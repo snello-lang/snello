@@ -1,0 +1,101 @@
+// 11: A JSON value type with an encoder and decoder.
+//
+// Tests a recursive sum type holding collections, an encoder that
+// reborrows its output for nested calls, and a decoder struct that holds
+// a borrow of its input (a borrow-holding struct, as in example 05).
+//
+// Low-level helpers (escape, skipSpace, peek, expect, string, number) are
+// omitted; they are ordinary byte handling.
+
+package json
+
+import ("fmt"; "strconv"; "strings")
+
+type Value enum {
+    Null
+    Bool(bool)
+    Number(float64)
+    String(string)
+    Array([]Value)
+    Object(map[string]Value)
+}
+
+type DecodeError struct { pos int; msg string }
+
+func (v ref Value) Encode(out mut strings.Builder) {
+    match v {
+        Null      => out.WriteString("null"),
+        Bool(b)   => out.WriteString(if b { "true" } else { "false" }),
+        Number(n) => out.WriteString(strconv.FormatFloat(n)),
+        String(s) => { out.WriteByte('"'); out.WriteString(escape(s)); out.WriteByte('"') },
+        Array(xs) => {
+            out.WriteByte('[')
+            for i, x := range xs {
+                if i > 0 { out.WriteByte(',') }
+                x.Encode(out)             // `out` is reborrowed for the nested call
+            }
+            out.WriteByte(']')
+        },
+        Object(m) => {
+            out.WriteByte('{')
+            first := true
+            for k, x := range m {
+                if !first { out.WriteByte(',') }
+                first = false
+                out.WriteByte('"'); out.WriteString(escape(k)); out.WriteString("\":")
+                x.Encode(out)
+            }
+            out.WriteByte('}')
+        },
+    }
+}
+
+type Decoder struct {
+    src ref string          // the Decoder is a borrow
+    pos int
+}
+
+func (d mut Decoder) Value() Result<Value, DecodeError> {
+    d.skipSpace()
+    match d.peek() {
+        'n' => { d.expect("null")?;  return Ok(Null) },
+        't' => { d.expect("true")?;  return Ok(Bool(true)) },
+        'f' => { d.expect("false")?; return Ok(Bool(false)) },
+        '"' => return Ok(String(d.string()?)),
+        '[' => {
+            d.pos += 1
+            xs := []Value{}
+            for d.peekSkip() != ']' {
+                xs.Push(d.Value()?)
+                if d.peekSkip() == ',' { d.pos += 1 }
+            }
+            d.pos += 1
+            return Ok(Array(xs))
+        },
+        '{' => {
+            d.pos += 1
+            m := map[string]Value{}
+            for d.peekSkip() != '}' {
+                k := d.string()?
+                d.skipSpace(); d.expect(":")?
+                m[k] = d.Value()?
+                if d.peekSkip() == ',' { d.pos += 1 }
+            }
+            d.pos += 1
+            return Ok(Object(m))
+        },
+        _ => return Ok(Number(d.number()?)),
+    }
+}
+
+func Decode(src ref string) Result<Value, DecodeError> {
+    d := Decoder{src: src, pos: 0}
+    return d.Value()                      // Value owns everything; d is dropped
+}
+
+func main() {
+    v := Decode(`{"a": [1, 2, {"b": null}], "c": "hi"}`).Expect("valid json")
+    var sb strings.Builder
+    v.Encode(mut sb)
+    fmt.Println(sb.String())
+}

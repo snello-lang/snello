@@ -1,0 +1,73 @@
+// 12: A worker pool with select, a deadline, and cancellation.
+//
+// Tests select over channels, a cancellation token shared through Arc,
+// and results flowing back as moves. Receiving from a channel yields T?,
+// None once the channel is closed and drained.
+
+package pool
+
+import ("fmt"; "sync"; "time")
+
+type Task struct { id int; payload []byte }
+type Done struct { id int; size int }
+
+// A cancellation token is a channel that gets closed. Closing twice is a
+// panic in Go, so a Once guards it. sync types synchronize internally and
+// are used through `ref`.
+type Cancel struct {
+    ch   chan struct{}
+    once sync.Once
+}
+
+func NewCancel() Arc<Cancel>              { return Arc.New(Cancel{ch: make(chan struct{})}) }
+func (c ref Cancel) Cancel()              { c.once.Do(func() { close(c.ch) }) }
+func (c ref Cancel) Done() <-chan struct{} { return c.ch }
+
+func worker(id int, tasks <-chan Task, out chan<- Done, cancel Arc<Cancel>) {
+    for {
+        select {
+        case t := <-tasks:                          // t is Task?; the task is moved out of the channel
+            t := t ?? return                        // None: channel closed, no more work
+            time.Sleep(10 * time.Millisecond)       // pretend work
+            out <- Done{id: t.id, size: len(t.payload)}
+        case <-cancel.Done():
+            fmt.Println("worker", id, "cancelled")
+            return
+        }
+    }
+}
+
+func Run(workers int, inputs []Task, deadline time.Duration) []Done {
+    tasks := make(chan Task)
+    out := make(chan Done)
+    cancel := NewCancel()
+    want := len(inputs)                             // read before inputs is moved
+
+    for i := 0; i < workers; i++ {
+        go worker(i, tasks, out, cancel.Clone())    // each worker gets its own Arc handle
+    }
+    go func() {                                     // inputs moved into this task
+        for _, t := range inputs { tasks <- t }     // each Task moved into the channel
+        close(tasks)
+    }()
+
+    results := []Done{}
+    timer := time.After(deadline)
+    for len(results) < want {
+        select {
+        case d := <-out:
+            results.Push(d ?? break)
+        case <-timer:
+            break
+        }
+    }
+    cancel.Cancel()
+    return results
+}
+
+func main() {
+    inputs := []Task{}
+    for i := 0; i < 20; i++ { inputs.Push(Task{id: i, payload: make([]byte, i)}) }
+    done := Run(4, inputs, 100 * time.Millisecond)
+    fmt.Println(len(done), "finished")
+}

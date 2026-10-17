@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 240" width="700" height="240">
+  <title>Teak</title>
+  <defs><mask id="t"><rect width="256" height="256" fill="#fff"/><rect x="0" y="78" width="256" height="22" fill="#000"/><rect x="117" y="78" width="22" height="120" rx="11" fill="#000"/></mask></defs>
+  <g transform="translate(0 28) scale(0.8)">
+    <path fill="#C68A3A" mask="url(#t)" d="M128,12 C58,56 56,180 128,230 C200,180 198,56 128,12 Z"/>
+    <path d="M128,230 Q128,242 120,250" stroke="#C68A3A" stroke-width="10" stroke-linecap="round" fill="none"/>
+  </g>
+  <g transform="translate(190 18)"><path d="M60,56 V168 Q60,200 92,200 M34,100 H90 M235,150 A50,50 0 1 0 223.3,182.1 M135,150 H235 M380,100 V200 M430,50 V200 M430,152 L490,100 M456,130 L494,200" fill="none" stroke="#F3E9D8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/><circle cx="330" cy="150" r="50" fill="none" stroke="#F3E9D8" stroke-width="20"/></g>
+</svg>

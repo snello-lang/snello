@@ -1,0 +1,145 @@
+// 05: A recursive-descent parser for arithmetic expressions.
+//
+// Tests sum types, match, owned pointers for recursive data, and a lexer struct that
+// holds a borrow of its input.
+//
+// A struct with a `ref` field is itself a borrow: it obeys every borrow
+// rule (cannot be stored in an owned struct, returned, or sent). That is
+// enough for a lexer, which is created in Parse, used, and dropped before
+// Parse returns. See design/00-syntax-conventions.md, "Borrow-holding
+// structs".
+
+package calc
+
+import ("fmt"; "strconv")
+
+type Token enum impl Copy, Eq {
+    Num(float64)
+    Plus
+    Minus
+    Star
+    Slash
+    LParen
+    RParen
+    EOF
+}
+
+type Expr enum {
+    Lit(float64)
+    Neg(*Expr)                                  // *T: an owned heap pointer
+    Bin(op Token, lhs *Expr, rhs *Expr)
+}
+
+type ParseError enum {
+    Unexpected(got Token, pos int)
+    BadChar(c byte, pos int)
+    BadNumber(text string)
+}
+
+type Lexer struct {
+    src ref string          // the Lexer is therefore a borrow
+    pos int
+}
+
+func (l mut Lexer) Next() Result<Token, ParseError> {
+    for l.pos < len(l.src) && l.src[l.pos] == ' ' { l.pos += 1 }
+    if l.pos >= len(l.src) { return Ok(EOF) }
+    c := l.src[l.pos]
+    l.pos += 1
+    match c {
+        '+' => return Ok(Plus),
+        '-' => return Ok(Minus),
+        '*' => return Ok(Star),
+        '/' => return Ok(Slash),
+        '(' => return Ok(LParen),
+        ')' => return Ok(RParen),
+        '0'..='9' | '.' => {
+            start := l.pos - 1
+            for l.pos < len(l.src) && (l.src[l.pos].IsDigit() || l.src[l.pos] == '.') { l.pos += 1 }
+            text := l.src[start:l.pos]                   // ref string into src
+            return strconv.ParseFloat(text)
+                .Map(func(v float64) Token { return Num(v) })
+                .MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
+        },
+        _ => return Err(BadChar(c, l.pos - 1)),
+    }
+}
+
+type Parser struct {
+    lex Lexer               // contains a borrow, so Parser is a borrow too
+    cur Token
+}
+
+func (p mut Parser) advance() Result<(), ParseError> {
+    p.cur = p.lex.Next()?
+    return Ok(())
+}
+
+// expr := term (('+' | '-') term)*
+func (p mut Parser) expr() Result<Expr, ParseError> {
+    lhs := p.term()?
+    for p.cur == Plus || p.cur == Minus {
+        op := p.cur
+        p.advance()?
+        rhs := p.term()?
+        lhs = Bin(op, &lhs, &rhs)                   // &x moves x to the heap
+    }
+    return Ok(lhs)
+}
+
+// term := factor (('*' | '/') factor)*
+func (p mut Parser) term() Result<Expr, ParseError> {
+    lhs := p.factor()?
+    for p.cur == Star || p.cur == Slash {
+        op := p.cur
+        p.advance()?
+        rhs := p.factor()?
+        lhs = Bin(op, &lhs, &rhs)
+    }
+    return Ok(lhs)
+}
+
+// factor := Num | '-' factor | '(' expr ')'
+func (p mut Parser) factor() Result<Expr, ParseError> {
+    match p.cur {
+        Num(v) => { p.advance()?; return Ok(Lit(v)) },
+        Minus  => { p.advance()?; return Ok(Neg(&p.factor()?)) },
+        LParen => {
+            p.advance()?
+            e := p.expr()?
+            if p.cur != RParen { return Err(Unexpected(p.cur, p.lex.pos)) }
+            p.advance()?
+            return Ok(e)
+        },
+        t => return Err(Unexpected(t, p.lex.pos)),
+    }
+}
+
+func Parse(src ref string) Result<Expr, ParseError> {
+    p := Parser{lex: Lexer{src: src, pos: 0}, cur: EOF}
+    p.advance()?
+    e := p.expr()?
+    if p.cur != EOF { return Err(Unexpected(p.cur, p.lex.pos)) }
+    return Ok(e)                                  // Expr owns its heap nodes; p is dropped here
+}
+
+// An owned pointer dereferences automatically, so `inner` is usable as ref Expr.
+func Eval(e ref Expr) float64 {
+    return match e {
+        Lit(v)            => v,
+        Neg(inner)        => -Eval(inner),
+        Bin(Plus, l, r)   => Eval(l) + Eval(r),
+        Bin(Minus, l, r)  => Eval(l) - Eval(r),
+        Bin(Star, l, r)   => Eval(l) * Eval(r),
+        Bin(Slash, l, r)  => Eval(l) / Eval(r),
+        Bin(_, _, _)      => unreachable(),
+    }
+}
+
+func main() {
+    src := "1 + 2 * (3 - -4)"
+    match Parse(ref src) {
+        Ok(e)  => fmt.Println(Eval(ref e)),     // 15
+        Err(e) => fmt.Println("error:", e),
+    }
+}

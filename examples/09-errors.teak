@@ -1,0 +1,67 @@
+// 09: Error handling with Result, custom error enums, `?`, and `??`.
+//
+// Tests that Go's "errors are values" survives without nil, and that `?`
+// keeps the happy path readable.
+
+package config
+
+import ("fmt"; "io"; "os"; "strconv")
+
+type ConfigError enum impl Error {
+    NotFound(path string)
+    Unreadable(path string, cause io.Error)
+    BadValue(key string, text string)
+    Missing(key string)
+}
+
+func (e ref ConfigError) Error() string {
+    return match e {
+        NotFound(p)      => fmt.Sprintf("config %s not found", p),
+        Unreadable(p, c) => fmt.Sprintf("cannot read %s: %s", p, c),
+        BadValue(k, t)   => fmt.Sprintf("key %s: bad value %q", k, t),
+        Missing(k)       => fmt.Sprintf("key %s missing", k),
+    }
+}
+
+type Config struct {
+    port    int
+    workers int
+}
+
+// `?` on a Result<T, io.Error> inside a function returning
+// Result<T, ConfigError> needs a conversion. If ConfigError implemented
+// From<io.Error>, `?` would convert automatically; here the mapping is
+// explicit so both forms are visible.
+func Load(path string) Result<Config, ConfigError> {
+    text := os.ReadToString(ref path).MapErr(func(e io.Error) ConfigError {
+        return match e.Kind() {
+            NotExist => NotFound(path.Clone()),
+            _        => Unreadable(path.Clone(), e),
+        }
+    })?
+
+    kv := map[string]string{}
+    for line := range text.Lines() {                       // iterator of ref string
+        if (k, v) := line.SplitOnce("=") {                 // binds when Some
+            kv[k.Trim().ToOwned()] = v.Trim().ToOwned()
+        }
+    }
+
+    port := parseKey(ref kv, "port")?
+    workers := parseKey(ref kv, "workers")?
+    return Ok(Config{port: port, workers: workers})
+}
+
+func parseKey(kv ref map[string]string, key string) Result<int, ConfigError> {
+    text := kv[ref key] ?? return Err(Missing(key))        // `??`: unwrap, or run the else
+    return strconv.Atoi(text).MapErr(func(_ strconv.Error) ConfigError {
+        return BadValue(key, text.ToOwned())
+    })
+}
+
+func main() {
+    match Load("app.conf") {
+        Ok(c)  => fmt.Println("port", c.port, "workers", c.workers),
+        Err(e) => { fmt.Println(e.Error()); os.Exit(1) },
+    }
+}

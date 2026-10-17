@@ -1,0 +1,78 @@
+// 07: Traits with default methods, fields, and mixins.
+//
+// A trait is a Go interface that may also carry default methods and
+// fields. A type says which traits it implements on its declaration, and
+// its methods are ordinary Go methods. There are no impl blocks.
+//
+// A trait name used as a type means "any value implementing it", exactly
+// like a Go interface value.
+
+package shapes
+
+import ("fmt"; "math")
+
+trait Shape {
+    func (s ref Self) Area() float64
+    func (s ref Self) Perimeter() float64
+    func (s ref Self) Name() string
+    func (s ref Self) Describe() string {                    // default method
+        return fmt.Sprintf("%s with area %.2f", s.Name(), s.Area())
+    }
+}
+
+// A trait with a field. A type that implements Named gets the field,
+// stored inline and set at construction like any other field.
+trait Named {
+    var name string
+    func (n ref Self) Name() string { return n.name }
+}
+
+// A trait that refines another and overrides its default.
+trait Logged: Shape {
+    func (s ref Self) Describe() string {
+        return "[logged] " + super.Describe()
+    }
+}
+
+type Circle struct impl Shape, Named, Logged {
+    r float64
+}
+
+func (c ref Circle) Area() float64      { return math.Pi * c.r * c.r }
+func (c ref Circle) Perimeter() float64 { return 2 * math.Pi * c.r }
+
+type Rect struct impl Shape, Named {
+    w, h float64
+}
+
+func (r ref Rect) Area() float64      { return r.w * r.h }
+func (r ref Rect) Perimeter() float64 { return 2 * (r.w + r.h) }
+func (r ref Rect) Describe() string   { return "a rectangle" }      // overrides the default
+
+// Which Describe does Circle get? Its own methods first, then the traits
+// in its impl list from right to left: Logged, then Named, then
+// Shape. So Circle.Describe is Logged's, whose `super` is Shape's default,
+// whose Name() is Named's. All resolved at compile time, all direct calls.
+
+// Static dispatch through a bound: one copy of the function per T.
+func TotalArea<T: Shape>(xs ref []T) float64 {
+    sum := 0.0
+    for _, x := range xs { sum += x.Area() }
+    return sum
+}
+
+// Dynamic dispatch: a slice of Shape values holds any mix of types that
+// implement Shape. Each element owns its value, as a Go interface does.
+func PrintAll(xs ref []Shape) {
+    for _, x := range xs { fmt.Println(x.Describe()) }
+}
+
+func main() {
+    circles := []Circle{{r: 1, name: "circle"}, {r: 2, name: "big circle"}}
+    fmt.Println(TotalArea(ref circles))
+
+    mixed := []Shape{Circle{r: 1, name: "circle"}, Rect{w: 2, h: 3, name: "rect"}}
+    PrintAll(ref mixed)
+    // [logged] circle with area 3.14
+    // a rectangle
+}

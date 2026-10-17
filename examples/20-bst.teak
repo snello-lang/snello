@@ -1,0 +1,85 @@
+// 20: A binary search tree with in-place insert and delete.
+//
+// The hardest ownership shape for owned pointers: walking down a chain of
+// *Node? slots with a mutable borrow, and replacing nodes in place.
+// If this reads well, second-class borrows are enough for most
+// data-structure code.
+
+package bst
+
+import "fmt"
+
+type Node<K: Ord, V> struct {
+    key   K
+    val   V
+    left  *Node<K, V>?
+    right *Node<K, V>?
+}
+
+type Tree<K: Ord, V> struct { root *Node<K, V>? }
+
+func (t mut Tree<K, V>) Insert(k K, v V) {
+    // `cur` is a mut borrow of one *Node? slot. Each step re-points it
+    // at a slot one level down. A borrow may be replaced by a borrow
+    // derived from itself; the old one ends and the new one inherits its
+    // scope.
+    cur := mut t.root
+    for {
+        n := cur ?? { *cur = Some(&Node{key: k, val: v, left: None, right: None}); return }
+        match k.Cmp(ref n.key) {
+            Less    => cur = mut n.left,
+            Greater => cur = mut n.right,
+            Equal   => { n.val = v; return },
+        }
+    }
+}
+
+func (t ref Tree<K, V>) Get(k ref K) ref V? {
+    cur := ref t.root
+    for {
+        n := cur ?? return None
+        match k.Cmp(ref n.key) {
+            Less    => cur = ref n.left,
+            Greater => cur = ref n.right,
+            Equal   => return Some(ref n.val),
+        }
+    }
+}
+
+// remove takes the subtree by value, rebuilds it, and returns it. Moving an
+// owned pointer out and back in copies the pointer, not the node.
+func remove<K: Ord, V>(slot *Node<K, V>?, k ref K) *Node<K, V>? {
+    n := slot ?? return None
+    match k.Cmp(ref n.key) {
+        Less    => { n.left = remove(take(mut n.left), k); return Some(n) },
+        Greater => { n.right = remove(take(mut n.right), k); return Some(n) },
+        Equal   => match (take(mut n.left), take(mut n.right)) {
+            (None, r)          => return r,          // n dropped here
+            (l, None)          => return l,
+            (Some(l), Some(r)) => {
+                min, rest := popMin(r)               // splice in the right subtree's minimum
+                return Some(&Node{key: min.key, val: min.val, left: Some(l), right: rest})
+            },
+        },
+    }
+}
+
+func popMin<K: Ord, V>(n *Node<K, V>) (*Node<K, V>, *Node<K, V>?) {
+    match take(mut n.left) {
+        None    => { right := take(mut n.right); return (n, right) },
+        Some(l) => { min, rest := popMin(l); n.left = rest; return (min, Some(n)) },
+    }
+}
+
+func (t mut Tree<K, V>) Delete(k ref K) {
+    t.root = remove(take(mut t.root), k)
+}
+
+func main() {
+    t := Tree<int, string>{}
+    for _, k := range []int{5, 3, 8, 1, 4} { t.Insert(k, fmt.Sprint(k)) }
+    fmt.Println(t.Get(ref 4))     // Some("4")
+    t.Delete(ref 5)
+    fmt.Println(t.Get(ref 5))     // None
+    fmt.Println(t.Get(ref 8))     // Some("8")
+}

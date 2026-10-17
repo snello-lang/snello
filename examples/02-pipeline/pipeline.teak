@@ -1,0 +1,106 @@
+// 02: A concurrent pipeline over channels.
+//
+// Three stages connected by channels, with the middle stage fanned out to
+// several workers. It is the standard Go pipeline shape, and the point of
+// the example is that it stays that shape.
+//
+// Four rules make it memory safe without a GC, and none of them needs an
+// annotation:
+//
+//   1. Sending on a channel MOVES the value. The sender no longer owns it.
+//   2. Receiving from a channel gives the receiver ownership. When the
+//      received value goes out of scope, it is freed, right there.
+//   3. A channel handle is a Copy value. Any number of tasks may hold one.
+//   4. `go f()` moves everything it captures into the new task.
+//
+// There is no shared mutable state in this file, so there is no lock.
+
+package pipeline
+
+import ("fmt"; "strings")
+
+type Job struct {
+    id   int
+    text string
+}
+
+type Result struct {
+    id    int
+    words int
+}
+
+// Stage 1: produce jobs.
+func produce(n int) <-chan Job {
+    out := make(chan Job)
+    go func() {                              // `out` is Copy, so it is copied into the task
+        defer close(out)
+        for i := 0; i < n; i++ {
+            job := Job{id: i, text: strings.Repeat("teak ", i)}
+            out <- job                       // rule 1: job is moved into the channel
+            // job cannot be used here any more; the compiler rejects it
+        }
+    }()
+    return out
+}
+
+// Stage 2: count words. Called several times to fan out.
+func count(jobs <-chan Job) <-chan Result {
+    out := make(chan Result)
+    go func() {
+        defer close(out)
+        for job := range jobs {              // rule 2: this task now owns job
+            out <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
+        }                                    // job dropped here; its string is freed
+    }()
+    return out
+}
+
+// Stage 3: merge several result channels into one.
+func merge(inputs []<-chan Result) <-chan Result {
+    out := make(chan Result)
+    done := make(chan struct{})
+    n := len(inputs)
+    for _, in := range inputs {              // ranging over an owned slice moves each element
+        go func() {                          // rule 4: `in` is moved into this task
+            for r := range in { out <- r }
+            done <- struct{}{}
+        }()
+    }
+    go func() {
+        for i := 0; i < n; i++ { <-done }    // wait for every forwarder
+        close(out)
+    }()
+    return out
+}
+
+func main() {
+    jobs := produce(10)
+
+    // Fan out: four workers read from the same channel. `jobs` is a Copy
+    // handle (rule 3), so passing it four times is fine.
+    workers := []<-chan Result{}
+    for i := 0; i < 4; i++ {
+        workers = append(workers, count(jobs))
+    }
+
+    total := 0
+    for r := range merge(workers) {          // `workers` is moved into merge
+        total += r.words
+    }
+    fmt.Println(total)                       // 0+1+2+...+9 = 45
+}
+
+// What the compiler rejects, for contrast:
+//
+//   s := "hello"
+//   go func() { fmt.Println(s) }()         // ok: s is moved into the task
+//   fmt.Println(s)                         // error: s was moved
+//
+//   m := map[string]int{}
+//   go func() { m["a"] = 1 }()             // ok on its own: m moved in
+//   go func() { m["b"] = 2 }()             // error: m was already moved
+//
+//   go func() { use(ref m) }()             // error: a borrow cannot cross `go`
+//
+// Shared mutable state across tasks is covered in 03-http-cache.teak,
+// where it is actually needed.
