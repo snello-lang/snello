@@ -59,17 +59,18 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** The `ast` package: sealed interfaces `Node`, `Decl`, `Stmt`, `Expr`, `Type`, `Pattern`, each with an unexported marker method, and the concrete node structs for everything the examples use. Every node carries its position. No parser yet; this task is the data structure and a printer.
 
 **Acceptance criteria:**
-- [ ] One struct per construct in `design/00-syntax-conventions.md`, grouped by interface
-- [ ] An `ast.Print` that writes an indented tree, readable by a person
-- [ ] A test constructs a small tree by hand and checks the printed form
+- [x] One struct per construct in `design/00-syntax-conventions.md`, grouped by interface
+- [x] An `ast.Print` that writes an indented tree, readable by a person
+- [x] A test constructs a small tree by hand and checks the printed form
 
 **Verification:**
-- [ ] Tests pass: `go test ./ast/`
-- [ ] `go vet ./...` reports no unused or unreachable type switch arms
+- [x] Tests pass: `go test ./ast/`
+- [x] `go vet ./...` reports no unused or unreachable type switch arms
 
 **Dependencies:** 0.1
 **Files:** `ast/ast.go`, `ast/print.go`, `ast/ast_test.go`
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.5: Parser skeleton and `teak parse`
 

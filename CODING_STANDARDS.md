@@ -84,6 +84,7 @@ return tok, lit
 - A comment says why, or what a reader cannot see from the code. It never restates the code.
 - Every exported identifier has a doc comment that starts with its name.
 - A comment that explains a subtle choice points at the precedent: "mirrors go/scanner", "see design/04-borrows-ref-and-mut.md".
+- No banner or separator comments (`// ---- Types ----`, `// =====`). Sections of a file are separated by the order of declarations and by blank lines, not by decorated comments.
 
 ### Errors
 
