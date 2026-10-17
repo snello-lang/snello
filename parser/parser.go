@@ -10,6 +10,11 @@
 // consumed it. On a syntax error it records the error, skips to the
 // next token that can start a declaration, and continues, so one
 // mistake produces one message rather than a cascade.
+//
+// Every loop that recovers from an error must make progress on each
+// pass: after skipping to a recovery token, it either consumes that
+// token or leaves the loop. A loop that neither consumes nor leaves
+// spins forever on the first token it cannot handle.
 package parser
 
 import (
@@ -122,17 +127,19 @@ func (p *Parser) advance(to *kindSet) {
 	}
 }
 
+// parseIdent parses an identifier. On any other token it reports the
+// error, leaves the token in place, and returns a placeholder so the
+// tree stays well formed.
 func (p *Parser) parseIdent() *ast.Ident {
-	name := "_"
-	pos := p.pos
-	if p.tok == token.IDENT {
-		name = p.lit
-		p.next()
-	} else {
-		p.expect(token.IDENT)
+	ident := &ast.Ident{NamePos: p.pos, Name: "_"}
+	if p.tok != token.IDENT {
+		p.errorExpected(p.pos, "identifier")
+		return ident
 	}
 
-	return &ast.Ident{NamePos: pos, Name: name}
+	ident.Name = p.lit
+	p.next()
+	return ident
 }
 
 // parseFile parses: package clause, imports, declarations.
@@ -161,20 +168,38 @@ func (p *Parser) parseImportDecl() []*ast.ImportSpec {
 	p.expect(token.IMPORT)
 
 	var specs []*ast.ImportSpec
-	if p.tok == token.LPAREN {
-		p.next()
-		for p.tok != token.RPAREN && p.tok != token.EOF {
-			specs = append(specs, p.parseImportSpec())
-			if !p.expectSemi() {
-				p.advance(groupEnd)
-			}
+	if p.tok != token.LPAREN {
+		spec, ok := p.parseImportSpec()
+		specs = append(specs, spec)
+		if !ok || !p.expectSemi() {
+			p.advance(declStart)
 		}
 
-		p.expect(token.RPAREN)
-	} else {
-		specs = append(specs, p.parseImportSpec())
+		return specs
 	}
 
+	p.next()
+	for p.tok != token.RPAREN && p.tok != token.EOF {
+		spec, ok := p.parseImportSpec()
+		specs = append(specs, spec)
+		if !ok || !p.expectSemi() {
+			// Skip to the closing parenthesis. If a declaration start
+			// comes first, the group was never closed: report that once
+			// and leave the token for the declaration loop.
+			p.advance(groupEnd)
+			if p.tok != token.RPAREN {
+				p.errorExpected(p.pos, "')'")
+				return specs
+			}
+		}
+	}
+
+	if p.tok == token.EOF {
+		p.errorExpected(p.pos, "')'")
+		return specs
+	}
+
+	p.next() // the ')'
 	if !p.expectSemi() {
 		p.advance(declStart)
 	}
@@ -182,22 +207,23 @@ func (p *Parser) parseImportDecl() []*ast.ImportSpec {
 	return specs
 }
 
-func (p *Parser) parseImportSpec() *ast.ImportSpec {
+// parseImportSpec parses one import. It reports whether the spec was
+// well formed; on a malformed one the caller decides how to recover.
+func (p *Parser) parseImportSpec() (*ast.ImportSpec, bool) {
 	spec := &ast.ImportSpec{}
 	if p.tok == token.IDENT {
 		spec.Name = p.parseIdent()
 	}
 
 	spec.Path = &ast.BasicLit{ValuePos: p.pos, Kind: token.STRING, Value: `""`}
-	if p.tok == token.STRING {
-		spec.Path.Value = p.lit
-		p.next()
-	} else {
+	if p.tok != token.STRING {
 		p.errorExpected(p.pos, "import path")
-		p.advance(groupEnd)
+		return spec, false
 	}
 
-	return spec
+	spec.Path.Value = p.lit
+	p.next()
+	return spec, true
 }
 
 // parseDecl parses one top-level declaration. The declaration forms
