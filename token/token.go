@@ -10,7 +10,10 @@
 // ..=.
 package token
 
-import "strconv"
+import (
+	"sort"
+	"strconv"
+)
 
 // Kind is the kind of a lexical token.
 type Kind int
@@ -127,6 +130,10 @@ const (
 	SELF  // Self, the implementing type inside a trait
 	SUPER // super, the next definition in the impl order
 	keywordEnd
+
+	// NumKinds is one more than the largest Kind, for tables indexed by
+	// Kind.
+	NumKinds = int(keywordEnd) + 1
 )
 
 // Operator precedences, as in Go, with one addition: `??` binds loosest
@@ -245,13 +252,29 @@ var tokens = [...]string{
 
 var keywords map[string]Kind
 
-// Pos is a position in a source file. Line and Column are 1-based;
-// Offset is the 0-based byte offset.
-type Pos struct {
+// Pos is a compact position: a byte offset into the file being
+// compiled, plus one so that the zero value means "no position". Nodes
+// store a Pos, not a line and column, so that a node is eight bytes
+// smaller and carries no string; File.Position resolves the line and
+// column when an error is printed. This mirrors go/token.
+type Pos int
+
+// NoPos is the zero Pos, meaning no position.
+const NoPos Pos = 0
+
+// A Position is a resolved position, for printing.
+type Position struct {
 	Filename string
-	Offset   int
-	Line     int
-	Column   int
+	Offset   int // 0-based byte offset
+	Line     int // 1-based
+	Column   int // 1-based, in bytes
+}
+
+// A File records the line starts of one source file so that a Pos can
+// be resolved to a line and column. The scanner fills it in as it goes.
+type File struct {
+	name  string
+	lines []int // byte offset of the start of each line; lines[0] is 0
 }
 
 // String returns the string corresponding to the token kind: the
@@ -303,10 +326,54 @@ func (k Kind) Precedence() int {
 	return LowestPrec
 }
 
-// IsValid reports whether the position carries a line number.
-func (p Pos) IsValid() bool { return p.Line > 0 }
+// IsValid reports whether p is a real position.
+func (p Pos) IsValid() bool { return p != NoPos }
 
-func (p Pos) String() string {
+// NewFile returns a File for a source of the given size. The line table
+// is sized for the typical line length up front so it rarely grows.
+func NewFile(name string, size int) *File {
+	lines := make([]int, 1, size/32+1)
+	return &File{name: name, lines: lines}
+}
+
+// Name returns the file name.
+func (f *File) Name() string { return f.name }
+
+// Pos returns the Pos for a byte offset in the file.
+func (f *File) Pos(offset int) Pos { return Pos(offset + 1) }
+
+// Offset returns the byte offset of a Pos.
+func (f *File) Offset(p Pos) int { return int(p) - 1 }
+
+// AddLine records that a new line starts at the given byte offset. The
+// scanner calls it once per newline, in order.
+func (f *File) AddLine(offset int) {
+	if offset > f.lines[len(f.lines)-1] {
+		f.lines = append(f.lines, offset)
+	}
+}
+
+// Position resolves p to a line and column by binary search over the
+// recorded line starts.
+func (f *File) Position(p Pos) Position {
+	if !p.IsValid() {
+		return Position{Filename: f.name}
+	}
+
+	offset := f.Offset(p)
+	line := sort.Search(len(f.lines), func(i int) bool { return f.lines[i] > offset })
+	return Position{
+		Filename: f.name,
+		Offset:   offset,
+		Line:     line,
+		Column:   offset - f.lines[line-1] + 1,
+	}
+}
+
+// IsValid reports whether the position carries a line number.
+func (p Position) IsValid() bool { return p.Line > 0 }
+
+func (p Position) String() string {
 	s := p.Filename
 	if p.IsValid() {
 		if s != "" {

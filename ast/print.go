@@ -15,28 +15,31 @@ import (
 
 // Fprint writes an indented rendering of the tree rooted at node, one
 // field per line, for people reading `teak parse` output. Positions are
-// printed as line:column; nil fields and empty slices are omitted.
+// printed as line:column, resolved through file, or as raw offsets when
+// file is nil; nil fields, empty slices and missing positions are
+// omitted.
 //
 // It walks the node with reflection, as go/ast.Fprint does, so that
 // adding a node type needs no change here.
-func Fprint(w io.Writer, node Node) {
-	p := printer{w: w}
+func Fprint(w io.Writer, node Node, file *token.File) {
+	p := printer{w: w, file: file}
 	p.print(reflect.ValueOf(node), 0)
 	fmt.Fprintln(w)
 }
 
 // Sprint returns what Fprint would write.
-func Sprint(node Node) string {
+func Sprint(node Node, file *token.File) string {
 	var sb strings.Builder
-	Fprint(&sb, node)
+	Fprint(&sb, node, file)
 	return sb.String()
 }
 
 type printer struct {
-	w io.Writer
+	w    io.Writer
+	file *token.File
 }
 
-var posType = reflect.TypeOf(token.Pos{})
+var posType = reflect.TypeOf(token.NoPos)
 
 func (p *printer) print(v reflect.Value, depth int) {
 	switch v.Kind() {
@@ -49,12 +52,6 @@ func (p *printer) print(v reflect.Value, depth int) {
 		p.print(v.Elem(), depth)
 
 	case reflect.Struct:
-		if v.Type() == posType {
-			pos := v.Interface().(token.Pos)
-			fmt.Fprintf(p.w, "%d:%d", pos.Line, pos.Column)
-			return
-		}
-
 		fmt.Fprintf(p.w, "%s {", v.Type().Name())
 		for i := 0; i < v.NumField(); i++ {
 			f := v.Field(i)
@@ -81,13 +78,25 @@ func (p *printer) print(v reflect.Value, depth int) {
 		fmt.Fprintf(p.w, "%q", v.String())
 
 	default:
-		if k, ok := v.Interface().(token.Kind); ok {
-			fmt.Fprint(p.w, k.String())
-			return
+		switch x := v.Interface().(type) {
+		case token.Pos:
+			p.printPos(x)
+		case token.Kind:
+			fmt.Fprint(p.w, x.String())
+		default:
+			fmt.Fprint(p.w, x)
 		}
-
-		fmt.Fprint(p.w, v.Interface())
 	}
+}
+
+func (p *printer) printPos(pos token.Pos) {
+	if p.file == nil {
+		fmt.Fprint(p.w, int(pos))
+		return
+	}
+
+	r := p.file.Position(pos)
+	fmt.Fprintf(p.w, "%d:%d", r.Line, r.Column)
 }
 
 // isEmpty reports whether a field would print nothing useful.
@@ -99,7 +108,7 @@ func isEmpty(v reflect.Value) bool {
 		return v.Len() == 0
 	case reflect.Bool:
 		return !v.Bool()
-	case reflect.Struct:
+	case reflect.Int:
 		return v.Type() == posType && !v.Interface().(token.Pos).IsValid()
 	}
 

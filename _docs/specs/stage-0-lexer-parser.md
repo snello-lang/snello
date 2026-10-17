@@ -77,17 +77,18 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** The `parser` package with its token lookahead, error reporting with positions, synchronization after an error, and parsing of a file's package clause and imports only. The `teak parse` command prints the tree. This is the end-to-end path every later task extends.
 
 **Acceptance criteria:**
-- [ ] `package x` with imports parses to a `File` node
-- [ ] An error names the position, what was found, and what was expected
-- [ ] After an error, parsing resumes at the next top-level declaration
+- [x] `package x` with imports parses to a `File` node
+- [x] An error names the position, what was found, and what was expected
+- [x] After an error, parsing resumes at the next top-level declaration
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Manual check: `go run ./cmd/teak parse` on a file containing only a package clause and imports
+- [x] Tests pass: `go test ./parser/`
+- [x] Manual check: `go run ./cmd/teak parse` on a file containing only a package clause and imports
 
 **Dependencies:** 0.4
 **Files:** `parser/parser.go`, `parser/parser_test.go`, `cmd/teak/main.go`
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.6: Types
 

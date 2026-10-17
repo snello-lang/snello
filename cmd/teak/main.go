@@ -4,15 +4,17 @@
 
 // Command teak is the Teak compiler driver.
 //
-// Stage 0 provides one subcommand, `teak lex FILE`, which prints the
-// token stream. It exists so the lexer can be inspected by hand while the
-// parser is being written.
+// Stage 0 provides two subcommands for inspecting the front end by hand:
+// `teak lex FILE` prints the token stream and `teak parse FILE` prints
+// the syntax tree.
 package main
 
 import (
 	"fmt"
 	"os"
 
+	"github.com/teak-lang/teak/ast"
+	"github.com/teak-lang/teak/parser"
 	"github.com/teak-lang/teak/scanner"
 	"github.com/teak-lang/teak/token"
 )
@@ -28,25 +30,31 @@ func main() {
 			usage()
 		}
 		os.Exit(lex(os.Args[2]))
+	case "parse":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(parse(os.Args[2]))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak lex FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (lex | parse) FILE")
 	os.Exit(2)
 }
 
 func lex(path string) int {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	src, ok := readSource(path)
+	if !ok {
 		return 1
 	}
 
+	file := token.NewFile(path, len(src))
 	var s scanner.Scanner
-	s.Init(path, src, func(pos token.Pos, msg string) {
+	s.Init(file, src, func(pos token.Position, msg string) {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", pos, msg)
 	})
 
@@ -55,14 +63,51 @@ func lex(path string) int {
 		if tok == token.EOF {
 			break
 		}
+
 		if lit == "\n" {
 			lit = `"\n"`
 		}
-		fmt.Printf("%s\t%s\t%s\n", pos, tok, lit)
+
+		fmt.Printf("%s\t%s\t%s\n", file.Position(pos), tok, lit)
 	}
 
 	if s.ErrorCount > 0 {
 		return 1
 	}
+
 	return 0
+}
+
+func parse(path string) int {
+	src, ok := readSource(path)
+	if !ok {
+		return 1
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	ast.Fprint(os.Stdout, f, file)
+	if err != nil {
+		if list, ok := err.(scanner.ErrorList); ok {
+			for _, e := range list {
+				fmt.Fprintln(os.Stderr, e)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+		}
+
+		return 1
+	}
+
+	return 0
+}
+
+// readSource reads a file, reporting a failure to stderr.
+func readSource(path string) ([]byte, bool) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, false
+	}
+
+	return src, true
 }

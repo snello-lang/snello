@@ -22,14 +22,21 @@ const (
 	bom = 0xFEFF // byte order mark, permitted once at the start of a file
 )
 
-// An ErrorHandler is called for each lexical error, with its position.
-type ErrorHandler func(pos token.Pos, msg string)
+// An ErrorHandler is called for each lexical error, with its position
+// already resolved to a line and column.
+type ErrorHandler func(pos token.Position, msg string)
 
 // A Scanner holds the state of one lexing pass over a file.
+//
+// The source is held as a string so that every identifier and literal
+// the scanner returns is a substring of it, sharing its memory: the one
+// copy made in Init is the only allocation the scanner performs per
+// file. (Converting a []byte slice to a string, as go/scanner does,
+// allocates once per token.)
 type Scanner struct {
-	src      []byte
-	filename string
-	err      ErrorHandler
+	src  string
+	file *token.File
+	err  ErrorHandler
 
 	// The scanner keeps one character of lookahead: ch is the character
 	// being looked at, offset is where it starts in src, and nextOffset
@@ -38,25 +45,22 @@ type Scanner struct {
 	ch         rune // the current character; eof (-1) past the end of src
 	offset     int  // byte offset in src where ch starts
 	nextOffset int  // byte offset in src where the character after ch starts
-	line       int  // 1-based line number of ch
-	lineOffset int  // byte offset in src where the current line starts
 	insertSemi bool // set when a newline here should produce a semicolon
 
 	// ErrorCount is the number of errors reported so far.
 	ErrorCount int
 }
 
-// Init prepares the scanner to lex src. The filename is used only in
-// positions. err may be nil.
-func (s *Scanner) Init(filename string, src []byte, err ErrorHandler) {
-	s.src = src
-	s.filename = filename
+// Init prepares the scanner to lex src. The scanner records each line
+// start in file as it goes, so positions can be resolved later. err may
+// be nil.
+func (s *Scanner) Init(file *token.File, src []byte, err ErrorHandler) {
+	s.src = string(src)
+	s.file = file
 	s.err = err
 	s.ch = ' '
 	s.offset = 0
 	s.nextOffset = 0
-	s.line = 1
-	s.lineOffset = 0
 	s.insertSemi = false
 	s.ErrorCount = 0
 	s.next()
@@ -78,7 +82,9 @@ scanAgain:
 	switch ch := s.ch; {
 	case isLetter(ch):
 		lit = s.scanIdentifier()
-		tok = token.Lookup(lit)
+		if tok = token.Lookup(lit); tok != token.IDENT {
+			lit = tok.String() // the table's string, so lit never pins src
+		}
 
 		switch tok {
 		case token.IDENT, token.BREAK, token.CONTINUE, token.RETURN, token.SELF, token.SUPER:
@@ -220,19 +226,12 @@ scanAgain:
 	return pos, tok, lit
 }
 
-func (s *Scanner) pos() token.Pos {
-	return token.Pos{
-		Filename: s.filename,
-		Offset:   s.offset,
-		Line:     s.line,
-		Column:   s.offset - s.lineOffset + 1,
-	}
-}
+func (s *Scanner) pos() token.Pos { return s.file.Pos(s.offset) }
 
 func (s *Scanner) error(pos token.Pos, msg string) {
 	s.ErrorCount++
 	if s.err != nil {
-		s.err(pos, msg)
+		s.err(s.file.Position(pos), msg)
 	}
 }
 
@@ -245,8 +244,7 @@ func (s *Scanner) next() {
 	if s.nextOffset >= len(s.src) {
 		s.offset = len(s.src)
 		if s.ch == '\n' {
-			s.lineOffset = s.offset
-			s.line++
+			s.file.AddLine(s.offset)
 		}
 
 		s.ch = eof
@@ -255,13 +253,12 @@ func (s *Scanner) next() {
 
 	s.offset = s.nextOffset
 	if s.ch == '\n' {
-		s.lineOffset = s.offset
-		s.line++
+		s.file.AddLine(s.offset)
 	}
 
 	r, w := rune(s.src[s.nextOffset]), 1
 	if r >= utf8.RuneSelf {
-		r, w = utf8.DecodeRune(s.src[s.nextOffset:])
+		r, w = utf8.DecodeRuneInString(s.src[s.nextOffset:])
 		if r == utf8.RuneError && w == 1 {
 			s.error(s.pos(), "illegal UTF-8 encoding")
 		}
@@ -324,7 +321,7 @@ func (s *Scanner) scanIdentifier() string {
 		s.next()
 	}
 
-	return string(s.src[offs:s.offset])
+	return s.src[offs:s.offset]
 }
 
 // scanDots scans the rest of a token that began with two dots; the first
@@ -427,7 +424,7 @@ func (s *Scanner) scanNumber() (token.Kind, string) {
 		}
 	}
 
-	return tok, string(s.src[offs:s.offset])
+	return tok, s.src[offs:s.offset]
 }
 
 // scanEscape consumes an escape sequence after the backslash. quote is
@@ -503,7 +500,7 @@ func (s *Scanner) scanString() string {
 		}
 	}
 
-	return string(s.src[offs:s.offset])
+	return s.src[offs:s.offset]
 }
 
 // scanRawString scans a `...` literal; the opening backquote is consumed.
@@ -523,7 +520,7 @@ func (s *Scanner) scanRawString() string {
 		}
 	}
 
-	return string(s.src[offs:s.offset])
+	return s.src[offs:s.offset]
 }
 
 // scanRune scans a '.' literal; the opening quote is already consumed.
@@ -555,7 +552,7 @@ func (s *Scanner) scanRune() string {
 		s.error(s.pos(), "illegal rune literal")
 	}
 
-	return string(s.src[offs:s.offset])
+	return s.src[offs:s.offset]
 }
 
 // switch2 returns tok1 if the current character is '=', else tok0.

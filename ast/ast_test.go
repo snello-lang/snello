@@ -20,7 +20,14 @@ import (
 // by hand and checks the printed form, which doubles as a readable
 // statement of how the node types fit together.
 func TestPrint(t *testing.T) {
-	at := func(line, col int) token.Pos { return token.Pos{Line: line, Column: col} }
+	// A file with four lines of 40 bytes, so line:column maps to an offset
+	// the printer can resolve back.
+	file := token.NewFile("test.teak", 160)
+	for _, start := range []int{40, 80, 120} {
+		file.AddLine(start)
+	}
+
+	at := func(line, col int) token.Pos { return file.Pos((line-1)*40 + col - 1) }
 	id := func(line, col int, name string) *Ident { return &Ident{NamePos: at(line, col), Name: name} }
 
 	decl := &FuncDecl{
@@ -177,7 +184,7 @@ func TestPrint(t *testing.T) {
   }
 }
 `
-	got := Sprint(decl)
+	got := Sprint(decl, file)
 	if got != want {
 		t.Errorf("printed tree differs:\n got:\n%s\n want:\n%s", got, want)
 	}
@@ -187,7 +194,8 @@ func TestPrint(t *testing.T) {
 // those are the ones that can point at the wrong token: a qualified type
 // starts at its package, a named field at its first name.
 func TestPos(t *testing.T) {
-	at := func(col int) token.Pos { return token.Pos{Line: 1, Column: col} }
+	file := token.NewFile("test.teak", 100)
+	at := func(col int) token.Pos { return file.Pos(col - 1) }
 	id := func(col int, name string) *Ident { return &Ident{NamePos: at(col), Name: name} }
 
 	tests := []struct {
@@ -207,7 +215,7 @@ func TestPos(t *testing.T) {
 		{"elided literal", &CompositeLit{Lbrace: at(5)}, 5},
 	}
 	for _, tt := range tests {
-		if got := tt.node.Pos().Column; got != tt.want {
+		if got := file.Position(tt.node.Pos()).Column; got != tt.want {
 			t.Errorf("%s: Pos column %d, want %d", tt.name, got, tt.want)
 		}
 	}

@@ -92,6 +92,18 @@ return tok, lit
 - One problem, one error. Do not report the same fault twice from two checks.
 - Error handlers are callbacks, as in `go/scanner`; packages do not print or exit.
 
+## Compiler performance
+
+Compile time is a feature, and in Go the way to lose it is allocation: every object the compiler allocates is work for Go's collector while the user waits. The rules:
+
+- **Measure, do not guess.** Every package that processes source has a benchmark over the programs in `examples/`, run with `-benchmem`. Allocations per operation is the number to watch; a change that raises it needs a reason in its commit message. Current baseline: the scanner performs about nine allocations per file, none per token.
+- **Positions are integers.** `token.Pos` is a byte offset; line and column are resolved only when an error is printed. No node carries a string for its position.
+- **Substrings, not copies.** The scanner holds the source as a string and returns identifiers and literals as substrings of it. Never `string(bytes)` per token.
+- **Tables, not maps, for small fixed sets.** A set of token kinds is an array indexed by kind, one load per test. Maps are for data whose keys are not known at compile time.
+- **Nothing per token or per node that is not the token or the node.** No closures created inside the scan or parse loop, no `fmt` on the hot path, no interface conversions of small values in loops, no slices appended one element at a time when the length is known.
+- **Error paths may allocate freely.** `fmt.Sprintf` in an error message is fine; the program being compiled is broken and the user is reading, not waiting.
+- **Reflection is for debugging output only.** The AST printer uses it; nothing on the compile path does.
+
 ## Tests
 
 - Standard `testing` package only. No assertion libraries, no mocks.

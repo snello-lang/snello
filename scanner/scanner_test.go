@@ -129,47 +129,87 @@ func TestErrors(t *testing.T) {
 // acceptance suite for every stage; stage 0 only requires that they
 // contain no illegal characters.
 func TestExamples(t *testing.T) {
-	root := filepath.Join("..", "examples")
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(path, ".teak") {
-			files = append(files, path)
-		}
-		return nil
-	})
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(files) < 20 {
-		t.Fatalf("found %d example files, want at least 20", len(files))
-	}
-
-	for _, f := range files {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		toks, errs := scanAll(t, f, string(src))
+	for _, f := range exampleFiles(t) {
+		toks, errs := scanAll(t, f.name, string(f.src))
 		for _, e := range errs {
 			t.Error(e)
 		}
 
 		for _, tk := range toks {
 			if tk.tok == token.ILLEGAL {
-				t.Errorf("%s: illegal token %q", f, tk.lit)
+				t.Errorf("%s: illegal token %q", f.name, tk.lit)
 			}
 		}
 
 		if len(toks) == 0 {
-			t.Errorf("%s: no tokens", f)
+			t.Errorf("%s: no tokens", f.name)
 		}
 	}
+}
+
+// BenchmarkExamples lexes every example program. Run with -benchmem:
+// allocations per operation are the number to watch, since each one is
+// work for Go's collector during a compile.
+func BenchmarkExamples(b *testing.B) {
+	files := exampleFiles(b)
+	var total int
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		for _, f := range files {
+			var s Scanner
+			s.Init(token.NewFile(f.name, len(f.src)), f.src, nil)
+
+			for {
+				_, tok, _ := s.Scan()
+				if tok == token.EOF {
+					break
+				}
+
+				total++
+			}
+		}
+	}
+
+	b.ReportMetric(float64(total)/float64(b.N), "tokens/op")
+}
+
+type exampleFile struct {
+	name string
+	src  []byte
+}
+
+// exampleFiles returns every .teak program under examples/, and fails
+// the test if there are fewer than the twenty the design promises.
+func exampleFiles(tb testing.TB) []exampleFile {
+	tb.Helper()
+	var files []exampleFile
+	err := filepath.WalkDir(filepath.Join("..", "examples"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !d.IsDir() && strings.HasSuffix(path, ".teak") {
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+
+			files = append(files, exampleFile{path, src})
+		}
+
+		return nil
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	if len(files) < 20 {
+		tb.Fatalf("found %d example files, want at least 20", len(files))
+	}
+
+	return files
 }
 
 // scanAll lexes src to the end and returns the tokens and the error
@@ -178,7 +218,7 @@ func scanAll(t *testing.T, name, src string) ([]elt, []string) {
 	t.Helper()
 	var s Scanner
 	var errs []string
-	s.Init(name, []byte(src), func(pos token.Pos, msg string) {
+	s.Init(token.NewFile(name, len(src)), []byte(src), func(pos token.Position, msg string) {
 		errs = append(errs, pos.String()+": "+msg)
 	})
 
