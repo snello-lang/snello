@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 02: A concurrent pipeline over channels.
 //
 // Three stages connected by channels, with the middle stage fanned out to

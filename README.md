@@ -15,10 +15,7 @@
 
 Teak is in the design phase. There is no compiler yet.
 
-The current work is a set of twenty programs written in a provisional
-syntax before any implementation exists. They are the design's test suite:
-every rule in the language must let each of them read naturally, and every
-stage of the compiler will have to run them all.
+The current work is a set of twenty programs written in a provisional syntax before any implementation exists. They are the design's test suite: every rule in the language must let each of them read naturally, and every stage of the compiler will have to run them all.
 
 ## Goals
 
@@ -35,6 +32,7 @@ stage of the compiler will have to run them all.
 |---|---|
 | [`design/`](design/) | Language design document and syntax conventions |
 | [`examples/`](examples/) | The twenty programs, with the open questions they raised |
+| [`specs/`](specs/) | The implementation plan and per-stage task lists |
 | [`brand/`](brand/) | Logo, wordmark, and palette |
 
 ## Plan

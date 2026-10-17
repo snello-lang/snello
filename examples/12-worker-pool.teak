@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 12: A worker pool with select, a deadline, and cancellation.
 //
 // Tests select over channels, a cancellation token shared through Arc,

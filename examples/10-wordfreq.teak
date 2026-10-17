@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 10: Word frequency count over a file.
 //
 // Tests owned strings versus borrowed slices of them, maps with owned

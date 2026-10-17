@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 04: A directed graph with BFS and shortest paths.
 //
 // Nodes refer to each other by integer id. The graph is append-only, so a

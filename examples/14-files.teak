@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 14: File copying with deterministic cleanup.
 //
 // Tests Drop versus defer, and that a closed file cannot be used again

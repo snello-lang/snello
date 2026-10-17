@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Version 3: Teak with the standard library Arena<T>. This is the Teak way.
 //
 // Same idea as tree-slice.teak, but the arena is a library type and the

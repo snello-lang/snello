@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 11: A JSON value type with an encoder and decoder.
 //
 // Tests a recursive sum type holding collections, an encoder that

@@ -1,10 +1,6 @@
 # Example programs
 
-Twenty programs written in Teak before Teak exists. They are the design's
-test suite: every rule in `../design/00-syntax-conventions.md` must let
-each of these read naturally, and every stage of the compiler must run
-them all. Numbers do not mean difficulty; the first five are the ones most
-likely to break the memory model.
+Twenty programs written in Teak before Teak exists. They are the design's test suite: every rule in `../design/00-syntax-conventions.md` must let each of these read naturally, and every stage of the compiler must run them all. Numbers do not mean difficulty; the first five are the ones most likely to break the memory model.
 
 | # | File | What it stresses |
 |---|---|---|
@@ -31,9 +27,7 @@ likely to break the memory model.
 
 ## Decisions these forced
 
-Writing the programs surfaced seven questions. All are now decided and
-recorded in `../design/00-syntax-conventions.md`; the examples follow
-them.
+Writing the programs surfaced seven questions. All are now decided and recorded in `../design/00-syntax-conventions.md`; the examples follow them.
 
 | Question | Decision | Where |
 |---|---|---|
@@ -45,5 +39,4 @@ them.
 | Channel receive on a closed channel | `<-ch` yields `T?`; `range ch` yields `T` | 12 |
 | The `??` operator | Kept; the else may `return`, `break`, or `continue` | 06, 09, 20 |
 
-The owned heap pointer is spelled `*T` and created with `&expr`, as in
-Go; there is no `Box<T>` (05, 06, 20).
+The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there is no `Box<T>` (05, 06, 20).
