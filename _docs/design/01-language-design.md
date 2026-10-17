@@ -1,6 +1,6 @@
 # Teak language design
 
-Status: draft, 2026-10-17. This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../examples/`.
+Status: draft, 2026-10-17. This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
 
 ## Goals
 
@@ -60,7 +60,7 @@ Ownership with moves by default and **second-class borrows**.
 - Destructors run deterministically when the owner goes out of scope. `defer` remains for cleanup not tied to a value.
 - Structures that need non-owning links (parent pointers, graphs, LRU caches) use arenas with indices, which is already common Go idiom, or the standard library's `Rc`/`Weak`. Both are library types. See `02-arenas-and-indices.md` for the full reasoning.
 
-The programs in `../examples/` confirm the model handles trees, graphs, parsers, linked lists, an LRU cache, and a binary search tree with in-place mutation. Open questions they surfaced are listed in `../examples/README.md`.
+The programs in `../../examples/` confirm the model handles trees, graphs, parsers, linked lists, an LRU cache, and a binary search tree with in-place mutation. Open questions they surfaced are listed in `../../examples/README.md`.
 
 ### Why not the alternatives
 
@@ -140,7 +140,7 @@ Stage 4 emits LLVM IR as text and shells out to `clang`, with a runtime in C. No
 
 Ownership comes before traits because ownership is the bet. Stage 1 is run against the twenty programs with traits and generics stripped out; if the checker rejects one, the design changes before anything is built on top of it. Borrow checking inside a function, with reborrows, conditional moves, moves in loops, and calls like `v.Push(v.Len())`, is the part of Rust's compiler that took longest, and dropping annotations removes none of it. The estimate reflects that.
 
-The twenty programs in `../examples/` are the acceptance test for every stage. Each stage must compile and run all of them before the next begins.
+The twenty programs in `../../examples/` are the acceptance test for every stage. Each stage must compile and run all of them before the next begins.
 
 ## Performance
 

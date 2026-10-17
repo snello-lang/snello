@@ -87,7 +87,7 @@ The price of never annotating. Each has an idiom the examples use.
 ## What it costs
 
 - **A choice at every signature.** Go developers write `T` or `*T` by habit; Teak asks which of three things the function does. The default is easy, `ref` for reading, `mut` for changing, by value for keeping, but it is a decision Go does not ask for.
-- **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../examples/15-lru.teak`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
+- **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../../examples/15-lru.teak`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
 - **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in an owned struct, returning it, or sending it is not.
 
 ## Choosing, in one line

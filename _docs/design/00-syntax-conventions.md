@@ -1,6 +1,6 @@
 # Syntax conventions
 
-Status: draft, 2026-10-17. These are the rules the programs in `../examples/` assume. Each was tested by writing those programs; when an example reads badly, the rule changes here first. The guiding principle: **if Go already has a way to say it, Teak says it the same way.** New syntax exists only where Go has no answer.
+Status: draft, 2026-10-17. These are the rules the programs in `../../examples/` assume. Each was tested by writing those programs; when an example reads badly, the rule changes here first. The guiding principle: **if Go already has a way to say it, Teak says it the same way.** New syntax exists only where Go has no answer.
 
 ## Carried over from Go unchanged
 

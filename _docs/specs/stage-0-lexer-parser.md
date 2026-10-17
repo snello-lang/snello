@@ -59,7 +59,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** The `ast` package: sealed interfaces `Node`, `Decl`, `Stmt`, `Expr`, `Type`, `Pattern`, each with an unexported marker method, and the concrete node structs for everything the examples use. Every node carries its position. No parser yet; this task is the data structure and a printer.
 
 **Acceptance criteria:**
-- [x] One struct per construct in `design/00-syntax-conventions.md`, grouped by interface
+- [x] One struct per construct in `../design/00-syntax-conventions.md`, grouped by interface
 - [x] An `ast.Print` that writes an indented tree, readable by a person
 - [x] A test constructs a small tree by hand and checks the printed form
 
@@ -100,10 +100,10 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Verification:**
 - [ ] Tests pass: `go test ./parser/`
-- [ ] Design updated: `design/00-syntax-conventions.md` states the `<` rule
+- [ ] Design updated: `../design/00-syntax-conventions.md` states the `<` rule
 
 **Dependencies:** 0.5
-**Files:** `parser/types.go`, `parser/parser_test.go`, `design/00-syntax-conventions.md`
+**Files:** `parser/types.go`, `parser/parser_test.go`, `../design/00-syntax-conventions.md`
 **Scope:** M
 
 ## Task 0.7: Declarations
@@ -193,6 +193,6 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 - [ ] All tasks above checked
 - [ ] `go test ./...` passes; `gofmt -l .` and `go vet ./...` are clean
-- [ ] The grammar decisions made during parsing (the `<` rule, `if` forms, `??` precedence) are recorded in `design/00-syntax-conventions.md`
+- [ ] The grammar decisions made during parsing (the `<` rule, `if` forms, `??` precedence) are recorded in `../design/00-syntax-conventions.md`
 - [x] Open question from `plan.md` decided: stage 1 includes `match` and enums (2026-10-18)
 - [ ] Reviewed by the owner before stage 1 begins

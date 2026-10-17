@@ -83,7 +83,7 @@ return tok, lit
 
 - A comment says why, or what a reader cannot see from the code. It never restates the code.
 - Every exported identifier has a doc comment that starts with its name.
-- A comment that explains a subtle choice points at the precedent: "mirrors go/scanner", "see design/04-borrows-ref-and-mut.md".
+- A comment that explains a subtle choice points at the precedent: "mirrors go/scanner", "see _docs/design/04-borrows-ref-and-mut.md".
 - No banner or separator comments (`// ---- Types ----`, `// =====`). Sections of a file are separated by the order of declarations and by blank lines, not by decorated comments.
 
 ### Errors
@@ -105,7 +105,7 @@ return tok, lit
 ## Teak code in `examples/`
 
 - Each file begins with a comment stating what the program tests.
-- Syntax follows `design/00-syntax-conventions.md`. When an example needs something the conventions do not cover, the conventions change first, then the example.
+- Syntax follows `_docs/design/00-syntax-conventions.md`. When an example needs something the conventions do not cover, the conventions change first, then the example.
 - Lines the compiler must reject are shown as comments with the reason, so they can become negative tests later.
 
 ## Commits

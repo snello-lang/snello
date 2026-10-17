@@ -10,7 +10,7 @@
 // Get instead of aliasing whatever lives in the slot now.
 //
 // Compared to tree-slice.teak: no `live` flag, no leaked slots, and stale
-// handles are detected instead of trusted. See design/02-arenas-and-indices.md.
+// handles are detected instead of trusted. See _docs/design/02-arenas-and-indices.md.
 
 package tree
 

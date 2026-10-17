@@ -15,7 +15,7 @@ Core Teak for this stage: structs, enums and `match`, functions and methods with
 
 **Verification:**
 - [ ] All positive programs parse: `go run ./cmd/teak parse`
-- [ ] Reviewed against `design/04-borrows-ref-and-mut.md`: every rule has at least one negative program
+- [ ] Reviewed against `../design/04-borrows-ref-and-mut.md`: every rule has at least one negative program
 
 **Dependencies:** Stage 0
 **Files:** `examples/core/*.teak`, `examples/core/errors/*.teak`
@@ -160,7 +160,7 @@ Core Teak for this stage: structs, enums and `match`, functions and methods with
 
 **Acceptance criteria:**
 - [ ] `go test ./...` runs the core suite and passes
-- [ ] Any rule that changed is updated in `design/04-borrows-ref-and-mut.md` and the examples
+- [ ] Any rule that changed is updated in `../design/04-borrows-ref-and-mut.md` and the examples
 
 **Verification:**
 - [ ] Tests pass: `go test ./...`
@@ -174,5 +174,5 @@ Core Teak for this stage: structs, enums and `match`, functions and methods with
 
 - [ ] All tasks above checked
 - [ ] Every negative program fails for the planned reason and no other
-- [ ] **Decision:** the ownership model holds as designed, or the design document is revised before stage 2. Record the decision in `design/01-language-design.md`
+- [ ] **Decision:** the ownership model holds as designed, or the design document is revised before stage 2. Record the decision in `../design/01-language-design.md`
 - [ ] Reviewed by the owner

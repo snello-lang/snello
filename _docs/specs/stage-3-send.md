@@ -1,6 +1,6 @@
 # Stage 3: ownership across tasks
 
-Goal: the rule in `design/03-ownership-across-tasks.md` is enforced. Data races are compile errors.
+Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data races are compile errors.
 
 ## Task 3.1: `Send` inference
 

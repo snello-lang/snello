@@ -7,14 +7,14 @@ Goal: one Teak kernel runs on a GPU through the LLVM targets, under the rule tha
 **Description:** A design note and a checker mode that identifies functions in the kernel-safe subset: no allocation, no tasks, no trait-as-type dispatch, no unbounded recursion.
 
 **Acceptance criteria:**
-- [ ] `design/06-kernels.md` defines the subset
+- [ ] `../design/06-kernels.md` defines the subset
 - [ ] A function outside the subset that is marked as a kernel reports why
 
 **Verification:**
 - [ ] Tests pass: `go test ./types/`
 
 **Dependencies:** Stage 4
-**Files:** `design/06-kernels.md`, `types/kernel.go`
+**Files:** `../design/06-kernels.md`, `types/kernel.go`
 **Scope:** M
 
 ## Task 5.2: `Device<T>` and launch

@@ -7,14 +7,14 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 **Description:** A design note for the intermediate form between the checked AST and LLVM IR: how enums, options, borrows, drops, closures and interface values are laid out. Written before code.
 
 **Acceptance criteria:**
-- [ ] `design/05-lowering.md` covers every type kind and every drop point
+- [ ] `../design/05-lowering.md` covers every type kind and every drop point
 - [ ] `T?` on a pointer is documented as zero-cost
 
 **Verification:**
 - [ ] Reviewed by the owner
 
 **Dependencies:** Stage 3
-**Files:** `design/05-lowering.md`
+**Files:** `../design/05-lowering.md`
 **Scope:** M
 
 ## Task 4.2: LLVM IR for core, hello world native
@@ -83,7 +83,7 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 
 **Acceptance criteria:**
 - [ ] Native suite green
-- [ ] Numbers recorded in `design/01-language-design.md` next to the expectations
+- [ ] Numbers recorded in `../design/01-language-design.md` next to the expectations
 
 **Verification:**
 - [ ] Tests pass: `go test ./...`

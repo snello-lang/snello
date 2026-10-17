@@ -8,7 +8,7 @@
 // lasts exactly one request, and ownership of the response body.
 //
 // Shared state crosses task boundaries only inside Arc (see
-// design/03-ownership-across-tasks.md). The mux stores the server in an
+// _docs/design/03-ownership-across-tasks.md). The mux stores the server in an
 // Arc and hands each request task its own clone; inside the task the
 // handler receives a `ref Server` for the duration of the request.
 

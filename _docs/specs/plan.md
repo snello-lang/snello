@@ -2,7 +2,7 @@
 
 This folder is the traceable record of the compiler's construction. `plan.md` holds the decisions, the order, the risks, and an index of every task. One file per stage holds the tasks themselves with checkboxes, acceptance criteria, and verification steps. A task is checked off only when its verification steps have been run and passed; the date goes next to the box.
 
-The stages come from `../design/01-language-design.md`. The twenty programs under `../examples/` are the acceptance suite for every stage.
+The stages come from `../design/01-language-design.md`. The twenty programs under `../../examples/` are the acceptance suite for every stage.
 
 ## Overview
 

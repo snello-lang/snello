@@ -10,7 +10,7 @@
 // A struct with a `ref` field is itself a borrow: it obeys every borrow
 // rule (cannot be stored in an owned struct, returned, or sent). That is
 // enough for a lexer, which is created in Parse, used, and dropped before
-// Parse returns. See design/00-syntax-conventions.md, "Borrow-holding
+// Parse returns. See _docs/design/00-syntax-conventions.md, "Borrow-holding
 // structs".
 
 package calc

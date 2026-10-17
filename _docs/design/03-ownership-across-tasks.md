@@ -1,6 +1,6 @@
 # Ownership across tasks
 
-Status: decided, 2026-10-17. This note explains what may cross a task boundary in Teak and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../examples/02-pipeline/`.
+Status: decided, 2026-10-17. This note explains what may cross a task boundary in Teak and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
 
 ## The problem
 
@@ -52,7 +52,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 - `Arc<Mutex<T>>` or `Arc<RwLock<T>>` for shared mutable state. The lock owns the data. `Lock()` returns a guard that is a `mut T` borrow and releases on drop, so forgetting to unlock is impossible and so is touching the data without the lock.
 - Atomics for counters and flags.
 
-`../examples/03-http-cache.teak` shows `Arc<RwLock<T>>` where a cache is shared by every request task.
+`../../examples/03-http-cache.teak` shows `Arc<RwLock<T>>` where a cache is shared by every request task.
 
 ## What it costs
 
@@ -65,7 +65,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 - **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written.
 - **Deterministic frees across tasks.** A value received from a channel is freed by the receiver when it is done, not by a collector later.
 - **Nothing to annotate.** The pipeline example has one Teak-specific token, a `ref`, and it is there for efficiency rather than safety.
-- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../examples/13-actor.teak` shows it.
+- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.teak` shows it.
 
 ## Precedent
 

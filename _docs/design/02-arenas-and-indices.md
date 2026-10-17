@@ -49,7 +49,7 @@ Because an index is a plain integer:
 - it can be sent across tasks,
 - and the ownership story stays trivial: the slice owns everything, and when the tree is dropped, everything goes with it.
 
-Every operation on a node needs the arena as well as the index, which is why the methods in `../examples/01-tree.teak` all take the tree as their receiver. You never hand someone "a node" on its own.
+Every operation on a node needs the arena as well as the index, which is why the methods in `../../examples/01-tree.teak` all take the tree as their receiver. You never hand someone "a node" on its own.
 
 ## The standard library `Arena<T>`
 
@@ -74,12 +74,12 @@ for i, v := range a { ... }                     // i: Index<T>, v: ref T, live s
 - Removed slots go on a free list and are reused by later inserts, so a long-lived arena with churn does not grow without bound.
 - `Get` and `GetMut` return borrows tied to the arena borrow, under the one built-in rule in `01-language-design.md`. They cannot be stored.
 
-The tree in `../examples/01-tree.teak` is written against this API.
+The tree in `../../examples/01-tree.teak` is written against this API.
 
 ## What it costs
 
 - **Stale indices are a runtime condition, not a compile-time one.** The generation check makes them safe and detectable, but the compiler cannot prove an index is live the way it proves an owner is. Code that holds indices across removals must handle `None`.
-- **Aliasing inside one slice.** Mutating `nodes[a]` and `nodes[b]` in the same expression is two mutable paths into one slice, and the compiler cannot prove `a != b`. The idiom is to copy the needed fields out as plain values first, then write back. `../examples/15-lru.teak` shows both the rejected form and the accepted one.
+- **Aliasing inside one slice.** Mutating `nodes[a]` and `nodes[b]` in the same expression is two mutable paths into one slice, and the compiler cannot prove `a != b`. The idiom is to copy the needed fields out as plain values first, then write back. `../../examples/15-lru.teak` shows both the rejected form and the accepted one.
 - **No node without its arena.** A function that wants to work on a node must receive the arena too. In practice this is one extra parameter.
 - **A small per-slot overhead.** The generation counter is one integer per slot, and each lookup compares it. This is far cheaper than a reference count or a runtime borrow flag.
 
@@ -93,7 +93,7 @@ The tree in `../examples/01-tree.teak` is written against this API.
 
 ## When to use something else
 
-The arena is the recommended idiom, not the only one. The standard library provides `Rc<T>` and `Weak<T>` for code that genuinely needs shared, pointer-shaped ownership, for example when nodes must outlive any single container or be shared by several. `../examples/01-tree.teak` shows the same tree written both ways. `Rc` costs a reference count per node and is not `Send`; `Arc` is the atomic version for cross-task sharing.
+The arena is the recommended idiom, not the only one. The standard library provides `Rc<T>` and `Weak<T>` for code that genuinely needs shared, pointer-shaped ownership, for example when nodes must outlive any single container or be shared by several. `../../examples/01-tree.teak` shows the same tree written both ways. `Rc` costs a reference count per node and is not `Send`; `Arc` is the atomic version for cross-task sharing.
 
 ## Precedent
 

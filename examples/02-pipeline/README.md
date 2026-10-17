@@ -40,4 +40,4 @@ out <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
 
 `strings.Fields` only needs to read the text, so it takes a `ref`. Without the `ref`, `job.text` would be moved into the call, which would also be legal here since `job` is dropped on the next line. The borrow is the cheaper and clearer choice. This is the only Teak-specific token in the whole pipeline.
 
-See `../../design/03-ownership-across-tasks.md` for the rules and the reasoning behind them.
+See `../../_docs/design/03-ownership-across-tasks.md` for the rules and the reasoning behind them.

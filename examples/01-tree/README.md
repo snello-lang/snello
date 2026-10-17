@@ -45,4 +45,4 @@ The Go program keeps a removed subtree alive for as long as any variable points 
 
 ## The escape hatch
 
-Code that needs pointer-shaped shared ownership, for example nodes that must outlive any single container, can use `Rc<Node>` with `Weak<Node>` back-links from the standard library. It costs a reference count and one allocation per node, a runtime borrow check on each access, and the tree is not `Send`. It is deliberately not shown as a full version here; see `../../design/02-arenas-and-indices.md` for when it is the right choice.
+Code that needs pointer-shaped shared ownership, for example nodes that must outlive any single container, can use `Rc<Node>` with `Weak<Node>` back-links from the standard library. It costs a reference count and one allocation per node, a runtime borrow check on each access, and the tree is not `Send`. It is deliberately not shown as a full version here; see `../../_docs/design/02-arenas-and-indices.md` for when it is the right choice.

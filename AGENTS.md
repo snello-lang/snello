@@ -8,12 +8,12 @@ Teak is a programming language in design: Go's syntax and concurrency, memory sa
 
 ## Read first, in this order
 
-1. `design/01-language-design.md`: every decision and why.
-2. `design/00-syntax-conventions.md`: the syntax the examples use.
-3. `design/02-` to `04-`: the memory model notes.
+1. `_docs/design/01-language-design.md`: every decision and why.
+2. `_docs/design/00-syntax-conventions.md`: the syntax the examples use.
+3. `_docs/design/02-` to `04-`: the memory model notes.
 4. `examples/README.md`: what each example tests and the decisions they forced.
 5. `CODING_STANDARDS.md`: how code is written here.
-6. `specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
+6. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 
@@ -48,12 +48,13 @@ go run ./cmd/teak lex FILE   # print the token stream of a Teak file
 
 | Path | Contents |
 |---|---|
-| `design/` | Design documents, numbered |
+| `_docs/design/` | Design documents, numbered |
+| `_docs/specs/` | Implementation plan and per-stage task lists |
 | `examples/` | The twenty Teak programs, plus Go versions of the first two |
 | `token/` | Token kinds and positions, modeled on `go/token` |
 | `scanner/` | The lexer, modeled on `go/scanner` |
 | `cmd/teak/` | The command-line driver |
-| `brand/` | Logo and palette |
+| `_docs/brand/` | Logo and palette |
 
 Packages to come, in order: `ast`, `parser`, then the checker.
 

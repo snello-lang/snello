@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-dark.svg">
-    <img alt="Teak" src="brand/logo-light.svg" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="_docs/brand/logo-dark.svg">
+    <img alt="Teak" src="_docs/brand/logo-light.svg" width="320">
   </picture>
 </p>
 
@@ -30,10 +30,10 @@ The current work is a set of twenty programs written in a provisional syntax bef
 
 | Path | Contents |
 |---|---|
-| [`design/`](design/) | Language design document and syntax conventions |
+| [`_docs/design/`](_docs/design/) | Language design document and syntax conventions |
 | [`examples/`](examples/) | The twenty programs, with the open questions they raised |
-| [`specs/`](specs/) | The implementation plan and per-stage task lists |
-| [`brand/`](brand/) | Logo, wordmark, and palette |
+| [`_docs/specs/`](_docs/specs/) | The implementation plan and per-stage task lists |
+| [`_docs/brand/`](_docs/brand/) | Logo, wordmark, and palette |
 
 ## Plan
 
