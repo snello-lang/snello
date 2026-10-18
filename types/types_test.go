@@ -5,6 +5,7 @@
 package types
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/teak-lang/teak/token"
@@ -66,6 +67,7 @@ func TestTypeString(t *testing.T) {
 		{NewResult(Typ[Int64], Typ[Error]), "Result<i64, error>"},
 		{NewResult(Unit, state), "Result<(), State>"},
 		{NewSignature(nil, nil, nil), "func()"},
+		{NewSignature(nil, nil, &Tuple{}), "func()"}, // an empty tuple built by hand is still Unit
 		{NewSignature(nil, []*Var{NewVar(token.NoPos, "n", NewRef(node, false))}, nil), "func(ref Node)"},
 		{NewSignature(nil, []*Var{NewVar(token.NoPos, "a", integer), NewVar(token.NoPos, "b", integer)}, Typ[Bool]), "func(int, int) bool"},
 		{NewSignature(nil, nil, NewTuple(integer, str)), "func() (int, string)"},
@@ -145,7 +147,10 @@ func TestAssignableTo(t *testing.T) {
 		{NewChan(SendRecv, integer), NewChan(RecvOnly, integer), true},
 		{NewChan(SendOnly, integer), NewChan(SendRecv, integer), false},
 		{NewChan(SendRecv, integer), NewChan(SendOnly, f64), false},
-		{NewPointer(node), NewOption(NewPointer(node)), false}, // Some(p) is written
+		{NewChan(SendRecv, integer), NewNamed(NewTypeName(token.NoPos, "Ch", nil), NewChan(SendOnly, integer), nil), true},                                                      // through a name
+		{NewNamed(NewTypeName(token.NoPos, "Bi", nil), NewChan(SendRecv, integer), nil), NewChan(RecvOnly, integer), true},                                                      // a named channel narrows
+		{NewNamed(NewTypeName(token.NoPos, "Bi", nil), NewChan(SendRecv, integer), nil), NewNamed(NewTypeName(token.NoPos, "Ch", nil), NewChan(SendOnly, integer), nil), false}, // two names never assign
+		{NewPointer(node), NewOption(NewPointer(node)), false},                                                                                                                  // Some(p) is written
 		{Unit, Unit, true},
 	}
 	for _, tt := range tests {
@@ -242,7 +247,7 @@ func TestUniverse(t *testing.T) {
 			continue
 		}
 
-		if kind := typeName(obj); kind != tt.kind {
+		if kind := fmt.Sprintf("%T", obj); kind != tt.kind {
 			t.Errorf("Universe.Lookup(%q) is %s, want %s", tt.name, kind, tt.kind)
 		}
 
@@ -296,27 +301,4 @@ func TestScope(t *testing.T) {
 	if fn.Parent() != pkg || Universe.Parent() != nil {
 		t.Error("Parent chain is wrong")
 	}
-}
-
-// typeName returns the dynamic type of an object as a string, for the
-// universe test.
-func typeName(obj Object) string {
-	switch obj.(type) {
-	case *TypeName:
-		return "*types.TypeName"
-	case *Var:
-		return "*types.Var"
-	case *Const:
-		return "*types.Const"
-	case *Func:
-		return "*types.Func"
-	case *Variant:
-		return "*types.Variant"
-	case *Builtin:
-		return "*types.Builtin"
-	case *PkgName:
-		return "*types.PkgName"
-	}
-
-	return "?"
 }

@@ -63,6 +63,15 @@ const (
 	IsNumeric = IsInteger | IsFloat
 )
 
+// copyState caches whether a named type is Copy; see Named.isCopy.
+type copyState int8
+
+const (
+	copyUnknown copyState = iota
+	copyNo
+	copyYes
+)
+
 // ChanDir is the direction of a channel type.
 type ChanDir int
 
@@ -201,7 +210,7 @@ type Named struct {
 	obj        *TypeName
 	underlying Type
 	impls      []string // the traits after impl, by name until traits exist
-	copyState  int8     // 0 unknown, 1 not Copy, 2 Copy
+	copyState  copyState
 }
 
 // NewPointer returns the type *elem.
@@ -432,7 +441,7 @@ func signatureString(s *Signature) string {
 	}
 
 	b.WriteString(")")
-	if s.results != Unit {
+	if t, ok := s.results.(*Tuple); !ok || t.Len() > 0 {
 		b.WriteString(" ")
 		b.WriteString(s.results.String())
 	}

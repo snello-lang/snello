@@ -82,13 +82,14 @@ func AssignableTo(v, t Type) bool {
 		return ok && vr.mut && !tr.mut && Identical(vr.elem, tr.elem)
 	}
 
-	if vc, ok := v.(*Chan); ok && vc.dir == SendRecv {
-		tc, ok := t.(*Chan)
-		return ok && Identical(vc.elem, tc.elem)
-	}
-
 	if isNamed(v) && isNamed(t) {
 		return false
+	}
+
+	if vc, ok := v.Underlying().(*Chan); ok && vc.dir == SendRecv {
+		if tc, ok := t.Underlying().(*Chan); ok && Identical(vc.elem, tc.elem) {
+			return true
+		}
 	}
 
 	return Identical(v.Underlying(), t.Underlying())
@@ -141,23 +142,14 @@ func IsCopy(t Type) bool {
 // reaches itself without a pointer in between has no finite size and is
 // rejected elsewhere; here it counts as Copy so the recursion ends.
 func (n *Named) isCopy() bool {
-	switch n.copyState {
-	case 1:
-		return false
-	case 2:
-		return true
+	if n.copyState == copyUnknown && n.underlying != nil {
+		n.copyState = copyYes // provisional, so that a cycle back to n ends here
+		if !IsCopy(n.underlying) {
+			n.copyState = copyNo
+		}
 	}
 
-	if n.underlying == nil {
-		return false
-	}
-
-	n.copyState = 2
-	if !IsCopy(n.underlying) {
-		n.copyState = 1
-	}
-
-	return n.copyState == 2
+	return n.copyState == copyYes
 }
 
 // isNamed reports whether t is a declared or basic type, the types that
