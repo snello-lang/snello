@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 typedef int64_t tk_int;
 typedef uint64_t tk_uint;
@@ -57,16 +58,6 @@ _Noreturn void tk_panic(tk_string msg);
 _Noreturn void tk_exit(int code);
 _Noreturn void tk_bounds(int64_t i, int64_t len);
 
-// tk_index checks an index against a length and returns it, so every
-// element access is checked, as in Teak.
-static inline int64_t tk_index(int64_t i, int64_t len) {
-    if ((uint64_t)i >= (uint64_t)len) {
-        tk_bounds(i, len);
-    }
-
-    return i;
-}
-
 // An error is its message for now, and an empty message is no
 // error: the os and io functions return one and store their result
 // through a pointer. A file is a descriptor; the three standard streams
@@ -75,17 +66,129 @@ typedef struct {
     int fd;
 } tk_file;
 
-// Drops: each releases what a value owns and is a no-op on a zero
-// value, which is what a moved-from place holds. A file closes its
-// descriptor, never one of the three standard streams.
-static inline void tk_string_drop(tk_string s) {
+// A map keeps its entries in insertion order, which is the order a
+// range visits them, and finds them through a hash index. The emitter
+// gives each map type a tk_map_type naming the sizes, the hash and
+// the equality of its keys. A map declared without a value is all
+// zeros and works as an empty map.
+typedef struct {
+    void *keys;
+    void *vals;
+    uint8_t *live;  // one per entry: false after Remove
+    int64_t *index; // hash slots holding entry positions plus one; zero is empty
+    int64_t len;    // entries, dead ones included
+    int64_t count;  // live entries
+    int64_t cap;    // room for entries
+    int64_t slots;  // size of the index, a power of two
+} tk_map;
+
+// A debug build, teak build -debug, compiles the runtime with TK_DEBUG
+// and makes a mistake of the compiler a stopped program instead of a
+// quiet one: every block tk_alloc gives is counted, and a program that
+// ends with blocks still live reports them and fails; a released block
+// is filled with the poison byte and kept from reuse for a while, and
+// a dropped place is filled with it too, so a string, slice, map,
+// pointer or file read after its release is seen by the runtime
+// function that reads it, which panics naming it; an owned pointer
+// read after it moved, which leaves a null, panics the same way. A
+// release build does none of this.
+#ifdef TK_DEBUG
+#define TK_POISON(place) memset(&(place), 0xDD, sizeof(place))
+#define TK_DEREF(p) (*(__typeof__(p))tk_deref(p))
+_Noreturn void tk_released(const char *what);
+void *tk_deref(void *p);
+void tk_check_block(const void *p, const char *what);
+
+// A poisoned length or capacity is negative, which no live value has;
+// an owned string also points at a block, which must still be live.
+// The block is what catches a borrow of a local that outlived it: the
+// C compiler may drop the poisoning of a variable whose scope just
+// ended, but never the poisoning of the heap.
+static inline void tk_check_string(tk_string s) {
+    if (s.len < 0 || s.cap < 0) {
+        tk_released("string");
+    }
+
     if (s.cap > 0) {
-        tk_free((void *)s.ptr);
+        tk_check_block(s.ptr, "string");
     }
 }
 
-void tk_file_drop(tk_file f);
+static inline void tk_check_slice(const tk_slice *s) {
+    if (s->len < 0 || s->cap < 0) {
+        tk_released("slice");
+    }
+}
+
+static inline void tk_check_len(int64_t len) {
+    if (len < 0) {
+        tk_released("slice");
+    }
+}
+
+static inline void tk_check_map(const tk_map *m) {
+    if (m->len < 0 || m->cap < 0) {
+        tk_released("map");
+    }
+
+    if (m->keys != NULL) {
+        tk_check_block(m->keys, "map");
+    }
+}
+
+static inline void tk_check_file(tk_file f) {
+    if (f.fd == (int)0xDDDDDDDD) {
+        tk_released("file");
+    }
+}
+#else
+#define TK_POISON(place) ((void)0)
+#define TK_DEREF(p) (*(p))
+#define tk_check_string(s) ((void)0)
+#define tk_check_slice(s) ((void)0)
+#define tk_check_len(len) ((void)0)
+#define tk_check_map(m) ((void)0)
+#define tk_check_file(f) ((void)0)
+#endif
+
+// tk_index checks an index against a length and returns it, so every
+// element access is checked, as in Teak.
+static inline int64_t tk_index(int64_t i, int64_t len) {
+    tk_check_len(len);
+    if ((uint64_t)i >= (uint64_t)len) {
+        tk_bounds(i, len);
+    }
+
+    return i;
+}
+
+// tk_finish ends a program that returned from main: in a debug build
+// it reports the blocks still live and fails the program when there
+// are any.
+int tk_finish(void);
+
+// Drops: each releases what a value owns and is a no-op on a zero
+// value, which is what a moved-from place holds, and leaves the place
+// poisoned in a debug build. A file closes its descriptor, never one
+// of the three standard streams.
+static inline void tk_string_drop(tk_string *s) {
+    tk_check_string(*s);
+    if (s->cap > 0) {
+        tk_free((void *)s->ptr);
+    }
+
+    TK_POISON(*s);
+}
+
+// tk_string_free is the drop of a string the runtime was given to
+// consume, which has no place to poison.
+static inline void tk_string_free(tk_string s) {
+    tk_string_drop(&s);
+}
+
+void tk_file_drop(tk_file *f);
 void tk_slice_free(tk_slice *s);
+void tk_release(void **p); // frees the block an owned pointer holds and empties the pointer
 
 extern tk_file tk_stdin, tk_stdout, tk_stderr;
 extern tk_slice tk_args; // the command line, as a slice of tk_string
@@ -111,22 +214,6 @@ void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size);
 void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size_t size);
 void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx);
 
-// A map keeps its entries in insertion order, which is the order a
-// range visits them, and finds them through a hash index. The emitter
-// gives each map type a tk_map_type naming the sizes, the hash and
-// the equality of its keys. A map declared without a value is all
-// zeros and works as an empty map.
-typedef struct {
-    void *keys;
-    void *vals;
-    uint8_t *live;  // one per entry: false after Remove
-    int64_t *index; // hash slots holding entry positions plus one; zero is empty
-    int64_t len;    // entries, dead ones included
-    int64_t count;  // live entries
-    int64_t cap;    // room for entries
-    int64_t slots;  // size of the index, a power of two
-} tk_map;
-
 typedef struct {
     size_t ksize;
     size_t vsize;
@@ -145,6 +232,13 @@ void tk_map_free(tk_map *m, const tk_map_type *t);
 int64_t tk_map_next(const tk_map *m, int64_t i);
 uint64_t tk_hash_bytes(const void *p, size_t n);
 uint64_t tk_hash_mix(uint64_t h, uint64_t v);
+
+// tk_hash_string hashes a map key, checked first in a debug build, as
+// a poisoned length would be read as an enormous one.
+static inline uint64_t tk_hash_string(tk_string s) {
+    tk_check_string(s);
+    return tk_hash_bytes(s.ptr, (size_t)s.len);
+}
 
 tk_string tk_string_clone(tk_string s);
 tk_string tk_substr(tk_string s, int64_t lo, int64_t hi);

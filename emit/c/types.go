@@ -332,8 +332,26 @@ func depth(t types.Type) int {
 
 // deref writes v, a C value of Teak type t, dereferenced to the value.
 func deref(v string, t types.Type) string {
-	for d := depth(t); d > 0; d-- {
-		v = "(*" + v + ")"
+	return derefTo(v, t, nil)
+}
+
+// derefTo writes v, a C value of Teak type have, read down to the
+// pointer depth of want: through a mut borrow, which is a C pointer
+// to the place, and through an owned pointer, which a debug build
+// checks first.
+func derefTo(v string, have, want types.Type) string {
+	for t := have; depth(t) > depth(want); {
+		switch u := t.(type) {
+		case *types.Ref:
+			if u.Mut() {
+				v = "(*" + v + ")"
+			}
+
+			t = u.Elem()
+		case *types.Pointer:
+			v = "TK_DEREF(" + v + ")"
+			t = u.Elem()
+		}
 	}
 
 	return v

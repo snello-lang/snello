@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `teak build` produces native binaries for all of core Teak (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there (stage 1, task 1.9).
+Status: `teak build` produces native binaries for all of core Teak (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there; `teak build -debug` checks the drops at run time (stage 1, task 1.9).
 
 ## The compiler
 
@@ -34,6 +34,8 @@ teak build hello.teak
 ```
 
 `teak build` writes a native executable named after the file, in the current directory. The file name must end in `.teak`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Teak's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
+
+`teak build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
 
 ## The other commands
 

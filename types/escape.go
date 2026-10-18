@@ -272,6 +272,11 @@ func (c *Checker) returned(e ast.Expr, op operand) {
 	}
 
 	if holdsBorrow(c.sig.results) {
+		if tmp := c.borrowOfTemporary(e); tmp != nil {
+			c.errorf(e.Pos(), "cannot return a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			return
+		}
+
 		c.source(e, e.Pos())
 	}
 }

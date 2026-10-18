@@ -31,15 +31,18 @@ import (
 	"github.com/teak-lang/teak/types"
 )
 
-//go:embed runtime/teak.h runtime/teak.c
+//go:embed runtime/teak.h runtime/teak.c runtime/debug.c
 var runtimeFiles embed.FS
 
-// Runtime returns the runtime's header and source, to be written next
-// to the emitted program and compiled with it.
-func Runtime() (header, source []byte) {
-	header, _ = runtimeFiles.ReadFile("runtime/teak.h")
-	source, _ = runtimeFiles.ReadFile("runtime/teak.c")
-	return header, source
+// Runtime returns the runtime's files by name, to be written next to
+// the emitted program and compiled with it.
+func Runtime() map[string][]byte {
+	files := make(map[string][]byte)
+	for _, name := range []string{"teak.h", "teak.c", "debug.c"} {
+		files[name], _ = runtimeFiles.ReadFile("runtime/" + name)
+	}
+
+	return files
 }
 
 // An Emitter writes one program. C needs a type complete before a
@@ -136,7 +139,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n\ttk_main();\n\treturn 0;\n}\n")
+	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n\ttk_main();\n\treturn tk_finish();\n}\n")
 	return out.Bytes(), nil
 }
 

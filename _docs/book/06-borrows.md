@@ -47,6 +47,14 @@ The compiler enforces six rules. They are what make it possible to never write d
 5. **A borrow passes on narrower or equal.** A `mut T` can be handed to a function wanting `ref T` or `mut T`; a `ref T` only as `ref T`. A borrow of a field or element can be taken from a borrow of the whole, and a borrow variable may be reassigned to a borrow derived from itself.
 6. **The owner outlives every borrow.** This follows from the others: a borrow never leaves the function that can see its owner, except by rule 3, riding on an input borrow the caller already holds.
 
+Rule 6 reaches one value the others do not name: a temporary, a value no variable holds, such as the result of `s.Clone()` in `s.Clone().Trim()`. A temporary is dropped when its statement ends, so a borrow of it can be used inside the statement, `fmt.Println(s.Clone().Trim())`, ranged over, matched on, but not kept in a variable or returned:
+
+```teak
+t := s.Clone().Trim()                 // ERROR "cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends"
+```
+
+Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program.
+
 Rule 4 is the one you will meet first. A method with a `mut` receiver creates a `mut` borrow, so a `ref` held across the call is a conflict:
 
 ```teak
@@ -163,5 +171,6 @@ Every message about a live borrow ends with where it began and the use that keep
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
 | `cannot return a borrow of local s`, `cannot return a borrow of m: a method's returned borrow is tied to its receiver` | `return-local-borrow`, `TestEscapes` in `types/escape_test.go` |
+| `cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`, `cannot return a borrow of a temporary: ...` | `TestBorrows`, `TestEscapes` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
 | `closure captures n by borrow and cannot be returned`, `... stored`, `... sent`, `... spawned` | `closure-returned`, `closure-stored`, `TestEscapes` |

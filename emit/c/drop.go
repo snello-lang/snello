@@ -102,9 +102,9 @@ func hasDrop(t types.Type) bool {
 func (e *Emitter) dropOf(place string, t types.Type, pos token.Pos) string {
 	switch {
 	case isString(t):
-		return "tk_string_drop(" + place + ");"
+		return "tk_string_drop(&" + place + ");"
 	case t == types.OSFile:
-		return "tk_file_drop(" + place + ");"
+		return "tk_file_drop(&" + place + ");"
 	}
 
 	return e.dropper(t, pos) + "(&" + place + ");"
@@ -131,10 +131,10 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
-		b.WriteString("\ttk_string_drop(*v);\n")
+		b.WriteString("\ttk_string_drop(v);\n")
 	case *types.Struct:
 		if t == types.OSFile {
-			b.WriteString("\ttk_file_drop(*v);\n")
+			b.WriteString("\ttk_file_drop(v);\n")
 			break
 		}
 
@@ -170,7 +170,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			}
 		}
 	case *types.Pointer:
-		put(&b, "\tif (*v != NULL) {\n\t\t", e.dropIfNeeded("(**v)", u.Elem(), pos), "\n\t\ttk_free(*v);\n\t\t*v = NULL;\n\t}\n")
+		put(&b, "\tif (*v != NULL) {\n\t\t", e.dropIfNeeded("TK_DEREF(*v)", u.Elem(), pos), "\n\t\ttk_release((void **)v);\n\t}\n")
 	case *types.Slice:
 		if needsDrop(u.Elem()) {
 			put(&b, "\tfor (int64_t i = 0; i < v->len; i++) {\n\t\t", e.dropOf("v->ptr[i]", u.Elem(), pos), "\n\t}\n\n")
@@ -428,9 +428,30 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	return e.cloner(t, pos) + "(" + v + ")"
 }
 
+// mapSlotter returns the name of the function giving the value slot
+// for a key in a map of type t, writing it on first use: the key is
+// taken, kept by a new entry and dropped when an entry already has it.
+func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
+	name := "tk_mapslot_" + mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	mt, k, v := e.mapType(t, pos), e.cType(t.Key(), pos), e.cType(t.Value(), pos)
+	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k)"
+	put(&e.protos, head, ";\n")
+	var b strings.Builder
+	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n")
+	put(&b, "\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\treturn found;\n\t}\n\n")
+	put(&b, "\treturn tk_map_slot((tk_map *)m, ", mt, ", &k);\n}\n\n")
+	e.helpers.WriteString(b.String())
+	return name
+}
+
 // mapSetter returns the name of the function storing a key and value
 // in a map of type t, writing it on first use: an entry already there
-// takes the new value and drops the old one and the key it was given.
+// takes the new value and drops the old one.
 func (e *Emitter) mapSetter(t *types.Map, pos token.Pos) string {
 	name := "tk_mapset_" + mangle(t)
 	if e.state[name] != undeclared {
@@ -438,14 +459,10 @@ func (e *Emitter) mapSetter(t *types.Map, pos token.Pos) string {
 	}
 
 	e.state[name] = defined
-	mt, k, v := e.mapType(t, pos), e.cType(t.Key(), pos), e.cType(t.Value(), pos)
+	k, v := e.cType(t.Key(), pos), e.cType(t.Value(), pos)
 	head := "static void " + name + "(" + e.cType(t, pos) + " *m, " + k + " k, " + v + " v)"
 	put(&e.protos, head, ";\n")
-	var b strings.Builder
-	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n")
-	put(&b, "\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\t", e.dropIfNeeded("(*found)", t.Value(), pos), "\n\t\t*found = v;\n\t\treturn;\n\t}\n\n")
-	put(&b, "\t*(", v, " *)tk_map_slot((tk_map *)m, ", mt, ", &k) = v;\n}\n\n")
-	e.helpers.WriteString(b.String())
+	put(&e.helpers, head, " {\n\t", v, " *slot = ", e.mapSlotter(t, pos), "(m, k);\n\t", e.dropIfNeeded("(*slot)", t.Value(), pos), "\n\t*slot = v;\n}\n\n")
 	return name
 }
 

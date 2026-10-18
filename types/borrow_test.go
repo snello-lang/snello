@@ -19,6 +19,18 @@ func TestBorrows(t *testing.T) {
 		src  string
 		want []string
 	}{
+		// A borrow of a temporary dies with its statement, so it cannot be kept.
+		{"func f() { t := \"  pad  \".Clone().Trim(); print(t) }", []string{"cannot keep a borrow of a temporary: \"  pad  \".Clone() is dropped when the statement ends"}},
+		{"func f() { r := ref \"x\".Clone(); print(r) }", []string{"cannot keep a borrow of a temporary: \"x\".Clone() is dropped when the statement ends"}},
+		{"func f() { w := \"a b\".Clone().Fields(); print(w) }", []string{"cannot keep a borrow of a temporary: \"a b\".Clone() is dropped when the statement ends"}},
+		{"func f() { p := Pair{a: \"a\", b: \"b\"}; t := p.a.Clone().Trim(); print(t) }", []string{"cannot keep a borrow of a temporary: p.a.Clone() is dropped when the statement ends"}},
+		{"func f() { s := \"x\"; t := s.Trim(); print(t) }", nil},
+		{"func f() { t := \"  lit  \".Trim(); print(t) }", nil},          // a literal lives for the whole program
+		{"func f() { s := \"x\"; n := s.Clone().Len(); print(n) }", nil}, // n borrows nothing
+		{"func f() { for w := range \"a b\".Clone().Fields() { print(w) } }", nil},
+		{"func f() { if (k, v) := \"k=v\".Clone().SplitOnce(\"=\") { print(k); print(v) } }", nil},
+		{"func f() { print(\"  x \".Clone().Trim()) }", nil},
+
 		// Any number of ref, or one mut, and a borrow lives to its last use.
 		{"func f() { xs := []int{1}; r := ref xs; xs.Push(2); print(r) }", []string{"cannot borrow xs as mut: xs is borrowed as ref by r"}},
 		{"func f() { xs := []int{1}; r := ref xs; print(r); xs.Push(2) }", nil},

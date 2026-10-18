@@ -77,17 +77,11 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
 		return e.expr(x)
 	}
 
-	d := depth(have) - depth(want)
-	if d < 0 {
+	if depth(have) < depth(want) {
 		return "&" + e.lvalue(x)
 	}
 
-	s := e.expr(x)
-	for ; d > 0; d-- {
-		s = "(*" + s + ")"
-	}
-
-	return s
+	return derefTo(e.expr(x), have, want)
 }
 
 // lvalue writes x as a place about to be written or lent mutably: as
@@ -361,8 +355,13 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		return e.valueTo(x.X, e.info.Types[x])
 	case token.MUL:
 		s := e.expr(x.X)
-		if r, ok := e.info.Types[x.X].(*types.Ref); ok && !r.Mut() {
-			return s // a ref is the value itself
+		switch r := e.info.Types[x.X].(type) {
+		case *types.Ref:
+			if !r.Mut() {
+				return s // a ref is the value itself
+			}
+		case *types.Pointer:
+			return "TK_DEREF(" + s + ")"
 		}
 
 		return "(*" + s + ")"
@@ -405,7 +404,12 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 		return r
 	}
 
-	sides := e.operands([]ast.Expr{x.X, x.Y}, []types.Type{t, t})
+	var want types.Type = t
+	if x.Op != token.ADD {
+		want = types.NewRef(t, false) // a comparison only looks at its sides: one built here is held for the statement
+	}
+
+	sides := e.operands([]ast.Expr{x.X, x.Y}, []types.Type{want, want})
 	l, r := sides[0], sides[1]
 	if x.Op == token.EQL || x.Op == token.NEQ {
 		if _, basic := t.Underlying().(*types.Basic); !basic || isString(t) {

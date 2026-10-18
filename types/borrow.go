@@ -206,10 +206,18 @@ func (c *Checker) lendCaptures(e ast.Expr, pos token.Pos) {
 // hold records that v holds the borrow its value carries, when the
 // value is a borrow and the place it was lent from can be found: r in
 // r := ref xs holds xs, n in n := cur ?? return holds what cur holds,
-// and f in f := m.Get(k) holds m.
+// and f in f := m.Get(k) holds m. A borrow of a temporary cannot be
+// held at all: t := s.Clone().Trim() would outlive the clone.
 func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 	if e == nil {
 		return
+	}
+
+	if _, ok := borrowIn(v.typ); ok {
+		if tmp := c.borrowOfTemporary(e); tmp != nil {
+			c.errorf(pos, "cannot keep a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			return
+		}
 	}
 
 	if id, ok := unparen(e).(*ast.Ident); ok && isMut(v.typ) {
@@ -242,6 +250,73 @@ func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 	}
 
 	c.derive(v, borrowSource(e), pos)
+}
+
+// noteTemporary records that e, lent to a call or a ref, is a
+// temporary when its value is owned and no variable holds it, other
+// than a literal or a constant, which live for the whole program.
+func (c *Checker) noteTemporary(e ast.Expr, x operand) {
+	if x.mode == value && !isBorrow(x.typ) && !c.static(e) {
+		c.markTemporary(e, e)
+	}
+}
+
+// markTemporary records that the value of e is, or borrows, the
+// temporary tmp.
+func (c *Checker) markTemporary(e, tmp ast.Expr) {
+	if c.temporary == nil {
+		c.temporary = make(map[ast.Expr]ast.Expr)
+	}
+
+	c.temporary[e] = tmp
+}
+
+// static reports whether e is a literal or a constant, whose value
+// outlives every statement.
+func (c *Checker) static(e ast.Expr) bool {
+	switch e := unparen(e).(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		_, obj := c.scope.LookupParent(e.Name)
+		_, ok := obj.(*Const)
+		return ok
+	}
+
+	return false
+}
+
+// borrowOfTemporary returns the temporary a borrow in e was lent
+// from, looking through parentheses, ?? and ?, and into the elements
+// of a literal or tuple, or nil when every borrow in e comes from a
+// place.
+func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.CoalesceExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.TryExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.TupleExpr:
+		for _, elt := range x.Elts {
+			if tmp := c.borrowOfTemporary(elt); tmp != nil {
+				return tmp
+			}
+		}
+	case *ast.CompositeLit:
+		for _, elt := range x.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			if tmp := c.borrowOfTemporary(elt); tmp != nil {
+				return tmp
+			}
+		}
+	}
+
+	return c.temporary[e]
 }
 
 // derive records that v holds a borrow of the place src, when v's type

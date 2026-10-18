@@ -20,10 +20,11 @@ var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-fwrapv", "-fno
 
 // Build writes the emitted program and the runtime into dir, compiles
 // them with the system C compiler, and returns the path of the binary
-// named name. The compiler's output comes back with any error.
-func Build(dir, name string, src []byte) (bin string, output []byte, err error) {
-	header, source := Runtime()
-	files := map[string][]byte{"teak.h": header, "teak.c": source, name + ".c": src}
+// named name. The compiler's output comes back with any error. A debug
+// build compiles the runtime's checks in: see runtime/debug.c.
+func Build(dir, name string, src []byte, debug bool) (bin string, output []byte, err error) {
+	files := Runtime()
+	files[name+".c"] = src
 	for file, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
 			return "", nil, err
@@ -31,7 +32,12 @@ func Build(dir, name string, src []byte) (bin string, output []byte, err error) 
 	}
 
 	bin = filepath.Join(dir, name)
-	args := append(append([]string{}, Flags...), "-o", bin, filepath.Join(dir, name+".c"), filepath.Join(dir, "teak.c"), "-lm")
+	args := append([]string{}, Flags...)
+	if debug {
+		args = append(args, "-DTK_DEBUG")
+	}
+
+	args = append(args, "-o", bin, filepath.Join(dir, name+".c"), filepath.Join(dir, "teak.c"), filepath.Join(dir, "debug.c"), "-lm")
 	cmd := exec.Command("cc", args...)
 	output, err = cmd.CombinedOutput()
 	return bin, output, err

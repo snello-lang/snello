@@ -19,9 +19,12 @@ import (
 // pointer before its parameters, and the environment. A closure is
 // lifted to a function of its own, and its environment holds a pointer
 // to each variable it captures, which is what capturing by borrow
-// means: the closure reads and writes the variable itself. A named
-// function used as a value gets an adapter that ignores the
-// environment.
+// means: the closure reads and writes the variable itself. The
+// environment lives in the frame of the function that wrote the
+// closure, declared at its top: a closure with captures is a borrow,
+// which the checker keeps from outliving that frame, so nothing is
+// allocated and nothing is freed. A named function used as a value
+// gets an adapter that ignores the environment.
 
 // funcLit writes a closure: the lifted function and its environment
 // type into their sections, the environment's allocation here, and
@@ -60,13 +63,13 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 	e.helpers.Write(e.body.Bytes())
 	e.body = outer
 	cell := e.temp()
-	e.line("struct " + env + " *" + cell + " = tk_alloc(sizeof *" + cell + ");")
+	e.prologue = append(e.prologue, "struct "+env+" "+cell+";")
 	for _, v := range captured {
-		e.line(cell + "->" + ident(v.Name()) + " = &" + e.variable(v, outerCaptured) + ";")
+		e.line(cell + "." + ident(v.Name()) + " = &" + e.variable(v, outerCaptured) + ";")
 	}
 
 	e.captured = outerCaptured
-	return "(" + pair + "){" + name + ", " + cell + "}"
+	return "(" + pair + "){" + name + ", &" + cell + "}"
 }
 
 // captures lists the local variables a closure refers to that are

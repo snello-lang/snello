@@ -357,6 +357,12 @@ func exprText(e ast.Expr) string {
 		return exprText(e.X) + "[" + exprText(e.Index) + "]"
 	case *ast.UnaryExpr:
 		return e.Op.String() + exprText(e.X)
+	case *ast.CallExpr:
+		if len(e.Args) == 0 {
+			return exprText(e.Fun) + "()"
+		}
+
+		return exprText(e.Fun) + "(...)"
 	}
 
 	return "..."

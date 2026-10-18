@@ -43,6 +43,10 @@ func TestEscapes(t *testing.T) {
 		{"func pick(a ref Node, b ref Node) ref string { return ref a.value }", []string{"pick returns a borrow but has two borrowed parameters"}},
 		{"func (n ref Node) pick(m ref Node) ref string { return ref m.value }", []string{"cannot return a borrow of m: a method's returned borrow is tied to its receiver"}},
 		{"func f() ref string { s := \"a\"; return ref s }", []string{"cannot return a borrow of local s"}},
+		{"func f() ref string { s := \"a\"; return s.Clone().Trim() }", []string{"cannot return a borrow of a temporary: s.Clone() is dropped when the statement ends"}},
+		{"func f() ref string { return trim(1, \"y\".Clone()) }", []string{"cannot return a borrow of a temporary: \"y\".Clone() is dropped when the statement ends"}},
+		{"func f() Lexer { return Lexer{src: \"z\".Clone().Trim(), pos: 0} }", []string{"cannot return a borrow of a temporary: \"z\".Clone() is dropped when the statement ends"}},
+		{"func f(s ref string) ref string { return s.Trim() }", nil},
 		{"func f(n Node) ref string { return ref n.value }", []string{"cannot return a borrow of local n"}},
 		{"func f(n ref Node) ref string { s := n.value.Clone(); return ref s }", []string{"cannot return a borrow of local s"}},
 		{"func f(n ref Node) ref string { t := ref n.value; return t }", nil}, // through a holder

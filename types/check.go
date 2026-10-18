@@ -71,6 +71,12 @@ type Checker struct {
 	closures []closure
 	captured map[*ast.FuncLit][]capture
 	spawning *ast.CallExpr
+
+	// temporary maps an expression lent to a call or a ref to the
+	// temporary its value is or borrows: an owned value no variable
+	// holds, which the statement drops at its end, so that a borrow of
+	// it cannot be kept past the statement or returned.
+	temporary map[ast.Expr]ast.Expr
 }
 
 // Check resolves every name in f, a file of one package, and returns

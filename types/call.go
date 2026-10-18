@@ -60,11 +60,18 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.spawned(e, f, sig)
 	}
 
-	c.args(e, sig)
+	tmp := c.args(e, sig)
 	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
 		if r, ok := sig.recv.typ.(*Ref); ok {
 			c.lend(sel.X, r.mut, e.Rparen) // the receiver is borrowed last, after the arguments
+			if t := c.temporary[sel.X]; t != nil {
+				tmp = t
+			}
 		}
+	}
+
+	if _, ok := borrowIn(sig.results); ok && tmp != nil {
+		c.markTemporary(e, tmp) // the result borrows what the receiver or argument did
 	}
 
 	return operand{value, sig.results, nil, nil}
@@ -72,8 +79,9 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 
 // args checks the arguments of a call against the parameters. An
 // argument for a ref parameter is checked with the borrowed type as its
-// hint, so a literal or None gets the type the parameter holds.
-func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
+// hint, so a literal or None gets the type the parameter holds. It
+// returns the temporary a borrowed argument lends, if any.
+func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 	params := sig.params
 	fixed := len(params)
 	if sig.variadic {
@@ -83,7 +91,7 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
 		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
 		c.exprs(e.Args)
-		return
+		return nil
 	}
 
 	for i, arg := range e.Args {
@@ -105,6 +113,13 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 			c.kept(op, "spawned", arg.Pos())
 		}
 
+		if _, ok := p.typ.(*Ref); ok {
+			c.noteTemporary(arg, op)
+			if t := c.temporary[arg]; t != nil {
+				tmp = t
+			}
+		}
+
 		if r, ok := p.typ.(*Ref); ok && op.mode != value {
 			c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
 		} else if !isMut(op.typ) {
@@ -112,6 +127,8 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 			c.maybeMove(op, p.typ)
 		}
 	}
+
+	return tmp
 }
 
 // paramHint is the type to check an argument with: the type behind a

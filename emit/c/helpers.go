@@ -288,7 +288,7 @@ func (e *Emitter) hash(v string, t types.Type, pos token.Pos) string {
 	case *types.Basic:
 		switch {
 		case isString(u):
-			return "tk_hash_bytes(" + v + ".ptr, (size_t)" + v + ".len)"
+			return "tk_hash_string(" + v + ")"
 		case u.Info()&types.IsFloat != 0:
 			return "(" + v + " == 0 ? 0 : tk_hash_bytes(&" + v + ", sizeof " + v + "))" // 0.0 and -0.0 are equal, so they hash alike
 		}

@@ -14,7 +14,7 @@ import (
 
 // The predeclared methods of slices, strings, options and results, and
 // the built-ins that work on them, are lowered here onto the runtime:
-// the stage 1 library table of _docs/design/05-standard-library.md.
+// the library table of _docs/design/05-standard-library.md.
 // An operation that produces a new slice writes it into a temporary
 // through the runtime, since C cannot convert between the slice types
 // the emitter declares.
@@ -181,7 +181,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Get", "GetMut":
 		out, found := e.temp(), e.temp()
 		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + " = {0};")
-		e.line(val + " *" + found + " = tk_map_find(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ");")
+		e.line(val + " *" + found + " = tk_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ");")
 		e.line("if (" + found + " != NULL) {")
 		e.line(out + ".has = true;")
 		if sel.Sel.Name == "Get" {
@@ -199,10 +199,10 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Remove":
 		out := e.temp()
 		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + ";")
-		e.line(out + ".has = tk_map_remove(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ", &" + out + ".val);")
+		e.line(out + ".has = tk_map_remove(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ", &" + out + ".val);")
 		return out
 	case "Contains":
-		return "(tk_map_find(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ") != NULL)"
+		return "(tk_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ") != NULL)"
 	case "Clone":
 		if needsDrop(t.Key()) || needsDrop(t.Value()) {
 			return e.cloner(t, x.Pos()) + "(" + place + ")"
@@ -219,17 +219,37 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 }
 
 // mapIndex writes m[k]: when written to, the entry's value, made with
-// the zero value when the key is new; when read, the value or the zero
-// value, with the map unchanged.
+// the zero value when the key is new, which then owns the key; when
+// read, the value or the zero value, with the map unchanged.
 func (e *Emitter) mapIndex(x *ast.IndexExpr, place string, t *types.Map, write bool) string {
-	mt := e.mapType(t, x.Pos())
-	key := e.saved(x.Index, t.Key())
 	val := e.cType(t.Value(), x.Pos())
 	if write {
-		return "(*(" + val + " *)tk_map_slot(&" + place + ", " + mt + ", &" + key + "))"
+		slot := e.temp()
+		e.line(val + " *" + slot + " = " + e.mapSlotter(t, x.Pos()) + "(&" + place + ", " + e.valueTo(x.Index, t.Key()) + ");")
+		return "(*" + slot + ")"
 	}
 
-	return "(*(const " + val + " *)tk_map_get(&" + place + ", " + mt + ", &" + key + ", &(" + val + ")" + zeroValue + "))"
+	mt := e.mapType(t, x.Pos())
+	return "(*(const " + val + " *)tk_map_get(&" + place + ", " + mt + ", &" + e.key(x.Index, t.Key()) + ", &(" + val + ")" + zeroValue + "))"
+}
+
+// key writes a map key the operation only looks up, in a temporary
+// the runtime takes by address; a key built here is held for the
+// statement and dropped with it.
+func (e *Emitter) key(x ast.Expr, t types.Type) string {
+	v := e.saved(x, t)
+	if e.lent(x, nil) {
+		e.hold(v, t)
+	}
+
+	return v
+}
+
+// looked writes x, of type t, where the operation only looks at its
+// value, as a ref parameter would: a value built here is held for the
+// statement and dropped with it.
+func (e *Emitter) looked(x ast.Expr, t types.Type) string {
+	return e.operands([]ast.Expr{x}, []types.Type{types.NewRef(t, false)})[0]
 }
 
 // mapStore writes the entry for key k in the map at place, with v as
@@ -253,7 +273,7 @@ func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) strin
 }
 
 func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
-	s := e.valueTo(sel.X, types.Typ[types.String])
+	s := e.looked(sel.X, types.Typ[types.String])
 	args := e.operands(x.Args, nil)
 	switch sel.Sel.Name {
 	case "Len":
@@ -304,7 +324,7 @@ func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, abs
 	case "Expect", "Unwrap":
 		msg := text{literal(sel.Sel.Name + " on " + absent), false}
 		if sel.Sel.Name == "Expect" {
-			msg = text{e.valueTo(x.Args[0], types.Typ[types.String]), false}
+			msg = text{e.looked(x.Args[0], types.Typ[types.String]), false}
 		}
 
 		if r, ok := t.Underlying().(*types.Result); ok {

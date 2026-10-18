@@ -5,7 +5,9 @@
 // Command teak is the Teak compiler driver.
 //
 // `teak build FILE` compiles a Teak program to a native binary in the
-// current directory. Four more subcommands inspect the compiler by
+// current directory; `teak build -debug FILE` builds it with the
+// runtime's checks, which stop the program on a value used after its
+// release and report values never released. Four more subcommands inspect the compiler by
 // hand: `teak lex FILE` prints the token stream, `teak parse FILE` the
 // syntax tree, `teak check FILE` what the checker finds, and `teak emit
 // FILE` the C source that build would compile.
@@ -49,11 +51,14 @@ func main() {
 
 		os.Exit(check(os.Args[2]))
 	case "build":
-		if len(os.Args) != 3 {
-			usage()
+		switch {
+		case len(os.Args) == 3:
+			os.Exit(build(os.Args[2], false))
+		case len(os.Args) == 4 && os.Args[2] == "-debug":
+			os.Exit(build(os.Args[3], true))
 		}
 
-		os.Exit(build(os.Args[2]))
+		usage()
 	case "emit":
 		if len(os.Args) != 3 {
 			usage()
@@ -66,7 +71,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (build | emit | lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (build [-debug] | emit | lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -152,8 +157,9 @@ func emit(path string) int {
 }
 
 // build compiles a file to a native binary named after it, in the
-// current directory, through the C backend and the system C compiler.
-func build(path string) int {
+// current directory, through the C backend and the system C compiler;
+// debug asks for the runtime's checks.
+func build(path string, debug bool) int {
 	csrc, ok := emitSource(path)
 	if !ok {
 		return 1
@@ -167,7 +173,7 @@ func build(path string) int {
 
 	defer os.RemoveAll(dir)
 	name := strings.TrimSuffix(filepath.Base(path), ".teak")
-	bin, out, err := c.Build(dir, name, csrc)
+	bin, out, err := c.Build(dir, name, csrc, debug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cc: %v\n%s", err, out)
 		return 1

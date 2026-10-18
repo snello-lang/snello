@@ -21,6 +21,9 @@
 tk_file tk_stdin = {0}, tk_stdout = {1}, tk_stderr = {2};
 tk_slice tk_args = {0};
 
+// The allocator of a release build is the system's; debug.c has the
+// counting, poisoning one of a debug build.
+#ifndef TK_DEBUG
 void *tk_alloc(size_t n) {
     void *p = malloc(n == 0 ? 1 : n);
     if (p == NULL) {
@@ -32,6 +35,17 @@ void *tk_alloc(size_t n) {
 
 void tk_free(void *p) {
     free(p);
+}
+
+int tk_finish(void) {
+    return 0;
+}
+#endif
+
+void tk_release(void **p) {
+    tk_free(*p);
+    *p = NULL;
+    TK_POISON(*p);
 }
 
 _Noreturn void tk_exit(int code) {
@@ -56,6 +70,7 @@ _Noreturn void tk_bounds(int64_t i, int64_t len) {
 // grow makes room for at least need elements, doubling as Teak's
 // Push amortizes to constant time.
 static void grow(tk_slice *s, int64_t need, size_t size) {
+    tk_check_slice(s);
     if (need <= s->cap) {
         return;
     }
@@ -76,10 +91,12 @@ static void grow(tk_slice *s, int64_t need, size_t size) {
 }
 
 void tk_slice_free(tk_slice *s) {
+    tk_check_slice(s);
     tk_free(s->ptr);
     s->ptr = NULL;
     s->len = 0;
     s->cap = 0;
+    TK_POISON(*s);
 }
 
 void tk_slice_make(tk_slice *out, int64_t len, int64_t cap, size_t size) {
@@ -100,6 +117,7 @@ void tk_slice_push(tk_slice *s, const void *v, size_t size) {
 }
 
 bool tk_slice_pop(tk_slice *s, void *out, size_t size) {
+    tk_check_slice(s);
     if (s->len == 0) {
         return false;
     }
@@ -110,6 +128,7 @@ bool tk_slice_pop(tk_slice *s, void *out, size_t size) {
 }
 
 void tk_slice_insert(tk_slice *s, int64_t i, const void *v, size_t size) {
+    tk_check_slice(s);
     if ((uint64_t)i > (uint64_t)s->len) {
         tk_bounds(i, s->len);
     }
@@ -130,6 +149,7 @@ void tk_slice_remove(tk_slice *s, int64_t i, void *out, size_t size) {
 }
 
 void tk_slice_reverse(tk_slice *s, size_t size) {
+    tk_check_slice(s);
     if (s->len < 2) {
         return;
     }
@@ -148,6 +168,7 @@ void tk_slice_reverse(tk_slice *s, size_t size) {
 }
 
 void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size) {
+    tk_check_slice(s);
     out->ptr = tk_alloc((size_t)s->len * size);
     memcpy(out->ptr, s->ptr, (size_t)s->len * size);
     out->len = s->len;
@@ -155,6 +176,7 @@ void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size) {
 }
 
 void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size_t size) {
+    tk_check_slice(s);
     if (lo < 0 || hi < lo || hi > s->len) {
         tk_bounds(hi, s->len);
     }
@@ -190,6 +212,7 @@ static void merge(char *p, char *tmp, int64_t n, size_t size, bool (*less)(void 
 }
 
 void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
+    tk_check_slice(s);
     if (s->len < 2) {
         return;
     }
@@ -200,6 +223,8 @@ void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void 
 }
 
 tk_string tk_concat(tk_string a, tk_string b) {
+    tk_check_string(a);
+    tk_check_string(b);
     uint8_t *p = tk_alloc((size_t)(a.len + b.len));
     memcpy(p, a.ptr, (size_t)a.len);
     memcpy(p + a.len, b.ptr, (size_t)b.len);
@@ -209,21 +234,25 @@ tk_string tk_concat(tk_string a, tk_string b) {
 tk_string tk_join(tk_string a, tk_string b, int owned) {
     tk_string s = tk_concat(a, b);
     if (owned & 1) {
-        tk_string_drop(a);
+        tk_string_free(a);
     }
 
     if (owned & 2) {
-        tk_string_drop(b);
+        tk_string_free(b);
     }
 
     return s;
 }
 
 bool tk_string_eq(tk_string a, tk_string b) {
+    tk_check_string(a);
+    tk_check_string(b);
     return a.len == b.len && memcmp(a.ptr, b.ptr, (size_t)a.len) == 0;
 }
 
 int tk_string_cmp(tk_string a, tk_string b) {
+    tk_check_string(a);
+    tk_check_string(b);
     int64_t n = a.len < b.len ? a.len : b.len;
     int c = memcmp(a.ptr, b.ptr, (size_t)n);
     if (c != 0) {
@@ -284,6 +313,7 @@ tk_string tk_bool_to_string(bool v) {
 // tk_quote writes s as a string literal reads: in double quotes, with
 // a quote, a backslash and the control characters escaped.
 tk_string tk_quote(tk_string s) {
+    tk_check_string(s);
     uint8_t *p = tk_alloc((size_t)s.len * 4 + 2);
     int64_t n = 0;
     p[n++] = '"';
@@ -381,6 +411,7 @@ static void rebuild(tk_map *m, const tk_map_type *t) {
 }
 
 void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key) {
+    tk_check_map(m);
     if (m->count == 0) {
         return NULL;
     }
@@ -414,6 +445,7 @@ void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key) {
 }
 
 bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) {
+    tk_check_map(m);
     if (m->count == 0) {
         return false;
     }
@@ -436,6 +468,7 @@ bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) 
 }
 
 void tk_map_free(tk_map *m, const tk_map_type *t) {
+    tk_check_map(m);
     for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
         if (t->kdrop != NULL) {
             t->kdrop(key_at(m, t, i));
@@ -451,9 +484,11 @@ void tk_map_free(tk_map *m, const tk_map_type *t) {
     tk_free(m->live);
     tk_free(m->index);
     memset(m, 0, sizeof *m);
+    TK_POISON(*m);
 }
 
 void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
+    tk_check_map(m);
     tk_map n = {0};
     for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
         memcpy(tk_map_slot(&n, t, key_at(m, t, i)), val_at(m, t, i), t->vsize);
@@ -463,6 +498,7 @@ void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
 }
 
 int64_t tk_map_next(const tk_map *m, int64_t i) {
+    tk_check_map(m);
     for (; i < m->len; i++) {
         if (m->live[i]) {
             return i;
@@ -473,12 +509,14 @@ int64_t tk_map_next(const tk_map *m, int64_t i) {
 }
 
 tk_string tk_string_clone(tk_string s) {
+    tk_check_string(s);
     uint8_t *p = tk_alloc((size_t)s.len);
     memcpy(p, s.ptr, (size_t)s.len);
     return TK_OWNED(p, s.len);
 }
 
 tk_string tk_substr(tk_string s, int64_t lo, int64_t hi) {
+    tk_check_string(s);
     if (lo < 0 || hi < lo || hi > s.len) {
         tk_bounds(hi, s.len);
     }
@@ -489,6 +527,7 @@ tk_string tk_substr(tk_string s, int64_t lo, int64_t hi) {
 // mapped copies s through f, one byte at a time: ASCII case only,
 // until the library is written in Teak.
 static tk_string mapped(tk_string s, int (*f)(int)) {
+    tk_check_string(s);
     uint8_t *p = tk_alloc((size_t)s.len);
     for (int64_t i = 0; i < s.len; i++) {
         p[i] = (uint8_t)f(s.ptr[i]);
@@ -505,6 +544,7 @@ static bool space(uint8_t c) {
 }
 
 tk_string tk_trim(tk_string s) {
+    tk_check_string(s);
     int64_t lo = 0, hi = s.len;
     while (lo < hi && space(s.ptr[lo])) {
         lo++;
@@ -518,15 +558,21 @@ tk_string tk_trim(tk_string s) {
 }
 
 bool tk_has_prefix(tk_string s, tk_string t) {
+    tk_check_string(s);
+    tk_check_string(t);
     return s.len >= t.len && memcmp(s.ptr, t.ptr, (size_t)t.len) == 0;
 }
 
 bool tk_has_suffix(tk_string s, tk_string t) {
+    tk_check_string(s);
+    tk_check_string(t);
     return s.len >= t.len && memcmp(s.ptr + s.len - t.len, t.ptr, (size_t)t.len) == 0;
 }
 
 // find returns the offset of t in s, or -1.
 static int64_t find(tk_string s, tk_string t) {
+    tk_check_string(s);
+    tk_check_string(t);
     for (int64_t i = 0; i + t.len <= s.len; i++) {
         if (memcmp(s.ptr + i, t.ptr, (size_t)t.len) == 0) {
             return i;
@@ -540,6 +586,7 @@ bool tk_string_contains(tk_string s, tk_string t) { return find(s, t) >= 0; }
 
 // tk_fields splits s around runs of white space into views of s.
 void tk_fields(tk_string s, tk_slice *out) {
+    tk_check_string(s);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
@@ -564,6 +611,8 @@ void tk_fields(tk_string s, tk_slice *out) {
 // tk_split splits s at every sep into views of s; an empty separator
 // splits between every byte.
 void tk_split(tk_string s, tk_string sep, tk_slice *out) {
+    tk_check_string(s);
+    tk_check_string(sep);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
@@ -605,6 +654,7 @@ void tk_init(int argc, char **argv) {
 // reading at the zero and open another file than the one named, so it
 // is refused as an invalid argument.
 static char *cpath(tk_string s) {
+    tk_check_string(s);
     if (memchr(s.ptr, 0, (size_t)s.len) != NULL) {
         errno = EINVAL;
         return NULL;
@@ -706,7 +756,7 @@ tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out) {
 
     tk_string tmpl = tk_join(tk_join(dir, TK_STR("/", 1), 0), tk_join(pattern, TK_STR("XXXXXX", 6), 0), 3);
     char *p = cpath(tmpl);
-    tk_string_drop(tmpl);
+    tk_string_free(tmpl);
     if (p == NULL || mkdtemp(p) == NULL) {
         tk_free(p);
         return failure("mkdirtemp", dir);
@@ -760,13 +810,17 @@ tk_string tk_remove_all(tk_string path) {
     return TK_STR("", 0);
 }
 
-void tk_file_drop(tk_file f) {
-    if (f.fd > 2) {
-        close(f.fd);
+void tk_file_drop(tk_file *f) {
+    tk_check_file(*f);
+    if (f->fd > 2) {
+        close(f->fd);
     }
+
+    TK_POISON(*f);
 }
 
 tk_string tk_file_close(tk_file f) {
+    tk_check_file(f);
     if (close(f.fd) != 0) {
         return failure("close", TK_STR("file", 4));
     }
@@ -775,6 +829,7 @@ tk_string tk_file_close(tk_file f) {
 }
 
 tk_string tk_file_sync(tk_file *f) {
+    tk_check_file(*f);
     if (fsync(f->fd) != 0) {
         return failure("sync", TK_STR("file", 4));
     }
@@ -803,6 +858,8 @@ static bool write_all(int fd, const uint8_t *p, int64_t len) {
 }
 
 tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n) {
+    tk_check_file(*f);
+    tk_check_string(s);
     if (!write_all(f->fd, s.ptr, s.len)) {
         return failure("write", TK_STR("file", 4));
     }
@@ -812,6 +869,8 @@ tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n) {
 }
 
 tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n) {
+    tk_check_file(*dst);
+    tk_check_file(*src);
     uint8_t buf[32768];
     *n = 0;
     for (;;) {
@@ -832,10 +891,14 @@ tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n) {
     }
 }
 
-void tk_print_string(tk_string s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); }
+void tk_print_string(tk_string s) {
+    tk_check_string(s);
+    fwrite(s.ptr, 1, (size_t)s.len, stdout);
+}
+
 void tk_print_owned(tk_string s) {
     tk_print_string(s);
-    tk_string_drop(s);
+    tk_string_free(s);
 }
 void tk_print_int(int64_t v) { printf("%lld", (long long)v); }
 void tk_print_uint(uint64_t v) { printf("%llu", (unsigned long long)v); }
@@ -843,8 +906,12 @@ void tk_print_f64(double v) { tk_print_owned(tk_f64_to_string(v)); }
 void tk_print_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 void tk_print_sep(void) { fputc(' ', stdout); }
 void tk_print_nl(void) { fputc('\n', stdout); }
-void tk_eprint_string(tk_string s) { fwrite(s.ptr, 1, (size_t)s.len, stderr); }
+void tk_eprint_string(tk_string s) {
+    tk_check_string(s);
+    fwrite(s.ptr, 1, (size_t)s.len, stderr);
+}
+
 void tk_eprint_owned(tk_string s) {
     tk_eprint_string(s);
-    tk_string_drop(s);
+    tk_string_free(s);
 }

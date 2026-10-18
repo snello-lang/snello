@@ -219,6 +219,8 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 	if r.mut && x.mode == borrowed {
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
 	}
+
+	c.noteTemporary(e.X, x)
 }
 
 func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
@@ -339,6 +341,11 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		}
 
 		c.lend(e.X, e.Op == token.MUT, e.X.Pos())
+		c.noteTemporary(e.X, x)
+		if tmp := c.temporary[e.X]; tmp != nil {
+			c.markTemporary(e, tmp) // ref s.Clone() borrows the clone
+		}
+
 		return operand{value, NewRef(t, e.Op == token.MUT), nil, nil}
 	case token.AND:
 		var hint Type

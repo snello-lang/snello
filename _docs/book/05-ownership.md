@@ -1,6 +1,6 @@
 # 5. Ownership: moves, `Copy`, `take` and `Drop`
 
-Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope and on an early `return` (stage 1, task 1.9; `examples/run/drops.teak` prints the order); a panic ends the program without running them yet, and `teak build -debug` is to come. The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
+Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope and on an early `return` (stage 1, task 1.9; `examples/run/drops.teak` prints the order); a panic ends the program without running them yet. `teak build -debug` checks the drops as the program runs (stage 1, task 1.9). The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
 
 Teak has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 
@@ -135,6 +135,28 @@ A method with a plain value receiver takes its receiver and may drop it. That is
 f.Close()?
 f.WriteString("late")?                // ERROR "use of moved value f"
 ```
+
+## Checking the drops: `teak build -debug`
+
+The compiler decides where every value is freed, so a mistake in the compiler would be a leak or a value used after its release, and neither makes a program fail on its own. A debug build makes both fail:
+
+```
+teak build -debug prog.teak
+./prog
+```
+
+The binary runs the same program with a checking runtime. Every allocation is counted, and a program that returns from `main` with values still unreleased reports them and exits with code 3:
+
+```
+teak: 3 blocks (9 bytes) not released
+  3 bytes: t h e
+  3 bytes: a n d
+  3 bytes: t h e
+```
+
+Released memory is filled with a poison byte and kept from reuse for a while, and a released place is poisoned too. A string, slice, map, pointer or file read after its release is seen by the runtime operation that reads it, which panics with `a released string was used`, naming the kind of value; an owned pointer read after its value moved away panics with `a moved pointer was used`. A release build does none of this and runs at full speed.
+
+No program the checker accepts should ever fail this way, which is what makes the debug build useful to the compiler's own tests: every example program runs under it, so a drop the compiler forgets, or places wrongly, is a failing test rather than a slow leak. Its first find was a rule the checker lacked: a borrow of a temporary, `t := s.Clone().Trim()`, printed poison once the clone was dropped at the end of its statement, and is now refused (chapter 6). It also catches the one escape the checker does not see yet, a closure capturing a local that a function stores through a parameter of function type, when the closure is called after the local is gone.
 
 ## What the compiler reports
 
