@@ -37,7 +37,7 @@ Build the Teak compiler in Go, one stage at a time, each stage leaving a working
 
 ## Checkpoints
 
-A checkpoint is a human review before the next stage begins. Each stage file ends with its checkpoint list.
+A checkpoint is a human review before the next stage begins. Each stage file ends with its checkpoint list, and each list includes the book chapters the stage owns (`../book/README.md`): the book is written as features land, not after.
 
 | After | What is reviewed |
 |---|---|

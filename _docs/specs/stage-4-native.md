@@ -109,4 +109,5 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 ## Checkpoint: stage 4
 
 - [ ] Native suite green; benchmark table filled in
+- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
 - [ ] Reviewed by the owner

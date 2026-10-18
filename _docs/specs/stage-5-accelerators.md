@@ -49,4 +49,5 @@ Goal: one Teak kernel runs on a GPU through the LLVM targets, under the rule tha
 ## Checkpoint: stage 5
 
 - [ ] Kernel runs; no earlier-stage change was needed
+- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
 - [ ] Reviewed by the owner

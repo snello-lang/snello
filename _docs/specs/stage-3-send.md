@@ -65,4 +65,5 @@ Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data rac
 ## Checkpoint: stage 3
 
 - [ ] Race programs rejected; concurrency examples run
+- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
 - [ ] Reviewed by the owner

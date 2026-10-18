@@ -194,4 +194,5 @@ The predeclared names, number types and the library packages are defined in `../
 - [ ] All tasks above checked
 - [ ] Every negative program fails for the planned reason and no other
 - [ ] **Decision:** the ownership model holds as designed, or the design document is revised before stage 2. Record the decision in `../design/01-language-design.md`
+- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
 - [ ] Reviewed by the owner

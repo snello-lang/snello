@@ -111,4 +111,5 @@ Goal: all twenty examples compile through the Go backend and run with their expe
 
 - [ ] All twenty examples run with expected output
 - [ ] Compile time recorded; decision on dictionary passing for debug builds
+- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
 - [ ] Reviewed by the owner
