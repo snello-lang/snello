@@ -5,6 +5,8 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,10 +64,10 @@ func TestErrors(t *testing.T) {
 		{"package 3", "1:9: expected identifier, found '3'", 2}, // the 3 is then not a declaration
 		{"package a\nimport 7\n", "2:8: expected import path, found '7'", 1},
 		{"package a\nimport (\"x\" \"y\")\n", "2:13: expected ';' or newline, found '\"y\"'", 1},
-		{"package a\nfunc f() {}\nimport \"x\"\n", "2:1: expected declaration", 2},
+		{"package a\nfunc f() {}\nimport \"x\"\n", "3:1: imports must appear before other declarations", 1},
 		{"package a\nimport (\"x\"\n\"y\" 7)\n", "3:5: expected ';' or newline, found '7'", 1},
-		{"package a\n\"", "2:1: expected declaration, found '\"'", 2}, // plus the scanner's unterminated string
-		{"package a\nimport (\n\t\"x\"\nfunc f() {}\n", "4:1: expected import path, found 'func'", 3},
+		{"package a\n\"", "2:1: expected declaration, found '\"'", 2},                                 // plus the scanner's unterminated string
+		{"package a\nimport (\n\t\"x\"\nfunc f() {}\n", "4:1: expected import path, found 'func'", 2}, // then the missing ')'; f parses
 		{"package a\nimport (\n\t\"x\"\n", "4:1: expected ')', found 'EOF'", 1},
 	}
 	for _, tt := range tests {
@@ -98,10 +100,80 @@ func TestPartialFile(t *testing.T) {
 	}
 }
 
+// TestExamples parses every example program and expects no errors. The
+// examples are the acceptance suite; a syntax change that breaks one is
+// wrong until the example or the conventions are updated.
+func TestExamples(t *testing.T) {
+	for _, f := range exampleFiles(t) {
+		if _, _, err := ParseFile(f.name, f.src); err != nil {
+			t.Errorf("%s: %v", f.name, err)
+		}
+	}
+}
+
+// BenchmarkExamples parses every example program once per iteration
+// and reports allocations, the number the coding standards track.
+func BenchmarkExamples(b *testing.B) {
+	files := exampleFiles(b)
+	var decls int
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		for _, f := range files {
+			file, _, err := ParseFile(f.name, f.src)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			decls += len(file.Decls)
+		}
+	}
+
+	b.ReportMetric(float64(decls)/float64(b.N), "decls/op")
+}
+
 func countErrors(err error) int {
 	if list, ok := err.(scanner.ErrorList); ok {
 		return len(list)
 	}
 
 	return 1
+}
+
+type exampleFile struct {
+	name string
+	src  []byte
+}
+
+// exampleFiles reads every .teak file under examples/, as the scanner's
+// benchmark does.
+func exampleFiles(tb testing.TB) []exampleFile {
+	tb.Helper()
+	var files []exampleFile
+	err := filepath.WalkDir(filepath.Join("..", "examples"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !d.IsDir() && strings.HasSuffix(path, ".teak") {
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+
+			files = append(files, exampleFile{path, src})
+		}
+
+		return nil
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	if len(files) < 20 {
+		tb.Fatalf("found %d example files, want at least 20", len(files))
+	}
+
+	return files
 }

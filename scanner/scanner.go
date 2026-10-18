@@ -6,7 +6,9 @@
 //
 // It follows the structure of Go's go/scanner: a Scanner is initialized
 // with a source buffer and returns one token per call to Scan, inserting
-// semicolons at line ends by Go's rule. Comments are skipped.
+// semicolons at line ends by Go's rule, extended to lines ending in a
+// postfix ? or in the > that closes a type argument list. Comments are
+// skipped.
 package scanner
 
 import (
@@ -186,6 +188,10 @@ scanAgain:
 			}
 		case '>':
 			tok = s.switch4(token.GTR, token.GEQ, '>', token.SHR, token.SHR_ASSIGN)
+			// A line ending in > or >> is one that closes a type
+			// argument list: cache Arc<RwLock<Entry>>. A comparison or
+			// shift keeps its right operand on the same line.
+			insertSemi = tok == token.GTR || tok == token.SHR
 		case '=':
 			if s.ch == '>' {
 				s.next()

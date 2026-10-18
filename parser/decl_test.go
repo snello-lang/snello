@@ -1,0 +1,241 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package parser
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/teak-lang/teak/ast"
+	"github.com/teak-lang/teak/scanner"
+)
+
+// TestDecls parses each declaration and prints it back in canonical
+// form. A skipped body prints as {...} and a skipped initializer as ...;
+// both are placeholders until statements and expressions parse.
+func TestDecls(t *testing.T) {
+	tests := []struct{ src, want string }{
+		// Functions and methods, from the examples.
+		{"func main() {}", "func main() {...}"},
+		{"func (t mut Tree) AddChild(parent NodeID, value string) NodeID {}", "func (t mut Tree) AddChild(parent NodeID, value string) NodeID {...}"},
+		{"func (s ref Stack<T>) Peek() ref T? {}", "func (s ref Stack<T>) Peek() (ref T)? {...}"},
+		{"func (f File) Close() {}", "func (f File) Close() {...}"},
+		{"func (p mut Parser) advance() Result<(), ParseError> {}", "func (p mut Parser) advance() Result<(), ParseError> {...}"},
+		{"func (a Vec3) Add(b Vec3) Vec3 { return Vec3{x: a.x + b.x} }", "func (a Vec3) Add(b Vec3) Vec3 {...}"},
+		{"func MaxBy<T: Ord + Clone>(xs ref []T) T? {}", "func MaxBy<T: Ord + Clone>(xs ref []T) (T)? {...}"},
+		{"func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {}", "func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {...}"},
+		{"func popMin<K: Ord, V>(n *Node<K, V>) (*Node<K, V>, *Node<K, V>?) {}", "func popMin<K: Ord, V>(n *Node<K, V>) (*Node<K, V>, (*Node<K, V>)?) {...}"},
+		{"func f() int", "func f() int"}, // no body: the checker's problem, not the parser's
+
+		// Types: definitions, structs with impl lists, enums.
+		{"type NodeID int", "type NodeID int"},
+		{"type Circle struct impl Shape, Named, Logged {\n\tr float64\n}", "type Circle struct impl Shape, Named, Logged {r float64}"},
+		{"type Cache<K: Hash + Eq + Clone, V> struct {}", "type Cache<K: Hash + Eq + Clone, V> struct {}"},
+		{"type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}", "type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}"},
+		{"type Expr enum {\n\tLit(float64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "type Expr enum {Lit(float64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
+		{"type Token enum impl Copy, Eq { Plus; Minus }", "type Token enum impl Copy, Eq {Plus; Minus}"},
+		{"type Value enum { Null; Array([]Value); Object(map[string]Value) }", "type Value enum {Null; Array([]Value); Object(map[string]Value)}"},
+		{"type Msg enum { Withdraw(amount int, reply chan<- Result<int, string>) }", "type Msg enum {Withdraw(amount int, reply chan<- Result<int, string>)}"},
+
+		// Traits: required and default methods, fields, refinement.
+		{"trait Shape {\n\tfunc (s ref Self) Area() float64\n\tfunc (s ref Self) Describe() string { return s.Name() }\n}", "trait Shape {func (s ref Self) Area() float64; func (s ref Self) Describe() string {...}}"},
+		{"trait Named {\n\tvar name string\n\tfunc (n ref Self) Name() string { return n.name }\n}", "trait Named {var name string; func (n ref Self) Name() string {...}}"},
+		{"trait Logged: Shape {}", "trait Logged: Shape {}"},
+		{"trait Iterator<T> {\n\tfunc (it mut Self) Next() T?\n\tfunc (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {}\n}", "trait Iterator<T> {func (it mut Self) Next() (T)?; func (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {...}}"},
+
+		// Variables and constants; initializers are skipped until 0.9.
+		{"var x int", "var x int"},
+		{"var x, y int = 1, 2", "var x, y int = ..., ..."},
+		{"const limit = 1 << 10", "const limit = ..."},
+		{"var f = func() int { return 1 }", "var f = ..."},
+		{"var m = map[string]int{\"a\": 1}", "var m = ..."},
+	}
+	for _, tt := range tests {
+		d, errs := parseDeclString(tt.src)
+		if len(errs) > 0 {
+			t.Errorf("%q: unexpected errors: %v", tt.src, errs)
+			continue
+		}
+
+		if got := declString(d); got != tt.want {
+			t.Errorf("%q: parsed as %q, want %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+func TestDeclErrors(t *testing.T) {
+	tests := []struct {
+		src  string
+		want string // substring of the first error
+		n    int    // total errors expected
+	}{
+		{"type T struct", "expected '{', found 'EOF'", 1},               // no semicolon after struct, as in Go
+		{"type T struct\nfunc f() {}", "expected '{', found 'func'", 2}, // then the missing newline
+		{"type T impl Shape struct {}", "'impl' goes after 'struct' or 'enum'", 1},
+		{"type E enum {\n\tLit float64\n}", "expected '(' or newline, found 'float64'", 1},
+		{"type E enum {\n\t3\n}", "expected variant or '}', found '3'", 1},
+		{"type T<K Ord> struct {}", "expected '>', found 'Ord'", 2}, // cascade: the stray '>' is reported too
+		{"trait T {\n\tx int\n}", "expected method, field or '}', found 'x'", 1},
+		{"trait T {\n\tx int\n\tfunc (s ref Self) F()\n}", "expected method, field or '}', found 'x'", 1},
+		{"trait T { 3 func (s ref Self) F() }", "expected method, field or '}', found '3'", 1}, // resumes at func
+		{"var x", "expected type or '=', found 'newline'", 1},
+		{"func f() {", "expected '}', found 'EOF'", 1},
+		{"func (Tree) F() {}", "receiver needs a name and a type", 1},
+		{"func () F() {}", "receiver needs a name and a type", 1},
+		{"func f(,) {}", "expected type, found ','", 1},
+	}
+	for _, tt := range tests {
+		_, errs := parseDeclString(tt.src)
+		if len(errs) == 0 || !strings.Contains(errs[0], tt.want) {
+			t.Errorf("%q: got %v, want an error containing %q", tt.src, errs, tt.want)
+			continue
+		}
+
+		if len(errs) != tt.n {
+			t.Errorf("%q: %d errors, want %d: %v", tt.src, len(errs), tt.n, errs)
+		}
+	}
+}
+
+// TestImplBeforeStruct checks that an impl list in the wrong place is
+// reported and still kept, so the declaration is otherwise intact.
+func TestImplBeforeStruct(t *testing.T) {
+	d, errs := parseDeclString("type T impl Shape struct { x int }")
+	if len(errs) != 1 {
+		t.Fatalf("got %v, want one error", errs)
+	}
+
+	if got, want := declString(d), "type T struct impl Shape {x int}"; got != want {
+		t.Errorf("parsed as %q, want %q", got, want)
+	}
+}
+
+// parseDeclString parses src as the one declaration of a file and
+// returns it with the error messages.
+func parseDeclString(src string) (ast.Decl, []string) {
+	f, _, err := ParseFile("test.teak", []byte("package p\n"+src+"\n"))
+
+	var errs []string
+	if list, ok := err.(scanner.ErrorList); ok {
+		for _, e := range list {
+			errs = append(errs, e.Error())
+		}
+	}
+
+	if len(f.Decls) == 0 {
+		return nil, errs
+	}
+
+	return f.Decls[0], errs
+}
+
+// declString renders a declaration in canonical source form, using
+// typeString for every type in it.
+func declString(d ast.Decl) string {
+	switch d := d.(type) {
+	case *ast.FuncDecl:
+		s := "func "
+		if d.Recv != nil {
+			s += "(" + d.Recv.Name.Name + " " + typeString(d.Recv.Type) + ") "
+		}
+
+		s += d.Name.Name + typeParamList(d.TypeParams) + "(" + paramList(d.Params) + ")"
+		switch len(d.Results) {
+		case 0:
+		case 1:
+			s += " " + typeString(d.Results[0])
+		default:
+			s += " (" + typeList(d.Results, ", ") + ")"
+		}
+
+		if d.Body != nil {
+			s += " {...}"
+		}
+
+		return s
+	case *ast.TypeDecl:
+		s := "type " + d.Name.Name + typeParamList(d.TypeParams) + " "
+		impls := ""
+		if len(d.Impls) > 0 {
+			impls = " impl " + typeList(d.Impls, ", ")
+		}
+
+		switch def := d.Def.(type) {
+		case *ast.StructType:
+			return s + "struct" + impls + " {" + fieldList(def.Fields) + "}"
+		case *ast.EnumType:
+			var variants []string
+			for _, v := range def.Variants {
+				vs := v.Name.Name
+				if v.Fields != nil {
+					vs += "(" + paramList(v.Fields) + ")"
+				}
+
+				variants = append(variants, vs)
+			}
+
+			return s + "enum" + impls + " {" + strings.Join(variants, "; ") + "}"
+		}
+
+		return s + typeString(d.Def)
+	case *ast.TraitDecl:
+		s := "trait " + d.Name.Name + typeParamList(d.TypeParams)
+		if len(d.Refines) > 0 {
+			s += ": " + typeList(d.Refines, ", ")
+		}
+
+		var members []string
+		for _, f := range d.Fields {
+			members = append(members, "var "+fieldString(f))
+		}
+
+		for _, m := range d.Methods {
+			members = append(members, declString(m))
+		}
+
+		return s + " {" + strings.Join(members, "; ") + "}"
+	case *ast.VarDecl:
+		s := "var "
+		if d.Const {
+			s = "const "
+		}
+
+		var names []string
+		for _, n := range d.Names {
+			names = append(names, n.Name)
+		}
+
+		s += strings.Join(names, ", ")
+		if d.Type != nil {
+			s += " " + typeString(d.Type)
+		}
+
+		if len(d.Values) > 0 {
+			s += " = " + strings.TrimSuffix(strings.Repeat("..., ", len(d.Values)), ", ")
+		}
+
+		return s
+	}
+
+	return "?"
+}
+
+func typeParamList(params []*ast.TypeParam) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, tp := range params {
+		s := tp.Name.Name
+		if len(tp.Bounds) > 0 {
+			s += ": " + typeList(tp.Bounds, " + ")
+		}
+
+		parts = append(parts, s)
+	}
+
+	return "<" + strings.Join(parts, ", ") + ">"
+}

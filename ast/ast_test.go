@@ -231,6 +231,7 @@ func TestFamilies(t *testing.T) {
 		_ Decl    = (*VarDecl)(nil)
 		_ Stmt    = (*IfBindStmt)(nil)
 		_ Stmt    = (*RangeStmt)(nil)
+		_ Expr    = (*BadExpr)(nil)
 		_ Expr    = (*CoalesceExpr)(nil)
 		_ Expr    = (*MatchExpr)(nil)
 		_ Expr    = (*Ident)(nil)

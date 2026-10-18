@@ -50,6 +50,11 @@ func TestTokens(t *testing.T) {
 			{token.IDENT, "next"}, {token.MUL, ""}, {token.IDENT, "Node"}, {token.LSS, ""}, {token.IDENT, "T"},
 			{token.GTR, ""}, {token.QUESTION, ""}, {token.SEMICOLON, "\n"},
 		}},
+		{"cache Arc<RwLock<T>>\nn := a >\nb", []elt{
+			{token.IDENT, "cache"}, {token.IDENT, "Arc"}, {token.LSS, ""}, {token.IDENT, "RwLock"}, {token.LSS, ""},
+			{token.IDENT, "T"}, {token.SHR, ""}, {token.SEMICOLON, "\n"}, {token.IDENT, "n"}, {token.DEFINE, ""},
+			{token.IDENT, "a"}, {token.GTR, ""}, {token.SEMICOLON, "\n"}, {token.IDENT, "b"}, {token.SEMICOLON, "\n"},
+		}},
 		{"out <- job // moved\n", []elt{
 			{token.IDENT, "out"}, {token.ARROW, ""}, {token.IDENT, "job"}, {token.SEMICOLON, "\n"},
 		}},

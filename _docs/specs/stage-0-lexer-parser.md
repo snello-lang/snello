@@ -113,16 +113,17 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** Top-level declarations: `func` with named receivers in all three modes, `type ... struct impl A, B { }`, `type ... enum impl ... { }` with variants, `trait` with required methods, default methods, fields and refinement, generic parameter lists with bounds, `var` and `const`.
 
 **Acceptance criteria:**
-- [ ] Every declaration form in examples 07, 16, 17 and 18 parses
-- [ ] A missing `{`, a stray `impl`, and a variant without parentheses each give a specific error
+- [x] Every declaration form in examples 07, 16, 17 and 18 parses; in fact every example parses with zero errors, with bodies and initializers skipped until 0.8 and 0.9
+- [x] A missing `{`, a stray `impl`, and a variant without parentheses each give a specific error
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Manual check: `teak parse examples/07-traits.teak` prints the trait and struct declarations
+- [x] Tests pass: `go test ./parser/`
+- [x] Manual check: `teak parse examples/07-traits.teak` prints the trait and struct declarations
 
 **Dependencies:** 0.6
-**Files:** `parser/decl.go`, `parser/parser_test.go`
+**Files:** `parser/decl.go`, `parser/decl_test.go`, `parser/parser_test.go` (example sweep and benchmark), `parser/expr.go` (stub), `ast/ast.go` (BadExpr; variant fields are parameters), `scanner/scanner.go` (semicolon after a closing `>`)
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.8: Statements
 

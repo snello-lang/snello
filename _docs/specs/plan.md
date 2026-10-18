@@ -28,7 +28,7 @@ Build the Teak compiler in Go, one stage at a time, each stage leaving a working
 
 | Stage | File | Tasks | State |
 |---|---|---|---|
-| 0 | [stage-0-lexer-parser.md](stage-0-lexer-parser.md) | 0.1 to 0.11 | in progress: 0.1 to 0.6 done |
+| 0 | [stage-0-lexer-parser.md](stage-0-lexer-parser.md) | 0.1 to 0.11 | in progress: 0.1 to 0.7 done |
 | 1 | [stage-1-core-checker.md](stage-1-core-checker.md) | 1.1 to 1.10 | not started |
 | 2 | [stage-2-traits-generics.md](stage-2-traits-generics.md) | 2.1 to 2.7 | not started |
 | 3 | [stage-3-send.md](stage-3-send.md) | 3.1 to 3.4 | not started |

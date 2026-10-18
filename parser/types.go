@@ -373,7 +373,9 @@ func (p *Parser) parseStructType() *ast.StructType {
 // was never closed, and the list ends so that the declaration loop can
 // pick up where the struct left off.
 func (p *Parser) parseFieldList() []*ast.Field {
-	p.expect(token.LBRACE)
+	if !p.expectLbrace() {
+		return nil
+	}
 
 	var fields []*ast.Field
 	for p.tok != token.RBRACE && p.tok != token.EOF {

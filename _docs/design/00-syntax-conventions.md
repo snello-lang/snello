@@ -36,6 +36,9 @@ These came out of writing the parser and are binding on every example.
 - **`<` in an expression** is less-than unless the tokens after it form a type list closed by `>` that is directly followed by `(` or `{`, in which case it is a type argument list on a call or a composite literal: `arena.New<Node>()`, `Stack<string>{}`. The parser tries the type-argument reading first and backs up if it fails. In practice `a < b` is never followed by `>` and `(`, so ordinary comparisons are unaffected; the one thing to avoid is `a < b > (c)`, which reads as a generic call.
 - **Parameter names versus types.** In `func(from, to NodeID, w int)` the identifiers before a type are names sharing it; in `func(T, U) V` they are types. An identifier followed by a comma is decided by what ends its group, as in Go.
 - **Array lengths** are integer literals.
+- **A newline after `>` ends the line**, as it does after an identifier, a `)` or a `?`. Go inserts no semicolon after `>`, but in Teak a line ends in `>` or `>>` whenever a generic type closes it: `cache Arc<RwLock<Entry>>`. The cost is that a comparison or a shift cannot break its line after the operator; keep the right operand on the same line.
+- **`var` and `const`** declare one name list per keyword: `var x, y int = 1, 2`. Grouping with parentheses is not decided yet; nothing in the examples needs it.
+- **`impl` goes after `struct` or `enum`**: `type Circle struct impl Shape { ... }`. Written before them it is reported and still recorded, so the rest of the declaration is checked.
 
 ## Heap allocation
 
@@ -83,7 +86,7 @@ func (c ref Circle) Area() float64 { return math.Pi * c.r * c.r }
 ```
 
 - A type declares what it implements with `impl` on its declaration: `type Circle struct impl Shape, Named { ... }`. The same for enums. The compiler checks every required method exists. There are no impl blocks; methods are ordinary Go methods.
-- Trait fields are stored inline in the implementing struct and set at construction: `Circle{r: 1, name: "circle"}`.
+- Trait fields are stored inline in the implementing struct and set at construction: `Circle{r: 1, name: "circle"}`. A trait field has no default value; `var name string = "x"` inside a trait is an error.
 - Overriding a default is defining the method. `super.Method()` inside an override calls the next definition in the impl order.
 - Resolution order: the type's own methods, then its impl list from right to left, each trait followed by the traits it refines. Resolved at compile time; every call is direct.
 - A trait refining another: `trait Logged: Shape { ... }`.

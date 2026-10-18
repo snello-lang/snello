@@ -169,25 +169,33 @@ func typeString(typ ast.Type) string {
 	case *ast.TupleType:
 		return "(" + typeList(t.Elems, ", ") + ")"
 	case *ast.StructType:
-		var fields []string
-		for _, f := range t.Fields {
-			var names []string
-			for _, n := range f.Names {
-				names = append(names, n.Name)
-			}
-
-			s := typeString(f.Type)
-			if len(names) > 0 {
-				s = strings.Join(names, ", ") + " " + s
-			}
-
-			fields = append(fields, s)
-		}
-
-		return "struct{" + strings.Join(fields, "; ") + "}"
+		return "struct{" + fieldList(t.Fields) + "}"
 	}
 
 	return "?"
+}
+
+func fieldList(fields []*ast.Field) string {
+	var parts []string
+	for _, f := range fields {
+		parts = append(parts, fieldString(f))
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+func fieldString(f *ast.Field) string {
+	var names []string
+	for _, n := range f.Names {
+		names = append(names, n.Name)
+	}
+
+	s := typeString(f.Type)
+	if len(names) > 0 {
+		s = strings.Join(names, ", ") + " " + s
+	}
+
+	return s
 }
 
 func typeList(types []ast.Type, sep string) string {

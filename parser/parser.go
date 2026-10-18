@@ -154,6 +154,20 @@ func (p *Parser) expect(tok token.Kind) token.Pos {
 	return pos
 }
 
+// expectLbrace consumes the '{' that opens a body and reports whether
+// it was there. A missing brace is reported once and the body is left
+// unparsed, so the caller resumes at whatever comes next instead of
+// also reporting the missing '}'.
+func (p *Parser) expectLbrace() bool {
+	if p.tok != token.LBRACE {
+		p.errorExpected(p.pos, "'{'")
+		return false
+	}
+
+	p.next()
+	return true
+}
+
 // expectSemi consumes a statement-ending semicolon and reports whether
 // it found one. A closing brace or parenthesis also ends a statement, as
 // in Go, and is not consumed. The caller decides how to recover.
@@ -274,22 +288,6 @@ func (p *Parser) parseImportSpec() (*ast.ImportSpec, bool) {
 	spec.Path.Value = p.lit
 	p.next()
 	return spec, true
-}
-
-// parseDecl parses one top-level declaration. The declaration forms
-// arrive with later tasks; until then any declaration is an error, and
-// the parser skips to the next one.
-func (p *Parser) parseDecl() ast.Decl {
-	switch p.tok {
-	case token.IMPORT:
-		p.error(p.pos, "imports must appear before other declarations")
-	default:
-		p.errorExpected(p.pos, "declaration")
-	}
-
-	p.next()
-	p.advance(declStart)
-	return nil
 }
 
 func newKindSet(kinds ...token.Kind) *kindSet {

@@ -78,9 +78,8 @@ type BasicLit struct {
 	Value    string // source text, including quotes
 }
 
-// A Field is one or more names sharing a type, in a struct, an enum
-// variant, or a trait. Names is empty for a positional variant field
-// such as Num(float64), and for an embedded struct field as in Go.
+// A Field is one or more names sharing a type, in a struct or a trait.
+// Names is empty for an embedded field, as in Go.
 type Field struct {
 	Names []*Ident
 	Type  Type
@@ -235,10 +234,12 @@ type EnumType struct {
 	Variants []*Variant
 }
 
-// A Variant is one case of an enum, with zero or more fields.
+// A Variant is one case of an enum. Its fields are written like a
+// parameter list, positional as in Num(float64) or named as in
+// Bin(op Token, lhs *Expr, rhs *Expr), so they are parameters.
 type Variant struct {
 	Name   *Ident
-	Fields []*Field
+	Fields []*Param
 }
 
 // A BlockStmt is a brace-delimited list of statements.
@@ -378,6 +379,13 @@ type CommClause struct {
 	Case token.Pos
 	Comm Stmt
 	Body []Stmt
+}
+
+// A BadExpr is a placeholder for an expression the parser could not
+// parse, covering the tokens from From up to but not including To. It
+// keeps the tree well formed after an error, as in go/ast.
+type BadExpr struct {
+	From, To token.Pos
 }
 
 // A ParenExpr is a parenthesized expression.
@@ -583,6 +591,7 @@ func (x *SwitchStmt) Pos() token.Pos   { return x.Switch }
 func (x *CaseClause) Pos() token.Pos   { return x.Case }
 func (x *SelectStmt) Pos() token.Pos   { return x.Select }
 func (x *CommClause) Pos() token.Pos   { return x.Case }
+func (x *BadExpr) Pos() token.Pos      { return x.From }
 func (x *ParenExpr) Pos() token.Pos    { return x.Lparen }
 func (x *TupleExpr) Pos() token.Pos    { return x.Lparen }
 func (x *SelectorExpr) Pos() token.Pos { return x.X.Pos() }
@@ -635,6 +644,7 @@ func (*SelectStmt) stmtNode() {}
 
 func (*Ident) exprNode()        {}
 func (*BasicLit) exprNode()     {}
+func (*BadExpr) exprNode()      {}
 func (*ParenExpr) exprNode()    {}
 func (*TupleExpr) exprNode()    {}
 func (*SelectorExpr) exprNode() {}
