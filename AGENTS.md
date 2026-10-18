@@ -11,6 +11,7 @@ Teak is a programming language in design: Go's syntax and concurrency, memory sa
 1. `_docs/design/01-language-design.md`: every decision and why.
 2. `_docs/design/00-syntax-conventions.md`: the syntax the examples use.
 3. `_docs/design/02-` to `04-`: the memory model notes.
+4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
 4. `examples/README.md`: what each example tests and the decisions they forced.
 5. `CODING_STANDARDS.md`: how code is written here.
 6. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.

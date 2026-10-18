@@ -29,7 +29,7 @@ Build the Teak compiler in Go, one stage at a time, each stage leaving a working
 | Stage | File | Tasks | State |
 |---|---|---|---|
 | 0 | [stage-0-lexer-parser.md](stage-0-lexer-parser.md) | 0.1 to 0.11 | in progress: 0.1 to 0.7 and 0.9 done; 0.8 next |
-| 1 | [stage-1-core-checker.md](stage-1-core-checker.md) | 1.1 to 1.10 | not started |
+| 1 | [stage-1-core-checker.md](stage-1-core-checker.md) | 1.0 to 1.10 | not started; 1.0 is the standard library design, added 2026-10-18 after noticing the examples use library names no document defines |
 | 2 | [stage-2-traits-generics.md](stage-2-traits-generics.md) | 2.1 to 2.7 | not started |
 | 3 | [stage-3-send.md](stage-3-send.md) | 3.1 to 3.4 | not started |
 | 4 | [stage-4-native.md](stage-4-native.md) | 4.1 to 4.7 | not started |
@@ -41,7 +41,7 @@ A checkpoint is a human review before the next stage begins. Each stage file end
 
 | After | What is reviewed |
 |---|---|
-| Stage 0 | All twenty examples parse; the AST printer output reads correctly; the grammar decisions the parser made are recorded in the syntax conventions |
+| Stage 0 | All twenty examples parse; the AST printer output reads correctly; the grammar decisions the parser made are recorded in the syntax conventions; the standard library design (task 1.0) is written and decided before any checker code |
 | Stage 1 | The core examples type-check and run as Go; the negative tests are rejected with the planned messages; **decision point: does the ownership model hold, or does the design change?** |
 | Stage 2 | All twenty examples compile and run with their expected output |
 | Stage 3 | The concurrency examples compile; the race programs are rejected |
