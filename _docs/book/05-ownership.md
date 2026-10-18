@@ -4,6 +4,16 @@ Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (st
 
 Teak has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 
+## The model in three rules
+
+Think of every value as a physical object, a notebook. The ownership model is the set of rules about who holds the notebook and who may read or write in it, and there are three.
+
+1. **One owner at a time.** Exactly one variable holds the value. Passing it to a function or storing it in a struct hands the notebook over; the old variable is empty afterwards, and using it is a compile error. To keep a copy you say so, with `Clone`. Small values such as numbers copy silently; they are the `Copy` types.
+2. **Lending instead of handing over.** Most functions only need to look at a value, or change it in place and give it back, so instead of handing the notebook over you lend it: `ref` lends it for reading, `mut` for writing, and it comes back when the function returns. The one rule about lending is any number of readers or exactly one writer, never both, and while a writer holds the notebook even the owner keeps their hands off. Chapter 6 is about lending.
+3. **The owner cleans up.** When the owning variable goes out of scope the value is freed, and everything inside it with it. A value that must do something on the way out, close a file, remove a directory, has a `Drop` method, and the compiler calls it on that line. There is no garbage collector because the compiler already knows the line where every value dies.
+
+That is the whole model; the rest of this chapter and the next are its consequences. What it buys is the speed of a program that frees its own memory with the three classic mistakes ruled out before the program runs: using a value after it was freed, freeing it twice, and forgetting to free it. Each has one answer the compiler can compute, who owns this, so each is a compile error or impossible.
+
 ## Moving
 
 Assigning a value gives it a new owner. The old name no longer owns anything and cannot be used:

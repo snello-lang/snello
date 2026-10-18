@@ -49,6 +49,21 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | `tmp := head; head = head.next` | `old := take(mut s.head)` |
 | Copy a struct and hope it had no shared state | `s.Clone()` is the only copy, and it is explicit |
 
+### Where the model comes from
+
+The ownership model is not Teak's invention. One owner per value, borrows that are either many readers or one writer, and a `Drop` that runs when the owner is done are the model Rust made mainstream, and before Rust they were the linear types of academic languages. A Rust programmer recognizes Teak's chapters 5 and 6 at once, and that is deliberate: it is the one model with a decade of proof on real systems, and it is what lets Teak drop the garbage collector that Go's simplicity leans on.
+
+Where Teak differs is in what it leaves out, and this is the bet stage 1 of the compiler was built to test:
+
+| In Rust | In Teak |
+|---|---|
+| Lifetime annotations, `fn f<'a>(x: &'a T) -> &'a U`, say which input a returned borrow comes from; the hardest part of the language to learn | None. A returned borrow comes from the receiver or from the only borrowed parameter; a function where that is ambiguous is refused, and you return a clone or an index instead |
+| A borrow is a first-class value: it can live in a struct, a `Vec`, a channel, and the type system tracks its lifetime through all of them | A borrow lives inside one function and cannot be stored, sent or captured by a task; a long-lived structure that points into another uses an arena with indices (chapter 13) |
+| `&x`, `&mut x` at every call site; `x.method()` borrows implicitly | `f(x)` lends for reading with no keyword, `f(mut x)` for writing; `ref` and `mut` on the parameter say the rest |
+| Programs that need a lifetime are written with one | Those programs are refused; the eight core programs, written to exercise the hard cases, never needed one |
+
+The restriction on borrows is real, and it is what makes the absence of annotations possible: when a borrow cannot leave its function, every lifetime can be inferred or the program rejected, with nothing to write either way.
+
 ## Chapter 6: Borrows
 
 | In Go | In Teak |
