@@ -4,7 +4,7 @@ This file is read by coding agents working in this repository. It says what the 
 
 ## What this is
 
-Teak is a programming language in design: Go's syntax and concurrency, memory safety without a garbage collector, no lifetime annotations, and Scala-style traits. There is no compiler yet beyond what is in this repository. The owner is a Go developer building the language to learn compiler construction; the project's purpose is as much their learning as the language itself.
+Teak is a programming language: Go's syntax and concurrency, memory safety without a garbage collector, no lifetime annotations, and Scala-style traits. The compiler in this repository builds core Teak to native binaries today (stages 0 and 1 of `_docs/specs/plan.md`); traits, generics, tasks and the standard library in Teak are the stages ahead. The compiler is written in Go, after the Go toolchain's own packages, and a Teak program runs on Teak's own runtime with nothing of Go inside it.
 
 ## Read first, in this order
 
@@ -22,11 +22,12 @@ Do not propose anything these documents already decided without saying which dec
 ## How work is done
 
 - **One slice at a time.** Land one small, runnable, tested piece per turn, explain what it does and why it is shaped that way, and stop so the owner can read it. Do not deliver several packages at once.
-- **Explain by analogy to Go.** The owner knows Go well and does not know Rust, OCaml, or type theory. Point at the Go toolchain counterpart (`go/scanner`, `go/parser`, `go/types`) for every design choice. Never explain a Teak feature with Rust vocabulary.
+- **Explain by analogy to Go.** The compiler follows the Go toolchain's design, so point at the counterpart (`go/scanner`, `go/parser`, `go/types`) for every design choice, and explain in Go's terms, not Rust's, OCaml's or type theory's. Never explain a Teak feature with Rust vocabulary.
 - **Design before code.** A new construct goes into the syntax conventions and an example before it goes into the parser.
 - **Tests with every slice.** Table tests, error tests, and the examples sweep, using only the standard `testing` package.
 - **The book grows with the code.** `_docs/book/` is the language book for users. A slice that implements or decides a language feature writes or updates the chapter that owns it in the same change, and keeps the chapter's status line true. The book's `README.md` lists the chapters and which stage writes each.
 - **Do not commit or push.** The owner commits. Leave the working tree clean of temporary files.
+- **No AI authorship.** Do not credit an AI tool, model, or bot as an author anywhere in a contribution. This includes `Co-Authored-By` commit trailers (e.g. `Co-Authored-By: Claude ...`), "Generated with ..." footers in PR descriptions, and any other attribution to an AI tool in commits, PR descriptions, issues, code, or comments. If your tooling adds such lines by default, remove them before committing and before opening the PR. The human who submits the PR is its sole author and must be able to explain and defend every line of it in review. PRs that credit an AI tool as an author will not be reviewed until the attribution is removed.
 
 ## Constraints that need a human to change
 
