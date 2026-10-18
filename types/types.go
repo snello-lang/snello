@@ -210,6 +210,7 @@ type Named struct {
 	obj        *TypeName
 	underlying Type
 	impls      []string // the traits after impl, by name until traits exist
+	methods    []*Func
 	copyState  copyState
 }
 
@@ -355,6 +356,28 @@ func (n *Named) Obj() *TypeName { return n.obj }
 // SetUnderlying sets the underlying type of a named type declared
 // before its definition was known.
 func (n *Named) SetUnderlying(t Type) { n.underlying = t }
+
+// AddMethod attaches a method declared on the type and returns nil, or
+// returns the method already declared under that name.
+func (n *Named) AddMethod(f *Func) *Func {
+	if old := n.Method(f.name); old != nil {
+		return old
+	}
+
+	n.methods = append(n.methods, f)
+	return nil
+}
+
+// Method returns the method with the given name, or nil.
+func (n *Named) Method(name string) *Func {
+	for _, m := range n.methods {
+		if m.name == name {
+			return m
+		}
+	}
+
+	return nil
+}
 
 // Implements reports whether the declaration listed trait after impl.
 func (n *Named) Implements(trait string) bool {

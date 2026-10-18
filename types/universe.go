@@ -46,7 +46,7 @@ func init() {
 	def(NewConst(token.NoPos, "true", Typ[Bool], "true"))
 	def(NewConst(token.NoPos, "false", Typ[Bool], "false"))
 	for _, b := range predeclaredBuiltins {
-		def(&Builtin{object{b.name, nil, token.NoPos}, b.id})
+		def(NewBuiltin(b.name, b.id))
 	}
 
 	SomeVariant = NewVariant(token.NoPos, "Some", nil, 0, nil)

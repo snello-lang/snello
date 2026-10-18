@@ -44,7 +44,9 @@ go build ./...        # must be clean
 go vet ./...          # must be clean
 gofmt -l .            # must print nothing
 go test ./...         # must pass
-go run ./cmd/teak lex FILE   # print the token stream of a Teak file
+go run ./cmd/teak lex FILE     # print the token stream of a Teak file
+go run ./cmd/teak parse FILE   # print the syntax tree
+go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
 ```
 
 ## Layout

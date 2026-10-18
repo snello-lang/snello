@@ -125,6 +125,11 @@ func NewVariant(pos token.Pos, name string, parent *Named, index int, fields []*
 	return v
 }
 
+// NewBuiltin returns a predeclared function.
+func NewBuiltin(name string, id BuiltinID) *Builtin {
+	return &Builtin{object{name, nil, token.NoPos}, id}
+}
+
 // NewPkgName returns an imported package name.
 func NewPkgName(pos token.Pos, name, path string) *PkgName {
 	return &PkgName{object{name, nil, pos}, path}

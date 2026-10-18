@@ -65,15 +65,17 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** Package, file, function and block scopes; declaration before use rules as in Go; resolution of every identifier in the AST to its object; errors for undefined and redeclared names.
 
 **Acceptance criteria:**
-- [ ] Every identifier in the core examples resolves
-- [ ] Undefined and redeclared names report the position of both uses
+- [x] Every identifier in the core examples resolves (2026-10-18; `TestCoreExamples`)
+- [x] Undefined and redeclared names report the position of both uses (`x redeclared in this block; first declared at 2:8`)
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
-- [ ] Manual check: `teak check examples/core/tree.teak` reports nothing
+- [x] Tests pass: `go test ./types/`
+- [x] Manual check: `teak check examples/core/tree.teak` reports nothing
 
 **Dependencies:** 1.2
-**Files:** `types/scope.go`, `types/resolve.go`, `cmd/teak/main.go`
+**Files:** `types/check.go`, `types/resolve.go`, `types/typexpr.go`, `types/check_test.go`, `cmd/teak/main.go`
+
+**Done:** 2026-10-18. Type expressions are resolved here as well, so every declared object has its type before task 1.4; `nil-used.teak` is the first negative program the checker passes, and the test harness for the rest (`TestNegativePrograms`) is in place, insisting that unhandled programs produce no error.
 **Scope:** M
 
 ## Task 1.4: Expression and statement checking

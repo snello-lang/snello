@@ -4,9 +4,9 @@
 
 // Command teak is the Teak compiler driver.
 //
-// Stage 0 provides two subcommands for inspecting the front end by hand:
-// `teak lex FILE` prints the token stream and `teak parse FILE` prints
-// the syntax tree.
+// Three subcommands inspect the front end by hand: `teak lex FILE`
+// prints the token stream, `teak parse FILE` prints the syntax tree, and
+// `teak check FILE` reports what the checker finds.
 package main
 
 import (
@@ -17,6 +17,7 @@ import (
 	"github.com/teak-lang/teak/parser"
 	"github.com/teak-lang/teak/scanner"
 	"github.com/teak-lang/teak/token"
+	"github.com/teak-lang/teak/types"
 )
 
 func main() {
@@ -36,13 +37,19 @@ func main() {
 		}
 
 		os.Exit(parse(os.Args[2]))
+	case "check":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(check(os.Args[2]))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (lex | parse) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -87,18 +94,45 @@ func parse(path string) int {
 	f, file, err := parser.ParseFile(path, src)
 	ast.Fprint(os.Stdout, f, file)
 	if err != nil {
-		if list, ok := err.(scanner.ErrorList); ok {
-			for _, e := range list {
-				fmt.Fprintln(os.Stderr, e)
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, err)
-		}
-
+		printErrors(err)
 		return 1
 	}
 
 	return 0
+}
+
+// check parses and checks a file and prints the errors; it prints
+// nothing and exits 0 when the file is correct.
+func check(path string) int {
+	src, ok := readSource(path)
+	if !ok {
+		return 1
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	if err == nil {
+		_, err = types.Check(file, f, nil)
+	}
+
+	if err != nil {
+		printErrors(err)
+		return 1
+	}
+
+	return 0
+}
+
+// printErrors writes each error of a list on its own line.
+func printErrors(err error) {
+	if list, ok := err.(scanner.ErrorList); ok {
+		for _, e := range list {
+			fmt.Fprintln(os.Stderr, e)
+		}
+
+		return
+	}
+
+	fmt.Fprintln(os.Stderr, err)
 }
 
 // readSource reads a file, reporting a failure to stderr.
