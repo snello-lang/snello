@@ -368,29 +368,3 @@ func (p *Parser) parseVarDecl() *ast.VarDecl {
 
 	return d
 }
-
-// skipBody skips a brace-delimited body and returns a block holding
-// only its brace positions. Statements parse for real since task 0.8;
-// this remains for the arms of a match, which arrive with task 0.10.
-// Nested braces are counted, so a literal inside does not end it early.
-func (p *Parser) skipBody() *ast.BlockStmt {
-	body := &ast.BlockStmt{Lbrace: p.expect(token.LBRACE)}
-	depth := 1
-	for p.tok != token.EOF {
-		switch p.tok {
-		case token.LBRACE:
-			depth++
-		case token.RBRACE:
-			depth--
-		}
-
-		if depth == 0 {
-			break
-		}
-
-		p.next()
-	}
-
-	body.Rbrace = p.expect(token.RBRACE)
-	return body
-}

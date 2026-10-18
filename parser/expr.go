@@ -388,13 +388,90 @@ func (p *Parser) parseIfExpr() *ast.IfExpr {
 	return x
 }
 
-// parseMatchExpr parses "match" Expr "{" arms "}". The arms arrive with
-// task 0.10; until then the body is skipped and Arms is nil.
+// parseMatchExpr parses "match" Expr "{" {Arm} "}". The value is a
+// control clause, so a "{" in it opens the arms. Arms end with a comma
+// or a newline, and the last may have neither.
+//
+//	match (s, ev) {
+//	    (Closed, Dial)                       => Connecting(1, now),
+//	    (Connecting(n, _), Timeout) if n < 3 => Connecting(n + 1, now),
+//	    _                                    => s,
+//	}
 func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 	x := &ast.MatchExpr{Match: p.expect(token.MATCH)}
 	x.X = p.parseControlExpr()
-	p.skipBody()
+	if !p.expectLbrace() {
+		return x
+	}
+
+	for p.tok != token.RBRACE && p.tok != token.EOF {
+		x.Arms = append(x.Arms, p.parseMatchArm())
+		switch p.tok {
+		case token.COMMA, token.SEMICOLON:
+			p.next()
+		case token.RBRACE:
+		default:
+			p.errorExpected(p.pos, "',' or newline after the arm")
+			p.advance(armEnd)
+			if p.tok == token.COMMA || p.tok == token.SEMICOLON {
+				p.next()
+			}
+		}
+	}
+
+	p.expect(token.RBRACE)
 	return x
+}
+
+// parseMatchArm parses Pattern ["if" Expr] "=>" Body. An arm without
+// its "=>" is reported once and skipped to the end of the arm, with
+// Body left nil.
+func (p *Parser) parseMatchArm() *ast.MatchArm {
+	arm := &ast.MatchArm{Pat: p.parsePattern()}
+	if p.tok == token.IF {
+		p.next()
+		arm.Guard = p.parseExpr()
+	}
+
+	if p.tok != token.FATARROW {
+		p.errorExpected(p.pos, "'=>'")
+		p.advance(armEnd)
+		return arm
+	}
+
+	arm.Arrow = p.pos
+	p.next()
+	arm.Body = p.parseArmBody()
+	return arm
+}
+
+// parseArmBody parses what follows "=>": a block, a return, break or
+// continue, a send or assignment, or an expression, which the examples
+// use freely: `Stop => return,` and `Balance(reply) => reply <- n,`.
+// A plain expression is returned as the expression itself.
+func (p *Parser) parseArmBody() ast.Node {
+	switch p.tok {
+	case token.LBRACE, token.BREAK, token.CONTINUE:
+		return p.parseStmt()
+	case token.RETURN:
+		// A comma ends the arm, so a return here carries at most one
+		// expression; several results are written as a tuple.
+		ret := &ast.ReturnStmt{Return: p.pos}
+		p.next()
+		if !exprEnd[p.tok] {
+			ret.Results = []ast.Expr{p.parseExpr()}
+		}
+
+		return ret
+	}
+
+	x := p.parseExpr()
+	s := p.simpleStmtAfter(x, nil)
+	if es, ok := s.(*ast.ExprStmt); ok {
+		return es.X
+	}
+
+	return s
 }
 
 // parseControlExpr parses the expression of a control clause, where a

@@ -38,6 +38,10 @@ var (
 	stmtStart = newKindSet(token.BREAK, token.CONST, token.CONTINUE, token.DEFER, token.FOR, token.SPAWN,
 		token.IF, token.RETURN, token.SELECT, token.SWITCH, token.VAR)
 	stmtEnd = stmtStart.with(token.SEMICOLON, token.RBRACE, token.CASE, token.DEFAULT)
+
+	// armEnd is where a broken match arm ends: at the comma or newline
+	// before the next arm, or at the brace that closes the match.
+	armEnd = newKindSet(token.COMMA, token.SEMICOLON, token.RBRACE)
 )
 
 // A kindSet is a set of token kinds as a table indexed by Kind: a

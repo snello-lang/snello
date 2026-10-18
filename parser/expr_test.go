@@ -93,7 +93,7 @@ func TestExprs(t *testing.T) {
 		{"if x == y { a } else { b }", "if (x == y) {...} else {...}"},               // y { is not a literal here
 		{"if x == []int{1} { a } else { b }", "if (x == []int{1}) {...} else {...}"}, // but a written type is
 		{"if f(T{}) { a } else { b }", "if f(T{}) {...} else {...}"},
-		{"match e { Lit(v) => v }", "match e {...}"},
+		{"match e { Lit(v) => v }", "match e { Lit(v) => v }"},
 		{"f(if c { a } else { b })", "f(if c {...} else {...})"},
 	}
 	for _, tt := range tests {
@@ -228,7 +228,21 @@ func exprString(x ast.Expr) string {
 
 		return s
 	case *ast.MatchExpr:
-		return "match " + exprString(x.X) + " {...}"
+		if len(x.Arms) == 0 {
+			return "match " + exprString(x.X) + " { }"
+		}
+
+		var arms []string
+		for _, arm := range x.Arms {
+			s := patString(arm.Pat)
+			if arm.Guard != nil {
+				s += " if " + exprString(arm.Guard)
+			}
+
+			arms = append(arms, s+" => "+armBodyString(arm.Body))
+		}
+
+		return "match " + exprString(x.X) + " { " + strings.Join(arms, "; ") + " }"
 	case *ast.TypeExpr:
 		return typeString(x.Type)
 	}

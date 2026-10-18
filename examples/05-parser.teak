@@ -61,9 +61,9 @@ func (l mut Lexer) Next() Result<Token, ParseError> {
             start := l.pos - 1
             for l.pos < len(l.src) && (l.src[l.pos].IsDigit() || l.src[l.pos] == '.') { l.pos += 1 }
             text := l.src[start:l.pos]                   // ref string into src
-            return strconv.ParseFloat(text)
-                .Map(func(v f64) Token { return Num(v) })
-                .MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
+            return strconv.ParseFloat(text).
+                Map(func(v f64) Token { return Num(v) }).
+                MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
         },
         _ => return Err(BadChar(c, l.pos - 1)),
     }

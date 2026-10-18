@@ -33,11 +33,11 @@ func TestStmts(t *testing.T) {
 		{"defer f.Close()", "defer f.Close()"},
 		{"return", "return"},
 		{"return a, b", "return a, b"},
-		{"return match e { }", "return match e {...}"},
+		{"return match e { }", "return match e { }"},
 		{"break", "break"},
 		{"continue", "continue"},
 		{"{ a; b }", "{ a; b }"},
-		{"match e { }", "match e {...}"},
+		{"match e { }", "match e { }"},
 		{"n := take(mut s.head) ?? return None", "n := (take((mut s.head)) ?? return None)"},
 
 		// if: Go's forms and Teak's binding.
@@ -313,13 +313,24 @@ func optExpr(x ast.Expr) string {
 	return exprString(x)
 }
 
-// patString renders the patterns an if binding can use.
+// patString renders a pattern in source form.
 func patString(pat ast.Pattern) string {
 	switch pat := pat.(type) {
 	case *ast.IdentPat:
 		return pat.Name.Name
 	case *ast.WildcardPat:
 		return "_"
+	case *ast.LitPat:
+		return pat.Lit.Value
+	case *ast.RangePat:
+		return pat.Lo.Value + "..=" + pat.Hi.Value
+	case *ast.OrPat:
+		var parts []string
+		for _, alt := range pat.Alts {
+			parts = append(parts, patString(alt))
+		}
+
+		return strings.Join(parts, " | ")
 	case *ast.TuplePat:
 		var parts []string
 		for _, elt := range pat.Elts {
@@ -333,7 +344,26 @@ func patString(pat ast.Pattern) string {
 			parts = append(parts, patString(arg))
 		}
 
+		if pat.Args == nil {
+			return exprString(pat.Path)
+		}
+
 		return exprString(pat.Path) + "(" + strings.Join(parts, ", ") + ")"
+	}
+
+	return "?"
+}
+
+// armBodyString renders a match arm body: an expression, a block, or a
+// simple statement.
+func armBodyString(n ast.Node) string {
+	switch n := n.(type) {
+	case nil:
+		return "?"
+	case ast.Expr:
+		return exprString(n)
+	case ast.Stmt:
+		return stmtString(n)
 	}
 
 	return "?"

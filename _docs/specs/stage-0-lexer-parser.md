@@ -165,17 +165,18 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** `match` in expression and statement position; arms with `=>`; patterns: literal, identifier binding, wildcard `_`, variant with sub-patterns, tuple, range `..=`, alternatives `|`, guards `if`.
 
 **Acceptance criteria:**
-- [ ] Every pattern form in examples 05, 09 and 17 parses
-- [ ] `(Connecting(n, _), Timeout) if n < 3 => ...` parses as a tuple pattern with a guard
-- [ ] An arm without `=>` and a pattern with an unbalanced parenthesis each give a specific error
+- [x] Every pattern form in examples 05, 09 and 17 parses; all twenty examples parse completely, with no body skipped
+- [x] `(Connecting(n, _), Timeout) if n < 3 => ...` parses as a tuple pattern with a guard
+- [x] An arm without `=>` and a pattern with an unbalanced parenthesis each give a specific error
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Manual check: `teak parse examples/17-state-machine.teak`
+- [x] Tests pass: `go test ./parser/`
+- [x] Manual check: `teak parse examples/17-state-machine.teak`
 
 **Dependencies:** 0.9
-**Files:** `parser/pattern.go`, `parser/parser_test.go`
+**Files:** `parser/pattern.go`, `parser/pattern_test.go`, `parser/expr.go` (match arms)
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.11: Examples sweep and error recovery
 

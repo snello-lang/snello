@@ -151,6 +151,14 @@ func (p *Parser) parseSimpleStmt() ast.Stmt {
 		}
 	}
 
+	return p.simpleStmtAfter(x, lhs)
+}
+
+// simpleStmtAfter builds the simple statement that the token after an
+// expression list calls for. x is the first expression; lhs is the
+// whole list when there was a comma, nil otherwise. A match arm body
+// uses it too, with lhs nil, since a comma there ends the arm.
+func (p *Parser) simpleStmtAfter(x ast.Expr, lhs []ast.Expr) ast.Stmt {
 	switch p.tok {
 	case token.DEFINE, token.ASSIGN,
 		token.ADD_ASSIGN, token.SUB_ASSIGN, token.MUL_ASSIGN, token.QUO_ASSIGN, token.REM_ASSIGN,
@@ -169,7 +177,17 @@ func (p *Parser) parseSimpleStmt() ast.Stmt {
 			return p.parseRangeClause(lhs, tok)
 		}
 
-		return &ast.AssignStmt{Lhs: lhs, TokPos: pos, Tok: tok, Rhs: p.parseExprList(token.ILLEGAL)}
+		// One name on the left takes one expression on the right, as
+		// in Go; only a list takes a list. This is also what lets a
+		// comma end a match arm whose body is an assignment.
+		var rhs []ast.Expr
+		if len(lhs) == 1 {
+			rhs = []ast.Expr{p.parseExpr()}
+		} else {
+			rhs = p.parseExprList(token.ILLEGAL)
+		}
+
+		return &ast.AssignStmt{Lhs: lhs, TokPos: pos, Tok: tok, Rhs: rhs}
 	case token.INC, token.DEC:
 		s := &ast.IncDecStmt{X: x, TokPos: p.pos, Tok: p.tok}
 		p.next()
