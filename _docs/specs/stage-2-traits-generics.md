@@ -1,6 +1,6 @@
 # Stage 2: traits, generics, and the full examples
 
-Goal: all twenty examples compile through the Go backend and run with their expected output.
+Goal: all twenty examples compile through the C backend and run with their expected output.
 
 ## Task 2.1: Generic functions and types
 
@@ -11,10 +11,10 @@ Goal: all twenty examples compile through the Go backend and run with their expe
 - [ ] A call with an uninferable type parameter reports which one
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/ ./emit/golang/`
+- [ ] Tests pass: `go test ./types/ ./emit/c/`
 
 **Dependencies:** Stage 1
-**Files:** `types/generic.go`, `emit/golang/mono.go`, tests
+**Files:** `types/generic.go`, `emit/c/mono.go`, tests
 **Scope:** L
 
 ## Task 2.2: Trait declarations and `impl`
@@ -41,10 +41,10 @@ Goal: all twenty examples compile through the Go backend and run with their expe
 - [ ] Two traits providing the same default with no override on the type reports an ambiguity
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/ ./emit/golang/`
+- [ ] Tests pass: `go test ./types/ ./emit/c/`
 
 **Dependencies:** 2.2
-**Files:** `types/trait.go`, `emit/golang/trait.go`, tests
+**Files:** `types/trait.go`, `emit/c/trait.go`, tests
 **Scope:** M
 
 ## Task 2.4: Trait as a type
@@ -56,10 +56,10 @@ Goal: all twenty examples compile through the Go backend and run with their expe
 - [ ] Assigning a non-implementing type reports the missing trait
 
 **Verification:**
-- [ ] Tests pass: `go test ./emit/golang/`
+- [ ] Tests pass: `go test ./emit/c/`
 
 **Dependencies:** 2.3
-**Files:** `types/trait.go`, `emit/golang/trait.go`
+**Files:** `types/trait.go`, `emit/c/trait.go`
 **Scope:** M
 
 ## Task 2.5: Standard traits

@@ -1,6 +1,6 @@
-# Stage 4: native backend and runtime
+# Stage 4: LLVM backend and the full runtime
 
-Goal: all twenty examples run as native binaries with no Go toolchain involved, and the performance table in the design document is measured.
+Goal: the C emitter is replaced by an LLVM IR backend with the runtime carried over, the runtime gains its M:N scheduler and netpoller, and the performance table in the design document is measured. (Native binaries exist since stage 1; this stage is about optimization control and the runtime's final shape.)
 
 ## Task 4.1: Lowering design
 
@@ -17,13 +17,13 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 **Files:** `../design/05-lowering.md`
 **Scope:** M
 
-## Task 4.2: LLVM IR for core, hello world native
+## Task 4.2: LLVM IR for core
 
-**Description:** Emit LLVM IR as text for the core subset and shell out to `clang`. No tasks, no channels yet.
+**Description:** Emit LLVM IR as text for the core subset and shell out to `clang`, matching the C backend's output on the core suite. No tasks, no channels yet.
 
 **Acceptance criteria:**
-- [ ] `teak build -target native hello.teak` produces a binary with no Go runtime
-- [ ] The core positive programs that use no concurrency run natively
+- [ ] `teak build -backend llvm hello.teak` produces a binary
+- [ ] The core positive programs that use no concurrency run through the LLVM backend with the same output as through C
 
 **Verification:**
 - [ ] Tests pass: `go test ./emit/llvm/`
@@ -34,7 +34,7 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 
 ## Task 4.3: Runtime: allocation, panics, unwinding
 
-**Description:** The C runtime's first pieces: allocator, panic with message and exit, unwinding that runs drops.
+**Description:** Panic unwinding that runs every pending drop, and the allocator's final form; the allocator and panic exist since stage 1.
 
 **Acceptance criteria:**
 - [ ] A panic in a nested call runs every pending `Drop` on the way out
@@ -67,7 +67,7 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 **Description:** Channels with the Go semantics, `select`, and blocking-looking I/O over kqueue, epoll or io_uring.
 
 **Acceptance criteria:**
-- [ ] Examples 02, 12, 13 run natively
+- [ ] Examples 02, 12, 13 run on the M:N scheduler
 - [ ] Example 03 serves requests with a real socket
 
 **Verification:**
@@ -92,9 +92,9 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 **Files:** `bench/`, design document
 **Scope:** M
 
-## Task 4.7: Go backend demoted
+## Task 4.7: C backend demoted
 
-**Description:** The Go backend becomes the reference implementation used for differential testing; the native backend is the default.
+**Description:** The C backend becomes the reference implementation used for differential testing; the LLVM backend is the default.
 
 **Acceptance criteria:**
 - [ ] A test runs every example through both backends and compares output

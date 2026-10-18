@@ -71,7 +71,7 @@ Examples 01, 03, 12 and 15 name `arena.Arena`, `arena.Index` and `sync.Arc` thro
 
 ## 3. Go's package map, Teak's signatures
 
-Package names and layout are Go's, so a Go developer knows where to look, and the first backend emits Go. Inside a package the rule is: **the same name when the meaning is the same, a new name when ownership changes the meaning.** `strings.Repeat` is the same function in both languages. `os.ReadFile` is not: Go's returns a byte slice and a nullable error, Teak's returns `Result<string, io.Error>`, so it is `os.ReadToString`. Kotlin treats Java's library the same way: the same names where nothing changed, new ones where null safety did.
+Package names and layout are Go's, so a Go developer knows where to look. Inside a package the rule is: **the same name when the meaning is the same, a new name when ownership changes the meaning.** `strings.Repeat` is the same function in both languages. `os.ReadFile` is not: Go's returns a byte slice and a nullable error, Teak's returns `Result<string, io.Error>`, so it is `os.ReadToString`. Kotlin treats Java's library the same way: the same names where nothing changed, new ones where null safety did.
 
 ## 4. Three signature rules
 
@@ -91,7 +91,7 @@ Rule 1 forces one language decision. The borrows note today says a borrow at a c
 
 ## The stage 1 mapping table
 
-Stage 1 has no library code. It has a table in the Go emitter that maps each of these names onto the Go function of the same meaning, and nothing more: `fmt.Println`, `fmt.Printf`, `fmt.Sprintf`, `fmt.Sprint`, `os.Exit`, `os.Stderr`, `os.ReadToString`, `strings.Fields`, `strings.Repeat`, `time.Now`, `math.Pi`, `math.Sqrt`, and the methods of section 1 on slices, maps, strings, options and results. Everything in the table is debt that the stage 4 runtime repays. Library code written in Teak, which begins at task 2.6, carries over to stage 4 unchanged.
+Stage 1 has no library code written in Teak. It has a table in the C emitter that maps each of these names onto a function of the C runtime with the same meaning, and nothing more: `fmt.Println`, `fmt.Printf`, `fmt.Sprintf`, `fmt.Sprint`, `os.Exit`, `os.Stderr`, `os.ReadToString`, `strings.Fields`, `strings.Repeat`, `time.Now`, `math.Pi`, `math.Sqrt`, and the methods of section 1 on slices, maps, strings, options and results. Everything in the table is debt that the stage 4 runtime repays. Library code written in Teak, which begins at task 2.6, carries over to stage 4 unchanged.
 
 ## What this does not decide
 

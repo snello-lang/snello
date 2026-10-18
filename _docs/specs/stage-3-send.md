@@ -1,6 +1,6 @@
 # Stage 3: ownership across tasks
 
-Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data races are compile errors.
+Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data races are compile errors. Tasks run as runtime threads and channels are queues in the C runtime; the M:N scheduler is stage 4.
 
 ## Task 3.1: `Send` inference
 
@@ -35,7 +35,7 @@ Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data rac
 
 ## Task 3.3: Shared-state library
 
-**Description:** `Arc`, `Mutex<T>`, `RwLock<T>` with guards that are `mut`/`ref` borrows released on drop; `sync.Once`; `WaitGroup` as a `Copy` handle; mapped onto Go's `sync`.
+**Description:** `Arc`, `Mutex<T>`, `RwLock<T>` with guards that are `mut`/`ref` borrows released on drop; `sync.Once`; `WaitGroup` as a `Copy` handle; over the runtime's threads and locks.
 
 **Acceptance criteria:**
 - [ ] Example 03 checks and runs against a stub database

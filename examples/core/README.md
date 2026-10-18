@@ -1,6 +1,6 @@
 # Core programs
 
-The stage 1 acceptance suite: eight programs written in core Teak, the part of the language the first checker and the Go backend handle. Core Teak is structs, enums and `match`, functions and methods with `ref`, `mut` and value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??`, slices, maps, strings, `Copy` computed from structure, `Drop`, `defer`, and closures. It has no traits and no user generics; the one `impl` that appears is `impl Drop`, which is how a type gets a `Drop` method.
+The stage 1 acceptance suite: eight programs written in core Teak, the part of the language the first checker and the C backend handle. Core Teak is structs, enums and `match`, functions and methods with `ref`, `mut` and value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??`, slices, maps, strings, `Copy` computed from structure, `Drop`, `defer`, and closures. It has no traits and no user generics; the one `impl` that appears is `impl Drop`, which is how a type gets a `Drop` method.
 
 Each program is the core version of one of the twenty programs in the parent folder. What was removed, and what each one stresses, is in its header comment.
 
@@ -17,7 +17,7 @@ Each program is the core version of one of the twenty programs in the parent fol
 
 ## Library surface
 
-The programs call only these library names. Stage 1 maps each onto the Go function of the same meaning in a table in the emitter; nothing else from the library exists in stage 1.
+The programs call only these library names. Stage 1 maps each onto a C runtime function of the same meaning in a table in the emitter; nothing else from the library exists in stage 1.
 
 - Predeclared, from section 1 of `../../_docs/design/05-standard-library.md`: `len`, `make`, `take`, the `Expect` method on options and results, and the methods `Push`, `Clone`, `RemoveValue`, `Reverse`, `SortBy` on slices, `Get`, `Insert` on maps, `Fields`, `Split`, `SplitOnce`, `Trim`, `ToLower`, `Clone` on strings.
 - `fmt`: `Println`, `Sprintf`, `Sprint`.

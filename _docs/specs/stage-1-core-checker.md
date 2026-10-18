@@ -1,6 +1,6 @@
-# Stage 1: core checker and Go backend
+# Stage 1: core checker and C backend
 
-Goal: `teak build FILE` type-checks a program written in the core of Teak, enforces ownership and borrowing, emits Go, and produces a binary. No traits, no user generics. This stage decides whether the memory model holds.
+Goal: `teak build FILE` type-checks a program written in the core of Teak, enforces ownership and borrowing, emits C, and produces a native binary. No traits, no user generics. This stage decides whether the memory model holds.
 
 The predeclared names, number types and the library packages are defined in `../design/05-standard-library.md`; the checker's universe scope is built from its section 1. Core Teak for this stage: structs, enums and `match`, functions and methods with `ref`/`mut`/value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??` as built-ins, slices, maps, strings, `Copy` for numbers and plain structs, `Drop`, `defer`.
 
@@ -96,21 +96,21 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Done:** 2026-10-18, in one slice. Expressions carry a mode (value, owned place, borrowed place) beside their type for the ownership passes; literals and None take their type from context; operators read through borrows; the stage 1 library (`fmt`, `os`, `io`, and the predeclared methods) lives in `library.go`; exhaustiveness is the usefulness check from Maranget's "Warnings for pattern matching". Negative programs handled: nil-used, missing-arm, wrong-question-kind, ref-as-mut. Book chapter 8 written with it.
 
-## Task 1.5: Go emitter and `teak build`
+## Task 1.5: C emitter and `teak build`
 
-**Description:** Emit Go source for a checked core program and run `go build` on it. Enums become tagged structs, `match` becomes a switch, `T?` becomes a struct with a flag or a pointer, `Drop` becomes a deferred call. The first end-to-end program runs.
+**Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `emit/c/runtime/` provides strings, slices, maps, printing and panics. The first end-to-end program runs natively. (Changed 2026-10-18 from a Go emitter; see the design document.) Three slices: functions, numbers, strings and control flow (done 2026-10-18); structs, enums, match, options and results; maps, string methods, closures and files.
 
 **Acceptance criteria:**
-- [ ] `teak build hello.teak` produces a binary that prints hello
+- [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
 - [ ] Every positive core program builds and runs with its expected output
-- [ ] Emitted Go is `gofmt`-clean
+- [ ] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror`
 
 **Verification:**
-- [ ] Tests pass: `go test ./emit/golang/`
-- [ ] Manual check: run three core programs
+- [ ] Tests pass: `go test ./emit/c/`
+- [ ] Manual check: build and run three core programs
 
 **Dependencies:** 1.4
-**Files:** `emit/golang/emit.go`, `emit/golang/emit_test.go`, `cmd/teak/main.go`
+**Files:** `emit/c/`, `emit/c/runtime/`, `cmd/teak/main.go`
 **Scope:** L
 
 ## Task 1.6: Moves
@@ -167,19 +167,19 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.9: Drops and release checking
 
-**Description:** Scope-exit drops in order, on every exit path; `Close`-style consuming methods; emitted Go calls an explicit release at every computed drop; a debug build mode asserts that nothing released is reachable afterwards, so that Go's collector can never hide a checker mistake.
+**Description:** Scope-exit drops in order, on every exit path; `Close`-style consuming methods; the emitted C frees at every computed drop; a debug build poisons freed memory and asserts that nothing released is reachable afterwards, and a leak checker runs over the core suite, so that a checker mistake is a failing test.
 
 **Acceptance criteria:**
-- [ ] A `Drop` type's method runs at scope exit, on early return, and on panic, in the emitted Go
+- [ ] A `Drop` type's method runs at scope exit, on early return, and on panic, in the emitted C
 - [ ] `teak build -debug` panics with a message if a released value is touched
 - [ ] The file-copy core example closes both files on every path
 
 **Verification:**
-- [ ] Tests pass: `go test ./emit/golang/`
+- [ ] Tests pass: `go test ./emit/c/`
 - [ ] Manual check: a program that releases then uses a value panics under `-debug`
 
 **Dependencies:** 1.8
-**Files:** `emit/golang/drop.go`, `emit/golang/runtime_debug.go`
+**Files:** `emit/c/drop.go`, `emit/c/runtime/debug.c`
 **Scope:** M
 
 ## Task 1.10: Core suite green

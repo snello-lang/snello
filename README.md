@@ -40,8 +40,8 @@ The current work is a set of twenty programs written in a provisional syntax bef
 | Stage | What |
 |---|---|
 | 0 | Lexer and parser for the Go-like syntax, written in Go |
-| 1 | Core checker: ownership, moves, `ref`/`mut` borrows, destructors. Emit Go source. |
-| 2 | Traits, generics, sum types, `Option`/`Result`. Still emit Go. |
+| 1 | Core checker: ownership, moves, `ref`/`mut` borrows, destructors. Emit C; native binaries. |
+| 2 | Traits, generics, sum types, `Option`/`Result`. Still emit C. |
 | 3 | Sendable inference for `spawn` and channels. |
 | 4 | LLVM backend and a native runtime with an M:N scheduler. |
 | 5 | GPU kernels through the LLVM targets: a kernel-safe subset and device buffers. |

@@ -9,7 +9,7 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | Chapter | Status |
 |---|---|
 | 1. Introduction | not written |
-| 2. Getting started | waits for `teak build` (stage 1, task 1.5) |
+| [2. Getting started](02-getting-started.md) | `teak build` works for the first slice of the C backend (stage 1, task 1.5) |
 | [3. Basics](03-basics.md) | implemented and checked (stage 1, task 1.4) |
 | [4. Structs, enums and match](04-structs-enums-match.md) | implemented and checked (stage 1, task 1.4) |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | decided; checked from stage 1, tasks 1.6 and 1.9 |

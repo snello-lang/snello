@@ -24,8 +24,9 @@ var libraries = map[string]*Scope{
 // to return but failure yields.
 var errorResult = NewResult(Unit, Typ[Error])
 
-// The library's own named types, shared between packages.
-var osFile = NewNamed(NewTypeName(token.NoPos, "File", nil), NewStruct(nil), []string{"Drop"})
+// OSFile is the library's os.File type, shared between packages and
+// recognized by the Go emitter.
+var OSFile = NewNamed(NewTypeName(token.NoPos, "File", nil), NewStruct(nil), []string{"Drop"})
 
 // libraryMember returns the object named in an imported package, or nil.
 func libraryMember(path, name string) Object {
@@ -53,26 +54,26 @@ func fmtPackage() *Scope {
 
 func osPackage() *Scope {
 	s := NewScope(nil)
-	osFile.AddMethod(libMethod("Close", NewVar(token.NoPos, "f", osFile), nil, errorResult))
-	osFile.AddMethod(libMethod("Sync", NewVar(token.NoPos, "f", NewRef(osFile, true)), nil, errorResult))
-	osFile.AddMethod(libMethod("WriteString", NewVar(token.NoPos, "f", NewRef(osFile, true)), []*Var{param("s", ref(Typ[String]))}, NewResult(Typ[Int], Typ[Error])))
-	s.Insert(osFile.obj)
+	OSFile.AddMethod(libMethod("Close", NewVar(token.NoPos, "f", OSFile), nil, errorResult))
+	OSFile.AddMethod(libMethod("Sync", NewVar(token.NoPos, "f", NewRef(OSFile, true)), nil, errorResult))
+	OSFile.AddMethod(libMethod("WriteString", NewVar(token.NoPos, "f", NewRef(OSFile, true)), []*Var{param("s", ref(Typ[String]))}, NewResult(Typ[Int], Typ[Error])))
+	s.Insert(OSFile.obj)
 	s.Insert(libFunc("ReadToString", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(Typ[String], Typ[Error]))))
-	s.Insert(libFunc("Open", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(osFile, Typ[Error]))))
-	s.Insert(libFunc("Create", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(osFile, Typ[Error]))))
+	s.Insert(libFunc("Open", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(OSFile, Typ[Error]))))
+	s.Insert(libFunc("Create", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(OSFile, Typ[Error]))))
 	s.Insert(libFunc("MkdirTemp", NewSignature(nil, []*Var{param("dir", ref(Typ[String])), param("pattern", ref(Typ[String]))}, NewResult(Typ[String], Typ[Error]))))
 	s.Insert(libFunc("RemoveAll", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, errorResult)))
 	s.Insert(libFunc("Exit", NewSignature(nil, []*Var{param("code", Typ[Int])}, Typ[Never])))
 	s.Insert(NewVar(token.NoPos, "Args", NewSlice(Typ[String])))
-	s.Insert(NewVar(token.NoPos, "Stdin", osFile))
-	s.Insert(NewVar(token.NoPos, "Stdout", osFile))
-	s.Insert(NewVar(token.NoPos, "Stderr", osFile))
+	s.Insert(NewVar(token.NoPos, "Stdin", OSFile))
+	s.Insert(NewVar(token.NoPos, "Stdout", OSFile))
+	s.Insert(NewVar(token.NoPos, "Stderr", OSFile))
 	return s
 }
 
 func ioPackage() *Scope {
 	s := NewScope(nil)
-	s.Insert(libFunc("Copy", NewSignature(nil, []*Var{param("dst", NewRef(osFile, true)), param("src", NewRef(osFile, true))}, NewResult(Typ[Int64], Typ[Error]))))
+	s.Insert(libFunc("Copy", NewSignature(nil, []*Var{param("dst", NewRef(OSFile, true)), param("src", NewRef(OSFile, true))}, NewResult(Typ[Int64], Typ[Error]))))
 	return s
 }
 

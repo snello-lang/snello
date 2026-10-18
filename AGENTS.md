@@ -31,7 +31,7 @@ Do not propose anything these documents already decided without saying which dec
 ## Constraints that need a human to change
 
 - **Zero dependencies.** The compiler imports only the standard library.
-- **No garbage collector**, anywhere in the language's semantics. The Go-emitting backend is scaffolding; nothing may rely on Go's collector.
+- **No garbage collector**, anywhere. Teak programs are native binaries: the C backend and its runtime own every allocation, and nothing may rely on a collector. Go is the language the compiler is written in, nothing more.
 - **Simplicity.** If Go has a way to say it, Teak says it that way. A new construct must be readable by a Go developer without a glossary. The list of things deliberately left out is in the design document under "What Teak leaves out"; do not add any of them back.
 - **The examples are the acceptance suite.** Every stage must process all twenty. Changing an example to make a stage pass requires changing the design document in the same change.
 - **License header** on every `.go` and `.teak` file, in the form shown in `CODING_STANDARDS.md`.
@@ -47,6 +47,7 @@ go test ./...         # must pass
 go run ./cmd/teak lex FILE     # print the token stream of a Teak file
 go run ./cmd/teak parse FILE   # print the syntax tree
 go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
+go run ./cmd/teak build FILE   # build a native binary next to the file; needs cc on the PATH
 ```
 
 ## Layout
@@ -65,7 +66,7 @@ go run ./cmd/teak check FILE   # report what the checker finds; silent when the 
 | `cmd/teak/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |
 
-Packages to come: the Go emitter (`emit/golang`), then the native backend.
+Packages to come: the C emitter (`emit/c`) with its runtime, then the LLVM backend.
 
 ## When the design and the code disagree
 

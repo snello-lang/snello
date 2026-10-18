@@ -6,7 +6,7 @@ The stages come from `../design/01-language-design.md`. The twenty programs unde
 
 ## Overview
 
-Build the Teak compiler in Go, one stage at a time, each stage leaving a working tool that processes all twenty example programs. Stages 0 to 3 emit Go source so the type system can be validated before a runtime exists. Stage 4 replaces the backend with LLVM and a native runtime. Stage 5 extends the native backend to accelerators.
+Build the Teak compiler in Go, one stage at a time, each stage leaving a working tool that processes all twenty example programs. Stages 1 to 3 emit C and build it with the system C compiler over a small C runtime, so every stage produces native binaries. Stage 4 replaces the C emitter with LLVM IR and keeps the runtime. Stage 5 extends the native backend to accelerators.
 
 ## Architecture decisions
 
@@ -29,7 +29,7 @@ Build the Teak compiler in Go, one stage at a time, each stage leaving a working
 | Stage | File | Tasks | State |
 |---|---|---|---|
 | 0 | [stage-0-lexer-parser.md](stage-0-lexer-parser.md) | 0.1 to 0.11 | complete: all tasks done and checkpoint reviewed by the owner 2026-10-18 |
-| 1 | [stage-1-core-checker.md](stage-1-core-checker.md) | 1.0 to 1.10 | 1.0 done 2026-10-18 (standard library design, added after noticing the examples use library names no document defines; owner's review pending); 1.1 next |
+| 1 | [stage-1-core-checker.md](stage-1-core-checker.md) | 1.0 to 1.10 | 1.0 to 1.4 done 2026-10-18; 1.5, the C backend, in progress (the backend changed from Go source to C on 2026-10-18, see the design document) |
 | 2 | [stage-2-traits-generics.md](stage-2-traits-generics.md) | 2.1 to 2.7 | not started |
 | 3 | [stage-3-send.md](stage-3-send.md) | 3.1 to 3.4 | not started |
 | 4 | [stage-4-native.md](stage-4-native.md) | 4.1 to 4.7 | not started |
@@ -42,7 +42,7 @@ A checkpoint is a human review before the next stage begins. Each stage file end
 | After | What is reviewed |
 |---|---|
 | Stage 0 | All twenty examples parse; the AST printer output reads correctly; the grammar decisions the parser made are recorded in the syntax conventions; the standard library design (task 1.0) is written and decided before any checker code |
-| Stage 1 | The core examples type-check and run as Go; the negative tests are rejected with the planned messages; **decision point: does the ownership model hold, or does the design change?** |
+| Stage 1 | The core examples type-check and run as native binaries; the negative tests are rejected with the planned messages; **decision point: does the ownership model hold, or does the design change?** |
 | Stage 2 | All twenty examples compile and run with their expected output |
 | Stage 3 | The concurrency examples compile; the race programs are rejected |
 | Stage 4 | All twenty run natively; benchmark numbers compared with the performance table in the design document |
@@ -56,12 +56,12 @@ A checkpoint is a human review before the next stage begins. Each stage file end
 | Borrow checking within a function is larger than estimated (reborrows, conditional moves, loops) | High: stage 1 slips | Tasks 1.6 to 1.8 are separate so progress is visible; a dataflow pass is planned from the start, not retrofitted |
 | `<` as both less-than and generic bracket is ambiguous to parse | Medium | Task 0.6 decides the rule early; Go's own parser faced the same with `[` and the examples give the cases |
 | Monomorphization makes compile times unacceptable | Medium | Measured at the stage 2 checkpoint; dictionary passing is the planned relief |
-| The Go backend's garbage collector hides a checker bug | High: a wrong checker ships | Task 1.9 emits explicit releases and a debug mode that asserts nothing is reachable after release |
-| Stage 4 is a second compiler's worth of work | High: year two | Each 4.x task has a runnable milestone; the Go backend stays as the reference implementation |
+| A missing release leaks, or a wrong one frees early | High: a wrong checker ships | Task 1.9 frees at every computed drop, a debug build poisons freed memory and asserts nothing reachable after release, and a leak checker runs over the suite |
+| Stage 4 is a second compiler's worth of work | High: year two | Each 4.x task has a runnable milestone; the C backend stays as the reference implementation |
 
 ## Decisions on the open questions
 
 Decided 2026-10-18.
 
 - **Stage 1 includes enums and `match`.** Ownership cannot be tested on programs that cannot express absence; every core program needs `T?`, which is an enum, and `T?` needs `match` or `??` to be used. A temporary nil-like placeholder for one stage would cost more than keeping them. What stage 1 leaves out is everything that needs type parameters in user code: generic types, generic functions, traits. `Option` and `Result` are built in for the stage, as `map` and `chan` are built-in generics in Go.
-- **Each stage's standard library is the minimum its own tests call.** Stage 0: none. Stage 1: `fmt.Println`, `os` open, create, read and exit, `strings` basics, slice methods and `take`, each a direct mapping onto the Go function of the same name, held in a table in the emitter rather than a package. Stage 2 (task 2.6): the first real library, `Option` and `Result` methods, `Arena<T>`, `Rc`, `Weak`, and the shims the twenty examples import, written in Teak wherever Teak can express it. Stage 3: `Arc`, `Mutex`, `RwLock`, `Once`, `WaitGroup`. Stage 4: the runtime replaces the Go mappings; library code written in Teak is unchanged. The rule: library code in Teak validates the language for free; library code as Go mappings is debt that stage 4 repays, so keep the second kind small.
+- **Each stage's standard library is the minimum its own tests call.** Stage 0: none. Stage 1: `fmt.Println`, `os` open, create, read and exit, `strings` basics, slice methods and `take`, each a direct mapping onto a C runtime function of the same meaning, held in a table in the emitter rather than a package. Stage 2 (task 2.6): the first real library, `Option` and `Result` methods, `Arena<T>`, `Rc`, `Weak`, and the shims the twenty examples import, written in Teak wherever Teak can express it. Stage 3: `Arc`, `Mutex`, `RwLock`, `Once`, `WaitGroup`. Stage 4: the LLVM backend keeps the runtime; library code written in Teak is unchanged. The rule: library code in Teak validates the language for free; library code as runtime mappings is debt the Teak library repays, so keep the second kind small.

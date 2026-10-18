@@ -4,16 +4,20 @@
 
 // Command teak is the Teak compiler driver.
 //
-// Three subcommands inspect the front end by hand: `teak lex FILE`
-// prints the token stream, `teak parse FILE` prints the syntax tree, and
-// `teak check FILE` reports what the checker finds.
+// `teak build FILE` compiles a Teak program to a native binary next to
+// it. Three more subcommands inspect the front end by hand: `teak lex
+// FILE` prints the token stream, `teak parse FILE` prints the syntax
+// tree, and `teak check FILE` reports what the checker finds.
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/teak-lang/teak/ast"
+	"github.com/teak-lang/teak/emit/c"
 	"github.com/teak-lang/teak/parser"
 	"github.com/teak-lang/teak/scanner"
 	"github.com/teak-lang/teak/token"
@@ -43,13 +47,19 @@ func main() {
 		}
 
 		os.Exit(check(os.Args[2]))
+	case "build":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(build(os.Args[2]))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (build | lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -116,6 +126,58 @@ func check(path string) int {
 
 	if err != nil {
 		printErrors(err)
+		return 1
+	}
+
+	return 0
+}
+
+// build compiles a file to a native binary named after it, in the
+// current directory, through the C backend and the system C compiler.
+func build(path string) int {
+	src, ok := readSource(path)
+	if !ok {
+		return 1
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	info := &types.Info{}
+	if err == nil {
+		_, err = types.Check(file, f, info)
+	}
+
+	if err != nil {
+		printErrors(err)
+		return 1
+	}
+
+	csrc, err := c.Emit(file, f, info)
+	if err != nil {
+		printErrors(err)
+		return 1
+	}
+
+	dir, err := os.MkdirTemp("", "teak-build")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	defer os.RemoveAll(dir)
+	name := strings.TrimSuffix(filepath.Base(path), ".teak")
+	bin, out, err := c.Build(dir, name, csrc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cc: %v\n%s", err, out)
+		return 1
+	}
+
+	built, err := os.ReadFile(bin)
+	if err == nil {
+		err = os.WriteFile(name, built, 0o755)
+	}
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
