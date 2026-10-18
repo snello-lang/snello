@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 17: A connection state machine.
 //
 // Tests enums carrying different data per state, exhaustive match with
@@ -8,12 +12,12 @@ package conn
 
 import ("fmt"; "net"; "time")
 
-type Session struct {
+struct Session {
     id     string
     socket net.Socket            // owned; closed by Drop
 }
 
-type State enum {
+enum State {
     Closed
     Connecting(attempt int, since time.Time)
     Open(session Session)
@@ -21,7 +25,7 @@ type State enum {
     Failed(reason string)
 }
 
-type Event enum {
+enum Event {
     Dial
     Connected(session Session)
     Timeout

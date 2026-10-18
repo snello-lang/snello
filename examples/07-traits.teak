@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 07: Traits with default methods, fields, and mixins.
 //
 // A trait is a Go interface that may also carry default methods and
@@ -12,8 +16,8 @@ package shapes
 import ("fmt"; "math")
 
 trait Shape {
-    func (s ref Self) Area() float64
-    func (s ref Self) Perimeter() float64
+    func (s ref Self) Area() f64
+    func (s ref Self) Perimeter() f64
     func (s ref Self) Name() string
     func (s ref Self) Describe() string {                    // default method
         return fmt.Sprintf("%s with area %.2f", s.Name(), s.Area())
@@ -34,19 +38,19 @@ trait Logged: Shape {
     }
 }
 
-type Circle struct impl Shape, Named, Logged {
-    r float64
+struct Circle impl Shape, Named, Logged {
+    r f64
 }
 
-func (c ref Circle) Area() float64      { return math.Pi * c.r * c.r }
-func (c ref Circle) Perimeter() float64 { return 2 * math.Pi * c.r }
+func (c ref Circle) Area() f64      { return math.Pi * c.r * c.r }
+func (c ref Circle) Perimeter() f64 { return 2 * math.Pi * c.r }
 
-type Rect struct impl Shape, Named {
-    w, h float64
+struct Rect impl Shape, Named {
+    w, h f64
 }
 
-func (r ref Rect) Area() float64      { return r.w * r.h }
-func (r ref Rect) Perimeter() float64 { return 2 * (r.w + r.h) }
+func (r ref Rect) Area() f64      { return r.w * r.h }
+func (r ref Rect) Perimeter() f64 { return 2 * (r.w + r.h) }
 func (r ref Rect) Describe() string   { return "a rectangle" }      // overrides the default
 
 // Which Describe does Circle get? Its own methods first, then the traits
@@ -55,7 +59,7 @@ func (r ref Rect) Describe() string   { return "a rectangle" }      // overrides
 // whose Name() is Named's. All resolved at compile time, all direct calls.
 
 // Static dispatch through a bound: one copy of the function per T.
-func TotalArea<T: Shape>(xs ref []T) float64 {
+func TotalArea<T: Shape>(xs ref []T) f64 {
     sum := 0.0
     for _, x := range xs { sum += x.Area() }
     return sum

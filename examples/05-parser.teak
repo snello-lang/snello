@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 05: A recursive-descent parser for arithmetic expressions.
 //
 // Tests sum types, match, owned pointers for recursive data, and a lexer struct that
@@ -6,15 +10,15 @@
 // A struct with a `ref` field is itself a borrow: it obeys every borrow
 // rule (cannot be stored in an owned struct, returned, or sent). That is
 // enough for a lexer, which is created in Parse, used, and dropped before
-// Parse returns. See design/00-syntax-conventions.md, "Borrow-holding
+// Parse returns. See _docs/design/00-syntax-conventions.md, "Borrow-holding
 // structs".
 
 package calc
 
 import ("fmt"; "strconv")
 
-type Token enum impl Copy, Eq {
-    Num(float64)
+enum Token impl Copy, Eq {
+    Num(f64)
     Plus
     Minus
     Star
@@ -24,19 +28,19 @@ type Token enum impl Copy, Eq {
     EOF
 }
 
-type Expr enum {
-    Lit(float64)
+enum Expr {
+    Lit(f64)
     Neg(*Expr)                                  // *T: an owned heap pointer
     Bin(op Token, lhs *Expr, rhs *Expr)
 }
 
-type ParseError enum {
+enum ParseError {
     Unexpected(got Token, pos int)
     BadChar(c byte, pos int)
     BadNumber(text string)
 }
 
-type Lexer struct {
+struct Lexer {
     src ref string          // the Lexer is therefore a borrow
     pos int
 }
@@ -57,15 +61,15 @@ func (l mut Lexer) Next() Result<Token, ParseError> {
             start := l.pos - 1
             for l.pos < len(l.src) && (l.src[l.pos].IsDigit() || l.src[l.pos] == '.') { l.pos += 1 }
             text := l.src[start:l.pos]                   // ref string into src
-            return strconv.ParseFloat(text)
-                .Map(func(v float64) Token { return Num(v) })
-                .MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
+            return strconv.ParseFloat(text).
+                Map(func(v f64) Token { return Num(v) }).
+                MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
         },
         _ => return Err(BadChar(c, l.pos - 1)),
     }
 }
 
-type Parser struct {
+struct Parser {
     lex Lexer               // contains a borrow, so Parser is a borrow too
     cur Token
 }
@@ -124,7 +128,7 @@ func Parse(src ref string) Result<Expr, ParseError> {
 }
 
 // An owned pointer dereferences automatically, so `inner` is usable as ref Expr.
-func Eval(e ref Expr) float64 {
+func Eval(e ref Expr) f64 {
     return match e {
         Lit(v)            => v,
         Neg(inner)        => -Eval(inner),

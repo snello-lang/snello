@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 10: Word frequency count over a file.
 //
 // Tests owned strings versus borrowed slices of them, maps with owned
@@ -7,7 +11,7 @@ package wordfreq
 
 import ("fmt"; "os"; "sort"; "strings")
 
-type Count struct { word string; n int }
+struct Count { word string; n int }
 
 func main() {
     text := os.ReadToString("input.txt").Expect("read input")

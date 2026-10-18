@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 06: A stack and a queue.
 //
 // Tests: *Node? as the owned link, `take` to move a value out of a field,
@@ -8,14 +12,14 @@ package list
 
 import "fmt"
 
-type Node<T> struct {
+struct Node<T> {
     value T
     next  *Node<T>?             // owned pointer, or None
 }
 
 // Zero value: head None, len 0. A struct whose fields all have zero
 // values can be written `Stack<T>{}`, as in Go.
-type Stack<T> struct {
+struct Stack<T> {
     head *Node<T>?
     len  int
 }
@@ -45,9 +49,9 @@ func (s ref Stack<T>) Peek() ref T? {
 
 // A linked queue needs a tail link, which would be a second owner of the
 // last node. A ring buffer has no such link and is faster anyway.
-type QueueFull struct{}
+struct QueueFull{}
 
-type Queue<T> struct {
+struct Queue<T> {
     buf  []T?
     head int
     len  int

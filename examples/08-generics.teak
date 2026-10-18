@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 08: Generic containers and functions with trait bounds.
 //
 // Tests: generic structs, bounds, monomorphization, and the choice between
@@ -9,7 +13,7 @@ import "fmt"
 
 // A growable list. The built-in slice already does this; the point is the
 // shape of a generic type with ref and mut methods.
-type List<T> struct {
+struct List<T> {
     items []T
 }
 
@@ -51,7 +55,7 @@ func MaxBy<T: Ord + Clone>(xs ref []T) T? {
 }
 
 // A generic type may implement a trait conditionally on its parameters.
-type Pair<A: Copy, B: Copy> struct impl Copy { a A; b B }
+struct Pair<A: Copy, B: Copy> impl Copy { a A; b B }
 
 func main() {
     l := List<int>{}

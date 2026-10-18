@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 14: File copying with deterministic cleanup.
 //
 // Tests Drop versus defer, and that a closed file cannot be used again
@@ -12,7 +16,7 @@ import ("fmt"; "io"; "os")
 // cannot. The idiom: call Close() when you care about the error, rely on
 // Drop when you do not.
 
-func Copy(src ref string, dst ref string) Result<int64, io.Error> {
+func Copy(src ref string, dst ref string) Result<i64, io.Error> {
     in := os.Open(src)?                     // owned; closed by Drop on every exit path
     out := os.Create(dst)?
 
@@ -25,7 +29,7 @@ func Copy(src ref string, dst ref string) Result<int64, io.Error> {
 
 // A temp directory that removes itself. Drop runs on normal exit, early
 // return, and panic unwinding.
-type TempDir struct impl Drop { path string }
+struct TempDir impl Drop { path string }
 
 func NewTempDir() Result<TempDir, io.Error> {
     p := os.MkdirTemp("", "teak")?

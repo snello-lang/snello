@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 15: An LRU cache.
 //
 // The classic ownership torture test: a hash map pointing into a doubly
@@ -14,14 +18,14 @@ package lru
 
 import ("arena"; "fmt")
 
-type entry<K, V> struct {
+struct entry<K, V> {
     key  K
     val  V
     prev Index<entry<K, V>>?
     next Index<entry<K, V>>?
 }
 
-type Cache<K: Hash + Eq + Clone, V> struct {
+struct Cache<K: Hash + Eq + Clone, V> {
     cap   int
     index map[K]Index<entry<K, V>>
     slots Arena<entry<K, V>>

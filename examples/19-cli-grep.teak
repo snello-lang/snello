@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 19: A small command-line tool: grep.
 //
 // Tests argument parsing, reading stdin or files line by line without
@@ -7,7 +11,7 @@ package main
 
 import ("bufio"; "fmt"; "io"; "os"; "regexp")
 
-type Opts struct {
+struct Opts {
     pattern     string
     files       []string
     ignoreCase  bool

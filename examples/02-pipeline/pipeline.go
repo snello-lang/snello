@@ -1,3 +1,9 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build ignore
+
 // Version 1: idiomatic Go.
 //
 // The same three-stage pipeline. Compare line by line with pipeline.teak:

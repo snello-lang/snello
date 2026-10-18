@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 13: An actor with a mailbox.
 //
 // The actor pattern is the natural fit for this memory model: the state
@@ -8,14 +12,14 @@ package actor
 
 import "fmt"
 
-type Msg enum {
+enum Msg {
     Deposit(amount int)
     Withdraw(amount int, reply chan<- Result<int, string>)
     Balance(reply chan<- int)
     Stop
 }
 
-type Account struct {
+struct Account {
     balance int
     history []int
 }
@@ -44,11 +48,11 @@ func run(acct Account, inbox <-chan Msg) {
 
 // A handle is a Copy value wrapping a channel. Copying it does not copy
 // the actor.
-type Handle struct impl Copy { inbox chan<- Msg }
+struct Handle impl Copy { inbox chan<- Msg }
 
 func Spawn(initial int) Handle {
     ch := make(chan Msg, 64)
-    go run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
+    spawn run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
     return Handle{inbox: ch}
 }
 

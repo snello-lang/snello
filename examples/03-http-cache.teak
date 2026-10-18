@@ -1,10 +1,14 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 03: An HTTP handler with a shared cache and a pooled connection.
 //
 // Tests: long-lived state shared by every request task, a borrow that
 // lasts exactly one request, and ownership of the response body.
 //
 // Shared state crosses task boundaries only inside Arc (see
-// design/03-ownership-across-tasks.md). The mux stores the server in an
+// _docs/design/03-ownership-across-tasks.md). The mux stores the server in an
 // Arc and hands each request task its own clone; inside the task the
 // handler receives a `ref Server` for the duration of the request.
 
@@ -19,12 +23,12 @@ import (
     "time"
 )
 
-type Entry struct {
+struct Entry {
     body    []byte
     expires time.Time
 }
 
-type Server struct {
+struct Server {
     cache Arc<sync.RwLock<map[string]Entry>>   // shared, lock-protected
     db    Arc<db.Pool>                          // shared, internally synchronized
 }

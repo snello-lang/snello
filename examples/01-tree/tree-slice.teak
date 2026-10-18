@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Version 2: Teak with a hand-rolled arena.
 //
 // Without a GC every value has one owner, so a child cannot hold a pointer
@@ -16,14 +20,14 @@ import "fmt"
 
 type NodeID int
 
-type Node struct {
+struct Node {
     value    string
     parent   NodeID?               // None for the root
     children []NodeID
     live     bool                  // false after Remove; the slot is kept
 }
 
-type Tree struct {
+struct Tree {
     nodes []Node                   // owns every node
 }
 

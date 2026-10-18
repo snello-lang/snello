@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 09: Error handling with Result, custom error enums, `?`, and `??`.
 //
 // Tests that Go's "errors are values" survives without nil, and that `?`
@@ -7,7 +11,7 @@ package config
 
 import ("fmt"; "io"; "os"; "strconv")
 
-type ConfigError enum impl Error {
+enum ConfigError impl Error {
     NotFound(path string)
     Unreadable(path string, cause io.Error)
     BadValue(key string, text string)
@@ -23,7 +27,7 @@ func (e ref ConfigError) Error() string {
     }
 }
 
-type Config struct {
+struct Config {
     port    int
     workers int
 }

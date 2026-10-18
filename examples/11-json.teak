@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 11: A JSON value type with an encoder and decoder.
 //
 // Tests a recursive sum type holding collections, an encoder that
@@ -11,16 +15,16 @@ package json
 
 import ("fmt"; "strconv"; "strings")
 
-type Value enum {
+enum Value {
     Null
     Bool(bool)
-    Number(float64)
+    Number(f64)
     String(string)
     Array([]Value)
     Object(map[string]Value)
 }
 
-type DecodeError struct { pos int; msg string }
+struct DecodeError { pos int; msg string }
 
 func (v ref Value) Encode(out mut strings.Builder) {
     match v {
@@ -50,7 +54,7 @@ func (v ref Value) Encode(out mut strings.Builder) {
     }
 }
 
-type Decoder struct {
+struct Decoder {
     src ref string          // the Decoder is a borrow
     pos int
 }

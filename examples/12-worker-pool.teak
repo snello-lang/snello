@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 12: A worker pool with select, a deadline, and cancellation.
 //
 // Tests select over channels, a cancellation token shared through Arc,
@@ -8,13 +12,13 @@ package pool
 
 import ("fmt"; "sync"; "time")
 
-type Task struct { id int; payload []byte }
-type Done struct { id int; size int }
+struct Task { id int; payload []byte }
+struct Done { id int; size int }
 
 // A cancellation token is a channel that gets closed. Closing twice is a
 // panic in Go, so a Once guards it. sync types synchronize internally and
 // are used through `ref`.
-type Cancel struct {
+struct Cancel {
     ch   chan struct{}
     once sync.Once
 }
@@ -44,9 +48,10 @@ func Run(workers int, inputs []Task, deadline time.Duration) []Done {
     want := len(inputs)                             // read before inputs is moved
 
     for i := 0; i < workers; i++ {
-        go worker(i, tasks, out, cancel.Clone())    // each worker gets its own Arc handle
+        spawn worker(i, tasks, out, cancel.Clone())    // each worker gets its own Arc handle
     }
-    go func() {                                     // inputs moved into this task
+    
+    spawn func() {                                     // inputs moved into this task
         for _, t := range inputs { tasks <- t }     // each Task moved into the channel
         close(tasks)
     }()

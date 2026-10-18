@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // 04: A directed graph with BFS and shortest paths.
 //
 // Nodes refer to each other by integer id. The graph is append-only, so a
@@ -11,12 +15,12 @@ import ("fmt"; "heap")
 
 type NodeID int
 
-type Edge struct impl Copy {
+struct Edge impl Copy {
     to     NodeID
     weight int
 }
 
-type Graph struct {
+struct Graph {
     labels []string
     adj    [][]Edge              // adj[i] owns the edges leaving node i
 }
@@ -54,7 +58,7 @@ func (g ref Graph) BFS(start NodeID) []NodeID {
 
 // Dijkstra with the standard library heap. Items are small Copy structs
 // that the heap owns.
-type item struct impl Copy, Ord { node NodeID; dist int }
+struct item impl Copy, Ord { node NodeID; dist int }
 
 func (a ref item) Cmp(b ref item) Ordering { return a.dist.Cmp(b.dist) }
 

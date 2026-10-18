@@ -1,3 +1,7 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Version 3: Teak with the standard library Arena<T>. This is the Teak way.
 //
 // Same idea as tree-slice.teak, but the arena is a library type and the
@@ -6,19 +10,19 @@
 // Get instead of aliasing whatever lives in the slot now.
 //
 // Compared to tree-slice.teak: no `live` flag, no leaked slots, and stale
-// handles are detected instead of trusted. See design/02-arenas-and-indices.md.
+// handles are detected instead of trusted. See _docs/design/02-arenas-and-indices.md.
 
 package tree
 
 import ("fmt"; "arena")
 
-type Node struct {
+struct Node {
     value    string
     parent   Index<Node>?         // None for the root
     children []Index<Node>
 }
 
-type Tree struct {
+struct Tree {
     nodes Arena<Node>             // owns every node
     root  Index<Node>
 }

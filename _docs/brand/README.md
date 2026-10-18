@@ -1,9 +1,6 @@
 # Teak brand assets
 
-The mark is a teak leaf with the letter T carved out of it: the vertical cut is
-the leaf's midrib, the horizontal cut is a vein, and the tip above the cut is the
-leaf's own tip. The wordmark is a rounded monoline "teak" whose t repeats the
-same two strokes.
+The mark is a teak leaf with the letter T carved out of it: the vertical cut is the leaf's midrib, the horizontal cut is a vein, and the tip above the cut is the leaf's own tip. The wordmark is a rounded monoline "teak" whose t repeats the same two strokes.
 
 | File | Use |
 |---|---|
