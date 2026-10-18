@@ -36,7 +36,7 @@ func TestTypes(t *testing.T) {
 		{"map[string]Value?", "map[string](Value)?"},
 		{"*Node<K, V>?", "(*Node<K, V>)?"},
 		{"(ref string, ref string)?", "((ref string, ref string))?"},
-		{"[16]float64", "[16]float64"},
+		{"[16]f64", "[16]f64"},
 
 		// Channels.
 		{"chan Job", "chan Job"},
@@ -60,7 +60,7 @@ func TestTypes(t *testing.T) {
 		{"(A)", "A"},
 		{"struct{}", "struct{}"},
 		{"struct { id int; next *Node? }", "struct{id int; next (*Node)?}"},
-		{"struct { w, h float64; Point }", "struct{w, h float64; Point}"},
+		{"struct { w, h f64; Point }", "struct{w, h f64; Point}"},
 	}
 	for _, tt := range tests {
 		typ, errs := parseTypeString(tt.src)

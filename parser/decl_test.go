@@ -31,16 +31,16 @@ func TestDecls(t *testing.T) {
 
 		// Types: definitions, structs with impl lists, enums.
 		{"type NodeID int", "type NodeID int"},
-		{"type Circle struct impl Shape, Named, Logged {\n\tr float64\n}", "type Circle struct impl Shape, Named, Logged {r float64}"},
+		{"type Circle struct impl Shape, Named, Logged {\n\tr f64\n}", "type Circle struct impl Shape, Named, Logged {r f64}"},
 		{"type Cache<K: Hash + Eq + Clone, V> struct {}", "type Cache<K: Hash + Eq + Clone, V> struct {}"},
 		{"type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}", "type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}"},
-		{"type Expr enum {\n\tLit(float64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "type Expr enum {Lit(float64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
+		{"type Expr enum {\n\tLit(f64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "type Expr enum {Lit(f64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
 		{"type Token enum impl Copy, Eq { Plus; Minus }", "type Token enum impl Copy, Eq {Plus; Minus}"},
 		{"type Value enum { Null; Array([]Value); Object(map[string]Value) }", "type Value enum {Null; Array([]Value); Object(map[string]Value)}"},
 		{"type Msg enum { Withdraw(amount int, reply chan<- Result<int, string>) }", "type Msg enum {Withdraw(amount int, reply chan<- Result<int, string>)}"},
 
 		// Traits: required and default methods, fields, refinement.
-		{"trait Shape {\n\tfunc (s ref Self) Area() float64\n\tfunc (s ref Self) Describe() string { return s.Name() }\n}", "trait Shape {func (s ref Self) Area() float64; func (s ref Self) Describe() string {...}}"},
+		{"trait Shape {\n\tfunc (s ref Self) Area() f64\n\tfunc (s ref Self) Describe() string { return s.Name() }\n}", "trait Shape {func (s ref Self) Area() f64; func (s ref Self) Describe() string {...}}"},
 		{"trait Named {\n\tvar name string\n\tfunc (n ref Self) Name() string { return n.name }\n}", "trait Named {var name string; func (n ref Self) Name() string {...}}"},
 		{"trait Logged: Shape {}", "trait Logged: Shape {}"},
 		{"trait Iterator<T> {\n\tfunc (it mut Self) Next() T?\n\tfunc (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {}\n}", "trait Iterator<T> {func (it mut Self) Next() (T)?; func (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {...}}"},
@@ -74,7 +74,7 @@ func TestDeclErrors(t *testing.T) {
 		{"type T struct", "expected '{', found 'EOF'", 1},               // no semicolon after struct, as in Go
 		{"type T struct\nfunc f() {}", "expected '{', found 'func'", 2}, // then the missing newline
 		{"type T impl Shape struct {}", "'impl' goes after 'struct' or 'enum'", 1},
-		{"type E enum {\n\tLit float64\n}", "expected '(' or newline, found 'float64'", 1},
+		{"type E enum {\n\tLit f64\n}", "expected '(' or newline, found 'f64'", 1},
 		{"type E enum {\n\t3\n}", "expected variant or '}', found '3'", 1},
 		{"type T<K Ord> struct {}", "expected '>', found 'Ord'", 2}, // cascade: the stray '>' is reported too
 		{"trait T {\n\tx int\n}", "expected method, field or '}', found 'x'", 1},

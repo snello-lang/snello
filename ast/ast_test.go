@@ -205,8 +205,8 @@ func TestPos(t *testing.T) {
 	}{
 		{"qualified type", &NamedType{Pkg: id(1, "http"), Name: id(6, "Request")}, 1},
 		{"unqualified type", &NamedType{Name: id(6, "Request")}, 6},
-		{"named field", &Field{Names: []*Ident{id(1, "w"), id(4, "h")}, Type: &NamedType{Name: id(6, "float64")}}, 1},
-		{"positional field", &Field{Type: &NamedType{Name: id(6, "float64")}}, 6},
+		{"named field", &Field{Names: []*Ident{id(1, "w"), id(4, "h")}, Type: &NamedType{Name: id(6, "f64")}}, 1},
+		{"positional field", &Field{Type: &NamedType{Name: id(6, "f64")}}, 6},
 		{"named param", &Param{Name: id(1, "xs"), Type: &RefType{Ref: at(4), Elem: &NamedType{Name: id(8, "T")}}}, 1},
 		{"unnamed param", &Param{Type: &NamedType{Name: id(8, "T")}}, 8},
 		{"aliased import", &ImportSpec{Name: id(8, "j"), Path: &BasicLit{ValuePos: at(10), Kind: token.STRING, Value: `"json"`}}, 8},

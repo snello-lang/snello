@@ -1,6 +1,6 @@
 # Syntax conventions
 
-Status: draft, 2026-10-17. These are the rules the programs in `../../examples/` assume. Each was tested by writing those programs; when an example reads badly, the rule changes here first. The guiding principle: **if Go already has a way to say it, Teak says it the same way.** New syntax exists only where Go has no answer.
+Status: draft, 2026-10-17. These are the rules the programs in `../../examples/` assume. Each was tested by writing those programs; when an example reads badly, the rule changes here first. The guiding principle: **if Go already has a way to say it, Teak says it the same way.** The principle covers syntax and keywords, which are what make Teak readable at first sight. The spelling of the primitive number types is vocabulary, not grammar, and there Teak follows the convention of the newer systems languages (`i32`, `f64`); see the number types below and `05-standard-library.md`. That is the one deliberate departure, stated once so it does not become a slope. New syntax exists only where Go has no answer.
 
 ## Carried over from Go unchanged
 
@@ -55,8 +55,18 @@ Go's other uses of `*T`, sharing a value or mutating it through a pointer, are `
 
 ## Types
 
+Number types, with `int` and `uint` the platform word size and `int` the index type as in Go; `byte` is `u8` and `rune` is `i32`:
+
+| Kind | Types |
+|---|---|
+| Signed integers | `i8`, `i16`, `i32`, `i64`, `int` |
+| Unsigned integers | `u8`, `u16`, `u32`, `u64`, `uint` |
+| Floating point | `f32`, `f64` |
+
+No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; checked arithmetic is a library function returning `T?`. A literal takes the type its context asks for.
+
 - Generics with angle brackets: `List<T>`, `func Map<T, U>(...)`. Bounds with a colon: `T: Ord + Clone`.
-- Sum types: `type Shape enum { Circle(r float64); Rect(w, h float64) }`.
+- Sum types: `type Shape enum { Circle(r f64); Rect(w, h f64) }`.
 - `match` with exhaustiveness checking. Patterns: literals, variants with bindings, tuples `(a, b)`, ranges `'0'..='9'`, alternatives `|`, guards `if cond`, wildcard `_`.
 - `Option<T>` written `T?`, with `Some(x)` and `None`. `Result<T, E>` with `Ok(x)` and `Err(e)`. No `nil`.
 - `x?` propagates `None` or `Err` from a function returning the same kind.
@@ -72,7 +82,7 @@ Full reasoning in `01-language-design.md`. Traits are Go interfaces that may als
 
 ```teak
 trait Shape {
-    func (s ref Self) Area() float64                  // required
+    func (s ref Self) Area() f64                  // required
     func (s ref Self) Describe() string {             // default
         return fmt.Sprintf("area %.2f", s.Area())
     }
@@ -84,10 +94,10 @@ trait Named {
 }
 
 type Circle struct impl Shape, Named {
-    r float64
+    r f64
 }
 
-func (c ref Circle) Area() float64 { return math.Pi * c.r * c.r }
+func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 ```
 
 - A type declares what it implements with `impl` on its declaration: `type Circle struct impl Shape, Named { ... }`. The same for enums. The compiler checks every required method exists. There are no impl blocks; methods are ordinary Go methods.

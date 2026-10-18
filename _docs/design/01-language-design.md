@@ -27,6 +27,7 @@ Simplicity is a goal with the same weight as the others, and it is kept by subtr
 | Left out | Why | What Teak has instead |
 |---|---|---|
 | Lifetime annotations | The hardest part of Rust to learn | Borrows inferred from one source, or rejected |
+| Complex numbers and untyped constant arithmetic | Rare, and a subtle corner of Go's specification | A library `Complex<T>` with the operator traits; literals typed by context |
 | `nil` | The billion-dollar mistake | `T?` |
 | Exceptions | Hidden control flow, costly without a GC | `Result` and `?` |
 | Inheritance | Fragile base classes | Traits with defaults, and Go embedding |
@@ -83,8 +84,8 @@ Runtime, when it arrives in stage 4: an M:N work-stealing scheduler, blocking-lo
 A trait is a Go interface that may also carry default methods and fields. A type says what it implements on its declaration, and its methods are ordinary Go methods:
 
 ```teak
-type Circle struct impl Shape, Named { r float64 }
-func (c ref Circle) Area() float64 { return math.Pi * c.r * c.r }
+type Circle struct impl Shape, Named { r f64 }
+func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 ```
 
 - **Nominal, declared with `impl`.** Go's implicit satisfaction does not combine with default methods and fields, because it becomes ambiguous which default applies and where a field lives. Declaring it costs one word on the type and gives coherence for generics.

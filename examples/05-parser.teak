@@ -18,7 +18,7 @@ package calc
 import ("fmt"; "strconv")
 
 type Token enum impl Copy, Eq {
-    Num(float64)
+    Num(f64)
     Plus
     Minus
     Star
@@ -29,7 +29,7 @@ type Token enum impl Copy, Eq {
 }
 
 type Expr enum {
-    Lit(float64)
+    Lit(f64)
     Neg(*Expr)                                  // *T: an owned heap pointer
     Bin(op Token, lhs *Expr, rhs *Expr)
 }
@@ -62,7 +62,7 @@ func (l mut Lexer) Next() Result<Token, ParseError> {
             for l.pos < len(l.src) && (l.src[l.pos].IsDigit() || l.src[l.pos] == '.') { l.pos += 1 }
             text := l.src[start:l.pos]                   // ref string into src
             return strconv.ParseFloat(text)
-                .Map(func(v float64) Token { return Num(v) })
+                .Map(func(v f64) Token { return Num(v) })
                 .MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
         },
         _ => return Err(BadChar(c, l.pos - 1)),
@@ -128,7 +128,7 @@ func Parse(src ref string) Result<Expr, ParseError> {
 }
 
 // An owned pointer dereferences automatically, so `inner` is usable as ref Expr.
-func Eval(e ref Expr) float64 {
+func Eval(e ref Expr) f64 {
     return match e {
         Lit(v)            => v,
         Neg(inner)        => -Eval(inner),

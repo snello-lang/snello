@@ -7,7 +7,7 @@ Status: decided, 2026-10-17. This note explains the three ways a value can be ha
 Go gives you two ways to pass a value, and one of them means four things at once.
 
 ```go
-func Area(r Rect) float64       // by value: a copy
+func Area(r Rect) f64       // by value: a copy
 func Grow(r *Rect)              // by pointer
 ```
 

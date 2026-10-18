@@ -16,7 +16,7 @@ import ("fmt"; "io"; "os")
 // cannot. The idiom: call Close() when you care about the error, rely on
 // Drop when you do not.
 
-func Copy(src ref string, dst ref string) Result<int64, io.Error> {
+func Copy(src ref string, dst ref string) Result<i64, io.Error> {
     in := os.Open(src)?                     // owned; closed by Drop on every exit path
     out := os.Create(dst)?
 

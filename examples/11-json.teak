@@ -18,7 +18,7 @@ import ("fmt"; "strconv"; "strings")
 type Value enum {
     Null
     Bool(bool)
-    Number(float64)
+    Number(f64)
     String(string)
     Array([]Value)
     Object(map[string]Value)
