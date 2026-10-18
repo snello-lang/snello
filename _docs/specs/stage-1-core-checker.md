@@ -98,11 +98,11 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.5: C emitter and `teak build`
 
-**Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `emit/c/runtime/` provides strings, slices, maps, printing and panics. The first end-to-end program runs natively. (Changed 2026-10-18 from a Go emitter; see the design document.) Three slices: functions, numbers, strings and control flow (done 2026-10-18); structs, enums, match, options and results; maps, string methods, closures and files.
+**Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `emit/c/runtime/` provides strings, slices, maps, printing and panics. The first end-to-end program runs natively. (Changed 2026-10-18 from a Go emitter; see the design document.) Three slices: functions, numbers, strings and control flow (done 2026-10-18); structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings (done 2026-10-18: `calc.teak` is the first core program that builds and runs; `teak emit FILE` prints the C; two checker clarifications came with it, `*v += 1` for a bare `mut` borrow of a number and an owned pointer lent as a `ref` of what it holds); slices, maps, string methods, closures, `defer` and files.
 
 **Acceptance criteria:**
 - [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
-- [ ] Every positive core program builds and runs with its expected output
+- [ ] Every positive core program builds and runs with its expected output (calc 2026-10-18; the rest need slice three, and state, files, bst, list and tree need the drops of task 1.9)
 - [ ] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror`
 
 **Verification:**

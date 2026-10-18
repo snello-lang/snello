@@ -19,5 +19,8 @@ The binary is written to the current directory, named after the file. `go test .
 | strings.teak | A `ref string` parameter, concatenation, comparison, byte indexing, `Sprintf`, `Printf`, `Sprint` |
 | control.teak | `if`/`else if`, the three forms of `for`, `continue` and `break`, a named number type, swap by parallel assignment |
 | corners.teak | What the lowering to C must get right: literal bases, wrapping overflow, trigraph-looking strings, float printing |
+| shapes.teak | Structs and enums: literals, `ref` and `mut` receivers, `match` with bindings, a guard and an or-pattern, a payload changed in place, printing of composite values |
+| options.teak | `Some`/`None`, `Ok`/`Err`, `?`, `??` with a value, a `panic` and a `return`, `if` with a binding, `if` as an expression, and the order of evaluation when an operand needs statements |
+| boxes.teak | `&x` moving a value to the heap, a recursive type through `*Node?`, a pointer lent as what it holds, tuples built, destructured, matched and printed, `()` in a Result |
 
-The programs under `../core/` are the stage 1 acceptance suite and need the next two slices (structs, enums, `match`, options, results, maps, closures, files) before they build. When one of them builds, its expected output moves from its comments into a `.out` file here.
+The programs under `../core/` are the stage 1 acceptance suite. `calc.teak` builds and runs; the others need the third slice (slices, maps, string methods, closures, `defer`, files) or the drops of task 1.9. When one of them builds, its expected output moves from its comments into a `.out` file beside it, and the same test picks it up.

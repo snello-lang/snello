@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `teak build` produces native binaries for the part of the language the C backend lowers so far (stage 1, task 1.5, first slice): functions, numbers, strings, booleans, `if` and `for`, and `fmt` printing. The rest of core Teak follows in the next two slices.
+Status: `teak build` produces native binaries for the part of the language the C backend lowers so far (stage 1, task 1.5, two slices of three): functions and methods, numbers, strings, booleans, `if` and `for`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, and `fmt` printing. Slices, maps, closures, `defer` and files follow in the third slice.
 
 ## The compiler
 
@@ -37,7 +37,7 @@ teak build hello.teak
 
 ## The other commands
 
-`teak check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `teak build` runs first, and it is useful on its own while writing.
+`teak check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `teak build` runs first, and it is useful on its own while writing. `teak emit FILE` prints the C source that `teak build` compiles, for reading what the compiler made of a program.
 
 `teak parse FILE` prints the syntax tree and `teak lex FILE` the tokens. They exist for people working on the compiler.
 

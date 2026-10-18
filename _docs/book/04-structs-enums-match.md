@@ -1,6 +1,6 @@
 # 4. Structs, enums and match
 
-Status: implemented. The syntax is parsed (stage 0) and the types, bindings and exhaustiveness are checked (stage 1, task 1.4, `teak check`).
+Status: implemented. The syntax is parsed (stage 0), the types, bindings and exhaustiveness are checked (stage 1, task 1.4, `teak check`), and `teak build` compiles all of it to native code (stage 1, task 1.5). `examples/run/shapes.teak` exercises this chapter.
 
 Teak has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten.
 
@@ -159,3 +159,12 @@ if (k, v) := line.SplitOnce("=") { ... }
 ```
 
 The block runs with `parent` bound when the optional holds a value. The left side may be a name, `_`, a tuple of them, or a variant pattern such as `Some(n)`. Chapter 8 covers `T?` and the `??` operator, which unwraps or runs an else: `n := take(mut s.head) ?? return None`.
+
+## What a value costs
+
+A struct is its fields laid out in order, nothing more: no header, no hidden pointer. An enum is a small tag followed by room for the largest variant's payload, so `Shape` above is one tag and two `f64`, wherever it is stored. Building a variant writes the tag and the payload in place; it allocates nothing. `match` reads the tag and compares it to the arm's variant, in order, and binds names to the payload's fields where they lie; a `match` on a value reached through a borrow binds borrows of the fields, and copies nothing either.
+
+An optional `T?` is a flag and room for a `T`, and `Result<T, E>` is a flag and room for whichever of `T` and `E` it holds. Only `&expr` allocates: it moves the value into a cell on the heap and gives back the owned pointer to it. A pointer is one machine word, so `*Node?` is a word and a flag, which is how a recursive type stays finite.
+
+Those are also the rules the C backend follows, and `teak emit FILE` shows them applied to a program.
+

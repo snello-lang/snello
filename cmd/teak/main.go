@@ -4,10 +4,11 @@
 
 // Command teak is the Teak compiler driver.
 //
-// `teak build FILE` compiles a Teak program to a native binary next to
-// it. Three more subcommands inspect the front end by hand: `teak lex
-// FILE` prints the token stream, `teak parse FILE` prints the syntax
-// tree, and `teak check FILE` reports what the checker finds.
+// `teak build FILE` compiles a Teak program to a native binary in the
+// current directory. Four more subcommands inspect the compiler by
+// hand: `teak lex FILE` prints the token stream, `teak parse FILE` the
+// syntax tree, `teak check FILE` what the checker finds, and `teak emit
+// FILE` the C source that build would compile.
 package main
 
 import (
@@ -53,13 +54,19 @@ func main() {
 		}
 
 		os.Exit(build(os.Args[2]))
+	case "emit":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(emit(os.Args[2]))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (build | lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (build | emit | lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -132,28 +139,23 @@ func check(path string) int {
 	return 0
 }
 
-// build compiles a file to a native binary named after it, in the
-// current directory, through the C backend and the system C compiler.
-func build(path string) int {
-	src, ok := readSource(path)
+// emit prints the C source for a file, for reading what build
+// compiles.
+func emit(path string) int {
+	csrc, ok := emitSource(path)
 	if !ok {
 		return 1
 	}
 
-	f, file, err := parser.ParseFile(path, src)
-	info := &types.Info{}
-	if err == nil {
-		_, err = types.Check(file, f, info)
-	}
+	os.Stdout.Write(csrc)
+	return 0
+}
 
-	if err != nil {
-		printErrors(err)
-		return 1
-	}
-
-	csrc, err := c.Emit(file, f, info)
-	if err != nil {
-		printErrors(err)
+// build compiles a file to a native binary named after it, in the
+// current directory, through the C backend and the system C compiler.
+func build(path string) int {
+	csrc, ok := emitSource(path)
+	if !ok {
 		return 1
 	}
 
@@ -182,6 +184,33 @@ func build(path string) int {
 	}
 
 	return 0
+}
+
+// emitSource parses, checks and emits a file, printing the errors of
+// whichever step fails.
+func emitSource(path string) ([]byte, bool) {
+	src, ok := readSource(path)
+	if !ok {
+		return nil, false
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	info := &types.Info{}
+	if err == nil {
+		_, err = types.Check(file, f, info)
+	}
+
+	var csrc []byte
+	if err == nil {
+		csrc, err = c.Emit(file, f, info)
+	}
+
+	if err != nil {
+		printErrors(err)
+		return nil, false
+	}
+
+	return csrc, true
 }
 
 // printErrors writes each error of a list on its own line.

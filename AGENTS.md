@@ -47,7 +47,8 @@ go test ./...         # must pass
 go run ./cmd/teak lex FILE     # print the token stream of a Teak file
 go run ./cmd/teak parse FILE   # print the syntax tree
 go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
-go run ./cmd/teak build FILE   # build a native binary next to the file; needs cc on the PATH
+go run ./cmd/teak build FILE   # build a native binary in the current directory; needs cc on the PATH
+go run ./cmd/teak emit FILE    # print the C source that build compiles
 ```
 
 ## Layout

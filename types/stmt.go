@@ -128,8 +128,6 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			return
 		}
 
-		xt := valueType(x)
-		c.assign(y, xt, s.Rhs[0].Pos(), "assignment")
 		need := IsInteger
 		switch s.Tok {
 		case token.ADD_ASSIGN:
@@ -138,9 +136,12 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			need = IsNumeric
 		}
 
-		if !hasInfo(xt, need) {
+		if !hasInfo(x.typ, need) { // a bare borrow is written through with *x op= v, as x = v rebinds it
 			c.errorf(s.TokPos, s.Tok.String()+" is not defined on "+x.typ.String())
+			return
 		}
+
+		c.assign(y, x.typ, s.Rhs[0].Pos(), "assignment")
 	}
 }
 

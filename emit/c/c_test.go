@@ -11,32 +11,41 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/teak-lang/teak/ast"
 	"github.com/teak-lang/teak/parser"
+	"github.com/teak-lang/teak/token"
 	"github.com/teak-lang/teak/types"
 )
 
-// TestRunExamples builds every program under examples/run and compares
-// what it prints with the .out file beside it. The folder is the
-// playground for the backend: each slice adds the programs it makes
-// buildable, and a reader can run any of them with teak build.
+// TestRunExamples builds every program under examples/run and the
+// core programs that have an expected output, and compares what each
+// prints with the .out file beside it. examples/run is the playground
+// for the backend: each slice adds the programs it makes buildable,
+// and a reader can run any of them with teak build. A core program
+// joins the test when its slice lands, by gaining its .out file.
 func TestRunExamples(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "run", "*.teak"))
-	if err != nil || len(paths) == 0 {
+	run, err := filepath.Glob(filepath.Join("..", "..", "examples", "run", "*.teak"))
+	if err != nil || len(run) == 0 {
 		t.Fatalf("no programs under examples/run: %v", err)
 	}
 
-	for _, path := range paths {
+	core, _ := filepath.Glob(filepath.Join("..", "..", "examples", "core", "*.teak"))
+	for _, path := range append(run, core...) {
 		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
+		if err != nil {
+			if filepath.Base(filepath.Dir(path)) == "run" {
+				t.Errorf("%s: every program under examples/run needs its expected output beside it", path)
+			}
+
+			continue
+		}
+
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
-			}
-
-			want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
-			if err != nil {
-				t.Fatalf("every program needs its expected output beside it: %v", err)
 			}
 
 			if got := buildAndRun(t, name, string(src)); got != string(want) {
@@ -59,20 +68,67 @@ func TestExit(t *testing.T) {
 // TestUnsupported checks that a construct the backend does not lower
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {
-	src := "package main\nstruct P { x int }\nfunc main() { p := P{x: 1}; print(p.x) }\n"
-	f, file, err := parser.ParseFile("t.teak", []byte(src))
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct{ src, want string }{
+		{"func main() { f := func(x int) int { return x + 1 }; print(f(1)) }", "closures"},
+		{"func next(i int) int? { return Some(i + 1) }\nfunc main() { for i := 0; i < 3; i = next(i) ?? 0 {} }", "after the second ; of a for"},
+	}
+	for _, tt := range tests {
+		f, file, err := parser.ParseFile("t.teak", []byte("package main\n"+tt.src+"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		info := &types.Info{}
+		if _, err := types.Check(file, f, info); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = Emit(file, f, info)
+		if err == nil || !strings.Contains(err.Error(), "does not support") || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: got %v, want an error naming %q", tt.src, err, tt.want)
+		}
+	}
+}
+
+// BenchmarkEmit emits every program under examples/run once per
+// iteration, parsed and checked ahead of time, and reports
+// allocations, the number the coding standards track.
+func BenchmarkEmit(b *testing.B) {
+	type checked struct {
+		f    *ast.File
+		file *token.File
+		info *types.Info
 	}
 
-	info := &types.Info{}
-	if _, err := types.Check(file, f, info); err != nil {
-		t.Fatal(err)
+	paths, _ := filepath.Glob(filepath.Join("..", "..", "examples", "run", "*.teak"))
+	var programs []checked
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		f, file, err := parser.ParseFile(path, src)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		info := &types.Info{}
+		if _, err := types.Check(file, f, info); err != nil {
+			b.Fatal(err)
+		}
+
+		programs = append(programs, checked{f, file, info})
 	}
 
-	_, err = Emit(file, f, info)
-	if err == nil || !strings.Contains(err.Error(), "does not support") {
-		t.Errorf("got %v, want an unsupported-construct error", err)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		for _, p := range programs {
+			if _, err := Emit(p.file, p.f, p.info); err != nil {
+				b.Fatal(err)
+			}
+		}
 	}
 }
 

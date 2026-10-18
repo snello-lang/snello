@@ -7,13 +7,17 @@
 // to 3 (_docs/design/01-language-design.md, "Backend: C first, LLVM
 // later"); stage 4 replaces it with LLVM IR and keeps the runtime.
 //
-// The lowering so far: numbers are C integers and doubles, a string is
-// the runtime's tk_string view, a ref T is passed as a T and a mut T as
-// a T*, a function is a static C function, and fmt's printing is a
-// sequence of runtime calls chosen by the argument types. Constructs
-// the emitter does not handle yet are reported as errors, never
-// emitted wrong. The emitter never decides anything about ownership;
-// it reads the types the checker recorded.
+// The lowering: numbers are C integers and doubles, a string is the
+// runtime's tk_string view, a struct is a C struct, an enum a tagged
+// union, an option a struct with a flag, a Result a flag over a union,
+// a tuple a struct. A ref T is passed as a T and a mut T or a *T as a
+// T*. A function is a static C function and a method one named after
+// its type. match, ?, ?? and if expressions become statements that
+// leave their value in a temporary, and fmt's printing is a sequence
+// of runtime calls chosen by the argument types. Constructs the
+// emitter does not handle yet are reported as errors, never emitted
+// wrong. The emitter never decides anything about ownership; it reads
+// the types the checker recorded.
 package c
 
 import (
@@ -38,24 +42,30 @@ func Runtime() (header, source []byte) {
 	return header, source
 }
 
-// An Emitter writes one program. Function bodies go into body;
-// prototypes and type definitions, which C needs before use, go into
-// their own sections and are written out first.
+// An Emitter writes one program. C needs a type complete before a
+// value of it is declared and a function declared before a call, so
+// declarations, type definitions, prototypes and helper functions go
+// into sections of their own, written out before the function bodies.
 type Emitter struct {
-	info   *types.Info
-	file   *token.File
-	types  bytes.Buffer // typedefs
-	protos bytes.Buffer // function prototypes
-	body   bytes.Buffer // function definitions
-	tmp    int
-	used   map[types.Object]bool
-	result types.Type // the result type of the function being emitted
-	errors []string
+	info    *types.Info
+	file    *token.File
+	decls   bytes.Buffer // forward declarations of struct types
+	types   bytes.Buffer // type definitions, each after the ones it holds by value
+	protos  bytes.Buffer // function prototypes
+	helpers bytes.Buffer // generated functions, such as the printers of composite types
+	body    bytes.Buffer // function definitions
+	tmp     int
+	used    map[types.Object]bool
+	state   map[string]int  // of each C type and helper name: undeclared, declared, defining, defined
+	seen    map[string]bool // the unsupported constructs reported so far
+	result  types.Type      // the result type of the function being emitted
+	errors  []string
 }
 
 // cReserved holds the identifiers an emitted program must not reuse:
-// C's keywords and the libc and runtime names the output refers to. A
-// Teak identifier among them gets a trailing underscore.
+// C's keywords and the libc names the output refers to. A Teak
+// identifier among them, or one starting with the runtime's tk_
+// prefix, gets a trailing underscore.
 var cReserved = map[string]bool{
 	"auto": true, "break": true, "case": true, "char": true, "const": true, "continue": true,
 	"default": true, "do": true, "double": true, "else": true, "enum": true, "extern": true,
@@ -71,15 +81,25 @@ var cReserved = map[string]bool{
 // Defs, Uses and Types the checker recorded for f; file resolves the
 // positions in error messages.
 func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
-	e := &Emitter{info: info, file: file, used: make(map[types.Object]bool, len(info.Uses))}
+	e := &Emitter{
+		info:  info,
+		file:  file,
+		used:  make(map[types.Object]bool, len(info.Uses)),
+		state: make(map[string]int),
+		seen:  make(map[string]bool),
+	}
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
 
 	for _, d := range f.Decls {
-		switch d := d.(type) {
-		case *ast.TypeDecl:
+		if d, ok := d.(*ast.TypeDecl); ok {
 			e.typeDecl(d)
+		}
+	}
+
+	for _, d := range f.Decls {
+		switch d := d.(type) {
 		case *ast.FuncDecl:
 			e.funcDecl(d)
 		case *ast.VarDecl:
@@ -93,16 +113,19 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 
 	var out bytes.Buffer
 	out.WriteString("// Emitted by the Teak compiler from " + file.Name() + ". Do not edit.\n\n#include \"teak.h\"\n\n")
+	out.Write(e.decls.Bytes())
+	out.WriteString("\n")
 	out.Write(e.types.Bytes())
 	out.Write(e.protos.Bytes())
 	out.WriteString("\n")
+	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
 	out.WriteString("int main(void) {\n\ttk_main();\n\treturn 0;\n}\n")
 	return out.Bytes(), nil
 }
 
 // An Error lists the constructs the emitter cannot lower yet, one per
-// line with its position.
+// line with the position of its first use.
 type Error struct {
 	Unsupported []string
 }
@@ -111,41 +134,58 @@ func (e *Error) Error() string {
 	return strings.Join(e.Unsupported, "\n")
 }
 
-// unsupported records a construct the backend does not handle yet.
+// unsupported records a construct the backend does not handle yet,
+// once per construct: the first position is enough to act on.
 func (e *Emitter) unsupported(pos token.Pos, what string) {
+	if e.seen[what] {
+		return
+	}
+
+	e.seen[what] = true
 	e.errors = append(e.errors, e.file.Position(pos).String()+": the C backend does not support "+what+" yet")
 }
 
+// typeDecl declares a type: a struct or enum is forward-declared here
+// and defined when first used, so types may refer to each other in
+// any order; any other declared type is a typedef written at once.
 func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	named := e.info.Defs[d.Name].(*types.TypeName).Type().(*types.Named)
+	if named.Implements("Drop") {
+		e.unsupported(d.Pos(), "Drop")
+	}
+
 	switch named.Underlying().(type) {
-	case *types.Basic:
-		e.types.WriteString("typedef " + e.cType(named.Underlying(), d.Pos()) + " " + ident(d.Name.Name) + ";\n")
+	case *types.Struct, *types.Enum:
+		name := ident(d.Name.Name)
+		e.state[name] = declared
+		e.decls.WriteString("typedef struct " + name + " " + name + ";\n")
 	default:
-		e.unsupported(d.Pos(), "struct and enum declarations")
+		e.define(named, d.Pos())
 	}
 }
 
 // funcDecl writes a function: a prototype in the prototypes section
 // and the definition in the body. Teak's main becomes tk_main, which
-// the C main calls.
+// the C main calls; a method is a function named after its type whose
+// first parameter is the receiver.
 func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	fn := e.info.Defs[d.Name].(*types.Func)
 	sig := fn.Type().(*types.Signature)
-	if sig.Recv() != nil {
-		e.unsupported(d.Pos(), "methods")
-		return
-	}
-
 	name := ident(d.Name.Name)
 	if d.Name.Name == "main" {
 		name = "tk_main"
 	}
 
-	head := "static TK_UNUSED " + e.resultType(sig, d.Pos()) + " " + name + "(" + e.params(sig, d.Pos()) + ")"
+	params := sig.Params()
+	if recv := sig.Recv(); recv != nil {
+		name = methodName(recv.Type(), d.Name.Name)
+		params = append([]*types.Var{recv}, params...)
+	}
+
+	head := "static TK_UNUSED " + e.resultType(sig, d.Pos()) + " " + name + "(" + e.params(params, d.Pos()) + ")"
 	e.protos.WriteString(head + ";\n")
 	e.line(head + " {")
-	for _, p := range sig.Params() {
+	for _, p := range params {
 		if p.Name() != "" && !e.used[p] {
 			e.line("(void)" + ident(p.Name()) + ";")
 		}
@@ -159,13 +199,20 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	e.line("")
 }
 
-func (e *Emitter) params(sig *types.Signature, pos token.Pos) string {
-	if len(sig.Params()) == 0 {
+// methodName is the C name of a method: the receiver's type and the
+// method's name, under the runtime prefix so it collides with nothing
+// the program declares.
+func methodName(recv types.Type, name string) string {
+	return "tk_" + mangle(valueType(recv)) + "_" + name
+}
+
+func (e *Emitter) params(params []*types.Var, pos token.Pos) string {
+	if len(params) == 0 {
 		return "void"
 	}
 
-	parts := make([]string, len(sig.Params()))
-	for i, p := range sig.Params() {
+	parts := make([]string, len(params))
+	for i, p := range params {
 		parts[i] = e.cType(p.Type(), pos)
 		if p.Name() != "" {
 			parts[i] += " " + ident(p.Name())
@@ -181,28 +228,6 @@ func (e *Emitter) resultType(sig *types.Signature, pos token.Pos) string {
 	}
 
 	return e.cType(sig.Results(), pos)
-}
-
-// cType writes the C type for a Teak type; a kind the backend does not
-// lower yet is reported and written as void so the output still reads.
-func (e *Emitter) cType(t types.Type, pos token.Pos) string {
-	switch t := t.(type) {
-	case *types.Basic:
-		return basicType(t)
-	case *types.Named:
-		if _, ok := t.Underlying().(*types.Basic); ok {
-			return ident(t.Obj().Name())
-		}
-	case *types.Ref:
-		if t.Mut() {
-			return e.cType(t.Elem(), pos) + " *"
-		}
-
-		return e.cType(t.Elem(), pos)
-	}
-
-	e.unsupported(pos, "values of type "+t.String())
-	return "void"
 }
 
 func basicType(t *types.Basic) string {
@@ -258,7 +283,7 @@ func (e *Emitter) temp() string {
 
 // ident writes a Teak identifier as a C identifier.
 func ident(name string) string {
-	if cReserved[name] {
+	if cReserved[name] || strings.HasPrefix(name, "tk_") || strings.HasPrefix(name, "TK_") {
 		return name + "_"
 	}
 

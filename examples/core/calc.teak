@@ -114,7 +114,8 @@ func (p mut Parser) term() Result<Expr, ParseError> {
 
 // factor := Num | '-' factor | '(' expr ')'
 func (p mut Parser) factor() Result<Expr, ParseError> {
-    match p.cur {
+    tok := p.cur                                // a copy: bindings into p.cur would keep p borrowed across advance
+    match tok {
         Num(v) => { p.advance()?; return Ok(Lit(v)) },
         Minus  => { p.advance()?; return Ok(Neg(&p.factor()?)) },
         LParen => {

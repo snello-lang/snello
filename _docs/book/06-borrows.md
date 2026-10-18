@@ -24,7 +24,7 @@ io.Copy(mut out, mut in)              // both lent mutably for the duration of t
 x.Describe()                          // a receiver borrows itself: no keyword
 ```
 
-Passing an owned value to a `ref` parameter borrows it with no keyword, as a receiver already does; writing `ref` makes the borrow visible and means the same thing. `mut` is always written when the argument is an owned value, because a visible mutation is worth a word. A borrow variable is passed on as itself, with no keyword, since its mode is already part of its type: `visit(n)` where `n` is a `ref Node`, `bump(a, b)` where both are `mut int`. Receivers follow the parameter they are: `func (t ref Tree) Path()` reads the tree, `func (t mut Tree) AddChild()` changes it, and `func (f File) Close()` takes it.
+Passing an owned value to a `ref` parameter borrows it with no keyword, as a receiver already does; writing `ref` makes the borrow visible and means the same thing. An owned pointer is lent as what it holds: `total(head)` with `head` a `*Node` fits a `ref Node` parameter. `mut` is always written when the argument is an owned value, because a visible mutation is worth a word. A borrow variable is passed on as itself, with no keyword, since its mode is already part of its type: `visit(n)` where `n` is a `ref Node`, `bump(a, b)` where both are `mut int`. Receivers follow the parameter they are: `func (t ref Tree) Path()` reads the tree, `func (t mut Tree) AddChild()` changes it, and `func (f File) Close()` takes it.
 
 A borrow can also be bound to a local name, and then it lives from that line to the last line that uses the name:
 
@@ -34,7 +34,7 @@ if !n.live { return }
 visit(n)
 ```
 
-Through a borrow, fields and methods are reached with a dot; no `*` is written. Replacing the whole value behind a `mut` is the one place `*` appears: `*cur = Some(&Node{...})`.
+Through a borrow, fields and methods are reached with a dot; no `*` is written. Replacing the whole value behind a `mut` is the one place `*` appears: `*cur = Some(&Node{...})`, and for a `mut int` named `n`, `*n += 1`. Writing `n = 5` or `n += 1` instead is an error, because assigning to a borrow variable rebinds it to another place, as in `cur = mut n.left`.
 
 ## The rules
 

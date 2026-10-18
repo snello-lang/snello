@@ -100,6 +100,10 @@ func assignable(op operand, t Type) bool {
 			return true // the implicit borrow
 		}
 
+		if p, ok := v.(*Pointer); ok && !r.mut && Identical(p.elem, r.elem) {
+			return true // the implicit borrow of what an owned pointer holds
+		}
+
 		if vr, ok := v.(*Ref); ok && (vr.mut || !r.mut) {
 			if p, ok := vr.elem.(*Pointer); ok && Identical(p.elem, r.elem) {
 				return true // ref *T as ref T

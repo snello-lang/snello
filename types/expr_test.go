@@ -52,6 +52,8 @@ func TestExprErrors(t *testing.T) {
 		// Fields, methods and indexing through borrows and pointers.
 		{"func f(n ref Node) int { return n.n }", nil},
 		{"func f(n *Node) string { return n.value.Clone() }", nil},
+		{"func f(n ref Node) int { return n.n }; func g(p *Node) int { return f(p) }", nil},
+		{"func f(n mut Node) {}; func g(p *Node) { f(p) }", []string{"cannot use p (*Node) as mut Node in argument"}},
 		{"func f(n ref Node) int { return n.missing }", []string{"missing is not a field or method of ref Node"}},
 		{"func f(xs ref []Node, i NodeID) int { return xs[i].n }", nil},
 		{"func f(xs []int) int { return xs[\"a\"] }", []string{"index must be an integer, not string"}},
@@ -113,6 +115,8 @@ func TestExprErrors(t *testing.T) {
 		{"func f() { x := 1; x = \"a\" }", []string{"cannot use a value of type string as int in assignment"}},
 		{"func f() { x := 1; x += 2.5 }", []string{"cannot use a value of type f64 as int in assignment"}},
 		{"func f() { s := \"a\"; s += \"b\" }", nil},
+		{"func f() { x := 1; v := mut x; v += 2 }", []string{"+= is not defined on mut int"}},
+		{"func f() { x := 1; v := mut x; *v += 2 }", nil},
 		{"func f() (int, string) { return (1, \"a\") }", nil},
 		{"func f() (int, string) { return 1, \"a\" }", nil},
 		{"func f() (int, string) { return 1 }", []string{"cannot use a value of type int as (int, string) in return"}},

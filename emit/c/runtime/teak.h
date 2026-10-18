@@ -27,6 +27,14 @@ typedef struct {
 
 #define TK_STR(s, n) ((tk_string){(const uint8_t *)(s), (n)})
 
+// The unit value (), which C has no type for: a Result<(), E> or a
+// tuple holds one of these.
+typedef struct {
+    char tk_pad;
+} tk_unit;
+
+#define TK_UNIT ((tk_unit){0})
+
 // A function the program never calls is not an error, as it is not in
 // Teak; every emitted function carries this.
 #define TK_UNUSED __attribute__((unused))

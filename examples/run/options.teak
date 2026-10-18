@@ -1,0 +1,100 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Options and Results: Some and None, Ok and Err, ? passing the absent
+// or failed case up, ?? with a value, a panic and a return on its right,
+// if with a binding, if as an expression, a match on a Result, and the
+// order of evaluation when an operand needs statements.
+
+package main
+
+import "fmt"
+
+func half(n int) int? {
+	if n%2 == 0 {
+		return Some(n / 2)
+	}
+
+	return None
+}
+
+func quarter(n int) int? {
+	h := half(n)?
+	return half(h)
+}
+
+func parse(s ref string) Result<int, string> {
+	if len(s) == 0 {
+		return Err("empty")
+	}
+
+	return Ok(len(s))
+}
+
+func twice(s ref string) Result<int, string> {
+	n := parse(s)?
+	return Ok(n * 2)
+}
+
+func describe(n int) string {
+	v := half(n) ?? return "odd"
+	return fmt.Sprint("half ", v)
+}
+
+func bump(o mut (int?)) {
+	v := o ?? return
+	*v += 100
+}
+
+func trace(label string, v int) int {
+	fmt.Println("eval", label)
+	return v
+}
+
+func main() {
+	fmt.Println(half(8), half(3), quarter(8), quarter(6))
+	fmt.Println(twice("abc"), twice(""))
+
+	v := half(3) ?? -1
+	w := quarter(12) ?? panic("no")
+	fmt.Println(v, w, describe(4), describe(5))
+
+	o := Some(1)
+	bump(mut o)
+	var none int?
+	bump(mut none)
+	fmt.Println(o, none)
+
+	if n := half(10) {
+		fmt.Println("even half", n)
+	} else {
+		fmt.Println("odd")
+	}
+
+	kind := if v < 0 { "neg" } else if v == 0 { "zero" } else { "pos" }
+	fmt.Println(kind)
+
+	match twice("xy") {
+		Ok(n) => fmt.Println("ok", n),
+		Err(msg) => fmt.Println("err", msg),
+	}
+
+	for i := 0; i < 3; i += 1 {
+		match half(i) {
+			Some(h) => fmt.Println(i, "halves to", h),
+			None => fmt.Println(i, "is odd"),
+		}
+	}
+
+	// Operands are evaluated left to right, whether or not one of them
+	// needs statements.
+	sum := trace("a", 1) + (half(trace("b", 4)) ?? 0)
+	fmt.Println(sum, trace("c", 0) > 0 && (half(trace("d", 2)) ?? 0) > 0)
+	fmt.Println(trace("e", 1)-trace("f", 2), Point{x: trace("g", 1), y: trace("h", 2)})
+}
+
+struct Point {
+	x int
+	y int
+}
