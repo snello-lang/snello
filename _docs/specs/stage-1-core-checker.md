@@ -130,6 +130,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [ ] A `mut` borrow while a `ref` is live is an error naming both
+- [ ] `v.Push(v.Len())` is accepted: arguments are evaluated before the receiver is borrowed
 - [ ] The binary search tree's insert and get check without errors
 - [ ] The LRU's rejected form is rejected; the accepted form is accepted
 
@@ -147,7 +148,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [ ] `Peek() ref T?` on a `ref` receiver is accepted; the same on a function with two borrowed parameters is rejected with the message from the design note
-- [ ] A struct with a `ref` field can be created and used locally but not stored or returned
+- [ ] A struct with a `ref` field can be created and used locally and returned under the one-source rule, but not stored or sent
 - [ ] A closure that assigns to a captured local cannot be returned
 
 **Verification:**

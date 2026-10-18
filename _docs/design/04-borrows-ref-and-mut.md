@@ -54,6 +54,8 @@ At a call site `mut` is always written and `ref` may be left out: an owned value
 5. **A borrow can be passed on, narrower or equal.** A `mut T` can be passed to a function wanting `ref T` or `mut T`. A `ref T` can only be passed on as `ref T`. A borrow of a field or element can be derived from a borrow of the whole: from `t mut Tree`, `mut t.nodes[i]`. A borrow variable may be reassigned to a borrow derived from itself.
 6. **The owner outlives every borrow.** Guaranteed by rules 1 to 3: a borrow never leaves the function that can see its owner, except by rule 3, where it rides on an input borrow the caller already holds.
 
+One ordering rule makes rule 4 practical. **In a call, the arguments are evaluated first, and their borrows end, before the receiver or a `mut` argument is borrowed.** So `v.Push(v.Len())` is legal: `v.Len()` borrows `v` as `ref`, returns, and the borrow is over before `Push` takes `v` as `mut`. What rule 4 rejects is a borrow that must still be live when the `mut` one starts, such as a `ref` bound to a local and used after the call. (Decided 2026-10-18.)
+
 So Teak has lifetimes. It infers every one of them and rejects the programs where inference is ambiguous, instead of asking for an annotation. Rules 2 and 3 are what make inference always possible: a borrow never outlives the function it was created in, except by riding on one input borrow.
 
 ## What cannot be written
@@ -90,7 +92,7 @@ The price of never annotating. Each has an idiom the examples use.
 
 - **A choice at every signature.** Go developers write `T` or `*T` by habit; Teak asks which of three things the function does. The default is easy, `ref` for reading, `mut` for changing, by value for keeping, but it is a decision Go does not ask for.
 - **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../../examples/15-lru.teak`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
-- **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in an owned struct, returning it, or sending it is not.
+- **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in owned data or sending it is not. Returning one follows rule 3 like any borrow: tied to the receiver or to the only borrowed parameter. That is how `text.Fields()` returns an iterator that borrows its receiver, and why `NewLexer(src ref string) Lexer` is legal while `NewLexer(src ref string, name ref string) Lexer` is not. (Clarified 2026-10-18; an earlier draft said a borrow-holding struct could never be returned.)
 
 ## Choosing, in one line
 

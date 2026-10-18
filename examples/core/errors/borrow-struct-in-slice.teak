@@ -1,0 +1,23 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a struct holding a borrow is a borrow, and owned data cannot hold
+// a borrow. Returning it is allowed when tied to one input, as for any
+// borrow; storing it is not. Fix: keep the lexers on the stack, one at a
+// time, as core/calc.teak does.
+
+package p
+
+struct Lexer {
+    src ref string
+    pos int
+}
+
+func NewLexer(src ref string) Lexer { return Lexer{src: src, pos: 0} }   // legal: tied to src
+
+func main() {
+    a := "1 + 2"
+    lexers := []Lexer{}                   // ERROR "a slice cannot hold Lexer: it holds a borrow"
+    lexers.Push(NewLexer(ref a))
+}

@@ -56,7 +56,7 @@ xs.Push(3)                            // ERROR "cannot borrow xs as mut: xs is b
 fmt.Println(r)
 ```
 
-Move the `Println` before the `Push`, or the `Push` before the `ref`, and it compiles: the borrow `r` ends at its last use. The same rule is why a slice cannot be grown while a borrow of an element is live, why a map cannot be changed while it is being ranged, and why an iterator cannot be invalidated: each of those is a write during a read, and the compiler rejects it.
+Move the `Println` before the `Push`, or the `Push` before the `ref`, and it compiles: the borrow `r` ends at its last use. Arguments are evaluated before the receiver is borrowed, so `xs.Push(xs.Len())` is fine: the `ref` taken by `Len` is over before `Push` takes its `mut`. The same rule is why a slice cannot be grown while a borrow of an element is live, why a map cannot be changed while it is being ranged, and why an iterator cannot be invalidated: each of those is a write during a read, and the compiler rejects it.
 
 ## Walking a structure
 
@@ -125,7 +125,7 @@ func Parse(src ref string) Result<Expr, ParseError> {
 }
 ```
 
-It cannot be returned, stored in owned data, or sent: `cannot return Lexer: it holds a borrow`. A closure that reads or assigns a local captures it by borrow and is a borrow in the same way; one that captures only owned or `Copy` values, or moves what it captures, may be stored and returned. A `counter()` that returns a closure incrementing a local is rejected, because the local dies when `counter` returns; the state goes into a struct with a method instead.
+It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`. A closure that reads or assigns a local captures it by borrow and is a borrow in the same way; one that captures only owned or `Copy` values, or moves what it captures, may be stored and returned. A `counter()` that returns a closure incrementing a local is rejected, because the local dies when `counter` returns; the state goes into a struct with a method instead.
 
 ## What cannot be written
 
@@ -148,5 +148,5 @@ It cannot be returned, stored in owned data, or sent: `cannot return Lexer: it h
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
 | `cannot return a borrow of local s` | `return-local-borrow` |
-| `cannot return Lexer: it holds a borrow` | `return-borrow-struct` |
+| `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
 | `closure captures n by borrow and cannot be returned` | `closure-returned`, `closure-stored` |

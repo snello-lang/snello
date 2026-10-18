@@ -18,7 +18,7 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots | 1.7 |
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed | 1.7 |
 | 5. A borrow passes on narrower or equal | ref-as-mut, assign-through-ref, mut-through-ref-receiver | 1.7 |
-| 2. A borrow cannot be stored | borrow-in-slice, return-borrow-struct, closure-stored | 1.8 |
+| 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored | 1.8 |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel | 1.8 |
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned | 1.8 |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
@@ -35,7 +35,8 @@ The messages are the plan for the checker, chosen here so that they read the sam
 - A borrow that is not allowed: `cannot borrow X as mut: <reason>`, where the reason is `X is borrowed as ref`, `X is already borrowed as mut`, or `X is a ref borrow`; `... through a ref receiver` for the receiver case.
 - A write that is not allowed: `cannot assign to X: X is borrowed`, `cannot assign to X through a ref borrow`.
 - An escaping borrow: `cannot return ...`, `... cannot be returned`, `... cannot be stored`, `a spawned task cannot hold a borrow`, `a channel cannot carry a borrow`, `a slice cannot hold a borrow`.
-- A signature that cannot be written (`return-two-borrows`, `return-borrow-struct`) is reported on the `func` line; a statement that breaks a rule is reported on its own line. An error in a type does not cascade: the line after `[]ref string{}` is not reported again.
+- A signature that cannot be written (`return-two-borrows`) is reported on the `func` line; a statement that breaks a rule is reported on its own line. An error in a type does not cascade: the line after `[]ref string{}` is not reported again.
+- Rule 4 is checked after the arguments of a call are evaluated, so `v.Push(v.Len())` is accepted (`04-borrows-ref-and-mut.md`, ordering rule); no negative program tests the call itself.
 
 The programs assume the call-site rule from `05-standard-library.md` section 5: an owned value passed to a `ref` parameter is borrowed without a keyword, `mut` is written when the argument is an owned place, and a borrow variable is passed on as itself with no keyword, since its mode is part of its type (`bump(a, b)` in `two-mut`, `push(xs)` in `ref-as-mut`).
 

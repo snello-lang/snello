@@ -60,5 +60,5 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | Modify a map during `range`: a runtime surprise | A compile error: a write during a read |
 | Return a pointer to a local; the GC keeps it alive | `cannot return a borrow of local s`; return the value |
 | A closure capturing a local by reference, returned from `counter()` | Rejected; put the state in a struct with a method |
-| A struct holding a `*string` into a buffer | A struct holding `ref string` is itself a borrow: local use only |
+| A struct holding a `*string` into a buffer | A struct holding `ref string` is itself a borrow: returned only like a borrow, never stored |
 | Pass the same slice to five goroutines | `a spawned task cannot hold a borrow`; move it, clone it, or share it through `sync.Arc` |
