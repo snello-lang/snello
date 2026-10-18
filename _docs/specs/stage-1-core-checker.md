@@ -27,7 +27,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [ ] At least eight positive programs under `examples/core/`, covering the tree, the linked list, the state machine, file copying, the parser and the binary search tree without generics
-- [ ] At least twenty negative programs under `examples/core/errors/`: use after move, move in a loop, two `mut` borrows, borrow stored in a struct, borrow returned from two inputs, borrow across `go`, `nil` used, missing match arm, and so on
+- [ ] At least twenty negative programs under `examples/core/errors/`: use after move, move in a loop, two `mut` borrows, borrow stored in a struct, borrow returned from two inputs, borrow across `spawn`, `nil` used, missing match arm, and so on
 - [ ] Each negative program has exactly one `// ERROR` line
 
 **Verification:**
@@ -105,7 +105,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.6: Moves
 
-**Description:** Ownership tracking as a dataflow pass over each function: a value is moved by assignment, by passing by value, by returning, by sending, and by capture in `go`; using a moved value is an error; `Copy` types are exempt; partial moves out of a value about to be dropped are allowed; moves inside loops and conditionals are tracked by merging states at joins.
+**Description:** Ownership tracking as a dataflow pass over each function: a value is moved by assignment, by passing by value, by returning, by sending, and by capture in `spawn`; using a moved value is an error; `Copy` types are exempt; partial moves out of a value about to be dropped are allowed; moves inside loops and conditionals are tracked by merging states at joins.
 
 **Acceptance criteria:**
 - [ ] Use after move reports both the use and the move
@@ -139,7 +139,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.8: Escaping borrows
 
-**Description:** The rules that keep borrows from escaping: no borrow in an owned struct field, channel, or `go` capture; a returned borrow tied to the receiver or the sole borrowed parameter and nothing else; borrow-holding structs and closures treated as borrows.
+**Description:** The rules that keep borrows from escaping: no borrow in an owned struct field, channel, or `spawn` capture; a returned borrow tied to the receiver or the sole borrowed parameter and nothing else; borrow-holding structs and closures treated as borrows.
 
 **Acceptance criteria:**
 - [ ] `Peek() ref T?` on a `ref` receiver is accepted; the same on a function with two borrowed parameters is rejected with the message from the design note

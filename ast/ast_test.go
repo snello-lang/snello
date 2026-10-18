@@ -229,6 +229,7 @@ func TestFamilies(t *testing.T) {
 		_ Decl    = (*TypeDecl)(nil)
 		_ Decl    = (*TraitDecl)(nil)
 		_ Decl    = (*VarDecl)(nil)
+		_ Stmt    = (*BadStmt)(nil)
 		_ Stmt    = (*IfBindStmt)(nil)
 		_ Stmt    = (*RangeStmt)(nil)
 		_ Expr    = (*BadExpr)(nil)

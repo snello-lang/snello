@@ -242,6 +242,13 @@ type Variant struct {
 	Fields []*Param
 }
 
+// A BadStmt is a placeholder for a statement the parser could not
+// parse, covering the tokens from From up to but not including To, as
+// BadExpr is for expressions.
+type BadStmt struct {
+	From, To token.Pos
+}
+
 // A BlockStmt is a brace-delimited list of statements.
 type BlockStmt struct {
 	Lbrace token.Pos
@@ -287,10 +294,11 @@ type AssignStmt struct {
 	Rhs    []Expr
 }
 
-// A GoStmt starts a task.
-type GoStmt struct {
-	Go   token.Pos
-	Call Expr
+// A SpawnStmt starts a task: spawn f(x). It is Go's go statement under
+// the verb the design uses for tasks.
+type SpawnStmt struct {
+	Spawn token.Pos
+	Call  Expr
 }
 
 // A DeferStmt defers a call.
@@ -579,6 +587,7 @@ func (x *TupleType) Pos() token.Pos    { return x.Lparen }
 func (x *StructType) Pos() token.Pos   { return x.Struct }
 func (x *EnumType) Pos() token.Pos     { return x.Enum }
 func (x *Variant) Pos() token.Pos      { return x.Name.Pos() }
+func (x *BadStmt) Pos() token.Pos      { return x.From }
 func (x *BlockStmt) Pos() token.Pos    { return x.Lbrace }
 func (x *DeclStmt) Pos() token.Pos     { return x.Decl.Pos() }
 func (x *EmptyStmt) Pos() token.Pos    { return x.Semicolon }
@@ -586,7 +595,7 @@ func (x *ExprStmt) Pos() token.Pos     { return x.X.Pos() }
 func (x *SendStmt) Pos() token.Pos     { return x.Chan.Pos() }
 func (x *IncDecStmt) Pos() token.Pos   { return x.X.Pos() }
 func (x *AssignStmt) Pos() token.Pos   { return x.Lhs[0].Pos() }
-func (x *GoStmt) Pos() token.Pos       { return x.Go }
+func (x *SpawnStmt) Pos() token.Pos    { return x.Spawn }
 func (x *DeferStmt) Pos() token.Pos    { return x.Defer }
 func (x *ReturnStmt) Pos() token.Pos   { return x.Return }
 func (x *BranchStmt) Pos() token.Pos   { return x.TokPos }
@@ -632,6 +641,7 @@ func (*TypeDecl) declNode()  {}
 func (*TraitDecl) declNode() {}
 func (*VarDecl) declNode()   {}
 
+func (*BadStmt) stmtNode()    {}
 func (*BlockStmt) stmtNode()  {}
 func (*DeclStmt) stmtNode()   {}
 func (*EmptyStmt) stmtNode()  {}
@@ -639,7 +649,7 @@ func (*ExprStmt) stmtNode()   {}
 func (*SendStmt) stmtNode()   {}
 func (*IncDecStmt) stmtNode() {}
 func (*AssignStmt) stmtNode() {}
-func (*GoStmt) stmtNode()     {}
+func (*SpawnStmt) stmtNode()  {}
 func (*DeferStmt) stmtNode()  {}
 func (*ReturnStmt) stmtNode() {}
 func (*BranchStmt) stmtNode() {}

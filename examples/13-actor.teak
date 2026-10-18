@@ -52,7 +52,7 @@ type Handle struct impl Copy { inbox chan<- Msg }
 
 func Spawn(initial int) Handle {
     ch := make(chan Msg, 64)
-    go run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
+    spawn run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
     return Handle{inbox: ch}
 }
 

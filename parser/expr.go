@@ -41,18 +41,20 @@ func (p *Parser) parseExpr() ast.Expr {
 	return p.parseBinaryExpr(token.LowestPrec + 1)
 }
 
-// parseExprList parses Expr {"," Expr} up to a closing token: the
-// arguments of a call, the elements of a tuple, or the results of a
-// return. An empty list is allowed, and a trailing comma before close.
+// parseExprList parses Expr {"," Expr}, at least one expression. A
+// trailing comma is allowed before close, as in a call whose arguments
+// end on their own lines; close is ILLEGAL, which no token is, where a
+// trailing comma is not allowed. A caller that accepts an empty list
+// checks for its closing token before calling.
 func (p *Parser) parseExprList(close token.Kind) []ast.Expr {
-	var list []ast.Expr
-	for p.tok != close && p.tok != token.EOF {
-		list = append(list, p.parseExpr())
-		if p.tok != token.COMMA {
+	list := []ast.Expr{p.parseExpr()}
+	for p.tok == token.COMMA {
+		p.next()
+		if p.tok == close {
 			break
 		}
 
-		p.next()
+		list = append(list, p.parseExpr())
 	}
 
 	return list
@@ -92,26 +94,15 @@ func (p *Parser) parseBinaryExpr(prec1 int) ast.Expr {
 //	cur ?? { *cur = ...; return }   BlockStmt
 func (p *Parser) parseCoalesceElse() ast.Node {
 	switch p.tok {
-	case token.RETURN:
-		ret := &ast.ReturnStmt{Return: p.pos}
-		p.next()
-		if !exprEnd[p.tok] {
-			ret.Results = p.parseExprList(token.SEMICOLON)
-		}
-
-		return ret
-	case token.BREAK, token.CONTINUE:
-		pos, tok := p.pos, p.tok
-		p.next()
-		return &ast.BranchStmt{TokPos: pos, Tok: tok}
-	case token.LBRACE:
-		return p.skipBody()
+	case token.RETURN, token.BREAK, token.CONTINUE, token.LBRACE:
+		return p.parseStmt()
 	}
 
 	return p.parseBinaryExpr(token.COALESCE.Precedence())
 }
 
-// parseUnaryExpr parses prefix operators, which nest: &*p, -(-x). The
+// parseUnaryExpr parses prefix operators, which nest: &*p, -(-x). Its
+// operator set is mirrored in exprStart. The
 // operand of a unary operator is another unary expression, so ref x?
 // is ref (x?): the postfix ? binds tighter than any prefix.
 //
@@ -226,7 +217,8 @@ func (p *Parser) parseTypeArgsIfAny(x ast.Expr) []ast.Type {
 	return p.parseTypeArgs()
 }
 
-// parseOperand parses the start of a primary expression.
+// parseOperand parses the start of a primary expression. Its cases are
+// mirrored in exprStart, which decides what may begin a statement.
 //
 //	x, 42, "s", 'c'     Ident, BasicLit
 //	(a, b), (x)         TupleExpr, ParenExpr
@@ -256,7 +248,7 @@ func (p *Parser) parseOperand() ast.Expr {
 			return &ast.TypeExpr{Type: typ}
 		}
 
-		return &ast.FuncLit{Type: typ, Body: p.skipBody()}
+		return &ast.FuncLit{Type: typ, Body: p.parseBlock()}
 	case token.IF:
 		return p.parseIfExpr()
 	case token.MATCH:
@@ -320,7 +312,12 @@ func (p *Parser) parseCall(fun ast.Expr, typeArgs []ast.Type) *ast.CallExpr {
 func (p *Parser) parseParenExprs() (token.Pos, []ast.Expr) {
 	pos := p.expect(token.LPAREN)
 	p.exprLev++
-	list := p.parseExprList(token.RPAREN)
+
+	var list []ast.Expr
+	if p.tok != token.RPAREN {
+		list = p.parseExprList(token.RPAREN)
+	}
+
 	p.exprLev--
 	p.expect(token.RPAREN)
 	return pos, list
@@ -369,13 +366,13 @@ func (p *Parser) parseElementValue() ast.Expr {
 
 // parseIfExpr parses "if" Expr Block "else" (Block | IfExpr) in
 // expression position. The condition is a control clause, so a "{" in
-// it opens the body. The blocks are skipped until task 0.8.
+// it opens the body.
 //
 //	if ci { "(?i)" + p } else { p.Clone() }
 func (p *Parser) parseIfExpr() *ast.IfExpr {
 	x := &ast.IfExpr{If: p.expect(token.IF)}
 	x.Cond = p.parseControlExpr()
-	x.Then = p.skipBody()
+	x.Then = p.parseBlock()
 	if p.tok != token.ELSE {
 		p.errorExpected(p.pos, "'else'") // an if expression has a value on every path
 		return x
@@ -385,7 +382,7 @@ func (p *Parser) parseIfExpr() *ast.IfExpr {
 	if p.tok == token.IF {
 		x.Else = p.parseIfExpr()
 	} else {
-		x.Else = p.skipBody()
+		x.Else = p.parseBlock()
 	}
 
 	return x

@@ -16,7 +16,7 @@ The four rules, each marked in `pipeline.teak` where it applies:
 1. Sending on a channel moves the value. The sender no longer owns it.
 2. Receiving gives the receiver ownership. When the value goes out of scope it is freed, in that task, at that moment.
 3. A channel handle is a `Copy` value. Any number of tasks may hold one.
-4. `go f()` moves everything it captures into the new task.
+4. `spawn f()` moves everything it captures into the new task.
 
 ## Why it is different underneath
 
@@ -25,7 +25,7 @@ The four rules, each marked in `pipeline.teak` where it applies:
 | `job` after `out <- job` | Still usable; struct copied, string shared | Compile error: moved |
 | Memory of a consumed job | Freed by the GC, eventually | Freed when `job` leaves scope in the worker |
 | Two goroutines writing one map | Compiles; data race at runtime | Compile error: value already moved |
-| A borrow captured by `go` | No such concept; the pointer is shared | Compile error: borrows cannot cross `go` |
+| A borrow captured by `spawn` | No such concept; the pointer is shared | Compile error: borrows cannot cross `spawn` |
 | Sharing when you need it | Pass a pointer and remember the mutex | `Arc<Mutex<T>>`, and the compiler checks it |
 
 The last row is in `../03-http-cache.teak`, where shared state is actually needed. It is kept out of this example on purpose.

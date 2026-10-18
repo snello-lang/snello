@@ -72,7 +72,7 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 	d.Params = p.parseParams()
 	d.Results = p.parseResults()
 	if p.tok == token.LBRACE {
-		d.Body = p.skipBody()
+		d.Body = p.parseBlock()
 	}
 
 	return d
@@ -369,11 +369,10 @@ func (p *Parser) parseVarDecl() *ast.VarDecl {
 	return d
 }
 
-// skipBody skips a brace-delimited function body and returns a block
-// holding only its brace positions. Statements arrive with task 0.8;
-// until then this is what lets every declaration in the examples parse.
-// Nested braces are counted, so a composite literal or a function
-// literal inside the body does not end it early.
+// skipBody skips a brace-delimited body and returns a block holding
+// only its brace positions. Statements parse for real since task 0.8;
+// this remains for the arms of a match, which arrive with task 0.10.
+// Nested braces are counted, so a literal inside does not end it early.
 func (p *Parser) skipBody() *ast.BlockStmt {
 	body := &ast.BlockStmt{Lbrace: p.expect(token.LBRACE)}
 	depth := 1

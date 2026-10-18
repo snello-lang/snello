@@ -107,7 +107,7 @@ const (
 	ELSE
 	FOR
 	FUNC
-	GO
+	SPAWN
 	IF
 	IMPORT
 	MAP
@@ -227,7 +227,7 @@ var tokens = [...]string{
 	ELSE:     "else",
 	FOR:      "for",
 	FUNC:     "func",
-	GO:       "go",
+	SPAWN:    "spawn",
 	IF:       "if",
 	IMPORT:   "import",
 	MAP:      "map",

@@ -13,8 +13,8 @@ import (
 )
 
 // TestDecls parses each declaration and prints it back in canonical
-// form. A skipped body prints as {...} and a skipped initializer as ...;
-// both are placeholders until statements and expressions parse.
+// form. A function body prints as {...}; its statements have their own
+// tests.
 func TestDecls(t *testing.T) {
 	tests := []struct{ src, want string }{
 		// Functions and methods, from the examples.
@@ -45,12 +45,12 @@ func TestDecls(t *testing.T) {
 		{"trait Logged: Shape {}", "trait Logged: Shape {}"},
 		{"trait Iterator<T> {\n\tfunc (it mut Self) Next() T?\n\tfunc (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {}\n}", "trait Iterator<T> {func (it mut Self) Next() (T)?; func (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {...}}"},
 
-		// Variables and constants; initializers are skipped until 0.9.
+		// Variables and constants.
 		{"var x int", "var x int"},
-		{"var x, y int = 1, 2", "var x, y int = ..., ..."},
-		{"const limit = 1 << 10", "const limit = ..."},
-		{"var f = func() int { return 1 }", "var f = ..."},
-		{"var m = map[string]int{\"a\": 1}", "var m = ..."},
+		{"var x, y int = 1, 2", "var x, y int = 1, 2"},
+		{"const limit = 1 << 10", "const limit = (1 << 10)"},
+		{"var f = func() int { return 1 }", "var f = func() int {...}"},
+		{"var m = map[string]int{\"a\": 1}", "var m = map[string]int{\"a\": 1}"},
 	}
 	for _, tt := range tests {
 		d, errs := parseDeclString(tt.src)
@@ -213,7 +213,7 @@ func declString(d ast.Decl) string {
 		}
 
 		if len(d.Values) > 0 {
-			s += " = " + strings.TrimSuffix(strings.Repeat("..., ", len(d.Values)), ", ")
+			s += " = " + exprList(d.Values)
 		}
 
 		return s

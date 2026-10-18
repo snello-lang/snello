@@ -15,7 +15,7 @@
 //   2. Receiving from a channel gives the receiver ownership. When the
 //      received value goes out of scope, it is freed, right there.
 //   3. A channel handle is a Copy value. Any number of tasks may hold one.
-//   4. `go f()` moves everything it captures into the new task.
+//   4. `spawn f()` moves everything it captures into the new task.
 //
 // There is no shared mutable state in this file, so there is no lock.
 
@@ -36,7 +36,7 @@ type Result struct {
 // Stage 1: produce jobs.
 func produce(n int) <-chan Job {
     out := make(chan Job)
-    go func() {                              // `out` is Copy, so it is copied into the task
+    spawn func() {                              // `out` is Copy, so it is copied into the task
         defer close(out)
         for i := 0; i < n; i++ {
             job := Job{id: i, text: strings.Repeat("teak ", i)}
@@ -50,7 +50,7 @@ func produce(n int) <-chan Job {
 // Stage 2: count words. Called several times to fan out.
 func count(jobs <-chan Job) <-chan Result {
     out := make(chan Result)
-    go func() {
+    spawn func() {
         defer close(out)
         for job := range jobs {              // rule 2: this task now owns job
             out <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
@@ -65,12 +65,12 @@ func merge(inputs []<-chan Result) <-chan Result {
     done := make(chan struct{})
     n := len(inputs)
     for _, in := range inputs {              // ranging over an owned slice moves each element
-        go func() {                          // rule 4: `in` is moved into this task
+        spawn func() {                          // rule 4: `in` is moved into this task
             for r := range in { out <- r }
             done <- struct{}{}
         }()
     }
-    go func() {
+    spawn func() {
         for i := 0; i < n; i++ { <-done }    // wait for every forwarder
         close(out)
     }()
@@ -104,7 +104,7 @@ func main() {
 //   go func() { m["a"] = 1 }()             // ok on its own: m moved in
 //   go func() { m["b"] = 2 }()             // error: m was already moved
 //
-//   go func() { use(ref m) }()             // error: a borrow cannot cross `go`
+//   go func() { use(ref m) }()             // error: a borrow cannot cross `spawn`
 //
 // Shared mutable state across tasks is covered in 03-http-cache.teak,
 // where it is actually needed.

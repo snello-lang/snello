@@ -127,19 +127,20 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 ## Task 0.8: Statements
 
-**Description:** Go's statement set: assignment and `:=`, `if` including the option-binding form `if x := opt {` and `if (k, v) := opt {`, all `for` forms including `range` over `ref` and `mut`, `switch`, `select`, `go`, `defer`, `return`, `break`, `continue`, send, blocks, and `match` as a statement.
+**Description:** Go's statement set: assignment and `:=`, `if` including the option-binding form `if x := opt {` and `if (k, v) := opt {`, all `for` forms including `range` over `ref` and `mut`, `switch`, `select`, `spawn`, `defer`, `return`, `break`, `continue`, send, blocks, and `match` as a statement.
 
 **Acceptance criteria:**
-- [ ] Every statement form in examples 02, 12 and 19 parses
-- [ ] Go's `if init; cond {` and Teak's `if x := opt {` are both accepted and distinguished
+- [x] Every statement form in examples 02, 12 and 19 parses; all twenty examples parse with their bodies, with only match arms still skipped
+- [x] Go's `if init; cond {` and Teak's `if x := opt {` are both accepted and distinguished
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Manual check: `teak parse examples/12-worker-pool.teak`
+- [x] Tests pass: `go test ./parser/`
+- [x] Manual check: `teak parse examples/12-worker-pool.teak`
 
 **Dependencies:** 0.9 (order swapped; see 0.9)
-**Files:** `parser/stmt.go`, `parser/parser_test.go`
+**Files:** `parser/stmt.go`, `parser/stmt_test.go`, `parser/pattern.go` (patterns of an if binding), `ast/ast.go` (BadStmt)
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.9: Expressions
 

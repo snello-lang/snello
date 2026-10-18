@@ -4,7 +4,7 @@ Status: draft, 2026-10-17. These are the rules the programs in `../../examples/`
 
 ## Carried over from Go unchanged
 
-`package`, `import`, `func`, `type ... struct`, `:=`, `var`, `for`, `if`, `switch`, `defer`, `go`, channels and `select`, slices, maps, methods with named receivers, multiple return values, exported names by capitalization, zero values, mutable parameters and locals.
+`package`, `import`, `func`, `type ... struct`, `:=`, `var`, `for`, `if`, `switch`, `defer`, channels and `select`, slices, maps, methods with named receivers, multiple return values, exported names by capitalization, zero values, mutable parameters and locals.
 
 `for` ranges exactly as in Go: `for i := range xs` yields the index, `for i, x := range xs` the index and element, `for k, v := range m` key and value, `for x := range ch` the received value. An iterator ranges like a channel: `for x := range it` yields each item.
 
@@ -15,7 +15,7 @@ Full reasoning in `04-borrows-ref-and-mut.md`. The rules:
 - Every value has one owner. Passing or assigning by value **moves** it, unless its type is `Copy`.
 - `ref T` is a shared read-only borrow; `mut T` is an exclusive mutable borrow. Both are written at the declaration and at the use site: `func Len(xs ref []T)`, called as `Len(ref xs)`.
 - Receivers: `func (t ref Tree) Len()`, `func (t mut Tree) Push()`, `func (f File) Close()` (consumes).
-- A borrow lives from its creation to its last use within one function. It cannot be stored in an owned struct, captured by `go`, or sent on a channel.
+- A borrow lives from its creation to its last use within one function. It cannot be stored in an owned struct, captured by `spawn`, or sent on a channel.
 - A borrow may be returned only when tied to one input: the receiver (`func (s ref Stack<T>) Peek() ref T?`) or the sole borrowed parameter (`func Trim(s ref string) ref string`). Two borrowed inputs and a borrowed output is a compile error; clone or return an index.
 - Any number of `ref` or exactly one `mut` at a time.
 - A borrow variable may be reassigned to a borrow derived from itself: `cur = mut n.left` where `n` was reached through `cur`. This is what makes walking a chain of boxes possible (example 20).
@@ -42,6 +42,8 @@ These came out of writing the parser and are binding on every example.
 - **Postfix `?` binds tighter than any prefix operator.** `-x?` is `-(x?)` and `ref x?` is `ref (x?)`.
 - **A `{` after a name opens a composite literal, except in a control clause.** In `if x == y {` the brace opens the body, as in Go. Write `if x == (T{}) {` to compare against a literal there. A type written out is never ambiguous, so `for _, k := range []int{5, 3} {` is fine.
 - **A type may stand as an expression** where Go allows it: as the argument of `make`, as the function of a conversion such as `[]byte(s)`, and as the type of a composite literal.
+- **An `if` binding is a short declaration followed directly by `{`.** `if x := opt {` binds; `if x := f(); x > 0 {` is Go's init-and-condition, told apart by the `;`. The left side of a binding is a name, `_`, a tuple of them, or a variant such as `Some(n)`.
+- **`spawn` starts a task**, where Go writes `go`. It is the one keyword Teak renames: `go` is the name of another language, and `spawn` is the verb Rust, Erlang and Elixir use for the same thing. Not `async`, which in every language that has it marks a function for a later `await`; Teak has no `await` and no two kinds of function. `spawn` and `defer` take a call, as Go's `go` and `defer` do; any other expression is an error. A `for` may range with no variable: `for range ch {`.
 - **An `if` expression has an `else`.** Every path yields a value, so `x := if c { a }` without an `else` is an error.
 - **`impl` goes after `struct` or `enum`**: `type Circle struct impl Shape { ... }`. Written before them it is reported and still recorded, so the rest of the declaration is checked.
 
@@ -114,7 +116,7 @@ func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 
 Full reasoning in `03-ownership-across-tasks.md`.
 
-- `go f(x)` moves `x` into the new task. A closure passed to `go` moves everything it captures.
+- `spawn f(x)` moves `x` into the new task. A closure passed to `spawn` moves everything it captures.
 - Sending moves the value; receiving owns it. Channel handles are `Copy`.
 - `Send` is inferred from structure and never written.
 - `Mutex<T>` and `RwLock<T>` own their data; `Lock()` returns a guard that is a `mut T` and unlocks on drop.
@@ -122,7 +124,7 @@ Full reasoning in `03-ownership-across-tasks.md`.
 
 ## Closures
 
-A closure captures each variable in the weakest mode its body needs: `ref` if it only reads it, `mut` if it assigns to it, by move if it consumes it or the closure is passed to `go`. A closure that captures by borrow is a borrow (see above). A closure that captures only owned or `Copy` values may be stored and returned.
+A closure captures each variable in the weakest mode its body needs: `ref` if it only reads it, `mut` if it assigns to it, by move if it consumes it or the closure is passed to `spawn`. A closure that captures by borrow is a borrow (see above). A closure that captures only owned or `Copy` values may be stored and returned.
 
 ## Destructors
 

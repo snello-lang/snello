@@ -96,7 +96,7 @@ return tok, lit
 
 Compile time is a feature, and in Go the way to lose it is allocation: every object the compiler allocates is work for Go's collector while the user waits. The rules:
 
-- **Measure, do not guess.** Every package that processes source has a benchmark over the programs in `examples/`, run with `-benchmem`. Allocations per operation is the number to watch; a change that raises it needs a reason in its commit message. Current baseline: the scanner performs about nine allocations per file, none per token; the parser, with bodies and initializers still skipped, performs about 3,500 allocations over the 21 example files, about 20 per declaration, every one an AST node or a node-owned slice.
+- **Measure, do not guess.** Every package that processes source has a benchmark over the programs in `examples/`, run with `-benchmem`. Allocations per operation is the number to watch; a change that raises it needs a reason in its commit message. Current baseline: the scanner performs about nine allocations per file, none per token; the parser performs about 9,500 allocations over the 21 example files with their bodies, about 55 per declaration, every one an AST node or a node-owned slice (match arms still skipped until task 0.10).
 - **Positions are integers.** `token.Pos` is a byte offset; line and column are resolved only when an error is printed. No node carries a string for its position.
 - **Substrings, not copies.** The scanner holds the source as a string and returns identifiers and literals as substrings of it. Never `string(bytes)` per token.
 - **Tables, not maps, for small fixed sets.** A set of token kinds is an array indexed by kind, one load per test. Maps are for data whose keys are not known at compile time.

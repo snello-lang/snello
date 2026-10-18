@@ -70,16 +70,16 @@ func main() {
 
     // This closure assigns to `total`, so it captures a mut borrow of it.
     // `add` is therefore a borrow: it can be called here but not stored
-    // in a struct, returned, or passed to `go`. The borrow ends when `add`
+    // in a struct, returned, or passed to `spawn`. The borrow ends when `add`
     // goes out of scope, and `total` is readable again.
     total := 0
     add := func(x int) { total += x }
     for _, x := range evens { add(x) }
     fmt.Println(total)                // 36
 
-    // Passing a closure to `go` requires it to own everything it
+    // Passing a closure to `spawn` requires it to own everything it
     // captures, so `names` is moved in.
     names := []string{"a", "b"}
-    go func() { fmt.Println(names) }()
+    spawn func() { fmt.Println(names) }()
     // fmt.Println(names)             // error: names was moved into the task
 }

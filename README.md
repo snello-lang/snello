@@ -19,7 +19,7 @@ The current work is a set of twenty programs written in a provisional syntax bef
 
 ## Goals
 
-- **Go's surface.** `func`, `:=`, `go`, channels, `select`, `defer`, slices, maps. A Go developer should read Teak on day one.
+- **Go's surface.** `func`, `:=`, channels, `select`, `defer`, slices, maps, and `spawn` where Go says `go`. A Go developer should read Teak on day one.
 - **No garbage collector.** Values have one owner and are freed deterministically. Memory safety is checked at compile time.
 - **No lifetime annotations.** Borrows are second class: they can be passed down the call stack but not stored, returned, or sent to another task. That one restriction removes the hardest part of Rust.
 - **Data-race freedom.** Anything crossing a task boundary must be moved, immutable, or atomically shared. The compiler infers which types qualify.
@@ -42,7 +42,7 @@ The current work is a set of twenty programs written in a provisional syntax bef
 | 0 | Lexer and parser for the Go-like syntax, written in Go |
 | 1 | Core checker: ownership, moves, `ref`/`mut` borrows, destructors. Emit Go source. |
 | 2 | Traits, generics, sum types, `Option`/`Result`. Still emit Go. |
-| 3 | Sendable inference for `go` and channels. |
+| 3 | Sendable inference for `spawn` and channels. |
 | 4 | LLVM backend and a native runtime with an M:N scheduler. |
 | 5 | GPU kernels through the LLVM targets: a kernel-safe subset and device buffers. |
 

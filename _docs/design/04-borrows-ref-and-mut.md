@@ -44,7 +44,7 @@ sort.Sort(mut list)                   // lend the list for mutation
 ## The rules
 
 1. **A borrow lives from its creation to its last use, inside one function.** A borrow passed to a callee ends when the callee returns. A borrow bound to a local, `n := ref t.nodes[id]`, ends at the last line that uses `n`. The compiler computes this; nothing is written.
-2. **A borrow cannot be stored in owned data or sent.** It cannot be put in a field of an owned struct, captured by a closure that is stored, placed in a channel, or captured by `go`. A struct or closure that holds a borrow is itself a borrow (see below).
+2. **A borrow cannot be stored in owned data or sent.** It cannot be put in a field of an owned struct, captured by a closure that is stored, placed in a channel, or captured by `spawn`. A struct or closure that holds a borrow is itself a borrow (see below).
 3. **A borrow may be returned only when its source is unambiguous.** The compiler ties a returned borrow to exactly one input:
    - the receiver, for a method with a `ref` or `mut` receiver: `func (s ref Stack<T>) Peek() ref T?`;
    - otherwise the only borrowed parameter: `func Trim(s ref string) ref string`. A function with two borrowed inputs and a borrowed output is rejected: `func Longest(a ref string, b ref string) ref string` cannot be written; return a clone or an index instead. At the call site, the input borrow is extended to the last use of the returned one. This is exactly the rule Rust applies when no lifetime is written; Teak has no syntax for the cases it does not cover.

@@ -19,7 +19,7 @@ Goal: the rule in `../design/03-ownership-across-tasks.md` is enforced. Data rac
 
 ## Task 3.2: Task boundary checks
 
-**Description:** `go` moves its captures and requires them `Send`; channel element types must be `Send`; sending moves; receiving yields `T?`; a borrow cannot cross any of these.
+**Description:** `spawn` moves its captures and requires them `Send`; channel element types must be `Send`; sending moves; receiving yields `T?`; a borrow cannot cross any of these.
 
 **Acceptance criteria:**
 - [ ] The rejected programs at the bottom of example 02 are rejected with messages naming the rule

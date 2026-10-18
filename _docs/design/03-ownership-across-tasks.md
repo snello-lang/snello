@@ -14,7 +14,7 @@ Without a garbage collector the problem is sharper. If two tasks can both reach 
 
 A task boundary is any of:
 
-- a `go` statement, for the values it captures,
+- a `spawn` statement, for the values it captures,
 - a channel send, for the value sent,
 - a channel receive, for the value received.
 
@@ -23,8 +23,8 @@ Concretely:
 1. **Sending moves.** `ch <- v` transfers ownership of `v` to the channel. Using `v` afterwards is a compile error.
 2. **Receiving owns.** `v := <-ch` makes this task the owner of `v`. When `v` goes out of scope it is freed here, deterministically.
 3. **Channel handles are `Copy`.** The channel itself is a shared, internally synchronized object; a handle to it is a small value any number of tasks may hold. This is what makes fan-out and fan-in one-liners.
-4. **`go` moves its captures.** A closure passed to `go` takes ownership of every variable it mentions. There is no capture by reference across a task boundary.
-5. **Borrows never cross.** A `ref T` or `mut T` cannot be captured by `go` or sent on a channel. A borrow is tied to a call frame, and the new task has its own frames.
+4. **`spawn` moves its captures.** A closure passed to `spawn` takes ownership of every variable it mentions. There is no capture by reference across a task boundary.
+5. **Borrows never cross.** A `ref T` or `mut T` cannot be captured by `spawn` or sent on a channel. A borrow is tied to a call frame, and the new task has its own frames.
 
 ## `Send`, inferred
 
@@ -57,7 +57,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 ## What it costs
 
 - **Fan-out of one value to many tasks needs an explicit choice.** In Go, passing the same slice to five goroutines is one line and a latent race. In Teak it is a compile error, and the fix is to say what you meant: clone it, wrap it in an Arc, or send a piece to each task.
-- **No borrowed captures in `go`.** Go code that spawns a goroutine to work on a local variable and then waits for it must instead move the variable in and get it back through a channel or a join handle. Structured concurrency, where a scope joins all tasks it spawned, is the planned way to let borrows into tasks safely. It is not in version one.
+- **No borrowed captures in `spawn`.** Go code that spawns a goroutine to work on a local variable and then waits for it must instead move the variable in and get it back through a channel or a join handle. Structured concurrency, where a scope joins all tasks it spawned, is the planned way to let borrows into tasks safely. It is not in version one.
 - **`sync.WaitGroup` as Go has it cannot exist**, since it relies on a shared pointer. Teak's version is a `Copy` handle to an internally synchronized counter, like a channel.
 
 ## What it gains

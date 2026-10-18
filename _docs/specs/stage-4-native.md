@@ -53,7 +53,7 @@ Goal: all twenty examples run as native binaries with no Go toolchain involved, 
 
 **Acceptance criteria:**
 - [ ] One hundred thousand sleeping tasks fit in memory
-- [ ] `go f()` runs on another core when one is free
+- [ ] `spawn f()` runs on another core when one is free
 
 **Verification:**
 - [ ] A benchmark records task spawn cost and context switch cost

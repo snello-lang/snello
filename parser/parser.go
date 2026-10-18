@@ -31,6 +31,13 @@ var (
 	declStart = newKindSet(token.IMPORT, token.FUNC, token.TYPE, token.TRAIT, token.VAR, token.CONST)
 	groupEnd  = declStart.with(token.RPAREN)
 	fieldEnd  = declStart.with(token.SEMICOLON, token.RBRACE)
+
+	// stmtStart is the set of keywords that begin a statement and
+	// cannot be part of a broken one, so recovery inside a block may
+	// resume at any of them. stmtEnd adds the tokens that end one.
+	stmtStart = newKindSet(token.BREAK, token.CONST, token.CONTINUE, token.DEFER, token.FOR, token.SPAWN,
+		token.IF, token.RETURN, token.SELECT, token.SWITCH, token.VAR)
+	stmtEnd = stmtStart.with(token.SEMICOLON, token.RBRACE, token.CASE, token.DEFAULT)
 )
 
 // A kindSet is a set of token kinds as a table indexed by Kind: a

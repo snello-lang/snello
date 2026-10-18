@@ -69,7 +69,7 @@ Inko's runtime-checked borrows are the fallback if second-class borrows prove to
 
 ## Concurrency
 
-Keep Go's surface: `go f()`, channels, `select`, `sync.WaitGroup`.
+Keep Go's surface: `spawn f()` where Go writes `go f()`, channels, `select`, `sync.WaitGroup`.
 
 Add one rule: **a value crossing a task boundary must be moved, immutable, or atomically shared.** The compiler infers a `Send` property from type structure. A type is `Send` if all its fields are; `Rc` is not, `Arc` is, `Mutex<T>` is when `T` is. Users write no annotations.
 
@@ -135,7 +135,7 @@ Stage 4 emits LLVM IR as text and shells out to `clang`, with a runtime in C. No
 | 0 | Lexer and parser for the Go-like syntax, modeled on `go/scanner` and `go/parser` | weeks |
 | 1 | Core checker: structs, functions, `*T`, moves, `ref`/`mut` borrows, destructors. No traits, no generics. Emit Go. | 4 to 8 months |
 | 2 | Traits, generics, sum types, `Option`/`Result`, `?`. | 2 to 3 months |
-| 3 | `Send` inference on `go` and channel sends, mapped to Go concurrency. | 1 month |
+| 3 | `Send` inference on `spawn` and channel sends, mapped to Go concurrency. | 1 month |
 | 4 | LLVM backend, C runtime with M:N scheduler, netpoller, stack management. | year two |
 | 5 | Kernel-safe subset, `Device<T>`, kernel launch through the LLVM GPU targets. | after 4 |
 
