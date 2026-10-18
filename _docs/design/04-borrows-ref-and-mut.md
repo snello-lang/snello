@@ -35,9 +35,11 @@ And to local bindings and call sites, where the keyword marks what is being crea
 
 ```teak
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
-strings.Fields(ref job.text)          // lend the text for the call
+strings.Fields(ref job.text)          // lend the text for the call; `ref` is optional here
 sort.Sort(mut list)                   // lend the list for mutation
 ```
+
+At a call site `mut` is always written and `ref` may be left out: an owned value passed where a `ref T` parameter is expected is borrowed for the call without a keyword, exactly as a receiver is, so `fmt.Println("error:", e)` lends `e` and keeps it. Writing the `ref` makes the same borrow visible. A visible mutation is worth a word, as Go's `&x` is; a read is not. Decided in `05-standard-library.md`, section 5.
 
 `Copy` types (numbers, bools, small plain structs) are copied rather than moved when passed by value, so for them the first row behaves like Go and borrowing is rarely needed.
 

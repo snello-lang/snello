@@ -23,11 +23,11 @@ struct Cancel {
     once sync.Once
 }
 
-func NewCancel() Arc<Cancel>              { return Arc.New(Cancel{ch: make(chan struct{})}) }
+func NewCancel() sync.Arc<Cancel>              { return sync.Arc.New(Cancel{ch: make(chan struct{})}) }
 func (c ref Cancel) Cancel()              { c.once.Do(func() { close(c.ch) }) }
 func (c ref Cancel) Done() <-chan struct{} { return c.ch }
 
-func worker(id int, tasks <-chan Task, out chan<- Done, cancel Arc<Cancel>) {
+func worker(id int, tasks <-chan Task, out chan<- Done, cancel sync.Arc<Cancel>) {
     for {
         select {
         case t := <-tasks:                          // t is Task?; the task is moved out of the channel

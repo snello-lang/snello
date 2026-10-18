@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Version 3: Teak with the standard library Arena<T>. This is the Teak way.
+// Version 3: Teak with the standard library arena.Arena<T>. This is the Teak way.
 //
 // Same idea as tree-slice.teak, but the arena is a library type and the
 // index carries a generation counter. Remove frees a node immediately and
-// reuses its slot safely: any old Index<Node> for it returns None from
+// reuses its slot safely: any old arena.Index<Node> for it returns None from
 // Get instead of aliasing whatever lives in the slot now.
 //
 // Compared to tree-slice.teak: no `live` flag, no leaked slots, and stale
@@ -18,24 +18,24 @@ import ("fmt"; "arena")
 
 struct Node {
     value    string
-    parent   Index<Node>?         // None for the root
-    children []Index<Node>
+    parent   arena.Index<Node>?         // None for the root
+    children []arena.Index<Node>
 }
 
 struct Tree {
-    nodes Arena<Node>             // owns every node
-    root  Index<Node>
+    nodes arena.Arena<Node>             // owns every node
+    root  arena.Index<Node>
 }
 
 func NewTree(value string) Tree {
     nodes := arena.New<Node>()
-    root := nodes.Insert(Node{value: value, parent: None, children: []Index<Node>{}})
+    root := nodes.Insert(Node{value: value, parent: None, children: []arena.Index<Node>{}})
     return Tree{nodes: nodes, root: root}
 }
 
 // mut receiver: exclusive borrow of the tree for the duration of the call.
-func (t mut Tree) AddChild(parent Index<Node>, value string) Index<Node> {
-    id := t.nodes.Insert(Node{value: value, parent: Some(parent), children: []Index<Node>{}})
+func (t mut Tree) AddChild(parent arena.Index<Node>, value string) arena.Index<Node> {
+    id := t.nodes.Insert(Node{value: value, parent: Some(parent), children: []arena.Index<Node>{}})
     // GetMut returns None for a stale or removed index. A parent handed to
     // us by the caller should be valid, so Expect turns a bug into a panic
     // with a message rather than silent corruption.
@@ -43,9 +43,9 @@ func (t mut Tree) AddChild(parent Index<Node>, value string) Index<Node> {
     return id
 }
 
-// Remove detaches a subtree and frees its nodes. Any Index<Node> the
+// Remove detaches a subtree and frees its nodes. Any arena.Index<Node> the
 // caller still holds for those nodes becomes stale: Get on it returns None.
-func (t mut Tree) Remove(id Index<Node>) {
+func (t mut Tree) Remove(id arena.Index<Node>) {
     node := t.nodes.Remove(id) ?? return         // already gone: nothing to do
     for _, child := range node.children { t.Remove(child) }
     if parent := node.parent {
@@ -54,7 +54,7 @@ func (t mut Tree) Remove(id Index<Node>) {
 }
 
 // ref receiver: shared borrow, cannot mutate.
-func (t ref Tree) Path(id Index<Node>) []string {
+func (t ref Tree) Path(id arena.Index<Node>) []string {
     path := []string{}
     cur := Some(id)
     for cur != None {
@@ -68,7 +68,7 @@ func (t ref Tree) Path(id Index<Node>) []string {
 
 // Depth-first walk with a closure. The closure receives a borrow and
 // therefore cannot keep the node after the walk returns.
-func (t ref Tree) Walk(id Index<Node>, visit func(ref Node)) {
+func (t ref Tree) Walk(id arena.Index<Node>, visit func(ref Node)) {
     n := t.nodes.Get(id) ?? return
     visit(n)
     for _, child := range n.children { t.Walk(child, visit) }

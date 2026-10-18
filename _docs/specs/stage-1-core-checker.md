@@ -9,16 +9,18 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** A design document, `../design/05-standard-library.md`, that says what the library is, before any checker code depends on the answer. It settles four questions, each with its precedent: which names are predeclared by the language and which come from packages; that there is no prelude, so `Arena`, `Arc` and the rest are imported; that package names and layout follow Go while signatures follow Teak's ownership rules, with a new name wherever ownership changes a function's meaning; and the three signature rules (read-only parameters are `ref`, changed ones `mut`, kept ones by value). It also decides the one language rule the library forces: whether an owned value passed to a `ref` parameter is borrowed implicitly, as a receiver already is. It lists the stage 1 mapping table. It does not list every function; the examples do that, and task 2.6 keeps its criterion.
 
 **Acceptance criteria:**
-- [ ] The document exists with the four decisions and the call-site rule, each marked decided by the human (draft written 2026-10-18; three items open)
-- [ ] The list of predeclared names is in one place and the stage 1 spec refers to it
-- [ ] Every name the twenty examples use without an import is either predeclared or the example gains the import
+- [x] The document exists with the four decisions and the call-site rule, each marked decided (2026-10-18; the three items without precedent were decided on the recommendation and await the owner's review)
+- [x] The list of predeclared names is in one place and the stage 1 spec refers to it
+- [x] Every name the twenty examples use without an import is either predeclared or the example gains the import (examples 01, 03, 12, 15)
 
 **Verification:**
-- [ ] `teak parse` still accepts all twenty examples after the import sweep
+- [x] `teak parse` still accepts all twenty examples after the import sweep
 - [ ] Design review by the human
 
 **Dependencies:** Stage 0 checkpoint
 **Files:** `_docs/design/05-standard-library.md`, `examples/`
+
+**Done:** 2026-10-18, pending the owner's design review
 **Scope:** M
 
 ## Task 1.1: Core example set and negative tests
