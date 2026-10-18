@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The Teak runtime, stage 1: the representations and operations the C
+// The Teak runtime: the representations and operations the C
 // emitter relies on. Every emitted program includes this header and is
 // linked with teak.c. Names begin with tk_ so that no Teak identifier
 // can collide with them.
@@ -18,8 +18,8 @@ typedef int64_t tk_int;
 typedef uint64_t tk_uint;
 
 // A string is a view of immutable UTF-8 bytes: a literal points at
-// static data, an owned string at bytes from tk_alloc. Stage 1 frees
-// nothing; task 1.9 adds the releases the checker computes.
+// static data, an owned string at bytes from tk_alloc. Nothing is
+// freed yet; the releases the checker computes come with drops.
 typedef struct {
     const uint8_t *ptr;
     int64_t len;
@@ -63,7 +63,7 @@ static inline int64_t tk_index(int64_t i, int64_t len) {
     return i;
 }
 
-// An error is its message in stage 1, and an empty message is no
+// An error is its message for now, and an empty message is no
 // error: the os and io functions return one and store their result
 // through a pointer. A file is a descriptor; the three standard streams
 // are files too.

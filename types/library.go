@@ -6,12 +6,12 @@ package types
 
 import "github.com/teak-lang/teak/token"
 
-// The stage 1 library: the names the core programs import, with the
+// The core library: the names the core programs import, with the
 // signatures section 4 of _docs/design/05-standard-library.md gives
 // them, and the methods section 1 predeclares on slices, maps, strings,
 // options and results. Everything here is a mapping onto a Go function
-// of the same meaning, debt the stage 4 runtime repays; see the
-// mapping table in that document.
+// of the same meaning, debt the library written in Teak repays; see
+// the mapping table in that document.
 
 // libraries holds one scope per package path, built once.
 var libraries = map[string]*Scope{
@@ -38,7 +38,7 @@ func libraryMember(path, name string) Object {
 }
 
 // isLibraryPackage reports whether the import path names a package the
-// stage 1 library knows.
+// core library knows.
 func isLibraryPackage(path string) bool {
 	return libraries[path] != nil
 }
@@ -106,11 +106,11 @@ func sliceMethod(t *Slice, name string) *Signature {
 	elem := t.elem
 	switch name {
 	case "Push":
-		return changes([]*Var{param("v", elem)}, Unit)
+		return changes([]*Var{keeps("v", elem)}, Unit)
 	case "Pop":
 		return changes(nil, NewOption(elem))
 	case "Insert":
-		return changes([]*Var{param("i", Typ[Int]), param("v", elem)}, Unit)
+		return changes([]*Var{param("i", Typ[Int]), keeps("v", elem)}, Unit)
 	case "Remove":
 		return changes([]*Var{param("i", Typ[Int])}, elem)
 	case "RemoveValue":
@@ -136,7 +136,7 @@ func mapMethod(t *Map, name string) *Signature {
 	case "GetMut":
 		return changes([]*Var{param("k", ref(t.key))}, NewOption(NewRef(t.value, true)))
 	case "Insert":
-		return changes([]*Var{param("k", t.key), param("v", t.value)}, Unit)
+		return changes([]*Var{keeps("k", t.key), keeps("v", t.value)}, Unit)
 	case "Remove":
 		return changes([]*Var{param("k", ref(t.key))}, NewOption(t.value))
 	case "Contains":
@@ -149,7 +149,7 @@ func mapMethod(t *Map, name string) *Signature {
 }
 
 // stringMethod: Fields and Split yield borrows into the string. Until
-// the iterator trait exists (stage 2) they are typed as a slice of
+// the iterator trait exists they are typed as a slice of
 // borrows, a type a program cannot write, which ranges as the iterator
 // will.
 func stringMethod(name string) *Signature {
@@ -241,6 +241,14 @@ func variadic(params []*Var, results Type) *Signature {
 
 func param(name string, t Type) *Var {
 	return NewVar(token.NoPos, name, t)
+}
+
+// keeps is a parameter whose argument the method stores, which a
+// closure capturing a local cannot be.
+func keeps(name string, t Type) *Var {
+	v := NewVar(token.NoPos, name, t)
+	v.kept = true
+	return v
 }
 
 func ref(t Type) *Ref {

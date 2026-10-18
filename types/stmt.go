@@ -59,7 +59,9 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 	case *ast.AssignStmt:
 		c.assignStmt(s)
 	case *ast.SpawnStmt:
+		c.spawning, _ = s.Call.(*ast.CallExpr)
 		c.expr(s.Call, nil)
+		c.spawning = nil
 	case *ast.DeferStmt:
 		c.expr(s.Call, nil)
 	case *ast.ReturnStmt:
@@ -223,15 +225,7 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 		}
 
 		x, holder := c.target(s.Lhs[0])
-		y := c.expr(s.Rhs[0], hintOf(x))
-		if x.mode != invalid {
-			c.assign(y, x.typ, s.Rhs[0].Pos(), "assignment")
-			c.revive(s.Lhs[0])
-			if holder != nil {
-				c.hold(holder, s.Rhs[0], s.Lhs[0].Pos())
-			}
-		}
-
+		c.stored(s.Lhs[0], x, holder, c.expr(s.Rhs[0], hintOf(x)))
 		return
 	}
 
@@ -248,6 +242,13 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 // variable holds what the value lends.
 func (c *Checker) assignTo(lhs ast.Expr, op operand) {
 	x, holder := c.target(lhs)
+	c.stored(lhs, x, holder, op)
+}
+
+// stored finishes an assignment once its two sides are checked: x is
+// the target, holder the borrow variable it names, if any, and op the
+// value.
+func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 	if x.mode == invalid {
 		return
 	}
@@ -256,6 +257,8 @@ func (c *Checker) assignTo(lhs ast.Expr, op operand) {
 	c.revive(lhs)
 	if holder != nil {
 		c.hold(holder, op.expr, lhs.Pos())
+	} else if _, ok := lhs.(*ast.Ident); !ok {
+		c.kept(op, "stored", lhs.Pos()) // a field or element keeps the value
 	}
 }
 
@@ -287,7 +290,9 @@ func (c *Checker) send(s *ast.SendStmt) {
 		return
 	}
 
-	c.assign(c.expr(s.Value, t.elem), t.elem, s.Value.Pos(), "send")
+	v := c.expr(s.Value, t.elem)
+	c.assign(v, t.elem, s.Value.Pos(), "send")
+	c.kept(v, "sent", s.Value.Pos())
 }
 
 // returnStmt checks the results against the function's result type:
@@ -300,7 +305,9 @@ func (c *Checker) returnStmt(s *ast.ReturnStmt) {
 			c.errorf(s.Return, "return needs a value of type "+want.String())
 		}
 	case len(s.Results) == 1:
-		c.assign(c.expr(s.Results[0], want), want, s.Results[0].Pos(), "return")
+		op := c.expr(s.Results[0], want)
+		c.assign(op, want, s.Results[0].Pos(), "return")
+		c.returned(s.Results[0], op)
 	default:
 		t, ok := want.(*Tuple)
 		if !ok || len(t.elems) != len(s.Results) {
@@ -310,7 +317,9 @@ func (c *Checker) returnStmt(s *ast.ReturnStmt) {
 		}
 
 		for i, r := range s.Results {
-			c.assign(c.expr(r, t.elems[i]), t.elems[i], r.Pos(), "return")
+			op := c.expr(r, t.elems[i])
+			c.assign(op, t.elems[i], r.Pos(), "return")
+			c.returned(r, op)
 		}
 	}
 }
@@ -487,7 +496,7 @@ func rangeTypes(x operand) (key, val Type, ok bool) {
 
 // isIterator reports whether a slice type stands for an iterator: the
 // library types Fields and Split as a slice of borrows, a type no
-// program can write, until the iterator trait exists (stage 2).
+// program can write, until the iterator trait exists.
 func isIterator(t *Slice) bool {
 	_, ok := t.elem.(*Ref)
 	return ok

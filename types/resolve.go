@@ -116,6 +116,7 @@ func (c *Checker) resolveDecls(f *ast.File) {
 		}
 	}
 
+	c.resolvePending()
 	for i, d := range f.Decls {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
@@ -150,6 +151,7 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	}
 
 	fn.typ = NewSignature(recv, c.params(d.Params), c.results(d.Results))
+	c.checkSources(d.Name.Name, fn.typ.(*Signature), d.Name.Pos())
 	if d.Recv == nil {
 		return
 	}

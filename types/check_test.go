@@ -36,7 +36,7 @@ func TestResolve(t *testing.T) {
 		{"package p\nfunc f() { count := 0; g := func() { count += 1 }; g() }", nil},
 		{"package p\nfunc f() { x := 1; x, y := 2, 3; print(x, y) }", nil},
 		{"package p\nimport \"fmt\"\nfunc f() { fmt.Println(1) }", nil},
-		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", []string{"3:17: undefined: http.Get"}}, // only the stage 1 library exists
+		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", []string{"3:17: undefined: http.Get"}}, // only the core library exists
 		{"package p\nstruct T { a int }\nfunc f() { t := T{a: 1}; m := map[string]int{\"k\": 1}; print(t, m) }", nil},
 		{"package p\nstruct TempDir impl Drop { path string }\nfunc (t mut TempDir) Drop() {}", nil},
 		{"package p\nfunc f() { var x, y int = 1, 2; const c = 3; print(x, y, c) }", nil},
@@ -155,7 +155,7 @@ var handledErrors = map[string]bool{
 	"move-out-of-slice.teak":   true,
 	"move-out-of-borrow.teak":  true,
 	"partial-move.teak":        true,
-	// Task 1.7: borrows.
+	// Borrows.
 	"mut-while-ref.teak":            true,
 	"two-mut.teak":                  true,
 	"two-slots.teak":                true,
@@ -163,6 +163,15 @@ var handledErrors = map[string]bool{
 	"move-while-borrowed.teak":      true,
 	"assign-through-ref.teak":       true,
 	"mut-through-ref-receiver.teak": true,
+	// Escaping borrows.
+	"borrow-in-slice.teak":        true,
+	"borrow-struct-in-slice.teak": true,
+	"closure-stored.teak":         true,
+	"borrow-across-spawn.teak":    true,
+	"borrow-on-channel.teak":      true,
+	"return-two-borrows.teak":     true,
+	"return-local-borrow.teak":    true,
+	"closure-returned.teak":       true,
 }
 
 func TestNegativePrograms(t *testing.T) {

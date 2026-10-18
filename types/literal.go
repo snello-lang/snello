@@ -112,7 +112,9 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 			}
 
 			c.assign(c.expr(kv.Key, u.key), u.key, kv.Key.Pos(), "map key")
-			c.assign(c.expr(kv.Value, u.value), u.value, kv.Value.Pos(), "map value")
+			v := c.expr(kv.Value, u.value)
+			c.assign(v, u.value, kv.Value.Pos(), "map value")
+			c.kept(v, "stored", kv.Value.Pos())
 		}
 	default:
 		if t != Typ[Invalid] {
@@ -150,7 +152,9 @@ func (c *Checker) structLit(e *ast.CompositeLit, st *Struct) {
 		}
 
 		c.recordUse(key, f)
-		c.assign(c.expr(kv.Value, f.typ), f.typ, kv.Value.Pos(), "field "+f.name)
+		v := c.expr(kv.Value, f.typ)
+		c.assign(v, f.typ, kv.Value.Pos(), "field "+f.name)
+		c.kept(v, "stored", kv.Value.Pos())
 	}
 }
 
@@ -179,6 +183,8 @@ func (c *Checker) elements(elts []ast.Expr, elem Type) {
 			continue
 		}
 
-		c.assign(c.expr(elt, elem), elem, elt.Pos(), "element")
+		v := c.expr(elt, elem)
+		c.assign(v, elem, elt.Pos(), "element")
+		c.kept(v, "stored", elt.Pos())
 	}
 }

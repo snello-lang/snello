@@ -9,7 +9,7 @@ import (
 	"github.com/teak-lang/teak/token"
 )
 
-// The move pass (task 1.6 of stage 1) runs inside the checker's walk of
+// The move pass runs inside the checker's walk of
 // a body. A value goes to a new owner when it is assigned, passed by
 // value, returned, sent, put into a literal or captured by a closure
 // that consumes it; after that the old name is dead. The pass keeps the
@@ -230,6 +230,7 @@ func (c *Checker) move(e ast.Expr) {
 	p, kind := c.placeOf(e)
 	switch kind {
 	case placeOwned:
+		c.capture(p.v, byMove)
 		c.access(e, p, moveAccess, e.Pos(), e.Pos())
 		c.moved = append(c.moved, move{p, e.Pos()})
 	case placeBorrowed:

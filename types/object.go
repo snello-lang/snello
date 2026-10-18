@@ -53,6 +53,7 @@ type Var struct {
 	object
 	field   bool
 	lastUse token.Pos // the last use seen so far, for the borrow pass; an assignment to the whole variable is not one
+	kept    bool      // a parameter whose argument the callee keeps: Push stores its element
 }
 
 // A Const is a named constant; true and false, and const declarations.

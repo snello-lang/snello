@@ -150,7 +150,7 @@ func declName(d ast.Decl) string {
 // errors against the file's own annotations: a line ending in
 // `// ERROR "text"` must produce exactly one error containing text, and
 // no other line may produce any. This is the form the Go compiler's
-// errorcheck tests use, and the form stage 1's negative tests will use.
+// errorcheck tests use, and the form the checker's negative tests use.
 func TestErrorFiles(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.teak"))
 	if err != nil || len(paths) == 0 {

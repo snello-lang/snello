@@ -9,7 +9,7 @@ import (
 	"github.com/teak-lang/teak/token"
 )
 
-// The borrow pass (task 1.7 of stage 1) runs inside the checker's walk
+// The borrow pass runs inside the checker's walk
 // beside the move pass. A borrow is created by ref or mut on a place,
 // by a method on its receiver, by a parameter that lends, by a pattern
 // matched through a borrow, and by ?? on a borrowed option; it is held
@@ -72,6 +72,7 @@ func (c *Checker) accessExpr(e ast.Expr, what access, pos token.Pos) *Var {
 		return nil
 	}
 
+	c.capture(p.v, byMut)
 	if what == writeAccess && kind == placeOwned && p.path == "" && isBorrow(p.v.typ) {
 		c.rebind(p.v, pos)
 		return p.v
@@ -176,10 +177,30 @@ func (c *Checker) lend(e ast.Expr, mut bool, at token.Pos) {
 	what := refAccess
 	if mut {
 		what = mutAccess
+		c.capture(p.v, byMut)
 	}
 
 	c.access(e, p, what, e.Pos(), at)
 	c.temps = append(c.temps, borrow{place: p, mut: mut, pos: e.Pos()})
+}
+
+// lendCaptures lends what a closure literal captures for the call it
+// is passed to, so that the call cannot borrow the same variable again.
+func (c *Checker) lendCaptures(e ast.Expr, pos token.Pos) {
+	for _, cap := range c.capturesOf(e) {
+		if cap.mode == byMove {
+			continue
+		}
+
+		b := cap.borrow(nil, pos)
+		what := refAccess
+		if b.mut {
+			what = mutAccess
+		}
+
+		c.access(&ast.Ident{NamePos: pos, Name: cap.v.name}, b.place, what, pos, pos) // named for the message
+		c.temps = append(c.temps, b)
+	}
 }
 
 // hold records that v holds the borrow its value carries, when the
@@ -196,6 +217,28 @@ func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 			c.transfer(p.v, v, pos) // q := p moves a mut borrow: q holds what p held
 			return
 		}
+	}
+
+	if caps := c.capturesOf(e); caps != nil {
+		for _, cap := range caps { // g := func() { n += 1 }: g holds n
+			if cap.mode != byMove { // the closure owns what it moved; the variable is dead outside
+				c.borrows = append(c.borrows, cap.borrow(v, pos))
+			}
+		}
+
+		return
+	}
+
+	if lit, ok := unparen(e).(*ast.CompositeLit); ok {
+		for _, elt := range lit.Elts { // l := Lexer{src: ref s}: l holds s
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			c.derive(v, borrowSource(elt), pos)
+		}
+
+		return
 	}
 
 	c.derive(v, borrowSource(e), pos)
@@ -349,7 +392,8 @@ func borrowSource(e ast.Expr) ast.Expr {
 
 // borrowIn reports whether a value of type t is or carries a borrow,
 // and whether that borrow is mut: a ref or mut, an option of one, the
-// slice of borrows an iterator stands for, or a tuple holding one.
+// slice of borrows an iterator stands for, a tuple holding one, or a
+// struct with such a field, which is a borrow itself.
 func borrowIn(t Type) (mut, ok bool) {
 	switch t := t.(type) {
 	case *Ref:
@@ -361,6 +405,16 @@ func borrowIn(t Type) (mut, ok bool) {
 	case *Tuple:
 		for _, e := range t.elems {
 			if mut, ok := borrowIn(e); ok {
+				return mut, true
+			}
+		}
+	case *Named:
+		if t.holdsBorrow() {
+			return borrowIn(t.underlying)
+		}
+	case *Struct:
+		for _, f := range t.fields {
+			if mut, ok := borrowIn(f.typ); ok {
 				return mut, true
 			}
 		}

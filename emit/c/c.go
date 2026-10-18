@@ -3,9 +3,9 @@
 // license that can be found in the LICENSE file.
 
 // Package c emits C source for a checked core Teak program and
-// provides the runtime it links against. It is the backend of stages 1
-// to 3 (_docs/design/01-language-design.md, "Backend: C first, LLVM
-// later"); stage 4 replaces it with LLVM IR and keeps the runtime.
+// provides the runtime it links against. It is the first backend
+// (_docs/design/01-language-design.md, "Backend: C first, LLVM
+// later"); LLVM IR replaces it and keeps the runtime.
 //
 // The lowering: numbers are C integers and doubles, a string is the
 // runtime's tk_string view, a struct is a C struct, an enum a tagged
@@ -275,7 +275,7 @@ func basicType(t *types.Basic) string {
 	case types.Bool:
 		return "bool"
 	case types.String, types.Error:
-		return "tk_string" // an error is its message in stage 1
+		return "tk_string" // an error is its message for now
 	case types.Int8:
 		return "int8_t"
 	case types.Int16:

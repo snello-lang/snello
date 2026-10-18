@@ -60,6 +60,16 @@ type Checker struct {
 	temps     []borrow
 	conflicts []conflict
 	depth     int // of expression nesting; a lent borrow ends with the full expression
+
+	// The escape pass (escape.go): whether the declarations are resolved
+	// and the questions asked before they were, the closures being
+	// checked and what each closure literal captured, and the call a
+	// spawn statement is starting.
+	declared bool
+	pending  []pendingStore
+	closures []closure
+	captured map[*ast.FuncLit][]capture
+	spawning *ast.CallExpr
 }
 
 // Check resolves every name in f, a file of one package, and returns

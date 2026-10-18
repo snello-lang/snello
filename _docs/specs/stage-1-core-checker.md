@@ -167,13 +167,15 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** The rules that keep borrows from escaping: no borrow in an owned struct field, channel, or `spawn` capture; a returned borrow tied to the receiver or the sole borrowed parameter and nothing else; borrow-holding structs and closures treated as borrows.
 
 **Acceptance criteria:**
-- [ ] `Peek() ref T?` on a `ref` receiver is accepted; the same on a function with two borrowed parameters is rejected with the message from the design note
-- [ ] A struct with a `ref` field can be created and used locally and returned under the one-source rule, but not stored or sent
-- [ ] A closure that assigns to a captured local cannot be returned
+- [x] `Peek() ref T?` on a `ref` receiver is accepted; the same on a function with two borrowed parameters is rejected with the message from the design note (2026-10-18: `Longest returns a borrow but has two borrowed parameters`, on the `func` line)
+- [x] A struct with a `ref` field can be created and used locally and returned under the one-source rule, but not stored or sent (2026-10-18: `a slice cannot hold Lexer: it holds a borrow`, reported at the type)
+- [x] A closure that assigns to a captured local cannot be returned (2026-10-18: `closure captures n by borrow and cannot be returned`; the same for storing, sending and spawning)
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
-- [ ] Core parser example (lexer holding `src ref string`) checks
+- [x] Tests pass: `go test ./types/` (2026-10-18; `TestEscapes` covers the rules one by one)
+- [x] Core parser example (lexer holding `src ref string`) checks (2026-10-18)
+
+**Done:** 2026-10-18, as `types/escape.go` beside the borrow pass. Owned data is refused at the type: a slice, array, map, channel or pointer of a type that holds a borrow, which a named type caches as it does `Copy`; struct fields ask the question after every declaration is resolved. A signature with a borrowed result and two borrowed parameters is refused; one with none is not, since every return of a borrow of a local is reported at the return, following the borrows held by variables back to the receiver or the borrowed parameter. A closure captures every local it refers to, by borrow, or by move when it consumes it; a closure with captures is a borrow for returning, storing, sending and spawning, and a variable bound to it holds its borrows, so a closure that changes `xs` keeps `xs` lent while the variable is used. Two gaps to carry: a function-typed parameter is trusted to be owned, so a callee that stores its callback is the one place a borrowing closure can escape unseen; and a closure that only moves its captures is owned by the rules but still refused here, until the emitter copies moved values into the closure's environment instead of pointing at the variable (task 1.9 or 1.10). The checker's allocations rose by about twenty over the core programs, the closures' capture lists.
 
 **Dependencies:** 1.7
 **Files:** `types/escape.go`, `types/escape_test.go`

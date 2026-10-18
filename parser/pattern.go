@@ -149,7 +149,7 @@ func (p *Parser) parsePatternList() []ast.Pattern {
 // pattern, into that pattern. The forms a binding uses are a name, a
 // wildcard, a tuple of them, and a variant with sub-patterns. Anything
 // else is reported and becomes a wildcard so the tree stays whole. The
-// full pattern grammar, for match arms, arrives with task 0.10.
+// full pattern grammar is for match arms.
 //
 //	x            IdentPat
 //	_            WildcardPat

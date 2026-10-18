@@ -18,19 +18,30 @@ func (c *Checker) typ(e ast.Type) Type {
 	case *ast.NamedType:
 		return c.namedType(e)
 	case *ast.PointerType:
-		return NewPointer(c.typ(e.Elem))
+		if elem := c.typ(e.Elem); c.storable(elem, "a pointer", e.Pos()) {
+			return NewPointer(elem)
+		}
 	case *ast.OptionType:
 		return NewOption(c.typ(e.Elem))
 	case *ast.RefType:
 		return NewRef(c.typ(e.Elem), e.Mut)
 	case *ast.SliceType:
-		return NewSlice(c.typ(e.Elem))
+		if elem := c.typ(e.Elem); c.storable(elem, "a slice", e.Pos()) {
+			return NewSlice(elem)
+		}
 	case *ast.ArrayType:
-		return NewArray(c.typ(e.Elem), c.arrayLen(e.Len))
+		if elem := c.typ(e.Elem); c.storable(elem, "an array", e.Pos()) {
+			return NewArray(elem, c.arrayLen(e.Len))
+		}
 	case *ast.MapType:
-		return NewMap(c.typ(e.Key), c.typ(e.Value))
+		key, value := c.typ(e.Key), c.typ(e.Value)
+		if c.storable(key, "a map", e.Pos()) && c.storable(value, "a map", e.Pos()) {
+			return NewMap(key, value)
+		}
 	case *ast.ChanType:
-		return NewChan(ChanDir(e.Dir), c.typ(e.Elem))
+		if elem := c.typ(e.Elem); c.storable(elem, "a channel", e.Pos()) {
+			return NewChan(ChanDir(e.Dir), elem)
+		}
 	case *ast.FuncType:
 		return NewSignature(nil, c.params(e.Params), c.results(e.Results))
 	case *ast.TupleType:
@@ -59,9 +70,9 @@ func (c *Checker) typ(e ast.Type) Type {
 
 // namedType resolves a name to a type. Result<T, E> is the one name
 // written with type arguments in core Teak, and the language knows it.
-// A qualified name such as io.Error belongs to the library, which
-// stage 1 maps in the emitter; until then it is an invalid type and no
-// error, so the core programs check.
+// A qualified name such as io.Error belongs to the library, which the
+// emitter maps; until then it is an invalid type and no error, so the
+// core programs check.
 func (c *Checker) namedType(e *ast.NamedType) Type {
 	if e.Pkg == nil && e.Name.Name == "Result" {
 		if len(e.Args) != 2 {

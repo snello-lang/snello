@@ -425,7 +425,7 @@ func isBlank(x ast.Expr) bool {
 }
 
 // isString reports whether t is text in C: a string, or an error,
-// which stage 1 keeps as its message.
+// which is kept as its message.
 func isString(t types.Type) bool {
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && (b.Kind() == types.String || b.Kind() == types.Error)

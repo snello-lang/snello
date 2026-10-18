@@ -71,7 +71,7 @@ func TestMoves(t *testing.T) {
 		// A closure sees what moved before it.
 		{"func f() { s := \"a\"; keep(s); g := func() int { return len(s) }; g() }", []string{"use of moved value s"}},
 		// Closures and receivers.
-		{"func f() { s := \"a\"; g := func() int { return len(s) }; keep(s); g() }", nil},
+		{"func f() { s := \"a\"; g := func() int { return len(s) }; keep(s); g() }", []string{"cannot move s: s is borrowed by g"}}, // the closure holds s
 		{"func f() { s := \"a\"; g := func() { keep(s) }; keep(s); g() }", []string{"use of moved value s"}},
 		{"func f(n Node) { n.Consume(); print(n) }", []string{"use of moved value n"}},
 		{"func f(n Node) { n.Peek(); print(n) }", nil},

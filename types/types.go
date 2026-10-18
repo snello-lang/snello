@@ -217,11 +217,12 @@ type Enum struct {
 // same declaration. The underlying type is set after creation so that
 // a declaration can refer to itself through a pointer.
 type Named struct {
-	obj        *TypeName
-	underlying Type
-	impls      []string // the traits after impl, by name until traits exist
-	methods    []*Func
-	copyState  copyState
+	obj         *TypeName
+	underlying  Type
+	impls       []string // the traits after impl, by name until traits exist
+	methods     []*Func
+	copyState   copyState
+	borrowState copyState // whether the type holds a borrow; see Named.holdsBorrow
 }
 
 // NewPointer returns the type *elem.

@@ -1,6 +1,6 @@
 # 6. Borrows: `ref` and `mut`
 
-Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); rules 1, 4 and 5 are checked (stage 1, task 1.7, `teak check`), and rules 2, 3 and 6, the ones about a borrow escaping, come with task 1.8. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.teak` shows closures that keep the rules.
+Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); all six rules are checked (stage 1, tasks 1.7 and 1.8, `teak check`). Until the closure environment copies moved values, a closure that captures a local, even by moving it, counts as a borrow of it. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.teak` shows closures that keep the rules.
 
 Moving is the right thing when the callee keeps the value. Most functions do not keep it; they look at it, or change it, and give it back. For those, a value is **borrowed**: lent to the callee for the length of the call, with the owner unchanged. A borrow is written `ref T` to read or `mut T` to change.
 
@@ -135,7 +135,7 @@ func Parse(src ref string) Result<Expr, ParseError> {
 }
 ```
 
-It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`. A closure that reads or assigns a local captures it by borrow and is a borrow in the same way; one that captures only owned or `Copy` values, or moves what it captures, may be stored and returned. A `counter()` that returns a closure incrementing a local is rejected, because the local dies when `counter` returns; the state goes into a struct with a method instead.
+It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`, reported where the slice type is written, as `a channel cannot carry a borrow` is. A closure that reads or assigns a local captures it by borrow and is a borrow in the same way: it may be passed to a call, bound to a variable and called, but not stored in a field, slice or map, sent, spawned or returned. One that captures nothing may go anywhere; one that moves what it captures owns it, and will be allowed everywhere once the compiler copies moved values into the closure. A `counter()` that returns a closure incrementing a local is rejected, because the local dies when `counter` returns; the state goes into a struct with a method instead. A variable bound to a closure holds its borrows, so `g := func() { xs.Push(1) }` keeps `xs` lent `mut` until the last use of `g`.
 
 ## What cannot be written
 
@@ -162,6 +162,6 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot bind mut through m[k]: ... use m.GetMut(k)` | `TestBorrows` |
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
-| `cannot return a borrow of local s` | `return-local-borrow` |
+| `cannot return a borrow of local s`, `cannot return a borrow of m: a method's returned borrow is tied to its receiver` | `return-local-borrow`, `TestEscapes` in `types/escape_test.go` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
-| `closure captures n by borrow and cannot be returned` | `closure-returned`, `closure-stored` |
+| `closure captures n by borrow and cannot be returned`, `... stored`, `... sent`, `... spawned` | `closure-returned`, `closure-stored`, `TestEscapes` |

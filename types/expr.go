@@ -97,6 +97,7 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 			obj.lastUse = e.Pos() // a borrow lives to here; assigning the whole variable ends it instead
 		}
 
+		c.capture(obj, byRef)
 		c.checkUse(e)
 		return operand{variable, obj.typ, obj, nil}
 	case *Const:
@@ -586,7 +587,20 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	sig := c.typ(e.Type).(*Signature)
 	outer, regions, dead := c.sig, c.regions, c.dead
 	c.sig, c.regions, c.dead = sig, nil, false
+	c.closures = append(c.closures, closure{pos: e.Pos()})
+	temps := c.temps
+	c.temps = nil // the body runs when the closure is called, not while the call around it is lending
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
+	c.temps = temps
+	if caps := c.closures[len(c.closures)-1].captures; caps != nil {
+		if c.captured == nil {
+			c.captured = make(map[*ast.FuncLit][]capture)
+		}
+
+		c.captured[e] = caps // the closure is a borrow of what it captures
+	}
+
+	c.closures = c.closures[:len(c.closures)-1]
 	c.sig, c.regions, c.dead = outer, regions, dead
 	return operand{value, sig, nil, nil}
 }

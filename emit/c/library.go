@@ -12,12 +12,12 @@ import (
 	"github.com/teak-lang/teak/types"
 )
 
-// The stage 1 library is a table in the emitter, as
+// The core library is a table in the emitter, as
 // _docs/design/05-standard-library.md says: fmt's printing is lowered
 // onto the runtime's printers with the format read at compile time, and
 // the os and io functions onto runtime functions that return an error
 // message, empty on success. The library written in Teak replaces this
-// file in stage 2.
+// file.
 
 // libraryFunctions maps the os and io functions onto the runtime; stores
 // says whether the function has a value to store through its last
@@ -34,7 +34,7 @@ var libraryFunctions = map[string]struct {
 	"io.Copy":         {"tk_io_copy", true},
 }
 
-// libraryCall lowers the stage 1 library: fmt's printing becomes
+// libraryCall lowers the core library: fmt's printing becomes
 // runtime calls chosen by each argument's type, and the format of
 // Printf and Sprintf is read here, so the runtime has no formatter.
 func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) string {

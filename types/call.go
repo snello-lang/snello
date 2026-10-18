@@ -56,6 +56,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		return invalidOperand
 	}
 
+	if e == c.spawning {
+		c.spawned(e, f, sig)
+	}
+
 	c.args(e, sig)
 	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
 		if r, ok := sig.recv.typ.(*Ref); ok {
@@ -94,9 +98,17 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 			continue
 		}
 
+		switch {
+		case p.kept:
+			c.kept(op, "stored", arg.Pos())
+		case e == c.spawning:
+			c.kept(op, "spawned", arg.Pos())
+		}
+
 		if r, ok := p.typ.(*Ref); ok && op.mode != value {
 			c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
 		} else if !isMut(op.typ) {
+			c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
 			c.maybeMove(op, p.typ)
 		}
 	}
@@ -196,6 +208,10 @@ func (c *Checker) makeCall(e *ast.CallExpr) operand {
 	t := c.expr(e.Args[0], nil)
 	for _, arg := range e.Args[1:] {
 		c.intIndex(arg)
+	}
+
+	if t.mode == invalid {
+		return invalidOperand // a type that was refused, reported there
 	}
 
 	if t.mode != typeOperand {
