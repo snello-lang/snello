@@ -96,6 +96,65 @@ func main() {
 	}
 }
 
+// TestPanicDrops checks that a panic runs the Drop methods of the
+// values still owned, innermost first, and of no value that moved away
+// or was dropped before, in both builds; that a temporary dropped
+// after a variable its statement declared leaves that variable
+// registered; and that a Drop panicking during the unwinding ends the
+// program with its own message.
+func TestPanicDrops(t *testing.T) {
+	prelude := `package main
+import "fmt"
+struct Guard impl Drop { name string }
+func (g mut Guard) Drop() { fmt.Println("drop", g.name) }
+func take(g Guard) { fmt.Println("took", g.name) }
+func name(g ref Guard) string { return g.name.Clone() }
+`
+	tests := []struct{ name, body, out, err string }{
+		{"order", `
+	a := Guard{name: "a"}
+	b := Guard{name: "b"}
+	take(b)
+	{
+		c := Guard{name: "c"}
+		fmt.Println("inner", c.name)
+	}
+	g := Guard{name: "g" + name(Guard{name: "t"})}
+	d := Guard{name: "d"}
+	xs := []int{}
+	i := len(xs)
+	fmt.Println(xs[i], d.name, g.name)`, "took b\ndrop b\ninner c\ndrop c\ndrop t\ndrop d\ndrop gt\ndrop a\n", "panic: index out of range"},
+		{"panicking-drop", `
+	a := Guard{name: "a"}
+	b := Guard{name: "b"}
+	c := Guard{name: "c"}
+	if b.name == "b" {
+		panic("first")
+	}
+	fmt.Println(a.name, c.name)`, "drop c\n", "panic: first\npanic: in drop\n"},
+	}
+	for _, tt := range tests {
+		src := prelude
+		if tt.name == "panicking-drop" {
+			src += "struct Bad impl Drop { name string }\nfunc (b mut Bad) Drop() { panic(\"in drop\") }\n"
+			src = strings.Replace(src, "func main", "func main", 1)
+		}
+
+		body := tt.body
+		if tt.name == "panicking-drop" {
+			body = strings.Replace(body, `b := Guard{name: "b"}`, `b := Bad{name: "b"}`, 1)
+		}
+
+		src += "func main() {" + body + "\n}\n"
+		for _, debug := range []bool{false, true} {
+			out, stderr, code := run(t, "panicdrops", src, debug)
+			if out != tt.out || code != 2 || !strings.Contains(stderr, tt.err) {
+				t.Errorf("%s, debug=%v: got output %q, stderr %q and exit code %d, want %q, %q and 2", tt.name, debug, out, stderr, code, tt.out, tt.err)
+			}
+		}
+	}
+}
+
 // TestUnsupported checks that a construct the backend does not lower
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {

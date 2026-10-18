@@ -70,6 +70,7 @@ type Emitter struct {
 	defers   []deferred            // the deferred calls of the function being written, in order
 	frames   []frame               // the scopes open at this point, with the variables to drop at their end (drop.go)
 	temps    []owned               // the temporaries of the statement being written, dropped at its end
+	guards   map[*types.Named]bool // whether dropping a declared type runs a Drop method, which a panic must still run
 	errors   []string
 }
 
@@ -100,12 +101,13 @@ var cReserved = map[string]bool{
 // positions in error messages.
 func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 	e := &Emitter{
-		info:  info,
-		file:  file,
-		used:  make(map[types.Object]bool, len(info.Uses)),
-		state: make(map[string]int),
-		seen:  make(map[string]bool),
-		pre:   make(map[ast.Expr]string),
+		info:   info,
+		file:   file,
+		used:   make(map[types.Object]bool, len(info.Uses)),
+		state:  make(map[string]int),
+		seen:   make(map[string]bool),
+		pre:    make(map[ast.Expr]string),
+		guards: make(map[*types.Named]bool),
 	}
 	for _, obj := range info.Uses {
 		e.used[obj] = true

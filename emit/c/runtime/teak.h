@@ -55,6 +55,15 @@ typedef struct {
 void *tk_alloc(size_t n);
 void tk_free(void *p);
 _Noreturn void tk_panic(tk_string msg);
+
+// The guards: the owned values whose drop runs a Drop method, which
+// the emitted code registers where each is declared and removes where
+// it is dropped, so that a panic can still run them, innermost first.
+// A value is registered by its address, which a variable keeps for
+// its whole life; a value that moved away leaves an empty place, whose
+// drop does nothing.
+void tk_guard(void *p, void (*drop)(void *));
+void tk_unguard(void *p);
 _Noreturn void tk_exit(int code);
 _Noreturn void tk_bounds(int64_t i, int64_t len);
 

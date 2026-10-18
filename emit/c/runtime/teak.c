@@ -53,11 +53,63 @@ _Noreturn void tk_exit(int code) {
     exit(code);
 }
 
+typedef struct {
+    void *p;
+    void (*drop)(void *);
+} guard;
+
+// The guard stack grows with the system allocator, not tk_alloc, so a
+// debug build does not count it among the program's blocks.
+static guard *guards;
+static int64_t nguards, guardcap;
+static bool unwinding;
+
+void tk_guard(void *p, void (*drop)(void *)) {
+    if (nguards == guardcap) {
+        int64_t cap = guardcap < 16 ? 16 : guardcap * 2;
+        guard *more = realloc(guards, (size_t)cap * sizeof *guards);
+        if (more == NULL) {
+            tk_panic(TK_STR("out of memory", 13)); // the stack so far is intact for the unwinding
+        }
+
+        guards = more;
+        guardcap = cap;
+    }
+
+    guards[nguards++] = (guard){p, drop};
+}
+
+// tk_unguard removes the guard of p, searched from the top: a value is
+// usually dropped in the reverse order of its registration, but a
+// temporary of a statement may be dropped after a variable the
+// statement declared.
+void tk_unguard(void *p) {
+    for (int64_t i = nguards - 1; i >= 0; i--) {
+        if (guards[i].p == p) {
+            memmove(&guards[i], &guards[i + 1], (size_t)(nguards - i - 1) * sizeof *guards);
+            nguards--;
+            return;
+        }
+    }
+}
+
+// tk_panic prints the message, then runs the drops of the guarded
+// values, innermost first, and ends the program. A Drop that panics
+// during that ends the program with its own message at once.
 _Noreturn void tk_panic(tk_string msg) {
     fflush(stdout);
     fputs("panic: ", stderr);
     fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
+    if (!unwinding) {
+        unwinding = true;
+        while (nguards > 0) {
+            guard g = guards[--nguards];
+            g.drop(g.p);
+        }
+    }
+
+    fflush(stdout);
     exit(2);
 }
 

@@ -56,30 +56,65 @@ func needsDrop(t types.Type) bool {
 		if t == types.OSFile || t.Implements("Drop") {
 			return true
 		}
-
-		return needsDrop(t.Underlying())
 	case *types.Pointer, *types.Slice, *types.Map:
 		return true
+	}
+
+	return anyPart(t, needsDrop)
+}
+
+// guarded reports whether dropping a value of type t runs a Drop
+// method, its own or one of a part, which a panic must still run: such
+// a value is registered with the runtime while it is owned. The answer
+// for a declared type is kept, as a type may hold a pointer to itself.
+func (e *Emitter) guarded(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	if !ok {
+		return anyPart(t, e.guarded)
+	}
+
+	if g, done := e.guards[n]; done {
+		return g
+	}
+
+	e.guards[n] = false // reached through itself, a type adds nothing
+	e.guards[n] = hasDrop(n) || anyPart(n, e.guarded)
+	return e.guards[n]
+}
+
+// anyPart reports whether f holds for a part of a value of type t: the
+// underlying type of a declared type, what a pointer, slice or map
+// holds, or the elements and fields of a composite.
+func anyPart(t types.Type, f func(types.Type) bool) bool {
+	switch t := t.(type) {
+	case *types.Named:
+		return f(t.Underlying())
+	case *types.Pointer:
+		return f(t.Elem())
+	case *types.Slice:
+		return f(t.Elem())
+	case *types.Map:
+		return f(t.Key()) || f(t.Value())
 	case *types.Option:
-		return needsDrop(t.Elem())
+		return f(t.Elem())
 	case *types.Result:
-		return needsDrop(t.Val()) || needsDrop(t.Err())
+		return f(t.Val()) || f(t.Err())
 	case *types.Tuple:
 		for i := 0; i < t.Len(); i++ {
-			if needsDrop(t.At(i)) {
+			if f(t.At(i)) {
 				return true
 			}
 		}
 	case *types.Struct:
 		for i := 0; i < t.NumFields(); i++ {
-			if needsDrop(t.Field(i).Type()) {
+			if f(t.Field(i).Type()) {
 				return true
 			}
 		}
 	case *types.Enum:
 		for i := 0; i < t.NumVariants(); i++ {
-			for _, f := range t.Variant(i).Fields() {
-				if needsDrop(f.Type()) {
+			for _, v := range t.Variant(i).Fields() {
+				if f(v.Type()) {
 					return true
 				}
 			}
@@ -225,6 +260,7 @@ func (e *Emitter) own(name string, t types.Type) {
 
 	f := &e.frames[len(e.frames)-1]
 	f.vars = append(f.vars, owned{name, t})
+	e.guard(name, t)
 }
 
 // hold records a temporary of the statement being written, dropped
@@ -232,12 +268,24 @@ func (e *Emitter) own(name string, t types.Type) {
 func (e *Emitter) hold(name string, t types.Type) {
 	if needsDrop(t) {
 		e.temps = append(e.temps, owned{name, t})
+		e.guard(name, t)
+	}
+}
+
+// guard registers an owned value with the runtime when its drop runs
+// a Drop method, so that a panic runs it too.
+func (e *Emitter) guard(name string, t types.Type) {
+	if e.guarded(t) {
+		e.line("tk_guard(&" + name + ", " + e.dropFn(t, token.NoPos) + ");")
 	}
 }
 
 func (e *Emitter) dropVars(vars []owned, pos token.Pos) {
 	for _, v := range slices.Backward(vars) {
 		e.line(e.dropOf(v.name, v.typ, pos))
+		if e.guarded(v.typ) {
+			e.line("tk_unguard(&" + v.name + ");")
+		}
 	}
 }
 

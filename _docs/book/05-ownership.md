@@ -1,6 +1,6 @@
 # 5. Ownership: moves, `Copy`, `take` and `Drop`
 
-Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope and on an early `return` (stage 1, task 1.9; `examples/run/drops.teak` prints the order); a panic ends the program without running them yet. `teak build -debug` checks the drops as the program runs (stage 1, task 1.9). The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
+Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope, on an early `return` and when a panic ends the program (stage 1, task 1.9; `examples/run/drops.teak` prints the order). `teak build -debug` checks the drops as the program runs (stage 1, task 1.9). The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
 
 Teak has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 
@@ -125,7 +125,7 @@ func main() {
 }
 ```
 
-`Drop` runs at the end of the scope, on an early `return`, and while a panic unwinds. `defer` is still there for cleanup that belongs to no value, and the two compose: the deferred calls run first, then the scope's values are dropped, since a deferred call may still be looking at one of them.
+`Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then every value still owned is dropped, innermost first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose: the deferred calls run first, then the scope's values are dropped, since a deferred call may still be looking at one of them. A deferred call does not run on a panic today; put cleanup that must survive a panic in a `Drop`.
 
 A value moved out of a variable is not dropped twice: the move leaves the variable empty, and dropping an empty variable does nothing. That is what makes a move inside an `if` safe without any bookkeeping on your part, and it is why `take` leaves the zero value behind. A value that no variable holds, such as a string built for a `Println`, is dropped when its statement ends.
 
