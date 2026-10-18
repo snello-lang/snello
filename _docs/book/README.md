@@ -10,12 +10,12 @@ The book is written as the language is built. A chapter exists as soon as its fe
 |---|---|
 | 1. Introduction | not written |
 | 2. Getting started | waits for `teak build` (stage 1, task 1.5) |
-| [3. Basics](03-basics.md) | syntax implemented (stage 0); checked from stage 1 |
-| [4. Structs, enums and match](04-structs-enums-match.md) | syntax implemented (stage 0); checked from stage 1 |
+| [3. Basics](03-basics.md) | implemented and checked (stage 1, task 1.4) |
+| [4. Structs, enums and match](04-structs-enums-match.md) | implemented and checked (stage 1, task 1.4) |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | decided; checked from stage 1, tasks 1.6 and 1.9 |
 | [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; checked from stage 1, tasks 1.7 and 1.8 |
 | 7. Owned pointers and recursive data | written with stage 1 |
-| 8. Option, Result, `?` and `??` | written with stage 1, task 1.4 |
+| [8. Option, Result, `?` and `??`](08-option-result.md) | implemented and checked (stage 1, task 1.4) |
 | 9. Collections: slices, maps and strings | written with stage 1 |
 | 10. Concurrency: `spawn`, channels, `select` | written with stage 3 |
 | 11. Traits | written with stage 2 |

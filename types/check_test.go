@@ -36,7 +36,7 @@ func TestResolve(t *testing.T) {
 		{"package p\nfunc f() { count := 0; g := func() { count += 1 }; g() }", nil},
 		{"package p\nfunc f() { x := 1; x, y := 2, 3; print(x, y) }", nil},
 		{"package p\nimport \"fmt\"\nfunc f() { fmt.Println(1) }", nil},
-		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", nil},
+		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", []string{"3:17: undefined: http.Get"}}, // only the stage 1 library exists
 		{"package p\nstruct T { a int }\nfunc f() { t := T{a: 1}; m := map[string]int{\"k\": 1}; print(t, m) }", nil},
 		{"package p\nstruct TempDir impl Drop { path string }\nfunc (t mut TempDir) Drop() {}", nil},
 		{"package p\nfunc f() { var x, y int = 1, 2; const c = 3; print(x, y, c) }", nil},
@@ -47,7 +47,7 @@ func TestResolve(t *testing.T) {
 		{"package p\nfunc T() {}\nstruct T { x int }\nfunc g() T { return T{x: 1} }", []string{"3:8: T redeclared in this block; first declared at 2:6", "4:10: T is not a type", "4:21: T is not a type"}}, // the first declaration wins; no panic
 		{"package p\nenum A { X(n int) }\nenum B { X(s string) }", []string{"3:10: X redeclared in this block; first declared at 2:10"}},
 		{"package p\nfunc f() Result<int, error> { return Ok(1) }", nil},
-		{"package p\nfunc f() Result<int> { return Ok(1) }", []string{"2:10: Result takes two type arguments"}},
+		{"package p\nfunc f() Result<int> { return Ok(1) }", []string{"2:10: Result takes two type arguments"}}, // Ok(1) against the invalid type says nothing more
 		{"package p\nfunc f() { x := 1; x := 2; print(x) }", []string{"2:22: no new variables on the left side of :="}},
 		{"package p\nfunc f() { _ := 1 }", []string{"2:14: no new variables on the left side of :="}},
 		{"package p\nfunc f(x int) { _ = x; _, y := x, x; print(y) }", nil},
@@ -58,10 +58,10 @@ func TestResolve(t *testing.T) {
 		{"package p\nstruct T { a int; a string }", []string{"2:19: duplicate field a"}},
 		{"package p\nenum A { X }\nenum B { X }", []string{"3:10: X redeclared in this block; first declared at 2:10"}},
 		{"package p\nstruct T {}\nfunc (t ref T) m() {}\nfunc (t ref T) m() {}", []string{"4:16: method T.m redeclared; first declared at 3:16"}},
-		{"package p\nfunc f() { x := 1; print(x()) }\nfunc g() Missing {}", []string{"3:10: undefined: Missing"}},
+		{"package p\nfunc f() { x := 1; print(x) }\nfunc g() Missing { return 0 }", []string{"3:10: undefined: Missing"}},
 		{"package p\nfunc f() { var x f }\nfunc f2() {}", []string{"2:18: f is not a type"}},
 		{"package p\nfunc f() { x := 1; { y := x }; print(y) }", []string{"2:38: undefined: y"}},
-		{"package p\nfunc f() { for i := range 3 {}; print(i) }", []string{"2:39: undefined: i"}},
+		{"package p\nfunc f(xs []int) { for i := range xs {}; print(i) }", []string{"2:48: undefined: i"}},
 		{"package p\nfunc f<T>(x T) {}", []string{"2:1: generic functions are not part of core Teak", "2:13: undefined: T"}},
 		{"package p\nstruct S<T> { x T }", []string{"2:1: generic types are not part of core Teak", "2:17: undefined: T"}},
 		{"package p\ntrait Shape {}", []string{"2:1: traits are not part of core Teak"}},
@@ -109,7 +109,7 @@ func TestInfo(t *testing.T) {
 	}
 
 	wantDefs := map[string]string{"T": "*types.TypeName", "n": "*types.Var", "t": "*types.Var", "get": "*types.Func", "main": "*types.Func", "v": "*types.Var", "x": "*types.Var", "S": "*types.TypeName", "A": "*types.Variant", "B": "*types.Variant", "k": "*types.Var", "s": "*types.Var", "other": "*types.Var"}
-	wantUses := map[string]string{"T": "*types.TypeName", "t": "*types.Var", "v": "*types.Var", "x": "*types.Var", "print": "*types.Builtin", "int": "*types.TypeName", "A": "*types.Variant", "B": "*types.Variant", "k": "*types.Var", "s": "*types.Var"} // A in a pattern is a use, other a binding
+	wantUses := map[string]string{"T": "*types.TypeName", "t": "*types.Var", "v": "*types.Var", "x": "*types.Var", "print": "*types.Builtin", "int": "*types.TypeName", "A": "*types.Variant", "B": "*types.Variant", "k": "*types.Var", "s": "*types.Var", "get": "*types.Func", "n": "*types.Var"} // A in a pattern is a use, other a binding; get and n are the selector and the field key
 	for name, kind := range wantDefs {
 		if defs[name] != kind {
 			t.Errorf("Defs[%s] = %q, want %q", name, defs[name], kind)
@@ -143,7 +143,10 @@ func TestCoreExamples(t *testing.T) {
 // other negative program must produce no error at all, since the
 // checker has no business rejecting it for another reason.
 var handledErrors = map[string]bool{
-	"nil-used.teak": true,
+	"nil-used.teak":            true,
+	"missing-arm.teak":         true,
+	"wrong-question-kind.teak": true,
+	"ref-as-mut.teak":          true,
 }
 
 func TestNegativePrograms(t *testing.T) {

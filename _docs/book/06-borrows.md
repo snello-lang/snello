@@ -79,7 +79,7 @@ func (t mut Tree) Insert(k int, v string) {
 }
 ```
 
-Each `cur = mut n.left` ends the old borrow and starts one derived from it, with the same owner behind it. The same shape with `ref` is `Get`.
+Each `cur = mut n.left` ends the old borrow and starts one derived from it, with the same owner behind it. The type of `cur` is `mut (*Node?)`, a mutable borrow of an optional pointer. The same shape with `ref` is `Get`.
 
 Two `mut` borrows into one slice at the same time are rejected, because the compiler cannot prove `i` and `j` differ:
 
@@ -143,7 +143,7 @@ It is returned only as a borrow is, tied to the receiver or to the only borrowed
 | `cannot borrow xs as mut: xs is borrowed as ref` | `mut-while-ref` |
 | `cannot borrow n as mut: n is already borrowed as mut` | `two-mut`, `two-slots` |
 | `cannot assign to s: s is borrowed`, `cannot move s: s is borrowed` | `assign-while-borrowed`, `move-while-borrowed` |
-| `cannot borrow xs as mut: xs is a ref borrow` | `ref-as-mut` |
+| `cannot use xs (ref []int) as mut []int` | `ref-as-mut` |
 | `cannot assign to n.value through a ref borrow` | `assign-through-ref`, `mut-through-ref-receiver` |
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |

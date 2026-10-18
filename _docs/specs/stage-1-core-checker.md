@@ -83,16 +83,18 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** Types for every expression; checking of assignments, calls, returns, `?` and `??`, `match` exhaustiveness over enums and options, `if` option binding, `for range` forms. No ownership yet.
 
 **Acceptance criteria:**
-- [ ] All positive core programs check with no errors
-- [ ] A missing match arm names the missing variant
-- [ ] `?` in a function returning the wrong kind reports what kind was expected
+- [x] All positive core programs check with no errors (2026-10-18)
+- [x] A missing match arm names the missing variant (`match is not exhaustive: missing Failed(_)`, also for tuples: `missing (Some(_), None)`)
+- [x] `?` in a function returning the wrong kind reports what kind was expected
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
+- [x] Tests pass: `go test ./types/`
 
 **Dependencies:** 1.3
-**Files:** `types/expr.go`, `types/stmt.go`, `types/check_test.go`
+**Files:** `types/expr.go`, `types/stmt.go`, `types/match.go`, `types/library.go`, `types/expr_test.go`
 **Scope:** L, split into expressions then statements
+
+**Done:** 2026-10-18, in one slice. Expressions carry a mode (value, owned place, borrowed place) beside their type for the ownership passes; literals and None take their type from context; operators read through borrows; the stage 1 library (`fmt`, `os`, `io`, and the predeclared methods) lives in `library.go`; exhaustiveness is the usefulness check from Maranget's "Warnings for pattern matching". Negative programs handled: nil-used, missing-arm, wrong-question-kind, ref-as-mut. Book chapter 8 written with it.
 
 ## Task 1.5: Go emitter and `teak build`
 

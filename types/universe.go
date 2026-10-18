@@ -35,7 +35,7 @@ var predeclaredBuiltins = [...]struct {
 
 func init() {
 	Universe = NewScope(nil)
-	for _, t := range Typ[Bool:] { // Invalid is not a name
+	for _, t := range Typ[Bool:Any] { // Invalid, Any and Never are not names
 		def(NewTypeName(token.NoPos, t.name, t))
 	}
 

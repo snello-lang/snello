@@ -17,12 +17,14 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | A partial move ends the whole | partial-move | 1.6 |
 | 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots | 1.7 |
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed | 1.7 |
-| 5. A borrow passes on narrower or equal | ref-as-mut, assign-through-ref, mut-through-ref-receiver | 1.7 |
+| 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch, reported by 1.4), assign-through-ref, mut-through-ref-receiver | 1.4, 1.7 |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored | 1.8 |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel | 1.8 |
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned | 1.8 |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
 | No `nil` | nil-used | 1.3 |
+
+As of task 1.4 the checker handles nil-used, missing-arm, wrong-question-kind and ref-as-mut; `handledErrors` in `types/check_test.go` is the list, and every other program must still produce no error.
 | `match` is exhaustive | missing-arm | 1.4 |
 | `?` propagates to the same kind | wrong-question-kind | 1.4 |
 
@@ -32,7 +34,7 @@ The messages are the plan for the checker, chosen here so that they read the sam
 
 - A dead value: `use of moved value X`, `use of partially moved value X`, `X moved in a previous iteration of the loop`.
 - A move that is not allowed: `cannot move X out of ...`, `cannot move X: X is borrowed`.
-- A borrow that is not allowed: `cannot borrow X as mut: <reason>`, where the reason is `X is borrowed as ref`, `X is already borrowed as mut`, or `X is a ref borrow`; `... through a ref receiver` for the receiver case.
+- A borrow that is not allowed: `cannot borrow X as mut: <reason>`, where the reason is `X is borrowed as ref` or `X is already borrowed as mut`; `... through a ref receiver` for the receiver case. Passing a `ref` where a `mut` is wanted is a type mismatch: `cannot use X (ref T) as mut T`.
 - A write that is not allowed: `cannot assign to X: X is borrowed`, `cannot assign to X through a ref borrow`.
 - An escaping borrow: `cannot return ...`, `... cannot be returned`, `... cannot be stored`, `a spawned task cannot hold a borrow`, `a channel cannot carry a borrow`, `a slice cannot hold a borrow`.
 - A signature that cannot be written (`return-two-borrows`) is reported on the `func` line; a statement that breaks a rule is reported on its own line. An error in a type does not cascade: the line after `[]ref string{}` is not reported again.

@@ -108,7 +108,7 @@ func AssignableTo(v, t Type) bool {
 func IsCopy(t Type) bool {
 	switch t := t.(type) {
 	case *Basic:
-		return t.kind != String && t.kind != Error && t.kind != Invalid
+		return t.kind != String && t.kind != Error && t.kind != Invalid && t.kind != Any && t.kind != Never
 	case *Ref:
 		return !t.mut
 	case *Chan, *Signature:

@@ -43,6 +43,13 @@ const (
 	Float32
 	Float64
 
+	// Any and Never are internal: not names in the universe. Any is the
+	// parameter type of the printing functions and accepts every value;
+	// Never is the type of an expression that does not return, such as
+	// panic("x") or a ?? else that returns, and converts to any type.
+	Any
+	Never
+
 	// Aliases: byte is u8 and rune is i32, as their names are only
 	// spellings. Identical compares kinds, so the alias and its type
 	// are the same type.
@@ -99,6 +106,8 @@ var Typ = [...]*Basic{
 	Uint:    {Uint, IsInteger | IsUnsigned, "uint"},
 	Float32: {Float32, IsFloat, "f32"},
 	Float64: {Float64, IsFloat, "f64"},
+	Any:     {Any, 0, "any"},
+	Never:   {Never, 0, "never"},
 }
 
 // aliases are the basic types that share a kind with an entry of Typ
@@ -186,9 +195,10 @@ type Tuple struct {
 // A Signature is a function type. Each parameter's type says how it is
 // passed: a *Ref for ref and mut, any other type for a move or copy.
 type Signature struct {
-	recv    *Var // nil for a function
-	params  []*Var
-	results Type // Unit, a single type, or a *Tuple of several
+	recv     *Var // nil for a function
+	params   []*Var
+	results  Type // Unit, a single type, or a *Tuple of several
+	variadic bool // the last parameter takes any number of arguments
 }
 
 // A Struct is an unnamed struct type. Most structs are the underlying
@@ -254,7 +264,7 @@ func NewSignature(recv *Var, params []*Var, results Type) *Signature {
 		results = Unit
 	}
 
-	return &Signature{recv, params, results}
+	return &Signature{recv, params, results, false}
 }
 
 // NewStruct returns a struct type with the given fields.
@@ -338,6 +348,10 @@ func (s *Signature) Params() []*Var { return s.params }
 // Results returns the result type: Unit, one type, or a *Tuple.
 func (s *Signature) Results() Type { return s.results }
 
+// Variadic reports whether the last parameter takes any number of
+// arguments, as the printing functions do.
+func (s *Signature) Variadic() bool { return s.variadic }
+
 // NumFields returns the number of fields.
 func (s *Struct) NumFields() int { return len(s.fields) }
 
@@ -406,7 +420,7 @@ func (e *Enum) Underlying() Type      { return e }
 func (n *Named) Underlying() Type     { return n.underlying }
 
 func (b *Basic) String() string     { return b.name }
-func (p *Pointer) String() string   { return "*" + p.elem.String() }
+func (p *Pointer) String() string   { return "*" + optionParens(p.elem) }
 func (r *Ref) String() string       { return refString(r) }
 func (o *Option) String() string    { return optionString(o) }
 func (r *Result) String() string    { return "Result<" + r.val.String() + ", " + r.err.String() + ">" }
@@ -422,10 +436,21 @@ func (n *Named) String() string     { return n.obj.name }
 
 func refString(r *Ref) string {
 	if r.mut {
-		return "mut " + r.elem.String()
+		return "mut " + optionParens(r.elem)
 	}
 
-	return "ref " + r.elem.String()
+	return "ref " + optionParens(r.elem)
+}
+
+// optionParens writes t, parenthesized when it is an option, since ?
+// binds outside a pointer or borrow: *T? is an optional pointer, and a
+// pointer to an optional is written *(T?).
+func optionParens(t Type) string {
+	if _, ok := t.(*Option); ok {
+		return "(" + t.String() + ")"
+	}
+
+	return t.String()
 }
 
 // optionString writes elem? with the parentheses the grammar needs: ?
@@ -458,6 +483,10 @@ func signatureString(s *Signature) string {
 	for i, p := range s.params {
 		if i > 0 {
 			b.WriteString(", ")
+		}
+
+		if s.variadic && i == len(s.params)-1 {
+			b.WriteString("...")
 		}
 
 		b.WriteString(p.typ.String())

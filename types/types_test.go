@@ -54,6 +54,8 @@ func TestTypeString(t *testing.T) {
 		{NewPointer(node), "*Node"},
 		{NewOption(NewPointer(node)), "*Node?"},
 		{NewOption(NewRef(str, false)), "ref string?"},
+		{NewRef(NewOption(NewPointer(node)), true), "mut (*Node?)"}, // a borrow of an optional, not an optional borrow
+		{NewPointer(NewOption(integer)), "*(int?)"},
 		{NewRef(NewSlice(integer), true), "mut []int"},
 		{NewSlice(NewOption(integer)), "[]int?"},
 		{NewOption(NewSlice(integer)), "([]int)?"},

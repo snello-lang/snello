@@ -54,8 +54,9 @@ func (t mut Tree) Remove(id NodeID) {
 func (t ref Tree) Path(id NodeID) []string {
     path := []string{}
     cur := Some(id)
-    for cur != None {
-        n := ref t.nodes[cur?]                     // n borrows one node; ends at its last use below
+    for {
+        at := cur ?? break                     // None ends the walk
+        n := ref t.nodes[at]                     // n borrows one node; ends at its last use below
         if !n.live { break }
         path.Push(n.value.Clone())                 // the path owns copies
         cur = n.parent

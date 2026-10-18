@@ -25,8 +25,9 @@ type Package struct {
 // something to the object it refers to. An identifier appears in at
 // most one of the two.
 type Info struct {
-	Defs map[*ast.Ident]Object
-	Uses map[*ast.Ident]Object
+	Defs  map[*ast.Ident]Object
+	Uses  map[*ast.Ident]Object
+	Types map[ast.Expr]Type // the type of every expression that has one
 }
 
 // A Checker holds the state of one check: the file being checked, the
@@ -36,17 +37,15 @@ type Checker struct {
 	pkg    *Package
 	info   *Info
 	errors scanner.ErrorList
-	scope  *Scope   // the innermost scope open at the current point
-	objs   []Object // the object of each top-level declaration, by index; nil for var and const
+	scope  *Scope     // the innermost scope open at the current point
+	objs   []Object   // the object of each top-level declaration, by index; nil for var and const
+	sig    *Signature // the function whose body is being checked; nil at the top level
 }
 
 // Check resolves every name in f, a file of one package, and returns
 // the package and the errors found, sorted by position. The file's
 // positions are resolved through file. info, when not nil, receives
 // the objects of every identifier.
-//
-// Stage 1.3: names and types of declarations. The types of expressions
-// come with task 1.4.
 func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 	c := &Checker{file: file, info: info}
 	c.pkg = &Package{name: f.Name.Name, scope: NewScope(Universe)}
@@ -57,6 +56,10 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 
 		if info.Uses == nil {
 			info.Uses = make(map[*ast.Ident]Object)
+		}
+
+		if info.Types == nil {
+			info.Types = make(map[ast.Expr]Type)
 		}
 	}
 
@@ -152,5 +155,11 @@ func (c *Checker) recordDef(ident *ast.Ident, obj Object) {
 func (c *Checker) recordUse(ident *ast.Ident, obj Object) {
 	if c.info != nil {
 		c.info.Uses[ident] = obj
+	}
+}
+
+func (c *Checker) recordType(e ast.Expr, t Type) {
+	if c.info != nil {
+		c.info.Types[e] = t
 	}
 }

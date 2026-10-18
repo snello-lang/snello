@@ -10,5 +10,5 @@ package p
 func push(xs mut []int) { xs.Push(1) }
 
 func fill(xs ref []int) {
-    push(xs)                              // ERROR "cannot borrow xs as mut: xs is a ref borrow"
+    push(xs)                              // ERROR "cannot use xs (ref []int) as mut []int"
 }

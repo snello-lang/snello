@@ -1,6 +1,6 @@
 # 4. Structs, enums and match
 
-Status: the syntax in this chapter is implemented (stage 0, `teak parse`). Exhaustiveness and types are checked from stage 1, task 1.4.
+Status: implemented. The syntax is parsed (stage 0) and the types, bindings and exhaustiveness are checked (stage 1, task 1.4, `teak check`).
 
 Teak has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten.
 
