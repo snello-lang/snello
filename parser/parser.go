@@ -30,6 +30,7 @@ import (
 var (
 	declStart = newKindSet(token.IMPORT, token.FUNC, token.TYPE, token.TRAIT, token.VAR, token.CONST)
 	groupEnd  = declStart.with(token.RPAREN)
+	fieldEnd  = declStart.with(token.SEMICOLON, token.RBRACE)
 )
 
 // A kindSet is a set of token kinds as a table indexed by Kind: a
@@ -47,6 +48,16 @@ type Parser struct {
 	pos token.Pos
 	tok token.Kind
 	lit string
+
+	// One token of lookahead beyond the current one, filled by peek()
+	// and drained by next(). Only a few decisions need it, such as
+	// telling a parameter name from a type name.
+	ahead struct {
+		valid bool
+		pos   token.Pos
+		tok   token.Kind
+		lit   string
+	}
 }
 
 // ParseFile parses src as a Teak source file. It always returns a File,
@@ -71,7 +82,46 @@ func (p *Parser) init(filename string, src []byte) {
 
 // next advances to the following token.
 func (p *Parser) next() {
+	if p.ahead.valid {
+		p.pos, p.tok, p.lit = p.ahead.pos, p.ahead.tok, p.ahead.lit
+		p.ahead.valid = false
+		return
+	}
+
 	p.pos, p.tok, p.lit = p.scanner.Scan()
+}
+
+// peek returns the kind of the token after the current one without
+// consuming anything.
+func (p *Parser) peek() token.Kind {
+	if !p.ahead.valid {
+		p.ahead.pos, p.ahead.tok, p.ahead.lit = p.scanner.Scan()
+		p.ahead.valid = true
+	}
+
+	return p.ahead.tok
+}
+
+// expectGtr consumes the '>' that closes a type argument list. The
+// scanner cannot know that the '>>' in Arc<RwLock<T>> is two closing
+// brackets rather than a shift, so the parser splits it here: it
+// consumes one '>' and leaves a '>' as the current token.
+func (p *Parser) expectGtr() {
+	switch p.tok {
+	case token.GTR:
+		p.next()
+	case token.SHR:
+		p.tok = token.GTR
+		p.pos++
+	case token.GEQ:
+		p.tok = token.ASSIGN
+		p.pos++
+	case token.SHR_ASSIGN:
+		p.tok = token.GEQ
+		p.pos++
+	default:
+		p.errorExpected(p.pos, "'>'")
+	}
 }
 
 func (p *Parser) error(pos token.Pos, msg string) {

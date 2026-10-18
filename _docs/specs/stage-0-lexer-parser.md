@@ -95,17 +95,18 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** Parsing of type expressions: named, qualified, generic instantiation `List<T>`, owned pointer `*T`, option `T?`, slice, array, map, channel, function, tuple `(A, B)`, and the parameter modes `ref T` and `mut T`. Decides the rule for `<` as a type-parameter bracket and records it in the syntax conventions.
 
 **Acceptance criteria:**
-- [ ] Every type form in the examples parses to the right node
-- [ ] `a < b` as an expression is not mistaken for a type instantiation; the rule is written down
-- [ ] `*Node<K, V>?` parses as option of pointer of instantiated type
+- [x] Every type form in the examples parses to the right node
+- [x] `a < b` as an expression is not mistaken for a type instantiation; the rule is written down
+- [x] `*Node<K, V>?` parses as option of pointer of instantiated type
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Design updated: `../design/00-syntax-conventions.md` states the `<` rule
+- [x] Tests pass: `go test ./parser/`
+- [x] Design updated: `../design/00-syntax-conventions.md` states the `<` rule
 
 **Dependencies:** 0.5
 **Files:** `parser/types.go`, `parser/parser_test.go`, `../design/00-syntax-conventions.md`
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.7: Declarations
 
@@ -194,6 +195,6 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 - [ ] All tasks above checked
 - [ ] `go test ./...` passes; `gofmt -l .` and `go vet ./...` are clean
-- [ ] The grammar decisions made during parsing (the `<` rule, `if` forms, `??` precedence) are recorded in `../design/00-syntax-conventions.md`
+- [ ] The grammar decisions made during parsing (the `<` rule, `if` forms, `??` precedence) are recorded in `../design/00-syntax-conventions.md` (the `<` rule and `?` binding are recorded; the rest arrive with 0.8 and 0.9)
 - [x] Open question from `plan.md` decided: stage 1 includes `match` and enums (2026-10-18)
 - [ ] Reviewed by the owner before stage 1 begins

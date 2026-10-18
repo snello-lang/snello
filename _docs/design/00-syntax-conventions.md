@@ -27,6 +27,16 @@ Full reasoning in `04-borrows-ref-and-mut.md`. The rules:
 - Slices have methods `Push`, `Pop`, `Remove`, `Reverse`; `append` remains as in Go.
 - `+` on strings borrows both operands and returns a new string.
 
+## Grammar rules decided by the parser
+
+These came out of writing the parser and are binding on every example.
+
+- **Where `?` binds.** `?` applies to the whole pointer or borrow before it, and to the element inside a container. So `*Node?` is an optional pointer, `ref T?` is an optional borrow, `[]int?` is a slice of optional ints, and `map[K]V?` is a map whose values are optional. To make a whole container optional, parenthesize: `([]int)?`.
+- **`<` in a type** always opens a type argument list: `List<T>`, `arena.Index<Node>`. There is no less-than in a type, so there is nothing to confuse it with. The `>>` that closes `Arc<RwLock<T>>` is two closing brackets; the parser splits it.
+- **`<` in an expression** is less-than unless the tokens after it form a type list closed by `>` that is directly followed by `(` or `{`, in which case it is a type argument list on a call or a composite literal: `arena.New<Node>()`, `Stack<string>{}`. The parser tries the type-argument reading first and backs up if it fails. In practice `a < b` is never followed by `>` and `(`, so ordinary comparisons are unaffected; the one thing to avoid is `a < b > (c)`, which reads as a generic call.
+- **Parameter names versus types.** In `func(from, to NodeID, w int)` the identifiers before a type are names sharing it; in `func(T, U) V` they are types. An identifier followed by a comma is decided by what ends its group, as in Go.
+- **Array lengths** are integer literals.
+
 ## Heap allocation
 
 `*T` is an owned pointer to a heap value, and `&expr` allocates: the Go spellings, with one owner. Used for recursive types: `next *Node?`, built with `&Node{...}`. It dereferences automatically for field access and method calls. There is no `nil`; an absent pointer is `*T?`.
