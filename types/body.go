@@ -27,6 +27,7 @@ func (c *Checker) resolveBodies(f *ast.File) {
 			c.sig = fn.typ.(*Signature)
 			c.moved, c.dead = c.moved[:0], false // each body starts afresh; a closure's body shares its function's
 			c.funcBody(c.sig, d.Recv, d.Params, d.Body)
+			c.resolveBorrows()
 			c.sig = nil
 		}
 	}

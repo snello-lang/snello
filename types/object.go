@@ -51,7 +51,8 @@ type TypeName struct {
 // A Var is a variable: a local, a parameter, a receiver, or a field.
 type Var struct {
 	object
-	field bool
+	field   bool
+	lastUse token.Pos // the last use seen so far, for the borrow pass; an assignment to the whole variable is not one
 }
 
 // A Const is a named constant; true and false, and const declarations.
@@ -97,12 +98,12 @@ func NewTypeName(pos token.Pos, name string, typ Type) *TypeName {
 
 // NewVar returns a local, parameter or receiver.
 func NewVar(pos token.Pos, name string, typ Type) *Var {
-	return &Var{object{name, typ, pos}, false}
+	return &Var{object: object{name, typ, pos}}
 }
 
 // NewField returns a struct or variant field.
 func NewField(pos token.Pos, name string, typ Type) *Var {
-	return &Var{object{name, typ, pos}, true}
+	return &Var{object: object{name, typ, pos}, field: true}
 }
 
 // NewConst returns a named constant with the given literal text.

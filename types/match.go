@@ -48,7 +48,9 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	for _, arm := range e.Arms {
 		c.openScope()
 		c.bindsOwned = false
+		c.copies = !isBorrow(x.typ) // a borrow variable binds borrows; a place reached through one copies what is Copy
 		p := c.pattern(arm.Pat, scrutinee, b)
+		c.bindThrough(arm.Pat, e.X, b)
 		if c.bindsOwned && !consumed && x.mode == variable {
 			c.moveBefore(e.X, &f) // a part bound by value leaves the place, on every arm
 			consumed = true
@@ -159,6 +161,10 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 	if b == nil && !IsCopy(t) {
 		c.bindsOwned = true
+	}
+
+	if c.copies && IsCopy(t) {
+		b = nil // a Copy value reached through a borrow is read, not lent
 	}
 
 	c.declare(c.scope, p.Name, NewVar(p.Name.Pos(), p.Name.Name, wrap(t, b)))

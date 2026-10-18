@@ -91,36 +91,39 @@ func builtinMethod(recv Type, name string) *Signature {
 			return stringMethod(name)
 		}
 	case *Option:
-		return optionMethod(t.elem, name)
+		return optionMethod(recv, t.elem, name)
 	case *Result:
-		return resultMethod(t.val, name)
+		return resultMethod(recv, t.val, name)
 	}
 
 	return nil
 }
 
+// Each predeclared method says what it does to its receiver, as a
+// declared method's receiver does: reads lends it, changes borrows it
+// mut, and takes consumes it, as Expect does the option it opens.
 func sliceMethod(t *Slice, name string) *Signature {
 	elem := t.elem
 	switch name {
 	case "Push":
-		return method([]*Var{param("v", elem)}, Unit)
+		return changes([]*Var{param("v", elem)}, Unit)
 	case "Pop":
-		return method(nil, NewOption(elem))
+		return changes(nil, NewOption(elem))
 	case "Insert":
-		return method([]*Var{param("i", Typ[Int]), param("v", elem)}, Unit)
+		return changes([]*Var{param("i", Typ[Int]), param("v", elem)}, Unit)
 	case "Remove":
-		return method([]*Var{param("i", Typ[Int])}, elem)
+		return changes([]*Var{param("i", Typ[Int])}, elem)
 	case "RemoveValue":
-		return method([]*Var{param("v", ref(elem))}, Typ[Bool])
+		return changes([]*Var{param("v", ref(elem))}, Typ[Bool])
 	case "Contains":
-		return method([]*Var{param("v", ref(elem))}, Typ[Bool])
+		return reads([]*Var{param("v", ref(elem))}, Typ[Bool])
 	case "Clear", "Reverse", "Sort":
-		return method(nil, Unit)
+		return changes(nil, Unit)
 	case "SortBy":
 		less := NewSignature(nil, []*Var{param("a", ref(elem)), param("b", ref(elem))}, Typ[Bool])
-		return method([]*Var{param("less", less)}, Unit)
+		return changes([]*Var{param("less", less)}, Unit)
 	case "Clone":
-		return method(nil, t)
+		return reads(nil, t)
 	}
 
 	return nil
@@ -129,17 +132,17 @@ func sliceMethod(t *Slice, name string) *Signature {
 func mapMethod(t *Map, name string) *Signature {
 	switch name {
 	case "Get":
-		return method([]*Var{param("k", ref(t.key))}, NewOption(ref(t.value)))
+		return reads([]*Var{param("k", ref(t.key))}, NewOption(ref(t.value)))
 	case "GetMut":
-		return method([]*Var{param("k", ref(t.key))}, NewOption(NewRef(t.value, true)))
+		return changes([]*Var{param("k", ref(t.key))}, NewOption(NewRef(t.value, true)))
 	case "Insert":
-		return method([]*Var{param("k", t.key), param("v", t.value)}, Unit)
+		return changes([]*Var{param("k", t.key), param("v", t.value)}, Unit)
 	case "Remove":
-		return method([]*Var{param("k", ref(t.key))}, NewOption(t.value))
+		return changes([]*Var{param("k", ref(t.key))}, NewOption(t.value))
 	case "Contains":
-		return method([]*Var{param("k", ref(t.key))}, Typ[Bool])
+		return reads([]*Var{param("k", ref(t.key))}, Typ[Bool])
 	case "Clone":
-		return method(nil, t)
+		return reads(nil, t)
 	}
 
 	return nil
@@ -153,49 +156,49 @@ func stringMethod(name string) *Signature {
 	s := Typ[String]
 	switch name {
 	case "Len":
-		return method(nil, Typ[Int])
+		return reads(nil, Typ[Int])
 	case "Clone", "ToUpper", "ToLower":
-		return method(nil, s)
+		return reads(nil, s)
 	case "Fields":
-		return method(nil, NewSlice(ref(s)))
+		return reads(nil, NewSlice(ref(s)))
 	case "Split":
-		return method([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
+		return reads([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
 	case "SplitOnce":
-		return method([]*Var{param("sep", ref(s))}, NewOption(NewTuple(ref(s), ref(s))))
+		return reads([]*Var{param("sep", ref(s))}, NewOption(NewTuple(ref(s), ref(s))))
 	case "Trim":
-		return method(nil, ref(s))
+		return reads(nil, ref(s))
 	case "HasPrefix", "HasSuffix", "Contains":
-		return method([]*Var{param("t", ref(s))}, Typ[Bool])
+		return reads([]*Var{param("t", ref(s))}, Typ[Bool])
 	}
 
 	return nil
 }
 
-func optionMethod(elem Type, name string) *Signature {
+func optionMethod(t, elem Type, name string) *Signature {
 	switch name {
 	case "Expect":
-		return method([]*Var{param("msg", ref(Typ[String]))}, elem)
+		return takes(t, []*Var{param("msg", ref(Typ[String]))}, elem)
 	case "Unwrap":
-		return method(nil, elem)
+		return takes(t, nil, elem)
 	case "UnwrapOr":
-		return method([]*Var{param("v", elem)}, elem)
+		return takes(t, []*Var{param("v", elem)}, elem)
 	case "IsSome", "IsNone":
-		return method(nil, Typ[Bool])
+		return reads(nil, Typ[Bool])
 	}
 
 	return nil
 }
 
-func resultMethod(val Type, name string) *Signature {
+func resultMethod(t, val Type, name string) *Signature {
 	switch name {
 	case "Expect":
-		return method([]*Var{param("msg", ref(Typ[String]))}, val)
+		return takes(t, []*Var{param("msg", ref(Typ[String]))}, val)
 	case "Unwrap":
-		return method(nil, val)
+		return takes(t, nil, val)
 	case "UnwrapOr":
-		return method([]*Var{param("v", val)}, val)
+		return takes(t, []*Var{param("v", val)}, val)
 	case "IsOk", "IsErr":
-		return method(nil, Typ[Bool])
+		return reads(nil, Typ[Bool])
 	}
 
 	return nil
@@ -209,8 +212,25 @@ func libMethod(name string, recv *Var, params []*Var, results Type) *Func {
 	return NewFunc(token.NoPos, name, NewSignature(recv, params, results))
 }
 
-func method(params []*Var, results Type) *Signature {
-	return NewSignature(nil, params, results)
+// The receivers of the methods that lend are shared: the checker reads
+// only whether the borrow is mut, and the emitter lowers these methods
+// by name. A method that takes its receiver names the type, which the
+// move pass needs.
+var (
+	refReceiver = param("", NewRef(Typ[Any], false))
+	mutReceiver = param("", NewRef(Typ[Any], true))
+)
+
+func reads(params []*Var, results Type) *Signature {
+	return NewSignature(refReceiver, params, results)
+}
+
+func changes(params []*Var, results Type) *Signature {
+	return NewSignature(mutReceiver, params, results)
+}
+
+func takes(recv Type, params []*Var, results Type) *Signature {
+	return NewSignature(param("", recv), params, results)
 }
 
 func variadic(params []*Var, results Type) *Signature {

@@ -155,6 +155,14 @@ var handledErrors = map[string]bool{
 	"move-out-of-slice.teak":   true,
 	"move-out-of-borrow.teak":  true,
 	"partial-move.teak":        true,
+	// Task 1.7: borrows.
+	"mut-while-ref.teak":            true,
+	"two-mut.teak":                  true,
+	"two-slots.teak":                true,
+	"assign-while-borrowed.teak":    true,
+	"move-while-borrowed.teak":      true,
+	"assign-through-ref.teak":       true,
+	"mut-through-ref-receiver.teak": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

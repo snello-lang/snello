@@ -26,7 +26,7 @@ root := Node{value: "root", parent: None, children: []NodeID{}}
 
 `None` has no type of its own; it takes the type the context asks for, a field, a parameter, a result, or the other side of a comparison. Written where nothing asks for a type, it is an error: `cannot tell the type of None here`. `Some(x)` takes the type of `x`, or the context's when it has one, so `Some(ref n.value)` is a `ref string?` where that is wanted.
 
-The methods on an optional are `Expect(msg)`, which yields the value or stops the program with the message, `Unwrap()`, `UnwrapOr(v)`, `IsSome()` and `IsNone()`:
+The methods on an optional are `Expect(msg)`, which yields the value or stops the program with the message, `Unwrap()`, `UnwrapOr(v)`, `IsSome()` and `IsNone()`. The first three take the optional, since they give its value away, so after `o.Expect("present")` the name `o` is gone unless its type is `Copy`; the two tests only read it:
 
 ```teak
 text := os.ReadToString("input.txt").Expect("read input")

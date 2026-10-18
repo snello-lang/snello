@@ -147,14 +147,16 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** `ref` and `mut` borrows as part of the same pass: creation at call sites and local bindings, liveness to last use within the function, exclusivity (any number of `ref` or one `mut`), the owner frozen while borrowed, reborrowing a chain (`cur = mut n.left`), and the two-mutable-paths rule for slices. One case for this pass to decide: a `match` with `mut` bindings on `m[k]` for a key the map does not hold writes a temporary, since reading a missing key yields the zero value and not an entry; the checker should reject a `mut` binding through a map read, or require `GetMut`.
 
 **Acceptance criteria:**
-- [ ] A `mut` borrow while a `ref` is live is an error naming both
-- [ ] `v.Push(v.Len())` is accepted: arguments are evaluated before the receiver is borrowed
-- [ ] The binary search tree's insert and get check without errors
-- [ ] The LRU's rejected form is rejected; the accepted form is accepted
+- [x] A `mut` borrow while a `ref` is live is an error naming both (2026-10-18: `cannot borrow xs as mut: xs is borrowed as ref by r at 15:5, used at 17:17`)
+- [x] `v.Push(v.Len())` is accepted: arguments are evaluated before the receiver is borrowed (2026-10-18, as `xs.Push(len(xs))` and `xs.Insert(xs.Pop() ?? 0, 2)`; a slice has no `Len` method)
+- [x] The binary search tree's insert and get check without errors (2026-10-18)
+- [x] The LRU's rejected form is rejected; the accepted form is accepted (2026-10-18, in its core shape: `two-slots` is rejected, and `TestBorrows` holds a map version of both forms, `e := m.GetMut(k).Expect(..)` kept across a second `GetMut` against the copy-out-first form)
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
-- [ ] The borrow-related negative programs fail with their messages
+- [x] Tests pass: `go test ./types/` (2026-10-18; `TestBorrows` covers the rules one by one)
+- [x] The borrow-related negative programs fail with their messages (2026-10-18: all seven)
+
+**Done:** 2026-10-18, inside the checker's walk beside the move pass. A borrow is held by the variable it is bound to and lives to that variable's last use; the check records each access that collides with a held borrow and decides it at the end of the function, when every last use is known. A use inside a loop that began after the borrow counts again on the next pass. The map case was decided: a `mut` binding through `m[k]` is refused with a message naming `m.GetMut(k)`. Two rules settled on the way: a pattern or `??` on a place reached through a borrow copies a `Copy` part and borrows the rest, while one on a borrow variable, or on `mut xs[0]` written out, binds borrows, which is how a `Copy` payload is changed in place; and `Expect`, `Unwrap` and `UnwrapOr` take the option or `Result` they open. Liveness is by source order, so a use in a sibling branch keeps a borrow live across a conflict in the other branch; no core program needs better, and task 1.10 can revisit it. The checker's allocations rose from about 1,840 to about 1,870 over the core programs.
 
 **Dependencies:** 1.6
 **Files:** `types/borrow.go`, `types/borrow_test.go`

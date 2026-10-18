@@ -1,6 +1,6 @@
 # 6. Borrows: `ref` and `mut`
 
-Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); the rules are checked from stage 1, tasks 1.7 and 1.8. The programs under `../../examples/core/errors/` show each rule being broken, and `examples/run/closures.teak` shows closures that keep them.
+Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); rules 1, 4 and 5 are checked (stage 1, task 1.7, `teak check`), and rules 2, 3 and 6, the ones about a borrow escaping, come with task 1.8. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.teak` shows closures that keep the rules.
 
 Moving is the right thing when the callee keeps the value. Most functions do not keep it; they look at it, or change it, and give it back. For those, a value is **borrowed**: lent to the callee for the length of the call, with the owner unchanged. A borrow is written `ref T` to read or `mut T` to change.
 
@@ -34,7 +34,7 @@ if !n.live { return }
 visit(n)
 ```
 
-Through a borrow, fields and methods are reached with a dot; no `*` is written. Replacing the whole value behind a `mut` is the one place `*` appears: `*cur = Some(&Node{...})`, and for a `mut int` named `n`, `*n += 1`. Writing `n = 5` or `n += 1` instead is an error, because assigning to a borrow variable rebinds it to another place, as in `cur = mut n.left`.
+Through a borrow, fields and methods are reached with a dot; no `*` is written. Replacing the whole value behind a `mut` is the one place `*` appears: `*cur = Some(&Node{...})`, and for a `mut int` named `n`, `*n += 1`. Writing `n = 5`, `n += 1` or `n++` instead is an error, because assigning to a borrow variable rebinds it to another place, as in `cur = mut n.left`.
 
 ## The rules
 
@@ -56,7 +56,9 @@ xs.Push(3)                            // ERROR "cannot borrow xs as mut: xs is b
 fmt.Println(r)
 ```
 
-Move the `Println` before the `Push`, or the `Push` before the `ref`, and it compiles: the borrow `r` ends at its last use. Arguments are evaluated before the receiver is borrowed, so `xs.Push(xs.Len())` is fine: the `ref` taken by `Len` is over before `Push` takes its `mut`. The same rule is why a slice cannot be grown while a borrow of an element is live, why a map cannot be changed while it is being ranged, and why an iterator cannot be invalidated: each of those is a write during a read, and the compiler rejects it.
+Move the `Println` before the `Push`, or the `Push` before the `ref`, and it compiles: the borrow `r` ends at its last use. The message names both ends, where `r` was created and the use that keeps it alive: `xs is borrowed as ref by r at 16:5, used at 18:17`. Arguments are evaluated before the receiver is borrowed, so `xs.Push(len(xs))` and `xs.Insert(xs.Pop() ?? 0, 2)` are fine: the borrow each argument takes is over before `Push` takes its `mut`. The same rule is why a slice cannot be grown while a borrow of an element is live, why a map cannot be changed while it is being ranged, and why an iterator cannot be invalidated: each of those is a write during a read, and the compiler rejects it.
+
+While a value is lent `mut`, the owner may not even read it: `a := mut n; fmt.Println(n); *a += 1` is `cannot use n: n is borrowed as mut by a`. A loop counts a use on its next pass, so a borrow created before a loop and used anywhere inside it is live for the whole loop: `used in the next pass of the loop at 12:9`.
 
 ## Walking a structure
 
@@ -89,6 +91,14 @@ b := mut xs[j]                        // ERROR "cannot borrow xs[j] as mut: xs i
 ```
 
 The idiom is to copy the needed values out first, then write. `Remove` in the core tree clones a child list before recursing for exactly this reason. Two `mut` borrows of different fields of one struct are fine; the fields are known to be distinct.
+
+## Matching through a borrow
+
+A `match`, an `if` binding and `??` bind what is inside the value they look at, and the binding keeps the borrow of the value. On a borrow variable the bindings are borrows of the same kind: through `s mut Slot`, `Full(p)` makes `p` a `mut Point`, and `p.Shift(1, 1)` changes the point in the slot. On a place reached through a borrow, `t.nodes[id].parent` inside a method on `t mut Tree`, a binding copies what `:=` would copy and borrows the rest: `if parent := t.nodes[id].parent` makes `parent` a plain `NodeID`, free to index `t.nodes` again, while `if n := t.nodes[id].next` makes `n` a `mut *Node` that keeps `t.nodes` lent. To change a `Copy` payload in place, write the borrow out, as a call does: `match mut xs[0] { Full(n) => *n += 1, Vacant => {} }`.
+
+A `mut` binding through a map read is refused, because `m[k]` for a key the map does not hold reads the zero value and a write to it would go nowhere: `cannot bind mut through m[k]: a key the map does not hold reads the zero value; use m.GetMut(k)`.
+
+`Expect`, `Unwrap` and `UnwrapOr` take the optional or `Result` they open, as `Close` takes a file, so `o.Expect("present")` moves `o` unless its type is `Copy`.
 
 ## Returning a borrow
 
@@ -138,13 +148,18 @@ It is returned only as a borrow is, tied to the receiver or to the only borrowed
 
 ## What the compiler reports
 
+Every message about a live borrow ends with where it began and the use that keeps it alive: `by r at 16:5, used at 18:17`, or `by the range loop at 20:5` for a collection a loop is ranging over.
+
 | Message | Program |
 |---|---|
 | `cannot borrow xs as mut: xs is borrowed as ref` | `mut-while-ref` |
 | `cannot borrow n as mut: n is already borrowed as mut` | `two-mut`, `two-slots` |
+| `cannot borrow n as ref: n is already borrowed as mut`, `cannot use n: n is borrowed as mut` | `TestBorrows` in `types/borrow_test.go` |
 | `cannot assign to s: s is borrowed`, `cannot move s: s is borrowed` | `assign-while-borrowed`, `move-while-borrowed` |
 | `cannot use xs (ref []int) as mut []int` | `ref-as-mut` |
-| `cannot assign to n.value through a ref borrow` | `assign-through-ref`, `mut-through-ref-receiver` |
+| `cannot assign to n.value through a ref borrow` | `assign-through-ref` |
+| `cannot borrow t.nodes as mut through a ref receiver` | `mut-through-ref-receiver` |
+| `cannot bind mut through m[k]: ... use m.GetMut(k)` | `TestBorrows` |
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
 | `cannot return a borrow of local s` | `return-local-borrow` |

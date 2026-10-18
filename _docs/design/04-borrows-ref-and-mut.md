@@ -56,6 +56,8 @@ At a call site `mut` is always written and `ref` may be left out: an owned value
 
 One ordering rule makes rule 4 practical. **In a call, the arguments are evaluated first, and their borrows end, before the receiver or a `mut` argument is borrowed.** So `v.Push(v.Len())` is legal: `v.Len()` borrows `v` as `ref`, returns, and the borrow is over before `Push` takes `v` as `mut`. What rule 4 rejects is a borrow that must still be live when the `mut` one starts, such as a `ref` bound to a local and used after the call. (Decided 2026-10-18.)
 
+Two more decisions came with the checker (2026-10-18). **What a pattern binds through a borrow.** A `match`, an `if` binding or `??` on a borrow variable binds borrows of the same kind, `Copy` or not: `Full(p)` through `s mut Slot` makes `p` a `mut Point`. On a place reached through a borrow, `t.nodes[id].parent` in a method on `t mut Tree`, a binding copies what `:=` would copy and borrows the rest, so `parent` is a plain `NodeID` and does not keep `t.nodes` lent; changing a `Copy` payload in place is written `match mut xs[0]`, as a mutation at a call site is written `mut`. This is the rule Rust applies to a place scrutinee, with the borrow of a non-`Copy` part where Rust would refuse to move. **A `mut` binding through a map read is refused**, with a message naming `m.GetMut(k)`, since `m[k]` for a key the map does not hold reads the zero value and a write to it would be lost.
+
 So Teak has lifetimes. It infers every one of them and rejects the programs where inference is ambiguous, instead of asking for an annotation. Rules 2 and 3 are what make inference always possible: a borrow never outlives the function it was created in, except by riding on one input borrow.
 
 ## What cannot be written

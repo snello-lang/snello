@@ -29,7 +29,7 @@ These names are predeclared: visible in every file without an import, and known 
 
 **Other basic types.** `bool`, `string`, `error`.
 
-**Option and result.** `T?` with `Some` and `None`; `Result<T, E>` with `Ok` and `Err`. Both are enums the compiler knows, because `?` and `??` and `match` exhaustiveness are language features over them. Their methods: `Expect`, `Unwrap`, `UnwrapOr`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Map`, `MapErr`.
+**Option and result.** `T?` with `Some` and `None`; `Result<T, E>` with `Ok` and `Err`. Both are enums the compiler knows, because `?` and `??` and `match` exhaustiveness are language features over them. Their methods: `Expect`, `Unwrap`, `UnwrapOr`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Map`, `MapErr`. The ones that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `Map` and `MapErr`, take their receiver; the tests lend it (decided with the borrow checker, 2026-10-18).
 
 **Functions.** `len`, `cap`, `make`, `take`, `panic`, `print`.
 

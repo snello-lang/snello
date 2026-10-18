@@ -263,7 +263,7 @@ func (p *Parser) parseOperand() ast.Expr {
 // expression when there is exactly one, a tuple otherwise, including
 // the empty tuple () that is the unit value in Ok(()).
 func (p *Parser) parseParenOrTuple() ast.Expr {
-	pos, list := p.parseParenExprs()
+	pos, list, _ := p.parseParenExprs()
 	if len(list) == 1 {
 		return &ast.ParenExpr{Lparen: pos, X: list[0]}
 	}
@@ -301,15 +301,15 @@ func (p *Parser) parseIndexOrSlice(x ast.Expr) ast.Expr {
 // parseCall parses "(" [ExprList] ")" after the function and any type
 // arguments already read.
 func (p *Parser) parseCall(fun ast.Expr, typeArgs []ast.Type) *ast.CallExpr {
-	pos, args := p.parseParenExprs()
-	return &ast.CallExpr{Fun: fun, TypeArgs: typeArgs, Lparen: pos, Args: args}
+	lparen, args, rparen := p.parseParenExprs()
+	return &ast.CallExpr{Fun: fun, TypeArgs: typeArgs, Lparen: lparen, Args: args, Rparen: rparen}
 }
 
-// parseParenExprs parses "(" [ExprList] ")" and returns the position
-// of the opening parenthesis with the list. Inside the parentheses the
+// parseParenExprs parses "(" [ExprList] ")" and returns the positions
+// of the parentheses with the list. Inside the parentheses the
 // expression level is raised, so a composite literal is allowed again
 // even within a control clause: if f(T{}) {.
-func (p *Parser) parseParenExprs() (token.Pos, []ast.Expr) {
+func (p *Parser) parseParenExprs() (token.Pos, []ast.Expr, token.Pos) {
 	pos := p.expect(token.LPAREN)
 	p.exprLev++
 
@@ -319,8 +319,7 @@ func (p *Parser) parseParenExprs() (token.Pos, []ast.Expr) {
 	}
 
 	p.exprLev--
-	p.expect(token.RPAREN)
-	return pos, list
+	return pos, list, p.expect(token.RPAREN)
 }
 
 // parseCompositeLit parses "{" [Element {"," Element}] "}" for a type

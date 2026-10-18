@@ -72,7 +72,7 @@ func TestPanics(t *testing.T) {
 	src := `package main
 import "fmt"
 enum Slot { Full(n int); Vacant }
-func bump(xs mut []Slot) { match xs[0] { Full(n) => *n += 1, Vacant => {} } }
+func bump(xs mut []Slot) { match mut xs[0] { Full(n) => *n += 1, Vacant => {} } }
 func main() {
 	xs := []Slot{Full(1)}
 	bump(mut xs)

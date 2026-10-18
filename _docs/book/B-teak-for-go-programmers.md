@@ -58,6 +58,8 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | `p.field` through a pointer; `*p = v` to replace | The same: `n.value` through a borrow; `*cur = v` to replace |
 | Append under a live pointer reallocates silently | `xs.Push(v)` while an element borrow is live is a compile error |
 | Modify a map during `range`: a runtime surprise | A compile error: a write during a read |
+| `if v, ok := m[k]; ok { v.n++ }` changes a copy, silently | A binding through a place copies what `:=` copies; to change it where it lies, write `match mut xs[0] { Full(n) => *n += 1 }` |
+| `v, ok := o.Get()` leaves `o` usable | `o.Expect(msg)` takes `o`: a value handed out is not kept |
 | Return a pointer to a local; the GC keeps it alive | `cannot return a borrow of local s`; return the value |
 | A closure capturing a local by reference, returned from `counter()` | Rejected; put the state in a struct with a method |
 | A struct holding a `*string` into a buffer | A struct holding `ref string` is itself a borrow: returned only like a borrow, never stored |

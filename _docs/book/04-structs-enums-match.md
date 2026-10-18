@@ -162,7 +162,7 @@ The block runs with `parent` bound when the optional holds a value. The left sid
 
 ## What a value costs
 
-A struct is its fields laid out in order, nothing more: no header, no hidden pointer. An enum is a small tag followed by room for the largest variant's payload, so `Shape` above is one tag and two `f64`, wherever it is stored. Building a variant writes the tag and the payload in place; it allocates nothing. `match` reads the tag and compares it to the arm's variant, in order, and binds names to the payload's fields where they lie; a `match` on a value reached through a borrow binds borrows of the fields, and copies nothing either.
+A struct is its fields laid out in order, nothing more: no header, no hidden pointer. An enum is a small tag followed by room for the largest variant's payload, so `Shape` above is one tag and two `f64`, wherever it is stored. Building a variant writes the tag and the payload in place; it allocates nothing. `match` reads the tag and compares it to the arm's variant, in order, and binds names to the payload's fields where they lie; a `match` on a borrow binds borrows of the fields, and copies nothing either, while one on a place reached through a borrow copies the fields a `:=` would copy and borrows the rest (chapter 6).
 
 An optional `T?` is a flag and room for a `T`, and `Result<T, E>` is a flag and room for whichever of `T` and `E` it holds. Only `&expr` allocates: it moves the value into a cell on the heap and gives back the owned pointer to it. A pointer is one machine word, so `*Node?` is a word and a flag, which is how a recursive type stays finite.
 

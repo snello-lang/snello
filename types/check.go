@@ -50,6 +50,16 @@ type Checker struct {
 	noUse      bool // evaluating an assignment target, which is not a use
 	inner      bool // evaluating the base of a selector, which the selector checks as a whole
 	bindsOwned bool // a pattern bound a non-Copy value by value
+	copies     bool // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
+
+	// The borrow pass (borrow.go): the borrows held by variables of the
+	// function being checked, the ones lent for the call or statement
+	// being checked, and the accesses that collided with one, decided
+	// at the end of the function.
+	borrows   []borrow
+	temps     []borrow
+	conflicts []conflict
+	depth     int // of expression nesting; a lent borrow ends with the full expression
 }
 
 // Check resolves every name in f, a file of one package, and returns

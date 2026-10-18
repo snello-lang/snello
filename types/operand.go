@@ -119,6 +119,10 @@ func assignable(op operand, t Type) bool {
 		}
 
 		if vr, ok := v.(*Ref); ok && (vr.mut || !r.mut) {
+			if Identical(vr.elem, r.elem) {
+				return true // a mut passed on as a ref
+			}
+
 			if p, ok := vr.elem.(*Pointer); ok && Identical(p.elem, r.elem) {
 				return true // ref *T as ref T
 			}

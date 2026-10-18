@@ -37,6 +37,8 @@ func (c *Checker) block(b *ast.BlockStmt) bool {
 // past it: a return, a call that never returns, or a compound statement
 // all of whose paths leave.
 func (c *Checker) stmt(s ast.Stmt) bool {
+	lent := len(c.temps)
+	defer func() { c.temps = c.temps[:lent] }() // what the statement lent is given back
 	switch s := s.(type) {
 	case *ast.BlockStmt:
 		return c.block(s)
@@ -49,8 +51,10 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		c.send(s)
 	case *ast.IncDecStmt:
 		x := c.expr(s.X, nil)
-		if x.mode != invalid && !hasInfo(valueType(x), IsNumeric) {
+		if x.mode != invalid && !hasInfo(x.typ, IsNumeric) { // a bare borrow is written through with (*x)++, as x = v rebinds it
 			c.errorf(s.TokPos, s.Tok.String()+" is not defined on "+x.typ.String())
+		} else if x.mode != invalid && c.writable(s.X, x) {
+			c.accessExpr(s.X, writeAccess, accessPos(s.X))
 		}
 	case *ast.AssignStmt:
 		c.assignStmt(s)
@@ -106,6 +110,10 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 			c.setType(c.scope.Lookup(name.Name), inferred(ops[i]))
 			c.maybeMove(ops[i], inferred(ops[i]))
 		}
+
+		if v, ok := c.scope.Lookup(name.Name).(*Var); ok {
+			c.hold(v, ops[i].expr, name.Pos())
+		}
 	}
 }
 
@@ -146,8 +154,23 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			return
 		}
 
+		if c.writable(s.Lhs[0], x) {
+			c.accessExpr(s.Lhs[0], writeAccess, accessPos(s.Lhs[0]))
+		}
+
 		c.fits(y, x.typ, s.Rhs[0].Pos(), "assignment") // an operator reads its right side; nothing moves
 	}
+}
+
+// writable reports whether the place x denotes may be written, and
+// reports why not: a value reached through a ref is read-only.
+func (c *Checker) writable(e ast.Expr, x operand) bool {
+	if x.mode != borrowed {
+		return true
+	}
+
+	c.errorf(e.Pos(), "cannot assign to "+exprText(e)+" through a ref "+c.throughWhat(e))
+	return false
 }
 
 func (c *Checker) define(s *ast.AssignStmt) {
@@ -172,18 +195,15 @@ func (c *Checker) define(s *ast.AssignStmt) {
 			continue // _ := x declares nothing
 		}
 
-		if old := c.scope.Lookup(ident.Name); old != nil {
-			c.recordUse(ident, old)
-			if v, ok := old.(*Var); ok && v.typ != nil {
-				c.assign(ops[i], v.typ, lhs.Pos(), "assignment")
-				c.revive(ident)
-			}
-
+		if c.scope.Lookup(ident.Name) != nil {
+			c.assignTo(ident, ops[i])
 			continue
 		}
 
 		c.maybeMove(ops[i], inferred(ops[i]))
-		c.declare(c.scope, ident, NewVar(ident.Pos(), ident.Name, inferred(ops[i])))
+		v := NewVar(ident.Pos(), ident.Name, inferred(ops[i]))
+		c.declare(c.scope, ident, v)
+		c.hold(v, ops[i].expr, ident.Pos())
 		declared = true
 	}
 
@@ -202,11 +222,14 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 			return
 		}
 
-		x := c.target(s.Lhs[0])
+		x, holder := c.target(s.Lhs[0])
 		y := c.expr(s.Rhs[0], hintOf(x))
 		if x.mode != invalid {
 			c.assign(y, x.typ, s.Rhs[0].Pos(), "assignment")
 			c.revive(s.Lhs[0])
+			if holder != nil {
+				c.hold(holder, s.Rhs[0], s.Lhs[0].Pos())
+			}
 		}
 
 		return
@@ -214,24 +237,40 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 
 	ops := c.values(len(s.Lhs), s.Rhs, nil, s.TokPos)
 	for i, lhs := range s.Lhs {
-		if isBlank(lhs) {
-			continue
-		}
-
-		if x := c.target(lhs); x.mode != invalid {
-			c.assign(ops[i], x.typ, lhs.Pos(), "assignment")
-			c.revive(lhs)
+		if !isBlank(lhs) {
+			c.assignTo(lhs, ops[i])
 		}
 	}
 }
 
+// assignTo checks an assignment of an already checked value to a
+// place: the value fits, the place is owned again, and a borrow
+// variable holds what the value lends.
+func (c *Checker) assignTo(lhs ast.Expr, op operand) {
+	x, holder := c.target(lhs)
+	if x.mode == invalid {
+		return
+	}
+
+	c.assign(op, x.typ, lhs.Pos(), "assignment")
+	c.revive(lhs)
+	if holder != nil {
+		c.hold(holder, op.expr, lhs.Pos())
+	}
+}
+
 // target checks the place an assignment writes, which is not a use of
-// the value there.
-func (c *Checker) target(e ast.Expr) operand {
+// the value there but an access to it, and returns the variable when
+// the place is a borrow variable: the assignment rebinds it.
+func (c *Checker) target(e ast.Expr) (operand, *Var) {
 	c.noUse = true
 	x := c.expr(e, nil)
 	c.noUse = false
-	return x
+	if x.mode == invalid || !c.writable(e, x) {
+		return x, nil
+	}
+
+	return x, c.accessExpr(e, writeAccess, accessPos(e))
 }
 
 func (c *Checker) send(s *ast.SendStmt) {
@@ -314,7 +353,10 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 	if x.mode != invalid {
 		inner, m := deref(x)
 		if o, ok := inner.Underlying().(*Option); ok {
-			c.pattern(s.Pat, o.elem, borrowOf(m))
+			b := borrowOf(m)
+			c.copies = !isBorrow(x.typ)
+			c.pattern(s.Pat, o.elem, b)
+			c.bindThrough(s.Pat, s.Value, b)
 		} else {
 			c.errorf(s.Value.Pos(), "if x := v binds an option; "+x.typ.String()+" is not one")
 			c.pattern(s.Pat, Typ[Invalid], nil)
@@ -382,8 +424,10 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 			c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
 		}
 
-		if _, isRef := x.typ.(*Ref); x.mode == variable && !isRef {
+		if x.mode == variable && !isBorrow(x.typ) {
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
+		} else if mut, lent := borrowIn(x.typ); lent || x.mode != value {
+			c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
 		}
 	}
 
@@ -398,6 +442,20 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 
 	c.block(s.Body)
 	c.leaveRegion()
+}
+
+// holdRange records the borrow a range loop holds of its collection
+// for the whole body: the loop reads or changes the elements in turn,
+// so nothing may change the collection under it.
+func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) {
+	src := borrowSource(s.X)
+	if src == nil {
+		return
+	}
+
+	if p, kind := through(c.placeOf(src)); kind != notPlace {
+		c.borrows = append(c.borrows, borrow{place: p, mut: mut, pos: s.For, until: s.Body.Rbrace})
+	}
 }
 
 // rangeTypes returns what the two range variables get for a value, or
@@ -463,7 +521,7 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 		return
 	}
 
-	x := c.target(e)
+	x, _ := c.target(e)
 	if x.mode != invalid {
 		c.assign(operand{value, t, nil, nil}, x.typ, e.Pos(), "range assignment")
 		c.revive(e)

@@ -13,7 +13,7 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | [3. Basics](03-basics.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [4. Structs, enums and match](04-structs-enums-match.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves checked (stage 1, task 1.6); drops from task 1.9 |
-| [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; compiled (stage 1, task 1.5); checked from stage 1, tasks 1.7 and 1.8 |
+| [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; compiled (stage 1, task 1.5); liveness, exclusivity and the frozen owner checked (stage 1, task 1.7); escaping borrows checked with task 1.8 |
 | [7. Owned pointers and recursive data](07-owned-pointers.md) | implemented, checked and compiled (stage 1, task 1.5); frees in task 1.9 |
 | [8. Option, Result, `?` and `??`](08-option-result.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [9. Collections: slices, maps and strings](09-collections.md) | implemented, checked and compiled (stage 1, task 1.5) |

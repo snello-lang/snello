@@ -14,7 +14,12 @@ import (
 // element, and an elided composite literal its type. It is a hint, not
 // a check; the caller decides whether the result fits.
 func (c *Checker) expr(e ast.Expr, expected Type) operand {
+	c.depth++
 	op := c.exprInternal(e, expected)
+	if c.depth--; c.depth == 0 {
+		c.temps = c.temps[:0] // what the full expression lent is given back
+	}
+
 	if op.typ == Typ[Invalid] {
 		return invalidOperand // reported where the type went wrong; never again
 	}
@@ -86,6 +91,10 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 	case *Var:
 		if obj.typ == nil {
 			return invalidOperand // declared with an error
+		}
+
+		if !c.noUse || c.inner {
+			obj.lastUse = e.Pos() // a borrow lives to here; assigning the whole variable ends it instead
 		}
 
 		c.checkUse(e)
@@ -176,22 +185,39 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
 			c.recordUse(e.Sel, fn)
-			c.checkUse(e.X)
-			if recv := fn.typ.(*Signature).recv; recv != nil && !isMut(x.typ) {
-				c.maybeMove(x, recv.typ) // a value receiver takes the receiver; a borrow variable is lent again
-			}
-
+			c.receiver(e, x, fn.typ.(*Signature))
 			return operand{value, fn.typ, fn, nil}
 		}
 	}
 
 	if sig := builtinMethod(base, e.Sel.Name); sig != nil {
-		c.checkUse(e.X)
+		c.receiver(e, x, sig)
 		return operand{value, sig, nil, nil}
 	}
 
 	c.errorf(e.Sel.Pos(), e.Sel.Name+" is not a field or method of "+x.typ.String())
 	return invalidOperand
+}
+
+// receiver checks the receiver of a method against what the method
+// asks of it: a value receiver takes it, so an owned receiver moves and
+// a borrow variable is lent again; a mut receiver needs a place that
+// can be changed, which a value reached through a ref is not. The
+// borrow the call creates is checked in call, after the arguments.
+func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
+	c.checkUse(e.X)
+	r, ok := sig.recv.typ.(*Ref)
+	if !ok {
+		if !isMut(x.typ) {
+			c.maybeMove(x, sig.recv.typ)
+		}
+
+		return
+	}
+
+	if r.mut && x.mode == borrowed {
+		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+	}
 }
 
 func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
@@ -215,7 +241,10 @@ func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
 }
 
 func (c *Checker) index(e *ast.IndexExpr) operand {
+	wasInner := c.inner
+	c.inner = isPlaceChain(e.X) // the whole index is the use, checked below
 	x := c.expr(e.X, nil)
+	c.inner = wasInner
 	if x.mode == invalid {
 		return invalidOperand
 	}
@@ -224,16 +253,20 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		c.intIndex(e.Index)
+		c.checkUse(e)
 		return operand{m, t.elem, nil, nil}
 	case *Array:
 		c.intIndex(e.Index)
+		c.checkUse(e)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
 		c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		c.checkUse(e)
 		return operand{m, t.value, nil, nil}
 	case *Basic:
 		if t.kind == String {
 			c.intIndex(e.Index)
+			c.checkUse(e)
 			return operand{value, aliases[0], nil, nil} // a byte, by that name
 		}
 	}
@@ -289,11 +322,17 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			return invalidOperand
 		}
 
+		if e.Op == token.MUT && x.mode == borrowed {
+			c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+			return invalidOperand
+		}
+
 		t := x.typ
 		if r, ok := t.(*Ref); ok {
 			t = r.elem // a borrow of a borrow is a borrow of the value
 		}
 
+		c.lend(e.X, e.Op == token.MUT, e.X.Pos())
 		return operand{value, NewRef(t, e.Op == token.MUT), nil, nil}
 	case token.AND:
 		var hint Type
@@ -437,7 +476,7 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr, expected Type) operand {
 	inner, m := x.typ, x.mode
 	through := borrowOf(m) // a place reached through a borrow
 	if r, ok := inner.(*Ref); ok {
-		through = r
+		through = r // a borrow variable
 		inner = r.elem
 	}
 
@@ -453,9 +492,14 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr, expected Type) operand {
 		return invalidOperand
 	}
 
-	if through != nil {
+	if through != nil && !isBorrow(x.typ) && IsCopy(result) {
+		m = value // a Copy value reached through a borrow is read, not lent
+	} else if through != nil {
 		result = NewRef(result, through.mut)
 		m = value
+		if through.mut {
+			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
+		}
 	} else if m == variable && !IsCopy(result) {
 		c.move(e.X) // the value inside leaves the place
 	}
@@ -499,7 +543,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
-	if _, isRef := x.typ.(*Ref); x.mode == variable && !isRef && !IsCopy(xt) {
+	if x.mode == variable && !isBorrow(x.typ) && !IsCopy(xt) {
 		c.move(e.X) // the value inside leaves the place
 	}
 

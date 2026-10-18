@@ -14,6 +14,13 @@ import (
 // call checks a conversion, a built-in, a variant constructor, or a
 // call of a function or method value.
 func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
+	lent := len(c.temps)
+	op := c.callInner(e, expected)
+	c.temps = c.temps[:lent] // the call returned; what it lent is given back
+	return op
+}
+
+func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	for _, t := range e.TypeArgs {
 		c.typ(t)
 		c.errorf(e.Lparen, "explicit type arguments are not part of core Teak")
@@ -50,6 +57,12 @@ func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
 	}
 
 	c.args(e, sig)
+	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
+		if r, ok := sig.recv.typ.(*Ref); ok {
+			c.lend(sel.X, r.mut, e.Rparen) // the receiver is borrowed last, after the arguments
+		}
+	}
+
 	return operand{value, sig.results, nil, nil}
 }
 
@@ -77,8 +90,14 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 
 		p := params[i]
 		op := c.expr(arg, paramHint(p.typ))
-		if c.fits(op, p.typ, arg.Pos(), "argument") && !isMut(op.typ) {
-			c.maybeMove(op, p.typ) // a borrow variable passed on is lent again, not moved
+		if !c.fits(op, p.typ, arg.Pos(), "argument") {
+			continue
+		}
+
+		if r, ok := p.typ.(*Ref); ok && op.mode != value {
+			c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
+		} else if !isMut(op.typ) {
+			c.maybeMove(op, p.typ)
 		}
 	}
 }

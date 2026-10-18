@@ -135,12 +135,20 @@ func through(p place, kind placeKind) (place, placeKind) {
 // holds: a whole variable may be given a new value, and so may a moved
 // field, but a field of a moved value may not.
 func (c *Checker) checkUse(e ast.Expr) {
-	if len(c.moved) == 0 || c.inner {
+	if c.inner || len(c.moved) == 0 && len(c.borrows) == 0 && len(c.temps) == 0 {
 		return
 	}
 
 	p, kind := c.placeOf(e)
-	if kind == notPlace || c.noUse && kind == placeOwned && p.path == "" {
+	if kind == notPlace {
+		return
+	}
+
+	if !c.noUse {
+		c.access(e, p, readAccess, e.Pos(), e.Pos()) // a read collides with a mut borrow
+	}
+
+	if len(c.moved) == 0 || c.noUse && kind == placeOwned && p.path == "" {
 		return
 	}
 
@@ -210,6 +218,11 @@ func isMut(t Type) bool {
 	return ok && r.mut
 }
 
+func isBorrow(t Type) bool {
+	_, ok := t.(*Ref)
+	return ok
+}
+
 // move records that the place e denotes is moved, or reports why it
 // cannot be: nothing moves out through a borrow, and an element is lent
 // by its index, never moved.
@@ -217,6 +230,7 @@ func (c *Checker) move(e ast.Expr) {
 	p, kind := c.placeOf(e)
 	switch kind {
 	case placeOwned:
+		c.access(e, p, moveAccess, e.Pos(), e.Pos())
 		c.moved = append(c.moved, move{p, e.Pos()})
 	case placeBorrowed:
 		c.errorf(e.Pos(), "cannot move "+p.text()+" out of a borrow")
