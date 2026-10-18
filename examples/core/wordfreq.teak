@@ -1,0 +1,42 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Core 7: word frequency count over a file.
+//
+// The core version of 10-wordfreq.teak using only the predeclared string
+// and slice methods. Stresses: an owned string versus borrows of its
+// pieces, a map with owned keys, consuming a map into a slice, and
+// sorting in place through a mut borrow.
+
+package wordfreq
+
+import ("fmt"; "os")
+
+struct Count { word string; n int }
+
+func main() {
+    text := os.ReadToString("input.txt").Expect("read input")
+
+    counts := map[string]int{}
+    // Fields yields borrows into `text`. A map needs owned keys, and
+    // ToLower returns a new owned string, so each word is copied exactly
+    // once.
+    for w := range text.Fields() {
+        counts[w.ToLower()] += 1
+    }
+
+    // Consume the map into a slice: ranging over an owned map by value
+    // moves each key and value out.
+    list := []Count{}
+    for k, v := range counts {
+        list.Push(Count{word: k, n: v})
+    }
+    list.SortBy(func(a ref Count, b ref Count) bool {
+        return a.n > b.n || (a.n == b.n && a.word < b.word)
+    })
+
+    for _, c := range list {
+        fmt.Println(c.n, c.word)
+    }
+}

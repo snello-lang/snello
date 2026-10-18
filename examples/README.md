@@ -40,3 +40,7 @@ Writing the programs surfaced seven questions. All are now decided and recorded 
 | The `??` operator | Kept; the else may `return`, `break`, or `continue` | 06, 09, 20 |
 
 The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there is no `Box<T>` (05, 06, 20).
+
+## The core set
+
+`core/` holds eight of these programs rewritten in core Teak, without traits or user generics, as the acceptance suite for stage 1. See `core/README.md`.

@@ -28,12 +28,12 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** Write the stage's acceptance suite before the checker: versions of the examples that use only core Teak, and a set of programs the checker must reject, each with the expected message on the offending line in a `// ERROR "..."` comment, as the Go compiler's errorcheck tests do.
 
 **Acceptance criteria:**
-- [ ] At least eight positive programs under `examples/core/`, covering the tree, the linked list, the state machine, file copying, the parser and the binary search tree without generics
+- [x] At least eight positive programs under `examples/core/`, covering the tree, the linked list, the state machine, file copying, the parser and the binary search tree without generics (2026-10-18: tree, list, state, files, calc, bst, wordfreq, config)
 - [ ] At least twenty negative programs under `examples/core/errors/`: use after move, move in a loop, two `mut` borrows, borrow stored in a struct, borrow returned from two inputs, borrow across `spawn`, `nil` used, missing match arm, and so on
 - [ ] Each negative program has exactly one `// ERROR` line
 
 **Verification:**
-- [ ] All positive programs parse: `go run ./cmd/teak parse`
+- [x] All positive programs parse: `go run ./cmd/teak parse` (2026-10-18; the parser's example test now covers them)
 - [ ] Reviewed against `../design/04-borrows-ref-and-mut.md`: every rule has at least one negative program
 
 **Dependencies:** 1.0

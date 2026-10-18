@@ -1,0 +1,86 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Core 1: a tree with parent links, as a hand-rolled arena.
+//
+// The core version of 01-tree/tree-slice.teak. One slice owns every node
+// and nodes link by index, so no node has two owners. Stresses: `ref`
+// and `mut` receivers, a borrow of one element (`ref t.nodes[i]`), a
+// closure taking a borrow, cloning out of a borrow before mutating.
+
+package tree
+
+import "fmt"
+
+type NodeID int
+
+struct Node {
+    value    string
+    parent   NodeID?               // None for the root
+    children []NodeID
+    live     bool                  // false after Remove; the slot is kept
+}
+
+struct Tree {
+    nodes []Node                   // owns every node
+}
+
+func NewTree(value string) Tree {
+    return Tree{nodes: []Node{{value: value, parent: None, children: []NodeID{}, live: true}}}
+}
+
+func (t mut Tree) AddChild(parent NodeID, value string) NodeID {
+    id := NodeID(len(t.nodes))
+    t.nodes.Push(Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})
+    t.nodes[parent].children.Push(id)
+    return id
+}
+
+// Remove marks a subtree dead. The slots stay allocated: reusing them
+// would let an old NodeID silently point at a new node.
+func (t mut Tree) Remove(id NodeID) {
+    if !t.nodes[id].live { return }
+    t.nodes[id].live = false
+    children := t.nodes[id].children.Clone()      // copy out: cannot borrow t.nodes[id] while mutating others
+    for _, child := range children { t.Remove(child) }
+    if parent := t.nodes[id].parent {
+        t.nodes[parent].children.RemoveValue(id)
+    }
+    t.nodes[id].value = ""                         // drop the payload now, not at tree drop
+    t.nodes[id].children = []NodeID{}
+}
+
+func (t ref Tree) Path(id NodeID) []string {
+    path := []string{}
+    cur := Some(id)
+    for cur != None {
+        n := ref t.nodes[cur?]                     // n borrows one node; ends at its last use below
+        if !n.live { break }
+        path.Push(n.value.Clone())                 // the path owns copies
+        cur = n.parent
+    }
+    path.Reverse()
+    return path
+}
+
+func (t ref Tree) Walk(id NodeID, visit func(ref Node)) {
+    n := ref t.nodes[id]
+    if !n.live { return }
+    visit(n)
+    for _, child := range n.children { t.Walk(child, visit) }
+}
+
+func main() {
+    t := NewTree("root")
+    a := t.AddChild(0, "a")
+    b := t.AddChild(a, "b")
+    fmt.Println(t.Path(b))             // [root a b]
+
+    count := 0
+    t.Walk(0, func(n ref Node) { count += 1 })
+    fmt.Println(count)                 // 3
+
+    t.Remove(a)
+    fmt.Println(t.Path(b))             // []: b is dead and Path says so
+}
