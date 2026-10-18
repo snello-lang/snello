@@ -26,7 +26,7 @@ The programs call only these library names. Stage 1 maps each onto a C runtime f
 
 ## Expected output
 
-Every `main` says in its comments what it prints. When a program builds, that text becomes a `.out` file beside it, and `go test ./emit/c/` builds the program and compares its output with the file; `calc.out`, `list.out` and `bst.out` are the first (2026-10-18). Task 1.9 checks that every `Drop` line appears exactly once.
+Every `main` says in its comments what it prints. When a program builds, that text becomes a `.out` file beside it, and `go test ./emit/c/` builds the program and compares its output with the file; `calc`, `list`, `bst`, `config`, `tree` and `wordfreq` have theirs (2026-10-18); `state` and `files` wait for task 1.9. A program that reads files, such as `config.teak` reading `app.conf`, has them in a folder named after it with the suffix `.files`, which the test copies into the directory the binary runs in. Task 1.9 checks that every `Drop` line appears exactly once.
 
 ## Negative programs
 

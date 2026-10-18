@@ -19,6 +19,10 @@ import (
 // C, such as a print, writes its statements and returns an empty
 // string.
 func (e *Emitter) expr(x ast.Expr) string {
+	if v, ok := e.pre[x]; ok {
+		return v // evaluated at a defer statement
+	}
+
 	switch x := x.(type) {
 	case *ast.Ident:
 		return e.ident(x)
@@ -43,7 +47,7 @@ func (e *Emitter) expr(x ast.Expr) string {
 	case *ast.CompositeLit:
 		return e.compositeLit(x)
 	case *ast.FuncLit:
-		e.unsupported(x.Pos(), "closures")
+		return e.funcLit(x)
 	case *ast.CoalesceExpr:
 		return e.coalesce(x)
 	case *ast.TryExpr:
@@ -112,14 +116,25 @@ func (e *Emitter) ident(x *ast.Ident) string {
 			return obj.Name() // true, false: C has them with stdbool.h
 		}
 	case *types.Func:
-		if obj.Name() == "main" {
-			return "tk_main"
+		return e.funcValue(obj, x.Pos()) // a function named outside a call is a value
+	case *types.Var:
+		if s, ok := e.captured[obj]; ok {
+			return s
 		}
 	case *types.Variant:
 		return e.variantValue(e.info.Types[x], obj, nil, x.Pos())
 	}
 
 	return ident(x.Name)
+}
+
+// funcName writes the C name of a declared function.
+func funcName(fn *types.Func) string {
+	if fn.Name() == "main" {
+		return "tk_main"
+	}
+
+	return ident(fn.Name())
 }
 
 // variantValue writes a value of an enum, option or Result type built
@@ -162,6 +177,13 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 // through calls.
 func (e *Emitter) selector(x *ast.SelectorExpr) string {
 	if pkg := e.packageOf(x.X); pkg != nil {
+		switch pkg.Path() + "." + x.Sel.Name {
+		case "os.Args":
+			return "(*(" + e.cType(e.info.Types[x], x.Pos()) + " *)&tk_args)"
+		case "os.Stdin", "os.Stdout", "os.Stderr":
+			return "tk_" + strings.ToLower(x.Sel.Name)
+		}
+
 		e.unsupported(x.Pos(), pkg.Name()+"."+x.Sel.Name)
 		return "0"
 	}
@@ -393,7 +415,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 		case *types.TypeName:
 			return "((" + e.cType(obj.Type(), x.Pos()) + ")(" + e.expr(x.Args[0]) + "))"
 		case *types.Func:
-			return e.ident(id) + "(" + e.args(nil, x.Args, obj.Type().(*types.Signature)) + ")"
+			return funcName(obj) + "(" + e.args(nil, x.Args, obj.Type().(*types.Signature)) + ")"
 		case *types.Variant:
 			return e.variantValue(e.info.Types[x], obj, e.operands(x.Args, e.variantFields(e.info.Types[x], obj)), x.Pos())
 		}
@@ -401,7 +423,11 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 
 	sel, ok := x.Fun.(*ast.SelectorExpr)
 	if !ok {
-		e.unsupported(x.Pos(), "calling a value")
+		if sig, ok := valueType(e.info.Types[x.Fun]).(*types.Signature); ok {
+			return e.callValue(x, sig)
+		}
+
+		e.unsupported(x.Pos(), "calling a value of type "+e.info.Types[x.Fun].String())
 		return "0"
 	}
 
@@ -411,10 +437,18 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 
 	fn, ok := e.info.Uses[sel.Sel].(*types.Func)
 	if !ok {
+		if sig, ok := valueType(e.info.Types[x.Fun]).(*types.Signature); ok && e.info.Uses[sel.Sel] != nil {
+			return e.callValue(x, sig) // a field holding a function value
+		}
+
 		return e.methodCall(x, sel)
 	}
 
 	sig := fn.Type().(*types.Signature)
+	if fn.Pos() == token.NoPos { // a method of the library's os.File
+		return e.libraryMethod(x, sel.Sel.Name, e.args(sel.X, x.Args, sig))
+	}
+
 	return methodName(sig.Recv().Type(), sel.Sel.Name) + "(" + e.args(sel.X, x.Args, sig) + ")"
 }
 
@@ -495,133 +529,4 @@ func (e *Emitter) packageOf(x ast.Expr) *types.PkgName {
 	}
 
 	return nil
-}
-
-// libraryCall lowers the stage 1 library: fmt's printing becomes
-// runtime calls chosen by each argument's type, and the format of
-// Printf and Sprintf is read here, so the runtime has no formatter.
-func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) string {
-	switch pkg.Path() + "." + name {
-	case "fmt.Println":
-		parts := e.evaluated(x.Args)
-		for i, a := range x.Args {
-			if i > 0 {
-				e.line("tk_print_sep();")
-			}
-
-			e.line("tk_print_string(" + e.text(parts[i], a) + ");")
-		}
-
-		e.line("tk_print_nl();")
-		return ""
-	case "fmt.Sprint":
-		return e.sprint(x.Args)
-	case "fmt.Sprintf":
-		return e.sprintf(x)
-	case "fmt.Printf":
-		e.line("tk_print_string(" + e.sprintf(x) + ");")
-		return ""
-	case "os.Exit":
-		return "tk_exit((int)(" + e.expr(x.Args[0]) + "))"
-	}
-
-	e.unsupported(x.Pos(), pkg.Name()+"."+name)
-	return "0"
-}
-
-// toString writes the runtime call that turns a value into a string.
-func (e *Emitter) toString(a ast.Expr) string {
-	return e.text(e.expr(a), a)
-}
-
-// text writes the conversion of v, the C text of a, to a tk_string.
-func (e *Emitter) text(v string, a ast.Expr) string {
-	return e.toText(v, e.info.Types[a], a.Pos(), false)
-}
-
-// sprint joins the arguments as Sprint does: a space between two
-// operands when neither is a string.
-func (e *Emitter) sprint(args []ast.Expr) string {
-	parts := e.operands(args, nil)
-	out := ""
-	for i, a := range args {
-		if i > 0 && !isString(valueType(e.info.Types[a])) && !isString(valueType(e.info.Types[args[i-1]])) {
-			out = concat(out, literal(" "))
-		}
-
-		out = concat(out, e.text(parts[i], a))
-	}
-
-	if out == "" {
-		return literal("")
-	}
-
-	return out
-}
-
-// sprintf reads the format at compile time and writes the
-// concatenation it stands for. Verbs: %d, %s, %v, %q, %%.
-func (e *Emitter) sprintf(x *ast.CallExpr) string {
-	lit, ok := x.Args[0].(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		e.unsupported(x.Args[0].Pos(), "a format that is not a literal")
-		return literal("")
-	}
-
-	format, _ := strconv.Unquote(lit.Value)
-	args := x.Args[1:]
-	parts := e.operands(args, nil)
-	out, text := "", ""
-	flush := func() {
-		if text != "" {
-			out = concat(out, literal(text))
-			text = ""
-		}
-	}
-
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' || i+1 >= len(format) {
-			text += string(format[i])
-			continue
-		}
-
-		i++
-		verb := format[i]
-		if verb == '%' {
-			text += "%"
-			continue
-		}
-
-		if len(args) == 0 {
-			e.unsupported(lit.Pos(), "a format with more verbs than arguments")
-			return literal("")
-		}
-
-		flush()
-		a, v := args[0], parts[0]
-		args, parts = args[1:], parts[1:]
-		switch verb {
-		case 'd', 's', 'v':
-			out = concat(out, e.text(v, a))
-		case 'q':
-			out = concat(out, "tk_quote("+e.text(v, a)+")")
-		default:
-			e.unsupported(lit.Pos(), "the format verb %"+string(verb))
-		}
-	}
-
-	flush()
-	if out == "" {
-		return literal("")
-	}
-
-	return out
-}
-
-func concat(a, b string) string {
-	if a == "" {
-		return b
-	}
-
-	return "tk_concat(" + a + ", " + b + ")"
 }

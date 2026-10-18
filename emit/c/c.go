@@ -47,19 +47,32 @@ func Runtime() (header, source []byte) {
 // declarations, type definitions, prototypes and helper functions go
 // into sections of their own, written out before the function bodies.
 type Emitter struct {
-	info    *types.Info
-	file    *token.File
-	decls   bytes.Buffer // forward declarations of struct types
-	types   bytes.Buffer // type definitions, each after the ones it holds by value
-	protos  bytes.Buffer // function prototypes
-	helpers bytes.Buffer // generated functions, such as the printers of composite types
-	body    bytes.Buffer // function definitions
-	tmp     int
-	used    map[types.Object]bool
-	state   map[string]int  // of each C type and helper name: undeclared, declared, defining, defined
-	seen    map[string]bool // the unsupported constructs reported so far
-	result  types.Type      // the result type of the function being emitted
-	errors  []string
+	info     *types.Info
+	file     *token.File
+	decls    bytes.Buffer // forward declarations of struct types
+	types    bytes.Buffer // type definitions, each after the ones it holds by value
+	protos   bytes.Buffer // function prototypes
+	helpers  bytes.Buffer // generated functions, such as the printers of composite types
+	body     bytes.Buffer // function definitions
+	tmp      int
+	used     map[types.Object]bool
+	state    map[string]int        // of each C type and helper name: undeclared, declared, defining, defined
+	seen     map[string]bool       // the unsupported constructs reported so far
+	result   types.Type            // the result type of the function being emitted
+	loops    []string              // the loops open at this point: the label continue jumps to, or empty for C's continue
+	captured map[*types.Var]string // inside a closure: how each captured variable is reached
+	closures int                   // closures written so far, numbering their functions
+	prologue []string              // declarations to put at the top of the function being written
+	pre      map[ast.Expr]string   // expressions already evaluated into temporaries, for defer
+	defers   []deferred            // the deferred calls of the function being written, in order
+	errors   []string
+}
+
+// A deferred call is a flag that says the defer statement ran and the
+// lines that make the call.
+type deferred struct {
+	flag string
+	code string
 }
 
 // cReserved holds the identifiers an emitted program must not reuse:
@@ -87,6 +100,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 		used:  make(map[types.Object]bool, len(info.Uses)),
 		state: make(map[string]int),
 		seen:  make(map[string]bool),
+		pre:   make(map[ast.Expr]string),
 	}
 	for _, obj := range info.Uses {
 		e.used[obj] = true
@@ -120,7 +134,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(void) {\n\ttk_main();\n\treturn 0;\n}\n")
+	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n\ttk_main();\n\treturn 0;\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -185,18 +199,44 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	head := "static TK_UNUSED " + e.resultType(sig, d.Pos()) + " " + name + "(" + e.params(params, d.Pos()) + ")"
 	e.protos.WriteString(head + ";\n")
 	e.line(head + " {")
-	for _, p := range params {
+	e.function(sig, d.Body)
+	e.line("")
+}
+
+// function writes the body of a function or closure whose head was
+// just written: a (void) for each parameter nothing refers to, since
+// the C compiler is asked to treat an unused one as an error, the
+// statements, the deferred calls of a body that falls off its end, and
+// the declarations the body asked for at the top. The caller's own
+// state is kept.
+func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
+	outerResult, outerLoops, outerPrologue, outerDefers := e.result, e.loops, e.prologue, e.defers
+	e.result, e.loops, e.prologue, e.defers = sig.Results(), nil, nil, nil
+	start := e.body.Len()
+	for _, p := range sig.Params() {
 		if p.Name() != "" && !e.used[p] {
 			e.line("(void)" + ident(p.Name()) + ";")
 		}
 	}
 
-	outer := e.result
-	e.result = sig.Results()
-	e.stmts(d.Body.List)
-	e.result = outer
+	if recv := sig.Recv(); recv != nil && !e.used[recv] {
+		e.line("(void)" + ident(recv.Name()) + ";")
+	}
+
+	e.stmts(body.List)
+	if sig.Results() == types.Unit {
+		e.runDefers()
+	}
+
 	e.line("}")
-	e.line("")
+	if len(e.prologue) > 0 {
+		rest := append([]byte(nil), e.body.Bytes()[start:]...)
+		e.body.Truncate(start)
+		e.body.WriteString(strings.Join(e.prologue, "\n") + "\n")
+		e.body.Write(rest)
+	}
+
+	e.result, e.loops, e.prologue, e.defers = outerResult, outerLoops, outerPrologue, outerDefers
 }
 
 // methodName is the C name of a method: the receiver's type and the
@@ -234,8 +274,8 @@ func basicType(t *types.Basic) string {
 	switch t.Kind() {
 	case types.Bool:
 		return "bool"
-	case types.String:
-		return "tk_string"
+	case types.String, types.Error:
+		return "tk_string" // an error is its message in stage 1
 	case types.Int8:
 		return "int8_t"
 	case types.Int16:

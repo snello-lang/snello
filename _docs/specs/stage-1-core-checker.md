@@ -105,11 +105,13 @@ The predeclared names, number types and the library packages are defined in `../
 - [x] Structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings; `teak emit FILE` (2026-10-18; `calc.teak` builds. Two checker clarifications came with it: `*v += 1` for a bare `mut` borrow of a number, and an owned pointer lent as a `ref` of what it holds)
 - [x] Slices, string methods, option and result methods, `take`, equality of composite values (2026-10-18; `list.teak` and `bst.teak` build. Printing quotes a string inside `Some`, `Ok`, `Err` and a variant and prints an empty struct as its name, until the library in Teak decides in task 2.6)
 - [x] Maps (2026-10-18; an insertion-ordered hash map in the runtime with a generated hash and equality per key type; `config.teak` still waits for `os.ReadToString` in the last slice)
-- [ ] Closures, `defer`, and the `os` and `io` functions (`tree.teak`, `wordfreq.teak`, `files.teak`)
+- [x] Closures, `defer`, and the `os` and `io` functions (2026-10-18; `config.teak`, `tree.teak` and `wordfreq.teak` build. A closure is lifted to a function with an environment of pointers to what it captures; `defer` saves its arguments at the statement and runs before every return; `error` is its message; a program's input files sit beside it in `name.files/`)
+
+**Done:** 2026-10-18, in five slices. All of core Teak but `Drop` compiles; `examples/run/` holds twelve programs that build and run, and five of the eight core programs have their `.out` file. `state.teak` and `files.teak` print or clean up from `Drop` and wait for task 1.9, which also decides what a clone of a slice of strings owns and frees what `&` allocated.
 
 **Acceptance criteria:**
 - [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
-- [ ] Every positive core program builds and runs with its expected output (calc, list and bst 2026-10-18; tree and wordfreq need closures, config needs maps, files needs `defer` and `os`; state and files also need the drops of task 1.9)
+- [ ] Every positive core program builds and runs with its expected output (calc, list, bst, config, tree and wordfreq 2026-10-18; state and files need the drops of task 1.9)
 - [x] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror` (2026-10-18; every build and every test uses these flags, plus `-fwrapv` and `-fno-strict-aliasing`)
 
 **Verification:**
@@ -140,7 +142,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.7: Borrows
 
-**Description:** `ref` and `mut` borrows as part of the same pass: creation at call sites and local bindings, liveness to last use within the function, exclusivity (any number of `ref` or one `mut`), the owner frozen while borrowed, reborrowing a chain (`cur = mut n.left`), and the two-mutable-paths rule for slices.
+**Description:** `ref` and `mut` borrows as part of the same pass: creation at call sites and local bindings, liveness to last use within the function, exclusivity (any number of `ref` or one `mut`), the owner frozen while borrowed, reborrowing a chain (`cur = mut n.left`), and the two-mutable-paths rule for slices. One case for this pass to decide: a `match` with `mut` bindings on `m[k]` for a key the map does not hold writes a temporary, since reading a missing key yields the zero value and not an entry; the checker should reject a `mut` binding through a map read, or require `GetMut`.
 
 **Acceptance criteria:**
 - [ ] A `mut` borrow while a `ref` is live is an error naming both

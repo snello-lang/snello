@@ -1,6 +1,6 @@
 # Appendix B. Teak for Go programmers
 
-Status: grows with the chapters; covers chapters 3 to 6 and 9.
+Status: grows with the chapters; covers chapters 3 to 9.
 
 The chapters describe Teak on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Teak is not a Go dialect, and Go programs are not Teak programs; the syntax is familiar so that the ideas get your full attention.
 
@@ -79,4 +79,15 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
 | `delete(m, k)` | `m.Remove(k)` returns the value as `V?` |
 | Map iteration order is random | Insertion order |
+
+## Chapter 7: Owned pointers
+
+| In Go | In Teak |
+|---|---|
+| `&x` takes the address of a variable; the GC keeps it alive | `&expr` moves the value to the heap; the pointer owns it and nothing else may point there |
+| `p := &Node{}`; copying `p` makes a second pointer to the same node | A pointer moves; there is one owner, so no two names reach one node |
+| `*p` to read through, `p.field` as a shortcut | `p.field` the same; `*p` only to read or replace the whole value |
+| `next *Node` is `nil` at the end of a list | `next *Node?` is `None` at the end; there is no `nil` |
+| `p == q` compares addresses | `p == q` compares what they hold |
+| A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
 

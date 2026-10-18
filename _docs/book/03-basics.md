@@ -1,6 +1,6 @@
 # 3. Basics
 
-Status: implemented. The syntax is parsed (stage 0), the types and names are checked (stage 1, task 1.4, `teak check`), and everything here except maps, closures, `switch`, `defer` and `spawn` compiles to native code (stage 1, task 1.5).
+Status: implemented. The syntax is parsed (stage 0), the types and names are checked (stage 1, task 1.4, `teak check`), and everything here except `switch` and `spawn` compiles to native code (stage 1, task 1.5).
 
 This chapter is the shape of a Teak program: files, names, values, functions and control flow. Everything later in the book is built from these parts.
 
@@ -123,7 +123,7 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 
 `if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
-`defer` runs a call when the enclosing function returns. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+`defer` runs a call when the enclosing function returns, after the return value is computed. The arguments are evaluated where the `defer` stands, and several deferred calls run last first. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
 
 ## Built-in functions
 

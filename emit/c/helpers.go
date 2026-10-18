@@ -120,9 +120,9 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) str
 
 	v = deref(v, t)
 	switch {
-	case b.Kind() == types.String && quoted:
+	case isString(b) && quoted:
 		return "tk_quote(" + v + ")"
-	case b.Kind() == types.String:
+	case isString(b):
 		return v
 	case b.Kind() == types.Bool:
 		return "tk_bool_to_string(" + v + ")"
@@ -145,7 +145,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) str
 func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) string {
 	t = valueType(t)
 	if basic, ok := t.Underlying().(*types.Basic); ok {
-		if basic.Kind() == types.String {
+		if isString(basic) {
 			return "tk_string_eq(" + a + ", " + b + ")"
 		}
 
@@ -253,7 +253,7 @@ func (e *Emitter) hash(v string, t types.Type, pos token.Pos) string {
 	switch u := valueType(t).Underlying().(type) {
 	case *types.Basic:
 		switch {
-		case u.Kind() == types.String:
+		case isString(u):
 			return "tk_hash_bytes(" + v + ".ptr, (size_t)" + v + ".len)"
 		case u.Info()&types.IsFloat != 0:
 			return "(" + v + " == 0 ? 0 : tk_hash_bytes(&" + v + ", sizeof " + v + "))" // 0.0 and -0.0 are equal, so they hash alike

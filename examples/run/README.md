@@ -17,12 +17,14 @@ The binary is written to the current directory, named after the file. `go test .
 | hello.teak | One `fmt.Println` |
 | fib.teak | Recursion, integer and float arithmetic, sized integers, conversions |
 | strings.teak | A `ref string` parameter, concatenation, comparison, byte indexing, `Sprintf`, `Printf`, `Sprint` |
-| control.teak | `if`/`else if`, the three forms of `for`, `continue` and `break`, a named number type, swap by parallel assignment |
+| control.teak | `if`/`else if`, the three forms of `for`, `continue` and `break`, a loop whose condition and step call functions, a named number type, swap by parallel assignment, `defer` |
 | corners.teak | What the lowering to C must get right: literal bases, wrapping overflow, trigraph-looking strings, float printing |
 | shapes.teak | Structs and enums: literals, `ref` and `mut` receivers, `match` with bindings, a guard and an or-pattern, a payload changed in place, printing of composite values |
 | options.teak | `Some`/`None`, `Ok`/`Err`, `?`, `??` with a value, a `panic` and a `return`, `if` with a binding, `if` as an expression, and the order of evaluation when an operand needs statements |
 | boxes.teak | `&x` moving a value to the heap, a recursive type through `*Node?`, a pointer lent as what it holds, tuples built, destructured, matched and printed, `()` in a Result |
 | slices.teak | Slice literals, `make`, checked indexing, sub-slices, every slice method but `Sort`, `range` by index and value and through a `mut`, string methods and their iterators, option and result methods, `==` on composite values, `take` |
 | maps.teak | Map literals, `m[k]` reading a missing key as zero and writing a new entry, `+=` on an entry, every map method, `range` in insertion order and through a `mut`, a tuple as a key, growth with removals |
+| files.teak | A temporary directory, `Create`, `WriteString`, `Open`, `ReadToString`, `io.Copy`, `Close`, `RemoveAll`, the message of a failed open, `?` on library results, `os.Args`, `os.Stdout` |
+| closures.teak | A closure changing a captured local, function values in a parameter and a field, a named function as a value, a closure inside a closure, `SortBy` and `Sort` |
 
-The programs under `../core/` are the stage 1 acceptance suite. `calc.teak`, `list.teak` and `bst.teak` build and run; the others need maps, closures, `defer` and files, or the drops of task 1.9. When one of them builds, its expected output moves from its comments into a `.out` file beside it, and the same test picks it up.
+The programs under `../core/` are the stage 1 acceptance suite. Six of them build and run; `state.teak` and `files.teak` wait for the drops of task 1.9. A program that reads files has them in a folder named after it with the suffix `.files`, which the test copies beside the binary. When one of them builds, its expected output moves from its comments into a `.out` file beside it, and the same test picks it up.

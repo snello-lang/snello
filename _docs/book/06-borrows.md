@@ -1,6 +1,6 @@
 # 6. Borrows: `ref` and `mut`
 
-Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); checked from stage 1, tasks 1.7 and 1.8. The programs under `../../examples/core/errors/` show each rule being broken.
+Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); the rules are checked from stage 1, tasks 1.7 and 1.8. The programs under `../../examples/core/errors/` show each rule being broken, and `examples/run/closures.teak` shows closures that keep them.
 
 Moving is the right thing when the callee keeps the value. Most functions do not keep it; they look at it, or change it, and give it back. For those, a value is **borrowed**: lent to the callee for the length of the call, with the owner unchanged. A borrow is written `ref T` to read or `mut T` to change.
 

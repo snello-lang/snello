@@ -44,6 +44,10 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	case *types.Basic:
 		return basicType(t)
 	case *types.Named:
+		if t == types.OSFile {
+			return "tk_file"
+		}
+
 		return ident(t.Obj().Name())
 	case *types.Ref:
 		if t.Mut() {
@@ -53,7 +57,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		return e.typeName(t.Elem(), pos)
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
-	case *types.Option, *types.Result, *types.Slice:
+	case *types.Option, *types.Result, *types.Slice, *types.Signature:
 		return e.declare(t, pos)
 	case *types.Map:
 		name := "tk_" + mangle(t)
@@ -114,6 +118,10 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		e.defineStruct(t, pos, func() string {
 			return "\t" + e.typeName(t.Elem(), pos) + " *ptr;\n\ttk_int len;\n\ttk_int cap;\n"
 		})
+	case *types.Signature:
+		e.defineStruct(t, pos, func() string {
+			return "\t" + e.resultType(t, pos) + " (*fn)(" + e.closureParams(t, pos) + ");\n\tvoid *env;\n"
+		})
 	case *types.Tuple:
 		if t == types.Unit {
 			return
@@ -134,6 +142,10 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 // whose forward declaration Emit wrote, any other as a typedef of its
 // underlying type.
 func (e *Emitter) defineNamed(t *types.Named, pos token.Pos) {
+	if t == types.OSFile {
+		return // the runtime's
+	}
+
 	name := ident(t.Obj().Name())
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
@@ -253,6 +265,13 @@ func mangle(t types.Type) string {
 		return "slice_" + mangle(t.Elem())
 	case *types.Map:
 		return "map_" + mangle(t.Key()) + "_" + mangle(t.Value())
+	case *types.Signature:
+		parts := make([]string, len(t.Params()))
+		for i, p := range t.Params() {
+			parts[i] = mangle(p.Type())
+		}
+
+		return "fn" + strconv.Itoa(len(parts)) + "_" + strings.Join(append(parts, mangle(t.Results())), "_")
 	case *types.Tuple:
 		if t == types.Unit {
 			return "unit"

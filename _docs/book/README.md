@@ -9,21 +9,21 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | Chapter | Status |
 |---|---|
 | 1. Introduction | not written |
-| [2. Getting started](02-getting-started.md) | `teak build` works for the first two slices of the C backend and the slices and strings of the third (stage 1, task 1.5) |
-| [3. Basics](03-basics.md) | implemented and checked (stage 1, task 1.4) |
+| [2. Getting started](02-getting-started.md) | `teak build` compiles all of core Teak but `Drop` (stage 1, task 1.5) |
+| [3. Basics](03-basics.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [4. Structs, enums and match](04-structs-enums-match.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | decided; checked from stage 1, tasks 1.6 and 1.9 |
-| [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; checked from stage 1, tasks 1.7 and 1.8 |
-| 7. Owned pointers and recursive data | written with stage 1 |
+| [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; compiled (stage 1, task 1.5); checked from stage 1, tasks 1.7 and 1.8 |
+| [7. Owned pointers and recursive data](07-owned-pointers.md) | implemented, checked and compiled (stage 1, task 1.5); frees in task 1.9 |
 | [8. Option, Result, `?` and `??`](08-option-result.md) | implemented, checked and compiled (stage 1, task 1.5) |
-| [9. Collections: slices, maps and strings](09-collections.md) | slices and strings compiled (stage 1, task 1.5); maps checked, compiled next |
+| [9. Collections: slices, maps and strings](09-collections.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | 10. Concurrency: `spawn`, channels, `select` | written with stage 3 |
 | 11. Traits | written with stage 2 |
 | 12. Generics | written with stage 2 |
 | 13. Arenas and indices | written with stage 2, task 2.6 |
 | 14. The standard library | written with stage 2, task 2.6 |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | implemented (stage 0) |
-| [Appendix B. Teak for Go programmers](B-teak-for-go-programmers.md) | covers chapters 3 to 6 and 9; grows with them |
+| [Appendix B. Teak for Go programmers](B-teak-for-go-programmers.md) | covers chapters 3 to 9; grows with them |
 
 ## How the book is kept current
 

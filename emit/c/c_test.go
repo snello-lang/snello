@@ -48,7 +48,7 @@ func TestRunExamples(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if got := buildAndRun(t, name, string(src)); got != string(want) {
+			if got := buildAndRun(t, name, string(src), strings.TrimSuffix(path, ".teak")+".files"); got != string(want) {
 				t.Errorf("%s printed:\n%s\nwant:\n%s", path, got, want)
 			}
 		})
@@ -91,8 +91,8 @@ func main() {
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {
 	tests := []struct{ src, want string }{
-		{"func main() { f := func(x int) int { return x + 1 }; print(f(1)) }", "closures"},
-		{"func next(i int) int? { return Some(i + 1) }\nfunc main() { for i := 0; i < 3; i = next(i) ?? 0 {} }", "after the second ; of a for"},
+		{"func work() {}\nfunc main() { spawn work() }", "channels and tasks"},
+		{"func main() { ch := make(chan int); ch <- 1 }", "channels"},
 	}
 	for _, tt := range tests {
 		f, file, err := parser.ParseFile("t.teak", []byte("package main\n"+tt.src+"\n"))
@@ -156,10 +156,11 @@ func BenchmarkEmit(b *testing.B) {
 
 // buildAndRun emits src, compiles it with the system C compiler under
 // the warnings the standards require, runs the binary, and returns its
-// standard output.
-func buildAndRun(t *testing.T, name, src string) string {
+// standard output. The files under fixtures, if the directory exists,
+// are copied beside the binary first, for a program that reads them.
+func buildAndRun(t *testing.T, name, src string, fixtures ...string) string {
 	t.Helper()
-	out, code := run(t, name, src)
+	out, code := run(t, name, src, fixtures...)
 	if code != 0 {
 		t.Fatalf("%s exited with %d\n%s", name, code, out)
 	}
@@ -168,7 +169,7 @@ func buildAndRun(t *testing.T, name, src string) string {
 }
 
 // run builds src and runs it, returning its standard output and exit code.
-func run(t *testing.T, name, src string) (string, int) {
+func run(t *testing.T, name, src string, fixtures ...string) (string, int) {
 	t.Helper()
 	f, file, err := parser.ParseFile(name+".teak", []byte(src))
 	if err != nil {
@@ -186,6 +187,24 @@ func run(t *testing.T, name, src string) (string, int) {
 	}
 
 	dir := t.TempDir()
+	for _, fixture := range fixtures {
+		entries, err := os.ReadDir(fixture)
+		if err != nil {
+			continue // no files to place
+		}
+
+		for _, entry := range entries {
+			data, err := os.ReadFile(filepath.Join(fixture, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(filepath.Join(dir, entry.Name()), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	bin, out, err := Build(dir, name, csrc)
 	if err != nil {
 		t.Fatalf("%v\n%s\n--- emitted C ---\n%s", err, out, csrc)

@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `teak build` produces native binaries for the part of the language the C backend lowers so far (stage 1, task 1.5): functions and methods, numbers, strings and their methods, booleans, `if` and `for` including `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, slices and their methods, `take`, and `fmt` printing. Maps, closures, `defer` and files follow.
+Status: `teak build` produces native binaries for all of core Teak (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. What a `Drop` method does when a value dies is task 1.9; until then a type with `Drop` is reported rather than compiled without it.
 
 ## The compiler
 

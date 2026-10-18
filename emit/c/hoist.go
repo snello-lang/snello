@@ -54,29 +54,36 @@ func needsHoist(x ast.Expr) bool {
 
 // hasEffects reports whether evaluating x may call a function or
 // needs statements, so that its order among its neighbors is visible.
-func hasEffects(x ast.Expr) bool {
+// len and cap only read, so they count as what their argument is.
+func (e *Emitter) hasEffects(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok {
+			if b, ok := e.info.Uses[id].(*types.Builtin); ok && (b.ID() == types.BuiltinLen || b.ID() == types.BuiltinCap) {
+				return e.anyEffects(x.Args)
+			}
+		}
+
 		return true
 	case *ast.ParenExpr:
-		return hasEffects(x.X)
+		return e.hasEffects(x.X)
 	case *ast.TupleExpr:
-		return anyEffects(x.Elts)
+		return e.anyEffects(x.Elts)
 	case *ast.SelectorExpr:
-		return hasEffects(x.X)
+		return e.hasEffects(x.X)
 	case *ast.IndexExpr:
-		return hasEffects(x.X) || hasEffects(x.Index)
+		return e.hasEffects(x.X) || e.hasEffects(x.Index)
 	case *ast.UnaryExpr:
-		return hasEffects(x.X)
+		return e.hasEffects(x.X)
 	case *ast.BinaryExpr:
-		return hasEffects(x.X) || hasEffects(x.Y)
+		return e.hasEffects(x.X) || e.hasEffects(x.Y)
 	case *ast.CompositeLit:
 		for _, elt := range x.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
 				elt = kv.Value
 			}
 
-			if hasEffects(elt) {
+			if e.hasEffects(elt) {
 				return true
 			}
 		}
@@ -85,9 +92,9 @@ func hasEffects(x ast.Expr) bool {
 	return needsHoist(x)
 }
 
-func anyEffects(xs []ast.Expr) bool {
+func (e *Emitter) anyEffects(xs []ast.Expr) bool {
 	for _, x := range xs {
-		if hasEffects(x) {
+		if e.hasEffects(x) {
 			return true
 		}
 	}
@@ -112,7 +119,7 @@ func anyHoist(xs []ast.Expr) bool {
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 	last := -1
 	for i, x := range xs {
-		if hasEffects(x) {
+		if e.hasEffects(x) {
 			last = i
 		}
 	}
@@ -145,7 +152,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 // all are evaluated before the first is used.
 func (e *Emitter) evaluated(xs []ast.Expr) []string {
 	parts := e.operands(xs, nil)
-	if n := len(xs); n > 0 && hasEffects(xs[n-1]) {
+	if n := len(xs); n > 0 && e.hasEffects(xs[n-1]) {
 		tmp := e.temp()
 		e.line(e.cType(e.info.Types[xs[n-1]], xs[n-1].Pos()) + " " + tmp + " = " + parts[n-1] + ";")
 		parts[n-1] = tmp
@@ -197,7 +204,7 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 		v, ok := e.info.Uses[x.Sel].(*types.Var)
 		return ok && v.IsField() && e.isPlace(x.X)
 	case *ast.IndexExpr:
-		return e.isPlace(x.X) && !hasEffects(x.Index)
+		return e.isPlace(x.X) && !e.hasEffects(x.Index)
 	case *ast.UnaryExpr:
 		return x.Op == token.MUL && e.isPlace(x.X)
 	}

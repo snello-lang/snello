@@ -46,4 +46,51 @@ func main() {
 	x, y := 1, 2
 	x, y = y, x
 	fmt.Println(n, x, y, !(x > y) && y != 0)
+
+	// A condition and a post statement that call run on every pass, and
+	// continue still reaches the post statement.
+	hits := 0
+	for i := 0; i < limit(3); i = step(i) {
+		if i == 1 {
+			continue
+		}
+
+		hits += i
+	}
+
+	fmt.Println(hits)
+
+	// Deferred calls run at return, last deferred first, with their
+	// arguments as they were at the defer; a mut receiver is lent, not
+	// copied, so the call changes it.
+	fmt.Println(ordered(2), tally())
 }
+
+func ordered(n int) int {
+	defer fmt.Println("third")
+	defer fmt.Println("second", n)
+	n += 10
+	if n > 5 {
+		defer fmt.Println("first", n)
+		return n
+	}
+
+	return 0
+}
+
+struct Tally {
+	n int
+}
+
+func (t mut Tally) Add(v int) { t.n += v }
+
+func tally() int {
+	t := Tally{n: 1}
+	defer t.Add(5)
+	t.Add(1)
+	return t.n
+}
+
+func limit(n int) int { return n }
+
+func step(i int) int { return i + 1 }

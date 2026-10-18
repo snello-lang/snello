@@ -63,6 +63,28 @@ static inline int64_t tk_index(int64_t i, int64_t len) {
     return i;
 }
 
+// An error is its message in stage 1, and an empty message is no
+// error: the os and io functions return one and store their result
+// through a pointer. A file is a descriptor; the three standard streams
+// are files too.
+typedef struct {
+    int fd;
+} tk_file;
+
+extern tk_file tk_stdin, tk_stdout, tk_stderr;
+extern tk_slice tk_args; // the command line, as a slice of tk_string
+
+void tk_init(int argc, char **argv);
+tk_string tk_read_to_string(tk_string path, tk_string *out);
+tk_string tk_open(tk_string path, tk_file *out);
+tk_string tk_create(tk_string path, tk_file *out);
+tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out);
+tk_string tk_remove_all(tk_string path);
+tk_string tk_file_close(tk_file f);
+tk_string tk_file_sync(tk_file *f);
+tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n);
+tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n);
+
 void tk_slice_make(tk_slice *out, int64_t len, int64_t cap, size_t size);
 void tk_slice_push(tk_slice *s, const void *v, size_t size);
 bool tk_slice_pop(tk_slice *s, void *out, size_t size);
@@ -71,6 +93,7 @@ void tk_slice_remove(tk_slice *s, int64_t i, void *out, size_t size);
 void tk_slice_reverse(tk_slice *s, size_t size);
 void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size);
 void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size_t size);
+void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx);
 
 // A map keeps its entries in insertion order, which is the order a
 // range visits them, and finds them through a hash index. The emitter

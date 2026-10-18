@@ -1,0 +1,55 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Closures and function values: a closure capturing a local and
+// changing it, a function value in a parameter and in a field, a named
+// function as a value, a closure inside a closure, SortBy with a
+// closure, and Sort.
+
+package main
+
+import "fmt"
+
+struct Button {
+	label string
+	onClick func(int) int
+}
+
+func apply(f func(int) int, v int) int { return f(v) }
+
+func double(x int) int { return x * 2 }
+
+func each(xs ref []int, visit func(ref int)) {
+	for _, x := range xs {
+		visit(x)
+	}
+}
+
+func main() {
+	total := 0
+	each([]int{1, 2, 3}, func(x ref int) { total += x })
+	fmt.Println(total)
+
+	factor := 10
+	fmt.Println(apply(func(v int) int { return v * factor }, 4), apply(double, 4))
+
+	b := Button{label: "ok", onClick: func(n int) int { return n + 1 }}
+	fmt.Println(b.label, b.onClick(41))
+
+	outer := 1
+	sum := 0
+	each([]int{1, 2}, func(x ref int) {
+		each([]int{10, 20}, func(y ref int) { sum += outer + x + y })
+	})
+	fmt.Println(sum)
+
+	words := []string{"pear", "fig", "apple"}
+	words.SortBy(func(a ref string, b ref string) bool { return a.Len() < b.Len() })
+	fmt.Println(words)
+	words.Sort()
+	fmt.Println(words)
+	nums := []int{3, 1, 2}
+	nums.Sort()
+	fmt.Println(nums)
+}

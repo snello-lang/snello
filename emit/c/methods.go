@@ -86,10 +86,57 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.into(t, x.Pos(), func(out string) string {
 			return "tk_slice_clone(" + generic + ", " + out + ", " + size + ")"
 		})
+	case "SortBy":
+		less := e.saved(x.Args[0], e.info.Types[x.Args[0]])
+		e.line("tk_slice_sort(" + generic + ", " + size + ", " + e.lessAdapter(t.Elem(), x.Pos()) + ", &" + less + ");")
+		return ""
+	case "Sort":
+		e.line("tk_slice_sort(" + generic + ", " + size + ", " + e.ordering(t.Elem(), x.Pos()) + ", NULL);")
+		return ""
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
 	return "0"
+}
+
+// lessAdapter returns the name of the function that lets the runtime
+// sort call a Teak less function held in the context, written once per
+// element type.
+func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
+	name := "tk_lessfn_" + mangle(elem)
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		ct := e.cType(elem, pos)
+		less := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "a", types.NewRef(elem, false)), types.NewVar(token.NoPos, "b", types.NewRef(elem, false))}, types.Typ[types.Bool])
+		fn := e.cType(less, pos)
+		e.helpers.WriteString("static bool " + name + "(void *ctx, const void *a, const void *b) {\n\t" + fn + " *f = ctx;\n\treturn f->fn(f->env, *(const " + ct + " *)a, *(const " + ct + " *)b);\n}\n\n")
+	}
+
+	return name
+}
+
+// ordering returns the name of the function that compares two
+// elements with <, for Sort on numbers and strings.
+func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
+	name := "tk_lt_" + mangle(elem)
+	b, ok := valueType(elem).Underlying().(*types.Basic)
+	if !ok || b.Kind() == types.Bool {
+		e.unsupported(pos, "Sort on a slice of "+elem.String()+"; use SortBy")
+		return "NULL"
+	}
+
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		ct := e.cType(elem, pos)
+		test := "*(const " + ct + " *)a < *(const " + ct + " *)b"
+		if isString(elem) {
+			test = "tk_string_cmp(*(const " + ct + " *)a, *(const " + ct + " *)b) < 0"
+		}
+
+		e.helpers.WriteString("static bool " + name + "(void *ctx, const void *a, const void *b) {\n\t(void)ctx;\n\treturn " + test + ";\n}\n\n")
+	}
+
+	return name
 }
 
 // search writes RemoveValue or Contains through a generated function
@@ -294,10 +341,10 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 	}
 
 	var i string
-	if hasEffects(x.Index) { // the place may be written twice, as by take or +=
-		i = e.saved(x.Index, e.info.Types[x.Index])
+	if e.hasEffects(x.Index) { // the place may be written twice, as by take or +=
+		i = e.saved(x.Index, types.Typ[types.Int])
 	} else {
-		i = e.expr(x.Index)
+		i = e.valueTo(x.Index, types.Typ[types.Int]) // through any borrow of the index
 	}
 
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) {
@@ -313,11 +360,11 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) string {
 	place, t := e.scrutinee(x.X)
 	lo, hi := "0", place+".len"
 	if x.Low != nil {
-		lo = "(int64_t)(" + e.expr(x.Low) + ")"
+		lo = "(int64_t)(" + e.valueTo(x.Low, types.Typ[types.Int]) + ")"
 	}
 
 	if x.High != nil {
-		hi = "(int64_t)(" + e.expr(x.High) + ")"
+		hi = "(int64_t)(" + e.valueTo(x.High, types.Typ[types.Int]) + ")"
 	}
 
 	if isString(t) {
@@ -348,7 +395,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 		return "0"
 	}
 
-	sizes := e.operands(x.Args[1:], nil)
+	sizes := e.operands(x.Args[1:], []types.Type{types.Typ[types.Int], types.Typ[types.Int]}[:len(x.Args)-1])
 	n, c := "0", ""
 	if len(sizes) > 0 {
 		n = "(int64_t)(" + sizes[0] + ")"

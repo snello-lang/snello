@@ -2,13 +2,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
+
 #include "teak.h"
 
 #include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+tk_file tk_stdin = {0}, tk_stdout = {1}, tk_stderr = {2};
+tk_slice tk_args = {0};
 
 void *tk_alloc(size_t n) {
     void *p = malloc(n == 0 ? 1 : n);
@@ -141,6 +152,39 @@ void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size
     out->cap = s->cap - lo;
 }
 
+// merge sorts the n elements at p, stably, using tmp as scratch of the
+// same size.
+static void merge(char *p, char *tmp, int64_t n, size_t size, bool (*less)(void *, const void *, const void *), void *ctx) {
+    if (n < 2) {
+        return;
+    }
+
+    int64_t half = n / 2;
+    merge(p, tmp, half, size, less, ctx);
+    merge(p + (size_t)half * size, tmp, n - half, size, less, ctx);
+    int64_t i = 0, j = half, k = 0;
+    while (i < half && j < n) {
+        if (less(ctx, p + (size_t)j * size, p + (size_t)i * size)) {
+            memcpy(tmp + (size_t)k++ * size, p + (size_t)j++ * size, size);
+        } else {
+            memcpy(tmp + (size_t)k++ * size, p + (size_t)i++ * size, size);
+        }
+    }
+
+    memcpy(tmp + (size_t)k * size, p + (size_t)i * size, (size_t)(half - i) * size);
+    k += half - i;
+    memcpy(tmp + (size_t)k * size, p + (size_t)j * size, (size_t)(n - j) * size);
+    memcpy(p, tmp, (size_t)n * size);
+}
+
+void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
+    if (s->len < 2) {
+        return;
+    }
+
+    merge(s->ptr, tk_alloc((size_t)s->len * size), s->len, size, less, ctx);
+}
+
 tk_string tk_concat(tk_string a, tk_string b) {
     uint8_t *p = tk_alloc((size_t)(a.len + b.len));
     memcpy(p, a.ptr, (size_t)a.len);
@@ -210,17 +254,30 @@ tk_string tk_bool_to_string(bool v) {
     return v ? TK_STR("true", 4) : TK_STR("false", 5);
 }
 
+// tk_quote writes s as a string literal reads: in double quotes, with
+// a quote, a backslash and the control characters escaped.
 tk_string tk_quote(tk_string s) {
-    uint8_t *p = tk_alloc((size_t)s.len * 2 + 2);
+    uint8_t *p = tk_alloc((size_t)s.len * 4 + 2);
     int64_t n = 0;
     p[n++] = '"';
     for (int64_t i = 0; i < s.len; i++) {
         uint8_t c = s.ptr[i];
-        if (c == '"' || c == '\\') {
-            p[n++] = '\\';
+        const char *escape = NULL;
+        switch (c) {
+        case '"': escape = "\\\""; break;
+        case '\\': escape = "\\\\"; break;
+        case '\n': escape = "\\n"; break;
+        case '\t': escape = "\\t"; break;
+        case '\r': escape = "\\r"; break;
         }
 
-        p[n++] = c;
+        if (escape != NULL) {
+            n += snprintf((char *)p + n, 3, "%s", escape);
+        } else if (c < ' ' || c == 127) {
+            n += snprintf((char *)p + n, 5, "\\x%02x", c);
+        } else {
+            p[n++] = c;
+        }
     }
 
     p[n++] = '"';
@@ -480,6 +537,228 @@ bool tk_split_once(tk_string s, tk_string sep, tk_string *before, tk_string *aft
     *before = TK_STR(s.ptr, at);
     *after = TK_STR(s.ptr + at + sep.len, s.len - at - sep.len);
     return true;
+}
+
+void tk_init(int argc, char **argv) {
+    for (int i = 0; i < argc; i++) {
+        tk_string arg = TK_STR(argv[i], (int64_t)strlen(argv[i]));
+        tk_slice_push(&tk_args, &arg, sizeof arg);
+    }
+}
+
+// cpath copies a Teak string into a C string for the system calls. A
+// string holding a zero byte cannot be a path: the system would stop
+// reading at the zero and open another file than the one named, so it
+// is refused as an invalid argument.
+static char *cpath(tk_string s) {
+    if (memchr(s.ptr, 0, (size_t)s.len) != NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    char *p = tk_alloc((size_t)s.len + 1);
+    memcpy(p, s.ptr, (size_t)s.len);
+    p[s.len] = '\0';
+    return p;
+}
+
+// sysopen opens a path with flags, or fails with errno set.
+static int sysopen(tk_string path, int flags) {
+    char *p = cpath(path);
+    return p == NULL ? -1 : open(p, flags, 0666);
+}
+
+// failure builds the message "op path: reason" from errno, as Go's os
+// package words it, with the reason in lower case.
+static tk_string failure(const char *op, tk_string path) {
+    const char *reason = strerror(errno);
+    tk_string msg = tk_concat(tk_concat(TK_STR(op, (int64_t)strlen(op)), TK_STR(" ", 1)), path);
+    msg = tk_concat(msg, TK_STR(": ", 2));
+    tk_string r = TK_STR(reason, (int64_t)strlen(reason));
+    if (r.len > 0 && r.ptr[0] >= 'A' && r.ptr[0] <= 'Z') {
+        uint8_t *p = tk_alloc((size_t)r.len);
+        memcpy(p, r.ptr, (size_t)r.len);
+        p[0] = (uint8_t)(p[0] + ('a' - 'A'));
+        r = TK_STR(p, r.len);
+    }
+
+    return tk_concat(msg, r);
+}
+
+tk_string tk_read_to_string(tk_string path, tk_string *out) {
+    int fd = sysopen(path, O_RDONLY);
+    if (fd < 0) {
+        return failure("open", path);
+    }
+
+    tk_slice buf = {0};
+    for (;;) {
+        grow(&buf, buf.len + 4096, 1);
+        ssize_t n = read(fd, (char *)buf.ptr + buf.len, (size_t)(buf.cap - buf.len));
+        if (n < 0) {
+            close(fd);
+            return failure("read", path);
+        }
+
+        if (n == 0) {
+            break;
+        }
+
+        buf.len += n;
+    }
+
+    close(fd);
+    *out = TK_STR(buf.ptr, buf.len);
+    return TK_STR("", 0);
+}
+
+tk_string tk_open(tk_string path, tk_file *out) {
+    int fd = sysopen(path, O_RDONLY);
+    if (fd < 0) {
+        return failure("open", path);
+    }
+
+    out->fd = fd;
+    return TK_STR("", 0);
+}
+
+tk_string tk_create(tk_string path, tk_file *out) {
+    int fd = sysopen(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        return failure("open", path);
+    }
+
+    out->fd = fd;
+    return TK_STR("", 0);
+}
+
+// tk_mkdir_temp makes a new directory under dir, or the system's
+// temporary directory when dir is empty, named after pattern.
+tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out) {
+    if (dir.len == 0) {
+        const char *tmp = getenv("TMPDIR");
+        if (tmp == NULL || tmp[0] == '\0') {
+            tmp = "/tmp";
+        }
+
+        dir = TK_STR(tmp, (int64_t)strlen(tmp));
+    }
+
+    tk_string tmpl = tk_concat(tk_concat(dir, TK_STR("/", 1)), tk_concat(pattern, TK_STR("XXXXXX", 6)));
+    char *p = cpath(tmpl);
+    if (p == NULL || mkdtemp(p) == NULL) {
+        return failure("mkdirtemp", dir);
+    }
+
+    *out = TK_STR(p, tmpl.len);
+    return TK_STR("", 0);
+}
+
+static int remove_tree(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d == NULL) {
+            return -1;
+        }
+
+        struct dirent *ent;
+        int rc = 0;
+        while (rc == 0 && (ent = readdir(d)) != NULL) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+
+            size_t n = strlen(path) + 1 + strlen(ent->d_name) + 1;
+            char *child = tk_alloc(n);
+            snprintf(child, n, "%s/%s", path, ent->d_name);
+            rc = remove_tree(child);
+        }
+
+        closedir(d);
+        return rc == 0 ? rmdir(path) : rc;
+    }
+
+    return unlink(path);
+}
+
+tk_string tk_remove_all(tk_string path) {
+    char *p = cpath(path);
+    if (p == NULL || remove_tree(p) != 0) {
+        return failure("remove", path);
+    }
+
+    return TK_STR("", 0);
+}
+
+tk_string tk_file_close(tk_file f) {
+    if (close(f.fd) != 0) {
+        return failure("close", TK_STR("file", 4));
+    }
+
+    return TK_STR("", 0);
+}
+
+tk_string tk_file_sync(tk_file *f) {
+    if (fsync(f->fd) != 0) {
+        return failure("sync", TK_STR("file", 4));
+    }
+
+    return TK_STR("", 0);
+}
+
+// write_all writes every byte, through stdio for the standard streams
+// so that prints and writes to them stay in order.
+static bool write_all(int fd, const uint8_t *p, int64_t len) {
+    if (fd == 1 || fd == 2) {
+        return fwrite(p, 1, (size_t)len, fd == 1 ? stdout : stderr) == (size_t)len;
+    }
+
+    while (len > 0) {
+        ssize_t n = write(fd, p, (size_t)len);
+        if (n < 0) {
+            return false;
+        }
+
+        p += n;
+        len -= n;
+    }
+
+    return true;
+}
+
+tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n) {
+    if (!write_all(f->fd, s.ptr, s.len)) {
+        return failure("write", TK_STR("file", 4));
+    }
+
+    *n = s.len;
+    return TK_STR("", 0);
+}
+
+tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n) {
+    uint8_t buf[32768];
+    *n = 0;
+    for (;;) {
+        ssize_t got = read(src->fd, buf, sizeof buf);
+        if (got < 0) {
+            return failure("read", TK_STR("file", 4));
+        }
+
+        if (got == 0) {
+            return TK_STR("", 0);
+        }
+
+        if (!write_all(dst->fd, buf, got)) {
+            return failure("write", TK_STR("file", 4));
+        }
+
+        *n += got;
+    }
 }
 
 void tk_print_string(tk_string s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); }

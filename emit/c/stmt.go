@@ -41,6 +41,11 @@ func (e *Emitter) stmt(s ast.Stmt) {
 	case *ast.ReturnStmt:
 		e.returnStmt(s)
 	case *ast.BranchStmt:
+		if n := len(e.loops); s.Tok == token.CONTINUE && n > 0 && e.loops[n-1] != "" {
+			e.line("goto " + e.loops[n-1] + ";")
+			break
+		}
+
 		e.line(s.Tok.String() + ";")
 	case *ast.IfStmt:
 		e.ifStmt(s)
@@ -53,7 +58,7 @@ func (e *Emitter) stmt(s ast.Stmt) {
 	case *ast.SwitchStmt:
 		e.unsupported(s.Pos(), "switch")
 	case *ast.DeferStmt:
-		e.unsupported(s.Pos(), "defer")
+		e.deferStmt(s)
 	case *ast.SendStmt, *ast.SelectStmt, *ast.SpawnStmt:
 		e.unsupported(s.Pos(), "channels and tasks")
 	case *ast.EmptyStmt:
@@ -195,14 +200,21 @@ func (e *Emitter) spread(x ast.Expr, n int) []string {
 	return parts
 }
 
+// returnStmt writes a return. With deferred calls pending, the value
+// is computed first, then the calls run, then the value is returned.
 func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
-	switch len(s.Results) {
-	case 0:
+	switch {
+	case len(s.Results) > 1:
+		e.unsupported(s.Return, "returning several values")
+	case len(s.Results) == 0:
+		e.runDefers()
 		e.line("return;")
-	case 1:
+	case len(e.defers) == 0:
 		e.line("return " + e.valueTo(s.Results[0], e.result) + ";")
 	default:
-		e.unsupported(s.Return, "returning several values")
+		v := e.saved(s.Results[0], e.result)
+		e.runDefers()
+		e.line("return " + v + ";")
 	}
 }
 
@@ -240,8 +252,10 @@ func (e *Emitter) elseBranch(els ast.Stmt) {
 	}
 }
 
-// forStmt writes Teak's three loop forms. A condition that needs
-// statements of its own is tested at the top of the body.
+// forStmt writes Teak's three loop forms. A condition that calls or
+// needs statements is tested at the top of the body, so that what it
+// needs runs on every pass; a post statement that does is written at
+// the end of the body under a label that continue jumps to.
 func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("{")
 	if s.Init != nil {
@@ -249,15 +263,15 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	}
 
 	cond := ""
-	if s.Cond != nil && !needsHoist(s.Cond) {
+	if s.Cond != nil && !e.hasEffects(s.Cond) {
 		cond = e.expr(s.Cond)
 	}
 
-	post := ""
+	post, label := "", ""
 	if s.Post != nil {
 		var ok bool
 		if post, ok = e.simpleStmt(s.Post); !ok {
-			e.unsupported(s.Post.Pos(), "this kind of statement after the second ; of a for")
+			label = e.temp() + "_post"
 		}
 	}
 
@@ -266,7 +280,14 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 		e.line("if (!" + e.cond(s.Cond) + ") { break; }")
 	}
 
+	e.loops = append(e.loops, label)
 	e.stmts(s.Body.List)
+	e.loops = e.loops[:len(e.loops)-1]
+	if label != "" {
+		e.line(label + ":;")
+		e.stmt(s.Post)
+	}
+
 	e.line("}")
 	e.line("}")
 }
@@ -280,6 +301,8 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.line("{")
 	place, t := e.scrutinee(s.X)
 	i := e.temp()
+	e.loops = append(e.loops, "") // continue reaches the loop's own step
+	defer func() { e.loops = e.loops[:len(e.loops)-1] }()
 	if m, ok := t.Underlying().(*types.Map); ok {
 		e.line("for (int64_t " + i + " = tk_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = tk_map_next(&" + place + ", " + i + " + 1)) {")
 		e.rangeVar(s.Key, s.Tok, "(("+e.cType(m.Key(), s.Pos())+" *)"+place+".keys)["+i+"]", m.Key())
@@ -339,14 +362,15 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType typ
 }
 
 // simpleStmt writes a statement that C accepts as an expression, for
-// the post clause of a for: x++, x += 1, x = e. A value that needs
-// statements cannot go there, as they would run once, before the loop.
+// the post clause of a for: x++, x += 1, x = e. A value that calls or
+// needs statements cannot go there, as they would run once, before the
+// loop; the caller writes such a statement in the body.
 func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 	switch s := s.(type) {
 	case *ast.IncDecStmt:
 		return e.expr(s.X) + s.Tok.String(), true
 	case *ast.AssignStmt:
-		if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Tok == token.DEFINE || needsHoist(s.Rhs[0]) {
+		if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Tok == token.DEFINE || e.hasEffects(s.Rhs[0]) {
 			return "", false
 		}
 
@@ -400,7 +424,9 @@ func isBlank(x ast.Expr) bool {
 	return ok && id.Name == "_"
 }
 
+// isString reports whether t is text in C: a string, or an error,
+// which stage 1 keeps as its message.
 func isString(t types.Type) bool {
 	b, ok := t.Underlying().(*types.Basic)
-	return ok && b.Kind() == types.String
+	return ok && (b.Kind() == types.String || b.Kind() == types.Error)
 }

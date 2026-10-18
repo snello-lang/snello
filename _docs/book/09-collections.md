@@ -1,6 +1,6 @@
 # 9. Collections: slices, maps and strings
 
-Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.teak` and `maps.teak` exercise this chapter; `Sort` and `SortBy` wait for closures.
+Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.teak`, `maps.teak` and `closures.teak` exercise this chapter.
 
 A slice is an owned, growable list. A map is an owned table from keys to values. A string is an owned sequence of bytes holding UTF-8 text. All three own their memory, so the rules of chapter 5 apply to them: they move when assigned or passed by value, they are lent with `ref` and `mut`, and they are freed when their owner is dropped. None of them is ever `nil`; a slice or map declared without a value is empty and ready to use.
 
@@ -28,7 +28,7 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 | `xs.Contains(v)` | Reports whether an element equals `v` |
 | `xs.Clear()` | Removes every element and keeps the room |
 | `xs.Reverse()` | Reverses the elements in place |
-| `xs.Sort()`, `xs.SortBy(less)` | Sort in place; `SortBy` takes the ordering as a function (chapter 11 for `Sort`) |
+| `xs.Sort()`, `xs.SortBy(less)` | Sort in place, keeping equal elements in their order; `Sort` orders numbers and strings, `SortBy` takes the ordering as a function |
 | `xs.Clone()` | A new slice holding a copy of every element |
 
 `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. The core tree uses most of them:
