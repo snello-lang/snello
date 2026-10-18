@@ -31,7 +31,7 @@ func (e *Emitter) expr(x ast.Expr) string {
 	case *ast.SelectorExpr:
 		return e.selector(x)
 	case *ast.IndexExpr:
-		return e.index(x)
+		return e.index(x, false)
 	case *ast.SliceExpr:
 		return e.sliceExpr(x)
 	case *ast.CallExpr:
@@ -64,22 +64,39 @@ func (e *Emitter) expr(x ast.Expr) string {
 // an owned pointer is read as its value, or with the address taken
 // when a place is passed where a mut borrow is wanted.
 func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
-	s := e.expr(x)
 	have := e.info.Types[x]
 	if want == nil || have == nil {
-		return s
+		return e.expr(x)
 	}
 
 	d := depth(have) - depth(want)
+	if d < 0 {
+		return "&" + e.lvalue(x)
+	}
+
+	s := e.expr(x)
 	for ; d > 0; d-- {
 		s = "(*" + s + ")"
 	}
 
-	if d < 0 {
-		s = "&" + s
+	return s
+}
+
+// lvalue writes x as a place about to be written or lent mutably: as
+// expr does, except that a map element is made when its key is new.
+func (e *Emitter) lvalue(x ast.Expr) string {
+	switch x := x.(type) {
+	case *ast.ParenExpr:
+		return "(" + e.lvalue(x.X) + ")"
+	case *ast.IndexExpr:
+		return e.index(x, true)
+	case *ast.SelectorExpr:
+		if _, ok := e.info.Uses[x.Sel].(*types.Var); ok && e.packageOf(x.X) == nil {
+			return deref(e.lvalue(x.X), e.info.Types[x.X]) + "." + ident(x.Sel.Name)
+		}
 	}
 
-	return s
+	return e.expr(x)
 }
 
 // place writes x dereferenced to the value it denotes, for a field
@@ -183,6 +200,10 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 	t := e.info.Types[x]
 	if st, ok := t.Underlying().(*types.Slice); ok {
 		return e.sliceLit(x, t, st)
+	}
+
+	if mt, ok := t.Underlying().(*types.Map); ok {
+		return e.mapLit(x, t, mt)
 	}
 
 	if _, ok := t.Underlying().(*types.Struct); !ok {

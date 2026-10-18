@@ -57,6 +57,13 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 		}
 
 		b.WriteString("\treturn " + joined("(", ")", ", ", parts) + ";\n")
+	case *types.Map:
+		k, val := "(("+e.cType(u.Key(), pos)+" *)"+v+".keys)[i]", "(("+e.cType(u.Value(), pos)+" *)"+v+".vals)[i]"
+		b.WriteString("\ttk_string out = " + literal("map[") + ";\n")
+		b.WriteString("\tfor (int64_t i = tk_map_next(&" + v + ", 0); i >= 0; i = tk_map_next(&" + v + ", i + 1)) {\n")
+		b.WriteString("\t\tif (out.len > 4) {\n\t\t\tout = tk_concat(out, " + literal(" ") + ");\n\t\t}\n\n")
+		b.WriteString("\t\tout = tk_concat(tk_concat(tk_concat(out, " + e.toText(k, u.Key(), pos, false) + "), " + literal(":") + "), " + e.toText(val, u.Value(), pos, false) + ");\n\t}\n\n")
+		b.WriteString("\treturn tk_concat(out, " + literal("]") + ");\n")
 	case *types.Slice:
 		b.WriteString("\ttk_string out = " + literal("[") + ";\n")
 		b.WriteString("\tfor (int64_t i = 0; i < " + v + ".len; i++) {\n")
@@ -214,6 +221,65 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 	b.WriteString("}\n\n")
 	e.helpers.WriteString(b.String())
 	return name
+}
+
+// mapType returns the name of the descriptor the runtime needs for a
+// map type, its key and value sizes and the key's hash and equality,
+// writing it and the two key functions on first use.
+func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
+	name := "tk_mt_" + mangle(t)
+	if e.state[name] != undeclared {
+		return "&" + name
+	}
+
+	e.state[name] = defined
+	key := e.cType(t.Key(), pos)
+	hash, eq := "tk_khash_"+mangle(t.Key()), "tk_keq_"+mangle(t.Key())
+	if e.state[hash] == undeclared {
+		e.state[hash] = defined
+		e.helpers.WriteString("static uint64_t " + hash + "(const void *p) {\n\t" + key + " k = *(const " + key + " *)p;\n\t(void)k;\n\treturn " + e.hash("k", t.Key(), pos) + ";\n}\n\n")
+		e.helpers.WriteString("static bool " + eq + "(const void *a, const void *b) {\n\treturn " + e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos) + ";\n}\n\n")
+	}
+
+	e.helpers.WriteString("static const tk_map_type " + name + " = {sizeof(" + key + "), sizeof(" + e.cType(t.Value(), pos) + "), " + hash + ", " + eq + "};\n\n")
+	return "&" + name
+}
+
+// hash writes the hash of the C value v of key type t: bytes for a
+// string, the value for a number, and a mix of the parts for a tuple,
+// struct, option or pointer.
+func (e *Emitter) hash(v string, t types.Type, pos token.Pos) string {
+	v = deref(v, t)
+	switch u := valueType(t).Underlying().(type) {
+	case *types.Basic:
+		switch {
+		case u.Kind() == types.String:
+			return "tk_hash_bytes(" + v + ".ptr, (size_t)" + v + ".len)"
+		case u.Info()&types.IsFloat != 0:
+			return "(" + v + " == 0 ? 0 : tk_hash_bytes(&" + v + ", sizeof " + v + "))" // 0.0 and -0.0 are equal, so they hash alike
+		}
+
+		return "tk_hash_mix(0, (uint64_t)" + v + ")"
+	case *types.Option:
+		return "(" + v + ".has ? tk_hash_mix(1, " + e.hash(v+".val", u.Elem(), pos) + ") : 0)"
+	case *types.Tuple:
+		h := "0"
+		for i := 0; i < u.Len(); i++ {
+			h = "tk_hash_mix(" + h + ", " + e.hash(v+".e"+strconv.Itoa(i), u.At(i), pos) + ")"
+		}
+
+		return h
+	case *types.Struct:
+		h := "0"
+		for i := 0; i < u.NumFields(); i++ {
+			h = "tk_hash_mix(" + h + ", " + e.hash(v+"."+ident(u.Field(i).Name()), u.Field(i).Type(), pos) + ")"
+		}
+
+		return h
+	}
+
+	e.unsupported(pos, "map keys of type "+t.String())
+	return "0"
 }
 
 // allOf joins conditions with &&; none is true.

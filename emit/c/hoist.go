@@ -159,7 +159,21 @@ func (e *Emitter) evaluated(xs []ast.Expr) []string {
 // itself when it denotes a place, otherwise a temporary holding it.
 // It returns the place and the type of the value there.
 func (e *Emitter) scrutinee(x ast.Expr) (string, types.Type) {
+	return e.placeOf(x, false)
+}
+
+// changed writes a place a method is about to change, as scrutinee
+// does, except that a map element is made when its key is new.
+func (e *Emitter) changed(x ast.Expr) (string, types.Type) {
+	return e.placeOf(x, true)
+}
+
+func (e *Emitter) placeOf(x ast.Expr, write bool) (string, types.Type) {
 	t := e.info.Types[x]
+	if e.isPlace(x) && write {
+		return deref(e.lvalue(x), t), valueType(t)
+	}
+
 	if e.isPlace(x) {
 		return e.place(x), valueType(t)
 	}

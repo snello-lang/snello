@@ -26,6 +26,8 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	switch t := recv.Underlying().(type) {
 	case *types.Slice:
 		return e.sliceMethod(x, sel, t)
+	case *types.Map:
+		return e.mapMethod(x, sel, t)
 	case *types.Basic:
 		if t.Kind() == types.String {
 			return e.stringMethod(x, sel)
@@ -40,8 +42,14 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	return "0"
 }
 
+// mutating names the predeclared methods that change their receiver.
+var mutating = map[string]bool{
+	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
+	"Clear": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
+}
+
 func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice) string {
-	place, _ := e.scrutinee(sel.X)
+	place, _ := e.receiver(sel)
 	generic := "(tk_slice *)&" + place
 	elem := e.cType(t.Elem(), x.Pos())
 	size := "sizeof(" + elem + ")"
@@ -102,6 +110,93 @@ func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) s
 	}
 
 	return name + "(&" + place + ", " + v + ")"
+}
+
+// receiver writes the place a predeclared method is called on, made
+// when the method changes it and it is a new map element.
+func (e *Emitter) receiver(sel *ast.SelectorExpr) (string, types.Type) {
+	if mutating[sel.Sel.Name] {
+		return e.changed(sel.X)
+	}
+
+	return e.scrutinee(sel.X)
+}
+
+func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map) string {
+	place, _ := e.receiver(sel)
+	mt := e.mapType(t, x.Pos())
+	val := e.cType(t.Value(), x.Pos())
+	switch sel.Sel.Name {
+	case "Get", "GetMut":
+		out, found := e.temp(), e.temp()
+		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + " = {0};")
+		e.line(val + " *" + found + " = tk_map_find(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ");")
+		e.line("if (" + found + " != NULL) {")
+		e.line(out + ".has = true;")
+		if sel.Sel.Name == "Get" {
+			e.line(out + ".val = *" + found + ";")
+		} else {
+			e.line(out + ".val = " + found + ";")
+		}
+
+		e.line("}")
+		return out
+	case "Insert":
+		args := e.operands(x.Args, []types.Type{t.Key(), t.Value()})
+		e.mapStore(place, t, args[0], args[1], x.Pos())
+		return ""
+	case "Remove":
+		out := e.temp()
+		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + ";")
+		e.line(out + ".has = tk_map_remove(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ", &" + out + ".val);")
+		return out
+	case "Contains":
+		return "(tk_map_find(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ") != NULL)"
+	case "Clone":
+		out := e.temp()
+		e.line(e.cType(t, x.Pos()) + " " + out + ";")
+		e.line("tk_map_clone(&" + place + ", " + mt + ", &" + out + ");")
+		return out
+	}
+
+	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
+	return "0"
+}
+
+// mapIndex writes m[k]: when written to, the entry's value, made with
+// the zero value when the key is new; when read, the value or the zero
+// value, with the map unchanged.
+func (e *Emitter) mapIndex(x *ast.IndexExpr, place string, t *types.Map, write bool) string {
+	mt := e.mapType(t, x.Pos())
+	key := e.saved(x.Index, t.Key())
+	val := e.cType(t.Value(), x.Pos())
+	if write {
+		return "(*(" + val + " *)tk_map_slot(&" + place + ", " + mt + ", &" + key + "))"
+	}
+
+	return "(*(const " + val + " *)tk_map_get(&" + place + ", " + mt + ", &" + key + ", &(" + val + ")" + zeroValue + "))"
+}
+
+// mapStore writes the entry for key k in the map at place, with v as
+// its value.
+func (e *Emitter) mapStore(place string, t *types.Map, k, v string, pos token.Pos) {
+	key := e.temp()
+	e.line(e.cType(t.Key(), pos) + " " + key + " = " + k + ";")
+	e.line("*(" + e.cType(t.Value(), pos) + " *)tk_map_slot(&" + place + ", " + e.mapType(t, pos) + ", &" + key + ") = " + v + ";")
+}
+
+// mapLit writes map[K]V{k: v}: an empty map, then one insertion per
+// entry.
+func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) string {
+	out := e.temp()
+	e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
+	for _, elt := range x.Elts {
+		kv := elt.(*ast.KeyValueExpr)
+		parts := e.operands([]ast.Expr{kv.Key, kv.Value}, []types.Type{mt.Key(), mt.Value()})
+		e.mapStore(out, mt, parts[0], parts[1], x.Pos())
+	}
+
+	return out
 }
 
 func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
@@ -190,9 +285,14 @@ func (e *Emitter) saved(x ast.Expr, t types.Type) string {
 	return v
 }
 
-// index writes x[i] on a slice or a string, with the index checked.
-func (e *Emitter) index(x *ast.IndexExpr) string {
+// index writes x[i] on a slice or a string, with the index checked, or
+// on a map; write says whether the element is about to be assigned.
+func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 	place, t := e.scrutinee(x.X)
+	if m, ok := t.Underlying().(*types.Map); ok {
+		return e.mapIndex(x, place, m, write)
+	}
+
 	var i string
 	if hasEffects(x.Index) { // the place may be written twice, as by take or +=
 		i = e.saved(x.Index, e.info.Types[x.Index])
@@ -235,9 +335,13 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) string {
 	return "0"
 }
 
-// makeCall writes make([]T, n) and make([]T, n, cap).
+// makeCall writes make([]T, n), make([]T, n, cap) and make(map[K]V).
 func (e *Emitter) makeCall(x *ast.CallExpr) string {
 	t := e.info.Types[x]
+	if _, ok := t.Underlying().(*types.Map); ok {
+		return "(" + e.cType(t, x.Pos()) + "){0}"
+	}
+
 	st, ok := t.Underlying().(*types.Slice)
 	if !ok {
 		e.unsupported(x.Pos(), "make of "+t.String())
@@ -283,17 +387,22 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) s
 // takeCall writes take(mut place): the value, with the zero value left
 // behind.
 func (e *Emitter) takeCall(x *ast.CallExpr) string {
-	place := e.place(x.Args[0].(*ast.UnaryExpr).X)
+	target := x.Args[0].(*ast.UnaryExpr).X
+	place := deref(e.lvalue(target), e.info.Types[target])
 	t := e.info.Types[x]
 	out := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + out + " = " + place + ";")
-	e.line(place + " = (" + e.cType(t, x.Pos()) + ")" + e.zeroValue(t) + ";")
+	e.line(place + " = (" + e.cType(t, x.Pos()) + ")" + zeroValue + ";")
 	return out
 }
 
-// lenCall writes len(x) and cap(x) on a slice or a string.
+// lenCall writes len(x) and cap(x) on a slice, a string or a map.
 func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	place, t := e.scrutinee(x.Args[0])
+	if _, ok := t.Underlying().(*types.Map); ok && b.ID() == types.BuiltinLen {
+		return place + ".count"
+	}
+
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) && b.ID() == types.BuiltinLen {
 		return place + "." + b.Name()
 	}

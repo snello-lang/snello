@@ -80,7 +80,7 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 		case i < len(d.Values):
 			decl += e.valueTo(d.Values[i], v.Type())
 		default:
-			decl += e.zeroValue(v.Type())
+			decl += zeroValue
 		}
 
 		e.line(decl + ";")
@@ -111,12 +111,13 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 		e.store(lhs, s.Tok, e.valueTo(rhs, e.target(lhs, s.Tok)))
 	default:
 		t := valueType(e.info.Types[lhs])
+		place := e.lvalue(lhs)
 		if isString(t) { // s += t has no C operator
-			e.line(e.expr(lhs) + " = tk_concat(" + e.expr(lhs) + ", " + e.valueTo(rhs, t) + ");")
+			e.line(place + " = tk_concat(" + place + ", " + e.valueTo(rhs, t) + ");")
 			return
 		}
 
-		e.line(e.expr(lhs) + " " + s.Tok.String() + " " + e.valueTo(rhs, t) + ";")
+		e.line(place + " " + s.Tok.String() + " " + e.valueTo(rhs, t) + ";")
 	}
 }
 
@@ -178,7 +179,7 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string) {
 		}
 	}
 
-	e.line(e.expr(lhs) + " = " + value + ";")
+	e.line(e.lvalue(lhs) + " = " + value + ";")
 }
 
 // spread writes a tuple value into a temporary and names its n
@@ -279,22 +280,34 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.line("{")
 	place, t := e.scrutinee(s.X)
 	i := e.temp()
+	if m, ok := t.Underlying().(*types.Map); ok {
+		e.line("for (int64_t " + i + " = tk_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = tk_map_next(&" + place + ", " + i + " + 1)) {")
+		e.rangeVar(s.Key, s.Tok, "(("+e.cType(m.Key(), s.Pos())+" *)"+place+".keys)["+i+"]", m.Key())
+		e.rangeVar(s.Value, s.Tok, "(("+e.cType(m.Value(), s.Pos())+" *)"+place+".vals)["+i+"]", m.Value())
+		e.stmts(s.Body.List)
+		e.line("}")
+		e.line("}")
+		return
+	}
+
 	e.line("for (tk_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
 	elem := place + ".ptr[" + i + "]"
+	var elemType types.Type = types.Typ[types.Uint8]
 	iterator := false
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
-		_, iterator = u.Elem().(*types.Ref)
+		elemType = u.Elem()
+		_, iterator = elemType.(*types.Ref)
 	case *types.Basic:
 	default:
 		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
 	}
 
 	if iterator {
-		e.rangeVar(s.Key, s.Tok, elem)
+		e.rangeVar(s.Key, s.Tok, elem, elemType)
 	} else {
-		e.rangeVar(s.Key, s.Tok, i)
-		e.rangeVar(s.Value, s.Tok, elem)
+		e.rangeVar(s.Key, s.Tok, i, types.Typ[types.Int])
+		e.rangeVar(s.Value, s.Tok, elem, elemType)
 	}
 
 	e.stmts(s.Body.List)
@@ -303,20 +316,21 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 }
 
 // rangeVar binds one range variable to the C place of the current
-// item: a new name for :=, an assignment for =, nothing for _.
-func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string) {
+// item, of Teak type itemType: a new name for :=, an assignment for =,
+// nothing for _. A mut binding of the item is its address.
+func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType types.Type) {
 	if x == nil || isBlank(x) {
 		return
 	}
 
 	if tok != token.DEFINE {
-		e.line(e.expr(x) + " = " + item + ";")
+		e.line(e.lvalue(x) + " = " + item + ";")
 		return
 	}
 
 	name := x.(*ast.Ident)
 	v := e.info.Defs[name]
-	if r, ok := v.Type().(*types.Ref); ok && r.Mut() {
+	if depth(v.Type()) > depth(itemType) {
 		item = "&" + item
 	}
 
@@ -338,14 +352,14 @@ func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 
 		t := valueType(e.info.Types[s.Lhs[0]])
 		if s.Tok == token.ASSIGN {
-			return e.expr(s.Lhs[0]) + " = " + e.valueTo(s.Rhs[0], t), true
+			return e.lvalue(s.Lhs[0]) + " = " + e.valueTo(s.Rhs[0], t), true
 		}
 
 		if isString(t) {
 			return "", false
 		}
 
-		return e.expr(s.Lhs[0]) + " " + s.Tok.String() + " " + e.valueTo(s.Rhs[0], t), true
+		return e.lvalue(s.Lhs[0]) + " " + s.Tok.String() + " " + e.valueTo(s.Rhs[0], t), true
 	}
 
 	return "", false

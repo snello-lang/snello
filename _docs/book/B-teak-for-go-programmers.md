@@ -76,4 +76,7 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s` |
 | `for i, r := range s` yields runes | `for i, c := range s` yields bytes; text as runes comes with the library (stage 2) |
 | `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
+| `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
+| `delete(m, k)` | `m.Remove(k)` returns the value as `V?` |
+| Map iteration order is random | Insertion order |
 

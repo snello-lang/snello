@@ -104,7 +104,7 @@ The predeclared names, number types and the library packages are defined in `../
 - [x] Functions, numbers, strings and control flow; `teak build FILE` (2026-10-18)
 - [x] Structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings; `teak emit FILE` (2026-10-18; `calc.teak` builds. Two checker clarifications came with it: `*v += 1` for a bare `mut` borrow of a number, and an owned pointer lent as a `ref` of what it holds)
 - [x] Slices, string methods, option and result methods, `take`, equality of composite values (2026-10-18; `list.teak` and `bst.teak` build. Printing quotes a string inside `Some`, `Ok`, `Err` and a variant and prints an empty struct as its name, until the library in Teak decides in task 2.6)
-- [ ] Maps (`config.teak`)
+- [x] Maps (2026-10-18; an insertion-ordered hash map in the runtime with a generated hash and equality per key type; `config.teak` still waits for `os.ReadToString` in the last slice)
 - [ ] Closures, `defer`, and the `os` and `io` functions (`tree.teak`, `wordfreq.teak`, `files.teak`)
 
 **Acceptance criteria:**

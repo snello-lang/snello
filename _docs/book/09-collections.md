@@ -1,6 +1,6 @@
 # 9. Collections: slices, maps and strings
 
-Status: slices and strings are implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). Maps are decided and checked; they compile in the next part of the same slice. `examples/run/slices.teak` exercises this chapter.
+Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.teak` and `maps.teak` exercise this chapter; `Sort` and `SortBy` wait for closures.
 
 A slice is an owned, growable list. A map is an owned table from keys to values. A string is an owned sequence of bytes holding UTF-8 text. All three own their memory, so the rules of chapter 5 apply to them: they move when assigned or passed by value, they are lent with `ref` and `mut`, and they are freed when their owner is dropped. None of them is ever `nil`; a slice or map declared without a value is empty and ready to use.
 
@@ -82,7 +82,37 @@ if (k, v) := line.SplitOnce("=") {
 
 ## Maps
 
-Decided, and checked; compiled in the next part of this slice. A map literal is `map[string]int{}`, `m[k]` reads a value and `m[k] = v` writes one, and the methods are `Get`, `GetMut`, `Insert`, `Remove`, `Contains` and `Clone`. `for k, v := range m` walks the entries. This section grows when the compiler does.
+A map holds one value per key. A map literal lists its entries, or none, and `make(map[K]V)` is the same as the empty literal:
+
+```teak
+kv := map[string]string{}
+counts := map[string]int{}
+```
+
+`m[k] = v` stores a value, making the entry when the key is new, and `m[k]` reads one. Reading a key that is not there gives the value type's zero value and leaves the map unchanged, so `counts[w] += 1` counts a word whether or not it was seen before. `len(m)` is the number of entries.
+
+The methods say what happens to the entry:
+
+| Method | What it does |
+|---|---|
+| `m.Get(k)` | The value as a borrow, `ref V?`: `None` when the key is absent |
+| `m.GetMut(k)` | The same as a `mut V?`, to change the value in place |
+| `m.Insert(k, v)` | Stores `v` under `k`, replacing what was there |
+| `m.Remove(k)` | Takes the entry out and returns its value as `V?` |
+| `m.Contains(k)` | Whether the key is there |
+| `m.Clone()` | A new map with a copy of every entry |
+
+`Get` and `GetMut` answer with an optional because the entry may be absent, which is what `config` relies on:
+
+```teak
+text := kv.Get(ref key) ?? return Err(Missing(key))
+```
+
+A key is any type with `==`: numbers, strings, booleans, enums, tuples and structs of those. A map owns its keys and values, so inserting a borrowed string clones it first: `kv.Insert(k.Trim().Clone(), v.Trim().Clone())`.
+
+`for k, v := range m` walks the entries in the order they were inserted, which is also the order a map prints in: `map[one:1 two:2]`. Through a `mut` borrow the values are lent for writing, as slice elements are; ranging over an owned map by value moves each key and value out, which is how `wordfreq` turns its counts into a list to sort.
+
+Two maps do not compare with `==`, for the same reason two slices do not.
 
 ## What the compiler reports
 
@@ -90,9 +120,9 @@ Decided, and checked; compiled in the next part of this slice. A map literal is 
 |---|---|
 | `cannot index a value of type int` | Only slices, arrays, maps and strings index |
 | `index must be an integer, not string` | A slice index is an integer of any integer type |
-| `values of type []int cannot be compared with ==` | Compare elements, or use `Contains` |
+| `values of type []int cannot be compared with ==` | Compare elements, or use `Contains`; the same for maps |
 | `index out of range [5] with length 3` | At run time: the program stops instead of reading past the end |
 
 ## What a value costs
 
-A slice is three words, a pointer to its elements, a length and a capacity, and its elements lie one after another in one allocation. `Push` doubles the room when it runs out, so appending `n` elements allocates about `log n` times. A string is two words, a pointer and a length, and a literal points at the program's own bytes; only `+`, `Clone`, `ToUpper` and `ToLower` allocate. A borrow of part of either is the same two or three words pointing into the middle, and allocates nothing.
+A slice is three words, a pointer to its elements, a length and a capacity, and its elements lie one after another in one allocation. A map is eight words: its keys and values lie in two arrays in insertion order, found through a hash index that doubles as the map grows; a removed entry leaves its slot until the next growth compacts the arrays. `Push` doubles the room when it runs out, so appending `n` elements allocates about `log n` times. A string is two words, a pointer and a length, and a literal points at the program's own bytes; only `+`, `Clone`, `ToUpper` and `ToLower` allocate. A borrow of part of either is the same two or three words pointing into the middle, and allocates nothing.

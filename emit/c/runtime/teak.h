@@ -72,6 +72,38 @@ void tk_slice_reverse(tk_slice *s, size_t size);
 void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size);
 void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size_t size);
 
+// A map keeps its entries in insertion order, which is the order a
+// range visits them, and finds them through a hash index. The emitter
+// gives each map type a tk_map_type naming the sizes, the hash and
+// the equality of its keys. A map declared without a value is all
+// zeros and works as an empty map.
+typedef struct {
+    void *keys;
+    void *vals;
+    uint8_t *live;  // one per entry: false after Remove
+    int64_t *index; // hash slots holding entry positions plus one; zero is empty
+    int64_t len;    // entries, dead ones included
+    int64_t count;  // live entries
+    int64_t cap;    // room for entries
+    int64_t slots;  // size of the index, a power of two
+} tk_map;
+
+typedef struct {
+    size_t ksize;
+    size_t vsize;
+    uint64_t (*hash)(const void *key);
+    bool (*eq)(const void *a, const void *b);
+} tk_map_type;
+
+void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key);
+const void *tk_map_get(const tk_map *m, const tk_map_type *t, const void *key, const void *zero);
+void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key);
+bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out);
+void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out);
+int64_t tk_map_next(const tk_map *m, int64_t i);
+uint64_t tk_hash_bytes(const void *p, size_t n);
+uint64_t tk_hash_mix(uint64_t h, uint64_t v);
+
 tk_string tk_string_clone(tk_string s);
 tk_string tk_substr(tk_string s, int64_t lo, int64_t hi);
 tk_string tk_to_upper(tk_string s);

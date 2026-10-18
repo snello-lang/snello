@@ -22,6 +22,11 @@ const (
 	defined
 )
 
+// zeroValue is the initializer of a variable declared without a value:
+// {0} zeroes a number, a pointer and every field of a struct alike, and
+// makes a compound literal with (T) in front.
+const zeroValue = "{0}"
+
 // cType writes the C type for a Teak type and makes sure the type is
 // complete, so a value of it can be declared. A kind the backend does
 // not lower yet is reported and written as void so the output still
@@ -50,6 +55,14 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		return e.typeName(t.Elem(), pos) + " *"
 	case *types.Option, *types.Result, *types.Slice:
 		return e.declare(t, pos)
+	case *types.Map:
+		name := "tk_" + mangle(t)
+		if e.state[name] == undeclared {
+			e.state[name] = defined
+			e.decls.WriteString("typedef tk_map " + name + ";\n")
+		}
+
+		return name
 	case *types.Tuple:
 		if t == types.Unit {
 			return "tk_unit"
@@ -238,6 +251,8 @@ func mangle(t types.Type) string {
 		return "res_" + mangle(t.Val()) + "_" + mangle(t.Err())
 	case *types.Slice:
 		return "slice_" + mangle(t.Elem())
+	case *types.Map:
+		return "map_" + mangle(t.Key()) + "_" + mangle(t.Value())
 	case *types.Tuple:
 		if t == types.Unit {
 			return "unit"
@@ -284,25 +299,6 @@ func depth(t types.Type) int {
 	}
 
 	return 0
-}
-
-// zeroValue writes the initializer of a variable declared without a
-// value.
-func (e *Emitter) zeroValue(t types.Type) string {
-	switch valueType(t).Underlying().(type) {
-	case *types.Basic:
-		if isString(t) {
-			return "{0}"
-		}
-
-		return "0"
-	}
-
-	if depth(t) > 0 {
-		return "NULL"
-	}
-
-	return "{0}"
 }
 
 // deref writes v, a C value of Teak type t, dereferenced to the value.

@@ -155,7 +155,7 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) {
 		}
 
 		value := place
-		if r, ok := v.Type().(*types.Ref); ok && r.Mut() {
+		if depth(v.Type()) > depth(t) { // a mut binding of a value: its address
 			value = "&" + place
 		}
 

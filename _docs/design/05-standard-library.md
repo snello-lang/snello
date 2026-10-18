@@ -38,7 +38,7 @@ These names are predeclared: visible in every file without an import, and known 
 | On | Methods |
 |---|---|
 | `[]T` | `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Reverse`, `Sort`, `SortBy`, `Contains`, `Clone` |
-| `map[K]V` | `Get`, `GetMut`, `Insert`, `Remove`, `Contains`, `Clone` |
+| `map[K]V` | `Get`, `GetMut`, `Insert`, `Remove`, `Contains`, `Clone`. `m[k]` on a missing key reads the zero value and changes nothing; `m[k] = v` and `m[k] += v` make the entry. A range visits entries in insertion order (decided 2026-10-18 with the C backend) |
 | `string` | `Len`, `Clone`, `Fields`, `Split`, `SplitOnce`, `Trim`, `HasPrefix`, `HasSuffix`, `Contains`, `ToUpper`, `ToLower` |
 
 **The standard traits.** `Copy`, `Clone`, `Eq`, `Ord`, `Hash`, `Drop`, `Error`, and the operator traits `Add`, `Sub`, `Mul`, `Div`, `Rem`, `Neg`. Every number type is `Copy`, `Eq`, `Ord` and `Hash`, and implements the operator traits.

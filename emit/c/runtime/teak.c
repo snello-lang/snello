@@ -227,6 +227,140 @@ tk_string tk_quote(tk_string s) {
     return TK_STR(p, n);
 }
 
+uint64_t tk_hash_bytes(const void *p, size_t n) {
+    uint64_t h = 1469598103934665603u; // FNV-1a
+    for (size_t i = 0; i < n; i++) {
+        h = (h ^ ((const uint8_t *)p)[i]) * 1099511628211u;
+    }
+
+    return h;
+}
+
+uint64_t tk_hash_mix(uint64_t h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15u + (h << 6) + (h >> 2);
+    return h * 1099511628211u;
+}
+
+static void *key_at(const tk_map *m, const tk_map_type *t, int64_t i) { return (char *)m->keys + (size_t)i * t->ksize; }
+static void *val_at(const tk_map *m, const tk_map_type *t, int64_t i) { return (char *)m->vals + (size_t)i * t->vsize; }
+
+// probe returns the index slot holding the key, or the empty slot
+// where it would go; the index must have room.
+static int64_t probe(const tk_map *m, const tk_map_type *t, const void *key) {
+    uint64_t mask = (uint64_t)m->slots - 1;
+    for (uint64_t i = t->hash(key) & mask;; i = (i + 1) & mask) {
+        int64_t at = m->index[i];
+        if (at == 0 || (m->live[at - 1] && t->eq(key_at(m, t, at - 1), key))) {
+            return (int64_t)i;
+        }
+    }
+}
+
+// rebuild makes room for one more entry, growing the arrays, dropping
+// dead entries, and indexing the live ones again.
+static void rebuild(tk_map *m, const tk_map_type *t) {
+    int64_t cap = m->cap < 8 ? 8 : m->cap * 2;
+    if (m->count + 1 <= m->cap / 2) {
+        cap = m->cap; // enough dead entries to drop
+    }
+
+    tk_map n = {0};
+    n.cap = cap;
+    n.slots = 16;
+    while (n.slots < cap * 2) {
+        n.slots *= 2;
+    }
+
+    n.keys = tk_alloc((size_t)cap * t->ksize);
+    n.vals = tk_alloc((size_t)cap * t->vsize);
+    n.live = tk_alloc((size_t)cap);
+    n.index = tk_alloc((size_t)n.slots * sizeof(int64_t));
+    memset(n.index, 0, (size_t)n.slots * sizeof(int64_t));
+    for (int64_t i = 0; i < m->len; i++) {
+        if (!m->live[i]) {
+            continue;
+        }
+
+        memcpy(key_at(&n, t, n.len), key_at(m, t, i), t->ksize);
+        memcpy(val_at(&n, t, n.len), val_at(m, t, i), t->vsize);
+        n.live[n.len] = 1;
+        n.len++;
+        n.index[probe(&n, t, key_at(m, t, i))] = n.len;
+    }
+
+    n.count = n.len;
+    *m = n;
+}
+
+void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key) {
+    if (m->count == 0) {
+        return NULL;
+    }
+
+    int64_t at = m->index[probe(m, t, key)];
+    return at == 0 ? NULL : val_at(m, t, at - 1);
+}
+
+const void *tk_map_get(const tk_map *m, const tk_map_type *t, const void *key, const void *zero) {
+    const void *v = tk_map_find(m, t, key);
+    return v == NULL ? zero : v;
+}
+
+void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key) {
+    void *v = tk_map_find(m, t, key);
+    if (v != NULL) {
+        return v;
+    }
+
+    if (m->len == m->cap) {
+        rebuild(m, t);
+    }
+
+    int64_t i = m->len++;
+    memcpy(key_at(m, t, i), key, t->ksize);
+    memset(val_at(m, t, i), 0, t->vsize);
+    m->live[i] = 1;
+    m->count++;
+    m->index[probe(m, t, key)] = i + 1;
+    return val_at(m, t, i);
+}
+
+bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) {
+    if (m->count == 0) {
+        return false;
+    }
+
+    int64_t slot = probe(m, t, key);
+    int64_t at = m->index[slot];
+    if (at == 0) {
+        return false;
+    }
+
+    memcpy(out, val_at(m, t, at - 1), t->vsize);
+    m->live[at - 1] = 0; // the entry stays, skipped by lookups and ranges, until the next rebuild drops it
+    m->count--;
+    return true;
+}
+
+void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
+    tk_map n = {0};
+    for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
+        memcpy(tk_map_slot(&n, t, key_at(m, t, i)), val_at(m, t, i), t->vsize);
+    }
+
+    *out = n;
+}
+
+int64_t tk_map_next(const tk_map *m, int64_t i) {
+    for (; i < m->len; i++) {
+        if (m->live[i]) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 tk_string tk_string_clone(tk_string s) {
     uint8_t *p = tk_alloc((size_t)s.len);
     memcpy(p, s.ptr, (size_t)s.len);
