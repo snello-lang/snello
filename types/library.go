@@ -25,7 +25,7 @@ var libraries = map[string]*Scope{
 var errorResult = NewResult(Unit, Typ[Error])
 
 // OSFile is the library's os.File type, shared between packages and
-// recognized by the Go emitter.
+// recognized by the C emitter.
 var OSFile = NewNamed(NewTypeName(token.NoPos, "File", nil), NewStruct(nil), []string{"Drop"})
 
 // libraryMember returns the object named in an imported package, or nil.

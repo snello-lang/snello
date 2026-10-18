@@ -7,6 +7,7 @@ package c
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,77 +15,32 @@ import (
 	"github.com/teak-lang/teak/types"
 )
 
-func TestPrograms(t *testing.T) {
-	tests := []struct {
-		name, src, want string
-	}{
-		{"hello", `package main
-import "fmt"
-func main() { fmt.Println("hello") }
-`, "hello\n"},
-		{"numbers", `package main
-import "fmt"
-func fib(n int) int { if n < 2 { return n }; return fib(n-1) + fib(n-2) }
-func main() {
-    sum := 0
-    for i := 0; i < 10; i += 1 { sum += fib(i) }
-    fmt.Println(fib(10), sum, 7 / 2, 7 % 2, -3, 2.5 * 2, 1.0 / 3.0)
-    var big i64 = 1
-    for i := 0; i < 40; i += 1 { big *= 2 }
-    fmt.Println(big, u8(255), 'a', f64(3) / 2 == 1.5)
-}
-`, "55 88 3 1 -3 5 0.3333333333333333\n1099511627776 255 97 true\n"},
-		{"strings", `package main
-import "fmt"
-func greet(name ref string) string { return "hello, " + name }
-func main() {
-    s := greet("teak")
-    fmt.Println(s, len(s), s == "hello, teak", s < "zz", s[0], s[7])
-    t := s
-    t += "!"
-    fmt.Println(t)
-    fmt.Println(fmt.Sprintf("%d + %d = %d; %s %q %v", 1, 2, 3, "a", "b", true))
-    fmt.Printf("%s-%d\n", "x", 42)
-    fmt.Println(fmt.Sprint(1, 2, "a", 3.5, "b", "c"))
-}
-`, "hello, teak 11 true true 104 116\nhello, teak!\n1 + 2 = 3; a \"b\" true\nx-42\n1 2a3.5bc\n"},
-		{"corners", `package main
-import "fmt"
-func unused() int { return 1 }
-func main() {
-    x := 1_000 + 0b101 + 0o17 + 0x1F
-    var big i64 = 9223372036854775807
-    big += 1
-    fmt.Println("??= \"q\" \\ \u00e9", x, big, 1e3, 0.1 + 0.2)
-}
-`, "??= \"q\" \\ \u00e9 1051 -9223372036854775808 1000 0.30000000000000004\n"},
-		{"control", `package main
-import "fmt"
-type Score int
-func grade(s Score) string {
-    if s >= 90 { return "A" } else if s >= 80 { return "B" }
-    return "C"
-}
-func main() {
-    for i := 0; i < 3; i += 1 {
-        if i == 1 { continue }
-        fmt.Println(i, grade(Score(70 + i*12)))
-    }
-    n := 0
-    for n < 5 { n += 2 }
-    for { n -= 1; if n == 0 { break } }
-    x, y := 1, 2
-    x, y = y, x
-    fmt.Println(n, x, y, !(x > y) && y != 0)
-}
-`, "0 C\n2 A\n0 2 1 false\n"},
+// TestRunExamples builds every program under examples/run and compares
+// what it prints with the .out file beside it. The folder is the
+// playground for the backend: each slice adds the programs it makes
+// buildable, and a reader can run any of them with teak build.
+func TestRunExamples(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "run", "*.teak"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no programs under examples/run: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := buildAndRun(t, tt.name, tt.src)
-			if got != tt.want {
-				t.Errorf("output:\n%s\nwant:\n%s", got, tt.want)
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
+			if err != nil {
+				t.Fatalf("every program needs its expected output beside it: %v", err)
+			}
+
+			if got := buildAndRun(t, name, string(src)); got != string(want) {
+				t.Errorf("%s printed:\n%s\nwant:\n%s", path, got, want)
 			}
 		})
 	}

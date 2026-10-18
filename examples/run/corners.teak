@@ -1,0 +1,25 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Corners of the lowering to C: a function nothing calls, number
+// literals in every base with digit separators, a signed overflow that
+// must wrap, a string that would be a C trigraph, and float printing
+// without an exponent.
+
+package main
+
+import "fmt"
+
+func unused() int {
+	return 1
+}
+
+func main() {
+	x := 1_000 + 0b101 + 0o17 + 0x1F
+
+	var big i64 = 9223372036854775807
+	big += 1
+
+	fmt.Println("??= \"q\" \\ \u00e9", x, big, 1e3, 0.1+0.2)
+}

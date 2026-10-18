@@ -197,8 +197,16 @@ func printErrors(err error) {
 	fmt.Fprintln(os.Stderr, err)
 }
 
-// readSource reads a file, reporting a failure to stderr.
+// readSource reads a Teak source file, reporting a failure to stderr.
+// The name must end in .teak, as the Go tool insists on .go: it keeps a
+// stray file from being compiled as Teak, and it keeps build from
+// writing the binary over a source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
+	if !strings.HasSuffix(path, ".teak") {
+		fmt.Fprintf(os.Stderr, "%s: Teak source files end in .teak\n", path)
+		return nil, false
+	}
+
 	src, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

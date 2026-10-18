@@ -108,6 +108,7 @@ The predeclared names, number types and the library packages are defined in `../
 **Verification:**
 - [ ] Tests pass: `go test ./emit/c/`
 - [ ] Manual check: build and run three core programs
+- [x] Every program under `examples/run/` prints its `.out` file; each slice adds the programs it makes buildable (2026-10-18)
 
 **Dependencies:** 1.4
 **Files:** `emit/c/`, `emit/c/runtime/`, `cmd/teak/main.go`

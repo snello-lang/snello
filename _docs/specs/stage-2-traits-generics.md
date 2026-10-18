@@ -79,7 +79,7 @@ Goal: all twenty examples compile through the C backend and run with their expec
 
 ## Task 2.6: Standard library, first cut
 
-**Description:** The library the examples import, written in Teak where possible and mapped onto Go packages otherwise: `Option`/`Result` methods, slice methods (`Push`, `Pop`, `Remove`, `Reverse`), `take`, `Arena<T>` and `Index<T>`, `Rc`/`Weak`, `strings`, `strconv`, `fmt`, `os`, `io`, `bufio`, `sort`, `time` shims.
+**Description:** The library the examples import, written in Teak where possible and mapped onto the C runtime otherwise: `Option`/`Result` methods, slice methods (`Push`, `Pop`, `Remove`, `Reverse`), `take`, `Arena<T>` and `Index<T>`, `Rc`/`Weak`, `strings`, `strconv`, `fmt`, `os`, `io`, `bufio`, `sort`, `time` shims.
 
 **Acceptance criteria:**
 - [ ] Each function the examples call exists with the signature the examples use

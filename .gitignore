@@ -1,0 +1,8 @@
+# The compiler built with go build -o teak ./cmd/teak.
+/teak
+
+# Binaries teak build writes next to the example programs.
+/examples/run/*
+!/examples/run/*.teak
+!/examples/run/*.out
+!/examples/run/README.md

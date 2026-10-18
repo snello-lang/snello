@@ -33,7 +33,7 @@ teak build hello.teak
 ./hello
 ```
 
-`teak build` writes a native executable named after the file, next to it. The binary contains Teak's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
+`teak build` writes a native executable named after the file, in the current directory. The file name must end in `.teak`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Teak's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
 
 ## The other commands
 

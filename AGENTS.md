@@ -57,7 +57,7 @@ go run ./cmd/teak build FILE   # build a native binary next to the file; needs c
 | `_docs/design/` | Design documents, numbered |
 | `_docs/specs/` | Implementation plan and per-stage task lists |
 | `_docs/book/` | The language book, written chapter by chapter as features land |
-| `examples/` | The twenty Teak programs, plus Go versions of the first two |
+| `examples/` | The twenty Teak programs, plus Go versions of the first two; `core/` is the stage 1 suite, `run/` the programs that build and run today with their expected output |
 | `token/` | Token kinds and positions, modeled on `go/token` |
 | `scanner/` | The lexer, modeled on `go/scanner` |
 | `ast/` | The syntax tree, modeled on `go/ast` |
