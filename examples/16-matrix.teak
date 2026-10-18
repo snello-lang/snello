@@ -13,7 +13,7 @@ import ("fmt"; "math")
 
 // Operators are traits from the standard library: Add, Sub, Mul, and so
 // on. Implementing one is declaring it and writing the method.
-type Vec3 struct impl Copy, Eq, Add, Sub, Mul<f64> {
+struct Vec3 impl Copy, Eq, Add, Sub, Mul<f64> {
     x, y, z f64
 }
 
@@ -24,7 +24,7 @@ func (a Vec3) Dot(b Vec3) f64   { return a.x*b.x + a.y*b.y + a.z*b.z }
 func (a Vec3) Len() f64         { return math.Sqrt(a.Dot(a)) }
 func (a Vec3) Norm() Vec3           { return a * (1 / a.Len()) }
 
-type Mat4 struct impl Copy, Mul { m [16]f64 }
+struct Mat4 impl Copy, Mul { m [16]f64 }
 
 func Identity() Mat4 {
     var r Mat4

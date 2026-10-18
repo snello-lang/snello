@@ -18,14 +18,14 @@ package lru
 
 import ("arena"; "fmt")
 
-type entry<K, V> struct {
+struct entry<K, V> {
     key  K
     val  V
     prev Index<entry<K, V>>?
     next Index<entry<K, V>>?
 }
 
-type Cache<K: Hash + Eq + Clone, V> struct {
+struct Cache<K: Hash + Eq + Clone, V> {
     cap   int
     index map[K]Index<entry<K, V>>
     slots Arena<entry<K, V>>

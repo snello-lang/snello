@@ -31,13 +31,13 @@ func TestDecls(t *testing.T) {
 
 		// Types: definitions, structs with impl lists, enums.
 		{"type NodeID int", "type NodeID int"},
-		{"type Circle struct impl Shape, Named, Logged {\n\tr f64\n}", "type Circle struct impl Shape, Named, Logged {r f64}"},
-		{"type Cache<K: Hash + Eq + Clone, V> struct {}", "type Cache<K: Hash + Eq + Clone, V> struct {}"},
-		{"type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}", "type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {}"},
-		{"type Expr enum {\n\tLit(f64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "type Expr enum {Lit(f64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
-		{"type Token enum impl Copy, Eq { Plus; Minus }", "type Token enum impl Copy, Eq {Plus; Minus}"},
-		{"type Value enum { Null; Array([]Value); Object(map[string]Value) }", "type Value enum {Null; Array([]Value); Object(map[string]Value)}"},
-		{"type Msg enum { Withdraw(amount int, reply chan<- Result<int, string>) }", "type Msg enum {Withdraw(amount int, reply chan<- Result<int, string>)}"},
+		{"struct Circle impl Shape, Named, Logged {\n\tr f64\n}", "struct Circle impl Shape, Named, Logged {r f64}"},
+		{"struct Cache<K: Hash + Eq + Clone, V> {}", "struct Cache<K: Hash + Eq + Clone, V> {}"},
+		{"struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}", "struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}"},
+		{"enum Expr {\n\tLit(f64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "enum Expr {Lit(f64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
+		{"enum Token impl Copy, Eq { Plus; Minus }", "enum Token impl Copy, Eq {Plus; Minus}"},
+		{"enum Value { Null; Array([]Value); Object(map[string]Value) }", "enum Value {Null; Array([]Value); Object(map[string]Value)}"},
+		{"enum Msg { Withdraw(amount int, reply chan<- Result<int, string>) }", "enum Msg {Withdraw(amount int, reply chan<- Result<int, string>)}"},
 
 		// Traits: required and default methods, fields, refinement.
 		{"trait Shape {\n\tfunc (s ref Self) Area() f64\n\tfunc (s ref Self) Describe() string { return s.Name() }\n}", "trait Shape {func (s ref Self) Area() f64; func (s ref Self) Describe() string {...}}"},
@@ -71,12 +71,13 @@ func TestDeclErrors(t *testing.T) {
 		want string // substring of the first error
 		n    int    // total errors expected
 	}{
-		{"type T struct", "expected '{', found 'EOF'", 1},               // no semicolon after struct, as in Go
-		{"type T struct\nfunc f() {}", "expected '{', found 'func'", 2}, // then the missing newline
-		{"type T impl Shape struct {}", "'impl' goes after 'struct' or 'enum'", 1},
-		{"type E enum {\n\tLit f64\n}", "expected '(' or newline, found 'f64'", 1},
-		{"type E enum {\n\t3\n}", "expected variant or '}', found '3'", 1},
-		{"type T<K Ord> struct {}", "expected '>', found 'Ord'", 2}, // cascade: the stray '>' is reported too
+		{"struct T", "expected '{', found 'newline'", 1},
+		{"struct T\nfunc f() {}", "expected '{', found 'newline'", 1},
+		{"type T struct {}", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1}, // Go's spelling
+		{"type T enum { A }", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1},
+		{"enum E {\n\tLit f64\n}", "expected '(' or newline, found 'f64'", 1},
+		{"enum E {\n\t3\n}", "expected variant or '}', found '3'", 1},
+		{"struct T<K Ord> {}", "expected '>', found 'Ord'", 1}, // the stray '>' is on the same line, so not reported
 		{"trait T {\n\tx int\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T {\n\tx int\n\tfunc (s ref Self) F()\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T { 3 func (s ref Self) F() }", "expected method, field or '}', found '3'", 1}, // resumes at func
@@ -99,15 +100,15 @@ func TestDeclErrors(t *testing.T) {
 	}
 }
 
-// TestImplBeforeStruct checks that an impl list in the wrong place is
-// reported and still kept, so the declaration is otherwise intact.
-func TestImplBeforeStruct(t *testing.T) {
-	d, errs := parseDeclString("type T impl Shape struct { x int }")
+// TestGoSpelling checks that Go's `type T struct` is reported once with
+// the Teak spelling and still parsed whole, impl list included.
+func TestGoSpelling(t *testing.T) {
+	d, errs := parseDeclString("type T struct impl Shape { x int }")
 	if len(errs) != 1 {
 		t.Fatalf("got %v, want one error", errs)
 	}
 
-	if got, want := declString(d), "type T struct impl Shape {x int}"; got != want {
+	if got, want := declString(d), "struct T impl Shape {x int}"; got != want {
 		t.Errorf("parsed as %q, want %q", got, want)
 	}
 }
@@ -156,7 +157,7 @@ func declString(d ast.Decl) string {
 
 		return s
 	case *ast.TypeDecl:
-		s := "type " + d.Name.Name + typeParamList(d.TypeParams) + " "
+		s := d.Name.Name + typeParamList(d.TypeParams)
 		impls := ""
 		if len(d.Impls) > 0 {
 			impls = " impl " + typeList(d.Impls, ", ")
@@ -164,7 +165,7 @@ func declString(d ast.Decl) string {
 
 		switch def := d.Def.(type) {
 		case *ast.StructType:
-			return s + "struct" + impls + " {" + fieldList(def.Fields) + "}"
+			return "struct " + s + impls + " {" + fieldList(def.Fields) + "}"
 		case *ast.EnumType:
 			var variants []string
 			for _, v := range def.Variants {
@@ -176,10 +177,10 @@ func declString(d ast.Decl) string {
 				variants = append(variants, vs)
 			}
 
-			return s + "enum" + impls + " {" + strings.Join(variants, "; ") + "}"
+			return "enum " + s + impls + " {" + strings.Join(variants, "; ") + "}"
 		}
 
-		return s + typeString(d.Def)
+		return "type " + s + " " + typeString(d.Def)
 	case *ast.TraitDecl:
 		s := "trait " + d.Name.Name + typeParamList(d.TypeParams)
 		if len(d.Refines) > 0 {

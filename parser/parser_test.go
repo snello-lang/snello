@@ -7,6 +7,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -59,15 +60,15 @@ func TestErrors(t *testing.T) {
 		want string // substring of the first error
 		n    int    // total errors expected
 	}{
-		{"func main() {}", "1:1: expected 'package', found 'func'", 2},
+		{"func main() {}", "1:1: expected 'package', found 'func'", 1},
 		{"package", "1:8: expected identifier, found 'EOF'", 1},
-		{"package 3", "1:9: expected identifier, found '3'", 2}, // the 3 is then not a declaration
+		{"package 3", "1:9: expected identifier, found '3'", 1},
 		{"package a\nimport 7\n", "2:8: expected import path, found '7'", 1},
 		{"package a\nimport (\"x\" \"y\")\n", "2:13: expected ';' or newline, found '\"y\"'", 1},
 		{"package a\nfunc f() {}\nimport \"x\"\n", "3:1: imports must appear before other declarations", 1},
 		{"package a\nimport (\"x\"\n\"y\" 7)\n", "3:5: expected ';' or newline, found '7'", 1},
-		{"package a\n\"", "2:1: expected declaration, found '\"'", 2},                                 // plus the scanner's unterminated string
-		{"package a\nimport (\n\t\"x\"\nfunc f() {}\n", "4:1: expected import path, found 'func'", 2}, // then the missing ')'; f parses
+		{"package a\n\"", "2:2: string literal not terminated", 1},                                    // the scanner's error; the parser's on the same line is dropped
+		{"package a\nimport (\n\t\"x\"\nfunc f() {}\n", "4:1: expected import path, found 'func'", 1}, // f still parses
 		{"package a\nimport (\n\t\"x\"\n", "4:1: expected ')', found 'EOF'", 1},
 	}
 	for _, tt := range tests {
@@ -102,14 +103,101 @@ func TestPartialFile(t *testing.T) {
 
 // TestExamples parses every example program and expects no errors. The
 // examples are the acceptance suite; a syntax change that breaks one is
-// wrong until the example or the conventions are updated.
+// wrong until the example or the conventions are updated. As a check
+// that the tree is the program and not a plausible fragment of it, the
+// first and last declarations must be the ones the source text shows.
 func TestExamples(t *testing.T) {
 	for _, f := range exampleFiles(t) {
-		if _, _, err := ParseFile(f.name, f.src); err != nil {
+		file, _, err := ParseFile(f.name, f.src)
+		if err != nil {
 			t.Errorf("%s: %v", f.name, err)
+			continue
+		}
+
+		names := declPattern.FindAllStringSubmatch(string(f.src), -1)
+		if len(names) == 0 || len(file.Decls) == 0 {
+			t.Errorf("%s: no declarations", f.name)
+			continue
+		}
+
+		first, last := declName(file.Decls[0]), declName(file.Decls[len(file.Decls)-1])
+		if first != names[0][1] || last != names[len(names)-1][1] {
+			t.Errorf("%s: declarations %s ... %s, source shows %s ... %s", f.name, first, last, names[0][1], names[len(names)-1][1])
 		}
 	}
 }
+
+// declPattern finds the name of each top-level declaration in source
+// text, skipping a method's receiver.
+var declPattern = regexp.MustCompile(`(?m)^(?:func|struct|enum|type|trait|var|const)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`)
+
+func declName(d ast.Decl) string {
+	switch d := d.(type) {
+	case *ast.FuncDecl:
+		return d.Name.Name
+	case *ast.TypeDecl:
+		return d.Name.Name
+	case *ast.TraitDecl:
+		return d.Name.Name
+	case *ast.VarDecl:
+		return d.Names[0].Name
+	}
+
+	return "?"
+}
+
+// TestErrorFiles parses each file under testdata/errors and checks the
+// errors against the file's own annotations: a line ending in
+// `// ERROR "text"` must produce exactly one error containing text, and
+// no other line may produce any. This is the form the Go compiler's
+// errorcheck tests use, and the form stage 1's negative tests will use.
+func TestErrorFiles(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.teak"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no error files found: %v", err)
+	}
+
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := map[int]string{} // line to expected text
+		for i, line := range strings.Split(string(src), "\n") {
+			if m := errorPattern.FindStringSubmatch(line); m != nil {
+				want[i+1] = m[1]
+			}
+		}
+
+		_, _, perr := ParseFile(path, src)
+		got := map[int][]string{}
+		if list, ok := perr.(scanner.ErrorList); ok {
+			for _, e := range list {
+				got[e.Pos.Line] = append(got[e.Pos.Line], e.Msg)
+			}
+		}
+
+		for line, text := range want {
+			switch msgs := got[line]; {
+			case len(msgs) == 0:
+				t.Errorf("%s:%d: no error, want one containing %q", path, line, text)
+			case len(msgs) > 1:
+				t.Errorf("%s:%d: %d errors, want one: %q", path, line, len(msgs), msgs)
+			case !strings.Contains(msgs[0], text):
+				t.Errorf("%s:%d: got %q, want it to contain %q", path, line, msgs[0], text)
+			}
+		}
+
+		for line, msgs := range got {
+			if _, ok := want[line]; !ok {
+				t.Errorf("%s:%d: unexpected error %q", path, line, msgs[0])
+			}
+		}
+	}
+}
+
+var errorPattern = regexp.MustCompile(`// ERROR "(.*)"\s*$`)
 
 // BenchmarkExamples parses every example program once per iteration
 // and reports allocations, the number the coding standards track.

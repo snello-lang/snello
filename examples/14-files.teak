@@ -29,7 +29,7 @@ func Copy(src ref string, dst ref string) Result<i64, io.Error> {
 
 // A temp directory that removes itself. Drop runs on normal exit, early
 // return, and panic unwinding.
-type TempDir struct impl Drop { path string }
+struct TempDir impl Drop { path string }
 
 func NewTempDir() Result<TempDir, io.Error> {
     p := os.MkdirTemp("", "teak")?

@@ -29,7 +29,7 @@ trait Iterator<T> {
     }
 }
 
-type Range struct impl Iterator<int> { cur, end int }
+struct Range impl Iterator<int> { cur, end int }
 
 func (r mut Range) Next() int? {
     if r.cur >= r.end { return None }
@@ -37,14 +37,14 @@ func (r mut Range) Next() int? {
     return Some(r.cur - 1)
 }
 
-type MapIter<I: Iterator<T>, T, U> struct impl Iterator<U> {
+struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {
     inner I
     f     func(T) U
 }
 
 func (m mut MapIter<I, T, U>) Next() U? { return m.inner.Next().Map(m.f) }
 
-type FilterIter<I: Iterator<T>, T> struct impl Iterator<T> {
+struct FilterIter<I: Iterator<T>, T> impl Iterator<T> {
     inner I
     keep  func(ref T) bool
 }

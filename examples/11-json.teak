@@ -15,7 +15,7 @@ package json
 
 import ("fmt"; "strconv"; "strings")
 
-type Value enum {
+enum Value {
     Null
     Bool(bool)
     Number(f64)
@@ -24,7 +24,7 @@ type Value enum {
     Object(map[string]Value)
 }
 
-type DecodeError struct { pos int; msg string }
+struct DecodeError { pos int; msg string }
 
 func (v ref Value) Encode(out mut strings.Builder) {
     match v {
@@ -54,7 +54,7 @@ func (v ref Value) Encode(out mut strings.Builder) {
     }
 }
 
-type Decoder struct {
+struct Decoder {
     src ref string          // the Decoder is a borrow
     pos int
 }

@@ -47,7 +47,7 @@ func (p *Parser) parseStmtList() []ast.Stmt {
 			continue
 		}
 
-		p.advance(stmtEnd)
+		p.skipTo(stmtEnd)
 		if p.tok == token.SEMICOLON {
 			p.next()
 		}
@@ -111,7 +111,7 @@ func (p *Parser) parseStmt() ast.Stmt {
 
 	bad := &ast.BadStmt{From: p.pos}
 	p.errorExpected(p.pos, "statement")
-	p.advance(stmtEnd)
+	p.skipTo(stmtEnd)
 	bad.To = p.pos
 	return bad
 }

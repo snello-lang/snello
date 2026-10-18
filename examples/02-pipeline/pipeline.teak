@@ -23,12 +23,12 @@ package pipeline
 
 import ("fmt"; "strings")
 
-type Job struct {
+struct Job {
     id   int
     text string
 }
 
-type Result struct {
+struct Result {
     id    int
     words int
 }

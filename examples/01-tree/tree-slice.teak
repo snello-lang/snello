@@ -20,14 +20,14 @@ import "fmt"
 
 type NodeID int
 
-type Node struct {
+struct Node {
     value    string
     parent   NodeID?               // None for the root
     children []NodeID
     live     bool                  // false after Remove; the slot is kept
 }
 
-type Tree struct {
+struct Tree {
     nodes []Node                   // owns every node
 }
 

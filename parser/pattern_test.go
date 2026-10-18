@@ -21,6 +21,8 @@ func TestMatch(t *testing.T) {
 		{"match x { n => a }", "match x { n => a }"},
 		{"match x { None => a }", "match x { None => a }"},
 		{"match x { 1 => a }", "match x { 1 => a }"},
+		{"match x { -1 => a }", "match x { -1 => a }"},
+		{"match x { -1..=1 => a }", "match x { -1..=1 => a }"},
 		{"match x { \"-i\" => a }", "match x { \"-i\" => a }"},
 		{"match c { '0'..='9' => a }", "match c { '0'..='9' => a }"},
 		{"match c { '0'..='9' | '.' => a }", "match c { '0'..='9' | '.' => a }"},
@@ -79,6 +81,8 @@ func TestMatchErrors(t *testing.T) {
 		{"match x { => a }", "expected pattern, found '=>'", 1},
 		{"match x { 1 => a b => c }", "expected ',' or newline after the arm, found 'b'", 1},
 		{"match x { 1 => a", "expected '}', found 'EOF'", 1},
+		{"match x { - => a }", "expected number after '-', found '=>'", 1},
+		{"match x {\n\tClosed { x; y },\n\t_ => b,\n}", "expected '=>', found '{'", 1}, // the block is skipped whole
 	}
 	for _, tt := range tests {
 		_, errs := parseExprString(tt.src)

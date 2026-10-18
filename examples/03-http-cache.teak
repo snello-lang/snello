@@ -23,12 +23,12 @@ import (
     "time"
 )
 
-type Entry struct {
+struct Entry {
     body    []byte
     expires time.Time
 }
 
-type Server struct {
+struct Server {
     cache Arc<sync.RwLock<map[string]Entry>>   // shared, lock-protected
     db    Arc<db.Pool>                          // shared, internally synchronized
 }

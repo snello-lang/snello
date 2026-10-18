@@ -47,7 +47,7 @@ These came out of writing the parser and are binding on every example.
 - **A match arm is `pattern [if guard] => body`, ended by a comma or a newline.** The body is an expression, a block, or one statement: `Stop => return,`, `Balance(reply) => reply <- n,`, `"-i" => o.ignoreCase = true,`. Because a comma ends the arm, a `return` in an arm carries one expression, and several results are written as a tuple: `return (n, right)`. A bare name in a pattern is a binding or a constant variant such as `None`; the checker tells them apart. A parenthesized single pattern is that pattern.
 - **One name on the left takes one expression on the right.** `x := f()`; only a list takes a list, `a, b := b, a`, as in Go.
 - **An `if` expression has an `else`.** Every path yields a value, so `x := if c { a }` without an `else` is an error.
-- **`impl` goes after `struct` or `enum`**: `type Circle struct impl Shape { ... }`. Written before them it is reported and still recorded, so the rest of the declaration is checked.
+- **`impl` goes after `struct` or `enum`**: `struct Circle impl Shape { ... }`. Written before them it is reported and still recorded, so the rest of the declaration is checked.
 
 ## Heap allocation
 
@@ -61,17 +61,17 @@ Go's other uses of `*T`, sharing a value or mutating it through a pointer, are `
 
 Number types, with `int` and `uint` the platform word size and `int` the index type as in Go; `byte` is `u8` and `rune` is `i32`:
 
-| Kind | Types |
-|---|---|
-| Signed integers | `i8`, `i16`, `i32`, `i64`, `int` |
+| Kind              | Types                             |
+|-------------------|-----------------------------------|
+| Signed integers   | `i8`, `i16`, `i32`, `i64`, `int`  |
 | Unsigned integers | `u8`, `u16`, `u32`, `u64`, `uint` |
-| Floating point | `f32`, `f64` |
+| Floating point    | `f32`, `f64`                      |
 
 No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; checked arithmetic is a library function returning `T?`. A literal takes the type its context asks for.
 
 - Generics with angle brackets: `List<T>`, `func Map<T, U>(...)`. Bounds with a colon: `T: Ord + Clone`.
-- Sum types: `type Shape enum { Circle(r f64); Rect(w, h f64) }`.
-- `match` with exhaustiveness checking. Patterns: literals, variants with bindings, tuples `(a, b)`, ranges `'0'..='9'`, alternatives `|`, guards `if cond`, wildcard `_`.
+- Sum types: `enum Shape { Circle(r f64); Rect(w, h f64) }`.
+- `match` with exhaustiveness checking. Patterns: literals including negative numbers `-1`, variants with bindings, tuples `(a, b)`, ranges `'0'..='9'`, alternatives `|`, guards `if cond`, wildcard `_`.
 - `Option<T>` written `T?`, with `Some(x)` and `None`. `Result<T, E>` with `Ok(x)` and `Err(e)`. No `nil`.
 - `x?` propagates `None` or `Err` from a function returning the same kind.
 - `x ?? expr` unwraps or evaluates `expr`, which may `return`, `break`, or `continue`: `n := take(mut s.head) ?? return None`.
@@ -97,19 +97,19 @@ trait Named {
     func (n ref Self) Name() string { return n.name }
 }
 
-type Circle struct impl Shape, Named {
+struct Circle impl Shape, Named {
     r f64
 }
 
 func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 ```
 
-- A type declares what it implements with `impl` on its declaration: `type Circle struct impl Shape, Named { ... }`. The same for enums. The compiler checks every required method exists. There are no impl blocks; methods are ordinary Go methods.
+- A type declares what it implements with `impl` on its declaration: `struct Circle impl Shape, Named { ... }`. The same for enums. The compiler checks every required method exists. There are no impl blocks; methods are ordinary Go methods.
 - Trait fields are stored inline in the implementing struct and set at construction: `Circle{r: 1, name: "circle"}`. A trait field has no default value; `var name string = "x"` inside a trait is an error.
 - Overriding a default is defining the method. `super.Method()` inside an override calls the next definition in the impl order.
 - Resolution order: the type's own methods, then its impl list from right to left, each trait followed by the traits it refines. Resolved at compile time; every call is direct.
 - A trait refining another: `trait Logged: Shape { ... }`.
-- Marker and operator traits use the same mechanism: `type Vec3 struct impl Copy, Eq, Add { ... }` with a method `func (a Vec3) Add(b Vec3) Vec3`.
+- Marker and operator traits use the same mechanism: `struct Vec3 impl Copy, Eq, Add { ... }` with a method `func (a Vec3) Add(b Vec3) Vec3`.
 - Bounds: `func Total<T: Shape>(xs ref []T)`. Monomorphized per `T`.
 - **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types; each element owns its value. One allocation and one indirect call per value, the same cost as Go. Such a value is `Send` only if the trait requires it: `trait Shape: Send { ... }`.
 - Not in version one: self-types, implicits.

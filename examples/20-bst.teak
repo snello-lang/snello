@@ -13,14 +13,14 @@ package bst
 
 import "fmt"
 
-type Node<K: Ord, V> struct {
+struct Node<K: Ord, V> {
     key   K
     val   V
     left  *Node<K, V>?
     right *Node<K, V>?
 }
 
-type Tree<K: Ord, V> struct { root *Node<K, V>? }
+struct Tree<K: Ord, V> { root *Node<K, V>? }
 
 func (t mut Tree<K, V>) Insert(k K, v V) {
     // `cur` is a mut borrow of one *Node? slot. Each step re-points it

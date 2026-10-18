@@ -16,13 +16,13 @@ package tree
 
 import ("fmt"; "arena")
 
-type Node struct {
+struct Node {
     value    string
     parent   Index<Node>?         // None for the root
     children []Index<Node>
 }
 
-type Tree struct {
+struct Tree {
     nodes Arena<Node>             // owns every node
     root  Index<Node>
 }

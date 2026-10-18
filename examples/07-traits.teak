@@ -38,14 +38,14 @@ trait Logged: Shape {
     }
 }
 
-type Circle struct impl Shape, Named, Logged {
+struct Circle impl Shape, Named, Logged {
     r f64
 }
 
 func (c ref Circle) Area() f64      { return math.Pi * c.r * c.r }
 func (c ref Circle) Perimeter() f64 { return 2 * math.Pi * c.r }
 
-type Rect struct impl Shape, Named {
+struct Rect impl Shape, Named {
     w, h f64
 }
 

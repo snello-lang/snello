@@ -12,7 +12,8 @@ import (
 // parsePattern parses a pattern of a match arm. The grammar:
 //
 //	Pattern = Single {"|" Single}
-//	Single  = "_" | literal ["..=" literal] | Path ["(" [Pattern {"," Pattern}] ")"]
+//	Single  = "_" | ["-"] literal ["..=" ["-"] literal]
+//	        | Path ["(" [Pattern {"," Pattern}] ")"]
 //	        | "(" [Pattern {"," Pattern}] ")"
 //	Path    = ident {"." ident}
 //
@@ -44,24 +45,19 @@ func (p *Parser) parseSinglePattern() ast.Pattern {
 	switch p.tok {
 	case token.IDENT:
 		return p.parsePathPattern()
-	case token.INT, token.FLOAT, token.CHAR, token.STRING:
-		lit := &ast.BasicLit{ValuePos: p.pos, Kind: p.tok, Value: p.lit}
-		p.next()
+	case token.INT, token.FLOAT, token.CHAR, token.STRING, token.SUB:
+		lit := p.parseLitPattern()
 		if p.tok != token.RANGEINC {
 			return &ast.LitPat{Lit: lit}
 		}
 
 		p.next()
-		if !p.tok.IsLiteral() {
+		if !p.tok.IsLiteral() && p.tok != token.SUB {
 			p.errorExpected(p.pos, "literal after '..='")
+			return &ast.RangePat{Lo: lit, Hi: lit}
 		}
 
-		hi := &ast.BasicLit{ValuePos: p.pos, Kind: p.tok, Value: p.lit}
-		if p.tok.IsLiteral() {
-			p.next()
-		}
-
-		return &ast.RangePat{Lo: lit, Hi: hi}
+		return &ast.RangePat{Lo: lit, Hi: p.parseLitPattern()}
 	case token.LPAREN:
 		pos := p.pos
 		elts := p.parsePatternList()
@@ -74,6 +70,28 @@ func (p *Parser) parseSinglePattern() ast.Pattern {
 
 	p.errorExpected(p.pos, "pattern")
 	return &ast.WildcardPat{Underscore: p.pos}
+}
+
+// parseLitPattern parses a literal, with an optional minus sign in
+// front of a number: -1 matches minus one. The sign becomes part of the
+// literal's text, so the checker sees one negative literal.
+func (p *Parser) parseLitPattern() *ast.BasicLit {
+	lit := &ast.BasicLit{ValuePos: p.pos, Kind: p.tok, Value: p.lit}
+	if p.tok != token.SUB {
+		p.next()
+		return lit
+	}
+
+	p.next()
+	lit.Kind, lit.Value = p.tok, "-"+p.lit
+	if p.tok != token.INT && p.tok != token.FLOAT {
+		p.errorExpected(p.pos, "number after '-'")
+		lit.Kind = token.INT
+		return lit
+	}
+
+	p.next()
+	return lit
 }
 
 // parsePathPattern parses a name, a wildcard, or a variant with its

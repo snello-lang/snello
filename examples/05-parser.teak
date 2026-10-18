@@ -17,7 +17,7 @@ package calc
 
 import ("fmt"; "strconv")
 
-type Token enum impl Copy, Eq {
+enum Token impl Copy, Eq {
     Num(f64)
     Plus
     Minus
@@ -28,19 +28,19 @@ type Token enum impl Copy, Eq {
     EOF
 }
 
-type Expr enum {
+enum Expr {
     Lit(f64)
     Neg(*Expr)                                  // *T: an owned heap pointer
     Bin(op Token, lhs *Expr, rhs *Expr)
 }
 
-type ParseError enum {
+enum ParseError {
     Unexpected(got Token, pos int)
     BadChar(c byte, pos int)
     BadNumber(text string)
 }
 
-type Lexer struct {
+struct Lexer {
     src ref string          // the Lexer is therefore a borrow
     pos int
 }
@@ -69,7 +69,7 @@ func (l mut Lexer) Next() Result<Token, ParseError> {
     }
 }
 
-type Parser struct {
+struct Parser {
     lex Lexer               // contains a borrow, so Parser is a borrow too
     cur Token
 }

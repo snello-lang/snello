@@ -412,7 +412,7 @@ func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 		case token.RBRACE:
 		default:
 			p.errorExpected(p.pos, "',' or newline after the arm")
-			p.advance(armEnd)
+			p.skipTo(armEnd)
 			if p.tok == token.COMMA || p.tok == token.SEMICOLON {
 				p.next()
 			}
@@ -435,7 +435,7 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 
 	if p.tok != token.FATARROW {
 		p.errorExpected(p.pos, "'=>'")
-		p.advance(armEnd)
+		p.skipTo(armEnd)
 		return arm
 	}
 

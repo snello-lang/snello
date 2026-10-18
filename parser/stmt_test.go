@@ -99,7 +99,7 @@ func TestStmtErrors(t *testing.T) {
 		{"a, b", "expected ':=' or '=', found 'newline'", 1},
 		{"if { a }", "expected condition, found '{'", 1},
 		{"if x := y; { a }", "expected expression, found '{'", 1},
-		{"if a { x } else y", "expected 'if' or '{', found 'y'", 2}, // cascade: y is then not a statement end
+		{"if a { x } else y", "expected 'if' or '{', found 'y'", 1},
 		{"if a + b := x { y }", "expected a name, a tuple or a variant pattern before ':='", 1},
 		{"if x, y := f() { a }", "an if binding has one pattern and one value", 1},
 		{"for a, b, c := range xs { }", "range allows at most two variables", 1},

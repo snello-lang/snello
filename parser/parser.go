@@ -28,7 +28,7 @@ import (
 // top-level declaration; groupEnd adds the parenthesis that closes an
 // import group, so an error inside the group does not skip past it.
 var (
-	declStart = newKindSet(token.IMPORT, token.FUNC, token.TYPE, token.TRAIT, token.VAR, token.CONST)
+	declStart = newKindSet(token.IMPORT, token.FUNC, token.STRUCT, token.ENUM, token.TYPE, token.TRAIT, token.VAR, token.CONST)
 	groupEnd  = declStart.with(token.RPAREN)
 	fieldEnd  = declStart.with(token.SEMICOLON, token.RBRACE)
 
@@ -37,11 +37,12 @@ var (
 	// resume at any of them. stmtEnd adds the tokens that end one.
 	stmtStart = newKindSet(token.BREAK, token.CONST, token.CONTINUE, token.DEFER, token.FOR, token.SPAWN,
 		token.IF, token.RETURN, token.SELECT, token.SWITCH, token.VAR)
-	stmtEnd = stmtStart.with(token.SEMICOLON, token.RBRACE, token.CASE, token.DEFAULT)
+	stmtEnd = stmtStart.with(token.SEMICOLON, token.CASE, token.DEFAULT)
 
 	// armEnd is where a broken match arm ends: at the comma or newline
-	// before the next arm, or at the brace that closes the match.
-	armEnd = newKindSet(token.COMMA, token.SEMICOLON, token.RBRACE)
+	// before the next arm. The brace that closes the match ends it too,
+	// as skipTo's unmatched-brace rule.
+	armEnd = newKindSet(token.COMMA, token.SEMICOLON)
 )
 
 // A kindSet is a set of token kinds as a table indexed by Kind: a
@@ -107,7 +108,7 @@ func ParseFile(filename string, src []byte) (*ast.File, *token.File, error) {
 func (p *Parser) init(filename string, src []byte) {
 	p.file = token.NewFile(filename, len(src))
 	p.scanner.Init(p.file, src, func(pos token.Position, msg string) {
-		p.errors.Add(pos, msg)
+		p.addError(pos, msg)
 	})
 	p.next()
 }
@@ -167,7 +168,21 @@ func (p *Parser) expectGtr() {
 }
 
 func (p *Parser) error(pos token.Pos, msg string) {
-	p.errors.Add(p.file.Position(pos), msg)
+	p.addError(p.file.Position(pos), msg)
+}
+
+// addError records an error unless one was already recorded on the
+// same line. After the first error on a line the parser is guessing at
+// what the line meant, and the errors that follow are consequences of
+// the guess, not faults in the program. go/parser applies the same
+// rule outside its AllErrors mode. Every error, the scanner's included,
+// passes through here.
+func (p *Parser) addError(pos token.Position, msg string) {
+	if n := len(p.errors); n > 0 && p.errors[n-1].Pos.Line == pos.Line {
+		return
+	}
+
+	p.errors.Add(pos, msg)
 }
 
 // errorExpected reports what the parser wanted and what it found, in
@@ -184,12 +199,19 @@ func (p *Parser) errorExpected(pos token.Pos, what string) {
 	p.error(pos, "expected "+what+", found '"+found+"'")
 }
 
-// expect consumes the current token if it is tok, else reports an error.
-// It returns the token's position either way.
+// expect consumes the current token if it is tok, else reports an error
+// and consumes the token found instead, as go/parser does. The one
+// exception is a line end: a token missing at the end of a line is
+// reported without consuming the newline, so the statement ends where
+// the user ended it and the next line starts clean instead of being
+// read as a continuation. It returns the token's position either way.
 func (p *Parser) expect(tok token.Kind) token.Pos {
 	pos := p.pos
 	if p.tok != tok {
 		p.errorExpected(pos, "'"+tok.String()+"'")
+		if p.tok == token.SEMICOLON && p.lit == "\n" {
+			return pos
+		}
 	}
 
 	p.next()
@@ -227,8 +249,42 @@ func (p *Parser) expectSemi() bool {
 }
 
 // advance skips tokens until one in the set, or the end of the file.
+// It is for recovery between declarations, where no bracket structure
+// needs respecting; inside a body, skipTo is the one to use.
 func (p *Parser) advance(to *kindSet) {
 	for p.tok != token.EOF && !to[p.tok] {
+		p.next()
+	}
+}
+
+// skipTo skips the rest of a broken statement or match arm: tokens up
+// to one in the stop set at bracket depth zero, or to the '}' that
+// closes the enclosing body, whichever comes first. Brackets are
+// balanced on the way, so a block or a literal on the same line is
+// skipped whole rather than resumed in the middle, and a stray '{}' on
+// a line cannot end the body it sits in.
+func (p *Parser) skipTo(stop *kindSet) {
+	depth := 0
+	for p.tok != token.EOF {
+		switch p.tok {
+		case token.LPAREN, token.LBRACK, token.LBRACE:
+			depth++
+		case token.RPAREN, token.RBRACK:
+			if depth > 0 {
+				depth--
+			}
+		case token.RBRACE:
+			if depth == 0 {
+				return
+			}
+
+			depth--
+		default:
+			if depth == 0 && stop[p.tok] {
+				return
+			}
+		}
+
 		p.next()
 	}
 }

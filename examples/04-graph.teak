@@ -15,12 +15,12 @@ import ("fmt"; "heap")
 
 type NodeID int
 
-type Edge struct impl Copy {
+struct Edge impl Copy {
     to     NodeID
     weight int
 }
 
-type Graph struct {
+struct Graph {
     labels []string
     adj    [][]Edge              // adj[i] owns the edges leaving node i
 }
@@ -58,7 +58,7 @@ func (g ref Graph) BFS(start NodeID) []NodeID {
 
 // Dijkstra with the standard library heap. Items are small Copy structs
 // that the heap owns.
-type item struct impl Copy, Ord { node NodeID; dist int }
+struct item impl Copy, Ord { node NodeID; dist int }
 
 func (a ref item) Cmp(b ref item) Ordering { return a.dist.Cmp(b.dist) }
 

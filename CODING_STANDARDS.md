@@ -89,7 +89,7 @@ return tok, lit
 ### Errors
 
 - The compiler reports errors with a position and a message that says what was found and what was expected, in the user's terms: `"hexadecimal literal has no digits"`, never `"bad token"`.
-- One problem, one error. Do not report the same fault twice from two checks.
+- One problem, one error. Do not report the same fault twice from two checks. The parser enforces a coarser version of this mechanically, as `go/parser` does: at most one error per line, since after the first the parser is guessing at what the line meant.
 - Error handlers are callbacks, as in `go/scanner`; packages do not print or exit.
 
 ## Compiler performance

@@ -12,14 +12,14 @@ package actor
 
 import "fmt"
 
-type Msg enum {
+enum Msg {
     Deposit(amount int)
     Withdraw(amount int, reply chan<- Result<int, string>)
     Balance(reply chan<- int)
     Stop
 }
 
-type Account struct {
+struct Account {
     balance int
     history []int
 }
@@ -48,7 +48,7 @@ func run(acct Account, inbox <-chan Msg) {
 
 // A handle is a Copy value wrapping a channel. Copying it does not copy
 // the actor.
-type Handle struct impl Copy { inbox chan<- Msg }
+struct Handle impl Copy { inbox chan<- Msg }
 
 func Spawn(initial int) Handle {
     ch := make(chan Msg, 64)

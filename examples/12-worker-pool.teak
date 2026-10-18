@@ -12,13 +12,13 @@ package pool
 
 import ("fmt"; "sync"; "time")
 
-type Task struct { id int; payload []byte }
-type Done struct { id int; size int }
+struct Task { id int; payload []byte }
+struct Done { id int; size int }
 
 // A cancellation token is a channel that gets closed. Closing twice is a
 // panic in Go, so a Once guards it. sync types synchronize internally and
 // are used through `ref`.
-type Cancel struct {
+struct Cancel {
     ch   chan struct{}
     once sync.Once
 }

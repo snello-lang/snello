@@ -14,15 +14,19 @@ import (
 // consumes the token and skips to the next declaration start, so the
 // loop in parseFile always makes progress. It returns nil in that case.
 //
-//	func main() { ... }                  FuncDecl
-//	type Circle struct impl Shape { }    TypeDecl
-//	trait Shape { ... }                  TraitDecl
-//	var limit = 10                       VarDecl
+//	func main() { ... }                FuncDecl
+//	struct Circle impl Shape { }       TypeDecl with a StructType
+//	enum Expr { }                      TypeDecl with an EnumType
+//	type NodeID int                    TypeDecl with any other type
+//	trait Shape { ... }                TraitDecl
+//	var limit = 10                     VarDecl
 func (p *Parser) parseDecl() ast.Decl {
 	var d ast.Decl
 	switch p.tok {
 	case token.FUNC:
 		d = p.parseFuncDecl()
+	case token.STRUCT, token.ENUM:
+		d = p.parseStructOrEnumDecl()
 	case token.TYPE:
 		d = p.parseTypeDecl()
 	case token.TRAIT:
@@ -143,45 +147,71 @@ func (p *Parser) parseTypeParams() []*ast.TypeParam {
 	return params
 }
 
-// parseTypeDecl parses: "type" ident [TypeParams] Def, where Def is
-// "struct" [Impls] Fields, "enum" [Impls] Variants, or any type for a
-// definition like type NodeID int. The impl list comes after the
-// struct or enum keyword; an impl list before it is reported once and
-// still recorded, so the declaration survives the mistake.
+// parseStructOrEnumDecl parses: ("struct" | "enum") ident [TypeParams]
+// [Impls] Body, where the body is a field list for a struct and a
+// variant list for an enum. The keyword comes first, as with trait and
+// func, so a declaration says what it declares in its first word; Go's
+// `type Circle struct` is the one piece of Go's declaration syntax Teak
+// changes, because the impl list belongs on the thing being declared.
 //
-//	type NodeID int                         Def NamedType
-//	type Circle struct impl Shape { r float64 }   Impls [Shape], Def StructType
-//	type Expr enum { Lit(float64); Neg(*Expr) }   Def EnumType
-//	type Cache<K: Hash, V> struct { }       TypeParams [K, V]
+//	struct Circle impl Shape { r f64 }     Impls [Shape], Def StructType
+//	enum Expr { Lit(f64); Neg(*Expr) }     Def EnumType
+//	struct Cache<K: Hash, V> { }           TypeParams [K, V]
+func (p *Parser) parseStructOrEnumDecl() *ast.TypeDecl {
+	kind, pos := p.tok, p.pos
+	p.next()
+	d := &ast.TypeDecl{TokPos: pos, Name: p.parseIdent()}
+	if p.tok == token.LSS {
+		d.TypeParams = p.parseTypeParams()
+	}
+
+	d.Impls = p.parseImpls()
+	d.Def = p.parseStructOrEnumBody(kind, pos)
+	return d
+}
+
+// parseStructOrEnumBody parses the body of a struct or enum
+// declaration whose keyword, at pos, was already read.
+func (p *Parser) parseStructOrEnumBody(kind token.Kind, pos token.Pos) ast.Type {
+	if kind == token.STRUCT {
+		return &ast.StructType{Struct: pos, Fields: p.parseFieldList()}
+	}
+
+	return &ast.EnumType{Enum: pos, Variants: p.parseVariants()}
+}
+
+// parseTypeDecl parses: "type" ident [TypeParams] Type, a name for an
+// existing type. Go's spelling of a struct or enum declaration, `type
+// Circle struct { ... }`, is reported once with the Teak spelling and
+// then parsed as that declaration, so the tree is still whole.
+//
+//	type NodeID int                   Def NamedType
+//	type Handler func(Request)        Def FuncType
 func (p *Parser) parseTypeDecl() *ast.TypeDecl {
-	d := &ast.TypeDecl{TypePos: p.expect(token.TYPE)}
+	d := &ast.TypeDecl{TokPos: p.expect(token.TYPE)}
 	d.Name = p.parseIdent()
 	if p.tok == token.LSS {
 		d.TypeParams = p.parseTypeParams()
 	}
 
-	if p.tok == token.IMPL {
-		p.error(p.pos, "'impl' goes after 'struct' or 'enum'")
+	if p.tok == token.IMPL || p.tok == token.STRUCT || p.tok == token.ENUM {
+		p.error(d.TokPos, "a struct or enum declaration is spelled 'struct "+d.Name.Name+" {' or 'enum "+d.Name.Name+" {'")
 		d.Impls = p.parseImpls()
-	}
+		if p.tok != token.STRUCT && p.tok != token.ENUM {
+			return d
+		}
 
-	switch p.tok {
-	case token.STRUCT, token.ENUM:
 		kind, pos := p.tok, p.pos
 		p.next()
 		if impls := p.parseImpls(); impls != nil {
 			d.Impls = impls
 		}
 
-		if kind == token.STRUCT {
-			d.Def = &ast.StructType{Struct: pos, Fields: p.parseFieldList()}
-		} else {
-			d.Def = &ast.EnumType{Enum: pos, Variants: p.parseVariants()}
-		}
-	default:
-		d.Def = p.parseType()
+		d.Def = p.parseStructOrEnumBody(kind, pos)
+		return d
 	}
 
+	d.Def = p.parseType()
 	return d
 }
 

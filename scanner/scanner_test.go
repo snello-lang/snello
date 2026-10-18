@@ -28,8 +28,8 @@ func TestTokens(t *testing.T) {
 			{token.FUNC, "func"}, {token.LPAREN, ""}, {token.IDENT, "t"}, {token.REF, "ref"}, {token.IDENT, "Tree"}, {token.RPAREN, ""},
 			{token.IDENT, "Len"}, {token.LPAREN, ""}, {token.RPAREN, ""}, {token.IDENT, "int"}, {token.SEMICOLON, "\n"},
 		}},
-		{"type Circle struct impl Shape, Named {", []elt{
-			{token.TYPE, "type"}, {token.IDENT, "Circle"}, {token.STRUCT, "struct"}, {token.IMPL, "impl"},
+		{"struct Circle impl Shape, Named {", []elt{
+			{token.STRUCT, "struct"}, {token.IDENT, "Circle"}, {token.IMPL, "impl"},
 			{token.IDENT, "Shape"}, {token.COMMA, ""}, {token.IDENT, "Named"}, {token.LBRACE, ""},
 		}},
 		{"n := take(mut s.head) ?? return None", []elt{

@@ -183,22 +183,23 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** A test that parses all twenty examples with zero errors, a table of malformed inputs with their expected messages, and a check that the parser reports at most one error per malformed line rather than cascading.
 
 **Acceptance criteria:**
-- [ ] All twenty `.teak` files parse with no errors
-- [ ] Ten malformed inputs each produce the one expected message
-- [ ] `teak parse` on every example prints a tree whose first and last declarations match the source
+- [x] All twenty `.teak` files parse with no errors (`TestExamples`)
+- [x] Ten malformed inputs each produce the one expected message: thirty, in five annotated files under `parser/testdata/errors/` (`TestErrorFiles`)
+- [x] `teak parse` on every example prints a tree whose first and last declarations match the source (checked in `TestExamples`)
 
 **Verification:**
-- [ ] Tests pass: `go test ./...`
-- [ ] Manual check: `for f in examples/*.teak examples/*/*.teak; do go run ./cmd/teak parse $f > /dev/null || echo FAIL $f; done` prints nothing
+- [x] Tests pass: `go test ./...`
+- [x] Manual check: `for f in examples/*.teak examples/*/*.teak; do go run ./cmd/teak parse $f > /dev/null || echo FAIL $f; done` prints nothing
 
 **Dependencies:** 0.10
-**Files:** `parser/parser_test.go`, `parser/testdata/`
+**Files:** `parser/parser_test.go`, `parser/testdata/errors/`, `parser/parser.go` (one error per line; balanced skipping; line ends kept on a missing token), `parser/pattern.go` (negative literals)
 **Scope:** S
+**Done:** 2026-10-18
 
 ## Checkpoint: stage 0
 
-- [ ] All tasks above checked
-- [ ] `go test ./...` passes; `gofmt -l .` and `go vet ./...` are clean
-- [ ] The grammar decisions made during parsing (the `<` rule, `if` forms, `??` precedence) are recorded in `../design/00-syntax-conventions.md` (the `<` rule and `?` binding are recorded; the rest arrive with 0.8 and 0.9)
+- [x] All tasks above checked (2026-10-18)
+- [x] `go test ./...` passes; `gofmt -l .` and `go vet ./...` are clean
+- [x] The grammar decisions made during parsing are recorded in `../design/00-syntax-conventions.md` under "Grammar rules decided by the parser": `?` binding, `<` and `>`, `??`, the control-clause brace, types as expressions, `if` bindings, match arms, `spawn`
 - [x] Open question from `plan.md` decided: stage 1 includes `match` and enums (2026-10-18)
 - [ ] Reviewed by the owner before stage 1 begins

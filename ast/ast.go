@@ -110,10 +110,12 @@ type FuncDecl struct {
 	Body       *BlockStmt
 }
 
-// A TypeDecl declares a named type. Def is a *StructType, an *EnumType,
-// or any other type for a definition like `type NodeID int`.
+// A TypeDecl declares a named type: `struct Circle impl Shape { ... }`,
+// `enum Expr { ... }`, or `type NodeID int`. Def is a *StructType, an
+// *EnumType, or any other type for the third form. TokPos is the
+// position of the struct, enum or type keyword.
 type TypeDecl struct {
-	TypePos    token.Pos
+	TokPos     token.Pos
 	Name       *Ident
 	TypeParams []*TypeParam
 	Impls      []Type // the traits after `impl`
@@ -570,7 +572,7 @@ func (x *Field) Pos() token.Pos        { return firstPos(firstIdent(x.Names), x.
 func (x *Param) Pos() token.Pos        { return firstPos(x.Name, x.Type) }
 func (x *TypeParam) Pos() token.Pos    { return x.Name.Pos() }
 func (x *FuncDecl) Pos() token.Pos     { return x.Func }
-func (x *TypeDecl) Pos() token.Pos     { return x.TypePos }
+func (x *TypeDecl) Pos() token.Pos     { return x.TokPos }
 func (x *TraitDecl) Pos() token.Pos    { return x.Trait }
 func (x *VarDecl) Pos() token.Pos      { return x.TokPos }
 func (x *NamedType) Pos() token.Pos    { return firstPos(x.Pkg, x.Name) }

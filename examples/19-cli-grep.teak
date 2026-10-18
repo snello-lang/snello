@@ -11,7 +11,7 @@ package main
 
 import ("bufio"; "fmt"; "io"; "os"; "regexp")
 
-type Opts struct {
+struct Opts {
     pattern     string
     files       []string
     ignoreCase  bool

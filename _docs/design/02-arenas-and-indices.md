@@ -29,13 +29,13 @@ Move ownership up one level. One container owns every node, and nodes refer to e
 ```teak
 type NodeID int
 
-type Node struct {
+struct Node {
     value    string
     parent   NodeID?       // None for the root
     children []NodeID
 }
 
-type Tree struct {
+struct Tree {
     nodes []Node           // the arena: owns every node
 }
 ```
