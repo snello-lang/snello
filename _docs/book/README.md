@@ -22,7 +22,7 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | 12. Generics | written with stage 2 |
 | 13. Arenas and indices | written with stage 2, task 2.6 |
 | 14. The standard library | written with stage 2, task 2.6 |
-| Appendix A. Keywords and grammar notes | written with stage 1 |
+| [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | implemented (stage 0) |
 | [Appendix B. Teak for Go programmers](B-teak-for-go-programmers.md) | covers chapters 3 to 6; grows with them |
 
 ## How the book is kept current

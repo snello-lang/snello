@@ -57,10 +57,13 @@ go run ./cmd/teak lex FILE   # print the token stream of a Teak file
 | `examples/` | The twenty Teak programs, plus Go versions of the first two |
 | `token/` | Token kinds and positions, modeled on `go/token` |
 | `scanner/` | The lexer, modeled on `go/scanner` |
+| `ast/` | The syntax tree, modeled on `go/ast` |
+| `parser/` | The parser, modeled on `go/parser` |
+| `types/` | Types, objects, scopes and the checker, modeled on `go/types` |
 | `cmd/teak/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |
 
-Packages to come, in order: `ast`, `parser`, then the checker.
+Packages to come: the Go emitter (`emit/golang`), then the native backend.
 
 ## When the design and the code disagree
 

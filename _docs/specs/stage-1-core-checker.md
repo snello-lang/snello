@@ -47,15 +47,17 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** The `types` package: the representation of every core type, identity and assignability, the universe scope with the basic types, `Option` and `Result` as built-in enums.
 
 **Acceptance criteria:**
-- [ ] Types for basic, struct, enum, pointer, option, slice, array, map, channel, function, tuple, `ref` and `mut`
-- [ ] `Identical` and `AssignableTo` with tests
-- [ ] `Copy` is a property computed from structure, not declared
+- [x] Types for basic, struct, enum, pointer, option, slice, array, map, channel, function, tuple, `ref` and `mut` (2026-10-18; plus `Result` and named types)
+- [x] `Identical` and `AssignableTo` with tests
+- [x] `Copy` is a property computed from structure, not declared (`IsCopy`)
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
+- [x] Tests pass: `go test ./types/`
 
 **Dependencies:** 1.1
-**Files:** `types/type.go`, `types/universe.go`, `types/type_test.go`
+**Files:** `types/types.go`, `types/object.go`, `types/scope.go`, `types/universe.go`, `types/predicates.go`, `types/types_test.go`
+
+**Done:** 2026-10-18; objects and scopes started early because the universe needs them. Appendix A of the book written with it.
 **Scope:** M
 
 ## Task 1.3: Scopes and name resolution
