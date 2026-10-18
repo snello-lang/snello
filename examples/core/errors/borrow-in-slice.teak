@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an owned container cannot hold a borrow; a slice of borrows has
+// no owner to tie them to. Fix: store indexes, or own the strings.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "a"
+    xs := []ref string{}                  // ERROR "a slice cannot hold a borrow"
+    fmt.Println(len(xs), s)
+}

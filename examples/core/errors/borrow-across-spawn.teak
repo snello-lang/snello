@@ -1,0 +1,15 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a borrow is tied to a call frame; a new task has its own frames.
+// Fix: move xs into the task, or share it through sync.Arc.
+
+package p
+
+func count(xs ref []int) int { return len(xs) }
+
+func main() {
+    xs := []int{1, 2, 3}
+    spawn count(ref xs)                   // ERROR "a spawned task cannot hold a borrow"
+}

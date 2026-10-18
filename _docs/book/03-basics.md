@@ -2,7 +2,7 @@
 
 Status: the syntax in this chapter is implemented (stage 0, `teak parse`). Types and names are checked from stage 1.
 
-Teak programs look like Go programs. This chapter walks through the parts that a Go developer already knows and marks the places where Teak differs. If you know Go, read only the paragraphs that begin with **Different from Go**.
+This chapter is the shape of a Teak program: files, names, values, functions and control flow. Everything later in the book is built from these parts.
 
 ## A program
 
@@ -23,9 +23,9 @@ func main() {
 }
 ```
 
-A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every package is referred to by its name: `fmt.Println`, `os.Exit`. Names that start with a capital letter are exported from the package; the others are private to it. Comments are `//` to the end of the line. A statement ends at the end of its line, so there are no semicolons to write, and the braces go where Go puts them: `{` on the same line as `func`, `if` or `for`.
+A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. A program starts at `func main()` in package `main`.
 
-**Different from Go.** A line may end in `>` as well, because a generic type can close a line: `cache sync.Arc<sync.RwLock<Entry>>`. The cost is that a comparison cannot break its line after the operator. Keep the right operand on the same line.
+Names that start with a capital letter are exported from their package; the others are private to it. Comments run from `//` to the end of the line. A statement ends at the end of its line; a line ends after a name, a literal, a closing bracket, `?` or `>`, so a comparison or a shift keeps its right operand on the same line as the operator. Braces open on the line of the `func`, `if` or `for` they belong to.
 
 ## Variables
 
@@ -36,9 +36,9 @@ path := []string{}
 s := Stack{}            // zero value: every field at its zero value
 ```
 
-`:=` declares and infers, `var` declares with a type, and every type has a zero value, as in Go. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest. A name declared and never used is an error.
+`:=` declares a variable and infers its type from the value. `var` declares with a type written out, and a variable declared without a value starts at its type's zero value: `0`, `false`, `""`, an empty slice or map, a struct with every field at its zero value. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest.
 
-**Different from Go.** Assigning a value to a new name may move it. For a number or a `bool` nothing changes: `y := x` copies, and both names are usable. For a string, a slice, a struct or anything that owns memory, `t := s` moves the value to `t`, and `s` cannot be used afterwards. Chapter 5 explains why; for this chapter, know that the compiler tracks who owns each value and that most code never notices.
+Assigning a value to a new name hands the value over. For a number or a `bool` nothing is lost: `y := x` leaves both names usable. For a string, a slice, a struct or anything else that owns memory, `t := s` moves the value to `t`, and `s` cannot be used afterwards. Chapter 5 explains the rule; most code never meets it, because a value usually flows forward from where it is made to where it is needed.
 
 ## Numbers
 
@@ -49,11 +49,9 @@ s := Stack{}            // zero value: every field at its zero value
 | Floating point | `f32`, `f64` |
 | Aliases | `byte` is `u8`, `rune` is `i32` |
 
-`int` and `uint` are the word size of the machine, and `int` is the index type, as in Go. There is no `uintptr`, no `i128` and no complex type.
+`int` and `uint` are the word size of the machine, and `int` is the type of an index and a length. There is no `uintptr`, no `i128` and no complex type.
 
-**Different from Go.** The sized types are spelled the way most newer compiled languages spell them: `i32` where Go writes `int32`, `f64` where Go writes `float64`. This is the one place Teak's vocabulary leaves Go's on purpose.
-
-A literal takes the type its context asks for, and a conversion is a call of the type name, as in Go:
+A literal takes the type its context asks for, and a conversion is a call of the type name:
 
 ```teak
 v := f64(first - '0')               // first is a byte; v is f64
@@ -61,13 +59,13 @@ v = v*10 + f64(l.src[l.pos] - '0')  // 10 is f64 because v is
 n = n*10 + int(c - '0')
 ```
 
-**Different from Go.** There is no untyped constant arithmetic. `10` is an `f64` in the first line because `v` is, and an `int` in the last because `n` is; a literal never carries a type of its own into an expression. Integer arithmetic wraps on overflow as in Go, and checked arithmetic is a library function that returns `T?`.
+A literal never carries a type of its own into an expression: `10` is an `f64` in the second line because `v` is, and an `int` in the third because `n` is. Mixing two number types in one expression needs a conversion. Integer arithmetic wraps on overflow; checked arithmetic is a library function that returns `T?` (chapter 8).
 
 ## Booleans and strings
 
-`bool` has `true` and `false`, `&&`, `||` and `!`, exactly as in Go.
+`bool` has `true` and `false`, with `&&`, `||` and `!`.
 
-A `string` is UTF-8 bytes, immutable, with `len(s)` the length in bytes and `s[i]` a byte. Character literals such as `'+'` and `'0'` are written as in Go and take the type the context asks for, usually `byte`.
+A `string` is a sequence of UTF-8 bytes that owns its memory and never changes. `len(s)` is its length in bytes and `s[i]` is a byte. Character literals such as `'+'` and `'0'` take the type the context asks for, usually `byte`.
 
 ```teak
 for l.pos < len(l.src) && l.src[l.pos] == ' ' { l.pos += 1 }
@@ -76,7 +74,7 @@ text := l.src[start:l.pos]
 target := tmp.path + "/copy.txt"
 ```
 
-**Different from Go.** A string owns its bytes, so `s[a:b]` does not copy and does not produce a second owner: it lends the piece, as a `ref string`, for as long as the original is around. `+` reads both sides and builds a new string. The functions Go keeps in the `strings` package are methods on the value: `s.Fields()`, `s.Split("\n")`, `s.SplitOnce("=")`, `s.Trim()`, `s.HasPrefix(p)`, `s.Contains(t)`, `s.ToLower()`, and `s.Clone()` makes an owned copy. Chapter 9 lists them.
+`s[a:b]` lends a piece of the string, as a `ref string`, for as long as the original is around; it copies nothing (chapter 6). `+` reads both sides and builds a new string. The operations on strings are methods on the value: `s.Fields()`, `s.Split("\n")`, `s.SplitOnce("=")`, `s.Trim()`, `s.HasPrefix(p)`, `s.Contains(t)`, `s.ToLower()`, and `s.Clone()` makes an owned copy. Chapter 9 lists them.
 
 ## Functions
 
@@ -93,9 +91,9 @@ func popMin(n *Node) (*Node, *Node?) {
 
 A function is declared with `func`, its parameters are named before their types, and names that share a type are grouped: `func(from, to NodeID, w int)`. Several results are written as a tuple type, `(*Node, *Node?)`, returned as a tuple, `return (n, right)`, and taken apart at the call, `min, rest := popMin(l)`.
 
-**Different from Go.** A parameter says how the function takes its argument. `src ref string` reads it; `out mut File` changes it in place; a plain `n *Node` takes ownership of it. Go has `T` and `*T` for this and leaves the intent to a comment; Teak writes the intent and checks it. Chapter 6 covers the three modes. Until then, read `ref` as "borrowed to read" and `mut` as "borrowed to change".
+A parameter says how the function takes its argument. `src ref string` reads it; `out mut File` changes it in place; a plain `n *Node` takes ownership of it. Chapter 6 covers the three modes. Until then, read `ref` as "borrowed to read" and `mut` as "borrowed to change".
 
-Function literals are closures and are written as in Go. A closure that only reads a variable borrows it; one that assigns to it borrows it mutably:
+Function literals are closures. A closure that only reads a variable borrows it; one that assigns to it borrows it mutably:
 
 ```teak
 count := 0
@@ -105,7 +103,7 @@ fmt.Println(count)                 // 3
 
 ## Control flow
 
-`if`, `for`, `switch`, `break`, `continue`, `return` and `defer` are Go's, braces required and no parentheses around conditions. The init form `if x := f(); x > 0 {` works. `for` has Go's three forms and its range forms: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` received values, and `for range ch` receives and discards.
+`if`, `for`, `switch`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
 
 ```teak
 for i := 0; i < len(s); i += 1 {
@@ -117,18 +115,18 @@ for i := 0; i < len(s); i += 1 {
 for _, k := range []int{5, 3, 8, 1, 4} { t.Insert(k, fmt.Sprint(k)) }
 ```
 
-**Different from Go.** `if` is also an expression when every branch yields a value, and then the `else` is required:
+`if` is also an expression when every branch yields a value, and then the `else` is required:
 
 ```teak
 pat := if ci { "(?i)" + p } else { p.Clone() }
 ```
 
-**Different from Go.** `if x := opt {`, a short declaration followed directly by `{`, is not Go's init form. It binds `x` when the optional `opt` holds a value and skips the block when it does not. The `;` tells the two apart. Chapter 8 covers optionals; chapter 4 covers `match`, which replaces Go's type switch and most uses of `switch` on an enum.
+`if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
-`defer` and `spawn` take a call, as Go's `defer` and `go` do. `spawn f(x)` starts a task where Go writes `go f(x)`; chapter 10 covers it.
+`defer` runs a call when the enclosing function returns. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
 
 ## Built-in functions
 
-`len`, `cap`, `make` and `panic` are Go's. `print` writes to standard error for debugging; `fmt.Println` is the one to use. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
+`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
 
-**Different from Go.** There is no `append`, `delete`, `copy` or `new`. Slices and maps have methods instead, `xs.Push(v)`, `m.Remove(k)`, and `&expr` allocates (chapter 7). There is no `nil`: a value that may be absent has type `T?` (chapter 8).
+Slices and maps have methods rather than functions: `xs.Push(v)`, `m.Remove(k)` (chapter 9). `&expr` allocates a value on the heap (chapter 7). There is no `nil`: a value that may be absent has type `T?` (chapter 8).

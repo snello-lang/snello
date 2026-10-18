@@ -1,0 +1,17 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a struct holding a borrow is a borrow and cannot be returned,
+// stored, or sent. Fix: build the Lexer where it is used (core/calc.teak).
+
+package p
+
+struct Lexer {
+    src ref string
+    pos int
+}
+
+func NewLexer(src ref string) Lexer {     // ERROR "NewLexer cannot return Lexer: it holds a borrow"
+    return Lexer{src: src, pos: 0}
+}

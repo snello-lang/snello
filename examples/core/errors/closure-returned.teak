@@ -1,0 +1,13 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure that captures a local by borrow is a borrow, and the
+// local dies at return. Fix: move the state into a struct with a method.
+
+package p
+
+func counter() func() int {
+    n := 0
+    return func() int { n += 1; return n }      // ERROR "closure captures n by borrow and cannot be returned"
+}

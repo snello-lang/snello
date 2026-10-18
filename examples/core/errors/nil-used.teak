@@ -1,0 +1,13 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: there is no nil. An absent pointer is *Node?, and absence is None.
+
+package p
+
+struct Node { next *Node? }
+
+func leaf() Node {
+    return Node{next: nil}                // ERROR "nil is not defined; an absent value is None"
+}

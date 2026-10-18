@@ -2,7 +2,7 @@
 
 Status: the syntax in this chapter is implemented (stage 0, `teak parse`). Exhaustiveness and types are checked from stage 1, task 1.4.
 
-Teak has two ways to build a type out of others. A struct holds all of its fields at once, as in Go. An enum holds exactly one of its variants at a time, which Go has no direct way to say. `match` takes an enum apart, and the compiler checks that no variant is forgotten.
+Teak has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten.
 
 ## Structs
 
@@ -17,7 +17,7 @@ struct Node {
 struct Count { word string; n int }
 ```
 
-**Different from Go.** The declaration is `struct Name { ... }`, not `type Name struct { ... }`. The keyword comes first, as it does for `enum` and `trait`, and the traits a struct implements are listed on the same line: `struct TempDir impl Drop { path string }` (chapter 11). `type Name T` still exists for naming an existing type, as in `type NodeID int`.
+A struct declaration is `struct Name { fields }`, one field per line or separated by `;`, each a name and a type. The traits a struct implements are listed on the same line, `struct TempDir impl Drop { path string }` (chapter 11). `type Name T` gives a new name to an existing type, as in `type NodeID int`.
 
 A struct is built with a keyed literal and used with dot notation:
 
@@ -27,19 +27,17 @@ t := Tree{nodes: []Node{{value: value, parent: None, children: []NodeID{}, live:
 if !t.nodes[id].live { return }
 ```
 
-Every field has a zero value, so `Stack{}` is an empty stack. A named type is converted with a call of its name, `NodeID(len(t.nodes))`, as in Go.
+Every field has a zero value, so `Stack{}` is an empty stack. A named type is converted with a call of its name, `NodeID(len(t.nodes))`.
 
 ### Methods
 
 ```teak
 func (t mut Tree) AddChild(parent NodeID, value string) NodeID { ... }
 func (t ref Tree) Path(id NodeID) []string { ... }
-func (f File) Close() error? { ... }
+func (f File) Close() Result<(), error> { ... }
 ```
 
-Methods are Go's: a receiver in parentheses before the name, called with dot notation, no class body.
-
-**Different from Go.** The receiver says what the method does to its value, the way a parameter does. `t ref Tree` reads the tree; `t mut Tree` changes it; `f File` takes it, so after `f.Close()` the file is gone and cannot be used again. Go has value and pointer receivers; Teak's three modes are the same idea with the intent written down and checked. Chapter 6 gives the rules. A method call borrows its receiver by itself, so `t.Path(b)` is written without `ref`.
+A method is a function with a receiver in parentheses before its name, called with dot notation: `t.Path(b)`. The receiver says what the method does to its value, the way a parameter does. `t ref Tree` reads the tree; `t mut Tree` changes it; `f File` takes it, so after `f.Close()` the file is gone and cannot be used again. Chapter 6 gives the rules. A call borrows its receiver by itself, so `t.Path(b)` is written without `ref`.
 
 ## Enums
 
@@ -62,7 +60,7 @@ enum Token {
 
 An enum lists its variants, one per line or separated by `;`. A variant is a bare name, or a name with fields in parentheses. Fields may be named, as in `Connecting(attempt int)`, or just typed, as in `Num(f64)`. A value is built by naming the variant: `Closed`, `Connecting(1)`, `Open(sess)`.
 
-**Different from Go.** Go has no sum type. The usual Go shapes for this, a `const` block with `iota` plus a struct with fields that are only meaningful for some constants, or an interface with one implementing struct per case, both let the wrong field be read. An enum holds exactly the fields of the variant it is, and `match` is the only way to get at them, so reading `session` from a `Closed` state is not a mistake you can make.
+An enum value holds exactly the fields of the variant it is, and `match` is the only way to reach them. A state that is `Closed` has no session to read, and the compiler makes sure no code tries.
 
 An enum whose payloads are all plain values, like `Token` above, is a `Copy` type: assigning it copies, as a number does. One that holds a string or a pointer is moved like any owned value. Chapter 5 has the rule.
 
@@ -76,7 +74,7 @@ enum Expr {
 }
 ```
 
-`*Expr` is a pointer to a heap value with one owner, created with `&expr`; chapter 7 covers it. Two enums are built into the language: `T?`, an optional value with variants `Some(x)` and `None`, and `Result<T, E>` with `Ok(x)` and `Err(e)`. Chapter 8 covers them; they are ordinary enums under `match`.
+`*Expr` is a pointer to a heap value with one owner, created with `&expr`; chapter 7 covers it. Two enums are built into the language: `T?`, an optional value with variants `Some(x)` and `None`, and `Result<T, E>` with `Ok(x)` and `Err(e)`. Chapter 8 covers them; under `match` they are ordinary enums.
 
 ## Match
 
@@ -94,7 +92,7 @@ func (s ref State) Describe() string {
 
 `match value { arms }` compares the value against each arm's pattern in order and runs the first that fits. An arm is `pattern => body`, ended by a comma or by the end of the line. A variant pattern binds the variant's fields to new names: in the `Open(sess)` arm, `sess` is the session inside the state.
 
-**Different from Go.** Think of `match` as Go's type switch for enums, with two changes. It is exhaustive: if `State` gained a variant, every `match` on it that lacks a `_` arm would stop compiling until the new case is handled. And it is an expression when every arm yields a value, so `return match s { ... }` is the whole function body.
+A `match` is exhaustive. If `State` gained a variant, every `match` on it without a `_` arm would stop compiling until the new case is handled; the error names the missing variant. A `match` is an expression when every arm yields a value, so `return match s { ... }` is the whole function body.
 
 ### Patterns
 
@@ -109,7 +107,7 @@ func (s ref State) Describe() string {
 | Alternatives | any of the patterns | `Plus \| Minus` |
 | Guard | the pattern, and then a condition | `Connecting(n) if n < 3` |
 
-Patterns nest: `Bin(Plus, l, r)` matches a `Bin` whose first field is `Plus` and binds the other two. Matching on a tuple of two enums handles a state machine transition table in one place:
+Patterns nest: `Bin(Plus, l, r)` matches a `Bin` whose first field is `Plus` and binds the other two. Matching on a tuple of two enums writes a state machine's transition table in one place:
 
 ```teak
 func step(s State, ev Event) State {
@@ -147,7 +145,7 @@ match p.cur {
 }
 ```
 
-Because a comma ends the arm, a `return` inside an arm carries one expression; to return several values, return a tuple, `return (n, right)`. A `match` whose arms all return or yield nothing is a statement, like a `switch`.
+Because a comma ends the arm, a `return` inside an arm carries one expression; to return several values, return a tuple, `return (n, right)`. A `match` whose arms all return or yield nothing is a statement.
 
 ### Binding without a match
 

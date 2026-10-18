@@ -1,0 +1,20 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a move on one path counts after the paths join. Fix: move on
+// every path, or clone in the branch.
+
+package p
+
+import "fmt"
+
+func keep(s string) {}
+
+func main() {
+    s := "hello"
+    if len(s) > 3 {
+        keep(s)
+    }
+    fmt.Println(s)                        // ERROR "use of moved value s"
+}

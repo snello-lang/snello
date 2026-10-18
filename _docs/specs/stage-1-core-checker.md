@@ -29,12 +29,14 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [x] At least eight positive programs under `examples/core/`, covering the tree, the linked list, the state machine, file copying, the parser and the binary search tree without generics (2026-10-18: tree, list, state, files, calc, bst, wordfreq, config)
-- [ ] At least twenty negative programs under `examples/core/errors/`: use after move, move in a loop, two `mut` borrows, borrow stored in a struct, borrow returned from two inputs, borrow across `spawn`, `nil` used, missing match arm, and so on
-- [ ] Each negative program has exactly one `// ERROR` line
+- [x] At least twenty negative programs under `examples/core/errors/`: use after move, move in a loop, two `mut` borrows, borrow stored in a struct, borrow returned from two inputs, borrow across `spawn`, `nil` used, missing match arm, and so on (2026-10-18: 27 programs)
+- [x] Each negative program has exactly one `// ERROR` line
 
 **Verification:**
 - [x] All positive programs parse: `go run ./cmd/teak parse` (2026-10-18; the parser's example test now covers them)
-- [ ] Reviewed against `../design/04-borrows-ref-and-mut.md`: every rule has at least one negative program
+- [x] Reviewed against `../design/04-borrows-ref-and-mut.md`: every rule has at least one negative program (the table in `examples/core/errors/README.md`)
+
+**Done:** 2026-10-18; book chapters 5 and 6 written with it
 
 **Dependencies:** 1.0
 **Files:** `examples/core/*.teak`, `examples/core/errors/*.teak`

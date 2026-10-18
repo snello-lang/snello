@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: ? propagates to a function returning the same kind. A Result's
+// error has nowhere to go in a function returning an option.
+// Fix: return Result, or use ?? to choose a value for the error case.
+
+package p
+
+import "os"
+
+func size(path ref string) int? {
+    text := os.ReadToString(path)?        // ERROR "cannot use ? on a Result in a function returning an option"
+    return Some(len(text))
+}
