@@ -11,15 +11,72 @@
 
 ---
 
-## Status
+Teak is a compiled language with Go's syntax and memory safety without a garbage collector. Every value has one owner and is freed where its owner dies; the compiler checks every use at compile time, and you never write a lifetime annotation. A Teak program builds to a native executable with a small runtime inside and nothing else.
 
-Teak compiles. `teak build` turns a program in core Teak into a native executable: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results with `?` and `??`, owned pointers, `defer`, files and printing. The compiler checks ownership, moves and borrows, places every drop, and `teak build -debug` builds a binary that stops on a value used after its release and reports anything never released. Stages 0 and 1 of the plan below are done (2026-10-18); stage 2, traits and generics, is next.
+## A taste
 
-What does not exist yet: traits, generics, tasks and channels, and the standard library written in Teak. The programs that need them are in the repository as the acceptance test of the stages that will add them.
+```teak
+package main
+
+import "fmt"
+
+struct Rect {
+    w f64
+    h f64
+}
+
+func (r ref Rect) Area() f64 {
+    return r.w * r.h
+}
+
+enum Shape {
+    Circle(radius f64)
+    Box(rect Rect)
+}
+
+func area(s Shape) f64 {
+    return match s {
+        Circle(radius) => 3.14 * radius * radius,
+        Box(rect)      => rect.Area(),
+    }
+}
+
+func grow(shapes mut []Shape) {
+    shapes.Push(Box(Rect{w: 2.0, h: 3.0}))
+}
+
+func main() {
+    shapes := []Shape{Circle(1.0)}
+    grow(mut shapes)
+    total := 0.0
+    for _, s := range shapes {    // the loop takes the shapes: shapes moves here
+        total += area(s)
+    }
+
+    fmt.Println(total)
+    fmt.Println(len(shapes))      // ERROR "use of moved value shapes"
+}
+```
+
+A struct holds fields and an enum holds one of several variants, each with its own data; `match` takes the enum apart and must cover every variant. `Area` reads its receiver, which `ref` says. `grow` borrows the slice to change it, and the call says so with `mut`. The loop takes the shapes by value, so it uses the slice up, and the last line, which reads it afterwards, is refused:
+
+```
+shapes.teak:39:21: use of moved value shapes; moved at 34:23
+```
+
+## Why Teak
+
+- **Go's syntax.** `func`, `:=`, slices, maps, `defer`, `range`. A Go developer reads Teak on day one.
+- **No garbage collector, no leaks.** Values are freed at a point the compiler knows, and a type with a `Drop` method cleans up there, on every path out of a function, including a panic.
+- **No lifetime annotations.** Borrows are written `ref` and `mut` and live inside one function; a borrow is returned only from its one obvious source. The compiler infers every lifetime or refuses the program.
+- **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
+- **Mistakes that stop the program.** `teak build -debug` builds a binary that panics on any value used after its release and reports anything never released.
+
+Teak is young. The compiler handles core Teak today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, files and printing. Traits, generics, lightweight tasks with channels, a standard library written in Teak, and an LLVM backend are being built, in that order.
 
 ## Getting started
 
-The compiler is built from source with the Go toolchain; a Teak program needs a C compiler on the path, `cc`.
+Build the compiler from source with Go; a Teak program needs a C compiler on the path, `cc`.
 
 ```
 git clone https://github.com/teak-lang/teak
@@ -29,49 +86,22 @@ go build -o teak ./cmd/teak
 ./hello
 ```
 
-`teak check FILE` runs the checker and prints its errors, `teak emit FILE` prints the C the compiler would build, and `teak build -debug FILE` builds with the checking runtime. The book under [`_docs/book/`](_docs/book/) is the guide to the language, one feature per chapter, with every sample cut from a program under [`examples/`](examples/).
-
-## Features
-
-Implemented today:
-
-- **Go's syntax.** `func`, `:=`, slices, maps, `defer`, `range`, with `struct` and `enum` declarations and `spawn` where Go says `go`. A Go developer reads Teak on day one.
-- **Memory safety without a garbage collector.** Every value has one owner and is freed where the owner dies, with a `Drop` method run there, on every path out of a function including a panic. Checked at compile time.
-- **No lifetime annotations.** Borrows, `ref` and `mut`, live inside one function and cannot be stored or sent to another task; a borrow is returned only from its one obvious source, the receiver or the only borrowed parameter. That restriction removes the hardest part of Rust, and stage 1 showed the core programs never needed an annotation.
-- **Sum types and pattern matching**, exhaustive, with `T?` and `Result` instead of `nil` and exceptions.
-
-Planned, in the stages below:
-
-- **Scala-style traits, not interfaces.** Nominal traits with default methods and fields; a type says what it implements with `impl` on its declaration. Stage 2.
-- **Go's concurrency, race-free.** Lightweight tasks, channels and `select`; anything crossing a task boundary must be moved, immutable or atomically shared, and the compiler infers which types qualify. Stage 3.
-- **A native backend** through LLVM with an M:N scheduler, and GPU kernels on the same backend. Stages 4 and 5.
-
-## Layout
-
-| Path | Contents |
+| Command | What it does |
 |---|---|
-| [`cmd/teak`](cmd/teak/) | The compiler command: `build`, `check`, `emit`, `parse`, `lex` |
-| `scanner/`, `parser/`, `ast/`, `token/` | The front end, after the Go toolchain's packages of the same names |
-| [`types/`](types/) | The checker: types, moves, borrows, escapes |
-| [`emit/c/`](emit/c/) | The C backend and the runtime under `emit/c/runtime/`, compiled into every program |
-| [`examples/core/`](examples/core/) | The stage 1 acceptance suite: eight programs that run, and the negative programs the checker must reject |
-| [`examples/run/`](examples/run/) | Smaller programs, one per backend feature, each with the output it prints |
-| [`examples/`](examples/) | The twenty programs the language was designed against; all run once stage 2 lands |
-| [`_docs/book/`](_docs/book/) | The book: how to write Teak |
-| [`_docs/design/`](_docs/design/) | The language design, the decisions and their reasoning |
-| [`_docs/specs/`](_docs/specs/) | The implementation plan and per-stage task lists, ticked as tasks complete |
-| [`_docs/brand/`](_docs/brand/) | Logo, wordmark and palette |
+| `teak build FILE` | Compiles a program to a native executable in the current directory |
+| `teak build -debug FILE` | The same, with the checking runtime |
+| `teak check FILE` | Checks a program and prints its errors |
+| `teak emit FILE` | Prints the C the compiler generates |
 
-## Plan
+## Documentation
 
-| Stage | What | State |
-|---|---|---|
-| 0 | Lexer and parser for the Go-like syntax, written in Go | done 2026-10-18 |
-| 1 | Core checker: ownership, moves, `ref`/`mut` borrows, drops. C backend, native binaries, debug build | done 2026-10-18 |
-| 2 | Traits, generics, and the standard library written in Teak. Still emit C | next |
-| 3 | Sendable inference for `spawn` and channels | |
-| 4 | LLVM backend and a native runtime with an M:N scheduler | |
-| 5 | GPU kernels through the LLVM targets: a kernel-safe subset and device buffers | |
+- [The book](_docs/book/): the language, one feature per chapter, starting from [the introduction](_docs/book/01-introduction.md). Readers coming from Go have [Appendix B](_docs/book/B-teak-for-go-programmers.md).
+- [The design](_docs/design/): every decision behind the language and the reasoning for it.
+- [Examples](examples/): programs that build and run with the output each prints, and programs that break each rule with the message the compiler gives.
+
+## Contributing
+
+Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request; the tests build and run every example, so they need `cc` too. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
 
 ## License
 

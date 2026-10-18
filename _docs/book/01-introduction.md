@@ -1,6 +1,6 @@
 # 1. Introduction
 
-Status: written at the stage 1 checkpoint (2026-10-18). Everything this chapter promises about core Teak is what `teak build` does today; tasks, channels, traits and generics are described by the chapters that will come with them.
+Status: written at the stage 1 checkpoint. Everything this chapter promises about core Teak is what `teak build` does today; tasks, channels, traits and generics are described by the chapters that will come with them.
 
 Teak is a language for programs that must be fast, must not leak, and must be read by the next person without a glossary. It is a compiled language: `teak build` turns a program into a native executable with a small runtime inside it and nothing else. There is no garbage collector. The compiler decides where every value dies, frees it there, and refuses the programs in which that decision would be unsafe. It does this without asking you to write down how long anything lives.
 
