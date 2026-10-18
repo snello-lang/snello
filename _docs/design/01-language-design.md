@@ -1,6 +1,6 @@
 # Teak language design
 
-Status: draft, 2026-10-17. This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
+Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section). This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
 
 ## Goals
 
@@ -66,6 +66,8 @@ The programs in `../../examples/` confirm the model handles trees, graphs, parse
 ### Why not the alternatives
 
 Inko's runtime-checked borrows are the fallback if second-class borrows prove too restrictive in practice; they allow stored references at a small cost. Hylo's value semantics go further than needed and make callbacks awkward. Vale's generational references are elegant but young and carry a per-access cost in the worst case. Swift's reference counting conflicts with the no-hidden-cost goal.
+
+**Decision at the stage 1 checkpoint (2026-10-18): the ownership model holds as designed.** Stage 1 implemented the model as written above and in the borrows note: one owner per value, `ref` and `mut` borrows, the six rules, and no lifetime annotation anywhere. The eight core programs compile, run and free everything under a debug build that counts every allocation, and the 27 negative programs are rejected with the planned message and no other. Four refinements were needed, each a precise answer to a case the design had not spelled out and none a new concept for the programmer, each dated in `04-borrows-ref-and-mut.md`: the arguments of a call are evaluated, and their borrows end, before the receiver is borrowed; a pattern through a borrow copies `Copy` parts and borrows the rest; a `mut` binding through a map read is refused; and a borrow of a temporary dies with its statement. Two gaps carry into stage 2 as checker work, not model changes: a function-typed parameter is trusted to be owned, so a callee that stores its callback can keep a borrowing closure, which the debug build catches at run time; and a deferred call does not run on a panic, while `Drop` does. Stage 2 builds traits and generics on the model unchanged.
 
 ## Concurrency
 
