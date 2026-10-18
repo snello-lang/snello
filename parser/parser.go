@@ -52,12 +52,33 @@ type Parser struct {
 	// One token of lookahead beyond the current one, filled by peek()
 	// and drained by next(). Only a few decisions need it, such as
 	// telling a parameter name from a type name.
-	ahead struct {
-		valid bool
-		pos   token.Pos
-		tok   token.Kind
-		lit   string
-	}
+	ahead lookahead
+
+	// exprLev is the expression nesting level, as in go/parser: it
+	// counts open parentheses and brackets, and is -1 inside a control
+	// clause, where a '{' opens the body rather than a composite
+	// literal: `if x == y {` must not read `y {` as a literal.
+	exprLev int
+}
+
+// A lookahead is one scanned token held for peek.
+type lookahead struct {
+	valid bool
+	pos   token.Pos
+	tok   token.Kind
+	lit   string
+}
+
+// A checkpoint is the parser's place in the token stream, saved before
+// a speculative read and restored after it. The scanner holds its state
+// in plain fields, so saving is a struct copy and restoring is another;
+// neither allocates.
+type checkpoint struct {
+	scanner scanner.Scanner
+	pos     token.Pos
+	tok     token.Kind
+	lit     string
+	ahead   lookahead
 }
 
 // ParseFile parses src as a Teak source file. It always returns a File,
@@ -89,6 +110,16 @@ func (p *Parser) next() {
 	}
 
 	p.pos, p.tok, p.lit = p.scanner.Scan()
+}
+
+// save returns a checkpoint of the current position.
+func (p *Parser) save() checkpoint {
+	return checkpoint{p.scanner, p.pos, p.tok, p.lit, p.ahead}
+}
+
+// restore returns the parser to a saved checkpoint.
+func (p *Parser) restore(c checkpoint) {
+	p.scanner, p.pos, p.tok, p.lit, p.ahead = c.scanner, c.pos, c.tok, c.lit, c.ahead
 }
 
 // peek returns the kind of the token after the current one without

@@ -137,7 +137,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [ ] Tests pass: `go test ./parser/`
 - [ ] Manual check: `teak parse examples/12-worker-pool.teak`
 
-**Dependencies:** 0.7
+**Dependencies:** 0.9 (order swapped; see 0.9)
 **Files:** `parser/stmt.go`, `parser/parser_test.go`
 **Scope:** M
 
@@ -146,17 +146,18 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** Precedence climbing over Go's operators plus `??` at the bottom; unary `ref`, `mut`, `&`, `*`, `-`, `!`, `<-`; postfix `?`, call, selector, index, slice; composite literals for structs, slices and maps; function literals; generic calls `arena.New<Node>()`; `if` as an expression.
 
 **Acceptance criteria:**
-- [ ] Every expression form in examples 06, 09, 15 and 20 parses
-- [ ] `n := take(mut s.head) ?? return None` parses with `return` inside the `??` else
-- [ ] Precedence tests: `a ?? b == c` groups as `a ?? (b == c)`; `-x?` groups as `-(x?)`
+- [x] Every expression form in examples 06, 09, 15 and 20 parses; verified through the example sweep once 0.8 parses bodies, and through `parser/expr_test.go` now
+- [x] `n := take(mut s.head) ?? return None` parses with `return` inside the `??` else
+- [x] Precedence tests: `a ?? b == c` groups as `a ?? (b == c)`; `-x?` groups as `-(x?)`
 
 **Verification:**
-- [ ] Tests pass: `go test ./parser/`
-- [ ] Manual check: `teak parse examples/20-bst.teak`
+- [x] Tests pass: `go test ./parser/`
+- [x] Manual check: `teak parse examples/20-bst.teak` (bodies still skipped until 0.8; the expression tests stand in)
 
-**Dependencies:** 0.8
+**Dependencies:** 0.7. Done before 0.8: statements are built from expressions, and `if x := opt {` needs the parsed left side to tell a binding from an init statement. Expressions needed only the body skipper from 0.7.
 **Files:** `parser/expr.go`, `parser/parser_test.go`
 **Scope:** M
+**Done:** 2026-10-18
 
 ## Task 0.10: Match and patterns
 

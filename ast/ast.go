@@ -455,6 +455,13 @@ type CoalesceExpr struct {
 	Else  Node
 }
 
+// A TypeExpr is a type in expression position: the argument of make
+// in make([]byte, n), or the function of a conversion in []byte(s).
+// A composite literal's type is held by the literal itself.
+type TypeExpr struct {
+	Type Type
+}
+
 // A TryExpr is the postfix x?.
 type TryExpr struct {
 	X        Expr
@@ -601,6 +608,7 @@ func (x *CallExpr) Pos() token.Pos     { return x.Fun.Pos() }
 func (x *UnaryExpr) Pos() token.Pos    { return x.OpPos }
 func (x *BinaryExpr) Pos() token.Pos   { return x.X.Pos() }
 func (x *CoalesceExpr) Pos() token.Pos { return x.X.Pos() }
+func (x *TypeExpr) Pos() token.Pos     { return x.Type.Pos() }
 func (x *TryExpr) Pos() token.Pos      { return x.X.Pos() }
 func (x *CompositeLit) Pos() token.Pos { return compositePos(x) }
 func (x *KeyValueExpr) Pos() token.Pos { return x.Key.Pos() }
@@ -654,6 +662,7 @@ func (*CallExpr) exprNode()     {}
 func (*UnaryExpr) exprNode()    {}
 func (*BinaryExpr) exprNode()   {}
 func (*CoalesceExpr) exprNode() {}
+func (*TypeExpr) exprNode()     {}
 func (*TryExpr) exprNode()      {}
 func (*CompositeLit) exprNode() {}
 func (*KeyValueExpr) exprNode() {}
