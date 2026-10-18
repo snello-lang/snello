@@ -14,7 +14,9 @@ import (
 // error: the emitted C must be as clean as the Go of the compiler.
 // -fwrapv makes signed overflow wrap, as Teak's integers do; without
 // it C leaves overflow undefined and the optimizer may assume it away.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-fwrapv", "-O1"}
+// -fno-strict-aliasing lets the runtime work on every slice type
+// through tk_slice, which has the same layout.
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-fwrapv", "-fno-strict-aliasing", "-O1"}
 
 // Build writes the emitted program and the runtime into dir, compiles
 // them with the system C compiler, and returns the path of the binary

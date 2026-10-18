@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `teak build` produces native binaries for the part of the language the C backend lowers so far (stage 1, task 1.5, two slices of three): functions and methods, numbers, strings, booleans, `if` and `for`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, and `fmt` printing. Slices, maps, closures, `defer` and files follow in the third slice.
+Status: `teak build` produces native binaries for the part of the language the C backend lowers so far (stage 1, task 1.5): functions and methods, numbers, strings and their methods, booleans, `if` and `for` including `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, slices and their methods, `take`, and `fmt` printing. Maps, closures, `defer` and files follow.
 
 ## The compiler
 

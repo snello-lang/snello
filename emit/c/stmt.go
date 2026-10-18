@@ -32,7 +32,7 @@ func (e *Emitter) stmt(s ast.Stmt) {
 		e.declStmt(s.Decl)
 	case *ast.ExprStmt:
 		if x := e.expr(s.X); x != "" {
-			e.discard(s.X, x)
+			e.discard(x)
 		}
 	case *ast.IncDecStmt:
 		e.line(e.expr(s.X) + s.Tok.String() + ";")
@@ -49,7 +49,7 @@ func (e *Emitter) stmt(s ast.Stmt) {
 	case *ast.ForStmt:
 		e.forStmt(s)
 	case *ast.RangeStmt:
-		e.unsupported(s.Pos(), "range loops")
+		e.rangeStmt(s)
 	case *ast.SwitchStmt:
 		e.unsupported(s.Pos(), "switch")
 	case *ast.DeferStmt:
@@ -268,6 +268,60 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.stmts(s.Body.List)
 	e.line("}")
 	e.line("}")
+}
+
+// rangeStmt writes for k, v := range x over a slice or a string: an
+// index loop, with the key and value bound at the top of each pass. A
+// value reached through a mut borrow is bound as a pointer into the
+// slice. Fields and Split yield a slice of borrows whose one variable
+// is the item.
+func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	e.line("{")
+	place, t := e.scrutinee(s.X)
+	i := e.temp()
+	e.line("for (tk_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
+	elem := place + ".ptr[" + i + "]"
+	iterator := false
+	switch u := t.Underlying().(type) {
+	case *types.Slice:
+		_, iterator = u.Elem().(*types.Ref)
+	case *types.Basic:
+	default:
+		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
+	}
+
+	if iterator {
+		e.rangeVar(s.Key, s.Tok, elem)
+	} else {
+		e.rangeVar(s.Key, s.Tok, i)
+		e.rangeVar(s.Value, s.Tok, elem)
+	}
+
+	e.stmts(s.Body.List)
+	e.line("}")
+	e.line("}")
+}
+
+// rangeVar binds one range variable to the C place of the current
+// item: a new name for :=, an assignment for =, nothing for _.
+func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string) {
+	if x == nil || isBlank(x) {
+		return
+	}
+
+	if tok != token.DEFINE {
+		e.line(e.expr(x) + " = " + item + ";")
+		return
+	}
+
+	name := x.(*ast.Ident)
+	v := e.info.Defs[name]
+	if r, ok := v.Type().(*types.Ref); ok && r.Mut() {
+		item = "&" + item
+	}
+
+	e.line(e.cType(v.Type(), name.Pos()) + " " + ident(name.Name) + " = " + item + ";")
+	e.discardUnused(name)
 }
 
 // simpleStmt writes a statement that C accepts as an expression, for

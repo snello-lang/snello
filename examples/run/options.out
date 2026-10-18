@@ -1,5 +1,5 @@
 Some(4) None Some(2) None
-Ok(6) Err(empty)
+Ok(6) Err("empty")
 -1 3 half 2 odd
 Some(101) None
 even half 5

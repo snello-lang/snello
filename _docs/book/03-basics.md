@@ -1,6 +1,6 @@
 # 3. Basics
 
-Status: implemented. The syntax is parsed (stage 0) and the types and names are checked (stage 1, task 1.4, `teak check`).
+Status: implemented. The syntax is parsed (stage 0), the types and names are checked (stage 1, task 1.4, `teak check`), and everything here except maps, closures, `switch`, `defer` and `spawn` compiles to native code (stage 1, task 1.5).
 
 This chapter is the shape of a Teak program: files, names, values, functions and control flow. Everything later in the book is built from these parts.
 

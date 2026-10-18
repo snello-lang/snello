@@ -65,6 +65,28 @@ func TestExit(t *testing.T) {
 	}
 }
 
+// TestPanics checks that a checked index stops the program with the
+// panic exit code after flushing what was printed, and that a match
+// through a mut borrow of an element writes the element, not a copy.
+func TestPanics(t *testing.T) {
+	src := `package main
+import "fmt"
+enum Slot { Full(n int); Vacant }
+func bump(xs mut []Slot) { match xs[0] { Full(n) => *n += 1, Vacant => {} } }
+func main() {
+	xs := []Slot{Full(1)}
+	bump(mut xs)
+	fmt.Println(xs)
+	i := len(xs) // one past the end: the boundary the check must catch
+	fmt.Println(xs[i])
+}
+`
+	out, code := run(t, "panics", src)
+	if out != "[Full(2)]\n" || code != 2 {
+		t.Errorf("got output %q and exit code %d, want \"[Full(2)]\\n\" and 2", out, code)
+	}
+}
+
 // TestUnsupported checks that a construct the backend does not lower
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {

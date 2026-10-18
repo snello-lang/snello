@@ -48,7 +48,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		return e.typeName(t.Elem(), pos)
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
-	case *types.Option, *types.Result:
+	case *types.Option, *types.Result, *types.Slice:
 		return e.declare(t, pos)
 	case *types.Tuple:
 		if t == types.Unit {
@@ -96,6 +96,10 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 	case *types.Result:
 		e.defineStruct(t, pos, func() string {
 			return "\tbool ok;\n\tunion {\n\t\t" + e.cType(t.Val(), pos) + " val;\n\t\t" + e.cType(t.Err(), pos) + " err;\n\t};\n"
+		})
+	case *types.Slice:
+		e.defineStruct(t, pos, func() string {
+			return "\t" + e.typeName(t.Elem(), pos) + " *ptr;\n\ttk_int len;\n\ttk_int cap;\n"
 		})
 	case *types.Tuple:
 		if t == types.Unit {
@@ -232,6 +236,8 @@ func mangle(t types.Type) string {
 		return "opt_" + mangle(t.Elem())
 	case *types.Result:
 		return "res_" + mangle(t.Val()) + "_" + mangle(t.Err())
+	case *types.Slice:
+		return "slice_" + mangle(t.Elem())
 	case *types.Tuple:
 		if t == types.Unit {
 			return "unit"
@@ -297,120 +303,6 @@ func (e *Emitter) zeroValue(t types.Type) string {
 	}
 
 	return "{0}"
-}
-
-// stringer returns the name of the function that turns a value of a
-// composite type into text, writing it on first use: a struct as
-// {field field}, an enum as Name(field, field), an option as Some(x)
-// or None, a Result as Ok(x) or Err(e), a tuple as (a, b).
-func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
-	name := "tk_str_" + mangle(t)
-	if e.state[name] != undeclared {
-		return name
-	}
-
-	e.state[name] = defined
-	e.protos.WriteString("static tk_string " + name + "(" + e.cType(t, pos) + " v);\n")
-	var b strings.Builder
-	b.WriteString("static tk_string " + name + "(" + e.cType(t, pos) + " v) {\n\t(void)v; // the printer of () reads nothing\n")
-	v := deref("v", t)
-	switch u := valueType(t).Underlying().(type) {
-	case *types.Struct:
-		b.WriteString("\treturn " + joined("{", "}", " ", e.structParts(u, v, pos)) + ";\n")
-	case *types.Enum:
-		e.enumStringer(&b, u, v, pos)
-	case *types.Option:
-		b.WriteString("\tif (!" + v + ".has) {\n\t\treturn " + literal("None") + ";\n\t}\n\n")
-		b.WriteString("\treturn " + joined("Some(", ")", "", []string{e.toText(v+".val", u.Elem(), pos)}) + ";\n")
-	case *types.Result:
-		b.WriteString("\tif (!" + v + ".ok) {\n\t\treturn " + joined("Err(", ")", "", []string{e.toText(v+".err", u.Err(), pos)}) + ";\n\t}\n\n")
-		b.WriteString("\treturn " + joined("Ok(", ")", "", []string{e.toText(v+".val", u.Val(), pos)}) + ";\n")
-	case *types.Tuple:
-		parts := make([]string, u.Len())
-		for i := range parts {
-			parts[i] = e.toText(v+".e"+strconv.Itoa(i), u.At(i), pos)
-		}
-
-		b.WriteString("\treturn " + joined("(", ")", ", ", parts) + ";\n")
-	default:
-		b.WriteString("\treturn " + e.toText(v, valueType(t), pos) + ";\n")
-	}
-
-	b.WriteString("}\n\n")
-	e.helpers.WriteString(b.String())
-	return name
-}
-
-func (e *Emitter) enumStringer(b *strings.Builder, en *types.Enum, v string, pos token.Pos) {
-	b.WriteString("\tswitch (" + v + ".tag) {\n")
-	for i := 0; i < en.NumVariants(); i++ {
-		variant := en.Variant(i)
-		b.WriteString("\tcase " + strconv.Itoa(i) + ":\n")
-		if len(variant.Fields()) == 0 {
-			b.WriteString("\t\treturn " + literal(variant.Name()) + ";\n")
-			continue
-		}
-
-		parts := make([]string, len(variant.Fields()))
-		for j, f := range variant.Fields() {
-			parts[j] = e.toText(v+"."+variantMember(variant)+"."+fieldName(f, j), f.Type(), pos)
-		}
-
-		b.WriteString("\t\treturn " + joined(variant.Name()+"(", ")", ", ", parts) + ";\n")
-	}
-
-	b.WriteString("\t}\n\n\treturn " + literal("?") + ";\n")
-}
-
-func (e *Emitter) structParts(s *types.Struct, v string, pos token.Pos) []string {
-	parts := make([]string, s.NumFields())
-	for i := range parts {
-		f := s.Field(i)
-		parts[i] = e.toText(v+"."+ident(f.Name()), f.Type(), pos)
-	}
-
-	return parts
-}
-
-// toText writes the expression that turns the C value v of type t
-// into a tk_string.
-func (e *Emitter) toText(v string, t types.Type, pos token.Pos) string {
-	b, ok := valueType(t).Underlying().(*types.Basic)
-	if !ok {
-		return e.stringer(t, pos) + "(" + v + ")"
-	}
-
-	v = deref(v, t)
-	switch {
-	case b.Kind() == types.String:
-		return v
-	case b.Kind() == types.Bool:
-		return "tk_bool_to_string(" + v + ")"
-	case b.Info()&types.IsFloat != 0:
-		return "tk_f64_to_string((double)(" + v + "))"
-	case b.Info()&types.IsUnsigned != 0:
-		return "tk_uint_to_string((uint64_t)(" + v + "))"
-	case b.Info()&types.IsInteger != 0:
-		return "tk_int_to_string((int64_t)(" + v + "))"
-	}
-
-	e.unsupported(pos, "printing values of type "+t.String())
-	return literal("?")
-}
-
-// joined writes the concatenation of open, the parts separated by sep,
-// and close.
-func joined(open, close, sep string, parts []string) string {
-	out := literal(open)
-	for i, p := range parts {
-		if i > 0 && sep != "" {
-			out = concat(out, literal(sep))
-		}
-
-		out = concat(out, p)
-	}
-
-	return concat(out, literal(close))
 }
 
 // deref writes v, a C value of Teak type t, dereferenced to the value.

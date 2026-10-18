@@ -31,13 +31,9 @@ func (e *Emitter) expr(x ast.Expr) string {
 	case *ast.SelectorExpr:
 		return e.selector(x)
 	case *ast.IndexExpr:
-		if isString(valueType(e.info.Types[x.X])) {
-			return e.valueTo(x.X, types.Typ[types.String]) + ".ptr[" + e.expr(x.Index) + "]"
-		}
-
-		e.unsupported(x.Pos(), "indexing a value of type "+e.info.Types[x.X].String())
+		return e.index(x)
 	case *ast.SliceExpr:
-		e.unsupported(x.Pos(), "slicing")
+		return e.sliceExpr(x)
 	case *ast.CallExpr:
 		return e.call(x)
 	case *ast.UnaryExpr:
@@ -185,6 +181,10 @@ func (e *Emitter) tuple(x *ast.TupleExpr) string {
 // a C compound literal leaves them.
 func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 	t := e.info.Types[x]
+	if st, ok := t.Underlying().(*types.Slice); ok {
+		return e.sliceLit(x, t, st)
+	}
+
 	if _, ok := t.Underlying().(*types.Struct); !ok {
 		e.unsupported(x.Pos(), "literals of type "+t.String())
 		return "0"
@@ -337,17 +337,22 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 
 	sides := e.operands([]ast.Expr{x.X, x.Y}, []types.Type{t, t})
 	l, r := sides[0], sides[1]
-	if isString(t) {
-		switch x.Op {
-		case token.ADD:
-			return "tk_concat(" + l + ", " + r + ")"
-		case token.EQL:
-			return "tk_string_eq(" + l + ", " + r + ")"
-		case token.NEQ:
-			return "(!tk_string_eq(" + l + ", " + r + "))"
-		default:
-			return "(tk_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"
+	if x.Op == token.EQL || x.Op == token.NEQ {
+		if _, basic := t.Underlying().(*types.Basic); !basic || isString(t) {
+			if x.Op == token.NEQ {
+				return "(!" + e.equal(l, r, t, x.Pos()) + ")"
+			}
+
+			return "(" + e.equal(l, r, t, x.Pos()) + ")"
 		}
+	}
+
+	if isString(t) {
+		if x.Op == token.ADD {
+			return "tk_concat(" + l + ", " + r + ")"
+		}
+
+		return "(tk_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"
 	}
 
 	if x.Op == token.AND_NOT {
@@ -385,8 +390,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 
 	fn, ok := e.info.Uses[sel.Sel].(*types.Func)
 	if !ok {
-		e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on "+valueType(e.info.Types[sel.X]).String())
-		return "0"
+		return e.methodCall(x, sel)
 	}
 
 	sig := fn.Type().(*types.Signature)
@@ -440,10 +444,12 @@ func (e *Emitter) variantFields(t types.Type, v *types.Variant) []types.Type {
 
 func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 	switch b.ID() {
-	case types.BuiltinLen:
-		if isString(valueType(e.info.Types[x.Args[0]])) {
-			return e.valueTo(x.Args[0], types.Typ[types.String]) + ".len"
-		}
+	case types.BuiltinLen, types.BuiltinCap:
+		return e.lenCall(x, b)
+	case types.BuiltinMake:
+		return e.makeCall(x)
+	case types.BuiltinTake:
+		return e.takeCall(x)
 	case types.BuiltinPanic:
 		return "tk_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinPrint:
@@ -509,7 +515,7 @@ func (e *Emitter) toString(a ast.Expr) string {
 
 // text writes the conversion of v, the C text of a, to a tk_string.
 func (e *Emitter) text(v string, a ast.Expr) string {
-	return e.toText(v, e.info.Types[a], a.Pos())
+	return e.toText(v, e.info.Types[a], a.Pos(), false)
 }
 
 // sprint joins the arguments as Sprint does: a space between two

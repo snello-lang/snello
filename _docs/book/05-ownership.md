@@ -1,6 +1,6 @@
 # 5. Ownership: moves, `Copy`, `take` and `Drop`
 
-Status: decided (`../design/01-language-design.md`, `04-borrows-ref-and-mut.md`); checked from stage 1, tasks 1.6 and 1.9. The programs under `../../examples/core/errors/` show each rule being broken.
+Status: decided (`../design/01-language-design.md`, `04-borrows-ref-and-mut.md`); `take` compiles (stage 1, task 1.5); moves and drops are checked from stage 1, tasks 1.6 and 1.9. The programs under `../../examples/core/errors/` show each rule being broken.
 
 Teak has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 

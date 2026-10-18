@@ -98,16 +98,23 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.5: C emitter and `teak build`
 
-**Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `emit/c/runtime/` provides strings, slices, maps, printing and panics. The first end-to-end program runs natively. (Changed 2026-10-18 from a Go emitter; see the design document.) Three slices: functions, numbers, strings and control flow (done 2026-10-18); structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings (done 2026-10-18: `calc.teak` is the first core program that builds and runs; `teak emit FILE` prints the C; two checker clarifications came with it, `*v += 1` for a bare `mut` borrow of a number and an owned pointer lent as a `ref` of what it holds); slices, maps, string methods, closures, `defer` and files.
+**Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `emit/c/runtime/` provides strings, slices, maps, printing and panics. (Changed 2026-10-18 from a Go emitter; see the design document.) The work goes in slices, each adding programs to `examples/run/` and giving a core program its `.out` file when it starts to build.
+
+**Slices:**
+- [x] Functions, numbers, strings and control flow; `teak build FILE` (2026-10-18)
+- [x] Structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings; `teak emit FILE` (2026-10-18; `calc.teak` builds. Two checker clarifications came with it: `*v += 1` for a bare `mut` borrow of a number, and an owned pointer lent as a `ref` of what it holds)
+- [x] Slices, string methods, option and result methods, `take`, equality of composite values (2026-10-18; `list.teak` and `bst.teak` build. Printing quotes a string inside `Some`, `Ok`, `Err` and a variant and prints an empty struct as its name, until the library in Teak decides in task 2.6)
+- [ ] Maps (`config.teak`)
+- [ ] Closures, `defer`, and the `os` and `io` functions (`tree.teak`, `wordfreq.teak`, `files.teak`)
 
 **Acceptance criteria:**
 - [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
-- [ ] Every positive core program builds and runs with its expected output (calc 2026-10-18; the rest need slice three, and state, files, bst, list and tree need the drops of task 1.9)
-- [ ] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror`
+- [ ] Every positive core program builds and runs with its expected output (calc, list and bst 2026-10-18; tree and wordfreq need closures, config needs maps, files needs `defer` and `os`; state and files also need the drops of task 1.9)
+- [x] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror` (2026-10-18; every build and every test uses these flags, plus `-fwrapv` and `-fno-strict-aliasing`)
 
 **Verification:**
-- [ ] Tests pass: `go test ./emit/c/`
-- [ ] Manual check: build and run three core programs
+- [x] Tests pass: `go test ./emit/c/` (2026-10-18)
+- [x] Manual check: build and run three core programs (2026-10-18: calc, list, bst)
 - [x] Every program under `examples/run/` prints its `.out` file; each slice adds the programs it makes buildable (2026-10-18)
 
 **Dependencies:** 1.4

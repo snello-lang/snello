@@ -1,6 +1,6 @@
 # Appendix B. Teak for Go programmers
 
-Status: grows with the chapters; covers chapters 3 to 6.
+Status: grows with the chapters; covers chapters 3 to 6 and 9.
 
 The chapters describe Teak on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Teak is not a Go dialect, and Go programs are not Teak programs; the syntax is familiar so that the ideas get your full attention.
 
@@ -62,3 +62,18 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | A closure capturing a local by reference, returned from `counter()` | Rejected; put the state in a struct with a method |
 | A struct holding a `*string` into a buffer | A struct holding `ref string` is itself a borrow: returned only like a borrow, never stored |
 | Pass the same slice to five goroutines | `a spawned task cannot hold a borrow`; move it, clone it, or share it through `sync.Arc` |
+
+## Chapter 9: Collections
+
+| In Go | In Teak |
+|---|---|
+| `xs = append(xs, v)`, and remember to assign the result | `xs.Push(v)`; the slice grows in place, since it owns its elements |
+| A slice is a view; two slices may share an array and see each other's writes | A slice owns its elements; `xs[lo:hi]` is a borrow, and the borrow rules keep the two apart |
+| `var xs []int` is `nil` and `len(xs) == 0` | A slice declared without a value is empty; there is no `nil` |
+| `xs[i]` on a bad index panics | The same, with the same message |
+| `copy(dst, src)`, `sort.Ints(xs)`, `slices.Contains(xs, v)` | `xs.Clone()`, `xs.Sort()`, `xs.Contains(v)`: methods on the slice |
+| `strings.Fields(s)` returns new strings | `s.Fields()` yields borrows into `s`, and a loop over them lends `s` |
+| `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s` |
+| `for i, r := range s` yields runes | `for i, c := range s` yields bytes; text as runes comes with the library (stage 2) |
+| `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
+

@@ -182,6 +182,8 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 	case *ast.SelectorExpr:
 		v, ok := e.info.Uses[x.Sel].(*types.Var)
 		return ok && v.IsField() && e.isPlace(x.X)
+	case *ast.IndexExpr:
+		return e.isPlace(x.X) && !hasEffects(x.Index)
 	case *ast.UnaryExpr:
 		return x.Op == token.MUL && e.isPlace(x.X)
 	}
@@ -299,20 +301,16 @@ func (e *Emitter) assignOrRun(result string, x ast.Expr, want types.Type) {
 	switch {
 	case v == "":
 	case result == "" || isNever(e.info.Types[x]):
-		e.discard(x, v)
+		e.discard(v)
 	default:
 		e.line(result + " = " + v + ";")
 	}
 }
 
-// discard writes an expression as a statement. A value that is not a
-// call is cast to void, as the C compiler warns about an unused value.
-func (e *Emitter) discard(x ast.Expr, v string) {
-	if _, ok := x.(*ast.CallExpr); ok {
-		e.line(v + ";")
-		return
-	}
-
+// discard writes an expression as a statement, cast to void: the C
+// compiler warns about an unused value, and the text of a call may be
+// a temporary's field once the call was lowered.
+func (e *Emitter) discard(v string) {
 	e.line("(void)(" + v + ");")
 }
 

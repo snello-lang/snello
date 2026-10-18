@@ -1,6 +1,6 @@
 # 8. Option, Result, `?` and `??`
 
-Status: implemented, checked (stage 1, task 1.4, `teak check`) and compiled to native code (stage 1, task 1.5, `teak build`). `examples/run/options.teak` and `boxes.teak` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+Status: implemented, checked (stage 1, task 1.4, `teak check`) and compiled to native code, methods included (stage 1, task 1.5, `teak build`). `examples/run/options.teak`, `boxes.teak` and `slices.teak` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
 
 Teak has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 
