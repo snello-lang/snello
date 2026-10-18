@@ -209,21 +209,23 @@ Second slice 2026-10-18, the debug build: `emit/c/runtime/debug.c`, compiled int
 **Description:** The whole stage's acceptance: every positive core program builds and runs, every negative program is rejected with its message, and the design notes are updated with anything the checker forced.
 
 **Acceptance criteria:**
-- [ ] `go test ./...` runs the core suite and passes
-- [ ] Any rule that changed is updated in `../design/04-borrows-ref-and-mut.md` and the examples
+- [x] `go test ./...` runs the core suite and passes (2026-10-18: `TestCoreExamples` and `TestNegativePrograms` in `types/check_test.go`, `TestRunExamples` in `emit/c/c_test.go`)
+- [x] Any rule that changed is updated in `../design/04-borrows-ref-and-mut.md` and the examples (2026-10-18: the call ordering rule, what a pattern binds through a borrow, the `mut` binding through a map read, and borrows of temporaries, each dated in the design document)
 
 **Verification:**
-- [ ] Tests pass: `go test ./...`
-- [ ] Manual check: build and run all positive core programs in one script
+- [x] Tests pass: `go test ./...` (2026-10-18)
+- [x] Manual check: build and run all positive core programs in one script (2026-10-18: `sh examples/core/run.sh`)
+
+**Done:** 2026-10-18. The suite had grown with the tasks, so this task mostly names it: the eight positive programs are checked by `TestCoreExamples` and built and run, as release and as debug builds, by `TestRunExamples`, whose output is compared with the `.out` file beside each; the 27 negative programs are rejected by `TestNegativePrograms` with exactly the message on their `// ERROR` line and no error on any other line. `examples/core/run.sh` is the same run as a shell script, for a reader without the Go test runner in mind. The file the plan named, `types/suite_test.go`, was never needed: the suite lives in the test files of the two packages that run it.
 
 **Dependencies:** 1.9
-**Files:** `types/suite_test.go`, design notes as needed
+**Files:** `types/check_test.go`, `emit/c/c_test.go`, `examples/core/run.sh`, design notes as needed
 **Scope:** S
 
 ## Checkpoint: stage 1 (decision point)
 
-- [ ] All tasks above checked
-- [ ] Every negative program fails for the planned reason and no other
+- [ ] All tasks above checked (every box but the design review by the human in task 1.0)
+- [x] Every negative program fails for the planned reason and no other (2026-10-18: `TestNegativePrograms` requires exactly one error, on the annotated line, containing the annotated text, and fails on an error anywhere else)
 - [ ] **Decision:** the ownership model holds as designed, or the design document is revised before stage 2. Record the decision in `../design/01-language-design.md`
-- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
+- [x] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated (2026-10-18: chapters 1 to 9 and both appendices; chapter 1 written at the checkpoint)
 - [ ] Reviewed by the owner

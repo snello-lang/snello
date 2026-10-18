@@ -8,7 +8,7 @@ The book is written as the language is built. A chapter exists as soon as its fe
 
 | Chapter | Status |
 |---|---|
-| 1. Introduction | not written |
+| [1. Introduction](01-introduction.md) | written at the stage 1 checkpoint; describes core Teak as `teak build` compiles it |
 | [2. Getting started](02-getting-started.md) | `teak build` compiles all of core Teak, `teak build -debug` checks the drops (stage 1, tasks 1.5 and 1.9) |
 | [3. Basics](03-basics.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [4. Structs, enums and match](04-structs-enums-match.md) | implemented, checked and compiled (stage 1, task 1.5) |
