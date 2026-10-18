@@ -25,6 +25,7 @@ func (c *Checker) resolveBodies(f *ast.File) {
 		if d, ok := d.(*ast.FuncDecl); ok {
 			fn := c.objs[i].(*Func)
 			c.sig = fn.typ.(*Signature)
+			c.moved, c.dead = c.moved[:0], false // each body starts afresh; a closure's body shares its function's
 			c.funcBody(c.sig, d.Recv, d.Params, d.Body)
 			c.sig = nil
 		}
@@ -102,8 +103,9 @@ func (c *Checker) values(n int, values []ast.Expr, hint Type, pos token.Pos) []o
 			return ops
 		}
 
+		c.maybeMove(op, valueType(op)) // the parts move out of the tuple
 		for i := range ops {
-			ops[i] = operand{value, t.elems[i], nil}
+			ops[i] = operand{value, t.elems[i], nil, nil}
 		}
 
 		return ops

@@ -41,11 +41,19 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	}
 
 	b := borrowOf(m)
-	result := operand{value, Typ[Never], nil}
+	result := operand{value, Typ[Never], nil, nil}
 	rows := make([][]pat, 0, len(e.Arms))
+	f := c.forkAt()
+	consumed := false
 	for _, arm := range e.Arms {
 		c.openScope()
+		c.bindsOwned = false
 		p := c.pattern(arm.Pat, scrutinee, b)
+		if c.bindsOwned && !consumed && x.mode == variable {
+			c.moveBefore(e.X, &f) // a part bound by value leaves the place, on every arm
+			consumed = true
+		}
+
 		if arm.Guard != nil {
 			c.condition(arm.Guard)
 		} else {
@@ -55,7 +63,10 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		v := c.node(arm.Body, expected)
 		result = c.unify(result, v, arm.Arrow, "match")
 		c.closeScope()
+		c.branchEnd(&f)
 	}
+
+	c.joinAt(&f, true)
 
 	if x.mode != invalid {
 		if w := missing([]Type{scrutinee}, rows); w != nil {
@@ -76,11 +87,11 @@ func (c *Checker) pattern(p ast.Pattern, t Type, b *Ref) pat {
 	case *ast.IdentPat:
 		return c.identPat(p, t, b)
 	case *ast.LitPat:
-		c.assign(operand{value, c.literal(p.Lit, t), nil}, t, p.Lit.Pos(), "pattern")
+		c.assign(operand{value, c.literal(p.Lit, t), nil, nil}, t, p.Lit.Pos(), "pattern")
 		return pat{ctor: literal}
 	case *ast.RangePat:
-		c.assign(operand{value, c.literal(p.Lo, t), nil}, t, p.Lo.Pos(), "pattern")
-		c.assign(operand{value, c.literal(p.Hi, t), nil}, t, p.Hi.Pos(), "pattern")
+		c.assign(operand{value, c.literal(p.Lo, t), nil, nil}, t, p.Lo.Pos(), "pattern")
+		c.assign(operand{value, c.literal(p.Hi, t), nil, nil}, t, p.Hi.Pos(), "pattern")
 		return pat{ctor: literal}
 	case *ast.TuplePat:
 		tt, ok := t.Underlying().(*Tuple)
@@ -144,6 +155,10 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 			return pat{ctor: 1}
 		}
+	}
+
+	if b == nil && !IsCopy(t) {
+		c.bindsOwned = true
 	}
 
 	c.declare(c.scope, p.Name, NewVar(p.Name.Pos(), p.Name.Name, wrap(t, b)))

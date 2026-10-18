@@ -128,16 +128,18 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** Ownership tracking as a dataflow pass over each function: a value is moved by assignment, by passing by value, by returning, by sending, and by capture in `spawn`; using a moved value is an error; `Copy` types are exempt; partial moves out of a value about to be dropped are allowed; moves inside loops and conditionals are tracked by merging states at joins.
 
 **Acceptance criteria:**
-- [ ] Use after move reports both the use and the move
-- [ ] A move inside a loop body of a value declared outside is an error on the second iteration
-- [ ] A move in one branch and a use after the `if` is an error
+- [x] Use after move reports both the use and the move (2026-10-18: `use of moved value s; moved at 10:9`)
+- [x] A move inside a loop body of a value declared outside is an error on the second iteration (2026-10-18)
+- [x] A move in one branch and a use after the `if` is an error (2026-10-18)
 
 **Verification:**
-- [ ] Tests pass: `go test ./types/`
-- [ ] The move-related negative programs fail with their `// ERROR` messages
+- [x] Tests pass: `go test ./types/` (2026-10-18; `TestMoves` covers the rules one by one)
+- [x] The move-related negative programs fail with their `// ERROR` messages (2026-10-18: all eight)
+
+**Done:** 2026-10-18, inside the checker's walk rather than as a pass of its own: the list of moved places forks at a branch and joins after, a loop keeps the moves that reach its next pass, and a branch that leaves contributes nothing, which is what makes `?? return` work. Two rules settled on the way: a type with `Drop` is never `Copy`, and ranging through a borrow lends while ranging an owned collection consumes. The checker's allocations rose from about 1,800 to about 1,870 over the core programs, the lists of moves.
 
 **Dependencies:** 1.5
-**Files:** `types/own.go`, `types/own_test.go`
+**Files:** `types/move.go`, `types/move_test.go`
 **Scope:** L
 
 ## Task 1.7: Borrows

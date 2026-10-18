@@ -57,7 +57,7 @@ func numericExpected(expected Type, info BasicInfo) Type {
 
 func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 	if len(e.Elts) == 0 {
-		return operand{value, Unit, nil}
+		return operand{value, Unit, nil, nil}
 	}
 
 	var want *Tuple
@@ -72,10 +72,12 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 			hint = want.elems[i]
 		}
 
-		elems[i] = valueType(c.expr(elt, hint))
+		op := c.expr(elt, hint)
+		elems[i] = valueType(op)
+		c.maybeMove(op, elems[i]) // the part moves into the tuple
 	}
 
-	return operand{value, NewTuple(elems...), nil}
+	return operand{value, NewTuple(elems...), nil, nil}
 }
 
 // compositeLit checks T{...}. A struct literal names its fields; a
@@ -121,7 +123,7 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 		return invalidOperand
 	}
 
-	return operand{value, t, nil}
+	return operand{value, t, nil, nil}
 }
 
 func (c *Checker) structLit(e *ast.CompositeLit, st *Struct) {

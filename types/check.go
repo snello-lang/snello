@@ -40,6 +40,16 @@ type Checker struct {
 	scope  *Scope     // the innermost scope open at the current point
 	objs   []Object   // the object of each top-level declaration, by index; nil for var and const
 	sig    *Signature // the function whose body is being checked; nil at the top level
+
+	// The move pass (move.go): the places moved on the current path,
+	// whether the path can reach this point, the loops, switches and
+	// selects open here, and two flags for how a place is being read.
+	moved      []move
+	dead       bool
+	regions    []region
+	noUse      bool // evaluating an assignment target, which is not a use
+	inner      bool // evaluating the base of a selector, which the selector checks as a whole
+	bindsOwned bool // a pattern bound a non-Copy value by value
 }
 
 // Check resolves every name in f, a file of one package, and returns

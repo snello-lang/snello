@@ -21,6 +21,7 @@ func (c *Checker) expr(e ast.Expr, expected Type) operand {
 
 	if op.mode != invalid {
 		c.recordType(e, op.typ)
+		op.expr = e
 	}
 
 	return op
@@ -31,7 +32,7 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 	case *ast.Ident:
 		return c.ident(e, expected)
 	case *ast.BasicLit:
-		return operand{value, c.literal(e, expected), nil}
+		return operand{value, c.literal(e, expected), nil, nil}
 	case *ast.ParenExpr:
 		return c.expr(e.X, expected)
 	case *ast.TupleExpr:
@@ -51,7 +52,7 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 	case *ast.CoalesceExpr:
 		return c.coalesce(e, expected)
 	case *ast.TypeExpr:
-		return operand{typeOperand, c.typ(e.Type), nil}
+		return operand{typeOperand, c.typ(e.Type), nil, nil}
 	case *ast.TryExpr:
 		return c.try(e)
 	case *ast.CompositeLit:
@@ -87,17 +88,18 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 			return invalidOperand // declared with an error
 		}
 
-		return operand{variable, obj.typ, obj}
+		c.checkUse(e)
+		return operand{variable, obj.typ, obj, nil}
 	case *Const:
 		if obj.typ == nil {
 			return invalidOperand
 		}
 
-		return operand{value, obj.typ, obj}
+		return operand{value, obj.typ, obj, nil}
 	case *Func:
-		return operand{value, obj.typ, obj}
+		return operand{value, obj.typ, obj, nil}
 	case *TypeName:
-		return operand{typeOperand, obj.typ, obj}
+		return operand{typeOperand, obj.typ, obj, nil}
 	case *Builtin:
 		c.errorf(e.Pos(), obj.name+" must be called")
 	case *Variant:
@@ -124,7 +126,7 @@ func (c *Checker) constantVariant(e *ast.Ident, v *Variant, expected Type) opera
 
 		if expected != nil {
 			if _, ok := expected.Underlying().(*Option); ok {
-				return operand{value, expected, v}
+				return operand{value, expected, v, nil}
 			}
 		}
 
@@ -137,7 +139,7 @@ func (c *Checker) constantVariant(e *ast.Ident, v *Variant, expected Type) opera
 		return invalidOperand
 	}
 
-	return operand{value, v.parent, v}
+	return operand{value, v.parent, v, nil}
 }
 
 // selector checks x.Sel: a package member, a field, a method of a
@@ -154,7 +156,10 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 	}
 
+	wasInner := c.inner
+	c.inner = isPlaceChain(e.X) // the whole selector is the use, checked below
 	x := c.expr(e.X, nil)
+	c.inner = wasInner
 	if x.mode == invalid {
 		return invalidOperand
 	}
@@ -164,18 +169,25 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		if st, ok := named.underlying.(*Struct); ok {
 			if f := fieldOf(st, e.Sel.Name); f != nil {
 				c.recordUse(e.Sel, f)
-				return operand{m, f.typ, f}
+				c.checkUse(e)
+				return operand{m, f.typ, f, nil}
 			}
 		}
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
 			c.recordUse(e.Sel, fn)
-			return operand{value, fn.typ, fn}
+			c.checkUse(e.X)
+			if recv := fn.typ.(*Signature).recv; recv != nil && !isMut(x.typ) {
+				c.maybeMove(x, recv.typ) // a value receiver takes the receiver; a borrow variable is lent again
+			}
+
+			return operand{value, fn.typ, fn, nil}
 		}
 	}
 
 	if sig := builtinMethod(base, e.Sel.Name); sig != nil {
-		return operand{value, sig, nil}
+		c.checkUse(e.X)
+		return operand{value, sig, nil, nil}
 	}
 
 	c.errorf(e.Sel.Pos(), e.Sel.Name+" is not a field or method of "+x.typ.String())
@@ -192,11 +204,11 @@ func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
 	c.recordUse(e.Sel, obj)
 	switch obj := obj.(type) {
 	case *Func:
-		return operand{value, obj.typ, obj}
+		return operand{value, obj.typ, obj, nil}
 	case *Var:
-		return operand{variable, obj.typ, obj}
+		return operand{variable, obj.typ, obj, nil}
 	case *TypeName:
-		return operand{typeOperand, obj.typ, obj}
+		return operand{typeOperand, obj.typ, obj, nil}
 	}
 
 	return invalidOperand
@@ -212,17 +224,17 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		c.intIndex(e.Index)
-		return operand{m, t.elem, nil}
+		return operand{m, t.elem, nil, nil}
 	case *Array:
 		c.intIndex(e.Index)
-		return operand{m, t.elem, nil}
+		return operand{m, t.elem, nil, nil}
 	case *Map:
-		c.assign(c.expr(e.Index, t.key), t.key, e.Index.Pos(), "map key")
-		return operand{m, t.value, nil}
+		c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		return operand{m, t.value, nil, nil}
 	case *Basic:
 		if t.kind == String {
 			c.intIndex(e.Index)
-			return operand{value, aliases[0], nil} // a byte, by that name
+			return operand{value, aliases[0], nil, nil} // a byte, by that name
 		}
 	}
 
@@ -233,7 +245,7 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 // intIndex checks an index expression, which may be of any integer
 // type, including a declared one such as NodeID.
 func (c *Checker) intIndex(e ast.Expr) {
-	op := c.expr(e, Typ[Int])
+	op := c.operandOf(e, Typ[Int])
 	if op.mode != invalid && !hasInfo(valueType(op), IsInteger) {
 		c.errorf(e.Pos(), "index must be an integer, not "+op.typ.String())
 	}
@@ -258,10 +270,10 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 	base, m := deref(x)
 	switch t := base.Underlying().(type) {
 	case *Slice:
-		return operand{value, NewRef(t, m == mutBorrowed), nil}
+		return operand{value, NewRef(t, m == mutBorrowed), nil, nil}
 	case *Basic:
 		if t.kind == String {
-			return operand{value, NewRef(Typ[String], false), nil}
+			return operand{value, NewRef(Typ[String], false), nil, nil}
 		}
 	}
 
@@ -282,7 +294,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			t = r.elem // a borrow of a borrow is a borrow of the value
 		}
 
-		return operand{value, NewRef(t, e.Op == token.MUT), nil}
+		return operand{value, NewRef(t, e.Op == token.MUT), nil, nil}
 	case token.AND:
 		var hint Type
 		if p, ok := underlyingPointer(expected); ok {
@@ -294,9 +306,10 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			return invalidOperand
 		}
 
-		return operand{value, NewPointer(valueType(x)), nil}
+		c.maybeMove(x, valueType(x)) // &x moves x to the heap
+		return operand{value, NewPointer(valueType(x)), nil, nil}
 	case token.MUL:
-		x := c.expr(e.X, nil)
+		x := c.operandOf(e.X, nil) // reaching through p reads p, even to write what it holds
 		if x.mode == invalid {
 			return invalidOperand
 		}
@@ -308,9 +321,9 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 				m = mutBorrowed
 			}
 
-			return operand{m, t.elem, nil}
+			return operand{m, t.elem, nil, nil}
 		case *Pointer:
-			return operand{variable, t.elem, nil}
+			return operand{variable, t.elem, nil, nil}
 		}
 
 		c.errorf(e.OpPos, "cannot dereference a value of type "+x.typ.String())
@@ -322,7 +335,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		}
 
 		if ch, ok := valueType(x).Underlying().(*Chan); ok {
-			return operand{value, NewOption(ch.elem), nil}
+			return operand{value, NewOption(ch.elem), nil, nil}
 		}
 
 		c.errorf(e.OpPos, "cannot receive from a value of type "+x.typ.String())
@@ -350,7 +363,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		return invalidOperand
 	}
 
-	return operand{value, t, nil}
+	return operand{value, t, nil, nil}
 }
 
 // binary checks x op y. The two sides must have the same type; a
@@ -389,7 +402,7 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 			return invalidOperand
 		}
 
-		return operand{value, result, nil}
+		return operand{value, result, nil, nil}
 	case token.LSS, token.LEQ, token.GTR, token.GEQ:
 		need = IsNumeric | IsString
 		result = Typ[Bool]
@@ -406,7 +419,7 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 		return invalidOperand
 	}
 
-	return operand{value, result, nil}
+	return operand{value, result, nil, nil}
 }
 
 // coalesce checks x ?? else. x is an option or a Result, possibly
@@ -443,10 +456,16 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr, expected Type) operand {
 	if through != nil {
 		result = NewRef(result, through.mut)
 		m = value
+	} else if m == variable && !IsCopy(result) {
+		c.move(e.X) // the value inside leaves the place
 	}
 
+	f := c.forkAt()
+	c.branchEnd(&f) // the path with a value moves nothing
 	c.elseValue(e.Else, result)
-	return operand{m, result, nil}
+	c.branchEnd(&f)
+	c.joinAt(&f, true)
+	return operand{m, result, nil, nil}
 }
 
 // elseValue checks the right side of ?? or an else: an expression of
@@ -461,7 +480,9 @@ func (c *Checker) elseValue(n ast.Node, t Type) {
 			c.errorf(n.Pos(), "the block after ?? must return, break or continue, or end in a value of type "+t.String())
 		}
 	case ast.Stmt:
-		c.stmt(n)
+		if c.stmt(n) {
+			c.dead = true
+		}
 	}
 }
 
@@ -478,10 +499,14 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
+	if _, isRef := x.typ.(*Ref); x.mode == variable && !isRef && !IsCopy(xt) {
+		c.move(e.X) // the value inside leaves the place
+	}
+
 	switch want := c.sig.results.Underlying().(type) {
 	case *Option:
 		if o, ok := xt.Underlying().(*Option); ok {
-			return operand{value, o.elem, nil}
+			return operand{value, o.elem, nil, nil}
 		}
 
 		if _, ok := xt.Underlying().(*Result); ok {
@@ -494,7 +519,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 				c.errorf(e.Question, "? cannot pass on an error of type "+r.err.String()+" from a function returning "+c.sig.results.String())
 			}
 
-			return operand{value, r.val, nil}
+			return operand{value, r.val, nil, nil}
 		}
 
 		if _, ok := xt.Underlying().(*Option); ok {
@@ -515,18 +540,20 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 // the enclosing scopes like any name.
 func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	sig := c.typ(e.Type).(*Signature)
-	outer := c.sig
-	c.sig = sig
+	outer, regions, dead := c.sig, c.regions, c.dead
+	c.sig, c.regions, c.dead = sig, nil, false
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
-	c.sig = outer
-	return operand{value, sig, nil}
+	c.sig, c.regions, c.dead = outer, regions, dead
+	return operand{value, sig, nil, nil}
 }
 
 // ifExpr checks if c { a } else { b } as an expression: both branches
 // yield a value of one type, and a branch that leaves fits any type.
 func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 	c.condition(e.Cond)
+	f := c.forkAt()
 	a := c.blockValue(e.Then, expected)
+	c.branchEnd(&f)
 	var b operand
 	switch els := e.Else.(type) {
 	case *ast.BlockStmt:
@@ -535,6 +562,8 @@ func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 		b = c.ifExpr(els, expected)
 	}
 
+	c.branchEnd(&f)
+	c.joinAt(&f, true)
 	return c.unify(a, b, e.If, "if")
 }
 
@@ -546,23 +575,21 @@ func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	c.openScope()
 	defer c.closeScope()
 	if len(b.List) == 0 {
-		return operand{value, Unit, nil}
+		return operand{value, Unit, nil, nil}
 	}
 
 	last := len(b.List) - 1
-	for _, s := range b.List[:last] {
-		c.stmt(s)
-	}
-
+	c.stmts(b.List[:last])
 	if es, ok := b.List[last].(*ast.ExprStmt); ok {
 		return c.expr(es.X, expected)
 	}
 
 	if c.stmt(b.List[last]) {
-		return operand{value, Typ[Never], nil}
+		c.dead = true
+		return operand{value, Typ[Never], nil, nil}
 	}
 
-	return operand{value, Unit, nil}
+	return operand{value, Unit, nil, nil}
 }
 
 // unify gives two branches one type: a branch that never yields fits
@@ -576,9 +603,9 @@ func (c *Checker) unify(a, b operand, pos token.Pos, what string) operand {
 	case isNever(b.typ):
 		return a
 	case assignable(b, valueType(a)):
-		return operand{value, valueType(a), nil}
+		return operand{value, valueType(a), nil, nil}
 	case assignable(a, valueType(b)):
-		return operand{value, valueType(b), nil}
+		return operand{value, valueType(b), nil, nil}
 	}
 
 	c.errorf(pos, what+" branches have different types: "+a.typ.String()+" and "+b.typ.String())

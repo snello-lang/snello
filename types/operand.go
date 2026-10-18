@@ -30,9 +30,10 @@ type operand struct {
 	mode mode
 	typ  Type
 	obj  Object
+	expr ast.Expr // the expression, for the move pass; nil for a value made up here
 }
 
-var invalidOperand = operand{invalid, Typ[Invalid], nil}
+var invalidOperand = operand{invalid, Typ[Invalid], nil, nil}
 
 // deref strips the borrows and owned pointers in front of a type, for
 // a field access, method call or index through them, and says what
@@ -66,15 +67,28 @@ func (c *Checker) condition(e ast.Expr) {
 }
 
 // assign reports an error when op cannot be used where a value of type
-// t is wanted; what says the role, for the message.
+// t is wanted; what says the role, for the message. A place that fits
+// is moved there, unless t lends it.
 func (c *Checker) assign(op operand, t Type, pos token.Pos, what string) {
+	if c.fits(op, t, pos, what) {
+		c.maybeMove(op, t)
+	}
+}
+
+// fits reports whether op can be used where t is wanted, reporting the
+// mismatch, without moving anything: for an operator that reads its
+// operand.
+func (c *Checker) fits(op operand, t Type, pos token.Pos, what string) bool {
 	if op.mode == invalid || t == nil {
-		return
+		return false
 	}
 
 	if !assignable(op, t) {
 		c.errorf(pos, "cannot use "+describe(op)+" as "+t.String()+" in "+what)
+		return false
 	}
+
+	return true
 }
 
 // assignable reports whether op can be used where t is wanted. Beyond

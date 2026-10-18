@@ -50,7 +50,7 @@ func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
 	}
 
 	c.args(e, sig)
-	return operand{value, sig.results, nil}
+	return operand{value, sig.results, nil, nil}
 }
 
 // args checks the arguments of a call against the parameters. An
@@ -76,7 +76,10 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 		}
 
 		p := params[i]
-		c.assign(c.expr(arg, paramHint(p.typ)), p.typ, arg.Pos(), "argument")
+		op := c.expr(arg, paramHint(p.typ))
+		if c.fits(op, p.typ, arg.Pos(), "argument") && !isMut(op.typ) {
+			c.maybeMove(op, p.typ) // a borrow variable passed on is lent again, not moved
+		}
 	}
 }
 
@@ -102,7 +105,7 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 
 	x := c.expr(e.Args[0], t)
 	if x.mode == invalid || t == Typ[Invalid] {
-		return operand{value, t, nil}
+		return operand{value, t, nil, nil}
 	}
 
 	v := valueType(x)
@@ -114,7 +117,7 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 		c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String())
 	}
 
-	return operand{value, t, nil}
+	return operand{value, t, nil, nil}
 }
 
 func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
@@ -127,11 +130,11 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.takeCall(e)
 	case BuiltinPanic:
 		c.exprs(e.Args)
-		return operand{value, Typ[Never], nil}
+		return operand{value, Typ[Never], nil, nil}
 	}
 
 	c.exprs(e.Args) // print
-	return operand{value, Unit, nil}
+	return operand{value, Unit, nil, nil}
 }
 
 // lenCall checks len(x) and cap(x): len on a slice, array, map, string
@@ -145,7 +148,7 @@ func (c *Checker) lenCall(e *ast.CallExpr, b *Builtin) operand {
 
 	x := c.expr(e.Args[0], nil)
 	if x.mode == invalid {
-		return operand{value, Typ[Int], nil}
+		return operand{value, Typ[Int], nil, nil}
 	}
 
 	base, _ := deref(x)
@@ -161,7 +164,7 @@ func (c *Checker) lenCall(e *ast.CallExpr, b *Builtin) operand {
 		c.errorf(e.Args[0].Pos(), b.name+" is not defined on "+x.typ.String())
 	}
 
-	return operand{value, Typ[Int], nil}
+	return operand{value, Typ[Int], nil, nil}
 }
 
 // makeCall checks make(T, n...): T is a slice, map or channel type.
@@ -183,7 +186,7 @@ func (c *Checker) makeCall(e *ast.CallExpr) operand {
 
 	switch t.typ.Underlying().(type) {
 	case *Slice, *Map, *Chan:
-		return operand{value, t.typ, nil}
+		return operand{value, t.typ, nil, nil}
 	}
 
 	c.errorf(e.Args[0].Pos(), "make builds a slice, map or channel, not "+t.typ.String())
@@ -211,7 +214,7 @@ func (c *Checker) takeCall(e *ast.CallExpr) operand {
 		return invalidOperand
 	}
 
-	return operand{value, x.typ.(*Ref).elem, nil}
+	return operand{value, x.typ.(*Ref).elem, nil, nil}
 }
 
 // variantCall checks Some(x), Ok(x), Err(e) and a declared variant with
@@ -223,14 +226,14 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 		if len(e.Args) != len(v.fields) {
 			c.errorf(e.Lparen, v.name+" has "+strconv.Itoa(len(v.fields))+" fields, not "+strconv.Itoa(len(e.Args)))
 			c.exprs(e.Args)
-			return operand{value, v.parent, nil}
+			return operand{value, v.parent, nil, nil}
 		}
 
 		for i, arg := range e.Args {
 			c.assign(c.expr(arg, v.fields[i].typ), v.fields[i].typ, arg.Pos(), "field "+v.fields[i].name)
 		}
 
-		return operand{value, v.parent, nil}
+		return operand{value, v.parent, nil, nil}
 	}
 
 	if len(e.Args) != 1 {
@@ -267,12 +270,13 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 
 	if hint != nil {
 		c.assign(x, hint, e.Args[0].Pos(), "argument")
-		return operand{value, expected, nil}
+		return operand{value, expected, nil, nil}
 	}
 
 	switch v {
 	case SomeVariant:
-		return operand{value, NewOption(valueType(x)), nil}
+		c.maybeMove(x, valueType(x)) // the value moves into the option
+		return operand{value, NewOption(valueType(x)), nil, nil}
 	case NoneVariant:
 		c.errorf(e.Lparen, "None takes no argument")
 		return invalidOperand

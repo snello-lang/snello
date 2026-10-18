@@ -172,7 +172,7 @@ func TestExprTypes(t *testing.T) {
 	}{
 		{"func f(xs []Node) { x := ref xs[0] }", "ref Node"},
 		{"func f(xs mut []Node) { x := mut xs[0] }", "mut Node"},
-		{"func f(n ref Node) { x := n.value }", "string"},
+		{"func f(n ref Node) { x := n.value.Clone() }", "string"},
 		{"func f(n ref Node) { x := ref n.value }", "ref string"},
 		{"func f(cur mut (*Node?)) { x := cur ?? return }", "mut *Node"},
 		{"func f(cur ref (*Node?)) { x := cur ?? return }", "ref *Node"},

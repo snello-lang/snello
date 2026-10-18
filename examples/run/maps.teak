@@ -43,8 +43,8 @@ func main() {
 
 	counts := tally([]string{"a", "b", "a", "c", "a", "b"})
 	list := []Count{}
-	for k, v := range counts {
-		list.Push(Count{word: k, n: v})
+	for k, v := range ref counts { // through a borrow: the map keeps its entries
+		list.Push(Count{word: k.Clone(), n: v})
 	}
 
 	fmt.Println(list, counts.Clone())

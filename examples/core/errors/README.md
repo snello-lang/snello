@@ -24,7 +24,7 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
 | No `nil` | nil-used | 1.3 |
 
-As of task 1.4 the checker handles nil-used, missing-arm, wrong-question-kind and ref-as-mut; `handledErrors` in `types/check_test.go` is the list, and every other program must still produce no error.
+As of task 1.6 the checker handles nil-used, missing-arm, wrong-question-kind, ref-as-mut and the eight move programs; `handledErrors` in `types/check_test.go` is the list, and every other program must still produce no error.
 | `match` is exhaustive | missing-arm | 1.4 |
 | `?` propagates to the same kind | wrong-question-kind | 1.4 |
 

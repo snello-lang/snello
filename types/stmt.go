@@ -18,6 +18,9 @@ func (c *Checker) stmts(list []ast.Stmt) bool {
 	leaves := false
 	for _, s := range list {
 		leaves = c.stmt(s)
+		if leaves {
+			c.dead = true
+		}
 	}
 
 	return leaves
@@ -59,6 +62,7 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		c.returnStmt(s)
 		return true
 	case *ast.BranchStmt:
+		c.branch(s.Tok)
 		return true
 	case *ast.IfStmt:
 		return c.ifStmt(s)
@@ -100,6 +104,7 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 		c.assign(ops[i], t, d.Values[min(i, len(d.Values)-1)].Pos(), "declaration")
 		if t == nil {
 			c.setType(c.scope.Lookup(name.Name), inferred(ops[i]))
+			c.maybeMove(ops[i], inferred(ops[i]))
 		}
 	}
 }
@@ -141,7 +146,7 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			return
 		}
 
-		c.assign(y, x.typ, s.Rhs[0].Pos(), "assignment")
+		c.fits(y, x.typ, s.Rhs[0].Pos(), "assignment") // an operator reads its right side; nothing moves
 	}
 }
 
@@ -171,11 +176,13 @@ func (c *Checker) define(s *ast.AssignStmt) {
 			c.recordUse(ident, old)
 			if v, ok := old.(*Var); ok && v.typ != nil {
 				c.assign(ops[i], v.typ, lhs.Pos(), "assignment")
+				c.revive(ident)
 			}
 
 			continue
 		}
 
+		c.maybeMove(ops[i], inferred(ops[i]))
 		c.declare(c.scope, ident, NewVar(ident.Pos(), ident.Name, inferred(ops[i])))
 		declared = true
 	}
@@ -195,10 +202,11 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 			return
 		}
 
-		x := c.expr(s.Lhs[0], nil)
+		x := c.target(s.Lhs[0])
 		y := c.expr(s.Rhs[0], hintOf(x))
 		if x.mode != invalid {
 			c.assign(y, x.typ, s.Rhs[0].Pos(), "assignment")
+			c.revive(s.Lhs[0])
 		}
 
 		return
@@ -210,10 +218,20 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 			continue
 		}
 
-		if x := c.expr(lhs, nil); x.mode != invalid {
+		if x := c.target(lhs); x.mode != invalid {
 			c.assign(ops[i], x.typ, lhs.Pos(), "assignment")
+			c.revive(lhs)
 		}
 	}
+}
+
+// target checks the place an assignment writes, which is not a use of
+// the value there.
+func (c *Checker) target(e ast.Expr) operand {
+	c.noUse = true
+	x := c.expr(e, nil)
+	c.noUse = false
+	return x
 }
 
 func (c *Checker) send(s *ast.SendStmt) {
@@ -266,12 +284,24 @@ func (c *Checker) ifStmt(s *ast.IfStmt) bool {
 	}
 
 	c.condition(s.Cond)
+	f := c.forkAt()
 	leaves := c.block(s.Body)
-	if s.Else == nil {
+	return c.elseBranch(&f, s.Else, leaves)
+}
+
+// elseBranch ends the body of an if, checks its else if there is one,
+// and joins the two: the statement leaves only when both do.
+func (c *Checker) elseBranch(f *fork, els ast.Stmt, bodyLeaves bool) bool {
+	c.branchEnd(f)
+	if els == nil {
+		c.joinAt(f, false)
 		return false
 	}
 
-	return c.stmt(s.Else) && leaves
+	leaves := c.stmt(els)
+	c.branchEnd(f)
+	c.joinAt(f, true)
+	return leaves && bodyLeaves
 }
 
 // ifBind checks `if pat := value {`: the value is an option, and the
@@ -280,6 +310,7 @@ func (c *Checker) ifStmt(s *ast.IfStmt) bool {
 func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 	x := c.expr(s.Value, nil)
 	c.openScope()
+	c.bindsOwned = false
 	if x.mode != invalid {
 		inner, m := deref(x)
 		if o, ok := inner.Underlying().(*Option); ok {
@@ -292,13 +323,14 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 		c.pattern(s.Pat, Typ[Invalid], nil)
 	}
 
-	leaves := c.block(s.Body)
-	c.closeScope()
-	if s.Else == nil {
-		return false
+	if c.bindsOwned && x.mode == variable {
+		c.move(s.Value) // a part bound by value leaves the place
 	}
 
-	return c.stmt(s.Else) && leaves
+	f := c.forkAt()
+	leaves := c.block(s.Body)
+	c.closeScope()
+	return c.elseBranch(&f, s.Else, leaves)
 }
 
 // borrowOf turns the mode of a scrutinee into the borrow its bindings
@@ -321,6 +353,7 @@ func (c *Checker) forStmt(s *ast.ForStmt) bool {
 		c.stmt(s.Init)
 	}
 
+	c.enterRegion(true, s.For)
 	if s.Cond != nil {
 		c.condition(s.Cond)
 	}
@@ -330,6 +363,7 @@ func (c *Checker) forStmt(s *ast.ForStmt) bool {
 	}
 
 	c.block(s.Body)
+	c.leaveRegion()
 	return s.Cond == nil && !hasBreak(s.Body.List)
 }
 
@@ -347,8 +381,13 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		if key, val, ok = rangeTypes(x); !ok {
 			c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
 		}
+
+		if _, isRef := x.typ.(*Ref); x.mode == variable && !isRef {
+			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
+		}
 	}
 
+	c.enterRegion(true, s.For)
 	if s.Tok == token.DEFINE {
 		c.rangeVar(s.Key, key)
 		c.rangeVar(s.Value, val)
@@ -358,6 +397,7 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	}
 
 	c.block(s.Body)
+	c.leaveRegion()
 }
 
 // rangeTypes returns what the two range variables get for a value, or
@@ -423,9 +463,10 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 		return
 	}
 
-	x := c.expr(e, nil)
+	x := c.target(e)
 	if x.mode != invalid {
-		c.assign(operand{value, t, nil}, x.typ, e.Pos(), "range assignment")
+		c.assign(operand{value, t, nil, nil}, x.typ, e.Pos(), "range assignment")
+		c.revive(e)
 	}
 }
 
@@ -444,6 +485,8 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 	}
 
 	hasDefault, allLeave := false, true
+	c.enterRegion(false, s.Switch)
+	f := c.forkAt()
 	for _, cc := range s.Body {
 		c.openScope()
 		if len(cc.List) == 0 {
@@ -451,7 +494,7 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 		}
 
 		for _, e := range cc.List {
-			c.assign(c.expr(e, tag), tag, e.Pos(), "case")
+			c.fits(c.expr(e, tag), tag, e.Pos(), "case")
 		}
 
 		if !c.stmts(cc.Body) || hasBreak(cc.Body) {
@@ -459,13 +502,18 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 		}
 
 		c.closeScope()
+		c.branchEnd(&f)
 	}
 
+	c.joinAt(&f, hasDefault)
+	c.leaveRegion()
 	return hasDefault && allLeave
 }
 
 func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 	allLeave := true
+	c.enterRegion(false, s.Select)
+	f := c.forkAt()
 	for _, cc := range s.Body {
 		c.openScope()
 		if cc.Comm != nil {
@@ -477,8 +525,11 @@ func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 		}
 
 		c.closeScope()
+		c.branchEnd(&f)
 	}
 
+	c.joinAt(&f, true)
+	c.leaveRegion()
 	return allLeave
 }
 
@@ -493,10 +544,11 @@ func (c *Checker) node(n ast.Node, expected Type) operand {
 		return c.blockValue(n, expected)
 	case ast.Stmt:
 		if c.stmt(n) {
-			return operand{value, Typ[Never], nil}
+			c.dead = true
+			return operand{value, Typ[Never], nil, nil}
 		}
 
-		return operand{value, Unit, nil}
+		return operand{value, Unit, nil, nil}
 	}
 
 	return invalidOperand

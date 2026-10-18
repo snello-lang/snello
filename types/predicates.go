@@ -138,13 +138,15 @@ func IsCopy(t Type) bool {
 	return false // pointers, slices, maps
 }
 
-// isCopy caches the answer on the named type. A declaration that
-// reaches itself without a pointer in between has no finite size and is
-// rejected elsewhere; here it counts as Copy so the recursion ends.
+// isCopy caches the answer on the named type. A type with a Drop
+// method is never Copy: a copy would be dropped twice. A declaration
+// that reaches itself without a pointer in between has no finite size
+// and is rejected elsewhere; here it counts as Copy so the recursion
+// ends.
 func (n *Named) isCopy() bool {
 	if n.copyState == copyUnknown && n.underlying != nil {
 		n.copyState = copyYes // provisional, so that a cycle back to n ends here
-		if !IsCopy(n.underlying) {
+		if n.Implements("Drop") || !IsCopy(n.underlying) {
 			n.copyState = copyNo
 		}
 	}

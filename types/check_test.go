@@ -147,6 +147,14 @@ var handledErrors = map[string]bool{
 	"missing-arm.teak":         true,
 	"wrong-question-kind.teak": true,
 	"ref-as-mut.teak":          true,
+	"use-after-move.teak":      true,
+	"move-in-branch.teak":      true,
+	"closure-moves.teak":       true,
+	"use-after-close.teak":     true,
+	"move-in-loop.teak":        true,
+	"move-out-of-slice.teak":   true,
+	"move-out-of-borrow.teak":  true,
+	"partial-move.teak":        true,
 }
 
 func TestNegativePrograms(t *testing.T) {
