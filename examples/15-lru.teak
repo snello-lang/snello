@@ -5,7 +5,7 @@
 // 15: An LRU cache.
 //
 // The classic ownership torture test: a hash map pointing into a doubly
-// linked list. The list lives in an Arena<T> and the map holds Index<T>
+// linked list. The list lives in an arena.Arena<T> and the map holds arena.Index<T>
 // handles, the same approach as the tree in example 01. This is also how
 // the fast Go and Rust LRU libraries are written.
 //
@@ -21,20 +21,20 @@ import ("arena"; "fmt")
 struct entry<K, V> {
     key  K
     val  V
-    prev Index<entry<K, V>>?
-    next Index<entry<K, V>>?
+    prev arena.Index<entry<K, V>>?
+    next arena.Index<entry<K, V>>?
 }
 
 struct Cache<K: Hash + Eq + Clone, V> {
     cap   int
-    index map[K]Index<entry<K, V>>
-    slots Arena<entry<K, V>>
-    head  Index<entry<K, V>>?          // most recently used
-    tail  Index<entry<K, V>>?          // least recently used
+    index map[K]arena.Index<entry<K, V>>
+    slots arena.Arena<entry<K, V>>
+    head  arena.Index<entry<K, V>>?          // most recently used
+    tail  arena.Index<entry<K, V>>?          // least recently used
 }
 
 func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {
-    return Cache{cap: cap, index: map[K]Index<entry<K, V>>{}, slots: arena.New(), head: None, tail: None}
+    return Cache{cap: cap, index: map[K]arena.Index<entry<K, V>>{}, slots: arena.New(), head: None, tail: None}
 }
 
 // Rejected form, for contrast:
@@ -43,7 +43,7 @@ func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {
 //   c.slots.GetMut(e.prev?)?.next = e.next   // ...and a second mut borrow of the arena: error
 //
 // Accepted form: read the two links out as plain values, then write.
-func (c mut Cache<K, V>) unlink(s Index<entry<K, V>>) {
+func (c mut Cache<K, V>) unlink(s arena.Index<entry<K, V>>) {
     e := c.slots.Get(s).Expect("live")
     prev, next := e.prev, e.next                    // Index is Copy; the borrow of e ends here
     match prev {
@@ -56,7 +56,7 @@ func (c mut Cache<K, V>) unlink(s Index<entry<K, V>>) {
     }
 }
 
-func (c mut Cache<K, V>) pushFront(s Index<entry<K, V>>) {
+func (c mut Cache<K, V>) pushFront(s arena.Index<entry<K, V>>) {
     old := c.head
     {
         e := c.slots.GetMut(s).Expect("live")

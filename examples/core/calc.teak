@@ -1,0 +1,162 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Core 5: a recursive-descent parser for arithmetic expressions.
+//
+// The core version of 05-parser.teak: no trait impls, numbers lexed by
+// hand instead of strconv, and enum comparisons written as matches.
+// Stresses: sum types, match, owned pointers for recursive data, a Copy
+// enum, and a lexer struct that holds a borrow of its input.
+//
+// A struct with a `ref` field is itself a borrow: it obeys every borrow
+// rule (cannot be stored in owned data or sent; returned only as a borrow
+// is, tied to one input). That is
+// enough for a lexer, which is created in Parse, used, and dropped before
+// Parse returns.
+
+package calc
+
+import "fmt"
+
+enum Token {                                    // Copy: every payload is Copy
+    Num(f64)
+    Plus
+    Minus
+    Star
+    Slash
+    LParen
+    RParen
+    EOF
+}
+
+enum Expr {
+    Lit(f64)
+    Neg(*Expr)                                  // *T: an owned heap pointer
+    Bin(op Token, lhs *Expr, rhs *Expr)
+}
+
+enum ParseError {
+    Unexpected(got Token, pos int)
+    BadChar(c byte, pos int)
+}
+
+struct Lexer {
+    src ref string          // the Lexer is therefore a borrow
+    pos int
+}
+
+func (l mut Lexer) Next() Result<Token, ParseError> {
+    for l.pos < len(l.src) && l.src[l.pos] == ' ' { l.pos += 1 }
+    if l.pos >= len(l.src) { return Ok(EOF) }
+    c := l.src[l.pos]
+    l.pos += 1
+    match c {
+        '+' => return Ok(Plus),
+        '-' => return Ok(Minus),
+        '*' => return Ok(Star),
+        '/' => return Ok(Slash),
+        '(' => return Ok(LParen),
+        ')' => return Ok(RParen),
+        '0'..='9' => return Ok(Num(l.number(c))),
+        _ => return Err(BadChar(c, l.pos - 1)),
+    }
+}
+
+// number accumulates the digits of an integer literal by hand, so the
+// core suite needs no strconv.
+func (l mut Lexer) number(first byte) f64 {
+    v := f64(first - '0')
+    for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+        v = v*10 + f64(l.src[l.pos] - '0')
+        l.pos += 1
+    }
+    return v
+}
+
+func isAdditive(t ref Token) bool { return match t { Plus | Minus => true, _ => false } }
+
+func isMultiplicative(t ref Token) bool { return match t { Star | Slash => true, _ => false } }
+
+struct Parser {
+    lex Lexer               // contains a borrow, so Parser is a borrow too
+    cur Token
+}
+
+func (p mut Parser) advance() Result<(), ParseError> {
+    p.cur = p.lex.Next()?
+    return Ok(())
+}
+
+// expr := term (('+' | '-') term)*
+func (p mut Parser) expr() Result<Expr, ParseError> {
+    lhs := p.term()?
+    for isAdditive(ref p.cur) {
+        op := p.cur                                 // Token is Copy: a copy, not a move
+        p.advance()?
+        rhs := p.term()?
+        lhs = Bin(op, &lhs, &rhs)                   // &x moves x to the heap
+    }
+    return Ok(lhs)
+}
+
+// term := factor (('*' | '/') factor)*
+func (p mut Parser) term() Result<Expr, ParseError> {
+    lhs := p.factor()?
+    for isMultiplicative(ref p.cur) {
+        op := p.cur
+        p.advance()?
+        rhs := p.factor()?
+        lhs = Bin(op, &lhs, &rhs)
+    }
+    return Ok(lhs)
+}
+
+// factor := Num | '-' factor | '(' expr ')'
+func (p mut Parser) factor() Result<Expr, ParseError> {
+    tok := p.cur                                // a copy: bindings into p.cur would keep p borrowed across advance
+    match tok {
+        Num(v) => { p.advance()?; return Ok(Lit(v)) },
+        Minus  => { p.advance()?; return Ok(Neg(&p.factor()?)) },
+        LParen => {
+            p.advance()?
+            e := p.expr()?
+            match p.cur {
+                RParen => p.advance()?,
+                t      => return Err(Unexpected(t, p.lex.pos)),
+            }
+            return Ok(e)
+        },
+        t => return Err(Unexpected(t, p.lex.pos)),
+    }
+}
+
+func Parse(src ref string) Result<Expr, ParseError> {
+    p := Parser{lex: Lexer{src: src, pos: 0}, cur: EOF}
+    p.advance()?
+    e := p.expr()?
+    match p.cur {
+        EOF => return Ok(e),                      // Expr owns its heap nodes; p is dropped here
+        t   => return Err(Unexpected(t, p.lex.pos)),
+    }
+}
+
+// An owned pointer dereferences automatically, so `inner` is usable as ref Expr.
+func Eval(e ref Expr) f64 {
+    return match e {
+        Lit(v)           => v,
+        Neg(inner)       => -Eval(inner),
+        Bin(Plus, l, r)  => Eval(l) + Eval(r),
+        Bin(Minus, l, r) => Eval(l) - Eval(r),
+        Bin(Star, l, r)  => Eval(l) * Eval(r),
+        Bin(_, l, r)     => Eval(l) / Eval(r),    // only Slash reaches here: expr and term build no other operator
+    }
+}
+
+func main() {
+    src := "1 + 2 * (3 - -4)"
+    match Parse(ref src) {
+        Ok(e)  => fmt.Println(Eval(ref e)),     // 15
+        Err(e) => fmt.Println("error:", e),
+    }
+}

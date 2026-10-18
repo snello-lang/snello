@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: exactly one mut borrow at a time.
+
+package p
+
+func bump(a mut int, b mut int) { *a += 1; *b += 1 }
+
+func main() {
+    n := 0
+    a := mut n
+    b := mut n                            // ERROR "cannot borrow n as mut: n is already borrowed as mut"
+    bump(a, b)
+}

@@ -1,6 +1,6 @@
 # Teak language design
 
-Status: draft, 2026-10-17. This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
+Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section). This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
 
 ## Goals
 
@@ -18,7 +18,7 @@ Goal 2 is the one that shapes everything. Go's simplicity is largely bought by i
 
 **Teak is not a drop-in replacement for Go.** The syntax is Go's so that a Go developer reads Teak immediately, but ordinary Go programs do not compile as Teak and are not meant to. Go code relies on `nil`, first-class pointers, implicitly shared mutable state, structural interfaces, and a garbage collector keeping values alive; Teak has none of these. Code is ported to Teak, not copied. The relationship is Zig to C or Kotlin to Java, not TypeScript to JavaScript. Code that already follows ownership discipline, such as a channel pipeline, looks nearly identical in both; code that does not will change shape.
 
-**Importing Go packages is not a language feature.** The first backend emits Go source, which would make importing Go packages easy. It is deliberately not offered: every Go value crossing that boundary brings `nil`, aliasing, and GC dependence with it, and the native backend in stage 4 could never honor such imports. Interop with Go or C will be a bounded foreign-function boundary, designed separately once the native backend exists.
+**Importing Go packages is not a language feature.** The compiler is written in Go, which makes a bridge to Go packages tempting. It is deliberately not offered: every Go value crossing that boundary brings `nil`, aliasing, and GC dependence with it, and a Teak program runs on its own runtime, which could never honor such imports. Interop with Go or C will be a bounded foreign-function boundary, designed separately once the native backend exists.
 
 ## What Teak leaves out
 
@@ -66,6 +66,8 @@ The programs in `../../examples/` confirm the model handles trees, graphs, parse
 ### Why not the alternatives
 
 Inko's runtime-checked borrows are the fallback if second-class borrows prove too restrictive in practice; they allow stored references at a small cost. Hylo's value semantics go further than needed and make callbacks awkward. Vale's generational references are elegant but young and carry a per-access cost in the worst case. Swift's reference counting conflicts with the no-hidden-cost goal.
+
+**Decision at the stage 1 checkpoint (2026-10-18): the ownership model holds as designed.** Stage 1 implemented the model as written above and in the borrows note: one owner per value, `ref` and `mut` borrows, the six rules, and no lifetime annotation anywhere. The eight core programs compile, run and free everything under a debug build that counts every allocation, and the 27 negative programs are rejected with the planned message and no other. Four refinements were needed, each a precise answer to a case the design had not spelled out and none a new concept for the programmer, each dated in `04-borrows-ref-and-mut.md`: the arguments of a call are evaluated, and their borrows end, before the receiver is borrowed; a pattern through a borrow copies `Copy` parts and borrows the rest; a `mut` binding through a map read is refused; and a borrow of a temporary dies with its statement. Two gaps carry into stage 2 as checker work, not model changes: a function-typed parameter is trusted to be owned, so a callee that stores its callback can keep a borrowing closure, which the debug build catches at run time; and a deferred call does not run on a panic, while `Drop` does. Stage 2 builds traits and generics on the model unchanged.
 
 ## Concurrency
 
@@ -115,28 +117,30 @@ The compiler is written in Go. Reasons, in order of weight:
 
 1. The project is a collaboration where every line must be readable and debuggable by a Go developer.
 2. Self-hosting later becomes a translation job, since Teak has Go syntax.
-3. One toolchain for the first three stages: the compiler is Go, emits Go, and `go build` produces the binary.
+3. `go build` builds the compiler, and the compiler needs nothing but the system C compiler to build a Teak program.
 4. `go/types` is the best reference implementation of a production type checker in a language the team reads natively, and the Go runtime is the reference for the stage 4 scheduler.
 
 Go's lack of sum types is mitigated with sealed interfaces (an unexported marker method per node family) and the `go-check-sumtype` linter, which restores exhaustiveness checking on type switches.
 
-### Backend: Go source first, LLVM later
+### Backend: C first, LLVM later
 
-Stages 0 through 3 emit Go source. This gives goroutines, channels, `select`, the scheduler, and a cross-platform optimizing backend for free, so the novel work, the type system, can be validated before any runtime exists.
+Teak produces a native executable from the first program. Stages 1 through 3 emit C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, and from stage 3 tasks and channels, is C under `emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Teak program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
 
-**This does not make Teak garbage collected.** The language's semantics never depend on a collector: the checker decides where every value is freed, and a Teak program that is only correct because Go's collector caught something is a bug in the checker. To keep that honest, the Go backend emits an explicit release call at every point the checker computed a drop, and a debug mode asserts that nothing is reachable after its release. Go's collector is scaffolding that stage 4 removes; no Teak program will notice it was ever there.
+Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond `cc`. Stage 4 replaces the C emitter with LLVM IR when control over optimization, debug information, and the GPU targets of stage 5 demand it. The runtime carries over unchanged, and the C emitter is shaped so that the replacement is one package under `emit/`.
 
-Stage 4 emits LLVM IR as text and shells out to `clang`, with a runtime in C. No cgo, no bindings. Borgo, a Rust-flavored language that compiles to Go, is evidence the first half of this path works.
+**No collector, ever.** The checker decides where every value is freed, and the emitted C frees it there (task 1.9). A debug build poisons freed memory and asserts that nothing is reachable after its release, and a leak checker runs over the suite, so a missing or misplaced free is a failing test, not a slow leak.
+
+Decided 2026-10-18, replacing an earlier plan to emit Go source for the first three stages and keep Go's runtime as scaffolding. The owner's reason: Teak is its own language, and a Teak program must not run on another language's runtime, even temporarily.
 
 ### Stages
 
 | Stage | Deliverable | Rough effort |
 |---|---|---|
 | 0 | Lexer and parser for the Go-like syntax, modeled on `go/scanner` and `go/parser` | weeks |
-| 1 | Core checker: structs, functions, `*T`, moves, `ref`/`mut` borrows, destructors. No traits, no generics. Emit Go. | 4 to 8 months |
+| 1 | Core checker: structs, functions, `*T`, moves, `ref`/`mut` borrows, destructors. No traits, no generics. Emit C; the first native binaries. | 4 to 8 months |
 | 2 | Traits, generics, sum types, `Option`/`Result`, `?`. | 2 to 3 months |
-| 3 | `Send` inference on `spawn` and channel sends, mapped to Go concurrency. | 1 month |
-| 4 | LLVM backend, C runtime with M:N scheduler, netpoller, stack management. | year two |
+| 3 | `Send` inference on `spawn` and channel sends; tasks on runtime threads, channels in the C runtime. | 1 to 2 months |
+| 4 | LLVM IR backend replacing the C emitter; M:N scheduler, netpoller and stack management in the runtime. | year two |
 | 5 | Kernel-safe subset, `Device<T>`, kernel launch through the LLVM GPU targets. | after 4 |
 
 Ownership comes before traits because ownership is the bet. Stage 1 is run against the twenty programs with traits and generics stripped out; if the checker rejects one, the design changes before anything is built on top of it. Borrow checking inside a function, with reborrows, conditional moves, moves in loops, and calls like `v.Push(v.Len())`, is the part of Rust's compiler that took longest, and dropping annotations removes none of it. The estimate reflects that.
@@ -195,7 +199,7 @@ What it will need, as a later stage:
 | Pony | Reference capabilities for data-race-free actors |
 | Austral | Linear types kept deliberately small |
 | Koka | Perceus reference counting with reuse |
-| Borgo | Compiling a safer language to Go source |
+| Nim | Compiling a safer language to C source as its native backend |
 
 ## Reading list
 

@@ -64,6 +64,7 @@ func TestPrint(t *testing.T) {
 							Op:    token.REF,
 							X:     &SelectorExpr{X: id(3, 21, "n"), Sel: id(3, 23, "value")},
 						}},
+						Rparen: at(3, 28),
 					}},
 				},
 			},
@@ -176,6 +177,7 @@ func TestPrint(t *testing.T) {
                 }
               }
             ]
+            Rparen: 3:28
           }
         ]
       }

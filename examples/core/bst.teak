@@ -1,0 +1,98 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Core 6: a binary search tree with in-place insert and delete.
+//
+// The core version of 20-bst.teak with int keys and string values, so
+// comparison is `<` and `>` instead of an Ord bound. The hardest
+// ownership shape for owned pointers: walking down a chain of *Node?
+// slots with a mutable borrow, and replacing nodes in place.
+
+package bst
+
+import "fmt"
+
+struct Node {
+    key   int
+    val   string
+    left  *Node?
+    right *Node?
+}
+
+struct Tree { root *Node? }
+
+func (t mut Tree) Insert(k int, v string) {
+    // `cur` is a mut borrow of one *Node? slot. Each step re-points it
+    // at a slot one level down. A borrow may be replaced by a borrow
+    // derived from itself; the old one ends and the new one inherits its
+    // scope.
+    cur := mut t.root
+    for {
+        n := cur ?? { *cur = Some(&Node{key: k, val: v, left: None, right: None}); return }
+        if k < n.key {
+            cur = mut n.left
+        } else if k > n.key {
+            cur = mut n.right
+        } else {
+            n.val = v
+            return
+        }
+    }
+}
+
+func (t ref Tree) Get(k int) ref string? {
+    cur := ref t.root
+    for {
+        n := cur ?? return None
+        if k < n.key {
+            cur = ref n.left
+        } else if k > n.key {
+            cur = ref n.right
+        } else {
+            return Some(ref n.val)
+        }
+    }
+}
+
+// remove takes the subtree by value, rebuilds it, and returns it. Moving an
+// owned pointer out and back in copies the pointer, not the node.
+func remove(slot *Node?, k int) *Node? {
+    n := slot ?? return None
+    if k < n.key {
+        n.left = remove(take(mut n.left), k)
+        return Some(n)
+    }
+    if k > n.key {
+        n.right = remove(take(mut n.right), k)
+        return Some(n)
+    }
+    match (take(mut n.left), take(mut n.right)) {
+        (None, r)          => return r,          // n dropped here
+        (l, None)          => return l,
+        (Some(l), Some(r)) => {
+            min, rest := popMin(r)               // splice in the right subtree's minimum
+            return Some(&Node{key: min.key, val: min.val, left: Some(l), right: rest})
+        },
+    }
+}
+
+func popMin(n *Node) (*Node, *Node?) {
+    match take(mut n.left) {
+        None    => { right := take(mut n.right); return (n, right) },
+        Some(l) => { min, rest := popMin(l); n.left = rest; return (min, Some(n)) },
+    }
+}
+
+func (t mut Tree) Delete(k int) {
+    t.root = remove(take(mut t.root), k)
+}
+
+func main() {
+    t := Tree{root: None}
+    for _, k := range []int{5, 3, 8, 1, 4} { t.Insert(k, fmt.Sprint(k)) }
+    fmt.Println(t.Get(4))     // Some("4")
+    t.Delete(5)
+    fmt.Println(t.Get(5))     // None
+    fmt.Println(t.Get(8))     // Some("8")
+}

@@ -1,0 +1,81 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Drops: where values die. A Drop method prints its name, so the order
+// of the lines is the order the compiler releases values in: at the
+// end of a scope, last declared first; before a return, break or
+// continue; at the end of a match arm for what the arm bound, and
+// after the match for what no arm took; and at the end of a statement
+// for a value no variable holds. A moved value is never dropped twice.
+
+package main
+
+import "fmt"
+
+struct Res impl Drop { name string }
+
+func (r mut Res) Drop() { fmt.Println("drop", r.name) }
+
+func keep(s string) {}
+
+// pick returns one of its two arguments; the other dies with the match.
+// The first arm binds both by value, but a failed guard leaves them in
+// place for the next arm.
+func pick(c bool, a Res, b Res) Res {
+	return match (a, b) {
+		(x, y) if c => { fmt.Println("both", x.name, y.name); x },
+		(x, _)      => x,
+	}
+}
+
+// early leaves a loop three ways: continue, return and falling off the
+// end, dropping the pass's locals each time.
+func early(xs []string) int {
+	for i, x := range xs {
+		r := Res{name: x.Clone()}
+		if i == 1 { return len(r.name) }
+		if i == 0 { continue }
+		fmt.Println("never", r.name)
+	}
+	return -1
+}
+
+func main() {
+	s := "a".Clone()
+	if len(s) > 0 { keep(s) } else { fmt.Println(s) }  // moved on one path only
+
+	fmt.Println(pick(false, Res{name: "a"}, Res{name: "b"}).name)  // b dies in the match, a after the print
+	fmt.Println(pick(true, Res{name: "c"}, Res{name: "d"}).name)
+
+	fmt.Println(early([]string{"x".Clone(), "yy".Clone(), "zzz".Clone()}))
+
+	m := map[string]string{"k".Clone(): "v1".Clone()}
+	m.Insert("k".Clone(), "v2".Clone())      // the old value and the duplicate key are freed
+	m["k".Clone()] = "v3".Clone()
+	for k, v := range m { fmt.Println(k, v) }
+
+	rs := []Res{Res{name: "p"}}
+	rs.Push(Res{name: "q"})
+	if last := rs.Pop() { fmt.Println("popped", last.name) }  // last dies at the end of the body
+	fmt.Println(len(rs))
+
+	t := "t".Clone()
+	g := func() { keep(t) }                   // the closure owns t: it moved it
+	g()
+
+	u := "u".Clone()
+	defer keep(u)                             // moved into the deferred call
+
+	acc := ""
+	for i := 0; i < 3; i += 1 { acc += "x"; if i == 1 { break } }
+	fmt.Println(acc)
+
+	words := []string{"w".Clone()}
+	clone := words.Clone()                    // each string copied; both slices own theirs
+	fmt.Println(clone, words)
+
+	o := Some("o".Clone())
+	if v := o { fmt.Println(v) }
+	fmt.Println("end")                        // then rs, with p inside, is dropped
+}

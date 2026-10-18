@@ -4,19 +4,27 @@
 
 // Command teak is the Teak compiler driver.
 //
-// Stage 0 provides two subcommands for inspecting the front end by hand:
-// `teak lex FILE` prints the token stream and `teak parse FILE` prints
-// the syntax tree.
+// `teak build FILE` compiles a Teak program to a native binary in the
+// current directory; `teak build -debug FILE` builds it with the
+// runtime's checks, which stop the program on a value used after its
+// release and report values never released. Four more subcommands inspect the compiler by
+// hand: `teak lex FILE` prints the token stream, `teak parse FILE` the
+// syntax tree, `teak check FILE` what the checker finds, and `teak emit
+// FILE` the C source that build would compile.
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/teak-lang/teak/ast"
+	"github.com/teak-lang/teak/emit/c"
 	"github.com/teak-lang/teak/parser"
 	"github.com/teak-lang/teak/scanner"
 	"github.com/teak-lang/teak/token"
+	"github.com/teak-lang/teak/types"
 )
 
 func main() {
@@ -36,13 +44,34 @@ func main() {
 		}
 
 		os.Exit(parse(os.Args[2]))
+	case "check":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(check(os.Args[2]))
+	case "build":
+		switch {
+		case len(os.Args) == 3:
+			os.Exit(build(os.Args[2], false))
+		case len(os.Args) == 4 && os.Args[2] == "-debug":
+			os.Exit(build(os.Args[3], true))
+		}
+
+		usage()
+	case "emit":
+		if len(os.Args) != 3 {
+			usage()
+		}
+
+		os.Exit(emit(os.Args[2]))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (lex | parse) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (build [-debug] | emit | lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -87,22 +116,132 @@ func parse(path string) int {
 	f, file, err := parser.ParseFile(path, src)
 	ast.Fprint(os.Stdout, f, file)
 	if err != nil {
-		if list, ok := err.(scanner.ErrorList); ok {
-			for _, e := range list {
-				fmt.Fprintln(os.Stderr, e)
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, err)
-		}
-
+		printErrors(err)
 		return 1
 	}
 
 	return 0
 }
 
-// readSource reads a file, reporting a failure to stderr.
+// check parses and checks a file and prints the errors; it prints
+// nothing and exits 0 when the file is correct.
+func check(path string) int {
+	src, ok := readSource(path)
+	if !ok {
+		return 1
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	if err == nil {
+		_, err = types.Check(file, f, nil)
+	}
+
+	if err != nil {
+		printErrors(err)
+		return 1
+	}
+
+	return 0
+}
+
+// emit prints the C source for a file, for reading what build
+// compiles.
+func emit(path string) int {
+	csrc, ok := emitSource(path)
+	if !ok {
+		return 1
+	}
+
+	os.Stdout.Write(csrc)
+	return 0
+}
+
+// build compiles a file to a native binary named after it, in the
+// current directory, through the C backend and the system C compiler;
+// debug asks for the runtime's checks.
+func build(path string, debug bool) int {
+	csrc, ok := emitSource(path)
+	if !ok {
+		return 1
+	}
+
+	dir, err := os.MkdirTemp("", "teak-build")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	defer os.RemoveAll(dir)
+	name := strings.TrimSuffix(filepath.Base(path), ".teak")
+	bin, out, err := c.Build(dir, name, csrc, debug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cc: %v\n%s", err, out)
+		return 1
+	}
+
+	built, err := os.ReadFile(bin)
+	if err == nil {
+		err = os.WriteFile(name, built, 0o755)
+	}
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	return 0
+}
+
+// emitSource parses, checks and emits a file, printing the errors of
+// whichever step fails.
+func emitSource(path string) ([]byte, bool) {
+	src, ok := readSource(path)
+	if !ok {
+		return nil, false
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	info := &types.Info{}
+	if err == nil {
+		_, err = types.Check(file, f, info)
+	}
+
+	var csrc []byte
+	if err == nil {
+		csrc, err = c.Emit(file, f, info)
+	}
+
+	if err != nil {
+		printErrors(err)
+		return nil, false
+	}
+
+	return csrc, true
+}
+
+// printErrors writes each error of a list on its own line.
+func printErrors(err error) {
+	if list, ok := err.(scanner.ErrorList); ok {
+		for _, e := range list {
+			fmt.Fprintln(os.Stderr, e)
+		}
+
+		return
+	}
+
+	fmt.Fprintln(os.Stderr, err)
+}
+
+// readSource reads a Teak source file, reporting a failure to stderr.
+// The name must end in .teak, as the Go tool insists on .go: it keeps a
+// stray file from being compiled as Teak, and it keeps build from
+// writing the binary over a source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
+	if !strings.HasSuffix(path, ".teak") {
+		fmt.Fprintf(os.Stderr, "%s: Teak source files end in .teak\n", path)
+		return nil, false
+	}
+
 	src, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

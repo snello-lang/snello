@@ -35,9 +35,11 @@ And to local bindings and call sites, where the keyword marks what is being crea
 
 ```teak
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
-strings.Fields(ref job.text)          // lend the text for the call
+strings.Fields(ref job.text)          // lend the text for the call; `ref` is optional here
 sort.Sort(mut list)                   // lend the list for mutation
 ```
+
+At a call site `mut` is always written and `ref` may be left out: an owned value passed where a `ref T` parameter is expected is borrowed for the call without a keyword, exactly as a receiver is, so `fmt.Println("error:", e)` lends `e` and keeps it. Writing the `ref` makes the same borrow visible. An owned pointer is borrowed the same way, as what it holds: `total(head)` with `head *Node` lends the node to a `ref Node` parameter (clarified 2026-10-18). A visible mutation is worth a word, as Go's `&x` is; a read is not. Decided in `05-standard-library.md`, section 5.
 
 `Copy` types (numbers, bools, small plain structs) are copied rather than moved when passed by value, so for them the first row behaves like Go and borrowing is rarely needed.
 
@@ -51,6 +53,12 @@ sort.Sort(mut list)                   // lend the list for mutation
 4. **Any number of `ref`, or exactly one `mut`.** While a value is borrowed `mut`, no other borrow of it exists and the owner cannot touch it. While it is borrowed `ref`, any number of other `ref` borrows may exist, but no `mut` and no mutation by the owner.
 5. **A borrow can be passed on, narrower or equal.** A `mut T` can be passed to a function wanting `ref T` or `mut T`. A `ref T` can only be passed on as `ref T`. A borrow of a field or element can be derived from a borrow of the whole: from `t mut Tree`, `mut t.nodes[i]`. A borrow variable may be reassigned to a borrow derived from itself.
 6. **The owner outlives every borrow.** Guaranteed by rules 1 to 3: a borrow never leaves the function that can see its owner, except by rule 3, where it rides on an input borrow the caller already holds.
+
+One ordering rule makes rule 4 practical. **In a call, the arguments are evaluated first, and their borrows end, before the receiver or a `mut` argument is borrowed.** So `v.Push(v.Len())` is legal: `v.Len()` borrows `v` as `ref`, returns, and the borrow is over before `Push` takes `v` as `mut`. What rule 4 rejects is a borrow that must still be live when the `mut` one starts, such as a `ref` bound to a local and used after the call. (Decided 2026-10-18.)
+
+Two more decisions came with the checker (2026-10-18). **What a pattern binds through a borrow.** A `match`, an `if` binding or `??` on a borrow variable binds borrows of the same kind, `Copy` or not: `Full(p)` through `s mut Slot` makes `p` a `mut Point`. On a place reached through a borrow, `t.nodes[id].parent` in a method on `t mut Tree`, a binding copies what `:=` would copy and borrows the rest, so `parent` is a plain `NodeID` and does not keep `t.nodes` lent; changing a `Copy` payload in place is written `match mut xs[0]`, as a mutation at a call site is written `mut`. This is the rule Rust applies to a place scrutinee, with the borrow of a non-`Copy` part where Rust would refuse to move. **A `mut` binding through a map read is refused**, with a message naming `m.GetMut(k)`, since `m[k]` for a key the map does not hold reads the zero value and a write to it would be lost.
+
+**A borrow of a temporary dies with its statement** (decided 2026-10-18, when the debug build of task 1.9 printed poison for `t := s.Clone().Trim()`). A value no variable holds is dropped when its statement ends, so a borrow of it may be used within the statement, ranged over or matched on, but not bound to a variable or returned: `cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`. A literal or a constant is not a temporary. The checker marks an owned value lent to a call or a `ref`, carries the mark onto a call whose result borrows it, and refuses a binding or a return of a marked value.
 
 So Teak has lifetimes. It infers every one of them and rejects the programs where inference is ambiguous, instead of asking for an annotation. Rules 2 and 3 are what make inference always possible: a borrow never outlives the function it was created in, except by riding on one input borrow.
 
@@ -88,7 +96,7 @@ The price of never annotating. Each has an idiom the examples use.
 
 - **A choice at every signature.** Go developers write `T` or `*T` by habit; Teak asks which of three things the function does. The default is easy, `ref` for reading, `mut` for changing, by value for keeping, but it is a decision Go does not ask for.
 - **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../../examples/15-lru.teak`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
-- **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in an owned struct, returning it, or sending it is not.
+- **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in owned data or sending it is not. Returning one follows rule 3 like any borrow: tied to the receiver or to the only borrowed parameter. That is how `text.Fields()` returns an iterator that borrows its receiver, and why `NewLexer(src ref string) Lexer` is legal while `NewLexer(src ref string, name ref string) Lexer` is not. (Clarified 2026-10-18; an earlier draft said a borrow-holding struct could never be returned.)
 
 ## Choosing, in one line
 

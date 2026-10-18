@@ -29,14 +29,14 @@ struct Entry {
 }
 
 struct Server {
-    cache Arc<sync.RwLock<map[string]Entry>>   // shared, lock-protected
-    db    Arc<db.Pool>                          // shared, internally synchronized
+    cache sync.Arc<sync.RwLock<map[string]Entry>>   // shared, lock-protected
+    db    sync.Arc<db.Pool>                          // shared, internally synchronized
 }
 
 func NewServer(pool db.Pool) Server {
     return Server{
-        cache: Arc.New(sync.RwLock.New(map[string]Entry{})),
-        db:    Arc.New(pool),
+        cache: sync.Arc.New(sync.RwLock.New(map[string]Entry{})),
+        db:    sync.Arc.New(pool),
     }
 }
 
@@ -78,6 +78,6 @@ func (s ref Server) GetUser(w mut http.ResponseWriter, r http.Request) {
 func main() {
     s := NewServer(db.Connect("postgres://..."))
     mux := http.NewMux()
-    mux.Handle("/user", Arc.New(s), Server.GetUser)   // s moved into the Arc
+    mux.Handle("/user", sync.Arc.New(s), Server.GetUser)   // s moved into the Arc
     http.ListenAndServe(":8080", mux)
 }

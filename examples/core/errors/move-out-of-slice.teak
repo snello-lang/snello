@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: indexing an owned slice lends the element; it does not move it.
+// Fix: xs.Remove(0), xs.Pop(), or take on an optional element.
+
+package p
+
+import "fmt"
+
+func main() {
+    xs := []string{"a", "b"}
+    first := xs[0]                        // ERROR "cannot move xs[0] out of the slice"
+    fmt.Println(first)
+}

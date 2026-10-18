@@ -1,0 +1,14 @@
+map[one:11 two:2 three:3 four:4] 4 2 0 4
+Some(3) None true Some(2) None map[one:11 three:3 four:4]
+400
+one 11
+three 3
+four 400
+[{a 3} {b 2} {c 1}] map[a:3 b:2 c:1]
+map[] 0 false false
+map[3:true]
+a b true map[(1, 2):a (2, 1):b]
+500 1 0 993
+map[a:6 b:4 c:2]
+map[a:[1 2]] 0 map[a:[1 2]]
+zero false

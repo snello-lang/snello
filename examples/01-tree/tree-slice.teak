@@ -60,8 +60,9 @@ func (t mut Tree) Remove(id NodeID) {
 func (t ref Tree) Path(id NodeID) []string {
     path := []string{}
     cur := Some(id)
-    for cur != None {
-        n := ref t.nodes[cur?]
+    for {
+        at := cur ?? break                     // None ends the walk
+        n := ref t.nodes[at]
         if !n.live { break }
         path = append(path, n.value.Clone())
         cur = n.parent

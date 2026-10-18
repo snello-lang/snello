@@ -1,6 +1,6 @@
 # The standard library
 
-Status: draft for decision, 2026-10-18. This note says what the Teak standard library is: which names the language itself knows, where every other name comes from, how the library relates to Go's, and the rules every library signature follows. It exists because the twenty example programs use library names that no other document defines, and the checker in stage 1 is the first code that needs the answers. Three decisions are marked **open** for the human; everything else follows a precedent named in place.
+Status: decided 2026-10-18. This note says what the Teak standard library is: which names the language itself knows, where every other name comes from, how the library relates to Go's, and the rules every library signature follows. It exists because the twenty example programs use library names that no other document defines, and the checker in stage 1 is the first code that needs the answers. Three decisions had no precedent to follow; they are marked **decided** below with the reason, and each is a one-line change if the owner's review overturns it. Everything else follows a precedent named in place.
 
 ## The precedents
 
@@ -29,7 +29,7 @@ These names are predeclared: visible in every file without an import, and known 
 
 **Other basic types.** `bool`, `string`, `error`.
 
-**Option and result.** `T?` with `Some` and `None`; `Result<T, E>` with `Ok` and `Err`. Both are enums the compiler knows, because `?` and `??` and `match` exhaustiveness are language features over them. Their methods: `Expect`, `Unwrap`, `UnwrapOr`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Map`, `MapErr`.
+**Option and result.** `T?` with `Some` and `None`; `Result<T, E>` with `Ok` and `Err`. Both are enums the compiler knows, because `?` and `??` and `match` exhaustiveness are language features over them. Their methods: `Expect`, `Unwrap`, `UnwrapOr`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Map`, `MapErr`. The ones that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `Map` and `MapErr`, take their receiver; the tests lend it (decided with the borrow checker, 2026-10-18).
 
 **Functions.** `len`, `cap`, `make`, `take`, `panic`, `print`.
 
@@ -38,12 +38,12 @@ These names are predeclared: visible in every file without an import, and known 
 | On | Methods |
 |---|---|
 | `[]T` | `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Reverse`, `Sort`, `SortBy`, `Contains`, `Clone` |
-| `map[K]V` | `Get`, `GetMut`, `Insert`, `Remove`, `Contains`, `Clone` |
+| `map[K]V` | `Get`, `GetMut`, `Insert`, `Remove`, `Contains`, `Clone`. `m[k]` on a missing key reads the zero value and changes nothing; `m[k] = v` and `m[k] += v` make the entry. A range visits entries in insertion order (decided 2026-10-18 with the C backend) |
 | `string` | `Len`, `Clone`, `Fields`, `Split`, `SplitOnce`, `Trim`, `HasPrefix`, `HasSuffix`, `Contains`, `ToUpper`, `ToLower` |
 
 **The standard traits.** `Copy`, `Clone`, `Eq`, `Ord`, `Hash`, `Drop`, `Error`, and the operator traits `Add`, `Sub`, `Mul`, `Div`, `Rem`, `Neg`. Every number type is `Copy`, `Eq`, `Ord` and `Hash`, and implements the operator traits.
 
-**Open 1.** Whether the collection methods are predeclared, as above, or whether only the types are predeclared and the methods come from a package the program imports. The recommendation is predeclared, because Go's `append` and `len` are, and because `xs.Push(v)` with an import line above it would surprise a Go developer.
+**Decided 1 (2026-10-18): predeclared.** The collection methods are predeclared with their types, as above, because Go's `append` and `len` are, and because `xs.Push(v)` with an import line above it would surprise a Go developer. The alternative was a package the program imports for them.
 
 ## 2. No prelude: everything else is imported
 
@@ -65,13 +65,13 @@ Go's rule, and the rule the design's "what Teak leaves out" table implies, since
 | `time` | `Time`, `Duration`, `Now`, `Since`, `Sleep`, `After`, `Tick`, `Nanosecond` to `Hour` |
 | `regexp` | `Regexp`, `Compile` |
 
-The examples that use `Arc`, `Index` or `Arena` without a qualifier gain an import line and the qualifier. `net/http`, `json` and `db` in the HTTP example are placeholders for a later library and are not part of this list.
+Examples 01, 03, 12 and 15 name `arena.Arena`, `arena.Index` and `sync.Arc` through their packages (sweep done 2026-10-18); no example uses a library name without an import. `net/http`, `json` and `db` in the HTTP example, `heap` in the graph example and `net` in the state machine are placeholders for a later library and are not part of this list.
 
-**Open 2.** The package name for `Rc` and `Weak`. `rc` follows Rust's `std::rc`; `shared` would say what the package is for. Either is one word in a handful of import lines.
+**Decided 2 (2026-10-18): `rc`.** The package for `Rc` and `Weak` is `rc`, after Rust's `std::rc`, so the type reads `rc.Rc<T>`. The alternative, `shared`, says what the package is for but makes the type read `shared.Rc<T>`, a name that explains itself twice.
 
 ## 3. Go's package map, Teak's signatures
 
-Package names and layout are Go's, so a Go developer knows where to look, and the first backend emits Go. Inside a package the rule is: **the same name when the meaning is the same, a new name when ownership changes the meaning.** `strings.Repeat` is the same function in both languages. `os.ReadFile` is not: Go's returns a byte slice and a nullable error, Teak's returns `Result<string, io.Error>`, so it is `os.ReadToString`. Kotlin treats Java's library the same way: the same names where nothing changed, new ones where null safety did.
+Package names and layout are Go's, so a Go developer knows where to look. Inside a package the rule is: **the same name when the meaning is the same, a new name when ownership changes the meaning.** `strings.Repeat` is the same function in both languages. `os.ReadFile` is not: Go's returns a byte slice and a nullable error, Teak's returns `Result<string, io.Error>`, so it is `os.ReadToString`. Kotlin treats Java's library the same way: the same names where nothing changed, new ones where null safety did.
 
 ## 4. Three signature rules
 
@@ -87,11 +87,11 @@ Results are owned. `Copy` types are by value everywhere, and for them rule 1 rea
 
 Rule 1 forces one language decision. The borrows note today says a borrow at a call site is written with the keyword, `strings.Fields(ref job.text)`, and every print call in the examples passes owned values without it: `fmt.Println("error:", e)`. Under the written rule that call moves `e` into `Println`, which is not what anyone means.
 
-**Open 3, recommended yes.** An owned value passed where a `ref T` parameter is expected is borrowed for the call, exactly as a receiver already is: `x.Describe()` borrows `x` with no keyword. `mut` stays explicit at every call site, because a visible mutation is worth a word, as Go's `&x` and Swift's `&` are. Writing `ref` at the call site remains legal and means the same thing. With this rule the print calls are correct as written, and the borrows note changes one example line.
+**Decided 3 (2026-10-18): yes.** An owned value passed where a `ref T` parameter is expected is borrowed for the call, exactly as a receiver already is: `x.Describe()` borrows `x` with no keyword. `mut` stays explicit at every call site, because a visible mutation is worth a word, as Go's `&x` and Swift's `&` are. Writing `ref` at the call site remains legal and means the same thing. With this rule the print calls are correct as written; the borrows note states the rule beside its call-site example.
 
 ## The stage 1 mapping table
 
-Stage 1 has no library code. It has a table in the Go emitter that maps each of these names onto the Go function of the same meaning, and nothing more: `fmt.Println`, `fmt.Printf`, `fmt.Sprintf`, `fmt.Sprint`, `os.Exit`, `os.Stderr`, `os.ReadToString`, `strings.Fields`, `strings.Repeat`, `time.Now`, `math.Pi`, `math.Sqrt`, and the methods of section 1 on slices, maps, strings, options and results. Everything in the table is debt that the stage 4 runtime repays. Library code written in Teak, which begins at task 2.6, carries over to stage 4 unchanged.
+Stage 1 has no library code written in Teak. It has a table in the C emitter that maps each of these names onto a function of the C runtime with the same meaning, and nothing more: `fmt.Println`, `fmt.Printf`, `fmt.Sprintf`, `fmt.Sprint`, `os.Exit`, `os.Stderr`, `os.ReadToString`, `strings.Fields`, `strings.Repeat`, `time.Now`, `math.Pi`, `math.Sqrt`, and the methods of section 1 on slices, maps, strings, options and results. Everything in the table is debt that the stage 4 runtime repays. Library code written in Teak, which begins at task 2.6, carries over to stage 4 unchanged.
 
 ## What this does not decide
 

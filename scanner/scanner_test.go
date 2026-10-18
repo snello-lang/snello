@@ -131,8 +131,8 @@ func TestErrors(t *testing.T) {
 }
 
 // TestExamples lexes every program under examples/. The programs are the
-// acceptance suite for every stage; stage 0 only requires that they
-// contain no illegal characters.
+// acceptance suite; the scanner only requires that they contain no
+// illegal characters.
 func TestExamples(t *testing.T) {
 	for _, f := range exampleFiles(t) {
 		toks, errs := scanAll(t, f.name, string(f.src))

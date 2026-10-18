@@ -1,0 +1,110 @@
+# Appendix B. Teak for Go programmers
+
+Status: grows with the chapters; covers chapters 3 to 9.
+
+The chapters describe Teak on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Teak is not a Go dialect, and Go programs are not Teak programs; the syntax is familiar so that the ideas get your full attention.
+
+## Chapter 3: Basics
+
+Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `switch`, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
+
+| In Go | In Teak |
+|---|---|
+| `int32`, `float64`, `uint8` | `i32`, `f64`, `u8`; `int`, `uint`, `byte`, `rune` as before |
+| Untyped constants: `x := 10 * 2.5` | A literal takes its type from context; mix types with a conversion |
+| `s[a:b]` copies a string header; the bytes are shared by the GC | `s[a:b]` lends a `ref string`; the original must outlive it |
+| `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()` |
+| `go f(x)` | `spawn f(x)` |
+| `if x := f(); x > 0 {` | Same. `if x := opt {` with no `;` is a binding on an optional |
+| `append`, `delete`, `copy`, `new` | `xs.Push(v)`, `m.Remove(k)`, `xs.Clone()`, `&expr` |
+| `nil` | None. An absent value is `T?` |
+| `a, b := f()` for two results | Same; several results are a tuple, `return (n, right)` |
+| An `if` is a statement | An `if` with an `else` is also an expression |
+| A newline after `>` continues the line | A newline after `>` ends the line |
+
+## Chapter 4: Structs, enums and match
+
+Unchanged: struct fields, keyed literals, dot access, methods with receivers, `type Name T`.
+
+| In Go | In Teak |
+|---|---|
+| `type Node struct { ... }` | `struct Node { ... }` |
+| Value and pointer receivers, `(t Tree)` and `(t *Tree)` | Three receivers: `(t ref Tree)` reads, `(t mut Tree)` changes, `(t Tree)` takes |
+| A `const` block with `iota`, or an interface with one struct per case | `enum`, with fields per variant |
+| A type switch | `match`, exhaustive, usable as an expression |
+| `switch` on an enum constant | `match`; a missing case is a compile error |
+| `v, ok := m[k]` | `if v := m.Get(ref k) {` |
+
+## Chapter 5: Ownership
+
+Nothing here has a Go counterpart; the garbage collector made the questions disappear. What to unlearn:
+
+| In Go | In Teak |
+|---|---|
+| Assignment copies the value or the pointer; both names stay valid | Assignment moves; the old name is dead unless the type is `Copy` |
+| Passing a slice or a struct copies its header or its bytes | Passing by value moves; pass `ref` or `mut` to keep it |
+| `defer f.Close()` | A file closes itself when dropped; `f.Close()` consumes it and returns the error |
+| Finalizers run eventually, or never | `Drop` runs at scope exit, early return and panic, in order; a deferred call does not run on a panic |
+| `x := xs[0]` copies the element | `xs[0]` lends the element; `xs.Remove(0)`, `xs.Pop()` or `take` moves it |
+| `tmp := head; head = head.next` | `old := take(mut s.head)` |
+| Copy a struct and hope it had no shared state | `s.Clone()` is the only copy, and it is explicit |
+
+### Where the model comes from
+
+The ownership model is not Teak's invention. One owner per value, borrows that are either many readers or one writer, and a `Drop` that runs when the owner is done are the model Rust made mainstream, and before Rust they were the linear types of academic languages. A Rust programmer recognizes Teak's chapters 5 and 6 at once, and that is deliberate: it is the one model with a decade of proof on real systems, and it is what lets Teak drop the garbage collector that Go's simplicity leans on.
+
+Where Teak differs is in what it leaves out, and this is the bet stage 1 of the compiler was built to test:
+
+| In Rust | In Teak |
+|---|---|
+| Lifetime annotations, `fn f<'a>(x: &'a T) -> &'a U`, say which input a returned borrow comes from; the hardest part of the language to learn | None. A returned borrow comes from the receiver or from the only borrowed parameter; a function where that is ambiguous is refused, and you return a clone or an index instead |
+| A borrow is a first-class value: it can live in a struct, a `Vec`, a channel, and the type system tracks its lifetime through all of them | A borrow lives inside one function and cannot be stored, sent or captured by a task; a long-lived structure that points into another uses an arena with indices (chapter 13) |
+| `&x`, `&mut x` at every call site; `x.method()` borrows implicitly | `f(x)` lends for reading with no keyword, `f(mut x)` for writing; `ref` and `mut` on the parameter say the rest |
+| Programs that need a lifetime are written with one | Those programs are refused; the eight core programs, written to exercise the hard cases, never needed one |
+
+The restriction on borrows is real, and it is what makes the absence of annotations possible: when a borrow cannot leave its function, every lifetime can be inferred or the program rejected, with nothing to write either way.
+
+## Chapter 6: Borrows
+
+| In Go | In Teak |
+|---|---|
+| `func f(r *Rect)`: no copy, and maybe mutated, maybe kept, maybe nil | `func f(r ref Rect)` reads, `func f(r mut Rect)` changes; neither can keep it or be nil |
+| `f(&x)` | `f(mut x)` to change `x`; `f(x)` or `f(ref x)` to read it |
+| `p.field` through a pointer; `*p = v` to replace | The same: `n.value` through a borrow; `*cur = v` to replace |
+| Append under a live pointer reallocates silently | `xs.Push(v)` while an element borrow is live is a compile error |
+| Modify a map during `range`: a runtime surprise | A compile error: a write during a read |
+| `if v, ok := m[k]; ok { v.n++ }` changes a copy, silently | A binding through a place copies what `:=` copies; to change it where it lies, write `match mut xs[0] { Full(n) => *n += 1 }` |
+| `v, ok := o.Get()` leaves `o` usable | `o.Expect(msg)` takes `o`: a value handed out is not kept |
+| Return a pointer to a local; the GC keeps it alive | `cannot return a borrow of local s`; return the value |
+| A closure capturing a local by reference, returned from `counter()` | Rejected; put the state in a struct with a method |
+| A struct holding a `*string` into a buffer | A struct holding `ref string` is itself a borrow: returned only like a borrow, never stored |
+| Pass the same slice to five goroutines | `a spawned task cannot hold a borrow`; move it, clone it, or share it through `sync.Arc` |
+
+## Chapter 9: Collections
+
+| In Go | In Teak |
+|---|---|
+| `xs = append(xs, v)`, and remember to assign the result | `xs.Push(v)`; the slice grows in place, since it owns its elements |
+| A slice is a view; two slices may share an array and see each other's writes | A slice owns its elements; `xs[lo:hi]` is a borrow, and the borrow rules keep the two apart |
+| `var xs []int` is `nil` and `len(xs) == 0` | A slice declared without a value is empty; there is no `nil` |
+| `xs[i]` on a bad index panics | The same, with the same message |
+| `copy(dst, src)`, `sort.Ints(xs)`, `slices.Contains(xs, v)` | `xs.Clone()`, `xs.Sort()`, `xs.Contains(v)`: methods on the slice |
+| `strings.Fields(s)` returns new strings | `s.Fields()` yields borrows into `s`, and a loop over them lends `s` |
+| `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s` |
+| `for i, r := range s` yields runes | `for i, c := range s` yields bytes; text as runes comes with the library (stage 2) |
+| `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
+| `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
+| `delete(m, k)` | `m.Remove(k)` returns the value as `V?` |
+| Map iteration order is random | Insertion order |
+
+## Chapter 7: Owned pointers
+
+| In Go | In Teak |
+|---|---|
+| `&x` takes the address of a variable; the GC keeps it alive | `&expr` moves the value to the heap; the pointer owns it and nothing else may point there |
+| `p := &Node{}`; copying `p` makes a second pointer to the same node | A pointer moves; there is one owner, so no two names reach one node |
+| `*p` to read through, `p.field` as a shortcut | `p.field` the same; `*p` only to read or replace the whole value |
+| `next *Node` is `nil` at the end of a list | `next *Node?` is `None` at the end; there is no `nil` |
+| `p == q` compares addresses | `p == q` compares what they hold |
+| A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
+

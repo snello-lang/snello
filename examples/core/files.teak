@@ -1,0 +1,55 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Core 4: file copying with deterministic cleanup.
+//
+// The core version of 14-files.teak with the predeclared `error` type in
+// place of io.Error. Stresses: `Drop` versus `defer`, a consuming
+// `Close` after which the file cannot be used, `?` on every library
+// call, and a user type with a `Drop` method.
+
+package files
+
+import ("fmt"; "io"; "os")
+
+// os.File has Drop: going out of scope closes the descriptor. An explicit
+// Close consumes the file and reports the error, which Drop cannot. The
+// idiom: call Close when you care about the error, rely on Drop when you
+// do not.
+
+func Copy(src ref string, dst ref string) Result<i64, error> {
+    in := os.Open(src)?                     // owned; closed by Drop on every exit path
+    out := os.Create(dst)?
+
+    n := io.Copy(mut out, mut in)?          // both lent mutably for the duration of the copy
+
+    out.Close()?                            // consumes out; using it below is a compile error
+    return Ok(n)                            // in is closed here by Drop
+}
+
+// A temp directory that removes itself. Drop runs on normal exit, early
+// return, and panic unwinding.
+struct TempDir impl Drop { path string }
+
+func NewTempDir() Result<TempDir, error> {
+    p := os.MkdirTemp("", "teak")?
+    return Ok(TempDir{path: p})
+}
+
+func (t mut TempDir) Drop() { os.RemoveAll(ref t.path) }
+
+func main() {
+    tmp := NewTempDir().Expect("tempdir")
+    target := tmp.path + "/copy.txt"       // `+` borrows both sides and returns a new string
+
+    // defer remains for cleanup that is not tied to a value's lifetime.
+    defer fmt.Println("done")
+
+    match Copy("input.txt", ref target) {  // a literal borrows implicitly; `ref` may also be written
+        Ok(n)  => fmt.Println("copied", n, "bytes"),
+        Err(e) => fmt.Println("copy failed:", e),
+    }
+    // the deferred print runs, then tmp is dropped: directory removed
+
+}

@@ -438,6 +438,7 @@ type CallExpr struct {
 	TypeArgs []Type
 	Lparen   token.Pos
 	Args     []Expr
+	Rparen   token.Pos
 }
 
 // A UnaryExpr is a prefix operator applied to an operand. Op is one of

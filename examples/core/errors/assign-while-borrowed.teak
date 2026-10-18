@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the owner cannot change a value while it is borrowed.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "a"
+    r := ref s
+    s = "b"                               // ERROR "cannot assign to s: s is borrowed"
+    fmt.Println(r)
+}

@@ -1,0 +1,579 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package types
+
+import (
+	"github.com/teak-lang/teak/ast"
+	"github.com/teak-lang/teak/token"
+)
+
+// The borrow pass runs inside the checker's walk
+// beside the move pass. A borrow is created by ref or mut on a place,
+// by a method on its receiver, by a parameter that lends, by a pattern
+// matched through a borrow, and by ?? on a borrowed option; it is held
+// by the variable it is bound to and lives until that variable's last
+// use. Any number of ref borrows of a place may be live together, or
+// one mut; while a place is lent the owner may not assign to it or move
+// it, and while it is lent mut nothing else may read it. An access that
+// collides with a borrow is kept as a conflict until the end of the
+// function, when every variable's last use is known and the borrow's
+// liveness at the access can be decided; a borrow lent for one call
+// lives for that call only and collides at once. See
+// _docs/book/06-borrows.md for the rules as the reader sees them.
+
+// A borrow records a place lent to a holder: the variable holding the
+// borrow, or none for a range loop that holds its collection for the
+// whole body, the place lent, whether it is lent mut, where it began
+// and, once the holder was rebound, where it ended and the holder's
+// last use before that.
+type borrow struct {
+	holder *Var
+	place
+	mut   bool
+	pos   token.Pos
+	end   token.Pos // where the holder was rebound, or NoPos while it holds the borrow
+	last  token.Pos // the holder's last use before end
+	until token.Pos // for a range loop, the end of its body
+}
+
+// A conflict is an access that collided with a borrow, kept until the
+// function's end. A temporary borrow is live by construction; a held
+// one is live when its holder is used after the access.
+type conflict struct {
+	pos   token.Pos // where the access is reported
+	at    token.Pos // where it takes effect: a receiver is borrowed after its arguments
+	msg   string
+	b     int         // the index of the borrow in c.borrows, or -1 for a temporary
+	loops []token.Pos // where the loops around pos begin
+}
+
+// An access says what an expression does to a place, which decides the
+// borrows it collides with: a read collides with a mut borrow, a write
+// or a move with any, a ref borrow with a mut one, a mut borrow with
+// any.
+type access int8
+
+const (
+	readAccess access = iota
+	writeAccess
+	moveAccess
+	refAccess
+	mutAccess
+)
+
+// accessExpr resolves e to its place and records what the access does
+// to it. For an assignment to a variable holding a borrow it returns
+// that variable: the assignment rebinds it and ends what it held.
+func (c *Checker) accessExpr(e ast.Expr, what access, pos token.Pos) *Var {
+	p, kind := c.placeOf(e)
+	if kind == notPlace {
+		return nil
+	}
+
+	c.capture(p.v, byMut)
+	if what == writeAccess && kind == placeOwned && p.path == "" && isBorrow(p.v.typ) {
+		c.rebind(p.v, pos)
+		return p.v
+	}
+
+	c.access(e, p, what, pos, pos)
+	return nil
+}
+
+// access checks an access to a place against the borrows live at that
+// point: the ones lent for the call being checked and the ones held by
+// variables, which may or may not be live and are decided at the end
+// of the function. The access is reported at pos and takes effect at
+// at, which is later for a receiver, borrowed after its arguments.
+func (c *Checker) access(e ast.Expr, p place, what access, pos, at token.Pos) {
+	for i := range c.temps {
+		if t := &c.temps[i]; t.collides(p, what) {
+			c.conflictAt(pos, at, c.collision(e, p, what, t), -1)
+			return
+		}
+	}
+
+	for i := range c.borrows {
+		if b := &c.borrows[i]; b.end == token.NoPos && b.collides(p, what) {
+			c.conflictAt(pos, at, c.collision(e, p, what, b), i)
+			return
+		}
+	}
+}
+
+// collides reports whether an access to p collides with the borrow:
+// the places must overlap, and a read or a ref borrow is fine beside a
+// ref borrow.
+func (b *borrow) collides(p place, what access) bool {
+	if b.v != p.v || !b.place.within(p) && !p.within(b.place) {
+		return false
+	}
+
+	return b.mut || what != readAccess && what != refAccess
+}
+
+// collision writes the message for an access that collides with b, up
+// to where the borrow began; the use that keeps it live is added when
+// the conflict is resolved.
+func (c *Checker) collision(e ast.Expr, p place, what access, b *borrow) string {
+	var msg string
+	switch what {
+	case readAccess:
+		msg = "cannot use " + exprText(e) + ": " + b.text() + " is borrowed as mut"
+	case writeAccess:
+		msg = "cannot assign to " + exprText(e) + ": " + b.text() + " is borrowed"
+	case moveAccess:
+		msg = "cannot move " + p.text() + ": " + b.text() + " is borrowed"
+	case refAccess:
+		msg = "cannot borrow " + exprText(e) + " as ref: " + b.text() + " is already borrowed as mut"
+	case mutAccess:
+		msg = "cannot borrow " + exprText(e) + " as mut: " + b.text() + " is borrowed as ref"
+		if b.mut {
+			msg = "cannot borrow " + exprText(e) + " as mut: " + b.text() + " is already borrowed as mut"
+		}
+	}
+
+	switch {
+	case b.holder != nil:
+		msg += " by " + b.holder.name
+	case b.until != token.NoPos:
+		msg += " by the range loop"
+	}
+
+	return msg + " at " + c.lineCol(b.pos)
+}
+
+// conflictAt keeps a conflict for the end of the function. Two accesses
+// at one position are one access seen twice, as the operand of a
+// borrow is read and then lent; the later, more specific message wins.
+func (c *Checker) conflictAt(pos, at token.Pos, msg string, b int) {
+	if n := len(c.conflicts); n > 0 && c.conflicts[n-1].pos == pos {
+		c.conflicts[n-1] = conflict{pos, at, msg, b, c.conflicts[n-1].loops}
+		return
+	}
+
+	var loops []token.Pos
+	for _, r := range c.regions {
+		if r.loop {
+			loops = append(loops, r.pos)
+		}
+	}
+
+	c.conflicts = append(c.conflicts, conflict{pos, at, msg, b, loops})
+}
+
+// lend records a borrow of e for the call or statement being checked,
+// after checking the access, so that a later argument or the receiver
+// collides with it. The borrow takes effect at at: for a receiver, the
+// end of the call, once the arguments are evaluated.
+func (c *Checker) lend(e ast.Expr, mut bool, at token.Pos) {
+	p, kind := c.placeOf(e)
+	if kind == notPlace {
+		return
+	}
+
+	what := refAccess
+	if mut {
+		what = mutAccess
+		c.capture(p.v, byMut)
+	}
+
+	c.access(e, p, what, e.Pos(), at)
+	c.temps = append(c.temps, borrow{place: p, mut: mut, pos: e.Pos()})
+}
+
+// lendCaptures lends what a closure literal captures for the call it
+// is passed to, so that the call cannot borrow the same variable again.
+func (c *Checker) lendCaptures(e ast.Expr, pos token.Pos) {
+	for _, cap := range c.capturesOf(e) {
+		if cap.mode == byMove {
+			continue
+		}
+
+		b := cap.borrow(nil, pos)
+		what := refAccess
+		if b.mut {
+			what = mutAccess
+		}
+
+		c.access(&ast.Ident{NamePos: pos, Name: cap.v.name}, b.place, what, pos, pos) // named for the message
+		c.temps = append(c.temps, b)
+	}
+}
+
+// hold records that v holds the borrow its value carries, when the
+// value is a borrow and the place it was lent from can be found: r in
+// r := ref xs holds xs, n in n := cur ?? return holds what cur holds,
+// and f in f := m.Get(k) holds m. A borrow of a temporary cannot be
+// held at all: t := s.Clone().Trim() would outlive the clone.
+func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
+	if e == nil {
+		return
+	}
+
+	if _, ok := borrowIn(v.typ); ok {
+		if tmp := c.borrowOfTemporary(e); tmp != nil {
+			c.errorf(pos, "cannot keep a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			return
+		}
+	}
+
+	if id, ok := unparen(e).(*ast.Ident); ok && isMut(v.typ) {
+		if p, kind := c.placeOf(id); kind == placeOwned {
+			c.transfer(p.v, v, pos) // q := p moves a mut borrow: q holds what p held
+			return
+		}
+	}
+
+	if caps := c.capturesOf(e); caps != nil {
+		for _, cap := range caps { // g := func() { n += 1 }: g holds n
+			if cap.mode != byMove { // the closure owns what it moved; the variable is dead outside
+				c.borrows = append(c.borrows, cap.borrow(v, pos))
+			}
+		}
+
+		return
+	}
+
+	if lit, ok := unparen(e).(*ast.CompositeLit); ok {
+		for _, elt := range lit.Elts { // l := Lexer{src: ref s}: l holds s
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			c.derive(v, borrowSource(elt), pos)
+		}
+
+		return
+	}
+
+	c.derive(v, borrowSource(e), pos)
+}
+
+// noteTemporary records that e, lent to a call or a ref, is a
+// temporary when its value is owned and no variable holds it, other
+// than a literal or a constant, which live for the whole program.
+func (c *Checker) noteTemporary(e ast.Expr, x operand) {
+	if x.mode == value && !isBorrow(x.typ) && !c.static(e) {
+		c.markTemporary(e, e)
+	}
+}
+
+// markTemporary records that the value of e is, or borrows, the
+// temporary tmp.
+func (c *Checker) markTemporary(e, tmp ast.Expr) {
+	if c.temporary == nil {
+		c.temporary = make(map[ast.Expr]ast.Expr)
+	}
+
+	c.temporary[e] = tmp
+}
+
+// static reports whether e is a literal or a constant, whose value
+// outlives every statement.
+func (c *Checker) static(e ast.Expr) bool {
+	switch e := unparen(e).(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		_, obj := c.scope.LookupParent(e.Name)
+		_, ok := obj.(*Const)
+		return ok
+	}
+
+	return false
+}
+
+// borrowOfTemporary returns the temporary a borrow in e was lent
+// from, looking through parentheses, ?? and ?, and into the elements
+// of a literal or tuple, or nil when every borrow in e comes from a
+// place.
+func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.CoalesceExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.TryExpr:
+		return c.borrowOfTemporary(x.X)
+	case *ast.TupleExpr:
+		for _, elt := range x.Elts {
+			if tmp := c.borrowOfTemporary(elt); tmp != nil {
+				return tmp
+			}
+		}
+	case *ast.CompositeLit:
+		for _, elt := range x.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			if tmp := c.borrowOfTemporary(elt); tmp != nil {
+				return tmp
+			}
+		}
+	}
+
+	return c.temporary[e]
+}
+
+// derive records that v holds a borrow of the place src, when v's type
+// carries a borrow and src names a place.
+func (c *Checker) derive(v *Var, src ast.Expr, pos token.Pos) {
+	mut, ok := borrowIn(v.typ)
+	if !ok || src == nil {
+		return
+	}
+
+	if p, kind := through(c.placeOf(src)); kind != notPlace {
+		c.borrows = append(c.borrows, borrow{holder: v, place: p, mut: mut, pos: pos})
+	}
+}
+
+// accessPos is the position an access to the place e is reported at:
+// the place behind any * and parentheses, where the operand was read,
+// so that the read and the write of *p = v are seen as one access.
+func accessPos(e ast.Expr) token.Pos {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.UnaryExpr:
+			if x.Op != token.MUL {
+				return e.Pos()
+			}
+
+			e = x.X
+		default:
+			return e.Pos()
+		}
+	}
+}
+
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+
+		e = p.X
+	}
+}
+
+// transfer moves the borrows from holds to to: the old holder is dead
+// after the move, and the new one is used in its place.
+func (c *Checker) transfer(from, to *Var, pos token.Pos) {
+	n := len(c.borrows)
+	for i := range c.borrows[:n] {
+		if b := &c.borrows[i]; b.holder == from && b.end == token.NoPos {
+			b.end, b.last = pos, from.lastUse
+			c.borrows = append(c.borrows, borrow{holder: to, place: b.place, mut: b.mut, pos: pos})
+		}
+	}
+}
+
+// holdPattern records the bindings of a pattern matched through a
+// borrow of the place src as holders of that borrow, in the order they
+// are written.
+func (c *Checker) holdPattern(p ast.Pattern, src ast.Expr) {
+	switch p := p.(type) {
+	case *ast.IdentPat:
+		if v, ok := c.scope.Lookup(p.Name.Name).(*Var); ok {
+			c.derive(v, src, p.Name.Pos())
+		}
+	case *ast.TuplePat:
+		for _, elt := range p.Elts {
+			c.holdPattern(elt, src)
+		}
+	case *ast.VariantPat:
+		for _, arg := range p.Args {
+			c.holdPattern(arg, src)
+		}
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			c.holdPattern(alt, src)
+		}
+	}
+}
+
+// bindThrough checks the bindings of a match or if-binding on a
+// scrutinee reached through a borrow, once the arm's scope holds them:
+// they hold the borrow, and mut bindings borrow the scrutinee mut. A
+// mut binding through a map read is refused, since a key the map does
+// not hold reads the zero value and a write to it would be lost.
+func (c *Checker) bindThrough(p ast.Pattern, x ast.Expr, b *Ref) {
+	if b == nil || c.scope.Len() == 0 {
+		return
+	}
+
+	if b.mut {
+		if ix, ok := x.(*ast.IndexExpr); ok && isMap(stripRef(c.placeType(ix.X))) {
+			c.errorf(x.Pos(), "cannot bind mut through "+exprText(x)+": a key the map does not hold reads the zero value; use "+exprText(ix.X)+".GetMut("+exprText(ix.Index)+")")
+			return
+		}
+
+		c.accessExpr(x, mutAccess, x.Pos())
+	}
+
+	c.holdPattern(p, borrowSource(x))
+}
+
+// rebind ends the borrows v holds: an assignment to a borrow variable
+// points it somewhere else.
+func (c *Checker) rebind(v *Var, pos token.Pos) {
+	for i := range c.borrows {
+		if b := &c.borrows[i]; b.holder == v && b.end == token.NoPos {
+			b.end, b.last = pos, v.lastUse
+		}
+	}
+}
+
+// borrowSource finds the place expression a borrow-valued expression
+// lends from: the operand of ref or mut, the left side of ??, the
+// receiver of a method or the first argument of a function, the
+// operand of a slice expression, or the place itself when a borrow is
+// read out of a variable, field or element. Nil when there is none.
+func borrowSource(e ast.Expr) ast.Expr {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return borrowSource(e.X)
+	case *ast.UnaryExpr:
+		if e.Op == token.REF || e.Op == token.MUT {
+			return e.X
+		}
+	case *ast.CoalesceExpr:
+		return borrowSource(e.X)
+	case *ast.TryExpr:
+		return borrowSource(e.X)
+	case *ast.SliceExpr:
+		return e.X
+	case *ast.CallExpr:
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			return borrowSource(sel.X)
+		}
+
+		if len(e.Args) > 0 {
+			return borrowSource(e.Args[0])
+		}
+	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr:
+		return e
+	}
+
+	return nil
+}
+
+// borrowIn reports whether a value of type t is or carries a borrow,
+// and whether that borrow is mut: a ref or mut, an option of one, the
+// slice of borrows an iterator stands for, a tuple holding one, or a
+// struct with such a field, which is a borrow itself.
+func borrowIn(t Type) (mut, ok bool) {
+	switch t := t.(type) {
+	case *Ref:
+		return t.mut, true
+	case *Option:
+		return borrowIn(t.elem)
+	case *Slice:
+		return borrowIn(t.elem)
+	case *Tuple:
+		for _, e := range t.elems {
+			if mut, ok := borrowIn(e); ok {
+				return mut, true
+			}
+		}
+	case *Named:
+		if t.holdsBorrow() {
+			return borrowIn(t.underlying)
+		}
+	case *Struct:
+		for _, f := range t.fields {
+			if mut, ok := borrowIn(f.typ); ok {
+				return mut, true
+			}
+		}
+	}
+
+	return false, false
+}
+
+// resolveBorrows reports the conflicts of the function just checked
+// whose borrow was live at the access, and clears the pass for the next
+// function.
+func (c *Checker) resolveBorrows() {
+	for _, k := range c.conflicts {
+		if k.b < 0 {
+			c.errorf(k.pos, k.msg)
+			continue
+		}
+
+		if use, next, ok := c.liveAt(&c.borrows[k.b], k.at, k.loops); ok {
+			msg := k.msg
+			switch {
+			case next:
+				msg += ", used in the next pass of the loop at " + c.lineCol(use)
+			case use != token.NoPos:
+				msg += ", used at " + c.lineCol(use)
+			}
+
+			c.errorf(k.pos, msg)
+		}
+	}
+
+	c.borrows, c.temps, c.conflicts = c.borrows[:0], c.temps[:0], c.conflicts[:0]
+}
+
+// liveAt reports whether b is live at pos: a range loop's borrow lives
+// for its body; a held borrow lives while its holder is used after pos,
+// or inside a loop around pos that began after the borrow, since the
+// next pass reaches that use again, or while a borrow derived from it
+// is live. The use that keeps it live is returned for the message, and
+// whether it is reached by the next pass of a loop.
+func (c *Checker) liveAt(b *borrow, pos token.Pos, loops []token.Pos) (use token.Pos, next, live bool) {
+	if b.until != token.NoPos {
+		return token.NoPos, false, pos < b.until
+	}
+
+	if b.end != token.NoPos && b.end <= pos {
+		return token.NoPos, false, false
+	}
+
+	last := b.last
+	if b.end == token.NoPos {
+		last = b.holder.lastUse
+	}
+
+	if last > pos {
+		return last, false, true
+	}
+
+	for _, l := range loops {
+		if l > b.pos && last > l {
+			return last, true, true
+		}
+	}
+
+	for i := range c.borrows {
+		d := &c.borrows[i]
+		if d.v != b.holder || d.pos <= b.pos || d.pos >= pos || b.end != token.NoPos && d.pos >= b.end {
+			continue
+		}
+
+		if use, next, ok := c.liveAt(d, pos, loops); ok {
+			return use, next, true
+		}
+	}
+
+	return token.NoPos, false, false
+}
+
+// throughWhat names what a ref borrow was reached through, for a
+// message: the method's receiver, or a borrow.
+func (c *Checker) throughWhat(e ast.Expr) string {
+	if p, kind := c.placeOf(e); kind != notPlace && c.sig != nil && c.sig.recv == p.v {
+		return "receiver"
+	}
+
+	return "borrow"
+}

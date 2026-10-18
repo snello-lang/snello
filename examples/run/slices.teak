@@ -1,0 +1,93 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Slices and strings: literals, make, indexing with a checked index,
+// sub-slices, the predeclared methods, ranging by index and value and
+// through a mut borrow, string methods and their iterators, option and
+// result methods, equality of composite values, and take.
+
+package main
+
+import "fmt"
+
+struct Bag {
+	items []int
+	name string
+}
+
+func (b mut Bag) bump() {
+	for _, v := range b.items {
+		*v += 1
+	}
+}
+
+func (b ref Bag) total() int {
+	sum := 0
+	for i, v := range b.items {
+		sum += v * (i + 1)
+	}
+
+	return sum
+}
+
+func main() {
+	xs := []int{3, 1, 2}
+	xs.Push(4)
+	xs.Insert(0, 9)
+	fmt.Println(xs, len(xs), cap(xs) >= 5, xs[1], xs[1:3])
+	fmt.Println(xs.Pop(), xs.Remove(0), xs.Contains(2), xs.RemoveValue(2), xs.RemoveValue(7), xs)
+	ys := xs.Clone()
+	ys.Reverse()
+	xs.Clear()
+	fmt.Println(xs, ys)
+
+	b := Bag{items: make([]int, 3), name: "b"}
+	b.items[2] = 5
+	b.bump()
+	fmt.Println(b, b.total())
+
+	empty := []string{}
+	fmt.Println(empty, len(empty))
+	words := []string{"b", "a"}
+	for _, w := range words {
+		fmt.Println(w)
+	}
+
+	s := "  Hello, Teak World  "
+	t := s.Trim()
+	fmt.Println(t, t.Len(), t.ToUpper(), t.ToLower(), t[7:11], t.HasPrefix("Hello"), t.HasSuffix("x"), t.Contains("Teak"))
+	for w := range t.Fields() {
+		fmt.Println(w)
+	}
+
+	parts := "a,b,,c".Split(",")
+	fmt.Println(parts, len(parts))
+	if (k, v) := "key=value".SplitOnce("=") {
+		fmt.Println(k, v)
+	}
+
+	fmt.Println("x".SplitOnce("="), s.Clone() == s)
+	for i, c := range "hi" {
+		fmt.Println(i, c)
+	}
+
+	o := Some(3)
+	var n int?
+	fmt.Println(o.IsSome(), n.IsNone(), o.UnwrapOr(0), n.UnwrapOr(7), o.Expect("three"), o == Some(3), n == None)
+	r := check(1)
+	fmt.Println(r.IsOk(), r.UnwrapOr(0), check(-1).IsErr(), check(2).Expect("positive"))
+	pair := (1, "a")
+	fmt.Println(pair == (1, "a"), Some(pair) == Some((1, "b")))
+	var zero []int
+	zero.Push(1)
+	fmt.Println(zero, take(mut zero), zero)
+}
+
+func check(n int) Result<int, string> {
+	if n < 0 {
+		return Err("negative")
+	}
+
+	return Ok(n)
+}

@@ -8,7 +8,8 @@
 // holds a borrow of its input.
 //
 // A struct with a `ref` field is itself a borrow: it obeys every borrow
-// rule (cannot be stored in an owned struct, returned, or sent). That is
+// rule (cannot be stored in owned data or sent; returned only as a borrow
+// is, tied to one input). That is
 // enough for a lexer, which is created in Parse, used, and dropped before
 // Parse returns. See _docs/design/00-syntax-conventions.md, "Borrow-holding
 // structs".

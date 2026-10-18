@@ -202,4 +202,4 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] `go test ./...` passes; `gofmt -l .` and `go vet ./...` are clean
 - [x] The grammar decisions made during parsing are recorded in `../design/00-syntax-conventions.md` under "Grammar rules decided by the parser": `?` binding, `<` and `>`, `??`, the control-clause brace, types as expressions, `if` bindings, match arms, `spawn`
 - [x] Open question from `plan.md` decided: stage 1 includes `match` and enums (2026-10-18)
-- [ ] Reviewed by the owner before stage 1 begins
+- [x] Reviewed by the owner before stage 1 begins (2026-10-18)
