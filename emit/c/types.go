@@ -58,12 +58,12 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
 	case *types.Option, *types.Result, *types.Slice, *types.Signature:
-		return e.declare(t, pos)
+		return e.declare(t)
 	case *types.Map:
 		name := "tk_" + mangle(t)
 		if e.state[name] == undeclared {
 			e.state[name] = defined
-			e.decls.WriteString("typedef tk_map " + name + ";\n")
+			put(&e.decls, "typedef tk_map ", name, ";\n")
 		}
 
 		return name
@@ -72,7 +72,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 			return "tk_unit"
 		}
 
-		return e.declare(t, pos)
+		return e.declare(t)
 	}
 
 	e.unsupported(pos, "values of type "+t.String())
@@ -81,11 +81,11 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 
 // declare writes the forward declaration of a synthesized struct type
 // once and returns its name.
-func (e *Emitter) declare(t types.Type, pos token.Pos) string {
+func (e *Emitter) declare(t types.Type) string {
 	name := "tk_" + mangle(t)
 	if e.state[name] == undeclared {
 		e.state[name] = declared
-		e.decls.WriteString("typedef struct " + name + " " + name + ";\n")
+		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
 	}
 
 	return name
@@ -130,7 +130,7 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		e.defineStruct(t, pos, func() string {
 			var b strings.Builder
 			for i := 0; i < t.Len(); i++ {
-				b.WriteString("\t" + e.cType(t.At(i), pos) + " e" + strconv.Itoa(i) + ";\n")
+				put(&b, "\t", e.cType(t.At(i), pos), " e", strconv.Itoa(i), ";\n")
 			}
 
 			return b.String()
@@ -149,16 +149,16 @@ func (e *Emitter) defineNamed(t *types.Named, pos token.Pos) {
 	name := ident(t.Obj().Name())
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
-		e.defineStruct(t, pos, func() string { return e.structFields(u, pos) })
+		e.defineStruct(t, pos, func() string { return e.structFields(u, pos) + liveFlag(t) })
 	case *types.Enum:
-		e.defineStruct(t, pos, func() string { return e.enumFields(u, pos) })
+		e.defineStruct(t, pos, func() string { return e.enumFields(u, pos) + liveFlag(t) })
 	default:
 		if e.state[name] != undeclared {
 			return
 		}
 
 		e.state[name] = defined
-		e.types.WriteString("typedef " + e.cType(u, pos) + " " + name + ";\n")
+		put(&e.types, "typedef ", e.cType(u, pos), " ", name, ";\n")
 	}
 }
 
@@ -178,7 +178,7 @@ func (e *Emitter) defineStruct(t types.Type, pos token.Pos, fields func() string
 	e.state[name] = defining
 	body := fields()
 	e.state[name] = defined
-	e.types.WriteString("struct " + name + " {\n" + body + "};\n\n")
+	put(&e.types, "struct ", name, " {\n", body, "};\n\n")
 }
 
 func (e *Emitter) structFields(s *types.Struct, pos token.Pos) string {
@@ -189,10 +189,20 @@ func (e *Emitter) structFields(s *types.Struct, pos token.Pos) string {
 	var b strings.Builder
 	for i := 0; i < s.NumFields(); i++ {
 		f := s.Field(i)
-		b.WriteString("\t" + e.cType(f.Type(), pos) + " " + ident(f.Name()) + ";\n")
+		put(&b, "\t", e.cType(f.Type(), pos), " ", ident(f.Name()), ";\n")
 	}
 
 	return b.String()
+}
+
+// liveFlag writes the field that says a value of a type with a Drop
+// method is live: built and not moved away, so its Drop runs once.
+func liveFlag(t types.Type) string {
+	if hasDrop(t) {
+		return "\tbool tk_live;\n"
+	}
+
+	return ""
 }
 
 // enumFields writes a tagged union: the tag is the variant's index and
@@ -209,14 +219,14 @@ func (e *Emitter) enumFields(en *types.Enum, pos token.Pos) string {
 
 		payloads.WriteString("\t\tstruct {\n")
 		for j, f := range v.Fields() {
-			payloads.WriteString("\t\t\t" + e.cType(f.Type(), pos) + " " + fieldName(f, j) + ";\n")
+			put(&payloads, "\t\t\t", e.cType(f.Type(), pos), " ", fieldName(f, j), ";\n")
 		}
 
-		payloads.WriteString("\t\t} " + variantMember(v) + ";\n")
+		put(&payloads, "\t\t} ", variantMember(v), ";\n")
 	}
 
 	if payloads.Len() > 0 {
-		b.WriteString("\tunion {\n" + payloads.String() + "\t};\n")
+		put(&b, "\tunion {\n", payloads.String(), "\t};\n")
 	}
 
 	return b.String()

@@ -23,6 +23,10 @@ func (e *Emitter) expr(x ast.Expr) string {
 		return v // evaluated at a defer statement
 	}
 
+	if e.info.Moves[x] && needsDrop(e.info.Types[x]) {
+		return e.moved(x) // the value leaves the place, which is emptied
+	}
+
 	switch x := x.(type) {
 	case *ast.Ident:
 		return e.ident(x)
@@ -104,9 +108,15 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 }
 
 // place writes x dereferenced to the value it denotes, for a field
-// access or a match on it.
+// access or a match on it; a value built here is held in a temporary
+// and dropped when the statement ends.
 func (e *Emitter) place(x ast.Expr) string {
-	return deref(e.expr(x), e.info.Types[x])
+	if e.isPlace(x) {
+		return deref(e.expr(x), e.info.Types[x])
+	}
+
+	place, _ := e.scrutinee(x)
+	return place
 }
 
 func (e *Emitter) ident(x *ast.Ident) string {
@@ -156,6 +166,10 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 		return "(" + ct + "){.ok = false, .err = " + args[0] + "}"
 	case *types.Enum:
 		tag := ".tag = " + strconv.Itoa(v.Index())
+		if hasDrop(valueType(t)) {
+			tag += ", .tk_live = true"
+		}
+
 		if len(args) == 0 {
 			return "(" + ct + "){" + tag + "}"
 		}
@@ -233,8 +247,17 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 		return "0"
 	}
 
+	live := ""
+	if hasDrop(t) {
+		live = ".tk_live = true"
+	}
+
 	if len(x.Elts) == 0 {
-		return "(" + e.cType(t, x.Pos()) + "){0}"
+		if live == "" {
+			return "(" + e.cType(t, x.Pos()) + "){0}"
+		}
+
+		return "(" + e.cType(t, x.Pos()) + "){" + live + "}"
 	}
 
 	values := make([]ast.Expr, len(x.Elts))
@@ -251,6 +274,10 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 	parts := e.operands(values, wants)
 	for i := range parts {
 		parts[i] = "." + names[i] + " = " + parts[i]
+	}
+
+	if live != "" {
+		parts = append(parts, live)
 	}
 
 	return "(" + e.cType(t, x.Pos()) + "){" + strings.Join(parts, ", ") + "}"
@@ -317,7 +344,7 @@ func cString(s string) string {
 		case c >= ' ' && c < 127:
 			b.WriteByte(c)
 		default:
-			b.WriteString("\\" + strconv.FormatInt(int64(c)>>6, 8) + strconv.FormatInt(int64(c)>>3&7, 8) + strconv.FormatInt(int64(c)&7, 8))
+			put(&b, "\\", strconv.FormatInt(int64(c)>>6, 8), strconv.FormatInt(int64(c)>>3&7, 8), strconv.FormatInt(int64(c)&7, 8))
 		}
 	}
 
@@ -392,7 +419,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 
 	if isString(t) {
 		if x.Op == token.ADD {
-			return "tk_concat(" + l + ", " + r + ")"
+			return join(text{l, !e.isRead(x.X)}, text{r, !e.isRead(x.Y)}).s // a side built here is freed after the join
 		}
 
 		return "(tk_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"
@@ -510,7 +537,11 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 	case types.BuiltinPrint:
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {
-			e.line("tk_eprint_string(" + e.text(parts[i], a) + ");")
+			if s := e.text(parts[i], a); s.owned {
+				e.line("tk_eprint_owned(" + s.s + ");")
+			} else {
+				e.line("tk_eprint_string(" + s.s + ");")
+			}
 		}
 
 		return ""

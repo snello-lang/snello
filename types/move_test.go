@@ -68,6 +68,10 @@ func TestMoves(t *testing.T) {
 		// A scrutinee consumed by a later arm is gone after every arm.
 		{"func f(st State) { s := \"a\"; match st { Closed => keep(s), Failed(r) => keep(r), _ => {} }; keep(s) }", []string{"use of moved value s"}},
 		{"func f(st State) { match st { Closed => {}, Failed(r) => keep(r), _ => {} }; print(st) }", []string{"use of moved value st"}},
+		// A branch's value leaves with the expression.
+		{"func f(c bool) { s := \"a\"; t := match c { true => s, false => \"b\" }; keep(s); keep(t) }", []string{"use of moved value s"}},
+		{"func f(c bool) { s := \"a\"; t := if c { s } else { \"b\" }; keep(s); keep(t) }", []string{"use of moved value s"}},
+		{"func f(st State) string { return match st { Failed(r) => r, _ => \"\" } }", nil},
 		// A closure sees what moved before it.
 		{"func f() { s := \"a\"; keep(s); g := func() int { return len(s) }; g() }", []string{"use of moved value s"}},
 		// Closures and receivers.

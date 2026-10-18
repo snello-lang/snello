@@ -20,11 +20,20 @@ func (e *Emitter) stmts(list []ast.Stmt) {
 
 func (e *Emitter) block(b *ast.BlockStmt) {
 	e.line("{")
+	e.push(false)
 	e.stmts(b.List)
+	e.pop(b.Rbrace)
 	e.line("}")
 }
 
+// stmt writes one statement and then drops the temporaries it made.
 func (e *Emitter) stmt(s ast.Stmt) {
+	mark := len(e.temps)
+	e.stmtInner(s)
+	e.dropTemps(mark, s.Pos())
+}
+
+func (e *Emitter) stmtInner(s ast.Stmt) {
 	switch s := s.(type) {
 	case *ast.BlockStmt:
 		e.block(s)
@@ -32,7 +41,7 @@ func (e *Emitter) stmt(s ast.Stmt) {
 		e.declStmt(s.Decl)
 	case *ast.ExprStmt:
 		if x := e.expr(s.X); x != "" {
-			e.discard(x)
+			e.discard(x, e.info.Types[s.X], s.Pos())
 		}
 	case *ast.IncDecStmt:
 		e.line(e.expr(s.X) + s.Tok.String() + ";")
@@ -41,6 +50,7 @@ func (e *Emitter) stmt(s ast.Stmt) {
 	case *ast.ReturnStmt:
 		e.returnStmt(s)
 	case *ast.BranchStmt:
+		e.leave(e.loopFrame(), s.Pos()) // the loop body's variables die here
 		if n := len(e.loops); s.Tok == token.CONTINUE && n > 0 && e.loops[n-1] != "" {
 			e.line("goto " + e.loops[n-1] + ";")
 			break
@@ -90,6 +100,7 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 
 		e.line(decl + ";")
 		e.discardUnused(name)
+		e.own(ident(name.Name), v.Type())
 	}
 }
 
@@ -113,12 +124,17 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 	lhs, rhs := s.Lhs[0], s.Rhs[0]
 	switch s.Tok {
 	case token.DEFINE, token.ASSIGN:
-		e.store(lhs, s.Tok, e.valueTo(rhs, e.target(lhs, s.Tok)))
+		t := e.target(lhs, s.Tok)
+		if t == nil {
+			t = e.info.Types[rhs] // _ = x
+		}
+
+		e.store(lhs, s.Tok, e.valueTo(rhs, t), t)
 	default:
 		t := valueType(e.info.Types[lhs])
 		place := e.lvalue(lhs)
-		if isString(t) { // s += t has no C operator
-			e.line(place + " = tk_concat(" + place + ", " + e.valueTo(rhs, t) + ");")
+		if isString(t) { // s += t has no C operator; the old left side is freed after the join
+			e.line(place + " = " + join(text{place, true}, text{e.valueTo(rhs, t), !e.isRead(rhs)}).s + ";")
 			return
 		}
 
@@ -135,16 +151,23 @@ func (e *Emitter) assignMany(s *ast.AssignStmt) {
 		return
 	}
 
-	var temps []string
+	temps, kinds := make([]string, len(s.Lhs)), make([]types.Type, len(s.Lhs))
 	switch {
 	case len(s.Rhs) == 1 && len(s.Lhs) > 1:
 		temps = e.spread(s.Rhs[0], len(s.Lhs))
+		tuple := e.info.Types[s.Rhs[0]].Underlying().(*types.Tuple)
+		for i := range kinds {
+			kinds[i] = tuple.At(i)
+		}
 	case len(s.Lhs) == len(s.Rhs):
-		temps = make([]string, len(s.Rhs))
 		for i, rhs := range s.Rhs {
-			t := e.target(s.Lhs[i], s.Tok)
+			kinds[i] = e.target(s.Lhs[i], s.Tok)
+			if kinds[i] == nil {
+				kinds[i] = e.info.Types[rhs] // _
+			}
+
 			temps[i] = e.temp()
-			e.line(e.cType(t, rhs.Pos()) + " " + temps[i] + " = " + e.valueTo(rhs, t) + ";")
+			e.line(e.cType(kinds[i], rhs.Pos()) + " " + temps[i] + " = " + e.valueTo(rhs, kinds[i]) + ";")
 		}
 	default:
 		e.unsupported(s.TokPos, "this assignment of several values")
@@ -152,7 +175,7 @@ func (e *Emitter) assignMany(s *ast.AssignStmt) {
 	}
 
 	for i, lhs := range s.Lhs {
-		e.store(lhs, s.Tok, temps[i])
+		e.store(lhs, s.Tok, temps[i], kinds[i])
 	}
 }
 
@@ -168,11 +191,12 @@ func (e *Emitter) target(lhs ast.Expr, tok token.Kind) types.Type {
 	return e.info.Types[lhs]
 }
 
-// store writes value into lhs: a declaration for a name := introduces,
-// a discard for _, an assignment otherwise, including a name := reuses.
-func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string) {
+// store writes value, of type t, into lhs: a declaration for a name
+// := introduces, a drop for _, an assignment otherwise, including a
+// name := reuses, which drops what the place held before.
+func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type) {
 	if isBlank(lhs) {
-		e.line("(void)(" + value + ");")
+		e.discard(value, t, lhs.Pos())
 		return
 	}
 
@@ -180,11 +204,20 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string) {
 		if obj, declared := e.info.Defs[name]; declared {
 			e.line(e.cType(obj.Type(), name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
 			e.discardUnused(name)
+			e.own(ident(name.Name), obj.Type())
 			return
 		}
 	}
 
-	e.line(e.lvalue(lhs) + " = " + value + ";")
+	place := e.lvalue(lhs)
+	if needsDrop(t) {
+		tmp := e.temp()
+		e.line(e.cType(t, lhs.Pos()) + " " + tmp + " = " + value + ";")
+		e.line(e.dropOf(place, t, lhs.Pos()))
+		value = tmp
+	}
+
+	e.line(place + " = " + value + ";")
 }
 
 // spread writes a tuple value into a temporary and names its n
@@ -207,15 +240,27 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 	case len(s.Results) > 1:
 		e.unsupported(s.Return, "returning several values")
 	case len(s.Results) == 0:
-		e.runDefers()
+		e.leaveFunction(s.Pos())
 		e.line("return;")
-	case len(e.defers) == 0:
+	case len(e.defers) == 0 && e.nothingToDrop():
 		e.line("return " + e.valueTo(s.Results[0], e.result) + ";")
 	default:
 		v := e.saved(s.Results[0], e.result)
-		e.runDefers()
+		e.leaveFunction(s.Pos())
 		e.line("return " + v + ";")
 	}
+}
+
+// nothingToDrop reports whether no open frame holds a variable to
+// drop and no temporary is pending, so a return needs no temporary.
+func (e *Emitter) nothingToDrop() bool {
+	for _, f := range e.frames {
+		if len(f.vars) > 0 {
+			return false
+		}
+	}
+
+	return len(e.temps) == 0
 }
 
 // ifStmt writes an if, with an init statement in a block of its own so
@@ -223,13 +268,17 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 func (e *Emitter) ifStmt(s *ast.IfStmt) {
 	if s.Init != nil {
 		e.line("{")
+		e.push(false)
 		e.stmt(s.Init)
 	}
 
 	e.line("if " + e.cond(s.Cond) + " {")
+	e.push(false)
 	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
 	e.elseBranch(s.Else)
 	if s.Init != nil {
+		e.pop(s.Body.Rbrace)
 		e.line("}")
 	}
 }
@@ -243,7 +292,9 @@ func (e *Emitter) elseBranch(els ast.Stmt) {
 		e.line("}")
 	case *ast.BlockStmt:
 		e.line("} else {")
+		e.push(false)
 		e.stmts(els.List)
+		e.pop(els.Rbrace)
 		e.line("}")
 	default:
 		e.line("} else {")
@@ -258,6 +309,7 @@ func (e *Emitter) elseBranch(els ast.Stmt) {
 // the end of the body under a label that continue jumps to.
 func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("{")
+	e.push(false)
 	if s.Init != nil {
 		e.stmt(s.Init)
 	}
@@ -277,11 +329,13 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 
 	e.line("for (; " + cond + "; " + post + ") {")
 	if s.Cond != nil && cond == "" {
-		e.line("if (!" + e.cond(s.Cond) + ") { break; }")
+		e.line("if (!" + parenthesized(e.boolean(s.Cond)) + ") { break; }")
 	}
 
 	e.loops = append(e.loops, label)
+	e.push(true)
 	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
 	e.loops = e.loops[:len(e.loops)-1]
 	if label != "" {
 		e.line(label + ":;")
@@ -289,6 +343,7 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	}
 
 	e.line("}")
+	e.pop(s.Body.Rbrace)
 	e.line("}")
 }
 
@@ -298,16 +353,23 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 // slice. Fields and Split yield a slice of borrows whose one variable
 // is the item.
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	place, t, held := e.consumed(s.X)
+	if held != "" {
+		e.hold(held, e.info.Types[s.X]) // an owned collection is used up by the loop and dropped after it
+	}
+
+	consume := held != ""
 	e.line("{")
-	place, t := e.scrutinee(s.X)
 	i := e.temp()
 	e.loops = append(e.loops, "") // continue reaches the loop's own step
 	defer func() { e.loops = e.loops[:len(e.loops)-1] }()
 	if m, ok := t.Underlying().(*types.Map); ok {
 		e.line("for (int64_t " + i + " = tk_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = tk_map_next(&" + place + ", " + i + " + 1)) {")
-		e.rangeVar(s.Key, s.Tok, "(("+e.cType(m.Key(), s.Pos())+" *)"+place+".keys)["+i+"]", m.Key())
-		e.rangeVar(s.Value, s.Tok, "(("+e.cType(m.Value(), s.Pos())+" *)"+place+".vals)["+i+"]", m.Value())
+		e.push(true)
+		e.rangeVar(s.Key, s.Tok, "(("+e.cType(m.Key(), s.Pos())+" *)"+place+".keys)["+i+"]", m.Key(), consume)
+		e.rangeVar(s.Value, s.Tok, "(("+e.cType(m.Value(), s.Pos())+" *)"+place+".vals)["+i+"]", m.Value(), consume)
 		e.stmts(s.Body.List)
+		e.pop(s.Body.Rbrace)
 		e.line("}")
 		e.line("}")
 		return
@@ -326,39 +388,47 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
 	}
 
+	e.push(true)
 	if iterator {
-		e.rangeVar(s.Key, s.Tok, elem, elemType)
+		e.rangeVar(s.Key, s.Tok, elem, elemType, consume)
 	} else {
-		e.rangeVar(s.Key, s.Tok, i, types.Typ[types.Int])
-		e.rangeVar(s.Value, s.Tok, elem, elemType)
+		e.rangeVar(s.Key, s.Tok, i, types.Typ[types.Int], false)
+		e.rangeVar(s.Value, s.Tok, elem, elemType, consume)
 	}
 
 	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
 	e.line("}")
 	e.line("}")
 }
 
 // rangeVar binds one range variable to the C place of the current
 // item, of Teak type itemType: a new name for :=, an assignment for =,
-// nothing for _. A mut binding of the item is its address.
-func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType types.Type) {
+// nothing for _. A mut binding of the item is its address. When the
+// loop consumes its collection, an item bound by value leaves it.
+func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType types.Type, consume bool) {
 	if x == nil || isBlank(x) {
 		return
 	}
 
 	if tok != token.DEFINE {
-		e.line(e.lvalue(x) + " = " + item + ";")
+		e.store(x, tok, item, itemType)
 		return
 	}
 
 	name := x.(*ast.Ident)
 	v := e.info.Defs[name]
+	value := item
 	if depth(v.Type()) > depth(itemType) {
-		item = "&" + item
+		value = "&" + item
 	}
 
-	e.line(e.cType(v.Type(), name.Pos()) + " " + ident(name.Name) + " = " + item + ";")
+	e.line(e.cType(v.Type(), name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
 	e.discardUnused(name)
+	e.own(ident(name.Name), v.Type())
+	if _, borrow := v.Type().(*types.Ref); consume && !borrow && needsDrop(v.Type()) {
+		e.line(item + " = " + e.zero(itemType, name.Pos()) + ";")
+	}
 }
 
 // simpleStmt writes a statement that C accepts as an expression, for
@@ -392,7 +462,11 @@ func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 // cond writes a condition in exactly one pair of parentheses, as the C
 // compiler warns about a second pair around a comparison.
 func (e *Emitter) cond(x ast.Expr) string {
-	s := e.expr(x)
+	return parenthesized(e.expr(x))
+}
+
+// parenthesized writes s in exactly one pair of parentheses.
+func parenthesized(s string) string {
 	if len(s) > 1 && s[0] == '(' && s[len(s)-1] == ')' && balanced(s[1:len(s)-1]) {
 		return s
 	}

@@ -46,7 +46,11 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) 
 				e.line("tk_print_sep();")
 			}
 
-			e.line("tk_print_string(" + e.text(parts[i], a) + ");")
+			if s := e.text(parts[i], a); s.owned {
+				e.line("tk_print_owned(" + s.s + ");")
+			} else {
+				e.line("tk_print_string(" + s.s + ");")
+			}
 		}
 
 		e.line("tk_print_nl();")
@@ -56,7 +60,7 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) 
 	case "fmt.Sprintf":
 		return e.sprintf(x)
 	case "fmt.Printf":
-		e.line("tk_print_string(" + e.sprintf(x) + ");")
+		e.line("tk_print_owned(" + e.sprintf(x) + ");")
 		return ""
 	case "os.Exit":
 		return "tk_exit((int)(" + e.expr(x.Args[0]) + "))"
@@ -80,32 +84,42 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) 
 
 // toString writes the runtime call that turns a value into a string.
 func (e *Emitter) toString(a ast.Expr) string {
-	return e.text(e.expr(a), a)
+	return e.text(e.expr(a), a).s
 }
 
 // text writes the conversion of v, the C text of a, to a tk_string.
-func (e *Emitter) text(v string, a ast.Expr) string {
-	return e.toText(v, e.info.Types[a], a.Pos(), false)
+func (e *Emitter) text(v string, a ast.Expr) text {
+	return e.textOf(v, e.info.Types[a], a.Pos(), false)
 }
 
 // sprint joins the arguments as Sprint does: a space between two
-// operands when neither is a string.
+// operands when neither is a string. The result is built here; a
+// string argument is cloned, so the result is one owned string.
 func (e *Emitter) sprint(args []ast.Expr) string {
 	parts := e.operands(args, nil)
-	out := ""
+	var out text
 	for i, a := range args {
 		if i > 0 && !isString(valueType(e.info.Types[a])) && !isString(valueType(e.info.Types[args[i-1]])) {
-			out = concat(out, literal(" "))
+			out = join(out, text{literal(" "), false})
 		}
 
-		out = concat(out, e.text(parts[i], a))
+		out = join(out, e.text(parts[i], a))
 	}
 
-	if out == "" {
+	return built(out)
+}
+
+// built writes a text as a string the caller owns: a clone when it
+// was only lent.
+func built(t text) string {
+	switch {
+	case t.s == "":
 		return literal("")
+	case !t.owned:
+		return "tk_string_clone(" + t.s + ")"
 	}
 
-	return out
+	return t.s
 }
 
 // sprintf reads the format at compile time and writes the
@@ -120,24 +134,25 @@ func (e *Emitter) sprintf(x *ast.CallExpr) string {
 	format, _ := strconv.Unquote(lit.Value)
 	args := x.Args[1:]
 	parts := e.operands(args, nil)
-	out, text := "", ""
+	var out text
+	plain := ""
 	flush := func() {
-		if text != "" {
-			out = concat(out, literal(text))
-			text = ""
+		if plain != "" {
+			out = join(out, text{literal(plain), false})
+			plain = ""
 		}
 	}
 
 	for i := 0; i < len(format); i++ {
 		if format[i] != '%' || i+1 >= len(format) {
-			text += string(format[i])
+			plain += string(format[i])
 			continue
 		}
 
 		i++
 		verb := format[i]
 		if verb == '%' {
-			text += "%"
+			plain += "%"
 			continue
 		}
 
@@ -151,28 +166,24 @@ func (e *Emitter) sprintf(x *ast.CallExpr) string {
 		args, parts = args[1:], parts[1:]
 		switch verb {
 		case 'd', 's', 'v':
-			out = concat(out, e.text(v, a))
+			out = join(out, e.text(v, a))
 		case 'q':
-			out = concat(out, "tk_quote("+e.text(v, a)+")")
+			s := e.text(v, a)
+			if s.owned { // the quote reads a string it does not keep
+				tmp := e.temp()
+				e.line("tk_string " + tmp + " = " + s.s + ";")
+				e.hold(tmp, types.Typ[types.String])
+				s.s = tmp
+			}
+
+			out = join(out, text{"tk_quote(" + s.s + ")", true})
 		default:
 			e.unsupported(lit.Pos(), "the format verb %"+string(verb))
 		}
 	}
 
 	flush()
-	if out == "" {
-		return literal("")
-	}
-
-	return out
-}
-
-func concat(a, b string) string {
-	if a == "" {
-		return b
-	}
-
-	return "tk_concat(" + a + ", " + b + ")"
+	return built(out)
 }
 
 // libraryMethod lowers Close, Sync and WriteString on a file; args

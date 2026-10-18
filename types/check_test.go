@@ -242,7 +242,7 @@ func BenchmarkCheck(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		for _, p := range files {
 			if _, err := Check(p.file, p.f, nil); err != nil {
 				b.Fatal(err)

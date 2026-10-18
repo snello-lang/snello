@@ -1,6 +1,6 @@
 # 7. Owned pointers and recursive data
 
-Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5). `examples/run/boxes.teak`, `examples/core/list.teak`, `bst.teak` and `calc.teak` exercise this chapter. Freeing what a pointer owns is task 1.9.
+Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5). `examples/run/boxes.teak`, `examples/core/list.teak`, `bst.teak` and `calc.teak` exercise this chapter. What a pointer owns is freed when the pointer is dropped (stage 1, task 1.9).
 
 A value of type `*T` is an owned pointer: it holds a `T` on the heap and is the one owner of it. `&expr` makes one, moving the value out of the expression into a fresh heap cell:
 
@@ -80,4 +80,4 @@ The binary search tree in `examples/core/bst.teak` inserts, finds and deletes th
 
 ## What a value costs
 
-A pointer is one machine word, and `*Node?` is a word and a flag. `&expr` is one allocation of the value's size, and nothing else in this chapter allocates: moving a pointer copies the word, and reaching through it is one load. The cell is freed when its owner is dropped, which is chapter 5's rule and task 1.9's work.
+A pointer is one machine word, and `*Node?` is a word and a flag. `&expr` is one allocation of the value's size, and nothing else in this chapter allocates: moving a pointer copies the word, and reaching through it is one load. The cell is freed when its owner is dropped, which is chapter 5's rule.

@@ -18,14 +18,17 @@ typedef int64_t tk_int;
 typedef uint64_t tk_uint;
 
 // A string is a view of immutable UTF-8 bytes: a literal points at
-// static data, an owned string at bytes from tk_alloc. Nothing is
-// freed yet; the releases the checker computes come with drops.
+// static data and owns nothing, an owned string points at bytes from
+// tk_alloc and says so in cap, the size of that allocation. Dropping a
+// string frees the bytes it owns.
 typedef struct {
     const uint8_t *ptr;
     int64_t len;
+    int64_t cap;
 } tk_string;
 
-#define TK_STR(s, n) ((tk_string){(const uint8_t *)(s), (n)})
+#define TK_STR(s, n) ((tk_string){(const uint8_t *)(s), (n), 0})
+#define TK_OWNED(s, n) ((tk_string){(const uint8_t *)(s), (n), (n)})
 
 // The unit value (), which C has no type for: a Result<(), E> or a
 // tuple holds one of these.
@@ -49,6 +52,7 @@ typedef struct {
 } tk_slice;
 
 void *tk_alloc(size_t n);
+void tk_free(void *p);
 _Noreturn void tk_panic(tk_string msg);
 _Noreturn void tk_exit(int code);
 _Noreturn void tk_bounds(int64_t i, int64_t len);
@@ -70,6 +74,18 @@ static inline int64_t tk_index(int64_t i, int64_t len) {
 typedef struct {
     int fd;
 } tk_file;
+
+// Drops: each releases what a value owns and is a no-op on a zero
+// value, which is what a moved-from place holds. A file closes its
+// descriptor, never one of the three standard streams.
+static inline void tk_string_drop(tk_string s) {
+    if (s.cap > 0) {
+        tk_free((void *)s.ptr);
+    }
+}
+
+void tk_file_drop(tk_file f);
+void tk_slice_free(tk_slice *s);
 
 extern tk_file tk_stdin, tk_stdout, tk_stderr;
 extern tk_slice tk_args; // the command line, as a slice of tk_string
@@ -116,6 +132,8 @@ typedef struct {
     size_t vsize;
     uint64_t (*hash)(const void *key);
     bool (*eq)(const void *a, const void *b);
+    void (*kdrop)(void *key); // NULL when keys own nothing
+    void (*vdrop)(void *val); // NULL when values own nothing
 } tk_map_type;
 
 void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key);
@@ -123,6 +141,7 @@ const void *tk_map_get(const tk_map *m, const tk_map_type *t, const void *key, c
 void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key);
 bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out);
 void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out);
+void tk_map_free(tk_map *m, const tk_map_type *t);
 int64_t tk_map_next(const tk_map *m, int64_t i);
 uint64_t tk_hash_bytes(const void *p, size_t n);
 uint64_t tk_hash_mix(uint64_t h, uint64_t v);
@@ -140,6 +159,7 @@ void tk_split(tk_string s, tk_string sep, tk_slice *out);
 bool tk_split_once(tk_string s, tk_string sep, tk_string *before, tk_string *after);
 
 tk_string tk_concat(tk_string a, tk_string b);
+tk_string tk_join(tk_string a, tk_string b, int owned); // concatenates, then drops the inputs owned says it may: 1 for a, 2 for b
 bool tk_string_eq(tk_string a, tk_string b);
 int tk_string_cmp(tk_string a, tk_string b);
 tk_string tk_int_to_string(int64_t v);
@@ -150,6 +170,7 @@ tk_string tk_quote(tk_string s);
 
 // Printing: fmt.Println(a, b) is print a, separator, print b, newline.
 void tk_print_string(tk_string s);
+void tk_print_owned(tk_string s); // prints, then drops s
 void tk_print_int(int64_t v);
 void tk_print_uint(uint64_t v);
 void tk_print_f64(double v);
@@ -157,5 +178,6 @@ void tk_print_bool(bool v);
 void tk_print_sep(void);
 void tk_print_nl(void);
 void tk_eprint_string(tk_string s);
+void tk_eprint_owned(tk_string s);
 
 #endif

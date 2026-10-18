@@ -22,6 +22,7 @@ type match struct {
 	result     string // empty when the match yields no value
 	resultType types.Type
 	end        string
+	consume    bool // the scrutinee is taken apart: a binding by value empties its part
 }
 
 // matchExpr writes a match as a chain of tests on the scrutinee's
@@ -36,11 +37,17 @@ func (e *Emitter) matchExpr(x *ast.MatchExpr) string {
 		e.line(e.cType(m.resultType, x.Pos()) + " " + m.result + ";")
 	}
 
+	var held string
+	m.place, m.typ, held = e.consumed(x.X)
+	m.consume = held != ""
 	e.line("{")
-	m.place, m.typ = e.scrutinee(x.X)
 	m.end = e.temp() + "_end"
 	for _, arm := range x.Arms {
 		e.arm(&m, arm)
+	}
+
+	if held != "" {
+		e.hold(held, e.info.Types[x.X]) // what no arm took is dropped when the statement ends
 	}
 
 	e.line("tk_panic(" + literal("no match arm matched") + ");")
@@ -59,12 +66,18 @@ func (e *Emitter) arm(m *match, arm *ast.MatchArm) {
 		e.line("{")
 	}
 
-	e.patternBinds(arm.Pat, m.place, m.typ)
+	e.push(false)
+	taken := e.patternBinds(arm.Pat, m.place, m.typ)
 	if arm.Guard != nil {
-		e.line("if " + e.cond(arm.Guard) + " {")
+		e.line("if " + parenthesized(e.boolean(arm.Guard)) + " {")
+	}
+
+	if m.consume {
+		e.empty(taken, arm.Pos()) // the parts bound by value left the scrutinee, once the arm is known to run
 	}
 
 	e.node(arm.Body, m.result, m.resultType)
+	e.pop(arm.Pos())
 	e.line("goto " + m.end + ";")
 	if arm.Guard != nil {
 		e.line("}")
@@ -73,16 +86,34 @@ func (e *Emitter) arm(m *match, arm *ast.MatchArm) {
 	e.line("}")
 }
 
+// empty writes the emptying of places whose values were bound by
+// value.
+func (e *Emitter) empty(taken []owned, pos token.Pos) {
+	for _, t := range taken {
+		e.line(t.name + " = " + e.zero(t.typ, pos) + ";")
+	}
+}
+
 // ifBind writes if pat := value {: the body runs when the option holds
 // a value the pattern matches, with the pattern's names bound.
 func (e *Emitter) ifBind(s *ast.IfBindStmt) {
+	place, t, held := e.consumed(s.Value)
+	if held != "" {
+		e.hold(held, e.info.Types[s.Value])
+	}
+
 	e.line("{")
-	place, t := e.scrutinee(s.Value)
 	elem := t.Underlying().(*types.Option).Elem()
 	tests := append([]string{place + ".has"}, e.patternTests(s.Pat, place+".val", elem)...)
 	e.line("if (" + strings.Join(tests, " && ") + ") {")
-	e.patternBinds(s.Pat, place+".val", elem)
+	e.push(false)
+	taken := e.patternBinds(s.Pat, place+".val", elem)
+	if held != "" {
+		e.empty(taken, s.Pos())
+	}
+
 	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
 	e.elseBranch(s.Else)
 	e.line("}")
 }
@@ -103,7 +134,7 @@ func (e *Emitter) patternTests(p ast.Pattern, place string, t types.Type) []stri
 			return []string{"!" + place}
 		}
 	case *ast.LitPat:
-		return []string{e.literalTest(place, t, p.Lit)}
+		return []string{e.literalTest(place, p.Lit)}
 	case *ast.RangePat:
 		return []string{place + " >= " + e.literal(p.Lo), place + " <= " + e.literal(p.Hi)}
 	case *ast.TuplePat:
@@ -145,13 +176,14 @@ func (e *Emitter) patternTests(p ast.Pattern, place string, t types.Type) []stri
 
 // patternBinds declares the names a pattern binds, each to the part
 // of the value at place it stands for: a copy, or through a mut borrow
-// its address.
-func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) {
+// its address. It returns the parts bound by value that own
+// something, which a consuming match empties once the arm runs.
+func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) []owned {
 	switch p := p.(type) {
 	case *ast.IdentPat:
 		v, ok := e.info.Defs[p.Name].(*types.Var)
 		if !ok {
-			return
+			return nil
 		}
 
 		value := place
@@ -161,18 +193,30 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) {
 
 		e.line(e.cType(v.Type(), p.Pos()) + " " + ident(p.Name.Name) + " = " + value + ";")
 		e.discardUnused(p.Name)
+		e.own(ident(p.Name.Name), v.Type())
+		if _, borrow := v.Type().(*types.Ref); !borrow && needsDrop(v.Type()) {
+			return []owned{{place, v.Type()}}
+		}
 	case *ast.TuplePat:
+		var taken []owned
 		for i, elt := range p.Elts {
 			sub, st := tupleElem(place, t, i)
-			e.patternBinds(elt, sub, st)
+			taken = append(taken, e.patternBinds(elt, sub, st)...)
 		}
+
+		return taken
 	case *ast.VariantPat:
+		var taken []owned
 		v := e.info.Uses[p.Path.(*ast.Ident)].(*types.Variant)
 		for i, arg := range p.Args {
 			sub, ft := e.payload(place, t, v, i)
-			e.patternBinds(arg, sub, ft)
+			taken = append(taken, e.patternBinds(arg, sub, ft)...)
 		}
+
+		return taken
 	}
+
+	return nil
 }
 
 // tagTest writes the test that the value at place was built by v.
@@ -217,7 +261,7 @@ func tupleElem(place string, t types.Type, i int) (string, types.Type) {
 	return place + ".e" + strconv.Itoa(i), t.Underlying().(*types.Tuple).At(i)
 }
 
-func (e *Emitter) literalTest(place string, t types.Type, lit *ast.BasicLit) string {
+func (e *Emitter) literalTest(place string, lit *ast.BasicLit) string {
 	if lit.Kind == token.STRING {
 		return "tk_string_eq(" + place + ", " + e.literal(lit) + ")"
 	}

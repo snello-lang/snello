@@ -54,9 +54,11 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	// each return.
 	outer := e.body
 	e.body = bytes.Buffer{}
-	if v := e.expr(call); v != "" {
-		e.discard(v)
-	}
+	e.scoped(call.Pos(), func() { // the call's own temporaries are dropped with it
+		if v := e.expr(call); v != "" {
+			e.discard(v, e.info.Types[call], call.Pos())
+		}
+	})
 
 	code := e.body.String()
 	e.body = outer

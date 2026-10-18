@@ -290,9 +290,10 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 				hint = t.elem
 			}
 		case *Result:
-			if v == OkVariant {
+			switch v {
+			case OkVariant:
 				hint = t.val
-			} else if v == ErrVariant {
+			case ErrVariant:
 				hint = t.err
 			}
 		}

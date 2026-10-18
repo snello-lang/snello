@@ -145,7 +145,7 @@ func BenchmarkEmit(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		for _, p := range programs {
 			if _, err := Emit(p.file, p.f, p.info); err != nil {
 				b.Fatal(err)

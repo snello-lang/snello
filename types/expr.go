@@ -55,7 +55,7 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 	case *ast.BinaryExpr:
 		return c.binary(e, expected)
 	case *ast.CoalesceExpr:
-		return c.coalesce(e, expected)
+		return c.coalesce(e)
 	case *ast.TypeExpr:
 		return operand{typeOperand, c.typ(e.Type), nil, nil}
 	case *ast.TryExpr:
@@ -261,7 +261,12 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 		c.checkUse(e)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
-		c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		if c.noUse { // m[k] = v: the map keeps the key
+			c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		} else {
+			c.fits(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		}
+
 		c.checkUse(e)
 		return operand{m, t.value, nil, nil}
 	case *Basic:
@@ -467,7 +472,7 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 // inside: cur ?? ... on a mut (*Node?) yields a mut *Node, and s.head
 // ?? ... through a ref receiver yields a ref *Node. The else is a value
 // of the inside's type, or a block or statement that leaves.
-func (c *Checker) coalesce(e *ast.CoalesceExpr, expected Type) operand {
+func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 	x := c.expr(e.X, nil)
 	if x.mode == invalid {
 		c.node(e.Else, nil)
@@ -611,11 +616,13 @@ func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 	c.condition(e.Cond)
 	f := c.forkAt()
 	a := c.blockValue(e.Then, expected)
+	c.maybeMove(a, a.typ) // the branch's value leaves with the if
 	c.branchEnd(&f)
 	var b operand
 	switch els := e.Else.(type) {
 	case *ast.BlockStmt:
 		b = c.blockValue(els, expected)
+		c.maybeMove(b, b.typ)
 	case *ast.IfExpr:
 		b = c.ifExpr(els, expected)
 	}

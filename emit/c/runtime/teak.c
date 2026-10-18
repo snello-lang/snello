@@ -30,6 +30,10 @@ void *tk_alloc(size_t n) {
     return p;
 }
 
+void tk_free(void *p) {
+    free(p);
+}
+
 _Noreturn void tk_exit(int code) {
     fflush(stdout);
     exit(code);
@@ -66,8 +70,16 @@ static void grow(tk_slice *s, int64_t need, size_t size) {
         memcpy(p, s->ptr, (size_t)s->len * size);
     }
 
+    tk_free(s->ptr);
     s->ptr = p;
     s->cap = cap;
+}
+
+void tk_slice_free(tk_slice *s) {
+    tk_free(s->ptr);
+    s->ptr = NULL;
+    s->len = 0;
+    s->cap = 0;
 }
 
 void tk_slice_make(tk_slice *out, int64_t len, int64_t cap, size_t size) {
@@ -182,14 +194,29 @@ void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void 
         return;
     }
 
-    merge(s->ptr, tk_alloc((size_t)s->len * size), s->len, size, less, ctx);
+    void *tmp = tk_alloc((size_t)s->len * size);
+    merge(s->ptr, tmp, s->len, size, less, ctx);
+    tk_free(tmp);
 }
 
 tk_string tk_concat(tk_string a, tk_string b) {
     uint8_t *p = tk_alloc((size_t)(a.len + b.len));
     memcpy(p, a.ptr, (size_t)a.len);
     memcpy(p + a.len, b.ptr, (size_t)b.len);
-    return TK_STR(p, a.len + b.len);
+    return TK_OWNED(p, a.len + b.len);
+}
+
+tk_string tk_join(tk_string a, tk_string b, int owned) {
+    tk_string s = tk_concat(a, b);
+    if (owned & 1) {
+        tk_string_drop(a);
+    }
+
+    if (owned & 2) {
+        tk_string_drop(b);
+    }
+
+    return s;
 }
 
 bool tk_string_eq(tk_string a, tk_string b) {
@@ -211,7 +238,7 @@ static tk_string formatted(const char *buf) {
     size_t n = strlen(buf);
     uint8_t *p = tk_alloc(n);
     memcpy(p, buf, n);
-    return TK_STR(p, (int64_t)n);
+    return TK_OWNED(p, (int64_t)n);
 }
 
 tk_string tk_int_to_string(int64_t v) {
@@ -281,7 +308,7 @@ tk_string tk_quote(tk_string s) {
     }
 
     p[n++] = '"';
-    return TK_STR(p, n);
+    return TK_OWNED(p, n);
 }
 
 uint64_t tk_hash_bytes(const void *p, size_t n) {
@@ -346,6 +373,10 @@ static void rebuild(tk_map *m, const tk_map_type *t) {
     }
 
     n.count = n.len;
+    tk_free(m->keys);
+    tk_free(m->vals);
+    tk_free(m->live);
+    tk_free(m->index);
     *m = n;
 }
 
@@ -394,9 +425,32 @@ bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) 
     }
 
     memcpy(out, val_at(m, t, at - 1), t->vsize);
+    memset(val_at(m, t, at - 1), 0, t->vsize); // the value moved out
+    if (t->kdrop != NULL) {
+        t->kdrop(key_at(m, t, at - 1));
+    }
+
     m->live[at - 1] = 0; // the entry stays, skipped by lookups and ranges, until the next rebuild drops it
     m->count--;
     return true;
+}
+
+void tk_map_free(tk_map *m, const tk_map_type *t) {
+    for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
+        if (t->kdrop != NULL) {
+            t->kdrop(key_at(m, t, i));
+        }
+
+        if (t->vdrop != NULL) {
+            t->vdrop(val_at(m, t, i));
+        }
+    }
+
+    tk_free(m->keys);
+    tk_free(m->vals);
+    tk_free(m->live);
+    tk_free(m->index);
+    memset(m, 0, sizeof *m);
 }
 
 void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
@@ -421,7 +475,7 @@ int64_t tk_map_next(const tk_map *m, int64_t i) {
 tk_string tk_string_clone(tk_string s) {
     uint8_t *p = tk_alloc((size_t)s.len);
     memcpy(p, s.ptr, (size_t)s.len);
-    return TK_STR(p, s.len);
+    return TK_OWNED(p, s.len);
 }
 
 tk_string tk_substr(tk_string s, int64_t lo, int64_t hi) {
@@ -440,7 +494,7 @@ static tk_string mapped(tk_string s, int (*f)(int)) {
         p[i] = (uint8_t)f(s.ptr[i]);
     }
 
-    return TK_STR(p, s.len);
+    return TK_OWNED(p, s.len);
 }
 
 tk_string tk_to_upper(tk_string s) { return mapped(s, toupper); }
@@ -565,24 +619,30 @@ static char *cpath(tk_string s) {
 // sysopen opens a path with flags, or fails with errno set.
 static int sysopen(tk_string path, int flags) {
     char *p = cpath(path);
-    return p == NULL ? -1 : open(p, flags, 0666);
+    if (p == NULL) {
+        return -1;
+    }
+
+    int fd = open(p, flags, 0666);
+    tk_free(p);
+    return fd;
 }
 
 // failure builds the message "op path: reason" from errno, as Go's os
 // package words it, with the reason in lower case.
 static tk_string failure(const char *op, tk_string path) {
     const char *reason = strerror(errno);
-    tk_string msg = tk_concat(tk_concat(TK_STR(op, (int64_t)strlen(op)), TK_STR(" ", 1)), path);
-    msg = tk_concat(msg, TK_STR(": ", 2));
+    tk_string msg = tk_join(tk_concat(TK_STR(op, (int64_t)strlen(op)), TK_STR(" ", 1)), path, 1);
+    msg = tk_join(msg, TK_STR(": ", 2), 1);
     tk_string r = TK_STR(reason, (int64_t)strlen(reason));
     if (r.len > 0 && r.ptr[0] >= 'A' && r.ptr[0] <= 'Z') {
         uint8_t *p = tk_alloc((size_t)r.len);
         memcpy(p, r.ptr, (size_t)r.len);
         p[0] = (uint8_t)(p[0] + ('a' - 'A'));
-        r = TK_STR(p, r.len);
+        r = TK_OWNED(p, r.len);
     }
 
-    return tk_concat(msg, r);
+    return tk_join(msg, r, 3);
 }
 
 tk_string tk_read_to_string(tk_string path, tk_string *out) {
@@ -608,7 +668,7 @@ tk_string tk_read_to_string(tk_string path, tk_string *out) {
     }
 
     close(fd);
-    *out = TK_STR(buf.ptr, buf.len);
+    *out = (tk_string){buf.ptr, buf.len, buf.cap};
     return TK_STR("", 0);
 }
 
@@ -644,13 +704,15 @@ tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out) {
         dir = TK_STR(tmp, (int64_t)strlen(tmp));
     }
 
-    tk_string tmpl = tk_concat(tk_concat(dir, TK_STR("/", 1)), tk_concat(pattern, TK_STR("XXXXXX", 6)));
+    tk_string tmpl = tk_join(tk_join(dir, TK_STR("/", 1), 0), tk_join(pattern, TK_STR("XXXXXX", 6), 0), 3);
     char *p = cpath(tmpl);
+    tk_string_drop(tmpl);
     if (p == NULL || mkdtemp(p) == NULL) {
+        tk_free(p);
         return failure("mkdirtemp", dir);
     }
 
-    *out = TK_STR(p, tmpl.len);
+    *out = TK_OWNED(p, tmpl.len);
     return TK_STR("", 0);
 }
 
@@ -677,6 +739,7 @@ static int remove_tree(const char *path) {
             char *child = tk_alloc(n);
             snprintf(child, n, "%s/%s", path, ent->d_name);
             rc = remove_tree(child);
+            tk_free(child);
         }
 
         closedir(d);
@@ -688,11 +751,19 @@ static int remove_tree(const char *path) {
 
 tk_string tk_remove_all(tk_string path) {
     char *p = cpath(path);
-    if (p == NULL || remove_tree(p) != 0) {
+    int rc = p == NULL ? -1 : remove_tree(p);
+    tk_free(p);
+    if (rc != 0) {
         return failure("remove", path);
     }
 
     return TK_STR("", 0);
+}
+
+void tk_file_drop(tk_file f) {
+    if (f.fd > 2) {
+        close(f.fd);
+    }
 }
 
 tk_string tk_file_close(tk_file f) {
@@ -762,10 +833,18 @@ tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n) {
 }
 
 void tk_print_string(tk_string s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); }
+void tk_print_owned(tk_string s) {
+    tk_print_string(s);
+    tk_string_drop(s);
+}
 void tk_print_int(int64_t v) { printf("%lld", (long long)v); }
 void tk_print_uint(uint64_t v) { printf("%llu", (unsigned long long)v); }
-void tk_print_f64(double v) { tk_print_string(tk_f64_to_string(v)); }
+void tk_print_f64(double v) { tk_print_owned(tk_f64_to_string(v)); }
 void tk_print_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 void tk_print_sep(void) { fputc(' ', stdout); }
 void tk_print_nl(void) { fputc('\n', stdout); }
 void tk_eprint_string(tk_string s) { fwrite(s.ptr, 1, (size_t)s.len, stderr); }
+void tk_eprint_owned(tk_string s) {
+    tk_eprint_string(s);
+    tk_string_drop(s);
+}

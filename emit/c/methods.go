@@ -83,6 +83,10 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		e.line("tk_slice_reverse(" + generic + ", " + size + ");")
 		return ""
 	case "Clone":
+		if needsDrop(t.Elem()) {
+			return e.cloner(t, x.Pos()) + "(" + place + ")" // element by element, so that each copy owns its own
+		}
+
 		return e.into(t, x.Pos(), func(out string) string {
 			return "tk_slice_clone(" + generic + ", " + out + ", " + size + ")"
 		})
@@ -109,7 +113,7 @@ func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
 		ct := e.cType(elem, pos)
 		less := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "a", types.NewRef(elem, false)), types.NewVar(token.NoPos, "b", types.NewRef(elem, false))}, types.Typ[types.Bool])
 		fn := e.cType(less, pos)
-		e.helpers.WriteString("static bool " + name + "(void *ctx, const void *a, const void *b) {\n\t" + fn + " *f = ctx;\n\treturn f->fn(f->env, *(const " + ct + " *)a, *(const " + ct + " *)b);\n}\n\n")
+		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t", fn, " *f = ctx;\n\treturn f->fn(f->env, *(const ", ct, " *)a, *(const ", ct, " *)b);\n}\n\n")
 	}
 
 	return name
@@ -133,7 +137,7 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 			test = "tk_string_cmp(*(const " + ct + " *)a, *(const " + ct + " *)b) < 0"
 		}
 
-		e.helpers.WriteString("static bool " + name + "(void *ctx, const void *a, const void *b) {\n\t(void)ctx;\n\treturn " + test + ";\n}\n\n")
+		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t(void)ctx;\n\treturn ", test, ";\n}\n\n")
 	}
 
 	return name
@@ -147,8 +151,8 @@ func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) s
 		e.state[name] = defined
 		st, elem := e.cType(t, pos), e.cType(t.Elem(), pos)
 		head := "static bool " + name + "(" + st + " *s, " + elem + " v)"
-		e.protos.WriteString(head + ";\n")
-		e.helpers.WriteString(head + " {\n\tfor (int64_t i = 0; i < s->len; i++) {\n\t\tif (" + e.equal("s->ptr[i]", "v", t.Elem(), pos) + ") {\n")
+		put(&e.protos, head, ";\n")
+		put(&e.helpers, head, " {\n\tfor (int64_t i = 0; i < s->len; i++) {\n\t\tif (", e.equal("s->ptr[i]", "v", t.Elem(), pos), ") {\n")
 		if what == "RemoveValue" {
 			e.helpers.WriteString("\t\t\ttk_slice_remove((tk_slice *)s, i, &v, sizeof v);\n")
 		}
@@ -200,6 +204,10 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Contains":
 		return "(tk_map_find(&" + place + ", " + mt + ", &" + e.saved(x.Args[0], t.Key()) + ") != NULL)"
 	case "Clone":
+		if needsDrop(t.Key()) || needsDrop(t.Value()) {
+			return e.cloner(t, x.Pos()) + "(" + place + ")"
+		}
+
 		out := e.temp()
 		e.line(e.cType(t, x.Pos()) + " " + out + ";")
 		e.line("tk_map_clone(&" + place + ", " + mt + ", &" + out + ");")
@@ -225,11 +233,9 @@ func (e *Emitter) mapIndex(x *ast.IndexExpr, place string, t *types.Map, write b
 }
 
 // mapStore writes the entry for key k in the map at place, with v as
-// its value.
+// its value; an entry already there drops its old value.
 func (e *Emitter) mapStore(place string, t *types.Map, k, v string, pos token.Pos) {
-	key := e.temp()
-	e.line(e.cType(t.Key(), pos) + " " + key + " = " + k + ";")
-	e.line("*(" + e.cType(t.Value(), pos) + " *)tk_map_slot(&" + place + ", " + e.mapType(t, pos) + ", &" + key + ") = " + v + ";")
+	e.line(e.mapSetter(t, pos) + "(&" + place + ", " + k + ", " + v + ");")
 }
 
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
@@ -285,29 +291,40 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 // the field that says a value is present and absent the name of the
 // other case for the panic message.
 func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, absent string) string {
-	place, t := e.scrutinee(sel.X)
+	place, t, held := e.consumed(sel.X)
+	if held != "" {
+		e.hold(held, e.info.Types[sel.X])
+	}
+
 	switch sel.Sel.Name {
 	case "IsSome", "IsOk":
 		return place + "." + flag
 	case "IsNone", "IsErr":
 		return "(!" + place + "." + flag + ")"
 	case "Expect", "Unwrap":
-		msg := literal(sel.Sel.Name + " on " + absent)
+		msg := text{literal(sel.Sel.Name + " on " + absent), false}
 		if sel.Sel.Name == "Expect" {
-			msg = e.valueTo(x.Args[0], types.Typ[types.String])
+			msg = text{e.valueTo(x.Args[0], types.Typ[types.String]), false}
 		}
 
 		if r, ok := t.Underlying().(*types.Result); ok {
-			msg = concat(concat(msg, literal(": ")), e.toText(place+".err", r.Err(), x.Pos(), false))
+			s, owned := e.toText(place+".err", r.Err(), x.Pos(), false)
+			msg = join(join(msg, text{literal(": "), false}), text{s, owned})
 		}
 
 		e.line("if (!" + place + "." + flag + ") {")
-		e.line("tk_panic(" + msg + ");")
+		e.line("tk_panic(" + msg.s + ");")
 		e.line("}")
-		return place + ".val"
+		return e.taken(place+".val", e.info.Types[x], held, e.info.Types[sel.X], x.Pos())
 	case "UnwrapOr":
 		v := e.saved(x.Args[0], e.info.Types[x])
-		return "(" + place + "." + flag + " ? " + place + ".val : " + v + ")"
+		out := e.temp()
+		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + " = " + v + ";")
+		e.line("if (" + place + "." + flag + ") {")
+		e.line(e.dropIfNeeded(v, e.info.Types[x], x.Pos()))
+		e.line(out + " = " + e.taken(place+".val", e.info.Types[x], held, e.info.Types[sel.X], x.Pos()) + ";")
+		e.line("}")
+		return out
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on "+t.String())

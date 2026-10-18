@@ -28,6 +28,7 @@ type Info struct {
 	Defs  map[*ast.Ident]Object
 	Uses  map[*ast.Ident]Object
 	Types map[ast.Expr]Type // the type of every expression that has one
+	Moves map[ast.Expr]bool // the place expressions whose value moves away: the emitter empties the place
 }
 
 // A Checker holds the state of one check: the file being checked, the
@@ -90,6 +91,10 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 
 		if info.Types == nil {
 			info.Types = make(map[ast.Expr]Type)
+		}
+
+		if info.Moves == nil {
+			info.Moves = make(map[ast.Expr]bool)
 		}
 	}
 

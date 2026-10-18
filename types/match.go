@@ -63,6 +63,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		}
 
 		v := c.node(arm.Body, expected)
+		c.maybeMove(v, v.typ) // the arm's value leaves with the match
 		result = c.unify(result, v, arm.Arrow, "match")
 		c.closeScope()
 		c.branchEnd(&f)

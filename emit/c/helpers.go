@@ -30,48 +30,49 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 	}
 
 	e.state[name] = defined
-	e.protos.WriteString("static tk_string " + name + "(" + e.cType(t, pos) + " v);\n")
+	put(&e.protos, "static tk_string ", name, "(", e.cType(t, pos), " v);\n")
 	var b strings.Builder
-	b.WriteString("static tk_string " + name + "(" + e.cType(t, pos) + " v) {\n\t(void)v; // () and an empty struct have nothing to read\n")
+	put(&b, "static tk_string ", name, "(", e.cType(t, pos), " v) {\n\t(void)v; // () and an empty struct have nothing to read\n")
 	v := deref("v", t)
 	switch u := valueType(t).Underlying().(type) {
 	case *types.Struct:
 		if u.NumFields() == 0 {
-			b.WriteString("\treturn " + literal(valueType(t).String()) + ";\n")
+			put(&b, "\treturn ", literal(valueType(t).String()), ";\n")
 			break
 		}
 
-		b.WriteString("\treturn " + joined("{", "}", " ", e.structParts(u, v, pos)) + ";\n")
+		put(&b, "\treturn ", joined("{", "}", " ", e.structParts(u, v, pos)).s, ";\n")
 	case *types.Enum:
 		e.enumStringer(&b, u, v, pos)
 	case *types.Option:
-		b.WriteString("\tif (!" + v + ".has) {\n\t\treturn " + literal("None") + ";\n\t}\n\n")
-		b.WriteString("\treturn " + joined("Some(", ")", "", []string{e.toText(v+".val", u.Elem(), pos, true)}) + ";\n")
+		put(&b, "\tif (!", v, ".has) {\n\t\treturn ", literal("None"), ";\n\t}\n\n")
+		put(&b, "\treturn ", joined("Some(", ")", "", []text{e.textOf(v+".val", u.Elem(), pos, true)}).s, ";\n")
 	case *types.Result:
-		b.WriteString("\tif (!" + v + ".ok) {\n\t\treturn " + joined("Err(", ")", "", []string{e.toText(v+".err", u.Err(), pos, true)}) + ";\n\t}\n\n")
-		b.WriteString("\treturn " + joined("Ok(", ")", "", []string{e.toText(v+".val", u.Val(), pos, true)}) + ";\n")
+		put(&b, "\tif (!", v, ".ok) {\n\t\treturn ", joined("Err(", ")", "", []text{e.textOf(v+".err", u.Err(), pos, true)}).s, ";\n\t}\n\n")
+		put(&b, "\treturn ", joined("Ok(", ")", "", []text{e.textOf(v+".val", u.Val(), pos, true)}).s, ";\n")
 	case *types.Tuple:
-		parts := make([]string, u.Len())
+		parts := make([]text, u.Len())
 		for i := range parts {
-			parts[i] = e.toText(v+".e"+strconv.Itoa(i), u.At(i), pos, false)
+			parts[i] = e.textOf(v+".e"+strconv.Itoa(i), u.At(i), pos, false)
 		}
 
-		b.WriteString("\treturn " + joined("(", ")", ", ", parts) + ";\n")
+		put(&b, "\treturn ", joined("(", ")", ", ", parts).s, ";\n")
 	case *types.Map:
 		k, val := "(("+e.cType(u.Key(), pos)+" *)"+v+".keys)[i]", "(("+e.cType(u.Value(), pos)+" *)"+v+".vals)[i]"
-		b.WriteString("\ttk_string out = " + literal("map[") + ";\n")
-		b.WriteString("\tfor (int64_t i = tk_map_next(&" + v + ", 0); i >= 0; i = tk_map_next(&" + v + ", i + 1)) {\n")
-		b.WriteString("\t\tif (out.len > 4) {\n\t\t\tout = tk_concat(out, " + literal(" ") + ");\n\t\t}\n\n")
-		b.WriteString("\t\tout = tk_concat(tk_concat(tk_concat(out, " + e.toText(k, u.Key(), pos, false) + "), " + literal(":") + "), " + e.toText(val, u.Value(), pos, false) + ");\n\t}\n\n")
-		b.WriteString("\treturn tk_concat(out, " + literal("]") + ");\n")
+		put(&b, "\ttk_string out = ", literal("map["), ";\n")
+		put(&b, "\tfor (int64_t i = tk_map_next(&", v, ", 0); i >= 0; i = tk_map_next(&", v, ", i + 1)) {\n")
+		put(&b, "\t\tif (out.len > 4) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
+		put(&b, "\t\tout = ", join(join(join(text{"out", true}, e.textOf(k, u.Key(), pos, false)), text{literal(":"), false}), e.textOf(val, u.Value(), pos, false)).s, ";\n\t}\n\n")
+		put(&b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
 	case *types.Slice:
-		b.WriteString("\ttk_string out = " + literal("[") + ";\n")
-		b.WriteString("\tfor (int64_t i = 0; i < " + v + ".len; i++) {\n")
-		b.WriteString("\t\tif (i > 0) {\n\t\t\tout = tk_concat(out, " + literal(" ") + ");\n\t\t}\n\n")
-		b.WriteString("\t\tout = tk_concat(out, " + e.toText(v+".ptr[i]", u.Elem(), pos, false) + ");\n\t}\n\n")
-		b.WriteString("\treturn tk_concat(out, " + literal("]") + ");\n")
+		put(&b, "\ttk_string out = ", literal("["), ";\n")
+		put(&b, "\tfor (int64_t i = 0; i < ", v, ".len; i++) {\n")
+		put(&b, "\t\tif (i > 0) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
+		put(&b, "\t\tout = ", join(text{"out", true}, e.textOf(v+".ptr[i]", u.Elem(), pos, false)).s, ";\n\t}\n\n")
+		put(&b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
 	default:
-		b.WriteString("\treturn " + e.toText(v, valueType(t), pos, false) + ";\n")
+		s, _ := e.toText(v, valueType(t), pos, false)
+		put(&b, "\treturn ", s, ";\n")
 	}
 
 	b.WriteString("}\n\n")
@@ -80,62 +81,95 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 }
 
 func (e *Emitter) enumStringer(b *strings.Builder, en *types.Enum, v string, pos token.Pos) {
-	b.WriteString("\tswitch (" + v + ".tag) {\n")
+	put(b, "\tswitch (", v, ".tag) {\n")
 	for i := 0; i < en.NumVariants(); i++ {
 		variant := en.Variant(i)
-		b.WriteString("\tcase " + strconv.Itoa(i) + ":\n")
+		put(b, "\tcase ", strconv.Itoa(i), ":\n")
 		if len(variant.Fields()) == 0 {
-			b.WriteString("\t\treturn " + literal(variant.Name()) + ";\n")
+			put(b, "\t\treturn ", literal(variant.Name()), ";\n")
 			continue
 		}
 
-		parts := make([]string, len(variant.Fields()))
+		parts := make([]text, len(variant.Fields()))
 		for j, f := range variant.Fields() {
-			parts[j] = e.toText(v+"."+variantMember(variant)+"."+fieldName(f, j), f.Type(), pos, true)
+			parts[j] = e.textOf(v+"."+variantMember(variant)+"."+fieldName(f, j), f.Type(), pos, true)
 		}
 
-		b.WriteString("\t\treturn " + joined(variant.Name()+"(", ")", ", ", parts) + ";\n")
+		put(b, "\t\treturn ", joined(variant.Name()+"(", ")", ", ", parts).s, ";\n")
 	}
 
-	b.WriteString("\t}\n\n\treturn " + literal("?") + ";\n")
+	put(b, "\t}\n\n\treturn ", literal("?"), ";\n")
 }
 
-func (e *Emitter) structParts(s *types.Struct, v string, pos token.Pos) []string {
-	parts := make([]string, s.NumFields())
+func (e *Emitter) structParts(s *types.Struct, v string, pos token.Pos) []text {
+	parts := make([]text, s.NumFields())
 	for i := range parts {
 		f := s.Field(i)
-		parts[i] = e.toText(v+"."+ident(f.Name()), f.Type(), pos, false)
+		parts[i] = e.textOf(v+"."+ident(f.Name()), f.Type(), pos, false)
 	}
 
 	return parts
 }
 
+// A text is the C expression for a tk_string and whether the
+// expression builds it, in which case whoever uses it drops it: a
+// string read out of a value is only lent.
+type text struct {
+	s     string
+	owned bool
+}
+
+// join writes the concatenation of two texts, freeing the ones built
+// here once joined; the result is built here.
+func join(a, b text) text {
+	if a.s == "" {
+		return b
+	}
+
+	flags := 0
+	if a.owned {
+		flags |= 1
+	}
+
+	if b.owned {
+		flags |= 2
+	}
+
+	return text{"tk_join(" + a.s + ", " + b.s + ", " + strconv.Itoa(flags) + ")", true}
+}
+
+func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) text {
+	s, owned := e.toText(v, t, pos, quoted)
+	return text{s, owned}
+}
+
 // toText writes the expression that turns the C value v of type t
-// into a tk_string; quoted says whether a string is written in quotes.
-func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) string {
+// into a tk_string, and whether the expression builds the string;
+// quoted says whether a string is written in quotes.
+func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (string, bool) {
 	b, ok := valueType(t).Underlying().(*types.Basic)
 	if !ok {
-		return e.stringer(t, pos) + "(" + v + ")"
+		return e.stringer(t, pos) + "(" + v + ")", true
 	}
 
 	v = deref(v, t)
 	switch {
 	case isString(b) && quoted:
-		return "tk_quote(" + v + ")"
+		return "tk_quote(" + v + ")", true
 	case isString(b):
-		return v
+		return v, false
 	case b.Kind() == types.Bool:
-		return "tk_bool_to_string(" + v + ")"
+		return "tk_bool_to_string(" + v + ")", false
 	case b.Info()&types.IsFloat != 0:
-		return "tk_f64_to_string((double)(" + v + "))"
+		return "tk_f64_to_string((double)(" + v + "))", true
 	case b.Info()&types.IsUnsigned != 0:
-		return "tk_uint_to_string((uint64_t)(" + v + "))"
+		return "tk_uint_to_string((uint64_t)(" + v + "))", true
 	case b.Info()&types.IsInteger != 0:
-		return "tk_int_to_string((int64_t)(" + v + "))"
+		return "tk_int_to_string((int64_t)(" + v + "))", true
 	}
 
 	e.unsupported(pos, "printing values of type "+t.String())
-	return literal("?")
+	return literal("?"), false
 }
 
 // equal writes the test that two C values of type t are equal: the
@@ -165,9 +199,9 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 
 	e.state[name] = defined
 	ct := e.cType(t, pos)
-	e.protos.WriteString("static bool " + name + "(" + ct + " a, " + ct + " b);\n")
+	put(&e.protos, "static bool ", name, "(", ct, " a, ", ct, " b);\n")
 	var b strings.Builder
-	b.WriteString("static bool " + name + "(" + ct + " a, " + ct + " b) {\n")
+	put(&b, "static bool ", name, "(", ct, " a, ", ct, " b) {\n")
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
 		var parts []string
@@ -176,7 +210,7 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 			parts = append(parts, e.equal("a."+f, "b."+f, u.Field(i).Type(), pos))
 		}
 
-		b.WriteString("\treturn " + allOf(parts) + ";\n")
+		put(&b, "\treturn ", allOf(parts), ";\n")
 	case *types.Enum:
 		b.WriteString("\tif (a.tag != b.tag) {\n\t\treturn false;\n\t}\n\n\tswitch (a.tag) {\n")
 		for i := 0; i < u.NumVariants(); i++ {
@@ -191,15 +225,15 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 				parts = append(parts, e.equal("a"+field, "b"+field, f.Type(), pos))
 			}
 
-			b.WriteString("\tcase " + strconv.Itoa(i) + ":\n\t\treturn " + allOf(parts) + ";\n")
+			put(&b, "\tcase ", strconv.Itoa(i), ":\n\t\treturn ", allOf(parts), ";\n")
 		}
 
 		b.WriteString("\t}\n\n\treturn true;\n")
 	case *types.Option:
-		b.WriteString("\treturn a.has == b.has && (!a.has || " + e.equal("a.val", "b.val", u.Elem(), pos) + ");\n")
+		put(&b, "\treturn a.has == b.has && (!a.has || ", e.equal("a.val", "b.val", u.Elem(), pos), ");\n")
 	case *types.Result:
 		b.WriteString("\tif (a.ok != b.ok) {\n\t\treturn false;\n\t}\n\n")
-		b.WriteString("\treturn a.ok ? " + e.equal("a.val", "b.val", u.Val(), pos) + " : " + e.equal("a.err", "b.err", u.Err(), pos) + ";\n")
+		put(&b, "\treturn a.ok ? ", e.equal("a.val", "b.val", u.Val(), pos), " : ", e.equal("a.err", "b.err", u.Err(), pos), ";\n")
 	case *types.Tuple:
 		var parts []string
 		for i := 0; i < u.Len(); i++ {
@@ -207,12 +241,12 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 			parts = append(parts, e.equal("a"+f, "b"+f, u.At(i), pos))
 		}
 
-		b.WriteString("\treturn " + allOf(parts) + ";\n")
+		put(&b, "\treturn ", allOf(parts), ";\n")
 	case *types.Pointer:
-		b.WriteString("\treturn " + e.equal("(*a)", "(*b)", u.Elem(), pos) + ";\n")
+		put(&b, "\treturn ", e.equal("(*a)", "(*b)", u.Elem(), pos), ";\n")
 	case *types.Slice:
 		b.WriteString("\tif (a.len != b.len) {\n\t\treturn false;\n\t}\n\n")
-		b.WriteString("\tfor (int64_t i = 0; i < a.len; i++) {\n\t\tif (!" + e.equal("a.ptr[i]", "b.ptr[i]", u.Elem(), pos) + ") {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\treturn true;\n")
+		put(&b, "\tfor (int64_t i = 0; i < a.len; i++) {\n\t\tif (!", e.equal("a.ptr[i]", "b.ptr[i]", u.Elem(), pos), ") {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\treturn true;\n")
 	default:
 		e.unsupported(pos, "comparing values of type "+t.String())
 		b.WriteString("\treturn false;\n")
@@ -237,11 +271,11 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 	hash, eq := "tk_khash_"+mangle(t.Key()), "tk_keq_"+mangle(t.Key())
 	if e.state[hash] == undeclared {
 		e.state[hash] = defined
-		e.helpers.WriteString("static uint64_t " + hash + "(const void *p) {\n\t" + key + " k = *(const " + key + " *)p;\n\t(void)k;\n\treturn " + e.hash("k", t.Key(), pos) + ";\n}\n\n")
-		e.helpers.WriteString("static bool " + eq + "(const void *a, const void *b) {\n\treturn " + e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos) + ";\n}\n\n")
+		put(&e.helpers, "static uint64_t ", hash, "(const void *p) {\n\t", key, " k = *(const ", key, " *)p;\n\t(void)k;\n\treturn ", e.hash("k", t.Key(), pos), ";\n}\n\n")
+		put(&e.helpers, "static bool ", eq, "(const void *a, const void *b) {\n\treturn ", e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos), ";\n}\n\n")
 	}
 
-	e.helpers.WriteString("static const tk_map_type " + name + " = {sizeof(" + key + "), sizeof(" + e.cType(t.Value(), pos) + "), " + hash + ", " + eq + "};\n\n")
+	put(&e.helpers, "static const tk_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.dropFn(t.Key(), pos), ", ", e.dropFn(t.Value(), pos), "};\n\n")
 	return "&" + name
 }
 
@@ -292,16 +326,16 @@ func allOf(parts []string) string {
 }
 
 // joined writes the concatenation of open, the parts separated by sep,
-// and close.
-func joined(open, close, sep string, parts []string) string {
-	out := literal(open)
+// and close, freeing the parts built on the way.
+func joined(open, close, sep string, parts []text) text {
+	out := text{literal(open), false}
 	for i, p := range parts {
 		if i > 0 && sep != "" {
-			out = concat(out, literal(sep))
+			out = join(out, text{literal(sep), false})
 		}
 
-		out = concat(out, p)
+		out = join(out, p)
 	}
 
-	return concat(out, literal(close))
+	return join(out, text{literal(close), false})
 }

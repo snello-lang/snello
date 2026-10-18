@@ -50,5 +50,6 @@ func main() {
         Ok(n)  => fmt.Println("copied", n, "bytes"),
         Err(e) => fmt.Println("copy failed:", e),
     }
-    // tmp dropped here: directory removed. Then the deferred print runs.
+    // the deferred print runs, then tmp is dropped: directory removed
+
 }

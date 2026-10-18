@@ -35,12 +35,12 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 	captured := e.captures(x)
 	var fields strings.Builder
 	for _, v := range captured {
-		fields.WriteString("\t" + e.cType(v.Type(), v.Pos()) + " *" + ident(v.Name()) + ";\n")
+		put(&fields, "\t", e.cType(v.Type(), v.Pos()), " *", ident(v.Name()), ";\n")
 	}
 
-	e.types.WriteString("struct " + env + " {\n" + fields.String() + "\tchar tk_pad;\n};\n\n")
+	put(&e.types, "struct ", env, " {\n", fields.String(), "\tchar tk_pad;\n};\n\n")
 	head := "static " + e.resultType(sig, x.Pos()) + " " + name + "(void *tk_envp" + e.closureParamList(sig, x.Pos()) + ")"
-	e.protos.WriteString(head + ";\n")
+	put(&e.protos, head, ";\n")
 
 	// The body goes into a buffer of its own, with the captured
 	// variables reached through the environment.
@@ -111,9 +111,9 @@ func (e *Emitter) closureParams(sig *types.Signature, pos token.Pos) string {
 func (e *Emitter) closureParamList(sig *types.Signature, pos token.Pos) string {
 	var b strings.Builder
 	for _, p := range sig.Params() {
-		b.WriteString(", " + e.cType(p.Type(), pos))
+		put(&b, ", ", e.cType(p.Type(), pos))
 		if p.Name() != "" {
-			b.WriteString(" " + ident(p.Name()))
+			put(&b, " ", ident(p.Name()))
 		}
 	}
 
@@ -140,8 +140,8 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 		}
 
 		head := "static " + e.resultType(sig, pos) + " " + name + "(void *tk_env" + e.closureParamList(sig, pos) + ")"
-		e.protos.WriteString(head + ";\n")
-		e.helpers.WriteString(head + " {\n\t(void)tk_env;\n\t" + call + ";\n}\n\n")
+		put(&e.protos, head, ";\n")
+		put(&e.helpers, head, " {\n\t(void)tk_env;\n\t", call, ";\n}\n\n")
 	}
 
 	return "(" + pair + "){" + name + ", NULL}"

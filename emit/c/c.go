@@ -65,6 +65,8 @@ type Emitter struct {
 	prologue []string              // declarations to put at the top of the function being written
 	pre      map[ast.Expr]string   // expressions already evaluated into temporaries, for defer
 	defers   []deferred            // the deferred calls of the function being written, in order
+	frames   []frame               // the scopes open at this point, with the variables to drop at their end (drop.go)
+	temps    []owned               // the temporaries of the statement being written, dropped at its end
 	errors   []string
 }
 
@@ -126,7 +128,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 	}
 
 	var out bytes.Buffer
-	out.WriteString("// Emitted by the Teak compiler from " + file.Name() + ". Do not edit.\n\n#include \"teak.h\"\n\n")
+	put(&out, "// Emitted by the Teak compiler from ", file.Name(), ". Do not edit.\n\n#include \"teak.h\"\n\n")
 	out.Write(e.decls.Bytes())
 	out.WriteString("\n")
 	out.Write(e.types.Bytes())
@@ -164,15 +166,11 @@ func (e *Emitter) unsupported(pos token.Pos, what string) {
 // any order; any other declared type is a typedef written at once.
 func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	named := e.info.Defs[d.Name].(*types.TypeName).Type().(*types.Named)
-	if named.Implements("Drop") {
-		e.unsupported(d.Pos(), "Drop")
-	}
-
 	switch named.Underlying().(type) {
 	case *types.Struct, *types.Enum:
 		name := ident(d.Name.Name)
 		e.state[name] = declared
-		e.decls.WriteString("typedef struct " + name + " " + name + ";\n")
+		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
 	default:
 		e.define(named, d.Pos())
 	}
@@ -197,7 +195,7 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	}
 
 	head := "static TK_UNUSED " + e.resultType(sig, d.Pos()) + " " + name + "(" + e.params(params, d.Pos()) + ")"
-	e.protos.WriteString(head + ";\n")
+	put(&e.protos, head, ";\n")
 	e.line(head + " {")
 	e.function(sig, d.Body)
 	e.line("")
@@ -206,37 +204,54 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 // function writes the body of a function or closure whose head was
 // just written: a (void) for each parameter nothing refers to, since
 // the C compiler is asked to treat an unused one as an error, the
-// statements, the deferred calls of a body that falls off its end, and
-// the declarations the body asked for at the top. The caller's own
-// state is kept.
+// statements, and for a body that falls off its end the deferred calls
+// and then the drops of its parameters and locals, and the
+// declarations the body asked for at the top. The caller's own state
+// is kept.
 func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 	outerResult, outerLoops, outerPrologue, outerDefers := e.result, e.loops, e.prologue, e.defers
-	e.result, e.loops, e.prologue, e.defers = sig.Results(), nil, nil, nil
+	outerFrames, outerTemps := e.frames, e.temps
+	e.result, e.loops, e.prologue, e.defers, e.frames, e.temps = sig.Results(), nil, nil, nil, nil, nil
+	e.push(false)
 	start := e.body.Len()
-	for _, p := range sig.Params() {
-		if p.Name() != "" && !e.used[p] {
-			e.line("(void)" + ident(p.Name()) + ";")
+	if recv := sig.Recv(); recv != nil {
+		if !e.used[recv] {
+			e.line("(void)" + ident(recv.Name()) + ";")
 		}
+
+		e.own(ident(recv.Name()), recv.Type())
 	}
 
-	if recv := sig.Recv(); recv != nil && !e.used[recv] {
-		e.line("(void)" + ident(recv.Name()) + ";")
+	for _, p := range sig.Params() {
+		if p.Name() == "" {
+			continue
+		}
+
+		if !e.used[p] {
+			e.line("(void)" + ident(p.Name()) + ";")
+		}
+
+		e.own(ident(p.Name()), p.Type())
 	}
 
 	e.stmts(body.List)
 	if sig.Results() == types.Unit {
 		e.runDefers()
+		e.pop(body.Rbrace)
+	} else {
+		e.frames = e.frames[:len(e.frames)-1] // the body ended with a statement that left, which dropped everything
 	}
 
 	e.line("}")
 	if len(e.prologue) > 0 {
 		rest := append([]byte(nil), e.body.Bytes()[start:]...)
 		e.body.Truncate(start)
-		e.body.WriteString(strings.Join(e.prologue, "\n") + "\n")
+		put(&e.body, strings.Join(e.prologue, "\n"), "\n")
 		e.body.Write(rest)
 	}
 
 	e.result, e.loops, e.prologue, e.defers = outerResult, outerLoops, outerPrologue, outerDefers
+	e.frames, e.temps = outerFrames, outerTemps
 }
 
 // methodName is the C name of a method: the receiver's type and the
@@ -305,6 +320,19 @@ func basicType(t *types.Basic) string {
 	}
 
 	return "void"
+}
+
+// A writer is a section or a builder generated C goes into.
+type writer interface {
+	WriteString(s string) (int, error)
+}
+
+// put writes the parts of one piece of generated C, each on its own,
+// which is what a buffer is for.
+func put(w writer, parts ...string) {
+	for _, p := range parts {
+		w.WriteString(p)
+	}
 }
 
 // line writes one line of the current section. Indentation is not

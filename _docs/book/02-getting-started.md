@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `teak build` produces native binaries for all of core Teak (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. What a `Drop` method does when a value dies is task 1.9; until then a type with `Drop` is reported rather than compiled without it.
+Status: `teak build` produces native binaries for all of core Teak (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there (stage 1, task 1.9).
 
 ## The compiler
 

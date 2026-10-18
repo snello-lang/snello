@@ -37,12 +37,6 @@ func libraryMember(path, name string) Object {
 	return nil
 }
 
-// isLibraryPackage reports whether the import path names a package the
-// core library knows.
-func isLibraryPackage(path string) bool {
-	return libraries[path] != nil
-}
-
 func fmtPackage() *Scope {
 	s := NewScope(nil)
 	s.Insert(libFunc("Println", variadic(nil, Unit)))

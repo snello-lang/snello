@@ -233,6 +233,9 @@ func (c *Checker) move(e ast.Expr) {
 		c.capture(p.v, byMove)
 		c.access(e, p, moveAccess, e.Pos(), e.Pos())
 		c.moved = append(c.moved, move{p, e.Pos()})
+		if c.info != nil {
+			c.info.Moves[e] = true
+		}
 	case placeBorrowed:
 		c.errorf(e.Pos(), "cannot move "+p.text()+" out of a borrow")
 	case placeIndexed:

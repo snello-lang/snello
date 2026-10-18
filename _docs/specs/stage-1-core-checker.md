@@ -111,7 +111,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
-- [ ] Every positive core program builds and runs with its expected output (calc, list, bst, config, tree and wordfreq 2026-10-18; state and files need the drops of task 1.9)
+- [x] Every positive core program builds and runs with its expected output (calc, list, bst, config, tree and wordfreq 2026-10-18; state and files 2026-10-18, with the drops of task 1.9)
 - [x] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror` (2026-10-18; every build and every test uses these flags, plus `-fwrapv` and `-fno-strict-aliasing`)
 
 **Verification:**
@@ -186,13 +186,15 @@ The predeclared names, number types and the library packages are defined in `../
 **Description:** Scope-exit drops in order, on every exit path; `Close`-style consuming methods; the emitted C frees at every computed drop; a debug build poisons freed memory and asserts that nothing released is reachable afterwards, and a leak checker runs over the core suite, so that a checker mistake is a failing test.
 
 **Acceptance criteria:**
-- [ ] A `Drop` type's method runs at scope exit, on early return, and on panic, in the emitted C
+- [ ] A `Drop` type's method runs at scope exit, on early return, and on panic, in the emitted C (scope exit and early return 2026-10-18; a panic exits the process and runs no `Drop` yet)
 - [ ] `teak build -debug` panics with a message if a released value is touched
-- [ ] The file-copy core example closes both files on every path
+- [x] The file-copy core example closes both files on every path (2026-10-18)
 
 **Verification:**
-- [ ] Tests pass: `go test ./emit/c/`
+- [ ] Tests pass: `go test ./emit/c/` (2026-10-18 for the first slice; the debug build's tests are to come)
 - [ ] Manual check: a program that releases then uses a value panics under `-debug`
+
+**Progress:** first slice 2026-10-18, the drops themselves: `emit/c/drop.go` keeps a frame per scope with the owned variables declared in it and writes their drops, last first, at the closing brace, before a return, break or continue, and at the end of a match arm; every type that owns something gets a generated `tk_drop_T`, which calls a `Drop` method first and then releases the parts, and a type with `Drop` carries a live flag so the method runs once. The checker records every move in `Info.Moves`, and a move empties the place it leaves, so a conditionally moved value is dropped exactly once with no flags. A value no variable holds is a temporary of its statement, dropped when the statement ends; a consumed scrutinee has the parts an arm binds emptied and the rest dropped. Strings carry whether they own their bytes; maps drop their keys and values; `Clone` on a slice or map of owning elements copies element by element. Deferred calls run before the function's drops, since a deferred call may borrow a local (changed from the book's earlier order). Every runnable program passes under AddressSanitizer. Two branch moves the checker had missed came out of this: a `match` arm's or `if` expression's value is moved out of the expression. Still to do: `Drop` during a panic, the `-debug` build with poisoning and the use-after-release check, the leak counter over the suite, and the closure environment, which is never freed yet.
 
 **Dependencies:** 1.8
 **Files:** `emit/c/drop.go`, `emit/c/runtime/debug.c`

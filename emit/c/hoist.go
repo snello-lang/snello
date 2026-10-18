@@ -132,19 +132,40 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 		}
 
 		parts[i] = e.valueTo(x, want)
-		if i < last {
-			t := want
-			if t == nil {
-				t = e.info.Types[x]
-			}
+		t := want
+		if t == nil {
+			t = e.info.Types[x]
+		}
 
+		if i < last || e.lent(x, want) {
 			tmp := e.temp()
 			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[i] + ";")
 			parts[i] = tmp
+			if e.lent(x, want) {
+				e.hold(tmp, e.info.Types[x]) // built here and only lent: dropped when the statement ends
+			}
 		}
 	}
 
 	return parts
+}
+
+// lent reports whether x is a value built here that the operation
+// only looks at, as a ref parameter or a print does, so that nothing
+// else will drop it.
+func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
+	if want != nil {
+		r, ok := want.(*types.Ref)
+		if !ok || r.Mut() {
+			return false
+		}
+	}
+
+	if _, literal := x.(*ast.BasicLit); literal {
+		return false // a literal owns nothing
+	}
+
+	return !e.isRead(x) && needsDrop(e.info.Types[x])
 }
 
 // evaluated writes operands that are consumed one at a time, as a
@@ -163,32 +184,49 @@ func (e *Emitter) evaluated(xs []ast.Expr) []string {
 
 // scrutinee writes the value a match, ?, ?? or if-binding looks into,
 // as a place its parts can be read from and bound to: the expression
-// itself when it denotes a place, otherwise a temporary holding it.
-// It returns the place and the type of the value there.
+// itself when it denotes a place, otherwise a temporary holding it,
+// dropped when the statement ends. It returns the place and the type
+// of the value there.
 func (e *Emitter) scrutinee(x ast.Expr) (string, types.Type) {
-	return e.placeOf(x, false)
+	place, t, held := e.consumed(x)
+	if held != "" {
+		e.hold(held, e.info.Types[x])
+	}
+
+	return place, t
+}
+
+// consumed is scrutinee for an operation that takes the value apart:
+// a value built here, or a place whose value moves into the operation,
+// goes into a temporary the caller owns, returned as the third result
+// and empty for a place read where it is. The caller moves parts out of
+// the temporary, emptying each, and drops the rest.
+func (e *Emitter) consumed(x ast.Expr) (string, types.Type, string) {
+	t := e.info.Types[x]
+	if e.isPlace(x) && !e.info.Moves[x] {
+		return e.place(x), valueType(t), ""
+	}
+
+	var tmp string
+	if e.isPlace(x) {
+		tmp = e.moved(x)
+	} else {
+		tmp = e.temp()
+		e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + e.expr(x) + ";")
+	}
+
+	e.line("(void)" + tmp + ";")
+	return deref(tmp, t), valueType(t), tmp
 }
 
 // changed writes a place a method is about to change, as scrutinee
 // does, except that a map element is made when its key is new.
 func (e *Emitter) changed(x ast.Expr) (string, types.Type) {
-	return e.placeOf(x, true)
-}
-
-func (e *Emitter) placeOf(x ast.Expr, write bool) (string, types.Type) {
-	t := e.info.Types[x]
-	if e.isPlace(x) && write {
+	if t := e.info.Types[x]; e.isPlace(x) {
 		return deref(e.lvalue(x), t), valueType(t)
 	}
 
-	if e.isPlace(x) {
-		return e.place(x), valueType(t)
-	}
-
-	tmp := e.temp()
-	e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + e.expr(x) + ";")
-	e.line("(void)" + tmp + ";")
-	return deref(tmp, t), valueType(t)
+	return e.scrutinee(x)
 }
 
 // isPlace reports whether x denotes a variable or a field of one,
@@ -202,6 +240,10 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 		return e.isPlace(x.X)
 	case *ast.SelectorExpr:
 		v, ok := e.info.Uses[x.Sel].(*types.Var)
+		if ok && e.packageOf(x.X) != nil {
+			return true // a variable of the library, such as os.Args
+		}
+
 		return ok && v.IsField() && e.isPlace(x.X)
 	case *ast.IndexExpr:
 		return e.isPlace(x.X) && !e.hasEffects(x.Index)
@@ -215,18 +257,43 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 // try writes x?: the value inside, after a return of the absent or
 // failed case as the function's own result.
 func (e *Emitter) try(x *ast.TryExpr) string {
-	place, t := e.scrutinee(x.X)
-	switch t.Underlying().(type) {
+	place, t, held := e.consumed(x.X)
+	switch u := t.Underlying().(type) {
 	case *types.Option:
 		e.line("if (!" + place + ".has) {")
+		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.NoneVariant, nil, x.Pos()) + ";")
 	case *types.Result:
 		e.line("if (!" + place + ".ok) {")
-		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{place + ".err"}, x.Pos()) + ";")
+		err := e.taken(place+".err", u.Err(), held, e.info.Types[x.X], x.Pos())
+		e.leaveFunction(x.Pos())
+		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{err}, x.Pos()) + ";")
 	}
 
 	e.line("}")
-	return place + ".val"
+	return e.taken(place+".val", e.info.Types[x], held, e.info.Types[x.X], x.Pos())
+}
+
+// taken writes the move of the value at place, of type t, out of the
+// consumed scrutinee held, of type heldType: into a temporary, with
+// the scrutinee emptied so that its drop releases nothing twice. When
+// nothing was consumed, held is empty and the value is read in place.
+func (e *Emitter) taken(place string, t types.Type, held string, heldType types.Type, pos token.Pos) string {
+	if held == "" {
+		return place
+	}
+
+	v := e.temp()
+	e.line(e.cType(t, pos) + " " + v + " = " + place + ";")
+	e.line(held + " = " + e.zero(heldType, pos) + ";")
+	return v
+}
+
+// leaveFunction writes the drops a return from inside an expression
+// runs: the deferred calls, then every open frame.
+func (e *Emitter) leaveFunction(pos token.Pos) {
+	e.runDefers()
+	e.leave(0, pos)
 }
 
 // coalesce writes x ?? else: the value inside when there is one, or
@@ -235,9 +302,10 @@ func (e *Emitter) try(x *ast.TryExpr) string {
 // is the address of the value inside, so it can be written through.
 func (e *Emitter) coalesce(x *ast.CoalesceExpr) string {
 	rt := e.info.Types[x]
-	place, t := e.scrutinee(x.X)
+	place, t, held := e.consumed(x.X)
 	test, val := place+".has", place+".val"
-	if _, ok := t.Underlying().(*types.Result); ok {
+	r, isResult := t.Underlying().(*types.Result)
+	if isResult {
 		test = place + ".ok"
 	}
 
@@ -248,8 +316,13 @@ func (e *Emitter) coalesce(x *ast.CoalesceExpr) string {
 	result := e.temp()
 	e.line(e.cType(rt, x.Pos()) + " " + result + ";")
 	e.line("if (" + test + ") {")
-	e.line(result + " = " + val + ";")
+	e.line(result + " = " + e.taken(val, rt, held, e.info.Types[x.X], x.Pos()) + ";")
 	e.line("} else {")
+	if held != "" && isResult && needsDrop(r.Err()) {
+		e.line(e.dropOf(place+".err", r.Err(), x.Pos())) // the error is not looked at
+		e.line(held + " = " + e.zero(e.info.Types[x.X], x.Pos()) + ";")
+	}
+
 	e.node(x.Else, result, rt)
 	e.line("}")
 	return result
@@ -304,35 +377,32 @@ func (e *Emitter) blockValue(b *ast.BlockStmt, result string, want types.Type) {
 		return
 	}
 
+	e.push(false)
 	last := len(b.List) - 1
 	e.stmts(b.List[:last])
 	if es, ok := b.List[last].(*ast.ExprStmt); ok {
 		e.assignOrRun(result, es.X, want)
-		return
+	} else {
+		e.stmt(b.List[last])
 	}
 
-	e.stmt(b.List[last])
+	e.pop(b.Rbrace)
 }
 
 // assignOrRun writes x as the value of result, or as a statement when
 // there is no result to assign, as for a branch that leaves or an
 // expression whose value is ().
 func (e *Emitter) assignOrRun(result string, x ast.Expr, want types.Type) {
-	v := e.valueTo(x, want)
-	switch {
-	case v == "":
-	case result == "" || isNever(e.info.Types[x]):
-		e.discard(v)
-	default:
-		e.line(result + " = " + v + ";")
-	}
-}
-
-// discard writes an expression as a statement, cast to void: the C
-// compiler warns about an unused value, and the text of a call may be
-// a temporary's field once the call was lowered.
-func (e *Emitter) discard(v string) {
-	e.line("(void)(" + v + ");")
+	e.scoped(x.Pos(), func() {
+		v := e.valueTo(x, want)
+		switch {
+		case v == "":
+		case result == "" || isNever(e.info.Types[x]):
+			e.discard(v, e.info.Types[x], x.Pos())
+		default:
+			e.line(result + " = " + v + ";")
+		}
+	})
 }
 
 // yields reports whether an expression of type t leaves a value to
