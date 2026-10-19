@@ -44,11 +44,16 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	case *types.Basic:
 		return basicType(t)
 	case *types.Named:
-		if t == types.OSFile {
-			return "tk_file"
+		name := namedName(t)
+		if (t.TypeArgs() != nil || t.Obj().Pos() == token.NoPos) && e.state[name] == undeclared { // an instance, or the predeclared Ordering: no declaration of the program writes it
+			switch t.Underlying().(type) {
+			case *types.Struct, *types.Enum:
+				e.state[name] = declared // the forward declaration typeDecl writes for a declared type
+				put(&e.decls, "typedef struct ", name, " ", name, ";\n")
+			}
 		}
 
-		return ident(t.Obj().Name())
+		return name
 	case *types.Ref:
 		if t.Mut() {
 			return e.typeName(t.Elem(), pos) + " *"
@@ -57,7 +62,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		return e.typeName(t.Elem(), pos)
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
-	case *types.Option, *types.Result, *types.Slice, *types.Signature:
+	case *types.Option, *types.Result, *types.Slice, *types.Array, *types.Signature:
 		return e.declare(t)
 	case *types.Map:
 		name := "tk_" + mangle(t)
@@ -73,6 +78,15 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		}
 
 		return e.declare(t)
+	case *types.Trait:
+		name := ident(t.Obj().Name())
+		if e.state[name] == undeclared {
+			e.state[name] = declared
+			tab := tableType(t)
+			put(&e.decls, "typedef struct ", name, " ", name, ";\ntypedef struct ", tab, " ", tab, ";\n")
+		}
+
+		return name
 	}
 
 	e.unsupported(pos, "values of type "+t.String())
@@ -118,9 +132,13 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		e.defineStruct(t, pos, func() string {
 			return "\t" + e.typeName(t.Elem(), pos) + " *ptr;\n\ttk_int len;\n\ttk_int cap;\n"
 		})
+	case *types.Array: // a struct, so that it is copied and passed as a value; the element is defined whole, since it is inside
+		e.defineStruct(t, pos, func() string {
+			return "\t" + e.cType(t.Elem(), pos) + " at[" + strconv.FormatInt(t.Len(), 10) + "];\n"
+		})
 	case *types.Signature:
 		e.defineStruct(t, pos, func() string {
-			return "\t" + e.resultType(t, pos) + " (*fn)(" + e.closureParams(t, pos) + ");\n\tvoid *env;\n"
+			return "\t" + e.resultType(t, pos) + " (*fn)(" + e.closureParams(t, pos) + ");\n\tuint64_t box[TK_BOX_WORDS];\n"
 		})
 	case *types.Tuple:
 		if t == types.Unit {
@@ -135,6 +153,8 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 
 			return b.String()
 		})
+	case *types.Trait:
+		e.defineTrait(t, pos)
 	}
 }
 
@@ -142,11 +162,7 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 // whose forward declaration Emit wrote, any other as a typedef of its
 // underlying type.
 func (e *Emitter) defineNamed(t *types.Named, pos token.Pos) {
-	if t == types.OSFile {
-		return // the runtime's
-	}
-
-	name := ident(t.Obj().Name())
+	name := namedName(t)
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
 		e.defineStruct(t, pos, func() string { return e.structFields(u, pos) + liveFlag(t) })
@@ -258,6 +274,10 @@ func mangle(t types.Type) string {
 	case *types.Basic:
 		return types.Typ[t.Kind()].Name()
 	case *types.Named:
+		return namedName(t)
+	case *types.TypeParam:
+		return ident(t.Obj().Name()) // never written: every type is substituted first
+	case *types.Trait:
 		return ident(t.Obj().Name())
 	case *types.Ref:
 		if t.Mut() {
@@ -273,6 +293,8 @@ func mangle(t types.Type) string {
 		return "res_" + mangle(t.Val()) + "_" + mangle(t.Err())
 	case *types.Slice:
 		return "slice_" + mangle(t.Elem())
+	case *types.Array:
+		return "array_" + strconv.FormatInt(t.Len(), 10) + "_" + mangle(t.Elem())
 	case *types.Map:
 		return "map_" + mangle(t.Key()) + "_" + mangle(t.Value())
 	case *types.Signature:

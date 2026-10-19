@@ -1,0 +1,14 @@
+[0 4 8] 3
+4
+[n0 n4 n8] [0 2 4]
+[x] 0
+6
+true 1 one
+1 [0 4 8]
+n0
+2
+1 s
+drop box string
+drop box int
+drop a
+drop b

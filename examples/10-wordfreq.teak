@@ -30,7 +30,7 @@ func main() {
     for k, v := range counts {
         list.Push(Count{word: k, n: v})
     }
-    sort.SliceBy(mut list, func(a ref Count, b ref Count) bool {
+    sort.SortBy(mut list, func(a ref Count, b ref Count) bool {
         return a.n > b.n || (a.n == b.n && a.word < b.word)
     })
 

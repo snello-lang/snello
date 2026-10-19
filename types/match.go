@@ -44,6 +44,10 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	result := operand{value, Typ[Never], nil, nil}
 	rows := make([][]pat, 0, len(e.Arms))
 	f := c.forkAt()
+	if x.mode == variable {
+		c.watch(e.X) // an arm may assign it before another binds a part by value and moves it under the fork
+	}
+
 	consumed := false
 	for _, arm := range e.Arms {
 		c.openScope()
@@ -52,7 +56,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		p := c.pattern(arm.Pat, scrutinee, b)
 		c.bindThrough(arm.Pat, e.X, b)
 		if c.bindsOwned && !consumed && x.mode == variable {
-			c.moveBefore(e.X, &f) // a part bound by value leaves the place, on every arm
+			c.moveBefore(e.X, x.mode, &f) // a part bound by value leaves the place, on every arm
 			consumed = true
 		}
 
@@ -132,9 +136,17 @@ func (c *Checker) pattern(p ast.Pattern, t Type, b *Ref) pat {
 }
 
 // identPat is a variant, a constant, or a binding: whichever the name
-// resolves to; a name that resolves to nothing is a new binding.
+// resolves to. A name that resolves to nothing is a variant of the
+// scrutinee's enum when that has one of the name, as it would be in the
+// enum's own package, and a new binding otherwise.
 func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 	_, obj := c.scope.LookupParent(p.Name.Name)
+	if obj == nil {
+		if v := variantNamed(t, p.Name.Name); v != nil {
+			obj = v
+		}
+	}
+
 	switch obj := obj.(type) {
 	case *Variant:
 		c.recordUse(p.Name, obj)
@@ -174,9 +186,19 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 func (c *Checker) variantPat(p *ast.VariantPat, t Type, b *Ref) pat {
 	var v *Variant
-	if ident, ok := p.Path.(*ast.Ident); ok {
-		if obj := c.lookup(ident); obj != nil {
+	switch path := p.Path.(type) {
+	case *ast.Ident:
+		if _, obj := c.scope.LookupParent(path.Name); obj != nil {
+			c.recordUse(path, obj)
 			v, _ = obj.(*Variant)
+		} else if v = variantNamed(t, path.Name); v != nil {
+			c.recordUse(path, v) // the scrutinee's enum has it, as the enum's own package would
+		} else {
+			c.errorf(path.Pos(), "undefined: "+path.Name)
+		}
+	case *ast.SelectorExpr:
+		if id, ok := path.X.(*ast.Ident); ok { // io.NotFound(...): a variant through its package
+			v, _ = c.qualified(id, path.Sel).(*Variant)
 		}
 	}
 
@@ -215,6 +237,21 @@ func (c *Checker) variantPat(p *ast.VariantPat, t Type, b *Ref) pat {
 // variantOf returns the index of v among the constructors of t and the
 // types of its fields, or -1 after an error when v is not a variant of
 // t. Invalid t matches anything silently.
+// variantNamed returns the variant of the enum type t called name, or
+// nil: for a pattern naming a variant of another package's enum, which
+// is not in scope here.
+func variantNamed(t Type, name string) *Variant {
+	if en, ok := t.Underlying().(*Enum); ok {
+		for _, v := range en.variants {
+			if v.name == name {
+				return v
+			}
+		}
+	}
+
+	return nil
+}
+
 func (c *Checker) variantOf(t Type, v *Variant, pos token.Pos) (int, []Type) {
 	switch u := t.Underlying().(type) {
 	case *Option:
@@ -234,8 +271,8 @@ func (c *Checker) variantOf(t Type, v *Variant, pos token.Pos) (int, []Type) {
 			return 1, []Type{u.err}
 		}
 	case *Enum:
-		if n, ok := t.(*Named); ok && v.parent == n {
-			return v.index, fieldTypes(v.fields)
+		if n, ok := t.(*Named); ok && v.parent == n.Origin() {
+			return v.index, varTypes(u.variants[v.index].fields) // an instance's fields, with its arguments in place
 		}
 	case *Basic:
 		if u.kind == Invalid {
@@ -355,7 +392,7 @@ func ctorArgs(t Type, ctor int) []Type {
 
 		return []Type{u.err}
 	case *Enum:
-		return fieldTypes(u.variants[ctor].fields)
+		return varTypes(u.variants[ctor].fields)
 	case *Tuple:
 		return u.elems
 	}
@@ -387,14 +424,16 @@ func ctorString(t Type, ctor int, args []string) string {
 	return name + "(" + strings.Join(args, ", ") + ")"
 }
 
-func fieldTypes(fields []*Var) []Type {
-	if len(fields) == 0 {
+// varTypes returns the types of a list of variables: a variant's
+// fields, or a signature's parameters.
+func varTypes(vars []*Var) []Type {
+	if len(vars) == 0 {
 		return nil
 	}
 
-	ts := make([]Type, len(fields))
-	for i, f := range fields {
-		ts[i] = f.typ
+	ts := make([]Type, len(vars))
+	for i, v := range vars {
+		ts[i] = v.typ
 	}
 
 	return ts

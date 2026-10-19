@@ -57,7 +57,7 @@ Two slices do not compare with `==`: equality of a list is a question with more 
 
 ## Strings
 
-A string is immutable bytes. `len(s)` is its length in bytes and `s[i]` the byte at `i`, of type `byte`; `s[lo:hi]` lends the bytes between, as a `ref string`. `+` builds a new string from two, and `==` and `<` compare bytes. `for i, c := range s` yields each byte and its index.
+A string is immutable bytes. `len(s)` is its length in bytes and `s[i]` the byte at `i`, of type `byte`; `s[lo:hi]` lends the bytes between, as a `ref string`. `+` builds a new string from two, and `==` and `<` compare bytes. `for i, c := range s` yields each byte and its index. `[]byte(s)` copies the bytes into a slice that can be changed, and `string(b)` copies a byte slice into a string; both leave their operand as it was.
 
 Operations on text are methods. Most return views into the string, which cost nothing and live as borrows do:
 
@@ -66,6 +66,7 @@ Operations on text are methods. Most return views into the string, which cost no
 | `s.Len()` | The length in bytes, like `len(s)` |
 | `s.Trim()` | `s` without white space at either end, as a borrow |
 | `s.Fields()` | The pieces between white space, each a borrow; use it in a `for` |
+| `s.Lines()` | The lines, without their newline or a carriage return before it, each a borrow; a last line without a newline counts, a trailing newline makes no empty one |
 | `s.Split(sep)` | The pieces between each `sep`, likewise |
 | `s.SplitOnce(sep)` | The parts before and after the first `sep`, as `(ref string, ref string)?` |
 | `s.HasPrefix(t)`, `s.HasSuffix(t)`, `s.Contains(t)` | Whether `t` begins, ends or appears in `s` |
@@ -108,11 +109,15 @@ The methods say what happens to the entry:
 text := kv.Get(ref key) ?? return Err(Missing(key))
 ```
 
-A key is any type with `==`: numbers, strings, booleans, enums, tuples and structs of those. A map owns its keys and values, so inserting a borrowed string clones it first: `kv.Insert(k.Trim().Clone(), v.Trim().Clone())`.
+A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, booleans, enums and tuples of those by their structure, and a struct that lists `Hash`. A slice, a map or a trait value cannot be a key, and the compiler says so at the map type. A map owns its keys and values, so inserting a borrowed string clones it first: `kv.Insert(k.Trim().Clone(), v.Trim().Clone())`.
 
 `for k, v := range m` walks the entries in the order they were inserted, which is also the order a map prints in: `map[one:1 two:2]`. Through a `mut` borrow the values are lent for writing, as slice elements are; ranging over an owned map by value moves each key and value out, which is how `wordfreq` turns its counts into a list to sort.
 
 Two maps do not compare with `==`, for the same reason two slices do not.
+
+## Arrays
+
+An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `examples/run/arrays.teak` and `examples/16-matrix.teak`, whose `Mat4` holds a `[16]f64`, run them.
 
 ## What the compiler reports
 

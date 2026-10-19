@@ -1,6 +1,6 @@
 # 8. Option, Result, `?` and `??`
 
-Status: implemented, checked (stage 1, task 1.4, `teak check`) and compiled to native code, methods included (stage 1, task 1.5, `teak build`). `examples/run/options.teak`, `boxes.teak` and `slices.teak` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+Status: implemented, checked (stage 1, task 1.4, `teak check`) and compiled to native code, methods included (stage 1, task 1.5, `teak build`); `Map` and `MapErr` (stage 2, task 2.6). `examples/run/options.teak`, `boxes.teak` and `slices.teak` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
 
 Teak has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 
@@ -78,6 +78,19 @@ if (k, v) := line.SplitOnce("=") {
 ```
 
 The left side may be a name, a tuple of names, or a variant pattern. `if x := opt {` binds; `if x := f(); cond {` with a `;` is an initializer and a condition.
+
+## The methods
+
+Both types have `Expect(msg)`, which gives the inside or panics with the message, `Unwrap`, which panics with a message of its own, and `UnwrapOr(v)`, which gives the inside or `v`. An optional answers `IsSome` and `IsNone`, a result `IsOk` and `IsErr`. `Map(f)` applies a function to the present or successful case and leaves the other as it is, so `half(8).Map(twiceText)` is `Some("8")` and `half(3).Map(twiceText)` is `None`; a result also has `MapErr(f)`, which maps the error and leaves a success alone. The function may be a closure, capturing what it needs, or a function's name, and the result type of the method is whatever the function gives back:
+
+```teak
+suffix := "!"
+half(8).Map(func(v int) string { return fmt.Sprint(v) + suffix })       // Some("4!")
+parse("").MapErr(func(e string) int { return e.Len() })                 // Err(5)
+v := parse(s).MapErr(func(e string) int { return e.Len() })?            // the mapped error passes up
+```
+
+The methods that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `Map` and `MapErr`, take their receiver: the optional is moved into the call and cannot be used after. The tests, `IsSome` and the rest, lend it.
 
 ## `??`: a value or an exit
 

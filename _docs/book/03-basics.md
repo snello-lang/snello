@@ -23,7 +23,7 @@ func main() {
 }
 ```
 
-A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. A program starts at `func main()` in package `main`.
+A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. Chapter 14 lists the packages. A program starts at `func main()` in package `main`.
 
 Names that start with a capital letter are exported from their package; the others are private to it. Comments run from `//` to the end of the line. A statement ends at the end of its line; a line ends after a name, a literal, a closing bracket, `?` or `>`, so a comparison or a shift keeps its right operand on the same line as the operator. Braces open on the line of the `func`, `if` or `for` they belong to.
 
@@ -36,7 +36,7 @@ path := []string{}
 s := Stack{}            // zero value: every field at its zero value
 ```
 
-`:=` declares a variable and infers its type from the value. `var` declares with a type written out, and a variable declared without a value starts at its type's zero value: `0`, `false`, `""`, an empty slice or map, a struct with every field at its zero value. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest.
+`:=` declares a variable and infers its type from the value. `var` declares with a type written out, and a variable declared without a value starts at its type's zero value: `0`, `false`, `""`, an empty slice or map, a struct with every field at its zero value. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest. `const` declares a name for a literal, `const Scale f64 = 2.5`, inside a function or at the top level of a file, where `var` is not compiled yet.
 
 Assigning a value to a new name hands the value over. For a number or a `bool` nothing is lost: `y := x` leaves both names usable. For a string, a slice, a struct or anything else that owns memory, `t := s` moves the value to `t`, and `s` cannot be used afterwards. Chapter 5 explains the rule; most code never meets it, because a value usually flows forward from where it is made to where it is needed.
 
@@ -127,6 +127,6 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 
 ## Built-in functions
 
-`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
+`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `min` and `max` give the least and the greatest of two or more numbers of one type; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
 
 Slices and maps have methods rather than functions: `xs.Push(v)`, `m.Remove(k)` (chapter 9). `&expr` allocates a value on the heap (chapter 7). There is no `nil`: a value that may be absent has type `T?` (chapter 8).

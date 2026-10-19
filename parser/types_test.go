@@ -52,6 +52,8 @@ func TestTypes(t *testing.T) {
 		{"func(ref T) bool", "func(ref T) bool"},
 		{"func(xs ref []T, keep func(ref T) bool) List<T>", "func(xs ref []T, keep func(ref T) bool) List<T>"},
 		{"func() (*Node, *Node?)", "func() (*Node, (*Node)?)"},
+		{"func() (int, int)?", "func() ((int, int))?"}, // one optional tuple, not two results
+		{"func() (int)?", "func() (int)?"},
 		{"func(T?)", "func((T)?)"},
 		{"func(pkg.T, List<T>)", "func(pkg.T, List<T>)"},
 
@@ -213,8 +215,13 @@ func paramList(params []*ast.Param) string {
 	var parts []string
 	for i := 0; i < len(params); i++ {
 		p := params[i]
+		typ := typeString(p.Type)
+		if p.Dots.IsValid() {
+			typ = "..." + typ
+		}
+
 		if p.Name == nil {
-			parts = append(parts, typeString(p.Type))
+			parts = append(parts, typ)
 			continue
 		}
 
@@ -224,7 +231,7 @@ func paramList(params []*ast.Param) string {
 			names = append(names, params[i].Name.Name)
 		}
 
-		parts = append(parts, strings.Join(names, ", ")+" "+typeString(p.Type))
+		parts = append(parts, strings.Join(names, ", ")+" "+typ)
 	}
 
 	return strings.Join(parts, ", ")

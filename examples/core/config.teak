@@ -12,10 +12,10 @@
 
 package config
 
-import ("fmt"; "os")
+import ("fmt"; "io"; "os")
 
 enum ConfigError {
-    Unreadable(path string, cause error)
+    Unreadable(path string, cause io.Error)
     BadValue(key string, text string)
     Missing(key string)
 }

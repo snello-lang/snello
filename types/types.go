@@ -10,7 +10,7 @@
 // This file holds the types. Compared with go/types, Teak adds the
 // owned pointer *T, the borrows ref T and mut T, the optional T?, the
 // built-in Result<T, E>, tuples, and enums, and drops interfaces, whose
-// place traits take in a later stage.
+// place traits take (trait.go).
 package types
 
 import (
@@ -199,6 +199,7 @@ type Signature struct {
 	params   []*Var
 	results  Type // Unit, a single type, or a *Tuple of several
 	variadic bool // the last parameter takes any number of arguments
+	tparams  []*TypeParam
 }
 
 // A Struct is an unnamed struct type. Most structs are the underlying
@@ -214,15 +215,24 @@ type Enum struct {
 
 // A Named is a type with a name: a struct or enum declaration, or
 // `type Name T`. Two Named types are identical only if they are the
-// same declaration. The underlying type is set after creation so that
-// a declaration can refer to itself through a pointer.
+// same declaration, or the same instance of a generic one. The
+// underlying type is set after creation so that a declaration can
+// refer to itself through a pointer. See generic.go for the fields of
+// a generic declaration and its instances.
 type Named struct {
 	obj         *TypeName
 	underlying  Type
-	impls       []string // the traits after impl, by name until traits exist
-	methods     []*Func
+	impls       []*Trait // the traits after impl; a nil entry stands for one that failed to resolve
+	order       []*Trait // the traits consulted for a method, the most specific first (trait.go); super will walk it
+	methods     []*Func  // a declaration's own and inherited methods, or the instance methods made so far
 	copyState   copyState
 	borrowState copyState // whether the type holds a borrow; see Named.holdsBorrow
+
+	tparams   []*TypeParam // a generic declaration's parameters
+	instances []*Named     // a generic declaration's instances, one per argument list
+	ready     bool         // a generic declaration is resolved, so its instances can expand
+	orig      *Named       // an instance's declaration
+	targs     []Type       // an instance's arguments
 }
 
 // NewPointer returns the type *elem.
@@ -265,7 +275,7 @@ func NewSignature(recv *Var, params []*Var, results Type) *Signature {
 		results = Unit
 	}
 
-	return &Signature{recv, params, results, false}
+	return &Signature{recv, params, results, false, nil}
 }
 
 // NewStruct returns a struct type with the given fields.
@@ -275,9 +285,9 @@ func NewStruct(fields []*Var) *Struct { return &Struct{fields} }
 func NewEnum(variants []*Variant) *Enum { return &Enum{variants} }
 
 // NewNamed returns a named type for obj with the given underlying type,
-// which may be nil until SetUnderlying is called, and sets obj's type
-// to it if obj has none yet.
-func NewNamed(obj *TypeName, underlying Type, impls []string) *Named {
+// which may be nil until SetUnderlying is called, implementing the
+// given traits, and sets obj's type to it if obj has none yet.
+func NewNamed(obj *TypeName, underlying Type, impls []*Trait) *Named {
 	t := &Named{obj: obj, underlying: underlying, impls: impls}
 	if obj.typ == nil {
 		obj.typ = t
@@ -353,6 +363,9 @@ func (s *Signature) Results() Type { return s.results }
 // arguments, as the printing functions do.
 func (s *Signature) Variadic() bool { return s.variadic }
 
+// TypeParams returns a generic function's type parameters, or nil.
+func (s *Signature) TypeParams() []*TypeParam { return s.tparams }
+
 // NumFields returns the number of fields.
 func (s *Struct) NumFields() int { return len(s.fields) }
 
@@ -383,8 +396,14 @@ func (n *Named) AddMethod(f *Func) *Func {
 	return nil
 }
 
-// Method returns the method with the given name, or nil.
+// Method returns the method with the given name, or nil. An instance's
+// method has the declaration's signature with the arguments in place
+// of the parameters.
 func (n *Named) Method(name string) *Func {
+	if n.orig != nil {
+		return n.instanceMethod(name)
+	}
+
 	for _, m := range n.methods {
 		if m.name == name {
 			return m
@@ -394,10 +413,12 @@ func (n *Named) Method(name string) *Func {
 	return nil
 }
 
-// Implements reports whether the declaration listed trait after impl.
-func (n *Named) Implements(trait string) bool {
-	for _, name := range n.impls {
-		if name == trait {
+// Implements reports whether the declaration listed trait after impl,
+// or a trait refining it; an instance implements what its declaration
+// does.
+func (n *Named) Implements(trait *Trait) bool {
+	for _, t := range n.Origin().impls {
+		if t != nil && t.Refines(trait) {
 			return true
 		}
 	}
@@ -418,7 +439,7 @@ func (t *Tuple) Underlying() Type     { return t }
 func (s *Signature) Underlying() Type { return s }
 func (s *Struct) Underlying() Type    { return s }
 func (e *Enum) Underlying() Type      { return e }
-func (n *Named) Underlying() Type     { return n.underlying }
+func (n *Named) Underlying() Type     { n.expand(); return n.underlying }
 
 func (b *Basic) String() string     { return b.name }
 func (p *Pointer) String() string   { return "*" + optionParens(p.elem) }
@@ -433,7 +454,26 @@ func (t *Tuple) String() string     { return "(" + typeList(t.elems) + ")" }
 func (s *Signature) String() string { return signatureString(s) }
 func (s *Struct) String() string    { return structString(s) }
 func (e *Enum) String() string      { return enumString(e) }
-func (n *Named) String() string     { return n.obj.name }
+func (n *Named) String() string     { return namedString(n) }
+
+// namedString writes a named type, with its arguments when it is an
+// instance and its parameters when it is a generic declaration:
+// List<int>, List<T>.
+func namedString(n *Named) string {
+	name := n.obj.name
+	if p := n.obj.pkg; p != nil && p.path != "" {
+		name = p.name + "." + name // a library's type reads as the program writes it
+	}
+
+	switch {
+	case n.targs != nil:
+		return name + "<" + typeList(n.targs) + ">"
+	case n.tparams != nil:
+		return name + "<" + typeList(paramTypes(n.tparams)) + ">"
+	}
+
+	return name
+}
 
 func refString(r *Ref) string {
 	if r.mut {

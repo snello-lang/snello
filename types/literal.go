@@ -7,6 +7,7 @@ package types
 import (
 	"github.com/teak-lang/teak/ast"
 	"github.com/teak-lang/teak/token"
+	"strconv"
 )
 
 // literal types a literal by the type its context asks for: an integer
@@ -84,6 +85,10 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 // slice, array or map literal lists its elements, and an element that
 // is itself a literal may leave its type out.
 func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
+	if g := c.bareGeneric(e.Type); g != nil {
+		return c.genericLit(e, g, expected)
+	}
+
 	t := expected
 	if e.Type != nil {
 		t = c.typ(e.Type)
@@ -97,11 +102,15 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 
 	switch u := t.Underlying().(type) {
 	case *Struct:
-		c.structLit(e, u)
+		c.structLit(e, t, u, nil)
 	case *Slice:
 		c.elements(e.Elts, u.elem)
 	case *Array:
-		c.elements(e.Elts, u.elem)
+		if int64(len(e.Elts)) > u.len {
+			c.errorf(e.Lbrace, "too many elements for "+t.String()+": "+strconv.Itoa(len(e.Elts)))
+		}
+
+		c.elements(e.Elts, u.elem) // fewer than the length leaves the rest zero, as in Go
 	case *Map:
 		for _, elt := range e.Elts {
 			kv, ok := elt.(*ast.KeyValueExpr)
@@ -128,14 +137,85 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 	return operand{value, t, nil, nil}
 }
 
-func (c *Checker) structLit(e *ast.CompositeLit, st *Struct) {
+// bareGeneric returns the generic struct a composite literal names
+// without type arguments, Pair{a: 1, b: 2.0}, whose arguments are
+// inferred; or nil.
+func (c *Checker) bareGeneric(t ast.Type) *Named {
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Pkg != nil || len(n.Args) > 0 {
+		return nil
+	}
+
+	_, obj := c.scope.LookupParent(n.Name.Name)
+	tn, ok := obj.(*TypeName)
+	if !ok {
+		return nil
+	}
+
+	g, ok := tn.typ.(*Named)
+	if !ok || g.tparams == nil {
+		return nil
+	}
+
+	if _, isStruct := g.underlying.(*Struct); !isStruct {
+		return nil // namedType reports the missing arguments
+	}
+
+	c.recordUse(n.Name, tn)
+	return g
+}
+
+// genericLit checks a literal of a generic struct written without type
+// arguments: they come from the type the context expects, then from
+// the field values.
+func (c *Checker) genericLit(e *ast.CompositeLit, g *Named, expected Type) operand {
+	in := newInference(g.tparams)
+	in.unify(g, expected)
+
+	st := g.underlying.(*Struct)
+	if !c.keyed(e, g, st) {
+		return invalidOperand
+	}
+
+	var values []ast.Expr
+	var slots []Type
 	for _, elt := range e.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			c.errorf(elt.Pos(), "a struct literal names its fields: Name{field: value}")
-			c.expr(elt, nil)
-			continue
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				if f := fieldNamed(st.fields, key.Name); f != nil {
+					values = append(values, kv.Value)
+					slots = append(slots, f.typ)
+				}
+			}
 		}
+	}
+
+	ops := c.evaluate(in, values, slots, func(i int, op operand) { c.maybeMove(op, slots[i]) })
+	targs, ok := c.complete(in, g.obj.name, e.Type, nil)
+	if !ok {
+		return invalidOperand
+	}
+
+	t := Instantiate(g, targs)
+	done := make(map[ast.Expr]operand, len(values))
+	for i, v := range values {
+		done[v] = ops[i]
+	}
+
+	c.structLit(e, t, t.Underlying().(*Struct), done)
+	return operand{value, t, nil, nil}
+}
+
+// structLit checks the fields of a struct literal. done holds the
+// values already evaluated, and moved, while the struct's type
+// arguments were inferred; they are only checked against their field.
+func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[ast.Expr]operand) {
+	if !c.keyed(e, t, st) {
+		return
+	}
+
+	for _, elt := range e.Elts {
+		kv := elt.(*ast.KeyValueExpr)
 
 		key, ok := kv.Key.(*ast.Ident)
 		if !ok {
@@ -144,18 +224,67 @@ func (c *Checker) structLit(e *ast.CompositeLit, st *Struct) {
 			continue
 		}
 
-		f := fieldOf(st, key.Name)
+		f := fieldNamed(st.fields, key.Name)
 		if f == nil {
 			c.errorf(key.Pos(), "unknown field "+key.Name)
 			c.expr(kv.Value, nil)
 			continue
 		}
 
+		if !c.visible(t, key) {
+			c.expr(kv.Value, nil)
+			continue
+		}
+
 		c.recordUse(key, f)
-		v := c.expr(kv.Value, f.typ)
-		c.assign(v, f.typ, kv.Value.Pos(), "field "+f.name)
+		v, evaluated := done[kv.Value]
+		if evaluated {
+			c.fits(v, f.typ, kv.Value.Pos(), "field "+f.name)
+		} else {
+			v = c.expr(kv.Value, f.typ)
+			c.assign(v, f.typ, kv.Value.Pos(), "field "+f.name)
+		}
+
 		c.kept(v, "stored", kv.Value.Pos())
 	}
+}
+
+// keyed makes every element of a struct literal a key: value pair, and
+// reports whether it could. A literal names its fields, Vec3{x: 1, y:
+// 2, z: 3}, or gives every field in order, Vec3{1, 2, 3}, as Go
+// allows; the positional form is rewritten to the named one, each
+// value under the name of its field, so that everything after the
+// check sees one shape. Mixing the two, or giving the wrong number of
+// values, is reported.
+func (c *Checker) keyed(e *ast.CompositeLit, t Type, st *Struct) bool {
+	positional := 0
+	for _, elt := range e.Elts {
+		if _, ok := elt.(*ast.KeyValueExpr); !ok {
+			positional++
+		}
+	}
+
+	if positional == 0 {
+		return true
+	}
+
+	if positional < len(e.Elts) {
+		c.errorf(e.Lbrace, "a struct literal names its fields or gives them all in order, not both")
+		c.looseElements(e.Elts)
+		return false
+	}
+
+	if positional != len(st.fields) {
+		c.errorf(e.Lbrace, "a positional struct literal gives every field: "+t.String()+" has "+plural(len(st.fields), "field")+", not "+strconv.Itoa(positional))
+		c.looseElements(e.Elts)
+		return false
+	}
+
+	for i, elt := range e.Elts {
+		e.Elts[i] = &ast.KeyValueExpr{Key: &ast.Ident{NamePos: elt.Pos(), Name: st.fields[i].name}, Value: elt}
+	}
+
+	return true
 }
 
 // looseElements checks the elements of a literal whose type is unknown,

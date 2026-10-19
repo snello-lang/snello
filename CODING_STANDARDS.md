@@ -96,7 +96,7 @@ return tok, lit
 
 Compile time is a feature, and in Go the way to lose it is allocation: every object the compiler allocates is work for Go's collector while the user waits. The rules:
 
-- **Measure, do not guess.** Every package that processes source has a benchmark over the programs in `examples/`, run with `-benchmem`. Allocations per operation is the number to watch; a change that raises it needs a reason in its commit message. Current baseline: the scanner performs about nine allocations per file, none per token; the parser performs about 17,200 allocations over the 56 example files parsed completely (the twenty programs, the eight core programs and the 27 negative programs), about 61 per declaration, every one an AST node or a node-owned slice; the checker performs about 1,890 allocations over the eight core programs, mostly scopes and their maps, operand slices, the signatures the predeclared methods build on demand, the lists of moved places the move pass forks at branches, the borrows each function's variables hold, and the captures of each closure; the C emitter performs about 7,400 allocations over the thirteen programs under `examples/run/`, almost all of them the strings of C text it joins, which is the cost of writing text and acceptable until the LLVM backend replaces it.
+- **Measure, do not guess.** Every package that processes source has a benchmark over the programs in `examples/`, run with `-benchmem`. Allocations per operation is the number to watch; a change that raises it needs a reason in its commit message. Current baseline: the scanner performs about nine allocations per file, none per token; the parser performs about 17,200 allocations over the 56 example files parsed completely (the twenty programs, the eight core programs and the 27 negative programs), about 61 per declaration, every one an AST node or a node-owned slice; the checker performs about 1,960 allocations over the eight core programs, mostly scopes and their maps, operand slices, the signatures the predeclared methods build on demand, the lists of moved places the move pass forks at branches, the borrows each function's variables hold, and the captures of each closure; the C emitter performs about 48,000 allocations over the twenty-four programs under `examples/run/`, the library packages a program imports compiled with it, of which the generics and traits programs add about 6,400 for the instances, tables and adapters they write, almost all of them the strings of C text it joins, which is the cost of writing text and acceptable until the LLVM backend replaces it.
 - **Positions are integers.** `token.Pos` is a byte offset; line and column are resolved only when an error is printed. No node carries a string for its position.
 - **Substrings, not copies.** The scanner holds the source as a string and returns identifiers and literals as substrings of it. Never `string(bytes)` per token.
 - **Tables, not maps, for small fixed sets.** A set of token kinds is an array indexed by kind, one load per test. Maps are for data whose keys are not known at compile time.
@@ -114,9 +114,10 @@ Compile time is a feature, and in Go the way to lose it is allocation: every obj
 - A test failure message shows the input, what was produced, and what was expected.
 - Helpers used only by tests live at the bottom of the test file.
 
-## Teak code in `examples/`
+## Teak code in `examples/` and `std/`
 
-- Each file begins with a comment stating what the program tests.
+- Each file under `examples/` begins with a comment stating what the program tests; each package under `std/` begins with a package comment, as a Go package does, and every exported name has a doc comment that starts with the name.
+- A library function the runtime provides is declared without a body, and its doc comment says so.
 - Syntax follows `_docs/design/00-syntax-conventions.md`. When an example needs something the conventions do not cover, the conventions change first, then the example.
 - Lines the compiler must reject are shown as comments with the reason, so they can become negative tests later.
 

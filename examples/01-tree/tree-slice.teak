@@ -37,7 +37,7 @@ func NewTree(value string) Tree {
 
 func (t mut Tree) AddChild(parent NodeID, value string) NodeID {
     id := NodeID(len(t.nodes))
-    t.nodes = append(t.nodes, Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})
+    t.nodes.Push(Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})
     t.nodes[parent].children.Push(id)
     return id
 }
@@ -64,7 +64,7 @@ func (t ref Tree) Path(id NodeID) []string {
         at := cur ?? break                     // None ends the walk
         n := ref t.nodes[at]
         if !n.live { break }
-        path = append(path, n.value.Clone())
+        path.Push(n.value.Clone())
         cur = n.parent
     }
     path.Reverse()

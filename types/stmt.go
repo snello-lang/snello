@@ -138,8 +138,17 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 		}
 
 		x := c.expr(s.Lhs[0], nil)
+		if x.mode == invalid {
+			return
+		}
+
+		if fn := OperatorMethod(valueType(x), s.Tok.Binary(), false); fn != nil {
+			c.operatorAssign(s, x, fn)
+			return
+		}
+
 		y := c.expr(s.Rhs[0], hintOf(x))
-		if x.mode == invalid || y.mode == invalid {
+		if y.mode == invalid {
 			return
 		}
 
@@ -166,6 +175,23 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 
 // writable reports whether the place x denotes may be written, and
 // reports why not: a value reached through a ref is read-only.
+// operatorAssign checks a += b on a type with an Add as a = a + b: the
+// place must be writable, and the right operand must fit the method's
+// parameter. The left operand's value goes into the method and the
+// result comes back to the place within the statement, so nothing is
+// moved as far as the rest of the function can see; the method returns
+// Self, so the result fits the place.
+func (c *Checker) operatorAssign(s *ast.AssignStmt, x operand, fn *Func) {
+	param := fn.typ.(*Signature).params[0].typ
+	if y := c.expr(s.Rhs[0], param); y.mode != invalid {
+		c.assign(y, param, s.Rhs[0].Pos(), "the right operand of "+s.Tok.String())
+	}
+
+	if c.writable(s.Lhs[0], x) {
+		c.accessExpr(s.Lhs[0], writeAccess, accessPos(s.Lhs[0]))
+	}
+}
+
 func (c *Checker) writable(e ast.Expr, x operand) bool {
 	if x.mode != borrowed {
 		return true
@@ -375,7 +401,7 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 	}
 
 	if c.bindsOwned && x.mode == variable {
-		c.move(s.Value) // a part bound by value leaves the place
+		c.move(s.Value, x.mode) // a part bound by value leaves the place
 	}
 
 	f := c.forkAt()
@@ -404,7 +430,7 @@ func (c *Checker) forStmt(s *ast.ForStmt) bool {
 		c.stmt(s.Init)
 	}
 
-	c.enterRegion(true, s.For)
+	c.enterRegion(true, s.Cond == nil, s.For)
 	if s.Cond != nil {
 		c.condition(s.Cond)
 	}
@@ -440,7 +466,7 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		}
 	}
 
-	c.enterRegion(true, s.For)
+	c.enterRegion(true, false, s.For)
 	if s.Tok == token.DEFINE {
 		c.rangeVar(s.Key, key)
 		c.rangeVar(s.Value, val)
@@ -552,7 +578,7 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 	}
 
 	hasDefault, allLeave := false, true
-	c.enterRegion(false, s.Switch)
+	c.enterRegion(false, false, s.Switch)
 	f := c.forkAt()
 	for _, cc := range s.Body {
 		c.openScope()
@@ -579,7 +605,7 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 
 func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 	allLeave := true
-	c.enterRegion(false, s.Select)
+	c.enterRegion(false, false, s.Select)
 	f := c.forkAt()
 	for _, cc := range s.Body {
 		c.openScope()

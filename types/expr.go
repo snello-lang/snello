@@ -24,6 +24,11 @@ func (c *Checker) expr(e ast.Expr, expected Type) operand {
 		return invalidOperand // reported where the type went wrong; never again
 	}
 
+	if op.mode == typeOperand && unparen(e) != c.callee && unparen(e) != c.wantType { // a type stands only before the parentheses of a conversion, or where make wants one
+		c.errorf(e.Pos(), exprText(e)+" (type) is not an expression")
+		return invalidOperand
+	}
+
 	if op.mode != invalid {
 		c.recordType(e, op.typ)
 		op.expr = e
@@ -82,6 +87,11 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 		return invalidOperand
 	}
 
+	if e.Name == "super" {
+		c.errorf(e.Pos(), "super must be followed by a method: super.Method()")
+		return invalidOperand
+	}
+
 	obj := c.lookup(e)
 	if obj == nil {
 		return invalidOperand
@@ -107,6 +117,11 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 
 		return operand{value, obj.typ, obj, nil}
 	case *Func:
+		if sig, ok := obj.typ.(*Signature); ok && sig.tparams != nil && c.callee != e {
+			c.errorf(e.Pos(), "cannot use the generic function "+obj.name+" without calling it")
+			return invalidOperand
+		}
+
 		return operand{value, obj.typ, obj, nil}
 	case *TypeName:
 		return operand{typeOperand, obj.typ, obj, nil}
@@ -149,7 +164,21 @@ func (c *Checker) constantVariant(e *ast.Ident, v *Variant, expected Type) opera
 		return invalidOperand
 	}
 
-	return operand{value, v.parent, v, nil}
+	t := v.parent
+	if t.tparams != nil {
+		n, ok := expected.(*Named) // a variant without fields has nothing to infer from but its context
+		if !ok || n.Origin() != t {
+			if expected != Typ[Invalid] {
+				c.errorf(e.Pos(), "cannot infer the type parameter "+t.tparams[0].obj.name+" of "+v.name+": the context gives it no type")
+			}
+
+			return invalidOperand
+		}
+
+		t = n
+	}
+
+	return operand{value, t, v, nil}
 }
 
 // selector checks x.Sel: a package member, a field, a method of a
@@ -158,6 +187,10 @@ func (c *Checker) constantVariant(e *ast.Ident, v *Variant, expected Type) opera
 // Node, a ref Node, or a *Node.
 func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	if ident, ok := e.X.(*ast.Ident); ok {
+		if ident.Name == "super" {
+			return c.superCall(e)
+		}
+
 		if _, obj := c.scope.LookupParent(ident.Name); obj != nil {
 			if pkg, ok := obj.(*PkgName); ok {
 				c.recordUse(ident, pkg)
@@ -176,8 +209,12 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 
 	base, m := deref(x)
 	if named, ok := base.(*Named); ok {
-		if st, ok := named.underlying.(*Struct); ok {
-			if f := fieldOf(st, e.Sel.Name); f != nil {
+		if st, ok := named.Underlying().(*Struct); ok {
+			if f := fieldNamed(st.fields, e.Sel.Name); f != nil {
+				if !c.visible(named, e.Sel) {
+					return invalidOperand
+				}
+
 				c.recordUse(e.Sel, f)
 				c.checkUse(e)
 				return operand{m, f.typ, f, nil}
@@ -185,8 +222,18 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
+			if !c.visible(named, e.Sel) {
+				return invalidOperand
+			}
+
 			c.recordUse(e.Sel, fn)
-			c.receiver(e, x, fn.typ.(*Signature))
+			sig := fn.typ.(*Signature)
+			if sig.tparams != nil && c.callee != ast.Expr(e) { // the selector itself, which call unparenthesized
+				c.errorf(e.Sel.Pos(), "cannot use the generic method "+fn.name+" without calling it")
+				return invalidOperand
+			}
+
+			c.receiver(e, x, sig)
 			return operand{value, fn.typ, fn, nil}
 		}
 	}
@@ -196,51 +243,187 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		return operand{value, sig, nil, nil}
 	}
 
-	c.errorf(e.Sel.Pos(), e.Sel.Name+" is not a field or method of "+x.typ.String())
+	// A trait value, or a type parameter with bounds: the traits' fields
+	// and methods, with the value's type for Self.
+	var f *Var
+	var fn *Func
+	var param *TypeParam // the parameter whose bounds were searched, for the message
+	switch t := base.(type) {
+	case *Trait:
+		var mentionsSelf bool
+		if f, mentionsSelf = t.valueField(e.Sel.Name); mentionsSelf {
+			c.errorf(e.Sel.Pos(), "cannot reach "+e.Sel.Name+" through "+t.obj.name+": its type mentions Self")
+			return invalidOperand
+		}
+
+		if f == nil {
+			if fn, mentionsSelf = t.valueMethod(e.Sel.Name); mentionsSelf {
+				c.errorf(e.Sel.Pos(), "cannot call "+e.Sel.Name+" through "+t.obj.name+": its signature mentions Self")
+				return invalidOperand
+			}
+		}
+	case *TypeParam:
+		if f = t.boundField(e.Sel.Name); f == nil {
+			fn = t.boundMethod(e.Sel.Name)
+		}
+
+		param = t
+	}
+
+	if f != nil {
+		c.recordUse(e.Sel, f)
+		c.checkUse(e)
+		return operand{m, f.typ, f, nil}
+	}
+
+	if fn != nil {
+		c.recordUse(e.Sel, fn)
+		c.receiver(e, x, fn.typ.(*Signature))
+		return operand{value, fn.typ, fn, nil}
+	}
+
+	msg := e.Sel.Name + " is not a field or method of " + x.typ.String()
+	if param != nil {
+		msg += ": no bound of " + param.obj.name + " declares it"
+	}
+
+	c.errorf(e.Sel.Pos(), msg)
 	return invalidOperand
 }
 
 // receiver checks the receiver of a method against what the method
-// asks of it: a value receiver takes it, so an owned receiver moves and
-// a borrow variable is lent again; a mut receiver needs a place that
-// can be changed, which a value reached through a ref is not. The
-// borrow the call creates is checked in call, after the arguments.
+// asks of it: a value receiver takes it (takeValue); a mut receiver
+// needs a place that can be changed, which a value reached through a
+// ref is not. The borrow the call creates is checked in call, after the
+// arguments.
 func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
-	c.checkUse(e.X)
 	r, ok := sig.recv.typ.(*Ref)
 	if !ok {
-		if !isMut(x.typ) {
-			c.maybeMove(x, sig.recv.typ)
-		}
-
+		c.takeValue(e.X, x, sig.recv.typ)
 		return
 	}
 
+	c.checkUse(e.X)
+
 	if r.mut && x.mode == borrowed {
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+	} else if r.mut && isBorrow(x.typ) && !isMut(x.typ) { // the receiver is itself a ref borrow
+		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut: "+exprText(e.X)+" is a ref "+c.throughWhat(e.X))
 	}
 
 	c.noteTemporary(e.X, x)
 }
 
+// packageMember resolves pkg.Name as a value: a function, variable,
+// constant or type of the package.
 func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
-	obj := libraryMember(pkg.path, e.Sel.Name)
+	obj := c.member(pkg, e.Sel)
 	if obj == nil {
-		c.errorf(e.Sel.Pos(), "undefined: "+pkg.name+"."+e.Sel.Name)
 		return invalidOperand
 	}
 
-	c.recordUse(e.Sel, obj)
 	switch obj := obj.(type) {
 	case *Func:
 		return operand{value, obj.typ, obj, nil}
 	case *Var:
 		return operand{variable, obj.typ, obj, nil}
+	case *Const:
+		return operand{value, obj.typ, obj, nil}
 	case *TypeName:
 		return operand{typeOperand, obj.typ, obj, nil}
+	case *Variant:
+		return c.constantVariant(e.Sel, obj, nil) // io.NotExist: a variant named through its package
 	}
 
+	c.errorf(e.Sel.Pos(), "cannot use "+pkg.name+"."+e.Sel.Name+" as a value")
 	return invalidOperand
+}
+
+// visible reports whether the field or method sel of a value of type t
+// may be named here: always inside t's own package, and elsewhere only
+// when the name is exported, as in Go. A name that is not is reported.
+func (c *Checker) visible(t Type, sel *ast.Ident) bool {
+	n, ok := t.(*Named)
+	if !ok || n.obj.pkg == nil || n.obj.pkg == c.pkg || ast.IsExported(sel.Name) {
+		return true
+	}
+
+	c.errorf(sel.Pos(), sel.Name+" of "+n.String()+" is not exported")
+	return false
+}
+
+// qualified resolves pkg.Name written as a type, a trait or a pattern,
+// and records the use of the package name; nil after reporting.
+func (c *Checker) qualified(pkgIdent, sel *ast.Ident) Object {
+	obj := c.lookup(pkgIdent)
+	if obj == nil {
+		return nil
+	}
+
+	pkg, ok := obj.(*PkgName)
+	if !ok {
+		c.errorf(pkgIdent.Pos(), pkgIdent.Name+" is not a package")
+		return nil
+	}
+
+	return c.member(pkg, sel)
+}
+
+// packageVariant returns the variant pkg.Name names when the callee of
+// a call is one, recording the uses; nil for anything else, which the
+// call then resolves as a value and reports if it must.
+func (c *Checker) packageVariant(fun ast.Expr) *Variant {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	id, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+
+	_, obj := c.scope.LookupParent(id.Name)
+	pkg, ok := obj.(*PkgName)
+	if !ok || pkg.pkg == nil || !ast.IsExported(sel.Sel.Name) {
+		return nil
+	}
+
+	v, ok := pkg.pkg.scope.Lookup(sel.Sel.Name).(*Variant)
+	if !ok {
+		return nil
+	}
+
+	c.recordUse(id, pkg)
+	c.recordUse(sel.Sel, v)
+	return v
+}
+
+// member resolves a name in an imported package and records the use:
+// only an exported name is visible, as in Go. A member of a package the
+// importer did not find is not reported: the import was.
+func (c *Checker) member(pkg *PkgName, sel *ast.Ident) Object {
+	if pkg.missing {
+		return nil
+	}
+
+	var obj Object
+	if pkg.pkg != nil {
+		obj = pkg.pkg.scope.Lookup(sel.Name)
+	}
+
+	if obj != nil && !ast.IsExported(sel.Name) {
+		c.errorf(sel.Pos(), "name "+sel.Name+" not exported by package "+pkg.name)
+		return nil
+	}
+
+	if obj == nil {
+		c.errorf(sel.Pos(), "undefined: "+pkg.name+"."+sel.Name)
+		return nil
+	}
+
+	c.recordUse(sel, obj)
+	return obj
 }
 
 func (c *Checker) index(e *ast.IndexExpr) operand {
@@ -308,10 +491,10 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 		c.intIndex(e.High)
 	}
 
-	base, m := deref(x)
+	base, _ := deref(x)
 	switch t := base.Underlying().(type) {
 	case *Slice:
-		return operand{value, NewRef(t, m == mutBorrowed), nil, nil}
+		return operand{value, NewRef(t, false), nil, nil} // a view: it never owns or grows the elements, so it is never mut
 	case *Basic:
 		if t.kind == String {
 			return operand{value, NewRef(Typ[String], false), nil, nil}
@@ -400,6 +583,12 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 	}
 
 	t := readType(x)
+	if fn := OperatorMethod(t, e.Op, true); fn != nil {
+		sig := fn.typ.(*Signature)
+		c.takeValue(e.X, x, sig.recv.typ)
+		return operand{value, sig.results, nil, nil}
+	}
+
 	var need BasicInfo
 	switch e.Op {
 	case token.SUB:
@@ -429,6 +618,14 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 		x = c.expr(e.X, hintOf(y))
 	} else {
 		x = c.expr(e.X, expected)
+		if x.mode == invalid {
+			return invalidOperand
+		}
+
+		if fn := OperatorMethod(readType(x), e.Op, false); fn != nil {
+			return c.operatorCall(e, x, fn)
+		}
+
 		y = c.expr(e.Y, hintOf(x))
 	}
 
@@ -474,6 +671,40 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 	return operand{value, result, nil, nil}
 }
 
+// operatorCall checks a + b as a call of the operator's method on the
+// left operand, a.Add(b): the receiver is taken by value, so it moves
+// unless its type is Copy, as a value receiver does, and before the
+// right operand is read, as a receiver is taken before the arguments,
+// so a + a on a value that moves is a use after the move. The right
+// operand takes its hint from the method's parameter, so v * 2 is a
+// float when the method wants one, and must fit it; the result is the
+// method's.
+func (c *Checker) operatorCall(e *ast.BinaryExpr, x operand, fn *Func) operand {
+	sig := fn.typ.(*Signature)
+	c.takeValue(e.X, x, sig.recv.typ)
+	param := sig.params[0].typ
+	if y := c.expr(e.Y, param); y.mode != invalid {
+		c.assign(y, param, e.Y.Pos(), "the right operand of "+e.Op.String())
+	}
+
+	return operand{value, sig.results, nil, nil}
+}
+
+// takeValue checks the operand xe, whose value a method takes as its
+// receiver, by value, as recv: an owned value moves unless its type is
+// Copy, and a borrow of a value that is not Copy cannot give the value
+// up, since it is not the borrower's to give. The operand is read
+// first, as any use is.
+func (c *Checker) takeValue(xe ast.Expr, x operand, recv Type) {
+	c.checkUse(xe)
+	if isBorrow(x.typ) && !IsCopy(readType(x)) {
+		c.errorf(xe.Pos(), "cannot move "+exprText(xe)+" out of a borrow")
+		return
+	}
+
+	c.maybeMove(x, recv)
+}
+
 // coalesce checks x ?? else. x is an option or a Result, possibly
 // through a borrow, in which case the result is the same borrow of the
 // inside: cur ?? ... on a mut (*Node?) yields a mut *Node, and s.head
@@ -514,7 +745,7 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
 		}
 	} else if m == variable && !IsCopy(result) {
-		c.move(e.X) // the value inside leaves the place
+		c.move(e.X, m) // the value inside leaves the place
 	}
 
 	f := c.forkAt()
@@ -557,7 +788,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 
 	xt, _ := deref(x)
 	if x.mode == variable && !isBorrow(x.typ) && !IsCopy(xt) {
-		c.move(e.X) // the value inside leaves the place
+		c.move(e.X, x.mode) // the value inside leaves the place
 	}
 
 	switch want := c.sig.results.Underlying().(type) {
@@ -602,7 +833,11 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	c.closures = append(c.closures, closure{pos: e.Pos()})
 	temps := c.temps
 	c.temps = nil // the body runs when the closure is called, not while the call around it is lending
+	mark := len(c.moved)
+	c.floors = append(c.floors, floor{mark: mark})
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
+	c.floors = c.floors[:len(c.floors)-1]
+	c.moved = appendMoves(c.moved[:mark], c.moved[mark:]) // the body may never run: its moves count, as the captures do, but what it gives back does not
 	c.temps = temps
 	if caps := c.closures[len(c.closures)-1].captures; caps != nil {
 		if c.captured == nil {
@@ -610,6 +845,14 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 		}
 
 		c.captured[e] = caps // the closure is a borrow of what it captures
+		if c.info != nil {
+			vars := make([]Capture, len(caps))
+			for i, cap := range caps {
+				vars[i] = Capture{cap.v, cap.mode == byCopy}
+			}
+
+			c.info.Captures[e] = vars
+		}
 	}
 
 	c.closures = c.closures[:len(c.closures)-1]

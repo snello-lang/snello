@@ -18,17 +18,19 @@ import ("fmt"; "math")
 trait Shape {
     func (s ref Self) Area() f64
     func (s ref Self) Perimeter() f64
-    func (s ref Self) Name() string
+    func (s ref Self) Name() ref string
     func (s ref Self) Describe() string {                    // default method
         return fmt.Sprintf("%s with area %.2f", s.Name(), s.Area())
     }
 }
 
 // A trait with a field. A type that implements Named gets the field,
-// stored inline and set at construction like any other field.
+// stored inline and set at construction like any other field. The
+// field obeys the ownership rules of any struct field: a getter on a
+// borrowed Self returns a borrow of it, as a string would move out.
 trait Named {
     var name string
-    func (n ref Self) Name() string { return n.name }
+    func (n ref Self) Name() ref string { return ref n.name }
 }
 
 // A trait that refines another and overrides its default.

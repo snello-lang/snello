@@ -15,5 +15,9 @@ drop q
 xx
 [w] [w]
 o
+first
+sv
+tmp
+drop tmp
 end
 drop p

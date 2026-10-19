@@ -32,6 +32,14 @@ func TestMoves(t *testing.T) {
 		{"func f() { s := \"a\"; defer keep(s); keep(s) }", []string{"use of moved value s"}},
 		{"func f() string? { s := \"a\"; o := Some(s); keep(s); return o }", []string{"use of moved value s"}},
 		{"func f() { n := Node{value: \"a\", next: None, n: 0}; v := take(mut n.value); keep(v); print(n) }", nil},
+		// A part of a value no name holds stays where it is: the whole is dropped with the statement.
+		{"func pick(ps mut []Pair) mut Pair { return mut ps[0] }\nfunc f(ps mut []Pair) { s := pick(mut ps).a; keep(s) }", []string{"cannot move pick(...).a out of a borrow"}},
+		{"func pick(ps mut []Pair) mut Pair { return mut ps[0] }\nfunc f(ps mut []Pair) { s := pick(mut ps).a.Clone(); keep(s) }", nil}, // cloned, not moved
+		{"func pick(ns mut []Node) mut Node { return mut ns[0] }\nfunc f(ns mut []Node) { n := pick(mut ns).n; print(n) }", nil},        // a Copy part is read
+		{"func mkp() *Node { return &mk(\"a\") }\nfunc f() { s := (*mkp()).value; keep(s) }", []string{"cannot move (*mkp()).value out of a temporary"}},
+		{"func mkp() *Node { return &mk(\"a\") }\nfunc f() { n := *mkp(); keep(n.value) }", []string{"cannot move *mkp() out of a temporary"}},
+		{"func mkp() *Node { return &mk(\"a\") }\nfunc f() { p := mkp(); n := *p; keep(n.value) }", nil}, // bound first
+		{"func mkp() *Node { return &mk(\"a\") }\nfunc f() *Node { return (*mkp()).next ?? return &mk(\"b\") }", []string{"cannot move (*mkp()).next out of a temporary"}},
 		// Assignment restores the name.
 		{"func f() { s := \"a\"; keep(s); s = \"b\"; keep(s) }", nil},
 		{"func f() { n := Node{value: \"a\", next: None, n: 0}; v := n.value; n.value = \"b\"; keep(v); print(n) }", nil},
@@ -40,6 +48,27 @@ func TestMoves(t *testing.T) {
 		{"func f(c bool) { s := \"a\"; if c { keep(s) } else { keep(s) }; keep(s) }", []string{"use of moved value s"}},
 		{"func f(c bool) { s := \"a\"; if c { keep(s); return }; keep(s) }", nil},
 		{"func f(c bool) { s := \"a\"; if c { keep(s) } else { return }; keep(s) }", []string{"use of moved value s"}},
+
+		// A value given back after a move: owned where every path gave it back, moved where one did not.
+		{"func f(c bool) { s := \"a\"; keep(s); if c { s = \"b\" }; keep(s) }", []string{"use of moved value s"}},
+		{"func f(c bool) { s := \"a\"; keep(s); if c { s = \"b\" } else { s = \"c\" }; keep(s) }", nil},
+		{"func f(c bool) { s := \"a\"; keep(s); if c { s = \"b\"; keep(s) } else { s = \"c\" }; keep(s) }", []string{"use of moved value s"}},
+		{"func f(c bool) { s := \"a\"; keep(s); if c { s = \"b\"; keep(s); s = \"d\" } else { s = \"c\" }; keep(s) }", nil},
+		{"func f(o string?) string? { match o { Some(v) => keep(v), None => o = Some(\"a\") }; return o }", []string{"use of moved value o"}},
+		{"func f(o string?) string? { match o { Some(v) => o = Some(v), None => o = Some(\"a\") }; return o }", nil},
+		{"func f(c bool) { s := \"a\"; keep(s); for c { s = \"b\" }; keep(s) }", []string{"use of moved value s"}},       // the body may not run
+		{"func f(c bool) { s := \"a\"; keep(s); for c { s = \"b\"; keep(s); s = \"c\" } }", nil},                         // owned again within the iteration
+		{"func f(c bool, d bool) { s := \"a\"; if c { keep(s); if d { s = \"b\" } else { s = \"c\" } }; keep(s) }", nil}, // a move inside a branch, given back by a nested branch set
+		{"func f(c bool, d bool) { s := \"a\"; if c { keep(s); if d { s = \"b\" } }; keep(s) }", []string{"use of moved value s"}},
+		{"func f(c bool) { s := \"a\"; keep(s); switch { case c: s = \"b\"; default: s = \"c\" }; keep(s) }", nil}, // a switch is a region and a branch set
+		{"func f(c bool) { s := \"a\"; keep(s); switch { case c: s = \"b\" }; keep(s) }", []string{"use of moved value s"}},
+		{"func f(c bool) { s := \"a\"; keep(s); for { s = \"b\"; break }; keep(s) }", nil},                                                          // a loop with no condition runs its body
+		{"func f(c bool) { s := \"a\"; keep(s); for { if c { break }; s = \"b\"; break }; keep(s) }", []string{"use of moved value s"}},             // but one exit gave nothing back
+		{"func f(c bool) { p := Pair{a: \"x\", b: \"y\"}; keep(p.a); if c { p.a = \"1\" } else { p.a = \"2\" }; keepPair(p) }", nil},                // a part given back on every path clears the partial move
+		{"func f(c bool) { p := Pair{a: \"x\", b: \"y\"}; keep(p.a); if c { p.a = \"1\" } else { p = Pair{a: \"1\", b: \"2\"} }; keep(p.a) }", nil}, // the whole on one path counts for the part
+		{"func f(o string?) string? { match o { None => o = Some(\"a\"), Some(v) => o = Some(v) }; return o }", nil},                                // the arm order does not matter
+		{"func f(o string?) string? { match o { None => {}, Some(v) => o = Some(v) }; return o }", []string{"use of moved value o"}},
+		{"func f(c bool) { s := \"a\"; keep(s); g := func() { s = \"b\" }; if c { g() }; keep(s) }", []string{"use of moved value s"}}, // a closure may never run
 		{"func f(o string?) string { s := \"a\"; t := o ?? return s; keep(s); return t }", nil},
 		{"func f(o string?) string { s := \"a\"; t := o ?? s; keep(s); return t }", []string{"use of moved value s"}},
 		{"func f(st State) { s := \"a\"; match st { Closed => keep(s), Open(_) => {}, Failed(_) => {} }; keep(s) }", []string{"use of moved value s"}},
@@ -81,7 +110,7 @@ func TestMoves(t *testing.T) {
 		{"func f(n Node) { n.Peek(); print(n) }", nil},
 	}
 	for _, tt := range tests {
-		got := checkErrors(t, prelude+"func (n Node) Consume() {}\nfunc (n ref Node) Peek() {}\nfunc mk(s string) Node { return Node{value: s, next: None, n: 0} }\n"+tt.src)
+		got := checkErrors(t, prelude+"func (n Node) Consume() {}\nfunc (n ref Node) Peek() {}\nfunc mk(s string) Node { return Node{value: s, next: None, n: 0} }\nstruct Pair { a string; b string }\nfunc keepPair(p Pair) {}\n"+tt.src)
 		if len(got) != len(tt.want) {
 			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
 			continue

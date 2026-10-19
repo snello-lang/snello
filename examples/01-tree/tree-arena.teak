@@ -58,8 +58,9 @@ func (t ref Tree) Path(id arena.Index<Node>) []string {
     path := []string{}
     cur := Some(id)
     for cur != None {
-        n := t.nodes.Get(cur?) ?? break          // stale index ends the walk
-        path = append(path, n.value.Clone())     // n is a borrow; the path owns copies
+        at := cur ?? break
+        n := t.nodes.Get(at) ?? break            // stale index ends the walk
+        path.Push(n.value.Clone())               // n is a borrow; the path owns copies
         cur = n.parent
     }
     path.Reverse()

@@ -1,0 +1,101 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package strings builds and transforms text.
+//
+// What a string can do on its own is a method of the string: Len,
+// Fields, Split, SplitOnce, Trim, HasPrefix, HasSuffix, Contains,
+// ToUpper, ToLower and Clone. This package has what works on more than
+// one string, Join, what builds a new one piece by piece, Builder and
+// Repeat, and the transformations as functions, for a call that reads
+// better that way or a function value to pass along.
+//
+// Every parameter here is a borrow, ref string: a call lends its
+// argument and gets a new string back, and the argument stays with its
+// owner.
+package strings
+
+// A Builder accumulates text piece by piece and gives it back as one
+// string, cheaper than joining with + at every step. Its zero value is
+// ready to use: var b strings.Builder. A Builder owns the bytes it
+// holds and is passed mut to be written to.
+struct Builder {
+	buf []byte
+}
+
+// WriteString appends the bytes of s.
+func (b mut Builder) WriteString(s ref string) {
+	for i := 0; i < s.Len(); i++ {
+		b.buf.Push(s[i])
+	}
+}
+
+// WriteByte appends one byte.
+func (b mut Builder) WriteByte(c byte) {
+	b.buf.Push(c)
+}
+
+// Len returns the number of bytes written so far.
+func (b ref Builder) Len() int {
+	return len(b.buf)
+}
+
+// String returns what was written so far, as a new string. The builder
+// keeps its text and may go on; call it again after more writes for
+// the longer text.
+func (b ref Builder) String() string {
+	return string(b.buf)
+}
+
+// Reset empties the builder, ready for new text.
+func (b mut Builder) Reset() {
+	b.buf.Clear()
+}
+
+// Repeat returns s written n times in a row, and the empty string for
+// an n of zero or less.
+func Repeat(s ref string, n int) string {
+	var b Builder
+	for i := 0; i < n; i++ {
+		b.WriteString(s)
+	}
+
+	return string(b.buf)
+}
+
+// Join writes the parts one after another with sep between every two,
+// and none before the first or after the last: Join(ref parts, ", ").
+// An empty slice gives the empty string.
+func Join(parts ref []string, sep ref string) string {
+	var b Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+
+		b.WriteString(p)
+	}
+
+	return string(b.buf)
+}
+
+// Fields splits s around runs of spaces, tabs and newlines and yields
+// each word as a borrow into s, so no word is copied; a loop over them
+// lends s for its duration, for w := range strings.Fields(ref text).
+// It is the string's Fields method as a function.
+func Fields(s ref string) []ref string {
+	return s.Fields()
+}
+
+// ToLower returns a new string with the ASCII letters of s in lower
+// case and every other byte as it was.
+func ToLower(s ref string) string {
+	return s.ToLower()
+}
+
+// ToUpper returns a new string with the ASCII letters of s in upper
+// case and every other byte as it was.
+func ToUpper(s ref string) string {
+	return s.ToUpper()
+}

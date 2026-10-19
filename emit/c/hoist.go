@@ -134,7 +134,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 		parts[i] = e.valueTo(x, want)
 		t := want
 		if t == nil {
-			t = e.info.Types[x]
+			t = e.typeOf(x)
 		}
 
 		if i < last || e.lent(x, want) {
@@ -142,7 +142,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[i] + ";")
 			parts[i] = tmp
 			if e.lent(x, want) {
-				e.hold(tmp, e.info.Types[x]) // built here and only lent: dropped when the statement ends
+				e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
 			}
 		}
 	}
@@ -154,6 +154,10 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 // only looks at, as a ref parameter or a print does, so that nothing
 // else will drop it.
 func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
+	if u, ok := x.(*ast.UnaryExpr); ok && (u.Op == token.REF || u.Op == token.MUT) {
+		return false // a borrow written out holds what it lends itself (unary)
+	}
+
 	if want != nil {
 		r, ok := want.(*types.Ref)
 		if !ok || r.Mut() {
@@ -161,11 +165,22 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		}
 	}
 
+	x = borrowed(x)
 	if _, literal := x.(*ast.BasicLit); literal {
 		return false // a literal owns nothing
 	}
 
-	return !e.isRead(x) && needsDrop(e.info.Types[x])
+	return !e.isRead(x) && needsDrop(e.typeOf(x))
+}
+
+// borrowed returns the value an operand lends: the operand of a ref,
+// which may be built there, else the operand itself.
+func borrowed(x ast.Expr) ast.Expr {
+	if u, ok := x.(*ast.UnaryExpr); ok && u.Op == token.REF {
+		return u.X
+	}
+
+	return x
 }
 
 // evaluated writes operands that are consumed one at a time, as a
@@ -175,7 +190,7 @@ func (e *Emitter) evaluated(xs []ast.Expr) []string {
 	parts := e.operands(xs, nil)
 	if n := len(xs); n > 0 && e.hasEffects(xs[n-1]) {
 		tmp := e.temp()
-		e.line(e.cType(e.info.Types[xs[n-1]], xs[n-1].Pos()) + " " + tmp + " = " + parts[n-1] + ";")
+		e.line(e.cType(e.typeOf(xs[n-1]), xs[n-1].Pos()) + " " + tmp + " = " + parts[n-1] + ";")
 		parts[n-1] = tmp
 	}
 
@@ -190,7 +205,7 @@ func (e *Emitter) evaluated(xs []ast.Expr) []string {
 func (e *Emitter) scrutinee(x ast.Expr) (string, types.Type) {
 	place, t, held := e.consumed(x)
 	if held != "" {
-		e.hold(held, e.info.Types[x])
+		e.hold(held, e.typeOf(x))
 	}
 
 	return place, t
@@ -202,7 +217,7 @@ func (e *Emitter) scrutinee(x ast.Expr) (string, types.Type) {
 // and empty for a place read where it is. The caller moves parts out of
 // the temporary, emptying each, and drops the rest.
 func (e *Emitter) consumed(x ast.Expr) (string, types.Type, string) {
-	t := e.info.Types[x]
+	t := e.typeOf(x)
 	if e.isPlace(x) && !e.info.Moves[x] {
 		return e.place(x), valueType(t), ""
 	}
@@ -222,7 +237,7 @@ func (e *Emitter) consumed(x ast.Expr) (string, types.Type, string) {
 // changed writes a place a method is about to change, as scrutinee
 // does, except that a map element is made when its key is new.
 func (e *Emitter) changed(x ast.Expr) (string, types.Type) {
-	if t := e.info.Types[x]; e.isPlace(x) {
+	if t := e.typeOf(x); e.isPlace(x) {
 		return deref(e.lvalue(x), t), valueType(t)
 	}
 
@@ -244,14 +259,28 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 			return true // a variable of the library, such as os.Args
 		}
 
-		return ok && v.IsField() && e.isPlace(x.X)
+		return ok && v.IsField() && e.viaBorrow(x.X)
 	case *ast.IndexExpr:
-		return e.isPlace(x.X) && !e.hasEffects(x.Index)
+		return e.viaBorrow(x.X) && !e.hasEffects(x.Index)
 	case *ast.UnaryExpr:
-		return x.Op == token.MUL && e.isPlace(x.X)
+		return x.Op == token.MUL && e.viaBorrow(x.X)
 	}
 
 	return false
+}
+
+// viaBorrow reports whether a field, an element or the value of x is a
+// place: x is one itself, or x is a borrow, whose value lives elsewhere
+// however x was built, as the one Expect gives on an Option of a mut
+// borrow. A field read through it is the borrowed value's, not a copy
+// to drop here.
+func (e *Emitter) viaBorrow(x ast.Expr) bool {
+	if e.isPlace(x) {
+		return true
+	}
+
+	_, ok := e.typeOf(x).(*types.Ref)
+	return ok
 }
 
 // try writes x?: the value inside, after a return of the absent or
@@ -265,13 +294,13 @@ func (e *Emitter) try(x *ast.TryExpr) string {
 		e.line("return " + e.variantValue(e.result, types.NoneVariant, nil, x.Pos()) + ";")
 	case *types.Result:
 		e.line("if (!" + place + ".ok) {")
-		err := e.taken(place+".err", u.Err(), held, e.info.Types[x.X], x.Pos())
+		err := e.taken(place+".err", u.Err(), held, e.typeOf(x.X), x.Pos())
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{err}, x.Pos()) + ";")
 	}
 
 	e.line("}")
-	return e.taken(place+".val", e.info.Types[x], held, e.info.Types[x.X], x.Pos())
+	return e.taken(place+".val", e.typeOf(x), held, e.typeOf(x.X), x.Pos())
 }
 
 // taken writes the move of the value at place, of type t, out of the
@@ -301,7 +330,7 @@ func (e *Emitter) leaveFunction(pos token.Pos) {
 // is written as the statement it is. Through a mut borrow the result
 // is the address of the value inside, so it can be written through.
 func (e *Emitter) coalesce(x *ast.CoalesceExpr) string {
-	rt := e.info.Types[x]
+	rt := e.typeOf(x)
 	place, t, held := e.consumed(x.X)
 	test, val := place+".has", place+".val"
 	r, isResult := t.Underlying().(*types.Result)
@@ -316,11 +345,11 @@ func (e *Emitter) coalesce(x *ast.CoalesceExpr) string {
 	result := e.temp()
 	e.line(e.cType(rt, x.Pos()) + " " + result + ";")
 	e.line("if (" + test + ") {")
-	e.line(result + " = " + e.taken(val, rt, held, e.info.Types[x.X], x.Pos()) + ";")
+	e.line(result + " = " + e.taken(val, rt, held, e.typeOf(x.X), x.Pos()) + ";")
 	e.line("} else {")
 	if held != "" && isResult && needsDrop(r.Err()) {
 		e.line(e.dropOf(place+".err", r.Err(), x.Pos())) // the error is not looked at
-		e.line(held + " = " + e.zero(e.info.Types[x.X], x.Pos()) + ";")
+		e.line(held + " = " + e.zero(e.typeOf(x.X), x.Pos()) + ";")
 	}
 
 	e.node(x.Else, result, rt)
@@ -345,7 +374,7 @@ func (e *Emitter) node(n ast.Node, result string, want types.Type) {
 // ifExpr writes if c { a } else { b } with a value: both branches
 // assign the same temporary.
 func (e *Emitter) ifExpr(x *ast.IfExpr) string {
-	rt := e.info.Types[x]
+	rt := e.typeOf(x)
 	result := ""
 	if yields(rt) {
 		result = e.temp()
@@ -397,8 +426,8 @@ func (e *Emitter) assignOrRun(result string, x ast.Expr, want types.Type) {
 		v := e.valueTo(x, want)
 		switch {
 		case v == "":
-		case result == "" || isNever(e.info.Types[x]):
-			e.discard(v, e.info.Types[x], x.Pos())
+		case result == "" || isNever(e.typeOf(x)):
+			e.discard(v, e.typeOf(x), x.Pos())
 		default:
 			e.line(result + " = " + v + ";")
 		}

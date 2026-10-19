@@ -17,3 +17,16 @@ eval f
 eval g
 eval h
 -1 {1 2}
+Some("4!") None Some("8")
+Ok("6") Err("empty")
+Ok(3) Err(5)
+Ok("ok2") Err(5)
+Some(3) Some("kept")
+eval r
+pick
+Some("8") Some(30)
+drop a
+drop b
+true true
+true
+drop b

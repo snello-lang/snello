@@ -1,0 +1,193 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package examples holds the twenty example programs and the test that
+// builds and runs them: the acceptance suite of the language, each
+// program compared with the output recorded under expected/.
+package examples
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/teak-lang/teak/emit/c"
+	"github.com/teak-lang/teak/parser"
+	"github.com/teak-lang/teak/std"
+	"github.com/teak-lang/teak/types"
+)
+
+// examplePatterns name the twenty example programs: the files here and
+// the Teak programs inside the two folders that hold a Go version
+// beside the Teak one. The core and run suites have their own tests.
+var examplePatterns = []string{"*.teak", "01-tree/*.teak", "02-pipeline/*.teak"}
+
+// programs returns the paths of the example programs.
+func programs(t testing.TB) []string {
+	var paths []string
+	for _, pattern := range examplePatterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		paths = append(paths, matches...)
+	}
+
+	sort.Strings(paths)
+	return paths
+}
+
+// compile parses, checks and emits a program with the library packages
+// it imports, returning the C source or the first error.
+func compile(path string) ([]byte, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	f, file, err := parser.ParseFile(path, src)
+	if err != nil {
+		return nil, err
+	}
+
+	info := &types.Info{}
+	imp := std.NewImporter(info)
+	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
+		return nil, err
+	}
+
+	pkgs := imp.Packages()
+	libs := make([]c.Library, len(pkgs))
+	for i, p := range pkgs {
+		libs[i] = c.Library{File: p.File, Syntax: p.Syntax}
+	}
+
+	return c.Emit(file, f, info, libs...)
+}
+
+// pendingExamples are the programs without an expected output yet, and
+// what each waits for. A program that gains its output comes off the
+// list; one that loses it, by a misnamed fixture, is noticed.
+var pendingExamples = map[string]string{
+	"pipeline":         "spawn and channels, stage 3",
+	"03-http-cache":    "sync, net and db, stage 3 and later",
+	"04-graph":         "heap, a later library",
+	"12-worker-pool":   "spawn, channels and sync, stage 3",
+	"13-actor":         "spawn and channels, stage 3",
+	"17-state-machine": "net, a later library",
+	"18-iterators":     "spawn, stage 3",
+	"19-cli-grep":      "regexp, a later library",
+}
+
+// TestExamples builds every example program that has its expected
+// output under expected/, as a release build and as a debug build, runs
+// it with the files its fixture folder holds, and compares what it
+// prints. A program without an expected output must be on the pending
+// list, with its reason; the time each step takes is logged, which is
+// how the compile time of the suite is recorded.
+func TestExamples(t *testing.T) {
+	var pending []string
+	green := 0
+	var front, back time.Duration
+	for _, path := range programs(t) {
+		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		want, err := os.ReadFile(filepath.Join("expected", name+".out"))
+		if err != nil {
+			if _, known := pendingExamples[name]; !known {
+				t.Errorf("%s has no expected output and is not on the pending list", name)
+			}
+
+			pending = append(pending, name)
+			continue
+		}
+
+		if reason, listed := pendingExamples[name]; listed {
+			t.Errorf("%s has an expected output but is still listed as pending for %s", name, reason)
+		}
+
+		green++
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			csrc, err := compile(path)
+			if err != nil {
+				t.Fatalf("%s does not compile: %v", path, err)
+			}
+
+			front += time.Since(start)
+			for _, debug := range []bool{false, true} {
+				start = time.Now()
+				dir := t.TempDir()
+				bin, out, err := c.Build(dir, name, csrc, debug)
+				if err != nil {
+					t.Fatalf("cc (debug %v): %v\n%s", debug, err, out)
+				}
+
+				back += time.Since(start)
+				placeFixtures(t, name, dir)
+				cmd := exec.Command(bin)
+				cmd.Dir = dir
+				stdout, err := cmd.Output()
+				if exit, ok := err.(*exec.ExitError); ok {
+					t.Fatalf("debug %v: exited with %d\n%s%s", debug, exit.ExitCode(), stdout, exit.Stderr)
+				} else if err != nil {
+					t.Fatal(err)
+				}
+
+				if string(stdout) != string(want) {
+					t.Errorf("debug %v: printed\n%s--- expected ---\n%s", debug, stdout, want)
+				}
+			}
+		})
+	}
+
+	t.Logf("%d examples green, %d pending: %s", green, len(pending), strings.Join(pending, ", "))
+	t.Logf("compile time: %v in the compiler, %v in cc for two builds each", front.Round(time.Millisecond), back.Round(time.Millisecond))
+}
+
+// placeFixtures copies the files of expected/<name>.files/, when the
+// folder exists, into dir, where the program runs.
+func placeFixtures(t *testing.T, name, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("expected", name+".files"))
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join("expected", name+".files", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkExamples measures the compiler on the examples that run:
+// parsing, checking and emitting each, without the C compiler.
+func BenchmarkExamples(b *testing.B) {
+	var paths []string
+	for _, path := range programs(b) {
+		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		if _, err := os.Stat(filepath.Join("expected", name+".out")); err == nil {
+			paths = append(paths, path)
+		}
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, path := range paths {
+			if _, err := compile(path); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}

@@ -1,0 +1,24 @@
+4
+one two 2
+x=3
+0
+buffered in twos!
+0
+1 line 1 6
+2 line 2 6
+3 line 3 6
+4 tail without newline 20
+true false 0
+Some(108) Some("ine ")
+4 true true 5
+27 true true
+line 1
+line 2
+line 3
+tail without newline
+41
+[a][b][][c]
+false true
+5000
+5
+Err("write: short write") 1

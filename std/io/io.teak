@@ -1,0 +1,143 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package io has what reading and writing share: the Reader and Writer
+// traits, which files implement and other sources and sinks of bytes
+// will, the Error a failed operation reports, and Copy, which moves
+// everything a Reader has into a Writer.
+//
+// A function of this package or of os that can fail returns a
+// Result<T, Error>, never a value and an error side by side, so a
+// failure is passed up with ? or handled with a match. An Error prints
+// as its message, "open /x: no such file or directory", wherever a
+// value is printed.
+package io
+
+// An Error is what a file operation reports when it fails: the
+// operation, the path or stream it was on, and the system's reason.
+// A program that must tell one failure from another asks Kind; one
+// that only reports it prints the Error, or calls Error for the text.
+struct Error impl Error {
+	// Op names the operation that failed, as the system call is
+	// named: open, read, write, close, sync, remove, mkdirtemp.
+	Op string
+
+	// Path is the path the operation was given, or the name of the
+	// stream it was on, /dev/stdout for the standard output.
+	Path string
+
+	// Msg is the system's reason, in lower case: "no such file or
+	// directory", "permission denied".
+	Msg string
+
+	kind Kind
+}
+
+// A Kind sorts the failures a program may want to tell apart from the
+// rest, since the reasons the system gives are many. A failure the
+// Kind does not name is Other.
+enum Kind impl Copy, Eq {
+	// Other is any failure the other kinds do not name.
+	Other
+
+	// NotExist: the path named nothing.
+	NotExist
+
+	// Permission: the system refused the operation.
+	Permission
+
+	// Exists: the path named something already.
+	Exists
+}
+
+// A Reader is a source of bytes. Read fills the buffer it is given
+// from the front, with as many bytes as it has at hand, and returns
+// how many it wrote; zero means the end of the data, never an empty
+// buffer. A failure is an Error.
+trait Reader {
+	func (r mut Self) Read(buf mut []byte) Result<int, Error>
+}
+
+// A Writer is a sink of bytes. Write takes every byte of the buffer it
+// is given and returns how many it wrote, which is the buffer's
+// length; a Writer that cannot take them all fails instead.
+trait Writer {
+	func (w mut Self) Write(buf ref []byte) Result<int, Error>
+}
+
+// Error returns the message, Op, Path and Msg in one line, as Go words
+// it: "open /nonexistent: no such file or directory". An Error with no
+// Path, as a short write has none, leaves it out: "write: short write".
+func (e ref Error) Error() string {
+	if e.Path.Len() == 0 {
+		return e.Op + ": " + e.Msg
+	}
+
+	return e.Op + " " + e.Path + ": " + e.Msg
+}
+
+// Kind returns which kind of failure this is.
+func (e ref Error) Kind() Kind {
+	return e.kind
+}
+
+// Errno builds the Error for a system call that failed with the given
+// error number: op and path say what was tried, and the runtime turns
+// the number into its reason and its Kind. It is for a package that
+// calls the system, as os does; a program meets the Errors it makes.
+// ShortWrite is the Error for a writer that took none of the bytes it
+// was given and reported no failure: Op "write", Kind Other, message
+// "short write". Copy and bufio's Flush report it rather than ask
+// forever.
+func ShortWrite() Error {
+	return Error{Op: "write", Path: "", Msg: "short write", kind: Other}
+}
+
+func Errno(op string, path ref string, code int) Error {
+	kind := match kindOf(code) {
+		1 => NotExist,
+		2 => Permission,
+		3 => Exists,
+		_ => Other,
+	}
+	return Error{Op: op, Path: path.Clone(), Msg: reason(code), kind: kind}
+}
+
+// Copy reads src until its end and writes everything to dst, through a
+// buffer of 32 KiB, and returns the number of bytes copied. The first
+// failure of either side ends the copy with its Error; a Writer that
+// takes fewer bytes than it was given is asked again for the rest, and
+// one that takes none fails the copy with a short write. Both are lent
+// mut for the duration: io.Copy(mut out, mut in).
+func Copy<W: Writer, R: Reader>(dst mut W, src mut R) Result<i64, Error> {
+	buf := make([]byte, 32768)
+	var total i64 = 0
+	for {
+		n := src.Read(mut buf)?
+		if n == 0 {
+			return Ok(total)
+		}
+
+		written := 0
+		for written < n {
+			m := dst.Write(buf[written:n])?
+			if m <= 0 {
+				return Err(ShortWrite())
+			}
+
+			written += m
+		}
+
+		total += i64(n)
+	}
+}
+
+// reason returns the system's text for an error number, with its first
+// letter in lower case. The runtime provides it.
+func reason(code int) string
+
+// kindOf sorts an error number into a Kind: 1 for a missing file, 2
+// for a permission refused, 3 for a file that exists, 0 otherwise. The
+// runtime provides it.
+func kindOf(code int) int

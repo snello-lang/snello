@@ -58,6 +58,20 @@ func TestExprErrors(t *testing.T) {
 		{"func f(xs ref []Node, i NodeID) int { return xs[i].n }", nil},
 		{"func f(xs []int) int { return xs[\"a\"] }", []string{"index must be an integer, not string"}},
 		{"func f(s ref string) ref string { return s[1:2] }", nil},
+		{"func f(s ref string) int { n := 0; for l := range s.Lines() { if s[0].IsDigit() || l.Len() > 0 { n += 1 } }; return n }", nil},
+		{"func f(a int, b int) int { return min(a, b, 3) + max(1, b) }", nil},
+		{"func f(a f64) f64 { return min(a, 2) }", nil}, // the literal takes the type of a
+		{"func f(a int, b f64) int { return min(a, b) }", []string{"cannot use b (f64) as int in argument"}},
+		{"func f(a int) int { return min(a) }", []string{"min takes at least two arguments"}},
+		{"func f(s ref string) ref string { return max(s, s) }", []string{"max takes numbers, not string"}},
+		{"func f() string { return min(\"a\", \"b\") }", []string{"min takes numbers, not string"}},
+		{"func f() f64 { return min(1, 2.5) }", nil},    // literals alone with a point among them are f64
+		{"func f(a f64) f64 { return min(2, a) }", nil}, // the literal comes last whatever its place
+		{"func f() int { return min(1, 2.5) }", []string{"cannot use a value of type f64 as int in return"}},
+		{"func f(xs mut []int) ref []int { return xs[1:] }", nil},
+		{"func f() [3]int { return [3]int{1, 2} }", nil},                                                           // the rest is zero
+		{"func f() [2]int { return [2]int{1, 2, 3} }", []string{"too many elements for [2]int: 3"}},                // a sub-slice is a view, even of a slice lent mut
+		{"func f(xs mut []int) { v := xs[1:]; v.Push(7) }", []string{"cannot borrow v as mut: v is a ref borrow"}}, // so nothing grows through it
 		{"func f(m map[string]int) int { return m[\"k\"] }", nil},
 		{"func f(m map[string]int) int? { return m.Get(\"k\") }", []string{"cannot use a value of type ref int? as int? in return"}},
 		// Options and results.
@@ -66,7 +80,18 @@ func TestExprErrors(t *testing.T) {
 		{"func f() int { x := Some + 1; return x }", []string{"Some must be called: Some(x)"}},
 		{"func f() { x := len; print(x) }", []string{"len must be called"}},
 		{"func f() *Node? { return Some(&Node{value: \"a\", next: None, n: 0}) }", nil},
+		{"func f() Node { return Node{\"a\", None, 0} }", nil}, // positional: every field in order
+		{"func f() Node { return Node{\"a\", 0} }", []string{"a positional struct literal gives every field: Node has 3 fields, not 2"}},
+		{"func f() Node { return Node{\"a\", n: 0} }", []string{"a struct literal names its fields or gives them all in order, not both"}},
+		{"func f() Node { return Node{1, None, 0} }", []string{"cannot use a value of type int as string in field value"}},
 		{"func f(n ref Node) ref string? { return Some(ref n.value) }", nil},
+		{"func f(o int?) string? { return o.Map(func(v int) string { return \"x\" }) }", nil}, // U from the function's result
+		{"func f(r Result<int, string>) Result<string, string> { return r.Map(func(v int) string { return \"x\" }) }", nil},
+		{"func f(r Result<int, string>) Result<int, bool> { return r.MapErr(func(e string) bool { return e.Len() > 0 }) }", nil},
+		{"func f(o int?, g func(int) string) string? { return o.Map(g) }", nil}, // a function value too
+		{"func f(o int?) string? { return o.Map(func(v string) string { return v }) }", []string{"cannot use a value of type func(string) string as func(int) string in argument"}},
+		{"func f(o string?) { p := o.Map(func(v string) int { return v.Len() }); print(p); print(o) }", []string{"use of moved value o"}}, // Map takes its receiver
+		{"func f(o int?) { o.MapErr(func(e int) int { return e }) }", []string{"MapErr is not a field or method of int?"}},
 		{"func f() Result<int, string> { return Ok(1) }", nil},
 		{"func f() Result<int, string> { return Err(2) }", []string{"cannot use a value of type int as string in argument"}},
 		{"func f() { x := Ok(1) }", []string{"cannot tell the type of Ok(...) here"}},
@@ -133,7 +158,7 @@ func TestExprErrors(t *testing.T) {
 		{"func f() { x := make(int) }", []string{"make builds a slice, map or channel, not int"}},
 		{"func f(x int) { print(len(x)) }", []string{"len is not defined on int"}},
 		{"func f() { x := Node{value: \"a\", missing: 1} }", []string{"unknown field missing"}},
-		{"func f() { x := Node{\"a\"} }", []string{"a struct literal names its fields"}},
+		{"func f() { x := Node{\"a\"} }", []string{"a positional struct literal gives every field: Node has 3 fields, not 1"}},
 		{"func f() { xs := []Node{{value: \"a\", next: None, n: 0}}; print(xs) }", nil},
 		{"func f() { x := int(2.5); y := f64(3); z := NodeID(1); w := []byte(\"a\"); print(x, y, z, w) }", nil},
 		{"func f() { x := int(\"a\") }", []string{"cannot convert string to int"}},

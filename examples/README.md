@@ -41,6 +41,10 @@ Writing the programs surfaced seven questions. All are now decided and recorded 
 
 The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there is no `Box<T>` (05, 06, 20).
 
+## The suite
+
+`suite_test.go` builds and runs every program here that has its expected output under `expected/`, as a release build and as a debug build, and names the rest as pending: `go test ./examples`. The stage specs under `../_docs/specs/` say what each pending program waits for.
+
 ## The core set
 
 `core/` holds eight of these programs rewritten in core Teak, without traits or user generics, as the acceptance suite for stage 1. See `core/README.md`.

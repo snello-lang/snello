@@ -23,6 +23,7 @@ A struct is built with a keyed literal and used with dot notation:
 
 ```teak
 n := Node{value: value, parent: None, children: []NodeID{}, live: true}
+v := Vec3{1, 2, 3}                    // every field in order, when the names add nothing
 t := Tree{nodes: []Node{{value: value, parent: None, children: []NodeID{}, live: true}}}
 if !t.nodes[id].live { return }
 ```
@@ -106,6 +107,8 @@ A `match` is exhaustive. If `State` gained a variant, every `match` on it withou
 | Tuple | each element against its pattern | `(Open(sess), Shutdown)` |
 | Alternatives | any of the patterns | `Plus \| Minus` |
 | Guard | the pattern, and then a condition | `Connecting(n) if n < 3` |
+
+A name in a pattern is a variant when a variant of that name is in sight, and a binding otherwise. The variants of an enum from another package are named through the package, `io.NotExist`, or bare when the value matched is of that enum: `match e.Kind() { NotExist => ..., Permission => ... }` reads as it would inside `io`, since the scrutinee's type says which enum the names belong to. A name that is no variant of it binds, as any name would.
 
 Patterns nest: `Bin(Plus, l, r)` matches a `Bin` whose first field is `Plus` and binds the other two. Matching on a tuple of two enums writes a state machine's transition table in one place:
 

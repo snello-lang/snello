@@ -48,7 +48,7 @@ go test ./...         # must pass
 go run ./cmd/teak lex FILE     # print the token stream of a Teak file
 go run ./cmd/teak parse FILE   # print the syntax tree
 go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
-go run ./cmd/teak build FILE   # build a native binary in the current directory; needs cc on the PATH
+go run ./cmd/teak build FILE   # build a native binary in the current directory; needs cc on the PATH, or CC set
 go run ./cmd/teak emit FILE    # print the C source that build compiles
 ```
 
@@ -65,10 +65,14 @@ go run ./cmd/teak emit FILE    # print the C source that build compiles
 | `ast/` | The syntax tree, modeled on `go/ast` |
 | `parser/` | The parser, modeled on `go/parser` |
 | `types/` | Types, objects, scopes and the checker, modeled on `go/types` |
+| `emit/c/` | The C emitter and, under `runtime/`, the C runtime every Teak program links against |
+| `.github/workflows/` | `test.yml` runs `go test ./...` on Linux and macOS on every push and pull request; the README's badge is its status |
+| `examples/expected/` | The expected output of each example program that runs, `<name>.out`, with the files it reads in `<name>.files/`; `examples/suite_test.go` builds and runs every example that has one and names the rest as pending |
+| `std/` | The standard library, written in Teak, one directory per package, embedded in the compiler; `std.go` is the importer that loads a package for a program importing it; `builtin/` documents the predeclared names and is never imported, with `builtin_test.go` keeping it in step with the checker |
 | `cmd/teak/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |
 
-Packages to come: the C emitter (`emit/c`) with its runtime, then the LLVM backend.
+Packages to come: the LLVM backend under `emit/`.
 
 ## When the design and the code disagree
 

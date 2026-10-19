@@ -9,6 +9,10 @@
   <strong>The Teak Programming Language</strong>
 </p>
 
+<p align="center">
+  <a href="https://github.com/teak-lang/teak/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/teak-lang/teak/actions/workflows/test.yml/badge.svg"></a>
+</p>
+
 ---
 
 Teak is a compiled language with Go's syntax and memory safety without a garbage collector. Every value has one owner and is freed where its owner dies; the compiler checks every use at compile time, and you never write a lifetime annotation. A Teak program builds to a native executable with a small runtime inside and nothing else.
@@ -20,48 +24,44 @@ package main
 
 import "fmt"
 
-struct Rect {
-    w f64
-    h f64
-}
-
-func (r ref Rect) Area() f64 {
-    return r.w * r.h
-}
-
 enum Shape {
     Circle(radius f64)
-    Box(rect Rect)
+    Rect(w f64, h f64)
+}
+
+struct Canvas {
+    name   string
+    shapes []Shape
+}
+
+func (c mut Canvas) Add(s Shape) {
+    c.shapes.Push(s)
 }
 
 func area(s Shape) f64 {
     return match s {
         Circle(radius) => 3.14 * radius * radius,
-        Box(rect)      => rect.Area(),
+        Rect(w, h)     => w * h,
     }
-}
-
-func grow(shapes mut []Shape) {
-    shapes.Push(Box(Rect{w: 2.0, h: 3.0}))
 }
 
 func main() {
-    shapes := []Shape{Circle(1.0)}
-    grow(mut shapes)
+    canvas := Canvas{name: "sketch", shapes: []Shape{Circle(1.0)}}
+    canvas.Add(Rect(2.0, 3.0))
     total := 0.0
-    for _, s := range shapes {    // the loop takes the shapes: shapes moves here
+    for _, s := range canvas.shapes {    // the loop takes the shapes: they move out of the canvas
         total += area(s)
     }
 
-    fmt.Println(total)
-    fmt.Println(len(shapes))      // ERROR "use of moved value shapes"
+    fmt.Println(canvas.name, total)
+    fmt.Println(len(canvas.shapes))      // ERROR "use of moved value canvas.shapes"
 }
 ```
 
-A struct holds fields and an enum holds one of several variants, each with its own data; `match` takes the enum apart and must cover every variant. `Area` reads its receiver, which `ref` says. `grow` borrows the slice to change it, and the call says so with `mut`. The loop takes the shapes by value, so it uses the slice up, and the last line, which reads it afterwards, is refused:
+An enum holds one of several variants, each with its own data, and `match` takes it apart and must cover every variant. A struct holds fields, and `Add` changes its canvas in place, which its `mut` receiver says. The loop takes the shapes by value, so they move out of the canvas: its name is still there, but the last line, which reads the shapes afterwards, is refused:
 
 ```
-shapes.teak:39:21: use of moved value shapes; moved at 34:23
+shapes.teak:35:21: use of moved value canvas.shapes; moved at 30:23
 ```
 
 ## Why Teak
@@ -76,7 +76,7 @@ Teak is young. The compiler handles core Teak today: functions, methods and clos
 
 ## Getting started
 
-Build the compiler from source with Go; a Teak program needs a C compiler on the path, `cc`.
+Build the compiler from source with Go; a Teak program needs a C compiler on the path, `cc`, or the one `CC` names.
 
 ```
 git clone https://github.com/teak-lang/teak

@@ -1,0 +1,30 @@
+# Runs the test suite on every push and pull request, on Linux and
+# macOS. The tests build and run Teak programs through the C compiler
+# the runtime targets, clang, named through CC as every build tool reads
+# it; macOS runners have it as cc, Linux runners beside gcc.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod # the version the compiler is built with, 1.27.2 today, read from one place
+          check-latest: false
+      - name: Show the C compiler
+        run: clang --version
+      - name: Test
+        run: go test ./...
+        env:
+          CC: clang

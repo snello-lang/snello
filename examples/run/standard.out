@@ -1,0 +1,19 @@
+{4 6} true {2 4} {-1 -2}
+11 -20
+6 {8 12}
+{10 20} 3
+[{6 12} {9 12}] {2 4}
+drop 50 EUR
+drop 150 EUR
+200 EUR
+Less Greater Equal true false
+Less true Greater true
+less
+true 3 2 tools
+Some(Honors(90, "fine")) Some({2 0}) None
+Less Less true
+2 5 1
+true Equal 0 Less
+1 1
+Greater 1 true true
+drop 200 EUR

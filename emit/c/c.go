@@ -57,20 +57,28 @@ type Emitter struct {
 	protos   bytes.Buffer // function prototypes
 	helpers  bytes.Buffer // generated functions, such as the printers of composite types
 	body     bytes.Buffer // function definitions
+	boxWords int          // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	tmp      int
 	used     map[types.Object]bool
-	state    map[string]int        // of each C type and helper name: undeclared, declared, defining, defined
-	seen     map[string]bool       // the unsupported constructs reported so far
-	result   types.Type            // the result type of the function being emitted
-	loops    []string              // the loops open at this point: the label continue jumps to, or empty for C's continue
-	captured map[*types.Var]string // inside a closure: how each captured variable is reached
-	closures int                   // closures written so far, numbering their functions
-	prologue []string              // declarations to put at the top of the function being written
-	pre      map[ast.Expr]string   // expressions already evaluated into temporaries, for defer
-	defers   []deferred            // the deferred calls of the function being written, in order
-	frames   []frame               // the scopes open at this point, with the variables to drop at their end (drop.go)
-	temps    []owned               // the temporaries of the statement being written, dropped at its end
-	guards   map[*types.Named]bool // whether dropping a declared type runs a Drop method, which a panic must still run
+	state    map[string]int                  // of each C type and helper name: undeclared, declared, defining, defined
+	seen     map[string]bool                 // the unsupported constructs reported so far
+	result   types.Type                      // the result type of the function being emitted
+	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
+	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
+	closures int                             // closures written so far, numbering their functions
+	prologue []string                        // declarations to put at the top of the function being written
+	pre      map[ast.Expr]string             // expressions already evaluated into temporaries, for defer
+	defers   []deferred                      // the deferred calls of the function being written, in order
+	subst    map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	generics map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
+	files    map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
+	external map[*types.Var]bool             // the library variables the runtime defines, read through their runtime declaration
+	statics  []owned                         // the top-level variables owning something, dropped when main returns
+	done     map[string]bool                 // the instances asked for, by C name
+	work     []instance                      // the instances still to write
+	frames   []frame                         // the scopes open at this point, with the variables to drop at their end (drop.go)
+	temps    []owned                         // the temporaries of the statement being written, dropped at its end
+	guards   map[*types.Named]bool           // whether dropping a declared type runs a Drop method, which a panic must still run
 	errors   []string
 }
 
@@ -96,36 +104,80 @@ var cReserved = map[string]bool{
 	"strlen": true, "NULL": true, "stdout": true, "stderr": true, "size_t": true,
 }
 
-// Emit writes the C program for a checked file. info must hold the
-// Defs, Uses and Types the checker recorded for f; file resolves the
-// positions in error messages.
-func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
+// A Library is a package written in Teak that the program imports, as
+// the importer loaded it: its source file and its syntax, checked into
+// the program's Info. It is compiled with the program, into the same C
+// file, its names qualified by its import path.
+type Library struct {
+	File   *token.File
+	Syntax *ast.File
+}
+
+// Emit writes the C program for a checked file and the library
+// packages it imports, each after the ones it imports. info must hold
+// the Defs, Uses and Types the checker recorded for all of them; the
+// files resolve the positions in error messages.
+func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...Library) ([]byte, error) {
 	e := &Emitter{
-		info:   info,
-		file:   file,
-		used:   make(map[types.Object]bool, len(info.Uses)),
-		state:  make(map[string]int),
-		seen:   make(map[string]bool),
-		pre:    make(map[ast.Expr]string),
-		guards: make(map[*types.Named]bool),
+		info:     info,
+		file:     file,
+		used:     make(map[types.Object]bool, len(info.Uses)),
+		state:    make(map[string]int),
+		seen:     make(map[string]bool),
+		pre:      make(map[ast.Expr]string),
+		guards:   make(map[*types.Named]bool),
+		generics: make(map[*types.Func]*ast.FuncDecl),
+		files:    make(map[*ast.FuncDecl]*token.File),
+		external: make(map[*types.Var]bool),
+		done:     make(map[string]bool),
 	}
+	e.state["tk_slice_u8"] = defined // the runtime defines []byte in teak.h, as the library's bodiless functions take it
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
 
-	for _, d := range f.Decls {
-		if d, ok := d.(*ast.TypeDecl); ok {
-			e.typeDecl(d)
+	units := append(libraries, Library{file, f})
+	for _, u := range units {
+		e.file = u.File
+		for _, d := range u.Syntax.Decls {
+			switch d := d.(type) {
+			case *ast.TypeDecl:
+				if len(d.TypeParams) == 0 {
+					e.typeDecl(d) // an instance of a generic type is declared when a value of it is first written
+				}
+			case *ast.FuncDecl:
+				e.generic(d, info.Defs[d.Name].(*types.Func)) // noted before any body can call it
+			case *ast.TraitDecl:
+				for _, m := range d.Methods {
+					if fn, ok := info.Defs[m.Name].(*types.Func); ok && m.Body != nil {
+						e.generics[fn], e.files[m] = m, u.File // a default method is written once per implementing type
+					}
+				}
+			case *ast.VarDecl:
+				e.varDecl(d, u.Syntax != f)
+			}
 		}
 	}
 
-	for _, d := range f.Decls {
-		switch d := d.(type) {
-		case *ast.FuncDecl:
-			e.funcDecl(d)
-		case *ast.VarDecl:
-			e.unsupported(d.Pos(), "top-level var and const")
+	for _, u := range units {
+		e.file = u.File
+		for _, d := range u.Syntax.Decls {
+			if d, ok := d.(*ast.FuncDecl); ok && e.generics[info.Defs[d.Name].(*types.Func)] == nil {
+				e.funcDecl(d)
+			}
 		}
+	}
+
+	e.instances()
+	finish := "\ttk_main();\n"
+	if len(e.statics) > 0 {
+		finish += "\ttk_statics_drop();\n"
+		var b strings.Builder
+		for _, s := range e.statics {
+			put(&b, "\t", e.dropOf(s.name, s.typ, token.NoPos), "\n")
+		}
+
+		put(&e.helpers, "static void tk_statics_drop(void) {\n", b.String(), "}\n\n") // after the droppers it asks for
 	}
 
 	if len(e.errors) > 0 {
@@ -134,6 +186,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 
 	var out bytes.Buffer
 	put(&out, "// Emitted by the Teak compiler from ", file.Name(), ". Do not edit.\n\n#include \"teak.h\"\n\n")
+	put(&out, "#define TK_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
 	out.Write(e.decls.Bytes())
 	out.WriteString("\n")
 	out.Write(e.types.Bytes())
@@ -141,7 +194,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info) ([]byte, error) {
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n\ttk_main();\n\treturn tk_finish();\n}\n")
+	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n" + finish + "\treturn tk_finish();\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -173,7 +226,7 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	named := e.info.Defs[d.Name].(*types.TypeName).Type().(*types.Named)
 	switch named.Underlying().(type) {
 	case *types.Struct, *types.Enum:
-		name := ident(d.Name.Name)
+		name := namedName(named)
 		e.state[name] = declared
 		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
 	default:
@@ -181,28 +234,140 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	}
 }
 
+// varDecl writes a top-level variable or constant as a static C
+// variable, in the prototypes section so that a declared type it has is
+// defined first. The value must be a literal: a number, character,
+// boolean or string, a negated number, or a struct of such, since
+// anything else would need a computation, which C does not run before
+// main. A library variable declared without a value is the runtime's,
+// defined in its header under the variable's name, as a function
+// without a body is; a program's variable without a value starts at
+// zero. A variable that may come to own something, by assignment, is
+// dropped when main returns, so that a debug build reports what the
+// program itself leaked.
+func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
+	for i, name := range d.Names {
+		obj := e.info.Defs[name]
+		if len(d.Values) == 0 && library {
+			e.external[obj.(*types.Var)] = true
+			continue
+		}
+
+		value := zeroValue
+		if i < len(d.Values) {
+			if value = e.staticValue(d.Values[i], obj.Type()); value == "" {
+				e.unsupported(name.Pos(), "a top-level var or const whose value is not a literal")
+				return
+			}
+		}
+
+		qualifier := "static TK_UNUSED " // a library's streams may go unused by a program
+		if d.Const {
+			qualifier += "const "
+		} else if needsDrop(obj.Type()) {
+			e.statics = append(e.statics, owned{objName(obj), obj.Type()})
+		}
+
+		put(&e.protos, qualifier, e.cType(obj.Type(), name.Pos()), " ", objName(obj), " = ", value, ";\n")
+	}
+}
+
+// staticValue writes x as a C initializer a static variable of type t
+// can have: a number, character, boolean or string literal, the
+// negation of a number, or a struct literal of such, with the live flag
+// of a Drop type set. A string is written as the fields of a tk_string
+// over the C literal, since the TK_STR macro is a compound literal,
+// which C does not allow at file scope. It is empty for anything else.
+func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
+	switch x := x.(type) {
+	case *ast.BasicLit:
+		if x.Kind != token.STRING {
+			return e.literal(x)
+		}
+
+		if s, err := strconv.Unquote(x.Value); err == nil {
+			return "{(const uint8_t *)" + cString(s) + ", " + strconv.Itoa(len(s)) + ", 0}"
+		}
+	case *ast.Ident:
+		if x.Name == "true" || x.Name == "false" {
+			return x.Name
+		}
+	case *ast.UnaryExpr:
+		if v := e.staticValue(x.X, t); x.Op == token.SUB && v != "" {
+			if v == "9223372036854775808" {
+				return "INT64_MIN" // the one magnitude C cannot negate as a signed literal
+			}
+
+			return "-" + v
+		}
+	case *ast.ParenExpr:
+		return e.staticValue(x.X, t)
+	case *ast.CompositeLit:
+		st, ok := t.Underlying().(*types.Struct)
+		if !ok {
+			return ""
+		}
+
+		var parts []string
+		for _, elt := range x.Elts {
+			kv := elt.(*ast.KeyValueExpr)
+			key := kv.Key.(*ast.Ident)
+			v := e.staticValue(kv.Value, fieldType(st, key.Name))
+			if v == "" {
+				return ""
+			}
+
+			parts = append(parts, "."+ident(key.Name)+" = "+v)
+		}
+
+		if hasDrop(t) {
+			parts = append(parts, ".tk_live = true")
+		}
+
+		if len(parts) == 0 {
+			return zeroValue
+		}
+
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
+
+	return ""
+}
+
 // funcDecl writes a function: a prototype in the prototypes section
 // and the definition in the body. Teak's main becomes tk_main, which
 // the C main calls; a method is a function named after its type whose
-// first parameter is the receiver.
+// first parameter is the receiver. A library function declared without
+// a body is the runtime's, declared in its header under the same name,
+// so nothing is written for it.
 func (e *Emitter) funcDecl(d *ast.FuncDecl) {
-	fn := e.info.Defs[d.Name].(*types.Func)
-	sig := fn.Type().(*types.Signature)
-	name := ident(d.Name.Name)
-	if d.Name.Name == "main" {
-		name = "tk_main"
+	if d.Body == nil {
+		return
 	}
 
-	params := sig.Params()
+	fn := e.info.Defs[d.Name].(*types.Func)
+	sig := fn.Type().(*types.Signature)
+	name := funcName(fn)
 	if recv := sig.Recv(); recv != nil {
 		name = methodName(recv.Type(), d.Name.Name)
+	}
+
+	e.writeFunction(name, sig, d.Body, d.Pos())
+}
+
+// writeFunction writes a function or method under the given C name:
+// its prototype, its head with the receiver as the first parameter,
+// and its body.
+func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.BlockStmt, pos token.Pos) {
+	params := sig.Params()
+	if recv := sig.Recv(); recv != nil {
 		params = append([]*types.Var{recv}, params...)
 	}
 
-	head := "static TK_UNUSED " + e.resultType(sig, d.Pos()) + " " + name + "(" + e.params(params, d.Pos()) + ")"
+	head := "static TK_UNUSED " + e.resultType(sig, pos) + " " + name + "(" + e.params(params, pos) + ")"
 	put(&e.protos, head, ";\n")
 	e.line(head + " {")
-	e.function(sig, d.Body)
+	e.function(sig, body)
 	e.line("")
 }
 
@@ -361,4 +526,17 @@ func ident(name string) string {
 	}
 
 	return name
+}
+
+// objName writes the C name of a declared function, type or constant:
+// its own, or for one a library package declares the name qualified by
+// the package's import path, in the runtime's tk_ space, which no name
+// of the program reaches. A function the library declares without a
+// body is the runtime's under this name.
+func objName(obj types.Object) string {
+	if p := obj.Pkg(); p != nil && p.Path() != "" {
+		return "tk_" + strings.ReplaceAll(p.Path(), "/", "__") + "_" + obj.Name() // net/http is net__http, apart from a package net_http
+	}
+
+	return ident(obj.Name())
 }

@@ -58,7 +58,7 @@ func scan(name ref string, r mut io.Reader, re ref regexp.Regexp, o ref Opts, ou
 }
 
 func main() {
-    o := match parseArgs(os.Args()[1:]) {
+    o := match parseArgs(os.Args[1:]) {
         Ok(o)  => o,
         Err(m) => { fmt.Fprintln(mut os.Stderr, m); os.Exit(2) },
     }

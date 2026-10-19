@@ -23,6 +23,7 @@ import (
 	"github.com/teak-lang/teak/emit/c"
 	"github.com/teak-lang/teak/parser"
 	"github.com/teak-lang/teak/scanner"
+	"github.com/teak-lang/teak/std"
 	"github.com/teak-lang/teak/token"
 	"github.com/teak-lang/teak/types"
 )
@@ -133,7 +134,8 @@ func check(path string) int {
 
 	f, file, err := parser.ParseFile(path, src)
 	if err == nil {
-		_, err = types.Check(file, f, nil)
+		conf := types.Config{Importer: std.NewImporter(&types.Info{})}
+		_, err = conf.Check("", file, f, nil)
 	}
 
 	if err != nil {
@@ -202,13 +204,15 @@ func emitSource(path string) ([]byte, bool) {
 
 	f, file, err := parser.ParseFile(path, src)
 	info := &types.Info{}
+	imp := std.NewImporter(info)
 	if err == nil {
-		_, err = types.Check(file, f, info)
+		conf := types.Config{Importer: imp}
+		_, err = conf.Check("", file, f, info)
 	}
 
 	var csrc []byte
 	if err == nil {
-		csrc, err = c.Emit(file, f, info)
+		csrc, err = c.Emit(file, f, info, libraries(imp)...)
 	}
 
 	if err != nil {
@@ -217,6 +221,18 @@ func emitSource(path string) ([]byte, bool) {
 	}
 
 	return csrc, true
+}
+
+// libraries returns the packages the importer loaded, as the backend
+// takes them.
+func libraries(imp *std.Importer) []c.Library {
+	pkgs := imp.Packages()
+	libs := make([]c.Library, len(pkgs))
+	for i, p := range pkgs {
+		libs[i] = c.Library{File: p.File, Syntax: p.Syntax}
+	}
+
+	return libs
 }
 
 // printErrors writes each error of a list on its own line.

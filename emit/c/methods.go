@@ -21,7 +21,7 @@ import (
 
 // methodCall writes a call of a predeclared method on x.X.
 func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
-	recv := valueType(e.info.Types[sel.X])
+	recv := valueType(e.typeOf(sel.X))
 	name := sel.Sel.Name
 	switch t := recv.Underlying().(type) {
 	case *types.Slice:
@@ -29,8 +29,16 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	case *types.Map:
 		return e.mapMethod(x, sel, t)
 	case *types.Basic:
+		if call := e.standardMethod(x, sel, recv); call != "" {
+			return call
+		}
+
 		if t.Kind() == types.String {
 			return e.stringMethod(x, sel)
+		}
+
+		if t.Kind() == types.Uint8 {
+			return e.byteMethod(x, sel)
 		}
 	case *types.Option:
 		return e.optionMethod(x, sel, "has", "None")
@@ -60,7 +68,7 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return ""
 	case "Pop":
 		out := e.temp()
-		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + ";")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
 		e.line(out + ".has = tk_slice_pop(" + generic + ", &" + out + ".val, " + size + ");")
 		return out
 	case "Insert":
@@ -91,7 +99,7 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 			return "tk_slice_clone(" + generic + ", " + out + ", " + size + ")"
 		})
 	case "SortBy":
-		less := e.saved(x.Args[0], e.info.Types[x.Args[0]])
+		less := e.saved(x.Args[0], e.typeOf(x.Args[0]))
 		e.line("tk_slice_sort(" + generic + ", " + size + ", " + e.lessAdapter(t.Elem(), x.Pos()) + ", &" + less + ");")
 		return ""
 	case "Sort":
@@ -113,7 +121,7 @@ func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
 		ct := e.cType(elem, pos)
 		less := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "a", types.NewRef(elem, false)), types.NewVar(token.NoPos, "b", types.NewRef(elem, false))}, types.Typ[types.Bool])
 		fn := e.cType(less, pos)
-		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t", fn, " *f = ctx;\n\treturn f->fn(f->env, *(const ", ct, " *)a, *(const ", ct, " *)b);\n}\n\n")
+		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t", fn, " *f = ctx;\n\treturn f->fn(f->box, *(const ", ct, " *)a, *(const ", ct, " *)b);\n}\n\n")
 	}
 
 	return name
@@ -180,7 +188,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	switch sel.Sel.Name {
 	case "Get", "GetMut":
 		out, found := e.temp(), e.temp()
-		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + " = {0};")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
 		e.line(val + " *" + found + " = tk_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ");")
 		e.line("if (" + found + " != NULL) {")
 		e.line(out + ".has = true;")
@@ -198,7 +206,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		return ""
 	case "Remove":
 		out := e.temp()
-		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + ";")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
 		e.line(out + ".has = tk_map_remove(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ", &" + out + ".val);")
 		return out
 	case "Contains":
@@ -278,8 +286,6 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	switch sel.Sel.Name {
 	case "Len":
 		return s + ".len"
-	case "Clone":
-		return "tk_string_clone(" + s + ")"
 	case "ToUpper":
 		return "tk_to_upper(" + s + ")"
 	case "ToLower":
@@ -293,12 +299,14 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	case "Contains":
 		return "tk_string_contains(" + s + ", " + args[0] + ")"
 	case "Fields":
-		return e.into(e.info.Types[x], x.Pos(), func(out string) string { return "tk_fields(" + s + ", " + out + ")" })
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_fields(" + s + ", " + out + ")" })
+	case "Lines":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_lines(" + s + ", " + out + ")" })
 	case "Split":
-		return e.into(e.info.Types[x], x.Pos(), func(out string) string { return "tk_split(" + s + ", " + args[0] + ", " + out + ")" })
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_split(" + s + ", " + args[0] + ", " + out + ")" })
 	case "SplitOnce":
 		out := e.temp()
-		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + ";")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
 		e.line(out + ".has = tk_split_once(" + s + ", " + args[0] + ", &" + out + ".val.e0, &" + out + ".val.e1);")
 		return out
 	}
@@ -307,13 +315,59 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	return "0"
 }
 
+// byteMethod writes the character classes of a byte onto the runtime's
+// tests, which are ASCII, as a byte is.
+func (e *Emitter) byteMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
+	c := e.looked(sel.X, types.Typ[types.Uint8])
+	switch sel.Sel.Name {
+	case "IsDigit":
+		return "tk_is_digit(" + c + ")"
+	case "IsSpace":
+		return "tk_is_space(" + c + ")"
+	case "IsLetter":
+		return "tk_is_letter(" + c + ")"
+	case "IsUpper":
+		return "tk_is_upper(" + c + ")"
+	case "IsLower":
+		return "tk_is_lower(" + c + ")"
+	}
+
+	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on bytes")
+	return "0"
+}
+
+// standardMethod writes the method of a standard trait on a number, a
+// string or a bool, Eq, Cmp, Hash or Clone, from the comparison, hash
+// and copy the backend writes for the type; "" for any other method.
+func (e *Emitter) standardMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type) string {
+	switch sel.Sel.Name {
+	case "Eq", "Cmp":
+		a, b := e.looked(sel.X, recv), e.operands(x.Args, nil)[0]
+		if e.hasEffects(sel.X) || e.hasEffects(x.Args[0]) { // the comparison names each operand twice
+			a, b = e.spill(a, recv, x.Pos()), e.spill(b, e.typeOf(x.Args[0]), x.Pos())
+		}
+
+		if sel.Sel.Name == "Eq" {
+			return "(" + e.equal(a, b, recv, x.Pos()) + ")"
+		}
+
+		return e.compare(a, b, recv, x.Pos())
+	case "Hash":
+		return e.hash(e.looked(sel.X, recv), recv, x.Pos())
+	case "Clone":
+		return e.cloneOf(e.looked(sel.X, recv), recv, x.Pos())
+	}
+
+	return ""
+}
+
 // optionMethod writes the methods options and results share: flag is
 // the field that says a value is present and absent the name of the
 // other case for the panic message.
 func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, absent string) string {
 	place, t, held := e.consumed(sel.X)
 	if held != "" {
-		e.hold(held, e.info.Types[sel.X])
+		e.hold(held, e.typeOf(sel.X))
 	}
 
 	switch sel.Sel.Name {
@@ -335,20 +389,89 @@ func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, abs
 		e.line("if (!" + place + "." + flag + ") {")
 		e.line("tk_panic(" + msg.s + ");")
 		e.line("}")
-		return e.taken(place+".val", e.info.Types[x], held, e.info.Types[sel.X], x.Pos())
+		return e.taken(place+".val", e.typeOf(x), held, e.typeOf(sel.X), x.Pos())
 	case "UnwrapOr":
-		v := e.saved(x.Args[0], e.info.Types[x])
+		v := e.saved(x.Args[0], e.typeOf(x))
 		out := e.temp()
-		e.line(e.cType(e.info.Types[x], x.Pos()) + " " + out + " = " + v + ";")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = " + v + ";")
 		e.line("if (" + place + "." + flag + ") {")
-		e.line(e.dropIfNeeded(v, e.info.Types[x], x.Pos()))
-		e.line(out + " = " + e.taken(place+".val", e.info.Types[x], held, e.info.Types[sel.X], x.Pos()) + ";")
+		e.line(e.dropIfNeeded(v, e.typeOf(x), x.Pos()))
+		e.line(out + " = " + e.taken(place+".val", e.typeOf(x), held, e.typeOf(sel.X), x.Pos()) + ";")
 		e.line("}")
 		return out
+	case "Map", "MapErr":
+		return e.mapped(x, sel, place, t, held, flag)
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on "+t.String())
 	return "0"
+}
+
+// mapped writes Map and MapErr on the option or result at place, of
+// type t: the function argument is called on the part it maps, moved
+// out of the receiver, and the other part, when there is one, moves
+// into the result as it is. The function's type comes from the instance
+// the checker recorded for the call.
+func (e *Emitter) mapped(x *ast.CallExpr, sel *ast.SelectorExpr, place string, t types.Type, held string, flag string) string {
+	inst, ok := e.info.Instances[sel.Sel]
+	if !ok {
+		e.unsupported(x.Pos(), sel.Sel.Name+" without its instance")
+		return "0"
+	}
+
+	fsig := e.sub(inst.Type.Params()[0].Type()).(*types.Signature)
+	var f string
+	if e.hasEffects(x.Args[0]) {
+		f = e.saved(x.Args[0], fsig)
+	} else {
+		f = e.valueTo(x.Args[0], fsig)
+	}
+
+	rt := e.typeOf(x)
+	out := e.temp()
+	e.line(e.cType(rt, x.Pos()) + " " + out + " = {0};")
+
+	// part writes the move of one part out of the receiver into the
+	// result: through the function for the part it maps, as it is for
+	// the other.
+	mapsErr := sel.Sel.Name == "MapErr"
+	heldType := e.typeOf(sel.X)
+	part := func(field string, pt types.Type, through bool) {
+		v := e.taken(place+"."+field, pt, held, heldType, x.Pos())
+		if through {
+			v = f + ".fn(" + f + ".box, " + v + ")"
+		}
+
+		e.line(out + "." + field + " = " + v + ";")
+	}
+
+	e.line("if (" + place + "." + flag + ") {")
+	e.line(out + "." + flag + " = true;")
+	part("val", valueOf(e.typeOf(sel.X)), !mapsErr)
+	if _, isResult := t.Underlying().(*types.Result); isResult {
+		e.line("} else {")
+		part("err", errOf(e.typeOf(sel.X)), mapsErr)
+	}
+
+	e.line("}")
+	return out
+}
+
+// valueOf returns the value type of an option or a result, errOf the
+// error type of a result.
+func valueOf(t types.Type) types.Type {
+	switch u := t.Underlying().(type) {
+	case *types.Option:
+		return u.Elem()
+	case *types.Result:
+		return u.Val()
+	}
+
+	panic("valueOf: " + t.String() + " is neither an option nor a result")
+}
+
+func errOf(t types.Type) types.Type {
+	return t.Underlying().(*types.Result).Err()
 }
 
 // into writes an operation whose result the runtime stores through a
@@ -363,6 +486,15 @@ func (e *Emitter) into(t types.Type, pos token.Pos, call func(out string) string
 
 // saved writes x into a temporary of type t and returns its name, for
 // a value the runtime takes by address.
+// spill writes the C value v of type t into a temporary and returns its
+// name, so that an expression naming it more than once evaluates it
+// once.
+func (e *Emitter) spill(v string, t types.Type, pos token.Pos) string {
+	tmp := e.temp()
+	e.line(e.cType(t, pos) + " " + tmp + " = " + v + ";")
+	return tmp
+}
+
 func (e *Emitter) saved(x ast.Expr, t types.Type) string {
 	v := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + v + " = " + e.valueTo(x, t) + ";")
@@ -386,6 +518,10 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) {
 		return place + ".ptr[tk_index((int64_t)(" + i + "), " + place + ".len)]"
+	}
+
+	if a, ok := t.Underlying().(*types.Array); ok {
+		return place + ".at[tk_index((int64_t)(" + i + "), " + strconv.FormatInt(a.Len(), 10) + ")]"
 	}
 
 	e.unsupported(x.Pos(), "indexing a value of type "+t.String())
@@ -421,7 +557,7 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) string {
 
 // makeCall writes make([]T, n), make([]T, n, cap) and make(map[K]V).
 func (e *Emitter) makeCall(x *ast.CallExpr) string {
-	t := e.info.Types[x]
+	t := e.typeOf(x)
 	if _, ok := t.Underlying().(*types.Map); ok {
 		return "(" + e.cType(t, x.Pos()) + "){0}"
 	}
@@ -472,8 +608,14 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) s
 // behind.
 func (e *Emitter) takeCall(x *ast.CallExpr) string {
 	target := x.Args[0].(*ast.UnaryExpr).X
-	place := deref(e.lvalue(target), e.info.Types[target])
-	t := e.info.Types[x]
+	place := deref(e.lvalue(target), e.typeOf(target))
+	t := e.typeOf(x)
+	if e.hasEffects(target) { // the place is named twice below: a call in it runs once
+		at := e.temp()
+		e.line(e.cType(t, x.Pos()) + " *" + at + " = &" + place + ";")
+		place = "(*" + at + ")"
+	}
+
 	out := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + out + " = " + place + ";")
 	e.line(place + " = (" + e.cType(t, x.Pos()) + ")" + zeroValue + ";")
@@ -489,6 +631,10 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) && b.ID() == types.BuiltinLen {
 		return place + "." + b.Name()
+	}
+
+	if a, ok := t.Underlying().(*types.Array); ok {
+		return strconv.FormatInt(a.Len(), 10) // len and cap alike
 	}
 
 	e.unsupported(x.Pos(), b.Name()+" on "+t.String())

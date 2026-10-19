@@ -227,6 +227,18 @@ func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 		}
 	}
 
+	if id, ok := unparen(e).(*ast.Ident); ok && isSignature(v.typ) {
+		if p, kind := c.placeOf(id); kind == placeOwned {
+			for i := range c.borrows { // h := g: h holds what the closure g holds
+				if b := c.borrows[i]; b.holder == p.v && b.pos < pos && (b.end == token.NoPos || b.end > pos) {
+					c.borrows = append(c.borrows, borrow{holder: v, place: b.place, mut: b.mut, pos: pos})
+				}
+			}
+
+			return
+		}
+	}
+
 	if caps := c.capturesOf(e); caps != nil {
 		for _, cap := range caps { // g := func() { n += 1 }: g holds n
 			if cap.mode != byMove { // the closure owns what it moved; the variable is dead outside
@@ -485,7 +497,7 @@ func borrowIn(t Type) (mut, ok bool) {
 		}
 	case *Named:
 		if t.holdsBorrow() {
-			return borrowIn(t.underlying)
+			return borrowIn(t.Underlying())
 		}
 	case *Struct:
 		for _, f := range t.fields {
@@ -571,7 +583,7 @@ func (c *Checker) liveAt(b *borrow, pos token.Pos, loops []token.Pos) (use token
 // throughWhat names what a ref borrow was reached through, for a
 // message: the method's receiver, or a borrow.
 func (c *Checker) throughWhat(e ast.Expr) string {
-	if p, kind := c.placeOf(e); kind != notPlace && c.sig != nil && c.sig.recv == p.v {
+	if p, kind := c.placeOf(e); kind != notPlace && c.recv != nil && c.recv == p.v {
 		return "receiver"
 	}
 

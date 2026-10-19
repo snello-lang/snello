@@ -1,0 +1,48 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package math has the constants and functions of floating-point
+// arithmetic, over f64: Pi, and Sqrt, Abs, Min and Max.
+//
+// Every function takes and returns an f64. A program working in
+// another float type converts at the call, f64(x), and a literal
+// written as an argument takes the type on its own, so math.Min(2, 7)
+// needs no 2.0.
+package math
+
+// Pi is the ratio of a circle's circumference to its diameter, to the
+// precision an f64 holds.
+const Pi f64 = 3.14159265358979323846264338327950288
+
+// Sqrt returns the square root of x. For a negative x the result is not
+// a number, as the system's square root has it. The runtime provides
+// it.
+func Sqrt(x f64) f64
+
+// Abs returns the absolute value of x.
+func Abs(x f64) f64 {
+	if x < 0 {
+		return -x
+	}
+
+	return x
+}
+
+// Min returns the smaller of x and y, and y when neither is smaller.
+func Min(x, y f64) f64 {
+	if x < y {
+		return x
+	}
+
+	return y
+}
+
+// Max returns the larger of x and y, and y when neither is larger.
+func Max(x, y f64) f64 {
+	if x > y {
+		return x
+	}
+
+	return y
+}

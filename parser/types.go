@@ -251,15 +251,17 @@ func (p *Parser) parseParams() []*ast.Param {
 			continue
 		}
 
-		if p.tok == token.IDENT && typeStart[p.peek()] {
+		if p.tok == token.IDENT && (typeStart[p.peek()] || p.peek() == token.ELLIPSIS) {
 			names = append(names, p.parseIdent())
+			dots := p.parseDots()
 			typ := p.parseType()
 			for _, name := range names {
-				params = append(params, &ast.Param{Name: name, Type: typ})
+				params = append(params, &ast.Param{Name: name, Dots: dots, Type: typ})
 			}
 		} else {
 			params = appendTypeParams(params, names)
-			params = append(params, &ast.Param{Type: p.parseType()})
+			dots := p.parseDots()
+			params = append(params, &ast.Param{Dots: dots, Type: p.parseType()})
 		}
 
 		names = names[:0]
@@ -272,7 +274,25 @@ func (p *Parser) parseParams() []*ast.Param {
 
 	params = appendTypeParams(params, names)
 	p.expect(token.RPAREN)
+	for i, param := range params {
+		if param.Dots.IsValid() && i < len(params)-1 {
+			p.error(param.Dots, "can only use ... with the final parameter")
+		}
+	}
+
 	return params
+}
+
+// parseDots consumes the ... of a variadic parameter, if present, and
+// returns its position.
+func (p *Parser) parseDots() token.Pos {
+	if p.tok != token.ELLIPSIS {
+		return token.NoPos
+	}
+
+	pos := p.pos
+	p.next()
+	return pos
 }
 
 // appendTypeParams adds one unnamed parameter per held-back identifier,
@@ -293,10 +313,26 @@ func appendTypeParams(params []*ast.Param, names []*ast.Ident) []*ast.Param {
 //
 //	func() int               [int]
 //	func() (*Node, error)    [PointerType, error]
+//	func() (int, int)?       [OptionType{TupleType}]
 //	func()                   nil
 func (p *Parser) parseResults() []ast.Type {
 	if p.tok == token.LPAREN {
-		return p.parseTypeList()
+		pos := p.pos
+		elems := p.parseTypeList()
+		if p.tok != token.QUESTION {
+			return elems
+		}
+
+		// (A, B)? is one result, an optional tuple, as it is anywhere
+		// else a type is written.
+		var typ ast.Type = &ast.TupleType{Lparen: pos, Elems: elems}
+		if len(elems) == 1 {
+			typ = elems[0]
+		}
+
+		opt := &ast.OptionType{Elem: typ, Question: p.pos}
+		p.next()
+		return []ast.Type{opt}
 	}
 
 	if typeStart[p.tok] {

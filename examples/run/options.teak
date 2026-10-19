@@ -4,8 +4,12 @@
 
 // Options and Results: Some and None, Ok and Err, ? passing the absent
 // or failed case up, ?? with a value, a panic and a return on its right,
-// if with a binding, if as an expression, a match on a Result, and the
-// order of evaluation when an operand needs statements.
+// if with a binding, if as an expression, a match on a Result, the
+// order of evaluation when an operand needs statements, and Map and
+// MapErr on both, with a closure capturing a local, a function value,
+// a function argument that is itself a call, a Map inside a Map, an
+// owning value moved through, a value with a Drop method mapped and
+// passed through, and one passed up with ?.
 
 package main
 
@@ -45,6 +49,35 @@ func describe(n int) string {
 func bump(o mut (int?)) {
 	v := o ?? return
 	*v += 100
+}
+
+// label maps the error of a parse to its length and passes it up.
+func label(s ref string) Result<string, int> {
+	v := parse(s).MapErr(func(e string) int { return e.Len() })?
+	return Ok(fmt.Sprint("ok", v))
+}
+
+func twiceText(n int) string {
+	return fmt.Sprint(n * 2)
+}
+
+// pick returns a function value, and says so, to show the argument of
+// Map is evaluated once, after the receiver.
+func pick() func(int) string {
+	fmt.Println("pick")
+	return twiceText
+}
+
+struct Loud impl Drop { name string }
+
+func (l mut Loud) Drop() { fmt.Println("drop", l.name) }
+
+func loud(ok bool) Result<Loud, Loud> {
+	if ok {
+		return Ok(Loud{name: "a"})
+	}
+
+	return Err(Loud{name: "b"})
 }
 
 func trace(label string, v int) int {
@@ -92,6 +125,23 @@ func main() {
 	sum := trace("a", 1) + (half(trace("b", 4)) ?? 0)
 	fmt.Println(sum, trace("c", 0) > 0 && (half(trace("d", 2)) ?? 0) > 0)
 	fmt.Println(trace("e", 1)-trace("f", 2), Point{x: trace("g", 1), y: trace("h", 2)})
+
+	// Map and MapErr: the function runs on the present or failed case
+	// and the other case passes through.
+	suffix := "!".Clone()
+	fmt.Println(half(8).Map(func(v int) string { return fmt.Sprint(v) + suffix }), half(3).Map(twiceText), half(8).Map(twiceText))
+	fmt.Println(parse("abc").Map(twiceText), parse("").Map(twiceText))
+	fmt.Println(parse("abc").MapErr(func(e string) int { return e.Len() }), parse("").MapErr(func(e string) int { return e.Len() }))
+	fmt.Println(label("ab"), label(""))
+	owned := Some("own".Clone())
+	fmt.Println(owned.Map(func(s string) int { return s.Len() }), Some("kept".Clone()).Map(func(s string) string { return s }))
+	fmt.Println(half(trace("r", 8)).Map(pick()), Some(Some(3)).Map(func(o int?) int { return o.Map(func(v int) int { return v * 10 }) ?? 0 }))
+
+	// A value with a Drop method: the one mapped dies in the closure,
+	// the one passed through with the result.
+	fmt.Println(loud(true).Map(func(l Loud) int { return l.name.Len() }).IsOk(), loud(false).MapErr(func(l Loud) int { return 2 }).IsErr())
+	passed := loud(false).Map(func(l Loud) int { return 1 })
+	fmt.Println(passed.IsErr())
 }
 
 struct Point {

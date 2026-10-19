@@ -24,7 +24,7 @@ t := s
 fmt.Println(s)                        // ERROR "use of moved value s"
 ```
 
-The same happens whenever a value goes somewhere that keeps it: passed to a parameter declared by value, returned, stored in a field or a slice, sent on a channel, or captured by a task. Each of these is a **move**. Nothing is copied; the value now lives under its new owner and the old name is dead. The compiler reports the use and the move together, and the message is the same whatever moved it, including a closure that consumes the variable and a method that consumes its receiver, such as `f.Close()`.
+The same happens whenever a value goes somewhere that keeps it: passed to a parameter declared by value, returned, stored in a field or a slice, sent on a channel, or captured by a task. Each of these is a **move**. Nothing is copied; the value now lives under its new owner and the old name is dead. The compiler reports the use and the move together, and the message is the same whatever moved it, including a closure that consumes the variable and a method that consumes its receiver, such as `f.Close()`. Such a method cannot be called on a borrow of a value that moves, since the borrower has no value to give: `cannot move f out of a borrow`.
 
 Most code never notices. A value usually flows forward: built here, handed to the function that needs it, kept there. The state machine is the clearest case. `step` takes the old state and the event by value and builds the new state from their parts. The session inside moves from `Open` to `Draining` with nothing copied:
 
@@ -58,6 +58,8 @@ op := p.cur                                 // Token is Copy: a copy, not a move
 
 A struct with a string or a slice in it is not `Copy`, because those own memory. The rule to keep in mind: **if copying it would duplicate something that must be freed, it moves.**
 
+A type may say it anyway, `struct Edge impl Copy { from, to int }`, and then the compiler holds it to its word: a field that moves, or a `Drop` method, is reported at the declaration, `Edge does not implement Copy: field name has type string, which is not Copy`. Chapter 11 has the other traits a type can list this way.
+
 ## Moves in branches and loops
 
 A move on one path counts on every path after they join, and a move inside a loop happens on every iteration:
@@ -74,6 +76,8 @@ for i := 0; i < 3; i += 1 {
 }
 ```
 
+Assigning to a moved variable gives it a value again, and it is usable from there on. After paths join it is usable only if every path gave it one: `if c { s = "b" } else { s = "c" }` revives `s`, `if c { s = "b" }` alone does not, and neither does a `switch` without a `default`. Giving back a field clears a move of that field, and giving back the whole clears every part. Inside a loop body an assignment counts for the rest of that iteration only, since a loop with a condition may run its body no times; a `for` with no condition runs it, so what every `break` path gave back is usable after the loop. The check at the end of a loop body is simpler than this: a value declared before the loop and moved at the end of the body is reported, even where the next iteration would give it back before using it. An assignment inside a closure gives nothing back to the function around it, since the closure may never run.
+
 A move on a path that leaves the function does not count for the paths that stay. This is what makes `??` with a `return` work: the key moves into the error only when the else runs, and is still owned on the line after:
 
 ```teak
@@ -88,6 +92,13 @@ Indexing an owned slice or map does not move the element out; it lends it (chapt
 ```teak
 first := xs[0]                        // ERROR "cannot move xs[0] out of the slice"
 v := take(mut q.buf[q.head])          // moves the element out and leaves None behind
+```
+
+A part of a value no name holds stays where it is too: the field of a value a call lent, `pick(mut xs).name` where `pick` returns `mut Node`, is the borrowed value's, and the field of the cell a returned pointer points at, `(*mk()).name`, belongs to a temporary that is dropped when the statement ends, which would drop the part twice. Bind the temporary to a name first, `p := mk(); n := (*p).name`, and the move is from `p`.
+
+```teak
+s := pick(mut xs).name                // ERROR "cannot move pick(...).name out of a borrow"
+n := (*mk()).name                     // ERROR "cannot move (*mk()).name out of a temporary: bind the temporary to a name first"
 ```
 
 `take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. It is how a linked structure is rebuilt without a temporary placeholder:
@@ -176,4 +187,5 @@ No program the checker accepts should ever fail this way, which is what makes th
 | `s moved in a previous iteration of the loop` | `move-in-loop` |
 | `cannot move xs[0] out of the slice` | `move-out-of-slice` |
 | `cannot move n.value out of a borrow` | `move-out-of-borrow` |
+| `cannot move pick(...).name out of a borrow`, `cannot move (*mk()).name out of a temporary: bind the temporary to a name first` | `TestMoves` in `types/move_test.go` |
 | `use of partially moved value n` | `partial-move` |

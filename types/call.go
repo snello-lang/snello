@@ -21,16 +21,15 @@ func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
 }
 
 func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
-	for _, t := range e.TypeArgs {
-		c.typ(t)
-		c.errorf(e.Lparen, "explicit type arguments are not part of core Teak")
-	}
-
 	if ident, ok := e.Fun.(*ast.Ident); ok {
 		if _, obj := c.scope.LookupParent(ident.Name); obj != nil {
 			switch obj := obj.(type) {
 			case *Builtin:
 				c.recordUse(ident, obj)
+				if len(e.TypeArgs) > 0 {
+					c.errorf(e.Lparen, obj.name+" takes no type arguments")
+				}
+
 				return c.builtinCall(e, obj)
 			case *Variant:
 				c.recordUse(ident, obj)
@@ -39,7 +38,14 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		}
 	}
 
+	if v := c.packageVariant(e.Fun); v != nil {
+		return c.variantCall(e, v, expected)
+	}
+
+	callee := c.callee
+	c.callee = unparen(e.Fun)
 	f := c.expr(e.Fun, nil)
+	c.callee = callee // an inner call set its own: f().With(1) is a call of With
 	if f.mode == invalid {
 		c.exprs(e.Args)
 		return invalidOperand
@@ -60,8 +66,25 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.spawned(e, f, sig)
 	}
 
-	tmp := c.args(e, sig)
+	var tmp ast.Expr
+	switch {
+	case sig.tparams != nil:
+		if sig, tmp = c.genericCall(e, sig, expected); sig == nil {
+			return invalidOperand
+		}
+	case len(e.TypeArgs) > 0:
+		c.errorf(e.Lparen, exprText(e.Fun)+" is not generic and takes no type arguments")
+		c.exprs(e.Args)
+		return invalidOperand
+	default:
+		tmp = c.args(e, sig)
+	}
+
 	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
+		if n, ok := receiverBase(sig.recv.typ).(*Named); ok && n.orig != nil {
+			c.recordCall(n.orig.tparams, n.targs, e.Lparen, n.obj.name) // the method is an instance's, made per type argument
+		}
+
 		if r, ok := sig.recv.typ.(*Ref); ok {
 			c.lend(sel.X, r.mut, e.Rparen) // the receiver is borrowed last, after the arguments
 			if t := c.temporary[sel.X]; t != nil {
@@ -72,6 +95,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 
 	if _, ok := borrowIn(sig.results); ok && tmp != nil {
 		c.markTemporary(e, tmp) // the result borrows what the receiver or argument did
+	}
+
+	if diverges(f.obj) {
+		return operand{value, Typ[Never], nil, nil}
 	}
 
 	return operand{value, sig.results, nil, nil}
@@ -106,29 +133,157 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 			continue
 		}
 
-		switch {
-		case p.kept:
-			c.kept(op, "stored", arg.Pos())
-		case e == c.spawning:
-			c.kept(op, "spawned", arg.Pos())
-		}
-
-		if _, ok := p.typ.(*Ref); ok {
-			c.noteTemporary(arg, op)
-			if t := c.temporary[arg]; t != nil {
-				tmp = t
-			}
-		}
-
-		if r, ok := p.typ.(*Ref); ok && op.mode != value {
-			c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
-		} else if !isMut(op.typ) {
-			c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
-			c.maybeMove(op, p.typ)
+		if t := c.argEffects(e, arg, op, p); t != nil {
+			tmp = t
 		}
 	}
 
 	return tmp
+}
+
+// diverges reports whether a call of obj never returns: os.Exit, which
+// the library declares without a body and the compiler provides, ends
+// the program as panic does, and the checker knows it as it knows
+// panic, since a function cannot say so in its signature yet.
+func diverges(obj Object) bool {
+	fn, ok := obj.(*Func)
+	return ok && fn.name == "Exit" && fn.pkg != nil && fn.pkg.path == "os"
+}
+
+// genericVariant checks a variant of a generic enum: its type
+// arguments come from the type the context expects, the arguments
+// written, Leaf<int>(1), and the values, in that order.
+func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) operand {
+	if expected == Typ[Invalid] {
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
+	if len(e.Args) != len(v.fields) {
+		c.errorf(e.Lparen, v.name+" has "+strconv.Itoa(len(v.fields))+" fields, not "+strconv.Itoa(len(e.Args)))
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
+	in := newInference(v.parent.tparams)
+	if !c.explicit(in, e.TypeArgs, v.name, e.Fun, nil) {
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
+	in.unify(v.parent, expected)
+	slots := varTypes(v.fields)
+	ops := c.evaluate(in, e.Args, slots, func(i int, op operand) { c.maybeMove(op, slots[i]) })
+	targs, ok := c.complete(in, v.name, e.Fun, nil)
+	if !ok {
+		return invalidOperand
+	}
+
+	t := Instantiate(v.parent, targs)
+	fields := t.Underlying().(*Enum).variants[v.index].fields
+	for i, op := range ops {
+		c.fits(op, fields[i].typ, e.Args[i].Pos(), "field "+fields[i].name)
+	}
+
+	return operand{value, t, nil, nil}
+}
+
+// argEffects runs what passing op for the parameter p does, once the
+// argument fits: a kept or spawned argument may not be a borrow, an
+// argument for a ref or mut parameter is lent for the call, and any
+// other is moved unless it is Copy. It returns the temporary the
+// argument lends, if any. Only the parameter's shape matters, so a
+// generic call runs it before its type arguments are known.
+func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var) (tmp ast.Expr) {
+	switch {
+	case p.kept:
+		c.kept(op, "stored", arg.Pos())
+	case e == c.spawning:
+		c.kept(op, "spawned", arg.Pos())
+	}
+
+	if _, ok := p.typ.(*Ref); ok {
+		c.noteTemporary(arg, op)
+		tmp = c.temporary[arg]
+	}
+
+	if r, ok := p.typ.(*Ref); ok && op.mode != value {
+		c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
+	} else if !isMut(op.typ) {
+		c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
+		c.maybeMove(op, p.typ)
+	}
+
+	return tmp
+}
+
+// genericCall checks the arguments of a call of a generic function or
+// method: the type arguments written at the call come first, the rest
+// are inferred from the arguments and then from the type the context
+// expects of the result, and the arguments are checked against the
+// signature with them in place, which it returns, nil after an error,
+// with the temporary an argument lends. The instance is recorded for
+// the backend.
+func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*Signature, ast.Expr) {
+	name := exprText(e.Fun)
+	in := newInference(sig.tparams)
+	if !c.explicit(in, e.TypeArgs, name, e.Fun, sig) {
+		c.exprs(e.Args)
+		return nil, nil
+	}
+
+	fixed := len(sig.params)
+	if sig.variadic {
+		fixed--
+	}
+
+	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
+		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
+		c.exprs(e.Args)
+		return nil, nil
+	}
+
+	var tmp ast.Expr
+	ops := c.evaluate(in, e.Args[:fixed], varTypes(sig.params[:fixed]), func(i int, op operand) {
+		if t := c.argEffects(e, e.Args[i], op, sig.params[i]); t != nil {
+			tmp = t
+		}
+	})
+	c.exprs(e.Args[fixed:]) // a variadic any parameter takes anything
+
+	in.unify(sig.results, expected)
+	targs, ok := c.complete(in, name, e.Fun, sig)
+	if !ok {
+		return nil, nil
+	}
+
+	inst := in.apply(sig).(*Signature)
+	for i, op := range ops {
+		c.fits(op, inst.params[i].typ, e.Args[i].Pos(), "argument")
+	}
+
+	c.recordCall(sig.tparams, targs, e.Lparen, name)
+
+	if id := calleeName(e.Fun); id != nil && c.info != nil {
+		c.info.Instances[id] = Instance{targs, inst}
+	}
+
+	return inst, tmp
+}
+
+// calleeName is the name a call's function is written with: f, or the
+// method's name in x.f, through any parentheses. A generic function or
+// method reaches a call only through one of these, since it cannot be
+// a value.
+func calleeName(fun ast.Expr) *ast.Ident {
+	switch fun := unparen(fun).(type) {
+	case *ast.SelectorExpr:
+		return fun.Sel
+	case *ast.Ident:
+		return fun
+	}
+
+	return nil
 }
 
 // paramHint is the type to check an argument with: the type behind a
@@ -157,6 +312,10 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 	}
 
 	v := valueType(x)
+	if r, ok := x.typ.(*Ref); ok && (isString(r.elem) || isByteSlice(r.elem)) {
+		v = r.elem // a conversion between a string and its bytes copies, so it reads a borrowed operand as well
+	}
+
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
 	case Identical(v.Underlying(), t.Underlying()):
@@ -179,10 +338,83 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 	case BuiltinPanic:
 		c.exprs(e.Args)
 		return operand{value, Typ[Never], nil, nil}
+	case BuiltinMin, BuiltinMax:
+		return c.minCall(e, b)
 	}
 
 	c.exprs(e.Args) // print
 	return operand{value, Unit, nil, nil}
+}
+
+// minCall checks min(a, b, ...) and max(a, b, ...): two or more numbers
+// of one type, which is the result's. A literal among them takes the
+// type of the others.
+func (c *Checker) minCall(e *ast.CallExpr, b *Builtin) operand {
+	if len(e.Args) < 2 {
+		c.errorf(e.Lparen, b.name+" takes at least two arguments")
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
+	// The first argument that types itself gives the type; the literals
+	// come last and take it, or the first literal's own when there is
+	// nothing else.
+	var t Type
+	for _, late := range []bool{false, true} {
+		for _, a := range e.Args {
+			if contextTyped(a) != late {
+				continue
+			}
+
+			hint := t
+			if hint == nil && late && anyFloatLit(e.Args) {
+				hint = Typ[Float64] // literals alone: a point among them makes them all f64, as Go has it
+			}
+
+			x := c.expr(a, hint)
+			if x.mode == invalid {
+				return invalidOperand
+			}
+
+			if t != nil {
+				c.assign(x, t, a.Pos(), "argument")
+				continue
+			}
+
+			t = readType(x)
+			if u, ok := t.Underlying().(*Basic); !ok || u.info&IsNumeric == 0 {
+				c.errorf(a.Pos(), b.name+" takes numbers, not "+t.String())
+				return invalidOperand
+			}
+		}
+	}
+
+	return operand{value, t, nil, nil}
+}
+
+// anyFloatLit reports whether one of the expressions is a float literal,
+// through parentheses and a sign.
+func anyFloatLit(es []ast.Expr) bool {
+	for _, e := range es {
+		for {
+			switch x := e.(type) {
+			case *ast.ParenExpr:
+				e = x.X
+				continue
+			case *ast.UnaryExpr:
+				e = x.X
+				continue
+			case *ast.BasicLit:
+				if x.Kind == token.FLOAT {
+					return true
+				}
+			}
+
+			break
+		}
+	}
+
+	return false
 }
 
 // lenCall checks len(x) and cap(x): len on a slice, array, map, string
@@ -222,6 +454,7 @@ func (c *Checker) makeCall(e *ast.CallExpr) operand {
 		return invalidOperand
 	}
 
+	c.wantType = unparen(e.Args[0])
 	t := c.expr(e.Args[0], nil)
 	for _, arg := range e.Args[1:] {
 		c.intIndex(arg)
@@ -274,18 +507,29 @@ func (c *Checker) takeCall(e *ast.CallExpr) operand {
 // has one, else from the argument; Ok and Err need the context, since
 // the argument says nothing about the other half.
 func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operand {
+	if v.parent != nil && v.parent.tparams != nil {
+		return c.genericVariant(e, v, expected)
+	}
+
+	if len(e.TypeArgs) > 0 {
+		c.errorf(e.Lparen, v.name+" is not generic and takes no type arguments")
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
 	if v.parent != nil {
+		t := v.parent
 		if len(e.Args) != len(v.fields) {
 			c.errorf(e.Lparen, v.name+" has "+strconv.Itoa(len(v.fields))+" fields, not "+strconv.Itoa(len(e.Args)))
 			c.exprs(e.Args)
-			return operand{value, v.parent, nil, nil}
+			return operand{value, t, nil, nil}
 		}
 
 		for i, arg := range e.Args {
 			c.assign(c.expr(arg, v.fields[i].typ), v.fields[i].typ, arg.Pos(), "field "+v.fields[i].name)
 		}
 
-		return operand{value, v.parent, nil, nil}
+		return operand{value, t, nil, nil}
 	}
 
 	if len(e.Args) != 1 {

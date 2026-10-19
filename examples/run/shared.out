@@ -1,0 +1,23 @@
+text text 2 2
+true
+2
+text! 1
+1 1 true
+in scope x 2
+one left 1
+upgraded x 2
+before drop
+moving 1
+drop x
+after drop true
+1:cfg 2:cfg 3
+2
+1 0
+7 2 1 true
+1 true true
+0 solo
+solo!
+0 0 true true true
+end
+drop solo!
+drop cfg

@@ -31,7 +31,7 @@ type match struct {
 // to the next. The checker proved an arm matches every value, so the
 // panic after the last arm is never reached.
 func (e *Emitter) matchExpr(x *ast.MatchExpr) string {
-	m := match{result: "", resultType: e.info.Types[x]}
+	m := match{result: "", resultType: e.typeOf(x)}
 	if yields(m.resultType) {
 		m.result = e.temp()
 		e.line(e.cType(m.resultType, x.Pos()) + " " + m.result + ";")
@@ -47,7 +47,7 @@ func (e *Emitter) matchExpr(x *ast.MatchExpr) string {
 	}
 
 	if held != "" {
-		e.hold(held, e.info.Types[x.X]) // what no arm took is dropped when the statement ends
+		e.hold(held, e.typeOf(x.X)) // what no arm took is dropped when the statement ends
 	}
 
 	e.line("tk_panic(" + literal("no match arm matched") + ");")
@@ -99,7 +99,7 @@ func (e *Emitter) empty(taken []owned, pos token.Pos) {
 func (e *Emitter) ifBind(s *ast.IfBindStmt) {
 	place, t, held := e.consumed(s.Value)
 	if held != "" {
-		e.hold(held, e.info.Types[s.Value])
+		e.hold(held, e.typeOf(s.Value))
 	}
 
 	e.line("{")
@@ -146,7 +146,7 @@ func (e *Emitter) patternTests(p ast.Pattern, place string, t types.Type) []stri
 
 		return tests
 	case *ast.VariantPat:
-		v := e.info.Uses[p.Path.(*ast.Ident)].(*types.Variant)
+		v := variantOf(t, e.info.Uses[pathName(p.Path)].(*types.Variant))
 		tests := []string{e.tagTest(place, t, v)}
 		for i, arg := range p.Args {
 			sub, ft := e.payload(place, t, v, i)
@@ -186,16 +186,18 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) []owne
 			return nil
 		}
 
+		vt := e.sub(v.Type())
+
 		value := place
-		if depth(v.Type()) > depth(t) { // a mut binding of a value: its address
+		if depth(vt) > depth(t) { // a mut binding of a value: its address
 			value = "&" + place
 		}
 
-		e.line(e.cType(v.Type(), p.Pos()) + " " + ident(p.Name.Name) + " = " + value + ";")
+		e.line(e.cType(vt, p.Pos()) + " " + ident(p.Name.Name) + " = " + value + ";")
 		e.discardUnused(p.Name)
-		e.own(ident(p.Name.Name), v.Type())
-		if _, borrow := v.Type().(*types.Ref); !borrow && needsDrop(v.Type()) {
-			return []owned{{place, v.Type()}}
+		e.own(ident(p.Name.Name), vt)
+		if _, borrow := vt.(*types.Ref); !borrow && needsDrop(vt) {
+			return []owned{{place, vt}}
 		}
 	case *ast.TuplePat:
 		var taken []owned
@@ -207,7 +209,7 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) []owne
 		return taken
 	case *ast.VariantPat:
 		var taken []owned
-		v := e.info.Uses[p.Path.(*ast.Ident)].(*types.Variant)
+		v := variantOf(t, e.info.Uses[pathName(p.Path)].(*types.Variant))
 		for i, arg := range p.Args {
 			sub, ft := e.payload(place, t, v, i)
 			taken = append(taken, e.patternBinds(arg, sub, ft)...)
@@ -267,4 +269,14 @@ func (e *Emitter) literalTest(place string, lit *ast.BasicLit) string {
 	}
 
 	return place + " == " + e.literal(lit)
+}
+
+// pathName is the identifier a variant pattern's path resolves through:
+// the name itself, or the member of a qualified name, io.NotFound.
+func pathName(path ast.Expr) *ast.Ident {
+	if sel, ok := path.(*ast.SelectorExpr); ok {
+		return sel.Sel
+	}
+
+	return path.(*ast.Ident)
 }

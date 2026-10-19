@@ -16,6 +16,16 @@ import (
 // C: turning a value into text, and comparing two values. They are
 // generated on first use, one per type, under the runtime's prefix.
 
+// elements writes the body of a printer over n elements reached as
+// elem, with i for the index: [a b c], as Go prints a slice or an array.
+func (e *Emitter) elements(b *strings.Builder, n, elem string, t types.Type, pos token.Pos) {
+	put(b, "\ttk_string out = ", literal("["), ";\n")
+	put(b, "\tfor (int64_t i = 0; i < ", n, "; i++) {\n")
+	put(b, "\t\tif (i > 0) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
+	put(b, "\t\tout = ", join(text{"out", true}, e.textOf(elem, t, pos, false)).s, ";\n\t}\n\n")
+	put(b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
+}
+
 // stringer returns the name of the function that turns a value of a
 // composite type into text, writing it on first use: a struct as
 // {field field}, or its name when it has no fields; an enum as
@@ -65,11 +75,12 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 		put(&b, "\t\tout = ", join(join(join(text{"out", true}, e.textOf(k, u.Key(), pos, false)), text{literal(":"), false}), e.textOf(val, u.Value(), pos, false)).s, ";\n\t}\n\n")
 		put(&b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
 	case *types.Slice:
-		put(&b, "\ttk_string out = ", literal("["), ";\n")
-		put(&b, "\tfor (int64_t i = 0; i < ", v, ".len; i++) {\n")
-		put(&b, "\t\tif (i > 0) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
-		put(&b, "\t\tout = ", join(text{"out", true}, e.textOf(v+".ptr[i]", u.Elem(), pos, false)).s, ";\n\t}\n\n")
-		put(&b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
+		e.elements(&b, v+".len", v+".ptr[i]", u.Elem(), pos)
+	case *types.Array:
+		e.elements(&b, strconv.FormatInt(u.Len(), 10), v+".at[i]", u.Elem(), pos)
+	case *types.Trait:
+		e.unsupported(pos, "printing values of type "+t.String()) // the held value's type is not known here
+		put(&b, "\treturn ", literal("?"), ";\n")
 	default:
 		s, _ := e.toText(v, valueType(t), pos, false)
 		put(&b, "\treturn ", s, ";\n")
@@ -147,6 +158,16 @@ func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) tex
 // into a tk_string, and whether the expression builds the string;
 // quoted says whether a string is written in quotes.
 func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (string, bool) {
+	if n, ok := valueType(t).(*types.Named); ok && n.Implements(types.ErrorTrait) { // an error prints as its message, as the predeclared error does
+		name, _ := e.methodNameOf(nil, n, "Error", pos)
+		msg := name + "(" + deref(v, t) + ")"
+		if quoted {
+			return "tk_quote_owned(" + msg + ")", true
+		}
+
+		return msg, true
+	}
+
 	b, ok := valueType(t).Underlying().(*types.Basic)
 	if !ok {
 		return e.stringer(t, pos) + "(" + v + ")", true
@@ -172,12 +193,19 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	return literal("?"), false
 }
 
-// equal writes the test that two C values of type t are equal: the
-// operator for numbers and booleans, without parentheses so that an
-// if around it has one pair, the runtime for strings, and a generated
-// function for anything composite.
+// equal writes the test that two C values of type t are equal: the Eq
+// method of a type that wrote one, the operator for numbers and
+// booleans, without parentheses so that an if around it has one pair,
+// the runtime for strings, and a generated function for anything
+// composite. A ref receiver and a ref parameter are the values in C.
 func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) string {
+	a, b = deref(a, t), deref(b, t)
 	t = valueType(t)
+	if n, ok := t.(*types.Named); ok && written(n, "Eq") { // the type says how; a derived Eq is the comparison of the parts below
+		name, _ := e.methodNameOf(nil, n, "Eq", pos)
+		return name + "(" + a + ", " + b + ")"
+	}
+
 	if basic, ok := t.Underlying().(*types.Basic); ok {
 		if isString(basic) {
 			return "tk_string_eq(" + a + ", " + b + ")"
@@ -279,12 +307,28 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 	return "&" + name
 }
 
-// hash writes the hash of the C value v of key type t: bytes for a
-// string, the value for a number, and a mix of the parts for a tuple,
-// struct, option or pointer.
+// hash writes the hash of the C value v of key type t: the Hash method
+// of a type that wrote one, bytes for a string, the value for a number,
+// and a mix of the parts for a tuple, struct, option or pointer, which
+// is also what a derived Hash means.
 func (e *Emitter) hash(v string, t types.Type, pos token.Pos) string {
 	v = deref(v, t)
-	switch u := valueType(t).Underlying().(type) {
+	if n, ok := valueType(t).(*types.Named); ok && written(n, "Hash") {
+		name, _ := e.methodNameOf(nil, n, "Hash", pos)
+		return name + "(" + v + ")"
+	}
+
+	if _, ok := valueType(t).Underlying().(*types.Enum); ok {
+		return e.hasher(valueType(t), pos) + "(" + v + ")"
+	}
+
+	return e.hashParts(v, valueType(t), pos)
+}
+
+// hashParts writes the hash of the C value v of type t from its parts,
+// without asking for a method: what a derived Hash is.
+func (e *Emitter) hashParts(v string, t types.Type, pos token.Pos) string {
+	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		switch {
 		case isString(u):
@@ -314,6 +358,138 @@ func (e *Emitter) hash(v string, t types.Type, pos token.Pos) string {
 
 	e.unsupported(pos, "map keys of type "+t.String())
 	return "0"
+}
+
+// compare writes the Ordering of two C values of type t: numbers and
+// strings through the runtime's comparisons, a declared type through
+// its Cmp, written or derived.
+func (e *Emitter) compare(a, b string, t types.Type, pos token.Pos) string {
+	a, b = deref(a, t), deref(b, t)
+	t = valueType(t)
+	if n, ok := t.(*types.Named); ok && n.Method("Cmp") != nil {
+		name, _ := e.methodNameOf(nil, n, "Cmp", pos)
+		return name + "(" + a + ", " + b + ")"
+	}
+
+	if basic, ok := t.Underlying().(*types.Basic); ok {
+		if isString(basic) {
+			return e.order() + "(tk_string_cmp(" + a + ", " + b + "))"
+		}
+
+		return e.order() + "((" + a + " > " + b + ") - (" + a + " < " + b + "))"
+	}
+
+	e.unsupported(pos, "ordering values of type "+t.String())
+	return "0"
+}
+
+// order returns the name of the function turning a C comparison result,
+// negative, zero or positive, into an Ordering, writing it on first use.
+func (e *Emitter) order() string {
+	name := "tk_order"
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		ct := e.cType(types.Ordering, token.NoPos)
+		put(&e.helpers, "static ", ct, " ", name, "(int c) {\n\treturn (", ct, "){.tag = c < 0 ? 0 : c > 0 ? 2 : 1};\n}\n\n")
+	}
+
+	return name
+}
+
+// orderer returns the name of the function comparing two values of a
+// declared type part by part, the derived Cmp, writing it on first use:
+// the first part that differs decides, and an enum's variants are in
+// declaration order, with the payloads compared when the variants
+// agree.
+func (e *Emitter) orderer(t types.Type, pos token.Pos) string {
+	name := "tk_cmp_" + mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	ct, ord := e.cType(t, pos), e.cType(types.Ordering, pos)
+	put(&e.protos, "static ", ord, " ", name, "(", ct, " a, ", ct, " b);\n")
+	var b strings.Builder
+	put(&b, "static ", ord, " ", name, "(", ct, " a, ", ct, " b) {\n\t", ord, " r;\n")
+	decide := func(indent, a, bb string, t types.Type) {
+		put(&b, indent, "r = ", e.compare(a, bb, t, pos), ";\n", indent, "if (r.tag != 1) {\n", indent, "\treturn r;\n", indent, "}\n\n")
+	}
+
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			f := ident(u.Field(i).Name())
+			decide("\t", "a."+f, "b."+f, u.Field(i).Type())
+		}
+	case *types.Enum:
+		put(&b, "\tif (a.tag != b.tag) {\n\t\treturn ", e.order(), "(a.tag - b.tag);\n\t}\n\n")
+		payloads(&b, u, "a.tag", func(field string, t types.Type) { decide("\t\t", "a"+field, "b"+field, t) })
+	default:
+		e.unsupported(pos, "ordering values of type "+t.String())
+	}
+
+	put(&b, "\treturn (", ord, "){.tag = 1};\n}\n\n")
+	e.helpers.WriteString(b.String())
+	return name
+}
+
+// hasher returns the name of the function hashing a value of a
+// declared type part by part, the derived Hash, writing it on first
+// use; an enum mixes its tag with the payload of its variant.
+func (e *Emitter) hasher(t types.Type, pos token.Pos) string {
+	name := "tk_hash_" + mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	ct := e.cType(t, pos)
+	put(&e.protos, "static uint64_t ", name, "(", ct, " v);\n")
+	var b strings.Builder
+	put(&b, "static uint64_t ", name, "(", ct, " v) {\n")
+	if u, ok := t.Underlying().(*types.Enum); ok {
+		b.WriteString("\tuint64_t h = tk_hash_mix(0, (uint64_t)v.tag);\n")
+		payloads(&b, u, "v.tag", func(field string, t types.Type) {
+			put(&b, "\t\th = tk_hash_mix(h, ", e.hash("v"+field, t, pos), ");\n")
+		})
+		b.WriteString("\treturn h;\n}\n\n")
+	} else {
+		put(&b, "\treturn ", e.hashParts("v", t, pos), ";\n}\n\n")
+	}
+
+	e.helpers.WriteString(b.String())
+	return name
+}
+
+// payloads writes into b a switch on tag over the variants of u that
+// carry fields, calling f for each field with its member path from the
+// value, ".Open.e0", and its type; a function written part by part
+// handles the payload of whichever variant the value holds.
+func payloads(b *strings.Builder, u *types.Enum, tag string, f func(field string, t types.Type)) {
+	put(b, "\tswitch (", tag, ") {\n")
+	for i := 0; i < u.NumVariants(); i++ {
+		v := u.Variant(i)
+		if len(v.Fields()) == 0 {
+			continue
+		}
+
+		put(b, "\tcase ", strconv.Itoa(i), ":\n")
+		for j, fld := range v.Fields() {
+			f("."+variantMember(v)+"."+fieldName(fld, j), fld.Type())
+		}
+
+		b.WriteString("\t\tbreak;\n")
+	}
+
+	b.WriteString("\t}\n\n")
+}
+
+// written reports whether the declared type has a method of its own
+// under name, declared rather than derived from its fields.
+func written(n *types.Named, name string) bool {
+	fn := n.Method(name)
+	return fn != nil && !fn.Derived()
 }
 
 // allOf joins conditions with &&; none is true.

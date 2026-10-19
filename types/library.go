@@ -6,70 +6,16 @@ package types
 
 import "github.com/teak-lang/teak/token"
 
-// The core library: the names the core programs import, with the
-// signatures section 4 of _docs/design/05-standard-library.md gives
-// them, and the methods section 1 predeclares on slices, maps, strings,
-// options and results. Everything here is a mapping onto a Go function
-// of the same meaning, debt the library written in Teak repays; see
-// the mapping table in that document.
+// The methods section 1 of _docs/design/05-standard-library.md
+// predeclares on slices, maps, strings, options and results, each a
+// mapping onto a runtime function of the same meaning. The library's
+// packages are written in Teak under std/ and loaded through the
+// Config's Importer.
 
-// libraries holds one scope per package path, built once.
-var libraries = map[string]*Scope{
-	"fmt": fmtPackage(),
-	"os":  osPackage(),
-	"io":  ioPackage(),
-}
-
-// errorResult is Result<(), error>, what a library call with nothing
-// to return but failure yields.
-var errorResult = NewResult(Unit, Typ[Error])
-
-// OSFile is the library's os.File type, shared between packages and
-// recognized by the C emitter.
-var OSFile = NewNamed(NewTypeName(token.NoPos, "File", nil), NewStruct(nil), []string{"Drop"})
-
-// libraryMember returns the object named in an imported package, or nil.
-func libraryMember(path, name string) Object {
-	if scope := libraries[path]; scope != nil {
-		return scope.Lookup(name)
-	}
-
-	return nil
-}
-
-func fmtPackage() *Scope {
-	s := NewScope(nil)
-	s.Insert(libFunc("Println", variadic(nil, Unit)))
-	s.Insert(libFunc("Printf", variadic([]*Var{param("format", ref(Typ[String]))}, Unit)))
-	s.Insert(libFunc("Sprintf", variadic([]*Var{param("format", ref(Typ[String]))}, Typ[String])))
-	s.Insert(libFunc("Sprint", variadic(nil, Typ[String])))
-	return s
-}
-
-func osPackage() *Scope {
-	s := NewScope(nil)
-	OSFile.AddMethod(libMethod("Close", NewVar(token.NoPos, "f", OSFile), nil, errorResult))
-	OSFile.AddMethod(libMethod("Sync", NewVar(token.NoPos, "f", NewRef(OSFile, true)), nil, errorResult))
-	OSFile.AddMethod(libMethod("WriteString", NewVar(token.NoPos, "f", NewRef(OSFile, true)), []*Var{param("s", ref(Typ[String]))}, NewResult(Typ[Int], Typ[Error])))
-	s.Insert(OSFile.obj)
-	s.Insert(libFunc("ReadToString", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(Typ[String], Typ[Error]))))
-	s.Insert(libFunc("Open", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(OSFile, Typ[Error]))))
-	s.Insert(libFunc("Create", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, NewResult(OSFile, Typ[Error]))))
-	s.Insert(libFunc("MkdirTemp", NewSignature(nil, []*Var{param("dir", ref(Typ[String])), param("pattern", ref(Typ[String]))}, NewResult(Typ[String], Typ[Error]))))
-	s.Insert(libFunc("RemoveAll", NewSignature(nil, []*Var{param("path", ref(Typ[String]))}, errorResult)))
-	s.Insert(libFunc("Exit", NewSignature(nil, []*Var{param("code", Typ[Int])}, Typ[Never])))
-	s.Insert(NewVar(token.NoPos, "Args", NewSlice(Typ[String])))
-	s.Insert(NewVar(token.NoPos, "Stdin", OSFile))
-	s.Insert(NewVar(token.NoPos, "Stdout", OSFile))
-	s.Insert(NewVar(token.NoPos, "Stderr", OSFile))
-	return s
-}
-
-func ioPackage() *Scope {
-	s := NewScope(nil)
-	s.Insert(libFunc("Copy", NewSignature(nil, []*Var{param("dst", NewRef(OSFile, true)), param("src", NewRef(OSFile, true))}, NewResult(Typ[Int64], Typ[Error]))))
-	return s
-}
+// BuiltinMethod is builtinMethod for the test that keeps the library's
+// documentation of the predeclared methods, std/builtin, in step with
+// this table.
+func BuiltinMethod(recv Type, name string) *Signature { return builtinMethod(recv, name) }
 
 // builtinMethod returns the signature of a predeclared method on a
 // slice, map, string, option or result, or nil. The receiver is the
@@ -81,13 +27,56 @@ func builtinMethod(recv Type, name string) *Signature {
 	case *Map:
 		return mapMethod(t, name)
 	case *Basic:
+		if sig := standardMethod(recv, t, name); sig != nil {
+			return sig
+		}
+
 		if t.kind == String {
 			return stringMethod(name)
+		}
+
+		if t.kind == Uint8 {
+			return byteMethod(name)
 		}
 	case *Option:
 		return optionMethod(recv, t.elem, name)
 	case *Result:
 		return resultMethod(recv, t.val, name)
+	}
+
+	return nil
+}
+
+// standardMethod returns the method of a standard trait a number, a
+// string or a bool has, with the receiver's type for Self, which may be
+// a type declared over the basic one: Eq and Cmp take the other operand
+// as a declared type would, by ref for a string and by value for the
+// Copy types; Hash gives a u64; Clone gives the type itself. Nil for any
+// other name, or a trait the type lacks.
+func standardMethod(recv Type, t *Basic, name string) *Signature {
+	number, text := t.info&IsNumeric != 0, t.kind == String
+	if !number && !text && t.kind != Bool {
+		return nil
+	}
+
+	other := recv
+	if text {
+		other = ref(recv)
+	}
+
+	switch name {
+	case "Eq":
+		return reads([]*Var{param("o", other)}, Typ[Bool])
+	case "Cmp":
+		if !number && !text {
+			return nil
+		}
+
+		return reads([]*Var{param("o", other)}, Ordering)
+	case "Hash":
+		return reads(nil, Typ[Uint64])
+	case "Clone":
+		return reads(nil, recv)
 	}
 
 	return nil
@@ -151,9 +140,9 @@ func stringMethod(name string) *Signature {
 	switch name {
 	case "Len":
 		return reads(nil, Typ[Int])
-	case "Clone", "ToUpper", "ToLower":
+	case "ToUpper", "ToLower":
 		return reads(nil, s)
-	case "Fields":
+	case "Fields", "Lines":
 		return reads(nil, NewSlice(ref(s)))
 	case "Split":
 		return reads([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
@@ -178,6 +167,8 @@ func optionMethod(t, elem Type, name string) *Signature {
 		return takes(t, []*Var{param("v", elem)}, elem)
 	case "IsSome", "IsNone":
 		return reads(nil, Typ[Bool])
+	case "Map":
+		return mapping(t, elem, mapU, NewOption(mapU))
 	}
 
 	return nil
@@ -193,17 +184,42 @@ func resultMethod(t, val Type, name string) *Signature {
 		return takes(t, []*Var{param("v", val)}, val)
 	case "IsOk", "IsErr":
 		return reads(nil, Typ[Bool])
+	case "Map":
+		return mapping(t, val, mapU, NewResult(mapU, t.Underlying().(*Result).err))
+	case "MapErr":
+		return mapping(t, t.Underlying().(*Result).err, mapU, NewResult(val, mapU))
 	}
 
 	return nil
 }
 
-func libFunc(name string, sig *Signature) *Func {
-	return NewFunc(token.NoPos, name, sig)
+// mapU is the type parameter of Map and MapErr, the type their function
+// gives back, which each call infers from its argument. One parameter
+// serves every signature: an inference is keyed by it, and nothing is
+// called from inside the methods, so no call cycle runs through it.
+var mapU = NewTypeParam(NewTypeName(token.NoPos, "U", nil), 0)
+
+// mapping returns the signature of Map or MapErr on a receiver of type
+// t: it takes the receiver and a function from the part of type from to
+// a value of the type parameter u, and gives back result, which names
+// u. The function's own parameter is taken by value, as the method
+// takes its receiver.
+func mapping(t, from Type, u *TypeParam, result Type) *Signature {
+	f := NewSignature(nil, []*Var{param("v", from)}, u)
+	sig := takes(t, []*Var{param("f", f)}, result)
+	sig.tparams = []*TypeParam{u}
+	return sig
 }
 
-func libMethod(name string, recv *Var, params []*Var, results Type) *Func {
-	return NewFunc(token.NoPos, name, NewSignature(recv, params, results))
+// byteMethod: the character classes a parser asks of a byte, ASCII
+// only, as a byte is one.
+func byteMethod(name string) *Signature {
+	switch name {
+	case "IsDigit", "IsSpace", "IsLetter", "IsUpper", "IsLower":
+		return reads(nil, Typ[Bool])
+	}
+
+	return nil
 }
 
 // The receivers of the methods that lend are shared: the checker reads
@@ -225,12 +241,6 @@ func changes(params []*Var, results Type) *Signature {
 
 func takes(recv Type, params []*Var, results Type) *Signature {
 	return NewSignature(param("", recv), params, results)
-}
-
-func variadic(params []*Var, results Type) *Signature {
-	sig := NewSignature(nil, append(params, param("args", Typ[Any])), results)
-	sig.variadic = true
-	return sig
 }
 
 func param(name string, t Type) *Var {

@@ -16,32 +16,61 @@ import (
 )
 
 // A function value is a pair in C: a function taking an environment
-// pointer before its parameters, and the environment. A closure is
-// lifted to a function of its own, and its environment holds a pointer
-// to each variable it captures, which is what capturing by borrow
-// means: the closure reads and writes the variable itself. The
-// environment lives in the frame of the function that wrote the
-// closure, declared at its top: a closure with captures is a borrow,
-// which the checker keeps from outliving that frame, so nothing is
-// allocated and nothing is freed. A named function used as a value
-// gets an adapter that ignores the environment.
+// pointer before its parameters, and a box of a few words. A closure
+// is lifted to a function of its own with an environment struct; the
+// function receives the address of the pair's box. A closure that
+// borrows what it captures keeps pointers to the variables in an
+// environment that lives in the frame of the function that wrote it,
+// and the box holds the environment's address: such a closure is a
+// borrow, which the checker keeps from outliving the frame, so nothing
+// is allocated and nothing is freed. A closure that captures Copy
+// values it only reads holds their copies in the environment, and the
+// environment lives in the box itself, so the closure is a value that
+// goes anywhere, returned included, with nothing to drop. A named
+// function used as a value gets an adapter that ignores the
+// environment.
+
+// minBoxWords is the least size of the box in 64-bit words. The box
+// grows to the largest closure of copies in the program, counted in
+// words by the Teak types captured (words), and the C compiler checks
+// the count against the real layout.
+const minBoxWords = 4
 
 // funcLit writes a closure: the lifted function and its environment
-// type into their sections, the environment's allocation here, and
+// type into their sections, the environment's construction here, and
 // returns the pair.
 func (e *Emitter) funcLit(x *ast.FuncLit) string {
-	sig := e.info.Types[x].(*types.Signature)
+	sig := e.typeOf(x).(*types.Signature)
 	pair := e.cType(sig, x.Pos())
 	e.closures++
 	name := "tk_closure_" + strconv.Itoa(e.closures)
 	env := "tk_env_" + strconv.Itoa(e.closures)
 	captured := e.captures(x)
+	inline := true // every capture a copy: the environment is the box
 	var fields strings.Builder
-	for _, v := range captured {
-		put(&fields, "\t", e.cType(v.Type(), v.Pos()), " *", ident(v.Name()), ";\n")
+	for _, cap := range captured {
+		star := " *"
+		if cap.Copied {
+			star = " "
+		} else {
+			inline = false
+		}
+
+		put(&fields, "\t", e.cType(e.sub(cap.Var.Type()), cap.Var.Pos()), star, ident(cap.Var.Name()), ";\n")
 	}
 
-	put(&e.types, "struct ", env, " {\n", fields.String(), "\tchar tk_pad;\n};\n\n")
+	put(&e.types, "struct ", env, " {\n", fields.String(), "\tchar tk_pad;\n};\n")
+	if inline {
+		words := 1 // the pad
+		for _, cap := range captured {
+			words += e.words(e.sub(cap.Var.Type()))
+		}
+
+		e.boxWords = max(e.boxWords, words)
+		put(&e.types, "_Static_assert(sizeof(struct ", env, ") <= TK_BOX_WORDS * sizeof(uint64_t), \"a closure copies more than its box holds\");\n")
+	}
+
+	put(&e.types, "\n")
 	head := "static " + e.resultType(sig, x.Pos()) + " " + name + "(void *tk_envp" + e.closureParamList(sig, x.Pos()) + ")"
 	put(&e.protos, head, ";\n")
 
@@ -51,47 +80,110 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 	e.body = bytes.Buffer{}
 	outerCaptured := e.captured
 	e.captured = make(map[*types.Var]string, len(captured))
-	for _, v := range captured {
-		e.captured[v] = "(*tk_env->" + ident(v.Name()) + ")"
+	for _, cap := range captured {
+		if cap.Copied {
+			e.captured[cap.Var] = "(tk_env->" + ident(cap.Var.Name()) + ")"
+		} else {
+			e.captured[cap.Var] = "(*tk_env->" + ident(cap.Var.Name()) + ")"
+		}
 	}
 
 	e.line(head + " {")
-	e.line("struct " + env + " *tk_env = tk_envp;")
+	if inline {
+		e.line("struct " + env + " *tk_env = tk_envp;")
+	} else {
+		e.line("struct " + env + " *tk_env = *(struct " + env + " **)tk_envp;")
+	}
+
 	e.line("(void)tk_env;")
 	e.function(sig, x.Body)
 	e.line("")
 	e.helpers.Write(e.body.Bytes())
 	e.body = outer
-	cell := e.temp()
+	cell := e.temp() // the pair itself, or the environment in the frame
+	if inline {
+		e.line(pair + " " + cell + " = {" + name + ", {0}};")
+		for _, cap := range captured {
+			e.line("((struct " + env + " *)" + cell + ".box)->" + ident(cap.Var.Name()) + " = " + e.variable(cap.Var, outerCaptured) + ";")
+		}
+
+		e.captured = outerCaptured
+		return cell
+	}
+
 	e.prologue = append(e.prologue, "struct "+env+" "+cell+";")
-	for _, v := range captured {
-		e.line(cell + "." + ident(v.Name()) + " = &" + e.variable(v, outerCaptured) + ";")
+	for _, cap := range captured {
+		value := e.variable(cap.Var, outerCaptured)
+		if !cap.Copied {
+			value = "&" + value
+		}
+
+		e.line(cell + "." + ident(cap.Var.Name()) + " = " + value + ";")
 	}
 
 	e.captured = outerCaptured
-	return "(" + pair + "){" + name + ", &" + cell + "}"
+	return "(" + pair + "){" + name + ", {(uint64_t)(uintptr_t)&" + cell + "}}"
 }
 
-// captures lists the local variables a closure refers to that are
-// declared outside it, in order of declaration: every use inside the
-// closure's text of a variable declared before it. A variable an inner
-// closure captures is captured by the outer one too.
-func (e *Emitter) captures(x *ast.FuncLit) []*types.Var {
-	from, to := x.Pos(), x.Body.Rbrace
-	seen := make(map[*types.Var]bool)
-	var vars []*types.Var
-	for id, obj := range e.info.Uses {
-		v, ok := obj.(*types.Var)
-		if !ok || v.IsField() || v.Pos() == token.NoPos || id.Pos() < from || id.Pos() > to || v.Pos() >= from || seen[v] {
-			continue
+// words counts the 64-bit words a value of type t takes in C, rounding
+// each part up to a word, so the count is never short: the box of a
+// function value is sized by it, and the C compiler checks the real
+// layout against the box.
+func (e *Emitter) words(t types.Type) int {
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		if u.Kind() == types.String {
+			return 3
 		}
 
-		seen[v] = true
-		vars = append(vars, v)
+		return 1
+	case *types.Struct:
+		n := 1 // a live flag, or the pad of an empty struct
+		for i := 0; i < u.NumFields(); i++ {
+			n += e.words(u.Field(i).Type())
+		}
+
+		return n
+	case *types.Enum:
+		n := 0
+		for i := 0; i < u.NumVariants(); i++ {
+			m := 0
+			for _, f := range u.Variant(i).Fields() {
+				m += e.words(f.Type())
+			}
+
+			n = max(n, m)
+		}
+
+		return n + 1
+	case *types.Option:
+		return 1 + e.words(u.Elem())
+	case *types.Result:
+		return 1 + max(e.words(u.Val()), e.words(u.Err()))
+	case *types.Tuple:
+		n := 1
+		for i := 0; i < u.Len(); i++ {
+			n += e.words(u.At(i))
+		}
+
+		return n
+	case *types.Array:
+		return int(u.Len()) * e.words(u.Elem())
+	case *types.Signature:
+		return 1 + max(e.boxWords, minBoxWords)
 	}
 
-	sort.Slice(vars, func(i, j int) bool { return vars[i].Pos() < vars[j].Pos() })
-	return vars
+	return 3 // a slice, map or pointer: never Copy, so never copied in, counted anyway
+}
+
+// captures lists the variables a closure refers to that are declared
+// outside it, in order of declaration, as the checker recorded them,
+// each saying whether the closure holds a copy. A variable an inner
+// closure captures is captured by the outer one too.
+func (e *Emitter) captures(x *ast.FuncLit) []types.Capture {
+	caps := append([]types.Capture(nil), e.info.Captures[x]...) // the checker's list, in the order of their declarations
+	sort.Slice(caps, func(i, j int) bool { return caps[i].Var.Pos() < caps[j].Var.Pos() })
+	return caps
 }
 
 // variable writes how a variable is reached in the enclosing
@@ -129,7 +221,7 @@ func (e *Emitter) closureParamList(sig *types.Signature, pos token.Pos) string {
 func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 	sig := fn.Type().(*types.Signature)
 	pair := e.cType(sig, pos)
-	name := "tk_fnval_" + ident(fn.Name())
+	name := "tk_fnval_" + funcName(fn)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		args := make([]string, len(sig.Params()))
@@ -147,7 +239,7 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 		put(&e.helpers, head, " {\n\t(void)tk_env;\n\t", call, ";\n}\n\n")
 	}
 
-	return "(" + pair + "){" + name + ", NULL}"
+	return "(" + pair + "){" + name + ", {0}}"
 }
 
 // callValue writes a call of a function value: its function with its
@@ -165,5 +257,5 @@ func (e *Emitter) callValue(x *ast.CallExpr, sig *types.Signature) string {
 		args = ", " + args
 	}
 
-	return f + ".fn(" + f + ".env" + args + ")"
+	return f + ".fn(" + f + ".box" + args + ")"
 }

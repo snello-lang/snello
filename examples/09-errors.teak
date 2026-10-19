@@ -47,7 +47,7 @@ func Load(path string) Result<Config, ConfigError> {
     kv := map[string]string{}
     for line := range text.Lines() {                       // iterator of ref string
         if (k, v) := line.SplitOnce("=") {                 // binds when Some
-            kv[k.Trim().ToOwned()] = v.Trim().ToOwned()
+            kv[k.Trim().Clone()] = v.Trim().Clone()
         }
     }
 
@@ -57,9 +57,9 @@ func Load(path string) Result<Config, ConfigError> {
 }
 
 func parseKey(kv ref map[string]string, key string) Result<int, ConfigError> {
-    text := kv[ref key] ?? return Err(Missing(key))        // `??`: unwrap, or run the else
+    text := kv.Get(ref key) ?? return Err(Missing(key))    // `??`: unwrap, or run the else
     return strconv.Atoi(text).MapErr(func(_ strconv.Error) ConfigError {
-        return BadValue(key, text.ToOwned())
+        return BadValue(key, text.Clone())
     })
 }
 

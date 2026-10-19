@@ -7,9 +7,9 @@
 
 package p
 
-import "os"
+import ("io"; "os")
 
-func write(path ref string) Result<(), error> {
+func write(path ref string) Result<(), io.Error> {
     f := os.Create(path)?
     f.Close()?
     f.WriteString("late")?                // ERROR "use of moved value f"

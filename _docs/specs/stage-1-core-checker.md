@@ -15,7 +15,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Verification:**
 - [x] `teak parse` still accepts all twenty examples after the import sweep
-- [ ] Design review by the human
+- [x] Design review by the human (2026-10-18: the owner accepted the library decisions with the stage review)
 
 **Dependencies:** Stage 0 checkpoint
 **Files:** `_docs/design/05-standard-library.md`, `examples/`
@@ -224,8 +224,8 @@ Second slice 2026-10-18, the debug build: `emit/c/runtime/debug.c`, compiled int
 
 ## Checkpoint: stage 1 (decision point)
 
-- [ ] All tasks above checked (every box but the design review by the human in task 1.0)
+- [x] All tasks above checked (2026-10-18)
 - [x] Every negative program fails for the planned reason and no other (2026-10-18: `TestNegativePrograms` requires exactly one error, on the annotated line, containing the annotated text, and fails on an error anywhere else)
 - [x] **Decision:** the ownership model holds as designed, or the design document is revised before stage 2. Record the decision in `../design/01-language-design.md` (2026-10-18: holds; recorded at the end of the memory model section, with the four refinements and the two gaps carried into stage 2)
 - [x] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated (2026-10-18: chapters 1 to 9 and both appendices; chapter 1 written at the checkpoint)
-- [ ] Reviewed by the owner
+- [x] Reviewed by the owner (2026-10-18)

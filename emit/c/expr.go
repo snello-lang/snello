@@ -23,7 +23,7 @@ func (e *Emitter) expr(x ast.Expr) string {
 		return v // evaluated at a defer statement
 	}
 
-	if e.info.Moves[x] && needsDrop(e.info.Types[x]) {
+	if e.info.Moves[x] && needsDrop(e.typeOf(x)) {
 		return e.moved(x) // the value leaves the place, which is emptied
 	}
 
@@ -72,12 +72,27 @@ func (e *Emitter) expr(x ast.Expr) string {
 // an owned pointer is read as its value, or with the address taken
 // when a place is passed where a mut borrow is wanted.
 func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
-	have := e.info.Types[x]
+	have := e.typeOf(x)
 	if want == nil || have == nil {
 		return e.expr(x)
 	}
 
+	if tr, ok := want.(*types.Trait); ok {
+		if n, ok := have.(*types.Named); ok {
+			return e.box(e.expr(x), n, tr, x.Pos()) // a value becoming a trait value
+		}
+	}
+
 	if depth(have) < depth(want) {
+		if !e.isPlace(x) { // a value built here and lent mut lives in a temporary for the statement
+			tmp := e.spill(e.expr(x), have, x.Pos())
+			if needsDrop(have) {
+				e.hold(tmp, have)
+			}
+
+			return "&" + tmp
+		}
+
 		return "&" + e.lvalue(x)
 	}
 
@@ -93,8 +108,9 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 	case *ast.IndexExpr:
 		return e.index(x, true)
 	case *ast.SelectorExpr:
-		if _, ok := e.info.Uses[x.Sel].(*types.Var); ok && e.packageOf(x.X) == nil {
-			return deref(e.lvalue(x.X), e.info.Types[x.X]) + "." + ident(x.Sel.Name)
+		if f, ok := e.info.Uses[x.Sel].(*types.Var); ok && e.packageOf(x.X) == nil {
+			base := e.typeOf(x.X)
+			return field(deref(e.lvalue(x.X), base), base, f)
 		}
 	}
 
@@ -106,7 +122,7 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 // and dropped when the statement ends.
 func (e *Emitter) place(x ast.Expr) string {
 	if e.isPlace(x) {
-		return deref(e.expr(x), e.info.Types[x])
+		return deref(e.expr(x), e.typeOf(x))
 	}
 
 	place, _ := e.scrutinee(x)
@@ -119,14 +135,18 @@ func (e *Emitter) ident(x *ast.Ident) string {
 		if obj.Pos() == token.NoPos {
 			return obj.Name() // true, false: C has them with stdbool.h
 		}
+
+		return objName(obj)
 	case *types.Func:
 		return e.funcValue(obj, x.Pos()) // a function named outside a call is a value
 	case *types.Var:
 		if s, ok := e.captured[obj]; ok {
 			return s
 		}
+
+		return ident(obj.Name()) // the variable's own name: super stands for the receiver
 	case *types.Variant:
-		return e.variantValue(e.info.Types[x], obj, nil, x.Pos())
+		return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
 	}
 
 	return ident(x.Name)
@@ -134,11 +154,11 @@ func (e *Emitter) ident(x *ast.Ident) string {
 
 // funcName writes the C name of a declared function.
 func funcName(fn *types.Func) string {
-	if fn.Name() == "main" {
+	if p := fn.Pkg(); fn.Name() == "main" && p != nil && p.Path() == "" { // a method may be called main; it has no package of its own
 		return "tk_main"
 	}
 
-	return ident(fn.Name())
+	return objName(fn)
 }
 
 // variantValue writes a value of an enum, option or Result type built
@@ -185,23 +205,32 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 // through calls.
 func (e *Emitter) selector(x *ast.SelectorExpr) string {
 	if pkg := e.packageOf(x.X); pkg != nil {
-		switch pkg.Path() + "." + x.Sel.Name {
-		case "os.Args":
-			return "(*(" + e.cType(e.info.Types[x], x.Pos()) + " *)&tk_args)"
-		case "os.Stdin", "os.Stdout", "os.Stderr":
-			return "tk_" + strings.ToLower(x.Sel.Name)
+		switch obj := e.info.Uses[x.Sel].(type) { // a member of a package written in Teak
+		case *types.Func:
+			if loweredKey(obj) != "" {
+				e.unsupported(x.Pos(), "a function the compiler provides, "+pkg.Name()+"."+x.Sel.Name+", as a value")
+				return "0"
+			}
+
+			return e.funcValue(obj, x.Pos())
+		case *types.Variant:
+			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
+		case *types.Var:
+			if e.external[obj] {
+				return "(*(" + e.cType(e.typeOf(x), x.Pos()) + " *)&" + objName(obj) + ")"
+			}
 		}
 
-		e.unsupported(x.Pos(), pkg.Name()+"."+x.Sel.Name)
-		return "0"
+		return objName(e.info.Uses[x.Sel])
 	}
 
-	if _, ok := e.info.Uses[x.Sel].(*types.Var); !ok {
+	f, ok := e.info.Uses[x.Sel].(*types.Var)
+	if !ok {
 		e.unsupported(x.Pos(), "methods as values")
 		return "0"
 	}
 
-	return e.place(x.X) + "." + ident(x.Sel.Name)
+	return field(e.place(x.X), e.typeOf(x.X), f)
 }
 
 // tuple writes (a, b) as a struct literal and () as the unit value.
@@ -210,7 +239,7 @@ func (e *Emitter) tuple(x *ast.TupleExpr) string {
 		return "TK_UNIT"
 	}
 
-	t := e.info.Types[x].(*types.Tuple)
+	t := e.typeOf(x).(*types.Tuple)
 	wants := make([]types.Type, t.Len())
 	for i := range wants {
 		wants[i] = t.At(i)
@@ -227,13 +256,26 @@ func (e *Emitter) tuple(x *ast.TupleExpr) string {
 // compositeLit writes a struct literal; fields left out are zero, as
 // a C compound literal leaves them.
 func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
-	t := e.info.Types[x]
+	t := e.typeOf(x)
 	if st, ok := t.Underlying().(*types.Slice); ok {
 		return e.sliceLit(x, t, st)
 	}
 
 	if mt, ok := t.Underlying().(*types.Map); ok {
 		return e.mapLit(x, t, mt)
+	}
+
+	if at, ok := t.Underlying().(*types.Array); ok { // the elements given, the rest zero, as C fills an aggregate
+		if len(x.Elts) == 0 {
+			return "(" + e.cType(t, x.Pos()) + "){0}"
+		}
+
+		wants := make([]types.Type, len(x.Elts))
+		for i := range wants {
+			wants[i] = at.Elem()
+		}
+
+		return "(" + e.cType(t, x.Pos()) + "){.at = {" + strings.Join(e.operands(x.Elts, wants), ", ") + "}}"
 	}
 
 	if _, ok := t.Underlying().(*types.Struct); !ok {
@@ -254,6 +296,7 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 		return "(" + e.cType(t, x.Pos()) + "){" + live + "}"
 	}
 
+	st := t.Underlying().(*types.Struct)
 	values := make([]ast.Expr, len(x.Elts))
 	wants := make([]types.Type, len(x.Elts))
 	names := make([]string, len(x.Elts))
@@ -261,7 +304,7 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 		kv := elt.(*ast.KeyValueExpr)
 		key := kv.Key.(*ast.Ident)
 		values[i] = kv.Value
-		wants[i] = e.info.Uses[key].Type()
+		wants[i] = fieldType(st, key.Name) // the literal's own type's field, with any type arguments in place
 		names[i] = ident(key.Name)
 	}
 
@@ -352,10 +395,22 @@ func cString(s string) string {
 func (e *Emitter) unary(x *ast.UnaryExpr) string {
 	switch x.Op {
 	case token.REF, token.MUT:
-		return e.valueTo(x.X, e.info.Types[x])
+		if t := e.typeOf(x.X); !e.isPlace(x.X) && needsDrop(t) {
+			if _, ok := t.(*types.Ref); !ok { // a value built here and lent: held for the statement and dropped with it
+				tmp := e.spill(e.expr(x.X), t, x.Pos())
+				e.hold(tmp, t)
+				if x.Op == token.MUT {
+					return "&" + tmp
+				}
+
+				return tmp
+			}
+		}
+
+		return e.valueTo(x.X, e.typeOf(x))
 	case token.MUL:
 		s := e.expr(x.X)
-		switch r := e.info.Types[x.X].(type) {
+		switch r := e.typeOf(x.X).(type) {
 		case *types.Ref:
 			if !r.Mut() {
 				return s // a ref is the value itself
@@ -366,7 +421,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 
 		return "(*" + s + ")"
 	case token.AND:
-		elem := e.info.Types[x].(*types.Pointer).Elem()
+		elem := e.typeOf(x).(*types.Pointer).Elem()
 		cell := e.temp()
 		e.line(e.cType(elem, x.Pos()) + " *" + cell + " = tk_alloc(sizeof(" + e.cType(elem, x.Pos()) + "));")
 		e.line("*" + cell + " = " + e.valueTo(x.X, elem) + ";")
@@ -376,12 +431,40 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		return "0"
 	case token.XOR:
 		return "(~" + e.expr(x.X) + ")"
-	case token.SUB, token.NOT:
-		return "(" + x.Op.String() + e.expr(x.X) + ")"
+	case token.SUB:
+		if call := e.operatorCall(valueType(e.typeOf(x.X)), x.Op, true, x.X, nil, x.Pos()); call != "" {
+			return call
+		}
+
+		if lit, ok := x.X.(*ast.BasicLit); ok && lit.Kind == token.INT && e.literal(lit) == "9223372036854775808" {
+			return "INT64_MIN" // the one magnitude C cannot negate as a signed literal
+		}
+
+		return "(-" + e.expr(x.X) + ")"
+	case token.NOT:
+		return "(!" + e.expr(x.X) + ")"
 	}
 
 	e.unsupported(x.OpPos, "the operator "+x.Op.String())
 	return "0"
+}
+
+// operatorCall writes an operator on a value of a declared type that
+// lists the operator's trait as a call of the trait's method, the left
+// operand the receiver: a + b is Add(a, b). It returns "" when t has
+// no such method, so the operator is written as C's.
+func (e *Emitter) operatorCall(t types.Type, op token.Kind, unary bool, recv ast.Expr, args []ast.Expr, pos token.Pos) string {
+	fn := types.OperatorMethod(t, op, unary)
+	if fn == nil {
+		return ""
+	}
+
+	name, sig := e.methodNameOf(nil, t.(*types.Named), fn.Name(), pos)
+	if sig == nil {
+		return "0"
+	}
+
+	return name + "(" + e.args(recv, args, sig) + ")"
 }
 
 // binary writes x op y. Strings have no operators in C: + is a
@@ -389,7 +472,11 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 // side that needs statements is written under the test of the left
 // side, so && and || still stop short.
 func (e *Emitter) binary(x *ast.BinaryExpr) string {
-	t := valueType(e.info.Types[x.X])
+	t := valueType(e.typeOf(x.X))
+	if call := e.operatorCall(t, x.Op, false, x.X, []ast.Expr{x.Y}, x.Pos()); call != "" {
+		return call
+	}
+
 	if (x.Op == token.LAND || x.Op == token.LOR) && needsHoist(x.Y) {
 		r := e.temp()
 		e.line("bool " + r + " = " + e.valueTo(x.X, t) + ";")
@@ -439,36 +526,54 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 // call writes a conversion, a built-in, a variant constructor, a
 // library function, a method, or a call of a function of the program.
 func (e *Emitter) call(x *ast.CallExpr) string {
+	if _, ok := x.Fun.(*ast.TypeExpr); ok { // a conversion to a type written out, []byte(s)
+		return e.conversion(x.Args[0], e.typeOf(x))
+	}
+
 	if id, ok := x.Fun.(*ast.Ident); ok {
 		switch obj := e.info.Uses[id].(type) {
 		case *types.Builtin:
 			return e.builtinCall(x, obj)
 		case *types.TypeName:
-			return "((" + e.cType(obj.Type(), x.Pos()) + ")(" + e.expr(x.Args[0]) + "))"
+			return e.conversion(x.Args[0], obj.Type())
 		case *types.Func:
-			return funcName(obj) + "(" + e.args(nil, x.Args, obj.Type().(*types.Signature)) + ")"
+			if key := loweredKey(obj); key != "" {
+				return e.libraryCall(x, key) // a library calling a function of its own the compiler writes
+			}
+
+			return e.funcCall(x, id, obj)
 		case *types.Variant:
-			return e.variantValue(e.info.Types[x], obj, e.operands(x.Args, e.variantFields(e.info.Types[x], obj)), x.Pos())
+			return e.variantValue(e.typeOf(x), obj, e.operands(x.Args, e.variantFields(e.typeOf(x), obj)), x.Pos())
 		}
 	}
 
 	sel, ok := x.Fun.(*ast.SelectorExpr)
 	if !ok {
-		if sig, ok := valueType(e.info.Types[x.Fun]).(*types.Signature); ok {
+		if sig, ok := valueType(e.typeOf(x.Fun)).(*types.Signature); ok {
 			return e.callValue(x, sig)
 		}
 
-		e.unsupported(x.Pos(), "calling a value of type "+e.info.Types[x.Fun].String())
+		e.unsupported(x.Pos(), "calling a value of type "+e.typeOf(x.Fun).String())
 		return "0"
 	}
 
 	if pkg := e.packageOf(sel.X); pkg != nil {
-		return e.libraryCall(x, pkg, sel.Sel.Name)
+		if fn, ok := e.info.Uses[sel.Sel].(*types.Func); ok {
+			if key := loweredKey(fn); key != "" {
+				return e.libraryCall(x, key) // a function the library declares without a body and the compiler writes
+			}
+		}
+
+		if v, ok := e.info.Uses[sel.Sel].(*types.Variant); ok {
+			return e.variantValue(e.typeOf(x), v, e.operands(x.Args, e.variantFields(e.typeOf(x), v)), x.Pos())
+		}
+
+		return e.funcCall(x, sel.Sel, e.info.Uses[sel.Sel].(*types.Func))
 	}
 
 	fn, ok := e.info.Uses[sel.Sel].(*types.Func)
 	if !ok {
-		if sig, ok := valueType(e.info.Types[x.Fun]).(*types.Signature); ok && e.info.Uses[sel.Sel] != nil {
+		if sig, ok := valueType(e.typeOf(x.Fun)).(*types.Signature); ok && e.info.Uses[sel.Sel] != nil {
 			return e.callValue(x, sig) // a field holding a function value
 		}
 
@@ -476,11 +581,71 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 	}
 
 	sig := fn.Type().(*types.Signature)
-	if fn.Pos() == token.NoPos { // a method of the library's os.File
-		return e.libraryMethod(x, sel.Sel.Name, e.args(sel.X, x.Args, sig))
+	if id, ok := sel.X.(*ast.Ident); ok && id.Name == "super" {
+		return e.superCall(x, sel, fn)
 	}
 
-	return methodName(sig.Recv().Type(), sel.Sel.Name) + "(" + e.args(sel.X, x.Args, sig) + ")"
+	switch valueType(sig.Recv().Type()).(type) {
+	case *types.TypeParam:
+		return e.boundCall(x, sel, sig.Recv().Type())
+	case *types.Trait:
+		return e.traitCall(x, sel, sig.Recv().Type(), sig)
+	}
+
+	name, sig := e.methodNameOf(sel.Sel, valueType(sig.Recv().Type()).(*types.Named), sel.Sel.Name, x.Pos())
+	if sig == nil {
+		return "0"
+	}
+
+	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
+}
+
+// superCall writes super.M(args): the next definition of M in the
+// implementing type's resolution order, after the trait whose default
+// is being written, resolved for that type and called directly with
+// the method's own receiver; fn is the definition the checker typed
+// the call by.
+func (e *Emitter) superCall(x *ast.CallExpr, sel *ast.SelectorExpr, fn *types.Func) string {
+	recv := e.sub(fn.Type().(*types.Signature).Recv().Type())
+	named, ok := valueType(recv).(*types.Named)
+	if !ok {
+		e.unsupported(x.Pos(), "super on "+recv.String())
+		return "0"
+	}
+
+	target := named.SuperMethod(fn)
+	if target == nil {
+		e.unsupported(x.Pos(), "super."+sel.Sel.Name+" on "+named.String())
+		return "0"
+	}
+
+	name, sig := e.callInstance(nil, target, named)
+	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
+}
+
+// boundCall writes a call of a method a bound declares, x.Area() with
+// x of a type parameter bounded by Shape, whose receiver type is paramRecv.
+// The instance being written has a type argument in the parameter's
+// place, and the call goes to that type's own method, directly, as the
+// checker found the trait's method on the type when it checked the
+// impl list.
+func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv types.Type) string {
+	recv := e.sub(paramRecv)
+	if _, ok := valueType(recv).(*types.Trait); ok { // the type argument is a trait: its values dispatch
+		return e.traitCall(x, sel, recv, e.sub(e.info.Uses[sel.Sel].(*types.Func).Type()).(*types.Signature))
+	}
+
+	named, ok := valueType(recv).(*types.Named)
+	if !ok {
+		return e.methodCall(x, sel) // a predeclared type's own method, Cmp on an int or Clone on a string
+	}
+
+	name, sig := e.methodNameOf(sel.Sel, named, sel.Sel.Name, x.Pos())
+	if sig == nil {
+		return "0"
+	}
+
+	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
 }
 
 // args writes the arguments of a call, the receiver first when there
@@ -506,6 +671,30 @@ func (e *Emitter) args(recv ast.Expr, args []ast.Expr, sig *types.Signature) str
 	return strings.Join(e.operands(exprs, wants), ", ")
 }
 
+// minCall writes min(a, b, ...) and max(a, b, ...) as nested
+// conditionals over the arguments, each evaluated once.
+func (e *Emitter) minCall(x *ast.CallExpr, b *types.Builtin) string {
+	t := e.typeOf(x)
+	parts := e.operands(x.Args, nil)
+	for i, a := range x.Args {
+		if e.hasEffects(a) { // named twice below
+			parts[i] = e.spill(parts[i], t, x.Pos())
+		}
+	}
+
+	op := "<"
+	if b.ID() == types.BuiltinMax {
+		op = ">"
+	}
+
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out = "((" + p + " " + op + " " + out + ") ? " + p + " : " + out + ")"
+	}
+
+	return out
+}
+
 // variantFields lists the types a variant's arguments must have.
 func (e *Emitter) variantFields(t types.Type, v *types.Variant) []types.Type {
 	switch u := valueType(t).Underlying().(type) {
@@ -519,7 +708,7 @@ func (e *Emitter) variantFields(t types.Type, v *types.Variant) []types.Type {
 		return []types.Type{u.Err()}
 	}
 
-	fields := v.Fields()
+	fields := variantOf(t, v).Fields()
 	ts := make([]types.Type, len(fields))
 	for i, f := range fields {
 		ts[i] = f.Type()
@@ -538,6 +727,8 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		return e.takeCall(x)
 	case types.BuiltinPanic:
 		return "tk_panic(" + e.toString(x.Args[0]) + ")"
+	case types.BuiltinMin, types.BuiltinMax:
+		return e.minCall(x, b)
 	case types.BuiltinPrint:
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {
@@ -555,11 +746,61 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 	return "0"
 }
 
+// conversion writes T(x): a C cast between numbers, or between a
+// string and its bytes a copy, since the checker reads the operand and
+// leaves it to its owner; a temporary built for it is dropped with the
+// statement.
+func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
+	from := valueType(e.typeOf(x))
+	v := e.operands([]ast.Expr{x}, nil)[0]
+	switch {
+	case isString(from) && isByteSlice(to):
+		return "tk_string_to_bytes(" + v + ")"
+	case isByteSlice(from) && isString(to):
+		return "tk_bytes_to_string(" + v + ")"
+	}
+
+	return "((" + e.cType(to, x.Pos()) + ")(" + v + "))"
+}
+
+// isByteSlice reports whether t is []byte.
+func isByteSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+
+	b, ok := s.Elem().Underlying().(*types.Basic)
+	return ok && b.Kind() == types.Uint8
+}
+
+// funcCall writes the call x of the declared function fn, named by
+// id: its instance for a generic function, else the function itself.
+func (e *Emitter) funcCall(x *ast.CallExpr, id *ast.Ident, fn *types.Func) string {
+	if e.generics[fn] != nil {
+		name, sig := e.callInstance(id, fn, nil)
+		return name + "(" + e.args(nil, x.Args, sig) + ")"
+	}
+
+	return funcName(fn) + "(" + e.args(nil, x.Args, fn.Type().(*types.Signature)) + ")"
+}
+
 // packageOf returns the package an identifier names, or nil.
 func (e *Emitter) packageOf(x ast.Expr) *types.PkgName {
 	if id, ok := x.(*ast.Ident); ok {
 		if pkg, ok := e.info.Uses[id].(*types.PkgName); ok {
 			return pkg
+		}
+	}
+
+	return nil
+}
+
+// fieldType returns the type of the named field of st.
+func fieldType(st *types.Struct, name string) types.Type {
+	for i := 0; i < st.NumFields(); i++ {
+		if f := st.Field(i); f.Name() == name {
+			return f.Type()
 		}
 	}
 

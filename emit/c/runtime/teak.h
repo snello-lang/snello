@@ -67,13 +67,14 @@ void tk_unguard(void *p);
 _Noreturn void tk_exit(int code);
 _Noreturn void tk_bounds(int64_t i, int64_t len);
 
-// An error is its message for now, and an empty message is no
-// error: the os and io functions return one and store their result
-// through a pointer. A file is a descriptor; the three standard streams
-// are files too.
-typedef struct {
-    int fd;
-} tk_file;
+// A []byte is the one slice type the runtime names, since the library's
+// reading and writing functions take one; its layout is every slice's.
+typedef struct tk_slice_u8 tk_slice_u8;
+struct tk_slice_u8 {
+    uint8_t *ptr;
+    int64_t len;
+    int64_t cap;
+};
 
 // A map keeps its entries in insertion order, which is the order a
 // range visits them, and finds them through a hash index. The emitter
@@ -101,6 +102,13 @@ typedef struct {
 // function that reads it, which panics naming it; an owned pointer
 // read after it moved, which leaves a null, panics the same way. A
 // release build does none of this.
+// The character classes of a byte, ASCII only, as a byte is one.
+static inline bool tk_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
+static inline bool tk_is_space(uint8_t c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+static inline bool tk_is_upper(uint8_t c) { return c >= 'A' && c <= 'Z'; }
+static inline bool tk_is_lower(uint8_t c) { return c >= 'a' && c <= 'z'; }
+static inline bool tk_is_letter(uint8_t c) { return tk_is_upper(c) || tk_is_lower(c); }
+
 #ifdef TK_DEBUG
 #define TK_POISON(place) memset(&(place), 0xDD, sizeof(place))
 #define TK_DEREF(p) (*(__typeof__(p))tk_deref(p))
@@ -145,11 +153,6 @@ static inline void tk_check_map(const tk_map *m) {
     }
 }
 
-static inline void tk_check_file(tk_file f) {
-    if (f.fd == (int)0xDDDDDDDD) {
-        tk_released("file");
-    }
-}
 #else
 #define TK_POISON(place) ((void)0)
 #define TK_DEREF(p) (*(p))
@@ -157,7 +160,6 @@ static inline void tk_check_file(tk_file f) {
 #define tk_check_slice(s) ((void)0)
 #define tk_check_len(len) ((void)0)
 #define tk_check_map(m) ((void)0)
-#define tk_check_file(f) ((void)0)
 #endif
 
 // tk_index checks an index against a length and returns it, so every
@@ -195,23 +197,10 @@ static inline void tk_string_free(tk_string s) {
     tk_string_drop(&s);
 }
 
-void tk_file_drop(tk_file *f);
 void tk_slice_free(tk_slice *s);
 void tk_release(void **p); // frees the block an owned pointer holds and empties the pointer
 
-extern tk_file tk_stdin, tk_stdout, tk_stderr;
-extern tk_slice tk_args; // the command line, as a slice of tk_string
-
 void tk_init(int argc, char **argv);
-tk_string tk_read_to_string(tk_string path, tk_string *out);
-tk_string tk_open(tk_string path, tk_file *out);
-tk_string tk_create(tk_string path, tk_file *out);
-tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out);
-tk_string tk_remove_all(tk_string path);
-tk_string tk_file_close(tk_file f);
-tk_string tk_file_sync(tk_file *f);
-tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n);
-tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n);
 
 void tk_slice_make(tk_slice *out, int64_t len, int64_t cap, size_t size);
 void tk_slice_push(tk_slice *s, const void *v, size_t size);
@@ -258,6 +247,7 @@ bool tk_has_prefix(tk_string s, tk_string t);
 bool tk_has_suffix(tk_string s, tk_string t);
 bool tk_string_contains(tk_string s, tk_string t);
 void tk_fields(tk_string s, tk_slice *out);
+void tk_lines(tk_string s, tk_slice *out);
 void tk_split(tk_string s, tk_string sep, tk_slice *out);
 bool tk_split_once(tk_string s, tk_string sep, tk_string *before, tk_string *after);
 
@@ -268,8 +258,26 @@ int tk_string_cmp(tk_string a, tk_string b);
 tk_string tk_int_to_string(int64_t v);
 tk_string tk_uint_to_string(uint64_t v);
 tk_string tk_f64_to_string(double v);
+tk_string tk_f64_fixed(double v, int prec);
 tk_string tk_bool_to_string(bool v);
 tk_string tk_quote(tk_string s);
+tk_string tk_quote_owned(tk_string s);
+tk_string tk_pad(tk_string s, int64_t width, bool left, bool owned);
+
+// A string and a []byte have one layout, so a conversion copies the
+// bytes into a new owned value of the other kind.
+static inline tk_string tk_bytes_to_string(tk_slice_u8 b) {
+    return tk_string_clone((tk_string){b.ptr, b.len, 0});
+}
+
+static inline tk_slice_u8 tk_string_to_bytes(tk_string s) {
+    tk_string c = tk_string_clone(s);
+    if (c.cap == 0) {
+        return (tk_slice_u8){0}; // no bytes: an empty slice, not a view of static data
+    }
+
+    return (tk_slice_u8){(uint8_t *)c.ptr, c.len, c.cap};
+}
 
 // Printing: fmt.Println(a, b) is print a, separator, print b, newline.
 void tk_print_string(tk_string s);
@@ -282,5 +290,28 @@ void tk_print_sep(void);
 void tk_print_nl(void);
 void tk_eprint_string(tk_string s);
 void tk_eprint_owned(tk_string s);
+
+// The functions and variables the standard library declares without a
+// body or a value, under the names the compiler gives them: the
+// package's import path and the name. The os functions return the
+// system's error number, zero on success, and store their result
+// through their last parameter.
+double tk_math_Sqrt(double x);
+tk_string tk_io_reason(int64_t code);
+int64_t tk_io_kindOf(int64_t code);
+extern tk_slice tk_os_Args; // the command line, as a slice of tk_string
+int64_t tk_os_open(tk_string path, int64_t *fd);
+int64_t tk_os_create(tk_string path, int64_t *fd);
+int64_t tk_os_readToString(tk_string path, tk_string *out);
+int64_t tk_os_mkdirTemp(tk_string dir, tk_string pattern, tk_string *out);
+int64_t tk_os_removeAll(tk_string path);
+int64_t tk_os_read(int64_t fd, tk_slice_u8 *buf, int64_t *n);
+int64_t tk_os_write(int64_t fd, tk_slice_u8 buf, int64_t *n);
+int64_t tk_os_writeString(int64_t fd, tk_string s, int64_t *n);
+int64_t tk_os_syncFile(int64_t fd);
+int64_t tk_os_closeFile(int64_t fd);
+int64_t tk_strconv_parseFloat(tk_string s, double *out);
+int64_t tk_time_now(void);
+void tk_time_Sleep(int64_t d);
 
 #endif

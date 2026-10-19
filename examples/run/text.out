@@ -1,0 +1,24 @@
+teak 4
+again
+ababab x, y, z x
+TEAK teak
+11
+Ok(42) Ok(-7) Ok(3)
+Err("strconv.Atoi: parsing \"4x\": invalid syntax") Err("strconv.Atoi: parsing \"\": invalid syntax") Err("strconv.Atoi: parsing \"-\": invalid syntax")
+Ok(9223372036854775807) Err("strconv.Atoi: parsing \"9223372036854775808\": value out of range")
+Ok(-9223372036854775808) Err("strconv.Atoi: parsing \"-9223372036854775809\": value out of range")
+-15 2.5 3 0.1
+Ok(1500) Ok(-0.25) Err("strconv.ParseFloat: parsing \"abc\": invalid syntax") Err("strconv.ParseFloat: parsing \" 1\": invalid syntax") Err("strconv.ParseFloat: parsing \"1e999\": value out of range")
+Atoi x invalid syntax
+hi! 3
+3
+own
+to stdout 1
+   42|ab  |abcdef|2.2|
+     7 x
+missing true NotExist
+hello, world 12 3
+|é  |  é|
+Ok(0) Err("strconv.ParseFloat: parsing \"0x10\": invalid syntax") Ok(inf)
+Ok(19) copied byte by byte
+42

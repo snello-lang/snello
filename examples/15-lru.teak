@@ -69,14 +69,15 @@ func (c mut Cache<K, V>) pushFront(s arena.Index<entry<K, V>>) {
 }
 
 func (c mut Cache<K, V>) Get(k ref K) ref V? {
-    s := c.index[k] ?? return None
+    s := *(c.index.Get(k) ?? return None)              // Index is Copy: the borrow of the map ends here
     c.unlink(s)
     c.pushFront(s)
     return Some(ref c.slots.Get(s).Expect("live").val)
 }
 
 func (c mut Cache<K, V>) Put(k K, v V) {
-    if s := c.index[ref k] {
+    if found := c.index.Get(ref k) {
+        s := *found                                  // copied out; the map is free again
         c.slots.GetMut(s).Expect("live").val = v
         c.unlink(s)
         c.pushFront(s)

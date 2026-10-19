@@ -8,6 +8,8 @@
 // continue; at the end of a match arm for what the arm bound, and
 // after the match for what no arm took; and at the end of a statement
 // for a value no variable holds. A moved value is never dropped twice.
+// A take through a borrow a call returned runs the call once, and a
+// borrow of a temporary keeps it to the end of its statement.
 
 package main
 
@@ -18,6 +20,14 @@ struct Res impl Drop { name string }
 func (r mut Res) Drop() { fmt.Println("drop", r.name) }
 
 func keep(s string) {}
+
+struct Slot { v string? }
+
+// first lends the first slot, and says so, to show it runs once.
+func first(ss mut []Slot) mut Slot {
+	fmt.Println("first")
+	return mut ss[0]
+}
 
 // pick returns one of its two arguments; the other dies with the match.
 // The first arm binds both by value, but a failed guard leaves them in
@@ -77,5 +87,9 @@ func main() {
 
 	o := Some("o".Clone())
 	if v := o { fmt.Println(v) }
+
+	ss := []Slot{Slot{v: Some("sv".Clone())}}
+	fmt.Println(take(mut first(mut ss).v) ?? "none".Clone())   // first runs once
+	fmt.Println((ref Res{name: "tmp".Clone()}).name)           // a borrow of a temporary: it dies with the statement
 	fmt.Println("end")                        // then rs, with p inside, is dropped
 }

@@ -30,6 +30,11 @@ func TestEscapes(t *testing.T) {
 		{"struct S { xs []Lexer }", []string{"a slice cannot hold Lexer: it holds a borrow"}},
 		{"struct S { l Lexer; o ref int? }", nil}, // a struct holding a borrow is a borrow, which is allowed
 		{"func f(s ref string) Lexer { return Lexer{src: s, pos: 0} }", nil},
+		{"func f(s ref string, n int) Lexer { return Lexer{src: s, pos: n} }", nil}, // a count beside the borrow carries none
+		{"struct Box { v int }\nfunc (b ref Box) Get() ref int { return ref b.v }\nfunc f() ref int { b := Box{v: 1}; return b.Get() }", []string{"cannot return a borrow of local b"}},
+		{"func first(xs ref []int) ref int { return ref xs[0] }\nfunc f() ref int { xs := []int{1}; return first(xs) }", []string{"cannot return a borrow of local xs"}},
+		{"func f() ref int { xs := []int{1}; return xs[0] }", []string{"cannot return a borrow of local xs"}},
+		{"func f() ref string { s := \"ab\".Clone(); return s.Trim() }", []string{"cannot return a borrow of local s"}},
 		{"func f(s ref string) Lexer { l := Lexer{src: s, pos: 0}; return l }", nil},
 		{"func f(s ref string) ref Lexer { l := Lexer{src: s, pos: 0}; return ref l }", []string{"cannot return a borrow of local l"}},
 		{"func f() Lexer { s := \"a\"; return Lexer{src: ref s, pos: 0} }", []string{"cannot return a borrow of local s"}},
@@ -59,9 +64,17 @@ func TestEscapes(t *testing.T) {
 		{"func f(xs ref []int) ref []int { return xs[1:2] }", nil},
 		{"func f() ref []int { xs := []int{1}; return xs[0:1] }", []string{"cannot return a borrow of local xs"}},
 		// A closure that captures a local is a borrow of it.
-		{"func f() func() int { n := 0; return func() int { return n } }", []string{"closure captures n by borrow and cannot be returned"}},
+		{"func f() func() int { n := 0; return func() int { return n } }", nil}, // n is Copy and only read: copied in, no borrow
+		{"func f() func() int { s := \"a\".Clone(); return func() int { return s.Len() } }", []string{"closure captures s by borrow and cannot be returned"}},
+		{"func f() func() { n := 0; return func() { n += 1 } }", []string{"closure captures n by borrow and cannot be returned"}}, // assigned: borrowed mut
 		{"func f() func() int { return func() int { return 1 } }", nil},
-		{"func f() func() int { n := 0; g := func() int { return n }; return g }", []string{"closure g captures n by borrow and cannot be returned"}},
+		{"func f() func() int { n := 0; g := func() int { return n }; return g }", nil},
+		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; return g }", []string{"closure g captures s by borrow and cannot be returned"}},
+		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; return func() int { return g() } }", []string{"closure captures g by borrow and cannot be returned"}}, // a function value is never copied in: its borrows are g's
+		{"func f() func() { n := 0; g := func() { n += 1 }; return func() { g() } }", []string{"closure captures g by borrow and cannot be returned"}},
+		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; h := g; return h }", []string{"closure h captures s by borrow and cannot be returned"}}, // h holds what g held
+		{"func f() func() int { n := 1; g := func() int { return n }; return func() int { return g() } }", []string{"closure captures g by borrow and cannot be returned"}},     // g itself is borrow-free, but a function value is captured by borrow of the frame holding it
+
 		{"func f() { n := 0; g := func() { n += 1 }; xs := []func(){}; xs.Push(g) }", []string{"closure g captures n by borrow and cannot be stored"}},
 		{"func f() { n := 0; xs := []func(){func() { n += 1 }} }", []string{"closure captures n by borrow and cannot be stored"}},
 		{"func f() { n := 0; c := Cb{f: func() { n += 1 }} }", []string{"closure captures n by borrow and cannot be stored"}},

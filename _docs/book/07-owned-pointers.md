@@ -18,7 +18,7 @@ A pointer is an owned value like any other. Assigning or passing it by value mov
 
 ## Optional pointers and recursive types
 
-A type cannot hold itself by value, since it would have no finite size; it holds itself through a pointer. The link is usually optional, because a chain ends:
+A type cannot hold itself by value, since it would have no finite size; it holds itself through a pointer, a slice or a map. `struct R { r R? }` is refused with `invalid recursive type R: it contains itself; hold it through a pointer, *R`. The link is usually optional, because a chain ends:
 
 ```teak
 struct Node {

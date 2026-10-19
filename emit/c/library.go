@@ -12,33 +12,40 @@ import (
 	"github.com/teak-lang/teak/types"
 )
 
-// The core library is a table in the emitter, as
-// _docs/design/05-standard-library.md says: fmt's printing is lowered
-// onto the runtime's printers with the format read at compile time, and
-// the os and io functions onto runtime functions that return an error
-// message, empty on success. The library written in Teak replaces this
-// file.
+// The functions the library declares without a body and the compiler
+// writes, as _docs/design/05-standard-library.md says: fmt's printing
+// is lowered onto the runtime's printers by the type of each argument,
+// with the format read at compile time, so the runtime has no
+// formatter; os.Exit onto the runtime's exit, since a function cannot
+// say it never returns yet; and rc's two primitives onto the pointer
+// itself, since a second owner of one pointer is what the language
+// refuses and the reference count is what makes it safe there.
 
-// libraryFunctions maps the os and io functions onto the runtime; stores
-// says whether the function has a value to store through its last
-// argument.
-var libraryFunctions = map[string]struct {
-	runtime string
-	stores  bool
-}{
-	"os.ReadToString": {"tk_read_to_string", true},
-	"os.Open":         {"tk_open", true},
-	"os.Create":       {"tk_create", true},
-	"os.MkdirTemp":    {"tk_mkdir_temp", true},
-	"os.RemoveAll":    {"tk_remove_all", false},
-	"io.Copy":         {"tk_io_copy", true},
+// lowered names the library functions the compiler writes, by import
+// path and name.
+var lowered = map[string]bool{
+	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
+	"fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
+	"rc.alias": true, "rc.leak": true,
 }
 
-// libraryCall lowers the core library: fmt's printing becomes
-// runtime calls chosen by each argument's type, and the format of
-// Printf and Sprintf is read here, so the runtime has no formatter.
-func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) string {
-	switch pkg.Path() + "." + name {
+// loweredKey returns the key of fn in lowered, path.Name, or the empty
+// string for a function the compiler does not write.
+func loweredKey(fn *types.Func) string {
+	if fn.Pkg() == nil {
+		return ""
+	}
+
+	if key := fn.Pkg().Path() + "." + fn.Name(); lowered[key] {
+		return key
+	}
+
+	return ""
+}
+
+// libraryCall writes the call x of the lowered function key.
+func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
+	switch key {
 	case "fmt.Println":
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {
@@ -58,27 +65,31 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, pkg *types.PkgName, name string) 
 	case "fmt.Sprint":
 		return e.sprint(x.Args)
 	case "fmt.Sprintf":
-		return e.sprintf(x)
+		return e.sprintf(x.Args[0], x.Args[1:])
 	case "fmt.Printf":
-		e.line("tk_print_owned(" + e.sprintf(x) + ");")
+		e.line("tk_print_owned(" + e.sprintf(x.Args[0], x.Args[1:]) + ");")
+		return ""
+	case "fmt.Fprintln":
+		e.fprint(x, e.sprintln(x.Args[1:]))
+		return ""
+	case "fmt.Fprintf":
+		e.fprint(x, e.sprintf(x.Args[1], x.Args[2:]))
 		return ""
 	case "os.Exit":
 		return "tk_exit((int)(" + e.expr(x.Args[0]) + "))"
+	case "rc.alias": // a second copy of the pointer a borrow lends, owned by the caller: a ref borrow of a pointer is the pointer in C
+		t := e.typeOf(x.Args[0])
+		if r, ok := t.(*types.Ref); ok {
+			t = r.Elem()
+		}
+
+		return e.operands(x.Args, []types.Type{types.NewRef(t, false)})[0]
+	case "rc.leak": // the pointer moves in and nothing frees it
+		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
+		return ""
 	}
 
-	if lib, ok := libraryFunctions[pkg.Path()+"."+name]; ok {
-		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
-		args := e.args(nil, x.Args, fn.Type().(*types.Signature))
-		return e.libResult(x, func(out string) string {
-			if !lib.stores {
-				return lib.runtime + "(" + args + ")"
-			}
-
-			return lib.runtime + "(" + args + ", " + out + ")"
-		})
-	}
-
-	e.unsupported(x.Pos(), pkg.Name()+"."+name)
+	e.unsupported(x.Pos(), key)
 	return "0"
 }
 
@@ -89,7 +100,7 @@ func (e *Emitter) toString(a ast.Expr) string {
 
 // text writes the conversion of v, the C text of a, to a tk_string.
 func (e *Emitter) text(v string, a ast.Expr) text {
-	return e.textOf(v, e.info.Types[a], a.Pos(), false)
+	return e.textOf(v, e.typeOf(a), a.Pos(), false)
 }
 
 // sprint joins the arguments as Sprint does: a space between two
@@ -99,7 +110,7 @@ func (e *Emitter) sprint(args []ast.Expr) string {
 	parts := e.operands(args, nil)
 	var out text
 	for i, a := range args {
-		if i > 0 && !isString(valueType(e.info.Types[a])) && !isString(valueType(e.info.Types[args[i-1]])) {
+		if i > 0 && !isString(valueType(e.typeOf(a))) && !isString(valueType(e.typeOf(args[i-1]))) {
 			out = join(out, text{literal(" "), false})
 		}
 
@@ -107,6 +118,43 @@ func (e *Emitter) sprint(args []ast.Expr) string {
 	}
 
 	return built(out)
+}
+
+// sprintln joins the arguments as Println prints them: a space between
+// every two, and a newline at the end.
+func (e *Emitter) sprintln(args []ast.Expr) string {
+	parts := e.operands(args, nil)
+	texts := make([]text, len(args))
+	for i, a := range args {
+		texts[i] = e.text(parts[i], a)
+	}
+
+	return built(joined("", "\n", " ", texts))
+}
+
+// fprint writes the owned string s to the writer x.Args[0] names, a mut
+// borrow of a type implementing io.Writer, through its Write method
+// over a view of the string's bytes; the result is dropped, as
+// Fprintln has none.
+func (e *Emitter) fprint(x *ast.CallExpr, s string) {
+	w := x.Args[0]
+	named, ok := valueType(e.typeOf(w)).(*types.Named)
+	if !ok {
+		e.unsupported(w.Pos(), "a writer of type "+e.typeOf(w).String())
+		return
+	}
+
+	name, sig := e.methodNameOf(nil, named, "Write", x.Pos())
+	if sig == nil {
+		return
+	}
+
+	recv := e.expr(w)
+	tmp := e.temp()
+	e.line("tk_string " + tmp + " = " + s + ";")
+	bytes := "(" + e.cType(types.NewSlice(types.Typ[types.Uint8]), x.Pos()) + "){(uint8_t *)" + tmp + ".ptr, " + tmp + ".len, 0}"
+	e.discard(name+"("+recv+", "+bytes+")", sig.Results(), x.Pos())
+	e.line("tk_string_drop(&" + tmp + ");")
 }
 
 // built writes a text as a string the caller owns: a clone when it
@@ -123,16 +171,17 @@ func built(t text) string {
 }
 
 // sprintf reads the format at compile time and writes the
-// concatenation it stands for. Verbs: %d, %s, %v, %q, %%.
-func (e *Emitter) sprintf(x *ast.CallExpr) string {
-	lit, ok := x.Args[0].(*ast.BasicLit)
+// concatenation it stands for. Verbs: %d, %s, %v, %q, %%, and %f with
+// a precision, %.2f, for a float; a width pads with spaces on the left,
+// %6d, or on the right after a minus, %-6s.
+func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) string {
+	lit, ok := f.(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
-		e.unsupported(x.Args[0].Pos(), "a format that is not a literal")
+		e.unsupported(f.Pos(), "a format that is not a literal")
 		return literal("")
 	}
 
 	format, _ := strconv.Unquote(lit.Value)
-	args := x.Args[1:]
 	parts := e.operands(args, nil)
 	var out text
 	plain := ""
@@ -150,6 +199,36 @@ func (e *Emitter) sprintf(x *ast.CallExpr) string {
 		}
 
 		i++
+		left, width := false, -1
+		if format[i] == '-' {
+			left = true
+			i++
+		}
+
+		if i < len(format) && format[i] == '0' {
+			e.unsupported(lit.Pos(), "the 0 flag in a format")
+		}
+
+		for ; i < len(format) && '0' <= format[i] && format[i] <= '9'; i++ {
+			width = max(width, 0)*10 + int(format[i]-'0')
+		}
+
+		if i >= len(format) {
+			break
+		}
+
+		precision := -1
+		if format[i] == '.' {
+			precision = 0
+			for i++; i < len(format) && '0' <= format[i] && format[i] <= '9'; i++ {
+				precision = precision*10 + int(format[i]-'0')
+			}
+
+			if i >= len(format) {
+				break
+			}
+		}
+
 		verb := format[i]
 		if verb == '%' {
 			plain += "%"
@@ -164,9 +243,20 @@ func (e *Emitter) sprintf(x *ast.CallExpr) string {
 		flush()
 		a, v := args[0], parts[0]
 		args, parts = args[1:], parts[1:]
+		var part text
 		switch verb {
 		case 'd', 's', 'v':
-			out = join(out, e.text(v, a))
+			part = e.text(v, a)
+		case 'f':
+			if !isFloat(e.typeOf(a)) {
+				e.unsupported(a.Pos(), "%f on a value of type "+e.typeOf(a).String())
+			}
+
+			if precision < 0 {
+				precision = 6 // as Go prints %f
+			}
+
+			part = text{"tk_f64_fixed(" + v + ", " + strconv.Itoa(precision) + ")", true}
 		case 'q':
 			s := e.text(v, a)
 			if s.owned { // the quote reads a string it does not keep
@@ -176,48 +266,19 @@ func (e *Emitter) sprintf(x *ast.CallExpr) string {
 				s.s = tmp
 			}
 
-			out = join(out, text{"tk_quote(" + s.s + ")", true})
+			part = text{"tk_quote(" + s.s + ")", true}
 		default:
 			e.unsupported(lit.Pos(), "the format verb %"+string(verb))
+			continue
 		}
+
+		if width >= 0 {
+			part = text{"tk_pad(" + part.s + ", " + strconv.Itoa(width) + ", " + strconv.FormatBool(left) + ", " + strconv.FormatBool(part.owned) + ")", true}
+		}
+
+		out = join(out, part)
 	}
 
 	flush()
 	return built(out)
-}
-
-// libraryMethod lowers Close, Sync and WriteString on a file; args
-// holds the receiver and the arguments, written.
-func (e *Emitter) libraryMethod(x *ast.CallExpr, name, args string) string {
-	switch name {
-	case "Close":
-		return e.libResult(x, func(out string) string { return "tk_file_close(" + args + ")" })
-	case "Sync":
-		return e.libResult(x, func(out string) string { return "tk_file_sync(" + args + ")" })
-	case "WriteString":
-		return e.libResult(x, func(out string) string { return "tk_file_write_string(" + args + ", " + out + ")" })
-	}
-
-	e.unsupported(x.Pos(), "the method "+name+" on os.File")
-	return "0"
-}
-
-// libResult writes a call of a runtime function that returns an error
-// message, empty on success, and stores its value through a pointer,
-// as the Result the library function promises.
-func (e *Emitter) libResult(x *ast.CallExpr, call func(out string) string) string {
-	rt := e.info.Types[x]
-	r := rt.Underlying().(*types.Result)
-	val, err, out := e.temp(), e.temp(), e.temp()
-	e.line(e.cType(r.Val(), x.Pos()) + " " + val + " = " + zeroValue + ";")
-	e.line("tk_string " + err + " = " + call("&"+val) + ";")
-	e.line(e.cType(rt, x.Pos()) + " " + out + ";")
-	e.line("if (" + err + ".len == 0) {")
-	e.line(out + ".ok = true;")
-	e.line(out + ".val = " + val + ";")
-	e.line("} else {")
-	e.line(out + ".ok = false;")
-	e.line(out + ".err = " + err + ";")
-	e.line("}")
-	return out
 }

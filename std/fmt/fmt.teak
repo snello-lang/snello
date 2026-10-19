@@ -1,0 +1,54 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package fmt prints values and formats text.
+//
+// Its functions take arguments of any type, and the compiler writes the
+// printing itself, choosing by the type of each argument: a number
+// prints as its digits, a string as its text, a bool as true or false,
+// a struct as its type's name and fields, an enum value as its
+// variant, an option as Some(x) or None, a Result as Ok(x) or Err(e),
+// and a value whose type implements Error as its message. The format
+// of Printf is read when the program is compiled, so nothing is
+// formatted at run time. The functions are declared here without
+// bodies; the compiler provides them.
+//
+// A format is text with verbs, each taking the next argument: %d, %s
+// and %v print a value's text; %q prints a string in double quotes,
+// escaped; %f prints a float with six decimals, and %.2f with two; %%
+// is a percent sign. A width before the verb pads with spaces on the
+// left, %6d, or on the right after a minus, %-6s; a value already as
+// wide is printed whole.
+//
+// Every argument is lent for the call: printing a value leaves it with
+// its owner.
+package fmt
+
+import "io"
+
+// Println prints its arguments to the standard output separated by
+// spaces, then a newline.
+func Println(args ...ref any)
+
+// Printf prints its arguments to the standard output as the format
+// says. It adds no newline; the format writes its own, "\n".
+func Printf(format ref string, args ...ref any)
+
+// Sprint returns its arguments as text, with a space between two
+// operands when neither is a string, as Println separates them.
+func Sprint(args ...ref any) string
+
+// Sprintf returns its arguments formatted as the format says.
+func Sprintf(format ref string, args ...ref any) string
+
+// Fprintln writes its arguments to w, separated by spaces and ended by
+// a newline, with one call of its Write; w is any io.Writer, lent mut:
+// fmt.Fprintln(mut os.Stderr, "error:", e). A failure to write is not
+// reported.
+func Fprintln<W: io.Writer>(w mut W, args ...ref any)
+
+// Fprintf writes its arguments to w as the format says, with one call
+// of its Write; w is any io.Writer, lent mut. A failure to write is not
+// reported.
+func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)

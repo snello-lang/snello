@@ -5,6 +5,7 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestResolve(t *testing.T) {
 		{"package p\nfunc f() { count := 0; g := func() { count += 1 }; g() }", nil},
 		{"package p\nfunc f() { x := 1; x, y := 2, 3; print(x, y) }", nil},
 		{"package p\nimport \"fmt\"\nfunc f() { fmt.Println(1) }", nil},
-		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", []string{"3:17: undefined: http.Get"}}, // only the core library exists
+		{"package p\nimport \"net/http\"\nfunc f() { http.Get(\"\") }", []string{"2:8: package net/http is not in the standard library"}}, // the use is not reported again
 		{"package p\nstruct T { a int }\nfunc f() { t := T{a: 1}; m := map[string]int{\"k\": 1}; print(t, m) }", nil},
 		{"package p\nstruct TempDir impl Drop { path string }\nfunc (t mut TempDir) Drop() {}", nil},
 		{"package p\nfunc f() { var x, y int = 1, 2; const c = 3; print(x, y, c) }", nil},
@@ -62,9 +63,9 @@ func TestResolve(t *testing.T) {
 		{"package p\nfunc f() { var x f }\nfunc f2() {}", []string{"2:18: f is not a type"}},
 		{"package p\nfunc f() { x := 1; { y := x }; print(y) }", []string{"2:38: undefined: y"}},
 		{"package p\nfunc f(xs []int) { for i := range xs {}; print(i) }", []string{"2:48: undefined: i"}},
-		{"package p\nfunc f<T>(x T) {}", []string{"2:1: generic functions are not part of core Teak", "2:13: undefined: T"}},
-		{"package p\nstruct S<T> { x T }", []string{"2:1: generic types are not part of core Teak", "2:17: undefined: T"}},
-		{"package p\ntrait Shape {}", []string{"2:1: traits are not part of core Teak"}},
+		{"package p\nfunc f<T>(x T) {}", nil},
+		{"package p\nstruct S<T> { x T }", nil},
+		{"package p\ntrait Shape { func (s ref Self) Area() f64 }\nstruct C impl Shape {}\nfunc (c ref C) Area() f64 { return 1.0 }", nil},
 		{"package p\nfunc f(x int) { match x { 1 => y, _ => 0 } }", []string{"2:32: undefined: y"}},
 		{"package p\nfunc f(xs [99999999999999999999]int) {}", []string{"2:12: array length must be a non-negative integer literal"}},
 		{"package p\nfunc f() { x := 1; print(x) }\nfunc g() { print(x) }", []string{"3:18: undefined: x"}},
@@ -130,9 +131,10 @@ func TestInfo(t *testing.T) {
 // TestCoreExamples checks every positive core program and expects no
 // errors: every identifier in them resolves.
 func TestCoreExamples(t *testing.T) {
+	conf := libraryConfig()
 	for _, path := range corePrograms(t) {
 		f, file, _ := parseFile(t, path)
-		if _, err := Check(file, f, nil); err != nil {
+		if _, err := conf.Check("", file, f, nil); err != nil {
 			t.Errorf("%s: %v", path, err)
 		}
 	}
@@ -180,9 +182,10 @@ func TestNegativePrograms(t *testing.T) {
 		t.Fatalf("no negative programs found: %v", err)
 	}
 
+	conf := libraryConfig()
 	for _, path := range paths {
 		f, file, src := parseFile(t, path)
-		_, cerr := Check(file, f, nil)
+		_, cerr := conf.Check("", file, f, nil)
 		if !handledErrors[filepath.Base(path)] {
 			if cerr != nil {
 				t.Errorf("%s: unexpected error: %v", path, cerr)
@@ -240,11 +243,12 @@ func BenchmarkCheck(b *testing.B) {
 		files = append(files, parsed{f, file})
 	}
 
+	conf := libraryConfig() // the library packages are checked once, on the first import
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		for _, p := range files {
-			if _, err := Check(p.file, p.f, nil); err != nil {
+			if _, err := conf.Check("", p.file, p.f, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -258,7 +262,7 @@ func checkErrors(t *testing.T, src string) []string {
 		t.Fatalf("%q: parse error: %v", src, err)
 	}
 
-	_, err = Check(file, f, nil)
+	_, err = libraryConfig().Check("", file, f, nil)
 	if err == nil {
 		return nil
 	}
@@ -295,4 +299,110 @@ func parseFile(tb testing.TB, path string) (*ast.File, *token.File, []byte) {
 	}
 
 	return f, file, src
+}
+
+// A fileImporter loads the library packages from the std directory
+// beside this package, as the compiler's embedded importer does, for
+// the programs that import them; this package cannot use that importer,
+// which is built on it.
+type fileImporter struct {
+	conf   Config
+	loaded map[string]*Package
+}
+
+func libraryConfig() *Config {
+	imp := &fileImporter{loaded: make(map[string]*Package)}
+	imp.conf.Importer = imp
+	return &imp.conf
+}
+
+func (imp *fileImporter) Import(path string) (*Package, error) {
+	if pkg := imp.loaded[path]; pkg != nil {
+		return pkg, nil
+	}
+
+	name := filepath.Join("..", "std", path, filepath.Base(path)+".teak")
+	src, err := os.ReadFile(name)
+	if err != nil {
+		return nil, errors.New("package " + path + " is not in the standard library")
+	}
+
+	f, file, err := parser.ParseFile(name, src)
+	if err != nil {
+		return nil, err
+	}
+
+	pkg, err := imp.conf.Check(path, file, f, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	imp.loaded[path] = pkg
+	return pkg, nil
+}
+
+// A sourceImporter checks library packages given as source, for a test
+// of what crosses a package boundary.
+type sourceImporter struct {
+	conf   Config
+	srcs   map[string]string
+	loaded map[string]*Package
+}
+
+func (imp *sourceImporter) Import(path string) (*Package, error) {
+	if pkg := imp.loaded[path]; pkg != nil {
+		return pkg, nil
+	}
+
+	src, ok := imp.srcs[path]
+	if !ok {
+		return nil, errors.New("package " + path + " is not in the standard library")
+	}
+
+	f, file, err := parser.ParseFile(path+".teak", []byte(src))
+	if err != nil {
+		return nil, err
+	}
+
+	pkg, err := imp.conf.Check(path, file, f, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	imp.loaded[path] = pkg
+	return pkg, nil
+}
+
+// TestTraitInstancesAcrossPackages checks that an instance of a
+// library's generic trait made by the program's check is the one the
+// library made: a program's bound It<int> is met by the library's type
+// listing It<int>, and a library bound by the program's type.
+func TestTraitInstancesAcrossPackages(t *testing.T) {
+	lib := "package it\ntrait It<U> { func (s mut Self) Next() U? }\nstruct Lib impl It<int> { n int }\nfunc (l mut Lib) Next() int? { return None }\nfunc Drain<I: It<int>>(x mut I) int { return 0 }\n"
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{"import \"it\"\nfunc Sum<I: it.It<int>>(x mut I) int { return 0 }\nfunc f(l mut it.Lib) int { return Sum(mut l) }", ""},
+		{"import \"it\"\nstruct Mine impl it.It<int> { n int }\nfunc (m mut Mine) Next() int? { return None }\nfunc f(m mut Mine) int { return it.Drain(mut m) }", ""},
+		{"import \"it\"\nfunc Sum<I: it.It<string>>(x mut I) int { return 0 }\nfunc f(l mut it.Lib) int { return Sum(mut l) }", "cannot use it.Lib as the type parameter I of Sum: it.Lib does not implement It<string>"},
+	}
+	for _, tt := range tests {
+		imp := &sourceImporter{srcs: map[string]string{"it": lib}, loaded: map[string]*Package{}}
+		imp.conf.Importer = imp
+		f, file, err := parser.ParseFile("test.teak", []byte("package main\n"+tt.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = imp.conf.Check("", file, f, nil)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+
+		if tt.want == "" && got != "" || tt.want != "" && !strings.Contains(got, tt.want) {
+			t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got, tt.want)
+		}
+	}
 }

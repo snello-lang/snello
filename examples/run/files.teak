@@ -10,14 +10,14 @@ package main
 
 import ("fmt"; "io"; "os")
 
-func write(path ref string, text ref string) Result<int, error> {
+func write(path ref string, text ref string) Result<int, io.Error> {
 	f := os.Create(path)?
 	n := f.WriteString(text)?
 	f.Close()?
 	return Ok(n)
 }
 
-func copy(src ref string, dst ref string) Result<i64, error> {
+func copy(src ref string, dst ref string) Result<i64, io.Error> {
 	in := os.Open(src)?
 	out := os.Create(dst)?
 	n := io.Copy(mut out, mut in)?

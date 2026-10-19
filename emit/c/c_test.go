@@ -13,6 +13,7 @@ import (
 
 	"github.com/teak-lang/teak/ast"
 	"github.com/teak-lang/teak/parser"
+	"github.com/teak-lang/teak/std"
 	"github.com/teak-lang/teak/token"
 	"github.com/teak-lang/teak/types"
 )
@@ -161,6 +162,12 @@ func TestUnsupported(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{"func work() {}\nfunc main() { spawn work() }", "channels and tasks"},
 		{"func main() { ch := make(chan int); ch <- 1 }", "channels"},
+		{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
+		{"import \"fmt\"\nfunc main() { fmt.Printf(\"%.2f\", 1) }", "%f on a value of type int"},
+		{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
+		{"var n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
+		{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
+		{"import \"fmt\"\nfunc main() { fmt.Printf(\"%05d\", 1) }", "the 0 flag in a format"},
 	}
 	for _, tt := range tests {
 		f, file, err := parser.ParseFile("t.teak", []byte("package main\n"+tt.src+"\n"))
@@ -169,11 +176,12 @@ func TestUnsupported(t *testing.T) {
 		}
 
 		info := &types.Info{}
-		if _, err := types.Check(file, f, info); err != nil {
+		imp := std.NewImporter(info)
+		if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
 			t.Fatal(err)
 		}
 
-		_, err = Emit(file, f, info)
+		_, err = Emit(file, f, info, libraries(imp)...)
 		if err == nil || !strings.Contains(err.Error(), "does not support") || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: got %v, want an error naming %q", tt.src, err, tt.want)
 		}
@@ -188,6 +196,7 @@ func BenchmarkEmit(b *testing.B) {
 		f    *ast.File
 		file *token.File
 		info *types.Info
+		libs []Library
 	}
 
 	paths, _ := filepath.Glob(filepath.Join("..", "..", "examples", "run", "*.teak"))
@@ -204,18 +213,19 @@ func BenchmarkEmit(b *testing.B) {
 		}
 
 		info := &types.Info{}
-		if _, err := types.Check(file, f, info); err != nil {
+		imp := std.NewImporter(info)
+		if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
 			b.Fatal(err)
 		}
 
-		programs = append(programs, checked{f, file, info})
+		programs = append(programs, checked{f, file, info, libraries(imp)})
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		for _, p := range programs {
-			if _, err := Emit(p.file, p.f, p.info); err != nil {
+			if _, err := Emit(p.file, p.f, p.info, p.libs...); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -238,7 +248,6 @@ func TestDebugChecks(t *testing.T) {
 		{"slice", `tk_slice xs; tk_slice_make(&xs, 2, 2, 8); tk_slice_free(&xs); tk_print_int(tk_index(0, xs.len));`, "panic: a released slice was used", 2},
 		{"pointer", `int64_t *p = tk_alloc(8); *p = 1; tk_release((void **)&p); tk_print_int(TK_DEREF(p));`, "panic: a released pointer was used", 2},
 		{"moved", `int64_t *p = NULL; tk_print_int(TK_DEREF(p));`, "panic: a moved pointer was used", 2},
-		{"file", `tk_file f = {7}; tk_file_drop(&f); tk_file_drop(&f);`, "panic: a released file was used", 2},
 		{"twice", `void *p = tk_alloc(8); tk_free(p); tk_free(p);`, "panic: a block was released twice", 2},
 		{"leak", `void *p = tk_alloc(8); (void)p;`, "teak: 1 blocks (8 bytes) not released", 3},
 	}
@@ -278,11 +287,12 @@ func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string
 	}
 
 	info := &types.Info{}
-	if _, err := types.Check(file, f, info); err != nil {
+	imp := std.NewImporter(info)
+	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
 		t.Fatal(err)
 	}
 
-	csrc, err := Emit(file, f, info)
+	csrc, err := Emit(file, f, info, libraries(imp)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +340,17 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool) (string, s
 	}
 
 	return string(stdout), "", 0
+}
+
+// libraries returns the packages an importer loaded, as Emit takes
+// them.
+func libraries(imp *std.Importer) []Library {
+	var libs []Library
+	for _, p := range imp.Packages() {
+		libs = append(libs, Library{File: p.File, Syntax: p.Syntax})
+	}
+
+	return libs
 }
 
 func TestMain(m *testing.M) {

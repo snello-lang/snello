@@ -1,0 +1,11 @@
+3 Some("x") Some("y") Some("z")
+Some("y!")
+Some("y!") 2 None true None
+3 Some("w") None false true {1 2}
+{0 1001} 1 Some(1000)
+None None
+Some("x") Some("z") Some("w") 0
+2 Some("p") Some("q") None None
+[root left leaf right] 4
+false
+true

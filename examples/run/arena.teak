@@ -1,0 +1,93 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The arena package written in Teak: an Arena of strings inserted
+// into, read, changed and removed from; a stale Index answering None to
+// Get, GetMut and Remove after its slot is reused, while the new Index
+// of the same slot answers the new value; an Index printed as its slot
+// and generation, and a slot reused through a thousand removals; the
+// zero Index naming nothing; an Index compared and copied; a tree of nodes linked by
+// indices walked from its root; and an Arena dropped with values still
+// in it.
+
+package main
+
+import ("arena"; "fmt")
+
+struct Node {
+	name     string
+	children []arena.Index<Node>
+}
+
+func add(t mut arena.Arena<Node>, parent arena.Index<Node>, name string) arena.Index<Node> {
+	child := t.Insert(Node{name: name, children: []arena.Index<Node>{}})
+	t.GetMut(parent).Expect("live parent").children.Push(child)
+	return child
+}
+
+func names(t ref arena.Arena<Node>, i arena.Index<Node>, out mut []string) {
+	n := t.Get(i).Expect("live node")
+	out.Push(n.name.Clone())
+	for _, c := range n.children {
+		names(t, c, mut out)
+	}
+}
+
+func main() {
+	a := arena.New<string>()
+	x := a.Insert("x")
+	y := a.Insert("y")
+	z := a.Insert("z")
+	fmt.Println(a.Len(), a.Get(x), a.Get(y), a.Get(z))
+
+	// Changing through GetMut.
+	if s := a.GetMut(y) {
+		*s = s.Clone() + "!"
+	}
+	fmt.Println(a.Get(y))
+
+	// Removing y: its Index is stale, and so is every copy of it.
+	stale := y
+	fmt.Println(a.Remove(y), a.Len(), a.Get(stale), a.GetMut(stale).IsNone(), a.Remove(stale))
+
+	// The slot is reused: the new Index names the new value, the
+	// stale one still names nothing.
+	w := a.Insert("w")
+	fmt.Println(a.Len(), a.Get(w), a.Get(stale), w == stale, w == w, w)
+
+	// Churn reuses the one free slot, so the Arena does not grow.
+	churn := arena.New<int>()
+	k := churn.Insert(0)
+	for n := 1; n <= 1000; n++ {
+		churn.Remove(k)
+		k = churn.Insert(n)
+	}
+	fmt.Println(k, churn.Len(), churn.Get(k))
+
+	// The zero Index names nothing, in an empty Arena or a full one.
+	var none arena.Index<string>
+	fmt.Println(a.Get(none), arena.New<string>().Get(none))
+
+	// Removing everything and inserting again fills the free slots.
+	fmt.Println(a.Remove(x), a.Remove(z), a.Remove(w), a.Len())
+	p := a.Insert("p")
+	q := a.Insert("q")
+	fmt.Println(a.Len(), a.Get(p), a.Get(q), a.Get(x), a.Get(w))
+
+	// A tree: nodes in one Arena, linked by indices.
+	t := arena.New<Node>()
+	root := t.Insert(Node{name: "root", children: []arena.Index<Node>{}})
+	left := add(mut t, root, "left")
+	add(mut t, root, "right")
+	add(mut t, left, "leaf")
+	walk := []string{}
+	names(t, root, mut walk)
+	fmt.Println(walk, t.Len())
+
+	// Removing a node leaves its parent's link stale.
+	t.Remove(left)
+	for _, c := range t.Get(root).Expect("root").children {
+		fmt.Println(t.Get(c).IsSome())
+	}
+}

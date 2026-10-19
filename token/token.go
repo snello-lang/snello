@@ -305,6 +305,16 @@ func (k Kind) IsOperator() bool { return operatorBeg < k && k < operatorEnd }
 // IsKeyword reports whether the kind is a keyword.
 func (k Kind) IsKeyword() bool { return keywordBeg < k && k < keywordEnd }
 
+// Binary returns the operator a compound assignment applies, ADD for
+// ADD_ASSIGN; any other kind is returned as it is.
+func (k Kind) Binary() Kind {
+	if ADD_ASSIGN <= k && k <= AND_NOT_ASSIGN {
+		return k - ADD_ASSIGN + ADD
+	}
+
+	return k
+}
+
 // Precedence returns the binary operator precedence of k, or LowestPrec
 // if k is not a binary operator.
 func (k Kind) Precedence() int {

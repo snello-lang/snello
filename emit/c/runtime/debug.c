@@ -140,7 +140,11 @@ void *tk_deref(void *p) {
 }
 
 int tk_finish(void) {
-    tk_slice_free(&tk_args);
+    for (int64_t i = 0; i < tk_os_Args.len; i++) { // the program may have stored strings of its own in it
+        tk_string_drop(&((tk_string *)tk_os_Args.ptr)[i]);
+    }
+
+    tk_slice_free(&tk_os_Args);
     if (live_blocks == 0) {
         return 0;
     }

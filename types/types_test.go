@@ -17,7 +17,7 @@ import (
 var (
 	node    = NewNamed(NewTypeName(token.NoPos, "Node", nil), nil, nil)
 	point   = NewNamed(NewTypeName(token.NoPos, "Point", nil), nil, nil)
-	tok     = NewNamed(NewTypeName(token.NoPos, "Token", nil), nil, []string{"Copy", "Eq"})
+	tok     = NewNamed(NewTypeName(token.NoPos, "Token", nil), nil, []*Trait{CopyTrait, EqTrait})
 	state   = NewNamed(NewTypeName(token.NoPos, "State", nil), nil, nil)
 	nodeID  = NewNamed(NewTypeName(token.NoPos, "NodeID", nil), Typ[Int], nil)
 	f64     = Typ[Float64]
@@ -228,6 +228,8 @@ func TestUniverse(t *testing.T) {
 		{"false", "*types.Const", "bool"},
 		{"len", "*types.Builtin", ""},
 		{"take", "*types.Builtin", ""},
+		{"min", "*types.Builtin", ""},
+		{"max", "*types.Builtin", ""},
 		{"Some", "*types.Variant", ""},
 		{"None", "*types.Variant", ""},
 		{"Ok", "*types.Variant", ""},
@@ -267,8 +269,8 @@ func TestUniverse(t *testing.T) {
 		t.Error("byte and u8 are not identical")
 	}
 
-	if n := Universe.Len(); n != 29 {
-		t.Errorf("universe has %d names, want 29: 17 types, 2 constants, 6 builtins, 4 variants", n)
+	if n := Universe.Len(); n != 49 {
+		t.Errorf("universe has %d names, want 49: 19 types, 2 constants, 8 builtins, 7 variants, 13 traits", n)
 	}
 }
 

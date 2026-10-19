@@ -68,11 +68,11 @@ func (g ref Graph) Shortest(from NodeID) []int? {
     dist[from] = Some(0)
     h.Push(item{node: from, dist: 0})
     for cur := h.Pop(); cur != None; cur = h.Pop() {
-        cur := cur?
-        if dist[cur.node]? < cur.dist { continue }
+        cur := cur.Expect("the loop saw Some")
+        if dist[cur.node].UnwrapOr(cur.dist) < cur.dist { continue }
         for _, e := range g.adj[cur.node] {
             nd := cur.dist + e.weight
-            if dist[e.to] == None || nd < dist[e.to]? {
+            if nd < dist[e.to].UnwrapOr(nd + 1) {
                 dist[e.to] = Some(nd)
                 h.Push(item{node: e.to, dist: nd})
             }

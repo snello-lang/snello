@@ -53,10 +53,10 @@ func needsDrop(t types.Type) bool {
 	case *types.Basic:
 		return isString(t)
 	case *types.Named:
-		if t == types.OSFile || t.Implements("Drop") {
+		if t.Implements(types.DropTrait) {
 			return true
 		}
-	case *types.Pointer, *types.Slice, *types.Map:
+	case *types.Pointer, *types.Slice, *types.Map, *types.Trait:
 		return true
 	}
 
@@ -68,6 +68,10 @@ func needsDrop(t types.Type) bool {
 // a value is registered with the runtime while it is owned. The answer
 // for a declared type is kept, as a type may hold a pointer to itself.
 func (e *Emitter) guarded(t types.Type) bool {
+	if _, ok := t.(*types.Trait); ok {
+		return true // whatever the value holds may have a Drop method: an over-approximation, since the implementing types are known, kept until a trait value without one is worth a guard less
+	}
+
 	n, ok := t.(*types.Named)
 	if !ok {
 		return anyPart(t, e.guarded)
@@ -92,6 +96,8 @@ func anyPart(t types.Type, f func(types.Type) bool) bool {
 	case *types.Pointer:
 		return f(t.Elem())
 	case *types.Slice:
+		return f(t.Elem())
+	case *types.Array:
 		return f(t.Elem())
 	case *types.Map:
 		return f(t.Key()) || f(t.Value())
@@ -128,21 +134,32 @@ func anyPart(t types.Type, f func(types.Type) bool) bool {
 // which carries the live flag.
 func hasDrop(t types.Type) bool {
 	n, ok := t.(*types.Named)
-	return ok && n != types.OSFile && n.Implements("Drop")
+	return ok && n.Implements(types.DropTrait)
 }
 
 // dropOf writes the statement that drops the value at the C place of
-// type t: the runtime's own drop for a string or a file, a generated
-// function for anything else.
+// type t: the runtime's own drop for a string, a generated function for
+// anything else.
 func (e *Emitter) dropOf(place string, t types.Type, pos token.Pos) string {
-	switch {
-	case isString(t):
+	if isString(t) {
 		return "tk_string_drop(&" + place + ");"
-	case t == types.OSFile:
-		return "tk_file_drop(&" + place + ");"
 	}
 
 	return e.dropper(t, pos) + "(&" + place + ");"
+}
+
+// dropMethod returns the C name of the Drop method of t, asking for
+// its instance when t is an instance of a generic type or the method
+// is a trait's default.
+func (e *Emitter) dropMethod(t types.Type) string {
+	if n, ok := t.(*types.Named); ok {
+		if fn := n.Method("Drop"); fn != nil && e.generics[fn.Origin()] != nil {
+			name, _ := e.callInstance(nil, fn, n)
+			return name
+		}
+	}
+
+	return methodName(t, "Drop")
 }
 
 // dropper returns the name of the function dropping a value of type t
@@ -161,18 +178,13 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 	var b strings.Builder
 	put(&b, head, " {\n")
 	if hasDrop(t) {
-		put(&b, "\tif (!v->tk_live) {\n\t\treturn; // moved away, or never built\n\t}\n\n\tv->tk_live = false;\n\t", methodName(t, "Drop"), "(v);\n")
+		put(&b, "\tif (!v->tk_live) {\n\t\treturn; // moved away, or never built\n\t}\n\n\tv->tk_live = false;\n\t", e.dropMethod(t), "(v);\n")
 	}
 
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		b.WriteString("\ttk_string_drop(v);\n")
 	case *types.Struct:
-		if t == types.OSFile {
-			b.WriteString("\ttk_file_drop(v);\n")
-			break
-		}
-
 		for i := 0; i < u.NumFields(); i++ {
 			f := u.Field(i)
 			if needsDrop(f.Type()) {
@@ -212,8 +224,12 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 		}
 
 		b.WriteString("\ttk_slice_free((tk_slice *)v);\n")
+	case *types.Array:
+		put(&b, "\tfor (int64_t i = 0; i < ", strconv.FormatInt(u.Len(), 10), "; i++) {\n\t\t", e.dropOf("v->at[i]", u.Elem(), pos), "\n\t}\n")
 	case *types.Map:
 		put(&b, "\ttk_map_free((tk_map *)v, ", e.mapType(u, pos), ");\n")
+	case *types.Trait:
+		traitDrop(&b)
 	default:
 		e.unsupported(pos, "dropping values of type "+t.String())
 	}
@@ -352,7 +368,7 @@ func (e *Emitter) boolean(x ast.Expr) string {
 // value goes into a temporary and the place is emptied, so its drop
 // later does nothing.
 func (e *Emitter) moved(x ast.Expr) string {
-	t := e.info.Types[x]
+	t := e.typeOf(x)
 	place := e.rawPlace(x)
 	tmp := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + place + ";")
@@ -430,6 +446,10 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 	put(&e.protos, head, ";\n")
 	var b strings.Builder
 	put(&b, head, " {\n\t", ct, " out = ", zeroValue, ";\n")
+	if hasDrop(t) {
+		b.WriteString("\tout.tk_live = true;\n")
+	}
+
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		b.WriteString("\tout = tk_string_clone(v);\n")
@@ -438,6 +458,11 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 			f := ident(u.Field(i).Name())
 			put(&b, "\tout.", f, " = ", e.cloneOf("v."+f, u.Field(i).Type(), pos), ";\n")
 		}
+	case *types.Enum:
+		b.WriteString("\tout.tag = v.tag;\n")
+		payloads(&b, u, "v.tag", func(field string, t types.Type) {
+			put(&b, "\t\tout", field, " = ", e.cloneOf("v"+field, t, pos), ";\n")
+		})
 	case *types.Option:
 		put(&b, "\tout.has = v.has;\n\tif (v.has) {\n\t\tout.val = ", e.cloneOf("v.val", u.Elem(), pos), ";\n\t}\n")
 	case *types.Tuple:
@@ -450,6 +475,8 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 	case *types.Slice:
 		b.WriteString("\ttk_slice_make((tk_slice *)&out, v.len, v.len, sizeof *v.ptr);\n")
 		put(&b, "\tfor (int64_t i = 0; i < v.len; i++) {\n\t\tout.ptr[i] = ", e.cloneOf("v.ptr[i]", u.Elem(), pos), ";\n\t}\n")
+	case *types.Array:
+		put(&b, "\tfor (int64_t i = 0; i < ", strconv.FormatInt(u.Len(), 10), "; i++) {\n\t\tout.at[i] = ", e.cloneOf("v.at[i]", u.Elem(), pos), ";\n\t}\n")
 	case *types.Map:
 		k, val := "(("+e.cType(u.Key(), pos)+" *)v.keys)[i]", "(("+e.cType(u.Value(), pos)+" *)v.vals)[i]"
 		b.WriteString("\tfor (int64_t i = tk_map_next((tk_map *)&v, 0); i >= 0; i = tk_map_next((tk_map *)&v, i + 1)) {\n")
@@ -464,8 +491,14 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 }
 
 // cloneOf writes the copy of the C value v of type t: itself when it
-// owns nothing.
+// owns nothing, the Clone a declared type wrote, or a copy part by
+// part, which is what a derived Clone is.
 func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
+	if n, ok := t.(*types.Named); ok && written(n, "Clone") {
+		name, _ := e.methodNameOf(nil, n, "Clone", pos)
+		return name + "(" + v + ")"
+	}
+
 	switch {
 	case !needsDrop(t):
 		return v

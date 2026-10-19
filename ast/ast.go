@@ -11,7 +11,12 @@
 // with sum types. Every node records the position where it starts.
 package ast
 
-import "github.com/teak-lang/teak/token"
+import (
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/teak-lang/teak/token"
+)
 
 // Node is implemented by every node in the tree.
 type Node interface {
@@ -85,10 +90,12 @@ type Field struct {
 	Type  Type
 }
 
-// A Param is a function parameter. Type is a *RefType for the ref and
+// A Param is a function parameter; Dots is the position of the ... of
+// a variadic parameter, the last one, or NoPos. Type is a *RefType for the ref and
 // mut modes; any other type is passed by value.
 type Param struct {
 	Name *Ident // nil when unnamed, as in a function type
+	Dots token.Pos
 	Type Type
 }
 
@@ -729,4 +736,11 @@ func firstIdent(names []*Ident) *Ident {
 	}
 
 	return names[0]
+}
+
+// IsExported reports whether name starts with an upper-case letter,
+// which is what makes it visible outside its package, as in Go.
+func IsExported(name string) bool {
+	r, _ := utf8.DecodeRuneInString(name)
+	return unicode.IsUpper(r)
 }

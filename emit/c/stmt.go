@@ -41,7 +41,7 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 		e.declStmt(s.Decl)
 	case *ast.ExprStmt:
 		if x := e.expr(s.X); x != "" {
-			e.discard(x, e.info.Types[s.X], s.Pos())
+			e.discard(x, e.typeOf(s.X), s.Pos())
 		}
 	case *ast.IncDecStmt:
 		e.line(e.expr(s.X) + s.Tok.String() + ";")
@@ -88,19 +88,20 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 
 	for i, name := range d.Names {
 		v := e.info.Defs[name]
-		decl := e.cType(v.Type(), name.Pos()) + " " + ident(name.Name) + " = "
+		vt := e.sub(v.Type())
+		decl := e.cType(vt, name.Pos()) + " " + ident(name.Name) + " = "
 		switch {
 		case parts != nil:
 			decl += parts[i]
 		case i < len(d.Values):
-			decl += e.valueTo(d.Values[i], v.Type())
+			decl += e.valueTo(d.Values[i], vt)
 		default:
 			decl += zeroValue
 		}
 
 		e.line(decl + ";")
 		e.discardUnused(name)
-		e.own(ident(name.Name), v.Type())
+		e.own(ident(name.Name), vt)
 	}
 }
 
@@ -126,13 +127,18 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 	case token.DEFINE, token.ASSIGN:
 		t := e.target(lhs, s.Tok)
 		if t == nil {
-			t = e.info.Types[rhs] // _ = x
+			t = e.typeOf(rhs) // _ = x
 		}
 
 		e.store(lhs, s.Tok, e.valueTo(rhs, t), t)
 	default:
-		t := valueType(e.info.Types[lhs])
+		t := valueType(e.typeOf(lhs))
 		place := e.lvalue(lhs)
+		if call := e.operatorCall(t, s.Tok.Binary(), false, lhs, []ast.Expr{rhs}, s.Pos()); call != "" {
+			e.line(place + " = " + call + ";") // a += b on a type with an Add: the old value goes into the method
+			return
+		}
+
 		if isString(t) { // s += t has no C operator; the old left side is freed after the join
 			e.line(place + " = " + join(text{place, true}, text{e.valueTo(rhs, t), !e.isRead(rhs)}).s + ";")
 			return
@@ -155,7 +161,7 @@ func (e *Emitter) assignMany(s *ast.AssignStmt) {
 	switch {
 	case len(s.Rhs) == 1 && len(s.Lhs) > 1:
 		temps = e.spread(s.Rhs[0], len(s.Lhs))
-		tuple := e.info.Types[s.Rhs[0]].Underlying().(*types.Tuple)
+		tuple := e.typeOf(s.Rhs[0]).Underlying().(*types.Tuple)
 		for i := range kinds {
 			kinds[i] = tuple.At(i)
 		}
@@ -163,7 +169,7 @@ func (e *Emitter) assignMany(s *ast.AssignStmt) {
 		for i, rhs := range s.Rhs {
 			kinds[i] = e.target(s.Lhs[i], s.Tok)
 			if kinds[i] == nil {
-				kinds[i] = e.info.Types[rhs] // _
+				kinds[i] = e.typeOf(rhs) // _
 			}
 
 			temps[i] = e.temp()
@@ -184,11 +190,11 @@ func (e *Emitter) assignMany(s *ast.AssignStmt) {
 func (e *Emitter) target(lhs ast.Expr, tok token.Kind) types.Type {
 	if name, ok := lhs.(*ast.Ident); ok && tok == token.DEFINE {
 		if obj, declared := e.info.Defs[name]; declared {
-			return obj.Type()
+			return e.sub(obj.Type())
 		}
 	}
 
-	return e.info.Types[lhs]
+	return e.typeOf(lhs)
 }
 
 // store writes value, of type t, into lhs: a declaration for a name
@@ -202,9 +208,9 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type
 
 	if name, ok := lhs.(*ast.Ident); ok && tok == token.DEFINE {
 		if obj, declared := e.info.Defs[name]; declared {
-			e.line(e.cType(obj.Type(), name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
+			e.line(e.cType(e.sub(obj.Type()), name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
 			e.discardUnused(name)
-			e.own(ident(name.Name), obj.Type())
+			e.own(ident(name.Name), e.sub(obj.Type()))
 			return
 		}
 	}
@@ -224,7 +230,7 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type
 // elements.
 func (e *Emitter) spread(x ast.Expr, n int) []string {
 	tmp := e.temp()
-	e.line(e.cType(e.info.Types[x], x.Pos()) + " " + tmp + " = " + e.expr(x) + ";")
+	e.line(e.cType(e.typeOf(x), x.Pos()) + " " + tmp + " = " + e.expr(x) + ";")
 	parts := make([]string, n)
 	for i := range parts {
 		parts[i] = tmp + ".e" + strconv.Itoa(i)
@@ -242,10 +248,14 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 	case len(s.Results) == 0:
 		e.leaveFunction(s.Pos())
 		e.line("return;")
-	case len(e.defers) == 0 && e.nothingToDrop():
-		e.line("return " + e.valueTo(s.Results[0], e.result) + ";")
 	default:
-		v := e.saved(s.Results[0], e.result)
+		v := e.valueTo(s.Results[0], e.result)
+		if len(e.defers) == 0 && e.nothingToDrop() { // asked after the value is written: it may have left temporaries to drop
+			e.line("return " + v + ";")
+			return
+		}
+
+		v = e.spill(v, e.result, s.Pos())
 		e.leaveFunction(s.Pos())
 		e.line("return " + v + ";")
 	}
@@ -355,7 +365,7 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	place, t, held := e.consumed(s.X)
 	if held != "" {
-		e.hold(held, e.info.Types[s.X]) // an owned collection is used up by the loop and dropped after it
+		e.hold(held, e.typeOf(s.X)) // an owned collection is used up by the loop and dropped after it
 	}
 
 	consume := held != ""
@@ -417,16 +427,16 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType typ
 	}
 
 	name := x.(*ast.Ident)
-	v := e.info.Defs[name]
+	vt := e.sub(e.info.Defs[name].Type())
 	value := item
-	if depth(v.Type()) > depth(itemType) {
+	if depth(vt) > depth(itemType) {
 		value = "&" + item
 	}
 
-	e.line(e.cType(v.Type(), name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
+	e.line(e.cType(vt, name.Pos()) + " " + ident(name.Name) + " = " + value + ";")
 	e.discardUnused(name)
-	e.own(ident(name.Name), v.Type())
-	if _, borrow := v.Type().(*types.Ref); consume && !borrow && needsDrop(v.Type()) {
+	e.own(ident(name.Name), vt)
+	if _, borrow := vt.(*types.Ref); consume && !borrow && needsDrop(vt) {
 		e.line(item + " = " + e.zero(itemType, name.Pos()) + ";")
 	}
 }
@@ -444,7 +454,7 @@ func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 			return "", false
 		}
 
-		t := valueType(e.info.Types[s.Lhs[0]])
+		t := valueType(e.typeOf(s.Lhs[0]))
 		if s.Tok == token.ASSIGN {
 			return e.lvalue(s.Lhs[0]) + " = " + e.valueTo(s.Rhs[0], t), true
 		}
@@ -503,4 +513,10 @@ func isBlank(x ast.Expr) bool {
 func isString(t types.Type) bool {
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && (b.Kind() == types.String || b.Kind() == types.Error)
+}
+
+// isFloat reports whether t is a floating-point number.
+func isFloat(t types.Type) bool {
+	b, ok := valueType(t).Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsFloat != 0
 }

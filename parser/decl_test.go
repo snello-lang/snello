@@ -28,6 +28,8 @@ func TestDecls(t *testing.T) {
 		{"func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {}", "func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {...}"},
 		{"func popMin<K: Ord, V>(n *Node<K, V>) (*Node<K, V>, *Node<K, V>?) {}", "func popMin<K: Ord, V>(n *Node<K, V>) (*Node<K, V>, (*Node<K, V>)?) {...}"},
 		{"func f() int", "func f() int"}, // no body: the checker's problem, not the parser's
+		{"func Println(args ...ref any)", "func Println(args ...ref any)"},
+		{"func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)", "func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)"},
 
 		// Types: definitions, structs with impl lists, enums.
 		{"type NodeID int", "type NodeID int"},
@@ -72,6 +74,7 @@ func TestDeclErrors(t *testing.T) {
 		n    int    // total errors expected
 	}{
 		{"struct T", "expected '{', found 'newline'", 1},
+		{"func f(a ...int, b int) {}", "can only use ... with the final parameter", 1},
 		{"struct T\nfunc f() {}", "expected '{', found 'newline'", 1},
 		{"type T struct {}", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1}, // Go's spelling
 		{"type T enum { A }", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1},

@@ -1,6 +1,6 @@
 # Appendix B. Teak for Go programmers
 
-Status: grows with the chapters; covers chapters 3 to 9.
+Status: grows with the chapters; covers chapters 3 to 9, 11, 12 and 14.
 
 The chapters describe Teak on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Teak is not a Go dialect, and Go programs are not Teak programs; the syntax is familiar so that the ideas get your full attention.
 
@@ -13,7 +13,7 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capi
 | `int32`, `float64`, `uint8` | `i32`, `f64`, `u8`; `int`, `uint`, `byte`, `rune` as before |
 | Untyped constants: `x := 10 * 2.5` | A literal takes its type from context; mix types with a conversion |
 | `s[a:b]` copies a string header; the bytes are shared by the GC | `s[a:b]` lends a `ref string`; the original must outlive it |
-| `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()` |
+| `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()`; the package has the functions too (chapter 14) |
 | `go f(x)` | `spawn f(x)` |
 | `if x := f(); x > 0 {` | Same. `if x := opt {` with no `;` is a binding on an optional |
 | `append`, `delete`, `copy`, `new` | `xs.Push(v)`, `m.Remove(k)`, `xs.Clone()`, `&expr` |
@@ -108,3 +108,54 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `p == q` compares addresses | `p == q` compares what they hold |
 | A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
 
+## Chapter 11: Traits
+
+| In Go | In Teak |
+|---|---|
+| `type Shape interface { Area() float64 }` | `trait Shape { func (s ref Self) Area() f64 }`: the receiver says how the method borrows the value |
+| A type satisfies an interface by having the methods | A type implements a trait by saying so, `struct Circle impl Shape { ... }`; the compiler then checks the methods |
+| A struct with the right methods is a `Shape` wherever one is wanted | A struct that does not list `impl Shape` is not a `Shape`, whatever its methods |
+| `type Solid interface { Shape; Volume(h float64) float64 }`: embedding | `trait Solid: Shape { func (s ref Self) Volume(h f64) f64 }`: refinement |
+| `func TotalArea[T Shape](xs []T) float64`: a constraint | `func TotalArea<T: Shape>(xs ref []T) f64`: a bound; several are joined with `+` |
+| `comparable`, `cmp.Ordered`, `any` | `Eq`, `Ord`, and no bound at all; `Copy` is a bound too |
+| `var s Shape = Circle{}`, `[]Shape`: an interface value | The same, with the same cost: one allocation, one indirect call; the value is owned and moves, and a borrow cannot become one |
+| No default methods; share code with embedding or a helper function | Default methods in the trait, `super`, and trait fields, all decided and to come |
+| Type assertions and type switches on an interface value | Not in Teak: a trait value is used through its methods, and a `match` is for enums |
+
+## Chapter 12: Generics
+
+| In Go | In Teak |
+|---|---|
+| `type List[T any] struct { items []T }` | `struct List<T> { items []T }`: angle brackets, and no bound means no constraint |
+| `List[int]{}` | `List<int>{}` |
+| `func (l *List[T]) Push(v T)` | `func (l mut List<T>) Push(v T)` |
+| `func (l List[int]) Sum()` declares a type parameter named `int` | Refused: a receiver argument must be a fresh name |
+| A `T` value copies, whatever `T` is | A `T` value moves, unless the parameter is bounded `T: Copy` |
+| `[T comparable]`, `[T cmp.Ordered]` | `<T: Eq>`, `<T: Ord>`: traits as bounds (chapter 11) |
+| Operators only on the built-in types | `struct Vec2 impl Add, Mul<f64>` with `Add` and `Mul` methods: `a + b` is `a.Add(b)`, a direct call (chapter 11) |
+| `func Map[T, U any](s []T, f func(T) U) []U` | `func Map<T, U>(l List<T>, f func(T) U) List<U>` |
+| `Map[int, string](xs, f)`, or inferred | `Map<int, string>(l, f)`, or inferred, from the arguments and then from the type the result is assigned to |
+| No methods with their own type parameters, because interface values call through a method table | `func (l ref List<T>) Conv<U>(...)` is fine; the one place it cannot be called is through a trait used as a type (chapter 11) |
+| `Pair[int, string]{a: 1, b: "x"}`: a composite literal names its arguments | `Pair{a: 1, b: "x"}`: inferred from the fields |
+
+## Chapter 14: The standard library
+
+Unchanged: import paths and package names, `import m "math"` to rename, exported names by capitalization, `math.Pi`, `math.Sqrt`, `math.Abs`, `math.Min`, `math.Max`, the format verbs of `fmt`.
+
+| In Go | In Teak |
+|---|---|
+| `float64` throughout `math` | `f64` throughout `math` |
+| Each package is compiled once and linked | The library is compiled with the program, into one binary, so the C compiler inlines across the boundary |
+| `GOROOT` holds the library's source | The library's source is inside the compiler; a build needs no path and no environment |
+| A function with no body is implemented in assembly | A function with no body is the runtime's, in C; only the library may declare one |
+| `os.ReadFile` returns bytes and an error | `os.ReadToString` returns `Result<string, io.Error>` (chapter 8) |
+| `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
+| `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |
+| `io.Reader` and `io.Writer` are interfaces; `io.Copy(dst, src)` dispatches dynamically | `io.Reader` and `io.Writer` are traits; `io.Copy` is generic over them, one copy per pair of types |
+| Printing an `error` prints `err.Error()` | The same, for any type implementing the `Error` trait |
+| `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
+| `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
+| `strings.Builder` | The same, with `WriteString`, `WriteByte`, `Len`, `String` and `Reset` |
+| `[]byte(s)` and `string(b)` copy | The same |
+| `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr, ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait |
+| `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing |

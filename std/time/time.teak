@@ -1,0 +1,116 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package time measures time: a Duration is a span of it and a Time an
+// instant, both Copy values that compare and print as numbers.
+//
+// Now reads the system clock, Sleep waits, and the constants from
+// Nanosecond to Hour let a Duration be written as a product, 10 *
+// time.Millisecond, since a literal takes the Duration type from the
+// constant beside it. After and Tick, which hand a Time over a channel,
+// come with channels.
+package time
+
+// A Duration is a span of time, counted in nanoseconds, as an i64: the
+// longest is about 290 years. It is a number: it adds, subtracts,
+// compares and multiplies by an integer, and prints as its count of
+// nanoseconds.
+type Duration i64
+
+// Nanosecond is the unit of Duration; the others are its multiples.
+const Nanosecond Duration = 1
+const Microsecond Duration = 1000
+const Millisecond Duration = 1000000
+const Second Duration = 1000000000
+const Minute Duration = 60000000000
+const Hour Duration = 3600000000000
+
+// A Time is an instant, counted in nanoseconds since the start of 1970
+// in UTC, as the system's clock gives it. Two Times compare with ==,
+// <, Before and After, and Sub gives the Duration between them.
+struct Time impl Copy, Eq, Ord {
+	ns i64
+}
+
+// Now returns the current time as the system's clock has it. The clock
+// may be set back by the system, so a Duration between two Nows can be
+// negative.
+func Now() Time {
+	return Time{ns: now()}
+}
+
+// Unix returns the Time sec seconds and nsec nanoseconds after the
+// start of 1970 in UTC.
+func Unix(sec i64, nsec i64) Time {
+	return Time{ns: sec*1000000000 + nsec}
+}
+
+// Since returns the time elapsed since t: Now().Sub(t).
+func Since(t Time) Duration {
+	return Now().Sub(t)
+}
+
+// Sleep pauses the program for d, and returns at once for a d of zero
+// or less. The runtime provides it.
+func Sleep(d Duration)
+
+// Add returns the time d after t, or before it for a negative d.
+func (t Time) Add(d Duration) Time {
+	return Time{ns: t.ns + i64(d)}
+}
+
+// Sub returns the Duration from u to t, negative when t is before u.
+func (t Time) Sub(u Time) Duration {
+	return Duration(t.ns - u.ns)
+}
+
+// Before reports whether t is earlier than u.
+func (t Time) Before(u Time) bool {
+	return t.ns < u.ns
+}
+
+// After reports whether t is later than u.
+func (t Time) After(u Time) bool {
+	return t.ns > u.ns
+}
+
+// Unix returns the seconds since the start of 1970 in UTC, rounded
+// toward zero.
+func (t Time) Unix() i64 {
+	return t.ns / 1000000000
+}
+
+// UnixNano returns the nanoseconds since the start of 1970 in UTC.
+func (t Time) UnixNano() i64 {
+	return t.ns
+}
+
+// Nanoseconds returns the duration as a count of nanoseconds.
+func (d Duration) Nanoseconds() i64 {
+	return i64(d)
+}
+
+// Milliseconds returns the duration as a count of whole milliseconds.
+func (d Duration) Milliseconds() i64 {
+	return i64(d) / 1000000
+}
+
+// Seconds returns the duration in seconds, with the fraction.
+func (d Duration) Seconds() f64 {
+	return f64(d) / 1000000000.0
+}
+
+// Minutes returns the duration in minutes, with the fraction.
+func (d Duration) Minutes() f64 {
+	return f64(d) / 60000000000.0
+}
+
+// Hours returns the duration in hours, with the fraction.
+func (d Duration) Hours() f64 {
+	return f64(d) / 3600000000000.0
+}
+
+// now returns the system clock's nanoseconds since the start of 1970.
+// The runtime provides it.
+func now() i64

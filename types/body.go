@@ -11,9 +11,10 @@ import (
 	"github.com/teak-lang/teak/token"
 )
 
-// resolveBodies checks every top-level initializer and function body.
-// Initializers go first so that a function may use a global whose type
-// is inferred from its value.
+// resolveBodies checks every top-level initializer and function body,
+// and the bodies of the traits' default methods. Initializers go first
+// so that a function may use a global whose type is inferred from its
+// value.
 func (c *Checker) resolveBodies(f *ast.File) {
 	for _, d := range f.Decls {
 		if d, ok := d.(*ast.VarDecl); ok {
@@ -22,15 +23,30 @@ func (c *Checker) resolveBodies(f *ast.File) {
 	}
 
 	for i, d := range f.Decls {
-		if d, ok := d.(*ast.FuncDecl); ok {
-			fn := c.objs[i].(*Func)
-			c.sig = fn.typ.(*Signature)
-			c.moved, c.dead = c.moved[:0], false // each body starts afresh; a closure's body shares its function's
-			c.funcBody(c.sig, d.Recv, d.Params, d.Body)
-			c.resolveBorrows()
-			c.sig = nil
+		if d, ok := d.(*ast.FuncDecl); ok && !c.badMethods[d] {
+			outer := c.scope
+			if scope := c.typeScopes[d]; scope != nil {
+				c.scope = scope // the type parameters the receiver names
+			}
+
+			c.checkBody(c.objs[i].(*Func).typ.(*Signature), d.Recv, d.Params, d.Body)
+			c.scope = outer
 		}
 	}
+
+	c.checkDefaultBodies()
+}
+
+// checkBody checks one function's or method's body against its
+// signature. Each body starts afresh, with no moved places, and its
+// borrows are resolved at its end; a closure's body shares its
+// function's state.
+func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param, body *ast.BlockStmt) {
+	c.sig, c.recv = sig, sig.recv
+	c.moved, c.floors, c.dead = c.moved[:0], c.floors[:0], false
+	c.funcBody(sig, recv, params, body)
+	c.resolveBorrows()
+	c.sig, c.recv = nil, nil
 }
 
 // funcBody opens the function scope, declares the receiver and the

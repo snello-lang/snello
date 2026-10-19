@@ -74,6 +74,10 @@ func TestBorrows(t *testing.T) {
 		{"func (t ref Tree) f() { t.nodes.Push(Node{value: \"a\", next: None, n: 0}) }", []string{"cannot borrow t.nodes as mut through a ref receiver"}},
 		{"func f(t ref Tree) { t.nodes.Push(Node{value: \"a\", next: None, n: 0}) }", []string{"cannot borrow t.nodes as mut through a ref borrow"}},
 		{"func f(n ref Node) { take(mut n.next) }", []string{"cannot borrow n.next as mut through a ref borrow"}},
+		{"func (n mut Node) Bump() { n.n += 1 }\nfunc f(n ref Node) { n.Bump() }", []string{"cannot borrow n as mut: n is a ref borrow"}}, // the variable is itself a ref
+		{"func (n mut Node) Bump() { n.n += 1 }\nfunc f(n ref Node) { m := n; m.Bump() }", []string{"cannot borrow m as mut: m is a ref borrow"}},
+		{"func (n mut Node) Bump() { n.n += 1 }\nfunc (n ref Node) Twice() { n.Bump() }", []string{"cannot borrow n as mut: n is a ref receiver"}},
+		{"func (n mut Node) Bump() { n.n += 1 }\nfunc f(n mut Node) { n.Bump() }", nil},
 		// Matching through a borrow: the bindings hold it; a Copy part of a place is copied.
 		{"func f(st mut State) { match st { Failed(r) => { *st = Closed; keep(r.Clone()) }, _ => {} } }", []string{"cannot assign to *st: st is borrowed by r"}},
 		{"func f(st ref State) { match st { Failed(r) => keep(r.Clone()), _ => {} } }", nil},

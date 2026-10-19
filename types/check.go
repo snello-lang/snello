@@ -12,11 +12,27 @@ import (
 	"github.com/teak-lang/teak/token"
 )
 
-// A Package is a checked Teak package: its name and the scope holding
-// its top-level declarations.
+// A Package is a checked Teak package: its name, its import path,
+// empty for the program being compiled, and the scope holding its
+// top-level declarations.
 type Package struct {
 	name  string
+	path  string
 	scope *Scope
+}
+
+// An Importer loads the package an import path names, as
+// go/types.Importer does: it parses and checks the package's source,
+// once per path, and returns it, or an error saying why it could not.
+type Importer interface {
+	Import(path string) (*Package, error)
+}
+
+// A Config says how a program is checked: the Importer that loads the
+// packages it imports. Without one, only the core library table
+// answers an import. Modeled on go/types.Config.
+type Config struct {
+	Importer Importer
 }
 
 // Info records what the checker learned about the syntax tree, as
@@ -25,27 +41,68 @@ type Package struct {
 // something to the object it refers to. An identifier appears in at
 // most one of the two.
 type Info struct {
-	Defs  map[*ast.Ident]Object
-	Uses  map[*ast.Ident]Object
-	Types map[ast.Expr]Type // the type of every expression that has one
-	Moves map[ast.Expr]bool // the place expressions whose value moves away: the emitter empties the place
+	Defs      map[*ast.Ident]Object
+	Uses      map[*ast.Ident]Object
+	Types     map[ast.Expr]Type          // the type of every expression that has one
+	Moves     map[ast.Expr]bool          // the place expressions whose value moves away: the emitter empties the place
+	Instances map[*ast.Ident]Instance    // the name of each generic function at a call, with the arguments inferred for it
+	Captures  map[*ast.FuncLit][]Capture // the variables of the enclosing functions each closure refers to, in the order first seen
+}
+
+// An Instance is a generic function as one call uses it: its type
+// arguments, and its signature with them in place.
+// A Capture is a variable of an enclosing function that a closure
+// refers to. Copied says the closure holds a copy of its value, made
+// when the closure was: a Copy value the closure only reads. Any other
+// capture is reached through a borrow of the variable, or owned after a
+// move.
+type Capture struct {
+	Var    *Var
+	Copied bool
+}
+
+type Instance struct {
+	TypeArgs []Type
+	Type     *Signature
 }
 
 // A Checker holds the state of one check: the file being checked, the
 // package being built, the current scope, and the errors so far.
 type Checker struct {
+	conf   *Config
 	file   *token.File
 	pkg    *Package
 	info   *Info
 	errors scanner.ErrorList
 	scope  *Scope     // the innermost scope open at the current point
 	objs   []Object   // the object of each top-level declaration, by index; nil for var and const
-	sig    *Signature // the function whose body is being checked; nil at the top level
+	sig    *Signature // the function whose body is being checked, a closure's inside one; nil at the top level
+	recv   *Var       // the receiver of the method whose body is being checked, through any closures; nil elsewhere
+
+	// typeScopes holds, for a generic function and for a method of a
+	// generic type, the scope that declares its type parameters, under
+	// which the signature was resolved and the body is checked.
+	typeScopes map[*ast.FuncDecl]*Scope
+	badMethods map[*ast.FuncDecl]bool // methods left out after an error in their receiver
+	callee     ast.Expr               // the function of the call being checked, which alone may name a generic function
+	wantType   ast.Expr               // the expression a type may stand at besides the callee: the first argument of make
+	callEdges  []callEdge             // the type parameters calls pass to generic callees, for the cycle check (cycle.go)
+
+	// The traits (trait.go): the type Self stands for while a trait's
+	// methods are resolved or a default's body is checked, the bound
+	// checks that waited for the declarations, and the default methods
+	// whose bodies are checked with the function bodies.
+	self          *TypeParam
+	pendingBounds []pendingBound
+	pendingKeys   []pendingKey // the map key questions asked before the declarations were resolved (stdtraits.go)
+	instances     []*Trait     // the operator traits written with an argument, Mul<f64>, one per argument type (stdtraits.go)
+	defaults      []traitDefault
 
 	// The move pass (move.go): the places moved on the current path,
 	// whether the path can reach this point, the loops, switches and
 	// selects open here, and two flags for how a place is being read.
 	moved      []move
+	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
 	dead       bool
 	regions    []region
 	noUse      bool // evaluating an assignment target, which is not a use
@@ -82,10 +139,21 @@ type Checker struct {
 // Check resolves every name in f, a file of one package, and returns
 // the package and the errors found, sorted by position. The file's
 // positions are resolved through file. info, when not nil, receives
-// the objects of every identifier.
+// the objects of every identifier. The imports are answered by the
+// core library table alone; a program that imports a package written
+// in Teak is checked through a Config.
 func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
-	c := &Checker{file: file, info: info}
-	c.pkg = &Package{name: f.Name.Name, scope: NewScope(Universe)}
+	return (&Config{}).Check("", file, f, info)
+}
+
+// Check resolves every name in f, a file of the package at the import
+// path, as the function Check does, with the packages it imports
+// loaded through the Config's Importer. The program being compiled has
+// the empty path; a library package is checked under its own, into the
+// same Info, so the backend compiles them together.
+func (conf *Config) Check(path string, file *token.File, f *ast.File, info *Info) (*Package, error) {
+	c := &Checker{conf: conf, file: file, info: info, typeScopes: make(map[*ast.FuncDecl]*Scope), badMethods: make(map[*ast.FuncDecl]bool)}
+	c.pkg = &Package{name: f.Name.Name, path: path, scope: NewScope(Universe)}
 	if info != nil {
 		if info.Defs == nil {
 			info.Defs = make(map[*ast.Ident]Object)
@@ -102,6 +170,14 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 		if info.Moves == nil {
 			info.Moves = make(map[ast.Expr]bool)
 		}
+
+		if info.Instances == nil {
+			info.Instances = make(map[*ast.Ident]Instance)
+		}
+
+		if info.Captures == nil {
+			info.Captures = make(map[*ast.FuncLit][]Capture)
+		}
 	}
 
 	c.checkFile(f)
@@ -111,6 +187,10 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 
 // Name returns the package name.
 func (p *Package) Name() string { return p.name }
+
+// Path returns the import path of the package, or the empty string for
+// the program being compiled.
+func (p *Package) Path() string { return p.path }
 
 // Scope returns the package scope.
 func (p *Package) Scope() *Scope { return p.scope }
@@ -124,6 +204,7 @@ func (c *Checker) checkFile(f *ast.File) {
 	c.collectDecls(f)
 	c.resolveDecls(f)
 	c.resolveBodies(f)
+	c.checkCallCycles()
 }
 
 // errorf reports an error at pos. Error paths may allocate freely.
@@ -153,6 +234,10 @@ func (c *Checker) declare(scope *Scope, ident *ast.Ident, obj Object) {
 		}
 
 		c.errorf(ident.Pos(), msg)
+	}
+
+	if scope == c.pkg.scope {
+		obj.setPkg(c.pkg) // a top-level name is reached from other packages, and the backend names it after its package
 	}
 
 	c.recordDef(ident, obj)

@@ -5,6 +5,8 @@
 package types
 
 import (
+	"slices"
+
 	"github.com/teak-lang/teak/ast"
 	"github.com/teak-lang/teak/token"
 )
@@ -39,18 +41,24 @@ const (
 // A move records a place that was moved and where.
 type move struct {
 	place
-	pos token.Pos
+	pos     token.Pos
+	revived bool // not a move: the place was given a new value here, after a move recorded before the enclosing branch or loop began
 }
 
 // A region is a loop, switch or select open at the current point, with
-// the moves on the paths that leave it. A loop's end paths are those
-// that reach its next iteration.
+// the records of the paths that leave it: ends are the paths reaching
+// its end or a continue, which for a loop reach its next iteration, and
+// exits the paths leaving by break. A path with no records is counted
+// but not kept.
 type region struct {
-	loop  bool
-	pos   token.Pos
-	mark  int // len(moved) at entry
-	end   []move
-	exits []move
+	loop     bool
+	infinite bool // a loop with no condition: only a break reaches the point after it
+	pos      token.Pos
+	mark     int // len(moved) at entry
+	ends     [][]move
+	exits    [][]move
+	ended    int
+	exited   int
 }
 
 // A fork remembers the state at a branch point, so that every branch
@@ -58,9 +66,21 @@ type region struct {
 type fork struct {
 	mark     int
 	dead     bool
-	moves    []move // the moves of the branches that do not leave
-	all      bool   // whether every branch so far leaves
+	paths    [][]move // the records of the branches that do not leave, those with any
+	live     int      // the branches that do not leave
+	all      bool     // whether every branch so far leaves
 	branches int
+}
+
+// A floor is where the records of an open branch set, region or closure
+// body begin in moved. What lies under it belongs to the enclosing
+// paths and is not undone from inside (giveBack). A match watches its
+// scrutinee: an arm that assigns it is recorded even before an arm
+// binding a part by value puts the scrutinee's move under the fork.
+type floor struct {
+	mark     int
+	watch    place
+	watching bool
 }
 
 func (p place) text() string {
@@ -82,6 +102,14 @@ func (p place) within(q place) bool {
 func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 	switch e := e.(type) {
 	case *ast.Ident:
+		if e.Name == "super" { // the receiver of the method being checked (superCall)
+			if c.recv == nil {
+				return place{}, notPlace
+			}
+
+			return place{c.recv, ""}, placeOwned
+		}
+
 		_, obj := c.scope.LookupParent(e.Name)
 		v, ok := obj.(*Var)
 		if !ok || v.field || v.pos == token.NoPos {
@@ -152,18 +180,39 @@ func (c *Checker) checkUse(e ast.Expr) {
 		return
 	}
 
-	for _, m := range c.moved {
+	for i := len(c.moved) - 1; i >= 0; i-- { // the latest record of the place decides
+		m := c.moved[i]
+		if m.revived {
+			if p.within(m.place) {
+				return // given a new value since it moved
+			}
+
+			continue
+		}
+
 		switch {
 		case c.noUse && kind == placeOwned && m.place == p:
 			return // the moved field is given a new value
 		case p.within(m.place) || kind == placeIndexed && m.v == p.v:
 			c.errorf(e.Pos(), "use of moved value "+m.text()+"; moved at "+c.lineCol(m.pos))
 			return
-		case m.within(p) && !c.noUse:
+		case m.within(p) && !c.noUse && !revivedAfter(c.moved[i+1:], m.place):
 			c.errorf(e.Pos(), "use of partially moved value "+p.text()+"; "+m.text()+" moved at "+c.lineCol(m.pos))
 			return
 		}
 	}
+}
+
+// revivedAfter reports whether the records give the place q, or a place
+// holding it, a new value.
+func revivedAfter(records []move, q place) bool {
+	for _, r := range records {
+		if r.revived && q.within(r.place) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isPlaceChain reports whether e reaches a place through selectors,
@@ -210,7 +259,22 @@ func (c *Checker) maybeMove(op operand, t Type) {
 		return
 	}
 
-	c.move(op.expr)
+	c.move(op.expr, op.mode)
+}
+
+// partOf reports whether e names a part of a value, a field, an element
+// or what a pointer points at, rather than a whole.
+func partOf(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return partOf(e.X)
+	case *ast.SelectorExpr, *ast.IndexExpr:
+		return true
+	case *ast.UnaryExpr:
+		return e.Op == token.MUL
+	}
+
+	return false
 }
 
 func isMut(t Type) bool {
@@ -223,16 +287,25 @@ func isBorrow(t Type) bool {
 	return ok
 }
 
-// move records that the place e denotes is moved, or reports why it
-// cannot be: nothing moves out through a borrow, and an element is lent
-// by its index, never moved.
-func (c *Checker) move(e ast.Expr) {
+// move records that the place e denotes, reached as m says, is moved,
+// or reports why it cannot be: nothing moves out through a borrow, an
+// element is lent by its index, never moved, and a part of a value no
+// name holds, the field of what a call returned or of the cell its
+// pointer points at, has nowhere to go: the whole is dropped with the
+// statement, and the part would be dropped twice.
+func (c *Checker) move(e ast.Expr, m mode) {
 	p, kind := c.placeOf(e)
 	switch kind {
+	case notPlace:
+		if m == borrowed || m == mutBorrowed {
+			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a borrow")
+		} else if m == variable && partOf(e) {
+			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a temporary: bind the temporary to a name first")
+		}
 	case placeOwned:
 		c.capture(p.v, byMove)
 		c.access(e, p, moveAccess, e.Pos(), e.Pos())
-		c.moved = append(c.moved, move{p, e.Pos()})
+		c.moved = append(c.moved, move{p, e.Pos(), false})
 		if c.info != nil {
 			c.info.Moves[e] = true
 		}
@@ -246,9 +319,9 @@ func (c *Checker) move(e ast.Expr) {
 // moveBefore records a move that belongs before a set of branches, when
 // it is only known inside one of them: the move goes under the fork,
 // so that every branch and the join see it.
-func (c *Checker) moveBefore(e ast.Expr, f *fork) {
+func (c *Checker) moveBefore(e ast.Expr, how mode, f *fork) {
 	n := len(c.moved)
-	c.move(e)
+	c.move(e, how)
 	if len(c.moved) == n {
 		return // not a place, or reported
 	}
@@ -257,24 +330,62 @@ func (c *Checker) moveBefore(e ast.Expr, f *fork) {
 	copy(c.moved[f.mark+1:], c.moved[f.mark:n])
 	c.moved[f.mark] = m
 	f.mark++
+	c.floors[len(c.floors)-1].mark++
 }
 
 // revive makes the place e denotes owned again: an assignment to it
-// ends any move of it or of a part of it.
+// gives it back.
 func (c *Checker) revive(e ast.Expr) {
 	p, kind := c.placeOf(e)
-	if kind != placeOwned || len(c.moved) == 0 {
+	if kind != placeOwned || len(c.moved) == 0 && len(c.floors) == 0 {
 		return
 	}
 
-	kept := c.moved[:0]
-	for _, m := range c.moved {
+	c.giveBack(p, e.Pos())
+}
+
+// giveBack records that the place p has a value again. The moves of p,
+// or of a part of it, made since the innermost open branch set, region
+// or closure body began are undone; a move made before it stays, since
+// the enclosing construct holds its index and its other paths still
+// see it, and a revival record says instead that p is owned from here
+// on this path, for the join to weigh. At the top level nothing
+// encloses, and the moves are simply gone.
+func (c *Checker) giveBack(p place, pos token.Pos) {
+	floor := c.floor()
+	kept := c.moved[:floor]
+	for _, m := range c.moved[floor:] {
 		if !m.within(p) {
 			kept = append(kept, m)
 		}
 	}
 
 	c.moved = kept
+	if floor > 0 || c.watched(p) {
+		c.moved = append(c.moved, move{p, pos, true})
+	}
+}
+
+// floor returns the index in moved where the innermost open branch set,
+// region or closure body began its records; 0 when none is open.
+func (c *Checker) floor() int {
+	if len(c.floors) == 0 {
+		return 0
+	}
+
+	return c.floors[len(c.floors)-1].mark
+}
+
+// watched reports whether an open match watches p, or a place within
+// or holding it, as its scrutinee.
+func (c *Checker) watched(p place) bool {
+	for _, f := range c.floors {
+		if f.watching && (p.within(f.watch) || f.watch.within(p)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // containerName names what an index reaches into, for a message.
@@ -311,7 +422,7 @@ func (c *Checker) placeType(e ast.Expr) Type {
 		return stripRef(c.placeType(e.X))
 	case *ast.SelectorExpr:
 		if st, ok := stripRef(c.placeType(e.X)).Underlying().(*Struct); ok {
-			if f := fieldOf(st, e.Sel.Name); f != nil {
+			if f := fieldNamed(st.fields, e.Sel.Name); f != nil {
 				return f.typ
 			}
 		}
@@ -368,16 +479,29 @@ func exprText(e ast.Expr) string {
 	return "..."
 }
 
-// forkAt starts a set of branches from the current state.
+// forkAt starts a set of branches from the current state. The branches'
+// records begin at its mark, which the floor stack holds for giveBack.
 func (c *Checker) forkAt() fork {
+	c.floors = append(c.floors, floor{mark: len(c.moved)})
 	return fork{mark: len(c.moved), dead: c.dead, all: true}
 }
 
-// branchEnd ends one branch: its moves count after the join unless it
+// watch makes the innermost open branch set watch the place e denotes,
+// when it is an owned place: a match's scrutinee, whose move may be put
+// under the fork by a later arm.
+func (c *Checker) watch(e ast.Expr) {
+	if p, kind := c.placeOf(e); kind == placeOwned {
+		top := &c.floors[len(c.floors)-1]
+		top.watch, top.watching = p, true
+	}
+}
+
+// branchEnd ends one branch: its records count after the join unless it
 // left, and the state goes back to the fork for the next branch.
 func (c *Checker) branchEnd(f *fork) {
 	if !c.dead {
-		f.moves = append(f.moves, c.moved[f.mark:]...)
+		f.paths = addPath(f.paths, c.moved[f.mark:])
+		f.live++
 		f.all = false
 	}
 
@@ -386,46 +510,165 @@ func (c *Checker) branchEnd(f *fork) {
 	c.dead = f.dead
 }
 
-// joinAt applies the branches' moves after the join. complete says
-// whether the branches cover every path; otherwise a path with no
-// moves continues as well.
+// addPath keeps the records of one path reaching a join, when it has
+// any: a path without adds no move and gives nothing back, and is only
+// counted.
+func addPath(paths [][]move, records []move) [][]move {
+	if len(records) == 0 {
+		return paths
+	}
+
+	return append(paths, slices.Clone(records))
+}
+
+// joinAt joins the branches. complete says whether the branches cover
+// every path; otherwise a path with no records continues as well.
 func (c *Checker) joinAt(f *fork, complete bool) {
-	c.moved = append(c.moved, f.moves...)
+	c.floors = c.floors[:len(c.floors)-1]
+	c.join(f.paths, f.live, complete)
 	c.dead = f.dead || complete && f.all && f.branches > 0
 }
 
+// join applies the records of the paths meeting here, live of them,
+// those with records given: every move counts after the join, and a
+// place every path gave back is given back here, decided anew against
+// the records under the enclosing floor. complete says whether the
+// paths are all the ways here; a path without records gives nothing
+// back, so nothing is given back unless every live path has records.
+func (c *Checker) join(paths [][]move, live int, complete bool) {
+	for _, records := range paths {
+		c.moved = appendMoves(c.moved, records)
+	}
+
+	if !complete || len(paths) < live {
+		return
+	}
+
+	for _, p := range revivedByAll(paths) {
+		c.giveBack(p, token.NoPos)
+	}
+}
+
+// revivedByAll returns the places every path gives back, each path by
+// its own records (netRevived); a whole given back on one path counts
+// for a part given back on another.
+func revivedByAll(paths [][]move) []place {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	sets := make([][]place, len(paths))
+	for i, records := range paths {
+		sets[i] = netRevived(records)
+	}
+
+	var all []place
+	for _, set := range sets {
+		for _, p := range set {
+			if !slices.Contains(all, p) && inEvery(sets, p) {
+				all = append(all, p)
+			}
+		}
+	}
+
+	return all
+}
+
+// netRevived returns the places a path's records give back: the places
+// of its revivals, less any that a later move touches, moving it, a
+// part of it or a place holding it.
+func netRevived(records []move) []place {
+	var set []place
+	for _, m := range records {
+		if m.revived {
+			set = append(set, m.place)
+			continue
+		}
+
+		kept := set[:0]
+		for _, r := range set {
+			if !m.within(r) && !r.within(m.place) {
+				kept = append(kept, r)
+			}
+		}
+
+		set = kept
+	}
+
+	return set
+}
+
+// inEvery reports whether every set holds p or a place holding it.
+func inEvery(sets [][]place, p place) bool {
+	for _, set := range sets {
+		if !slices.ContainsFunc(set, p.within) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // enterRegion opens a loop, switch or select, and leaveRegion closes it,
-// applying the moves of the paths that left it by break. For a loop,
-// the moves on the paths reaching the next iteration are checked: a
-// value declared before the loop and moved on such a path is gone when
-// the loop comes round. The point after a region is reachable; the
-// caller's statement result says when it is not.
-func (c *Checker) enterRegion(loop bool, pos token.Pos) {
-	c.regions = append(c.regions, region{loop: loop, pos: pos, mark: len(c.moved)})
+// joining the paths that reach the point after it: a switch's or
+// select's end and its breaks; a loop's breaks, and when the loop has a
+// condition, its ends and the path on which the body never ran, which
+// gives nothing back. For a loop, the moves on the paths reaching the
+// next iteration are checked: a value declared before the loop and
+// moved on such a path is gone when the loop comes round. The point
+// after a region is reachable; the caller's statement result says when
+// it is not.
+func (c *Checker) enterRegion(loop, infinite bool, pos token.Pos) {
+	c.regions = append(c.regions, region{loop: loop, infinite: infinite, pos: pos, mark: len(c.moved)})
+	c.floors = append(c.floors, floor{mark: len(c.moved)})
 }
 
 func (c *Checker) leaveRegion() {
 	r := c.regions[len(c.regions)-1]
 	c.regions = c.regions[:len(c.regions)-1]
+	c.floors = c.floors[:len(c.floors)-1]
 	if !c.dead {
-		r.end = append(r.end, c.moved[r.mark:]...)
+		r.ends, r.ended = addPath(r.ends, c.moved[r.mark:]), r.ended+1
 	}
 
 	c.moved = c.moved[:r.mark]
 	if r.loop {
-		for _, m := range r.end {
-			if m.v.pos < r.pos {
-				c.errorf(m.pos, m.text()+" moved in a previous iteration of the loop")
+		for _, records := range r.ends {
+			for _, m := range records {
+				if !m.revived && m.v.pos < r.pos {
+					c.errorf(m.pos, m.text()+" moved in a previous iteration of the loop")
+				}
 			}
 		}
 	}
 
-	c.moved = append(c.moved, r.end...)
-	c.moved = append(c.moved, r.exits...)
+	paths, live := r.exits, r.exited
+	if !r.infinite {
+		paths = slices.Concat(paths, r.ends)
+		live += r.ended
+	}
+
+	if r.loop && !r.infinite {
+		live++ // the body never ran
+	}
+
+	c.join(paths, live, true)
 	c.dead = false
 }
 
-// branch records a break or continue: the moves so far go to the
+// appendMoves appends the moves among records to moved, leaving out the
+// revivals.
+func appendMoves(moved, records []move) []move {
+	for _, m := range records {
+		if !m.revived {
+			moved = append(moved, m)
+		}
+	}
+
+	return moved
+}
+
+// branch records a break or continue: the records so far go to the
 // region it leaves, and the path ends here.
 func (c *Checker) branch(tok token.Kind) {
 	if c.dead {
@@ -439,9 +682,9 @@ func (c *Checker) branch(tok token.Kind) {
 		}
 
 		if tok == token.CONTINUE {
-			r.end = append(r.end, c.moved[r.mark:]...)
+			r.ends, r.ended = addPath(r.ends, c.moved[r.mark:]), r.ended+1
 		} else {
-			r.exits = append(r.exits, c.moved[r.mark:]...)
+			r.exits, r.exited = addPath(r.exits, c.moved[r.mark:]), r.exited+1
 		}
 
 		return

@@ -24,7 +24,7 @@ trait Iterator<T> {
     }
     func (it mut Self) Collect() []T {
         out := []T{}
-        for v := it.Next(); v != None; v = it.Next() { out.Push(v?) }
+        for { out.Push(it.Next() ?? break) }
         return out
     }
 }
@@ -50,10 +50,10 @@ struct FilterIter<I: Iterator<T>, T> impl Iterator<T> {
 }
 
 func (f mut FilterIter<I, T>) Next() T? {
-    for v := f.inner.Next(); v != None; v = f.inner.Next() {
-        if f.keep(ref v?) { return v }
+    for {
+        v := f.inner.Next() ?? return None
+        if f.keep(ref v) { return Some(v) }
     }
-    return None
 }
 
 // A closure captures each variable in the weakest mode that its body

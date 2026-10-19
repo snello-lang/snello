@@ -82,6 +82,15 @@ func main() {
 	var zero []int
 	zero.Push(1)
 	fmt.Println(zero, take(mut zero), zero)
+
+	// An array is a value of a fixed length: zero-valued by var, indexed
+	// to read and write, copied whole, and len is its length.
+	var grid [4]int
+	grid[1] = 5
+	copy := grid
+	grid[2] = grid[1] * 2
+	fmt.Println(len(grid), grid[0], grid[1], grid[2], copy[2], cap(grid))
+
 }
 
 func check(n int) Result<int, string> {

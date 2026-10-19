@@ -92,7 +92,7 @@ func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 
 - **Nominal, declared with `impl`.** Go's implicit satisfaction does not combine with default methods and fields, because it becomes ambiguous which default applies and where a field lives. Declaring it costs one word on the type and gives coherence for generics.
 - **No impl blocks.** Rust groups methods by trait in separate blocks. Go's methods-with-receivers already say everything needed, so Teak keeps them. The compiler checks the declared traits are satisfied.
-- **Fields in traits** are stored inline in the implementing struct and set at construction.
+- **Fields in traits** are stored inline in the implementing struct and set at construction. A trait field obeys the ownership rules of a struct field, with no exception: a default method on a borrowed `Self` returns a borrow of the field or a clone of it, never the field itself (decided 2026-10-19, when example 07's `return n.name` was found to move a string out of a borrow).
 - **Resolution is at compile time per concrete type.** Own methods first, then the impl list from right to left. `super` calls the next definition in that order. Every call is direct.
 - **Traits are the generic constraint.** Generics are monomorphized by default, with dictionary passing available later to control compile times.
 - **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types. One allocation and one indirect call per value, the same as Go. There is no separate syntax for this.

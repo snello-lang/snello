@@ -16,12 +16,22 @@ import (
 // it C leaves overflow undefined and the optimizer may assume it away.
 // -fno-strict-aliasing lets the runtime work on every slice type
 // through tk_slice, which has the same layout.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-fwrapv", "-fno-strict-aliasing", "-O1"}
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-O1"}
+
+// Compiler returns the C compiler to run: the CC environment variable
+// when it is set, as every build tool reads it, else cc.
+func Compiler() string {
+	if cc := os.Getenv("CC"); cc != "" {
+		return cc
+	}
+
+	return "cc"
+}
 
 // Build writes the emitted program and the runtime into dir, compiles
-// them with the system C compiler, and returns the path of the binary
-// named name. The compiler's output comes back with any error. A debug
-// build compiles the runtime's checks in: see runtime/debug.c.
+// them with the C compiler, and returns the path of the binary named
+// name. The compiler's output comes back with any error. A debug build
+// compiles the runtime's checks in: see runtime/debug.c.
 func Build(dir, name string, src []byte, debug bool) (bin string, output []byte, err error) {
 	files := Runtime()
 	files[name+".c"] = src
@@ -38,7 +48,7 @@ func Build(dir, name string, src []byte, debug bool) (bin string, output []byte,
 	}
 
 	args = append(args, "-o", bin, filepath.Join(dir, name+".c"), filepath.Join(dir, "teak.c"), filepath.Join(dir, "debug.c"), "-lm")
-	cmd := exec.Command("cc", args...)
+	cmd := exec.Command(Compiler(), args...)
 	output, err = cmd.CombinedOutput()
 	return bin, output, err
 }

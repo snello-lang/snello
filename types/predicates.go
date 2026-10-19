@@ -133,6 +133,8 @@ func IsCopy(t Type) bool {
 		return true
 	case *Named:
 		return t.isCopy()
+	case *TypeParam:
+		return t.HasBound(CopyTrait)
 	}
 
 	return false // pointers, slices, maps
@@ -144,9 +146,9 @@ func IsCopy(t Type) bool {
 // and is rejected elsewhere; here it counts as Copy so the recursion
 // ends.
 func (n *Named) isCopy() bool {
-	if n.copyState == copyUnknown && n.underlying != nil {
+	if n.copyState == copyUnknown && n.Underlying() != nil {
 		n.copyState = copyYes // provisional, so that a cycle back to n ends here
-		if n.Implements("Drop") || !IsCopy(n.underlying) {
+		if n.Implements(DropTrait) || !IsCopy(n.underlying) {
 			n.copyState = copyNo
 		}
 	}
@@ -158,7 +160,7 @@ func (n *Named) isCopy() bool {
 // do not assign to each other across a name, as in Go.
 func isNamed(t Type) bool {
 	switch t.(type) {
-	case *Basic, *Named:
+	case *Basic, *Named, *TypeParam:
 		return true
 	}
 
@@ -180,6 +182,21 @@ func identicalLists(xs, ys []Type) bool {
 }
 
 // identicalVars compares parameter types; names do not matter.
+// identicalTypes reports whether two type lists are identical pairwise.
+func identicalTypes(xs, ys []Type) bool {
+	if len(xs) != len(ys) {
+		return false
+	}
+
+	for i := range xs {
+		if !Identical(xs[i], ys[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func identicalVars(xs, ys []*Var) bool {
 	if len(xs) != len(ys) {
 		return false

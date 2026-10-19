@@ -16,10 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
-tk_file tk_stdin = {0}, tk_stdout = {1}, tk_stderr = {2};
-tk_slice tk_args = {0};
+tk_slice tk_os_Args = {0};
 
 // The allocator of a release build is the system's; debug.c has the
 // counting, poisoning one of a debug build.
@@ -562,6 +562,10 @@ int64_t tk_map_next(const tk_map *m, int64_t i) {
 
 tk_string tk_string_clone(tk_string s) {
     tk_check_string(s);
+    if (s.len == 0) {
+        return TK_STR("", 0); // an owned string of no bytes would be a block with cap 0, which nothing frees
+    }
+
     uint8_t *p = tk_alloc((size_t)s.len);
     memcpy(p, s.ptr, (size_t)s.len);
     return TK_OWNED(p, s.len);
@@ -660,6 +664,35 @@ void tk_fields(tk_string s, tk_slice *out) {
     }
 }
 
+// tk_lines splits s at every newline into views of s, each without
+// its newline and a carriage return before it; a last line without a
+// newline is a line, a trailing newline does not make an empty one.
+void tk_lines(tk_string s, tk_slice *out) {
+    tk_check_string(s);
+    out->ptr = NULL;
+    out->len = 0;
+    out->cap = 0;
+    int64_t start = 0;
+    for (int64_t i = 0; i <= s.len; i++) {
+        if (i < s.len && s.ptr[i] != '\n') {
+            continue;
+        }
+
+        if (i == s.len && start == s.len) {
+            break; // nothing after the last newline, or an empty string
+        }
+
+        int64_t end = i;
+        if (end > start && s.ptr[end - 1] == '\r') {
+            end--;
+        }
+
+        tk_string line = TK_STR(s.ptr + start, end - start);
+        tk_slice_push(out, &line, sizeof line);
+        start = i + 1;
+    }
+}
+
 // tk_split splits s at every sep into views of s; an empty separator
 // splits between every byte.
 void tk_split(tk_string s, tk_string sep, tk_slice *out) {
@@ -697,7 +730,7 @@ bool tk_split_once(tk_string s, tk_string sep, tk_string *before, tk_string *aft
 void tk_init(int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         tk_string arg = TK_STR(argv[i], (int64_t)strlen(argv[i]));
-        tk_slice_push(&tk_args, &arg, sizeof arg);
+        tk_slice_push(&tk_os_Args, &arg, sizeof arg);
     }
 }
 
@@ -730,27 +763,42 @@ static int sysopen(tk_string path, int flags) {
     return fd;
 }
 
-// failure builds the message "op path: reason" from errno, as Go's os
-// package words it, with the reason in lower case.
-static tk_string failure(const char *op, tk_string path) {
-    const char *reason = strerror(errno);
-    tk_string msg = tk_join(tk_concat(TK_STR(op, (int64_t)strlen(op)), TK_STR(" ", 1)), path, 1);
-    msg = tk_join(msg, TK_STR(": ", 2), 1);
+// tk_io_reason is the system's text for an error number, with its
+// first letter in lower case, as Go words it; the library puts the
+// operation and the path in front.
+tk_string tk_io_reason(int64_t code) {
+    const char *reason = strerror((int)code);
     tk_string r = TK_STR(reason, (int64_t)strlen(reason));
-    if (r.len > 0 && r.ptr[0] >= 'A' && r.ptr[0] <= 'Z') {
-        uint8_t *p = tk_alloc((size_t)r.len);
-        memcpy(p, r.ptr, (size_t)r.len);
+    uint8_t *p = tk_alloc((size_t)r.len);
+    memcpy(p, r.ptr, (size_t)r.len);
+    if (r.len > 0 && p[0] >= 'A' && p[0] <= 'Z') {
         p[0] = (uint8_t)(p[0] + ('a' - 'A'));
-        r = TK_OWNED(p, r.len);
     }
 
-    return tk_join(msg, r, 3);
+    return TK_OWNED(p, r.len);
 }
 
-tk_string tk_read_to_string(tk_string path, tk_string *out) {
+// tk_io_kindOf sorts an error number as io.Kind does: 1 for a missing
+// file, 2 for a permission refused, 3 for a file that exists, 0 for
+// the rest.
+int64_t tk_io_kindOf(int64_t code) {
+    switch ((int)code) {
+    case ENOENT:
+        return 1;
+    case EACCES:
+    case EPERM:
+        return 2;
+    case EEXIST:
+        return 3;
+    }
+
+    return 0;
+}
+
+int64_t tk_os_readToString(tk_string path, tk_string *out) {
     int fd = sysopen(path, O_RDONLY);
     if (fd < 0) {
-        return failure("open", path);
+        return errno;
     }
 
     tk_slice buf = {0};
@@ -758,8 +806,10 @@ tk_string tk_read_to_string(tk_string path, tk_string *out) {
         grow(&buf, buf.len + 4096, 1);
         ssize_t n = read(fd, (char *)buf.ptr + buf.len, (size_t)(buf.cap - buf.len));
         if (n < 0) {
+            int code = errno;
             close(fd);
-            return failure("read", path);
+            tk_slice_free(&buf);
+            return code;
         }
 
         if (n == 0) {
@@ -770,33 +820,34 @@ tk_string tk_read_to_string(tk_string path, tk_string *out) {
     }
 
     close(fd);
+    tk_string_drop(out);
     *out = (tk_string){buf.ptr, buf.len, buf.cap};
-    return TK_STR("", 0);
+    return 0;
 }
 
-tk_string tk_open(tk_string path, tk_file *out) {
-    int fd = sysopen(path, O_RDONLY);
-    if (fd < 0) {
-        return failure("open", path);
+int64_t tk_os_open(tk_string path, int64_t *fd) {
+    int f = sysopen(path, O_RDONLY);
+    if (f < 0) {
+        return errno;
     }
 
-    out->fd = fd;
-    return TK_STR("", 0);
+    *fd = f;
+    return 0;
 }
 
-tk_string tk_create(tk_string path, tk_file *out) {
-    int fd = sysopen(path, O_WRONLY | O_CREAT | O_TRUNC);
-    if (fd < 0) {
-        return failure("open", path);
+int64_t tk_os_create(tk_string path, int64_t *fd) {
+    int f = sysopen(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (f < 0) {
+        return errno;
     }
 
-    out->fd = fd;
-    return TK_STR("", 0);
+    *fd = f;
+    return 0;
 }
 
-// tk_mkdir_temp makes a new directory under dir, or the system's
+// tk_os_mkdirTemp makes a new directory under dir, or the system's
 // temporary directory when dir is empty, named after pattern.
-tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out) {
+int64_t tk_os_mkdirTemp(tk_string dir, tk_string pattern, tk_string *out) {
     if (dir.len == 0) {
         const char *tmp = getenv("TMPDIR");
         if (tmp == NULL || tmp[0] == '\0') {
@@ -810,18 +861,20 @@ tk_string tk_mkdir_temp(tk_string dir, tk_string pattern, tk_string *out) {
     char *p = cpath(tmpl);
     tk_string_free(tmpl);
     if (p == NULL || mkdtemp(p) == NULL) {
+        int code = errno;
         tk_free(p);
-        return failure("mkdirtemp", dir);
+        return code;
     }
 
+    tk_string_drop(out);
     *out = TK_OWNED(p, tmpl.len);
-    return TK_STR("", 0);
+    return 0;
 }
 
 static int remove_tree(const char *path) {
     struct stat st;
     if (lstat(path, &st) != 0) {
-        return errno == ENOENT ? 0 : -1;
+        return -1;
     }
 
     if (S_ISDIR(st.st_mode)) {
@@ -845,48 +898,36 @@ static int remove_tree(const char *path) {
         }
 
         closedir(d);
-        return rc == 0 ? rmdir(path) : rc;
+        if (rc != 0) {
+            return rc;
+        }
+
+        return rmdir(path);
     }
 
     return unlink(path);
 }
 
-tk_string tk_remove_all(tk_string path) {
+// tk_os_removeAll removes a tree; a path that is not there is nothing to
+// remove, not a failure, as Go's RemoveAll has it.
+int64_t tk_os_removeAll(tk_string path) {
     char *p = cpath(path);
     int rc = p == NULL ? -1 : remove_tree(p);
+    int code = errno;
     tk_free(p);
-    if (rc != 0) {
-        return failure("remove", path);
+    if (rc != 0 && p != NULL && code == ENOENT) {
+        return 0;
     }
 
-    return TK_STR("", 0);
+    return rc == 0 ? 0 : code;
 }
 
-void tk_file_drop(tk_file *f) {
-    tk_check_file(*f);
-    if (f->fd > 2) {
-        close(f->fd);
-    }
-
-    TK_POISON(*f);
+int64_t tk_os_closeFile(int64_t fd) {
+    return close((int)fd) == 0 ? 0 : errno;
 }
 
-tk_string tk_file_close(tk_file f) {
-    tk_check_file(f);
-    if (close(f.fd) != 0) {
-        return failure("close", TK_STR("file", 4));
-    }
-
-    return TK_STR("", 0);
-}
-
-tk_string tk_file_sync(tk_file *f) {
-    tk_check_file(*f);
-    if (fsync(f->fd) != 0) {
-        return failure("sync", TK_STR("file", 4));
-    }
-
-    return TK_STR("", 0);
+int64_t tk_os_syncFile(int64_t fd) {
+    return fsync((int)fd) == 0 ? 0 : errno;
 }
 
 // write_all writes every byte, through stdio for the standard streams
@@ -909,38 +950,35 @@ static bool write_all(int fd, const uint8_t *p, int64_t len) {
     return true;
 }
 
-tk_string tk_file_write_string(tk_file *f, tk_string s, int64_t *n) {
-    tk_check_file(*f);
+int64_t tk_os_write(int64_t fd, tk_slice_u8 buf, int64_t *n) {
+    tk_check_slice((tk_slice *)&buf);
+    if (!write_all((int)fd, buf.ptr, buf.len)) {
+        return errno;
+    }
+
+    *n = buf.len;
+    return 0;
+}
+
+int64_t tk_os_writeString(int64_t fd, tk_string s, int64_t *n) {
     tk_check_string(s);
-    if (!write_all(f->fd, s.ptr, s.len)) {
-        return failure("write", TK_STR("file", 4));
+    if (!write_all((int)fd, s.ptr, s.len)) {
+        return errno;
     }
 
     *n = s.len;
-    return TK_STR("", 0);
+    return 0;
 }
 
-tk_string tk_io_copy(tk_file *dst, tk_file *src, int64_t *n) {
-    tk_check_file(*dst);
-    tk_check_file(*src);
-    uint8_t buf[32768];
-    *n = 0;
-    for (;;) {
-        ssize_t got = read(src->fd, buf, sizeof buf);
-        if (got < 0) {
-            return failure("read", TK_STR("file", 4));
-        }
-
-        if (got == 0) {
-            return TK_STR("", 0);
-        }
-
-        if (!write_all(dst->fd, buf, got)) {
-            return failure("write", TK_STR("file", 4));
-        }
-
-        *n += got;
+int64_t tk_os_read(int64_t fd, tk_slice_u8 *buf, int64_t *n) {
+    tk_check_slice((tk_slice *)buf);
+    ssize_t got = read((int)fd, buf->ptr, (size_t)buf->len);
+    if (got < 0) {
+        return errno;
     }
+
+    *n = got;
+    return 0;
 }
 
 void tk_print_string(tk_string s) {
@@ -955,6 +993,20 @@ void tk_print_owned(tk_string s) {
 void tk_print_int(int64_t v) { printf("%lld", (long long)v); }
 void tk_print_uint(uint64_t v) { printf("%llu", (unsigned long long)v); }
 void tk_print_f64(double v) { tk_print_owned(tk_f64_to_string(v)); }
+
+// tk_f64_fixed prints v with prec digits after the point, as %.2f
+// does; a number too long for the buffer, which takes the largest
+// double with a hundred decimals, falls back to an exponent.
+tk_string tk_f64_fixed(double v, int prec) {
+    char buf[448];
+    if (snprintf(buf, sizeof buf, "%.*f", prec, v) >= (int)sizeof buf) {
+        snprintf(buf, sizeof buf, "%.*e", prec, v);
+    }
+
+    return formatted(buf);
+}
+
+double tk_math_Sqrt(double x) { return sqrt(x); }
 void tk_print_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 void tk_print_sep(void) { fputc(' ', stdout); }
 void tk_print_nl(void) { fputc('\n', stdout); }
@@ -966,4 +1018,88 @@ void tk_eprint_string(tk_string s) {
 void tk_eprint_owned(tk_string s) {
     tk_eprint_string(s);
     tk_string_free(s);
+}
+
+// tk_strconv_parseFloat reads a floating-point number as C does, and
+// asks that the whole text be the number: no space before it and
+// nothing after it. 1 is a text that is not a number, 2 one that does
+// not fit.
+int64_t tk_strconv_parseFloat(tk_string s, double *out) {
+    tk_check_string(s);
+    if (s.len == 0 || isspace(s.ptr[0]) || memchr(s.ptr, 0, (size_t)s.len) != NULL) {
+        return 1;
+    }
+
+    int64_t digits = s.ptr[0] == '+' || s.ptr[0] == '-' ? 1 : 0;
+    if (s.len > digits + 1 && s.ptr[digits] == '0' && (s.ptr[digits + 1] == 'x' || s.ptr[digits + 1] == 'X')) {
+        return 1; // C reads a hexadecimal float; a Teak literal has none
+    }
+
+    char *p = tk_alloc((size_t)s.len + 1);
+    memcpy(p, s.ptr, (size_t)s.len);
+    p[s.len] = '\0';
+    char *end;
+    errno = 0;
+    double v = strtod(p, &end);
+    int64_t code = end != p + s.len ? 1 : errno == ERANGE && fabs(v) == HUGE_VAL ? 2 : 0; // a number too small to hold rounds to zero, as a literal does
+    tk_free(p);
+    if (code == 0) {
+        *out = v;
+    }
+
+    return code;
+}
+
+// tk_pad widens s to width characters with spaces, before it or after
+// it when left says so, as a width in a format does; a character is a
+// UTF-8 sequence, counted by its first byte. s is dropped when the
+// caller owned it. A string already as wide comes back as it is, which
+// drops as a view when it was one.
+tk_string tk_pad(tk_string s, int64_t width, bool left, bool owned) {
+    tk_check_string(s);
+    int64_t chars = 0;
+    for (int64_t i = 0; i < s.len; i++) {
+        chars += (s.ptr[i] & 0xC0) != 0x80;
+    }
+
+    if (chars >= width) {
+        return s;
+    }
+
+    int64_t fill = width - chars;
+    uint8_t *p = tk_alloc((size_t)(s.len + fill));
+    memset(p, ' ', (size_t)(s.len + fill));
+    memcpy(p + (left ? 0 : fill), s.ptr, (size_t)s.len);
+    width = s.len + fill;
+    if (owned) {
+        tk_string_free(s);
+    }
+
+    return TK_OWNED(p, width);
+}
+
+// tk_time_now reads the system's clock: nanoseconds since the start of
+// 1970 in UTC.
+int64_t tk_time_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+// tk_time_Sleep pauses for d nanoseconds, going back to sleep when a
+// signal cuts the pause short.
+void tk_time_Sleep(int64_t d) {
+    if (d <= 0) {
+        return;
+    }
+
+    struct timespec ts = {(time_t)(d / 1000000000), (long)(d % 1000000000)};
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+    }
+}
+
+tk_string tk_quote_owned(tk_string s) {
+    tk_string q = tk_quote(s);
+    tk_string_free(s);
+    return q;
 }

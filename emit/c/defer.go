@@ -30,20 +30,20 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	}
 
 	for _, a := range call.Args {
-		e.pre[a] = e.atTop(a, e.info.Types[a])
+		e.pre[a] = e.atTop(a, e.typeOf(a))
 	}
 
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr: // a method: its receiver, unless lent mutably
 		if e.packageOf(fun.X) == nil && !e.mutReceiver(fun) {
-			e.pre[fun.X] = e.atTop(fun.X, e.info.Types[fun.X])
+			e.pre[fun.X] = e.atTop(fun.X, e.typeOf(fun.X))
 		}
 	case *ast.Ident: // a function value in a variable; a named function needs nothing
 		if _, variable := e.info.Uses[fun].(*types.Var); variable {
-			e.pre[fun] = e.atTop(fun, e.info.Types[fun])
+			e.pre[fun] = e.atTop(fun, e.typeOf(fun))
 		}
 	default:
-		e.pre[fun] = e.atTop(fun, e.info.Types[fun])
+		e.pre[fun] = e.atTop(fun, e.typeOf(fun))
 	}
 
 	flag := e.temp() + "_deferred"
@@ -56,7 +56,7 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	e.body = bytes.Buffer{}
 	e.scoped(call.Pos(), func() { // the call's own temporaries are dropped with it
 		if v := e.expr(call); v != "" {
-			e.discard(v, e.info.Types[call], call.Pos())
+			e.discard(v, e.typeOf(call), call.Pos())
 		}
 	})
 

@@ -1,0 +1,138 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The bufio package written in Teak: a Writer over stdout holding what
+// is written until its buffer fills or Flush, written to by its own
+// methods and through fmt.Fprintln and Fprintf; a file written through
+// a Writer, scanned line by line with the last line unterminated, and
+// read through a Reader by bytes, up to a delimiter and into a slice;
+// a file copied through a Reader into a Writer with io.Copy; line
+// endings with a carriage return, and an empty line; a Scanner over an
+// empty file, and over a line longer than a block; and a writer that
+// takes nothing, reported as a short write.
+
+package main
+
+import ("bufio"; "fmt"; "io"; "os")
+
+// A Sink is a writer that takes nothing and reports no failure, which
+// Flush must not ask forever.
+struct Sink impl io.Writer { n int }
+
+func (s mut Sink) Write(p ref []byte) Result<int, io.Error> {
+	s.n++
+	return Ok(0)
+}
+
+func write(path ref string, text ref string) {
+	f := os.Create(path).Expect("create")
+	w := bufio.NewWriter(mut f)
+	w.WriteString(text).Expect("write")
+	w.Flush().Expect("flush")
+}
+
+func main() {
+	// Nothing reaches stdout until the buffer fills or Flush: the count
+	// is printed first, directly.
+	out := bufio.NewWriterSize(mut os.Stdout, 16)
+	out.WriteString("one ").Expect("write")
+	fmt.Println(out.Buffered())
+	fmt.Fprintln(mut out, "two", 2)
+	fmt.Fprintf(mut out, "%s=%d", "x", 3)
+	out.WriteByte('\n').Expect("write")
+	out.Flush().Expect("flush")
+	fmt.Println(out.Buffered())
+
+	// A small buffer fills many times over.
+	small := bufio.NewWriterSize(mut os.Stdout, 2)
+	small.WriteString("buffered in twos!\n").Expect("write")
+	fmt.Println(small.Buffered())
+	small.Flush().Expect("flush")
+
+	dir := os.MkdirTemp("", "teak-bufio").Expect("tempdir")
+	path := dir.Clone() + "/lines.txt"
+	{
+		f := os.Create(path).Expect("create")
+		w := bufio.NewWriter(mut f)
+		for i := 1; i <= 3; i++ {
+			fmt.Fprintf(mut w, "line %d\n", i)
+		}
+		w.WriteString("tail without newline").Expect("write")
+		w.Flush().Expect("flush")
+	}
+
+	// Lines, the last one without its newline.
+	f := os.Open(path).Expect("open")
+	sc := bufio.NewScanner(mut f)
+	n := 0
+	for sc.Scan() {
+		n++
+		fmt.Println(n, sc.Text(), len(sc.Bytes()))
+	}
+	fmt.Println(sc.Err().IsNone(), sc.Scan(), len(sc.Bytes()))
+
+	// Pieces: a byte, up to a delimiter, into a slice, the rest.
+	g := os.Open(path).Expect("open")
+	r := bufio.NewReader(mut g)
+	fmt.Println(r.ReadByte().Expect("read"), r.ReadString(' ').Expect("read"))
+	buf := make([]byte, 4)
+	k := r.Read(mut buf).Expect("read")
+	fmt.Println(k, buf[0] == '1', buf[1] == '\n', r.ReadString('\n').Expect("read").Expect("a line").Len())
+	rest := 0
+	for r.ReadByte().Expect("read").IsSome() {
+		rest++
+	}
+	fmt.Println(rest, r.ReadString('\n').Expect("read").IsNone(), r.ReadByte().Expect("read").IsNone())
+
+	// The whole file, through a Reader into a Writer.
+	h := os.Open(path).Expect("open")
+	src := bufio.NewReader(mut h)
+	dst := bufio.NewWriter(mut os.Stdout)
+	copied := io.Copy(mut dst, mut src).Expect("copy")
+	dst.WriteByte('\n').Expect("write")
+	dst.Flush().Expect("flush")
+	fmt.Println(copied)
+
+	// Line endings with a carriage return, and an empty line.
+	crlf := dir.Clone() + "/crlf.txt"
+	write(crlf, "a\r\nb\r\n\r\nc")
+	c := os.Open(crlf).Expect("open")
+	lines := bufio.NewScanner(mut c)
+	for lines.Scan() {
+		fmt.Printf("[%s]", lines.Text())
+	}
+	fmt.Println()
+
+	// An empty file has no lines.
+	empty := dir.Clone() + "/empty.txt"
+	write(empty, "")
+	e := os.Open(empty).Expect("open")
+	none := bufio.NewScanner(mut e)
+	fmt.Println(none.Scan(), none.Err().IsNone())
+
+	// A line longer than one block is read whole.
+	long := dir.Clone() + "/long.txt"
+	{
+		f := os.Create(long).Expect("create")
+		w := bufio.NewWriter(mut f)
+		for i := 0; i < 5000; i++ {
+			w.WriteByte('x').Expect("write")
+		}
+		w.WriteString("\nshort\n").Expect("write")
+		w.Flush().Expect("flush")
+	}
+	l := os.Open(long).Expect("open")
+	ls := bufio.NewScanner(mut l)
+	for ls.Scan() {
+		fmt.Println(len(ls.Bytes()))
+	}
+
+	// A writer that takes nothing is a short write, not a wait.
+	var sink Sink
+	bw := bufio.NewWriter(mut sink)
+	bw.WriteString("lost").Expect("write")
+	fmt.Println(bw.Flush(), sink.n)
+
+	os.RemoveAll(dir).Expect("remove")
+}

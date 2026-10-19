@@ -26,6 +26,11 @@ func each(xs ref []int, visit func(ref int)) {
 	}
 }
 
+// adder returns a closure holding a copy of offset.
+func adder(offset int) func(int) int {
+	return func(x int) int { return x + offset }
+}
+
 func main() {
 	total := 0
 	each([]int{1, 2, 3}, func(x ref int) { total += x })
@@ -52,4 +57,14 @@ func main() {
 	nums := []int{3, 1, 2}
 	nums.Sort()
 	fmt.Println(nums)
+	// A Copy value a closure only reads is copied in when the closure is
+	// made: the closure holds no borrow, so it can be returned, and a
+	// later change to the variable is not seen.
+	add := adder(10)
+	fmt.Println(add(5), adder(1)(1))
+	n := 1
+	snap := func() int { return n }
+	n = 2
+	fmt.Println(snap(), n)
+
 }

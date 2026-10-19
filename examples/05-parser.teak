@@ -64,7 +64,7 @@ func (l mut Lexer) Next() Result<Token, ParseError> {
             text := l.src[start:l.pos]                   // ref string into src
             return strconv.ParseFloat(text).
                 Map(func(v f64) Token { return Num(v) }).
-                MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.ToOwned()) })
+                MapErr(func(_ strconv.Error) ParseError { return BadNumber(text.Clone()) })
         },
         _ => return Err(BadChar(c, l.pos - 1)),
     }
@@ -137,7 +137,7 @@ func Eval(e ref Expr) f64 {
         Bin(Minus, l, r)  => Eval(l) - Eval(r),
         Bin(Star, l, r)   => Eval(l) * Eval(r),
         Bin(Slash, l, r)  => Eval(l) / Eval(r),
-        Bin(_, _, _)      => unreachable(),
+        Bin(_, _, _)      => panic("unreachable"),
     }
 }
 

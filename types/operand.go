@@ -84,11 +84,51 @@ func (c *Checker) fits(op operand, t Type, pos token.Pos, what string) bool {
 	}
 
 	if !assignable(op, t) {
-		c.errorf(pos, "cannot use "+describe(op)+" as "+t.String()+" in "+what)
+		c.errorf(pos, "cannot use "+describe(op)+" as "+t.String()+" in "+what+traitReason(op.typ, t))
 		return false
 	}
 
 	return true
+}
+
+// traitReason says why a value cannot become a trait value, after the
+// mismatch message, when t is a trait; empty otherwise.
+func traitReason(v, t Type) string {
+	tr, ok := t.(*Trait)
+	if !ok || v == Typ[Invalid] {
+		return ""
+	}
+
+	switch v := v.(type) {
+	case *Ref:
+		return ": a trait value is made from an owned value, not a borrow"
+	case *Pointer:
+		return ": a pointer does not become a trait value; the value it holds does"
+	case *Trait:
+		return ": a trait value cannot be used as another trait yet"
+	case *TypeParam:
+		return ": a type parameter cannot become a trait value yet"
+	case *Named:
+		if !v.Implements(tr) {
+			return ": " + v.obj.name + " does not implement " + tr.obj.name
+		}
+
+		return ": " + v.obj.name + " holds a borrow and cannot become a trait value"
+	}
+
+	return ": only a declared type implements a trait"
+}
+
+// convertsToTrait reports whether an owned value of type v becomes a
+// value of the trait type t: a declared type implementing t does, and
+// the value is moved into the trait value, or copied when it is Copy.
+// A type holding a borrow does not: the trait value hides what it
+// holds, so the borrow could no longer be tied to its owner. A borrow
+// does not, since a trait value owns what it holds, and another
+// trait's value does not yet.
+func convertsToTrait(v Type, t *Trait) bool {
+	n, ok := v.(*Named)
+	return ok && n.Implements(t) && !holdsBorrow(n)
 }
 
 // assignable reports whether op can be used where t is wanted. Beyond
@@ -107,6 +147,10 @@ func assignable(op operand, t Type) bool {
 
 	if AssignableTo(v, t) {
 		return true
+	}
+
+	if tr, ok := t.(*Trait); ok {
+		return convertsToTrait(v, tr)
 	}
 
 	if r, ok := t.(*Ref); ok {
@@ -181,8 +225,9 @@ func describe(op operand) string {
 	return "a value of type " + op.typ.String()
 }
 
-func fieldOf(st *Struct, name string) *Var {
-	for _, f := range st.fields {
+// fieldNamed returns the field with the given name among fields, or nil.
+func fieldNamed(fields []*Var, name string) *Var {
+	for _, f := range fields {
 		if f.name == name {
 			return f
 		}
@@ -206,18 +251,35 @@ func hasInfo(t Type, info BasicInfo) bool {
 }
 
 // comparable reports whether == is defined on t: every basic type,
-// option, enum, pointer and tuple of comparable parts; not slices,
-// maps, functions or structs, which compare through a method.
-func comparable(t Type) bool {
+// option, enum, pointer and tuple of comparable parts, a declared type
+// listing Eq and a type parameter bounded by it; not slices, maps or
+// functions, nor a struct that does not list Eq.
+func comparable(t Type) bool { return comparableBy(t, EqTrait) }
+
+// hashable reports whether a value of type t can be a map key: the
+// comparable types, with Hash in place of Eq for a declared type's
+// list and a type parameter's bounds.
+func hashable(t Type) bool { return comparableBy(t, HashTrait) }
+
+// comparableBy walks t as comparable does, asking a declared type and a
+// type parameter for trait, Eq or Hash, and every part of a composite
+// the same question.
+func comparableBy(t Type, trait *Trait) bool {
+	if n, ok := t.(*Named); ok && n.Implements(trait) {
+		return true // a struct compares by listing Eq, with the method written or derived
+	}
+
 	switch u := t.Underlying().(type) {
+	case *TypeParam:
+		return u.HasBound(trait)
 	case *Basic:
 		return u.kind != Any && u.kind != Never
 	case *Option:
-		return comparable(u.elem)
+		return comparableBy(u.elem, trait)
 	case *Enum:
 		for _, v := range u.variants {
 			for _, f := range v.fields {
-				if !comparable(f.typ) {
+				if !comparableBy(f.typ, trait) {
 					return false
 				}
 			}
@@ -225,10 +287,10 @@ func comparable(t Type) bool {
 
 		return true
 	case *Pointer:
-		return comparable(u.elem)
+		return comparableBy(u.elem, trait)
 	case *Tuple:
 		for _, e := range u.elems {
-			if !comparable(e) {
+			if !comparableBy(e, trait) {
 				return false
 			}
 		}

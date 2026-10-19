@@ -6,6 +6,7 @@ package types
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/teak-lang/teak/ast"
 	"github.com/teak-lang/teak/token"
@@ -38,7 +39,8 @@ type capture struct {
 type captureMode int8
 
 const (
-	byRef  captureMode = iota // read only: the closure borrows it
+	byCopy captureMode = iota // a Copy value only read: copied into the closure when it is made, so no borrow
+	byRef                     // read only: the closure borrows it
 	byMut                     // assigned, or lent mut: the closure borrows it mut
 	byMove                    // moved: the variable is dead outside, and the closure owns the value
 )
@@ -97,7 +99,7 @@ func anyHoldsBorrow(vs []*Var) bool {
 // holdsBorrow caches the answer on the named type, as isCopy does, with
 // the same provisional answer for a declaration that reaches itself.
 func (n *Named) holdsBorrow() bool {
-	if n.borrowState == copyUnknown && n.underlying != nil {
+	if n.borrowState == copyUnknown && n.Underlying() != nil {
 		n.borrowState = copyNo
 		if holdsBorrow(n.underlying) {
 			n.borrowState = copyYes
@@ -136,6 +138,26 @@ func (c *Checker) storable(elem Type, kind string, pos token.Pos) bool {
 	return false
 }
 
+// storableParts asks the storable question for every piece of owned
+// data written inside t, a slice, pointer, map or channel, as typ asks
+// it when a type is written: for a type the checker builds itself, a
+// trait's field with the implementing type in place of Self.
+func (c *Checker) storableParts(t Type, pos token.Pos) {
+	walkTypes(t, func(t Type) {
+		switch t := t.(type) {
+		case *Slice:
+			c.storable(t.elem, "a slice", pos)
+		case *Pointer:
+			c.storable(t.elem, "a pointer", pos)
+		case *Map:
+			c.storable(t.key, "a map", pos)
+			c.storable(t.value, "a map", pos)
+		case *Chan:
+			c.storable(t.elem, "a channel", pos)
+		}
+	})
+}
+
 // A pendingStore is a storable question asked while the declarations
 // were being resolved.
 type pendingStore struct {
@@ -153,6 +175,11 @@ func (c *Checker) resolvePending() {
 	}
 
 	c.pending = nil
+	for _, k := range c.pendingKeys {
+		c.keyable(k.key, k.pos)
+	}
+
+	c.pendingKeys = nil
 }
 
 // checkSources checks a signature that returns a borrow against rule
@@ -186,6 +213,10 @@ func (c *Checker) capture(v *Var, mode captureMode) {
 		return
 	}
 
+	if mode == byRef && IsCopy(v.typ) && !holdsBorrow(v.typ) && !isSignature(v.typ) {
+		mode = byCopy // a number read by a closure is copied in: the closure holds no borrow and may be returned; a borrow variable, Copy too, stays a borrow, and so does a function value, whose borrows are the holder's, not the type's
+	}
+
 	for i := range c.closures {
 		cl := &c.closures[i]
 		if v.pos > cl.pos {
@@ -210,14 +241,23 @@ func (cl *closure) index(v *Var) int {
 	return -1
 }
 
-// capturesOf returns what a closure literal captures, nil for one that
-// stands on its own.
+// capturesOf returns what a closure literal borrows, nil for one that
+// stands on its own: a Copy value it only reads is copied in and is no
+// borrow.
 func (c *Checker) capturesOf(e ast.Expr) []capture {
-	if lit, ok := unparen(e).(*ast.FuncLit); ok {
-		return c.captured[lit]
+	lit, ok := unparen(e).(*ast.FuncLit)
+	if !ok {
+		return nil
 	}
 
-	return nil
+	var borrowed []capture
+	for _, cap := range c.captured[lit] {
+		if cap.mode != byCopy {
+			borrowed = append(borrowed, cap)
+		}
+	}
+
+	return borrowed
 }
 
 // kept checks a value put into owned data, sent, spawned or returned:
@@ -298,12 +338,20 @@ func (c *Checker) source(e ast.Expr, pos token.Pos) {
 		c.sourceVar(e.X, pos, true)
 	case *ast.TupleExpr:
 		for _, elt := range e.Elts {
+			if !c.carriesBorrow(elt) {
+				continue
+			}
+
 			c.source(elt, pos)
 		}
 	case *ast.CompositeLit:
 		for _, elt := range e.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
 				elt = kv.Value
+			}
+
+			if !c.carriesBorrow(elt) {
+				continue // a count beside a borrow in a literal
 			}
 
 			c.source(elt, pos)
@@ -383,6 +431,56 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name) // taken by value, it dies at return
 	case c.sig.recv != nil && isBorrow(c.sig.recv.typ):
 		c.errorf(pos, "cannot return a borrow of "+v.name+": a method's returned borrow is tied to its receiver")
+	}
+}
+
+// carriesBorrow reports whether an operand of a literal can bring a
+// borrow into it: anything but a place whose type holds none, such as
+// an int beside a borrow. A place is read for the borrow it holds, so
+// a value is only what the place's type says.
+func (c *Checker) carriesBorrow(e ast.Expr) bool {
+	p, kind := c.placeOf(e)
+	return kind == notPlace || holdsBorrow(placeType(p))
+}
+
+// placeType returns the type of the value at p: the variable's own, or
+// the last field's on the path, each field reached through the borrows
+// and pointers in front of the value holding it.
+func placeType(p place) Type {
+	t := p.v.typ
+	if p.path == "" {
+		return t
+	}
+
+	for _, name := range strings.Split(p.path, ".") {
+		s, ok := stripped(t).Underlying().(*Struct)
+		if !ok {
+			return t
+		}
+
+		f := fieldNamed(s.fields, name)
+		if f == nil {
+			return t
+		}
+
+		t = f.typ
+	}
+
+	return t
+}
+
+// stripped returns t without the borrows and owned pointers in front
+// of it.
+func stripped(t Type) Type {
+	for {
+		switch u := t.(type) {
+		case *Ref:
+			t = u.elem
+		case *Pointer:
+			t = u.elem
+		default:
+			return t
+		}
 	}
 }
 

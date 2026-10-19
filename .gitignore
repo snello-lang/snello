@@ -6,3 +6,11 @@
 !/examples/run/*.teak
 !/examples/run/*.out
 !/examples/run/README.md
+
+.DS_Store
+Thumbs.db
+
+.tools/
+.idea/
+.vscode/
+*.iml
