@@ -15,6 +15,7 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capi
 | `s[a:b]` copies a string header; the bytes are shared by the GC | `s[a:b]` lends a `ref string`; the original must outlive it |
 | `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()`; the package has the functions too (chapter 14) |
 | `go f(x)` | `spawn f(x)` |
+| `break` inside `switch` or `select` ends that statement; a labeled `break outer` for the loop | `break` always ends the innermost loop; there are no labels |
 | `if x := f(); x > 0 {` | Same. `if x := opt {` with no `;` is a binding on an optional |
 | `append`, `delete`, `copy`, `new` | `xs.Push(v)`, `m.Remove(k)`, `xs.Clone()`, `&expr` |
 | `nil` | None. An absent value is `T?` |
@@ -34,6 +35,7 @@ Unchanged: struct fields, keyed literals, dot access, methods with receivers, `t
 | A type switch | `match`, exhaustive, usable as an expression |
 | `switch` on an enum constant | `match`; a missing case is a compile error |
 | `v, ok := m[k]` | `if v := m.Get(ref k) {` |
+| `struct{}` and anonymous structs | None: a struct is declared; a value with nothing in it is `()` |
 
 ## Chapter 5: Ownership
 
@@ -107,6 +109,24 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `next *Node` is `nil` at the end of a list | `next *Node?` is `None` at the end; there is no `nil` |
 | `p == q` compares addresses | `p == q` compares what they hold |
 | A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
+
+## Chapter 10: Concurrency
+
+Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for range ch`, `select`, a task is a function started and forgotten.
+
+| In Go | In Teak |
+|---|---|
+| `go f(x)` | `spawn f(x)` |
+| `done := make(chan struct{})`; `done <- struct{}{}` | `done := make(chan ())`; `done <- ()` |
+| `for { select { case <-timer: break } }` loops forever: the `break` ends the `select` | The `break` ends the `for` |
+| A goroutine may reach any value the spawning function can; sharing a map between two goroutines compiles and races | `spawn` moves what the task takes in; a second task cannot take the same value, and a borrow cannot cross at all |
+| Sending copies the value; the sender keeps using it | Sending moves the value; the sender has given it up |
+| `v, ok := <-ch` | `<-ch` is a `T?`, `None` once the channel is closed and drained |
+| Whether a value may safely cross goroutines is the programmer's problem; `go vet` and the race detector find some cases at run time | `Send` is inferred from the type and checked at compile time at every crossing |
+| `sync.Mutex` beside the data; forgetting to lock compiles | `sync.Mutex<T>` owns the data; the only way to it is through the guard `Lock` hands out, `*g.Get() += 1`, and the lock is released when the guard goes out of scope; `sync.RwLock<T>` the same with `Read` and `Write` |
+| `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; the zero value is empty and panics |
+| `var wg sync.WaitGroup` passed by pointer, `&wg` | `sync.WaitGroup` is a `Copy` handle on a counter, passed by value like a channel |
+| `*rc`-style shared ownership does not exist; the GC shares everything | `rc.Rc` shares within one task and is refused at a task boundary; `sync.Arc` shares across tasks |
 
 ## Chapter 11: Traits
 

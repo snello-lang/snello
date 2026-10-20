@@ -41,7 +41,7 @@ func TestTypes(t *testing.T) {
 		// Channels.
 		{"chan Job", "chan Job"},
 		{"chan<- Result<int, string>", "chan<- Result<int, string>"},
-		{"<-chan struct{}", "<-chan struct{}"},
+		{"<-chan ()", "<-chan ()"},
 
 		// Functions: unnamed, named, grouped, results.
 		{"func(T) U", "func(T) U"},
@@ -57,12 +57,10 @@ func TestTypes(t *testing.T) {
 		{"func(T?)", "func((T)?)"},
 		{"func(pkg.T, List<T>)", "func(pkg.T, List<T>)"},
 
-		// Tuples and structs.
+		// Tuples; the unit is the empty tuple.
 		{"(A, B)", "(A, B)"},
 		{"(A)", "A"},
-		{"struct{}", "struct{}"},
-		{"struct { id int; next *Node? }", "struct{id int; next (*Node)?}"},
-		{"struct { w, h f64; Point }", "struct{w, h f64; Point}"},
+		{"()", "()"},
 	}
 	for _, tt := range tests {
 		typ, errs := parseTypeString(tt.src)
@@ -86,8 +84,8 @@ func TestTypeErrors(t *testing.T) {
 		{"[x]int", "expected array length, found 'x'"},
 		{"<-chan<- T", "expected 'chan', found 'T'"},
 		{"func(", "expected ')', found 'EOF'"},
-		{"struct { a int\ntype", "expected field or '}', found 'type'"},
-		{"struct { a int b }", "expected ';' or newline, found 'b'"},
+		{"struct{}", "a struct is declared with a name"}, // a struct exists only by declaration
+		{"chan struct{}", "a struct is declared with a name"},
 	}
 	for _, tt := range tests {
 		_, errs := parseTypeString(tt.src)

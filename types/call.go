@@ -200,6 +200,7 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var) 
 		c.kept(op, "stored", arg.Pos())
 	case e == c.spawning:
 		c.kept(op, "spawned", arg.Pos())
+		c.spawnArg(arg, op)
 	}
 
 	if _, ok := p.typ.(*Ref); ok {
@@ -338,6 +339,8 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 	case BuiltinPanic:
 		c.exprs(e.Args)
 		return operand{value, Typ[Never], nil, nil}
+	case BuiltinClose:
+		return c.closeCall(e)
 	case BuiltinMin, BuiltinMax:
 		return c.minCall(e, b)
 	}

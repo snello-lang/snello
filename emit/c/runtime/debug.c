@@ -15,6 +15,7 @@
 
 #ifdef TK_DEBUG
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -41,12 +42,17 @@ static block *held[ring];
 static int next;
 static size_t held_bytes;
 
+// One lock covers the list, the counts and the quarantine, which every
+// task shares.
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
 void *tk_alloc(size_t n) {
     block *b = malloc(sizeof *b + (n == 0 ? 1 : n));
     if (b == NULL) {
         tk_panic(TK_STR("out of memory", 13));
     }
 
+    pthread_mutex_lock(&lock);
     b->size = n;
     b->magic = LIVE;
     b->prev = NULL;
@@ -58,6 +64,7 @@ void *tk_alloc(size_t n) {
     first = b;
     live_blocks++;
     live_bytes += (int64_t)n;
+    pthread_mutex_unlock(&lock);
     return b + 1;
 }
 
@@ -77,6 +84,7 @@ void tk_free(void *p) {
     }
 
     block *b = (block *)p - 1;
+    pthread_mutex_lock(&lock);
     if (b->magic == DEAD) {
         tk_panic(TK_STR("a block was released twice", 26));
     }
@@ -106,6 +114,8 @@ void tk_free(void *p) {
     for (int i = next, n = 0; held_bytes > limit && n < ring; i = (i + 1) % ring, n++) {
         evict(i); // oldest first, until the quarantine is under its limit
     }
+
+    pthread_mutex_unlock(&lock);
 }
 
 _Noreturn void tk_released(const char *what) {
@@ -145,6 +155,18 @@ int tk_finish(void) {
     }
 
     tk_slice_free(&tk_os_Args);
+    int64_t n = tk_tasks_running();
+    for (int i = 0; n > 0 && i < 200; i++) { // a task that has sent its last word may still be ending
+        tk_time_Sleep(1000000);
+        n = tk_tasks_running();
+    }
+
+    if (n > 0) {
+        fflush(stdout);
+        fprintf(stderr, "teak: %lld tasks still running at exit; the blocks were not checked\n", (long long)n);
+        return 0; // what a running task owns is not a leak
+    }
+
     if (live_blocks == 0) {
         return 0;
     }

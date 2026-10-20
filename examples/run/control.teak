@@ -3,14 +3,16 @@
 // license that can be found in the LICENSE file.
 
 // Control flow: if and else-if chains, the three forms of for, continue
-// reaching the post statement, break, a named number type, and a swap by
-// parallel assignment.
+// reaching the post statement, break, also from inside a match, a named
+// number type, and a swap by parallel assignment.
 
 package main
 
 import "fmt"
 
 type Score int
+
+enum Step { Go; Stop }
 
 func grade(s Score) string {
 	if s >= 90 {
@@ -59,6 +61,18 @@ func main() {
 	}
 
 	fmt.Println(hits)
+
+	// A break inside a match ends the loop around it: a match is not a
+	// loop, and neither is a switch or a select.
+	taken := 0
+	for _, s := range []Step{Go, Go, Stop, Go} {
+		match s {
+			Stop => break,
+			Go => taken += 1,
+		}
+	}
+
+	fmt.Println(taken)
 
 	// Deferred calls run at return, last deferred first, with their
 	// arguments as they were at the defer; a mut receiver is lent, not

@@ -1,0 +1,102 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Tasks and channels: a task started with spawn, an unbuffered channel
+// handing values from one task to another, a buffered one with close
+// and a range over it, a channel of (), a method spawned on a receiver
+// moved in, a value with a Drop method crossing a task and dropped by
+// the side that holds it last, len and cap, and a spawned closure that
+// takes what it mentions with it. Every task ends before main returns,
+// so a debug build checks the drops.
+
+package main
+
+import "fmt"
+
+struct Job {
+	id   int
+	text string
+}
+
+struct Ticket impl Drop {
+	n int
+}
+
+func (t mut Ticket) Drop() { fmt.Println("ticket", t.n, "dropped") }
+
+func produce(n int, out chan<- Job) {
+	for i := 0; i < n; i++ {
+		out <- Job{id: i, text: "job".Clone()} // an owned string crosses with the job
+	}
+
+	close(out)
+}
+
+func count(jobs <-chan Job, done chan<- int) {
+	total := 0
+	for j := range jobs { // each job is owned here and dropped at the end of its turn
+		total += j.id + len(j.text)
+	}
+
+	done <- total
+}
+
+struct Printer {
+	prefix string
+}
+
+func (p Printer) Run(words <-chan string, finished chan<- ()) {
+	for w := range words {
+		fmt.Println(p.prefix, w)
+	}
+
+	finished <- ()
+}
+
+func main() {
+	jobs := make(chan Job)
+	done := make(chan int, 1)
+	spawn produce(5, jobs)
+	spawn count(jobs, done)
+	fmt.Println((<-done).Expect("counted")) // 0+1+2+3+4, plus 3 letters each
+
+	words := make(chan string, 2)
+	finished := make(chan ())
+	fmt.Println(cap(words))
+	spawn Printer{prefix: ">"}.Run(words, finished) // the receiver is moved into the task
+	words <- "one".Clone()
+	words <- "two".Clone()
+	close(words)
+	<-finished
+
+	tickets := make(chan Ticket, 3)
+	tickets <- Ticket{n: 1}
+	tickets <- Ticket{n: 2}
+	tickets <- Ticket{n: 3}
+	fmt.Println(len(tickets), cap(tickets))
+	close(tickets)
+	t := (<-tickets).Expect("a ticket") // owned by main from here, dropped when main ends
+	for range tickets {} // the rest are dropped as they arrive
+	match <-tickets {
+		Some(late) => fmt.Println("unexpected", late.n),
+		None => fmt.Println("none left"),
+	}
+
+	// A spawned closure owns what it mentions: names is moved in and
+	// dropped by the task, k is copied, and a parameter is passed as to
+	// any call. A result the closure returns is dropped by the task.
+	names := []string{"ann".Clone(), "bob".Clone()}
+	k := 2
+	greeted := make(chan ())
+	spawn func(prefix string) {
+		for _, n := range names {
+			fmt.Println(prefix, n, k)
+		}
+
+		greeted <- ()
+	}("hi".Clone())
+	<-greeted
+	spawn func() string { return "unread".Clone() }()
+	fmt.Println("ticket", t.n, "held")
+}

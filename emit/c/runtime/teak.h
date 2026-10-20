@@ -313,5 +313,48 @@ int64_t tk_os_closeFile(int64_t fd);
 int64_t tk_strconv_parseFloat(tk_string s, double *out);
 int64_t tk_time_now(void);
 void tk_time_Sleep(int64_t d);
+int64_t tk_sync_newLock(void); // sync's locks are numbered; see the lock section of teak.c
+void tk_sync_freeLock(int64_t h);
+void tk_sync_lock(int64_t h);
+void tk_sync_unlock(int64_t h);
+void tk_sync_lockShared(int64_t h);
+void tk_sync_unlockShared(int64_t h);
+void tk_sync_count(int64_t h, int64_t n);
+void tk_sync_wait(int64_t h);
+int64_t tk_sync_atomicAdd(int64_t *n, int64_t d);
+
+// Tasks and channels, as _docs/design/06-tasks-and-channels.md lays
+// them out: this is the whole interface the emitted code uses, and the
+// scheduler of a later stage implements the same one. A task is a
+// thread here; a channel is a locked ring buffer, or a hand-off slot
+// when unbuffered, with a list of the tasks waiting on it, and lives
+// as long as the program, since its handle is a Copy value that no
+// count follows. A value is copied into the channel by its bytes and
+// out again: the sender's place was emptied by the move, and the
+// receiver owns what it took. tk_chan_recv returns false once the
+// channel is closed and empty, which the emitted code turns into None.
+typedef struct tk_chan tk_chan;
+
+// A case of a select: the channel, the value to send or the place to
+// receive into, and for a receive whether a value came, false once the
+// channel is closed and empty. tk_select waits for a case that can
+// proceed, performs it and returns its index, choosing at random among
+// several; with a default it returns -1 at once when none can.
+typedef struct {
+    tk_chan *chan;
+    void *value;
+    bool send;
+    bool ok;
+} tk_case;
+
+void tk_spawn(void (*run)(void *), void *arg);
+int tk_select(tk_case *cases, int n, bool has_default);
+int64_t tk_tasks_running(void);
+tk_chan *tk_chan_make(size_t size, int64_t cap);
+void tk_chan_send(tk_chan *c, const void *v);
+bool tk_chan_recv(tk_chan *c, void *out);
+void tk_chan_close(tk_chan *c);
+int64_t tk_chan_len(tk_chan *c);
+int64_t tk_chan_cap(tk_chan *c);
 
 #endif

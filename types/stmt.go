@@ -68,7 +68,7 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		c.returnStmt(s)
 		return true
 	case *ast.BranchStmt:
-		c.branch(s.Tok)
+		c.branch(s.Tok, s.Pos())
 		return true
 	case *ast.IfStmt:
 		return c.ifStmt(s)
@@ -510,7 +510,11 @@ func rangeTypes(x operand) (key, val Type, ok bool) {
 	case *Map:
 		return wrap(t.key, b), wrap(t.value, b), true
 	case *Chan:
-		return t.elem, Typ[Invalid], true
+		if t.dir == SendOnly {
+			return Typ[Invalid], Typ[Invalid], false
+		}
+
+		return t.elem, Typ[Invalid], true // one variable: the value received, owned
 	case *Basic:
 		if t.kind == String {
 			return Typ[Int], aliases[0], true
@@ -590,7 +594,7 @@ func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
 			c.fits(c.expr(e, tag), tag, e.Pos(), "case")
 		}
 
-		if !c.stmts(cc.Body) || hasBreak(cc.Body) {
+		if !c.stmts(cc.Body) {
 			allLeave = false
 		}
 
@@ -613,7 +617,7 @@ func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 			c.stmt(cc.Comm)
 		}
 
-		if !c.stmts(cc.Body) || hasBreak(cc.Body) {
+		if !c.stmts(cc.Body) {
 			allLeave = false
 		}
 
@@ -654,7 +658,8 @@ func (c *Checker) exprs(es []ast.Expr) {
 }
 
 // hasBreak reports whether a break in the list leaves the enclosing
-// loop or switch: one not inside a nested loop, switch or select.
+// loop: one not inside a nested loop. A switch, match or select is not
+// a loop, so a break in one of their cases counts.
 func hasBreak(list []ast.Stmt) bool {
 	for _, s := range list {
 		switch s := s.(type) {
@@ -665,6 +670,18 @@ func hasBreak(list []ast.Stmt) bool {
 		case *ast.BlockStmt:
 			if hasBreak(s.List) {
 				return true
+			}
+		case *ast.SwitchStmt:
+			for _, cc := range s.Body {
+				if hasBreak(cc.Body) {
+					return true
+				}
+			}
+		case *ast.SelectStmt:
+			for _, cc := range s.Body {
+				if hasBreak(cc.Body) {
+					return true
+				}
 			}
 		case *ast.IfStmt:
 			if hasBreak(s.Body.List) || s.Else != nil && hasBreak([]ast.Stmt{s.Else}) {

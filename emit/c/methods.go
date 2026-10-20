@@ -562,6 +562,15 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 		return "(" + e.cType(t, x.Pos()) + "){0}"
 	}
 
+	if ch, ok := t.Underlying().(*types.Chan); ok {
+		n := "0"
+		if len(x.Args) > 1 {
+			n = "(int64_t)(" + e.valueTo(x.Args[1], types.Typ[types.Int]) + ")"
+		}
+
+		return "tk_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ")"
+	}
+
 	st, ok := t.Underlying().(*types.Slice)
 	if !ok {
 		e.unsupported(x.Pos(), "make of "+t.String())
@@ -635,6 +644,10 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 
 	if a, ok := t.Underlying().(*types.Array); ok {
 		return strconv.FormatInt(a.Len(), 10) // len and cap alike
+	}
+
+	if _, ok := t.Underlying().(*types.Chan); ok {
+		return "tk_chan_" + b.Name() + "(" + place + ")"
 	}
 
 	e.unsupported(x.Pos(), b.Name()+" on "+t.String())

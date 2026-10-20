@@ -38,7 +38,8 @@ var (
 // type's structure. The predeclared types implement them by structure
 // (stdtraits.go), and a declared type by listing them, writing the
 // method or deriving it from its fields. The operator traits get their
-// methods with the operators.
+// methods with the operators. Send asks for no method either: a type
+// is Send by its structure (send.go), and listing it is refused.
 var (
 	CopyTrait  = standardTrait("Copy")
 	CloneTrait = standardTrait("Clone")
@@ -53,11 +54,12 @@ var (
 	DivTrait   = standardTrait("Div")
 	RemTrait   = standardTrait("Rem")
 	NegTrait   = standardTrait("Neg")
+	SendTrait  = standardTrait("Send")
 )
 
 var standardTraits = [...]*Trait{
 	CopyTrait, CloneTrait, EqTrait, OrdTrait, HashTrait, DropTrait, ErrorTrait,
-	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait,
+	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait,
 }
 
 var predeclaredBuiltins = [...]struct {
@@ -72,6 +74,7 @@ var predeclaredBuiltins = [...]struct {
 	{"print", BuiltinPrint},
 	{"min", BuiltinMin},
 	{"max", BuiltinMax},
+	{"close", BuiltinClose},
 }
 
 func init() {
@@ -80,7 +83,8 @@ func init() {
 		def(NewTypeName(token.NoPos, t.name, t))
 	}
 
-	def(NewTypeName(token.NoPos, "any", Typ[Any])) // the type of a variadic parameter of the library, nowhere else
+	def(NewTypeName(token.NoPos, "any", Typ[Any]))     // the type of a variadic parameter of the library, nowhere else
+	def(NewTypeName(token.NoPos, "local", Typ[Local])) // a field of a library type that stays in its task, nowhere else
 
 	for _, t := range aliases {
 		def(NewTypeName(token.NoPos, t.name, t))

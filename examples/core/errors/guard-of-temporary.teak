@@ -1,0 +1,19 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a borrow of a temporary dies with its statement; the guard
+// Lock returns is dropped, and the lock released, at the end of the
+// line that made it, so the value it lent cannot be kept.
+// Fix: bind the guard to a name, g := m.Lock(), and use g.Get() while
+// g is in scope.
+
+package p
+
+import "sync"
+
+func main() {
+    m := sync.NewMutex(0)
+    n := m.Lock().Get()                   // ERROR "cannot keep a borrow of a temporary: m.Lock() is dropped when the statement ends"
+    *n += 1
+}

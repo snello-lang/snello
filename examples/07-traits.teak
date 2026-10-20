@@ -4,12 +4,12 @@
 
 // 07: Traits with default methods, fields, and mixins.
 //
-// A trait is a Go interface that may also carry default methods and
-// fields. A type says which traits it implements on its declaration, and
-// its methods are ordinary Go methods. There are no impl blocks.
+// A trait is a named set of methods, and may also carry default methods
+// and fields. A type says which traits it implements on its declaration,
+// and its methods are ordinary methods. There are no impl blocks.
 //
-// A trait name used as a type means "any value implementing it", exactly
-// like a Go interface value.
+// A trait name used as a type means "any value implementing it": a boxed
+// value with a method table.
 
 package shapes
 
@@ -68,7 +68,7 @@ func TotalArea<T: Shape>(xs ref []T) f64 {
 }
 
 // Dynamic dispatch: a slice of Shape values holds any mix of types that
-// implement Shape. Each element owns its value, as a Go interface does.
+// implement Shape. Each element owns its value.
 func PrintAll(xs ref []Shape) {
     for _, x := range xs { fmt.Println(x.Describe()) }
 }

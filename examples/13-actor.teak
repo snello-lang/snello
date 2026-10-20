@@ -26,7 +26,7 @@ struct Account {
 
 // The actor loop owns `acct`. It was moved in by Spawn and is dropped when
 // the loop returns. Nothing else can reach it. Parameters are mutable
-// locals, as in Go.
+// locals.
 func run(acct Account, inbox <-chan Msg) {
     for m := range inbox {
         match m {

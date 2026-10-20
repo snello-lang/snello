@@ -5,8 +5,9 @@
 // 12: A worker pool with select, a deadline, and cancellation.
 //
 // Tests select over channels, a cancellation token shared through Arc,
-// and results flowing back as moves. Receiving from a channel yields T?,
-// None once the channel is closed and drained.
+// a WaitGroup that waits for the workers to stop, and results flowing
+// back as moves. Receiving from a channel yields T?, None once the
+// channel is closed and drained.
 
 package pool
 
@@ -15,42 +16,48 @@ import ("fmt"; "sync"; "time")
 struct Task { id int; payload []byte }
 struct Done { id int; size int }
 
-// A cancellation token is a channel that gets closed. Closing twice is a
-// panic in Go, so a Once guards it. sync types synchronize internally and
-// are used through `ref`.
+// A cancellation token is a channel that gets closed. Closing it twice
+// panics, so a Once guards the close. sync types synchronize
+// internally and are used through ref, which is how an Arc lends them.
 struct Cancel {
-    ch   chan struct{}
+    ch   chan ()
     once sync.Once
 }
 
-func NewCancel() sync.Arc<Cancel>              { return sync.Arc.New(Cancel{ch: make(chan struct{})}) }
-func (c ref Cancel) Cancel()              { c.once.Do(func() { close(c.ch) }) }
-func (c ref Cancel) Done() <-chan struct{} { return c.ch }
+func NewCancel() sync.Arc<Cancel>          { return sync.NewArc(Cancel{ch: make(chan ()), once: sync.NewOnce()}) }
+func (c ref Cancel) Cancel()               { c.once.Do(func() { close(c.ch) }) }
+func (c ref Cancel) Done() <-chan ()       { return c.ch }
 
-func worker(id int, tasks <-chan Task, out chan<- Done, cancel sync.Arc<Cancel>) {
+// A worker runs until the tasks run out or the pool is cancelled, and
+// counts itself out of the group either way. A break inside the select
+// leaves the loop, as it leaves the innermost loop anywhere.
+func worker(tasks <-chan Task, out chan<- Done, cancel sync.Arc<Cancel>, stopped sync.WaitGroup) {
     for {
         select {
-        case t := <-tasks:                          // t is Task?; the task is moved out of the channel
-            t := t ?? return                        // None: channel closed, no more work
+        case got := <-tasks:                        // got is Task?; the task is moved out of the channel
+            t := got ?? break                       // None: channel closed, no more work
             time.Sleep(10 * time.Millisecond)       // pretend work
             out <- Done{id: t.id, size: len(t.payload)}
-        case <-cancel.Done():
-            fmt.Println("worker", id, "cancelled")
-            return
+        case <-cancel.Get().Done():
+            break
         }
     }
+
+    stopped.Done()
 }
 
 func Run(workers int, inputs []Task, deadline time.Duration) []Done {
     tasks := make(chan Task)
     out := make(chan Done)
     cancel := NewCancel()
+    stopped := sync.NewWaitGroup()
     want := len(inputs)                             // read before inputs is moved
 
     for i := 0; i < workers; i++ {
-        spawn worker(i, tasks, out, cancel.Clone())    // each worker gets its own Arc handle
+        stopped.Add(1)
+        spawn worker(tasks, out, cancel.Clone(), stopped)    // each worker gets its own Arc handle
     }
-    
+
     spawn func() {                                     // inputs moved into this task
         for _, t := range inputs { tasks <- t }     // each Task moved into the channel
         close(tasks)
@@ -66,13 +73,16 @@ func Run(workers int, inputs []Task, deadline time.Duration) []Done {
             break
         }
     }
-    cancel.Cancel()
+
+    cancel.Get().Cancel()
+    stopped.Wait()
+    fmt.Println(workers, "workers stopped")
     return results
 }
 
 func main() {
     inputs := []Task{}
     for i := 0; i < 20; i++ { inputs.Push(Task{id: i, payload: make([]byte, i)}) }
-    done := Run(4, inputs, 100 * time.Millisecond)
+    done := Run(4, inputs, time.Second)
     fmt.Println(len(done), "finished")
 }

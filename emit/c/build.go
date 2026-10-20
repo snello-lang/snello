@@ -16,7 +16,7 @@ import (
 // it C leaves overflow undefined and the optimizer may assume it away.
 // -fno-strict-aliasing lets the runtime work on every slice type
 // through tk_slice, which has the same layout.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-O1"}
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1"}
 
 // Compiler returns the C compiler to run: the CC environment variable
 // when it is set, as every build tool reads it, else cc.

@@ -17,13 +17,13 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | [7. Owned pointers and recursive data](07-owned-pointers.md) | implemented, checked, compiled and freed (stage 1, tasks 1.5 and 1.9) |
 | [8. Option, Result, `?` and `??`](08-option-result.md) | implemented, checked and compiled (stage 1, task 1.5); `Map` and `MapErr` (stage 2, task 2.6) |
 | [9. Collections: slices, maps and strings](09-collections.md) | implemented, checked and compiled (stage 1, task 1.5); a map key must be `Eq` and `Hash` (stage 2, task 2.5) |
-| 10. Concurrency: `spawn`, channels, `select` | written with stage 3 |
+| [10. Concurrency: `spawn`, channels, `select`](10-concurrency.md) | the rule of the task boundary decided; `Send` inferred from the structure of every type, with `rc`'s handles kept in their task by a `local` field (stage 3, task 3.1); a `spawn` moves what its closure mentions and checks `Send` at every crossing, `close`, `for range ch` (task 3.2); tasks, channels and `select` run, with a function, a method or a closure spawned (task 3.3); `sync.Arc`, `Mutex`, `RwLock`, `Once` and `WaitGroup` with guards checked by the borrow rules, and `time.After` (task 3.4); the race programs rejected and the stage's decisions recorded (task 3.5): implemented (stage 3) |
 | [11. Traits](11-traits.md) | declarations, `impl`, refinement and bounds checked and compiled (stage 2, task 2.2); default methods, the resolution order, trait fields and `super` (task 2.3); a trait as a type checked and compiled (task 2.4); the standard traits' methods, derivation from the fields and the map key rule checked (task 2.5, first slice); the operator traits with their argument, checked and compiled (second slice); the derived methods and the predeclared types' own compiled (third slice, task 2.5 complete); generic traits and default methods with type parameters of their own (task 2.7) |
 | [12. Generics](12-generics.md) | generic types and functions checked, inferred and compiled one copy per instance (stage 2, task 2.1); bounds are traits (task 2.2) |
 | [13. Arenas and indices](13-arenas-and-indices.md) | `arena.Arena<T>` and `arena.Index<T>` written in Teak under `std/arena/`, with generation-checked indices (stage 2, task 2.6, seventh slice); a range over an arena waits for the iterator trait |
 | [14. The standard library](14-standard-library.md) | packages written in Teak under `std/`, imported and compiled with the program: `math`, `io`, `os`, `strings`, `strconv`, `sort`, `time`, `arena`, `rc` and `bufio` (stage 2, task 2.6, nine slices); every package is declared under `std/`, `fmt` and `os.Exit` without bodies, since the compiler writes them |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | implemented (stage 0) |
-| [Appendix B. Teak for Go programmers](B-teak-for-go-programmers.md) | covers chapters 3 to 9, 11, 12 and 14; grows with them |
+| [Appendix B. Teak for Go programmers](B-teak-for-go-programmers.md) | covers chapters 3 to 12 and 14; grows with them |
 
 ## How the book is kept current
 

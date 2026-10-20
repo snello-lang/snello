@@ -35,8 +35,8 @@ struct Server {
 
 func NewServer(pool db.Pool) Server {
     return Server{
-        cache: sync.Arc.New(sync.RwLock.New(map[string]Entry{})),
-        db:    sync.Arc.New(pool),
+        cache: sync.NewArc(sync.NewRwLock(map[string]Entry{})),
+        db:    sync.NewArc(pool),
     }
 }
 
@@ -45,12 +45,12 @@ func NewServer(pool db.Pool) Server {
 func (s ref Server) GetUser(w mut http.ResponseWriter, r http.Request) {
     id := r.Query("id")
 
-    // Fast path under a read lock. The guard is a `ref` borrow of the map
-    // and the lock is released when the guard goes out of scope at the end
-    // of the block.
+    // Fast path under a read lock. The guard lends the map as a `ref`,
+    // and the lock is released when the guard goes out of scope at the
+    // end of the block.
     {
-        c := s.cache.Read()
-        if e := c[ref id] {
+        c := s.cache.Get().Read()
+        if e := c.Get()[ref id] {
             if e.expires.After(time.Now()) {
                 w.Write(ref e.body)                 // borrowed, not copied
                 return
@@ -60,17 +60,17 @@ func (s ref Server) GetUser(w mut http.ResponseWriter, r http.Request) {
 
     // Slow path. `conn` is owned for the rest of the call and is returned
     // to the pool by its Drop on every exit path.
-    conn := s.db.Acquire()
+    conn := s.db.Get().Acquire()
     user := match conn.QueryUser(ref id) {
         Ok(u)  => u,
         Err(e) => { w.WriteHeader(500); w.WriteString(e.Error()); return },
     }
     body := json.Marshal(ref user)
 
-    // Write lock. The guard is a `mut` borrow of the map.
+    // Write lock. The guard lends the map as a `mut`.
     {
-        c := s.cache.Write()
-        c[id] = Entry{body: body.Clone(), expires: time.Now().Add(time.Minute)}
+        c := s.cache.Get().Write()
+        c.Get()[id] = Entry{body: body.Clone(), expires: time.Now().Add(time.Minute)}
     }
     w.Write(ref body)
 }

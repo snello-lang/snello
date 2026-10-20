@@ -156,12 +156,52 @@ func name(g ref Guard) string { return g.name.Clone() }
 	}
 }
 
+// TestTaskPanics checks the misuses of a channel, a WaitGroup and an
+// empty library handle that end the program, and that a panic in a
+// spawned task ends it as one in main does, with the message and
+// status 2.
+func TestTaskPanics(t *testing.T) {
+	tests := []struct{ name, body, err string }{
+		{"close-twice", "ch := make(chan int); close(ch); close(ch)", "panic: close of a closed channel"},
+		{"send-closed", "ch := make(chan int, 1); close(ch); ch <- 1", "panic: send on a closed channel"},
+		{"close-while-sending", "ch := make(chan int); spawn closer(ch); ch <- 1", "panic: channel closed while a send waited on it"},
+		{"task-panics", "ch := make(chan int); spawn boom(); <-ch", "panic: in a task"},
+		{"empty-waitgroup", "var wg sync.WaitGroup; wg.Add(1)", "panic: sync: use of an empty WaitGroup"},
+		{"negative-waitgroup", "wg := sync.NewWaitGroup(); wg.Done()", "panic: sync: negative WaitGroup count"},
+		{"empty-mutex", "var m sync.Mutex<int>; g := m.Lock(); *g.Get() += 1", "panic: sync: Lock on an empty Mutex"},
+		{"empty-rc", "var r rc.Rc<int>; fmt.Println(r.Get())", "panic: rc: Get on an empty handle"}, // the cell is reached through a pointer and never built: it must still be defined
+	}
+	prelude := "package main\nimport (\"fmt\"; \"rc\"; \"sync\"; \"time\")\nfunc closer(ch chan int) { time.Sleep(10 * time.Millisecond); close(ch) }\nfunc boom() { panic(\"in a task\") }\n"
+	for _, tt := range tests {
+		src := prelude + "func main() { " + tt.body + " }\n"
+		for _, debug := range []bool{false, true} {
+			_, stderr, code := run(t, tt.name, src, debug)
+			if code != 2 || !strings.Contains(stderr, tt.err) {
+				t.Errorf("%s, debug=%v: got stderr %q and exit code %d, want %q and 2", tt.name, debug, stderr, code, tt.err)
+			}
+		}
+	}
+}
+
+// TestTimers runs time.Tick, which no run program can hold, since its
+// task never ends and a debug build would skip the leak report for it:
+// three ticks are received and the program exits cleanly, with the
+// note on standard error tolerated.
+func TestTimers(t *testing.T) {
+	src := "package main\nimport (\"fmt\"; \"time\")\n" +
+		"func main() { ticks := time.Tick(time.Millisecond); for i := 0; i < 3; i++ { <-ticks; fmt.Println(\"tick\") } }\n"
+	for _, debug := range []bool{false, true} {
+		out, stderr, code := run(t, "tick", src, debug)
+		if code != 0 || out != "tick\ntick\ntick\n" {
+			t.Errorf("debug=%v: got output %q, stderr %q and exit code %d, want three ticks and 0", debug, out, stderr, code)
+		}
+	}
+}
+
 // TestUnsupported checks that a construct the backend does not lower
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {
 	tests := []struct{ src, want string }{
-		{"func work() {}\nfunc main() { spawn work() }", "channels and tasks"},
-		{"func main() { ch := make(chan int); ch <- 1 }", "channels"},
 		{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
 		{"import \"fmt\"\nfunc main() { fmt.Printf(\"%.2f\", 1) }", "%f on a value of type int"},
 		{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},

@@ -76,10 +76,12 @@ func (c *Checker) typ(e ast.Type) Type {
 }
 
 // namedType resolves a name to a type. Result<T, E> is the one name
-// written with type arguments that the language itself knows. A
-// qualified name, io.Error, is looked up in the imported package.
+// written with type arguments that the language itself knows, unless
+// the program declares a Result of its own, which shadows it as any
+// declaration shadows a predeclared name. A qualified name, io.Error,
+// is looked up in the imported package.
 func (c *Checker) namedType(e *ast.NamedType) Type {
-	if e.Pkg == nil && e.Name.Name == "Result" {
+	if _, declared := c.scope.LookupParent("Result"); e.Pkg == nil && e.Name.Name == "Result" && declared == nil {
 		if len(e.Args) != 2 {
 			c.errorf(e.Pos(), "Result takes two type arguments: Result<T, E>")
 			return Typ[Invalid]
@@ -107,6 +109,11 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 
 	if tn.typ == Typ[Any] {
 		c.errorf(e.Pos(), "any is only the type of a variadic parameter, ...ref any; a value of any type is a trait value")
+		return Typ[Invalid]
+	}
+
+	if tn.typ == Typ[Local] && c.pkg.path == "" {
+		c.errorf(e.Pos(), "local is a field of the standard library's types that stay in their task; a program does not write it")
 		return Typ[Invalid]
 	}
 

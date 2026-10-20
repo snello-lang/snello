@@ -1,0 +1,17 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a send moves the value into the channel; the receiver owns it
+// from then on, and the sender's variable is dead.
+// Fix: clone the value before sending, or send a piece of it and keep
+// the rest.
+
+package p
+
+func main() {
+    names := []string{"a", "b"}
+    ch := make(chan []string, 1)
+    ch <- names
+    names.Push("c")                       // ERROR "use of moved value names"
+}

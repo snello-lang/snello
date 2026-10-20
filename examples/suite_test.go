@@ -75,13 +75,9 @@ func compile(path string) ([]byte, error) {
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
-	"pipeline":         "spawn and channels, stage 3",
 	"03-http-cache":    "sync, net and db, stage 3 and later",
 	"04-graph":         "heap, a later library",
-	"12-worker-pool":   "spawn, channels and sync, stage 3",
-	"13-actor":         "spawn and channels, stage 3",
 	"17-state-machine": "net, a later library",
-	"18-iterators":     "spawn, stage 3",
 	"19-cli-grep":      "regexp, a later library",
 }
 

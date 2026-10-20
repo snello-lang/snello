@@ -6,8 +6,8 @@
 //
 // Nodes refer to each other by integer id. The graph is append-only, so a
 // plain slice with a NodeID is enough; Arena<T> (example 01) is for
-// structures that also remove. This is how most Go graph code is already
-// written, so the memory model costs nothing here.
+// structures that also remove. A graph of ids is the shape most graph
+// code already has, so the ownership rules cost nothing here.
 
 package graph
 

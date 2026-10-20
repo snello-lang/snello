@@ -107,7 +107,9 @@ func (p *Parser) parseCoreType() ast.Type {
 	case token.LPAREN:
 		return p.parseTupleType()
 	case token.STRUCT:
-		return p.parseStructType()
+		p.error(pos, "a struct is declared with a name, struct Name { ... }; a value that carries nothing is ()")
+		p.parseStructType() // skip it
+		return &ast.NamedType{Name: &ast.Ident{NamePos: pos, Name: "_"}}
 	}
 
 	p.errorExpected(pos, "type")
@@ -382,12 +384,12 @@ func (p *Parser) parseTypeList() []ast.Type {
 	return types
 }
 
-// parseStructType parses "struct" "{" {Field ";"} "}". It is the type
-// form used after "type Name struct"; the keyword and the field list are
-// the same whether the struct is named or anonymous.
+// parseStructType parses "struct" "{" {Field ";"} "}", the body of a
+// struct declaration after its name. A struct exists only by
+// declaration; in type position the keyword is refused (parseType).
 //
-//	struct{}                            StructType{Fields: nil}
-//	struct { w, h float64; Point }      StructType{Fields: [w h, Point]}
+//	struct Empty {}                     StructType{Fields: nil}
+//	struct Rect { w, h float64; Point } StructType{Fields: [w h, Point]}
 func (p *Parser) parseStructType() *ast.StructType {
 	pos := p.expect(token.STRUCT)
 	return &ast.StructType{Struct: pos, Fields: p.parseFieldList()}

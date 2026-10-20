@@ -174,6 +174,18 @@ var handledErrors = map[string]bool{
 	"return-two-borrows.teak":     true,
 	"return-local-borrow.teak":    true,
 	"closure-returned.teak":       true,
+	// Task boundaries.
+	"use-after-spawn.teak":  true,
+	"spawn-twice.teak":      true,
+	"spawn-not-send.teak":   true,
+	"channel-not-send.teak": true,
+	// Lock-protected data, reached only through a guard.
+	"guard-across-spawn.teak": true,
+	"guard-of-temporary.teak": true,
+	// The races of the stage's checkpoint.
+	"use-after-send.teak":            true,
+	"mutate-through-arc.teak":        true,
+	"borrowing-closure-spawned.teak": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

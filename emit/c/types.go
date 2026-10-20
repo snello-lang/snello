@@ -62,6 +62,8 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 		return e.typeName(t.Elem(), pos)
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
+	case *types.Chan:
+		return "tk_chan *"
 	case *types.Option, *types.Result, *types.Slice, *types.Array, *types.Signature:
 		return e.declare(t)
 	case *types.Map:
@@ -287,6 +289,8 @@ func mangle(t types.Type) string {
 		return "ref_" + mangle(t.Elem())
 	case *types.Pointer:
 		return "ptr_" + mangle(t.Elem())
+	case *types.Chan:
+		return "chan_" + mangle(t.Elem())
 	case *types.Option:
 		return "opt_" + mangle(t.Elem())
 	case *types.Result:

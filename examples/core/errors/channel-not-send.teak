@@ -1,0 +1,16 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value taken off a channel is owned by whichever task receives
+// it, so a channel carries only Send values. Fix: send the value itself,
+// or an sync.Arc of it.
+
+package p
+
+import "rc"
+
+func main() {
+    ch := make(chan rc.Rc<int>, 1)        // ERROR "a channel cannot carry rc.Rc<int>: rc.Rc<int> stays in its task"
+    print(cap(ch))
+}

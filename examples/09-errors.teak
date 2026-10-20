@@ -4,8 +4,8 @@
 
 // 09: Error handling with Result, custom error enums, `?`, and `??`.
 //
-// Tests that Go's "errors are values" survives without nil, and that `?`
-// keeps the happy path readable.
+// Tests that errors are ordinary values, with no nil to stand for their
+// absence, and that `?` keeps the happy path readable.
 
 package config
 

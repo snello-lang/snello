@@ -69,8 +69,12 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 		e.unsupported(s.Pos(), "switch")
 	case *ast.DeferStmt:
 		e.deferStmt(s)
-	case *ast.SendStmt, *ast.SelectStmt, *ast.SpawnStmt:
-		e.unsupported(s.Pos(), "channels and tasks")
+	case *ast.SendStmt:
+		e.sendStmt(s)
+	case *ast.SpawnStmt:
+		e.spawnStmt(s)
+	case *ast.SelectStmt:
+		e.selectStmt(s)
 	case *ast.EmptyStmt:
 	default:
 		e.unsupported(s.Pos(), "this kind of statement")
@@ -385,6 +389,12 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
+	if ch, ok := t.Underlying().(*types.Chan); ok {
+		e.rangeChan(s, place, ch.Elem())
+		e.line("}")
+		return
+	}
+
 	e.line("for (tk_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
 	elem := place + ".ptr[" + i + "]"
 	var elemType types.Type = types.Typ[types.Uint8]
@@ -410,6 +420,37 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.pop(s.Body.Rbrace)
 	e.line("}")
 	e.line("}")
+}
+
+// rangeChan writes a loop receiving from a channel until it is closed
+// and empty. Each value received is owned by the loop variable, or
+// dropped at once when the loop binds none.
+func (e *Emitter) rangeChan(s *ast.RangeStmt, ch string, elem types.Type) {
+	got := e.temp()
+	e.line("for (;;) {")
+	e.push(true)
+	e.line(e.cType(elem, s.Pos()) + " " + got + " = " + e.zero(elem, s.Pos()) + ";")
+	e.line("if (!tk_chan_recv(" + ch + ", &" + got + ")) { break; }")
+	if s.Key == nil || isBlank(s.Key) {
+		if needsDrop(elem) {
+			e.line(e.dropOf(got, elem, s.Pos()))
+		}
+	} else {
+		e.rangeVar(s.Key, s.Tok, got, elem, true)
+	}
+
+	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
+	e.line("}")
+}
+
+// sendStmt writes ch <- v: the value, moved out of its place, goes to
+// the runtime by address and is copied into the channel.
+func (e *Emitter) sendStmt(s *ast.SendStmt) {
+	ch := e.valueTo(s.Chan, valueType(e.typeOf(s.Chan)))
+	elem := valueType(e.typeOf(s.Chan)).Underlying().(*types.Chan).Elem()
+	v := e.spill(e.valueTo(s.Value, elem), elem, s.Pos())
+	e.line("tk_chan_send(" + ch + ", &" + v + ");")
 }
 
 // rangeVar binds one range variable to the C place of the current

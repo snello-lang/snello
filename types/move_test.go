@@ -76,6 +76,16 @@ func TestMoves(t *testing.T) {
 		{"func f(n int) { s := \"a\"; switch n { case 1: keep(s) }; keep(s) }", []string{"use of moved value s"}},
 		// Loops.
 		{"func f() { s := \"a\"; for { keep(s); break } }", nil},
+		{"func f() { s := \"a\"; for { switch { default: keep(s); break } } }", nil},                                                                   // a break in a switch leaves the loop
+		{"func f(ch chan int) { s := \"a\"; for { select { case v := <-ch: keep(s); break; default: break } } }", nil},                                 // and in a select
+		{"func f() { s := \"a\"; for { match Some(1) { Some(n) => { keep(s); break }, None => {} } } }", nil},                                          // and in a match
+		{"func f(c bool) { s := \"a\"; for { switch { case c: keep(s); default: break } } }", []string{"s moved in a previous iteration of the loop"}}, // the case that does not break comes round
+		{"func f() { s := \"a\"; for { switch { default: keep(s); break } }; keep(s) }", []string{"use of moved value s"}},                             // the break is the loop's one exit, and s left on it
+		{"func f(ch chan int) { s := \"a\"; for { select { case v := <-ch: keep(s); break } }; keep(s) }", []string{"use of moved value s"}},
+		{"func f() { break }", []string{"break is not inside a loop"}},
+		{"func f(c bool) { switch { case c: break } }", []string{"break is not inside a loop"}}, // a switch is not a loop
+		{"func f(c bool) { switch { case c: continue } }", []string{"continue is not inside a loop"}},
+		{"func f() { for { g := func() { break } } }", []string{"break is not inside a loop"}}, // a closure is a function of its own
 		{"func f(c bool) { s := \"a\"; for { if c { keep(s); continue }; break } }", []string{"s moved in a previous iteration of the loop"}},
 		{"func f() { for i := 0; i < 2; i += 1 { s := \"a\"; keep(s) } }", nil}, // declared inside
 		{"func f() { s := \"a\"; for i := 0; i < 2; i += 1 { keep(s); s = \"b\" } }", nil},

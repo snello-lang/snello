@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,10 +61,12 @@ typedef struct {
 } guard;
 
 // The guard stack grows with the system allocator, not tk_alloc, so a
-// debug build does not count it among the program's blocks.
-static guard *guards;
-static int64_t nguards, guardcap;
-static bool unwinding;
+// debug build does not count it among the program's blocks. Each task
+// has its own: a panic unwinds the task it happens in, and no other,
+// since the others are on other threads in the middle of their work.
+static _Thread_local guard *guards;
+static _Thread_local int64_t nguards, guardcap;
+static _Thread_local bool unwinding;
 
 void tk_guard(void *p, void (*drop)(void *)) {
     if (nguards == guardcap) {
@@ -1102,4 +1106,539 @@ tk_string tk_quote_owned(tk_string s) {
     tk_string q = tk_quote(s);
     tk_string_free(s);
     return q;
+}
+
+// Tasks and channels: _docs/design/06-tasks-and-channels.md, step one.
+// A task is a system thread with a small stack, started detached; the
+// program ends when main returns, whatever the tasks are doing. The
+// count of running tasks tells a debug build whether its leak report
+// can be trusted.
+
+static _Atomic int64_t tasks;
+
+typedef struct {
+    void (*run)(void *);
+    void *arg;
+} task;
+
+static void *task_main(void *p) {
+    task t = *(task *)p;
+    free(p);
+    t.run(t.arg);
+    atomic_fetch_sub(&tasks, 1);
+    return NULL;
+}
+
+void tk_spawn(void (*run)(void *), void *arg) {
+    task *t = malloc(sizeof *t);
+    if (t == NULL) {
+        tk_panic(TK_STR("out of memory", 13));
+    }
+
+    *t = (task){run, arg};
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 << 10);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    atomic_fetch_add(&tasks, 1);
+    pthread_t id;
+    if (pthread_create(&id, &attr, task_main, t) != 0) {
+        tk_panic(TK_STR("cannot start a task", 19));
+    }
+
+    pthread_attr_destroy(&attr);
+}
+
+int64_t tk_tasks_running(void) {
+    return atomic_load(&tasks);
+}
+
+// A waiter is a task's own wake signal: a task that must wait on a
+// channel, or on several in a select, puts a link to its waiter on each
+// channel's list, releases the channels and waits on the signal; every
+// send, receive and close on a channel wakes the waiters on its list,
+// which take the channel's lock again and recheck. The flag keeps a
+// wake that arrives between the release and the wait, and may also
+// carry a wake from a channel the task has stopped waiting on, which
+// costs the task one recheck. A link lives in the frame of the wait,
+// one per channel waited on, and is taken off the list before that
+// frame ends.
+typedef struct waiter {
+    pthread_mutex_t mu;
+    pthread_cond_t cond;
+    bool woken;
+} waiter;
+
+typedef struct waitlink {
+    waiter *w;
+    struct waitlink *next;
+} waitlink;
+
+static _Thread_local waiter self;
+static _Thread_local bool self_ready;
+
+static waiter *me(void) {
+    if (!self_ready) {
+        pthread_mutex_init(&self.mu, NULL);
+        pthread_cond_init(&self.cond, NULL);
+        self_ready = true;
+    }
+
+    return &self;
+}
+
+static void wait_signal(waiter *w) {
+    pthread_mutex_lock(&w->mu);
+    while (!w->woken) {
+        pthread_cond_wait(&w->cond, &w->mu);
+    }
+
+    w->woken = false;
+    pthread_mutex_unlock(&w->mu);
+}
+
+// An unbuffered channel is a ring of one element, the hand-off slot,
+// whose sender waits on until a receiver has taken its value: the
+// deposits and takes are counted so that a sender knows when its own
+// value, and not a later sender's, was taken.
+struct tk_chan {
+    pthread_mutex_t mu;
+    size_t size;      // of one element
+    int64_t cap;      // zero for an unbuffered channel
+    uint8_t *buf;     // the ring: cap elements, or one
+    int64_t head;     // the oldest element of the ring
+    int64_t len;      // elements in the ring
+    int64_t deposits; // values put in so far
+    int64_t takes;    // values taken out so far
+    int64_t receiving; // tasks waiting to receive, which is what lets a select send on an unbuffered channel
+    bool closed;
+    waitlink *waiters;
+};
+
+// room is the ring's size.
+static int64_t room(tk_chan *c) {
+    return c->cap > 0 ? c->cap : 1;
+}
+
+// The channel's memory is the system's, not tk_alloc's: a channel
+// lives as long as the program, and a debug build must not report it.
+tk_chan *tk_chan_make(size_t size, int64_t cap) {
+    tk_chan *c = calloc(1, sizeof *c);
+    if (c == NULL) {
+        tk_panic(TK_STR("out of memory", 13));
+    }
+
+    c->cap = cap;
+    c->buf = malloc((size == 0 ? 1 : size) * (size_t)room(c));
+    if (c->buf == NULL) {
+        tk_panic(TK_STR("out of memory", 13));
+    }
+
+    pthread_mutex_init(&c->mu, NULL);
+    c->size = size;
+    return c;
+}
+
+// The list of waiting tasks, and the wait on it, belong to whatever
+// holds the list: a channel here, a lock below. wake_all signals every
+// task on the list and empties it: a task that still has to wait puts
+// itself back.
+static void wake_all(waitlink **list) {
+    for (waitlink *l = *list; l != NULL; l = l->next) {
+        pthread_mutex_lock(&l->w->mu);
+        l->w->woken = true;
+        pthread_cond_signal(&l->w->cond);
+        pthread_mutex_unlock(&l->w->mu);
+    }
+
+    *list = NULL;
+}
+
+// unlink_from takes l off the list when it is still there: a wake from
+// another channel may have brought the task back before this one woke
+// it.
+static void unlink_from(waitlink **list, waitlink *l) {
+    for (waitlink **p = list; *p != NULL; p = &(*p)->next) {
+        if (*p == l) {
+            *p = l->next;
+            return;
+        }
+    }
+}
+
+// wait_on puts the calling task on the list, releases the mutex that
+// guards it, waits for a wake, and takes the mutex again.
+static void wait_on(pthread_mutex_t *mu, waitlink **list) {
+    waitlink l = {me(), *list};
+    *list = &l;
+    pthread_mutex_unlock(mu);
+    wait_signal(l.w);
+    pthread_mutex_lock(mu);
+    unlink_from(list, &l);
+}
+
+static uint8_t *slot(tk_chan *c, int64_t i) {
+    return c->buf + (size_t)(i % room(c)) * c->size;
+}
+
+// tk_chan_send_locked is a send on a channel the caller holds the
+// lock of, which it releases; a select calls it for the case it chose.
+static void tk_chan_send_locked(tk_chan *c, const void *v) {
+    while (c->len == room(c) && !c->closed) {
+        wait_on(&c->mu, &c->waiters);
+    }
+
+    if (c->closed) {
+        pthread_mutex_unlock(&c->mu);
+        tk_panic(TK_STR("send on a closed channel", 24));
+    }
+
+    memcpy(slot(c, c->head + c->len), v, c->size);
+    c->len++;
+    int64_t mine = ++c->deposits;
+    wake_all(&c->waiters);
+    while (c->cap == 0 && c->takes < mine) { // unbuffered: until a receiver has taken this value
+        if (c->closed) {
+            pthread_mutex_unlock(&c->mu);
+            tk_panic(TK_STR("channel closed while a send waited on it", 40)); // no receiver need ever come: a hang otherwise
+        }
+
+        wait_on(&c->mu, &c->waiters);
+    }
+}
+
+void tk_chan_send(tk_chan *c, const void *v) {
+    pthread_mutex_lock(&c->mu);
+    tk_chan_send_locked(c, v);
+    pthread_mutex_unlock(&c->mu);
+}
+
+static bool tk_chan_recv_locked(tk_chan *c, void *out) {
+    while (c->len == 0 && !c->closed) {
+        c->receiving++;
+        wait_on(&c->mu, &c->waiters);
+        c->receiving--;
+    }
+
+    if (c->len == 0) {
+        return false;
+    }
+
+    memcpy(out, slot(c, c->head), c->size);
+    c->head = (c->head + 1) % room(c);
+    c->len--;
+    c->takes++;
+    wake_all(&c->waiters);
+    return true;
+}
+
+bool tk_chan_recv(tk_chan *c, void *out) {
+    pthread_mutex_lock(&c->mu);
+    bool got = tk_chan_recv_locked(c, out);
+    pthread_mutex_unlock(&c->mu);
+    return got;
+}
+
+void tk_chan_close(tk_chan *c) {
+    pthread_mutex_lock(&c->mu);
+    if (c->closed) {
+        pthread_mutex_unlock(&c->mu);
+        tk_panic(TK_STR("close of a closed channel", 25));
+    }
+
+    c->closed = true;
+    wake_all(&c->waiters);
+    pthread_mutex_unlock(&c->mu);
+}
+
+int64_t tk_chan_len(tk_chan *c) {
+    pthread_mutex_lock(&c->mu);
+    int64_t n = c->len;
+    pthread_mutex_unlock(&c->mu);
+    return n;
+}
+
+int64_t tk_chan_cap(tk_chan *c) {
+    return c->cap;
+}
+
+// A select's random choice among the cases that can proceed, so that
+// a busy channel does not starve the others; a small generator of the
+// task's own, seeded from its address and the clock.
+static _Thread_local uint64_t rng;
+
+static uint64_t next_random(void) {
+    if (rng == 0) {
+        rng = ((uint64_t)(uintptr_t)&rng ^ (uint64_t)tk_time_now()) | 1;
+    }
+
+    rng ^= rng << 13;
+    rng ^= rng >> 7;
+    rng ^= rng << 17;
+    return rng;
+}
+
+// ready reports whether a case can proceed now: a receive when a value
+// waits or the channel is closed; a send when there is room, which on
+// an unbuffered channel means a receiver is waiting, or the channel is
+// closed, which the send then reports as a panic.
+static bool ready(const tk_case *k) {
+    tk_chan *c = k->chan;
+    if (!k->send) {
+        return c->len > 0 || c->closed;
+    }
+
+    return c->closed || (c->len < room(c) && (c->cap > 0 || c->receiving > 0));
+}
+
+// channels_of lists the distinct channels of the cases in increasing
+// address order, the order they are locked in, so that two selects
+// over the same channels cannot deadlock. Returns the count.
+static int channels_of(const tk_case *cases, int n, tk_chan **chans) {
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        tk_chan *c = cases[i].chan;
+        int j = 0;
+        while (j < m && chans[j] < c) {
+            j++;
+        }
+
+        if (j < m && chans[j] == c) {
+            continue;
+        }
+
+        memmove(&chans[j + 1], &chans[j], (size_t)(m - j) * sizeof *chans);
+        chans[j] = c;
+        m++;
+    }
+
+    return m;
+}
+
+static void lock_all(tk_chan **chans, int m) {
+    for (int i = 0; i < m; i++) {
+        pthread_mutex_lock(&chans[i]->mu);
+    }
+}
+
+static void unlock_all(tk_chan **chans, int m, tk_chan *except) {
+    for (int i = 0; i < m; i++) {
+        if (chans[i] != except) {
+            pthread_mutex_unlock(&chans[i]->mu);
+        }
+    }
+}
+
+// receivers counts the receive cases on c, each of which stands for a
+// waiting receiver while the select sleeps.
+static int64_t receivers(const tk_case *cases, int n, tk_chan *c) {
+    int64_t k = 0;
+    for (int i = 0; i < n; i++) {
+        if (cases[i].chan == c && !cases[i].send) {
+            k++;
+        }
+    }
+
+    return k;
+}
+
+int tk_select(tk_case *cases, int n, bool has_default) {
+    tk_chan *chans[n > 0 ? n : 1];
+    waitlink links[n > 0 ? n : 1];
+    int m = channels_of(cases, n, chans);
+    waiter *w = me();
+    lock_all(chans, m);
+    for (;;) {
+        int pick = -1, seen = 0;
+        for (int i = 0; i < n; i++) {
+            if (ready(&cases[i]) && next_random() % (uint64_t)++seen == 0) {
+                pick = i; // each ready case equally likely, whatever their number
+            }
+        }
+
+        if (pick >= 0) {
+            tk_case *k = &cases[pick];
+            tk_chan *c = k->chan;
+            unlock_all(chans, m, c);
+            if (k->send) {
+                tk_chan_send_locked(c, k->value);
+            } else {
+                k->ok = tk_chan_recv_locked(c, k->value);
+            }
+
+            pthread_mutex_unlock(&c->mu);
+            return pick;
+        }
+
+        if (has_default) {
+            unlock_all(chans, m, NULL);
+            return -1;
+        }
+
+        for (int i = 0; i < m; i++) {
+            links[i] = (waitlink){w, chans[i]->waiters};
+            chans[i]->waiters = &links[i];
+            chans[i]->receiving += receivers(cases, n, chans[i]);
+        }
+
+        unlock_all(chans, m, NULL);
+        wait_signal(w);
+        lock_all(chans, m);
+        for (int i = 0; i < m; i++) {
+            unlink_from(&chans[i]->waiters, &links[i]);
+            chans[i]->receiving -= receivers(cases, n, chans[i]);
+        }
+    }
+}
+
+// Locks, as _docs/design/06-tasks-and-channels.md lays them out: one
+// object serves the sync package's Mutex, RwLock and WaitGroup, a lock
+// held by one writer or by any number of readers, with the wait
+// group's count and the list of waiting tasks a channel has. The locks
+// are numbered in a table, so that the library holds an int as it
+// holds a file descriptor; number 0 is never handed out, so the zero
+// handle of a WaitGroup, the one handle the library gives out unmade,
+// is caught. A task that must wait links itself on the lock's list and
+// waits on its own signal, exactly as on a channel, which is what lets
+// the scheduler of a later stage park it the same way.
+typedef struct {
+    pthread_mutex_t mu;
+    int64_t readers; // tasks holding the lock shared
+    bool writer;     // a task holds the lock alone
+    int64_t count;   // the wait group's
+    waitlink *waiters;
+} tk_lock;
+
+static pthread_mutex_t locks_mu = PTHREAD_MUTEX_INITIALIZER;
+static tk_lock **locks;     // by number; slot 0 is never written or read
+static int64_t *free_locks; // numbers freed, handed out again first
+static int64_t nlocks = 1, nfree, caplocks;
+
+// The lock's memory is the system's, as a channel's is: a WaitGroup's
+// lock lives as long as the program, and a debug build must not
+// report it.
+int64_t tk_sync_newLock(void) {
+    tk_lock *l = calloc(1, sizeof *l);
+    if (l == NULL) {
+        tk_panic(TK_STR("out of memory", 13));
+    }
+
+    pthread_mutex_init(&l->mu, NULL);
+    pthread_mutex_lock(&locks_mu);
+    int64_t h;
+    if (nfree > 0) {
+        h = free_locks[--nfree];
+    } else {
+        if (nlocks >= caplocks) {
+            caplocks = caplocks == 0 ? 64 : caplocks * 2;
+            locks = realloc(locks, (size_t)caplocks * sizeof *locks);
+            free_locks = realloc(free_locks, (size_t)caplocks * sizeof *free_locks);
+            if (locks == NULL || free_locks == NULL) {
+                tk_panic(TK_STR("out of memory", 13));
+            }
+        }
+
+        h = nlocks++;
+    }
+
+    locks[h] = l;
+    pthread_mutex_unlock(&locks_mu);
+    return h;
+}
+
+// tk_sync_freeLock gives the number back. The Mutex or RwLock that
+// frees its lock owns it, so no task holds or waits on it by then.
+void tk_sync_freeLock(int64_t h) {
+    pthread_mutex_lock(&locks_mu);
+    tk_lock *l = locks[h];
+    locks[h] = NULL;
+    free_locks[nfree++] = h;
+    pthread_mutex_unlock(&locks_mu);
+    pthread_mutex_destroy(&l->mu);
+    free(l);
+}
+
+// lock_of returns the lock numbered h with its mutex taken.
+static tk_lock *lock_of(int64_t h) {
+    pthread_mutex_lock(&locks_mu);
+    tk_lock *l = h > 0 && h < nlocks ? locks[h] : NULL;
+    pthread_mutex_unlock(&locks_mu);
+    if (l == NULL) {
+        tk_panic(TK_STR("sync: use of an empty WaitGroup", 31));
+    }
+
+    pthread_mutex_lock(&l->mu);
+    return l;
+}
+
+// A writer waits for every holder; a reader waits for a writer only,
+// so readers are not counted ahead of a waiting writer.
+void tk_sync_lock(int64_t h) {
+    tk_lock *l = lock_of(h);
+    while (l->writer || l->readers > 0) {
+        wait_on(&l->mu, &l->waiters);
+    }
+
+    l->writer = true;
+    pthread_mutex_unlock(&l->mu);
+}
+
+void tk_sync_unlock(int64_t h) {
+    tk_lock *l = lock_of(h);
+    l->writer = false;
+    wake_all(&l->waiters);
+    pthread_mutex_unlock(&l->mu);
+}
+
+void tk_sync_lockShared(int64_t h) {
+    tk_lock *l = lock_of(h);
+    while (l->writer) {
+        wait_on(&l->mu, &l->waiters);
+    }
+
+    l->readers++;
+    pthread_mutex_unlock(&l->mu);
+}
+
+void tk_sync_unlockShared(int64_t h) {
+    tk_lock *l = lock_of(h);
+    l->readers--;
+    if (l->readers == 0) {
+        wake_all(&l->waiters);
+    }
+
+    pthread_mutex_unlock(&l->mu);
+}
+
+// tk_sync_count adds n to the count and wakes the waiters when it
+// reaches zero; a count below zero is a Done without its Add.
+void tk_sync_count(int64_t h, int64_t n) {
+    tk_lock *l = lock_of(h);
+    l->count += n;
+    if (l->count < 0) {
+        pthread_mutex_unlock(&l->mu);
+        tk_panic(TK_STR("sync: negative WaitGroup count", 30));
+    }
+
+    if (l->count == 0) {
+        wake_all(&l->waiters);
+    }
+
+    pthread_mutex_unlock(&l->mu);
+}
+
+void tk_sync_wait(int64_t h) {
+    tk_lock *l = lock_of(h);
+    while (l->count > 0) {
+        wait_on(&l->mu, &l->waiters);
+    }
+
+    pthread_mutex_unlock(&l->mu);
+}
+
+// tk_sync_atomicAdd adds d to *n as one step no other task's add can
+// interleave with, and returns the new value; the Arc's count is kept
+// with it, and the handle that brings it to zero drops the value.
+int64_t tk_sync_atomicAdd(int64_t *n, int64_t d) {
+    return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST);
 }

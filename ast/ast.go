@@ -230,8 +230,9 @@ type TupleType struct {
 	Elems  []Type
 }
 
-// A StructType is the body of a struct declaration, or an anonymous
-// struct type used directly, as in chan struct{}.
+// A StructType is the body of a struct declaration. A struct exists
+// only by declaration: there is no anonymous struct type, and a value
+// that carries nothing is the unit ().
 type StructType struct {
 	Struct token.Pos
 	Fields []*Field

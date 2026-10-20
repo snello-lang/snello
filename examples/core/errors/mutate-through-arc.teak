@@ -1,0 +1,17 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an Arc lends its value for reading only, since another task
+// may be reading it at the same moment.
+// Fix: put the value in a sync.Mutex or sync.RwLock inside the Arc and
+// change it through the guard.
+
+package p
+
+import "sync"
+
+func main() {
+    shared := sync.NewArc([]int{})
+    shared.Get().Push(1)                  // ERROR "cannot borrow shared.Get() as mut"
+}

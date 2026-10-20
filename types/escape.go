@@ -111,9 +111,10 @@ func (n *Named) holdsBorrow() bool {
 
 // storable reports whether elem may be held by owned data of the given
 // kind, a slice, map, channel or pointer, reporting why not: a borrow
-// in owned data has no owner to be tied to. Before the declarations
-// are resolved the question waits, since elem may be a struct whose
-// fields are not known yet.
+// in owned data has no owner to be tied to, and a channel carries its
+// values to another task, so they must be Send as well. Before the
+// declarations are resolved the question waits, since elem may be a
+// struct whose fields are not known yet.
 func (c *Checker) storable(elem Type, kind string, pos token.Pos) bool {
 	if !c.declared {
 		c.pending = append(c.pending, pendingStore{elem, kind, pos})
@@ -121,7 +122,7 @@ func (c *Checker) storable(elem Type, kind string, pos token.Pos) bool {
 	}
 
 	if !holdsBorrow(elem) {
-		return true
+		return kind != "a channel" || c.sendable(elem, pos) // what a channel carries is owned by another task
 	}
 
 	verb := " cannot hold "
@@ -502,22 +503,4 @@ func (c *Checker) isParam(v *Var) bool {
 	}
 
 	return false
-}
-
-// spawned checks the call a spawn statement starts: a task has frames
-// of its own, so the callee cannot be a closure holding a borrow, nor
-// take one in a parameter or in its receiver.
-func (c *Checker) spawned(e *ast.CallExpr, f operand, sig *Signature) {
-	c.kept(f, "spawned", e.Fun.Pos())
-	if sig.recv != nil && isBorrow(sig.recv.typ) {
-		c.errorf(e.Pos(), "a spawned task cannot hold a borrow")
-		return
-	}
-
-	for _, p := range sig.params {
-		if holdsBorrow(p.typ) {
-			c.errorf(e.Pos(), "a spawned task cannot hold a borrow")
-			return
-		}
-	}
 }

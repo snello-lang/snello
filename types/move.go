@@ -669,16 +669,17 @@ func appendMoves(moved, records []move) []move {
 }
 
 // branch records a break or continue: the records so far go to the
-// region it leaves, and the path ends here.
-func (c *Checker) branch(tok token.Kind) {
+// loop it leaves or continues, the innermost one, and the path ends
+// here. Outside any loop the statement is an error.
+func (c *Checker) branch(tok token.Kind, pos token.Pos) {
 	if c.dead {
 		return
 	}
 
 	for i := len(c.regions) - 1; i >= 0; i-- {
 		r := &c.regions[i]
-		if tok == token.CONTINUE && !r.loop {
-			continue
+		if !r.loop {
+			continue // a switch, match or select is not a loop: a break inside one leaves the loop around it
 		}
 
 		if tok == token.CONTINUE {
@@ -689,4 +690,6 @@ func (c *Checker) branch(tok token.Kind) {
 
 		return
 	}
+
+	c.errorf(pos, tok.String()+" is not inside a loop")
 }

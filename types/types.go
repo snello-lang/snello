@@ -50,6 +50,11 @@ const (
 	Any
 	Never
 
+	// Local is the one type that is not Send, written only by the
+	// standard library, as a field that holds nothing: a type with such
+	// a field stays in the task that made it, as rc.Rc does (send.go).
+	Local
+
 	// Aliases: byte is u8 and rune is i32, as their names are only
 	// spellings. Identical compares kinds, so the alias and its type
 	// are the same type.
@@ -108,6 +113,7 @@ var Typ = [...]*Basic{
 	Float64: {Float64, IsFloat, "f64"},
 	Any:     {Any, 0, "any"},
 	Never:   {Never, 0, "never"},
+	Local:   {Local, 0, "local"},
 }
 
 // aliases are the basic types that share a kind with an entry of Typ
@@ -227,6 +233,8 @@ type Named struct {
 	methods     []*Func  // a declaration's own and inherited methods, or the instance methods made so far
 	copyState   copyState
 	borrowState copyState // whether the type holds a borrow; see Named.holdsBorrow
+	sendState   copyState // whether a value may cross a task, and why not; see Named.notSend
+	sendWhy     string
 
 	tparams   []*TypeParam // a generic declaration's parameters
 	instances []*Named     // a generic declaration's instances, one per argument list

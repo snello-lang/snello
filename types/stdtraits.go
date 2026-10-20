@@ -172,6 +172,8 @@ func standardImplements(t Type, trait *Trait) (ok, decided bool) {
 	switch trait.origin() {
 	case CopyTrait:
 		return IsCopy(t), true
+	case SendTrait:
+		return IsSend(t), true
 	case EqTrait:
 		return comparable(t), true
 	case HashTrait:

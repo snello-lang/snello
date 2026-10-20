@@ -7,7 +7,7 @@
 // The classic ownership torture test: a hash map pointing into a doubly
 // linked list. The list lives in an arena.Arena<T> and the map holds arena.Index<T>
 // handles, the same approach as the tree in example 01. This is also how
-// the fast Go and Rust LRU libraries are written.
+// the fast LRU libraries are written.
 //
 // It also shows the one aliasing rule that bites: you cannot hold a `mut`
 // borrow of one arena slot while writing to another, because the compiler

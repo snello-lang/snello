@@ -12,10 +12,11 @@ Teak is a programming language: Go's syntax and concurrency, memory safety witho
 2. `_docs/design/00-syntax-conventions.md`: the syntax the examples use.
 3. `_docs/design/02-` to `04-`: the memory model notes.
 4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
-5. `_docs/book/README.md`: the user-facing book and which chapters exist.
-6. `examples/README.md`: what each example tests and the decisions they forced.
-7. `CODING_STANDARDS.md`: how code is written here.
-8. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
+5. `_docs/design/06-tasks-and-channels.md`: the runtime interface the compiler emits for tasks and channels, the thread-per-task runtime of stage 3 and the scheduler of stage 4.
+6. `_docs/book/README.md`: the user-facing book and which chapters exist.
+7. `examples/README.md`: what each example tests and the decisions they forced.
+8. `CODING_STANDARDS.md`: how code is written here.
+9. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 

@@ -1,0 +1,17 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: what a task takes in must be Send, and an rc handle is not: its
+// count of handles is not atomic. Fix: share the value through sync.Arc.
+
+package p
+
+import "rc"
+
+func show(r rc.Rc<int>) {}
+
+func main() {
+    r := rc.New(1)
+    spawn show(r.Clone())                 // ERROR "cannot spawn with r.Clone(): rc.Rc<int> stays in its task"
+}

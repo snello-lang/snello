@@ -17,16 +17,17 @@ import (
 // is lowered onto the runtime's printers by the type of each argument,
 // with the format read at compile time, so the runtime has no
 // formatter; os.Exit onto the runtime's exit, since a function cannot
-// say it never returns yet; and rc's two primitives onto the pointer
-// itself, since a second owner of one pointer is what the language
-// refuses and the reference count is what makes it safe there.
+// say it never returns yet; and the primitives of rc and sync onto the
+// pointer itself, since a second owner of one pointer, and a mut
+// reached through a ref, are what the language refuses and the
+// reference count and the lock are what make them safe there.
 
 // lowered names the library functions the compiler writes, by import
 // path and name.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
-	"rc.alias": true, "rc.leak": true,
+	"rc.alias": true, "rc.leak": true, "sync.alias": true, "sync.leak": true, "sync.inside": true,
 }
 
 // loweredKey returns the key of fn in lowered, path.Name, or the empty
@@ -77,14 +78,14 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		return ""
 	case "os.Exit":
 		return "tk_exit((int)(" + e.expr(x.Args[0]) + "))"
-	case "rc.alias": // a second copy of the pointer a borrow lends, owned by the caller: a ref borrow of a pointer is the pointer in C
+	case "rc.alias", "sync.alias", "sync.inside": // a second copy of the pointer a borrow lends, owned by the caller, or the cell it points at as a mut: a ref borrow of a pointer is the pointer in C, and so is a mut of what it points at
 		t := e.typeOf(x.Args[0])
 		if r, ok := t.(*types.Ref); ok {
 			t = r.Elem()
 		}
 
 		return e.operands(x.Args, []types.Type{types.NewRef(t, false)})[0]
-	case "rc.leak": // the pointer moves in and nothing frees it
+	case "rc.leak", "sync.leak": // the pointer moves in and nothing frees it
 		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
 		return ""
 	}

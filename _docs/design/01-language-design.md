@@ -36,6 +36,7 @@ Simplicity is a goal with the same weight as the others, and it is kept by subtr
 | Structural interfaces | Ambiguous once traits have defaults and fields | Nominal traits declared with `impl` |
 | Self-types, implicits, macros | Where Scala's and Rust's complexity lives | Nothing |
 | A garbage collector | The premise | Ownership, `Drop`, arenas, `Rc`/`Arc` where sharing is real |
+| Anonymous structs | A struct has a name; `struct{}` as "nothing" is a workaround for a language without a unit | `()`, the unit Teak already has: a signal channel is `chan ()` and the signal is `()` (decided 2026-10-20) |
 
 The test for any future addition: a Go developer must read it on day one without a glossary. If it needs a Rust or Scala word to explain, it is the wrong shape.
 
@@ -79,7 +80,7 @@ A mutex owns its data, as in Rust: `Mutex<T>` hands out a guard that is a `mut T
 
 Actors fall out naturally: a task that owns its state and receives messages needs no locks at all.
 
-Runtime, when it arrives in stage 4: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, epoll, or io_uring, and no async/await coloring. Stacks start as fixed virtual reservations with lazy commit and a stack pool; copying stacks come later if task counts demand it, and are possible without a GC since the compiler knows every frame layout.
+Runtime, when it arrives in stage 4: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, epoll, or io_uring, and no async/await coloring. Stacks start as fixed virtual reservations with lazy commit and a stack pool; copying stacks come later if task counts demand it, and are possible without a GC since the compiler knows every frame layout. Stage 3 runs tasks on the system's threads behind the same interface; `06-tasks-and-channels.md` has both.
 
 ## Traits
 

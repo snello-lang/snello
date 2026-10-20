@@ -110,6 +110,7 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 	case *ast.SelectorExpr:
 		if f, ok := e.info.Uses[x.Sel].(*types.Var); ok && e.packageOf(x.X) == nil {
 			base := e.typeOf(x.X)
+			e.define(valueType(base), x.Pos()) // reached through a pointer, the struct may be declared and not yet defined
 			return field(deref(e.lvalue(x.X), base), base, f)
 		}
 	}
@@ -230,6 +231,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) string {
 		return "0"
 	}
 
+	e.define(valueType(e.typeOf(x.X)), x.Pos()) // reached through a pointer, the struct may be declared and not yet defined
 	return field(e.place(x.X), e.typeOf(x.X), f)
 }
 
@@ -427,8 +429,13 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		e.line("*" + cell + " = " + e.valueTo(x.X, elem) + ";")
 		return cell
 	case token.ARROW:
-		e.unsupported(x.OpPos, "channels")
-		return "0"
+		opt := e.typeOf(x)
+		elem := valueType(opt).(*types.Option).Elem()
+		ch := e.valueTo(x.X, valueType(e.typeOf(x.X)))
+		got, ok := e.temp(), e.temp()
+		e.line(e.cType(elem, x.Pos()) + " " + got + " = " + e.zero(elem, x.Pos()) + ";")
+		e.line("bool " + ok + " = tk_chan_recv(" + ch + ", &" + got + ");")
+		return "(" + e.cType(opt, x.Pos()) + "){.has = " + ok + ", .val = " + got + "}"
 	case token.XOR:
 		return "(~" + e.expr(x.X) + ")"
 	case token.SUB:
@@ -651,6 +658,14 @@ func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv ty
 // args writes the arguments of a call, the receiver first when there
 // is one, each converted to its parameter's type.
 func (e *Emitter) args(recv ast.Expr, args []ast.Expr, sig *types.Signature) string {
+	_, values := e.callOperands(recv, args, sig)
+	return strings.Join(values, ", ")
+}
+
+// callOperands evaluates a call's receiver, when there is one, and its
+// arguments, each converted to the type the signature wants, and
+// returns those types with the values.
+func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signature) ([]types.Type, []string) {
 	wants := make([]types.Type, 0, len(args)+1)
 	exprs := make([]ast.Expr, 0, len(args)+1)
 	if recv != nil {
@@ -668,7 +683,7 @@ func (e *Emitter) args(recv ast.Expr, args []ast.Expr, sig *types.Signature) str
 		exprs = append(exprs, a)
 	}
 
-	return strings.Join(e.operands(exprs, wants), ", ")
+	return wants, e.operands(exprs, wants)
 }
 
 // minCall writes min(a, b, ...) and max(a, b, ...) as nested
@@ -729,6 +744,8 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		return "tk_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)
+	case types.BuiltinClose:
+		return "tk_chan_close(" + e.valueTo(x.Args[0], valueType(e.typeOf(x.Args[0]))) + ")"
 	case types.BuiltinPrint:
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {

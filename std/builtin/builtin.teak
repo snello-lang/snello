@@ -100,6 +100,13 @@ func cap(x any) int
 // argument.
 func make<T>(n int) T
 
+// close closes a channel: a receive on it yields None once the values
+// already sent are taken, and a range over it ends. Nothing is sent on
+// a closed channel; closing one twice, or a receive-only channel, is
+// refused. The channel's handle is Copy, so the sender closes it and
+// every receiver sees the end.
+func close<T>(ch chan<- T)
+
 // take moves the value out of a place written mut, a variable, field
 // or element, and leaves the type's zero value there: None for an
 // Option, "" for a string, 0 for a number. It is how a value leaves a
@@ -167,6 +174,26 @@ trait Mul { func (a Self) Mul(o Self) Self }
 trait Div { func (a Self) Div(o Self) Self }
 trait Rem { func (a Self) Rem(o Self) Self }
 trait Neg { func (a Self) Neg() Self }
+
+// Send marks a type whose values may cross from one task to another:
+// captured by a spawn, sent on a channel, received from one. It is
+// never listed on a type; the compiler reads it from the structure, and
+// a type is Send when every field is. The numbers, bool, string and a
+// channel handle are Send; an owned pointer, a slice, a map, an option
+// or a result is Send when what it holds is; a borrow never is, as it
+// points into a frame of the task that made it; a trait used as a type
+// is Send only when the trait refines Send, trait Job: Send; and a type
+// parameter only when bounded by it, T: Send. A type that holds a
+// local field is not Send.
+trait Send {}
+
+// local is a field that holds nothing and makes the type holding it
+// stay in its task: a value of that type is not Send. Only the
+// standard library writes it, on a type whose sharing is not safe
+// across tasks, as rc.Rc is, whose count of handles is not atomic. A
+// program never names it; its handles are refused at the task boundary
+// with a message naming the type.
+type local local
 
 // Push adds v at the end of the slice, which owns it from then on; the
 // slice grows when it is full.

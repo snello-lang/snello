@@ -1,0 +1,8 @@
+count 4000
+words 3 sum 6
+once
+task holds shared
+main holds shared 1
+held 100 total 4950
+deadline
+dropped shared

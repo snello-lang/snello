@@ -28,8 +28,13 @@
 package rc
 
 // A cell is what the handles on one value share: the value, gone once
-// the last Rc goes, and the two counts.
+// the last Rc goes, and the two counts. The counts are plain numbers,
+// changed by whichever handle is cloned or dropped, so a cell and the
+// handles on it stay in the task that made them: the local field says
+// so to the compiler, which refuses to send a handle to another task
+// or to capture one in a spawn.
 struct cell<T> {
+	_      local
 	strong int
 	weak   int
 	value  T?

@@ -26,7 +26,7 @@ struct Stack {
 
 func (s mut Stack) Push(v string) {
     // `take` moves the old head out and leaves None behind, so it can be
-    // moved into the new node with no copy and no temporary nil.
+    // moved into the new node with no copy and no placeholder value.
     old := take(mut s.head)
     s.head = Some(&Node{value: v, next: old})       // &x allocates x on the heap
     s.len += 1

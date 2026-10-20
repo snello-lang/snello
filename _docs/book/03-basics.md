@@ -103,7 +103,7 @@ fmt.Println(count)                 // 3
 
 ## Control flow
 
-`if`, `for`, `switch`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
+`if`, `for`, `switch`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. `break` ends the innermost loop and `continue` goes to its next iteration, wherever they stand inside it: a `switch`, a `match` or a `select` is not a loop and does not catch them, and outside a loop both are errors. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
 
 ```teak
 for i := 0; i < len(s); i += 1 {

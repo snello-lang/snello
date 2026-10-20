@@ -5,8 +5,8 @@
 // 02: A concurrent pipeline over channels.
 //
 // Three stages connected by channels, with the middle stage fanned out to
-// several workers. It is the standard Go pipeline shape, and the point of
-// the example is that it stays that shape.
+// several workers. It is the familiar pipeline shape, and the point of
+// the example is that ownership does not change it.
 //
 // Four rules make it memory safe without a GC, and none of them needs an
 // annotation:
@@ -62,12 +62,12 @@ func count(jobs <-chan Job) <-chan Result {
 // Stage 3: merge several result channels into one.
 func merge(inputs []<-chan Result) <-chan Result {
     out := make(chan Result)
-    done := make(chan struct{})
+    done := make(chan ())
     n := len(inputs)
     for _, in := range inputs {              // ranging over an owned slice moves each element
         spawn func() {                          // rule 4: `in` is moved into this task
             for r := range in { out <- r }
-            done <- struct{}{}
+            done <- ()
         }()
     }
     spawn func() {
@@ -84,7 +84,7 @@ func main() {
     // handle (rule 3), so passing it four times is fine.
     workers := []<-chan Result{}
     for i := 0; i < 4; i++ {
-        workers = append(workers, count(jobs))
+        workers.Push(count(jobs))
     }
 
     total := 0
@@ -97,14 +97,14 @@ func main() {
 // What the compiler rejects, for contrast:
 //
 //   s := "hello"
-//   go func() { fmt.Println(s) }()         // ok: s is moved into the task
+//   spawn func() { fmt.Println(s) }()      // ok: s is moved into the task
 //   fmt.Println(s)                         // error: s was moved
 //
 //   m := map[string]int{}
-//   go func() { m["a"] = 1 }()             // ok on its own: m moved in
-//   go func() { m["b"] = 2 }()             // error: m was already moved
+//   spawn func() { m["a"] = 1 }()          // ok on its own: m moved in
+//   spawn func() { m["b"] = 2 }()          // error: m was already moved
 //
-//   go func() { use(ref m) }()             // error: a borrow cannot cross `spawn`
+//   spawn func() { use(ref m) }()          // error: a borrow cannot cross `spawn`
 //
 // Shared mutable state across tasks is covered in 03-http-cache.teak,
 // where it is actually needed.

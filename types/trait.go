@@ -255,12 +255,12 @@ func (c *Checker) resolveTraitLists(f *ast.File) {
 		case *ast.TypeDecl:
 			n := c.objs[i].(*TypeName).typ.(*Named)
 			if len(d.TypeParams) == 0 {
-				n.impls = c.traitList(d.Impls, "after impl")
+				n.impls = c.implList(d)
 				continue
 			}
 
 			c.resolveBounds(d.TypeParams, n.tparams) // the parameters in scope for the bounds and the impl list, as in impl Mul<T>
-			n.impls = c.traitList(d.Impls, "after impl")
+			n.impls = c.implList(d)
 			c.closeScope()
 		case *ast.TraitDecl:
 			tr := c.objs[i].(*TypeName).typ.(*Trait)
@@ -361,6 +361,22 @@ func (c *Checker) checkRefinementCycles(f *ast.File) {
 			}
 		}
 	}
+}
+
+// implList resolves the traits a type declaration lists after impl.
+// Send among them is refused, since a type is Send by its structure
+// and never by listing it (send.go); the entry is left nil, as a trait
+// that failed to resolve is.
+func (c *Checker) implList(d *ast.TypeDecl) []*Trait {
+	impls := c.traitList(d.Impls, "after impl")
+	for i, tr := range impls {
+		if tr == SendTrait {
+			c.errorf(d.Impls[i].Pos(), "Send is not listed: a type is Send when every field is")
+			impls[i] = nil
+		}
+	}
+
+	return impls
 }
 
 // traitList resolves a list of trait names, an impl list, a refinement

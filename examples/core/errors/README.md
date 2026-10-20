@@ -20,6 +20,10 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch, reported by 1.4), assign-through-ref, mut-through-ref-receiver | 1.4, 1.7 |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored | 1.8 |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel | 1.8 |
+| A spawn moves what its closure mentions | use-after-spawn, spawn-twice | 3.2 |
+| What crosses a task boundary is `Send` | spawn-not-send, channel-not-send | 3.2 |
+| Lock-protected data is reached only through a guard, a borrow | guard-across-spawn, guard-of-temporary | 3.4 |
+| The races of the stage 3 checkpoint: a value used after it was sent, an Arc's value changed, a borrowing closure spawned | use-after-send, mutate-through-arc, borrowing-closure-spawned | 1.6, 1.4, 3.2 |
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned | 1.8 |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
 | No `nil` | nil-used | 1.3 |
@@ -37,6 +41,7 @@ The messages are the plan for the checker, chosen here so that they read the sam
 - A borrow that is not allowed: `cannot borrow X as mut: <reason>`, where the reason is `X is borrowed as ref` or `X is already borrowed as mut`; `... through a ref receiver` for the receiver case. Passing a `ref` where a `mut` is wanted is a type mismatch: `cannot use X (ref T) as mut T`.
 - A write that is not allowed: `cannot assign to X: X is borrowed`, `cannot assign to X through a ref borrow`.
 - An escaping borrow: `cannot return ...`, `... cannot be returned`, `... cannot be stored`, `a spawned task cannot hold a borrow`, `a channel cannot carry a borrow`, `a slice cannot hold a borrow`.
+- A value that is not `Send`: `cannot spawn with X: <why>`, `a channel cannot carry T: <why>`, where the reason names the part that stops the crossing: `rc.Rc<int> stays in its task`, `ref T is a borrow`, `Shape does not refine Send`, `T is not bounded by Send`.
 - A signature that cannot be written (`return-two-borrows`) is reported on the `func` line; a statement that breaks a rule is reported on its own line. An error in a type does not cascade: the line after `[]ref string{}` is not reported again.
 - Rule 4 is checked after the arguments of a call are evaluated, so `v.Push(v.Len())` is accepted (`04-borrows-ref-and-mut.md`, ordering rule); no negative program tests the call itself.
 

@@ -66,6 +66,7 @@ type Emitter struct {
 	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
 	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
 	closures int                             // closures written so far, numbering their functions
+	tasks    int                             // spawn statements written so far, numbering their trampolines
 	prologue []string                        // declarations to put at the top of the function being written
 	pre      map[ast.Expr]string             // expressions already evaluated into temporaries, for defer
 	defers   []deferred                      // the deferred calls of the function being written, in order
@@ -487,6 +488,8 @@ func basicType(t *types.Basic) string {
 		return "double"
 	case types.Never:
 		return "void"
+	case types.Local:
+		return "uint8_t" // holds nothing, but C has no empty type
 	}
 
 	return "void"

@@ -8,8 +8,8 @@
 // Now reads the system clock, Sleep waits, and the constants from
 // Nanosecond to Hour let a Duration be written as a product, 10 *
 // time.Millisecond, since a literal takes the Duration type from the
-// constant beside it. After and Tick, which hand a Time over a channel,
-// come with channels.
+// constant beside it. After and Tick hand a Time over a channel, once
+// or every so often, for a select to wait on.
 package time
 
 // A Duration is a span of time, counted in nanoseconds, as an i64: the
@@ -51,9 +51,42 @@ func Since(t Time) Duration {
 	return Now().Sub(t)
 }
 
-// Sleep pauses the program for d, and returns at once for a d of zero
-// or less. The runtime provides it.
+// Sleep pauses the task for d, and returns at once for a d of zero or
+// less. The runtime provides it.
 func Sleep(d Duration)
+
+// After returns a channel that gets the time once, d from now: a
+// deadline for a select to wait on beside its other cases. The channel
+// holds the one value, so the task that sends it never waits, and a
+// program that does not receive it loses nothing.
+func After(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	spawn func() {
+		Sleep(d)
+		ch <- Now()
+	}()
+
+	return ch
+}
+
+// Tick returns a channel that gets the time every d, for as long as the
+// program runs. A tick that arrives while the one before it is still
+// unreceived is dropped, so a slow receiver sees the ticks it can keep
+// up with and never a backlog of them.
+func Tick(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	spawn func() {
+		for {
+			Sleep(d)
+			select {
+			case ch <- Now():
+			default:
+			}
+		}
+	}()
+
+	return ch
+}
 
 // Add returns the time d after t, or before it for a negative d.
 func (t Time) Add(d Duration) Time {

@@ -1,0 +1,128 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// State shared between tasks through the sync package: a counter under
+// a Mutex, a map under an RwLock, a Once asked by three tasks, a value
+// with a Drop dropped once by the last Arc handle, and a deadline from
+// time.After.
+
+package main
+
+import ("fmt"; "sync"; "time")
+
+struct Token impl Drop { name string }
+
+func (t mut Token) Drop() { fmt.Println("dropped", t.name) }
+
+func main() {
+	// Four tasks add to one counter; each holds the lock for one step.
+	counter := sync.NewArc(sync.NewMutex(0))
+	wg := sync.NewWaitGroup()
+	for i := 0; i < 4; i++ {
+		c := counter.Clone()
+		wg.Add(1)
+		spawn func() {
+			for j := 0; j < 1000; j++ {
+				g := c.Get().Lock()
+				*g.Get() += 1
+			}
+
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	fmt.Println("count", *counter.Get().Lock().Get())
+
+	// Three writers fill a map; the reader sums it under the read lock.
+	words := sync.NewArc(sync.NewRwLock(map[string]int{}))
+	keys := []string{"a", "b", "c"}
+	done := make(chan ())
+	for i := 0; i < 3; i++ {
+		w := words.Clone()
+		key := keys[i].Clone()
+		spawn func() {
+			{
+				g := w.Get().Write()
+				m := g.Get()
+				m[key] = i + 1
+			}
+
+			done <- ()
+		}()
+	}
+
+	for i := 0; i < 3; i++ {
+		<-done
+	}
+
+	{
+		r := words.Get().Read()
+		m := r.Get()
+		sum := 0
+		for _, v := range m {
+			sum += v
+		}
+
+		fmt.Println("words", len(m), "sum", sum)
+	}
+
+	// A Once runs its function for the first task that asks and no other.
+	once := sync.NewArc(sync.NewOnce())
+	for i := 0; i < 3; i++ {
+		o := once.Clone()
+		wg.Add(1)
+		spawn func() {
+			o.Get().Do(func() { fmt.Println("once") })
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	// The last handle drops the value: the task gives its handle up before
+	// it signals, so main's is the last.
+	token := sync.NewArc(Token{name: "shared"})
+	t2 := token.Clone()
+	spawn func() {
+		{
+			t := t2
+			fmt.Println("task holds", t.Get().name)
+		}
+
+		done <- ()
+	}()
+
+	<-done
+	fmt.Println("main holds", token.Get().name, token.Count())
+
+	// Locks come and go: a hundred made and dropped in turn reuse their
+	// numbers, and a hundred held at once grow the runtime's table.
+	for i := 0; i < 100; i++ {
+		m := sync.NewMutex(i)
+		g := m.Lock()
+		*g.Get() += 1
+	}
+
+	held := []sync.Mutex<int>{}
+	for i := 0; i < 100; i++ {
+		held.Push(sync.NewMutex(i))
+	}
+
+	total := 0
+	for _, m := range ref held {
+		total += *m.Lock().Get()
+	}
+
+	fmt.Println("held", len(held), "total", total)
+
+	// A deadline beside a channel nothing sends on.
+	quiet := make(chan int)
+	select {
+	case v := <-quiet:
+		fmt.Println("got", v)
+	case <-time.After(20 * time.Millisecond):
+		fmt.Println("deadline")
+	}
+}
