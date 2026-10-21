@@ -1,6 +1,6 @@
 # Ownership across tasks
 
-Status: decided, 2026-10-17; `Send` inference implemented 2026-10-20 (stage 3, task 3.1, `types/send.go`). This note explains what may cross a task boundary in Teak and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
+Status: decided, 2026-10-17; `Send` inference implemented 2026-10-20 (stage 3, task 3.1, `compiler/types/send.go`). This note explains what may cross a task boundary in Teak and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
 
 ## The problem
 
@@ -22,7 +22,7 @@ Concretely:
 
 1. **Sending moves.** `ch <- v` transfers ownership of `v` to the channel. Using `v` afterwards is a compile error.
 2. **Receiving owns.** `v := <-ch` makes this task the owner of `v`. When `v` goes out of scope it is freed here, deterministically.
-3. **Channel handles are `Copy`.** The channel itself is a shared, internally synchronized object; a handle to it is a small value any number of tasks may hold. This is what makes fan-out and fan-in one-liners.
+3. **Channel handles are owned and cloned.** The channel itself is a shared, internally synchronized object with a count of its handles; a handle is moved as any owned value is, `ch.Clone()` gives another to hand to another task, and the last handle to go frees the channel (decided 2026-10-21, replacing `Copy` handles, which no last handle could free; `06-tasks-and-channels.md` has the reasoning). Fan-out and fan-in clone the handle once per task; a function within a task borrows it.
 4. **`spawn` moves its captures.** A closure passed to `spawn` takes ownership of every variable it mentions. There is no capture by reference across a task boundary.
 5. **Borrows never cross.** A `ref T` or `mut T` cannot be captured by `spawn` or sent on a channel. A borrow is tied to a call frame, and the new task has its own frames.
 
@@ -38,7 +38,7 @@ A type may cross a task boundary if it is `Send`. The compiler infers this from 
 | Channel handles | Yes | The channel synchronizes itself |
 | `Rc<T>` | No | Non-atomic reference count |
 | `Arc<T>` | If `T` is | Atomic reference count |
-| `Mutex<T>` | If `T` is | The lock serializes access |
+| `Mutex<T>` | If `T` is | The lock serializes access; it holds only a `T` that is `Send` (2026-10-21), since it exists to share between tasks, and around an `rc.Rc` it was the one way to close a cycle of handles that is never released |
 | A trait used as a type (`Shape`) | Only if the trait refines `Send` | The concrete type is unknown |
 | `ref T`, `mut T` | Never | Tied to a call frame |
 
@@ -65,7 +65,7 @@ The library was written on 2026-10-20 as `05-standard-library.md` decides it: `s
 
 - **Fan-out of one value to many tasks needs an explicit choice.** In Go, passing the same slice to five goroutines is one line and a latent race. In Teak it is a compile error, and the fix is to say what you meant: clone it, wrap it in an Arc, or send a piece to each task.
 - **No borrowed captures in `spawn`.** Go code that spawns a goroutine to work on a local variable and then waits for it must instead move the variable in and get it back through a channel or a join handle. Structured concurrency, where a scope joins all tasks it spawned, is the planned way to let borrows into tasks safely. It is not in version one.
-- **`sync.WaitGroup` as Go has it cannot exist**, since it relies on a shared pointer. Teak's version is a `Copy` handle to an internally synchronized counter, like a channel.
+- **`sync.WaitGroup` as Go has it cannot exist**, since it relies on a shared pointer. Teak's version is an owned handle on an internally synchronized counter, cloned for each task and freed by the last handle, like a channel.
 
 ## What it gains
 

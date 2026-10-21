@@ -2,6 +2,7 @@
 [apple fig pear] 1
 [{2 c} {7 a} {7 b}]
 [{7 a} {7 b} {2 c}] false
-10000000 10 1.01 60 true
-90000000000 true true true 1700000090 1700000090000000500
+10ms 10 1.01 60 true
+1m30s true true true 1700000090 1700000090000000500
 true true
+[NaN NaN 0.5 1 2 3] true [NaN NaN 0.5 1 2 3] Equal Less Greater

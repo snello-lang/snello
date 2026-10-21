@@ -1,6 +1,6 @@
 # Teak language design
 
-Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section). This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
+Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section); the task model confirmed at the stage 3 checkpoint, 2026-10-20 (see the decision at the end of the concurrency section). This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
 
 ## Goals
 
@@ -78,6 +78,8 @@ Add one rule: **a value crossing a task boundary must be moved, immutable, or at
 
 A mutex owns its data, as in Rust: `Mutex<T>` hands out a guard that is a `mut T` borrow and unlocks on drop. This makes lock-protected sharing type-checked and buys data-race freedom, which Go does not have.
 
+**Decision at the stage 3 checkpoint (2026-10-20): the task model holds as designed.** Stage 3 implemented the rule above and `03-ownership-across-tasks.md` as written: `Send` inferred from the structure of every type with nothing to annotate, a `spawn` that moves what its closure mentions, channels that move, and a lock whose guard is the only way to its value. Examples 02, 12, 13 and 18 run, and eleven race programs are rejected with the planned message and no other. Four refinements were needed, each dated where it was decided and none a new concept for the programmer: there is no `Sync`, since a `ref` never changes what it borrows and the only way to a `mut` from a shared value is a lock; `rc` is kept in its task by a `local` field the library writes, not by a table in the compiler; `break` means the innermost loop everywhere, so a `select` case can leave the loop around it; and the signal channel is `chan ()`, with anonymous struct types gone from the grammar. One fact of the compiled program shaped the library: a `ref T` is a copy of the value in C, so a lock boxes its value behind a pointer and one lowered function steps from a `ref` of that pointer to a `mut` of the box, the single place the language does so. The runtime of this stage is a thread per task and locked queues, behind the interface `06-tasks-and-channels.md` fixes; stage 4 replaces it with the scheduler behind the same interface. Two gaps carry forward as later work, not model changes: a struct holding a plain `*T` accepts `var` and has no value to hold, which the checker should refuse; and a timer is a task that sleeps, so a program ending with a timer pending skips its debug leak report, until the scheduler's timer wheel.
+
 Actors fall out naturally: a task that owns its state and receives messages needs no locks at all.
 
 Runtime, when it arrives in stage 4: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, epoll, or io_uring, and no async/await coloring. Stacks start as fixed virtual reservations with lazy commit and a stack pool; copying stacks come later if task counts demand it, and are possible without a GC since the compiler knows every frame layout. Stage 3 runs tasks on the system's threads behind the same interface; `06-tasks-and-channels.md` has both.
@@ -125,9 +127,9 @@ Go's lack of sum types is mitigated with sealed interfaces (an unexported marker
 
 ### Backend: C first, LLVM later
 
-Teak produces a native executable from the first program. Stages 1 through 3 emit C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, and from stage 3 tasks and channels, is C under `emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Teak program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
+Teak produces a native executable from the first program. Stages 1 through 3 emit C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, and from stage 3 tasks and channels, is C under `compiler/emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Teak program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
 
-Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond `cc`. Stage 4 replaces the C emitter with LLVM IR when control over optimization, debug information, and the GPU targets of stage 5 demand it. The runtime carries over unchanged, and the C emitter is shaped so that the replacement is one package under `emit/`.
+Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond `cc`. Stage 4 replaces the C emitter with LLVM IR when control over optimization, debug information, and the GPU targets of stage 6 demand it. The runtime carries over unchanged, and the C emitter is shaped so that the replacement is one package under `compiler/emit/`.
 
 **No collector, ever.** The checker decides where every value is freed, and the emitted C frees it there (task 1.9). A debug build poisons freed memory and asserts that nothing is reachable after its release, and a leak checker runs over the suite, so a missing or misplaced free is a failing test, not a slow leak.
 
@@ -162,7 +164,23 @@ Where Teak should land once the native backend exists. Claims here are expectati
 | Dynamic dispatch | Same: a trait as a type is an interface value | Same |
 | Compile time | Much slower: monomorphization plus LLVM | Equal |
 
-The one place Teak can lose to Go is code that allocates and discards many small objects, because a collector makes allocation nearly free and pays later in batches, while ownership pays per object. The mitigations are already in the design: arenas, `Copy` structs, and a fast allocator in the stage 4 runtime.
+Measured 2026-10-20, on an eight-core arm64 laptop, by `bench/`, and again 2026-10-21 with the runtime's own allocator (stage 5, task 5.1), the numbers below (the programs in Teak, Go and Rust, best of three runs; `TEAK_BENCH=1 go test ./bench -v` reprints the table):
+
+| Program | Teak (LLVM) | Teak (C) | Go | Rust |
+|---|---|---|---|---|
+| `fib`, CPU-bound | 31 ms | 28 ms | 34 ms | 31 ms |
+| `tree`, allocation-heavy | 38 ms | 41 ms | 35 ms | 61 ms |
+| `words`, strings and a map | 194 ms | 197 ms | 150 ms | 148 ms |
+| `tasks`, a spawn | 997 ns | 1010 ns | 176 ns | not measured |
+| `tasks`, a context switch | 991 ns | 988 ns | 125 ns | not measured |
+| `memory`, peak memory | 33 MB | 65 MB | 78 MB | 34 MB |
+| `memory`, the mean round; rounds over twice it | 103 µs; none | 119 µs; none | 96 µs; 178 of 2,000, up to 0.7 ms | 177 µs; none |
+
+What the numbers say against the expectations: CPU-bound code is where the table expected it, level with Rust and ahead of Go. Allocation-heavy code was level with Rust and behind Go by the margin the table foresaw, 63 ms against 38, the collector's batching against a free per node; the runtime's own allocator, written for that measurement, brings it within a tenth of Go and ahead of Rust, whose boxes go to the system's allocator: a small block comes from a list of free blocks of its size kept by each thread, so an allocation and a free are a few instructions and no lock, as in Go's runtime. Strings and a map are behind both, by less since the allocator, 256 ms before it: `fmt.Sprint` allocates every string and the map hashes every key with a general routine, where Go's and Rust's are specialized; the library, not the language. A spawn and a switch cost seven to eleven times Go's: a task is a reserved stack and a locked queue today, where Go's is a two-kilobyte stack and a lock-free one, and a channel operation takes the channel's mutex where Go's fast path does not; the shape is right and the constants are the next work. Rust has no tasks of this kind in its standard library, so that row is not measured against it. The task numbers move by about a fifth from one run to the next, since they time the operating system's threads waking each other; the other rows repeat within a few milliseconds.
+
+The `memory` rows measure the two expectations no other row does, footprint and latency, with a tree of a million nodes kept alive while two thousand small ones are built and dropped beside it. Both hold. Teak's peak is the live tree, however many small trees die: `TestNoCollector` in `bench/` builds the program with one, two thousand and ten thousand rounds and fails if the peak grows by a tenth. Go's peak is 2.4 times the live tree, the headroom its collector leaves garbage before a cycle. Teak's rounds are even, and Go's are faster on average but about one in eleven takes over twice its mean, up to 0.7 ms in this run and 7 ms in the first, when a cycle walks the live tree; Rust's match Teak's, as the model predicts. The mean is the allocator row again: Go's bump allocation against a free per node, a gap the runtime's allocator closed from 184 µs to 103. The C backend's peak is twice the LLVM backend's because its `*Node?` is a pointer and a flag, where the LLVM backend's is a bare pointer, the zero-cost option the first of the details below promises.
+
+The one place Teak can lose to Go is code that allocates and discards many small objects, because a collector makes allocation nearly free and pays later in batches, while ownership pays per object. The mitigations are already in the design: arenas, `Copy` structs, and a fast allocator in the runtime, written in stage 5.
 
 Three implementation details the table depends on:
 

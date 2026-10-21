@@ -78,11 +78,13 @@ func main() {
     fmt.Println(total)                // 36
 
     // Passing a closure to `spawn` requires it to own everything it
-    // captures, so `names` is moved in. The program ends when main
-    // returns, so main waits for the task's word before it does.
+    // captures, so `names` is moved in, and so is `d`, the task's own
+    // handle on `done`. The program ends when main returns, so main
+    // waits for the task's word before it does.
     names := []string{"a", "b"}
     done := make(chan ())
-    spawn func() { fmt.Println(names); done <- () }()
+    d := done.Clone()
+    spawn func() { fmt.Println(names); d <- () }()
     // fmt.Println(names)             // error: names was moved into the task
     <-done
 }

@@ -18,9 +18,13 @@
 //
 // Arc<T>, Mutex<T> and RwLock<T> are Send when T is, which is what
 // lets an Arc<Mutex<T>> be cloned into every task that shares the
-// value. A guard holds a borrow and so stays in the task and the scope
-// that took it. A WaitGroup is a Copy handle, as a channel is: every
-// copy names the same counter.
+// value. A Mutex and an RwLock hold only a value that is Send: they are
+// for sharing between tasks, and a lock around a value that must stay
+// in its task, an rc.Rc, would be a way to change a value its handles
+// share, and so to close a cycle of them that is never released. A
+// guard holds a borrow and so stays in the task and the scope that
+// took it. A WaitGroup is an owned handle, as a channel is: a task is
+// given its own with Clone, and the counter is freed with the last.
 //
 // The zero value of an Arc, a Mutex, an RwLock or a Once, var m
 // Mutex<int>, is empty: it holds no value, and Get, Lock, Read, Write
@@ -39,7 +43,11 @@ struct acell<T> {
 // An Arc is a handle on a shared value, one of its owners, that may
 // be in another task than its clones. It is moved, cloned for another
 // owner and lent with ref; when it goes out of scope the count goes
-// down, and the value is dropped with the last handle.
+// down, and the value is dropped with the last handle. Its T needs no
+// Send bound where a Mutex's and an RwLock's do: an Arc lends its value
+// only as a ref, so no link can be set through a handle, and a cycle
+// of handles that is never released cannot be built without a lock,
+// whose own T is Send.
 struct Arc<T> impl Clone, Drop {
 	p *acell<T>?
 }
@@ -72,11 +80,10 @@ func (a ref Arc<T>) Clone() Arc<T> {
 // zero for an empty handle. Another task may clone or drop a handle
 // right after, so the count is a reading, not a promise.
 func (a ref Arc<T>) Count() i64 {
-	if p := ref a.p {
-		return p.count
-	}
-
-	return 0
+	q := retain(a.p) ?? return 0
+	n := atomicAdd(mut q.count, 0) // read as one step, as the adds that change it write
+	leak(q)
+	return n
 }
 
 // Drop gives up this handle: the value and its cell are dropped with
@@ -105,12 +112,12 @@ struct box<T> {
 // dropped. A Mutex is moved, or lent with ref, which is how an
 // Arc<Mutex<T>> lends it to every task holding a handle. When it goes
 // out of scope the value is dropped with it.
-struct Mutex<T> impl Drop {
+struct Mutex<T: Send> impl Drop {
 	p *box<T>?
 }
 
 // NewMutex puts v behind a new lock.
-func NewMutex<T>(v T) Mutex<T> {
+func NewMutex<T: Send>(v T) Mutex<T> {
 	return Mutex<T>{p: Some(&box<T>{lock: newLock(), value: v})}
 }
 
@@ -156,12 +163,12 @@ func (g mut Guard<T>) Drop() {
 // Write; a writer waits for the readers to finish, and readers wait
 // for a writer. Like a Mutex it is moved or lent with ref, and drops
 // its value with itself.
-struct RwLock<T> impl Drop {
+struct RwLock<T: Send> impl Drop {
 	p *box<T>?
 }
 
 // NewRwLock puts v behind a new lock.
-func NewRwLock<T>(v T) RwLock<T> {
+func NewRwLock<T: Send>(v T) RwLock<T> {
 	return RwLock<T>{p: Some(&box<T>{lock: newLock(), value: v})}
 }
 
@@ -230,6 +237,10 @@ func NewOnce() Once {
 // for that run to finish otherwise. A Do called from inside f waits
 // forever.
 func (o ref Once) Do(f func()) {
+	if o.done.p.IsNone() {
+		panic("sync: Do on an empty Once")
+	}
+
 	g := o.done.Lock()
 	if !*g.Get() {
 		f()
@@ -239,33 +250,57 @@ func (o ref Once) Do(f func()) {
 
 // A WaitGroup counts the tasks a program waits for: Add counts tasks
 // in, Done counts one out, and Wait returns once the count is zero. It
-// is a Copy handle on a counter the runtime keeps, so every copy of it
-// names the same count, and a task spawned with a copy counts itself
-// out on the one the program waits on.
-struct WaitGroup impl Copy {
+// is a handle on a counter the runtime keeps, shared through an Arc:
+// Clone gives another handle on the same count, which a task is given
+// before the spawn so that it counts itself out on the one the program
+// waits on, and the last handle to go frees the counter. Add, Done and
+// Wait borrow the handle.
+struct WaitGroup impl Clone {
+	a Arc<counter>
+}
+
+// A counter is the runtime's lock a WaitGroup counts with, freed when
+// the last handle on it drops it.
+struct counter impl Drop {
 	h int
+}
+
+func (c mut counter) Drop() {
+	freeLock(c.h)
 }
 
 // NewWaitGroup returns a WaitGroup counting nothing.
 func NewWaitGroup() WaitGroup {
-	return WaitGroup{h: newLock()}
+	return WaitGroup{a: NewArc(counter{h: newLock()})}
 }
 
 // Add adds n, which may be negative, to the count; a count below zero
 // panics. Add is called before the task it counts is spawned, so that
 // Wait cannot return between the spawn and the Add.
-func (w WaitGroup) Add(n int) {
-	count(w.h, n)
+func (w ref WaitGroup) Add(n int) {
+	count(w.handle(), n)
 }
 
 // Done counts one task out: Add(-1).
-func (w WaitGroup) Done() {
-	count(w.h, -1)
+func (w ref WaitGroup) Done() {
+	count(w.handle(), -1)
 }
 
 // Wait returns once the count is zero, at once when it already is.
-func (w WaitGroup) Wait() {
-	wait(w.h)
+func (w ref WaitGroup) Wait() {
+	wait(w.handle())
+}
+
+// handle returns the runtime's lock of the group, or 0 for an empty
+// one, which the runtime refuses with Go's message. It reads the Arc's
+// cell directly, as this package may, rather than through Get, which
+// would refuse an empty group with the Arc's message instead.
+func (w ref WaitGroup) handle() int {
+	if p := ref w.a.p {
+		return p.value.h
+	}
+
+	return 0
 }
 
 // guard takes the lock of the box p points at, for writing, and returns
@@ -300,9 +335,9 @@ func alias<T>(p ref *acell<T>) *acell<T>
 func leak<T>(p *acell<T>)
 func inside<T>(p ref *box<T>) mut box<T>
 
-// The runtime provides these. A lock is numbered, as a file is, and
-// freed by the Mutex or RwLock that owns it; a WaitGroup's is never
-// freed, since its handle is Copy and nothing counts the copies.
+// The runtime provides these. A lock is held as an int, as a file is,
+// the runtime's own handle on it, never 0, and freed by the Mutex,
+// RwLock or WaitGroup counter that owns it.
 // atomicAdd adds d to n as one step that no other task's add can
 // interleave with, and returns the new value.
 func newLock() int

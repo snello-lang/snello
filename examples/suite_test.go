@@ -16,10 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/emit/c"
-	"github.com/teak-lang/teak/parser"
-	"github.com/teak-lang/teak/std"
-	"github.com/teak-lang/teak/types"
+	"github.com/teak-lang/teak/compiler/emit/c"
+	"github.com/teak-lang/teak/compiler/emit/llvm"
+	"github.com/teak-lang/teak/compiler/emit/lower"
+	"github.com/teak-lang/teak/compiler/importer"
+	"github.com/teak-lang/teak/compiler/parser"
+	"github.com/teak-lang/teak/compiler/types"
 )
 
 // examplePatterns name the twenty example programs: the files here and
@@ -43,9 +45,15 @@ func programs(t testing.TB) []string {
 	return paths
 }
 
+// backends are the two the suite runs every example through: the
+// LLVM backend, the default, and the C backend, the reference
+// implementation the LLVM backend is held to.
+var backends = []string{"llvm", "c"}
+
 // compile parses, checks and emits a program with the library packages
-// it imports, returning the C source or the first error.
-func compile(path string) ([]byte, error) {
+// it imports through the backend, returning the source the backend
+// writes or the first error.
+func compile(path, backend string) ([]byte, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -57,36 +65,52 @@ func compile(path string) ([]byte, error) {
 	}
 
 	info := &types.Info{}
-	imp := std.NewImporter(info)
+	imp := importer.NewImporter(info)
 	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
 		return nil, err
 	}
 
 	pkgs := imp.Packages()
-	libs := make([]c.Library, len(pkgs))
+	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = c.Library{File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{File: p.File, Syntax: p.Syntax}
+	}
+
+	if backend == "llvm" {
+		return llvm.Emit(llvm.Config{}, file, f, info, libs...)
 	}
 
 	return c.Emit(file, f, info, libs...)
+}
+
+// build compiles what a backend emitted into dir, as a release or a
+// debug build, and returns the binary.
+func build(dir, name, backend string, src []byte, debug bool) (string, []byte, error) {
+	if backend == "llvm" {
+		return llvm.Build(dir, name, src, debug)
+	}
+
+	return c.Build(dir, name, src, debug)
 }
 
 // pendingExamples are the programs without an expected output yet, and
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
-	"03-http-cache":    "sync, net and db, stage 3 and later",
+	"03-http-cache":    "net/http, db and json, later libraries over the net package",
 	"04-graph":         "heap, a later library",
-	"17-state-machine": "net, a later library",
+	"17-state-machine": "the higher layers of net, a later library",
 	"19-cli-grep":      "regexp, a later library",
 }
 
 // TestExamples builds every example program that has its expected
-// output under expected/, as a release build and as a debug build, runs
-// it with the files its fixture folder holds, and compares what it
-// prints. A program without an expected output must be on the pending
-// list, with its reason; the time each step takes is logged, which is
-// how the compile time of the suite is recorded.
+// output under expected/, through both backends, as a release build
+// and as a debug build, runs it with the files its fixture folder
+// holds, and compares what it prints: the differential test of the two
+// backends, which must print the same thing as each other and as the
+// output recorded. A program without an expected output must be on
+// the pending list, with its reason; the time each step takes is
+// logged, which is how the compile time of the suite is recorded.
 func TestExamples(t *testing.T) {
 	var pending []string
 	green := 0
@@ -109,41 +133,50 @@ func TestExamples(t *testing.T) {
 
 		green++
 		t.Run(name, func(t *testing.T) {
-			start := time.Now()
-			csrc, err := compile(path)
-			if err != nil {
-				t.Fatalf("%s does not compile: %v", path, err)
+			printed := make(map[string]string)
+			for _, backend := range backends {
+				start := time.Now()
+				src, err := compile(path, backend)
+				if err != nil {
+					t.Fatalf("%s does not compile through %s: %v", path, backend, err)
+				}
+
+				front += time.Since(start)
+				for _, debug := range []bool{false, true} {
+					start = time.Now()
+					dir := t.TempDir()
+					bin, out, err := build(dir, name, backend, src, debug)
+					if err != nil {
+						t.Fatalf("%s (debug %v): %v\n%s", backend, debug, err, out)
+					}
+
+					back += time.Since(start)
+					placeFixtures(t, name, dir)
+					cmd := exec.Command(bin)
+					cmd.Dir = dir
+					stdout, err := cmd.Output()
+					if exit, ok := err.(*exec.ExitError); ok {
+						t.Fatalf("%s, debug %v: exited with %d\n%s%s", backend, debug, exit.ExitCode(), stdout, exit.Stderr)
+					} else if err != nil {
+						t.Fatal(err)
+					}
+
+					if string(stdout) != string(want) {
+						t.Errorf("%s, debug %v: printed\n%s--- expected ---\n%s", backend, debug, stdout, want)
+					}
+
+					printed[backend] = string(stdout)
+				}
 			}
 
-			front += time.Since(start)
-			for _, debug := range []bool{false, true} {
-				start = time.Now()
-				dir := t.TempDir()
-				bin, out, err := c.Build(dir, name, csrc, debug)
-				if err != nil {
-					t.Fatalf("cc (debug %v): %v\n%s", debug, err, out)
-				}
-
-				back += time.Since(start)
-				placeFixtures(t, name, dir)
-				cmd := exec.Command(bin)
-				cmd.Dir = dir
-				stdout, err := cmd.Output()
-				if exit, ok := err.(*exec.ExitError); ok {
-					t.Fatalf("debug %v: exited with %d\n%s%s", debug, exit.ExitCode(), stdout, exit.Stderr)
-				} else if err != nil {
-					t.Fatal(err)
-				}
-
-				if string(stdout) != string(want) {
-					t.Errorf("debug %v: printed\n%s--- expected ---\n%s", debug, stdout, want)
-				}
+			if printed["llvm"] != printed["c"] {
+				t.Errorf("the backends disagree:\n--- llvm ---\n%s--- c ---\n%s", printed["llvm"], printed["c"])
 			}
 		})
 	}
 
 	t.Logf("%d examples green, %d pending: %s", green, len(pending), strings.Join(pending, ", "))
-	t.Logf("compile time: %v in the compiler, %v in cc for two builds each", front.Round(time.Millisecond), back.Round(time.Millisecond))
+	t.Logf("compile time: %v in the compiler, %v in clang and cc for two builds through each backend", front.Round(time.Millisecond), back.Round(time.Millisecond))
 }
 
 // placeFixtures copies the files of expected/<name>.files/, when the
@@ -168,7 +201,8 @@ func placeFixtures(t *testing.T, name, dir string) {
 }
 
 // BenchmarkExamples measures the compiler on the examples that run:
-// parsing, checking and emitting each, without the C compiler.
+// parsing, checking and emitting each through the default backend,
+// without clang.
 func BenchmarkExamples(b *testing.B) {
 	var paths []string
 	for _, path := range programs(b) {
@@ -181,7 +215,7 @@ func BenchmarkExamples(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		for _, path := range paths {
-			if _, err := compile(path); err != nil {
+			if _, err := compile(path, "llvm"); err != nil {
 				b.Fatal(err)
 			}
 		}

@@ -1,6 +1,6 @@
 # 12. Generics
 
-Status: generic types, functions and methods are checked and compiled (stage 2, task 2.1), with their type arguments inferred at calls, variants and struct literals; `examples/run/generics.teak` runs them. Bounds are traits, checked at every use (stage 2, task 2.2; chapter 11). The declarations of `List` and `Map` are cut from `examples/08-generics.teak`; the other samples are the checker's own cases in `types/generic_test.go`, until the programs that use them run.
+Status: generic types, functions and methods are checked and compiled (stage 2, task 2.1), with their type arguments inferred at calls, variants and struct literals; `examples/run/generics.teak` runs them. Bounds are traits, checked at every use (stage 2, task 2.2; chapter 11). The declarations of `List` and `Map` are cut from `examples/08-generics.teak`; the other samples are the checker's own cases in `compiler/types/generic_test.go`, until the programs that use them run.
 
 A generic type is written once for any element type. Its type parameters follow its name in angle brackets, and its fields use them as types:
 

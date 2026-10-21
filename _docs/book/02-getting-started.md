@@ -35,11 +35,11 @@ teak build hello.teak
 
 `teak build` writes a native executable named after the file, in the current directory. The file name must end in `.teak`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Teak's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
 
-`teak build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
+`teak build` writes LLVM IR and has clang compile it, with the optimizer that implies; `teak build -backend c FILE` builds the same program through the C backend, the reference implementation, which hands C to the system's C compiler. The two produce binaries that print the same thing, and the compiler's own tests hold them to it. `teak build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
 
 ## The other commands
 
-`teak check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `teak build` runs first, and it is useful on its own while writing. `teak emit FILE` prints the C source that `teak build` compiles, for reading what the compiler made of a program.
+`teak check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `teak build` runs first, and it is useful on its own while writing. `teak emit FILE` prints the IR that `teak build` compiles, for reading what the compiler made of a program; `teak emit -backend c FILE` prints the C source.
 
 `teak parse FILE` prints the syntax tree and `teak lex FILE` the tokens. They exist for people working on the compiler.
 

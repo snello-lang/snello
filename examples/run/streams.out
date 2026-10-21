@@ -1,0 +1,28 @@
+parse config.toml: unexpected end
+decode: bad header
+plain message
+open : no such file or directory true
+read is a directory
+Ok(()) Ok("written whole\n")
+Ok(()) true
+remove true
+true true false true
+true true
+Err("mkdirtemp a/b*: pattern contains path separator")
+remove of a full directory refused
+Ok(()) Ok(()) Ok(())
+Err("invalid write result") 1
+line: short
+err: Some("bufio.Scanner: token too long")
+line: short
+err: Some("bufio.Scanner: token too long")
+Ok(())
+Ok(None)
+Ok(Some("one\n"))
+Ok(Some("two"))
+Ok(None)
+Err("write disk: broken") 1
+Err("write disk: broken")
+Err("write disk: broken")
+100 0
+0 1

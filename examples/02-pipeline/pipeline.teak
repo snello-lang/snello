@@ -14,7 +14,8 @@
 //   1. Sending on a channel MOVES the value. The sender no longer owns it.
 //   2. Receiving from a channel gives the receiver ownership. When the
 //      received value goes out of scope, it is freed, right there.
-//   3. A channel handle is a Copy value. Any number of tasks may hold one.
+//   3. A channel handle is owned. `ch.Clone()` gives another handle on
+//      the same channel for another task, and the last handle frees it.
 //   4. `spawn f()` moves everything it captures into the new task.
 //
 // There is no shared mutable state in this file, so there is no lock.
@@ -36,11 +37,12 @@ struct Result {
 // Stage 1: produce jobs.
 func produce(n int) <-chan Job {
     out := make(chan Job)
-    spawn func() {                              // `out` is Copy, so it is copied into the task
-        defer close(out)
+    w := out.Clone()                            // rule 3: a handle for the task
+    spawn func() {                              // rule 4: `w` is moved into the task
+        defer close(w)
         for i := 0; i < n; i++ {
             job := Job{id: i, text: strings.Repeat("teak ", i)}
-            out <- job                       // rule 1: job is moved into the channel
+            w <- job                         // rule 1: job is moved into the channel
             // job cannot be used here any more; the compiler rejects it
         }
     }()
@@ -50,10 +52,11 @@ func produce(n int) <-chan Job {
 // Stage 2: count words. Called several times to fan out.
 func count(jobs <-chan Job) <-chan Result {
     out := make(chan Result)
+    w := out.Clone()
     spawn func() {
-        defer close(out)
+        defer close(w)
         for job := range jobs {              // rule 2: this task now owns job
-            out <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
+            w <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
         }                                    // job dropped here; its string is freed
     }()
     return out
@@ -65,14 +68,16 @@ func merge(inputs []<-chan Result) <-chan Result {
     done := make(chan ())
     n := len(inputs)
     for _, in := range inputs {              // ranging over an owned slice moves each element
-        spawn func() {                          // rule 4: `in` is moved into this task
-            for r := range in { out <- r }
-            done <- ()
+        w, d := out.Clone(), done.Clone()
+        spawn func() {                          // rule 4: `in`, `w` and `d` are moved into this task
+            for r := range in { w <- r }
+            d <- ()
         }()
     }
+    w := out.Clone()
     spawn func() {
         for i := 0; i < n; i++ { <-done }    // wait for every forwarder
-        close(out)
+        close(w)
     }()
     return out
 }
@@ -80,11 +85,11 @@ func merge(inputs []<-chan Result) <-chan Result {
 func main() {
     jobs := produce(10)
 
-    // Fan out: four workers read from the same channel. `jobs` is a Copy
-    // handle (rule 3), so passing it four times is fine.
+    // Fan out: four workers read from the same channel, each on a handle
+    // of its own (rule 3).
     workers := []<-chan Result{}
     for i := 0; i < 4; i++ {
-        workers.Push(count(jobs))
+        workers.Push(count(jobs.Clone()))
     }
 
     total := 0

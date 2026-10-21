@@ -55,6 +55,8 @@ fmt.Println(a.Get(w), a.Get(stale), w == stale)                      // Some("w"
 
 The slot is reused, so an arena that inserts and removes for a long time does not grow; the stale index still answers `None`, so the reuse is safe. A zero-valued `Index`, `var i arena.Index<string>`, names nothing in any arena. What a pointer makes a crash or a silent corruption, an arena makes an `Option` the program handles: a `match`, an `if` binding, or `Expect` where a stale index would be a bug worth a panic with a message.
 
+An index belongs to the arena that issued it, and the type says only the element type: an `Index<string>` from one `Arena<string>` used on another `Arena<string>` is not refused, and names whatever that arena holds in the same slot on the same generation, a value it has nothing to do with, which `Remove` would take out. Keep each index with its arena, as a field beside it or in a structure that owns both; the arena libraries of other languages leave the same rule to the program. An arena prints the values it holds, in the order of their slots: `fmt.Println(a)` prints `arena[y z]`.
+
 The check is one comparison per lookup, and it is a runtime check, not a compile-time one. The compiler proves who owns a value; it cannot prove an index is live. Code that keeps indices across removals handles `None`.
 
 ## A tree

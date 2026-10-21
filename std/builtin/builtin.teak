@@ -103,9 +103,10 @@ func make<T>(n int) T
 // close closes a channel: a receive on it yields None once the values
 // already sent are taken, and a range over it ends. Nothing is sent on
 // a closed channel; closing one twice, or a receive-only channel, is
-// refused. The channel's handle is Copy, so the sender closes it and
-// every receiver sees the end.
-func close<T>(ch chan<- T)
+// refused. It borrows the handle, as every operation on a channel
+// does, so the sender closes it and every receiver, on a handle of its
+// own, sees the end.
+func close<T>(ch ref chan<- T)
 
 // take moves the value out of a place written mut, a variable, field
 // or element, and leaves the type's zero value there: None for an
@@ -262,28 +263,45 @@ func (m ref map[K]V) Contains(k ref K) bool
 // types must be Clone.
 func (m ref map[K]V) Clone() map[K]V
 
+// Clone returns another handle on the same channel, of the same
+// direction, to hand to another task: a channel handle is owned, moved
+// by assignment, a call, a capture or a send, and the channel is freed
+// with its last handle. Sending, receiving, close, len, cap, a range and
+// a select case borrow the handle, and a ref chan T converts to a
+// ref chan<- T or a ref <-chan T.
+func (ch ref chan T) Clone() chan T
+func (ch ref <-chan T) Clone() <-chan T
+func (ch ref chan<- T) Clone() chan<- T
+
 // Len returns the length of the string in bytes, as len does.
 func (s ref string) Len() int
 
-// ToUpper and ToLower return a new string with the ASCII letters
-// changed in case; other bytes are copied as they are.
+// ToUpper and ToLower return a new string with every letter changed
+// in case, by Unicode's simple case mapping, as Go's strings.ToUpper
+// and ToLower give it; a byte that is not valid UTF-8 becomes the
+// replacement rune U+FFFD, as there.
 func (s ref string) ToUpper() string
 func (s ref string) ToLower() string
 
 // Lines lends the lines of the string, split at each newline and
 // without it, nor a carriage return before it; a last line without a
 // newline is a line, and a trailing newline does not make an empty
-// one. A range over them yields each as a ref string into s.
+// one. A range over them yields each as a ref string into s. Go's
+// strings.Lines keeps each newline; this one drops it, the line a
+// program reads.
 func (s ref string) Lines() []ref string
 
-// Fields lends the words of the string, split around runs of spaces,
-// tabs and newlines; a range over them yields each as a ref string
-// into s. The result holds borrows, and is ranged over, not kept.
+// Fields lends the words of the string, split around runs of white
+// space, the runes Go's unicode.IsSpace reports, as strings.Fields
+// does; a range over them yields each as a ref string into s. The
+// result holds borrows, and is ranged over, not kept.
 func (s ref string) Fields() []ref string
 
 // Split lends the pieces of the string between occurrences of sep, as
 // Fields does the words: an empty piece where two seps meet, and one
-// piece, the whole string, when sep is not there.
+// piece, the whole string, when sep is not there. An empty sep splits
+// after every UTF-8 sequence, and gives no pieces of an empty string,
+// as Go's strings.Split does.
 func (s ref string) Split(sep ref string) []ref string
 
 // SplitOnce lends what comes before the first sep and what comes
@@ -291,8 +309,9 @@ func (s ref string) Split(sep ref string) []ref string
 // SplitOnce("=") binds both.
 func (s ref string) SplitOnce(sep ref string) (ref string, ref string)?
 
-// Trim lends the string without the spaces, tabs and newlines at
-// either end.
+// Trim lends the string without the white space at either end, the
+// runes Go's unicode.IsSpace reports: Go's strings.TrimSpace. Go's
+// strings.Trim, which takes the bytes to cut, has no counterpart.
 func (s ref string) Trim() ref string
 
 // HasPrefix, HasSuffix and Contains report whether the string starts

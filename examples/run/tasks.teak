@@ -7,8 +7,9 @@
 // and a range over it, a channel of (), a method spawned on a receiver
 // moved in, a value with a Drop method crossing a task and dropped by
 // the side that holds it last, len and cap, and a spawned closure that
-// takes what it mentions with it. Every task ends before main returns,
-// so a debug build checks the drops.
+// takes what it mentions with it, each task with a handle of its own
+// on the channels it uses, and functions that borrow a channel. Every
+// task ends before main returns, so a debug build checks the drops.
 
 package main
 
@@ -42,6 +43,24 @@ func count(jobs <-chan Job, done chan<- int) {
 	done <- total
 }
 
+// fill and drain borrow the channel, as a function within one task
+// does: a ref chan int converts to either direction.
+func fill(out ref chan<- int, n int) {
+	for i := 1; i <= n; i++ {
+		out <- i
+	}
+}
+
+func drain(in ref <-chan int) int {
+	first := <-in ?? 0
+	rest := 0
+	for v := range in {
+		rest += v
+	}
+
+	return first*100 + rest
+}
+
 struct Printer {
 	prefix string
 }
@@ -57,14 +76,14 @@ func (p Printer) Run(words <-chan string, finished chan<- ()) {
 func main() {
 	jobs := make(chan Job)
 	done := make(chan int, 1)
-	spawn produce(5, jobs)
-	spawn count(jobs, done)
+	spawn produce(5, jobs.Clone()) // each task gets a handle of its own
+	spawn count(jobs, done.Clone()) // main's last use of jobs: the handle moves
 	fmt.Println((<-done).Expect("counted")) // 0+1+2+3+4, plus 3 letters each
 
 	words := make(chan string, 2)
 	finished := make(chan ())
 	fmt.Println(cap(words))
-	spawn Printer{prefix: ">"}.Run(words, finished) // the receiver is moved into the task
+	spawn Printer{prefix: ">"}.Run(words.Clone(), finished.Clone()) // the receiver is moved into the task
 	words <- "one".Clone()
 	words <- "two".Clone()
 	close(words)
@@ -83,18 +102,25 @@ func main() {
 		None => fmt.Println("none left"),
 	}
 
+	nums := make(chan int, 3)
+	fill(ref nums, 3)
+	fmt.Println(len(nums))
+	close(nums)
+	fmt.Println(drain(ref nums)) // 1, then 2+3
+
 	// A spawned closure owns what it mentions: names is moved in and
 	// dropped by the task, k is copied, and a parameter is passed as to
 	// any call. A result the closure returns is dropped by the task.
 	names := []string{"ann".Clone(), "bob".Clone()}
 	k := 2
 	greeted := make(chan ())
+	g := greeted.Clone()
 	spawn func(prefix string) {
 		for _, n := range names {
 			fmt.Println(prefix, n, k)
 		}
 
-		greeted <- ()
+		g <- ()
 	}("hi".Clone())
 	<-greeted
 	spawn func() string { return "unread".Clone() }()

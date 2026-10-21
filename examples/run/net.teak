@@ -1,0 +1,76 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Sockets: a server task listening on this machine alone, at a port
+// the system picks, and answering each line in upper case, a client
+// dialing it, bufio over a connection, the end of a connection seen as
+// a read of nothing, the error of dialing a port nothing listens on,
+// worded as Go words it and of Kind Refused, the Errors of a port out
+// of range, a host name and an IPv6 address, a dial with no host, and
+// a read into a buffer with no room.
+
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
+)
+
+// serve answers one connection line by line, in upper case, until the
+// client closes its side, then tells main how many lines it saw.
+func serve(l net.Listener, done chan int) {
+	conn := l.Accept().Expect("accept")
+	lines := 0
+	r := bufio.NewReader(mut conn)
+	for {
+		line := r.ReadString('\n').Expect("read") ?? break
+		r.Get().WriteString(ref line.ToUpper()).Expect("write") // the Reader holds conn: it lends it back to write
+		lines += 1
+	}
+
+	done <- lines
+}
+
+func main() {
+	l := net.Listen("127.0.0.1", 0).Expect("listen")
+	port := l.Port()
+	done := make(chan int)
+	spawn serve(l, done.Clone())
+
+	c := net.Dial("127.0.0.1", port).Expect("dial")
+	r := bufio.NewReader(mut c)
+	for _, word := range []string{"teak", "native"} {
+		r.Get().WriteString(ref (word.Clone() + "\n")).Expect("write")
+		fmt.Println(r.ReadString('\n').Expect("read").Expect("a reply").Trim())
+	}
+
+	c.Close().Expect("close")
+	fmt.Println("served", <-done ?? 0)
+
+	match net.Dial("127.0.0.1", 1) {
+		Ok(_) => fmt.Println("connected"),
+		Err(e) => fmt.Println(e, e.Kind() == io.Refused),
+	}
+
+	fmt.Println(message(net.Listen("127.0.0.1", 70000)))
+	fmt.Println(message(net.Dial("127.0.0.1", -1)))
+	fmt.Println(message(net.Dial("localhost", 80)))
+	fmt.Println(message(net.Dial("::1", 80)))
+
+	l2 := net.Listen("127.0.0.1", 0).Expect("listen")
+	d := net.Dial("", l2.Port()).Expect("dial with no host") // this machine, as in Go
+	a := l2.Accept().Expect("accept")
+	empty := []byte{}
+	fmt.Println(d.Read(mut empty), a.Close().IsOk()) // a buf with no room reads nothing, at once
+}
+
+// message gives what an operation reported: ok, or its Error's message.
+func message<T>(r Result<T, io.Error>) string {
+	return match r {
+		Ok(_) => "ok".Clone(),
+		Err(e) => e.Error(),
+	}
+}

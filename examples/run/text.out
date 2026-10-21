@@ -19,6 +19,6 @@ to stdout 1
 missing true NotExist
 hello, world 12 3
 |é  |  é|
-Ok(0) Err("strconv.ParseFloat: parsing \"0x10\": invalid syntax") Ok(inf)
+Ok(0) Err("strconv.ParseFloat: parsing \"0x10\": invalid syntax") Ok(+Inf)
 Ok(19) copied byte by byte
 42

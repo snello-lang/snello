@@ -26,7 +26,7 @@ struct Cancel {
 
 func NewCancel() sync.Arc<Cancel>          { return sync.NewArc(Cancel{ch: make(chan ()), once: sync.NewOnce()}) }
 func (c ref Cancel) Cancel()               { c.once.Do(func() { close(c.ch) }) }
-func (c ref Cancel) Done() <-chan ()       { return c.ch }
+func (c ref Cancel) Done() ref <-chan ()   { return ref c.ch }
 
 // A worker runs until the tasks run out or the pool is cancelled, and
 // counts itself out of the group either way. A break inside the select
@@ -55,7 +55,7 @@ func Run(workers int, inputs []Task, deadline time.Duration) []Done {
 
     for i := 0; i < workers; i++ {
         stopped.Add(1)
-        spawn worker(tasks, out, cancel.Clone(), stopped)    // each worker gets its own Arc handle
+        spawn worker(tasks.Clone(), out.Clone(), cancel.Clone(), stopped.Clone())    // each worker gets its own handles
     }
 
     spawn func() {                                     // inputs moved into this task

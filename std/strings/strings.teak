@@ -24,11 +24,9 @@ struct Builder {
 	buf []byte
 }
 
-// WriteString appends the bytes of s.
+// WriteString appends the bytes of s, in one copy.
 func (b mut Builder) WriteString(s ref string) {
-	for i := 0; i < s.Len(); i++ {
-		b.buf.Push(s[i])
-	}
+	appendString(mut b.buf, s)
 }
 
 // WriteByte appends one byte.
@@ -54,21 +52,39 @@ func (b mut Builder) Reset() {
 }
 
 // Repeat returns s written n times in a row, and the empty string for
-// an n of zero or less.
+// an n of zero. A negative n, or one that would make a string longer
+// than an int can count, stops the program, as Go's Repeat does.
 func Repeat(s ref string, n int) string {
-	var b Builder
-	for i := 0; i < n; i++ {
-		b.WriteString(s)
+	if n < 0 {
+		panic("strings: negative Repeat count")
 	}
 
-	return string(b.buf)
+	if s.Len() > 0 && n > maxInt / s.Len() {
+		panic("strings: Repeat output length overflow")
+	}
+
+	buf := make([]byte, 0, s.Len() * n) // the whole result, allocated once
+	for i := 0; i < n; i++ {
+		appendString(mut buf, s)
+	}
+
+	return string(buf)
 }
 
 // Join writes the parts one after another with sep between every two,
 // and none before the first or after the last: Join(ref parts, ", ").
 // An empty slice gives the empty string.
 func Join(parts ref []string, sep ref string) string {
-	var b Builder
+	size := 0
+	for i, p := range parts {
+		if i > 0 {
+			size += sep.Len()
+		}
+
+		size += p.Len()
+	}
+
+	b := Builder{buf: make([]byte, 0, size)} // the whole result, allocated once
 	for i, p := range parts {
 		if i > 0 {
 			b.WriteString(sep)
@@ -80,7 +96,8 @@ func Join(parts ref []string, sep ref string) string {
 	return string(b.buf)
 }
 
-// Fields splits s around runs of spaces, tabs and newlines and yields
+// Fields splits s around runs of white space, as Go's unicode.IsSpace
+// knows it, and yields
 // each word as a borrow into s, so no word is copied; a loop over them
 // lends s for its duration, for w := range strings.Fields(ref text).
 // It is the string's Fields method as a function.
@@ -88,14 +105,21 @@ func Fields(s ref string) []ref string {
 	return s.Fields()
 }
 
-// ToLower returns a new string with the ASCII letters of s in lower
-// case and every other byte as it was.
+// ToLower returns a new string with every letter of s in lower case,
+// by Unicode's simple case mapping, as Go's strings.ToLower gives it.
 func ToLower(s ref string) string {
 	return s.ToLower()
 }
 
-// ToUpper returns a new string with the ASCII letters of s in upper
-// case and every other byte as it was.
+// ToUpper returns a new string with every letter of s in upper case,
+// by Unicode's simple case mapping, as Go's strings.ToUpper gives it.
 func ToUpper(s ref string) string {
 	return s.ToUpper()
 }
+
+// maxInt is the largest int, the longest a string can be.
+const maxInt int = 9223372036854775807
+
+// appendString appends the bytes of s to b in one copy, growing b
+// once. The runtime provides it.
+func appendString(b mut []byte, s ref string)

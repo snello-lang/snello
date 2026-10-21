@@ -19,5 +19,12 @@ first
 sv
 tmp
 drop tmp
+drop blank
+drop e1
+e2
+drop c1
+drop c2
+0
 end
+drop e2
 drop p

@@ -92,7 +92,8 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `xs[i]` on a bad index panics | The same, with the same message |
 | `copy(dst, src)`, `sort.Ints(xs)`, `slices.Contains(xs, v)` | `xs.Clone()`, `xs.Sort()`, `xs.Contains(v)`: methods on the slice |
 | `strings.Fields(s)` returns new strings | `s.Fields()` yields borrows into `s`, and a loop over them lends `s` |
-| `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s` |
+| `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s`; Go's `strings.Trim`, with the bytes to cut, has no counterpart |
+| `strings.Lines(s)` keeps each newline | `s.Lines()` drops it, and a carriage return before it |
 | `for i, r := range s` yields runes | `for i, c := range s` yields bytes; text as runes comes with the library (stage 2) |
 | `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
 | `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
@@ -112,7 +113,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 ## Chapter 10: Concurrency
 
-Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for range ch`, `select`, a task is a function started and forgotten.
+Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for range ch`, `select`, a task is a function started and forgotten. Changed: a channel is not copied freely; a goroutine that shares one gets its own handle, `go produce(jobs)` is `spawn produce(jobs.Clone())`, since the last handle frees the channel and there is no collector to find it.
 
 | In Go | In Teak |
 |---|---|
@@ -125,7 +126,7 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 | Whether a value may safely cross goroutines is the programmer's problem; `go vet` and the race detector find some cases at run time | `Send` is inferred from the type and checked at compile time at every crossing |
 | `sync.Mutex` beside the data; forgetting to lock compiles | `sync.Mutex<T>` owns the data; the only way to it is through the guard `Lock` hands out, `*g.Get() += 1`, and the lock is released when the guard goes out of scope; `sync.RwLock<T>` the same with `Read` and `Write` |
 | `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; the zero value is empty and panics |
-| `var wg sync.WaitGroup` passed by pointer, `&wg` | `sync.WaitGroup` is a `Copy` handle on a counter, passed by value like a channel |
+| `var wg sync.WaitGroup` passed by pointer, `&wg` | `sync.WaitGroup` is an owned handle on a counter, cloned for each task, `w := wg.Clone()`, like a channel, and freed by the last handle |
 | `*rc`-style shared ownership does not exist; the GC shares everything | `rc.Rc` shares within one task and is refused at a task boundary; `sync.Arc` shares across tasks |
 
 ## Chapter 11: Traits
@@ -160,7 +161,7 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 
 ## Chapter 14: The standard library
 
-Unchanged: import paths and package names, `import m "math"` to rename, exported names by capitalization, `math.Pi`, `math.Sqrt`, `math.Abs`, `math.Min`, `math.Max`, the format verbs of `fmt`.
+Unchanged: import paths and package names, `import m "math"` to rename, exported names by capitalization, `math.Pi`, `math.Sqrt`, `math.Abs`, `math.Min`, `math.Max`, how a float prints, and the verbs `fmt` has, `%v`, `%d`, `%s`, `%q`, `%f` and `%t`, with a width and a precision.
 
 | In Go | In Teak |
 |---|---|
@@ -173,6 +174,9 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |
 | `io.Reader` and `io.Writer` are interfaces; `io.Copy(dst, src)` dispatches dynamically | `io.Reader` and `io.Writer` are traits; `io.Copy` is generic over them, one copy per pair of types |
 | Printing an `error` prints `err.Error()` | The same, for any type implementing the `Error` trait |
+| A type with a `String() string` method prints as it, a `fmt.Stringer` | A type prints as its `String` when it lists `impl fmt.Stringer`; traits are named, not matched by method |
+| `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` takes no `%x`, `%e`, `%T` or flags but the minus yet |
+| `err.(*strconv.NumError).Err == strconv.ErrRange` | `e.Kind() == strconv.Range` |
 | `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
 | `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
 | `strings.Builder` | The same, with `WriteString`, `WriteByte`, `Len`, `String` and `Reset` |

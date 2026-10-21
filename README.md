@@ -67,12 +67,12 @@ shapes.teak:35:21: use of moved value canvas.shapes; moved at 30:23
 ## Why Teak
 
 - **Go's syntax.** `func`, `:=`, slices, maps, `defer`, `range`. A Go developer reads Teak on day one.
-- **No garbage collector, no leaks.** Values are freed at a point the compiler knows, and a type with a `Drop` method cleans up there, on every path out of a function, including a panic.
+- **No garbage collector, no leaks.** Values are freed at a point the compiler knows, and a type with a `Drop` method cleans up there, on every path out of a function, including a panic. A program's peak memory is what it keeps alive, and it never pauses to collect: `bench/memory.teak` peaks at 33 MB with every round even, where the same program in Go peaks at 78 MB with one round in twenty stalled (chapter 5 of the book has the table).
 - **No lifetime annotations.** Borrows are written `ref` and `mut` and live inside one function; a borrow is returned only from its one obvious source. The compiler infers every lifetime or refuses the program.
 - **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
 - **Mistakes that stop the program.** `teak build -debug` builds a binary that panics on any value used after its release and reports anything never released.
 
-Teak is young. The compiler handles core Teak today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, files and printing. Traits, generics, lightweight tasks with channels, a standard library written in Teak, and an LLVM backend are being built, in that order.
+Teak is young. The compiler handles core Teak today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, files and printing. Traits, generics, tasks with channels on a scheduler of their own, sockets, a standard library written in Teak and an LLVM backend exist.
 
 ## Getting started
 
@@ -88,10 +88,11 @@ go build -o teak ./cmd/teak
 
 | Command | What it does |
 |---|---|
-| `teak build FILE` | Compiles a program to a native executable in the current directory |
+| `teak build FILE` | Compiles a program to a native executable in the current directory, through the LLVM backend and clang |
 | `teak build -debug FILE` | The same, with the checking runtime |
+| `teak build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler |
 | `teak check FILE` | Checks a program and prints its errors |
-| `teak emit FILE` | Prints the C the compiler generates |
+| `teak emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
 
 ## Documentation
 

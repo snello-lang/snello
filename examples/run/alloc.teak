@@ -1,0 +1,79 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The allocator across tasks: strings of every size it has a class
+// for, and larger, made by four tasks at once and released by main,
+// so that a block freed on a thread other than its own goes back to a
+// list it is found on again. Every string is checked byte by byte as
+// it arrives, and every tenth is kept to the end and checked again: a
+// block handed out twice would mix two producers' letters.
+
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func produce(letter string, out chan<- string, done chan<- ()) {
+	for round := 0; round < 20; round++ {
+		for n := 1; n <= 1200; n += 13 {
+			out <- strings.Repeat(letter, n)
+		}
+	}
+
+	done <- ()
+}
+
+func mixed(s ref string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != s[0] {
+			return true
+		}
+	}
+
+	return false
+}
+
+func main() {
+	out := make(chan string, 64)
+	done := make(chan (), 4)
+	spawn produce("a".Clone(), out.Clone(), done.Clone())
+	spawn produce("b".Clone(), out.Clone(), done.Clone())
+	spawn produce("c".Clone(), out.Clone(), done.Clone())
+	spawn produce("d".Clone(), out.Clone(), done.Clone())
+	closer := out.Clone()
+	spawn func() {
+		for i := 0; i < 4; i++ {
+			<-done
+		}
+
+		close(closer)
+	}()
+
+	count := 0
+	bytes := 0
+	bad := 0
+	kept := []string{}
+	for s := range out {
+		count += 1
+		bytes += len(s)
+		if mixed(s) {
+			bad += 1
+		}
+
+		if count%10 == 0 {
+			kept.Push(s)
+		}
+	}
+
+	held := len(kept)
+	for _, s := range kept {
+		if mixed(s) {
+			bad += 1
+		}
+	}
+
+	fmt.Println(count, "strings,", bytes, "bytes,", held, "kept,", bad, "mixed")
+}

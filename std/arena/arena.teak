@@ -18,6 +18,8 @@
 // makes a use after free, an arena makes an Option.
 package arena
 
+import "fmt"
+
 // An Index names a value in an Arena of T: the slot and the generation
 // the value was put there with. It is Copy, Eq and Hash, so it is
 // stored in a struct, a slice or a map, and passed around as a number
@@ -37,7 +39,7 @@ struct Index<T> impl Copy, Eq, Hash {
 // the borrow cannot be stored, but the Index can. An Arena is moved,
 // or lent with ref and mut; when it goes out of scope, every value
 // still in it is dropped.
-struct Arena<T> {
+struct Arena<T> impl fmt.Stringer {
 	slots []slot<T>
 	free  []int
 	count int
@@ -118,6 +120,22 @@ func (a mut Arena<T>) Remove(i Index<T>) T? {
 // slots.
 func (a ref Arena<T>) Len() int {
 	return a.count
+}
+
+// String returns the values the Arena holds, in the order of their
+// slots, written as a slice of them is printed: arena[a b c]. It is how
+// fmt prints an Arena, its free slots and generations left out.
+func (a ref Arena<T>) String() string {
+	out := "arena["
+	sep := ""
+	for _, s := range a.slots {
+		if v := ref s.value {
+			out = out + sep + fmt.Sprint(v)
+			sep = " "
+		}
+	}
+
+	return out + "]"
 }
 
 // live reports whether i names a value in the Arena: a slot that

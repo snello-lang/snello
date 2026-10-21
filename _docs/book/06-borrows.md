@@ -102,7 +102,7 @@ The idiom is to copy the needed values out first, then write. `Remove` in the co
 
 ## Matching through a borrow
 
-A `match`, an `if` binding and `??` bind what is inside the value they look at, and the binding keeps the borrow of the value. On a borrow variable the bindings are borrows of the same kind: through `s mut Slot`, `Full(p)` makes `p` a `mut Point`, and `p.Shift(1, 1)` changes the point in the slot. On a place reached through a borrow, `t.nodes[id].parent` inside a method on `t mut Tree`, a binding copies what `:=` would copy and borrows the rest: `if parent := t.nodes[id].parent` makes `parent` a plain `NodeID`, free to index `t.nodes` again, while `if n := t.nodes[id].next` makes `n` a `mut *Node` that keeps `t.nodes` lent. To change a `Copy` payload in place, write the borrow out, as a call does: `match mut xs[0] { Full(n) => *n += 1, Vacant => {} }`.
+A `match`, an `if` binding and `??` bind what is inside the value they look at, and the binding keeps the borrow of the value. On a borrow variable the bindings are borrows of the same kind: through `s mut Slot`, `Full(p)` makes `p` a `mut Point`, and `p.Shift(1, 1)` changes the point in the slot. On a place reached through a borrow, `t.nodes[id].parent` inside a method on `t mut Tree`, a binding copies what `:=` would copy and borrows the rest: `if parent := t.nodes[id].parent` makes `parent` a plain `NodeID`, free to index `t.nodes` again, while `if n := t.nodes[id].next` makes `n` a `mut *Node` that keeps `t.nodes` lent. To change a `Copy` payload in place, write the borrow out, as a call does: `match mut xs[0] { Full(n) => *n += 1, Vacant => {} }`. An option a call returns lends what the call lent: `if v := a.Get(i)` keeps `a` lent for as long as `v` is used, exactly as `v := a.Get(i).Expect("there")` does, so removing from `a` inside the body is refused while `v` is still to be read. A function's result lends the argument passed to its one borrowed parameter, wherever that parameter stands: `if v := pick(0, ref m)` keeps `m` lent, as a method's result keeps its receiver. The `else` branch and the `None` arm hold nothing, since the binding is not in scope there.
 
 A `mut` binding through a map read is refused, because `m[k]` for a key the map does not hold reads the zero value and a write to it would go nowhere: `cannot bind mut through m[k]: a key the map does not hold reads the zero value; use m.GetMut(k)`.
 
@@ -162,7 +162,7 @@ Every message about a live borrow ends with where it began and the use that keep
 |---|---|
 | `cannot borrow xs as mut: xs is borrowed as ref` | `mut-while-ref` |
 | `cannot borrow n as mut: n is already borrowed as mut` | `two-mut`, `two-slots` |
-| `cannot borrow n as ref: n is already borrowed as mut`, `cannot use n: n is borrowed as mut` | `TestBorrows` in `types/borrow_test.go` |
+| `cannot borrow n as ref: n is already borrowed as mut`, `cannot use n: n is borrowed as mut` | `TestBorrows` in `compiler/types/borrow_test.go` |
 | `cannot assign to s: s is borrowed`, `cannot move s: s is borrowed` | `assign-while-borrowed`, `move-while-borrowed` |
 | `cannot use xs (ref []int) as mut []int` | `ref-as-mut` |
 | `cannot assign to n.value through a ref borrow` | `assign-through-ref` |
@@ -170,7 +170,7 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot bind mut through m[k]: ... use m.GetMut(k)` | `TestBorrows` |
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
-| `cannot return a borrow of local s`, `cannot return a borrow of m: a method's returned borrow is tied to its receiver` | `return-local-borrow`, `TestEscapes` in `types/escape_test.go` |
+| `cannot return a borrow of local s`, `cannot return a borrow of m: a method's returned borrow is tied to its receiver` | `return-local-borrow`, `TestEscapes` in `compiler/types/escape_test.go` |
 | `cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`, `cannot return a borrow of a temporary: ...` | `TestBorrows`, `TestEscapes` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
 | `closure captures n by borrow and cannot be returned`, `... stored`, `... sent`, `... spawned` | `closure-returned`, `closure-stored`, `TestEscapes` |

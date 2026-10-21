@@ -1,0 +1,110 @@
+# Lowering: from the checked program to machine code
+
+Status: decided, 2026-10-20, before the first line of task 4.2. This note says how a Teak value is laid out and where it is released, as the C emitter of stages 1 to 3 decided it and as the LLVM backend of stage 4 keeps or changes it. The two backends are checked against each other on every example (task 4.7), so what they must agree on is written here once.
+
+## The problem
+
+A backend turns the checked program into the text of another language: C since stage 1, LLVM IR from stage 4. Everything about ownership was decided before the backend sees the program. The checker records the type of every expression, every move, every capture of a closure and its kind, and the type arguments of every generic call; the backend reads those tables and decides nothing about ownership itself. What the backend does decide is the shape of every value in memory, the order of evaluation, where each value is released, and how a panic finds the values still to release. Those decisions were made in the C emitter one slice at a time and live in its code; a second backend must make the same ones or the two will disagree on some program, which the differential test would then find late. This note is the record both backends are written against.
+
+## No intermediate form
+
+The LLVM backend walks the checked syntax tree as the C emitter does, reading the same tables. A lowered form of its own between the tree and the IR, a sequence of instructions with explicit temporaries, drops and moves, was considered and set aside: every decision such a form would carry is a rule over the checker's tables, not a data structure, and the C emitter already applies those rules directly; making it print a lowered form instead would be a rewrite of a working backend for no new capability, and a form that only the LLVM backend used would be a second statement of the rules, not a shared one. What the backends share is a package of the rules that are pure functions over types, `compiler/emit/lower`, moved out of the C emitter as the LLVM backend needs them: the names of functions, instances and types, which must be the same symbols in both outputs since the runtime declares some of them; the predicates that say what a value of a type needs when dropped and whether a panic must find it; the capture classes of a closure; the monomorphization worklist; and the table of the library functions the compiler writes. The tree walk and the text are each backend's own. If a third backend ever arrives, the shared package is where a lowered form would grow from.
+
+## The shape of every value
+
+| Teak | C emitter | LLVM backend | Note |
+|---|---|---|---|
+| `int`, `uint`, `i8` to `i64`, `u8` to `u64`, `byte` | `int64_t`, `uint64_t` and the sized kinds | `i64`, `i8` to `i64` | arithmetic wraps on overflow in both: the C emitter asks the C compiler for it with `-fwrapv`, the IR uses `add` without the no-wrap flags |
+| `f32`, `f64` | `float`, `double` | `float`, `double` | |
+| `bool` | `bool` | `i1` in registers, `i8` in memory | |
+| `string` | `tk_string {ptr, len, cap}` | `{ptr, i64, i64}` | `cap` is 0 for a literal, which owns nothing, and the size of the block for an owned string |
+| `()` | `tk_unit {char}` | `{}` | a value of no bits; a field or a channel of it takes none |
+| `local` | `uint8_t` | `i8` | holds nothing; it exists for the `Send` rule |
+| struct | a C struct of the fields, in order | a named struct type of the fields, in order | a type with a `Drop` method carries one more field, `tk_live` |
+| enum | `int tag` and a union of one struct per variant with fields | `{i32, [n x i8]}`, `n` the size of the largest variant's struct, each variant read and written through its own struct type at the payload's address | LLVM has no union; the byte array with the variants' alignment is the same layout |
+| `T?` | `{bool has; T val}` | `{i1, T}`, except `*T?` and `(mut T)?`, which are the pointer with null for `None` | the one layout the backends differ on, below |
+| `Result<T, E>` | `{bool ok; union {T val; E err}}` | `{i1, [n x i8]}` as an enum of two variants | |
+| `[]T` | `{T *ptr; int64 len; int64 cap}` | `{ptr, i64, i64}` | the one shape the runtime's slice functions take, whatever `T` |
+| `[n]T` | a struct holding `T at[n]` | `[n x T]` inside a struct | a struct, so an array is copied and passed as a value |
+| `map[K]V` | `tk_map`, eight words | the same | the runtime keeps the entries; the backend gives it the sizes, hash and equality of the key type |
+| tuple | a struct of `e0`, `e1`, ... | a struct of the elements | |
+| `ref T` | the value `T` itself, copied | a pointer to the place, `readonly`; of a string or a slice, the three words themselves | below |
+| `mut T` | `T *` | a pointer to the place | |
+| `*T` | `T *` to a block from `tk_alloc` | `ptr` | a debug build checks every read through it |
+| `chan T` | `tk_chan *` | `ptr` | an owned handle on a runtime object that counts its handles: `Clone` is `tk_chan_clone`, the drop `tk_chan_drop`, which empties the place, and the last frees the channel with the values still in it, dropped by the element's drop `make` passes; an operation borrows the handle, so one a call returned is a temporary of the statement |
+| function value | `{result (*fn)(void *env, params...); uint64_t box[W]}` | `{ptr, [W x i64]}` | `W` is the program's largest closure of copies, at least four words; a closure that borrows keeps its environment in the writing frame and the box holds its address |
+| trait value | `{const table *tab; void *data}` | `{ptr, ptr}` | the data is on the heap, owned by the value; the table is written once per implementing type and trait, with the drop first, then a function per method, then an accessor per trait field |
+| a type parameter | never written | never written | every instance is written with its arguments substituted (`mono.go`) |
+
+Two decisions carried over without change deserve their reason here. **The closure box is inline and of one size.** A function value must have one size per function type, since it is stored in fields and slices, so every one carries a box of `W` words, and a closure whose captures are all copies lives in the box entirely and is a value that goes anywhere, including out of the function that wrote it, with nothing to drop; a closure that borrows a variable keeps a pointer to it, in an environment in the writing frame, which the checker keeps from outliving that frame. Nothing is allocated for a closure, ever. **A trait value owns its data on the heap.** The alternative, a value large enough for any implementing type, would make every trait value as large as the largest type in the program; one allocation at the conversion and one indirect call per method is the price of a value of one size, and a `[]Shape` of three types is the case that chose it.
+
+## What the LLVM backend changes
+
+Three layouts change, each because the IR can say what C could not, and each is sound by a rule of the language.
+
+- **`*T?` is a nullable pointer.** An owned pointer is never null, so null is free to mean `None`, and the option of a pointer costs nothing: a linked list's `next *Node?` is one word, as it would be by hand. The same holds for an option of a `mut` borrow. The C emitter keeps the `{has, val}` struct, since C gives it no safe way to write the two as one type; the difference is invisible to a program.
+- **`ref T` is a pointer to the place.** The C emitter passes a `ref T` as a copy of the value, which is free for a number and a copy of three words for a string; a large struct lent to a method is copied whole. The borrow rules make a pointer sound: while a `ref` lives, no one changes or moves the value it lends, so the pointer always finds the value as it was lent, and many `ref`s to one value are many pointers to one place, which the IR marks `readonly` and nothing else. The library's lowered primitives follow the layout: `rc.alias` and `sync.alias` load the pointer the `ref` points at and give that word back as an owned pointer; `sync.inside` loads it and gives it back as the `mut`. In C each is the identity, since a `ref` of a pointer is the pointer.
+- **A `ref` of a string or a slice is the view itself**, the three words, not a pointer to them (decided 2026-10-20, when the port reached `bufio`). The language types `s[lo:hi]` as a borrow of the slice or string it views, and such a view has no place behind it: a pointer to it would point into the frame that built it. The three words are what the C emitter passes too, and what the runtime takes for a `ref string` parameter; a `mut` borrow of a string or a slice stays a pointer, since it is written through. Everything that reads a value through its borrows asks the borrow's depth, and a view has none.
+- **Through a borrowed option, the part is lent on.** `cur ?? else`, `x?`, `Expect` and a binding in a `match` or `if` on an option or a `Result` reached through a borrow yield the address of the value inside, as the checker types them, `ref *Node` for a `ref *Node?`; through an owned scrutinee they take the value out. The backend compares the depth of the type it must yield with the depth of the part and lends the address when the yield is deeper.
+- **An enum is a tag and bytes.** The union's layout, written out as a byte array of the largest variant's size and the variants' alignment, since the IR has no unions. A variant's fields are reached through the variant's own struct type at the payload's address.
+
+One rule of arithmetic is settled here because the IR forced the question (2026-10-20): **an integer division by zero panics**, with the message `integer divide by zero`, and **the smallest number divided by minus one is the smallest number**, its remainder zero, as the wrapping of every other operation implies. C leaves both undefined and the processors disagree, so the C backend's programs trap on one processor and continue on another; the IR leaves both undefined too, and its optimizer would act on that, so the LLVM backend tests the divisor and settles the one overflowing quotient with a select, a few instructions per division. The C backend does the same through a function per integer type, `tk_quo_` and `tk_rem_` (2026-10-20, when the two backends' tests became one table); before, its programs trapped on x86-64 and printed zero on arm64.
+
+Everything else keeps its shape. The runtime is the same C runtime, linked unchanged: the LLVM backend calls `tk_alloc`, `tk_panic`, the string, slice and map functions, the printers, `tk_spawn`, the channels and the locks by the names and the layouts `teak.h` declares, and a library function declared without a body is the same runtime symbol under the same name, `tk_math_Sqrt`. The runtime's `main` calls `tk_main` as before. A debug build asks the same runtime checks at the same points: a pointer read, a string or slice read, a dropped place poisoned.
+
+## Calling the runtime
+
+The IR does not abstract the processor's calling convention away: an aggregate parameter in IR is passed as the IR says, which is not how C passes a struct. The runtime has exactly one aggregate at its boundary, the three-word struct of a string and of a `[]byte`, passed and returned by value by sixty of its functions, and clang lowers it the same way on each processor that the backend must then match (`compiler/emit/llvm/abi.go`, decided 2026-10-20 by asking clang): on x86-64 a three-word parameter is a pointer to a copy the caller makes, marked `byval`, so the callee finds the copy in the argument area; on arm64 it is a plain pointer to that copy, found in a register; a three-word result comes back through a pointer the caller passes first, `sret`, on both. The emitter declares every runtime function it calls in that form and writes its calls to match, and knows the two processors the test suite runs on; another is an error until its convention is added, since a guessed convention is a miscompiled call. The program's own functions are not bound by this: both sides of a call between them are IR, and an aggregate passed as an IR value is read the same way by both. A map, a channel and a lock cross the boundary as a pointer or a number and need nothing. The module names its target triple, the processor and the system it is compiled for, so that clang lays it out for them whatever machine it runs on; the data layout is clang's own for that triple, not written by the backend.
+
+## Evaluation order and temporaries
+
+Operands are evaluated left to right, as the language says and as Go does. The C emitter must work for this, since C leaves the order of arguments and initializers open: an expression that needs statements, a `match`, `?`, `??` or `if` used as a value, is hoisted into a temporary before the statement that uses it, and every operand to its left is saved in a temporary of its own first so that nothing is reordered (`hoist.go`). In the IR every expression is a sequence of instructions in a basic block, so the order is the order written and the hoisting machinery has no counterpart: a `match` used as a value becomes blocks that join in a `phi`, or a store to a slot the arms share. The evaluation of a call's arguments before its receiver, which the borrows note decided, is a rule both backends follow.
+
+A value no variable holds, a string built for a print or a struct built to be lent, is a temporary of the statement that made it: it is held until the statement ends and dropped then, in both backends, after the drops of any variable the statement declared. Two parts of a statement end sooner (decided 2026-10-21, after the backends were found to disagree on both). The condition of an `if` is decided before either branch runs, and its temporaries are dropped then, since nothing binds a borrow of them; a guard taken in the condition, `if *m.Lock().Get() == 0 { *m.Lock().Get() = 1 }`, is given back before the body takes the lock again, as Rust drops the temporaries of an `if` condition. An `if` binding keeps its temporaries through its body, since the binding may borrow from them. The right side of `&&` and `||` runs only when the left leaves the answer open, and what it built is dropped on that path, before the two paths meet: a temporary the right side would have built is never built, and never dropped, when the left decides. A `for` condition's temporaries are dropped on every pass, before the body. `compiler/emit/internal/differ` builds every statement form with every kind of temporary through both backends and requires one output.
+
+## Where values are released
+
+Every value is released where the checker said its owner dies, and each backend keeps a frame per scope it writes, holding the owned variables declared there that have something to release. The points are these, and a backend writes a drop at every one:
+
+| Point | What is dropped |
+|---|---|
+| the end of a block | the block's variables, last declared first |
+| before a `return` | the variables of every open frame of the function, innermost first, after the deferred calls run |
+| before a `break` or `continue` | the variables of the frames down to the loop left or continued |
+| the end of a `match` arm | the arm's bindings, and the parts of the scrutinee an arm consumed |
+| the end of a statement | its temporaries |
+| an assignment to a place that holds a value | the old value, before the new one is stored |
+| a map write to an existing key | the old value, and the new key, since the entry keeps its own |
+| a `take` | nothing: the place is left `None` and the value moves out |
+| a closure capture consumed by the closure's body | the capture, when the body ends |
+| a spawned task ending | the task's parameters and captures, as any function's |
+| the end of `main` | the top-level variables of the program; nothing of other tasks |
+| a panic | the guarded values of the panicking task, innermost first, by the runtime |
+
+A move empties the place it moves from: an owned pointer becomes null, a string or slice gets a zero length and capacity, a struct with a `Drop` method clears its `tk_live` flag, a composite empties its parts. The drop of an emptied place does nothing, so a place is dropped exactly once whatever path reaches the end of its scope, and a conditional move needs no flag of its own beyond the place. A value that moves in and out of a loop body is handled by the same rule, since the loop's frame drops what the body left.
+
+A value whose type has a `Drop` method, or holds one, is registered with the runtime's guard stack when it is built and unregistered when it is dropped or moved, so that a panic can run the methods of the values still owned, innermost first. The guard stack is per task. A string, slice, map or pointer with no `Drop` method is not registered: a panic ends the program, and memory the program will not use again is not a leak worth a push and a pop per value.
+
+## Panics
+
+A panic prints its message, runs the drops on the guard stack, and exits with status 2, in any task. The LLVM backend keeps this mechanism in its first step: it is the runtime's, it costs nothing to a program that does not panic except the registration of `Drop`-bearing values, and it is what the differential test compares. Zero-cost unwinding through the IR's `invoke` and landing pads, which would remove the registration and run the drops of every frame from tables, is the step after, recorded here as an option and not a plan: it changes the drop discipline from a runtime list to a static one, and the two must be compared on the same programs before one replaces the other.
+
+## Calls, closures and generics
+
+A method is a function whose first parameter is the receiver, by value, as a `ref` or as a `mut`, under the layouts above. A function value is called through its pair: the function pointer with the box's address first. A generic function or method is written once per instance, with its type arguments substituted throughout, from a worklist that ends when no new instance is asked for; a trait's default method is one such instance per implementing type. Both backends emit the instances under the same names. The IR is one module per program, as the C output is one translation unit, which is what lets the optimizer inline a method across the program and remove the pair of a closure that never leaves its function.
+
+Tasks and channels lower to the interface of `06-tasks-and-channels.md` in both backends: a spawn is a block of the moved arguments and a trampoline the backend writes, handed to `tk_spawn`; a `select` is an array of cases handed to `tk_select`; the rest is runtime calls. Nothing about them is a layout question.
+
+## Optimization
+
+The C backend hands its text to the system's C compiler at `-O1`, with wrapping arithmetic and strict aliasing switched off, and that is the whole of its optimization control. The LLVM backend runs the standard pipeline and gains what it is for: a `ref` that is a pointer and not a copy, a `*T?` that is one word, inlining decided over the whole program, the removal of the dead stores that empty a moved place when nothing reads the place again, and the debug build's checks compiled out rather than switched off. Where the two differ in speed, the benchmark of task 4.6 says by how much, next to the table in `01-language-design.md`; this note promises no number.
+
+## What it costs
+
+- Two backends apply the rules of this note from two tree walks, and a rule changed in one must change in the other; the differential test of task 4.7 is what makes that a test failure and not a drift.
+- The LLVM backend's three changed layouts mean a program compiled by the two backends has values of different sizes; nothing in the language can observe that, and the runtime, which sees only the shapes it declares, is not touched.
+- The guard stack stays, and with it a push and a pop per `Drop`-bearing value, until landing pads are measured against it.
+
+## Precedent
+
+Rust's MIR and Go's SSA are the lowered forms this note declines for now: each exists because its compiler has one backend and many analyses to run between the front and the back, borrow checking in Rust's case; Teak's checker does its analysis on the tree, and its backends have no analysis of their own to share. The null-pointer option is Rust's niche optimization in its simplest instance, applied to the one type where the language guarantees the niche. The inline closure box with a fixed size is how Swift passes closures that capture nothing escaping; the heap-allocated trait value with a table is Go's interface value, one allocation per conversion, which is also what Teak's `[]Shape` wants. The guard stack for drops under a panic is the register-and-unwind scheme of early exception runtimes, kept here for its simplicity until a measurement says otherwise.

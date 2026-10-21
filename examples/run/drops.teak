@@ -91,5 +91,13 @@ func main() {
 	ss := []Slot{Slot{v: Some("sv".Clone())}}
 	fmt.Println(take(mut first(mut ss).v) ?? "none".Clone())   // first runs once
 	fmt.Println((ref Res{name: "tmp".Clone()}).name)           // a borrow of a temporary: it dies with the statement
+	d := Res{name: "blank".Clone()}
+	_ = d                                     // dropped here, once: _ = d moves d
+	e1, e2 := Res{name: "e1".Clone()}, Res{name: "e2".Clone()}
+	_, kept := e1, e2                         // e1 dropped here; kept owns e2
+	fmt.Println(kept.name)
+	cs := []Res{Res{name: "c1".Clone()}, Res{name: "c2".Clone()}}
+	cs.Clear()                                // each element dropped, in order
+	fmt.Println(len(cs))
 	fmt.Println("end")                        // then rs, with p inside, is dropped
 }

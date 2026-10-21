@@ -1,0 +1,93 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The bufio package when the reader or writer under it fails part way:
+// a Writer keeps its first error and returns it from every later call,
+// and never writes a byte twice; a Reader that fails keeps what it had
+// read for the next call; a Scanner gives what it had read as the last
+// line before it reports the failure.
+
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+)
+
+// Flaky takes at most three bytes a call and fails its second call.
+struct Flaky impl io.Writer {
+	got   []byte
+	calls int
+}
+
+func (f mut Flaky) Write(p ref []byte) Result<int, io.Error> {
+	f.calls++
+	if f.calls == 2 {
+		return Err(io.Errno("write", "flaky", 5))
+	}
+
+	n := min(3, len(p))
+	for i := 0; i < n; i++ {
+		f.got.Push(p[i])
+	}
+
+	return Ok(n)
+}
+
+// Script hands out one byte a call from data, and fails once on
+// reaching failAt.
+struct Script impl io.Reader {
+	data   string
+	pos    int
+	failAt int
+	failed bool
+}
+
+func (s mut Script) Read(p mut []byte) Result<int, io.Error> {
+	if s.pos == s.failAt && !s.failed {
+		s.failed = true
+		return Err(io.Errno("read", "script", 5))
+	}
+
+	if s.pos >= s.data.Len() || len(p) == 0 {
+		return Ok(0)
+	}
+
+	p[0] = s.data[s.pos]
+	s.pos++
+	return Ok(1)
+}
+
+func main() {
+	var fl Flaky
+	{
+		w := bufio.NewWriterSize(mut fl, 64)
+		w.WriteString("abcdefgh").Expect("buffered")
+		fmt.Println("flush:", w.Flush())
+		fmt.Println("flush again:", w.Flush())
+		fmt.Println("write after:", w.WriteString("Z"))
+	}
+
+	fmt.Println("written:", string(fl.got))
+
+	{
+		s := Script{data: "line1\nab|cd\n".Clone(), pos: 0, failAt: 8, failed: false}
+		r := bufio.NewReader(mut s)
+		fmt.Println(r.ReadString('\n'))
+		fmt.Println(r.ReadString('\n'))
+		fmt.Println(r.ReadString('\n'))
+		fmt.Println(r.ReadString('\n'))
+	}
+
+	{
+		s := Script{data: "one\ntwo".Clone(), pos: 0, failAt: 6, failed: false}
+		sc := bufio.NewScanner(mut s)
+		for sc.Scan() {
+			fmt.Println("line:", sc.Text())
+		}
+
+		fmt.Println("err:", sc.Err())
+	}
+}

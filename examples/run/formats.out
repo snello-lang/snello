@@ -1,0 +1,35 @@
+0.1 0.3333333333333333 5e-324 1e+21 1e+20 1.23456789e+08 1e+06 123456
+0.0001 1e-05 1.5e-07 -0 2.5 15 1e+100 1.2345678901234568e+20
++Inf -Inf NaN 9.007199254740992e+15 Some(+Inf) [NaN 1]
+0.1 1.6777216e+07 0.3 1e+20 -Inf
+[+Inf] [NaN] [2.500000] [2] [502]
+[3] [1e+10] [0.3333333333] [100] [hé] [abcd]
+[007] [     007] [-007] [] [42   |] [false]
+[18446744073709551615] [  200] [0200] [18446744073709551615]
+"a\a\b\f\v\x00\x7f \xff é\u00a0\u2028🙂\"\\" "tab\there"
+'A' '\n' '\'' '\x00' 'é' "he"
+21.5°C {attic -3.0°C}
+21.5°C 21.5°C "21.5°C"   21.5°C|
+0 +Inf +Inf NaN
+-Inf -Inf +Inf +Inf
+NaN NaN NaN -Inf +Inf
+NaN NaN NaN NaN NaN
+-Inf +Inf 1 0.5
+1_000.5 1000.5
+1.5_0 1.5
+0x1p-2 0.25
+0X1.8p1 3
++Infinity +Inf
+inf +Inf
+NaN NaN
+-nan invalid syntax false
+nan(1) invalid syntax false
+0x10 invalid syntax false
+_1 invalid syntax false
+1__0 invalid syntax false
+1_ invalid syntax false
+1e999 value out of range true
+1e-400 0
+{root} {root} 3
+rc.Weak()
+arena[y z] arena[]

@@ -5,27 +5,33 @@
 // Command teak is the Teak compiler driver.
 //
 // `teak build FILE` compiles a Teak program to a native binary in the
-// current directory; `teak build -debug FILE` builds it with the
-// runtime's checks, which stop the program on a value used after its
-// release and report values never released. Four more subcommands inspect the compiler by
-// hand: `teak lex FILE` prints the token stream, `teak parse FILE` the
-// syntax tree, `teak check FILE` what the checker finds, and `teak emit
-// FILE` the C source that build would compile.
+// current directory, through the LLVM backend and clang; `teak build
+// -debug FILE` builds it with the runtime's checks, which stop the
+// program on a value used after its release and report values never
+// released; `teak build -backend c FILE` builds it through the C
+// backend, the reference implementation, and the system's C compiler.
+// Four more subcommands inspect the compiler by hand: `teak lex FILE`
+// prints the token stream, `teak parse FILE` the syntax tree, `teak
+// check FILE` what the checker finds, and `teak emit [-backend c]
+// FILE` the IR module, or the C source, that build would compile.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/teak-lang/teak/ast"
-	"github.com/teak-lang/teak/emit/c"
-	"github.com/teak-lang/teak/parser"
-	"github.com/teak-lang/teak/scanner"
-	"github.com/teak-lang/teak/std"
-	"github.com/teak-lang/teak/token"
-	"github.com/teak-lang/teak/types"
+	"github.com/teak-lang/teak/compiler/ast"
+	"github.com/teak-lang/teak/compiler/emit/c"
+	"github.com/teak-lang/teak/compiler/emit/llvm"
+	"github.com/teak-lang/teak/compiler/emit/lower"
+	"github.com/teak-lang/teak/compiler/importer"
+	"github.com/teak-lang/teak/compiler/parser"
+	"github.com/teak-lang/teak/compiler/scanner"
+	"github.com/teak-lang/teak/compiler/token"
+	"github.com/teak-lang/teak/compiler/types"
 )
 
 func main() {
@@ -52,28 +58,36 @@ func main() {
 
 		os.Exit(check(os.Args[2]))
 	case "build":
-		switch {
-		case len(os.Args) == 3:
-			os.Exit(build(os.Args[2], false))
-		case len(os.Args) == 4 && os.Args[2] == "-debug":
-			os.Exit(build(os.Args[3], true))
-		}
-
-		usage()
+		path, backend, debug := buildArgs(os.Args[2:], true)
+		os.Exit(build(path, backend, debug))
 	case "emit":
-		if len(os.Args) != 3 {
-			usage()
-		}
-
-		os.Exit(emit(os.Args[2]))
+		path, backend, _ := buildArgs(os.Args[2:], false)
+		os.Exit(emit(path, backend))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (build [-debug] | emit | lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: teak (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | lex | parse | check) FILE")
 	os.Exit(2)
+}
+
+// buildArgs reads the flags of build and emit: the backend, and for a
+// build whether the runtime's checks are wanted.
+func buildArgs(args []string, withDebug bool) (path, backend string, debug bool) {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&backend, "backend", "llvm", "the backend: llvm, or c for the reference backend")
+	if withDebug {
+		fs.BoolVar(&debug, "debug", false, "build with the runtime's checks")
+	}
+
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || backend != "c" && backend != "llvm" {
+		usage()
+	}
+
+	return fs.Arg(0), backend, debug
 }
 
 func lex(path string) int {
@@ -134,7 +148,7 @@ func check(path string) int {
 
 	f, file, err := parser.ParseFile(path, src)
 	if err == nil {
-		conf := types.Config{Importer: std.NewImporter(&types.Info{})}
+		conf := types.Config{Importer: importer.NewImporter(&types.Info{})}
 		_, err = conf.Check("", file, f, nil)
 	}
 
@@ -146,23 +160,23 @@ func check(path string) int {
 	return 0
 }
 
-// emit prints the C source for a file, for reading what build
-// compiles.
-func emit(path string) int {
-	csrc, ok := emitSource(path)
+// emit prints what build would compile: the C source, or the IR
+// module, for reading.
+func emit(path, backend string) int {
+	src, ok := emitSource(path, backend, false)
 	if !ok {
 		return 1
 	}
 
-	os.Stdout.Write(csrc)
+	os.Stdout.Write(src)
 	return 0
 }
 
 // build compiles a file to a native binary named after it, in the
-// current directory, through the C backend and the system C compiler;
-// debug asks for the runtime's checks.
-func build(path string, debug bool) int {
-	csrc, ok := emitSource(path)
+// current directory, through the backend asked for; debug asks for
+// the runtime's checks.
+func build(path, backend string, debug bool) int {
+	src, ok := emitSource(path, backend, debug)
 	if !ok {
 		return 1
 	}
@@ -175,9 +189,16 @@ func build(path string, debug bool) int {
 
 	defer os.RemoveAll(dir)
 	name := strings.TrimSuffix(filepath.Base(path), ".teak")
-	bin, out, err := c.Build(dir, name, csrc, debug)
+	var bin string
+	var out []byte
+	if backend == "llvm" {
+		bin, out, err = llvm.Build(dir, name, src, debug)
+	} else {
+		bin, out, err = c.Build(dir, name, src, debug)
+	}
+
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cc: %v\n%s", err, out)
+		fmt.Fprintf(os.Stderr, "%s: %v\n%s", backend, err, out)
 		return 1
 	}
 
@@ -194,9 +215,11 @@ func build(path string, debug bool) int {
 	return 0
 }
 
-// emitSource parses, checks and emits a file, printing the errors of
-// whichever step fails.
-func emitSource(path string) ([]byte, bool) {
+// emitSource parses, checks and emits a file through the backend,
+// printing the errors of whichever step fails. The LLVM backend emits
+// a debug build's checks itself, so it is told; the C backend's are a
+// flag of the C compiler.
+func emitSource(path, backend string, debug bool) ([]byte, bool) {
 	src, ok := readSource(path)
 	if !ok {
 		return nil, false
@@ -204,15 +227,19 @@ func emitSource(path string) ([]byte, bool) {
 
 	f, file, err := parser.ParseFile(path, src)
 	info := &types.Info{}
-	imp := std.NewImporter(info)
+	imp := importer.NewImporter(info)
 	if err == nil {
 		conf := types.Config{Importer: imp}
 		_, err = conf.Check("", file, f, info)
 	}
 
-	var csrc []byte
+	var out []byte
 	if err == nil {
-		csrc, err = c.Emit(file, f, info, libraries(imp)...)
+		if backend == "llvm" {
+			out, err = llvm.Emit(llvm.Config{Debug: debug}, file, f, info, libraries(imp)...)
+		} else {
+			out, err = c.Emit(file, f, info, libraries(imp)...)
+		}
 	}
 
 	if err != nil {
@@ -220,16 +247,16 @@ func emitSource(path string) ([]byte, bool) {
 		return nil, false
 	}
 
-	return csrc, true
+	return out, true
 }
 
-// libraries returns the packages the importer loaded, as the backend
-// takes them.
-func libraries(imp *std.Importer) []c.Library {
+// libraries returns the packages the importer loaded, as the backends
+// take them.
+func libraries(imp *importer.Importer) []lower.Library {
 	pkgs := imp.Packages()
-	libs := make([]c.Library, len(pkgs))
+	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = c.Library{File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{File: p.File, Syntax: p.Syntax}
 	}
 
 	return libs

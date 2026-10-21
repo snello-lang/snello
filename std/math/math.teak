@@ -20,17 +20,46 @@ const Pi f64 = 3.14159265358979323846264338327950288
 // it.
 func Sqrt(x f64) f64
 
-// Abs returns the absolute value of x.
+// largest is the largest finite f64; past it is an infinity.
+const largest f64 = 1.79769313486231570814527423731704356798070e+308
+
+// Abs returns the absolute value of x: +0 for -0, +Inf for -Inf, and
+// NaN for NaN, as Go's math.Abs.
 func Abs(x f64) f64 {
-	if x < 0 {
+	if x < 0 || x == 0 && 1/x < 0 {
 		return -x
 	}
 
 	return x
 }
 
-// Min returns the smaller of x and y, and y when neither is smaller.
+// Min returns the smaller of x and y, as Go's math.Min: -Inf when
+// either is, else NaN when either is, and -0 as the smaller zero.
 func Min(x, y f64) f64 {
+	if x < -largest {
+		return x
+	}
+
+	if y < -largest {
+		return y
+	}
+
+	if x != x {
+		return x
+	}
+
+	if y != y {
+		return y
+	}
+
+	if x == 0 && x == y {
+		if 1/x < 0 {
+			return x
+		}
+
+		return y
+	}
+
 	if x < y {
 		return x
 	}
@@ -38,8 +67,33 @@ func Min(x, y f64) f64 {
 	return y
 }
 
-// Max returns the larger of x and y, and y when neither is larger.
+// Max returns the larger of x and y, as Go's math.Max: +Inf when
+// either is, else NaN when either is, and +0 as the larger zero.
 func Max(x, y f64) f64 {
+	if x > largest {
+		return x
+	}
+
+	if y > largest {
+		return y
+	}
+
+	if x != x {
+		return x
+	}
+
+	if y != y {
+		return y
+	}
+
+	if x == 0 && x == y {
+		if 1/x < 0 {
+			return y
+		}
+
+		return x
+	}
+
 	if x > y {
 		return x
 	}

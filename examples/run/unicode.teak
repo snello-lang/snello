@@ -1,0 +1,61 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Text beyond ASCII, as Go's strings package reads it: case changed by
+// Unicode's simple mapping, a byte that is not UTF-8 read as U+FFFD,
+// white space as unicode.IsSpace knows it in Fields and Trim, an empty
+// separator splitting after every UTF-8 sequence; Repeat and Join, and
+// Sort on a struct through its Cmp.
+
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+struct Point impl Ord {
+	x int
+	y int
+}
+
+func (p ref Point) Cmp(q ref Point) Ordering {
+	if p.x != q.x {
+		return p.x.Cmp(q.x)
+	}
+
+	return p.y.Cmp(q.y)
+}
+
+func main() {
+	fmt.Println("ÀÉÎ straße".ToLower(), "àéî straße".ToUpper())
+	fmt.Println("İstanbul".ToLower(), "ıi".ToUpper(), "ǅ".ToLower(), "ǆ".ToUpper())
+	bad := "a\xffb"
+	fmt.Println(bad.ToUpper(), len(bad.ToUpper()), "Ωμέγα".ToUpper(), strings.ToLower("ΑΒΓ"))
+
+	words := "a b　c d e".Fields()
+	fmt.Println(len(words), words)
+	t := " 　 x y \u0085\t"
+	fmt.Println("[" + t.Trim() + "]", len(t.Trim()))
+
+	letters := "héllo".Split("")
+	fmt.Println(len(letters), letters)
+	fmt.Println(len("".Split("")), len("".Split(",")), len(bad.Split("")), len("a,b,,c".Split(",")))
+
+	fmt.Println(strings.Repeat("ab", 3), len(strings.Repeat("ab", 0)), len(strings.Repeat("", 5)))
+	parts := []string{"x".Clone(), "yy".Clone(), "z".Clone()}
+	fmt.Println(strings.Join(ref parts, "--"), len(strings.Join(ref []string{}, ",")))
+	var b strings.Builder
+	b.WriteString("héllo, ")
+	b.WriteString("wörld")
+	b.WriteByte('!')
+	fmt.Println(b.String(), b.Len())
+
+	hay := strings.Repeat("ab", 1000) + "abc"
+	fmt.Println(hay.Contains("abc"), hay.Contains("abd"), hay.Contains(""), "".Contains("a"))
+
+	ps := []Point{Point{x: 2, y: 1}, Point{x: 1, y: 5}, Point{x: 2, y: 0}, Point{x: 1, y: 2}}
+	ps.Sort()
+	fmt.Println(ps)
+}

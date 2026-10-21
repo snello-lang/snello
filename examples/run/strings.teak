@@ -35,4 +35,6 @@ func main() {
 	c := "7 Z"
 	fmt.Println(c[0].IsDigit(), c[1].IsSpace(), c[2].IsLetter(), c[2].IsUpper(), c[2].IsLower(), c[0].IsLetter())
 	fmt.Println(min(3, 1, 2), max(3, 1, 2), min(2.5, 1), max(-1, len(c)))
+	e := ""
+	fmt.Println(len(e.ToUpper()), len(e.ToLower()), len(e + e), len(e.Trim())) // built empty: no block to leak
 }

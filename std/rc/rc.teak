@@ -17,15 +17,18 @@
 // changed while shared is built from parts that are not shared, or
 // kept in an arena. That rule also means a cycle of handles cannot be
 // built, since the link that would close it is set through GetMut on a
-// handle that is no longer alone; so a value in an Rc is always
-// released. An Rc is for one task: its count is a plain number, and it
-// is not sent to another task. The memory of the value is released by
-// the last handle, Rc or Weak, to go.
+// handle that is no longer alone, and a lock, the other way to change a
+// shared value, holds only what may be sent, which an Rc may not; so a
+// value in an Rc is always released. An Rc is for one task: its count
+// is a plain number, and it is not sent to another task. The memory of
+// the value is released by the last handle, Rc or Weak, to go.
 //
 // The zero value of either handle, var r Rc<T>, is an empty handle:
 // it counts nothing, clones to another empty handle, and Get on it
 // panics.
 package rc
+
+import "fmt"
 
 // A cell is what the handles on one value share: the value, gone once
 // the last Rc goes, and the two counts. The counts are plain numbers,
@@ -43,16 +46,42 @@ struct cell<T> {
 // An Rc is a handle on a shared value, one of its owners. It is moved,
 // cloned for another owner, and lent with ref; when it goes out of
 // scope the count goes down, and the value with it when the count
-// reaches zero.
-struct Rc<T> impl Clone, Drop {
+// reaches zero. It prints as the value it holds.
+struct Rc<T> impl Clone, Drop, fmt.Stringer {
 	p *cell<T>?
 }
 
 // A Weak is a handle that does not own the value: a link back to a
 // value other handles own, broken when they are gone. It is moved,
-// cloned and lent as an Rc is.
-struct Weak<T> impl Clone, Drop {
+// cloned and lent as an Rc is, and prints as the value while it is
+// there.
+struct Weak<T> impl Clone, Drop, fmt.Stringer {
 	p *cell<T>?
+}
+
+// String returns the text of the value, as fmt prints it, so that an
+// Rc, and a struct holding one, print as the value they share; an
+// empty handle prints as rc.Rc().
+func (r ref Rc<T>) String() string {
+	return text(ref r.p, "rc.Rc()")
+}
+
+// String returns the text of the value while it is there, as an Rc
+// prints, and rc.Weak() once it is gone or for an empty handle.
+func (w ref Weak<T>) String() string {
+	return text(ref w.p, "rc.Weak()")
+}
+
+// text returns the text of the value a cell holds, or none when the
+// cell is gone or holds none.
+func text<T>(p ref (*cell<T>?), none string) string {
+	if c := ref p {
+		if v := ref c.value {
+			return fmt.Sprint(v)
+		}
+	}
+
+	return none
 }
 
 // New puts v in a new shared cell and returns the first handle on it.
@@ -127,12 +156,19 @@ func (r ref Rc<T>) WeakCount() int {
 func (r mut Rc<T>) Drop() {
 	p := take(mut r.p) ?? return // empty, or dropped already
 	p.strong--
-	if p.strong == 0 && p.weak == 0 {
-		return // the last handle: p goes out of scope here and frees the cell, the value with it
+	if p.strong > 0 {
+		leak(p)
+		return
 	}
 
-	if p.strong == 0 {
-		p.value = None // the value dies with its last owner; the Weaks keep the cell
+	// The last owner: the value goes. Dropping it may drop Weaks on this
+	// cell, its last one included, so this handle counts as one more Weak
+	// until the value is gone, and the cell outlives the value's drop.
+	p.weak++
+	_ = take(mut p.value)
+	p.weak--
+	if p.weak == 0 {
+		return // no handle left: p goes out of scope here and frees the cell
 	}
 
 	leak(p)

@@ -1,0 +1,89 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Printing as Go prints: a float in the shortest form that reads back
+// as it, with Go's exponent rule, and +Inf, -Inf and NaN; an f32 at its
+// own precision; a precision on %v, %s, %q and %d; %q escaped as Go's
+// strconv.Quote escapes, and an integer quoted as its rune; a type
+// implementing fmt.Stringer printed as its String, inside a struct
+// too; math.Abs, Min and Max and the predeclared min and max on -0 and
+// NaN; ParseFloat's grammar and the Kind of its error; and an Rc, a
+// Weak and an Arena printed as what they hold.
+
+package main
+
+import (
+	"arena"
+	"fmt"
+	"math"
+	"rc"
+	"strconv"
+)
+
+struct Celsius impl fmt.Stringer {
+	deg f64
+}
+
+func (c ref Celsius) String() string { return fmt.Sprintf("%.1f°C", c.deg) }
+
+struct Reading {
+	place string
+	temp  Celsius
+}
+
+struct Node {
+	name string
+}
+
+func main() {
+	zero := 0.0
+	inf := 1 / zero
+	nan := zero / zero
+	fmt.Println(0.1, 1.0/3, 5e-324, 1e21, 1e20, 123456789.0, 1e6, 123456.0)
+	fmt.Println(0.0001, 0.00001, 1.5e-7, -zero, 2.5, 15.0, 1e100, 1.2345678901234568e20)
+	fmt.Println(inf, -inf, nan, 9007199254740993.0, Some(inf), []f64{nan, 1})
+	var f f32 = 0.1
+	var g f32 = 16777216.0
+	fmt.Println(f, g, f*3, strconv.FormatFloat(1e20), strconv.FormatFloat(-inf))
+	fmt.Printf("[%.3f] [%.2f] [%f] [%.0f] [%d]\n", inf, nan, 2.5, 2.5, len(fmt.Sprintf("%.500f", 1.0)))
+	fmt.Printf("[%.1v] [%.3v] [%.10v] [%.3v] [%.2s] [%.4v]\n", 3.14159, 1e10, 1.0/3, 100.0, "héllo", "abcdef")
+	fmt.Printf("[%.3d] [%8.3d] [%.3d] [%.0d] [%-5d|] [%t]\n", 7, 7, -7, 0, 42, false)
+	var big u64 = 18446744073709551615
+	var small u8 = 200
+	fmt.Printf("[%d] [%5d] [%.4d] [%v]\n", big, small, small, big)
+	fmt.Printf("%q %q\n", "a\x07\x08\x0c\x0b\x00\x7f \xff é  🙂\"\\", "tab\there")
+	fmt.Printf("%q %q %q %q %q %.2q\n", 'A', '\n', '\'', byte(0), 'é', "hello")
+
+	c := Celsius{deg: 21.5}
+	fmt.Println(c, Reading{place: "attic".Clone(), temp: Celsius{deg: -3}})
+	fmt.Printf("%v %s %q %8s|\n", c, c, c, c)
+
+	fmt.Println(math.Abs(-zero), 1/math.Abs(-zero), math.Abs(-inf), math.Abs(nan))
+	fmt.Println(1/math.Min(-zero, zero), 1/math.Min(zero, -zero), 1/math.Max(-zero, zero), 1/math.Max(zero, -zero))
+	fmt.Println(math.Min(nan, 1), math.Min(1, nan), math.Max(nan, 1), math.Min(-inf, nan), math.Max(inf, nan))
+	fmt.Println(min(nan, 1.0), min(1.0, nan), max(nan, 1.0), max(1.0, nan), min(-inf, nan))
+	fmt.Println(1/min(zero, -zero), 1/max(-zero, zero), min(2.5, 1), max(f, 0.5))
+
+	for _, s := range []string{"1_000.5", "1.5_0", "0x1p-2", "0X1.8p1", "+Infinity", "inf", "NaN", "-nan", "nan(1)", "0x10", "_1", "1__0", "1_", "1e999", "1e-400"} {
+		match strconv.ParseFloat(ref s) {
+			Ok(v) => fmt.Println(s, v),
+			Err(e) => fmt.Println(s, e.Msg, e.Kind() == strconv.Range),
+		}
+	}
+
+	r := rc.New(Node{name: "root".Clone()})
+	w := r.Downgrade()
+	fmt.Println(r, w, rc.New(3))
+	{
+		_ = take(mut r)
+	}
+
+	fmt.Println(w)
+	a := arena.New<string>()
+	x := a.Insert("x".Clone())
+	a.Insert("y".Clone())
+	a.Insert("z".Clone())
+	a.Remove(x)
+	fmt.Println(a, arena.New<int>())
+}

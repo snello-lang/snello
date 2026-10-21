@@ -14,7 +14,7 @@ path := []string{}
 buf := make([]int?, cap)
 ```
 
-`len(xs)` is the number of elements and `cap(xs)` the room before the next growth. `xs[i]` reads or writes an element, and an index outside the slice stops the program with `index out of range [5] with length 3`. `xs[lo:hi]` lends the elements from `lo` up to `hi`: the result is a borrow of the slice, with the type `ref []T`, or `mut []T` when `xs` was reached through a `mut`.
+`len(xs)` is the number of elements and `cap(xs)` the room before the next growth. `xs[i]` reads or writes an element, and an index outside the slice stops the program with `index out of range [5] with length 3`. `xs[lo:hi]` lends the elements from `lo` up to `hi`: the result is a borrow of the slice, with the type `ref []T`, or `mut []T` when `xs` was reached through a `mut`. A sub-slice is a window on its slice's elements: a function given `mut xs[1:4]` may change, sort and reverse those elements, but their number is the slice's to change, so `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue` and `Clear` on a sub-slice, or replacing it whole, stop the program with `Push on a sub-slice: it lends the elements of its slice and cannot change its length`, before anything is changed. `cap` of a sub-slice is its length.
 
 Growing and shrinking are methods, since a slice owns its elements and the methods say what happens to them:
 
@@ -64,14 +64,16 @@ Operations on text are methods. Most return views into the string, which cost no
 | Method | Returns |
 |---|---|
 | `s.Len()` | The length in bytes, like `len(s)` |
-| `s.Trim()` | `s` without white space at either end, as a borrow |
+| `s.Trim()` | `s` without white space at either end, as a borrow: Go's `strings.TrimSpace` |
 | `s.Fields()` | The pieces between white space, each a borrow; use it in a `for` |
-| `s.Lines()` | The lines, without their newline or a carriage return before it, each a borrow; a last line without a newline counts, a trailing newline makes no empty one |
-| `s.Split(sep)` | The pieces between each `sep`, likewise |
+| `s.Lines()` | The lines, without their newline or a carriage return before it, each a borrow; a last line without a newline counts, a trailing newline makes no empty one. Go's `strings.Lines` keeps each newline |
+| `s.Split(sep)` | The pieces between each `sep`, likewise; an empty `sep` gives each UTF-8 sequence, and none of an empty string |
 | `s.SplitOnce(sep)` | The parts before and after the first `sep`, as `(ref string, ref string)?` |
 | `s.HasPrefix(t)`, `s.HasSuffix(t)`, `s.Contains(t)` | Whether `t` begins, ends or appears in `s` |
-| `s.ToUpper()`, `s.ToLower()` | A new, owned string |
+| `s.ToUpper()`, `s.ToLower()` | A new, owned string, every letter changed by Unicode's simple case mapping |
 | `s.Clone()` | A new, owned copy of `s` |
+
+Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` and `ToLower` change every letter, `"àéî".ToUpper()` is `ÀÉÎ`, white space for `Trim` and `Fields` is what Unicode calls white space, a no-break space or an ideographic space among it, and a byte that is not valid UTF-8 reads as the replacement character U+FFFD, which `ToUpper` writes in its place. `examples/run/unicode.teak` checks each against Go's output. A slice expression out of range stops the program in Go's words, `slice bounds out of range [3:1]` or `[:10] with length 3`, and so does `make` with a negative length or a capacity below it, `makeslice: len out of range`.
 
 The pieces `Fields` and `Split` yield borrow the string they came from, so `for w := range text.Fields()` lends `text` for the loop. To keep a piece, clone it or build an owned string from it, which is what `wordfreq` does with `w.ToLower()` before using the word as a map key. `SplitOnce` is made for `if` with a binding:
 

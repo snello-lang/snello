@@ -1,6 +1,6 @@
 # 5. Ownership: moves, `Copy`, `take` and `Drop`
 
-Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope, on an early `return` and when a panic ends the program (stage 1, task 1.9; `examples/run/drops.teak` prints the order). `teak build -debug` checks the drops as the program runs (stage 1, task 1.9). The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
+Status: moves are checked (stage 1, task 1.6, `teak check`), `take` compiles (stage 1, task 1.5), and drops run at the end of a scope, on an early `return` and when a panic ends the program (stage 1, task 1.9; `examples/run/drops.teak` prints the order). `teak build -debug` checks the drops as the program runs (stage 1, task 1.9), and `bench/memory.teak` measures what freeing without a collector buys (stage 4, task 4.6), over the runtime's own allocator (stage 5, task 5.1). The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
 
 Teak has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 
@@ -42,7 +42,7 @@ When you do want both names, say so: `t := s.Clone()` copies the string and both
 
 ## `Copy` types
 
-Numbers, `bool`, and channel handles are copied, not moved. `y := x` on an `int` leaves `x` usable. A struct or enum whose fields are all of such types is a `Copy` type too; the compiler works this out from the fields, and nothing is declared:
+Numbers and `bool` are copied, not moved. `y := x` on an `int` leaves `x` usable. A struct or enum whose fields are all of such types is a `Copy` type too; the compiler works this out from the fields, and nothing is declared:
 
 ```teak
 enum Token {                                    // Copy: every payload is Copy
@@ -101,7 +101,7 @@ s := pick(mut xs).name                // ERROR "cannot move pick(...).name out o
 n := (*mk()).name                     // ERROR "cannot move (*mk()).name out of a temporary: bind the temporary to a name first"
 ```
 
-`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. It is how a linked structure is rebuilt without a temporary placeholder:
+`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer and a function value have no zero value, since nothing could be done with the null left behind, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind`; make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
 
 ```teak
 func (s mut Stack) Push(v string) {
@@ -130,7 +130,7 @@ Using `n` as a whole after `n.next` moved out would be an error: `use of partial
 
 ## Dropping
 
-When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
+When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
 
 ```teak
 struct TempDir impl Drop { path string }
@@ -179,6 +179,32 @@ Released memory is filled with a poison byte and kept from reuse for a while, an
 
 No program the checker accepts should ever fail this way, which is what makes the debug build useful to the compiler's own tests: every example program runs under it, so a drop the compiler forgets, or places wrongly, is a failing test rather than a slow leak. Its first find was a rule the checker lacked: a borrow of a temporary, `t := s.Clone().Trim()`, printed poison once the clone was dropped at the end of its statement, and is now refused (chapter 6). It also catches the one escape the checker does not see yet, a closure capturing a local that a function stores through a parameter of function type, when the closure is called after the local is gone.
 
+## What no collector buys
+
+Freeing every value on the line its owner dies is not only about leaks. It changes two numbers a program with a collector cannot control: how much memory it holds, and how long it can stall. `bench/memory.teak` shows both. It keeps a tree of a million nodes alive the whole run and, beside it, runs two thousand rounds that each build a small tree, walk it and drop it:
+
+```teak
+// round builds a small tree, counts it, and frees it on the way out.
+func round() int {
+	t := build(12)
+	return count(t)
+}
+```
+
+`t` dies at the closing brace, so the eight thousand blocks of one round are the next round's. Nothing piles up and nothing has to walk the live tree to find out what is dead. The same program in Go and in Rust, measured on an eight-core arm64 laptop:
+
+| | Teak | Go | Rust |
+|---|---|---|---|
+| Peak memory | 33 MB | 78 MB | 34 MB |
+| Mean round | 103 µs | 96 µs | 177 µs |
+| Rounds over twice the mean | none | 178 of 2,000, up to 0.7 ms | none |
+
+- **Memory is what is live.** Teak's peak is the live tree. Go's is 2.4 times it: its collector lets garbage reach about the size of the live heap before a cycle.
+- **No pauses.** Every Teak round costs the same, since each pays for its own frees as it goes. About one Go round in eleven takes over twice the mean, the rounds a collection runs in.
+- **The cost is per object.** Go's mean round is faster: allocating from a collector's heap is a pointer bump, and freeing is batched. Teak pays a call to the allocator for each node, as Rust does, but the runtime's allocator keeps a list of free blocks of each size on every thread, so the call is a few instructions and the mean round is within a tenth of Go's.
+
+Two tests hold this in place. `go test ./bench -run TestNoCollector -v` builds the program with one round, with two thousand and with ten thousand. It fails if the peak with eighty million blocks freed is a tenth over the peak with eight thousand. `TEAK_BENCH=1 go test ./bench -v` prints the whole table above, for every benchmark and all three languages. The order in which values die is shown by `examples/run/drops.teak`, which prints it, and that nothing is left behind by the debug build of every example, which fails on any block not released.
+
 ## What the compiler reports
 
 | Message | Program |
@@ -187,5 +213,5 @@ No program the checker accepts should ever fail this way, which is what makes th
 | `s moved in a previous iteration of the loop` | `move-in-loop` |
 | `cannot move xs[0] out of the slice` | `move-out-of-slice` |
 | `cannot move n.value out of a borrow` | `move-out-of-borrow` |
-| `cannot move pick(...).name out of a borrow`, `cannot move (*mk()).name out of a temporary: bind the temporary to a name first` | `TestMoves` in `types/move_test.go` |
+| `cannot move pick(...).name out of a borrow`, `cannot move (*mk()).name out of a temporary: bind the temporary to a name first` | `TestMoves` in `compiler/types/move_test.go` |
 | `use of partially moved value n` | `partial-move` |

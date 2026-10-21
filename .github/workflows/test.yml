@@ -1,30 +1,68 @@
-# Runs the test suite on every push and pull request, on Linux and
-# macOS. The tests build and run Teak programs through the C compiler
-# the runtime targets, clang, named through CC as every build tool reads
-# it; macOS runners have it as cc, Linux runners beside gcc.
+# Runs the checks and the test suite on every push and pull request.
+#
+# The suite builds and runs Teak programs through both backends, and
+# the runtime under them has code per processor and per system: the
+# context switch is assembly for x86-64 and for arm64, the poller is
+# epoll on Linux and kqueue on Darwin, and a call into the runtime
+# follows each processor's C convention. Each runner covers one pair
+# natively, so no part of it is tested under emulation:
+#
+#   ubuntu-latest      x86-64 Linux: the x86-64 switch, epoll, byval
+#   ubuntu-24.04-arm   arm64 Linux: glibc's thread-locals, which a task
+#                      that moves between threads must not cache
+#   macos-latest       arm64 Darwin: kqueue
+#
+# x86-64 Darwin is the one pair no runner covers.
 name: Tests
 
 on:
   push:
   pull_request:
 
+# A newer push to the same branch makes an older run's result moot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: go test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  checks:
+    name: gofmt and go vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod # the version the compiler is built with, 1.27.2 today, read from one place
-          check-latest: false
-      - name: Show the C compiler
-        run: clang --version
+          cache-dependency-path: go.mod # the compiler has no dependencies, so no go.sum: the build cache is keyed on go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+      - name: Install clang
+        if: runner.os == 'Linux'
+        run: command -v clang || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang; }
+      - name: Show the toolchain
+        run: |
+          clang --version
+          if [ -r /proc/sys/vm/max_map_count ]; then echo "vm.max_map_count $(cat /proc/sys/vm/max_map_count)"; fi
       - name: Test
-        run: go test ./...
+        run: go test ./... -timeout 25m
         env:
-          CC: clang
+          CC: clang # the C backend's compiler, named as every build tool reads it
+          CLANG: clang # the LLVM backend's

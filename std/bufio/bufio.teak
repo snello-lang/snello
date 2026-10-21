@@ -17,9 +17,16 @@
 //
 // What a Writer holds is written out by Flush, and by Write when the
 // buffer is full. A Writer dropped without Flush loses what it holds,
-// as Go's does, so a program defers Flush when it makes one. The end of
-// the input is not an error: a Reader answers Ok(None) or Ok(0) there,
-// and a Scanner's Scan answers false with Err None.
+// as Go's does, so a program defers Flush when it makes one. The first
+// error a Writer meets is kept: every Write and Flush after it returns
+// that error, and a byte the writer under it took is never written
+// again. The end of the input is not an error: a Reader answers
+// Ok(None) or Ok(0) there, and a Scanner's Scan answers false with Err
+// None. The end is not final either: a Reader asked again asks the
+// reader under it again, as Go's does, so a file another program is
+// appending to is read on as it grows. A read that fails costs no
+// byte: what a Reader had read when the reader under it failed is
+// returned by the next call.
 package bufio
 
 import "io"
@@ -31,6 +38,7 @@ struct Writer<W: io.Writer> impl io.Writer {
 	w    mut W
 	buf  []byte
 	size int
+	err  io.Error? // the first error, which every later call returns
 }
 
 // A Reader reads from the reader under it in blocks and hands them out
@@ -41,7 +49,6 @@ struct Reader<R: io.Reader> impl io.Reader {
 	buf   []byte
 	block []byte
 	start int
-	done  bool
 }
 
 // A Scanner reads a reader line by line: Scan reads the next line, and
@@ -56,7 +63,14 @@ struct Scanner<R: io.Reader> {
 	scanned int // the bytes from start up to here hold no newline
 	done    bool
 	err     io.Error?
+	max     int // the longest line, its ending included
 }
+
+// MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
+// ending included, unless Buffer sets another: a longer one ends the
+// scan with "bufio.Scanner: token too long" rather than grow the
+// buffer without a bound on input a program does not control.
+const MaxScanTokenSize int = 65536
 
 // The number of bytes a block read from or written to the underlying
 // reader or writer has.
@@ -66,35 +80,49 @@ const blockSize int = 4096
 // the Writer lives. Its buffer holds 4096 bytes before it is written
 // out.
 func NewWriter<W: io.Writer>(w mut W) Writer<W> {
-	return Writer<W>{w: w, buf: []byte{}, size: blockSize}
+	return Writer<W>{w: w, buf: []byte{}, size: blockSize, err: None}
 }
 
 // NewWriterSize is NewWriter with a buffer of size bytes; a size below
-// one is one.
+// one is NewWriter's 4096, as Go's NewWriterSize has it.
 func NewWriterSize<W: io.Writer>(w mut W, size int) Writer<W> {
 	if size < 1 {
-		size = 1
+		size = blockSize
 	}
 
-	return Writer<W>{w: w, buf: []byte{}, size: size}
+	return Writer<W>{w: w, buf: []byte{}, size: size, err: None}
 }
 
 // NewReader returns a Reader that reads from r, borrowed for as long as
 // the Reader lives.
 func NewReader<R: io.Reader>(r mut R) Reader<R> {
-	return Reader<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0, done: false}
+	return Reader<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0}
 }
 
 // NewScanner returns a Scanner over r, borrowed for as long as the
 // Scanner lives, with no line read yet.
 func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
-	return Scanner<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0, end: 0, scanned: 0, done: false, err: None}
+	return Scanner<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0, end: 0, scanned: 0, done: false, err: None, max: MaxScanTokenSize}
+}
+
+// Buffer sets the longest line the Scanner reads, its ending included,
+// in place of MaxScanTokenSize; a size below one is one. Go's Buffer
+// also takes the first buffer to read into, which a Teak Scanner makes
+// itself.
+func (s mut Scanner<R>) Buffer(size int) {
+	s.max = max(size, 1)
 }
 
 // Write adds p to the buffer, writing the buffer out when it fills, and
 // returns the length of p. An error is the underlying writer's, from
-// the write that failed. It is io.Writer's method.
+// the write that failed, or the one kept from an earlier call, which
+// an empty p meets too, as Go's Write has it. It is io.Writer's
+// method.
 func (b mut Writer<W>) Write(p ref []byte) Result<int, io.Error> {
+	if e := b.err {
+		return Err(e.Clone())
+	}
+
 	for _, c := range p {
 		b.push(c)?
 	}
@@ -103,8 +131,12 @@ func (b mut Writer<W>) Write(p ref []byte) Result<int, io.Error> {
 }
 
 // WriteString adds s to the buffer, as Write does its bytes, and
-// returns its length.
+// returns its length; a kept error is returned for an empty s too.
 func (b mut Writer<W>) WriteString(s ref string) Result<int, io.Error> {
+	if e := b.err {
+		return Err(e.Clone())
+	}
+
 	for i := 0; i < s.Len(); i++ {
 		b.push(s[i])?
 	}
@@ -119,6 +151,10 @@ func (b mut Writer<W>) WriteByte(c byte) Result<(), io.Error> {
 
 // push adds one byte and writes the buffer out when it is full.
 func (b mut Writer<W>) push(c byte) Result<(), io.Error> {
+	if e := b.err {
+		return Err(e.Clone())
+	}
+
 	b.buf.Push(c)
 	if len(b.buf) >= b.size {
 		b.Flush()?
@@ -129,16 +165,31 @@ func (b mut Writer<W>) push(c byte) Result<(), io.Error> {
 
 // Flush writes what the buffer holds to the writer under it, asking
 // again for what a short write left, and empties the buffer. It is
-// what a program defers after NewWriter.
+// what a program defers after NewWriter. When a write fails, the bytes
+// written before it leave the buffer, the rest stay, and the error is
+// kept for every later call.
 func (b mut Writer<W>) Flush() Result<(), io.Error> {
+	if e := b.err {
+		return Err(e.Clone())
+	}
+
 	written := 0
 	for written < len(b.buf) {
-		n := b.w.Write(b.buf[written:])?
-		if n <= 0 {
-			return Err(io.ShortWrite())
+		failed := match b.w.Write(b.buf[written:]) {
+			Ok(n) => {
+				if n > 0 {
+					written += n
+					continue
+				}
+
+				io.ShortWrite()
+			},
+			Err(e) => e,
 		}
 
-		written += n
+		b.buf = b.buf[written:].Clone()
+		b.err = Some(failed.Clone())
+		return Err(failed)
 	}
 
 	b.buf.Clear()
@@ -149,6 +200,24 @@ func (b mut Writer<W>) Flush() Result<(), io.Error> {
 // written yet.
 func (b ref Writer<W>) Buffered() int {
 	return len(b.buf)
+}
+
+// Get lends the writer under the Writer, for as long as the Writer is
+// lent. The Writer holds that writer mut until it is dropped, so this
+// is the way to reach it meanwhile, as Go's program reaches the value
+// it gave bufio.NewWriter. A write made through it goes ahead of what
+// the buffer still holds: Flush first to keep the order.
+func (b mut Writer<W>) Get() mut W {
+	return mut b.w
+}
+
+// Get lends the reader under the Reader, for as long as the Reader is
+// lent. The Reader holds that reader mut until it is dropped, so this
+// is the way to reach it meanwhile: a connection read line by line
+// through a Reader is written to through Get. A read made through it
+// takes bytes from after those the buffer already holds.
+func (r mut Reader<R>) Get() mut R {
+	return mut r.r
 }
 
 // Read fills p from the buffer, reading from the reader under it when
@@ -186,11 +255,21 @@ func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
 
 // ReadString reads up to and including the first delim and returns
 // what it read, delim included; at the end of the input it returns
-// what was left, and None once nothing is.
+// what was left, and None once nothing is. A later call asks the
+// reader under it again, and gives what has arrived since.
 func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
 	out := []byte{}
 	for {
-		if !r.fill()? {
+		more := match r.fill() {
+			Ok(more) => more,
+			Err(e) => {
+				r.buf = out // the buffer was empty, or fill would not have read: what was read waits for the next call
+				r.start = 0
+				return Err(e)
+			},
+		}
+
+		if !more {
 			break
 		}
 
@@ -211,21 +290,17 @@ func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
 
 // fill makes sure the buffer has a byte to give, reading a block when
 // it is empty, and reports whether it has one: false at the end of the
-// input.
+// input, which is asked about again the next time, since the reader
+// under it may have more by then.
 func (r mut Reader<R>) fill() Result<bool, io.Error> {
 	if r.start < len(r.buf) {
 		return Ok(true)
-	}
-
-	if r.done {
-		return Ok(false)
 	}
 
 	r.buf.Clear()
 	r.start = 0
 	n := r.r.Read(mut r.block)?
 	if n == 0 {
-		r.done = true
 		return Ok(false)
 	}
 
@@ -237,7 +312,8 @@ func (r mut Reader<R>) fill() Result<bool, io.Error> {
 }
 
 // Scan reads the next line and reports whether there was one; false at
-// the end of the input, or when a read failed, which Err then says. The
+// the end of the input, or when a read failed, which Err then says;
+// what was read before a failure is given as the last line first. The
 // line is read without its ending, a newline or a carriage return and
 // a newline; a last line without one is a line too.
 func (s mut Scanner<R>) Scan() bool {
@@ -257,13 +333,27 @@ func (s mut Scanner<R>) Scan() bool {
 			return true
 		}
 
+		// Read no more than the limit leaves room for, as Go's Scanner
+		// reads into a buffer of at most its limit, so a line past it
+		// is refused whatever the reader gives at a call.
 		s.scanned = len(s.buf)
-		n := match s.r.Read(mut s.block) {
+		room := s.max - (len(s.buf) - s.start)
+		if room <= 0 {
+			s.err = Some(io.NewError("bufio.Scanner", "", "token too long", io.Other))
+			s.done = true
+			s.end = s.start // no line: the long one is not given in part
+			return false
+		}
+
+		n := match s.r.Read(mut s.block[:min(room, blockSize)]) {
 			Ok(n) => n,
 			Err(e) => {
+				// What was read before the failure is the last line,
+				// as at the end of the input; Err says why it stopped.
 				s.err = Some(e)
 				s.done = true
-				return false
+				s.end = len(s.buf)
+				return s.start < s.end
 			},
 		}
 

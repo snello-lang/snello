@@ -35,4 +35,11 @@ func main() {
 	start := time.Now()
 	time.Sleep(2 * time.Millisecond)
 	fmt.Println(time.Since(start) >= 2*time.Millisecond, time.Now().After(start))
+	zero := 0.0
+	nan := zero / zero
+	fs := []f64{3, nan, 1, nan, 0.5, 2}
+	gs := fs.Clone()
+	fs.Sort()                                 // NaN first, as Go orders it
+	sort.Sort(mut gs)
+	fmt.Println(fs, sort.IsSorted(ref fs), gs, nan.Cmp(nan), nan.Cmp(1.0), zero.Cmp(nan))
 }

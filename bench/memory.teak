@@ -1,0 +1,82 @@
+// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Memory without a collector: a tree of a million nodes kept alive
+// the whole run, and two thousand rounds beside it, each building a
+// small tree, walking it and dropping it, sixteen million blocks that
+// die young. Each small tree is freed when its round returns, so its
+// memory is the next one's and the program's peak is what is live; a
+// collector instead lets the dead trees pile up until its next cycle,
+// and the cycle walks the live tree too, which shows as rounds that
+// take far longer than the rest. The program prints the counts, then
+// the mean round, the longest, and how many took over twice the mean.
+
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+const rounds = 2000
+
+struct Node {
+	left  *Node?
+	right *Node?
+}
+
+func build(depth int) *Node {
+	if depth == 0 {
+		return &Node{left: None, right: None}
+	}
+
+	return &Node{left: Some(build(depth - 1)), right: Some(build(depth - 1))}
+}
+
+func count(n ref Node) int {
+	total := 1
+	if l := n.left {
+		total += count(l)
+	}
+
+	if r := n.right {
+		total += count(r)
+	}
+
+	return total
+}
+
+// round builds a small tree, counts it, and frees it on the way out.
+func round() int {
+	t := build(12)
+	return count(t)
+}
+
+func main() {
+	live := build(20)
+	total := 0
+	took := make([]time.Duration, rounds)
+	all := time.Now()
+	for i := 0; i < rounds; i++ {
+		start := time.Now()
+		total += round()
+		took[i] = time.Since(start)
+	}
+
+	mean := time.Since(all) / time.Duration(rounds)
+	longest := time.Duration(0)
+	slow := 0
+	for _, d := range took {
+		if d > longest {
+			longest = d
+		}
+
+		if d > 2*mean {
+			slow += 1
+		}
+	}
+
+	fmt.Println(count(live), total)
+	fmt.Println("round: mean", mean.Microseconds(), "us, longest", longest.Microseconds(), "us,", slow, "over twice the mean")
+}

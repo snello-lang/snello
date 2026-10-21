@@ -21,6 +21,7 @@ func main() {
 	wg := sync.NewWaitGroup()
 	for i := 0; i < 4; i++ {
 		c := counter.Clone()
+		w := wg.Clone() // the task's own handle on the group
 		wg.Add(1)
 		spawn func() {
 			for j := 0; j < 1000; j++ {
@@ -28,7 +29,7 @@ func main() {
 				*g.Get() += 1
 			}
 
-			wg.Done()
+			w.Done()
 		}()
 	}
 
@@ -42,6 +43,7 @@ func main() {
 	for i := 0; i < 3; i++ {
 		w := words.Clone()
 		key := keys[i].Clone()
+		d := done.Clone()
 		spawn func() {
 			{
 				g := w.Get().Write()
@@ -49,7 +51,7 @@ func main() {
 				m[key] = i + 1
 			}
 
-			done <- ()
+			d <- ()
 		}()
 	}
 
@@ -72,10 +74,11 @@ func main() {
 	once := sync.NewArc(sync.NewOnce())
 	for i := 0; i < 3; i++ {
 		o := once.Clone()
+		w := wg.Clone()
 		wg.Add(1)
 		spawn func() {
 			o.Get().Do(func() { fmt.Println("once") })
-			wg.Done()
+			w.Done()
 		}()
 	}
 
@@ -85,13 +88,14 @@ func main() {
 	// it signals, so main's is the last.
 	token := sync.NewArc(Token{name: "shared"})
 	t2 := token.Clone()
+	d := done.Clone()
 	spawn func() {
 		{
 			t := t2
 			fmt.Println("task holds", t.Get().name)
 		}
 
-		done <- ()
+		d <- ()
 	}()
 
 	<-done

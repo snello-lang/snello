@@ -7,6 +7,10 @@
 !/examples/run/*.out
 !/examples/run/README.md
 
+# Objects a C compiler leaves when the runtime is compiled by hand; the
+# builds themselves work in a temporary directory.
+*.o
+
 .DS_Store
 Thumbs.db
 

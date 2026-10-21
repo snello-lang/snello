@@ -1,6 +1,6 @@
 # 10. Concurrency: `spawn`, channels, `select`
 
-Status: implemented (stage 3). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `teak build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.teak` and `select.teak`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.teak`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.teak`, `examples/13-actor.teak`, `examples/18-iterators.teak` and `examples/run/sync.teak`.
+Status: implemented (stage 3); since stage 4 the tasks run on one worker thread per core and a task that waits parks instead of holding a thread (task 4.4), and a socket parks the same way (task 4.5). A channel handle and a `sync.WaitGroup` are owned and cloned for another task, every operation borrows them, and the last handle frees the channel or the group's counter (stage 5, task 5.13, 2026-10-21). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `teak build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.teak` and `select.teak`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.teak`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.teak`, `examples/13-actor.teak`, `examples/18-iterators.teak` and `examples/run/sync.teak`.
 
 A task is a function running on its own, started with `spawn`. Tasks talk through channels. That much is familiar. What Teak adds is one rule about the values that pass between tasks, and the compiler enforces it, so that two tasks can never reach one value at the same time: the bug that a race detector hunts at run time cannot be written.
 
@@ -14,16 +14,17 @@ A value crossing from one task to another is **moved, immutable, or atomically s
 
 Each is a move, as chapter 5 describes a move. After `ch <- job`, `job` is gone from the sender; the receiver that does `j := <-ch` owns `j` and drops it when it goes out of scope, there and then. A closure given to `spawn` owns every variable it mentions, so the function that spawned it cannot use them afterwards. And a borrow, `ref T` or `mut T`, never crosses: it points into a frame of the task that made it, and the new task has frames of its own.
 
-Channel handles are `Copy`. The channel is one shared object that synchronizes itself; a handle to it is a small value that any number of tasks may hold, which is what makes a pipeline a matter of passing the same `out` to several workers.
+A channel handle is owned too. The channel is one shared object that synchronizes itself; a handle on it is a small value, moved like any other, and `ch.Clone()` gives another handle on the same channel. Each task that sends or receives takes a handle of its own, which is what makes a pipeline a matter of handing a clone of `out` to each worker.
 
 ```teak
 func produce(n int) <-chan Job {
     out := make(chan Job)
-    spawn func() {                              // `out` is Copy, so it is copied into the task
-        defer close(out)
+    w := out.Clone()                            // rule 3: a handle for the task
+    spawn func() {                              // rule 4: `w` is moved into the task
+        defer close(w)
         for i := 0; i < n; i++ {
             job := Job{id: i, text: "..."}
-            out <- job                       // rule 1: job is moved into the channel
+            w <- job                         // rule 1: job is moved into the channel
         }
     }()
     return out
@@ -47,7 +48,7 @@ A value may cross a task boundary when its type is `Send`. Nobody writes `Send` 
 The last row is the one place structure is not the whole story, and it is settled inside the library rather than by a rule of the compiler: the cell that `rc`'s handles share holds a field of the predeclared type `local`, which holds nothing and is not `Send`, so any type holding it stays in its task. A program cannot write `local`, and cannot list `Send` on a type either; both are read from the fields.
 
 ```teak
-spawn run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
+spawn run(Account{balance: initial}, ch.Clone())      // Account is Send: an int and a slice of ints
 ```
 
 When a value cannot cross, the message names the part that stops it, not the type around it: an `rc.Rc<Node>` inside a struct is reported as `rc.Rc<Node> stays in its task`, a borrow as `ref Node is a borrow`, a trait value as `Shape does not refine Send`. The fix is to say what was meant: clone the value, send a piece of it to each task, or share it through `sync.Arc`, which chapter 10 covers once the library is written.
@@ -56,12 +57,13 @@ There is no second property beside `Send`. Nothing in Teak changes a value throu
 
 ## What the compiler checks
 
-A closure written in a `spawn` statement takes every variable it mentions with it. The move happens at the `spawn`, whatever the closure does with the variable inside, so the function cannot use the variable afterwards; a `Copy` value is copied in, as it is for any closure.
+A closure written in a `spawn` statement takes every variable it mentions with it. The move happens at the `spawn`, whatever the closure does with the variable inside, so the function cannot use the variable afterwards; a `Copy` value is copied in, as it is for any closure. A channel the closure sends on is a handle like any other, so the task is given a clone of its own, `d` above, and `main` keeps `done`.
 
 ```teak
 names := []string{"a", "b"}
 done := make(chan ())
-spawn func() { fmt.Println(names); done <- () }()
+d := done.Clone()
+spawn func() { fmt.Println(names); d <- () }()
 // fmt.Println(names)             // error: names was moved into the task
 <-done
 ```
@@ -73,7 +75,7 @@ A channel carries only `Send` values, and the compiler says so where the channel
 `close(ch)` closes a channel: a receive yields `None` once the values already sent are taken, and a range over the channel ends. A receive-only channel cannot be closed. `for v := range ch` receives until then, and each `v` is owned by the loop body; `for range ch` with no variable drops each value as it arrives.
 
 ```teak
-for r := range merge(workers) {          // `workers` is moved into merge
+for r := range merge(workers) {          // `workers` is moved into merge; the range borrows the channel merge returns
     total += r.words
 }
 ```
@@ -96,11 +98,12 @@ A send case goes only when the send would not wait: when the channel has room, o
 
 ## How it runs
 
-A task runs on its own thread, started when `spawn` runs and gone when its function returns. A value sent on a channel is copied into the channel and the sender's variable is empty from then on; a value received is copied out into memory the receiving task owns, so each value is owned by exactly one task at any moment, which is what the rules above promise. An unbuffered channel hands a value over directly, and the sender continues only once a receiver has taken it; a buffered one holds up to its capacity. Three things to know:
+A task is not a thread. The runtime keeps one worker thread per core and runs the tasks on them: `spawn` gives the task a small stack of its own and puts it on a worker's queue, and a task runs until it waits, on a channel, a lock, a timer or a socket, when the worker switches to the next task and whoever the first was waiting for puts it back. Starting a task costs about a microsecond and switching between two about the same, so a program may have a hundred thousand of them waiting at once. A task that computes without ever waiting keeps its worker; the others run on the rest. A value sent on a channel is copied into the channel and the sender's variable is empty from then on; a value received is copied out into memory the receiving task owns, so each value is owned by exactly one task at any moment, which is what the rules above promise. An unbuffered channel hands a value over directly, and the sender continues only once a receiver has taken it; a buffered one holds up to its capacity. Three things to know:
 
 - **The program ends when `main` returns**, whatever the other tasks are doing. A program that needs its tasks to finish waits for them, on a channel as `examples/run/tasks.teak` does.
-- **A channel lives as long as the program.** Its handle is `Copy`, so nothing counts the handles and nothing frees the channel; a value still inside one when the program ends is not dropped. A program that makes a channel per request keeps each until it exits.
+- **A channel is freed by its last handle.** A handle is an owned value: assigning it, passing it or capturing it in a `spawn` moves it, and `ch.Clone()` makes another handle on the same channel, so each task that sends or receives gets its own, `spawn produce(jobs.Clone())`. Sending, receiving, `close`, `len`, `for range` and `select` only borrow the handle, so a loop sends on one handle as often as it likes, and a function in the same task that only uses a channel takes it by `ref`. When the last handle is dropped the channel is freed, with any values still in it. Closing stays explicit: the last handle going does not close a channel, since no one is left to see it. Two handles are equal, `==`, when they are on one channel, as in Go, so a channel can be a map key.
 - **A panic in any task ends the program**, with the message, the drops of that task's own values, and exit status 2, as a panic in `main` does.
+- **A program that can never go on stops.** When every task waits, the main task among them, and nothing is left that could wake one, no timer and no socket, the program ends with `fatal error: all tasks are asleep - deadlock!` and status 2, as Go's does: a receive no task will ever send to, a `WaitGroup` that never reaches zero, two tasks each waiting for the other. A task asleep in `time.Sleep`, or waiting on a socket, or a pending `time.After`, is something that can still wake one, so such a program waits.
 
 `teak build -debug` checks a concurrent program as it checks any other, and reports the memory still held at the end; when a task is still running at that point the report is skipped, with a note, since what a running task owns is not a leak.
 
@@ -110,19 +113,20 @@ Some state genuinely must be reached from several tasks: a counter, a cache, a c
 
 - **`sync.Arc<T>`** is a handle on a value shared between tasks, as `rc.Rc` is within one: `sync.NewArc(v)` makes the first handle, `Clone` another, `Get` lends the value for reading, and the value is dropped with the last handle. An `Arc<T>` is `Send` when `T` is, so each task gets a clone of its own. An `Arc` never lends its value for changing.
 - **`sync.Mutex<T>`** owns a value and lends it for changing to one task at a time. `Lock` waits for the lock and returns a guard; `Get` on the guard lends the `mut T`, and the guard gives the lock back when it is dropped, at the end of its scope.
-- **`sync.RwLock<T>`** lends either for reading to any number of tasks, with `Read`, or for changing to one, with `Write`; each returns a guard of its kind.
-- **`sync.Once`** runs a function the first time `Do` is called and never again; **`sync.WaitGroup`** counts tasks with `Add` and `Done` and waits for zero with `Wait`. A `WaitGroup` is a `Copy` handle like a channel, so a task is spawned with a copy of it.
+- **`sync.RwLock<T>`** lends either for reading to any number of tasks, with `Read`, or for changing to one, with `Write`; each returns a guard of its kind. A task waiting to write holds back the readers that come after it, as Go's `RWMutex` does, so readers cannot keep a writer out; a task therefore does not `Read` again a lock it is reading.
+- **`sync.Once`** runs a function the first time `Do` is called and never again; **`sync.WaitGroup`** counts tasks with `Add` and `Done` and waits for zero with `Wait`. A `WaitGroup` is an owned handle like a channel: a task is given its own with `wg.Clone()` before the `spawn`, and the counter is freed with the last handle.
 
 ```teak
 counter := sync.NewArc(sync.NewMutex(0))
 wg := sync.NewWaitGroup()
 for i := 0; i < 4; i++ {
 	c := counter.Clone()
+	w := wg.Clone() // the task's own handle on the group
 	wg.Add(1)
 	spawn func() {
 		g := c.Get().Lock()
 		*g.Get() += 1
-		wg.Done()
+		w.Done()
 	}()
 }
 
@@ -132,8 +136,8 @@ fmt.Println(*counter.Get().Lock().Get()) // 4
 
 The guard is what makes the lock safe to use: it holds a borrow of the value, so it is tied to the lock and the scope that took it. Keeping it in a struct, sending it, capturing it in a `spawn`, or binding the value of a lock the statement drops, `n := m.Lock().Get()`, are each refused by the borrow rules, with the message those rules give; and since the value is reached only through a guard, touching it without the lock cannot be written at all. The lock is released where the guard's scope ends, so a block, or a function of its own, bounds the critical section.
 
-Each of these types is made with its `New` function. The zero value, `var m sync.Mutex<int>`, is empty, and `Lock` on it panics, as `Get` on an empty `rc.Rc` does.
+Each of these types is made with its `New` function. The zero value, `var m sync.Mutex<int>`, is empty, and `Lock` on it panics, as `Get` on an empty `rc.Rc` does, and `Do` on an empty `Once` panics naming the `Once`. Each lock is reached through its own handle, so tasks taking locks of their own never wait on one another.
 
 ## What comes next
 
-Stage 4 replaces the runtime under this chapter without changing a line of it: tasks become coroutines on a few threads, a task that waits parks instead of holding a thread, and a timer becomes an entry in a wheel. Until then a `time.After` or `time.Tick` is a task that sleeps, so a program that returns from `main` with a timer not yet due leaves a task running, and a debug build skips its leak report with the note. Structured concurrency, where a scope joins the tasks it spawned and so could lend them a borrow, is a later design question; version one moves.
+Stage 4 replaced the runtime under this chapter without changing a line of it: tasks are coroutines on a few threads, a task that waits parks instead of holding a thread, and a timer is an entry in a heap one thread serves. Sockets, in the `net` package of chapter 14, park the same way. A `time.After` or `time.Tick` is an entry in that heap, not a task, holding a handle on its channel: an `After` drops it once it has fired, and either is taken out of the heap the moment the program drops its own last handle, since no one could receive from it. So a loop that waits in a `select` with a `time.After` beside a case that wins leaves nothing behind, as in Go since 1.23, and a `Tick` stops when its channel is dropped. Structured concurrency, where a scope joins the tasks it spawned and so could lend them a borrow, is a later design question; version one moves.

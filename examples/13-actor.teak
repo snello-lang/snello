@@ -46,30 +46,30 @@ func run(acct Account, inbox <-chan Msg) {
     }
 }
 
-// A handle is a Copy value wrapping a channel. Copying it does not copy
-// the actor.
-struct Handle impl Copy { inbox chan<- Msg }
+// A handle wraps the actor's mailbox. Cloning it gives another task a
+// handle on the same actor; it never copies the actor.
+struct Handle impl Clone { inbox chan<- Msg }
 
 func Spawn(initial int) Handle {
     ch := make(chan Msg, 64)
-    spawn run(Account{balance: initial}, ch)      // Account is Send: an int and a slice of ints
+    spawn run(Account{balance: initial}, ch.Clone())      // Account is Send: an int and a slice of ints
     return Handle{inbox: ch}
 }
 
-func (h Handle) Withdraw(n int) Result<int, string> {
+func (h ref Handle) Withdraw(n int) Result<int, string> {
     reply := make(chan Result<int, string>, 1)
-    h.inbox <- Withdraw(n, reply)
-    return (<-reply).Expect("actor replied")  // the actor always answers before dropping reply
+    h.inbox <- Withdraw(n, reply.Clone())       // the message carries a handle for the actor's answer
+    return (<-reply).Expect("actor replied")  // the actor always answers before dropping its handle
 }
 
-func (h Handle) Balance() int {
+func (h ref Handle) Balance() int {
     reply := make(chan int, 1)
-    h.inbox <- Balance(reply)
+    h.inbox <- Balance(reply.Clone())
     return (<-reply).Expect("actor replied")
 }
 
-func (h Handle) Deposit(n int) { h.inbox <- Deposit(n) }
-func (h Handle) Stop()         { h.inbox <- Stop }
+func (h ref Handle) Deposit(n int) { h.inbox <- Deposit(n) }
+func (h ref Handle) Stop()         { h.inbox <- Stop }
 
 func main() {
     acct := Spawn(100)

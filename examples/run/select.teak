@@ -30,7 +30,7 @@ func take(u <-chan string, ready chan<- (), got chan<- string) {
 func main() {
 	data := make(chan int)
 	quit := make(chan ())
-	spawn feed(data, quit)
+	spawn feed(data.Clone(), quit.Clone())
 	sum := 0
 	for {
 		select {
@@ -97,7 +97,7 @@ func main() {
 
 	ready := make(chan ())
 	got := make(chan string)
-	spawn take(u, ready, got)
+	spawn take(u.Clone(), ready.Clone(), got.Clone())
 	<-ready
 	for {
 		select {

@@ -93,7 +93,7 @@ The tree in `../../examples/01-tree.teak` is written against this API.
 
 ## When to use something else
 
-The arena is the recommended idiom, not the only one. The standard library provides `Rc<T>` and `Weak<T>` for code that genuinely needs shared, pointer-shaped ownership, for example when nodes must outlive any single container or be shared by several. `../../examples/01-tree.teak` shows the same tree written both ways. `Rc` costs a reference count per node and is not `Send`; `Arc` is the atomic version for cross-task sharing.
+The arena is the recommended idiom, not the only one. The standard library provides `Rc<T>` and `Weak<T>` for code that genuinely needs shared, pointer-shaped ownership, for example when nodes must outlive any single container or be shared by several. `../../examples/01-tree/` shows the tree written with a slice by hand and with the library arena; a version with `Rc` children and `Weak` parent links is not among them, since a parent link is set after its node is shared and Teak changes a shared value only through a handle that is alone or through a lock, which holds only what may be sent and so never an `Rc`. `Rc` costs a reference count per node and is not `Send`; `Arc` is the atomic version for cross-task sharing.
 
 ## Precedent
 

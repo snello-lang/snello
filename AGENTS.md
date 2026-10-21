@@ -13,10 +13,11 @@ Teak is a programming language: Go's syntax and concurrency, memory safety witho
 3. `_docs/design/02-` to `04-`: the memory model notes.
 4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
 5. `_docs/design/06-tasks-and-channels.md`: the runtime interface the compiler emits for tasks and channels, the thread-per-task runtime of stage 3 and the scheduler of stage 4.
-6. `_docs/book/README.md`: the user-facing book and which chapters exist.
-7. `examples/README.md`: what each example tests and the decisions they forced.
-8. `CODING_STANDARDS.md`: how code is written here.
-9. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
+6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
+7. `_docs/book/README.md`: the user-facing book and which chapters exist.
+8. `examples/README.md`: what each example tests and the decisions they forced.
+9. `CODING_STANDARDS.md`: how code is written here.
+10. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 
@@ -49,8 +50,9 @@ go test ./...         # must pass
 go run ./cmd/teak lex FILE     # print the token stream of a Teak file
 go run ./cmd/teak parse FILE   # print the syntax tree
 go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
-go run ./cmd/teak build FILE   # build a native binary in the current directory; needs cc on the PATH, or CC set
-go run ./cmd/teak emit FILE    # print the C source that build compiles
+go run ./cmd/teak build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
+go run ./cmd/teak build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, or CC set
+go run ./cmd/teak emit FILE    # print the IR module that build compiles; -backend c prints the C source
 ```
 
 ## Layout
@@ -61,19 +63,24 @@ go run ./cmd/teak emit FILE    # print the C source that build compiles
 | `_docs/specs/` | Implementation plan and per-stage task lists |
 | `_docs/book/` | The language book, written chapter by chapter as features land |
 | `examples/` | The twenty Teak programs, plus Go versions of the first two; `core/` is the stage 1 suite, `run/` the programs that build and run today with their expected output |
-| `token/` | Token kinds and positions, modeled on `go/token` |
-| `scanner/` | The lexer, modeled on `go/scanner` |
-| `ast/` | The syntax tree, modeled on `go/ast` |
-| `parser/` | The parser, modeled on `go/parser` |
-| `types/` | Types, objects, scopes and the checker, modeled on `go/types` |
-| `emit/c/` | The C emitter and, under `runtime/`, the C runtime every Teak program links against |
-| `.github/workflows/` | `test.yml` runs `go test ./...` on Linux and macOS on every push and pull request; the README's badge is its status |
+| `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Teak program, which carries only `runtime/` and `std/` |
+| `compiler/token/` | Token kinds and positions, modeled on `go/token` |
+| `compiler/scanner/` | The lexer, modeled on `go/scanner` |
+| `compiler/ast/` | The syntax tree, modeled on `go/ast` |
+| `compiler/parser/` | The parser, modeled on `go/parser` |
+| `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower |
+| `compiler/importer/` | Loads a standard library package for a program importing it, modeled on `go/importer`; its tests check every package compiles and keep `std/builtin/` in step with the checker |
+| `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
+| `compiler/emit/c/` | The C emitter, the reference backend |
+| `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |
+| `compiler/emit/internal/backendtest/` | The programs both backends' tests build and run, with what each must give, so the backends are held to one list |
+| `runtime/` | The C runtime every Teak program links against, under `c/`: `teak.c` the values, channels and locks, `alloc.c` the allocator, `unicode.c` the case, white-space and printable-rune tables `mkunicode.go` writes from Unicode's data files, `sched.c` the scheduler, `net.c` the poller and sockets, `debug.c` the checking build; embedded by the package for both backends |
+| `bench/` | The benchmark programs in Teak, Go and Rust behind the design document's performance table |
+| `.github/workflows/` | `test.yml` checks gofmt and vet, and runs `go test ./...` natively on x86-64 Linux, arm64 Linux and arm64 macOS, on every push and pull request; the README's badge is its status |
 | `examples/expected/` | The expected output of each example program that runs, `<name>.out`, with the files it reads in `<name>.files/`; `examples/suite_test.go` builds and runs every example that has one and names the rest as pending |
-| `std/` | The standard library, written in Teak, one directory per package, embedded in the compiler; `std.go` is the importer that loads a package for a program importing it; `builtin/` documents the predeclared names and is never imported, with `builtin_test.go` keeping it in step with the checker |
+| `std/` | The standard library, written in Teak, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/teak/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |
-
-Packages to come: the LLVM backend under `emit/`.
 
 ## When the design and the code disagree
 

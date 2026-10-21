@@ -17,7 +17,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] Build succeeds: `go build ./...`
 
 **Dependencies:** None
-**Files:** `token/token.go`
+**Files:** `compiler/token/token.go`
 **Scope:** S
 **Done:** 2026-10-17
 
@@ -31,10 +31,10 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] All twenty examples lex with no illegal tokens
 
 **Verification:**
-- [x] Tests pass: `go test ./scanner/`
+- [x] Tests pass: `go test ./compiler/scanner/`
 
 **Dependencies:** 0.1
-**Files:** `scanner/scanner.go`, `scanner/scanner_test.go`
+**Files:** `compiler/scanner/scanner.go`, `compiler/scanner/scanner_test.go`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -64,11 +64,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] A test constructs a small tree by hand and checks the printed form
 
 **Verification:**
-- [x] Tests pass: `go test ./ast/`
+- [x] Tests pass: `go test ./compiler/ast/`
 - [x] `go vet ./...` reports no unused or unreachable type switch arms
 
 **Dependencies:** 0.1
-**Files:** `ast/ast.go`, `ast/print.go`, `ast/ast_test.go`
+**Files:** `compiler/ast/ast.go`, `compiler/ast/print.go`, `compiler/ast/ast_test.go`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -82,11 +82,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] After an error, parsing resumes at the next top-level declaration
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Manual check: `go run ./cmd/teak parse` on a file containing only a package clause and imports
 
 **Dependencies:** 0.4
-**Files:** `parser/parser.go`, `parser/parser_test.go`, `cmd/teak/main.go`
+**Files:** `compiler/parser/parser.go`, `compiler/parser/parser_test.go`, `cmd/teak/main.go`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -100,11 +100,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] `*Node<K, V>?` parses as option of pointer of instantiated type
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Design updated: `../design/00-syntax-conventions.md` states the `<` rule
 
 **Dependencies:** 0.5
-**Files:** `parser/types.go`, `parser/parser_test.go`, `../design/00-syntax-conventions.md`
+**Files:** `compiler/parser/types.go`, `compiler/parser/parser_test.go`, `../design/00-syntax-conventions.md`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -117,11 +117,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] A missing `{`, a stray `impl`, and a variant without parentheses each give a specific error
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Manual check: `teak parse examples/07-traits.teak` prints the trait and struct declarations
 
 **Dependencies:** 0.6
-**Files:** `parser/decl.go`, `parser/decl_test.go`, `parser/parser_test.go` (example sweep and benchmark), `parser/expr.go` (stub), `ast/ast.go` (BadExpr; variant fields are parameters), `scanner/scanner.go` (semicolon after a closing `>`)
+**Files:** `compiler/parser/decl.go`, `compiler/parser/decl_test.go`, `compiler/parser/parser_test.go` (example sweep and benchmark), `compiler/parser/expr.go` (stub), `compiler/ast/ast.go` (BadExpr; variant fields are parameters), `compiler/scanner/scanner.go` (semicolon after a closing `>`)
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -134,11 +134,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] Go's `if init; cond {` and Teak's `if x := opt {` are both accepted and distinguished
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Manual check: `teak parse examples/12-worker-pool.teak`
 
 **Dependencies:** 0.9 (order swapped; see 0.9)
-**Files:** `parser/stmt.go`, `parser/stmt_test.go`, `parser/pattern.go` (patterns of an if binding), `ast/ast.go` (BadStmt)
+**Files:** `compiler/parser/stmt.go`, `compiler/parser/stmt_test.go`, `compiler/parser/pattern.go` (patterns of an if binding), `compiler/ast/ast.go` (BadStmt)
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -147,16 +147,16 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** Precedence climbing over Go's operators plus `??` at the bottom; unary `ref`, `mut`, `&`, `*`, `-`, `!`, `<-`; postfix `?`, call, selector, index, slice; composite literals for structs, slices and maps; function literals; generic calls `arena.New<Node>()`; `if` as an expression.
 
 **Acceptance criteria:**
-- [x] Every expression form in examples 06, 09, 15 and 20 parses; verified through the example sweep once 0.8 parses bodies, and through `parser/expr_test.go` now
+- [x] Every expression form in examples 06, 09, 15 and 20 parses; verified through the example sweep once 0.8 parses bodies, and through `compiler/parser/expr_test.go` now
 - [x] `n := take(mut s.head) ?? return None` parses with `return` inside the `??` else
 - [x] Precedence tests: `a ?? b == c` groups as `a ?? (b == c)`; `-x?` groups as `-(x?)`
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Manual check: `teak parse examples/20-bst.teak` (bodies still skipped until 0.8; the expression tests stand in)
 
 **Dependencies:** 0.7. Done before 0.8: statements are built from expressions, and `if x := opt {` needs the parsed left side to tell a binding from an init statement. Expressions needed only the body skipper from 0.7.
-**Files:** `parser/expr.go`, `parser/parser_test.go`
+**Files:** `compiler/parser/expr.go`, `compiler/parser/parser_test.go`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -170,11 +170,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] An arm without `=>` and a pattern with an unbalanced parenthesis each give a specific error
 
 **Verification:**
-- [x] Tests pass: `go test ./parser/`
+- [x] Tests pass: `go test ./compiler/parser/`
 - [x] Manual check: `teak parse examples/17-state-machine.teak`
 
 **Dependencies:** 0.9
-**Files:** `parser/pattern.go`, `parser/pattern_test.go`, `parser/expr.go` (match arms)
+**Files:** `compiler/parser/pattern.go`, `compiler/parser/pattern_test.go`, `compiler/parser/expr.go` (match arms)
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -184,7 +184,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Acceptance criteria:**
 - [x] All twenty `.teak` files parse with no errors (`TestExamples`)
-- [x] Ten malformed inputs each produce the one expected message: thirty, in five annotated files under `parser/testdata/errors/` (`TestErrorFiles`)
+- [x] Ten malformed inputs each produce the one expected message: thirty, in five annotated files under `compiler/parser/testdata/errors/` (`TestErrorFiles`)
 - [x] `teak parse` on every example prints a tree whose first and last declarations match the source (checked in `TestExamples`)
 
 **Verification:**
@@ -192,7 +192,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 - [x] Manual check: `for f in examples/*.teak examples/*/*.teak; do go run ./cmd/teak parse $f > /dev/null || echo FAIL $f; done` prints nothing
 
 **Dependencies:** 0.10
-**Files:** `parser/parser_test.go`, `parser/testdata/errors/`, `parser/parser.go` (one error per line; balanced skipping; line ends kept on a missing token), `parser/pattern.go` (negative literals)
+**Files:** `compiler/parser/parser_test.go`, `compiler/parser/testdata/errors/`, `compiler/parser/parser.go` (one error per line; balanced skipping; line ends kept on a missing token), `compiler/parser/pattern.go` (negative literals)
 **Scope:** S
 **Done:** 2026-10-18
 

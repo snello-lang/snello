@@ -2,6 +2,8 @@ Ok(12)
 Ok(12)
 Ok("hello, file\n")
 Err("open /nonexistent/missing.txt: no such file or directory")
+true true
+stat <dir>/gone: no such file or directory
 Ok(()) true true
 true true
 direct

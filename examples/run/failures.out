@@ -1,0 +1,11 @@
+flush: Err("write flaky: input/output error")
+flush again: Err("write flaky: input/output error")
+write after: Err("write flaky: input/output error")
+written: abc
+Ok(Some("line1\n"))
+Err("read script: input/output error")
+Ok(Some("ab|cd\n"))
+Ok(None)
+line: one
+line: tw
+err: Some("read script: input/output error")

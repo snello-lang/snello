@@ -25,8 +25,9 @@ import "io"
 // cares about that failure calls Close, and one that does not lets the
 // File go. A File is not Copy: it is moved, or lent with ref and mut.
 struct File impl Drop, io.Reader, io.Writer {
-	fd   int
-	name string
+	fd     int
+	name   string
+	stream bool // one of the three standard streams, which stay open for the program's life
 }
 
 // Args is the command line: the program's name first, then its
@@ -42,14 +43,18 @@ var Args []string
 func Exit(code int)
 
 // Stdin is the standard input, open for reading.
-var Stdin = File{fd: 0, name: "/dev/stdin"}
+var Stdin = File{fd: 0, name: "/dev/stdin", stream: true}
 
-// Stdout is the standard output, open for writing. What fmt prints
-// and what is written here come out in order.
-var Stdout = File{fd: 1, name: "/dev/stdout"}
+// Stdout is the standard output, open for writing. Nothing is held
+// back: what fmt prints and what is written here go to the output at
+// once, in the order they were made, interleaved rightly with Stderr,
+// and a prompt without a newline shows before the program reads its
+// answer. A program that writes much in small pieces wraps it in a
+// bufio.Writer.
+var Stdout = File{fd: 1, name: "/dev/stdout", stream: true}
 
 // Stderr is the standard error output, open for writing.
-var Stderr = File{fd: 2, name: "/dev/stderr"}
+var Stderr = File{fd: 2, name: "/dev/stderr", stream: true}
 
 // Open opens the named file for reading. A missing file is an Error of
 // Kind NotExist, with Op "open".
@@ -60,7 +65,7 @@ func Open(path ref string) Result<File, io.Error> {
 		return Err(io.Errno("open", path, code))
 	}
 
-	return Ok(File{fd: fd, name: path.Clone()})
+	return Ok(File{fd: fd, name: path.Clone(), stream: false})
 }
 
 // Create opens the named file for writing, making it when it does not
@@ -73,44 +78,88 @@ func Create(path ref string) Result<File, io.Error> {
 		return Err(io.Errno("open", path, code))
 	}
 
-	return Ok(File{fd: fd, name: path.Clone()})
+	return Ok(File{fd: fd, name: path.Clone(), stream: false})
 }
 
 // ReadToString reads the whole of the named file into one string. The
 // bytes are taken as they are, so a file that is not UTF-8 gives a
-// string that is not either.
+// string that is not either. An Error's Op says which step failed:
+// "open", or "read" for a path that opens but cannot be read, as a
+// directory cannot.
 func ReadToString(path ref string) Result<string, io.Error> {
 	text := ""
-	code := readToString(path, mut text)
+	inRead := 0
+	code := readToString(path, mut text, mut inRead)
 	if code != 0 {
-		return Err(io.Errno("open", path, code))
+		op := if inRead == 1 { "read" } else { "open" }
+		return Err(io.Errno(op, path, code))
 	}
 
 	return Ok(text)
 }
 
-// MkdirTemp makes a new directory and returns its path. The directory
-// is under dir, or under the system's temporary directory, TMPDIR or
-// /tmp, when dir is empty; its name is pattern followed by random
-// letters, so two calls never name the same directory. The caller
-// removes it, with RemoveAll, when it is done.
+// WriteString writes s to the named file, made with permissions 0666
+// before the umask when it does not exist and emptied when it does, as
+// Go's os.WriteFile does with its bytes; ReadToString reads it back.
+func WriteString(path ref string, s ref string) Result<(), io.Error> {
+	f := Create(path)?
+	f.WriteString(s)?
+	return f.Close()
+}
+
+// MkdirTemp makes a new directory, with permissions 0700, and returns
+// its path. The directory is under dir, or under the system's
+// temporary directory, TMPDIR or /tmp, when dir is empty. Its name is
+// pattern with its last * replaced by a random number, or with the
+// number after it when it has no *, as Go names it, so "build-*.tmp"
+// gives build-2817162.tmp; a name taken already is tried again with
+// another number. A pattern holding a / is refused, and a dir that
+// does not exist is reported as Go reports it, by the stat of dir:
+// stat /tmp/gone: no such file or directory. The caller removes the
+// directory, with RemoveAll, when it is done.
 func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
+	if pattern.Contains("/") {
+		return Err(io.NewError("mkdirtemp", pattern.Clone(), "pattern contains path separator", io.Other))
+	}
+
 	path := ""
-	code := mkdirTemp(dir, pattern, mut path)
+	op := ""
+	code := mkdirTemp(dir, pattern, mut path, mut op)
 	if code != 0 {
-		return Err(io.Errno("mkdirtemp", dir, code))
+		return Err(io.Errno(op, path, code))
 	}
 
 	return Ok(path)
 }
 
-// RemoveAll removes the named file, or the named directory and
-// everything under it. A path that names nothing is nothing to
-// remove, not a failure.
-func RemoveAll(path ref string) Result<(), io.Error> {
-	code := removeAll(path)
+// Remove removes the named file, or the named directory when it is
+// empty. A path that names nothing is an Error of Kind NotExist.
+func Remove(path ref string) Result<(), io.Error> {
+	code := remove(path)
 	if code != 0 {
 		return Err(io.Errno("remove", path, code))
+	}
+
+	return Ok(())
+}
+
+// RemoveAll removes the named file, or the named directory and
+// everything under it. A path that names nothing is nothing to
+// remove, not a failure. A path whose last element is ".", as "." or
+// "dir/." are, is refused before anything is removed, as Go refuses
+// it: the directory it names cannot be removed from inside itself. A
+// failure part way names the entry it failed on and the call that
+// failed, as Go's does: "unlinkat /tmp/d/locked/f: permission denied".
+func RemoveAll(path ref string) Result<(), io.Error> {
+	if path == "." || path.HasSuffix("/.") {
+		return Err(io.Errno("RemoveAll", path, 22)) // EINVAL, the same number on every system Teak runs on
+	}
+
+	failed := ""
+	op := ""
+	code := removeAll(path, mut failed, mut op)
+	if code != 0 {
+		return Err(io.Errno(op, failed, code))
 	}
 
 	return Ok(())
@@ -189,7 +238,7 @@ func (f File) Close() Result<(), io.Error> {
 // Close already closed it. A failure to close is lost; a program that
 // cares calls Close.
 func (f mut File) Drop() {
-	if f.fd > 2 {
+	if !f.stream && f.fd >= 0 {
 		closeFile(f.fd)
 	}
 }
@@ -198,9 +247,10 @@ func (f mut File) Drop() {
 // zero on success, and stores its result through its last parameter.
 func open(path ref string, fd mut int) int
 func create(path ref string, fd mut int) int
-func readToString(path ref string, out mut string) int
-func mkdirTemp(dir ref string, pattern ref string, out mut string) int
-func removeAll(path ref string) int
+func readToString(path ref string, out mut string, inRead mut int) int
+func mkdirTemp(dir ref string, pattern ref string, out mut string, op mut string) int
+func removeAll(path ref string, failed mut string, op mut string) int
+func remove(path ref string) int
 func read(fd int, buf mut []byte, n mut int) int
 func write(fd int, buf ref []byte, n mut int) int
 func writeString(fd int, s ref string, n mut int) int
