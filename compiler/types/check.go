@@ -105,10 +105,12 @@ type Checker struct {
 	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
 	dead       bool
 	regions    []region
-	noUse      bool // evaluating an assignment target, which is not a use
-	inner      bool // evaluating the base of a selector, which the selector checks as a whole
-	bindsOwned bool // a pattern bound a non-Copy value by value
-	copies     bool // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
+	noUse      bool                    // evaluating an assignment target, which is not a use
+	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
+	bindsOwned bool                    // a pattern bound a non-Copy value by value
+	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)
+	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
+	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
 
 	// The borrow pass (borrow.go): the borrows held by variables of the
 	// function being checked, the ones lent for the call or statement

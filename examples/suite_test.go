@@ -98,7 +98,6 @@ func build(dir, name, backend string, src []byte, debug bool) (string, []byte, e
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
 	"03-http-cache":    "net/http, db and json, later libraries over the net package",
-	"04-graph":         "heap, a later library",
 	"17-state-machine": "the higher layers of net, a later library",
 	"19-cli-grep":      "regexp, a later library",
 }

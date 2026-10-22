@@ -387,6 +387,7 @@ func (c *Checker) elseBranch(f *fork, els ast.Stmt, bodyLeaves bool) bool {
 // option binds borrows.
 func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 	x := c.expr(s.Value, nil)
+	outer := c.scope
 	c.openScope()
 	c.bindsOwned = false
 	if x.mode != invalid {
@@ -395,7 +396,7 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 			b := borrowOf(m)
 			c.copies = !isBorrow(x.typ)
 			c.pattern(s.Pat, o.elem, b)
-			c.bindThrough(s.Pat, s.Value, b)
+			c.resolvingIn(outer, func() { c.bindThrough(s.Pat, s.Value, b) }) // if o := o binds a new o out of the old
 		} else {
 			c.errorf(s.Value.Pos(), "if x := v binds an option; "+x.typ.String()+" is not one")
 			c.pattern(s.Pat, Typ[Invalid], nil)
@@ -404,8 +405,8 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 		c.pattern(s.Pat, Typ[Invalid], nil)
 	}
 
-	if c.bindsOwned && x.mode == variable {
-		c.move(s.Value, x.mode) // a part bound by value leaves the place
+	if c.bindsOwned && held(s.Value, x.mode) {
+		c.resolvingIn(outer, func() { c.move(s.Value, variable) }) // a part bound by value leaves the place; a temporary's part may not leave it
 	}
 
 	f := c.forkAt()
@@ -467,7 +468,7 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		switch {
 		case x.mode == variable && isChan(readType(x)):
 			c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
-		case x.mode == variable && !isBorrow(x.typ):
+		case held(s.X, x.mode) && !isBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
 		case lent || x.mode != value:
 			c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
@@ -491,13 +492,10 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 // for the whole body: the loop reads or changes the elements in turn,
 // so nothing may change the collection under it.
 func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) {
-	src := c.borrowSource(s.X)
-	if src == nil {
-		return
-	}
-
-	if p, kind := through(c.placeOf(src)); kind != notPlace {
-		c.borrows = append(c.borrows, borrow{place: p, mut: mut, pos: s.For, until: s.Body.Rbrace})
+	for _, src := range c.borrowSources(s.X) {
+		if p, kind := through(c.placeOf(src)); kind != notPlace {
+			c.borrows = append(c.borrows, borrow{place: p, mut: mut, pos: s.For, until: s.Body.Rbrace})
+		}
 	}
 }
 

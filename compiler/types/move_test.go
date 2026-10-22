@@ -106,6 +106,21 @@ func TestMoves(t *testing.T) {
 		{"func f(st State) { match st { Failed(_) => {}, _ => {} }; print(st) }", nil},
 		{"func f(st ref State) string { return match st { Failed(r) => r.Clone(), _ => \"\" } }", nil},
 		{"func f(p (string, int)) { s, n := p; keep(s); print(n, p) }", []string{"use of moved value p"}},
+		// A binding may reuse the name of the value it takes apart: the move is the old name's.
+		{"func f(o string?) { match o { Some(o) => keep(o), None => {} } }", nil},
+		{"func f(o string?) { if o := o { keep(o) } }", nil},
+		{"func f(o string?) { if o := o { keep(o) }; print(o) }", []string{"use of moved value o"}},
+		{"func f(o string?) { match o { Some(o) => keep(o), None => {} }; print(o) }", []string{"use of moved value o"}},
+		{"func f(o string?) { if o := ref o { read(o) }; print(o) }", nil},
+		// A part of a value no name holds is read or lent where it is, and never moved out of it.
+		{"func f() { s := mk(\"a\").value; keep(s) }", []string{"cannot move mk(...).value out of a temporary"}},
+		{"func f() { keep(mk(\"a\").value) }", []string{"cannot move mk(...).value out of a temporary"}},
+		{"func f() { if n := mk(\"a\").next { print(n) } }", []string{"cannot move mk(...).next out of a temporary"}},
+		{"func f() { match mk(\"a\").next { Some(n) => print(n), None => {} } }", []string{"cannot move mk(...).next out of a temporary"}},
+		{"func f() { n := mk(\"a\").next ?? return; print(n) }", []string{"cannot move mk(...).next out of a temporary"}},
+		{"struct Bag { xs []string }\nfunc bag() Bag { return Bag{xs: []string{}} }\nfunc f() { for _, n := range bag().xs { print(n) } }", []string{"cannot move bag().xs out of a temporary"}},
+		{"func f() { print(read(ref mk(\"a\").value), mk(\"a\").value.Len(), mk(\"a\").n) }", nil},
+		{"struct Bag { xs []string }\nfunc bag() Bag { return Bag{xs: []string{}} }\nfunc f() { if n := ref mk(\"a\").next { print(n) }; for _, n := range ref bag().xs { print(n) }; s := mk(\"a\").value.Clone(); keep(s) }", nil},
 		// Flags for the base of a selector and for an assignment target reach no further than the place.
 		{"func f() { s := \"a\"; keep(s); print(mk(s).n) }", []string{"use of moved value s"}},
 		{"func f(xs []int) { s := \"a\"; keep(s); xs[len(s)] = 1 }", []string{"use of moved value s"}},

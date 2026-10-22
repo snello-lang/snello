@@ -56,7 +56,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 // mutating names the predeclared methods that change their receiver.
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
-	"Clear": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
+	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
 }
 
 // receiver writes the place a predeclared method is called on, made
@@ -109,6 +109,10 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		}
 
 		e.store(value{"i64", "0"}, e.gep("%tk_slice", p, 1))
+		return unit
+	case "Swap":
+		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int]})
+		e.rt("tk_slice_swap", "void", value{"ptr", p}, args[0], args[1], size)
 		return unit
 	case "Reverse":
 		e.rt("tk_slice_reverse", "void", value{"ptr", p}, size)

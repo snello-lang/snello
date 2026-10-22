@@ -27,11 +27,12 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 | `xs.RemoveValue(v)` | Removes the first element equal to `v`; reports whether one was found |
 | `xs.Contains(v)` | Reports whether an element equals `v` |
 | `xs.Clear()` | Removes every element and keeps the room |
+| `xs.Swap(i, j)` | Exchanges the elements at `i` and `j`, moving each into the other's place |
 | `xs.Reverse()` | Reverses the elements in place |
 | `xs.Sort()`, `xs.SortBy(less)` | Sort in place, keeping equal elements in their order; `Sort` orders numbers and strings, `SortBy` takes the ordering as a function |
 | `xs.Clone()` | A new slice holding a copy of every element |
 
-`Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. The core tree uses most of them:
+`Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Swap`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. `Swap` is how an algorithm moves elements it does not own a copy of: Go's `xs[i], xs[j] = xs[j], xs[i]` would move each element out of the slice, which is refused for a type that is not `Copy`, `cannot move xs[j] out of the slice`. The core tree uses most of them:
 
 ```teak
 t.nodes.Push(Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})

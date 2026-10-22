@@ -49,7 +49,7 @@ func main() {
 
 	// Removing y: its Index is stale, and so is every copy of it.
 	stale := y
-	fmt.Println(a.Remove(y), a.Len(), a.Get(stale), a.GetMut(stale).IsNone(), a.Remove(stale))
+	fmt.Println(a.Remove(y), a.Len(), fmt.Sprint(a.Get(stale)), a.GetMut(stale).IsNone(), a.Remove(stale)) // the borrow Get lends is text before GetMut lends a mut
 
 	// The slot is reused: the new Index names the new value, the
 	// stale one still names nothing.

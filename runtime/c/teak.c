@@ -168,6 +168,27 @@ void tk_slice_remove(tk_slice *s, int64_t i, void *out, size_t size) {
     s->len--;
 }
 
+// exchange swaps the size bytes at a and b through a buffer on the
+// stack, a piece at a time, so an element of any size fits.
+static void exchange(char *a, char *b, size_t size) {
+    char tmp[256];
+    for (size_t done = 0; done < size; done += sizeof tmp) {
+        size_t n = size - done < sizeof tmp ? size - done : sizeof tmp;
+        memcpy(tmp, a + done, n);
+        memcpy(a + done, b + done, n);
+        memcpy(b + done, tmp, n);
+    }
+}
+
+void tk_slice_swap(tk_slice *s, int64_t i, int64_t j, size_t size) {
+    tk_check_slice(s);
+    tk_index(i, s->len);
+    tk_index(j, s->len);
+    if (i != j) {
+        exchange((char *)s->ptr + (size_t)i * size, (char *)s->ptr + (size_t)j * size, size);
+    }
+}
+
 void tk_slice_reverse(tk_slice *s, size_t size) {
     tk_check_slice(s);
     if (s->len < 2) {
@@ -176,14 +197,8 @@ void tk_slice_reverse(tk_slice *s, size_t size) {
 
     char *lo = s->ptr;
     char *hi = (char *)s->ptr + (size_t)(s->len - 1) * size;
-    char tmp[256];
     for (; lo < hi; lo += size, hi -= size) {
-        for (size_t done = 0; done < size; done += sizeof tmp) {
-            size_t n = size - done < sizeof tmp ? size - done : sizeof tmp;
-            memcpy(tmp, lo + done, n);
-            memcpy(lo + done, hi + done, n);
-            memcpy(hi + done, tmp, n);
-        }
+        exchange(lo, hi, size);
     }
 }
 

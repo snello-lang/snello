@@ -102,6 +102,8 @@ func sliceMethod(t *Slice, name string) *Signature {
 		return changes([]*Var{param("v", ref(elem))}, Typ[Bool])
 	case "Contains":
 		return reads([]*Var{param("v", ref(elem))}, Typ[Bool])
+	case "Swap":
+		return changes([]*Var{param("i", Typ[Int]), param("j", Typ[Int])}, Unit)
 	case "Clear", "Reverse", "Sort":
 		return changes(nil, Unit)
 	case "SortBy":

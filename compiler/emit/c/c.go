@@ -50,7 +50,9 @@ type Emitter struct {
 	seen     map[string]bool                 // the unsupported constructs reported so far
 	result   types.Type                      // the result type of the function being emitted
 	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
+	jumped   map[string]bool                 // the labels a continue has jumped to, the ones written
 	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
+	names    naming                          // the C names of locals and parameters (locals.go)
 	closures int                             // closures written so far, numbering their functions
 	tasks    int                             // spawn statements written so far, numbering their trampolines
 	prologue []string                        // declarations to put at the top of the function being written
@@ -94,6 +96,8 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
 		done:     make(map[string]bool),
+		names:    newNaming(f, info),
+		jumped:   make(map[string]bool),
 	}
 	e.state["tk_slice_u8"] = defined // the runtime defines []byte in teak.h, as the library's bodiless functions take it
 	for _, obj := range info.Uses {
@@ -344,16 +348,18 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 // is kept.
 func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 	outerResult, outerLoops, outerPrologue, outerDefers := e.result, e.loops, e.prologue, e.defers
-	outerFrames, outerTemps := e.frames, e.temps
+	outerFrames, outerTemps, outerDeclared := e.frames, e.temps, e.names.declared
 	e.result, e.loops, e.prologue, e.defers, e.frames, e.temps = sig.Results(), nil, nil, nil, nil, nil
+	e.names.declared = make(map[string]bool)
 	e.push(false)
 	start := e.body.Len()
 	if recv := sig.Recv(); recv != nil {
+		e.names.declared[e.localName(recv)] = true
 		if !e.used[recv] {
-			e.line("(void)" + lower.Ident(recv.Name()) + ";")
+			e.line("(void)" + e.localName(recv) + ";")
 		}
 
-		e.own(lower.Ident(recv.Name()), recv.Type())
+		e.own(e.localName(recv), recv.Type())
 	}
 
 	for _, p := range sig.Params() {
@@ -361,11 +367,12 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 			continue
 		}
 
+		e.names.declared[e.localName(p)] = true
 		if !e.used[p] {
-			e.line("(void)" + lower.Ident(p.Name()) + ";")
+			e.line("(void)" + e.localName(p) + ";")
 		}
 
-		e.own(lower.Ident(p.Name()), p.Type())
+		e.own(e.localName(p), p.Type())
 	}
 
 	e.stmts(body.List)
@@ -385,7 +392,7 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 	}
 
 	e.result, e.loops, e.prologue, e.defers = outerResult, outerLoops, outerPrologue, outerDefers
-	e.frames, e.temps = outerFrames, outerTemps
+	e.frames, e.temps, e.names.declared = outerFrames, outerTemps, outerDeclared
 }
 
 func (e *Emitter) params(params []*types.Var, pos token.Pos) string {
@@ -397,7 +404,7 @@ func (e *Emitter) params(params []*types.Var, pos token.Pos) string {
 	for i, p := range params {
 		parts[i] = e.cType(p.Type(), pos)
 		if p.Name() != "" {
-			parts[i] += " " + lower.Ident(p.Name())
+			parts[i] += " " + e.localName(p)
 		}
 	}
 

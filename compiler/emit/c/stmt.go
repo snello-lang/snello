@@ -54,6 +54,7 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 		e.leave(e.loopFrame(), s.Pos()) // the loop body's variables die here
 		if n := len(e.loops); s.Tok == token.CONTINUE && n > 0 && e.loops[n-1] != "" {
 			e.line("goto " + e.loops[n-1] + ";")
+			e.jumped[e.loops[n-1]] = true
 			break
 		}
 
@@ -94,7 +95,8 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 	for i, name := range d.Names {
 		v := e.info.Defs[name]
 		vt := e.sub(v.Type())
-		decl := e.cType(vt, name.Pos()) + " " + lower.Ident(name.Name) + " = "
+		local := e.declareLocal(name)
+		decl := e.cType(vt, name.Pos()) + " " + local + " = "
 		switch {
 		case parts != nil:
 			decl += parts[i]
@@ -106,7 +108,7 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 
 		e.line(decl + ";")
 		e.discardUnused(name)
-		e.own(lower.Ident(name.Name), vt)
+		e.own(local, vt)
 	}
 }
 
@@ -117,7 +119,7 @@ func (e *Emitter) discardUnused(name *ast.Ident) {
 	}
 
 	if obj := e.info.Defs[name]; obj != nil && !e.used[obj] {
-		e.line("(void)" + lower.Ident(name.Name) + ";")
+		e.line("(void)" + e.ident(name) + ";")
 	}
 }
 
@@ -220,9 +222,10 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type
 
 	if name, ok := lhs.(*ast.Ident); ok && tok == token.DEFINE {
 		if obj, declared := e.info.Defs[name]; declared {
-			e.line(e.cType(e.sub(obj.Type()), name.Pos()) + " " + lower.Ident(name.Name) + " = " + value + ";")
+			local := e.declareLocal(name)
+			e.line(e.cType(e.sub(obj.Type()), name.Pos()) + " " + local + " = " + value + ";")
 			e.discardUnused(name)
-			e.own(lower.Ident(name.Name), e.sub(obj.Type()))
+			e.own(local, e.sub(obj.Type()))
 			return
 		}
 	}
@@ -338,10 +341,11 @@ func (e *Emitter) elseBranch(els ast.Stmt) {
 	}
 }
 
-// forStmt writes Teak's three loop forms. A condition that calls or
-// needs statements is tested at the top of the body, so that what it
-// needs runs on every pass; a post statement that does is written at
-// the end of the body under a label that continue jumps to.
+// forStmt writes Teak's three loop forms. A condition that calls,
+// needs statements or builds a temporary is tested at the top of the
+// body, so that what it needs runs, and its temporaries are dropped, on
+// every pass; a post statement that needs statements is written at the
+// end of the body, under a label when a continue jumps to it.
 func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("{")
 	e.push(false)
@@ -351,7 +355,12 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 
 	cond := ""
 	if s.Cond != nil && !e.hasEffects(s.Cond) {
+		mark, start := len(e.temps), e.body.Len()
 		cond = e.expr(s.Cond)
+		if len(e.temps) > mark { // a temporary the condition needs is built and dropped on every pass, in the body
+			e.body.Truncate(start)
+			e.temps, cond = e.temps[:mark], ""
+		}
 	}
 
 	post, label := "", ""
@@ -373,7 +382,10 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.pop(s.Body.Rbrace)
 	e.loops = e.loops[:len(e.loops)-1]
 	if label != "" {
-		e.line(label + ":;")
+		if e.jumped[label] {
+			e.line(label + ":;")
+		}
+
 		e.stmt(s.Post)
 	}
 
@@ -495,9 +507,10 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType typ
 		value = "&" + item
 	}
 
-	e.line(e.cType(vt, name.Pos()) + " " + lower.Ident(name.Name) + " = " + value + ";")
+	local := e.declareLocal(name)
+	e.line(e.cType(vt, name.Pos()) + " " + local + " = " + value + ";")
 	e.discardUnused(name)
-	e.own(lower.Ident(name.Name), vt)
+	e.own(local, vt)
 	if _, borrow := vt.(*types.Ref); consume && !borrow && needsDrop(vt) {
 		e.line(item + " = " + e.zero(itemType, name.Pos()) + ";")
 	}

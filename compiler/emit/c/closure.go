@@ -195,7 +195,7 @@ func (e *Emitter) variable(v *types.Var, captured map[*types.Var]string) string 
 		return s
 	}
 
-	return lower.Ident(v.Name())
+	return e.localName(v)
 }
 
 // closureParams writes the parameter types of a function value's
@@ -209,7 +209,7 @@ func (e *Emitter) closureParamList(sig *types.Signature, pos token.Pos) string {
 	for _, p := range sig.Params() {
 		put(&b, ", ", e.cType(p.Type(), pos))
 		if p.Name() != "" {
-			put(&b, " ", lower.Ident(p.Name()))
+			put(&b, " ", e.localName(p))
 		}
 	}
 
@@ -227,7 +227,7 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 		e.state[name] = defined
 		args := make([]string, len(sig.Params()))
 		for i, p := range sig.Params() {
-			args[i] = lower.Ident(p.Name())
+			args[i] = e.localName(p)
 		}
 
 		call := lower.FuncName(fn) + "(" + strings.Join(args, ", ") + ")"

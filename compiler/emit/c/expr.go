@@ -113,6 +113,10 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 		if f, ok := e.info.Uses[x.Sel].(*types.Var); ok && e.packageOf(x.X) == nil {
 			base := e.typeOf(x.X)
 			e.define(lower.ValueType(base), x.Pos()) // reached through a pointer, the struct may be declared and not yet defined
+			if !e.isPlace(x.X) {
+				return field(e.place(x.X), base, f) // a value built here: the field of the temporary holding it
+			}
+
 			return field(deref(e.lvalue(x.X), base), base, f)
 		}
 	}
@@ -147,7 +151,7 @@ func (e *Emitter) ident(x *ast.Ident) string {
 			return s
 		}
 
-		return lower.Ident(obj.Name()) // the variable's own name: super stands for the receiver
+		return e.localName(obj) // the variable's own name: super stands for the receiver
 	case *types.Variant:
 		return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
 	}
@@ -431,6 +435,13 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		return e.valueTo(x.X, e.typeOf(x))
 	case token.MUL:
 		s := e.expr(x.X)
+		if _, owned := e.typeOf(x.X).(*types.Pointer); owned && !e.isPlace(x.X) { // a pointer built here owns its block: held, and freed when the statement ends
+			held := e.temp()
+			e.line(e.cType(e.typeOf(x.X), x.Pos()) + " " + held + " = " + s + ";")
+			e.hold(held, e.typeOf(x.X))
+			s = held
+		}
+
 		switch r := e.typeOf(x.X).(type) {
 		case *types.Ref:
 			if !r.Mut() {

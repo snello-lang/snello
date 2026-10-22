@@ -475,8 +475,16 @@ func (c *Checker) intIndex(e ast.Expr) {
 	}
 }
 
+// mutableView reports whether e is a slice of a value mut may lend:
+// one owned, or reached through a mut borrow, not through a ref.
+func (c *Checker) mutableView(e ast.Expr) bool {
+	s, ok := unparen(e).(*ast.SliceExpr)
+	return ok && !c.readOnly[s]
+}
+
 // sliceExpr checks x[lo:hi], which lends the piece: a ref string or a
-// ref []T, mut when x is reached through a mut borrow.
+// ref []T, never mut itself; mut x[lo:hi] lends it for changing when x
+// is owned or reached through a mut borrow (mutableView).
 func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 	x := c.expr(e.X, nil)
 	if x.mode == invalid {
@@ -491,7 +499,15 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 		c.intIndex(e.High)
 	}
 
-	base, _ := deref(x)
+	base, m := deref(x)
+	if m == borrowed {
+		if c.readOnly == nil {
+			c.readOnly = make(map[*ast.SliceExpr]bool)
+		}
+
+		c.readOnly[e] = true
+	}
+
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		return operand{value, NewRef(t, false), nil, nil} // a view: it never owns or grows the elements, so it is never mut
@@ -515,6 +531,16 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 
 		if e.Op == token.MUT && x.mode == borrowed {
 			c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+			return invalidOperand
+		}
+
+		if e.Op == token.MUT && isBorrow(x.typ) && !isMut(x.typ) && !c.mutableView(e.X) { // a borrow of a borrow is a borrow of the value, which a ref may not change
+			if s, ok := unparen(e.X).(*ast.SliceExpr); ok {
+				c.errorf(e.X.Pos(), "cannot borrow "+exprText(s)+" as mut: it is a slice of "+exprText(s.X)+", reached through a ref "+c.throughWhat(s.X))
+			} else {
+				c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut: "+exprText(e.X)+" is a ref "+c.throughWhat(e.X))
+			}
+
 			return invalidOperand
 		}
 
@@ -744,8 +770,8 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 		if through.mut {
 			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
 		}
-	} else if m == variable && !IsCopy(result) {
-		c.move(e.X, m) // the value inside leaves the place
+	} else if held(e.X, m) && !IsCopy(result) {
+		c.move(e.X, variable) // the value inside leaves the place
 	}
 
 	f := c.forkAt()
@@ -787,8 +813,8 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
-	if x.mode == variable && !isBorrow(x.typ) && !IsCopy(xt) {
-		c.move(e.X, x.mode) // the value inside leaves the place
+	if held(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
+		c.move(e.X, variable) // the value inside leaves the place
 	}
 
 	switch want := c.sig.results.Underlying().(type) {

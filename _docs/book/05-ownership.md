@@ -94,11 +94,13 @@ first := xs[0]                        // ERROR "cannot move xs[0] out of the sli
 v := take(mut q.buf[q.head])          // moves the element out and leaves None behind
 ```
 
-A part of a value no name holds stays where it is too: the field of a value a call lent, `pick(mut xs).name` where `pick` returns `mut Node`, is the borrowed value's, and the field of the cell a returned pointer points at, `(*mk()).name`, belongs to a temporary that is dropped when the statement ends, which would drop the part twice. Bind the temporary to a name first, `p := mk(); n := (*p).name`, and the move is from `p`.
+A part of a value no name holds stays where it is too: the field of a value a call lent, `pick(mut xs).name` where `pick` returns `mut Node`, is the borrowed value's, and the field of a value a call returned, `row().name`, or of the cell a returned pointer points at, `(*mk()).name`, belongs to a temporary that is dropped when the statement ends, which would drop the part twice. Every operation that takes a value is refused on such a part: an assignment, an argument passed by value, `if v := row().note`, a `match` arm binding by value, `row().note ?? ""`, `row().note?`, and `range` over `row().tags`. Bind the temporary to a name first, `r := row(); s := r.name`, and the move is from `r`. Reading the part where it is, or lending it, is fine, and the whole temporary is dropped once when the statement ends: `len(row().tags)`, `match row().name { ... }`, `if v := ref row().note`, `for _, t := range ref row().tags`, `grow(mut row().tags)`.
 
 ```teak
 s := pick(mut xs).name                // ERROR "cannot move pick(...).name out of a borrow"
 n := (*mk()).name                     // ERROR "cannot move (*mk()).name out of a temporary: bind the temporary to a name first"
+t := row().name                       // ERROR "cannot move row().name out of a temporary: bind the temporary to a name first"
+fmt.Println(row().name, len(row().tags))   // fine: both are read where they are
 ```
 
 `take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer and a function value have no zero value, since nothing could be done with the null left behind, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind`; make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
@@ -213,5 +215,5 @@ Two tests hold this in place. `go test ./bench -run TestNoCollector -v` builds t
 | `s moved in a previous iteration of the loop` | `move-in-loop` |
 | `cannot move xs[0] out of the slice` | `move-out-of-slice` |
 | `cannot move n.value out of a borrow` | `move-out-of-borrow` |
-| `cannot move pick(...).name out of a borrow`, `cannot move (*mk()).name out of a temporary: bind the temporary to a name first` | `TestMoves` in `compiler/types/move_test.go` |
+| `cannot move pick(...).name out of a borrow`, `cannot move (*mk()).name out of a temporary: bind the temporary to a name first`, `cannot move row().name out of a temporary: ...` | `TestMoves` in `compiler/types/move_test.go` |
 | `use of partially moved value n` | `partial-move` |

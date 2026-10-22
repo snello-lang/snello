@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
 	"github.com/teak-lang/teak/compiler/token"
 	"github.com/teak-lang/teak/compiler/types"
 )
@@ -194,9 +193,10 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) []owne
 			value = "&" + place
 		}
 
-		e.line(e.cType(vt, p.Pos()) + " " + lower.Ident(p.Name.Name) + " = " + value + ";")
+		local := e.declareLocal(p.Name)
+		e.line(e.cType(vt, p.Pos()) + " " + local + " = " + value + ";")
 		e.discardUnused(p.Name)
-		e.own(lower.Ident(p.Name.Name), vt)
+		e.own(local, vt)
 		if _, borrow := vt.(*types.Ref); !borrow && needsDrop(vt) {
 			return []owned{{place, vt}}
 		}

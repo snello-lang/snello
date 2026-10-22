@@ -70,7 +70,12 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	values := make([]string, 0, len(captured)+len(x.Args))
 	for _, cap := range captured {
 		t := e.sub(cap.Var.Type())
-		params = append(params, types.NewVar(cap.Var.Pos(), cap.Var.Name(), t))
+		p := types.NewVar(cap.Var.Pos(), cap.Var.Name(), t)
+		if local, renamed := e.names.renamed[cap.Var]; renamed {
+			e.names.renamed[p] = local // the body names the capture as the enclosing function did
+		}
+
+		params = append(params, p)
 		v := e.variable(cap.Var, e.captured)
 		if !cap.Copied && needsDrop(t) { // moved into the task: the place is emptied
 			tmp := e.temp()
@@ -90,7 +95,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	list := make([]string, len(params))
 	for i, p := range params {
 		wants[i] = p.Type()
-		list[i] = e.cType(p.Type(), pos) + " " + lower.Ident(p.Name())
+		list[i] = e.cType(p.Type(), pos) + " " + e.localName(p)
 	}
 
 	if len(list) == 0 {

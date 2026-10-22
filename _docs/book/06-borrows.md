@@ -44,7 +44,7 @@ The compiler enforces six rules. They are what make it possible to never write d
 2. **A borrow cannot be stored or sent.** Not in a field of an owned struct, not in a slice, not on a channel, not captured by `spawn`. A struct or closure that holds a borrow is itself a borrow and obeys the same rules.
 3. **A borrow can be returned only from one obvious source**: the receiver, for a `ref` or `mut` method, or the only borrowed parameter. A function with two borrowed inputs and a borrowed result is rejected.
 4. **Any number of `ref`, or exactly one `mut`.** While a value is borrowed `mut`, nothing else may look at it, including its owner. While it is borrowed `ref`, any number of other `ref` borrows may exist, but nothing may change it.
-5. **A borrow passes on narrower or equal.** A `mut T` can be handed to a function wanting `ref T` or `mut T`; a `ref T` only as `ref T`. A borrow of a field or element can be taken from a borrow of the whole, and a borrow variable may be reassigned to a borrow derived from itself.
+5. **A borrow passes on narrower or equal.** A `mut T` can be handed to a function wanting `ref T` or `mut T`; a `ref T` only as `ref T`. A borrow of a field or element can be taken from a borrow of the whole, and a borrow variable may be reassigned to a borrow derived from itself. Writing `mut` does not widen a `ref`: `mut r` where `r` is a `ref`, and `mut xs[0:2]` where `xs` is a `ref []int`, are refused, while `mut xs[0:2]` of a slice the function owns, or holds `mut`, lends that piece for changing.
 6. **The owner outlives every borrow.** This follows from the others: a borrow never leaves the function that can see its owner, except by rule 3, riding on an input borrow the caller already holds.
 
 Rule 6 reaches one value the others do not name: a temporary, a value no variable holds, such as the result of `s.Clone()` in `s.Clone().Trim()`. A temporary is dropped when its statement ends, so a borrow of it can be used inside the statement, `fmt.Println(s.Clone().Trim())`, ranged over, matched on, but not kept in a variable or returned:
@@ -53,7 +53,7 @@ Rule 6 reaches one value the others do not name: a temporary, a value no variabl
 t := s.Clone().Trim()                 // ERROR "cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends"
 ```
 
-Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program.
+Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program. A temporary's fields and elements are places in it, read and lent where they are, `len(row().tags)`, `grow(mut row().tags)`, and dropped with it once; none is moved out of it (chapter 5).
 
 Rule 4 is the one you will meet first. A method with a `mut` receiver creates a `mut` borrow, so a `ref` held across the call is a conflict:
 
@@ -65,6 +65,10 @@ fmt.Println(r)
 ```
 
 Move the `Println` before the `Push`, or the `Push` before the `ref`, and it compiles: the borrow `r` ends at its last use. The message names both ends, where `r` was created and the use that keeps it alive: `xs is borrowed as ref by r at 16:5, used at 18:17`. Arguments are evaluated before the receiver is borrowed, so `xs.Push(len(xs))` and `xs.Insert(xs.Pop() ?? 0, 2)` are fine: the borrow each argument takes is over before `Push` takes its `mut`. The same rule is why a slice cannot be grown while a borrow of an element is live, why a map cannot be changed while it is being ranged, and why an iterator cannot be invalidated: each of those is a write during a read, and the compiler rejects it.
+
+A value chosen at run time borrows from every place it may come from: `x := if c { ref s } else { ref z }` holds both `s` and `z`, as `match` does over its arms and `o ?? ref z` over both sides, so neither may change while `x` is used, and `return if c { s } else { ref z }` is refused when `z` is a local.
+
+A borrow a call returns stays lent while it is passed along. In `fmt.Println(m.Get("a"), m.Remove("b"))` the first argument still points into `m` when `Remove` would change it, which could move the very entry being printed, so the call is refused: `cannot borrow m as mut: m is borrowed as ref at 4:14`. Print the borrow in a statement of its own, or turn it into text first, `fmt.Println(fmt.Sprint(m.Get("a")), m.Remove("b"))`. A borrow read into a value before the call takes its `mut` is over, so `m.Insert("b", *(m.Get("a") ?? ref 0) + 1)` is fine.
 
 While a value is lent `mut`, the owner may not even read it: `a := mut n; fmt.Println(n); *a += 1` is `cannot use n: n is borrowed as mut by a`. A loop counts a use on its next pass, so a borrow created before a loop and used anywhere inside it is live for the whole loop: `used in the next pass of the loop at 12:9`.
 
@@ -167,6 +171,7 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot use xs (ref []int) as mut []int` | `ref-as-mut` |
 | `cannot assign to n.value through a ref borrow` | `assign-through-ref` |
 | `cannot borrow t.nodes as mut through a ref receiver` | `mut-through-ref-receiver` |
+| `cannot borrow r as mut: r is a ref borrow`, `cannot borrow xs[0:1] as mut: it is a slice of xs, reached through a ref borrow`, `cannot borrow m as mut: m is borrowed as ref at ...` for a borrow passed beside it | `TestLending` in `compiler/types/borrow_test.go` |
 | `cannot bind mut through m[k]: ... use m.GetMut(k)` | `TestBorrows` |
 | `a slice cannot hold a borrow`, `a channel cannot carry a borrow`, `a spawned task cannot hold a borrow` | `borrow-in-slice`, `borrow-on-channel`, `borrow-across-spawn` |
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |

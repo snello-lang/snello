@@ -70,6 +70,35 @@ func mk(n int) T { return T{n: n} }
 `,
 		read: "len(word(%))", change: "len(word(%).ToUpper())", bind: "", body: `fmt.Println("body", %)`,
 	},
+	{
+		name: "part", // a field of a temporary is a place in it, dropped once with the whole
+		decls: `struct T impl Drop { n int }
+func (t mut T) Drop() { fmt.Println("drop", t.n) }
+func (t ref T) Get() int { return t.n }
+func (t mut T) Bump() int { t.n += 100; return t.n }
+func (t ref T) Opt() ref int? { return Some(ref t.n) }
+struct W { t T; s string; xs []int }
+func mk(n int) W { return W{t: T{n: n}, s: strings.Repeat("ab", n), xs: []int{n}} }
+`,
+		read: "mk(%).t.Get()", change: "mk(%).t.Bump()", bind: "mk(%).t.Opt()", body: `fmt.Println("body", %, len(mk(%).s), mk(%).xs[0])`,
+	},
+	{
+		name: "element", // so is an element of a temporary slice of strings, which the debug build sees released twice or leaked
+		decls: `func mk(n int) []string { return []string{strings.Repeat("ab", n), strings.Repeat("c", n)} }
+func grow(s mut string) int { *s = *s + "!"; return len(s) }
+`,
+		read: "len(mk(%)[1])", change: "grow(mut mk(%)[0])", bind: "", body: `fmt.Println("body", %, mk(%)[0])`,
+	},
+	{
+		name: "lent", // a temporary lent with ref or mut is held once and dropped once
+		decls: `struct L { s string; xs []int }
+func peek(l ref L) int { return len(l.s) + l.xs[0] }
+func bump(l mut L) int { l.xs.Push(1); l.s = l.s + "!"; return len(l.s) + len(l.xs) }
+func opt(l ref L) ref int? { return Some(ref l.xs[0]) }
+func mk(n int) L { return L{s: strings.Repeat("ab", n), xs: []int{n}} }
+`,
+		read: "peek(ref mk(%))", change: "bump(mut mk(%))", bind: "opt(ref mk(%))", body: `fmt.Println("body", %, peek(ref mk(%)), bump(mut L{s: "x", xs: []int{%}}))`,
+	},
 }
 
 // forms are the statement forms, each a template over @R, @M, @B and

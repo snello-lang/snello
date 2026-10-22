@@ -257,7 +257,9 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 		v := e.valueTo(x.X, e.typeOf(x))
 		if !e.isPlace(x.X) && needsDrop(e.typeOf(x.X)) { // a borrow written out of a value built here holds what it lends itself
 			if depth(e.typeOf(x.X)) < depth(e.typeOf(x)) {
-				e.hold(v.s, e.typeOf(x.X)) // the slot the value was lent from
+				if x.Op == token.REF {
+					e.hold(v.s, e.typeOf(x.X)) // the slot the value was lent from; valueTo holds one it lends mut
+				}
 			} else {
 				e.hold(e.spill(v), e.typeOf(x.X))
 			}
@@ -265,7 +267,12 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 
 		return v
 	case token.MUL:
-		return e.derefTo(e.expr(x.X), e.typeOf(x.X), e.typeOf(x))
+		v := e.expr(x.X)
+		if _, owned := e.typeOf(x.X).(*types.Pointer); owned && !e.isPlace(x.X) { // a pointer built here owns its block: held, and freed when the statement ends
+			e.hold(e.spill(v), e.typeOf(x.X))
+		}
+
+		return e.derefTo(v, e.typeOf(x.X), e.typeOf(x))
 	case token.AND:
 		elem := e.typeOf(x).(*types.Pointer).Elem()
 		cell := e.alloc(elem, x.Pos())
@@ -689,8 +696,12 @@ func fieldIndex(st *types.Struct, name string) int {
 	return -1
 }
 
-// isPlace reports whether x denotes a variable or a field of one,
-// which can be read in place and bound to without a copy.
+// isPlace reports whether x denotes a variable or a part of a value,
+// which can be read in place and bound to without a copy. A field, an
+// element or what a pointer points at is a place wherever the value
+// is: in a variable, behind a borrow, or in the temporary scrutinee
+// holds for a value built here, which the statement drops whole, so
+// that its part is never copied out and dropped twice.
 func (e *Emitter) isPlace(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.Ident:
@@ -704,26 +715,14 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 			return true // a variable of the library, such as os.Args
 		}
 
-		return ok && v.IsField() && e.viaBorrow(x.X)
+		return ok && v.IsField()
 	case *ast.IndexExpr:
-		return e.viaBorrow(x.X)
+		return true
 	case *ast.UnaryExpr:
-		return x.Op == token.MUL && e.viaBorrow(x.X)
+		return x.Op == token.MUL
 	}
 
 	return false
-}
-
-// viaBorrow reports whether a field, an element or the value of x is a
-// place: x is one itself, or x is a borrow, whose value lives elsewhere
-// however x was built.
-func (e *Emitter) viaBorrow(x ast.Expr) bool {
-	if e.isPlace(x) {
-		return true
-	}
-
-	_, ok := e.typeOf(x).(*types.Ref)
-	return ok
 }
 
 // operands writes a list of operands evaluated left to right, each

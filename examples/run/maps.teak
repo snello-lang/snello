@@ -31,7 +31,9 @@ func main() {
 	m["four"] = 4
 	m["one"] += 10
 	fmt.Println(m, len(m), m["two"], m["missing"], len(m))
-	fmt.Println(m.Get("three"), m.Get("nope"), m.Contains("four"), m.Remove("two"), m.Remove("two"), m)
+	// Get lends into m, which Remove changes: the borrows are turned into
+	// text first, as one call may not hold a borrow of m while it changes m.
+	fmt.Println(fmt.Sprint(m.Get("three"), m.Get("nope")), m.Contains("four"), m.Remove("two"), m.Remove("two"), m)
 	if v := m.GetMut("four") {
 		*v *= 100
 	}

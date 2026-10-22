@@ -224,6 +224,10 @@ func (xs ref []T) Contains(v ref T) bool
 // the next Push.
 func (xs mut []T) Clear()
 
+// Swap exchanges the elements at indexes i and j, moving each into the
+// other's place; an index out of range panics.
+func (xs mut []T) Swap(i, j int)
+
 // Reverse reverses the order of the elements in place.
 func (xs mut []T) Reverse()
 

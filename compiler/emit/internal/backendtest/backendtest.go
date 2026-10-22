@@ -822,6 +822,253 @@ func main() {
 `,
 			Out: "8000\n",
 		},
+		{
+			Name: "heap", // the library's binary heap, least first by Cmp: pushes and pops interleaved, a heap built from a slice, Peek, an order reversed by its Cmp, owned elements left in a heap when it goes, and elements larger than the runtime's swap buffer
+			Src: `package main
+import ("fmt"; "heap"; "sort")
+struct Job impl Ord { pri int; name string }
+func (a ref Job) Cmp(b ref Job) Ordering { return a.pri.Cmp(b.pri) }
+struct Max impl Copy, Ord { n int }
+func (a ref Max) Cmp(b ref Max) Ordering { return b.n.Cmp(a.n) }
+struct Wide impl Ord { f0 int; f1 int; f2 int; f3 int; f4 int; f5 int; f6 int; f7 int; f8 int; f9 int; f10 int; f11 int; f12 int; f13 int; f14 int; f15 int; f16 int; f17 int; f18 int; f19 int; f20 int; f21 int; f22 int; f23 int; f24 int; f25 int; f26 int; f27 int; f28 int; f29 int; f30 int; f31 int; f32 int }
+func (a ref Wide) Cmp(b ref Wide) Ordering { return a.f0.Cmp(b.f32) }
+func drain(h mut heap.Heap<int>) []int {
+	out := []int{}
+	for v := h.Pop(); v != None; v = h.Pop() { out.Push(v.Expect("Some")) }
+	return out
+}
+func main() {
+	var empty heap.Heap<int>
+	fmt.Println(empty.Len(), empty.Pop(), empty.Peek())
+	empty.Push(4)
+	fmt.Println(empty.Peek(), empty.Len())
+	h := heap.New<int>()
+	seed := 7
+	for i := 0; i < 500; i++ {
+		seed = (seed*1103515245 + 12345) % 2147483648
+		h.Push(seed % 1000)
+		if i % 3 == 0 { h.Pop() }
+	}
+	fmt.Println(h.Len())
+	xs := drain(mut h)
+	fmt.Println(len(xs), sort.IsSorted(ref xs), h.Len(), h.Pop())
+	f := heap.From([]int{5, 3, 8, 1, 9, 2, 7, 1, 0, 6})
+	fmt.Println(f.Peek(), f.Len())
+	fmt.Println(drain(mut f))
+	fmt.Println(drain(mut heap.From([]int{})), drain(mut heap.From([]int{4})))
+	jobs := heap.New<Job>()
+	for _, p := range []int{5, 1, 4, 2, 3} { jobs.Push(Job{pri: p, name: fmt.Sprint("job", p)}) }
+	for i := 0; i < 3; i++ {
+		if j := jobs.Pop() { fmt.Println(j.pri, j.name) }
+	}
+	if j := jobs.Peek() { fmt.Println("next", j.name) }
+	m := heap.From([]Max{Max{n: 2}, Max{n: 9}, Max{n: 4}})
+	m.Push(Max{n: 7})
+	order := []int{}
+	for v := m.Pop(); v != None; v = m.Pop() { order.Push(v.Expect("Some").n) }
+	fmt.Println(order)
+	w := heap.New<Wide>()
+	for i := 0; i < 20; i++ { k := (i * 7) % 20; w.Push(Wide{f0: k, f32: k}) }
+	total := 0
+	last := -1
+	for v := w.Pop(); v != None; v = w.Pop() {
+		x := v.Expect("Some")
+		if x.f0 < last || x.f0 != x.f32 { fmt.Println("out of order") }
+		last = x.f0
+		total += x.f0
+	}
+	fmt.Println(total)
+}
+`,
+			Out: "0 None None\nSome(4) 1\n333\n333 true 0 None\nSome(0) 10\n[0 1 1 2 3 5 6 7 8 9]\n[] [4]\n1 job1\n2 job2\n3 job3\nnext job4\n[9 7 4 2]\n190\n",
+		},
+		{
+			Name: "slice-swap", // Swap moves two elements into each other's places: numbers, owned strings, a slice of a slice lent mut, slices of slices
+			Src: `package main
+import "fmt"
+func tail(xs mut []string) { xs.Swap(0, 1) }
+func main() {
+	xs := []int{1, 2, 3, 4}
+	xs.Swap(0, 3)
+	xs.Swap(1, 1)
+	fmt.Println(xs)
+	ss := []string{"a".Clone(), "b".Clone(), "c".Clone()}
+	ss.Swap(0, 2)
+	tail(mut ss[1:3])
+	fmt.Println(ss)
+	twice := [][]string{[]string{"x".Clone()}, []string{}}
+	twice.Swap(0, 1)
+	fmt.Println(twice)
+}
+`,
+			Out: "[4 2 3 1]\n[c a b]\n[[] [x]]\n",
+		},
+		{
+			Name: "shadowed-locals", // a local that reuses a name already declared in its function, or the name of a top-level declaration, gets a C name of its own: x := x in a block, a loop variable shadowed in its body, a struct's name, a capture, a spawn, a generic instance
+			Src: `package main
+import "fmt"
+struct item { n int }
+var count = 10
+func mk(n int) item { return item{n: n} }
+func pick<T: Clone>(x T) T {
+	{
+		x := x.Clone()
+		return x
+	}
+}
+func next(n int) int? {
+	if n < 3 { return Some(n + 1) }
+	return None
+}
+func main() {
+	count := count + 1
+	fmt.Println(count)
+	item := mk(2)
+	got := mk(4)
+	fmt.Println(item.n, got.n)
+	seen := []int{}
+	for i := 0; i < 3; i++ {
+		i := i * 10
+		seen.Push(i)
+	}
+	fmt.Println(seen)
+	s := "outer".Clone()
+	{
+		s := s + "!"
+		fmt.Println(s)
+	}
+	fmt.Println(s)
+	steps := []int{}
+	for cur := next(0); cur != None; cur = next(cur.Expect("Some")) {
+		cur := cur.Expect("Some")
+		steps.Push(cur)
+	}
+	fmt.Println(steps)
+	n := 1
+	f := func() int {
+		n := n + 1
+		return n
+	}
+	fmt.Println(f(), n)
+	done := make(chan int)
+	d := done.Clone()
+	v := 5
+	{
+		v := v * 2
+		spawn func() { d <- v }()
+	}
+	fmt.Println(<-done, v)
+	fmt.Println(pick("p".Clone()), pick(3))
+	o := Some("in".Clone())
+	match o {
+		Some(o) => fmt.Println(o),
+		None => fmt.Println("none"),
+	}
+}
+`,
+			Out: "11\n2 4\n[0 10 20]\nouter!\nouter\n[1 2 3]\n2 1\nSome(10) 5\np 3\nin\n",
+		},
+		{
+			Name: "toplevel-names", // a parameter or local named as a top-level declaration of the program gets a C name of its own, in a function, a closure, a function value's adapter and a spawn; a top-level variable keeps its name
+			Src: `package main
+import "fmt"
+struct item { n int }
+func mk(n int) item { return item{n: n} }
+func f(item int) int { x := mk(item); return x.n }
+func g(mk int) int { return mk + 1 }
+func main() {
+	h := f
+	fmt.Println(f(3), g(4), h(5))
+	k := func(item int) int { y := mk(item); return y.n }
+	fmt.Println(k(6)); later(); done := make(chan int); d := done.Clone(); item := 7; spawn func() { d <- item }(); fmt.Println(<-done)
+}
+var count = 10
+func bump(count int) int { return count + 1 }
+func useGlobal() int { count := count + 5; return count }
+func later() { fmt.Println(bump(count), useGlobal(), count) }
+`,
+			Out: "3 5 5\n6\n11 15 10\nSome(7)\n",
+		},
+		{
+			Name: "temporary-parts", // a field or element of a value built in the statement is a place inside the temporary that holds it: read, lent, matched and changed there, and dropped once with the whole
+			Src: `package main
+import "fmt"
+struct Pt { x int; y int }
+struct Row { name string; tags []string; at Pt; note string? }
+struct Doc { row Row; id int }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, at: Pt{x: 1, y: 2}, note: Some("n".Clone())} }
+func doc() Doc { return Doc{row: row("d"), id: 7} }
+func boxed() *Row { return &row("b") }
+func names() []string { return []string{"a".Clone(), "bb".Clone()} }
+func count(xs ref []string) int { return len(xs) }
+func add(xs mut []string) { xs.Push("t3".Clone()) }
+func main() {
+	fmt.Println(row("r").name, len(row("r").tags), row("r").at, row("r").at.y)
+	fmt.Println(doc().row.name, doc().row.tags[1], len(doc().row.tags[0]), doc().id)
+	fmt.Println(names()[1], len(names()[0]), count(ref row("r").tags))
+	add(mut row("r").tags)
+	row("r").tags.Push("t4".Clone())
+	match row("m").name {
+		"m" => fmt.Println("matched"),
+		_ => fmt.Println("missed"),
+	}
+	match ref row("m").note {
+		Some(n) => fmt.Println("note", n),
+		None => fmt.Println("none"),
+	}
+	if n := ref doc().row.note { fmt.Println("if", n) }
+	for _, t := range ref row("r").tags { fmt.Println("tag", t) }
+	fmt.Println((*boxed()).name, len((*boxed()).tags), *boxed())
+	fmt.Println(row("r").name == "r", row("r").name.Len(), row("r").name + "!", row("r").note.IsSome())
+	c := doc().row.name.Clone()
+	fmt.Println(c)
+}
+`,
+			Out: "r 2 {1 2} 2\nd t2 2 7\nbb 1 2\nmatched\nnote n\nif n\ntag t1\ntag t2\nb 2 {b [t1 t2] {1 2} Some(\"n\")}\ntrue 1 r! true\nd\n",
+		},
+		{
+			Name: "mut-temporaries", // a value built here and lent mut is held once and dropped once, whole or a field of it
+			Src: `package main
+import "fmt"
+struct S { xs []string; n int }
+func mk() []string { return []string{"a".Clone()} }
+func mks() S { return S{xs: []string{"a".Clone()}, n: 1} }
+func grow(xs mut []string) int { xs.Push("b".Clone()); return len(xs) }
+func bump(s mut S) int { s.xs.Push("c".Clone()); s.n += 1; return s.n + len(s.xs) }
+func main() {
+	fmt.Println(grow(mut []string{"x".Clone()}), grow(mut mk()), bump(mut mks()), bump(mut S{xs: mk(), n: 5}))
+	grow(mut mk())
+	bump(mut mks())
+	fmt.Println(grow(mut mks().xs))
+}
+`,
+			Out: "2 2 4 8\n2\n",
+		},
+		{
+			Name: "loop-owned-step", // a loop whose variable owns what it holds, with a step that needs statements: the condition's temporaries are made and dropped on every pass, and the step's label is written only when a continue jumps to it
+			Src: `package main
+import "fmt"
+func next(n int) string? {
+	if n < 4 { return Some(fmt.Sprint("s", n)) }
+	return None
+}
+func main() {
+	i := 0
+	for v := next(i); v != None; v = next(i) {
+		i++
+		fmt.Println(v)
+	}
+	i = 0
+	for v := next(i); v != None; v = next(i) {
+		i++
+		if i == 2 { continue }
+		fmt.Println("kept", v)
+	}
+	for j := 0; j < 5 && next(j) != Some("s2".Clone()); j++ { fmt.Println("j", j) }
+}
+`,
+			Out: "Some(\"s0\")\nSome(\"s1\")\nSome(\"s2\")\nSome(\"s3\")\nkept Some(\"s0\")\nkept Some(\"s2\")\nkept Some(\"s3\")\nj 0\nj 1\n",
+		},
 	}
 
 	for _, misuse := range []struct{ name, body, err string }{
@@ -837,6 +1084,7 @@ func main() {
 		{"deadlock-waitgroup", "wg := sync.NewWaitGroup(); wg.Add(1); wg.Wait()", "fatal error: all tasks are asleep - deadlock!"},
 		{"deadlock-tasks", "a := make(chan int); b := make(chan int); b2 := b.Clone(); spawn func() { <-a; b2 <- 1 }(); <-b", "fatal error: all tasks are asleep - deadlock!"},
 		{"empty-rc", "var r rc.Rc<int>; fmt.Println(r.Get())", "panic: rc: Get on an empty handle"},
+		{"swap-out-of-range", "xs := []int{1}; xs.Swap(0, 1)", "panic: index out of range [1] with length 1"},
 	} {
 		programs = append(programs, Program{
 			Name: misuse.name, Src: tasks + "func main() { " + misuse.body + " }\n",
