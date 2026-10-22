@@ -248,7 +248,6 @@ void tk_slice_push(tk_slice *s, const void *v, size_t size);
 bool tk_slice_pop(tk_slice *s, void *out, size_t size);
 void tk_slice_insert(tk_slice *s, int64_t i, const void *v, size_t size);
 void tk_slice_remove(tk_slice *s, int64_t i, void *out, size_t size);
-void tk_slice_swap(tk_slice *s, int64_t i, int64_t j, size_t size);
 void tk_slice_reverse(tk_slice *s, size_t size);
 void tk_slice_clone(const tk_slice *s, tk_slice *out, size_t size);
 void tk_slice_sub(const tk_slice *s, int64_t lo, int64_t hi, tk_slice *out, size_t size);

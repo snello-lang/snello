@@ -97,9 +97,14 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 
 		e.line(place + ".len = 0;")
 		return ""
-	case "Swap":
+	case "Swap": // both indexes checked, in order, then the two elements exchanged in place
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int]})
-		e.line("tk_slice_swap(" + generic + ", " + args[0] + ", " + args[1] + ", " + size + ");")
+		a, b, tmp := e.temp(), e.temp(), e.temp()
+		e.line("int64_t " + a + " = tk_index((int64_t)(" + args[0] + "), " + place + ".len);")
+		e.line("int64_t " + b + " = tk_index((int64_t)(" + args[1] + "), " + place + ".len);")
+		e.line(elem + " " + tmp + " = " + place + ".ptr[" + a + "];")
+		e.line(place + ".ptr[" + a + "] = " + place + ".ptr[" + b + "];")
+		e.line(place + ".ptr[" + b + "] = " + tmp + ";")
 		return ""
 	case "Reverse":
 		e.line("tk_slice_reverse(" + generic + ", " + size + ");")

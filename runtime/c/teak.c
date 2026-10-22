@@ -180,15 +180,6 @@ static void exchange(char *a, char *b, size_t size) {
     }
 }
 
-void tk_slice_swap(tk_slice *s, int64_t i, int64_t j, size_t size) {
-    tk_check_slice(s);
-    tk_index(i, s->len);
-    tk_index(j, s->len);
-    if (i != j) {
-        exchange((char *)s->ptr + (size_t)i * size, (char *)s->ptr + (size_t)j * size, size);
-    }
-}
-
 void tk_slice_reverse(tk_slice *s, size_t size) {
     tk_check_slice(s);
     if (s->len < 2) {

@@ -883,6 +883,40 @@ func main() {
 			Out: "0 None None\nSome(4) 1\n333\n333 true 0 None\nSome(0) 10\n[0 1 1 2 3 5 6 7 8 9]\n[] [4]\n1 job1\n2 job2\n3 job3\nnext job4\n[9 7 4 2]\n190\n",
 		},
 		{
+			Name: "heap-edges", // the bottom-up descent of Pop on heaps of two and three, Clear and reuse, IsEmpty, and three thousand pushes with pops between them giving back the multiset pushed
+			Src: `package main
+import ("fmt"; "heap")
+func main() {
+	e := heap.From([]int{2, 1})
+	fmt.Println(e.IsEmpty(), e.Pop(), e.Pop(), e.Pop(), e.IsEmpty())
+	t := heap.From([]int{3, 1, 2})
+	fmt.Println(t.Pop(), t.Pop(), t.Pop(), t.Pop())
+	c := heap.From([]string{"b".Clone(), "a".Clone()})
+	c.Clear()
+	fmt.Println(c.Len(), c.IsEmpty())
+	c.Push("z".Clone())
+	fmt.Println(c.Len(), c.Pop())
+	h := heap.New<int>()
+	all := []int{}
+	got := []int{}
+	seed := 9
+	for i := 0; i < 3000; i++ {
+		seed = (seed*1103515245 + 12345) % 2147483648
+		h.Push(seed % 97)
+		all.Push(seed % 97)
+		if i % 4 == 3 { got.Push(h.Pop().Expect("Some")) }
+	}
+	for v := h.Pop(); v != None; v = h.Pop() { got.Push(v.Expect("Some")) }
+	got.Sort()
+	all.Sort()
+	same := len(got) == len(all)
+	for i := 0; i < len(all) && same; i++ { same = got[i] == all[i] }
+	fmt.Println("same multiset", same, len(got))
+}
+`,
+			Out: "false Some(1) Some(2) None true\nSome(1) Some(2) Some(3) None\n0 true\n1 Some(\"z\")\nsame multiset true 3000\n",
+		},
+		{
 			Name: "slice-swap", // Swap moves two elements into each other's places: numbers, owned strings, a slice of a slice lent mut, slices of slices
 			Src: `package main
 import "fmt"

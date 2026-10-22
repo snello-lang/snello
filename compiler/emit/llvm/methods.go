@@ -110,9 +110,17 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 
 		e.store(value{"i64", "0"}, e.gep("%tk_slice", p, 1))
 		return unit
-	case "Swap":
+	case "Swap": // both indexes checked, in order, then the two elements exchanged in place
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int]})
-		e.rt("tk_slice_swap", "void", value{"ptr", p}, args[0], args[1], size)
+		base := e.load("ptr", e.gep("%tk_slice", p, 0))
+		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		a := e.checkIndex(args[0], n)
+		b := e.checkIndex(args[1], n)
+		t := e.irType(elem, x.Pos())
+		pa, pb := e.elem(t, base.s, a.s), e.elem(t, base.s, b.s)
+		va, vb := e.load(t, pa), e.load(t, pb)
+		e.store(vb, pa)
+		e.store(va, pb)
 		return unit
 	case "Reverse":
 		e.rt("tk_slice_reverse", "void", value{"ptr", p}, size)

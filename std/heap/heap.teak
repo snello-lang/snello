@@ -10,11 +10,13 @@
 // The elements are kept in a slice laid out as a complete binary tree:
 // the children of the element at index i are at 2i+1 and 2i+2, and no
 // element is less than its parent, so the least is at index 0. Push and
-// Pop restore that order by moving one element up or down a path of the
+// Pop restore that order by moving one element along a path of the
 // tree, so each costs O(log n) comparisons; From builds a heap from a
-// slice in O(n). This is the layout and algorithm of Go's container/heap
-// and Rust's BinaryHeap. Elements that compare Equal come out in no
-// particular order: a heap is not a stable sort.
+// slice in O(n), Floyd's construction. This is the layout and algorithm
+// of Go's container/heap and Rust's BinaryHeap, and Pop is Rust's:
+// Floyd's bottom-up descent, about half the comparisons of the textbook
+// one. Elements that compare Equal come out in no particular order: a
+// heap is not a stable sort.
 package heap
 
 // A Heap owns its elements and hands them back least first. It is
@@ -49,6 +51,16 @@ func (h ref Heap<T>) Len() int {
 	return len(h.items)
 }
 
+// IsEmpty reports whether the heap holds no element.
+func (h ref Heap<T>) IsEmpty() bool {
+	return len(h.items) == 0
+}
+
+// Clear drops every element and keeps the memory for the next Push.
+func (h mut Heap<T>) Clear() {
+	h.items.Clear()
+}
+
 // Push adds v to the heap, which owns it from then on.
 func (h mut Heap<T>) Push(v T) {
 	h.items.Push(v)
@@ -65,8 +77,38 @@ func (h mut Heap<T>) Pop() T? {
 
 	h.items.Swap(0, n)
 	v := h.items.Pop()
-	h.down(0)
+	h.bottom()
 	return v
+}
+
+// bottom puts the element at the root in its place after a Pop moved
+// the last element there. That element is one of the greatest, so it
+// belongs near a leaf: it goes down the path of lesser children to the
+// bottom, one comparison a level, between the two children, and then
+// up while it is less than its parent, which is rarely more than a
+// level or two. The textbook descent compares it with a child at every
+// level too, twice the comparisons, which counts when Cmp is costly, as
+// for strings.
+func (h mut Heap<T>) bottom() {
+	n := len(h.items)
+	i := 0
+	child := 1
+	for child < n-1 {
+		if h.items[child+1].Cmp(h.items[child]) == Less {
+			child += 1
+		}
+
+		h.items.Swap(i, child)
+		i = child
+		child = 2*i + 1
+	}
+
+	if child == n-1 {
+		h.items.Swap(i, child)
+		i = child
+	}
+
+	h.up(i)
 }
 
 // Peek lends the least element without removing it, or None when the
