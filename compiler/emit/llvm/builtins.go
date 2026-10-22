@@ -240,7 +240,14 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 	t := e.typeOf(x)
 	switch u := t.Underlying().(type) {
 	case *types.Map:
-		return value{"%tk_map", "zeroinitializer"}
+		if len(x.Args) == 1 {
+			return value{"%tk_map", "zeroinitializer"}
+		}
+
+		out := e.slot("%tk_map") // room for the size hint's entries, as Go makes it
+		e.store(value{"%tk_map", "zeroinitializer"}, out)
+		e.rt("tk_map_reserve", "void", value{"ptr", out}, value{"ptr", e.mapType(u, x.Pos())}, e.valueTo(x.Args[1], types.Typ[types.Int]))
+		return e.load("%tk_map", out)
 	case *types.Chan:
 		n := value{"i64", "0"}
 		if len(x.Args) > 1 {

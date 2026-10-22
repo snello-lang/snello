@@ -29,18 +29,18 @@ A few library functions are not written in Teak: the runtime provides them in C,
 | Package | What it has |
 |---|---|
 | `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%s`, `%q`, `%f`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, and a width before the verb, `%6d`, or `%-6s` to pad on the right; it is checked against its arguments when the program is compiled |
-| `io` | `Error` with `Error()` and `Kind()`, `NewError` for the errors a program's own reader or writer reports, the `Kind` enum, the `Reader` and `Writer` traits, `Copy` |
+| `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader` and `Writer` traits, `Copy` |
 | `os` | `Args`, `Stdin`, `Stdout`, `Stderr`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit` |
 | `math` | `Pi`; `Sqrt`, `Abs`, `Min`, `Max`, over `f64`, with Go's answers on -0, NaN and the infinities |
 | `strings` | `Builder` with `WriteString`, `WriteByte`, `Len`, `String` and `Reset`; `Repeat`, `Join`, `ToLower`, `ToUpper`, `Fields` |
 | `strconv` | `Atoi`, `Itoa`, `ParseFloat`, `FormatFloat`, and `Error` with `Func`, `Text`, `Msg` and `Kind()`, `Syntax` or `Range` |
 | `sort` | `Sort` and `Search` over any `Ord` element, `SortBy` with an order of the program's own, `IsSorted` |
 | `heap` | `Heap<T: Ord>`, a priority queue: `New`, `From` to build one from a slice in linear time, `Push`, `Pop` returning the least element first or `None`, `Peek`, `Len`, `IsEmpty`, `Clear`. It is a binary heap over a slice, the layout and algorithm of Go's `container/heap` and Rust's `BinaryHeap`, with Rust's bottom-up `Pop`, so `Push` and `Pop` take O(log n) comparisons; a type that wants the greatest first gives itself a `Cmp` that says so. Elements that compare `Equal` come out in no set order (`examples/04-graph.teak`) |
-| `time` | `Duration` with the constants `Nanosecond` to `Hour`, its readings, `String`, `Round`, `Truncate` and `Abs`, `Time` with `Add`, `Sub`, `Before`, `After`, `Unix`, `UnixNano` and `String`, `Now`, `Unix`, `Since`, `Sleep`, and `After` and `Tick` as entries in the runtime's timer heap: a `Tick` keeps to its period and drops the ticks a slow receiver misses, and a `Tick` of zero or less never ticks. A `Time` reaches far past any date a program meets, and one from `Now` carries the monotonic clock's reading, so `Since` and `Sub` between two `Now`s are not moved by the system setting its clock; `Sub` gives the longest `Duration` when the span is longer, and `Unix` rounds down, all as in Go (`examples/run/clocks.teak`) |
+| `time` | `Duration` with the constants `Nanosecond` to `Hour`, its readings, `String`, `Round`, `Truncate` and `Abs`, `Time` with `Add`, `Sub`, `Before`, `After`, `IsZero`, `Unix`, `UnixNano` and `String`, `Now`, `Unix`, `Since`, `Sleep`, and `After` and `Tick` as entries in the runtime's timer heap: a `Tick` keeps to its period and drops the ticks a slow receiver misses, and a `Tick` of zero or less never ticks. A `Time` reaches far past any date a program meets, and one from `Now` carries the monotonic clock's reading, so `Since` and `Sub` between two `Now`s are not moved by the system setting its clock; `Sub` gives the longest `Duration` when the span is longer, and `Unix` rounds down, all as in Go (`examples/run/clocks.teak`) |
 | `arena` | `Arena<T>` with `Insert`, `Get`, `GetMut`, `Remove` and `Len`, `Index<T>`, `New`; chapter 13 |
 | `rc` | `Rc<T>` with `Get`, `GetMut`, `Clone`, `Downgrade`, `StrongCount` and `WeakCount`, `Weak<T>` with `Upgrade` and `Clone`, `New` |
-| `net` | `Listen` on an IPv4 address and a port, `Listener` with `Port` and `Accept`, `Dial`, `Conn` with `Read`, `Write`, `WriteString` and `Close`, an `io.Reader` and `io.Writer`; an operation that would block parks the task, so a task per connection costs no thread (stage 4, task 4.5). A failure reads as Go's, `dial tcp 127.0.0.1:1: connect: connection refused`, and its `Kind` is `Refused`, `Reset` or `TimedOut` where it is one of those; an empty host is every address to `Listen` and this machine to `Dial`; a port out of range, a host name and an IPv6 address are refused with an Error saying which, since names are not looked up yet |
-| `bufio` | `Writer` with `Write`, `WriteString`, `WriteByte`, `Flush`, `Buffered` and `Get`, `Reader` with `Read`, `ReadByte`, `ReadString` and `Get`, `Scanner` with `Scan`, `Bytes`, `Text`, `Err` and `Buffer`, and `MaxScanTokenSize`; `NewWriter`, `NewWriterSize`, `NewReader`, `NewScanner` |
+| `net` | `Listen` on an IPv4 address and a port, `Listener` with `Port`, `Accept` and `SetDeadline`, `Dial` and `DialTimeout`, `Conn` with `Read`, `Write`, `WriteString`, `Close` and Go's deadlines, `SetDeadline`, `SetReadDeadline` and `SetWriteDeadline`, an `io.Reader` and `io.Writer`; an operation that would block parks the task, so a task per connection costs no thread (stage 4, task 4.5). A failure reads as Go's, `dial tcp 127.0.0.1:1: connect: connection refused`, and its `Kind` is `Refused`, `Reset` or `TimedOut` where it is one of those; an empty host is every address to `Listen` and this machine to `Dial`; a port out of range, a host name and an IPv6 address are refused with an Error saying which, since names are not looked up yet |
+| `bufio` | `Writer` with `Write`, `WriteString`, `WriteByte`, `Flush`, `Buffered`, `Available` and `Get`, `Reader` with `Read`, `ReadByte`, `ReadString` and `Get`, `Scanner` with `Scan`, `Bytes`, `Text`, `Err` and `Buffer`, and `MaxScanTokenSize`; `NewWriter`, `NewWriterSize`, `NewReader`, `NewScanner` |
 
 Every package the library's design names is written now but `regexp`; `sync` is chapter 10's, since it is about tasks. A range over an arena or a scanner's lines waits for the iterator trait.
 
@@ -149,7 +149,7 @@ func (c ref Celsius) String() string { return fmt.Sprintf("%.1f°C", c.deg) }
 
 ## sort and time
 
-`sort.Sort` orders a slice in place, least first, by the `Cmp` of its element type, so it takes any slice whose elements are `Ord`: numbers, strings, and a struct or enum that lists `Ord` and gets `Cmp` derived from its fields, chapter 11. `SortBy` takes the order from a function instead. Both lend the slice `mut` and move its elements within it; nothing is copied. `Search` finds a value in a sorted slice, or the index where it would go.
+`sort.Sort` orders a slice in place, least first, by the `Cmp` of its element type, so it takes any slice whose elements are `Ord`: numbers, strings, and a struct or enum that lists `Ord` and gets `Cmp` derived from its fields, chapter 11. `SortBy` takes the order from a function instead. Both lend the slice `mut` and move its elements within it; nothing is copied. The sort is stable, elements that compare equal keeping their order, and is Rust's: driftsort, a quicksort where the input has no order and merges where it has, with a buffer of half the slice. A comparison that is not an order, a NaN among floats or a function that contradicts itself, leaves the order unspecified, but every element is still in the slice once. `Search` finds a value in a sorted slice, or the index where it would go.
 
 ```teak
 sort.Sort(mut nums)
@@ -223,3 +223,34 @@ for sc.Scan() {
 ```
 
 Passing a buffered writer to `fmt.Fprintln`, which is generic over its writer, is what made the one exception to chapter 12's rule on type arguments: a function that only borrows a type parameter's values may take a type argument that holds a borrow.
+
+## net
+
+A server is a `Listener` and a task per connection. Each connection is written as blocking code, a read that waits for the client's bytes, and runs as event-driven code: a read with nothing to read parks the task, and the runtime's poller wakes it when the bytes come, so ten thousand idle connections are ten thousand parked tasks and no threads. A connection is an `io.Reader` and an `io.Writer`, so `bufio` and `io.Copy` work over it as over a file.
+
+A server must not let a client that stops sending hold its task for ever. A deadline, as in Go, is a point in time after which a read or a write that has not finished fails instead of waiting, with an `io.Error` of Kind `io.TimedOut` that reads as Go's, `read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout`. It holds for every read and write from when it is set until it is moved, so one deadline bounds a whole request however many reads it takes, and a server sets one per request:
+
+```go
+func serve(c net.Conn) {
+	buf := make([]byte, 4096)
+	for {
+		c.SetReadDeadline(time.Now().Add(30 * time.Second)).Expect("deadline")
+		n := match c.Read(mut buf) {
+			Ok(n) => n,
+			Err(e) => {
+				if e.Kind() == io.TimedOut {
+					fmt.Println("idle client dropped")
+				}
+				return
+			},
+		}
+		if n == 0 {
+			return // the client closed its side
+		}
+		c.Write(buf[0:n]).Expect("echo")
+	}
+}
+```
+
+`SetDeadline` sets the reads' and the writes' together, `SetReadDeadline` and `SetWriteDeadline` one of them, and a `Listener`'s `SetDeadline` bounds `Accept`. The zero `Time`, `var none time.Time`, clears a deadline; one that has passed fails every operation at once until it is set again. `DialTimeout(host, port, timeout)` gives up on a connection not made in time. A write whose deadline passes partway, or that a broken connection or a full disk cuts short, has written the first `e.Written()` bytes, the count Go's `Write` returns beside its error.
+

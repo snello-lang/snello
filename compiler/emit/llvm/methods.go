@@ -82,13 +82,56 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	switch sel.Sel.Name {
 	case "Push":
 		v := e.spill(e.valueTo(x.Args[0], elem))
+		if e.cfg.Debug { // the runtime's checks on every push
+			e.rt("tk_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
+			return unit
+		}
+
+		// With room, in place; growing, and a sub-slice's panic, the
+		// runtime's. A sub-slice's capacity is below every length.
+		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		room := e.op("icmp slt i64 "+n.s+", "+e.load("i64", e.gep("%tk_slice", p, 2)).s, "i1")
+		fast, slow, done := e.block("push.fast"), e.block("push.slow"), e.block("push.done")
+		e.branch(room.s, fast, slow)
+		e.label(fast)
+		t := e.irType(elem, x.Pos())
+		base := e.load("ptr", e.gep("%tk_slice", p, 0))
+		e.store(e.load(t, v), e.elem(t, base.s, n.s))
+		e.store(e.op("add i64 "+n.s+", 1", "i64"), e.gep("%tk_slice", p, 1))
+		e.jump(done)
+		e.label(slow)
 		e.rt("tk_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
+		e.jump(done)
+		e.label(done)
 		return unit
 	case "Pop":
-		out := e.slot(e.irType(elem, x.Pos()))
+		t := e.irType(elem, x.Pos())
+		out := e.slot(t)
 		e.zero(out, elem, x.Pos())
-		has := e.rt("tk_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
-		return e.optionOf(e.typeOf(x), has, e.load(e.irType(elem, x.Pos()), out), x.Pos())
+		if e.cfg.Debug {
+			has := e.rt("tk_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
+			return e.optionOf(e.typeOf(x), has, e.load(t, out), x.Pos())
+		}
+
+		// A slice of its own with an element, in place; the rest the
+		// runtime's.
+		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		some := e.op("icmp sgt i64 "+n.s+", 0", "i1")
+		own := e.op("icmp sge i64 "+e.load("i64", e.gep("%tk_slice", p, 2)).s+", 0", "i1")
+		fast, slow, done := e.block("pop.fast"), e.block("pop.slow"), e.block("pop.done")
+		e.branch(e.op("and i1 "+some.s+", "+own.s, "i1").s, fast, slow)
+		e.label(fast)
+		last := e.op("sub i64 "+n.s+", 1", "i64")
+		e.store(last, e.gep("%tk_slice", p, 1))
+		base := e.load("ptr", e.gep("%tk_slice", p, 0))
+		e.store(e.load(t, e.elem(t, base.s, last.s)), out)
+		e.jump(done)
+		e.label(slow)
+		got := e.rt("tk_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
+		e.jump(done)
+		e.label(done)
+		has := e.op("phi i1 [ true, %"+fast+" ], [ "+got.s+", %"+slow+" ]", "i1")
+		return e.optionOf(e.typeOf(x), has, e.load(t, out), x.Pos())
 	case "Insert":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], elem})
 		v := e.spill(args[1])
@@ -135,10 +178,13 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.load("%tk_slice", out)
 	case "SortBy":
 		less := e.spill(e.valueTo(x.Args[0], e.typeOf(x.Args[0])))
-		e.rt("tk_slice_sort", "void", value{"ptr", p}, size, value{"ptr", "@" + e.lessAdapter(elem, x.Pos())}, value{"ptr", less})
+		e.inst("call void @" + e.sorter("tk_sortby_"+lower.Mangle(elem), "@"+e.lessAdapter(elem, x.Pos()), size) + "(ptr " + p + ", ptr " + less + ")")
 		return unit
 	case "Sort":
-		e.rt("tk_slice_sort", "void", value{"ptr", p}, size, value{"ptr", e.ordering(elem, x.Pos())}, value{"ptr", "null"})
+		if order := e.ordering(elem, x.Pos()); order != "null" {
+			e.inst("call void @" + e.sorter("tk_sort_"+lower.Mangle(elem), order, size) + "(ptr " + p + ", ptr null)")
+		}
+
 		return unit
 	}
 
@@ -169,6 +215,26 @@ func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
 
 		r := e.op("call i1 "+fn.s+"(ptr "+box+", "+a.typed()+", "+b.typed()+")", "i1")
 		e.inst("ret " + r.typed())
+		e.fn.terminated = true
+	})
+	return name
+}
+
+// sorter returns the name of the function that sorts a slice by less,
+// one for each element type and order: the runtime's sort is inlined
+// into it when the module is optimized with the runtime, and with the
+// element's size and less constants there, clang compiles one sort for
+// the type with the comparison inlined, as a generic sort is
+// instantiated for each type.
+func (e *Emitter) sorter(name, less string, size value) string {
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	e.helper(name, "void", []string{"ptr %s", "ptr %ctx"}, func() {
+		e.rt("tk_slice_sort", "void", value{"ptr", "%s"}, size, value{"ptr", less}, value{"ptr", "%ctx"})
+		e.inst("ret void")
 		e.fn.terminated = true
 	})
 	return name
@@ -394,16 +460,16 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 	e.helper(name, "ptr", []string{"ptr %m", kt + " %k"}, func() {
 		k := e.spill(value{kt, "%k"})
 		mt := value{"ptr", e.mapType(t, pos)}
-		found := e.rt("tk_map_find", "ptr", value{"ptr", "%m"}, mt, value{"ptr", k})
-		isNull := e.op("icmp eq ptr "+found.s+", null", "i1")
+		added := e.slot("ptr")
+		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", k}, value{"ptr", added})
+		isNew := e.op("icmp ne ptr "+e.load("ptr", added).s+", null", "i1")
 		new, have := e.block("new"), e.block("have")
-		e.branch(isNull.s, new, have)
+		e.branch(isNew.s, new, have)
 		e.label(have)
-		e.dropIfNeeded(k, t.Key(), pos)
-		e.inst("ret " + found.typed())
+		e.dropIfNeeded(k, t.Key(), pos) // the entry keeps the key it has
+		e.inst("ret " + slot.typed())
 		e.fn.terminated = true
 		e.label(new)
-		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", k})
 		e.inst("ret " + slot.typed())
 		e.fn.terminated = true
 	})
@@ -422,16 +488,17 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 	e.state[name] = true
 	e.helper(name, "ptr", []string{"ptr %m", "ptr %k"}, func() {
 		mt := value{"ptr", e.mapType(t, pos)}
-		found := e.rt("tk_map_find", "ptr", value{"ptr", "%m"}, mt, value{"ptr", "%k"})
-		isNull := e.op("icmp eq ptr "+found.s+", null", "i1")
+		added := e.slot("ptr")
+		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", "%k"}, value{"ptr", added})
+		key := e.load("ptr", added)
+		isNew := e.op("icmp ne ptr "+key.s+", null", "i1")
 		new, have := e.block("new"), e.block("have")
-		e.branch(isNull.s, new, have)
+		e.branch(isNew.s, new, have)
 		e.label(have)
-		e.inst("ret " + found.typed())
+		e.inst("ret " + slot.typed())
 		e.fn.terminated = true
 		e.label(new)
-		copy := e.spill(e.cloneAt("%k", t.Key(), pos))
-		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", copy})
+		e.store(e.cloneAt("%k", t.Key(), pos), key.s) // the entry keeps a key of its own
 		e.inst("ret " + slot.typed())
 		e.fn.terminated = true
 	})

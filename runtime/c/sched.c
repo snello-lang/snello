@@ -27,7 +27,7 @@
 #define _DEFAULT_SOURCE // glibc's mmap flags and clocks under -std=c11, as teak.c asks for its own
 #define _DARWIN_C_SOURCE
 
-#include "teak.h"
+#include "internal.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -160,7 +160,11 @@ typedef struct tk_task task;
 
 // A worker: its scheduler context, the queue of runnable tasks it
 // owns, and for the main thread the scheduler stack it takes when the
-// main task first parks.
+// main task first parks. runnext is Go's: the task this worker's
+// running task last woke, which the worker runs next, before its
+// queue, so that two tasks handing values back and forth stay on one
+// thread, one switch apart, where a wake through the queue would wake
+// another thread to run the task there.
 typedef struct {
     void *sched_sp;
     void *sched_stack;
@@ -168,6 +172,8 @@ typedef struct {
     pthread_mutex_t mu;
     task *head, *tail;
     int64_t len;
+    task *runnext;      // under mu
+    int64_t runnext_at; // when it was put there, on the monotonic clock
 } worker;
 
 static worker *workers;
@@ -200,9 +206,11 @@ static task main_task; // the main thread's own stack and context
 
 static _Atomic int64_t running;  // tasks started and not yet done, the main task not counted
 static _Atomic int64_t queued;   // tasks on any queue
+static _Atomic int64_t nexts;    // workers' runnext slots holding a task
 static pthread_mutex_t idle_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t idle_cond = PTHREAD_COND_INITIALIZER;
 static _Atomic int idle; // workers waiting for work
+static _Atomic int spinning; // workers looking for work before they wait, at most one
 static _Atomic int64_t outside; // wakes promised by threads that are not workers: the timers in the heap, the sockets the poller watches
 
 // tk_outside counts n more wakes promised by a thread that is not a
@@ -289,6 +297,15 @@ tk_task *tk_self(void) {
     return t;
 }
 
+// wake_idle wakes one worker waiting for work, if one is.
+static void wake_idle(void) {
+    if (atomic_load(&idle) > 0) {
+        pthread_mutex_lock(&idle_mu);
+        pthread_cond_signal(&idle_cond);
+        pthread_mutex_unlock(&idle_mu);
+    }
+}
+
 // The queues. push puts a task on a worker's queue and tells an idle
 // worker; a worker with nothing in its own queue steals half of
 // another worker's.
@@ -305,16 +322,63 @@ static void push(worker *w, task *t) {
     w->len++;
     pthread_mutex_unlock(&w->mu);
     atomic_fetch_add(&queued, 1);
-    if (atomic_load(&idle) > 0) { // a worker counts itself idle before it reads queued, and both are sequentially consistent, so one of the two sees the other
-        pthread_mutex_lock(&idle_mu);
-        pthread_cond_signal(&idle_cond);
-        pthread_mutex_unlock(&idle_mu);
+    wake_idle(); // a worker counts itself idle before it reads queued, and both are sequentially consistent, so one of the two sees the other
+}
+
+// The inject queue holds the tasks woken by a thread that is not a
+// worker, the poller's or the timers', as Go's global run queue holds
+// what its netpoller and timers make ready. Every worker looks at it
+// after its own queue, and a spinning worker looks at it alone: a task
+// woken from outside is what a spin is for, since only it would
+// otherwise cost a thread woken to run it, and work the workers make
+// for one another stays where it was made.
+static pthread_mutex_t inject_mu = PTHREAD_MUTEX_INITIALIZER;
+static task *inject_head, *inject_tail;
+static _Atomic int64_t injected;
+
+static void inject(task *t) {
+    pthread_mutex_lock(&inject_mu);
+    t->next = NULL;
+    if (inject_tail != NULL) {
+        inject_tail->next = t;
+    } else {
+        inject_head = t;
+    }
+
+    inject_tail = t;
+    pthread_mutex_unlock(&inject_mu);
+    atomic_fetch_add(&queued, 1);
+    atomic_fetch_add(&injected, 1);
+    if (atomic_load(&spinning) == 0) { // a spinner stops spinning before it reads injected, and both are sequentially consistent, so one of the two sees the other
+        wake_idle();
     }
 }
 
-// home is the queue a task made runnable here goes on: the running
-// worker's, or the first worker's from a thread that is not a worker,
-// such as the timer's or the poller's.
+static task *take_injected(void) {
+    if (atomic_load(&injected) == 0) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&inject_mu);
+    task *t = inject_head;
+    if (t != NULL) {
+        inject_head = t->next;
+        if (inject_head == NULL) {
+            inject_tail = NULL;
+        }
+    }
+
+    pthread_mutex_unlock(&inject_mu);
+    if (t != NULL) {
+        atomic_fetch_sub(&injected, 1);
+        atomic_fetch_sub(&queued, 1);
+    }
+
+    return t;
+}
+
+// home is the queue a task spawned here goes on: the running worker's,
+// or the first worker's from the main thread before it is one.
 static worker *home(void) {
     worker *w = my_worker();
     return w != NULL ? w : &workers[0];
@@ -377,8 +441,54 @@ static bool steal(worker *to, worker *from) {
     return true;
 }
 
+// put_next puts t in w's runnext slot; a task it displaces goes on
+// w's queue, where another worker may steal it.
+static void put_next(worker *w, task *t) {
+    pthread_mutex_lock(&w->mu);
+    task *old = w->runnext;
+    w->runnext = t;
+    w->runnext_at = tk_time_mono();
+    pthread_mutex_unlock(&w->mu);
+    if (old != NULL) {
+        push(w, old);
+    } else {
+        atomic_fetch_add(&nexts, 1);
+    }
+}
+
+// take_next takes the task in w's runnext slot: any when stale is
+// zero, else only one that has waited there longer than stale, for an
+// idle worker taking it from a worker whose running task has not let it
+// go, since tasks are not preempted.
+static task *take_next(worker *w, int64_t stale) {
+    pthread_mutex_lock(&w->mu);
+    task *t = w->runnext;
+    if (t != NULL && (stale == 0 || tk_time_mono() - w->runnext_at > stale)) {
+        w->runnext = NULL;
+    } else {
+        t = NULL;
+    }
+
+    pthread_mutex_unlock(&w->mu);
+    if (t != NULL) {
+        atomic_fetch_sub(&nexts, 1);
+    }
+
+    return t;
+}
+
 static task *next_task(worker *w) {
-    task *t = pop(w);
+    task *t = take_next(w, 0);
+    if (t != NULL) {
+        return t;
+    }
+
+    t = pop(w);
+    if (t != NULL) {
+        return t;
+    }
+
+    t = take_injected();
     if (t != NULL) {
         return t;
     }
@@ -417,10 +527,10 @@ static void settle(worker *w) {
         break;
     case PARKING:
         pthread_mutex_lock(&t->mu);
-        if (t->woken) {
+        if (t->woken) { // woken while it switched away: it runs next, here
             t->state = RUNNABLE;
             pthread_mutex_unlock(&t->mu);
-            push(w, t);
+            put_next(w, t);
         } else {
             t->state = PARKED;
             pthread_mutex_unlock(&t->mu);
@@ -443,12 +553,109 @@ static void run_task(worker *w, task *t) {
     settle(w);
 }
 
-// sched_loop runs the worker: the next task, or a wait for one.
+// A task left in another worker's runnext slot this long, its worker
+// busy with a task that does not let go, is taken by an idle worker.
+static const int64_t next_stale = 1000000; // a millisecond
+
+// steal_next takes a task some worker has left in its runnext slot
+// longer than next_stale.
+static task *steal_next(worker *w) {
+    if (atomic_load(&nexts) == 0) {
+        return NULL;
+    }
+
+    for (int i = 0; i < nworkers; i++) {
+        if (&workers[i] != w) {
+            task *t = take_next(&workers[i], next_stale);
+            if (t != NULL) {
+                return t;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+// A worker that runs out of tasks spins before it sleeps, as Go's
+// runtime keeps an M spinning: it looks at the inject queue for up to
+// spin_for and takes a task the poller or the timers woke meanwhile with
+// no thread woken to run it, which is what such a task costs otherwise,
+// since their threads are not workers. One worker spins at a time, and
+// an inject while one does wakes no other. The spinning adapts, as an adaptive mutex's
+// does: worth tells whether it has paid lately, raised when a spin finds
+// a task or a worker's sleep ends within spin_for, lowered when a spin
+// finds none, and a worker spins only while it is above zero. A program
+// trading messages keeps it up; one that ticks every millisecond, or
+// waits on a socket that is quiet, brings it to zero and wastes no time
+// spinning.
+static const int64_t spin_for = 50000; // 50 µs
+
+enum { worth_most = 8 };
+
+static _Atomic int worth = 1;
+
+static void spun(bool paid) {
+    int w = atomic_load(&worth);
+    int next = paid ? (w < worth_most ? w + 1 : w) : (w > 0 ? w - 1 : 0);
+    if (next != w) {
+        atomic_compare_exchange_strong(&worth, &w, next); // a lost race loses one step of a guess
+    }
+}
+
+// spin looks at the inject queue until spin_for has passed, and reports
+// whether a task was injected meanwhile.
+static bool spin(void) {
+    int expected = 0;
+    if (atomic_load(&worth) <= 0 || !atomic_compare_exchange_strong(&spinning, &expected, 1)) {
+        return false;
+    }
+
+    int64_t until = tk_time_mono() + spin_for;
+    bool found = false;
+    for (int i = 1;; i++) {
+        if (atomic_load(&injected) > 0) {
+            found = true;
+            break;
+        }
+
+        if (i % 64 == 0 && tk_time_mono() > until) {
+            break;
+        }
+
+        tk_spin_hint();
+    }
+
+    atomic_store(&spinning, 0);
+    found = found || atomic_load(&injected) > 0; // an inject that saw it spinning woke no one: it looks once more
+    spun(found);
+    return found;
+}
+
+// sched_loop runs the worker: the next task, or a spin and then a wait
+// for one. While a runnext slot holds a task, an idle worker looks again
+// every next_stale, rather than sleep until a queue has one.
 static void sched_loop(worker *w) {
     for (;;) {
         task *t = next_task(w);
+        if (t == NULL) {
+            t = steal_next(w);
+        }
+
         if (t != NULL) {
             run_task(w, t);
+            continue;
+        }
+
+        if (spin()) { // injects it saw woke no one: when more than its own task waits, it wakes a worker for the rest, as Go's spinning M does
+            t = take_injected();
+            if (atomic_load(&injected) > 0) {
+                wake_idle();
+            }
+
+            if (t != NULL) {
+                run_task(w, t);
+            }
+
             continue;
         }
 
@@ -461,7 +668,24 @@ static void sched_loop(worker *w) {
                 exit(2);
             }
 
+            if (atomic_load(&nexts) > 0) {
+                struct timespec until;
+                clock_gettime(CLOCK_REALTIME, &until);
+                until.tv_nsec += next_stale;
+                if (until.tv_nsec >= 1000000000) {
+                    until.tv_sec++;
+                    until.tv_nsec -= 1000000000;
+                }
+
+                pthread_cond_timedwait(&idle_cond, &idle_mu, &until);
+                break;
+            }
+
+            int64_t asleep = tk_time_mono();
             pthread_cond_wait(&idle_cond, &idle_mu);
+            if (atomic_load(&injected) > 0 && tk_time_mono() - asleep < spin_for) {
+                spun(true); // a wake from outside came soon enough that a spin would have caught it
+            }
         }
 
         atomic_fetch_sub(&idle, 1);
@@ -596,7 +820,13 @@ void tk_wake(tk_task *t) {
     if (t->state == PARKED) {
         t->state = RUNNABLE;
         pthread_mutex_unlock(&t->mu);
-        push(home(), t);
+        worker *w = my_worker();
+        if (w != NULL) {
+            put_next(w, t); // woken by a task: it runs next on this worker
+        } else {
+            inject(t); // by the timer's or the poller's thread
+        }
+
         return;
     }
 
@@ -604,8 +834,9 @@ void tk_wake(tk_task *t) {
 }
 
 // Timers: a heap of deadlines, served by one thread that sleeps until
-// the earliest. A timer either wakes a sleeping task or, for After and
-// Tick, puts the time in a channel; a ticking one goes back in the heap
+// the earliest. A timer either wakes a sleeping task, or, for After and
+// Tick, puts the time in a channel, or calls a function of the runtime's
+// own, as a socket's deadline does; a ticking one goes back in the heap
 // for its next tick. An After or a Tick is so an entry in the heap, as
 // in Go's runtime, and no task waits for it. A channel's timer holds a
 // handle of its own: an After drops it once it fired, a Tick once no
@@ -617,6 +848,9 @@ typedef struct {
     bool *fired;    // the sleeping task's own flag, set under timers_mu
     tk_chan *ch;    // or the channel the time goes to
     int64_t every;  // and, for a Tick, its period
+    void (*fire)(void *); // or the function to call, with arg
+    void *arg;
+    int64_t *at; // where the function's timer is kept: one more than its index in the heap, 0 when out of it
 } timer;
 
 // The deadlines are on the monotonic clock, which the system never sets
@@ -640,6 +874,8 @@ static void place(int64_t i, timer x) {
     timers[i] = x;
     if (x.ch != NULL) {
         tk_chan_placeTimer(x.ch, i);
+    } else if (x.at != NULL) {
+        *x.at = i + 1;
     }
 }
 
@@ -706,6 +942,8 @@ static timer timer_remove(int64_t i) {
 
     if (gone.ch != NULL) {
         tk_chan_placeTimer(gone.ch, -1);
+    } else if (gone.at != NULL) {
+        *gone.at = 0;
     }
 
     return gone;
@@ -728,6 +966,12 @@ static void *timer_main(void *arg) {
         int64_t now = tk_time_mono();
         if (when <= now) {
             timer due = timer_pop();
+            if (due.fire != NULL) { // under the lock, so that a disarm either takes it out first or waits for it to finish
+                due.fire(due.arg);
+                tk_outside(-1);
+                continue;
+            }
+
             if (due.ch == NULL) { // wake first, then fire, both under the lock: once the task sees its flag, nothing here touches it again
                 tk_wake(due.t);
                 *due.fired = true;
@@ -821,12 +1065,43 @@ static void start_timing(void) {
     timing = true;
 }
 
+// tk_deadline_arm calls fire with arg d from now, on the timers'
+// thread, under timers_mu: a function that takes no lock the timers'
+// thread waits behind. The timer is kept at *at, which is 0 while it is
+// out of the heap; arming it again moves it. Like every timer it is a
+// wake promised from outside the workers until it fires or is disarmed.
+void tk_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg) {
+    pthread_mutex_lock(&timers_mu);
+    start_timing();
+    if (*at > 0) {
+        timer_remove(*at - 1);
+        tk_outside(-1);
+    }
+
+    timer_push((timer){.when = deadline(d), .fire = fire, .arg = arg, .at = at});
+    pthread_cond_signal(&timers_cond);
+    pthread_mutex_unlock(&timers_mu);
+}
+
+// tk_deadline_disarm takes the timer kept at *at out of the heap, if it
+// is in it. Once it returns, the timer's function is not running and
+// will not run.
+void tk_deadline_disarm(int64_t *at) {
+    pthread_mutex_lock(&timers_mu);
+    if (*at > 0) {
+        timer_remove(*at - 1);
+        tk_outside(-1);
+    }
+
+    pthread_mutex_unlock(&timers_mu);
+}
+
 // tk_time_startTimer puts the time in ch once, d from now, and then
 // every period, when every is above zero.
 void tk_time_startTimer(tk_chan *ch, int64_t d, int64_t every) {
     pthread_mutex_lock(&timers_mu);
     start_timing();
-    timer_push((timer){deadline(d), NULL, NULL, ch, every});
+    timer_push((timer){.when = deadline(d), .ch = ch, .every = every});
     pthread_cond_signal(&timers_cond);
     pthread_mutex_unlock(&timers_mu);
 }
@@ -897,7 +1172,7 @@ void tk_sleep(int64_t d) {
     pthread_mutex_lock(&timers_mu);
     start_timing();
     bool fired = false;
-    timer_push((timer){deadline(d), t, &fired, NULL, 0});
+    timer_push((timer){.when = deadline(d), .t = t, .fired = &fired});
     pthread_cond_signal(&timers_cond);
     while (!fired) {
         pthread_mutex_unlock(&timers_mu);

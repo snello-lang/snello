@@ -298,7 +298,7 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 		put(&b, "\treturn ", e.equal("(*a)", "(*b)", u.Elem(), pos), ";\n")
 	case *types.Slice:
 		b.WriteString("\tif (a.len != b.len) {\n\t\treturn false;\n\t}\n\n")
-		put(&b, "\tfor (int64_t i = 0; i < a.len; i++) {\n\t\tif (!", e.equal("a.ptr[i]", "b.ptr[i]", u.Elem(), pos), ") {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\treturn true;\n")
+		put(&b, "\tfor (int64_t i = 0; i < a.len; i++) {\n\t\tif (!(", e.equal("a.ptr[i]", "b.ptr[i]", u.Elem(), pos), ")) {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\treturn true;\n")
 	default:
 		e.unsupported(pos, "comparing values of type "+t.String())
 		b.WriteString("\treturn false;\n")

@@ -15,8 +15,12 @@ import (
 )
 
 // Flags are the options clang is given for the module: the standard
-// optimization pipeline, which is what the backend is for. The runtime
-// beside it is compiled by the C compiler under the C backend's flags.
+// optimization pipeline, which is what the backend is for. A release
+// build adds link-time optimization: the module and the runtime are
+// compiled by clang to IR and optimized together when linked, so the
+// runtime's hot functions are inlined into the program. A debug build
+// links the module with the runtime compiled by the C compiler under
+// the C backend's flags.
 var Flags = []string{"-O2"}
 
 // Compiler returns the compiler that turns the module into an object:
@@ -44,28 +48,47 @@ func Build(dir, name string, module []byte, debug bool) (bin string, output []by
 		}
 	}
 
-	obj := filepath.Join(dir, name+".o")
+	obj := filepath.Join(dir, name+".ll.o") // never the object of a runtime file, whatever the program is called
 	args := append([]string{}, Flags...)
 	if t := moduleTriple(module); t != "" {
 		args = append(args, "-target", t) // the module's, so that clang does not override it with the host's
 	}
 
+	if !debug {
+		args = append(args, "-flto")
+	}
+
 	args = append(args, "-c", "-o", obj, filepath.Join(dir, name+".ll"))
-	output, err = exec.Command(Compiler(), args...).CombinedOutput()
+	cc := c.Compiler()
+	rtargs := append([]string{}, c.Flags...)
+	if debug {
+		rtargs = append(rtargs, c.Debug...)
+	} else {
+		cc = Compiler() // the module is clang's IR: clang compiles the runtime to IR beside it and links the two
+		rtargs = append(rtargs, c.Release...)
+	}
+
+	var compiled []byte
+	var moduleErr error
+	done := make(chan struct{})
+	go func() { // the module beside the runtime's files
+		compiled, moduleErr = exec.Command(Compiler(), args...).CombinedOutput()
+		close(done)
+	}()
+
+	objs, output, err := c.Objects(cc, rtargs, runtime.Paths(dir))
+	<-done
+	output = append(compiled, output...)
+	if moduleErr != nil {
+		return "", output, moduleErr
+	}
+
 	if err != nil {
 		return "", output, err
 	}
 
 	bin = filepath.Join(dir, name)
-	args = append([]string{}, c.Flags...)
-	if debug {
-		args = append(args, "-DTK_DEBUG")
-	}
-
-	args = append(args, "-o", bin, obj)
-	args = append(args, runtime.Paths(dir)...)
-	args = append(args, "-lm")
-	linked, err := exec.Command(c.Compiler(), args...).CombinedOutput()
+	linked, err := exec.Command(cc, append(append(append(rtargs, "-o", bin, obj), objs...), "-lm")...).CombinedOutput()
 	return bin, append(output, linked...), err
 }
 

@@ -65,14 +65,26 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	elem := e.cType(t.Elem(), x.Pos())
 	size := "sizeof(" + elem + ")"
 	switch sel.Sel.Name {
-	case "Push":
+	case "Push": // with room, in place; growing, and a sub-slice's panic, the runtime's
 		v := e.saved(x.Args[0], t.Elem())
-		e.line("tk_slice_push(" + generic + ", &" + v + ", " + size + ");")
+		sp := e.temp()
+		e.line(e.cType(t, x.Pos()) + " *" + sp + " = &" + place + ";")
+		e.line("if (TK_PUSH_FAST(*" + sp + ")) {")
+		e.line(sp + "->ptr[" + sp + "->len++] = " + v + ";")
+		e.line("} else {")
+		e.line("tk_slice_push((tk_slice *)" + sp + ", &" + v + ", " + size + ");")
+		e.line("}")
 		return ""
-	case "Pop":
-		out := e.temp()
+	case "Pop": // a slice of its own with an element, in place; the rest the runtime's
+		out, sp := e.temp(), e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
-		e.line(out + ".has = tk_slice_pop(" + generic + ", &" + out + ".val, " + size + ");")
+		e.line(e.cType(t, x.Pos()) + " *" + sp + " = &" + place + ";")
+		e.line("if (TK_POP_FAST(*" + sp + ")) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val = " + sp + "->ptr[--" + sp + "->len];")
+		e.line("} else {")
+		e.line(out + ".has = tk_slice_pop((tk_slice *)" + sp + ", &" + out + ".val, " + size + ");")
+		e.line("}")
 		return out
 	case "Insert":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], t.Elem()})
@@ -86,7 +98,7 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		e.line("tk_slice_remove(" + generic + ", " + e.valueTo(x.Args[0], types.Typ[types.Int]) + ", &" + out + ", " + size + ");")
 		return out
 	case "RemoveValue", "Contains":
-		return e.search(sel.Sel.Name, place, e.valueTo(x.Args[0], t.Elem()), t, x.Pos())
+		return e.search(sel.Sel.Name, place, e.looked(x.Args[0], t.Elem()), t, x.Pos()) // lent: a value built here is held and dropped with the statement
 	case "Clear":
 		e.line("tk_slice_own(" + generic + ", \"Clear\");")
 		if needsDrop(t.Elem()) {
@@ -119,10 +131,13 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		})
 	case "SortBy":
 		less := e.saved(x.Args[0], e.typeOf(x.Args[0]))
-		e.line("tk_slice_sort(" + generic + ", " + size + ", " + e.lessAdapter(t.Elem(), x.Pos()) + ", &" + less + ");")
+		e.line(e.sorter("tk_sortby_"+lower.Mangle(t.Elem()), e.lessAdapter(t.Elem(), x.Pos()), size) + "(" + generic + ", &" + less + ");")
 		return ""
 	case "Sort":
-		e.line("tk_slice_sort(" + generic + ", " + size + ", " + e.ordering(t.Elem(), x.Pos()) + ", NULL);")
+		if order := e.ordering(t.Elem(), x.Pos()); order != "NULL" {
+			e.line(e.sorter("tk_sort_"+lower.Mangle(t.Elem()), order, size) + "(" + generic + ", NULL);")
+		}
+
 		return ""
 	}
 
@@ -141,6 +156,23 @@ func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
 		less := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "a", types.NewRef(elem, false)), types.NewVar(token.NoPos, "b", types.NewRef(elem, false))}, types.Typ[types.Bool])
 		fn := e.cType(less, pos)
 		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t", fn, " *f = ctx;\n\treturn f->fn(f->box, *(const ", ct, " *)a, *(const ", ct, " *)b);\n}\n\n")
+	}
+
+	return name
+}
+
+// sorter returns the name of the function that sorts a slice by less,
+// one for each element type and order: the runtime's sort is inlined
+// into it when the program is optimized with the runtime, and with the
+// element's size and less constants there, clang compiles one sort for
+// the type with the comparison inlined, as a generic sort is
+// instantiated for each type.
+func (e *Emitter) sorter(name, less, size string) string {
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		head := "static void " + name + "(tk_slice *s, void *ctx)"
+		put(&e.protos, head, ";\n")
+		put(&e.helpers, head, " {\n\ttk_slice_sort(s, ", size, ", ", less, ", ctx);\n}\n\n")
 	}
 
 	return name
@@ -186,8 +218,11 @@ func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) s
 		head := "static bool " + name + "(" + st + " *s, " + elem + " v)"
 		put(&e.protos, head, ";\n")
 		put(&e.helpers, head, " {\n\tfor (int64_t i = 0; i < s->len; i++) {\n\t\tif (", e.equal("s->ptr[i]", "v", t.Elem(), pos), ") {\n")
-		if what == "RemoveValue" {
-			e.helpers.WriteString("\t\t\ttk_slice_remove((tk_slice *)s, i, &v, sizeof v);\n")
+		if what == "RemoveValue" { // the element leaves the slice and is dropped; v is only lent
+			put(&e.helpers, "\t\t\t", elem, " out;\n\t\t\ttk_slice_remove((tk_slice *)s, i, &out, sizeof out);\n")
+			if needsDrop(t.Elem()) {
+				put(&e.helpers, "\t\t\t", e.dropOf("out", t.Elem(), pos), "\n")
+			}
 		}
 
 		e.helpers.WriteString("\t\t\treturn true;\n\t\t}\n\t}\n\n\treturn false;\n}\n\n")
@@ -592,8 +627,14 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) string {
 // makeCall writes make([]T, n), make([]T, n, cap) and make(map[K]V).
 func (e *Emitter) makeCall(x *ast.CallExpr) string {
 	t := e.typeOf(x)
-	if _, ok := t.Underlying().(*types.Map); ok {
-		return "(" + e.cType(t, x.Pos()) + "){0}"
+	if mt, ok := t.Underlying().(*types.Map); ok {
+		out := e.temp()
+		e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
+		if len(x.Args) > 1 { // room for the size hint's entries, as Go makes it
+			e.line("tk_map_reserve((tk_map *)&" + out + ", " + e.mapType(mt, x.Pos()) + ", " + e.valueTo(x.Args[1], types.Typ[types.Int]) + ");")
+		}
+
+		return out
 	}
 
 	if ch, ok := t.Underlying().(*types.Chan); ok {

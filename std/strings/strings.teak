@@ -63,12 +63,7 @@ func Repeat(s ref string, n int) string {
 		panic("strings: Repeat output length overflow")
 	}
 
-	buf := make([]byte, 0, s.Len() * n) // the whole result, allocated once
-	for i := 0; i < n; i++ {
-		appendString(mut buf, s)
-	}
-
-	return string(buf)
+	return repeat(s, n)
 }
 
 // Join writes the parts one after another with sep between every two,
@@ -84,16 +79,16 @@ func Join(parts ref []string, sep ref string) string {
 		size += p.Len()
 	}
 
-	b := Builder{buf: make([]byte, 0, size)} // the whole result, allocated once
+	buf := make([]byte, 0, size) // the whole result, allocated once and given to the string
 	for i, p := range parts {
 		if i > 0 {
-			b.WriteString(sep)
+			appendString(mut buf, sep)
 		}
 
-		b.WriteString(p)
+		appendString(mut buf, p)
 	}
 
-	return string(b.buf)
+	return ownString(buf)
 }
 
 // Fields splits s around runs of white space, as Go's unicode.IsSpace
@@ -123,3 +118,11 @@ const maxInt int = 9223372036854775807
 // appendString appends the bytes of s to b in one copy, growing b
 // once. The runtime provides it.
 func appendString(b mut []byte, s ref string)
+
+// repeat writes s n times into one allocation, by doubling: s once,
+// then what is written so far again, until the length is reached, as
+// Go's Repeat does. The runtime provides it.
+func repeat(s ref string, n int) string
+
+// ownString makes b, which it takes, the string's bytes, with no copy.
+func ownString(b []byte) string

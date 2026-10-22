@@ -8,6 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
+	"sync"
 
 	"github.com/teak-lang/teak/runtime"
 )
@@ -17,8 +20,22 @@ import (
 // -fwrapv makes signed overflow wrap, as Teak's integers do; without
 // it C leaves overflow undefined and the optimizer may assume it away.
 // -fno-strict-aliasing lets the runtime work on every slice type
-// through tk_slice, which has the same layout.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1"}
+// through tk_slice, which has the same layout. A variable the program
+// assigns and never reads is the checker's to judge, not the C
+// compiler's, so that warning is off. The optimization level is the
+// build's: Release or Debug.
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-fwrapv", "-fno-strict-aliasing", "-pthread"}
+
+// Release are the options of a release build: the standard
+// optimizations, and link-time optimization over the program and the
+// runtime together, so that a runtime function a program calls in a
+// loop, a push or a hash, is inlined into it as a function of the
+// program would be. Debug are a debug build's, which compiles the
+// runtime's checks in and is built for speed of building.
+var (
+	Release = []string{"-O2", "-flto"}
+	Debug   = []string{"-O1", "-DTK_DEBUG"}
+)
 
 // Compiler returns the C compiler to run: the CC environment variable
 // when it is set, as every build tool reads it, else cc.
@@ -43,16 +60,53 @@ func Build(dir, name string, src []byte, debug bool) (bin string, output []byte,
 		}
 	}
 
-	bin = filepath.Join(dir, name)
 	args := append([]string{}, Flags...)
 	if debug {
-		args = append(args, "-DTK_DEBUG")
+		args = append(args, Debug...)
+	} else {
+		args = append(args, Release...)
 	}
 
-	args = append(args, "-o", bin, filepath.Join(dir, name+".teak.c"))
-	args = append(args, runtime.Paths(dir)...)
-	args = append(args, "-lm")
-	cmd := exec.Command(Compiler(), args...)
-	output, err = cmd.CombinedOutput()
-	return bin, output, err
+	objs, output, err := Objects(Compiler(), args, append([]string{filepath.Join(dir, name+".teak.c")}, runtime.Paths(dir)...))
+	if err != nil {
+		return "", output, err
+	}
+
+	bin = filepath.Join(dir, name)
+	linked, err := exec.Command(Compiler(), append(append(append(args, "-o", bin), objs...), "-lm")...).CombinedOutput()
+	return bin, append(output, linked...), err
+}
+
+// Objects compiles each of the C files srcs to an object beside it with
+// cc and args, as many at once as there are processors, and returns
+// the objects in the order of srcs, with the compilers' output in that
+// order too. A build's time is then its longest file's, not the sum of
+// the runtime's files; under -flto an object is the file's IR, and the
+// link optimizes the program and the runtime together as one.
+func Objects(cc string, args, srcs []string) (objs []string, output []byte, err error) {
+	objs = make([]string, len(srcs))
+	outs := make([][]byte, len(srcs))
+	errs := make([]error, len(srcs))
+	slots := make(chan struct{}, goruntime.NumCPU())
+	var wg sync.WaitGroup
+	for i, src := range srcs {
+		objs[i] = strings.TrimSuffix(src, filepath.Ext(src)) + ".o"
+		wg.Add(1)
+		go func(i int, src string) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			outs[i], errs[i] = exec.Command(cc, append(append([]string{}, args...), "-c", "-o", objs[i], src)...).CombinedOutput()
+		}(i, src)
+	}
+
+	wg.Wait()
+	for i := range srcs {
+		output = append(output, outs[i]...)
+		if err == nil {
+			err = errs[i]
+		}
+	}
+
+	return objs, output, err
 }

@@ -27,6 +27,13 @@
 // appending to is read on as it grows. A read that fails costs no
 // byte: what a Reader had read when the reader under it failed is
 // returned by the next call.
+//
+// The buffers are Go's: a Writer and a Reader hold one block of a fixed
+// size, filled and emptied by index, and a Scanner one that doubles up
+// to its limit. Bytes move between them and the program in blocks, by
+// memmove, and a line's end is found by memchr; a write or a read at
+// least as large as the buffer, when it holds nothing, goes straight
+// between the program and the writer or reader under it, with no copy.
 package bufio
 
 import "io"
@@ -35,35 +42,36 @@ import "io"
 // under it in blocks, when its buffer is full and on Flush. It is made
 // with NewWriter.
 struct Writer<W: io.Writer> impl io.Writer {
-	w    mut W
-	buf  []byte
-	size int
-	err  io.Error? // the first error, which every later call returns
+	w   mut W
+	buf []byte // its whole size from the start, of which n bytes are held
+	n   int
+	err io.Error? // the first error, which every later call returns
 }
 
 // A Reader reads from the reader under it in blocks and hands them out
 // in the pieces asked for: bytes, lines, and what an io.Reader is
 // asked. It is made with NewReader.
 struct Reader<R: io.Reader> impl io.Reader {
-	r     mut R
-	buf   []byte
-	block []byte
-	start int
+	r   mut R
+	buf []byte // what was read and not handed out lies from rp up to wp
+	rp  int
+	wp  int
 }
 
 // A Scanner reads a reader line by line: Scan reads the next line, and
 // Bytes or Text give it, without its line ending. It is made with
 // NewScanner.
 struct Scanner<R: io.Reader> {
-	r       mut R
-	buf     []byte
-	block   []byte
-	start   int
-	end     int
-	scanned int // the bytes from start up to here hold no newline
-	done    bool
-	err     io.Error?
-	max     int // the longest line, its ending included
+	r        mut R
+	buf      []byte // what was read and not scanned lies from start up to end
+	start    int
+	end      int
+	searched int // from start up to here holds no newline
+	line0    int // the line Scan gave last is buf[line0:line1]
+	line1    int
+	done     bool
+	err      io.Error?
+	max      int // the longest line, its ending included
 }
 
 // MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
@@ -72,15 +80,15 @@ struct Scanner<R: io.Reader> {
 // buffer without a bound on input a program does not control.
 const MaxScanTokenSize int = 65536
 
-// The number of bytes a block read from or written to the underlying
-// reader or writer has.
+// The size of a Writer's and a Reader's buffer, and the first size of a
+// Scanner's, as Go's bufio has them.
 const blockSize int = 4096
 
 // NewWriter returns a Writer that writes to w, borrowed for as long as
 // the Writer lives. Its buffer holds 4096 bytes before it is written
 // out.
 func NewWriter<W: io.Writer>(w mut W) Writer<W> {
-	return Writer<W>{w: w, buf: []byte{}, size: blockSize, err: None}
+	return Writer<W>{w: w, buf: make([]byte, blockSize), n: 0, err: None}
 }
 
 // NewWriterSize is NewWriter with a buffer of size bytes; a size below
@@ -90,19 +98,19 @@ func NewWriterSize<W: io.Writer>(w mut W, size int) Writer<W> {
 		size = blockSize
 	}
 
-	return Writer<W>{w: w, buf: []byte{}, size: size, err: None}
+	return Writer<W>{w: w, buf: make([]byte, size), n: 0, err: None}
 }
 
 // NewReader returns a Reader that reads from r, borrowed for as long as
 // the Reader lives.
 func NewReader<R: io.Reader>(r mut R) Reader<R> {
-	return Reader<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0}
+	return Reader<R>{r: r, buf: make([]byte, blockSize), rp: 0, wp: 0}
 }
 
 // NewScanner returns a Scanner over r, borrowed for as long as the
 // Scanner lives, with no line read yet.
 func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
-	return Scanner<R>{r: r, buf: []byte{}, block: make([]byte, blockSize), start: 0, end: 0, scanned: 0, done: false, err: None, max: MaxScanTokenSize}
+	return Scanner<R>{r: r, buf: []byte{}, start: 0, end: 0, searched: 0, line0: 0, line1: 0, done: false, err: None, max: MaxScanTokenSize}
 }
 
 // Buffer sets the longest line the Scanner reads, its ending included,
@@ -114,53 +122,99 @@ func (s mut Scanner<R>) Buffer(size int) {
 }
 
 // Write adds p to the buffer, writing the buffer out when it fills, and
-// returns the length of p. An error is the underlying writer's, from
-// the write that failed, or the one kept from an earlier call, which
-// an empty p meets too, as Go's Write has it. It is io.Writer's
-// method.
+// returns the length of p. A p larger than what the buffer has room
+// for, when it holds nothing, is written to the writer under it
+// directly. An error is the underlying writer's, from the write that
+// failed, or the one kept from an earlier call, which an empty p meets
+// too, as Go's Write has it. It is io.Writer's method.
 func (b mut Writer<W>) Write(p ref []byte) Result<int, io.Error> {
 	if e := b.err {
 		return Err(e.Clone())
 	}
 
-	for _, c := range p {
-		b.push(c)?
+	nn := 0
+	for len(p)-nn > len(b.buf)-b.n {
+		if b.n == 0 {
+			nn += b.writeOut(p[nn:])?
+			return Ok(nn)
+		}
+
+		k := copyBytes(mut b.buf[b.n:], p[nn:])
+		b.n += k
+		nn += k
+		b.Flush()?
 	}
 
-	return Ok(len(p))
+	k := copyBytes(mut b.buf[b.n:], p[nn:])
+	b.n += k
+	return Ok(nn + k)
 }
 
 // WriteString adds s to the buffer, as Write does its bytes, and
-// returns its length; a kept error is returned for an empty s too.
+// returns its length; a kept error is returned for an empty s too. An s
+// longer than the room left, when the buffer holds nothing, is written
+// to the writer under it directly.
 func (b mut Writer<W>) WriteString(s ref string) Result<int, io.Error> {
 	if e := b.err {
 		return Err(e.Clone())
 	}
 
-	for i := 0; i < s.Len(); i++ {
-		b.push(s[i])?
+	nn := 0
+	for s.Len()-nn > len(b.buf)-b.n {
+		if b.n == 0 { // as Go writes a string straight to a writer that takes strings
+			nn += b.writeOut(bytesOf(s[nn:]))?
+			return Ok(nn)
+		}
+
+		k := copyString(mut b.buf[b.n:], s[nn:])
+		b.n += k
+		nn += k
+		b.Flush()?
 	}
 
-	return Ok(s.Len())
+	k := copyString(mut b.buf[b.n:], s[nn:])
+	b.n += k
+	return Ok(nn + k)
 }
 
-// WriteByte adds one byte to the buffer.
+// WriteByte adds one byte to the buffer, writing the buffer out first
+// when it is full.
 func (b mut Writer<W>) WriteByte(c byte) Result<(), io.Error> {
-	return b.push(c)
-}
-
-// push adds one byte and writes the buffer out when it is full.
-func (b mut Writer<W>) push(c byte) Result<(), io.Error> {
 	if e := b.err {
 		return Err(e.Clone())
 	}
 
-	b.buf.Push(c)
-	if len(b.buf) >= b.size {
+	if b.n == len(b.buf) {
 		b.Flush()?
 	}
 
+	b.buf[b.n] = c
+	b.n++
 	return Ok(())
+}
+
+// writeOut writes p to the writer under the Writer, asking again for
+// what a short write left, and keeps the error of a write that fails.
+func (b mut Writer<W>) writeOut(p ref []byte) Result<int, io.Error> {
+	written := 0
+	for written < len(p) {
+		failed := match b.w.Write(p[written:]) {
+			Ok(n) => {
+				if n > 0 {
+					written += n
+					continue
+				}
+
+				io.ShortWrite()
+			},
+			Err(e) => e,
+		}
+
+		b.err = Some(failed.Clone())
+		return Err(failed)
+	}
+
+	return Ok(written)
 }
 
 // Flush writes what the buffer holds to the writer under it, asking
@@ -174,8 +228,8 @@ func (b mut Writer<W>) Flush() Result<(), io.Error> {
 	}
 
 	written := 0
-	for written < len(b.buf) {
-		failed := match b.w.Write(b.buf[written:]) {
+	for written < b.n {
+		failed := match b.w.Write(b.buf[written:b.n]) {
 			Ok(n) => {
 				if n > 0 {
 					written += n
@@ -187,19 +241,26 @@ func (b mut Writer<W>) Flush() Result<(), io.Error> {
 			Err(e) => e,
 		}
 
-		b.buf = b.buf[written:].Clone()
+		slide(mut b.buf, written, b.n)
+		b.n -= written
 		b.err = Some(failed.Clone())
 		return Err(failed)
 	}
 
-	b.buf.Clear()
+	b.n = 0
 	return Ok(())
 }
 
 // Buffered returns how many bytes the buffer holds that Flush has not
 // written yet.
 func (b ref Writer<W>) Buffered() int {
-	return len(b.buf)
+	return b.n
+}
+
+// Available returns how many bytes the buffer has room for before a
+// write fills it.
+func (b ref Writer<W>) Available() int {
+	return len(b.buf) - b.n
 }
 
 // Get lends the writer under the Writer, for as long as the Writer is
@@ -222,34 +283,41 @@ func (r mut Reader<R>) Get() mut R {
 
 // Read fills p from the buffer, reading from the reader under it when
 // the buffer is empty, and returns how many bytes it wrote to p: zero
-// at the end of the input. It is io.Reader's method.
+// at the end of the input. A p at least as large as the buffer, when it
+// holds nothing, is read into directly. It is io.Reader's method.
 func (r mut Reader<R>) Read(p mut []byte) Result<int, io.Error> {
 	if len(p) == 0 {
 		return Ok(0)
 	}
 
-	if !r.fill()? {
-		return Ok(0)
+	if r.rp == r.wp {
+		if len(p) >= len(r.buf) {
+			return r.r.Read(p)
+		}
+
+		r.rp = 0
+		r.wp = 0
+		n := r.r.Read(mut r.buf)?
+		if n == 0 {
+			return Ok(0)
+		}
+
+		r.wp = n
 	}
 
-	n := 0
-	for n < len(p) && r.start < len(r.buf) {
-		p[n] = r.buf[r.start]
-		n++
-		r.start++
-	}
-
-	return Ok(n)
+	k := copyBytes(p, r.buf[r.rp:r.wp])
+	r.rp += k
+	return Ok(k)
 }
 
 // ReadByte returns the next byte, or None at the end of the input.
 func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
-	if !r.fill()? {
+	if r.rp == r.wp && !r.fill()? {
 		return Ok(None)
 	}
 
-	c := r.buf[r.start]
-	r.start++
+	c := r.buf[r.rp]
+	r.rp++
 	return Ok(Some(c))
 }
 
@@ -258,57 +326,71 @@ func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
 // what was left, and None once nothing is. A later call asks the
 // reader under it again, and gives what has arrived since.
 func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
-	out := []byte{}
+	long := []byte{} // the first parts of a line longer than the buffer
 	for {
+		i := indexByte(r.buf[r.rp:r.wp], delim)
+		if i >= 0 {
+			end := r.rp + i + 1
+			if len(long) == 0 {
+				line := string(r.buf[r.rp:end])
+				r.rp = end
+				return Ok(Some(line))
+			}
+
+			appendBytes(mut long, r.buf[r.rp:end])
+			r.rp = end
+			return Ok(Some(string(long)))
+		}
+
+		if r.wp-r.rp == len(r.buf) { // full of one line: set it aside and read on
+			appendBytes(mut long, r.buf[r.rp:r.wp])
+			r.rp = r.wp
+		}
+
 		more := match r.fill() {
 			Ok(more) => more,
 			Err(e) => {
-				r.buf = out // the buffer was empty, or fill would not have read: what was read waits for the next call
-				r.start = 0
+				if len(long) > 0 { // what was set aside goes back in front, for the next call
+					appendBytes(mut long, r.buf[r.rp:r.wp])
+					r.buf = long
+					r.rp = 0
+					r.wp = len(r.buf)
+				}
+
 				return Err(e)
 			},
 		}
 
-		if !more {
-			break
-		}
+		if !more { // the end of the input: what is left is the last line
+			appendBytes(mut long, r.buf[r.rp:r.wp])
+			r.rp = r.wp
+			if len(long) == 0 {
+				return Ok(None)
+			}
 
-		c := r.buf[r.start]
-		r.start++
-		out.Push(c)
-		if c == delim {
-			break
+			return Ok(Some(string(long)))
 		}
 	}
-
-	if len(out) == 0 {
-		return Ok(None)
-	}
-
-	return Ok(Some(string(out)))
 }
 
-// fill makes sure the buffer has a byte to give, reading a block when
-// it is empty, and reports whether it has one: false at the end of the
-// input, which is asked about again the next time, since the reader
+// fill moves what the buffer holds to its start and reads into the room
+// after it, and reports whether it read anything: false at the end of
+// the input, which is asked about again the next time, since the reader
 // under it may have more by then.
 func (r mut Reader<R>) fill() Result<bool, io.Error> {
-	if r.start < len(r.buf) {
+	if r.rp > 0 {
+		slide(mut r.buf, r.rp, r.wp)
+		r.wp -= r.rp
+		r.rp = 0
+	}
+
+	if r.wp == len(r.buf) {
 		return Ok(true)
 	}
 
-	r.buf.Clear()
-	r.start = 0
-	n := r.r.Read(mut r.block)?
-	if n == 0 {
-		return Ok(false)
-	}
-
-	for i := 0; i < n; i++ {
-		r.buf.Push(r.block[i])
-	}
-
-	return Ok(true)
+	n := r.r.Read(mut r.buf[r.wp:])?
+	r.wp += n
+	return Ok(n > 0)
 }
 
 // Scan reads the next line and reports whether there was one; false at
@@ -317,99 +399,88 @@ func (r mut Reader<R>) fill() Result<bool, io.Error> {
 // line is read without its ending, a newline or a carriage return and
 // a newline; a last line without one is a line too.
 func (s mut Scanner<R>) Scan() bool {
-	if s.done {
-		s.start = s.end // no line any more
-		return false
-	}
-
-	// Drop the line Scan gave last time, and look for the end of the
-	// next one, reading more while it has none; what was looked at
-	// without finding one is not looked at again.
-	s.start = s.end
-	s.scanned = s.start
 	for {
 		if i := s.newline() {
-			s.end = i + 1
+			s.line0 = s.start
+			s.line1 = i + 1
+			s.start = i + 1
+			s.searched = s.start
 			return true
 		}
 
-		// Read no more than the limit leaves room for, as Go's Scanner
-		// reads into a buffer of at most its limit, so a line past it
-		// is refused whatever the reader gives at a call.
-		s.scanned = len(s.buf)
-		room := s.max - (len(s.buf) - s.start)
-		if room <= 0 {
-			s.err = Some(io.NewError("bufio.Scanner", "", "token too long", io.Other))
-			s.done = true
-			s.end = s.start // no line: the long one is not given in part
-			return false
+		s.searched = s.end
+		if s.done { // the input ended, or a read failed: what is left is the last line
+			s.line0 = s.start
+			s.line1 = s.end
+			s.start = s.end
+			return s.line0 < s.line1
 		}
 
-		n := match s.r.Read(mut s.block[:min(room, blockSize)]) {
+		// Room for more: what is held moves to the start, and a buffer
+		// full of one line doubles, up to the limit.
+		if s.start > 0 {
+			slide(mut s.buf, s.start, s.end)
+			s.end -= s.start
+			s.searched -= s.start
+			s.start = 0
+		}
+
+		if s.end == len(s.buf) {
+			if len(s.buf) >= s.max {
+				s.err = Some(io.NewError("bufio.Scanner", "", "token too long", io.Other))
+				s.done = true
+				s.line0 = s.start // no line: the long one is not given in part
+				s.line1 = s.start
+				s.start = s.end
+				return false
+			}
+
+			bigger := make([]byte, min(max(2*len(s.buf), blockSize), s.max))
+			copyBytes(mut bigger, s.buf[0:s.end])
+			s.buf = bigger
+		}
+
+		n := match s.r.Read(mut s.buf[s.end:]) {
 			Ok(n) => n,
 			Err(e) => {
-				// What was read before the failure is the last line,
-				// as at the end of the input; Err says why it stopped.
 				s.err = Some(e)
-				s.done = true
-				s.end = len(s.buf)
-				return s.start < s.end
+				0
 			},
 		}
 
 		if n == 0 {
-			// The input ends: what is left is the last line, when
-			// there is anything.
 			s.done = true
-			s.end = len(s.buf)
-			return s.start < s.end
 		}
 
-		// Keep only what Scan has not given, then add the block.
-		if s.start > 0 {
-			kept := []byte{}
-			for i := s.start; i < len(s.buf); i++ {
-				kept.Push(s.buf[i])
-			}
-
-			s.scanned -= s.start
-			s.buf = kept
-			s.start = 0
-			s.end = 0
-		}
-
-		for i := 0; i < n; i++ {
-			s.buf.Push(s.block[i])
-		}
+		s.end += n
 	}
 }
 
 // newline returns the index of the first newline in what has not been
-// looked at yet, from scanned on, or None.
+// looked at yet, from searched on, or None.
 func (s ref Scanner<R>) newline() int? {
-	for i := s.scanned; i < len(s.buf); i++ {
-		if s.buf[i] == '\n' {
-			return Some(i)
-		}
+	i := indexByte(s.buf[s.searched:s.end], '\n')
+	if i < 0 {
+		return None
 	}
 
-	return None
+	return Some(s.searched + i)
 }
 
 // Bytes lends the last line Scan read, without its line ending; the
 // borrow lasts as long as the Scanner's. Before Scan, or after it
 // returned false, the line is empty.
 func (s ref Scanner<R>) Bytes() ref []byte {
-	end := s.end
-	if end > s.start && s.buf[end-1] == '\n' {
+	end := s.line1
+	if end > s.line0 && s.buf[end-1] == '\n' {
 		end--
 	}
 
-	if end > s.start && s.buf[end-1] == '\r' {
+	if end > s.line0 && s.buf[end-1] == '\r' {
 		end--
 	}
 
-	return s.buf[s.start:end]
+	return s.buf[s.line0:end]
 }
 
 // Text returns the last line Scan read as a new string, without its
@@ -426,3 +497,25 @@ func (s ref Scanner<R>) Err() ref io.Error? {
 		None => None,
 	}
 }
+
+// copyBytes copies the bytes of src that fit to the start of dst, the
+// two possibly overlapping, and returns how many: Go's copy. The
+// runtime provides it, by memmove.
+func copyBytes(dst mut []byte, src ref []byte) int
+
+// copyString is copyBytes from a string.
+func copyString(dst mut []byte, src ref string) int
+
+// indexByte returns the index of the first c in p, or -1: Go's
+// bytes.IndexByte, by memchr.
+func indexByte(p ref []byte, c byte) int
+
+// appendBytes appends the bytes of p to b in one copy, growing b once.
+func appendBytes(b mut []byte, p ref []byte)
+
+// slide moves the bytes of b from lo up to hi to its start, where a
+// buffer keeps what it has not handed out.
+func slide(b mut []byte, lo int, hi int)
+
+// bytesOf lends the bytes of s as a slice of them, with no copy.
+func bytesOf(s ref string) ref []byte

@@ -118,8 +118,8 @@ func (e *Emitter) discardUnused(name *ast.Ident) {
 		return
 	}
 
-	if obj := e.info.Defs[name]; obj != nil && !e.used[obj] {
-		e.line("(void)" + e.ident(name) + ";")
+	if v, ok := e.info.Defs[name].(*types.Var); ok && !e.used[v] {
+		e.line("(void)" + e.localName(v) + ";") // the name declareLocal gave it
 	}
 }
 
@@ -146,8 +146,14 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 			return
 		}
 
-		if isString(t) { // s += t has no C operator; the old left side is freed after the join
-			e.line(place + " = " + join(text{place, true}, text{e.valueTo(rhs, t), !e.isRead(rhs)}).s + ";")
+		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
+			r := e.temp()
+			e.line("tk_string " + r + " = " + e.valueTo(rhs, t) + ";")
+			e.line("tk_string_append(&" + place + ", &" + r + ");")
+			if !e.isRead(rhs) {
+				e.line("tk_string_drop(&" + r + ");")
+			}
+
 			return
 		}
 

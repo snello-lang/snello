@@ -532,6 +532,21 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 		return r
 	}
 
+	if parts := lower.Addends(x, e.typeOf); len(parts) > 2 { // a + b + c: one allocation for the whole
+		wants := make([]types.Type, len(parts))
+		for i := range wants {
+			wants[i] = t
+		}
+
+		vals := e.operands(parts, wants)
+		pieces := make([]piece, len(parts))
+		for i, v := range vals {
+			pieces[i] = piece{text: text{v, !e.isRead(parts[i])}}
+		}
+
+		return e.concat(pieces)
+	}
+
 	var want types.Type = t
 	if x.Op != token.ADD {
 		want = types.NewRef(t, false) // a comparison only looks at its sides: one built here is held for the statement

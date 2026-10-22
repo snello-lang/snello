@@ -12,7 +12,7 @@ import (
 
 // A local or a parameter is written under its own name, unless a local
 // of the same name was declared before it in the same C function, or
-// the program declares the name at its top level. C puts a variable in
+// the program declares a type or trait of the name. C puts a variable in
 // scope inside its own initializer, so x := x in an inner block would
 // read the new x, a loop's step written after the body would reach a
 // variable the body declares under the loop variable's name, and a
@@ -20,8 +20,8 @@ import (
 // struct's C type from the rest of the function. Such a variable is
 // given a name of its own, a temporary's number before it, which no
 // name of the program reaches. A library's names are in the runtime's
-// tk_ space, which no local reaches either; a top-level variable keeps
-// its name, which is the one it takes.
+// tk_ space and the program's functions, variables and constants in
+// tk__, which no local reaches either.
 
 // declareLocal returns the C name of the local name declares, and
 // takes it in the function being written.
@@ -45,14 +45,15 @@ func (e *Emitter) declareLocal(name *ast.Ident) string {
 type naming struct {
 	renamed  map[*types.Var]string // the C name of each variable given one of its own
 	declared map[string]bool       // the C names taken in the function being written
-	toplevel map[string]bool       // the C names the program's own declarations take at file scope
-	globals  map[*types.Var]bool   // the program's top-level variables, which keep their names
+	toplevel map[string]bool       // the C names the program's types and traits take at file scope
+	globals  map[*types.Var]bool   // the top-level variables of the program and its libraries (varDecl), named by lower.ObjName
 }
 
-// newNaming returns the naming of the program in f: the names its
-// types, traits, functions and variables take at file scope, each under
-// its own name, and its variables, which keep theirs.
-func newNaming(f *ast.File, info *types.Info) naming {
+// newNaming returns the naming of the program in f: the names its types
+// and traits take at file scope, each under its own name. Its
+// functions, variables and constants are in the tk__ space (lower) and
+// meet no local.
+func newNaming(f *ast.File) naming {
 	n := naming{renamed: make(map[*types.Var]string), toplevel: make(map[string]bool), globals: make(map[*types.Var]bool)}
 	for _, d := range f.Decls {
 		switch d := d.(type) {
@@ -60,17 +61,6 @@ func newNaming(f *ast.File, info *types.Info) naming {
 			n.toplevel[lower.Ident(d.Name.Name)] = true
 		case *ast.TraitDecl:
 			n.toplevel[lower.Ident(d.Name.Name)] = true
-		case *ast.FuncDecl:
-			if d.Recv == nil {
-				n.toplevel[lower.Ident(d.Name.Name)] = true
-			}
-		case *ast.VarDecl:
-			for _, name := range d.Names {
-				n.toplevel[lower.Ident(name.Name)] = true
-				if v, ok := info.Defs[name].(*types.Var); ok {
-					n.globals[v] = true
-				}
-			}
 		}
 	}
 
@@ -83,8 +73,12 @@ func (e *Emitter) localName(v *types.Var) string {
 		return local
 	}
 
+	if e.names.globals[v] {
+		return lower.ObjName(v)
+	}
+
 	name := lower.Ident(v.Name())
-	if e.names.toplevel[name] && !e.names.globals[v] { // the first time v is named, its declaration or the head of its function
+	if e.names.toplevel[name] { // the first time v is named, its declaration or the head of its function
 		name = e.temp() + "_" + name
 		e.names.renamed[v] = name
 	}

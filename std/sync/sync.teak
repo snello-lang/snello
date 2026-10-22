@@ -169,7 +169,7 @@ struct RwLock<T: Send> impl Drop {
 
 // NewRwLock puts v behind a new lock.
 func NewRwLock<T: Send>(v T) RwLock<T> {
-	return RwLock<T>{p: Some(&box<T>{lock: newLock(), value: v})}
+	return RwLock<T>{p: Some(&box<T>{lock: newRwLock(), value: v})}
 }
 
 // Read waits until no task holds the lock for writing, takes it for
@@ -341,6 +341,7 @@ func inside<T>(p ref *box<T>) mut box<T>
 // atomicAdd adds d to n as one step that no other task's add can
 // interleave with, and returns the new value.
 func newLock() int
+func newRwLock() int
 func freeLock(h int)
 func lock(h int)
 func unlock(h int)

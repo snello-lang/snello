@@ -164,10 +164,13 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 
 		p := e.placeAt(e.lvalue(lhs), e.typeOf(lhs))
 		ir := e.irType(t, lhs.Pos())
-		if isString(t) { // s += t: the old left side is freed after the join
-			old := e.load(ir, p)
-			r := e.valueTo(rhs, t)
-			e.store(e.join(text{old, true}, text{r, !e.isRead(rhs)}).v, p)
+		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
+			r := e.spill(e.valueTo(rhs, t))
+			e.rt("tk_string_append", "void", value{"ptr", p}, value{"ptr", r})
+			if !e.isRead(rhs) {
+				e.dropOf(r, t, s.TokPos)
+			}
+
 			return
 		}
 

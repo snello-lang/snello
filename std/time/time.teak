@@ -228,6 +228,13 @@ func (t ref Time) Cmp(u ref Time) Ordering {
 
 // Eq reports whether two Times are the same instant, as Cmp orders
 // them; it is what == on Times means.
+// IsZero reports whether t is the zero Time, var t time.Time, as Go's
+// IsZero does; Teak's zero Time is the start of 1970 in UTC, where Go's
+// is the first instant of year 1. A deadline of the zero Time is none.
+func (t Time) IsZero() bool {
+	return t.sec == 0 && t.nsec == 0
+}
+
 func (t ref Time) Eq(u ref Time) bool {
 	return t.Cmp(u) == Equal
 }

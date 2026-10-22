@@ -96,7 +96,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
 		done:     make(map[string]bool),
-		names:    newNaming(f, info),
+		names:    newNaming(f),
 		jumped:   make(map[string]bool),
 	}
 	e.state["tk_slice_u8"] = defined // the runtime defines []byte in teak.h, as the library's bodiless functions take it
@@ -216,6 +216,10 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 	for i, name := range d.Names {
 		obj := e.info.Defs[name]
+		if v, ok := obj.(*types.Var); ok {
+			e.names.globals[v] = true
+		}
+
 		if len(d.Values) == 0 && library {
 			e.external[obj.(*types.Var)] = true
 			continue

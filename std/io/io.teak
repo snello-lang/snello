@@ -33,6 +33,7 @@ struct Error impl Error, Clone {
 
 	kind    Kind
 	hasPath bool // the operation was on a path, empty or not, which the message shows
+	written int  // the bytes a write took before it failed
 }
 
 // A Kind sorts the failures a program may want to tell apart from the
@@ -100,6 +101,25 @@ func (e ref Error) Error() string {
 // Kind returns which kind of failure this is.
 func (e ref Error) Kind() Kind {
 	return e.kind
+}
+
+// Written returns how many bytes a write had taken before it failed,
+// which Go's Write returns beside its error: a connection whose
+// deadline passed partway through a large write, or a disk that filled,
+// took the first Written bytes and not the rest. It is 0 for every
+// other failure. A Result holds a count or an Error and not both, so
+// the Error holds the count, as Java's InterruptedIOException holds
+// bytesTransferred.
+func (e ref Error) Written() int {
+	return e.written
+}
+
+// WithWritten returns e saying that n bytes were written before it: for
+// a Writer of a program's own that fails partway, as a connection's
+// Write does.
+func (e Error) WithWritten(n int) Error {
+	e.written = n
+	return e
 }
 
 // NewError builds an Error a program reports: a Reader or a Writer of

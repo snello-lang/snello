@@ -82,6 +82,8 @@ func TestTaskBoundaries(t *testing.T) {
 		{"func f(ch chan int) { close(ch, ch) }", []string{"close takes one channel"}},
 		{"func f(in <-chan int, ch chan int) { for v := range in { print(v) }; for range ch {} }", nil},
 		{"func f(out chan<- int) { for v := range out { print(v) } }", []string{"cannot range over a value of type chan<- int"}},
+		{"func f(in <-chan int) { for i, v := range in { print(i, v) } }", []string{"range over in permits only one iteration variable"}},             // the value received is the one variable, as in Go
+		{"func f(s ref string) { for _, w := range s.Fields() { print(w) } }", []string{"range over s.Fields() permits only one iteration variable"}}, // an iterator's one variable is the item
 	}
 	for _, tt := range tests {
 		got := checkErrors(t, prelude+tt.src)

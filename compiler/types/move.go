@@ -514,6 +514,10 @@ func exprText(e ast.Expr) string {
 	case *ast.SliceExpr:
 		return exprText(e.X) + "[" + optText(e.Low) + ":" + optText(e.High) + "]"
 	case *ast.UnaryExpr:
+		if e.Op == token.REF || e.Op == token.MUT {
+			return e.Op.String() + " " + exprText(e.X) // the keyword, then the operand: ref fs
+		}
+
 		return e.Op.String() + exprText(e.X)
 	case *ast.CallExpr:
 		if len(e.Args) == 0 {

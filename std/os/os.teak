@@ -186,12 +186,14 @@ func (f mut File) Read(buf mut []byte) Result<int, io.Error> {
 }
 
 // Write writes all of buf to the file and returns how many bytes it
-// wrote, the length of buf. It is io.Writer's method.
+// wrote, the length of buf. It is io.Writer's method. A write that
+// fails partway, on a disk that filled, has written the Error's
+// Written() bytes.
 func (f mut File) Write(buf ref []byte) Result<int, io.Error> {
 	n := 0
 	code := write(f.fd, buf, mut n)
 	if code != 0 {
-		return Err(io.Errno("write", ref f.name, code))
+		return Err(io.Errno("write", ref f.name, code).WithWritten(n))
 	}
 
 	return Ok(n)
@@ -203,7 +205,7 @@ func (f mut File) WriteString(s ref string) Result<int, io.Error> {
 	n := 0
 	code := writeString(f.fd, s, mut n)
 	if code != 0 {
-		return Err(io.Errno("write", ref f.name, code))
+		return Err(io.Errno("write", ref f.name, code).WithWritten(n))
 	}
 
 	return Ok(n)

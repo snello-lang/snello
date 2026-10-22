@@ -555,9 +555,8 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k)"
 	put(&e.protos, head, ";\n")
 	var b strings.Builder
-	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n")
-	put(&b, "\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\treturn found;\n\t}\n\n")
-	put(&b, "\treturn tk_map_slot((tk_map *)m, ", mt, ", &k);\n}\n\n")
+	put(&b, head, " {\n\tvoid *added;\n\t", v, " *slot = tk_map_slot((tk_map *)m, ", mt, ", &k, &added);\n")
+	put(&b, "\tif (added == NULL) {\n\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t}\n\n\treturn slot;\n}\n\n")
 	e.helpers.WriteString(b.String())
 	return name
 }
@@ -576,8 +575,8 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k)"
 	put(&e.protos, head, ";\n")
 	var b strings.Builder
-	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n\t\treturn found;\n\t}\n\n")
-	put(&b, "\t", k, " copy = ", e.cloneOf("k", t.Key(), pos), ";\n\treturn tk_map_slot((tk_map *)m, ", mt, ", &copy);\n}\n\n")
+	put(&b, head, " {\n\tvoid *added;\n\t", v, " *slot = tk_map_slot((tk_map *)m, ", mt, ", &k, &added);\n")
+	put(&b, "\tif (added != NULL) {\n\t\t*(", k, " *)added = ", e.cloneOf("k", t.Key(), pos), "; // the entry keeps a key of its own\n\t}\n\n\treturn slot;\n}\n\n")
 	e.helpers.WriteString(b.String())
 	return name
 }

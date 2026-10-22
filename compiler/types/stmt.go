@@ -462,6 +462,9 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		var ok bool
 		if key, val, ok = rangeTypes(x); !ok {
 			c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
+		} else if val == Typ[Invalid] && s.Value != nil { // a channel's or an iterator's one variable: the value, or the item
+			c.errorf(s.Value.Pos(), "range over "+exprText(s.X)+" permits only one iteration variable")
+			key = Typ[Invalid]
 		}
 
 		mut, lent := borrowIn(x.typ)

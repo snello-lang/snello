@@ -4,8 +4,8 @@
 
 // The Teak runtime: the representations and operations the C
 // emitter relies on. Every emitted program includes this header and is
-// linked with teak.c. Names begin with tk_ so that no Teak identifier
-// can collide with them.
+// linked with the runtime's files. Names begin with tk_ so that no Teak
+// identifier can collide with them.
 
 #ifndef TEAK_H
 #define TEAK_H
@@ -106,14 +106,14 @@ struct tk_slice_u8 {
 // the equality of its keys. A map declared without a value is all
 // zeros and works as an empty map.
 typedef struct {
-    void *keys;
+    void *keys;        // the entries' block: keys, then values, then hashes
     void *vals;
-    uint8_t *live;  // one per entry: false after Remove
-    int64_t *index; // hash slots holding entry positions plus one; zero is empty
-    int64_t len;    // entries, dead ones included
-    int64_t count;  // live entries
-    int64_t cap;    // room for entries
-    int64_t slots;  // size of the index, a power of two
+    uint64_t *hashes;  // one per entry: its key's hash, zero after Remove
+    uint8_t *ctrl;     // the index's block: a control byte a slot, then the slots' entry numbers
+    int64_t len;       // entries, emptied ones included
+    int64_t count;     // live entries
+    int64_t cap;       // room for entries
+    int64_t slots;     // slots of the index, a power of two, eight or more
 } tk_map;
 
 // A debug build, teak build -debug, compiles the runtime with TK_DEBUG
@@ -233,6 +233,15 @@ int64_t tk_slice_cap(const tk_slice *s); // a view's room is its length
 // holds.
 _Noreturn void tk_slice_bounds(int64_t lo, int64_t hi, int64_t n);
 void tk_strings_appendString(tk_slice_u8 *buf, tk_string s);
+tk_string tk_strings_repeat(tk_string s, int64_t n);
+void tk_string_append(tk_string *s, const tk_string *x);
+tk_string tk_strings_ownString(tk_slice_u8 b);
+int64_t tk_bufio_copyBytes(tk_slice_u8 *dst, tk_slice_u8 src);
+int64_t tk_bufio_copyString(tk_slice_u8 *dst, tk_string s);
+int64_t tk_bufio_indexByte(tk_slice_u8 p, uint8_t c);
+void tk_bufio_appendBytes(tk_slice_u8 *b, tk_slice_u8 p);
+void tk_bufio_slide(tk_slice_u8 *b, int64_t lo, int64_t hi);
+tk_slice_u8 tk_bufio_bytesOf(tk_string s);
 
 int32_t tk_rune_upper(int32_t r);
 int32_t tk_rune_lower(int32_t r);
@@ -244,6 +253,18 @@ void tk_release(void **p); // frees the block an owned pointer holds and empties
 void tk_init(int argc, char **argv);
 
 void tk_slice_make(tk_slice *out, int64_t len, int64_t cap, size_t size);
+// TK_PUSH_FAST and TK_POP_FAST say when the C backend's Push and Pop
+// write in place, without the runtime: a push with room, and a pop of a
+// slice that owns its elements and has one; a sub-slice's capacity,
+// TK_VIEW, is below every length. A debug build always calls the
+// runtime, for its checks.
+#ifdef TK_DEBUG
+#define TK_PUSH_FAST(s) 0
+#define TK_POP_FAST(s) 0
+#else
+#define TK_PUSH_FAST(s) ((s).len < (s).cap)
+#define TK_POP_FAST(s) ((s).len > 0 && (s).cap >= 0)
+#endif
 void tk_slice_push(tk_slice *s, const void *v, size_t size);
 bool tk_slice_pop(tk_slice *s, void *out, size_t size);
 void tk_slice_insert(tk_slice *s, int64_t i, const void *v, size_t size);
@@ -264,11 +285,17 @@ typedef struct {
 
 void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key);
 const void *tk_map_get(const tk_map *m, const tk_map_type *t, const void *key, const void *zero);
-void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key);
+// tk_map_slot returns the value's place for key, making the entry when
+// the map has none, its value zero: added is then the place of the key
+// the entry keeps, a copy of key's bytes, and NULL when the entry was
+// there. One hash and one probe either way.
+void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key, void **added);
+void tk_map_reserve(tk_map *m, const tk_map_type *t, int64_t n);
 bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out);
 void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out);
 void tk_map_free(tk_map *m, const tk_map_type *t);
 int64_t tk_map_next(const tk_map *m, int64_t i);
+void tk_hash_init(void);
 uint64_t tk_hash_bytes(const void *p, size_t n);
 uint64_t tk_hash_mix(uint64_t h, uint64_t v);
 
@@ -376,6 +403,7 @@ void tk_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono); // package time'
 int64_t tk_time_mono(void); // the monotonic clock, in nanoseconds, never 0
 void tk_outside(int64_t n); // wakes promised by a thread that is not a worker; see sched.c
 int64_t tk_sync_newLock(void); // a sync lock's handle is its address; see the lock section of teak.c
+int64_t tk_sync_newRwLock(void);
 void tk_sync_freeLock(int64_t h);
 void tk_sync_lock(int64_t h);
 void tk_sync_unlock(int64_t h);
@@ -386,7 +414,8 @@ void tk_sync_wait(int64_t h);
 int64_t tk_sync_atomicAdd(int64_t *n, int64_t d);
 int64_t tk_net_listen(tk_string host, int64_t port, int64_t *fd, int64_t *got, tk_string *call); // the net package's, in net.c
 int64_t tk_net_accept(int64_t fd, int64_t *out);
-int64_t tk_net_dial(tk_string host, int64_t port, int64_t *fd, tk_string *call);
+int64_t tk_net_dial(tk_string host, int64_t port, int64_t timeout, int64_t *fd, tk_string *call);
+int64_t tk_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set);
 int64_t tk_net_addrs(int64_t fd, tk_string *local, tk_string *remote);
 int64_t tk_net_read(int64_t fd, tk_slice_u8 *buf, int64_t *n);
 int64_t tk_net_write(int64_t fd, tk_slice_u8 buf, int64_t *n);

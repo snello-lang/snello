@@ -185,6 +185,32 @@ func TestDebugChecks(t *testing.T) {
 	}
 }
 
+// TestDescriptorFlags checks the descriptors the runtime makes: each is
+// closed on exec, as Go makes every one, so that a program the process
+// starts inherits none, and a socket is non-blocking, as the poller
+// needs. A file created, a file opened, a listening socket, a dialed
+// connection and an accepted one print their number, then whether each
+// flag is set.
+func TestDescriptorFlags(t *testing.T) {
+	body := `int64_t fds[5] = {0}, port = 0, bad = 0; tk_string call;
+	bad += tk_os_create(TK_STR("flags.txt", 9), &fds[0]);
+	bad += tk_os_open(TK_STR("flags.txt", 9), &fds[1]);
+	bad += tk_net_listen(TK_STR("127.0.0.1", 9), 0, &fds[2], &port, &call);
+	bad += tk_net_dial(TK_STR("127.0.0.1", 9), port, 0, &fds[3], &call);
+	bad += tk_net_accept(fds[2], &fds[4]);
+	for (int i = 0; i < 5; i++) {
+		char line[32];
+		int n = snprintf(line, sizeof line, "%d %d %d\n", i, (fcntl((int)fds[i], F_GETFD) & FD_CLOEXEC) != 0, (fcntl((int)fds[i], F_GETFL) & O_NONBLOCK) != 0);
+		tk_print_string(TK_STR(line, n));
+	}
+	tk_print_int(bad);`
+	csrc := "#include \"teak.h\"\n#include <fcntl.h>\n#include <stdio.h>\nint main(int argc, char **argv) { tk_init(argc, argv); " + body + " return tk_finish(); }\n"
+	out, stderr, code := execute(t, t.TempDir(), "flags", []byte(csrc), false)
+	if want := "0 1 0\n1 1 0\n2 1 1\n3 1 1\n4 1 1\n0"; out != want || code != 0 {
+		t.Errorf("exit %d, printed %q%s, want %q", code, out, stderr, want)
+	}
+}
+
 // buildAndRun emits src, compiles it with the system C compiler under
 // the warnings the standards require, runs the binary, and returns its
 // standard output. The files under fixtures, if the directory exists,
