@@ -6,7 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/snello-lang/snello/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/snello-lang/snello/test.yml?branch=main&label=tests"></a>
+  <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/snello-lang/snello?label=go"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/snello-lang/snello?label=license"></a>
 </p>
 
 ---
@@ -68,11 +70,11 @@ shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
 - **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
 - **Mistakes that stop the program.** `snello build -debug` builds a binary that panics on any value used after its release and reports anything never released.
 
-Snello is young. The compiler handles core Snello today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, files and printing. Traits, generics, tasks with channels on a scheduler of their own, sockets, a standard library written in Snello and an LLVM backend exist.
+Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. Packages of a program's own, outside the compiler, are being built now; see [the plan](_docs/specs/plan.md) for what is done and what is next.
 
 ## Getting started
 
-Build the compiler from source with Go; a Snello program needs a C compiler on the path, `cc`, or the one `CC` names.
+Build the compiler from source with Go. Building a Snello program needs `clang` on the path, or the one `CLANG` names; the C backend needs `cc`, or the one `CC` names.
 
 ```
 git clone https://github.com/snello-lang/snello
@@ -98,7 +100,7 @@ go build -o snello ./cmd/snello
 
 ## Contributing
 
-Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request; the tests build and run every example, so they need `cc` too. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
+Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request; the tests build and run every example through both backends, so they need `clang` and `cc` too, and take a few minutes. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
 
 ## License
 
