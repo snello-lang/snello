@@ -13,18 +13,39 @@
 package lower
 
 import (
+	"errors"
+
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A Library is a package written in Snello that the program imports, as
-// the importer loaded it: its source file and its syntax, checked into
-// the program's Info. It is compiled with the program, into the same
-// output, its names qualified by its import path.
+// the importer loaded it: its import path, its source file and its
+// syntax, checked into the program's Info. It is compiled with the
+// program, into the same output, its names qualified by its import path.
 type Library struct {
+	Path   string
 	File   *token.File
 	Syntax *ast.File
+}
+
+// CheckPrefixes refuses two libraries whose import paths would share
+// one symbol prefix, example.com/a.b and example.com/a_b, since their
+// names could then collide in the output; no real program meets it
+// (_docs/design/08-packages.md).
+func CheckPrefixes(libraries []Library) error {
+	paths := make(map[string]string, len(libraries))
+	for _, lib := range libraries {
+		prefix := PathPrefix(lib.Path)
+		if other, ok := paths[prefix]; ok && other != lib.Path {
+			return errors.New("import paths " + other + " and " + lib.Path + " would share one symbol prefix")
+		}
+
+		paths[prefix] = lib.Path
+	}
+
+	return nil
 }
 
 // lowered names the library functions the compiler writes, by import

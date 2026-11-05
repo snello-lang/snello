@@ -26,7 +26,7 @@ func (c *Checker) typ(e ast.Type) Type {
 	case *ast.RefType:
 		return NewRef(c.typ(e.Elem), e.Mut)
 	case *ast.SliceType:
-		if elem := c.typ(e.Elem); c.pkg.path != "" || c.storable(elem, "a slice", e.Pos()) {
+		if elem := c.typ(e.Elem); c.pkg.std || c.storable(elem, "a slice", e.Pos()) {
 			return NewSlice(elem) // a library may write the slice of borrows a string's Fields yields, which the iterator trait will replace
 		}
 	case *ast.ArrayType:
@@ -112,7 +112,7 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 		return Typ[Invalid]
 	}
 
-	if tn.typ == Typ[Local] && c.pkg.path == "" {
+	if tn.typ == Typ[Local] && !c.pkg.std {
 		c.errorf(e.Pos(), "local is a field of the standard library's types that stay in their task; a program does not write it")
 		return Typ[Invalid]
 	}
@@ -205,7 +205,7 @@ func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 		switch {
 		case !p.Dots.IsValid():
 			t = c.typ(p.Type)
-		case c.pkg.path == "":
+		case !c.pkg.std:
 			c.errorf(p.Dots, "a variadic parameter is not supported yet")
 			t = Typ[Invalid]
 		default:

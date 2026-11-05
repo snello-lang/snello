@@ -5,6 +5,7 @@
 package types
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -21,7 +22,15 @@ func (c *Checker) collectImports(f *ast.File, scope *Scope) {
 		name := path[strings.LastIndexByte(path, '/')+1:]
 		pkg := NewPkgName(imp.Pos(), name, path)
 		if c.conf.Importer != nil {
-			if loaded, err := c.conf.Importer.Import(path); err != nil {
+			var loaded *Package
+			var err error
+			if from, ok := c.conf.Importer.(ImporterFrom); ok {
+				loaded, err = from.ImportFrom(path, filepath.Dir(c.file.Name()))
+			} else {
+				loaded, err = c.conf.Importer.Import(path)
+			}
+
+			if err != nil {
 				c.errorf(imp.Path.Pos(), err.Error())
 				pkg.missing = true
 			} else {
@@ -246,8 +255,8 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	sig.variadic = variadic
 	fn.typ = sig
 	c.checkSources(d.Name.Name, fn.typ.(*Signature), d.Name.Pos())
-	if d.Body == nil && c.pkg.path == "" {
-		c.errorf(d.Name.Pos(), "missing function body") // a library package may leave one to the runtime
+	if d.Body == nil && !c.pkg.std {
+		c.errorf(d.Name.Pos(), "missing function body") // the standard library may leave one to the runtime
 	}
 
 	if d.Recv == nil {
@@ -256,6 +265,11 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 
 	c.recordDef(d.Name, fn)
 	named, ok := receiverBase(recv.typ).(*Named)
+	if ok && named.obj.pkg != c.pkg {
+		c.errorf(d.Recv.Pos(), "cannot define new methods on non-local type "+named.String()) // Go's rule and message
+		return
+	}
+
 	if !ok {
 		c.errorf(d.Recv.Pos(), "a receiver must be a declared type, a ref or mut of one")
 		return

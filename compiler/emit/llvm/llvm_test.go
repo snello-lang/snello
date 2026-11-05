@@ -419,7 +419,7 @@ func emit(t *testing.T, name, src string, cfg Config) ([]byte, error) {
 func libraries(imp *importer.Importer) []lower.Library {
 	var libs []lower.Library
 	for _, p := range imp.Packages() {
-		libs = append(libs, lower.Library{File: p.File, Syntax: p.Syntax})
+		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax})
 	}
 
 	return libs

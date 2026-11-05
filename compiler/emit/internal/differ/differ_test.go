@@ -199,7 +199,7 @@ func run(t *testing.T, name, src, backend string, debug bool) (string, int) {
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax}
 	}
 
 	var emitted []byte

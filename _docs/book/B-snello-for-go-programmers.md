@@ -1,8 +1,20 @@
 # Appendix B. Snello for Go programmers
 
-Status: grows with the chapters; covers chapters 3 to 9, 11, 12 and 14.
+Status: grows with the chapters; covers chapters 2 to 9, 11, 12 and 14.
 
 The chapters describe Snello on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Snello is not a Go dialect, and Go programs are not Snello programs; the syntax is familiar so that the ideas get your full attention.
+
+## Chapter 2: Packages and modules
+
+| Go | Snello |
+|---|---|
+| A directory is a package; its files share one package clause | The same |
+| `go.mod` with `module`, `go`, `require path version`, `replace path => dir` | `snello.mod` with `module` and `require path dir`; a requirement names a directory, as Go's `replace` does, and nothing else is in the file |
+| An import path is found in the standard library, then in the module, then through `replace` and the module cache | The standard library, then the module, then the `require` lines; there is no cache and nothing is fetched |
+| A module path's first element needs a dot only for `go get` | Every module path's first element has a dot, so a module path is never a standard package's |
+| `go build` in a directory, or `go run file.go` for one file | `snello build DIR`, or `snello build FILE` for one file |
+| A method is declared in the package of its receiver's type | The same |
+| Functions implemented in assembly are declared without a body | Only the standard library declares a function without a body; what a package of the program's own may bind to C is decided in stage 5, task 5.5 |
 
 ## Chapter 3: Basics
 

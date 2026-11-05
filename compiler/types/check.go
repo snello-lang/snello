@@ -13,11 +13,12 @@ import (
 )
 
 // A Package is a checked Snello package: its name, its import path,
-// empty for the program being compiled, and the scope holding its
-// top-level declarations.
+// empty for the program being compiled, whether it is the standard
+// library's, and the scope holding its top-level declarations.
 type Package struct {
 	name  string
 	path  string
+	std   bool
 	scope *Scope
 }
 
@@ -28,11 +29,26 @@ type Importer interface {
 	Import(path string) (*Package, error)
 }
 
+// An ImporterFrom is an Importer that resolves a path from the
+// directory of the file importing it, as go/types.ImporterFrom does,
+// so that a package of the program's own is found through the module
+// the file is in (_docs/design/08-packages.md). The checker calls
+// ImportFrom when the Config's Importer has it.
+type ImporterFrom interface {
+	Importer
+	ImportFrom(path, dir string) (*Package, error)
+}
+
 // A Config says how a program is checked: the Importer that loads the
-// packages it imports. Without one, only the core library table
-// answers an import. Modeled on go/types.Config.
+// packages it imports, and whether the package is the standard
+// library's, which may declare what a program may not: a function
+// without a body, a variadic ...ref any, a local field and a slice of
+// borrows. Without an Importer, only the core library table answers an
+// import. Modeled on go/types.Config; Standard is what Go's compiler
+// learns from its -std flag.
 type Config struct {
 	Importer Importer
+	Standard bool
 }
 
 // Info records what the checker learned about the syntax tree, as
@@ -156,7 +172,7 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 // same Info, so the backend compiles them together.
 func (conf *Config) Check(path string, file *token.File, f *ast.File, info *Info) (*Package, error) {
 	c := &Checker{conf: conf, file: file, info: info, typeScopes: make(map[*ast.FuncDecl]*Scope), badMethods: make(map[*ast.FuncDecl]bool)}
-	c.pkg = &Package{name: f.Name.Name, path: path, scope: NewScope(Universe)}
+	c.pkg = &Package{name: f.Name.Name, path: path, std: conf.Standard, scope: NewScope(Universe)}
 	if info != nil {
 		if info.Defs == nil {
 			info.Defs = make(map[*ast.Ident]Object)

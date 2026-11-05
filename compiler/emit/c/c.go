@@ -84,6 +84,10 @@ type deferred struct {
 // must hold the Defs, Uses and Types the checker recorded for all of
 // them; the files resolve the positions in error messages.
 func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
+	if err := lower.CheckPrefixes(libraries); err != nil {
+		return nil, err
+	}
+
 	e := &Emitter{
 		info:     info,
 		file:     file,

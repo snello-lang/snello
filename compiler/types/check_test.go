@@ -318,13 +318,15 @@ func parseFile(tb testing.TB, path string) (*ast.File, *token.File, []byte) {
 // the programs that import them; this package cannot use that importer,
 // which is built on it.
 type fileImporter struct {
-	conf   Config
+	conf   Config // the program's
+	std    Config // the library's, with what only the standard library may write
 	loaded map[string]*Package
 }
 
 func libraryConfig() *Config {
 	imp := &fileImporter{loaded: make(map[string]*Package)}
 	imp.conf.Importer = imp
+	imp.std = Config{Importer: imp, Standard: true}
 	return &imp.conf
 }
 
@@ -344,7 +346,7 @@ func (imp *fileImporter) Import(path string) (*Package, error) {
 		return nil, err
 	}
 
-	pkg, err := imp.conf.Check(path, file, f, nil)
+	pkg, err := imp.std.Check(path, file, f, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +356,8 @@ func (imp *fileImporter) Import(path string) (*Package, error) {
 }
 
 // A sourceImporter checks library packages given as source, for a test
-// of what crosses a package boundary.
+// of what crosses a package boundary; they stand for the standard
+// library and are checked as it is.
 type sourceImporter struct {
 	conf   Config
 	srcs   map[string]string
@@ -376,7 +379,8 @@ func (imp *sourceImporter) Import(path string) (*Package, error) {
 		return nil, err
 	}
 
-	pkg, err := imp.conf.Check(path, file, f, nil)
+	std := Config{Importer: imp.conf.Importer, Standard: true}
+	pkg, err := std.Check(path, file, f, nil)
 	if err != nil {
 		return nil, err
 	}
