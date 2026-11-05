@@ -42,15 +42,17 @@ Goal: an initial working language, as the owner restated it on 2026-11-05: lean,
 
 **Acceptance criteria:**
 - [ ] A package of two files in a directory beside the program, imported by path, with a function, a struct, an enum, a trait and a generic function of its used across the boundary, through both backends as a release and a debug build
-- [ ] A package that imports another package of the program's own and a standard package; an import cycle refused as `import cycle: a imports b imports a`
-- [ ] A `snello.mod` with a `require` line resolving an import path to a directory elsewhere on disk
-- [ ] The standard library's privileges refused in a package of the program's own with the existing messages
+- [x] A package that imports another package of the program's own and a standard package; an import cycle refused as `import cycle: a imports b imports a` (2026-11-05: `util` importing `shapes` and `strings`, and the cycle `a` to `b` to `a` named with its full paths, in `TestOwnPackages`)
+- [x] A `snello.mod` with a `require` line resolving an import path to a directory elsewhere on disk (2026-11-05: a relative or absolute directory, a required module bringing its own `snello.mod` and require lines, a required directory with no module file, and a required module whose file names another path refused; `TestModFile`, `TestPackageDir`, `TestOwnPackages`)
+- [x] The standard library's privileges refused in a package of the program's own with the existing messages (2026-11-05: a function without a body, `...ref any` and `local`, each with the program's message, since the privileges hang on `types.Config.Standard` and not on the import path; a method on another package's type refused with Go's message on the way)
 - [ ] `snello build <dir>` builds the main package of a directory, and `snello build <file>` is unchanged
-- [ ] The layout of a package and the module file in `../design/08-packages.md`, chapter 2 of the book says how a program with a package is laid out, and Appendix B maps it to Go's modules
+- [x] The layout of a package and the module file in `../design/08-packages.md`, chapter 2 of the book says how a program with a package is laid out, and Appendix B maps it to Go's modules (2026-11-05)
 
 **Verification:**
 - [ ] `examples/run/packaged/`, a program with a package directory, in the run suite of both backends
 - [ ] Tests pass: `go test ./compiler/importer ./compiler/types ./examples`
+
+Progress: the design written 2026-11-05, `../design/08-packages.md`, with the section on packages in chapter 2 of the book and the chapter 2 table of Appendix B. First slice the same day: `snello.mod` read by `importer.ParseModFile` and found by `FindModule`; the importer answers an import from the standard library, then the module, then its require lines, a required module bringing its own; the cycle message in the form above; a program, a relative path and a missing directory refused by the importer, and two paths sharing a symbol prefix by the backends through `lower.CheckPrefixes`; the standard library's privileges tied to `types.Config.Standard` rather than the empty import path, so a package of the program's own gets the program's messages; a method on another package's type refused with Go's message; the symbol prefix of a dotted path; `snello build`, `check` and `emit` finding the module above the file. A package is one file until the next slice, which brings the multi-file package and `token.FileSet`; `snello build DIR` and `examples/run/packaged/` follow.
 
 **Dependencies:** Stage 4
 **Files:** `compiler/importer/`, `compiler/types/`, `cmd/snello/`, `examples/run/packaged/`, `../design/08-packages.md`, `../book/02-getting-started.md`

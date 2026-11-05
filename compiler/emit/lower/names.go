@@ -75,7 +75,7 @@ func capitals(name string) bool {
 // program's types keep their names, which no linker sees.
 func ObjName(obj types.Object) string {
 	if p := obj.Pkg(); p != nil && p.Path() != "" {
-		return "sn_" + strings.ReplaceAll(p.Path(), "/", "__") + "_" + obj.Name() // net/http is net__http, apart from a package net_http
+		return PathPrefix(p.Path()) + obj.Name()
 	}
 
 	switch obj.(type) {
@@ -86,6 +86,30 @@ func ObjName(obj types.Object) string {
 	}
 
 	return Ident(obj.Name())
+}
+
+// PathPrefix writes the start of every symbol of the package at an
+// import path: sn_, the path with / as __, and _. net/http is
+// sn_net__http_, apart from a package net_http. The path of a package
+// of the program's own carries a dot or a dash no C identifier may,
+// example.com/app, and each is written as _; CheckPrefixes refuses two
+// paths that would share a prefix this way (_docs/design/08-packages.md).
+func PathPrefix(path string) string {
+	var b strings.Builder
+	b.WriteString("sn_")
+	for i := 0; i < len(path); i++ {
+		switch path[i] {
+		case '/':
+			b.WriteString("__")
+		case '.', '-':
+			b.WriteByte('_')
+		default:
+			b.WriteByte(path[i])
+		}
+	}
+
+	b.WriteByte('_')
+	return b.String()
 }
 
 // FuncName writes the symbol of a declared function. A method may be

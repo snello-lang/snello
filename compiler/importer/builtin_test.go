@@ -76,7 +76,7 @@ func TestBuiltin(t *testing.T) {
 	}
 
 	info := &types.Info{}
-	pkg, err := (&types.Config{}).Check("doc", file, f, info)
+	pkg, err := (&types.Config{Standard: true}).Check("doc", file, f, info) // the predeclared methods take what only the standard library writes
 	if err != nil {
 		if list, ok := err.(scanner.ErrorList); ok {
 			for _, e := range list {

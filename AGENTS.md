@@ -14,10 +14,11 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
 5. `_docs/design/06-tasks-and-channels.md`: the runtime interface the compiler emits for tasks and channels, the thread-per-task runtime of stage 3 and the scheduler of stage 4.
 6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
-7. `_docs/book/README.md`: the user-facing book and which chapters exist.
-8. `examples/README.md`: what each example tests and the decisions they forced.
-9. `CODING_STANDARDS.md`: how code is written here.
-10. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
+7. `_docs/design/08-packages.md`: a directory as a package, the module file, and how an import path is found.
+8. `_docs/book/README.md`: the user-facing book and which chapters exist.
+9. `examples/README.md`: what each example tests and the decisions they forced.
+10. `CODING_STANDARDS.md`: how code is written here.
+11. `_docs/specs/plan.md` and the stage file for the current stage: what is done, what is next, and the acceptance criteria for each task. Check a task off, with the date, only after running its verification steps.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 
@@ -69,7 +70,7 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
 | `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower |
-| `compiler/importer/` | Loads a standard library package for a program importing it, modeled on `go/importer`; its tests check every package compiles and keep `std/builtin/` in step with the checker |
+| `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the module `snello.mod` declares (`mod.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
 | `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
 | `compiler/emit/c/` | The C emitter, the reference backend |
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |

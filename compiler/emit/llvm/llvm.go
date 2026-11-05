@@ -142,6 +142,10 @@ func Emit(cfg Config, file *token.File, f *ast.File, info *types.Info, libraries
 		return nil, err
 	}
 
+	if err := lower.CheckPrefixes(libraries); err != nil {
+		return nil, err
+	}
+
 	words := minBoxWords
 	for pass := 0; ; pass++ {
 		out, need, err := emitPass(cfg, target, words, file, f, info, libraries)

@@ -5,7 +5,9 @@
 // Command snello is the Snello compiler driver.
 //
 // `snello build FILE` compiles a Snello program to a native binary in the
-// current directory, through the LLVM backend and clang; `snello build
+// current directory, through the LLVM backend and clang, with the
+// packages of its own found through the nearest snello.mod above the
+// file (_docs/design/08-packages.md); `snello build
 // -debug FILE` builds it with the runtime's checks, which stop the
 // program on a value used after its release and report values never
 // released; `snello build -backend c FILE` builds it through the C
@@ -148,7 +150,12 @@ func check(path string) int {
 
 	f, file, err := parser.ParseFile(path, src)
 	if err == nil {
-		conf := types.Config{Importer: importer.NewImporter(&types.Info{})}
+		imp, ok := newImporter(path, &types.Info{})
+		if !ok {
+			return 1
+		}
+
+		conf := types.Config{Importer: imp}
 		_, err = conf.Check("", file, f, nil)
 	}
 
@@ -227,7 +234,11 @@ func emitSource(path, backend string, debug bool) ([]byte, bool) {
 
 	f, file, err := parser.ParseFile(path, src)
 	info := &types.Info{}
-	imp := importer.NewImporter(info)
+	imp, ok := newImporter(path, info)
+	if !ok {
+		return nil, false
+	}
+
 	if err == nil {
 		conf := types.Config{Importer: imp}
 		_, err = conf.Check("", file, f, info)
@@ -250,13 +261,28 @@ func emitSource(path, backend string, debug bool) ([]byte, bool) {
 	return out, true
 }
 
+// newImporter returns the importer for a program at path: one that
+// finds the program's own packages through the module named by the
+// nearest snello.mod above the file, or the standard library alone
+// when there is none. A module file that does not read is reported.
+func newImporter(path string, info *types.Info) (*importer.Importer, bool) {
+	imp := importer.NewImporter(info)
+	var err error
+	if imp.Module, err = importer.FindModule(filepath.Dir(path)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, false
+	}
+
+	return imp, true
+}
+
 // libraries returns the packages the importer loaded, as the backends
 // take them.
 func libraries(imp *importer.Importer) []lower.Library {
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax}
 	}
 
 	return libs
