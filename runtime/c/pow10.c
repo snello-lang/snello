@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <stdint.h>
 
-// tk_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
+// sn_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
 // rounded down, its top bit set: Go's detailedPowersOfTen.
-const uint64_t tk_pow10[696][2] = {
+const uint64_t sn_pow10[696][2] = {
     {0x1732C869CD60E453, 0xFA8FD5A0081C0288}, // 1e-348
     {0x0E7FBD42205C8EB4, 0x9C99E58405118195}, // 1e-347
     {0x521FAC92A873B261, 0xC3C05EE50655E1FA}, // 1e-346

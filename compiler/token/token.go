@@ -1,11 +1,11 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package token defines the lexical tokens of Teak.
+// Package token defines the lexical tokens of Snello.
 //
-// The set is Go's, minus what Teak leaves out (interface, goto,
-// fallthrough), plus the handful Teak adds: the keywords trait, impl,
+// The set is Go's, minus what Snello leaves out (interface, goto,
+// fallthrough), plus the handful Snello adds: the keywords trait, impl,
 // enum, match, ref, mut, Self and super, and the operators ?, ??, => and
 // ..=.
 package token
@@ -89,7 +89,7 @@ const (
 	SEMICOLON // ;
 	COLON     // :
 
-	// Teak additions.
+	// Snello additions.
 	QUESTION // ? (the option type T? and the propagating postfix x?)
 	COALESCE // ?? (unwrap or else)
 	FATARROW // => (match arm)
@@ -120,7 +120,7 @@ const (
 	TYPE
 	VAR
 
-	// Teak additions.
+	// Snello additions.
 	TRAIT
 	IMPL
 	ENUM

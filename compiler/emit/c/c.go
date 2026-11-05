@@ -1,14 +1,14 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package c emits C source for a checked core Teak program and
+// Package c emits C source for a checked core Snello program and
 // provides the runtime it links against. It is the first backend
 // (_docs/design/01-language-design.md, "Backend: C first, LLVM
 // later"); LLVM IR replaces it and keeps the runtime.
 //
 // The lowering: numbers are C integers and doubles, a string is the
-// runtime's tk_string view, a struct is a C struct, an enum a tagged
+// runtime's sn_string view, a struct is a C struct, an enum a tagged
 // union, an option a struct with a flag, a Result a flag over a union,
 // a tuple a struct. A ref T is passed as a T and a mut T or a *T as a
 // T*. A function is a static C function and a method one named after
@@ -25,10 +25,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // An Emitter writes one program. C needs a type complete before a
@@ -99,7 +99,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		names:    newNaming(f),
 		jumped:   make(map[string]bool),
 	}
-	e.state["tk_slice_u8"] = defined // the runtime defines []byte in teak.h, as the library's bodiless functions take it
+	e.state["sn_slice_u8"] = defined // the runtime defines []byte in snello.h, as the library's bodiless functions take it
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -137,15 +137,15 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 	}
 
 	e.instances()
-	finish := "\ttk_main();\n"
+	finish := "\tsn_main();\n"
 	if len(e.statics) > 0 {
-		finish += "\ttk_statics_drop();\n"
+		finish += "\tsn_statics_drop();\n"
 		var b strings.Builder
 		for _, s := range e.statics {
 			put(&b, "\t", e.dropOf(s.name, s.typ, token.NoPos), "\n")
 		}
 
-		put(&e.helpers, "static void tk_statics_drop(void) {\n", b.String(), "}\n\n") // after the droppers it asks for
+		put(&e.helpers, "static void sn_statics_drop(void) {\n", b.String(), "}\n\n") // after the droppers it asks for
 	}
 
 	if len(e.errors) > 0 {
@@ -153,8 +153,8 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 	}
 
 	var out bytes.Buffer
-	put(&out, "// Emitted by the Teak compiler from ", file.Name(), ". Do not edit.\n\n#include \"teak.h\"\n\n")
-	put(&out, "#define TK_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
+	put(&out, "// Emitted by the Snello compiler from ", file.Name(), ". Do not edit.\n\n#include \"snello.h\"\n\n")
+	put(&out, "#define SN_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
 	out.Write(e.decls.Bytes())
 	out.WriteString("\n")
 	out.Write(e.types.Bytes())
@@ -162,7 +162,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(int argc, char **argv) {\n\ttk_init(argc, argv);\n" + finish + "\treturn tk_finish();\n}\n")
+	out.WriteString("int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n" + finish + "\treturn sn_finish();\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -233,7 +233,7 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 			}
 		}
 
-		qualifier := "static TK_UNUSED " // a library's streams may go unused by a program
+		qualifier := "static SN_UNUSED " // a library's streams may go unused by a program
 		if d.Const {
 			qualifier += "const "
 		} else if needsDrop(obj.Type()) {
@@ -247,8 +247,8 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 // staticValue writes x as a C initializer a static variable of type t
 // can have: a number, character, boolean or string literal, the
 // negation of a number, or a struct literal of such, with the live flag
-// of a Drop type set. A string is written as the fields of a tk_string
-// over the C literal, since the TK_STR macro is a compound literal,
+// of a Drop type set. A string is written as the fields of a sn_string
+// over the C literal, since the SN_STR macro is a compound literal,
 // which C does not allow at file scope. It is empty for anything else.
 func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 	switch x := x.(type) {
@@ -293,7 +293,7 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 		}
 
 		if hasDrop(t) {
-			parts = append(parts, ".tk_live = true")
+			parts = append(parts, ".sn_live = true")
 		}
 
 		if len(parts) == 0 {
@@ -307,7 +307,7 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 }
 
 // funcDecl writes a function: a prototype in the prototypes section
-// and the definition in the body. Teak's main becomes tk_main, which
+// and the definition in the body. Snello's main becomes sn_main, which
 // the C main calls; a method is a function named after its type whose
 // first parameter is the receiver. A library function declared without
 // a body is the runtime's, declared in its header under the same name,
@@ -336,7 +336,7 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 		params = append([]*types.Var{recv}, params...)
 	}
 
-	head := "static TK_UNUSED " + e.resultType(sig, pos) + " " + name + "(" + e.params(params, pos) + ")"
+	head := "static SN_UNUSED " + e.resultType(sig, pos) + " " + name + "(" + e.params(params, pos) + ")"
 	put(&e.protos, head, ";\n")
 	e.line(head + " {")
 	e.function(sig, body)
@@ -428,7 +428,7 @@ func basicType(t *types.Basic) string {
 	case types.Bool:
 		return "bool"
 	case types.String, types.Error:
-		return "tk_string" // an error is its message for now
+		return "sn_string" // an error is its message for now
 	case types.Int8:
 		return "int8_t"
 	case types.Int16:
@@ -438,7 +438,7 @@ func basicType(t *types.Basic) string {
 	case types.Int64:
 		return "int64_t"
 	case types.Int:
-		return "tk_int"
+		return "sn_int"
 	case types.Uint8:
 		return "uint8_t"
 	case types.Uint16:
@@ -448,7 +448,7 @@ func basicType(t *types.Basic) string {
 	case types.Uint64:
 		return "uint64_t"
 	case types.Uint:
-		return "tk_uint"
+		return "sn_uint"
 	case types.Float32:
 		return "float"
 	case types.Float64:
@@ -476,7 +476,7 @@ func put(w writer, parts ...string) {
 }
 
 // line writes one line of the current section. Indentation is not
-// tracked; the output is for the C compiler, and a reader has the Teak
+// tracked; the output is for the C compiler, and a reader has the Snello
 // source.
 func (e *Emitter) line(s string) {
 	e.body.WriteString(s)
@@ -486,5 +486,5 @@ func (e *Emitter) line(s string) {
 // temp returns a fresh temporary name.
 func (e *Emitter) temp() string {
 	e.tmp++
-	return "tk_t" + strconv.Itoa(e.tmp)
+	return "sn_t" + strconv.Itoa(e.tmp)
 }

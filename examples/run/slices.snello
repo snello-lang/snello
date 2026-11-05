@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -54,9 +54,9 @@ func main() {
 		fmt.Println(w)
 	}
 
-	s := "  Hello, Teak World  "
+	s := "  Hello, Snello World  "
 	t := s.Trim()
-	fmt.Println(t, t.Len(), t.ToUpper(), t.ToLower(), t[7:11], t.HasPrefix("Hello"), t.HasSuffix("x"), t.Contains("Teak"))
+	fmt.Println(t, t.Len(), t.ToUpper(), t.ToLower(), t[7:13], t.HasPrefix("Hello"), t.HasSuffix("x"), t.Contains("Snello"))
 	for w := range t.Fields() {
 		fmt.Println(w)
 	}

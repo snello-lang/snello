@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@ package types
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
+	"github.com/snello-lang/snello/compiler/ast"
 )
 
 // typ turns a type expression into a Type, resolving every name in it.

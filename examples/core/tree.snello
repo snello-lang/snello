@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 1: a tree with parent links, as a hand-rolled arena.
 //
-// The core version of 01-tree/tree-slice.teak. One slice owns every node
+// The core version of 01-tree/tree-slice.snello. One slice owns every node
 // and nodes link by index, so no node has two owners. Stresses: `ref`
 // and `mut` receivers, a borrow of one element (`ref t.nodes[i]`), a
 // closure taking a borrow, cloning out of a borrow before mutating.

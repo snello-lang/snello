@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 5: a recursive-descent parser for arithmetic expressions.
 //
-// The core version of 05-parser.teak: no trait impls, numbers lexed by
+// The core version of 05-parser.snello: no trait impls, numbers lexed by
 // hand instead of strconv, and enum comparisons written as matches.
 // Stresses: sum types, match, owned pointers for recursive data, a Copy
 // enum, and a lexer struct that holds a borrow of its input.

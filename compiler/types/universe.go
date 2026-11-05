@@ -1,12 +1,12 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/token"
+import "github.com/snello-lang/snello/compiler/token"
 
-// Universe is the outermost scope: the names every Teak file sees
+// Universe is the outermost scope: the names every Snello file sees
 // without an import. Its contents are section 1 of
 // _docs/design/05-standard-library.md, and nothing else: there is no
 // prelude.

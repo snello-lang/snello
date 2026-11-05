@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 8: error handling with Result, a custom error enum, `?` and `??`.
 //
-// The core version of 09-errors.teak with the predeclared `error` type
+// The core version of 09-errors.snello with the predeclared `error` type
 // as the cause, the integers parsed by hand, and the map read through
 // `Get`. Stresses: `?` across a chain of Results, `??` whose else
 // returns, a value moved only on the diverging path and used after, and

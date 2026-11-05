@@ -1,19 +1,19 @@
 # Core programs
 
-The stage 1 acceptance suite: eight programs written in core Teak, the part of the language the first checker and the C backend handle. Core Teak is structs, enums and `match`, functions and methods with `ref`, `mut` and value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??`, slices, maps, strings, `Copy` computed from structure, `Drop`, `defer`, and closures. It has no traits and no user generics; the one `impl` that appears is `impl Drop`, which is how a type gets a `Drop` method.
+The stage 1 acceptance suite: eight programs written in core Snello, the part of the language the first checker and the C backend handle. Core Snello is structs, enums and `match`, functions and methods with `ref`, `mut` and value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??`, slices, maps, strings, `Copy` computed from structure, `Drop`, `defer`, and closures. It has no traits and no user generics; the one `impl` that appears is `impl Drop`, which is how a type gets a `Drop` method.
 
 Each program is the core version of one of the twenty programs in the parent folder. What was removed, and what each one stresses, is in its header comment.
 
 | File | From | What it stresses |
 |---|---|---|
-| tree.teak | 01-tree/tree-slice | `ref`/`mut` receivers, a borrow of one slice element, a closure taking a borrow, cloning out before mutating |
-| list.teak | 06-linked-list | `*Node?` links, `take`, a partial move out of a heap node, a borrow returned from a `ref` receiver |
-| state.teak | 17-state-machine | Enums with data, exhaustive tuple match with guards, consuming transitions, `Drop` on a dropped state |
-| files.teak | 14-files | `Drop` versus `defer`, a consuming `Close`, `?` on library calls, a user `Drop` type |
-| calc.teak | 05-parser | Sum types, owned pointers for recursion, a Copy enum, a struct holding a borrow |
-| bst.teak | 20-bst | A `mut` borrow walked down a chain of `*Node?` slots, in-place delete through `take` |
-| wordfreq.teak | 10-wordfreq | Owned string versus borrows of its pieces, owned map keys, consuming a map, sorting through `mut` |
-| config.teak | 09-errors | `?` across Results, `??` whose else returns, a move on the diverging path only, a borrow of a map value |
+| tree.snello | 01-tree/tree-slice | `ref`/`mut` receivers, a borrow of one slice element, a closure taking a borrow, cloning out before mutating |
+| list.snello | 06-linked-list | `*Node?` links, `take`, a partial move out of a heap node, a borrow returned from a `ref` receiver |
+| state.snello | 17-state-machine | Enums with data, exhaustive tuple match with guards, consuming transitions, `Drop` on a dropped state |
+| files.snello | 14-files | `Drop` versus `defer`, a consuming `Close`, `?` on library calls, a user `Drop` type |
+| calc.snello | 05-parser | Sum types, owned pointers for recursion, a Copy enum, a struct holding a borrow |
+| bst.snello | 20-bst | A `mut` borrow walked down a chain of `*Node?` slots, in-place delete through `take` |
+| wordfreq.snello | 10-wordfreq | Owned string versus borrows of its pieces, owned map keys, consuming a map, sorting through `mut` |
+| config.snello | 09-errors | `?` across Results, `??` whose else returns, a move on the diverging path only, a borrow of a map value |
 
 ## Library surface
 
@@ -26,7 +26,7 @@ The programs call only these library names. Stage 1 maps each onto a C runtime f
 
 ## Expected output
 
-Every `main` says in its comments what it prints. When a program builds, that text becomes a `.out` file beside it, and `go test ./compiler/emit/c/` builds the program and compares its output with the file; all eight have theirs. A program that reads files, such as `config.teak` reading `app.conf`, has them in a folder named after it with the suffix `.files`, which the test copies into the directory the binary runs in. `state.out` shows every `Drop` line exactly once.
+Every `main` says in its comments what it prints. When a program builds, that text becomes a `.out` file beside it, and `go test ./compiler/emit/c/` builds the program and compares its output with the file; all eight have theirs. A program that reads files, such as `config.snello` reading `app.conf`, has them in a folder named after it with the suffix `.files`, which the test copies into the directory the binary runs in. `state.out` shows every `Drop` line exactly once.
 
 ## Negative programs
 

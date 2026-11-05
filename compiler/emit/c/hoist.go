@@ -1,22 +1,22 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package c
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
-// Teak has expressions C has not: match, ?, ??, if with a value, and
+// Snello has expressions C has not: match, ?, ??, if with a value, and
 // &x, which allocates. Each is written as statements that leave the
 // value in a temporary, before the statement that uses it. Writing
 // them early must not reorder evaluation, so an operand to the left of
 // one is saved in a temporary of its own first. The same holds for
-// calls: Teak evaluates operands left to right, as Go does, and C
+// calls: Snello evaluates operands left to right, as Go does, and C
 // leaves the order of arguments and initializers open.
 
 // needsHoist reports whether writing x produces statements.

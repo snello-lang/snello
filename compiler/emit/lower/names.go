@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,15 +8,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The names of the symbols a backend writes are the same in every
 // backend, since the runtime declares some of them and the
 // differential test compares the rest: a function, variable or
-// constant of the program is in the tk__ space, a library's is
-// qualified by its import path in the runtime's tk_ space, and Teak's
-// main is tk_main, which the runtime's main calls (ObjName).
+// constant of the program is in the sn__ space, a library's is
+// qualified by its import path in the runtime's sn_ space, and Snello's
+// main is sn_main, which the runtime's main calls (ObjName).
 
 // reserved holds the identifiers an emitted program must not reuse:
 // C's keywords and the libc names the C output refers to. The IR
@@ -33,7 +33,7 @@ var reserved = map[string]bool{
 	"strlen": true, "NULL": true, "stdout": true, "stderr": true, "size_t": true,
 }
 
-// Ident writes a Teak identifier as a symbol: a reserved one, one
+// Ident writes a Snello identifier as a symbol: a reserved one, one
 // starting with the runtime's prefix, or one written in capitals alone,
 // gets a trailing underscore. C's headers define their constants as
 // macros in capitals, SIZE_MAX and INT64_MAX in stdint.h and dozens more
@@ -41,7 +41,7 @@ var reserved = map[string]bool{
 // name; no list of them is complete, so every name of that form is
 // spelled apart, which changes nothing but the C.
 func Ident(name string) string {
-	if reserved[name] || strings.HasPrefix(name, "tk_") || strings.HasPrefix(name, "TK_") || capitals(name) {
+	if reserved[name] || strings.HasPrefix(name, "sn_") || strings.HasPrefix(name, "SN_") || capitals(name) {
 		return name + "_"
 	}
 
@@ -66,22 +66,22 @@ func capitals(name string) bool {
 
 // ObjName writes the symbol of a declared function, variable, type or
 // constant. One a library package declares is qualified by the
-// package's import path, in the runtime's tk_ space, which no name of a
+// package's import path, in the runtime's sn_ space, which no name of a
 // program reaches. The program's own functions, variables and
-// constants are in tk__, the space of the package with no path, as Go's
+// constants are in sn__, the space of the package with no path, as Go's
 // linker writes them main.name: a symbol the program named write must
 // not be libc's write, which the runtime calls, once link-time
 // optimization makes the program and the runtime one unit. The
 // program's types keep their names, which no linker sees.
 func ObjName(obj types.Object) string {
 	if p := obj.Pkg(); p != nil && p.Path() != "" {
-		return "tk_" + strings.ReplaceAll(p.Path(), "/", "__") + "_" + obj.Name() // net/http is net__http, apart from a package net_http
+		return "sn_" + strings.ReplaceAll(p.Path(), "/", "__") + "_" + obj.Name() // net/http is net__http, apart from a package net_http
 	}
 
 	switch obj.(type) {
 	case *types.Func, *types.Var, *types.Const:
 		if obj.Pkg() != nil {
-			return "tk__" + obj.Name()
+			return "sn__" + obj.Name()
 		}
 	}
 
@@ -92,7 +92,7 @@ func ObjName(obj types.Object) string {
 // called main; it has no package of its own.
 func FuncName(fn *types.Func) string {
 	if p := fn.Pkg(); fn.Name() == "main" && p != nil && p.Path() == "" {
-		return "tk_main"
+		return "sn_main"
 	}
 
 	return ObjName(fn)
@@ -102,7 +102,7 @@ func FuncName(fn *types.Func) string {
 // the method's name, under the runtime prefix so it collides with
 // nothing the program declares.
 func MethodName(recv types.Type, name string) string {
-	return "tk_" + Mangle(ValueType(recv)) + "_" + name
+	return "sn_" + Mangle(ValueType(recv)) + "_" + name
 }
 
 // NamedName writes the symbol of a declared type: its own, or for an

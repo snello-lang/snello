@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -35,7 +35,7 @@
 typedef struct {
     _Atomic int64_t count; // units free
     _Atomic int64_t nwait; // tasks in, or on their way into, the queue
-    tk_waitq q;
+    sn_waitq q;
 } semaphore;
 
 typedef struct {
@@ -43,85 +43,85 @@ typedef struct {
     bool rw;                   // an RwLock's, which counts readers
     _Atomic int64_t readers;   // Go's readerCount
     _Atomic int64_t departing; // Go's readerWait: readers a writer waits for
-    tk_qlock mu;              // over the queues and the count
-    tk_waitq lockq;               // tasks waiting for the word to leave 2
+    sn_qlock mu;              // over the queues and the count
+    sn_waitq lockq;               // tasks waiting for the word to leave 2
     semaphore reading;         // readers waiting for a writer
     semaphore writing;         // the writer waiting for the readers before it
     int64_t count;             // the wait group's
-    tk_waitq groupq;              // tasks waiting for the count to reach zero
-} tk_lock;
+    sn_waitq groupq;              // tasks waiting for the count to reach zero
+} sn_lock;
 
 static const int64_t max_readers = (int64_t)1 << 30;
 
-static tk_lock *new_lock(bool rw) {
-    tk_lock *l = tk_alloc(sizeof *l);
+static sn_lock *new_lock(bool rw) {
+    sn_lock *l = sn_alloc(sizeof *l);
     memset(l, 0, sizeof *l);
     l->rw = rw;
-    tk_qlock_init(&l->mu);
+    sn_qlock_init(&l->mu);
     return l;
 }
 
-// The lock's memory is tk_alloc's, so a debug build reports a lock
+// The lock's memory is sn_alloc's, so a debug build reports a lock
 // that nothing freed.
-int64_t tk_sync_newLock(void) {
+int64_t sn_sync_newLock(void) {
     return (int64_t)(intptr_t)new_lock(false);
 }
 
-int64_t tk_sync_newRwLock(void) {
+int64_t sn_sync_newRwLock(void) {
     return (int64_t)(intptr_t)new_lock(true);
 }
 
-// tk_sync_freeLock frees the lock. The Mutex, RwLock or WaitGroup
+// sn_sync_freeLock frees the lock. The Mutex, RwLock or WaitGroup
 // counter that frees its lock owns it, the last handle in a WaitGroup's
 // case, so no task holds or waits on it by then.
-void tk_sync_freeLock(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
-    tk_qlock_free(&l->mu);
-    tk_free(l);
+void sn_sync_freeLock(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
+    sn_qlock_free(&l->mu);
+    sn_free(l);
 }
 
 // park_while parks the task while the word is 2, as a futex wait does:
 // the word is read under the queue's lock, which a waker takes too, so
 // a wake cannot fall between the read and the park.
-static void park_while(tk_lock *l) {
-    tk_qlock_take(&l->mu);
+static void park_while(sn_lock *l) {
+    sn_qlock_take(&l->mu);
     if (atomic_load(&l->state) != 2) {
-        tk_qlock_give(&l->mu);
+        sn_qlock_give(&l->mu);
         return;
     }
 
-    tk_wait_state ws = {0};
-    tk_waiter me = {tk_self(), NULL, &ws, 0, false, false, NULL, NULL};
-    tk_enqueue(&l->lockq, &me);
-    tk_qlock_give(&l->mu);
-    tk_await_wait(&ws);
-    tk_qlock_take(&l->mu);
-    tk_qlock_give(&l->mu);
+    sn_wait_state ws = {0};
+    sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+    sn_enqueue(&l->lockq, &me);
+    sn_qlock_give(&l->mu);
+    sn_await_wait(&ws);
+    sn_qlock_take(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
-static void wake_one(tk_lock *l) {
-    tk_qlock_take(&l->mu);
-    tk_waiter *w = tk_dequeue(&l->lockq);
+static void wake_one(sn_lock *l) {
+    sn_qlock_take(&l->mu);
+    sn_waiter *w = sn_dequeue(&l->lockq);
     if (w != NULL) {
-        tk_finish_wait(w, true);
+        sn_finish_wait(w, true);
     }
 
-    tk_qlock_give(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
 // spin waits a little for a lock held by a running task, and returns
 // the word as it last read it.
-static int32_t spin(tk_lock *l) {
+static int32_t spin(sn_lock *l) {
     int32_t s = atomic_load_explicit(&l->state, memory_order_relaxed);
     for (int i = 0; i < 100 && s == 1; i++) {
-        tk_spin_hint();
+        sn_spin_hint();
         s = atomic_load_explicit(&l->state, memory_order_relaxed);
     }
 
     return s;
 }
 
-static void mutex_lock(tk_lock *l) {
+static void mutex_lock(sn_lock *l) {
     int32_t s = 0;
     if (atomic_compare_exchange_strong_explicit(&l->state, &s, 1, memory_order_acquire, memory_order_relaxed)) {
         return;
@@ -143,7 +143,7 @@ static void mutex_lock(tk_lock *l) {
     }
 }
 
-static void mutex_unlock(tk_lock *l) {
+static void mutex_unlock(sn_lock *l) {
     if (atomic_exchange_explicit(&l->state, 0, memory_order_release) == 2) {
         wake_one(l);
     }
@@ -166,43 +166,43 @@ static bool sema_try(semaphore *s) {
     return false;
 }
 
-static void sema_acquire(tk_lock *l, semaphore *s) {
+static void sema_acquire(sn_lock *l, semaphore *s) {
     if (sema_try(s)) {
         return;
     }
 
-    tk_qlock_take(&l->mu);
+    sn_qlock_take(&l->mu);
     atomic_fetch_add(&s->nwait, 1);
     while (!sema_try(s)) {
-        tk_wait_state ws = {0};
-        tk_waiter me = {tk_self(), NULL, &ws, 0, false, false, NULL, NULL};
-        tk_enqueue(&s->q, &me);
-        tk_qlock_give(&l->mu);
-        tk_await_wait(&ws);
-        tk_qlock_take(&l->mu);
+        sn_wait_state ws = {0};
+        sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+        sn_enqueue(&s->q, &me);
+        sn_qlock_give(&l->mu);
+        sn_await_wait(&ws);
+        sn_qlock_take(&l->mu);
     }
 
     atomic_fetch_sub(&s->nwait, 1);
-    tk_qlock_give(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
-static void sema_release(tk_lock *l, semaphore *s) {
+static void sema_release(sn_lock *l, semaphore *s) {
     atomic_fetch_add(&s->count, 1);
     if (atomic_load(&s->nwait) == 0) {
         return;
     }
 
-    tk_qlock_take(&l->mu);
-    tk_waiter *w = tk_dequeue(&s->q);
+    sn_qlock_take(&l->mu);
+    sn_waiter *w = sn_dequeue(&s->q);
     if (w != NULL) {
-        tk_finish_wait(w, true);
+        sn_finish_wait(w, true);
     }
 
-    tk_qlock_give(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
-void tk_sync_lock(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
+void sn_sync_lock(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
     mutex_lock(l);
     if (l->rw) { // hold back new readers, and wait for those in to leave
         int64_t r = atomic_fetch_sub(&l->readers, max_readers);
@@ -212,8 +212,8 @@ void tk_sync_lock(int64_t h) {
     }
 }
 
-void tk_sync_unlock(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
+void sn_sync_unlock(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
     if (l->rw) { // let in the readers that waited
         int64_t r = atomic_fetch_add(&l->readers, max_readers) + max_readers;
         for (int64_t i = 0; i < r; i++) {
@@ -224,15 +224,15 @@ void tk_sync_unlock(int64_t h) {
     mutex_unlock(l);
 }
 
-void tk_sync_lockShared(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
+void sn_sync_lockShared(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
     if (atomic_fetch_add(&l->readers, 1) + 1 < 0) { // a writer holds the lock or waits for it
         sema_acquire(l, &l->reading);
     }
 }
 
-void tk_sync_unlockShared(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
+void sn_sync_unlockShared(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
     if (atomic_fetch_sub(&l->readers, 1) - 1 < 0 && atomic_fetch_sub(&l->departing, 1) - 1 == 0) {
         sema_release(l, &l->writing); // the last reader a writer waited for
     }
@@ -240,55 +240,55 @@ void tk_sync_unlockShared(int64_t h) {
 
 // lock_of returns the lock h names; an empty handle is a WaitGroup's,
 // since a Mutex and an RwLock catch their own.
-static tk_lock *lock_of(int64_t h) {
-    tk_lock *l = (tk_lock *)(intptr_t)h;
+static sn_lock *lock_of(int64_t h) {
+    sn_lock *l = (sn_lock *)(intptr_t)h;
     if (l == NULL) {
-        tk_panic(TK_STR("sync: use of an empty WaitGroup", 31));
+        sn_panic(SN_STR("sync: use of an empty WaitGroup", 31));
     }
 
     return l;
 }
 
-// tk_sync_count adds n to the count and wakes the waiters when it
+// sn_sync_count adds n to the count and wakes the waiters when it
 // reaches zero; a count below zero is a Done without its Add.
-void tk_sync_count(int64_t h, int64_t n) {
-    tk_lock *l = lock_of(h);
-    tk_qlock_take(&l->mu);
+void sn_sync_count(int64_t h, int64_t n) {
+    sn_lock *l = lock_of(h);
+    sn_qlock_take(&l->mu);
     l->count += n;
     if (l->count < 0) {
-        tk_qlock_give(&l->mu);
-        tk_panic(TK_STR("sync: negative WaitGroup count", 30));
+        sn_qlock_give(&l->mu);
+        sn_panic(SN_STR("sync: negative WaitGroup count", 30));
     }
 
     if (l->count == 0) {
-        for (tk_waiter *w; (w = tk_dequeue(&l->groupq)) != NULL;) {
-            tk_finish_wait(w, true);
+        for (sn_waiter *w; (w = sn_dequeue(&l->groupq)) != NULL;) {
+            sn_finish_wait(w, true);
         }
     }
 
-    tk_qlock_give(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
-void tk_sync_wait(int64_t h) {
-    tk_lock *l = lock_of(h);
-    tk_qlock_take(&l->mu);
+void sn_sync_wait(int64_t h) {
+    sn_lock *l = lock_of(h);
+    sn_qlock_take(&l->mu);
     if (l->count == 0) {
-        tk_qlock_give(&l->mu);
+        sn_qlock_give(&l->mu);
         return;
     }
 
-    tk_wait_state ws = {0};
-    tk_waiter me = {tk_self(), NULL, &ws, 0, false, false, NULL, NULL};
-    tk_enqueue(&l->groupq, &me);
-    tk_qlock_give(&l->mu);
-    tk_await_wait(&ws);
-    tk_qlock_take(&l->mu);
-    tk_qlock_give(&l->mu);
+    sn_wait_state ws = {0};
+    sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+    sn_enqueue(&l->groupq, &me);
+    sn_qlock_give(&l->mu);
+    sn_await_wait(&ws);
+    sn_qlock_take(&l->mu);
+    sn_qlock_give(&l->mu);
 }
 
-// tk_sync_atomicAdd adds d to *n as one step no other task's add can
+// sn_sync_atomicAdd adds d to *n as one step no other task's add can
 // interleave with, and returns the new value; the Arc's count is kept
 // with it, and the handle that brings it to zero drops the value.
-int64_t tk_sync_atomicAdd(int64_t *n, int64_t d) {
+int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) {
     return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST);
 }

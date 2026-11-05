@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A function value is a pair in C: a function taking an environment
@@ -33,7 +33,7 @@ import (
 
 // minBoxWords is the least size of the box in 64-bit words. The box
 // grows to the largest closure of copies in the program, counted in
-// words by the Teak types captured (words), and the C compiler checks
+// words by the Snello types captured (words), and the C compiler checks
 // the count against the real layout.
 const minBoxWords = 4
 
@@ -44,8 +44,8 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 	sig := e.typeOf(x).(*types.Signature)
 	pair := e.cType(sig, x.Pos())
 	e.closures++
-	name := "tk_closure_" + strconv.Itoa(e.closures)
-	env := "tk_env_" + strconv.Itoa(e.closures)
+	name := "sn_closure_" + strconv.Itoa(e.closures)
+	env := "sn_env_" + strconv.Itoa(e.closures)
 	captured := e.captures(x)
 	inline := true // every capture a copy: the environment is the box
 	var fields strings.Builder
@@ -60,7 +60,7 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 		put(&fields, "\t", e.cType(e.sub(cap.Var.Type()), cap.Var.Pos()), star, lower.Ident(cap.Var.Name()), ";\n")
 	}
 
-	put(&e.types, "struct ", env, " {\n", fields.String(), "\tchar tk_pad;\n};\n")
+	put(&e.types, "struct ", env, " {\n", fields.String(), "\tchar sn_pad;\n};\n")
 	if inline {
 		words := 1 // the pad
 		for _, cap := range captured {
@@ -68,11 +68,11 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 		}
 
 		e.boxWords = max(e.boxWords, words)
-		put(&e.types, "_Static_assert(sizeof(struct ", env, ") <= TK_BOX_WORDS * sizeof(uint64_t), \"a closure copies more than its box holds\");\n")
+		put(&e.types, "_Static_assert(sizeof(struct ", env, ") <= SN_BOX_WORDS * sizeof(uint64_t), \"a closure copies more than its box holds\");\n")
 	}
 
 	put(&e.types, "\n")
-	head := "static " + e.resultType(sig, x.Pos()) + " " + name + "(void *tk_envp" + e.closureParamList(sig, x.Pos()) + ")"
+	head := "static " + e.resultType(sig, x.Pos()) + " " + name + "(void *sn_envp" + e.closureParamList(sig, x.Pos()) + ")"
 	put(&e.protos, head, ";\n")
 
 	// The body goes into a buffer of its own, with the captured
@@ -83,20 +83,20 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 	e.captured = make(map[*types.Var]string, len(captured))
 	for _, cap := range captured {
 		if cap.Copied {
-			e.captured[cap.Var] = "(tk_env->" + lower.Ident(cap.Var.Name()) + ")"
+			e.captured[cap.Var] = "(sn_env->" + lower.Ident(cap.Var.Name()) + ")"
 		} else {
-			e.captured[cap.Var] = "(*tk_env->" + lower.Ident(cap.Var.Name()) + ")"
+			e.captured[cap.Var] = "(*sn_env->" + lower.Ident(cap.Var.Name()) + ")"
 		}
 	}
 
 	e.line(head + " {")
 	if inline {
-		e.line("struct " + env + " *tk_env = tk_envp;")
+		e.line("struct " + env + " *sn_env = sn_envp;")
 	} else {
-		e.line("struct " + env + " *tk_env = *(struct " + env + " **)tk_envp;")
+		e.line("struct " + env + " *sn_env = *(struct " + env + " **)sn_envp;")
 	}
 
-	e.line("(void)tk_env;")
+	e.line("(void)sn_env;")
 	e.function(sig, x.Body)
 	e.line("")
 	e.helpers.Write(e.body.Bytes())
@@ -222,7 +222,7 @@ func (e *Emitter) closureParamList(sig *types.Signature, pos token.Pos) string {
 func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 	sig := fn.Type().(*types.Signature)
 	pair := e.cType(sig, pos)
-	name := "tk_fnval_" + lower.FuncName(fn)
+	name := "sn_fnval_" + lower.FuncName(fn)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		args := make([]string, len(sig.Params()))
@@ -235,9 +235,9 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 			call = "return " + call
 		}
 
-		head := "static " + e.resultType(sig, pos) + " " + name + "(void *tk_env" + e.closureParamList(sig, pos) + ")"
+		head := "static " + e.resultType(sig, pos) + " " + name + "(void *sn_env" + e.closureParamList(sig, pos) + ")"
 		put(&e.protos, head, ";\n")
-		put(&e.helpers, head, " {\n\t(void)tk_env;\n\t", call, ";\n}\n\n")
+		put(&e.helpers, head, " {\n\t(void)sn_env;\n\t", call, ";\n}\n\n")
 	}
 
 	return "(" + pair + "){" + name + ", {0}}"

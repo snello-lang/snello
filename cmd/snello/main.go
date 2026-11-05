@@ -1,18 +1,18 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Command teak is the Teak compiler driver.
+// Command snello is the Snello compiler driver.
 //
-// `teak build FILE` compiles a Teak program to a native binary in the
-// current directory, through the LLVM backend and clang; `teak build
+// `snello build FILE` compiles a Snello program to a native binary in the
+// current directory, through the LLVM backend and clang; `snello build
 // -debug FILE` builds it with the runtime's checks, which stop the
 // program on a value used after its release and report values never
-// released; `teak build -backend c FILE` builds it through the C
+// released; `snello build -backend c FILE` builds it through the C
 // backend, the reference implementation, and the system's C compiler.
-// Four more subcommands inspect the compiler by hand: `teak lex FILE`
-// prints the token stream, `teak parse FILE` the syntax tree, `teak
-// check FILE` what the checker finds, and `teak emit [-backend c]
+// Four more subcommands inspect the compiler by hand: `snello lex FILE`
+// prints the token stream, `snello parse FILE` the syntax tree, `snello
+// check FILE` what the checker finds, and `snello emit [-backend c]
 // FILE` the IR module, or the C source, that build would compile.
 package main
 
@@ -23,15 +23,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/c"
-	"github.com/teak-lang/teak/compiler/emit/llvm"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/emit/llvm"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 func main() {
@@ -69,7 +69,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: teak (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | lex | parse | check) FILE")
 	os.Exit(2)
 }
 
@@ -181,14 +181,14 @@ func build(path, backend string, debug bool) int {
 		return 1
 	}
 
-	dir, err := os.MkdirTemp("", "teak-build")
+	dir, err := os.MkdirTemp("", "snello-build")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
 	defer os.RemoveAll(dir)
-	name := strings.TrimSuffix(filepath.Base(path), ".teak")
+	name := strings.TrimSuffix(filepath.Base(path), ".snello")
 	var bin string
 	var out []byte
 	if backend == "llvm" {
@@ -275,13 +275,13 @@ func printErrors(err error) {
 	fmt.Fprintln(os.Stderr, err)
 }
 
-// readSource reads a Teak source file, reporting a failure to stderr.
-// The name must end in .teak, as the Go tool insists on .go: it keeps a
-// stray file from being compiled as Teak, and it keeps build from
+// readSource reads a Snello source file, reporting a failure to stderr.
+// The name must end in .snello, as the Go tool insists on .go: it keeps a
+// stray file from being compiled as Snello, and it keeps build from
 // writing the binary over a source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
-	if !strings.HasSuffix(path, ".teak") {
-		fmt.Fprintf(os.Stderr, "%s: Teak source files end in .teak\n", path)
+	if !strings.HasSuffix(path, ".snello") {
+		fmt.Fprintf(os.Stderr, "%s: Snello source files end in .snello\n", path)
 		return nil, false
 	}
 

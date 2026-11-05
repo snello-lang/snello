@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -47,9 +47,9 @@ static inline uint64_t wyr3(const uint8_t *p, size_t k) {
     return ((uint64_t)p[0] << 16) | ((uint64_t)p[k >> 1] << 8) | p[k - 1];
 }
 
-// tk_hash_init draws the seeds. A system that gives no random bytes
+// sn_hash_init draws the seeds. A system that gives no random bytes
 // leaves the fixed ones, which hash as well and are only predictable.
-void tk_hash_init(void) {
+void sn_hash_init(void) {
     uint64_t seed[2];
     if (getentropy(seed, sizeof seed) == 0) {
         hash_seed[0] = seed[0] ^ wyp[0];
@@ -57,7 +57,7 @@ void tk_hash_init(void) {
     }
 }
 
-uint64_t tk_hash_bytes(const void *key, size_t len) {
+uint64_t sn_hash_bytes(const void *key, size_t len) {
     const uint8_t *p = key;
     uint64_t seed = hash_seed[0];
     seed ^= wymix(seed ^ wyp[0], wyp[1]);
@@ -104,10 +104,10 @@ uint64_t tk_hash_bytes(const void *key, size_t len) {
     return wymix(a ^ wyp[0] ^ len, b ^ wyp[1]);
 }
 
-// tk_hash_mix folds the hash v of a part of a key into h, the hash of
+// sn_hash_mix folds the hash v of a part of a key into h, the hash of
 // the parts before it, keyed by the seed: a struct, a tuple or an
-// option hashes its parts in turn, and a number is tk_hash_mix(0, n).
-uint64_t tk_hash_mix(uint64_t h, uint64_t v) {
+// option hashes its parts in turn, and a number is sn_hash_mix(0, n).
+uint64_t sn_hash_mix(uint64_t h, uint64_t v) {
     return wymix(h ^ hash_seed[1] ^ wyp[2], v ^ wyp[3]);
 }
 
@@ -130,11 +130,11 @@ enum { ctrl_empty = 0xFF, ctrl_deleted = 0x80 };
 
 static const uint64_t lo_bits = 0x0101010101010101u, hi_bits = 0x8080808080808080u;
 
-static void *key_at(const tk_map *m, const tk_map_type *t, int64_t i) { return (char *)m->keys + (size_t)i * t->ksize; }
-static void *val_at(const tk_map *m, const tk_map_type *t, int64_t i) { return (char *)m->vals + (size_t)i * t->vsize; }
-static uint32_t *slot_entries(const tk_map *m) { return (uint32_t *)(m->ctrl + m->slots); }
+static void *key_at(const sn_map *m, const sn_map_type *t, int64_t i) { return (char *)m->keys + (size_t)i * t->ksize; }
+static void *val_at(const sn_map *m, const sn_map_type *t, int64_t i) { return (char *)m->vals + (size_t)i * t->vsize; }
+static uint32_t *slot_entries(const sn_map *m) { return (uint32_t *)(m->ctrl + m->slots); }
 
-static inline uint64_t group_at(const tk_map *m, uint64_t g) {
+static inline uint64_t group_at(const sn_map *m, uint64_t g) {
     uint64_t w;
     memcpy(&w, m->ctrl + g * 8, 8); // little-endian: byte j of the group is bits 8j to 8j+7
     return w;
@@ -154,7 +154,7 @@ static inline uint64_t match_free(uint64_t w) { return w & hi_bits; } // empty o
 // key_hash is the hash a map files a key under: the type's hash, keyed
 // once more, since a Hash method of the program's may return the key
 // itself; never zero, which marks an emptied entry.
-static inline uint64_t key_hash(const tk_map_type *t, const void *key) {
+static inline uint64_t key_hash(const sn_map_type *t, const void *key) {
     uint64_t h = wymix(t->hash(key) ^ hash_seed[0], wyp[1]);
     return h != 0 ? h : 1;
 }
@@ -162,7 +162,7 @@ static inline uint64_t key_hash(const tk_map_type *t, const void *key) {
 static inline uint8_t tag(uint64_t h) { return (uint8_t)(h >> 57); }
 
 // find_slot returns the slot holding key, of hash h, or -1.
-static int64_t find_slot(const tk_map *m, const tk_map_type *t, const void *key, uint64_t h) {
+static int64_t find_slot(const sn_map *m, const sn_map_type *t, const void *key, uint64_t h) {
     uint64_t gmask = ((uint64_t)m->slots >> 3) - 1;
     uint64_t g = h & gmask;
     const uint32_t *entries = slot_entries(m);
@@ -187,7 +187,7 @@ static int64_t find_slot(const tk_map *m, const tk_map_type *t, const void *key,
 // free_slot returns the first empty or deleted slot on the probe path
 // of hash h: a new key goes there, before any group a lookup of it
 // would stop at.
-static uint64_t free_slot(const tk_map *m, uint64_t h) {
+static uint64_t free_slot(const sn_map *m, uint64_t h) {
     uint64_t gmask = ((uint64_t)m->slots >> 3) - 1;
     uint64_t g = h & gmask;
     for (uint64_t step = 1;; step++) {
@@ -206,7 +206,7 @@ static size_t round16(size_t n) { return (n + 15) & ~(size_t)15; }
 // when dropping the emptied entries makes enough, else doubles it, and
 // indexes the live entries again from their stored hashes, with no key
 // hashed or compared. The live entries keep their order.
-static void rebuild(tk_map *m, const tk_map_type *t, int64_t need) {
+static void rebuild(sn_map *m, const sn_map_type *t, int64_t need) {
     int64_t cap = m->cap < 8 ? 8 : m->cap;
     if (need > cap / 2 && m->cap > 0) {
         cap *= 2;
@@ -217,12 +217,12 @@ static void rebuild(tk_map *m, const tk_map_type *t, int64_t need) {
     }
 
     if (cap > (int64_t)UINT32_MAX) {
-        tk_panic(TK_STR("map: too many entries", 21));
+        sn_panic(SN_STR("map: too many entries", 21));
     }
 
     size_t koff = 0, voff = round16((size_t)cap * t->ksize), hoff = voff + round16((size_t)cap * t->vsize);
-    char *block = tk_alloc(hoff + (size_t)cap * sizeof(uint64_t));
-    tk_map n = {0};
+    char *block = sn_alloc(hoff + (size_t)cap * sizeof(uint64_t));
+    sn_map n = {0};
     n.keys = block + koff;
     n.vals = block + voff;
     n.hashes = (uint64_t *)(block + hoff);
@@ -232,7 +232,7 @@ static void rebuild(tk_map *m, const tk_map_type *t, int64_t need) {
         n.slots *= 2;
     }
 
-    n.ctrl = tk_alloc((size_t)n.slots * (1 + sizeof(uint32_t)));
+    n.ctrl = sn_alloc((size_t)n.slots * (1 + sizeof(uint32_t)));
     memset(n.ctrl, ctrl_empty, (size_t)n.slots);
     uint32_t *entries = slot_entries(&n);
     for (int64_t i = 0; i < m->len; i++) {
@@ -251,13 +251,13 @@ static void rebuild(tk_map *m, const tk_map_type *t, int64_t need) {
     }
 
     n.count = n.len;
-    tk_free(m->keys);
-    tk_free(m->ctrl);
+    sn_free(m->keys);
+    sn_free(m->ctrl);
     *m = n;
 }
 
-void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key) {
-    tk_check_map(m);
+void *sn_map_find(const sn_map *m, const sn_map_type *t, const void *key) {
+    sn_check_map(m);
     if (m->count == 0) {
         return NULL;
     }
@@ -266,13 +266,13 @@ void *tk_map_find(const tk_map *m, const tk_map_type *t, const void *key) {
     return s < 0 ? NULL : val_at(m, t, slot_entries(m)[s]);
 }
 
-const void *tk_map_get(const tk_map *m, const tk_map_type *t, const void *key, const void *zero) {
-    const void *v = tk_map_find(m, t, key);
+const void *sn_map_get(const sn_map *m, const sn_map_type *t, const void *key, const void *zero) {
+    const void *v = sn_map_find(m, t, key);
     return v == NULL ? zero : v;
 }
 
-void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key, void **added) {
-    tk_check_map(m);
+void *sn_map_slot(sn_map *m, const sn_map_type *t, const void *key, void **added) {
+    sn_check_map(m);
     uint64_t h = key_hash(t, key);
     if (m->count > 0) {
         int64_t s = find_slot(m, t, key, h);
@@ -298,10 +298,10 @@ void *tk_map_slot(tk_map *m, const tk_map_type *t, const void *key, void **added
     return val_at(m, t, e);
 }
 
-void tk_map_reserve(tk_map *m, const tk_map_type *t, int64_t n) {
-    tk_check_map(m);
+void sn_map_reserve(sn_map *m, const sn_map_type *t, int64_t n) {
+    sn_check_map(m);
     if (n < 0) {
-        tk_panic(TK_STR("makemap: size out of range", 26));
+        sn_panic(SN_STR("makemap: size out of range", 26));
     }
 
     if (n > m->cap) {
@@ -309,8 +309,8 @@ void tk_map_reserve(tk_map *m, const tk_map_type *t, int64_t n) {
     }
 }
 
-bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) {
-    tk_check_map(m);
+bool sn_map_remove(sn_map *m, const sn_map_type *t, const void *key, void *out) {
+    sn_check_map(m);
     if (m->count == 0) {
         return false;
     }
@@ -342,9 +342,9 @@ bool tk_map_remove(tk_map *m, const tk_map_type *t, const void *key, void *out) 
     return true;
 }
 
-void tk_map_free(tk_map *m, const tk_map_type *t) {
-    tk_check_map(m);
-    for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
+void sn_map_free(sn_map *m, const sn_map_type *t) {
+    sn_check_map(m);
+    for (int64_t i = sn_map_next(m, 0); i >= 0; i = sn_map_next(m, i + 1)) {
         if (t->kdrop != NULL) {
             t->kdrop(key_at(m, t, i));
         }
@@ -354,22 +354,22 @@ void tk_map_free(tk_map *m, const tk_map_type *t) {
         }
     }
 
-    tk_free(m->keys);
-    tk_free(m->ctrl);
+    sn_free(m->keys);
+    sn_free(m->ctrl);
     memset(m, 0, sizeof *m);
-    TK_POISON(*m);
+    SN_POISON(*m);
 }
 
-// tk_map_clone copies the bytes of the live entries in order into a map
+// sn_map_clone copies the bytes of the live entries in order into a map
 // of their own, indexed from their hashes: the backends clone what the
 // keys and values own.
-void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
-    tk_check_map(m);
-    tk_map n = {0};
+void sn_map_clone(const sn_map *m, const sn_map_type *t, sn_map *out) {
+    sn_check_map(m);
+    sn_map n = {0};
     if (m->count > 0) {
         rebuild(&n, t, m->count);
         uint32_t *entries = slot_entries(&n);
-        for (int64_t i = tk_map_next(m, 0); i >= 0; i = tk_map_next(m, i + 1)) {
+        for (int64_t i = sn_map_next(m, 0); i >= 0; i = sn_map_next(m, i + 1)) {
             int64_t e = n.len++;
             memcpy(key_at(&n, t, e), key_at(m, t, i), t->ksize);
             memcpy(val_at(&n, t, e), val_at(m, t, i), t->vsize);
@@ -385,8 +385,8 @@ void tk_map_clone(const tk_map *m, const tk_map_type *t, tk_map *out) {
     *out = n;
 }
 
-int64_t tk_map_next(const tk_map *m, int64_t i) {
-    tk_check_map(m);
+int64_t sn_map_next(const sn_map *m, int64_t i) {
+    sn_check_map(m);
     for (; i < m->len; i++) {
         if (m->hashes[i] != 0) {
             return i;

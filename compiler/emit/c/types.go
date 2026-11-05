@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The state of a C type definition, kept per C type name: C needs a
@@ -28,7 +28,7 @@ const (
 // makes a compound literal with (T) in front.
 const zeroValue = "{0}"
 
-// cType writes the C type for a Teak type and makes sure the type is
+// cType writes the C type for a Snello type and makes sure the type is
 // complete, so a value of it can be declared. A kind the backend does
 // not lower yet is reported and written as void so the output still
 // reads.
@@ -37,7 +37,7 @@ func (e *Emitter) cType(t types.Type, pos token.Pos) string {
 	return e.typeName(t, pos)
 }
 
-// typeName writes the C name of a Teak type, declaring it when it is a
+// typeName writes the C name of a Snello type, declaring it when it is a
 // struct the output has not seen; the type may still be incomplete,
 // which is all a pointer to it needs.
 func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
@@ -64,20 +64,20 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	case *types.Pointer:
 		return e.typeName(t.Elem(), pos) + " *"
 	case *types.Chan:
-		return "tk_chan *"
+		return "sn_chan *"
 	case *types.Option, *types.Result, *types.Slice, *types.Array, *types.Signature:
 		return e.declare(t)
 	case *types.Map:
-		name := "tk_" + lower.Mangle(t)
+		name := "sn_" + lower.Mangle(t)
 		if e.state[name] == undeclared {
 			e.state[name] = defined
-			put(&e.decls, "typedef tk_map ", name, ";\n")
+			put(&e.decls, "typedef sn_map ", name, ";\n")
 		}
 
 		return name
 	case *types.Tuple:
 		if t == types.Unit {
-			return "tk_unit"
+			return "sn_unit"
 		}
 
 		return e.declare(t)
@@ -99,7 +99,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 // declare writes the forward declaration of a synthesized struct type
 // once and returns its name.
 func (e *Emitter) declare(t types.Type) string {
-	name := "tk_" + lower.Mangle(t)
+	name := "sn_" + lower.Mangle(t)
 	if e.state[name] == undeclared {
 		e.state[name] = declared
 		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
@@ -133,7 +133,7 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		})
 	case *types.Slice:
 		e.defineStruct(t, pos, func() string {
-			return "\t" + e.typeName(t.Elem(), pos) + " *ptr;\n\ttk_int len;\n\ttk_int cap;\n"
+			return "\t" + e.typeName(t.Elem(), pos) + " *ptr;\n\tsn_int len;\n\tsn_int cap;\n"
 		})
 	case *types.Array: // a struct, so that it is copied and passed as a value; the element is defined whole, since it is inside
 		e.defineStruct(t, pos, func() string {
@@ -141,7 +141,7 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		})
 	case *types.Signature:
 		e.defineStruct(t, pos, func() string {
-			return "\t" + e.resultType(t, pos) + " (*fn)(" + e.closureParams(t, pos) + ");\n\tuint64_t box[TK_BOX_WORDS];\n"
+			return "\t" + e.resultType(t, pos) + " (*fn)(" + e.closureParams(t, pos) + ");\n\tuint64_t box[SN_BOX_WORDS];\n"
 		})
 	case *types.Tuple:
 		if t == types.Unit {
@@ -202,7 +202,7 @@ func (e *Emitter) defineStruct(t types.Type, pos token.Pos, fields func() string
 
 func (e *Emitter) structFields(s *types.Struct, pos token.Pos) string {
 	if s.NumFields() == 0 {
-		return "\tchar tk_pad;\n"
+		return "\tchar sn_pad;\n"
 	}
 
 	var b strings.Builder
@@ -218,7 +218,7 @@ func (e *Emitter) structFields(s *types.Struct, pos token.Pos) string {
 // method is live: built and not moved away, so its Drop runs once.
 func liveFlag(t types.Type) string {
 	if hasDrop(t) {
-		return "\tbool tk_live;\n"
+		return "\tbool sn_live;\n"
 	}
 
 	return ""
@@ -271,7 +271,7 @@ func variantMember(v *types.Variant) string {
 	return lower.Ident(v.Name())
 }
 
-// depth is the number of C pointers in front of the value of a Teak
+// depth is the number of C pointers in front of the value of a Snello
 // type: one per mut borrow and per owned pointer, none for a ref.
 func depth(t types.Type) int {
 	switch t := t.(type) {
@@ -288,12 +288,12 @@ func depth(t types.Type) int {
 	return 0
 }
 
-// deref writes v, a C value of Teak type t, dereferenced to the value.
+// deref writes v, a C value of Snello type t, dereferenced to the value.
 func deref(v string, t types.Type) string {
 	return derefTo(v, t, nil)
 }
 
-// derefTo writes v, a C value of Teak type have, read down to the
+// derefTo writes v, a C value of Snello type have, read down to the
 // pointer depth of want: through a mut borrow, which is a C pointer
 // to the place, and through an owned pointer, which a debug build
 // checks first.
@@ -307,7 +307,7 @@ func derefTo(v string, have, want types.Type) string {
 
 			t = u.Elem()
 		case *types.Pointer:
-			v = "TK_DEREF(" + v + ")"
+			v = "SN_DEREF(" + v + ")"
 			t = u.Elem()
 		}
 	}
@@ -315,7 +315,7 @@ func derefTo(v string, have, want types.Type) string {
 	return v
 }
 
-// literal writes a tk_string for constant text.
+// literal writes a sn_string for constant text.
 func literal(s string) string {
-	return "TK_STR(" + cString(s) + ", " + strconv.Itoa(len(s)) + ")"
+	return "SN_STR(" + cString(s) + ", " + strconv.Itoa(len(s)) + ")"
 }

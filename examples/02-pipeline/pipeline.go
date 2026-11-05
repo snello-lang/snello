@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 // Version 1: idiomatic Go.
 //
-// The same three-stage pipeline. Compare line by line with pipeline.teak:
+// The same three-stage pipeline. Compare line by line with pipeline.snello:
 // the shape is identical. The difference is what the compiler lets you do
 // wrong, shown at the bottom.
 
@@ -32,7 +32,7 @@ func produce(n int) <-chan Job {
 	go func() {
 		defer close(out)
 		for i := 0; i < n; i++ {
-			job := Job{id: i, text: strings.Repeat("teak ", i)}
+			job := Job{id: i, text: strings.Repeat("snello ", i)}
 			out <- job
 			// job is still usable here. Go copied the struct; the string
 			// inside is shared with the receiver until the GC frees it.
@@ -86,7 +86,7 @@ func main() {
 	fmt.Println(total) // 45
 }
 
-// What Go accepts that Teak rejects. All three compile and run in Go.
+// What Go accepts that Snello rejects. All three compile and run in Go.
 //
 //	m := map[string]int{}
 //	go func() { m["a"] = 1 }()

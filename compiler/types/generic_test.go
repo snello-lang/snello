@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/parser"
+	"github.com/snello-lang/snello/compiler/parser"
 )
 
 // genericPrelude declares the generic types the cases use: a list with
@@ -244,7 +244,7 @@ func TestGenericFunctions(t *testing.T) {
 // backend writes one copy of the function for.
 func TestInstances(t *testing.T) {
 	src := "package p\nfunc Id<T>(x T) T { return x }\nfunc f() { a := Id(1); b := Id(\"s\"); print(a); print(b) }\n"
-	f, file, err := parser.ParseFile("t.teak", []byte(src))
+	f, file, err := parser.ParseFile("t.snello", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 )
 
-// A Program is a Teak program and what running it must give: its
+// A Program is a Snello program and what running it must give: its
 // standard output exactly, unless AnyOut says the output varies; text
 // its standard error contains; its exit code. It runs as a release
 // build and as a debug build, unless ReleaseOnly says the debug build
@@ -1240,7 +1240,7 @@ func main() {
 	same := 0
 	for i := 0; i < len(sizes); i++ {
 		n := sizes[i]
-		want := strings.Repeat("teak", n / 4) + strings.Repeat("!", n % 4)
+		want := strings.Repeat("data", n / 4) + strings.Repeat("!", n % 4)
 		p := dir + "/f" + fmt.Sprint(n)
 		os.WriteString(ref p, ref want).Expect("write")
 		got := os.ReadToString(ref p).Expect("read")

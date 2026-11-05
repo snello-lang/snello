@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The arena package written in Teak: an Arena of strings inserted
+// The arena package written in Snello: an Arena of strings inserted
 // into, read, changed and removed from; a stale Index answering None to
 // Get, GetMut and Remove after its slot is reused, while the new Index
 // of the same slot answers the new value; an Index printed as its slot

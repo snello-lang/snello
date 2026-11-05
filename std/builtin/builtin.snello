@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package builtin documents what every Teak program has without an
+// Package builtin documents what every Snello program has without an
 // import: the basic types, Option and Result, the methods of slices,
 // maps and strings, the built-in functions and the standard traits.
 // The compiler provides every one of them; this file is their

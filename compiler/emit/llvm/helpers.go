@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Some operations on a composite type need a function of their own:
@@ -56,7 +56,7 @@ func (e *Emitter) join(a, b text) text {
 		flags |= 2
 	}
 
-	return text{e.rt("tk_join", "%tk_string", a.v, b.v, value{"i32", strconv.Itoa(flags)}), true}
+	return text{e.rt("sn_join", "%sn_string", a.v, b.v, value{"i32", strconv.Itoa(flags)}), true}
 }
 
 // joined writes the concatenation of open, the parts separated by sep,
@@ -75,7 +75,7 @@ func (e *Emitter) joined(open, close, sep string, parts []text) text {
 }
 
 // concat writes the concatenation of the pieces as one string the
-// caller owns. Two pieces are one tk_join, which allocates once; more
+// caller owns. Two pieces are one sn_join, which allocates once; more
 // are built in one allocation too: the whole is sized from the texts'
 // lengths and the literals' before a byte is copied, then every piece
 // is appended and the texts built here are dropped. fmt's printing
@@ -120,8 +120,8 @@ func (e *Emitter) concat(pieces []piece, pos token.Pos) value {
 		size = e.op("add i64 "+size.s+", "+strconv.Itoa(known), "i64")
 	}
 
-	buf := e.slot("%tk_slice")
-	e.store(value{"%tk_slice", "zeroinitializer"}, buf)
+	buf := e.slot("%sn_slice")
+	e.store(value{"%sn_slice", "zeroinitializer"}, buf)
 	done := ""
 	if known == 0 { // an empty result owns nothing, so no block is made for it
 		some := e.op("icmp sgt i64 "+size.s+", 0", "i1")
@@ -131,14 +131,14 @@ func (e *Emitter) concat(pieces []piece, pos token.Pos) value {
 		e.label(alloc)
 	}
 
-	e.rt("tk_slice_make", "void", value{"ptr", buf}, value{"i64", "0"}, size, value{"i64", "1"})
+	e.rt("sn_slice_make", "void", value{"ptr", buf}, value{"i64", "0"}, size, value{"i64", "1"})
 	if done != "" {
 		e.jump(done)
 		e.label(done)
 	}
 
 	for _, p := range pieces {
-		e.rt("tk_strings_appendString", "void", value{"ptr", buf}, e.pieceText(p).v)
+		e.rt("sn_strings_appendString", "void", value{"ptr", buf}, e.pieceText(p).v)
 	}
 
 	for _, p := range pieces {
@@ -147,7 +147,7 @@ func (e *Emitter) concat(pieces []piece, pos token.Pos) value {
 		}
 	}
 
-	return e.load("%tk_string", buf)
+	return e.load("%sn_string", buf)
 }
 
 // pieceText returns the piece as a text: a literal is lent.
@@ -166,13 +166,13 @@ func (e *Emitter) built(t text) value {
 	case t.v.typ == "":
 		return e.constString("")
 	case !t.owned:
-		return e.rt("tk_string_clone", "%tk_string", t.v)
+		return e.rt("sn_string_clone", "%sn_string", t.v)
 	}
 
 	return t.v
 }
 
-// textOf writes the conversion of v, a value of the Teak type t, to a
+// textOf writes the conversion of v, a value of the Snello type t, to a
 // string: the value is read through its borrows and pointers and
 // turned into text at its address.
 func (e *Emitter) textOf(v value, t types.Type, pos token.Pos, quoted bool) text {
@@ -231,9 +231,9 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		}
 
 		name, _ := e.methodNameOf(nil, n, method, pos)
-		msg := e.op("call %tk_string @"+name+"(ptr "+p+")", "%tk_string")
+		msg := e.op("call %sn_string @"+name+"(ptr "+p+")", "%sn_string")
 		if quoted {
-			return text{e.rt("tk_quote_owned", "%tk_string", msg), true}
+			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
 		}
 
 		return text{msg, true}
@@ -241,26 +241,26 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 
 	b, ok := t.Underlying().(*types.Basic)
 	if !ok {
-		return text{e.op("call %tk_string @"+e.stringer(t, pos)+"(ptr "+p+")", "%tk_string"), true}
+		return text{e.op("call %sn_string @"+e.stringer(t, pos)+"(ptr "+p+")", "%sn_string"), true}
 	}
 
 	ir := e.irType(t, pos)
 	v := e.load(ir, p)
 	switch {
 	case isString(b) && quoted:
-		return text{e.rt("tk_quote", "%tk_string", v), true}
+		return text{e.rt("sn_quote", "%sn_string", v), true}
 	case isString(b):
 		return text{v, false}
 	case b.Kind() == types.Bool:
-		return text{e.rt("tk_bool_to_string", "%tk_string", v), false}
+		return text{e.rt("sn_bool_to_string", "%sn_string", v), false}
 	case b.Info()&types.IsFloat != 0 && ir == "float": // the fewest digits that read back as the same f32
-		return text{e.rt("tk_f32_to_string", "%tk_string", v), true}
+		return text{e.rt("sn_f32_to_string", "%sn_string", v), true}
 	case b.Info()&types.IsFloat != 0:
-		return text{e.rt("tk_f64_to_string", "%tk_string", v), true}
+		return text{e.rt("sn_f64_to_string", "%sn_string", v), true}
 	case b.Info()&types.IsUnsigned != 0:
-		return text{e.rt("tk_uint_to_string", "%tk_string", e.widen(v, false)), true}
+		return text{e.rt("sn_uint_to_string", "%sn_string", e.widen(v, false)), true}
 	case b.Info()&types.IsInteger != 0:
-		return text{e.rt("tk_int_to_string", "%tk_string", e.widen(v, true)), true}
+		return text{e.rt("sn_int_to_string", "%sn_string", e.widen(v, true)), true}
 	}
 
 	e.unsupported(pos, "printing values of type "+t.String())
@@ -289,13 +289,13 @@ func (e *Emitter) widen(v value, signed bool) value {
 // A string inside a constructor is quoted, so the text reads as the
 // value would be written; inside a struct, tuple or slice it is not.
 func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
-	name := "tk_str_" + lower.Mangle(t)
+	name := "sn_str_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
 
 	e.state[name] = true
-	e.helper(name, "%tk_string", []string{"ptr %v"}, func() {
+	e.helper(name, "%sn_string", []string{"ptr %v"}, func() {
 		ir := e.irType(t, pos)
 		switch u := t.Underlying().(type) {
 		case *types.Struct:
@@ -354,18 +354,18 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 		case *types.Map:
 			out := e.spill(e.constString("map["))
 			e.eachEntry("%v", u, pos, func(k, v string) {
-				n := e.load("i64", e.gep("%tk_string", out, 1))
+				n := e.load("i64", e.gep("%sn_string", out, 1))
 				started := e.op("icmp sgt i64 "+n.s+", 4", "i1")
 				sep, next := e.block("sep"), e.block("entry")
 				e.branch(started.s, sep, next)
 				e.label(sep)
-				e.store(e.join(text{e.load("%tk_string", out), true}, e.lit(" ")).v, out)
+				e.store(e.join(text{e.load("%sn_string", out), true}, e.lit(" ")).v, out)
 				e.jump(next)
 				e.label(next)
-				entry := e.join(e.join(text{e.load("%tk_string", out), true}, e.textAt(k, u.Key(), pos, false)), e.lit(":"))
+				entry := e.join(e.join(text{e.load("%sn_string", out), true}, e.textAt(k, u.Key(), pos, false)), e.lit(":"))
 				e.store(e.join(entry, e.textAt(v, u.Value(), pos, false)).v, out)
 			})
-			e.ret(e.join(text{e.load("%tk_string", out), true}, e.lit("]")))
+			e.ret(e.join(text{e.load("%sn_string", out), true}, e.lit("]")))
 		case *types.Slice:
 			e.elements(func(body func(p, i string)) { e.eachElementIndexed("%v", u.Elem(), pos, body) }, u.Elem(), pos)
 		case *types.Array:
@@ -424,12 +424,12 @@ func (e *Emitter) elements(each func(body func(p, i string)), elem types.Type, p
 		sep, next := e.block("sep"), e.block("elem")
 		e.branch(first.s, next, sep)
 		e.label(sep)
-		e.store(e.join(text{e.load("%tk_string", out), true}, e.lit(" ")).v, out)
+		e.store(e.join(text{e.load("%sn_string", out), true}, e.lit(" ")).v, out)
 		e.jump(next)
 		e.label(next)
-		e.store(e.join(text{e.load("%tk_string", out), true}, e.textAt(p, elem, pos, false)).v, out)
+		e.store(e.join(text{e.load("%sn_string", out), true}, e.textAt(p, elem, pos, false)).v, out)
 	})
-	e.ret(e.join(text{e.load("%tk_string", out), true}, e.lit("]")))
+	e.ret(e.join(text{e.load("%sn_string", out), true}, e.lit("]")))
 }
 
 // ret ends the function being written returning the text as a string
@@ -490,7 +490,7 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) value {
 		ir := e.irType(t, pos)
 		l, r := e.load(ir, a), e.load(ir, b)
 		if isString(basic) {
-			return e.rt("tk_string_eq", "i1", l, r)
+			return e.rt("sn_string_eq", "i1", l, r)
 		}
 
 		if isFloat(basic) {
@@ -511,7 +511,7 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) value {
 // comparer returns the name of the function comparing two values of a
 // composite type part by part, writing it on first use.
 func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
-	name := "tk_eq_" + lower.Mangle(t)
+	name := "sn_eq_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -629,10 +629,10 @@ func (e *Emitter) hashParts(p string, t types.Type, pos token.Pos) value {
 		switch {
 		case isString(u):
 			s := e.load(ir, p)
-			return e.rt("tk_hash_bytes", "i64", e.extract(s, 0, "ptr"), e.extract(s, 1, "i64"))
+			return e.rt("sn_hash_bytes", "i64", e.extract(s, 0, "ptr"), e.extract(s, 1, "i64"))
 		case isFloat(u):
 			v := e.load(ir, p)
-			h := e.rt("tk_hash_bytes", "i64", value{"ptr", p}, value{"i64", strconv.FormatInt(e.size(t), 10)})
+			h := e.rt("sn_hash_bytes", "i64", value{"ptr", p}, value{"i64", strconv.FormatInt(e.size(t), 10)})
 			isZero := e.op("fcmp oeq "+v.typed()+", 0.0", "i1")
 			return e.op("select i1 "+isZero.s+", i64 0, "+h.typed(), "i64") // 0.0 and -0.0 are equal, so they hash alike
 		}
@@ -677,14 +677,14 @@ func (e *Emitter) hashParts(p string, t types.Type, pos token.Pos) value {
 
 // mix folds v into the hash h through the runtime.
 func (e *Emitter) mix(h, v value) value {
-	return e.rt("tk_hash_mix", "i64", h, v)
+	return e.rt("sn_hash_mix", "i64", h, v)
 }
 
 // hasher returns the name of the function hashing a value of a
 // declared type part by part, the derived Hash, writing it on first
 // use; an enum mixes its tag with the payload of its variant.
 func (e *Emitter) hasher(t types.Type, pos token.Pos) string {
-	name := "tk_hash_" + lower.Mangle(t)
+	name := "sn_hash_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -745,7 +745,7 @@ func (e *Emitter) compare(a, b string, t types.Type, pos token.Pos) value {
 		ir := e.irType(t, pos)
 		l, r := e.load(ir, a), e.load(ir, b)
 		if isString(basic) {
-			return e.order(e.rt("tk_string_cmp", "i32", l, r))
+			return e.order(e.rt("sn_string_cmp", "i32", l, r))
 		}
 
 		less := e.op("zext i1 "+e.less(l, r, t).s+" to i32", "i32")
@@ -774,7 +774,7 @@ func (e *Emitter) order(c value) value {
 // declaration order, with the payloads compared when the variants
 // agree.
 func (e *Emitter) orderer(t types.Type, pos token.Pos) string {
-	name := "tk_cmp_" + lower.Mangle(t)
+	name := "sn_cmp_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}

@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The rc package written in Teak: an Rc of a string cloned, read
+// The rc package written in Snello: an Rc of a string cloned, read
 // through every handle, changed through GetMut only while it is the one
 // handle, and counted; a value with a Drop method dropped when its last
 // Rc goes and not before, a Weak that does not keep it alive, upgraded

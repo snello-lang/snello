@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@ package ast
 import (
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // TestPrint builds the tree for
@@ -22,7 +22,7 @@ import (
 func TestPrint(t *testing.T) {
 	// A file with four lines of 40 bytes, so line:column maps to an offset
 	// the printer can resolve back.
-	file := token.NewFile("test.teak", 160)
+	file := token.NewFile("test.snello", 160)
 	for _, start := range []int{40, 80, 120} {
 		file.AddLine(start)
 	}
@@ -196,7 +196,7 @@ func TestPrint(t *testing.T) {
 // those are the ones that can point at the wrong token: a qualified type
 // starts at its package, a named field at its first name.
 func TestPos(t *testing.T) {
-	file := token.NewFile("test.teak", 100)
+	file := token.NewFile("test.snello", 100)
 	at := func(col int) token.Pos { return file.Pos(col - 1) }
 	id := func(col int, name string) *Ident { return &Ident{NamePos: at(col), Name: name} }
 

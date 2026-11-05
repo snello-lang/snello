@@ -1,6 +1,6 @@
 # 6. Borrows: `ref` and `mut`
 
-Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); all six rules are checked (stage 1, tasks 1.7 and 1.8, `teak check`). Until the closure environment copies moved values, a closure that captures a local, even by moving it, counts as a borrow of it. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.teak` shows closures that keep the rules.
+Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); all six rules are checked (stage 1, tasks 1.7 and 1.8, `snello check`). Until the closure environment copies moved values, a closure that captures a local, even by moving it, counts as a borrow of it. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.snello` shows closures that keep the rules.
 
 Moving is the right thing when the callee keeps the value. Most functions do not keep it; they look at it, or change it, and give it back. For those, a value is **borrowed**: lent to the callee for the length of the call, with the owner unchanged. A borrow is written `ref T` to read or `mut T` to change.
 
@@ -18,7 +18,7 @@ The choice, in one line: **reading it, `ref`; changing it, `mut`; keeping it, se
 
 ## At the call site
 
-```teak
+```snello
 strings.Fields(ref job.text)          // lend the text for the call; ref is optional here
 io.Copy(mut out, mut in)              // both lent mutably for the duration of the copy
 x.Describe()                          // a receiver borrows itself: no keyword
@@ -28,7 +28,7 @@ Passing an owned value to a `ref` parameter borrows it with no keyword, as a rec
 
 A borrow can also be bound to a local name, and then it lives from that line to the last line that uses the name:
 
-```teak
+```snello
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
 if !n.live { return }
 visit(n)
@@ -49,7 +49,7 @@ The compiler enforces six rules. They are what make it possible to never write d
 
 Rule 6 reaches one value the others do not name: a temporary, a value no variable holds, such as the result of `s.Clone()` in `s.Clone().Trim()`. A temporary is dropped when its statement ends, so a borrow of it can be used inside the statement, `fmt.Println(s.Clone().Trim())`, ranged over, matched on, but not kept in a variable or returned:
 
-```teak
+```snello
 t := s.Clone().Trim()                 // ERROR "cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends"
 ```
 
@@ -57,7 +57,7 @@ Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, whic
 
 Rule 4 is the one you will meet first. A method with a `mut` receiver creates a `mut` borrow, so a `ref` held across the call is a conflict:
 
-```teak
+```snello
 xs := []int{1, 2}
 r := ref xs
 xs.Push(3)                            // ERROR "cannot borrow xs as mut: xs is borrowed as ref"
@@ -76,7 +76,7 @@ While a value is lent `mut`, the owner may not even read it: `a := mut n; fmt.Pr
 
 Rule 5 is what makes pointer-chasing code possible. A borrow variable can be re-pointed at a borrow reached through itself, so a `mut` walk down a chain of `*Node?` slots is one loop:
 
-```teak
+```snello
 func (t mut Tree) Insert(k int, v string) {
     cur := mut t.root
     for {
@@ -97,7 +97,7 @@ Each `cur = mut n.left` ends the old borrow and starts one derived from it, with
 
 Two `mut` borrows into one slice at the same time are rejected, because the compiler cannot prove `i` and `j` differ:
 
-```teak
+```snello
 a := mut xs[i]
 b := mut xs[j]                        // ERROR "cannot borrow xs[j] as mut: xs is already borrowed as mut"
 ```
@@ -116,7 +116,7 @@ A `mut` binding through a map read is refused, because `m[k]` for a key the map 
 
 A method may return a borrow into its receiver, and the result lives as long as the receiver borrow does:
 
-```teak
+```snello
 func (s ref Stack) Peek() ref string? {
     n := s.head ?? return None
     return Some(ref n.value)
@@ -125,7 +125,7 @@ func (s ref Stack) Peek() ref string? {
 
 A function may do the same with its only borrowed parameter: `func Trim(s ref string) ref string`. With two borrowed parameters the source is ambiguous and the function cannot be written; return a clone, or an index that says which one:
 
-```teak
+```snello
 func Longest(a ref string, b ref string) ref string {    // ERROR "Longest returns a borrow but has two borrowed parameters"
 ```
 
@@ -135,7 +135,7 @@ This is the price of never writing down how long a borrow lasts: the few functio
 
 A struct with a `ref` or `mut` field is itself a borrow. It can be built and used inside a function and dropped before the function returns, which is exactly what a lexer needs:
 
-```teak
+```snello
 struct Lexer {
     src ref string          // the Lexer is therefore a borrow
     pos int

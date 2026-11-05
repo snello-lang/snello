@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 4: file copying with deterministic cleanup.
 //
-// The core version of 14-files.teak. Stresses: `Drop` versus `defer`, a consuming
+// The core version of 14-files.snello. Stresses: `Drop` versus `defer`, a consuming
 // `Close` after which the file cannot be used, `?` on every library
 // call, and a user type with a `Drop` method.
 
@@ -32,7 +32,7 @@ func Copy(src ref string, dst ref string) Result<i64, io.Error> {
 struct TempDir impl Drop { path string }
 
 func NewTempDir() Result<TempDir, io.Error> {
-    p := os.MkdirTemp("", "teak")?
+    p := os.MkdirTemp("", "snello")?
     return Ok(TempDir{path: p})
 }
 

@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 6: a binary search tree with in-place insert and delete.
 //
-// The core version of 20-bst.teak with int keys and string values, so
+// The core version of 20-bst.snello with int keys and string values, so
 // comparison is `<` and `>` instead of an Ord bound. The hardest
 // ownership shape for owned pointers: walking down a chain of *Node?
 // slots with a mutable borrow, and replacing nodes in place.

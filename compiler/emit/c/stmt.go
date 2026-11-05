@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package c
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 func (e *Emitter) stmts(list []ast.Stmt) {
@@ -148,10 +148,10 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 
 		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
 			r := e.temp()
-			e.line("tk_string " + r + " = " + e.valueTo(rhs, t) + ";")
-			e.line("tk_string_append(&" + place + ", &" + r + ");")
+			e.line("sn_string " + r + " = " + e.valueTo(rhs, t) + ";")
+			e.line("sn_string_append(&" + place + ", &" + r + ");")
 			if !e.isRead(rhs) {
-				e.line("tk_string_drop(&" + r + ");")
+				e.line("sn_string_drop(&" + r + ");")
 			}
 
 			return
@@ -169,7 +169,7 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 }
 
 // assignMany writes a, b := x, y or a, b = y, x: every right side goes
-// into a temporary before any left side changes, as Teak and Go
+// into a temporary before any left side changes, as Snello and Go
 // require. With one right side, a tuple, each name takes one element.
 func (e *Emitter) assignMany(s *ast.AssignStmt) {
 	if s.Tok != token.DEFINE && s.Tok != token.ASSIGN {
@@ -295,7 +295,7 @@ func (e *Emitter) nothingToDrop() bool {
 }
 
 // ifStmt writes an if, with an init statement in a block of its own so
-// its names end with the if, as they do in Teak.
+// its names end with the if, as they do in Snello.
 func (e *Emitter) ifStmt(s *ast.IfStmt) {
 	if s.Init != nil {
 		e.line("{")
@@ -347,7 +347,7 @@ func (e *Emitter) elseBranch(els ast.Stmt) {
 	}
 }
 
-// forStmt writes Teak's three loop forms. A condition that calls,
+// forStmt writes Snello's three loop forms. A condition that calls,
 // needs statements or builds a temporary is tested at the top of the
 // body, so that what it needs runs, and its temporaries are dropped, on
 // every pass; a post statement that needs statements is written at the
@@ -417,7 +417,7 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.loops = append(e.loops, "") // continue reaches the loop's own step
 	defer func() { e.loops = e.loops[:len(e.loops)-1] }()
 	if m, ok := t.Underlying().(*types.Map); ok {
-		e.line("for (int64_t " + i + " = tk_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = tk_map_next(&" + place + ", " + i + " + 1)) {")
+		e.line("for (int64_t " + i + " = sn_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = sn_map_next(&" + place + ", " + i + " + 1)) {")
 		e.push(true)
 		e.rangeVar(s.Key, s.Tok, "(("+e.cType(m.Key(), s.Pos())+" *)"+place+".keys)["+i+"]", m.Key(), consume)
 		e.rangeVar(s.Value, s.Tok, "(("+e.cType(m.Value(), s.Pos())+" *)"+place+".vals)["+i+"]", m.Value(), consume)
@@ -434,7 +434,7 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
-	e.line("for (tk_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
+	e.line("for (sn_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
 	elem := place + ".ptr[" + i + "]"
 	var elemType types.Type = types.Typ[types.Uint8]
 	iterator := false
@@ -469,7 +469,7 @@ func (e *Emitter) rangeChan(s *ast.RangeStmt, ch string, elem types.Type) {
 	e.line("for (;;) {")
 	e.push(true)
 	e.line(e.cType(elem, s.Pos()) + " " + got + " = " + e.zero(elem, s.Pos()) + ";")
-	e.line("if (!tk_chan_recv(" + ch + ", &" + got + ")) { break; }")
+	e.line("if (!sn_chan_recv(" + ch + ", &" + got + ")) { break; }")
 	if s.Key == nil || isBlank(s.Key) {
 		if needsDrop(elem) {
 			e.line(e.dropOf(got, elem, s.Pos()))
@@ -489,11 +489,11 @@ func (e *Emitter) sendStmt(s *ast.SendStmt) {
 	ch := e.looked(s.Chan, lower.ValueType(e.typeOf(s.Chan)))
 	elem := lower.ValueType(e.typeOf(s.Chan)).Underlying().(*types.Chan).Elem()
 	v := e.spill(e.valueTo(s.Value, elem), elem, s.Pos())
-	e.line("tk_chan_send(" + ch + ", &" + v + ");")
+	e.line("sn_chan_send(" + ch + ", &" + v + ");")
 }
 
 // rangeVar binds one range variable to the C place of the current
-// item, of Teak type itemType: a new name for :=, an assignment for =,
+// item, of Snello type itemType: a new name for :=, an assignment for =,
 // nothing for _. A mut binding of the item is its address. When the
 // loop consumes its collection, an item bound by value leaves it.
 func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType types.Type, consume bool) {

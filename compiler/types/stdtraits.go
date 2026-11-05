@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/token"
+import "github.com/snello-lang/snello/compiler/token"
 
 // The binary operators a declared type can define, each through a
 // standard trait with one method: a + b is a.Add(b). The method takes

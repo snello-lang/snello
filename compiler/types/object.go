@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/token"
+import "github.com/snello-lang/snello/compiler/token"
 
 // BuiltinID identifies a predeclared function.
 type BuiltinID int
@@ -111,7 +111,7 @@ type Builtin struct {
 }
 
 // A PkgName is an imported package, the name before the dot: a
-// package written in Teak, loaded by the importer, or one of the
+// package written in Snello, loaded by the importer, or one of the
 // runtime mappings the core library table holds, which has no Package.
 // An import the importer could not find is reported once, at the
 // import, and its members are then not reported again.
@@ -207,7 +207,7 @@ func (b *Builtin) ID() BuiltinID { return b.id }
 // Path returns the import path.
 func (p *PkgName) Path() string { return p.path }
 
-// Imported returns the package written in Teak the name stands for,
+// Imported returns the package written in Snello the name stands for,
 // or nil for a package of the core library table.
 func (p *PkgName) Imported() *Package { return p.pkg }
 

@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@ package types
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
+	"github.com/snello-lang/snello/compiler/ast"
 )
 
 // formatted reports whether f is one of fmt's functions that take a
@@ -101,7 +101,7 @@ func (c *Checker) named(e ast.Expr) Object {
 
 // verbFits returns what is wrong with printing a value of type t with
 // the verb p, or "". Each verb prints the types Go's fmt prints with it
-// and Teak has: %v any value; %d an integer; %s a string, an error, or
+// and Snello has: %v any value; %d an integer; %s a string, an error, or
 // a type printing as its Error or String method, which a type
 // parameter bounded by Error or fmt.Stringer and a trait value of a
 // trait refining one do too; %q a string, such a type, or an

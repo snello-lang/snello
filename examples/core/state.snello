@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 3: a connection state machine.
 //
-// The core version of 17-state-machine.teak with the socket and the
+// The core version of 17-state-machine.snello with the socket and the
 // clock replaced by plain fields. Stresses: enums carrying different data
 // per state, exhaustive match on a tuple with guards, consuming
 // transitions that move a value from the old state into the new one, and

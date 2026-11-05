@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package parser builds the syntax tree of a Teak source file, modeled
+// Package parser builds the syntax tree of a Snello source file, modeled
 // on go/parser.
 //
 // The parser is recursive descent with one token of lookahead: it holds
@@ -18,9 +18,9 @@
 package parser
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // Recovery sets: after an error the parser skips to a token in the set
@@ -93,7 +93,7 @@ type checkpoint struct {
 	ahead   lookahead
 }
 
-// ParseFile parses src as a Teak source file. It always returns a File,
+// ParseFile parses src as a Snello source file. It always returns a File,
 // possibly partial, and the errors found, sorted by position. The
 // returned token.File resolves positions in the tree.
 func ParseFile(filename string, src []byte) (*ast.File, *token.File, error) {

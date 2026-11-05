@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -115,7 +115,7 @@ func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
 
 // Buffer sets the longest line the Scanner reads, its ending included,
 // in place of MaxScanTokenSize; a size below one is one. Go's Buffer
-// also takes the first buffer to read into, which a Teak Scanner makes
+// also takes the first buffer to read into, which a Snello Scanner makes
 // itself.
 func (s mut Scanner<R>) Buffer(size int) {
 	s.max = max(size, 1)

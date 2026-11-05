@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The strings and strconv packages written in Teak: a Builder written
+// The strings and strconv packages written in Snello: a Builder written
 // to, read and reset, Repeat and Join, ToLower and ToUpper, Fields
 // through the package, Atoi with each of its errors, Itoa, ParseFloat
 // and FormatFloat, an Error's fields read, and the conversions between
@@ -51,8 +51,8 @@ func bytesOf(s ref string) int { return len([]byte(s)) }
 
 func main() {
 	var b strings.Builder
-	b.WriteString("tea")
-	b.WriteByte('k')
+	b.WriteString("snell")
+	b.WriteByte('o')
 	fmt.Println(b.String(), b.Len())
 	b.Reset()
 	b.WriteString("again")
@@ -60,7 +60,7 @@ func main() {
 
 	parts := []string{"x", "y", "z"}
 	fmt.Println(strings.Repeat("ab", 3), strings.Join(ref parts, ", "), strings.Join(ref parts[:1], "-"))
-	fmt.Println(strings.ToUpper("Teak"), strings.ToLower("Teak"))
+	fmt.Println(strings.ToUpper("Snello"), strings.ToLower("Snello"))
 	words := 0
 	for w := range strings.Fields("  one two  three ") {
 		words += w.Len()

@@ -1,14 +1,14 @@
-# Appendix B. Teak for Go programmers
+# Appendix B. Snello for Go programmers
 
 Status: grows with the chapters; covers chapters 3 to 9, 11, 12 and 14.
 
-The chapters describe Teak on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Teak is not a Go dialect, and Go programs are not Teak programs; the syntax is familiar so that the ideas get your full attention.
+The chapters describe Snello on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Snello is not a Go dialect, and Go programs are not Snello programs; the syntax is familiar so that the ideas get your full attention.
 
 ## Chapter 3: Basics
 
 Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `switch`, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `int32`, `float64`, `uint8` | `i32`, `f64`, `u8`; `int`, `uint`, `byte`, `rune` as before |
 | Untyped constants: `x := 10 * 2.5` | A literal takes its type from context; mix types with a conversion |
@@ -27,7 +27,7 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capi
 
 Unchanged: struct fields, keyed literals, dot access, methods with receivers, `type Name T`.
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `type Node struct { ... }` | `struct Node { ... }` |
 | Value and pointer receivers, `(t Tree)` and `(t *Tree)` | Three receivers: `(t ref Tree)` reads, `(t mut Tree)` changes, `(t Tree)` takes |
@@ -41,7 +41,7 @@ Unchanged: struct fields, keyed literals, dot access, methods with receivers, `t
 
 Nothing here has a Go counterpart; the garbage collector made the questions disappear. What to unlearn:
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | Assignment copies the value or the pointer; both names stay valid | Assignment moves; the old name is dead unless the type is `Copy` |
 | Passing a slice or a struct copies its header or its bytes | Passing by value moves; pass `ref` or `mut` to keep it |
@@ -53,11 +53,11 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 
 ### Where the model comes from
 
-The ownership model is not Teak's invention. One owner per value, borrows that are either many readers or one writer, and a `Drop` that runs when the owner is done are the model Rust made mainstream, and before Rust they were the linear types of academic languages. A Rust programmer recognizes Teak's chapters 5 and 6 at once, and that is deliberate: it is the one model with a decade of proof on real systems, and it is what lets Teak drop the garbage collector that Go's simplicity leans on.
+The ownership model is not Snello's invention. One owner per value, borrows that are either many readers or one writer, and a `Drop` that runs when the owner is done are the model Rust made mainstream, and before Rust they were the linear types of academic languages. A Rust programmer recognizes Snello's chapters 5 and 6 at once, and that is deliberate: it is the one model with a decade of proof on real systems, and it is what lets Snello drop the garbage collector that Go's simplicity leans on.
 
-Where Teak differs is in what it leaves out, and this is the bet stage 1 of the compiler was built to test:
+Where Snello differs is in what it leaves out, and this is the bet stage 1 of the compiler was built to test:
 
-| In Rust | In Teak |
+| In Rust | In Snello |
 |---|---|
 | Lifetime annotations, `fn f<'a>(x: &'a T) -> &'a U`, say which input a returned borrow comes from; the hardest part of the language to learn | None. A returned borrow comes from the receiver or from the only borrowed parameter; a function where that is ambiguous is refused, and you return a clone or an index instead |
 | A borrow is a first-class value: it can live in a struct, a `Vec`, a channel, and the type system tracks its lifetime through all of them | A borrow lives inside one function and cannot be stored, sent or captured by a task; a long-lived structure that points into another uses an arena with indices (chapter 13) |
@@ -68,7 +68,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 ## Chapter 6: Borrows
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `func f(r *Rect)`: no copy, and maybe mutated, maybe kept, maybe nil | `func f(r ref Rect)` reads, `func f(r mut Rect)` changes; neither can keep it or be nil |
 | `f(&x)` | `f(mut x)` to change `x`; `f(x)` or `f(ref x)` to read it |
@@ -84,7 +84,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 ## Chapter 9: Collections
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `xs = append(xs, v)`, and remember to assign the result | `xs.Push(v)`; the slice grows in place, since it owns its elements |
 | A slice is a view; two slices may share an array and see each other's writes | A slice owns its elements; `xs[lo:hi]` is a borrow, and the borrow rules keep the two apart |
@@ -102,7 +102,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 ## Chapter 7: Owned pointers
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `&x` takes the address of a variable; the GC keeps it alive | `&expr` moves the value to the heap; the pointer owns it and nothing else may point there |
 | `p := &Node{}`; copying `p` makes a second pointer to the same node | A pointer moves; there is one owner, so no two names reach one node |
@@ -115,7 +115,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for range ch`, `select`, a task is a function started and forgotten. Changed: a channel is not copied freely; a goroutine that shares one gets its own handle, `go produce(jobs)` is `spawn produce(jobs.Clone())`, since the last handle frees the channel and there is no collector to find it.
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `go f(x)` | `spawn f(x)` |
 | `done := make(chan struct{})`; `done <- struct{}{}` | `done := make(chan ())`; `done <- ()` |
@@ -131,7 +131,7 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 
 ## Chapter 11: Traits
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `type Shape interface { Area() float64 }` | `trait Shape { func (s ref Self) Area() f64 }`: the receiver says how the method borrows the value |
 | A type satisfies an interface by having the methods | A type implements a trait by saying so, `struct Circle impl Shape { ... }`; the compiler then checks the methods |
@@ -141,11 +141,11 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 | `comparable`, `cmp.Ordered`, `any` | `Eq`, `Ord`, and no bound at all; `Copy` is a bound too |
 | `var s Shape = Circle{}`, `[]Shape`: an interface value | The same, with the same cost: one allocation, one indirect call; the value is owned and moves, and a borrow cannot become one |
 | No default methods; share code with embedding or a helper function | Default methods in the trait, `super`, and trait fields, all decided and to come |
-| Type assertions and type switches on an interface value | Not in Teak: a trait value is used through its methods, and a `match` is for enums |
+| Type assertions and type switches on an interface value | Not in Snello: a trait value is used through its methods, and a `match` is for enums |
 
 ## Chapter 12: Generics
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `type List[T any] struct { items []T }` | `struct List<T> { items []T }`: angle brackets, and no bound means no constraint |
 | `List[int]{}` | `List<int>{}` |
@@ -163,7 +163,7 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 
 Unchanged: import paths and package names, `import m "math"` to rename, exported names by capitalization, `math.Pi`, `math.Sqrt`, `math.Abs`, `math.Min`, `math.Max`, how a float prints, and the verbs `fmt` has, `%v`, `%d`, `%s`, `%q`, `%f` and `%t`, with a width and a precision.
 
-| In Go | In Teak |
+| In Go | In Snello |
 |---|---|
 | `float64` throughout `math` | `f64` throughout `math` |
 | Each package is compiled once and linked | The library is compiled with the program, into one binary, so the C compiler inlines across the boundary |

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2026 The Teak Programming Language. All rights reserved.
+# Copyright 2026 The Snello Programming Language. All rights reserved.
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
@@ -16,17 +16,17 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-go build -o "$work/teak" "$root/cmd/teak" || exit 1
+go build -o "$work/snello" "$root/cmd/snello" || exit 1
 status=0
-for src in "$root"/examples/core/*.teak; do
-    name=$(basename "$src" .teak)
+for src in "$root"/examples/core/*.snello; do
+    name=$(basename "$src" .snello)
     dir="$work/$name"
     mkdir -p "$dir"
     if [ -d "$root/examples/core/$name.files" ]; then
         cp "$root/examples/core/$name.files"/* "$dir/"
     fi
 
-    if (cd "$dir" && "$work/teak" build "$src" && "./$name" > out.txt) && diff "$root/examples/core/$name.out" "$dir/out.txt"; then
+    if (cd "$dir" && "$work/snello" build "$src" && "./$name" > out.txt) && diff "$root/examples/core/$name.out" "$dir/out.txt"; then
         echo "ok   $name"
     else
         echo "FAIL $name"

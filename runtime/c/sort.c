@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -32,7 +32,7 @@
 // slice exactly once. The element's size is known at the call: the core
 // is inlined into a copy for each common size, so that moving an
 // element is a load and a store and not a call of memcpy.
-#include "teak.h"
+#include "snello.h"
 
 #include <string.h>
 
@@ -555,7 +555,7 @@ INLINE void sort_core(char *base, int64_t n, size_t size, less_fn less, void *ct
 
     size_t need = (size_t)(room + 2 * ilog2(room) + 2) * size;
     char local[4096];
-    char *scratch = need <= sizeof local ? local : tk_alloc(need);
+    char *scratch = need <= sizeof local ? local : sn_alloc(need);
     if (n <= 2 * small_sort_max) {
         merge_sort(base, n, size, less, ctx, scratch, one);
     } else {
@@ -563,19 +563,19 @@ INLINE void sort_core(char *base, int64_t n, size_t size, less_fn less, void *ct
     }
 
     if (scratch != local) {
-        tk_free(scratch);
+        sn_free(scratch);
     }
 }
 
 #undef INLINE
 #undef AT
 
-// tk_slice_sort is inlined whole into each of the program's sorters,
+// sn_slice_sort is inlined whole into each of the program's sorters,
 // one for each element type and order, when the program is optimized
 // with the runtime: there the element's size and less are constants, so
 // the switch keeps one case and clang inlines the comparison into it.
-__attribute__((always_inline)) void tk_slice_sort(tk_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
-    tk_check_slice(s);
+__attribute__((always_inline)) void sn_slice_sort(sn_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
+    sn_check_slice(s);
     if (s->len < 2 || size == 0) {
         return;
     }

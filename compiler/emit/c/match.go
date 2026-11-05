@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A match is what every arm of one match shares: the place and type
@@ -50,7 +50,7 @@ func (e *Emitter) matchExpr(x *ast.MatchExpr) string {
 		e.hold(held, e.typeOf(x.X)) // what no arm took is dropped when the statement ends
 	}
 
-	e.line("tk_panic(" + literal("no match arm matched") + ");")
+	e.line("sn_panic(" + literal("no match arm matched") + ");")
 	if len(x.Arms) > 0 {
 		e.line(m.end + ":;")
 	}
@@ -266,7 +266,7 @@ func tupleElem(place string, t types.Type, i int) (string, types.Type) {
 
 func (e *Emitter) literalTest(place string, lit *ast.BasicLit) string {
 	if lit.Kind == token.STRING {
-		return "tk_string_eq(" + place + ", " + e.literal(lit) + ")"
+		return "sn_string_eq(" + place + ", " + e.literal(lit) + ")"
 	}
 
 	return place + " == " + e.literal(lit)

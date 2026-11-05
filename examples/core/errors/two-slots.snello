@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Rule: two mut borrows into one slice are rejected because the compiler
 // cannot prove the indexes differ. Fix: copy the needed values out first,
-// as examples/15-lru.teak and examples/core/tree.teak do.
+// as examples/15-lru.snello and examples/core/tree.snello do.
 
 package p
 

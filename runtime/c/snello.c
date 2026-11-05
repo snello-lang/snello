@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -25,37 +25,37 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-tk_slice tk_os_Args = {0};
+sn_slice sn_os_Args = {0};
 
 // The allocator is alloc.c's; a release build has nothing to check at
 // the end, and debug.c has the report of a debug build.
-#ifndef TK_DEBUG
-int tk_finish(void) {
+#ifndef SN_DEBUG
+int sn_finish(void) {
     return 0;
 }
 #endif
 
-void tk_release(void **p) {
-    tk_free(*p);
+void sn_release(void **p) {
+    sn_free(*p);
     *p = NULL;
-    TK_POISON(*p);
+    SN_POISON(*p);
 }
 
-_Noreturn void tk_exit(int code) {
+_Noreturn void sn_exit(int code) {
     fflush(stdout);
     exit(code);
 }
 
-_Noreturn void tk_bounds(int64_t i, int64_t len) {
+_Noreturn void sn_bounds(int64_t i, int64_t len) {
     char buf[96];
     snprintf(buf, sizeof buf, "index out of range [%lld] with length %lld", (long long)i, (long long)len);
-    tk_panic(TK_STR(buf, (int64_t)strlen(buf)));
+    sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
 }
 
-// tk_slice_grow makes room for at least need elements, doubling as Teak's
+// sn_slice_grow makes room for at least need elements, doubling as Snello's
 // Push amortizes to constant time.
-void tk_slice_grow(tk_slice *s, int64_t need, size_t size) {
-    tk_check_slice(s);
+void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
+    sn_check_slice(s);
     if (need <= s->cap) {
         return;
     }
@@ -65,12 +65,12 @@ void tk_slice_grow(tk_slice *s, int64_t need, size_t size) {
         cap = need;
     }
 
-    void *p = tk_alloc((size_t)cap * size);
+    void *p = sn_alloc((size_t)cap * size);
     if (s->len > 0) {
         memcpy(p, s->ptr, (size_t)s->len * size);
     }
 
-    tk_free(s->ptr);
+    sn_free(s->ptr);
     s->ptr = p;
     s->cap = cap;
 }
@@ -81,7 +81,7 @@ void tk_slice_grow(tk_slice *s, int64_t need, size_t size) {
 // Go's small numbers, views of the table that own nothing.
 static const char digit_pairs[201] = "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
 
-char *tk_format_uint(uint64_t u, char *end) {
+char *sn_format_uint(uint64_t u, char *end) {
     while (u >= 100) {
         uint64_t two = (u % 100) * 2;
         u /= 100;
@@ -99,28 +99,28 @@ char *tk_format_uint(uint64_t u, char *end) {
     return end;
 }
 
-tk_string tk_format_int(uint64_t u, bool neg) {
+sn_string sn_format_int(uint64_t u, bool neg) {
     if (!neg && u < 100) {
-        return TK_STR(digit_pairs + u * 2 + (u < 10), u < 10 ? 1 : 2);
+        return SN_STR(digit_pairs + u * 2 + (u < 10), u < 10 ? 1 : 2);
     }
 
     char buf[24];
-    char *end = buf + sizeof buf, *p = tk_format_uint(u, end);
+    char *end = buf + sizeof buf, *p = sn_format_uint(u, end);
     if (neg) {
         *--p = '-';
     }
 
     size_t n = (size_t)(end - p);
-    uint8_t *q = tk_alloc(n);
+    uint8_t *q = sn_alloc(n);
     memcpy(q, p, n);
-    return TK_OWNED(q, (int64_t)n);
+    return SN_OWNED(q, (int64_t)n);
 }
 
-// tk_utf8_decode reads the rune at p, at most n bytes long, as Go's
+// sn_utf8_decode reads the rune at p, at most n bytes long, as Go's
 // utf8.DecodeRune does: a sequence that is not valid UTF-8, cut short,
 // overlong or a surrogate, reads as the replacement rune U+FFFD, one
 // byte wide.
-int tk_utf8_decode(const uint8_t *p, int64_t n, int32_t *r) {
+int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r) {
     uint8_t c = p[0];
     if (c < 0x80) {
         *r = c;
@@ -167,8 +167,8 @@ int tk_utf8_decode(const uint8_t *p, int64_t n, int32_t *r) {
     return w;
 }
 
-// tk_utf8_encode writes r as UTF-8 at out and returns its length.
-int tk_utf8_encode(int32_t r, uint8_t *out) {
+// sn_utf8_encode writes r as UTF-8 at out and returns its length.
+int sn_utf8_encode(int32_t r, uint8_t *out) {
     if (r < 0x80) {
         out[0] = (uint8_t)r;
         return 1;
@@ -194,8 +194,8 @@ int tk_utf8_encode(int32_t r, uint8_t *out) {
     return 4;
 }
 
-void tk_init(int argc, char **argv) {
-    tk_hash_init(); // before any map hashes a key
+void sn_init(int argc, char **argv) {
+    sn_hash_init(); // before any map hashes a key
     // A program started with one of the standard streams closed has
     // its descriptor free, and the first file the program opened would
     // take it: read as stdin, or written by every print. As Go's
@@ -224,19 +224,19 @@ void tk_init(int argc, char **argv) {
     }
 
     for (int i = 0; i < argc; i++) {
-        tk_string arg = TK_STR(argv[i], (int64_t)strlen(argv[i]));
-        tk_slice_push(&tk_os_Args, &arg, sizeof arg);
+        sn_string arg = SN_STR(argv[i], (int64_t)strlen(argv[i]));
+        sn_slice_push(&sn_os_Args, &arg, sizeof arg);
     }
 }
 
-// tk_write_fd writes every byte of p, asking again after a short write or
+// sn_write_fd writes every byte of p, asking again after a short write or
 // an interrupted call, and returns how many it wrote: all of len, or
 // fewer with errno saying why.
-int64_t tk_write_fd(int fd, const uint8_t *p, int64_t len) {
+int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
     int64_t done = 0;
     while (done < len) {
         size_t want = (size_t)(len - done);
-        ssize_t n = write(fd, p + done, want < TK_IO_MAX ? want : TK_IO_MAX);
+        ssize_t n = write(fd, p + done, want < SN_IO_MAX ? want : SN_IO_MAX);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -252,9 +252,9 @@ int64_t tk_write_fd(int fd, const uint8_t *p, int64_t len) {
 }
 
 // The queues a task waits on for a channel or a lock, whose waiters
-// internal.h lays out. tk_enqueue adds w at the tail of q, and
-// tk_remove_waiter takes it out from wherever it is.
-void tk_enqueue(tk_waitq *q, tk_waiter *w) {
+// internal.h lays out. sn_enqueue adds w at the tail of q, and
+// sn_remove_waiter takes it out from wherever it is.
+void sn_enqueue(sn_waitq *q, sn_waiter *w) {
     w->next = NULL;
     w->prev = q->tail;
     if (q->tail != NULL) {
@@ -267,7 +267,7 @@ void tk_enqueue(tk_waitq *q, tk_waiter *w) {
     w->queued = true;
 }
 
-void tk_remove_waiter(tk_waitq *q, tk_waiter *w) {
+void sn_remove_waiter(sn_waitq *q, sn_waiter *w) {
     if (!w->queued) {
         return;
     }
@@ -287,12 +287,12 @@ void tk_remove_waiter(tk_waitq *q, tk_waiter *w) {
     w->queued = false;
 }
 
-// tk_dequeue takes the first waiter whose wait is still open off the
+// sn_dequeue takes the first waiter whose wait is still open off the
 // queue, and claims its wait; the waiters of selects other operations
 // took first are dropped on the way.
-tk_waiter *tk_dequeue(tk_waitq *q) {
-    for (tk_waiter *w = q->head; w != NULL; w = q->head) {
-        tk_remove_waiter(q, w);
+sn_waiter *sn_dequeue(sn_waitq *q) {
+    for (sn_waiter *w = q->head; w != NULL; w = q->head) {
+        sn_remove_waiter(q, w);
         int open = 0;
         if (atomic_compare_exchange_strong(&w->ws->claimed, &open, 1)) {
             return w;
@@ -302,21 +302,21 @@ tk_waiter *tk_dequeue(tk_waitq *q) {
     return NULL;
 }
 
-// tk_finish_wait ends a wait tk_dequeue took and wakes its task. The
+// sn_finish_wait ends a wait sn_dequeue took and wakes its task. The
 // caller holds the lock of the queue the waiter was on.
-void tk_finish_wait(tk_waiter *w, bool success) {
+void sn_finish_wait(sn_waiter *w, bool success) {
     w->success = success;
     w->ws->fired = w->index;
-    tk_task *t = w->t;
+    sn_task *t = w->t;
     atomic_store_explicit(&w->ws->done, 1, memory_order_release);
-    tk_wake(t);
+    sn_wake(t);
 }
 
-// tk_await_wait parks until an operation has finished the wait; a wake
+// sn_await_wait parks until an operation has finished the wait; a wake
 // kept from an earlier wait costs one more park.
-void tk_await_wait(tk_wait_state *ws) {
+void sn_await_wait(sn_wait_state *ws) {
     while (!atomic_load_explicit(&ws->done, memory_order_acquire)) {
-        tk_park();
+        sn_park();
     }
 }
 
@@ -327,9 +327,9 @@ void tk_await_wait(tk_wait_state *ws) {
 // resumed on another thread reads that thread's (sched.c says why).
 static _Thread_local uint64_t rng;
 
-__attribute__((noinline)) uint64_t tk_next_random(void) { // never inlined into tk_select, whose task may move threads at its park
+__attribute__((noinline)) uint64_t sn_next_random(void) { // never inlined into sn_select, whose task may move threads at its park
     if (rng == 0) {
-        rng = ((uint64_t)(uintptr_t)&rng ^ (uint64_t)tk_time_now()) | 1;
+        rng = ((uint64_t)(uintptr_t)&rng ^ (uint64_t)sn_time_now()) | 1;
     }
 
     rng ^= rng << 13;

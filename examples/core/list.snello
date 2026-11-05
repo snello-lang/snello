@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 2: a stack and a ring queue.
 //
-// The core version of 06-linked-list.teak with the element types fixed
+// The core version of 06-linked-list.snello with the element types fixed
 // to string and int. Stresses: `*Node?` as the owned link, `take` moving
 // a value out of a field, a partial move out of a heap node about to be
 // dropped, and a method returning a borrow into its receiver.

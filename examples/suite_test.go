@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -16,18 +16,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/compiler/emit/c"
-	"github.com/teak-lang/teak/compiler/emit/llvm"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/emit/llvm"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // examplePatterns name the twenty example programs: the files here and
-// the Teak programs inside the two folders that hold a Go version
-// beside the Teak one. The core and run suites have their own tests.
-var examplePatterns = []string{"*.teak", "01-tree/*.teak", "02-pipeline/*.teak"}
+// the Snello programs inside the two folders that hold a Go version
+// beside the Snello one. The core and run suites have their own tests.
+var examplePatterns = []string{"*.snello", "01-tree/*.snello", "02-pipeline/*.snello"}
 
 // programs returns the paths of the example programs.
 func programs(t testing.TB) []string {
@@ -115,7 +115,7 @@ func TestExamples(t *testing.T) {
 	green := 0
 	var front, back time.Duration
 	for _, path := range programs(t) {
-		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		name := strings.TrimSuffix(filepath.Base(path), ".snello")
 		want, err := os.ReadFile(filepath.Join("expected", name+".out"))
 		if err != nil {
 			if _, known := pendingExamples[name]; !known {
@@ -205,7 +205,7 @@ func placeFixtures(t *testing.T, name, dir string) {
 func BenchmarkExamples(b *testing.B) {
 	var paths []string
 	for _, path := range programs(b) {
-		name := strings.TrimSuffix(filepath.Base(path), ".teak")
+		name := strings.TrimSuffix(filepath.Base(path), ".snello")
 		if _, err := os.Stat(filepath.Join("expected", name+".out")); err == nil {
 			paths = append(paths, path)
 		}

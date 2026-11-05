@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/ast"
+import "github.com/snello-lang/snello/compiler/ast"
 
 // A value crosses a task boundary when a spawn captures it, a send puts
 // it on a channel, or a receive takes it off one. It may cross when its
@@ -22,7 +22,7 @@ import "github.com/teak-lang/teak/compiler/ast"
 // with such a field stays in its task, which is how rc.Rc, whose count
 // is not atomic, says so.
 //
-// Nothing in Teak changes a value through a shared ref except under a
+// Nothing in Snello changes a value through a shared ref except under a
 // lock, so safe to share between tasks and safe to send are one
 // property, and there is no second one beside Send.
 

@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,38 +7,38 @@
 
 #include "internal.h"
 
-void tk_print_string(tk_string s) {
-    tk_check_string(s);
-    tk_write_fd(1, s.ptr, s.len);
+void sn_print_string(sn_string s) {
+    sn_check_string(s);
+    sn_write_fd(1, s.ptr, s.len);
 }
 
-void tk_print_owned(tk_string s) {
-    tk_print_string(s);
-    tk_string_free(s);
+void sn_print_owned(sn_string s) {
+    sn_print_string(s);
+    sn_string_free(s);
 }
 
-void tk_print_int(int64_t v) {
+void sn_print_int(int64_t v) {
     char buf[24];
-    char *end = buf + sizeof buf, *p = tk_format_uint(v < 0 ? 0 - (uint64_t)v : (uint64_t)v, end);
+    char *end = buf + sizeof buf, *p = sn_format_uint(v < 0 ? 0 - (uint64_t)v : (uint64_t)v, end);
     if (v < 0) {
         *--p = '-';
     }
 
-    tk_write_fd(1, (const uint8_t *)p, end - p);
+    sn_write_fd(1, (const uint8_t *)p, end - p);
 }
 
-void tk_print_uint(uint64_t v) {
+void sn_print_uint(uint64_t v) {
     char buf[24];
-    char *end = buf + sizeof buf, *p = tk_format_uint(v, end);
-    tk_write_fd(1, (const uint8_t *)p, end - p);
+    char *end = buf + sizeof buf, *p = sn_format_uint(v, end);
+    sn_write_fd(1, (const uint8_t *)p, end - p);
 }
 
-void tk_eprint_string(tk_string s) {
-    tk_check_string(s);
-    tk_write_fd(2, s.ptr, s.len);
+void sn_eprint_string(sn_string s) {
+    sn_check_string(s);
+    sn_write_fd(2, s.ptr, s.len);
 }
 
-void tk_eprint_owned(tk_string s) {
-    tk_eprint_string(s);
-    tk_string_free(s);
+void sn_eprint_owned(sn_string s) {
+    sn_eprint_string(s);
+    sn_string_free(s);
 }

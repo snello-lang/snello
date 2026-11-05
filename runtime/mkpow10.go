@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -32,7 +32,7 @@ func main() {
 	out := flag.String("o", "c/pow10.c", "the file to write")
 	flag.Parse()
 	var b bytes.Buffer
-	b.WriteString(`// Copyright 2026 The Teak Programming Language. All rights reserved.
+	b.WriteString(`// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -40,9 +40,9 @@ func main() {
 
 #include <stdint.h>
 
-// tk_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
+// sn_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
 // rounded down, its top bit set: Go's detailedPowersOfTen.
-const uint64_t tk_pow10[696][2] = {
+const uint64_t sn_pow10[696][2] = {
 `)
 	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
 	for q := minExp10; q <= maxExp10; q++ {

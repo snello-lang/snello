@@ -1,9 +1,9 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // The debug build's allocator and checks, compiled into every program
-// and empty unless TK_DEBUG is defined, which teak build -debug does.
+// and empty unless SN_DEBUG is defined, which snello build -debug does.
 // Every block carries a header saying how large it is and whether it
 // is live; a released block is filled with the poison byte and held
 // in a quarantine before it goes back to alloc.c's heap, so that a read
@@ -11,9 +11,9 @@
 // was reused for; and the program fails at its end when blocks are
 // still live, which is a drop the compiler forgot.
 
-#include "teak.h"
+#include "snello.h"
 
-#ifdef TK_DEBUG
+#ifdef SN_DEBUG
 
 #include <pthread.h>
 #include <stdio.h>
@@ -47,10 +47,10 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 // The header adds 32 bytes, so a block of 993 to 1024 bytes, the
 // heap's largest class in a release build, is the system's in this one.
-void *tk_alloc(size_t n) {
-    block *b = tk_heap_alloc(sizeof *b + (n == 0 ? 1 : n));
+void *sn_alloc(size_t n) {
+    block *b = sn_heap_alloc(sizeof *b + (n == 0 ? 1 : n));
     if (b == NULL) {
-        tk_panic(TK_STR("out of memory", 13));
+        sn_panic(SN_STR("out of memory", 13));
     }
 
     pthread_mutex_lock(&lock);
@@ -74,12 +74,12 @@ static void evict(int i) {
     block *old = held[i];
     if (old != NULL) {
         held_bytes -= old->size;
-        tk_heap_free(old);
+        sn_heap_free(old);
         held[i] = NULL;
     }
 }
 
-void tk_free(void *p) {
+void sn_free(void *p) {
     if (p == NULL) {
         return;
     }
@@ -87,11 +87,11 @@ void tk_free(void *p) {
     block *b = (block *)p - 1;
     pthread_mutex_lock(&lock);
     if (b->magic == DEAD) {
-        tk_panic(TK_STR("a block was released twice", 26));
+        sn_panic(SN_STR("a block was released twice", 26));
     }
 
     if (b->magic != LIVE) {
-        tk_panic(TK_STR("a pointer not from the allocator was released", 45));
+        sn_panic(SN_STR("a pointer not from the allocator was released", 45));
     }
 
     b->magic = DEAD;
@@ -119,63 +119,63 @@ void tk_free(void *p) {
     pthread_mutex_unlock(&lock);
 }
 
-_Noreturn void tk_released(const char *what) {
+_Noreturn void sn_released(const char *what) {
     char buf[64];
     snprintf(buf, sizeof buf, "a released %s was used", what);
-    tk_panic(TK_STR(buf, (int64_t)strlen(buf)));
+    sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
 }
 
-// tk_check_block panics when p, the start of a block from tk_alloc,
+// sn_check_block panics when p, the start of a block from sn_alloc,
 // was released.
-void tk_check_block(const void *p, const char *what) {
+void sn_check_block(const void *p, const char *what) {
     if ((uintptr_t)p == (uintptr_t)0xDDDDDDDDDDDDDDDDULL) {
-        tk_released(what);
+        sn_released(what);
     }
 
     const block *b = (const block *)p - 1;
     if (b->magic == DEAD) {
-        tk_released(what);
+        sn_released(what);
     }
 }
 
-// tk_deref checks an owned pointer before the program reads through
+// sn_deref checks an owned pointer before the program reads through
 // it: a null is a pointer whose value moved away, a poisoned one was
 // released.
-void *tk_deref(void *p) {
+void *sn_deref(void *p) {
     if (p == NULL) {
-        tk_panic(TK_STR("a moved pointer was used", 24));
+        sn_panic(SN_STR("a moved pointer was used", 24));
     }
 
-    tk_check_block(p, "pointer");
+    sn_check_block(p, "pointer");
     return p;
 }
 
-int tk_finish(void) {
-    for (int64_t i = 0; i < tk_os_Args.len; i++) { // the program may have stored strings of its own in it
-        tk_string_drop(&((tk_string *)tk_os_Args.ptr)[i]);
+int sn_finish(void) {
+    for (int64_t i = 0; i < sn_os_Args.len; i++) { // the program may have stored strings of its own in it
+        sn_string_drop(&((sn_string *)sn_os_Args.ptr)[i]);
     }
 
-    tk_slice_free(&tk_os_Args);
-    int64_t n = tk_tasks_running();
+    sn_slice_free(&sn_os_Args);
+    int64_t n = sn_tasks_running();
     for (int i = 0; n > 0 && i < 200; i++) { // a task that has sent its last word may still be ending
-        tk_time_Sleep(1000000);
-        n = tk_tasks_running();
+        sn_time_Sleep(1000000);
+        n = sn_tasks_running();
     }
 
     if (n > 0) {
         fflush(stdout);
-        fprintf(stderr, "teak: %lld tasks still running at exit; the blocks were not checked\n", (long long)n);
+        fprintf(stderr, "snello: %lld tasks still running at exit; the blocks were not checked\n", (long long)n);
         return 0; // what a running task owns is not a leak
     }
 
-    tk_timers_stop(); // a pending After's channel is the timer's, which ends here
+    sn_timers_stop(); // a pending After's channel is the timer's, which ends here
 
     if (live_blocks == 0) {
         return 0;
     }
 
     fflush(stdout);
-    fprintf(stderr, "teak: %lld blocks (%lld bytes) not released\n", (long long)live_blocks, (long long)live_bytes);
+    fprintf(stderr, "snello: %lld blocks (%lld bytes) not released\n", (long long)live_blocks, (long long)live_bytes);
     for (block *b = first; b != NULL; b = b->next) {
         // Each block's bytes, as text as far as they are printable,
         // which names a leaked string outright.

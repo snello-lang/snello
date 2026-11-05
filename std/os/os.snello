@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -152,7 +152,7 @@ func Remove(path ref string) Result<(), io.Error> {
 // failed, as Go's does: "unlinkat /tmp/d/locked/f: permission denied".
 func RemoveAll(path ref string) Result<(), io.Error> {
 	if path == "." || path.HasSuffix("/.") {
-		return Err(io.Errno("RemoveAll", path, 22)) // EINVAL, the same number on every system Teak runs on
+		return Err(io.Errno("RemoveAll", path, 22)) // EINVAL, the same number on every system Snello runs on
 	}
 
 	failed := ""

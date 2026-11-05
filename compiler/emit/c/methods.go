@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package c
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The predeclared methods of slices, strings, options and results, and
@@ -61,7 +61,7 @@ var mutating = map[string]bool{
 
 func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice) string {
 	place, _ := e.receiver(sel)
-	generic := "(tk_slice *)&" + place
+	generic := "(sn_slice *)&" + place
 	elem := e.cType(t.Elem(), x.Pos())
 	size := "sizeof(" + elem + ")"
 	switch sel.Sel.Name {
@@ -69,38 +69,38 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		v := e.saved(x.Args[0], t.Elem())
 		sp := e.temp()
 		e.line(e.cType(t, x.Pos()) + " *" + sp + " = &" + place + ";")
-		e.line("if (TK_PUSH_FAST(*" + sp + ")) {")
+		e.line("if (SN_PUSH_FAST(*" + sp + ")) {")
 		e.line(sp + "->ptr[" + sp + "->len++] = " + v + ";")
 		e.line("} else {")
-		e.line("tk_slice_push((tk_slice *)" + sp + ", &" + v + ", " + size + ");")
+		e.line("sn_slice_push((sn_slice *)" + sp + ", &" + v + ", " + size + ");")
 		e.line("}")
 		return ""
 	case "Pop": // a slice of its own with an element, in place; the rest the runtime's
 		out, sp := e.temp(), e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
 		e.line(e.cType(t, x.Pos()) + " *" + sp + " = &" + place + ";")
-		e.line("if (TK_POP_FAST(*" + sp + ")) {")
+		e.line("if (SN_POP_FAST(*" + sp + ")) {")
 		e.line(out + ".has = true;")
 		e.line(out + ".val = " + sp + "->ptr[--" + sp + "->len];")
 		e.line("} else {")
-		e.line(out + ".has = tk_slice_pop((tk_slice *)" + sp + ", &" + out + ".val, " + size + ");")
+		e.line(out + ".has = sn_slice_pop((sn_slice *)" + sp + ", &" + out + ".val, " + size + ");")
 		e.line("}")
 		return out
 	case "Insert":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], t.Elem()})
 		v := e.temp()
 		e.line(elem + " " + v + " = " + args[1] + ";")
-		e.line("tk_slice_insert(" + generic + ", " + args[0] + ", &" + v + ", " + size + ");")
+		e.line("sn_slice_insert(" + generic + ", " + args[0] + ", &" + v + ", " + size + ");")
 		return ""
 	case "Remove":
 		out := e.temp()
 		e.line(elem + " " + out + ";")
-		e.line("tk_slice_remove(" + generic + ", " + e.valueTo(x.Args[0], types.Typ[types.Int]) + ", &" + out + ", " + size + ");")
+		e.line("sn_slice_remove(" + generic + ", " + e.valueTo(x.Args[0], types.Typ[types.Int]) + ", &" + out + ", " + size + ");")
 		return out
 	case "RemoveValue", "Contains":
 		return e.search(sel.Sel.Name, place, e.looked(x.Args[0], t.Elem()), t, x.Pos()) // lent: a value built here is held and dropped with the statement
 	case "Clear":
-		e.line("tk_slice_own(" + generic + ", \"Clear\");")
+		e.line("sn_slice_own(" + generic + ", \"Clear\");")
 		if needsDrop(t.Elem()) {
 			e.line("for (int64_t i = 0; i < " + place + ".len; i++) {")
 			e.line(e.dropOf(place+".ptr[i]", t.Elem(), x.Pos()))
@@ -112,14 +112,14 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	case "Swap": // both indexes checked, in order, then the two elements exchanged in place
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int]})
 		a, b, tmp := e.temp(), e.temp(), e.temp()
-		e.line("int64_t " + a + " = tk_index((int64_t)(" + args[0] + "), " + place + ".len);")
-		e.line("int64_t " + b + " = tk_index((int64_t)(" + args[1] + "), " + place + ".len);")
+		e.line("int64_t " + a + " = sn_index((int64_t)(" + args[0] + "), " + place + ".len);")
+		e.line("int64_t " + b + " = sn_index((int64_t)(" + args[1] + "), " + place + ".len);")
 		e.line(elem + " " + tmp + " = " + place + ".ptr[" + a + "];")
 		e.line(place + ".ptr[" + a + "] = " + place + ".ptr[" + b + "];")
 		e.line(place + ".ptr[" + b + "] = " + tmp + ";")
 		return ""
 	case "Reverse":
-		e.line("tk_slice_reverse(" + generic + ", " + size + ");")
+		e.line("sn_slice_reverse(" + generic + ", " + size + ");")
 		return ""
 	case "Clone":
 		if needsDrop(t.Elem()) {
@@ -127,15 +127,15 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		}
 
 		return e.into(t, x.Pos(), func(out string) string {
-			return "tk_slice_clone(" + generic + ", " + out + ", " + size + ")"
+			return "sn_slice_clone(" + generic + ", " + out + ", " + size + ")"
 		})
 	case "SortBy":
 		less := e.saved(x.Args[0], e.typeOf(x.Args[0]))
-		e.line(e.sorter("tk_sortby_"+lower.Mangle(t.Elem()), e.lessAdapter(t.Elem(), x.Pos()), size) + "(" + generic + ", &" + less + ");")
+		e.line(e.sorter("sn_sortby_"+lower.Mangle(t.Elem()), e.lessAdapter(t.Elem(), x.Pos()), size) + "(" + generic + ", &" + less + ");")
 		return ""
 	case "Sort":
 		if order := e.ordering(t.Elem(), x.Pos()); order != "NULL" {
-			e.line(e.sorter("tk_sort_"+lower.Mangle(t.Elem()), order, size) + "(" + generic + ", NULL);")
+			e.line(e.sorter("sn_sort_"+lower.Mangle(t.Elem()), order, size) + "(" + generic + ", NULL);")
 		}
 
 		return ""
@@ -146,10 +146,10 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 }
 
 // lessAdapter returns the name of the function that lets the runtime
-// sort call a Teak less function held in the context, written once per
+// sort call a Snello less function held in the context, written once per
 // element type.
 func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
-	name := "tk_lessfn_" + lower.Mangle(elem)
+	name := "sn_lessfn_" + lower.Mangle(elem)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		ct := e.cType(elem, pos)
@@ -170,9 +170,9 @@ func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
 func (e *Emitter) sorter(name, less, size string) string {
 	if e.state[name] == undeclared {
 		e.state[name] = defined
-		head := "static void " + name + "(tk_slice *s, void *ctx)"
+		head := "static void " + name + "(sn_slice *s, void *ctx)"
 		put(&e.protos, head, ";\n")
-		put(&e.helpers, head, " {\n\ttk_slice_sort(s, ", size, ", ", less, ", ctx);\n}\n\n")
+		put(&e.helpers, head, " {\n\tsn_slice_sort(s, ", size, ", ", less, ", ctx);\n}\n\n")
 	}
 
 	return name
@@ -183,7 +183,7 @@ func (e *Emitter) sorter(name, less, size string) string {
 // Cmp, written or derived, through it: a before b when a.Cmp(b) is
 // Less, as sort.Sort orders.
 func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
-	name := "tk_lt_" + lower.Mangle(elem)
+	name := "sn_lt_" + lower.Mangle(elem)
 	n, cmp := lower.ValueType(elem).(*types.Named)
 	cmp = cmp && n.Method("Cmp") != nil
 	b, ok := lower.ValueType(elem).Underlying().(*types.Basic)
@@ -199,7 +199,7 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 		if cmp {
 			test = e.compare("*("+ct+" const *)a", "*("+ct+" const *)b", elem, pos) + ".tag == 0" // a before b when a.Cmp(b) is Less
 		} else if isString(elem) {
-			test = "tk_string_cmp(*(const " + ct + " *)a, *(const " + ct + " *)b) < 0"
+			test = "sn_string_cmp(*(const " + ct + " *)a, *(const " + ct + " *)b) < 0"
 		}
 
 		put(&e.helpers, "static bool ", name, "(void *ctx, const void *a, const void *b) {\n\t(void)ctx;\n\treturn ", test, ";\n}\n\n")
@@ -211,7 +211,7 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 // search writes RemoveValue or Contains through a generated function
 // that walks the slice comparing elements with the element's equality.
 func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) string {
-	name := "tk_" + what + "_" + lower.Mangle(t.Elem())
+	name := "sn_" + what + "_" + lower.Mangle(t.Elem())
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		st, elem := e.cType(t, pos), e.cType(t.Elem(), pos)
@@ -219,7 +219,7 @@ func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) s
 		put(&e.protos, head, ";\n")
 		put(&e.helpers, head, " {\n\tfor (int64_t i = 0; i < s->len; i++) {\n\t\tif (", e.equal("s->ptr[i]", "v", t.Elem(), pos), ") {\n")
 		if what == "RemoveValue" { // the element leaves the slice and is dropped; v is only lent
-			put(&e.helpers, "\t\t\t", elem, " out;\n\t\t\ttk_slice_remove((tk_slice *)s, i, &out, sizeof out);\n")
+			put(&e.helpers, "\t\t\t", elem, " out;\n\t\t\tsn_slice_remove((sn_slice *)s, i, &out, sizeof out);\n")
 			if needsDrop(t.Elem()) {
 				put(&e.helpers, "\t\t\t", e.dropOf("out", t.Elem(), pos), "\n")
 			}
@@ -249,7 +249,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Get", "GetMut":
 		out, found := e.temp(), e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
-		e.line(val + " *" + found + " = tk_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ");")
+		e.line(val + " *" + found + " = sn_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ");")
 		e.line("if (" + found + " != NULL) {")
 		e.line(out + ".has = true;")
 		if sel.Sel.Name == "Get" {
@@ -267,10 +267,10 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Remove":
 		out := e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
-		e.line(out + ".has = tk_map_remove(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ", &" + out + ".val);")
+		e.line(out + ".has = sn_map_remove(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ", &" + out + ".val);")
 		return out
 	case "Contains":
-		return "(tk_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ") != NULL)"
+		return "(sn_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ") != NULL)"
 	case "Clone":
 		if needsDrop(t.Key()) || needsDrop(t.Value()) {
 			return e.cloner(t, x.Pos()) + "(" + place + ")"
@@ -278,7 +278,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 
 		out := e.temp()
 		e.line(e.cType(t, x.Pos()) + " " + out + ";")
-		e.line("tk_map_clone(&" + place + ", " + mt + ", &" + out + ");")
+		e.line("sn_map_clone(&" + place + ", " + mt + ", &" + out + ");")
 		return out
 	}
 
@@ -307,7 +307,7 @@ func (e *Emitter) mapIndex(x *ast.IndexExpr, place string, t *types.Map, write b
 	}
 
 	mt := e.mapType(t, x.Pos())
-	return "(*(const " + val + " *)tk_map_get(&" + place + ", " + mt + ", &" + e.key(x.Index, t.Key()) + ", &(" + val + ")" + zeroValue + "))"
+	return "(*(const " + val + " *)sn_map_get(&" + place + ", " + mt + ", &" + e.key(x.Index, t.Key()) + ", &(" + val + ")" + zeroValue + "))"
 }
 
 // key writes a map key the operation only looks up, in a temporary
@@ -356,27 +356,27 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	case "Len":
 		return s + ".len"
 	case "ToUpper":
-		return "tk_to_upper(" + s + ")"
+		return "sn_to_upper(" + s + ")"
 	case "ToLower":
-		return "tk_to_lower(" + s + ")"
+		return "sn_to_lower(" + s + ")"
 	case "Trim":
-		return "tk_trim(" + s + ")"
+		return "sn_trim(" + s + ")"
 	case "HasPrefix":
-		return "tk_has_prefix(" + s + ", " + args[0] + ")"
+		return "sn_has_prefix(" + s + ", " + args[0] + ")"
 	case "HasSuffix":
-		return "tk_has_suffix(" + s + ", " + args[0] + ")"
+		return "sn_has_suffix(" + s + ", " + args[0] + ")"
 	case "Contains":
-		return "tk_string_contains(" + s + ", " + args[0] + ")"
+		return "sn_string_contains(" + s + ", " + args[0] + ")"
 	case "Fields":
-		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_fields(" + s + ", " + out + ")" })
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_fields(" + s + ", " + out + ")" })
 	case "Lines":
-		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_lines(" + s + ", " + out + ")" })
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_lines(" + s + ", " + out + ")" })
 	case "Split":
-		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "tk_split(" + s + ", " + args[0] + ", " + out + ")" })
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split(" + s + ", " + args[0] + ", " + out + ")" })
 	case "SplitOnce":
 		out := e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
-		e.line(out + ".has = tk_split_once(" + s + ", " + args[0] + ", &" + out + ".val.e0, &" + out + ".val.e1);")
+		e.line(out + ".has = sn_split_once(" + s + ", " + args[0] + ", &" + out + ".val.e0, &" + out + ".val.e1);")
 		return out
 	}
 
@@ -390,15 +390,15 @@ func (e *Emitter) byteMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	c := e.looked(sel.X, types.Typ[types.Uint8])
 	switch sel.Sel.Name {
 	case "IsDigit":
-		return "tk_is_digit(" + c + ")"
+		return "sn_is_digit(" + c + ")"
 	case "IsSpace":
-		return "tk_is_space(" + c + ")"
+		return "sn_is_space(" + c + ")"
 	case "IsLetter":
-		return "tk_is_letter(" + c + ")"
+		return "sn_is_letter(" + c + ")"
 	case "IsUpper":
-		return "tk_is_upper(" + c + ")"
+		return "sn_is_upper(" + c + ")"
 	case "IsLower":
-		return "tk_is_lower(" + c + ")"
+		return "sn_is_lower(" + c + ")"
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on bytes")
@@ -456,7 +456,7 @@ func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, abs
 		}
 
 		e.line("if (!" + place + "." + flag + ") {")
-		e.line("tk_panic(" + msg.s + ");")
+		e.line("sn_panic(" + msg.s + ");")
 		e.line("}")
 		return e.taken(place+".val", e.typeOf(x), held, e.typeOf(sel.X), x.Pos())
 	case "UnwrapOr":
@@ -544,12 +544,12 @@ func errOf(t types.Type) types.Type {
 }
 
 // into writes an operation whose result the runtime stores through a
-// slice pointer into a temporary of the Teak type t, and returns the
+// slice pointer into a temporary of the Snello type t, and returns the
 // temporary. call writes the operation given the pointer.
 func (e *Emitter) into(t types.Type, pos token.Pos, call func(out string) string) string {
 	out := e.temp()
 	e.line(e.cType(t, pos) + " " + out + ";")
-	e.line(call("(tk_slice *)&"+out) + ";")
+	e.line(call("(sn_slice *)&"+out) + ";")
 	return out
 }
 
@@ -586,11 +586,11 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 	}
 
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) {
-		return place + ".ptr[tk_index((int64_t)(" + i + "), " + place + ".len)]"
+		return place + ".ptr[sn_index((int64_t)(" + i + "), " + place + ".len)]"
 	}
 
 	if a, ok := t.Underlying().(*types.Array); ok {
-		return place + ".at[tk_index((int64_t)(" + i + "), " + strconv.FormatInt(a.Len(), 10) + ")]"
+		return place + ".at[sn_index((int64_t)(" + i + "), " + strconv.FormatInt(a.Len(), 10) + ")]"
 	}
 
 	e.unsupported(x.Pos(), "indexing a value of type "+t.String())
@@ -610,13 +610,13 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) string {
 	}
 
 	if isString(t) {
-		return "tk_substr(" + place + ", " + lo + ", " + hi + ")"
+		return "sn_substr(" + place + ", " + lo + ", " + hi + ")"
 	}
 
 	if st, ok := t.Underlying().(*types.Slice); ok {
 		size := "sizeof(" + e.cType(st.Elem(), x.Pos()) + ")"
 		return e.into(t, x.Pos(), func(out string) string {
-			return "tk_slice_sub((tk_slice *)&" + place + ", " + lo + ", " + hi + ", " + out + ", " + size + ")"
+			return "sn_slice_sub((sn_slice *)&" + place + ", " + lo + ", " + hi + ", " + out + ", " + size + ")"
 		})
 	}
 
@@ -631,7 +631,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 		out := e.temp()
 		e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
 		if len(x.Args) > 1 { // room for the size hint's entries, as Go makes it
-			e.line("tk_map_reserve((tk_map *)&" + out + ", " + e.mapType(mt, x.Pos()) + ", " + e.valueTo(x.Args[1], types.Typ[types.Int]) + ");")
+			e.line("sn_map_reserve((sn_map *)&" + out + ", " + e.mapType(mt, x.Pos()) + ", " + e.valueTo(x.Args[1], types.Typ[types.Int]) + ");")
 		}
 
 		return out
@@ -643,7 +643,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 			n = "(int64_t)(" + e.valueTo(x.Args[1], types.Typ[types.Int]) + ")"
 		}
 
-		return "tk_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ")"
+		return "sn_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ")"
 	}
 
 	st, ok := t.Underlying().(*types.Slice)
@@ -664,7 +664,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 	}
 
 	size := "sizeof(" + e.cType(st.Elem(), x.Pos()) + ")"
-	return e.into(t, x.Pos(), func(out string) string { return "tk_slice_make(" + out + ", " + n + ", " + c + ", " + size + ")" })
+	return e.into(t, x.Pos(), func(out string) string { return "sn_slice_make(" + out + ", " + n + ", " + c + ", " + size + ")" })
 }
 
 // sliceLit writes []T{a, b}: a slice made to size, then filled.
@@ -680,7 +680,7 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) s
 
 	parts := e.operands(x.Elts, wants)
 	n, size := strconv.Itoa(len(parts)), "sizeof("+e.cType(st.Elem(), x.Pos())+")"
-	out := e.into(t, x.Pos(), func(out string) string { return "tk_slice_make(" + out + ", " + n + ", " + n + ", " + size + ")" })
+	out := e.into(t, x.Pos(), func(out string) string { return "sn_slice_make(" + out + ", " + n + ", " + n + ", " + size + ")" })
 	for i, p := range parts {
 		e.line(out + ".ptr[" + strconv.Itoa(i) + "] = " + p + ";")
 	}
@@ -714,7 +714,7 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	}
 
 	if _, ok := t.Underlying().(*types.Slice); ok && b.ID() == types.BuiltinCap {
-		return "tk_slice_cap((tk_slice *)&" + place + ")" // a sub-slice's room is its length
+		return "sn_slice_cap((sn_slice *)&" + place + ")" // a sub-slice's room is its length
 	}
 
 	if _, ok := t.Underlying().(*types.Slice); ok || isString(t) && b.ID() == types.BuiltinLen {
@@ -726,7 +726,7 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	}
 
 	if _, ok := t.Underlying().(*types.Chan); ok {
-		return "tk_chan_" + b.Name() + "(" + place + ")"
+		return "sn_chan_" + b.Name() + "(" + place + ")"
 	}
 
 	e.unsupported(x.Pos(), b.Name()+" on "+t.String())

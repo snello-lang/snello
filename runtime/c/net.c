@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -51,15 +51,15 @@ static __attribute__((noinline)) int last_error(void) {
     return errno;
 }
 
-// TK_SOCK_FLAGS makes a socket non-blocking and closed on exec as it is
+// SN_SOCK_FLAGS makes a socket non-blocking and closed on exec as it is
 // made, where the system can: Linux takes both as flags to socket and
 // accept4, as Go asks for them, so a socket is never open across an exec
 // for a moment and costs no further call. Darwin has neither flag, and
 // prepare sets both with fcntl, as Go does there.
 #if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
-#define TK_SOCK_FLAGS (SOCK_NONBLOCK | SOCK_CLOEXEC)
+#define SN_SOCK_FLAGS (SOCK_NONBLOCK | SOCK_CLOEXEC)
 #else
-#define TK_SOCK_FLAGS 0
+#define SN_SOCK_FLAGS 0
 #endif
 
 // prepare makes a socket non-blocking and closed on exec, where it was
@@ -76,7 +76,7 @@ static const char *prepare(int fd) {
         return "setsockopt";
     }
 #endif
-#if TK_SOCK_FLAGS == 0
+#if SN_SOCK_FLAGS == 0
     if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
         return "fcntl";
     }
@@ -137,9 +137,9 @@ static int backlog(void) {
 }
 
 #if defined(MSG_NOSIGNAL)
-#define TK_NOSIGNAL MSG_NOSIGNAL
+#define SN_NOSIGNAL MSG_NOSIGNAL
 #else
-#define TK_NOSIGNAL 0
+#define SN_NOSIGNAL 0
 #endif
 
 static pthread_mutex_t poller_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -196,7 +196,7 @@ static _Atomic(poll_desc *) pds[pd_chunks];
 
 static poll_desc *pd_of(int fd) {
     if (fd < 0 || fd >= pd_chunk * pd_chunks) {
-        tk_panic(TK_STR("net: descriptor number out of range", 35));
+        sn_panic(SN_STR("net: descriptor number out of range", 35));
     }
 
     _Atomic(poll_desc *) *slot = &pds[fd / pd_chunk];
@@ -204,7 +204,7 @@ static poll_desc *pd_of(int fd) {
     if (c == NULL) {
         poll_desc *made = calloc(pd_chunk, sizeof *made);
         if (made == NULL) {
-            tk_panic(TK_STR("out of memory", 13));
+            sn_panic(SN_STR("out of memory", 13));
         }
 
         if (atomic_compare_exchange_strong_explicit(slot, &c, made, memory_order_acq_rel, memory_order_acquire)) {
@@ -236,8 +236,8 @@ static void ready(_Atomic uintptr_t *word) {
     }
 
     if (old != pd_none) {
-        tk_wake((tk_task *)old);
-        tk_outside(-1);
+        sn_wake((sn_task *)old);
+        sn_outside(-1);
     }
 }
 
@@ -283,7 +283,7 @@ static void poller_start(void) {
         poller = epoll_create1(0);
 #endif
         if (poller < 0) {
-            tk_panic(TK_STR("cannot make the poller", 22));
+            sn_panic(SN_STR("cannot make the poller", 22));
         }
 
         pthread_t id;
@@ -291,7 +291,7 @@ static void poller_start(void) {
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
         if (pthread_create(&id, &attr, poll_main, NULL) != 0) {
-            tk_panic(TK_STR("cannot start the poller", 23));
+            sn_panic(SN_STR("cannot start the poller", 23));
         }
 
         pthread_attr_destroy(&attr);
@@ -309,8 +309,8 @@ static void expire(poll_desc *pd, bool write) {
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     uintptr_t old = atomic_load(word);
     if (old > pd_ready && atomic_compare_exchange_strong(word, &old, pd_none)) {
-        tk_wake((tk_task *)old);
-        tk_outside(-1);
+        sn_wake((sn_task *)old);
+        sn_outside(-1);
     }
 }
 
@@ -365,7 +365,7 @@ static int wait_fd(int fd, bool write) {
     poll_desc *pd = pd_of(fd);
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
-    uintptr_t self = (uintptr_t)tk_self();
+    uintptr_t self = (uintptr_t)sn_self();
     for (;;) {
         if (atomic_load(dl) < 0) {
             return pd_timeout;
@@ -376,48 +376,48 @@ static int wait_fd(int fd, bool write) {
             return 0;
         }
 
-        tk_outside(1);
+        sn_outside(1);
         old = pd_none;
         if (atomic_compare_exchange_strong(word, &old, self)) {
             break;
         }
 
-        tk_outside(-1);
+        sn_outside(-1);
         if (old != pd_ready) {
-            tk_panic(TK_STR("net: two tasks wait on one socket", 33));
+            sn_panic(SN_STR("net: two tasks wait on one socket", 33));
         }
     }
 
     if (atomic_load(dl) >= 0) { // a deadline marked after the look above sees the task in the word and wakes it
-        tk_park();
+        sn_park();
     }
 
     uintptr_t mine = self;
     if (atomic_compare_exchange_strong(word, &mine, pd_none)) {
-        tk_outside(-1);
+        sn_outside(-1);
     }
 
     return atomic_load(dl) < 0 ? pd_timeout : 0;
 }
 
-// tk_net_setDeadline sets when fd's reads, or its writes, stop waiting:
+// sn_net_setDeadline sets when fd's reads, or its writes, stop waiting:
 // d nanoseconds from now, at once for a d of zero or less, and never
 // when set is 0. Setting it again moves it, and a deadline that passed
 // no longer holds once it is set again, as in Go. The old timer is taken
 // out before the new one is marked armed, so that it cannot fire after
 // and mark the new deadline passed.
-int64_t tk_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
+int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
     poll_desc *pd = pd_of((int)fd);
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
     int64_t *at = write ? &pd->wt : &pd->rt;
-    tk_deadline_disarm(at);
+    sn_deadline_disarm(at);
     if (set == 0) {
         atomic_store(dl, 0);
     } else if (d <= 0) {
         expire(pd, write != 0);
     } else {
         atomic_store(dl, 1);
-        tk_deadline_arm(at, d, write ? expire_write : expire_read, pd);
+        sn_deadline_arm(at, d, write ? expire_write : expire_read, pd);
     }
 
     return 0;
@@ -429,22 +429,22 @@ int64_t tk_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
 // find it closed.
 static void unwatch(int fd) {
     poll_desc *pd = pd_of(fd);
-    tk_deadline_disarm(&pd->rt); // a timer of this socket's must not fire on the next one with its number
-    tk_deadline_disarm(&pd->wt);
+    sn_deadline_disarm(&pd->rt); // a timer of this socket's must not fire on the next one with its number
+    sn_deadline_disarm(&pd->wt);
     atomic_store(&pd->rd, 0);
     atomic_store(&pd->wd, 0);
     _Atomic uintptr_t *words[2] = {&pd->r, &pd->w};
     for (int i = 0; i < 2; i++) {
         uintptr_t old = atomic_exchange(words[i], pd_none);
         if (old > pd_ready) {
-            tk_wake((tk_task *)old);
-            tk_outside(-1);
+            sn_wake((sn_task *)old);
+            sn_outside(-1);
         }
     }
 }
 
 // ipv4 reads the IPv4 address host, "127.0.0.1", into addr.
-static bool ipv4(tk_string host, struct in_addr *addr) {
+static bool ipv4(sn_string host, struct in_addr *addr) {
     char text[64];
     if (host.len >= (int64_t)sizeof text) {
         return false;
@@ -458,29 +458,29 @@ static bool ipv4(tk_string host, struct in_addr *addr) {
 // fail closes s, when there is one, and returns the error of the call
 // named, storing the name for the library's message, "bind: address
 // already in use".
-static int64_t fail(int s, const char *name, tk_string *call) {
+static int64_t fail(int s, const char *name, sn_string *call) {
     int code = last_error();
     if (s >= 0) {
         unwatch(s);
         close(s);
     }
 
-    *call = TK_STR(name, (int64_t)strlen(name));
+    *call = SN_STR(name, (int64_t)strlen(name));
     return code;
 }
 
-// tk_net_listen opens a TCP socket listening on the IPv4 address host,
+// sn_net_listen opens a TCP socket listening on the IPv4 address host,
 // "0.0.0.0" for every address of the machine, at the port, 0 for one
 // the system picks, and stores the descriptor and the port it listens
 // on; a failure stores the call that failed. A host that is not an
 // IPv4 address is -1, which the library words; the port is in range.
-int64_t tk_net_listen(tk_string host, int64_t port, int64_t *fd, int64_t *got, tk_string *call) {
+int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
     if (!ipv4(host, &addr.sin_addr)) {
         return -1;
     }
 
-    int s = socket(AF_INET, SOCK_STREAM | TK_SOCK_FLAGS, 0);
+    int s = socket(AF_INET, SOCK_STREAM | SN_SOCK_FLAGS, 0);
     if (s < 0) {
         return fail(s, "socket", call);
     }
@@ -514,20 +514,20 @@ int64_t tk_net_listen(tk_string host, int64_t port, int64_t *fd, int64_t *got, t
     return 0;
 }
 
-// tk_net_accept waits for a connection on the listening socket and
+// sn_net_accept waits for a connection on the listening socket and
 // stores its descriptor. A connection its client reset before it was
 // accepted is skipped, as Go's runtime skips it, for the next one: on
 // Darwin it is accepted and then refuses its socket options, elsewhere
 // accept reports it aborted. Either is the client's failure, and a
 // server that stopped on it could be stopped by any client.
-int64_t tk_net_accept(int64_t fd, int64_t *out) {
+int64_t sn_net_accept(int64_t fd, int64_t *out) {
     for (;;) {
         if (passed((int)fd, false)) {
             return pd_timeout;
         }
 
-#if TK_SOCK_FLAGS != 0
-        int c = accept4((int)fd, NULL, NULL, TK_SOCK_FLAGS);
+#if SN_SOCK_FLAGS != 0
+        int c = accept4((int)fd, NULL, NULL, SN_SOCK_FLAGS);
 #else
         int c = accept((int)fd, NULL, NULL);
 #endif
@@ -562,7 +562,7 @@ int64_t tk_net_accept(int64_t fd, int64_t *out) {
     }
 }
 
-// tk_net_dial connects to the IPv4 address host at the port and stores
+// sn_net_dial connects to the IPv4 address host at the port and stores
 // the connection's descriptor, or on a failure the call that failed. A
 // host that is not an IPv4 address is -1, which the library words; a
 // connection not made within timeout nanoseconds, when it is above
@@ -571,13 +571,13 @@ int64_t tk_net_accept(int64_t fd, int64_t *out) {
 // again after every wake, as Go checks it: a wake can come for another
 // wait, so a socket with no error yet is connected only once it has a
 // peer.
-int64_t tk_net_dial(tk_string host, int64_t port, int64_t timeout, int64_t *fd, tk_string *call) {
+int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call) {
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
     if (!ipv4(host, &addr.sin_addr)) {
         return -1;
     }
 
-    int s = socket(AF_INET, SOCK_STREAM | TK_SOCK_FLAGS, 0);
+    int s = socket(AF_INET, SOCK_STREAM | SN_SOCK_FLAGS, 0);
     if (s < 0) {
         return fail(s, "socket", call);
     }
@@ -592,7 +592,7 @@ int64_t tk_net_dial(tk_string host, int64_t port, int64_t timeout, int64_t *fd, 
     }
 
     if (timeout > 0) {
-        tk_net_setDeadline(s, 1, timeout, 1);
+        sn_net_setDeadline(s, 1, timeout, 1);
     }
 
     if (connect(s, (struct sockaddr *)&addr, sizeof addr) != 0) {
@@ -631,7 +631,7 @@ int64_t tk_net_dial(tk_string host, int64_t port, int64_t timeout, int64_t *fd, 
     }
 
     if (timeout > 0) {
-        tk_net_setDeadline(s, 1, 0, 0); // the timeout was the dial's: the connection has none
+        sn_net_setDeadline(s, 1, 0, 0); // the timeout was the dial's: the connection has none
     }
 
     *fd = s;
@@ -640,22 +640,22 @@ int64_t tk_net_dial(tk_string host, int64_t port, int64_t timeout, int64_t *fd, 
 
 // address formats the IPv4 address and port of a socket as Go prints
 // them, "127.0.0.1:8080", as an owned string.
-static tk_string address(const struct sockaddr_in *a) {
+static sn_string address(const struct sockaddr_in *a) {
     char ip[INET_ADDRSTRLEN];
     if (inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip) == NULL) {
-        return TK_STR("", 0);
+        return SN_STR("", 0);
     }
 
     char text[INET_ADDRSTRLEN + 8];
     int n = snprintf(text, sizeof text, "%s:%d", ip, ntohs(a->sin_port));
-    uint8_t *p = tk_alloc((size_t)n);
+    uint8_t *p = sn_alloc((size_t)n);
     memcpy(p, text, (size_t)n);
-    return TK_OWNED(p, n);
+    return SN_OWNED(p, n);
 }
 
-// tk_net_addrs stores the local and the remote address of a socket,
+// sn_net_addrs stores the local and the remote address of a socket,
 // the remote one empty when it has no peer, as a listening socket.
-int64_t tk_net_addrs(int64_t fd, tk_string *local, tk_string *remote) {
+int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
     struct sockaddr_in a;
     socklen_t len = sizeof a;
     if (getsockname((int)fd, (struct sockaddr *)&a, &len) != 0) {
@@ -664,15 +664,15 @@ int64_t tk_net_addrs(int64_t fd, tk_string *local, tk_string *remote) {
 
     *local = address(&a);
     len = sizeof a;
-    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? address(&a) : TK_STR("", 0);
+    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? address(&a) : SN_STR("", 0);
     return 0;
 }
 
-// tk_net_read reads what the connection has into buf and stores how
+// sn_net_read reads what the connection has into buf and stores how
 // much, 0 once the other side has closed, or for a buf of no bytes. A
 // read a signal interrupts is asked again, as the file reads are.
-int64_t tk_net_read(int64_t fd, tk_slice_u8 *buf, int64_t *n) {
-    tk_check_slice((tk_slice *)buf);
+int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
+    sn_check_slice((sn_slice *)buf);
     if (buf->len == 0) {
         *n = 0;
         return 0;
@@ -703,11 +703,11 @@ int64_t tk_net_read(int64_t fd, tk_slice_u8 *buf, int64_t *n) {
     }
 }
 
-// tk_net_write writes all of buf to the connection and stores how
+// sn_net_write writes all of buf to the connection and stores how
 // much it wrote: the length of buf, or on a failure what went before
 // it, which the library's Error carries as Go's Write returns it.
-int64_t tk_net_write(int64_t fd, tk_slice_u8 buf, int64_t *n) {
-    tk_check_slice((tk_slice *)&buf);
+int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
+    sn_check_slice((sn_slice *)&buf);
     int64_t done = 0;
     *n = 0;
     while (done < buf.len) {
@@ -716,7 +716,7 @@ int64_t tk_net_write(int64_t fd, tk_slice_u8 buf, int64_t *n) {
             return pd_timeout;
         }
 
-        ssize_t put = send((int)fd, buf.ptr + done, (size_t)(buf.len - done), TK_NOSIGNAL);
+        ssize_t put = send((int)fd, buf.ptr + done, (size_t)(buf.len - done), SN_NOSIGNAL);
         if (put >= 0) {
             done += put;
             continue;
@@ -741,9 +741,9 @@ int64_t tk_net_write(int64_t fd, tk_slice_u8 buf, int64_t *n) {
     return 0;
 }
 
-// tk_net_closeConn closes a socket, a connection or a listener, and
+// sn_net_closeConn closes a socket, a connection or a listener, and
 // forgets what the poller still promised for it.
-int64_t tk_net_closeConn(int64_t fd) {
+int64_t sn_net_closeConn(int64_t fd) {
     unwatch((int)fd);
     return close((int)fd) == 0 ? 0 : last_error();
 }

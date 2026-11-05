@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,11 +10,11 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // Fprint writes an indented rendering of the tree rooted at node, one
-// field per line, for people reading `teak parse` output. Positions are
+// field per line, for people reading `snello parse` output. Positions are
 // printed as line:column, resolved through file, or as raw offsets when
 // file is nil; nil fields, empty slices and missing positions are
 // omitted.

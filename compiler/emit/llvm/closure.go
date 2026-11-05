@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A function value is a pair: a function taking an environment pointer
@@ -65,7 +65,7 @@ func (e *Emitter) funcLit(x *ast.FuncLit) value {
 	params := e.info.Types[x].(*types.Signature).Params() // the declaration's own objects, which the body names
 	pair := e.irType(sig, x.Pos())
 	e.closures++
-	name := "tk_closure_" + strconv.Itoa(e.closures)
+	name := "sn_closure_" + strconv.Itoa(e.closures)
 	captured := e.captures(x)
 	inline := true // every capture a copy: the environment is the box
 	parts := make([]string, len(captured))
@@ -155,7 +155,7 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) value {
 		return value{pair, "zeroinitializer"}
 	}
 
-	name := "tk_fnval_" + lower.FuncName(fn)
+	name := "sn_fnval_" + lower.FuncName(fn)
 	if !e.state[name] {
 		e.state[name] = true
 		params := []string{"ptr %env"}

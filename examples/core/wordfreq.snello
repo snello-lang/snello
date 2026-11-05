@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Core 7: word frequency count over a file.
 //
-// The core version of 10-wordfreq.teak using only the predeclared string
+// The core version of 10-wordfreq.snello using only the predeclared string
 // and slice methods. Stresses: an owned string versus borrows of its
 // pieces, a map with owned keys, consuming a map into a slice, and
 // sorting in place through a mut borrow.

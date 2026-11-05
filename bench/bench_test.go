@@ -1,13 +1,13 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Package bench holds the programs behind the performance table of
-// _docs/design/01-language-design.md, each written in Teak, Go and
+// _docs/design/01-language-design.md, each written in Snello, Go and
 // Rust, and the tests that build and time them. The timing runs only
-// when asked, TEAK_BENCH=1 go test ./bench -v, since it takes a
+// when asked, SNELLO_BENCH=1 go test ./bench -v, since it takes a
 // minute and its numbers are for the design document, not for a
-// pass or fail; without the variable the tests check that every Teak
+// pass or fail; without the variable the tests check that every Snello
 // program here builds and prints what its Go version prints, and that
 // a program's peak memory is what it keeps alive, however much it
 // allocates and frees on the way.
@@ -25,12 +25,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/compiler/emit/c"
-	"github.com/teak-lang/teak/compiler/emit/llvm"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/emit/llvm"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // programs are the benchmarks, by the stem of their files.
@@ -40,21 +40,21 @@ var programs = []string{"fib", "tree", "words", "tasks", "memory"}
 // their last line, which varies from run to run and is not compared.
 var timed = map[string]bool{"tasks": true, "memory": true}
 
-// TestBenchmarks builds every program here through both Teak backends
-// and in Go, checks that they print the same, and when TEAK_BENCH is
+// TestBenchmarks builds every program here through both Snello backends
+// and in Go, checks that they print the same, and when SNELLO_BENCH is
 // set builds the Rust versions too and times them all, the best of
 // three runs each, with the peak memory of each binary and the timings
 // a timed program reports, printing the table the design document
 // records.
 func TestBenchmarks(t *testing.T) {
-	timing := os.Getenv("TEAK_BENCH") != ""
+	timing := os.Getenv("SNELLO_BENCH") != ""
 	dir := t.TempDir()
 	var rows []string
 	for _, name := range programs {
 		bins := map[string]string{
-			"teak (llvm)": buildTeak(t, dir, name, "llvm"),
-			"teak (c)":    buildTeak(t, dir, name, "c"),
-			"go":          buildGo(t, dir, name),
+			"snello (llvm)": buildSnello(t, dir, name, "llvm"),
+			"snello (c)":    buildSnello(t, dir, name, "c"),
+			"go":            buildGo(t, dir, name),
 		}
 		if timing {
 			if _, err := os.Stat(name + ".rs"); err == nil {
@@ -106,7 +106,7 @@ func TestBenchmarks(t *testing.T) {
 // a multiple of the live heap before a cycle fails this test; Go's,
 // at its default setting, peaks at about twice the live heap.
 func TestNoCollector(t *testing.T) {
-	src, err := os.ReadFile("memory.teak")
+	src, err := os.ReadFile("memory.snello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestNoCollector(t *testing.T) {
 		peaks := make(map[int]int64)
 		for _, n := range []int{1, 2000, 10000} {
 			variant := strings.Replace(string(src), "const rounds = 2000", "const rounds = "+strconv.Itoa(n), 1)
-			bin := buildTeakSource(t, t.TempDir(), "memory", []byte(variant), backend)
+			bin := buildSnelloSource(t, t.TempDir(), "memory", []byte(variant), backend)
 			peaks[n] = run(t, bin).peak
 		}
 
@@ -192,22 +192,22 @@ func megabytes(n int64) string {
 	return strconv.FormatInt(n>>20, 10) + " MB"
 }
 
-// buildTeak builds name.teak through the backend into dir.
-func buildTeak(t *testing.T, dir, name, backend string) string {
+// buildSnello builds name.snello through the backend into dir.
+func buildSnello(t *testing.T, dir, name, backend string) string {
 	t.Helper()
-	src, err := os.ReadFile(name + ".teak")
+	src, err := os.ReadFile(name + ".snello")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return buildTeakSource(t, dir, name, src, backend)
+	return buildSnelloSource(t, dir, name, src, backend)
 }
 
-// buildTeakSource builds src, as the program name, through the backend
+// buildSnelloSource builds src, as the program name, through the backend
 // into dir.
-func buildTeakSource(t *testing.T, dir, name string, src []byte, backend string) string {
+func buildSnelloSource(t *testing.T, dir, name string, src []byte, backend string) string {
 	t.Helper()
-	f, file, err := parser.ParseFile(name+".teak", src)
+	f, file, err := parser.ParseFile(name+".snello", src)
 	if err != nil {
 		t.Fatal(err)
 	}

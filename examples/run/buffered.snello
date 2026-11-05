@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The bufio package written in Teak: a Writer over stdout holding what
+// The bufio package written in Snello: a Writer over stdout holding what
 // is written until its buffer fills or Flush, written to by its own
 // methods and through fmt.Fprintln and Fprintf; a file written through
 // a Writer, scanned line by line with the last line unterminated, and
@@ -50,7 +50,7 @@ func main() {
 	fmt.Println(small.Buffered())
 	small.Flush().Expect("flush")
 
-	dir := os.MkdirTemp("", "teak-bufio").Expect("tempdir")
+	dir := os.MkdirTemp("", "snello-bufio").Expect("tempdir")
 	path := dir.Clone() + "/lines.txt"
 	{
 		f := os.Create(path).Expect("create")

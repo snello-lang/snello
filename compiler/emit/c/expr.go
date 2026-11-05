@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // expr writes an expression and returns its C text. An expression that
@@ -179,7 +179,7 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 	case *types.Enum:
 		tag := ".tag = " + strconv.Itoa(v.Index())
 		if hasDrop(lower.ValueType(t)) {
-			tag += ", .tk_live = true"
+			tag += ", .sn_live = true"
 		}
 
 		if len(args) == 0 {
@@ -203,7 +203,7 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 // through calls.
 func (e *Emitter) selector(x *ast.SelectorExpr) string {
 	if pkg := e.packageOf(x.X); pkg != nil {
-		switch obj := e.info.Uses[x.Sel].(type) { // a member of a package written in Teak
+		switch obj := e.info.Uses[x.Sel].(type) { // a member of a package written in Snello
 		case *types.Func:
 			if lower.Key(obj) != "" {
 				e.unsupported(x.Pos(), "a function the compiler provides, "+pkg.Name()+"."+x.Sel.Name+", as a value")
@@ -235,7 +235,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) string {
 // tuple writes (a, b) as a struct literal and () as the unit value.
 func (e *Emitter) tuple(x *ast.TupleExpr) string {
 	if len(x.Elts) == 0 {
-		return "TK_UNIT"
+		return "SN_UNIT"
 	}
 
 	t := e.typeOf(x).(*types.Tuple)
@@ -284,7 +284,7 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 
 	live := ""
 	if hasDrop(t) {
-		live = ".tk_live = true"
+		live = ".sn_live = true"
 	}
 
 	if len(x.Elts) == 0 {
@@ -324,7 +324,7 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 // here, so the runtime never counts bytes. An integer carries a suffix
 // that makes it 64 bits, unsigned when its type is: C gives a bare
 // literal the narrowest signed type that holds it, so 570 * 31556952
-// would overflow an int where Teak computes in the literal's type, and
+// would overflow an int where Snello computes in the literal's type, and
 // a literal past the signed range would be refused.
 func (e *Emitter) literal(x *ast.BasicLit) string {
 	switch x.Kind {
@@ -448,14 +448,14 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 				return s // a ref is the value itself
 			}
 		case *types.Pointer:
-			return "TK_DEREF(" + s + ")"
+			return "SN_DEREF(" + s + ")"
 		}
 
 		return "(*" + s + ")"
 	case token.AND:
 		elem := e.typeOf(x).(*types.Pointer).Elem()
 		cell := e.temp()
-		e.line(e.cType(elem, x.Pos()) + " *" + cell + " = tk_alloc(sizeof(" + e.cType(elem, x.Pos()) + "));")
+		e.line(e.cType(elem, x.Pos()) + " *" + cell + " = sn_alloc(sizeof(" + e.cType(elem, x.Pos()) + "));")
 		e.line("*" + cell + " = " + e.valueTo(x.X, elem) + ";")
 		return cell
 	case token.ARROW:
@@ -464,7 +464,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		ch := e.looked(x.X, lower.ValueType(e.typeOf(x.X)))
 		got, ok := e.temp(), e.temp()
 		e.line(e.cType(elem, x.Pos()) + " " + got + " = " + e.zero(elem, x.Pos()) + ";")
-		e.line("bool " + ok + " = tk_chan_recv(" + ch + ", &" + got + ");")
+		e.line("bool " + ok + " = sn_chan_recv(" + ch + ", &" + got + ");")
 		return "(" + e.cType(opt, x.Pos()) + "){.has = " + ok + ", .val = " + got + "}"
 	case token.XOR:
 		return "(~" + e.expr(x.X) + ")"
@@ -569,7 +569,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 			return join(text{l, !e.isRead(x.X)}, text{r, !e.isRead(x.Y)}).s // a side built here is freed after the join
 		}
 
-		return "(tk_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"
+		return "(sn_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"
 	}
 
 	if x.Op == token.AND_NOT {
@@ -597,9 +597,9 @@ func divides(op token.Kind, t types.Type) bool {
 // settles for both backends. C leaves both undefined, and the
 // processors disagree: x86-64 traps where arm64 goes on.
 func (e *Emitter) divider(op token.Kind, t types.Type, pos token.Pos) string {
-	name := "tk_quo_" + lower.Mangle(t)
+	name := "sn_quo_" + lower.Mangle(t)
 	if op == token.REM {
-		name = "tk_rem_" + lower.Mangle(t)
+		name = "sn_rem_" + lower.Mangle(t)
 	}
 
 	if e.state[name] != undeclared {
@@ -609,8 +609,8 @@ func (e *Emitter) divider(op token.Kind, t types.Type, pos token.Pos) string {
 	e.state[name] = defined
 	ct := e.cType(t, pos)
 	var b strings.Builder
-	put(&b, "static TK_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " b) {\n")
-	put(&b, "\tif (b == 0) {\n\t\ttk_panic(", literal("integer divide by zero"), ");\n\t}\n\n")
+	put(&b, "static SN_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " b) {\n")
+	put(&b, "\tif (b == 0) {\n\t\tsn_panic(", literal("integer divide by zero"), ");\n\t}\n\n")
 	if t.Underlying().(*types.Basic).Info()&types.IsUnsigned == 0 {
 		overflow := "(" + ct + ")(0 - a)" // the wrapping negation, which is the smallest number itself when a is
 		if op == token.REM {
@@ -621,7 +621,7 @@ func (e *Emitter) divider(op token.Kind, t types.Type, pos token.Pos) string {
 	}
 
 	put(&b, "\treturn a ", op.String(), " b;\n}\n\n")
-	put(&e.protos, "static TK_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " b);\n")
+	put(&e.protos, "static SN_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " b);\n")
 	e.helpers.WriteString(b.String())
 	return name
 }
@@ -800,7 +800,7 @@ func (e *Emitter) minCall(x *ast.CallExpr, b *types.Builtin) string {
 	if isFloat(t) { // NaN wins, and -0 is below +0, as Go's specification has min and max on floats
 		out := parts[0]
 		for _, p := range parts[1:] {
-			out = "tk_f64_" + b.Name() + "(" + out + ", " + p + ")"
+			out = "sn_f64_" + b.Name() + "(" + out + ", " + p + ")"
 		}
 
 		return "((" + e.cType(t, x.Pos()) + ")" + out + ")"
@@ -850,18 +850,18 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 	case types.BuiltinTake:
 		return e.takeCall(x)
 	case types.BuiltinPanic:
-		return "tk_panic(" + e.toString(x.Args[0]) + ")"
+		return "sn_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)
 	case types.BuiltinClose:
-		return "tk_chan_close(" + e.looked(x.Args[0], lower.ValueType(e.typeOf(x.Args[0]))) + ")"
+		return "sn_chan_close(" + e.looked(x.Args[0], lower.ValueType(e.typeOf(x.Args[0]))) + ")"
 	case types.BuiltinPrint:
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {
 			if s := e.text(parts[i], a); s.owned {
-				e.line("tk_eprint_owned(" + s.s + ");")
+				e.line("sn_eprint_owned(" + s.s + ");")
 			} else {
-				e.line("tk_eprint_string(" + s.s + ");")
+				e.line("sn_eprint_string(" + s.s + ");")
 			}
 		}
 
@@ -881,9 +881,9 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 	v := e.operands([]ast.Expr{x}, nil)[0]
 	switch {
 	case isString(from) && isByteSlice(to):
-		return "tk_string_to_bytes(" + v + ")"
+		return "sn_string_to_bytes(" + v + ")"
 	case isByteSlice(from) && isString(to):
-		return "tk_bytes_to_string(" + v + ")"
+		return "sn_bytes_to_string(" + v + ")"
 	}
 
 	return "((" + e.cType(to, x.Pos()) + ")(" + v + "))"

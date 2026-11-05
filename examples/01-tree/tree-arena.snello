@@ -1,15 +1,15 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Version 3: Teak with the standard library arena.Arena<T>. This is the Teak way.
+// Version 3: Snello with the standard library arena.Arena<T>. This is the Snello way.
 //
-// Same idea as tree-slice.teak, but the arena is a library type and the
+// Same idea as tree-slice.snello, but the arena is a library type and the
 // index carries a generation counter. Remove frees a node immediately and
 // reuses its slot safely: any old arena.Index<Node> for it returns None from
 // Get instead of aliasing whatever lives in the slot now.
 //
-// Compared to tree-slice.teak: no `live` flag, no leaked slots, and stale
+// Compared to tree-slice.snello: no `live` flag, no leaked slots, and stale
 // handles are detected instead of trusted. See _docs/design/02-arenas-and-indices.md.
 
 package tree

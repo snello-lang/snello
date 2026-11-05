@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/teak-lang/teak/compiler/emit/c"
-	"github.com/teak-lang/teak/runtime"
+	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/runtime"
 )
 
 // Flags are the options clang is given for the module: the standard

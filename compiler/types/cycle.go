@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/token"
+import "github.com/snello-lang/snello/compiler/token"
 
 // Two kinds of declaration describe no type a program can hold, and
 // both are refused once every declaration is resolved, before anything

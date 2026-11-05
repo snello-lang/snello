@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 // Nodes point at each other. This works because the garbage collector
 // keeps a node alive as long as anything points at it; nobody decides
 // who owns a node. This file is the reference point: what a Go developer
-// expects to write, and what Teak must stay close to.
+// expects to write, and what Snello must stay close to.
 
 package tree
 

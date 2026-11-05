@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The shapes of _docs/design/07-lowering.md. A borrow, an owned
@@ -24,7 +24,7 @@ import (
 // data pointer. A declared struct or enum is a named type of the
 // module, which the IR lets refer to itself through a ptr.
 
-// irType writes the IR type of a Teak type. A kind the backend does
+// irType writes the IR type of a Snello type. A kind the backend does
 // not lower yet is reported and written as void so the output still
 // reads.
 func (e *Emitter) irType(t types.Type, pos token.Pos) string {
@@ -57,11 +57,11 @@ func (e *Emitter) irType(t types.Type, pos token.Pos) string {
 	case *types.Result:
 		return "{ i1, [" + strconv.FormatInt(e.payloadWords(t.Val(), t.Err()), 10) + " x i64] }"
 	case *types.Slice:
-		return "%tk_slice"
+		return "%sn_slice"
 	case *types.Array:
 		return "[" + strconv.FormatInt(t.Len(), 10) + " x " + e.irType(t.Elem(), pos) + "]"
 	case *types.Map:
-		return "%tk_map"
+		return "%sn_map"
 	case *types.Tuple:
 		if t == types.Unit {
 			return "{}"
@@ -76,7 +76,7 @@ func (e *Emitter) irType(t types.Type, pos token.Pos) string {
 	case *types.Signature:
 		return "{ ptr, [" + strconv.Itoa(e.boxWords) + " x i64] }"
 	case *types.Trait:
-		return "%tk_trait"
+		return "%sn_trait"
 	case *types.TypeParam:
 		if s := e.sub(t); s != t {
 			return e.irType(s, pos)
@@ -357,7 +357,7 @@ func basicType(t *types.Basic) string {
 	case types.Bool:
 		return "i1"
 	case types.String, types.Error:
-		return "%tk_string"
+		return "%sn_string"
 	case types.Int8, types.Uint8, types.Local:
 		return "i8"
 	case types.Int16, types.Uint16:

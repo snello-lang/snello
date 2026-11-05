@@ -1,15 +1,15 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
-import "github.com/teak-lang/teak/compiler/token"
+import "github.com/snello-lang/snello/compiler/token"
 
 // The methods section 1 of _docs/design/05-standard-library.md
 // predeclares on slices, maps, strings, options and results, each a
 // mapping onto a runtime function of the same meaning. The library's
-// packages are written in Teak under std/ and loaded through the
+// packages are written in Snello under std/ and loaded through the
 // Config's Importer.
 
 // BuiltinMethod is builtinMethod for the test that keeps the library's

@@ -1,11 +1,11 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Rule: a struct holding a borrow is a borrow, and owned data cannot hold
 // a borrow. Returning it is allowed when tied to one input, as for any
 // borrow; storing it is not. Fix: keep the lexers on the stack, one at a
-// time, as core/calc.teak does.
+// time, as core/calc.snello does.
 
 package p
 

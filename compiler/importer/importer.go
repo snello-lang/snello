@@ -1,10 +1,10 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // Package importer loads the standard library's packages for a program
 // that imports them, as go/importer serves go/types: it reads each
-// package's Teak source from the copy std embeds in the compiler, and
+// package's Snello source from the copy std embeds in the compiler, and
 // parses and checks it.
 package importer
 
@@ -14,11 +14,11 @@ import (
 	"path"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
-	"github.com/teak-lang/teak/std"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/std"
 )
 
 // A Package is a library package as loaded: its import path, its
@@ -67,7 +67,7 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
 	}
 
-	name := importPath + "/" + path.Base(importPath) + ".teak"
+	name := importPath + "/" + path.Base(importPath) + ".snello"
 	src, err := std.Sources.ReadFile(name)
 	if err != nil {
 		return nil, errors.New("package " + importPath + " is not in the standard library")
@@ -99,7 +99,7 @@ func (imp *Importer) Packages() []*Package { return imp.order }
 func Paths() []string {
 	var paths []string
 	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(name, ".teak") {
+		if err == nil && !d.IsDir() && strings.HasSuffix(name, ".snello") {
 			paths = append(paths, path.Dir(name))
 		}
 

@@ -1,14 +1,14 @@
 # 8. Option, Result, `?` and `??`
 
-Status: implemented, checked (stage 1, task 1.4, `teak check`) and compiled to native code, methods included (stage 1, task 1.5, `teak build`); `Map` and `MapErr` (stage 2, task 2.6). `examples/run/options.teak`, `boxes.teak` and `slices.teak` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+Status: implemented, checked (stage 1, task 1.4, `snello check`) and compiled to native code, methods included (stage 1, task 1.5, `snello build`); `Map` and `MapErr` (stage 2, task 2.6). `examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
 
-Teak has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
+Snello has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 
 ## `T?`
 
 `T?` is a value that is either `Some(x)` with an `x` of type `T`, or `None`:
 
-```teak
+```snello
 struct Node {
     value    string
     parent   NodeID?               // None for the root
@@ -17,7 +17,7 @@ struct Node {
 
 ```
 
-```teak
+```snello
 n := Node{value: value, parent: Some(parent), children: []NodeID{}}
 root := Node{value: "root", parent: None, children: []NodeID{}}
 ```
@@ -28,7 +28,7 @@ root := Node{value: "root", parent: None, children: []NodeID{}}
 
 The methods on an optional are `Expect(msg)`, which yields the value or stops the program with the message, `Unwrap()`, `UnwrapOr(v)`, `IsSome()` and `IsNone()`. The first three take the optional, since they give its value away, so after `o.Expect("present")` the name `o` is gone unless its type is `Copy`; the two tests only read it:
 
-```teak
+```snello
 text := os.ReadToString("input.txt").Expect("read input")
 ```
 
@@ -36,7 +36,7 @@ text := os.ReadToString("input.txt").Expect("read input")
 
 A `Result<T, E>` is either `Ok(x)` with an `x` of type `T` or `Err(e)` with an `e` of type `E`. The error type is any type the program chooses, usually an enum with one variant per thing that can go wrong, or the predeclared `error`:
 
-```teak
+```snello
 enum ConfigError {
     Unreadable(path string, cause error)
     BadValue(key string, text string)
@@ -53,7 +53,7 @@ func Copy(src ref string, dst ref string) Result<i64, error> { ... }
 
 `match` handles both as the enums they are, exhaustively:
 
-```teak
+```snello
 match Parse(ref src) {
     Ok(e)  => fmt.Println(Eval(ref e)),
     Err(e) => fmt.Println("error:", e),
@@ -67,7 +67,7 @@ text := match os.ReadToString(ref path) {
 
 When only the present case matters, an `if` binding is shorter. The block runs with the pattern bound when the optional holds a value, and the `else`, if any, when it does not:
 
-```teak
+```snello
 if parent := t.nodes[id].parent {
     t.nodes[parent].children.RemoveValue(id)
 }
@@ -83,7 +83,7 @@ The left side may be a name, a tuple of names, or a variant pattern. `if x := op
 
 Both types have `Expect(msg)`, which gives the inside or panics with the message, `Unwrap`, which panics with a message of its own, and `UnwrapOr(v)`, which gives the inside or `v`. An optional answers `IsSome` and `IsNone`, a result `IsOk` and `IsErr`. `Map(f)` applies a function to the present or successful case and leaves the other as it is, so `half(8).Map(twiceText)` is `Some("8")` and `half(3).Map(twiceText)` is `None`; a result also has `MapErr(f)`, which maps the error and leaves a success alone. The function may be a closure, capturing what it needs, or a function's name, and the result type of the method is whatever the function gives back:
 
-```teak
+```snello
 suffix := "!"
 half(8).Map(func(v int) string { return fmt.Sprint(v) + suffix })       // Some("4!")
 parse("").MapErr(func(e string) int { return e.Len() })                 // Err(5)
@@ -96,7 +96,7 @@ The methods that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `Map` and
 
 `x ?? else` yields the value inside `x` when it is `Some` or `Ok`, and otherwise evaluates `else`. The else is an expression of the inside's type, or a `return`, `break` or `continue`, or a block ending in one:
 
-```teak
+```snello
 n := take(mut s.head) ?? return None
 text := kv.Get(ref key) ?? return Err(Missing(key))   // key moves only if the else runs
 at := cur ?? break
@@ -109,7 +109,7 @@ n := cur ?? { *cur = Some(&Node{key: k, val: v, left: None, right: None}); retur
 
 `x?` inside a function yields the value inside `x` and returns early with the absent or failed case when there is none. The function's result type says which kind `?` handles: in a function returning `T?`, `x?` takes an optional and returns `None`; in one returning `Result<T, E>`, it takes a `Result<U, E>` with the same error type and returns the `Err`:
 
-```teak
+```snello
 func Copy(src ref string, dst ref string) Result<i64, error> {
     in := os.Open(src)?                     // owned; closed by Drop on every exit path
     out := os.Create(dst)?

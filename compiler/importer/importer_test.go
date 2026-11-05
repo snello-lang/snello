@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // TestPackages loads every package of the library, so that a package
@@ -113,7 +113,7 @@ func TestImports(t *testing.T) {
 		{"import \"sync\"\nfunc f() { a := sync.NewArc(sync.NewMutex(make(chan int))); print(a) }", nil}, // a channel handle is Send, and a Mutex of a Send value is
 	}
 	for _, tt := range tests {
-		f, file, err := parser.ParseFile("t.teak", []byte("package p\n"+tt.src+"\n"))
+		f, file, err := parser.ParseFile("t.snello", []byte("package p\n"+tt.src+"\n"))
 		if err != nil {
 			t.Fatalf("%q: parse error: %v", tt.src, err)
 		}

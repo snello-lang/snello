@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 func TestResolve(t *testing.T) {
@@ -89,7 +89,7 @@ func TestResolve(t *testing.T) {
 // Defs or Uses, pointing at the right object.
 func TestInfo(t *testing.T) {
 	src := "package p\nstruct T { n int }\nenum S { A; B(k int) }\nfunc (t ref T) get() int { return t.n }\nfunc main() { v := T{n: 1}; x := v.get(); print(x); s := A; print(match s { A => 0, B(k) => k, other => 1 }) }"
-	f, file, err := parser.ParseFile("info.teak", []byte(src))
+	f, file, err := parser.ParseFile("info.snello", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,51 +145,51 @@ func TestCoreExamples(t *testing.T) {
 // other negative program must produce no error at all, since the
 // checker has no business rejecting it for another reason.
 var handledErrors = map[string]bool{
-	"nil-used.teak":            true,
-	"missing-arm.teak":         true,
-	"wrong-question-kind.teak": true,
-	"ref-as-mut.teak":          true,
-	"use-after-move.teak":      true,
-	"move-in-branch.teak":      true,
-	"closure-moves.teak":       true,
-	"use-after-close.teak":     true,
-	"move-in-loop.teak":        true,
-	"move-out-of-slice.teak":   true,
-	"move-out-of-borrow.teak":  true,
-	"partial-move.teak":        true,
+	"nil-used.snello":            true,
+	"missing-arm.snello":         true,
+	"wrong-question-kind.snello": true,
+	"ref-as-mut.snello":          true,
+	"use-after-move.snello":      true,
+	"move-in-branch.snello":      true,
+	"closure-moves.snello":       true,
+	"use-after-close.snello":     true,
+	"move-in-loop.snello":        true,
+	"move-out-of-slice.snello":   true,
+	"move-out-of-borrow.snello":  true,
+	"partial-move.snello":        true,
 	// Borrows.
-	"mut-while-ref.teak":            true,
-	"two-mut.teak":                  true,
-	"two-slots.teak":                true,
-	"assign-while-borrowed.teak":    true,
-	"move-while-borrowed.teak":      true,
-	"assign-through-ref.teak":       true,
-	"mut-through-ref-receiver.teak": true,
+	"mut-while-ref.snello":            true,
+	"two-mut.snello":                  true,
+	"two-slots.snello":                true,
+	"assign-while-borrowed.snello":    true,
+	"move-while-borrowed.snello":      true,
+	"assign-through-ref.snello":       true,
+	"mut-through-ref-receiver.snello": true,
 	// Escaping borrows.
-	"borrow-in-slice.teak":        true,
-	"borrow-struct-in-slice.teak": true,
-	"closure-stored.teak":         true,
-	"borrow-across-spawn.teak":    true,
-	"borrow-on-channel.teak":      true,
-	"return-two-borrows.teak":     true,
-	"return-local-borrow.teak":    true,
-	"closure-returned.teak":       true,
+	"borrow-in-slice.snello":        true,
+	"borrow-struct-in-slice.snello": true,
+	"closure-stored.snello":         true,
+	"borrow-across-spawn.snello":    true,
+	"borrow-on-channel.snello":      true,
+	"return-two-borrows.snello":     true,
+	"return-local-borrow.snello":    true,
+	"closure-returned.snello":       true,
 	// Task boundaries.
-	"use-after-spawn.teak":  true,
-	"spawn-twice.teak":      true,
-	"spawn-not-send.teak":   true,
-	"channel-not-send.teak": true,
+	"use-after-spawn.snello":  true,
+	"spawn-twice.snello":      true,
+	"spawn-not-send.snello":   true,
+	"channel-not-send.snello": true,
 	// Lock-protected data, reached only through a guard.
-	"guard-across-spawn.teak": true,
-	"guard-of-temporary.teak": true,
+	"guard-across-spawn.snello": true,
+	"guard-of-temporary.snello": true,
 	// The races of the stage's checkpoint.
-	"use-after-send.teak":            true,
-	"mutate-through-arc.teak":        true,
-	"borrowing-closure-spawned.teak": true,
+	"use-after-send.snello":            true,
+	"mutate-through-arc.snello":        true,
+	"borrowing-closure-spawned.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "errors", "*.teak"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "errors", "*.snello"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no negative programs found: %v", err)
 	}
@@ -269,7 +269,7 @@ func BenchmarkCheck(b *testing.B) {
 
 func checkErrors(t *testing.T, src string) []string {
 	t.Helper()
-	f, file, err := parser.ParseFile("test.teak", []byte(src))
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
 	if err != nil {
 		t.Fatalf("%q: parse error: %v", src, err)
 	}
@@ -290,7 +290,7 @@ func checkErrors(t *testing.T, src string) []string {
 // corePrograms returns the positive core programs under examples/core.
 func corePrograms(tb testing.TB) []string {
 	tb.Helper()
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "*.teak"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "*.snello"))
 	if err != nil || len(paths) < 8 {
 		tb.Fatalf("found %d core programs, want at least 8: %v", len(paths), err)
 	}
@@ -333,7 +333,7 @@ func (imp *fileImporter) Import(path string) (*Package, error) {
 		return pkg, nil
 	}
 
-	name := filepath.Join("..", "..", "std", path, filepath.Base(path)+".teak")
+	name := filepath.Join("..", "..", "std", path, filepath.Base(path)+".snello")
 	src, err := os.ReadFile(name)
 	if err != nil {
 		return nil, errors.New("package " + path + " is not in the standard library")
@@ -371,7 +371,7 @@ func (imp *sourceImporter) Import(path string) (*Package, error) {
 		return nil, errors.New("package " + path + " is not in the standard library")
 	}
 
-	f, file, err := parser.ParseFile(path+".teak", []byte(src))
+	f, file, err := parser.ParseFile(path+".snello", []byte(src))
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ func TestTraitInstancesAcrossPackages(t *testing.T) {
 	for _, tt := range tests {
 		imp := &sourceImporter{srcs: map[string]string{"it": lib}, loaded: map[string]*Package{}}
 		imp.conf.Importer = imp
-		f, file, err := parser.ParseFile("test.teak", []byte("package main\n"+tt.src))
+		f, file, err := parser.ParseFile("test.snello", []byte("package main\n"+tt.src))
 		if err != nil {
 			t.Fatal(err)
 		}

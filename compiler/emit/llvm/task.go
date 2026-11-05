@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
-// A spawn statement becomes a call of tk_spawn with a trampoline and a
+// A spawn statement becomes a call of sn_spawn with a trampoline and a
 // block of arguments (_docs/design/06-tasks-and-channels.md): the
 // receiver and the arguments are evaluated here, moved into a block
 // the task owns, and the trampoline, one per spawn statement, calls
@@ -46,7 +46,7 @@ func (e *Emitter) receive(x *ast.UnaryExpr) value {
 	ch := e.chanOperand(x.X)
 	got := e.slot(e.irType(elem, x.Pos()))
 	e.zero(got, elem, x.Pos())
-	ok := e.rt("tk_chan_recv", "i1", ch, value{"ptr", got})
+	ok := e.rt("sn_chan_recv", "i1", ch, value{"ptr", got})
 	return e.optionOf(opt, ok, e.load(e.irType(elem, x.Pos()), got), x.Pos())
 }
 
@@ -56,7 +56,7 @@ func (e *Emitter) sendStmt(s *ast.SendStmt) {
 	ch := e.chanOperand(s.Chan)
 	elem := lower.ValueType(e.typeOf(s.Chan)).Underlying().(*types.Chan).Elem()
 	v := e.spill(e.valueTo(s.Value, elem))
-	e.rt("tk_chan_send", "void", ch, value{"ptr", v})
+	e.rt("sn_chan_send", "void", ch, value{"ptr", v})
 }
 
 // rangeChan writes a loop receiving from the channel ch until it is
@@ -68,7 +68,7 @@ func (e *Emitter) rangeChan(s *ast.RangeStmt, ch value, elem types.Type) {
 	e.jump(again)
 	e.label(again)
 	e.zero(got, elem, s.Pos())
-	ok := e.rt("tk_chan_recv", "i1", ch, value{"ptr", got})
+	ok := e.rt("sn_chan_recv", "i1", ch, value{"ptr", got})
 	e.branch(ok.s, body, end)
 	e.label(body)
 	e.fn.loops = append(e.fn.loops, loop{next: again, end: end, frame: len(e.fn.frames)})
@@ -120,7 +120,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 
 	wants, values := e.callOperands(recv, x.Args, sig)
 	e.tasks++
-	e.spawnCall("tk_task_"+strconv.Itoa(e.tasks), name, sig, wants, values, s.Pos())
+	e.spawnCall("sn_task_"+strconv.Itoa(e.tasks), name, sig, wants, values, s.Pos())
 }
 
 // spawnClosure lifts a spawned closure to a function of its captures
@@ -153,7 +153,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	argWants, args := e.callOperands(nil, x.Args, sig)
 	wants, values = append(wants, argWants...), append(values, args...)
 	e.tasks++
-	task := "tk_task_" + strconv.Itoa(e.tasks)
+	task := "sn_task_" + strconv.Itoa(e.tasks)
 	e.writeBody(task+"_fn", lifted, params, nil, nil, lit.Body, pos)
 	e.spawnCall(task, task+"_fn", lifted, wants, values, pos)
 }
@@ -177,20 +177,20 @@ func (e *Emitter) spawnCall(task, name string, sig *types.Signature, wants []typ
 
 		r := e.callValues(name, sig, wants, args, pos)
 		e.discard(r, sig.Results(), pos)
-		e.declare("tk_free", "declare void @tk_free(ptr)")
-		e.inst("call void @tk_free(ptr %p)")
+		e.declare("sn_free", "declare void @sn_free(ptr)")
+		e.inst("call void @sn_free(ptr %p)")
 		e.inst("ret void")
 		e.fn.terminated = true
 	})
 
-	e.declare("tk_alloc", "declare ptr @tk_alloc(i64)")
-	block := e.op("call ptr @tk_alloc(i64 "+strconv.FormatInt(max(e.structSize(wants), 1), 10)+")", "ptr")
+	e.declare("sn_alloc", "declare ptr @sn_alloc(i64)")
+	block := e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.structSize(wants), 1), 10)+")", "ptr")
 	for i, v := range values {
 		e.store(v, e.gep(st, block.s, i))
 	}
 
-	e.declare("tk_spawn", "declare void @tk_spawn(ptr, ptr)")
-	e.inst("call void @tk_spawn(ptr @" + task + "_run, " + block.typed() + ")")
+	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr)")
+	e.inst("call void @sn_spawn(ptr @" + task + "_run, " + block.typed() + ")")
 }
 
 // spawnee names the function a spawned call of fun runs, with its
@@ -242,7 +242,7 @@ func (e *Emitter) calleeName(id *ast.Ident, fn *types.Func) (string, *types.Sign
 }
 
 // A select evaluates every case's channel, and a send case's value, on
-// entry, hands them to tk_select as an array of cases, and runs the
+// entry, hands them to sn_select as an array of cases, and runs the
 // body of the case it chose, each under a test of the chosen index, so
 // a break inside a case leaves the loop around the select as the
 // language says. A receive case gets its value as the Option the
@@ -278,17 +278,17 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 		}
 	}
 
-	cases := e.slot("[" + strconv.Itoa(max(n, 1)) + " x %tk_case]")
+	cases := e.slot("[" + strconv.Itoa(max(n, 1)) + " x %sn_case]")
 	at := func(i int) string {
-		return e.op("getelementptr inbounds ["+strconv.Itoa(max(n, 1))+" x %tk_case], ptr "+cases+", i64 0, i64 "+strconv.Itoa(i), "ptr").s
+		return e.op("getelementptr inbounds ["+strconv.Itoa(max(n, 1))+" x %sn_case], ptr "+cases+", i64 0, i64 "+strconv.Itoa(i), "ptr").s
 	}
 
 	setCase := func(i int, ch value, v string, send bool) {
 		c := at(i)
-		e.store(ch, e.gep("%tk_case", c, 0))
-		e.store(value{"ptr", v}, e.gep("%tk_case", c, 1))
-		e.store(value{"i8", strconv.Itoa(boolBit(send))}, e.gep("%tk_case", c, 2))
-		e.store(value{"i8", "0"}, e.gep("%tk_case", c, 3))
+		e.store(ch, e.gep("%sn_case", c, 0))
+		e.store(value{"ptr", v}, e.gep("%sn_case", c, 1))
+		e.store(value{"i8", strconv.Itoa(boolBit(send))}, e.gep("%sn_case", c, 2))
+		e.store(value{"i8", "0"}, e.gep("%sn_case", c, 3))
 	}
 
 	i := 0
@@ -317,7 +317,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 		i++
 	}
 
-	chosen := e.rt("tk_select", "i32", value{"ptr", cases}, value{"i32", strconv.Itoa(n)}, value{"i1", strconv.FormatBool(hasDefault)})
+	chosen := e.rt("sn_select", "i32", value{"ptr", cases}, value{"i32", strconv.Itoa(n)}, value{"i1", strconv.FormatBool(hasDefault)})
 	for _, snd := range sends {
 		if !needsDrop(snd.typ) {
 			continue
@@ -335,7 +335,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 	for _, r := range recvs { // the option the receive would have built, from the case's verdict
 		opt := e.typeOf(r.recv)
 		elem := lower.ValueType(opt).Underlying().(*types.Option).Elem()
-		ok := e.op("trunc "+e.load("i8", e.gep("%tk_case", at(r.index), 3)).typed()+" to i1", "i1")
+		ok := e.op("trunc "+e.load("i8", e.gep("%sn_case", at(r.index), 3)).typed()+" to i1", "i1")
 		e.fn.pre[r.recv] = e.spill(e.optionOf(opt, ok, e.load(e.irType(elem, r.recv.Pos()), r.got), r.recv.Pos()))
 	}
 
@@ -355,7 +355,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 		e.label(body)
 		e.push(false)
 		switch cc.Comm.(type) {
-		case nil, *ast.SendStmt: // the send happened in tk_select
+		case nil, *ast.SendStmt: // the send happened in sn_select
 		default:
 			e.stmt(cc.Comm) // the receive, pre-evaluated: a binding, an assignment or a discard
 			delete(e.fn.pre, receiveOf(cc.Comm))

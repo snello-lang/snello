@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -14,8 +14,8 @@ func greet(name ref string) string {
 }
 
 func main() {
-	s := greet("teak")
-	fmt.Println(s, len(s), s == "hello, teak", s < "zz", s[0], s[7])
+	s := greet("snello")
+	fmt.Println(s, len(s), s == "hello, snello", s < "zz", s[0], s[7])
 
 	t := s
 	t += "!"

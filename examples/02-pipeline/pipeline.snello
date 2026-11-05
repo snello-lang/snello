@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -41,7 +41,7 @@ func produce(n int) <-chan Job {
     spawn func() {                              // rule 4: `w` is moved into the task
         defer close(w)
         for i := 0; i < n; i++ {
-            job := Job{id: i, text: strings.Repeat("teak ", i)}
+            job := Job{id: i, text: strings.Repeat("snello ", i)}
             w <- job                         // rule 1: job is moved into the channel
             // job cannot be used here any more; the compiler rejects it
         }
@@ -111,5 +111,5 @@ func main() {
 //
 //   spawn func() { use(ref m) }()          // error: a borrow cannot cross `spawn`
 //
-// Shared mutable state across tasks is covered in 03-http-cache.teak,
+// Shared mutable state across tasks is covered in 03-http-cache.snello,
 // where it is actually needed.

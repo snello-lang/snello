@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -32,7 +32,7 @@ func Copy(src ref string, dst ref string) Result<i64, io.Error> {
 struct TempDir impl Drop { path string }
 
 func NewTempDir() Result<TempDir, io.Error> {
-    p := os.MkdirTemp("", "teak")?
+    p := os.MkdirTemp("", "snello")?
     return Ok(TempDir{path: p})
 }
 

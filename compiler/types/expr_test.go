@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/parser"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
 )
 
 // prelude is the declarations the expression tests share.
@@ -233,7 +233,7 @@ func TestExprTypes(t *testing.T) {
 		{"func f() { x := panic(\"no\") }", "never"},
 	}
 	for _, tt := range tests {
-		f, file, err := parser.ParseFile("t.teak", []byte(prelude+tt.src))
+		f, file, err := parser.ParseFile("t.snello", []byte(prelude+tt.src))
 		if err != nil {
 			t.Fatalf("%s: %v", tt.src, err)
 		}

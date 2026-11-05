@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The sort and time packages written in Teak: Sort on numbers, strings
+// The sort and time packages written in Snello: Sort on numbers, strings
 // and a struct whose Ord is derived, SortBy with an order of the
 // program's own, Search and IsSorted; a Duration written as a product
 // of a constant, its arithmetic and its readings, a Time built, moved

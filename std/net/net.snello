@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -272,7 +272,7 @@ func opError(op string, path ref string, call ref string, code int) io.Error {
 // addressError is the Error of an address the operation op cannot use,
 // with the reason msg: "listen tcp: address 70000: invalid port".
 func addressError(op string, msg string) io.Error {
-	e := io.Errno(op, "tcp", 22) // EINVAL, which is 22 on every system Teak runs on: Kind Other
+	e := io.Errno(op, "tcp", 22) // EINVAL, which is 22 on every system Snello runs on: Kind Other
 	e.Msg = msg
 	return e
 }

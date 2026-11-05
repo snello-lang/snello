@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package llvm
 import (
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Calls: of the program's functions and methods, of generic instances,
@@ -48,7 +48,7 @@ func (e *Emitter) callNamed(name string, sig *types.Signature, recv ast.Expr, ar
 // function of the program takes its values as the IR aggregates they
 // are; one the runtime defines is called under the C convention
 // (abi.go), with a ref parameter given the value it lends, since C has
-// no borrows: the runtime reads a ref string as a tk_string.
+// no borrows: the runtime reads a ref string as a sn_string.
 func (e *Emitter) callValues(name string, sig *types.Signature, wants []types.Type, values []value, pos token.Pos) value {
 	if e.runtime[name] {
 		args := make([]value, len(values))
@@ -360,7 +360,7 @@ func isByteSlice(t types.Type) bool {
 func (e *Emitter) rt(name, ret string, args ...value) value {
 	var decl, call []string
 	sret := ""
-	if ret == "%tk_string" || ret == "%tk_slice" {
+	if ret == "%sn_string" || ret == "%sn_slice" {
 		sret = e.slot(ret)
 		decl = append(decl, e.abi.result(ret))
 		call = append(call, e.abi.result(ret)+" "+sret)
@@ -368,7 +368,7 @@ func (e *Emitter) rt(name, ret string, args ...value) value {
 
 	for _, a := range args {
 		switch a.typ {
-		case "%tk_string", "%tk_slice":
+		case "%sn_string", "%sn_slice":
 			slot := e.spill(a)
 			decl = append(decl, e.abi.words(a.typ))
 			call = append(call, e.abi.words(a.typ)+" "+slot)

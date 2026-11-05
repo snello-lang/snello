@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -42,7 +42,7 @@ func main() {
 
 	c := net.Dial("127.0.0.1", port).Expect("dial")
 	r := bufio.NewReader(mut c)
-	for _, word := range []string{"teak", "native"} {
+	for _, word := range []string{"snello", "native"} {
 		r.Get().WriteString(ref (word.Clone() + "\n")).Expect("write")
 		fmt.Println(r.ReadString('\n').Expect("read").Expect("a reply").Trim())
 	}

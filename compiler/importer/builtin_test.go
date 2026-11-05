@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/types"
-	"github.com/teak-lang/teak/std"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/std"
 )
 
-// method is a predeclared method as std/builtin/builtin.teak declares
+// method is a predeclared method as std/builtin/builtin.snello declares
 // it: the receiver's name, mode and type, the method's name, and its
 // parameters and result as written.
 type method struct {
@@ -29,9 +29,9 @@ type method struct {
 // on the name, Map<U>.
 var methodLine = regexp.MustCompile(`^func \((\w+) (ref |mut |)([^)]+)\) (\w+)(?:<\w+>)?\((.*?)\) ?(.*)$`)
 
-// documented returns the methods std/builtin/builtin.teak declares.
+// documented returns the methods std/builtin/builtin.snello declares.
 func documented(t *testing.T) []method {
-	src, err := std.Sources.ReadFile("builtin/builtin.teak")
+	src, err := std.Sources.ReadFile("builtin/builtin.snello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestBuiltin(t *testing.T) {
 		b.WriteString("func (" + m.recvName + " " + m.mode + " R" + n + ") m" + n + "(" + m.params + ") " + m.result + " { panic(\"doc\") }\n")
 	}
 
-	f, file, err := parser.ParseFile("doc.teak", []byte(b.String()))
+	f, file, err := parser.ParseFile("doc.snello", []byte(b.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

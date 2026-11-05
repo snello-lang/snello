@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Version 2: Teak with a hand-rolled arena.
+// Version 2: Snello with a hand-rolled arena.
 //
 // Without a GC every value has one owner, so a child cannot hold a pointer
 // to its parent: the parent would then have two owners. The fix is to let

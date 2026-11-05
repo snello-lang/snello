@@ -1,12 +1,12 @@
 # 4. Structs, enums and match
 
-Status: implemented. The syntax is parsed (stage 0), the types, bindings and exhaustiveness are checked (stage 1, task 1.4, `teak check`), and `teak build` compiles all of it to native code (stage 1, task 1.5). `examples/run/shapes.teak` exercises this chapter.
+Status: implemented. The syntax is parsed (stage 0), the types, bindings and exhaustiveness are checked (stage 1, task 1.4, `snello check`), and `snello build` compiles all of it to native code (stage 1, task 1.5). `examples/run/shapes.snello` exercises this chapter.
 
-Teak has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten. Both exist only by declaration: a struct has a name, and there is no struct type written inline. A value that carries nothing is `()`, the unit of chapter 3.
+Snello has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten. Both exist only by declaration: a struct has a name, and there is no struct type written inline. A value that carries nothing is `()`, the unit of chapter 3.
 
 ## Structs
 
-```teak
+```snello
 struct Node {
     value    string
     parent   NodeID?               // None for the root
@@ -21,7 +21,7 @@ A struct declaration is `struct Name { fields }`, one field per line or separate
 
 A struct is built with a keyed literal and used with dot notation:
 
-```teak
+```snello
 n := Node{value: value, parent: None, children: []NodeID{}, live: true}
 v := Vec3{1, 2, 3}                    // every field in order, when the names add nothing
 t := Tree{nodes: []Node{{value: value, parent: None, children: []NodeID{}, live: true}}}
@@ -32,7 +32,7 @@ Every field has a zero value, so `Stack{}` is an empty stack. A named type is co
 
 ### Methods
 
-```teak
+```snello
 func (t mut Tree) AddChild(parent NodeID, value string) NodeID { ... }
 func (t ref Tree) Path(id NodeID) []string { ... }
 func (f File) Close() Result<(), error> { ... }
@@ -42,7 +42,7 @@ A method is a function with a receiver in parentheses before its name, called wi
 
 ## Enums
 
-```teak
+```snello
 enum State {
     Closed
     Connecting(attempt int)
@@ -67,7 +67,7 @@ An enum whose payloads are all plain values, like `Token` above, is a `Copy` typ
 
 Enums can be recursive through an owned pointer, which is how a tree-shaped value is written:
 
-```teak
+```snello
 enum Expr {
     Lit(f64)
     Neg(*Expr)                                  // *T: an owned heap pointer
@@ -79,7 +79,7 @@ enum Expr {
 
 ## Match
 
-```teak
+```snello
 func (s ref State) Describe() string {
     return match s {
         Closed            => "closed",
@@ -112,7 +112,7 @@ A name in a pattern is a variant when a variant of that name is in sight, and a 
 
 Patterns nest: `Bin(Plus, l, r)` matches a `Bin` whose first field is `Plus` and binds the other two. Matching on a tuple of two enums writes a state machine's transition table in one place:
 
-```teak
+```snello
 func step(s State, ev Event) State {
     return match (s, ev) {
         (Closed, Dial)                       => Connecting(1),
@@ -134,7 +134,7 @@ Arms are tried in order, so the guarded `Connecting(n) if n < 3` must come befor
 
 The body of an arm is an expression, a block, or a single statement:
 
-```teak
+```snello
 match c {
     '+' => return Ok(Plus),
     '0'..='9' => return Ok(Num(l.number(c))),
@@ -154,7 +154,7 @@ Because a comma ends the arm, a `return` inside an arm carries one expression; t
 
 When only one variant matters, an `if` binding is shorter than a two-arm `match`:
 
-```teak
+```snello
 if parent := t.nodes[id].parent {
     t.nodes[parent].children.RemoveValue(id)
 }
@@ -169,5 +169,5 @@ A struct is its fields laid out in order, nothing more: no header, no hidden poi
 
 An optional `T?` is a flag and room for a `T`, and `Result<T, E>` is a flag and room for whichever of `T` and `E` it holds. Only `&expr` allocates: it moves the value into a cell on the heap and gives back the owned pointer to it. A pointer is one machine word, so `*Node?` is a word and a flag, which is how a recursive type stays finite.
 
-Those are also the rules the C backend follows, and `teak emit FILE` shows them applied to a program.
+Those are also the rules the C backend follows, and `snello emit FILE` shows them applied to a program.
 

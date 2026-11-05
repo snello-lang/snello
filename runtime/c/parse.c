@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -71,7 +71,7 @@ static bool underscores_ok(const uint8_t *p, int64_t n) {
 // without a sign, decimal digits with a point and an exponent or not,
 // or 0x and hexadecimal digits with a point or not and the p exponent
 // Go asks of them.
-static bool go_float(tk_string s, char *out) {
+static bool go_float(sn_string s, char *out) {
     const uint8_t *p = s.ptr;
     int64_t i = 0, n = 0;
     if (s.len > 0 && (p[0] == '+' || p[0] == '-')) {
@@ -140,14 +140,14 @@ static bool go_float(tk_string s, char *out) {
     return digits && (!hex || exp);
 }
 
-// tk_strconv_parseFloat reads a floating-point number as Go's
+// sn_strconv_parseFloat reads a floating-point number as Go's
 // strconv.ParseFloat does, the whole text being the number. 1 is a text
 // that is not a number, 2 one that does not fit.
-int64_t tk_strconv_parseFloat(tk_string s, double *out) {
-    tk_check_string(s);
-    char *p = tk_alloc((size_t)s.len + 1);
+int64_t sn_strconv_parseFloat(sn_string s, double *out) {
+    sn_check_string(s);
+    char *p = sn_alloc((size_t)s.len + 1);
     if (!go_float(s, p)) {
-        tk_free(p);
+        sn_free(p);
         return 1;
     }
 
@@ -155,7 +155,7 @@ int64_t tk_strconv_parseFloat(tk_string s, double *out) {
     errno = 0;
     double v = strtod(p, &end);
     int64_t code = *end != '\0' ? 1 : errno == ERANGE && fabs(v) == HUGE_VAL ? 2 : 0; // a number too small to hold rounds to zero, as a literal does
-    tk_free(p);
+    sn_free(p);
     if (code == 0) {
         *out = v;
     }

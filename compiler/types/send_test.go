@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // TestIsSend covers the type kinds of the table in
@@ -131,7 +131,7 @@ func TestSendInPrograms(t *testing.T) {
 	}
 
 	// rc.Rc<int> and rc.Weak<int>, as the program's check sees them.
-	f, file, err := parser.ParseFile("test.teak", []byte("package main\nimport \"rc\"\nstruct Box<T> { v T }\nstruct Both { r rc.Rc<int>; w rc.Weak<int>; xs []rc.Rc<string>; b Box<rc.Rc<int>>; ok Box<int> }\nfunc main() {}"))
+	f, file, err := parser.ParseFile("test.snello", []byte("package main\nimport \"rc\"\nstruct Box<T> { v T }\nstruct Both { r rc.Rc<int>; w rc.Weak<int>; xs []rc.Rc<string>; b Box<rc.Rc<int>>; ok Box<int> }\nfunc main() {}"))
 	if err != nil {
 		t.Fatal(err)
 	}

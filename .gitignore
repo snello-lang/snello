@@ -1,9 +1,9 @@
-# The compiler built with go build -o teak ./cmd/teak.
-/teak
+# The compiler built with go build -o snello ./cmd/snello.
+/snello
 
-# Binaries teak build writes next to the example programs.
+# Binaries snello build writes next to the example programs.
 /examples/run/*
-!/examples/run/*.teak
+!/examples/run/*.snello
 !/examples/run/*.out
 !/examples/run/README.md
 

@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -15,12 +15,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-tk_string tk_int_to_string(int64_t v) {
-    return v < 0 ? tk_format_int(0 - (uint64_t)v, true) : tk_format_int((uint64_t)v, false);
+sn_string sn_int_to_string(int64_t v) {
+    return v < 0 ? sn_format_int(0 - (uint64_t)v, true) : sn_format_int((uint64_t)v, false);
 }
 
-tk_string tk_uint_to_string(uint64_t v) {
-    return tk_format_int(v, false);
+sn_string sn_uint_to_string(uint64_t v) {
+    return sn_format_int(v, false);
 }
 
 // Floats print as Go's strconv prints them. A decimal is the digits of
@@ -28,7 +28,7 @@ tk_string tk_uint_to_string(uint64_t v) {
 // goes among them: 0.25 is "25" with the point at 0, 120 is "12" with
 // the point at 3. The layout around the digits is Go's.
 typedef struct {
-    char *d;  // the digits, from tk_alloc
+    char *d;  // the digits, from sn_alloc
     int nd;   // how many
     int dp;   // the point's place
 } decimal;
@@ -39,8 +39,8 @@ typedef struct {
 // fewest digits inside it, with the correctly rounded one when several
 // are. One 128-bit multiply per bound and no division by anything but
 // constants, where reading candidates back with strtod costs a dozen
-// library calls a number. tk_pow10 is mkpow10.go's table.
-extern const uint64_t tk_pow10[696][2];
+// library calls a number. sn_pow10 is mkpow10.go's table.
+extern const uint64_t sn_pow10[696][2];
 
 typedef struct {
     char buf[32];
@@ -159,7 +159,7 @@ static uint32_t mult64_pow10(uint32_t m, int *e2, int q, bool *exact) {
         return m << 6;
     }
 
-    uint64_t pow = tk_pow10[q + 348][1];
+    uint64_t pow = sn_pow10[q + 348][1];
     if (q < 0) {
         pow += 1; // an inverse power is rounded up
     }
@@ -179,7 +179,7 @@ static uint64_t mult128_pow10(uint64_t m, int *e2, int q, bool *exact) {
         return m << 8;
     }
 
-    uint64_t p0 = tk_pow10[q + 348][0], p1 = tk_pow10[q + 348][1];
+    uint64_t p0 = sn_pow10[q + 348][0], p1 = sn_pow10[q + 348][1];
     if (q < 0) {
         p0 += 1;
     }
@@ -333,7 +333,7 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
             ryu_shortest(&r, mant, exp - 1023 - 52, false);
         }
 
-        d->d = tk_alloc((size_t)r.nd + 1);
+        d->d = sn_alloc((size_t)r.nd + 1);
         memcpy(d->d, r.d, (size_t)r.nd);
         d->nd = r.nd;
         d->dp = r.dp;
@@ -353,7 +353,7 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
 
         ryu_dec r;
         ryu_fixed(&r, mant, exp - 1023 - 52, prec);
-        d->d = tk_alloc((size_t)r.nd + 1);
+        d->d = sn_alloc((size_t)r.nd + 1);
         memcpy(d->d, r.d, (size_t)r.nd);
         d->nd = r.nd;
         d->dp = r.dp;
@@ -361,7 +361,7 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
     }
 
     size_t size = (size_t)(prec > 17 ? prec : 17) + 16;
-    char *buf = tk_alloc(size);
+    char *buf = sn_alloc(size);
     snprintf(buf, size, "%.*e", prec - 1, v);
     d->nd = 0;
     char *p = buf;
@@ -379,7 +379,7 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
     d->d = buf;
 }
 
-// The text being built: a block from tk_alloc and how much of it is
+// The text being built: a block from sn_alloc and how much of it is
 // written.
 typedef struct {
     char *p;
@@ -426,13 +426,13 @@ static void put_f(out_text *o, const decimal *d, int prec) {
 
 // special writes the text of a float with no digits, an infinity or
 // NaN, as Go spells them, or reports that v has digits.
-static bool special(double v, tk_string *s) {
+static bool special(double v, sn_string *s) {
     if (v != v) {
-        *s = TK_STR("NaN", 3);
+        *s = SN_STR("NaN", 3);
     } else if (v > DBL_MAX) {
-        *s = TK_STR("+Inf", 4);
+        *s = SN_STR("+Inf", 4);
     } else if (v < -DBL_MAX) {
-        *s = TK_STR("-Inf", 4);
+        *s = SN_STR("-Inf", 4);
     } else {
         return false;
     }
@@ -445,14 +445,14 @@ static bool special(double v, tk_string *s) {
 // significant digits; an exponent when the number's own is below -4 or
 // at least the precision, which is 6 for the shortest form, so 1e+06
 // and 123456 print as Go prints them.
-static tk_string format_g(double v, int prec, bool f32) {
-    tk_string s;
+static sn_string format_g(double v, int prec, bool f32) {
+    sn_string s;
     if (special(v, &s)) {
         return s;
     }
 
     bool shortest = prec < 0;
-    out_text o = {tk_alloc((size_t)(prec > 0 ? prec : 0) + 340), 0}; // a double's point is never 310 digits from its first
+    out_text o = {sn_alloc((size_t)(prec > 0 ? prec : 0) + 340), 0}; // a double's point is never 310 digits from its first
     if (signbit(v)) {
         out_byte(&o, '-');
         v = -v;
@@ -460,7 +460,7 @@ static tk_string format_g(double v, int prec, bool f32) {
 
     if (v == 0) {
         out_byte(&o, '0');
-        return TK_OWNED(o.p, o.n);
+        return SN_OWNED(o.p, o.n);
     }
 
     decimal d;
@@ -488,31 +488,31 @@ static tk_string format_g(double v, int prec, bool f32) {
         put_f(&o, &d, digits - d.dp > 0 ? digits - d.dp : 0);
     }
 
-    tk_free(d.d);
-    return TK_OWNED(o.p, o.n);
+    sn_free(d.d);
+    return SN_OWNED(o.p, o.n);
 }
 
-// tk_f64_to_string prints v as Go's %v and strconv.FormatFloat(v, 'g',
+// sn_f64_to_string prints v as Go's %v and strconv.FormatFloat(v, 'g',
 // -1, 64) do: the shortest text that reads back as v, 15 for 15.0,
 // 1e+06 for a million, +Inf and NaN.
-tk_string tk_f64_to_string(double v) {
+sn_string sn_f64_to_string(double v) {
     return format_g(v, -1, false);
 }
 
-// tk_f32_to_string is tk_f64_to_string for an f32: the fewest digits
+// sn_f32_to_string is sn_f64_to_string for an f32: the fewest digits
 // that read back as the same f32, so 0.1 prints as 0.1.
-tk_string tk_f32_to_string(float v) {
+sn_string sn_f32_to_string(float v) {
     return format_g((double)v, -1, true);
 }
 
-// tk_f64_g prints v with prec significant digits, as Go's %.3v and
+// sn_f64_g prints v with prec significant digits, as Go's %.3v and
 // %.3g do on a float.
-tk_string tk_f64_g(double v, int64_t prec) {
+sn_string sn_f64_g(double v, int64_t prec) {
     return format_g(v, (int)prec, false);
 }
 
-tk_string tk_bool_to_string(bool v) {
-    return v ? TK_STR("true", 4) : TK_STR("false", 5);
+sn_string sn_bool_to_string(bool v) {
+    return v ? SN_STR("true", 4) : SN_STR("false", 5);
 }
 
 // Fixed-precision digits are Ryū's too, Go's ryuFtoaFixed64: the number
@@ -538,7 +538,7 @@ static uint64_t mult128_top(uint64_t m, int *e2, int q, bool *exact) {
         return m >> 1;
     }
 
-    uint64_t p0 = tk_pow10[q + 348][0], p1 = tk_pow10[q + 348][1];
+    uint64_t p0 = sn_pow10[q + 348][0], p1 = sn_pow10[q + 348][1];
     if (q < 0) {
         p0 += 1;
     }
@@ -646,7 +646,7 @@ static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec) {
 // %f does, and reports false when the digits needed are more than
 // seventeen or none, which the C library's correctly rounded printf
 // writes instead.
-static bool fixed_digits(double v, int prec, tk_string *out) {
+static bool fixed_digits(double v, int prec, sn_string *out) {
     bool neg = signbit(v);
     double a = neg ? -v : v;
     uint64_t bits;
@@ -669,7 +669,7 @@ static bool fixed_digits(double v, int prec, tk_string *out) {
 
     ryu_fixed(&d, mant, exp, digits);
     int whole = d.dp > 0 ? d.dp : 1;
-    char *p = tk_alloc((size_t)(neg + whole + 1 + prec));
+    char *p = sn_alloc((size_t)(neg + whole + 1 + prec));
     int64_t n = 0;
     if (neg) {
         p[n++] = '-';
@@ -691,15 +691,15 @@ static bool fixed_digits(double v, int prec, tk_string *out) {
         }
     }
 
-    *out = TK_OWNED(p, n);
+    *out = SN_OWNED(p, n);
     return true;
 }
 
-// tk_f64_fixed prints v with prec digits after the point, as %.2f
+// sn_f64_fixed prints v with prec digits after the point, as %.2f
 // does, however many that takes, and an infinity or NaN as Go spells
 // it.
-tk_string tk_f64_fixed(double v, int prec) {
-    tk_string s;
+sn_string sn_f64_fixed(double v, int prec) {
+    sn_string s;
     if (special(v, &s)) {
         return s;
     }
@@ -709,21 +709,21 @@ tk_string tk_f64_fixed(double v, int prec) {
     }
 
     int n = snprintf(NULL, 0, "%.*f", prec, v);
-    char *p = tk_alloc((size_t)n + 1);
+    char *p = sn_alloc((size_t)n + 1);
     snprintf(p, (size_t)n + 1, "%.*f", prec, v);
-    return TK_OWNED(p, n);
+    return SN_OWNED(p, n);
 }
 
-// tk_int_digits gives the decimal text of an integer, which it takes,
+// sn_int_digits gives the decimal text of an integer, which it takes,
 // at least prec digits long, zeros after the sign making up the rest,
 // as Go's %.3d does; a precision of zero prints zero as nothing.
-tk_string tk_int_digits(tk_string s, int64_t prec) {
-    tk_check_string(s);
+sn_string sn_int_digits(sn_string s, int64_t prec) {
+    sn_check_string(s);
     int64_t sign = s.len > 0 && s.ptr[0] == '-' ? 1 : 0;
     int64_t digits = s.len - sign;
     if (prec == 0 && digits == 1 && s.ptr[sign] == '0') {
-        tk_string_free(s);
-        return TK_STR("", 0);
+        sn_string_free(s);
+        return SN_STR("", 0);
     }
 
     if (digits >= prec) {
@@ -731,62 +731,62 @@ tk_string tk_int_digits(tk_string s, int64_t prec) {
     }
 
     int64_t n = sign + prec;
-    char *p = tk_alloc((size_t)n);
+    char *p = sn_alloc((size_t)n);
     memcpy(p, s.ptr, (size_t)sign);
     memset(p + sign, '0', (size_t)(prec - digits));
     memcpy(p + sign + prec - digits, s.ptr + sign, (size_t)digits);
-    tk_string_free(s);
-    return TK_OWNED(p, n);
+    sn_string_free(s);
+    return SN_OWNED(p, n);
 }
 
-// tk_truncate gives the first prec characters of s, a character being
+// sn_truncate gives the first prec characters of s, a character being
 // a UTF-8 sequence, as Go's %.2s does; s is dropped when the caller
 // owned it, and the result is owned then too.
-tk_string tk_truncate(tk_string s, int64_t prec, bool owned) {
-    tk_check_string(s);
+sn_string sn_truncate(sn_string s, int64_t prec, bool owned) {
+    sn_check_string(s);
     int64_t i = 0;
     for (int64_t chars = 0; i < s.len && chars < prec; chars++) {
         int32_t r;
-        i += tk_utf8_decode(s.ptr + i, s.len - i, &r);
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
     }
 
     if (!owned) {
-        return (tk_string){s.ptr, i, 0};
+        return (sn_string){s.ptr, i, 0};
     }
 
-    char *p = tk_alloc((size_t)(i > 0 ? i : 1));
+    char *p = sn_alloc((size_t)(i > 0 ? i : 1));
     memcpy(p, s.ptr, (size_t)i);
-    tk_string_free(s);
-    return TK_OWNED(p, i);
+    sn_string_free(s);
+    return SN_OWNED(p, i);
 }
 
-// tk_pad widens s to width characters with spaces, before it or after
+// sn_pad widens s to width characters with spaces, before it or after
 // it when left says so, as a width in a format does; a character is a
 // UTF-8 sequence, counted by its first byte. s is dropped when the
 // caller owned it, and the result is owned whatever s was: the emitted
 // code frees it, so a string already as wide comes back as it is only
 // when it was owned, and as a copy when it was lent, a variable or a
 // field whose bytes the caller keeps.
-tk_string tk_pad(tk_string s, int64_t width, bool left, bool owned) {
-    tk_check_string(s);
+sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned) {
+    sn_check_string(s);
     int64_t chars = 0; // runes as Go counts them: an invalid byte is one
     for (int64_t i = 0; i < s.len; chars++) {
         int32_t r;
-        i += tk_utf8_decode(s.ptr + i, s.len - i, &r);
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
     }
 
     if (chars >= width) {
-        return owned ? s : tk_string_clone(s);
+        return owned ? s : sn_string_clone(s);
     }
 
     int64_t fill = width - chars;
-    uint8_t *p = tk_alloc((size_t)(s.len + fill));
+    uint8_t *p = sn_alloc((size_t)(s.len + fill));
     memset(p, ' ', (size_t)(s.len + fill));
     memcpy(p + (left ? 0 : fill), s.ptr, (size_t)s.len);
     width = s.len + fill;
     if (owned) {
-        tk_string_free(s);
+        sn_string_free(s);
     }
 
-    return TK_OWNED(p, width);
+    return SN_OWNED(p, width);
 }

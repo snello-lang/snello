@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 // A task is a coroutine with a stack of its own, reserved from the
 // system and committed by it page by page as the task touches it, and
 // a saved set of callee-saved registers; switching from one task to
-// another is the assembly routine tk_switch below, one per processor.
+// another is the assembly routine sn_switch below, one per processor.
 // N worker threads, one per core with the main thread among them, run
 // M tasks: each worker keeps a queue of runnable tasks and steals from
 // another's when its own is empty; a worker with nothing to run waits
@@ -24,7 +24,7 @@
 // nothing per thread but what this file keeps per task: the guard
 // stack a panic unwinds, which lives in the task.
 
-#define _DEFAULT_SOURCE // glibc's mmap flags and clocks under -std=c11, as teak.c asks for its own
+#define _DEFAULT_SOURCE // glibc's mmap flags and clocks under -std=c11, as snello.c asks for its own
 #define _DARWIN_C_SOURCE
 
 #include "internal.h"
@@ -39,7 +39,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// tk_switch saves the callee-saved registers and the stack pointer of
+// sn_switch saves the callee-saved registers and the stack pointer of
 // the running context into *save, and resumes the context whose stack
 // pointer is to, which was saved the same way, or made by make_context
 // for a context that has not run yet. The frame it saves is 160 bytes
@@ -47,20 +47,20 @@
 // x86-64: rbp, rbx and r12 to r15, pushed, with the return address the
 // caller left above them. The symbol carries a leading underscore on
 // Darwin, as every C symbol does there.
-void tk_switch(void **save, void *to);
+void sn_switch(void **save, void *to);
 
 #if defined(__APPLE__)
-#define TK_SYM(name) "_" #name
+#define SN_SYM(name) "_" #name
 #else
-#define TK_SYM(name) #name
+#define SN_SYM(name) #name
 #endif
 
 #if defined(__aarch64__)
-#define TK_FRAME 160
+#define SN_FRAME 160
 __asm__(
     ".text\n"
-    ".globl " TK_SYM(tk_switch) "\n"
-    ".p2align 2\n" TK_SYM(tk_switch) ":\n"
+    ".globl " SN_SYM(sn_switch) "\n"
+    ".p2align 2\n" SN_SYM(sn_switch) ":\n"
     "  sub sp, sp, #160\n"
     "  stp x19, x20, [sp, #0]\n"
     "  stp x21, x22, [sp, #16]\n"
@@ -88,10 +88,10 @@ __asm__(
     "  add sp, sp, #160\n"
     "  ret\n");
 #elif defined(__x86_64__)
-#define TK_FRAME 64
+#define SN_FRAME 64
 __asm__(
     ".text\n"
-    ".globl " TK_SYM(tk_switch) "\n" TK_SYM(tk_switch) ":\n"
+    ".globl " SN_SYM(sn_switch) "\n" SN_SYM(sn_switch) ":\n"
     "  pushq %rbp\n"
     "  pushq %rbx\n"
     "  pushq %r12\n"
@@ -108,18 +108,18 @@ __asm__(
     "  popq %rbp\n"
     "  ret\n");
 #else
-#error "the Teak runtime has no context switch for this processor"
+#error "the Snello runtime has no context switch for this processor"
 #endif
 
-// make_context lays out the frame tk_switch restores at the top of a
+// make_context lays out the frame sn_switch restores at the top of a
 // fresh stack, so that the first switch to it returns into entry with
 // an aligned stack and every saved register zero. On x86-64 the
 // return address sits one word below the top, so that entry begins as
 // a called function does, with the stack pointer eight past a
 // sixteen-byte boundary.
 static void *make_context(void *top, void (*entry)(void)) {
-    uint8_t *sp = (uint8_t *)top - TK_FRAME;
-    memset(sp, 0, TK_FRAME);
+    uint8_t *sp = (uint8_t *)top - SN_FRAME;
+    memset(sp, 0, SN_FRAME);
 #if defined(__aarch64__)
     ((void **)sp)[11] = (void *)entry; // x30, the return address
 #else
@@ -141,7 +141,7 @@ typedef struct {
     void (*drop)(void *);
 } guard;
 
-struct tk_task {
+struct sn_task {
     void *sp;        // the saved context, while not running
     void *stack;     // the reservation, NULL for the main task
     size_t size;     // of the reservation, guard page included
@@ -150,13 +150,13 @@ struct tk_task {
     pthread_mutex_t mu; // over state and woken
     int state;
     bool woken;
-    struct tk_task *next; // on a queue
+    struct sn_task *next; // on a queue
     guard *guards;        // the values a panic drops, innermost last
     int64_t nguards, guardcap;
     bool unwinding;
 };
 
-typedef struct tk_task task;
+typedef struct sn_task task;
 
 // A worker: its scheduler context, the queue of runnable tasks it
 // owns, and for the main thread the scheduler stack it takes when the
@@ -213,10 +213,10 @@ static _Atomic int idle; // workers waiting for work
 static _Atomic int spinning; // workers looking for work before they wait, at most one
 static _Atomic int64_t outside; // wakes promised by threads that are not workers: the timers in the heap, the sockets the poller watches
 
-// tk_outside counts n more wakes promised by a thread that is not a
+// sn_outside counts n more wakes promised by a thread that is not a
 // worker, or n fewer once one has reached its task. When none is left,
 // the idle workers look again at whether any task can still be woken.
-void tk_outside(int64_t n) {
+void sn_outside(int64_t n) {
     if (atomic_fetch_add(&outside, n) + n == 0) {
         pthread_mutex_lock(&idle_mu);
         pthread_cond_broadcast(&idle_cond);
@@ -260,12 +260,12 @@ static void *stack_new(size_t *size) {
 #endif
     void *s = mmap(NULL, stack_size, PROT_READ | PROT_WRITE, flags, -1, 0);
     if (s == MAP_FAILED) {
-        tk_panic(TK_STR("cannot reserve a task's stack", 29));
+        sn_panic(SN_STR("cannot reserve a task's stack", 29));
     }
 
     if (mprotect(s, page, PROT_NONE) != 0) { // the guard page is a mapping of its own, and the system's count of them is finite
         munmap(s, stack_size);
-        tk_panic(TK_STR("cannot reserve a task's stack: the system's limit of memory mappings is reached", 79));
+        sn_panic(SN_STR("cannot reserve a task's stack: the system's limit of memory mappings is reached", 79));
     }
 
     *size = stack_size;
@@ -284,9 +284,9 @@ static void stack_free(void *s, size_t size) {
     munmap(s, size);
 }
 
-// tk_self returns the running task; on the main thread before any
+// sn_self returns the running task; on the main thread before any
 // task exists, it makes the main task from the thread itself.
-tk_task *tk_self(void) {
+sn_task *sn_self(void) {
     task *t = my_task();
     if (t == NULL) {
         pthread_mutex_init(&main_task.mu, NULL);
@@ -447,7 +447,7 @@ static void put_next(worker *w, task *t) {
     pthread_mutex_lock(&w->mu);
     task *old = w->runnext;
     w->runnext = t;
-    w->runnext_at = tk_time_mono();
+    w->runnext_at = sn_time_mono();
     pthread_mutex_unlock(&w->mu);
     if (old != NULL) {
         push(w, old);
@@ -463,7 +463,7 @@ static void put_next(worker *w, task *t) {
 static task *take_next(worker *w, int64_t stale) {
     pthread_mutex_lock(&w->mu);
     task *t = w->runnext;
-    if (t != NULL && (stale == 0 || tk_time_mono() - w->runnext_at > stale)) {
+    if (t != NULL && (stale == 0 || sn_time_mono() - w->runnext_at > stale)) {
         w->runnext = NULL;
     } else {
         t = NULL;
@@ -548,7 +548,7 @@ static void run_task(worker *w, task *t) {
     pthread_mutex_unlock(&t->mu);
     current = t;
     w->last = t;
-    tk_switch(&w->sched_sp, t->sp);
+    sn_switch(&w->sched_sp, t->sp);
     current = NULL;
     settle(w);
 }
@@ -610,7 +610,7 @@ static bool spin(void) {
         return false;
     }
 
-    int64_t until = tk_time_mono() + spin_for;
+    int64_t until = sn_time_mono() + spin_for;
     bool found = false;
     for (int i = 1;; i++) {
         if (atomic_load(&injected) > 0) {
@@ -618,11 +618,11 @@ static bool spin(void) {
             break;
         }
 
-        if (i % 64 == 0 && tk_time_mono() > until) {
+        if (i % 64 == 0 && sn_time_mono() > until) {
             break;
         }
 
-        tk_spin_hint();
+        sn_spin_hint();
     }
 
     atomic_store(&spinning, 0);
@@ -681,9 +681,9 @@ static void sched_loop(worker *w) {
                 break;
             }
 
-            int64_t asleep = tk_time_mono();
+            int64_t asleep = sn_time_mono();
             pthread_cond_wait(&idle_cond, &idle_mu);
-            if (atomic_load(&injected) > 0 && tk_time_mono() - asleep < spin_for) {
+            if (atomic_load(&injected) > 0 && sn_time_mono() - asleep < spin_for) {
                 spun(true); // a wake from outside came soon enough that a spin would have caught it
             }
         }
@@ -716,7 +716,7 @@ static void start(void) {
         nworkers = cores > 1 ? (int)cores : 1;
         workers = calloc((size_t)nworkers, sizeof *workers);
         if (workers == NULL) {
-            tk_panic(TK_STR("out of memory", 13));
+            sn_panic(SN_STR("out of memory", 13));
         }
 
         for (int i = 0; i < nworkers; i++) {
@@ -734,7 +734,7 @@ static void start(void) {
             pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
             pthread_t id;
             if (pthread_create(&id, &attr, worker_main, &workers[i]) != 0) {
-                tk_panic(TK_STR("cannot start a worker", 21));
+                sn_panic(SN_STR("cannot start a worker", 21));
             }
 
             pthread_attr_destroy(&attr);
@@ -751,19 +751,19 @@ static void task_entry(void) {
     task *t = my_task();
     t->run(t->arg);
     t->state = DONE;
-    tk_switch(&t->sp, my_worker()->sched_sp);
+    sn_switch(&t->sp, my_worker()->sched_sp);
     abort(); // a done task is never resumed
 }
 
-void tk_spawn(void (*run)(void *), void *arg) {
+void sn_spawn(void (*run)(void *), void *arg) {
     if (!started) {
         start();
     }
 
-    tk_self();
+    sn_self();
     task *t = calloc(1, sizeof *t);
     if (t == NULL) {
-        tk_panic(TK_STR("out of memory", 13));
+        sn_panic(SN_STR("out of memory", 13));
     }
 
     t->run = run;
@@ -776,17 +776,17 @@ void tk_spawn(void (*run)(void *), void *arg) {
     push(home(), t);
 }
 
-int64_t tk_tasks_running(void) {
+int64_t sn_tasks_running(void) {
     return atomic_load(&running);
 }
 
-// tk_park waits for a wake: the task switches to its worker's
+// sn_park waits for a wake: the task switches to its worker's
 // scheduler, which settles it as parked, and resumes when a wake puts
 // it back on a queue and a worker runs it. A wake that came first is
 // consumed at once. The main thread's scheduler context is made the
 // first time the main task parks.
-void tk_park(void) {
-    task *t = tk_self();
+void sn_park(void) {
+    task *t = sn_self();
     if (!started) {
         start(); // the main task sleeping before any spawn: the thread still needs its scheduler
     }
@@ -803,7 +803,7 @@ void tk_park(void) {
         t->state = PARKING;
         pthread_mutex_unlock(&t->mu);
         w->last = t;
-        tk_switch(&t->sp, w->sched_sp);
+        sn_switch(&t->sp, w->sched_sp);
         w = my_worker(); // resumed, on whichever worker ran the queue
         pthread_mutex_lock(&t->mu);
     }
@@ -812,9 +812,9 @@ void tk_park(void) {
     pthread_mutex_unlock(&t->mu);
 }
 
-// tk_wake makes a parked task runnable, or keeps the wake for a task
+// sn_wake makes a parked task runnable, or keeps the wake for a task
 // still running or parking, which consumes it at its next park.
-void tk_wake(tk_task *t) {
+void sn_wake(sn_task *t) {
     pthread_mutex_lock(&t->mu);
     t->woken = true;
     if (t->state == PARKED) {
@@ -846,7 +846,7 @@ typedef struct {
     int64_t when;
     task *t;
     bool *fired;    // the sleeping task's own flag, set under timers_mu
-    tk_chan *ch;    // or the channel the time goes to
+    sn_chan *ch;    // or the channel the time goes to
     int64_t every;  // and, for a Tick, its period
     void (*fire)(void *); // or the function to call, with arg
     void *arg;
@@ -873,7 +873,7 @@ static pthread_cond_t fired_cond = PTHREAD_COND_INITIALIZER;
 static void place(int64_t i, timer x) {
     timers[i] = x;
     if (x.ch != NULL) {
-        tk_chan_placeTimer(x.ch, i);
+        sn_chan_placeTimer(x.ch, i);
     } else if (x.at != NULL) {
         *x.at = i + 1;
     }
@@ -915,12 +915,12 @@ static void sift_down(int64_t i, timer x) {
 // timer_push puts x in the heap; the caller holds timers_mu. Every
 // timer is counted outside until what it wakes is woken.
 static void timer_push(timer x) {
-    tk_outside(1);
+    sn_outside(1);
     if (ntimers == captimers) {
         captimers = captimers == 0 ? 64 : captimers * 2;
         timers = realloc(timers, (size_t)captimers * sizeof *timers);
         if (timers == NULL) {
-            tk_panic(TK_STR("out of memory", 13));
+            sn_panic(SN_STR("out of memory", 13));
         }
     }
 
@@ -941,7 +941,7 @@ static timer timer_remove(int64_t i) {
     }
 
     if (gone.ch != NULL) {
-        tk_chan_placeTimer(gone.ch, -1);
+        sn_chan_placeTimer(gone.ch, -1);
     } else if (gone.at != NULL) {
         *gone.at = 0;
     }
@@ -963,19 +963,19 @@ static void *timer_main(void *arg) {
         }
 
         int64_t when = timers[0].when;
-        int64_t now = tk_time_mono();
+        int64_t now = sn_time_mono();
         if (when <= now) {
             timer due = timer_pop();
             if (due.fire != NULL) { // under the lock, so that a disarm either takes it out first or waits for it to finish
                 due.fire(due.arg);
-                tk_outside(-1);
+                sn_outside(-1);
                 continue;
             }
 
             if (due.ch == NULL) { // wake first, then fire, both under the lock: once the task sees its flag, nothing here touches it again
-                tk_wake(due.t);
+                sn_wake(due.t);
                 *due.fired = true;
-                tk_outside(-1);
+                sn_outside(-1);
                 continue;
             }
 
@@ -984,22 +984,22 @@ static void *timer_main(void *arg) {
             int64_t next = due.every > 0 ? now + due.every - (now - due.when) % due.every : 0;
             firing++;
             pthread_mutex_unlock(&timers_mu); // the channel's lock is never taken under this one
-            tk_time at = tk_time_read();
-            bool heard = tk_chan_offer(due.ch, &at);
+            sn_time at = sn_time_read();
+            bool heard = sn_chan_offer(due.ch, &at);
             pthread_mutex_lock(&timers_mu);
             bool again = heard && due.every > 0 && !stopping;
             if (again) {
                 due.when = next;
                 timer_push(due); // counted outside before this one stops counting, so the count never passes through zero
-                if (tk_chan_alone(due.ch)) {
+                if (sn_chan_alone(due.ch)) {
                     // The program's last handle went after the offer and
                     // before the push, so its drop found no timer in the
                     // heap to take out: this does it. The drop takes away
                     // its handle before it looks for the timer, and the
                     // push places the timer before this looks at the
                     // handles, so one of the two always sees the other.
-                    timer_remove(tk_chan_timer(due.ch));
-                    tk_outside(-1);
+                    timer_remove(sn_chan_timer(due.ch));
+                    sn_outside(-1);
                     again = false;
                 }
             }
@@ -1009,8 +1009,8 @@ static void *timer_main(void *arg) {
             }
 
             pthread_mutex_unlock(&timers_mu);
-            tk_chan_drop(&due.ch); // an After's handle, or a Tick's no one can receive from: nothing when it went back in the heap
-            tk_outside(-1);
+            sn_chan_drop(&due.ch); // an After's handle, or a Tick's no one can receive from: nothing when it went back in the heap
+            sn_outside(-1);
             pthread_mutex_lock(&timers_mu);
             firing--;
             pthread_cond_broadcast(&fired_cond);
@@ -1035,7 +1035,7 @@ static void *timer_main(void *arg) {
 // Duration waits for as long as there is rather than wrapping round to
 // fire at once.
 static int64_t deadline(int64_t d) {
-    int64_t now = tk_time_mono();
+    int64_t now = sn_time_mono();
     return d > INT64_MAX - now ? INT64_MAX : now + d;
 }
 
@@ -1058,24 +1058,24 @@ static void start_timing(void) {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     if (pthread_create(&id, &attr, timer_main, NULL) != 0) {
-        tk_panic(TK_STR("cannot start the timer", 22));
+        sn_panic(SN_STR("cannot start the timer", 22));
     }
 
     pthread_attr_destroy(&attr);
     timing = true;
 }
 
-// tk_deadline_arm calls fire with arg d from now, on the timers'
+// sn_deadline_arm calls fire with arg d from now, on the timers'
 // thread, under timers_mu: a function that takes no lock the timers'
 // thread waits behind. The timer is kept at *at, which is 0 while it is
 // out of the heap; arming it again moves it. Like every timer it is a
 // wake promised from outside the workers until it fires or is disarmed.
-void tk_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg) {
+void sn_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg) {
     pthread_mutex_lock(&timers_mu);
     start_timing();
     if (*at > 0) {
         timer_remove(*at - 1);
-        tk_outside(-1);
+        sn_outside(-1);
     }
 
     timer_push((timer){.when = deadline(d), .fire = fire, .arg = arg, .at = at});
@@ -1083,22 +1083,22 @@ void tk_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg) {
     pthread_mutex_unlock(&timers_mu);
 }
 
-// tk_deadline_disarm takes the timer kept at *at out of the heap, if it
+// sn_deadline_disarm takes the timer kept at *at out of the heap, if it
 // is in it. Once it returns, the timer's function is not running and
 // will not run.
-void tk_deadline_disarm(int64_t *at) {
+void sn_deadline_disarm(int64_t *at) {
     pthread_mutex_lock(&timers_mu);
     if (*at > 0) {
         timer_remove(*at - 1);
-        tk_outside(-1);
+        sn_outside(-1);
     }
 
     pthread_mutex_unlock(&timers_mu);
 }
 
-// tk_time_startTimer puts the time in ch once, d from now, and then
+// sn_time_startTimer puts the time in ch once, d from now, and then
 // every period, when every is above zero.
-void tk_time_startTimer(tk_chan *ch, int64_t d, int64_t every) {
+void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
     pthread_mutex_lock(&timers_mu);
     start_timing();
     timer_push((timer){.when = deadline(d), .ch = ch, .every = every});
@@ -1106,15 +1106,15 @@ void tk_time_startTimer(tk_chan *ch, int64_t d, int64_t every) {
     pthread_mutex_unlock(&timers_mu);
 }
 
-// tk_timer_abandon takes out the timer of c, whose last handle but the
+// sn_timer_abandon takes out the timer of c, whose last handle but the
 // timer's own was dropped: no one can receive what it would send, so it
 // is no promise of a wake, and its handle, the last, frees the channel
 // now rather than at its deadline. A timer that fired meanwhile is out
 // of the heap already and drops its handle itself, and at the end of
-// the program tk_timers_stop drops them all.
-void tk_timer_abandon(tk_chan *c) {
+// the program sn_timers_stop drops them all.
+void sn_timer_abandon(sn_chan *c) {
     pthread_mutex_lock(&timers_mu);
-    int64_t at = tk_chan_timer(c);
+    int64_t at = sn_chan_timer(c);
     if (at < 0 || stopping) {
         pthread_mutex_unlock(&timers_mu);
         return;
@@ -1122,15 +1122,15 @@ void tk_timer_abandon(tk_chan *c) {
 
     timer gone = timer_remove(at);
     pthread_mutex_unlock(&timers_mu);
-    tk_outside(-1);
-    tk_chan_drop(&gone.ch);
+    sn_outside(-1);
+    sn_chan_drop(&gone.ch);
 }
 
-// tk_timers_stop stops the timers as the program ends and drops the
+// sn_timers_stop stops the timers as the program ends and drops the
 // handles the channel timers hold, after any timer firing now is done
 // with its own, so that a debug build's count of blocks finds the
 // channels of a pending After or a running Tick freed.
-void tk_timers_stop(void) {
+void sn_timers_stop(void) {
     pthread_mutex_lock(&timers_mu);
     stopping = true;
     while (firing > 0) {
@@ -1138,9 +1138,9 @@ void tk_timers_stop(void) {
     }
 
     int64_t n = 0;
-    tk_chan **held = malloc((size_t)(ntimers > 0 ? ntimers : 1) * sizeof *held);
+    sn_chan **held = malloc((size_t)(ntimers > 0 ? ntimers : 1) * sizeof *held);
     if (held == NULL) {
-        tk_panic(TK_STR("out of memory", 13));
+        sn_panic(SN_STR("out of memory", 13));
     }
 
     for (int64_t i = 0; i < ntimers; i++) {
@@ -1152,23 +1152,23 @@ void tk_timers_stop(void) {
     ntimers = 0; // the heap held the handles taken here, and no entry may point at a channel they free
     pthread_mutex_unlock(&timers_mu);
     for (int64_t i = 0; i < n; i++) {
-        tk_chan_drop(&held[i]);
+        sn_chan_drop(&held[i]);
     }
 
     free(held);
 }
 
-// tk_sleep parks the task until its timer fires. A park can return for
+// sn_sleep parks the task until its timer fires. A park can return for
 // a wake meant for an earlier wait, one a select's second channel sent
 // before the select unlinked from it, so the task parks until its own
 // flag says the timer fired; returning sooner would cut the sleep short
 // and leave the timer to wake a task that may be gone.
-void tk_sleep(int64_t d) {
+void sn_sleep(int64_t d) {
     if (d <= 0) {
         return;
     }
 
-    task *t = tk_self();
+    task *t = sn_self();
     pthread_mutex_lock(&timers_mu);
     start_timing();
     bool fired = false;
@@ -1176,7 +1176,7 @@ void tk_sleep(int64_t d) {
     pthread_cond_signal(&timers_cond);
     while (!fired) {
         pthread_mutex_unlock(&timers_mu);
-        tk_park();
+        sn_park();
         pthread_mutex_lock(&timers_mu);
     }
 
@@ -1184,17 +1184,17 @@ void tk_sleep(int64_t d) {
 }
 
 // The guard stack of a task: the values a panic drops, innermost
-// last. It grows with the system allocator, not tk_alloc, so a debug
+// last. It grows with the system allocator, not sn_alloc, so a debug
 // build does not count it among the program's blocks. A panic unwinds
 // the task it happens in and no other, since the others are on other
 // workers or parked in the middle of their work.
-void tk_guard(void *p, void (*drop)(void *)) {
-    task *t = tk_self();
+void sn_guard(void *p, void (*drop)(void *)) {
+    task *t = sn_self();
     if (t->nguards == t->guardcap) {
         int64_t cap = t->guardcap < 16 ? 16 : t->guardcap * 2;
         guard *more = realloc(t->guards, (size_t)cap * sizeof *more);
         if (more == NULL) {
-            tk_panic(TK_STR("out of memory", 13)); // the stack so far is intact for the unwinding
+            sn_panic(SN_STR("out of memory", 13)); // the stack so far is intact for the unwinding
         }
 
         t->guards = more;
@@ -1204,12 +1204,12 @@ void tk_guard(void *p, void (*drop)(void *)) {
     t->guards[t->nguards++] = (guard){p, drop};
 }
 
-// tk_unguard removes the guard of p, searched from the top: a value is
+// sn_unguard removes the guard of p, searched from the top: a value is
 // usually dropped in the reverse order of its registration, but a
 // temporary of a statement may be dropped after a variable the
 // statement declared.
-void tk_unguard(void *p) {
-    task *t = tk_self();
+void sn_unguard(void *p) {
+    task *t = sn_self();
     for (int64_t i = t->nguards - 1; i >= 0; i--) {
         if (t->guards[i].p == p) {
             memmove(&t->guards[i], &t->guards[i + 1], (size_t)(t->nguards - i - 1) * sizeof *t->guards);
@@ -1219,15 +1219,15 @@ void tk_unguard(void *p) {
     }
 }
 
-// tk_panic prints the message, then runs the drops of the guarded
+// sn_panic prints the message, then runs the drops of the guarded
 // values, innermost first, and ends the program. A Drop that panics
 // during that ends the program with its own message at once.
-_Noreturn void tk_panic(tk_string msg) {
+_Noreturn void sn_panic(sn_string msg) {
     fflush(stdout);
     fputs("panic: ", stderr);
     fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
-    task *t = tk_self();
+    task *t = sn_self();
     if (!t->unwinding) {
         t->unwinding = true;
         while (t->nguards > 0) {

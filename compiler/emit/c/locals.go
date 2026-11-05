@@ -1,13 +1,13 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package c
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A local or a parameter is written under its own name, unless a local
@@ -20,8 +20,8 @@ import (
 // struct's C type from the rest of the function. Such a variable is
 // given a name of its own, a temporary's number before it, which no
 // name of the program reaches. A library's names are in the runtime's
-// tk_ space and the program's functions, variables and constants in
-// tk__, which no local reaches either.
+// sn_ space and the program's functions, variables and constants in
+// sn__, which no local reaches either.
 
 // declareLocal returns the C name of the local name declares, and
 // takes it in the function being written.
@@ -51,7 +51,7 @@ type naming struct {
 
 // newNaming returns the naming of the program in f: the names its types
 // and traits take at file scope, each under its own name. Its
-// functions, variables and constants are in the tk__ space (lower) and
+// functions, variables and constants are in the sn__ space (lower) and
 // meet no local.
 func newNaming(f *ast.File) naming {
 	n := naming{renamed: make(map[*types.Var]string), toplevel: make(map[string]bool), globals: make(map[*types.Var]bool)}

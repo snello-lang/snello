@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/internal/backendtest"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // TestHello builds the smallest program through the LLVM backend, in
@@ -31,10 +31,10 @@ import (
 // link with the runtime and the runtime's own main all work or none
 // of them does.
 func TestHello(t *testing.T) {
-	src := "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello, Teak\")\n\tfmt.Println(\"two\", \"words\")\n}\n"
+	src := "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello, Snello\")\n\tfmt.Println(\"two\", \"words\")\n}\n"
 	for _, debug := range []bool{false, true} {
 		out, stderr, code := run(t, "hello", src, debug)
-		if out != "hello, Teak\ntwo words\n" || code != 0 {
+		if out != "hello, Snello\ntwo words\n" || code != 0 {
 			t.Errorf("debug=%v: got output %q, stderr %q and exit code %d, want the two lines and 0", debug, out, stderr, code)
 		}
 	}
@@ -46,15 +46,15 @@ func TestHello(t *testing.T) {
 // .out file beside it: the same suite the C backend runs, so that the
 // two backends are held to the same output.
 func TestRunExamples(t *testing.T) {
-	programs, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.teak"))
+	programs, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
 	if err != nil || len(programs) == 0 {
 		t.Fatalf("no programs under examples/run: %v", err)
 	}
 
-	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.teak"))
+	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.snello"))
 	for _, path := range append(programs, core...) {
-		name := strings.TrimSuffix(filepath.Base(path), ".teak")
-		want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
+		name := strings.TrimSuffix(filepath.Base(path), ".snello")
+		want, err := os.ReadFile(strings.TrimSuffix(path, ".snello") + ".out")
 		if err != nil {
 			continue // a core program without an output yet; the C suite names the ones that need it
 		}
@@ -72,7 +72,7 @@ func TestRunExamples(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				out, stderr, code := run(t, name, string(src), debug, strings.TrimSuffix(path, ".teak")+".files")
+				out, stderr, code := run(t, name, string(src), debug, strings.TrimSuffix(path, ".snello")+".files")
 				if out != string(want) || code != 0 {
 					t.Errorf("%s printed:\n%s--- stderr ---\n%s--- exit %d, want ---\n%s", path, out, stderr, code, want)
 				}
@@ -91,13 +91,13 @@ func TestNoReservation(t *testing.T) {
 		t.Skip("only Linux enforces a limit on the address space")
 	}
 
-	path := filepath.Join("..", "..", "..", "examples", "run", "alloc.teak")
+	path := filepath.Join("..", "..", "..", "examples", "run", "alloc.snello")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
+	want, err := os.ReadFile(strings.TrimSuffix(path, ".snello") + ".out")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestNoReservation(t *testing.T) {
 // with socket options it refuses, and Accept skips it, as Go's runtime
 // does; Linux hands it over usable, and the server's write to it fails
 // instead, so the server writes to each connection until one takes it.
-// A Teak program cannot reset a connection, so Go plays the clients.
+// A Snello program cannot reset a connection, so Go plays the clients.
 func TestAcceptAfterReset(t *testing.T) {
 	src := `package main
 import ("fmt"; "net"; "os"; "time")
@@ -200,7 +200,7 @@ func main() {
 // TestResetMessage has a client reset a connection a server is about
 // to read: the server's Error is worded as Go words it, naming both
 // ends, and its Kind is Reset, so a program tells it from the rest
-// without reading the message. Go plays the client, which a Teak
+// without reading the message. Go plays the client, which a Snello
 // program cannot, since resetting takes a socket option net does not
 // offer.
 func TestResetMessage(t *testing.T) {
@@ -303,13 +303,13 @@ func TestUnsupported(t *testing.T) {
 // and the target triple written for each processor and system.
 func TestABI(t *testing.T) {
 	amd64, err := targetABI("amd64")
-	if err != nil || amd64.words("%tk_string") != "ptr byval(%tk_string) align 8" {
-		t.Errorf("amd64: %q, %v", amd64.words("%tk_string"), err)
+	if err != nil || amd64.words("%sn_string") != "ptr byval(%sn_string) align 8" {
+		t.Errorf("amd64: %q, %v", amd64.words("%sn_string"), err)
 	}
 
 	arm64, err := targetABI("arm64")
-	if err != nil || arm64.words("%tk_string") != "ptr" {
-		t.Errorf("arm64: %q, %v", arm64.words("%tk_string"), err)
+	if err != nil || arm64.words("%sn_string") != "ptr" {
+		t.Errorf("arm64: %q, %v", arm64.words("%sn_string"), err)
 	}
 
 	if _, err := targetABI("riscv64"); err == nil {
@@ -333,7 +333,7 @@ func TestABI(t *testing.T) {
 // clang on every machine the suite runs on; running it is the other
 // runner's job.
 func TestCrossCompile(t *testing.T) {
-	src := "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello, Teak\")\n}\n"
+	src := "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello, Snello\")\n}\n"
 	for _, arch := range []string{"amd64", "arm64"} {
 		module, err := emit(t, "hello", src, Config{Arch: arch, OS: "linux"})
 		if err != nil {
@@ -364,7 +364,7 @@ func BenchmarkEmit(b *testing.B) {
 		libs []lower.Library
 	}
 
-	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.teak"))
+	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
 	var programs []checked
 	for _, path := range paths {
 		src, err := os.ReadFile(path)
@@ -400,7 +400,7 @@ func BenchmarkEmit(b *testing.B) {
 // emit parses, checks and emits src as the program name.
 func emit(t *testing.T, name, src string, cfg Config) ([]byte, error) {
 	t.Helper()
-	f, file, err := parser.ParseFile(name+".teak", []byte(src))
+	f, file, err := parser.ParseFile(name+".snello", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func libraries(imp *importer.Importer) []lower.Library {
 	return libs
 }
 
-// run builds src, a Teak program, through the backend and runs it,
+// run builds src, a Snello program, through the backend and runs it,
 // returning its standard output, its standard error and its exit code.
 // The files under fixtures, if the directory exists, are copied beside
 // the binary first, for a program that reads them.

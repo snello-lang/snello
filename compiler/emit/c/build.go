@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -12,15 +12,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/teak-lang/teak/runtime"
+	"github.com/snello-lang/snello/runtime"
 )
 
 // Flags are the options the C compiler is given. Every warning is an
 // error: the emitted C must be as clean as the Go of the compiler.
-// -fwrapv makes signed overflow wrap, as Teak's integers do; without
+// -fwrapv makes signed overflow wrap, as Snello's integers do; without
 // it C leaves overflow undefined and the optimizer may assume it away.
 // -fno-strict-aliasing lets the runtime work on every slice type
-// through tk_slice, which has the same layout. A variable the program
+// through sn_slice, which has the same layout. A variable the program
 // assigns and never reads is the checker's to judge, not the C
 // compiler's, so that warning is off. The optimization level is the
 // build's: Release or Debug.
@@ -34,7 +34,7 @@ var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautologic
 // runtime's checks in and is built for speed of building.
 var (
 	Release = []string{"-O2", "-flto"}
-	Debug   = []string{"-O1", "-DTK_DEBUG"}
+	Debug   = []string{"-O1", "-DSN_DEBUG"}
 )
 
 // Compiler returns the C compiler to run: the CC environment variable
@@ -53,7 +53,7 @@ func Compiler() string {
 // compiles the runtime's checks in: see runtime/c/debug.c.
 func Build(dir, name string, src []byte, debug bool) (bin string, output []byte, err error) {
 	files := runtime.Files()
-	files[name+".teak.c"] = src // never the name of a runtime file, whatever the program is called
+	files[name+".snello.c"] = src // never the name of a runtime file, whatever the program is called
 	for file, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
 			return "", nil, err
@@ -67,7 +67,7 @@ func Build(dir, name string, src []byte, debug bool) (bin string, output []byte,
 		args = append(args, Release...)
 	}
 
-	objs, output, err := Objects(Compiler(), args, append([]string{filepath.Join(dir, name+".teak.c")}, runtime.Paths(dir)...))
+	objs, output, err := Objects(Compiler(), args, append([]string{filepath.Join(dir, name+".snello.c")}, runtime.Paths(dir)...))
 	if err != nil {
 		return "", output, err
 	}

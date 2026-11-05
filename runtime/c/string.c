@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,16 +10,16 @@
 
 #include <string.h>
 
-// tk_string_append is s += x: in place when s owns room past its end,
+// sn_string_append is s += x: in place when s owns room past its end,
 // which only a string built by the program can, and else into a block
 // twice as large, so that a string built by += in a loop costs
 // amortized time a byte, as Rust's String does, and not a copy of the
 // whole on every pass. The borrow rules keep anything from viewing s
 // while it changes; x may be a part of s, which is read before the old
 // block is freed.
-void tk_string_append(tk_string *s, const tk_string *x) {
-    tk_check_string(*s);
-    tk_check_string(*x);
+void sn_string_append(sn_string *s, const sn_string *x) {
+    sn_check_string(*s);
+    sn_check_string(*x);
     if (x->len == 0) {
         return;
     }
@@ -40,47 +40,47 @@ void tk_string_append(tk_string *s, const tk_string *x) {
         cap = 16;
     }
 
-    uint8_t *p = tk_alloc((size_t)cap);
+    uint8_t *p = sn_alloc((size_t)cap);
     memcpy(p, s->ptr, (size_t)s->len);
     memcpy(p + s->len, x->ptr, (size_t)x->len);
     if (s->cap > 0) {
-        tk_free((void *)s->ptr);
+        sn_free((void *)s->ptr);
     }
 
-    *s = (tk_string){p, n, cap};
+    *s = (sn_string){p, n, cap};
 }
 
-tk_string tk_concat(tk_string a, tk_string b) {
-    tk_check_string(a);
-    tk_check_string(b);
-    uint8_t *p = tk_alloc((size_t)(a.len + b.len));
+sn_string sn_concat(sn_string a, sn_string b) {
+    sn_check_string(a);
+    sn_check_string(b);
+    uint8_t *p = sn_alloc((size_t)(a.len + b.len));
     memcpy(p, a.ptr, (size_t)a.len);
     memcpy(p + a.len, b.ptr, (size_t)b.len);
-    return TK_OWNED(p, a.len + b.len);
+    return SN_OWNED(p, a.len + b.len);
 }
 
-tk_string tk_join(tk_string a, tk_string b, int owned) {
-    tk_string s = tk_concat(a, b);
+sn_string sn_join(sn_string a, sn_string b, int owned) {
+    sn_string s = sn_concat(a, b);
     if (owned & 1) {
-        tk_string_free(a);
+        sn_string_free(a);
     }
 
     if (owned & 2) {
-        tk_string_free(b);
+        sn_string_free(b);
     }
 
     return s;
 }
 
-bool tk_string_eq(tk_string a, tk_string b) {
-    tk_check_string(a);
-    tk_check_string(b);
+bool sn_string_eq(sn_string a, sn_string b) {
+    sn_check_string(a);
+    sn_check_string(b);
     return a.len == b.len && memcmp(a.ptr, b.ptr, (size_t)a.len) == 0;
 }
 
-int tk_string_cmp(tk_string a, tk_string b) {
-    tk_check_string(a);
-    tk_check_string(b);
+int sn_string_cmp(sn_string a, sn_string b) {
+    sn_check_string(a);
+    sn_check_string(b);
     int64_t n = a.len < b.len ? a.len : b.len;
     int c = memcmp(a.ptr, b.ptr, (size_t)n);
     if (c != 0) {
@@ -90,24 +90,24 @@ int tk_string_cmp(tk_string a, tk_string b) {
     return a.len < b.len ? -1 : a.len > b.len;
 }
 
-tk_string tk_string_clone(tk_string s) {
-    tk_check_string(s);
+sn_string sn_string_clone(sn_string s) {
+    sn_check_string(s);
     if (s.len == 0) {
-        return TK_STR("", 0); // an owned string of no bytes would be a block with cap 0, which nothing frees
+        return SN_STR("", 0); // an owned string of no bytes would be a block with cap 0, which nothing frees
     }
 
-    uint8_t *p = tk_alloc((size_t)s.len);
+    uint8_t *p = sn_alloc((size_t)s.len);
     memcpy(p, s.ptr, (size_t)s.len);
-    return TK_OWNED(p, s.len);
+    return SN_OWNED(p, s.len);
 }
 
-tk_string tk_substr(tk_string s, int64_t lo, int64_t hi) {
-    tk_check_string(s);
+sn_string sn_substr(sn_string s, int64_t lo, int64_t hi) {
+    sn_check_string(s);
     if (lo < 0 || hi < lo || hi > s.len) {
-        tk_slice_bounds(lo, hi, s.len);
+        sn_slice_bounds(lo, hi, s.len);
     }
 
-    return TK_STR(s.ptr + lo, hi - lo);
+    return SN_STR(s.ptr + lo, hi - lo);
 }
 
 // decode_last reads the rune that ends the n bytes at p, as Go's
@@ -129,7 +129,7 @@ static int decode_last(const uint8_t *p, int64_t n, int32_t *r) {
         start = 0;
     }
 
-    int w = tk_utf8_decode(p + start, n - start, r);
+    int w = sn_utf8_decode(p + start, n - start, r);
     if (start + w != n) {
         *r = 0xFFFD;
         return 1;
@@ -142,21 +142,21 @@ static int decode_last(const uint8_t *p, int64_t n, int32_t *r) {
 // for ToUpper and ToLower: a byte that is not valid UTF-8 becomes the
 // replacement rune, and a rune may change its length, so the length is
 // counted before the copy. Text of ASCII alone is copied byte by byte.
-static tk_string mapped(tk_string s, int32_t (*f)(int32_t)) {
-    tk_check_string(s);
+static sn_string mapped(sn_string s, int32_t (*f)(int32_t)) {
+    sn_check_string(s);
     bool ascii = true;
     for (int64_t i = 0; i < s.len && ascii; i++) {
         ascii = s.ptr[i] < 0x80;
     }
 
     if (ascii) { // a byte's case by arithmetic, which the compiler writes with vector instructions
-        uint8_t *p = tk_alloc((size_t)s.len);
-        if (f == tk_rune_upper) {
+        uint8_t *p = sn_alloc((size_t)s.len);
+        if (f == sn_rune_upper) {
             for (int64_t i = 0; i < s.len; i++) {
                 uint8_t c = s.ptr[i];
                 p[i] = (uint8_t)(c - ((c >= 'a' && c <= 'z') ? 32 : 0));
             }
-        } else if (f == tk_rune_lower) {
+        } else if (f == sn_rune_lower) {
             for (int64_t i = 0; i < s.len; i++) {
                 uint8_t c = s.ptr[i];
                 p[i] = (uint8_t)(c + ((c >= 'A' && c <= 'Z') ? 32 : 0));
@@ -167,29 +167,29 @@ static tk_string mapped(tk_string s, int32_t (*f)(int32_t)) {
             }
         }
 
-        return TK_OWNED(p, s.len);
+        return SN_OWNED(p, s.len);
     }
 
     uint8_t tmp[4];
     int64_t n = 0;
     for (int64_t i = 0; i < s.len;) {
         int32_t r;
-        i += tk_utf8_decode(s.ptr + i, s.len - i, &r);
-        n += tk_utf8_encode(f(r), tmp);
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
+        n += sn_utf8_encode(f(r), tmp);
     }
 
-    uint8_t *p = tk_alloc((size_t)n);
+    uint8_t *p = sn_alloc((size_t)n);
     for (int64_t i = 0, at = 0; i < s.len;) {
         int32_t r;
-        i += tk_utf8_decode(s.ptr + i, s.len - i, &r);
-        at += tk_utf8_encode(f(r), p + at);
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
+        at += sn_utf8_encode(f(r), p + at);
     }
 
-    return TK_OWNED(p, n);
+    return SN_OWNED(p, n);
 }
 
-tk_string tk_to_upper(tk_string s) { return mapped(s, tk_rune_upper); }
-tk_string tk_to_lower(tk_string s) { return mapped(s, tk_rune_lower); }
+sn_string sn_to_upper(sn_string s) { return mapped(s, sn_rune_upper); }
+sn_string sn_to_lower(sn_string s) { return mapped(s, sn_rune_lower); }
 
 // ascii_space is Go's asciiSpace: the white space below 0x80, by byte.
 static const uint8_t ascii_space[256] = {['\t'] = 1, ['\n'] = 1, ['\v'] = 1, ['\f'] = 1, ['\r'] = 1, [' '] = 1};
@@ -204,14 +204,14 @@ static inline bool space_at(const uint8_t *p, int64_t n, int *w) {
     }
 
     int32_t r;
-    *w = tk_utf8_decode(p, n, &r);
-    return tk_rune_space(r);
+    *w = sn_utf8_decode(p, n, &r);
+    return sn_rune_space(r);
 }
 
-// tk_trim lends s without the white space at either end, the runes
+// sn_trim lends s without the white space at either end, the runes
 // Go's unicode.IsSpace reports, as strings.TrimSpace does.
-tk_string tk_trim(tk_string s) {
-    tk_check_string(s);
+sn_string sn_trim(sn_string s) {
+    sn_check_string(s);
     int64_t lo = 0, hi = s.len;
     int w;
     while (lo < hi && space_at(s.ptr + lo, hi - lo, &w)) {
@@ -230,25 +230,25 @@ tk_string tk_trim(tk_string s) {
 
         int32_t r;
         int back = decode_last(s.ptr + lo, hi - lo, &r);
-        if (!tk_rune_space(r)) {
+        if (!sn_rune_space(r)) {
             break;
         }
 
         hi -= back;
     }
 
-    return TK_STR(s.ptr + lo, hi - lo);
+    return SN_STR(s.ptr + lo, hi - lo);
 }
 
-bool tk_has_prefix(tk_string s, tk_string t) {
-    tk_check_string(s);
-    tk_check_string(t);
+bool sn_has_prefix(sn_string s, sn_string t) {
+    sn_check_string(s);
+    sn_check_string(t);
     return s.len >= t.len && memcmp(s.ptr, t.ptr, (size_t)t.len) == 0;
 }
 
-bool tk_has_suffix(tk_string s, tk_string t) {
-    tk_check_string(s);
-    tk_check_string(t);
+bool sn_has_suffix(sn_string s, sn_string t) {
+    sn_check_string(s);
+    sn_check_string(t);
     return s.len >= t.len && memcmp(s.ptr + s.len - t.len, t.ptr, (size_t)t.len) == 0;
 }
 
@@ -288,9 +288,9 @@ static int64_t rabin_karp(const uint8_t *s, int64_t n, const uint8_t *t, int64_t
 // misses outrun the progress, the rest of s is searched by rabin_karp,
 // so that no t, however close to matching everywhere, makes a search
 // cost the product of the lengths.
-static int64_t find(tk_string s, tk_string t) {
-    tk_check_string(s);
-    tk_check_string(t);
+static int64_t find(sn_string s, sn_string t) {
+    sn_check_string(s);
+    sn_check_string(t);
     int64_t n = s.len, m = t.len;
     if (m == 0) {
         return 0;
@@ -337,12 +337,12 @@ static int64_t find(tk_string s, tk_string t) {
     return -1;
 }
 
-bool tk_string_contains(tk_string s, tk_string t) { return find(s, t) >= 0; }
+bool sn_string_contains(sn_string s, sn_string t) { return find(s, t) >= 0; }
 
-// tk_fields splits s around runs of white space, the runes Go's
+// sn_fields splits s around runs of white space, the runes Go's
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
-void tk_fields(tk_string s, tk_slice *out) {
-    tk_check_string(s);
+void sn_fields(sn_string s, sn_slice *out) {
+    sn_check_string(s);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
@@ -368,8 +368,8 @@ void tk_fields(tk_string s, tk_slice *out) {
             return;
         }
 
-        tk_slice_make(out, 0, n, sizeof(tk_string));
-        tk_string *f = out->ptr;
+        sn_slice_make(out, 0, n, sizeof(sn_string));
+        sn_string *f = out->ptr;
         int64_t j = 0;
         while (j < s.len) {
             while (j < s.len && ascii_space[s.ptr[j]]) {
@@ -382,7 +382,7 @@ void tk_fields(tk_string s, tk_slice *out) {
             }
 
             if (j > start) {
-                f[out->len++] = TK_STR(s.ptr + start, j - start);
+                f[out->len++] = SN_STR(s.ptr + start, j - start);
             }
         }
 
@@ -402,17 +402,17 @@ void tk_fields(tk_string s, tk_slice *out) {
         }
 
         if (i > start) {
-            tk_string field = TK_STR(s.ptr + start, i - start);
-            tk_slice_push(out, &field, sizeof field);
+            sn_string field = SN_STR(s.ptr + start, i - start);
+            sn_slice_push(out, &field, sizeof field);
         }
     }
 }
 
-// tk_lines splits s at every newline into views of s, each without
+// sn_lines splits s at every newline into views of s, each without
 // its newline and a carriage return before it; a last line without a
 // newline is a line, a trailing newline does not make an empty one.
-void tk_lines(tk_string s, tk_slice *out) {
-    tk_check_string(s);
+void sn_lines(sn_string s, sn_slice *out) {
+    sn_check_string(s);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
@@ -431,28 +431,28 @@ void tk_lines(tk_string s, tk_slice *out) {
             end--;
         }
 
-        tk_string line = TK_STR(s.ptr + start, end - start);
-        tk_slice_push(out, &line, sizeof line);
+        sn_string line = SN_STR(s.ptr + start, end - start);
+        sn_slice_push(out, &line, sizeof line);
         start = i + 1;
     }
 }
 
-// tk_split splits s at every sep into views of s. An empty separator
+// sn_split splits s at every sep into views of s. An empty separator
 // splits after every UTF-8 sequence, a byte that is not one counting
 // as one, and gives no pieces of an empty string, as Go's strings.Split
 // does.
-void tk_split(tk_string s, tk_string sep, tk_slice *out) {
-    tk_check_string(s);
-    tk_check_string(sep);
+void sn_split(sn_string s, sn_string sep, sn_slice *out) {
+    sn_check_string(s);
+    sn_check_string(sep);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
     if (sep.len == 0) {
         for (int64_t i = 0; i < s.len;) {
             int32_t r;
-            int w = tk_utf8_decode(s.ptr + i, s.len - i, &r);
-            tk_string piece = TK_STR(s.ptr + i, w);
-            tk_slice_push(out, &piece, sizeof piece);
+            int w = sn_utf8_decode(s.ptr + i, s.len - i, &r);
+            sn_string piece = SN_STR(s.ptr + i, w);
+            sn_slice_push(out, &piece, sizeof piece);
             i += w;
         }
 
@@ -461,30 +461,30 @@ void tk_split(tk_string s, tk_string sep, tk_slice *out) {
 
     int64_t start = 0;
     for (;;) {
-        tk_string rest = TK_STR(s.ptr + start, s.len - start);
+        sn_string rest = SN_STR(s.ptr + start, s.len - start);
         int64_t at = find(rest, sep);
         if (at < 0) {
-            tk_slice_push(out, &rest, sizeof rest);
+            sn_slice_push(out, &rest, sizeof rest);
             return;
         }
 
-        tk_string piece = TK_STR(rest.ptr, at);
-        tk_slice_push(out, &piece, sizeof piece);
+        sn_string piece = SN_STR(rest.ptr, at);
+        sn_slice_push(out, &piece, sizeof piece);
         start += at + sep.len;
     }
 }
 
-// tk_strings_repeat writes s n times into one allocation: s once, then
+// sn_strings_repeat writes s n times into one allocation: s once, then
 // what is written so far again, doubling, as Go's strings.Repeat does,
 // in about log2(n) copies. The library checked n and the length.
-tk_string tk_strings_repeat(tk_string s, int64_t n) {
-    tk_check_string(s);
+sn_string sn_strings_repeat(sn_string s, int64_t n) {
+    sn_check_string(s);
     int64_t total = s.len * n;
     if (total == 0) {
-        return TK_STR("", 0);
+        return SN_STR("", 0);
     }
 
-    uint8_t *p = tk_alloc((size_t)total);
+    uint8_t *p = sn_alloc((size_t)total);
     memcpy(p, s.ptr, (size_t)s.len);
     for (int64_t filled = s.len; filled < total;) {
         int64_t chunk = filled < total - filled ? filled : total - filled;
@@ -492,48 +492,48 @@ tk_string tk_strings_repeat(tk_string s, int64_t n) {
         filled += chunk;
     }
 
-    return TK_OWNED(p, total);
+    return SN_OWNED(p, total);
 }
 
-// tk_strings_ownString makes the bytes of b, which it takes, a string's:
+// sn_strings_ownString makes the bytes of b, which it takes, a string's:
 // a string's cap is its allocation's size, as a slice's is, so the
 // buffer passes over whole, with no copy.
-tk_string tk_strings_ownString(tk_slice_u8 b) {
-    tk_check_slice((tk_slice *)&b);
+sn_string sn_strings_ownString(sn_slice_u8 b) {
+    sn_check_slice((sn_slice *)&b);
     if (b.len == 0) {
         if (b.ptr != NULL) { // a block of no bytes is a block too
-            tk_free(b.ptr);
+            sn_free(b.ptr);
         }
 
-        return TK_STR("", 0);
+        return SN_STR("", 0);
     }
 
-    return (tk_string){b.ptr, b.len, b.cap};
+    return (sn_string){b.ptr, b.len, b.cap};
 }
 
-// tk_strings_appendString appends the bytes of s to b in one copy,
+// sn_strings_appendString appends the bytes of s to b in one copy,
 // growing it once: the strings package's Builder and Repeat write
 // through it.
-void tk_strings_appendString(tk_slice_u8 *buf, tk_string s) {
-    tk_slice *b = (tk_slice *)buf; // the same three words
-    tk_check_string(s);
+void sn_strings_appendString(sn_slice_u8 *buf, sn_string s) {
+    sn_slice *b = (sn_slice *)buf; // the same three words
+    sn_check_string(s);
     if (s.len == 0) {
         return;
     }
 
-    tk_slice_own(b, "WriteString");
-    tk_slice_grow(b, b->len + s.len, 1);
+    sn_slice_own(b, "WriteString");
+    sn_slice_grow(b, b->len + s.len, 1);
     memcpy((uint8_t *)b->ptr + b->len, s.ptr, (size_t)s.len);
     b->len += s.len;
 }
 
-bool tk_split_once(tk_string s, tk_string sep, tk_string *before, tk_string *after) {
+bool sn_split_once(sn_string s, sn_string sep, sn_string *before, sn_string *after) {
     int64_t at = find(s, sep);
     if (at < 0) {
         return false;
     }
 
-    *before = TK_STR(s.ptr, at);
-    *after = TK_STR(s.ptr + at + sep.len, s.len - at - sep.len);
+    *before = SN_STR(s.ptr, at);
+    *after = SN_STR(s.ptr + at + sep.len, s.len - at - sep.len);
     return true;
 }

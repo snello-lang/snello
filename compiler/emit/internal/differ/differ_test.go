@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/compiler/emit/c"
-	"github.com/teak-lang/teak/compiler/emit/llvm"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/emit/llvm"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A kind is a temporary: the declarations it needs, an expression
@@ -185,7 +185,7 @@ func TestBackendsAgree(t *testing.T) {
 // to both streams and its exit code; a program that hangs is stopped.
 func run(t *testing.T, name, src, backend string, debug bool) (string, int) {
 	t.Helper()
-	f, file, err := parser.ParseFile(name+".teak", []byte(src))
+	f, file, err := parser.ParseFile(name+".snello", []byte(src))
 	if err != nil {
 		t.Fatalf("%v\n%s", err, src)
 	}

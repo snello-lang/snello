@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -20,8 +20,8 @@ static int64_t escape_rune(char *p, int32_t r, char quote) {
         return 2;
     }
 
-    if (tk_isprint(r)) {
-        return tk_utf8_encode(r, (uint8_t *)p);
+    if (sn_isprint(r)) {
+        return sn_utf8_encode(r, (uint8_t *)p);
     }
 
     const char *short_escape = NULL;
@@ -51,17 +51,17 @@ static int64_t escape_rune(char *p, int32_t r, char quote) {
     return snprintf(p, 11, "\\U%08x", (unsigned)r);
 }
 
-// tk_quote writes s as Go's strconv.Quote and %q write a string: in
+// sn_quote writes s as Go's strconv.Quote and %q write a string: in
 // double quotes, a byte that starts no UTF-8 sequence as \xNN, and every
 // rune as escape_rune writes it.
-tk_string tk_quote(tk_string s) {
-    tk_check_string(s);
-    char *p = tk_alloc((size_t)s.len * 4 + 3); // \xNN is the most one byte takes, and snprintf ends with a zero
+sn_string sn_quote(sn_string s) {
+    sn_check_string(s);
+    char *p = sn_alloc((size_t)s.len * 4 + 3); // \xNN is the most one byte takes, and snprintf ends with a zero
     int64_t n = 0;
     p[n++] = '"';
     for (int64_t i = 0; i < s.len;) {
         int32_t r;
-        int width = tk_utf8_decode(s.ptr + i, s.len - i, &r);
+        int width = sn_utf8_decode(s.ptr + i, s.len - i, &r);
         if (r == 0xFFFD && width == 1) { // a byte that starts no rune, as strconv.Quote tells it from a written U+FFFD
             n += snprintf(p + n, 5, "\\x%02x", s.ptr[i]);
         } else {
@@ -72,27 +72,27 @@ tk_string tk_quote(tk_string s) {
     }
 
     p[n++] = '"';
-    return TK_OWNED(p, n);
+    return SN_OWNED(p, n);
 }
 
-// tk_quote_rune writes r as Go's strconv.QuoteRune and %q write a rune:
+// sn_quote_rune writes r as Go's strconv.QuoteRune and %q write a rune:
 // in single quotes, with a value that is no rune, past U+10FFFF or a
 // surrogate, written as U+FFFD.
-tk_string tk_quote_rune(int64_t r) {
+sn_string sn_quote_rune(int64_t r) {
     if (r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) {
         r = 0xFFFD;
     }
 
-    char *p = tk_alloc(16);
+    char *p = sn_alloc(16);
     int64_t n = 0;
     p[n++] = '\'';
     n += escape_rune(p + n, (int32_t)r, '\'');
     p[n++] = '\'';
-    return TK_OWNED(p, n);
+    return SN_OWNED(p, n);
 }
 
-tk_string tk_quote_owned(tk_string s) {
-    tk_string q = tk_quote(s);
-    tk_string_free(s);
+sn_string sn_quote_owned(sn_string s) {
+    sn_string q = sn_quote(s);
+    sn_string_free(s);
     return q;
 }

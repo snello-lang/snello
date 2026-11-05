@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Some operations on a composite type need a function of their own in
@@ -20,11 +20,11 @@ import (
 // elements writes the body of a printer over n elements reached as
 // elem, with i for the index: [a b c], as Go prints a slice or an array.
 func (e *Emitter) elements(b *strings.Builder, n, elem string, t types.Type, pos token.Pos) {
-	put(b, "\ttk_string out = ", literal("["), ";\n")
+	put(b, "\tsn_string out = ", literal("["), ";\n")
 	put(b, "\tfor (int64_t i = 0; i < ", n, "; i++) {\n")
-	put(b, "\t\tif (i > 0) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
+	put(b, "\t\tif (i > 0) {\n\t\t\tout = sn_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
 	put(b, "\t\tout = ", join(text{"out", true}, e.textOf(elem, t, pos, false)).s, ";\n\t}\n\n")
-	put(b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
+	put(b, "\treturn sn_join(out, ", literal("]"), ", 1);\n")
 }
 
 // stringer returns the name of the function that turns a value of a
@@ -35,15 +35,15 @@ func (e *Emitter) elements(b *strings.Builder, n, elem string, t types.Type, pos
 // constructor is quoted, so the text reads as the value would be
 // written; inside a struct, tuple or slice it is not.
 func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
-	name := "tk_str_" + lower.Mangle(t)
+	name := "sn_str_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
 
 	e.state[name] = defined
-	put(&e.protos, "static tk_string ", name, "(", e.cType(t, pos), " v);\n")
+	put(&e.protos, "static sn_string ", name, "(", e.cType(t, pos), " v);\n")
 	var b strings.Builder
-	put(&b, "static tk_string ", name, "(", e.cType(t, pos), " v) {\n\t(void)v; // () and an empty struct have nothing to read\n")
+	put(&b, "static sn_string ", name, "(", e.cType(t, pos), " v) {\n\t(void)v; // () and an empty struct have nothing to read\n")
 	v := deref("v", t)
 	switch u := lower.ValueType(t).Underlying().(type) {
 	case *types.Struct:
@@ -70,11 +70,11 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 		put(&b, "\treturn ", joined("(", ")", ", ", parts).s, ";\n")
 	case *types.Map:
 		k, val := "(("+e.cType(u.Key(), pos)+" *)"+v+".keys)[i]", "(("+e.cType(u.Value(), pos)+" *)"+v+".vals)[i]"
-		put(&b, "\ttk_string out = ", literal("map["), ";\n")
-		put(&b, "\tfor (int64_t i = tk_map_next(&", v, ", 0); i >= 0; i = tk_map_next(&", v, ", i + 1)) {\n")
-		put(&b, "\t\tif (out.len > 4) {\n\t\t\tout = tk_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
+		put(&b, "\tsn_string out = ", literal("map["), ";\n")
+		put(&b, "\tfor (int64_t i = sn_map_next(&", v, ", 0); i >= 0; i = sn_map_next(&", v, ", i + 1)) {\n")
+		put(&b, "\t\tif (out.len > 4) {\n\t\t\tout = sn_join(out, ", literal(" "), ", 1);\n\t\t}\n\n")
 		put(&b, "\t\tout = ", join(join(join(text{"out", true}, e.textOf(k, u.Key(), pos, false)), text{literal(":"), false}), e.textOf(val, u.Value(), pos, false)).s, ";\n\t}\n\n")
-		put(&b, "\treturn tk_join(out, ", literal("]"), ", 1);\n")
+		put(&b, "\treturn sn_join(out, ", literal("]"), ", 1);\n")
 	case *types.Slice:
 		e.elements(&b, v+".len", v+".ptr[i]", u.Elem(), pos)
 	case *types.Array:
@@ -127,7 +127,7 @@ func (e *Emitter) structParts(s *types.Struct, v string, pos token.Pos) []text {
 	return parts
 }
 
-// A text is the C expression for a tk_string and whether the
+// A text is the C expression for a sn_string and whether the
 // expression builds it, in which case whoever uses it drops it: a
 // string read out of a value is only lent.
 type text struct {
@@ -158,7 +158,7 @@ func join(a, b text) text {
 		flags |= 2
 	}
 
-	return text{"tk_join(" + a.s + ", " + b.s + ", " + strconv.Itoa(flags) + ")", true}
+	return text{"sn_join(" + a.s + ", " + b.s + ", " + strconv.Itoa(flags) + ")", true}
 }
 
 func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) text {
@@ -167,7 +167,7 @@ func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) tex
 }
 
 // toText writes the expression that turns the C value v of type t
-// into a tk_string, and whether the expression builds the string;
+// into a sn_string, and whether the expression builds the string;
 // quoted says whether a string is written in quotes.
 func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (string, bool) {
 	if n, ok := lower.ValueType(t).(*types.Named); ok && (n.Implements(types.ErrorTrait) || types.IsStringer(n)) { // an error prints as its message, as the predeclared error does, and a Stringer as its String
@@ -179,7 +179,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 		name, _ := e.methodNameOf(nil, n, method, pos)
 		msg := name + "(" + deref(v, t) + ")"
 		if quoted {
-			return "tk_quote_owned(" + msg + ")", true
+			return "sn_quote_owned(" + msg + ")", true
 		}
 
 		return msg, true
@@ -193,19 +193,19 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	v = deref(v, t)
 	switch {
 	case isString(b) && quoted:
-		return "tk_quote(" + v + ")", true
+		return "sn_quote(" + v + ")", true
 	case isString(b):
 		return v, false
 	case b.Kind() == types.Bool:
-		return "tk_bool_to_string(" + v + ")", false
+		return "sn_bool_to_string(" + v + ")", false
 	case b.Kind() == types.Float32: // the fewest digits that read back as the same f32
-		return "tk_f32_to_string(" + v + ")", true
+		return "sn_f32_to_string(" + v + ")", true
 	case b.Info()&types.IsFloat != 0:
-		return "tk_f64_to_string((double)(" + v + "))", true
+		return "sn_f64_to_string((double)(" + v + "))", true
 	case b.Info()&types.IsUnsigned != 0:
-		return "tk_uint_to_string((uint64_t)(" + v + "))", true
+		return "sn_uint_to_string((uint64_t)(" + v + "))", true
 	case b.Info()&types.IsInteger != 0:
-		return "tk_int_to_string((int64_t)(" + v + "))", true
+		return "sn_int_to_string((int64_t)(" + v + "))", true
 	}
 
 	e.unsupported(pos, "printing values of type "+t.String())
@@ -228,7 +228,7 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) string {
 
 	if basic, ok := t.Underlying().(*types.Basic); ok {
 		if isString(basic) {
-			return "tk_string_eq(" + a + ", " + b + ")"
+			return "sn_string_eq(" + a + ", " + b + ")"
 		}
 
 		return a + " == " + b
@@ -244,7 +244,7 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) string {
 // comparer returns the name of the function comparing two values of a
 // composite type part by part, writing it on first use.
 func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
-	name := "tk_eq_" + lower.Mangle(t)
+	name := "sn_eq_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -313,21 +313,21 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 // map type, its key and value sizes and the key's hash and equality,
 // writing it and the two key functions on first use.
 func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
-	name := "tk_mt_" + lower.Mangle(t)
+	name := "sn_mt_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return "&" + name
 	}
 
 	e.state[name] = defined
 	key := e.cType(t.Key(), pos)
-	hash, eq := "tk_khash_"+lower.Mangle(t.Key()), "tk_keq_"+lower.Mangle(t.Key())
+	hash, eq := "sn_khash_"+lower.Mangle(t.Key()), "sn_keq_"+lower.Mangle(t.Key())
 	if e.state[hash] == undeclared {
 		e.state[hash] = defined
 		put(&e.helpers, "static uint64_t ", hash, "(const void *p) {\n\t", key, " k = *(", key, " const *)p; // const after the type, so a pointer type reads right\n\t(void)k;\n\treturn ", e.hash("k", t.Key(), pos), ";\n}\n\n")
 		put(&e.helpers, "static bool ", eq, "(const void *a, const void *b) {\n\treturn ", e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos), ";\n}\n\n")
 	}
 
-	put(&e.helpers, "static const tk_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.dropFn(t.Key(), pos), ", ", e.dropFn(t.Value(), pos), "};\n\n")
+	put(&e.helpers, "static const sn_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.dropFn(t.Key(), pos), ", ", e.dropFn(t.Value(), pos), "};\n\n")
 	return "&" + name
 }
 
@@ -356,27 +356,27 @@ func (e *Emitter) hashParts(v string, t types.Type, pos token.Pos) string {
 	case *types.Basic:
 		switch {
 		case isString(u):
-			return "tk_hash_string(" + v + ")"
+			return "sn_hash_string(" + v + ")"
 		case u.Info()&types.IsFloat != 0:
-			return "(" + v + " == 0 ? 0 : tk_hash_bytes(&" + v + ", sizeof " + v + "))" // 0.0 and -0.0 are equal, so they hash alike
+			return "(" + v + " == 0 ? 0 : sn_hash_bytes(&" + v + ", sizeof " + v + "))" // 0.0 and -0.0 are equal, so they hash alike
 		}
 
-		return "tk_hash_mix(0, (uint64_t)" + v + ")"
+		return "sn_hash_mix(0, (uint64_t)" + v + ")"
 	case *types.Chan:
-		return "tk_hash_mix(0, (uint64_t)(uintptr_t)" + v + ")" // the channel it is a handle on
+		return "sn_hash_mix(0, (uint64_t)(uintptr_t)" + v + ")" // the channel it is a handle on
 	case *types.Option:
-		return "(" + v + ".has ? tk_hash_mix(1, " + e.hash(v+".val", u.Elem(), pos) + ") : 0)"
+		return "(" + v + ".has ? sn_hash_mix(1, " + e.hash(v+".val", u.Elem(), pos) + ") : 0)"
 	case *types.Tuple:
 		h := "0"
 		for i := 0; i < u.Len(); i++ {
-			h = "tk_hash_mix(" + h + ", " + e.hash(v+".e"+strconv.Itoa(i), u.At(i), pos) + ")"
+			h = "sn_hash_mix(" + h + ", " + e.hash(v+".e"+strconv.Itoa(i), u.At(i), pos) + ")"
 		}
 
 		return h
 	case *types.Struct:
 		h := "0"
 		for i := 0; i < u.NumFields(); i++ {
-			h = "tk_hash_mix(" + h + ", " + e.hash(v+"."+lower.Ident(u.Field(i).Name()), u.Field(i).Type(), pos) + ")"
+			h = "sn_hash_mix(" + h + ", " + e.hash(v+"."+lower.Ident(u.Field(i).Name()), u.Field(i).Type(), pos) + ")"
 		}
 
 		return h
@@ -411,7 +411,7 @@ func (e *Emitter) compare(a, b string, t types.Type, pos token.Pos) string {
 
 	if basic, ok := t.Underlying().(*types.Basic); ok {
 		if isString(basic) {
-			return e.order() + "(tk_string_cmp(" + a + ", " + b + "))"
+			return e.order() + "(sn_string_cmp(" + a + ", " + b + "))"
 		}
 
 		return e.order() + "((" + less(b, a, t) + ") - (" + less(a, b, t) + "))"
@@ -424,7 +424,7 @@ func (e *Emitter) compare(a, b string, t types.Type, pos token.Pos) string {
 // order returns the name of the function turning a C comparison result,
 // negative, zero or positive, into an Ordering, writing it on first use.
 func (e *Emitter) order() string {
-	name := "tk_order"
+	name := "sn_order"
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		ct := e.cType(types.Ordering, token.NoPos)
@@ -440,7 +440,7 @@ func (e *Emitter) order() string {
 // declaration order, with the payloads compared when the variants
 // agree.
 func (e *Emitter) orderer(t types.Type, pos token.Pos) string {
-	name := "tk_cmp_" + lower.Mangle(t)
+	name := "sn_cmp_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -476,7 +476,7 @@ func (e *Emitter) orderer(t types.Type, pos token.Pos) string {
 // declared type part by part, the derived Hash, writing it on first
 // use; an enum mixes its tag with the payload of its variant.
 func (e *Emitter) hasher(t types.Type, pos token.Pos) string {
-	name := "tk_hash_" + lower.Mangle(t)
+	name := "sn_hash_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -487,9 +487,9 @@ func (e *Emitter) hasher(t types.Type, pos token.Pos) string {
 	var b strings.Builder
 	put(&b, "static uint64_t ", name, "(", ct, " v) {\n")
 	if u, ok := t.Underlying().(*types.Enum); ok {
-		b.WriteString("\tuint64_t h = tk_hash_mix(0, (uint64_t)v.tag);\n")
+		b.WriteString("\tuint64_t h = sn_hash_mix(0, (uint64_t)v.tag);\n")
 		payloads(&b, u, "v.tag", func(field string, t types.Type) {
-			put(&b, "\t\th = tk_hash_mix(h, ", e.hash("v"+field, t, pos), ");\n")
+			put(&b, "\t\th = sn_hash_mix(h, ", e.hash("v"+field, t, pos), ");\n")
 		})
 		b.WriteString("\treturn h;\n}\n\n")
 	} else {
@@ -555,7 +555,7 @@ func joined(open, close, sep string, parts []text) text {
 }
 
 // concat writes the concatenation of the pieces as one string the
-// caller owns. Two pieces are one tk_join, which allocates once; more
+// caller owns. Two pieces are one sn_join, which allocates once; more
 // are built in one allocation too: each text is held in a temporary,
 // in order, so that the whole is sized from their lengths and the
 // literals' before a byte is copied, then every piece is appended and
@@ -580,7 +580,7 @@ func (e *Emitter) concat(pieces []piece) string {
 		}
 
 		tmp := e.temp()
-		e.line("tk_string " + tmp + " = " + p.text.s + ";")
+		e.line("sn_string " + tmp + " = " + p.text.s + ";")
 		pieces[i].text.s = tmp
 		lens = append(lens, tmp+".len")
 	}
@@ -600,24 +600,24 @@ func (e *Emitter) concat(pieces []piece) string {
 	}
 
 	buf := e.temp()
-	e.line("tk_slice_u8 " + buf + " = {0};")
-	made := "tk_slice_make((tk_slice *)&" + buf + ", 0, " + size + ", 1);"
+	e.line("sn_slice_u8 " + buf + " = {0};")
+	made := "sn_slice_make((sn_slice *)&" + buf + ", 0, " + size + ", 1);"
 	if known == 0 {
 		made = "if (" + size + " > 0) { " + made + " }" // an empty result owns nothing, so no block is made for it
 	}
 
 	e.line(made)
 	for _, p := range pieces {
-		e.line("tk_strings_appendString(&" + buf + ", " + p.asText().s + ");")
+		e.line("sn_strings_appendString(&" + buf + ", " + p.asText().s + ");")
 	}
 
 	for _, p := range pieces {
 		if p.text.owned {
-			e.line("tk_string_drop(&" + p.text.s + ");")
+			e.line("sn_string_drop(&" + p.text.s + ");")
 		}
 	}
 
-	return "(tk_string){" + buf + ".ptr, " + buf + ".len, " + buf + ".cap}"
+	return "(sn_string){" + buf + ".ptr, " + buf + ".len, " + buf + ".cap}"
 }
 
 // asText returns the piece as a text: a literal is lent.

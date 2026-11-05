@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,16 +7,16 @@ package llvm
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The predeclared methods of slices, maps, strings, bytes, options and
 // results, and the built-ins that work on them, are lowered here onto
 // the runtime: the library table of _docs/design/05-standard-library.md.
-// What teak.h writes as a static inline function, an index check or a
+// What snello.h writes as a static inline function, an index check or a
 // character class, is written here as the instructions it is, since
 // the IR cannot call what the C compiler never emits.
 
@@ -83,24 +83,24 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	case "Push":
 		v := e.spill(e.valueTo(x.Args[0], elem))
 		if e.cfg.Debug { // the runtime's checks on every push
-			e.rt("tk_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
+			e.rt("sn_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
 			return unit
 		}
 
 		// With room, in place; growing, and a sub-slice's panic, the
 		// runtime's. A sub-slice's capacity is below every length.
-		n := e.load("i64", e.gep("%tk_slice", p, 1))
-		room := e.op("icmp slt i64 "+n.s+", "+e.load("i64", e.gep("%tk_slice", p, 2)).s, "i1")
+		n := e.load("i64", e.gep("%sn_slice", p, 1))
+		room := e.op("icmp slt i64 "+n.s+", "+e.load("i64", e.gep("%sn_slice", p, 2)).s, "i1")
 		fast, slow, done := e.block("push.fast"), e.block("push.slow"), e.block("push.done")
 		e.branch(room.s, fast, slow)
 		e.label(fast)
 		t := e.irType(elem, x.Pos())
-		base := e.load("ptr", e.gep("%tk_slice", p, 0))
+		base := e.load("ptr", e.gep("%sn_slice", p, 0))
 		e.store(e.load(t, v), e.elem(t, base.s, n.s))
-		e.store(e.op("add i64 "+n.s+", 1", "i64"), e.gep("%tk_slice", p, 1))
+		e.store(e.op("add i64 "+n.s+", 1", "i64"), e.gep("%sn_slice", p, 1))
 		e.jump(done)
 		e.label(slow)
-		e.rt("tk_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
+		e.rt("sn_slice_push", "void", value{"ptr", p}, value{"ptr", v}, size)
 		e.jump(done)
 		e.label(done)
 		return unit
@@ -109,25 +109,25 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		out := e.slot(t)
 		e.zero(out, elem, x.Pos())
 		if e.cfg.Debug {
-			has := e.rt("tk_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
+			has := e.rt("sn_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
 			return e.optionOf(e.typeOf(x), has, e.load(t, out), x.Pos())
 		}
 
 		// A slice of its own with an element, in place; the rest the
 		// runtime's.
-		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		n := e.load("i64", e.gep("%sn_slice", p, 1))
 		some := e.op("icmp sgt i64 "+n.s+", 0", "i1")
-		own := e.op("icmp sge i64 "+e.load("i64", e.gep("%tk_slice", p, 2)).s+", 0", "i1")
+		own := e.op("icmp sge i64 "+e.load("i64", e.gep("%sn_slice", p, 2)).s+", 0", "i1")
 		fast, slow, done := e.block("pop.fast"), e.block("pop.slow"), e.block("pop.done")
 		e.branch(e.op("and i1 "+some.s+", "+own.s, "i1").s, fast, slow)
 		e.label(fast)
 		last := e.op("sub i64 "+n.s+", 1", "i64")
-		e.store(last, e.gep("%tk_slice", p, 1))
-		base := e.load("ptr", e.gep("%tk_slice", p, 0))
+		e.store(last, e.gep("%sn_slice", p, 1))
+		base := e.load("ptr", e.gep("%sn_slice", p, 0))
 		e.store(e.load(t, e.elem(t, base.s, last.s)), out)
 		e.jump(done)
 		e.label(slow)
-		got := e.rt("tk_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
+		got := e.rt("sn_slice_pop", "i1", value{"ptr", p}, value{"ptr", out}, size)
 		e.jump(done)
 		e.label(done)
 		has := e.op("phi i1 [ true, %"+fast+" ], [ "+got.s+", %"+slow+" ]", "i1")
@@ -135,12 +135,12 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	case "Insert":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], elem})
 		v := e.spill(args[1])
-		e.rt("tk_slice_insert", "void", value{"ptr", p}, args[0], value{"ptr", v}, size)
+		e.rt("sn_slice_insert", "void", value{"ptr", p}, args[0], value{"ptr", v}, size)
 		return unit
 	case "Remove":
 		out := e.slot(e.irType(elem, x.Pos()))
 		i := e.valueTo(x.Args[0], types.Typ[types.Int])
-		e.rt("tk_slice_remove", "void", value{"ptr", p}, i, value{"ptr", out}, size)
+		e.rt("sn_slice_remove", "void", value{"ptr", p}, i, value{"ptr", out}, size)
 		return e.load(e.irType(elem, x.Pos()), out)
 	case "RemoveValue", "Contains":
 		v := e.lookedAt(x.Args[0], elem)
@@ -151,12 +151,12 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 			e.eachElement(p, elem, x.Pos(), func(q string) { e.dropOf(q, elem, x.Pos()) })
 		}
 
-		e.store(value{"i64", "0"}, e.gep("%tk_slice", p, 1))
+		e.store(value{"i64", "0"}, e.gep("%sn_slice", p, 1))
 		return unit
 	case "Swap": // both indexes checked, in order, then the two elements exchanged in place
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int]})
-		base := e.load("ptr", e.gep("%tk_slice", p, 0))
-		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		base := e.load("ptr", e.gep("%sn_slice", p, 0))
+		n := e.load("i64", e.gep("%sn_slice", p, 1))
 		a := e.checkIndex(args[0], n)
 		b := e.checkIndex(args[1], n)
 		t := e.irType(elem, x.Pos())
@@ -166,23 +166,23 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		e.store(va, pb)
 		return unit
 	case "Reverse":
-		e.rt("tk_slice_reverse", "void", value{"ptr", p}, size)
+		e.rt("sn_slice_reverse", "void", value{"ptr", p}, size)
 		return unit
 	case "Clone":
 		if needsDrop(elem) {
-			return e.op("call %tk_slice @"+e.cloner(t, x.Pos())+"(ptr "+p+")", "%tk_slice") // element by element, so that each copy owns its own
+			return e.op("call %sn_slice @"+e.cloner(t, x.Pos())+"(ptr "+p+")", "%sn_slice") // element by element, so that each copy owns its own
 		}
 
-		out := e.slot("%tk_slice")
-		e.rt("tk_slice_clone", "void", value{"ptr", p}, value{"ptr", out}, size)
-		return e.load("%tk_slice", out)
+		out := e.slot("%sn_slice")
+		e.rt("sn_slice_clone", "void", value{"ptr", p}, value{"ptr", out}, size)
+		return e.load("%sn_slice", out)
 	case "SortBy":
 		less := e.spill(e.valueTo(x.Args[0], e.typeOf(x.Args[0])))
-		e.inst("call void @" + e.sorter("tk_sortby_"+lower.Mangle(elem), "@"+e.lessAdapter(elem, x.Pos()), size) + "(ptr " + p + ", ptr " + less + ")")
+		e.inst("call void @" + e.sorter("sn_sortby_"+lower.Mangle(elem), "@"+e.lessAdapter(elem, x.Pos()), size) + "(ptr " + p + ", ptr " + less + ")")
 		return unit
 	case "Sort":
 		if order := e.ordering(elem, x.Pos()); order != "null" {
-			e.inst("call void @" + e.sorter("tk_sort_"+lower.Mangle(elem), order, size) + "(ptr " + p + ", ptr null)")
+			e.inst("call void @" + e.sorter("sn_sort_"+lower.Mangle(elem), order, size) + "(ptr " + p + ", ptr null)")
 		}
 
 		return unit
@@ -193,11 +193,11 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 }
 
 // lessAdapter returns the name of the function that lets the runtime
-// sort call a Teak less function held in the context, written once per
+// sort call a Snello less function held in the context, written once per
 // element type: the runtime hands it the addresses of two elements,
 // which are the ref borrows the function takes.
 func (e *Emitter) lessAdapter(elem types.Type, pos token.Pos) string {
-	name := "tk_lessfn_" + lower.Mangle(elem)
+	name := "sn_lessfn_" + lower.Mangle(elem)
 	if e.state[name] {
 		return name
 	}
@@ -233,7 +233,7 @@ func (e *Emitter) sorter(name, less string, size value) string {
 
 	e.state[name] = true
 	e.helper(name, "void", []string{"ptr %s", "ptr %ctx"}, func() {
-		e.rt("tk_slice_sort", "void", value{"ptr", "%s"}, size, value{"ptr", less}, value{"ptr", "%ctx"})
+		e.rt("sn_slice_sort", "void", value{"ptr", "%s"}, size, value{"ptr", less}, value{"ptr", "%ctx"})
 		e.inst("ret void")
 		e.fn.terminated = true
 	})
@@ -245,7 +245,7 @@ func (e *Emitter) sorter(name, less string, size value) string {
 // derived, through it: a before b when a.Cmp(b) is Less, as sort.Sort
 // orders. It is a pointer operand.
 func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
-	name := "tk_lt_" + lower.Mangle(elem)
+	name := "sn_lt_" + lower.Mangle(elem)
 	n, cmp := lower.ValueType(elem).(*types.Named)
 	cmp = cmp && n.Method("Cmp") != nil
 	b, ok := lower.ValueType(elem).Underlying().(*types.Basic)
@@ -271,7 +271,7 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 		l, r := e.load(ir, "%a"), e.load(ir, "%b")
 		var less value
 		if isString(elem) {
-			c := e.rt("tk_string_cmp", "i32", l, r)
+			c := e.rt("sn_string_cmp", "i32", l, r)
 			less = e.op("icmp slt "+c.typed()+", 0", "i1")
 		} else {
 			less = e.less(l, r, elem)
@@ -287,15 +287,15 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 // which panics naming what when it is a sub-slice, whose length is its
 // slice's to change.
 func (e *Emitter) ownsBuffer(p, what string) {
-	e.declare("tk_slice_own", "declare void @tk_slice_own(ptr, ptr)")
-	e.inst("call void @tk_slice_own(ptr " + p + ", ptr " + e.constBytes(what) + ")")
+	e.declare("sn_slice_own", "declare void @sn_slice_own(ptr, ptr)")
+	e.inst("call void @sn_slice_own(ptr " + p + ", ptr " + e.constBytes(what) + ")")
 }
 
 // search returns the name of the function writing RemoveValue or
 // Contains, which walks the slice comparing elements with the
 // element's equality; a removed element is dropped.
 func (e *Emitter) search(what string, t *types.Slice, pos token.Pos) string {
-	name := "tk_" + what + "_" + lower.Mangle(t.Elem())
+	name := "sn_" + what + "_" + lower.Mangle(t.Elem())
 	if e.state[name] {
 		return name
 	}
@@ -308,7 +308,7 @@ func (e *Emitter) search(what string, t *types.Slice, pos token.Pos) string {
 			e.label(found)
 			if what == "RemoveValue" {
 				out := e.slot(e.irType(t.Elem(), pos))
-				e.rt("tk_slice_remove", "void", value{"ptr", "%s"}, value{"i64", i}, value{"ptr", out}, e.sizeOf(t.Elem()))
+				e.rt("sn_slice_remove", "void", value{"ptr", "%s"}, value{"i64", i}, value{"ptr", out}, e.sizeOf(t.Elem()))
 				e.dropIfNeeded(out, t.Elem(), pos)
 			}
 
@@ -328,7 +328,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	mt := value{"ptr", e.mapType(t, x.Pos())}
 	switch sel.Sel.Name {
 	case "Get", "GetMut":
-		found := e.rt("tk_map_find", "ptr", m, mt, value{"ptr", e.key(x.Args[0], t.Key())})
+		found := e.rt("sn_map_find", "ptr", m, mt, value{"ptr", e.key(x.Args[0], t.Key())})
 		if sel.Sel.Name == "GetMut" {
 			return found // (mut V)? is the pointer itself, null for None
 		}
@@ -357,20 +357,20 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Remove":
 		out := e.slot(e.irType(t.Value(), x.Pos()))
 		e.zero(out, t.Value(), x.Pos())
-		has := e.rt("tk_map_remove", "i1", m, mt, value{"ptr", e.key(x.Args[0], t.Key())}, value{"ptr", out})
+		has := e.rt("sn_map_remove", "i1", m, mt, value{"ptr", e.key(x.Args[0], t.Key())}, value{"ptr", out})
 		return e.optionOf(e.typeOf(x), has, e.load(e.irType(t.Value(), x.Pos()), out), x.Pos())
 	case "Contains":
-		found := e.rt("tk_map_find", "ptr", m, mt, value{"ptr", e.key(x.Args[0], t.Key())})
+		found := e.rt("sn_map_find", "ptr", m, mt, value{"ptr", e.key(x.Args[0], t.Key())})
 		return e.op("icmp ne ptr "+found.s+", null", "i1")
 	case "Clone":
 		if needsDrop(t.Key()) || needsDrop(t.Value()) {
-			return e.op("call %tk_map @"+e.cloner(t, x.Pos())+"(ptr "+p+")", "%tk_map")
+			return e.op("call %sn_map @"+e.cloner(t, x.Pos())+"(ptr "+p+")", "%sn_map")
 		}
 
-		out := e.slot("%tk_map")
-		e.store(value{"%tk_map", "zeroinitializer"}, out)
-		e.rt("tk_map_clone", "void", m, mt, value{"ptr", out})
-		return e.load("%tk_map", out)
+		out := e.slot("%sn_map")
+		e.store(value{"%sn_map", "zeroinitializer"}, out)
+		e.rt("sn_map_clone", "void", m, mt, value{"ptr", out})
+		return e.load("%sn_map", out)
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
@@ -408,7 +408,7 @@ func (e *Emitter) mapIndex(x *ast.IndexExpr, p string, t *types.Map, write bool)
 
 	zero := e.slot(e.irType(t.Value(), x.Pos()))
 	e.zero(zero, t.Value(), x.Pos())
-	return e.rt("tk_map_get", "ptr", value{"ptr", p}, value{"ptr", e.mapType(t, x.Pos())}, value{"ptr", e.key(x.Index, t.Key())}, value{"ptr", zero}).s
+	return e.rt("sn_map_get", "ptr", value{"ptr", p}, value{"ptr", e.mapType(t, x.Pos())}, value{"ptr", e.key(x.Index, t.Key())}, value{"ptr", zero}).s
 }
 
 // key writes a map key the operation only looks up, in a slot the
@@ -450,7 +450,7 @@ func (e *Emitter) looked(x ast.Expr, t types.Type) value {
 // key is taken, kept by a new entry and dropped when an entry already
 // has it.
 func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
-	name := "tk_mapslot_" + lower.Mangle(t)
+	name := "sn_mapslot_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -461,7 +461,7 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 		k := e.spill(value{kt, "%k"})
 		mt := value{"ptr", e.mapType(t, pos)}
 		added := e.slot("ptr")
-		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", k}, value{"ptr", added})
+		slot := e.rt("sn_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", k}, value{"ptr", added})
 		isNew := e.op("icmp ne ptr "+e.load("ptr", added).s+", null", "i1")
 		new, have := e.block("new"), e.block("have")
 		e.branch(isNew.s, new, have)
@@ -480,7 +480,7 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 // of the value for a key the caller keeps, at the address k, writing it
 // on first use: a new entry takes a copy of the key.
 func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
-	name := "tk_mapslot_lent_" + lower.Mangle(t)
+	name := "sn_mapslot_lent_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -489,7 +489,7 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 	e.helper(name, "ptr", []string{"ptr %m", "ptr %k"}, func() {
 		mt := value{"ptr", e.mapType(t, pos)}
 		added := e.slot("ptr")
-		slot := e.rt("tk_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", "%k"}, value{"ptr", added})
+		slot := e.rt("sn_map_slot", "ptr", value{"ptr", "%m"}, mt, value{"ptr", "%k"}, value{"ptr", added})
 		key := e.load("ptr", added)
 		isNew := e.op("icmp ne ptr "+key.s+", null", "i1")
 		new, have := e.block("new"), e.block("have")
@@ -508,7 +508,7 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 // mapSet writes the entry for the key k in the map at the address p,
 // with v as its value; an entry already there drops its old value.
 func (e *Emitter) mapSet(p string, t *types.Map, k, v value, pos token.Pos) {
-	name := "tk_mapset_" + lower.Mangle(t)
+	name := "sn_mapset_" + lower.Mangle(t)
 	if !e.state[name] {
 		e.state[name] = true
 		kt, vt := e.irType(t.Key(), pos), e.irType(t.Value(), pos)
@@ -529,13 +529,13 @@ func (e *Emitter) mapSet(p string, t *types.Map, k, v value, pos token.Pos) {
 // and the drops of both, writing it and the two key functions on first
 // use.
 func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
-	name := "tk_mt_" + lower.Mangle(t)
+	name := "sn_mt_" + lower.Mangle(t)
 	if e.state[name] {
 		return "@" + name
 	}
 
 	e.state[name] = true
-	hash, eq := "tk_khash_"+lower.Mangle(t.Key()), "tk_keq_"+lower.Mangle(t.Key())
+	hash, eq := "sn_khash_"+lower.Mangle(t.Key()), "sn_keq_"+lower.Mangle(t.Key())
 	if !e.state[hash] {
 		e.state[hash] = true
 		e.helper(hash, "i64", []string{"ptr %p"}, func() {
@@ -557,7 +557,7 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 		vdrop = "@" + e.dropper(t.Value(), pos)
 	}
 
-	put(&e.consts, "@", name, " = internal constant %tk_map_type { i64 ", e.sizeOf(t.Key()).s, ", i64 ", e.sizeOf(t.Value()).s, ", ptr @", hash, ", ptr @", eq, ", ptr ", kdrop, ", ptr ", vdrop, " }\n")
+	put(&e.consts, "@", name, " = internal constant %sn_map_type { i64 ", e.sizeOf(t.Key()).s, ", i64 ", e.sizeOf(t.Value()).s, ", ptr @", hash, ", ptr @", eq, ", ptr ", kdrop, ", ptr ", vdrop, " }\n")
 	return "@" + name
 }
 
@@ -565,9 +565,9 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 // address m, in insertion order, calling body with the addresses of
 // each key and value.
 func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, v string)) {
-	e.declare("tk_map_next", "declare i64 @tk_map_next(ptr, i64)")
+	e.declare("sn_map_next", "declare i64 @sn_map_next(ptr, i64)")
 	i := e.slot("i64")
-	e.store(e.op("call i64 @tk_map_next(ptr "+m+", i64 0)", "i64"), i)
+	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 0)", "i64"), i)
 	cond, loop, done := e.block("entry.cond"), e.block("entry"), e.block("entry.done")
 	e.jump(cond)
 	e.label(cond)
@@ -575,11 +575,11 @@ func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, 
 	more := e.op("icmp sge i64 "+cur.s+", 0", "i1")
 	e.branch(more.s, loop, done)
 	e.label(loop)
-	keys := e.load("ptr", e.gep("%tk_map", m, 0))
-	vals := e.load("ptr", e.gep("%tk_map", m, 1))
+	keys := e.load("ptr", e.gep("%sn_map", m, 0))
+	vals := e.load("ptr", e.gep("%sn_map", m, 1))
 	body(e.elem(e.irType(t.Key(), pos), keys.s, cur.s), e.elem(e.irType(t.Value(), pos), vals.s, cur.s))
 	next := e.op("add i64 "+cur.s+", 1", "i64")
-	e.store(e.op("call i64 @tk_map_next(ptr "+m+", i64 "+next.s+")", "i64"), i)
+	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 "+next.s+")", "i64"), i)
 	e.jump(cond)
 	e.label(done)
 }
@@ -587,8 +587,8 @@ func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, 
 // eachElementIndexed writes a loop over the elements of the slice at
 // the address s, calling body with the address and the index of each.
 func (e *Emitter) eachElementIndexed(s string, elem types.Type, pos token.Pos, body func(p, i string)) {
-	ptr := e.load("ptr", e.gep("%tk_slice", s, 0))
-	n := e.load("i64", e.gep("%tk_slice", s, 1))
+	ptr := e.load("ptr", e.gep("%sn_slice", s, 0))
+	n := e.load("i64", e.gep("%sn_slice", s, 1))
 	i := e.slot("i64")
 	e.store(value{"i64", "0"}, i)
 	cond, loop, done := e.block("each.cond"), e.block("each"), e.block("each.done")
@@ -608,27 +608,27 @@ func (e *Emitter) eachElementIndexed(s string, elem types.Type, pos token.Pos, b
 // sliceMake writes a slice of n elements of type elem, with room for c,
 // into the slot out.
 func (e *Emitter) sliceMake(out string, n, c value, elem types.Type, pos token.Pos) {
-	e.rt("tk_slice_make", "void", value{"ptr", out}, n, c, e.sizeOf(elem))
+	e.rt("sn_slice_make", "void", value{"ptr", out}, n, c, e.sizeOf(elem))
 }
 
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
 // entry.
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) value {
-	out := e.slot("%tk_map")
-	e.store(value{"%tk_map", "zeroinitializer"}, out)
+	out := e.slot("%sn_map")
+	e.store(value{"%sn_map", "zeroinitializer"}, out)
 	for _, elt := range x.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 		parts := e.operands([]ast.Expr{kv.Key, kv.Value}, []types.Type{mt.Key(), mt.Value()})
 		e.mapSet(out, mt, parts[0], parts[1], x.Pos())
 	}
 
-	return e.load("%tk_map", out)
+	return e.load("%sn_map", out)
 }
 
 // sliceLit writes []T{a, b}: a slice made to size, then filled.
 func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) value {
 	if len(x.Elts) == 0 {
-		return value{"%tk_slice", "zeroinitializer"}
+		return value{"%sn_slice", "zeroinitializer"}
 	}
 
 	wants := make([]types.Type, len(x.Elts))
@@ -638,15 +638,15 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) v
 
 	parts := e.operands(x.Elts, wants)
 	n := value{"i64", strconv.Itoa(len(parts))}
-	out := e.slot("%tk_slice")
+	out := e.slot("%sn_slice")
 	e.sliceMake(out, n, n, st.Elem(), x.Pos())
-	base := e.load("ptr", e.gep("%tk_slice", out, 0))
+	base := e.load("ptr", e.gep("%sn_slice", out, 0))
 	et := e.irType(st.Elem(), x.Pos())
 	for i, p := range parts {
 		e.store(p, e.elem(et, base.s, strconv.Itoa(i)))
 	}
 
-	return e.load("%tk_slice", out)
+	return e.load("%sn_slice", out)
 }
 
 func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
@@ -660,28 +660,28 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 	case "Len":
 		return e.extract(s, 1, "i64")
 	case "ToUpper":
-		return e.rt("tk_to_upper", "%tk_string", s)
+		return e.rt("sn_to_upper", "%sn_string", s)
 	case "ToLower":
-		return e.rt("tk_to_lower", "%tk_string", s)
+		return e.rt("sn_to_lower", "%sn_string", s)
 	case "Trim":
-		return e.rt("tk_trim", "%tk_string", s)
+		return e.rt("sn_trim", "%sn_string", s)
 	case "HasPrefix":
-		return e.rt("tk_has_prefix", "i1", s, args[0])
+		return e.rt("sn_has_prefix", "i1", s, args[0])
 	case "HasSuffix":
-		return e.rt("tk_has_suffix", "i1", s, args[0])
+		return e.rt("sn_has_suffix", "i1", s, args[0])
 	case "Contains":
-		return e.rt("tk_string_contains", "i1", s, args[0])
+		return e.rt("sn_string_contains", "i1", s, args[0])
 	case "Fields", "Lines", "Split":
-		out := e.slot("%tk_slice")
-		name := map[string]string{"Fields": "tk_fields", "Lines": "tk_lines", "Split": "tk_split"}[sel.Sel.Name]
+		out := e.slot("%sn_slice")
+		name := map[string]string{"Fields": "sn_fields", "Lines": "sn_lines", "Split": "sn_split"}[sel.Sel.Name]
 		e.rt(name, "void", append(append([]value{s}, args...), value{"ptr", out})...)
-		return e.load("%tk_slice", out)
+		return e.load("%sn_slice", out)
 	case "SplitOnce":
-		before, after := e.slot("%tk_string"), e.slot("%tk_string")
-		has := e.rt("tk_split_once", "i1", s, args[0], value{"ptr", before}, value{"ptr", after})
+		before, after := e.slot("%sn_string"), e.slot("%sn_string")
+		has := e.rt("sn_split_once", "i1", s, args[0], value{"ptr", before}, value{"ptr", after})
 		pair := e.irType(lower.ValueType(e.typeOf(x)).Underlying().(*types.Option).Elem(), x.Pos())
-		tuple := e.insert(value{pair, "zeroinitializer"}, e.load("%tk_string", before), 0)
-		tuple = e.insert(tuple, e.load("%tk_string", after), 1)
+		tuple := e.insert(value{pair, "zeroinitializer"}, e.load("%sn_string", before), 0)
+		tuple = e.insert(tuple, e.load("%sn_string", after), 1)
 		return e.optionOf(e.typeOf(x), has, tuple, x.Pos())
 	}
 
@@ -690,7 +690,7 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 }
 
 // byteMethod writes the character classes of a byte as the
-// comparisons teak.h writes them, which are ASCII, as a byte is.
+// comparisons snello.h writes them, which are ASCII, as a byte is.
 func (e *Emitter) byteMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 	c := e.looked(sel.X, types.Typ[types.Uint8])
 	between := func(lo, hi byte) value {

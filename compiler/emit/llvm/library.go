@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package llvm
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The functions the library declares without a body and the compiler
@@ -40,7 +40,7 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 		return unit
 	case "os.Exit":
 		code := e.op("trunc "+e.expr(x.Args[0]).typed()+" to i32", "i32")
-		e.rt("tk_exit", "void", code)
+		e.rt("sn_exit", "void", code)
 		e.inst("unreachable")
 		e.fn.terminated = true
 		return unit
@@ -63,9 +63,9 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 // print writes a text to standard output, freed after when built here.
 func (e *Emitter) print(s text) {
 	if s.owned {
-		e.callWords("tk_print_owned", s.v)
+		e.callWords("sn_print_owned", s.v)
 	} else {
-		e.callWords("tk_print_string", s.v)
+		e.callWords("sn_print_string", s.v)
 	}
 }
 
@@ -121,7 +121,7 @@ func (e *Emitter) fprint(x *ast.CallExpr, s value) {
 
 	recv := e.expr(w)
 	tmp := e.spill(s)
-	view := e.insert(value{"%tk_slice", "zeroinitializer"}, e.extract(s, 0, "ptr"), 0)
+	view := e.insert(value{"%sn_slice", "zeroinitializer"}, e.extract(s, 0, "ptr"), 0)
 	view = e.insert(view, e.extract(s, 1, "i64"), 1)
 	r := e.callValues(name, sig, []types.Type{sig.Recv().Type(), sig.Params()[0].Type()}, []value{recv, view}, x.Pos()) // a ref []byte is the view itself
 	e.discard(r, sig.Results(), x.Pos())
@@ -151,7 +151,7 @@ func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) value {
 		part := e.verb(p, args[0], parts[0])
 		args, parts = args[1:], parts[1:]
 		if p.Width >= 0 {
-			part = text{e.rt("tk_pad", "%tk_string", part.v, value{"i64", strconv.Itoa(p.Width)}, value{"i1", strconv.FormatBool(p.Minus)}, value{"i1", strconv.FormatBool(part.owned)}), true}
+			part = text{e.rt("sn_pad", "%sn_string", part.v, value{"i64", strconv.Itoa(p.Width)}, value{"i1", strconv.FormatBool(p.Minus)}, value{"i1", strconv.FormatBool(part.owned)}), true}
 		}
 
 		out = append(out, piece{text: part})
@@ -181,7 +181,7 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 			return s
 		}
 
-		return text{e.rt("tk_truncate", "%tk_string", s.v, prec, value{"i1", strconv.FormatBool(s.owned)}), s.owned}
+		return text{e.rt("sn_truncate", "%sn_string", s.v, prec, value{"i1", strconv.FormatBool(s.owned)}), s.owned}
 	}
 
 	switch {
@@ -191,28 +191,28 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 			digits = 6 // as Go prints %f
 		}
 
-		return text{e.rt("tk_f64_fixed", "%tk_string", float(), value{"i32", strconv.Itoa(digits)}), true}
+		return text{e.rt("sn_f64_fixed", "%sn_string", float(), value{"i32", strconv.Itoa(digits)}), true}
 	case p.Verb == 'v' && p.Prec >= 0 && isFloat(vt):
-		return text{e.rt("tk_f64_g", "%tk_string", float(), prec), true}
+		return text{e.rt("sn_f64_g", "%sn_string", float(), prec), true}
 	case p.Verb == 'q' && isInteger(vt):
-		return text{e.rt("tk_quote_rune", "%tk_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
+		return text{e.rt("sn_quote_rune", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q':
 		s := truncated(e.textOf(v, t, a.Pos(), false))
 		if s.owned {
-			return text{e.rt("tk_quote_owned", "%tk_string", s.v), true}
+			return text{e.rt("sn_quote_owned", "%sn_string", s.v), true}
 		}
 
-		return text{e.rt("tk_quote", "%tk_string", s.v), true}
+		return text{e.rt("sn_quote", "%sn_string", s.v), true}
 	case p.Verb == 'd': // the number, never a String method's text, as Go's %d prints it
-		toString, signed := "tk_int_to_string", true
+		toString, signed := "sn_int_to_string", true
 		if isUnsigned(vt) {
-			toString, signed = "tk_uint_to_string", false
+			toString, signed = "sn_uint_to_string", false
 		}
 
-		digits := e.rt(toString, "%tk_string", e.widen(e.derefTo(v, t, vt), signed))
+		digits := e.rt(toString, "%sn_string", e.widen(e.derefTo(v, t, vt), signed))
 
 		if p.Prec >= 0 {
-			digits = e.rt("tk_int_digits", "%tk_string", digits, prec)
+			digits = e.rt("sn_int_digits", "%sn_string", digits, prec)
 		}
 
 		return text{digits, true}
