@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // stmts writes the statements of a block.
@@ -164,10 +164,13 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 
 		p := e.placeAt(e.lvalue(lhs), e.typeOf(lhs))
 		ir := e.irType(t, lhs.Pos())
-		if isString(t) { // s += t: the old left side is freed after the join
-			old := e.load(ir, p)
-			r := e.valueTo(rhs, t)
-			e.store(e.join(text{old, true}, text{r, !e.isRead(rhs)}).v, p)
+		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
+			r := e.spill(e.valueTo(rhs, t))
+			e.rt("sn_string_append", "void", value{"ptr", p}, value{"ptr", r})
+			if !e.isRead(rhs) {
+				e.dropOf(r, t, s.TokPos)
+			}
+
 			return
 		}
 
@@ -178,7 +181,7 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 }
 
 // assignMany writes a, b := x, y or a, b = y, x: every right side goes
-// into a temporary before any left side changes, as Teak and Go
+// into a temporary before any left side changes, as Snello and Go
 // require. With one right side, a tuple, each name takes one element.
 func (e *Emitter) assignMany(s *ast.AssignStmt) {
 	if s.Tok != token.DEFINE && s.Tok != token.ASSIGN {
@@ -433,15 +436,15 @@ func (e *Emitter) rangeIndexed(s *ast.RangeStmt, p string, t types.Type, consume
 	case *types.Slice:
 		elemType = u.Elem()
 		_, iterator = elemType.(*types.Ref)
-		base = e.load("ptr", e.gep("%tk_slice", p, 0))
-		n = e.load("i64", e.gep("%tk_slice", p, 1))
+		base = e.load("ptr", e.gep("%sn_slice", p, 0))
+		n = e.load("i64", e.gep("%sn_slice", p, 1))
 	case *types.Array:
 		elemType = u.Elem()
 		base = value{"ptr", p}
 		n = value{"i64", fmt.Sprint(u.Len())}
 	case *types.Basic:
-		base = e.load("ptr", e.gep("%tk_string", p, 0))
-		n = e.load("i64", e.gep("%tk_string", p, 1))
+		base = e.load("ptr", e.gep("%sn_string", p, 0))
+		n = e.load("i64", e.gep("%sn_string", p, 1))
 	default:
 		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
 		return
@@ -484,9 +487,9 @@ func (e *Emitter) rangeIndexed(s *ast.RangeStmt, p string, t types.Type, consume
 // rangeMap writes a range over a map in insertion order, through the
 // runtime's walk of its entries.
 func (e *Emitter) rangeMap(s *ast.RangeStmt, p string, m *types.Map, consume bool) {
-	e.declare("tk_map_next", "declare i64 @tk_map_next(ptr, i64)")
+	e.declare("sn_map_next", "declare i64 @sn_map_next(ptr, i64)")
 	i := e.slot("i64")
-	e.store(e.op("call i64 @tk_map_next(ptr "+p+", i64 0)", "i64"), i)
+	e.store(e.op("call i64 @sn_map_next(ptr "+p+", i64 0)", "i64"), i)
 	cond, body, post, end := e.block("range.cond"), e.block("range.body"), e.block("range.post"), e.block("range.end")
 	e.jump(cond)
 	e.label(cond)
@@ -496,8 +499,8 @@ func (e *Emitter) rangeMap(s *ast.RangeStmt, p string, m *types.Map, consume boo
 	e.label(body)
 	e.fn.loops = append(e.fn.loops, loop{next: post, end: end, frame: len(e.fn.frames)})
 	e.push(true)
-	keys := e.load("ptr", e.gep("%tk_map", p, 0))
-	vals := e.load("ptr", e.gep("%tk_map", p, 1))
+	keys := e.load("ptr", e.gep("%sn_map", p, 0))
+	vals := e.load("ptr", e.gep("%sn_map", p, 1))
 	e.rangeVar(s.Key, s.Tok, e.elem(e.irType(m.Key(), s.Pos()), keys.s, cur.s), m.Key(), consume)
 	e.rangeVar(s.Value, s.Tok, e.elem(e.irType(m.Value(), s.Pos()), vals.s, cur.s), m.Value(), consume)
 	e.stmts(s.Body.List)
@@ -511,13 +514,13 @@ func (e *Emitter) rangeMap(s *ast.RangeStmt, p string, m *types.Map, consume boo
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
 	e.label(post)
 	next := e.op("add i64 "+cur.s+", 1", "i64")
-	e.store(e.op("call i64 @tk_map_next(ptr "+p+", i64 "+next.s+")", "i64"), i)
+	e.store(e.op("call i64 @sn_map_next(ptr "+p+", i64 "+next.s+")", "i64"), i)
 	e.jump(cond)
 	e.label(end)
 }
 
 // rangeVar binds one range variable to the item at the address p, of
-// Teak type itemType: a new name for :=, an assignment for =, nothing
+// Snello type itemType: a new name for :=, an assignment for =, nothing
 // for _. A mut binding of the item is its address. When the loop
 // consumes its collection, an item bound by value leaves it.
 func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, p string, itemType types.Type, consume bool) {

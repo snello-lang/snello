@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package llvm
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The predeclared functions, len, cap, make, take, panic, min, max,
@@ -30,13 +30,13 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 	i := e.valueTo(x.Index, types.Typ[types.Int])
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
-		base := e.load("ptr", e.gep("%tk_slice", p, 0))
-		n := e.load("i64", e.gep("%tk_slice", p, 1))
+		base := e.load("ptr", e.gep("%sn_slice", p, 0))
+		n := e.load("i64", e.gep("%sn_slice", p, 1))
 		return e.elem(e.irType(u.Elem(), x.Pos()), base.s, e.checkIndex(i, n).s)
 	case *types.Basic:
 		if isString(u) {
-			base := e.load("ptr", e.gep("%tk_string", p, 0))
-			n := e.load("i64", e.gep("%tk_string", p, 1))
+			base := e.load("ptr", e.gep("%sn_string", p, 0))
+			n := e.load("i64", e.gep("%sn_string", p, 1))
 			return e.elem("i8", base.s, e.checkIndex(i, n).s)
 		}
 	case *types.Array:
@@ -48,15 +48,15 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 }
 
 // checkIndex writes the check of an index against a length, as
-// tk_index does: an index at or past the length, or negative, which is
+// sn_index does: an index at or past the length, or negative, which is
 // past any length as an unsigned number, ends the program.
 func (e *Emitter) checkIndex(i, n value) value {
-	e.declare("tk_bounds", "declare void @tk_bounds(i64, i64)")
+	e.declare("sn_bounds", "declare void @sn_bounds(i64, i64)")
 	ok, bad := e.block("index"), e.block("index.bad")
 	inRange := e.op("icmp ult "+i.typed()+", "+n.s, "i1")
 	e.branch(inRange.s, ok, bad)
 	e.label(bad)
-	e.inst("call void @tk_bounds(" + i.typed() + ", " + n.typed() + ")")
+	e.inst("call void @sn_bounds(" + i.typed() + ", " + n.typed() + ")")
 	e.inst("unreachable")
 	e.fn.terminated = true
 	e.label(ok)
@@ -71,19 +71,19 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) value {
 		lo = e.valueTo(x.Low, types.Typ[types.Int])
 	}
 
-	hi := e.load("i64", e.gep("%tk_slice", p, 1)) // a string's length is at the same place
+	hi := e.load("i64", e.gep("%sn_slice", p, 1)) // a string's length is at the same place
 	if x.High != nil {
 		hi = e.valueTo(x.High, types.Typ[types.Int])
 	}
 
 	if isString(t) {
-		return e.rt("tk_substr", "%tk_string", e.load("%tk_string", p), lo, hi)
+		return e.rt("sn_substr", "%sn_string", e.load("%sn_string", p), lo, hi)
 	}
 
 	if st, ok := t.Underlying().(*types.Slice); ok {
-		out := e.slot("%tk_slice")
-		e.rt("tk_slice_sub", "void", value{"ptr", p}, lo, hi, value{"ptr", out}, e.sizeOf(st.Elem()))
-		return e.load("%tk_slice", out)
+		out := e.slot("%sn_slice")
+		e.rt("sn_slice_sub", "void", value{"ptr", p}, lo, hi, value{"ptr", out}, e.sizeOf(st.Elem()))
+		return e.load("%sn_slice", out)
 	}
 
 	e.unsupported(x.Pos(), "slicing a value of type "+t.String())
@@ -94,25 +94,25 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) value {
 // holds, as the runtime's inline conversion makes one; no bytes are an
 // empty slice, not a view of static data.
 func (e *Emitter) stringToBytes(s value) value {
-	out := e.slot("%tk_slice")
-	e.store(value{"%tk_slice", "zeroinitializer"}, out)
+	out := e.slot("%sn_slice")
+	e.store(value{"%sn_slice", "zeroinitializer"}, out)
 	n := e.extract(s, 1, "i64")
 	empty := e.op("icmp eq "+n.typed()+", 0", "i1")
 	copy, done := e.block("copy"), e.block("done")
 	e.branch(empty.s, done, copy)
 	e.label(copy)
-	e.store(e.rt("tk_string_clone", "%tk_string", s), out) // the same three words, read back as a slice
+	e.store(e.rt("sn_string_clone", "%sn_string", s), out) // the same three words, read back as a slice
 	e.jump(done)
 	e.label(done)
-	return e.load("%tk_slice", out)
+	return e.load("%sn_slice", out)
 }
 
 // bytesToString writes string(b): a copy of the bytes as an owned
 // string.
 func (e *Emitter) bytesToString(b value) value {
-	view := e.insert(value{"%tk_string", "zeroinitializer"}, e.extract(b, 0, "ptr"), 0)
+	view := e.insert(value{"%sn_string", "zeroinitializer"}, e.extract(b, 0, "ptr"), 0)
 	view = e.insert(view, e.extract(b, 1, "i64"), 1)
-	return e.rt("tk_string_clone", "%tk_string", view)
+	return e.rt("sn_string_clone", "%sn_string", view)
 }
 
 // builtinCall writes a call of a predeclared function.
@@ -136,16 +136,16 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)
 	case types.BuiltinClose:
-		e.rt("tk_chan_close", "void", e.chanOperand(x.Args[0]))
+		e.rt("sn_chan_close", "void", e.chanOperand(x.Args[0]))
 		return unit
 	case types.BuiltinPrint:
 		parts := e.operands(x.Args, nil)
 		for i, a := range x.Args {
 			s := e.textOf(parts[i], e.typeOf(a), a.Pos(), false)
 			if s.owned {
-				e.callWords("tk_eprint_owned", s.v)
+				e.callWords("sn_eprint_owned", s.v)
 			} else {
-				e.callWords("tk_eprint_string", s.v)
+				e.callWords("sn_eprint_string", s.v)
 			}
 		}
 
@@ -166,7 +166,7 @@ func (e *Emitter) minCall(x *ast.CallExpr, b *types.Builtin) value {
 	}
 
 	if isFloat(t) { // NaN wins, and -0 is below +0, as Go's specification has min and max on floats
-		fn := "tk_f64_" + b.Name()
+		fn := "sn_f64_" + b.Name()
 		out := parts[0]
 		for _, p := range parts[1:] {
 			a, q := out, p
@@ -212,22 +212,22 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) value {
 	switch u := t.Underlying().(type) {
 	case *types.Map:
 		if b.ID() == types.BuiltinLen {
-			return e.load("i64", e.gep("%tk_map", p, 5)) // count: the live entries
+			return e.load("i64", e.gep("%sn_map", p, 5)) // count: the live entries
 		}
 	case *types.Slice:
 		if b.ID() == types.BuiltinLen {
-			return e.load("i64", e.gep("%tk_slice", p, 1))
+			return e.load("i64", e.gep("%sn_slice", p, 1))
 		}
 
-		return e.rt("tk_slice_cap", "i64", value{"ptr", p}) // a sub-slice's room is its length
+		return e.rt("sn_slice_cap", "i64", value{"ptr", p}) // a sub-slice's room is its length
 	case *types.Basic:
 		if isString(u) && b.ID() == types.BuiltinLen {
-			return e.load("i64", e.gep("%tk_string", p, 1))
+			return e.load("i64", e.gep("%sn_string", p, 1))
 		}
 	case *types.Array:
 		return value{"i64", strconv.FormatInt(u.Len(), 10)} // len and cap alike
 	case *types.Chan:
-		return e.rt("tk_chan_"+b.Name(), "i64", e.load("ptr", p))
+		return e.rt("sn_chan_"+b.Name(), "i64", e.load("ptr", p))
 	}
 
 	e.unsupported(x.Pos(), b.Name()+" on "+t.String())
@@ -240,7 +240,14 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 	t := e.typeOf(x)
 	switch u := t.Underlying().(type) {
 	case *types.Map:
-		return value{"%tk_map", "zeroinitializer"}
+		if len(x.Args) == 1 {
+			return value{"%sn_map", "zeroinitializer"}
+		}
+
+		out := e.slot("%sn_map") // room for the size hint's entries, as Go makes it
+		e.store(value{"%sn_map", "zeroinitializer"}, out)
+		e.rt("sn_map_reserve", "void", value{"ptr", out}, value{"ptr", e.mapType(u, x.Pos())}, e.valueTo(x.Args[1], types.Typ[types.Int]))
+		return e.load("%sn_map", out)
 	case *types.Chan:
 		n := value{"i64", "0"}
 		if len(x.Args) > 1 {
@@ -252,7 +259,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 			drop.s = "@" + e.dropper(u.Elem(), x.Pos())
 		}
 
-		return e.rt("tk_chan_make", "ptr", e.sizeOf(u.Elem()), n, drop)
+		return e.rt("sn_chan_make", "ptr", e.sizeOf(u.Elem()), n, drop)
 	case *types.Slice:
 		wants := []types.Type{types.Typ[types.Int], types.Typ[types.Int]}[:len(x.Args)-1]
 		sizes := e.operands(x.Args[1:], wants)
@@ -265,9 +272,9 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 			c = sizes[1]
 		}
 
-		out := e.slot("%tk_slice")
+		out := e.slot("%sn_slice")
 		e.sliceMake(out, n, c, u.Elem(), x.Pos())
-		return e.load("%tk_slice", out)
+		return e.load("%sn_slice", out)
 	}
 
 	e.unsupported(x.Pos(), "make of "+t.String())

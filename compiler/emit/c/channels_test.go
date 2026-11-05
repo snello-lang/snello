@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,10 +8,10 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/emit/internal/backendtest"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // TestChannelsFlat runs backendtest.Churn and checks that its memory
@@ -21,7 +21,7 @@ func TestChannelsFlat(t *testing.T) {
 		t.Skip("a million channels")
 	}
 
-	f, file, err := parser.ParseFile("churn.teak", []byte(backendtest.Churn))
+	f, file, err := parser.ParseFile("churn.snello", []byte(backendtest.Churn))
 	if err != nil {
 		t.Fatal(err)
 	}

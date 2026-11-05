@@ -1,12 +1,12 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package parser
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // exprStart is the set of tokens that can begin an expression, and so
@@ -228,7 +228,7 @@ func (p *Parser) parseRangeClause(vars []ast.Expr, tok token.Kind) *ast.RangeStm
 }
 
 // parseIfStmt parses Go's if, with an optional init statement, and
-// Teak's option binding. Both begin with a simple statement; what
+// Snello's option binding. Both begin with a simple statement; what
 // follows it tells them apart:
 //
 //	if x > 0 {                  IfStmt{Cond}

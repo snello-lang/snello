@@ -1,0 +1,13 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a ref borrow is read-only. Fix: take n as mut.
+
+package p
+
+struct Node { value string }
+
+func rename(n ref Node) {
+    n.value = "x"                         // ERROR "cannot assign to n.value through a ref borrow"
+}

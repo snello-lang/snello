@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // A pat is a pattern reduced to what exhaustiveness needs: a wildcard,
@@ -49,16 +49,19 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	}
 
 	consumed := false
+	outer := c.scope
 	for _, arm := range e.Arms {
 		c.openScope()
 		c.bindsOwned = false
 		c.copies = !isBorrow(x.typ) // a borrow variable binds borrows; a place reached through one copies what is Copy
 		p := c.pattern(arm.Pat, scrutinee, b)
-		c.bindThrough(arm.Pat, e.X, b)
-		if c.bindsOwned && !consumed && x.mode == variable {
-			c.moveBefore(e.X, x.mode, &f) // a part bound by value leaves the place, on every arm
-			consumed = true
-		}
+		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
+			c.bindThrough(arm.Pat, e.X, b)
+			if c.bindsOwned && !consumed && held(e.X, x.mode) {
+				c.moveBefore(e.X, variable, &f) // a part bound by value leaves the place, on every arm; a temporary's part may not leave it
+				consumed = true
+			}
+		})
 
 		if arm.Guard != nil {
 			c.condition(arm.Guard)

@@ -1,6 +1,6 @@
 # Ownership across tasks
 
-Status: decided, 2026-10-17; `Send` inference implemented 2026-10-20 (stage 3, task 3.1, `compiler/types/send.go`). This note explains what may cross a task boundary in Teak and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
+Status: decided, 2026-10-17; `Send` inference implemented 2026-10-20 (stage 3, task 3.1, `compiler/types/send.go`). This note explains what may cross a task boundary in Snello and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
 
 ## The problem
 
@@ -47,7 +47,7 @@ A user never writes `Send` on a type, and listing it after `impl` is refused. It
 Two decisions made with the implementation (2026-10-20):
 
 - **`Rc` is not `Send` by a field, not by a rule of the compiler.** Structurally an `Rc<T>` is an owned pointer to a cell of two counts and a value, the same shape `Arc<T>` will have; what differs is that the counts are not atomic, which no type can show. The cell therefore holds a field of the predeclared type `local`, a type that holds nothing and is not `Send`, so every type reaching it is not either. Only the standard library may write `local`, as only it may write `any`; the compiler keeps no table of library names, and a new unsendable library type needs no compiler change. A comment directive was considered and rejected: a comment the parser must read is a second syntax, and a misspelled one silently does nothing.
-- **There is no `Sync`.** Rust's second property covers types that change a value through a shared reference, `Cell` and `RefCell`. Teak has none: a `ref` never changes what it borrows, and the only way to a `mut` from a shared value is a lock, which synchronizes. Safe to share and safe to send are therefore one property, and `Arc<T>` is `Send` when `T` is.
+- **There is no `Sync`.** Rust's second property covers types that change a value through a shared reference, `Cell` and `RefCell`. Snello has none: a `ref` never changes what it borrows, and the only way to a `mut` from a shared value is a lock, which synchronizes. Safe to share and safe to send are therefore one property, and `Arc<T>` is `Send` when `T` is.
 
 ## Sharing when you need it
 
@@ -59,20 +59,20 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 
 The library was written on 2026-10-20 as `05-standard-library.md` decides it: `sync.NewArc(v)`, with `Get` lending the value; `sync.NewMutex(v)` and `sync.NewRwLock(v)`, with `Lock`, `Read` and `Write` returning a guard whose `Get` lends the value, `*g.Get() += 1`, and whose `Drop` gives the lock back; `sync.NewOnce()` with `Do`; `sync.NewWaitGroup()` as a `Copy` handle with `Add`, `Done` and `Wait`. A guard is a borrow-holding struct, so storing it, sending it, or keeping it past the statement that made the lock temporary is refused by the rules of `04-borrows-ref-and-mut.md`, with no rule added for it. The one step from a `ref` of the lock to a `mut` of its value is a function the compiler lowers for the library alone, as `rc` has its two.
 
-`../../examples/03-http-cache.teak` shows `Arc<RwLock<T>>` where a cache is shared by every request task.
+`../../examples/03-http-cache.snello` shows `Arc<RwLock<T>>` where a cache is shared by every request task.
 
 ## What it costs
 
-- **Fan-out of one value to many tasks needs an explicit choice.** In Go, passing the same slice to five goroutines is one line and a latent race. In Teak it is a compile error, and the fix is to say what you meant: clone it, wrap it in an Arc, or send a piece to each task.
+- **Fan-out of one value to many tasks needs an explicit choice.** In Go, passing the same slice to five goroutines is one line and a latent race. In Snello it is a compile error, and the fix is to say what you meant: clone it, wrap it in an Arc, or send a piece to each task.
 - **No borrowed captures in `spawn`.** Go code that spawns a goroutine to work on a local variable and then waits for it must instead move the variable in and get it back through a channel or a join handle. Structured concurrency, where a scope joins all tasks it spawned, is the planned way to let borrows into tasks safely. It is not in version one.
-- **`sync.WaitGroup` as Go has it cannot exist**, since it relies on a shared pointer. Teak's version is an owned handle on an internally synchronized counter, cloned for each task and freed by the last handle, like a channel.
+- **`sync.WaitGroup` as Go has it cannot exist**, since it relies on a shared pointer. Snello's version is an owned handle on an internally synchronized counter, cloned for each task and freed by the last handle, like a channel.
 
 ## What it gains
 
 - **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written.
 - **Deterministic frees across tasks.** A value received from a channel is freed by the receiver when it is done, not by a collector later.
-- **Nothing to annotate.** The pipeline example has one Teak-specific token, a `ref`, and it is there for efficiency rather than safety.
-- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.teak` shows it.
+- **Nothing to annotate.** The pipeline example has one Snello-specific token, a `ref`, and it is there for efficiency rather than safety.
+- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.snello` shows it.
 
 ## What stage 3 decided
 
@@ -91,4 +91,4 @@ The checkpoint's race programs live under `../../examples/core/errors/`: a value
 
 ## Precedent
 
-Rust's `Send` and `Sync` are the direct ancestor, with the difference that Teak infers them and has no lifetimes to thread through closures. Pony's reference capabilities and Inko's process model show that move-on-send with inferred sendability is enough for real programs. Swift 6's strict concurrency checking arrived at the same rule from a reference-counted starting point.
+Rust's `Send` and `Sync` are the direct ancestor, with the difference that Snello infers them and has no lifetimes to thread through closures. Pony's reference capabilities and Inko's process model show that move-on-send with inferred sendability is enough for real programs. Swift 6's strict concurrency checking arrived at the same rule from a reference-counted starting point.

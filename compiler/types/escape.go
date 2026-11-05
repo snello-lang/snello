@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // The escape pass keeps a borrow inside the
@@ -322,8 +322,17 @@ func (c *Checker) returned(e ast.Expr, op operand) {
 	}
 }
 
-// source finds the places the borrows in e come from and checks each.
+// source finds the places the borrows in e come from and checks each,
+// in every branch of a value chosen at run time.
 func (c *Checker) source(e ast.Expr, pos token.Pos) {
+	if vs, ok := branches(e); ok {
+		for _, v := range vs {
+			c.source(v, pos)
+		}
+
+		return
+	}
+
 	switch e := e.(type) {
 	case *ast.ParenExpr:
 		c.source(e.X, pos)
@@ -331,8 +340,6 @@ func (c *Checker) source(e ast.Expr, pos token.Pos) {
 		if e.Op == token.REF || e.Op == token.MUT {
 			c.sourceVar(e.X, pos, true)
 		}
-	case *ast.CoalesceExpr:
-		c.source(e.X, pos)
 	case *ast.TryExpr:
 		c.source(e.X, pos)
 	case *ast.SliceExpr:

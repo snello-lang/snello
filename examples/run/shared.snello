@@ -1,0 +1,96 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The rc package written in Snello: an Rc of a string cloned, read
+// through every handle, changed through GetMut only while it is the one
+// handle, and counted; a value with a Drop method dropped when its last
+// Rc goes and not before, a Weak that does not keep it alive, upgraded
+// while the value is there and answering None after; a struct holding
+// an Rc dropped with it; handles kept in a slice; an Rc of an Rc; a
+// Weak dropped while its Rc lives, and GetMut once the Weak is gone;
+// and the empty handles.
+
+package main
+
+import ("fmt"; "rc")
+
+struct Loud impl Drop { name string }
+
+func (l mut Loud) Drop() { fmt.Println("drop", l.name) }
+
+struct Holder { shared rc.Rc<Loud>; tag int }
+
+func describe(h ref Holder) string {
+	return fmt.Sprintf("%d:%s", h.tag, h.shared.Get().name)
+}
+
+func main() {
+	a := rc.New("text")
+	b := a.Clone()
+	fmt.Println(a.Get(), b.Get(), a.StrongCount(), b.StrongCount())
+
+	// GetMut while shared is None; after the other handle goes, Some.
+	fmt.Println(a.GetMut().IsNone())
+	{
+		c := b
+		fmt.Println(c.StrongCount())
+	}
+	if s := a.GetMut() {
+		*s = s.Clone() + "!"
+	}
+	fmt.Println(a.Get(), a.StrongCount())
+
+	// The value lives until its last handle goes.
+	x := rc.New(Loud{name: "x"})
+	w := x.Downgrade()
+	fmt.Println(x.StrongCount(), x.WeakCount(), x.GetMut().IsNone())
+	{
+		y := x.Clone()
+		fmt.Println("in scope", y.Get().name, y.StrongCount())
+	}
+	fmt.Println("one left", x.StrongCount())
+	if up := w.Upgrade() {
+		fmt.Println("upgraded", up.Get().name, up.StrongCount())
+	}
+	fmt.Println("before drop")
+	{
+		gone := x
+		fmt.Println("moving", gone.StrongCount())
+	}
+	fmt.Println("after drop", w.Upgrade().IsNone())
+
+	// Handles in structs and slices.
+	cfg := rc.New(Loud{name: "cfg"})
+	holders := []Holder{Holder{shared: cfg.Clone(), tag: 1}, Holder{shared: cfg.Clone(), tag: 2}}
+	fmt.Println(describe(holders[0]), describe(holders[1]), cfg.StrongCount())
+	holders.Pop()
+	fmt.Println(cfg.StrongCount())
+	holders = []Holder{}
+	fmt.Println(cfg.StrongCount(), len(holders))
+
+	// An Rc of an Rc, and a Weak cloned.
+	outer := rc.New(rc.New(7))
+	inner := outer.Get().Clone()
+	w2 := w.Clone()
+	fmt.Println(inner.Get(), inner.StrongCount(), outer.StrongCount(), w2.Upgrade().IsNone())
+
+	// A Weak dropped while its Rc lives leaves the value in place, and
+	// once the Weak is gone the Rc is alone again.
+	solo := rc.New(Loud{name: "solo"})
+	{
+		d := solo.Downgrade()
+		fmt.Println(solo.WeakCount(), d.Upgrade().IsSome(), solo.GetMut().IsNone())
+	}
+	fmt.Println(solo.WeakCount(), solo.Get().name)
+	if s := solo.GetMut() {
+		s.name = "solo!"
+	}
+	fmt.Println(solo.Get().name)
+
+	// The empty handles count nothing and clone to empty handles.
+	var emptyRc rc.Rc<Loud>
+	var emptyWeak rc.Weak<Loud>
+	fmt.Println(emptyRc.StrongCount(), emptyRc.Clone().StrongCount(), emptyRc.Downgrade().Upgrade().IsNone(), emptyWeak.Upgrade().IsNone(), emptyWeak.Clone().Upgrade().IsNone())
+	fmt.Println("end")
+}

@@ -1,13 +1,13 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package types declares the data types of Teak and the checker that
+// Package types declares the data types of Snello and the checker that
 // assigns one to every expression. It is modeled on go/types: a Type
 // interface with one struct per kind of type, objects for the named
 // entities of a program, and scopes that map names to objects.
 //
-// This file holds the types. Compared with go/types, Teak adds the
+// This file holds the types. Compared with go/types, Snello adds the
 // owned pointer *T, the borrows ref T and mut T, the optional T?, the
 // built-in Result<T, E>, tuples, and enums, and drops interfaces, whose
 // place traits take (trait.go).
@@ -127,13 +127,13 @@ var aliases = [...]*Basic{
 // and the value inside Ok(()).
 var Unit = &Tuple{}
 
-// A Type is a Teak type.
+// A Type is a Snello type.
 type Type interface {
 	// Underlying returns the underlying type of a type: the type itself
 	// for every kind but Named, as in go/types.
 	Underlying() Type
 
-	// String returns the type as it is written in a Teak program.
+	// String returns the type as it is written in a Snello program.
 	String() string
 }
 

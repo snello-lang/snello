@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
-// A spawn statement becomes a call of tk_spawn with a trampoline and a
+// A spawn statement becomes a call of sn_spawn with a trampoline and a
 // block of arguments (_docs/design/06-tasks-and-channels.md): the
 // receiver and the arguments are evaluated here, moved into a block
 // the task owns, and the trampoline, one per spawn statement, calls
@@ -55,7 +55,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 
 	wants, values := e.callOperands(recv, x.Args, sig)
 	e.tasks++
-	e.spawnCall("tk_task_"+strconv.Itoa(e.tasks), name, wants, values, sig.Results(), s.Pos())
+	e.spawnCall("sn_task_"+strconv.Itoa(e.tasks), name, wants, values, sig.Results(), s.Pos())
 }
 
 // spawnClosure lifts a spawned closure to a function of its captures
@@ -70,7 +70,12 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	values := make([]string, 0, len(captured)+len(x.Args))
 	for _, cap := range captured {
 		t := e.sub(cap.Var.Type())
-		params = append(params, types.NewVar(cap.Var.Pos(), cap.Var.Name(), t))
+		p := types.NewVar(cap.Var.Pos(), cap.Var.Name(), t)
+		if local, renamed := e.names.renamed[cap.Var]; renamed {
+			e.names.renamed[p] = local // the body names the capture as the enclosing function did
+		}
+
+		params = append(params, p)
 		v := e.variable(cap.Var, e.captured)
 		if !cap.Copied && needsDrop(t) { // moved into the task: the place is emptied
 			tmp := e.temp()
@@ -90,7 +95,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	list := make([]string, len(params))
 	for i, p := range params {
 		wants[i] = p.Type()
-		list[i] = e.cType(p.Type(), pos) + " " + lower.Ident(p.Name())
+		list[i] = e.cType(p.Type(), pos) + " " + e.localName(p)
 	}
 
 	if len(list) == 0 {
@@ -98,7 +103,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	}
 
 	e.tasks++
-	task := "tk_task_" + strconv.Itoa(e.tasks)
+	task := "sn_task_" + strconv.Itoa(e.tasks)
 	name := task + "_fn"
 	head := "static " + e.resultType(lifted, pos) + " " + name + "(" + strings.Join(list, ", ") + ")"
 	put(&e.protos, head, ";\n")
@@ -118,7 +123,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 // by the trampoline, as the statement discards it.
 func (e *Emitter) spawnCall(task, name string, wants []types.Type, values []string, results types.Type, pos token.Pos) {
 	st := "struct " + task
-	fields, args := "\tchar tk_pad;\n", make([]string, len(values))
+	fields, args := "\tchar sn_pad;\n", make([]string, len(values))
 	if len(values) > 0 {
 		var b strings.Builder
 		for i, t := range wants {
@@ -145,14 +150,14 @@ func (e *Emitter) spawnCall(task, name string, wants []types.Type, values []stri
 	}
 
 	put(&e.types, st, " {\n", fields, "};\n\n")
-	put(&e.helpers, "static void ", task, "_run(void *p) {\n", unpack, call, "\ttk_free(p);\n}\n\n")
+	put(&e.helpers, "static void ", task, "_run(void *p) {\n", unpack, call, "\tsn_free(p);\n}\n\n")
 	block := e.temp()
-	e.line(st + " *" + block + " = tk_alloc(sizeof *" + block + ");")
+	e.line(st + " *" + block + " = sn_alloc(sizeof *" + block + ");")
 	for i, v := range values {
 		e.line(block + "->a" + strconv.Itoa(i) + " = " + v + ";")
 	}
 
-	e.line("tk_spawn(" + task + "_run, " + block + ");")
+	e.line("sn_spawn(" + task + "_run, " + block + ");")
 }
 
 // spawnee names the C function a spawned call of fun runs, with its
@@ -204,10 +209,10 @@ func (e *Emitter) calleeName(id *ast.Ident, fn *types.Func) (string, *types.Sign
 }
 
 // A select evaluates every case's channel, and a send case's value, on
-// entry, hands them to tk_select as an array of cases, and runs the
+// entry, hands them to sn_select as an array of cases, and runs the
 // body of the case it chose as a chain of ifs, never a C switch, so a
 // break inside a case leaves the loop around the select as the
-// language says. The last case is the chain's else, since tk_select
+// language says. The last case is the chain's else, since sn_select
 // chose one of them, so the C compiler sees that a select whose every
 // case returns does not fall through; a select with no case never
 // returns at all. A receive case gets its value as the Option the
@@ -239,7 +244,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 	e.line("{")
 	mark := len(e.temps) // a case's channel made here, a handle a call returned, is dropped in this block
 	cases := e.temp()
-	e.line("tk_case " + cases + "[" + strconv.Itoa(max(n, 1)) + "];")
+	e.line("sn_case " + cases + "[" + strconv.Itoa(max(n, 1)) + "];")
 	i := 0
 	for _, cc := range s.Body {
 		if cc.Comm == nil {
@@ -250,7 +255,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 			ch := e.looked(send.Chan, lower.ValueType(e.typeOf(send.Chan)))
 			elem := lower.ValueType(e.typeOf(send.Chan)).Underlying().(*types.Chan).Elem()
 			v := e.spill(e.valueTo(send.Value, elem), elem, send.Pos())
-			e.line(cases + "[" + strconv.Itoa(i) + "] = (tk_case){" + ch + ", &" + v + ", true, false};")
+			e.line(cases + "[" + strconv.Itoa(i) + "] = (sn_case){" + ch + ", &" + v + ", true, false};")
 			sends = append(sends, sent{i, v, elem})
 			i++
 			continue
@@ -261,20 +266,20 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 		elem := lower.ValueType(e.typeOf(recv.X)).Underlying().(*types.Chan).Elem()
 		got := e.temp()
 		e.line(e.cType(elem, recv.Pos()) + " " + got + " = " + e.zero(elem, recv.Pos()) + ";")
-		e.line(cases + "[" + strconv.Itoa(i) + "] = (tk_case){" + ch + ", &" + got + ", false, false};")
+		e.line(cases + "[" + strconv.Itoa(i) + "] = (sn_case){" + ch + ", &" + got + ", false, false};")
 		e.pre[recv] = "(" + e.cType(e.typeOf(recv), recv.Pos()) + "){.has = " + cases + "[" + strconv.Itoa(i) + "].ok, .val = " + got + "}"
 		i++
 	}
 
 	if len(s.Body) == 0 {
-		e.line("tk_select(" + cases + ", 0, false);")
+		e.line("sn_select(" + cases + ", 0, false);")
 		e.line("__builtin_unreachable();")
 		e.line("}")
 		return
 	}
 
 	chosen := e.temp()
-	e.line("int " + chosen + " = tk_select(" + cases + ", " + strconv.Itoa(n) + ", " + strconv.FormatBool(hasDefault) + ");")
+	e.line("int " + chosen + " = sn_select(" + cases + ", " + strconv.Itoa(n) + ", " + strconv.FormatBool(hasDefault) + ");")
 	for _, snd := range sends {
 		if needsDrop(snd.typ) {
 			e.line("if (" + chosen + " != " + strconv.Itoa(snd.index) + ") { " + e.dropOf(snd.value, snd.typ, s.Pos()) + " }")
@@ -300,7 +305,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 
 		e.push(false)
 		switch cc.Comm.(type) {
-		case nil, *ast.SendStmt: // the send happened in tk_select
+		case nil, *ast.SendStmt: // the send happened in sn_select
 		default:
 			e.stmt(cc.Comm) // the receive, pre-evaluated: a binding, an assignment or a discard
 			delete(e.pre, receiveOf(cc.Comm))

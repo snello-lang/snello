@@ -1,0 +1,19 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure that consumes a variable captures it by move, at the
+// point the closure is written. Fix: clone before the closure.
+
+package p
+
+import "fmt"
+
+func keep(s string) {}
+
+func main() {
+    s := "hello"
+    f := func() { keep(s) }
+    fmt.Println(s)                        // ERROR "use of moved value s"
+    f()
+}

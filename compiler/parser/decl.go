@@ -1,12 +1,12 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package parser
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // parseDecl parses one top-level declaration and the semicolon that
@@ -84,7 +84,7 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 
 // parseReceiver parses "(" ident Type ")". The type is one of the three
 // receiver modes: T consumes, ref T borrows, mut T borrows mutably. Go
-// allows an unnamed receiver, (Tree), and Teak does not; that mistake
+// allows an unnamed receiver, (Tree), and Snello does not; that mistake
 // gets one message of its own rather than a complaint about the ')'.
 //
 //	(f File)         Param{f, NamedType File}
@@ -151,7 +151,7 @@ func (p *Parser) parseTypeParams() []*ast.TypeParam {
 // [Impls] Body, where the body is a field list for a struct and a
 // variant list for an enum. The keyword comes first, as with trait and
 // func, so a declaration says what it declares in its first word; Go's
-// `type Circle struct` is the one piece of Go's declaration syntax Teak
+// `type Circle struct` is the one piece of Go's declaration syntax Snello
 // changes, because the impl list belongs on the thing being declared.
 //
 //	struct Circle impl Shape { r f64 }     Impls [Shape], Def StructType
@@ -184,7 +184,7 @@ func (p *Parser) parseStructOrEnumBody(kind token.Kind, pos token.Pos) ast.Type 
 // type over an existing one, which lists the traits it implements
 // after the type it is declared over, as a struct lists them before
 // its body. Go's spelling of a struct or enum declaration, `type
-// Circle struct { ... }`, is reported once with the Teak spelling and
+// Circle struct { ... }`, is reported once with the Snello spelling and
 // then parsed as that declaration, so the tree is still whole.
 //
 //	type NodeID int                          Def NamedType

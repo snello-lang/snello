@@ -1,0 +1,76 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Structs and enums: a struct literal, methods with ref and mut
+// receivers, an enum with payloads, match with bindings and a guard,
+// an or-pattern, and printing of composite values.
+
+package main
+
+import "fmt"
+
+struct Point {
+	x int
+	y int
+}
+
+func (p ref Point) Sum() int { return p.x + p.y }
+
+func (p mut Point) Shift(dx int, dy int) {
+	p.x += dx
+	p.y += dy
+}
+
+enum Shape {
+	Circle(r f64)
+	Rect(w f64, h f64)
+	Empty
+}
+
+func area(s ref Shape) f64 {
+	return match s {
+		Circle(r) => 3.0 * r * r,
+		Rect(w, h) if w == h => w * w,
+		Rect(w, h) => w * h,
+		Empty => 0.0,
+	}
+}
+
+func isRound(s ref Shape) bool {
+	return match s {
+		Circle(_) | Empty => true,
+		_ => false,
+	}
+}
+
+enum Slot {
+	Full(p Point)
+	Vacant
+}
+
+// grow changes the point inside the slot in place: through a mut
+// borrow, a binding is a mut borrow of the payload.
+func grow(s mut Slot) {
+	match s {
+		Full(p) => p.Shift(1, 1),
+		Vacant => {},
+	}
+}
+
+func main() {
+	p := Point{x: 1, y: 2}
+	p.Shift(10, 0)
+	fmt.Println(p.Sum(), p.x, p)
+
+	fmt.Println(area(ref Circle(1.0)), area(ref Rect(2.0, 2.0)), area(ref Rect(2.0, 3.0)), area(ref Empty))
+	fmt.Println(isRound(ref Circle(1.0)), isRound(ref Empty), isRound(ref Rect(1.0, 1.0)))
+
+	s := Full(Point{x: 0, y: 0})
+	grow(mut s)
+	grow(mut s)
+	fmt.Println(s, Vacant, Rect(1.0, 2.5))
+
+	var z Point
+	fmt.Println(z)
+}

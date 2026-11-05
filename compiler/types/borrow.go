@@ -1,12 +1,12 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package types
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // The borrow pass runs inside the checker's walk
@@ -256,7 +256,7 @@ func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 				elt = kv.Value
 			}
 
-			c.derive(v, c.borrowSource(elt), pos)
+			c.derive(v, c.borrowSources(elt), pos)
 		}
 
 		return
@@ -265,14 +265,14 @@ func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
 	if call, ok := unparen(e).(*ast.CallExpr); ok {
 		if _, ok := c.calleeOf(call).(*Variant); ok {
 			for _, arg := range call.Args { // p := Pair(ref a, ref b): p holds both
-				c.derive(v, c.borrowSource(arg), pos)
+				c.derive(v, c.borrowSources(arg), pos)
 			}
 
 			return
 		}
 	}
 
-	c.derive(v, c.borrowSource(e), pos)
+	c.derive(v, c.borrowSources(e), pos)
 }
 
 // noteTemporary records that e, lent to a call or a ref, is a
@@ -301,8 +301,7 @@ func (c *Checker) static(e ast.Expr) bool {
 	case *ast.BasicLit:
 		return true
 	case *ast.Ident:
-		_, obj := c.scope.LookupParent(e.Name)
-		_, ok := obj.(*Const)
+		_, ok := c.resolve(e.Name).(*Const)
 		return ok
 	}
 
@@ -314,10 +313,18 @@ func (c *Checker) static(e ast.Expr) bool {
 // of a literal or tuple, or nil when every borrow in e comes from a
 // place.
 func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
+	if vs, ok := branches(e); ok {
+		for _, v := range vs { // a branch that lends a temporary
+			if tmp := c.borrowOfTemporary(v); tmp != nil {
+				return tmp
+			}
+		}
+
+		return nil
+	}
+
 	switch x := e.(type) {
 	case *ast.ParenExpr:
-		return c.borrowOfTemporary(x.X)
-	case *ast.CoalesceExpr:
 		return c.borrowOfTemporary(x.X)
 	case *ast.TryExpr:
 		return c.borrowOfTemporary(x.X)
@@ -344,14 +351,16 @@ func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
 
 // derive records that v holds a borrow of the place src, when v's type
 // carries a borrow and src names a place.
-func (c *Checker) derive(v *Var, src ast.Expr, pos token.Pos) {
+func (c *Checker) derive(v *Var, srcs []ast.Expr, pos token.Pos) {
 	mut, ok := borrowIn(v.typ)
-	if !ok || src == nil {
+	if !ok {
 		return
 	}
 
-	if p, kind := through(c.placeOf(src)); kind != notPlace {
-		c.borrows = append(c.borrows, borrow{holder: v, place: p, mut: mut, pos: pos})
+	for _, src := range srcs {
+		if p, kind := through(c.placeOf(src)); kind != notPlace {
+			c.borrows = append(c.borrows, borrow{holder: v, place: p, mut: mut, pos: pos})
+		}
 	}
 }
 
@@ -401,23 +410,23 @@ func (c *Checker) transfer(from, to *Var, pos token.Pos) {
 // holdPattern records the bindings of a pattern matched through a
 // borrow of the place src as holders of that borrow, in the order they
 // are written.
-func (c *Checker) holdPattern(p ast.Pattern, src ast.Expr) {
+func (c *Checker) holdPattern(p ast.Pattern, srcs []ast.Expr) {
 	switch p := p.(type) {
 	case *ast.IdentPat:
 		if v, ok := c.scope.Lookup(p.Name.Name).(*Var); ok {
-			c.derive(v, src, p.Name.Pos())
+			c.derive(v, srcs, p.Name.Pos())
 		}
 	case *ast.TuplePat:
 		for _, elt := range p.Elts {
-			c.holdPattern(elt, src)
+			c.holdPattern(elt, srcs)
 		}
 	case *ast.VariantPat:
 		for _, arg := range p.Args {
-			c.holdPattern(arg, src)
+			c.holdPattern(arg, srcs)
 		}
 	case *ast.OrPat:
 		for _, alt := range p.Alts {
-			c.holdPattern(alt, src)
+			c.holdPattern(alt, srcs)
 		}
 	}
 }
@@ -435,7 +444,7 @@ func (c *Checker) bindThrough(p ast.Pattern, x ast.Expr, b *Ref) {
 	}
 
 	if b == nil {
-		c.holdPattern(p, c.borrowSource(x))
+		c.holdPattern(p, c.borrowSources(x))
 		return
 	}
 
@@ -448,7 +457,7 @@ func (c *Checker) bindThrough(p ast.Pattern, x ast.Expr, b *Ref) {
 		c.accessExpr(x, mutAccess, x.Pos())
 	}
 
-	c.holdPattern(p, c.borrowSource(x))
+	c.holdPattern(p, c.borrowSources(x))
 }
 
 // rebind ends the borrows v holds: an assignment to a borrow variable
@@ -461,32 +470,90 @@ func (c *Checker) rebind(v *Var, pos token.Pos) {
 	}
 }
 
-// borrowSource finds the place expression a borrow-valued expression
-// lends from: the operand of ref or mut, the left side of ??, the
-// receiver of a method or the argument a function's result borrows
-// (callSource), the operand of a slice expression, or the place itself
-// when a borrow is read out of a variable, field or element. Nil when
-// there is none.
-func (c *Checker) borrowSource(e ast.Expr) ast.Expr {
+// borrowSources finds the place expressions a borrow-valued expression
+// lends from: the operand of ref or mut, the receiver of a method or
+// the argument a function's result borrows (callSource), the operand
+// of a slice expression, or the place itself when a borrow is read out
+// of a variable, field or element. A value chosen at run time lends
+// from every place it may come from: both sides of ??, and each branch
+// of an if or match expression. None when there is none.
+func (c *Checker) borrowSources(e ast.Expr) []ast.Expr {
+	if vs, ok := branches(e); ok {
+		var srcs []ast.Expr
+		for _, v := range vs {
+			srcs = append(srcs, c.borrowSources(v)...)
+		}
+
+		return srcs
+	}
+
 	switch e := e.(type) {
 	case *ast.ParenExpr:
-		return c.borrowSource(e.X)
+		return c.borrowSources(e.X)
 	case *ast.UnaryExpr:
 		if e.Op == token.REF || e.Op == token.MUT {
-			return e.X
+			return []ast.Expr{e.X}
 		}
-	case *ast.CoalesceExpr:
-		return c.borrowSource(e.X)
 	case *ast.TryExpr:
-		return c.borrowSource(e.X)
+		return c.borrowSources(e.X)
 	case *ast.SliceExpr:
-		return e.X
+		return []ast.Expr{e.X}
 	case *ast.CallExpr:
 		if src := c.callSource(e); src != nil {
-			return c.borrowSource(src)
+			return c.borrowSources(src)
 		}
 	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr:
-		return e
+		return []ast.Expr{e}
+	}
+
+	return nil
+}
+
+// branches returns the expressions the value of e is chosen from at run
+// time, and whether e is such a choice: both sides of x ?? y, and the
+// value of each branch of an if or match expression, the expression a
+// branch's block ends with. A side that leaves, ?? return, gives none.
+func branches(e ast.Expr) ([]ast.Expr, bool) {
+	var vs []ast.Expr
+	switch x := unparen(e).(type) {
+	case *ast.CoalesceExpr:
+		vs = append(append(vs, x.X), valueOf(x.Else)...)
+	case *ast.IfExpr:
+		for x != nil {
+			vs = append(vs, valueOf(x.Then)...)
+			switch els := x.Else.(type) {
+			case *ast.IfExpr:
+				x = els
+				continue
+			default:
+				vs = append(vs, valueOf(els)...)
+			}
+
+			x = nil
+		}
+	case *ast.MatchExpr:
+		for _, arm := range x.Arms {
+			vs = append(vs, valueOf(arm.Body)...)
+		}
+	default:
+		return nil, false
+	}
+
+	return vs, true
+}
+
+// valueOf returns the expression a branch yields: the branch itself
+// when it is one, or the expression its block ends with.
+func valueOf(n ast.Node) []ast.Expr {
+	switch n := n.(type) {
+	case *ast.BlockStmt:
+		if len(n.List) > 0 {
+			if s, ok := n.List[len(n.List)-1].(*ast.ExprStmt); ok {
+				return []ast.Expr{s.X}
+			}
+		}
+	case ast.Expr:
+		return []ast.Expr{n}
 	}
 
 	return nil

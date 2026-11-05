@@ -1,0 +1,81 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// 13: An actor with a mailbox.
+//
+// The actor pattern is the natural fit for this memory model: the state
+// is owned by exactly one task and only messages cross the boundary. No
+// locks, no Arc around the state.
+
+package actor
+
+import "fmt"
+
+enum Msg {
+    Deposit(amount int)
+    Withdraw(amount int, reply chan<- Result<int, string>)
+    Balance(reply chan<- int)
+    Stop
+}
+
+struct Account {
+    balance int
+    history []int
+}
+
+// The actor loop owns `acct`. It was moved in by Spawn and is dropped when
+// the loop returns. Nothing else can reach it. Parameters are mutable
+// locals.
+func run(acct Account, inbox <-chan Msg) {
+    for m := range inbox {
+        match m {
+            Deposit(n) => { acct.balance += n; acct.history.Push(n) },
+            Withdraw(n, reply) => {
+                if n > acct.balance {
+                    reply <- Err("insufficient funds")
+                } else {
+                    acct.balance -= n
+                    acct.history.Push(-n)
+                    reply <- Ok(acct.balance)
+                }
+            },
+            Balance(reply) => reply <- acct.balance,
+            Stop => return,
+        }
+    }
+}
+
+// A handle wraps the actor's mailbox. Cloning it gives another task a
+// handle on the same actor; it never copies the actor.
+struct Handle impl Clone { inbox chan<- Msg }
+
+func Spawn(initial int) Handle {
+    ch := make(chan Msg, 64)
+    spawn run(Account{balance: initial}, ch.Clone())      // Account is Send: an int and a slice of ints
+    return Handle{inbox: ch}
+}
+
+func (h ref Handle) Withdraw(n int) Result<int, string> {
+    reply := make(chan Result<int, string>, 1)
+    h.inbox <- Withdraw(n, reply.Clone())       // the message carries a handle for the actor's answer
+    return (<-reply).Expect("actor replied")  // the actor always answers before dropping its handle
+}
+
+func (h ref Handle) Balance() int {
+    reply := make(chan int, 1)
+    h.inbox <- Balance(reply.Clone())
+    return (<-reply).Expect("actor replied")
+}
+
+func (h ref Handle) Deposit(n int) { h.inbox <- Deposit(n) }
+func (h ref Handle) Stop()         { h.inbox <- Stop }
+
+func main() {
+    acct := Spawn(100)
+    acct.Deposit(50)
+    fmt.Println(acct.Withdraw(120))     // Ok(30)
+    fmt.Println(acct.Withdraw(100))     // Err("insufficient funds")
+    fmt.Println(acct.Balance())         // 30
+    acct.Stop()
+}

@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/scanner"
 )
 
 // TestDecls parses each declaration and prints it back in canonical
@@ -110,7 +110,7 @@ func TestDeclErrors(t *testing.T) {
 }
 
 // TestGoSpelling checks that Go's `type T struct` is reported once with
-// the Teak spelling and still parsed whole, impl list included.
+// the Snello spelling and still parsed whole, impl list included.
 func TestGoSpelling(t *testing.T) {
 	d, errs := parseDeclString("type T struct impl Shape { x int }")
 	if len(errs) != 1 {
@@ -125,7 +125,7 @@ func TestGoSpelling(t *testing.T) {
 // parseDeclString parses src as the one declaration of a file and
 // returns it with the error messages.
 func parseDeclString(src string) (ast.Decl, []string) {
-	f, _, err := ParseFile("test.teak", []byte("package p\n"+src+"\n"))
+	f, _, err := ParseFile("test.snello", []byte("package p\n"+src+"\n"))
 
 	var errs []string
 	if list, ok := err.(scanner.ErrorList); ok {

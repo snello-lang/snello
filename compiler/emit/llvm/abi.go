@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -20,7 +20,7 @@ import (
 // and the calls agree with the declarations. The program's own
 // functions pass their values as IR aggregates, which both sides of
 // such a call read the same way since both are IR. The runtime has no
-// other aggregate at its boundary: teak.h passes a map, a channel and
+// other aggregate at its boundary: snello.h passes a map, a channel and
 // a lock by pointer or by number.
 type abi struct {
 	byval bool

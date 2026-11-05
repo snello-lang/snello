@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -128,6 +128,65 @@ func TestBorrows(t *testing.T) {
 		for i := range got {
 			if !strings.Contains(got[i], tt.want[i]) {
 				t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+// TestLending checks what mut may lend and how long a borrow a call
+// returns stays lent: a ref borrow, and a slice of a value reached
+// through one, are never lent mut, and a borrow passed from one call
+// to another keeps its place lent until the call it goes to returns.
+func TestLending(t *testing.T) {
+	const helpers = "struct Tree { nodes []Node }\nfunc find(m ref map[string]string) ref string? { return m.Get(\"a\") }\n" +
+		"func sort(xs mut []int) {}\nfunc touch(ns mut []Node) {}\nfunc clear(m mut map[string]string) int { return 0 }\n" +
+		"func both(v ref string?, n int) {}\nfunc hand(v ref string?, m mut map[string]string) {}\n" +
+		"func pass(v ref string, n int) {}\nfunc wipe(s mut string) int { return 0 }\n"
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		// mut lends what an owned value or a mut borrow reaches, never what a ref borrow does.
+		{"func f(s ref string) { t := take(mut s); keep(t) }", []string{"cannot borrow s as mut: s is a ref borrow"}},
+		{"func f() { s := \"a\"; r := ref s; t := take(mut r); keep(t) }", []string{"cannot borrow r as mut: r is a ref borrow"}},
+		{"func f(xs ref []int) { grow(mut xs) }", []string{"cannot borrow xs as mut: xs is a ref borrow"}},
+		{"func f(xs ref []int) { sort(mut xs[0:1]) }", []string{"cannot borrow xs[0:1] as mut: it is a slice of xs, reached through a ref borrow"}},
+		{"func f(t ref Tree) { touch(mut t.nodes[1:]) }", []string{"cannot borrow t.nodes[1:] as mut: it is a slice of t.nodes, reached through a ref borrow"}},
+		{"func f(xs ref []int) { ys := xs[0:1]; sort(mut ys) }", []string{"cannot borrow ys as mut: ys is a ref borrow"}},
+		{"func f(xs ref []int) { sort(mut (xs[0:1])) }", []string{"cannot borrow xs[0:1] as mut: it is a slice of xs, reached through a ref borrow"}},
+		{"func f(xs mut []int) { sort(mut xs[0:1]) }", nil},
+		{"func f() { xs := []int{2, 1}; sort(mut xs[0:2]); r := mut xs; grow(mut r) }", nil},
+		{"func f(t mut Tree) { touch(mut t.nodes[1:]) }", nil},
+		// A borrow a call returns stays lent while it is passed along: the call it goes to sees no mut of the same place.
+		{"func f() { m := map[string]string{}; both(find(ref m), clear(mut m)) }", []string{"cannot borrow m as mut: m is borrowed as ref at"}},
+		{"func f() { m := map[string]string{}; print(find(ref m), clear(mut m)) }", []string{"cannot borrow m as mut: m is borrowed as ref at"}},
+		{"func f() { m := map[string]string{}; hand(find(ref m), mut m) }", []string{"cannot borrow m as mut: m is borrowed as ref at"}},
+		{"func f() { m := map[string]string{}; both(m.Get(\"a\"), clear(mut m)) }", []string{"cannot borrow m as mut: m is borrowed as ref at"}},
+		{"func f() { m := map[string]string{}; both(find(ref m), 1); clear(mut m); print(find(ref m), find(ref m)) }", nil},
+		{"func f() { m := map[string]int{}; m.Insert(\"b\", *(m.Get(\"a\") ?? ref 0) + 1) }", nil}, // the borrow is read and gone before the call lends m
+		// A value chosen at run time borrows from every place it may come from: each branch of an if or match, both sides of ??.
+		{"func f(c bool) { s := \"a\"; z := \"z\"; x := if c { ref s } else { ref z }; s = \"b\"; print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
+		{"func f(c bool) { s := \"a\"; z := \"z\"; x := if c { ref s } else { ref z }; z = \"b\"; print(x) }", []string{"cannot assign to z: z is borrowed by x"}},
+		{"func f(c bool) { s := \"a\"; z := \"z\"; x := match c { true => ref s, false => ref z }; s = \"b\"; print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
+		{"func f(o ref string?) { z := \"z\"; x := o ?? ref z; z = \"y\"; print(x) }", []string{"cannot assign to z: z is borrowed by x"}},
+		{"func f(c bool) { s := \"a\"; z := \"z\"; pass(if c { ref s } else { ref z }, wipe(mut s)) }", []string{"cannot borrow s as mut: s is borrowed as ref at"}},
+		{"func f(c bool) { xs := []int{1}; ys := []int{}; for _, v := range if c { ref xs } else { ref ys } { xs.Push(v) } }", []string{"cannot borrow xs as mut: xs is borrowed as ref by the range loop"}},
+		{"func f(c bool) { x := if c { \"a\".Clone().Trim() } else { \"b\".Trim() }; print(x) }", []string{"cannot keep a borrow of a temporary"}},
+		{"func f(c bool, s ref string) ref string { z := \"z\"; return if c { s } else { ref z } }", []string{"cannot return a borrow of local z"}},
+		{"func f(c bool) { s := \"a\"; z := \"z\"; x := if c { ref s } else { ref z }; print(x); s = \"b\"; z = \"c\" }", nil},
+		{"func f(c bool) int { s := \"a\"; n := if c { len(s) } else { 0 }; s = \"b\"; return n }", nil}, // a Copy value borrows nothing
+		{"func f(o ref string?) ref string { return o ?? return \"x\" }", nil},
+	}
+	for _, tt := range tests {
+		got := checkErrors(t, prelude+helpers+tt.src)
+		if len(got) != len(tt.want) {
+			t.Errorf("%q: got %d errors %q, want %q", tt.src, len(got), got, tt.want)
+			continue
+		}
+
+		for i := range got {
+			if !strings.Contains(got[i], tt.want[i]) {
+				t.Errorf("%q: error %q does not contain %q", tt.src, got[i], tt.want[i])
 			}
 		}
 	}

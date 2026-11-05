@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,8 +7,8 @@ package types
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // call checks a conversion, a built-in, a variant constructor, or a
@@ -129,7 +129,9 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 	defer func() { c.variadic = rest }() // after the arguments' own calls, which set it too
 	for i, arg := range e.Args {
 		if i >= fixed {
-			rest = append(rest, c.expr(arg, nil)) // a variadic any parameter takes anything
+			op := c.expr(arg, nil) // a variadic any parameter takes anything
+			c.keepLent(arg, op)
+			rest = append(rest, op)
 			continue
 		}
 
@@ -139,12 +141,40 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 			continue
 		}
 
+		c.keepLent(arg, op)
+
 		if t := c.argEffects(e, arg, op, p); t != nil {
 			tmp = t
 		}
 	}
 
 	return tmp
+}
+
+// keepLent keeps lent, until the call an argument is passed to returns,
+// what the argument borrows when it is a borrow another call returned:
+// that call gave back what it lent, but its result still points into
+// the source, so two(a.Get(), clear(mut a)) would change a under the
+// borrow passed beside it. A variable holds its own borrow, and ref x
+// lends for the call already.
+func (c *Checker) keepLent(arg ast.Expr, op operand) {
+	if op.mode == invalid {
+		return
+	}
+
+	mut, ok := borrowIn(op.typ)
+	if !ok {
+		return
+	}
+
+	switch unparen(arg).(type) {
+	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr, *ast.UnaryExpr, *ast.FuncLit:
+		return
+	}
+
+	for _, src := range c.borrowSources(arg) {
+		c.lend(src, mut, arg.Pos())
+	}
 }
 
 // diverges reports whether a call of obj never returns: os.Exit, which
@@ -355,7 +385,10 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.minCall(e, b)
 	}
 
-	c.exprs(e.Args) // print
+	for _, arg := range e.Args { // print
+		c.keepLent(arg, c.expr(arg, nil))
+	}
+
 	return operand{value, Unit, nil, nil}
 }
 

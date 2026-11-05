@@ -1,0 +1,61 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Owned pointers and tuples: &x moves a value to the heap, a recursive
+// struct through *Node?, a pointer read as the value it owns, a tuple
+// built, matched and printed, and () as the value of a Result.
+
+package main
+
+import "fmt"
+
+struct Node {
+	value int
+	next *Node?
+}
+
+func total(n ref Node) int {
+	sum := n.value
+	if next := n.next {
+		sum += total(next)
+	}
+
+	return sum
+}
+
+func push(head *Node?, value int) *Node? {
+	return Some(&Node{value: value, next: head})
+}
+
+func divmod(a int, b int) (int, int) {
+	return (a / b, a % b)
+}
+
+func check(n int) Result<(), string> {
+	if n < 0 {
+		return Err("negative")
+	}
+
+	return Ok(())
+}
+
+func main() {
+	list := push(push(push(None, 3), 2), 1)
+	if head := list {
+		fmt.Println(total(head), head.value, head)
+	}
+
+	q, r := divmod(17, 5)
+	pair := divmod(9, 4)
+	fmt.Println(q, r, pair, match pair { (2, _) => "two", (_, rem) => fmt.Sprint("rem ", rem) })
+
+	boxed := &Point{x: 3, y: 4}
+	fmt.Println(boxed.x * boxed.y, *boxed, boxed)
+	fmt.Println(check(1), check(-1))
+}
+
+struct Point {
+	x int
+	y int
+}

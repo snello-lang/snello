@@ -1,13 +1,13 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package llvm
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Generics are written one copy per instance, as the C backend writes

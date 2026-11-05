@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -16,13 +16,13 @@ import (
 )
 
 // TestUnicodeTables checks that c/unicode.c is what mkunicode.go writes
-// from the Unicode Character Database in the directory TEAK_UCD names,
+// from the Unicode Character Database in the directory SNELLO_UCD names,
 // so the tables cannot be edited by hand. It is skipped without one,
 // since the database is not kept in the repository.
 func TestUnicodeTables(t *testing.T) {
-	ucd := os.Getenv("TEAK_UCD")
+	ucd := os.Getenv("SNELLO_UCD")
 	if ucd == "" {
-		t.Skip("TEAK_UCD names no copy of the Unicode Character Database")
+		t.Skip("SNELLO_UCD names no copy of the Unicode Character Database")
 	}
 
 	out := filepath.Join(t.TempDir(), "unicode.c")
@@ -75,12 +75,12 @@ func TestUnicodeLookup(t *testing.T) {
 		}
 	}
 
-	probe := `#include "teak.h"
+	probe := `#include "snello.h"
 #include <stdio.h>
 int main(void) {
     for (int32_t r = 0; r <= 0x10FFFF; r++) {
-        int32_t u = tk_rune_upper(r), l = tk_rune_lower(r);
-        bool s = tk_rune_space(r), p = tk_isprint(r);
+        int32_t u = sn_rune_upper(r), l = sn_rune_lower(r);
+        bool s = sn_rune_space(r), p = sn_isprint(r);
         if (u != r || l != r || s || !p) {
             printf("%X %X %X %d %d\n", r, u, l, s, p);
         }
@@ -123,7 +123,7 @@ int main(void) {
 }
 
 // TestRemoveAllDeep removes a tree four hundred directories deep
-// through tk_os_removeAll, called from a spawned task, whose stack is
+// through sn_os_removeAll, called from a spawned task, whose stack is
 // 256 KB: the walk must keep no frame per level, since a tree can be
 // deeper than any stack, and must work relative to a directory already
 // open, since a path can be longer than the system opens in one call.
@@ -162,34 +162,34 @@ func TestRemoveAllDeep(t *testing.T) {
 	}
 
 	r.Close()
-	probe := `#include "teak.h"
+	probe := `#include "snello.h"
 #include <stdio.h>
 #include <string.h>
-static tk_chan *done;
-static tk_string path;
+static sn_chan *done;
+static sn_string path;
 static void run(void *arg) {
     (void)arg;
-    tk_string failed = TK_STR("", 0), op = TK_STR("", 0);
-    int64_t code = tk_os_removeAll(path, &failed, &op);
+    sn_string failed = SN_STR("", 0), op = SN_STR("", 0);
+    int64_t code = sn_os_removeAll(path, &failed, &op);
     printf("%lld", (long long)code);
     if (code != 0) {
         printf(" %.*s %.*s", (int)op.len, (const char *)op.ptr, (int)failed.len, (const char *)failed.ptr);
     }
 
     printf("\n");
-    tk_string_drop(&failed);
-    tk_string_drop(&op);
-    tk_chan_send(done, &code);
+    sn_string_drop(&failed);
+    sn_string_drop(&op);
+    sn_chan_send(done, &code);
 }
 int main(int argc, char **argv) {
-    tk_init(argc, argv);
-    path = TK_STR(argv[1], (int64_t)strlen(argv[1]));
-    done = tk_chan_make(sizeof(int64_t), 1, NULL); // buffered: the sender is done with it once its value is in
-    tk_spawn(run, NULL);
+    sn_init(argc, argv);
+    path = SN_STR(argv[1], (int64_t)strlen(argv[1]));
+    done = sn_chan_make(sizeof(int64_t), 1, NULL); // buffered: the sender is done with it once its value is in
+    sn_spawn(run, NULL);
     int64_t code;
-    tk_chan_recv(done, &code);
-    tk_chan_drop(&done); // the task's work is over: the last handle frees the channel
-    return tk_finish();
+    sn_chan_recv(done, &code);
+    sn_chan_drop(&done); // the task's work is over: the last handle frees the channel
+    return sn_finish();
 }
 `
 	bin := buildProbe(t, filepath.Join(dir, "build"), probe)
@@ -245,7 +245,7 @@ func buildProbe(t *testing.T, dir, src string) string {
 	}
 
 	bin := filepath.Join(dir, "probe")
-	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1", "-DTK_DEBUG", "-o", bin, filepath.Join(dir, "probe.c")}
+	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1", "-DSN_DEBUG", "-o", bin, filepath.Join(dir, "probe.c")}
 	args = append(args, Paths(dir)...)
 	args = append(args, "-lm")
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {

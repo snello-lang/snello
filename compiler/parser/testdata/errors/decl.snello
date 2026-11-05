@@ -1,0 +1,27 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Malformed declarations, one fault per line.
+
+package p
+
+type Circle struct impl Shape { r f64 }     // ERROR "spelled 'struct Circle {' or 'enum Circle {'"
+
+enum E {
+    Lit f64                                 // ERROR "expected '(' or newline, found 'f64'"
+    Neg(*E)
+}
+
+struct T<K Ord> {}                     // ERROR "expected '>', found 'Ord'"
+
+func (Tree) F() {}                          // ERROR "receiver needs a name and a type"
+
+var x                                       // ERROR "expected type or '=', found 'newline'"
+
+trait Shape {
+    x int                                   // ERROR "expected method, field or '}', found 'x'"
+    func (s ref Self) Area() f64
+}
+
+func ok() {}

@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a lock's guard holds a borrow of the value, so it stays in the
+// task and the scope that took the lock.
+// Fix: give the task a clone of the Arc and let it take the lock itself.
+
+package p
+
+import "sync"
+
+func main() {
+    counter := sync.NewArc(sync.NewMutex(0))
+    g := counter.Get().Lock()
+    spawn func() { *g.Get() += 1 }()      // ERROR "cannot spawn with g: mut int is a borrow"
+}

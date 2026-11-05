@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // TestPackages loads every package of the library, so that a package
@@ -55,7 +55,7 @@ func TestImports(t *testing.T) {
 		{"import m \"math\"\nfunc f(x f64) f64 { return m.Sqrt(x) }", nil},
 		{"import \"math\"\nfunc f() f64 { return math.Tau }", []string{"3:28: undefined: math.Tau"}},
 		{"import \"math\"\nfunc f() f64 { return math.Sqrt(2, 3) }", []string{"3:32: wrong number of arguments: have 2, want 1"}},
-		{"import \"heap\"\nfunc f() { heap.New() }", []string{"2:8: package heap is not in the standard library"}}, // the use is not reported again
+		{"import \"nosuch\"\nfunc f() { nosuch.New() }", []string{"2:8: package nosuch is not in the standard library"}}, // the use is not reported again
 		{"import \"builtin\"\nfunc f() int { return len(\"x\") }", []string{"2:8: package builtin is not imported: its names are predeclared"}},
 		{"import \"fmt\"\nfunc f() { fmt.Println(1) }", nil}, // the compiler provides fmt
 		{"import (\"io\"; \"os\")\nfunc f(p ref string) Result<i64, io.Error> { in := os.Open(p)?; out := os.Create(p)?; n := io.Copy(mut out, mut in)?; out.Close()?; return Ok(n) }", nil},
@@ -113,7 +113,7 @@ func TestImports(t *testing.T) {
 		{"import \"sync\"\nfunc f() { a := sync.NewArc(sync.NewMutex(make(chan int))); print(a) }", nil}, // a channel handle is Send, and a Mutex of a Send value is
 	}
 	for _, tt := range tests {
-		f, file, err := parser.ParseFile("t.teak", []byte("package p\n"+tt.src+"\n"))
+		f, file, err := parser.ParseFile("t.snello", []byte("package p\n"+tt.src+"\n"))
 		if err != nil {
 			t.Fatalf("%q: parse error: %v", tt.src, err)
 		}

@@ -1,0 +1,18 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the owner cannot move a value while it is borrowed.
+
+package p
+
+import "fmt"
+
+func keep(s string) {}
+
+func main() {
+    s := "a"
+    r := ref s
+    keep(s)                               // ERROR "cannot move s: s is borrowed"
+    fmt.Println(r)
+}

@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a method with a value receiver consumes its receiver. Close
+// takes the file, so the file is gone afterwards.
+
+package p
+
+import ("io"; "os")
+
+func write(path ref string) Result<(), io.Error> {
+    f := os.Create(path)?
+    f.Close()?
+    f.WriteString("late")?                // ERROR "use of moved value f"
+    return Ok(())
+}

@@ -1,0 +1,83 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// 03: An HTTP handler with a shared cache and a pooled connection.
+//
+// Tests: long-lived state shared by every request task, a borrow that
+// lasts exactly one request, and ownership of the response body.
+//
+// Shared state crosses task boundaries only inside Arc (see
+// _docs/design/03-ownership-across-tasks.md). The mux stores the server in an
+// Arc and hands each request task its own clone; inside the task the
+// handler receives a `ref Server` for the duration of the request.
+
+package web
+
+import (
+    "db"
+    "fmt"
+    "json"
+    "net/http"
+    "sync"
+    "time"
+)
+
+struct Entry {
+    body    []byte
+    expires time.Time
+}
+
+struct Server {
+    cache sync.Arc<sync.RwLock<map[string]Entry>>   // shared, lock-protected
+    db    sync.Arc<db.Pool>                          // shared, internally synchronized
+}
+
+func NewServer(pool db.Pool) Server {
+    return Server{
+        cache: sync.NewArc(sync.NewRwLock(map[string]Entry{})),
+        db:    sync.NewArc(pool),
+    }
+}
+
+// The request is owned by this call and dropped when it returns. The
+// response writer is borrowed mutably; the runtime owns it.
+func (s ref Server) GetUser(w mut http.ResponseWriter, r http.Request) {
+    id := r.Query("id")
+
+    // Fast path under a read lock. The guard lends the map as a `ref`,
+    // and the lock is released when the guard goes out of scope at the
+    // end of the block.
+    {
+        c := s.cache.Get().Read()
+        if e := c.Get()[ref id] {
+            if e.expires.After(time.Now()) {
+                w.Write(ref e.body)                 // borrowed, not copied
+                return
+            }
+        }
+    }
+
+    // Slow path. `conn` is owned for the rest of the call and is returned
+    // to the pool by its Drop on every exit path.
+    conn := s.db.Get().Acquire()
+    user := match conn.QueryUser(ref id) {
+        Ok(u)  => u,
+        Err(e) => { w.WriteHeader(500); w.WriteString(e.Error()); return },
+    }
+    body := json.Marshal(ref user)
+
+    // Write lock. The guard lends the map as a `mut`.
+    {
+        c := s.cache.Get().Write()
+        c.Get()[id] = Entry{body: body.Clone(), expires: time.Now().Add(time.Minute)}
+    }
+    w.Write(ref body)
+}
+
+func main() {
+    s := NewServer(db.Connect("postgres://..."))
+    mux := http.NewMux()
+    mux.Handle("/user", sync.Arc.New(s), Server.GetUser)   // s moved into the Arc
+    http.ListenAndServe(":8080", mux)
+}

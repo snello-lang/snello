@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Every value is freed where the checker said its owner dies. The
@@ -38,7 +38,7 @@ type frame struct {
 	mark int
 }
 
-// An owned value the emitter will drop: its C text and its Teak type.
+// An owned value the emitter will drop: its C text and its Snello type.
 type owned struct {
 	name string
 	typ  types.Type
@@ -143,7 +143,7 @@ func hasDrop(t types.Type) bool {
 // anything else.
 func (e *Emitter) dropOf(place string, t types.Type, pos token.Pos) string {
 	if isString(t) {
-		return "tk_string_drop(&" + place + ");"
+		return "sn_string_drop(&" + place + ");"
 	}
 
 	return e.dropper(t, pos) + "(&" + place + ");"
@@ -168,7 +168,7 @@ func (e *Emitter) dropMethod(t types.Type) string {
 // when the value is live, then each part that owns something, and the
 // memory a pointer, slice or map holds.
 func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
-	name := "tk_drop_" + lower.Mangle(t)
+	name := "sn_drop_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -179,12 +179,12 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 	var b strings.Builder
 	put(&b, head, " {\n")
 	if hasDrop(t) {
-		put(&b, "\tif (!v->tk_live) {\n\t\treturn; // moved away, or never built\n\t}\n\n\tv->tk_live = false;\n\t", e.dropMethod(t), "(v);\n")
+		put(&b, "\tif (!v->sn_live) {\n\t\treturn; // moved away, or never built\n\t}\n\n\tv->sn_live = false;\n\t", e.dropMethod(t), "(v);\n")
 	}
 
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
-		b.WriteString("\ttk_string_drop(v);\n")
+		b.WriteString("\tsn_string_drop(v);\n")
 	case *types.Struct:
 		for i := 0; i < u.NumFields(); i++ {
 			f := u.Field(i)
@@ -218,20 +218,20 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			}
 		}
 	case *types.Pointer:
-		put(&b, "\tif (*v != NULL) {\n\t\t", e.dropIfNeeded("TK_DEREF(*v)", u.Elem(), pos), "\n\t\ttk_release((void **)v);\n\t}\n")
+		put(&b, "\tif (*v != NULL) {\n\t\t", e.dropIfNeeded("SN_DEREF(*v)", u.Elem(), pos), "\n\t\tsn_release((void **)v);\n\t}\n")
 	case *types.Slice:
 		if needsDrop(u.Elem()) {
-			b.WriteString("\ttk_slice_own((tk_slice *)v, \"replacing\"); // before an element is dropped, so a refused drop leaves the slice whole\n")
+			b.WriteString("\tsn_slice_own((sn_slice *)v, \"replacing\"); // before an element is dropped, so a refused drop leaves the slice whole\n")
 			put(&b, "\tfor (int64_t i = 0; i < v->len; i++) {\n\t\t", e.dropOf("v->ptr[i]", u.Elem(), pos), "\n\t}\n\n")
 		}
 
-		b.WriteString("\ttk_slice_free((tk_slice *)v);\n")
+		b.WriteString("\tsn_slice_free((sn_slice *)v);\n")
 	case *types.Array:
 		put(&b, "\tfor (int64_t i = 0; i < ", strconv.FormatInt(u.Len(), 10), "; i++) {\n\t\t", e.dropOf("v->at[i]", u.Elem(), pos), "\n\t}\n")
 	case *types.Map:
-		put(&b, "\ttk_map_free((tk_map *)v, ", e.mapType(u, pos), ");\n")
+		put(&b, "\tsn_map_free((sn_map *)v, ", e.mapType(u, pos), ");\n")
 	case *types.Chan:
-		b.WriteString("\ttk_chan_drop(v);\n")
+		b.WriteString("\tsn_chan_drop(v);\n")
 	case *types.Trait:
 		traitDrop(&b)
 	default:
@@ -296,7 +296,7 @@ func (e *Emitter) hold(name string, t types.Type) {
 // a Drop method, so that a panic runs it too.
 func (e *Emitter) guard(name string, t types.Type) {
 	if e.guarded(t) {
-		e.line("tk_guard(&" + name + ", " + e.dropFn(t, token.NoPos) + ");")
+		e.line("sn_guard(&" + name + ", " + e.dropFn(t, token.NoPos) + ");")
 	}
 }
 
@@ -304,7 +304,7 @@ func (e *Emitter) dropVars(vars []owned, pos token.Pos) {
 	for _, v := range slices.Backward(vars) {
 		e.line(e.dropOf(v.name, v.typ, pos))
 		if e.guarded(v.typ) {
-			e.line("tk_unguard(&" + v.name + ");")
+			e.line("sn_unguard(&" + v.name + ");")
 		}
 	}
 }
@@ -439,7 +439,7 @@ func (e *Emitter) discard(v string, t types.Type, pos token.Pos) {
 // part by part, writing it on first use, for a slice or map whose
 // elements own something: a bitwise copy would be dropped twice.
 func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
-	name := "tk_clone_" + lower.Mangle(t)
+	name := "sn_clone_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -451,12 +451,12 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 	var b strings.Builder
 	put(&b, head, " {\n\t", ct, " out = ", zeroValue, ";\n")
 	if hasDrop(t) {
-		b.WriteString("\tout.tk_live = true;\n")
+		b.WriteString("\tout.sn_live = true;\n")
 	}
 
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
-		b.WriteString("\tout = tk_string_clone(v);\n")
+		b.WriteString("\tout = sn_string_clone(v);\n")
 	case *types.Struct:
 		for i := 0; i < u.NumFields(); i++ {
 			f := lower.Ident(u.Field(i).Name())
@@ -475,15 +475,15 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 			put(&b, "\tout.", f, " = ", e.cloneOf("v."+f, u.At(i), pos), ";\n")
 		}
 	case *types.Pointer:
-		put(&b, "\tif (v != NULL) {\n\t\tout = tk_alloc(sizeof *out);\n\t\t*out = ", e.cloneOf("(*v)", u.Elem(), pos), ";\n\t}\n")
+		put(&b, "\tif (v != NULL) {\n\t\tout = sn_alloc(sizeof *out);\n\t\t*out = ", e.cloneOf("(*v)", u.Elem(), pos), ";\n\t}\n")
 	case *types.Slice:
-		b.WriteString("\ttk_slice_make((tk_slice *)&out, v.len, v.len, sizeof *v.ptr);\n")
+		b.WriteString("\tsn_slice_make((sn_slice *)&out, v.len, v.len, sizeof *v.ptr);\n")
 		put(&b, "\tfor (int64_t i = 0; i < v.len; i++) {\n\t\tout.ptr[i] = ", e.cloneOf("v.ptr[i]", u.Elem(), pos), ";\n\t}\n")
 	case *types.Array:
 		put(&b, "\tfor (int64_t i = 0; i < ", strconv.FormatInt(u.Len(), 10), "; i++) {\n\t\tout.at[i] = ", e.cloneOf("v.at[i]", u.Elem(), pos), ";\n\t}\n")
 	case *types.Map:
 		k, val := "(("+e.cType(u.Key(), pos)+" *)v.keys)[i]", "(("+e.cType(u.Value(), pos)+" *)v.vals)[i]"
-		b.WriteString("\tfor (int64_t i = tk_map_next((tk_map *)&v, 0); i >= 0; i = tk_map_next((tk_map *)&v, i + 1)) {\n")
+		b.WriteString("\tfor (int64_t i = sn_map_next((sn_map *)&v, 0); i >= 0; i = sn_map_next((sn_map *)&v, i + 1)) {\n")
 		put(&b, "\t\t", e.mapSetter(u, pos), "(&out, ", e.cloneOf(k, u.Key(), pos), ", ", e.cloneOf(val, u.Value(), pos), ");\n\t}\n")
 	default:
 		e.unsupported(pos, "cloning values of type "+t.String())
@@ -507,9 +507,9 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	case !needsDrop(t):
 		return v
 	case isString(t):
-		return "tk_string_clone(" + v + ")"
+		return "sn_string_clone(" + v + ")"
 	case isChan(t):
-		return "tk_chan_clone(" + v + ")" // another handle on the same channel
+		return "sn_chan_clone(" + v + ")" // another handle on the same channel
 	}
 
 	return e.cloner(t, pos) + "(" + v + ")"
@@ -524,7 +524,7 @@ func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
 		return "NULL"
 	}
 
-	name := "tk_dropv_" + lower.Mangle(elem)
+	name := "sn_dropv_" + lower.Mangle(elem)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -545,7 +545,7 @@ func isChan(t types.Type) bool {
 // for a key in a map of type t, writing it on first use: the key is
 // taken, kept by a new entry and dropped when an entry already has it.
 func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
-	name := "tk_mapslot_" + lower.Mangle(t)
+	name := "sn_mapslot_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -555,9 +555,8 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k)"
 	put(&e.protos, head, ";\n")
 	var b strings.Builder
-	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n")
-	put(&b, "\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\treturn found;\n\t}\n\n")
-	put(&b, "\treturn tk_map_slot((tk_map *)m, ", mt, ", &k);\n}\n\n")
+	put(&b, head, " {\n\tvoid *added;\n\t", v, " *slot = sn_map_slot((sn_map *)m, ", mt, ", &k, &added);\n")
+	put(&b, "\tif (added == NULL) {\n\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t}\n\n\treturn slot;\n}\n\n")
 	e.helpers.WriteString(b.String())
 	return name
 }
@@ -566,7 +565,7 @@ func (e *Emitter) mapSlotter(t *types.Map, pos token.Pos) string {
 // slot for a key the caller keeps, writing it on first use: a new entry
 // takes a copy of the key.
 func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
-	name := "tk_mapslot_lent_" + lower.Mangle(t)
+	name := "sn_mapslot_lent_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -576,8 +575,8 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k)"
 	put(&e.protos, head, ";\n")
 	var b strings.Builder
-	put(&b, head, " {\n\t", v, " *found = tk_map_find((tk_map *)m, ", mt, ", &k);\n\tif (found != NULL) {\n\t\treturn found;\n\t}\n\n")
-	put(&b, "\t", k, " copy = ", e.cloneOf("k", t.Key(), pos), ";\n\treturn tk_map_slot((tk_map *)m, ", mt, ", &copy);\n}\n\n")
+	put(&b, head, " {\n\tvoid *added;\n\t", v, " *slot = sn_map_slot((sn_map *)m, ", mt, ", &k, &added);\n")
+	put(&b, "\tif (added != NULL) {\n\t\t*(", k, " *)added = ", e.cloneOf("k", t.Key(), pos), "; // the entry keeps a key of its own\n\t}\n\n\treturn slot;\n}\n\n")
 	e.helpers.WriteString(b.String())
 	return name
 }
@@ -586,7 +585,7 @@ func (e *Emitter) mapLentSlotter(t *types.Map, pos token.Pos) string {
 // in a map of type t, writing it on first use: an entry already there
 // takes the new value and drops the old one.
 func (e *Emitter) mapSetter(t *types.Map, pos token.Pos) string {
-	name := "tk_mapset_" + lower.Mangle(t)
+	name := "sn_mapset_" + lower.Mangle(t)
 	if e.state[name] != undeclared {
 		return name
 	}
@@ -607,7 +606,7 @@ func (e *Emitter) dropFn(t types.Type, pos token.Pos) string {
 		return "NULL"
 	}
 
-	name := "tk_dropfn_" + lower.Mangle(t)
+	name := "sn_dropfn_" + lower.Mangle(t)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		ct := e.cType(t, pos)

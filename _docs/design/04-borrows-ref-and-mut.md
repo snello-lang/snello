@@ -1,6 +1,6 @@
 # Borrows: `ref` and `mut`
 
-Status: decided, 2026-10-17. This note explains the three ways a value can be handed to a function in Teak, what `ref` and `mut` mean, the rules the compiler enforces, and what they buy. It is the part of the memory model a Go developer meets first, on the first function signature they write.
+Status: decided, 2026-10-17. This note explains the three ways a value can be handed to a function in Snello, what `ref` and `mut` mean, the rules the compiler enforces, and what they buy. It is the part of the memory model a Go developer meets first, on the first function signature they write.
 
 ## The problem
 
@@ -17,7 +17,7 @@ Without a garbage collector the gap is fatal rather than annoying. If a callee m
 
 ## The three parameter modes
 
-| Teak | Meaning | Go equivalent | After the call, the caller… |
+| Snello | Meaning | Go equivalent | After the call, the caller… |
 |---|---|---|---|
 | `func f(v T)` | **Take.** Ownership moves into `f`. | by value, when the callee keeps it | cannot use `v` (moved), unless `T` is `Copy` |
 | `func f(v ref T)` | **Look.** A shared, read-only borrow. | `*T` or by value, when the callee only reads | still owns `v`, unchanged |
@@ -25,7 +25,7 @@ Without a garbage collector the gap is fatal rather than annoying. If a callee m
 
 The same three modes apply to method receivers:
 
-```teak
+```snello
 func (s ref Server) GetUser(...)      // reads the server
 func (t mut Tree) AddChild(...)       // changes the tree
 func (f File) Close() io.Error?       // consumes the file; it cannot be used after
@@ -33,7 +33,7 @@ func (f File) Close() io.Error?       // consumes the file; it cannot be used af
 
 And to local bindings and call sites, where the keyword marks what is being created:
 
-```teak
+```snello
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
 strings.Fields(ref job.text)          // lend the text for the call; `ref` is optional here
 sort.Sort(mut list)                   // lend the list for mutation
@@ -49,7 +49,7 @@ At a call site `mut` is always written and `ref` may be left out: an owned value
 2. **A borrow cannot be stored in owned data or sent.** It cannot be put in a field of an owned struct, captured by a closure that is stored, placed in a channel, or captured by `spawn`. A struct or closure that holds a borrow is itself a borrow (see below).
 3. **A borrow may be returned only when its source is unambiguous.** The compiler ties a returned borrow to exactly one input:
    - the receiver, for a method with a `ref` or `mut` receiver: `func (s ref Stack<T>) Peek() ref T?`;
-   - otherwise the only borrowed parameter: `func Trim(s ref string) ref string`. A function with two borrowed inputs and a borrowed output is rejected: `func Longest(a ref string, b ref string) ref string` cannot be written; return a clone or an index instead. At the call site, the input borrow is extended to the last use of the returned one. This is exactly the rule Rust applies when no lifetime is written; Teak has no syntax for the cases it does not cover.
+   - otherwise the only borrowed parameter: `func Trim(s ref string) ref string`. A function with two borrowed inputs and a borrowed output is rejected: `func Longest(a ref string, b ref string) ref string` cannot be written; return a clone or an index instead. At the call site, the input borrow is extended to the last use of the returned one. This is exactly the rule Rust applies when no lifetime is written; Snello has no syntax for the cases it does not cover.
 4. **Any number of `ref`, or exactly one `mut`.** While a value is borrowed `mut`, no other borrow of it exists and the owner cannot touch it. While it is borrowed `ref`, any number of other `ref` borrows may exist, but no `mut` and no mutation by the owner.
 5. **A borrow can be passed on, narrower or equal.** A `mut T` can be passed to a function wanting `ref T` or `mut T`. A `ref T` can only be passed on as `ref T`. A borrow of a field or element can be derived from a borrow of the whole: from `t mut Tree`, `mut t.nodes[i]`. A borrow variable may be reassigned to a borrow derived from itself.
 6. **The owner outlives every borrow.** Guaranteed by rules 1 to 3: a borrow never leaves the function that can see its owner, except by rule 3, where it rides on an input borrow the caller already holds.
@@ -60,7 +60,7 @@ Two more decisions came with the checker (2026-10-18). **What a pattern binds th
 
 **A borrow of a temporary dies with its statement** (decided 2026-10-18, when the debug build of task 1.9 printed poison for `t := s.Clone().Trim()`). A value no variable holds is dropped when its statement ends, so a borrow of it may be used within the statement, ranged over or matched on, but not bound to a variable or returned: `cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`. A literal or a constant is not a temporary. The checker marks an owned value lent to a call or a `ref`, carries the mark onto a call whose result borrows it, and refuses a binding or a return of a marked value.
 
-So Teak has lifetimes. It infers every one of them and rejects the programs where inference is ambiguous, instead of asking for an annotation. Rules 2 and 3 are what make inference always possible: a borrow never outlives the function it was created in, except by riding on one input borrow.
+So Snello has lifetimes. It infers every one of them and rejects the programs where inference is ambiguous, instead of asking for an annotation. Rules 2 and 3 are what make inference always possible: a borrow never outlives the function it was created in, except by riding on one input borrow.
 
 ## What cannot be written
 
@@ -94,8 +94,8 @@ The price of never annotating. Each has an idiom the examples use.
 
 ## What it costs
 
-- **A choice at every signature.** Go developers write `T` or `*T` by habit; Teak asks which of three things the function does. The default is easy, `ref` for reading, `mut` for changing, by value for keeping, but it is a decision Go does not ask for.
-- **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../../examples/15-lru.teak`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
+- **A choice at every signature.** Go developers write `T` or `*T` by habit; Snello asks which of three things the function does. The default is easy, `ref` for reading, `mut` for changing, by value for keeping, but it is a decision Go does not ask for.
+- **Some Go patterns need restructuring.** Holding a `mut` borrow of one slice element while mutating another is rejected, so code copies the needed values out first (`../../examples/15-lru.snello`). Two mutable borrows of one struct's different fields are allowed; two of the same slice are not, because the compiler cannot prove the indices differ.
 - **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every rule above. A `Lexer` holding `src ref string` is legal for the duration of a parse (example 05); storing it in owned data or sending it is not. Returning one follows rule 3 like any borrow: tied to the receiver or to the only borrowed parameter. That is how `text.Fields()` returns an iterator that borrows its receiver, and why `NewLexer(src ref string) Lexer` is legal while `NewLexer(src ref string, name ref string) Lexer` is not. (Clarified 2026-10-18; an earlier draft said a borrow-holding struct could never be returned.)
 
 ## Choosing, in one line

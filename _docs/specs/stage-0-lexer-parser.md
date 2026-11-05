@@ -1,15 +1,15 @@
 # Stage 0: lexer and parser
 
-Goal: `teak parse FILE` reads any of the twenty example programs, builds a syntax tree, and prints it. Modeled on `go/scanner`, `go/ast`, `go/parser`.
+Goal: `snello parse FILE` reads any of the twenty example programs, builds a syntax tree, and prints it. Modeled on `go/scanner`, `go/ast`, `go/parser`.
 
 Done when every task below is checked and the checkpoint has been reviewed.
 
 ## Task 0.1: Token set
 
-**Description:** The `token` package: every token kind Teak has, keyword lookup, operator precedence, source positions.
+**Description:** The `token` package: every token kind Snello has, keyword lookup, operator precedence, source positions.
 
 **Acceptance criteria:**
-- [x] All Go tokens Teak keeps, plus `trait`, `impl`, `enum`, `match`, `ref`, `mut`, `Self`, `super`, `?`, `??`, `=>`, `..=`
+- [x] All Go tokens Snello keeps, plus `trait`, `impl`, `enum`, `match`, `ref`, `mut`, `Self`, `super`, `?`, `??`, `=>`, `..=`
 - [x] `Lookup` distinguishes keywords from identifiers
 - [x] `Precedence` places `??` below every other binary operator
 
@@ -38,19 +38,19 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Scope:** M
 **Done:** 2026-10-18
 
-## Task 0.3: `teak lex`
+## Task 0.3: `snello lex`
 
 **Description:** The driver's first subcommand: print the token stream of a file with positions.
 
 **Acceptance criteria:**
-- [x] `go run ./cmd/teak lex examples/13-actor.teak` prints one token per line
+- [x] `go run ./cmd/snello lex examples/13-actor.snello` prints one token per line
 - [x] Exit status 1 when the file has lexical errors
 
 **Verification:**
 - [x] Manual check on three example files
 
 **Dependencies:** 0.2
-**Files:** `cmd/teak/main.go`
+**Files:** `cmd/snello/main.go`
 **Scope:** XS
 **Done:** 2026-10-17
 
@@ -72,9 +72,9 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Scope:** M
 **Done:** 2026-10-18
 
-## Task 0.5: Parser skeleton and `teak parse`
+## Task 0.5: Parser skeleton and `snello parse`
 
-**Description:** The `parser` package with its token lookahead, error reporting with positions, synchronization after an error, and parsing of a file's package clause and imports only. The `teak parse` command prints the tree. This is the end-to-end path every later task extends.
+**Description:** The `parser` package with its token lookahead, error reporting with positions, synchronization after an error, and parsing of a file's package clause and imports only. The `snello parse` command prints the tree. This is the end-to-end path every later task extends.
 
 **Acceptance criteria:**
 - [x] `package x` with imports parses to a `File` node
@@ -83,10 +83,10 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/parser/`
-- [x] Manual check: `go run ./cmd/teak parse` on a file containing only a package clause and imports
+- [x] Manual check: `go run ./cmd/snello parse` on a file containing only a package clause and imports
 
 **Dependencies:** 0.4
-**Files:** `compiler/parser/parser.go`, `compiler/parser/parser_test.go`, `cmd/teak/main.go`
+**Files:** `compiler/parser/parser.go`, `compiler/parser/parser_test.go`, `cmd/snello/main.go`
 **Scope:** M
 **Done:** 2026-10-18
 
@@ -118,7 +118,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/parser/`
-- [x] Manual check: `teak parse examples/07-traits.teak` prints the trait and struct declarations
+- [x] Manual check: `snello parse examples/07-traits.snello` prints the trait and struct declarations
 
 **Dependencies:** 0.6
 **Files:** `compiler/parser/decl.go`, `compiler/parser/decl_test.go`, `compiler/parser/parser_test.go` (example sweep and benchmark), `compiler/parser/expr.go` (stub), `compiler/ast/ast.go` (BadExpr; variant fields are parameters), `compiler/scanner/scanner.go` (semicolon after a closing `>`)
@@ -131,11 +131,11 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Acceptance criteria:**
 - [x] Every statement form in examples 02, 12 and 19 parses; all twenty examples parse with their bodies, with only match arms still skipped
-- [x] Go's `if init; cond {` and Teak's `if x := opt {` are both accepted and distinguished
+- [x] Go's `if init; cond {` and Snello's `if x := opt {` are both accepted and distinguished
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/parser/`
-- [x] Manual check: `teak parse examples/12-worker-pool.teak`
+- [x] Manual check: `snello parse examples/12-worker-pool.snello`
 
 **Dependencies:** 0.9 (order swapped; see 0.9)
 **Files:** `compiler/parser/stmt.go`, `compiler/parser/stmt_test.go`, `compiler/parser/pattern.go` (patterns of an if binding), `compiler/ast/ast.go` (BadStmt)
@@ -153,7 +153,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/parser/`
-- [x] Manual check: `teak parse examples/20-bst.teak` (bodies still skipped until 0.8; the expression tests stand in)
+- [x] Manual check: `snello parse examples/20-bst.snello` (bodies still skipped until 0.8; the expression tests stand in)
 
 **Dependencies:** 0.7. Done before 0.8: statements are built from expressions, and `if x := opt {` needs the parsed left side to tell a binding from an init statement. Expressions needed only the body skipper from 0.7.
 **Files:** `compiler/parser/expr.go`, `compiler/parser/parser_test.go`
@@ -171,7 +171,7 @@ Done when every task below is checked and the checkpoint has been reviewed.
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/parser/`
-- [x] Manual check: `teak parse examples/17-state-machine.teak`
+- [x] Manual check: `snello parse examples/17-state-machine.snello`
 
 **Dependencies:** 0.9
 **Files:** `compiler/parser/pattern.go`, `compiler/parser/pattern_test.go`, `compiler/parser/expr.go` (match arms)
@@ -183,13 +183,13 @@ Done when every task below is checked and the checkpoint has been reviewed.
 **Description:** A test that parses all twenty examples with zero errors, a table of malformed inputs with their expected messages, and a check that the parser reports at most one error per malformed line rather than cascading.
 
 **Acceptance criteria:**
-- [x] All twenty `.teak` files parse with no errors (`TestExamples`)
+- [x] All twenty `.snello` files parse with no errors (`TestExamples`)
 - [x] Ten malformed inputs each produce the one expected message: thirty, in five annotated files under `compiler/parser/testdata/errors/` (`TestErrorFiles`)
-- [x] `teak parse` on every example prints a tree whose first and last declarations match the source (checked in `TestExamples`)
+- [x] `snello parse` on every example prints a tree whose first and last declarations match the source (checked in `TestExamples`)
 
 **Verification:**
 - [x] Tests pass: `go test ./...`
-- [x] Manual check: `for f in examples/*.teak examples/*/*.teak; do go run ./cmd/teak parse $f > /dev/null || echo FAIL $f; done` prints nothing
+- [x] Manual check: `for f in examples/*.snello examples/*/*.snello; do go run ./cmd/snello parse $f > /dev/null || echo FAIL $f; done` prints nothing
 
 **Dependencies:** 0.10
 **Files:** `compiler/parser/parser_test.go`, `compiler/parser/testdata/errors/`, `compiler/parser/parser.go` (one error per line; balanced skipping; line ends kept on a missing token), `compiler/parser/pattern.go` (negative literals)

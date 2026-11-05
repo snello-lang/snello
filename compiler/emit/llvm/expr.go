@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A value the function computed: the text of its operand, a register
@@ -33,7 +33,7 @@ func (v value) typed() string {
 	return v.typ + " " + v.s
 }
 
-// depth is the number of pointers in front of the value of a Teak
+// depth is the number of pointers in front of the value of a Snello
 // type: one per borrow and per owned pointer, except a borrow that is
 // a view (types.go), which is the value itself.
 func depth(t types.Type) int {
@@ -214,10 +214,10 @@ func hexFloat(f float64, width int) string {
 }
 
 // constString writes s as a private constant of the module and
-// returns the tk_string value pointing at it: a literal owns nothing,
+// returns the sn_string value pointing at it: a literal owns nothing,
 // which a capacity of zero says.
 func (e *Emitter) constString(s string) value {
-	return value{"%tk_string", "{ ptr " + e.constBytes(s) + ", i64 " + strconv.Itoa(len(s)) + ", i64 0 }"}
+	return value{"%sn_string", "{ ptr " + e.constBytes(s) + ", i64 " + strconv.Itoa(len(s)) + ", i64 0 }"}
 }
 
 // constBytes writes the bytes of s, and a zero after them for the
@@ -257,7 +257,9 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 		v := e.valueTo(x.X, e.typeOf(x))
 		if !e.isPlace(x.X) && needsDrop(e.typeOf(x.X)) { // a borrow written out of a value built here holds what it lends itself
 			if depth(e.typeOf(x.X)) < depth(e.typeOf(x)) {
-				e.hold(v.s, e.typeOf(x.X)) // the slot the value was lent from
+				if x.Op == token.REF {
+					e.hold(v.s, e.typeOf(x.X)) // the slot the value was lent from; valueTo holds one it lends mut
+				}
 			} else {
 				e.hold(e.spill(v), e.typeOf(x.X))
 			}
@@ -265,7 +267,12 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 
 		return v
 	case token.MUL:
-		return e.derefTo(e.expr(x.X), e.typeOf(x.X), e.typeOf(x))
+		v := e.expr(x.X)
+		if _, owned := e.typeOf(x.X).(*types.Pointer); owned && !e.isPlace(x.X) { // a pointer built here owns its block: held, and freed when the statement ends
+			e.hold(e.spill(v), e.typeOf(x.X))
+		}
+
+		return e.derefTo(v, e.typeOf(x.X), e.typeOf(x))
 	case token.AND:
 		elem := e.typeOf(x).(*types.Pointer).Elem()
 		cell := e.alloc(elem, x.Pos())
@@ -300,8 +307,8 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 // alloc returns the address of a new block on the heap for a value of
 // type t.
 func (e *Emitter) alloc(t types.Type, pos token.Pos) string {
-	e.declare("tk_alloc", "declare ptr @tk_alloc(i64)")
-	return e.op("call ptr @tk_alloc(i64 "+strconv.FormatInt(max(e.size(t), 1), 10)+")", "ptr").s
+	e.declare("sn_alloc", "declare ptr @sn_alloc(i64)")
+	return e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.size(t), 1), 10)+")", "ptr").s
 }
 
 // deref returns the address an owned pointer holds, checked first in
@@ -311,11 +318,11 @@ func (e *Emitter) deref(p value) value {
 		return p
 	}
 
-	e.declare("tk_deref", "declare ptr @tk_deref(ptr)")
-	return e.op("call ptr @tk_deref(ptr "+p.s+")", "ptr")
+	e.declare("sn_deref", "declare ptr @sn_deref(ptr)")
+	return e.op("call ptr @sn_deref(ptr "+p.s+")", "ptr")
 }
 
-// derefTo reads v, a value of the Teak type have, down to the pointer
+// derefTo reads v, a value of the Snello type have, down to the pointer
 // depth of want: through a borrow, which is the address of the place,
 // and through an owned pointer, which a debug build checks first.
 func (e *Emitter) derefTo(v value, have, want types.Type) value {
@@ -345,6 +352,21 @@ func (e *Emitter) binary(x *ast.BinaryExpr) value {
 	t := lower.ValueType(e.typeOf(x.X))
 	if call, ok := e.operatorCall(t, x.Op, false, x.X, []ast.Expr{x.Y}, x.Pos()); ok {
 		return call
+	}
+
+	if parts := lower.Addends(x, e.typeOf); len(parts) > 2 { // a + b + c: one allocation for the whole
+		wants := make([]types.Type, len(parts))
+		for i := range wants {
+			wants[i] = t
+		}
+
+		vals := e.operands(parts, wants)
+		pieces := make([]piece, len(parts))
+		for i, v := range vals {
+			pieces[i] = piece{text: text{v, !e.isRead(parts[i])}}
+		}
+
+		return e.concat(pieces, x.Pos())
 	}
 
 	var want types.Type = t
@@ -378,7 +400,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) value {
 			return e.join(text{l, !e.isRead(x.X)}, text{r, !e.isRead(x.Y)}).v // a side built here is freed after the join
 		}
 
-		c := e.rt("tk_string_cmp", "i32", l, r)
+		c := e.rt("sn_string_cmp", "i32", l, r)
 		name, _ := compare(x.Op, false, false)
 		return e.op("icmp "+name+" "+c.typed()+", 0", "i1")
 	}
@@ -420,7 +442,7 @@ func (e *Emitter) logical(x *ast.BinaryExpr) value {
 	return e.op("phi i1 [ "+short+", %"+left+" ], [ "+r.s+", %"+fromRight+" ]", "i1")
 }
 
-// arith writes the operator op on l and r, values of the Teak type t.
+// arith writes the operator op on l and r, values of the Snello type t.
 func (e *Emitter) arith(op token.Kind, l, r value, t types.Type, pos token.Pos) value {
 	if !isInteger(t) && !isFloat(t) && !isBool(t) {
 		e.unsupported(pos, "the operator "+op.String()+" on values of type "+t.String())
@@ -550,9 +572,9 @@ func (e *Emitter) divide(op token.Kind, l, r value, unsigned bool) value {
 	return e.op("select i1 "+minusOne.s+", "+wrapped.typed()+", "+q.typed(), l.typ)
 }
 
-// panic ends the program with the message, a tk_string value.
+// panic ends the program with the message, a sn_string value.
 func (e *Emitter) panic(msg value) {
-	e.callWords("tk_panic", msg)
+	e.callWords("sn_panic", msg)
 	e.inst("unreachable")
 	e.fn.terminated = true
 }
@@ -689,8 +711,12 @@ func fieldIndex(st *types.Struct, name string) int {
 	return -1
 }
 
-// isPlace reports whether x denotes a variable or a field of one,
-// which can be read in place and bound to without a copy.
+// isPlace reports whether x denotes a variable or a part of a value,
+// which can be read in place and bound to without a copy. A field, an
+// element or what a pointer points at is a place wherever the value
+// is: in a variable, behind a borrow, or in the temporary scrutinee
+// holds for a value built here, which the statement drops whole, so
+// that its part is never copied out and dropped twice.
 func (e *Emitter) isPlace(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.Ident:
@@ -704,26 +730,14 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 			return true // a variable of the library, such as os.Args
 		}
 
-		return ok && v.IsField() && e.viaBorrow(x.X)
+		return ok && v.IsField()
 	case *ast.IndexExpr:
-		return e.viaBorrow(x.X)
+		return true
 	case *ast.UnaryExpr:
-		return x.Op == token.MUL && e.viaBorrow(x.X)
+		return x.Op == token.MUL
 	}
 
 	return false
-}
-
-// viaBorrow reports whether a field, an element or the value of x is a
-// place: x is one itself, or x is a borrow, whose value lives elsewhere
-// however x was built.
-func (e *Emitter) viaBorrow(x ast.Expr) bool {
-	if e.isPlace(x) {
-		return true
-	}
-
-	_, ok := e.typeOf(x).(*types.Ref)
-	return ok
 }
 
 // operands writes a list of operands evaluated left to right, each

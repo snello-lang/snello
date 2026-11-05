@@ -1,0 +1,510 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package time measures time: a Duration is a span of it and a Time an
+// instant, both Copy values that compare as numbers do. A Time prints
+// as Go's does, in UTC: 2006-01-02 15:04:05.999999999 +0000 UTC, and
+// a Duration as Go's does, 1h30m0s or 1.5µs.
+//
+// Now reads the system clock, Sleep waits, and the constants from
+// Nanosecond to Hour let a Duration be written as a product, 10 *
+// time.Millisecond, since a literal takes the Duration type from the
+// constant beside it. After and Tick hand a Time over a channel, once
+// or every so often, for a select to wait on.
+package time
+
+import "fmt"
+
+// A Duration is a span of time, counted in nanoseconds, as an i64: the
+// longest is about 290 years. It is a number: it adds, subtracts,
+// compares and multiplies by an integer. fmt prints it in Go's form,
+// 72h3m0.5s, through its String.
+type Duration i64 impl fmt.Stringer
+
+// Nanosecond is the unit of Duration; the others are its multiples.
+const Nanosecond Duration = 1
+const Microsecond Duration = 1000
+const Millisecond Duration = 1000000
+const Second Duration = 1000000000
+const Minute Duration = 60000000000
+const Hour Duration = 3600000000000
+
+// The longest Duration, which Sub gives when the span between two
+// Times is longer than a Duration holds, and the longest the other
+// way, which Round gives when its result would be past either.
+const maxDuration Duration = 9223372036854775807
+const minDuration Duration = -9223372036854775808
+
+// The civil date of a Time is computed as Go's time package computes
+// it, from the seconds since an absolute epoch, March 1 of the year
+// -absoluteYears, far enough back that every second a Time holds is
+// counted from it as an unsigned number; unixToAbsolute is what the
+// seconds since 1970 are shifted by, and marchThruDecember the days
+// from March 1 to the end of a year, since a year counted from March
+// puts the leap day last.
+const absoluteYears i64 = 292277022400
+const unixToAbsolute u64 = 9223372028741760000
+const marchThruDecember u64 = 306
+const secondsPerDay u64 = 86400
+
+// A Time is an instant, as Go's is: the seconds since the start of
+// 1970 in UTC and the nanoseconds past them, which reach hundreds of
+// billions of years either way, and for a Time Now read, the reading
+// of the monotonic clock beside them. The system may set its wall clock
+// back or forward, never the monotonic one, so when both Times hold a
+// reading, comparing them and Sub use it, and a Duration measured
+// between two Nows is never thrown off by a change of the clock. Two
+// Times compare with ==, <, Before and After, all meaning the same
+// instant or the earlier one, and Sub gives the Duration between them.
+// A Time prints as String gives it.
+struct Time impl Copy, Eq, Ord, fmt.Stringer {
+	sec  i64 // since the start of 1970 in UTC
+	nsec i64 // past sec, from 0 up to a second
+	mono i64 // the monotonic clock's nanoseconds when Now read it, or 0
+}
+
+// Now returns the current time: the system's clock, and the monotonic
+// clock's reading.
+func Now() Time {
+	var t Time
+	clock(mut t.sec, mut t.nsec, mut t.mono)
+	return t
+}
+
+// Unix returns the Time sec seconds and nsec nanoseconds after the
+// start of 1970 in UTC. An nsec outside zero up to a second is carried
+// into the seconds, so Unix(1, -1) is the last nanosecond of the
+// first second. The Time holds no monotonic reading.
+func Unix(sec i64, nsec i64) Time {
+	sec += nsec / 1000000000
+	nsec = nsec % 1000000000
+	if nsec < 0 {
+		nsec += 1000000000
+		sec--
+	}
+
+	return Time{sec: sec, nsec: nsec, mono: 0}
+}
+
+// Since returns the time elapsed since t: Now().Sub(t).
+func Since(t Time) Duration {
+	return Now().Sub(t)
+}
+
+// Sleep pauses the task for d, and returns at once for a d of zero or
+// less. The runtime provides it.
+func Sleep(d Duration)
+
+// After returns a channel that gets the time once, d from now: a
+// deadline for a select to wait on beside its other cases. The channel
+// holds the one value, and the runtime's timer puts it there, so no
+// task waits for it, and a program that does not receive it loses
+// nothing. A d past the largest time waits for as long as there is.
+func After(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	startTimer(ch.Clone(), d, 0)
+	return ch
+}
+
+// Tick returns a channel that gets the time every d, for as long as the
+// program runs, on the period rather than d after the last tick, so the
+// ticks do not drift. A tick that arrives while the one before it is
+// still unreceived is dropped, so a slow receiver sees the ticks it can
+// keep up with and never a backlog of them. For a d of zero or less no
+// tick ever comes, as Go's Tick then gives a channel nothing sends on.
+func Tick(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	if d > 0 {
+		startTimer(ch.Clone(), d, d)
+	}
+
+	return ch
+}
+
+// startTimer has the runtime's timer put the time in ch d from now, and
+// then every period when every is above zero. The timer owns the
+// handle, and drops it once it has fired for the last time, so a
+// channel no one receives from is freed with the timer. The runtime
+// provides it.
+func startTimer(ch chan<- Time, d Duration, every Duration)
+
+// String returns the Time as Go's String prints one in UTC, the date,
+// the clock with the nanoseconds past the second when there are any,
+// without their trailing zeros, and the zone: 2006-01-02
+// 15:04:05.999999999 +0000 UTC. Go's String prints the local zone and,
+// for a Time from Now, the monotonic reading after m=; this one prints
+// UTC and no reading. It is fmt.Stringer's method, so a Time prints
+// this way.
+func (t ref Time) String() string {
+	year := i64(0)
+	month := i64(0)
+	day := i64(0)
+	t.date(mut year, mut month, mut day)
+	clock := i64((u64(t.sec) + unixToAbsolute) % secondsPerDay)
+	hour := clock / 3600
+	minute := clock % 3600 / 60
+	second := clock % 60
+	s := fmt.Sprintf("%.4d-%.2d-%.2d %.2d:%.2d:%.2d", year, month, day, hour, minute, second)
+	if t.nsec != 0 {
+		buf := make([]byte, 10)
+		w := len(buf)
+		v := u64(t.nsec)
+		fmtFrac(mut buf, mut w, mut v, 9)
+		s += string(buf[w:])
+	}
+
+	return s + " +0000 UTC"
+}
+
+// Add returns the time d after t, or before it for a negative d. A
+// monotonic reading moves with it, and is dropped when it would not
+// fit.
+func (t Time) Add(d Duration) Time {
+	sec := t.sec + i64(d/Second)
+	nsec := t.nsec + i64(d%Second)
+	if nsec >= 1000000000 {
+		sec++
+		nsec -= 1000000000
+	} else if nsec < 0 {
+		sec--
+		nsec += 1000000000
+	}
+
+	mono := t.mono
+	if mono != 0 {
+		mono += i64(d)
+		if d < 0 && mono > t.mono || d > 0 && mono < t.mono || mono == 0 {
+			mono = 0
+		}
+	}
+
+	return Time{sec: sec, nsec: nsec, mono: mono}
+}
+
+// Sub returns the Duration from u to t, negative when t is before u.
+// When both hold a monotonic reading the readings are subtracted, so
+// the clock being set between them changes nothing. A span longer than
+// a Duration holds gives the longest Duration of its sign.
+func (t Time) Sub(u Time) Duration {
+	if t.mono != 0 && u.mono != 0 {
+		d := Duration(t.mono - u.mono)
+		if d < 0 && t.mono > u.mono {
+			return maxDuration
+		}
+
+		if d > 0 && t.mono < u.mono {
+			return minDuration
+		}
+
+		return d
+	}
+
+	d := Duration(t.sec-u.sec)*Second + Duration(t.nsec-u.nsec)
+	if u.wall().Add(d) == t.wall() {
+		return d
+	}
+
+	if t.wall().Before(u.wall()) {
+		return minDuration
+	}
+
+	return maxDuration
+}
+
+// Cmp orders two Times by the instant: by their monotonic readings when
+// both hold one, by the wall clock otherwise.
+func (t ref Time) Cmp(u ref Time) Ordering {
+	if t.mono != 0 && u.mono != 0 {
+		return t.mono.Cmp(u.mono)
+	}
+
+	if t.sec != u.sec {
+		return t.sec.Cmp(u.sec)
+	}
+
+	return t.nsec.Cmp(u.nsec)
+}
+
+// Eq reports whether two Times are the same instant, as Cmp orders
+// them; it is what == on Times means.
+// IsZero reports whether t is the zero Time, var t time.Time, as Go's
+// IsZero does; Snello's zero Time is the start of 1970 in UTC, where Go's
+// is the first instant of year 1. A deadline of the zero Time is none.
+func (t Time) IsZero() bool {
+	return t.sec == 0 && t.nsec == 0
+}
+
+func (t ref Time) Eq(u ref Time) bool {
+	return t.Cmp(u) == Equal
+}
+
+// Before reports whether t is earlier than u.
+func (t Time) Before(u Time) bool {
+	return t.Cmp(u) == Less
+}
+
+// After reports whether t is later than u.
+func (t Time) After(u Time) bool {
+	return t.Cmp(u) == Greater
+}
+
+// Unix returns the seconds since the start of 1970 in UTC, rounded
+// down, as Go's does: the second the instant is in.
+func (t Time) Unix() i64 {
+	return t.sec
+}
+
+// UnixNano returns the nanoseconds since the start of 1970 in UTC. A
+// Time more than about 292 years from 1970 has more than an i64 holds,
+// and the result is then not meaningful, as in Go.
+func (t Time) UnixNano() i64 {
+	return t.sec*1000000000 + t.nsec
+}
+
+// wall returns t without its monotonic reading, for arithmetic on the
+// wall clock alone.
+func (t Time) wall() Time {
+	return Time{sec: t.sec, nsec: t.nsec, mono: 0}
+}
+
+// Nanoseconds returns the duration as a count of nanoseconds.
+func (d Duration) Nanoseconds() i64 {
+	return i64(d)
+}
+
+// Microseconds returns the duration as a count of whole microseconds.
+func (d Duration) Microseconds() i64 {
+	return i64(d) / 1000
+}
+
+// Milliseconds returns the duration as a count of whole milliseconds.
+func (d Duration) Milliseconds() i64 {
+	return i64(d) / 1000000
+}
+
+// Seconds returns the duration in seconds, with the fraction.
+func (d Duration) Seconds() f64 {
+	return f64(d) / 1000000000.0
+}
+
+// Minutes returns the duration in minutes, with the fraction.
+func (d Duration) Minutes() f64 {
+	return f64(d) / 60000000000.0
+}
+
+// Hours returns the duration in hours, with the fraction.
+func (d Duration) Hours() f64 {
+	return f64(d) / 3600000000000.0
+}
+
+// String returns the duration as Go's String prints one, 72h3m0.5s:
+// hours, minutes and seconds, the leading units that are zero left
+// out, and the fraction of a second without its trailing zeros. A
+// duration under a second is given in the unit that makes its first
+// digit nonzero, 1.5ms, 2µs or 999ns, and the zero duration is 0s. It
+// is Go's algorithm, so the longest Duration prints as
+// 2562047h47m16.854775807s and the longest negative one as
+// -2562047h47m16.854775808s.
+func (d ref Duration) String() string {
+	buf := make([]byte, 32)
+	w := len(buf)
+	u := u64(*d)
+	neg := *d < 0
+	if neg {
+		u = 0 - u
+	}
+
+	if u < u64(Second) {
+		// Under a second: a smaller unit, so the first digit is not 0.
+		prec := 0
+		w--
+		buf[w] = 's'
+		w--
+		if u == 0 {
+			buf[w] = '0'
+			return string(buf[w:])
+		} else if u < u64(Microsecond) {
+			prec = 0
+			buf[w] = 'n'
+		} else if u < u64(Millisecond) {
+			prec = 3
+			w-- // the micro sign is two bytes, U+00B5
+			buf[w] = 0xC2
+			buf[w+1] = 0xB5
+		} else {
+			prec = 6
+			buf[w] = 'm'
+		}
+
+		fmtFrac(mut buf, mut w, mut u, prec)
+		fmtInt(mut buf, mut w, u)
+	} else {
+		w--
+		buf[w] = 's'
+		fmtFrac(mut buf, mut w, mut u, 9)
+
+		// u is now whole seconds.
+		fmtInt(mut buf, mut w, u%60)
+		u /= 60
+
+		// u is now whole minutes.
+		if u > 0 {
+			w--
+			buf[w] = 'm'
+			fmtInt(mut buf, mut w, u%60)
+			u /= 60
+
+			// u is now whole hours; days are not all the same length,
+			// so hours is the largest unit.
+			if u > 0 {
+				w--
+				buf[w] = 'h'
+				fmtInt(mut buf, mut w, u)
+			}
+		}
+	}
+
+	if neg {
+		w--
+		buf[w] = '-'
+	}
+
+	return string(buf[w:])
+}
+
+// Truncate returns d rounded toward zero to a multiple of m, or d
+// itself when m is zero or less.
+func (d Duration) Truncate(m Duration) Duration {
+	if m <= 0 {
+		return d
+	}
+
+	return d - d%m
+}
+
+// Round returns d rounded to the nearest multiple of m, a half rounded
+// away from zero, or d itself when m is zero or less. A result past
+// the longest Duration of its sign is that Duration.
+func (d Duration) Round(m Duration) Duration {
+	if m <= 0 {
+		return d
+	}
+
+	r := d % m
+	if d < 0 {
+		r = -r
+		if lessThanHalf(r, m) {
+			return d + r
+		}
+
+		d1 := d - m + r
+		if d1 < d {
+			return d1
+		}
+
+		return minDuration // overflow
+	}
+
+	if lessThanHalf(r, m) {
+		return d - r
+	}
+
+	d1 := d + m - r
+	if d1 > d {
+		return d1
+	}
+
+	return maxDuration // overflow
+}
+
+// Abs returns d without its sign. The most negative Duration has no
+// positive twin, so it gives the longest one, a nanosecond shorter.
+func (d Duration) Abs() Duration {
+	if d >= 0 {
+		return d
+	}
+
+	if d == minDuration {
+		return maxDuration
+	}
+
+	return -d
+}
+
+// date computes the civil date of t in UTC. The days are counted in a
+// calendar whose year starts on March 1, so that the leap day falls at
+// the end of a year, and from an epoch that starts a 400-year cycle of
+// 146097 days. The cycle the day is in gives the century; within the
+// cycle, the year and the day of the year come from fixed-point
+// multiplications in place of divisions, 2939745 / 2^32 being a year
+// in quarter-days (1 / 1461) and 2141 / 2^16 a month in days
+// (1 / 30.6), which the compiler's integer arithmetic makes exact over
+// the range; a day in January or February then belongs to the next
+// calendar year.
+func (t ref Time) date(year mut i64, month mut i64, day mut i64) {
+	days := (u64(t.sec) + unixToAbsolute) / secondsPerDay
+	d := 4*days + 3
+	century := d / 146097
+	cd := u64(u32(d%146097) | 3)
+	cyear := (2939745 * cd) >> 32
+	ayday := ((2939745 * cd) & 0xFFFFFFFF) / 2939745 / 4
+	md := 2141*ayday + 197913
+	amonth := md >> 16
+	janFeb := u64(0)
+	if ayday >= marchThruDecember {
+		janFeb = 1
+	}
+
+	*year = i64(century)*100 - absoluteYears + i64(cyear) + i64(janFeb)
+	*month = i64(amonth) - i64(janFeb)*12
+	*day = 1 + i64((md&0xFFFF)/2141)
+}
+
+// fmtFrac writes the fraction v/10**prec, .12345, into buf before w,
+// without its trailing zeros and without the point when the fraction
+// is zero, moves w to where it starts, and leaves v/10**prec in v.
+func fmtFrac(buf mut []byte, w mut int, v mut u64, prec int) {
+	print := false
+	for i := 0; i < prec; i++ {
+		digit := *v % 10
+		print = print || digit != 0
+		if print {
+			*w--
+			buf[*w] = byte(digit) + '0'
+		}
+
+		*v /= 10
+	}
+
+	if print {
+		*w--
+		buf[*w] = '.'
+	}
+}
+
+// fmtInt writes the digits of v into buf before w and moves w to where
+// they start.
+func fmtInt(buf mut []byte, w mut int, v u64) {
+	if v == 0 {
+		*w--
+		buf[*w] = '0'
+		return
+	}
+
+	for v > 0 {
+		*w--
+		buf[*w] = byte(v%10) + '0'
+		v /= 10
+	}
+}
+
+// lessThanHalf reports whether x+x < y without overflowing, for an x
+// and a y that are both positive.
+func lessThanHalf(x Duration, y Duration) bool {
+	return u64(x)+u64(x) < u64(y)
+}
+
+// clock reads the system's wall clock into sec and nsec and the
+// monotonic clock into mono. The runtime provides it.
+func clock(sec mut i64, nsec mut i64, mono mut i64)

@@ -1,0 +1,15 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a channel hands values to other tasks, and a borrow cannot leave
+// its task. Fix: send the string itself, or a clone.
+
+package p
+
+import "fmt"
+
+func main() {
+    ch := make(chan ref string, 1)        // ERROR "a channel cannot carry a borrow"
+    fmt.Println(cap(ch))
+}

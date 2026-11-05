@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A trait used as a type is an interface value: a pointer to a table
@@ -76,7 +76,7 @@ func (e *Emitter) entry(fn *types.Func, pos token.Pos) string {
 
 // tableType is the C name of a trait's table type.
 func tableType(t *types.Trait) string {
-	return "tk_" + lower.Ident(t.Obj().Name()) + "_tab"
+	return "sn_" + lower.Ident(t.Obj().Name()) + "_tab"
 }
 
 // fieldAccessor is the table entry reaching a trait field, apart from
@@ -89,7 +89,7 @@ func fieldAccessor(f *types.Var) string {
 // into a value of the trait type to: the function doing it is written
 // once per pair, with the table it points at.
 func (e *Emitter) box(v string, from *types.Named, to *types.Trait, pos token.Pos) string {
-	name := "tk_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
+	name := "sn_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		e.table(name, from, to, pos)
@@ -110,7 +110,7 @@ func (e *Emitter) table(name string, from *types.Named, to *types.Trait, pos tok
 		drop = e.dropper(from, pos) + "(p);"
 	}
 
-	put(&b, "static void ", name, "_drop(void *tk_p) {\n\t", typ, " *p = tk_p;\n\t", drop, "\n\ttk_free(p);\n}\n\n")
+	put(&b, "static void ", name, "_drop(void *sn_p) {\n\t", typ, " *p = sn_p;\n\t", drop, "\n\tsn_free(p);\n}\n\n")
 	entries = append(entries, name+"_drop")
 	for _, fn := range to.ValueMethods() {
 		adapter := name + "_" + lower.Ident(fn.Name())
@@ -121,12 +121,12 @@ func (e *Emitter) table(name string, from *types.Named, to *types.Trait, pos tok
 	for _, f := range to.ValueFields() {
 		accessor := name + "_" + fieldAccessor(f)
 		entries = append(entries, accessor)
-		put(&b, "static ", e.cType(f.Type(), pos), " *", accessor, "(void *tk_p) {\n\treturn &((", typ, " *)tk_p)->", lower.Ident(f.Name()), ";\n}\n\n")
+		put(&b, "static ", e.cType(f.Type(), pos), " *", accessor, "(void *sn_p) {\n\treturn &((", typ, " *)sn_p)->", lower.Ident(f.Name()), ";\n}\n\n")
 	}
 
 	put(&b, "static const ", tableType(to), " ", name, "_tab = {", strings.Join(entries, ", "), "};\n\n")
-	put(&b, "static TK_UNUSED ", box, " ", name, "(", typ, " v) {\n\t", typ, " *p = tk_alloc(sizeof(", typ, "));\n\t*p = v;\n\treturn (", box, "){&", name, "_tab, p};\n}\n\n")
-	put(&e.protos, "static TK_UNUSED ", box, " ", name, "(", typ, " v);\n")
+	put(&b, "static SN_UNUSED ", box, " ", name, "(", typ, " v) {\n\t", typ, " *p = sn_alloc(sizeof(", typ, "));\n\t*p = v;\n\treturn (", box, "){&", name, "_tab, p};\n}\n\n")
+	put(&e.protos, "static SN_UNUSED ", box, " ", name, "(", typ, " v);\n")
 	e.helpers.WriteString(b.String())
 }
 
@@ -148,7 +148,7 @@ func (e *Emitter) adapter(b *strings.Builder, name, typ string, from *types.Name
 			recv = "p"
 		}
 	default:
-		free = "\ttk_free(p);\n" // a value receiver takes the data; the trait value was consumed
+		free = "\tsn_free(p);\n" // a value receiver takes the data; the trait value was consumed
 	}
 
 	args := []string{recv}
@@ -160,7 +160,7 @@ func (e *Emitter) adapter(b *strings.Builder, name, typ string, from *types.Name
 	}
 
 	call := target + "(" + strings.Join(args, ", ") + ")"
-	put(b, "static ", e.resultType(sig, pos), " ", name, "(void *tk_p", params.String(), ") {\n\t", typ, " *p = tk_p;\n")
+	put(b, "static ", e.resultType(sig, pos), " ", name, "(void *sn_p", params.String(), ") {\n\t", typ, " *p = sn_p;\n")
 	switch {
 	case sig.Results() == types.Unit:
 		put(b, "\t", call, ";\n", free)
@@ -181,7 +181,7 @@ func (e *Emitter) adapter(b *strings.Builder, name, typ string, from *types.Name
 // not have is reported, with a nil signature.
 func (e *Emitter) methodNameOf(id *ast.Ident, t *types.Named, name string, pos token.Pos) (string, *types.Signature) {
 	fn := t.Method(name)
-	if fn == nil { // a library type's method, as Drop on os.File, until the library is written in Teak
+	if fn == nil { // a library type's method, as Drop on os.File, until the library is written in Snello
 		e.unsupported(pos, "the method "+name+" of a trait on "+t.String())
 		return "0", nil
 	}

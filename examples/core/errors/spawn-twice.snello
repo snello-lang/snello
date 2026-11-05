@@ -1,0 +1,15 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value moved into one task is gone; a second task cannot take
+// it too. Fix: clone it, send a piece to each task, or share it through
+// sync.Arc.
+
+package p
+
+func main() {
+    m := map[string]int{}
+    spawn func() { m["a"] = 1 }()
+    spawn func() { m["b"] = 2 }()         // ERROR "use of moved value m"
+}

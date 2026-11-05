@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,12 +7,12 @@ package types
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/scanner"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
-// A Package is a checked Teak package: its name, its import path,
+// A Package is a checked Snello package: its name, its import path,
 // empty for the program being compiled, and the scope holding its
 // top-level declarations.
 type Package struct {
@@ -105,10 +105,12 @@ type Checker struct {
 	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
 	dead       bool
 	regions    []region
-	noUse      bool // evaluating an assignment target, which is not a use
-	inner      bool // evaluating the base of a selector, which the selector checks as a whole
-	bindsOwned bool // a pattern bound a non-Copy value by value
-	copies     bool // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
+	noUse      bool                    // evaluating an assignment target, which is not a use
+	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
+	bindsOwned bool                    // a pattern bound a non-Copy value by value
+	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)
+	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
+	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
 
 	// The borrow pass (borrow.go): the borrows held by variables of the
 	// function being checked, the ones lent for the call or statement
@@ -142,7 +144,7 @@ type Checker struct {
 // positions are resolved through file. info, when not nil, receives
 // the objects of every identifier. The imports are answered by the
 // core library table alone; a program that imports a package written
-// in Teak is checked through a Config.
+// in Snello is checked through a Config.
 func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 	return (&Config{}).Check("", file, f, info)
 }

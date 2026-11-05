@@ -1,0 +1,293 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Traits as bounds, compiled one copy per type argument: a trait with
+// required methods and a default, a trait refining it, types
+// implementing them that inherit the default, override it, or take a
+// refining trait's version of it, a generic type implementing the trait
+// by calling the methods of its own bounded parameter, generic functions
+// bounded by the traits whose calls go to each type argument's own
+// method, and a Drop method checked against the standard trait.
+
+package main
+
+import "fmt"
+
+trait Shape {
+	func (s ref Self) Area() f64
+	func (s ref Self) Name() string
+	func (s ref Self) Describe() string {
+		name := s.Name()
+		return fmt.Sprint(name, " with area ", s.Area())
+	}
+}
+
+trait Solid: Shape {
+	func (s ref Self) Volume(h f64) f64
+}
+
+trait Named {
+	var name string
+	func (n ref Self) Name() string { return n.name.Clone() }
+}
+
+trait Loud: Shape {
+	func (s ref Self) Describe() string {
+		d := super.Describe()
+		return "[loud] " + d
+	}
+}
+
+struct Circle impl Shape, Named {
+	r f64
+}
+
+func (c ref Circle) Area() f64 { return 3.0 * c.r * c.r }
+
+struct Rect impl Solid, Named {
+	w, h f64
+}
+
+func (r ref Rect) Area() f64           { return r.w * r.h }
+func (r ref Rect) Volume(h f64) f64 { return r.Area() * h }
+func (r ref Rect) Describe() string {
+	d := super.Describe()
+	return "a rectangle, " + d
+}
+
+struct Square impl Shape, Loud {
+	s f64
+}
+
+func (q ref Square) Area() f64    { return q.s * q.s }
+func (q ref Square) Name() string { return "square" }
+
+// A mut receiver calling a ref default through super: the receiver is
+// converted as for any call.
+func (q mut Square) Grow() string {
+	q.s += 1
+	d := super.Describe()
+	return d
+}
+
+// super reaches the next definition in the implementing type's order,
+// which may belong to a trait the current one does not refine: Gift
+// lists Fancy and Noted, both refining Plain, so Noted's super.Tag is
+// Fancy's Tag, and Fancy's super is Plain's.
+trait Plain {
+	func (p ref Self) Tag() string { return "plain" }
+}
+
+trait Fancy: Plain {
+	func (p ref Self) Tag() string {
+		d := super.Tag()
+		return "fancy " + d
+	}
+}
+
+trait Noted: Plain {
+	func (p ref Self) Note() string {
+		d := super.Tag()
+		return "note: " + d
+	}
+}
+
+struct Gift impl Fancy, Noted {
+	n int
+}
+
+struct Scaled<T: Shape> impl Shape {
+	inner T
+	k     f64
+}
+
+func (s ref Scaled<T>) Area() f64    { return s.inner.Area() * s.k * s.k }
+func (s ref Scaled<T>) Name() string { return "scaled " + s.inner.Name() }
+
+func TotalArea<T: Shape>(xs ref []T) f64 {
+	sum := 0.0
+	for _, x := range xs {
+		sum += x.Area()
+	}
+
+	return sum
+}
+
+func Show<T: Shape>(x ref T) string {
+	name := x.Name()
+	return fmt.Sprint(name, ": ", x.Describe())
+}
+
+func Column<T: Solid>(x ref T, h f64) string {
+	name := x.Name()
+	return fmt.Sprint(name, " column of volume ", x.Volume(h))
+}
+
+func Largest<T: Shape>(xs ref []T) string {
+	best := 0
+	for i, x := range xs {
+		if x.Area() > xs[best].Area() {
+			best = i
+		}
+	}
+
+	return xs[best].Name()
+}
+
+// A trait as a type: a slice of Shape values holding a Circle, a Rect
+// and a Square, each dispatching to its own methods; a generic function
+// bounded by Shape taking the slice itself; a trait value holding a
+// Drop type, dropped with it; a trait field written and read through
+// the value; a mut method and a consuming method through the value.
+func PrintAll(xs ref []Shape) {
+	for _, x := range xs {
+		fmt.Println(x.Describe())
+	}
+}
+
+trait Bumper {
+	func (b mut Self) Bump()
+	func (b Self) Final() int
+}
+
+struct Clicker impl Bumper, Drop {
+	n int
+}
+
+func (t mut Clicker) Bump()   { t.n += 1 }
+func (t Clicker) Final() int  { return t.n * 10 }
+func (t mut Clicker) Drop()   { fmt.Println("drop clicker", t.n) }
+
+func BumpTwice(b mut Bumper) {
+	b.Bump()
+	b.Bump()
+}
+
+struct Counter impl Drop {
+	name string
+}
+
+func (c mut Counter) Drop() { fmt.Println("drop", c.name) }
+
+trait Counted: Drop {
+	func (c mut Self) Drop() { fmt.Println("drop counted") }
+}
+
+struct Tally impl Counted {
+	n int
+}
+
+// A trait value returned from a function and used at once, called on
+// or lent to a ref parameter, is dropped when its statement ends; one
+// passed by value is dropped by the function; an inherited method and
+// a trait field are reached through a refining trait's value; a struct
+// holds a trait value whose methods take the struct itself.
+func MakeShape() Shape { return Circle{r: 2, name: "made"} }
+
+func AreaOf(s Shape) f64 { return s.Area() }
+
+trait Titled: Named {
+	func (t ref Self) Title() string { return "the " + t.Name() }
+}
+
+struct Dot impl Titled {}
+
+trait Placed {
+	func (p ref Self) Fits(s ref Scene) bool
+}
+
+struct Scene {
+	what Placed
+	room f64
+}
+
+struct Peg impl Placed {
+	w f64
+}
+
+func (p ref Peg) Fits(s ref Scene) bool { return p.w <= s.room }
+
+// A struct listing Eq compares through the Eq it wrote, or part by part
+// through the one derived from its fields; a map key listing Hash
+// hashes and compares through its own methods.
+struct Approx impl Eq {
+	x f64
+}
+
+func (a ref Approx) Eq(o ref Approx) bool { return a.x-o.x < 0.5 && o.x-a.x < 0.5 }
+
+struct Initial impl Hash {
+	s string
+}
+
+func (k ref Initial) Eq(o ref Initial) bool { return k.s[0] == o.s[0] }
+func (k ref Initial) Hash() u64            { return u64(k.s[0]) }
+
+struct Pt impl Copy, Eq, Hash {
+	x, y int
+}
+
+func main() {
+	circles := []Circle{{r: 1, name: "circle"}, {r: 2, name: "big circle"}}
+	rects := []Rect{{w: 2, h: 3, name: "rect"}, {w: 1, h: 1, name: "unit"}}
+	rects[1].name = "unit square"
+	fmt.Println(TotalArea(ref circles), TotalArea(ref rects))
+	fmt.Println(circles[0].Describe())
+	fmt.Println(rects[0].Describe())
+
+	big := Scaled<Circle>{inner: Circle{r: 1, name: "circle"}, k: 2}
+	fmt.Println(big.Describe())
+	twice := Scaled<Scaled<Circle>>{inner: big, k: 2}
+	fmt.Println(Show(ref twice))
+
+	sq := Square{s: 3}
+	fmt.Println(sq.Describe())
+	fmt.Println(Show(ref sq), Show(ref rects[1]))
+	fmt.Println(sq.Grow())
+	g := Gift{n: 1}
+	fmt.Println(g.Tag(), g.Note(), g.n)
+
+	fmt.Println(Column(ref rects[0], 10))
+	fmt.Println(Largest(ref circles), Largest(ref rects))
+
+	mixed := []Shape{Circle{r: 1, name: "circle"}, Rect{w: 2, h: 3, name: "rect"}, Square{s: 1}}
+	PrintAll(ref mixed)
+	fmt.Println(TotalArea(ref mixed), Largest(ref mixed))
+	var named Named = Circle{r: 1, name: "plain"}
+	named.name = "renamed"
+	fmt.Println(named.Name(), len(named.name))
+	var b Bumper = Clicker{n: 1}
+	BumpTwice(mut b)
+	fmt.Println(b.Final())
+	var kept Bumper = Clicker{n: 5}
+	moved := kept
+	fmt.Println(moved.Final())
+
+	fmt.Println(MakeShape().Describe(), Show(ref MakeShape()))
+	fmt.Println(AreaOf(Square{s: 2}))
+	var solid Solid = Rect{w: 1, h: 2, name: "brick"}
+	fmt.Println(solid.Describe(), solid.Volume(2))
+	var titled Titled = Dot{name: "dot"}
+	titled.name = "spot"
+	fmt.Println(titled.Title())
+	var scaled Shape = Scaled<Circle>{inner: Circle{r: 1, name: "circle"}, k: 3}
+	fmt.Println(scaled.Describe())
+	scene := Scene{what: Peg{w: 1}, room: 2}
+	fmt.Println(scene.what.Fits(ref scene))
+	bumpers := []Bumper{Clicker{n: 1}}
+	bumpers[0].Bump()
+
+	fmt.Println(Approx{x: 1} == Approx{x: 1.2}, Approx{x: 1} != Approx{x: 2})
+	initials := map[Initial]int{}
+	initials[Initial{s: "alpha"}] = 1
+	initials[Initial{s: "apple"}] += 1
+	fmt.Println(initials[Initial{s: "any"}], len(initials))
+	p, q := Pt{x: 1, y: 2}, Pt{x: 1, y: 2}
+	seen := map[Pt]int{p: 3}
+	fmt.Println(p == q, p.Eq(ref q), p != Pt{x: 2, y: 2}, seen[q])
+
+	c := Counter{name: "c"}
+	t := Tally{n: 2}
+	fmt.Println(c.name, t.n)
+}

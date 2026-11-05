@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,9 +7,9 @@ package c
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The functions the library declares without a body and the compiler
@@ -22,14 +22,14 @@ import (
 func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	switch key {
 	case "fmt.Println": // the line built whole and written at once, so two tasks' lines do not interleave
-		e.line("tk_print_owned(" + e.sprintln(x.Args) + ");")
+		e.line("sn_print_owned(" + e.sprintln(x.Args) + ");")
 		return ""
 	case "fmt.Sprint":
 		return e.sprint(x.Args)
 	case "fmt.Sprintf":
 		return e.sprintf(x.Args[0], x.Args[1:])
 	case "fmt.Printf":
-		e.line("tk_print_owned(" + e.sprintf(x.Args[0], x.Args[1:]) + ");")
+		e.line("sn_print_owned(" + e.sprintf(x.Args[0], x.Args[1:]) + ");")
 		return ""
 	case "fmt.Fprintln":
 		e.fprint(x, e.sprintln(x.Args[1:]))
@@ -38,7 +38,7 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		e.fprint(x, e.sprintf(x.Args[1], x.Args[2:]))
 		return ""
 	case "os.Exit":
-		return "tk_exit((int)(" + e.expr(x.Args[0]) + "))"
+		return "sn_exit((int)(" + e.expr(x.Args[0]) + "))"
 	case "rc.alias", "sync.alias", "sync.inside": // a second copy of the pointer a borrow lends, owned by the caller, or the cell it points at as a mut: a ref borrow of a pointer is the pointer in C, and so is a mut of what it points at
 		t := e.typeOf(x.Args[0])
 		if r, ok := t.(*types.Ref); ok {
@@ -60,7 +60,7 @@ func (e *Emitter) toString(a ast.Expr) string {
 	return e.text(e.expr(a), a).s
 }
 
-// text writes the conversion of v, the C text of a, to a tk_string.
+// text writes the conversion of v, the C text of a, to a sn_string.
 func (e *Emitter) text(v string, a ast.Expr) text {
 	return e.textOf(v, e.typeOf(a), a.Pos(), false)
 }
@@ -117,10 +117,10 @@ func (e *Emitter) fprint(x *ast.CallExpr, s string) {
 
 	recv := e.expr(w)
 	tmp := e.temp()
-	e.line("tk_string " + tmp + " = " + s + ";")
+	e.line("sn_string " + tmp + " = " + s + ";")
 	bytes := "(" + e.cType(types.NewSlice(types.Typ[types.Uint8]), x.Pos()) + "){(uint8_t *)" + tmp + ".ptr, " + tmp + ".len, 0}"
 	e.discard(name+"("+recv+", "+bytes+")", sig.Results(), x.Pos())
-	e.line("tk_string_drop(&" + tmp + ");")
+	e.line("sn_string_drop(&" + tmp + ");")
 }
 
 // built writes a text as a string the caller owns: a clone when it
@@ -130,7 +130,7 @@ func built(t text) string {
 	case t.s == "":
 		return literal("")
 	case !t.owned:
-		return "tk_string_clone(" + t.s + ")"
+		return "sn_string_clone(" + t.s + ")"
 	}
 
 	return t.s
@@ -158,7 +158,7 @@ func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) string {
 		part := e.verb(p, args[0], parts[0])
 		args, parts = args[1:], parts[1:]
 		if p.Width >= 0 {
-			part = text{"tk_pad(" + part.s + ", " + strconv.Itoa(p.Width) + ", " + strconv.FormatBool(p.Minus) + ", " + strconv.FormatBool(part.owned) + ")", true}
+			part = text{"sn_pad(" + part.s + ", " + strconv.Itoa(p.Width) + ", " + strconv.FormatBool(p.Minus) + ", " + strconv.FormatBool(part.owned) + ")", true}
 		}
 
 		out = append(out, piece{text: part})
@@ -183,7 +183,7 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 			return s
 		}
 
-		return text{"tk_truncate(" + s.s + ", " + prec + ", " + strconv.FormatBool(s.owned) + ")", s.owned}
+		return text{"sn_truncate(" + s.s + ", " + prec + ", " + strconv.FormatBool(s.owned) + ")", s.owned}
 	}
 
 	switch {
@@ -193,26 +193,26 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 			digits = 6 // as Go prints %f
 		}
 
-		return text{"tk_f64_fixed(" + deref(v, t) + ", " + strconv.Itoa(digits) + ")", true}
+		return text{"sn_f64_fixed(" + deref(v, t) + ", " + strconv.Itoa(digits) + ")", true}
 	case p.Verb == 'v' && p.Prec >= 0 && info&types.IsFloat != 0:
-		return text{"tk_f64_g(" + deref(v, t) + ", " + prec + ")", true}
+		return text{"sn_f64_g(" + deref(v, t) + ", " + prec + ")", true}
 	case p.Verb == 'q' && info&types.IsInteger != 0:
-		return text{"tk_quote_rune((int64_t)(" + deref(v, t) + "))", true}
+		return text{"sn_quote_rune((int64_t)(" + deref(v, t) + "))", true}
 	case p.Verb == 'q':
 		s := truncated(e.text(v, a))
 		if s.owned {
-			return text{"tk_quote_owned(" + s.s + ")", true}
+			return text{"sn_quote_owned(" + s.s + ")", true}
 		}
 
-		return text{"tk_quote(" + s.s + ")", true}
+		return text{"sn_quote(" + s.s + ")", true}
 	case p.Verb == 'd': // the number, never a String method's text, as Go's %d prints it
-		digits := "tk_int_to_string((int64_t)(" + deref(v, t) + "))"
+		digits := "sn_int_to_string((int64_t)(" + deref(v, t) + "))"
 		if info&types.IsUnsigned != 0 {
-			digits = "tk_uint_to_string((uint64_t)(" + deref(v, t) + "))"
+			digits = "sn_uint_to_string((uint64_t)(" + deref(v, t) + "))"
 		}
 
 		if p.Prec >= 0 {
-			digits = "tk_int_digits(" + digits + ", " + prec + ")"
+			digits = "sn_int_digits(" + digits + ", " + prec + ")"
 		}
 
 		return text{digits, true}

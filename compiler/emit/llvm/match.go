@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,9 +7,9 @@ package llvm
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A match is what every arm of one match shares: the address and type
@@ -303,7 +303,7 @@ func (e *Emitter) tupleElem(p string, t types.Type, i int) (string, types.Type) 
 func (e *Emitter) literalTest(p string, t types.Type, lit *ast.BasicLit) value {
 	v := e.load(e.irType(t, lit.Pos()), p)
 	if lit.Kind == token.STRING {
-		return e.rt("tk_string_eq", "i1", v, e.literalOf(lit, t))
+		return e.rt("sn_string_eq", "i1", v, e.literalOf(lit, t))
 	}
 
 	if isFloat(t) {

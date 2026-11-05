@@ -1,22 +1,22 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package c
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
-// Teak has expressions C has not: match, ?, ??, if with a value, and
+// Snello has expressions C has not: match, ?, ??, if with a value, and
 // &x, which allocates. Each is written as statements that leave the
 // value in a temporary, before the statement that uses it. Writing
 // them early must not reorder evaluation, so an operand to the left of
 // one is saved in a temporary of its own first. The same holds for
-// calls: Teak evaluates operands left to right, as Go does, and C
+// calls: Snello evaluates operands left to right, as Go does, and C
 // leaves the order of arguments and initializers open.
 
 // needsHoist reports whether writing x produces statements.
@@ -245,8 +245,12 @@ func (e *Emitter) changed(x ast.Expr) (string, types.Type) {
 	return e.scrutinee(x)
 }
 
-// isPlace reports whether x denotes a variable or a field of one,
-// which can be read in place and bound to without a copy.
+// isPlace reports whether x denotes a variable or a part of a value,
+// which can be read in place and bound to without a copy. A field, an
+// element or what a pointer points at is a place wherever the value
+// is: in a variable, behind a borrow, or in the temporary scrutinee
+// holds for a value built here, which the statement drops whole, so
+// that its part is never copied out and dropped twice.
 func (e *Emitter) isPlace(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.Ident:
@@ -260,28 +264,14 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 			return true // a variable of the library, such as os.Args
 		}
 
-		return ok && v.IsField() && e.viaBorrow(x.X)
+		return ok && v.IsField()
 	case *ast.IndexExpr:
-		return e.viaBorrow(x.X) && !e.hasEffects(x.Index)
+		return !e.hasEffects(x.Index)
 	case *ast.UnaryExpr:
-		return x.Op == token.MUL && e.viaBorrow(x.X)
+		return x.Op == token.MUL
 	}
 
 	return false
-}
-
-// viaBorrow reports whether a field, an element or the value of x is a
-// place: x is one itself, or x is a borrow, whose value lives elsewhere
-// however x was built, as the one Expect gives on an Option of a mut
-// borrow. A field read through it is the borrowed value's, not a copy
-// to drop here.
-func (e *Emitter) viaBorrow(x ast.Expr) bool {
-	if e.isPlace(x) {
-		return true
-	}
-
-	_, ok := e.typeOf(x).(*types.Ref)
-	return ok
 }
 
 // try writes x?: the value inside, after a return of the absent or

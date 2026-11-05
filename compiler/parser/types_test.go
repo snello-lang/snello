@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // TestTypes parses each type and prints it back in canonical form. For
@@ -99,7 +99,7 @@ func TestTypeErrors(t *testing.T) {
 // messages, so types can be tested before declarations exist.
 func parseTypeString(src string) (ast.Type, []string) {
 	var p Parser
-	p.init("test.teak", []byte(src))
+	p.init("test.snello", []byte(src))
 	typ := p.parseType()
 	if p.tok != token.EOF && p.tok != token.SEMICOLON {
 		p.errorExpected(p.pos, "end of type")

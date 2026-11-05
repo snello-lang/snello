@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A trait used as a type is an interface value: a pointer to a table
@@ -32,7 +32,7 @@ import (
 // into a value of the trait type to, with the table written once per
 // pair.
 func (e *Emitter) box(v value, from *types.Named, to *types.Trait, pos token.Pos) value {
-	name := "tk_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
+	name := "sn_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
 	if !e.state[name] {
 		e.state[name] = true
 		e.table(name, from, to, pos)
@@ -40,7 +40,7 @@ func (e *Emitter) box(v value, from *types.Named, to *types.Trait, pos token.Pos
 
 	p := e.alloc(from, pos)
 	e.store(v, p)
-	out := e.insert(value{"%tk_trait", "zeroinitializer"}, value{"ptr", "@" + name + "_tab"}, 0)
+	out := e.insert(value{"%sn_trait", "zeroinitializer"}, value{"ptr", "@" + name + "_tab"}, 0)
 	return e.insert(out, value{"ptr", p}, 1)
 }
 
@@ -50,8 +50,8 @@ func (e *Emitter) table(name string, from *types.Named, to *types.Trait, pos tok
 	entries := []string{"ptr @" + name + "_drop"}
 	e.helper(name+"_drop", "void", []string{"ptr %p"}, func() {
 		e.dropIfNeeded("%p", from, pos)
-		e.declare("tk_free", "declare void @tk_free(ptr)")
-		e.inst("call void @tk_free(ptr %p)")
+		e.declare("sn_free", "declare void @sn_free(ptr)")
+		e.inst("call void @sn_free(ptr %p)")
 		e.inst("ret void")
 		e.fn.terminated = true
 	})
@@ -104,8 +104,8 @@ func (e *Emitter) adapter(name string, from *types.Named, fn *types.Func, pos to
 
 		r := e.callValues(target, tsig, wants, args, pos)
 		if free {
-			e.declare("tk_free", "declare void @tk_free(ptr)")
-			e.inst("call void @tk_free(ptr %p)")
+			e.declare("sn_free", "declare void @sn_free(ptr)")
+			e.inst("call void @sn_free(ptr %p)")
 		}
 
 		if sig.Results() == types.Unit {
@@ -159,8 +159,8 @@ func (e *Emitter) entry(tr *types.Trait, name string) int {
 // the address p: a place in the box reached through the table's
 // accessor, which can be read, written and emptied as any field.
 func (e *Emitter) traitField(p string, tr *types.Trait, f *types.Var) string {
-	tab := e.load("ptr", e.gep("%tk_trait", p, 0))
-	data := e.load("ptr", e.gep("%tk_trait", p, 1))
+	tab := e.load("ptr", e.gep("%sn_trait", p, 0))
+	data := e.load("ptr", e.gep("%sn_trait", p, 1))
 	index := 1 + len(tr.ValueMethods())
 	for i, field := range tr.ValueFields() {
 		if field.Name() == f.Name() {

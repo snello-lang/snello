@@ -1,12 +1,12 @@
 # Stage 1: core checker and C backend
 
-Goal: `teak build FILE` type-checks a program written in the core of Teak, enforces ownership and borrowing, emits C, and produces a native binary. No traits, no user generics. This stage decides whether the memory model holds.
+Goal: `snello build FILE` type-checks a program written in the core of Snello, enforces ownership and borrowing, emits C, and produces a native binary. No traits, no user generics. This stage decides whether the memory model holds.
 
-The predeclared names, number types and the library packages are defined in `../design/05-standard-library.md`; the checker's universe scope is built from its section 1. Core Teak for this stage: structs, enums and `match`, functions and methods with `ref`/`mut`/value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??` as built-ins, slices, maps, strings, `Copy` for numbers and plain structs, `Drop`, `defer`.
+The predeclared names, number types and the library packages are defined in `../design/05-standard-library.md`; the checker's universe scope is built from its section 1. Core Snello for this stage: structs, enums and `match`, functions and methods with `ref`/`mut`/value receivers, `*T` and `&expr`, `T?` and `Result` with `?` and `??` as built-ins, slices, maps, strings, `Copy` for numbers and plain structs, `Drop`, `defer`.
 
 ## Task 1.0: Standard library design
 
-**Description:** A design document, `../design/05-standard-library.md`, that says what the library is, before any checker code depends on the answer. It settles four questions, each with its precedent: which names are predeclared by the language and which come from packages; that there is no prelude, so `Arena`, `Arc` and the rest are imported; that package names and layout follow Go while signatures follow Teak's ownership rules, with a new name wherever ownership changes a function's meaning; and the three signature rules (read-only parameters are `ref`, changed ones `mut`, kept ones by value). It also decides the one language rule the library forces: whether an owned value passed to a `ref` parameter is borrowed implicitly, as a receiver already is. It lists the stage 1 mapping table. It does not list every function; the examples do that, and task 2.6 keeps its criterion.
+**Description:** A design document, `../design/05-standard-library.md`, that says what the library is, before any checker code depends on the answer. It settles four questions, each with its precedent: which names are predeclared by the language and which come from packages; that there is no prelude, so `Arena`, `Arc` and the rest are imported; that package names and layout follow Go while signatures follow Snello's ownership rules, with a new name wherever ownership changes a function's meaning; and the three signature rules (read-only parameters are `ref`, changed ones `mut`, kept ones by value). It also decides the one language rule the library forces: whether an owned value passed to a `ref` parameter is borrowed implicitly, as a receiver already is. It lists the stage 1 mapping table. It does not list every function; the examples do that, and task 2.6 keeps its criterion.
 
 **Acceptance criteria:**
 - [x] The document exists with the four decisions and the call-site rule, each marked decided (2026-10-18; the three items without precedent were decided on the recommendation and await the owner's review)
@@ -14,7 +14,7 @@ The predeclared names, number types and the library packages are defined in `../
 - [x] Every name the twenty examples use without an import is either predeclared or the example gains the import (examples 01, 03, 12, 15)
 
 **Verification:**
-- [x] `teak parse` still accepts all twenty examples after the import sweep
+- [x] `snello parse` still accepts all twenty examples after the import sweep
 - [x] Design review by the human (2026-10-18: the owner accepted the library decisions with the stage review)
 
 **Dependencies:** Stage 0 checkpoint
@@ -25,7 +25,7 @@ The predeclared names, number types and the library packages are defined in `../
 
 ## Task 1.1: Core example set and negative tests
 
-**Description:** Write the stage's acceptance suite before the checker: versions of the examples that use only core Teak, and a set of programs the checker must reject, each with the expected message on the offending line in a `// ERROR "..."` comment, as the Go compiler's errorcheck tests do.
+**Description:** Write the stage's acceptance suite before the checker: versions of the examples that use only core Snello, and a set of programs the checker must reject, each with the expected message on the offending line in a `// ERROR "..."` comment, as the Go compiler's errorcheck tests do.
 
 **Acceptance criteria:**
 - [x] At least eight positive programs under `examples/core/`, covering the tree, the linked list, the state machine, file copying, the parser and the binary search tree without generics (2026-10-18: tree, list, state, files, calc, bst, wordfreq, config)
@@ -33,13 +33,13 @@ The predeclared names, number types and the library packages are defined in `../
 - [x] Each negative program has exactly one `// ERROR` line
 
 **Verification:**
-- [x] All positive programs parse: `go run ./cmd/teak parse` (2026-10-18; the parser's example test now covers them)
+- [x] All positive programs parse: `go run ./cmd/snello parse` (2026-10-18; the parser's example test now covers them)
 - [x] Reviewed against `../design/04-borrows-ref-and-mut.md`: every rule has at least one negative program (the table in `examples/core/errors/README.md`)
 
 **Done:** 2026-10-18; book chapters 5 and 6 written with it
 
 **Dependencies:** 1.0
-**Files:** `examples/core/*.teak`, `examples/core/errors/*.teak`
+**Files:** `examples/core/*.snello`, `examples/core/errors/*.snello`
 **Scope:** L, split across two sessions if needed
 
 ## Task 1.2: Type representation
@@ -70,12 +70,12 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/types/`
-- [x] Manual check: `teak check examples/core/tree.teak` reports nothing
+- [x] Manual check: `snello check examples/core/tree.snello` reports nothing
 
 **Dependencies:** 1.2
-**Files:** `compiler/types/check.go`, `compiler/types/resolve.go`, `compiler/types/typexpr.go`, `compiler/types/check_test.go`, `cmd/teak/main.go`
+**Files:** `compiler/types/check.go`, `compiler/types/resolve.go`, `compiler/types/typexpr.go`, `compiler/types/check_test.go`, `cmd/snello/main.go`
 
-**Done:** 2026-10-18. Type expressions are resolved here as well, so every declared object has its type before task 1.4; `nil-used.teak` is the first negative program the checker passes, and the test harness for the rest (`TestNegativePrograms`) is in place, insisting that unhandled programs produce no error.
+**Done:** 2026-10-18. Type expressions are resolved here as well, so every declared object has its type before task 1.4; `nil-used.snello` is the first negative program the checker passes, and the test harness for the rest (`TestNegativePrograms`) is in place, insisting that unhandled programs produce no error.
 **Scope:** M
 
 ## Task 1.4: Expression and statement checking
@@ -96,21 +96,21 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Done:** 2026-10-18, in one slice. Expressions carry a mode (value, owned place, borrowed place) beside their type for the ownership passes; literals and None take their type from context; operators read through borrows; the stage 1 library (`fmt`, `os`, `io`, and the predeclared methods) lives in `library.go`; exhaustiveness is the usefulness check from Maranget's "Warnings for pattern matching". Negative programs handled: nil-used, missing-arm, wrong-question-kind, ref-as-mut. Book chapter 8 written with it.
 
-## Task 1.5: C emitter and `teak build`
+## Task 1.5: C emitter and `snello build`
 
 **Description:** Emit C source for a checked core program and build it with the system C compiler into a native binary. Enums become tagged unions, `match` an if chain, `T?` a struct with a flag, closures a function with an environment, and the runtime under `compiler/emit/c/runtime/` provides strings, slices, maps, printing and panics. (Changed 2026-10-18 from a Go emitter; see the design document.) The work goes in slices, each adding programs to `examples/run/` and giving a core program its `.out` file when it starts to build.
 
 **Slices:**
-- [x] Functions, numbers, strings and control flow; `teak build FILE` (2026-10-18)
-- [x] Structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings; `teak emit FILE` (2026-10-18; `calc.teak` builds. Two checker clarifications came with it: `*v += 1` for a bare `mut` borrow of a number, and an owned pointer lent as a `ref` of what it holds)
-- [x] Slices, string methods, option and result methods, `take`, equality of composite values (2026-10-18; `list.teak` and `bst.teak` build. Printing quotes a string inside `Some`, `Ok`, `Err` and a variant and prints an empty struct as its name, until the library in Teak decides in task 2.6)
-- [x] Maps (2026-10-18; an insertion-ordered hash map in the runtime with a generated hash and equality per key type; `config.teak` still waits for `os.ReadToString` in the last slice)
-- [x] Closures, `defer`, and the `os` and `io` functions (2026-10-18; `config.teak`, `tree.teak` and `wordfreq.teak` build. A closure is lifted to a function with an environment of pointers to what it captures; `defer` saves its arguments at the statement and runs before every return; `error` is its message; a program's input files sit beside it in `name.files/`)
+- [x] Functions, numbers, strings and control flow; `snello build FILE` (2026-10-18)
+- [x] Structs, enums, methods, `match`, options, results, tuples, owned pointers, `?`, `??`, if expressions and if bindings; `snello emit FILE` (2026-10-18; `calc.snello` builds. Two checker clarifications came with it: `*v += 1` for a bare `mut` borrow of a number, and an owned pointer lent as a `ref` of what it holds)
+- [x] Slices, string methods, option and result methods, `take`, equality of composite values (2026-10-18; `list.snello` and `bst.snello` build. Printing quotes a string inside `Some`, `Ok`, `Err` and a variant and prints an empty struct as its name, until the library in Snello decides in task 2.6)
+- [x] Maps (2026-10-18; an insertion-ordered hash map in the runtime with a generated hash and equality per key type; `config.snello` still waits for `os.ReadToString` in the last slice)
+- [x] Closures, `defer`, and the `os` and `io` functions (2026-10-18; `config.snello`, `tree.snello` and `wordfreq.snello` build. A closure is lifted to a function with an environment of pointers to what it captures; `defer` saves its arguments at the statement and runs before every return; `error` is its message; a program's input files sit beside it in `name.files/`)
 
-**Done:** 2026-10-18, in five slices. All of core Teak but `Drop` compiles; `examples/run/` holds twelve programs that build and run, and five of the eight core programs have their `.out` file. `state.teak` and `files.teak` print or clean up from `Drop` and wait for task 1.9, which also decides what a clone of a slice of strings owns and frees what `&` allocated. The library the core programs import is not a library yet but a table in the emitter (`compiler/emit/c/library.go`), the stage 1 mapping table of the design document: `fmt.Println`, `Sprint`, `Sprintf` and `Printf`, `os.ReadToString`, `Open`, `Create`, `MkdirTemp`, `RemoveAll` and `Exit`, `io.Copy`, and `Close`, `Sync` and `WriteString` on a file, each lowered onto a C runtime function; the predeclared methods on strings, slices, maps, options and results are lowered the same way (`compiler/emit/c/methods.go`) with their signatures in the checker (`compiler/types/library.go`). The library written in Teak, `std/`, is task 2.6, since nearly all of it needs the traits and generics of stage 2.
+**Done:** 2026-10-18, in five slices. All of core Snello but `Drop` compiles; `examples/run/` holds twelve programs that build and run, and five of the eight core programs have their `.out` file. `state.snello` and `files.snello` print or clean up from `Drop` and wait for task 1.9, which also decides what a clone of a slice of strings owns and frees what `&` allocated. The library the core programs import is not a library yet but a table in the emitter (`compiler/emit/c/library.go`), the stage 1 mapping table of the design document: `fmt.Println`, `Sprint`, `Sprintf` and `Printf`, `os.ReadToString`, `Open`, `Create`, `MkdirTemp`, `RemoveAll` and `Exit`, `io.Copy`, and `Close`, `Sync` and `WriteString` on a file, each lowered onto a C runtime function; the predeclared methods on strings, slices, maps, options and results are lowered the same way (`compiler/emit/c/methods.go`) with their signatures in the checker (`compiler/types/library.go`). The library written in Snello, `std/`, is task 2.6, since nearly all of it needs the traits and generics of stage 2.
 
 **Acceptance criteria:**
-- [x] `teak build hello.teak` produces a native binary that prints hello (2026-10-18)
+- [x] `snello build hello.snello` produces a native binary that prints hello (2026-10-18)
 - [x] Every positive core program builds and runs with its expected output (calc, list, bst, config, tree and wordfreq 2026-10-18; state and files 2026-10-18, with the drops of task 1.9)
 - [x] The emitted C compiles with `cc -std=c11 -Wall -Wextra -Werror` (2026-10-18; every build and every test uses these flags, plus `-fwrapv` and `-fno-strict-aliasing`)
 
@@ -120,7 +120,7 @@ The predeclared names, number types and the library packages are defined in `../
 - [x] Every program under `examples/run/` prints its `.out` file; each slice adds the programs it makes buildable (2026-10-18)
 
 **Dependencies:** 1.4
-**Files:** `compiler/emit/c/`, `compiler/emit/c/runtime/`, `cmd/teak/main.go`
+**Files:** `compiler/emit/c/`, `compiler/emit/c/runtime/`, `cmd/snello/main.go`
 **Scope:** L
 
 ## Task 1.6: Moves
@@ -187,18 +187,18 @@ The predeclared names, number types and the library packages are defined in `../
 
 **Acceptance criteria:**
 - [x] A `Drop` type's method runs at scope exit, on early return, and on panic, in the emitted C (scope exit and early return 2026-10-18; panic 2026-10-18)
-- [x] `teak build -debug` panics with a message if a released value is touched (2026-10-18)
+- [x] `snello build -debug` panics with a message if a released value is touched (2026-10-18)
 - [x] The file-copy core example closes both files on every path (2026-10-18)
 
 **Verification:**
 - [x] Tests pass: `go test ./compiler/emit/c/` (2026-10-18: every example program runs as a release and as a debug build, `TestDebugChecks` trips each check from C, and `TestPanicDrops` sees a panic run the drops)
 - [x] Manual check: a program that releases then uses a value panics under `-debug` (2026-10-18: a closure capturing a local, stored by a callee through a function-typed parameter and called after the local's scope, prints garbage in a release build and panics `a released string was used` in a debug build)
 
-**Done:** 2026-10-18, in three slices. The last one, `Drop` on a panic: the emitted code registers every owned value whose drop runs a `Drop` method, its own or a part's, with the runtime where the value is declared (`tk_guard`, by address, with the type's drop function) and removes it where the value is dropped (`tk_unguard`, searched from the top, since a statement's temporary may be dropped after a variable the statement declared); `tk_panic` prints its message, runs the registered drops innermost first, and exits, and a `Drop` that panics while they run ends the program with its own message. A moved-from place is empty, so its registered drop does nothing, and the guard stack grows with the system allocator so the debug build does not count it. The emitter's walk for "does dropping this type run a `Drop`" is kept per declared type, since a type may point to itself. Deferred calls do not run on a panic: `defer` is for cleanup not tied to a value, and running it would need each deferred call lifted to a closure; a decision for the checkpoint. Allocations rose to about 7,400 over the run programs.
+**Done:** 2026-10-18, in three slices. The last one, `Drop` on a panic: the emitted code registers every owned value whose drop runs a `Drop` method, its own or a part's, with the runtime where the value is declared (`sn_guard`, by address, with the type's drop function) and removes it where the value is dropped (`sn_unguard`, searched from the top, since a statement's temporary may be dropped after a variable the statement declared); `sn_panic` prints its message, runs the registered drops innermost first, and exits, and a `Drop` that panics while they run ends the program with its own message. A moved-from place is empty, so its registered drop does nothing, and the guard stack grows with the system allocator so the debug build does not count it. The emitter's walk for "does dropping this type run a `Drop`" is kept per declared type, since a type may point to itself. Deferred calls do not run on a panic: `defer` is for cleanup not tied to a value, and running it would need each deferred call lifted to a closure; a decision for the checkpoint. Allocations rose to about 7,400 over the run programs.
 
-**Progress:** first slice 2026-10-18, the drops themselves: `compiler/emit/c/drop.go` keeps a frame per scope with the owned variables declared in it and writes their drops, last first, at the closing brace, before a return, break or continue, and at the end of a match arm; every type that owns something gets a generated `tk_drop_T`, which calls a `Drop` method first and then releases the parts, and a type with `Drop` carries a live flag so the method runs once. The checker records every move in `Info.Moves`, and a move empties the place it leaves, so a conditionally moved value is dropped exactly once with no flags. A value no variable holds is a temporary of its statement, dropped when the statement ends; a consumed scrutinee has the parts an arm binds emptied and the rest dropped. Strings carry whether they own their bytes; maps drop their keys and values; `Clone` on a slice or map of owning elements copies element by element. Deferred calls run before the function's drops, since a deferred call may borrow a local (changed from the book's earlier order). Every runnable program passes under AddressSanitizer. Two branch moves the checker had missed came out of this: a `match` arm's or `if` expression's value is moved out of the expression.
+**Progress:** first slice 2026-10-18, the drops themselves: `compiler/emit/c/drop.go` keeps a frame per scope with the owned variables declared in it and writes their drops, last first, at the closing brace, before a return, break or continue, and at the end of a match arm; every type that owns something gets a generated `sn_drop_T`, which calls a `Drop` method first and then releases the parts, and a type with `Drop` carries a live flag so the method runs once. The checker records every move in `Info.Moves`, and a move empties the place it leaves, so a conditionally moved value is dropped exactly once with no flags. A value no variable holds is a temporary of its statement, dropped when the statement ends; a consumed scrutinee has the parts an arm binds emptied and the rest dropped. Strings carry whether they own their bytes; maps drop their keys and values; `Clone` on a slice or map of owning elements copies element by element. Deferred calls run before the function's drops, since a deferred call may borrow a local (changed from the book's earlier order). Every runnable program passes under AddressSanitizer. Two branch moves the checker had missed came out of this: a `match` arm's or `if` expression's value is moved out of the expression.
 
-Second slice 2026-10-18, the debug build: `compiler/emit/c/runtime/debug.c`, compiled into every program and active under `-DTK_DEBUG`, which `teak build -debug` passes. Its allocator gives every block a header with its size, a live mark and a place on the list of live blocks; a release checks the mark (a block released twice panics), fills the block with the poison byte 0xDD and holds it in a bounded quarantine before the system gets it back; `tk_finish`, which the emitted `main` returns through, reports the blocks still live, with their bytes, and exits 3. Every drop poisons the place it emptied, and every runtime operation that reads a string, slice, map or file checks for the poison, an owned string or a map also checking the mark of its block, which is what catches a borrow of a local that outlived it: the C compiler drops the poisoning of a variable whose scope just ended, never the heap's. An owned pointer is read through `TK_DEREF`, which in a debug build refuses a null (moved) or released pointer. In a release build every check is a no-op and the allocator is the system's. The suite runs every example program as both builds, and the debug run found three leaks the sanitizer had not: a value built in a statement and only looked at, by a comparison, a string method's receiver or a map lookup, was never dropped (held for the statement now), and a map write with a key already present lost the key (a generated slot function takes the key and drops a duplicate). The closure environment now lives in the frame of the function that wrote the closure, declared at its top: a capturing closure is a borrow, so it never outlives that frame, and nothing is allocated. The review's probes found a rule the checker lacked, which the drop of lent temporaries had turned from a leak into a dangling view: a borrow of a temporary, `t := s.Clone().Trim()`, may not be bound to a variable or returned (`cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`; recorded in the design document). Still to do: `Drop` during a panic, which needs a decision (see the checkpoint).
+Second slice 2026-10-18, the debug build: `compiler/emit/c/runtime/debug.c`, compiled into every program and active under `-DSN_DEBUG`, which `snello build -debug` passes. Its allocator gives every block a header with its size, a live mark and a place on the list of live blocks; a release checks the mark (a block released twice panics), fills the block with the poison byte 0xDD and holds it in a bounded quarantine before the system gets it back; `sn_finish`, which the emitted `main` returns through, reports the blocks still live, with their bytes, and exits 3. Every drop poisons the place it emptied, and every runtime operation that reads a string, slice, map or file checks for the poison, an owned string or a map also checking the mark of its block, which is what catches a borrow of a local that outlived it: the C compiler drops the poisoning of a variable whose scope just ended, never the heap's. An owned pointer is read through `SN_DEREF`, which in a debug build refuses a null (moved) or released pointer. In a release build every check is a no-op and the allocator is the system's. The suite runs every example program as both builds, and the debug run found three leaks the sanitizer had not: a value built in a statement and only looked at, by a comparison, a string method's receiver or a map lookup, was never dropped (held for the statement now), and a map write with a key already present lost the key (a generated slot function takes the key and drops a duplicate). The closure environment now lives in the frame of the function that wrote the closure, declared at its top: a capturing closure is a borrow, so it never outlives that frame, and nothing is allocated. The review's probes found a rule the checker lacked, which the drop of lent temporaries had turned from a leak into a dangling view: a borrow of a temporary, `t := s.Clone().Trim()`, may not be bound to a variable or returned (`cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`; recorded in the design document). Still to do: `Drop` during a panic, which needs a decision (see the checkpoint).
 
 **Dependencies:** 1.8
 **Files:** `compiler/emit/c/drop.go`, `compiler/emit/c/runtime/debug.c`

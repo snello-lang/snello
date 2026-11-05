@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/internal/backendtest"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/importer"
-	"github.com/teak-lang/teak/compiler/parser"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // TestRunExamples builds every program under examples/run and the
@@ -28,18 +28,18 @@ import (
 // debug build, which fails a program that touches a released value or
 // ends with a value never released. examples/run is the playground
 // for the backend: each slice adds the programs it makes buildable,
-// and a reader can run any of them with teak build. A core program
+// and a reader can run any of them with snello build. A core program
 // joins the test when its slice lands, by gaining its .out file.
 func TestRunExamples(t *testing.T) {
-	run, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.teak"))
+	run, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
 	if err != nil || len(run) == 0 {
 		t.Fatalf("no programs under examples/run: %v", err)
 	}
 
-	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.teak"))
+	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.snello"))
 	for _, path := range append(run, core...) {
-		name := strings.TrimSuffix(filepath.Base(path), ".teak")
-		want, err := os.ReadFile(strings.TrimSuffix(path, ".teak") + ".out")
+		name := strings.TrimSuffix(filepath.Base(path), ".snello")
+		want, err := os.ReadFile(strings.TrimSuffix(path, ".snello") + ".out")
 		if err != nil {
 			if filepath.Base(filepath.Dir(path)) == "run" {
 				t.Errorf("%s: every program under examples/run needs its expected output beside it", path)
@@ -61,7 +61,7 @@ func TestRunExamples(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				if got := buildAndRun(t, name, string(src), debug, strings.TrimSuffix(path, ".teak")+".files"); got != string(want) {
+				if got := buildAndRun(t, name, string(src), debug, strings.TrimSuffix(path, ".snello")+".files"); got != string(want) {
 					t.Errorf("%s printed:\n%s\nwant:\n%s", path, got, want)
 				}
 			})
@@ -92,7 +92,7 @@ func TestPrograms(t *testing.T) {
 // is an error that names it, never silent wrong code.
 func TestUnsupported(t *testing.T) {
 	for _, r := range backendtest.Refusals {
-		f, file, err := parser.ParseFile("t.teak", []byte("package main\n"+r.Src+"\n"))
+		f, file, err := parser.ParseFile("t.snello", []byte("package main\n"+r.Src+"\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func BenchmarkEmit(b *testing.B) {
 		libs []lower.Library
 	}
 
-	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.teak"))
+	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
 	var programs []checked
 	for _, path := range paths {
 		src, err := os.ReadFile(path)
@@ -163,25 +163,51 @@ func TestDebugChecks(t *testing.T) {
 		name, body, want string
 		code             int
 	}{
-		{"string", `tk_string s = tk_string_clone(TK_STR("hi", 2)); tk_string_drop(&s); tk_print_string(s);`, "panic: a released string was used", 2},
-		{"stale", `tk_string s = tk_string_clone(TK_STR("hi", 2)); tk_string copy = s; tk_string_drop(&s); tk_print_string(copy);`, "panic: a released string was used", 2},
-		{"hash", `tk_string s = tk_string_clone(TK_STR("hi", 2)); tk_string_drop(&s); tk_print_uint(tk_hash_string(s));`, "panic: a released string was used", 2},
-		{"stale-pointer", `int64_t *p = tk_alloc(8); int64_t *q = p; tk_release((void **)&p); tk_print_int(TK_DEREF(q));`, "panic: a released pointer was used", 2},
-		{"slice", `tk_slice xs; tk_slice_make(&xs, 2, 2, 8); tk_slice_free(&xs); tk_print_int(tk_index(0, xs.len));`, "panic: a released slice was used", 2},
-		{"pointer", `int64_t *p = tk_alloc(8); *p = 1; tk_release((void **)&p); tk_print_int(TK_DEREF(p));`, "panic: a released pointer was used", 2},
-		{"moved", `int64_t *p = NULL; tk_print_int(TK_DEREF(p));`, "panic: a moved pointer was used", 2},
-		{"twice", `void *p = tk_alloc(8); tk_free(p); tk_free(p);`, "panic: a block was released twice", 2},
-		{"leak", `void *p = tk_alloc(8); (void)p;`, "teak: 1 blocks (8 bytes) not released", 3},
+		{"string", `sn_string s = sn_string_clone(SN_STR("hi", 2)); sn_string_drop(&s); sn_print_string(s);`, "panic: a released string was used", 2},
+		{"stale", `sn_string s = sn_string_clone(SN_STR("hi", 2)); sn_string copy = s; sn_string_drop(&s); sn_print_string(copy);`, "panic: a released string was used", 2},
+		{"hash", `sn_string s = sn_string_clone(SN_STR("hi", 2)); sn_string_drop(&s); sn_print_uint(sn_hash_string(s));`, "panic: a released string was used", 2},
+		{"stale-pointer", `int64_t *p = sn_alloc(8); int64_t *q = p; sn_release((void **)&p); sn_print_int(SN_DEREF(q));`, "panic: a released pointer was used", 2},
+		{"slice", `sn_slice xs; sn_slice_make(&xs, 2, 2, 8); sn_slice_free(&xs); sn_print_int(sn_index(0, xs.len));`, "panic: a released slice was used", 2},
+		{"pointer", `int64_t *p = sn_alloc(8); *p = 1; sn_release((void **)&p); sn_print_int(SN_DEREF(p));`, "panic: a released pointer was used", 2},
+		{"moved", `int64_t *p = NULL; sn_print_int(SN_DEREF(p));`, "panic: a moved pointer was used", 2},
+		{"twice", `void *p = sn_alloc(8); sn_free(p); sn_free(p);`, "panic: a block was released twice", 2},
+		{"leak", `void *p = sn_alloc(8); (void)p;`, "snello: 1 blocks (8 bytes) not released", 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			csrc := "#include \"teak.h\"\nint main(int argc, char **argv) { tk_init(argc, argv); " + tt.body + " return tk_finish(); }\n"
+			csrc := "#include \"snello.h\"\nint main(int argc, char **argv) { sn_init(argc, argv); " + tt.body + " return sn_finish(); }\n"
 			_, stderr, code := execute(t, t.TempDir(), tt.name, []byte(csrc), true)
 			if !strings.Contains(stderr, tt.want) || code != tt.code {
 				t.Errorf("%s: exit %d with %q, want exit %d with %q", tt.name, code, stderr, tt.code, tt.want)
 			}
 		})
+	}
+}
+
+// TestDescriptorFlags checks the descriptors the runtime makes: each is
+// closed on exec, as Go makes every one, so that a program the process
+// starts inherits none, and a socket is non-blocking, as the poller
+// needs. A file created, a file opened, a listening socket, a dialed
+// connection and an accepted one print their number, then whether each
+// flag is set.
+func TestDescriptorFlags(t *testing.T) {
+	body := `int64_t fds[5] = {0}, port = 0, bad = 0; sn_string call;
+	bad += sn_os_create(SN_STR("flags.txt", 9), &fds[0]);
+	bad += sn_os_open(SN_STR("flags.txt", 9), &fds[1]);
+	bad += sn_net_listen(SN_STR("127.0.0.1", 9), 0, &fds[2], &port, &call);
+	bad += sn_net_dial(SN_STR("127.0.0.1", 9), port, 0, &fds[3], &call);
+	bad += sn_net_accept(fds[2], &fds[4]);
+	for (int i = 0; i < 5; i++) {
+		char line[32];
+		int n = snprintf(line, sizeof line, "%d %d %d\n", i, (fcntl((int)fds[i], F_GETFD) & FD_CLOEXEC) != 0, (fcntl((int)fds[i], F_GETFL) & O_NONBLOCK) != 0);
+		sn_print_string(SN_STR(line, n));
+	}
+	sn_print_int(bad);`
+	csrc := "#include \"snello.h\"\n#include <fcntl.h>\n#include <stdio.h>\nint main(int argc, char **argv) { sn_init(argc, argv); " + body + " return sn_finish(); }\n"
+	out, stderr, code := execute(t, t.TempDir(), "flags", []byte(csrc), false)
+	if want := "0 1 0\n1 1 0\n2 1 1\n3 1 1\n4 1 1\n0"; out != want || code != 0 {
+		t.Errorf("exit %d, printed %q%s, want %q", code, out, stderr, want)
 	}
 }
 
@@ -199,11 +225,11 @@ func buildAndRun(t *testing.T, name, src string, debug bool, fixtures ...string)
 	return out
 }
 
-// run builds src, a Teak program, and runs it, returning its standard
+// run builds src, a Snello program, and runs it, returning its standard
 // output, its standard error and its exit code.
 func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string, string, int) {
 	t.Helper()
-	f, file, err := parser.ParseFile(name+".teak", []byte(src))
+	f, file, err := parser.ParseFile(name+".snello", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}

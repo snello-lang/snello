@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/scanner"
 )
 
 func TestFile(t *testing.T) {
@@ -28,7 +28,7 @@ func TestFile(t *testing.T) {
 		{"package a; import \"x\"; import (\"y\"; \"z\")", "a", []string{`- "x"`, `- "y"`, `- "z"`}},
 	}
 	for _, tt := range tests {
-		f, _, err := ParseFile("test.teak", []byte(tt.src))
+		f, _, err := ParseFile("test.snello", []byte(tt.src))
 		if err != nil {
 			t.Errorf("%q: unexpected error: %v", tt.src, err)
 			continue
@@ -72,7 +72,7 @@ func TestErrors(t *testing.T) {
 		{"package a\nimport (\n\t\"x\"\n", "4:1: expected ')', found 'EOF'", 1},
 	}
 	for _, tt := range tests {
-		_, _, err := ParseFile("test.teak", []byte(tt.src))
+		_, _, err := ParseFile("test.snello", []byte(tt.src))
 		if err == nil {
 			t.Errorf("%q: expected an error", tt.src)
 			continue
@@ -91,7 +91,7 @@ func TestErrors(t *testing.T) {
 // TestPartialFile checks that a file with an error still comes back with
 // everything parsed before it, so tools can work on broken input.
 func TestPartialFile(t *testing.T) {
-	f, file, err := ParseFile("test.teak", []byte("package a\nimport \"x\"\n???\n"))
+	f, file, err := ParseFile("test.snello", []byte("package a\nimport \"x\"\n???\n"))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -152,7 +152,7 @@ func declName(d ast.Decl) string {
 // no other line may produce any. This is the form the Go compiler's
 // errorcheck tests use, and the form the checker's negative tests use.
 func TestErrorFiles(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.teak"))
+	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.snello"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no error files found: %v", err)
 	}
@@ -234,7 +234,7 @@ type exampleFile struct {
 	src  []byte
 }
 
-// exampleFiles reads every .teak file under examples/, as the scanner's
+// exampleFiles reads every .snello file under examples/, as the scanner's
 // benchmark does.
 func exampleFiles(tb testing.TB) []exampleFile {
 	tb.Helper()
@@ -244,7 +244,7 @@ func exampleFiles(tb testing.TB) []exampleFile {
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(path, ".teak") {
+		if !d.IsDir() && strings.HasSuffix(path, ".snello") {
 			src, err := os.ReadFile(path)
 			if err != nil {
 				return err

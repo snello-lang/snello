@@ -1,6 +1,6 @@
 # 9. Collections: slices, maps and strings
 
-Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.teak`, `maps.teak` and `closures.teak` exercise this chapter.
+Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.snello`, `maps.snello` and `closures.snello` exercise this chapter.
 
 A slice is an owned, growable list. A map is an owned table from keys to values. A string is an owned sequence of bytes holding UTF-8 text. All three own their memory, so the rules of chapter 5 apply to them: they move when assigned or passed by value, they are lent with `ref` and `mut`, and they are freed when their owner is dropped. None of them is ever `nil`; a slice or map declared without a value is empty and ready to use.
 
@@ -8,7 +8,7 @@ A slice is an owned, growable list. A map is an owned table from keys to values.
 
 A slice literal lists its elements, and `make` builds one of a given length, filled with the element's zero value:
 
-```teak
+```snello
 xs := []int{3, 1, 2}
 path := []string{}
 buf := make([]int?, cap)
@@ -27,13 +27,14 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 | `xs.RemoveValue(v)` | Removes the first element equal to `v`; reports whether one was found |
 | `xs.Contains(v)` | Reports whether an element equals `v` |
 | `xs.Clear()` | Removes every element and keeps the room |
+| `xs.Swap(i, j)` | Exchanges the elements at `i` and `j`, moving each into the other's place |
 | `xs.Reverse()` | Reverses the elements in place |
 | `xs.Sort()`, `xs.SortBy(less)` | Sort in place, keeping equal elements in their order; `Sort` orders numbers and strings, `SortBy` takes the ordering as a function |
 | `xs.Clone()` | A new slice holding a copy of every element |
 
-`Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. The core tree uses most of them:
+`Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Swap`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. `Swap` is how an algorithm moves elements it does not own a copy of: Go's `xs[i], xs[j] = xs[j], xs[i]` would move each element out of the slice, which is refused for a type that is not `Copy`, `cannot move xs[j] out of the slice`. The core tree uses most of them:
 
-```teak
+```snello
 t.nodes.Push(Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})
 t.nodes[parent].children.Push(id)
 children := t.nodes[id].children.Clone()
@@ -43,7 +44,7 @@ path.Reverse()
 
 The range form of `for` walks a slice. `for i, x := range xs` gives the index and the element; `for _, x := range xs` only the element; `for i := range xs` only the index. The element is lent, not copied, when the slice is reached through a borrow, so through a `mut` the loop can change it in place:
 
-```teak
+```snello
 func (b mut Bag) bump() {
     for _, v := range b.items {
         *v += 1
@@ -73,11 +74,11 @@ Operations on text are methods. Most return views into the string, which cost no
 | `s.ToUpper()`, `s.ToLower()` | A new, owned string, every letter changed by Unicode's simple case mapping |
 | `s.Clone()` | A new, owned copy of `s` |
 
-Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` and `ToLower` change every letter, `"àéî".ToUpper()` is `ÀÉÎ`, white space for `Trim` and `Fields` is what Unicode calls white space, a no-break space or an ideographic space among it, and a byte that is not valid UTF-8 reads as the replacement character U+FFFD, which `ToUpper` writes in its place. `examples/run/unicode.teak` checks each against Go's output. A slice expression out of range stops the program in Go's words, `slice bounds out of range [3:1]` or `[:10] with length 3`, and so does `make` with a negative length or a capacity below it, `makeslice: len out of range`.
+Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` and `ToLower` change every letter, `"àéî".ToUpper()` is `ÀÉÎ`, white space for `Trim` and `Fields` is what Unicode calls white space, a no-break space or an ideographic space among it, and a byte that is not valid UTF-8 reads as the replacement character U+FFFD, which `ToUpper` writes in its place. `examples/run/unicode.snello` checks each against Go's output. A slice expression out of range stops the program in Go's words, `slice bounds out of range [3:1]` or `[:10] with length 3`, and so does `make` with a negative length or a capacity below it, `makeslice: len out of range`.
 
 The pieces `Fields` and `Split` yield borrow the string they came from, so `for w := range text.Fields()` lends `text` for the loop. To keep a piece, clone it or build an owned string from it, which is what `wordfreq` does with `w.ToLower()` before using the word as a map key. `SplitOnce` is made for `if` with a binding:
 
-```teak
+```snello
 if (k, v) := line.SplitOnce("=") {
     settings.Insert(k.Trim().Clone(), v.Trim().Clone())
 }
@@ -87,7 +88,7 @@ if (k, v) := line.SplitOnce("=") {
 
 A map holds one value per key. A map literal lists its entries, or none, and `make(map[K]V)` is the same as the empty literal:
 
-```teak
+```snello
 kv := map[string]string{}
 counts := map[string]int{}
 ```
@@ -107,7 +108,7 @@ The methods say what happens to the entry:
 
 `Get` and `GetMut` answer with an optional because the entry may be absent, which is what `config` relies on:
 
-```teak
+```snello
 text := kv.Get(ref key) ?? return Err(Missing(key))
 ```
 
@@ -119,7 +120,7 @@ Two maps do not compare with `==`, for the same reason two slices do not.
 
 ## Arrays
 
-An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `examples/run/arrays.teak` and `examples/16-matrix.teak`, whose `Mat4` holds a `[16]f64`, run them.
+An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `examples/run/arrays.snello` and `examples/16-matrix.snello`, whose `Mat4` holds a `[16]f64`, run them.
 
 ## What the compiler reports
 
@@ -132,4 +133,4 @@ An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written 
 
 ## What a value costs
 
-A slice is three words, a pointer to its elements, a length and a capacity, and its elements lie one after another in one allocation. A map is eight words: its keys and values lie in two arrays in insertion order, found through a hash index that doubles as the map grows; a removed entry leaves its slot until the next growth compacts the arrays. `Push` doubles the room when it runs out, so appending `n` elements allocates about `log n` times. A string is two words, a pointer and a length, and a literal points at the program's own bytes; only `+`, `Clone`, `ToUpper` and `ToLower` allocate. A borrow of part of either is the same two or three words pointing into the middle, and allocates nothing.
+A slice is three words, a pointer to its elements, a length and a capacity, and its elements lie one after another in one allocation. A map is eight words: its keys and values lie in insertion order in one block, with each key's hash, and an index finds them, a Swiss table as Go's and Rust's maps are, which compares keys only where seven bits of the hash already match; a removed entry leaves its place until the next growth compacts the block. Keys are hashed with a seed drawn when the program starts, as in Go and Rust, so keys chosen to collide cannot be prepared ahead; the seed changes nothing a program sees, since a range follows insertion order. `make(map[K]V, n)` makes room for `n` entries at once. `Push` doubles the room when it runs out, so appending `n` elements allocates about `log n` times. A string is two words, a pointer and a length, and a literal points at the program's own bytes; only `+`, `Clone`, `ToUpper` and `ToLower` allocate. A borrow of part of either is the same two or three words pointing into the middle, and allocates nothing.

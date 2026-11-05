@@ -4,7 +4,7 @@ This file is read by coding agents working in this repository. It says what the 
 
 ## What this is
 
-Teak is a programming language: Go's syntax and concurrency, memory safety without a garbage collector, no lifetime annotations, and Scala-style traits. The compiler in this repository builds core Teak to native binaries today (stages 0 and 1 of `_docs/specs/plan.md`); traits, generics, tasks and the standard library in Teak are the stages ahead. The compiler is written in Go, after the Go toolchain's own packages, and a Teak program runs on Teak's own runtime with nothing of Go inside it.
+Snello is a programming language: Go's syntax and concurrency, memory safety without a garbage collector, no lifetime annotations, and Scala-style traits. The compiler in this repository builds core Snello to native binaries today (stages 0 and 1 of `_docs/specs/plan.md`); traits, generics, tasks and the standard library in Snello are the stages ahead. The compiler is written in Go, after the Go toolchain's own packages, and a Snello program runs on Snello's own runtime with nothing of Go inside it.
 
 ## Read first, in this order
 
@@ -24,7 +24,7 @@ Do not propose anything these documents already decided without saying which dec
 ## How work is done
 
 - **One slice at a time.** Land one small, runnable, tested piece per turn, explain what it does and why it is shaped that way, and stop so the owner can read it. Do not deliver several packages at once.
-- **Explain by analogy to Go.** The compiler follows the Go toolchain's design, so point at the counterpart (`go/scanner`, `go/parser`, `go/types`) for every design choice, and explain in Go's terms, not Rust's, OCaml's or type theory's. Never explain a Teak feature with Rust vocabulary.
+- **Explain by analogy to Go.** The compiler follows the Go toolchain's design, so point at the counterpart (`go/scanner`, `go/parser`, `go/types`) for every design choice, and explain in Go's terms, not Rust's, OCaml's or type theory's. Never explain a Snello feature with Rust vocabulary.
 - **Design before code.** A new construct goes into the syntax conventions and an example before it goes into the parser.
 - **Tests with every slice.** Table tests, error tests, and the examples sweep, using only the standard `testing` package.
 - **The book grows with the code.** `_docs/book/` is the language book for users. A slice that implements or decides a language feature writes or updates the chapter that owns it in the same change, and keeps the chapter's status line true. The book's `README.md` lists the chapters and which stage writes each.
@@ -34,10 +34,10 @@ Do not propose anything these documents already decided without saying which dec
 ## Constraints that need a human to change
 
 - **Zero dependencies.** The compiler imports only the standard library.
-- **No garbage collector**, anywhere. Teak programs are native binaries: the C backend and its runtime own every allocation, and nothing may rely on a collector. Go is the language the compiler is written in, nothing more.
-- **Simplicity.** If Go has a way to say it, Teak says it that way. A new construct must be readable by a Go developer without a glossary. The list of things deliberately left out is in the design document under "What Teak leaves out"; do not add any of them back.
+- **No garbage collector**, anywhere. Snello programs are native binaries: the C backend and its runtime own every allocation, and nothing may rely on a collector. Go is the language the compiler is written in, nothing more.
+- **Simplicity.** If Go has a way to say it, Snello says it that way. A new construct must be readable by a Go developer without a glossary. The list of things deliberately left out is in the design document under "What Snello leaves out"; do not add any of them back.
 - **The examples are the acceptance suite.** Every stage must process all twenty. Changing an example to make a stage pass requires changing the design document in the same change.
-- **License header** on every `.go` and `.teak` file, in the form shown in `CODING_STANDARDS.md`.
+- **License header** on every `.go` and `.snello` file, in the form shown in `CODING_STANDARDS.md`.
 - **Markdown is not hard-wrapped.** One line per paragraph; never reflow prose to a column width.
 
 ## Commands
@@ -47,12 +47,12 @@ go build ./...        # must be clean
 go vet ./...          # must be clean
 gofmt -l .            # must print nothing
 go test ./...         # must pass
-go run ./cmd/teak lex FILE     # print the token stream of a Teak file
-go run ./cmd/teak parse FILE   # print the syntax tree
-go run ./cmd/teak check FILE   # report what the checker finds; silent when the file is correct
-go run ./cmd/teak build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
-go run ./cmd/teak build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, or CC set
-go run ./cmd/teak emit FILE    # print the IR module that build compiles; -backend c prints the C source
+go run ./cmd/snello lex FILE     # print the token stream of a Snello file
+go run ./cmd/snello parse FILE   # print the syntax tree
+go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct
+go run ./cmd/snello build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
+go run ./cmd/snello build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, or CC set
+go run ./cmd/snello emit FILE    # print the IR module that build compiles; -backend c prints the C source
 ```
 
 ## Layout
@@ -62,8 +62,8 @@ go run ./cmd/teak emit FILE    # print the IR module that build compiles; -backe
 | `_docs/design/` | Design documents, numbered |
 | `_docs/specs/` | Implementation plan and per-stage task lists |
 | `_docs/book/` | The language book, written chapter by chapter as features land |
-| `examples/` | The twenty Teak programs, plus Go versions of the first two; `core/` is the stage 1 suite, `run/` the programs that build and run today with their expected output |
-| `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Teak program, which carries only `runtime/` and `std/` |
+| `examples/` | The twenty Snello programs, plus Go versions of the first two; `core/` is the stage 1 suite, `run/` the programs that build and run today with their expected output |
+| `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Snello program, which carries only `runtime/` and `std/` |
 | `compiler/token/` | Token kinds and positions, modeled on `go/token` |
 | `compiler/scanner/` | The lexer, modeled on `go/scanner` |
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
@@ -74,12 +74,12 @@ go run ./cmd/teak emit FILE    # print the IR module that build compiles; -backe
 | `compiler/emit/c/` | The C emitter, the reference backend |
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |
 | `compiler/emit/internal/backendtest/` | The programs both backends' tests build and run, with what each must give, so the backends are held to one list |
-| `runtime/` | The C runtime every Teak program links against, under `c/`: `teak.c` the values, channels and locks, `alloc.c` the allocator, `unicode.c` the case, white-space and printable-rune tables `mkunicode.go` writes from Unicode's data files, `sched.c` the scheduler, `net.c` the poller and sockets, `debug.c` the checking build; embedded by the package for both backends |
-| `bench/` | The benchmark programs in Teak, Go and Rust behind the design document's performance table |
+| `runtime/` | The C runtime every Snello program links against, under `c/`, one file a part: `snello.c` the core, a program's start and end, panics and what more than one file uses, which `internal.h` declares for the runtime alone; `slice.c`, `sort.c` (Rust's driftsort), `string.c`, `map.c`, `chan.c` and `sync.c` the values, channels and locks; `format.c`, `quote.c` and `parse.c` numbers and quotes as text; `bufio.c`, `os.c`, `print.c`, `math.c` and `time.c` the runtime's half of those packages; `alloc.c` the allocator, `unicode.c` the case, white-space and printable-rune tables `mkunicode.go` writes from Unicode's data files, `pow10.c` the powers of ten `mkpow10.go` writes, `sched.c` the scheduler, `net.c` the poller and sockets, `debug.c` the checking build; embedded by the package for both backends, which compile the files in parallel |
+| `bench/` | The benchmark programs in Snello, Go and Rust behind the design document's performance table |
 | `.github/workflows/` | `test.yml` checks gofmt and vet, and runs `go test ./...` natively on x86-64 Linux, arm64 Linux and arm64 macOS, on every push and pull request; the README's badge is its status |
 | `examples/expected/` | The expected output of each example program that runs, `<name>.out`, with the files it reads in `<name>.files/`; `examples/suite_test.go` builds and runs every example that has one and names the rest as pending |
-| `std/` | The standard library, written in Teak, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
-| `cmd/teak/` | The command-line driver |
+| `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
+| `cmd/snello/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |
 
 ## When the design and the code disagree

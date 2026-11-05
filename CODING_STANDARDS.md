@@ -1,6 +1,6 @@
 # Coding standards
 
-These apply to the Go code of the compiler and to the Teak code under `examples/`. They exist so that every file reads the same way, whoever or whatever wrote it.
+These apply to the Go code of the compiler and to the Snello code under `examples/`. They exist so that every file reads the same way, whoever or whatever wrote it.
 
 ## Principles
 
@@ -11,10 +11,10 @@ These apply to the Go code of the compiler and to the Teak code under `examples/
 
 ## Files
 
-- Every `.go` and `.teak` file starts with the license header:
+- Every `.go` and `.snello` file starts with the license header:
 
   ```go
-  // Copyright 2026 The Teak Programming Language. All rights reserved.
+  // Copyright 2026 The Snello Programming Language. All rights reserved.
   // Use of this source code is governed by a BSD-style
   // license that can be found in the LICENSE file.
   ```
@@ -114,7 +114,7 @@ Compile time is a feature, and in Go the way to lose it is allocation: every obj
 - A test failure message shows the input, what was produced, and what was expected.
 - Helpers used only by tests live at the bottom of the test file.
 
-## Teak code in `examples/` and `std/`
+## Snello code in `examples/` and `std/`
 
 - Each file under `examples/` begins with a comment stating what the program tests; each package under `std/` begins with a package comment, as a Go package does, and every exported name has a doc comment that starts with the name.
 - A library function the runtime provides is declared without a body, and its doc comment says so.

@@ -1,36 +1,51 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package runtime holds, under c/, the C runtime every Teak program links
+// Package runtime holds, under c/, the C runtime every Snello program links
 // against, embedded in the compiler so that a build needs nothing but
-// the compiler and a C compiler: strings, slices and maps, printing,
-// panics and the guard stack, tasks, channels and locks, and the system
-// calls the library's bodiless functions stand for; alloc.c is the
-// allocator, unicode.c the tables of case, white space and printable
-// runes that mkunicode.go writes, sched.c the scheduler that runs the
-// tasks and net.c the sockets over its poller. Both backends write these
-// files next to the program they emit and compile them with it; debug.c
-// is the checking build's tracker of every block.
+// the compiler and a C compiler. snello.c is its core, the start and the
+// end of a program, panics, and what more than one file uses, which
+// internal.h declares; each part of the language and the library has a
+// file of its own: slice.c and sort.c, Rust's driftsort, for slices,
+// string.c for strings, format.c, quote.c and parse.c for numbers and
+// quotes as text, map.c for maps, bufio.c, os.c, print.c, math.c and
+// time.c for their packages, and chan.c and sync.c for channels and
+// locks. alloc.c is the allocator, unicode.c the tables of case, white
+// space and printable runes that mkunicode.go writes, pow10.c the
+// powers of ten floats are formatted with, which mkpow10.go writes,
+// sched.c the scheduler that runs the tasks and net.c the sockets over
+// its poller. Both backends write these files next to the program they
+// emit and compile them with it; debug.c is the checking build's
+// tracker of every block.
 package runtime
 
 //go:generate go run mkunicode.go
+//go:generate go run mkpow10.go
 
 import (
 	"embed"
 	"path/filepath"
 )
 
-//go:embed c/teak.h c/teak.c c/alloc.c c/unicode.c c/sched.c c/net.c c/debug.c
+//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/pow10.c c/sched.c c/net.c c/debug.c
 var files embed.FS
 
 // sources are the runtime's files a build compiles.
-var sources = []string{"teak.c", "alloc.c", "unicode.c", "sched.c", "net.c", "debug.c"}
+var sources = []string{
+	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "map.c", "bufio.c",
+	"os.c", "print.c", "math.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "pow10.c",
+	"sched.c", "net.c", "debug.c",
+}
+
+// headers are the runtime's headers: snello.h, which the program's C
+// includes too, and internal.h, which only the runtime's files do.
+var headers = []string{"snello.h", "internal.h"}
 
 // Files returns the runtime's files by name.
 func Files() map[string][]byte {
 	out := make(map[string][]byte)
-	for _, name := range append([]string{"teak.h"}, sources...) {
+	for _, name := range append(append([]string{}, headers...), sources...) {
 		out[name], _ = files.ReadFile("c/" + name)
 	}
 

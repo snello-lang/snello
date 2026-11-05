@@ -1,0 +1,40 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Strings: a borrowed parameter, concatenation, length and comparison,
+// indexing a byte, and the fmt family of printing functions.
+
+package main
+
+import "fmt"
+
+func greet(name ref string) string {
+	return "hello, " + name
+}
+
+func main() {
+	s := greet("snello")
+	fmt.Println(s, len(s), s == "hello, snello", s < "zz", s[0], s[7])
+
+	t := s
+	t += "!"
+	fmt.Println(t)
+
+	fmt.Println(fmt.Sprintf("%d + %d = %d; %s %q %v", 1, 2, 3, "a", "b", true))
+	fmt.Printf("%s-%d\n", "x", 42)
+	fmt.Println(fmt.Sprint(1, 2, "a", 3.5, "b", "c"))
+
+	// Lines, the character classes of a byte, and min and max.
+	n := 0
+	for l := range "a\r\nbc\n\nd".Lines() {
+		n += 1
+		fmt.Printf("%d ", l.Len())
+	}
+	fmt.Println(n, len("".Lines()), len("x\n".Lines()))
+	c := "7 Z"
+	fmt.Println(c[0].IsDigit(), c[1].IsSpace(), c[2].IsLetter(), c[2].IsUpper(), c[2].IsLower(), c[0].IsLetter())
+	fmt.Println(min(3, 1, 2), max(3, 1, 2), min(2.5, 1), max(-1, len(c)))
+	e := ""
+	fmt.Println(len(e.ToUpper()), len(e.ToLower()), len(e + e), len(e.Trim())) // built empty: no block to leak
+}

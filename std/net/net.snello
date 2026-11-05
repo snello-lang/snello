@@ -1,0 +1,303 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package net is TCP: a Listener that accepts connections and a Conn
+// that reads and writes one. A Conn implements io.Reader and
+// io.Writer, so bufio and io.Copy work over it as over a file. A
+// program writes a connection as blocking code; underneath, an
+// operation that would block parks the task and the runtime's poller
+// wakes it when the socket is ready, so a task per connection costs
+// no thread (_docs/design/06-tasks-and-channels.md).
+//
+// A failure is an io.Error worded as Go words it: the operation, the
+// network and the address, then the system call and the system's
+// reason, "dial tcp 127.0.0.1:1: connect: connection refused" or "read
+// tcp 127.0.0.1:50338->127.0.0.1:8080: read: connection reset by peer".
+// Its Kind tells a refused dial, a reset connection and a timed out one
+// from the rest, so a program need not read the message. An address
+// is an IPv4 address and a port: a host name or an IPv6 address is
+// refused with an Error that says so.
+//
+// A deadline is Go's: a point in time after which a read, a write or an
+// Accept that has not finished fails with an Error of Kind io.TimedOut,
+// "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout", instead of
+// waiting. It holds for every operation from when it is set until it is
+// moved, so one deadline bounds a whole request of many reads, which a
+// timeout per call cannot; a server sets one per request,
+// c.SetReadDeadline(time.Now().Add(30 * time.Second)), so that a client
+// that stops sending cannot hold its task for ever. A write whose
+// deadline passes partway has written the first e.Written() bytes.
+
+package net
+
+import (
+	"io"
+	"strconv"
+	"time"
+)
+
+// A Listener is a TCP socket listening on a port. It implements Drop:
+// the socket closes when the Listener goes out of scope.
+struct Listener impl Drop {
+	fd   int
+	port int
+	addr string // the address it listens on, which a failed Accept names
+}
+
+// A Conn is one TCP connection. It implements Drop, io.Reader and
+// io.Writer: the connection closes when the Conn goes out of scope,
+// unless Close closed it first.
+struct Conn impl Drop, io.Reader, io.Writer {
+	fd   int
+	name string // "tcp local->remote", which a failed Read or Write names
+}
+
+// Listen opens a socket listening on the IPv4 address host at the
+// port, or at a port the system picks when port is 0, which Port
+// reports. "127.0.0.1" is this machine alone; "0.0.0.0", or an empty
+// host as in Go, is every address it has, reachable from the network.
+func Listen(host ref string, port int) Result<Listener, io.Error> {
+	h := if host.Len() == 0 { "0.0.0.0".Clone() } else { host.Clone() }
+	if port < 0 || port > 65535 {
+		return Err(addressError("listen", "address " + strconv.Itoa(port) + ": invalid port"))
+	}
+
+	fd := 0
+	got := 0
+	call := ""
+	code := listen(ref h, port, mut fd, mut got, mut call)
+	if code < 0 {
+		return Err(hostError("listen", ref h))
+	}
+
+	if code != 0 {
+		return Err(opError("listen", "tcp " + h + ":" + strconv.Itoa(port), ref call, code))
+	}
+
+	return Ok(Listener{fd: fd, port: got, addr: h + ":" + strconv.Itoa(got)})
+}
+
+// Port returns the port the Listener listens on.
+func (l ref Listener) Port() int {
+	return l.port
+}
+
+// Accept waits for the next connection and returns it; the task parks
+// meanwhile, until the Listener's deadline, if it has one.
+func (l mut Listener) Accept() Result<Conn, io.Error> {
+	fd := 0
+	code := accept(l.fd, mut fd)
+	if code == timedOut {
+		return Err(timeoutError("accept", "tcp " + l.addr))
+	}
+
+	if code != 0 {
+		return Err(opError("accept", "tcp " + l.addr, "accept", code))
+	}
+
+	return Ok(newConn(fd))
+}
+
+// SetDeadline sets the time after which Accept stops waiting and fails
+// with an Error of Kind io.TimedOut; the zero Time means none.
+func (l mut Listener) SetDeadline(t time.Time) Result<(), io.Error> {
+	return setDeadlineOf(l.fd, 0, t)
+}
+
+// Drop closes the listening socket.
+func (l mut Listener) Drop() {
+	if l.fd >= 0 {
+		closeConn(l.fd)
+	}
+}
+
+// Dial connects to the IPv4 address host, "127.0.0.1", at the port; an
+// empty host is this machine, as in Go.
+func Dial(host ref string, port int) Result<Conn, io.Error> {
+	return DialTimeout(host, port, 0)
+}
+
+// DialTimeout is Dial that gives up once timeout has passed without a
+// connection, with an Error of Kind io.TimedOut, "dial tcp
+// 10.0.0.9:80: i/o timeout"; a timeout of zero or less waits as long
+// as the system does, as Dial. The connection it returns has no
+// deadline.
+func DialTimeout(host ref string, port int, timeout time.Duration) Result<Conn, io.Error> {
+	h := if host.Len() == 0 { "127.0.0.1".Clone() } else { host.Clone() }
+	if port < 0 || port > 65535 {
+		return Err(addressError("dial", "address " + strconv.Itoa(port) + ": invalid port"))
+	}
+
+	fd := 0
+	call := ""
+	code := dial(ref h, port, i64(timeout), mut fd, mut call)
+	if code == timedOut {
+		return Err(timeoutError("dial", "tcp " + h + ":" + strconv.Itoa(port)))
+	}
+
+	if code < 0 {
+		return Err(hostError("dial", ref h))
+	}
+
+	if code != 0 {
+		return Err(opError("dial", "tcp " + h + ":" + strconv.Itoa(port), ref call, code))
+	}
+
+	return Ok(newConn(fd))
+}
+
+// Read reads what the connection has into buf and returns how many
+// bytes it read, 0 once the other side has closed. A buf with no room
+// reads nothing and returns 0 at once, so 0 means the end only for a
+// buf with room, as for every io.Reader. It is io.Reader's method.
+func (c mut Conn) Read(buf mut []byte) Result<int, io.Error> {
+	n := 0
+	code := read(c.fd, buf, mut n)
+	if code == timedOut {
+		return Err(timeoutError("read", c.name.Clone()))
+	}
+
+	if code != 0 {
+		return Err(opError("read", ref c.name, "read", code))
+	}
+
+	return Ok(n)
+}
+
+// Write writes all of buf to the connection and returns how many
+// bytes it wrote, the length of buf. It is io.Writer's method. A write
+// that fails partway, its deadline passed or the connection broken,
+// has written the Error's Written() bytes.
+func (c mut Conn) Write(buf ref []byte) Result<int, io.Error> {
+	n := 0
+	code := write(c.fd, buf, mut n)
+	if code == timedOut {
+		return Err(timeoutError("write", c.name.Clone()).WithWritten(n))
+	}
+
+	if code != 0 {
+		return Err(opError("write", ref c.name, "write", code).WithWritten(n))
+	}
+
+	return Ok(n)
+}
+
+// SetDeadline sets the deadline of the connection's reads and writes
+// both: the time after which one that has not finished fails with an
+// Error of Kind io.TimedOut instead of waiting. The zero Time means
+// none. A deadline passed stays passed, failing every read and write,
+// until it is set again.
+func (c mut Conn) SetDeadline(t time.Time) Result<(), io.Error> {
+	setDeadlineOf(c.fd, 0, t)?
+	return setDeadlineOf(c.fd, 1, t)
+}
+
+// SetReadDeadline sets the deadline of the connection's reads alone.
+func (c mut Conn) SetReadDeadline(t time.Time) Result<(), io.Error> {
+	return setDeadlineOf(c.fd, 0, t)
+}
+
+// SetWriteDeadline sets the deadline of the connection's writes alone.
+func (c mut Conn) SetWriteDeadline(t time.Time) Result<(), io.Error> {
+	return setDeadlineOf(c.fd, 1, t)
+}
+
+// WriteString writes all of s to the connection.
+func (c mut Conn) WriteString(s ref string) Result<int, io.Error> {
+	return c.Write(ref []byte(s))
+}
+
+// Close closes the connection now, so that the other side sees its
+// end, and reports a failure to. It consumes the Conn, as os.File's
+// Close does: a closed connection cannot be used again.
+func (c Conn) Close() Result<(), io.Error> {
+	code := closeConn(c.fd)
+	c.fd = -1 // closed: Drop has nothing left to do
+	if code != 0 {
+		return Err(opError("close", ref c.name, "close", code))
+	}
+
+	return Ok(())
+}
+
+// Drop closes the connection unless Close already did.
+func (c mut Conn) Drop() {
+	if c.fd >= 0 {
+		closeConn(c.fd)
+	}
+}
+
+// newConn makes the Conn of a connected socket, named by its two
+// addresses for the Errors it reports.
+func newConn(fd int) Conn {
+	local := ""
+	remote := ""
+	addrs(fd, mut local, mut remote)
+	return Conn{fd: fd, name: "tcp " + local + "->" + remote}
+}
+
+// timedOut is what the runtime's calls return for a deadline passed,
+// which is no error number of the system's.
+const timedOut = -2
+
+// setDeadlineOf sets the deadline of fd's reads, or its writes when
+// write is 1, to t, or clears it for the zero Time.
+func setDeadlineOf(fd int, write int, t time.Time) Result<(), io.Error> {
+	set := if t.IsZero() { 0 } else { 1 }
+	code := setDeadline(fd, write, i64(t.Sub(time.Now())), set)
+	if code != 0 {
+		return Err(io.Errno("set deadline", "tcp", code))
+	}
+
+	return Ok(())
+}
+
+// timeoutError is the Error of an operation whose deadline passed,
+// worded as Go words it: "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o
+// timeout".
+func timeoutError(op string, path string) io.Error {
+	return io.NewError(op, path, "i/o timeout", io.TimedOut)
+}
+
+// opError is the Error of a socket call that failed with the system's
+// error number code, worded as Go words it: the operation, the network
+// and address in path, then the call, "connect: connection refused".
+func opError(op string, path ref string, call ref string, code int) io.Error {
+	e := io.Errno(op, path, code)
+	e.Msg = call + ": " + e.Msg
+	return e
+}
+
+// addressError is the Error of an address the operation op cannot use,
+// with the reason msg: "listen tcp: address 70000: invalid port".
+func addressError(op string, msg string) io.Error {
+	e := io.Errno(op, "tcp", 22) // EINVAL, which is 22 on every system Snello runs on: Kind Other
+	e.Msg = msg
+	return e
+}
+
+// hostError is the Error of a host that is not an IPv4 address: an
+// IPv6 address, or a name, which the package does not look up.
+func hostError(op string, host ref string) io.Error {
+	if host.Contains(":") {
+		return addressError(op, "address " + host + ": IPv6 addresses are not supported")
+	}
+
+	return addressError(op, "lookup " + host + ": host names are not looked up; give an IPv4 address")
+}
+
+// The runtime provides these; each returns the system's error number,
+// zero on success, and stores its result through its last parameters.
+// listen and dial return -1 for a host that is not an IPv4 address,
+// and store the name of the system call that failed in call; accept,
+// dial, read and write return timedOut once the deadline has passed,
+// and write stores how much it wrote even when it fails.
+func listen(host ref string, port int, fd mut int, got mut int, call mut string) int
+func accept(fd int, out mut int) int
+func dial(host ref string, port int, timeout i64, fd mut int, call mut string) int
+func setDeadline(fd int, write int, d i64, set int) int
+func addrs(fd int, local mut string, remote mut string) int
+func read(fd int, buf mut []byte, n mut int) int
+func write(fd int, buf ref []byte, n mut int) int
+func closeConn(fd int) int

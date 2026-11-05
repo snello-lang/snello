@@ -1,8 +1,8 @@
 # 13. Arenas and indices
 
-Status: `arena.Arena<T>` and `arena.Index<T>` are written in Teak under `std/arena/` and compiled with the program that imports them (stage 2, task 2.6); `examples/run/arena.teak` runs them, stale indices included. A range over an arena waits for the iterator trait. The tree is cut from `examples/01-tree/tree-arena.teak`, the rest from the run program.
+Status: `arena.Arena<T>` and `arena.Index<T>` are written in Snello under `std/arena/` and compiled with the program that imports them (stage 2, task 2.6); `examples/run/arena.snello` runs them, stale indices included. A range over an arena waits for the iterator trait. The tree is cut from `examples/01-tree/tree-arena.snello`, the rest from the run program.
 
-Chapter 7 built a list and a tree from owned pointers, and chapter 6 said what a borrow cannot do: live in a struct. Between them they leave one shape of data out. A node that points back at its parent, a graph whose nodes point at each other, a cache that is both a map and a list: each needs a link that does not own what it names, and Teak has no such pointer. This chapter is the answer, and it is the answer Go programmers already know from any code that cares about speed: put every node in one container and link them by position.
+Chapter 7 built a list and a tree from owned pointers, and chapter 6 said what a borrow cannot do: live in a struct. Between them they leave one shape of data out. A node that points back at its parent, a graph whose nodes point at each other, a cache that is both a map and a list: each needs a link that does not own what it names, and Snello has no such pointer. This chapter is the answer, and it is the answer Go programmers already know from any code that cares about speed: put every node in one container and link them by position.
 
 ## An index instead of a pointer
 
@@ -10,7 +10,7 @@ The container owns every node. A link is a number, the node's place in the conta
 
 Written by hand, that is a slice and an index type:
 
-```teak
+```snello
 type NodeID int
 
 struct Node {
@@ -28,7 +28,7 @@ It works, and it has one hole. Remove a node, reuse its slot for another, and ev
 
 ## `arena.Arena<T>` and `arena.Index<T>`
 
-```teak
+```snello
 import "arena"
 
 a := arena.New<string>()
@@ -45,7 +45,7 @@ The type is given to `New` when nothing else fixes it, `arena.New<Node>()`; a fi
 
 Every slot in the arena has a generation, and an `Index` remembers the generation its slot had when the value went in. `Remove` empties the slot and raises its generation. From then on every copy of the old index fails the comparison, however many values the slot has held since:
 
-```teak
+```snello
 stale := y
 fmt.Println(a.Remove(y), a.Len(), a.Get(stale), a.Remove(stale))   // Some("y") 1 None None
 
@@ -63,7 +63,7 @@ The check is one comparison per lookup, and it is a runtime check, not a compile
 
 A tree keeps its nodes in one arena and its links as indices, in both directions:
 
-```teak
+```snello
 struct Node {
 	value    string
 	parent   arena.Index<Node>?         // None for the root
@@ -96,7 +96,7 @@ The parent link is the thing an owned pointer could not express, and here it is 
 
 `GetMut` lends the arena `mut` for as long as the borrow it returns lives, so two values of one arena cannot be changed through two borrows in one expression; the compiler cannot know the two indices differ. The idiom is to read what is needed out as values first, then write:
 
-```teak
+```snello
 e := c.slots.Get(s).Expect("live")
 prev, next := e.prev, e.next                // Index is Copy; the borrow of e ends here
 if p := prev { c.slots.GetMut(p).Expect("live").next = next }

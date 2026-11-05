@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package ast declares the syntax tree of Teak, modeled on go/ast.
+// Package ast declares the syntax tree of Snello, modeled on go/ast.
 //
 // There are five families of node: Decl, Stmt, Expr, Type and Pattern.
 // Each family is a sealed interface: an interface with an unexported
@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // Node is implemented by every node in the tree.

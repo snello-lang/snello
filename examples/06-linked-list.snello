@@ -1,0 +1,93 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// 06: A stack and a queue.
+//
+// Tests: *Node? as the owned link, `take` to move a value out of a field,
+// partial moves out of a heap node that is about to be dropped, and a
+// method that returns a borrow into its receiver.
+
+package list
+
+import "fmt"
+
+struct Node<T> {
+    value T
+    next  *Node<T>?             // owned pointer, or None
+}
+
+// Zero value: head None, len 0. A struct whose fields all have zero
+// values can be written `Stack<T>{}`.
+struct Stack<T> {
+    head *Node<T>?
+    len  int
+}
+
+func (s mut Stack<T>) Push(v T) {
+    // `take` moves the old head out and leaves None behind, so it can be
+    // moved into the new node with no copy and no placeholder value.
+    old := take(mut s.head)
+    s.head = Some(&Node{value: v, next: old})       // &x allocates x on the heap
+    s.len += 1
+}
+
+func (s mut Stack<T>) Pop() T? {
+    n := take(mut s.head) ?? return None
+    s.head = n.next                   // moving a field out of the owned node n
+    s.len -= 1                        // is allowed because n is dropped at the
+    return Some(n.value)              // end of this function
+}
+
+// Returns a borrow into the receiver. The caller holds it for as long as
+// it holds the receiver borrow, which ends at the next mutation of the
+// stack. This is the one way a borrow may be returned.
+func (s ref Stack<T>) Peek() ref T? {
+    n := s.head ?? return None
+    return Some(ref n.value)
+}
+
+// A linked queue needs a tail link, which would be a second owner of the
+// last node. A ring buffer has no such link and is faster anyway.
+struct QueueFull{}
+
+struct Queue<T> {
+    buf  []T?
+    head int
+    len  int
+}
+
+func NewQueue<T>(cap int) Queue<T> {
+    return Queue{buf: make([]T?, cap), head: 0, len: 0}
+}
+
+func (q mut Queue<T>) Push(v T) Result<(), QueueFull> {
+    if q.len == len(q.buf) { return Err(QueueFull{}) }
+    q.buf[(q.head + q.len) % len(q.buf)] = Some(v)
+    q.len += 1
+    return Ok(())
+}
+
+func (q mut Queue<T>) Pop() T? {
+    if q.len == 0 { return None }
+    v := take(mut q.buf[q.head])
+    q.head = (q.head + 1) % len(q.buf)
+    q.len -= 1
+    return v
+}
+
+func main() {
+    s := Stack<string>{}
+    s.Push("a")
+    s.Push("b")
+    fmt.Println(s.Peek())    // Some("b")
+    fmt.Println(s.Pop())     // Some("b")
+    fmt.Println(s.Pop())     // Some("a")
+    fmt.Println(s.Pop())     // None
+
+    q := NewQueue<int>(2)
+    q.Push(1).Expect("room")
+    q.Push(2).Expect("room")
+    fmt.Println(q.Push(3))   // Err(QueueFull)
+    fmt.Println(q.Pop())     // Some(1)
+}

@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure given to spawn moves every variable it mentions into
+// the task; the function that spawned it cannot use them afterwards.
+// Fix: clone before the spawn, or send the value back on a channel.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "hello"
+    spawn func() { fmt.Println(s) }()
+    fmt.Println(s)                        // ERROR "use of moved value s"
+}

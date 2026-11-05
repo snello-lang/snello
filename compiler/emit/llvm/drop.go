@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // Every value is freed where the checker said its owner dies, at the
@@ -41,7 +41,7 @@ type frame struct {
 }
 
 // An owned value the emitter will drop: the address of its slot and
-// its Teak type.
+// its Snello type.
 type owned struct {
 	slot string
 	typ  types.Type
@@ -169,7 +169,7 @@ func (e *Emitter) dropIfNeeded(p string, t types.Type, pos token.Pos) {
 // memory a string, pointer, slice or map holds; in a debug build the
 // place is poisoned after, as the C runtime's drops poison it.
 func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
-	name := "tk_drop_" + lower.Mangle(t)
+	name := "sn_drop_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -198,8 +198,8 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			e.branch(owned.s, free, done)
 			e.label(free)
 			e.check(ir, "%v", t)
-			e.declare("tk_free", "declare void @tk_free(ptr)")
-			e.inst("call void @tk_free(ptr " + e.load("ptr", e.gep(ir, "%v", 0)).s + ")")
+			e.declare("sn_free", "declare void @sn_free(ptr)")
+			e.inst("call void @sn_free(ptr " + e.load("ptr", e.gep(ir, "%v", 0)).s + ")")
 			e.jump(done)
 			e.label(done)
 		case *types.Struct:
@@ -275,8 +275,8 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			e.branch(isNull.s, done, free)
 			e.label(free)
 			e.dropIfNeeded(e.deref(p).s, u.Elem(), pos)
-			e.declare("tk_release", "declare void @tk_release(ptr)")
-			e.inst("call void @tk_release(ptr %v)")
+			e.declare("sn_release", "declare void @sn_release(ptr)")
+			e.inst("call void @sn_release(ptr %v)")
 			e.jump(done)
 			e.label(done)
 		case *types.Slice:
@@ -285,18 +285,18 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 				e.eachElement("%v", u.Elem(), pos, func(p string) { e.dropOf(p, u.Elem(), pos) })
 			}
 
-			e.declare("tk_slice_free", "declare void @tk_slice_free(ptr)")
-			e.inst("call void @tk_slice_free(ptr %v)")
+			e.declare("sn_slice_free", "declare void @sn_slice_free(ptr)")
+			e.inst("call void @sn_slice_free(ptr %v)")
 		case *types.Array:
 			for i := int64(0); i < u.Len(); i++ {
 				e.dropOf(e.gep(ir, "%v", int(i)), u.Elem(), pos)
 			}
 		case *types.Map:
-			e.declare("tk_map_free", "declare void @tk_map_free(ptr, ptr)")
-			e.inst("call void @tk_map_free(ptr %v, ptr " + e.mapType(u, pos) + ")")
+			e.declare("sn_map_free", "declare void @sn_map_free(ptr, ptr)")
+			e.inst("call void @sn_map_free(ptr %v, ptr " + e.mapType(u, pos) + ")")
 		case *types.Chan:
-			e.declare("tk_chan_drop", "declare void @tk_chan_drop(ptr)")
-			e.inst("call void @tk_chan_drop(ptr %v)")
+			e.declare("sn_chan_drop", "declare void @sn_chan_drop(ptr)")
+			e.inst("call void @sn_chan_drop(ptr %v)")
 		case *types.Trait:
 			tab := e.load("ptr", e.gep(ir, "%v", 0))
 			isNull := e.op("icmp eq ptr "+tab.s+", null", "i1")
@@ -368,8 +368,8 @@ func (e *Emitter) check(ir, p string, t types.Type) {
 		return
 	}
 
-	e.declare("tk_released", "declare void @tk_released(ptr)")
-	e.declare("tk_check_block", "declare void @tk_check_block(ptr, ptr)")
+	e.declare("sn_released", "declare void @sn_released(ptr)")
+	e.declare("sn_check_block", "declare void @sn_check_block(ptr, ptr)")
 	what := e.constBytes("string")
 	n := e.load("i64", e.gep(ir, p, 1))
 	cap := e.load("i64", e.gep(ir, p, 2))
@@ -379,7 +379,7 @@ func (e *Emitter) check(ir, p string, t types.Type) {
 	fail, ok := e.block("released"), e.block("live")
 	e.branch(bad.s, fail, ok)
 	e.label(fail)
-	e.inst("call void @tk_released(ptr " + what + ")")
+	e.inst("call void @sn_released(ptr " + what + ")")
 	e.inst("unreachable")
 	e.fn.terminated = true
 	e.label(ok)
@@ -387,7 +387,7 @@ func (e *Emitter) check(ir, p string, t types.Type) {
 	block, done := e.block("block"), e.block("checked")
 	e.branch(owned.s, block, done)
 	e.label(block)
-	e.inst("call void @tk_check_block(ptr " + e.load("ptr", e.gep(ir, p, 0)).s + ", ptr " + what + ")")
+	e.inst("call void @sn_check_block(ptr " + e.load("ptr", e.gep(ir, p, 0)).s + ", ptr " + what + ")")
 	e.jump(done)
 	e.label(done)
 }
@@ -437,8 +437,8 @@ func (e *Emitter) hold(slot string, t types.Type) {
 // a Drop method, so that a panic runs it too.
 func (e *Emitter) guard(slot string, t types.Type) {
 	if e.guarded(t) {
-		e.declare("tk_guard", "declare void @tk_guard(ptr, ptr)")
-		e.inst("call void @tk_guard(ptr " + slot + ", ptr @" + e.dropper(t, token.NoPos) + ")")
+		e.declare("sn_guard", "declare void @sn_guard(ptr, ptr)")
+		e.inst("call void @sn_guard(ptr " + slot + ", ptr @" + e.dropper(t, token.NoPos) + ")")
 	}
 }
 
@@ -446,8 +446,8 @@ func (e *Emitter) dropVars(vars []owned, pos token.Pos) {
 	for _, v := range slices.Backward(vars) {
 		e.dropOf(v.slot, v.typ, pos)
 		if e.guarded(v.typ) {
-			e.declare("tk_unguard", "declare void @tk_unguard(ptr)")
-			e.inst("call void @tk_unguard(ptr " + v.slot + ")")
+			e.declare("sn_unguard", "declare void @sn_unguard(ptr)")
+			e.inst("call void @sn_unguard(ptr " + v.slot + ")")
 		}
 	}
 }
@@ -541,7 +541,7 @@ func (e *Emitter) discard(v value, t types.Type, pos token.Pos) {
 // elements own something: a bitwise copy would be dropped twice. It
 // takes the value's address and returns the copy.
 func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
-	name := "tk_clone_" + lower.Mangle(t)
+	name := "sn_clone_" + lower.Mangle(t)
 	if e.state[name] {
 		return name
 	}
@@ -557,7 +557,7 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 
 		switch u := t.Underlying().(type) {
 		case *types.Basic:
-			e.store(e.rt("tk_string_clone", "%tk_string", e.load(ir, "%v")), out)
+			e.store(e.rt("sn_string_clone", "%sn_string", e.load(ir, "%v")), out)
 		case *types.Struct:
 			for i := 0; i < u.NumFields(); i++ {
 				ft := u.Field(i).Type()
@@ -635,9 +635,9 @@ func (e *Emitter) cloneAt(p string, t types.Type, pos token.Pos) value {
 	case !needsDrop(t):
 		return e.load(ir, p)
 	case isString(t):
-		return e.rt("tk_string_clone", "%tk_string", e.load(ir, p))
+		return e.rt("sn_string_clone", "%sn_string", e.load(ir, p))
 	case isChan(t):
-		return e.rt("tk_chan_clone", "ptr", e.load(ir, p)) // another handle on the same channel
+		return e.rt("sn_chan_clone", "ptr", e.load(ir, p)) // another handle on the same channel
 	}
 
 	return e.op("call "+ir+" @"+e.cloner(t, pos)+"(ptr "+p+")", ir)

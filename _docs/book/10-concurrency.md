@@ -1,8 +1,8 @@
 # 10. Concurrency: `spawn`, channels, `select`
 
-Status: implemented (stage 3); since stage 4 the tasks run on one worker thread per core and a task that waits parks instead of holding a thread (task 4.4), and a socket parks the same way (task 4.5). A channel handle and a `sync.WaitGroup` are owned and cloned for another task, every operation borrows them, and the last handle frees the channel or the group's counter (stage 5, task 5.13, 2026-10-21). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `teak build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.teak` and `select.teak`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.teak`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.teak`, `examples/13-actor.teak`, `examples/18-iterators.teak` and `examples/run/sync.teak`.
+Status: implemented (stage 3); since stage 4 the tasks run on one worker thread per core and a task that waits parks instead of holding a thread (task 4.4), and a socket parks the same way (task 4.5). A channel handle and a `sync.WaitGroup` are owned and cloned for another task, every operation borrows them, and the last handle frees the channel or the group's counter (stage 5, task 5.13, 2026-10-21). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `snello build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.snello` and `select.snello`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.snello`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.snello`, `examples/13-actor.snello`, `examples/18-iterators.snello` and `examples/run/sync.snello`.
 
-A task is a function running on its own, started with `spawn`. Tasks talk through channels. That much is familiar. What Teak adds is one rule about the values that pass between tasks, and the compiler enforces it, so that two tasks can never reach one value at the same time: the bug that a race detector hunts at run time cannot be written.
+A task is a function running on its own, started with `spawn`. Tasks talk through channels. That much is familiar. What Snello adds is one rule about the values that pass between tasks, and the compiler enforces it, so that two tasks can never reach one value at the same time: the bug that a race detector hunts at run time cannot be written.
 
 ## The rule
 
@@ -16,7 +16,7 @@ Each is a move, as chapter 5 describes a move. After `ch <- job`, `job` is gone 
 
 A channel handle is owned too. The channel is one shared object that synchronizes itself; a handle on it is a small value, moved like any other, and `ch.Clone()` gives another handle on the same channel. Each task that sends or receives takes a handle of its own, which is what makes a pipeline a matter of handing a clone of `out` to each worker.
 
-```teak
+```snello
 func produce(n int) <-chan Job {
     out := make(chan Job)
     w := out.Clone()                            // rule 3: a handle for the task
@@ -47,19 +47,19 @@ A value may cross a task boundary when its type is `Send`. Nobody writes `Send` 
 
 The last row is the one place structure is not the whole story, and it is settled inside the library rather than by a rule of the compiler: the cell that `rc`'s handles share holds a field of the predeclared type `local`, which holds nothing and is not `Send`, so any type holding it stays in its task. A program cannot write `local`, and cannot list `Send` on a type either; both are read from the fields.
 
-```teak
+```snello
 spawn run(Account{balance: initial}, ch.Clone())      // Account is Send: an int and a slice of ints
 ```
 
 When a value cannot cross, the message names the part that stops it, not the type around it: an `rc.Rc<Node>` inside a struct is reported as `rc.Rc<Node> stays in its task`, a borrow as `ref Node is a borrow`, a trait value as `Shape does not refine Send`. The fix is to say what was meant: clone the value, send a piece of it to each task, or share it through `sync.Arc`, which chapter 10 covers once the library is written.
 
-There is no second property beside `Send`. Nothing in Teak changes a value through a shared `ref` except under a lock, so a value that is safe to send is safe to share, and one word covers both.
+There is no second property beside `Send`. Nothing in Snello changes a value through a shared `ref` except under a lock, so a value that is safe to send is safe to share, and one word covers both.
 
 ## What the compiler checks
 
 A closure written in a `spawn` statement takes every variable it mentions with it. The move happens at the `spawn`, whatever the closure does with the variable inside, so the function cannot use the variable afterwards; a `Copy` value is copied in, as it is for any closure. A channel the closure sends on is a handle like any other, so the task is given a clone of its own, `d` above, and `main` keeps `done`.
 
-```teak
+```snello
 names := []string{"a", "b"}
 done := make(chan ())
 d := done.Clone()
@@ -74,7 +74,7 @@ A channel carries only `Send` values, and the compiler says so where the channel
 
 `close(ch)` closes a channel: a receive yields `None` once the values already sent are taken, and a range over the channel ends. A receive-only channel cannot be closed. `for v := range ch` receives until then, and each `v` is owned by the loop body; `for range ch` with no variable drops each value as it arrives.
 
-```teak
+```snello
 for r := range merge(workers) {          // `workers` is moved into merge; the range borrows the channel merge returns
     total += r.words
 }
@@ -84,7 +84,7 @@ for r := range merge(workers) {          // `workers` is moved into merge; the r
 
 `select` waits for the first of several channel operations that can proceed and runs that case; with a `default` it does not wait. A receive case binds the `T?` the receive yields, a send case sends, and a bare `<-ch` discards what it receives. When several cases are ready at once, one is chosen at random, so a busy channel cannot starve the others.
 
-```teak
+```snello
 select {
 case got := <-tasks:                        // got is Task?; the task is moved out of the channel
     t := got ?? return                      // None: channel closed, no more work
@@ -100,23 +100,23 @@ A send case goes only when the send would not wait: when the channel has room, o
 
 A task is not a thread. The runtime keeps one worker thread per core and runs the tasks on them: `spawn` gives the task a small stack of its own and puts it on a worker's queue, and a task runs until it waits, on a channel, a lock, a timer or a socket, when the worker switches to the next task and whoever the first was waiting for puts it back. Starting a task costs about a microsecond and switching between two about the same, so a program may have a hundred thousand of them waiting at once. A task that computes without ever waiting keeps its worker; the others run on the rest. A value sent on a channel is copied into the channel and the sender's variable is empty from then on; a value received is copied out into memory the receiving task owns, so each value is owned by exactly one task at any moment, which is what the rules above promise. An unbuffered channel hands a value over directly, and the sender continues only once a receiver has taken it; a buffered one holds up to its capacity. Three things to know:
 
-- **The program ends when `main` returns**, whatever the other tasks are doing. A program that needs its tasks to finish waits for them, on a channel as `examples/run/tasks.teak` does.
+- **The program ends when `main` returns**, whatever the other tasks are doing. A program that needs its tasks to finish waits for them, on a channel as `examples/run/tasks.snello` does.
 - **A channel is freed by its last handle.** A handle is an owned value: assigning it, passing it or capturing it in a `spawn` moves it, and `ch.Clone()` makes another handle on the same channel, so each task that sends or receives gets its own, `spawn produce(jobs.Clone())`. Sending, receiving, `close`, `len`, `for range` and `select` only borrow the handle, so a loop sends on one handle as often as it likes, and a function in the same task that only uses a channel takes it by `ref`. When the last handle is dropped the channel is freed, with any values still in it. Closing stays explicit: the last handle going does not close a channel, since no one is left to see it. Two handles are equal, `==`, when they are on one channel, as in Go, so a channel can be a map key.
 - **A panic in any task ends the program**, with the message, the drops of that task's own values, and exit status 2, as a panic in `main` does.
 - **A program that can never go on stops.** When every task waits, the main task among them, and nothing is left that could wake one, no timer and no socket, the program ends with `fatal error: all tasks are asleep - deadlock!` and status 2, as Go's does: a receive no task will ever send to, a `WaitGroup` that never reaches zero, two tasks each waiting for the other. A task asleep in `time.Sleep`, or waiting on a socket, or a pending `time.After`, is something that can still wake one, so such a program waits.
 
-`teak build -debug` checks a concurrent program as it checks any other, and reports the memory still held at the end; when a task is still running at that point the report is skipped, with a note, since what a running task owns is not a leak.
+`snello build -debug` checks a concurrent program as it checks any other, and reports the memory still held at the end; when a task is still running at that point the report is skipped, with a note, since what a running task owns is not a leak.
 
 ## Sharing state: `sync`
 
-Some state genuinely must be reached from several tasks: a counter, a cache, a cancellation flag. The `sync` package has the types for it, and the compiler checks their use with the rules of chapter 6 and nothing added. The sample is cut from `examples/run/sync.teak`.
+Some state genuinely must be reached from several tasks: a counter, a cache, a cancellation flag. The `sync` package has the types for it, and the compiler checks their use with the rules of chapter 6 and nothing added. The sample is cut from `examples/run/sync.snello`.
 
 - **`sync.Arc<T>`** is a handle on a value shared between tasks, as `rc.Rc` is within one: `sync.NewArc(v)` makes the first handle, `Clone` another, `Get` lends the value for reading, and the value is dropped with the last handle. An `Arc<T>` is `Send` when `T` is, so each task gets a clone of its own. An `Arc` never lends its value for changing.
 - **`sync.Mutex<T>`** owns a value and lends it for changing to one task at a time. `Lock` waits for the lock and returns a guard; `Get` on the guard lends the `mut T`, and the guard gives the lock back when it is dropped, at the end of its scope.
 - **`sync.RwLock<T>`** lends either for reading to any number of tasks, with `Read`, or for changing to one, with `Write`; each returns a guard of its kind. A task waiting to write holds back the readers that come after it, as Go's `RWMutex` does, so readers cannot keep a writer out; a task therefore does not `Read` again a lock it is reading.
 - **`sync.Once`** runs a function the first time `Do` is called and never again; **`sync.WaitGroup`** counts tasks with `Add` and `Done` and waits for zero with `Wait`. A `WaitGroup` is an owned handle like a channel: a task is given its own with `wg.Clone()` before the `spawn`, and the counter is freed with the last handle.
 
-```teak
+```snello
 counter := sync.NewArc(sync.NewMutex(0))
 wg := sync.NewWaitGroup()
 for i := 0; i < 4; i++ {

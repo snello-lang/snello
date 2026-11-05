@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The allocator under tk_alloc and tk_free, after the Go runtime's
+// The allocator under sn_alloc and sn_free, after the Go runtime's
 // (malloc.go). A small block is rounded up to one of a few size classes
 // and carved from a span, 64 KB of blocks of one class. Each thread
 // keeps a list of free blocks per class, as each P in Go keeps its
@@ -25,7 +25,7 @@
 #define _DEFAULT_SOURCE // glibc's mmap flags under -std=c11
 #define _DARWIN_C_SOURCE
 
-#include "teak.h"
+#include "snello.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -211,7 +211,7 @@ static void give_back(cache *k, int c) {
     pthread_mutex_unlock(&z->mu);
 }
 
-void *tk_heap_alloc(size_t n) {
+void *sn_heap_alloc(size_t n) {
     if (n > largest) {
         return malloc(n);
     }
@@ -228,7 +228,7 @@ void *tk_heap_alloc(size_t n) {
     return p;
 }
 
-void tk_heap_free(void *p) {
+void sn_heap_free(void *p) {
     uintptr_t off = (uintptr_t)p - (uintptr_t)base;
     if (off >= reserved) { // the system's block, or NULL
         free(p);
@@ -246,17 +246,17 @@ void tk_heap_free(void *p) {
 
 // The allocator of a release build; debug.c has the counting,
 // poisoning one of a debug build, over the same heap.
-#ifndef TK_DEBUG
-void *tk_alloc(size_t n) {
-    void *p = tk_heap_alloc(n);
+#ifndef SN_DEBUG
+void *sn_alloc(size_t n) {
+    void *p = sn_heap_alloc(n);
     if (p == NULL) {
-        tk_panic(TK_STR("out of memory", 13));
+        sn_panic(SN_STR("out of memory", 13));
     }
 
     return p;
 }
 
-void tk_free(void *p) {
-    tk_heap_free(p);
+void sn_free(void *p) {
+    sn_heap_free(p);
 }
 #endif

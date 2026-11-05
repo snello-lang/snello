@@ -1,0 +1,392 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package builtin documents what every Snello program has without an
+// import: the basic types, Option and Result, the methods of slices,
+// maps and strings, the built-in functions and the standard traits.
+// The compiler provides every one of them; this file is their
+// documentation, written where Go writes it, and nothing here is
+// compiled. A program does not import it, and the import is refused:
+// its names are in scope everywhere.
+//
+// The declarations have no bodies. Their receivers and parameters are
+// written as a program would write a call: a slice method on xs mut
+// []T lends the slice mut and changes it, one on xs ref []T reads it,
+// and a method on a value, Expect on o T?, takes it. T, K, V and E
+// stand for the element, key, value and error types of the receiver,
+// and U for a type a method's function argument gives back. A test
+// under std/ keeps this file in step with the compiler's tables: every
+// method here exists with this signature, and every method the
+// compiler has is here.
+package builtin
+
+// bool is true or false. It is Copy, Eq and Hash.
+type bool bool
+
+// string is immutable text, UTF-8 bytes with a length. It is Eq, Ord,
+// Hash and Clone; s[i] is its byte i, s[a:b] a borrow of the bytes a
+// to b, and len(s) its length in bytes. A string literal is a view of
+// the program's text and owns nothing; Clone makes an owned copy.
+type string string
+
+// The integers of fixed size. Each is Copy, Eq, Ord and Hash and
+// implements Add, Sub, Mul, Div, Rem and Neg; arithmetic wraps on
+// overflow, and division by zero panics.
+type i8 i8
+type i16 i16
+type i32 i32
+type i64 i64
+type u8 u8
+type u16 u16
+type u32 u32
+type u64 u64
+
+// int and uint are 64 bits wide: the types of len, of an index and of
+// an integer literal with nothing to say otherwise.
+type int int
+type uint uint
+
+// byte is u8 under another name, the element of []byte and the type of
+// s[i] on a string; rune is i32, a Unicode code point, the type of a
+// character literal 'x'.
+type byte u8
+type rune i32
+
+// The floating-point numbers, Copy, Eq and Ord, with the arithmetic
+// traits; f64 is the type of a literal with a point in it.
+type f32 f32
+type f64 f64
+
+// any is the type of a variadic parameter of a library function the
+// compiler writes, fmt.Println(args ...ref any), which takes an
+// argument of any type by its own type. A program cannot name it.
+type any any
+
+// true and false are the two values of bool.
+const true bool = true
+const false bool = false
+
+// An Option<T>, written T?, is a value of T or nothing: Some(v) or
+// None. It is what a lookup that may find nothing returns, and it is
+// taken apart by match, by an if binding, if v := opt { ... }, by ??
+// with a value or an exit on its right, and by ? in a function that
+// returns an Option itself. A borrow may be optional, ref T?, which is
+// how a borrow says absence, since no borrow is nil.
+enum Option<T> { Some(v T); None }
+
+// A Result<T, E> is a value of T or an error of E: Ok(v) or Err(e). A
+// function that can fail returns one; the caller passes the failure up
+// with ?, from a function returning a Result with the same error type,
+// or handles it with a match. E is any type; the library's is io.Error,
+// and a type implementing Error prints as its message.
+enum Result<T, E> { Ok(v T); Err(e E) }
+
+// An Ordering is what Cmp returns: how the receiver stands to the
+// argument.
+enum Ordering { Less; Equal; Greater }
+
+// len returns the length of a slice, an array, a string in bytes, a
+// map in entries, or a channel in buffered values.
+func len(x any) int
+
+// cap returns the capacity of a slice, an array or a channel: how much
+// it holds before it grows, or blocks.
+func cap(x any) int
+
+// make returns a new slice of a length and an optional capacity,
+// make([]T, n) or make([]T, n, cap), with every element the zero
+// value, or a new empty map, make(map[K]V). The type is its first
+// argument.
+func make<T>(n int) T
+
+// close closes a channel: a receive on it yields None once the values
+// already sent are taken, and a range over it ends. Nothing is sent on
+// a closed channel; closing one twice, or a receive-only channel, is
+// refused. It borrows the handle, as every operation on a channel
+// does, so the sender closes it and every receiver, on a handle of its
+// own, sees the end.
+func close<T>(ch ref chan<- T)
+
+// take moves the value out of a place written mut, a variable, field
+// or element, and leaves the type's zero value there: None for an
+// Option, "" for a string, 0 for a number. It is how a value leaves a
+// place that cannot be moved out of, an element or a field reached
+// through a borrow, and how a linked structure is rebuilt without a
+// placeholder.
+func take<T>(place mut T) T
+
+// panic prints its message and ends the program with status 2, after
+// the values still owned are dropped. It never returns, and the
+// compiler knows that: a match arm or an if branch may end in a panic
+// where a value is wanted.
+func panic(msg ref string)
+
+// print prints its arguments and a newline, as fmt.Println does. It is
+// for programs that import nothing; fmt is the library's way.
+func print(args ...ref any)
+
+// min and max return the least and the greatest of two or more numbers
+// of one type, which is the result's; a literal among them takes the
+// type of the others.
+func min<T>(a T, b T, rest ...T) T
+func max<T>(a T, b T, rest ...T) T
+
+// Copy marks a type whose values are copied on assignment and when
+// passed, rather than moved: the numbers, bool, a struct or enum that
+// lists Copy and whose every field is Copy. A Copy type cannot have a
+// Drop method.
+trait Copy {}
+
+// Clone gives an explicit, owned copy of a value that is not Copy. A
+// struct or enum that lists Clone has it derived from its fields when
+// every field is Clone; a type may write its own.
+trait Clone { func (s ref Self) Clone() Self }
+
+// Eq compares two values for equality, behind ==. A struct or enum
+// that lists Eq has it derived from its fields; a type that writes Eq
+// and lists Hash writes Hash too, since equal values must hash alike.
+trait Eq { func (s ref Self) Eq(o ref Self) bool }
+
+// Ord orders values, behind <, <=, > and >=, and refines Eq. A derived
+// Cmp compares field by field, in declaration order.
+trait Ord: Eq { func (s ref Self) Cmp(o ref Self) Ordering }
+
+// Hash gives a value's hash, for a map key, and refines Eq. A map's
+// key type must implement Hash.
+trait Hash: Eq { func (s ref Self) Hash() u64 }
+
+// Drop runs when a value goes out of scope, on every path out of its
+// function, and when a panic ends the program: a file closes itself, a
+// handle gives up its count. A type with a Drop method cannot be Copy.
+trait Drop { func (s mut Self) Drop() }
+
+// Error marks an error type: its message. A value of a type
+// implementing Error prints as its message wherever a value is
+// printed, inside an Err(...) as well.
+trait Error { func (s ref Self) Error() string }
+
+// The operator traits, behind the arithmetic operators on a declared
+// type: a + b calls a.Add(b), and -a calls a.Neg(). Each takes its
+// operands by value. The numbers implement them all.
+trait Add { func (a Self) Add(o Self) Self }
+trait Sub { func (a Self) Sub(o Self) Self }
+trait Mul { func (a Self) Mul(o Self) Self }
+trait Div { func (a Self) Div(o Self) Self }
+trait Rem { func (a Self) Rem(o Self) Self }
+trait Neg { func (a Self) Neg() Self }
+
+// Send marks a type whose values may cross from one task to another:
+// captured by a spawn, sent on a channel, received from one. It is
+// never listed on a type; the compiler reads it from the structure, and
+// a type is Send when every field is. The numbers, bool, string and a
+// channel handle are Send; an owned pointer, a slice, a map, an option
+// or a result is Send when what it holds is; a borrow never is, as it
+// points into a frame of the task that made it; a trait used as a type
+// is Send only when the trait refines Send, trait Job: Send; and a type
+// parameter only when bounded by it, T: Send. A type that holds a
+// local field is not Send.
+trait Send {}
+
+// local is a field that holds nothing and makes the type holding it
+// stay in its task: a value of that type is not Send. Only the
+// standard library writes it, on a type whose sharing is not safe
+// across tasks, as rc.Rc is, whose count of handles is not atomic. A
+// program never names it; its handles are refused at the task boundary
+// with a message naming the type.
+type local local
+
+// Push adds v at the end of the slice, which owns it from then on; the
+// slice grows when it is full.
+func (xs mut []T) Push(v T)
+
+// Pop removes the last element and returns it, or None when the slice
+// is empty.
+func (xs mut []T) Pop() T?
+
+// Insert adds v at index i, shifting the elements from i on by one; i
+// may be len(xs). An index past that panics.
+func (xs mut []T) Insert(i int, v T)
+
+// Remove removes the element at index i and returns it, shifting the
+// elements after it by one. An index out of range panics.
+func (xs mut []T) Remove(i int) T
+
+// RemoveValue removes the first element equal to v and reports whether
+// there was one. The element type must be Eq.
+func (xs mut []T) RemoveValue(v ref T) bool
+
+// Contains reports whether an element equals v. The element type must
+// be Eq.
+func (xs ref []T) Contains(v ref T) bool
+
+// Clear removes every element, dropping each, and keeps the memory for
+// the next Push.
+func (xs mut []T) Clear()
+
+// Swap exchanges the elements at indexes i and j, moving each into the
+// other's place; an index out of range panics.
+func (xs mut []T) Swap(i, j int)
+
+// Reverse reverses the order of the elements in place.
+func (xs mut []T) Reverse()
+
+// Sort orders the elements in place, least first by Cmp. The element
+// type must be Ord.
+func (xs mut []T) Sort()
+
+// SortBy orders the elements in place by less, which says whether a
+// goes before b.
+func (xs mut []T) SortBy(less func(a ref T, b ref T) bool)
+
+// Clone returns a new slice with a clone of every element. The element
+// type must be Clone.
+func (xs ref []T) Clone() []T
+
+// Get lends the value under k, or None when the key is absent. A read
+// m[k] gives the value or the zero value instead, and changes nothing.
+func (m ref map[K]V) Get(k ref K) ref V?
+
+// GetMut lends the value under k for changing, or None when the key is
+// absent; m[k] = v and m[k] += v make the entry when it is missing.
+func (m mut map[K]V) GetMut(k ref K) mut V?
+
+// Insert puts v under k, which the map owns from then on, dropping the
+// value that was there; a key already present keeps its place in the
+// insertion order a range follows.
+func (m mut map[K]V) Insert(k K, v V)
+
+// Remove takes the entry under k out and returns its value, or None
+// when the key is absent; the key is dropped.
+func (m mut map[K]V) Remove(k ref K) V?
+
+// Contains reports whether k has an entry.
+func (m ref map[K]V) Contains(k ref K) bool
+
+// Clone returns a new map with a clone of every key and value. Both
+// types must be Clone.
+func (m ref map[K]V) Clone() map[K]V
+
+// Clone returns another handle on the same channel, of the same
+// direction, to hand to another task: a channel handle is owned, moved
+// by assignment, a call, a capture or a send, and the channel is freed
+// with its last handle. Sending, receiving, close, len, cap, a range and
+// a select case borrow the handle, and a ref chan T converts to a
+// ref chan<- T or a ref <-chan T.
+func (ch ref chan T) Clone() chan T
+func (ch ref <-chan T) Clone() <-chan T
+func (ch ref chan<- T) Clone() chan<- T
+
+// Len returns the length of the string in bytes, as len does.
+func (s ref string) Len() int
+
+// ToUpper and ToLower return a new string with every letter changed
+// in case, by Unicode's simple case mapping, as Go's strings.ToUpper
+// and ToLower give it; a byte that is not valid UTF-8 becomes the
+// replacement rune U+FFFD, as there.
+func (s ref string) ToUpper() string
+func (s ref string) ToLower() string
+
+// Lines lends the lines of the string, split at each newline and
+// without it, nor a carriage return before it; a last line without a
+// newline is a line, and a trailing newline does not make an empty
+// one. A range over them yields each as a ref string into s. Go's
+// strings.Lines keeps each newline; this one drops it, the line a
+// program reads.
+func (s ref string) Lines() []ref string
+
+// Fields lends the words of the string, split around runs of white
+// space, the runes Go's unicode.IsSpace reports, as strings.Fields
+// does; a range over them yields each as a ref string into s. The
+// result holds borrows, and is ranged over, not kept.
+func (s ref string) Fields() []ref string
+
+// Split lends the pieces of the string between occurrences of sep, as
+// Fields does the words: an empty piece where two seps meet, and one
+// piece, the whole string, when sep is not there. An empty sep splits
+// after every UTF-8 sequence, and gives no pieces of an empty string,
+// as Go's strings.Split does.
+func (s ref string) Split(sep ref string) []ref string
+
+// SplitOnce lends what comes before the first sep and what comes
+// after it, or None when sep is not there: if (k, v) := line.
+// SplitOnce("=") binds both.
+func (s ref string) SplitOnce(sep ref string) (ref string, ref string)?
+
+// Trim lends the string without the white space at either end, the
+// runes Go's unicode.IsSpace reports: Go's strings.TrimSpace. Go's
+// strings.Trim, which takes the bytes to cut, has no counterpart.
+func (s ref string) Trim() ref string
+
+// HasPrefix, HasSuffix and Contains report whether the string starts
+// with, ends with or holds t.
+func (s ref string) HasPrefix(t ref string) bool
+func (s ref string) HasSuffix(t ref string) bool
+func (s ref string) Contains(t ref string) bool
+
+// IsDigit, IsSpace, IsLetter, IsUpper and IsLower say which class an
+// ASCII byte is in: a decimal digit, white space, a letter of either
+// case, an upper-case or a lower-case letter. A byte above 127 is in
+// none; text beyond ASCII is read by its runes.
+func (c ref byte) IsDigit() bool
+func (c ref byte) IsSpace() bool
+func (c ref byte) IsLetter() bool
+func (c ref byte) IsUpper() bool
+func (c ref byte) IsLower() bool
+
+// Eq, Cmp, Hash and Clone are the standard traits' methods, which the
+// strings, the numbers and bool have: Eq behind ==, Cmp behind <, Hash
+// for a map key, and Clone for an owned copy of a string. On a number
+// or a bool the other operand is taken by value, as the type is Copy.
+func (s ref string) Eq(o ref string) bool
+func (s ref string) Cmp(o ref string) Ordering
+func (s ref string) Hash() u64
+func (s ref string) Clone() string
+
+// Expect returns the value inside, or panics with msg when there is
+// none. It takes the Option.
+func (o T?) Expect(msg ref string) T
+
+// Unwrap returns the value inside, or panics with a message of its
+// own. Expect, with a message that says what was expected, reads
+// better.
+func (o T?) Unwrap() T
+
+// UnwrapOr returns the value inside, or v when there is none; v is
+// built whether or not it is needed, so o ?? v, which builds it only
+// then, is the same thing written shorter.
+func (o T?) UnwrapOr(v T) T
+
+// IsSome and IsNone report whether there is a value, without taking
+// it.
+func (o ref T?) IsSome() bool
+func (o ref T?) IsNone() bool
+
+// Map applies f to the value when there is one and returns the result
+// as an Option, or None when there was none. f may be a closure or a
+// function's name, and U is whatever it gives back.
+func (o T?) Map<U>(f func(v T) U) U?
+
+// Expect returns the Ok value, or panics with msg and the error when
+// the Result is an Err. It takes the Result.
+func (r Result<T, E>) Expect(msg ref string) T
+
+// Unwrap returns the Ok value, or panics with the error.
+func (r Result<T, E>) Unwrap() T
+
+// UnwrapOr returns the Ok value, or v when the Result is an Err, which
+// is dropped.
+func (r Result<T, E>) UnwrapOr(v T) T
+
+// IsOk and IsErr report which case the Result is, without taking it.
+func (r ref Result<T, E>) IsOk() bool
+func (r ref Result<T, E>) IsErr() bool
+
+// Map applies f to the Ok value and returns the result as a Result
+// with the same error type; an Err passes through as it is.
+func (r Result<T, E>) Map<U>(f func(v T) U) Result<U, E>
+
+// MapErr applies f to the error and returns a Result with the error
+// type f gives back; an Ok passes through as it is. It is how an
+// error of one type becomes one of another before ? passes it up.
+func (r Result<T, E>) MapErr<U>(f func(e E) U) Result<T, U>

@@ -1,9 +1,9 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 // This file reads the formats of fmt's printing functions: the grammar
-// of Go's fmt, of which Teak's fmt takes the verbs %d, %s, %v, %q, %f
+// of Go's fmt, of which Snello's fmt takes the verbs %d, %s, %v, %q, %f
 // and %t, a width, a precision and the minus flag. The checker checks a
 // format against its arguments with it, as go vet's printf check does,
 // and both backends lower a format with it, so the three read one
@@ -14,8 +14,8 @@ package types
 import (
 	"strconv"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // FormatText returns the text of the format e that fmt's printing
@@ -65,7 +65,7 @@ type FormatPiece struct {
 	Prec  int    // the precision, or -1
 }
 
-// FormatVerbs are the verbs Teak's fmt prints.
+// FormatVerbs are the verbs Snello's fmt prints.
 const FormatVerbs = "dfqstv"
 
 // An FormatError says what is wrong with a format.

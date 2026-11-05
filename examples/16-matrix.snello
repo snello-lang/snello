@@ -1,0 +1,63 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// 16: Small numeric code: vectors, a 4x4 matrix, operator methods.
+//
+// Tests Copy types, operator traits, and that hot loops have no hidden
+// allocation or reference counting.
+
+package linalg
+
+import ("fmt"; "math")
+
+// Operators are traits from the standard library: Add, Sub, Mul, and so
+// on. Implementing one is declaring it and writing the method.
+struct Vec3 impl Copy, Eq, Add, Sub, Mul<f64> {
+    x, y, z f64
+}
+
+func (a Vec3) Add(b Vec3) Vec3      { return Vec3{a.x + b.x, a.y + b.y, a.z + b.z} }
+func (a Vec3) Sub(b Vec3) Vec3      { return Vec3{a.x - b.x, a.y - b.y, a.z - b.z} }
+func (a Vec3) Mul(k f64) Vec3   { return Vec3{a.x * k, a.y * k, a.z * k} }
+func (a Vec3) Dot(b Vec3) f64   { return a.x*b.x + a.y*b.y + a.z*b.z }
+func (a Vec3) Len() f64         { return math.Sqrt(a.Dot(a)) }
+func (a Vec3) Norm() Vec3           { return a * (1 / a.Len()) }
+
+struct Mat4 impl Copy, Mul { m [16]f64 }
+
+func Identity() Mat4 {
+    var r Mat4
+    for i := 0; i < 4; i++ { r.m[i*4+i] = 1 }
+    return r
+}
+
+func (a Mat4) Mul(b Mat4) Mat4 {
+    var r Mat4
+    for i := 0; i < 4; i++ {
+        for j := 0; j < 4; j++ {
+            s := 0.0
+            for k := 0; k < 4; k++ { s += a.m[i*4+k] * b.m[k*4+j] }
+            r.m[i*4+j] = s
+        }
+    }
+    return r
+}
+
+// A buffer of vectors mutated in place through a mut borrow. Ranging over
+// `mut vs` yields a mut borrow of each element; assigning a whole new
+// value through a borrow uses `*`.
+func ScaleAll(vs mut []Vec3, k f64) {
+    for _, v := range vs { *v = *v * k }
+}
+
+func main() {
+    a := Vec3{1, 2, 3}
+    b := a                     // Copy: both usable
+    fmt.Println((a + b).Len())
+    m := Identity() * Identity()
+    fmt.Println(m.m[0], m.m[5])
+    pts := []Vec3{a, b}
+    ScaleAll(mut pts, 2)
+    fmt.Println(pts[0])
+}

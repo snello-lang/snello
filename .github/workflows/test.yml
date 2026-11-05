@@ -1,6 +1,6 @@
 # Runs the checks and the test suite on every push and pull request.
 #
-# The suite builds and runs Teak programs through both backends, and
+# The suite builds and runs Snello programs through both backends, and
 # the runtime under them has code per processor and per system: the
 # context switch is assembly for x86-64 and for arm64, the poller is
 # epoll on Linux and kqueue on Darwin, and a call into the runtime

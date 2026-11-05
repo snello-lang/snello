@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package scanner implements the lexer for Teak source text.
+// Package scanner implements the lexer for Snello source text.
 //
 // It follows the structure of Go's go/scanner: a Scanner is initialized
 // with a source buffer and returns one token per call to Scan, inserting
@@ -16,7 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 const (

@@ -1,7 +1,7 @@
-teak 4
+snello 6
 again
 ababab x, y, z x
-TEAK teak
+SNELLO snello
 11
 Ok(42) Ok(-7) Ok(3)
 Err("strconv.Atoi: parsing \"4x\": invalid syntax") Err("strconv.Atoi: parsing \"\": invalid syntax") Err("strconv.Atoi: parsing \"-\": invalid syntax")

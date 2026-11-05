@@ -1,29 +1,29 @@
 # Example programs
 
-Twenty programs written in Teak before Teak exists. They are the design's test suite: every rule in `../_docs/design/00-syntax-conventions.md` must let each of these read naturally, and every stage of the compiler must run them all. Numbers do not mean difficulty; the first five are the ones most likely to break the memory model.
+Twenty programs written in Snello before Snello exists. They are the design's test suite: every rule in `../_docs/design/00-syntax-conventions.md` must let each of these read naturally, and every stage of the compiler must run them all. Numbers do not mean difficulty; the first five are the ones most likely to break the memory model.
 
 | # | File | What it stresses |
 |---|---|---|
 | 01 | 01-tree/ | Parent pointers, three ways: Go pointers, hand-rolled slice, Arena<T> |
-| 02 | 02-pipeline/ | Channels and ownership crossing tasks, Go beside Teak |
-| 03 | http-cache.teak | Long-lived shared state, per-request borrows, Drop for connections |
-| 04 | graph.teak | Arena graph, BFS, heap with Ord bound |
-| 05 | parser.teak | Sum types, match, owned pointers for recursion, a borrow-holding struct |
-| 06 | linked-list.teak | `*Node?` links, take, partial moves, returning a ref from a ref receiver |
-| 07 | traits.teak | impl, default methods, trait fields, super, trait as a type |
-| 08 | generics.teak | Bounds, consume vs borrow in generic functions, conditional impl |
-| 09 | errors.teak | Result, custom error enums, ?, ?? |
-| 10 | wordfreq.teak | Owned string vs borrowed slice, maps, sorting |
-| 11 | json.teak | Recursive enum with collections, encoder/decoder |
-| 12 | worker-pool.teak | select, timeouts, cancellation token |
-| 13 | actor.teak | Task-owned state, message passing, reply channels |
-| 14 | files.teak | Drop vs defer, consuming Close |
-| 15 | lru.teak | Map into an Arena-backed linked list; the two-slots aliasing rule |
-| 16 | matrix.teak | Copy types, operator traits, no hidden allocation |
-| 17 | state-machine.teak | Enum states, consuming transitions |
-| 18 | iterators.teak | Closure capture modes, lazy iterator trait |
-| 19 | cli-grep.teak | Args, stdin/files, per-line borrows, exit codes |
-| 20 | bst.teak | Reborrowing down a chain of boxes, in-place delete |
+| 02 | 02-pipeline/ | Channels and ownership crossing tasks, Go beside Snello |
+| 03 | http-cache.snello | Long-lived shared state, per-request borrows, Drop for connections |
+| 04 | graph.snello | Arena graph, BFS, heap with Ord bound |
+| 05 | parser.snello | Sum types, match, owned pointers for recursion, a borrow-holding struct |
+| 06 | linked-list.snello | `*Node?` links, take, partial moves, returning a ref from a ref receiver |
+| 07 | traits.snello | impl, default methods, trait fields, super, trait as a type |
+| 08 | generics.snello | Bounds, consume vs borrow in generic functions, conditional impl |
+| 09 | errors.snello | Result, custom error enums, ?, ?? |
+| 10 | wordfreq.snello | Owned string vs borrowed slice, maps, sorting |
+| 11 | json.snello | Recursive enum with collections, encoder/decoder |
+| 12 | worker-pool.snello | select, timeouts, cancellation token |
+| 13 | actor.snello | Task-owned state, message passing, reply channels |
+| 14 | files.snello | Drop vs defer, consuming Close |
+| 15 | lru.snello | Map into an Arena-backed linked list; the two-slots aliasing rule |
+| 16 | matrix.snello | Copy types, operator traits, no hidden allocation |
+| 17 | state-machine.snello | Enum states, consuming transitions |
+| 18 | iterators.snello | Closure capture modes, lazy iterator trait |
+| 19 | cli-grep.snello | Args, stdin/files, per-line borrows, exit codes |
+| 20 | bst.snello | Reborrowing down a chain of boxes, in-place delete |
 
 ## Decisions these forced
 
@@ -47,4 +47,4 @@ The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there
 
 ## The core set
 
-`core/` holds eight of these programs rewritten in core Teak, without traits or user generics, as the acceptance suite for stage 1. See `core/README.md`.
+`core/` holds eight of these programs rewritten in core Snello, without traits or user generics, as the acceptance suite for stage 1. See `core/README.md`.

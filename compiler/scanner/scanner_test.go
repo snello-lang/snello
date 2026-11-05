@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 type elt struct {
@@ -185,7 +185,7 @@ type exampleFile struct {
 	src  []byte
 }
 
-// exampleFiles returns every .teak program under examples/, and fails
+// exampleFiles returns every .snello program under examples/, and fails
 // the test if there are fewer than the twenty the design promises.
 func exampleFiles(tb testing.TB) []exampleFile {
 	tb.Helper()
@@ -195,7 +195,7 @@ func exampleFiles(tb testing.TB) []exampleFile {
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(path, ".teak") {
+		if !d.IsDir() && strings.HasSuffix(path, ".snello") {
 			src, err := os.ReadFile(path)
 			if err != nil {
 				return err

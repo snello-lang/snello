@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: match is exhaustive. The message names the missing variant.
+// Fix: add a Failed arm, or a _ arm.
+
+package p
+
+enum State {
+    Closed
+    Open(id int)
+    Failed(reason string)
+}
+
+func describe(s ref State) string {
+    return match s {                      // ERROR "match is not exhaustive: missing Failed"
+        Closed  => "closed",
+        Open(_) => "open",
+    }
+}

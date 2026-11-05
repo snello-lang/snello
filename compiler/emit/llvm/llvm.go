@@ -1,8 +1,8 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package llvm writes a checked Teak program as LLVM IR, which clang
+// Package llvm writes a checked Snello program as LLVM IR, which clang
 // turns into a native binary over the C runtime the C backend uses,
 // linked unchanged. The layouts and the release points are those of
 // _docs/design/07-lowering.md, shared with the C backend through
@@ -31,14 +31,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/emit/lower"
-	"github.com/teak-lang/teak/compiler/token"
-	"github.com/teak-lang/teak/compiler/types"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // A Config says how the program is built: with the runtime's checks,
-// as teak build -debug asks, and for which processor, since a call
+// as snello build -debug asks, and for which processor, since a call
 // into the C runtime follows the processor's calling convention
 // (abi.go).
 type Config struct {
@@ -235,10 +235,10 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 	}
 
 	var out bytes.Buffer
-	put(&out, "; Emitted by the Teak compiler from ", file.Name(), ". Do not edit.\n")
+	put(&out, "; Emitted by the Snello compiler from ", file.Name(), ". Do not edit.\n")
 	put(&out, "source_filename = ", strconv.Quote(file.Name()), "\n")
 	put(&out, "target triple = ", strconv.Quote(triple(cfg.Arch, cfg.OS)), "\n\n")
-	put(&out, "%tk_string = type { ptr, i64, i64 }\n%tk_slice = type { ptr, i64, i64 }\n%tk_map = type { ptr, ptr, ptr, ptr, i64, i64, i64, i64 }\n%tk_trait = type { ptr, ptr }\n%tk_map_type = type { i64, i64, ptr, ptr, ptr, ptr }\n%tk_case = type { ptr, ptr, i8, i8 }\n")
+	put(&out, "%sn_string = type { ptr, i64, i64 }\n%sn_slice = type { ptr, i64, i64 }\n%sn_map = type { ptr, ptr, ptr, ptr, i64, i64, i64, i64 }\n%sn_trait = type { ptr, ptr }\n%sn_map_type = type { i64, i64, ptr, ptr, ptr, ptr }\n%sn_case = type { ptr, ptr, i8, i8 }\n")
 	out.Write(e.types.Bytes())
 	out.WriteString("\n")
 	out.Write(e.consts.Bytes())
@@ -262,16 +262,16 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 // mainFunc writes the module's main: the runtime set up, the program's
 // main, the top-level variables dropped, and the runtime's verdict.
 func (e *Emitter) mainFunc() {
-	e.declare("tk_init", "declare void @tk_init(i32, ptr)")
-	e.declare("tk_finish", "declare i32 @tk_finish()")
+	e.declare("sn_init", "declare void @sn_init(i32, ptr)")
+	e.declare("sn_finish", "declare i32 @sn_finish()")
 	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
-	e.inst("call void @tk_init(i32 %argc, ptr %argv)")
-	e.inst("call void @tk_main()")
+	e.inst("call void @sn_init(i32 %argc, ptr %argv)")
+	e.inst("call void @sn_main()")
 	for i := len(e.statics) - 1; i >= 0; i-- {
 		e.dropOf(e.statics[i].slot, e.statics[i].typ, token.NoPos)
 	}
 
-	code := e.op("call i32 @tk_finish()", "i32")
+	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
 	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv) {\nentry:\n")
 	e.funcs.Write(e.fn.allocas.Bytes())
@@ -409,7 +409,7 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 
 // funcDecl writes a function: its parameters stored into slots of
 // their own at the top, its body, and the drops and terminator the
-// body's end needs. Teak's main becomes tk_main, which the module's
+// body's end needs. Snello's main becomes sn_main, which the module's
 // main calls after the runtime is set up; a method is a function named
 // after its type whose first parameter is the receiver; a function
 // declared without a body is the runtime's and needs nothing written.
@@ -439,7 +439,7 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 	e.writeBody(name, sig, params, nil, nil, body, pos)
 }
 
-// writeBody writes a function under name whose Teak parameters are
+// writeBody writes a function under name whose Snello parameters are
 // params, after any leading IR parameters written as declared, such as
 // a closure's environment. prologue, when not nil, writes instructions
 // before the parameters are stored and returns how the body reaches
@@ -502,7 +502,7 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 	e.fn.terminated = true
 }
 
-// resultType writes the IR type a function returns: void for a Teak
+// resultType writes the IR type a function returns: void for a Snello
 // function of no result.
 func (e *Emitter) resultType(t types.Type, pos token.Pos) string {
 	if t == types.Unit {

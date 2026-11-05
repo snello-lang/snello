@@ -1,12 +1,12 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package parser
 
 import (
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // typeStart is the set of tokens that can begin a type. Callers test
@@ -311,7 +311,7 @@ func appendTypeParams(params []*ast.Param, names []*ast.Ident) []*ast.Param {
 
 // parseResults parses an optional result list: one type, or several in
 // parentheses. No type at all means no results. Result names are not
-// part of Teak, so the parenthesized form is a plain type list.
+// part of Snello, so the parenthesized form is a plain type list.
 //
 //	func() int               [int]
 //	func() (*Node, error)    [PointerType, error]

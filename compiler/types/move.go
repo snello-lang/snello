@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -7,8 +7,8 @@ package types
 import (
 	"slices"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // The move pass runs inside the checker's walk of
@@ -96,6 +96,30 @@ func (p place) within(q place) bool {
 	return p.v == q.v && (q.path == "" || p.path == q.path || len(p.path) > len(q.path) && p.path[:len(q.path)] == q.path && p.path[len(q.path)] == '.')
 }
 
+// resolve finds the object a name in an expression already checked
+// denotes: in the current scope, or, while the bindings of a match arm
+// or an if-binding are checked against the value they take apart, in
+// the scope the value was written in, since a binding may reuse a name
+// the value reads, if o := o, and the move or borrow of the value is
+// the old o's.
+func (c *Checker) resolve(name string) Object {
+	s := c.scope
+	if c.names != nil {
+		s = c.names
+	}
+
+	_, obj := s.LookupParent(name)
+	return obj
+}
+
+// resolvingIn runs f with the names of expressions resolved in outer.
+func (c *Checker) resolvingIn(outer *Scope, f func()) {
+	saved := c.names
+	c.names = outer
+	f()
+	c.names = saved
+}
+
 // placeOf resolves an expression to the place it denotes and how it is
 // reached. Names are looked up again rather than carried on operands,
 // so that nothing is allocated per expression on the way.
@@ -110,8 +134,7 @@ func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 			return place{c.recv, ""}, placeOwned
 		}
 
-		_, obj := c.scope.LookupParent(e.Name)
-		v, ok := obj.(*Var)
+		v, ok := c.resolve(e.Name).(*Var)
 		if !ok || v.field || v.pos == token.NoPos {
 			return place{}, notPlace
 		}
@@ -259,7 +282,7 @@ func (c *Checker) operandOf(e ast.Expr, hint Type) operand {
 // as does dropping it into the blank; passing it to a call
 // lends it again, which the caller handles.
 func (c *Checker) maybeMove(op operand, t Type) {
-	if op.expr == nil || op.mode != variable && op.mode != borrowed && op.mode != mutBorrowed {
+	if op.expr == nil || !held(op.expr, op.mode) && op.mode != borrowed && op.mode != mutBorrowed {
 		return
 	}
 
@@ -267,7 +290,20 @@ func (c *Checker) maybeMove(op operand, t Type) {
 		return
 	}
 
-	c.move(op.expr, op.mode)
+	m := op.mode
+	if m == value {
+		m = variable // a part of a value built here, which stays in it
+	}
+
+	c.move(op.expr, m)
+}
+
+// held reports whether an operation that takes the value of e, reached
+// as m says, takes it from a place: a variable, or a part of a value
+// built here, which the move refuses, since the whole is the
+// statement's and is dropped with it.
+func held(e ast.Expr, m mode) bool {
+	return m == variable || m == value && partOf(e)
 }
 
 // partOf reports whether e names a part of a value, a field, an element
@@ -421,7 +457,7 @@ func (c *Checker) containerName(e ast.Expr) string {
 func (c *Checker) placeType(e ast.Expr) Type {
 	switch e := e.(type) {
 	case *ast.Ident:
-		if _, obj := c.scope.LookupParent(e.Name); obj != nil && obj.Type() != nil {
+		if obj := c.resolve(e.Name); obj != nil && obj.Type() != nil {
 			return obj.Type()
 		}
 	case *ast.ParenExpr:
@@ -475,7 +511,13 @@ func exprText(e ast.Expr) string {
 		return exprText(e.X) + "." + e.Sel.Name
 	case *ast.IndexExpr:
 		return exprText(e.X) + "[" + exprText(e.Index) + "]"
+	case *ast.SliceExpr:
+		return exprText(e.X) + "[" + optText(e.Low) + ":" + optText(e.High) + "]"
 	case *ast.UnaryExpr:
+		if e.Op == token.REF || e.Op == token.MUT {
+			return e.Op.String() + " " + exprText(e.X) // the keyword, then the operand: ref fs
+		}
+
 		return e.Op.String() + exprText(e.X)
 	case *ast.CallExpr:
 		if len(e.Args) == 0 {
@@ -486,6 +528,15 @@ func exprText(e ast.Expr) string {
 	}
 
 	return "..."
+}
+
+// optText writes an optional bound of a slice expression.
+func optText(e ast.Expr) string {
+	if e == nil {
+		return ""
+	}
+
+	return exprText(e)
 }
 
 // forkAt starts a set of branches from the current state. The branches'

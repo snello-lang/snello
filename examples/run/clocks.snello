@@ -1,0 +1,74 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Time arithmetic, as Go's: a Time far from 1970 round-trips and
+// compares across centuries; Sub gives the longest Duration of its sign
+// when the span is longer than a Duration holds; Unix rounds down and
+// Unix carries nanoseconds past a second into the seconds; two Nows are
+// compared and subtracted on the monotonic clock; an After hands over
+// a whole Time, made by the runtime's timer; a Duration's String is
+// Go's, over every branch of its algorithm, with Round, Truncate and
+// Abs from Go's tests; and a Time prints in UTC as Go's String prints
+// one, across leap days, the first year and the year 9999.
+
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	far := time.Unix(10000000000, 0) // in the year 2286, past where nanoseconds in an i64 end
+	fmt.Println(far.Unix())
+
+	y2000 := time.Unix(946684800, 0)
+	y2300 := time.Unix(10413792000, 0)
+	fmt.Println(y2300.After(y2000), y2300.Before(y2000), y2000.Before(y2300))
+
+	years := i64(570)
+	later := time.Unix(946684800+years*31556952, 0) // 570 years on: more than a Duration holds
+	fmt.Println(later.Sub(y2000), y2000.Sub(later))
+	fmt.Println(time.Unix(10, 500).Sub(time.Unix(8, 700)))
+
+	fmt.Println(time.Unix(0, -1).Unix(), time.Unix(0, -1).UnixNano(), time.Unix(1, -1).UnixNano())
+	fmt.Println(time.Unix(0, 1500000000) == time.Unix(1, 500000000), time.Unix(0, 999999999).Add(1).Unix(), time.Unix(0, 0).Add(-1).Unix())
+
+	t := time.Now()
+	u := t.Add(3 * time.Second)
+	fmt.Println(u.Sub(t), u.After(t), t.Sub(u), t == t.Add(0), time.Since(t) >= 0)
+
+	v := (<-time.After(time.Millisecond)).Expect("a time")
+	fmt.Println(v.After(t), v.Sub(t) >= time.Millisecond, v.Unix() >= t.Unix())
+
+	longest := time.Duration(9223372036854775807)
+	shortest := time.Duration(-9223372036854775808)
+	spans := []time.Duration{0, 1, 999, time.Microsecond, 1500 * time.Nanosecond, time.Millisecond, time.Second,
+		time.Second + 1, time.Minute, time.Hour + 30*time.Minute, -10 * time.Second,
+		longest, shortest, 72*time.Hour + 3*time.Minute + 500*time.Millisecond, 1100 * time.Microsecond, -1}
+	for _, d := range spans {
+		fmt.Println(d)
+	}
+
+	rounds := [][]time.Duration{
+		{0, time.Second}, {time.Minute, -7 * time.Second}, {time.Minute, 0}, {time.Minute, 1}, {2 * time.Minute, time.Minute},
+		{-time.Minute, time.Minute}, {time.Hour, time.Minute}, {time.Minute, time.Hour},
+		{time.Minute, 31 * time.Second}, {-time.Minute, 31 * time.Second},
+		{time.Minute + 30*time.Second, 2 * time.Minute}, {-time.Minute - 30*time.Second, 2 * time.Minute},
+		{time.Minute, 2 * time.Minute}, {-time.Minute, 2 * time.Minute}, {longest, time.Second}, {shortest, time.Second},
+	}
+	for _, r := range rounds {
+		fmt.Println(r[0].Round(r[1]), r[0].Truncate(r[1]))
+	}
+
+	fmt.Println((-11*time.Second + 500*time.Millisecond).Truncate(time.Second), shortest.Abs(), (-5 * time.Second).Abs(), time.Duration(7).Abs())
+	fmt.Printf("%v %s %8v|\n", 1500*time.Millisecond, time.Hour, time.Millisecond)
+
+	stamps := [][]i64{
+		{0, 0}, {1700000000, 500}, {946684800, 0}, {-1, 0}, {951782400, 123456789}, {10413792000, 0}, {-62135596800, 0}, {253402300799, 999999999}, {-2208988800, 0}, {1709164800, 0}, {4107542400, 1},
+	}
+	for _, s := range stamps {
+		fmt.Println(time.Unix(s[0], s[1]))
+	}
+}

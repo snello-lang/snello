@@ -1,0 +1,118 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The strings and strconv packages written in Snello: a Builder written
+// to, read and reset, Repeat and Join, ToLower and ToUpper, Fields
+// through the package, Atoi with each of its errors, Itoa, ParseFloat
+// and FormatFloat, an Error's fields read, and the conversions between
+// a string and its bytes, owned and borrowed. Then fmt's Fprintln and
+// Fprintf writing to os.Stdout, widths in a format, and the variants of
+// another package's enum named through it, in a value and in patterns.
+// Then what the review of the library asked for: a top-level variable
+// given an owned string, dropped when main returns; a borrowed string's
+// bytes; a width counted in characters; io.Copy over a reader and a
+// writer of the program's own, the writer taking one byte at a time;
+// and a method named main.
+
+package main
+
+import ("fmt"; "io"; "os"; "strconv"; "strings")
+
+var greeting = "hi"
+
+// A Src hands out its bytes a few at a time, as a file would.
+struct Src impl io.Reader { data []byte; pos int }
+
+func (s mut Src) Read(buf mut []byte) Result<int, io.Error> {
+	n := 0
+	for s.pos < len(s.data) && n < len(buf) && n < 3 {
+		buf[n] = s.data[s.pos]
+		s.pos++
+		n++
+	}
+
+	return Ok(n)
+}
+
+// A Short takes one byte per Write, so a copy into it must ask again.
+struct Short impl io.Writer { got []byte }
+
+func (w mut Short) Write(buf ref []byte) Result<int, io.Error> {
+	w.got.Push(buf[0])
+	return Ok(1)
+}
+
+struct Clock {}
+
+func (c ref Clock) main() int { return 42 }
+
+func bytesOf(s ref string) int { return len([]byte(s)) }
+
+func main() {
+	var b strings.Builder
+	b.WriteString("snell")
+	b.WriteByte('o')
+	fmt.Println(b.String(), b.Len())
+	b.Reset()
+	b.WriteString("again")
+	fmt.Println(b.String())
+
+	parts := []string{"x", "y", "z"}
+	fmt.Println(strings.Repeat("ab", 3), strings.Join(ref parts, ", "), strings.Join(ref parts[:1], "-"))
+	fmt.Println(strings.ToUpper("Snello"), strings.ToLower("Snello"))
+	words := 0
+	for w := range strings.Fields("  one two  three ") {
+		words += w.Len()
+	}
+	fmt.Println(words)
+
+	fmt.Println(strconv.Atoi("42"), strconv.Atoi("-7"), strconv.Atoi("+3"))
+	fmt.Println(strconv.Atoi("4x"), strconv.Atoi(""), strconv.Atoi("-"))
+	fmt.Println(strconv.Atoi("9223372036854775807"), strconv.Atoi("9223372036854775808"))
+	fmt.Println(strconv.Atoi("-9223372036854775808"), strconv.Atoi("-9223372036854775809"))
+	fmt.Println(strconv.Itoa(-15), strconv.FormatFloat(2.5), strconv.FormatFloat(3), strconv.FormatFloat(0.1))
+	fmt.Println(strconv.ParseFloat("1.5e3"), strconv.ParseFloat("-0.25"), strconv.ParseFloat("abc"), strconv.ParseFloat(" 1"), strconv.ParseFloat("1e999"))
+	match strconv.Atoi("x") {
+		Ok(n) => fmt.Println(n),
+		Err(e) => fmt.Println(e.Func, e.Text, e.Msg),
+	}
+
+	bytes := []byte("hi")
+	bytes.Push('!')
+	fmt.Println(string(bytes), len(bytes))
+	owned := "own".Clone()
+	moved := []byte(owned)
+	fmt.Println(len(moved))
+	text := string(moved)
+	fmt.Println(text)
+
+	fmt.Fprintln(mut os.Stdout, "to", "stdout", 1)
+	fmt.Fprintf(mut os.Stdout, "%5d|%-4s|%3s|%2.1f|\n", 42, "ab", "abcdef", 2.25)
+	fmt.Printf("%6d %s\n", 7, "x")
+
+	match os.Open("/nonexistent/x") {
+		Ok(_) => fmt.Println("opened"),
+		Err(e) => fmt.Println(kind(e.Kind()), e.Kind() == io.NotExist, e.Kind()),
+	}
+
+	greeting = "hello, ".Clone() + "world"
+	fmt.Println(greeting, bytesOf(ref greeting), bytesOf("abc"))
+	fmt.Printf("|%-3s|%3s|\n", "\u00e9", "\u00e9")
+	fmt.Println(strconv.ParseFloat("1e-400"), strconv.ParseFloat("0x10"), strconv.ParseFloat("inf"))
+	src := Src{data: []byte("copied byte by byte"), pos: 0}
+	sink := Short{got: []byte{}}
+	fmt.Println(io.Copy(mut sink, mut src), string(sink.got))
+	c := Clock{}
+	fmt.Println(c.main())
+}
+
+// kind names a Kind by its variants, bare and qualified, as a program
+// matching another package's enum writes them.
+func kind(k io.Kind) string {
+	return match k {
+		NotExist => "missing",
+		io.Permission => "refused",
+		_ => "other",
+	}
+}

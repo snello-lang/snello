@@ -1,4 +1,4 @@
-// Copyright 2026 The Teak Programming Language. All rights reserved.
+// Copyright 2026 The Snello Programming Language. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teak-lang/teak/compiler/ast"
-	"github.com/teak-lang/teak/compiler/token"
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // TestStmts parses each statement and prints it back in canonical
@@ -40,7 +40,7 @@ func TestStmts(t *testing.T) {
 		{"match e { }", "match e { }"},
 		{"n := take(mut s.head) ?? return None", "n := (take((mut s.head)) ?? return None)"},
 
-		// if: Go's forms and Teak's binding.
+		// if: Go's forms and Snello's binding.
 		{"if x > 0 { a }", "if (x > 0) { a }"},
 		{"if v := f(); v > 0 { a }", "if v := f(); (v > 0) { a }"},
 		{"if x := opt { a }", "if x := opt { a }"},
@@ -161,7 +161,7 @@ func TestBindPatterns(t *testing.T) {
 // error messages.
 func parseStmtString(src string) (ast.Stmt, []string) {
 	var p Parser
-	p.init("test.teak", []byte(src))
+	p.init("test.snello", []byte(src))
 	s := p.parseStmt()
 	if p.tok != token.EOF && p.tok != token.SEMICOLON {
 		p.errorExpected(p.pos, "';' or newline")
