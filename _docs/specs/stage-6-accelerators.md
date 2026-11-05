@@ -1,6 +1,6 @@
 # Stage 6: accelerators
 
-Goal: one Teak kernel runs on a GPU through the LLVM targets, under the rule that nothing in earlier stages had to change to allow it.
+Goal: one Snello kernel runs on a GPU through the LLVM targets, under the rule that nothing in earlier stages had to change to allow it.
 
 ## Task 6.1: Kernel-safe subset
 
@@ -37,13 +37,13 @@ Goal: one Teak kernel runs on a GPU through the LLVM targets, under the rule tha
 **Description:** A twenty-first example, a matrix multiply from example 16's types, running on a GPU with its CPU result as the check.
 
 **Acceptance criteria:**
-- [ ] `examples/21-gpu-matmul.teak` runs and matches the CPU result
+- [ ] `examples/21-gpu-matmul.snello` runs and matches the CPU result
 
 **Verification:**
 - [ ] Manual check on GPU hardware
 
 **Dependencies:** 6.2
-**Files:** `examples/21-gpu-matmul.teak`
+**Files:** `examples/21-gpu-matmul.snello`
 **Scope:** M
 
 ## Checkpoint: stage 6

@@ -1,10 +1,10 @@
-# Teak language design
+# Snello language design
 
-Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section); the task model confirmed at the stage 3 checkpoint, 2026-10-20 (see the decision at the end of the concurrency section). This document records the decisions behind Teak and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
+Status: draft, 2026-10-17; the memory model confirmed at the stage 1 checkpoint, 2026-10-18 (see the decision at the end of the memory model section); the task model confirmed at the stage 3 checkpoint, 2026-10-20 (see the decision at the end of the concurrency section). This document records the decisions behind Snello and the reasoning for each. Syntax lives in `00-syntax-conventions.md`; the programs that test these decisions live in `../../examples/`.
 
 ## Goals
 
-1. Go's syntax and simplicity. A Go developer reads Teak on day one.
+1. Go's syntax and simplicity. A Go developer reads Snello on day one.
 2. Memory safety at compile time, without a garbage collector.
 3. No lifetime annotations.
 4. Go's concurrency model: lightweight tasks, channels, `select`.
@@ -16,15 +16,15 @@ Goal 2 is the one that shapes everything. Go's simplicity is largely bought by i
 
 ## Non-goals
 
-**Teak is not a drop-in replacement for Go.** The syntax is Go's so that a Go developer reads Teak immediately, but ordinary Go programs do not compile as Teak and are not meant to. Go code relies on `nil`, first-class pointers, implicitly shared mutable state, structural interfaces, and a garbage collector keeping values alive; Teak has none of these. Code is ported to Teak, not copied. The relationship is Zig to C or Kotlin to Java, not TypeScript to JavaScript. Code that already follows ownership discipline, such as a channel pipeline, looks nearly identical in both; code that does not will change shape.
+**Snello is not a drop-in replacement for Go.** The syntax is Go's so that a Go developer reads Snello immediately, but ordinary Go programs do not compile as Snello and are not meant to. Go code relies on `nil`, first-class pointers, implicitly shared mutable state, structural interfaces, and a garbage collector keeping values alive; Snello has none of these. Code is ported to Snello, not copied. The relationship is Zig to C or Kotlin to Java, not TypeScript to JavaScript. Code that already follows ownership discipline, such as a channel pipeline, looks nearly identical in both; code that does not will change shape.
 
-**Importing Go packages is not a language feature.** The compiler is written in Go, which makes a bridge to Go packages tempting. It is deliberately not offered: every Go value crossing that boundary brings `nil`, aliasing, and GC dependence with it, and a Teak program runs on its own runtime, which could never honor such imports. Interop with Go or C will be a bounded foreign-function boundary, designed separately once the native backend exists.
+**Importing Go packages is not a language feature.** The compiler is written in Go, which makes a bridge to Go packages tempting. It is deliberately not offered: every Go value crossing that boundary brings `nil`, aliasing, and GC dependence with it, and a Snello program runs on its own runtime, which could never honor such imports. Interop with Go or C will be a bounded foreign-function boundary, designed separately once the native backend exists.
 
-## What Teak leaves out
+## What Snello leaves out
 
 Simplicity is a goal with the same weight as the others, and it is kept by subtraction. Each of these was considered and rejected, and each rejection is a decision that needs an argument to reverse:
 
-| Left out | Why | What Teak has instead |
+| Left out | Why | What Snello has instead |
 |---|---|---|
 | Lifetime annotations | The hardest part of Rust to learn | Borrows inferred from one source, or rejected |
 | Complex numbers and untyped constant arithmetic | Rare, and a subtle corner of Go's specification | A library `Complex<T>` with the operator traits; literals typed by context |
@@ -36,7 +36,7 @@ Simplicity is a goal with the same weight as the others, and it is kept by subtr
 | Structural interfaces | Ambiguous once traits have defaults and fields | Nominal traits declared with `impl` |
 | Self-types, implicits, macros | Where Scala's and Rust's complexity lives | Nothing |
 | A garbage collector | The premise | Ownership, `Drop`, arenas, `Rc`/`Arc` where sharing is real |
-| Anonymous structs | A struct has a name; `struct{}` as "nothing" is a workaround for a language without a unit | `()`, the unit Teak already has: a signal channel is `chan ()` and the signal is `()` (decided 2026-10-20) |
+| Anonymous structs | A struct has a name; `struct{}` as "nothing" is a workaround for a language without a unit | `()`, the unit Snello already has: a signal channel is `chan ()` and the signal is `()` (decided 2026-10-20) |
 
 The test for any future addition: a Go developer must read it on day one without a glossary. If it needs a Rust or Scala word to explain, it is the wrong shape.
 
@@ -58,7 +58,7 @@ Ownership with moves by default and **second-class borrows**.
 
 - Every value has exactly one owner. Assignment and passing by value move the value. Types marked `Copy` (numbers, small plain structs) are copied.
 - A borrow (`ref T` shared, `mut T` exclusive) may be passed further down the call stack but may not be stored in a struct, captured by a task, put in a channel, or returned, with one built-in exception: a method with a borrowed receiver may return a borrow into that receiver, tied to the receiver's borrow.
-- Teak therefore has lifetimes but never writes them: every borrow's lifetime is inferred from the function it lives in or from the one input it was derived from, and programs where that is ambiguous are rejected rather than annotated. `04-borrows-ref-and-mut.md` has the rules and the list of what cannot be written.
+- Snello therefore has lifetimes but never writes them: every borrow's lifetime is inferred from the function it lives in or from the one input it was derived from, and programs where that is ambiguous are rejected rather than annotated. `04-borrows-ref-and-mut.md` has the rules and the list of what cannot be written.
 - Destructors run deterministically when the owner goes out of scope. `defer` remains for cleanup not tied to a value.
 - Structures that need non-owning links (parent pointers, graphs, LRU caches) use arenas with indices, which is already common Go idiom, or the standard library's `Rc`/`Weak`. Both are library types. See `02-arenas-and-indices.md` for the full reasoning.
 
@@ -88,13 +88,13 @@ Runtime, when it arrives in stage 4: an M:N work-stealing scheduler, blocking-lo
 
 A trait is a Go interface that may also carry default methods and fields. A type says what it implements on its declaration, and its methods are ordinary Go methods:
 
-```teak
+```snello
 struct Circle impl Shape, Named { r f64 }
 func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 ```
 
 - **Nominal, declared with `impl`.** Go's implicit satisfaction does not combine with default methods and fields, because it becomes ambiguous which default applies and where a field lives. Declaring it costs one word on the type and gives coherence for generics.
-- **No impl blocks.** Rust groups methods by trait in separate blocks. Go's methods-with-receivers already say everything needed, so Teak keeps them. The compiler checks the declared traits are satisfied.
+- **No impl blocks.** Rust groups methods by trait in separate blocks. Go's methods-with-receivers already say everything needed, so Snello keeps them. The compiler checks the declared traits are satisfied.
 - **Fields in traits** are stored inline in the implementing struct and set at construction. A trait field obeys the ownership rules of a struct field, with no exception: a default method on a borrowed `Self` returns a borrow of the field or a clone of it, never the field itself (decided 2026-10-19, when example 07's `return n.name` was found to move a string out of a borrow).
 - **Resolution is at compile time per concrete type.** Own methods first, then the impl list from right to left. `super` calls the next definition in that order. Every call is direct.
 - **Traits are the generic constraint.** Generics are monomorphized by default, with dictionary passing available later to control compile times.
@@ -119,21 +119,21 @@ These are not on the original list but follow from the ones that are.
 The compiler is written in Go. Reasons, in order of weight:
 
 1. The project is a collaboration where every line must be readable and debuggable by a Go developer.
-2. Self-hosting later becomes a translation job, since Teak has Go syntax.
-3. `go build` builds the compiler, and the compiler needs nothing but the system C compiler to build a Teak program.
+2. Self-hosting later becomes a translation job, since Snello has Go syntax.
+3. `go build` builds the compiler, and the compiler needs nothing but the system C compiler to build a Snello program.
 4. `go/types` is the best reference implementation of a production type checker in a language the team reads natively, and the Go runtime is the reference for the stage 4 scheduler.
 
 Go's lack of sum types is mitigated with sealed interfaces (an unexported marker method per node family) and the `go-check-sumtype` linter, which restores exhaustiveness checking on type switches.
 
 ### Backend: C first, LLVM later
 
-Teak produces a native executable from the first program. Stages 1 through 3 emit C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, and from stage 3 tasks and channels, is C under `compiler/emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Teak program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
+Snello produces a native executable from the first program. Stages 1 through 3 emit C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, and from stage 3 tasks and channels, is C under `compiler/emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Snello program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
 
 Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond `cc`. Stage 4 replaces the C emitter with LLVM IR when control over optimization, debug information, and the GPU targets of stage 6 demand it. The runtime carries over unchanged, and the C emitter is shaped so that the replacement is one package under `compiler/emit/`.
 
 **No collector, ever.** The checker decides where every value is freed, and the emitted C frees it there (task 1.9). A debug build poisons freed memory and asserts that nothing is reachable after its release, and a leak checker runs over the suite, so a missing or misplaced free is a failing test, not a slow leak.
 
-Decided 2026-10-18, replacing an earlier plan to emit Go source for the first three stages and keep Go's runtime as scaffolding. The owner's reason: Teak is its own language, and a Teak program must not run on another language's runtime, even temporarily.
+Decided 2026-10-18, replacing an earlier plan to emit Go source for the first three stages and keep Go's runtime as scaffolding. The owner's reason: Snello is its own language, and a Snello program must not run on another language's runtime, even temporarily.
 
 ### Stages
 
@@ -152,7 +152,7 @@ The twenty programs in `../../examples/` are the acceptance test for every stage
 
 ## Performance
 
-Where Teak should land once the native backend exists. Claims here are expectations from the design, not measurements; they become the benchmark suite for stage 4.
+Where Snello should land once the native backend exists. Claims here are expectations from the design, not measurements; they become the benchmark suite for stage 4.
 
 | | Against Go | Against Rust |
 |---|---|---|
@@ -164,9 +164,9 @@ Where Teak should land once the native backend exists. Claims here are expectati
 | Dynamic dispatch | Same: a trait as a type is an interface value | Same |
 | Compile time | Much slower: monomorphization plus LLVM | Equal |
 
-Measured 2026-10-20, on an eight-core arm64 laptop, by `bench/`, and again 2026-10-21 with the runtime's own allocator (stage 5, task 5.1), the numbers below (the programs in Teak, Go and Rust, best of three runs; `TEAK_BENCH=1 go test ./bench -v` reprints the table):
+Measured 2026-10-20, on an eight-core arm64 laptop, by `bench/`, and again 2026-10-21 with the runtime's own allocator (stage 5, task 5.1), the numbers below (the programs in Snello, Go and Rust, best of three runs; `SNELLO_BENCH=1 go test ./bench -v` reprints the table):
 
-| Program | Teak (LLVM) | Teak (C) | Go | Rust |
+| Program | Snello (LLVM) | Snello (C) | Go | Rust |
 |---|---|---|---|---|
 | `fib`, CPU-bound | 31 ms | 28 ms | 34 ms | 31 ms |
 | `tree`, allocation-heavy | 38 ms | 41 ms | 35 ms | 61 ms |
@@ -178,9 +178,9 @@ Measured 2026-10-20, on an eight-core arm64 laptop, by `bench/`, and again 2026-
 
 What the numbers say against the expectations: CPU-bound code is where the table expected it, level with Rust and ahead of Go. Allocation-heavy code was level with Rust and behind Go by the margin the table foresaw, 63 ms against 38, the collector's batching against a free per node; the runtime's own allocator, written for that measurement, brings it within a tenth of Go and ahead of Rust, whose boxes go to the system's allocator: a small block comes from a list of free blocks of its size kept by each thread, so an allocation and a free are a few instructions and no lock, as in Go's runtime. Strings and a map are behind both, by less since the allocator, 256 ms before it: `fmt.Sprint` allocates every string and the map hashes every key with a general routine, where Go's and Rust's are specialized; the library, not the language. A spawn and a switch cost seven to eleven times Go's: a task is a reserved stack and a locked queue today, where Go's is a two-kilobyte stack and a lock-free one, and a channel operation takes the channel's mutex where Go's fast path does not; the shape is right and the constants are the next work. Rust has no tasks of this kind in its standard library, so that row is not measured against it. The task numbers move by about a fifth from one run to the next, since they time the operating system's threads waking each other; the other rows repeat within a few milliseconds.
 
-The `memory` rows measure the two expectations no other row does, footprint and latency, with a tree of a million nodes kept alive while two thousand small ones are built and dropped beside it. Both hold. Teak's peak is the live tree, however many small trees die: `TestNoCollector` in `bench/` builds the program with one, two thousand and ten thousand rounds and fails if the peak grows by a tenth. Go's peak is 2.4 times the live tree, the headroom its collector leaves garbage before a cycle. Teak's rounds are even, and Go's are faster on average but about one in eleven takes over twice its mean, up to 0.7 ms in this run and 7 ms in the first, when a cycle walks the live tree; Rust's match Teak's, as the model predicts. The mean is the allocator row again: Go's bump allocation against a free per node, a gap the runtime's allocator closed from 184 µs to 103. The C backend's peak is twice the LLVM backend's because its `*Node?` is a pointer and a flag, where the LLVM backend's is a bare pointer, the zero-cost option the first of the details below promises.
+The `memory` rows measure the two expectations no other row does, footprint and latency, with a tree of a million nodes kept alive while two thousand small ones are built and dropped beside it. Both hold. Snello's peak is the live tree, however many small trees die: `TestNoCollector` in `bench/` builds the program with one, two thousand and ten thousand rounds and fails if the peak grows by a tenth. Go's peak is 2.4 times the live tree, the headroom its collector leaves garbage before a cycle. Snello's rounds are even, and Go's are faster on average but about one in eleven takes over twice its mean, up to 0.7 ms in this run and 7 ms in the first, when a cycle walks the live tree; Rust's match Snello's, as the model predicts. The mean is the allocator row again: Go's bump allocation against a free per node, a gap the runtime's allocator closed from 184 µs to 103. The C backend's peak is twice the LLVM backend's because its `*Node?` is a pointer and a flag, where the LLVM backend's is a bare pointer, the zero-cost option the first of the details below promises.
 
-The one place Teak can lose to Go is code that allocates and discards many small objects, because a collector makes allocation nearly free and pays later in batches, while ownership pays per object. The mitigations are already in the design: arenas, `Copy` structs, and a fast allocator in the runtime, written in stage 5.
+The one place Snello can lose to Go is code that allocates and discards many small objects, because a collector makes allocation nearly free and pays later in batches, while ownership pays per object. The mitigations are already in the design: arenas, `Copy` structs, and a fast allocator in the runtime, written in stage 5.
 
 Three implementation details the table depends on:
 
@@ -194,7 +194,7 @@ Compile time is the real trade. Rust-class speed and Go-class compile time have 
 
 Not in version one. Designed for from day one, under one rule: **nothing in version one may preclude it.** That rule forbids, for example, hidden allocation in `?` or in string concatenation.
 
-Why it fits Teak better than a collected language:
+Why it fits Snello better than a collected language:
 
 - The stage 4 backend is LLVM, which already targets NVIDIA and AMD GPUs. That is how Mojo and Julia got there.
 - Ownership is the right model for device memory. Moving a buffer to a device is a move; a device buffer is freed by `Drop`; the `Send` inference extends naturally to "may this type live on a device". A collector cannot see device memory, which is why collected languages struggle here.
@@ -208,7 +208,7 @@ What it will need, as a later stage:
 
 ## Prior art
 
-| Language | What Teak takes from it |
+| Language | What Snello takes from it |
 |---|---|
 | Inko | The closest existing match; single ownership plus lightweight processes without a GC |
 | Hylo | Value semantics without lifetimes |
@@ -228,7 +228,7 @@ In order of when each becomes useful.
 2. The `go/types` package source. Stage 1.
 3. Robert Nystrom, *Crafting Interpreters*, second half. Closures, resolution, bytecode.
 4. Osvald et al., *Gentrification Gone Too Far? Affordable 2nd-Class Values*. The paper behind second-class borrows.
-5. Weiss et al., *Oxide: The Essence of Rust*. A readable formal model of what Teak simplifies.
+5. Weiss et al., *Oxide: The Essence of Rust*. A readable formal model of what Snello simplifies.
 6. The Inko compiler and the Hylo language specification.
 7. The Go runtime scheduler, `runtime/proc.go`. Stage 4.
 
@@ -236,4 +236,4 @@ In order of when each becomes useful.
 
 ## Name
 
-Teak: a hardwood known for durability and resistance to rot, which maps onto memory safety without a collector. Four letters, one syllable, no collision with an existing language. GitHub organization `teak-lang`, following the golang and rust-lang convention. Brand assets are in `../brand/`.
+Snello: a hardwood known for durability and resistance to rot, which maps onto memory safety without a collector. Four letters, one syllable, no collision with an existing language. GitHub organization `snello-lang`, following the golang and rust-lang convention. Brand assets are in `../brand/`.
