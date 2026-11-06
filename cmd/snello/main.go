@@ -4,21 +4,24 @@
 
 // Command snello is the Snello compiler driver.
 //
-// `snello build FILE` compiles a Snello program to a native binary in the
-// current directory, through the LLVM backend and clang, with the
-// packages of its own found through the nearest snello.mod above the
-// file (_docs/design/08-packages.md); `snello build
+// `snello build FILE` compiles a Snello program of one file to a native
+// binary in the current directory, through the LLVM backend and clang,
+// and `snello build DIR` a program of every .snello file in a
+// directory, named after the directory as go build names it; the
+// packages of the program's own are found through the nearest
+// snello.mod above it (_docs/design/08-packages.md). `snello build
 // -debug FILE` builds it with the runtime's checks, which stop the
 // program on a value used after its release and report values never
 // released; `snello build -backend c FILE` builds it through the C
 // backend, the reference implementation, and the system's C compiler.
 // Four more subcommands inspect the compiler by hand: `snello lex FILE`
 // prints the token stream, `snello parse FILE` the syntax tree, `snello
-// check FILE` what the checker finds, and `snello emit [-backend c]
-// FILE` the IR module, or the C source, that build would compile.
+// check FILE|DIR` what the checker finds, and `snello emit [-backend c]
+// FILE|DIR` the IR module, or the C source, that build would compile.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -71,7 +74,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | lex | parse | check) FILE")
+	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | check) FILE|DIR")
+	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
 	os.Exit(2)
 }
 
@@ -140,26 +144,16 @@ func parse(path string) int {
 	return 0
 }
 
-// check parses and checks a file and prints the errors; it prints
-// nothing and exits 0 when the file is correct.
+// check parses and checks a program, a file or a directory, and prints
+// the errors; it prints nothing and exits 0 when the program is correct.
+// A package that is not a program passes too, as go vet takes one.
 func check(path string) int {
-	src, ok := readSource(path)
+	names, _, ok := programFiles(path)
 	if !ok {
 		return 1
 	}
 
-	f, file, err := parser.ParseFile(path, src)
-	if err == nil {
-		imp, ok := newImporter(path, &types.Info{})
-		if !ok {
-			return 1
-		}
-
-		conf := types.Config{Importer: imp}
-		_, err = conf.Check("", file, f, nil)
-	}
-
-	if err != nil {
+	if _, _, err := importer.LoadProgram(names, &types.Info{}); err != nil {
 		printErrors(err)
 		return 1
 	}
@@ -179,10 +173,15 @@ func emit(path, backend string) int {
 	return 0
 }
 
-// build compiles a file to a native binary named after it, in the
-// current directory, through the backend asked for; debug asks for
-// the runtime's checks.
+// build compiles a program, a file or a directory, to a native binary
+// named after it, in the current directory, through the backend asked
+// for; debug asks for the runtime's checks.
 func build(path, backend string, debug bool) int {
+	_, isDir, ok := programFiles(path)
+	if !ok {
+		return 1
+	}
+
 	src, ok := emitSource(path, backend, debug)
 	if !ok {
 		return 1
@@ -195,7 +194,7 @@ func build(path, backend string, debug bool) int {
 	}
 
 	defer os.RemoveAll(dir)
-	name := strings.TrimSuffix(filepath.Base(path), ".snello")
+	name := programName(path, isDir)
 	var bin string
 	var out []byte
 	if backend == "llvm" {
@@ -222,34 +221,31 @@ func build(path, backend string, debug bool) int {
 	return 0
 }
 
-// emitSource parses, checks and emits a file through the backend,
-// printing the errors of whichever step fails. The LLVM backend emits
-// a debug build's checks itself, so it is told; the C backend's are a
-// flag of the C compiler.
+// emitSource loads a program, a file or a directory, and emits it
+// through the backend, printing the errors of whichever step fails. A
+// package that is not a program is refused as CheckMain says, since
+// only check takes one. The LLVM backend emits a debug build's checks
+// itself, so it is told; the C backend's are a flag of the C compiler.
 func emitSource(path, backend string, debug bool) ([]byte, bool) {
-	src, ok := readSource(path)
+	names, _, ok := programFiles(path)
 	if !ok {
 		return nil, false
 	}
 
-	f, file, err := parser.ParseFile(path, src)
 	info := &types.Info{}
-	imp, ok := newImporter(path, info)
-	if !ok {
-		return nil, false
-	}
-
+	imp, prog, err := importer.LoadProgram(names, info)
 	if err == nil {
-		conf := types.Config{Importer: imp}
-		_, err = conf.Check("", file, f, info)
+		if err = prog.CheckMain(); err != nil {
+			err = errors.New(path + ": " + err.Error())
+		}
 	}
 
 	var out []byte
 	if err == nil {
 		if backend == "llvm" {
-			out, err = llvm.Emit(llvm.Config{Debug: debug}, file, f, info, libraries(imp)...)
+			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libraries(imp)...)
 		} else {
-			out, err = c.Emit(file, f, info, libraries(imp)...)
+			out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libraries(imp)...)
 		}
 	}
 
@@ -261,19 +257,53 @@ func emitSource(path, backend string, debug bool) ([]byte, bool) {
 	return out, true
 }
 
-// newImporter returns the importer for a program at path: one that
-// finds the program's own packages through the module named by the
-// nearest snello.mod above the file, or the standard library alone
-// when there is none. A module file that does not read is reported.
-func newImporter(path string, info *types.Info) (*importer.Importer, bool) {
-	imp := importer.NewImporter(info)
-	var err error
-	if imp.Module, err = importer.FindModule(filepath.Dir(path)); err != nil {
+// programFiles returns the source files of the program at path, as go
+// build takes a file or a directory: the one file named, which must
+// end in .snello, or every .snello file of the directory, which must
+// hold one; and whether path is a directory. A failure is reported to
+// stderr.
+func programFiles(path string) (names []string, dir, ok bool) {
+	info, err := os.Stat(path)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return nil, false
+		return nil, false, false
 	}
 
-	return imp, true
+	if !info.IsDir() {
+		if !isSource(path) {
+			return nil, false, false
+		}
+
+		return []string{path}, false, true
+	}
+
+	names, err = importer.SourceFiles(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, true, false
+	}
+
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "%s: no .snello files in the directory\n", path)
+		return nil, true, false
+	}
+
+	return names, true, true
+}
+
+// programName names the binary of a build: the last element of path,
+// as go build names it, which for a directory given as . or .. comes
+// from its absolute path, without the .snello extension of a file, or
+// of a directory so named, so that the binary is never taken for a
+// source file by the next build.
+func programName(path string, dir bool) string {
+	if dir {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+
+	return strings.TrimSuffix(filepath.Base(path), ".snello")
 }
 
 // libraries returns the packages the importer loaded, as the backends
@@ -306,8 +336,7 @@ func printErrors(err error) {
 // stray file from being compiled as Snello, and it keeps build from
 // writing the binary over a source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
-	if !strings.HasSuffix(path, ".snello") {
-		fmt.Fprintf(os.Stderr, "%s: Snello source files end in .snello\n", path)
+	if !isSource(path) {
 		return nil, false
 	}
 
@@ -318,4 +347,15 @@ func readSource(path string) ([]byte, bool) {
 	}
 
 	return src, true
+}
+
+// isSource reports whether path names a Snello source file, and says
+// so to stderr when it does not.
+func isSource(path string) bool {
+	if !strings.HasSuffix(path, ".snello") {
+		fmt.Fprintf(os.Stderr, "%s: Snello source files end in .snello\n", path)
+		return false
+	}
+
+	return true
 }

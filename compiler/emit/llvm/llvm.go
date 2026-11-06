@@ -124,10 +124,18 @@ type deferred struct {
 	call *ast.CallExpr
 }
 
-// Emit writes the IR module for a checked file and the library
-// packages it imports, each after the ones it imports. info must hold
-// the Defs, Uses and Types the checker recorded for all of them; the
-// files resolve the positions in error messages.
+// Emit writes the IR module for a checked file, a program of one, and
+// the library packages it imports; EmitFiles takes a main package of
+// several files.
+func Emit(cfg Config, file *token.File, f *ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
+	return EmitFiles(cfg, []*token.File{file}, []*ast.File{f}, info, libraries...)
+}
+
+// EmitFiles writes the IR module for a checked main package, its files
+// parsed into one FileSet, and the library packages it imports, each
+// after the ones it imports. info must hold the Defs, Uses and Types
+// the checker recorded for all of them; the files resolve the positions
+// in error messages.
 //
 // The box of a function value has one size in the whole module, since
 // it is part of every function type, and the size is found before any
@@ -136,7 +144,7 @@ type deferred struct {
 // known only as the instance is written; when one needs a larger box
 // than the module was written with, the module is written again with
 // that size, which settles in a pass or two.
-func Emit(cfg Config, file *token.File, f *ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
+func EmitFiles(cfg Config, files []*token.File, fs []*ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
 	target, err := targetABI(cfg.Arch)
 	if err != nil {
 		return nil, err
@@ -148,13 +156,13 @@ func Emit(cfg Config, file *token.File, f *ast.File, info *types.Info, libraries
 
 	words := minBoxWords
 	for pass := 0; ; pass++ {
-		out, need, err := emitPass(cfg, target, words, file, f, info, libraries)
+		out, need, err := emitPass(cfg, target, words, files, fs, info, libraries)
 		if err != nil || need == 0 {
 			return out, err
 		}
 
 		if pass == maxPasses { // a box that must hold more than itself, which no Copy value is
-			return nil, &Error{[]string{file.Name() + ": the LLVM backend does not support a closure whose copies need a box of " + strconv.Itoa(need) + " words yet"}}
+			return nil, &Error{[]string{files[0].Name() + ": the LLVM backend does not support a closure whose copies need a box of " + strconv.Itoa(need) + " words yet"}}
 		}
 
 		words = need
@@ -169,12 +177,12 @@ const maxPasses = 8
 // emitPass writes the module once with boxes of at least words words, and
 // returns it with the larger size a closure needed, or zero when every
 // closure fit.
-func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, info *types.Info, libraries []lower.Library) ([]byte, int, error) {
+func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.File, info *types.Info, libraries []lower.Library) ([]byte, int, error) {
 	e := &Emitter{
 		cfg:        cfg,
 		abi:        target,
 		info:       info,
-		file:       file,
+		file:       files[0],
 		decls:      make(map[string]string),
 		state:      make(map[string]bool),
 		seen:       make(map[string]bool),
@@ -194,8 +202,12 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 	}
 
 	e.sizeBoxes()
-	units := append(append([]lower.Library(nil), libraries...), lower.Library{File: file, Syntax: f})
-	for _, u := range units {
+	units := append([]lower.Library(nil), libraries...)
+	for i, f := range fs {
+		units = append(units, lower.Library{File: files[i], Syntax: f})
+	}
+
+	for i, u := range units {
 		e.file = u.File
 		for _, d := range u.Syntax.Decls {
 			switch d := d.(type) {
@@ -213,7 +225,7 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 					}
 				}
 			case *ast.VarDecl:
-				e.varDecl(d, u.Syntax != f)
+				e.varDecl(d, i < len(libraries))
 			}
 		}
 	}
@@ -227,7 +239,7 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 		}
 	}
 
-	e.file = file
+	e.file = files[0]
 	e.instances()
 	e.mainFunc()
 	if len(e.errors) > 0 {
@@ -238,9 +250,14 @@ func emitPass(cfg Config, target abi, words int, file *token.File, f *ast.File, 
 		return nil, e.boxNeed, nil
 	}
 
+	sources := make([]string, len(files))
+	for i, f := range files {
+		sources[i] = f.Name()
+	}
+
 	var out bytes.Buffer
-	put(&out, "; Emitted by the Snello compiler from ", file.Name(), ". Do not edit.\n")
-	put(&out, "source_filename = ", strconv.Quote(file.Name()), "\n")
+	put(&out, "; Emitted by the Snello compiler from ", strings.Join(sources, ", "), ". Do not edit.\n")
+	put(&out, "source_filename = ", strconv.Quote(files[0].Name()), "\n")
 	put(&out, "target triple = ", strconv.Quote(triple(cfg.Arch, cfg.OS)), "\n\n")
 	put(&out, "%sn_string = type { ptr, i64, i64 }\n%sn_slice = type { ptr, i64, i64 }\n%sn_map = type { ptr, ptr, ptr, ptr, i64, i64, i64, i64 }\n%sn_trait = type { ptr, ptr }\n%sn_map_type = type { i64, i64, ptr, ptr, ptr, ptr }\n%sn_case = type { ptr, ptr, i8, i8 }\n")
 	out.Write(e.types.Bytes())

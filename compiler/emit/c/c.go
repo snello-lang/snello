@@ -78,19 +78,27 @@ type deferred struct {
 	code string
 }
 
-// Emit writes the C program for a checked file and the library
-// packages it imports, each after the ones it imports, into one C
-// file with the library names qualified by their import paths. info
-// must hold the Defs, Uses and Types the checker recorded for all of
-// them; the files resolve the positions in error messages.
+// Emit writes the C program for a checked file, a program of one, and
+// the library packages it imports; EmitFiles takes a main package of
+// several files.
 func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
+	return EmitFiles([]*token.File{file}, []*ast.File{f}, info, libraries...)
+}
+
+// EmitFiles writes the C program for a checked main package, its files
+// parsed into one FileSet, and the library packages it imports, each
+// after the ones it imports, into one C file with the library names
+// qualified by their import paths. info must hold the Defs, Uses and
+// Types the checker recorded for all of them; the files resolve the
+// positions in error messages.
+func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
 	if err := lower.CheckPrefixes(libraries); err != nil {
 		return nil, err
 	}
 
 	e := &Emitter{
 		info:     info,
-		file:     file,
+		file:     files[0],
 		used:     make(map[types.Object]bool, len(info.Uses)),
 		state:    make(map[string]int),
 		seen:     make(map[string]bool),
@@ -100,7 +108,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
 		done:     make(map[string]bool),
-		names:    newNaming(f),
+		names:    newNaming(fs),
 		jumped:   make(map[string]bool),
 	}
 	e.state["sn_slice_u8"] = defined // the runtime defines []byte in snello.h, as the library's bodiless functions take it
@@ -108,8 +116,12 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		e.used[obj] = true
 	}
 
-	units := append(libraries, lower.Library{File: file, Syntax: f})
-	for _, u := range units {
+	units := append([]lower.Library(nil), libraries...)
+	for i, f := range fs {
+		units = append(units, lower.Library{File: files[i], Syntax: f})
+	}
+
+	for i, u := range units {
 		e.file = u.File
 		for _, d := range u.Syntax.Decls {
 			switch d := d.(type) {
@@ -126,7 +138,7 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 					}
 				}
 			case *ast.VarDecl:
-				e.varDecl(d, u.Syntax != f)
+				e.varDecl(d, i < len(libraries))
 			}
 		}
 	}
@@ -156,8 +168,13 @@ func Emit(file *token.File, f *ast.File, info *types.Info, libraries ...lower.Li
 		return nil, &Error{e.errors}
 	}
 
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name()
+	}
+
 	var out bytes.Buffer
-	put(&out, "// Emitted by the Snello compiler from ", file.Name(), ". Do not edit.\n\n#include \"snello.h\"\n\n")
+	put(&out, "// Emitted by the Snello compiler from ", strings.Join(names, ", "), ". Do not edit.\n\n#include \"snello.h\"\n\n")
 	put(&out, "#define SN_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
 	out.Write(e.decls.Bytes())
 	out.WriteString("\n")

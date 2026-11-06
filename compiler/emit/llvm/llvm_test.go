@@ -79,6 +79,33 @@ func TestRunExamples(t *testing.T) {
 			})
 		}
 	}
+
+	dirs, err := backendtest.Directories(filepath.Join("..", "..", "..", "examples", "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range dirs {
+		want, err := os.ReadFile(dir + ".out")
+		if err != nil {
+			continue // the C suite names a program without its output
+		}
+
+		for _, debug := range []bool{false, true} {
+			suffix := ""
+			if debug {
+				suffix = "-debug"
+			}
+
+			t.Run(filepath.Base(dir)+suffix, func(t *testing.T) {
+				t.Parallel()
+				out, stderr, code := runDir(t, dir, debug)
+				if out != string(want) || code != 0 {
+					t.Errorf("%s printed:\n%s--- stderr ---\n%s--- exit %d, want ---\n%s", dir, out, stderr, code, want)
+				}
+			})
+		}
+	}
 }
 
 // TestNoReservation runs the allocator's program, in both builds,
@@ -436,6 +463,31 @@ func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string
 		t.Fatal(err)
 	}
 
+	return execute(t, name, module, debug, fixtures...)
+}
+
+// runDir builds the program in dir, a main package of one or several
+// files with the packages of its own found through the module file
+// above it, as snello build DIR does, and runs it.
+func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
+	t.Helper()
+	prog, info, libs, err := backendtest.LoadDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	module, err := EmitFiles(Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return execute(t, filepath.Base(dir), module, debug)
+}
+
+// execute compiles the module as the program name, in a directory of
+// its own with the fixtures beside it, and runs it there.
+func execute(t *testing.T, name string, module []byte, debug bool, fixtures ...string) (string, string, int) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, fixture := range fixtures {
 		entries, err := os.ReadDir(fixture)

@@ -52,6 +52,7 @@ go run ./cmd/snello lex FILE     # print the token stream of a Snello file
 go run ./cmd/snello parse FILE   # print the syntax tree
 go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct
 go run ./cmd/snello build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
+go run ./cmd/snello build DIR    # the same for a program of every .snello file in a directory, named after it
 go run ./cmd/snello build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, or CC set
 go run ./cmd/snello emit FILE    # print the IR module that build compiles; -backend c prints the C source
 ```
@@ -70,7 +71,7 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
 | `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower |
-| `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the module `snello.mod` declares (`mod.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
+| `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the module `snello.mod` declares (`mod.go`), and the main package of a file or a directory for the driver and the tests (`program.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
 | `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
 | `compiler/emit/c/` | The C emitter, the reference backend |
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |

@@ -1,0 +1,27 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package shapes is a package of the program's own, found through the
+// module file above it: the trait and the structs are in this file,
+// the enum and the generic functions in area.snello.
+package shapes
+
+import "math"
+
+trait Shape {
+	func (s ref Self) Name() string
+	func (s ref Self) Area() f64
+}
+
+struct Circle impl Shape { Radius f64 }
+
+func (c ref Circle) Name() string { return "circle" }
+
+func (c ref Circle) Area() f64 { return math.Pi * c.Radius * c.Radius }
+
+struct Rect impl Shape { W f64; H f64 }
+
+func (r ref Rect) Name() string { return "rect" }
+
+func (r ref Rect) Area() f64 { return r.W * r.H }
