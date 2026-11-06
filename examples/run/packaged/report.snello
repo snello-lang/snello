@@ -1,0 +1,28 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package main
+
+import ("fmt"; "example.com/packaged/shapes")
+
+// reports counts the reports made: a global declared in the second
+// file of the main package without a value, read by the first.
+var reports int
+
+// report is in the second file of the main package, which main.snello
+// sees as it sees its own declarations; its bound is the trait of the
+// package beside the program.
+func report<S: shapes.Shape>(s ref S) string {
+	reports += 1
+	return fmt.Sprintf("%s %.2f", s.Name(), s.Area())
+}
+
+// kindOf is the kind of a shape, an enum of the package.
+func kindOf<S: shapes.Shape>(s ref S) shapes.Kind {
+	if s.Name() == "circle" {
+		return shapes.Round
+	}
+
+	return shapes.Square
+}

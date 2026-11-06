@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package shapes
+
+// Kind says whether a shape has corners.
+enum Kind impl Copy, Clone, Eq { Round; Square }
+
+// Describe names a kind.
+func Describe(k Kind) string {
+	return match k {
+		Round => "round",
+		Square => "square",
+	}
+}
+
+// Area is the area of a shape taken as its own.
+func Area<S: Shape>(s S) f64 { return s.Area() }
+
+// Largest is the larger area of two shapes lent.
+func Largest<A: Shape, B: Shape>(a ref A, b ref B) f64 { return max(a.Area(), b.Area()) }

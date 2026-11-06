@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `snello build` produces native binaries for all of core Snello (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there; `snello build -debug` checks the drops at run time (stage 1, task 1.9). Packages of the program's own and the module file are decided (stage 5, task 5.3); a package of one or several files imports through `snello.mod` today, and `snello build DIR` is not built yet.
+Status: `snello build` produces native binaries for all of core Snello (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there; `snello build -debug` checks the drops at run time (stage 1, task 1.9). Packages of the program's own and the module file are decided (stage 5, task 5.3); a package of one or several files imports through `snello.mod`, and `snello build DIR` builds a program of several files (stage 5, task 5.3).
 
 ## The compiler
 
@@ -33,7 +33,7 @@ snello build hello.snello
 ./hello
 ```
 
-`snello build` writes a native executable named after the file, in the current directory. The file name must end in `.snello`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Snello's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
+`snello build` writes a native executable named after the file, in the current directory, or after the directory when given one: `snello build DIR` builds every `.snello` file in it as one program, which the section on packages below comes to. The file name must end in `.snello`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Snello's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
 
 `snello build` writes LLVM IR and has clang compile it, with the optimizer that implies; `snello build -backend c FILE` builds the same program through the C backend, the reference implementation, which hands C to the system's C compiler. The two produce binaries that print the same thing, and the compiler's own tests hold them to it. `snello build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
 

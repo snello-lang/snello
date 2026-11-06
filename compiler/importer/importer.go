@@ -15,13 +15,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
-	"github.com/snello-lang/snello/compiler/parser"
-	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
@@ -142,7 +139,7 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		}
 	}
 
-	files, err := sourceFiles(pkgDir)
+	files, err := SourceFiles(pkgDir)
 	if err != nil || len(files) == 0 {
 		return nil, errors.New("no package at " + pkgDir + " for import " + importPath)
 	}
@@ -190,18 +187,8 @@ func Paths() []string {
 func (imp *Importer) load(importPath string, names []string, srcs [][]byte, conf *types.Config) (*types.Package, error) {
 	imp.loading = append(imp.loading, loading{importPath, conf.Standard})
 	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
-	fset := token.NewFileSet()
-	syntax := make([]*ast.File, len(names))
-	var errs scanner.ErrorList
-	for i, name := range names {
-		var err error
-		if syntax[i], err = parser.Parse(fset.AddFile(name, len(srcs[i])), srcs[i]); err != nil {
-			errs = append(errs, err.(scanner.ErrorList)...)
-		}
-	}
-
+	fset, syntax, err := parseFiles(names, srcs)
 	var pkg *types.Package
-	var err error = errs.Err()
 	if err == nil {
 		pkg, err = conf.CheckFiles(importPath, fset.Files(), syntax, imp.info)
 	}
@@ -262,22 +249,4 @@ func (imp *Importer) checkRequired(r *Require) error {
 	}
 
 	return nil
-}
-
-// sourceFiles returns the .snello files of a directory, in name order.
-func sourceFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".snello") {
-			files = append(files, filepath.Join(dir, e.Name()))
-		}
-	}
-
-	sort.Strings(files)
-	return files, nil
 }

@@ -67,6 +67,38 @@ func TestRunExamples(t *testing.T) {
 			})
 		}
 	}
+
+	dirs, err := backendtest.Directories(filepath.Join("..", "..", "..", "examples", "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range dirs {
+		want, err := os.ReadFile(dir + ".out")
+		if err != nil {
+			t.Errorf("%s: every program under examples/run needs its expected output beside it", dir)
+			continue
+		}
+
+		for _, debug := range []bool{false, true} {
+			suffix := ""
+			if debug {
+				suffix = "-debug"
+			}
+
+			t.Run(filepath.Base(dir)+suffix, func(t *testing.T) {
+				t.Parallel()
+				out, stderr, code := runDir(t, dir, debug)
+				if code != 0 {
+					t.Fatalf("%s exited with %d\n%s%s", dir, code, out, stderr)
+				}
+
+				if out != string(want) {
+					t.Errorf("%s printed:\n%s\nwant:\n%s", dir, out, want)
+				}
+			})
+		}
+	}
 }
 
 // TestPrograms builds and runs the programs every backend runs, from
@@ -265,6 +297,24 @@ func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string
 	}
 
 	return execute(t, dir, name, csrc, debug)
+}
+
+// runDir builds the program in dir, a main package of one or several
+// files with the packages of its own found through the module file
+// above it, as snello build DIR does, and runs it.
+func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
+	t.Helper()
+	prog, info, libs, err := backendtest.LoadDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	csrc, err := EmitFiles(prog.Files, prog.Syntax, info, libs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return execute(t, t.TempDir(), filepath.Base(dir), csrc, debug)
 }
 
 // execute compiles the C source as the program name in dir, with the

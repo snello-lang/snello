@@ -53,14 +53,16 @@ type naming struct {
 // and traits take at file scope, each under its own name. Its
 // functions, variables and constants are in the sn__ space (lower) and
 // meet no local.
-func newNaming(f *ast.File) naming {
+func newNaming(fs []*ast.File) naming {
 	n := naming{renamed: make(map[*types.Var]string), toplevel: make(map[string]bool), globals: make(map[*types.Var]bool)}
-	for _, d := range f.Decls {
-		switch d := d.(type) {
-		case *ast.TypeDecl:
-			n.toplevel[lower.Ident(d.Name.Name)] = true
-		case *ast.TraitDecl:
-			n.toplevel[lower.Ident(d.Name.Name)] = true
+	for _, f := range fs {
+		for _, d := range f.Decls {
+			switch d := d.(type) {
+			case *ast.TypeDecl:
+				n.toplevel[lower.Ident(d.Name.Name)] = true
+			case *ast.TraitDecl:
+				n.toplevel[lower.Ident(d.Name.Name)] = true
+			}
 		}
 	}
 
