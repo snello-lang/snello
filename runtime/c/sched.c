@@ -1191,24 +1191,34 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
     pthread_mutex_unlock(&timers_mu);
 }
 
-// sn_timer_abandon takes out the timer of c, whose last handle but the
-// timer's own was dropped: no one can receive what it would send, so it
-// is no promise of a wake, and its handle, the last, frees the channel
-// now rather than at its deadline. A timer that fired meanwhile is out
-// of the heap already and drops its handle itself, and at the end of
-// the program sn_timers_stop drops them all.
-void sn_timer_abandon(sn_chan *c) {
+// sn_timer_abandon drops a handle of c, whose After or Tick was in the
+// heap a moment ago, and reports whether it did. Under the timers'
+// lock, which the timers' thread holds to take a timer out, the timer
+// is in the heap or it is not: if it is, the handle comes down there,
+// and when it was the last but the timer's own, no one can receive
+// what the timer would send, so it is no promise of a wake, and the
+// timer is taken out and its handle, the last, frees the channel now
+// rather than at its deadline. A timer that fired meanwhile, or the end
+// of the program, which drops the timers' handles in sn_timers_stop,
+// leaves the handle to the caller, who drops it as any other.
+bool sn_timer_abandon(sn_chan *c) {
     pthread_mutex_lock(&timers_mu);
     int64_t at = sn_chan_timer(c);
     if (at < 0 || stopping) {
         pthread_mutex_unlock(&timers_mu);
-        return;
+        return false;
+    }
+
+    if (!sn_chan_release(c)) { // another handle of the program's remains
+        pthread_mutex_unlock(&timers_mu);
+        return true;
     }
 
     timer gone = timer_remove(at);
     pthread_mutex_unlock(&timers_mu);
     sn_outside(-1);
     sn_chan_drop(&gone.ch);
+    return true;
 }
 
 // sn_timers_stop stops the timers as the program ends and drops the

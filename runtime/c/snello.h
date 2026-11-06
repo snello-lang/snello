@@ -452,9 +452,10 @@ void sn_spawn(void (*run)(void *), void *arg);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
 void sn_timers_stop(void);
-void sn_timer_abandon(sn_chan *c);
+bool sn_timer_abandon(sn_chan *c);
 int64_t sn_chan_timer(sn_chan *c);
 bool sn_chan_alone(sn_chan *c);
+bool sn_chan_release(sn_chan *c);
 void sn_chan_placeTimer(sn_chan *c, int64_t at);
 
 // The scheduler's own interface (sched.c), which the channels, the
