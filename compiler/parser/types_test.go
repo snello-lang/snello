@@ -99,7 +99,7 @@ func TestTypeErrors(t *testing.T) {
 // messages, so types can be tested before declarations exist.
 func parseTypeString(src string) (ast.Type, []string) {
 	var p Parser
-	p.init("test.snello", []byte(src))
+	p.init(token.NewFile("test.snello", len(src)), []byte(src))
 	typ := p.parseType()
 	if p.tok != token.EOF && p.tok != token.SEMICOLON {
 		p.errorExpected(p.pos, "end of type")

@@ -422,3 +422,55 @@ func TestTraitInstancesAcrossPackages(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckFiles checks packages of several files: the files see each
+// other's declarations, each sees its own imports, and the messages
+// for the mistakes only several files can make.
+func TestCheckFiles(t *testing.T) {
+	tests := []struct {
+		files []string // the sources, a.snello then b.snello
+		want  []string // one substring per expected error, in position order
+	}{
+		{[]string{"package p\nstruct T { n int }\nfunc New() T { return T{n: 1} }", "package p\nfunc f() int { t := New(); return t.n + count }\nvar count = 2"}, nil},
+		{[]string{"package p\nfunc f() {}", "package p\nfunc f() {}"}, []string{"b.snello:2:6: f redeclared in this block; first declared at a.snello:2:6"}},
+		{[]string{"package p\nimport \"math\"\nfunc f() f64 { return math.Pi }", "package p\nfunc g() f64 { return math.Pi }"}, []string{"b.snello:2:23: undefined: math"}},
+		{[]string{"package p\nfunc f() {}", "package q\nfunc g() {}"}, []string{"b.snello:1:9: found packages p (a.snello) and q (b.snello) in pkg"}},
+		{[]string{"package p\nstruct A { b B }", "package p\nstruct B { a A }"}, []string{"a.snello:2:8: invalid recursive type A"}},
+		{[]string{"package p\nfunc f() int { return g() }", "package p\nfunc g() int { return h }"}, []string{"b.snello:2:23: undefined: h"}},
+		{[]string{"package p\ntrait Named { func (s ref Self) Name() string }\nstruct T impl Named {}", "package p\nfunc (t ref T) Name() string { return \"t\" }\nfunc f(t ref T) string { return t.Name() }"}, nil}, // a trait and its implementation across files
+	}
+	for _, tt := range tests {
+		fset := token.NewFileSet()
+		var files []*token.File
+		var syntax []*ast.File
+		for i, src := range tt.files {
+			name := "pkg/" + string(rune('a'+i)) + ".snello"
+			file := fset.AddFile(name, len(src))
+			f, err := parser.Parse(file, []byte(src))
+			if err != nil {
+				t.Fatalf("%q: parse error: %v", src, err)
+			}
+
+			files = append(files, file)
+			syntax = append(syntax, f)
+		}
+
+		var got []string
+		if _, err := libraryConfig().CheckFiles("", files, syntax, nil); err != nil {
+			for _, e := range err.(scanner.ErrorList) {
+				got = append(got, e.Error())
+			}
+		}
+
+		if len(got) != len(tt.want) {
+			t.Errorf("%q: got %d errors %q, want %d %q", tt.files, len(got), got, len(tt.want), tt.want)
+			continue
+		}
+
+		for i, w := range tt.want {
+			if !strings.Contains(got[i], w) {
+				t.Errorf("%q: error %d = %q, want it to contain %q", tt.files, i, got[i], w)
+			}
+		}
+	}
+}

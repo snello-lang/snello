@@ -58,6 +58,12 @@ sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *)) {
     return c;
 }
 
+// sn_chan_release takes one handle away, for sn_timer_abandon under the
+// timers' lock, and reports whether the one left is the timer's.
+bool sn_chan_release(sn_chan *c) {
+    return atomic_fetch_sub(&c->handles, 1) == 2;
+}
+
 // sn_chan_timer and sn_chan_placeTimer read and set where the
 // channel's timer is in the timers' heap, which sched.c keeps under its
 // lock; -1 is none.
@@ -85,7 +91,11 @@ sn_chan *sn_chan_clone(sn_chan *c) {
 // the one left is a pending timer's, which only a timer still in the
 // heap holds, no one can receive from the channel again, and the timer
 // is taken out and its handle dropped at once, so a select that took
-// another case leaves no After behind it until its deadline.
+// another case leaves no After behind it until its deadline. That is
+// decided in sn_timer_abandon, under the timers' lock, since a channel
+// is never touched after its handle is given up: the other holder may
+// drop the last and free it the moment the count comes down, and the
+// timers' thread once read the timer of a channel freed and reused.
 void sn_chan_drop(sn_chan **h) {
     sn_chan *c = *h;
     *h = NULL;
@@ -93,13 +103,11 @@ void sn_chan_drop(sn_chan **h) {
         return;
     }
 
-    int64_t before = atomic_fetch_sub(&c->handles, 1);
-    if (before == 2 && atomic_load(&c->timer) >= 0) {
-        sn_timer_abandon(c);
+    if (atomic_load(&c->timer) >= 0 && sn_timer_abandon(c)) {
         return;
     }
 
-    if (before != 1) {
+    if (atomic_fetch_sub(&c->handles, 1) != 1) {
         return;
     }
 

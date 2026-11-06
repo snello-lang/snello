@@ -1,6 +1,6 @@
 # 2. Getting started
 
-Status: `snello build` produces native binaries for all of core Snello (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there; `snello build -debug` checks the drops at run time (stage 1, task 1.9). Packages of the program's own and the module file are decided (stage 5, task 5.3); a package of one file imports through `snello.mod` today, and a package of several files and `snello build DIR` are not built yet.
+Status: `snello build` produces native binaries for all of core Snello (stage 1, task 1.5): functions, methods and closures, numbers, strings, slices and maps with their methods, `if`, `for` and `range`, structs, enums and `match`, options and results with `?` and `??`, tuples, owned pointers, `take`, `defer`, files through `os` and `io`, and `fmt` printing. Every value is dropped where its owner dies, and a `Drop` method runs there; `snello build -debug` checks the drops at run time (stage 1, task 1.9). Packages of the program's own and the module file are decided (stage 5, task 5.3); a package of one or several files imports through `snello.mod` today, and `snello build DIR` is not built yet.
 
 ## The compiler
 

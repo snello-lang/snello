@@ -11,17 +11,21 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
-// resolveBodies checks every top-level initializer and function body,
-// and the bodies of the traits' default methods. Initializers go first
-// so that a function may use a global whose type is inferred from its
-// value.
-func (c *Checker) resolveBodies(f *ast.File) {
+// initializers checks the top-level initializers of a file. They go
+// before every body, so that a function may use a global whose type is
+// inferred from its value.
+func (c *Checker) initializers(f *ast.File) {
 	for _, d := range f.Decls {
 		if d, ok := d.(*ast.VarDecl); ok {
-			c.initializers(d, c.pkg.scope)
+			c.initializersOf(d, c.pkg.scope)
 		}
 	}
+}
 
+// funcBodies checks the body of every function and method of a file,
+// after the initializers of every file, so that a function may use a
+// global of another file whose type is inferred from its value.
+func (c *Checker) funcBodies(f *ast.File) {
 	for i, d := range f.Decls {
 		if d, ok := d.(*ast.FuncDecl); ok && !c.badMethods[d] {
 			outer := c.scope
@@ -33,8 +37,6 @@ func (c *Checker) resolveBodies(f *ast.File) {
 			c.scope = outer
 		}
 	}
-
-	c.checkDefaultBodies()
 }
 
 // checkBody checks one function's or method's body against its
@@ -76,10 +78,10 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 	c.closeScope()
 }
 
-// initializers checks the values of a var or const declaration whose
+// initializersOf checks the values of a var or const declaration whose
 // names are already declared in scope, giving an untyped name the type
 // of its value.
-func (c *Checker) initializers(d *ast.VarDecl, scope *Scope) {
+func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 	if len(d.Values) == 0 {
 		return // the parser requires a type when there is no value
 	}

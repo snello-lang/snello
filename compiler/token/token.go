@@ -272,9 +272,21 @@ type Position struct {
 
 // A File records the line starts of one source file so that a Pos can
 // be resolved to a line and column. The scanner fills it in as it goes.
+// Its positions start at base: 1 for a file on its own, and past the
+// previous file's for one in a FileSet.
 type File struct {
 	name  string
+	base  int
+	size  int
 	lines []int // byte offset of the start of each line; lines[0] is 0
+}
+
+// A FileSet holds the files of one package, each at a base no other
+// file's positions reach, so that a Pos anywhere in the package names
+// its file as well as its offset. Mirrors go/token.FileSet.
+type FileSet struct {
+	files []*File
+	base  int // the base of the next file added
 }
 
 // String returns the string corresponding to the token kind: the
@@ -339,21 +351,65 @@ func (k Kind) Precedence() int {
 // IsValid reports whether p is a real position.
 func (p Pos) IsValid() bool { return p != NoPos }
 
-// NewFile returns a File for a source of the given size. The line table
-// is sized for the typical line length up front so it rarely grows.
+// NewFile returns a File on its own for a source of the given size,
+// with positions from 1. The line table is sized for the typical line
+// length up front so it rarely grows.
 func NewFile(name string, size int) *File {
+	return newFile(name, 1, size)
+}
+
+// NewFileSet returns an empty set.
+func NewFileSet() *FileSet { return &FileSet{base: 1} }
+
+// AddFile adds a file of the given size to the set and returns it, with
+// its positions after every file added before.
+func (s *FileSet) AddFile(name string, size int) *File {
+	f := newFile(name, s.base, size)
+	s.files = append(s.files, f)
+	s.base += size + 1 // a position one past the end is the file's too
+	return f
+}
+
+// Files returns the files of the set, in the order added.
+func (s *FileSet) Files() []*File { return s.files }
+
+// File returns the file p is in, or nil.
+func (s *FileSet) File(p Pos) *File {
+	for _, f := range s.files {
+		if f.base <= int(p) && int(p) <= f.base+f.size {
+			return f
+		}
+	}
+
+	return nil
+}
+
+// Position resolves p through the file it is in; a position in no file
+// of the set resolves to none.
+func (s *FileSet) Position(p Pos) Position {
+	if f := s.File(p); f != nil {
+		return f.Position(p)
+	}
+
+	return Position{}
+}
+
+func newFile(name string, base, size int) *File {
 	lines := make([]int, 1, size/32+1)
-	return &File{name: name, lines: lines}
+	return &File{name: name, base: base, size: size, lines: lines}
 }
 
 // Name returns the file name.
 func (f *File) Name() string { return f.name }
 
 // Pos returns the Pos for a byte offset in the file.
-func (f *File) Pos(offset int) Pos { return Pos(offset + 1) }
+func (f *File) Pos(offset int) Pos { return Pos(f.base + offset) }
 
 // Offset returns the byte offset of a Pos.
-func (f *File) Offset(p Pos) int { return int(p) - 1 }
+func (f *File) Offset(p Pos) int { return int(p) - f.base }
+
+// Holds reports whether p is a position of this file.
+func (f *File) Holds(p Pos) bool { return f.base <= int(p) && int(p) <= f.base+f.size }
 
 // AddLine records that a new line starts at the given byte offset. The
 // scanner calls it once per newline, in order.

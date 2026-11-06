@@ -5,6 +5,7 @@
 package types
 
 import (
+	"path/filepath"
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -82,10 +83,12 @@ type Instance struct {
 	Type     *Signature
 }
 
-// A Checker holds the state of one check: the file being checked, the
-// package being built, the current scope, and the errors so far.
+// A Checker holds the state of one check: the files of the package,
+// the one being walked, the package being built, the current scope,
+// and the errors so far.
 type Checker struct {
 	conf   *Config
+	files  []*token.File
 	file   *token.File
 	pkg    *Package
 	info   *Info
@@ -171,8 +174,28 @@ func Check(file *token.File, f *ast.File, info *Info) (*Package, error) {
 // the empty path; a library package is checked under its own, into the
 // same Info, so the backend compiles them together.
 func (conf *Config) Check(path string, file *token.File, f *ast.File, info *Info) (*Package, error) {
-	c := &Checker{conf: conf, file: file, info: info, typeScopes: make(map[*ast.FuncDecl]*Scope), badMethods: make(map[*ast.FuncDecl]bool)}
-	c.pkg = &Package{name: f.Name.Name, path: path, std: conf.Standard, scope: NewScope(Universe)}
+	return conf.CheckFiles(path, []*token.File{file}, []*ast.File{f}, info)
+}
+
+// CheckFiles checks a package of several files, as Check checks one:
+// the files of one directory, parsed into one FileSet so that their
+// positions are distinct, each with its syntax. The files see each
+// other's declarations and each its own imports, as Go's do; files
+// that disagree on the package clause are refused with Go's message.
+func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File, info *Info) (*Package, error) {
+	if len(files) != len(fs) || len(fs) == 0 {
+		panic("types: CheckFiles needs one token.File per ast.File")
+	}
+
+	c := &Checker{conf: conf, files: files, file: files[0], info: info, typeScopes: make(map[*ast.FuncDecl]*Scope), badMethods: make(map[*ast.FuncDecl]bool)}
+	c.pkg = &Package{name: fs[0].Name.Name, path: path, std: conf.Standard, scope: NewScope(Universe)}
+	for i, f := range fs[1:] {
+		if f.Name.Name != c.pkg.name {
+			first, other := filepath.Base(files[0].Name()), filepath.Base(files[i+1].Name())
+			c.errorf(f.Name.Pos(), "found packages "+c.pkg.name+" ("+first+") and "+f.Name.Name+" ("+other+") in "+filepath.Base(filepath.Dir(files[0].Name())))
+		}
+	}
+
 	if info != nil {
 		if info.Defs == nil {
 			info.Defs = make(map[*ast.Ident]Object)
@@ -199,7 +222,7 @@ func (conf *Config) Check(path string, file *token.File, f *ast.File, info *Info
 		}
 	}
 
-	c.checkFile(f)
+	c.checkFiles(fs)
 	c.errors.Sort()
 	return c.pkg, c.errors.Err()
 }
@@ -216,26 +239,97 @@ func (p *Package) Scope() *Scope { return p.scope }
 
 // checkFile runs the passes in order: collect the file's declarations
 // into the package scope, give them their types, then walk the bodies.
-func (c *Checker) checkFile(f *ast.File) {
-	fileScope := NewScope(c.pkg.scope)
-	c.scope = fileScope
-	c.collectImports(f, fileScope)
-	c.collectDecls(f)
-	c.resolveDecls(f)
-	c.resolveBodies(f)
+// checkFiles walks the package's files together, a phase at a time
+// over all of them, so that a declaration in one file is known to
+// every other before any body is entered: the imports and the
+// declared names of each file, then the types, then the signatures,
+// then the bodies. Each file has its own scope for its imports, under
+// the package scope, and its own table of declared objects, by the
+// index of the declaration in the file.
+func (c *Checker) checkFiles(fs []*ast.File) {
+	scopes := make([]*Scope, len(fs))
+	objs := make([][]Object, len(fs))
+	enter := func(i int) {
+		c.file, c.scope, c.objs = c.files[i], scopes[i], objs[i]
+	}
+
+	for i, f := range fs {
+		scopes[i] = NewScope(c.pkg.scope)
+		enter(i)
+		c.collectImports(f, scopes[i])
+		c.collectDecls(f)
+		objs[i] = c.objs
+	}
+
+	for i, f := range fs {
+		enter(i)
+		c.resolveTraitLists(f)
+	}
+
+	var named []*Named
+	for i, f := range fs {
+		enter(i)
+		named = append(named, c.resolveTypes(f)...)
+	}
+
+	c.checkTypeCycles(named)
+	c.resolvePending()
+	c.resolvePendingBounds()
+	for i, f := range fs {
+		enter(i)
+		c.resolveSignatures(f)
+	}
+
+	c.fillTraitInstances()
+	for i, f := range fs {
+		enter(i)
+		c.checkRefinements(f)
+		c.checkImpls(f)
+	}
+
+	for i, f := range fs {
+		enter(i)
+		c.initializers(f)
+	}
+
+	for i, f := range fs {
+		enter(i)
+		c.funcBodies(f)
+	}
+
+	c.checkDefaultBodies()
 	c.checkCallCycles()
 }
 
 // errorf reports an error at pos. Error paths may allocate freely.
 func (c *Checker) errorf(pos token.Pos, msg string) {
-	c.errors.Add(c.file.Position(pos), msg)
+	c.errors.Add(c.position(pos), msg)
 }
 
-// lineCol formats a position of the file being checked as line:col,
-// for a message that points at a second place in the same file.
+// position resolves pos through the file of the package it is in,
+// which is the file being walked but for a position of a declaration
+// in another file.
+func (c *Checker) position(pos token.Pos) token.Position {
+	for _, f := range c.files {
+		if f.Holds(pos) {
+			return f.Position(pos)
+		}
+	}
+
+	return c.file.Position(pos)
+}
+
+// lineCol formats a position as line:col, for a message that points
+// at a second place; a place in another file of the package is named
+// with that file.
 func (c *Checker) lineCol(pos token.Pos) string {
-	p := c.file.Position(pos)
-	return strconv.Itoa(p.Line) + ":" + strconv.Itoa(p.Column)
+	p := c.position(pos)
+	at := strconv.Itoa(p.Line) + ":" + strconv.Itoa(p.Column)
+	if p.Filename != c.file.Name() {
+		return filepath.Base(p.Filename) + ":" + at
+	}
+
+	return at
 }
 
 // declare puts obj into scope under ident, recording the definition,

@@ -65,7 +65,7 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 | `_docs/book/` | The language book, written chapter by chapter as features land |
 | `examples/` | The twenty Snello programs, plus Go versions of the first two; `core/` is the stage 1 suite, `run/` the programs that build and run today with their expected output |
 | `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Snello program, which carries only `runtime/` and `std/` |
-| `compiler/token/` | Token kinds and positions, modeled on `go/token` |
+| `compiler/token/` | Token kinds and positions, modeled on `go/token`; a `FileSet` gives the files of a package distinct positions |
 | `compiler/scanner/` | The lexer, modeled on `go/scanner` |
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |

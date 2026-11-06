@@ -21,13 +21,16 @@ import (
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
 )
 
-// A Package is a library package as loaded: its import path, its
-// source file and syntax, and the package the checker built from them.
+// A Package is one source file of a library package as loaded: its
+// import path, the file and its syntax, and the package the checker
+// built from all of its files. A package of several files is several
+// entries, in the order of their names, each the backends' unit.
 type Package struct {
 	Path   string
 	File   *token.File
@@ -113,7 +116,7 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 
 	name := importPath + "/" + path.Base(importPath) + ".snello"
 	if src, err := std.Sources.ReadFile(name); err == nil {
-		return imp.load(importPath, name, src, &imp.std)
+		return imp.load(importPath, []string{name}, [][]byte{src}, &imp.std)
 	}
 
 	var m *Module
@@ -144,16 +147,14 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		return nil, errors.New("no package at " + pkgDir + " for import " + importPath)
 	}
 
-	if len(files) > 1 {
-		return nil, errors.New("package " + importPath + " has " + strconv.Itoa(len(files)) + " files; a package of several files is not supported yet")
+	srcs := make([][]byte, len(files))
+	for i, name := range files {
+		if srcs[i], err = os.ReadFile(name); err != nil {
+			return nil, err
+		}
 	}
 
-	src, err := os.ReadFile(files[0])
-	if err != nil {
-		return nil, err
-	}
-
-	pkg, err := imp.load(importPath, files[0], src, &imp.own)
+	pkg, err := imp.load(importPath, files, srcs, &imp.own)
 	if err != nil {
 		return nil, err
 	}
@@ -183,24 +184,41 @@ func Paths() []string {
 	return paths
 }
 
-// load parses and checks one package's source under conf, as the
-// package at importPath, and records it.
-func (imp *Importer) load(importPath, name string, src []byte, conf *types.Config) (*types.Package, error) {
+// load parses and checks the files of one package under conf, as the
+// package at importPath, and records them. The files are parsed into
+// one FileSet, so that an error in any of them names its file.
+func (imp *Importer) load(importPath string, names []string, srcs [][]byte, conf *types.Config) (*types.Package, error) {
 	imp.loading = append(imp.loading, loading{importPath, conf.Standard})
 	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
-	f, file, err := parser.ParseFile(name, src)
+	fset := token.NewFileSet()
+	syntax := make([]*ast.File, len(names))
+	var errs scanner.ErrorList
+	for i, name := range names {
+		var err error
+		if syntax[i], err = parser.Parse(fset.AddFile(name, len(srcs[i])), srcs[i]); err != nil {
+			errs = append(errs, err.(scanner.ErrorList)...)
+		}
+	}
+
 	var pkg *types.Package
+	var err error = errs.Err()
 	if err == nil {
-		pkg, err = conf.Check(importPath, file, f, imp.info)
+		pkg, err = conf.CheckFiles(importPath, fset.Files(), syntax, imp.info)
 	}
 
 	if err != nil {
 		return nil, errors.New("package " + importPath + " does not compile:\n" + err.Error())
 	}
 
-	p := &Package{importPath, file, f, pkg}
-	imp.loaded[importPath] = p
-	imp.order = append(imp.order, p)
+	for i, f := range syntax {
+		p := &Package{importPath, fset.Files()[i], f, pkg}
+		if i == 0 {
+			imp.loaded[importPath] = p
+		}
+
+		imp.order = append(imp.order, p)
+	}
+
 	return pkg, nil
 }
 

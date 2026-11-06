@@ -9,7 +9,7 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | Chapter | Status |
 |---|---|
 | [1. Introduction](01-introduction.md) | written at the stage 1 checkpoint; describes core Snello as `snello build` compiles it |
-| [2. Getting started](02-getting-started.md) | `snello build` compiles all of core Snello, `snello build -debug` checks the drops (stage 1, tasks 1.5 and 1.9); the LLVM backend is the default and `-backend c` the reference (stage 4, task 4.7); packages of the program's own are found through `snello.mod`, one file a package so far (stage 5, task 5.3) |
+| [2. Getting started](02-getting-started.md) | `snello build` compiles all of core Snello, `snello build -debug` checks the drops (stage 1, tasks 1.5 and 1.9); the LLVM backend is the default and `-backend c` the reference (stage 4, task 4.7); packages of the program's own, of one file or several, are found through `snello.mod` (stage 5, task 5.3) |
 | [3. Basics](03-basics.md) | implemented, checked and compiled (stage 1, task 1.5) |
 | [4. Structs, enums and match](04-structs-enums-match.md) | implemented, checked and compiled (stage 1, task 1.5); the positional struct literal (stage 2, task 2.7) |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves checked (stage 1, task 1.6); drops at scope exit, return and panic, checked by `snello build -debug` (stage 1, task 1.9); `impl Copy` checked against the fields, and a moved variable given back by assignment on every path (stage 2, task 2.5); what no collector buys measured against Go and Rust by `bench/memory.snello` (stage 4, task 4.6), over the runtime's own allocator (stage 5, task 5.1) |

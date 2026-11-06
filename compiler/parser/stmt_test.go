@@ -161,7 +161,7 @@ func TestBindPatterns(t *testing.T) {
 // error messages.
 func parseStmtString(src string) (ast.Stmt, []string) {
 	var p Parser
-	p.init("test.snello", []byte(src))
+	p.init(token.NewFile("test.snello", len(src)), []byte(src))
 	s := p.parseStmt()
 	if p.tok != token.EOF && p.tok != token.SEMICOLON {
 		p.errorExpected(p.pos, "';' or newline")

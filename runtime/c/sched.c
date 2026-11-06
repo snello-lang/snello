@@ -15,7 +15,9 @@
 // the next task, and whoever wakes it puts it back on a queue. A task
 // runs until it parks or ends: the scheduler does not preempt, so a
 // task that computes without ever waiting keeps its worker, and the
-// others keep running on the rest.
+// others keep running on the rest; a task it wakes meanwhile goes to
+// another worker through the monitor thread below, so that it holds
+// no task but its own.
 //
 // The main thread's own stack is the main task's. When the main task
 // first parks, the main thread takes a scheduler stack of its own and
@@ -226,12 +228,18 @@ void sn_outside(int64_t n) {
 
 // deadlocked reports, to an idle worker holding idle_mu, that no task
 // can ever run again: every worker idle, so every task is parked or
-// done, nothing on a queue, and no timer or socket left to wake one.
-// The main task is among the parked, since the main thread is a worker
-// only once the main task has parked, so the program cannot end. Go's
-// runtime stops such a program with the same message.
+// done, nothing in a runnext slot or on a queue, and no timer or socket
+// left to wake one. An idle worker's slot is empty, since only its own
+// thread fills it and it empties it before it sleeps, so a slot counted
+// with every worker idle holds a task the monitor is moving to the
+// inject queue, which is a task to run: the monitor counts it in the
+// slot until it is on the queue, and the counts are read here in the
+// order it changes them. The main task is among the parked, since the
+// main thread is a worker only once the main task has parked, so the
+// program cannot end. Go's runtime stops such a program with the same
+// message.
 static bool deadlocked(void) {
-    return atomic_load(&idle) == nworkers && atomic_load(&queued) == 0 && atomic_load(&outside) == 0;
+    return atomic_load(&idle) == nworkers && atomic_load(&nexts) == 0 && atomic_load(&queued) == 0 && atomic_load(&outside) == 0;
 }
 
 static const size_t stack_size = 256 << 10; // a task's stack, as step one's thread stack was
@@ -327,7 +335,8 @@ static void push(worker *w, task *t) {
 
 // The inject queue holds the tasks woken by a thread that is not a
 // worker, the poller's or the timers', as Go's global run queue holds
-// what its netpoller and timers make ready. Every worker looks at it
+// what its netpoller and timers make ready, and the tasks the monitor
+// moves out of a runnext slot. Every worker looks at it
 // after its own queue, and a spinning worker looks at it alone: a task
 // woken from outside is what a spin is for, since only it would
 // otherwise cost a thread woken to run it, and work the workers make
@@ -456,11 +465,12 @@ static void put_next(worker *w, task *t) {
     }
 }
 
-// take_next takes the task in w's runnext slot: any when stale is
-// zero, else only one that has waited there longer than stale, for an
-// idle worker taking it from a worker whose running task has not let it
-// go, since tasks are not preempted.
-static task *take_next(worker *w, int64_t stale) {
+// clear_next empties w's runnext slot and returns the task it held: any
+// when stale is zero, else only one that has waited there longer than
+// stale, left by a running task that has not let go, since tasks are
+// not preempted. The caller takes the task out of the count of slots
+// once it is somewhere a worker can find it.
+static task *clear_next(worker *w, int64_t stale) {
     pthread_mutex_lock(&w->mu);
     task *t = w->runnext;
     if (t != NULL && (stale == 0 || sn_time_mono() - w->runnext_at > stale)) {
@@ -470,6 +480,12 @@ static task *take_next(worker *w, int64_t stale) {
     }
 
     pthread_mutex_unlock(&w->mu);
+    return t;
+}
+
+// take_next takes the task in w's runnext slot for the worker to run.
+static task *take_next(worker *w, int64_t stale) {
+    task *t = clear_next(w, stale);
     if (t != NULL) {
         atomic_fetch_sub(&nexts, 1);
     }
@@ -554,7 +570,8 @@ static void run_task(worker *w, task *t) {
 }
 
 // A task left in another worker's runnext slot this long, its worker
-// busy with a task that does not let go, is taken by an idle worker.
+// busy with a task that does not let go, is taken by a worker looking
+// for work, or moved by the monitor when none is.
 static const int64_t next_stale = 1000000; // a millisecond
 
 // steal_next takes a task some worker has left in its runnext slot
@@ -631,9 +648,78 @@ static bool spin(void) {
     return found;
 }
 
+// The monitor thread watches the workers for the one thing a scheduler
+// without preemption cannot leave to them. A task woken by a running
+// task goes in that worker's runnext slot, to run there when the
+// running task lets go, and no worker is woken for it, since a thread
+// woken for every hand-off is what the slot saves; Go's runtime wakes
+// one, and lets it take the slot after a few microseconds. A task that
+// does not let go, computing without a wait, would keep the slot's
+// task, with every idle worker asleep by then and nothing to wake one.
+// The monitor looks, while any worker is busy, for a task left in a
+// slot longer than next_stale and moves it to the inject queue, which
+// wakes an idle worker to run it. It sleeps while every worker is idle,
+// as Go's sysmon does, since only a running task fills a slot, and the
+// first worker to leave idle wakes it: it reads the count under its
+// lock before it waits, and the worker signals under the same lock
+// after the count changes, so no wake is lost. It pauses next_stale
+// between looks after a move, and twice as long after each look that
+// finds nothing, up to pause_most, as sysmon backs off, so that a
+// program computing or blocked in a read costs a wake every ten
+// milliseconds rather than every one: a task is moved within two
+// milliseconds while hand-offs are being left and within about ten
+// otherwise, Go's quantum before it preempts.
+static const int64_t pause_most = 10000000; // 10 ms
+
+static pthread_mutex_t monitor_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t monitor_cond = PTHREAD_COND_INITIALIZER;
+
+// move_next moves a task left stale in w's slot to the inject queue,
+// and reports whether there was one. The task counts in the slot until
+// it is on the queue, so that deadlocked never finds it in neither.
+static bool move_next(worker *w) {
+    task *t = clear_next(w, next_stale);
+    if (t == NULL) {
+        return false;
+    }
+
+    inject(t);
+    atomic_fetch_sub(&nexts, 1);
+    return true;
+}
+
+static void monitor_wake(void) {
+    pthread_mutex_lock(&monitor_mu);
+    pthread_cond_signal(&monitor_cond);
+    pthread_mutex_unlock(&monitor_mu);
+}
+
+static void *monitor_main(void *arg) {
+    (void)arg;
+    int64_t pause = next_stale;
+    for (;;) {
+        pthread_mutex_lock(&monitor_mu);
+        while (atomic_load(&idle) == nworkers) {
+            pthread_cond_wait(&monitor_cond, &monitor_mu);
+            pause = next_stale;
+        }
+
+        pthread_mutex_unlock(&monitor_mu);
+        struct timespec until = {0, (long)pause};
+        nanosleep(&until, NULL);
+        bool moved = false;
+        if (atomic_load(&nexts) > 0) {
+            for (int i = 0; i < nworkers; i++) {
+                moved = move_next(&workers[i]) || moved;
+            }
+        }
+
+        pause = moved ? next_stale : (pause * 2 < pause_most ? pause * 2 : pause_most);
+    }
+}
+
 // sched_loop runs the worker: the next task, or a spin and then a wait
-// for one. While a runnext slot holds a task, an idle worker looks again
-// every next_stale, rather than sleep until a queue has one.
+// for one.
 static void sched_loop(worker *w) {
     for (;;) {
         task *t = next_task(w);
@@ -668,19 +754,6 @@ static void sched_loop(worker *w) {
                 exit(2);
             }
 
-            if (atomic_load(&nexts) > 0) {
-                struct timespec until;
-                clock_gettime(CLOCK_REALTIME, &until);
-                until.tv_nsec += next_stale;
-                if (until.tv_nsec >= 1000000000) {
-                    until.tv_sec++;
-                    until.tv_nsec -= 1000000000;
-                }
-
-                pthread_cond_timedwait(&idle_cond, &idle_mu, &until);
-                break;
-            }
-
             int64_t asleep = sn_time_mono();
             pthread_cond_wait(&idle_cond, &idle_mu);
             if (atomic_load(&injected) > 0 && sn_time_mono() - asleep < spin_for) {
@@ -688,8 +761,11 @@ static void sched_loop(worker *w) {
             }
         }
 
-        atomic_fetch_sub(&idle, 1);
+        bool first = atomic_fetch_sub(&idle, 1) == nworkers;
         pthread_mutex_unlock(&idle_mu);
+        if (first) {
+            monitor_wake(); // the first worker busy again: the monitor's lock is never taken under idle_mu
+        }
     }
 }
 
@@ -707,8 +783,21 @@ static void sched_entry(void) {
     sched_loop(self_worker);
 }
 
-// start makes the workers: the main thread is the first, and one
-// thread per further core.
+// start_thread starts a detached thread of the runtime's own.
+static void start_thread(void *(*main)(void *), void *arg) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t id;
+    if (pthread_create(&id, &attr, main, arg) != 0) {
+        sn_panic(SN_STR("cannot start a thread", 21));
+    }
+
+    pthread_attr_destroy(&attr);
+}
+
+// start makes the workers, the main thread the first and one thread
+// per further core, and the monitor when there is more than one.
 static void start(void) {
     pthread_mutex_lock(&start_mu);
     if (!started) {
@@ -729,15 +818,11 @@ static void start(void) {
 
         started = true;
         for (int i = 1; i < nworkers; i++) {
-            pthread_attr_t attr;
-            pthread_attr_init(&attr);
-            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-            pthread_t id;
-            if (pthread_create(&id, &attr, worker_main, &workers[i]) != 0) {
-                sn_panic(SN_STR("cannot start a worker", 21));
-            }
+            start_thread(worker_main, &workers[i]);
+        }
 
-            pthread_attr_destroy(&attr);
+        if (nworkers > 1) {
+            start_thread(monitor_main, NULL); // with one worker there is none to move a task to
         }
     }
 
@@ -1106,24 +1191,34 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
     pthread_mutex_unlock(&timers_mu);
 }
 
-// sn_timer_abandon takes out the timer of c, whose last handle but the
-// timer's own was dropped: no one can receive what it would send, so it
-// is no promise of a wake, and its handle, the last, frees the channel
-// now rather than at its deadline. A timer that fired meanwhile is out
-// of the heap already and drops its handle itself, and at the end of
-// the program sn_timers_stop drops them all.
-void sn_timer_abandon(sn_chan *c) {
+// sn_timer_abandon drops a handle of c, whose After or Tick was in the
+// heap a moment ago, and reports whether it did. Under the timers'
+// lock, which the timers' thread holds to take a timer out, the timer
+// is in the heap or it is not: if it is, the handle comes down there,
+// and when it was the last but the timer's own, no one can receive
+// what the timer would send, so it is no promise of a wake, and the
+// timer is taken out and its handle, the last, frees the channel now
+// rather than at its deadline. A timer that fired meanwhile, or the end
+// of the program, which drops the timers' handles in sn_timers_stop,
+// leaves the handle to the caller, who drops it as any other.
+bool sn_timer_abandon(sn_chan *c) {
     pthread_mutex_lock(&timers_mu);
     int64_t at = sn_chan_timer(c);
     if (at < 0 || stopping) {
         pthread_mutex_unlock(&timers_mu);
-        return;
+        return false;
+    }
+
+    if (!sn_chan_release(c)) { // another handle of the program's remains
+        pthread_mutex_unlock(&timers_mu);
+        return true;
     }
 
     timer gone = timer_remove(at);
     pthread_mutex_unlock(&timers_mu);
     sn_outside(-1);
     sn_chan_drop(&gone.ch);
+    return true;
 }
 
 // sn_timers_stop stops the timers as the program ends and drops the
