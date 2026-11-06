@@ -547,6 +547,38 @@ func main() {
 			Out: "true\n", ReleaseOnly: true, MinCPUs: 2,
 		},
 		{
+			Name: "handoff", // a task woken by a task that then computes without a wait runs on another worker meanwhile, moved out of the busy worker's runnext slot by the monitor; main sleeps first, so that every worker is idle and the monitor asleep, and the timer's wake must wake it; compute's 5 ms settle lets every idle worker end its spin and sleep before the slot is filled, so that nothing but the monitor can move the task
+			Src: `package main
+import ("fmt"; "time")
+func compute(ready chan int, ch chan int) {
+	<-ready
+	settle := time.Now().Add(5 * time.Millisecond)
+	for time.Now().Before(settle) {
+	}
+	ch <- 1
+	until := time.Now().Add(2 * time.Second)
+	for time.Now().Before(until) {
+	}
+}
+func reply(ready chan int, ch chan int, out chan bool, start time.Time) {
+	ready <- 1
+	<-ch
+	out <- time.Since(start) < time.Second
+}
+func main() {
+	time.Sleep(10 * time.Millisecond)
+	ready := make(chan int, 1)
+	ch := make(chan int)
+	out := make(chan bool)
+	start := time.Now()
+	spawn reply(ready.Clone(), ch.Clone(), out.Clone(), start)
+	spawn compute(ready.Clone(), ch.Clone())
+	fmt.Println(<-out ?? false)
+}
+`,
+			Out: "true\n", ReleaseOnly: true, MinCPUs: 2,
+		},
+		{
 			Name: "asleep-not-deadlocked", // every task parked, but a sleeping one has a timer to wake it: no deadlock
 			Src:  "package main\nimport (\"fmt\"; \"time\")\nfunc later(ch chan int) { time.Sleep(20 * time.Millisecond); ch <- 7 }\nfunc main() { ch := make(chan int); spawn later(ch.Clone()); fmt.Println(<-ch ?? 0) }\n",
 			Out:  "7\n",
