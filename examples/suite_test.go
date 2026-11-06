@@ -97,9 +97,8 @@ func build(dir, name, backend string, src []byte, debug bool) (string, []byte, e
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
-	"03-http-cache":    "net/http, db and json, later libraries over the net package",
-	"17-state-machine": "the higher layers of net, a later library",
-	"19-cli-grep":      "regexp, a later library",
+	"03-http-cache": "net/http, db and json, later libraries over the net package",
+	"19-cli-grep":   "regexp, a later library",
 }
 
 // TestExamples builds every example program that has its expected

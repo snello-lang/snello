@@ -29,19 +29,23 @@ type Program struct {
 }
 
 // CheckMain reports why the program cannot be built, in go build's
-// words: its package is not main, or main is not declared in it, or is
-// declared as something other than a function. snello check takes any
-// package, as go vet does, and does not ask.
+// words: main is not declared in its package, or is declared as
+// something other than a function. The package may have any name,
+// since a program is the package that declares main, and the examples
+// name theirs after what they show, where Go asks for main. snello
+// check takes a package without main, as go vet does, and does not
+// ask.
 func (p *Program) CheckMain() error {
-	if p.Pkg.Name() != "main" {
-		return errors.New("package " + p.Pkg.Name() + " is not a main package")
-	}
-
 	switch p.Pkg.Scope().Lookup("main").(type) {
 	case *types.Func:
 		return nil
 	case nil:
-		return errors.New("function main is undeclared in the main package")
+		in := "package " + p.Pkg.Name()
+		if p.Pkg.Name() == "main" {
+			in = "the main package"
+		}
+
+		return errors.New("function main is undeclared in " + in)
 	default:
 		return errors.New("cannot declare main - must be func")
 	}

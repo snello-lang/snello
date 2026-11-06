@@ -63,12 +63,12 @@ Progress: the design written 2026-11-05, `../design/08-packages.md`, with the se
 **Description:** `net` stays in the standard library, as Rust's `std::net` does. The example names `net.Socket` and calls `net.Dial("...")` for the socket itself; the package of task 4.5 has `Conn`, and its `Dial(host, port)` returns a `Result` and needs a peer listening. Which side moves is the owner's decision and is made first: the example to the package, with a `Conn` dialled to a listener the program opens, or the package to the example.
 
 **Acceptance criteria:**
-- [ ] The decision recorded in `05-standard-library.md`, and in `examples/README.md` if the example changes
-- [ ] Example 17 runs with an expected output and leaves the pending list
+- [x] The decision recorded in `05-standard-library.md`, and in `examples/README.md` if the example changes (2026-11-06: decision 8, the example moves to the package; the README's row says what the socket shows)
+- [x] Example 17 runs with an expected output and leaves the pending list (2026-11-06: a `net.Listen` on a free port, a `net.Dial` to it, the `Session` owning the `net.Conn`, and the listener's side reading the end of the connection once the state that held the session is dropped)
 
 **Verification:**
-- [ ] Reviewed by the owner before the code
-- [ ] Tests pass: `go test ./examples`
+- [x] Reviewed by the owner before the code (2026-11-06: the owner chose the example moving to the package over the package widening)
+- [x] Tests pass: `go test ./examples` (2026-11-06)
 
 **Dependencies:** Stage 4
 **Files:** `examples/17-state-machine.snello` or `std/net/`, `examples/expected/17-state-machine.out`
