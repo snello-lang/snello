@@ -16,14 +16,16 @@ import (
 // the program's own beside it, found through the module file, as
 // snello build DIR does; a program of one file; two files that disagree
 // on the package clause, refused with both named; and what CheckMain
-// says of a library, a main package without main, and one whose main
-// is a variable.
+// says of a program under another package clause, a library, which
+// has no main, a main package without main, and one whose main is a
+// variable.
 func TestLoadProgram(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"snello.mod":           "module example.com/app\n",
 		"shapes/shape.snello":  shapesSrc,
 		"shapes/area.snello":   areaSrc,
 		"nomain/a.snello":      "package main\nfunc f() {}\n",
+		"named/a.snello":       "package named\nfunc main() {}\n",
 		"varmain/a.snello":     "package main\nvar main int\n",
 		"cmd/tool/main.snello": "package main\nimport (\"fmt\"; \"example.com/app/shapes\")\nfunc main() { c := shapes.Circle{Radius: 1}; r := shapes.Rect{W: 1, H: 2}; fmt.Println(shapes.Largest(ref c, ref r) + extra()) }\n",
 		"cmd/tool/more.snello": "package main\nfunc extra() f64 { return 1 }\n",
@@ -67,7 +69,8 @@ func TestLoadProgram(t *testing.T) {
 
 	for _, c := range []struct{ dir, want string }{
 		{"cmd/tool", ""},
-		{"shapes", "package shapes is not a main package"},
+		{"named", ""}, // a program under another package clause, as the examples are
+		{"shapes", "function main is undeclared in package shapes"},
 		{"nomain", "function main is undeclared in the main package"},
 		{"varmain", "cannot declare main - must be func"},
 	} {

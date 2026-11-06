@@ -20,7 +20,7 @@ Twenty programs written in Snello before Snello exists. They are the design's te
 | 14 | files.snello | Drop vs defer, consuming Close |
 | 15 | lru.snello | Map into an Arena-backed linked list; the two-slots aliasing rule |
 | 16 | matrix.snello | Copy types, operator traits, no hidden allocation |
-| 17 | state-machine.snello | Enum states, consuming transitions |
+| 17 | state-machine.snello | Enum states, consuming transitions, a session's connection closed where its state is dropped |
 | 18 | iterators.snello | Closure capture modes, lazy iterator trait |
 | 19 | cli-grep.snello | Args, stdin/files, per-line borrows, exit codes |
 | 20 | bst.snello | Reborrowing down a chain of boxes, in-place delete |

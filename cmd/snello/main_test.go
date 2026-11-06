@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,28 @@ func TestProgramFiles(t *testing.T) {
 			if names[i] != filepath.Join(root, name) {
 				t.Errorf("programFiles(%q)[%d] = %q, want %q", c.path, i, names[i], filepath.Join(root, name))
 			}
+		}
+	}
+}
+
+// TestEmitExamples emits every example with an expected output through
+// the driver, which must take a program under any package clause: the
+// examples name theirs after what they show, and a slice once refused
+// them all for not being package main.
+func TestEmitExamples(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.snello"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no examples: %v", err)
+	}
+
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".snello")
+		if _, err := os.Stat(filepath.Join("..", "..", "examples", "expected", name+".out")); err != nil {
+			continue // pending: the examples suite names it
+		}
+
+		if _, ok := emitSource(path, "llvm", false); !ok {
+			t.Errorf("%s: the driver refused it", path)
 		}
 	}
 }
