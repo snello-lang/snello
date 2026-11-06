@@ -158,13 +158,12 @@ func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
 	}
 }
 
-// resolveDecls gives every collected object its type: the trait lists
-// first, then struct fields and enum variants, trait methods, function
-// signatures, methods on their receiver types, and declared variable
-// types; last, with every method attached, each type is checked
-// against the traits it implements. Bodies are not entered.
-func (c *Checker) resolveDecls(f *ast.File) {
-	c.resolveTraitLists(f)
+// resolveTypes gives each declared type of a file its struct fields,
+// enum variants or underlying type, and returns them for the cycle
+// check over the whole package. The order of the phases over a
+// package's files is checkFiles's: the trait lists come first, the
+// types next, and the signatures after every type of every file.
+func (c *Checker) resolveTypes(f *ast.File) []*Named {
 	var named []*Named
 	for i, d := range f.Decls {
 		if d, ok := d.(*ast.TypeDecl); ok {
@@ -174,9 +173,13 @@ func (c *Checker) resolveDecls(f *ast.File) {
 		}
 	}
 
-	c.checkTypeCycles(named)
-	c.resolvePending()
-	c.resolvePendingBounds()
+	return named
+}
+
+// resolveSignatures gives each trait of a file its methods, each
+// function its signature, each method its place on its receiver type,
+// and each declared variable its type. Bodies are not entered.
+func (c *Checker) resolveSignatures(f *ast.File) {
 	for i, d := range f.Decls {
 		switch d := d.(type) {
 		case *ast.TraitDecl:
@@ -187,10 +190,6 @@ func (c *Checker) resolveDecls(f *ast.File) {
 			c.resolveVar(d)
 		}
 	}
-
-	c.fillTraitInstances()
-	c.checkRefinements(f)
-	c.checkImpls(f)
 }
 
 func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {

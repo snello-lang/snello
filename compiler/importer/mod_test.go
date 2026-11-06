@@ -140,13 +140,18 @@ func TestOwnPackages(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"snello.mod":               "module example.com/app\nrequire example.com/dep " + dep + "\nrequire example.com/bare " + filepath.Join(dep, "..", "bare") + "\nrequire example.com/renamed " + filepath.Join(dep, "..", "renamed") + "\n",
 		"shapes/shapes.snello":     shapesSrc,
+		"shapes/area.snello":       areaSrc,
 		"util/util.snello":         "package util\n\nimport (\n\t\"example.com/app/shapes\"\n\t\"strings\"\n)\n\nfunc Describe<S: shapes.Shape>(s ref S) string { return strings.ToUpper(s.Name()) }\n",
 		"cycle/a/a.snello":         "package a\n\nimport \"example.com/app/cycle/b\"\n\nfunc A() int { return b.B() }\n",
 		"cycle/b/b.snello":         "package b\n\nimport \"example.com/app/cycle/a\"\n\nfunc B() int { return a.A() }\n",
 		"cmd/tool/main.snello":     "package main\n\nfunc main() {}\n",
 		"empty/.keep":              "",
-		"two/a.snello":             "package two\n",
-		"two/b.snello":             "package two\n",
+		"two/a.snello":             "package two\n\nfunc A() int { return b() }\n",
+		"two/b.snello":             "package two\n\nfunc b() int { return 2 }\n",
+		"mixed/a.snello":           "package mixed\n",
+		"mixed/b.snello":           "package other\n",
+		"broken/a.snello":          "package broken\n",
+		"broken/b.snello":          "package broken\n\nfunc B() int { return c }\n",
 		"bodiless/bodiless.snello": "package bodiless\n\nfunc Sqrt(x f64) f64\n",
 		"variadic/variadic.snello": "package variadic\n\nfunc Print(args ...ref any) {}\n",
 		"local/local.snello":       "package local\n\nstruct T { l local }\n",
@@ -176,7 +181,9 @@ func TestOwnPackages(t *testing.T) {
 		{"import \"example.com/elsewhere\"\nfunc f() {}", []string{"package example.com/elsewhere is not in the standard library, in module example.com/app or in its require lines"}},
 		{"import \"nosuch\"\nfunc f() {}", []string{"package nosuch is not in the standard library, in module example.com/app or in its require lines"}},
 		{"import \"./shapes\"\nfunc f() {}", []string{`malformed import path "./shapes": a relative path; name the package by its path under the module`}},
-		{"import \"example.com/app/two\"\nfunc f() {}", []string{"package example.com/app/two has 2 files; a package of several files is not supported yet"}},
+		{"import \"example.com/app/two\"\nfunc f() int { return two.A() }", nil}, // a package of two files, one calling into the other
+		{"import \"example.com/app/mixed\"\nfunc f() {}", []string{"found packages mixed (a.snello) and other (b.snello) in mixed"}},
+		{"import \"example.com/app/broken\"\nfunc f() {}", []string{"b.snello:3:23: undefined: c"}}, // an error in the second file names it
 		{"import \"example.com/app/bodiless\"\nfunc f() {}", []string{"package example.com/app/bodiless does not compile:", "missing function body"}},
 		{"import \"example.com/app/variadic\"\nfunc f() {}", []string{"a variadic parameter is not supported yet"}},
 		{"import \"example.com/app/local\"\nfunc f() {}", []string{"local is a field of the standard library's types that stay in their task; a program does not write it"}},
@@ -233,8 +240,9 @@ func TestOwnPackages(t *testing.T) {
 	}
 }
 
-// shapesSrc is a package with a function, a struct, an enum, a trait
-// and a generic function, for using each across the boundary.
+// shapesSrc is the first file of a package with a function, a struct,
+// an enum, a trait and a generic function, for using each across the
+// boundary.
 const shapesSrc = `package shapes
 
 trait Shape {
@@ -253,6 +261,12 @@ struct Rect impl Shape { W f64; H f64 }
 func (r ref Rect) Name() string { return "rect" }
 
 func (r ref Rect) Area() f64 { return r.W * r.H }
+
+`
+
+// areaSrc is the second file of the package: an enum and the generic
+// functions, over the trait and the structs the first file declares.
+const areaSrc = `package shapes
 
 enum Kind impl Copy, Clone, Eq { Round; Square }
 

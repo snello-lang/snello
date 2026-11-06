@@ -97,16 +97,25 @@ type checkpoint struct {
 // possibly partial, and the errors found, sorted by position. The
 // returned token.File resolves positions in the tree.
 func ParseFile(filename string, src []byte) (*ast.File, *token.File, error) {
+	file := token.NewFile(filename, len(src))
+	f, err := Parse(file, src)
+	return f, file, err
+}
+
+// Parse parses src into file, one a FileSet made when the source is a
+// file of a package of several, and returns the syntax tree and the
+// errors, as ParseFile does.
+func Parse(file *token.File, src []byte) (*ast.File, error) {
 	var p Parser
-	p.init(filename, src)
+	p.init(file, src)
 	f := p.parseFile()
 	p.errors.Sort()
 
-	return f, p.file, p.errors.Err()
+	return f, p.errors.Err()
 }
 
-func (p *Parser) init(filename string, src []byte) {
-	p.file = token.NewFile(filename, len(src))
+func (p *Parser) init(file *token.File, src []byte) {
+	p.file = file
 	p.scanner.Init(p.file, src, func(pos token.Position, msg string) {
 		p.addError(pos, msg)
 	})
