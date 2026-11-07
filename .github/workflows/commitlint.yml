@@ -1,0 +1,33 @@
+# Every commit message is a Conventional Commit, as GoAkt's are:
+# type(scope)!: subject, the type one of feat, fix, docs, test, ci,
+# chore, refactor, perf or revert, the subject in lower case and
+# without a period, a body after a blank line. The default rules of
+# commitlint's config-conventional apply; a pull request's commits are
+# checked as it is opened, pushed to and marked ready, and main's as it
+# is pushed to.
+name: commitlint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # ready_for_review is not a default activity type: list it (plus the
+    # defaults) so marking a draft PR ready also starts a run.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every commit of the pull request, not the merge alone
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1

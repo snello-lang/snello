@@ -15,9 +15,19 @@
 # x86-64 Darwin is the one pair no runner covers.
 name: Tests
 
+# A change to documentation alone, markdown anywhere or anything under
+# _docs/, runs none of this: the lints of commit messages and pull
+# request titles still run, and main is not protected by these checks,
+# so a skipped run blocks nothing.
 on:
   push:
+    paths-ignore:
+      - '**.md'
+      - '_docs/**'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - '_docs/**'
 
 # A newer push to the same branch makes an older run's result moot.
 concurrency:

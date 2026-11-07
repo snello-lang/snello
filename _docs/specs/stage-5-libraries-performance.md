@@ -125,10 +125,10 @@ Progress: the design written 2026-11-06, section 6 and decision 4 of `../design/
 - [x] The Rust programs and the code that built them are removed, and `bench/README.md` and the design document say the comparison is with Go (2026-11-07)
 - [x] `bench/churn` in Snello and Go prints the same, with every task allocating at once and blocks crossing tasks (2026-11-07: a task per core, `os.Cores` added to the library for it, each over a ring of 256 slots, then 400,000 blocks a task handed to the next task in batches of 256, so the channel costs a word per batch; 28 to 32 ms against Go's 174)
 - [x] The CI workflow runs the benchmark on x86-64 and arm64 Linux and writes the table to the job's summary; a wrong output fails the job and a time does not (2026-11-07: the `bench` job, `SNELLO_BENCH_OUT` naming the file the test writes the table to, appended to the step summary)
-- [ ] The table in `../design/01-language-design.md` recorded again under the method, for the Mac and for both Linux runners, with task 5.1's target checked again by median (2026-11-07: the Mac's table recorded, `tree` at 0.97 of Go by median; the Linux tables wait for the `bench` job's first run, after which they are recorded here and the box checked)
+- [x] The table in `../design/01-language-design.md` recorded again under the method, for the Mac and for both Linux runners, with task 5.1's target checked again by median (2026-11-07: the Mac's table, `tree` at 0.97 of Go by median; the two Linux tables from the `bench` job's first run, `tree` at 0.69 of Go on x86-64 and 0.58 on arm64)
 
 **Verification:**
-- [ ] `SNELLO_BENCH=1 go test ./bench -v` on macOS, and the job summaries of both Linux runners (2026-11-07: macOS run; the Linux summaries wait for the job's first run)
+- [x] `SNELLO_BENCH=1 go test ./bench -v` on macOS, and the job summaries of both Linux runners (2026-11-07: macOS, and the two summaries of run 42365775764)
 - [x] Tests pass: `go test ./...` (2026-11-07)
 
 **Dependencies:** 5.1
@@ -242,9 +242,9 @@ Review of 5.11 to 5.13, 2026-10-21, by four independent reviews of the runtime, 
 
 ## Checkpoint: stage 5
 
-- [ ] Every example but 19, which waits for stage 8's `regexp`, runs natively through both backends on macOS and on both Linux runners
-- [ ] A package outside the compiler builds and binds C
-- [ ] The standard library holds the packages of `05-standard-library.md` and nothing more, each on its reference algorithm and measured against Go, with the measurement recorded in the library table (the Rust comparisons made before 2026-11-07 stay recorded as the history of each choice)
-- [ ] `tree`, `words` and `tasks` at their targets by the median of task 5.8, the table in the design document updated for the Mac and both Linux runners
-- [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated
-- [ ] Reviewed by the owner
+- [x] Every example but 19, which waits for stage 8's `regexp`, runs natively through both backends on macOS and on both Linux runners (2026-11-07: the three `go test` jobs of run 42365775764)
+- [x] A package outside the compiler builds and binds C (2026-11-07: `examples/run/bound/`)
+- [x] The standard library holds the packages of `05-standard-library.md` and nothing more, each on its reference algorithm and measured against Go, with the measurement recorded in the library table (the Rust comparisons made before 2026-11-07 stay recorded as the history of each choice; 2026-11-07, the fifteen packages on disk are the note's list)
+- [x] `tree`, `words` and `tasks` at their targets by the median of task 5.8, the table in the design document updated for the Mac and both Linux runners (2026-11-07: `tree` and `words` on all three; the switch on all three; the spawn at 2.1 times Go on the Mac, 2.6 on x86-64 Linux and 1.6 on arm64 Linux, closed at the owner's word)
+- [x] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated (2026-11-07: chapters 2, 14 and 15, Appendix B, and the enum sections of chapter 4)
+- [x] Reviewed by the owner (2026-11-07: pull request #8 merged)
