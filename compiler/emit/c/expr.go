@@ -210,6 +210,11 @@ func (e *Emitter) selector(x *ast.SelectorExpr) string {
 				return "0"
 			}
 
+			if lower.Located(obj) != "" {
+				e.unsupported(x.Pos(), pkg.Name()+"."+x.Sel.Name+" as a value: it is called, so that a failure names its line")
+				return "0"
+			}
+
 			return e.funcValue(obj, x.Pos())
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
@@ -644,6 +649,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 				return e.libraryCall(x, key) // a library calling a function of its own the compiler writes
 			}
 
+			e.locate(x, obj)
 			return e.funcCall(x, id, obj)
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, e.operands(x.Args, e.variantFields(e.typeOf(x), obj)), x.Pos())
@@ -665,6 +671,8 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 			if key := lower.Key(fn); key != "" {
 				return e.libraryCall(x, key) // a function the library declares without a body and the compiler writes
 			}
+
+			e.locate(x, fn)
 		}
 
 		if v, ok := e.info.Uses[sel.Sel].(*types.Variant); ok {

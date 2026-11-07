@@ -14,6 +14,8 @@
 // program on a value used after its release and report values never
 // released; `snello build -backend c FILE` builds it through the C
 // backend, the reference implementation, and the system's C compiler.
+// `snello test DIR` builds the tests of a package, its _test.snello
+// files, with a generated main and runs them (_docs/design/09-testing.md).
 // Four more subcommands inspect the compiler by hand: `snello lex FILE`
 // prints the token stream, `snello parse FILE` the syntax tree, `snello
 // check FILE|DIR` what the checker finds, and `snello emit [-backend c]
@@ -26,7 +28,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/c"
@@ -35,6 +39,7 @@ import (
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -68,6 +73,8 @@ func main() {
 	case "emit":
 		path, backend, _ := buildArgs(os.Args[2:], false)
 		os.Exit(emit(path, backend))
+	case "test":
+		os.Exit(test(os.Args[2:]))
 	default:
 		usage()
 	}
@@ -75,8 +82,64 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | check) FILE|DIR")
+	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
 	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
 	os.Exit(2)
+}
+
+// test builds the tests of the package in a directory into a program
+// and runs it: -backend chooses the backend, and the rest of the
+// flags, -v and -run NAME, go to the program, whose exit code is the
+// command's (_docs/design/09-testing.md, section 5).
+func test(args []string) int {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	backend := fs.String("backend", "llvm", "the backend: llvm, or c for the reference backend")
+	bools := map[string]*bool{}
+	for _, name := range []string{"v", "failfast", "shuffle", "short", "update"} {
+		bools[name] = fs.Bool(name, false, "")
+	}
+
+	strs := map[string]*string{}
+	for _, name := range []string{"run", "bench"} {
+		strs[name] = fs.String(name, "", "")
+	}
+
+	count := fs.Int("count", 1, "")
+	timeout := fs.Duration("timeout", 0, "")
+
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || *backend != "c" && *backend != "llvm" {
+		usage()
+	}
+
+	var pass []string
+	for _, name := range []string{"v", "failfast", "shuffle", "short", "update"} {
+		if *bools[name] {
+			pass = append(pass, "-"+name)
+		}
+	}
+
+	for _, name := range []string{"run", "bench"} {
+		if *strs[name] != "" {
+			pass = append(pass, "-"+name, *strs[name])
+		}
+	}
+
+	if *count != 1 {
+		pass = append(pass, "-count", strconv.Itoa(*count))
+	}
+
+	if *timeout > 0 { // the program counts in whole seconds
+		pass = append(pass, "-timeout", strconv.Itoa(int((*timeout+time.Second-1)/time.Second)))
+	}
+
+	code, err := testrun.Run(fs.Arg(0), *backend, pass, os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	return code
 }
 
 // buildArgs reads the flags of build and emit: the backend, and for a

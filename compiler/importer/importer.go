@@ -46,6 +46,8 @@ type Package struct {
 type Importer struct {
 	Module *Module
 
+	Tests string // the path of the package under test, whose test files are loaded with it, or ""
+
 	std     types.Config // the standard library is checked with its privileges
 	own     types.Config // a package of the program's own without them
 	info    *types.Info
@@ -120,7 +122,22 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 	name := importPath + "/" + path.Base(importPath) + ".snello"
 	if src, err := std.Sources.ReadFile(name); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
-			return imp.load(importPath, []string{name}, [][]byte{src}, nil, nil, &imp.std)
+			names, srcs := []string{name}, [][]byte{src}
+			if imp.Tests == importPath { // the package under test: its test files join it
+				entries, _ := fs.ReadDir(std.Sources, importPath)
+				for _, e := range entries {
+					if IsTestFile(e.Name()) {
+						test, err := std.Sources.ReadFile(importPath + "/" + e.Name())
+						if err != nil {
+							return nil, nil, err
+						}
+
+						names, srcs = append(names, importPath+"/"+e.Name()), append(srcs, test)
+					}
+				}
+			}
+
+			return imp.load(importPath, names, srcs, nil, nil, &imp.std)
 		})
 	}
 
@@ -211,6 +228,15 @@ func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []strin
 		return nil, nil, errors.New("no package at " + pkgDir + " for import " + importPath)
 	}
 
+	if canonical == imp.Tests { // the package under test: its test files join it
+		tests, err := TestFiles(pkgDir)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		files = append(files, tests...)
+	}
+
 	srcs := make([][]byte, len(files))
 	for i, name := range files {
 		if srcs[i], err = os.ReadFile(name); err != nil {
@@ -288,6 +314,10 @@ func Paths() []string {
 // error in any of them names its file.
 func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
 	fset, syntax, err := parseFiles(names, srcs)
+	if err == nil {
+		err = checkTestImports(names, syntax, conf.Standard)
+	}
+
 	var pkg *types.Package
 	if err == nil {
 		pkg, err = conf.CheckFiles(path, fset.Files(), syntax, imp.info)

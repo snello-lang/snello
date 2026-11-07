@@ -34,6 +34,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,7 +165,22 @@ struct sn_task {
     guard *guards;        // the values a panic drops, innermost last
     int64_t nguards, guardcap;
     bool unwinding;
+    sn_string unwound;     // the message of the panic being unwound to a mark, for a drop that panics meanwhile to report
+    struct sn_mark *marks; // the marks a panic unwinds to, innermost first; none for a program's task
+    sn_string places[3];   // the place of the test call being made, testing.c's: the task's own, so that parallel tests do not share it
 };
+
+// A mark is where a panic on the task stops: the jump back, the guard
+// count at the mark, so that the values made since are dropped and the
+// ones before are kept, and the message, for the caller of sn_catch.
+// It lives in sn_catch's frame on the task's stack, below the frames
+// the panic abandons (_docs/design/09-testing.md, section 3).
+typedef struct sn_mark {
+    sigjmp_buf jump;
+    int64_t nguards;
+    sn_string *out; // where the panic's message goes, the caller's
+    struct sn_mark *prev;
+} sn_mark;
 
 typedef struct sn_task task;
 
@@ -370,6 +386,12 @@ sn_task *sn_self(void) {
     }
 
     return t;
+}
+
+// sn_task_places returns the running task's slots for the place of a
+// test's call, which testing.c fills and reads.
+sn_string *sn_task_places(void) {
+    return sn_self()->places;
 }
 
 static _Atomic int waiting; // workers blocked in the idle wait, under idle_mu
@@ -658,6 +680,7 @@ static void settle(worker *w) {
         }
 
         free(t->guards);
+        sn_string_drop(&t->places[SN_PLACE_PARTS]);
         free(t);
         atomic_fetch_sub(&running, 1);
         break;
@@ -1490,6 +1513,10 @@ void sn_unguard(void *p) {
     task *t = sn_self();
     for (int64_t i = t->nguards - 1; i >= 0; i--) {
         if (t->guards[i].p == p) {
+            for (sn_mark *m = t->marks; m != NULL && m->nguards > i; m = m->prev) {
+                m->nguards--; // a guard below a mark removed: the mark's count moves with it, though the ownership rules let no value declared above a mark be dropped under it
+            }
+
             memmove(&t->guards[i], &t->guards[i + 1], (size_t)(t->nguards - i - 1) * sizeof *t->guards);
             t->nguards--;
             return;
@@ -1500,12 +1527,73 @@ void sn_unguard(void *p) {
 // sn_panic prints the message, then runs the drops of the guarded
 // values, innermost first, and ends the program. A Drop that panics
 // during that ends the program with its own message at once.
+// sn_catch runs fn on the current task under a mark and returns
+// whether a panic ended it, with the panic's message in *msg, owned by
+// the caller, when one did. Marks nest, a subtest's inside its test's.
+// The jump saves no signal mask, and the task may resume on another
+// thread between the mark and the panic: the jump restores the
+// registers and the stack pointer of the mark's frame, which are the
+// task's own, and nothing of the thread's. Nothing of the mark or of
+// the task is read after the jump: sn_panic wrote the message to the
+// caller's slot before it jumped, and a local of this frame changed
+// since the mark would be indeterminate to read.
+bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg) {
+    task *t = sn_self();
+    sn_mark m;
+    m.nguards = t->nguards;
+    m.out = msg;
+    m.prev = t->marks;
+    t->marks = &m;
+    if (sigsetjmp(m.jump, 0) == 0) {
+        fn(ctx);
+        t->marks = m.prev;
+        return false;
+    }
+
+    return true; // the panic took the mark off, unwound to it and wrote *msg
+}
+
+// sn_panic ends the task's work with the message: on a task with a
+// mark, by dropping the values guarded since the mark, with the
+// message cloned first since those drops may free what it views, and
+// jumping to the mark with it; on any other, and while a drop of that
+// unwinding panics itself, by printing the message, dropping every
+// guarded value and ending the process, as a panic always did. A drop
+// that panics while unwinding to a mark ends the process too, since
+// the first panic can no longer be reported through the mark, and
+// its message is printed with the drop's so that neither is lost.
 _Noreturn void sn_panic(sn_string msg) {
+    task *t = my_task(); // a thread of the runtime's own, the timers' or the poller's, has none and never jumps into the main task's mark
+    if (t != NULL && t->marks != NULL && !t->unwinding) {
+        sn_mark *m = t->marks;
+        t->marks = m->prev;
+        *m->out = sn_string_clone(msg); // before the unwinding drops what the message may be part of
+        t->unwound = *m->out;
+        t->unwinding = true;
+        while (t->nguards > m->nguards) {
+            guard g = t->guards[--t->nguards];
+            g.drop(g.p);
+        }
+
+        t->unwinding = false;
+        t->unwound = (sn_string){0};
+        siglongjmp(m->jump, 1);
+    }
+
+    if (t == NULL) {
+        t = sn_self();
+    }
+
     fflush(stdout);
     fputs("panic: ", stderr);
     fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
-    task *t = sn_self();
+    if (t->unwound.len > 0) {
+        fputs("\twhile unwinding from panic: ", stderr);
+        fwrite(t->unwound.ptr, 1, (size_t)t->unwound.len, stderr);
+        fputc('\n', stderr);
+    }
+
     if (!t->unwinding) {
         t->unwinding = true;
         while (t->nguards > 0) {

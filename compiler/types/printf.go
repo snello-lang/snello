@@ -89,7 +89,7 @@ func (c *Checker) named(e ast.Expr) Object {
 	case *ast.SelectorExpr:
 		if x, ok := e.X.(*ast.Ident); ok {
 			if _, obj := c.scope.LookupParent(x.Name); obj != nil {
-				if pkg, ok := obj.(*PkgName); ok && ast.IsExported(e.Sel.Name) {
+				if pkg, ok := obj.(*PkgName); ok && ast.IsExported(e.Sel.Name) && pkg.Imported() != nil { // nil for a package whose check failed, reported already
 					return pkg.Imported().Scope().Lookup(e.Sel.Name)
 				}
 			}

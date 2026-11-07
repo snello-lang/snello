@@ -69,7 +69,7 @@ The library was written on 2026-10-20 as `05-standard-library.md` decides it: `s
 
 ## What it gains
 
-- **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written.
+- **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written, for every value a task owns, borrows or shares through `sync`. A package-level `var` is the one gap found (2026-11-07, while checking the claim for the book): it is a plain shared global the checker lets any task assign; task 9.2 of stage 9 makes it readable everywhere and changed only through a `sync.Mutex` or an atomic it holds.
 - **Deterministic frees across tasks.** A value received from a channel is freed by the receiver when it is done, not by a collector later.
 - **Nothing to annotate.** The pipeline example has one Snello-specific token, a `ref`, and it is there for efficiency rather than safety.
 - **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.snello` shows it.

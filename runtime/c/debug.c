@@ -11,11 +11,12 @@
 // was reused for; and the program fails at its end when blocks are
 // still live, which is a drop the compiler forgot.
 
-#include "snello.h"
+#include "internal.h"
 
 #ifdef SN_DEBUG
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 
 #define LIVE 0x4C49564500000000ULL
@@ -47,12 +48,16 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 // The header adds 32 bytes, so a block of 993 to 1024 bytes, the
 // heap's largest class in a release build, is the system's in this one.
+_Atomic int64_t sn_alloc_count, sn_alloc_total;
+
 void *sn_alloc(size_t n) {
     block *b = sn_heap_alloc(sizeof *b + (n == 0 ? 1 : n));
     if (b == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
+    atomic_fetch_add_explicit(&sn_alloc_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sn_alloc_total, (int64_t)n, memory_order_relaxed);
     pthread_mutex_lock(&lock);
     b->size = n;
     b->magic = LIVE;
@@ -151,6 +156,7 @@ void *sn_deref(void *p) {
 }
 
 int sn_finish(void) {
+    sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
     for (int64_t i = 0; i < sn_os_Args.len; i++) { // the program may have stored strings of its own in it
         sn_string_drop(&((sn_string *)sn_os_Args.ptr)[i]);
     }

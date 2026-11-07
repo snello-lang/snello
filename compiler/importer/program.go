@@ -8,7 +8,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -64,22 +66,66 @@ func LoadProgram(names []string, info *types.Info) (*Importer, *Program, error) 
 		return nil, nil, errors.New("no source files to load")
 	}
 
-	imp := NewImporter(info)
-	var err error
-	if imp.Module, err = FindModule(filepath.Dir(names[0])); err != nil {
-		return nil, nil, err
-	}
-
 	srcs := make([][]byte, len(names))
+	var err error
 	for i, name := range names {
 		if srcs[i], err = os.ReadFile(name); err != nil {
 			return nil, nil, err
 		}
 	}
 
-	fset, syntax, err := parseFiles(names, srcs)
+	return LoadProgramFrom(Load{Names: names, Srcs: srcs}, info)
+}
+
+// A Load is a program given as sources, named as files for the
+// messages and for the module they are found under: what a test build
+// gives the loader, with the generated main in memory. Tests is the
+// path of the package whose test files are loaded with it, or "";
+// DropMain leaves the program's own main out, for a main package
+// tested with a generated one, which is the file named by Main and
+// keeps its.
+type Load struct {
+	Names    []string
+	Srcs     [][]byte
+	Tests    string
+	DropMain bool
+	Main     string
+}
+
+// LoadProgramFrom loads a program from its sources, as LoadProgram
+// loads it from its files.
+func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
+	if len(l.Names) == 0 {
+		return nil, nil, errors.New("no source files to load")
+	}
+
+	imp := NewImporter(info)
+	imp.Tests = l.Tests
+	var err error
+	if imp.Module, err = FindModule(filepath.Dir(l.Names[0])); err != nil {
+		return nil, nil, err
+	}
+
+	fset, syntax, err := parseFiles(l.Names, l.Srcs)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if err := checkTestImports(l.Names, syntax, false); err != nil {
+		return nil, nil, err
+	}
+
+	if l.DropMain {
+		for i, f := range syntax {
+			if l.Names[i] == l.Main {
+				continue
+			}
+
+			f.Decls = slices.DeleteFunc(f.Decls, func(d ast.Decl) bool {
+				fn, ok := d.(*ast.FuncDecl)
+				return ok && fn.Recv == nil && fn.Name.Name == "main"
+			})
+		}
 	}
 
 	conf := types.Config{Importer: imp}
@@ -132,8 +178,25 @@ func LoadPackage(dir string, info *types.Info) error {
 
 // SourceFiles returns the .snello files of dir, sorted by name, each
 // with its directory: the package the directory holds, and none when
-// it holds no package.
+// it holds no package. A test file, NAME_test.snello, is not among
+// them: it is part of the package only when the package is tested
+// (_docs/design/09-testing.md, section 1).
 func SourceFiles(dir string) ([]string, error) {
+	return filesOf(dir, func(name string) bool { return strings.HasSuffix(name, ".snello") && !IsTestFile(name) })
+}
+
+// TestFiles returns the test files of dir, NAME_test.snello, sorted by
+// name, each with its directory.
+func TestFiles(dir string) ([]string, error) {
+	return filesOf(dir, IsTestFile)
+}
+
+// IsTestFile reports whether a file's name is a test file's.
+func IsTestFile(name string) bool {
+	return strings.HasSuffix(name, "_test.snello")
+}
+
+func filesOf(dir string, want func(string) bool) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -141,13 +204,37 @@ func SourceFiles(dir string) ([]string, error) {
 
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".snello") {
+		if !e.IsDir() && want(e.Name()) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}
 
 	sort.Strings(files)
 	return files, nil
+}
+
+// checkTestImports refuses an import of testing or expect from a file
+// that is not a test file, so that nothing of a test reaches a
+// program's binary; the standard library's own files are exempt, since
+// expect is built on testing.
+func checkTestImports(names []string, syntax []*ast.File, standard bool) error {
+	if standard {
+		return nil
+	}
+
+	for i, f := range syntax {
+		if f == nil || IsTestFile(names[i]) {
+			continue
+		}
+
+		for _, spec := range f.Imports {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && (path == "testing" || path == "expect") {
+				return errors.New(names[i] + ": package " + path + " is imported by test files alone")
+			}
+		}
+	}
+
+	return nil
 }
 
 // cFiles returns the .c and .h files of dir, sorted by name, each with

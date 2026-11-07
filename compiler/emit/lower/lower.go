@@ -106,11 +106,123 @@ func CheckPrefixes(libraries []Library) error {
 // say it never returns yet; and the primitives of rc and sync are the
 // pointer itself, since a second owner of one pointer, and a mut
 // reached through a ref, are what the language refuses and the
-// reference count and the lock are what make them safe there.
+// reference count and the lock are what make them safe there; and
+// testing.Catch runs a function under the runtime's mark, which takes
+// the function as C takes one, through an adapter the backend writes.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
 	"rc.alias": true, "rc.leak": true, "sync.alias": true, "sync.leak": true, "sync.inside": true,
+	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
+}
+
+// located names the functions of testing the compiler hands the place
+// of their call before the call, the file and line alone; every
+// exported function of expect is handed the whole call's text as
+// well, so that a test's failure names its file and line, the
+// expression as the test wrote it and the values of its parts
+// (_docs/design/09-testing.md, section 4): the backend hands the
+// runtime the place, and for expect the parts, which it keeps for the
+// running task and the package's where and parts read back, and then
+// writes the call as any other.
+var located = map[string]string{"testing.Log": "line", "testing.Logf": "line", "testing.Skip": "line"}
+
+// Located returns how the place of a call of fn is handed to it: call,
+// line, or "" for a function that is not told.
+func Located(fn *types.Func) string {
+	if fn.Pkg() == nil {
+		return ""
+	}
+
+	if fn.Pkg().Path() == "expect" && ast.IsExported(fn.Name()) {
+		return "call"
+	}
+
+	return located[fn.Pkg().Path()+"."+fn.Name()]
+}
+
+// Simple reports whether an expression may be evaluated twice without
+// anyone noticing: a name, a literal, a field or an element of one, or
+// the predeclared len of one. The parts of a condition are shown for
+// such operands alone, since showing them evaluates them again.
+func Simple(info *types.Info, e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident, *ast.BasicLit:
+		return true
+	case *ast.ParenExpr:
+		return Simple(info, x.X)
+	case *ast.SelectorExpr:
+		return Simple(info, x.X)
+	case *ast.IndexExpr:
+		return Simple(info, x.X) && Simple(info, x.Index)
+	case *ast.CallExpr:
+		id, ok := x.Fun.(*ast.Ident)
+		if !ok || id.Name != "len" || len(x.Args) != 1 {
+			return false
+		}
+
+		_, builtin := info.Uses[id].(*types.Builtin) // not a function of the program's named len
+		return builtin && Simple(info, x.Args[0])
+	}
+
+	return false
+}
+
+// Comparison reports whether a condition is a comparison of two
+// operands worth showing: both simple, and not both literals.
+func Comparison(info *types.Info, e ast.Expr) (x, y ast.Expr, ok bool) {
+	b, isBinary := e.(*ast.BinaryExpr)
+	if !isBinary {
+		return nil, nil, false
+	}
+
+	switch b.Op {
+	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
+	default:
+		return nil, nil, false
+	}
+
+	if !Simple(info, b.X) || !Simple(info, b.Y) {
+		return nil, nil, false
+	}
+
+	_, xlit := b.X.(*ast.BasicLit)
+	_, ylit := b.Y.(*ast.BasicLit)
+	if xlit && ylit {
+		return nil, nil, false
+	}
+
+	return b.X, b.Y, true
+}
+
+// Parts says what the parts of an assertion are, which each backend
+// then writes in its own text: typed for Equal, NotEqual and
+// EqualSlice, whose parts are the name of the type compared, or the
+// operands of a condition that is a comparison of simple operands, the
+// literals among them left out, for True and False; neither for any
+// other assertion.
+func Parts(info *types.Info, x *ast.CallExpr, name string) (typed bool, operands []ast.Expr) {
+	switch name {
+	case "Equal", "NotEqual", "EqualSlice":
+		return len(x.Args) > 0, nil
+	case "True", "False":
+		if len(x.Args) != 1 {
+			return false, nil
+		}
+
+		l, r, ok := Comparison(info, x.Args[0])
+		if !ok {
+			return false, nil
+		}
+
+		for _, operand := range []ast.Expr{l, r} {
+			if _, lit := operand.(*ast.BasicLit); !lit {
+				operands = append(operands, operand)
+			}
+		}
+	}
+
+	return false, operands
 }
 
 // Key returns the key of fn among the lowered functions, path.Name, or

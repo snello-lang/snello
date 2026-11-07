@@ -1,0 +1,38 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package strings
+
+import ("expect"; "testing")
+
+func TestRepeat() {
+	expect.Equal(ref Repeat("ab", 3), "ababab")
+	expect.Equal(ref Repeat("x", 0), "")
+}
+
+func TestJoin() {
+	expect.Equal(ref Join(ref []string{"a", "b", "c"}, "-"), "a-b-c")
+	expect.Equal(ref Join(ref []string{}, "-"), "")
+}
+
+func TestCase() {
+	testing.Run("upper", func() { expect.Equal(ref ToUpper("snello"), "SNELLO") })
+	testing.Run("lower", func() { expect.Equal(ref ToLower("SNELLO"), "snello") })
+}
+
+func TestBuilder() {
+	var b Builder
+	b.WriteString("one")
+	b.WriteByte(' ')
+	b.WriteString("two")
+	expect.Equal(ref b.Len(), ref 7)
+	expect.Equal(ref b.String(), "one two")
+}
+
+func BenchmarkRepeat() {
+	testing.ReportAllocs()
+	for testing.Loop() {
+		_ = Repeat("ab", 16)
+	}
+}

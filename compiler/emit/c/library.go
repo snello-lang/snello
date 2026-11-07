@@ -5,10 +5,12 @@
 package c
 
 import (
+	"path/filepath"
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -49,10 +51,89 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	case "rc.leak", "sync.leak": // the pointer moves in and nothing frees it
 		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
 		return ""
+	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
+		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
+		e.locate(x, fn)
+		plain := "Log"
+		if key == "expect.Failf" {
+			plain = "Fail"
+		}
+
+		tmp := e.temp()
+		e.line("sn_string " + tmp + " = " + e.sprintf(x.Args[0], x.Args[1:]) + ";")
+		e.line(lower.ObjName(fn.Pkg().Scope().Lookup(plain)) + "(" + tmp + ");")
+		e.line("sn_string_drop(&" + tmp + ");")
+		return ""
+	case "testing.Catch": // the function runs under the runtime's mark, called through an adapter as the sort's less is
+		f := e.saved(x.Args[0], e.typeOf(x.Args[0]))
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {.has = false};")
+		e.line(out + ".has = sn_catch(" + e.catchAdapter(lower.ValueType(e.typeOf(x.Args[0])), x.Pos()) + ", &" + f + ", &" + out + ".val);")
+		return out
 	}
 
 	e.unsupported(x.Pos(), key)
 	return "0"
+}
+
+// locate hands the runtime, before a call of a located function, the
+// place of the call for the running task, file:line, with the call's
+// text and its parts for an assertion: the type of what Equal
+// compares, or the operands of a condition with their values, when
+// they are simple enough to read twice (_docs/design/09-testing.md,
+// section 4).
+func (e *Emitter) locate(x *ast.CallExpr, fn *types.Func) {
+	mode := lower.Located(fn)
+	if mode == "" {
+		return
+	}
+
+	pos := e.file.Position(x.Pos())
+	where := filepath.Base(pos.Filename) + ":" + strconv.Itoa(pos.Line)
+	if mode != "call" {
+		e.line("sn_testing_line(" + literal(where) + ");")
+		return
+	}
+
+	where += ": " + ast.Source(x)
+	e.line("sn_testing_call(" + literal(where) + ", " + e.parts(x, fn.Name()) + ");")
+}
+
+// parts writes the parts of an assertion as lower.Parts decides them:
+// the type compared, or the operands with their values, "n is 2,
+// limit is 3", or nothing.
+func (e *Emitter) parts(x *ast.CallExpr, name string) string {
+	typed, operands := lower.Parts(e.info, x, name)
+	if typed {
+		return literal(lower.ValueType(e.typeOf(x.Args[0])).String())
+	}
+
+	if len(operands) == 0 {
+		return literal("")
+	}
+
+	var pieces []piece
+	for i, operand := range operands {
+		if i > 0 {
+			pieces = append(pieces, piece{lit: ", "})
+		}
+
+		pieces = append(pieces, piece{lit: ast.Source(operand) + " is "}, piece{text: e.text(e.expr(operand), operand)})
+	}
+
+	return e.concat(pieces)
+}
+
+// catchAdapter returns the name of the function that lets sn_catch
+// call a Snello function value held in the context, written once.
+func (e *Emitter) catchAdapter(sig types.Type, pos token.Pos) string {
+	name := "sn_catchfn_" + lower.Mangle(sig)
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		put(&e.helpers, "static void ", name, "(void *ctx) {\n\t", e.cType(sig, pos), " *f = ctx;\n\tf->fn(f->box);\n}\n\n")
+	}
+
+	return name
 }
 
 // toString writes the runtime call that turns a value into a string.

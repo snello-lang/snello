@@ -2,28 +2,68 @@
 
 Goal: close the gaps of `standard-library-gaps.md` that the owner decided in (2026-11-07), before stage 8 builds the first library outside the compiler on the core. The library stays under decision 7 of `../design/05-standard-library.md`: every addition is a name a Go programmer reaches for in the first hour of a port, written on its reference algorithm and measured where it matters, and nothing that encodes a format, speaks a protocol or wraps a system. Two things come first because everything after them is tested through them: a `testing` package with `snello test`, so that the library's own tests are written in Snello, and the error trait's capabilities, since every new function reports failures through it. The solidity work, fuzzing and Go twins, comes before the widening, since it finds bugs in what exists. Each task's design is recorded in the design note before its code, reviewed by the owner, as every library decision has been.
 
-The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
+The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within the stage, task 9.2 was added on 2026-11-07 ahead of everything else when a race through a package-level `var` was found, and 9.3 behind it at the owner's word that every package of the library has its tests.
 
 ## Task 9.1: `testing` and `snello test`
 
-**Description:** A program's or a library's own tests have no way to be written in Snello today; the compiler's suites are Go. The design decides, in a note of its own, `../design/09-testing.md`: a `_test.snello` file beside a package's files is part of the package when tested and not otherwise, as Go's `_test.go` is; a test is `func TestName(t mut testing.T)` in such a file, found by name; `snello test DIR` builds the package with its tests and a generated `main` that runs them, reports each as Go's `go test -v` does, and exits with a failure when one fails; `t.Errorf`, `t.Fatalf`, `t.Log`, `t.Run` for subtests, `t.Skip`; a test program that panics is a failure naming the test. Benchmarks and examples as tests are out of this task. The `testing` package is ordinary Snello over `fmt` and `os`; what the compiler writes is the `main` that calls the tests found.
+**Description:** A program's or a library's own tests have no way to be written in Snello today; the compiler's suites are Go. The design is `../design/09-testing.md`, at the owner's word simpler than Go's and not Go copied: a `_test.snello` file beside a package's files is part of the package when tested and not otherwise; a test is `func TestName()`, a plain function with no handle, found by name; a failed assertion is a panic, which the runner catches at the test's boundary through a mark the runtime gains, unwinding the test's values; cleanup is `Drop`; `snello test DIR` builds the package with its tests and a generated `main` and runs it, reporting as `go test -v` does. The `testing` and `expect` packages are rich enough that no library outside them is needed, in three slices: the runtime's mark, `sn_catch`, first, since `expect.Panics` and fuzzing wait on it too; then `expect.Equal`, `True`, `Fail`, `testing.Run` for subtests, `Log`, `Skip`, `TempDir` and the runner; then the diffs `go-cmp` gives, `Some`, `Ok`, `Contains`, `Panics`, golden files with `-update`, `testing.Parallel`, benchmarks with `testing.Loop` reporting ns/op and allocations per op from the runtime's allocator, and the flags `-run`, `-bench`, `-v`, `-count`, `-failfast`, `-timeout`, `-shuffle`, `-short`. What the compiler writes is the `main` that calls the tests found, and the file, line and expression text the two packages' functions report.
 
 **Acceptance criteria:**
-- [ ] `../design/09-testing.md` written and reviewed by the owner before the code
-- [ ] `snello test DIR` runs the tests of a package of the program's own and of a `main` package, through both backends, reporting each test and exiting as Go's `go test` does
-- [ ] `_test.snello` files are left out of `snello build` and `snello check` and refused in the standard library
-- [ ] The library's own tests begin: one package of the standard library has a `_test.snello` run by `go test ./std` through `snello test`
-- [ ] Chapter 2 of the book says how a test is written and run; Appendix B maps `go test`
+- [x] `../design/09-testing.md` reviewed by the owner before the code (2026-11-07: three rounds, the handle dropped at the owner's word, the failure message's rules, no `-race`)
+- [x] The runtime's mark: a panic on a task with a mark unwinds to it, dropping the values with `Drop` made since, and is returned as a message; one without ends the process as today; programs in `backendtest` through both backends, release and debug, the debug build reporting nothing left, but for the one program that pins what the design leaves unfreed, the plain values of the abandoned frames, which runs as a release build (2026-11-07: `sn_catch` and the mark in `sched.c`, `testing.Catch` lowered through an adapter in each backend, the programs `catch`, `catch-abandoned`, `catch-drop-panics` and `catch-across-threads`; the review found the LLVM backend cloning a panic's message where the C backend did not, a leak under a mark, fixed)
+- [x] `snello test DIR` runs the tests of a package of the program's own and of a `main` package, through both backends, reporting each test and exiting as Go's `go test` does; a failed assertion prints the expression as written, got and want in that order with their types and sizes, the first difference in words, the values of a condition's operands, and the subtest's case, in the form the design note shows, each form pinned by a test (2026-11-07: `compiler/testrun` plans, generates, builds and runs; `snello test` with every flag; the compiler writes the file, line, call text and parts before every call of an exported `expect` function and of `testing.Log`, `Logf` and `Skip`, `ast.Source` printing the call as written, the operands' values for a comparison of simple operands; `TestRun` and `TestMore` pin the forms through both backends. The subtest's case is its name, `TestDouble/wrong`, since a closure's captured row is the test's to name; an assertion nested in another's arguments reports the outer's place, documented, the style being one assertion per line)
+- [x] `_test.snello` files are left out of `snello build`, `snello check`, `snello emit` and of every import, `testing` and `expect` are refused from any file but a test file, and a test function with the wrong signature is refused with the message designed; a program's binary built beside its tests holds no symbol of either package, checked by the suite (2026-11-07: `importer.SourceFiles` and `TestFiles`, `checkTestImports`, `TestTestFiles`; the signature refused at discovery; the symbols checked in `TestRun` through both backends)
+- [x] The library's own tests begin: one package of the standard library has a `_test.snello` run by `go test ./std` through the runner, under the library's privileges (2026-11-07: `std/strings/strings_test.snello`, run by `std/std_test.go` through `testrun.PlanStd` in both backends)
+- [x] The place of a call is the running task's: two parallel tests asserting at once never share it (2026-11-07: found while checking the book's claim of race freedom, `where` and `parts` were package variables of `testing` and `expect`; now `sn_testing_line` and `sn_testing_call` in `runtime/c/testing.c` keep them on the task and the packages' bodiless `where()` and `parts()` read them back; `TestMore`'s parallel pair asserts twenty thousand times each while one fails)
+- [x] The review before the pull request (2026-11-07, five axes, by a reviewer reading the design note first): a second `testing.Parallel` call stood in for the test's verdict, now refused with `testing.Parallel called twice`; `-count` and `-timeout` took garbage as zero, now typed flags in `snello test` and checked in `Main` with exit code 2; `-run .` runs every test; an `expect` function taken as a value lost its place, now refused by both backends; a benchmark failing an expectation is reported with `--- FAIL`; the timeout's line goes to the standard error, and a test binary ended by a signal exits 2 with a line; `sn_panic` takes the mark path on a task alone, never from the timers' or the poller's thread; the parts decision shared in `lower.Parts`, with `len` recognized as the predeclared function; the design note's rules 3 to 5, samples and table brought to what was built; a checker crash on a package whose check failed, met on the way, made a plain error
+- [x] The third slice: the diffs, the option and result assertions, `Panics`, golden files with `-update`, `Parallel`, benchmarks reporting ns/op and allocations per op, and the flags, each with a test of the packages themselves in Snello (2026-11-07: `EqualSlice` and `EqualText` say the first difference; `IsSome`, `IsNone`, `IsOk`, `IsErr`, named with `Is` since the variants own the bare names; `Golden` with `-update` into a `testdata` the author makes until task 9.11; `Parallel` behind a gate with each test in a task and its lines held; `Loop`, `ResetTimer`, `ReportAllocs` with the allocator's counts; `-count`, `-failfast`, `-timeout`, `-shuffle`, `-short`; `TestMore` drives each through the runner, and `std/strings/strings_test.snello` has a benchmark)
+- [x] Chapter 2 of the book says how a test is written and run, with a table-driven test, an assertion and a benchmark; Appendix B maps `go test`, `testing.T`, `testify`, `go-cmp` and `goldie` (2026-11-07: the tests section of chapter 2, cut from `examples/run/packaged/shapes/shapes_test.snello`; six rows of Appendix B)
 
 **Verification:**
-- [ ] `go test ./cmd/snello ./compiler/importer ./std`
-- [ ] Tests pass: `go test ./...`
+- [x] `go test ./cmd/snello ./compiler/importer ./compiler/emit/... ./std` (2026-11-07, and `./compiler/testrun`)
+- [x] Tests pass: `go test ./...` (2026-11-07, after each slice)
 
 **Dependencies:** Stage 5
-**Files:** `std/testing/`, `cmd/snello/`, `compiler/importer/`, `../design/09-testing.md`, `../book/02-getting-started.md`, `../book/B-snello-for-go-programmers.md`
+**Files:** `runtime/c/sched.c`, `std/testing/`, `std/expect/`, `cmd/snello/`, `compiler/importer/`, `compiler/emit/lower/`, `../design/09-testing.md`, `../book/02-getting-started.md`, `../book/B-snello-for-go-programmers.md`
+**Scope:** XL, three slices
+
+## Task 9.2: Package variables and data-race freedom
+
+**Description:** A package-level `var` is a plain shared global today: the checker moves what a `spawn` mentions, but a global is not captured, so any task may assign one or lend it as `mut`, and two tasks writing one lose updates or free a string twice. Found on 2026-11-07 while checking the book's claim that a data race is a compile error, and decided at the owner's word the same day: there will never be a race in Snello, and the rule is Rust's for a static, a package-level `var` may be read from any task and is changed only through a `sync.Mutex` or an atomic held in it, with assignment and `mut` of it refused by the checker with a message naming the way. Two things come with it: a package variable initialized by a call, `var reg = sync.NewMutex(Registry{})`, run before `main` in declaration order through both backends, which neither supports yet; and the standard library's own globals rewritten under the rule, `testing`'s flags, registry and benchmark state, `os.Args`, and the standard streams, whose writer method takes `mut`. The design note comes first and the owner reviews it before code; it lays out, beside the rule, the wider question the owner raised, immutability by default for locals as Scala's `val` and Rust's `let` have it, which Snello's two spellings `x := v` and `var x` could carry without a keyword, with what every example that pushes to a slice declared with `:=` would pay, and simplicity is the criterion the owner set: the rule a reader can state in one sentence wins. The gap sentences written into `../design/03-ownership-across-tasks.md`, `../design/09-testing.md`, chapter 10 and Appendix B on 2026-11-07 come out when the task lands.
+
+**Acceptance criteria:**
+- [ ] The design recorded in `../design/03-ownership-across-tasks.md` and reviewed by the owner before the code: the rule, its message, initialization order, the locals question answered either way
+- [ ] A global assigned from a function, lent as `mut`, or passed to a method taking `mut`, is refused with the message designed; a global read from two tasks, and a `sync.Mutex` held in a global and locked from two tasks, compile and run through both backends; the three programs of the finding (a counter, a slice pushed to, a string assigned, each from two tasks) are rejected, under `examples/core/errors/`
+- [ ] A package variable initialized by a call runs before `main`, in declaration order, through both backends, and the debug build reports nothing left
+- [ ] The standard library's globals rewritten under the rule, `go test ./std` and `./examples` green; `snello test` and the examples using `os.Stdout` unchanged for a program
+- [ ] Chapters 3, 10 and 14 and Appendix B state the rule; the gap sentences removed
+
+**Verification:**
+- [ ] `go test ./compiler/types ./compiler/emit/... ./std ./examples`
+- [ ] Tests pass: `go test ./...`
+
+**Dependencies:** 9.1
+**Files:** `compiler/types/`, `compiler/emit/`, `std/testing/`, `std/os/`, `std/sync/`, `examples/core/errors/`, `../design/03-ownership-across-tasks.md`, `../book/03-basics.md`, `../book/10-concurrency.md`
 **Scope:** L
 
-## Task 9.2: The `Error` trait, whole
+## Task 9.3: The library's tests, every package
+
+**Description:** Task 9.1 gave the standard library its first test file, `std/strings/strings_test.snello`; the owner asked on 2026-11-07 that every package have one, except `expect` and `testing`, which `compiler/testrun`'s Go tests drive through the runner and which cannot assert on themselves. A `_test.snello` per package, run by `go test ./std` through both backends under the library's privileges, covering every exported name with a table where the name has cases and with at least one benchmark per package; a `net` test on a loopback listener; `os` and `bufio` on `testing.TempDir`. What a test finds wrong in a package is fixed in the same change, with the fix named here.
+
+**Acceptance criteria:**
+- [ ] A `_test.snello` in each of `arena`, `bufio`, `builtin`, `fmt`, `heap`, `io`, `math`, `net`, `os`, `rc`, `sort`, `strconv`, `strings`, `sync` and `time`, every exported name called at least once, at least one benchmark each
+- [ ] `go test ./std` runs them all through both backends and is green; any package bug found is listed here with its fix
+- [ ] Chapter 16 names `go test ./std` as how the library is tested and how a package's tests are added
+
+**Verification:**
+- [ ] `go test ./std`
+- [ ] Tests pass: `go test ./...`
+
+**Dependencies:** 9.2
+**Files:** `std/*/*_test.snello`, `std/std_test.go`, `../book/16-testing.md`
+**Scope:** M
+
+## Task 9.4: The `Error` trait, whole
 
 **Description:** There is no `errors` package, at the owner's word: the one trait does the work, with what Rust's `Error` and Go's `error` make a program write by hand done by the language. Three things, designed first in `../design/05-standard-library.md` and in `../design/04-borrows-ref-and-mut.md` where `?` is: `Source() (trait Error)?` on the trait with a default of none, so a cause is one method and a chain is walked by asking, and `fmt` prints the chain after the message with `%+v`; `?` converting the callee's error into the caller's when the caller's error enum has exactly one variant whose single field is the callee's error type, so `Io(e io.Error)` takes an `io.Error` with nothing written, two such variants refused as ambiguous and a conversion written then; and a derived `Error()` for an enum that lists `Error` and writes none, printing the variant and its fields. The library's own `io.Error` and `strconv.Error` gain `Source` where they wrap.
 
@@ -41,7 +81,7 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Files:** `compiler/types/`, `compiler/emit/`, `std/builtin/`, `std/io/`, `std/strconv/`, `examples/09-errors.snello`, `../book/08-option-result.md`
 **Scope:** M
 
-## Task 9.3: Solidity: fuzzing and Go twins
+## Task 9.5: Solidity: fuzzing and Go twins
 
 **Description:** `strconv`, the quote reader, `fmt`'s format grammar, `ParseFloat` and `bufio`'s line reading take input the program does not control and have never run under a fuzzer. A Go fuzz target per parser, under `go test -fuzz`, with a corpus checked in and the targets run for a bounded time in CI. And a Go twin per package whose behaviour is defined as Go's, `strconv`, `strings`, `sort`, `time`'s `String`, `bufio`, run by the suite as `formats` is, so that every package's output is pinned to Go's line for line.
 
@@ -57,7 +97,7 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Files:** `runtime/`, `compiler/types/format_test.go`, `examples/run/`, `.github/workflows/test.yml`
 **Scope:** M
 
-## Task 9.4: Unicode and runes
+## Task 9.6: Unicode and runes
 
 **Description:** A string is bytes, and the case, white-space and printable tables are Unicode 17 already; what is missing is the rune. `for _, r := range s` yields runes with their byte offsets, as Go's does, a language rule recorded in `../design/00-syntax-conventions.md`; `s.Runes()` makes an owned `[]rune`; `strings.Builder.WriteRune`, `bufio.Reader.ReadRune`; a `unicode` package with `IsLetter`, `IsDigit`, `IsSpace`, `IsUpper`, `IsLower`, `IsPrint`, `ToUpper`, `ToLower` on runes over the runtime's tables; `utf8.RuneLen`, `utf8.EncodeRune`, `utf8.DecodeRune` as functions of `unicode/utf8`.
 
@@ -69,11 +109,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./compiler/... ./std ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `compiler/types/`, `compiler/emit/`, `std/unicode/`, `std/builtin/`, `std/strings/`, `std/bufio/`, `runtime/c/unicode.c`
 **Scope:** L
 
-## Task 9.5: Strings, slices, maps, options and results
+## Task 9.7: Strings, slices, maps, options and results
 
 **Description:** The methods every program reaches for. On `string`: `Index`, `LastIndex`, `Replace`, `ReplaceAll`, `TrimPrefix`, `TrimSuffix`, `TrimSpace`, `Count`, `SplitN`; `strings.NewReader` as an `io.Reader`; `Builder.Grow`. On `[]T`: `Extend(ref []T)`, `Index(ref T) int?`, `First() ref T?`, `Last() ref T?`, `Truncate(n)`. On `map[K]V`: `GetOrInsert(k, v) mut V`, `Len` as `len` stays. On `T?`: `AndThen`, `OrElse`. On `Result<T, E>`: `Ok() T?`, `Err() E?`, `AndThen`, `UnwrapOrElse`. On every integer type: `Abs`, `Clamp`, `CheckedAdd`, `CheckedSub`, `CheckedMul` returning `T?`, which chapter 3 promises; `[]byte` gains `Equal` and `Index`. Each is written on its reference algorithm; `Index` and `Replace` on the search `Contains` has.
 
@@ -85,11 +125,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./compiler/types ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/builtin/`, `std/strings/`, `runtime/c/string.c`, `runtime/c/slice.c`, `compiler/emit/lower/`
 **Scope:** M
 
-## Task 9.6: `math`, `math/bits` and `rand`
+## Task 9.8: `math`, `math/bits` and `rand`
 
 **Description:** `math` fills in: `Floor`, `Ceil`, `Round`, `Trunc`, `Pow`, `Exp`, `Log`, `Log2`, `Log10`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`, `Sinh`, `Cosh`, `Tanh`, `Hypot`, `Mod`, `Cbrt`, `Inf`, `NaN`, `IsNaN`, `IsInf`, `Signbit`, `Copysign`, `E`, `Ln2`, `MaxInt`, `MinInt`, `MaxFloat64`, `SmallestNonzeroFloat64` and the sized limits; each a bound function to libm or a constant. `math/bits`: `LeadingZeros`, `TrailingZeros`, `OnesCount`, `RotateLeft`, `Reverse`, `Len`, which the backends write inline. `math/rand`: a seedable generator, Go 1.22's PCG, with `Int`, `IntN`, `Int64`, `Float64`, `Shuffle`, `Perm`, and the package functions over a generator seeded from the runtime's random source.
 
@@ -100,13 +140,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/math/`, `std/math/bits/`, `std/math/rand/`, `runtime/c/math.c`, `compiler/emit/`
 **Scope:** M
 
-## Task 9.7: `fmt` and `strconv`
+## Task 9.9: `fmt` and `strconv`
 
-**Description:** `fmt` gains `Fprint`, the verbs `%x`, `%X`, `%o`, `%b`, `%c`, `%e`, `%g`, a width and the `-` flag, and `Errorf` is not added, task 9.2's `?` and `Source` taking its place. `strconv` gains `ParseInt(s, base)` and `ParseUint`, `FormatInt(n, base)` and `FormatUint`, `ParseBool` and `FormatBool`, `Quote` and `Unquote` over the runtime's quoting, `FormatFloat(f, prec)`, and `f32` through `ParseFloat32` and `FormatFloat32`. The format grammar in `compiler/types/format.go` checks the new verbs as it checks the old.
+**Description:** `fmt` gains `Fprint`, the verbs `%x`, `%X`, `%o`, `%b`, `%c`, `%e`, `%g`, a width and the `-` flag, and `Errorf` is not added, task 9.4's `?` and `Source` taking its place. `strconv` gains `ParseInt(s, base)` and `ParseUint`, `FormatInt(n, base)` and `FormatUint`, `ParseBool` and `FormatBool`, `Quote` and `Unquote` over the runtime's quoting, `FormatFloat(f, prec)`, and `f32` through `ParseFloat32` and `FormatFloat32`. The format grammar in `compiler/types/format.go` checks the new verbs as it checks the old.
 
 **Acceptance criteria:**
 - [ ] Every verb and function above, matched line for line against a Go twin, `examples/run/formats.snello` extended
@@ -115,11 +155,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./compiler/types ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/fmt/`, `std/strconv/`, `compiler/types/format.go`, `compiler/emit/`, `runtime/c/format.c`, `runtime/c/parse.c`
 **Scope:** M
 
-## Task 9.8: `io`, `bufio` and `bytes`
+## Task 9.10: `io`, `bufio` and `bytes`
 
 **Description:** `io` gains `ReadAll`, `ReadFull`, `Discard`, a `Seeker` trait with `Seek` on `os.File`; `bufio.Reader` gains `Peek`, `ReadBytes`, `UnreadByte`; `bufio.Scanner` gains `Words()` as a second constructor; a `bytes` package with `Buffer` as a growable `io.Writer` and `io.Reader`, the structure every encoder writes into, over the slice the runtime has.
 
@@ -130,11 +170,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/io/`, `std/bufio/`, `std/bytes/`, `std/os/`, `runtime/c/os.c`, `runtime/c/bufio.c`
 **Scope:** M
 
-## Task 9.9: `os` and `path`
+## Task 9.11: `os` and `path`
 
 **Description:** `os` gains the environment, `Getenv`, `LookupEnv`, `Setenv`, `Environ`; directories, `ReadDir` returning entries with name and kind, `Mkdir`, `MkdirAll`, `Stat` and `Lstat` returning a `FileInfo` with size, mode, modification time and whether a directory, `Rename`, `Getwd`, `Chdir`; `ReadFile` as bytes, `WriteFile`, `OpenFile(path, flags, mode)` with append, create, truncate and exclusive; `TempDir`, `Getpid`, `Hostname`. A `path` package of pure string functions, `Join`, `Base`, `Dir`, `Ext`, `Clean`, `Split`, `IsAbs`, with `filepath` as its name for the system's separator as Go has both. `os/exec` and signals stay out, each a design note of its own after this stage.
 
@@ -145,11 +185,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/os/`, `std/path/`, `std/path/filepath/`, `runtime/c/os.c`
 **Scope:** M
 
-## Task 9.10: `time`
+## Task 9.12: `time`
 
 **Description:** A calendar in UTC: `Date(year, month, day, hour, min, sec, nsec)`, `Year`, `Month`, `Day`, `Hour`, `Minute`, `Second`, `Nanosecond`, `Weekday`, `YearDay`, `AddDate`; `Format` and `Parse` with Go's reference layout, `2006-01-02 15:04:05`, and the layouts `RFC3339`, `DateTime`, `DateOnly`, `TimeOnly`, `Kitchen`; `ParseDuration`; `Timer` and `Ticker` as values with `Stop` and `Reset`, their `Drop` stopping them, over the runtime's timer heap; `Truncate` and `Round` on `Time`. Zones stay out: UTC only, as decided, with `Local` a later decision.
 
@@ -160,11 +200,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/time/`, `runtime/c/time.c`, `runtime/c/sched.c`
 **Scope:** L
 
-## Task 9.11: `sync` and the collections
+## Task 9.13: `sync` and the collections
 
 **Description:** Atomics: `sync.AtomicInt` and `sync.AtomicBool` with `Load`, `Store`, `Add`, `Swap`, `CompareAndSwap`, over the runtime's atomics, `Send` by structure; `WaitGroup.Go(f)` as Go 1.25's. `Deque<T>` with `PushFront`, `PopFront`, `PushBack`, `PopBack`, `Front`, `Back`, `Len`, a ring over a slice; `Set<T>` over the map with `Insert`, `Contains`, `Remove`, `Len`, `range`; `heap.Reverse<T>` as Rust's `cmp::Reverse`; `range` over an `arena.Arena<T>` yielding `(Index<T>, ref T)`; `rc.TryUnwrap`.
 
@@ -175,11 +215,11 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples ./bench`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/sync/`, `std/deque/`, `std/set/`, `std/heap/`, `std/arena/`, `std/rc/`, `runtime/c/sync.c`
 **Scope:** M
 
-## Task 9.12: `net`: names and IPv6
+## Task 9.14: `net`: names and IPv6
 
 **Description:** `Dial("example.com", 443)` is refused today. Names resolve through the system's resolver, `getaddrinfo`, on the poller's thread so that a task does not block a worker, with a `LookupHost` returning the addresses; IPv6 addresses listen, dial and print as Go's do; `Conn.LocalAddr`, `Conn.RemoteAddr`, `Listener.Addr` as strings; `DialTimeout` covers the lookup. UDP, Unix sockets and TLS stay out: UDP until a program needs it, TLS as a library of stage 8 over a system library through the binding of chapter 15.
 
@@ -191,7 +231,7 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6.
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.3
+**Dependencies:** 9.5
 **Files:** `std/net/`, `runtime/c/net.c`
 **Scope:** L
 

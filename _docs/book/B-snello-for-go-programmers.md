@@ -27,6 +27,11 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capi
 | `s[a:b]` copies a string header; the bytes are shared by the GC | `s[a:b]` lends a `ref string`; the original must outlive it |
 | `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()`; the package has the functions too (chapter 14) |
 | `go f(x)` | `spawn f(x)` |
+| `func TestX(t *testing.T)`, `t.Errorf`, `t.Fatalf`, `t.Run`, `t.Log`, `t.Skip`, `t.TempDir`, `t.Cleanup` | `func TestX()` with no handle; `expect.Equal(ref got, ref want)` and the other assertions fail by a panic the runner catches; `testing.Run`, `testing.Log`, `testing.Skip`, `testing.TempDir()` whose `Drop` is the cleanup; record-and-continue is not kept, the first failed expectation ends the test |
+| `go test ./...`, `go test -v -run Name` | `snello test DIR`, `snello test -v -run Name DIR`; one package at a time |
+| `testify`'s `assert.Equal`, `go-cmp`'s diff | `expect.Equal`, printing got and want and the first difference in words; no library needed |
+| `go test -race` | Nothing: a data race is a compile error in Snello, so there is no detector; a package-level `var` is the one gap until task 9.2 of stage 9 makes it immutable (chapter 16) |
+| `func BenchmarkX(b *testing.B)`, `for b.Loop()`, `b.ReportAllocs()`, `go test -bench .` | `func BenchmarkX()`, `for testing.Loop()`, `testing.ReportAllocs()`, `snello test -bench . DIR`; the line printed is Go's |
 | `break` inside `switch` or `select` ends that statement; a labeled `break outer` for the loop | `break` always ends the innermost loop; there are no labels |
 | `if x := f(); x > 0 {` | Same. `if x := opt {` with no `;` is a binding on an optional |
 | `append`, `delete`, `copy`, `new` | `xs.Push(v)`, `m.Remove(k)`, `xs.Clone()`, `&expr` |

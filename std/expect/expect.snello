@@ -1,0 +1,279 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package expect asserts, in a test: a failed expectation panics with
+// a message that says what was expected and what was found, and the
+// test runner reports the test failed with it, the expression as the
+// test wrote it, then got, then want (_docs/design/09-testing.md,
+// section 4). It is imported by test files alone.
+package expect
+
+import ("fmt"; "os"; "testing")
+
+// where() and parts are the place of the assertion being made,
+// file:line and the call as the test wrote it, and its parts, the type
+// compared or the operands of a condition with their values: the
+// compiler hands both to the runtime before every call of a function
+// of this package, since no function can know where it was called
+// from or what its arguments were spelled as, and the runtime keeps
+// them for the running task, so that parallel tests never share them
+// (runtime/c/testing.c).
+func where() string
+func parts() string
+
+// Equal fails unless got equals want, printing both.
+func Equal<T: Eq>(got ref T, want ref T) {
+	if !got.Eq(want) {
+		panic(ref fmt.Sprintf("%s\n        got:  %v\n        want: %v%s", where(), got, want, typed()))
+	}
+}
+
+// NotEqual fails when got equals want.
+func NotEqual<T: Eq>(got ref T, want ref T) {
+	if got.Eq(want) {
+		panic(ref fmt.Sprintf("%s\n        both are %v%s", where(), got, typed()))
+	}
+}
+
+// typed names the type compared, after the values, when the compiler
+// handed it.
+func typed() string {
+	p := parts()
+	if p.Len() == 0 {
+		return ""
+	}
+
+	return "   (" + p + ")"
+}
+
+// Failf fails with a message of the test's own, formatted as
+// fmt.Sprintf formats it. The compiler provides it.
+func Failf(format ref string, args ...ref any)
+
+// EqualSlice fails unless got and want hold equal elements in order,
+// saying where they first differ and by how much they differ in length.
+func EqualSlice<T: Eq>(got ref []T, want ref []T) {
+	n := min(len(got), len(want))
+	for i := 0; i < n; i++ {
+		if !got[i].Eq(ref want[i]) {
+			panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        element %d: got %v where %v was wanted%s", where(), got, parts(), count(len(got)), want, count(len(want)), i, got[i], want[i], lengths(len(got), len(want))))
+		}
+	}
+
+	if len(got) != len(want) {
+		panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        the first %d agree%s", where(), got, parts(), count(len(got)), want, count(len(want)), n, lengths(len(got), len(want))))
+	}
+}
+
+// count writes a count of elements, with the noun in its number.
+func count(n int) string {
+	if n == 1 {
+		return "1 element"
+	}
+
+	return fmt.Sprintf("%d elements", n)
+}
+
+// lengths says how the lengths differ, or nothing when they do not.
+func lengths(got int, want int) string {
+	if got > want {
+		return fmt.Sprintf("; got has %d more", got-want)
+	}
+
+	if got < want {
+		return fmt.Sprintf("; got has %d fewer", want-got)
+	}
+
+	return ""
+}
+
+// True fails unless cond holds, saying so with the operands of a
+// comparison and their values when the compiler handed them.
+func True(cond bool) {
+	if !cond {
+		panic(ref (where() + " is false" + operands()))
+	}
+}
+
+// False fails when cond holds.
+func False(cond bool) {
+	if cond {
+		panic(ref (where() + " is true" + operands()))
+	}
+}
+
+// operands writes the parts of a condition on a line of their own.
+func operands() string {
+	p := parts()
+	if p.Len() == 0 {
+		return ""
+	}
+
+	return "\n        " + p
+}
+
+// Fail fails with a message of the test's own.
+func Fail(msg ref string) {
+	panic(ref (where() + ": " + msg))
+}
+
+// IsSome fails unless o holds a value, and returns it. The assertions
+// on options and results are named with Is, since Some, None, Ok and
+// Err are the variants' names, which a function of this package would
+// hide from its own patterns.
+func IsSome<T>(o T?) T {
+	match o {
+		Some(v) => return v,
+		None => panic(ref (where() + ": is None, a value was wanted")),
+	}
+}
+
+// IsNone fails when o holds a value, printing it.
+func IsNone<T>(o T?) {
+	if v := o {
+		panic(ref fmt.Sprintf("%s: holds %v, None was wanted", where(), v))
+	}
+}
+
+// IsOk fails unless r is Ok, printing the error it holds, and returns
+// the value.
+func IsOk<T, E: Error>(r Result<T, E>) T {
+	match r {
+		Ok(v) => return v,
+		Err(e) => panic(ref (where() + ": is Err, Ok was wanted\n        error: " + e.Error())),
+	}
+}
+
+// IsErr fails unless r is Err, printing the value it holds, and returns
+// the error.
+func IsErr<T, E>(r Result<T, E>) E {
+	match r {
+		Ok(v) => panic(ref fmt.Sprintf("%s: is Ok, Err was wanted\n        value: %v", where(), v)),
+		Err(e) => return e,
+	}
+}
+
+// Contains fails unless s holds sub.
+func Contains(s ref string, sub ref string) {
+	if !s.Contains(sub) {
+		panic(ref fmt.Sprintf("%s\n        %q does not contain %q", where(), s, sub))
+	}
+}
+
+// ContainsElem fails unless xs holds v.
+func ContainsElem<T: Eq>(xs ref []T, v ref T) {
+	if !xs.Contains(v) {
+		panic(ref fmt.Sprintf("%s\n        %v does not contain %v", where(), xs, v))
+	}
+}
+
+// HasPrefix fails unless s starts with prefix.
+func HasPrefix(s ref string, prefix ref string) {
+	if !s.HasPrefix(prefix) {
+		panic(ref fmt.Sprintf("%s\n        %q does not start with %q", where(), s, prefix))
+	}
+}
+
+// HasSuffix fails unless s ends with suffix.
+func HasSuffix(s ref string, suffix ref string) {
+	if !s.HasSuffix(suffix) {
+		panic(ref fmt.Sprintf("%s\n        %q does not end with %q", where(), s, suffix))
+	}
+}
+
+// Len fails unless xs has n elements.
+func Len<T>(xs ref []T, n int) {
+	if len(xs) != n {
+		panic(ref fmt.Sprintf("%s\n        got %s, want %s: %v", where(), count(len(xs)), count(n), xs))
+	}
+}
+
+// Empty fails unless xs has no element.
+func Empty<T>(xs ref []T) {
+	if len(xs) != 0 {
+		panic(ref fmt.Sprintf("%s\n        got %s, want none: %v", where(), count(len(xs)), xs))
+	}
+}
+
+// EqualText fails unless got and want are the same text, saying which
+// line first differs, for text of several lines.
+func EqualText(got ref string, want ref string) {
+	if got == want {
+		return
+	}
+
+	panic(ref (where() + "\n" + textDiff(got, want)))
+}
+
+// textDiff says where two texts first differ, line by line: the line's
+// number, what it holds in each, and the lines around it from got.
+func textDiff(got ref string, want ref string) string {
+	gl := got.Lines()
+	wl := want.Lines()
+	n := min(len(gl), len(wl))
+	for i := 0; i < n; i++ {
+		if gl[i] != wl[i] {
+			return fmt.Sprintf("        line %d: got %q where %q was wanted%s", i+1, gl[i], wl[i], lineCounts(len(gl), len(wl)))
+		}
+	}
+
+	return fmt.Sprintf("        the first %d lines agree%s", n, lineCounts(len(gl), len(wl)))
+}
+
+func lineCounts(got int, want int) string {
+	if got > want {
+		return fmt.Sprintf("; got has %d lines more", got-want)
+	}
+
+	if got < want {
+		return fmt.Sprintf("; got has %d lines fewer", want-got)
+	}
+
+	return ""
+}
+
+// Golden compares got with the file testdata/NAME.golden beside the
+// package, failing with the first differing line; snello test -update
+// writes the file instead, as goldie does for Go.
+func Golden(name ref string, got ref string) {
+	path := "testdata/" + name + ".golden"
+	if testing.Update() {
+		if os.WriteString(ref path, got).IsErr() {
+			panic(ref (where() + ": -update could not write " + path + "; the testdata directory is made by hand until the library makes directories (task 9.11)"))
+		}
+
+		return
+	}
+
+	match os.ReadToString(ref path) {
+		Ok(want) => {
+			if got != want {
+				panic(ref (where() + "\n        differs from " + path + "\n" + textDiff(got, ref want)))
+			}
+		},
+		Err(e) => panic(ref (where() + ": " + e.Error() + "; snello test -update writes the file")),
+	}
+}
+
+// Panics fails unless f panics; the panic is caught and its values
+// dropped, and the test goes on.
+func Panics(f func()) {
+	at := where()
+	if testing.Catch(f).IsNone() {
+		panic(ref (at + ": the function did not panic"))
+	}
+}
+
+// PanicsWith fails unless f panics with exactly the message msg.
+func PanicsWith(f func(), msg ref string) {
+	at := where()
+	match testing.Catch(f) {
+		None => panic(ref (at + ": the function did not panic")),
+		Some(got) => {
+			if got != msg {
+				panic(ref fmt.Sprintf("%s\n        panicked with: %q\n        want:          %q", at, got, msg))
+			}
+		},
+	}
+}

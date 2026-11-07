@@ -118,6 +118,7 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 				return e.libraryCall(x, key)
 			}
 
+			e.locate(x, obj)
 			return e.funcCall(x, id, obj)
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, e.operands(x.Args, e.variantFields(e.typeOf(x), obj)), x.Pos())
@@ -139,6 +140,8 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 			if key := lower.Key(fn); key != "" {
 				return e.libraryCall(x, key)
 			}
+
+			e.locate(x, fn)
 		}
 
 		if v, ok := e.info.Uses[sel.Sel].(*types.Variant); ok {
