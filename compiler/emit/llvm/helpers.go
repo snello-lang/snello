@@ -224,6 +224,15 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		t = r.Elem()
 	}
 
+	if tr, ok := t.(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
+		msg := e.traitMessage(p, tr)
+		if quoted {
+			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+		}
+
+		return text{msg, true}
+	}
+
 	if n, ok := t.(*types.Named); ok && (n.Implements(types.ErrorTrait) || types.IsStringer(n)) {
 		method := "String"
 		if n.Implements(types.ErrorTrait) {
@@ -374,11 +383,11 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 					body(e.gep(ir, "%v", int(i)), strconv.FormatInt(i, 10))
 				}
 			}, u.Elem(), pos)
-		case *types.Trait:
-			e.unsupported(pos, "printing values of type "+t.String()) // the held value's type is not known here
+		case *types.Trait, *types.Signature, *types.Chan: // a trait value is printed before this is reached, when its trait gives a message; a function or a channel has no text
+			e.unsupported(pos, "printing values of type "+t.String())
 			e.ret(e.lit("?"))
 		default:
-			e.ret(e.textAt("%v", t, pos, false))
+			e.ret(e.textAt("%v", t.Underlying(), pos, false)) // the structure, so that a derived Error() over a basic type prints the number and not itself
 		}
 	})
 	return name

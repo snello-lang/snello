@@ -129,6 +129,14 @@ func verbFits(p FormatPiece, t Type) string {
 	what := ""
 	switch p.Verb {
 	case 'v':
+		if p.Plus && !isErrorType(t) {
+			return "%+v takes an error, not " + t.String()
+		}
+
+		if p.Plus && p.Prec >= 0 {
+			return "%+v takes no precision"
+		}
+
 		if p.Prec >= 0 && !is(IsString) && !is(IsFloat) {
 			return "%." + strconv.Itoa(p.Prec) + "v takes a precision on a string or a float, not on " + t.String()
 		}

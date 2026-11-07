@@ -102,6 +102,15 @@ func TestExprErrors(t *testing.T) {
 		{"func f(x mut (*Node?)) mut *Node { return x ?? return x ?? panic(\"empty\") }", nil},
 		{"func f(x Result<int, string>) Result<int, string> { return Ok(x?) }", nil},
 		{"func f(x Result<int, string>) Result<int, bool> { return Ok(x?) }", []string{"? cannot pass on an error of type string from a function returning Result<int, bool>"}},
+		// ? passes an error on where an assignment would, and into the one variant that holds its type.
+		{"struct A impl Error { n int }\nenum E impl Error { Wrap(a A); Other }\nfunc f(x Result<int, A>) Result<int, E> { return Ok(x?) }", nil},
+		{"struct A impl Error { n int }\nenum E impl Error { Wrap(a A); Again(a A) }\nfunc f(x Result<int, A>) Result<int, E> { return Ok(x?) }", []string{"? cannot pass on an error of type A from a function returning Result<int, E>: E holds an A in Wrap and in Again; convert it"}},
+		{"struct A impl Error { n int }\nenum E impl Error { Other; Two(a A, n int) }\nfunc f(x Result<int, A>) Result<int, E> { return Ok(x?) }", []string{"? cannot pass on an error of type A from a function returning Result<int, E>: no variant of E holds an A"}},
+		{"struct A impl Error { n int }\nfunc f(x Result<int, A>) Result<int, Error> { return Ok(x?) }", nil},
+		{"struct B { n int }\nfunc f(x Result<int, B>) Result<int, Error> { return Ok(x?) }", []string{"? cannot pass on an error of type B from a function returning Result<int, Error>: B does not implement Error"}},
+		{"struct A impl Error { n int }\nstruct S impl Error { n int }\nfunc f(x Result<int, A>) Result<int, S> { return Ok(x?) }", []string{"? cannot pass on an error of type A from a function returning Result<int, S>: S is not an enum"}},
+		{"struct A impl Error { n int }\nfunc f<E: Error>(x Result<int, A>) Result<int, E> { return Ok(x?) }", []string{"? cannot pass on an error of type A from a function returning Result<int, E>: E is a type parameter"}},
+		{"struct A impl Error { n int }\nenum W<T> impl Error { Wrap(t T); Other }\nfunc f(x Result<int, A>) Result<int, W<A>> { return Ok(x?) }", nil}, // a generic instance holds the type in one variant
 		{"func f(x int?) Result<int, string> { return Ok(x?) }", []string{"cannot use ? on an option in a function returning a Result"}},
 		{"func f(x int?) int { return x? }", []string{"? is only allowed in a function returning an option or a Result"}},
 		{"func f(x int?) int { if n := x { return n }; return 0 }", nil},
@@ -267,4 +276,57 @@ func lastDefineType(f *ast.File, info *Info) string {
 	}
 
 	return "(no type recorded)"
+}
+
+// The article a message puts before a type's name.
+func TestArticle(t *testing.T) {
+	for _, tt := range []struct{ name, want string }{
+		{"io.Error", "an io.Error"},
+		{"A", "an A"},
+		{"strconv.Error", "a strconv.Error"},
+		{"E", "an E"},
+		{"Code", "a Code"},
+		{"", "a "},
+	} {
+		if got := article(tt.name); got != tt.want {
+			t.Errorf("article(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// What the checker records for the backends at each x? whose error
+// type differs from the function's: the variant it wraps the error in,
+// and nothing for a trait value or the same type.
+func TestWraps(t *testing.T) {
+	const src = `package p
+struct A impl Error { n int }
+enum E impl Error { Wrap(a A); Other }
+func wrap(x Result<int, A>) Result<int, E> { return Ok(x?) }
+func box(x Result<int, A>) Result<int, Error> { return Ok(x?) }
+func same(x Result<int, E>) Result<int, E> { return Ok(x?) }
+`
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &Info{}
+	if _, err := libraryConfig().Check("", file, f, info); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(info.Wraps); n != 1 {
+		t.Fatalf("%d conversions recorded, want 1: %v", n, info.Wraps)
+	}
+
+	for e, v := range info.Wraps {
+		if v.Name() != "Wrap" || v.Parent().Obj().Name() != "E" {
+			t.Errorf("x? at %v wraps in %s.%s, want E.Wrap", file.Position(e.Pos()), v.Parent().Obj().Name(), v.Name())
+		}
+
+		if line := file.Position(e.Pos()).Line; line != 4 {
+			t.Errorf("the conversion recorded is on line %d, want line 4, the enum's", line)
+		}
+	}
+
 }

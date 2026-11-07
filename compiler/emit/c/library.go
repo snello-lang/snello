@@ -268,6 +268,8 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 	}
 
 	switch {
+	case p.Verb == 'v' && p.Plus: // an error's chain
+		return text{e.chainer(lower.ValueType(t), a.Pos()) + "(" + deref(v, t) + ")", true}
 	case p.Verb == 'f':
 		digits := max(p.Prec, 0)
 		if p.Prec < 0 {

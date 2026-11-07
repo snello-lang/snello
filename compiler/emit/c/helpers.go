@@ -79,11 +79,11 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 		e.elements(&b, v+".len", v+".ptr[i]", u.Elem(), pos)
 	case *types.Array:
 		e.elements(&b, strconv.FormatInt(u.Len(), 10), v+".at[i]", u.Elem(), pos)
-	case *types.Trait:
-		e.unsupported(pos, "printing values of type "+t.String()) // the held value's type is not known here
+	case *types.Trait, *types.Signature, *types.Chan: // a trait value is printed before this is reached, when its trait gives a message; a function or a channel has no text
+		e.unsupported(pos, "printing values of type "+t.String())
 		put(&b, "\treturn ", literal("?"), ";\n")
 	default:
-		s, _ := e.toText(v, lower.ValueType(t), pos, false)
+		s, _ := e.toText(v, lower.ValueType(t).Underlying(), pos, false) // the structure, so that a derived Error() over a basic type prints the number and not itself
 		put(&b, "\treturn ", s, ";\n")
 	}
 
@@ -170,6 +170,15 @@ func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) tex
 // into a sn_string, and whether the expression builds the string;
 // quoted says whether a string is written in quotes.
 func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (string, bool) {
+	if tr, ok := lower.ValueType(t).(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
+		msg := e.traitText(tr, pos) + "(" + deref(v, t) + ")"
+		if quoted {
+			return "sn_quote_owned(" + msg + ")", true
+		}
+
+		return msg, true
+	}
+
 	if n, ok := lower.ValueType(t).(*types.Named); ok && (n.Implements(types.ErrorTrait) || types.IsStringer(n)) { // an error prints as its message, as the predeclared error does, and a Stringer as its String
 		method := "String"
 		if n.Implements(types.ErrorTrait) {

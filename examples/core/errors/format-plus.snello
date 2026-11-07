@@ -1,0 +1,16 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the + flag goes with %v on an error, whose chain it prints;
+// fmt checks its formats when the program is compiled and takes the
+// flag nowhere else.
+// Fix: %v, or an error for the argument.
+
+package p
+
+import "fmt"
+
+func show(n int) {
+    fmt.Printf("%+v\n", n)                  // ERROR "fmt.Printf format %+v takes an error, not int"
+}

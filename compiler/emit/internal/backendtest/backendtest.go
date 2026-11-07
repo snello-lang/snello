@@ -854,6 +854,102 @@ func main() {
 			Out: "said\n3\ndone\n",
 		},
 		{
+			Name: "error-derived", // a type listing Error and writing no Error() prints as %v prints it, an enum, a struct and a type over int; Source() is None; %+v is %v with no source
+			Src: `package main
+import ("fmt"; "strconv")
+enum ConfigError impl Error {
+	Unreadable(cause strconv.Error)
+	Missing(key string)
+	Empty
+}
+struct Pair impl Error { key string; n int }
+type Code int impl Error
+func parse(s ref string) Result<int, ConfigError> {
+	n := strconv.Atoi(s)?
+	return Ok(n)
+}
+func main() {
+	text := "x"
+	match parse(ref text) {
+		Ok(n) => fmt.Println(n),
+		Err(e) => { fmt.Println(e); fmt.Printf("%v|%s|%q|%+v\n", e, e, e, e) },
+	}
+	e := Missing("port")
+	fmt.Println(e, Empty, Pair{key: "k", n: 1}, Code(42))
+	if s := e.Source() { fmt.Println("source", s) } else { fmt.Println("no source") }
+	fmt.Printf("%+v %+v %+v\n", Pair{key: "k", n: 1}, Code(7), ref e)
+}`,
+			Out: "Unreadable(\"strconv.Atoi: parsing \\\"x\\\": invalid syntax\")\n" +
+				"Unreadable(\"strconv.Atoi: parsing \\\"x\\\": invalid syntax\")|Unreadable(\"strconv.Atoi: parsing \\\"x\\\": invalid syntax\")|\"Unreadable(\\\"strconv.Atoi: parsing \\\\\\\"x\\\\\\\": invalid syntax\\\")\"|Unreadable(\"strconv.Atoi: parsing \\\"x\\\": invalid syntax\")\n" +
+				"Missing(\"port\") Empty {k 1} 42\nno source\n{k 1} 7 Missing(\"port\")\n",
+		},
+		{
+			Name: "error-chain", // a written Source gives the cause as an owned trait value, a clone; %+v prints the chain through the tables, on the type and on a trait value of Error; a trait value of Error or fmt.Stringer prints as its message
+			Src: `package main
+import ("fmt"; "strconv")
+struct LoadError impl Error, Clone { path string; cause strconv.Error }
+func (e ref LoadError) Error() string { return fmt.Sprintf("load %s", e.path) }
+func (e ref LoadError) Source() Error? { return Some(e.cause.Clone()) }
+struct Outer impl Error { inner LoadError }
+func (e ref Outer) Error() string { return "outer" }
+func (e ref Outer) Source() Error? { return Some(e.inner.Clone()) }
+struct P impl fmt.Stringer { n int }
+func (p ref P) String() string { return fmt.Sprintf("P%d", p.n) }
+func main() {
+	text := "x"
+	cause := match strconv.Atoi(ref text) { Ok(_) => panic("parsed"), Err(c) => c }
+	e := LoadError{path: "app.conf", cause: cause}
+	fmt.Printf("%v\n%+v\n", e, e)
+	o := Outer{inner: e}
+	fmt.Printf("%+v\n", o)
+	var boxed Error = o
+	fmt.Printf("%+v|%v|%s|%q\n", boxed, boxed, boxed, boxed)
+	fmt.Println(boxed)
+	if s := boxed.Source() { fmt.Println("source:", s) }
+	var sv fmt.Stringer = P{n: 3}
+	fmt.Println(sv, []fmt.Stringer{P{n: 4}}, Some(sv))
+}`,
+			Out: "load app.conf\nload app.conf: strconv.Atoi: parsing \"x\": invalid syntax\n" +
+				"outer: load app.conf: strconv.Atoi: parsing \"x\": invalid syntax\n" +
+				"outer: load app.conf: strconv.Atoi: parsing \"x\": invalid syntax|outer|outer|\"outer\"\nouter\nsource: load app.conf\nP3 [P4] Some(\"P3\")\n",
+		},
+		{
+			Name: "error-pass", // ? passes an error into the one variant holding its type, into a trait value when the function returns Result<T, Error>, and as it is when the types match
+			Src: `package main
+import ("fmt"; "io"; "os"; "strconv")
+enum AppError impl Error {
+	Read(cause io.Error)
+	Parse(cause strconv.Error)
+	Other(msg string)
+}
+func load(path string) Result<int, AppError> {
+	text := os.ReadToString(ref path)?
+	n := strconv.Atoi(ref text)?
+	return Ok(n)
+}
+func loadAny(path string) Result<int, Error> {
+	text := os.ReadToString(ref path)?
+	n := strconv.Atoi(ref text)?
+	return Ok(n)
+}
+func parse(text ref string) Result<int, AppError> { n := strconv.Atoi(text)?; return Ok(n) }
+func parseAny(text ref string) Result<int, Error> { n := strconv.Atoi(text)?; return Ok(n) }
+func twice(text ref string) Result<int, AppError> { n := parse(text)?; return Ok(n * 2) }
+func main() {
+	match load("/nonexistent/x") { Ok(n) => fmt.Println(n), Err(e) => fmt.Println(e) }
+	match loadAny("/nonexistent/x") { Ok(n) => fmt.Println(n), Err(e) => fmt.Println("error:", e) }
+	q := "q"
+	match parse(ref q) { Ok(n) => fmt.Println(n), Err(e) => fmt.Println(e) }
+	match parseAny(ref q) { Ok(n) => fmt.Println(n), Err(e) => fmt.Println("error:", e) }
+	match twice(ref q) { Ok(n) => fmt.Println(n), Err(e) => fmt.Println(e) }
+	seven := "7"
+	fmt.Println(twice(ref seven), parseAny(ref seven))
+}`,
+			Out: "Read(\"open /nonexistent/x: no such file or directory\")\nerror: open /nonexistent/x: no such file or directory\n" +
+				"Parse(\"strconv.Atoi: parsing \\\"q\\\": invalid syntax\")\nerror: strconv.Atoi: parsing \"q\": invalid syntax\n" +
+				"Parse(\"strconv.Atoi: parsing \\\"q\\\": invalid syntax\")\nOk(14) Ok(7)\n",
+		},
+		{
 			Name: "globals", // what a package variable allows from any task: reading, a ref lent to a function, a Copy value copied out, an element indexed, a method taking ref; the table is read by two tasks at once
 			Src: `package main
 import ("fmt"; "strings")
@@ -1955,6 +2051,8 @@ type Refusal struct {
 // the body after its package clause.
 var Refusals = []Refusal{
 	{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
+	{"struct P { f func() }\nfunc main() { print(P{f: func() {}}) }", "printing values of type func()"},
+	{"struct W<T> impl Error { t T }\nfunc main() { print(W{t: func() {}}) }", "printing values of type func()"}, // a derived message on an instance over a function: the declaration passed the checker
 	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level const whose value is not a literal"},
 	{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
 	{"import \"expect\"\nfunc main() { ok := expect.True; ok(true) }", "expect.True as a value: it is called, so that a failure names its line"},

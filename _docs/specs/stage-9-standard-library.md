@@ -74,17 +74,17 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 
 ## Task 9.4: The `Error` trait, whole
 
-**Description:** There is no `errors` package: the one trait does the work, with what Rust's `Error` and Go's `error` make a program write by hand done by the language. Three things, designed first in `../design/05-standard-library.md` and in `../design/04-borrows-ref-and-mut.md` where `?` is: `Source() (trait Error)?` on the trait with a default of none, so a cause is one method and a chain is walked by asking, and `fmt` prints the chain after the message with `%+v`; `?` converting the callee's error into the caller's when the caller's error enum has exactly one variant whose single field is the callee's error type, so `Io(e io.Error)` takes an `io.Error` with nothing written, two such variants refused as ambiguous and a conversion written then; and a derived `Error()` for an enum that lists `Error` and writes none, printing the variant and its fields. The library's own `io.Error` and `strconv.Error` gain `Source` where they wrap.
+**Description:** There is no `errors` package: the one trait does the work, with what Rust's `Error` and Go's `error` make a program write by hand done by the language. Three things, designed first in `../design/05-standard-library.md` and in `../design/00-syntax-conventions.md` where the rules of `?` are: `Source() (trait Error)?` on the trait with a default of none, so a cause is one method and a chain is walked by asking, and `fmt` prints the chain after the message with `%+v`; `?` converting the callee's error into the caller's when the caller's error enum has exactly one variant whose single field is the callee's error type, so `Io(e io.Error)` takes an `io.Error` with nothing written, two such variants refused as ambiguous and a conversion written then; and a derived `Error()` for an enum that lists `Error` and writes none, printing the variant and its fields. The library's own `io.Error` and `strconv.Error` gain `Source` where they wrap.
 
 **Acceptance criteria:**
-- [ ] The design recorded and reviewed by the owner before the code: the trait's new method, the `?` rule and its refusal, the derived message
-- [ ] A program whose error enum wraps `io.Error` and `strconv.Error` uses `?` on both with no conversion written, through both backends; the ambiguous case is refused with the message designed
-- [ ] `Source` walked and printed; a derived `Error()` on an enum
-- [ ] Chapter 8 of the book rewritten for it; example 09 uses it
+- [x] The design recorded and reviewed before the code: the trait's new method, the `?` rule and its refusal, the derived message (2026-11-07: decided 11 of the library note and the `?` bullet of the syntax conventions; `?` also passes an error into a trait value, so `Result<T, Error>` is Go's `error`; the derived message is the value as `%v` prints it, for a struct as for an enum; `%+v` is refused on anything but an error; a trait value of `Error` or `fmt.Stringer` prints)
+- [x] A program whose error enum wraps `io.Error` and `strconv.Error` uses `?` on both with no conversion written, through both backends; the ambiguous case is refused with the message designed (2026-11-07: `error-pass` in the backend tests and `examples/run/errors.snello`; `try-ambiguous` and `try-no-variant` under `examples/core/errors`)
+- [x] `Source` walked and printed; a derived `Error()` on an enum (2026-11-07: `error-chain` and `error-derived`, a derived message on a struct and a type over `int` as well; `strconv.Error` lists `Clone` so that a `Source` can give it; the checker refuses a derived message over a field that cannot print, `error-unprintable`, and `%+v` on a non-error, `format-plus`)
+- [x] Chapter 8 of the book rewritten for it; example 09 uses it (2026-11-07: errors got a chapter of their own, 17, cut from `examples/run/errors.snello`, with chapter 8's `?` section pointing at it; example 09 drops its two `MapErr` closures and its hand-written `Error()`, and prints a chain through a `LoadError` with `Source`)
 
 **Verification:**
-- [ ] `go test ./compiler/types ./compiler/emit/... ./examples`
-- [ ] Tests pass: `go test ./...`
+- [x] `go test ./compiler/types ./compiler/emit/... ./examples` (2026-11-07)
+- [x] Tests pass: `go test ./...` (2026-11-07, natively, with `make test` and `make check`; every Go file the task touched has its test file beside it)
 
 **Dependencies:** 9.1
 **Files:** `compiler/types/`, `compiler/emit/`, `std/builtin/`, `std/io/`, `std/strconv/`, `examples/09-errors.snello`, `../book/08-option-result.md`

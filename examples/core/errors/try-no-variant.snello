@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: ? passes an error into the one variant of the function's error
+// enum whose only field has the error's type; an enum with no such
+// variant takes the error through a conversion the program writes.
+// Fix: a variant holding the io.Error, or MapErr building the one meant.
+
+package p
+
+import ("io"; "os")
+
+enum ConfigError impl Error {
+    NotFound(path string)
+    Unreadable(path string, cause io.Error)
+}
+
+func load(path string) Result<string, ConfigError> {
+    text := os.ReadToString(ref path)?     // ERROR "? cannot pass on an error of type io.Error from a function returning Result<string, ConfigError>: no variant of ConfigError holds an io.Error"
+    return Ok(text)
+}

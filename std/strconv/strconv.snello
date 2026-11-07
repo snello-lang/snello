@@ -15,7 +15,7 @@ import "fmt"
 // An Error says which function could not read which text, and why: the
 // text was not a number of that kind, or the number does not fit the
 // type. It prints as "strconv.Atoi: parsing "4x": invalid syntax".
-struct Error impl Error {
+struct Error impl Error, Clone {
 	// Func names the function that failed: Atoi or ParseFloat.
 	Func string
 

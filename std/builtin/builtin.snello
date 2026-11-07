@@ -164,7 +164,18 @@ trait Drop { func (s mut Self) Drop() }
 // Error marks an error type: its message. A value of a type
 // implementing Error prints as its message wherever a value is
 // printed, inside an Err(...) as well.
-trait Error { func (s ref Self) Error() string }
+trait Error {
+	func (s ref Self) Error() string
+
+	// Source gives the error this one wraps, an owned trait value, or
+	// None; a type that writes no Source has it derived as None, and
+	// one that writes no Error has the message derived: the value as
+	// %v prints it. %+v prints the message and then each source's
+	// message after a colon and a space, and ? passes an error into
+	// the one variant of the function's error enum holding its type,
+	// or into a trait value when the function returns Result<T, Error>.
+	func (s ref Self) Source() Error?
+}
 
 // The operator traits, behind the arithmetic operators on a declared
 // type: a + b calls a.Add(b), and -a calls a.Neg(). Each takes its

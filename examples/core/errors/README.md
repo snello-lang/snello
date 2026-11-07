@@ -28,6 +28,7 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
 | No `nil` | nil-used | 1.3 |
 | A package variable is read and lent as `ref` by every task, and never assigned, lent as `mut` or moved out of; its type is `Send` | global-assigned, global-mut, global-moved, global-not-send, global-declared-not-send, global-trait-not-send | 9.2 |
+| `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus | 9.4 |
 
 As of task 1.8 the checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5 and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
 | `match` is exhaustive | missing-arm | 1.4 |

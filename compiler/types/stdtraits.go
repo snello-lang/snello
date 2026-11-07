@@ -36,9 +36,11 @@ var operators = [...]struct {
 // field by field whenever every field implements the trait, so a type
 // that lists the trait and declares no method gets that one. Copy has
 // no method and is the same check; a type with a Drop method is never
-// Copy. An enum of comparable payloads is Eq and Hash by structure, as
-// it has always compared with ==; a struct is only by listing them, as
-// == on a struct has always gone through a method. A map key must have
+// Copy. Error's two are derived apart: Error() is the value as %v
+// prints it, so every field must be printable, and Source() is None.
+// An enum of comparable payloads is Eq and Hash by structure, as it
+// has always compared with ==; a struct is only by listing them, as ==
+// on a struct has always gone through a method. A map key must have
 // both.
 
 // pendingKey is a map key question asked before the declarations were
@@ -332,11 +334,11 @@ func composite(n *Named) bool {
 }
 
 // derivable reports whether a type listing the standard trait without
-// its method gets the method from its fields. Each of these traits
-// requires exactly one method, which deriveMethod relies on.
+// its methods gets them from its fields, or, for Error, from its
+// printed form.
 func derivable(tr *Trait) bool {
 	switch tr {
-	case CopyTrait, EqTrait, OrdTrait, HashTrait, CloneTrait:
+	case CopyTrait, EqTrait, OrdTrait, HashTrait, CloneTrait, ErrorTrait:
 		return true
 	}
 
@@ -368,33 +370,44 @@ func (c *Checker) deriveListed(n *Named, listed *Trait, pos token.Pos) {
 	}
 }
 
-// deriveMethod gives the declared type n the method of the standard
-// trait tr it listed, or reached through listed, without declaring the
-// method: written from the fields, when every field implements the
-// trait. It returns the message refusing the derivation, at the first
-// field that does not implement the trait, or "". The method is added
-// either way, so that a refused derivation is reported once, not again
-// as a missing method. A type that wrote the method keeps it, checked
-// as any method is.
+// deriveMethod gives the declared type n the methods of the standard
+// trait tr it listed, or reached through listed, without declaring
+// them: written from the fields, when every field implements the
+// trait, or for Error from the printed form. It returns the message
+// refusing the derivation, at the first field that does not implement
+// the trait, or "". The methods are added either way, so that a refused
+// derivation is reported once, not again as a missing method. A type
+// that wrote a method keeps it, checked as any method is.
 func deriveMethod(n *Named, listed, tr *Trait) string {
 	if !derivable(tr) {
 		return ""
 	}
 
-	if tr != CopyTrait {
-		want := tr.required[0] // the one method a derivable trait requires
+	derived := false
+	for _, want := range tr.required { // one method, or Error's two
 		if n.Method(want.name) != nil {
-			return ""
+			continue
 		}
 
 		fn := substFunc(want, map[*TypeParam]Type{tr.self: n})
 		fn.derived = true
 		n.AddMethod(fn)
+		derived = true
 	}
 
-	reason := undeserved(n, tr)
-	if tr == CopyTrait && n.Implements(DropTrait) {
+	if tr != CopyTrait && !derived {
+		return ""
+	}
+
+	reason := ""
+	switch {
+	case tr == ErrorTrait && n.Method("Error").derived:
+		reason = unprintable(n) // the message is the printed form; a derived Source alone asks nothing of the fields
+	case tr == ErrorTrait:
+	case tr == CopyTrait && n.Implements(DropTrait):
 		reason = "it implements Drop"
+	default:
+		reason = undeserved(n, tr)
 	}
 
 	if reason == "" {
@@ -429,6 +442,92 @@ func undeserved(n *Named, tr *Trait) string {
 	}
 
 	return ""
+}
+
+// unprintable returns why the derived Error() of n cannot print it:
+// the first field whose type fmt does not print, or "".
+func unprintable(n *Named) string {
+	switch u := n.Underlying().(type) {
+	case *Struct:
+		for _, f := range u.fields {
+			if !printable(f.typ, nil) {
+				return "field " + f.name + " has type " + f.typ.String() + ", which cannot be printed"
+			}
+		}
+	case *Enum:
+		for _, v := range u.variants {
+			for _, f := range v.fields {
+				if !printable(f.typ, nil) {
+					return "variant " + v.name + " has a field of type " + f.typ.String() + ", which cannot be printed"
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// printable reports whether fmt prints a value of type t: anything but
+// a function, a channel, or a trait value of a trait that is neither
+// Error nor fmt.Stringer, looking through composites and declared
+// types; seen cuts a type that holds itself through a pointer. A type
+// parameter is printable here: the declaration is checked once, not
+// its instances, so an instance over a function or a channel is
+// refused by the backend when it prints, not by the checker.
+func printable(t Type, seen map[*Named]bool) bool {
+	switch u := t.(type) {
+	case *Signature, *Chan:
+		return false
+	case *Trait:
+		return u.Refines(ErrorTrait) || refinesStringer(u)
+	case *Pointer:
+		return printable(u.elem, seen)
+	case *Ref:
+		return printable(u.elem, seen)
+	case *Option:
+		return printable(u.elem, seen)
+	case *Slice:
+		return printable(u.elem, seen)
+	case *Array:
+		return printable(u.elem, seen)
+	case *Result:
+		return printable(u.val, seen) && printable(u.err, seen)
+	case *Map:
+		return printable(u.key, seen) && printable(u.value, seen)
+	case *Tuple:
+		for _, e := range u.elems {
+			if !printable(e, seen) {
+				return false
+			}
+		}
+	case *Named:
+		if seen[u] || u.Implements(ErrorTrait) || IsStringer(u) {
+			return true
+		}
+
+		if seen == nil {
+			seen = make(map[*Named]bool)
+		}
+
+		seen[u] = true
+		return printable(u.Underlying(), seen)
+	case *Struct:
+		for _, f := range u.fields {
+			if !printable(f.typ, seen) {
+				return false
+			}
+		}
+	case *Enum:
+		for _, v := range u.variants {
+			for _, f := range v.fields {
+				if !printable(f.typ, seen) {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
 }
 
 // keyable reports whether a value of type key may be a map key: it

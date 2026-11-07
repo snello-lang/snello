@@ -26,6 +26,10 @@ func TestParseFormat(t *testing.T) {
 		{"%05d", nil, "fmt takes no 0 flag"},
 		{"%#v", nil, "fmt takes no # flag"},
 		{"%*d", nil, "fmt takes no * width or precision"},
+		{"%+v|%-+8v", []FormatPiece{{Verb: 'v', Plus: true, Width: -1, Prec: -1}, {Text: "|"}, {Verb: 'v', Plus: true, Minus: true, Width: 8, Prec: -1}}, ""}, // the plus flag, an error's chain, beside the minus
+		{"%+d", nil, "fmt takes the + flag on %v of an error only"},
+		{"%+s", nil, "fmt takes the + flag on %v of an error only"},
+		{"%+q", nil, "fmt takes the + flag on %v of an error only"},
 	}
 	for _, tt := range tests {
 		got, err := ParseFormat(tt.format)

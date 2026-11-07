@@ -895,7 +895,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		val = e.gep(ir, p, 1)
 		e.branch(okFlag.s, ok, fail)
 		e.label(fail)
-		err := e.taken(val, u.Err(), held, e.typeOf(x.X), x.Pos())
+		err := e.passed(x, e.taken(val, u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
 		e.inst("ret " + e.variantValue(e.fn.sig.Results(), types.ErrVariant, []value{err}, x.Pos()).typed())
 	}

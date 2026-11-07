@@ -183,7 +183,15 @@ func TestTraits(t *testing.T) {
 		{"struct R impl Hash { n int }\nfunc (a ref R) Eq(o ref R) bool { return true }\nfunc (a ref R) Hash() u64 { return 0 }", nil},
 		{"struct R impl Clone { p *Blob }", []string{"R does not implement Clone: field p has type *Blob, which is not Clone"}},
 		{"struct R impl Clone { s string; xs []int; o int? }\nfunc f(r ref R) R { return r.Clone() }", nil},
-		{"struct R impl Error { n int }", []string{"R does not implement Error: missing method Error() string"}},
+		{"struct R impl Error { n int }", nil}, // Error() derived, the value as %v prints it, and Source() derived as None
+		{"struct R impl Error { f func() }", []string{"R does not implement Error: field f has type func(), which cannot be printed"}},
+		{"enum R impl Error { A(f []func()); B }", []string{"R does not implement Error: variant A has a field of type []func(), which cannot be printed"}},
+		{"struct R impl Error { f func() }\nfunc (r ref R) Error() string { return \"r\" }", nil}, // a written message asks nothing of the fields
+		{"struct R impl Error { s Shape }", []string{"R does not implement Error: field s has type Shape, which cannot be printed"}},
+		{"struct R impl Error { s Error? }", nil},
+		{"struct R impl Error { n int }\nfunc (r ref R) Source() Error? { return None }", nil},
+		{"struct R impl Error { n int }\nfunc (r ref R) Source() int? { return None }", []string{"method R.Source has the wrong signature for Error: have (ref R) Source() int?, want (ref R) Source() Error?"}},
+		{"struct R impl Error { n int }\nfunc f(r ref R) string { if s := r.Source() { return s.Error() }; return r.Error() }", nil},
 		{"struct R impl Error { n int }\nfunc (r ref R) Error() string { return \"r\" }\nfunc E<T: Error>(e ref T) string { return e.Error() }\nfunc f(r R) string { return E(ref r) }", nil},
 		{"func M<T: Ord>(a ref T, b ref T) Ordering { return a.Cmp(b) }\nfunc f(a Blob, b Blob) Ordering { return M(ref a, ref b) }", []string{"cannot use Blob as the type parameter T of M: Blob does not implement Ord"}},
 		{"func M<T: Ord>(a ref T, b ref T) Ordering { return a.Cmp(b) }\nfunc f(a int, b int, s string, t string) bool { return M(ref a, ref b) == M(ref s, ref t) }", nil},
@@ -280,9 +288,9 @@ func TestTraits(t *testing.T) {
 		{"func f<T: Blob>() {}", []string{"Blob is not a trait"}},
 		{"trait Twice: Blob {}", []string{"Blob is not a trait"}},
 		{"struct X impl fmt.Formatter {}", []string{"undefined: fmt.Formatter"}},
-		{"struct X impl fmt.Stringer {}", []string{"X does not implement Stringer: missing method String() string"}},                   // fmt's one trait
-		{"struct Error impl Error { msg string }\nfunc (e ref Error) Error() string { return e.msg.Clone() }", nil},                    // the trait behind the type of the same name
-		{"struct Error { msg string }\nstruct X impl Error {}", []string{"X does not implement Error: missing method Error() string"}}, // the trait, not the struct beside it
+		{"struct X impl fmt.Stringer {}", []string{"X does not implement Stringer: missing method String() string"}}, // fmt's one trait
+		{"struct Error impl Error { msg string }\nfunc (e ref Error) Error() string { return e.msg.Clone() }", nil},  // the trait behind the type of the same name
+		{"struct Error { msg string }\nstruct X impl Error {}\nfunc f(x ref X) string { return x.Error() }", nil},    // the trait, not the struct beside it: Error() is derived
 		{"func f<T: fmt.Formatter>() {}", []string{"undefined: fmt.Formatter"}},
 		{"struct X impl Shape<int> {}", []string{"Shape takes no type arguments"}},
 		{"struct X impl Named, Named {}\nfunc (x ref X) Label() string { return \"\" }", []string{"Named listed twice"}},

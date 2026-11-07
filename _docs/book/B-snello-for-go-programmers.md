@@ -194,9 +194,13 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
 | `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |
 | `io.Reader` and `io.Writer` are interfaces; `io.Copy(dst, src)` dispatches dynamically | `io.Reader` and `io.Writer` are traits; `io.Copy` is generic over them, one copy per pair of types |
-| Printing an `error` prints `err.Error()` | The same, for any type implementing the `Error` trait |
+| Printing an `error` prints `err.Error()` | The same, for any type implementing the `Error` trait, and for a value of type `Error`, which holds any error as `error` does |
+| `func f() (T, error)`, `if err != nil { return nil, err }` | `func f() Result<T, Error>` and `x?`: an error of any type passes into the `Error` value (chapter 17) |
+| `fmt.Errorf("load %s: %w", path, err)`, `errors.Unwrap`, `errors.Is` | A type with `Error()` for the message and `Source()` for the cause; `%+v` prints the chain; `Is` is a `match` on the enum |
+| `errors.New("message")` for a one-off error | An enum variant, or a struct listing `Error`: the message is derived from the value |
+| A `From` conversion, or wrapping by hand, at every `return err` | `?` wraps the error in the one variant of the function's error enum that holds its type |
 | A type with a `String() string` method prints as it, a `fmt.Stringer` | A type prints as its `String` when it lists `impl fmt.Stringer`; traits are named, not matched by method |
-| `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` takes no `%x`, `%e`, `%T` or flags but the minus yet |
+| `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` takes no `%x`, `%e`, `%T` or flags but the minus and the plus on `%v` of an error yet |
 | `err.(*strconv.NumError).Err == strconv.ErrRange` | `e.Kind() == strconv.Range` |
 | `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
 | `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
