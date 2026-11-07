@@ -1,0 +1,33 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package fmt_test
+
+import ("expect"; "fmt"; "os"; "testing")
+
+struct Point impl fmt.Stringer { x int; y int }
+
+func (p ref Point) String() string { return fmt.Sprintf("(%d, %d)", p.x, p.y) }
+
+func TestSprint() {
+	expect.Equal(ref fmt.Sprint("a", 1, true), "a1 true")
+	expect.Equal(ref fmt.Sprint(1, 2), "1 2")
+	expect.Equal(ref fmt.Sprint(Point{x: 1, y: 2}), "(1, 2)")
+}
+
+func TestSprintf() {
+	expect.Equal(ref fmt.Sprintf("%d-%s|%5.2f|%q|%v", 3, "x", 2.0, "q", Point{x: 0, y: 9}), "3-x| 2.00|\"q\"|(0, 9)")
+	expect.Equal(ref fmt.Sprintf("%-4d|%4s|", 7, "ab"), "7   |  ab|")
+}
+
+func TestPrint() {
+	fmt.Println("printed by the fmt tests", 1)
+	fmt.Printf("%s %d\n", "and", 2)
+	fmt.Fprintln(mut os.Stdout(), "to", "stdout")
+	fmt.Fprintf(mut os.Stdout(), "%3d\n", 5)
+}
+
+func BenchmarkSprintf() {
+	for testing.Loop() { _ = fmt.Sprintf("%d:%s", 42, "x") }
+}

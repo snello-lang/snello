@@ -1,0 +1,64 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package net_test
+
+import ("bufio"; "expect"; "io"; "net"; "testing"; "time")
+
+// serve answers one connection line by line, in upper case, until the
+// client closes its side, and reports how many lines it saw.
+func serve(l net.Listener, done chan<- int) {
+	conn := l.Accept().Expect("accept")
+	lines := 0
+	r := bufio.NewReader(mut conn)
+	for {
+		line := r.ReadString('\n').Expect("read") ?? break
+		r.Get().WriteString(ref line.ToUpper()).Expect("write")
+		lines += 1
+	}
+
+	done <- lines
+}
+
+func TestEcho() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	port := l.Port()
+	expect.True(port > 0)
+	done := make(chan int)
+	spawn serve(l, done.Clone())
+	c := expect.IsOk(net.Dial("127.0.0.1", port))
+	expect.IsOk(c.SetDeadline(time.Now().Add(time.Duration(5) * time.Second)))
+	expect.IsOk(c.SetReadDeadline(time.Now().Add(time.Duration(5) * time.Second)))
+	expect.IsOk(c.SetWriteDeadline(time.Now().Add(time.Duration(5) * time.Second)))
+	r := bufio.NewReader(mut c)
+	expect.Equal(ref expect.IsOk(r.Get().WriteString("snello\n")), ref 7)
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString('\n'))), "SNELLO\n")
+	expect.Equal(ref expect.IsOk(r.Get().Write(ref []byte{111, 107, 10})), ref 3)
+	buf := make([]byte, 3)
+	expect.Equal(ref expect.IsOk(r.Read(mut buf)), ref 3)
+	expect.Equal(ref buf[0], ref byte(79))
+	expect.IsOk(c.Close())
+	expect.Equal(ref (<-done ?? 0), ref 2)
+}
+
+func TestDialErrors() {
+	e := expect.IsErr(net.Dial("127.0.0.1", 1))
+	expect.True(e.Kind() == io.Refused)
+	expect.IsErr(net.Listen("127.0.0.1", 70000))
+	expect.IsErr(net.DialTimeout("127.0.0.1", 1, time.Duration(100)*time.Millisecond))
+}
+
+func TestListenerDeadline() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	expect.IsOk(l.SetDeadline(time.Now().Add(time.Duration(20) * time.Millisecond)))
+	expect.IsErr(l.Accept())
+}
+
+func BenchmarkDial() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	port := l.Port()
+	spawn func(l net.Listener) { for { _ = l.Accept() } }(l)
+	testing.ResetTimer()
+	for testing.Loop() { _ = net.Dial("127.0.0.1", port) }
+}

@@ -336,6 +336,48 @@ func TestMore(t *testing.T) {
 	}
 }
 
+// TestStdDir runs a standard package's tests from the checkout, as
+// snello test std/NAME does, through both backends, and refuses a
+// directory that is not a standard package's: the plan reads the
+// library from the checkout, so the sources as edited are what run.
+func TestStdDir(t *testing.T) {
+	dir := filepath.Join("..", "..", "std", "strings")
+	if !IsStdDir(dir) {
+		t.Fatalf("%s is not seen as a standard package", dir)
+	}
+
+	for _, backend := range []string{"llvm", "c"} {
+		var out bytes.Buffer
+		code, err := Run(dir, backend, nil, &out, &out)
+		if err != nil || code != 0 || !strings.Contains(out.String(), "ok  \tstrings\t") {
+			t.Errorf("%s: exited %d, %v\n%s", backend, code, err, out.String())
+		}
+	}
+
+	if _, err := PlanStdDir(filepath.Join("..", "..", "std", "nosuch")); err == nil || !strings.Contains(err.Error(), "is not a standard package of the library") {
+		t.Errorf("a directory that is no standard package: got %v", err)
+	}
+
+	if IsStdDir(filepath.Join("..", "..", "examples", "run", "packaged", "shapes")) {
+		t.Error("an example package is seen as a standard one")
+	}
+
+	// A project's own std/strings is not the library's: the whole
+	// library is not beside it.
+	foreign := writeTree(t, map[string]string{
+		"snello.mod":                 "",
+		"std/strings/strings.snello": "package strings\n\nfunc N() int { return 1 }\n",
+		"std/strings/s_test.snello":  "package strings_test\n\nimport (\"expect\"; \"strings\")\n\nfunc TestN() { expect.Equal(ref strings.N(), ref 1) }\n",
+	})
+	if IsStdDir(filepath.Join(foreign, "std", "strings")) {
+		t.Error("a project's own std/strings is seen as the library's")
+	}
+
+	if _, err := PlanStdDir(filepath.Join(foreign, "std", "strings")); err == nil || !strings.Contains(err.Error(), "is not a standard package of the library") {
+		t.Errorf("a project's own std/strings: got %v", err)
+	}
+}
+
 // TestRun runs the tests of a library package and of a main package
 // through both backends, as snello test does, and checks what they
 // print and how they exit; then the refusals: a test with the wrong
@@ -351,6 +393,13 @@ func TestRun(t *testing.T) {
 		"badsig/b.snello":           "package badsig\n",
 		"badsig/b_test.snello":      "package badsig\n\nfunc TestWrong(n int) {}\n",
 		"notests/n.snello":          "package notests\n",
+		"ext/ext.snello":            "package ext\n\nfunc N() int { return 1 }\n\nfunc hidden() int { return 2 }\n",
+		"ext/ext_test.snello":       "package ext_test\n\nimport (\"expect\"; \"ext\")\n\nfunc TestN() { expect.Equal(ref ext.N(), ref 1) }\n",
+		"mixed/m.snello":            "package mixed\n",
+		"mixed/a_test.snello":       "package mixed\n\nfunc TestA() {}\n",
+		"mixed/b_test.snello":       "package mixed_test\n\nfunc TestB() {}\n",
+		"extmain/main.snello":       "package main\n\nfunc main() {}\n",
+		"extmain/main_test.snello":  "package main_test\n\nfunc TestM() {}\n",
 		"../loose/l.snello":         "package loose\n",
 		"../loose/l_test.snello":    "package loose\n\nfunc TestL() {}\n",
 	})
@@ -423,9 +472,22 @@ func TestRun(t *testing.T) {
 		}
 	}
 
+	// An external test package, ext_test, imports ext as its users do:
+	// the form for a package the harness itself depends on, and for
+	// testing a package through its exported names alone.
+	for _, backend := range []string{"llvm", "c"} {
+		var out bytes.Buffer
+		code, err := Run(filepath.Join(root, "ext"), backend, nil, &out, &out)
+		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \text\t") {
+			t.Errorf("%s: the external test package exited %d, %v, printed %q", backend, code, err, out.String())
+		}
+	}
+
 	for _, c := range []struct{ dir, want string }{
 		{"badsig", "TestWrong has the wrong signature: want func()"},
 		{"notests", "no _test.snello files"},
+		{"mixed", "the test files are of two packages, mixed and mixed_test (b_test.snello)"},
+		{"extmain", "the tests of a main package are inside it, package main, since main cannot be imported; main_test cannot be"},
 		{"../loose", "no snello.mod above the package; snello test needs the module to name it"},
 	} {
 		var out bytes.Buffer

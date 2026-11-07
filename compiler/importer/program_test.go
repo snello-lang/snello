@@ -112,6 +112,7 @@ func TestTestFiles(t *testing.T) {
 		"app/main_test.snello":      "package main\n\nimport \"expect\"\n\nfunc TestMain() { expect.True(true) }\n",
 		"prog/main.snello":          "package main\n\nimport \"expect\"\n\nfunc main() { expect.True(true) }\n",
 		"viaharness/main.snello":    "package main\n\nimport (\"fmt\"; \"harness\")\n\nfunc main() { fmt.Println(harness.F().IsNone()) }\n",
+		"viatests/main.snello":      "package main\n\nimport \"tested_test\"\n\nfunc main() { tested_test.TestN() }\n",
 		"wrongpkg/w.snello":         "package wrongpkg\n",
 		"wrongpkg/w_test.snello":    "package other\n",
 	})
@@ -182,6 +183,13 @@ func TestTestFiles(t *testing.T) {
 	names, _ = SourceFiles(filepath.Join(root, "viaharness"))
 	if _, _, err := LoadProgram(names, &types.Info{}); err == nil || !strings.Contains(err.Error(), "harness.snello: package testing is imported by test files alone") {
 		t.Errorf("viaharness: got %v", err)
+	}
+
+	// An external test package is a test file's to import as well: a
+	// program importing one would carry the harness.
+	names, _ = SourceFiles(filepath.Join(root, "viatests"))
+	if _, _, err := LoadProgram(names, &types.Info{}); err == nil || !strings.Contains(err.Error(), "main.snello: package tested_test is imported by test files alone") {
+		t.Errorf("viatests: got %v", err)
 	}
 
 	// A main package under test: its own main dropped, the generated one kept.

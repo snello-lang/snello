@@ -1,0 +1,123 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package sync_test
+
+import ("expect"; "sync"; "testing")
+
+struct Point impl Eq, Clone { x int; y int }
+
+func TestArc() {
+	a := sync.NewArc("shared".Clone())
+	expect.Equal(ref a.Count(), ref i64(1))
+	b := a.Clone()
+	expect.Equal(ref a.Count(), ref i64(2))
+	expect.Equal(a.Get(), "shared")
+	expect.Equal(b.Get(), "shared")
+	done := make(chan i64, 1)
+	spawn func(h sync.Arc<string>, out chan<- i64) { out <- i64(h.Get().Len()) }(b, done.Clone())
+	expect.Equal(ref (<-done ?? 0), ref i64(6))
+}
+
+func TestCounter() {
+	c := sync.NewCounter(5)
+	expect.Equal(ref c.Load(), ref 5)
+	expect.Equal(ref c.Add(2), ref 7)
+	expect.Equal(ref c.Add(-7), ref 0)
+	c.Store(9)
+	expect.True(c.CompareAndSwap(9, 10))
+	expect.False(c.CompareAndSwap(9, 11))
+	expect.Equal(ref c.Load(), ref 10)
+}
+
+func TestCounterFromTasks() {
+	hits := sync.NewArc(sync.NewCounter(0))
+	done := make(chan (), 2)
+	for i := 0; i < 2; i++ {
+		spawn func(h sync.Arc<sync.Counter>, out chan<- ()) {
+			for n := 0; n < 10000; n++ { h.Get().Add(1) }
+			out <- ()
+		}(hits.Clone(), done.Clone())
+	}
+	<-done
+	<-done
+	expect.Equal(ref hits.Get().Load(), ref 20000)
+}
+
+func TestAtomic() {
+	s := sync.NewAtomic("idle".Clone())
+	expect.Equal(ref s.Load(), "idle")
+	expect.True(s.CompareAndSwap("idle", "busy".Clone()))
+	expect.False(s.CompareAndSwap("idle", "late".Clone()))
+	expect.Equal(ref s.Swap("done".Clone()), "busy")
+	s.Store("over".Clone())
+	expect.Equal(ref s.Load(), "over")
+	p := sync.NewAtomic(Point{x: 1, y: 2})
+	expect.Equal(ref p.Swap(Point{x: 3, y: 4}), ref Point{x: 1, y: 2})
+	expect.Equal(ref p.Load(), ref Point{x: 3, y: 4})
+	flag := sync.NewAtomic(false)
+	expect.True(flag.CompareAndSwap(ref false, true))
+	expect.True(flag.Load())
+}
+
+func TestMutexFromTasks() {
+	total := sync.NewArc(sync.NewMutex(0))
+	wg := sync.NewWaitGroup()
+	for i := 0; i < 4; i++ {
+		t := total.Clone()
+		w := wg.Clone()
+		wg.Add(1)
+		spawn func() {
+			for n := 0; n < 1000; n++ {
+				g := t.Get().Lock()
+				*g.Get() += 1
+			}
+			w.Done()
+		}()
+	}
+	wg.Wait()
+	expect.Equal(ref *total.Get().Lock().Get(), ref 4000)
+}
+
+func TestRwLock() {
+	l := sync.NewRwLock([]int{1, 2, 3})
+	r := l.Read()
+	expect.Equal(ref len(r.Get()), ref 3)
+	r2 := l.Read()
+	expect.Equal(ref r2.Get()[0], ref 1)
+}
+
+func TestRwLockWrite() {
+	l := sync.NewRwLock([]int{1, 2, 3})
+	w := l.Write()
+	w.Get().Push(4)
+	expect.Equal(ref len(w.Get()), ref 4)
+}
+
+func TestOnce() {
+	calls := sync.NewCounter(0)
+	once := sync.NewOnce()
+	once.Do(func() { calls.Add(1) })
+	once.Do(func() { calls.Add(1) })
+	expect.Equal(ref calls.Load(), ref 1)
+}
+
+func TestEmpty() {
+	expect.PanicsWith(func() { var m sync.Mutex<int>; m.Lock() }, "sync: Lock on an empty Mutex")
+	expect.PanicsWith(func() { var a sync.Arc<int>; a.Get() }, "sync: Get on an empty Arc")
+	expect.PanicsWith(func() { var c sync.Counter; c.Load() }, "sync: use of an empty Counter")
+}
+
+func BenchmarkCounterAdd() {
+	c := sync.NewCounter(0)
+	for testing.Loop() { c.Add(1) }
+}
+
+func BenchmarkMutexLock() {
+	m := sync.NewMutex(0)
+	for testing.Loop() {
+		g := m.Lock()
+		*g.Get() += 1
+	}
+}

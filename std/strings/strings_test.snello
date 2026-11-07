@@ -2,37 +2,60 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package strings
+package strings_test
 
-import ("expect"; "testing")
+import ("expect"; "strings"; "testing")
 
 func TestRepeat() {
-	expect.Equal(ref Repeat("ab", 3), "ababab")
-	expect.Equal(ref Repeat("x", 0), "")
+	expect.Equal(ref strings.Repeat("ab", 3), "ababab")
+	expect.Equal(ref strings.Repeat("x", 0), "")
 }
 
 func TestJoin() {
-	expect.Equal(ref Join(ref []string{"a", "b", "c"}, "-"), "a-b-c")
-	expect.Equal(ref Join(ref []string{}, "-"), "")
+	expect.Equal(ref strings.Join(ref []string{"a", "b", "c"}, "-"), "a-b-c")
+	expect.Equal(ref strings.Join(ref []string{}, "-"), "")
+	expect.Equal(ref strings.Join(ref []string{"one"}, ", "), "one")
 }
 
 func TestCase() {
-	testing.Run("upper", func() { expect.Equal(ref ToUpper("snello"), "SNELLO") })
-	testing.Run("lower", func() { expect.Equal(ref ToLower("SNELLO"), "snello") })
+	testing.Run("upper", func() { expect.Equal(ref strings.ToUpper("snello"), "SNELLO") })
+	testing.Run("lower", func() { expect.Equal(ref strings.ToLower("SNELLO"), "snello") })
+	testing.Run("mixed", func() { expect.Equal(ref strings.ToUpper("Café 1"), "CAFÉ 1") })
+}
+
+func TestFields() {
+	fields := strings.Fields("  two   words ")
+	expect.Equal(ref len(fields), ref 2)
+	expect.Equal(fields[0], "two")
+	expect.Equal(fields[1], "words")
+	expect.Equal(ref len(strings.Fields("   ")), ref 0)
 }
 
 func TestBuilder() {
-	var b Builder
+	var b strings.Builder
 	b.WriteString("one")
 	b.WriteByte(' ')
 	b.WriteString("two")
 	expect.Equal(ref b.Len(), ref 7)
 	expect.Equal(ref b.String(), "one two")
+	b.Reset()
+	expect.Equal(ref b.Len(), ref 0)
+	expect.Equal(ref b.String(), "")
 }
 
 func BenchmarkRepeat() {
 	testing.ReportAllocs()
 	for testing.Loop() {
-		_ = Repeat("ab", 16)
+		_ = strings.Repeat("ab", 16)
+	}
+}
+
+func BenchmarkBuilder() {
+	for testing.Loop() {
+		var b strings.Builder
+		b.WriteString("one")
+		b.WriteByte(' ')
+		b.WriteString("two")
+		_ = b.String()
 	}
 }

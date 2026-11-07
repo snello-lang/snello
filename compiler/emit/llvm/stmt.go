@@ -296,6 +296,11 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 	case 1:
 		v := e.valueTo(s.Results[0], e.fn.sig.Results())
 		e.leaveFunction(s.Pos())
+		if e.fn.sig.Results() == types.Unit { // a generic function returning its T, given (): the function is void, and the value was evaluated for its effects
+			e.inst("ret void")
+			break
+		}
+
 		e.inst("ret " + v.typed())
 	default:
 		e.unsupported(s.Return, "returning several values")

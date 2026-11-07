@@ -90,7 +90,9 @@ func usage() {
 // test builds the tests of the package in a directory into a program
 // and runs it: -backend chooses the backend, and the rest of the
 // flags, -v and -run NAME, go to the program, whose exit code is the
-// command's (_docs/design/09-testing.md, section 5).
+// command's (_docs/design/09-testing.md, section 5). In a checkout of
+// the compiler, std/NAME is a standard package, run from its sources
+// as edited with the library's privileges.
 func test(args []string) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)

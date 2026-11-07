@@ -1,0 +1,47 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package rc_test
+
+import ("expect"; "fmt"; "rc"; "testing")
+
+struct Node { name string }
+
+func TestCounts() {
+	r := rc.New(Node{name: "root".Clone()})
+	expect.Equal(ref r.StrongCount(), ref 1)
+	expect.Equal(ref r.WeakCount(), ref 0)
+	s := r.Clone()
+	expect.Equal(ref r.StrongCount(), ref 2)
+	expect.Equal(ref s.Get().name, "root")
+	w := r.Downgrade()
+	expect.Equal(ref r.WeakCount(), ref 1)
+	u := expect.IsSome(w.Upgrade())
+	expect.Equal(ref u.StrongCount(), ref 3)
+}
+
+func TestGetMut() {
+	r := rc.New(1)
+	if v := r.GetMut() {
+		*v = 2
+	}
+	expect.Equal(ref *r.Get(), ref 2)
+	s := r.Clone()
+	expect.True(r.GetMut().IsNone())
+	expect.Equal(ref *s.Get(), ref 2)
+}
+
+func TestWeakOutlives() {
+	w := rc.New("gone".Clone()).Downgrade()
+	expect.IsNone(w.Upgrade())
+	w2 := w.Clone()
+	expect.IsNone(w2.Upgrade())
+	expect.Contains(ref fmt.Sprint(w), "Weak")
+	expect.Contains(ref fmt.Sprint(rc.New(3)), "3")
+}
+
+func BenchmarkClone() {
+	r := rc.New(1)
+	for testing.Loop() { _ = r.Clone() }
+}

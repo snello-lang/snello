@@ -1,0 +1,39 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package sort_test
+
+import ("expect"; "sort"; "testing")
+
+func TestSort() {
+	xs := []int{3, 1, 2}
+	sort.Sort(mut xs)
+	expect.EqualSlice(ref xs, ref []int{1, 2, 3})
+	expect.True(sort.IsSorted(ref xs))
+	empty := []int{}
+	sort.Sort(mut empty)
+	expect.Empty(ref empty)
+}
+
+func TestSortBy() {
+	words := []string{"pear".Clone(), "fig".Clone(), "banana".Clone()}
+	sort.SortBy(mut words, func(a ref string, b ref string) bool { return a.Len() < b.Len() })
+	expect.Equal(ref words[0], "fig")
+	expect.Equal(ref words[2], "banana")
+}
+
+func TestSearch() {
+	xs := []int{1, 3, 5, 7}
+	expect.Equal(ref sort.Search(ref xs, ref 5), ref 2)
+	expect.Equal(ref sort.Search(ref xs, ref 4), ref 2)
+	expect.Equal(ref sort.Search(ref xs, ref 9), ref 4)
+	expect.False(sort.IsSorted(ref []int{2, 1}))
+}
+
+func BenchmarkSort() {
+	for testing.Loop() {
+		xs := []int{9, 8, 7, 6, 5, 4, 3, 2, 1, 0}
+		sort.Sort(mut xs)
+	}
+}

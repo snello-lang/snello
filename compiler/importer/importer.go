@@ -48,6 +48,13 @@ type Importer struct {
 
 	Tests string // the path of the package under test, whose test files are loaded with it, or ""
 
+	// StdDir is a directory holding the standard library's sources as
+	// std/ in the compiler's repository does, read in place of the copy
+	// embedded in the compiler: how snello test std/NAME in a checkout
+	// runs a package's tests against the sources as edited. Empty, the
+	// embedded copy is read.
+	StdDir string
+
 	std     types.Config // the standard library is checked with its privileges
 	own     types.Config // a package of the program's own without them
 	info    *types.Info
@@ -109,7 +116,9 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 // dep/util, so that the program's util and the dependency's are two
 // packages with two symbol prefixes, and the same package whichever
 // require line reaches its module. A path none of the three has is
-// refused naming the three.
+// refused naming the three. A path ending in _test names the external
+// test package of the package before it, importTests, which only a
+// test file may import; the suffix is reserved, as Go reserves it.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
 	if importPath == "builtin" {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
@@ -119,15 +128,19 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		return nil, err
 	}
 
+	if base, ok := strings.CutSuffix(importPath, "_test"); ok && base != "" && !strings.HasSuffix(base, "/") {
+		return imp.importTests(base, importPath, dir)
+	}
+
 	name := importPath + "/" + path.Base(importPath) + ".snello"
-	if src, err := std.Sources.ReadFile(name); err == nil {
+	if src, err := imp.stdFile(name); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
 			names, srcs := []string{name}, [][]byte{src}
 			if imp.Tests == importPath { // the package under test: its test files join it
-				entries, _ := fs.ReadDir(std.Sources, importPath)
+				entries, _ := imp.stdDir(importPath)
 				for _, e := range entries {
 					if IsTestFile(e.Name()) {
-						test, err := std.Sources.ReadFile(importPath + "/" + e.Name())
+						test, err := imp.stdFile(importPath + "/" + e.Name())
 						if err != nil {
 							return nil, nil, err
 						}
@@ -141,36 +154,49 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		})
 	}
 
-	var r *root
-	var err error
-	if n := len(imp.loading); n > 0 && imp.loading[n-1].std {
-		r = nil // dir is a directory of the embedded library, not one on disk
-	} else if r, err = imp.rootFor(dir); err != nil {
-		return nil, err
-	}
-
-	if r == nil {
-		return nil, errors.New("package " + importPath + " is not in the standard library, and no snello.mod above the program marks a module")
-	}
-
-	pkgDir, req, err := r.module.Lookup(importPath)
+	canonical, pkgDir, owner, err := imp.resolveOwn(importPath, dir)
 	if err != nil {
 		return nil, err
 	}
 
-	if pkgDir == "" {
-		return nil, errors.New("package " + importPath + " is not in the standard library, in the module's directories or in its require lines")
+	return imp.loadOnce(canonical, false, func() (*types.Package, []*Package, error) {
+		return imp.loadDir(canonical, importPath, pkgDir, owner.module.Links)
+	})
+}
+
+// resolveOwn finds the package of the program's own that importPath
+// names from dir: its canonical name, its directory, and the module it
+// is a directory of, whose links it carries.
+func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir string, owner *root, err error) {
+	var r *root
+	if n := len(imp.loading); n > 0 && imp.loading[n-1].std {
+		r = nil // dir is a directory of the embedded library, not one on disk
+	} else if r, err = imp.rootFor(dir); err != nil {
+		return "", "", nil, err
 	}
 
-	canonical := importPath
+	if r == nil {
+		return "", "", nil, errors.New("package " + importPath + " is not in the standard library, and no snello.mod above the program marks a module")
+	}
+
+	pkgDir, req, err := r.module.Lookup(importPath)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	if pkgDir == "" {
+		return "", "", nil, errors.New("package " + importPath + " is not in the standard library, in the module's directories or in its require lines")
+	}
+
+	canonical = importPath
 	if r.id != "" {
 		canonical = r.id + "/" + importPath
 	}
 
-	owner := r // the module the package is a directory of, whose links it carries
+	owner = r // the module the package is a directory of, whose links it carries
 	if req != nil {
 		if owner, err = imp.enter(req); err != nil {
-			return nil, err
+			return "", "", nil, err
 		}
 
 		canonical = owner.id
@@ -179,8 +205,68 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		}
 	}
 
-	return imp.loadOnce(canonical, false, func() (*types.Package, []*Package, error) {
-		return imp.loadDir(canonical, importPath, pkgDir, owner.module.Links)
+	return canonical, pkgDir, owner, nil
+}
+
+// importTests loads the external test package of base, named
+// base_test: the test files of base's directory whose package clause
+// is base_test, a package of their own that imports base as its users
+// do, so that a package the test harness itself depends on, sync under
+// testing, is tested without an import cycle (_docs/design/09-testing.md,
+// section 1). A standard package's is loaded with the library's
+// privileges, from the embedded copy or from StdDir.
+func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, error) {
+	if _, err := imp.stdFile(base + "/" + base + ".snello"); err == nil {
+		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
+			entries, err := imp.stdDir(base)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			var names []string
+			var srcs [][]byte
+			for _, e := range entries {
+				if IsTestFile(e.Name()) {
+					src, err := imp.stdFile(base + "/" + e.Name())
+					if err != nil {
+						return nil, nil, err
+					}
+
+					names, srcs = append(names, base+"/"+e.Name()), append(srcs, src)
+				}
+			}
+
+			if len(names) == 0 {
+				return nil, nil, errors.New("package " + importPath + " has no test files under " + base)
+			}
+
+			return imp.load(importPath, names, srcs, nil, nil, &imp.std)
+		})
+	}
+
+	canonical, pkgDir, owner, err := imp.resolveOwn(base, dir)
+	if err != nil {
+		return nil, errors.New("package " + importPath + " names the tests of " + base + ", and " + err.Error())
+	}
+
+	return imp.loadOnce(canonical+"_test", false, func() (*types.Package, []*Package, error) {
+		tests, err := TestFiles(pkgDir)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if len(tests) == 0 {
+			return nil, nil, errors.New("package " + importPath + " has no test files at " + pkgDir)
+		}
+
+		srcs := make([][]byte, len(tests))
+		for i, name := range tests {
+			if srcs[i], err = os.ReadFile(name); err != nil {
+				return nil, nil, err
+			}
+		}
+
+		return imp.load(canonical+"_test", tests, srcs, nil, owner.module.Links, &imp.own)
 	})
 }
 
@@ -293,6 +379,25 @@ func bound(entries []*Package) string {
 // Packages returns the packages loaded so far, each after the ones it
 // imports, for the backend to compile with the program.
 func (imp *Importer) Packages() []*Package { return imp.order }
+
+// stdFile reads a file of the standard library by its path under std/,
+// from StdDir when one is set and from the embedded copy otherwise.
+func (imp *Importer) stdFile(name string) ([]byte, error) {
+	if imp.StdDir != "" {
+		return os.ReadFile(filepath.Join(imp.StdDir, filepath.FromSlash(name)))
+	}
+
+	return std.Sources.ReadFile(name)
+}
+
+// stdDir lists a standard package's directory, as stdFile reads it.
+func (imp *Importer) stdDir(importPath string) ([]fs.DirEntry, error) {
+	if imp.StdDir != "" {
+		return os.ReadDir(filepath.Join(imp.StdDir, filepath.FromSlash(importPath)))
+	}
+
+	return fs.ReadDir(std.Sources, importPath)
+}
 
 // Paths returns the import path of every package in the library.
 func Paths() []string {
