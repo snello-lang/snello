@@ -77,6 +77,78 @@ enum Expr {
 
 `*Expr` is a pointer to a heap value with one owner, created with `&expr`; chapter 7 covers it. Two enums are built into the language: `T?`, an optional value with variants `Some(x)` and `None`, and `Result<T, E>` with `Ok(x)` and `Err(e)`. Chapter 8 covers them; under `match` they are ordinary enums.
 
+### Methods and traits on an enum
+
+An enum takes methods as a struct does, with a receiver lent `ref` or `mut` or taken by value, and the body reaches the fields of the variant through `match`, as `Describe` below does. What an enum implements is listed after its name, as for a struct:
+
+```snello
+enum Token impl Copy, Eq {
+    Num(f64)
+    Plus
+    Minus
+    EOF
+}
+
+enum ConfigError impl Error {
+    Missing(key string)
+    BadValue(key string, value string)
+}
+
+func (e ref ConfigError) Error() string {
+    return match e {
+        Missing(k)     => "missing " + k,
+        BadValue(k, v) => "bad value for " + k + ": " + v,
+    }
+}
+```
+
+The compiler checks the list: a trait named there is implemented, or the declaration is an error. For the standard traits a method need not be written. `Eq`, `Ord`, `Clone` and `Hash` listed without their method are derived variant by variant, as they are derived field by field for a struct, whenever every field has the trait. A derived `Cmp` orders by the variant's place in the declaration first, an earlier variant less than a later one, and two values of one variant by their fields in order, so with `enum Grade impl Ord { Fail; Pass(score int); Honors(score int, note string) }` every `Fail` is less than every `Pass`, and `Pass(1)` is less than `Pass(2)`.
+
+Two of the standard traits an enum has without listing them. `==` compares any two values of an enum whose fields compare, the variants first and then the fields, and such an enum hashes the same way, so it keys a map as it is, `map[State]int{}`; a struct compares and hashes only by listing `Eq` and `Hash`. `Copy` is as the section above says, by structure: listing it makes the intent visible and checked, and the error names the field in the way, `E does not implement Copy: variant B has a field of type string, which is not Copy`. A type with a `Drop` method is never `Copy`, and an enum may have one:
+
+```snello
+enum Note impl Drop {
+    Quiet
+    Loud(s string)
+}
+
+func (n mut Note) Drop() { fmt.Println("the note is gone") }
+```
+
+`Drop` runs when the value goes out of scope whatever its variant, and the fields of the variant are dropped after it. Chapter 5 covers `Drop`.
+
+An enum prints as it is written in a program: `fmt.Println(Connecting(2), Closed, Open("s1", 3))` prints `Connecting(2) Closed Open("s1", 3)`, a string field quoted, and `%v` prints the same. An enum that lists `fmt.Stringer` and writes `String` prints what `String` returns, as any type that lists it does.
+
+### Generic enums
+
+An enum may take type parameters, as a struct and a function may (chapter 12):
+
+```snello
+enum Tree<T> {
+    Leaf(v T)
+    Branch(left *Tree<T>, right *Tree<T>)
+}
+
+func sum(t ref Tree<int>) int {
+    return match t {
+        Leaf(v)       => v,
+        Branch(l, r)  => sum(l) + sum(r),
+    }
+}
+```
+
+The type argument comes from the fields a value is built with: `Leaf(3)` is a `Tree<int>`. A variant with no field of the parameter's type cannot say what the argument is, so it takes it from where it is used, a declared type, a parameter or a return: `var head *Node? = None` is typed, and `None` on its own is `cannot tell the type of None here; the context gives it no type`. `T?` and `Result<T, E>` are generic enums the library declares, `enum Option<T> { Some(v T); None }` with `T?` as its spelling and `enum Result<T, E> { Ok(v T); Err(e E) }`, which is why they behave as the enums here do.
+
+### Variants as names
+
+A variant is a value when it has no fields, `Closed`, and a constructor when it has, `Connecting(1)`: the name followed by the fields in the order of the declaration. The field names in a declaration, `Connecting(attempt int)`, are for the reader and for the error messages; a value is built by position, `Connecting(attempt: 1)` is not a form, and a pattern binds by position too, `Connecting(n)`. A variant with fields is not a function value: `xs.Map(Connecting)` is refused with `Connecting has fields and must be written Connecting(...)`, and the way to pass one is a closure, `func(n int) State { return Connecting(n) }`.
+
+The variants of an enum from another package are named through the package when used as values, `io.NotExist`, and may be bare in a pattern on a value of that enum, as the next section says. One enum is predeclared, `Ordering`, with the variants `Less`, `Equal` and `Greater`: `Cmp` returns it, and a comparison reads `a.Cmp(ref b) == Greater`.
+
+### What an enum is not
+
+An enum is not a number. There is no `iota` and no conversion: `int(Red)` on `enum Color { Red; Green }` is `cannot convert Color to int`. An enumeration that is a number with names, a port, a flag word, a code from the system, is a type declared over the number with constants, as Go writes it, `type Color int` and `const Red Color = 0`; chapter 3 covers declared types. The fields of a value are reached through `match` or an `if` binding and nowhere else: there is no `s.attempt`, since the value may not be a `Connecting`, and the compiler does not guess. A `match` that leaves a variant out is refused with the variant named, `match is not exhaustive: missing Connecting(_)`, and that is the point of writing an enum: every place that takes the value apart is checked against every shape the value can have.
+
 ## Match
 
 ```snello
