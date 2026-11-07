@@ -254,8 +254,14 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	sig.variadic = variadic
 	fn.typ = sig
 	c.checkSources(d.Name.Name, fn.typ.(*Signature), d.Name.Pos())
-	if d.Body == nil && !c.pkg.std {
-		c.errorf(d.Name.Pos(), "missing function body") // the standard library may leave one to the runtime
+	if d.Body == nil {
+		switch {
+		case c.pkg.std: // the runtime defines it
+		case c.pkg.path == "":
+			c.errorf(d.Name.Pos(), "missing function body") // a program binds C through a package, not in its own file
+		default:
+			c.checkBinding(d, sig) // a package's binding to C
+		}
 	}
 
 	if d.Recv == nil {

@@ -71,7 +71,7 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
 | `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower |
-| `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the module `snello.mod` declares (`mod.go`), and the main package of a file or a directory for the driver and the tests (`program.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
+| `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the root `snello.mod` marks, or under a `require` line (`mod.go`), and the main package of a file or a directory for the driver and the tests (`program.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
 | `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
 | `compiler/emit/c/` | The C emitter, the reference backend |
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |

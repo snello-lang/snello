@@ -47,12 +47,12 @@ snello build hello.snello
 
 A program grows past one file the way a Go program does: a directory is a package, and a module file names the tree the packages live in. Each `.snello` file in a directory begins with the same package clause, and the files see each other's declarations. The directory the program is in is the main package, and `snello build DIR` builds every file in it into a binary named after the directory; `snello build FILE` still builds the one file alone, as `go run hello.go` does.
 
-A file `snello.mod` at the root of the tree names the module, and an import path under that name is a directory under the root:
+A file `snello.mod` at the root of the tree marks the module, and an import names a directory under the root:
 
 ```
 app/
-    snello.mod          module example.com/app
-    main.snello         package main; import "example.com/app/shapes"
+    snello.mod          may be empty: it marks the root
+    main.snello         package main; import "shapes"
     shapes/
         shape.snello    package shapes
         area.snello     package shapes
@@ -63,7 +63,7 @@ package main
 
 import (
     "fmt"
-    "example.com/app/shapes"
+    "shapes"
 )
 
 func main() {
@@ -72,7 +72,7 @@ func main() {
 }
 ```
 
-An import is answered by the standard library first, then by the module, then by a `require` line in `snello.mod`, which names an import path and the directory on disk that holds it, `require example.com/regexp ../regexp`. There are no versions and nothing is fetched: a dependency is a directory, as Go's `replace` makes one. The module path's first element has a dot, `example.com`, so that it is never taken for a standard package. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
+An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. There are no versions and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
 
 ## A second program
 

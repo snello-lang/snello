@@ -1,0 +1,49 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package tally binds C from a package of the program's own: a counter
+// kept by the C side in tally.c, reached through a handle, and three
+// functions over the forms that cross, a view of bytes, a buffer to
+// fill, a view of a string and an out-parameter. Each function declared
+// without a body is defined in tally.c under its derived symbol, which
+// tally.snello.h, written by the compiler, declares.
+package tally
+
+// A Tally is a counter the C side keeps: the handle is the C object's
+// address as an int, which Snello never reads, wrapped in a struct of
+// the package so that Drop gives the C object back where the Tally is
+// dropped.
+struct Tally impl Drop { handle int }
+
+func (t mut Tally) Drop() { release(t.handle) }
+
+// Add adds n and returns the count.
+func (t mut Tally) Add(n int) int { return add(t.handle, n) }
+
+// Count is the count so far.
+func (t ref Tally) Count() int { return add(t.handle, 0) }
+
+// Open makes a counter starting at start, on the heap, owned by the
+// caller: the C side hands back its address, and the Tally wraps it.
+func Open(start int) *Tally { return &Tally{handle: open(start)} }
+
+// Live is how many counters the C side holds: what Drop gives back.
+func Live() int
+
+func open(start int) int
+
+func add(handle int, n int) int
+
+func release(handle int)
+
+// Sum adds the bytes of xs, which C reads as a view.
+func Sum(xs ref []byte) int
+
+// Fill writes b over the whole room of buf and returns how many bytes
+// it wrote: C fills the buffer and sets its length.
+func Fill(buf mut []byte, b byte) int
+
+// Parse reads a decimal number from s into n and reports whether s
+// was one: a view in, an out-parameter back.
+func Parse(s ref string, n mut int) bool

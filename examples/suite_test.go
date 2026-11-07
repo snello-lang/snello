@@ -53,44 +53,48 @@ var backends = []string{"llvm", "c"}
 // compile parses, checks and emits a program with the library packages
 // it imports through the backend, returning the source the backend
 // writes or the first error.
-func compile(path, backend string) ([]byte, error) {
+func compile(path, backend string) ([]byte, []lower.Binding, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	f, file, err := parser.ParseFile(path, src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	info := &types.Info{}
 	imp := importer.NewImporter(info)
 	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links}
 	}
 
+	bindings := lower.Bindings(info, libs)
 	if backend == "llvm" {
-		return llvm.Emit(llvm.Config{}, file, f, info, libs...)
+		out, err := llvm.Emit(llvm.Config{}, file, f, info, libs...)
+		return out, bindings, err
 	}
 
-	return c.Emit(file, f, info, libs...)
+	out, err := c.Emit(file, f, info, libs...)
+	return out, bindings, err
 }
 
-// build compiles what a backend emitted into dir, as a release or a
-// debug build, and returns the binary.
-func build(dir, name, backend string, src []byte, debug bool) (string, []byte, error) {
+// build compiles what a backend emitted into dir, with the C side of
+// the packages that bind C, as a release or a debug build, and returns
+// the binary.
+func build(dir, name, backend string, src []byte, debug bool, bindings []lower.Binding) (string, []byte, error) {
 	if backend == "llvm" {
-		return llvm.Build(dir, name, src, debug)
+		return llvm.Build(dir, name, src, debug, bindings...)
 	}
 
-	return c.Build(dir, name, src, debug)
+	return c.Build(dir, name, src, debug, bindings...)
 }
 
 // pendingExamples are the programs without an expected output yet, and
@@ -134,7 +138,7 @@ func TestExamples(t *testing.T) {
 			printed := make(map[string]string)
 			for _, backend := range backends {
 				start := time.Now()
-				src, err := compile(path, backend)
+				src, bindings, err := compile(path, backend)
 				if err != nil {
 					t.Fatalf("%s does not compile through %s: %v", path, backend, err)
 				}
@@ -143,7 +147,7 @@ func TestExamples(t *testing.T) {
 				for _, debug := range []bool{false, true} {
 					start = time.Now()
 					dir := t.TempDir()
-					bin, out, err := build(dir, name, backend, src, debug)
+					bin, out, err := build(dir, name, backend, src, debug, bindings)
 					if err != nil {
 						t.Fatalf("%s (debug %v): %v\n%s", backend, debug, err, out)
 					}
@@ -213,7 +217,7 @@ func BenchmarkExamples(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		for _, path := range paths {
-			if _, err := compile(path, "llvm"); err != nil {
+			if _, _, err := compile(path, "llvm"); err != nil {
 				b.Fatal(err)
 			}
 		}

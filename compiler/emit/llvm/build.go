@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/runtime"
 )
 
@@ -34,18 +35,24 @@ func Compiler() string {
 	return "clang"
 }
 
-// Build writes the module and the runtime into dir, compiles the
-// module to an object with clang, links it with the runtime compiled
-// by the C compiler, and returns the path of the binary named name.
+// Build writes the module and the runtime into dir, with the C side of
+// every package that binds C, compiles the module to an object with
+// clang, links it with the runtime and that C compiled by the C
+// compiler, and returns the path of the binary named name.
 // The compilers' output comes back with any error. A debug build
 // compiles the runtime's checks in, as the C backend's does.
-func Build(dir, name string, module []byte, debug bool) (bin string, output []byte, err error) {
+func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
 	files := runtime.Files()
 	files[name+".ll"] = module
 	for file, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
 			return "", nil, err
 		}
+	}
+
+	bound, err := c.BindingSources(dir, bindings)
+	if err != nil {
+		return "", nil, err
 	}
 
 	obj := filepath.Join(dir, name+".ll.o") // never the object of a runtime file, whatever the program is called
@@ -76,7 +83,8 @@ func Build(dir, name string, module []byte, debug bool) (bin string, output []by
 		close(done)
 	}()
 
-	objs, output, err := c.Objects(cc, rtargs, runtime.Paths(dir))
+	rtargs = append(rtargs, "-I", dir) // snello.h, for a package's C
+	objs, output, err := c.Objects(cc, rtargs, append(runtime.Paths(dir), bound...))
 	<-done
 	output = append(compiled, output...)
 	if moduleErr != nil {
@@ -88,7 +96,7 @@ func Build(dir, name string, module []byte, debug bool) (bin string, output []by
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(cc, append(append(append(rtargs, "-o", bin, obj), objs...), "-lm")...).CombinedOutput()
+	linked, err := exec.Command(cc, append(append(append(append(rtargs, "-o", bin, obj), objs...), c.LinkFlags(bindings)...), "-lm")...).CombinedOutput()
 	return bin, append(output, linked...), err
 }
 

@@ -9,12 +9,12 @@ The chapters describe Snello on its own terms and name no other language. This a
 | Go | Snello |
 |---|---|
 | A directory is a package; its files share one package clause | The same |
-| `go.mod` with `module`, `go`, `require path version`, `replace path => dir` | `snello.mod` with `module` and `require path dir`; a requirement names a directory, as Go's `replace` does, and nothing else is in the file |
+| `go.mod` with `module`, `go`, `require path version`, `replace path => dir` | `snello.mod` with `require name dir`, and nothing else: no module name, and a requirement names a directory, as Go's `replace` does |
 | An import path is found in the standard library, then in the module, then through `replace` and the module cache | The standard library, then the module, then the `require` lines; there is no cache and nothing is fetched |
-| A module path's first element needs a dot only for `go get` | Every module path's first element has a dot, so a module path is never a standard package's |
+| `import "example.com/app/shapes"`, the module path in every import | `import "shapes"`: a directory under the root, or a required name; a module has no path |
 | `go build` in a directory, or `go run file.go` for one file | `snello build DIR`, or `snello build FILE` for one file |
 | A method is declared in the package of its receiver's type | The same |
-| Functions implemented in assembly are declared without a body | Only the standard library declares a function without a body; what a package of the program's own may bind to C is decided in stage 5, task 5.5 |
+| Functions implemented in assembly are declared without a body; cgo binds C through `import "C"` and `#cgo LDFLAGS: -lm` comments | A package declares a function without a body and defines it in C beside the package, under the symbol the compiler derives and the header it writes (chapter 15); the main package may not; a system library is `link m` in `snello.mod` |
 
 ## Chapter 3: Basics
 

@@ -234,6 +234,11 @@ func (p *Package) Name() string { return p.name }
 // the program being compiled.
 func (p *Package) Path() string { return p.path }
 
+// Standard reports whether the package is the standard library's,
+// checked with the library's privileges and named in the runtime's
+// symbol space.
+func (p *Package) Standard() bool { return p.std }
+
 // Scope returns the package scope.
 func (p *Package) Scope() *Scope { return p.scope }
 

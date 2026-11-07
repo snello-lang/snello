@@ -33,6 +33,8 @@ type Package struct {
 	File   *token.File
 	Syntax *ast.File
 	Pkg    *types.Package
+	CFiles []string // the .c and .h files of the package's directory, its C side; none for a standard package, whose C side is the runtime
+	Links  []string // the system libraries the package's module links, from its link lines
 }
 
 // An Importer loads the packages a program imports, each once,
@@ -48,9 +50,9 @@ type Importer struct {
 	own     types.Config // a package of the program's own without them
 	info    *types.Info
 	loaded  map[string]*Package
-	loading []loading          // the packages being loaded, outermost first, for naming a cycle
-	modules map[string]*Module // the module of each directory asked about
-	order   []*Package         // as the loads finished: a package after the ones it imports
+	loading []loading        // the packages being loaded, outermost first, for naming a cycle
+	roots   map[string]*root // the modules reached so far, by directory
+	order   []*Package       // as the loads finished: a package after the ones it imports
 }
 
 // A loading is a package whose imports are being loaded: its path, and
@@ -61,10 +63,20 @@ type loading struct {
 	std  bool
 }
 
+// A root is a module the importer has reached, with the prefix the
+// paths of its packages carry: none for the program's module, and for
+// a required module the require names that led to it, dep, or
+// dep/third for a module a dependency requires. The prefix is what
+// keeps the program's util and a dependency's util two packages.
+type root struct {
+	module *Module
+	prefix string
+}
+
 // NewImporter returns an importer that checks the packages it loads
 // into info.
 func NewImporter(info *types.Info) *Importer {
-	imp := &Importer{info: info, loaded: make(map[string]*Package), modules: make(map[string]*Module)}
+	imp := &Importer{info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
 	imp.std = types.Config{Importer: imp, Standard: true}
 	imp.own = types.Config{Importer: imp}
 	return imp
@@ -84,25 +96,13 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 }
 
 // ImportFrom loads the package at importPath for a file in dir: the
-// standard library answers first, then the module dir is in, then that
-// module's require lines. A path none of them has is refused naming
-// the three.
+// standard library answers first, then the directories of the module
+// dir is in, then that module's require lines. A package of a required
+// module is named by the require that reached it, dep/util, so that
+// the program's util and the dependency's are two packages with two
+// symbol prefixes. A path none of the three has is refused naming the
+// three.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
-	if p := imp.loaded[importPath]; p != nil {
-		return p.Pkg, nil
-	}
-
-	for i, l := range imp.loading {
-		if l.path == importPath {
-			cycle := make([]string, 0, len(imp.loading)-i+1)
-			for _, l := range imp.loading[i:] {
-				cycle = append(cycle, l.path)
-			}
-
-			return nil, errors.New("import cycle: " + strings.Join(append(cycle, importPath), " imports "))
-		}
-	}
-
 	if importPath == "builtin" {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
 	}
@@ -113,54 +113,143 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 
 	name := importPath + "/" + path.Base(importPath) + ".snello"
 	if src, err := std.Sources.ReadFile(name); err == nil {
-		return imp.load(importPath, []string{name}, [][]byte{src}, &imp.std)
+		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
+			return imp.load(importPath, []string{name}, [][]byte{src}, nil, nil, &imp.std)
+		})
 	}
 
-	var m *Module
+	var r *root
 	var err error
 	if n := len(imp.loading); n > 0 && imp.loading[n-1].std {
-		m = nil // dir is a directory of the embedded library, not one on disk
-	} else if m, err = imp.moduleFor(dir); err != nil {
+		r = nil // dir is a directory of the embedded library, not one on disk
+	} else if r, err = imp.rootFor(dir); err != nil {
 		return nil, err
 	}
 
-	if m == nil {
-		return nil, errors.New("package " + importPath + " is not in the standard library")
+	if r == nil {
+		return nil, errors.New("package " + importPath + " is not in the standard library, and no snello.mod above the program marks a module")
 	}
 
-	pkgDir, req, ok := m.PackageDir(importPath)
-	if !ok {
-		return nil, errors.New("package " + importPath + " is not in the standard library, in module " + m.Path + " or in its require lines")
+	pkgDir, req, err := r.module.Lookup(importPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if pkgDir == "" {
+		return nil, errors.New("package " + importPath + " is not in the standard library, in the module's directories or in its require lines")
+	}
+
+	canonical := importPath
+	if r.prefix != "" {
+		canonical = r.prefix + "/" + importPath
 	}
 
 	if req != nil {
-		if err := imp.checkRequired(req); err != nil {
+		if err := imp.enter(req, canonical[:len(canonical)-len(importPath)]+req.Name); err != nil {
 			return nil, err
 		}
 	}
 
+	return imp.loadOnce(canonical, false, func() (*types.Package, []*Package, error) {
+		return imp.loadDir(canonical, importPath, pkgDir, r.module.Links)
+	})
+}
+
+// loadOnce answers an import from the packages loaded, refuses a cycle
+// with the cycle written out, and otherwise loads the package named
+// path with load and records it once it compiled and passed the
+// checks load makes, so that a package refused is never answered from
+// the cache.
+func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package, []*Package, error)) (*types.Package, error) {
+	if p := imp.loaded[path]; p != nil {
+		return p.Pkg, nil
+	}
+
+	for i, l := range imp.loading {
+		if l.path == path {
+			cycle := make([]string, 0, len(imp.loading)-i+1)
+			for _, l := range imp.loading[i:] {
+				cycle = append(cycle, l.path)
+			}
+
+			return nil, errors.New("import cycle: " + strings.Join(append(cycle, path), " imports "))
+		}
+	}
+
+	imp.loading = append(imp.loading, loading{path, std})
+	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
+	pkg, entries, err := load()
+	if err != nil {
+		return nil, err
+	}
+
+	imp.loaded[path] = entries[0]
+	imp.order = append(imp.order, entries...)
+	return pkg, nil
+}
+
+// loadDir loads the package of the program's own at pkgDir, imported
+// as importPath and named canonical: its .snello files, its C side
+// when it has one, the libraries its module links, and the refusals of
+// a program, of a bound package with no .c file to define what it
+// declares, and of a file named as the header the compiler writes.
+func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []string) (*types.Package, []*Package, error) {
 	files, err := SourceFiles(pkgDir)
 	if err != nil || len(files) == 0 {
-		return nil, errors.New("no package at " + pkgDir + " for import " + importPath)
+		return nil, nil, errors.New("no package at " + pkgDir + " for import " + importPath)
 	}
 
 	srcs := make([][]byte, len(files))
 	for i, name := range files {
 		if srcs[i], err = os.ReadFile(name); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	pkg, err := imp.load(importPath, files, srcs, &imp.own)
+	cfiles, err := cFiles(pkgDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	hasC := false
+	for _, f := range cfiles {
+		if strings.HasSuffix(f, ".c") {
+			hasC = true
+		}
+
+		if filepath.Base(f) == path.Base(importPath)+".snello.h" {
+			return nil, nil, errors.New("package " + importPath + ": " + filepath.Base(f) + " is the header the compiler writes for the package; rename it")
+		}
+	}
+
+	pkg, entries, err := imp.load(canonical, files, srcs, cfiles, links, &imp.own)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if pkg.Name() == "main" {
-		return nil, errors.New("import " + strconv.Quote(importPath) + " is a program, not an importable package")
+		return nil, nil, errors.New("import " + strconv.Quote(importPath) + " is a program, not an importable package")
 	}
 
-	return pkg, nil
+	if name := bound(entries); name != "" && !hasC {
+		return nil, nil, errors.New("package " + importPath + " declares " + name + " without a body and has no .c file beside it to define it")
+	}
+
+	return pkg, entries, nil
+}
+
+// bound returns the name of a function the package declares without a
+// body, in any of its files, or "" when it has none.
+func bound(entries []*Package) string {
+	for _, p := range entries {
+		for _, d := range p.Syntax.Decls {
+			if d, ok := d.(*ast.FuncDecl); ok && d.Body == nil {
+				return d.Name.Name
+			}
+		}
+	}
+
+	return ""
 }
 
 // Packages returns the packages loaded so far, each after the ones it
@@ -182,71 +271,79 @@ func Paths() []string {
 }
 
 // load parses and checks the files of one package under conf, as the
-// package at importPath, and records them. The files are parsed into
-// one FileSet, so that an error in any of them names its file.
-func (imp *Importer) load(importPath string, names []string, srcs [][]byte, conf *types.Config) (*types.Package, error) {
-	imp.loading = append(imp.loading, loading{importPath, conf.Standard})
-	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
+// package named path, and returns it with one entry per file, for the
+// caller to record. The files are parsed into one FileSet, so that an
+// error in any of them names its file.
+func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
 	fset, syntax, err := parseFiles(names, srcs)
 	var pkg *types.Package
 	if err == nil {
-		pkg, err = conf.CheckFiles(importPath, fset.Files(), syntax, imp.info)
+		pkg, err = conf.CheckFiles(path, fset.Files(), syntax, imp.info)
 	}
 
 	if err != nil {
-		return nil, errors.New("package " + importPath + " does not compile:\n" + err.Error())
+		return nil, nil, errors.New("package " + path + " does not compile:\n" + err.Error())
 	}
 
+	entries := make([]*Package, len(syntax))
 	for i, f := range syntax {
-		p := &Package{importPath, fset.Files()[i], f, pkg}
-		if i == 0 {
-			imp.loaded[importPath] = p
-		}
-
-		imp.order = append(imp.order, p)
+		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links}
 	}
 
-	return pkg, nil
+	return pkg, entries, nil
 }
 
-// moduleFor returns the module governing the files in dir: the one
-// named by the nearest snello.mod in dir or above it, which lets a
-// required module bring its own require lines, or the program's when
-// there is none.
-func (imp *Importer) moduleFor(dir string) (*Module, error) {
-	if dir == "" || dir == "." || imp.Module == nil {
-		return imp.Module, nil
+// rootFor returns the module governing the files in dir, with the
+// prefix its packages are named under: the program's module for a
+// directory under its root, or the required module a directory is
+// under, which enter recorded when the require was followed. A module
+// file deeper in either tree is not looked for (section 7 of the
+// design note). A program with no module has none.
+func (imp *Importer) rootFor(dir string) (*root, error) {
+	if imp.Module == nil {
+		return nil, nil
 	}
 
-	if m, ok := imp.modules[dir]; ok {
-		return m, nil
+	if r, ok := imp.roots[imp.Module.Dir]; !ok || r == nil {
+		imp.roots[imp.Module.Dir] = &root{imp.Module, ""}
 	}
 
-	m, err := FindModule(dir)
+	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	if m == nil || m.Dir == imp.Module.Dir {
-		m = imp.Module
-	}
+	for d := abs; ; d = filepath.Dir(d) {
+		if r, ok := imp.roots[d]; ok {
+			return r, nil
+		}
 
-	imp.modules[dir] = m
-	return m, nil
+		if parent := filepath.Dir(d); parent == d {
+			return imp.roots[imp.Module.Dir], nil // outside every tree reached: the program's own rules
+		}
+	}
 }
 
-// checkRequired reads the module file of a required directory, when it
-// has one of its own, which must name the path the require line gave,
-// as the go.mod of a replacement directory must name its module.
-func (imp *Importer) checkRequired(r *Require) error {
-	m, err := imp.moduleFor(r.Dir)
-	if err != nil {
-		return err
+// enter records the module a require line leads to, under the prefix
+// its packages are named by: the module its directory's snello.mod
+// marks, with its own require lines, or the directory alone when it
+// has none.
+func (imp *Importer) enter(req *Require, prefix string) error {
+	if _, ok := imp.roots[req.Dir]; ok {
+		return nil
 	}
 
-	if m.Dir == r.Dir && m.Path != r.Path {
-		return errors.New(filepath.Join(m.Dir, ModFile) + ": module path is " + m.Path + ", but the directory is required as " + r.Path)
+	m := &Module{Dir: req.Dir}
+	if src, err := os.ReadFile(filepath.Join(req.Dir, ModFile)); err == nil {
+		if m, err = ParseModFile(filepath.Join(req.Dir, ModFile), src); err != nil {
+			return err
+		}
+
+		if err := m.checkShadows(); err != nil {
+			return err
+		}
 	}
 
+	imp.roots[req.Dir] = &root{m, prefix}
 	return nil
 }

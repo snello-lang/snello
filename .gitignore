@@ -3,11 +3,13 @@
 
 # Binaries snello build writes next to the example programs, or inside
 # a program directory built from within; at any depth, the sources,
-# the module files, the expected outputs, the READMEs and the fixture
-# directories stay.
+# a package's C side, the module files, the expected outputs, the
+# READMEs and the fixture directories stay.
 /examples/run/**
 !/examples/run/**/
 !/examples/run/**/*.snello
+!/examples/run/**/*.c
+!/examples/run/**/*.h
 !/examples/run/**/*.out
 !/examples/run/**/snello.mod
 !/examples/run/**/README.md

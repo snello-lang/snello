@@ -4,7 +4,7 @@
 
 package main
 
-import ("fmt"; "example.com/packaged/shapes")
+import ("fmt"; "shapes")
 
 // reports counts the reports made: a global declared in the second
 // file of the main package without a value, read by the first.

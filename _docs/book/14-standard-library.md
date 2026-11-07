@@ -254,3 +254,6 @@ func serve(c net.Conn) {
 
 `SetDeadline` sets the reads' and the writes' together, `SetReadDeadline` and `SetWriteDeadline` one of them, and a `Listener`'s `SetDeadline` bounds `Accept`. The zero `Time`, `var none time.Time`, clears a deadline; one that has passed fails every operation at once until it is set again. `DialTimeout(host, port, timeout)` gives up on a connection not made in time. A write whose deadline passes partway, or that a broken connection or a full disk cuts short, has written the first `e.Written()` bytes, the count Go's `Write` returns beside its error.
 
+## Binding C from a package
+
+A package of your own may reach C as the standard library reaches its runtime, a function declared without a body and defined in C beside the package, with a system library named by one line in the module file. Chapter 15 is the whole of it.
