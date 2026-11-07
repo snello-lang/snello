@@ -140,7 +140,7 @@ jobs:
           key: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
           restore-keys: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-
       - name: Time the benchmarks
-        run: mkdir -p bin && build/run.sh env SNELLO_BENCH=1 SNELLO_BENCH_OUT=bin/bench.md go test ./bench -run TestBenchmarks -v -timeout 25m
+        run: mkdir -p bin && build/run.sh env SNELLO_BENCH=1 SNELLO_BENCH_OUT=/src/bin/bench.md go test ./bench -run TestBenchmarks -v -timeout 25m # an absolute path, since go test runs in bench/; the repository is /src in the image
       - name: Write the table to the summary
         if: always()
         run: |
