@@ -46,5 +46,5 @@ func main() {
 
 	switched := time.Since(start)
 	close(in)
-	fmt.Println("spawn", spawned/100000, "ns/op switch", switched/1000000, "ns/op")
+	fmt.Println("spawn", (spawned / 100000).Nanoseconds(), "ns/op switch", (switched / 1000000).Nanoseconds(), "ns/op")
 }

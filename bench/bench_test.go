@@ -3,14 +3,16 @@
 // license that can be found in the LICENSE file.
 
 // Package bench holds the programs behind the performance table of
-// _docs/design/01-language-design.md, each written in Snello, Go and
-// Rust, and the tests that build and time them. The timing runs only
-// when asked, SNELLO_BENCH=1 go test ./bench -v, since it takes a
-// minute and its numbers are for the design document, not for a
+// _docs/design/01-language-design.md, each written in Snello and in
+// Go, and the tests that build and time them. The timing runs only
+// when asked, SNELLO_BENCH=1 go test ./bench -v, since it takes
+// minutes and its numbers are for the design document, not for a
 // pass or fail; without the variable the tests check that every Snello
 // program here builds and prints what its Go version prints, and that
 // a program's peak memory is what it keeps alive, however much it
-// allocates and frees on the way.
+// allocates and frees on the way. With SNELLO_BENCH_OUT naming a file,
+// the table is written there too, which is how the CI workflow puts it
+// in the job's summary.
 package bench
 
 import (
@@ -34,7 +36,13 @@ import (
 )
 
 // programs are the benchmarks, by the stem of their files.
-var programs = []string{"fib", "tree", "words", "tasks", "memory"}
+var programs = []string{"fib", "tree", "words", "churn", "tasks", "memory"}
+
+// runs is how many times a binary is timed, after a first run that is
+// discarded, since the first run of a new binary pays for the system's
+// check of it, on macOS most of all. The table reports the median of
+// the runs with the least and the most.
+const runs = 10
 
 // timed are the programs that time themselves and print the timings on
 // their last line, which varies from run to run and is not compared.
@@ -42,10 +50,10 @@ var timed = map[string]bool{"tasks": true, "memory": true}
 
 // TestBenchmarks builds every program here through both Snello backends
 // and in Go, checks that they print the same, and when SNELLO_BENCH is
-// set builds the Rust versions too and times them all, the best of
-// three runs each, with the peak memory of each binary and the timings
-// a timed program reports, printing the table the design document
-// records.
+// set times them all, runs times each after a discarded first, with
+// the peak memory of each binary and the timings a timed program
+// reports, printing the table the design document records: the
+// median, the least and the most of each.
 func TestBenchmarks(t *testing.T) {
 	timing := os.Getenv("SNELLO_BENCH") != ""
 	dir := t.TempDir()
@@ -55,11 +63,6 @@ func TestBenchmarks(t *testing.T) {
 			"snello (llvm)": buildSnello(t, dir, name, "llvm"),
 			"snello (c)":    buildSnello(t, dir, name, "c"),
 			"go":            buildGo(t, dir, name),
-		}
-		if timing {
-			if _, err := os.Stat(name + ".rs"); err == nil {
-				bins["rust"] = buildRust(t, dir, name)
-			}
 		}
 
 		outputs := make(map[string]string)
@@ -87,13 +90,22 @@ func TestBenchmarks(t *testing.T) {
 
 		sort.Strings(tools)
 		for _, tool := range tools {
-			r := best(t, bins[tool])
-			rows = append(rows, "| "+name+" | "+tool+" | "+r.took.Round(time.Millisecond).String()+" | "+megabytes(r.peak)+" | "+r.reported+" |")
+			s := measure(t, bins[tool])
+			rows = append(rows, "| "+name+" | "+tool+" | "+ms(s.median)+" | "+ms(s.least)+" | "+ms(s.most)+" | "+megabytes(s.peak)+" | "+s.reported+" |")
 		}
 	}
 
-	if timing {
-		t.Logf("\n| program | tool | best of three | peak memory | reported |\n|---|---|---|---|---|\n%s", strings.Join(rows, "\n"))
+	if !timing {
+		return
+	}
+
+	table := "| program | tool | median | least | most | peak memory | reported |\n|---|---|---|---|---|---|---|\n" + strings.Join(rows, "\n") + "\n"
+	heading := runtime.GOOS + "/" + runtime.GOARCH + ", " + strconv.Itoa(runtime.NumCPU()) + " processors, " + strconv.Itoa(runs) + " runs after a discarded first\n\n"
+	t.Logf("\n%s%s", heading, table)
+	if out := os.Getenv("SNELLO_BENCH_OUT"); out != "" {
+		if err := os.WriteFile(out, []byte(heading+table), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -139,17 +151,118 @@ type measurement struct {
 	reported string
 }
 
-// best runs a binary three times and returns its fastest run.
-func best(t *testing.T, bin string) measurement {
+// A summary is what the table says of a binary: the median, least
+// and most of its runs' times, the median of their peaks, and the
+// timings a timed program reported, each number summarized the same
+// way, "997 (980–1020)".
+type summary struct {
+	median, least, most time.Duration
+	peak                int64
+	reported            string
+}
+
+// measure runs a binary once for nothing, then runs times, and
+// summarizes the runs.
+func measure(t *testing.T, bin string) summary {
 	t.Helper()
-	var fastest measurement
-	for i := 0; i < 3; i++ {
-		if m := run(t, bin); fastest.took == 0 || m.took < fastest.took {
-			fastest = m
+	run(t, bin)
+	ms := make([]measurement, runs)
+	for i := range ms {
+		ms[i] = run(t, bin)
+	}
+
+	tooks := make([]int64, runs)
+	peaks := make([]int64, runs)
+	for i, m := range ms {
+		tooks[i] = int64(m.took)
+		peaks[i] = m.peak
+	}
+
+	median, least, most := stats(tooks)
+	s := summary{median: time.Duration(median), least: time.Duration(least), most: time.Duration(most)}
+	s.peak, _, _ = stats(peaks)
+	if ms[0].reported != "" {
+		s.reported = summarize(ms)
+	}
+
+	return s
+}
+
+// summarize writes the line a timed program printed with each of its
+// numbers replaced by the median of the runs and the least and the
+// most in parentheses; a word that is not a number in every run, or
+// a line whose shape varies, is left as the first run printed it.
+func summarize(ms []measurement) string {
+	words := strings.Fields(ms[0].reported)
+	lines := make([][]string, len(ms))
+	for i, m := range ms {
+		if lines[i] = strings.Fields(m.reported); len(lines[i]) != len(words) {
+			return ms[0].reported
 		}
 	}
 
-	return fastest
+	for i := range words {
+		values := make([]int64, 0, len(ms))
+		for _, fields := range lines {
+			v, err := strconv.ParseInt(fields[i], 10, 64)
+			if err != nil {
+				break
+			}
+
+			values = append(values, v)
+		}
+
+		if len(values) != len(ms) {
+			continue
+		}
+
+		median, least, most := stats(values)
+		words[i] = strconv.FormatInt(median, 10) + " (" + strconv.FormatInt(least, 10) + "–" + strconv.FormatInt(most, 10) + ")"
+	}
+
+	return strings.Join(words, " ")
+}
+
+// TestSummary checks the arithmetic of the table: the median of an
+// even count is the mean of its two middle values, and a timed
+// program's numbers are summarized word by word while its words that
+// are not numbers, and a line whose shape differs, are left alone.
+func TestSummary(t *testing.T) {
+	if median, least, most := stats([]int64{4, 1, 3, 2}); median != 2 || least != 1 || most != 4 {
+		t.Errorf("stats of 4 1 3 2: %d %d %d, want 2 1 4", median, least, most)
+	}
+
+	if median, _, _ := stats([]int64{5, 1, 3}); median != 3 {
+		t.Errorf("stats of 5 1 3: median %d, want 3", median)
+	}
+
+	runs := []measurement{{reported: "spawn 10 ns/op switch 7 ns/op"}, {reported: "spawn 30 ns/op switch 5 ns/op"}, {reported: "spawn 20 ns/op switch 6 ns/op"}}
+	if got, want := summarize(runs), "spawn 20 (10–30) ns/op switch 6 (5–7) ns/op"; got != want {
+		t.Errorf("summarize: %q, want %q", got, want)
+	}
+
+	odd := []measurement{{reported: "a 1"}, {reported: "a 1 b"}}
+	if got := summarize(odd); got != "a 1" {
+		t.Errorf("summarize of lines of two shapes: %q, want the first line", got)
+	}
+}
+
+// stats returns the median, the least and the most of the values.
+func stats(values []int64) (median, least, most int64) {
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	n := len(sorted)
+	median = sorted[n/2]
+	if n%2 == 0 {
+		median = (sorted[n/2-1] + sorted[n/2]) / 2
+	}
+
+	return median, sorted[0], sorted[n-1]
+}
+
+// ms writes a duration in whole milliseconds.
+func ms(d time.Duration) string {
+	return d.Round(time.Millisecond).String()
 }
 
 // run runs a binary once and measures it.
@@ -173,7 +286,7 @@ func run(t *testing.T, bin string) measurement {
 	}
 
 	m := measurement{took: took, peak: peak}
-	if timed[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(bin), "-go"), "-rs")] {
+	if timed[strings.TrimSuffix(filepath.Base(bin), "-go")] {
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		m.reported = lines[len(lines)-1]
 	}
@@ -259,17 +372,6 @@ func buildGo(t *testing.T, dir, name string) string {
 	bin := filepath.Join(dir, name+"-go")
 	if out, err := exec.Command("go", "build", "-o", bin, name+".go").CombinedOutput(); err != nil {
 		t.Fatalf("go build %s: %v\n%s", name, err, out)
-	}
-
-	return bin
-}
-
-// buildRust builds name.rs into dir with optimization on.
-func buildRust(t *testing.T, dir, name string) string {
-	t.Helper()
-	bin := filepath.Join(dir, name+"-rs")
-	if out, err := exec.Command("rustc", "-O", "-o", bin, name+".rs").CombinedOutput(); err != nil {
-		t.Fatalf("rustc %s: %v\n%s", name, err, out)
 	}
 
 	return bin

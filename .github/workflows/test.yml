@@ -66,3 +66,37 @@ jobs:
         env:
           CC: clang # the C backend's compiler, named as every build tool reads it
           CLANG: clang # the LLVM backend's
+
+  bench:
+    # The performance table, measured natively on both Linux
+    # processors and written to the job's summary. A program that
+    # prints the wrong thing fails the job; a time never does, since a
+    # shared runner is too noisy for a time to be a test. The Mac's
+    # numbers are measured by hand, bench/README.md.
+    name: benchmark (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+      - name: Install clang
+        run: command -v clang || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang; }
+      - name: Time the benchmarks
+        run: go test ./bench -run TestBenchmarks -v -timeout 25m
+        env:
+          CC: clang
+          CLANG: clang
+          SNELLO_BENCH: 1
+          SNELLO_BENCH_OUT: ${{ runner.temp }}/bench.md
+      - name: Write the table to the summary
+        if: always()
+        run: |
+          echo "## Benchmarks on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -r "${{ runner.temp }}/bench.md" ]; then cat "${{ runner.temp }}/bench.md" >> "$GITHUB_STEP_SUMMARY"; else echo "no table: the timing did not finish" >> "$GITHUB_STEP_SUMMARY"; fi
