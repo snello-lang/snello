@@ -271,6 +271,13 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 		e.line("return;")
 	default:
 		v := e.valueTo(s.Results[0], e.result)
+		if e.result == types.Unit { // a generic function returning its T, given (): the function is void, and the value is evaluated for its effects
+			e.line("(void)(" + v + ");")
+			e.leaveFunction(s.Pos())
+			e.line("return;")
+			return
+		}
+
 		if len(e.defers) == 0 && e.nothingToDrop() { // asked after the value is written: it may have left temporaries to drop
 			e.line("return " + v + ";")
 			return

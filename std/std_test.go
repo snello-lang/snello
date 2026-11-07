@@ -52,6 +52,7 @@ func TestPackages(t *testing.T) {
 
 				var out bytes.Buffer
 				cmd := exec.Command(bin, "-v")
+				cmd.Dir = p // the package's directory, so that testdata/ is beside it, as snello test std/NAME runs it
 				cmd.Stdout, cmd.Stderr = &out, &out
 				if err := cmd.Run(); err != nil || !strings.Contains(out.String(), "\nok  \t"+p+"\t") {
 					t.Errorf("%s: %v\n%s", p, err, out.String())

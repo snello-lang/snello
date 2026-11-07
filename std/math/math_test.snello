@@ -1,0 +1,31 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package math_test
+
+import ("expect"; "math"; "testing")
+
+func TestSqrt() {
+	expect.Equal(ref math.Sqrt(16.0), ref 4.0)
+	expect.Equal(ref math.Sqrt(0.0), ref 0.0)
+	expect.True(math.Abs(math.Sqrt(2.0)*math.Sqrt(2.0)-2.0) < 1e-12)
+}
+
+func TestAbsMinMax() {
+	expect.Equal(ref math.Abs(-2.5), ref 2.5)
+	expect.Equal(ref math.Abs(2.5), ref 2.5)
+	expect.Equal(ref math.Min(1.0, 2.0), ref 1.0)
+	expect.Equal(ref math.Max(1.0, 2.0), ref 2.0)
+	expect.Equal(ref math.Min(-0.5, 3.0), ref -0.5)
+}
+
+func TestPi() {
+	expect.True(math.Pi > 3.14159)
+	expect.True(math.Pi < 3.1416)
+}
+
+func BenchmarkSqrt() {
+	x := 2.0
+	for testing.Loop() { x = math.Sqrt(x + 1.0) }
+}

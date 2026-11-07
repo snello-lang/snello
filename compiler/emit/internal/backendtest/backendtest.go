@@ -811,6 +811,49 @@ func main() {
 			Out: "true false true false\n2 b true\n1\n",
 		},
 		{
+			Name: "bound-over-named", // a standard trait's method through a bound, on a type declared over a predeclared one: Clone on a named slice and a named map, Eq and Cmp on a named number, which the declared type has as its own
+			Src: `package main
+import "fmt"
+type Names []string
+type Ages map[string]int
+type Weight f64
+func dup<T: Clone>(x ref T) T { return x.Clone() }
+func same<T: Eq>(a ref T, b ref T) bool { return a.Eq(b) }
+func less<T: Ord>(a ref T, b ref T) bool { return a.Cmp(b) == Less }
+func main() {
+	ns := Names{"a".Clone(), "b".Clone()}
+	copy := dup(ref ns)
+	copy.Push("c".Clone())
+	fmt.Println(len(ns), len(copy))
+	ages := Ages{"x": 1}
+	fmt.Println(len(dup(ref ages)))
+	w := Weight(1.5)
+	fmt.Println(same(ref w, ref Weight(1.5)), less(ref w, ref Weight(2.0)))
+}`,
+			Out: "2 3\n1\ntrue true\n",
+		},
+		{
+			Name: "generic-unit-return", // a generic function returning its T, given () as T: the instance is a void function whose return evaluates the value and returns nothing
+			Src: `package main
+import "fmt"
+func pick<T>(r Result<T, string>) T {
+	match r {
+		Ok(v) => return v,
+		Err(e) => panic(ref e),
+	}
+}
+func say() Result<(), string> { fmt.Println("said"); return Ok(()) }
+func main() {
+	pick(say())
+	var n Result<int, string> = Ok(3)
+	fmt.Println(pick(n))
+	var r Result<(), string> = Ok(())
+	pick(r)
+	fmt.Println("done")
+}`,
+			Out: "said\n3\ndone\n",
+		},
+		{
 			Name: "globals", // what a package variable allows from any task: reading, a ref lent to a function, a Copy value copied out, an element indexed, a method taking ref; the table is read by two tasks at once
 			Src: `package main
 import ("fmt"; "strings")

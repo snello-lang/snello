@@ -13,6 +13,14 @@
 #   macos-latest       arm64 Darwin: kqueue
 #
 # x86-64 Darwin is the one pair no runner covers.
+#
+# The Linux jobs run inside the image build/Dockerfile describes, the
+# one the Makefile's Snello targets run in on a developer's machine,
+# through the same build/run.sh, so that a green run there and a green
+# job here mean the same thing; the image is built from the Dockerfile
+# with its layers cached by GitHub, so a run after an unchanged
+# Dockerfile pays nothing for it. The macOS job runs natively, since
+# it covers kqueue.
 name: Tests
 
 # A change to documentation alone, markdown anywhere or anything under
@@ -53,60 +61,88 @@ jobs:
   test:
     name: go test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v7
+      - name: Read the Go version
+        if: runner.os == 'Linux'
+        run: echo "GO_VERSION=$(awk '/^go /{print $2}' go.mod)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+        if: runner.os == 'Linux'
+      - name: Build the image # the one the Makefile runs in, its layers cached under the Dockerfile's hash and the runner's processor
+        if: runner.os == 'Linux'
+        uses: docker/build-push-action@v6
+        with:
+          context: build
+          build-args: GO_VERSION=${{ env.GO_VERSION }}
+          tags: snello-dev
+          load: true
+          cache-from: type=gha,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
+          cache-to: type=gha,mode=max,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
+      - uses: actions/cache@v4 # the Go build cache the image's runs write, so a run compiles only what changed
+        if: runner.os == 'Linux'
+        with:
+          path: ~/.cache/snello
+          key: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-
+      - name: Test in the image
+        if: runner.os == 'Linux'
+        run: build/run.sh go test ./... -timeout 25m
+      - name: Snello tests and checks through the Makefile # NEEDS= since the image is built above
+        if: runner.os == 'Linux'
+        run: make test NEEDS= && make check NEEDS=
       - uses: actions/setup-go@v7
+        if: runner.os == 'macOS'
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
-      - name: Install clang
-        if: runner.os == 'Linux'
-        run: command -v clang || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang; }
-      - name: Show the toolchain
-        run: |
-          clang --version
-          if [ -r /proc/sys/vm/max_map_count ]; then echo "vm.max_map_count $(cat /proc/sys/vm/max_map_count)"; fi
-      - name: Test
+      - name: Test natively
+        if: runner.os == 'macOS'
         run: go test ./... -timeout 25m
         env:
           CC: clang # the C backend's compiler, named as every build tool reads it
           CLANG: clang # the LLVM backend's
 
   bench:
-    # The performance table, measured natively on both Linux
-    # processors and written to the job's summary. A program that
+    # The performance table, measured on both Linux processors inside
+    # the image and written to the job's summary. A program that
     # prints the wrong thing fails the job; a time never does, since a
     # shared runner is too noisy for a time to be a test. The Mac's
-    # numbers are measured by hand, bench/README.md.
+    # numbers are measured natively by hand, bench/README.md.
     name: benchmark (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - name: Read the Go version
+        run: echo "GO_VERSION=$(awk '/^go /{print $2}' go.mod)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image # the one the Makefile runs in, its layers cached under the Dockerfile's hash and the runner's processor
+        uses: docker/build-push-action@v6
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.mod
-      - name: Install clang
-        run: command -v clang || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang; }
+          context: build
+          build-args: GO_VERSION=${{ env.GO_VERSION }}
+          tags: snello-dev
+          load: true
+          cache-from: type=gha,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
+          cache-to: type=gha,mode=max,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/snello
+          key: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: snello-go-${{ runner.arch }}-${{ hashFiles('go.mod') }}-
       - name: Time the benchmarks
-        run: go test ./bench -run TestBenchmarks -v -timeout 25m
-        env:
-          CC: clang
-          CLANG: clang
-          SNELLO_BENCH: 1
-          SNELLO_BENCH_OUT: ${{ runner.temp }}/bench.md
+        run: mkdir -p bin && build/run.sh env SNELLO_BENCH=1 SNELLO_BENCH_OUT=/src/bin/bench.md go test ./bench -run TestBenchmarks -v -timeout 25m # an absolute path, since go test runs in bench/; the repository is /src in the image
       - name: Write the table to the summary
         if: always()
         run: |
           echo "## Benchmarks on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
-          if [ -r "${{ runner.temp }}/bench.md" ]; then cat "${{ runner.temp }}/bench.md" >> "$GITHUB_STEP_SUMMARY"; else echo "no table: the timing did not finish" >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -r bin/bench.md ]; then cat bin/bench.md >> "$GITHUB_STEP_SUMMARY"; else echo "no table: the timing did not finish" >> "$GITHUB_STEP_SUMMARY"; fi

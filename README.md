@@ -79,8 +79,8 @@ Build the compiler from source with Go. Building a Snello program needs `clang` 
 ```
 git clone https://github.com/snello-lang/snello
 cd snello
-go build -o snello ./cmd/snello
-./snello build examples/run/hello.snello
+make build          # the compiler into bin/snello, built inside the Linux image; NATIVE=1 make build uses the Go on your machine
+bin/snello build examples/run/hello.snello
 ./hello
 ```
 
@@ -100,7 +100,7 @@ go build -o snello ./cmd/snello
 
 ## Contributing
 
-Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request; the tests build and run every example through both backends, so they need `clang` and `cc` too, and take a few minutes. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
+Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request, or `build/run.sh go test ./...` to run it inside the Linux image CI uses; the tests build and run every example through both backends, so they need `clang` and `cc` too, and take a few minutes. The Makefile runs Snello: `make test` runs the library's and the examples' own tests through `snello test`, `make test-std` and `make test-examples` each half, and `make check` runs `snello check` over the examples, each inside the image unless `NATIVE=1` is given. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
 
 ## License
 

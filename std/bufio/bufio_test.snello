@@ -1,0 +1,66 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package bufio_test
+
+import ("bufio"; "expect"; "os"; "testing")
+
+func TestWriter() {
+	dir := testing.TempDir()
+	path := dir.Join("out.txt")
+	f := expect.IsOk(os.Create(ref path))
+	w := bufio.NewWriterSize(mut f, 8)
+	expect.Equal(ref w.Available(), ref 8)
+	expect.Equal(ref expect.IsOk(w.WriteString("abc")), ref 3)
+	expect.Equal(ref w.Buffered(), ref 3)
+	expect.IsOk(w.WriteByte(byte(100)))
+	expect.Equal(ref expect.IsOk(w.Write(ref []byte{101, 102, 103, 104, 105, 106})), ref 6)
+	expect.IsOk(w.Flush())
+	expect.Equal(ref w.Buffered(), ref 0)
+	expect.IsOk(w.Get().WriteString("!"))
+	expect.IsOk(w.Flush())
+	expect.IsOk(f.Close())
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "abcdefghij!")
+}
+
+func TestReader() {
+	dir := testing.TempDir()
+	path := dir.Join("in.txt")
+	expect.IsOk(os.WriteString(ref path, "one\ntwo\nthree"))
+	f := expect.IsOk(os.Open(ref path))
+	r := bufio.NewReader(mut f)
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadByte())), ref byte(111))
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "ne\n")
+	buf := make([]byte, 3)
+	expect.Equal(ref expect.IsOk(r.Read(mut buf)), ref 3)
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "\n")
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "three")
+	expect.IsNone(expect.IsOk(r.ReadString(byte(10))))
+	expect.IsNone(expect.IsOk(r.ReadByte()))
+	expect.Equal(r.Get().Name(), ref path)
+}
+
+func TestScanner() {
+	dir := testing.TempDir()
+	path := dir.Join("lines.txt")
+	expect.IsOk(os.WriteString(ref path, "alpha\nbeta\n\ngamma"))
+	f := expect.IsOk(os.Open(ref path))
+	s := bufio.NewScanner(mut f)
+	s.Buffer(bufio.MaxScanTokenSize)
+	lines := []string{}
+	for s.Scan() {
+		lines.Push(s.Text())
+	}
+	expect.EqualSlice(ref lines, ref []string{"alpha".Clone(), "beta".Clone(), "".Clone(), "gamma".Clone()})
+	expect.True(s.Err().IsNone())
+	expect.Equal(ref len(s.Bytes()), ref 0)
+}
+
+func BenchmarkWriteString() {
+	dir := testing.TempDir()
+	f := expect.IsOk(os.Create(ref dir.Join("bench.txt")))
+	w := bufio.NewWriter(mut f)
+	testing.ResetTimer()
+	for testing.Loop() { _ = w.WriteString("line\n") }
+}

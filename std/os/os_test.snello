@@ -1,0 +1,54 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package os_test
+
+import ("expect"; "io"; "os"; "testing")
+
+func TestArgsCoresStreams() {
+	expect.True(len(os.Args) > 0)
+	expect.True(os.Cores() > 0)
+	expect.Equal(os.Stdin().Name(), "/dev/stdin")
+	expect.Equal(os.Stdout().Name(), "/dev/stdout")
+	expect.Equal(os.Stderr().Name(), "/dev/stderr")
+}
+
+func TestFiles() {
+	dir := testing.TempDir()
+	path := dir.Join("notes.txt")
+	f := expect.IsOk(os.Create(ref path))
+	expect.Equal(f.Name(), ref path)
+	expect.Equal(ref expect.IsOk(f.WriteString("hello ")), ref 6)
+	expect.Equal(ref expect.IsOk(f.Write(ref []byte{119, 111, 114, 108, 100})), ref 5)
+	expect.IsOk(f.Sync())
+	expect.IsOk(f.Close())
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "hello world")
+	r := expect.IsOk(os.Open(ref path))
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(r.Read(mut buf)), ref 5)
+	expect.Equal(ref buf[0], ref byte(104))
+	expect.IsOk(os.WriteString(ref path, "replaced"))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "replaced")
+	expect.IsOk(os.Remove(ref path))
+	e := expect.IsErr(os.Open(ref path))
+	expect.True(e.Kind() == io.NotExist)
+	expect.Contains(ref e.Error(), "no such file")
+}
+
+func TestDirs() {
+	dir := testing.TempDir()
+	inner := expect.IsOk(os.MkdirTemp(dir.Path(), "work"))
+	expect.HasPrefix(ref inner, dir.Path())
+	expect.IsOk(os.WriteString(ref (inner.Clone() + "/a.txt"), "a"))
+	expect.IsOk(os.RemoveAll(ref inner))
+	expect.IsErr(os.Open(ref (inner.Clone() + "/a.txt")))
+}
+
+func BenchmarkReadToString() {
+	dir := testing.TempDir()
+	path := dir.Join("bench.txt")
+	expect.IsOk(os.WriteString(ref path, "some text to read back"))
+	testing.ResetTimer()
+	for testing.Loop() { _ = os.ReadToString(ref path) }
+}

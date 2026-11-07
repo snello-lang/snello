@@ -90,6 +90,7 @@ type Load struct {
 	Tests    string
 	DropMain bool
 	Main     string
+	StdDir   string // the standard library's sources read from a directory, as Importer.StdDir
 }
 
 // LoadProgramFrom loads a program from its sources, as LoadProgram
@@ -101,6 +102,7 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 
 	imp := NewImporter(info)
 	imp.Tests = l.Tests
+	imp.StdDir = l.StdDir
 	var err error
 	if imp.Module, err = FindModule(filepath.Dir(l.Names[0])); err != nil {
 		return nil, nil, err
@@ -213,10 +215,12 @@ func filesOf(dir string, want func(string) bool) ([]string, error) {
 	return files, nil
 }
 
-// checkTestImports refuses an import of testing or expect from a file
-// that is not a test file, so that nothing of a test reaches a
-// program's binary; the standard library's own files are exempt, since
-// expect is built on testing.
+// checkTestImports refuses an import of testing or expect, or of an
+// external test package, NAME_test, from a file that is not a test
+// file, so that nothing of a test reaches a program's binary; the
+// standard library's own files are exempt, since expect is built on
+// testing. The generated runner is a test file by its name, and so the
+// one importer of a test package.
 func checkTestImports(names []string, syntax []*ast.File, standard bool) error {
 	if standard {
 		return nil
@@ -228,7 +232,7 @@ func checkTestImports(names []string, syntax []*ast.File, standard bool) error {
 		}
 
 		for _, spec := range f.Imports {
-			if path, err := strconv.Unquote(spec.Path.Value); err == nil && (path == "testing" || path == "expect") {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && (path == "testing" || path == "expect" || strings.HasSuffix(path, "_test")) {
 				return errors.New(names[i] + ": package " + path + " is imported by test files alone")
 			}
 		}

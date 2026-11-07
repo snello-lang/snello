@@ -1,0 +1,135 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package builtin_test
+
+import ("expect"; "testing")
+
+func TestSlices() {
+	xs := []int{3, 1, 2}
+	xs.Push(4)
+	expect.Equal(ref expect.IsSome(xs.Pop()), ref 4)
+	xs.Insert(0, 9)
+	expect.EqualSlice(ref xs, ref []int{9, 3, 1, 2})
+	expect.Equal(ref xs.Remove(0), ref 9)
+	expect.True(xs.RemoveValue(ref 1))
+	expect.False(xs.RemoveValue(ref 1))
+	expect.True(xs.Contains(ref 3))
+	xs.Swap(0, 1)
+	expect.EqualSlice(ref xs, ref []int{2, 3})
+	xs.Push(1)
+	xs.Sort()
+	expect.EqualSlice(ref xs, ref []int{1, 2, 3})
+	xs.Reverse()
+	expect.EqualSlice(ref xs, ref []int{3, 2, 1})
+	xs.SortBy(func(a ref int, b ref int) bool { return *a < *b })
+	expect.EqualSlice(ref xs, ref []int{1, 2, 3})
+	ys := xs.Clone()
+	xs.Clear()
+	expect.Empty(ref xs)
+	expect.Len(ref ys, 3)
+	expect.IsNone(xs.Pop())
+}
+
+func TestMaps() {
+	m := map[string]int{}
+	m.Insert("a".Clone(), 1)
+	m.Insert("b".Clone(), 2)
+	expect.True(m.Contains("a"))
+	expect.False(m.Contains("z"))
+	if v := m.Get("b") { expect.Equal(v, ref 2) } else { expect.Fail("b is missing") }
+	if v := m.GetMut("b") { *v = 20 }
+	expect.Equal(ref expect.IsSome(m.Remove("b")), ref 20)
+	expect.IsNone(m.Remove("b"))
+	n := m.Clone()
+	expect.Equal(ref len(n), ref 1)
+	expect.True(n.Get("z").IsNone())
+}
+
+func TestChannels() {
+	ch := make(chan int, 2)
+	c2 := ch.Clone()
+	c2 <- 7
+	expect.Equal(ref (<-ch ?? 0), ref 7)
+	var send chan<- int = ch.Clone()
+	s2 := send.Clone()
+	s2 <- 8
+	var recv <-chan int = ch.Clone()
+	r2 := recv.Clone()
+	expect.Equal(ref (<-r2 ?? 0), ref 8)
+}
+
+func TestStrings() {
+	s := "  Hello, World  "
+	expect.Equal(ref s.Len(), ref 16)
+	expect.Equal(ref s.Trim(), "Hello, World")
+	expect.Equal(ref s.ToUpper(), "  HELLO, WORLD  ")
+	expect.Equal(ref s.ToLower(), "  hello, world  ")
+	expect.True(s.HasPrefix("  H"))
+	expect.True(s.HasSuffix("d  "))
+	expect.True(s.Contains("lo, W"))
+	expect.Equal(ref len("a b  c".Fields()), ref 3)
+	expect.Equal(ref len("l1\nl2\nl3".Lines()), ref 3)
+	expect.Equal(ref len("a,b,,c".Split(",")), ref 4)
+	if (k, v) := "key=value".SplitOnce("=") { expect.Equal(k, "key"); expect.Equal(v, "value") } else { expect.Fail("no =") }
+	expect.True("k".SplitOnce("=").IsNone())
+	expect.True("abc".Eq("abc"))
+	expect.True("abc".Cmp("abd") == Less)
+	expect.True("abc".Hash() == "abc".Clone().Hash())
+	expect.Equal(ref "abc".Clone(), "abc")
+}
+
+func TestBytes() {
+	d := byte(55)
+	sp := byte(32)
+	a := byte(97)
+	u := byte(81)
+	expect.True(d.IsDigit())
+	expect.False(a.IsDigit())
+	expect.True(sp.IsSpace())
+	expect.True(a.IsLetter())
+	expect.True(a.IsLower())
+	expect.True(u.IsUpper())
+	expect.False(u.IsLower())
+}
+
+func TestOptions() {
+	var some int? = Some(3)
+	var none int? = None
+	expect.True(some.IsSome())
+	expect.True(none.IsNone())
+	expect.Equal(ref some.Expect("three"), ref 3)
+	expect.Equal(ref some.Unwrap(), ref 3)
+	expect.Equal(ref none.UnwrapOr(9), ref 9)
+	expect.Equal(ref expect.IsSome(some.Map(func(v int) int { return v * 2 })), ref 6)
+	expect.IsNone(none.Map(func(v int) int { return v * 2 }))
+	expect.PanicsWith(func() { var n int? = None; n.Expect("needed") }, "needed")
+}
+
+func TestResults() {
+	var ok Result<int, string> = Ok(4)
+	var bad Result<int, string> = Err("bad".Clone())
+	expect.True(ok.IsOk())
+	expect.True(bad.IsErr())
+	expect.Equal(ref ok.Expect("four"), ref 4) // a result holding a string moves into Expect, so each call below gets its own
+	var ok2 Result<int, string> = Ok(4)
+	expect.Equal(ref ok2.Unwrap(), ref 4)
+	expect.Equal(ref bad.UnwrapOr(0), ref 0)
+	var ok3 Result<int, string> = Ok(4)
+	expect.Equal(ref ok3.Map(func(v int) int { return v + 1 }).Expect("mapped"), ref 5)
+	var bad2 Result<int, string> = Err("bad".Clone())
+	match bad2.MapErr(func(e string) int { return e.Len() }) {
+		Err(n) => expect.Equal(ref n, ref 3),
+		Ok(_) => expect.Fail("an Err mapped to Ok"),
+	}
+	expect.Panics(func() { var r Result<int, string> = Err("no".Clone()); r.Unwrap() })
+}
+
+func BenchmarkPushPop() {
+	xs := []int{}
+	for testing.Loop() {
+		xs.Push(1)
+		_ = xs.Pop()
+	}
+}

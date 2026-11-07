@@ -1,0 +1,44 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package heap_test
+
+import ("expect"; "heap"; "testing")
+
+func TestPushPop() {
+	h := heap.New<int>()
+	expect.True(h.IsEmpty())
+	h.Push(5)
+	h.Push(1)
+	h.Push(3)
+	expect.Equal(ref h.Len(), ref 3)
+	expect.Equal(ref expect.IsSome(h.Pop()), ref 1)
+	expect.Equal(ref expect.IsSome(h.Pop()), ref 3)
+	expect.Equal(ref expect.IsSome(h.Pop()), ref 5)
+	expect.IsNone(h.Pop())
+}
+
+func TestFromPeekClear() {
+	h := heap.From([]int{4, 2, 9})
+	expect.Equal(ref h.Len(), ref 3)
+	if v := h.Peek() { expect.Equal(v, ref 2) } else { expect.Fail("the heap has no top") }
+	h.Clear()
+	expect.True(h.IsEmpty())
+	expect.True(h.Peek().IsNone())
+}
+
+func TestStrings() {
+	h := heap.From([]string{"pear".Clone(), "apple".Clone()})
+	expect.Equal(ref expect.IsSome(h.Pop()), "apple")
+}
+
+func BenchmarkPushPop() {
+	h := heap.New<int>()
+	for testing.Loop() {
+		h.Push(7)
+		h.Push(3)
+		_ = h.Pop()
+		_ = h.Pop()
+	}
+}

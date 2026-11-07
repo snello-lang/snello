@@ -1,0 +1,40 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package arena_test
+
+import ("arena"; "expect"; "fmt"; "testing")
+
+func TestInsertGetRemove() {
+	a := arena.New<string>()
+	i := a.Insert("one".Clone())
+	j := a.Insert("two".Clone())
+	expect.Equal(ref a.Len(), ref 2)
+	if v := a.Get(i) { expect.Equal(v, "one") } else { expect.Fail("one is missing") }
+	if v := a.Get(j) { expect.Equal(v, "two") } else { expect.Fail("two is missing") }
+	expect.True(i != j)
+	expect.Equal(ref expect.IsSome(a.Remove(i)), "one")
+	expect.True(a.Get(i).IsNone())
+	expect.Equal(ref a.Len(), ref 1)
+	expect.IsNone(a.Remove(i))
+}
+
+func TestGetMut() {
+	a := arena.New<int>()
+	i := a.Insert(1)
+	if v := a.GetMut(i) {
+		*v += 41
+	}
+	if v := a.Get(i) { expect.Equal(v, ref 42) } else { expect.Fail("the slot is empty") }
+	expect.Equal(ref fmt.Sprint(a), "arena[42]")
+	expect.Equal(ref a.String(), "arena[42]")
+}
+
+func BenchmarkInsertRemove() {
+	a := arena.New<int>()
+	for testing.Loop() {
+		i := a.Insert(1)
+		_ = a.Remove(i)
+	}
+}

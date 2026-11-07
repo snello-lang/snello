@@ -6,7 +6,9 @@ This chapter is for two readers: a developer writing the tests of a program or a
 
 ## Test files
 
-A package's tests live beside it in files named `NAME_test.snello`. A test file carries the package's own package clause and sees everything the package declares, exported or not; a test file with another package name is refused, `found packages shapes (shapes.snello) and other (shapes_test.snello)`. A test file is part of its package only when the package is tested: `snello build`, `snello check` and `snello emit` never read one, and an import of the package does not either, so a test can be as large and as slow as it likes without costing the program.
+A package's tests live beside it in files named `NAME_test.snello`. A test file is part of its package only when the package is tested: `snello build`, `snello check` and `snello emit` never read one, and an import of the package does not either, so a test can be as large and as slow as it likes without costing the program.
+
+A test file carries the package's own clause, `package shapes`, and sees everything in it; or the clause `package shapes_test`, which makes the directory's test files a package of their own that imports `shapes` as its users do and sees its exported names alone, the form the standard library's own tests take, since `expect` and `testing` import `sync`, `fmt`, `os` and `time` and a test inside one of those would import itself. A directory's test files are all of one form, and a `main` package's tests are inside it, since `main` cannot be imported. The suffix `_test` on an import path names such a package and nothing else, and only a test file may import one, as only a test file may import `expect` and `testing`.
 
 Two packages exist for tests: `expect` asserts and `testing` runs. Both may be imported from a test file alone, and an import from any other file is refused, `package testing is imported by test files alone`. The two rules together are the guarantee of this chapter: nothing of a test reaches a program's binary, neither the test functions, nor the two packages, nor the runner the compiler generates. The compiler's suite checks it by building a program beside its tests and searching the binary for a symbol of either package.
 
@@ -201,7 +203,8 @@ A program tests its `main` package the same way: `main_test.snello` beside `main
 - **Memory of a failed test.** The values with `Drop` methods are dropped when a test fails; the plain memory of the frames the panic abandoned, a slice of numbers or a message a `Sprintf` built, is not freed until the process ends, since a guard per owned value would cost every program for the sake of a failed test. A test build is therefore a release build, and the debug build's report of leaks is for programs.
 - **A panic inside C** a package binds is not caught; C does not unwind.
 - **An assertion on a task the test spawned** is a plain panic, since the mark that turns a failure into a report is the test's own task's: it prints `panic:` with the message and ends the process. Send what a spawned task finds back over a channel and assert on the test's task.
-- **No external test packages**, no caching of results, no coverage, no examples run as tests: each is a task when a program asks for it (`../design/09-testing.md`, section 6).
+- **No caching of results**, no coverage, no examples run as tests: each is a task when a program asks for it (`../design/09-testing.md`, section 6).
+- **An assertion takes an option or a result by value**: `expect.IsSome(h.Peek())` on a `ref T?` is refused, since the value cannot move out of the borrow; bind it instead, `if v := h.Peek() { expect.Equal(v, ref 2) }`.
 - **No race detector**, because a data race is a compile error in Snello: a value reaches another task by a move, inside an `Arc`, or through a channel, and a `mut` of a shared value comes only through a lock that owns it (chapter 10). A package variable is under the same rule, read by every task and changed only through what it holds.
 
 ## For maintainers: how it is built
@@ -219,4 +222,9 @@ The forms of the output are pinned by `compiler/testrun`'s tests, `TestRun` over
 
 ## For maintainers: the library's own tests
 
-The standard library tests itself in Snello: a `_test.snello` beside a package's file, `std/strings/strings_test.snello` beside `strings.snello`, run by `go test ./std` through the runner above, under the library's privileges, through both backends with `-v`. To add a package's tests, add the file; `std/std_test.go` finds every test file in the embedded tree and fails when none exists. The `testing` and `expect` packages themselves are tested by the runner's Go tests, since they cannot assert on their own assertions. Task 9.3 gives every other package its file.
+The standard library tests itself in Snello: a `_test.snello` beside every package's file, `std/strings/strings_test.snello` beside `strings.snello`, each an external test package, `package strings_test`, with every exported name called and at least one benchmark. Two commands run them:
+
+- `snello test std/NAME`, in a checkout of the compiler, runs one package's tests from the directory, through either backend, with the library's privileges; the whole library is read from the checkout then, so the sources as edited are what run, not the copy embedded in the compiler running them.
+- `make test` runs every package that way through both backends and the example packages with tests, `make test-std` and `make test-examples` each half, inside the Linux image `build/Dockerfile` describes, so that a green run on any machine means the same as CI's; `NATIVE=1 make test` runs them on the host. `make build`, `make check` and `make shell` are the other targets: the Makefile runs Snello, and the Go suite stays `go test ./...`, which CI runs inside the same image through `build/run.sh`.
+
+`go test ./std` is CI's entry to the same tests, a Go file that finds every test file in the embedded library and runs it through the runner above. To add a package's tests, add the file. The `testing` and `expect` packages themselves are tested by the runner's Go tests, since they cannot assert on their own assertions; `os.Exit` is the one exported name no test calls, since it ends the process.

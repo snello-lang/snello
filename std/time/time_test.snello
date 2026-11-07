@@ -1,0 +1,63 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package time_test
+
+import ("expect"; "testing"; "time")
+
+func TestDurations() {
+	d := time.Duration(1500) * time.Millisecond
+	expect.Equal(ref d.String(), "1.5s")
+	expect.Equal(ref d.Milliseconds(), ref i64(1500))
+	expect.Equal(ref d.Microseconds(), ref i64(1500000))
+	expect.Equal(ref d.Nanoseconds(), ref i64(1500000000))
+	expect.Equal(ref d.Seconds(), ref 1.5)
+	expect.Equal(ref (time.Duration(90) * time.Minute).Hours(), ref 1.5)
+	expect.Equal(ref (time.Duration(90) * time.Second).Minutes(), ref 1.5)
+	expect.Equal(ref d.Truncate(time.Second), ref time.Second)
+	expect.Equal(ref d.Round(time.Second), ref time.Duration(2)*time.Second)
+	expect.Equal(ref (time.Duration(-3) * time.Second).Abs(), ref time.Duration(3)*time.Second)
+	expect.Equal(ref time.Microsecond.String(), "1µs")
+	expect.Equal(ref time.Nanosecond.String(), "1ns")
+	expect.Equal(ref (time.Duration(2) * time.Hour).String(), "2h0m0s")
+}
+
+func TestTimes() {
+	t := time.Unix(1700000000, 500)
+	u := t.Add(time.Duration(2) * time.Second)
+	expect.True(t.Before(u))
+	expect.True(u.After(t))
+	expect.False(t.After(u))
+	expect.Equal(ref u.Sub(t), ref time.Duration(2)*time.Second)
+	expect.Equal(ref t.Unix(), ref i64(1700000000))
+	expect.Equal(ref t.UnixNano(), ref i64(1700000000000000500))
+	expect.True(t.Cmp(ref u) == Less)
+	expect.True(t.Eq(ref time.Unix(1700000000, 500)))
+	expect.True(t == time.Unix(1700000000, 500))
+	var zero time.Time
+	expect.True(zero.IsZero())
+	expect.False(t.IsZero())
+	expect.True(t.String().Len() > 0)
+}
+
+func TestClock() {
+	start := time.Now()
+	time.Sleep(time.Duration(5) * time.Millisecond)
+	expect.True(time.Since(start) >= time.Duration(5)*time.Millisecond)
+	expect.True(time.Now().After(start))
+}
+
+func TestAfterTick() {
+	fired := <-time.After(time.Duration(2) * time.Millisecond)
+	expect.True(fired.IsSome())
+	ticks := time.Tick(time.Duration(1) * time.Millisecond)
+	first := <-ticks
+	second := <-ticks
+	expect.True(first.IsSome())
+	expect.True(second.IsSome())
+}
+
+func BenchmarkNow() {
+	for testing.Loop() { _ = time.Now() }
+}

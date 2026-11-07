@@ -759,8 +759,8 @@ func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv ty
 	}
 
 	named, ok := lower.ValueType(recv).(*types.Named)
-	if !ok {
-		return e.methodCall(x, sel) // a predeclared type's own method, Cmp on an int or Clone on a string
+	if !ok || named.Method(sel.Sel.Name) == nil && isPredeclaredKind(named.Underlying()) {
+		return e.methodCall(x, sel) // a predeclared type's own method, Cmp on an int or Clone on a string, which a type declared over one has as its own
 	}
 
 	name, sig := e.methodNameOf(sel.Sel, named, sel.Sel.Name, x.Pos())
@@ -947,4 +947,18 @@ func fieldType(st *types.Struct, name string) types.Type {
 	}
 
 	return nil
+}
+
+// isPredeclaredKind reports whether t is a predeclared kind, a number,
+// bool, string, slice, map, array, tuple or option, whose standard
+// methods a type declared over it has as its own, time.Duration's Eq
+// and Cmp or a named slice's Clone; a struct or an enum has what it
+// lists.
+func isPredeclaredKind(t types.Type) bool {
+	switch t.(type) {
+	case *types.Struct, *types.Enum:
+		return false
+	}
+
+	return true
 }

@@ -45,12 +45,13 @@ const Runner = "snello_test.snello"
 // where the package is, whether it is a main package, its source and
 // test files, and the names of its tests in the order they run.
 type Plan struct {
-	Dir   string   // the package's directory, or "" for a standard package
-	Path  string   // the import path the generated main imports it by; "" for a main package
-	Main  bool     // a main package: the generated file joins it
-	Files []string // the package's sources, on disk or in the embedded library
-	Tests []string // the test files
-	Names []string // the tests, by name, sorted
+	Dir    string   // the package's directory, or "" for a standard package
+	Path   string   // the import path the generated main imports it by; "" for a main package
+	Main   bool     // a main package: the generated file joins it
+	Files  []string // the package's sources, on disk or in the embedded library
+	Tests  []string // the test files
+	Names  []string // the tests, by name, sorted
+	StdDir string   // for a standard package read from a checkout, the directory holding the library's sources, std/
 }
 
 // PlanDir finds the tests of the package in dir: its test files, the
@@ -73,7 +74,8 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	p := &Plan{Dir: dir, Files: files, Tests: tests}
-	if p.Names, err = testNames(tests, nil); err != nil {
+	var pkg string
+	if p.Names, pkg, err = testNames(tests, nil); err != nil {
 		return nil, err
 	}
 
@@ -93,6 +95,10 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	if f.Name.Name == "main" {
+		if pkg != "main" {
+			return nil, errors.New(dir + ": the tests of a main package are inside it, package main, since main cannot be imported; " + pkg + " cannot be")
+		}
+
 		p.Main = true
 		return p, nil
 	}
@@ -117,6 +123,9 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	p.Path = filepath.ToSlash(rel)
+	if external(pkg, path.Base(p.Path)) {
+		p.Path += "_test"
+	}
 	return p, nil
 }
 
@@ -150,8 +159,85 @@ func PlanStd(importPath string) (*Plan, error) {
 		return nil, errors.New(importPath + ": no _test.snello files")
 	}
 
-	p.Names, err = testNames(p.Tests, srcs)
-	return p, err
+	var pkg string
+	if p.Names, pkg, err = testNames(p.Tests, srcs); err != nil {
+		return nil, err
+	}
+
+	if external(pkg, importPath) {
+		p.Path += "_test"
+	}
+
+	return p, nil
+}
+
+// PlanStdDir finds the tests of the standard package in dir, a
+// directory std/NAME of a checkout of the compiler, read from the
+// directory so that the tests run against the sources as edited; the
+// whole library is read from the checkout then, every package under
+// std/. A directory that is not a standard package's is refused.
+func PlanStdDir(dir string) (*Plan, error) {
+	if !IsStdDir(dir) {
+		return nil, errors.New(dir + " is not a standard package of the library: snello test std/NAME runs one in a checkout of the compiler, whose std/ holds every package, with the compiler built from that checkout")
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	tests, err := importer.TestFiles(abs)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(tests) == 0 {
+		return nil, errors.New(dir + ": no _test.snello files")
+	}
+
+	name := filepath.Base(abs)
+	p := &Plan{Path: name, Files: []string{filepath.Join(abs, name+".snello")}, Tests: tests, StdDir: filepath.Dir(abs)}
+	var pkg string
+	if p.Names, pkg, err = testNames(tests, nil); err != nil {
+		return nil, err
+	}
+
+	if external(pkg, name) {
+		p.Path += "_test"
+	}
+
+	return p, nil
+}
+
+// IsStdDir reports whether dir is a standard package's directory in a
+// checkout of the compiler: std/NAME, holding NAME.snello, for a NAME
+// the embedded library has, under a std/ that holds every package of
+// the embedded library, so that a program's own directory named std
+// is never mistaken for the checkout and planned with the library's
+// privileges.
+func IsStdDir(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+
+	name := filepath.Base(abs)
+	stdDir := filepath.Dir(abs)
+	if filepath.Base(stdDir) != "std" {
+		return false
+	}
+
+	if _, err := std.Sources.ReadFile(name + "/" + name + ".snello"); err != nil {
+		return false
+	}
+
+	for _, p := range importer.Paths() { // the whole library, as the embedded copy lists it
+		if _, err := os.Stat(filepath.Join(stdDir, p, path.Base(p)+".snello")); err != nil {
+			return false
+		}
+	}
+
+	return true
 }
 
 // testNames parses the test files, read from disk when srcs is nil,
@@ -159,26 +245,33 @@ func PlanStd(importPath string) (*Plan, error) {
 // a capital with no receiver, sorted, as the tests run. One with
 // parameters, results or type parameters is refused, so that a test is
 // never silently not run.
-func testNames(tests []string, srcs [][]byte) ([]string, error) {
+func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 	var names []string
+	pkg := ""
 	for i, name := range tests {
 		var src []byte
 		var err error
 		if srcs != nil {
 			src = srcs[i]
 		} else if src, err = os.ReadFile(name); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		f, _, err := parser.ParseFile(name, src)
 		if err != nil {
-			return nil, err
+			return nil, "", err
+		}
+
+		if pkg == "" {
+			pkg = f.Name.Name
+		} else if f.Name.Name != pkg {
+			return nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + "_test package")
 		}
 
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && isTest(fn.Name.Name) {
 				if len(fn.Params) != 0 || len(fn.Results) != 0 || len(fn.TypeParams) != 0 {
-					return nil, errors.New(fn.Name.Name + " has the wrong signature: want func()")
+					return nil, "", errors.New(fn.Name.Name + " has the wrong signature: want func()")
 				}
 
 				names = append(names, fn.Name.Name)
@@ -187,7 +280,16 @@ func testNames(tests []string, srcs [][]byte) ([]string, error) {
 	}
 
 	sort.Strings(names)
-	return names, nil
+	return names, pkg, nil
+}
+
+// external says whether the test files, of package pkg, are the
+// external test package of the package named base, pkg base_test,
+// which imports base as its users do: the form for a package the test
+// harness itself depends on, and for testing a package through its
+// exported names alone.
+func external(pkg, base string) bool {
+	return pkg == base+"_test"
 }
 
 // isTest reports whether name is a test's, Test and then a capital, or
@@ -215,7 +317,7 @@ func (p *Plan) Source() []byte {
 		prefix = "pkg."
 	}
 
-	label := p.Path
+	label := strings.TrimSuffix(p.Path, "_test") // the package tested, whichever form its tests take
 	if p.Main {
 		label = path.Base(filepath.ToSlash(p.Dir))
 	}
@@ -241,7 +343,7 @@ func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
 	}
 
 	info := &types.Info{}
-	load := importer.Load{Tests: p.Path}
+	load := importer.Load{Tests: p.Path, StdDir: p.StdDir}
 	if p.Main {
 		load.Names = append(append(append([]string{}, p.Files...), p.Tests...), filepath.Join(dir, Runner))
 		load.DropMain = true
@@ -331,7 +433,14 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 // runs the program with args, its output passed through, and returns
 // the program's exit code: 0 when every test passed.
 func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, error) {
-	p, err := PlanDir(dir)
+	var p *Plan
+	var err error
+	if IsStdDir(dir) {
+		p, err = PlanStdDir(dir)
+	} else {
+		p, err = PlanDir(dir)
+	}
+
 	if err != nil {
 		return 1, err
 	}

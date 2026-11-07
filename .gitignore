@@ -1,5 +1,7 @@
-# The compiler built with go build -o snello ./cmd/snello.
+# The compiler built with go build -o snello ./cmd/snello, or into
+# bin/ by make build.
 /snello
+/bin/
 
 # Binaries snello build writes next to the example programs, or inside
 # a program directory built from within; at any depth, the sources,

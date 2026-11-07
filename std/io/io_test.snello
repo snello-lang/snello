@@ -1,0 +1,36 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package io_test
+
+import ("expect"; "io"; "os"; "testing")
+
+func TestError() {
+	e := io.NewError("open".Clone(), "/x".Clone(), "boom".Clone(), io.NotExist)
+	expect.Equal(ref e.Error(), "open /x: boom")
+	expect.True(e.Kind() == io.NotExist)
+	expect.Equal(ref e.Written(), ref 0)
+	e2 := e.Clone().WithWritten(3)
+	expect.Equal(ref e2.Written(), ref 3)
+	expect.Equal(ref io.ShortWrite().Error(), "write: short write")
+	missing := io.Errno("open".Clone(), "/nope", 2)
+	expect.True(missing.Kind() == io.NotExist)
+	expect.Contains(ref missing.Error(), "/nope")
+}
+
+func TestCopy() {
+	dir := testing.TempDir()
+	src := expect.IsOk(os.Create(ref dir.Join("src")))
+	expect.IsOk(src.WriteString("copied text"))
+	expect.IsOk(src.Close())
+	in := expect.IsOk(os.Open(ref dir.Join("src")))
+	out := expect.IsOk(os.Create(ref dir.Join("dst")))
+	expect.Equal(ref expect.IsOk(io.Copy(mut out, mut in)), ref i64(11))
+	expect.IsOk(out.Close())
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("dst"))), "copied text")
+}
+
+func BenchmarkNewError() {
+	for testing.Loop() { _ = io.NewError("op".Clone(), "p".Clone(), "m".Clone(), io.Other) }
+}
