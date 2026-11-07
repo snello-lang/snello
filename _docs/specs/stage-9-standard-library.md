@@ -1,6 +1,6 @@
 # Stage 9: the standard library's gaps
 
-Goal: close the gaps of `standard-library-gaps.md` that the owner decided in (2026-11-07), before stage 8 builds the first library outside the compiler on the core. The library stays under decision 7 of `../design/05-standard-library.md`: every addition is a name a Go programmer reaches for in the first hour of a port, written on its reference algorithm and measured where it matters, and nothing that encodes a format, speaks a protocol or wraps a system. Two things come first because everything after them is tested through them: a `testing` package with `snello test`, so that the library's own tests are written in Snello, and the error trait's capabilities, since every new function reports failures through it. The solidity work, fuzzing and Go twins, comes before the widening, since it finds bugs in what exists. Each task's design is recorded in the design note before its code, reviewed by the owner, as every library decision has been.
+Goal: close the gaps of `standard-library-gaps.md` that the owner decided in (2026-11-07), before stage 8 builds the first library outside the compiler on the core. The library stays under decision 7 of `../design/05-standard-library.md`: every addition is a name a Go programmer reaches for in the first hour of a port, written on its reference algorithm and measured where it matters, and nothing that encodes a format, speaks a protocol or wraps a system. Two things come first because everything after them is tested through them: a `testing` package with `snello test`, so that the library's own tests are written in Snello, and the error trait's capabilities, since every new function reports failures through it. Fuzzing goes with the task that touches each parser, 9.9 and 9.10, and no package pins its output to Go's (task 9.5, dropped 2026-11-07). Each task's design is recorded in the design note before its code, reviewed by the owner, as every library decision has been.
 
 The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within the stage, task 9.2 was added on 2026-11-07 ahead of everything else when a race through a package-level `var` was found, and 9.3 behind it, decided: every package of the library has its tests.
 
@@ -90,21 +90,9 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Files:** `compiler/types/`, `compiler/emit/`, `std/builtin/`, `std/io/`, `std/strconv/`, `examples/09-errors.snello`, `../book/08-option-result.md`
 **Scope:** M
 
-## Task 9.5: Solidity: fuzzing and Go twins
+## Task 9.5: Dropped: no Go twins, and the fuzzing folded into 9.9 and 9.10
 
-**Description:** `strconv`, the quote reader, `fmt`'s format grammar, `ParseFloat` and `bufio`'s line reading take input the program does not control and have never run under a fuzzer. A Go fuzz target per parser, under `go test -fuzz`, with a corpus checked in and the targets run for a bounded time in CI. And a Go twin per package whose behaviour is defined as Go's, `strconv`, `strings`, `sort`, `time`'s `String`, `bufio`, run by the suite as `formats` is, so that every package's output is pinned to Go's line for line.
-
-**Acceptance criteria:**
-- [ ] Fuzz targets for the five parsers, with corpora, finding nothing after a run of ten minutes each; any finding fixed with its input added to the corpus
-- [ ] A Go twin for each package named, in `examples/run/`, matched line for line in the run suite of both backends
-- [ ] The CI workflow runs each fuzz target for one minute on one runner
-
-**Verification:**
-- [ ] `go test -fuzz=. -fuzztime=10m` per target, once; `go test ./...`
-
-**Dependencies:** 9.1
-**Files:** `runtime/`, `compiler/types/format_test.go`, `examples/run/`, `.github/workflows/test.yml`
-**Scope:** M
+**Description:** This task was "Solidity: fuzzing and Go twins": a fuzz target per parser run in CI, and a Go program beside each package whose output would pin Snello's line for line. Dropped, decided 2026-11-07: Snello is a language setting its own course, and Go is a map for package names, never a specification, so a package's expected output is the language's own, written and reviewed as the book is, and conformance with Go holds only where a design note decided "as Go's" (floats in `fmt`, the Unicode tables, `ParseFloat`'s grammar), which `examples/run/formats.snello` pins already. The fuzzing keeps its point, that the four parsers reading a program's input are C or lower to C and a bug there is memory unsafety, and loses its ceremony: one bounded campaign each, as a criterion of the task that touches the parser, 9.9 for `ParseFloat`, `Atoi` and the quote reader and 9.10 for `bufio`, with every finding fixed and its input kept as an ordinary test, and no CI job. The format grammar is Go code in the checker that only ever reads source text and is not fuzzed. A fuzzing mode of `snello test` of its own, with the corpus beside the test file, is a language question for later, outside this stage. The number stays so that the tasks after it keep theirs.
 
 ## Task 9.6: Unicode and runes
 
@@ -112,13 +100,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 
 **Acceptance criteria:**
 - [ ] A range over a string yields runes and offsets through both backends; an invalid sequence yields the replacement rune and advances one byte, as Go's does
-- [ ] The `unicode` and `unicode/utf8` packages, with a Go twin matching rune by rune over the tables' ranges
+- [ ] The `unicode` and `unicode/utf8` packages, their tables checked rune by rune against the Unicode Character Database files they are written from
 - [ ] Chapters 3 and 14 cover runes
 
 **Verification:**
 - [ ] `go test ./compiler/... ./std ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `compiler/types/`, `compiler/emit/`, `std/unicode/`, `std/builtin/`, `std/strings/`, `std/bufio/`, `runtime/c/unicode.c`
 **Scope:** L
 
@@ -128,13 +116,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 
 **Acceptance criteria:**
 - [ ] Every name above in `std/builtin` or its package, documented there, in the library table and in chapter 9 or 14
-- [ ] A Go twin in `examples/run/` for the string and slice methods, matched line for line
+- [ ] An example under `examples/run/` for the string and slice methods, its expected output the language's own, reviewed
 - [ ] `Index` on a 20 MB text with a 50,001-byte needle takes under two seconds, as `Contains` does
 
 **Verification:**
 - [ ] `go test ./compiler/types ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/builtin/`, `std/strings/`, `runtime/c/string.c`, `runtime/c/slice.c`, `compiler/emit/lower/`
 **Scope:** M
 
@@ -143,13 +131,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Description:** `math` fills in: `Floor`, `Ceil`, `Round`, `Trunc`, `Pow`, `Exp`, `Log`, `Log2`, `Log10`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`, `Sinh`, `Cosh`, `Tanh`, `Hypot`, `Mod`, `Cbrt`, `Inf`, `NaN`, `IsNaN`, `IsInf`, `Signbit`, `Copysign`, `E`, `Ln2`, `MaxInt`, `MinInt`, `MaxFloat64`, `SmallestNonzeroFloat64` and the sized limits; each a bound function to libm or a constant. `math/bits`: `LeadingZeros`, `TrailingZeros`, `OnesCount`, `RotateLeft`, `Reverse`, `Len`, which the backends write inline. `math/rand`: a seedable generator, Go 1.22's PCG, with `Int`, `IntN`, `Int64`, `Float64`, `Shuffle`, `Perm`, and the package functions over a generator seeded from the runtime's random source.
 
 **Acceptance criteria:**
-- [ ] Every name above, with a Go twin matched line for line on fixed inputs and, for `rand`, on a fixed seed against Go's PCG
+- [ ] Every name above in an example under `examples/run/` on fixed inputs, `rand` on a fixed seed, with the generator and the sequence it must give decided in the task's design note
 - [ ] `bits` written inline by both backends: the C backend to the compiler's builtins, the LLVM backend to the intrinsics
 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/math/`, `std/math/bits/`, `std/math/rand/`, `runtime/c/math.c`, `compiler/emit/`
 **Scope:** M
 
@@ -158,13 +146,14 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Description:** `fmt` gains `Fprint`, the verbs `%x`, `%X`, `%o`, `%b`, `%c`, `%e`, `%g`, a width and the `-` flag, and `Errorf` is not added, task 9.4's `?` and `Source` taking its place. `strconv` gains `ParseInt(s, base)` and `ParseUint`, `FormatInt(n, base)` and `FormatUint`, `ParseBool` and `FormatBool`, `Quote` and `Unquote` over the runtime's quoting, `FormatFloat(f, prec)`, and `f32` through `ParseFloat32` and `FormatFloat32`. The format grammar in `compiler/types/format.go` checks the new verbs as it checks the old.
 
 **Acceptance criteria:**
-- [ ] Every verb and function above, matched line for line against a Go twin, `examples/run/formats.snello` extended
+- [ ] Every verb and function above in `examples/run/formats.snello`, extended; floats print as decided 6 of the library note has them
+- [ ] `ParseFloat`, `Atoi` and the quote reader fuzzed for ten minutes each by a Go test driving the runtime, written once here and used again by 9.10; every finding fixed and its input kept as an ordinary test; no CI job (2026-11-07, from the dropped task 9.5)
 - [ ] A verb against the wrong argument refused when the program is compiled, as today
 
 **Verification:**
 - [ ] `go test ./compiler/types ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/fmt/`, `std/strconv/`, `compiler/types/format.go`, `compiler/emit/`, `runtime/c/format.c`, `runtime/c/parse.c`
 **Scope:** M
 
@@ -173,13 +162,14 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Description:** `io` gains `ReadAll`, `ReadFull`, `Discard`, a `Seeker` trait with `Seek` on `os.File`; `bufio.Reader` gains `Peek`, `ReadBytes`, `UnreadByte`; `bufio.Scanner` gains `Words()` as a second constructor; a `bytes` package with `Buffer` as a growable `io.Writer` and `io.Reader`, the structure every encoder writes into, over the slice the runtime has.
 
 **Acceptance criteria:**
-- [ ] Every name above, with `bytes.Buffer` and `Seek` matched against a Go twin; `io.ReadAll` on a 100 MB file within 1.25 times Go's time
+- [ ] Every name above, with `bytes.Buffer` and `Seek`, in an example under `examples/run/`; `io.ReadAll` on a 100 MB file within 1.25 times Go's time
+- [ ] `bufio`'s line reader fuzzed for ten minutes with the harness of 9.9: it never hands out a line past its limit and never reads a byte twice; every finding fixed and its input kept as a test (2026-11-07, from the dropped task 9.5)
 - [ ] Chapter 14 and the library table
 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.9, for the fuzzing harness
 **Files:** `std/io/`, `std/bufio/`, `std/bytes/`, `std/os/`, `runtime/c/os.c`, `runtime/c/bufio.c`
 **Scope:** M
 
@@ -188,13 +178,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Description:** `os` gains the environment, `Getenv`, `LookupEnv`, `Setenv`, `Environ`; directories, `ReadDir` returning entries with name and kind, `Mkdir`, `MkdirAll`, `Stat` and `Lstat` returning a `FileInfo` with size, mode, modification time and whether a directory, `Rename`, `Getwd`, `Chdir`; `ReadFile` as bytes, `WriteFile`, `OpenFile(path, flags, mode)` with append, create, truncate and exclusive; `TempDir`, `Getpid`, `Hostname`. A `path` package of pure string functions, `Join`, `Base`, `Dir`, `Ext`, `Clean`, `Split`, `IsAbs`, with `filepath` as its name for the system's separator as Go has both. `os/exec` and signals stay out, each a design note of its own after this stage.
 
 **Acceptance criteria:**
-- [ ] Every name above through both backends, `examples/run/files.snello` extended and a Go twin for `path`
+- [ ] Every name above through both backends, `examples/run/files.snello` extended and `path` in an example of its own
 - [ ] Every descriptor opened closed on exec, as the existing ones are; every error an `io.Error` worded as Go's
 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/os/`, `std/path/`, `std/path/filepath/`, `runtime/c/os.c`
 **Scope:** M
 
@@ -203,13 +193,13 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Description:** A calendar in UTC: `Date(year, month, day, hour, min, sec, nsec)`, `Year`, `Month`, `Day`, `Hour`, `Minute`, `Second`, `Nanosecond`, `Weekday`, `YearDay`, `AddDate`; `Format` and `Parse` with Go's reference layout, `2006-01-02 15:04:05`, and the layouts `RFC3339`, `DateTime`, `DateOnly`, `TimeOnly`, `Kitchen`; `ParseDuration`; `Timer` and `Ticker` as values with `Stop` and `Reset`, their `Drop` stopping them, over the runtime's timer heap; `Truncate` and `Round` on `Time`. Zones stay out: UTC only, as decided, with `Local` a later decision.
 
 **Acceptance criteria:**
-- [ ] Every name above, `Format` and `Parse` matched against a Go twin over a table of times and layouts, the calendar against Go's over a range of dates including leap years
+- [ ] Every name above, `Format` and `Parse` over a table of times and layouts decided in the task's design note, the calendar checked over a range of dates including leap years against the civil calendar's own rules
 - [ ] A `Timer` stopped before it fires sends nothing; a `Ticker` dropped ticks no more; `examples/run/clocks.snello` extended
 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/time/`, `runtime/c/time.c`, `runtime/c/sched.c`
 **Scope:** L
 
@@ -224,7 +214,7 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples ./bench`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/sync/`, `std/deque/`, `std/set/`, `std/heap/`, `std/arena/`, `std/rc/`, `runtime/c/sync.c`
 **Scope:** M
 
@@ -240,14 +230,14 @@ The order ahead, decided 2026-11-07: this stage, then 8, then 7, then 6. Within 
 **Verification:**
 - [ ] `go test ./std ./compiler/emit/... ./examples`
 
-**Dependencies:** 9.5
+**Dependencies:** 9.1
 **Files:** `std/net/`, `runtime/c/net.c`
 **Scope:** L
 
 ## Checkpoint: stage 9
 
 - [ ] `snello test` runs the standard library's own tests, written in Snello, and the suite runs them in CI
-- [ ] Every parser fuzzed with a corpus checked in, and every package with a Go twin matched line for line
+- [ ] The four parsers that read a program's input fuzzed once, their findings kept as tests; every package's expected output the language's own, reviewed
 - [ ] Every name the gaps document decided `std` exists, documented in the library table and the book, with the measurements the tasks name
 - [ ] The library still holds the note's packages and the stage's, and nothing more; the `later` rows of the gaps document each have a design note named, written or not
 - [ ] Reviewed by the owner
