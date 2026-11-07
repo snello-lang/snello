@@ -65,16 +65,23 @@ func capitals(name string) bool {
 }
 
 // ObjName writes the symbol of a declared function, variable, type or
-// constant. One a library package declares is qualified by the
-// package's import path, in the runtime's sn_ space, which no name of a
-// program reaches. The program's own functions, variables and
-// constants are in sn__, the space of the package with no path, as Go's
-// linker writes them main.name: a symbol the program named write must
-// not be libc's write, which the runtime calls, once link-time
+// constant. One a standard package declares is qualified by the
+// package's import path in the runtime's sn_ space, under which the
+// runtime defines the functions the package declares without a body;
+// one a package of the program's own declares is qualified the same
+// way in the snm_ space, which the runtime never uses, so a package
+// may have any name. The program's own functions, variables and
+// constants are in sn__, the space of the package with no path, as
+// Go's linker writes them main.name: a symbol the program named write
+// must not be libc's write, which the runtime calls, once link-time
 // optimization makes the program and the runtime one unit. The
 // program's types keep their names, which no linker sees.
 func ObjName(obj types.Object) string {
 	if p := obj.Pkg(); p != nil && p.Path() != "" {
+		if p.Standard() {
+			return StdPrefix(p.Path()) + obj.Name()
+		}
+
 		return PathPrefix(p.Path()) + obj.Name()
 	}
 
@@ -88,15 +95,26 @@ func ObjName(obj types.Object) string {
 	return Ident(obj.Name())
 }
 
-// PathPrefix writes the start of every symbol of the package at an
-// import path: sn_, the path with / as __, and _. net/http is
-// sn_net__http_, apart from a package net_http. The path of a package
-// of the program's own carries a dot or a dash no C identifier may,
-// example.com/app, and each is written as _; CheckPrefixes refuses two
-// paths that would share a prefix this way (_docs/design/08-packages.md).
+// PathPrefix writes the start of every symbol of a package of the
+// program's own at an import path: snm_, the path with / as __, and _.
+// a/b is snm_a__b_, apart from a package a_b. A path may carry a dot or
+// a dash no C identifier may, my-lib, and each is written as _;
+// CheckPrefixes refuses two paths that would share a prefix this way
+// (_docs/design/08-packages.md). StdPrefix is the standard library's
+// form, sn_fmt_ and sn_net__http_, the names the runtime defines.
 func PathPrefix(path string) string {
+	return prefix("snm_", path)
+}
+
+// StdPrefix writes the start of every symbol of the standard package
+// at an import path.
+func StdPrefix(path string) string {
+	return prefix("sn_", path)
+}
+
+func prefix(space, path string) string {
 	var b strings.Builder
-	b.WriteString("sn_")
+	b.WriteString(space)
 	for i := 0; i < len(path); i++ {
 		switch path[i] {
 		case '/':

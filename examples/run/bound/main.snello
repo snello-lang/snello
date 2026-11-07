@@ -1,0 +1,25 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A program with a package that binds C beside it, tally, found
+// through the module file: a handle made and dropped by the C side's
+// counter, bytes lent as a view, a buffer filled, and a string parsed
+// into an out-parameter. Built with snello build examples/run/bound.
+package main
+
+import ("fmt"; "tally")
+
+func main() {
+	{
+		t := tally.Open(40)
+		fmt.Println(t.Add(2), t.Count(), tally.Live())
+	}
+	fmt.Println(tally.Live()) // the Tally dropped at the block's end gave its counter back
+	xs := []byte{1, 2, 3}
+	fmt.Println(tally.Sum(ref xs))
+	buf := make([]byte, 4)
+	fmt.Println(tally.Fill(mut buf, 7), buf)
+	var n int
+	fmt.Println(tally.Parse("123", mut n), n, tally.Parse("12x", mut n), n)
+}

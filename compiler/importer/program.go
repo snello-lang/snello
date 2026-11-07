@@ -91,6 +91,45 @@ func LoadProgram(names []string, info *types.Info) (*Importer, *Program, error) 
 	return imp, &Program{fset.Files(), syntax, pkg}, nil
 }
 
+// LoadPackage checks the package in dir, a directory under a module's
+// root other than the root itself, as an import of the program would:
+// under a library's rules, named by its directory under the root, with
+// the packages it imports. It is what snello check runs on a directory
+// whose package is not main, since a library checked as a program would
+// be refused its binding to C. A directory that is a module's root or
+// under no module is checked as a program.
+func LoadPackage(dir string, info *types.Info) error {
+	m, err := FindModule(dir)
+	if err != nil {
+		return err
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+
+	if m == nil || abs == m.Dir {
+		names, err := SourceFiles(dir)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = LoadProgram(names, info)
+		return err
+	}
+
+	rel, err := filepath.Rel(m.Dir, abs)
+	if err != nil {
+		return err
+	}
+
+	imp := NewImporter(info)
+	imp.Module = m
+	_, err = imp.ImportFrom(filepath.ToSlash(rel), m.Dir)
+	return err
+}
+
 // SourceFiles returns the .snello files of dir, sorted by name, each
 // with its directory: the package the directory holds, and none when
 // it holds no package.
@@ -103,6 +142,26 @@ func SourceFiles(dir string) ([]string, error) {
 	var files []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".snello") {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+// cFiles returns the .c and .h files of dir, sorted by name, each with
+// its directory: the C side of the package the directory holds, which
+// the backends compile with the program.
+func cFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && (strings.HasSuffix(e.Name(), ".c") || strings.HasSuffix(e.Name(), ".h")) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}

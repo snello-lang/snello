@@ -96,22 +96,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 		return nil, err
 	}
 
-	e := &Emitter{
-		info:     info,
-		file:     files[0],
-		used:     make(map[types.Object]bool, len(info.Uses)),
-		state:    make(map[string]int),
-		seen:     make(map[string]bool),
-		pre:      make(map[ast.Expr]string),
-		guards:   make(map[*types.Named]bool),
-		generics: make(map[*types.Func]*ast.FuncDecl),
-		files:    make(map[*ast.FuncDecl]*token.File),
-		external: make(map[*types.Var]bool),
-		done:     make(map[string]bool),
-		names:    newNaming(fs),
-		jumped:   make(map[string]bool),
-	}
-	e.state["sn_slice_u8"] = defined // the runtime defines []byte in snello.h, as the library's bodiless functions take it
+	e := newEmitter(info, files[0], fs)
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -130,7 +115,12 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 					e.typeDecl(d) // an instance of a generic type is declared when a value of it is first written
 				}
 			case *ast.FuncDecl:
-				e.generic(d, info.Defs[d.Name].(*types.Func)) // noted before any body can call it
+				fn := info.Defs[d.Name].(*types.Func)
+				if d.Body == nil && len(u.CFiles) > 0 {
+					e.prototype(fn, d.Pos()) // a package's binding to C: the prototype the runtime's header gives a standard package's
+				}
+
+				e.generic(d, fn) // noted before any body can call it
 			case *ast.TraitDecl:
 				for _, m := range d.Methods {
 					if fn, ok := info.Defs[m.Name].(*types.Func); ok && m.Body != nil {
@@ -346,6 +336,38 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	}
 
 	e.writeFunction(name, sig, d.Body, d.Pos())
+}
+
+// newEmitter makes an emitter for a program whose main package is the
+// files fs, positions resolved through file, or for the header of a
+// package that binds C, which has no program and no Info.
+func newEmitter(info *types.Info, file *token.File, fs []*ast.File) *Emitter {
+	e := &Emitter{
+		info:     info,
+		file:     file,
+		used:     make(map[types.Object]bool),
+		state:    make(map[string]int),
+		seen:     make(map[string]bool),
+		pre:      make(map[ast.Expr]string),
+		guards:   make(map[*types.Named]bool),
+		generics: make(map[*types.Func]*ast.FuncDecl),
+		files:    make(map[*ast.FuncDecl]*token.File),
+		external: make(map[*types.Var]bool),
+		done:     make(map[string]bool),
+		names:    newNaming(fs),
+		jumped:   make(map[string]bool),
+	}
+	e.state["sn_slice_u8"] = defined // the runtime defines []byte in snello.h, as the library's bodiless functions take it
+	return e
+}
+
+// prototype writes the prototype of a function a package binds to C,
+// under its derived symbol, from its Snello signature: what the
+// package's header declares too, so the C side's definition is checked
+// against it there.
+func (e *Emitter) prototype(fn *types.Func, pos token.Pos) {
+	sig := fn.Type().(*types.Signature)
+	put(&e.protos, e.resultType(sig, pos), " ", lower.FuncName(fn), "(", e.params(sig.Params(), pos), ");\n")
 }
 
 // writeFunction writes a function or method under the given C name:

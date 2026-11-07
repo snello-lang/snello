@@ -446,7 +446,7 @@ func emit(t *testing.T, name, src string, cfg Config) ([]byte, error) {
 func libraries(imp *importer.Importer) []lower.Library {
 	var libs []lower.Library
 	for _, p := range imp.Packages() {
-		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax})
+		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles})
 	}
 
 	return libs
@@ -463,7 +463,7 @@ func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string
 		t.Fatal(err)
 	}
 
-	return execute(t, name, module, debug, fixtures...)
+	return execute(t, name, module, debug, fixtures)
 }
 
 // runDir builds the program in dir, a main package of one or several
@@ -481,12 +481,13 @@ func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
 		t.Fatal(err)
 	}
 
-	return execute(t, filepath.Base(dir), module, debug)
+	return execute(t, filepath.Base(dir), module, debug, nil, lower.Bindings(info, libs)...)
 }
 
 // execute compiles the module as the program name, in a directory of
-// its own with the fixtures beside it, and runs it there.
-func execute(t *testing.T, name string, module []byte, debug bool, fixtures ...string) (string, string, int) {
+// its own with the fixtures beside it and the C side of the packages
+// that bind C, and runs it there; fixtures may be nil.
+func execute(t *testing.T, name string, module []byte, debug bool, fixtures []string, bindings ...lower.Binding) (string, string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, fixture := range fixtures {
@@ -507,7 +508,7 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures ...s
 		}
 	}
 
-	bin, out, err := Build(dir, name, module, debug)
+	bin, out, err := Build(dir, name, module, debug, bindings...)
 	if err != nil {
 		t.Fatalf("%v\n%s\n--- emitted IR ---\n%s", err, out, module)
 	}

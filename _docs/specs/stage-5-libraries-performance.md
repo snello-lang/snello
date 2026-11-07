@@ -1,6 +1,6 @@
 # Stage 5: packages and performance
 
-Goal: an initial working language, as the owner restated it on 2026-11-05: lean, without a collector, very fast, with a very small standard library that is rock solid and follows the reference implementations of the industry, and a core that any external library can be built on, as Rust's crates are built on its `std`. The stage was planned on 2026-10-21 as libraries and performance, with the libraries of examples 03, 04, 17 and 19 written into the standard library. On 2026-11-05 the owner narrowed it: `regexp`, `json`, `db` and `net/http` leave the standard library, as Rust keeps them out of its own, and in their place the stage gives Snello what a library outside the compiler needs, packages of the program's own and a way to bind C, and proves it by writing `regexp` as such a package with nothing the standard library is privileged to. The performance tasks stay: the three rows of the table where the measurement fell short, allocation, strings and a map, and tasks, reach the targets the owner set on 2026-10-21, measured on macOS and on both Linux runners. Nothing in the language changes except what the proof shows a library cannot do without; where an example disagrees with the language or the library, the disagreement is settled and recorded in the design document in the same change, as `AGENTS.md` requires.
+Goal: an initial working language, as the owner restated it on 2026-11-05: lean, without a collector, very fast, with a very small standard library that is rock solid and follows the reference implementations of the industry, and a core that any external library can be built on, as Rust's crates are built on its `std`. The stage was planned on 2026-10-21 as libraries and performance, with the libraries of examples 03, 04, 17 and 19 written into the standard library. On 2026-11-05 the owner narrowed it: `regexp`, `json`, `db` and `net/http` leave the standard library, as Rust keeps them out of its own, and in their place the stage gives Snello what a library outside the compiler needs, packages of the program's own and a way to bind C, and the libraries written on that core, `regexp` first, are stage 8's (moved there 2026-11-07). The performance tasks stay: the three rows of the table where the measurement fell short, allocation, strings and a map, and tasks, reach the targets the owner set on 2026-10-21, measured on macOS and on both Linux runners. Nothing in the language changes except what the proof shows a library cannot do without; where an example disagrees with the language or the library, the disagreement is settled and recorded in the design document in the same change, as `AGENTS.md` requires.
 
 ## Task 5.1: Allocator
 
@@ -79,54 +79,40 @@ Progress: the design written 2026-11-05, `../design/08-packages.md`, with the se
 **Description:** The standard library reaches the runtime through functions declared without a body, which the checker reserves to library packages, and the runtime is C compiled with the program. A library outside the compiler that wraps a C library, as Rust's crates do through `extern "C"` blocks and `-sys` crates, needs the same two things: a declaration without a body bound to a C symbol, and C sources or a system library compiled and linked with the program. The design is written first and reviewed by the owner: Go's way, since Go has one, a function without a body is implemented elsewhere, bound to the symbol `sn_<path>_<name>` as the standard library's are, with the C signature derived from the Snello types by the ABI `runtime/c/snello.h` already defines; `.c` and `.h` files in the package's directory are compiled with the program, as `cgo` compiles the C files of a package; a system library is named by one line in `snello.mod`. The types that may cross are listed by the note, numbers, `bool`, `string` and `[]byte` as views, an owned pointer as the opaque handle a C library hands back, and anything else is refused at the declaration with a message naming the type; what the C side does with memory is the library author's responsibility, as it is inside Rust's `unsafe`, and the debug build's tracker sees what the C side allocates through `sn_alloc`. `any`, `...ref any`, `local` and the lowered names stay the compiler's, since each exists for one standard package and a library needs none of them.
 
 **Acceptance criteria:**
-- [ ] `../design/08-packages.md` says what crosses a binding and how, reviewed by the owner before the code
-- [ ] A package of the program's own declares a function without a body, implements it in a `.c` file in its directory, and a program calls it through both backends as a release and a debug build
-- [ ] A type that may not cross is refused at the declaration with its name in the message, and a body-less function in the main package is still refused
+- [x] `../design/08-packages.md` says what crosses a binding and how, reviewed by the owner before the code (2026-11-06: section 6 and decision 4, reviewed by the owner before the first slice)
+- [x] A package of the program's own declares a function without a body, implements it in a `.c` file in its directory, and a program calls it through both backends as a release and a debug build (2026-11-06: `examples/run/bound/`, whose `tally` binds a handle given back by `Drop`, a view of bytes, a buffer, a string view and an out-parameter, through `tally.snello.h` written by the compiler)
+- [x] A type that may not cross is refused at the declaration with its name in the message, and a body-less function in the main package is still refused (2026-11-06: `cannot cross to C: map[string]int, in parameter m` and the five other forms in `TestOwnPackages`; a bound package with no `.c` file is refused by the importer too)
 - [ ] A package that names a system library in `snello.mod` links it: `m`'s `cbrt` called from Snello
 - [ ] Chapter 14 of the book has a section on binding C from a package
 
 **Verification:**
-- [ ] `examples/run/bound/`, a program with a package that binds C, in the run suite of both backends
+- [x] `examples/run/bound/`, a program with a package that binds C, in the run suite of both backends (2026-11-06)
 - [ ] Tests pass: `go test ./compiler/... ./examples`
+
+Progress: the design written 2026-11-06, section 6 and decision 4 of `../design/08-packages.md`, reviewed by the owner. First slice the same day: `types.checkBinding` admits a function without a body in a package of the program's own and refuses a receiver, a type parameter and any type outside the list, with the type named; the importer records a package's `.c` and `.h` files and refuses a bound package that has none; `lower.Bindings` collects a package's C side, `emit/c.Header` writes `name.snello.h` with the prototypes and the handle structs from the Snello signatures, and both backends compile the package's C beside the runtime, under a directory named by the symbol prefix, and link it; the C backend writes the prototype of a bound function into the program; `examples/run/bound/` in the run suite of both backends, release and debug; the refusals in `TestOwnPackages`. The `link` line, `m`'s `cbrt` and chapter 14 follow.
 
 **Dependencies:** 5.3
 **Files:** `compiler/types/`, `compiler/emit/`, `compiler/importer/`, `cmd/snello/`, `runtime/runtime.go`, `examples/run/bound/`, `../design/08-packages.md`, `../book/14-standard-library.md`
 **Scope:** M
 
-## Task 5.6: `regexp` as a package outside the compiler
+## Task 5.6: moved
 
-**Description:** The proof that the core is enough: `regexp` written under `lib/regexp/` at the repository's root, outside `std/`, with nothing a package of the program's own cannot write, so that it compiles under the rules of task 5.3 and binds no C. Go's syntax, the RE2 subset, compiled to a program and run by a Pike VM, which is what Go's `regexp` and the `PikeVM` of Rust's `regex` crate run, so a match takes time linear in the input and no pattern backtracks; the subset is what example 19 uses and the common forms, literals, `.`, classes with ranges and `\d`, `\w`, `\s`, the anchors, `*`, `+`, `?`, `{n,m}`, alternation, groups and the `(?i)` flag, written in the package's doc comment. `Compile` returns a `Result` whose error carries Go's message for the pattern, `missing closing )`; `Match` says whether a line matches, `Find` returns the span of the first match or none. Every gap the package meets in the language is a finding of this task, closed in the core or recorded as a decision in the design note it belongs to; that is what the proof is for. The package is measured against Go's `regexp` and Rust's `regex` crate on a grep of a 100 MB file, as every standard package is measured, with the numbers in the package's README; Rust's crate runs a lazy DFA and is expected to be well ahead, Go's is the target.
+`regexp` as a package outside the compiler moved to stage 8, built-in libraries, as its task 8.2 (2026-11-07, at the owner's word: not needed for the core). The number stays so that the tasks after it keep theirs.
 
-**Acceptance criteria:**
-- [ ] `lib/regexp/` compiles as a package of the program's own under task 5.3's rules, with no function without a body and none of the standard library's names
-- [ ] Table tests for the matcher over every form of the subset, and a malformed pattern refused by `Compile` with Go's message
-- [ ] `(a*)*b` against thirty `a`s and no `b`, which a backtracking matcher takes exponential time on, matches in under a millisecond
-- [ ] Not slower than Go's `regexp` on the grep of a 100 MB file, measured against Go's and Rust's with the method of task 5.8 and recorded in `lib/regexp/README.md`
-- [ ] Every language gap the package met is closed or recorded, listed in this task's progress
+## Task 5.7: Example 03 on `net`
 
-**Verification:**
-- [ ] `go test ./lib/...`, which builds the package's tests through both backends
-- [ ] Tests pass: `go test ./...`
-
-**Dependencies:** 5.3
-**Files:** `lib/regexp/`, `compiler/types/`, `compiler/emit/`
-**Scope:** L
-
-## Task 5.7: Examples 03 and 19 and the empty pending list
-
-**Description:** Example 19 imports `regexp` from `lib/regexp/` through a `snello.mod` in `examples/`, since the examples show how Snello programs are written and a program with a dependency is one of them; this is the owner's decision, the alternative being a plain-substring grep over the standard library alone. Example 19 also fails the checker for three reasons outside the library: it names `bufio.Writer` without its type argument, it ranges over `bufio.Scanner.Lines`, which does not exist, and `fmt.Fprintf` cannot infer its writer from the argument; each is settled as a library change or an example change. Example 03 loses `net/http`, `db` and `json`, and keeps what it is for, long-lived shared state, per-request borrows and `Drop` for connections: it becomes a cache server over `net` speaking a line protocol, `GET key` and `SET key value`, a task per connection, its store behind `sync.Arc` with a connection's `Drop` reporting the close. Its checker errors are settled as example 19's are: `sync.NewArc` cannot infer its type argument, a map read is bound with `if x := v` as though it were an option, and `sync.Arc.New` is called where the library has `sync.NewArc`. The example serves forever, so the suite starts the program, connects over the loopback, sends a fixed script and compares the responses with an expected output.
+**Description:** Example 03 loses `net/http`, `db` and `json`, and keeps what it is for, long-lived shared state, per-request borrows and `Drop` for connections: it becomes a cache server over `net` speaking a line protocol, `GET key` and `SET key value`, a task per connection, its store behind `sync.Arc` with a connection's `Drop` reporting the close. Its three checker errors are settled, each as a library change or an example change: `sync.NewArc` cannot infer its type argument, a map read is bound with `if x := v` as though it were an option, and `sync.Arc.New` is called where the library has `sync.NewArc`. The example serves forever, so the suite starts the program, connects over the loopback, sends a fixed script and compares the responses with an expected output.
 
 **Acceptance criteria:**
-- [ ] Example 19 runs with an expected output and the files it reads, through `lib/regexp`, and leaves the pending list; the decision recorded in `examples/README.md`
 - [ ] Example 03 serves a script of requests over a real socket, made by the suite, and its responses match the expected output; the rewrite recorded in `examples/README.md`
-- [ ] The six checker errors are settled, each decision recorded in the design note it belongs to
-- [ ] The pending list in `examples/suite_test.go` is empty
+- [ ] The three checker errors are settled, each decision recorded in the design note it belongs to
+- [ ] Example 03 leaves the pending list in `examples/suite_test.go`
 
 **Verification:**
 - [ ] Tests pass: `go test ./...`
 
-**Dependencies:** 5.4, 5.6
-**Files:** `examples/03-http-cache.snello`, `examples/19-cli-grep.snello`, `examples/snello.mod`, `examples/suite_test.go`, `examples/expected/`, `examples/README.md`
+**Dependencies:** 5.4
+**Files:** `examples/03-http-cache.snello`, `examples/suite_test.go`, `examples/expected/`, `examples/README.md`
 **Scope:** M
 
 ## Task 5.8: Benchmarks that can be trusted
@@ -252,8 +238,8 @@ Review of 5.11 to 5.13, 2026-10-21, by four independent reviews of the runtime, 
 
 ## Checkpoint: stage 5
 
-- [ ] All twenty examples run natively through both backends on macOS and on both Linux runners; the pending list is empty
-- [ ] A package outside the compiler builds, binds C, and `regexp` is written as one with nothing the standard library is privileged to; the gaps it found are closed or recorded
+- [ ] Every example but 19, which waits for stage 8's `regexp`, runs natively through both backends on macOS and on both Linux runners
+- [ ] A package outside the compiler builds and binds C
 - [ ] The standard library holds the packages of `05-standard-library.md` and nothing more, each on its reference algorithm and measured against Go and Rust, with the measurement recorded in the library table
 - [ ] `tree`, `words` and `tasks` at their targets by the median of task 5.8, the table in the design document updated for the Mac and both Linux runners
 - [ ] The book chapters this stage owns (see `../book/README.md`) are written and their status lines updated

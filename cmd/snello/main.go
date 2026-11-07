@@ -146,14 +146,24 @@ func parse(path string) int {
 
 // check parses and checks a program, a file or a directory, and prints
 // the errors; it prints nothing and exits 0 when the program is correct.
-// A package that is not a program passes too, as go vet takes one.
+// A directory whose package is not main is checked as the library it
+// is, as go vet takes one, so that its binding to C is not refused as a
+// program's would be.
 func check(path string) int {
-	names, _, ok := programFiles(path)
+	names, dir, ok := programFiles(path)
 	if !ok {
 		return 1
 	}
 
-	if _, _, err := importer.LoadProgram(names, &types.Info{}); err != nil {
+	info := &types.Info{}
+	var err error
+	if dir && !isMain(names[0]) {
+		err = importer.LoadPackage(path, info)
+	} else {
+		_, _, err = importer.LoadProgram(names, info)
+	}
+
+	if err != nil {
 		printErrors(err)
 		return 1
 	}
@@ -161,10 +171,23 @@ func check(path string) int {
 	return 0
 }
 
+// isMain reports whether the source file's package clause says main;
+// a file that does not read or parse counts as main, so that the
+// program's loader reports it.
+func isMain(name string) bool {
+	src, err := os.ReadFile(name)
+	if err != nil {
+		return true
+	}
+
+	f, _, _ := parser.ParseFile(name, src)
+	return f == nil || f.Name == nil || f.Name.Name == "main"
+}
+
 // emit prints what build would compile: the C source, or the IR
 // module, for reading.
 func emit(path, backend string) int {
-	src, ok := emitSource(path, backend, false)
+	src, _, ok := emitSource(path, backend, false)
 	if !ok {
 		return 1
 	}
@@ -182,7 +205,7 @@ func build(path, backend string, debug bool) int {
 		return 1
 	}
 
-	src, ok := emitSource(path, backend, debug)
+	src, bindings, ok := emitSource(path, backend, debug)
 	if !ok {
 		return 1
 	}
@@ -198,9 +221,9 @@ func build(path, backend string, debug bool) int {
 	var bin string
 	var out []byte
 	if backend == "llvm" {
-		bin, out, err = llvm.Build(dir, name, src, debug)
+		bin, out, err = llvm.Build(dir, name, src, debug, bindings...)
 	} else {
-		bin, out, err = c.Build(dir, name, src, debug)
+		bin, out, err = c.Build(dir, name, src, debug, bindings...)
 	}
 
 	if err != nil {
@@ -222,14 +245,15 @@ func build(path, backend string, debug bool) int {
 }
 
 // emitSource loads a program, a file or a directory, and emits it
-// through the backend, printing the errors of whichever step fails. A
+// through the backend, printing the errors of whichever step fails,
+// with the C side of every package that binds C, for the build. A
 // package that is not a program is refused as CheckMain says, since
 // only check takes one. The LLVM backend emits a debug build's checks
 // itself, so it is told; the C backend's are a flag of the C compiler.
-func emitSource(path, backend string, debug bool) ([]byte, bool) {
+func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool) {
 	names, _, ok := programFiles(path)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 
 	info := &types.Info{}
@@ -241,20 +265,23 @@ func emitSource(path, backend string, debug bool) ([]byte, bool) {
 	}
 
 	var out []byte
+	var bindings []lower.Binding
 	if err == nil {
+		libs := libraries(imp)
+		bindings = lower.Bindings(info, libs)
 		if backend == "llvm" {
-			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libraries(imp)...)
+			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
 		} else {
-			out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libraries(imp)...)
+			out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libs...)
 		}
 	}
 
 	if err != nil {
 		printErrors(err)
-		return nil, false
+		return nil, nil, false
 	}
 
-	return out, true
+	return out, bindings, true
 }
 
 // programFiles returns the source files of the program at path, as go
@@ -312,7 +339,7 @@ func libraries(imp *importer.Importer) []lower.Library {
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles}
 	}
 
 	return libs

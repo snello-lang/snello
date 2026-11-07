@@ -102,7 +102,7 @@ func TestEmitExamples(t *testing.T) {
 			continue // pending: the examples suite names it
 		}
 
-		if _, ok := emitSource(path, "llvm", false); !ok {
+		if _, _, ok := emitSource(path, "llvm", false); !ok {
 			t.Errorf("%s: the driver refused it", path)
 		}
 	}

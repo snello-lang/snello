@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/runtime"
 )
 
@@ -47,17 +48,23 @@ func Compiler() string {
 	return "cc"
 }
 
-// Build writes the emitted program and the runtime into dir, compiles
-// them with the C compiler, and returns the path of the binary named
-// name. The compiler's output comes back with any error. A debug build
-// compiles the runtime's checks in: see runtime/c/debug.c.
-func Build(dir, name string, src []byte, debug bool) (bin string, output []byte, err error) {
+// Build writes the emitted program and the runtime into dir, with the
+// C side of every package that binds C, compiles them with the C
+// compiler, and returns the path of the binary named name. The
+// compiler's output comes back with any error. A debug build compiles
+// the runtime's checks in: see runtime/c/debug.c.
+func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
 	files := runtime.Files()
 	files[name+".snello.c"] = src // never the name of a runtime file, whatever the program is called
 	for file, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
 			return "", nil, err
 		}
+	}
+
+	bound, err := BindingSources(dir, bindings)
+	if err != nil {
+		return "", nil, err
 	}
 
 	args := append([]string{}, Flags...)
@@ -67,7 +74,8 @@ func Build(dir, name string, src []byte, debug bool) (bin string, output []byte,
 		args = append(args, Release...)
 	}
 
-	objs, output, err := Objects(Compiler(), args, append([]string{filepath.Join(dir, name+".snello.c")}, runtime.Paths(dir)...))
+	args = append(args, "-I", dir) // snello.h, for a package's C
+	objs, output, err := Objects(Compiler(), args, append(append([]string{filepath.Join(dir, name+".snello.c")}, runtime.Paths(dir)...), bound...))
 	if err != nil {
 		return "", output, err
 	}

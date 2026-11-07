@@ -314,14 +314,14 @@ func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
 		t.Fatal(err)
 	}
 
-	return execute(t, t.TempDir(), filepath.Base(dir), csrc, debug)
+	return execute(t, t.TempDir(), filepath.Base(dir), csrc, debug, lower.Bindings(info, libs)...)
 }
 
 // execute compiles the C source as the program name in dir, with the
-// runtime, and runs it there.
-func execute(t *testing.T, dir, name string, csrc []byte, debug bool) (string, string, int) {
+// runtime and the C side of the packages that bind C, and runs it there.
+func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings ...lower.Binding) (string, string, int) {
 	t.Helper()
-	bin, out, err := Build(dir, name, csrc, debug)
+	bin, out, err := Build(dir, name, csrc, debug, bindings...)
 	if err != nil {
 		t.Fatalf("%v\n%s\n--- emitted C ---\n%s", err, out, csrc)
 	}
@@ -347,7 +347,7 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool) (string, s
 func libraries(imp *importer.Importer) []lower.Library {
 	var libs []lower.Library
 	for _, p := range imp.Packages() {
-		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax})
+		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles})
 	}
 
 	return libs

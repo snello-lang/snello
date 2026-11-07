@@ -14,6 +14,8 @@ package lower
 
 import (
 	"errors"
+	"path"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -22,12 +24,58 @@ import (
 
 // A Library is a package written in Snello that the program imports, as
 // the importer loaded it: its import path, its source file and its
-// syntax, checked into the program's Info. It is compiled with the
-// program, into the same output, its names qualified by its import path.
+// syntax, checked into the program's Info, and the .c and .h files of
+// its directory when it binds C, none for a standard package. It is
+// compiled with the program, into the same output, its names qualified
+// by its import path.
 type Library struct {
 	Path   string
 	File   *token.File
 	Syntax *ast.File
+	CFiles []string
+}
+
+// A Binding is a package's C side, which the backends compile with the
+// program (_docs/design/08-packages.md, section 6): its import path,
+// the symbol prefix that names its directory in a build, the header the
+// compiler writes there for its C to include, the .c and .h files of
+// its directory, and the functions it declares without a body, bound
+// to C under their derived symbols.
+type Binding struct {
+	Path   string
+	Prefix string
+	Header string
+	Files  []string
+	Funcs  []*types.Func
+}
+
+// Bindings collects the C side of every library that has one, in the
+// order of the libraries: a standard package has none, since the
+// runtime is its C side, and a package of the program's own has one
+// when its directory holds a .c or .h file.
+func Bindings(info *types.Info, libraries []Library) []Binding {
+	var bindings []Binding
+	index := make(map[string]int)
+	for _, lib := range libraries {
+		if len(lib.CFiles) == 0 {
+			continue
+		}
+
+		i, ok := index[lib.Path]
+		if !ok {
+			i = len(bindings)
+			index[lib.Path] = i
+			bindings = append(bindings, Binding{Path: lib.Path, Prefix: strings.TrimSuffix(PathPrefix(lib.Path), "_"), Header: path.Base(lib.Path) + ".snello.h", Files: lib.CFiles})
+		}
+
+		for _, d := range lib.Syntax.Decls {
+			if d, ok := d.(*ast.FuncDecl); ok && d.Body == nil {
+				bindings[i].Funcs = append(bindings[i].Funcs, info.Defs[d.Name].(*types.Func))
+			}
+		}
+	}
+
+	return bindings
 }
 
 // CheckPrefixes refuses two libraries whose import paths would share
