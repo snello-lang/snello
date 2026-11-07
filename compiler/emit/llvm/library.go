@@ -5,6 +5,7 @@
 package llvm
 
 import (
+	"path/filepath"
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -54,10 +55,99 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 	case "rc.leak", "sync.leak": // the pointer moves in and nothing frees it
 		e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})
 		return unit
+	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
+		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
+		e.locate(x, fn)
+		plain := "Log"
+		if key == "expect.Failf" {
+			plain = "Fail"
+		}
+
+		line := e.sprintf(x.Args[0], x.Args[1:])
+		target := fn.Pkg().Scope().Lookup(plain).(*types.Func)
+		e.inst("call void @" + lower.ObjName(target) + "(" + line.typed() + ")") // a ref string is the three words themselves
+		e.dropOf(e.spill(line), types.Typ[types.String], x.Pos())
+		return unit
+	case "testing.Catch": // the function runs under the runtime's mark, called through an adapter as the sort's less is
+		sig := lower.ValueType(e.typeOf(x.Args[0]))
+		f := e.spill(e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0])
+		str := e.irType(types.Typ[types.String], x.Pos())
+		msg := e.slot(str)
+		e.store(value{str, "zeroinitializer"}, msg) // the payload of a None, as the C side's {.has = false} leaves it
+		has := e.rt("sn_catch", "i1", value{"ptr", "@" + e.catchAdapter(sig, x.Pos())}, value{"ptr", f}, value{"ptr", msg})
+		out := e.insert(value{e.irType(e.typeOf(x), x.Pos()), "zeroinitializer"}, has, 0)
+		return e.insert(out, e.load(str, msg), 1)
 	}
 
 	e.unsupported(x.Pos(), key)
 	return unit
+}
+
+// locate hands the runtime, before a call of a located function, the
+// place of the call for the running task, file:line, with the call's
+// text and its parts for an assertion: the type of what Equal
+// compares, or the operands of a condition with their values, when
+// they are simple enough to read twice (_docs/design/09-testing.md,
+// section 4).
+func (e *Emitter) locate(x *ast.CallExpr, fn *types.Func) {
+	mode := lower.Located(fn)
+	if mode == "" {
+		return
+	}
+
+	pos := e.file.Position(x.Pos())
+	where := filepath.Base(pos.Filename) + ":" + strconv.Itoa(pos.Line)
+	if mode != "call" {
+		e.rt("sn_testing_line", "void", e.constString(where))
+		return
+	}
+
+	where += ": " + ast.Source(x)
+	e.rt("sn_testing_call", "void", e.constString(where), e.parts(x, fn.Name()))
+}
+
+// parts writes the parts of an assertion as lower.Parts decides them:
+// the type compared, or the operands with their values, "n is 2,
+// limit is 3", or nothing.
+func (e *Emitter) parts(x *ast.CallExpr, name string) value {
+	typed, operands := lower.Parts(e.info, x, name)
+	if typed {
+		return e.constString(lower.ValueType(e.typeOf(x.Args[0])).String())
+	}
+
+	if len(operands) == 0 {
+		return e.constString("")
+	}
+
+	var pieces []piece
+	for i, operand := range operands {
+		if i > 0 {
+			pieces = append(pieces, piece{lit: ", "})
+		}
+
+		pieces = append(pieces, piece{lit: ast.Source(operand) + " is "}, piece{text: e.textOf(e.expr(operand), e.typeOf(operand), operand.Pos(), false)})
+	}
+
+	return e.concat(pieces, x.Pos())
+}
+
+// catchAdapter returns the name of the function that lets sn_catch
+// call a Snello function value held in the context, written once.
+func (e *Emitter) catchAdapter(sig types.Type, pos token.Pos) string {
+	name := "sn_catchfn_" + lower.Mangle(sig)
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	pair := e.irType(sig, pos)
+	e.helper(name, "void", []string{"ptr %ctx"}, func() {
+		fn := e.load("ptr", e.gep(pair, "%ctx", 0))
+		e.inst("call void " + fn.s + "(ptr " + e.gep(pair, "%ctx", 1) + ")")
+		e.inst("ret void")
+		e.fn.terminated = true
+	})
+	return name
 }
 
 // print writes a text to standard output, freed after when built here.

@@ -129,9 +129,14 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		v := e.load(e.irType(t, x.Pos()), p)
 		e.zero(p, t, x.Pos())
 		return v
-	case types.BuiltinPanic:
+	case types.BuiltinPanic: // the text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
 		v := e.operands(x.Args, nil)[0]
-		e.panic(e.built(e.textOf(v, e.typeOf(x.Args[0]), x.Pos(), false)))
+		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos(), false).v
+		if msg.typ == "" {
+			msg = e.constString("")
+		}
+
+		e.panic(msg)
 		return unit
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)

@@ -247,12 +247,16 @@ void sn_heap_free(void *p) {
 // The allocator of a release build; debug.c has the counting,
 // poisoning one of a debug build, over the same heap.
 #ifndef SN_DEBUG
+_Atomic int64_t sn_alloc_count, sn_alloc_total;
+
 void *sn_alloc(size_t n) {
     void *p = sn_heap_alloc(n);
     if (p == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
+    atomic_fetch_add_explicit(&sn_alloc_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sn_alloc_total, (int64_t)n, memory_order_relaxed);
     return p;
 }
 

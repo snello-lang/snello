@@ -118,6 +118,18 @@ uint64_t sn_next_random(void);
 // the scheduler starts a worker per and os.Cores reports. sched.c's.
 int64_t sn_cores(void);
 
+// sn_alloc_count and sn_alloc_total count the blocks and the bytes
+// sn_alloc has given out, in a release build and a debug build alike,
+// for a benchmark's allocations per operation. alloc.c's and debug.c's.
+extern _Atomic int64_t sn_alloc_count, sn_alloc_total;
+
+// sn_task_places returns the running task's slots for the place of a
+// test's call: the file and line of a testing.Log, the file, line and
+// text of an expect call, and that call's parts, owned. sched.c's,
+// filled and read by testing.c, the parts freed with the task.
+enum { SN_PLACE_LINE, SN_PLACE_CALL, SN_PLACE_PARTS };
+sn_string *sn_task_places(void);
+
 // sn_deadline_arm calls fire(arg) d nanoseconds from now on the timers'
 // thread, keeping the timer at *at, 0 while it is out of the heap, so
 // that arming it again moves it and sn_deadline_disarm takes it out;

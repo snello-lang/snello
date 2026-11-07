@@ -1075,6 +1075,11 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 				return unit
 			}
 
+			if lower.Located(obj) != "" {
+				e.unsupported(x.Pos(), pkg.Name()+"."+x.Sel.Name+" as a value: it is called, so that a failure names its line")
+				return unit
+			}
+
 			return e.funcValue(obj, x.Pos())
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())

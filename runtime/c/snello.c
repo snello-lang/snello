@@ -31,6 +31,7 @@ sn_slice sn_os_Args = {0};
 // the end, and debug.c has the report of a debug build.
 #ifndef SN_DEBUG
 int sn_finish(void) {
+    sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
     return 0;
 }
 #endif

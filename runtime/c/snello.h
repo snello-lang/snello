@@ -79,6 +79,7 @@ static inline sn_string sn_owned(void *p, int64_t n) {
 void *sn_heap_alloc(size_t n);
 void sn_heap_free(void *p);
 _Noreturn void sn_panic(sn_string msg);
+bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg); // runs fn under a mark: true with the message when a panic ended it (testing.Catch)
 
 // The guards: the owned values whose drop runs a Drop method, which
 // the emitted code registers where each is declared and removes where
@@ -380,6 +381,16 @@ int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_str
 int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
 int64_t sn_os_Cores(void);
+int64_t sn_testing_task(void); // the running task's identity, for the test runner's state per test
+void sn_testing_lock(void);
+void sn_testing_unlock(void);
+int64_t sn_testing_allocs(void); // the blocks sn_alloc gave out so far, for a benchmark's allocations per operation
+int64_t sn_testing_allocBytes(void);
+void sn_testing_line(sn_string where);                  // the compiler writes these before a call of testing.Log, Logf, Skip, and of an exported function of expect
+void sn_testing_call(sn_string where, sn_string parts); // the place of the call, with the parts the compiler found, owned
+sn_string sn_testing_where(void);                        // testing.where, expect.where and expect.parts read them back
+sn_string sn_expect_where(void);
+sn_string sn_expect_parts(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);

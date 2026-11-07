@@ -51,7 +51,7 @@ func (p Program) Builds() []bool {
 func (p Program) Check(out, stderr string, code int) string {
 	switch {
 	case code != p.Code:
-		return "exit code " + strconv.Itoa(code) + ", want " + strconv.Itoa(p.Code)
+		return "exit code " + strconv.Itoa(code) + ", want " + strconv.Itoa(p.Code) + "; stderr: " + strconv.Quote(stderr)
 	case !p.AnyOut && out != p.Out:
 		return "output " + strconv.Quote(out) + ", want " + strconv.Quote(p.Out)
 	case !strings.Contains(stderr, p.Stderr):
@@ -809,6 +809,100 @@ func main() {
 }
 `,
 			Out: "true false true false\n2 b true\n1\n",
+		},
+		{
+			Name: "catch", // a panic caught at the runtime's mark: the values with Drop made under it are dropped, what the caller holds stays, marks nest, a runtime panic is a message like any other, and a failed expectation is a panic like any other
+			Src: `package main
+import ("expect"; "fmt"; "testing")
+struct Res impl Drop { name string }
+func (r mut Res) Drop() { fmt.Println("drop", r.name) }
+func main() {
+	kept := Res{name: "kept"}
+	expect.Panics(func() {
+		inner := Res{name: "inner"}
+		fmt.Println("holding", inner.name)
+		panic("boom")
+	})
+	fmt.Println("after", kept.name)
+	expect.PanicsWith(func() { a, b := 1, 0; fmt.Println(a / b) }, "integer divide by zero")
+	expect.PanicsWith(func() {
+		expect.Panics(func() { panic("inner") })
+		fmt.Println("between")
+		panic("outer")
+	}, "outer")
+	fmt.Println(testing.Catch(func() {}), testing.Catch(func() { panic("told") }))
+	expect.True(len(kept.name) == 4) // an assertion on the main task: the parts it holds are freed at the end, as a task's are with the task
+	fmt.Println("done")
+}`,
+			Out: "holding inner\ndrop inner\nafter kept\nbetween\nNone Some(\"told\")\ndone\ndrop kept\n",
+		},
+		{
+			Name: "catch-abandoned", // the plain values of the frames a caught panic abandons, the []int, the messages PanicsWith and Panics build here and the place Panics holds, are not freed: a panic drops what has a Drop method and the process frees the rest at its end, so a test build is a release build (09-testing.md, section 3)
+			Src: `package main
+import ("expect"; "fmt")
+func main() {
+	expect.PanicsWith(func() { xs := []int{1}; fmt.Println(xs[5]) }, "index out of range [5] with length 1")
+	expect.PanicsWith(func() { expect.PanicsWith(func() { panic("a") }, "b") }, "catch-abandoned.snello:5: expect.PanicsWith(func() { ... }, \"b\")\n        panicked with: \"a\"\n        want:          \"b\"")
+	expect.PanicsWith(func() { expect.Panics(func() {}) }, "catch-abandoned.snello:6: expect.Panics(func() { ... }): the function did not panic") // the place Panics holds and the message it builds are abandoned too
+	fmt.Println("done")
+}`,
+			Out:         "done\n",
+			ReleaseOnly: true,
+		},
+		{
+			Name: "catch-drop-panics", // a Drop that panics while a caught panic unwinds ends the process, with both messages, since the first can no longer reach the mark
+			Src: `package main
+import ("expect"; "fmt")
+struct Bad impl Drop { name string }
+func (b mut Bad) Drop() { panic(ref ("drop of " + b.name + " failed")) }
+func main() {
+	expect.Panics(func() {
+		b := Bad{name: "b"}
+		fmt.Println("holding", b.name)
+		panic("original")
+	})
+	fmt.Println("not reached")
+}`,
+			Out:         "holding b\n",
+			Stderr:      "panic: drop of b failed\n\twhile unwinding from panic: original\n",
+			Code:        2,
+			ReleaseOnly: true, // the abandoned frames are not freed, as catch-abandoned pins
+		},
+		{
+			Name: "catch-across-threads", // a mark taken on one thread and jumped to after the task parked and resumed on another: the jump restores the task's own stack and registers, nothing of the thread's
+			Src: `package main
+import ("expect"; "fmt"; "testing"; "time")
+struct Res impl Drop { name string }
+func (r mut Res) Drop() { fmt.Println("drop", r.name) }
+func main() {
+	ready := make(chan int)
+	done := make(chan string)
+	r, d := ready.Clone(), done.Clone()
+	spawn func() {
+		for i := 0; i < 5; i++ {
+			kept := Res{name: "kept"}
+			expect.PanicsWith(func() {
+				inner := Res{name: "inner"}
+				n := <-r ?? -1
+				time.Sleep(time.Millisecond)
+				panic(fmt.Sprintf("boom %d %s", n, inner.name))
+			}, fmt.Sprintf("boom %d inner", i))
+			msg := testing.Catch(func() { <-r; panic("second") })
+			fmt.Println("round", i, kept.name, msg)
+		}
+		d <- "ok"
+	}()
+	for i := 0; i < 5; i++ {
+		time.Sleep(time.Millisecond)
+		ready <- i
+		time.Sleep(time.Millisecond)
+		ready <- i
+	}
+	fmt.Println(<-done ?? "none")
+}`,
+			Out:         "drop inner\nround 0 kept Some(\"second\")\ndrop kept\ndrop inner\nround 1 kept Some(\"second\")\ndrop kept\ndrop inner\nround 2 kept Some(\"second\")\ndrop kept\ndrop inner\nround 3 kept Some(\"second\")\ndrop kept\ndrop inner\nround 4 kept Some(\"second\")\ndrop kept\nok\n",
+			ReleaseOnly: true, // the message built by Sprintf in the abandoned frame is not freed, as catch-abandoned pins
+			MinCPUs:     2,
 		},
 		{
 			Name: "guard-temporaries", // a guard built in a statement and lent mut, as Get's receiver is, is dropped with the statement, so the lock is given back: an assignment, an op= and a call through it, in a closure too
@@ -1717,4 +1811,6 @@ var Refusals = []Refusal{
 	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
 	{"var n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
 	{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
+	{"import \"expect\"\nfunc main() { ok := expect.True; ok(true) }", "expect.True as a value: it is called, so that a failure names its line"},
+	{"import \"testing\"\nfunc main() { log := testing.Log; log(\"x\") }", "testing.Log as a value"},
 }
