@@ -24,5 +24,5 @@ func main() {
 	fmt.Println(tally.Fill(mut buf, 7), buf)
 	var n int
 	fmt.Println(tally.Parse("123", mut n), n, tally.Parse("12x", mut n), n)
-	fmt.Println(mathx.Cbrt(27))
+	fmt.Printf("%.3f\n", mathx.Cbrt(27)) // to three decimals: a libm's cbrt may be off in the last bit
 }
