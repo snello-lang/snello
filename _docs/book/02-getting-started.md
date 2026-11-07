@@ -72,7 +72,7 @@ func main() {
 }
 ```
 
-An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. There are no versions and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
+An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. There are no versions and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one: a dependency is the directory it is, so two dependencies that each require a third share one copy of it, and a value of the third's types passes between them. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
 
 ## A second program
 

@@ -248,7 +248,9 @@ func checkRequireName(name string) error {
 }
 
 // checkImportPath says what is wrong with an import path: an element
-// that is empty, or that is . or .., as go/build refuses them.
+// that is empty, or that is . or .., as go/build refuses them, or a
+// character outside letters, digits, . - and _, as the go command
+// refuses, which keeps ~ for the importer's own ids.
 func checkImportPath(path string) error {
 	for _, elem := range strings.Split(path, "/") {
 		switch elem {
@@ -256,6 +258,12 @@ func checkImportPath(path string) error {
 			return errors.New("malformed import path " + strconv.Quote(path) + ": empty path element")
 		case ".", "..":
 			return errors.New("malformed import path " + strconv.Quote(path) + ": a relative path; name the package by its directory under the module")
+		}
+
+		for _, c := range elem {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+				return errors.New("malformed import path " + strconv.Quote(path) + ": invalid character " + strconv.QuoteRune(c))
+			}
 		}
 	}
 

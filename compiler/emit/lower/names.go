@@ -119,7 +119,7 @@ func prefix(space, path string) string {
 		switch path[i] {
 		case '/':
 			b.WriteString("__")
-		case '.', '-':
+		case '.', '-', '~':
 			b.WriteByte('_')
 		default:
 			b.WriteByte(path[i])
