@@ -64,6 +64,7 @@ type Info struct {
 	Moves     map[ast.Expr]bool          // the place expressions whose value moves away: the emitter empties the place
 	Instances map[*ast.Ident]Instance    // the name of each generic function at a call, with the arguments inferred for it
 	Captures  map[*ast.FuncLit][]Capture // the variables of the enclosing functions each closure refers to, in the order first seen
+	Wraps     map[*ast.TryExpr]*Variant  // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -219,6 +220,10 @@ func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File,
 
 		if info.Captures == nil {
 			info.Captures = make(map[*ast.FuncLit][]Capture)
+		}
+
+		if info.Wraps == nil {
+			info.Wraps = make(map[*ast.TryExpr]*Variant)
 		}
 	}
 

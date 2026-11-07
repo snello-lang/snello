@@ -285,7 +285,7 @@ func (e *Emitter) try(x *ast.TryExpr) string {
 		e.line("return " + e.variantValue(e.result, types.NoneVariant, nil, x.Pos()) + ";")
 	case *types.Result:
 		e.line("if (!" + place + ".ok) {")
-		err := e.taken(place+".err", u.Err(), held, e.typeOf(x.X), x.Pos())
+		err := e.passed(x, e.taken(place+".err", u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{err}, x.Pos()) + ";")
 	}

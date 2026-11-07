@@ -4,7 +4,8 @@
 
 // This file reads the formats of fmt's printing functions: the grammar
 // of Go's fmt, of which Snello's fmt takes the verbs %d, %s, %v, %q, %f
-// and %t, a width, a precision and the minus flag. The checker checks a
+// and %t, a width, a precision, the minus flag and the plus flag on %v
+// of an error, which prints its chain. The checker checks a
 // format against its arguments with it, as go vet's printf check does,
 // and both backends lower a format with it, so the three read one
 // grammar.
@@ -61,6 +62,7 @@ type FormatPiece struct {
 	Text  string // the text, when Verb is 0
 	Verb  byte   // one of FormatVerbs
 	Minus bool   // pad on the right, %-6s
+	Plus  bool   // print an error's chain, %+v
 	Width int    // the width, or -1
 	Prec  int    // the precision, or -1
 }
@@ -91,11 +93,14 @@ func ParseFormat(format string) ([]FormatPiece, error) {
 		i++
 		p := FormatPiece{Width: -1, Prec: -1}
 		for ; i < len(format) && isFormatFlag(format[i]); i++ {
-			if format[i] != '-' {
+			switch format[i] {
+			case '-':
+				p.Minus = true
+			case '+':
+				p.Plus = true
+			default:
 				return nil, &FormatError{"fmt takes no " + string(format[i]) + " flag: " + formatQuoted(format)}
 			}
-
-			p.Minus = true
 		}
 
 		i, p.Width = formatNumber(format, i)
@@ -118,6 +123,10 @@ func ParseFormat(format string) ([]FormatPiece, error) {
 			p.Verb = c
 		default:
 			return nil, &FormatError{"fmt has no verb %" + string(rune(c)) + ": " + formatQuoted(format)}
+		}
+
+		if p.Plus && p.Verb != 'v' {
+			return nil, &FormatError{"fmt takes the + flag on %v of an error only: " + formatQuoted(format)}
 		}
 
 		if len(text) > 0 {

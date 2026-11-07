@@ -1,0 +1,135 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The Error trait, whole: a message derived from the value, a cause
+// through Source, the chain under %+v, an error passed into the one
+// variant that holds its type or into a trait value, and a trait value
+// of Error printed as its message. Chapter 17 of the book is cut from
+// this program.
+
+package main
+
+import ("fmt"; "io"; "os"; "strconv")
+
+// An enum that lists Error and writes nothing: its message is the value
+// as %v prints it, and its Source is None.
+enum AppError impl Error, Clone {
+    Read(cause io.Error)
+    Parse(cause strconv.Error)
+    Missing(key string)
+    Empty
+}
+
+// A struct and a type over int, the same way.
+struct Pair impl Error { key string; n int }
+type Code int impl Error
+
+// A type that writes its message and gives its cause: Source returns
+// an owned trait value, so the cause is cloned.
+struct LoadError impl Error, Clone {
+    path  string
+    cause AppError
+}
+
+func (e ref LoadError) Error() string { return fmt.Sprintf("load %s", e.path) }
+func (e ref LoadError) Source() Error? { return Some(e.cause.Clone()) }
+
+// A second level of wrapping, for a chain of three.
+struct Outer impl Error { inner LoadError }
+
+func (e ref Outer) Error() string { return "start" }
+func (e ref Outer) Source() Error? { return Some(e.inner.Clone()) }
+
+struct Point impl fmt.Stringer { x, y int }
+
+func (p ref Point) String() string { return fmt.Sprintf("(%d, %d)", p.x, p.y) }
+
+// ? passes an io.Error into Read and a strconv.Error into Parse, the
+// one variant each that holds the type, with no conversion written.
+func load(path string) Result<int, AppError> {
+    text := os.ReadToString(ref path)?
+    n := strconv.Atoi(ref text)?
+    return Ok(n)
+}
+
+// With Error itself as the error type, ? passes any error in as a
+// trait value: the shape of a function returning (T, error).
+func loadAny(path string) Result<int, Error> {
+    text := os.ReadToString(ref path)?
+    n := strconv.Atoi(ref text)?
+    return Ok(n)
+}
+
+func parse(text ref string) Result<int, AppError> {
+    n := strconv.Atoi(text)?
+    return Ok(n)
+}
+
+// The same type passes as it is, as it always has.
+func twice(text ref string) Result<int, AppError> {
+    n := parse(text)?
+    return Ok(n * 2)
+}
+
+// A variant with two fields is not a target of ?: the conversion is
+// written, as MapErr or a match.
+func wrap(path string) Result<int, LoadError> {
+    return load(path.Clone()).MapErr(func(e AppError) LoadError {
+        return LoadError{path: path, cause: e}
+    })
+}
+
+func main() {
+    // Derived messages: the value as it prints.
+    fmt.Println(Missing("port"), Empty, Pair{key: "k", n: 1}, Code(42))
+    q := "q"
+    match parse(ref q) {
+        Ok(n)  => fmt.Println(n),
+        Err(e) => fmt.Printf("%v|%s|%+v\n", e, e, e),
+    }
+    if s := Missing("port").Source() {
+        fmt.Println("source:", s)
+    } else {
+        fmt.Println("no source")
+    }
+
+    // ? into the variant, into a trait value, and as it is.
+    match load("/nonexistent/x") {
+        Ok(n)  => fmt.Println(n),
+        Err(e) => fmt.Println(e),
+    }
+    match loadAny("/nonexistent/x") {
+        Ok(n)  => fmt.Println(n),
+        Err(e) => fmt.Println("error:", e),
+    }
+    seven := "7"
+    fmt.Println(twice(ref seven), twice(ref q))
+
+    // A written Source: the chain under %+v, on the type and on a trait
+    // value of Error.
+    e := match wrap("/nonexistent/x") {
+        Ok(_)  => panic("read"),
+        Err(e) => e,
+    }
+    fmt.Printf("%v\n%+v\n", e, e)
+    o := Outer{inner: e}
+    fmt.Printf("%+v\n", o)
+    var boxed Error = o
+    fmt.Printf("%v|%+v|%q\n", boxed, boxed, boxed)
+    fmt.Println(boxed)
+    if s := boxed.Source() {
+        fmt.Println("source:", s)
+    }
+
+    // A failure told apart by the kind of its cause.
+    match load("app.conf") {
+        Ok(n)                                   => fmt.Println(n),
+        Err(Read(e)) if e.Kind() == io.NotExist => fmt.Println("no config, using defaults"),
+        Err(e)                                  => { fmt.Println(e); os.Exit(1) },
+    }
+
+    // A trait value of fmt.Stringer prints as its String too.
+    var p fmt.Stringer = Point{x: 1, y: 2}
+    fmt.Println(p, []fmt.Stringer{Point{x: 3, y: 4}}, Some(p))
+}

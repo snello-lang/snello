@@ -193,6 +193,11 @@ var handledErrors = map[string]bool{
 	"global-not-send.snello":          true,
 	"global-declared-not-send.snello": true,
 	"global-trait-not-send.snello":    true,
+	// The Error trait: ? passes an error on, the derived message, the + flag.
+	"try-ambiguous.snello":     true,
+	"try-no-variant.snello":    true,
+	"error-unprintable.snello": true,
+	"format-plus.snello":       true,
 }
 
 func TestNegativePrograms(t *testing.T) {

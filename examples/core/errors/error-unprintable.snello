@@ -1,0 +1,15 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a type that lists Error and writes no Error() has the message
+// derived, the value as %v prints it, so every field must be a value
+// fmt prints; a function value is not one.
+// Fix: write Error(), or keep the function out of the error.
+
+package p
+
+struct Job impl Error {                     // ERROR "Job does not implement Error: field run has type func(), which cannot be printed"
+    name string
+    run  func()
+}

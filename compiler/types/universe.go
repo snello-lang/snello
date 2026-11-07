@@ -34,8 +34,9 @@ var (
 // The standard traits, predeclared so that impl lists and bounds can
 // name them: the markers and the operator traits of section 1 of
 // _docs/design/05-standard-library.md. Each marker asks for one method
-// over Self, given in init; Copy asks for none, being a property of a
-// type's structure. The predeclared types implement them by structure
+// over Self, given in init, but Error, which asks for its message and
+// its cause; Copy asks for none, being a property of a type's
+// structure. The predeclared types implement them by structure
 // (stdtraits.go), and a declared type by listing them, writing the
 // method or deriving it from its fields. The operator traits get their
 // methods with the operators. Send asks for no method either: a type
@@ -116,8 +117,9 @@ func init() {
 	requires(OrdTrait, "Cmp", false, []*Var{otherParam(OrdTrait)}, Ordering)
 	requires(HashTrait, "Hash", false, nil, Typ[Uint64])
 	requires(ErrorTrait, "Error", false, nil, Typ[String])
-	refines(OrdTrait, EqTrait)  // what is ordered can be compared
-	refines(HashTrait, EqTrait) // equal values must hash alike
+	also(ErrorTrait, "Source", NewOption(ErrorTrait)) // the cause, an owned trait value: a borrowed one is not a type
+	refines(OrdTrait, EqTrait)                        // what is ordered can be compared
+	refines(HashTrait, EqTrait)                       // equal values must hash alike
 	for _, o := range operators {
 		operator(o.trait, o.name, true)
 	}
@@ -137,8 +139,20 @@ func init() {
 // requires gives a standard trait its one method: name, on a ref or
 // mut receiver of Self, with the given parameters and result.
 func requires(t *Trait, name string, mut bool, params []*Var, result Type) {
-	recv := NewVar(token.NoPos, "s", NewRef(t.self, mut))
-	t.required = []*Func{NewFunc(token.NoPos, name, NewSignature(recv, params, result))}
+	t.required = []*Func{NewFunc(token.NoPos, name, NewSignature(self(t, mut), params, result))}
+}
+
+// self is the receiver of a standard trait's method, s ref Self or s
+// mut Self.
+func self(t *Trait, mut bool) *Var {
+	return NewVar(token.NoPos, "s", NewRef(t.self, mut))
+}
+
+// also adds a second required method to a standard trait, on ref Self
+// with no parameters: Error's Source, which a type that writes none
+// has derived to give None (stdtraits.go).
+func also(t *Trait, name string, result Type) {
+	t.required = append(t.required, NewFunc(token.NoPos, name, NewSignature(self(t, false), nil, result)))
 }
 
 // refines makes the standard trait t refine base, with the resolution

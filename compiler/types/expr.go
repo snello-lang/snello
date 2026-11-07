@@ -830,7 +830,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	case *Result:
 		if r, ok := xt.Underlying().(*Result); ok {
 			if !Identical(r.err, want.err) {
-				c.errorf(e.Question, "? cannot pass on an error of type "+r.err.String()+" from a function returning "+c.sig.results.String())
+				c.passError(e, r.err, want.err)
 			}
 
 			return operand{value, r.val, nil, nil}
@@ -848,6 +848,79 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	c.errorf(e.Question, "? needs an option or a Result on its left, not "+x.typ.String())
 	return invalidOperand
 }
+
+// passError settles how x? hands an error of type from to a function
+// returning one of a different type to: as a trait value when to is a
+// trait from implements, or wrapped in the one variant of to's enum
+// whose only field has type from, which Info.Wraps records for the
+// backends. Two such variants are ambiguous, and anything else is
+// refused with the reason.
+func (c *Checker) passError(e *ast.TryExpr, from, to Type) {
+	head := "? cannot pass on an error of type " + from.String() + " from a function returning " + c.sig.results.String()
+	if tr, ok := to.(*Trait); ok {
+		if !convertsToTrait(from, tr) {
+			c.errorf(e.Question, head+traitReason(from, tr))
+		}
+
+		return
+	}
+
+	if _, ok := to.(*TypeParam); ok {
+		c.errorf(e.Question, head+": "+to.String()+" is a type parameter")
+		return
+	}
+
+	n, _ := to.(*Named)
+	if n == nil {
+		c.errorf(e.Question, head)
+		return
+	}
+
+	en, ok := n.Underlying().(*Enum)
+	if !ok {
+		c.errorf(e.Question, head+": "+n.String()+" is not an enum")
+		return
+	}
+
+	var holders []*Variant
+	for _, v := range en.variants {
+		if len(v.fields) == 1 && Identical(v.fields[0].typ, from) {
+			holders = append(holders, v)
+		}
+	}
+
+	switch len(holders) {
+	case 1:
+		if c.info != nil {
+			c.info.Wraps[e] = holders[0]
+		}
+	case 0:
+		c.errorf(e.Question, head+": no variant of "+n.String()+" holds "+article(from.String()))
+	default:
+		where := ""
+		for i, v := range holders {
+			if i > 0 {
+				where += " and "
+			}
+
+			where += "in " + v.name
+		}
+
+		c.errorf(e.Question, head+": "+n.String()+" holds "+article(from.String())+" "+where+"; convert it")
+	}
+}
+
+// article prefixes a type's name with a or an, for a message that
+// speaks of one value of it.
+func article(name string) string {
+	if len(name) > 0 && isVowel(name[0]) {
+		return "an " + name
+	}
+
+	return "a " + name
+}
+
+func isVowel(c byte) bool { c |= 0x20; return c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' }
 
 // funcLit checks a closure: its body is checked as a function body with
 // the closure's own signature, and names it captures resolve through

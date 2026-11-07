@@ -1,0 +1,14 @@
+Missing("port") Empty {k 1} 42
+Parse("strconv.Atoi: parsing \"q\": invalid syntax")|Parse("strconv.Atoi: parsing \"q\": invalid syntax")|Parse("strconv.Atoi: parsing \"q\": invalid syntax")
+no source
+Read("open /nonexistent/x: no such file or directory")
+error: open /nonexistent/x: no such file or directory
+Ok(14) Err("Parse(\"strconv.Atoi: parsing \\\"q\\\": invalid syntax\")")
+load /nonexistent/x
+load /nonexistent/x: Read("open /nonexistent/x: no such file or directory")
+start: load /nonexistent/x: Read("open /nonexistent/x: no such file or directory")
+start|start: load /nonexistent/x: Read("open /nonexistent/x: no such file or directory")|"start"
+start
+source: load /nonexistent/x
+no config, using defaults
+(1, 2) [(3, 4)] Some("(1, 2)")

@@ -197,6 +197,10 @@ func (e *Emitter) methodNameOf(id *ast.Ident, t *types.Named, name string, pos t
 			return e.hasher(t, pos), sig
 		case "Clone":
 			return e.cloner(t, pos), sig
+		case "Error":
+			return e.messenger(t, pos), sig
+		case "Source":
+			return e.sourcer(t, pos), sig
 		}
 	}
 

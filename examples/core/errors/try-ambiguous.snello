@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: ? passes an error into the one variant of the function's error
+// enum whose only field has the error's type; two such variants leave
+// the choice to the program.
+// Fix: MapErr, or a match, naming the variant meant.
+
+package p
+
+import ("io"; "os")
+
+enum SyncError impl Error {
+    Read(cause io.Error)
+    Write(cause io.Error)
+}
+
+func load(path string) Result<string, SyncError> {
+    text := os.ReadToString(ref path)?     // ERROR "? cannot pass on an error of type io.Error from a function returning Result<string, SyncError>: SyncError holds an io.Error in Read and in Write; convert it"
+    return Ok(text)
+}
