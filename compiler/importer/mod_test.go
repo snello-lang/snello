@@ -155,13 +155,16 @@ func TestOwnPackages(t *testing.T) {
 		"util/util.snello":        "package util\n\nfunc U() int { return 7 }\n",
 		"own/own.snello":          "package own\n\nimport \"util\"\n\nfunc N() int { return util.U() }\n",
 		"../third/snello.mod":     "",
-		"../third/pkg/pkg.snello": "package pkg\n\nfunc N() int { return 3 }\n",
+		"../third/pkg/pkg.snello": "package pkg\n\nstruct T { n int }\n\nfunc N() int { return 3 }\n\nfunc Make() T { return T{n: 3} }\n",
+		"make/make.snello":        "package make\n\nimport \"third/pkg\"\n\nfunc Make() pkg.T { return pkg.Make() }\n",
+		"../dia/snello.mod":       "require third ../third\n",
+		"../dia/via/via.snello":   "package via\n\nimport \"third/pkg\"\n\nfunc Take(t pkg.T) int { return pkg.N() }\n",
 		"greet/greet.snello":      "package greet\n\nimport \"leaf\"\n\nfunc Hello() string { return leaf.Word().Clone() + \", hello\" }\n",
 		"../leaf/leaf.snello":     "package leaf\n\nfunc Word() string { return \"leaf\" }\n",
 		"../bare/bare.snello":     "package bare\n\nfunc N() int { return 1 }\n",
 	})
 	root := writeTree(t, map[string]string{
-		"snello.mod":                 "require dep " + dep + "\nrequire bare " + filepath.Join(dep, "..", "bare") + "\nrequire twin " + filepath.Join(dep, "..", "bare") + "\n",
+		"snello.mod":                 "require dep " + dep + "\nrequire bare " + filepath.Join(dep, "..", "bare") + "\nrequire twin " + filepath.Join(dep, "..", "bare") + "\nrequire dia " + filepath.Join(dep, "..", "dia") + "\nrequire also " + dep + "\n",
 		"twin/t.snello":              "package twin\n",
 		"shapes/shapes.snello":       shapesSrc,
 		"shapes/area.snello":         areaSrc,
@@ -218,6 +221,8 @@ func TestOwnPackages(t *testing.T) {
 		{"import \"bare\"\nfunc f() int { return bare.N() }", nil},                                                                                 // a required directory with no module file of its own
 		{"import \"dep/chain\"\nfunc f() int { return chain.N() }", nil},                                                                           // a required module requiring a third, which has a module file of its own
 		{"import \"dep/own\"\nimport \"util\"\nfunc f() string { return util.Own() + own.N() }", []string{"mismatched types string and int in +"}}, // the dependency's util and the program's are two packages: own.N is the dependency's int
+		{"import \"dep/make\"\nimport \"dia/via\"\nfunc f() int { return via.Take(make.Make()) }", nil},                                            // a diamond: dep and dia each require third, which is one module and pkg.T one type
+		{"import \"also/util\"\nimport \"dep/util\"\nfunc f() int { return util.U() }", []string{"util redeclared"}},                               // one module under two require names is one module: the second import is the same package, and the name clashes as any twice-imported package's does
 		{"import \"dep/util\"\nimport \"util\"\nfunc f() int { return util.U() }", []string{"util redeclared"}},
 		{"import \"twin\"\nfunc f() {}", []string{`import "twin" is both a directory of the module and under the required twin`}},
 		{"import \"cmd/tool\"\nfunc f() {}", []string{`import "cmd/tool" is a program, not an importable package`}},

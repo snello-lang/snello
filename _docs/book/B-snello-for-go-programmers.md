@@ -182,6 +182,7 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `GOROOT` holds the library's source | The library's source is inside the compiler; a build needs no path and no environment |
 | A function with no body is implemented in assembly | A function with no body is the runtime's, in C; only the library may declare one |
 | `os.ReadFile` returns bytes and an error | `os.ReadToString` returns `Result<string, io.Error>` (chapter 8) |
+| `runtime.NumCPU()` | `os.Cores()`; there is no `runtime` package, and no `GOMAXPROCS`: the runtime runs one worker per processor |
 | `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
 | `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |
 | `io.Reader` and `io.Writer` are interfaces; `io.Copy(dst, src)` dispatches dynamically | `io.Reader` and `io.Writer` are traits; `io.Copy` is generic over them, one copy per pair of types |

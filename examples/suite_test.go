@@ -8,6 +8,9 @@
 package examples
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,17 +104,17 @@ func build(dir, name, backend string, src []byte, debug bool, bindings []lower.B
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
-	"03-http-cache": "net/http, db and json, later libraries over the net package",
-	"19-cli-grep":   "regexp, a later library",
+	"19-cli-grep": "regexp, a later library of stage 8",
 }
 
 // TestExamples builds every example program that has its expected
 // output under expected/, through both backends, as a release build
 // and as a debug build, runs it with the files its fixture folder
-// holds, and compares what it prints: the differential test of the two
-// backends, which must print the same thing as each other and as the
-// output recorded. A program without an expected output must be on
-// the pending list, with its reason; the time each step takes is
+// holds, or drives it over a socket when a script lies beside the
+// output, and compares what it prints: the differential test of the
+// two backends, which must print the same thing as each other and as
+// the output recorded. A program without an expected output must be
+// on the pending list, with its reason; the time each step takes is
 // logged, which is how the compile time of the suite is recorded.
 func TestExamples(t *testing.T) {
 	var pending []string
@@ -131,6 +134,11 @@ func TestExamples(t *testing.T) {
 
 		if reason, listed := pendingExamples[name]; listed {
 			t.Errorf("%s has an expected output but is still listed as pending for %s", name, reason)
+		}
+
+		script, err := os.ReadFile(filepath.Join("expected", name+".script"))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
 		}
 
 		green++
@@ -154,13 +162,9 @@ func TestExamples(t *testing.T) {
 
 					back += time.Since(start)
 					placeFixtures(t, name, dir)
-					cmd := exec.Command(bin)
-					cmd.Dir = dir
-					stdout, err := cmd.Output()
-					if exit, ok := err.(*exec.ExitError); ok {
-						t.Fatalf("%s, debug %v: exited with %d\n%s%s", backend, debug, exit.ExitCode(), stdout, exit.Stderr)
-					} else if err != nil {
-						t.Fatal(err)
+					stdout, err := run(bin, dir, script)
+					if err != nil {
+						t.Fatalf("%s, debug %v: %v", backend, debug, err)
 					}
 
 					if string(stdout) != string(want) {
@@ -179,6 +183,25 @@ func TestExamples(t *testing.T) {
 
 	t.Logf("%d examples green, %d pending: %s", green, len(pending), strings.Join(pending, ", "))
 	t.Logf("compile time: %v in the compiler, %v in clang and cc for two builds through each backend", front.Round(time.Millisecond), back.Round(time.Millisecond))
+}
+
+// run runs the binary bin in dir and returns what it printed on
+// standard output: on its own for a program that prints, or driven by
+// the script for one that serves. An exit that is not 0 is an error
+// carrying the code and the standard error.
+func run(bin, dir string, script []byte) ([]byte, error) {
+	if script != nil {
+		return play(bin, dir, script)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = dir
+	stdout, err := cmd.Output()
+	if exit, ok := err.(*exec.ExitError); ok {
+		return nil, fmt.Errorf("exited with %d\n%s%s", exit.ExitCode(), stdout, exit.Stderr)
+	}
+
+	return stdout, err
 }
 
 // placeFixtures copies the files of expected/<name>.files/, when the

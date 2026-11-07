@@ -63,14 +63,19 @@ type loading struct {
 	std  bool
 }
 
-// A root is a module the importer has reached, with the prefix the
-// paths of its packages carry: none for the program's module, and for
-// a required module the require names that led to it, dep, or
-// dep/third for a module a dependency requires. The prefix is what
-// keeps the program's util and a dependency's util two packages.
+// A root is a module the importer has reached, with the id the paths
+// of its packages carry: none for the program's module, and for a
+// required module the require name that first reached it, dep, with a
+// numeral after a ~ when a module reached earlier took that name,
+// dep~2. A module is one whatever route reaches it, since the roots
+// are keyed by directory: a dependency two dependencies require is
+// loaded once and its types are one type, where a name made of the
+// route, b/d and c/d, loaded it twice (2026-11-07, decision 5 of the
+// design note). The id is what keeps the program's util and a
+// dependency's util two packages.
 type root struct {
 	module *Module
-	prefix string
+	id     string
 }
 
 // NewImporter returns an importer that checks the packages it loads
@@ -98,10 +103,11 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 // ImportFrom loads the package at importPath for a file in dir: the
 // standard library answers first, then the directories of the module
 // dir is in, then that module's require lines. A package of a required
-// module is named by the require that reached it, dep/util, so that
-// the program's util and the dependency's are two packages with two
-// symbol prefixes. A path none of the three has is refused naming the
-// three.
+// module is named by the module's id and its directory under it,
+// dep/util, so that the program's util and the dependency's are two
+// packages with two symbol prefixes, and the same package whichever
+// require line reaches its module. A path none of the three has is
+// refused naming the three.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
 	if importPath == "builtin" {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
@@ -140,18 +146,24 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 	}
 
 	canonical := importPath
-	if r.prefix != "" {
-		canonical = r.prefix + "/" + importPath
+	if r.id != "" {
+		canonical = r.id + "/" + importPath
 	}
 
+	owner := r // the module the package is a directory of, whose links it carries
 	if req != nil {
-		if err := imp.enter(req, canonical[:len(canonical)-len(importPath)]+req.Name); err != nil {
+		if owner, err = imp.enter(req); err != nil {
 			return nil, err
+		}
+
+		canonical = owner.id
+		if inner := strings.TrimPrefix(strings.TrimPrefix(importPath, req.Name), "/"); inner != "" {
+			canonical += "/" + inner
 		}
 	}
 
 	return imp.loadOnce(canonical, false, func() (*types.Package, []*Package, error) {
-		return imp.loadDir(canonical, importPath, pkgDir, r.module.Links)
+		return imp.loadDir(canonical, importPath, pkgDir, owner.module.Links)
 	})
 }
 
@@ -293,57 +305,87 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 	return pkg, entries, nil
 }
 
-// rootFor returns the module governing the files in dir, with the
-// prefix its packages are named under: the program's module for a
-// directory under its root, or the required module a directory is
-// under, which enter recorded when the require was followed. A module
-// file deeper in either tree is not looked for (section 7 of the
-// design note). A program with no module has none.
+// rootFor returns the module governing the files in dir, with the id
+// its packages are named under: the program's module for a directory
+// under its root, or the required module a directory is under, which
+// enter recorded when the require was followed. A module file deeper
+// in either tree is not looked for (section 7 of the design note). A
+// program with no module has none.
 func (imp *Importer) rootFor(dir string) (*root, error) {
 	if imp.Module == nil {
 		return nil, nil
 	}
 
-	if r, ok := imp.roots[imp.Module.Dir]; !ok || r == nil {
-		imp.roots[imp.Module.Dir] = &root{imp.Module, ""}
+	own := canonDir(imp.Module.Dir)
+	if r, ok := imp.roots[own]; !ok || r == nil {
+		imp.roots[own] = &root{imp.Module, ""}
 	}
 
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	for d := abs; ; d = filepath.Dir(d) {
+	for d := canonDir(dir); ; d = filepath.Dir(d) {
 		if r, ok := imp.roots[d]; ok {
 			return r, nil
 		}
 
 		if parent := filepath.Dir(d); parent == d {
-			return imp.roots[imp.Module.Dir], nil // outside every tree reached: the program's own rules
+			return imp.roots[own], nil // outside every tree reached: the program's own rules
 		}
 	}
 }
 
-// enter records the module a require line leads to, under the prefix
-// its packages are named by: the module its directory's snello.mod
-// marks, with its own require lines, or the directory alone when it
-// has none.
-func (imp *Importer) enter(req *Require, prefix string) error {
-	if _, ok := imp.roots[req.Dir]; ok {
-		return nil
+// canonDir is the one spelling of a directory the roots are keyed by:
+// absolute, with symbolic links resolved, so that two require lines
+// naming one directory two ways reach one module.
+func canonDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+
+	return abs
+}
+
+// enter returns the module a require line leads to, recording it the
+// first time under the id its packages are named by: the module its
+// directory's snello.mod marks, with its own require lines, or the
+// directory alone when it has none.
+func (imp *Importer) enter(req *Require) (*root, error) {
+	dir := canonDir(req.Dir)
+	if r, ok := imp.roots[dir]; ok {
+		return r, nil
 	}
 
 	m := &Module{Dir: req.Dir}
 	if src, err := os.ReadFile(filepath.Join(req.Dir, ModFile)); err == nil {
 		if m, err = ParseModFile(filepath.Join(req.Dir, ModFile), src); err != nil {
-			return err
+			return nil, err
 		}
 
 		if err := m.checkShadows(); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	imp.roots[req.Dir] = &root{m, prefix}
-	return nil
+	id := req.Name
+	for n := 2; imp.taken(id); n++ {
+		id = req.Name + "~" + strconv.Itoa(n) // ~ is no character of an import path, so the id names no directory and no require
+	}
+
+	r := &root{m, id}
+	imp.roots[dir] = r
+	return r, nil
+}
+
+// taken reports whether a module reached already carries the id.
+func (imp *Importer) taken(id string) bool {
+	for _, r := range imp.roots {
+		if r != nil && r.id == id {
+			return true
+		}
+	}
+
+	return false
 }

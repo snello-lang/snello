@@ -20,6 +20,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// sn_os_Cores is os.Cores: the processors the program may run on, the
+// count the scheduler starts a worker per.
+int64_t sn_os_Cores(void) {
+    return sn_cores();
+}
+
 // cpath copies a Snello string into a C string for the system calls. A
 // string holding a zero byte cannot be a path: the system would stop
 // reading at the zero and open another file than the one named, so it

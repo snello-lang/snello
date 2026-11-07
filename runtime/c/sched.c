@@ -27,6 +27,7 @@
 // stack a panic unwinds, which lives in the task.
 
 #define _DEFAULT_SOURCE // glibc's mmap flags and clocks under -std=c11, as snello.c asks for its own
+#define _GNU_SOURCE     // glibc's sched_getaffinity, for the processors the program may run on
 #define _DARWIN_C_SOURCE
 
 #include "internal.h"
@@ -40,6 +41,10 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 // sn_switch saves the callee-saved registers and the stack pointer of
 // the running context into *save, and resumes the context whose stack
@@ -130,13 +135,18 @@ static void *make_context(void *top, void (*entry)(void)) {
     return sp;
 }
 
-// A task's states: running on a worker; runnable on a queue; parking,
-// switched away from but not yet settled by its worker; parked,
-// waiting for a wake; done. A wake that arrives while the task is
-// running or parking is kept as the woken flag, which park consumes,
-// so a wake is never lost between a task deciding to wait and its
-// worker taking it off the stack.
-enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE };
+// A task's state is one atomic word, changed by compare-and-swap, as
+// Go's casgstatus changes a goroutine's: RUNNING on a worker; RUNNABLE
+// on a queue or in a slot; PARKING, switched away from but not yet
+// settled by its worker; PARKED, waiting for a wake; DONE. WOKEN is a
+// bit over the first three: a wake that came while the task was
+// running or parking, kept for its park, so that a wake is never lost
+// between a task deciding to wait and its worker taking it off the
+// stack, and cleared when the task resumes, since the wake that
+// resumed it is the one it waited for. Before, a mutex per task
+// guarded a state and a flag, made and destroyed per spawn and taken
+// twice per park and wake (2026-11-07, task 5.10 of stage 5).
+enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, WOKEN = 8 };
 
 typedef struct {
     void *p;
@@ -149,9 +159,7 @@ struct sn_task {
     size_t size;     // of the reservation, guard page included
     void (*run)(void *);
     void *arg;
-    pthread_mutex_t mu; // over state and woken
-    int state;
-    bool woken;
+    _Atomic int state;
     struct sn_task *next; // on a queue
     guard *guards;        // the values a panic drops, innermost last
     int64_t nguards, guardcap;
@@ -167,15 +175,29 @@ typedef struct sn_task task;
 // queue, so that two tasks handing values back and forth stay on one
 // thread, one switch apart, where a wake through the queue would wake
 // another thread to run the task there.
+enum { ring_size = 256, stack_cache = 32 }; // a cache of 64 was measured no better (2026-11-07)
+
 typedef struct {
     void *sched_sp;
     void *sched_stack;
     task *last; // the task that switched to the scheduler, to settle
     pthread_mutex_t mu;
-    task *head, *tail;
-    int64_t len;
     task *runnext;      // under mu
     int64_t runnext_at; // when it was put there, on the monotonic clock
+    // The queue is Go's runq: a ring the worker's own thread alone
+    // writes at the tail and takes from at the head, and other workers
+    // take half of from the head, each take a compare-and-swap of the
+    // head and no lock; a ring that is full sends half to the inject
+    // queue. The counts only grow, so a slot's index is its count
+    // modulo the size.
+    _Atomic uint32_t qhead, qtail;
+    _Atomic(task *) ring[ring_size]; // read by a stealer while the owner writes a neighbour: relaxed atomics make that formally clean at no cost
+    // The stacks of its tasks that ended, kept for its next spawns, as
+    // Go's stack cache sits per P over the heap: taken and given back
+    // by the worker's thread alone, with the pool behind it under its
+    // lock, half the cache at a time.
+    void *stacks[stack_cache];
+    int nstacks;
 } worker;
 
 static worker *workers;
@@ -247,20 +269,47 @@ static const size_t stack_size = 256 << 10; // a task's stack, as step one's thr
 // A stack is a reservation with a guard page at its low end, so that
 // a recursion past it faults rather than writes over another task's.
 // Freed stacks are pooled, since mapping is the costly part of a spawn.
+// The pool's lock is a mutex: a spin lock was measured in its place
+// and made a spawn a quarter slower by the median of eleven runs
+// (2026-11-07, under task 5.10 of stage 5), the spinners costing the
+// workers the cores the mutex's sleepers gave them.
 static pthread_mutex_t pool_mu = PTHREAD_MUTEX_INITIALIZER;
-static void *pool[256];
+static void *pool[256]; // measured against 1024 (2026-11-07): the deeper pool made a spawn a third slower
 static int pooled;
 
-static void *stack_new(size_t *size) {
+static void pool_take(void) {
     pthread_mutex_lock(&pool_mu);
-    if (pooled > 0) {
+}
+
+static void pool_give(void) {
+    pthread_mutex_unlock(&pool_mu);
+}
+
+// stack_new gives a stack from w's cache, which is refilled with half
+// a cache from the pool when it is empty, or from the pool alone for
+// a thread that is no worker, and maps a new one when both are empty.
+static void *stack_new(worker *w, size_t *size) {
+    *size = stack_size;
+    if (w != NULL && w->nstacks > 0) {
+        return w->stacks[--w->nstacks];
+    }
+
+    pool_take();
+    if (w != NULL) {
+        while (pooled > 0 && w->nstacks < stack_cache / 2) {
+            w->stacks[w->nstacks++] = pool[--pooled];
+        }
+    } else if (pooled > 0) {
         void *s = pool[--pooled];
-        pthread_mutex_unlock(&pool_mu);
-        *size = stack_size;
+        pool_give();
         return s;
     }
 
-    pthread_mutex_unlock(&pool_mu);
+    pool_give();
+    if (w != NULL && w->nstacks > 0) {
+        return w->stacks[--w->nstacks];
+    }
+
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
@@ -276,19 +325,38 @@ static void *stack_new(size_t *size) {
         sn_panic(SN_STR("cannot reserve a task's stack: the system's limit of memory mappings is reached", 79));
     }
 
-    *size = stack_size;
     return s;
 }
 
-static void stack_free(void *s, size_t size) {
-    pthread_mutex_lock(&pool_mu);
-    if (pooled < (int)(sizeof pool / sizeof pool[0])) {
-        pool[pooled++] = s;
-        pthread_mutex_unlock(&pool_mu);
+// stack_free keeps a stack in w's cache; a full cache sends half to
+// the pool under one lock, and what the pool has no room for is
+// unmapped. A thread that is no worker gives to the pool alone.
+static void stack_free(worker *w, void *s, size_t size) {
+    if (w != NULL) {
+        if (w->nstacks == stack_cache) {
+            pool_take();
+            while (w->nstacks > stack_cache / 2 && pooled < (int)(sizeof pool / sizeof pool[0])) {
+                pool[pooled++] = w->stacks[--w->nstacks];
+            }
+
+            pool_give();
+            while (w->nstacks > stack_cache / 2) {
+                munmap(w->stacks[--w->nstacks], size);
+            }
+        }
+
+        w->stacks[w->nstacks++] = s;
         return;
     }
 
-    pthread_mutex_unlock(&pool_mu);
+    pool_take();
+    if (pooled < (int)(sizeof pool / sizeof pool[0])) {
+        pool[pooled++] = s;
+        pool_give();
+        return;
+    }
+
+    pool_give();
     munmap(s, size);
 }
 
@@ -297,40 +365,66 @@ static void stack_free(void *s, size_t size) {
 sn_task *sn_self(void) {
     task *t = my_task();
     if (t == NULL) {
-        pthread_mutex_init(&main_task.mu, NULL);
-        main_task.state = RUNNING;
+        atomic_store(&main_task.state, RUNNING);
         current = t = &main_task;
     }
 
     return t;
 }
 
-// wake_idle wakes one worker waiting for work, if one is.
+static _Atomic int waiting; // workers blocked in the idle wait, under idle_mu
+static int handed;          // spins given to signalled workers not yet back from the wait, under idle_mu
+
+// wake_idle wakes one worker blocked waiting for work, if one is and
+// no worker is spinning, and makes the one it wakes the spinner before
+// it wakes, as Go's wakep starts an M spinning: every push until the
+// woken worker runs sees a spinner and wakes no other, where before a
+// burst of spawns woke a worker per spawn while one was on its way.
+// The worker that returns from the wait with a spin handed out takes
+// it, and gives it up once it has found work or spun its time out; a
+// worker a broadcast or a spurious return woke finds none handed and
+// takes nothing, so there is one spinner at a time still. A signal
+// goes only to a worker counted blocked, under the lock it blocks
+// with, so a spin is never handed to no one.
 static void wake_idle(void) {
-    if (atomic_load(&idle) > 0) {
-        pthread_mutex_lock(&idle_mu);
-        pthread_cond_signal(&idle_cond);
-        pthread_mutex_unlock(&idle_mu);
+    if (atomic_load(&idle) == 0 || atomic_load(&spinning) != 0) {
+        return;
     }
+
+    pthread_mutex_lock(&idle_mu);
+    int expected = 0;
+    if (atomic_load(&waiting) > 0 && atomic_compare_exchange_strong(&spinning, &expected, 1)) {
+        handed++;
+        pthread_cond_signal(&idle_cond);
+    }
+
+    pthread_mutex_unlock(&idle_mu);
 }
 
-// The queues. push puts a task on a worker's queue and tells an idle
-// worker; a worker with nothing in its own queue steals half of
-// another worker's.
+static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl);
+
+// The queues. push puts a task on the ring of w, the worker whose
+// thread runs it, and tells an idle worker; a worker with nothing in
+// its own ring steals half of another worker's. A full ring sends
+// half of itself with the task to the inject queue, as Go's runqput
+// does to its global queue.
 static void push(worker *w, task *t) {
-    pthread_mutex_lock(&w->mu);
-    t->next = NULL;
-    if (w->tail != NULL) {
-        w->tail->next = t;
-    } else {
-        w->head = t;
+    for (;;) {
+        uint32_t h = atomic_load_explicit(&w->qhead, memory_order_acquire);
+        uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
+        if (tl - h < ring_size) {
+            atomic_store_explicit(&w->ring[tl % ring_size], t, memory_order_relaxed);
+            atomic_store_explicit(&w->qtail, tl + 1, memory_order_release); // the slot is written before a taker sees the count
+            break;
+        }
+
+        if (push_slow(w, t, h, tl)) {
+            break;
+        }
     }
 
-    w->tail = t;
-    w->len++;
-    pthread_mutex_unlock(&w->mu);
     atomic_fetch_add(&queued, 1);
-    wake_idle(); // a worker counts itself idle before it reads queued, and both are sequentially consistent, so one of the two sees the other
+    wake_idle(); // a spinner looks at the queues, and one that stops reads queued after it stops; a worker counts itself idle before it reads queued; all are sequentially consistent, so one side sees the other
 }
 
 // The inject queue holds the tasks woken by a thread that is not a
@@ -358,9 +452,40 @@ static void inject(task *t) {
     pthread_mutex_unlock(&inject_mu);
     atomic_fetch_add(&queued, 1);
     atomic_fetch_add(&injected, 1);
-    if (atomic_load(&spinning) == 0) { // a spinner stops spinning before it reads injected, and both are sequentially consistent, so one of the two sees the other
-        wake_idle();
+    wake_idle(); // a spinner stops spinning before it reads queued, and both are sequentially consistent, so one of the two sees the other
+}
+
+// push_slow moves half of w's full ring, with t after it, to the
+// inject queue, and reports whether it did; a stealer that took from
+// the ring meanwhile makes it fail, and push tries the ring again.
+static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl) {
+    uint32_t n = (tl - h) / 2;
+    task *batch[ring_size / 2 + 1];
+    for (uint32_t i = 0; i < n; i++) {
+        batch[i] = atomic_load_explicit(&w->ring[(h + i) % ring_size], memory_order_relaxed);
     }
+
+    if (!atomic_compare_exchange_strong_explicit(&w->qhead, &h, h + n, memory_order_acq_rel, memory_order_relaxed)) {
+        return false;
+    }
+
+    batch[n] = t;
+    for (uint32_t i = 0; i < n; i++) {
+        batch[i]->next = batch[i + 1];
+    }
+
+    batch[n]->next = NULL;
+    pthread_mutex_lock(&inject_mu);
+    if (inject_tail != NULL) {
+        inject_tail->next = batch[0];
+    } else {
+        inject_head = batch[0];
+    }
+
+    inject_tail = batch[n];
+    pthread_mutex_unlock(&inject_mu);
+    atomic_fetch_add(&injected, (int64_t)n + 1); // the n moved stay counted in queued; push counts t
+    return true;
 }
 
 static task *take_injected(void) {
@@ -388,66 +513,62 @@ static task *take_injected(void) {
 
 // home is the queue a task spawned here goes on: the running worker's,
 // or the first worker's from the main thread before it is one.
-static worker *home(void) {
-    worker *w = my_worker();
-    return w != NULL ? w : &workers[0];
-}
 
+// pop takes the task at the head of w's own ring, by the worker's
+// thread, racing only with stealers for the head.
 static task *pop(worker *w) {
-    pthread_mutex_lock(&w->mu);
-    task *t = w->head;
-    if (t != NULL) {
-        w->head = t->next;
-        if (w->head == NULL) {
-            w->tail = NULL;
+    for (;;) {
+        uint32_t h = atomic_load_explicit(&w->qhead, memory_order_acquire);
+        uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
+        if (tl == h) {
+            return NULL;
         }
 
-        w->len--;
+        task *t = atomic_load_explicit(&w->ring[h % ring_size], memory_order_relaxed);
+        if (atomic_compare_exchange_weak_explicit(&w->qhead, &h, h + 1, memory_order_acq_rel, memory_order_relaxed)) {
+            atomic_fetch_sub(&queued, 1);
+            return t;
+        }
     }
-
-    pthread_mutex_unlock(&w->mu);
-    if (t != NULL) {
-        atomic_fetch_sub(&queued, 1);
-    }
-
-    return t;
 }
 
-// steal moves half of the queue of from, rounded up so that a lone
-// task is taken, onto the queue of to, and returns whether anything
-// moved.
-static bool steal(worker *to, worker *from) {
-    pthread_mutex_lock(&from->mu);
-    int64_t n = (from->len + 1) / 2;
-    if (n == 0) {
-        pthread_mutex_unlock(&from->mu);
-        return false;
-    }
+// steal takes half of the ring of from, rounded up so that a lone task
+// is taken, for to, whose own ring is empty: the first is returned to
+// run and the rest go on to's ring, as Go's runqsteal does. A head that
+// moved under the read, a take by the owner or another stealer, makes
+// the swap fail and the read is made again.
+static task *steal(worker *to, worker *from) {
+    task *batch[ring_size / 2];
+    for (;;) {
+        uint32_t h = atomic_load_explicit(&from->qhead, memory_order_acquire);
+        uint32_t tl = atomic_load_explicit(&from->qtail, memory_order_acquire);
+        uint32_t n = tl - h;
+        n = n - n / 2;
+        if (n == 0) {
+            return NULL;
+        }
 
-    task *first = from->head, *last = first;
-    for (int64_t i = 1; i < n; i++) {
-        last = last->next;
-    }
+        if (n > ring_size / 2) {
+            continue; // the two counts were read across a change: read again
+        }
 
-    from->head = last->next;
-    if (from->head == NULL) {
-        from->tail = NULL;
-    }
+        for (uint32_t i = 0; i < n; i++) {
+            batch[i] = atomic_load_explicit(&from->ring[(h + i) % ring_size], memory_order_relaxed);
+        }
 
-    from->len -= n;
-    pthread_mutex_unlock(&from->mu);
-    last->next = NULL;
-    pthread_mutex_lock(&to->mu);
-    if (to->tail != NULL) {
-        to->tail->next = first;
-    } else {
-        to->head = first;
-    }
+        if (!atomic_compare_exchange_strong_explicit(&from->qhead, &h, h + n, memory_order_acq_rel, memory_order_relaxed)) {
+            continue;
+        }
 
-    to->tail = last;
-    to->len += n;
-    pthread_mutex_unlock(&to->mu);
-    return true;
+        uint32_t t = atomic_load_explicit(&to->qtail, memory_order_relaxed);
+        for (uint32_t i = 1; i < n; i++) {
+            atomic_store_explicit(&to->ring[(t + i - 1) % ring_size], batch[i], memory_order_relaxed);
+        }
+
+        atomic_store_explicit(&to->qtail, t + n - 1, memory_order_release);
+        atomic_fetch_sub(&queued, 1); // the one returned; the rest stay queued
+        return batch[0];
+    }
 }
 
 // put_next puts t in w's runnext slot; a task it displaces goes on
@@ -511,8 +632,8 @@ static task *next_task(worker *w) {
 
     for (int i = 0; i < nworkers; i++) {
         worker *other = &workers[i];
-        if (other != w && steal(w, other)) {
-            return pop(w);
+        if (other != w && (t = steal(w, other)) != NULL) {
+            return t;
         }
     }
 
@@ -530,38 +651,35 @@ static void settle(worker *w) {
     }
 
     w->last = NULL;
-    switch (t->state) {
+    switch (atomic_load(&t->state) & ~WOKEN) {
     case DONE:
         if (t->stack != NULL) {
-            stack_free(t->stack, t->size);
+            stack_free(w, t->stack, t->size);
         }
 
-        pthread_mutex_destroy(&t->mu);
         free(t->guards);
         free(t);
         atomic_fetch_sub(&running, 1);
         break;
-    case PARKING:
-        pthread_mutex_lock(&t->mu);
-        if (t->woken) { // woken while it switched away: it runs next, here
-            t->state = RUNNABLE;
-            pthread_mutex_unlock(&t->mu);
+    case PARKING: {
+        int expected = PARKING;
+        if (!atomic_compare_exchange_strong(&t->state, &expected, PARKED)) { // woken while it switched away: it runs next, here
+            atomic_store(&t->state, RUNNABLE);
             put_next(w, t);
-        } else {
-            t->state = PARKED;
-            pthread_mutex_unlock(&t->mu);
         }
 
         break;
+    }
     }
 }
 
 // run_task switches the worker to a task, and settles the task when it
 // switches back.
 static void run_task(worker *w, task *t) {
-    pthread_mutex_lock(&t->mu);
-    t->state = RUNNING;
-    pthread_mutex_unlock(&t->mu);
+    int s = atomic_load(&t->state);
+    while (!atomic_compare_exchange_weak(&t->state, &s, RUNNING | (s & WOKEN))) { // a wake kept for its next park stays
+    }
+
     current = t;
     w->last = t;
     sn_switch(&w->sched_sp, t->sp);
@@ -594,11 +712,14 @@ static task *steal_next(worker *w) {
 }
 
 // A worker that runs out of tasks spins before it sleeps, as Go's
-// runtime keeps an M spinning: it looks at the inject queue for up to
-// spin_for and takes a task the poller or the timers woke meanwhile with
-// no thread woken to run it, which is what such a task costs otherwise,
-// since their threads are not workers. One worker spins at a time, and
-// an inject while one does wakes no other. The spinning adapts, as an adaptive mutex's
+// runtime keeps an M spinning: it looks at the queues for up to
+// spin_for and takes a task the poller or the timers woke meanwhile,
+// or one a running task pushed, with no thread woken to run it, which
+// is what such a task costs otherwise. One worker spins at a time, and
+// a push or an inject while one does wakes no other; the spinner, once
+// it has found work, wakes a worker for what is left (2026-11-07, for
+// task 5.10 of stage 5: before, every push woke a worker while any was
+// idle, a system call per spawn). The spinning adapts, as an adaptive mutex's
 // does: worth tells whether it has paid lately, raised when a spin finds
 // a task or a worker's sleep ends within spin_for, lowered when a spin
 // finds none, and a worker spins only while it is above zero. A program
@@ -619,18 +740,19 @@ static void spun(bool paid) {
     }
 }
 
-// spin looks at the inject queue until spin_for has passed, and reports
-// whether a task was injected meanwhile.
-static bool spin(void) {
+// spin looks at the queues until spin_for has passed, and reports
+// whether a task was queued or injected meanwhile. A worker woken to
+// spin holds the spin already; another takes it if no one holds it.
+static bool spin(bool holding) {
     int expected = 0;
-    if (atomic_load(&worth) <= 0 || !atomic_compare_exchange_strong(&spinning, &expected, 1)) {
+    if (!holding && (atomic_load(&worth) <= 0 || !atomic_compare_exchange_strong(&spinning, &expected, 1))) {
         return false;
     }
 
     int64_t until = sn_time_mono() + spin_for;
     bool found = false;
     for (int i = 1;; i++) {
-        if (atomic_load(&injected) > 0) {
+        if (atomic_load(&queued) > 0) { // queued counts the injected too
             found = true;
             break;
         }
@@ -643,7 +765,7 @@ static bool spin(void) {
     }
 
     atomic_store(&spinning, 0);
-    found = found || atomic_load(&injected) > 0; // an inject that saw it spinning woke no one: it looks once more
+    found = found || atomic_load(&queued) > 0; // a push or an inject that saw it spinning woke no one: it looks once more
     spun(found);
     return found;
 }
@@ -721,6 +843,8 @@ static void *monitor_main(void *arg) {
 // sched_loop runs the worker: the next task, or a spin and then a wait
 // for one.
 static void sched_loop(worker *w) {
+    bool woken = false;   // out of a wait or a spin with work found: the pushes meanwhile woke no one, so it wakes a worker for what it leaves
+    bool holding = false; // woken to spin, and holding the spin until it finds work or spins it out
     for (;;) {
         task *t = next_task(w);
         if (t == NULL) {
@@ -728,26 +852,42 @@ static void sched_loop(worker *w) {
         }
 
         if (t != NULL) {
+            if (holding) {
+                holding = false;
+                atomic_store(&spinning, 0);
+            }
+
+            if (woken) {
+                woken = false;
+                if (atomic_load(&queued) > 0) {
+                    wake_idle(); // as Go's spinning M, once it finds work, starts another for the rest
+                }
+            }
+
             run_task(w, t);
             continue;
         }
 
-        if (spin()) { // injects it saw woke no one: when more than its own task waits, it wakes a worker for the rest, as Go's spinning M does
-            t = take_injected();
-            if (atomic_load(&injected) > 0) {
-                wake_idle();
-            }
-
-            if (t != NULL) {
-                run_task(w, t);
-            }
-
-            continue;
+        if (spin(holding)) {
+            holding = false; // spin gave the spin up
+            woken = true;
+            continue; // next_task takes what was found: the inject queue, or a steal
         }
+
+        holding = false;
 
         pthread_mutex_lock(&idle_mu);
         atomic_fetch_add(&idle, 1);
-        while (atomic_load(&queued) == 0) {
+        for (;;) {
+            if (holding) { // woken to spin and the work taken meanwhile: the spin goes back before the queues are read, so a push that saw it held is seen here, or sees the worker idle and signals
+                holding = false;
+                atomic_store(&spinning, 0);
+            }
+
+            if (atomic_load(&queued) > 0) {
+                break;
+            }
+
             if (deadlocked()) {
                 fflush(stdout);
                 fputs("fatal error: all tasks are asleep - deadlock!\n", stderr);
@@ -755,14 +895,22 @@ static void sched_loop(worker *w) {
             }
 
             int64_t asleep = sn_time_mono();
+            atomic_fetch_add(&waiting, 1);
             pthread_cond_wait(&idle_cond, &idle_mu);
-            if (atomic_load(&injected) > 0 && sn_time_mono() - asleep < spin_for) {
-                spun(true); // a wake from outside came soon enough that a spin would have caught it
+            atomic_fetch_sub(&waiting, 1);
+            if (handed > 0) { // a signal with a spin woke it; a broadcast or a spurious return hands none
+                handed--;
+                holding = true;
+            }
+
+            if (atomic_load(&queued) > 0 && sn_time_mono() - asleep < spin_for) {
+                spun(true); // a push or a wake from outside came soon enough that a spin would have caught it
             }
         }
 
         bool first = atomic_fetch_sub(&idle, 1) == nworkers;
         pthread_mutex_unlock(&idle_mu);
+        woken = true;
         if (first) {
             monitor_wake(); // the first worker busy again: the monitor's lock is never taken under idle_mu
         }
@@ -796,13 +944,32 @@ static void start_thread(void *(*main)(void *), void *arg) {
     pthread_attr_destroy(&attr);
 }
 
+// sn_cores is the number of processors the program may run on, at
+// least one: the processors in the thread's affinity mask on Linux,
+// as Go's runtime.NumCPU counts them, so that a program held to a
+// few processors by taskset or a container starts a worker for each
+// of those; the processors online elsewhere.
+int64_t sn_cores(void) {
+    long n = 0;
+#ifdef __linux__
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        n = CPU_COUNT(&set);
+    }
+#endif
+    if (n <= 0) {
+        n = sysconf(_SC_NPROCESSORS_ONLN);
+    }
+
+    return n > 1 ? (int64_t)n : 1;
+}
+
 // start makes the workers, the main thread the first and one thread
 // per further core, and the monitor when there is more than one.
 static void start(void) {
     pthread_mutex_lock(&start_mu);
     if (!started) {
-        long cores = sysconf(_SC_NPROCESSORS_ONLN);
-        nworkers = cores > 1 ? (int)cores : 1;
+        nworkers = (int)sn_cores();
         workers = calloc((size_t)nworkers, sizeof *workers);
         if (workers == NULL) {
             sn_panic(SN_STR("out of memory", 13));
@@ -835,7 +1002,7 @@ static void start(void) {
 static void task_entry(void) {
     task *t = my_task();
     t->run(t->arg);
-    t->state = DONE;
+    atomic_store(&t->state, DONE);
     sn_switch(&t->sp, my_worker()->sched_sp);
     abort(); // a done task is never resumed
 }
@@ -846,19 +1013,23 @@ void sn_spawn(void (*run)(void *), void *arg) {
     }
 
     sn_self();
-    task *t = calloc(1, sizeof *t);
+    task *t = calloc(1, sizeof *t); // its own block: a record at the top of the task's stack was measured (2026-11-07) and made a spawn two thirds slower
     if (t == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
     t->run = run;
     t->arg = arg;
-    t->stack = stack_new(&t->size);
+    t->stack = stack_new(my_worker(), &t->size); // the spawning thread's worker, or the pool for a thread that is none
     t->sp = make_context((uint8_t *)t->stack + t->size, task_entry);
-    pthread_mutex_init(&t->mu, NULL);
-    t->state = RUNNABLE;
+    atomic_store(&t->state, RUNNABLE);
     atomic_fetch_add(&running, 1);
-    push(home(), t);
+    worker *w = my_worker();
+    if (w != NULL) {
+        push(w, t); // the spawning thread's own ring, which its thread alone writes
+    } else {
+        inject(t); // a thread that is no worker, which none is today: the main thread is one from start on
+    }
 }
 
 int64_t sn_tasks_running(void) {
@@ -879,43 +1050,55 @@ void sn_park(void) {
     worker *w = my_worker();
     if (w->sched_sp == NULL) { // the main thread, parking for the first time
         size_t size;
-        w->sched_stack = stack_new(&size);
+        w->sched_stack = stack_new(NULL, &size);
         w->sched_sp = make_context((uint8_t *)w->sched_stack + size, sched_entry);
     }
 
-    pthread_mutex_lock(&t->mu);
-    while (!t->woken) {
-        t->state = PARKING;
-        pthread_mutex_unlock(&t->mu);
+    for (;;) {
+        int s = atomic_load(&t->state); // RUNNING, with WOKEN when a wake came first
+        if (s & WOKEN) {
+            if (atomic_compare_exchange_strong(&t->state, &s, RUNNING)) {
+                return; // the wake is consumed and the task goes on
+            }
+
+            continue;
+        }
+
+        if (!atomic_compare_exchange_strong(&t->state, &s, PARKING)) {
+            continue; // a wake came between the read and the swap
+        }
+
         w->last = t;
         sn_switch(&t->sp, w->sched_sp);
-        w = my_worker(); // resumed, on whichever worker ran the queue
-        pthread_mutex_lock(&t->mu);
+        atomic_fetch_and(&t->state, ~WOKEN); // resumed by a wake, on whichever worker ran the queue: one that came after it is the same wake, whose condition the caller reads again
+        return;
     }
-
-    t->woken = false;
-    pthread_mutex_unlock(&t->mu);
 }
 
 // sn_wake makes a parked task runnable, or keeps the wake for a task
 // still running or parking, which consumes it at its next park.
 void sn_wake(sn_task *t) {
-    pthread_mutex_lock(&t->mu);
-    t->woken = true;
-    if (t->state == PARKED) {
-        t->state = RUNNABLE;
-        pthread_mutex_unlock(&t->mu);
-        worker *w = my_worker();
-        if (w != NULL) {
-            put_next(w, t); // woken by a task: it runs next on this worker
-        } else {
-            inject(t); // by the timer's or the poller's thread
+    for (;;) {
+        int s = atomic_load(&t->state);
+        if (s == PARKED) {
+            if (!atomic_compare_exchange_strong(&t->state, &s, RUNNABLE)) {
+                continue;
+            }
+
+            worker *w = my_worker();
+            if (w != NULL) {
+                put_next(w, t); // woken by a task: it runs next on this worker
+            } else {
+                inject(t); // by the timer's or the poller's thread
+            }
+
+            return;
         }
 
-        return;
+        if ((s & WOKEN) != 0 || s == DONE || atomic_compare_exchange_strong(&t->state, &s, s | WOKEN)) {
+            return; // the wake is kept for the task's park, or was already
+        }
     }
-
-    pthread_mutex_unlock(&t->mu);
 }
 
 // Timers: a heap of deadlines, served by one thread that sleeps until

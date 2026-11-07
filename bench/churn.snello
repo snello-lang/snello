@@ -1,0 +1,78 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The allocator under contention: a task per core allocating and
+// freeing small blocks of mixed sizes at once, each over a ring of
+// slots that frees a block as the next takes its place, and then
+// blocks made in one task and freed in another, handed around a ring
+// of channels a batch at a time, so that a block goes back to a free
+// list that is not its thread's and the channel costs a word per
+// batch, not per block. The tasks are one per core, so the total
+// printed is the machine's, and the Go version's on the same machine.
+
+package main
+
+import ("fmt"; "os")
+
+const rounds = 409600 // 1600 batches
+const slots = 256
+const batch = 256
+
+// size is the size of the i'th block: sixteen sizes from 16 to 256
+// bytes, in a stride that visits them all.
+func size(i int) int {
+	return 16 + (i * 7 % 16) * 16
+}
+
+// churn is one task: it fills its ring rounds times, dropping the
+// block each slot held, then sends rounds blocks to the next task in
+// batches and drops the batches the previous task sends it, and
+// reports the bytes it allocated.
+func churn(id int, out chan [][]byte, in chan [][]byte, done chan int) {
+	ring := make([][]byte, slots)
+	made := 0
+	for i := 0; i < rounds; i++ {
+		n := size(i + id)
+		ring[i%slots] = make([]byte, n)
+		made += n
+	}
+
+	for i := 0; i < rounds/batch; i++ {
+		blocks := make([][]byte, 0, batch)
+		for j := 0; j < batch; j++ {
+			n := size(i*batch + j + id)
+			blocks.Push(make([]byte, n))
+			made += n
+		}
+
+		out <- blocks
+		<-in // the previous task's batch, dropped here
+	}
+
+	close(out)
+	for range in {
+	}
+
+	done <- made
+}
+
+func main() {
+	workers := os.Cores()
+	chans := make([]chan [][]byte, 0, workers)
+	for i := 0; i < workers; i++ {
+		chans.Push(make(chan [][]byte, 4))
+	}
+
+	done := make(chan int, workers)
+	for i := 0; i < workers; i++ {
+		spawn churn(i, chans[i].Clone(), chans[(i+1)%workers].Clone(), done.Clone())
+	}
+
+	total := 0
+	for i := 0; i < workers; i++ {
+		total += <-done ?? 0
+	}
+
+	fmt.Println(workers, "tasks allocated", total, "bytes")
+}

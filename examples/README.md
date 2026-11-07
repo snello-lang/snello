@@ -6,7 +6,7 @@ Twenty programs written in Snello before Snello exists. They are the design's te
 |---|---|---|
 | 01 | 01-tree/ | Parent pointers, three ways: Go pointers, hand-rolled slice, Arena<T> |
 | 02 | 02-pipeline/ | Channels and ownership crossing tasks, Go beside Snello |
-| 03 | http-cache.snello | Long-lived shared state, per-request borrows, Drop for connections |
+| 03 | cache-server.snello | Long-lived shared state, per-request borrows, Drop for connections; a server over `net` the suite drives with a script |
 | 04 | graph.snello | Arena graph, BFS, heap with Ord bound |
 | 05 | parser.snello | Sum types, match, owned pointers for recursion, a borrow-holding struct |
 | 06 | linked-list.snello | `*Node?` links, take, partial moves, returning a ref from a ref receiver |
@@ -44,6 +44,8 @@ The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there
 ## The suite
 
 `suite_test.go` builds and runs every program here that has its expected output under `expected/`, as a release build and as a debug build, and names the rest as pending: `go test ./examples`. The stage specs under `../_docs/specs/` say what each pending program waits for.
+
+A program that serves rather than prints has a script beside its expected output, `expected/NAME.script`, which the suite plays against it over the loopback: a section per connection, of lines `> text` sent and `< text` expected back, each section ended by the server closing the connection and the last one stopping the server, whose standard output is then compared as every other program's is. Example 03 is the one such program: it was sketched as an HTTP handler over `net/http`, `db` and `json`, which the library does not have, and was rewritten on 2026-11-07 as a cache server over `net`, speaking `GET`, `SET`, `QUIT` and `SHUTDOWN`, with what it tests unchanged, the store behind `sync.Arc<sync.RwLock<map>>` shared by a task per connection and a `Session` whose `Drop` reports the close (decision 9 of `../_docs/design/05-standard-library.md`).
 
 ## The core set
 

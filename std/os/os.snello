@@ -42,6 +42,13 @@ var Args []string
 // printed is flushed first. The compiler provides it.
 func Exit(code int)
 
+// Cores returns the number of processors the program may run on, as
+// Go's runtime.NumCPU does, the processors the program is allowed by
+// taskset or a container on Linux and the processors online elsewhere:
+// the count the runtime starts a worker for, so a pool of that many
+// tasks keeps every core busy. The runtime provides it.
+func Cores() int
+
 // Stdin is the standard input, open for reading.
 var Stdin = File{fd: 0, name: "/dev/stdin", stream: true}
 

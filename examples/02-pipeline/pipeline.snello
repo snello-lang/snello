@@ -111,5 +111,5 @@ func main() {
 //
 //   spawn func() { use(ref m) }()          // error: a borrow cannot cross `spawn`
 //
-// Shared mutable state across tasks is covered in 03-http-cache.snello,
+// Shared mutable state across tasks is covered in 03-cache-server.snello,
 // where it is actually needed.

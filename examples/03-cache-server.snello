@@ -1,0 +1,178 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// 03: A cache server over a socket.
+//
+// Tests: long-lived state shared by every connection task, a borrow
+// that lasts exactly one request, and Drop closing a connection and
+// reporting it.
+//
+// The server speaks a line protocol on a port the system picks and
+// prints on standard error, where a client finds it: SET key value
+// answers OK, GET key the value or MISSING, QUIT closes the
+// connection, and SHUTDOWN closes it and stops the server once every
+// connection has ended, which a client that connected and sits
+// silent holds up, as a server draining its connections is held up.
+// An entry lives a minute. Shared state crosses
+// task boundaries only inside Arc (_docs/design/03-ownership-across-tasks.md):
+// the store is an Arc<RwLock<map>>, each connection task holds a
+// clone of the Arc, and a request borrows the map for exactly as long
+// as it runs, under a read lock for GET and a write lock for SET. The
+// examples suite plays expected/03-cache-server.script against it.
+
+package cache
+
+import ("bufio"; "fmt"; "io"; "net"; "os"; "sync"; "time")
+
+struct Entry {
+    value   string
+    expires time.Time
+}
+
+// A Session owns its connection. Its Drop reports the close, and the
+// connection's own Drop closes the socket after it, so the report is
+// printed before the client sees the end.
+struct Session impl Drop {
+    id     int
+    socket net.Conn
+}
+
+func (s mut Session) Drop() {
+    fmt.Println("connection", s.id, "closed")
+}
+
+// A Reply is what one request line gets: text to send back, or the
+// end of the connection, with the server going on or stopping.
+enum Reply {
+    Text(s string)
+    Bye
+    Halt
+}
+
+// respond answers one request line against the store. A GET takes the
+// read lock for the lookup alone and copies the value out from under
+// it; a SET takes the write lock for the insert alone. Each guard is
+// dropped where its block ends, which is where the lock is released.
+func respond(line ref string, store ref sync.Arc<sync.RwLock<map[string]Entry>>) Reply {
+    words := line.Fields()
+    if len(words) == 0 {
+        return Text("ERR empty line")
+    }
+
+    cmd := words[0]
+    if cmd == "GET" && len(words) == 2 {
+        c := store.Get().Read()
+        if e := c.Get().Get(words[1]) {
+            if e.expires.After(time.Now()) {
+                return Text(e.value.Clone())
+            }
+        }
+
+        return Text("MISSING")
+    }
+
+    if cmd == "SET" && len(words) == 3 {
+        c := store.Get().Write()
+        c.Get()[words[1].Clone()] = Entry{value: words[2].Clone(), expires: time.Now().Add(time.Minute)}
+        return Text("OK")
+    }
+
+    if cmd == "QUIT" {
+        return Bye
+    }
+
+    if cmd == "SHUTDOWN" {
+        return Halt
+    }
+
+    if cmd == "GET" {
+        return Text("ERR usage: GET key")
+    }
+
+    if cmd == "SET" {
+        return Text("ERR usage: SET key value")
+    }
+
+    return Text("ERR unknown command")
+}
+
+// handle serves one connection until the client says QUIT or SHUTDOWN
+// or goes away, and says whether the server is to stop. It owns the
+// session, which is dropped as it returns: the close is reported and
+// the socket closed before the caller goes on.
+func handle(sess Session, store ref sync.Arc<sync.RwLock<map[string]Entry>>) bool {
+    r := bufio.NewReader(mut sess.socket)
+    for {
+        line := match r.ReadString('\n') {
+            Ok(l) => l ?? break,    // the client closed its side
+            Err(_) => break,        // or went away: a reset, a timeout
+        }
+
+        match respond(ref line, store) {
+            Text(s) => {
+                // The Reader lends the connection back to write. A client
+                // gone between its request and the reply ends the session
+                // as a QUIT would, not the server.
+                if r.Get().WriteString(ref (s + "\n")).IsErr() {
+                    return false
+                }
+            },
+            Bye => return false,
+            Halt => return true,
+        }
+    }
+
+    return false
+}
+
+// serve is the task of one connection. It hands the session to handle,
+// which drops it as it returns, and only then signals the stop and
+// counts itself out of the group, so every close is reported before
+// the server's last line.
+func serve(sess Session, store sync.Arc<sync.RwLock<map[string]Entry>>, stop chan (), done sync.WaitGroup) {
+    if handle(sess, ref store) {
+        select {
+        case stop <- ():
+        default:    // a second SHUTDOWN finds the first's signal still waiting
+        }
+    }
+
+    done.Done()
+}
+
+func main() {
+    l := net.Listen("127.0.0.1", 0).Expect("listen")
+    fmt.Fprintln(mut os.Stderr, l.Port())
+    store := sync.NewArc(sync.NewRwLock(map[string]Entry{}))
+    stop := make(chan (), 1)
+    done := sync.NewWaitGroup()
+    next := 1
+    for {
+        // Accept waits a tenth of a second at most, so that the loop
+        // sees a stop within that, as a server with a signal to watch
+        // and no select over sockets does.
+        l.SetDeadline(time.Now().Add(100 * time.Millisecond)).Expect("deadline")
+        match l.Accept() {
+            Ok(conn) => {
+                done.Add(1)
+                spawn serve(Session{id: next, socket: conn}, store.Clone(), stop.Clone(), done.Clone())
+                next += 1
+            },
+            Err(e) => {
+                if e.Kind() != io.TimedOut {
+                    panic(ref e.Error())
+                }
+            },
+        }
+
+        select {
+        case <-stop:
+            break
+        default:
+        }
+    }
+
+    done.Wait()
+    fmt.Println("server stopped with", len(store.Get().Read().Get()), "entries")
+}

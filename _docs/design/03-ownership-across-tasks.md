@@ -59,7 +59,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 
 The library was written on 2026-10-20 as `05-standard-library.md` decides it: `sync.NewArc(v)`, with `Get` lending the value; `sync.NewMutex(v)` and `sync.NewRwLock(v)`, with `Lock`, `Read` and `Write` returning a guard whose `Get` lends the value, `*g.Get() += 1`, and whose `Drop` gives the lock back; `sync.NewOnce()` with `Do`; `sync.NewWaitGroup()` as a `Copy` handle with `Add`, `Done` and `Wait`. A guard is a borrow-holding struct, so storing it, sending it, or keeping it past the statement that made the lock temporary is refused by the rules of `04-borrows-ref-and-mut.md`, with no rule added for it. The one step from a `ref` of the lock to a `mut` of its value is a function the compiler lowers for the library alone, as `rc` has its two.
 
-`../../examples/03-http-cache.snello` shows `Arc<RwLock<T>>` where a cache is shared by every request task.
+`../../examples/03-cache-server.snello` shows `Arc<RwLock<T>>` where a cache is shared by every connection task, each holding a clone of the `Arc` and borrowing the map under the lock for one request at a time.
 
 ## What it costs
 

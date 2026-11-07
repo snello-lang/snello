@@ -114,6 +114,10 @@ int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len);
 // sn_next_random is the calling thread's next random number.
 uint64_t sn_next_random(void);
 
+// sn_cores is the number of processors the program may run on, which
+// the scheduler starts a worker per and os.Cores reports. sched.c's.
+int64_t sn_cores(void);
+
 // sn_deadline_arm calls fire(arg) d nanoseconds from now on the timers'
 // thread, keeping the timer at *at, 0 while it is out of the heap, so
 // that arming it again moves it and sn_deadline_disarm takes it out;
