@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// A program with a package that binds C beside it, tally, found
-// through the module file: a handle made and dropped by the C side's
-// counter, bytes lent as a view, a buffer filled, and a string parsed
-// into an out-parameter. Built with snello build examples/run/bound.
+// A program with two packages that bind C beside it, found through
+// the module file: tally, with a handle made and dropped by the C
+// side's counter, bytes lent as a view, a buffer filled, and a string
+// parsed into an out-parameter; and mathx, which reaches the system's
+// math library through the module file's link line. Built with snello
+// build examples/run/bound.
 package main
 
-import ("fmt"; "tally")
+import ("fmt"; "mathx"; "tally")
 
 func main() {
 	{
@@ -22,4 +24,5 @@ func main() {
 	fmt.Println(tally.Fill(mut buf, 7), buf)
 	var n int
 	fmt.Println(tally.Parse("123", mut n), n, tally.Parse("12x", mut n), n)
+	fmt.Println(mathx.Cbrt(27))
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,7 @@ const ModFile = "snello.mod"
 type Module struct {
 	Dir      string
 	Requires []Require
+	Links    []string // the system libraries its link lines name, -lNAME at the link of a program that imports a package of the module
 }
 
 // A Require is one require line: the name a program imports the
@@ -70,10 +72,10 @@ func FindModule(dir string) (*Module, error) {
 }
 
 // ParseModFile reads a module file, named for its errors, whose
-// directory is the module's root. The file holds require directives,
-// one a line, with // comments, and may be empty, since marking the
-// root is its first job. Go's module directive is refused with what
-// takes its place.
+// directory is the module's root. The file holds require and link
+// directives, one a line, with // comments, and may be empty, since
+// marking the root is its first job. Go's module directive is refused
+// with what takes its place.
 func ParseModFile(name string, src []byte) (*Module, error) {
 	m := &Module{Dir: filepath.Dir(name)}
 	for i, line := range strings.Split(string(src), "\n") {
@@ -109,6 +111,18 @@ func ParseModFile(name string, src []byte) (*Module, error) {
 			}
 
 			m.Requires = append(m.Requires, Require{fields[1], dir})
+		case "link":
+			if len(fields) != 2 {
+				return nil, errors.New(at + "link needs a library name")
+			}
+
+			if strings.HasPrefix(fields[1], "-") || strings.ContainsAny(fields[1], "/\\") {
+				return nil, errors.New(at + "link names a library the system's linker finds, as -l does, not a flag or a path")
+			}
+
+			if !slices.Contains(m.Links, fields[1]) {
+				m.Links = append(m.Links, fields[1])
+			}
 		case "module":
 			return nil, errors.New(at + "a module has no name: the file marks the root, and an import names a directory under it")
 		default:

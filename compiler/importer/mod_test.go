@@ -32,6 +32,10 @@ func TestModFile(t *testing.T) {
 		{"require dep/ ../dep\n", nil, `snello.mod:1: malformed import path "dep/": empty path element`},
 		{"require dep ../a\nrequire dep ../b\n", nil, "snello.mod:2: a second require of dep"},
 		{"exclude dep\n", nil, `snello.mod:1: unknown directive "exclude"`},
+		{"link m\nlink sqlite3\nlink m\n", nil, ""},
+		{"link\n", nil, "snello.mod:1: link needs a library name"},
+		{"link -lm\n", nil, "snello.mod:1: link names a library the system's linker finds, as -l does, not a flag or a path"},
+		{"link /usr/lib/libm.a\n", nil, "snello.mod:1: link names a library the system's linker finds, as -l does, not a flag or a path"},
 	}
 	for _, tt := range tests {
 		m, err := ParseModFile(filepath.Join("/m", ModFile), []byte(tt.src))
@@ -51,6 +55,10 @@ func TestModFile(t *testing.T) {
 		if m.Dir != "/m" || len(m.Requires) != len(tt.requires) {
 			t.Errorf("%q: got %+v, want dir /m and %d requires", tt.src, m, len(tt.requires))
 			continue
+		}
+
+		if strings.HasPrefix(tt.src, "link m") && (len(m.Links) != 2 || m.Links[0] != "m" || m.Links[1] != "sqlite3") {
+			t.Errorf("%q: links %v, want m and sqlite3 once each", tt.src, m.Links)
 		}
 
 		for i, r := range tt.requires {

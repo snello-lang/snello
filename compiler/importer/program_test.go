@@ -21,7 +21,7 @@ import (
 // variable.
 func TestLoadProgram(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"snello.mod":           "// the root of the module\n",
+		"snello.mod":           "// the root of the module\nlink m\n",
 		"shapes/shape.snello":  shapesSrc,
 		"shapes/area.snello":   areaSrc,
 		"nomain/a.snello":      "package main\nfunc f() {}\n",
@@ -47,6 +47,12 @@ func TestLoadProgram(t *testing.T) {
 
 		if len(prog.Files) != len(names) || len(prog.Syntax) != len(names) || imp.Module == nil || imp.Module.Dir != root {
 			t.Errorf("%s: loaded %d files of %d, module %v", dir, len(prog.Files), len(names), imp.Module)
+		}
+
+		for _, p := range imp.Packages() {
+			if p.Path == "shapes" && (len(p.Links) != 1 || p.Links[0] != "m") {
+				t.Errorf("%s: the module's link line did not reach package shapes: %v", dir, p.Links)
+			}
 		}
 	}
 

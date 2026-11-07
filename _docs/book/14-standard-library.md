@@ -256,34 +256,4 @@ func serve(c net.Conn) {
 
 ## Binding C from a package
 
-The standard library reaches its runtime through functions declared without a body, and a package of your own may do the same to reach C: a function without a body in a package is bound to C under the symbol the compiler derives from the package's path and the function's name, `snm_tally_open` for `open` in package `tally`. The package's `.c` and `.h` files, beside its `.snello` files, are compiled with the program, and the compiler writes a header for them, `tally.snello.h`, which declares every bound function with the C types its Snello signature means, so that a definition that disagrees is an error the C compiler reports.
-
-```snello
-package tally
-
-struct Tally impl Drop { handle int }
-
-func (t mut Tally) Drop() { release(t.handle) }
-
-func Open(start int) *Tally { return &Tally{handle: open(start)} }
-
-func open(start int) int
-func release(handle int)
-func Sum(xs ref []byte) int
-func Parse(s ref string, n mut int) bool
-```
-
-```c
-#include "tally.snello.h"
-
-sn_int snm_tally_Sum(sn_slice_u8 xs) {
-    sn_int sum = 0;
-    for (int64_t i = 0; i < xs.len; i++) {
-        sum += xs.ptr[i];
-    }
-
-    return sum;
-}
-```
-
-What crosses is what the runtime passes already, and nothing is converted on the way: a number or a `bool` by value, `ref string` and `ref []byte` as a view of the bytes, `mut []byte` as a buffer C fills, and a `mut` number or `bool` as an out-parameter. A C library's handle crosses as an `int`, its pointer's value, which the package wraps in a struct with a `Drop` method, as `Tally` does, so that dropping the struct gives the C object back. Anything else is refused at the declaration with its type named, and a library that needs more converts in Snello around the binding. The C side keeps no view past the call, calls nothing of the program back, and holds the worker thread it runs on until it returns, as a file read does; the compiler checks the types, and the author keeps the rest. The main package cannot bind C: a program binds it through a package, so that the C side is always a directory a reader can find. `examples/run/bound/` is the whole of this example, with the program that uses it.
+A package of your own may reach C as the standard library reaches its runtime, a function declared without a body and defined in C beside the package, with a system library named by one line in the module file. Chapter 15 is the whole of it.

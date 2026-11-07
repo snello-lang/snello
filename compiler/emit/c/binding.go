@@ -41,6 +41,10 @@ func Header(b lower.Binding) []byte {
 func BindingSources(dir string, bindings []lower.Binding) ([]string, error) {
 	var srcs []string
 	for _, b := range bindings {
+		if len(b.Files) == 0 {
+			continue // a package with a link line and no C of its own
+		}
+
 		sub := filepath.Join(dir, b.Prefix)
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			return nil, err
@@ -68,4 +72,15 @@ func BindingSources(dir string, bindings []lower.Binding) ([]string, error) {
 	}
 
 	return srcs, nil
+}
+
+// LinkFlags returns the -l flags of the system libraries the bindings
+// name, for the link of the program.
+func LinkFlags(bindings []lower.Binding) []string {
+	var flags []string
+	for _, l := range lower.Links(bindings) {
+		flags = append(flags, "-l"+l)
+	}
+
+	return flags
 }

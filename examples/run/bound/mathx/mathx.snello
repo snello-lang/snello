@@ -1,0 +1,12 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package mathx binds a function of a system library: cbrt from the
+// math library, m, which the module file names with link m. The C
+// side is a shim of one line in mathx.c, since a bound function is
+// always defined under its derived symbol.
+package mathx
+
+// Cbrt is the cube root of x, from the system's math library.
+func Cbrt(x f64) f64

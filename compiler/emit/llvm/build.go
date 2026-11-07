@@ -96,7 +96,7 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(cc, append(append(append(rtargs, "-o", bin, obj), objs...), "-lm")...).CombinedOutput()
+	linked, err := exec.Command(cc, append(append(append(append(rtargs, "-o", bin, obj), objs...), c.LinkFlags(bindings)...), "-lm")...).CombinedOutput()
 	return bin, append(output, linked...), err
 }
 

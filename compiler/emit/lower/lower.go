@@ -33,6 +33,7 @@ type Library struct {
 	File   *token.File
 	Syntax *ast.File
 	CFiles []string
+	Links  []string // the system libraries the package's module links
 }
 
 // A Binding is a package's C side, which the backends compile with the
@@ -47,17 +48,19 @@ type Binding struct {
 	Header string
 	Files  []string
 	Funcs  []*types.Func
+	Links  []string // the system libraries to link for the package, its module's link lines
 }
 
 // Bindings collects the C side of every library that has one, in the
 // order of the libraries: a standard package has none, since the
 // runtime is its C side, and a package of the program's own has one
-// when its directory holds a .c or .h file.
+// when its directory holds a .c or .h file or its module links a
+// system library.
 func Bindings(info *types.Info, libraries []Library) []Binding {
 	var bindings []Binding
 	index := make(map[string]int)
 	for _, lib := range libraries {
-		if len(lib.CFiles) == 0 {
+		if len(lib.CFiles) == 0 && len(lib.Links) == 0 {
 			continue
 		}
 
@@ -65,7 +68,7 @@ func Bindings(info *types.Info, libraries []Library) []Binding {
 		if !ok {
 			i = len(bindings)
 			index[lib.Path] = i
-			bindings = append(bindings, Binding{Path: lib.Path, Prefix: strings.TrimSuffix(PathPrefix(lib.Path), "_"), Header: path.Base(lib.Path) + ".snello.h", Files: lib.CFiles})
+			bindings = append(bindings, Binding{Path: lib.Path, Prefix: strings.TrimSuffix(PathPrefix(lib.Path), "_"), Header: path.Base(lib.Path) + ".snello.h", Files: lib.CFiles, Links: lib.Links})
 		}
 
 		for _, d := range lib.Syntax.Decls {
@@ -122,4 +125,21 @@ func Key(fn *types.Func) string {
 	}
 
 	return ""
+}
+
+// Links returns the system libraries the bindings link, each once, in
+// the order met: -lNAME for each at the link of the program.
+func Links(bindings []Binding) []string {
+	var links []string
+	seen := make(map[string]bool)
+	for _, b := range bindings {
+		for _, l := range b.Links {
+			if !seen[l] {
+				seen[l] = true
+				links = append(links, l)
+			}
+		}
+	}
+
+	return links
 }

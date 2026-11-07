@@ -22,11 +22,22 @@ func TestHeader(t *testing.T) {
 	}
 
 	bindings := lower.Bindings(info, libs)
-	if len(bindings) != 1 || bindings[0].Path != "tally" || bindings[0].Prefix != "snm_tally" || bindings[0].Header != "tally.snello.h" {
-		t.Fatalf("bindings = %+v, want one for tally", bindings)
+	var tally *lower.Binding
+	for i := range bindings {
+		if bindings[i].Path == "tally" {
+			tally = &bindings[i]
+		}
 	}
 
-	header := string(Header(bindings[0]))
+	if tally == nil || tally.Prefix != "snm_tally" || tally.Header != "tally.snello.h" || len(tally.Links) != 1 || tally.Links[0] != "m" {
+		t.Fatalf("bindings = %+v, want tally with its module's link m", bindings)
+	}
+
+	if flags := LinkFlags(bindings); len(flags) != 1 || flags[0] != "-lm" {
+		t.Errorf("link flags %v, want -lm once for the two packages of one module", flags)
+	}
+
+	header := string(Header(*tally))
 	for _, want := range []string{
 		"#include \"snello.h\"",
 		"sn_int snm_tally_open(sn_int start);",

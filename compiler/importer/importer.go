@@ -34,6 +34,7 @@ type Package struct {
 	Syntax *ast.File
 	Pkg    *types.Package
 	CFiles []string // the .c and .h files of the package's directory, its C side; none for a standard package, whose C side is the runtime
+	Links  []string // the system libraries the package's module links, from its link lines
 }
 
 // An Importer loads the packages a program imports, each once,
@@ -113,7 +114,7 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 	name := importPath + "/" + path.Base(importPath) + ".snello"
 	if src, err := std.Sources.ReadFile(name); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
-			return imp.load(importPath, []string{name}, [][]byte{src}, nil, &imp.std)
+			return imp.load(importPath, []string{name}, [][]byte{src}, nil, nil, &imp.std)
 		})
 	}
 
@@ -150,7 +151,7 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 	}
 
 	return imp.loadOnce(canonical, false, func() (*types.Package, []*Package, error) {
-		return imp.loadDir(canonical, importPath, pkgDir)
+		return imp.loadDir(canonical, importPath, pkgDir, r.module.Links)
 	})
 }
 
@@ -189,10 +190,10 @@ func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package
 
 // loadDir loads the package of the program's own at pkgDir, imported
 // as importPath and named canonical: its .snello files, its C side
-// when it has one, and the refusals of a program, of a bound package
-// with no .c file to define what it declares, and of a file named as
-// the header the compiler writes.
-func (imp *Importer) loadDir(canonical, importPath, pkgDir string) (*types.Package, []*Package, error) {
+// when it has one, the libraries its module links, and the refusals of
+// a program, of a bound package with no .c file to define what it
+// declares, and of a file named as the header the compiler writes.
+func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []string) (*types.Package, []*Package, error) {
 	files, err := SourceFiles(pkgDir)
 	if err != nil || len(files) == 0 {
 		return nil, nil, errors.New("no package at " + pkgDir + " for import " + importPath)
@@ -221,7 +222,7 @@ func (imp *Importer) loadDir(canonical, importPath, pkgDir string) (*types.Packa
 		}
 	}
 
-	pkg, entries, err := imp.load(canonical, files, srcs, cfiles, &imp.own)
+	pkg, entries, err := imp.load(canonical, files, srcs, cfiles, links, &imp.own)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -273,7 +274,7 @@ func Paths() []string {
 // package named path, and returns it with one entry per file, for the
 // caller to record. The files are parsed into one FileSet, so that an
 // error in any of them names its file.
-func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles []string, conf *types.Config) (*types.Package, []*Package, error) {
+func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
 	fset, syntax, err := parseFiles(names, srcs)
 	var pkg *types.Package
 	if err == nil {
@@ -286,7 +287,7 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles []s
 
 	entries := make([]*Package, len(syntax))
 	for i, f := range syntax {
-		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles}
+		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links}
 	}
 
 	return pkg, entries, nil
