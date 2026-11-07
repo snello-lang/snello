@@ -1,0 +1,16 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable is never lent as mut, neither to a function
+// nor to a method taking mut, since a mut is a change and the variable
+// is every task's.
+// Fix: a sync.Mutex holding the slice, locked where it is pushed to.
+
+package p
+
+var names = []string{"a"}
+
+func grow() {
+    names.Push("b")                       // ERROR "names is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds"
+}

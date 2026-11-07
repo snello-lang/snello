@@ -35,7 +35,8 @@ func write(path ref string, text ref string) {
 func main() {
 	// Nothing reaches stdout until the buffer fills or Flush: the count
 	// is printed first, directly.
-	out := bufio.NewWriterSize(mut os.Stdout, 16)
+	stdout := os.Stdout()
+	out := bufio.NewWriterSize(mut stdout, 16)
 	out.WriteString("one ").Expect("write")
 	fmt.Println(out.Buffered())
 	fmt.Fprintln(mut out, "two", 2)
@@ -45,7 +46,8 @@ func main() {
 	fmt.Println(out.Buffered())
 
 	// A small buffer fills many times over.
-	small := bufio.NewWriterSize(mut os.Stdout, 2)
+	stdout2 := os.Stdout()
+	small := bufio.NewWriterSize(mut stdout2, 2)
 	small.WriteString("buffered in twos!\n").Expect("write")
 	fmt.Println(small.Buffered())
 	small.Flush().Expect("flush")
@@ -88,7 +90,8 @@ func main() {
 	// The whole file, through a Reader into a Writer.
 	h := os.Open(path).Expect("open")
 	src := bufio.NewReader(mut h)
-	dst := bufio.NewWriter(mut os.Stdout)
+	stdout3 := os.Stdout()
+	dst := bufio.NewWriter(mut stdout3)
 	copied := io.Copy(mut dst, mut src).Expect("copy")
 	dst.WriteByte('\n').Expect("write")
 	dst.Flush().Expect("flush")

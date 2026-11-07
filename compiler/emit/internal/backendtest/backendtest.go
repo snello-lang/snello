@@ -811,6 +811,110 @@ func main() {
 			Out: "true false true false\n2 b true\n1\n",
 		},
 		{
+			Name: "globals", // what a package variable allows from any task: reading, a ref lent to a function, a Copy value copied out, an element indexed, a method taking ref; the table is read by two tasks at once
+			Src: `package main
+import ("fmt"; "strings")
+const limit = 3
+var names = []string{"round", "square"}
+var title = "shapes"
+var zero = 0
+func count(xs ref []string) int { return len(xs) }
+func work(done chan<- int) {
+	n := zero
+	for _, name := range ref names { n += len(name) }
+	done <- n + count(ref names) + limit
+}
+func main() {
+	done := make(chan int, 2)
+	spawn work(done.Clone())
+	spawn work(done.Clone())
+	fmt.Println(<-done ?? 0, <-done ?? 0, names[1], title.ToUpper(), strings.Repeat(ref title, 2), zero + 1)
+}`,
+			Out: "16 16 square SHAPES shapesshapes 1\n",
+		},
+		{
+			Name: "atomics", // a Counter in a package variable that two tasks add to as one step each, exact with no lock; an Atomic of a string, a flag and a struct, loaded, stored, swapped and compared from two tasks
+			Src: `package main
+import ("fmt"; "sync")
+struct Point impl Eq, Clone { x int; y int }
+var hits = sync.NewCounter(0)
+var state = sync.NewAtomic("idle")
+func work(done chan<- ()) {
+	for i := 0; i < 100000; i++ { hits.Add(1) }
+	state.CompareAndSwap("idle", "busy".Clone())
+	done <- ()
+}
+func main() {
+	done := make(chan ())
+	spawn work(done.Clone())
+	spawn work(done.Clone())
+	<-done
+	<-done
+	fmt.Println(hits.Load(), state.Load())
+	fmt.Println(hits.CompareAndSwap(200000, 7), hits.CompareAndSwap(1, 2), hits.Load())
+	hits.Store(3)
+	fmt.Println(hits.Add(-3))
+	flag := sync.NewAtomic(false)
+	fmt.Println(flag.Load(), flag.CompareAndSwap(ref false, true), flag.Swap(false), flag.Load())
+	p := sync.NewAtomic(Point{x: 1, y: 2})
+	fmt.Println(p.Swap(Point{x: 3, y: 4}), p.Load(), p.CompareAndSwap(ref Point{x: 3, y: 4}, Point{x: 5, y: 6}), p.Load())
+	fmt.Println(state.Swap("done".Clone()), state.Load())
+}`,
+			Out: "200000 busy\ntrue false 7\n0\nfalse true true false\n{1 2} {3 4} true {5 6}\nbusy done\n",
+		},
+		{
+			Name: "lazy-globals", // a package variable whose initializer is a call is made once, on first use, by whichever task reaches it first, and never when no one does; a lock held in one is written from two tasks
+			Src: `package main
+import ("fmt"; "sync")
+func build(name ref string) string { fmt.Println("making", name); return name.Clone() + "!" }
+var greeting = build("hello")
+var unused = build("never")
+var total = sync.NewMutex(0)
+func add(n int, done chan<- ()) {
+	for i := 0; i < n; i++ {
+		g := total.Lock()
+		*g.Get() += 1
+	}
+	done <- ()
+}
+func main() {
+	fmt.Println(greeting)
+	fmt.Println(greeting)
+	done := make(chan ())
+	spawn add(1000, done.Clone())
+	spawn add(1000, done.Clone())
+	<-done
+	<-done
+	fmt.Println(*total.Lock().Get())
+}`,
+			Out: "making hello\nhello!\nhello!\n2000\n",
+		},
+		{
+			Name: "lazy-cycle", // an initializer that reads its own variable through another is a panic naming the variable, not a wait
+			Src: `package main
+import "fmt"
+func f() int { return b + 1 }
+func g() int { return a + 1 }
+var a = f()
+var b = g()
+func main() { fmt.Println(a) }`,
+			Code:   2,
+			Stderr: "panic: package variable a is read by its own initializer\n",
+		},
+		{
+			Name: "lazy-panic", // an initializer that panics under a mark leaves the variable unmade, so the next use runs it again
+			Src: `package main
+import ("expect"; "fmt")
+func boom() int { panic("boom") }
+var bad = boom()
+func main() {
+	expect.PanicsWith(func() { fmt.Println(bad) }, "boom")
+	expect.PanicsWith(func() { fmt.Println(bad) }, "boom")
+	fmt.Println("unmade twice")
+}`,
+			Out: "unmade twice\n",
+		},
+		{
 			Name: "catch", // a panic caught at the runtime's mark: the values with Drop made under it are dropped, what the caller holds stays, marks nest, a runtime panic is a message like any other, and a failed expectation is a panic like any other
 			Src: `package main
 import ("expect"; "fmt"; "testing")
@@ -1136,7 +1240,7 @@ func main() {
 	INT8_MIN := 5
 	r := INT64_MAX{NAN: 9}
 	fmt.Println(write("abc"), read(1), open(), memset(2), pthread_create(10), SIZE_MAX, EOF, INT8_MIN, r.NAN, r)
-	os.Stdout.WriteString("written through the runtime\n")
+	os.Stdout().WriteString("written through the runtime\n")
 	done := make(chan int)
 	d := done.Clone()
 	spawn func() { d <- read(41) }()
@@ -1808,8 +1912,7 @@ type Refusal struct {
 // the body after its package clause.
 var Refusals = []Refusal{
 	{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
-	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
-	{"var n = len(\"abc\")\nfunc main() { print(n) }", "a top-level var or const whose value is not a literal"},
+	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level const whose value is not a literal"},
 	{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
 	{"import \"expect\"\nfunc main() { ok := expect.True; ok(true) }", "expect.True as a value: it is called, so that a failure names its line"},
 	{"import \"testing\"\nfunc main() { log := testing.Log; log(\"x\") }", "testing.Log as a value"},

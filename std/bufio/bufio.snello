@@ -7,7 +7,7 @@
 // and reads text by lines.
 //
 // Each type borrows the reader or writer under it, mut, for as long as
-// it lives: bufio.NewWriter(mut os.Stdout) is a Writer<os.File> that
+// it lives: out := os.Stdout(); bufio.NewWriter(mut out) is a Writer<os.File> that
 // holds the borrow, and the file is not written to directly while it
 // does. A Writer, a Reader and a Scanner are borrows themselves, so
 // they are lent to a call and dropped at the end of their scope, but

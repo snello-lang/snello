@@ -186,6 +186,13 @@ var handledErrors = map[string]bool{
 	"use-after-send.snello":            true,
 	"mutate-through-arc.snello":        true,
 	"borrowing-closure-spawned.snello": true,
+	// Package variables, reached from every task.
+	"global-assigned.snello":          true,
+	"global-mut.snello":               true,
+	"global-moved.snello":             true,
+	"global-not-send.snello":          true,
+	"global-declared-not-send.snello": true,
+	"global-trait-not-send.snello":    true,
 }
 
 func TestNegativePrograms(t *testing.T) {

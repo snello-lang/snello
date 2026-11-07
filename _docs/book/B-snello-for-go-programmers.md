@@ -30,7 +30,7 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capi
 | `func TestX(t *testing.T)`, `t.Errorf`, `t.Fatalf`, `t.Run`, `t.Log`, `t.Skip`, `t.TempDir`, `t.Cleanup` | `func TestX()` with no handle; `expect.Equal(ref got, ref want)` and the other assertions fail by a panic the runner catches; `testing.Run`, `testing.Log`, `testing.Skip`, `testing.TempDir()` whose `Drop` is the cleanup; record-and-continue is not kept, the first failed expectation ends the test |
 | `go test ./...`, `go test -v -run Name` | `snello test DIR`, `snello test -v -run Name DIR`; one package at a time |
 | `testify`'s `assert.Equal`, `go-cmp`'s diff | `expect.Equal`, printing got and want and the first difference in words; no library needed |
-| `go test -race` | Nothing: a data race is a compile error in Snello, so there is no detector; a package-level `var` is the one gap until task 9.2 of stage 9 makes it immutable (chapter 16) |
+| `go test -race` | Nothing: a data race is a compile error in Snello, so there is no detector (chapters 10 and 16) |
 | `func BenchmarkX(b *testing.B)`, `for b.Loop()`, `b.ReportAllocs()`, `go test -bench .` | `func BenchmarkX()`, `for testing.Loop()`, `testing.ReportAllocs()`, `snello test -bench . DIR`; the line printed is Go's |
 | `break` inside `switch` or `select` ends that statement; a labeled `break outer` for the loop | `break` always ends the innermost loop; there are no labels |
 | `if x := f(); x > 0 {` | Same. `if x := opt {` with no `;` is a binding on an optional |
@@ -145,6 +145,9 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 | `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; the zero value is empty and panics |
 | `var wg sync.WaitGroup` passed by pointer, `&wg` | `sync.WaitGroup` is an owned handle on a counter, cloned for each task, `w := wg.Clone()`, like a channel, and freed by the last handle |
 | `*rc`-style shared ownership does not exist; the GC shares everything | `rc.Rc` shares within one task and is refused at a task boundary; `sync.Arc` shares across tasks |
+| `sync/atomic`: `atomic.Int64`, `atomic.Value`, `atomic.Bool` | `sync.Counter` for an `int` added to as one step; `sync.Atomic<T>` for any `Send`, `Clone` and `Eq` value read and replaced as one step, `Atomic<bool>` for a flag |
+| A package-level `var` any goroutine may write; `func init()` runs before `main` | A package variable is read by every task and never assigned, lent as `mut` or moved out of; it changes through the `Counter`, `Atomic` or lock it holds; an initializer that is a call runs once, on first use, and a variable never used is never made (chapter 10) |
+| `os.Stdout`, `os.Stderr`, `os.Stdin` are variables | `os.Stdout()`, `os.Stderr()`, `os.Stdin()` are functions giving a handle on the descriptor, since a package variable is never lent `mut` |
 
 ## Chapter 11: Traits
 
@@ -199,5 +202,5 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
 | `strings.Builder` | The same, with `WriteString`, `WriteByte`, `Len`, `String` and `Reset` |
 | `[]byte(s)` and `string(b)` copy | The same |
-| `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr, ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait |
+| `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr(), ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait; the streams are functions, since a package variable is never lent `mut` |
 | `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing |

@@ -82,8 +82,16 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 // names are already declared in scope, giving an untyped name the type
 // of its value.
 func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
-	if len(d.Values) == 0 {
-		return // the parser requires a type when there is no value
+	if len(d.Values) == 0 { // the parser requires a type when there is no value, resolved already
+		if scope == c.pkg.scope {
+			for _, name := range d.Names {
+				if v, ok := scope.Lookup(name.Name).(*Var); ok {
+					c.globalType(name, v.typ)
+				}
+			}
+		}
+
+		return
 	}
 
 	var declared Type
@@ -94,8 +102,14 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 	ops := c.values(len(d.Names), d.Values, declared, d.Pos())
 	for i, name := range d.Names {
 		c.assign(ops[i], declared, d.Values[min(i, len(d.Values)-1)].Pos(), "declaration")
+		t := declared
 		if declared == nil {
-			c.setType(scope.Lookup(name.Name), inferred(ops[i]))
+			t = inferred(ops[i])
+			c.setType(scope.Lookup(name.Name), t)
+		}
+
+		if scope == c.pkg.scope { // every type is complete in this phase, declared or inferred
+			c.globalType(name, t)
 		}
 	}
 }

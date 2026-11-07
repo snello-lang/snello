@@ -62,6 +62,7 @@ type TypeName struct {
 type Var struct {
 	object
 	field   bool
+	global  bool      // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
 	lastUse token.Pos // the last use seen so far, for the borrow pass; an assignment to the whole variable is not one
 	kept    bool      // a parameter whose argument the callee keeps: Push stores its element
 }

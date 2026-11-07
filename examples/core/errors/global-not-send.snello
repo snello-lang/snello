@@ -1,0 +1,15 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable's type must be one every task may share,
+// Send, since every task reaches it; an rc handle stays in its task.
+// Fix: sync.NewArc for a value shared by tasks, or a local rc.Rc.
+
+package p
+
+import "rc"
+
+struct Node { n int }
+
+var shared = rc.New(Node{n: 1})           // ERROR "shared cannot be a package variable: rc.Rc<Node> stays in its task"

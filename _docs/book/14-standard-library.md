@@ -30,7 +30,7 @@ A few library functions are not written in Snello: the runtime provides them in 
 |---|---|
 | `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%s`, `%q`, `%f`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, and a width before the verb, `%6d`, or `%-6s` to pad on the right; it is checked against its arguments when the program is compiled |
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader` and `Writer` traits, `Copy` |
-| `os` | `Args`, `Stdin`, `Stdout`, `Stderr`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers |
+| `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers |
 | `testing`, `expect` | the test runner and the assertions of chapter 16, imported by test files alone: `testing.Main`, `Run`, `Log`, `Logf`, `Skip`, `TempDir`, `Parallel`, `Loop`, `ResetTimer`, `ReportAllocs`, `Short`; `expect.Equal`, `NotEqual`, `EqualSlice`, `EqualText`, `True`, `False`, `Fail`, `Failf`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Contains`, `ContainsElem`, `HasPrefix`, `HasSuffix`, `Len`, `Empty`, `Golden`, `Panics`, `PanicsWith`, each a panic the runner catches through `testing.Catch`, with the file, line, expression and operands the compiler hands them |
 | `math` | `Pi`; `Sqrt`, `Abs`, `Min`, `Max`, over `f64`, with Go's answers on -0, NaN and the infinities |
 | `strings` | `Builder` with `WriteString`, `WriteByte`, `Len`, `String` and `Reset`; `Repeat`, `Join`, `ToLower`, `ToUpper`, `Fields` |
@@ -60,7 +60,7 @@ func copy(src ref string, dst ref string) Result<i64, io.Error> {
 }
 ```
 
-An `os.File` implements `Drop`: a file that goes out of scope is closed, on every path out of the function. `Close` consumes the file and reports the failure, which `Drop` cannot, so a program that cares about the error calls `Close` and one that does not lets the file go. The three standard streams are files too, open when the program starts, and stay open for its life: `os.Stdout.WriteString("direct\n")`. Nothing is held back on them: what `fmt` prints and what is written to `os.Stdout` and `os.Stderr` go out at once and in order, a prompt printed without a newline shows before the program reads its answer, and a write that fails says so at the write. `fmt.Println` builds its whole line and writes it once, so two tasks' lines never interleave. A program that writes much in small pieces wraps the stream in a `bufio.Writer`. `os.WriteString(path, s)` writes a whole file as `ReadToString` reads one; `os.Remove` removes one file or empty directory, `os.RemoveAll` a whole tree, naming the entry it failed on when it fails; `os.MkdirTemp(dir, "build-*")` puts a random number where the pattern's last `*` is, and when `dir` itself is missing reports its stat, `stat /tmp/gone: no such file or directory`, as Go does. `examples/run/streams.snello` and `files.snello` show these.
+An `os.File` implements `Drop`: a file that goes out of scope is closed, on every path out of the function. `Close` consumes the file and reports the failure, which `Drop` cannot, so a program that cares about the error calls `Close` and one that does not lets the file go. The three standard streams are files too, open when the program starts, and stay open for its life: `os.Stdout().WriteString("direct\n")`. Nothing is held back on them: what `fmt` prints and what is written to `os.Stdout` and `os.Stderr` go out at once and in order, a prompt printed without a newline shows before the program reads its answer, and a write that fails says so at the write. `fmt.Println` builds its whole line and writes it once, so two tasks' lines never interleave. A program that writes much in small pieces wraps the stream in a `bufio.Writer`. `os.WriteString(path, s)` writes a whole file as `ReadToString` reads one; `os.Remove` removes one file or empty directory, `os.RemoveAll` a whole tree, naming the entry it failed on when it fails; `os.MkdirTemp(dir, "build-*")` puts a random number where the pattern's last `*` is, and when `dir` itself is missing reports its stat, `stat /tmp/gone: no such file or directory`, as Go does. `examples/run/streams.snello` and `files.snello` show these.
 
 `io.Reader` and `io.Writer` are traits with one method each, `Read(buf mut []byte)` and `Write(buf ref []byte)`, and `os.File` implements both; a program's own types may too, and then `io.Copy` and `fmt.Fprintln` work on them. `io.Copy` is a generic function over the two traits, `Copy<W: Writer, R: Reader>(dst mut W, src mut R)`, so a copy between two files is one copy of the function, with the reads and writes called directly. A writer that takes fewer bytes than it was given is asked again for the rest.
 
@@ -119,8 +119,8 @@ match strconv.Atoi("x") {
 `fmt` is the one package the compiler writes itself: `Println` and its kin take arguments of any type, `func Println(args ...ref any)` as `std/fmt/fmt.snello` declares it, and the compiler chooses how to print each one from its type, so no formatting happens at run time and the format of `Printf` is read when the program is compiled. `...ref any` is the library's spelling for that; a program's own function takes arguments of the types it names. `Fprintln` and `Fprintf` write where they are told, to any value implementing `io.Writer`, lent `mut`:
 
 ```snello
-fmt.Fprintln(mut os.Stdout, "to", "stdout", 1)                       // to stdout 1
-fmt.Fprintf(mut os.Stdout, "%5d|%-4s|%3s|%2.1f|\n", 42, "ab", "abcdef", 2.25)   // "   42|ab  |abcdef|2.2|"
+fmt.Fprintln(mut os.Stdout(), "to", "stdout", 1)                       // to stdout 1
+fmt.Fprintf(mut os.Stdout(), "%5d|%-4s|%3s|%2.1f|\n", 42, "ab", "abcdef", 2.25)   // "   42|ab  |abcdef|2.2|"
 ```
 
 A width pads with spaces to the left of the value, or to the right after a minus, counting characters rather than bytes, so `é` is one; a value already wider is printed whole. `Fprintln` writes the text with one call of the writer's `Write`, and says nothing about a failure, as Go programs rarely look at one.
@@ -208,7 +208,8 @@ The package is written in Snello over two functions the compiler provides, which
 Since a `Reader` or `Writer` holds what it wraps `mut`, the program cannot reach that value directly while the buffer lives, where Go's program keeps using it beside the buffer. `Get` lends it back through the buffer: a server reading a connection line by line through a `Reader` answers on the same connection with `r.Get().WriteString(...)`. Once the buffer's last use is past, the value is the program's again.
 
 ```snello
-out := bufio.NewWriter(mut os.Stdout)
+stdout := os.Stdout()
+out := bufio.NewWriter(mut stdout)
 defer out.Flush()
 fmt.Fprintln(mut out, "two", 2)
 out.WriteByte('\n')

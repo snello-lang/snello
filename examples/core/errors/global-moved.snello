@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value that is not Copy cannot be moved out of a package
+// variable, since the move would leave the place empty for every other
+// task.
+// Fix: clone it, m := cache.Clone(), or lend it, ref cache.
+
+package p
+
+var cache = map[string]int{}
+
+func take_it() {
+    m := cache                            // ERROR "cache is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds"
+    print(len(m))
+}

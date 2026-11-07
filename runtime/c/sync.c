@@ -292,3 +292,35 @@ void sn_sync_wait(int64_t h) {
 int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) {
     return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST);
 }
+
+// The words of sync.Counter: one each on the
+// heap, named by its address as a lock is, so that a handle is a plain
+// int the package's value holds and every operation is one atomic
+// instruction on the word. Sequentially consistent, as Go's atomics
+// are: the cost is a fence on arm64, and a program that needs less
+// is a program that has measured.
+int64_t sn_sync_cellNew(int64_t v) {
+    int64_t *p = sn_alloc(sizeof *p);
+    __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
+    return (int64_t)(intptr_t)p;
+}
+
+int64_t sn_sync_cellLoad(int64_t h) {
+    return __atomic_load_n((int64_t *)(intptr_t)h, __ATOMIC_SEQ_CST);
+}
+
+void sn_sync_cellStore(int64_t h, int64_t v) {
+    __atomic_store_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST);
+}
+
+int64_t sn_sync_cellAdd(int64_t h, int64_t d) {
+    return __atomic_add_fetch((int64_t *)(intptr_t)h, d, __ATOMIC_SEQ_CST);
+}
+
+bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v) {
+    return __atomic_compare_exchange_n((int64_t *)(intptr_t)h, &old, v, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+void sn_sync_cellFree(int64_t h) {
+    sn_free((void *)(intptr_t)h);
+}

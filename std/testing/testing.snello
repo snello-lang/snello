@@ -14,7 +14,7 @@
 // test files alone: nothing of a test reaches a program's binary.
 package testing
 
-import ("fmt"; "os"; "time")
+import ("fmt"; "os"; "sync"; "time")
 
 // A Test is a test by name and function, what the generated main lists;
 // a benchmark is listed the same way.
@@ -69,39 +69,67 @@ struct Result {
 }
 
 // The registry: a state per running test, by the task it runs on, the
-// gate parallel tests wait at, and the channel their tasks report on.
-// A library's variable is given a literal, and a struct whose fields
-// start at their zero values is one.
+// gate parallel tests wait at, and the channel their tasks report on,
+// in a lock, as a package variable every task changes must be; it is
+// made on first use, since its initializer is a call.
 struct Registry {
 	states map[int]State
 	gate   (chan ())?
 	done   (chan Result)?
 }
 
-var reg Registry = Registry{}
+var reg = sync.NewMutex(Registry{states: map[int]State{}, gate: None, done: None})
 
-// The flags, as Main read them.
-var verbose bool = false
-var short bool = false
-var update bool = false
-var failfast bool = false
+// The flags, as Main read them, stored once before any test runs and
+// read by the tests: a configuration, which is what an Atomic holds.
+struct Config impl Eq, Clone {
+	verbose  bool
+	short    bool
+	update   bool
+	failfast bool
+}
+
+var cfg = sync.NewAtomic(Config{verbose: false, short: false, update: false, failfast: false})
 
 // Short reports whether -short was given, for a test to skip its long
 // part.
-func Short() bool { return short }
+func Short() bool { return cfg.Load().short }
 
 // Update reports whether -update was given, for expect.Golden to write
 // the file instead of comparing with it.
-func Update() bool { return update }
+func Update() bool { return cfg.Load().update }
+
+func verbose() bool { return cfg.Load().verbose }
+
+func failfast() bool { return cfg.Load().failfast }
 
 // with runs f on the running test's state, under the registry's lock.
 func with(f func(st mut State)) {
-	lock()
-	if st := reg.states.GetMut(ref task()) {
+	g := reg.Lock()
+	if st := g.Get().states.GetMut(ref task()) {
 		f(st)
 	}
+}
 
-	unlock()
+// doneChan and gateChan are handles of the round's channels, taken
+// under the lock and used outside it, since a send or a receive may
+// wait, and nothing waits while holding the registry.
+func doneChan() (chan Result)? {
+	g := reg.Lock()
+	if d := ref g.Get().done {
+		return Some(d.Clone())
+	}
+
+	return None
+}
+
+func gateChan() (chan ())? {
+	g := reg.Lock()
+	if gate := ref g.Get().gate {
+		return Some(gate.Clone())
+	}
+
+	return None
 }
 
 // say prints a line of the running test's report, or holds it when
@@ -154,11 +182,11 @@ func Parallel() {
 		panic("testing.Parallel called twice")
 	}
 
-	if done := ref reg.done {
+	if done := doneChan() {
 		done <- Result{name: name, passed: true, parallel: true, held: ""}
 	}
 
-	if gate := ref reg.gate {
+	if gate := gateChan() {
 		<-gate
 	}
 }
@@ -197,7 +225,7 @@ func run(f func()) bool {
 		st.skipped = false
 		st.logged = ""
 	})
-	if verbose {
+	if verbose() {
 		say(ref ("=== RUN   " + name))
 	}
 
@@ -222,7 +250,7 @@ func run(f func()) bool {
 				return false
 			}
 
-			if verbose {
+			if verbose() {
 				say(ref ("--- PASS: " + name + " " + took))
 				sayLogged(ref logged)
 			}
@@ -257,74 +285,59 @@ func sayLogged(logged ref string) {
 // and reports the result with the lines held.
 func runTest(t Test) {
 	id := task()
-	lock()
-	reg.states[id] = State{name: t.Name.Clone(), logged: "", failed: false, skipped: false, reason: "", parallel: false, held: ""}
-	unlock()
+	register(id, ref t.Name)
 	passed := run(t.F)
-	held := ""
-	lock()
-	if st := reg.states.Remove(ref id) {
-		held = st.held
-	}
-
-	unlock()
-	if done := ref reg.done {
+	held := unregister(id)
+	if done := doneChan() {
 		done <- Result{name: t.Name.Clone(), passed: passed, parallel: false, held: held}
 	}
+}
+
+// register and unregister keep the state of the test running on the
+// task id, under the registry's lock; unregister returns the lines the
+// test held.
+func register(id int, name ref string) {
+	g := reg.Lock()
+	r := g.Get()
+	r.states[id] = State{name: name.Clone(), logged: "", failed: false, skipped: false, reason: "", parallel: false, held: ""}
+}
+
+func unregister(id int) string {
+	g := reg.Lock()
+	r := g.Get()
+	if st := r.states.Remove(ref id) {
+		return st.held
+	}
+
+	return ""
 }
 
 // watchdog ends the program when the tests take longer than d.
 func watchdog(d time.Duration) {
 	time.Sleep(d)
-	fmt.Fprintln(mut os.Stderr, "panic: tests timed out after", d)
+	fmt.Fprintln(mut os.Stderr(), "panic: tests timed out after", d)
 	os.Exit(2)
 }
 
-// A benchmark's state, one at a time: how many iterations this run
-// makes, how many Loop has counted, when the timer started and what
-// it has counted, and the allocator's counts at the start.
-var benchN int = 0
-var benchI int = 0
-var benchStart i64 = 0
-var benchNanos i64 = 0
-var benchAllocs int = 0
-var benchBytes int = 0
-var benchReport bool = false
-
 // Loop is the loop of a benchmark, for testing.Loop() { ... }: it
 // counts the iterations the runner asked for, timing them, and is
-// false once they are done.
+// false once they are done. The benchmark's state, one at a time, is
+// the runtime's (runtime/c/testing.c), so that the loop costs one call
+// and no lock.
 func Loop() bool {
-	if benchI == 0 {
-		benchStart = time.Now().UnixNano()
-		benchAllocs = allocs()
-		benchBytes = allocBytes()
-	}
-
-	if benchI >= benchN {
-		benchNanos += time.Now().UnixNano() - benchStart
-		benchAllocs = allocs() - benchAllocs
-		benchBytes = allocBytes() - benchBytes
-		return false
-	}
-
-	benchI += 1
-	return true
+	return benchLoop()
 }
 
 // ResetTimer forgets the time and the allocations counted so far,
 // after a benchmark's setup.
 func ResetTimer() {
-	benchStart = time.Now().UnixNano()
-	benchNanos = 0
-	benchAllocs = allocs()
-	benchBytes = allocBytes()
+	benchReset()
 }
 
 // ReportAllocs asks the benchmark's line for its bytes and allocations
 // per operation.
 func ReportAllocs() {
-	benchReport = true
+	benchReport()
 }
 
 // runBench runs a benchmark for a count the runner raises until a run
@@ -334,21 +347,18 @@ func ReportAllocs() {
 func runBench(b ref Test) int {
 	n := 1
 	for {
-		benchN = n
-		benchI = 0
-		benchNanos = 0
-		benchReport = false
+		benchStart(n)
 		if msg := Catch(b.F) {
 			fmt.Println("--- FAIL: " + b.Name)
 			fmt.Println("    " + msg)
 			return 1
 		}
 
-		if benchNanos >= 1000000000 || n >= 1000000000 {
+		if benchNanos() >= 1000000000 || n >= 1000000000 {
 			break
 		}
 
-		per := benchNanos / i64(n)
+		per := benchNanos() / i64(n)
 		if per <= 0 {
 			per = 1
 		}
@@ -365,14 +375,14 @@ func runBench(b ref Test) int {
 		n = int(next)
 	}
 
-	per := f64(benchNanos) / f64(n)
+	per := f64(benchNanos()) / f64(n)
 	line := fmt.Sprintf("%-24s %10d %12.0f ns/op", b.Name, n, per)
 	if per < 100 { // Go prints the decimals of a small cost
 		line = fmt.Sprintf("%-24s %10d %12.2f ns/op", b.Name, n, per)
 	}
 
-	if benchReport {
-		line += fmt.Sprintf(" %8d B/op %8d allocs/op", benchBytes/n, benchAllocs/n)
+	if benchReported() {
+		line += fmt.Sprintf(" %8d B/op %8d allocs/op", benchBytes()/n, benchAllocs()/n)
 	}
 
 	fmt.Println(line)
@@ -380,17 +390,15 @@ func runBench(b ref Test) int {
 }
 
 // next is a random number for -shuffle, an xorshift over the seed.
-var seed i64 = 0
-
-func next() i64 {
-	seed ^= seed << 13
-	seed ^= seed >> 7
-	seed ^= seed << 17
-	if seed < 0 {
-		return -seed
+func next(seed mut i64) i64 {
+	*seed ^= *seed << 13
+	*seed ^= *seed >> 7
+	*seed ^= *seed << 17
+	if *seed < 0 {
+		return -*seed
 	}
 
-	return seed
+	return *seed
 }
 
 // Main runs the tests of the package named pkg, as the generated main
@@ -407,17 +415,18 @@ func Main(pkg ref string, tests []Test) {
 	count := 1
 	timeout := time.Duration(0)
 	shuffle := false
+	flags := Config{verbose: false, short: false, update: false, failfast: false}
 	for i := 1; i < len(os.Args); i++ {
 		arg := ref os.Args[i]
 		more := i+1 < len(os.Args)
 		if arg == "-v" {
-			verbose = true
+			flags.verbose = true
 		} else if arg == "-short" {
-			short = true
+			flags.short = true
 		} else if arg == "-update" {
-			update = true
+			flags.update = true
 		} else if arg == "-failfast" {
-			failfast = true
+			flags.failfast = true
 		} else if arg == "-shuffle" {
 			shuffle = true
 		} else if arg == "-run" && more {
@@ -435,10 +444,12 @@ func Main(pkg ref string, tests []Test) {
 		}
 	}
 
+	setFlags(flags)
 	if timeout > 0 {
 		spawn watchdog(timeout)
 	}
 
+	seed := i64(0)
 	if shuffle {
 		seed = time.Now().UnixNano()
 		if seed == 0 {
@@ -450,7 +461,7 @@ func Main(pkg ref string, tests []Test) {
 
 	start := time.Now()
 	failures := 0
-	for c := 0; c < count && (failures == 0 || !failfast); c++ {
+	for c := 0; c < count && (failures == 0 || !failfast()); c++ {
 		order := make([]int, 0, len(tests))
 		for i := 0; i < len(tests); i++ {
 			order.Push(i)
@@ -458,7 +469,7 @@ func Main(pkg ref string, tests []Test) {
 
 		if shuffle {
 			for i := len(order) - 1; i > 0; i-- {
-				j := int(next() % i64(i+1))
+				j := int(next(mut seed) % i64(i+1))
 				order.Swap(i, j)
 			}
 		}
@@ -481,7 +492,7 @@ func Main(pkg ref string, tests []Test) {
 		os.Exit(1)
 	}
 
-	if verbose {
+	if verbose() {
 		fmt.Println("PASS")
 	}
 
@@ -492,8 +503,9 @@ func Main(pkg ref string, tests []Test) {
 // its own, the sequential ones one at a time, the parallel ones
 // together after them, and returns how many failed.
 func round(tests ref []Test, order ref []int, only ref string) int {
-	reg.gate = Some(make(chan (), 0))
-	reg.done = Some(make(chan Result, len(tests)))
+	openRound(len(tests))
+	done := doneChan() ?? panic("testing: no round open")
+	gate := gateChan() ?? panic("testing: no round open")
 	failures := 0
 	waiting := 0
 	for _, i := range order {
@@ -502,38 +514,46 @@ func round(tests ref []Test, order ref []int, only ref string) int {
 			continue
 		}
 
-		if failures > 0 && failfast {
+		if failures > 0 && failfast() {
 			break
 		}
 
 		spawn runTest(Test{Name: t.Name.Clone(), F: t.F})
-		if done := ref reg.done {
-			if r := <-done {
-				if r.parallel {
-					waiting += 1
-				} else if !r.passed {
-					failures += 1
-				}
+		if r := <-done {
+			if r.parallel {
+				waiting += 1
+			} else if !r.passed {
+				failures += 1
 			}
 		}
 	}
 
-	if gate := ref reg.gate {
-		close(gate)
-	}
-
+	close(gate)
 	for ; waiting > 0; waiting-- {
-		if done := ref reg.done {
-			if r := <-done {
-				fmt.Printf("%s", r.held)
-				if !r.passed {
-					failures += 1
-				}
+		if r := <-done {
+			fmt.Printf("%s", r.held)
+			if !r.passed {
+				failures += 1
 			}
 		}
 	}
 
 	return failures
+}
+
+// openRound gives the registry a round's channels: the gate the
+// parallel tests wait at, and the channel every test reports on, with
+// room for all so that no task waits to report.
+func openRound(n int) {
+	g := reg.Lock()
+	r := g.Get()
+	r.gate = Some(make(chan (), 0))
+	r.done = Some(make(chan Result, n))
+}
+
+// setFlags records the flags, before any test runs.
+func setFlags(flags Config) {
+	cfg.Store(flags)
 }
 
 // number reads a flag's value as a count, ending the program with
@@ -543,7 +563,7 @@ func number(s ref string, flag ref string) int {
 	for i := 0; i < s.Len(); i++ {
 		d := s[i]
 		if d < '0' || d > '9' {
-			fmt.Fprintf(mut os.Stderr, "invalid value %q for %s\n", s, flag)
+			fmt.Fprintf(mut os.Stderr(), "invalid value %q for %s\n", s, flag)
 			os.Exit(2)
 		}
 
@@ -565,11 +585,15 @@ func Catch(f func()) string?
 // The runtime provides these: the place of the call being made,
 // file:line, which the compiler hands it before every call of Log,
 // Logf and Skip and it keeps for the running task; the running task's
-// identity; a lock over the registry; and the allocator's counts
+// identity; and the benchmark's state, one benchmark at a time
 // (runtime/c/testing.c).
 func where() string
 func task() int
-func lock()
-func unlock()
-func allocs() int
-func allocBytes() int
+func benchStart(n int)
+func benchLoop() bool
+func benchReset()
+func benchReport()
+func benchNanos() i64
+func benchAllocs() int
+func benchBytes() int
+func benchReported() bool

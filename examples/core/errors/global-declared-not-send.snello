@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable's type must be Send whether it is written
+// out or inferred, since every task reaches the variable; a struct
+// holding an rc handle, and a variable of such a type declared with no
+// value, are refused where they are declared.
+// Fix: sync.NewArc for a value shared by tasks, or a local rc.Rc.
+
+package p
+
+import "rc"
+
+struct Node { n int }
+
+struct Holder { r rc.Rc<Node> }
+
+var held Holder = Holder{r: rc.New(Node{n: 1})}   // ERROR "held cannot be a package variable: rc.Rc<Node> stays in its task"
+
+var empty Holder                                  // ERROR "empty cannot be a package variable: rc.Rc<Node> stays in its task"

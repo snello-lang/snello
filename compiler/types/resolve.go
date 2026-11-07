@@ -153,8 +153,24 @@ func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
 
 			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, text))
 		} else {
-			c.declare(scope, name, NewVar(name.Pos(), name.Name, t))
+			v := NewVar(name.Pos(), name.Name, t)
+			v.global = scope == c.pkg.scope // its type is checked for Send in initializersOf, once every type is complete
+			c.declare(scope, name, v)
 		}
+	}
+}
+
+// globalType refuses a package variable whose type cannot be shared
+// by every task, as a spawn refuses to carry it: a package variable is
+// reached from any task (_docs/design/03-ownership-across-tasks.md,
+// package variables).
+func (c *Checker) globalType(name *ast.Ident, t Type) {
+	if t == nil || t == Typ[Invalid] {
+		return // reported already
+	}
+
+	if why := NotSend(t); why != "" {
+		c.errorf(name.Pos(), name.Name+" cannot be a package variable: "+why)
 	}
 }
 

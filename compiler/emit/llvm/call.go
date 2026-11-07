@@ -112,7 +112,7 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 		case *types.Builtin:
 			return e.builtinCall(x, obj)
 		case *types.TypeName:
-			return e.conversion(x.Args[0], obj.Type())
+			return e.conversion(x.Args[0], e.typeOf(x)) // the call's type: a type parameter's name stands for the type it was given
 		case *types.Func:
 			if key := lower.Key(obj); key != "" {
 				return e.libraryCall(x, key)
@@ -148,8 +148,8 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 			return e.variantValue(e.typeOf(x), v, e.operands(x.Args, e.variantFields(e.typeOf(x), v)), x.Pos())
 		}
 
-		if tn, ok := e.info.Uses[sel.Sel].(*types.TypeName); ok { // a conversion to a library's type, time.Duration(n)
-			return e.conversion(x.Args[0], tn.Type())
+		if _, ok := e.info.Uses[sel.Sel].(*types.TypeName); ok { // a conversion to a library's type, time.Duration(n)
+			return e.conversion(x.Args[0], e.typeOf(x))
 		}
 
 		return e.funcCall(x, sel.Sel, e.info.Uses[sel.Sel].(*types.Func)) // a library function, instantiated when generic

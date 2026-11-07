@@ -81,6 +81,9 @@ type Emitter struct {
 	external   map[*types.Var]bool             // the library variables the runtime defines
 	runtime    map[string]bool                 // the library functions the runtime defines, by name, called under its convention
 	statics    []owned                         // the top-level variables owning something, dropped when main returns
+	lazy       map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	lazies     []owned                         // the lazy variables owning something, dropped when main returns if they were made
+	making     *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
 	done       map[string]bool                 // the instances asked for, by name
 	work       []instance                      // the instances still to write
 	errors     []string
@@ -194,6 +197,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 		runtime:    make(map[string]bool),
 		done:       make(map[string]bool),
 		globals:    make(map[*types.Var]bool),
+		lazy:       make(map[*types.Var]bool),
 		localConst: make(map[*types.Const]string),
 		boxWords:   words,
 	}
@@ -292,6 +296,17 @@ func (e *Emitter) mainFunc() {
 		e.dropOf(e.statics[i].slot, e.statics[i].typ, token.NoPos)
 	}
 
+	for i := len(e.lazies) - 1; i >= 0; i-- { // a lazy variable is dropped when it was made
+		state := e.op("load atomic i32, ptr "+e.lazies[i].slot+"_lazy acquire, align 4", "i32")
+		made := e.op("icmp eq i32 "+state.s+", 2", "i1")
+		drop, skip := e.block("drop"), e.block("skip")
+		e.branch(made.s, drop, skip)
+		e.label(drop)
+		e.dropOf(e.lazies[i].slot, e.lazies[i].typ, token.NoPos)
+		e.jump(skip)
+		e.label(skip)
+	}
+
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
 	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv) {\nentry:\n")
@@ -354,8 +369,13 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		value := zero(t)
 		if i < len(d.Values) {
 			if value = e.staticValue(d.Values[i], obj.Type()); value == "" {
-				e.unsupported(name.Pos(), "a top-level var or const whose value is not a literal")
-				return
+				if d.Const {
+					e.unsupported(name.Pos(), "a top-level const whose value is not a literal")
+					return
+				}
+
+				e.lazyVar(obj.(*types.Var), name, d.Values[i], t)
+				continue
 			}
 		}
 
@@ -367,6 +387,31 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		}
 
 		put(&e.globalDefs, "@", lower.ObjName(obj), " = internal ", qualifier, t, " ", value, "\n")
+	}
+}
+
+// lazyVar writes a top-level variable whose initializer is a call, or
+// anything else that is not a literal: the cell, zero until made; the
+// runtime's lazy beside it; the initializer as a function of its own,
+// an assignment to the cell written as any statement is; and the
+// getter every use of the variable goes through, which makes it on
+// the first (_docs/design/03-ownership-across-tasks.md, package
+// variables).
+func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t string) {
+	e.lazy[v] = true
+	g := "@" + lower.ObjName(v)
+	cell := &ast.Ident{NamePos: name.NamePos, Name: name.Name}
+	e.info.Uses[cell] = v
+	e.info.Types[cell] = v.Type()
+	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
+	e.making = v
+	e.writeFunction(lower.ObjName(v)+"_init", types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.making = nil
+	e.declare("sn_lazy_make", "declare void @sn_lazy_make(ptr, ptr, ptr)")
+	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
+	put(&e.funcs, "define internal ptr ", g, "_get() {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr ", g, "_init, ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
+	if needsDrop(v.Type()) {
+		e.lazies = append(e.lazies, owned{g, v.Type()})
 	}
 }
 
