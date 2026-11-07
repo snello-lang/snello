@@ -1,0 +1,30 @@
+# The suite plays this against the server, a section per connection:
+# a line "> text" is sent, "< text" is the reply expected back, and a
+# section ends when the server closes the connection. The last line
+# stops the server, whose standard output is then compared with
+# 03-cache-server.out.
+
+# A miss, a set, a hit, the errors, then QUIT.
+> GET answer
+< MISSING
+> SET answer 42
+< OK
+> GET answer
+< 42
+>
+< ERR empty line
+> SET answer
+< ERR usage: SET key value
+> GET
+< ERR usage: GET key
+> FROB answer
+< ERR unknown command
+> QUIT
+
+# A second connection sees the first's entry: the store outlives a
+# connection. SHUTDOWN closes this one and stops the server.
+> GET answer
+< 42
+> SET greeting hello
+< OK
+> SHUTDOWN

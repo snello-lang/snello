@@ -28,7 +28,7 @@ The four rules, each marked in `pipeline.snello` where it applies:
 | A borrow captured by `spawn` | No such concept; the pointer is shared | Compile error: borrows cannot cross `spawn` |
 | Sharing when you need it | Pass a pointer and remember the mutex | `Arc<Mutex<T>>`, and the compiler checks it |
 
-The last row is in `../03-http-cache.snello`, where shared state is actually needed. It is kept out of this example on purpose.
+The last row is in `../03-cache-server.snello`, where shared state is actually needed. It is kept out of this example on purpose.
 
 ## The lines that differ
 
