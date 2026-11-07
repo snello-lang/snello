@@ -1,6 +1,6 @@
 # 8. Option, Result, `?` and `??`
 
-Status: implemented, checked (stage 1, task 1.4, `snello check`) and compiled to native code, methods included (stage 1, task 1.5, `snello build`); `Map` and `MapErr` (stage 2, task 2.6). `examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+Status: implemented, checked (stage 1, task 1.4, `snello check`) and compiled to native code, methods included (stage 1, task 1.5, `snello build`); `Map` and `MapErr` (stage 2, task 2.6); `?` passing an error into the variant that holds its type or into a trait value (stage 9, task 9.4, chapter 17). `examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
 
 Snello has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 
@@ -34,17 +34,17 @@ text := os.ReadToString("input.txt").Expect("read input")
 
 ## `Result<T, E>`
 
-A `Result<T, E>` is either `Ok(x)` with an `x` of type `T` or `Err(e)` with an `e` of type `E`. The error type is any type the program chooses, usually an enum with one variant per thing that can go wrong, or the predeclared `error`:
+A `Result<T, E>` is either `Ok(x)` with an `x` of type `T` or `Err(e)` with an `e` of type `E`. The error type is any type the program chooses, usually an enum with one variant per thing that can go wrong, or the trait `Error` itself, which holds any error; chapter 17 is about `E`:
 
 ```snello
-enum ConfigError {
-    Unreadable(path string, cause error)
-    BadValue(key string, text string)
+enum ConfigError impl Error {
+    Unreadable(cause io.Error)
+    BadValue(cause strconv.Error)
     Missing(key string)
 }
 
 func Load(path string) Result<Config, ConfigError> { ... }
-func Copy(src ref string, dst ref string) Result<i64, error> { ... }
+func loadAny(path string) Result<int, Error> { ... }
 ```
 
 `Ok(x)` and `Err(e)` take their full type from the context, since the argument says nothing about the other half; writing `x := Ok(1)` with nothing asking for a type is an error. A function that returns a result and has nothing to return on success returns `Result<(), E>` and writes `return Ok(())`. The methods are the option's, under the names `Expect`, `Unwrap`, `UnwrapOr`, `IsOk` and `IsErr`.
@@ -110,7 +110,7 @@ n := cur ?? { *cur = Some(&Node{key: k, val: v, left: None, right: None}); retur
 `x?` inside a function yields the value inside `x` and returns early with the absent or failed case when there is none. The function's result type says which kind `?` handles: in a function returning `T?`, `x?` takes an optional and returns `None`; in one returning `Result<T, E>`, it takes a `Result<U, E>` with the same error type and returns the `Err`:
 
 ```snello
-func Copy(src ref string, dst ref string) Result<i64, error> {
+func Copy(src ref string, dst ref string) Result<i64, io.Error> {
     in := os.Open(src)?                     // owned; closed by Drop on every exit path
     out := os.Create(dst)?
     n := io.Copy(mut out, mut in)?
@@ -124,7 +124,9 @@ func (p mut Parser) advance() Result<(), ParseError> {
 }
 ```
 
-The two kinds do not mix. `?` on a result inside a function returning an optional has nowhere to put the error, and the compiler says so: `cannot use ? on a Result in a function returning an option`. To turn one into the other, use `??` and choose a value for the failing case, or `match` and build the other kind. The same applies to a result whose error type differs from the function's: `? cannot pass on an error of type E1 from a function returning Result<T, E2>`. Converting between error types is a `match` or a method today; an automatic conversion through a trait is a question for stage 2.
+The two kinds do not mix. `?` on a result inside a function returning an optional has nowhere to put the error, and the compiler says so: `cannot use ? on a Result in a function returning an option`. To turn one into the other, use `??` and choose a value for the failing case, or `match` and build the other kind.
+
+A result whose error type differs from the function's passes through `?` when the function's error type has a place for it: the one variant of its enum whose only field has the error's type, so `Unreadable(cause io.Error)` takes an `io.Error` with nothing written, or a trait value when the function returns `Result<T, Error>`. Anything else is refused, `? cannot pass on an error of type E1 from a function returning Result<T, E2>`, with the reason, and the conversion is a `MapErr` or a `match`. Chapter 17 has the rule and its refusals.
 
 ## What the compiler reports
 
