@@ -379,6 +379,7 @@ int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead);
 int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op);
 int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
+int64_t sn_os_Cores(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);
