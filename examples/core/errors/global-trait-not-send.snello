@@ -1,0 +1,18 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a trait used as the type of a package variable must refine
+// Send, as it must to cross a spawn, since the type behind it is not
+// known and every task reaches the variable.
+// Fix: trait Shape: Send, or a package variable of the struct's type.
+
+package p
+
+trait Shape { func (s ref Self) Area() f64 }
+
+struct Square impl Shape { side f64 }
+
+func (s ref Square) Area() f64 { return s.side * s.side }
+
+var unit Shape = Square{side: 1}                  // ERROR "unit cannot be a package variable: Shape does not refine Send"

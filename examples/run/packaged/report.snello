@@ -4,17 +4,18 @@
 
 package main
 
-import ("fmt"; "shapes")
+import ("fmt"; "shapes"; "sync")
 
-// reports counts the reports made: a global declared in the second
-// file of the main package without a value, read by the first.
-var reports int
+// reports counts the reports made: a package variable declared in the
+// second file of the main package and read by the first, a counter
+// since a package variable is changed only through what it holds.
+var reports = sync.NewCounter(0)
 
 // report is in the second file of the main package, which main.snello
 // sees as it sees its own declarations; its bound is the trait of the
 // package beside the program.
 func report<S: shapes.Shape>(s ref S) string {
-	reports += 1
+	reports.Add(1)
 	return fmt.Sprintf("%s %.2f", s.Name(), s.Area())
 }
 

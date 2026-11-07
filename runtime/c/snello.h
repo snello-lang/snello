@@ -89,6 +89,25 @@ bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg); // runs fn under a
 // drop does nothing.
 void sn_guard(void *p, void (*drop)(void *));
 void sn_unguard(void *p);
+
+// A package variable whose initializer is a call is made once, on
+// first use, under a lazy: its state is 0 before, 1 while the maker
+// task runs the initializer, 2 after. The emitted code checks the
+// state with one acquire load and calls sn_lazy_make when it is not 2,
+// which makes the variable or waits for the task making it; a
+// variable read by its own initializer is a panic naming it, and an
+// initializer that panics under a mark leaves the variable unmade
+// (_docs/design/03-ownership-across-tasks.md, package variables).
+typedef struct sn_lazy {
+    int state;
+    struct sn_task *maker;
+} sn_lazy;
+
+static inline bool sn_lazy_ready(sn_lazy *o) {
+    return __atomic_load_n(&o->state, __ATOMIC_ACQUIRE) == 2;
+}
+
+void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name);
 _Noreturn void sn_exit(int code);
 _Noreturn void sn_bounds(int64_t i, int64_t len);
 
@@ -382,10 +401,14 @@ int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
 int64_t sn_os_Cores(void);
 int64_t sn_testing_task(void); // the running task's identity, for the test runner's state per test
-void sn_testing_lock(void);
-void sn_testing_unlock(void);
-int64_t sn_testing_allocs(void); // the blocks sn_alloc gave out so far, for a benchmark's allocations per operation
-int64_t sn_testing_allocBytes(void);
+void sn_testing_benchStart(int64_t n); // the benchmark's state, one at a time; see testing.c
+bool sn_testing_benchLoop(void);
+void sn_testing_benchReset(void);
+void sn_testing_benchReport(void);
+int64_t sn_testing_benchNanos(void);
+int64_t sn_testing_benchAllocs(void);
+int64_t sn_testing_benchBytes(void);
+bool sn_testing_benchReported(void);
 void sn_testing_line(sn_string where);                  // the compiler writes these before a call of testing.Log, Logf, Skip, and of an exported function of expect
 void sn_testing_call(sn_string where, sn_string parts); // the place of the call, with the parts the compiler found, owned
 sn_string sn_testing_where(void);                        // testing.where, expect.where and expect.parts read them back
@@ -424,6 +447,12 @@ void sn_sync_unlockShared(int64_t h);
 void sn_sync_count(int64_t h, int64_t n);
 void sn_sync_wait(int64_t h);
 int64_t sn_sync_atomicAdd(int64_t *n, int64_t d);
+int64_t sn_sync_cellNew(int64_t v); // a Counter's word, named by its handle, as a lock is; see sync.c
+int64_t sn_sync_cellLoad(int64_t h);
+void sn_sync_cellStore(int64_t h, int64_t v);
+int64_t sn_sync_cellAdd(int64_t h, int64_t d);
+bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v);
+void sn_sync_cellFree(int64_t h);
 int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call); // the net package's, in net.c
 int64_t sn_net_accept(int64_t fd, int64_t *out);
 int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call);

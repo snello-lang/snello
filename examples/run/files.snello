@@ -44,7 +44,7 @@ func main() {
 	fmt.Println(os.RemoveAll(ref dir), os.ReadToString(ref a).IsErr(), os.ReadToString("bad\x00name").IsErr())
 	fmt.Println(len(os.Args) > 0, os.Args[0].HasSuffix("files"))
 	fmt.Println(os.Cores() > 0) // the processors the runtime makes its workers for
-	os.Stdout.WriteString("direct\n").Expect("write")
+	os.Stdout().WriteString("direct\n").Expect("write")
 	match os.Open("/nonexistent") {
 		Ok(_) => fmt.Println("opened"),
 		Err(e) => fmt.Println("error:", e),

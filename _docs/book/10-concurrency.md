@@ -1,6 +1,6 @@
 # 10. Concurrency: `spawn`, channels, `select`
 
-Status: implemented (stage 3); since stage 4 the tasks run on one worker thread per core and a task that waits parks instead of holding a thread (task 4.4), and a socket parks the same way (task 4.5). A package-level `var` is the one value the rule below does not yet cover: it is shared by every task and may be assigned by any, which task 9.2 of stage 9 closes by making it readable everywhere and changed only through a `sync.Mutex` or an atomic it holds. A channel handle and a `sync.WaitGroup` are owned and cloned for another task, every operation borrows them, and the last handle frees the channel or the group's counter (stage 5, task 5.13, 2026-10-21). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `snello build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.snello` and `select.snello`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.snello`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.snello`, `examples/13-actor.snello`, `examples/18-iterators.snello` and `examples/run/sync.snello`.
+Status: implemented (stage 3); since stage 4 the tasks run on one worker thread per core and a task that waits parks instead of holding a thread (task 4.4), and a socket parks the same way (task 4.5). A package variable is under the rule too: read by every task, changed only through what it holds, with `sync.Counter` and `sync.Atomic<T>` beside the locks and a call as its initializer made on first use (stage 9, task 9.2, 2026-11-07). A channel handle and a `sync.WaitGroup` are owned and cloned for another task, every operation borrows them, and the last handle frees the channel or the group's counter (stage 5, task 5.13, 2026-10-21). `Send` is inferred by the compiler (task 3.1) and checked at the three crossings, with `close` and `for range ch` (task 3.2); `snello build` runs tasks, channels and `select` (task 3.3; `examples/run/tasks.snello` and `select.snello`, examples 02, 13 and 18); the shared-state library, `sync`, and `time.After` run (task 3.4; `examples/run/sync.snello`, example 12); the race programs under `examples/core/errors/` are rejected (task 3.5). The samples are cut from `examples/02-pipeline/pipeline.snello`, `examples/13-actor.snello`, `examples/18-iterators.snello` and `examples/run/sync.snello`.
 
 A task is a function running on its own, started with `spawn`. Tasks talk through channels. That much is familiar. What Snello adds is one rule about the values that pass between tasks, and the compiler enforces it, so that two tasks can never reach one value at the same time: the bug that a race detector hunts at run time cannot be written.
 
@@ -114,6 +114,7 @@ Some state genuinely must be reached from several tasks: a counter, a cache, a c
 - **`sync.Arc<T>`** is a handle on a value shared between tasks, as `rc.Rc` is within one: `sync.NewArc(v)` makes the first handle, `Clone` another, `Get` lends the value for reading, and the value is dropped with the last handle. An `Arc<T>` is `Send` when `T` is, so each task gets a clone of its own. An `Arc` never lends its value for changing.
 - **`sync.Mutex<T>`** owns a value and lends it for changing to one task at a time. `Lock` waits for the lock and returns a guard; `Get` on the guard lends the `mut T`, and the guard gives the lock back when it is dropped, at the end of its scope.
 - **`sync.RwLock<T>`** lends either for reading to any number of tasks, with `Read`, or for changing to one, with `Write`; each returns a guard of its kind. A task waiting to write holds back the readers that come after it, as Go's `RWMutex` does, so readers cannot keep a writer out; a task therefore does not `Read` again a lock it is reading.
+- **`sync.Counter`** is an `int` several tasks add to as one step each, `hits.Add(1)`, with `Load`, `Store` and `CompareAndSwap`: one instruction, no lock, nothing parks. **`sync.Atomic<T>`** holds a value of any `Send`, `Clone` and `Eq` type that tasks read and replace as one step each, a flag, a name, a configuration: `Load` gives a copy, `Store` and `Swap` replace it, and `CompareAndSwap` replaces it when it equals the value expected. Both take `ref self`, as a lock does, since what they hold is what makes a change through a `ref` safe.
 - **`sync.Once`** runs a function the first time `Do` is called and never again; **`sync.WaitGroup`** counts tasks with `Add` and `Done` and waits for zero with `Wait`. A `WaitGroup` is an owned handle like a channel: a task is given its own with `wg.Clone()` before the `spawn`, and the counter is freed with the last handle.
 
 ```snello
@@ -137,6 +138,26 @@ fmt.Println(*counter.Get().Lock().Get()) // 4
 The guard is what makes the lock safe to use: it holds a borrow of the value, so it is tied to the lock and the scope that took it. Keeping it in a struct, sending it, capturing it in a `spawn`, or binding the value of a lock the statement drops, `n := m.Lock().Get()`, are each refused by the borrow rules, with the message those rules give; and since the value is reached only through a guard, touching it without the lock cannot be written at all. The lock is released where the guard's scope ends, so a block, or a function of its own, bounds the critical section.
 
 Each of these types is made with its `New` function. The zero value, `var m sync.Mutex<int>`, is empty, and `Lock` on it panics, as `Get` on an empty `rc.Rc` does, and `Do` on an empty `Once` panics naming the `Once`. Each lock is reached through its own handle, so tasks taking locks of their own never wait on one another.
+
+## Package variables
+
+A `var` at the top level of a file is a package variable, and it is the one value no move ever touches: a `spawn` moves what its closure mentions, a channel moves what it carries, but a package variable is mentioned by no one and reached by every task. So it is under one rule, in three sentences. It may be read from any task and lent as `ref`, and it is never assigned, lent as `mut` or moved out of. Its type is one every task may share, `Send`, so an `rc` handle cannot be one. A change goes through what it holds: a `Counter`, an `Atomic` or a lock.
+
+```snello
+var names = []string{"round", "square"}       // read anywhere, by any task
+var hits = sync.NewCounter(0)                  // hits.Add(1) from any task, exact
+var state = sync.NewAtomic("idle")             // state.Swap("busy".Clone()), state.Load()
+var cache = sync.NewMutex(map[string]int{})    // g := cache.Lock(); g.Get().Insert(k, v)
+var config = load("snello.toml")               // a call: made once, on first use
+```
+
+What the compiler says to the three ways of changing one, an assignment, a `mut` lent to a function or a method, and a move out:
+
+```
+main.snello:5:9: counter is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds
+```
+
+A package variable whose initializer is a call, the last line above, is made once, on first use, by whichever task reaches it first; a task that reaches it while another is making it waits, and a variable never used is never made, so it costs nothing. An initializer that reads its own variable through another function is a panic naming it, `package variable a is read by its own initializer`, and an initializer is plain code: one that waits for another task would wait forever. A variable with a literal initializer is plain memory, as before. The standard streams are functions for the same rule, `os.Stdout()`, since a `Write` needs a `mut` and a package variable is never lent one: each call gives a fresh handle on the descriptor, and dropping it never closes the stream.
 
 ## What comes next
 

@@ -151,6 +151,10 @@ func (e *Emitter) ident(x *ast.Ident) string {
 			return s
 		}
 
+		if e.lazy[obj] && e.making != obj {
+			return "(*" + lower.ObjName(obj) + "_get())" // made on first use; its own initializer names the cell
+		}
+
 		return e.localName(obj) // the variable's own name: super stands for the receiver
 	case *types.Variant:
 		return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
@@ -219,6 +223,10 @@ func (e *Emitter) selector(x *ast.SelectorExpr) string {
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
 		case *types.Var:
+			if e.lazy[obj] {
+				return "(*" + lower.ObjName(obj) + "_get())"
+			}
+
 			if e.external[obj] {
 				return "(*(" + e.cType(e.typeOf(x), x.Pos()) + " *)&" + lower.ObjName(obj) + ")"
 			}
@@ -643,7 +651,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 		case *types.Builtin:
 			return e.builtinCall(x, obj)
 		case *types.TypeName:
-			return e.conversion(x.Args[0], obj.Type())
+			return e.conversion(x.Args[0], e.typeOf(x)) // the call's type: a type parameter's name stands for the type it was given
 		case *types.Func:
 			if key := lower.Key(obj); key != "" {
 				return e.libraryCall(x, key) // a library calling a function of its own the compiler writes
@@ -679,8 +687,8 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 			return e.variantValue(e.typeOf(x), v, e.operands(x.Args, e.variantFields(e.typeOf(x), v)), x.Pos())
 		}
 
-		if tn, ok := e.info.Uses[sel.Sel].(*types.TypeName); ok { // a conversion to a library's type, time.Duration(n)
-			return e.conversion(x.Args[0], tn.Type())
+		if _, ok := e.info.Uses[sel.Sel].(*types.TypeName); ok { // a conversion to a library's type, time.Duration(n)
+			return e.conversion(x.Args[0], e.typeOf(x))
 		}
 
 		return e.funcCall(x, sel.Sel, e.info.Uses[sel.Sel].(*types.Func))

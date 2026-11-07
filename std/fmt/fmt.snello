@@ -63,7 +63,7 @@ func Sprintf(format ref string, args ...ref any) string
 
 // Fprintln writes its arguments to w, separated by spaces and ended by
 // a newline, with one call of its Write; w is any io.Writer, lent mut:
-// fmt.Fprintln(mut os.Stderr, "error:", e). A failure to write is not
+// fmt.Fprintln(mut os.Stderr(), "error:", e). A failure to write is not
 // reported.
 func Fprintln<W: io.Writer>(w mut W, args ...ref any)
 

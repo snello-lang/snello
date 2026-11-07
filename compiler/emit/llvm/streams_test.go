@@ -37,17 +37,17 @@ func release(t *testing.T, name, src string) string {
 }
 
 // TestStreamOrder sends both streams down one pipe: what fmt prints,
-// what is written to os.Stdout and os.Stderr, and print's output come
+// what is written to os.Stdout() and os.Stderr(), and print's output come
 // out in the order the program made them.
 func TestStreamOrder(t *testing.T) {
 	bin := release(t, "order", `package main
 import ("fmt"; "os")
 func main() {
 	fmt.Println("1-out")
-	os.Stderr.WriteString("2-err\n").Expect("stderr")
+	os.Stderr().WriteString("2-err\n").Expect("stderr")
 	fmt.Printf("%d-out\n", 3)
 	print("4-err\n")
-	os.Stdout.WriteString("5-out\n").Expect("stdout")
+	os.Stdout().WriteString("5-out\n").Expect("stdout")
 }
 `)
 	var both bytes.Buffer
@@ -70,7 +70,8 @@ func TestPrompt(t *testing.T) {
 import ("bufio"; "fmt"; "os")
 func main() {
 	fmt.Printf("Name: ")
-	r := bufio.NewReader(mut os.Stdin)
+	stdin := os.Stdin()
+	r := bufio.NewReader(mut stdin)
 	line := r.ReadString('\n').Expect("read") ?? "".Clone()
 	fmt.Printf("got %d\n", line.Len())
 }
@@ -132,7 +133,7 @@ func main() {
 	}
 
 	buf := make([]byte, 64)
-	fmt.Println("stdin", os.Stdin.Read(mut buf).Expect("read"))
+	fmt.Println("stdin", os.Stdin().Read(mut buf).Expect("read"))
 }
 `)
 	file := filepath.Join(t.TempDir(), "secret.txt")
@@ -160,15 +161,15 @@ func main() {
 	block := make([]byte, 1000)
 	written := 0
 	for i := 0; i < 256; i++ {
-		if os.Stdout.Write(ref block).IsErr() {
-			fmt.Fprintln(mut os.Stderr, written, "failed")
+		if os.Stdout().Write(ref block).IsErr() {
+			fmt.Fprintln(mut os.Stderr(), written, "failed")
 			return
 		}
 
 		written++
 	}
 
-	fmt.Fprintln(mut os.Stderr, written, "never failed")
+	fmt.Fprintln(mut os.Stderr(), written, "never failed")
 }
 `)
 	file := filepath.Join(t.TempDir(), "out")

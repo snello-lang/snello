@@ -97,6 +97,117 @@ func (a mut Arc<T>) Drop() {
 	leak(p)
 }
 
+// A Counter is an int that several tasks add to as one step each, a
+// count of requests, a generation, a size: Add, Load, Store and
+// CompareAndSwap take a ref, since the counter itself is what makes a
+// change through a ref safe, as a lock is, and each is one instruction
+// on a word of the runtime's that the handle names, so a Counter is
+// Send and a package variable may hold one, var hits = sync.NewCounter(0),
+// which every task reaches and none can race on
+// (_docs/design/03-ownership-across-tasks.md, package variables). The
+// zero value names no word and panics when used.
+struct Counter impl Drop {
+	h int
+}
+
+// NewCounter returns a Counter holding v.
+func NewCounter(v int) Counter {
+	return Counter{h: cellNew(i64(v))}
+}
+
+// Add adds d to the count as one step and returns the new count.
+func (c ref Counter) Add(d int) int {
+	return int(cellAdd(c.live(), i64(d)))
+}
+
+// Load returns the count as one step, which no Add or Store tears.
+func (c ref Counter) Load() int {
+	return int(cellLoad(c.live()))
+}
+
+// Store sets the count.
+func (c ref Counter) Store(v int) {
+	cellStore(c.live(), i64(v))
+}
+
+// CompareAndSwap sets the count to new when it is old, as one step,
+// and reports whether it did: how one task of many takes a turn.
+func (c ref Counter) CompareAndSwap(old int, new int) bool {
+	return cellSwap(c.live(), i64(old), i64(new))
+}
+
+// live is the word's handle; a Counter made as a zero value has none.
+func (c ref Counter) live() int {
+	if c.h == 0 {
+		panic("sync: use of an empty Counter")
+	}
+
+	return c.h
+}
+
+// Drop frees the word.
+func (c mut Counter) Drop() {
+	if c.h != 0 {
+		cellFree(c.h)
+	}
+}
+
+// An Atomic<T> holds a value of any type that several tasks read and
+// replace as one step each: a flag, a name, a configuration, a
+// snapshot. Load gives a copy of the value, Store and Swap replace it,
+// and CompareAndSwap replaces it when it equals the value expected;
+// each is one indivisible step, under a lock of the runtime's that the
+// Atomic owns, which is what one word of hardware cannot give a value
+// of any size. T is Send, since the value is shared between tasks,
+// Clone, since Load hands out a copy, and Eq, for CompareAndSwap. The
+// methods take a ref, as a lock's do, so a package variable may hold
+// one, var state = sync.NewAtomic("idle"), reached by every task and
+// raced on by none; a value that is only a count is a Counter, which
+// adds in one instruction.
+struct Atomic<T: Send + Clone + Eq> {
+	m Mutex<T>
+}
+
+// NewAtomic returns an Atomic holding v.
+func NewAtomic<T: Send + Clone + Eq>(v T) Atomic<T> {
+	return Atomic<T>{m: NewMutex(v)}
+}
+
+// Load returns a copy of the value.
+func (a ref Atomic<T>) Load() T {
+	g := a.m.Lock()
+	return g.Get().Clone()
+}
+
+// Store replaces the value, dropping the old one.
+func (a ref Atomic<T>) Store(v T) {
+	g := a.m.Lock()
+	*g.Get() = v
+}
+
+// Swap replaces the value and returns the old one, as a copy: the
+// value under the lock is cloned out and the original dropped, which
+// is what keeps T free of a zero value to leave behind.
+func (a ref Atomic<T>) Swap(v T) T {
+	g := a.m.Lock()
+	old := g.Get().Clone()
+	*g.Get() = v
+	return old
+}
+
+// CompareAndSwap replaces the value with new when it equals old, as
+// one step, and reports whether it did; new is taken either way, and
+// dropped when the value was not old.
+func (a ref Atomic<T>) CompareAndSwap(old ref T, new T) bool {
+	g := a.m.Lock()
+	if !g.Get().Eq(old) {
+		return false
+	}
+
+	*g.Get() = new
+	return true
+}
+
 // A box holds the value a lock protects, with the handle of the
 // runtime's lock. It lives on the heap, behind a pointer the Mutex or
 // RwLock owns, so that the one value is reached through any borrow of
@@ -350,3 +461,9 @@ func unlockShared(h int)
 func count(h int, n int)
 func wait(h int)
 func atomicAdd(n mut i64, d i64) i64
+func cellNew(v i64) int
+func cellLoad(h int) i64
+func cellStore(h int, v i64)
+func cellAdd(h int, d i64) i64
+func cellSwap(h int, old i64, new i64) bool
+func cellFree(h int)

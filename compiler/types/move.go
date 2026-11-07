@@ -147,6 +147,16 @@ func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 			return through(c.placeOf(e.X))
 		}
 	case *ast.SelectorExpr:
+		if id, ok := e.X.(*ast.Ident); ok { // a package variable of another package, os.Args: a place, so that the rules of a package variable reach it
+			if pkg, ok := c.resolve(id.Name).(*PkgName); ok && pkg.pkg != nil {
+				if v, ok := pkg.pkg.scope.Lookup(e.Sel.Name).(*Var); ok && v.global {
+					return place{v, ""}, placeOwned
+				}
+
+				return place{}, notPlace
+			}
+		}
+
 		p, kind := through(c.placeOf(e.X))
 		if kind == placeOwned || kind == placeBorrowed {
 			if p.path == "" {

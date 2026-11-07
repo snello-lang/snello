@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable is reached from every task, so it is read
+// and lent as ref anywhere and never assigned; two tasks writing one
+// would race.
+// Fix: hold the value in what changes safely while shared, var hits =
+// sync.NewCounter(0) and hits.Add(1), or a sync.Mutex or sync.Atomic.
+
+package p
+
+var counter int = 0
+
+func work() {
+    counter += 1                          // ERROR "counter is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds"
+}

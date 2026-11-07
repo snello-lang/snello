@@ -49,19 +49,33 @@ func Exit(code int)
 // tasks keeps every core busy. The runtime provides it.
 func Cores() int
 
-// Stdin is the standard input, open for reading.
-var Stdin = File{fd: 0, name: "/dev/stdin", stream: true}
+// Stdin returns a handle on the standard input, open for reading. The
+// three streams are functions and not package variables, since a
+// package variable is never lent mut and a Read or a Write needs a
+// mut: each call gives a fresh File on the descriptor, lent for the
+// call, fmt.Fprintln(mut os.Stderr(), ...), or held in a local for a
+// bufio.Reader; dropping it never closes the descriptor, and two tasks
+// writing through two handles share no memory, which is what the
+// descriptor already guarantees.
+func Stdin() File {
+	return File{fd: 0, name: "/dev/stdin", stream: true}
+}
 
-// Stdout is the standard output, open for writing. Nothing is held
-// back: what fmt prints and what is written here go to the output at
-// once, in the order they were made, interleaved rightly with Stderr,
-// and a prompt without a newline shows before the program reads its
-// answer. A program that writes much in small pieces wraps it in a
-// bufio.Writer.
-var Stdout = File{fd: 1, name: "/dev/stdout", stream: true}
+// Stdout returns a handle on the standard output, open for writing.
+// Nothing is held back: what fmt prints and what is written here go to
+// the output at once, in the order they were made, interleaved rightly
+// with Stderr, and a prompt without a newline shows before the program
+// reads its answer. A program that writes much in small pieces wraps
+// it in a bufio.Writer.
+func Stdout() File {
+	return File{fd: 1, name: "/dev/stdout", stream: true}
+}
 
-// Stderr is the standard error output, open for writing.
-var Stderr = File{fd: 2, name: "/dev/stderr", stream: true}
+// Stderr returns a handle on the standard error output, open for
+// writing.
+func Stderr() File {
+	return File{fd: 2, name: "/dev/stderr", stream: true}
+}
 
 // Open opens the named file for reading. A missing file is an Error of
 // Kind NotExist, with Op "open".

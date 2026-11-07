@@ -19,5 +19,5 @@ func main() {
 	fmt.Println(shapes.Largest(ref c, ref r))
 	fmt.Println(shapes.Describe(kindOf(ref c)), shapes.Describe(kindOf(ref r)), kindOf(ref r) == shapes.Square)
 	fmt.Println(report(ref c), report(ref r))
-	fmt.Println(shapes.Area(c) > 3, shapes.Area(r), reports)
+	fmt.Println(shapes.Area(c) > 3, shapes.Area(r), reports.Load())
 }

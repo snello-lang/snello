@@ -159,7 +159,7 @@ func TestAcceptAfterReset(t *testing.T) {
 import ("fmt"; "net"; "os"; "time")
 func main() {
 	l := net.Listen("127.0.0.1", 0).Expect("listen")
-	fmt.Fprintln(mut os.Stderr, l.Port())
+	fmt.Fprintln(mut os.Stderr(), l.Port())
 	time.Sleep(300 * time.Millisecond)
 	for {
 		c := l.Accept().Expect("accept")
@@ -235,14 +235,14 @@ func TestResetMessage(t *testing.T) {
 import ("fmt"; "io"; "net"; "os"; "time")
 func main() {
 	l := net.Listen("127.0.0.1", 0).Expect("listen")
-	fmt.Fprintln(mut os.Stderr, l.Port())
+	fmt.Fprintln(mut os.Stderr(), l.Port())
 	c := l.Accept().Expect("accept")
 	c.WriteString("hi").Expect("write")
 	time.Sleep(300 * time.Millisecond)
 	buf := make([]byte, 8)
 	match c.Read(mut buf) {
-		Ok(n) => fmt.Fprintln(mut os.Stderr, "read", n),
-		Err(e) => fmt.Fprintln(mut os.Stderr, e, e.Kind() == io.Reset),
+		Ok(n) => fmt.Fprintln(mut os.Stderr(), "read", n),
+		Err(e) => fmt.Fprintln(mut os.Stderr(), e, e.Kind() == io.Reset),
 	}
 }
 `

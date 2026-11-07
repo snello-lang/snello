@@ -1562,6 +1562,63 @@ bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg) {
 // that panics while unwinding to a mark ends the process too, since
 // the first panic can no longer be reported through the mark, and
 // its message is printed with the drop's so that neither is lost.
+// The lazies: one lock and one condition for every lazy package
+// variable, since making one is rare and short. A task that finds a
+// variable being made by another waits here, holding its worker,
+// which is what an initializer that waits for another task would
+// deadlock on; an initializer is plain code.
+static pthread_mutex_t lazy_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t lazy_cond = PTHREAD_COND_INITIALIZER;
+
+// lazy_abandon is the guard of an initializer that panics: the
+// variable is unmade again and whoever waits is woken, so that a later
+// use under a test makes it anew.
+static void lazy_abandon(void *p) {
+    sn_lazy *o = p;
+    pthread_mutex_lock(&lazy_mu);
+    __atomic_store_n(&o->state, 0, __ATOMIC_RELEASE);
+    o->maker = NULL;
+    pthread_cond_broadcast(&lazy_cond);
+    pthread_mutex_unlock(&lazy_mu);
+}
+
+void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name) {
+    task *self = sn_self();
+    pthread_mutex_lock(&lazy_mu);
+    for (;;) {
+        int state = __atomic_load_n(&o->state, __ATOMIC_ACQUIRE);
+        if (state == 2) {
+            pthread_mutex_unlock(&lazy_mu);
+            return;
+        }
+
+        if (state == 0) {
+            break;
+        }
+
+        if (o->maker == self) {
+            pthread_mutex_unlock(&lazy_mu);
+            char buf[192];
+            snprintf(buf, sizeof buf, "package variable %s is read by its own initializer", name);
+            sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
+        }
+
+        pthread_cond_wait(&lazy_cond, &lazy_mu);
+    }
+
+    __atomic_store_n(&o->state, 1, __ATOMIC_RELAXED);
+    o->maker = self;
+    pthread_mutex_unlock(&lazy_mu);
+    sn_guard(o, lazy_abandon);
+    init();
+    sn_unguard(o);
+    pthread_mutex_lock(&lazy_mu);
+    o->maker = NULL;
+    __atomic_store_n(&o->state, 2, __ATOMIC_RELEASE);
+    pthread_cond_broadcast(&lazy_cond);
+    pthread_mutex_unlock(&lazy_mu);
+}
+
 _Noreturn void sn_panic(sn_string msg) {
     task *t = my_task(); // a thread of the runtime's own, the timers' or the poller's, has none and never jumps into the main task's mark
     if (t != NULL && t->marks != NULL && !t->unwinding) {

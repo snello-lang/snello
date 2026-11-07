@@ -59,7 +59,7 @@ func TestImports(t *testing.T) {
 		{"import \"builtin\"\nfunc f() int { return len(\"x\") }", []string{"2:8: package builtin is not imported: its names are predeclared"}},
 		{"import \"fmt\"\nfunc f() { fmt.Println(1) }", nil}, // the compiler provides fmt
 		{"import (\"io\"; \"os\")\nfunc f(p ref string) Result<i64, io.Error> { in := os.Open(p)?; out := os.Create(p)?; n := io.Copy(mut out, mut in)?; out.Close()?; return Ok(n) }", nil},
-		{"import \"os\"\nfunc f() { os.Stdout.WriteString(\"x\").Expect(\"write\"); print(len(os.Args)); os.Exit(1) }", nil}, // Exit is the compiler's, the rest the package's
+		{"import \"os\"\nfunc f() { os.Stdout().WriteString(\"x\").Expect(\"write\"); print(len(os.Args)); os.Exit(1) }", nil}, // Exit is the compiler's, the rest the package's
 		{"import \"os\"\nfunc f(p ref string) int { fd := 0; return os.open(p, mut fd) }", []string{"3:47: name open not exported by package os"}},
 		{"import \"io\"\nfunc f(e io.Error) io.Kind { return e.Kind() }", nil},
 		{"import \"io\"\nfunc f() io.Error { return io.Error{Op: \"open\", Path: \"p\", Msg: \"m\", kind: Other} }", []string{"3:70: kind of io.Error is not exported", "3:76: undefined: Other"}},
@@ -68,8 +68,8 @@ func TestImports(t *testing.T) {
 		{"import \"strings\"\nfunc f(s ref string) int { n := 0; for w := range strings.Fields(s) { n += w.Len() }; return n }", nil}, // Fields yields borrows into s
 		{"import \"strconv\"\nfunc f(s ref string) int { v := 0.0; return strconv.parseFloat(s, mut v) }", []string{"name parseFloat not exported by package strconv"}},
 		{"import \"strconv\"\nfunc f(e strconv.Error) string { return e.Func.Clone() + e.Error() }", nil},
-		{"import (\"fmt\"; \"os\")\nfunc f(n int) { fmt.Fprintln(mut os.Stderr, \"n\", n); fmt.Fprintf(mut os.Stdout, \"%d\\n\", n) }", nil},
-		{"import (\"fmt\"; \"os\")\nfunc f() { fmt.Fprintln(os.Stderr, 1) }", []string{"3:25: cannot use Stderr (os.File) as mut os.File in argument"}},
+		{"import (\"fmt\"; \"os\")\nfunc f(n int) { fmt.Fprintln(mut os.Stderr(), \"n\", n); fmt.Fprintf(mut os.Stdout(), \"%d\\n\", n) }", nil},
+		{"import (\"fmt\"; \"os\")\nfunc f() { fmt.Fprintln(os.Stderr(), 1) }", []string{"3:25: cannot use a value of type os.File as mut os.File in argument"}},
 		{"import \"fmt\"\nfunc f(n int) { fmt.Fprintln(mut n, 1) }", []string{"3:17: cannot use int as the type parameter W of fmt.Fprintln: int does not implement Writer"}},
 		{"import (\"fmt\"; \"io\")\nfunc f(e mut io.Error) { fmt.Fprintln(mut e, 1) }", []string{"3:26: cannot use io.Error as the type parameter W of fmt.Fprintln: io.Error does not implement Writer"}},
 		{"func f(args ...ref any) {}", []string{"2:13: a variadic parameter is not supported yet"}}, // the library's alone
@@ -83,9 +83,9 @@ func TestImports(t *testing.T) {
 		{"import \"rc\"\nfunc f() int { a := rc.New(1); b := a; return *a.Get() + *b.Get() }", []string{"3:48: use of moved value a; moved at 3:37"}}, // a handle is moved, not copied
 		{"import \"rc\"\nfunc f(r ref rc.Rc<int>) ref int { return r.Get() }", nil},                                                                   // the borrow follows the receiver
 		{"import \"rc\"\nfunc f(r ref rc.Rc<int>) rc.Rc<int> { if p := ref r.p { return rc.Rc<int>{p: Some(rc.alias(p))} }; panic(\"gone\") }", []string{"3:53: p of rc.Rc<int> is not exported", "3:75: p of rc.Rc<int> is not exported", "3:86: name alias not exported by package rc"}},
-		{"import (\"bufio\"; \"fmt\"; \"io\"; \"os\")\nfunc f(src mut os.File) Result<i64, io.Error> { w := bufio.NewWriter(mut os.Stdout); fmt.Fprintln(mut w, 1); r := bufio.NewReader(mut src); n := io.Copy(mut w, mut r)?; w.Flush()?; return Ok(n) }", nil}, // a borrow-holding writer passed to the generic functions that only borrow it
+		{"import (\"bufio\"; \"fmt\"; \"io\"; \"os\")\nfunc f(src mut os.File) Result<i64, io.Error> { out := os.Stdout(); w := bufio.NewWriter(mut out); fmt.Fprintln(mut w, 1); r := bufio.NewReader(mut src); n := io.Copy(mut w, mut r)?; w.Flush()?; return Ok(n) }", nil}, // a borrow-holding writer passed to the generic functions that only borrow it
 		{"import (\"bufio\"; \"os\")\nfunc f(src mut os.File) int { sc := bufio.NewScanner(mut src); n := 0; for sc.Scan() { n += len(sc.Bytes()) + sc.Text().Len() }; return n }", nil},
-		{"import (\"bufio\"; \"os\")\nfunc f() { w := bufio.NewWriter(os.Stdout); w.Flush() }", []string{"3:33: cannot use Stdout (os.File) as mut os.File in argument"}},
+		{"import (\"bufio\"; \"os\")\nfunc f() { w := bufio.NewWriter(os.Stdout()); w.Flush() }", []string{"3:12: cannot keep a borrow of a temporary: os.Stdout() is dropped when the statement ends", "3:33: cannot use a value of type os.File as mut os.File in argument"}},
 		{"import (\"bufio\"; \"os\")\nfunc f(ws mut []bufio.Writer<os.File>) {}", []string{"3:15: a slice cannot hold Writer: it holds a borrow"}},
 		{"import (\"bufio\"; \"os\")\nfunc f(src mut os.File) int { sc := bufio.NewScanner(mut src); sc.Scan(); line := sc.Bytes(); sc.Scan(); return len(line) }", []string{"cannot borrow sc as mut: sc is borrowed as ref"}},
 		{"func f(x any) {}", []string{"2:10: any is only the type of a variadic parameter, ...ref any; a value of any type is a trait value"}},

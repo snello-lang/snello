@@ -60,22 +60,23 @@ func scan(name ref string, r mut io.Reader, re ref regexp.Regexp, o ref Opts, ou
 func main() {
     o := match parseArgs(os.Args[1:]) {
         Ok(o)  => o,
-        Err(m) => { fmt.Fprintln(mut os.Stderr, m); os.Exit(2) },
+        Err(m) => { fmt.Fprintln(mut os.Stderr(), m); os.Exit(2) },
     }
     pat := if o.ignoreCase { "(?i)" + o.pattern } else { o.pattern.Clone() }
     re := regexp.Compile(ref pat).Expect("bad pattern")
 
-    out := bufio.NewWriter(mut os.Stdout)
+    stdout := os.Stdout()
+    out := bufio.NewWriter(mut stdout)
     defer out.Flush()
 
     total := 0
     if len(o.files) == 0 {
-        total += scan("stdin", mut os.Stdin, ref re, ref o, mut out)
+        total += scan("stdin", mut os.Stdin(), ref re, ref o, mut out)
     }
     for _, f := range ref o.files {                 // borrow the slice; f is ref string
         match os.Open(f) {
             Ok(file) => total += scan(f, mut file, ref re, ref o, mut out),   // file dropped after
-            Err(e)   => fmt.Fprintln(mut os.Stderr, f, e),
+            Err(e)   => fmt.Fprintln(mut os.Stderr(), f, e),
         }
     }
     os.Exit(if total > 0 { 0 } else { 1 })

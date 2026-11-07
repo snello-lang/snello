@@ -51,6 +51,9 @@ type Emitter struct {
 	result   types.Type                      // the result type of the function being emitted
 	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
 	jumped   map[string]bool                 // the labels a continue has jumped to, the ones written
+	lazy     map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	lazies   []owned                         // the lazy variables owning something, dropped when main returns if they were made
+	making   *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
 	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
 	names    naming                          // the C names of locals and parameters (locals.go)
 	closures int                             // closures written so far, numbering their functions
@@ -144,11 +147,15 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 
 	e.instances()
 	finish := "\tsn_main();\n"
-	if len(e.statics) > 0 {
+	if len(e.statics) > 0 || len(e.lazies) > 0 {
 		finish += "\tsn_statics_drop();\n"
 		var b strings.Builder
 		for _, s := range e.statics {
 			put(&b, "\t", e.dropOf(s.name, s.typ, token.NoPos), "\n")
+		}
+
+		for _, s := range e.lazies {
+			put(&b, "\tif (sn_lazy_ready(&", s.name, "_lazy)) {\n\t\t", e.dropOf(s.name, s.typ, token.NoPos), "\n\t}\n")
 		}
 
 		put(&e.helpers, "static void sn_statics_drop(void) {\n", b.String(), "}\n\n") // after the droppers it asks for
@@ -239,8 +246,13 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		value := zeroValue
 		if i < len(d.Values) {
 			if value = e.staticValue(d.Values[i], obj.Type()); value == "" {
-				e.unsupported(name.Pos(), "a top-level var or const whose value is not a literal")
-				return
+				if d.Const {
+					e.unsupported(name.Pos(), "a top-level const whose value is not a literal")
+					return
+				}
+
+				e.lazyVar(obj.(*types.Var), name, d.Values[i])
+				continue
 			}
 		}
 
@@ -252,6 +264,31 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		}
 
 		put(&e.protos, qualifier, e.cType(obj.Type(), name.Pos()), " ", lower.ObjName(obj), " = ", value, ";\n")
+	}
+}
+
+// lazyVar writes a top-level variable whose initializer is a call, or
+// anything else that is not a literal: the cell, zero until made; the
+// runtime's lazy beside it; the initializer as a function of its own,
+// an assignment to the cell written as any statement is; and the
+// getter every use of the variable goes through, which makes it on
+// the first (_docs/design/03-ownership-across-tasks.md, package
+// variables).
+func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
+	e.lazy[v] = true
+	cname := lower.ObjName(v)
+	ct := e.cType(v.Type(), name.Pos())
+	cell := &ast.Ident{NamePos: name.NamePos, Name: name.Name}
+	e.info.Uses[cell] = v
+	e.info.Types[cell] = v.Type()
+	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
+	e.making = v
+	e.writeFunction(cname+"_init", types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.making = nil
+	put(&e.protos, "static SN_UNUSED ", ct, " ", cname, ";\nstatic sn_lazy ", cname, "_lazy;\n")
+	put(&e.protos, "static inline SN_UNUSED ", ct, " *", cname, "_get(void) {\n\tif (!sn_lazy_ready(&", cname, "_lazy)) {\n\t\tsn_lazy_make(&", cname, "_lazy, ", cname, "_init, ", cString(name.Name), ");\n\t}\n\n\treturn &", cname, ";\n}\n\n")
+	if needsDrop(v.Type()) {
+		e.lazies = append(e.lazies, owned{cname, v.Type()})
 	}
 }
 
@@ -353,6 +390,7 @@ func newEmitter(info *types.Info, file *token.File, fs []*ast.File) *Emitter {
 		generics: make(map[*types.Func]*ast.FuncDecl),
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
+		lazy:     make(map[*types.Var]bool),
 		done:     make(map[string]bool),
 		names:    newNaming(fs),
 		jumped:   make(map[string]bool),

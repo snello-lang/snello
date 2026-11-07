@@ -210,7 +210,7 @@ func (c *Checker) checkSources(name string, sig *Signature, pos token.Pos) {
 // capture notes that the closures being checked refer to v, when v is
 // a local of a function enclosing them, declared before they begin.
 func (c *Checker) capture(v *Var, mode captureMode) {
-	if len(c.closures) == 0 || v.pos == token.NoPos || v.field || c.pkg.scope.Lookup(v.name) == v {
+	if len(c.closures) == 0 || v.pos == token.NoPos || v.field || v.global {
 		return
 	}
 
@@ -449,7 +449,7 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 	}
 
 	v, before := p.v, pos
-	if c.pkg.scope.Lookup(v.name) == v {
+	if v.global {
 		c.errorf(pos, "cannot return a borrow of "+v.name+": a returned borrow is tied to the receiver or a borrowed parameter")
 		return
 	}

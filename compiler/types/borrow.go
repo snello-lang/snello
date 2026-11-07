@@ -88,6 +88,11 @@ func (c *Checker) accessExpr(e ast.Expr, what access, pos token.Pos) *Var {
 // of the function. The access is reported at pos and takes effect at
 // at, which is later for a receiver, borrowed after its arguments.
 func (c *Checker) access(e ast.Expr, p place, what access, pos, at token.Pos) {
+	if p.v.global && what != readAccess && what != refAccess { // a package variable is reached from every task: read and lent as ref, never changed or taken
+		c.errorf(pos, p.v.name+" is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds")
+		return
+	}
+
 	for i := range c.temps {
 		if t := &c.temps[i]; t.collides(p, what) {
 			c.conflictAt(pos, at, c.collision(e, p, what, t), -1)

@@ -140,6 +140,10 @@ func (e *Emitter) varSlot(v *types.Var, pos token.Pos) string {
 		return s
 	}
 
+	if e.lazy[v] && e.making != v {
+		return e.op("call ptr @"+lower.ObjName(v)+"_get()", "ptr").s // made on first use; its own initializer names the cell
+	}
+
 	if e.external[v] || e.globals[v] {
 		return "@" + lower.ObjName(v)
 	}

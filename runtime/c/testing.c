@@ -4,44 +4,83 @@
 
 // The runtime's half of the testing package, which a test build alone
 // links into use: the running task's identity, for the runner to keep
-// a state per test when tests run in parallel; a lock over that
-// state, held across no park; the allocator's counts, for a
-// benchmark's allocations and bytes per operation; and the place of
-// the call being made, which the compiler writes before every call
-// of testing.Log, Logf and Skip and of an exported function of expect
-// and the packages read back, kept on the running task so that two
-// parallel tests never share it (_docs/design/09-testing.md, section 4).
+// a state per test when tests run in parallel; the benchmark's state,
+// with the allocator's counts for its allocations and bytes per
+// operation; and the place of the call being made, which the compiler
+// writes before every call of testing.Log, Logf and Skip and of an
+// exported function of expect and the packages read back, kept on the
+// running task so that two parallel tests never share it
+// (_docs/design/09-testing.md, section 4).
 
 #include "internal.h"
 
-#include <pthread.h>
 #include <stdatomic.h>
-
-static pthread_mutex_t testing_mu = PTHREAD_MUTEX_INITIALIZER;
 
 // sn_testing_task is testing.task: the running task, as a number.
 int64_t sn_testing_task(void) {
     return (int64_t)(uintptr_t)sn_self();
 }
 
-// sn_testing_lock and sn_testing_unlock are testing.lock and unlock:
-// a mutex of the runtime's, taken for the runner's map of states.
-void sn_testing_lock(void) {
-    pthread_mutex_lock(&testing_mu);
+// The benchmark's state, one benchmark at a time, since the runner
+// runs them one after another on one task: how many iterations this
+// run makes, how many the loop has counted, when the timer started
+// and what it has counted, and the allocator's counts at the start,
+// which become the counts of the loop alone at its end. It lives here
+// so that testing.Loop costs one call and no lock, and so that the
+// package has no variable a task writes.
+static int64_t bench_n, bench_i, bench_start, bench_nanos, bench_allocs, bench_bytes;
+static bool bench_report;
+
+void sn_testing_benchStart(int64_t n) {
+    bench_n = n;
+    bench_i = 0;
+    bench_nanos = 0;
+    bench_report = false;
 }
 
-void sn_testing_unlock(void) {
-    pthread_mutex_unlock(&testing_mu);
+bool sn_testing_benchLoop(void) {
+    if (bench_i == 0) {
+        bench_start = sn_time_mono();
+        bench_allocs = atomic_load(&sn_alloc_count);
+        bench_bytes = atomic_load(&sn_alloc_total);
+    }
+
+    if (bench_i >= bench_n) {
+        bench_nanos += sn_time_mono() - bench_start;
+        bench_allocs = atomic_load(&sn_alloc_count) - bench_allocs;
+        bench_bytes = atomic_load(&sn_alloc_total) - bench_bytes;
+        return false;
+    }
+
+    bench_i++;
+    return true;
 }
 
-// sn_testing_allocs and sn_testing_allocBytes are testing.allocs and
-// allocBytes: the blocks and the bytes sn_alloc has given out so far.
-int64_t sn_testing_allocs(void) {
-    return atomic_load(&sn_alloc_count);
+void sn_testing_benchReset(void) {
+    bench_start = sn_time_mono();
+    bench_nanos = 0;
+    bench_allocs = atomic_load(&sn_alloc_count);
+    bench_bytes = atomic_load(&sn_alloc_total);
 }
 
-int64_t sn_testing_allocBytes(void) {
-    return atomic_load(&sn_alloc_total);
+void sn_testing_benchReport(void) {
+    bench_report = true;
+}
+
+int64_t sn_testing_benchNanos(void) {
+    return bench_nanos;
+}
+
+int64_t sn_testing_benchAllocs(void) {
+    return bench_allocs;
+}
+
+int64_t sn_testing_benchBytes(void) {
+    return bench_bytes;
+}
+
+bool sn_testing_benchReported(void) {
+    return bench_report;
 }
 
 // sn_testing_line is written before a call of testing.Log, Logf or

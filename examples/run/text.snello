@@ -19,8 +19,6 @@ package main
 
 import ("fmt"; "io"; "os"; "strconv"; "strings")
 
-var greeting = "hi"
-
 // A Src hands out its bytes a few at a time, as a file would.
 struct Src impl io.Reader { data []byte; pos int }
 
@@ -87,8 +85,8 @@ func main() {
 	text := string(moved)
 	fmt.Println(text)
 
-	fmt.Fprintln(mut os.Stdout, "to", "stdout", 1)
-	fmt.Fprintf(mut os.Stdout, "%5d|%-4s|%3s|%2.1f|\n", 42, "ab", "abcdef", 2.25)
+	fmt.Fprintln(mut os.Stdout(), "to", "stdout", 1)
+	fmt.Fprintf(mut os.Stdout(), "%5d|%-4s|%3s|%2.1f|\n", 42, "ab", "abcdef", 2.25)
 	fmt.Printf("%6d %s\n", 7, "x")
 
 	match os.Open("/nonexistent/x") {
@@ -96,7 +94,7 @@ func main() {
 		Err(e) => fmt.Println(kind(e.Kind()), e.Kind() == io.NotExist, e.Kind()),
 	}
 
-	greeting = "hello, ".Clone() + "world"
+	greeting := "hello, ".Clone() + "world"
 	fmt.Println(greeting, bytesOf(ref greeting), bytesOf("abc"))
 	fmt.Printf("|%-3s|%3s|\n", "\u00e9", "\u00e9")
 	fmt.Println(strconv.ParseFloat("1e-400"), strconv.ParseFloat("0x10"), strconv.ParseFloat("inf"))
