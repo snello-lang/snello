@@ -1,0 +1,158 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package unicode answers questions about a rune from Unicode's own
+// tables, at the version the runtime's tables are written from: its
+// general category and the classes made of it, whether it is white
+// space, its script, and its upper, lower and title case and its case
+// folding. A rune is a code point, an i32; a value that is not one is
+// in no class, has category Cn and script Unknown, and maps to itself.
+package unicode
+
+// MaxRune is the largest code point, U+10FFFF.
+const MaxRune rune = 0x10FFFF
+
+// Version is the version of the Unicode standard the tables are written
+// from.
+const Version string = "18.0.0"
+
+// IsLetter reports whether r is a letter: its general category is one
+// of L's, Lu, Ll, Lt, Lm or Lo.
+func IsLetter(r rune) bool
+
+// IsTitle reports whether r is a title case letter, general category
+// Lt: a digraph such as ǅ that starts a word in title case.
+func IsTitle(r rune) bool
+
+// IsMark reports whether r is a mark, general category M: a combining
+// accent, a vowel sign.
+func IsMark(r rune) bool
+
+// IsNumber reports whether r is a number, general category N: a decimal
+// digit, a letter number such as Ⅻ, or another number such as ².
+func IsNumber(r rune) bool
+
+// IsPunct reports whether r is punctuation, general category P.
+func IsPunct(r rune) bool
+
+// IsSymbol reports whether r is a symbol, general category S: a math,
+// currency, modifier or other symbol, an emoji among them.
+func IsSymbol(r rune) bool
+
+// IsControl reports whether r is a control character, general category
+// Cc: U+0000 to U+001F and U+007F to U+009F.
+func IsControl(r rune) bool
+
+// IsGraphic reports whether r is graphic: a letter, mark, number,
+// punctuation, symbol or space separator, Zs; IsPrint is the same with
+// the ASCII space as its one space.
+func IsGraphic(r rune) bool
+
+// IsDigit reports whether r is a decimal digit, general category Nd:
+// '0' to '9', and the digits of every other script.
+func IsDigit(r rune) bool
+
+// IsSpace reports whether r has Unicode's White_Space property, the
+// runes strings.Fields splits at and Trim cuts.
+func IsSpace(r rune) bool
+
+// IsUpper reports whether r is upper case: Unicode's derived property
+// Uppercase, the letters of category Lu and the runes Unicode counts as
+// upper case beside them, such as Ⓐ. Category(r) == "Lu" asks for the
+// letters alone.
+func IsUpper(r rune) bool
+
+// IsLower reports whether r is lower case: Unicode's derived property
+// Lowercase, the letters of category Ll and the runes counted beside
+// them, such as ª and ⓐ.
+func IsLower(r rune) bool
+
+// IsAlphabetic reports whether r is alphabetic: Unicode's derived
+// property Alphabetic, every letter and the marks and numbers that
+// write words, such as a Devanagari vowel sign or Ⅻ. IsLetter asks for
+// the letters alone.
+func IsAlphabetic(r rune) bool
+
+// IsEmoji reports whether r has Unicode's Emoji property: 😀 and ❤, and
+// also the digits and # and *, which form keycap emoji.
+func IsEmoji(r rune) bool
+
+// IsIDStart reports whether r can start an identifier, by Unicode's
+// XID_Start, the form of ID_Start that stays closed under NFKC, as
+// annex 31 recommends: a letter of any script.
+func IsIDStart(r rune) bool
+
+// IsIDContinue reports whether r can go on an identifier, XID_Continue:
+// a letter, a digit, a combining mark or a connector such as _.
+func IsIDContinue(r rune) bool
+
+// DigitValue returns the value of a decimal digit, 0 to 9, of any
+// script, or None for a rune that is not one.
+func DigitValue(r rune) int? {
+	d := digit(r)
+	if d < 0 {
+		return None
+	}
+
+	return Some(d)
+}
+
+// NumericValue returns the numeric value Unicode gives r: 7 for 7, 12
+// for Ⅻ, 0.5 for ½; or None for a rune with none.
+func NumericValue(r rune) f64? {
+	var num i64 = 0
+	var den i64 = 1
+	if !numeric(r, mut num, mut den) {
+		return None
+	}
+
+	return Some(f64(num) / f64(den))
+}
+
+// IsPrint reports whether r is printable: a letter, a mark, a number,
+// a punctuation or a symbol, or the ASCII space; %q escapes every other
+// rune.
+func IsPrint(r rune) bool
+
+// ToUpper returns r in upper case, by Unicode's simple case mapping,
+// which strings.ToUpper applies to every rune; a rune with no upper
+// case is returned as it is.
+func ToUpper(r rune) rune
+
+// ToLower returns r in lower case, by Unicode's simple case mapping; a
+// rune with no lower case is returned as it is.
+func ToLower(r rune) rune
+
+// ToTitle returns r in title case, by Unicode's simple case mapping,
+// which is the upper case for every rune but the digraphs.
+func ToTitle(r rune) rune
+
+// CaseFold returns r's simple case folding, statuses C and S of Unicode's
+// CaseFolding.txt: every rune of a class that differs only in case maps
+// to the same one, so two runes are equal ignoring case when they fold
+// to the same rune. strings.EqualIgnoreCase compares whole strings by the
+// full folding, where ß is ss.
+func CaseFold(r rune) rune
+
+// Category returns the two letters of r's general category: Lu for an
+// uppercase letter, Nd for a decimal digit, Cn for a code point Unicode
+// has not assigned.
+func Category(r rune) string
+
+// Script returns r's script by Unicode's name for it, Latin, Han,
+// Cyrillic, Common for a rune of many scripts, Inherited for a mark
+// that takes its letter's, and Unknown for an unassigned code point.
+func Script(r rune) string
+
+// ScriptCode returns r's script by its four-letter code, ISO 15924's:
+// Latn, Hani, Cyrl, Zyyy for Common, Zzzz for Unknown.
+func ScriptCode(r rune) string
+
+// InScript reports whether r's script is the one named, by its name,
+// Latin, or its four-letter code, Latn.
+func InScript(r rune, name ref string) bool
+
+// digit and numeric are the runtime's decimal digit and numeric values.
+func digit(r rune) int
+func numeric(r rune, num mut i64, den mut i64) bool

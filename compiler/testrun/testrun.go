@@ -123,7 +123,7 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	p.Path = filepath.ToSlash(rel)
-	if external(pkg, path.Base(p.Path)) {
+	if external(pkg, p.Path) {
 		p.Path += "_test"
 	}
 	return p, nil
@@ -177,7 +177,8 @@ func PlanStd(importPath string) (*Plan, error) {
 // whole library is read from the checkout then, every package under
 // std/. A directory that is not a standard package's is refused.
 func PlanStdDir(dir string) (*Plan, error) {
-	if !IsStdDir(dir) {
+	stdDir, importPath, ok := stdPackage(dir)
+	if !ok {
 		return nil, errors.New(dir + " is not a standard package of the library: snello test std/NAME runs one in a checkout of the compiler, whose std/ holds every package, with the compiler built from that checkout")
 	}
 
@@ -195,14 +196,13 @@ func PlanStdDir(dir string) (*Plan, error) {
 		return nil, errors.New(dir + ": no _test.snello files")
 	}
 
-	name := filepath.Base(abs)
-	p := &Plan{Path: name, Files: []string{filepath.Join(abs, name+".snello")}, Tests: tests, StdDir: filepath.Dir(abs)}
+	p := &Plan{Path: importPath, Files: []string{filepath.Join(abs, path.Base(importPath)+".snello")}, Tests: tests, StdDir: stdDir}
 	var pkg string
 	if p.Names, pkg, err = testNames(tests, nil); err != nil {
 		return nil, err
 	}
 
-	if external(pkg, name) {
+	if external(pkg, importPath) {
 		p.Path += "_test"
 	}
 
@@ -210,34 +210,52 @@ func PlanStdDir(dir string) (*Plan, error) {
 }
 
 // IsStdDir reports whether dir is a standard package's directory in a
-// checkout of the compiler: std/NAME, holding NAME.snello, for a NAME
-// the embedded library has, under a std/ that holds every package of
-// the embedded library, so that a program's own directory named std
-// is never mistaken for the checkout and planned with the library's
-// privileges.
+// checkout of the compiler: std/NAME or std/NAME/SUB, holding the file
+// named after its last element, for a path the embedded library has,
+// under a std/ that holds every package of the embedded library, so
+// that a program's own directory named std is never mistaken for the
+// checkout and planned with the library's privileges.
 func IsStdDir(dir string) bool {
+	_, _, ok := stdPackage(dir)
+	return ok
+}
+
+// stdPackage returns the std/ directory above dir and the import path
+// of the standard package dir is, unicode/utf8 for std/unicode/utf8,
+// when IsStdDir holds for it.
+func stdPackage(dir string) (stdDir, importPath string, ok bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return false
+		return "", "", false
 	}
 
-	name := filepath.Base(abs)
-	stdDir := filepath.Dir(abs)
-	if filepath.Base(stdDir) != "std" {
-		return false
+	stdDir = filepath.Dir(abs)
+	for filepath.Base(stdDir) != "std" {
+		up := filepath.Dir(stdDir)
+		if up == stdDir {
+			return "", "", false
+		}
+
+		stdDir = up
 	}
 
-	if _, err := std.Sources.ReadFile(name + "/" + name + ".snello"); err != nil {
-		return false
+	rel, err := filepath.Rel(stdDir, abs)
+	if err != nil {
+		return "", "", false
+	}
+
+	importPath = filepath.ToSlash(rel)
+	if _, err := std.Sources.ReadFile(importPath + "/" + path.Base(importPath) + ".snello"); err != nil {
+		return "", "", false
 	}
 
 	for _, p := range importer.Paths() { // the whole library, as the embedded copy lists it
-		if _, err := os.Stat(filepath.Join(stdDir, p, path.Base(p)+".snello")); err != nil {
-			return false
+		if _, err := os.Stat(filepath.Join(stdDir, filepath.FromSlash(p), path.Base(p)+".snello")); err != nil {
+			return "", "", false
 		}
 	}
 
-	return true
+	return stdDir, importPath, true
 }
 
 // testNames parses the test files, read from disk when srcs is nil,
@@ -284,12 +302,13 @@ func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 }
 
 // external says whether the test files, of package pkg, are the
-// external test package of the package named base, pkg base_test,
-// which imports base as its users do: the form for a package the test
+// external test package of the package at importPath, whose name is
+// its last element: pkg utf8_test for unicode/utf8, which imports the
+// package as its users do. It is the form for a package the test
 // harness itself depends on, and for testing a package through its
 // exported names alone.
-func external(pkg, base string) bool {
-	return pkg == base+"_test"
+func external(pkg, importPath string) bool {
+	return pkg == path.Base(importPath)+"_test"
 }
 
 // isTest reports whether name is a test's, Test and then a capital, or

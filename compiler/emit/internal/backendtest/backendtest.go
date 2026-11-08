@@ -950,6 +950,56 @@ func main() {
 				"Parse(\"strconv.Atoi: parsing \\\"q\\\": invalid syntax\")\nOk(14) Ok(7)\n",
 		},
 		{
+			Name: "rune-conversions", // string(r) and string(rs) build the UTF-8 of a rune and of a []rune, a borrowed slice too, a value that is not a code point written as U+FFFD; the slices and strings are freed
+			Src: `package main
+import "fmt"
+func join(rs ref []rune) string { return string(rs) }
+func main() {
+	var r rune = 'é'
+	var bad rune = -1
+	var sur rune = 0xD800
+	rs := "añ世".Runes()
+	rs.Push(0x1F600)
+	fmt.Println(string(r), string('x'), string(rs), join(ref rs), string(bad), string(sur), len(string([]rune{})), string(rs[1]))
+}`,
+			Out: "é x añ世😀 añ世😀 \uFFFD \uFFFD 0 ñ\n",
+		},
+		{
+			Name: "string-runes", // Runes gives an owned slice of exactly the string's runes, a byte that starts no valid sequence read as U+FFFD; the slice is the program's to grow and is freed
+			Src: `package main
+import "fmt"
+func main() {
+	rs := "añ世\xff".Runes()
+	fmt.Println(len(rs), cap(rs), rs)
+	rs.Push('!')
+	fmt.Println(rs, len("".Runes()))
+}`,
+			Out: "4 4 [97 241 19990 65533]\n[97 241 19990 65533 33] 0\n",
+		},
+		{
+			Name: "range-runes", // a range over a string yields each rune and the byte offset it starts at; a byte that starts no valid sequence is U+FFFD and the loop moves on one byte; continue and break; the one-variable form; a borrowed and a sliced string; the string usable after the loop
+			Src: `package main
+import "fmt"
+func count(s ref string) int { n := 0; for range s { n += 1 }; return n }
+func main() {
+	s := "héllo, 世界"
+	for i, r := range s { fmt.Println(i, r) }
+	fmt.Println(len(s), count(ref s), s)
+	bad := "a\xffb\xe4\xb8c"
+	for i, r := range bad { fmt.Println(i, r) }
+	for i := range "añb" { fmt.Printf("%v ", i) }
+	fmt.Println()
+	for _, r := range s { if r == 'l' { continue }; if r == ',' { break }; fmt.Printf("%v ", r) }
+	fmt.Println()
+	for _, r := range s[7:] { fmt.Printf("%v ", r) }
+	fmt.Println()
+	for _, r := range "" { fmt.Println("never", r) }
+	fmt.Println(s)
+}`,
+			Out: "0 104\n1 233\n3 108\n4 108\n5 111\n6 44\n7 32\n8 19990\n11 30028\n14 9 héllo, 世界\n" +
+				"0 97\n1 65533\n2 98\n3 65533\n4 65533\n5 99\n0 1 3 \n104 233 111 \n32 19990 30028 \nhéllo, 世界\n",
+		},
+		{
 			Name: "globals", // what a package variable allows from any task: reading, a ref lent to a function, a Copy value copied out, an element indexed, a method taking ref; the table is read by two tasks at once
 			Src: `package main
 import ("fmt"; "strings")
@@ -1760,7 +1810,7 @@ func main() {
 			Out: "0|     0|0    |0|0|0|000\n1|     1|1    |1|1|1|001\n9|     9|9    |9|9|9|009\n10|    10|10   |10|10|10|010\n11|    11|11   |11|11|11|011\n42|    42|42   |42|42|42|042\n99|    99|99   |99|99|99|099\n100|   100|100  |100|100|100|100\n101|   101|101  |101|101|101|101\n999|   999|999  |999|999|999|999\n1000|  1000|1000 |1000|1000|1000|1000\n-1|    -1|-1   |-1|-1|-1|-001\n-9|    -9|-9   |-9|-9|-9|-009\n-10|   -10|-10  |-10|-10|-10|-010\n-99|   -99|-99  |-99|-99|-99|-099\n-100|  -100|-100 |-100|-100|-100|-100\n1234567890|1234567890|1234567890|1234567890|1234567890|1234567890|1234567890\n-1234567890|-1234567890|-1234567890|-1234567890|-1234567890|-1234567890|-1234567890\n9223372036854775807|9223372036854775807|9223372036854775807|9223372036854775807|9223372036854775807|9223372036854775807|9223372036854775807\n-9223372036854775808|-9223372036854775808|-9223372036854775808|-9223372036854775808|-9223372036854775808|-9223372036854775808|-9223372036854775808\n18446744073709551615 7 0 7 0\nn=577\n",
 		},
 		{
-			Name: "text-ascii", // Fields, Trim, ToUpper and ToLower through their ASCII fast paths and their Unicode ones: every ASCII space, U+0085, U+00A0 and U+3000, invalid bytes, empty and all-space text; the expected output is Go's
+			Name: "text-ascii", // Fields, Trim, ToUpper and ToLower through their ASCII fast paths and their Unicode ones: every ASCII space, U+0085, U+00A0 and U+3000, invalid bytes, empty and all-space text; case by Unicode's full mapping, so ß upper-cases to SS
 			Src: `package main
 import ("fmt"; "strings")
 func main() {
@@ -1774,7 +1824,7 @@ func main() {
 	}
 }
 `,
-			Out: "\"\" 0  \"\" \"\" \"\"\n\"   \" 0  \"\" \"   \" \"   \"\n\"a\" 1 [a] \"a\" \"A\" \"a\"\n\" a b  c \" 3 [a][b][c] \"a b  c\" \" A B  C \" \" a b  c \"\n\"\\ta\\nb\\vc\\fd\\re \" 5 [a][b][c][d][e] \"a\\nb\\vc\\fd\\re\" \"\\tA\\nB\\vC\\fD\\rE \" \"\\ta\\nb\\vc\\fd\\re \"\n\"x\\u0085y\\u00a0z\\u3000w\" 4 [x][y][z][w] \"x\\u0085y\\u00a0z\\u3000w\" \"X\\u0085Y\\u00a0Z\\u3000W\" \"x\\u0085y\\u00a0z\\u3000w\"\n\"\\xff a \\xfe\" 3 [\xff][a][\xfe] \"\\xff a \\xfe\" \"\xef\xbf\xbd A \xef\xbf\xbd\" \"\xef\xbf\xbd a \xef\xbf\xbd\"\n\"Hello, World! 123\" 3 [Hello,][World!][123] \"Hello, World! 123\" \"HELLO, WORLD! 123\" \"hello, world! 123\"\n\"\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c stra\xc3\x9fe \xc7\x85\" 3 [\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c][stra\xc3\x9fe][\xc7\x85] \"\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c stra\xc3\x9fe \xc7\x85\" \"\xc3\x80\xc3\x89\xc3\x8e\xc3\x95\xc3\x9c STRA\xc3\x9fE \xc7\x84\" \"\xc3\xa0\xc3\xa9\xc3\xae\xc3\xb5\xc3\xbc stra\xc3\x9fe \xc7\x86\"\n\"  lead\" 1 [lead] \"lead\" \"  LEAD\" \"  lead\"\n\"trail\\t\\n\" 1 [trail] \"trail\" \"TRAIL\\t\\n\" \"trail\\t\\n\"\n\"a\\x80b c\" 2 [a\x80b][c] \"a\\x80b c\" \"A\xef\xbf\xbdB C\" \"a\xef\xbf\xbdb c\"\n",
+			Out: "\"\" 0  \"\" \"\" \"\"\n\"   \" 0  \"\" \"   \" \"   \"\n\"a\" 1 [a] \"a\" \"A\" \"a\"\n\" a b  c \" 3 [a][b][c] \"a b  c\" \" A B  C \" \" a b  c \"\n\"\\ta\\nb\\vc\\fd\\re \" 5 [a][b][c][d][e] \"a\\nb\\vc\\fd\\re\" \"\\tA\\nB\\vC\\fD\\rE \" \"\\ta\\nb\\vc\\fd\\re \"\n\"x\\u0085y\\u00a0z\\u3000w\" 4 [x][y][z][w] \"x\\u0085y\\u00a0z\\u3000w\" \"X\\u0085Y\\u00a0Z\\u3000W\" \"x\\u0085y\\u00a0z\\u3000w\"\n\"\\xff a \\xfe\" 3 [\xff][a][\xfe] \"\\xff a \\xfe\" \"\xef\xbf\xbd A \xef\xbf\xbd\" \"\xef\xbf\xbd a \xef\xbf\xbd\"\n\"Hello, World! 123\" 3 [Hello,][World!][123] \"Hello, World! 123\" \"HELLO, WORLD! 123\" \"hello, world! 123\"\n\"\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c stra\xc3\x9fe \xc7\x85\" 3 [\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c][stra\xc3\x9fe][\xc7\x85] \"\xc3\x80\xc3\xa9\xc3\x8e\xc3\xb5\xc3\x9c stra\xc3\x9fe \xc7\x85\" \"\xc3\x80\xc3\x89\xc3\x8e\xc3\x95\xc3\x9c STRASSE \xc7\x84\" \"\xc3\xa0\xc3\xa9\xc3\xae\xc3\xb5\xc3\xbc stra\xc3\x9fe \xc7\x86\"\n\"  lead\" 1 [lead] \"lead\" \"  LEAD\" \"  lead\"\n\"trail\\t\\n\" 1 [trail] \"trail\" \"TRAIL\\t\\n\" \"trail\\t\\n\"\n\"a\\x80b c\" 2 [a\x80b][c] \"a\\x80b c\" \"A\xef\xbf\xbdB C\" \"a\xef\xbf\xbdb c\"\n",
 		},
 		{
 			Name: "fixed-floats", // %f with a precision and %v with one through Ryū's fixed digits, rounded half to even on the exact value: the ties 0.125, 2.5 and 0.375, 1.005 and 9.995 just off them, their neighbours, and doubles of every magnitude, with the C library past seventeen digits; the expected output is Go's

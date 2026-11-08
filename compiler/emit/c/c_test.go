@@ -361,3 +361,41 @@ func TestMain(m *testing.M) {
 
 	os.Exit(m.Run())
 }
+
+// emitSource parses, checks and emits the program src with the
+// standard library, and returns what the backend writes, failing the
+// test on any error. The tests beside each file of the backend read
+// the output by the function that wrote it.
+func emitSource(t *testing.T, src string) string {
+	t.Helper()
+	f, file, err := parser.ParseFile("t.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &types.Info{}
+	imp := importer.NewImporter(info)
+	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := Emit(file, f, info, libraries(imp)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(out)
+}
+
+// cFunction returns the body of the C function whose definition starts
+// with head, up to its closing brace, or fails the test.
+func cFunction(t *testing.T, out, head string) string {
+	t.Helper()
+	i := strings.Index(out, head+" {\n")
+	if i < 0 {
+		t.Fatalf("no function written as %q", head)
+	}
+
+	body := out[i:]
+	return body[:strings.Index(body, "\n}\n")]
+}

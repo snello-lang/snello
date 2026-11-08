@@ -138,58 +138,275 @@ static int decode_last(const uint8_t *p, int64_t n, int32_t *r) {
     return w;
 }
 
-// mapped copies s with every rune through f, as Go's strings.Map does
-// for ToUpper and ToLower: a byte that is not valid UTF-8 becomes the
-// replacement rune, and a rune may change its length, so the length is
-// counted before the copy. Text of ASCII alone is copied byte by byte.
-static sn_string mapped(sn_string s, int32_t (*f)(int32_t)) {
-    sn_check_string(s);
-    bool ascii = true;
-    for (int64_t i = 0; i < s.len && ascii; i++) {
-        ascii = s.ptr[i] < 0x80;
+// asciiCase copies s, which holds ASCII alone, with each letter in
+// upper or lower case: a byte's case by arithmetic, which the compiler
+// writes with vector instructions. No mapping of Unicode's but the
+// simple one touches ASCII.
+static sn_string asciiCase(sn_string s, bool upper) {
+    uint8_t *p = sn_alloc((size_t)(s.len > 0 ? s.len : 1));
+    for (int64_t i = 0; i < s.len; i++) {
+        uint8_t c = s.ptr[i];
+        if (upper) {
+            p[i] = (uint8_t)(c - ((c >= 'a' && c <= 'z') ? 32 : 0));
+        } else {
+            p[i] = (uint8_t)(c + ((c >= 'A' && c <= 'Z') ? 32 : 0));
+        }
     }
 
-    if (ascii) { // a byte's case by arithmetic, which the compiler writes with vector instructions
-        uint8_t *p = sn_alloc((size_t)s.len);
-        if (f == sn_rune_upper) {
-            for (int64_t i = 0; i < s.len; i++) {
-                uint8_t c = s.ptr[i];
-                p[i] = (uint8_t)(c - ((c >= 'a' && c <= 'z') ? 32 : 0));
-            }
-        } else if (f == sn_rune_lower) {
-            for (int64_t i = 0; i < s.len; i++) {
-                uint8_t c = s.ptr[i];
-                p[i] = (uint8_t)(c + ((c >= 'A' && c <= 'Z') ? 32 : 0));
-            }
-        } else {
-            for (int64_t i = 0; i < s.len; i++) {
-                p[i] = (uint8_t)f(s.ptr[i]);
+    return SN_OWNED(p, s.len);
+}
+
+// caseOf writes into to what the rune rs[k] of n maps to by Unicode's
+// full case mapping of kind, SN_UC_UPPER, SN_UC_LOWER or SN_UC_TITLE,
+// and returns how many runes that is: the mapping of SpecialCasing.txt
+// that holds in every language, else the simple one; lowered, a capital
+// sigma at the end of a word is the final form, by the rule Final_Sigma,
+// a cased letter before it, through case-ignorable runes, and none
+// after.
+static int caseOf(int kind, const int32_t *rs, int64_t n, int64_t k, int32_t to[3]) {
+    int m = sn_uc_special(kind, rs[k], to);
+    if (m == 0) {
+        to[0] = kind == SN_UC_UPPER ? sn_rune_upper(rs[k]) : kind == SN_UC_LOWER ? sn_rune_lower(rs[k]) : sn_rune_title(rs[k]);
+        m = 1;
+    }
+
+    if (kind == SN_UC_LOWER && rs[k] == 0x03A3) {
+        int64_t j = k - 1;
+        while (j >= 0 && sn_uc_case_ignorable(rs[j])) {
+            j--;
+        }
+
+        int64_t l = k + 1;
+        while (l < n && sn_uc_case_ignorable(rs[l])) {
+            l++;
+        }
+
+        if (j >= 0 && sn_uc_cased(rs[j]) && !(l < n && sn_uc_cased(rs[l]))) {
+            to[0] = 0x03C2;
+        }
+    }
+
+    return m;
+}
+
+// cased maps the runes of s, each by the kind kinds gives it, or kind
+// for all when kinds is NULL, into a new string, which may be longer
+// than s: the length is counted on a first pass and written on a
+// second. The runes are decoded first, since the final sigma looks on
+// both sides.
+static sn_string cased(sn_string s, int kind, int32_t *rs, int64_t n, const uint8_t *kinds) {
+    uint8_t tmp[4];
+    uint8_t *p = NULL;
+    int64_t size = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int64_t at = 0;
+        for (int64_t k = 0; k < n; k++) {
+            int32_t to[3];
+            int m = caseOf(kinds != NULL ? kinds[k] : kind, rs, n, k, to);
+            for (int i = 0; i < m; i++) {
+                at += sn_utf8_encode(to[i], pass == 0 ? tmp : p + at);
             }
         }
 
-        return SN_OWNED(p, s.len);
+        if (pass == 0) {
+            size = at;
+            p = sn_alloc((size_t)(size > 0 ? size : 1));
+        }
     }
 
-    uint8_t tmp[4];
-    int64_t n = 0;
-    for (int64_t i = 0; i < s.len;) {
-        int32_t r;
-        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
-        n += sn_utf8_encode(f(r), tmp);
-    }
-
-    uint8_t *p = sn_alloc((size_t)n);
-    for (int64_t i = 0, at = 0; i < s.len;) {
-        int32_t r;
-        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
-        at += sn_utf8_encode(f(r), p + at);
-    }
-
-    return SN_OWNED(p, n);
+    (void)s;
+    return SN_OWNED(p, size);
 }
 
-sn_string sn_to_upper(sn_string s) { return mapped(s, sn_rune_upper); }
-sn_string sn_to_lower(sn_string s) { return mapped(s, sn_rune_lower); }
+// decoded returns the runes of s in a new array, and their number in n.
+static int32_t *decoded(sn_string s, int64_t *n) {
+    int32_t *rs = sn_alloc((size_t)(s.len > 0 ? s.len : 1) * sizeof(int32_t)); // no more runes than bytes
+    *n = 0;
+    for (int64_t i = 0; i < s.len; (*n)++) {
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &rs[*n]);
+    }
+
+    return rs;
+}
+
+static bool ascii(sn_string s) {
+    for (int64_t i = 0; i < s.len; i++) {
+        if (s.ptr[i] >= 0x80) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// whole maps every rune of s by the full case mapping of kind.
+static sn_string whole(sn_string s, int kind) {
+    sn_check_string(s);
+    if (ascii(s)) {
+        return asciiCase(s, kind == SN_UC_UPPER);
+    }
+
+    int64_t n;
+    int32_t *rs = decoded(s, &n);
+    sn_string out = cased(s, kind, rs, n, NULL);
+    sn_free(rs);
+    return out;
+}
+
+sn_string sn_to_upper(sn_string s) { return whole(s, SN_UC_UPPER); }
+sn_string sn_to_lower(sn_string s) { return whole(s, SN_UC_LOWER); }
+
+// sn_strings_toTitle title-cases s as Unicode's toTitlecase does: in
+// each word, by the word boundaries of annex 29, the first cased letter
+// to its full title case mapping and every other rune to lower case, so
+// "straße ﬁx" is "Straße Fix".
+sn_string sn_strings_toTitle(sn_string s) {
+    sn_check_string(s);
+    int64_t n;
+    int32_t *rs = decoded(s, &n);
+    uint8_t *kinds = sn_alloc((size_t)(n > 0 ? n : 1));
+    int64_t k = 0;
+    for (int64_t at = 0; at < s.len;) {
+        int64_t end = at + sn_unicode__segment_next(s, at, 1);
+        bool first = true;
+        for (int64_t i = at; i < end; k++) {
+            int32_t r;
+            i += sn_utf8_decode(s.ptr + i, end - i, &r);
+            bool title = first && sn_uc_cased(r);
+            first = first && !title;
+            kinds[k] = title ? SN_UC_TITLE : SN_UC_LOWER;
+        }
+
+        at = end;
+    }
+
+    sn_string out = cased(s, SN_UC_LOWER, rs, n, kinds);
+    sn_free(kinds);
+    sn_free(rs);
+    return out;
+}
+
+// sn_strings_toValidUTF8 copies s with each run of bytes that are not
+// UTF-8 replaced by rep, once a run.
+sn_string sn_strings_toValidUTF8(sn_string s, sn_string rep) {
+    sn_check_string(s);
+    sn_check_string(rep);
+    int64_t size = 0;
+    uint8_t *p = NULL;
+    for (int pass = 0; pass < 2; pass++) {
+        int64_t at = 0;
+        bool bad = false;
+        for (int64_t i = 0; i < s.len;) {
+            int32_t r;
+            int w = sn_utf8_decode(s.ptr + i, s.len - i, &r);
+            if (r == 0xFFFD && w == 1) {
+                if (!bad) {
+                    if (pass == 1) {
+                        memcpy(p + at, rep.ptr, (size_t)rep.len);
+                    }
+
+                    at += rep.len;
+                }
+
+                bad = true;
+            } else {
+                if (pass == 1) {
+                    memcpy(p + at, s.ptr + i, (size_t)w);
+                }
+
+                at += w;
+                bad = false;
+            }
+
+            i += w;
+        }
+
+        if (pass == 0) {
+            size = at;
+            p = sn_alloc((size_t)(size > 0 ? size : 1));
+        }
+    }
+
+    return SN_OWNED(p, size);
+}
+
+// sn_string_from_rune and sn_string_from_runes build the string of one
+// rune or of a []rune, U+FFFD for a value that is not a code point: the
+// conversions string(r) and string(rs).
+sn_string sn_string_from_rune(int32_t r) {
+    uint8_t *p = sn_alloc(4);
+    return SN_OWNED(p, sn_utf8_encode(r, p));
+}
+
+sn_string sn_string_from_runes(sn_slice rs) {
+    const int32_t *r = rs.ptr;
+    uint8_t tmp[4];
+    int64_t size = 0;
+    for (int64_t i = 0; i < rs.len; i++) {
+        size += sn_utf8_encode(r[i], tmp);
+    }
+
+    uint8_t *p = sn_alloc((size_t)(size > 0 ? size : 1));
+    for (int64_t i = 0, at = 0; i < rs.len; i++) {
+        at += sn_utf8_encode(r[i], p + at);
+    }
+
+    return SN_OWNED(p, size);
+}
+
+// A folder reads a string's runes through full case folding, the runes
+// of one rune's folding queued until taken.
+typedef struct {
+    sn_string s;
+    int64_t i;
+    int32_t queue[3];
+    int head, n;
+} folder;
+
+// folded takes the next rune of the folding, returning false at the
+// end of the string.
+static bool folded(folder *f, int32_t *r) {
+    if (f->head == f->n) {
+        if (f->i >= f->s.len) {
+            return false;
+        }
+
+        int32_t c;
+        f->i += sn_utf8_decode(f->s.ptr + f->i, f->s.len - f->i, &c);
+        f->n = sn_uc_special(SN_UC_FOLD, c, f->queue);
+        if (f->n == 0) {
+            f->queue[0] = sn_rune_fold(c);
+            f->n = 1;
+        }
+
+        f->head = 0;
+    }
+
+    *r = f->queue[f->head++];
+    return true;
+}
+
+// sn_strings_equalIgnoreCase reports whether s and t are equal under full
+// case folding, statuses C and F of CaseFolding.txt: Unicode's default
+// caseless match.
+bool sn_strings_equalIgnoreCase(sn_string s, sn_string t) {
+    folder a = {s, 0, {0}, 0, 0}, b = {t, 0, {0}, 0, 0};
+    for (;;) {
+        int32_t x, y;
+        bool more = folded(&a, &x), other = folded(&b, &y);
+        if (more != other) {
+            return false;
+        }
+
+        if (!more) {
+            return true;
+        }
+
+        if (x != y) {
+            return false;
+        }
+    }
+}
 
 // ascii_space is Go's asciiSpace: the white space below 0x80, by byte.
 static const uint8_t ascii_space[256] = {['\t'] = 1, ['\n'] = 1, ['\v'] = 1, ['\f'] = 1, ['\r'] = 1, [' '] = 1};
@@ -405,6 +622,25 @@ void sn_fields(sn_string s, sn_slice *out) {
             sn_string field = SN_STR(s.ptr + start, i - start);
             sn_slice_push(out, &field, sizeof field);
         }
+    }
+}
+
+// sn_runes writes the runes of s into a new slice of exactly their
+// number, read by the decoder a range over a string uses.
+void sn_runes(sn_string s, sn_slice *out) {
+    sn_check_string(s);
+    int64_t n = 0;
+    int32_t r;
+    for (int64_t i = 0; i < s.len; n++) {
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
+    }
+
+    out->ptr = n > 0 ? sn_alloc((size_t)n * sizeof(int32_t)) : NULL;
+    out->len = n;
+    out->cap = n;
+    int32_t *at = out->ptr;
+    for (int64_t i = 0, k = 0; i < s.len; k++) {
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &at[k]);
     }
 }
 

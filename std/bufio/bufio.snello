@@ -36,7 +36,7 @@
 // between the program and the writer or reader under it, with no copy.
 package bufio
 
-import "io"
+import ("io"; "unicode/utf8")
 
 // A Writer collects what is written to it and writes it to the writer
 // under it in blocks, when its buffer is full and on Flush. It is made
@@ -54,8 +54,9 @@ struct Writer<W: io.Writer> impl io.Writer {
 struct Reader<R: io.Reader> impl io.Reader {
 	r   mut R
 	buf []byte // what was read and not handed out lies from rp up to wp
-	rp  int
-	wp  int
+	rp     int
+	wp     int
+	unread int // the width of the rune the last ReadRune returned, which UnreadRune can step back over, or -1
 }
 
 // A Scanner reads a reader line by line: Scan reads the next line, and
@@ -104,7 +105,7 @@ func NewWriterSize<W: io.Writer>(w mut W, size int) Writer<W> {
 // NewReader returns a Reader that reads from r, borrowed for as long as
 // the Reader lives.
 func NewReader<R: io.Reader>(r mut R) Reader<R> {
-	return Reader<R>{r: r, buf: make([]byte, blockSize), rp: 0, wp: 0}
+	return Reader<R>{r: r, buf: make([]byte, blockSize), rp: 0, wp: 0, unread: -1}
 }
 
 // NewScanner returns a Scanner over r, borrowed for as long as the
@@ -286,6 +287,7 @@ func (r mut Reader<R>) Get() mut R {
 // at the end of the input. A p at least as large as the buffer, when it
 // holds nothing, is read into directly. It is io.Reader's method.
 func (r mut Reader<R>) Read(p mut []byte) Result<int, io.Error> {
+	r.unread = -1
 	if len(p) == 0 {
 		return Ok(0)
 	}
@@ -312,6 +314,7 @@ func (r mut Reader<R>) Read(p mut []byte) Result<int, io.Error> {
 
 // ReadByte returns the next byte, or None at the end of the input.
 func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
+	r.unread = -1
 	if r.rp == r.wp && !r.fill()? {
 		return Ok(None)
 	}
@@ -321,11 +324,50 @@ func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
 	return Ok(Some(c))
 }
 
+// ReadRune returns the next rune and how many bytes it took, or None at
+// the end of the input. A byte that does not start a valid UTF-8
+// sequence reads as U+FFFD of width one, as a range over a string reads
+// it. It asks the reader under it for more only while the bytes it has
+// are the start of a rune cut short, so a rune typed at a terminal, or
+// bytes already no rune's start, are returned without waiting.
+func (r mut Reader<R>) ReadRune() Result<(rune, int)?, io.Error> {
+	r.unread = -1
+	for !utf8.FullRune(r.buf[r.rp:r.wp]) {
+		before := r.wp - r.rp
+		if !r.fill()? || r.wp - r.rp == before {
+			break
+		}
+	}
+
+	if r.rp == r.wp {
+		return Ok(None)
+	}
+
+	c, n := utf8.DecodeRune(r.buf[r.rp:r.wp])
+	r.rp += n
+	r.unread = n
+	return Ok(Some((c, n)))
+}
+
+// UnreadRune puts back the rune the last call returned, so the next
+// read gives it again, when that call was ReadRune; after any other
+// call it returns false and changes nothing.
+func (r mut Reader<R>) UnreadRune() bool {
+	if r.unread < 0 || r.rp < r.unread {
+		return false
+	}
+
+	r.rp -= r.unread
+	r.unread = -1
+	return true
+}
+
 // ReadString reads up to and including the first delim and returns
 // what it read, delim included; at the end of the input it returns
 // what was left, and None once nothing is. A later call asks the
 // reader under it again, and gives what has arrived since.
 func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
+	r.unread = -1
 	long := []byte{} // the first parts of a line longer than the buffer
 	for {
 		i := indexByte(r.buf[r.rp:r.wp], delim)

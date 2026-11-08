@@ -339,7 +339,9 @@ func paramHint(t Type) Type {
 }
 
 // conversion checks T(x): between number types, between a declared
-// type and its underlying type, and between string and []byte.
+// type and its underlying type, between string and []byte, and from a
+// rune or a []rune to a string, its UTF-8. A rune constant converts as
+// a rune, not as the string's expected type.
 func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 	if len(e.Args) != 1 {
 		c.errorf(e.Lparen, "a conversion takes one argument")
@@ -347,20 +349,26 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 		return invalidOperand
 	}
 
-	x := c.expr(e.Args[0], t)
+	hint := t
+	if isString(t) {
+		hint = nil // string(r): the operand is typed by itself, a character literal as a rune
+	}
+
+	x := c.expr(e.Args[0], hint)
 	if x.mode == invalid || t == Typ[Invalid] {
 		return operand{value, t, nil, nil}
 	}
 
 	v := valueType(x)
-	if r, ok := x.typ.(*Ref); ok && (isString(r.elem) || isByteSlice(r.elem)) {
-		v = r.elem // a conversion between a string and its bytes copies, so it reads a borrowed operand as well
+	if r, ok := x.typ.(*Ref); ok && (isString(r.elem) || isByteSlice(r.elem) || isRuneSlice(r.elem)) {
+		v = r.elem // a conversion between a string and its bytes or runes copies, so it reads a borrowed operand as well
 	}
 
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
 	case Identical(v.Underlying(), t.Underlying()):
 	case isString(v) && isByteSlice(t), isByteSlice(v) && isString(t):
+	case isRune(v) && isString(t), isRuneSlice(v) && isString(t):
 	default:
 		c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String())
 	}

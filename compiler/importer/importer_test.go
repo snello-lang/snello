@@ -65,7 +65,10 @@ func TestImports(t *testing.T) {
 		{"import \"io\"\nfunc f() io.Error { return io.Error{Op: \"open\", Path: \"p\", Msg: \"m\", kind: Other} }", []string{"3:70: kind of io.Error is not exported", "3:76: undefined: Other"}},
 		{"import (\"io\"; \"os\")\nfunc f(p ref string) Result<string, error> { return Ok(os.ReadToString(p)?) }", []string{"? cannot pass on an error of type io.Error from a function returning Result<string, error>"}},
 		{"import (\"strconv\"; \"strings\")\nfunc f(xs ref []string) Result<int, strconv.Error> { var b strings.Builder; b.WriteString(strings.Join(xs, \",\")); b.WriteByte('!'); return strconv.Atoi(b.String()) }", nil},
-		{"import \"strings\"\nfunc f(s ref string) int { n := 0; for w := range strings.Fields(s) { n += w.Len() }; return n }", nil}, // Fields yields borrows into s
+		{"import \"strings\"\nfunc f(s ref string) int { n := 0; for w := range strings.Fields(s) { n += w.Len() }; return n }", nil},                                                                                          // Fields yields borrows into s
+		{"import (\"unicode\"; \"unicode/utf8\")\nfunc f(r rune) bool { p := []byte{}; utf8.AppendRune(mut p, unicode.ToUpper(r)); c, n := utf8.DecodeRune(ref p); return unicode.IsLetter(c) && n == utf8.RuneLen(c) }", nil}, // a package two levels down, named by its last element
+		{"import \"unicode/utf8\"\nfunc f(p ref []byte) int { var r rune = 0; return utf8.decode(p, mut r) }", []string{"name decode not exported by package utf8"}},
+		{"import \"unicode/nosuch\"\nfunc f() {}", []string{"package unicode/nosuch is not in the standard library"}},
 		{"import \"strconv\"\nfunc f(s ref string) int { v := 0.0; return strconv.parseFloat(s, mut v) }", []string{"name parseFloat not exported by package strconv"}},
 		{"import \"strconv\"\nfunc f(e strconv.Error) string { return e.Func.Clone() + e.Error() }", nil},
 		{"import (\"fmt\"; \"os\")\nfunc f(n int) { fmt.Fprintln(mut os.Stderr(), \"n\", n); fmt.Fprintf(mut os.Stdout(), \"%d\\n\", n) }", nil},

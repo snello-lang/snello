@@ -323,6 +323,18 @@ func isMap(t Type) bool {
 	return ok
 }
 
+// isRune reports whether t is rune, i32, or a type declared over it.
+func isRune(t Type) bool {
+	b, ok := t.Underlying().(*Basic)
+	return ok && b.kind == Int32
+}
+
+// isRuneSlice reports whether t is []rune.
+func isRuneSlice(t Type) bool {
+	s, ok := t.Underlying().(*Slice)
+	return ok && isRune(s.elem)
+}
+
 func isByteSlice(t Type) bool {
 	s, ok := t.Underlying().(*Slice)
 	if !ok {

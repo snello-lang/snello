@@ -425,10 +425,54 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	case *types.Chan:
 		e.rangeChan(s, e.load("ptr", p), u.Elem())
 	default:
+		if isString(t) {
+			e.rangeString(s, p)
+			break
+		}
+
 		e.rangeIndexed(s, p, t, consume)
 	}
 
 	e.pop(s.Body.Rbrace)
+}
+
+// rangeString writes a loop over the runes of the string at p: each
+// step decodes the rune at the offset and moves on by its width, which
+// the step after the body, where a continue goes, adds.
+func (e *Emitter) rangeString(s *ast.RangeStmt, p string) {
+	base := e.load("ptr", e.gep("%sn_string", p, 0))
+	n := e.load("i64", e.gep("%sn_string", p, 1))
+	i, w, r := e.slot("i64"), e.slot("i64"), e.slot("i32")
+	e.store(value{"i64", "0"}, i)
+	cond, body, post, end := e.block("range.cond"), e.block("range.body"), e.block("range.post"), e.block("range.end")
+	e.jump(cond)
+	e.label(cond)
+	cur := e.load("i64", i)
+	more := e.op("icmp slt i64 "+cur.s+", "+n.s, "i1")
+	e.branch(more.s, body, end)
+	e.label(body)
+	at := e.elem("i8", base.s, cur.s)
+	left := e.op("sub i64 "+n.s+", "+cur.s, "i64")
+	e.declare("sn_utf8_decode", "declare i32 @sn_utf8_decode(ptr, i64, ptr)")
+	width := e.op("call i32 @sn_utf8_decode(ptr "+at+", i64 "+left.s+", ptr "+r+")", "i32")
+	e.store(e.op("sext i32 "+width.s+" to i64", "i64"), w)
+	e.fn.loops = append(e.fn.loops, loop{next: post, end: end, frame: len(e.fn.frames)})
+	e.push(true)
+	e.rangeVar(s.Key, s.Tok, e.spill(cur), types.Typ[types.Int], false)
+	e.rangeVar(s.Value, s.Tok, r, types.Typ[types.Rune], false)
+	e.stmts(s.Body.List)
+	if !e.fn.terminated {
+		e.pop(s.Body.Rbrace)
+		e.jump(post)
+	} else {
+		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+	}
+
+	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
+	e.label(post)
+	e.store(e.op("add i64 "+cur.s+", "+e.load("i64", w).s, "i64"), i)
+	e.jump(cond)
+	e.label(end)
 }
 
 // rangeIndexed writes a range over a slice, an array or a string.

@@ -1,0 +1,131 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package unicode_test
+
+import ("expect"; "testing"; "unicode")
+
+func TestClasses() {
+	testing.Run("letter", func() {
+		expect.True(unicode.IsLetter('a') && unicode.IsLetter('Z') && unicode.IsLetter('é') && unicode.IsLetter('Ж') && unicode.IsLetter('世'))
+		expect.False(unicode.IsLetter('9') || unicode.IsLetter(' ') || unicode.IsLetter('!'))
+	})
+	testing.Run("digit", func() {
+		expect.True(unicode.IsDigit('0') && unicode.IsDigit('9') && unicode.IsDigit(0x0663)) // ARABIC-INDIC DIGIT THREE
+		expect.False(unicode.IsDigit('a') || unicode.IsDigit(0x00B2))                       // SUPERSCRIPT TWO is a number, No, not a decimal digit
+	})
+	testing.Run("space", func() {
+		expect.True(unicode.IsSpace(' ') && unicode.IsSpace('\t') && unicode.IsSpace('\n') && unicode.IsSpace(0x00A0) && unicode.IsSpace(0x3000))
+		expect.False(unicode.IsSpace('a') || unicode.IsSpace(0x200B)) // ZERO WIDTH SPACE has no White_Space
+	})
+	testing.Run("case", func() {
+		expect.True(unicode.IsUpper('A') && unicode.IsUpper('Ж') && unicode.IsLower('a') && unicode.IsLower('ж'))
+		expect.False(unicode.IsUpper('a') || unicode.IsLower('A') || unicode.IsUpper('1') || unicode.IsLower('世'))
+	})
+	testing.Run("print", func() {
+		expect.True(unicode.IsPrint('a') && unicode.IsPrint(' ') && unicode.IsPrint('€'))
+		expect.False(unicode.IsPrint('\t') || unicode.IsPrint(0x0000) || unicode.IsPrint(0x00A0))
+	})
+}
+
+func TestCategories() {
+	testing.Run("title", func() { expect.True(unicode.IsTitle(0x01C5) && !unicode.IsTitle('A')) }) // ǅ
+	testing.Run("mark", func() { expect.True(unicode.IsMark(0x0301) && unicode.IsMark(0x093E) && !unicode.IsMark('a')) })
+	testing.Run("number", func() { expect.True(unicode.IsNumber('7') && unicode.IsNumber(0x00B2) && unicode.IsNumber(0x216B) && !unicode.IsNumber('a')) }) // ², Ⅻ
+	testing.Run("punct", func() { expect.True(unicode.IsPunct('!') && unicode.IsPunct(0x00BF) && unicode.IsPunct(0x3002) && !unicode.IsPunct('+')) }) // ¿, 。
+	testing.Run("symbol", func() { expect.True(unicode.IsSymbol('+') && unicode.IsSymbol('€') && unicode.IsSymbol(0x1F600) && !unicode.IsSymbol('a')) })
+	testing.Run("control", func() { expect.True(unicode.IsControl('\n') && unicode.IsControl(0x007F) && unicode.IsControl(0x0085) && !unicode.IsControl(' ')) })
+	testing.Run("graphic", func() { expect.True(unicode.IsGraphic(' ') && unicode.IsGraphic(0x3000) && unicode.IsGraphic('a') && !unicode.IsGraphic('\t')) })
+	testing.Run("name", func() {
+		expect.Equal(ref unicode.Category('A'), "Lu")
+		expect.Equal(ref unicode.Category(0x0663), "Nd")
+		expect.Equal(ref unicode.Category(0x0378), "Cn") // unassigned
+		expect.Equal(ref unicode.Category(0xE000), "Co")
+	})
+}
+
+// The derived properties go beyond a category: Ⓐ is upper case and a
+// symbol, a vowel sign is alphabetic and a mark.
+func TestDerived() {
+	expect.True(unicode.IsUpper(0x24B6) && !unicode.IsLetter(0x24B6)) // Ⓐ
+	expect.True(unicode.IsLower(0x00AA))                              // ª
+	expect.True(unicode.IsAlphabetic(0x093E) && !unicode.IsLetter(0x093E)) // DEVANAGARI VOWEL SIGN AA
+	expect.True(unicode.IsAlphabetic('a') && !unicode.IsAlphabetic('1'))
+	expect.True(unicode.IsEmoji(0x1F600) && unicode.IsEmoji('#') && unicode.IsEmoji('7')) // the keycap bases are Emoji
+	expect.False(unicode.IsEmoji('a'))
+	expect.True(unicode.IsIDStart('a') && unicode.IsIDStart('ж') && unicode.IsIDStart('世'))
+	expect.False(unicode.IsIDStart('1') || unicode.IsIDStart('_'))
+	expect.True(unicode.IsIDContinue('1') && unicode.IsIDContinue('_') && unicode.IsIDContinue(0x0301))
+	expect.False(unicode.IsIDContinue('-') || unicode.IsIDContinue(' '))
+}
+
+func TestValues() {
+	expect.Equal(ref expect.IsSome(unicode.DigitValue('7')), ref 7)
+	expect.Equal(ref expect.IsSome(unicode.DigitValue(0x0663)), ref 3) // ٣
+	expect.IsNone(unicode.DigitValue(0x00B2))                          // ² is a number, not a decimal digit
+	expect.IsNone(unicode.DigitValue('a'))
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x216B)), ref 12.0) // Ⅻ
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x00BD)), ref 0.5)  // ½
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x00B2)), ref 2.0)
+	expect.IsNone(unicode.NumericValue('a'))
+	expect.Equal(ref unicode.Version, "18.0.0")
+}
+
+func TestScripts() {
+	expect.Equal(ref unicode.Script('a'), "Latin")
+	expect.Equal(ref unicode.Script('Ж'), "Cyrillic")
+	expect.Equal(ref unicode.Script('世'), "Han")
+	expect.Equal(ref unicode.Script('1'), "Common")
+	expect.Equal(ref unicode.Script(0x0301), "Inherited")
+	expect.Equal(ref unicode.Script(0x0378), "Unknown")
+	expect.True(unicode.InScript('α', "Greek"))
+	expect.True(unicode.InScript('α', "Grek")) // by its four-letter code
+	expect.False(unicode.InScript('a', "Greek"))
+	expect.Equal(ref unicode.ScriptCode('a'), "Latn")
+	expect.Equal(ref unicode.ScriptCode('世'), "Hani")
+	expect.Equal(ref unicode.ScriptCode('1'), "Zyyy")
+	expect.Equal(ref unicode.ScriptCode(0x0378), "Zzzz")
+}
+
+func TestMappings() {
+	expect.Equal(ref unicode.ToUpper('a'), ref 'A')
+	expect.Equal(ref unicode.ToUpper('é'), ref 'É')
+	expect.Equal(ref unicode.ToLower('Ж'), ref 'ж')
+	expect.Equal(ref unicode.ToUpper('1'), ref '1')
+	expect.Equal(ref unicode.ToLower('世'), ref '世')
+	expect.Equal(ref unicode.ToTitle(0x01C6), ref 0x01C5) // ǆ to ǅ
+	expect.Equal(ref unicode.ToTitle('a'), ref 'A')
+	expect.Equal(ref unicode.CaseFold('K'), ref 'k')
+	expect.Equal(ref unicode.CaseFold(0x212A), ref 'k') // KELVIN SIGN
+	expect.Equal(ref unicode.CaseFold('k'), ref 'k')
+}
+
+// A value that is not a code point is none of the classes and maps to
+// itself.
+func TestNotACodePoint() {
+	for _, r := range []rune{-1, unicode.MaxRune + 1} {
+		expect.False(unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || unicode.IsUpper(r) || unicode.IsLower(r) || unicode.IsPrint(r))
+		expect.False(unicode.IsTitle(r) || unicode.IsMark(r) || unicode.IsNumber(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) || unicode.IsControl(r) || unicode.IsGraphic(r))
+		expect.Equal(ref unicode.Category(r), "Cn")
+		expect.Equal(ref unicode.Script(r), "Unknown")
+		expect.False(unicode.IsAlphabetic(r) || unicode.IsEmoji(r) || unicode.IsIDStart(r) || unicode.IsIDContinue(r))
+		expect.IsNone(unicode.DigitValue(r))
+		expect.IsNone(unicode.NumericValue(r))
+		expect.Equal(ref unicode.ToUpper(r), ref r)
+		expect.Equal(ref unicode.ToLower(r), ref r)
+	}
+}
+
+func BenchmarkIsLetter() {
+	n := 0
+	for testing.Loop() {
+		for _, r := range "Snello è veloce, 世界" {
+			if unicode.IsLetter(r) {
+				n += 1
+			}
+		}
+	}
+
+	expect.True(n > 0)
+}

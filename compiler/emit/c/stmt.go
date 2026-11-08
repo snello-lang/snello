@@ -441,6 +441,12 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
+	if isString(t) {
+		e.rangeString(s, place, i)
+		e.line("}")
+		return
+	}
+
 	e.line("for (sn_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
 	elem := place + ".ptr[" + i + "]"
 	var elemType types.Type = types.Typ[types.Uint8]
@@ -465,6 +471,23 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.stmts(s.Body.List)
 	e.pop(s.Body.Rbrace)
 	e.line("}")
+	e.line("}")
+}
+
+// rangeString writes a loop over the runes of the string at place: each
+// step decodes the rune at the offset i and moves on by its width, so a
+// continue, which runs the loop's step, moves on as well.
+func (e *Emitter) rangeString(s *ast.RangeStmt, place, i string) {
+	w, r := e.temp(), e.temp()
+	e.line("sn_int " + w + " = 0;")
+	e.line("for (sn_int " + i + " = 0; " + i + " < " + place + ".len; " + i + " += " + w + ") {")
+	e.line("int32_t " + r + ";")
+	e.line(w + " = sn_utf8_decode((const uint8_t *)" + place + ".ptr + " + i + ", " + place + ".len - " + i + ", &" + r + ");")
+	e.push(true)
+	e.rangeVar(s.Key, s.Tok, i, types.Typ[types.Int], false)
+	e.rangeVar(s.Value, s.Tok, r, types.Typ[types.Rune], false)
+	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
 	e.line("}")
 }
 

@@ -900,9 +900,26 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 		return "sn_string_to_bytes(" + v + ")"
 	case isByteSlice(from) && isString(to):
 		return "sn_bytes_to_string(" + v + ")"
+	case isRuneSlice(from) && isString(to):
+		t := e.spill(v, from, x.Pos())
+		return "sn_string_from_runes((sn_slice){" + t + ".ptr, " + t + ".len, " + t + ".cap})"
+	case isRune(from) && isString(to):
+		return "sn_string_from_rune(" + v + ")"
 	}
 
 	return "((" + e.cType(to, x.Pos()) + ")(" + v + "))"
+}
+
+// isRune reports whether t is rune, i32, or a type declared over it.
+func isRune(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.Int32
+}
+
+// isRuneSlice reports whether t is []rune.
+func isRuneSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	return ok && isRune(s.Elem())
 }
 
 // isByteSlice reports whether t is []byte.

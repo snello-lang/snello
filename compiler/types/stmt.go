@@ -471,6 +471,8 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		switch {
 		case x.mode == variable && isChan(readType(x)):
 			c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
+		case x.mode == variable && isString(readType(x)):
+			c.holdRange(s, false) // a string is lent for the loop: its runes are copies, so consuming it would gain nothing
 		case held(s.X, x.mode) && !isBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
 		case lent || x.mode != value:
@@ -526,7 +528,7 @@ func rangeTypes(x operand) (key, val Type, ok bool) {
 		return t.elem, Typ[Invalid], true // one variable: the value received, owned
 	case *Basic:
 		if t.kind == String {
-			return Typ[Int], aliases[0], true
+			return Typ[Int], aliases[1], true // the offset each rune starts at, and the rune
 		}
 	}
 

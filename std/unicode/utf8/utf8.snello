@@ -1,0 +1,172 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package utf8 reads and writes runes in UTF-8, the encoding of every
+// string: how many bytes a rune takes, a rune appended as its bytes,
+// and the first rune of some bytes or of a string. A byte that does
+// not start a valid sequence reads as RuneError of width one, the rule
+// a range over a string and every string function follow.
+package utf8
+
+// RuneError is U+FFFD, the replacement rune, read where the bytes are
+// not UTF-8 and written for a value that is not a code point.
+const RuneError rune = 0xFFFD
+
+// MaxRune is the largest code point, U+10FFFF.
+const MaxRune rune = 0x10FFFF
+
+// UTFMax is the most bytes a rune takes.
+const UTFMax int = 4
+
+// RuneSelf is the first rune that takes more than one byte: below it, a
+// byte is the rune it encodes.
+const RuneSelf rune = 0x80
+
+// ValidRune reports whether r is a code point UTF-8 can hold: 0 to
+// MaxRune, the surrogates U+D800 to U+DFFF left out.
+func ValidRune(r rune) bool {
+	return RuneLen(r) > 0
+}
+
+// RuneStart reports whether b can be the first byte of a rune: any but
+// a continuation byte, 10xxxxxx.
+func RuneStart(b byte) bool {
+	return b & 0xC0 != 0x80
+}
+
+// Valid reports whether p is UTF-8 throughout.
+func Valid(p ref []byte) bool {
+	return valid(p)
+}
+
+// ValidString reports whether s is UTF-8 throughout.
+func ValidString(s ref string) bool {
+	return validString(s)
+}
+
+// RuneCount returns the number of runes in p, as a range over a string
+// reads them: each byte that starts no valid sequence one rune.
+func RuneCount(p ref []byte) int {
+	return count(p)
+}
+
+// RuneCountInString returns the number of runes in s without making
+// them a slice.
+func RuneCountInString(s ref string) int {
+	return countString(s)
+}
+
+// FullRune reports whether p begins with a whole rune, or with bytes
+// that are no rune's start and read as RuneError whatever follows:
+// false only for the start of a rune cut short, which more bytes would
+// complete.
+func FullRune(p ref []byte) bool {
+	return full(p)
+}
+
+// FullRuneInString is FullRune over a string's bytes.
+func FullRuneInString(s ref string) bool {
+	return fullString(s)
+}
+
+// DecodeLastRune returns the rune that ends p and how many bytes it
+// takes: (RuneError, 1) when p does not end with a valid sequence, and
+// (RuneError, 0) when p is empty.
+func DecodeLastRune(p ref []byte) (rune, int) {
+	var r rune = RuneError
+	n := decodeLast(p, mut r)
+	return (r, n)
+}
+
+// DecodeLastRuneInString is DecodeLastRune over a string's bytes.
+func DecodeLastRuneInString(s ref string) (rune, int) {
+	var r rune = RuneError
+	n := decodeLastString(s, mut r)
+	return (r, n)
+}
+
+// RuneLen returns how many bytes r takes in UTF-8, from one to four,
+// or -1 for a value that is not a code point: a negative one, one past
+// MaxRune, or a surrogate, U+D800 to U+DFFF.
+func RuneLen(r rune) int {
+	if r < 0 || r >= 0xD800 && r <= 0xDFFF || r > MaxRune {
+		return -1
+	}
+
+	if r < 0x80 {
+		return 1
+	}
+
+	if r < 0x800 {
+		return 2
+	}
+
+	if r < 0x10000 {
+		return 3
+	}
+
+	return 4
+}
+
+// AppendRune appends the UTF-8 bytes of r to p, and those of RuneError
+// for a value that is not a code point. The slice grows as Push grows
+// it.
+func AppendRune(p mut []byte, r rune) {
+	c := r
+	if RuneLen(r) < 0 {
+		c = RuneError
+	}
+
+	n := RuneLen(c)
+	if n == 1 {
+		p.Push(byte(c))
+		return
+	}
+
+	if n == 2 {
+		p.Push(byte(0xC0 | c >> 6))
+	} else if n == 3 {
+		p.Push(byte(0xE0 | c >> 12))
+		p.Push(byte(0x80 | c >> 6 & 0x3F))
+	} else {
+		p.Push(byte(0xF0 | c >> 18))
+		p.Push(byte(0x80 | c >> 12 & 0x3F))
+		p.Push(byte(0x80 | c >> 6 & 0x3F))
+	}
+
+	p.Push(byte(0x80 | c & 0x3F))
+}
+
+// DecodeRune returns the first rune of p and how many bytes it takes:
+// (RuneError, 1) when p does not start with a valid sequence, and
+// (RuneError, 0) when p is empty.
+func DecodeRune(p ref []byte) (rune, int) {
+	var r rune = RuneError
+	n := decode(p, mut r)
+	return (r, n)
+}
+
+// DecodeRuneInString is DecodeRune over a string's bytes.
+func DecodeRuneInString(s ref string) (rune, int) {
+	var r rune = RuneError
+	n := decodeString(s, mut r)
+	return (r, n)
+}
+
+// decode and decodeString read the first rune through the runtime's
+// one decoder, writing it to r and returning its width, zero for no
+// bytes.
+func decode(p ref []byte, r mut rune) int
+func decodeString(s ref string, r mut rune) int
+
+// The runtime's validation, counting, completeness and last rune, by
+// the same decoder.
+func valid(p ref []byte) bool
+func validString(s ref string) bool
+func count(p ref []byte) int
+func countString(s ref string) int
+func full(p ref []byte) bool
+func fullString(s ref string) bool
+func decodeLast(p ref []byte, r mut rune) int
+func decodeLastString(s ref string, r mut rune) int

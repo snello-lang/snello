@@ -671,9 +671,9 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 		return e.rt("sn_has_suffix", "i1", s, args[0])
 	case "Contains":
 		return e.rt("sn_string_contains", "i1", s, args[0])
-	case "Fields", "Lines", "Split":
+	case "Fields", "Lines", "Split", "Runes":
 		out := e.slot("%sn_slice")
-		name := map[string]string{"Fields": "sn_fields", "Lines": "sn_lines", "Split": "sn_split"}[sel.Sel.Name]
+		name := map[string]string{"Fields": "sn_fields", "Lines": "sn_lines", "Split": "sn_split", "Runes": "sn_runes"}[sel.Sel.Name]
 		e.rt(name, "void", append(append([]value{s}, args...), value{"ptr", out})...)
 		return e.load("%sn_slice", out)
 	case "SplitOnce":

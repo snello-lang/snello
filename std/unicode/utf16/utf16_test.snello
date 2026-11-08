@@ -1,0 +1,72 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package utf16_test
+
+import ("expect"; "testing"; "unicode/utf16")
+
+func TestRuneLen() {
+	expect.Equal(ref utf16.RuneLen('a'), ref 1)
+	expect.Equal(ref utf16.RuneLen(0xFFFF), ref 1)
+	expect.Equal(ref utf16.RuneLen(0x10000), ref 2)
+	expect.Equal(ref utf16.RuneLen(0xD800), ref -1)
+	expect.Equal(ref utf16.RuneLen(0x110000), ref -1)
+	expect.True(utf16.IsSurrogate(0xD800) && utf16.IsSurrogate(0xDFFF))
+	expect.False(utf16.IsSurrogate(0xE000) || utf16.IsSurrogate('a'))
+}
+
+func TestPair() {
+	r1, r2 := utf16.EncodeRune(0x1F600)
+	expect.Equal(ref r1, ref 0xD83D)
+	expect.Equal(ref r2, ref 0xDE00)
+	expect.Equal(ref utf16.DecodeRune(0xD83D, 0xDE00), ref 0x1F600)
+	expect.Equal(ref utf16.DecodeRune('a', 0xDE00), ref 0xFFFD)
+	r1, r2 = utf16.EncodeRune('a') // one unit: no pair
+	expect.Equal(ref r1, ref 0xFFFD)
+	expect.Equal(ref r2, ref 0xFFFD)
+}
+
+func TestEncodeDecode() {
+	units := utf16.Encode(ref []rune{'a', 'é', 0x1F600})
+	expect.EqualSlice(ref units, ref []u16{97, 233, 0xD83D, 0xDE00})
+	expect.EqualSlice(ref utf16.Decode(ref units), ref []rune{'a', 'é', 0x1F600})
+	expect.EqualSlice(ref utf16.Decode(ref []u16{0xD83D, 97, 0xDE00}), ref []rune{0xFFFD, 'a', 0xFFFD}) // unpaired surrogates
+	p := []u16{}
+	utf16.AppendRune(mut p, 0x1F600)
+	utf16.AppendRune(mut p, 0xD800) // a surrogate alone is U+FFFD
+	expect.EqualSlice(ref p, ref []u16{0xD83D, 0xDE00, 0xFFFD})
+}
+
+func TestBytes() {
+	expect.EqualSlice(ref utf16.EncodeBytes("a😀", utf16.BigEndian, false), ref []byte{0, 97, 0xD8, 0x3D, 0xDE, 0x00})
+	expect.EqualSlice(ref utf16.EncodeBytes("a", utf16.LittleEndian, true), ref []byte{0xFF, 0xFE, 97, 0}) // the byte-order mark first
+	expect.Equal(ref utf16.DecodeBytes(ref []byte{0, 97, 0xD8, 0x3D, 0xDE, 0x00}, utf16.BigEndian), "a😀")
+	expect.Equal(ref utf16.DecodeBytes(ref []byte{0xFF, 0xFE, 97, 0}, utf16.BigEndian), "a") // the mark overrides the order given, and is dropped
+	expect.Equal(ref utf16.DecodeBytes(ref []byte{0, 97, 0}, utf16.BigEndian), "a\uFFFD")   // a last byte without its pair
+	expect.Equal(ref utf16.DecodeBytes(ref []byte{}, utf16.LittleEndian), "")
+	s := "Snello è veloce, 世界 😀"
+	expect.Equal(ref utf16.DecodeBytes(ref utf16.EncodeBytes(ref s, utf16.LittleEndian, true), utf16.BigEndian), ref s)
+}
+
+// Every code point encodes and decodes back.
+func TestRoundTrip() {
+	var r rune = 0
+	for r <= 0x10FFFF {
+		if !utf16.IsSurrogate(r) {
+			back := utf16.Decode(ref utf16.Encode(ref []rune{r}))
+			if len(back) != 1 || back[0] != r {
+				expect.EqualSlice(ref back, ref []rune{r})
+			}
+		}
+
+		r += 0x3F // every 63rd, across both planes and the pairs' ranges
+	}
+}
+
+func BenchmarkEncode() {
+	runes := "Snello è veloce, 世界 😀".Runes()
+	for testing.Loop() {
+		expect.True(len(utf16.Encode(ref runes)) > 0)
+	}
+}
