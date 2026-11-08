@@ -119,8 +119,8 @@ type Checker struct {
 	defaults      []traitDefault
 
 	// The move pass (move.go): the places moved on the current path,
-	// whether the path can reach this point, the loops, switches and
-	// selects open here, and two flags for how a place is being read.
+	// whether the path can reach this point, the loops and selects open
+	// here, and two flags for how a place is being read.
 	moved      []move
 	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
 	dead       bool

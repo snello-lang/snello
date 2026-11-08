@@ -1,6 +1,6 @@
 # 3. Basics
 
-Status: implemented. The syntax is parsed (stage 0), the types and names are checked (stage 1, task 1.4, `snello check`), and everything here except `switch` and `spawn` compiles to native code (stage 1, task 1.5).
+Status: implemented. The syntax is parsed (stage 0), the types and names are checked (stage 1, task 1.4, `snello check`), and everything here except `spawn` compiles to native code (stage 1, task 1.5).
 
 This chapter is the shape of a Snello program: files, names, values, functions and control flow. Everything later in the book is built from these parts.
 
@@ -103,7 +103,7 @@ fmt.Println(count)                 // 3
 
 ## Control flow
 
-`if`, `for`, `switch`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. `break` ends the innermost loop and `continue` goes to its next iteration, wherever they stand inside it: a `switch`, a `match` or a `select` is not a loop and does not catch them, and outside a loop both are errors. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
+`if`, `for`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. Snello has no `switch`: `match`, chapter 4, does its work, on a value, `match x { 1 | 2 => ... }`, checking that every case is covered, and with no value on conditions, `match { x > 0 => ... }`, the first that holds; the word is reserved, and the compiler says so when it meets one. `break` ends the innermost loop and `continue` goes to its next iteration, wherever they stand inside it: a `match` or a `select` is not a loop and does not catch them, and outside a loop both are errors. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
 
 ```snello
 for i := 0; i < len(s); i += 1 {

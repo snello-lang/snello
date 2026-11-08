@@ -2,20 +2,22 @@
 
 Goal: Snello has what a programmer expects of any standard programming language at the bare minimum, as `language-gaps.md` lists it, decided 2026-11-08. Every task keeps the memory safety the borrow checker enforces and brings in no garbage collector, and says how in its design before any code: a feature that only adds refusals is safe by construction, and every value a feature makes has one owner and is freed by its `Drop`. Tasks 11.1 and 11.2 come before the rest of stage 9, since 11.2 changes `strings`, `sync`, `rc` and `arena`, which tasks 9.7 and 9.13 build on. The rest come before the release of stage 10. `Eq` on tuples and options in generic code, the one gap of the document not here, is task 9.7's.
 
-## Task 11.1: No `switch`
+## Task 11.1: No `switch`, and `match` on conditions
 
-**Description:** Snello does not support `switch`, decided 2026-11-08: `match` is the one way to branch on a value, and checks that every case is covered, and Go's tagless `switch` is an `if` and `else if` chain. Nothing in the library, the examples or `lib/` uses it, and neither backend compiles it. The word stays reserved, so a Go habit meets a clear error and not a confusing one.
+**Description:** Snello does not support `switch`, decided 2026-11-08: `match` is the one way to branch on a value, and checks that every case is covered. What Go's `switch` with no value does, `match` does with no value, decided the same day: `match { score >= 90 => "A", score >= 80 => "B", _ => "F" }` tries each arm's condition in turn and runs the first that holds, as Kotlin's `when` with no subject and Lisp's `cond` do; each condition is a `bool`, the arm `_` is required and last, since the compiler cannot tell whether conditions cover every case, and an arm is its condition alone. It is parsed as a match on the unit, each condition the guard of a wildcard, so the checker and both backends need nothing new. Nothing in the library, the examples or `lib/` used `switch`, and neither backend compiled it. The word stays reserved, so a Go habit meets a clear error and not a confusing one.
 
 **Acceptance criteria:**
-- [ ] `switch` is reserved and refused by the parser with an error that names `match` and the `if` chain; the parser's and the checker's `switch` code removed, with the tests that covered it
-- [ ] The syntax note's list of what is carried over from Go, chapter 3, appendix A and appendix B say so; the gaps of task 9.6 that name `switch` point here
+- [x] `switch` is reserved and refused by the parser with an error that names both forms of `match`, wherever it stands, and skipped whole so what follows is parsed and reports its own syntax errors; the parser's, the checker's and the C emitter's `switch` code removed, and the tests that used it rewritten with `match`, so the rules they held, a `break` in a `match` or `select` leaving the loop, stay tested
+- [x] `match` with no value: parsed, checked and run through both backends, as an expression and as a statement whose arms `return`, `break`, `continue` and assign; the arms a body of their own, so a literal opens in a condition even when the match stands in a control clause; a missing `_`, an arm after it, a guard on a condition and a condition that is not a `bool` refused with their messages
+- [x] A guard moves nothing: it runs whether or not its arm is taken, and `match () { _ if eat(s) => {}, _ => keep(s) }` was accepted and dropped `s` twice, a hole found by this task; a move in a guard or a condition of a value declared before it is refused, as Rust refuses it, while a name the guard declares itself is its own to move
+- [x] The syntax note, chapters 3, 4 and 5, appendix A and appendix B say so; the gaps of task 9.6 that name `switch` point here
 
 **Verification:**
-- [ ] `go test ./compiler/...`; `go test ./...`, `make test` and `make check`
+- [x] `go test ./compiler/...`; `go test ./...`, `make test` and `make check` (2026-11-08, natively; reviewed on five axes before the pull request, its findings fixed: a guard's own names, declared inside it, are its own to move; the arms of a match parse as a body of their own; `switch` refused wherever it stands)
 
 **Dependencies:** none
-**Files:** `compiler/parser/`, `compiler/ast/`, `compiler/types/`, `compiler/emit/`, `../design/00-syntax-conventions.md`, `../book/03-basics.md`, `../book/A-keywords-and-grammar.md`, `../book/B-snello-for-go-programmers.md`
-**Scope:** S
+**Files:** `compiler/parser/`, `compiler/ast/`, `compiler/types/`, `compiler/emit/`, `../design/00-syntax-conventions.md`, `../book/03-basics.md`, `../book/04-structs-enums-match.md`, `../book/05-ownership.md`, `../book/A-keywords-and-grammar.md`, `../book/B-snello-for-go-programmers.md`
+**Scope:** M
 
 ## Task 11.2: No zero values, and no panic a caller can reach in the library
 

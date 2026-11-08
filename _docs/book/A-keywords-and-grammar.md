@@ -15,7 +15,7 @@ Thirty-one words are reserved and cannot be used as names.
 | `return` | `select` | `Self` | `spawn` | `struct` |
 | `super` | `switch` | `trait` | `type` | `var` |
 
-`Self` and `super` have meaning only inside a trait (chapter 11). `None`, `Some`, `Ok`, `Err`, `true`, `false`, the type names and the built-in functions are predeclared names, not keywords: they are visible in every file and can be shadowed, though nothing good comes of it.
+`Self` and `super` have meaning only inside a trait (chapter 11). `switch` has no meaning at all: Snello has no switch statement, `match` does its work on a value and, written with no value, on conditions, and the word is reserved so that a program written with one is told so. `None`, `Some`, `Ok`, `Err`, `true`, `false`, the type names and the built-in functions are predeclared names, not keywords: they are visible in every file and can be shadowed, though nothing good comes of it.
 
 ## Lines
 
@@ -34,7 +34,7 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 - Postfix `?` on an expression binds tighter than any prefix operator: `-x?` is `-(x?)`.
 - `??` sits below every other operator and groups to the right: `a ?? b == c` is `a ?? (b == c)`, and `a ?? b ?? c` is `a ?? (b ?? c)`. Its right side is an expression, a block, or a `return`, `break` or `continue`.
 - In a type, `<` always opens a type argument list: `arena.Index<Node>`. In an expression, `<` is less-than unless the tokens after it form a type list closed by `>` directly followed by `(` or `{`: `arena.New<Node>()`, `Stack<string>{}`. Avoid `a < b > (c)`, which reads as a call with type arguments.
-- A `{` directly after a name opens a composite literal, except in the condition of an `if`, `for`, `switch` or `match`, where it opens the body. To compare against a literal there, parenthesize it: `if x == (T{}) {`. A written-out type is never ambiguous: `for _, k := range []int{5, 3} {`.
+- A `{` directly after a name opens a composite literal, except in the condition of an `if`, `for` or `match`, where it opens the body. To compare against a literal there, parenthesize it: `if x == (T{}) {`. A written-out type is never ambiguous: `for _, k := range []int{5, 3} {`.
 - `if x := opt {` is a binding on an optional; `if x := f(); x > 0 {` is an initializer and a condition. The `;` tells them apart.
 
 ## Declarations
@@ -43,7 +43,7 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 - `var` and `const` declare one name list per keyword: `var x, y int = 1, 2`.
 - Parameter names and types: in `func(from, to NodeID, w int)` the names before a type share it; in `func(T, U) V` the identifiers are types. An identifier followed by a comma is decided by what ends its group.
 - Array lengths are integer literals.
-- A match arm is `pattern [if guard] => body`, ended by a comma or a newline. A `return` in an arm takes one expression; several values are returned as a tuple.
+- A match arm is `pattern [if guard] => body`, ended by a comma or a newline. A `match` with no value, `match {`, has arms `condition => body`, and its last arm is `_ => body`. A `return` in an arm takes one expression; several values are returned as a tuple.
 - `spawn` and `defer` take a call. `for range ch {` ranges with no variable.
 - One name on the left of `:=` or `=` takes one expression on the right; a list takes a list, `a, b := b, a`.
 - An `if` used as an expression has an `else`.

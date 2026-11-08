@@ -34,7 +34,7 @@ func (p *Parser) parseBlock() *ast.BlockStmt {
 }
 
 // parseStmtList parses statements up to a closing brace or the next
-// case of a switch or select. Each statement ends with a semicolon,
+// case of a select. Each statement ends with a semicolon,
 // usually the one the scanner inserts at the end of its line. After a
 // statement that fails, the rest of its line is skipped, and parsing
 // resumes at the next line or at a keyword that can only begin a
@@ -94,7 +94,7 @@ func (p *Parser) parseStmt() ast.Stmt {
 	case token.FOR:
 		return p.parseForStmt()
 	case token.SWITCH:
-		return p.parseSwitchStmt()
+		return p.refuseSwitch()
 	case token.SELECT:
 		return p.parseSelectStmt()
 	case token.LBRACE:
@@ -369,54 +369,50 @@ func (p *Parser) parseForStmt() ast.Stmt {
 	return &ast.ForStmt{For: pos, Init: init, Cond: cond, Post: post, Body: p.parseBlock()}
 }
 
-// parseSwitchStmt parses "switch" [Init ";"] [Tag] "{" {CaseClause} "}".
-//
-//	switch x {              SwitchStmt{Tag x}
-//	switch {                tagless
-//	switch v := f(); v {    SwitchStmt{Init, Tag}
-func (p *Parser) parseSwitchStmt() *ast.SwitchStmt {
-	s := &ast.SwitchStmt{Switch: p.expect(token.SWITCH)}
+// noSwitch is the message for a switch, which Snello does not have:
+// match does what a switch does, on a value, and with no value on
+// conditions, the first that holds.
+const noSwitch = "Snello has no switch: use match, on a value, match x { 1 | 2 => ... }, or on conditions, match { x > 0 => ... }"
+
+// refuseSwitch reports a switch and skips it whole, wherever it stands:
+// the header is parsed as the old statement's was, its init and its
+// value, so a function literal or a bracket in it is passed over as
+// one; then the body, to the matching '}'. The statements after it
+// parse and report their own syntax errors. A switch with no body ends
+// with its header's line.
+func (p *Parser) refuseSwitch() *ast.BadStmt {
+	bad := &ast.BadStmt{From: p.pos}
+	p.error(p.pos, noSwitch)
+	p.next()
 	prev := p.exprLev
 	p.exprLev = -1
-
-	var tag ast.Stmt
-	if p.tok != token.LBRACE {
-		tag = p.parseSimpleStmt()
-		if p.tok == token.SEMICOLON {
+	if p.tok != token.LBRACE && p.tok != token.RBRACE && !p.atLineEnd() {
+		p.parseSimpleStmt()
+		if p.tok == token.SEMICOLON && !p.atLineEnd() { // the ';' after an init
 			p.next()
-			s.Init = tag
-			tag = nil
 			if p.tok != token.LBRACE {
-				tag = p.parseSimpleStmt()
+				p.parseSimpleStmt()
 			}
 		}
 	}
 
-	if tag != nil {
-		s.Tag = p.condExpr(tag)
-	}
-
 	p.exprLev = prev
-	if !p.expectLbrace() {
-		return s
-	}
-
-	for p.tok == token.CASE || p.tok == token.DEFAULT {
-		c := &ast.CaseClause{Case: p.pos}
-		if p.tok == token.CASE {
-			p.next()
-			c.List = p.parseExprList(token.COLON)
-		} else {
+	if p.tok == token.LBRACE {
+		p.next()
+		p.skipTo(newKindSet()) // to the '}' that closes the body
+		if p.tok == token.RBRACE {
 			p.next()
 		}
-
-		p.expect(token.COLON)
-		c.Body = p.parseStmtList()
-		s.Body = append(s.Body, c)
 	}
 
-	p.expect(token.RBRACE)
-	return s
+	bad.To = p.pos
+	return bad
+}
+
+// atLineEnd reports whether the token is the semicolon the scanner put
+// at the end of a line, or the end of the file.
+func (p *Parser) atLineEnd() bool {
+	return p.tok == token.EOF || p.tok == token.SEMICOLON && p.lit == "\n"
 }
 
 // parseSelectStmt parses "select" "{" {CommClause} "}". Each case is a

@@ -141,7 +141,7 @@ func TestExprErrors(t *testing.T) {
 		{"func f(c bool) int { if c { return 1 } else { return 2 } }", nil},
 		{"func f() int { for { } }", nil},
 		{"func f() int { for { break } }", []string{"missing return at the end of the function"}},
-		{"func f() int { for { switch { default: break } } }", []string{"missing return at the end of the function"}}, // the break leaves the loop, so the end is reached
+		{"func f() int { for { match Some(1) { Some(_) => break, None => {} } } }", []string{"missing return at the end of the function"}}, // the break leaves the loop, so the end is reached
 		{"func f(s State) int { match s { Closed => return 0, _ => return 1 } }", nil},
 		{"func f() int { panic(\"no\") }", nil},
 		{"func f() int { os.Exit(1) }", nil},

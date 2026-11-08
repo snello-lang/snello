@@ -253,6 +253,9 @@ func (p *Parser) parseOperand() ast.Expr {
 		return p.parseIfExpr()
 	case token.MATCH:
 		return p.parseMatchExpr()
+	case token.SWITCH:
+		bad := p.refuseSwitch()
+		return &ast.BadExpr{From: bad.From, To: bad.To}
 	}
 
 	p.errorExpected(p.pos, "expression")
@@ -396,15 +399,42 @@ func (p *Parser) parseIfExpr() *ast.IfExpr {
 //	    (Connecting(n, _), Timeout) if n < 3 => Connecting(n + 1, now),
 //	    _                                    => s,
 //	}
+//
+// A match with no value, "match" "{" {Cond "=>" Body} "}", takes each
+// arm's condition in turn and runs the first that holds, ending with
+// the arm _ for when none does:
+//
+//	match {
+//	    score >= 90 => "A",
+//	    score >= 80 => "B",
+//	    _           => "F",
+//	}
+//
+// It is parsed as a match on the unit, each condition the guard of a
+// wildcard, so everything after the parser sees one shape.
 func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 	x := &ast.MatchExpr{Match: p.expect(token.MATCH)}
-	x.X = p.parseControlExpr()
+	if p.tok == token.LBRACE {
+		x.Conds = true
+		x.X = &ast.TupleExpr{Lparen: x.Match}
+	} else {
+		x.X = p.parseControlExpr()
+	}
+
 	if !p.expectLbrace() {
 		return x
 	}
 
+	prev := p.exprLev // the arms are a body of their own: a '{' in them opens a literal, wherever the match stands
+	p.exprLev = 0
+	defer func() { p.exprLev = prev }()
 	for p.tok != token.RBRACE && p.tok != token.EOF {
-		x.Arms = append(x.Arms, p.parseMatchArm())
+		if x.Conds {
+			x.Arms = append(x.Arms, p.parseCondArm())
+		} else {
+			x.Arms = append(x.Arms, p.parseMatchArm())
+		}
+
 		switch p.tok {
 		case token.COMMA, token.SEMICOLON:
 			p.next()
@@ -432,6 +462,32 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 		arm.Guard = p.parseExpr()
 	}
 
+	return p.parseArmRest(arm)
+}
+
+// parseCondArm parses an arm of a match with no value, Cond "=>" Body,
+// as the guard of a wildcard, or _ "=>" Body as the wildcard alone. The
+// condition is the arm's whole test, so an "if" after it is reported:
+// two conditions are joined with &&.
+func (p *Parser) parseCondArm() *ast.MatchArm {
+	cond := p.parseExpr()
+	arm := &ast.MatchArm{Pat: &ast.WildcardPat{Underscore: cond.Pos()}}
+	if id, ok := cond.(*ast.Ident); !ok || id.Name != "_" {
+		arm.Guard = cond
+	}
+
+	if p.tok == token.IF {
+		p.error(p.pos, "an arm of a match with no value is its condition alone: join two with &&")
+		p.next()
+		p.parseExpr()
+	}
+
+	return p.parseArmRest(arm)
+}
+
+// parseArmRest parses the "=>" and the body of an arm whose head is
+// parsed.
+func (p *Parser) parseArmRest(arm *ast.MatchArm) *ast.MatchArm {
 	if p.tok != token.FATARROW {
 		p.errorExpected(p.pos, "'=>'")
 		p.skipTo(armEnd)

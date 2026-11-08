@@ -78,6 +78,7 @@ func TestDeclErrors(t *testing.T) {
 		n    int    // total errors expected
 	}{
 		{"struct T", "expected '{', found 'newline'", 1},
+		{"switch x { case 1: a }\nfunc f() {}", "Snello has no switch: use match", 1}, // at the top level too, and the declaration after it parses
 		{"func f(a ...int, b int) {}", "can only use ... with the final parameter", 1},
 		{"struct T\nfunc f() {}", "expected '{', found 'newline'", 1},
 		{"type T struct {}", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1}, // Go's spelling

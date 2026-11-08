@@ -78,8 +78,6 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		return c.forStmt(s)
 	case *ast.RangeStmt:
 		c.rangeStmt(s)
-	case *ast.SwitchStmt:
-		return c.switchStmt(s)
 	case *ast.SelectStmt:
 		return c.selectStmt(s)
 	}
@@ -578,46 +576,6 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 	}
 }
 
-func (c *Checker) switchStmt(s *ast.SwitchStmt) bool {
-	c.openScope()
-	defer c.closeScope()
-	if s.Init != nil {
-		c.stmt(s.Init)
-	}
-
-	var tag Type = Typ[Bool]
-	if s.Tag != nil {
-		if op := c.expr(s.Tag, nil); op.mode != invalid {
-			tag = valueType(op)
-		}
-	}
-
-	hasDefault, allLeave := false, true
-	c.enterRegion(false, false, s.Switch)
-	f := c.forkAt()
-	for _, cc := range s.Body {
-		c.openScope()
-		if len(cc.List) == 0 {
-			hasDefault = true
-		}
-
-		for _, e := range cc.List {
-			c.fits(c.expr(e, tag), tag, e.Pos(), "case")
-		}
-
-		if !c.stmts(cc.Body) {
-			allLeave = false
-		}
-
-		c.closeScope()
-		c.branchEnd(&f)
-	}
-
-	c.joinAt(&f, hasDefault)
-	c.leaveRegion()
-	return hasDefault && allLeave
-}
-
 func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 	allLeave := true
 	c.enterRegion(false, false, s.Select)
@@ -669,8 +627,8 @@ func (c *Checker) exprs(es []ast.Expr) {
 }
 
 // hasBreak reports whether a break in the list leaves the enclosing
-// loop: one not inside a nested loop. A switch, match or select is not
-// a loop, so a break in one of their cases counts.
+// loop: one not inside a nested loop. A match or select is not a loop,
+// so a break in one of their arms or cases counts.
 func hasBreak(list []ast.Stmt) bool {
 	for _, s := range list {
 		switch s := s.(type) {
@@ -681,12 +639,6 @@ func hasBreak(list []ast.Stmt) bool {
 		case *ast.BlockStmt:
 			if hasBreak(s.List) {
 				return true
-			}
-		case *ast.SwitchStmt:
-			for _, cc := range s.Body {
-				if hasBreak(cc.Body) {
-					return true
-				}
 			}
 		case *ast.SelectStmt:
 			for _, cc := range s.Body {

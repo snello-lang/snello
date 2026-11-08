@@ -67,8 +67,6 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 		e.forStmt(s)
 	case *ast.RangeStmt:
 		e.rangeStmt(s)
-	case *ast.SwitchStmt:
-		e.unsupported(s.Pos(), "switch")
 	case *ast.DeferStmt:
 		e.deferStmt(s)
 	case *ast.SendStmt:

@@ -68,10 +68,7 @@ func TestStmts(t *testing.T) {
 		{"for i = range xs { a }", "for i = range xs { a }"},
 		{"for range n { a }", "for range n { a }"},
 
-		// switch and select.
-		{"switch x { case 1, 2: a\ncase 3: b\ndefault: c }", "switch x { case 1, 2: a; case 3: b; default: c }"},
-		{"switch { case x > 0: a }", "switch { case (x > 0): a }"},
-		{"switch v := f(); v { case 1: a }", "switch v := f(); v { case 1: a }"},
+		// select.
 		{"select { case out <- r: a\ncase <-cancel.Done(): b\ncase t := <-tasks: c\ndefault: d }", "select { case out <- r: a; case (<-cancel.Done()): b; case t := (<-tasks): c; default: d }"},
 		{"select { case <-timer: }", "select { case (<-timer): }"},
 	}
@@ -107,7 +104,14 @@ func TestStmtErrors(t *testing.T) {
 		{"for i := 0; i < n { }", "expected ';', found '{'", 1},
 		{"x := 1 y := 2", "expected ';' or newline, found 'y'", 1},
 		{"{ a; ) ; b }", "expected statement, found ')'", 1}, // the line is skipped; b still parses
-		{"switch x { case 1 a }", "expected ':', found 'a'", 1},
+		{"switch x { case 1: a }", "Snello has no switch: use match, on a value, match x { 1 | 2 => ... }, or on conditions, match { x > 0 => ... }", 1},
+		{"switch { case x > 0: a\ndefault: b }", "Snello has no switch", 1},
+		{"switch v := f(); v { case 1: a }", "Snello has no switch", 1},                       // the header's ';' does not end it
+		{"switch x == (T{}) { case true: { a } }", "Snello has no switch", 1},                 // braces in the header and the body are balanced
+		{"{ switch x { case 1: a }\nb := ) }", "Snello has no switch", 2},                     // skipped whole: the statement after it parses and reports its own
+		{"{ switch x }", "Snello has no switch", 1},                                           // no body: it ends with the block around it
+		{"{ switch c\nn := )\n}", "Snello has no switch", 2},                                  // no body: it ends with its line, and the next line reports its own
+		{"switch g := func() int { return 1 }; g() { case 1: a }", "Snello has no switch", 1}, // a function literal in the header is passed over whole
 	}
 	for _, tt := range tests {
 		_, errs := parseStmtString(tt.src)
@@ -234,27 +238,6 @@ func stmtString(s ast.Stmt) string {
 		}
 
 		return out + "range " + exprString(s.X) + " " + stmtString(s.Body)
-	case *ast.SwitchStmt:
-		out := "switch "
-		if s.Init != nil {
-			out += stmtString(s.Init) + "; "
-		}
-
-		if s.Tag != nil {
-			out += exprString(s.Tag) + " "
-		}
-
-		var clauses []string
-		for _, c := range s.Body {
-			head := "default"
-			if c.List != nil {
-				head = "case " + exprList(c.List)
-			}
-
-			clauses = append(clauses, clauseString(head, c.Body))
-		}
-
-		return out + "{ " + strings.Join(clauses, "; ") + " }"
 	case *ast.SelectStmt:
 		var clauses []string
 		for _, c := range s.Body {

@@ -34,6 +34,12 @@ func (p *Parser) parseDecl() ast.Decl {
 	case token.VAR, token.CONST:
 		d = p.parseVarDecl()
 	default:
+		if p.tok == token.SWITCH {
+			p.refuseSwitch()
+			p.advance(declStart)
+			return nil
+		}
+
 		if p.tok == token.IMPORT {
 			p.error(p.pos, "imports must appear before other declarations")
 		} else {

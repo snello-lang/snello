@@ -202,6 +202,8 @@ func step(s State, ev Event) State {
 
 Arms are tried in order, so the guarded `Connecting(n) if n < 3` must come before the plain `Connecting(_)`, and the last arm, `(s, _)`, catches every pair not handled above it and hands the state back unchanged.
 
+A guard runs whether or not its arm is taken: when it fails, the next arm is tried. So a guard reads, and never moves a value declared before it; a name it declares itself, inside a closure or a block it calls, is its own. `Some(v) if read(v) > 0` lends `v` and is fine; `Some(v) if eat(v)`, where `eat` takes its string, is refused with `cannot move v in a match guard: it runs whether or not its arm is taken; lend it with ref`, since the arms after it would find `v` gone.
+
 ### Arm bodies
 
 The body of an arm is an expression, a block, or a single statement:
@@ -221,6 +223,37 @@ match p.cur {
 ```
 
 Because a comma ends the arm, a `return` inside an arm carries one expression; to return several values, return a tuple, `return (n, right)`. A `match` whose arms all return or yield nothing is a statement.
+
+### Match on conditions
+
+A `match` with no value takes conditions instead of patterns: the arms are tried in order, and the first whose condition holds runs. It is what Go writes as a `switch` with no value, and what an `if` and `else if` chain does, laid out as a table:
+
+```snello
+func grade(score int) string {
+    return match {
+        score >= 90 => "A",
+        score >= 80 => "B",
+        score >= 70 => "C",
+        _           => "F",
+    }
+}
+```
+
+Each arm's condition is a `bool`, and its body is what any arm's is: an expression, a block, or one statement, `return`, `break` and `continue` among them:
+
+```snello
+for _, n := range readings {
+    match {
+        n < 0  => continue,
+        n == 0 => break,
+        _      => total += n,
+    }
+}
+```
+
+The arm `_` is required, and comes last. The compiler cannot tell whether a list of conditions covers every case, so the arm for when none holds is written out, `_ => {}` when nothing is to happen, which an `if` chain that forgets its `else` leaves unsaid; a match without it is refused with `a match with no value needs a last arm _ => ..., for when no condition holds`, and an arm after it would never run and is refused too. An arm is its condition alone: two conditions are joined with `&&`, not with a guard. A condition is a guard on the arm `_`, so it moves nothing, for the reason above; the arms themselves are paths of their own, as the branches of an `if` are, so a value one arm moves cannot be used after the `match` unless that arm gave it a new value.
+
+Snello has no `switch`: `match x { ... }` branches on what a value is, `match { ... }` on which condition holds, and between them they do what a `switch` does, as expressions, with every case accounted for.
 
 ### Binding without a match
 

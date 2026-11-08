@@ -18,7 +18,7 @@ The chapters describe Snello on its own terms and name no other language. This a
 
 ## Chapter 3: Basics
 
-Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `switch`, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
+Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
 
 | In Go | In Snello |
 |---|---|
@@ -51,6 +51,8 @@ Unchanged: struct fields, keyed literals, dot access, methods with receivers, `t
 | A `const` block with `iota`, or an interface with one struct per case | `enum`, with fields per variant |
 | A type switch | `match`, exhaustive, usable as an expression |
 | `switch` on an enum constant | `match`; a missing case is a compile error |
+| `switch x { case 1, 2: ... default: ... }` | `match x { 1 \| 2 => ..., _ => ... }`: Snello has no `switch`, and `match` takes literals, ranges and guards |
+| A `switch` with no value, `switch { case x > 0: ... default: ... }` | `match { x > 0 => ..., _ => ... }`: the conditions in turn, the arm `_` required and last |
 | `v, ok := m[k]` | `if v := m.Get(ref k) {` |
 | `struct{}` and anonymous structs | None: a struct is declared; a value with nothing in it is `()` |
 

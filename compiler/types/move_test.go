@@ -68,8 +68,6 @@ func TestMoves(t *testing.T) {
 		{"func f(c bool) { s := \"a\"; keep(s); for c { s = \"b\"; keep(s); s = \"c\" } }", nil},                         // owned again within the iteration
 		{"func f(c bool, d bool) { s := \"a\"; if c { keep(s); if d { s = \"b\" } else { s = \"c\" } }; keep(s) }", nil}, // a move inside a branch, given back by a nested branch set
 		{"func f(c bool, d bool) { s := \"a\"; if c { keep(s); if d { s = \"b\" } }; keep(s) }", []string{"use of moved value s"}},
-		{"func f(c bool) { s := \"a\"; keep(s); switch { case c: s = \"b\"; default: s = \"c\" }; keep(s) }", nil}, // a switch is a region and a branch set
-		{"func f(c bool) { s := \"a\"; keep(s); switch { case c: s = \"b\" }; keep(s) }", []string{"use of moved value s"}},
 		{"func f(c bool) { s := \"a\"; keep(s); for { s = \"b\"; break }; keep(s) }", nil},                                                          // a loop with no condition runs its body
 		{"func f(c bool) { s := \"a\"; keep(s); for { if c { break }; s = \"b\"; break }; keep(s) }", []string{"use of moved value s"}},             // but one exit gave nothing back
 		{"func f(c bool) { p := Pair{a: \"x\", b: \"y\"}; keep(p.a); if c { p.a = \"1\" } else { p.a = \"2\" }; keepPair(p) }", nil},                // a part given back on every path clears the partial move
@@ -81,18 +79,16 @@ func TestMoves(t *testing.T) {
 		{"func f(o string?) string { s := \"a\"; t := o ?? s; keep(s); return t }", []string{"use of moved value s"}},
 		{"func f(st State) { s := \"a\"; match st { Closed => keep(s), Open(_) => {}, Failed(_) => {} }; keep(s) }", []string{"use of moved value s"}},
 		{"func f(st State) { s := \"a\"; match st { Closed => { keep(s); return }, _ => {} }; keep(s) }", nil},
-		{"func f(n int) { s := \"a\"; switch n { case 1: keep(s) }; keep(s) }", []string{"use of moved value s"}},
 		// Loops.
 		{"func f() { s := \"a\"; for { keep(s); break } }", nil},
-		{"func f() { s := \"a\"; for { switch { default: keep(s); break } } }", nil},                                                                   // a break in a switch leaves the loop
-		{"func f(ch chan int) { s := \"a\"; for { select { case v := <-ch: keep(s); break; default: break } } }", nil},                                 // and in a select
-		{"func f() { s := \"a\"; for { match Some(1) { Some(n) => { keep(s); break }, None => {} } } }", nil},                                          // and in a match
-		{"func f(c bool) { s := \"a\"; for { switch { case c: keep(s); default: break } } }", []string{"s moved in a previous iteration of the loop"}}, // the case that does not break comes round
-		{"func f() { s := \"a\"; for { switch { default: keep(s); break } }; keep(s) }", []string{"use of moved value s"}},                             // the break is the loop's one exit, and s left on it
+		{"func f(ch chan int) { s := \"a\"; for { select { case v := <-ch: keep(s); break; default: break } } }", nil},                                    // a break in a select leaves the loop
+		{"func f() { s := \"a\"; for { match Some(1) { Some(n) => { keep(s); break }, None => {} } } }", nil},                                             // and in a match
+		{"func f(o int?) { s := \"a\"; for { match o { Some(_) => keep(s), None => break } } }", []string{"s moved in a previous iteration of the loop"}}, // the arm that does not break comes round
+		{"func f() { s := \"a\"; for { match Some(1) { Some(_) => { keep(s); break }, None => {} } }; keep(s) }", []string{"use of moved value s"}},       // the break is the loop's one exit, and s left on it
 		{"func f(ch chan int) { s := \"a\"; for { select { case v := <-ch: keep(s); break } }; keep(s) }", []string{"use of moved value s"}},
 		{"func f() { break }", []string{"break is not inside a loop"}},
-		{"func f(c bool) { switch { case c: break } }", []string{"break is not inside a loop"}}, // a switch is not a loop
-		{"func f(c bool) { switch { case c: continue } }", []string{"continue is not inside a loop"}},
+		{"func f(o int?) { match o { Some(_) => break, None => {} } }", []string{"break is not inside a loop"}}, // a match is not a loop
+		{"func f(o int?) { match o { Some(_) => continue, None => {} } }", []string{"continue is not inside a loop"}},
 		{"func f() { for { g := func() { break } } }", []string{"break is not inside a loop"}}, // a closure is a function of its own
 		{"func f(c bool) { s := \"a\"; for { if c { keep(s); continue }; break } }", []string{"s moved in a previous iteration of the loop"}},
 		{"func f() { for i := 0; i < 2; i += 1 { s := \"a\"; keep(s) } }", nil}, // declared inside
