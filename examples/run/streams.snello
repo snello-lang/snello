@@ -173,7 +173,7 @@ func main() {
 	fmt.Println(w.WriteString(""))
 	var sink Sink
 	whole := bufio.NewWriterSize(mut sink, 0)
-	whole.WriteString(strings.Repeat("x", 100)).Expect("write")
+	whole.WriteString(strings.Repeat("x", 100) ?? "").Expect("write")
 	fmt.Println(whole.Buffered(), whole.Get().calls)
 	whole.Flush().Expect("flush")
 	fmt.Println(whole.Buffered(), whole.Get().calls)

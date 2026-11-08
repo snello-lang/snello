@@ -126,6 +126,7 @@ type Checker struct {
 	dead       bool
 	regions    []region
 	noUse      bool                    // evaluating an assignment target, which is not a use
+	lentMode   mode                    // what the last ref or mut checked lent: a place, or a value made for it
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
 	bindsOwned bool                    // a pattern bound a non-Copy value by value
 	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)

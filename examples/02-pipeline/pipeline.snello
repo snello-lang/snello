@@ -41,7 +41,7 @@ func produce(n int) <-chan Job {
     spawn func() {                              // rule 4: `w` is moved into the task
         defer close(w)
         for i := 0; i < n; i++ {
-            job := Job{id: i, text: strings.Repeat("snello ", i)}
+            job := Job{id: i, text: strings.Repeat("snello ", i) ?? ""}
             w <- job                         // rule 1: job is moved into the channel
             // job cannot be used here any more; the compiler rejects it
         }

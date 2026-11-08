@@ -103,7 +103,7 @@ t := row().name                       // ERROR "cannot move row().name out of a 
 fmt.Println(row().name, len(row().tags))   // fine: both are read where they are
 ```
 
-`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer and a function value have no zero value, since nothing could be done with the null left behind, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind`; make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
+`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer, a function value and a type with a `Drop` have no zero value, chapter 18, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind; replace(mut h.ch, v) leaves v`. `replace(mut place, v)` moves the value out and leaves `v` in its place, for every type; or make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
 
 ```snello
 func (s mut Stack) Push(v string) {

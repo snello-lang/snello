@@ -211,7 +211,7 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	if named, ok := base.(*Named); ok {
 		if st, ok := named.Underlying().(*Struct); ok {
 			if f := fieldNamed(st.fields, e.Sel.Name); f != nil {
-				if !c.visible(named, e.Sel) {
+				if !c.visible(named, e.Sel, f) {
 					return invalidOperand
 				}
 
@@ -222,7 +222,7 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
-			if !c.visible(named, e.Sel) {
+			if !c.visible(named, e.Sel, nil) {
 				return invalidOperand
 			}
 
@@ -340,11 +340,23 @@ func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
 }
 
 // visible reports whether the field or method sel of a value of type t
-// may be named here: always inside t's own package, and elsewhere only
-// when the name is exported, as in Go. A name that is not is reported.
-func (c *Checker) visible(t Type, sel *ast.Ident) bool {
+// may be named here: always inside the package that declares it, and
+// elsewhere only when the name is exported, as in Go. A field is the
+// package's that declared its struct, so a type declared over another
+// package's struct does not open its fields. A name that is not
+// visible is reported.
+func (c *Checker) visible(t Type, sel *ast.Ident, field *Var) bool {
 	n, ok := t.(*Named)
-	if !ok || n.obj.pkg == nil || n.obj.pkg == c.pkg || ast.IsExported(sel.Name) {
+	if !ok || ast.IsExported(sel.Name) {
+		return true
+	}
+
+	owner := n.obj.pkg
+	if field != nil && field.pkg != nil {
+		owner = field.pkg
+	}
+
+	if owner == nil || owner == c.pkg {
 		return true
 	}
 
@@ -448,8 +460,12 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	case *Map:
 		if c.noUse { // m[k] = v: the map keeps the key
 			c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+			if wasInner { // m[k].f = v writes part of an entry a missing key makes whole from the zero value
+				c.zeroWrite(e, t)
+			}
 		} else {
 			c.fits(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+			c.zeroRead(e, t)
 		}
 
 		c.checkUse(e)
@@ -550,6 +566,11 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		}
 
 		c.lend(e.X, e.Op == token.MUT, e.X.Pos())
+		c.lentMode = x.mode
+		if isMut(x.typ) {
+			c.lentMode = mutBorrowed // a mut borrow lent on lends the place it borrows
+		}
+
 		c.noteTemporary(e.X, x)
 		if tmp := c.temporary[e.X]; tmp != nil {
 			c.markTemporary(e, tmp) // ref s.Clone() borrows the clone

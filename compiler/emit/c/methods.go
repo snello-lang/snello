@@ -708,6 +708,23 @@ func (e *Emitter) takeCall(x *ast.CallExpr) string {
 	return out
 }
 
+// replaceCall writes replace(mut place, v): the value the place held,
+// with v moved in. The place's address is taken first, once, since v
+// may be a call that runs before the place is read.
+func (e *Emitter) replaceCall(x *ast.CallExpr) string {
+	target := x.Args[0].(*ast.UnaryExpr).X
+	place := deref(e.lvalue(target), e.typeOf(target))
+	t := e.typeOf(x)
+	ct := e.cType(t, x.Pos())
+	at := e.temp()
+	e.line(ct + " *" + at + " = &" + place + ";")
+	v := e.operands(x.Args[1:], []types.Type{t})[0]
+	out := e.temp()
+	e.line(ct + " " + out + " = *" + at + ";")
+	e.line("*" + at + " = " + v + ";")
+	return out
+}
+
 // lenCall writes len(x) and cap(x) on a slice, a string or a map.
 func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	place, t := e.scrutinee(x.Args[0])

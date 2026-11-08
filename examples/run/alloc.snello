@@ -19,7 +19,7 @@ import (
 func produce(letter string, out chan<- string, done chan<- ()) {
 	for round := 0; round < 20; round++ {
 		for n := 1; n <= 1200; n += 13 {
-			out <- strings.Repeat(letter, n)
+			out <- strings.Repeat(letter, n) ?? ""
 		}
 	}
 

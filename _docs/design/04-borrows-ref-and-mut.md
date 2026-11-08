@@ -73,6 +73,12 @@ The price of never annotating. Each has an idiom the examples use.
 | A self-referential struct | An arena with indices | 01, 15 |
 | Lending a local to a spawned task | Move it in, or share through `Arc` | 02, 03 |
 
+## No value is empty
+
+Decided 2026-11-08 with task 11.2, the rule of zero values in `00-syntax-conventions.md`. The borrow rules make every borrow point at a live value; they said nothing about the value itself, and Go's zero values let a value exist that holds nothing: `var p *int` compiled to a null that `*p` followed, and `var m sync.Mutex<int>` to a lock whose `Lock` panicked. A pointer, a channel, a function, a trait value, a type parameter and a type that implements `Drop` now have no zero value, nor does anything holding one, and the checker refuses every way of making one: a declaration with no value, a literal that leaves such a field out, an array literal too short, `make` with a length, a map read that could miss, and `take`.
+
+Why it keeps every guarantee: the rule only refuses. A program the checker accepted before and accepts now means what it meant; the programs it refuses are those that made an empty value, which nothing could use safely. No check runs at run time and no value grows a flag: a `*T` is still one word, now never null, and an empty value is written `T?`, which the checker makes every use handle. Every `Drop` runs on a value that was built, by its type's constructor or by a literal, never on a zero a declaration made; outside its package, a literal of such a type cannot leave a field out. `replace`, the one addition, moves a value out of a place and leaves a valid one in the same step, so the place is never empty, and its borrow of the place follows the rules of any `mut` borrow. No collector is involved: every value still has one owner and is freed by its `Drop`.
+
 ## What `ref` buys
 
 - **No copy.** Passing a large struct, a slice, or a string by `ref` moves nothing and allocates nothing.

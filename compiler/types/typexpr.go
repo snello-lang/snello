@@ -267,6 +267,7 @@ func (c *Checker) fields(fs []*ast.Field) []*Var {
 		t := c.typ(f.Type)
 		for _, name := range f.Names {
 			v := NewField(name.Pos(), name.Name, t)
+			v.pkg = c.pkg // the package that declares the field decides who may name it, whatever type is declared over the struct
 			if old := seen.Insert(v); old != nil {
 				c.errorf(name.Pos(), "duplicate field "+name.Name)
 			}

@@ -513,7 +513,7 @@ void sn_sync_lock(int64_t h);
 void sn_sync_unlock(int64_t h);
 void sn_sync_lockShared(int64_t h);
 void sn_sync_unlockShared(int64_t h);
-void sn_sync_count(int64_t h, int64_t n);
+bool sn_sync_count(int64_t h, int64_t n);
 void sn_sync_wait(int64_t h);
 int64_t sn_sync_atomicAdd(int64_t *n, int64_t d);
 int64_t sn_sync_cellNew(int64_t v); // a Counter's word, named by its handle, as a lock is; see sync.c

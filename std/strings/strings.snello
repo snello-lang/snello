@@ -60,18 +60,14 @@ func (b mut Builder) Reset() {
 }
 
 // Repeat returns s written n times in a row, and the empty string for
-// an n of zero. A negative n, or one that would make a string longer
-// than an int can count, stops the program, as Go's Repeat does.
-func Repeat(s ref string, n int) string {
-	if n < 0 {
-		panic("strings: negative Repeat count")
+// an n of zero; None for a negative n, or one that would make a string
+// longer than an int can count.
+func Repeat(s ref string, n int) string? {
+	if n < 0 || s.Len() > 0 && n > maxInt / s.Len() {
+		return None
 	}
 
-	if s.Len() > 0 && n > maxInt / s.Len() {
-		panic("strings: Repeat output length overflow")
-	}
-
-	return repeat(s, n)
+	return Some(repeat(s, n))
 }
 
 // Join writes the parts one after another with sep between every two,

@@ -865,6 +865,8 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		return e.makeCall(x)
 	case types.BuiltinTake:
 		return e.takeCall(x)
+	case types.BuiltinReplace:
+		return e.replaceCall(x)
 	case types.BuiltinPanic:
 		return "sn_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:

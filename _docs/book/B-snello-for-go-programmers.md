@@ -18,7 +18,7 @@ The chapters describe Snello on its own terms and name no other language. This a
 
 ## Chapter 3: Basics
 
-Unchanged: `package`, `import`, `:=`, `var`, zero values, exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
+Unchanged: `package`, `import`, `:=`, `var`, zero values for the types whose zero is a real value (chapter 18), exported names by capitalization, `func` with named parameters and grouped types, multiple results, closures, `if`, `for` and its range forms, `defer`, `len`, `cap`, `make`, `panic`, semicolon insertion.
 
 | In Go | In Snello |
 |---|---|
@@ -126,7 +126,7 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `golang.org/x/text/unicode/norm`, outside the standard library | `unicode/norm`, in it (chapter 19) |
 | Grapheme clusters, words and sentences need a module | `unicode/segment`, in the standard library (chapter 19) |
 | `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
-| `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
+| `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go, and is refused when the values have none |
 | `delete(m, k)` | `m.Remove(k)` returns the value as `V?` |
 | Map iteration order is random | Insertion order |
 
@@ -155,7 +155,9 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 | `v, ok := <-ch` | `<-ch` is a `T?`, `None` once the channel is closed and drained |
 | Whether a value may safely cross goroutines is the programmer's problem; `go vet` and the race detector find some cases at run time | `Send` is inferred from the type and checked at compile time at every crossing |
 | `sync.Mutex` beside the data; forgetting to lock compiles | `sync.Mutex<T>` owns the data; the only way to it is through the guard `Lock` hands out, `*g.Get() += 1`, and the lock is released when the guard goes out of scope; `sync.RwLock<T>` the same with `Read` and `Write` |
-| `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; the zero value is empty and panics |
+| `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; it has no zero value, and `var mu sync.Mutex<int>` is refused |
+| `var p *T`, `var ch chan T`, `var f func()`: `nil`, which panics when used | Refused: a pointer, a channel, a function and a type with `Drop` have no zero value; `*T?` for one that may be missing, chapter 18 |
+| `make([]*T, n)`: `n` nil pointers | `make([]*T, 0, n)` and `Push` |
 | `var wg sync.WaitGroup` passed by pointer, `&wg` | `sync.WaitGroup` is an owned handle on a counter, cloned for each task, `w := wg.Clone()`, like a channel, and freed by the last handle |
 | `*rc`-style shared ownership does not exist; the GC shares everything | `rc.Rc` shares within one task and is refused at a task boundary; `sync.Arc` shares across tasks |
 | `sync/atomic`: `atomic.Int64`, `atomic.Value`, `atomic.Bool` | `sync.Counter` for an `int` added to as one step; `sync.Atomic<T>` for any `Send`, `Clone` and `Eq` value read and replaced as one step, `Atomic<bool>` for a flag |

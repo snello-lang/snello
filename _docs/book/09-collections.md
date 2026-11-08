@@ -6,7 +6,7 @@ A slice is an owned, growable list. A map is an owned table from keys to values.
 
 ## Slices
 
-A slice literal lists its elements, and `make` builds one of a given length, filled with the element's zero value:
+A slice literal lists its elements, and `make` builds one of a given length, filled with the element's zero value; for an element with no zero value, a pointer or a type with `Drop` (chapter 18), `make([]T, 0, n)` reserves the room and `Push` fills it:
 
 ```snello
 xs := []int{3, 1, 2}
@@ -93,7 +93,7 @@ kv := map[string]string{}
 counts := map[string]int{}
 ```
 
-`m[k] = v` stores a value, making the entry when the key is new, and `m[k]` reads one. Reading a key that is not there gives the value type's zero value and leaves the map unchanged, so `counts[w] += 1` counts a word whether or not it was seen before. `len(m)` is the number of entries.
+`m[k] = v` stores a value, making the entry when the key is new, and `m[k]` reads one. Reading a key that is not there gives the value type's zero value and leaves the map unchanged, so `counts[w] += 1` counts a word whether or not it was seen before. For values with no zero value, chapter 18, reading `m[k]` and writing part of it, `m[k].f = v`, are refused: `m.Get(k)` and `m.GetMut(k)` say whether the key is there, and `m[k] = v` stores a whole value. `len(m)` is the number of entries.
 
 The methods say what happens to the entry:
 

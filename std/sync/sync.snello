@@ -26,10 +26,10 @@
 // took it. A WaitGroup is an owned handle, as a channel is: a task is
 // given its own with Clone, and the counter is freed with the last.
 //
-// The zero value of an Arc, a Mutex, an RwLock or a Once, var m
-// Mutex<int>, is empty: it holds no value, and Get, Lock, Read, Write
-// and Do on it panic. A zero WaitGroup counts nothing and Add on it
-// panics. Each is made with its New function.
+// None of these types has a zero value: each implements Drop, or holds
+// one that does, so var m Mutex<int> is refused and a handle comes only
+// from its New function. A handle always holds what it stands for, and
+// no operation on one panics over a handle being empty.
 package sync
 
 // An acell is what the handles on one value share: the value, and the
@@ -58,14 +58,13 @@ func NewArc<T>(v T) Arc<T> {
 	return Arc<T>{p: Some(&acell<T>{count: 1, value: v})}
 }
 
-// Get lends the value for reading, for as long as the Arc is lent. An
-// empty handle has no value and panics.
+// Get lends the value for reading, for as long as the Arc is lent.
 func (a ref Arc<T>) Get() ref T {
 	if p := ref a.p {
 		return ref p.value
 	}
 
-	panic("sync: Get on an empty Arc")
+	panic(broken)
 }
 
 // Clone returns another handle on the same value; the value is not
@@ -76,9 +75,9 @@ func (a ref Arc<T>) Clone() Arc<T> {
 	return Arc<T>{p: Some(q)}
 }
 
-// Count returns how many handles the value has, this one included;
-// zero for an empty handle. Another task may clone or drop a handle
-// right after, so the count is a reading, not a promise.
+// Count returns how many handles the value has, this one included.
+// Another task may clone or drop a handle right after, so the count is
+// a reading, not a promise.
 func (a ref Arc<T>) Count() i64 {
 	q := retain(a.p) ?? return 0
 	n := atomicAdd(mut q.count, 0) // read as one step, as the adds that change it write
@@ -89,7 +88,7 @@ func (a ref Arc<T>) Count() i64 {
 // Drop gives up this handle: the value and its cell are dropped with
 // the last one.
 func (a mut Arc<T>) Drop() {
-	p := take(mut a.p) ?? return // empty, or dropped already
+	p := take(mut a.p) ?? return // dropped already
 	if atomicAdd(mut p.count, -1) == 0 {
 		return // the last handle: p goes out of scope here and frees the cell, the value with it
 	}
@@ -103,9 +102,8 @@ func (a mut Arc<T>) Drop() {
 // change through a ref safe, as a lock is, and each is one instruction
 // on a word of the runtime's that the handle names, so a Counter is
 // Send and a package variable may hold one, var hits = sync.NewCounter(0),
-// which every task reaches and none can race on
-// (_docs/design/03-ownership-across-tasks.md, package variables). The
-// zero value names no word and panics when used.
+// which every task reaches and none can race on. It has no zero value:
+// one comes only from NewCounter.
 struct Counter impl Drop {
 	h int
 }
@@ -117,39 +115,28 @@ func NewCounter(v int) Counter {
 
 // Add adds d to the count as one step and returns the new count.
 func (c ref Counter) Add(d int) int {
-	return int(cellAdd(c.live(), i64(d)))
+	return int(cellAdd(c.h, i64(d)))
 }
 
 // Load returns the count as one step, which no Add or Store tears.
 func (c ref Counter) Load() int {
-	return int(cellLoad(c.live()))
+	return int(cellLoad(c.h))
 }
 
 // Store sets the count.
 func (c ref Counter) Store(v int) {
-	cellStore(c.live(), i64(v))
+	cellStore(c.h, i64(v))
 }
 
 // CompareAndSwap sets the count to new when it is old, as one step,
 // and reports whether it did: how one task of many takes a turn.
 func (c ref Counter) CompareAndSwap(old int, new int) bool {
-	return cellSwap(c.live(), i64(old), i64(new))
-}
-
-// live is the word's handle; a Counter made as a zero value has none.
-func (c ref Counter) live() int {
-	if c.h == 0 {
-		panic("sync: use of an empty Counter")
-	}
-
-	return c.h
+	return cellSwap(c.h, i64(old), i64(new))
 }
 
 // Drop frees the word.
 func (c mut Counter) Drop() {
-	if c.h != 0 {
-		cellFree(c.h)
-	}
+	cellFree(c.h)
 }
 
 // An Atomic<T> holds a value of any type that several tasks read and
@@ -185,14 +172,11 @@ func (a ref Atomic<T>) Store(v T) {
 	*g.Get() = v
 }
 
-// Swap replaces the value and returns the old one, as a copy: the
-// value under the lock is cloned out and the original dropped, which
-// is what keeps T free of a zero value to leave behind.
+// Swap replaces the value and returns the old one, moved out from
+// under the lock with v left in its place.
 func (a ref Atomic<T>) Swap(v T) T {
 	g := a.m.Lock()
-	old := g.Get().Clone()
-	*g.Get() = v
-	return old
+	return replace(mut *g.Get(), v)
 }
 
 // CompareAndSwap replaces the value with new when it equals old, as
@@ -233,13 +217,13 @@ func NewMutex<T: Send>(v T) Mutex<T> {
 }
 
 // Lock waits until no other task holds the lock, takes it, and returns
-// the Guard that holds it. An empty Mutex panics.
+// the Guard that holds it.
 func (m ref Mutex<T>) Lock() Guard<T> {
 	if p := ref m.p {
 		return guard(p)
 	}
 
-	panic("sync: Lock on an empty Mutex")
+	panic(broken)
 }
 
 // Drop releases the runtime's lock; the value is dropped with the box.
@@ -284,26 +268,24 @@ func NewRwLock<T: Send>(v T) RwLock<T> {
 }
 
 // Read waits until no task holds the lock for writing, takes it for
-// reading, and returns the ReadGuard that holds it. An empty RwLock
-// panics.
+// reading, and returns the ReadGuard that holds it.
 func (l ref RwLock<T>) Read() ReadGuard<T> {
 	if p := ref l.p {
 		lockShared(p.lock)
 		return ReadGuard<T>{lock: p.lock, v: ref p.value}
 	}
 
-	panic("sync: Read on an empty RwLock")
+	panic(broken)
 }
 
 // Write waits until no task holds the lock at all, takes it for
-// writing, and returns the Guard that holds it. An empty RwLock
-// panics.
+// writing, and returns the Guard that holds it.
 func (l ref RwLock<T>) Write() Guard<T> {
 	if p := ref l.p {
 		return guard(p)
 	}
 
-	panic("sync: Write on an empty RwLock")
+	panic(broken)
 }
 
 // Drop releases the runtime's lock; the value is dropped with the box.
@@ -348,10 +330,6 @@ func NewOnce() Once {
 // for that run to finish otherwise. A Do called from inside f waits
 // forever.
 func (o ref Once) Do(f func()) {
-	if o.done.p.IsNone() {
-		panic("sync: Do on an empty Once")
-	}
-
 	g := o.done.Lock()
 	if !*g.Get() {
 		f()
@@ -385,16 +363,19 @@ func NewWaitGroup() WaitGroup {
 	return WaitGroup{a: NewArc(counter{h: newLock()})}
 }
 
-// Add adds n, which may be negative, to the count; a count below zero
-// panics. Add is called before the task it counts is spawned, so that
-// Wait cannot return between the spawn and the Add.
-func (w ref WaitGroup) Add(n int) {
-	count(w.handle(), n)
+// Add adds n, which may be negative, to the count, and reports whether
+// it did: false, with the count left as it was, when the count would go
+// below zero, a Done with no Add before it. Add is called before the
+// task it counts is spawned, so that Wait cannot return between the
+// spawn and the Add.
+func (w ref WaitGroup) Add(n int) bool {
+	return count(w.handle(), n)
 }
 
-// Done counts one task out: Add(-1).
-func (w ref WaitGroup) Done() {
-	count(w.handle(), -1)
+// Done counts one task out, Add(-1), and reports whether it did: false
+// when the count is zero already.
+func (w ref WaitGroup) Done() bool {
+	return count(w.handle(), -1)
 }
 
 // Wait returns once the count is zero, at once when it already is.
@@ -402,17 +383,15 @@ func (w ref WaitGroup) Wait() {
 	wait(w.handle())
 }
 
-// handle returns the runtime's lock of the group, or 0 for an empty
-// one, which the runtime refuses with Go's message. It reads the Arc's
-// cell directly, as this package may, rather than through Get, which
-// would refuse an empty group with the Arc's message instead.
+// handle returns the runtime's lock of the group.
 func (w ref WaitGroup) handle() int {
-	if p := ref w.a.p {
-		return p.value.h
-	}
-
-	return 0
+	return w.a.Get().h
 }
+
+// broken is the message of the one panic left in the package: a handle
+// with no cell or box, which no program can make, since a handle comes
+// only from its New function and a Drop runs once.
+const broken string = "sync: a handle without its value: a broken invariant of the package"
 
 // guard takes the lock of the box p points at, for writing, and returns
 // the Guard holding it and the value: the one function that steps from
@@ -424,8 +403,8 @@ func guard<T>(p ref *box<T>) Guard<T> {
 }
 
 // retain returns an owned copy of the pointer a handle holds, for a new
-// handle on the same cell, or None for an empty handle. The caller
-// raises the count the new handle is counted in.
+// handle on the same cell, or None for a handle whose Drop has run. The
+// caller raises the count the new handle is counted in.
 func retain<T>(p ref (*acell<T>?)) *acell<T>? {
 	if q := ref p {
 		return Some(alias(q))
@@ -458,7 +437,7 @@ func lock(h int)
 func unlock(h int)
 func lockShared(h int)
 func unlockShared(h int)
-func count(h int, n int)
+func count(h int, n int) bool
 func wait(h int)
 func atomicAdd(n mut i64, d i64) i64
 func cellNew(v i64) int

@@ -1,0 +1,76 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// No empty values: the zero values of the types that have one, an
+// optional where a value may be missing, a value that depends on a
+// condition built where it is declared, replace moving a value out of a
+// place and leaving another, a map read with Get, and the library's
+// answers where a caller can be wrong: strings.Repeat's option and a
+// WaitGroup that will not count below zero. Chapter 18 of the book is
+// cut from this program.
+
+package main
+
+import ("fmt"; "rc"; "strings"; "sync")
+
+struct Point { x, y int }
+
+struct Node {
+	name string
+	next *Node?
+}
+
+struct Account {
+	owner string
+	lock sync.Mutex<int>
+}
+
+func main() {
+	// The types whose zero is a real value of them.
+	var n int
+	var s string
+	var p Point
+	var names []string
+	var next *Node?
+	fmt.Println(n, len(s), p, len(names), next.IsNone())
+
+	// A value that depends on a condition is built where it is declared.
+	limit := 3
+	lock := if limit > 2 { sync.NewMutex(limit) } else { sync.NewMutex(0) }
+	fmt.Println(*lock.Lock().Get())
+
+	// A handle that may point at nothing is an optional one.
+	root := rc.New(Node{name: "root".Clone(), next: None})
+	var parent rc.Weak<Node>?
+	fmt.Println(parent.IsNone())
+	parent = Some(root.Downgrade())
+	if w := ref parent {
+		fmt.Println(w.Upgrade().IsSome())
+	}
+
+	// replace moves a value out of a place and leaves another in it.
+	a := Account{owner: "ada".Clone(), lock: sync.NewMutex(10)}
+	old := replace(mut a.lock, sync.NewMutex(20))
+	fmt.Println(*old.Lock().Get(), *a.lock.Lock().Get())
+	head := Node{name: "head".Clone(), next: Some(&Node{name: "tail".Clone(), next: None})}
+	rest := replace(mut head.next, None)
+	if r := rest {
+		fmt.Println(head.name, "then", r.name)
+	}
+
+	// A map of values without a zero is read with Get.
+	accounts := map[string]Account{}
+	accounts["ada"] = Account{owner: "ada".Clone(), lock: sync.NewMutex(5)}
+	if acct := accounts.Get("ada") {
+		fmt.Println(acct.owner, *acct.lock.Lock().Get())
+	}
+
+	fmt.Println(accounts.Get("bob").IsNone())
+
+	// Where a caller can be wrong, the library answers instead of
+	// stopping the program.
+	fmt.Println(strings.Repeat("ab", 3) ?? "", strings.Repeat("ab", -1).IsNone())
+	wg := sync.NewWaitGroup()
+	fmt.Println(wg.Done(), wg.Add(1), wg.Done())
+}

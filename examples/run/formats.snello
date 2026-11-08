@@ -76,7 +76,7 @@ func main() {
 	w := r.Downgrade()
 	fmt.Println(r, w, rc.New(3))
 	{
-		_ = take(mut r)
+		_ = r // dropped here, so the Weak sees the value gone
 	}
 
 	fmt.Println(w)
