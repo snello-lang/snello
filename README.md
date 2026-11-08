@@ -7,7 +7,6 @@
 
 <p align="center">
   <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/snello-lang/snello/test.yml?branch=main&label=tests"></a>
-  <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/snello-lang/snello?label=go"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/snello-lang/snello?label=license"></a>
 </p>
 
@@ -70,27 +69,60 @@ shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
 - **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
 - **Mistakes that stop the program.** `snello build -debug` builds a binary that panics on any value used after its release and reports anything never released.
 
-Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. Packages of a program's own, outside the compiler, are being built now; see [the milestones](https://github.com/snello-lang/snello/milestones) for what is done and what is next.
+Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. What comes next, in order, is in the pinned [Roadmap](https://github.com/snello-lang/snello/issues/122).
 
-## Getting started
+## How Snello is built
 
-Build the compiler from source with Go. Building a Snello program needs `clang` on the path, or the one `CLANG` names; the C backend needs `cc`, or the one `CC` names.
+The compiler is written in Go, with nothing but Go's standard library, after the Go toolchain's own packages: a scanner, a parser, a type and ownership checker, and two backends. Go is only what the compiler is written in. A Snello program contains no Go: the compiler turns it into LLVM IR, or into C, and the system's `clang` or C compiler builds a native executable from it with Snello's runtime, a small library written in C. The standard library is written in Snello. A program you build needs neither Go nor a Go runtime to run.
+
+## Try it
+
+With Go 1.27.2 or later, and `clang` on the path, install the compiler:
+
+```
+go install github.com/snello-lang/snello/cmd/snello@latest
+```
+
+The compiler carries the standard library and the runtime inside it, so it works from any directory. Write a program:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello, Snello")
+}
+```
+
+Save it as `hello.snello`, then build it and run it:
+
+```
+snello build hello.snello
+./hello
+```
+
+To work on the compiler, build it from a clone instead:
 
 ```
 git clone https://github.com/snello-lang/snello
 cd snello
-make build          # the compiler into bin/snello, built inside the Linux image; NATIVE=1 make build uses the Go on your machine
+go build -o bin/snello ./cmd/snello
 bin/snello build examples/run/hello.snello
-./hello
 ```
+
+`make build` does the same inside the Linux image CI uses, for a build that matches CI's; it needs Docker, and `NATIVE=1 make build` uses the Go on your machine instead.
 
 | Command | What it does |
 |---|---|
-| `snello build FILE` | Compiles a program to a native executable in the current directory, through the LLVM backend and clang |
-| `snello build -debug FILE` | The same, with the checking runtime |
-| `snello build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler |
+| `snello build FILE` | Compiles a program to a native executable in the current directory, through the LLVM backend and clang; `DIR` builds the program of every `.snello` file in a directory |
+| `snello build -debug FILE` | The same, with the checking runtime, which panics on a value used after its release and reports anything never released |
+| `snello build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
 | `snello check FILE` | Checks a program and prints its errors |
+| `snello test DIR` | Runs the tests in a directory's `_test.snello` files |
 | `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
+
+`clang` is found on the path, or `CLANG` names it.
 
 ## Documentation
 
@@ -100,8 +132,8 @@ bin/snello build examples/run/hello.snello
 
 ## Contributing
 
-Read [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md). Run `go test ./...` before opening a pull request, or `build/run.sh go test ./...` to run it inside the Linux image CI uses; the tests build and run every example through both backends, so they need `clang` and `cc` too, and take a few minutes. The Makefile runs Snello: `make test` runs the library's and the examples' own tests through `snello test`, `make test-std` and `make test-examples` each half, and `make check` runs `snello check` over the examples, each inside the image unless `NATIVE=1` is given. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md).
+Contributions are welcome. Working on the compiler takes Go, `clang` and a C compiler, nothing more.
 
-## License
-
-[BSD 3-Clause](LICENSE)
+1. Pick an issue from the pinned [Roadmap](https://github.com/snello-lang/snello/issues/122), which lists the work in the order it is to be done. Each issue says what to build, how it is accepted and how to verify it, and its label says where it lives: `compiler/runtime` for the compiler, its backends, the runtime and the tools, `corelibs` for the standard library, `lib` for the libraries that ship outside the compiler.
+2. Read [CONTRIBUTING.md](CONTRIBUTING.md), [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md).
+3. Run `go test ./...` before opening a pull request.
