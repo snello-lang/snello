@@ -116,6 +116,13 @@ func close<T>(ch ref chan<- T)
 // placeholder.
 func take<T>(place mut T) T
 
+// replace moves the value out of a place written mut, a variable,
+// field or element, and leaves v there; it returns the value the place
+// held. It works for every type, where take works only for a type with
+// a zero value to leave behind, and the place is never empty:
+// old := replace(mut s.lock, sync.NewMutex(0)).
+func replace<T>(place mut T, v T) T
+
 // panic prints its message and ends the program with status 2, after
 // the values still owned are dropped. It never returns, and the
 // compiler knows that: a match arm or an if branch may end in a panic

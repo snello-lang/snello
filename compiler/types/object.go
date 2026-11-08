@@ -19,6 +19,7 @@ const (
 	BuiltinMin
 	BuiltinMax
 	BuiltinClose
+	BuiltinReplace
 )
 
 // An Object is a named entity of a program: a type name, a variable,

@@ -341,26 +341,26 @@ func main() {
 			Out: "[TEMP][TEMP]\n[HELLO WORLD][HELLO WORLD]\nHELLO WORLD\n[FIELD][FIELD]\nFIELD\n[HELLO WORLD][HELLO WORLD]\nHELLO WORLD\nHELLO\n[HELLO WORLD][HEL][  HEL]\n",
 		},
 		{
-			Name: "repeat-negative", // Go's message, before anything is built
+			Name: "repeat-negative", // None, before anything is built: the library does not stop the program over a caller's count
 			Src: `package main
 import ("fmt"; "strings")
 func main() {
 	n := -1
-	fmt.Println(strings.Repeat("ab", n))
+	fmt.Println(strings.Repeat("ab", n).IsNone(), strings.Repeat("ab", n) ?? "none")
 }
 `,
-			Stderr: "panic: strings: negative Repeat count", Code: 2,
+			Out: "true none\n",
 		},
 		{
-			Name: "repeat-overflow", // a result longer than an int can count
+			Name: "repeat-overflow", // a result longer than an int can count is None, and nothing is allocated for it
 			Src: `package main
 import ("fmt"; "strings")
 func main() {
 	n := 4611686018427387904
-	fmt.Println(len(strings.Repeat("ab", n)))
+	fmt.Println(strings.Repeat("ab", n).IsNone())
 }
 `,
-			Stderr: "panic: strings: Repeat output length overflow", Code: 2,
+			Out: "true\n",
 		},
 		{
 			Name: "slice-low-past-high", // the slice bounds in Go's runtime words
@@ -425,8 +425,8 @@ func main() {
 			Src: `package main
 import ("fmt"; "strings")
 func main() {
-	hay := strings.Repeat("a", 20000000)
-	needle := strings.Repeat("a", 50000) + "b"
+	hay := strings.Repeat("a", 20000000) ?? ""
+	needle := (strings.Repeat("a", 50000) ?? "") + "b"
 	fmt.Println(hay.Contains(needle), (hay + "b").Contains(needle), hay.SplitOnce(needle).IsNone())
 }
 `,
@@ -965,6 +965,41 @@ func main() {
 			Out: "é x añ世😀 añ世😀 \uFFFD \uFFFD 0 ñ\n",
 		},
 		{
+			Name: "waitgroup-below-zero", // a Done with no Add, or an Add that would take the count below zero, answers false and leaves the count, where it stopped the program
+			Src: `package main
+import ("fmt"; "sync")
+func main() {
+	wg := sync.NewWaitGroup()
+	fmt.Println(wg.Done(), wg.Add(1), wg.Add(-2), wg.Done())
+	wg.Wait()
+	fmt.Println("done")
+}`,
+			Out: "false true false true\ndone\n",
+		},
+		{
+			Name: "replace", // replace moves a value out of a place and leaves another, a field, an element and a variable, of a type with Drop and so with no zero value; each value is dropped once, the old where its new owner drops it
+			Src: `package main
+import "fmt"
+struct Loud impl Drop { name string }
+func (l mut Loud) Drop() { fmt.Println("drop", l.name) }
+func loud(s string) Loud { return Loud{name: s.Clone()} }
+struct Slot { l Loud; next *Slot? }
+func main() {
+	s := Slot{l: loud("a"), next: Some(&Slot{l: loud("tail"), next: None})}
+	old := replace(mut s.l, loud("b"))
+	fmt.Println("took", old.name, "left", s.l.name)
+	xs := []Loud{loud("x"), loud("y")}
+	first := replace(mut xs[0], loud("z"))
+	fmt.Println("took", first.name, "left", xs[0].name)
+	rest := replace(mut s.next, None)
+	fmt.Println("detached", rest.IsSome())
+	v := loud("v")
+	w := replace(mut v, loud("v2"))
+	fmt.Println(w.name, v.name)
+}`,
+			Out: "took a left b\ntook x left z\ndetached true\nv v2\ndrop v\ndrop v2\ndrop tail\ndrop x\ndrop z\ndrop y\ndrop a\ndrop b\n", // in reverse order of declaration: w holds v, v holds v2, first x, old a
+		},
+		{
 			Name: "match-conditions", // a match with no value takes the first condition that holds, as an expression and as a statement whose arms return, continue, break or assign; an owned value an arm moves is dropped once, on the arm that moved it
 			Src: `package main
 import "fmt"
@@ -1074,7 +1109,7 @@ func main() {
 	done := make(chan int, 2)
 	spawn work(done.Clone())
 	spawn work(done.Clone())
-	fmt.Println(<-done ?? 0, <-done ?? 0, names[1], title.ToUpper(), strings.Repeat(ref title, 2), zero + 1)
+	fmt.Println(<-done ?? 0, <-done ?? 0, names[1], title.ToUpper(), strings.Repeat(ref title, 2) ?? "", zero + 1)
 }`,
 			Out: "16 16 square SHAPES shapesshapes 1\n",
 		},
@@ -1716,7 +1751,7 @@ func main() {
 	same := 0
 	for i := 0; i < len(sizes); i++ {
 		n := sizes[i]
-		want := strings.Repeat("data", n / 4) + strings.Repeat("!", n % 4)
+		want := (strings.Repeat("data", n / 4) ?? "") + (strings.Repeat("!", n % 4) ?? "")
 		p := dir + "/f" + fmt.Sprint(n)
 		os.WriteString(ref p, ref want).Expect("write")
 		got := os.ReadToString(ref p).Expect("read")
@@ -1820,10 +1855,10 @@ func main() {
 	d := "" + "" + ""
 	fmt.Println(len(d), d == "")
 	x := mk("x") + mk("y") + mk("z")
-	fmt.Println(x, strings.Repeat("ab", 5), strings.Repeat("q", 0), strings.Repeat("", 9), strings.Join([]string{"p".Clone(), "q".Clone(), "r".Clone()}, ", "), strings.Join([]string{}, "-"))
+	fmt.Println(x, strings.Repeat("ab", 5) ?? "", strings.Repeat("q", 0) ?? "", strings.Repeat("", 9) ?? "", strings.Join([]string{"p".Clone(), "q".Clone(), "r".Clone()}, ", "), strings.Join([]string{}, "-"))
 	parts := []string{}
 	for i := 0; i < 5; i++ { parts.Push(fmt.Sprint(i) + ":" + mk("v") + ";") }
-	fmt.Println(parts, strings.Repeat("xyz", 7).Len())
+	fmt.Println(parts, (strings.Repeat("xyz", 7) ?? "").Len())
 	grow()
 }
 func grow() {
@@ -2099,14 +2134,9 @@ func main() {
 		{"send-closed", "ch := make(chan int, 1); close(ch); ch <- 1", "panic: send on a closed channel"},
 		{"close-while-sending", "ch := make(chan int); spawn closer(ch.Clone()); ch <- 1", "panic: channel closed while a send waited on it"},
 		{"task-panics", "ch := make(chan int); spawn boom(); <-ch", "panic: in a task"},
-		{"empty-waitgroup", "var wg sync.WaitGroup; wg.Add(1)", "panic: sync: use of an empty WaitGroup"},
-		{"negative-waitgroup", "wg := sync.NewWaitGroup(); wg.Done()", "panic: sync: negative WaitGroup count"},
-		{"empty-mutex", "var m sync.Mutex<int>; g := m.Lock(); *g.Get() += 1", "panic: sync: Lock on an empty Mutex"},
-		{"empty-once", "var o sync.Once; o.Do(func() {})", "panic: sync: Do on an empty Once"},
 		{"deadlock-receive", "ch := make(chan int); fmt.Println(\"waiting\"); <-ch", "fatal error: all tasks are asleep - deadlock!"},
 		{"deadlock-waitgroup", "wg := sync.NewWaitGroup(); wg.Add(1); wg.Wait()", "fatal error: all tasks are asleep - deadlock!"},
 		{"deadlock-tasks", "a := make(chan int); b := make(chan int); b2 := b.Clone(); spawn func() { <-a; b2 <- 1 }(); <-b", "fatal error: all tasks are asleep - deadlock!"},
-		{"empty-rc", "var r rc.Rc<int>; fmt.Println(r.Get())", "panic: rc: Get on an empty handle"},
 		{"swap-out-of-range", "xs := []int{1}; xs.Swap(0, 1)", "panic: index out of range [1] with length 1"},
 	} {
 		programs = append(programs, Program{

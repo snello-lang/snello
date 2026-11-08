@@ -109,7 +109,7 @@ func (a mut Arena<T>) Remove(i Index<T>) T? {
 		return None
 	}
 
-	v := take(mut a.slots[i.slot].value).Expect("arena: a live slot holds its value")
+	v := take(mut a.slots[i.slot].value) ?? return None // a live slot holds its value
 	a.slots[i.slot].gen++
 	a.free.Push(i.slot)
 	a.count--

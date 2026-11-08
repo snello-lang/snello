@@ -57,7 +57,7 @@ func main() {
 	fmt.Println(b.String())
 
 	parts := []string{"x", "y", "z"}
-	fmt.Println(strings.Repeat("ab", 3), strings.Join(ref parts, ", "), strings.Join(ref parts[:1], "-"))
+	fmt.Println(strings.Repeat("ab", 3) ?? "", strings.Join(ref parts, ", "), strings.Join(ref parts[:1], "-"))
 	fmt.Println(strings.ToUpper("Snello"), strings.ToLower("Snello"))
 	words := 0
 	for w := range strings.Fields("  one two  three ") {

@@ -367,6 +367,7 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
 	case Identical(v.Underlying(), t.Underlying()):
+		c.zeroConversion(e, v, t)
 	case isString(v) && isByteSlice(t), isByteSlice(v) && isString(t):
 	case isRune(v) && isString(t), isRuneSlice(v) && isString(t):
 	default:
@@ -384,6 +385,8 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.makeCall(e)
 	case BuiltinTake:
 		return c.takeCall(e)
+	case BuiltinReplace:
+		return c.replaceCall(e)
 	case BuiltinPanic:
 		c.exprs(e.Args)
 		return operand{value, Typ[Never], nil, nil}
@@ -525,6 +528,7 @@ func (c *Checker) makeCall(e *ast.CallExpr) operand {
 
 	switch t.typ.Underlying().(type) {
 	case *Slice, *Map, *Chan:
+		c.zeroMake(e, t.typ)
 		return operand{value, t.typ, nil, nil}
 	}
 
@@ -550,17 +554,62 @@ func (c *Checker) takeCall(e *ast.CallExpr) operand {
 	}
 
 	x := c.expr(e.Args[0], nil)
-	if x.mode == invalid {
+	if x.mode == invalid || !c.lentPlace(u, "take") {
 		return invalidOperand
 	}
 
 	t := x.typ.(*Ref).elem
 	if !hasZero(t) {
-		c.errorf(e.Args[0].Pos(), "cannot take "+exprText(u.X)+": "+t.String()+" has no zero value to leave behind")
+		c.errorf(e.Args[0].Pos(), "cannot take "+exprText(u.X)+": "+t.String()+" has no zero value to leave behind; replace(mut "+exprText(u.X)+", v) leaves v")
 		return invalidOperand
 	}
 
 	return operand{value, t, nil, nil}
+}
+
+// replaceCall checks replace(mut place, v): the place is written mut,
+// v is a value of the place's type, moved in, and the result is the
+// value the place held. The place is never empty, so it works for every
+// type, where take needs a zero value to leave behind.
+func (c *Checker) replaceCall(e *ast.CallExpr) operand {
+	if len(e.Args) != 2 {
+		c.errorf(e.Lparen, "replace takes a place and a value: replace(mut place, v)")
+		c.exprs(e.Args)
+		return invalidOperand
+	}
+
+	u, ok := e.Args[0].(*ast.UnaryExpr)
+	if !ok || u.Op != token.MUT {
+		c.exprs(e.Args)
+		c.errorf(e.Args[0].Pos(), "replace moves a value out of a place written mut: replace(mut x.f, v)")
+		return invalidOperand
+	}
+
+	x := c.expr(e.Args[0], nil)
+	if x.mode == invalid || !c.lentPlace(u, "replace") {
+		c.expr(e.Args[1], nil)
+		return invalidOperand
+	}
+
+	t := x.typ.(*Ref).elem
+	v := c.expr(e.Args[1], t)
+	c.assign(v, t, e.Args[1].Pos(), "replace")
+	c.kept(v, "stored", e.Args[1].Pos()) // the place keeps the value
+	return operand{value, t, nil, nil}
+}
+
+// lentPlace reports whether the mut borrow u, just checked, lends a
+// place, a variable or a field, element or *p of one, which take and
+// replace move a value out of and leave another in; a call's result, a
+// constant or a byte of a string is a value made for the borrow, and a
+// value moved out of it would be lost with it.
+func (c *Checker) lentPlace(u *ast.UnaryExpr, builtin string) bool {
+	if c.lentMode == variable || c.lentMode == mutBorrowed {
+		return true
+	}
+
+	c.errorf(u.X.Pos(), builtin+" needs a place, a variable or a field, element or *p of one: "+exprText(u.X)+" is not one")
+	return false
 }
 
 // variantCall checks Some(x), Ok(x), Err(e) and a declared variant with

@@ -10,8 +10,8 @@
 // Locks, as _docs/design/06-tasks-and-channels.md lays them out: one
 // object serves the sync package's Mutex, RwLock and WaitGroup. The
 // library holds a lock as an int, as it holds a file descriptor: the
-// handle is the lock's address, and 0, which no lock has, is the zero
-// handle of a WaitGroup, the one handle the library gives out unmade.
+// handle is the lock's address, never 0, since a handle comes only
+// from the function that makes its lock.
 //
 // The lock held alone is Rust's std::sync::Mutex, its futex mutex: one
 // word, 0 when free, 1 when held, 2 when held and a task may be waiting.
@@ -238,28 +238,24 @@ void sn_sync_unlockShared(int64_t h) {
     }
 }
 
-// lock_of returns the lock h names; an empty handle is a WaitGroup's,
-// since a Mutex and an RwLock catch their own.
-static sn_lock *lock_of(int64_t h) {
-    sn_lock *l = (sn_lock *)(intptr_t)h;
-    if (l == NULL) {
-        sn_panic(SN_STR("sync: use of an empty WaitGroup", 31));
-    }
-
-    return l;
-}
+// lock_of returns the lock h names, a WaitGroup's counter, which is
+// never 0: a WaitGroup comes only from NewWaitGroup.
+static sn_lock *lock_of(int64_t h) { return (sn_lock *)(intptr_t)h; }
 
 // sn_sync_count adds n to the count and wakes the waiters when it
-// reaches zero; a count below zero is a Done without its Add.
-void sn_sync_count(int64_t h, int64_t n) {
+// reaches zero, and reports whether it did: a count that would go below
+// zero, a Done without its Add, or past what an int holds, is left as
+// it was.
+bool sn_sync_count(int64_t h, int64_t n) {
     sn_lock *l = lock_of(h);
     sn_qlock_take(&l->mu);
-    l->count += n;
-    if (l->count < 0) {
+    int64_t count;
+    if (__builtin_add_overflow(l->count, n, &count) || count < 0) {
         sn_qlock_give(&l->mu);
-        sn_panic(SN_STR("sync: negative WaitGroup count", 30));
+        return false;
     }
 
+    l->count = count;
     if (l->count == 0) {
         for (sn_waiter *w; (w = sn_dequeue(&l->groupq)) != NULL;) {
             sn_finish_wait(w, true);
@@ -267,6 +263,7 @@ void sn_sync_count(int64_t h, int64_t n) {
     }
 
     sn_qlock_give(&l->mu);
+    return true;
 }
 
 void sn_sync_wait(int64_t h) {

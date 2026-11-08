@@ -97,6 +97,8 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 		c.declareVars(c.scope, d, t)
 		if t == nil {
 			c.errorf(d.Pos(), "a declaration without a value needs a type")
+		} else {
+			c.zeroDecl(d, t)
 		}
 
 		return

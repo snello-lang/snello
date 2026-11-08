@@ -91,6 +91,10 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 			}
 		}
 
+		if v, ok := scope.Lookup(d.Names[0].Name).(*Var); ok {
+			c.zeroDecl(d, v.typ)
+		}
+
 		return
 	}
 

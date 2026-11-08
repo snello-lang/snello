@@ -24,7 +24,7 @@ package strings
 import ("expect"; "testing")
 
 func TestRepeat() {
-    expect.Equal(Repeat("ab", 3), "ababab")
+    expect.Equal(ref expect.IsSome(Repeat("ab", 3)), "ababab")
 }
 
 func TestFields() {

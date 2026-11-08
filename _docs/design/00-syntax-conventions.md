@@ -4,7 +4,7 @@ Status: draft, 2026-10-17. These are the rules the programs in `../../examples/`
 
 ## Carried over from Go unchanged
 
-`package`, `import`, `func`, `type ... struct`, `:=`, `var`, `for`, `if`, `defer`, channels and `select`, slices, maps, methods with named receivers, multiple return values, exported names by capitalization, zero values, mutable parameters and locals.
+`package`, `import`, `func`, `type ... struct`, `:=`, `var`, `for`, `if`, `defer`, channels and `select`, slices, maps, methods with named receivers, multiple return values, exported names by capitalization, zero values for the types that have one (below), mutable parameters and locals.
 
 `for` ranges exactly as in Go: `for i := range xs` yields the index, `for i, x := range xs` the index and element, `for k, v := range m` key and value, `for x := range ch` the received value. An iterator ranges like a channel: `for x := range it` yields each item.
 
@@ -21,7 +21,7 @@ Full reasoning in `04-borrows-ref-and-mut.md`. The rules:
 - A borrow variable may be reassigned to a borrow derived from itself: `cur = mut n.left` where `n` was reached through `cur`. This is what makes walking a chain of boxes possible (example 20).
 - **Borrow-holding structs and closures.** A struct with a `ref` or `mut` field, and a closure that captures by borrow, are themselves borrows and obey every borrow rule. A lexer holding `src ref string` is legal; storing that lexer in owned data is not, and returning it follows the rule for returned borrows (examples 05, 11, 18).
 - Field access through a borrow needs no `*`: `n.value`. Assigning a whole new value through a `mut` borrow does: `*v = *v * k`.
-- `take(mut place)` moves the value out of a field or element and leaves the type's zero value (`None` for an option) behind.
+- `take(mut place)` moves the value out of a field or element and leaves the type's zero value (`None` for an option) behind, for a type that has one; `replace(mut place, v)` moves the value out and leaves `v`, for every type (zero values, below).
 - Indexing an owned slice yields a borrow. To move an element out use `xs.Remove(i)`, `xs.Pop()`, or `take` on an optional element.
 - Ranging: `range xs` on an owned collection consumes it, moving each element; `range ref xs` yields `ref` elements; `range mut xs` yields `mut` elements. A collection that is already a borrow ranges as that borrow.
 - Slices have methods `Push`, `Pop`, `Remove`, `Reverse`; `append` remains as in Go.
@@ -55,6 +55,64 @@ These came out of writing the parser and are binding on every example.
 - **One name on the left takes one expression on the right.** `x := f()`; only a list takes a list, `a, b := b, a`, as in Go.
 - **An `if` expression has an `else`.** Every path yields a value, so `x := if c { a }` without an `else` is an error.
 - **`impl` goes after `struct` or `enum`**: `struct Circle impl Shape { ... }`. Written before them it is reported and still recorded, so the rest of the declaration is checked.
+
+## Zero values
+
+No value in Snello is ever null or empty. A variable declared without a value gets its type's zero value, as in Go, but only when that zero is a real value of the type. (Decided 2026-11-08, task 11.2 of `../specs/stage-11-language-whole.md`.)
+
+**Types with a zero value**
+
+| Type | Zero value |
+|---|---|
+| a number | `0` |
+| `bool` | `false` |
+| `string` | `""` |
+| `T?` | `None`, whatever `T` is |
+| `[]T`, `map[K]V` | empty, whatever the element |
+| a struct, tuple or array | each part's zero value |
+| an enum | its first variant, with each field's zero value |
+| `Result<T, E>` | `Err` of `E`'s zero value |
+
+**Types without one**
+
+| Type | Why |
+|---|---|
+| `*T`, `chan T`, a function, a trait value | the zero would be a null that every use follows |
+| a type that implements `Drop` | it owns something, a cell, a lock, a file; its zero would own nothing |
+| a type parameter | the type argument may be one of the above |
+| a struct, tuple, array, enum or `Result` holding one of these | that part has no zero value |
+
+A value that may be missing is written `T?`: `var next *Node?` is `None`.
+
+**What the checker refuses**
+
+For a type without a zero value, every way of making one is an error:
+
+| Refused | Write instead |
+|---|---|
+| `var m sync.Mutex<int>` | `m := sync.NewMutex(0)`; `m := if c { ... } else { ... }` when it depends on a condition; or `var m sync.Mutex<int>?` |
+| `Box{}`, where `Box` has a field `p *int` | `Box{p: &n}`: name the field |
+| `[3]*Node{a}`, too short | `[3]*Node{a, b, c}` |
+| `make([]*Node, n)` | `make([]*Node, 0, n)`, then `Push`; `make([]*Node, 0)` is allowed |
+| `x := m[k]`, where the map's values are `*Node` | `m.Get(k)`, which gives a `ref *Node?`; writing `m[k] = v` is allowed |
+| `m[k].n = 5`, where the map's values are a struct with a `*int` field | `m.GetMut(k)`; a write of part of an entry would make the rest from the zero value |
+| `sync.Counter(c)`, where `c`'s type is declared over `sync.Counter` | `sync.NewCounter(n)`: a type without a zero value converts to and from no other type, and a type declared over another package's struct opens none of its fields |
+| `take(mut b.p)`, where `b.p` is a `*int` | `replace(mut b.p, &n)` |
+
+A declaration is not given a value later: `var m T` followed by an assignment on every path is refused too, and an `if` or `match` expression says the same thing in one statement.
+
+**`replace`**
+
+`replace(place mut T, v T) T` moves the value out of a place, a variable or a field, element or `*p` of one, written `mut`, and leaves `v` there; a call's result, a constant or a byte of a string is no place, and `replace` and `take` refuse it. It works for every type, where `take` works only for a type with a zero value, and the place is never empty. It is Rust's `mem::replace`.
+
+**In the library**
+
+- `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop`, so a program gets one only from its `New` function. Their "empty handle" panics can no longer be reached, and a `Weak` that may point at nothing is a `Weak<T>?`.
+- `strings.Repeat` returns `string?`: `None` for a negative count, or a string too long for an `int`.
+- `WaitGroup.Add` and `Done` return `bool`: `false`, with the count unchanged, when the count would go below zero.
+- `arena.Remove` takes its value without `Expect`.
+
+With these, the library panics on no mistake a caller can make. A branch inside `rc` and `sync` that only a broken invariant could reach keeps a panic that says so.
 
 ## Heap allocation
 

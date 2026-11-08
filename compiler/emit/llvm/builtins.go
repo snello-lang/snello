@@ -129,6 +129,14 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		v := e.load(e.irType(t, x.Pos()), p)
 		e.zero(p, t, x.Pos())
 		return v
+	case types.BuiltinReplace: // the place's address first, since v may be a call that runs before the place is read
+		target := x.Args[0].(*ast.UnaryExpr).X
+		p := e.placeAt(e.lvalue(target), e.typeOf(target))
+		t := e.typeOf(x)
+		v := e.operands(x.Args[1:], []types.Type{t})[0]
+		old := e.load(e.irType(t, x.Pos()), p)
+		e.store(v, p)
+		return old
 	case types.BuiltinPanic: // the text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
 		v := e.operands(x.Args, nil)[0]
 		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos(), false).v

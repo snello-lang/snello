@@ -24,15 +24,15 @@ Goal: Snello has what a programmer expects of any standard programming language 
 **Description:** Today `var p *int` compiles to a null that `*p` follows, and `var m sync.Mutex<int>` is an empty handle whose `Lock` panics. The rule, decided 2026-11-08: a type has no zero value when it implements `Drop`, when it is a type parameter, when it is a pointer, channel, function or trait value, or when it holds one of these. The checker refuses every way of making that zero: `var x T` with no value, local or package level; a struct literal that leaves such a field out; an array literal shorter than its length; `make([]T, n)`, while `make([]T, 0, n)` stays; a read `m[k]` of a map of such values, with a message naming `m.Get(k)`; and `take`, as today. A builtin `replace(place mut T, v T) T` moves a value out of a place and leaves `v` there, for every type. With the rule, the library panics on no mistake a caller can make: the `sync` and `rc` handles exist only from their constructors, `strings.Repeat` returns `string?`, `WaitGroup.Add` and `Done` return `false` for a count that would go below zero and leave it, and `arena.Remove` drops its `Expect`. A branch inside `rc` and `sync` that only an invariant broken can reach keeps its panic, as the library's rule allows.
 
 **Acceptance criteria:**
-- [ ] The design recorded and reviewed before the code, in the syntax note and the borrows note, with the argument that the rule only refuses and so keeps every guarantee
-- [ ] Each refusal has a checker test with its message; the programs the rule refuses are rewritten, `examples/run/shared.snello`'s empty handles and `examples/run/formats.snello`'s `take` of an `Rc`
-- [ ] `replace` through both backends, in release and debug builds, its ownership clean in `-debug`
-- [ ] `sync`, `rc`, `strings` and `arena` changed as described, their `_test.snello` files with them; the sync and rc programs clean under `-debug` and AddressSanitizer on both backends
-- [ ] The existing borrow and move tests pass unchanged
-- [ ] A chapter of its own in the book, for developers and maintainers; chapters 5, 10 and 13 and appendix B, which say a zero handle is empty and panics, corrected
+- [x] The design recorded and reviewed before the code, in the syntax note and the borrows note, with the argument that the rule only refuses and so keeps every guarantee
+- [x] Each refusal has a checker test with its message; the programs the rule refuses are rewritten, `examples/run/shared.snello`'s empty handles and `examples/run/formats.snello`'s `take` of an `Rc`
+- [x] `replace` through both backends, in release and debug builds, its ownership clean in `-debug`
+- [x] `sync`, `rc`, `strings` and `arena` changed as described, their `_test.snello` files with them; the sync and rc programs clean under `-debug` and AddressSanitizer on both backends
+- [x] The existing borrow and move tests pass unchanged
+- [x] A chapter of its own in the book, for developers and maintainers; chapters 5, 10 and 13 and appendix B, which say a zero handle is empty and panics, corrected
 
 **Verification:**
-- [ ] `go test ./compiler/... ./std ./examples`; `go test ./...`, `make test` and `make check`
+- [x] `go test ./compiler/... ./std ./examples`; `go test ./...`, `make test` and `make check` (2026-11-08, natively; reviewed on five axes before the pull request, its findings fixed: a write through a map entry, `m[k].f = v`, refused; a type that contains itself no longer crashes the walk; a field visible by the package that declared it, and no conversion to or from a type without a zero value; `take` and `replace` refuse what is not a place)
 
 **Dependencies:** none
 **Files:** `compiler/types/`, `compiler/emit/`, `std/builtin/`, `std/sync/`, `std/rc/`, `std/strings/`, `std/arena/`, `runtime/c/sync.c`, `examples/run/`, `../design/00-syntax-conventions.md`, `../design/04-borrows-ref-and-mut.md`, `../book/`

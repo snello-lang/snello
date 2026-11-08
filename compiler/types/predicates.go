@@ -167,47 +167,66 @@ func (n *Named) isCopy() bool {
 	return n.copyState == copyYes
 }
 
-// hasZero reports whether a value of type t can be left as the type's
-// zero value, which take leaves behind: "" for a
-// string, 0 for a number, None for an option, an empty slice or map,
-// an Err of the error's zero for a result, the first variant of an
-// enum with its fields zero. A channel handle, an owned pointer, a
-// borrow, a function value and a trait value have no empty form, since
-// their zero is a null that every use would follow; a composite with
-// such a part has none either. A type parameter counts as having one,
-// as generic code is checked once, against its bound.
+// hasZero reports whether type t has a zero value, one that is a real
+// value of it: "" for a string, 0 for a number, None for an option, an
+// empty slice or map, an Err of the error's zero for a result, the
+// first variant of an enum with its fields zero. A channel handle, an
+// owned pointer, a borrow, a function value and a trait value have
+// none, since their zero would be a null that every use followed; a
+// type that implements Drop has none, since it owns something its zero
+// would not; a type parameter has none, since generic code is checked
+// once for every type argument; and a composite with such a part has
+// none either. A declaration, a literal, make, a map read and take may
+// not make the zero of a type without one.
 func hasZero(t Type) bool {
+	return zeroIn(t, nil)
+}
+
+// zeroIn is hasZero with the declared types it is inside, so that a
+// type that contains itself, which is reported as invalid elsewhere,
+// ends the walk: one met again counts as having a zero value.
+func zeroIn(t Type, inside map[*Named]bool) bool {
 	switch t := t.(type) {
 	case *Basic:
 		return t.kind != Any && t.kind != Never
-	case *Option, *Slice, *Map, *TypeParam:
+	case *Option, *Slice, *Map:
 		return true
 	case *Result:
-		return hasZero(t.err)
+		return zeroIn(t.err, inside)
 	case *Array:
-		return hasZero(t.elem)
+		return zeroIn(t.elem, inside)
 	case *Tuple:
 		for _, e := range t.elems {
-			if !hasZero(e) {
+			if !zeroIn(e, inside) {
 				return false
 			}
 		}
 
 		return true
 	case *Struct:
-		return allHaveZero(t.fields)
+		return allHaveZero(t.fields, inside)
 	case *Enum:
-		return len(t.variants) > 0 && allHaveZero(t.variants[0].fields)
+		return len(t.variants) > 0 && allHaveZero(t.variants[0].fields, inside)
 	case *Named:
-		return hasZero(t.Underlying())
+		if inside[t] {
+			return true
+		}
+
+		if inside == nil {
+			inside = map[*Named]bool{}
+		}
+
+		inside[t] = true
+		defer delete(inside, t)
+		return !implements(t, DropTrait) && zeroIn(t.Underlying(), inside)
 	}
 
-	return false // channels, pointers, borrows, functions, traits
+	return false // channels, pointers, borrows, functions, traits, type parameters
 }
 
-func allHaveZero(vs []*Var) bool {
+func allHaveZero(vs []*Var, inside map[*Named]bool) bool {
 	for _, v := range vs {
-		if !hasZero(v.typ) {
+		if !zeroIn(v.typ, inside) {
 			return false
 		}
 	}

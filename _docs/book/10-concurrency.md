@@ -137,7 +137,7 @@ fmt.Println(*counter.Get().Lock().Get()) // 4
 
 The guard is what makes the lock safe to use: it holds a borrow of the value, so it is tied to the lock and the scope that took it. Keeping it in a struct, sending it, capturing it in a `spawn`, or binding the value of a lock the statement drops, `n := m.Lock().Get()`, are each refused by the borrow rules, with the message those rules give; and since the value is reached only through a guard, touching it without the lock cannot be written at all. The lock is released where the guard's scope ends, so a block, or a function of its own, bounds the critical section.
 
-Each of these types is made with its `New` function. The zero value, `var m sync.Mutex<int>`, is empty, and `Lock` on it panics, as `Get` on an empty `rc.Rc` does, and `Do` on an empty `Once` panics naming the `Once`. Each lock is reached through its own handle, so tasks taking locks of their own never wait on one another.
+Each of these types is made with its `New` function, and none has a zero value: `var m sync.Mutex<int>` is refused, since a lock with nothing behind it could only fail when used (chapter 18). `WaitGroup.Add` and `Done` return `false`, leaving the count as it was, for a count that would go below zero. Each lock is reached through its own handle, so tasks taking locks of their own never wait on one another.
 
 ## Package variables
 

@@ -103,10 +103,15 @@ func TestOnce() {
 	expect.Equal(ref calls.Load(), ref 1)
 }
 
-func TestEmpty() {
-	expect.PanicsWith(func() { var m sync.Mutex<int>; m.Lock() }, "sync: Lock on an empty Mutex")
-	expect.PanicsWith(func() { var a sync.Arc<int>; a.Get() }, "sync: Get on an empty Arc")
-	expect.PanicsWith(func() { var c sync.Counter; c.Load() }, "sync: use of an empty Counter")
+func TestWaitGroupCount() {
+	wg := sync.NewWaitGroup()
+	expect.False(wg.Done()) // no Add before it: the count stays at zero
+	expect.True(wg.Add(2))
+	expect.False(wg.Add(-3)) // below zero: refused, the count still 2
+	expect.True(wg.Done())
+	expect.True(wg.Done())
+	expect.False(wg.Done())
+	wg.Wait() // at zero, so it returns at once
 }
 
 func BenchmarkCounterAdd() {

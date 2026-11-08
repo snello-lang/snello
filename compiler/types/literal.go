@@ -110,7 +110,8 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 			c.errorf(e.Lbrace, "too many elements for "+t.String()+": "+strconv.Itoa(len(e.Elts)))
 		}
 
-		c.elements(e.Elts, u.elem) // fewer than the length leaves the rest zero, as in Go
+		c.elements(e.Elts, u.elem) // fewer than the length leaves the rest zero, as in Go, for an element that has one
+		c.zeroArray(e, t, u)
 	case *Map:
 		for _, elt := range e.Elts {
 			kv, ok := elt.(*ast.KeyValueExpr)
@@ -231,7 +232,7 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 			continue
 		}
 
-		if !c.visible(t, key) {
+		if !c.visible(t, key, f) {
 			c.expr(kv.Value, nil)
 			continue
 		}
@@ -247,6 +248,8 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 
 		c.kept(v, "stored", kv.Value.Pos())
 	}
+
+	c.zeroFields(e, t, st)
 }
 
 // keyed makes every element of a struct literal a key: value pair, and

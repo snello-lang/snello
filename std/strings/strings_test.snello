@@ -7,8 +7,11 @@ package strings_test
 import ("expect"; "strings"; "testing")
 
 func TestRepeat() {
-	expect.Equal(ref strings.Repeat("ab", 3), "ababab")
-	expect.Equal(ref strings.Repeat("x", 0), "")
+	expect.Equal(ref expect.IsSome(strings.Repeat("ab", 3)), "ababab")
+	expect.Equal(ref expect.IsSome(strings.Repeat("x", 0)), "")
+	expect.Equal(ref expect.IsSome(strings.Repeat("", 1000)), "")
+	expect.IsNone(strings.Repeat("x", -1))                   // a negative count
+	expect.IsNone(strings.Repeat("ab", 9223372036854775807)) // longer than an int can count
 }
 
 func TestJoin() {

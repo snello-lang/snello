@@ -9,7 +9,7 @@
 // while the value is there and answering None after; a struct holding
 // an Rc dropped with it; handles kept in a slice; an Rc of an Rc; a
 // Weak dropped while its Rc lives, and GetMut once the Weak is gone;
-// and the empty handles.
+// and a link that may point at nothing, an optional Weak.
 
 package main
 
@@ -88,9 +88,13 @@ func main() {
 	}
 	fmt.Println(solo.Get().name)
 
-	// The empty handles count nothing and clone to empty handles.
-	var emptyRc rc.Rc<Loud>
-	var emptyWeak rc.Weak<Loud>
-	fmt.Println(emptyRc.StrongCount(), emptyRc.Clone().StrongCount(), emptyRc.Downgrade().Upgrade().IsNone(), emptyWeak.Upgrade().IsNone(), emptyWeak.Clone().Upgrade().IsNone())
+	// A handle has no zero value: a link that may point at nothing is an
+	// optional one, None until it is given a handle.
+	var parent rc.Weak<Loud>?
+	fmt.Println(parent.IsNone(), solo.Downgrade().Upgrade().IsSome())
+	parent = Some(solo.Downgrade())
+	if p := ref parent {
+		fmt.Println(p.Upgrade().IsSome(), solo.WeakCount())
+	}
 	fmt.Println("end")
 }

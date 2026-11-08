@@ -23,9 +23,10 @@
 // is a plain number, and it is not sent to another task. The memory of
 // the value is released by the last handle, Rc or Weak, to go.
 //
-// The zero value of either handle, var r Rc<T>, is an empty handle:
-// it counts nothing, clones to another empty handle, and Get on it
-// panics.
+// Neither handle has a zero value: each implements Drop, so var r
+// Rc<T> is refused, and an Rc comes only from New or Clone, a Weak only
+// from Downgrade or Clone. A link that may point at nothing, the parent
+// of a tree's root, is a Weak<T>?.
 package rc
 
 import "fmt"
@@ -60,14 +61,13 @@ struct Weak<T> impl Clone, Drop, fmt.Stringer {
 }
 
 // String returns the text of the value, as fmt prints it, so that an
-// Rc, and a struct holding one, print as the value they share; an
-// empty handle prints as rc.Rc().
+// Rc, and a struct holding one, print as the value they share.
 func (r ref Rc<T>) String() string {
 	return text(ref r.p, "rc.Rc()")
 }
 
 // String returns the text of the value while it is there, as an Rc
-// prints, and rc.Weak() once it is gone or for an empty handle.
+// prints, and rc.Weak() once it is gone.
 func (w ref Weak<T>) String() string {
 	return text(ref w.p, "rc.Weak()")
 }
@@ -89,8 +89,7 @@ func New<T>(v T) Rc<T> {
 	return Rc<T>{p: Some(&cell<T>{strong: 1, weak: 0, value: Some(v)})}
 }
 
-// Get lends the value for reading, for as long as the Rc is lent. An
-// empty handle has no value and panics.
+// Get lends the value for reading, for as long as the Rc is lent.
 func (r ref Rc<T>) Get() ref T {
 	if p := ref r.p {
 		if v := ref p.value {
@@ -98,7 +97,7 @@ func (r ref Rc<T>) Get() ref T {
 		}
 	}
 
-	panic("rc: Get on an empty handle")
+	panic("rc: an Rc without its value: a broken invariant of the package") // an Rc holds its cell and the value until its Drop, which runs once
 }
 
 // GetMut lends the value for changing when this is the only handle on
@@ -133,7 +132,7 @@ func (r ref Rc<T>) Downgrade() Weak<T> {
 }
 
 // StrongCount returns how many Rc handles the value has, this one
-// included; zero for an empty handle.
+// included.
 func (r ref Rc<T>) StrongCount() int {
 	if p := ref r.p {
 		return p.strong
@@ -154,7 +153,7 @@ func (r ref Rc<T>) WeakCount() int {
 // Drop gives up this handle: the value is dropped with the last Rc, and
 // the cell released with the last handle of either kind.
 func (r mut Rc<T>) Drop() {
-	p := take(mut r.p) ?? return // empty, or dropped already
+	p := take(mut r.p) ?? return // dropped already
 	p.strong--
 	if p.strong > 0 {
 		leak(p)
@@ -175,7 +174,7 @@ func (r mut Rc<T>) Drop() {
 }
 
 // Upgrade returns an Rc on the value when it is still there, and None
-// when its last Rc is gone, or the Weak is empty.
+// when its last Rc is gone.
 func (w ref Weak<T>) Upgrade() Rc<T>? {
 	if p := ref w.p {
 		if p.strong > 0 {
@@ -198,7 +197,7 @@ func (w ref Weak<T>) Clone() Weak<T> {
 // Drop gives up this handle; the cell is released when it was the
 // last handle of either kind.
 func (w mut Weak<T>) Drop() {
-	p := take(mut w.p) ?? return // empty, or dropped already
+	p := take(mut w.p) ?? return // dropped already
 	p.weak--
 	if p.strong == 0 && p.weak == 0 {
 		return // the last handle: p goes out of scope here and frees the cell
@@ -208,8 +207,8 @@ func (w mut Weak<T>) Drop() {
 }
 
 // retain returns an owned copy of the pointer a handle holds, for a new
-// handle on the same cell, or None for an empty handle. The caller
-// raises the count the new handle is counted in.
+// handle on the same cell, or None for a handle whose Drop has run. The
+// caller raises the count the new handle is counted in.
 func retain<T>(p ref (*cell<T>?)) *cell<T>? {
 	if q := ref p {
 		return Some(alias(q))

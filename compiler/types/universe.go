@@ -76,6 +76,7 @@ var predeclaredBuiltins = [...]struct {
 	{"min", BuiltinMin},
 	{"max", BuiltinMax},
 	{"close", BuiltinClose},
+	{"replace", BuiltinReplace},
 }
 
 func init() {
