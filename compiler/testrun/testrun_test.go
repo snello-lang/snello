@@ -354,6 +354,20 @@ func TestStdDir(t *testing.T) {
 		}
 	}
 
+	nested := filepath.Join("..", "..", "std", "unicode", "utf8") // a package two levels down, unicode/utf8, tested as package utf8_test
+	if !IsStdDir(nested) {
+		t.Fatalf("%s is not seen as a standard package", nested)
+	}
+
+	if p, err := PlanStdDir(nested); err != nil || p.Path != "unicode/utf8_test" || filepath.Base(p.StdDir) != "std" {
+		t.Errorf("%s: planned as %+v, %v", nested, p, err)
+	}
+
+	var out bytes.Buffer
+	if code, err := Run(nested, "c", nil, &out, &out); err != nil || code != 0 || !strings.Contains(out.String(), "ok  \tunicode/utf8\t") {
+		t.Errorf("%s: exited %d, %v\n%s", nested, code, err, out.String())
+	}
+
 	if _, err := PlanStdDir(filepath.Join("..", "..", "std", "nosuch")); err == nil || !strings.Contains(err.Error(), "is not a standard package of the library") {
 		t.Errorf("a directory that is no standard package: got %v", err)
 	}

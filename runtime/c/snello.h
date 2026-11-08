@@ -247,6 +247,14 @@ static inline void sn_string_free(sn_string s) {
 void sn_slice_own(const sn_slice *s, const char *what);
 int64_t sn_slice_cap(const sn_slice *s); // a view's room is its length
 
+// sn_utf8_decode reads the rune at p, at most n bytes, and returns its
+// width: a byte that does not start a valid sequence is U+FFFD of width
+// one, the one rule every part of the language reads a string by, a
+// range over it included. sn_utf8_encode writes r at out and returns
+// its length, U+FFFD for a value that is not a code point.
+int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r);
+int sn_utf8_encode(int32_t r, uint8_t *out);
+
 // sn_rune_upper and sn_rune_lower map a rune to its upper or lower
 // case and sn_rune_space says whether it is white space, as Go's
 // unicode.ToUpper, ToLower and IsSpace do, from the tables unicode.c
@@ -266,6 +274,66 @@ sn_slice_u8 sn_bufio_bytesOf(sn_string s);
 int32_t sn_rune_upper(int32_t r);
 int32_t sn_rune_lower(int32_t r);
 bool sn_rune_space(int32_t r);
+
+// sn_rune_letter, sn_rune_digit, sn_rune_is_upper and sn_rune_is_lower
+// say whether a rune's general category is a letter, L, a decimal
+// digit, Nd, an uppercase letter, Lu, or a lowercase letter, Ll, from
+// the tables unicode.c holds; a value that is not a code point is none.
+bool sn_rune_letter(int32_t r);
+bool sn_rune_digit(int32_t r);
+bool sn_rune_is_upper(int32_t r);
+bool sn_rune_is_lower(int32_t r);
+
+// The functions the unicode packages and strings declare without a
+// body: the classes, mappings, categories and scripts of unicode and
+// the decoding of unicode/utf8, in rune.c; full case mapping and
+// folding on strings, in string.c; normalization, in norm.c; and text
+// segmentation, in segment.c.
+bool sn_unicode_IsLetter(int32_t r);
+bool sn_unicode_IsDigit(int32_t r);
+bool sn_unicode_IsSpace(int32_t r);
+bool sn_unicode_IsUpper(int32_t r);
+bool sn_unicode_IsLower(int32_t r);
+bool sn_unicode_IsTitle(int32_t r);
+bool sn_unicode_IsMark(int32_t r);
+bool sn_unicode_IsNumber(int32_t r);
+bool sn_unicode_IsPunct(int32_t r);
+bool sn_unicode_IsSymbol(int32_t r);
+bool sn_unicode_IsControl(int32_t r);
+bool sn_unicode_IsGraphic(int32_t r);
+bool sn_unicode_IsPrint(int32_t r);
+int32_t sn_unicode_ToUpper(int32_t r);
+int32_t sn_unicode_ToLower(int32_t r);
+int32_t sn_unicode_ToTitle(int32_t r);
+int32_t sn_unicode_CaseFold(int32_t r);
+sn_string sn_unicode_Category(int32_t r);
+sn_string sn_unicode_Script(int32_t r);
+sn_string sn_unicode_ScriptCode(int32_t r);
+bool sn_unicode_InScript(int32_t r, sn_string name);
+bool sn_unicode_IsAlphabetic(int32_t r);
+bool sn_unicode_IsEmoji(int32_t r);
+bool sn_unicode_IsIDStart(int32_t r);
+bool sn_unicode_IsIDContinue(int32_t r);
+int64_t sn_unicode_digit(int32_t r);
+bool sn_unicode_numeric(int32_t r, int64_t *num, int64_t *den);
+int64_t sn_unicode__utf8_decode(sn_slice_u8 p, int32_t *r);
+int64_t sn_unicode__utf8_decodeString(sn_string s, int32_t *r);
+bool sn_unicode__utf8_valid(sn_slice_u8 p);
+bool sn_unicode__utf8_validString(sn_string s);
+int64_t sn_unicode__utf8_count(sn_slice_u8 p);
+int64_t sn_unicode__utf8_countString(sn_string s);
+bool sn_unicode__utf8_full(sn_slice_u8 p);
+bool sn_unicode__utf8_fullString(sn_string s);
+int64_t sn_unicode__utf8_decodeLast(sn_slice_u8 p, int32_t *r);
+int64_t sn_unicode__utf8_decodeLastString(sn_string s, int32_t *r);
+sn_string sn_strings_toTitle(sn_string s);
+sn_string sn_strings_toValidUTF8(sn_string s, sn_string rep);
+sn_string sn_string_from_rune(int32_t r);
+sn_string sn_string_from_runes(sn_slice rs);
+bool sn_strings_equalIgnoreCase(sn_string s, sn_string t);
+sn_string sn_unicode__norm_normalize(sn_string s, int64_t form);
+bool sn_unicode__norm_isNormal(sn_string s, int64_t form);
+int64_t sn_unicode__segment_next(sn_string s, int64_t at, int64_t kind);
 
 void sn_slice_free(sn_slice *s);
 void sn_release(void **p); // frees the block an owned pointer holds and empties the pointer
@@ -336,6 +404,7 @@ bool sn_has_suffix(sn_string s, sn_string t);
 bool sn_string_contains(sn_string s, sn_string t);
 void sn_fields(sn_string s, sn_slice *out);
 void sn_lines(sn_string s, sn_slice *out);
+void sn_runes(sn_string s, sn_slice *out);
 void sn_split(sn_string s, sn_string sep, sn_slice *out);
 bool sn_split_once(sn_string s, sn_string sep, sn_string *before, sn_string *after);
 

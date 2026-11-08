@@ -28,13 +28,13 @@ import (
 	"path/filepath"
 )
 
-//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/pow10.c c/sched.c c/net.c c/debug.c c/testing.c
+//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/net.c c/debug.c c/testing.c
 var files embed.FS
 
 // sources are the runtime's files a build compiles.
 var sources = []string{
 	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "map.c", "bufio.c",
-	"os.c", "print.c", "math.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "pow10.c",
+	"os.c", "print.c", "math.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "rune.c", "norm.c", "segment.c", "pow10.c",
 	"sched.c", "net.c", "debug.c", "testing.c",
 }
 

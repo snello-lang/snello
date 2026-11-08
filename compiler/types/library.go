@@ -158,6 +158,8 @@ func stringMethod(name string) *Signature {
 		return reads(nil, s)
 	case "Fields", "Lines":
 		return reads(nil, NewSlice(ref(s)))
+	case "Runes":
+		return reads(nil, NewSlice(aliases[1]))
 	case "Split":
 		return reads([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
 	case "SplitOnce":

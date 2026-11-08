@@ -4,7 +4,7 @@
 
 package bufio_test
 
-import ("bufio"; "expect"; "os"; "testing")
+import ("bufio"; "expect"; "io"; "os"; "testing")
 
 func TestWriter() {
 	dir := testing.TempDir()
@@ -39,6 +39,73 @@ func TestReader() {
 	expect.IsNone(expect.IsOk(r.ReadString(byte(10))))
 	expect.IsNone(expect.IsOk(r.ReadByte()))
 	expect.Equal(r.Get().Name(), ref path)
+}
+
+// A Trickle hands out its bytes one a call, so that every rune of more
+// than one byte reaches the Reader split across reads.
+struct Trickle impl io.Reader {
+	data []byte
+	at   int
+}
+
+func (t mut Trickle) Read(buf mut []byte) Result<int, io.Error> {
+	if t.at == len(t.data) || len(buf) == 0 {
+		return Ok(0)
+	}
+
+	buf[0] = t.data[t.at]
+	t.at += 1
+	return Ok(1)
+}
+
+func TestReadRune() {
+	var t = Trickle{data: []byte("aé世\xff😀"), at: 0}
+	rd := bufio.NewReader(mut t)
+	runes := []rune{'a', 'é', '世', '\uFFFD', 0x1F600} // a byte that starts no sequence is U+FFFD
+	widths := []int{1, 2, 3, 1, 4}
+	for i, want := range ref runes {
+		r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
+		expect.Equal(ref r, want)
+		expect.Equal(ref n, widths[i])
+	}
+
+	expect.IsNone(expect.IsOk(rd.ReadRune()))
+}
+
+// A sequence that is already no rune's start returns at once, and
+// UnreadRune puts back the rune just read.
+func TestUnreadRune() {
+	var t = Trickle{data: []byte("\xe2Aé"), at: 0}
+	rd := bufio.NewReader(mut t)
+	r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref '\uFFFD') // E2 then A: invalid without a third byte
+	expect.Equal(ref n, ref 1)
+	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref 'A')
+	expect.True(rd.UnreadRune())
+	expect.False(rd.UnreadRune()) // once a read
+	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref 'A')
+	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref 'é')
+	expect.Equal(ref n, ref 2)
+	expect.True(rd.UnreadRune())
+	expect.IsSome(expect.IsOk(rd.ReadByte()))
+	expect.False(rd.UnreadRune()) // after another read
+}
+
+// A rune cut short by the end of the input reads as U+FFFD a byte at a
+// time.
+func TestReadRuneCut() {
+	var t = Trickle{data: []byte("\xe4\xb8"), at: 0}
+	rd := bufio.NewReader(mut t)
+	r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref '\uFFFD')
+	expect.Equal(ref n, ref 1)
+	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
+	expect.Equal(ref r, ref '\uFFFD')
+	expect.Equal(ref n, ref 1)
+	expect.IsNone(expect.IsOk(rd.ReadRune()))
 }
 
 func TestScanner() {

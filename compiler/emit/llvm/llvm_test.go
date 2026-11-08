@@ -537,3 +537,53 @@ func TestMain(m *testing.M) {
 
 	os.Exit(m.Run())
 }
+
+// emitSource parses, checks and emits the program src with the
+// standard library, and returns what the backend writes, failing the
+// test on any error. The tests beside each file of the backend read
+// the output by the function that wrote it.
+func emitSource(t *testing.T, src string) string {
+	t.Helper()
+	f, file, err := parser.ParseFile("t.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &types.Info{}
+	imp := importer.NewImporter(info)
+	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := Emit(Config{}, file, f, info, libraries(imp)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(out)
+}
+
+// irFunction returns the body of the IR function named name, up to its
+// closing brace, or fails the test.
+func irFunction(t *testing.T, out, name string) string {
+	t.Helper()
+	i := strings.Index(out, "define internal ")
+	for i >= 0 {
+		line := out[i:]
+		line = line[:strings.Index(line, "\n")]
+		if strings.Contains(line, " @"+name+"(") {
+			body := out[i:]
+			return body[:strings.Index(body, "\n}\n")]
+		}
+
+		next := strings.Index(out[i+1:], "define internal ")
+		if next < 0 {
+			break
+		}
+
+		i += 1 + next
+	}
+
+	t.Fatalf("no function written as @%s", name)
+	return ""
+}

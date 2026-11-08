@@ -216,7 +216,7 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 // section 1). A standard package's is loaded with the library's
 // privileges, from the embedded copy or from StdDir.
 func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, error) {
-	if _, err := imp.stdFile(base + "/" + base + ".snello"); err == nil {
+	if _, err := imp.stdFile(base + "/" + path.Base(base) + ".snello"); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
 			entries, err := imp.stdDir(base)
 			if err != nil {

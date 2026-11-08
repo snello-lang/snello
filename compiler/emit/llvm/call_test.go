@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+// conversion writes string(r) and string(rs) as calls of the runtime's
+// sn_string_from_rune and sn_string_from_runes.
+func TestRuneConversions(t *testing.T) {
+	body := irFunction(t, emitSource(t, `package main
+func main() { var r rune = 'é'; rs := "añ".Runes(); print(string(r), string(rs)) }`), "sn_main")
+	for _, want := range []string{"@sn_string_from_rune(", "@sn_string_from_runes("} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main lacks a call of %s:\n%s", want, body)
+		}
+	}
+}
+
 // methodNameOf hands a derived Error() to the type's stringer and a
 // derived Source() to the function giving None, so the table of a
 // type used as an Error reaches both.

@@ -1,0 +1,115 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package segment splits text at the boundaries annex 29 of the Unicode
+// standard defines: grapheme clusters, what a reader sees as one
+// character, a flag, an emoji with its modifiers, a letter with its
+// accents, a consonant cluster of an Indian script; words; and
+// sentences. Each function gives the pieces in order, each a borrow
+// into the string, so nothing is copied and the pieces join back to
+// the string; a loop over them lends the string for its duration, as
+// strings.Fields does.
+package segment
+
+import "unicode"
+
+// A Kind is one of the three kinds of boundary annex 29 defines.
+enum Kind impl Copy, Eq {
+	// Grapheme: the boundaries of grapheme clusters.
+	Grapheme
+
+	// Word: the boundaries of words.
+	Word
+
+	// Sentence: the boundaries of sentences.
+	Sentence
+}
+
+// Graphemes returns the grapheme clusters of s.
+func Graphemes(s ref string) []ref string {
+	return split(s, Grapheme)
+}
+
+// Words returns the pieces of s between word boundaries: the words, and
+// the runs of spaces and the punctuation between them, each a piece of
+// its own, as annex 29 places the boundaries. IsWord tells the words
+// from the rest.
+func Words(s ref string) []ref string {
+	return split(s, Word)
+}
+
+// Sentences returns the sentences of s, each with the spaces after it.
+func Sentences(s ref string) []ref string {
+	return split(s, Sentence)
+}
+
+// Next returns the byte offset of the first boundary of kind k after the
+// boundary at, for walking s without the slice, at going from 0 until
+// there is none: None when no segment starts at at, at the end of s,
+// past it or below 0.
+func Next(k Kind, s ref string, at int) int? {
+	if at < 0 || at >= len(s) {
+		return None
+	}
+
+	return Some(boundary(s, at, k))
+}
+
+// Count returns how many segments of kind k s holds, without the slice:
+// Count(Grapheme, s) is the number of characters a reader sees.
+func Count(k Kind, s ref string) int {
+	n := 0
+	at := 0
+	for at < len(s) {
+		at = boundary(s, at, k)
+		n += 1
+	}
+
+	return n
+}
+
+// IsWord reports whether a piece Words gave is a word, one holding a
+// letter or a number, as an ideograph and a kana are letters; a run of
+// spaces or of punctuation is not.
+func IsWord(piece ref string) bool {
+	for _, r := range piece {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// split cuts s into the segments of kind k, measured by the runtime.
+func split(s ref string, k Kind) []ref string {
+	out := []ref string{}
+	at := 0
+	for at < len(s) {
+		end := boundary(s, at, k)
+		out.Push(s[at:end])
+		at = end
+	}
+
+	return out
+}
+
+// boundary returns the first boundary of kind k after the boundary at,
+// an offset within s.
+func boundary(s ref string, at int, k Kind) int {
+	return at + next(s, at, code(k))
+}
+
+// code numbers the kinds as the runtime does.
+func code(k Kind) int {
+	return match k {
+		Grapheme => 0,
+		Word => 1,
+		Sentence => 2,
+	}
+}
+
+// next returns the length in bytes of the segment of the kind that
+// starts at the boundary at.
+func next(s ref string, at int, kind int) int

@@ -7,10 +7,6 @@ package c
 import (
 	"strings"
 	"testing"
-
-	"github.com/snello-lang/snello/compiler/importer"
-	"github.com/snello-lang/snello/compiler/parser"
-	"github.com/snello-lang/snello/compiler/types"
 )
 
 // The program the Error trait's helpers are written for: a derived
@@ -43,36 +39,7 @@ func main() {
 
 func emitError(t *testing.T) string {
 	t.Helper()
-	f, file, err := parser.ParseFile("t.snello", []byte(errorSrc))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	info := &types.Info{}
-	imp := importer.NewImporter(info)
-	if _, err := (&types.Config{Importer: imp}).Check("", file, f, info); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := Emit(file, f, info, libraries(imp)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return string(out)
-}
-
-// cFunction returns the body of the C function whose definition starts
-// with head, up to its closing brace, or fails the test.
-func cFunction(t *testing.T, out, head string) string {
-	t.Helper()
-	i := strings.Index(out, head+" {\n")
-	if i < 0 {
-		t.Fatalf("no function written as %q", head)
-	}
-
-	body := out[i:]
-	return body[:strings.Index(body, "\n}\n")]
+	return emitSource(t, errorSrc)
 }
 
 // The helpers error.go writes: a derived Source, the chain behind %+v

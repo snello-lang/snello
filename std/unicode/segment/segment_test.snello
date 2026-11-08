@@ -1,0 +1,105 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package segment_test
+
+import ("expect"; "testing"; "unicode/segment")
+
+// join puts the pieces back together and counts them.
+func join(pieces ref []ref string) (string, int) {
+	out := ""
+	for p := range pieces {
+		out = out + p
+	}
+
+	return (out, len(pieces))
+}
+
+func TestGraphemes() {
+	s := "é🇫🇷👍🏽\r\nक्षि"
+	g := segment.Graphemes(ref s)
+	expect.Equal(ref len(g), ref 5)
+	expect.Equal(g[0], "é")        // a letter and its accent
+	expect.Equal(g[1], "🇫🇷")            // a flag, two regional indicators
+	expect.Equal(g[2], "👍🏽")            // an emoji and its skin tone
+	expect.Equal(g[3], "\r\n")           // a line ending is one
+	expect.Equal(g[4], "क्षि")           // a Devanagari conjunct with its vowel sign
+	joined, _ := join(ref g)
+	expect.Equal(ref joined, ref s)
+	expect.Equal(ref len(segment.Graphemes("")), ref 0)
+}
+
+func TestWords() {
+	w := segment.Words("Hello, wörld! 3.14 can't")
+	expect.Equal(ref len(w), ref 9) // the words, the comma, the bang and the spaces between, each a piece
+	expect.Equal(w[0], "Hello")
+	expect.Equal(w[1], ",")
+	expect.Equal(w[3], "wörld")
+	expect.Equal(w[6], "3.14") // a number with its point is one word
+	expect.Equal(w[8], "can't")
+}
+
+func TestSentences() {
+	s := "Mr. Smith left. He said: \"Hi!\" Then went."
+	p := segment.Sentences(ref s)
+	expect.Equal(ref len(p), ref 4)
+	expect.Equal(p[1], "Smith left. ")
+	expect.Equal(p[2], "He said: \"Hi!\" ")
+	joined, n := join(ref p)
+	expect.Equal(ref joined, ref s)
+	expect.Equal(ref n, ref 4)
+}
+
+func TestWalk() {
+	s := "e\u0301🇫🇷 ok"
+	expect.Equal(ref segment.Count(segment.Grapheme, ref s), ref 5) // é, the flag, the space, o, k
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 0)), ref 3)
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 3)), ref 11)
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 13)), ref 14)
+	expect.Equal(ref segment.Count(segment.Word, "Hello, world"), ref 4)
+	expect.Equal(ref segment.Count(segment.Sentence, "One. Two."), ref 2)
+	expect.Equal(ref segment.Count(segment.Grapheme, ""), ref 0)
+}
+
+func TestNextAtTheEnd() {
+	s := "abc"
+	expect.IsNone(segment.Next(segment.Grapheme, ref s, len(s)))
+	expect.IsNone(segment.Next(segment.Word, ref s, 4))
+	expect.IsNone(segment.Next(segment.Sentence, ref s, -1))
+	expect.IsNone(segment.Next(segment.Word, "", 0))
+	at := 0
+	pieces := 0
+	for {
+		match segment.Next(segment.Word, "Hello, world", at) {
+			None => break,
+			Some(end) => {
+				at = end
+				pieces += 1
+			},
+		}
+	}
+
+	expect.Equal(ref pieces, ref 4)
+	expect.Equal(ref at, ref 12)
+}
+
+func TestIsWord() {
+	words := 0
+	for w := range segment.Words("Hello, wörld! 3.14 世界") {
+		if segment.IsWord(w) {
+			words += 1
+		}
+	}
+
+	expect.Equal(ref words, ref 5) // Hello, wörld, 3.14, 世 and 界: annex 29 gives each ideograph a segment of its own
+	expect.False(segment.IsWord(", "))
+	expect.True(segment.IsWord("3.14"))
+}
+
+func BenchmarkGraphemes() {
+	s := "Snello è veloce, 世界 🇫🇷👍🏽 क्षि"
+	for testing.Loop() {
+		expect.True(len(segment.Graphemes(ref s)) > 0)
+	}
+}

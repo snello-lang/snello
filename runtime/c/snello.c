@@ -168,8 +168,13 @@ int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r) {
     return w;
 }
 
-// sn_utf8_encode writes r as UTF-8 at out and returns its length.
+// sn_utf8_encode writes r as UTF-8 at out and returns its length, and
+// writes U+FFFD for a value that is not a code point UTF-8 can hold.
 int sn_utf8_encode(int32_t r, uint8_t *out) {
+    if (r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) {
+        r = 0xFFFD; // not a code point UTF-8 can hold
+    }
+
     if (r < 0x80) {
         out[0] = (uint8_t)r;
         return 1;

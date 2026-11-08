@@ -1,0 +1,189 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package utf16 reads and writes runes in UTF-16, the encoding of
+// Windows, Java and JavaScript strings: a rune below U+10000 is one
+// unit of 16 bits, and one above it two, a surrogate pair. An unpaired
+// surrogate reads as U+FFFD.
+package utf16
+
+// replacement is U+FFFD, read for an unpaired surrogate and written for
+// a value that is not a code point.
+const replacement rune = 0xFFFD
+
+// The surrogates: a high one, U+D800 to U+DBFF, then a low one, U+DC00
+// to U+DFFF, carry the 20 bits of a rune past U+FFFF.
+const surr1 rune = 0xD800
+const surr2 rune = 0xDC00
+const surr3 rune = 0xE000
+const surrSelf rune = 0x10000
+const maxRune rune = 0x10FFFF
+
+// IsSurrogate reports whether r is a surrogate, U+D800 to U+DFFF, which
+// UTF-16 uses in pairs and which is no rune of its own.
+func IsSurrogate(r rune) bool {
+	return r >= surr1 && r < surr3
+}
+
+// RuneLen returns how many 16-bit units r takes, one or two, or -1 for
+// a value that is not a code point or is a surrogate.
+func RuneLen(r rune) int {
+	if r < 0 || r > maxRune || IsSurrogate(r) {
+		return -1
+	}
+
+	if r < surrSelf {
+		return 1
+	}
+
+	return 2
+}
+
+// EncodeRune returns the surrogate pair of r, and (U+FFFD, U+FFFD) for
+// a rune below U+10000, which takes one unit, or a value that is not a
+// code point.
+func EncodeRune(r rune) (rune, rune) {
+	if r < surrSelf || r > maxRune {
+		return (replacement, replacement)
+	}
+
+	r -= surrSelf
+	return (surr1 + (r >> 10) & 0x3FF, surr2 + r & 0x3FF)
+}
+
+// DecodeRune returns the rune the surrogate pair r1, r2 holds, and
+// U+FFFD when they are not a high and then a low surrogate.
+func DecodeRune(r1 rune, r2 rune) rune {
+	if r1 >= surr1 && r1 < surr2 && r2 >= surr2 && r2 < surr3 {
+		return (r1 - surr1) << 10 | (r2 - surr2) + surrSelf
+	}
+
+	return replacement
+}
+
+// AppendRune appends the UTF-16 units of r to p, U+FFFD's for a value
+// that is not a code point or is a surrogate.
+func AppendRune(p mut []u16, r rune) {
+	n := RuneLen(r)
+	if n == 1 {
+		p.Push(u16(r))
+		return
+	}
+
+	if n < 0 {
+		p.Push(u16(replacement))
+		return
+	}
+
+	r1, r2 := EncodeRune(r)
+	p.Push(u16(r1))
+	p.Push(u16(r2))
+}
+
+// An Order is the order a 16-bit unit's two bytes are written in.
+enum Order impl Copy, Eq {
+	// BigEndian writes the high byte first, UTF-16BE.
+	BigEndian
+
+	// LittleEndian writes the low byte first, UTF-16LE, as Windows does.
+	LittleEndian
+}
+
+// EncodeBytes returns s in UTF-16 bytes in the order o, after a
+// byte-order mark, U+FEFF, when bom is true.
+func EncodeBytes(s ref string, o Order, bom bool) []byte {
+	units := []u16{}
+	if bom {
+		units.Push(0xFEFF)
+	}
+
+	for _, r := range s {
+		AppendRune(mut units, r)
+	}
+
+	out := []byte{}
+	for _, u := range ref units {
+		hi, lo := byte(u >> 8), byte(u & 0xFF)
+		if o == BigEndian {
+			out.Push(hi)
+			out.Push(lo)
+		} else {
+			out.Push(lo)
+			out.Push(hi)
+		}
+	}
+
+	return out
+}
+
+// DecodeBytes returns the string the UTF-16 bytes p hold in the order
+// o. A byte-order mark at the start says the order instead and is
+// dropped; an unpaired surrogate, and a last byte without its pair,
+// read as U+FFFD.
+func DecodeBytes(p ref []byte, o Order) string {
+	order := o
+	at := 0
+	if len(p) >= 2 && p[0] == 0xFE && p[1] == 0xFF {
+		order = BigEndian
+		at = 2
+	} else if len(p) >= 2 && p[0] == 0xFF && p[1] == 0xFE {
+		order = LittleEndian
+		at = 2
+	}
+
+	units := []u16{}
+	for at + 1 < len(p) {
+		if order == BigEndian {
+			units.Push(u16(p[at]) << 8 | u16(p[at + 1]))
+		} else {
+			units.Push(u16(p[at + 1]) << 8 | u16(p[at]))
+		}
+
+		at += 2
+	}
+
+	runes := Decode(ref units)
+	if at < len(p) {
+		runes.Push(replacement)
+	}
+
+	return string(runes)
+}
+
+// Encode returns the UTF-16 units of the runes s.
+func Encode(s ref []rune) []u16 {
+	out := []u16{}
+	for _, r := range s {
+		AppendRune(mut out, r)
+	}
+
+	return out
+}
+
+// Decode returns the runes the UTF-16 units s hold, U+FFFD for each
+// unit of an unpaired surrogate.
+func Decode(s ref []u16) []rune {
+	out := []rune{}
+	i := 0
+	for i < len(s) {
+		r := rune(s[i])
+		if r >= surr1 && r < surr2 && i + 1 < len(s) {
+			if d := DecodeRune(r, rune(s[i + 1])); d != replacement {
+				out.Push(d)
+				i += 2
+				continue
+			}
+		}
+
+		if IsSurrogate(r) {
+			out.Push(replacement)
+		} else {
+			out.Push(r)
+		}
+
+		i += 1
+	}
+
+	return out
+}

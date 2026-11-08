@@ -1,0 +1,126 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package utf8_test
+
+import ("expect"; "testing"; "unicode/utf8")
+
+func TestRuneLen() {
+	expect.Equal(ref utf8.RuneLen('a'), ref 1)
+	expect.Equal(ref utf8.RuneLen('é'), ref 2)
+	expect.Equal(ref utf8.RuneLen('世'), ref 3)
+	expect.Equal(ref utf8.RuneLen(0x1F600), ref 4)
+	expect.Equal(ref utf8.RuneLen(0xD800), ref -1)
+	expect.Equal(ref utf8.RuneLen(-1), ref -1)
+	expect.Equal(ref utf8.RuneLen(utf8.MaxRune + 1), ref -1)
+}
+
+func TestValid() {
+	expect.True(utf8.ValidString("añ世😀"))
+	expect.True(utf8.ValidString(""))
+	expect.True(utf8.ValidString("\uFFFD")) // the replacement rune itself is valid
+	expect.False(utf8.ValidString("a\xff"))
+	expect.False(utf8.ValidString("\xe4\xb8")) // cut short
+	expect.False(utf8.ValidString("\xed\xa0\x80")) // an encoded surrogate
+	expect.True(utf8.Valid(ref []byte{228, 184, 150}))
+	expect.False(utf8.Valid(ref []byte{0xC0, 0x80})) // an overlong encoding
+	expect.True(utf8.ValidRune('a') && utf8.ValidRune(utf8.MaxRune))
+	expect.False(utf8.ValidRune(0xDFFF) || utf8.ValidRune(-1) || utf8.ValidRune(utf8.MaxRune + 1))
+}
+
+func TestConstants() {
+	expect.Equal(ref utf8.RuneSelf, ref 0x80)
+	expect.Equal(ref utf8.UTFMax, ref 4)
+	expect.Equal(ref utf8.RuneLen(utf8.RuneSelf - 1), ref 1)
+	expect.Equal(ref utf8.RuneLen(utf8.RuneSelf), ref 2)
+}
+
+func TestCount() {
+	expect.Equal(ref utf8.RuneCountInString("añ世😀"), ref 4)
+	expect.Equal(ref utf8.RuneCountInString(""), ref 0)
+	expect.Equal(ref utf8.RuneCountInString("a\xffb"), ref 3) // a stray byte counts as a rune
+	expect.Equal(ref utf8.RuneCount(ref []byte{228, 184, 150, 97}), ref 2)
+}
+
+func TestFullRune() {
+	expect.True(utf8.FullRuneInString("a") && utf8.FullRuneInString("世"))
+	expect.False(utf8.FullRuneInString("\xe4\xb8")) // more bytes would complete it
+	expect.False(utf8.FullRuneInString(""))
+	expect.True(utf8.FullRuneInString("\xff")) // reads as RuneError whatever follows
+	expect.True(utf8.FullRuneInString("\xe4a")) // cut short by a byte that is no continuation: RuneError already
+	expect.True(utf8.FullRune(ref []byte{240, 159, 152, 128}))
+	expect.False(utf8.FullRune(ref []byte{240, 159, 152}))
+	expect.True(utf8.RuneStart('a') && utf8.RuneStart(0xE4))
+	expect.False(utf8.RuneStart(0xB8))
+}
+
+func TestDecodeLast() {
+	tests := []string{"añ", "a", "", "a\xff", "世", "\xb8", "a\xe4\xb8"}
+	runes := []rune{'ñ', 'a', utf8.RuneError, utf8.RuneError, '世', utf8.RuneError, utf8.RuneError}
+	widths := []int{2, 1, 0, 1, 3, 1, 1}
+	for i, s := range ref tests {
+		r, n := utf8.DecodeLastRuneInString(s)
+		expect.Equal(ref r, runes[i])
+		expect.Equal(ref n, widths[i])
+	}
+
+	r, n := utf8.DecodeLastRune(ref []byte{97, 240, 159, 152, 128})
+	expect.Equal(ref r, ref 0x1F600)
+	expect.Equal(ref n, ref 4)
+}
+
+func TestAppendRune() {
+	p := []byte{}
+	utf8.AppendRune(mut p, 'a')
+	utf8.AppendRune(mut p, '世')
+	utf8.AppendRune(mut p, 0xD800) // a surrogate is written as RuneError
+	expect.EqualSlice(ref p, ref []byte{97, 228, 184, 150, 239, 191, 189})
+}
+
+func TestDecode() {
+	tests := []string{"é!", "", "\xff", "\xe4\xb8", "\xed\xa0\x80", "\xf0\x9f\x98\x80"}
+	runes := []rune{'é', utf8.RuneError, utf8.RuneError, utf8.RuneError, utf8.RuneError, 0x1F600} // a cut-short sequence and an encoded surrogate are RuneError
+	widths := []int{2, 0, 1, 1, 1, 4}
+	for i, s := range ref tests {
+		r, n := utf8.DecodeRuneInString(s)
+		expect.Equal(ref r, runes[i])
+		expect.Equal(ref n, widths[i])
+	}
+
+	r, n := utf8.DecodeRune(ref []byte{240, 159, 152, 128})
+	expect.Equal(ref r, ref 0x1F600)
+	expect.Equal(ref n, ref 4)
+	r, n = utf8.DecodeRune(ref []byte{})
+	expect.Equal(ref r, ref utf8.RuneError)
+	expect.Equal(ref n, ref 0)
+}
+
+// Every code point written by AppendRune reads back by DecodeRune, the
+// runtime's decoder, with the width RuneLen gives: the encoder in
+// Snello and the decoder in C agree on every rune.
+func TestRoundTrip() {
+	var r rune = 0
+	p := []byte{}
+	for r <= utf8.MaxRune {
+		if utf8.RuneLen(r) > 0 {
+			p.Clear()
+			utf8.AppendRune(mut p, r)
+			got, n := utf8.DecodeRune(ref p)
+			if got != r || n != utf8.RuneLen(r) || n != len(p) {
+				expect.Equal(ref got, ref r)
+				expect.Equal(ref n, ref len(p))
+			}
+		}
+
+		r += 1
+	}
+}
+
+func BenchmarkDecodeRune() {
+	s := "Snello è veloce, 世界"
+	for testing.Loop() {
+		r, n := utf8.DecodeRuneInString(ref s)
+		expect.True(r > 0 && n > 0)
+	}
+}

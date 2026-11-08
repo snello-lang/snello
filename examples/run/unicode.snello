@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Text beyond ASCII, as Go's strings package reads it: case changed by
-// Unicode's simple mapping, a byte that is not UTF-8 read as U+FFFD,
+// Text beyond ASCII: case changed by Unicode's full mapping, so ß
+// upper-cases to SS and İ lowers to i and a combining dot above, as it
+// does in every language, a byte that is not UTF-8 read as U+FFFD,
 // white space as unicode.IsSpace knows it in Fields and Trim, an empty
 // separator splitting after every UTF-8 sequence; Repeat and Join, and
 // Sort on a struct through its Cmp.

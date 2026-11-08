@@ -1,0 +1,55 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package norm puts a string in one of Unicode's four normalization
+// forms, so that text written two ways compares equal: é as one rune,
+// U+00E9, or as e and a combining accent, U+0065 U+0301. NFD
+// decomposes every rune and NFC composes it again; NFKD and NFKC also
+// replace a compatibility character by its plain form, ﬁ by fi and ² by
+// 2. The forms are annex 15 of the standard, over the runtime's tables.
+package norm
+
+// A Form is one of the four normalization forms.
+enum Form impl Copy, Eq {
+	// NFC: canonical decomposition, then canonical composition; the form
+	// most text is written in, and the one to compare by.
+	NFC
+
+	// NFD: canonical decomposition, every mark after its letter in
+	// canonical order.
+	NFD
+
+	// NFKC: compatibility decomposition, then canonical composition.
+	NFKC
+
+	// NFKD: compatibility decomposition.
+	NFKD
+}
+
+// String returns s in the form f, a new string. A byte that is not
+// UTF-8 becomes U+FFFD, as a range over s reads it, so a string with
+// one is in no form.
+func String(f Form, s ref string) string {
+	return normalize(s, code(f))
+}
+
+// IsNormalString reports whether s is in the form f already: by the
+// standard's quick check, which reads the string once and allocates
+// nothing, and by normalizing it only when the quick check cannot tell.
+func IsNormalString(f Form, s ref string) bool {
+	return isNormal(s, code(f))
+}
+
+// code numbers the forms as the runtime does.
+func code(f Form) int {
+	return match f {
+		NFC => 0,
+		NFD => 1,
+		NFKC => 2,
+		NFKD => 3,
+	}
+}
+
+func normalize(s ref string, form int) string
+func isNormal(s ref string, form int) bool

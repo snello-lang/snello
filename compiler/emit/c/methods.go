@@ -371,6 +371,8 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_fields(" + s + ", " + out + ")" })
 	case "Lines":
 		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_lines(" + s + ", " + out + ")" })
+	case "Runes":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_runes(" + s + ", " + out + ")" })
 	case "Split":
 		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split(" + s + ", " + args[0] + ", " + out + ")" })
 	case "SplitOnce":

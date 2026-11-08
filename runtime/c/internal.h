@@ -95,12 +95,6 @@ static inline void sn_spin_hint(void) {
 // bytes, doubling, as Push amortizes to constant time.
 void sn_slice_grow(sn_slice *s, int64_t need, size_t size);
 
-// sn_utf8_decode reads the rune at p, at most n bytes, as Go's
-// utf8.DecodeRune does, and returns its width; sn_utf8_encode writes r
-// at out and returns its length.
-int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r);
-int sn_utf8_encode(int32_t r, uint8_t *out);
-
 // sn_format_uint writes u's decimal digits ending at end and returns
 // where they begin; sn_format_int makes the owned string of u, negated
 // when neg.
@@ -147,5 +141,87 @@ void sn_remove_waiter(sn_waitq *q, sn_waiter *w);
 sn_waiter *sn_dequeue(sn_waitq *q);
 void sn_finish_wait(sn_waiter *w, bool success);
 void sn_await_wait(sn_wait_state *ws);
+
+// Unicode's properties, as mkunicode.go numbers them in unicode.c: the
+// general categories, the grapheme, word and sentence break properties
+// and Indic_Conjunct_Break. Each list is in the generator's order, and
+// the generator stops on a value it does not know.
+enum {
+    SN_GC_Cn, SN_GC_Lu, SN_GC_Ll, SN_GC_Lt, SN_GC_Lm, SN_GC_Lo, SN_GC_Mn, SN_GC_Mc, SN_GC_Me, SN_GC_Nd,
+    SN_GC_Nl, SN_GC_No, SN_GC_Pc, SN_GC_Pd, SN_GC_Ps, SN_GC_Pe, SN_GC_Pi, SN_GC_Pf, SN_GC_Po, SN_GC_Sm,
+    SN_GC_Sc, SN_GC_Sk, SN_GC_So, SN_GC_Zs, SN_GC_Zl, SN_GC_Zp, SN_GC_Cc, SN_GC_Cf, SN_GC_Cs, SN_GC_Co,
+};
+
+enum {
+    SN_GCB_Other, SN_GCB_CR, SN_GCB_LF, SN_GCB_Control, SN_GCB_Extend, SN_GCB_ZWJ, SN_GCB_RI,
+    SN_GCB_Prepend, SN_GCB_SpacingMark, SN_GCB_L, SN_GCB_V, SN_GCB_T, SN_GCB_LV, SN_GCB_LVT,
+};
+
+enum {
+    SN_WB_Other, SN_WB_CR, SN_WB_LF, SN_WB_Newline, SN_WB_Extend, SN_WB_ZWJ, SN_WB_RI, SN_WB_Format,
+    SN_WB_Katakana, SN_WB_Hebrew_Letter, SN_WB_ALetter, SN_WB_Single_Quote, SN_WB_Double_Quote,
+    SN_WB_MidNumLet, SN_WB_MidLetter, SN_WB_MidNum, SN_WB_Numeric, SN_WB_ExtendNumLet, SN_WB_WSegSpace,
+};
+
+enum {
+    SN_SB_Other, SN_SB_CR, SN_SB_LF, SN_SB_Extend, SN_SB_Sep, SN_SB_Format, SN_SB_Sp, SN_SB_Lower,
+    SN_SB_Upper, SN_SB_OLetter, SN_SB_Numeric, SN_SB_ATerm, SN_SB_SContinue, SN_SB_STerm, SN_SB_Close,
+};
+
+enum { SN_INCB_None, SN_INCB_Linker, SN_INCB_Consonant, SN_INCB_Extend };
+
+// The derived properties sn_uc_derived gives, as bits, and the
+// normalization quick-check values sn_uc_quick gives that are not Yes.
+enum {
+    SN_UC_ALPHABETIC = 1 << 0,
+    SN_UC_UPPERCASE = 1 << 1,
+    SN_UC_LOWERCASE = 1 << 2,
+    SN_UC_XID_START = 1 << 3,
+    SN_UC_XID_CONTINUE = 1 << 4,
+    SN_UC_EMOJI = 1 << 5,
+};
+
+enum {
+    SN_QC_NFD_NO = 1 << 0,
+    SN_QC_NFC_NO = 1 << 1,
+    SN_QC_NFC_MAYBE = 1 << 2,
+    SN_QC_NFKD_NO = 1 << 3,
+    SN_QC_NFKC_NO = 1 << 4,
+    SN_QC_NFKC_MAYBE = 1 << 5,
+};
+
+// The kinds of full mapping sn_uc_special reads.
+enum { SN_UC_UPPER, SN_UC_LOWER, SN_UC_TITLE, SN_UC_FOLD };
+
+// The lookups of unicode.c the hand-written algorithms read: the
+// category and script of a rune, by number, and their names; a full
+// mapping of SpecialCasing.txt or CaseFolding.txt into out, returning
+// its length, or 0 when the simple mapping holds; the Cased and
+// Case_Ignorable properties; the combining class; a decomposition,
+// canonical alone unless compat, returning its length and setting out;
+// the canonical composition of a pair, or -1; and the break properties.
+int sn_rune_category(int32_t r);
+const char *sn_category_name(int c);
+int sn_rune_script(int32_t r);
+const char *sn_script_name(int s);
+int sn_script_count(void);
+const char *sn_script_code(int s);
+int sn_uc_derived(int32_t r);
+int sn_uc_quick(int32_t r);
+int sn_uc_decimal(int32_t r);
+bool sn_uc_numeric(int32_t r, int64_t *num, int32_t *den);
+int32_t sn_rune_title(int32_t r);
+int32_t sn_rune_fold(int32_t r);
+int sn_uc_special(int kind, int32_t r, int32_t out[3]);
+bool sn_uc_cased(int32_t r);
+bool sn_uc_case_ignorable(int32_t r);
+int sn_uc_ccc(int32_t r);
+int sn_uc_decomp(int32_t r, bool compat, const int32_t **out);
+int32_t sn_uc_compose(int32_t a, int32_t b);
+int sn_uc_gcb(int32_t r);
+int sn_uc_wb(int32_t r);
+int sn_uc_sb(int32_t r);
+bool sn_uc_extpict(int32_t r);
+int sn_uc_incb(int32_t r);
 
 #endif

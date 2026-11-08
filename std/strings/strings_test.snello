@@ -31,6 +31,86 @@ func TestFields() {
 	expect.Equal(ref len(strings.Fields("   ")), ref 0)
 }
 
+func TestFullCase() {
+	expect.Equal(ref strings.ToUpper("straße"), "STRASSE") // a rune grows to two
+	expect.Equal(ref strings.ToUpper("ﬁ"), "FI")
+	expect.Equal(ref strings.ToLower("ΟΔΥΣΣΕΥΣ"), "οδυσσευς") // the last sigma is final, the one inside a word is not
+	expect.Equal(ref strings.ToLower("Σ"), "σ") // alone, no cased letter before it
+	expect.Equal(ref strings.ToLower("ΑΣ'"), "ας'") // a case-ignorable apostrophe after it
+	expect.Equal(ref "ß".ToUpper(), "SS") // the string method maps the same
+	expect.Equal(ref strings.ToTitle("ǆ ß a"), "ǅ Ss A")
+	expect.Equal(ref strings.ToTitle("straße ﬁx ǆungla"), "Straße Fix ǅungla") // the first cased letter of each word, the rest lowered
+	expect.Equal(ref strings.ToTitle("HELLO wORLD, it's 2026"), "Hello World, It's 2026")
+	expect.Equal(ref strings.ToTitle("ΟΔΥΣΣΕΥΣ"), "Οδυσσευς") // lowered with the final sigma
+	expect.Equal(ref strings.ToTitle(""), "")
+	expect.Equal(ref strings.ToTitle("3rd o'neil 'tis"), "3rd O'neil 'Tis") // a word starts at its first letter, number or symbol
+	expect.Equal(ref strings.ToTitle("3RD (hello)"), "3rd (Hello)")
+	expect.Equal(ref strings.ToUpper("snello"), "SNELLO") // ASCII stays byte for byte
+}
+
+func TestEqualIgnoreCase() {
+	expect.True(strings.EqualIgnoreCase("Straße", "STRASSE"))
+	expect.True(strings.EqualIgnoreCase("Snello", "sNELLO"))
+	expect.True(strings.EqualIgnoreCase("ΣΑΣ", "σας")) // σ and ς fold alike
+	expect.True(strings.EqualIgnoreCase("K", "\u212A")) // the Kelvin sign
+	expect.True(strings.EqualIgnoreCase("", ""))
+	expect.False(strings.EqualIgnoreCase("a", "b"))
+	expect.False(strings.EqualIgnoreCase("ß", "s")) // a prefix of the folding is not equal
+	expect.False(strings.EqualIgnoreCase("ı", "I")) // dotless i folds to itself outside Turkish
+}
+
+func TestValidUTF8() {
+	expect.Equal(ref strings.ToValidUTF8("a\xffb\xfe\xfdc", "?"), "a?b?c") // one replacement a run
+	expect.Equal(ref strings.ToValidUTF8("añ", "?"), "añ")
+	expect.Equal(ref strings.ToValidUTF8("\xff", ""), "")
+	expect.Equal(ref strings.ToValidUTF8("", "?"), "")
+}
+
+func TestFuncs() {
+	space := func(r rune) bool { return r == ' ' || r == ',' }
+	expect.Equal(ref strings.IndexFunc("ab, c", space), ref 2)
+	expect.Equal(ref strings.LastIndexFunc("ab, c", space), ref 3)
+	expect.Equal(ref strings.IndexFunc("abc", space), ref -1)
+	expect.Equal(ref strings.LastIndexFunc("", space), ref -1)
+	expect.Equal(strings.TrimFunc(" ,añ, ", space), "añ")
+	expect.Equal(strings.TrimLeftFunc(" ,añ, ", space), "añ, ")
+	expect.Equal(strings.TrimRightFunc(" ,añ, ", space), " ,añ")
+	expect.Equal(strings.TrimFunc(" , ", space), "")
+	fields := strings.FieldsFunc(", a,b ,, c ", space)
+	expect.Equal(ref len(fields), ref 3)
+	expect.Equal(fields[0], "a")
+	expect.Equal(fields[2], "c")
+	expect.Equal(ref len(strings.FieldsFunc("", space)), ref 0)
+}
+
+func TestRunes() {
+	expect.Equal(ref strings.IndexRune("añb", 'b'), ref 3)
+	expect.Equal(ref strings.IndexRune("añb", 'z'), ref -1)
+	expect.Equal(ref strings.IndexRune("a\xffb", '\uFFFD'), ref 1) // a stray byte reads as RuneError
+	expect.True(strings.ContainsRune("añb", 'ñ'))
+	expect.False(strings.ContainsRune("", 'a'))
+	upper := func(r rune) rune { return r - 32 }
+	expect.Equal(ref strings.Map(upper, "abc"), "ABC")
+	drop := func(r rune) rune {
+		if r == 'a' {
+			return -1
+		}
+
+		return r
+	}
+	expect.Equal(ref strings.Map(drop, "banana"), "bnn")
+}
+
+func TestWriteRune() {
+	var b strings.Builder
+	b.WriteRune('h')
+	b.WriteRune('é')
+	b.WriteRune('世')
+	b.WriteRune(-1) // not a code point: U+FFFD
+	expect.Equal(ref b.String(), "hé世\uFFFD")
+	expect.Equal(ref b.Len(), ref 9)
+}
+
 func TestBuilder() {
 	var b strings.Builder
 	b.WriteString("one")

@@ -305,6 +305,10 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
 		return e.stringToBytes(e.looked(x, from))
 	case isByteSlice(from) && isString(to):
 		return e.bytesToString(e.looked(x, from))
+	case isRuneSlice(from) && isString(to):
+		return e.rt("sn_string_from_runes", "%sn_string", e.looked(x, from))
+	case isRune(from) && isString(to):
+		return e.rt("sn_string_from_rune", "%sn_string", e.looked(x, from))
 	}
 
 	v := e.derefTo(e.operands([]ast.Expr{x}, nil)[0], e.typeOf(x), from)
@@ -347,6 +351,18 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
 	}
 
 	return value{ir, v.s} // the same bits under another name
+}
+
+// isRune reports whether t is rune, i32, or a type declared over it.
+func isRune(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.Int32
+}
+
+// isRuneSlice reports whether t is []rune.
+func isRuneSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	return ok && isRune(s.Elem())
 }
 
 // isByteSlice reports whether t is []byte.

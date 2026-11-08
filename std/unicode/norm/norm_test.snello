@@ -1,0 +1,47 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package norm_test
+
+import ("expect"; "testing"; "unicode/norm")
+
+func TestForms() {
+	composed := "é"     // é, one rune
+	decomposed := "é" // e and a combining acute accent
+	expect.Equal(ref norm.String(norm.NFC, ref decomposed), ref composed)
+	expect.Equal(ref norm.String(norm.NFD, ref composed), ref decomposed)
+	expect.Equal(ref norm.String(norm.NFKC, "ﬁ²"), "fi2") // compatibility characters replaced
+	expect.Equal(ref norm.String(norm.NFKD, "ﬁ"), "fi")
+	expect.Equal(ref norm.String(norm.NFC, "ﬁ"), "ﬁ") // canonical forms keep them
+	expect.Equal(ref norm.String(norm.NFC, ""), "")
+}
+
+// Marks come in canonical order whatever order they were written in.
+func TestOrder() {
+	a := "ậ" // dot below, then circumflex
+	b := "ậ" // the other order
+	expect.Equal(ref norm.String(norm.NFD, ref a), ref norm.String(norm.NFD, ref b))
+	expect.Equal(ref norm.String(norm.NFC, ref b), "ậ") // ậ
+}
+
+// A Hangul syllable decomposes and composes by its algorithm.
+func TestHangul() {
+	expect.Equal(ref norm.String(norm.NFD, "한"), "한") // 한
+	expect.Equal(ref norm.String(norm.NFC, "한"), "한")
+}
+
+func TestIsNormal() {
+	expect.True(norm.IsNormalString(norm.NFC, "é"))
+	expect.False(norm.IsNormalString(norm.NFD, "é"))
+	expect.True(norm.IsNormalString(norm.NFD, "é"))
+	expect.False(norm.IsNormalString(norm.NFKC, "ﬁ"))
+	expect.True(norm.IsNormalString(norm.NFC, "plain ASCII"))
+}
+
+func BenchmarkNFC() {
+	s := "Amélie écrit à Zürich"
+	for testing.Loop() {
+		expect.True(len(norm.String(norm.NFC, ref s)) > 0)
+	}
+}

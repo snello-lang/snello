@@ -291,10 +291,17 @@ func (ch ref chan<- T) Clone() chan<- T
 // Len returns the length of the string in bytes, as len does.
 func (s ref string) Len() int
 
+// Runes returns the string's runes in a new slice of exactly their
+// number, read as a range over the string reads them: a byte that does
+// not start a valid UTF-8 sequence is U+FFFD. A range over the string
+// itself walks the runes without the slice.
+func (s ref string) Runes() []rune
+
 // ToUpper and ToLower return a new string with every letter changed
-// in case, by Unicode's simple case mapping, as Go's strings.ToUpper
-// and ToLower give it; a byte that is not valid UTF-8 becomes the
-// replacement rune U+FFFD, as there.
+// in case, by Unicode's full case mapping: the mappings that hold in
+// every language, so ß upper-cases to SS and a string may grow, and a
+// capital sigma at the end of a word lowered to ς; a byte that is not
+// valid UTF-8 becomes the replacement rune U+FFFD.
 func (s ref string) ToUpper() string
 func (s ref string) ToLower() string
 
