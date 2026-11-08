@@ -17,7 +17,7 @@ Snello is a compiled language with Go's syntax and memory safety without a garba
 
 ## A taste
 
-```snello
+```go
 package main
 
 import "fmt"
