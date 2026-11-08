@@ -111,7 +111,18 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `strings.Fields(s)` returns new strings | `s.Fields()` yields borrows into `s`, and a loop over them lends `s` |
 | `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s`; Go's `strings.Trim`, with the bytes to cut, has no counterpart |
 | `strings.Lines(s)` keeps each newline | `s.Lines()` drops it, and a carriage return before it |
-| `for i, r := range s` yields runes | `for i, c := range s` yields bytes; text as runes comes with the library (stage 2) |
+| `for i, r := range s` yields runes | The same, and an invalid byte reads as U+FFFD and moves on one byte; the string is lent for the loop (chapter 19) |
+| `utf8.EncodeRune(p, r)` writes into a buffer of fixed size | `utf8.AppendRune(mut p, r)` appends, growing the slice (chapter 19) |
+| `strings.ToUpper` maps each rune by the simple mapping: `"ß"` stays `"ß"` | Full case mapping: `"ß"` upper-cases to `"SS"`, and a final capital sigma lowers to `ς` (chapter 19) |
+| `strings.EqualFold` compares by simple folding: `"ß"` and `"ss"` differ | `strings.EqualIgnoreCase` compares by full folding: they are equal (chapter 19) |
+| `unicode.SimpleFold(r)` walks a rune's case orbit | `unicode.CaseFold(r)` gives the one rune its case set folds to |
+| `strings.ToTitle` maps every letter to title case, `"ǆemal"` to `"ǅEMAL"` | `strings.ToTitle` title-cases by words, Unicode's way: `"ǆemal"` to `"ǅemal"`, `"HELLO wORLD"` to `"Hello World"` (chapter 19) |
+| `unicode.IsUpper` is category Lu | `unicode.IsUpper` is the derived `Uppercase` property, `Ⓐ` included; `unicode.Category(r) == "Lu"` is Go's |
+| `string(65)` is `"A"`, and `go vet` warns | `string(r)` takes a `rune` only; `string(65)` is refused (chapter 19) |
+| `string(rs)` and `[]rune(s)` | `string(rs)` the same; `s.Runes()` for the runes |
+| `unicode.Is(unicode.Latin, r)` over a table | `unicode.InScript(r, "Latin")`, and `unicode.Script(r)` names it |
+| `golang.org/x/text/unicode/norm`, outside the standard library | `unicode/norm`, in it (chapter 19) |
+| Grapheme clusters, words and sentences need a module | `unicode/segment`, in the standard library (chapter 19) |
 | `[]byte(s)` copies | `[]byte(s)` converts the owned string, and back |
 | `v, ok := m[k]` | `m.Get(k)` is a `ref V?`; `m[k]` alone reads the zero value for a missing key, as in Go |
 | `delete(m, k)` | `m.Remove(k)` returns the value as `V?` |

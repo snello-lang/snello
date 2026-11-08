@@ -65,7 +65,7 @@ A literal never carries a type of its own into an expression: `10` is an `f64` i
 
 `bool` has `true` and `false`, with `&&`, `||` and `!`.
 
-A `string` is a sequence of UTF-8 bytes that owns its memory and never changes. `len(s)` is its length in bytes and `s[i]` is a byte. Character literals such as `'+'` and `'0'` take the type the context asks for, usually `byte`.
+A `string` is a sequence of UTF-8 bytes that owns its memory and never changes. `len(s)` is its length in bytes and `s[i]` is a byte; `for i, r := range s` walks its runes, the code points, each of type `rune`, as chapter 19 describes. Character literals such as `'+'` and `'0'` take the type the context asks for, usually `byte`.
 
 ```snello
 for l.pos < len(l.src) && l.src[l.pos] == ' ' { l.pos += 1 }

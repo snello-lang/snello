@@ -25,8 +25,9 @@ The book is written as the language is built. A chapter exists as soon as its fe
 | [15. Binding C](15-binding-c.md) | a package declares a function without a body and defines it in C beside it, under the symbol the compiler derives and the header it writes; what crosses, a handle wrapped with `Drop`, and a system library named by `link` in the module file (stage 5, task 5.5) |
 | [16. Testing](16-testing.md) | test files part of the package only under test, tests as plain functions, the `expect` and `testing` packages, `snello test` with its flags, subtests, parallel tests, benchmarks and golden files, the failure message's form, and how it is built for maintainers (stage 9, task 9.1); every library package tested through `package NAME_test`, `snello test std/NAME`, and the Makefile running the pure Snello targets inside the Linux image (task 9.3) |
 | [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, the message and the cause derived when not written, `?` passing an error into the variant that holds its type or into a trait value, `%+v` printing the chain, and the refusals (stage 9, task 9.4) |
+| [19. Text: strings, runes and Unicode](19-text.md) | Unicode 18 whole: a range over a string yields runes, `s.Runes()`, `WriteRune` and `ReadRune`; `unicode`, `unicode/utf8` and `unicode/utf16`; full case mapping and `EqualIgnoreCase`; `unicode/norm` and `unicode/segment`; what a string that is not valid UTF-8 reads as, and where each piece lives (stage 9, task 9.6) |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | implemented (stage 0) |
-| [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | covers chapters 2 to 12 and 14 to 17; grows with them |
+| [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | covers chapters 2 to 12, 14 to 17 and 19; grows with them |
 
 ## How the book is kept current
 

@@ -58,7 +58,7 @@ Two slices do not compare with `==`: equality of a list is a question with more 
 
 ## Strings
 
-A string is immutable bytes. `len(s)` is its length in bytes and `s[i]` the byte at `i`, of type `byte`; `s[lo:hi]` lends the bytes between, as a `ref string`. `+` builds a new string from two, and `==` and `<` compare bytes. `for i, c := range s` yields each byte and its index. `[]byte(s)` copies the bytes into a slice that can be changed, and `string(b)` copies a byte slice into a string; both leave their operand as it was.
+A string is immutable bytes. `len(s)` is its length in bytes and `s[i]` the byte at `i`, of type `byte`; `s[lo:hi]` lends the bytes between, as a `ref string`. `+` builds a new string from two, and `==` and `<` compare bytes. `for i, r := range s` yields each rune and the byte offset it starts at, and the string is lent for the loop; chapter 19 has runes, the `unicode` packages and what a string that is not valid UTF-8 reads as. `[]byte(s)` copies the bytes into a slice that can be changed, and `string(b)` copies a byte slice into a string; both leave their operand as it was.
 
 Operations on text are methods. Most return views into the string, which cost nothing and live as borrows do:
 
