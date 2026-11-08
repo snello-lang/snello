@@ -12,7 +12,8 @@
 // language and the full case folding; the Cased and Case_Ignorable
 // properties the final sigma needs; the derived properties Alphabetic,
 // Uppercase, Lowercase, XID_Start and XID_Continue, and Emoji; the
-// decimal digit and numeric values; the White_Space runes and the
+// decimal digit values and the numeric values, the ideographs' from
+// Unihan among them; the White_Space runes and the
 // printable ones; the script of every code point and its four-letter
 // code; the normalization quick-check values; the combining
 // classes, decompositions and canonical compositions of normalization;
@@ -66,6 +67,7 @@ var remote = map[string]string{
 	"WordBreakProperty.txt":     "auxiliary/",
 	"SentenceBreakProperty.txt": "auxiliary/",
 	"emoji-data.txt":            "emoji/",
+	"DerivedNumericValues.txt":  "extracted/",
 }
 
 // A run is the runes lo, lo+stride, ... up to hi, each mapped to itself
@@ -200,6 +202,25 @@ func lines(dir, version, name string, f func(fields []string)) {
 	}
 }
 
+// rational reads the numeric value s of r, an integer or a fraction
+// n/d, as its numerator and denominator.
+func rational(r rune, s string) [2]int64 {
+	num, den, frac := strings.Cut(s, "/")
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil {
+		log.Fatalf("U+%04X: numeric value %q", r, s)
+	}
+
+	d := int64(1)
+	if frac {
+		if d, err = strconv.ParseInt(den, 10, 64); err != nil || d <= 0 {
+			log.Fatalf("U+%04X: numeric value %q", r, s)
+		}
+	}
+
+	return [2]int64{n, d}
+}
+
 // codeRange reads lo or lo..hi.
 func codeRange(s string) (rune, rune) {
 	lo, hi, isRange := strings.Cut(s, "..")
@@ -285,20 +306,7 @@ func read(dir, version string) database {
 		}
 
 		if f[8] != "" {
-			num, den, frac := strings.Cut(f[8], "/")
-			n, err := strconv.ParseInt(num, 10, 64)
-			if err != nil {
-				log.Fatalf("U+%04X: numeric value %q", r, f[8])
-			}
-
-			d := int64(1)
-			if frac {
-				if d, err = strconv.ParseInt(den, 10, 64); err != nil {
-					log.Fatalf("U+%04X: numeric value %q", r, f[8])
-				}
-			}
-
-			db.numeric[r] = [2]int64{n, d}
+			db.numeric[r] = rational(r, f[8])
 		}
 
 		if n, _ := strconv.Atoi(f[3]); n != 0 {
@@ -357,6 +365,23 @@ func read(dir, version string) database {
 			db.foldSimple[r] = hex(f[2])
 		case "F":
 			db.foldFull[r] = hexes(f[2])
+		}
+	})
+
+	// The numeric values of UnicodeData.txt, and those Unihan gives the
+	// ideographs, 五 its 5, which only the derived file holds; where both
+	// give one they must be the same number, UnicodeData.txt's 2/12 the
+	// derived file's 1/6, and UnicodeData.txt's fraction is kept.
+	lines(dir, version, "DerivedNumericValues.txt", func(f []string) {
+		lo, hi := codeRange(f[0])
+		for c := lo; c <= hi; c++ {
+			v := rational(c, f[3])
+			old, ok := db.numeric[c]
+			if !ok {
+				db.numeric[c] = v
+			} else if old[0]*v[1] != v[0]*old[1] {
+				log.Fatalf("U+%04X: numeric value %d/%d in UnicodeData.txt, %s in DerivedNumericValues.txt", c, old[0], old[1], f[3])
+			}
 		}
 	})
 

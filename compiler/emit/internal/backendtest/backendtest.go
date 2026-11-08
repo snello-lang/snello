@@ -965,6 +965,21 @@ func main() {
 			Out: "é x añ世😀 añ世😀 \uFFFD \uFFFD 0 ñ\n",
 		},
 		{
+			Name: "conversions-through-mut", // string(p) and []byte(s) through a mut borrow read the value it lends, a []rune, a []byte and a string, and leave it to its owner
+			Src: `package main
+import "fmt"
+func runes(p mut []rune) string { p.Push('!'); return string(p) }
+func bytes(b mut []byte) string { b.Push(0x21); return string(b) }
+func raw(s mut string) []byte { *s = *s + "?"; return []byte(s) }
+func main() {
+	rs := "añ".Runes()
+	bs := []byte("hi")
+	s := "ok"
+	fmt.Println(runes(mut rs), bytes(mut bs), raw(mut s), len(rs), len(bs), s)
+}`,
+			Out: "añ! hi! [111 107 63] 3 3 ok?\n",
+		},
+		{
 			Name: "string-runes", // Runes gives an owned slice of exactly the string's runes, a byte that starts no valid sequence read as U+FFFD; the slice is the program's to grow and is freed
 			Src: `package main
 import "fmt"

@@ -337,10 +337,15 @@ static int64_t sentence(cursor *c) {
 }
 
 // sn_unicode__segment_next returns the length in bytes of the segment of
-// the kind that starts at the boundary at, or 0 at the end of s.
+// the kind that starts at the boundary at, or 0 at the end of s; an at
+// outside s is an index out of range.
 int64_t sn_unicode__segment_next(sn_string s, int64_t at, int64_t kind) {
     sn_check_string(s);
-    if (at >= s.len) {
+    if (at < 0 || at > s.len) {
+        sn_bounds(at, s.len);
+    }
+
+    if (at == s.len) {
         return 0;
     }
 

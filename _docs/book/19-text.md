@@ -95,7 +95,7 @@ Others are the properties Unicode derives beyond a category, the ones identifier
 | `IsIDStart(r)`, `IsIDContinue(r)` | `XID_Start` and `XID_Continue`, annex 31's identifiers: a letter of any script starts one, and digits, marks and `_` go on |
 | `IsEmoji(r)` | the `Emoji` property: `😀` and `❤`, and also the digits, `#` and `*`, which form keycaps |
 
-`Category(r)` gives the two letters themselves, `Lu` for `A` and `Cn` for a code point Unicode has not assigned. `Script(r)` gives the script by Unicode's name, `Latin`, `Cyrillic`, `Han`, `Common` for a rune many scripts use, such as a digit or `€`, `Inherited` for a mark that takes its letter's, and `Unknown` for an unassigned code point; `ScriptCode(r)` gives its four-letter code, `Latn`, `Hani`, `Zyyy`; `InScript(r, name)` takes either. `DigitValue(r)` gives a decimal digit's value, of any script, and `NumericValue(r)` the value Unicode gives any number, `12` for `Ⅻ` and `0.5` for `½`; each is `None` for a rune without one.
+`Category(r)` gives the two letters themselves, `Lu` for `A` and `Cn` for a code point Unicode has not assigned. `Script(r)` gives the script by Unicode's name, `Latin`, `Cyrillic`, `Han`, `Common` for a rune many scripts use, such as a digit or `€`, `Inherited` for a mark that takes its letter's, and `Unknown` for an unassigned code point; `ScriptCode(r)` gives its four-letter code, `Latn`, `Hani`, `Zyyy`; `InScript(r, name)` takes either. `DigitValue(r)` gives a decimal digit's value, of any script, and `NumericValue(r)` the value Unicode gives any number, `12` for `Ⅻ`, `0.5` for `½`, and `5` for the ideograph `五`, whose value comes from Unihan; each is `None` for a rune without one.
 
 ```snello
 for _, r := range "A٣€Ж世" {
@@ -132,7 +132,7 @@ func title(s ref string) string {
 
 ## Case on strings
 
-A string changes case by Unicode's full case mapping, which a single rune cannot: a rune may become several, so a string may grow. `strings.ToUpper("straße")` is `STRASSE`, and `ﬁ` upper-cases to `FI`. `strings.ToLower` lowers a capital sigma at the end of a word to the final form `ς`, as Greek writes it, and inside a word to `σ`: `ΟΔΥΣΣΕΥΣ` lowers to `οδυσσευς`. The string methods `s.ToUpper()` and `s.ToLower()` are the same functions. `strings.ToTitle` title-cases text as Unicode defines it: in each word, by the word boundaries below, the first cased letter to its title case and the rest to lower case, so `straße ﬁx ǆungla` is `Straße Fix ǅungla`. The mappings are the ones that hold in every language; a language's own rules, such as Turkish `i` upper-casing to `İ`, are a locale's.
+A string changes case by Unicode's full case mapping, which a single rune cannot: a rune may become several, so a string may grow. `strings.ToUpper("straße")` is `STRASSE`, and `ﬁ` upper-cases to `FI`. `strings.ToLower` lowers a capital sigma at the end of a word to the final form `ς`, as Greek writes it, and inside a word to `σ`: `ΟΔΥΣΣΕΥΣ` lowers to `οδυσσευς`. The string methods `s.ToUpper()` and `s.ToLower()` are the same functions. `strings.ToTitle` title-cases text as Unicode defines it: in each word, by the word boundaries below, the rune that starts it to its title case and the rest to lower case, so `straße ﬁx ǆungla` is `Straße Fix ǅungla`. A word starts at its first letter, number or symbol, where ICU starts it by default: a quote before it is passed over, so `'tis` is `'Tis`, and a digit that starts it stays as it is, so `3RD` is `3rd`. The mappings are the ones that hold in every language; a language's own rules, such as Turkish `i` upper-casing to `İ`, are a locale's.
 
 ```snello
 fmt.Println(strings.ToUpper("straße"), strings.ToLower("ΟΔΥΣΣΕΥΣ"), strings.ToTitle("straße ﬁx ǆungla"))
@@ -188,8 +188,8 @@ The same text can be written with different runes: `é` is one rune, U+00E9, or 
 - `norm.NFKC` and `norm.NFKD`: the same, and also replace a compatibility character by its plain form, `ﬁ` by `fi` and `²` by `2`, for search and identifiers.
 
 ```snello
-one := "café"
-two := "café"
+one := "caf\u00E9"
+two := "cafe\u0301"
 fmt.Println(one == two, norm.String(norm.NFC, ref one) == norm.String(norm.NFC, ref two), len(one), len(two))
 // false true 5 6
 fmt.Println(norm.String(norm.NFKC, "ﬁ x²"))
@@ -200,16 +200,16 @@ fmt.Println(norm.String(norm.NFKC, "ﬁ x²"))
 
 ## Segmentation: `unicode/segment`
 
-What a reader sees as one character can be several runes: a letter and its accent, a flag made of two regional indicators, an emoji with a skin tone, a consonant cluster of an Indian script. `"é🇫🇷👍🏽"` is 19 bytes, 6 runes and 3 characters. `unicode/segment` cuts text where the standard's annex 29 puts the boundaries:
+What a reader sees as one character can be several runes: a letter and its accent, a flag made of two regional indicators, an emoji with a skin tone, a consonant cluster of an Indian script. `"e\u0301🇫🇷👍🏽"`, an `e` with its accent, a flag and a thumb with a skin tone, is 19 bytes, 6 runes and 3 characters. `unicode/segment` cuts text where the standard's annex 29 puts the boundaries:
 
 - `segment.Graphemes(s)`: the grapheme clusters, the characters a reader sees, for counting them, moving a cursor or truncating text without splitting one.
 - `segment.Words(s)`: the pieces between word boundaries, the words and, each a piece of its own, the punctuation and the runs of spaces between them; `3.14` and `can't` are one word. `segment.IsWord(piece)` tells a word, a piece with a letter or a number, from the rest.
 - `segment.Sentences(s)`: the sentences, each with the spaces after it.
 
-Each gives the pieces in order, each a borrow into the string, so nothing is copied and the pieces join back to the string; a loop over them lends the string for its duration, as `strings.Fields` does. `segment.Count(kind, s)` counts the segments of `segment.Grapheme`, `segment.Word` or `segment.Sentence` without the slice, and `segment.Next(kind, s, at)` gives the boundary after `at`, for walking a string by offsets:
+Each gives the pieces in order, each a borrow into the string, so nothing is copied and the pieces join back to the string; a loop over them lends the string for its duration, as `strings.Fields` does. `segment.Count(kind, s)` counts the segments of `segment.Grapheme`, `segment.Word` or `segment.Sentence` without the slice, and `segment.Next(kind, s, at)` gives the boundary after `at`, for walking a string by offsets: `Some(end)` while a segment starts at `at`, and `None` at the end of the string, as for an offset past it or below 0, so a walk stops on the one answer:
 
 ```snello
-flags := "é🇫🇷👍🏽"
+flags := "e\u0301🇫🇷👍🏽"
 fmt.Println(len(flags), utf8.RuneCountInString(flags), segment.Count(segment.Grapheme, ref flags))
 // 19 6 3
 for w := range segment.Words("Hello, wörld! 3.14") {
@@ -220,14 +220,31 @@ for w := range segment.Words("Hello, wörld! 3.14") {
 // [Hello][wörld][3.14]
 ```
 
+A walk by offsets reads the same boundaries one at a time:
+
+```snello
+text := "Hi. Bye."
+at := 0
+for {
+    match segment.Next(segment.Sentence, ref text, at) {
+        None => break,
+        Some(end) => {
+            fmt.Printf("[%s]", text[at:end])
+            at = end
+        },
+    }
+}
+// [Hi. ][Bye.]
+```
+
 The boundaries are the standard's defaults, the same for every language: a sentence ends after `Mr.` as after any full stop followed by a capital, since telling an abbreviation from the end of a sentence takes a language's dictionary; each Han ideograph is a word of its own; and words of Thai or Japanese, which put no space between them, take a dictionary too.
 
 ## For maintainers
 
 - **The range and the conversions.** `rangeTypes` in `compiler/types/stmt.go` types the variables, the offset an `int` and the value a `rune`; `rangeStmt` lends an owned string for the loop with `holdRange`, beside the channel's case, instead of consuming it. Each backend writes the loop in `rangeString` in its `stmt.go`: the C backend's step adds the rune's width, so a `continue` moves on; the LLVM backend's adds it in the block after the body, where `continue` jumps. `conversion` in `compiler/types/call.go` takes `string(r)` and `string(rs)`, typing a character literal as a rune and refusing an `int`; each backend's conversion calls `sn_string_from_rune` and `sn_string_from_runes` in `runtime/c/string.c`.
 - **The decoder and encoder.** `sn_utf8_decode` and `sn_utf8_encode` in `runtime/c/snello.c`, declared in `snello.h` so that a program's code calls them, are the one reading and writing of UTF-8; the encoder writes U+FFFD for a value that is not a code point. `sn_runes` in `runtime/c/string.c` counts the runes, then allocates exactly that many.
-- **The tables.** `runtime/mkunicode.go` writes `runtime/c/unicode.c` from `runtime/testdata/ucd/18.0.0/`, Unicode's own files checked in: `UnicodeData.txt`, `PropList.txt`, `PropertyValueAliases.txt`, `SpecialCasing.txt`, `CaseFolding.txt`, `Scripts.txt`, `DerivedCoreProperties.txt`, `DerivedNormalizationProps.txt`, `CompositionExclusions.txt`, `emoji-data.txt` and the three break property files, with the test files beside them. It writes data and small lookups only: the case runs, the general category, the scripts and their codes, the derived properties, the digit and numeric values, the full mappings and foldings, `Cased` and `Case_Ignorable`, the combining classes, decompositions, compositions and quick-check values, and the break properties with `Extended_Pictographic` and `Indic_Conjunct_Break`. The numbering of each enumerated property and bit set is in `runtime/c/internal.h`, and the generator stops on a value it does not know, so a new version cannot file one silently as the default. Run `go run mkunicode.go` in `runtime/` after changing it; to move to a new version, add its files under `testdata/ucd/VERSION`, run `go run mkunicode.go -version VERSION`, change the version the generator, `runtime_test.go` and `unicode.Version` name, and run the tests, which say what the new version changed.
+- **The tables.** `runtime/mkunicode.go` writes `runtime/c/unicode.c` from `runtime/testdata/ucd/18.0.0/`, Unicode's own files checked in: `UnicodeData.txt`, `PropList.txt`, `PropertyValueAliases.txt`, `SpecialCasing.txt`, `CaseFolding.txt`, `Scripts.txt`, `DerivedCoreProperties.txt`, `DerivedNormalizationProps.txt`, `CompositionExclusions.txt`, `DerivedNumericValues.txt`, `emoji-data.txt` and the three break property files, with the test files beside them. It writes data and small lookups only: the case runs, the general category, the scripts and their codes, the derived properties, the digit values and the numeric values, the ideographs' from Unihan among them, which the generator checks against `UnicodeData.txt`'s where both give one, the full mappings and foldings, `Cased` and `Case_Ignorable`, the combining classes, decompositions, compositions and quick-check values, and the break properties with `Extended_Pictographic` and `Indic_Conjunct_Break`. The numbering of each enumerated property and bit set is in `runtime/c/internal.h`, and the generator stops on a value it does not know, so a new version cannot file one silently as the default. Run `go run mkunicode.go` in `runtime/` after changing it; to move to a new version, add its files under `testdata/ucd/VERSION`, run `go run mkunicode.go -version VERSION`, change the version the generator, `runtime_test.go` and `unicode.Version` name, and run the tests, which say what the new version changed.
 - **The algorithms**, written by hand over the tables: the package bindings, the classes, properties, values and scripts, and the rest of `utf8` in `runtime/c/rune.c`; full case mapping with the final sigma, title case by words, the full folding of `EqualIgnoreCase` and `ToValidUTF8` in `runtime/c/string.c`; normalization, decomposition, canonical ordering by a counting sort, composition with the Hangul algorithm and the quick check, in `runtime/c/norm.c`; segmentation, the rules of annex 29 over a cursor that decodes as far ahead as a rule looks, the sentence rules carrying their state forward, in `runtime/c/segment.c`. Each rule carries its number from the annex in a comment, and every algorithm takes time in proportion to its input.
 - **The packages.** `std/unicode/unicode.snello` declares its functions without bodies, bound to `rune.c`. `unicode/utf8`'s `RuneLen` and `AppendRune` and all of `unicode/utf16` are Snello; `utf8_test.snello` writes every code point with `AppendRune` and reads it back through the runtime's decoder, so the two cannot disagree. `unicode/norm` and `unicode/segment` are thin Snello over `norm.c` and `segment.c`; `segment` and `strings.FieldsFunc` build their slices of borrows themselves, a type the library may write and a program may not.
 - **Packages two levels down.** `unicode/utf8` was the library's first. `std/std.go` embeds `*/*.snello` and `*/*/*.snello`; the importer reads a package by its whole path and names its file by the last element, and its external tests as `utf8_test`; `stdPackage` in `compiler/testrun/testrun.go` finds the `std/` above a directory, so that `snello test std/unicode/norm` runs; `build/test-std.sh` finds the packages at any depth. A bodiless function's C name joins the path's elements with two underscores: `sn_unicode__norm_normalize`.
-- **The tests.** `runtime/runtime_test.go` holds the conformance: `TestUnicodeTables` fails when `unicode.c` is not what the generator writes; `TestUnicodeLookup` asks the compiled tables about all 1,114,112 code points, case, folding, every class and derived property, category, script and code, digit and numeric value, and compares each answer with the files, read by the test on its own; `TestCaseMapping` checks the full mappings of every assigned code point, the final sigma and `EqualIgnoreCase` against `SpecialCasing.txt` and `CaseFolding.txt`; `TestNormalization` runs every line of `NormalizationTest.txt` in all five columns and every code point it does not list; `TestQuickCheck` checks that `IsNormalString` agrees with normalizing on every code point and every string of that file; `TestSegmentation` runs every line of `GraphemeBreakTest.txt`, `WordBreakTest.txt` and `SentenceBreakTest.txt`; `TestLinearTime` holds normalization and sentence boundaries to linear time on inputs of 200,000 runes. Beside the compiler's files: `compiler/types/stmt_test.go`, `library_test.go`, `call_test.go` and `operand_test.go`; in each backend `stmt_test.go`, `methods_test.go`, and `expr_test.go` or `call_test.go`; `compiler/importer/importer_test.go` and `compiler/testrun/testrun_test.go` for the nested packages. `range-runes`, `string-runes` and `rune-conversions` in `compiler/emit/internal/backendtest` run through both backends in release and debug builds, and each package's `_test.snello` runs under `make test`.
+- **The tests.** `runtime/runtime_test.go` holds the conformance: `TestUnicodeTables` fails when `unicode.c` is not what the generator writes, or when it or `unicode.Version` names another version than the files'; `TestUnicodeLookup` asks the compiled tables about all 1,114,112 code points, case, folding, every class and derived property, category, script and code, digit and numeric value, and compares each answer with the files, read by the test on its own; `TestCaseMapping` checks the full mappings of every assigned code point, the final sigma and `EqualIgnoreCase` against `SpecialCasing.txt` and `CaseFolding.txt`; `TestNormalization` runs every line of `NormalizationTest.txt` in all five columns and every code point it does not list; `TestQuickCheck` checks that `IsNormalString` agrees with normalizing on every code point and every string of that file; `TestSegmentation` runs every line of `GraphemeBreakTest.txt`, `WordBreakTest.txt` and `SentenceBreakTest.txt`; `TestLinearTime` holds normalization and sentence boundaries to linear time on inputs of 200,000 runes. Beside the compiler's files: `compiler/types/stmt_test.go`, `library_test.go`, `call_test.go` and `operand_test.go`; in each backend `stmt_test.go`, `methods_test.go`, and `expr_test.go` or `call_test.go`; `compiler/importer/importer_test.go` and `compiler/testrun/testrun_test.go` for the nested packages. `range-runes`, `string-runes`, `rune-conversions` and `conversions-through-mut` in `compiler/emit/internal/backendtest` run through both backends in release and debug builds, and each package's `_test.snello` runs under `make test`.

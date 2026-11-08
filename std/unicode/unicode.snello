@@ -99,7 +99,8 @@ func DigitValue(r rune) int? {
 }
 
 // NumericValue returns the numeric value Unicode gives r: 7 for 7, 12
-// for Ⅻ, 0.5 for ½; or None for a rune with none.
+// for Ⅻ, 0.5 for ½, and 5 for the ideograph 五, whose value Unihan
+// gives; or None for a rune with none.
 func NumericValue(r rune) f64? {
 	var num i64 = 0
 	var den i64 = 1

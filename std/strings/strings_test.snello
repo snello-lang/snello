@@ -43,6 +43,8 @@ func TestFullCase() {
 	expect.Equal(ref strings.ToTitle("HELLO wORLD, it's 2026"), "Hello World, It's 2026")
 	expect.Equal(ref strings.ToTitle("ΟΔΥΣΣΕΥΣ"), "Οδυσσευς") // lowered with the final sigma
 	expect.Equal(ref strings.ToTitle(""), "")
+	expect.Equal(ref strings.ToTitle("3rd o'neil 'tis"), "3rd O'neil 'Tis") // a word starts at its first letter, number or symbol
+	expect.Equal(ref strings.ToTitle("3RD (hello)"), "3rd (Hello)")
 	expect.Equal(ref strings.ToUpper("snello"), "SNELLO") // ASCII stays byte for byte
 }
 

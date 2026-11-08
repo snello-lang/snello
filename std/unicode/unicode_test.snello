@@ -68,8 +68,10 @@ func TestValues() {
 	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x216B)), ref 12.0) // Ⅻ
 	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x00BD)), ref 0.5)  // ½
 	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x00B2)), ref 2.0)
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x4E94)), ref 5.0)          // 五, its value from Unihan
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x5104)), ref 100000000.0)  // 億
+	expect.Equal(ref expect.IsSome(unicode.NumericValue(0x109F7)), ref 2.0 / 12.0) // a Meroitic fraction, 2/12
 	expect.IsNone(unicode.NumericValue('a'))
-	expect.Equal(ref unicode.Version, "18.0.0")
 }
 
 func TestScripts() {

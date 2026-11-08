@@ -122,4 +122,19 @@ func main() {
 	}
 
 	fmt.Println()
+
+	// A walk by offsets reads the same boundaries one at a time.
+	text := "Hi. Bye."
+	at := 0
+	for {
+		match segment.Next(segment.Sentence, ref text, at) {
+			None => break,
+			Some(end) => {
+				fmt.Printf("[%s]", text[at:end])
+				at = end
+			},
+		}
+	}
+
+	fmt.Println()
 }

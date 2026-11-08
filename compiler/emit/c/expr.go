@@ -894,16 +894,18 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 // statement.
 func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 	from := lower.ValueType(e.typeOf(x))
-	v := e.operands([]ast.Expr{x}, nil)[0]
 	switch {
 	case isString(from) && isByteSlice(to):
-		return "sn_string_to_bytes(" + v + ")"
+		return "sn_string_to_bytes(" + e.looked(x, from) + ")"
 	case isByteSlice(from) && isString(to):
-		return "sn_bytes_to_string(" + v + ")"
+		return "sn_bytes_to_string(" + e.looked(x, from) + ")"
 	case isRuneSlice(from) && isString(to):
-		t := e.spill(v, from, x.Pos())
+		t := e.spill(e.looked(x, from), from, x.Pos())
 		return "sn_string_from_runes((sn_slice){" + t + ".ptr, " + t + ".len, " + t + ".cap})"
-	case isRune(from) && isString(to):
+	}
+
+	v := e.operands([]ast.Expr{x}, nil)[0]
+	if isRune(from) && isString(to) {
 		return "sn_string_from_rune(" + v + ")"
 	}
 

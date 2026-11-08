@@ -124,9 +124,12 @@ func ToUpper(s ref string) string {
 }
 
 // ToTitle returns s in title case as Unicode defines it: in each word,
-// by the word boundaries of annex 29, the first cased letter in title
+// by the word boundaries of annex 29, the rune that starts it in title
 // case and the rest in lower case, by the full case mappings, so
-// "straße ﬁx" is "Straße Fix" and "ǆungla" is "ǅungla".
+// "straße ﬁx" is "Straße Fix" and "ǆungla" is "ǅungla". A word starts
+// at its first letter, number or symbol, as ICU starts it by default:
+// a quote before it is passed over, "'tis" is "'Tis", and a digit that
+// starts it stays, "3RD" is "3rd".
 func ToTitle(s ref string) string {
 	return toTitle(s)
 }

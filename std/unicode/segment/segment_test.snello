@@ -54,12 +54,34 @@ func TestSentences() {
 func TestWalk() {
 	s := "e\u0301🇫🇷 ok"
 	expect.Equal(ref segment.Count(segment.Grapheme, ref s), ref 5) // é, the flag, the space, o, k
-	expect.Equal(ref segment.Next(segment.Grapheme, ref s, 0), ref 3)
-	expect.Equal(ref segment.Next(segment.Grapheme, ref s, 3), ref 11)
-	expect.Equal(ref segment.Next(segment.Grapheme, ref s, len(s)), ref len(s))
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 0)), ref 3)
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 3)), ref 11)
+	expect.Equal(ref expect.IsSome(segment.Next(segment.Grapheme, ref s, 13)), ref 14)
 	expect.Equal(ref segment.Count(segment.Word, "Hello, world"), ref 4)
 	expect.Equal(ref segment.Count(segment.Sentence, "One. Two."), ref 2)
 	expect.Equal(ref segment.Count(segment.Grapheme, ""), ref 0)
+}
+
+func TestNextAtTheEnd() {
+	s := "abc"
+	expect.IsNone(segment.Next(segment.Grapheme, ref s, len(s)))
+	expect.IsNone(segment.Next(segment.Word, ref s, 4))
+	expect.IsNone(segment.Next(segment.Sentence, ref s, -1))
+	expect.IsNone(segment.Next(segment.Word, "", 0))
+	at := 0
+	pieces := 0
+	for {
+		match segment.Next(segment.Word, "Hello, world", at) {
+			None => break,
+			Some(end) => {
+				at = end
+				pieces += 1
+			},
+		}
+	}
+
+	expect.Equal(ref pieces, ref 4)
+	expect.Equal(ref at, ref 12)
 }
 
 func TestIsWord() {

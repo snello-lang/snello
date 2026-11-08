@@ -22,7 +22,8 @@ var ucd = filepath.Join("testdata", "ucd", "18.0.0")
 
 // TestUnicodeTables checks that c/unicode.c is what mkunicode.go writes
 // from the database under testdata, so the tables cannot be edited by
-// hand.
+// hand, and that it and unicode.Version name the database's version, so
+// a move to the next one cannot leave Version behind.
 func TestUnicodeTables(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "unicode.c")
 	if b, err := exec.Command("go", "run", "mkunicode.go", "-ucd", ucd, "-o", out).CombinedOutput(); err != nil {
@@ -34,6 +35,16 @@ func TestUnicodeTables(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("c/unicode.c is stale: run go run mkunicode.go in runtime/")
 	}
+
+	src, err := os.ReadFile(filepath.Join("..", "std", "unicode", "unicode.snello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decl := `const Version string = "` + filepath.Base(ucd) + `"`
+	if !bytes.Contains(src, []byte(decl)) || !bytes.Contains(got, []byte("Database\n// "+filepath.Base(ucd)+";")) {
+		t.Fatalf("unicode.Version and c/unicode.c must name the tables' version, %s: std/unicode/unicode.snello needs %s", filepath.Base(ucd), decl)
+	}
 }
 
 // A runeFacts is what the database says of one rune: its general
@@ -44,12 +55,13 @@ type runeFacts struct {
 	fold                rune
 	space               bool
 	script              string
-	decimal, numeric    string // UnicodeData.txt's decimal digit value and numeric value, as written
+	decimal, numeric    string // the decimal digit value and the numeric value, as UnicodeData.txt writes them, else DerivedNumericValues.txt
 }
 
-// readUCD reads UnicodeData.txt and PropList.txt apart from the
-// generator, so that a mistake in its reading is not repeated here. A
-// rune the data does not list has no category, and maps to itself.
+// readUCD reads UnicodeData.txt, PropList.txt, CaseFolding.txt,
+// Scripts.txt and DerivedNumericValues.txt apart from the generator, so
+// that a mistake in its reading is not repeated here. A rune the data
+// does not list has no category, and maps to itself.
 func readUCD(t *testing.T) map[rune]*runeFacts {
 	t.Helper()
 	facts := map[rune]*runeFacts{}
@@ -164,6 +176,18 @@ func readUCD(t *testing.T) map[rune]*runeFacts {
 
 		for c := code(lo); c <= code(hi); c++ {
 			get(c).script = f[1]
+		}
+	})
+	scan("DerivedNumericValues.txt", func(f []string) { // the ideographs' values from Unihan, which UnicodeData.txt leaves out
+		lo, hi, isRange := strings.Cut(f[0], "..")
+		if !isRange {
+			hi = lo
+		}
+
+		for c := code(lo); c <= code(hi); c++ {
+			if get(c).numeric == "" {
+				get(c).numeric = f[3]
+			}
 		}
 	})
 	return facts

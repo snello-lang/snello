@@ -256,10 +256,25 @@ static sn_string whole(sn_string s, int kind) {
 sn_string sn_to_upper(sn_string s) { return whole(s, SN_UC_UPPER); }
 sn_string sn_to_lower(sn_string s) { return whole(s, SN_UC_LOWER); }
 
-// sn_strings_toTitle title-cases s as Unicode's toTitlecase does: in
-// each word, by the word boundaries of annex 29, the first cased letter
-// to its full title case mapping and every other rune to lower case, so
-// "straße ﬁx" is "Straße Fix".
+// starts reports whether r is where a word's title case begins: a
+// cased rune, or a letter, number, symbol or private-use rune, so that
+// a quote before a word is passed over and a digit that starts one,
+// as in "3rd", is its start.
+static bool starts(int32_t r) {
+    if (sn_uc_cased(r)) {
+        return true;
+    }
+
+    int c = sn_rune_category(r);
+    char m = sn_category_name(c)[0];
+    return m == 'L' || m == 'N' || m == 'S' || c == SN_GC_Co;
+}
+
+// sn_strings_toTitle title-cases s as Unicode's toTitlecase does, its
+// start adjusted as ICU's is by default: in each word, by the word
+// boundaries of annex 29, the first rune that starts it to its full
+// title case mapping and every other rune to lower case, so "straße
+// ﬁx" is "Straße Fix", "'tis" is "'Tis" and "3RD" is "3rd".
 sn_string sn_strings_toTitle(sn_string s) {
     sn_check_string(s);
     int64_t n;
@@ -272,7 +287,7 @@ sn_string sn_strings_toTitle(sn_string s) {
         for (int64_t i = at; i < end; k++) {
             int32_t r;
             i += sn_utf8_decode(s.ptr + i, end - i, &r);
-            bool title = first && sn_uc_cased(r);
+            bool title = first && starts(r);
             first = first && !title;
             kinds[k] = title ? SN_UC_TITLE : SN_UC_LOWER;
         }

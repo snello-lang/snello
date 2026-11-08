@@ -45,14 +45,15 @@ func Sentences(s ref string) []ref string {
 }
 
 // Next returns the byte offset of the first boundary of kind k after the
-// boundary at, or len(s) when none is: for walking s without the slice,
-// at going from 0 to len(s).
-func Next(k Kind, s ref string, at int) int {
-	if at >= len(s) {
-		return len(s)
+// boundary at, for walking s without the slice, at going from 0 until
+// there is none: None when no segment starts at at, at the end of s,
+// past it or below 0.
+func Next(k Kind, s ref string, at int) int? {
+	if at < 0 || at >= len(s) {
+		return None
 	}
 
-	return at + next(s, at, code(k))
+	return Some(boundary(s, at, k))
 }
 
 // Count returns how many segments of kind k s holds, without the slice:
@@ -61,7 +62,7 @@ func Count(k Kind, s ref string) int {
 	n := 0
 	at := 0
 	for at < len(s) {
-		at = Next(k, s, at)
+		at = boundary(s, at, k)
 		n += 1
 	}
 
@@ -86,12 +87,18 @@ func split(s ref string, k Kind) []ref string {
 	out := []ref string{}
 	at := 0
 	for at < len(s) {
-		end := Next(k, s, at)
+		end := boundary(s, at, k)
 		out.Push(s[at:end])
 		at = end
 	}
 
 	return out
+}
+
+// boundary returns the first boundary of kind k after the boundary at,
+// an offset within s.
+func boundary(s ref string, at int, k Kind) int {
+	return at + next(s, at, code(k))
 }
 
 // code numbers the kinds as the runtime does.
