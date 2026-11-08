@@ -64,7 +64,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		})
 
 		if arm.Guard != nil {
-			c.condition(arm.Guard)
+			c.guard(arm.Guard, arm.Arrow, e.Conds)
 		} else {
 			rows = appendRows(rows, p)
 		}
@@ -78,13 +78,59 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 
 	c.joinAt(&f, true)
 
-	if x.mode != invalid {
+	if e.Conds {
+		c.lastArm(e)
+	} else if x.mode != invalid {
 		if w := missing([]Type{scrutinee}, rows); w != nil {
 			c.errorf(e.Match, "match is not exhaustive: missing "+w[0])
 		}
 	}
 
 	return result
+}
+
+// guard checks an arm's guard, or the condition of an arm of a match
+// with no value. It runs whether or not its arm is taken, the next arm
+// tried when it fails, so it may move nothing it did not make: a value
+// declared before it and moved by it would be gone for the arms after
+// it, which the paths of the match do not see. It reads, and lends with
+// ref, as any condition does; a name the guard declares itself, in a
+// closure, a block or a match inside it, between the guard's start and
+// the arm's =>, is its own to move, and the names an arm's pattern
+// binds are declared before its guard.
+func (c *Checker) guard(g ast.Expr, arrow token.Pos, cond bool) {
+	mark := len(c.moved)
+	c.condition(g)
+	what := "a match guard"
+	if cond {
+		what = "the condition of a match arm"
+	}
+
+	for _, m := range c.moved[mark:] {
+		if own := m.v.Pos() >= g.Pos() && m.v.Pos() < arrow; !m.revived && !own {
+			c.errorf(m.pos, "cannot move "+m.text()+" in "+what+": it runs whether or not its arm is taken; lend it with ref")
+		}
+	}
+}
+
+// lastArm checks the arms of a match with no value: the arm _, for when
+// no condition holds, is there, and is the last, since the compiler
+// cannot tell whether the conditions cover every case, and an arm after
+// it would never run.
+func (c *Checker) lastArm(e *ast.MatchExpr) {
+	for i, arm := range e.Arms {
+		if arm.Guard != nil {
+			continue
+		}
+
+		if i < len(e.Arms)-1 {
+			c.errorf(e.Arms[i+1].Pat.Pos(), "this arm is never reached: the arm _ before it is taken whenever the ones above fail; _ comes last")
+		}
+
+		return
+	}
+
+	c.errorf(e.Match, "a match with no value needs a last arm _ => ..., for when no condition holds")
 }
 
 // pattern checks a pattern against the type it must match, declares

@@ -45,7 +45,7 @@ type move struct {
 	revived bool // not a move: the place was given a new value here, after a move recorded before the enclosing branch or loop began
 }
 
-// A region is a loop, switch or select open at the current point, with
+// A region is a loop or select open at the current point, with
 // the records of the paths that leave it: ends are the paths reaching
 // its end or a continue, which for a loop reach its next iteration, and
 // exits the paths leaving by break. A path with no records is counted
@@ -679,11 +679,11 @@ func inEvery(sets [][]place, p place) bool {
 	return true
 }
 
-// enterRegion opens a loop, switch or select, and leaveRegion closes it,
-// joining the paths that reach the point after it: a switch's or
-// select's end and its breaks; a loop's breaks, and when the loop has a
-// condition, its ends and the path on which the body never ran, which
-// gives nothing back. For a loop, the moves on the paths reaching the
+// enterRegion opens a loop or select, and leaveRegion closes it,
+// joining the paths that reach the point after it: a select's end and
+// its breaks; a loop's breaks, and when the loop has a condition, its
+// ends and the path on which the body never ran, which gives nothing
+// back. For a loop, the moves on the paths reaching the
 // next iteration are checked: a value declared before the loop and
 // moved on such a path is gone when the loop comes round. The point
 // after a region is reachable; the caller's statement result says when
@@ -749,7 +749,7 @@ func (c *Checker) branch(tok token.Kind, pos token.Pos) {
 	for i := len(c.regions) - 1; i >= 0; i-- {
 		r := &c.regions[i]
 		if !r.loop {
-			continue // a switch, match or select is not a loop: a break inside one leaves the loop around it
+			continue // a match or select is not a loop: a break inside one leaves the loop around it
 		}
 
 		if tok == token.CONTINUE {

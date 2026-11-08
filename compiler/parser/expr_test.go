@@ -94,6 +94,11 @@ func TestExprs(t *testing.T) {
 		{"if x == []int{1} { a } else { b }", "if (x == []int{1}) {...} else {...}"}, // but a written type is
 		{"if f(T{}) { a } else { b }", "if f(T{}) {...} else {...}"},
 		{"match e { Lit(v) => v }", "match e { Lit(v) => v }"},
+		{"match { x > 0 => a\nx < 0 => b\n_ => c }", "match { (x > 0) => a; (x < 0) => b; _ => c }"}, // a match with no value: each arm a condition
+		{"match { ok(x) => return, _ => {} }", "match { ok(x) => return; _ => {  } }"},
+		{"match { x == []int{1} => a, _ => b }", "match { (x == []int{1}) => a; _ => b }"},                                           // a literal in a condition, inside the braces
+		{"if match { T{a: 1}.a == x => c, _ => d } { a } else { b }", "if match { (T{a: 1}.a == x) => c; _ => d } {...} else {...}"}, // the arms are a body of their own, even in a control clause
+		{"match match { T{a: 1}.a == x => 1, _ => 2 } { 1 => a, _ => b }", "match match { (T{a: 1}.a == x) => 1; _ => 2 } { 1 => a; _ => b }"},
 		{"f(if c { a } else { b })", "f(if c {...} else {...})"},
 	}
 	for _, tt := range tests {
@@ -120,6 +125,9 @@ func TestExprErrors(t *testing.T) {
 		{"if c { a }", "expected 'else', found 'newline'"},
 		{"x.", "expected identifier, found 'EOF'"},
 		{"a.b.c<T>{}", "expected '(', found '{'"},
+		{"match { x > 0 if y => a, _ => b }", "an arm of a match with no value is its condition alone: join two with &&"},
+		{"match { x > 0 a, _ => b }", "expected '=>', found 'a'"},
+		{"switch x { case 1: a }", "Snello has no switch: use match"}, // where an expression is wanted too
 	}
 	for _, tt := range tests {
 		_, errs := parseExprString(tt.src)
@@ -228,6 +236,20 @@ func exprString(x ast.Expr) string {
 
 		return s
 	case *ast.MatchExpr:
+		if x.Conds {
+			var arms []string
+			for _, arm := range x.Arms {
+				head := "_"
+				if arm.Guard != nil {
+					head = exprString(arm.Guard)
+				}
+
+				arms = append(arms, head+" => "+armBodyString(arm.Body))
+			}
+
+			return "match { " + strings.Join(arms, "; ") + " }"
+		}
+
 		if len(x.Arms) == 0 {
 			return "match " + exprString(x.X) + " { }"
 		}

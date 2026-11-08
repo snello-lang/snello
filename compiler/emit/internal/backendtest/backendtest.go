@@ -965,6 +965,48 @@ func main() {
 			Out: "é x añ世😀 añ世😀 \uFFFD \uFFFD 0 ñ\n",
 		},
 		{
+			Name: "match-conditions", // a match with no value takes the first condition that holds, as an expression and as a statement whose arms return, continue, break or assign; an owned value an arm moves is dropped once, on the arm that moved it
+			Src: `package main
+import "fmt"
+func grade(score int) string {
+	return match {
+		score >= 90 => "A",
+		score >= 80 => "B",
+		_ => "F",
+	}
+}
+func keep(s string) int { return len(s) }
+func sign(n int) int {
+	match {
+		n < 0 => return -1,
+		n == 0 => return 0,
+		_ => {},
+	}
+
+	return 1
+}
+func main() {
+	total := 0
+	for _, n := range []int{3, -1, 7, 0, 5} {
+		match {
+			n < 0 => continue,
+			n == 0 => break,
+			_ => total += n,
+		}
+	}
+
+	s := "owned".Clone()
+	used := match {
+		total > 100 => keep(s),
+		len(s) > 3 => keep(s) * 2,
+		_ => 0,
+	}
+
+	fmt.Println(grade(95), grade(85), grade(10), total, used, sign(-4), sign(0), sign(9))
+}`,
+			Out: "A B F 10 10 -1 0 1\n",
+		},
+		{
 			Name: "conversions-through-mut", // string(p) and []byte(s) through a mut borrow read the value it lends, a []rune, a []byte and a string, and leave it to its owner
 			Src: `package main
 import "fmt"

@@ -370,21 +370,6 @@ type RangeStmt struct {
 	Body  *BlockStmt
 }
 
-// A SwitchStmt is Go's switch. Tag is nil for a tagless switch.
-type SwitchStmt struct {
-	Switch token.Pos
-	Init   Stmt
-	Tag    Expr
-	Body   []*CaseClause
-}
-
-// A CaseClause is one case of a switch. List is empty for default.
-type CaseClause struct {
-	Case token.Pos
-	List []Expr
-	Body []Stmt
-}
-
 // A SelectStmt is Go's select.
 type SelectStmt struct {
 	Select token.Pos
@@ -412,7 +397,8 @@ type ParenExpr struct {
 	X      Expr
 }
 
-// A TupleExpr is (a, b), with two or more elements.
+// A TupleExpr is (a, b), with two or more elements, or the unit (), with
+// none, which is also the value of a match with no value.
 type TupleExpr struct {
 	Lparen token.Pos
 	Elts   []Expr
@@ -516,11 +502,14 @@ type IfExpr struct {
 }
 
 // A MatchExpr is match x { arms }. In statement position it is wrapped
-// in an ExprStmt.
+// in an ExprStmt. Conds marks a match with no value, match { cond =>
+// body }: X is then the unit (), each arm's condition its Guard on a
+// wildcard, and the arm _ that ends it an unguarded wildcard.
 type MatchExpr struct {
 	Match token.Pos
 	X     Expr
 	Arms  []*MatchArm
+	Conds bool
 }
 
 // A MatchArm is pat [if guard] => body. Body is an Expr, a *BlockStmt,
@@ -614,8 +603,6 @@ func (x *IfStmt) Pos() token.Pos       { return x.If }
 func (x *IfBindStmt) Pos() token.Pos   { return x.If }
 func (x *ForStmt) Pos() token.Pos      { return x.For }
 func (x *RangeStmt) Pos() token.Pos    { return x.For }
-func (x *SwitchStmt) Pos() token.Pos   { return x.Switch }
-func (x *CaseClause) Pos() token.Pos   { return x.Case }
 func (x *SelectStmt) Pos() token.Pos   { return x.Select }
 func (x *CommClause) Pos() token.Pos   { return x.Case }
 func (x *BadExpr) Pos() token.Pos      { return x.From }
@@ -668,7 +655,6 @@ func (*IfStmt) stmtNode()     {}
 func (*IfBindStmt) stmtNode() {}
 func (*ForStmt) stmtNode()    {}
 func (*RangeStmt) stmtNode()  {}
-func (*SwitchStmt) stmtNode() {}
 func (*SelectStmt) stmtNode() {}
 
 func (*Ident) exprNode()        {}

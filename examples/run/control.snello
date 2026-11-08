@@ -63,7 +63,7 @@ func main() {
 	fmt.Println(hits)
 
 	// A break inside a match ends the loop around it: a match is not a
-	// loop, and neither is a switch or a select.
+	// loop, and neither is a select.
 	taken := 0
 	for _, s := range []Step{Go, Go, Stop, Go} {
 		match s {

@@ -79,7 +79,7 @@ The library was written on 2026-10-20 as `05-standard-library.md` decides it: `s
 The stage implemented this note as written and settled four things it had left open, each dated in the place it was decided:
 
 - **No `Sync`, and a marker type instead of a rule** (above, 2026-10-20): safe to share and safe to send are one property, and `rc` keeps its handles in their task with a `local` field, not a compiler table.
-- **`break` means the innermost loop, everywhere** (2026-10-20, `../specs/stage-3-send.md`, task 3.2): `switch`, `match` and `select` are not loops, so a `break` inside a `select` case leaves the `for` around it, which is what a worker's exit on cancellation means to say; a `break` outside any loop is an error. There are no labels.
+- **`break` means the innermost loop, everywhere** (2026-10-20, `../specs/stage-3-send.md`, task 3.2): `match` and `select` are not loops, so a `break` inside a `select` case leaves the `for` around it, which is what a worker's exit on cancellation means to say; a `break` outside any loop is an error. There are no labels.
 - **The program ends when `main` returns** (2026-10-20, `06-tasks-and-channels.md`): the other tasks stop with it, and a program that must wait for them says so with a channel or a `sync.WaitGroup`. A panic in any task ends the program with its message and status 2.
 - **The signal channel is `chan ()`** (2026-10-20, `../specs/stage-3-send.md`, task 3.2): `()` is the value that carries nothing, so `done <- ()` says what it does, and anonymous struct types left the grammar with the idiom that needed them.
 
