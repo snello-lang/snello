@@ -1,6 +1,6 @@
 # 17. Errors
 
-Status: the `Error` trait with `Error()` and `Source()`, the derived message, `?` passing an error into the one variant that holds its type or into a trait value, `%+v` printing the chain, and a trait value of `Error` or `fmt.Stringer` printed as its message, checked and compiled through both backends (stage 9, task 9.4). `examples/run/errors.snello` runs everything in this chapter, `examples/09-errors.snello` is a program built on it, and the programs under `../../examples/core/errors/` named at the end show the refusals.
+`examples/run/errors.snello` runs everything in this chapter, `examples/09-errors.snello` is a program built on it, and the programs under `../../examples/core/errors/` named at the end show the refusals.
 
 An error in Snello is a value. A function that can fail returns a `Result<T, E>`, chapter 8, and `E` is a type the program declares, an enum with one variant per thing that can go wrong, or the trait `Error` itself when the caller only needs a message. This chapter is about `E`: what makes a type an error, what the language writes for it, how an error passes up through `?` when the types differ, and how a chain of causes is kept and printed.
 

@@ -1,6 +1,6 @@
 # 19. Text: strings, runes and Unicode
 
-Status: implemented (stage 9, task 9.6, 2026-11-08), at Unicode 18.0.0: a range over a string yields runes; `s.Runes()` and the conversions `string(r)` and `string(rs)`; `strings.Builder.WriteRune`, `bufio.Reader.ReadRune` and `UnreadRune`; the `unicode` package with every class by category, the derived properties, `Category`, `Script` and `ScriptCode`, digit and numeric values, the simple mappings and `CaseFold`; `unicode/utf8` and `unicode/utf16`; full case mapping on strings with the final sigma, title case by words, `EqualIgnoreCase`, `ToValidUTF8` and the rune searches; `unicode/norm`, the four normalization forms with the quick check; and `unicode/segment`, grapheme clusters, words and sentences. Checked and compiled through both backends, every table tested on every code point and every algorithm on every line of the test file Unicode publishes for it. `examples/run/runes.snello` runs everything in this chapter.
+Snello's text follows Unicode 18.0.0. Every table is tested on every code point and every algorithm on every line of the test file Unicode publishes for it, and `examples/run/runes.snello` runs everything in this chapter.
 
 This chapter is for two readers: a developer handling text, and a maintainer of the compiler, the runtime or the library who needs to know where each piece lives. The last section is the maintainer's.
 
@@ -16,7 +16,7 @@ fmt.Println(len(s), len(s.Runes()), s[1], s.Runes()[1])
 // 14 9 195 233
 ```
 
-`s[1]` is the first byte of `é`, 195; its rune is 233, U+00E9. A rune prints as its number. To print it as text, convert it to a string; `fmt`'s `%c` verb is planned with the rest of `fmt`'s verbs, in task 9.9.
+`s[1]` is the first byte of `é`, 195; its rune is 233, U+00E9. A rune prints as its number. To print it as text, convert it to a string; `fmt`'s `%c` verb is planned with the rest of `fmt`'s verbs.
 
 ## From runes back to a string
 

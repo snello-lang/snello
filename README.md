@@ -70,7 +70,7 @@ shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
 - **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
 - **Mistakes that stop the program.** `snello build -debug` builds a binary that panics on any value used after its release and reports anything never released.
 
-Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. Packages of a program's own, outside the compiler, are being built now; see [the plan](_docs/specs/plan.md) for what is done and what is next.
+Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. Packages of a program's own, outside the compiler, are being built now; see [the milestones](https://github.com/snello-lang/snello/milestones) for what is done and what is next.
 
 ## Getting started
 

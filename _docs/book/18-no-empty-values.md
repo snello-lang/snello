@@ -1,6 +1,6 @@
 # 18. No empty values
 
-Status: implemented (stage 11, task 11.2, 2026-11-08): no value is ever null or empty. A type has a zero value only when its zero is a real value of it; the checker refuses every way of making the zero of a type that has none; the builtin `replace` moves a value out of a place and leaves another; and the library panics on no mistake a caller can make.
+No value is ever null or empty. A type has a zero value only when its zero is a real value of it; the checker refuses every way of making the zero of a type that has none; the builtin `replace` moves a value out of a place and leaves another; and the library panics on no mistake a caller can make.
 
 This chapter is for two readers: a developer, who needs to know which declarations the compiler refuses and what to write instead, and a maintainer of the compiler or the library, who needs to know where the rule lives. The last section is the maintainer's.
 

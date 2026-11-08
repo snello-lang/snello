@@ -1,7 +1,5 @@
 # Appendix A. Keywords and grammar notes
 
-Status: implemented (stage 0, `snello parse`). Grows when a stage adds syntax.
-
 ## Keywords
 
 Thirty-one words are reserved and cannot be used as names.

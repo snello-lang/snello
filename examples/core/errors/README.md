@@ -1,6 +1,6 @@
 # Negative programs
 
-Programs the stage 1 checker must reject. Each breaks exactly one rule and carries exactly one `// ERROR "text"` comment on the line the error is reported at; the checker's message for that line must contain the text, and no other line may produce an error. This is the form the Go compiler's errorcheck tests use and the form `compiler/parser/testdata/errors/` already uses for syntax errors.
+Programs the checker must reject. Each breaks exactly one rule and carries exactly one `// ERROR "text"` comment on the line the error is reported at; the checker's message for that line must contain the text, and no other line may produce an error. This is the form the Go compiler's errorcheck tests use and the form `compiler/parser/testdata/errors/` already uses for syntax errors.
 
 Every file's header comment states the rule it breaks and the idiom that fixes it, so the file doubles as documentation of the message. The book chapters 5 and 6 (`../../../_docs/book/`) explain the same rules in prose.
 
@@ -8,31 +8,31 @@ Every file's header comment states the rule it breaks and the idiom that fixes i
 
 Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the move rules come from `01-language-design.md` and the task-boundary rules from `03-ownership-across-tasks.md`.
 
-| Rule | Program | Checker task |
-|---|---|---|
-| A moved value is dead | use-after-move, move-in-branch, closure-moves, use-after-close | 1.6 |
-| A move inside a loop happens every iteration | move-in-loop | 1.6 |
-| Indexing lends; it does not move | move-out-of-slice | 1.6 |
-| Nothing moves out through a borrow | move-out-of-borrow | 1.6 |
-| A partial move ends the whole | partial-move | 1.6 |
-| 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots | 1.7 |
-| 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed | 1.7 |
-| 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch, reported by 1.4), assign-through-ref, mut-through-ref-receiver | 1.4, 1.7 |
-| 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored | 1.8 |
-| 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel | 1.8 |
-| A spawn moves what its closure mentions | use-after-spawn, spawn-twice | 3.2 |
-| What crosses a task boundary is `Send` | spawn-not-send, channel-not-send | 3.2 |
-| Lock-protected data is reached only through a guard, a borrow | guard-across-spawn, guard-of-temporary | 3.4 |
-| The races of the stage 3 checkpoint: a value used after it was sent, an Arc's value changed, a borrowing closure spawned | use-after-send, mutate-through-arc, borrowing-closure-spawned | 1.6, 1.4, 3.2 |
-| 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned | 1.8 |
-| 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned | 1.8 |
-| No `nil` | nil-used | 1.3 |
-| A package variable is read and lent as `ref` by every task, and never assigned, lent as `mut` or moved out of; its type is `Send` | global-assigned, global-mut, global-moved, global-not-send, global-declared-not-send, global-trait-not-send | 9.2 |
-| `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus | 9.4 |
+| Rule | Program |
+|---|---|
+| A moved value is dead | use-after-move, move-in-branch, closure-moves, use-after-close |
+| A move inside a loop happens every iteration | move-in-loop |
+| Indexing lends; it does not move | move-out-of-slice |
+| Nothing moves out through a borrow | move-out-of-borrow |
+| A partial move ends the whole | partial-move |
+| 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots |
+| 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed |
+| 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch), assign-through-ref, mut-through-ref-receiver |
+| 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored |
+| 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |
+| A spawn moves what its closure mentions | use-after-spawn, spawn-twice |
+| What crosses a task boundary is `Send` | spawn-not-send, channel-not-send |
+| Lock-protected data is reached only through a guard, a borrow | guard-across-spawn, guard-of-temporary |
+| The races a task can make: a value used after it was sent, an Arc's value changed, a borrowing closure spawned | use-after-send, mutate-through-arc, borrowing-closure-spawned |
+| 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned |
+| 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned |
+| No `nil` | nil-used |
+| A package variable is read and lent as `ref` by every task, and never assigned, lent as `mut` or moved out of; its type is `Send` | global-assigned, global-mut, global-moved, global-not-send, global-declared-not-send, global-trait-not-send |
+| `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus |
+| `match` is exhaustive | missing-arm |
+| `?` propagates to the same kind | wrong-question-kind |
 
-As of task 1.8 the checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5 and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
-| `match` is exhaustive | missing-arm | 1.4 |
-| `?` propagates to the same kind | wrong-question-kind | 1.4 |
+The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5 and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
 
 ## Message conventions
 

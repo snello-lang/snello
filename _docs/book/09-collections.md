@@ -1,6 +1,6 @@
 # 9. Collections: slices, maps and strings
 
-Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5, third slice). `examples/run/slices.snello`, `maps.snello` and `closures.snello` exercise this chapter.
+`examples/run/slices.snello`, `maps.snello` and `closures.snello` exercise this chapter.
 
 A slice is an owned, growable list. A map is an owned table from keys to values. A string is an owned sequence of bytes holding UTF-8 text. All three own their memory, so the rules of chapter 5 apply to them: they move when assigned or passed by value, they are lent with `ref` and `mut`, and they are freed when their owner is dropped. None of them is ever `nil`; a slice or map declared without a value is empty and ready to use.
 

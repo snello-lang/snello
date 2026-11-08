@@ -1,6 +1,6 @@
 # 13. Arenas and indices
 
-Status: `arena.Arena<T>` and `arena.Index<T>` are written in Snello under `std/arena/` and compiled with the program that imports them (stage 2, task 2.6); `examples/run/arena.snello` runs them, stale indices included. A range over an arena waits for the iterator trait. The tree is cut from `examples/01-tree/tree-arena.snello`, the rest from the run program.
+A range over an arena is not supported yet; it waits for the iterator trait. The tree is cut from `examples/01-tree/tree-arena.snello`, the rest from `examples/run/arena.snello`, which runs stale indices too.
 
 Chapter 7 built a list and a tree from owned pointers, and chapter 6 said what a borrow cannot do: live in a struct. Between them they leave one shape of data out. A node that points back at its parent, a graph whose nodes point at each other, a cache that is both a map and a list: each needs a link that does not own what it names, and Snello has no such pointer. This chapter is the answer, and it is the answer Go programmers already know from any code that cares about speed: put every node in one container and link them by position.
 

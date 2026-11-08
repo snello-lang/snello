@@ -1,6 +1,6 @@
 # 8. Option, Result, `?` and `??`
 
-Status: implemented, checked (stage 1, task 1.4, `snello check`) and compiled to native code, methods included (stage 1, task 1.5, `snello build`); `Map` and `MapErr` (stage 2, task 2.6); `?` passing an error into the variant that holds its type or into a trait value (stage 9, task 9.4, chapter 17). `examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+`examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
 
 Snello has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 

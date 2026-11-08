@@ -1,6 +1,6 @@
 # 6. Borrows: `ref` and `mut`
 
-Status: decided (`../design/04-borrows-ref-and-mut.md`, `05-standard-library.md` section 5); borrows and closures compile (stage 1, task 1.5); all six rules are checked (stage 1, tasks 1.7 and 1.8, `snello check`). Until the closure environment copies moved values, a closure that captures a local, even by moving it, counts as a borrow of it. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.snello` shows closures that keep the rules.
+The design is in `../design/04-borrows-ref-and-mut.md` and section 5 of `../design/05-standard-library.md`. Until the closure environment copies moved values, a closure that captures a local, even by moving it, counts as a borrow of it. The programs under `../../examples/core/errors/` show each rule being broken, every message below is the one the compiler prints, and `examples/run/closures.snello` shows closures that keep the rules.
 
 Moving is the right thing when the callee keeps the value. Most functions do not keep it; they look at it, or change it, and give it back. For those, a value is **borrowed**: lent to the callee for the length of the call, with the owner unchanged. A borrow is written `ref T` to read or `mut T` to change.
 

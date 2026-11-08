@@ -1,6 +1,6 @@
 # Benchmarks
 
-The programs behind the performance table in `../_docs/design/01-language-design.md`: each exists in Snello and in Go, written the same way in both so that what is measured is the language and its runtime, not the program. Go is the comparison because Snello is written against it, Go's syntax and concurrency without a collector; Rust versions were kept until 2026-11-07 and removed at the owner's word, so that the table has one comparison and no dependency to keep up.
+The programs behind the performance table in `../_docs/design/01-language-design.md`: each exists in Snello and in Go, written the same way in both so that what is measured is the language and its runtime, not the program. Go is the comparison because Snello is written against it, Go's syntax and concurrency without a collector; there are no Rust versions, so that the table has one comparison and no dependency to keep up.
 
 | Program | What it measures |
 |---|---|

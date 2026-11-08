@@ -1,6 +1,6 @@
 # Ownership across tasks
 
-Status: decided, 2026-10-17; `Send` inference implemented 2026-10-20 (stage 3, task 3.1, `compiler/types/send.go`). This note explains what may cross a task boundary in Snello and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
+Status: decided; `Send` inference implemented in `compiler/types/send.go`. This note explains what may cross a task boundary in Snello and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
 
 ## The problem
 
@@ -22,7 +22,7 @@ Concretely:
 
 1. **Sending moves.** `ch <- v` transfers ownership of `v` to the channel. Using `v` afterwards is a compile error.
 2. **Receiving owns.** `v := <-ch` makes this task the owner of `v`. When `v` goes out of scope it is freed here, deterministically.
-3. **Channel handles are owned and cloned.** The channel itself is a shared, internally synchronized object with a count of its handles; a handle is moved as any owned value is, `ch.Clone()` gives another to hand to another task, and the last handle to go frees the channel (decided 2026-10-21, replacing `Copy` handles, which no last handle could free; `06-tasks-and-channels.md` has the reasoning). Fan-out and fan-in clone the handle once per task; a function within a task borrows it.
+3. **Channel handles are owned and cloned.** The channel itself is a shared, internally synchronized object with a count of its handles; a handle is moved as any owned value is, `ch.Clone()` gives another to hand to another task, and the last handle to go frees the channel (replacing `Copy` handles, which no last handle could free; `06-tasks-and-channels.md` has the reasoning). Fan-out and fan-in clone the handle once per task; a function within a task borrows it.
 4. **`spawn` moves its captures.** A closure passed to `spawn` takes ownership of every variable it mentions. There is no capture by reference across a task boundary.
 5. **Borrows never cross.** A `ref T` or `mut T` cannot be captured by `spawn` or sent on a channel. A borrow is tied to a call frame, and the new task has its own frames.
 
@@ -38,13 +38,13 @@ A type may cross a task boundary if it is `Send`. The compiler infers this from 
 | Channel handles | Yes | The channel synchronizes itself |
 | `Rc<T>` | No | Non-atomic reference count |
 | `Arc<T>` | If `T` is | Atomic reference count |
-| `Mutex<T>` | If `T` is | The lock serializes access; it holds only a `T` that is `Send` (2026-10-21), since it exists to share between tasks, and around an `rc.Rc` it was the one way to close a cycle of handles that is never released |
+| `Mutex<T>` | If `T` is | The lock serializes access; it holds only a `T` that is `Send`, since it exists to share between tasks, and around an `rc.Rc` it was the one way to close a cycle of handles that is never released |
 | A trait used as a type (`Shape`) | Only if the trait refines `Send` | The concrete type is unknown |
 | `ref T`, `mut T` | Never | Tied to a call frame |
 
 A user never writes `Send` on a type, and listing it after `impl` is refused. It appears in error messages, as in "cannot send `rc.Rc<Node>` across a task: `rc.Rc<Node>` stays in its task", and in two places a program may name it: a trait may refine it, `trait Job: Send`, so that a value of the trait type may cross, and a type parameter may be bounded by it, `T: Send`, so that a generic body may spawn with a `T`.
 
-Two decisions made with the implementation (2026-10-20):
+Two decisions made with the implementation:
 
 - **`Rc` is not `Send` by a field, not by a rule of the compiler.** Structurally an `Rc<T>` is an owned pointer to a cell of two counts and a value, the same shape `Arc<T>` will have; what differs is that the counts are not atomic, which no type can show. The cell therefore holds a field of the predeclared type `local`, a type that holds nothing and is not `Send`, so every type reaching it is not either. Only the standard library may write `local`, as only it may write `any`; the compiler keeps no table of library names, and a new unsendable library type needs no compiler change. A comment directive was considered and rejected: a comment the parser must read is a second syntax, and a misspelled one silently does nothing.
 - **There is no `Sync`.** Rust's second property covers types that change a value through a shared reference, `Cell` and `RefCell`. Snello has none: a `ref` never changes what it borrows, and the only way to a `mut` from a shared value is a lock, which synchronizes. Safe to share and safe to send are therefore one property, and `Arc<T>` is `Send` when `T` is.
@@ -57,7 +57,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 - `Arc<Mutex<T>>` or `Arc<RwLock<T>>` for shared mutable state. The lock owns the data. `Lock()` returns a guard that is a `mut T` borrow and releases on drop, so forgetting to unlock is impossible and so is touching the data without the lock.
 - Atomics for counters and flags. (Not in the library yet; `Arc` counts with one atomic add the runtime provides, and a shared counter is an `Arc<Mutex<int>>`.)
 
-The library was written on 2026-10-20 as `05-standard-library.md` decides it: `sync.NewArc(v)`, with `Get` lending the value; `sync.NewMutex(v)` and `sync.NewRwLock(v)`, with `Lock`, `Read` and `Write` returning a guard whose `Get` lends the value, `*g.Get() += 1`, and whose `Drop` gives the lock back; `sync.NewOnce()` with `Do`; `sync.NewWaitGroup()` as a `Copy` handle with `Add`, `Done` and `Wait`. A guard is a borrow-holding struct, so storing it, sending it, or keeping it past the statement that made the lock temporary is refused by the rules of `04-borrows-ref-and-mut.md`, with no rule added for it. The one step from a `ref` of the lock to a `mut` of its value is a function the compiler lowers for the library alone, as `rc` has its two.
+The library is written as `05-standard-library.md` decides it: `sync.NewArc(v)`, with `Get` lending the value; `sync.NewMutex(v)` and `sync.NewRwLock(v)`, with `Lock`, `Read` and `Write` returning a guard whose `Get` lends the value, `*g.Get() += 1`, and whose `Drop` gives the lock back; `sync.NewOnce()` with `Do`; `sync.NewWaitGroup()` as a `Copy` handle with `Add`, `Done` and `Wait`. A guard is a borrow-holding struct, so storing it, sending it, or keeping it past the statement that made the lock temporary is refused by the rules of `04-borrows-ref-and-mut.md`, with no rule added for it. The one step from a `ref` of the lock to a `mut` of its value is a function the compiler lowers for the library alone, as `rc` has its two.
 
 `../../examples/03-cache-server.snello` shows `Arc<RwLock<T>>` where a cache is shared by every connection task, each holding a clone of the `Arc` and borrowing the map under the lock for one request at a time.
 
@@ -69,27 +69,27 @@ The library was written on 2026-10-20 as `05-standard-library.md` decides it: `s
 
 ## What it gains
 
-- **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written, for every value a task owns, borrows or shares through `sync`, and for a package variable, which the section below puts under the same rule (a plain shared global until 2026-11-07, found while checking the claim for the book and closed the same day).
+- **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written, for every value a task owns, borrows or shares through `sync`, and for a package variable, which the section below puts under the same rule.
 - **Deterministic frees across tasks.** A value received from a channel is freed by the receiver when it is done, not by a collector later.
 - **Nothing to annotate.** The pipeline example has one Snello-specific token, a `ref`, and it is there for efficiency rather than safety.
 - **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.snello` shows it.
 
-## What stage 3 decided
+## What the implementation decided
 
-The stage implemented this note as written and settled four things it had left open, each dated in the place it was decided:
+The implementation follows this note as written and settled four things it had left open:
 
-- **No `Sync`, and a marker type instead of a rule** (above, 2026-10-20): safe to share and safe to send are one property, and `rc` keeps its handles in their task with a `local` field, not a compiler table.
-- **`break` means the innermost loop, everywhere** (2026-10-20, `../specs/stage-3-send.md`, task 3.2): `match` and `select` are not loops, so a `break` inside a `select` case leaves the `for` around it, which is what a worker's exit on cancellation means to say; a `break` outside any loop is an error. There are no labels.
-- **The program ends when `main` returns** (2026-10-20, `06-tasks-and-channels.md`): the other tasks stop with it, and a program that must wait for them says so with a channel or a `sync.WaitGroup`. A panic in any task ends the program with its message and status 2.
-- **The signal channel is `chan ()`** (2026-10-20, `../specs/stage-3-send.md`, task 3.2): `()` is the value that carries nothing, so `done <- ()` says what it does, and anonymous struct types left the grammar with the idiom that needed them.
+- **No `Sync`, and a marker type instead of a rule** (above): safe to share and safe to send are one property, and `rc` keeps its handles in their task with a `local` field, not a compiler table.
+- **`break` means the innermost loop, everywhere**: `match` and `select` are not loops, so a `break` inside a `select` case leaves the `for` around it, which is what a worker's exit on cancellation means to say; a `break` outside any loop is an error. There are no labels.
+- **The program ends when `main` returns** (`06-tasks-and-channels.md`): the other tasks stop with it, and a program that must wait for them says so with a channel or a `sync.WaitGroup`. A panic in any task ends the program with its message and status 2.
+- **The signal channel is `chan ()`**: `()` is the value that carries nothing, so `done <- ()` says what it does, and anonymous struct types left the grammar with the idiom that needed them.
 
-The checkpoint's race programs live under `../../examples/core/errors/`: a value used after it was sent, an `Arc`'s value changed, a borrowing closure spawned, a borrow across a spawn or on a channel, a value spawned twice, a non-`Send` value spawned or carried, and a lock's guard captured by a task or kept past its statement. Each is rejected with the message its header names, and the concurrency examples 02, 12, 13 and 18 run.
+The race programs live under `../../examples/core/errors/`: a value used after it was sent, an `Arc`'s value changed, a borrowing closure spawned, a borrow across a spawn or on a channel, a value spawned twice, a non-`Send` value spawned or carried, and a lock's guard captured by a task or kept past its statement. Each is rejected with the message its header names, and the concurrency examples 02, 12, 13 and 18 run.
 
 ## Package variables
 
-Status: implemented 2026-11-07 (stage 9, task 9.2), as this section says; the decisions were the owner's the same day, and what the building changed is marked "as built".
+Status: implemented, as this section says; what the building changed is marked "as built".
 
-**The problem.** Everything above moves: a `spawn` takes what its closure mentions, a channel takes what it carries, and a borrow stays in its frame. A package variable is mentioned by no one and moved by nothing; it is simply there, and so every task reaches it. Found on 2026-11-07 while checking the book's claim that a data race is a compile error:
+**The problem.** Everything above moves: a `spawn` takes what its closure mentions, a channel takes what it carries, and a borrow stays in its frame. A package variable is mentioned by no one and moved by nothing; it is simply there, and so every task reaches it. Found while checking the book's claim that a data race is a compile error:
 
 ```snello
 var counter int = 0
@@ -100,7 +100,7 @@ func work(done chan<- ()) {
 }
 ```
 
-Two tasks running `work` print a different number each time, `1623118 of 2000000`, and the same program over a `var name string` frees the string twice, which the debug build reports as `a block was released twice`. The checker accepts both. Decided the same day: there will never be a race in Snello, and this is closed by a rule, not a note.
+Two tasks running `work` print a different number each time, `1623118 of 2000000`, and the same program over a `var name string` frees the string twice, which the debug build reports as `a block was released twice`. The checker accepts both. Decided: there will never be a race in Snello, and this is closed by a rule, not a note.
 
 **The rule, in three sentences.** A package variable may be read from any task, and is never assigned, lent as `mut`, or moved out of. Its type must be one every task may share, which is `Send` as inferred above, so an `rc` handle is refused as a `spawn` refuses it. A change goes through an atomic or a lock the variable holds, and the lock's guard is the only way to a `mut`, as it is for every value that crosses a task.
 
@@ -112,7 +112,7 @@ main.snello:5:9: counter is a package variable, shared by every task; change it 
 
 for `counter += 1`, for `bump(mut counter)`, for `names.Push("x")` through a method taking `mut`, for `m := cache` when the type is not `Copy`, and for a `match` arm or an `if v :=` that binds a part of one by value; as built the message names the three holders, `change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds`, and the one check sits where every access of a place goes through, the borrow checker's `access`, with a package variable of another package, `os.Args`, made a place so that the rule reaches it. Reading stays as it is anywhere: `fmt.Println(counter)`, `names[i]`, `ref names`, and copying a `Copy` value out. A `const` is unchanged. `take(mut cache)` needs no rule of its own, since it lends the place as `mut` first. A package variable whose type is not `Send`, an `rc` handle, is refused where it is declared, `shared cannot be a package variable: rc.Rc<Node> stays in its task`. The programs are `global-assigned`, `global-mut`, `global-moved` and `global-not-send` under `../../examples/core/errors/`, and `globals` in the backends' programs runs what is allowed from two tasks.
 
-The same program, correct, and the first thing anyone writes, so atomics come with this task rather than with the collections (decided 2026-11-07):
+The same program, correct, and the first thing anyone writes, so atomics come with package variables rather than with the collections:
 
 ```snello
 var hits = sync.NewCounter(0)
@@ -125,9 +125,9 @@ func work(done chan<- ()) {
 fmt.Println(hits.Load())   // 2000000, every time
 ```
 
-**As built, two types, decided that an atomic holds anything.** `sync.Counter` is an `int` in one word of the runtime's, named by a handle the value holds as a lock is, with `Add`, `Load`, `Store` and `CompareAndSwap` each one instruction, sequentially consistent as Go's. `sync.Atomic<T>` holds a value of any type that is `Send`, `Clone` and `Eq`, a flag, a name, a configuration, with `Load` giving a copy, `Store`, `Swap` and `CompareAndSwap` replacing it, each one indivisible step under a lock of the runtime's that the `Atomic` owns, since one word of hardware holds only an integer or a pointer and a value of any size needs the lock. The first draft was a hardware `Atomic<T>` over the integer widths alone, bounded by a new standard trait `Integer` with conversions on a bounded type parameter, `T(cell)` and `i64(v)`; the owner asked for an atomic of anything, the lock-based `Atomic<T>` is simpler and needs nothing new in the language, and the `Integer` trait came out again. Measured on an eight-core arm64 laptop through the LLVM backend, ten million increments: the word costs 7 ns each from one task and 17 ns with two tasks contending for the line, and `Mutex<int>` 10 ns from one task and 10 to 13 ns with two, the spinlock letting one task keep the line for a run; so the lock-based `Atomic<T>` gives up nothing a program would notice, and `Counter` is for the counter that must never park. The methods take `ref self` on both, since the word or the lock is what makes a change through a `ref` safe, as a `Mutex` is; both are `Send` and so may be package variables. A value that is not a count and changes in more than one step is a `sync.NewMutex(map[string]int{})` locked where it is used, and a `RwLock` when read often and changed rarely. No `Arc` is needed around any of them: a package variable is already reachable from every task, which is why it needs the lock.
+**As built, two types, decided that an atomic holds anything.** `sync.Counter` is an `int` in one word of the runtime's, named by a handle the value holds as a lock is, with `Add`, `Load`, `Store` and `CompareAndSwap` each one instruction, sequentially consistent as Go's. `sync.Atomic<T>` holds a value of any type that is `Send`, `Clone` and `Eq`, a flag, a name, a configuration, with `Load` giving a copy, `Store`, `Swap` and `CompareAndSwap` replacing it, each one indivisible step under a lock of the runtime's that the `Atomic` owns, since one word of hardware holds only an integer or a pointer and a value of any size needs the lock. The first draft was a hardware `Atomic<T>` over the integer widths alone, bounded by a new standard trait `Integer` with conversions on a bounded type parameter, `T(cell)` and `i64(v)`; an atomic of anything was asked for, the lock-based `Atomic<T>` is simpler and needs nothing new in the language, and the `Integer` trait came out again. Measured on an eight-core arm64 laptop through the LLVM backend, ten million increments: the word costs 7 ns each from one task and 17 ns with two tasks contending for the line, and `Mutex<int>` 10 ns from one task and 10 to 13 ns with two, the spinlock letting one task keep the line for a run; so the lock-based `Atomic<T>` gives up nothing a program would notice, and `Counter` is for the counter that must never park. The methods take `ref self` on both, since the word or the lock is what makes a change through a `ref` safe, as a `Mutex` is; both are `Send` and so may be package variables. A value that is not a count and changes in more than one step is a `sync.NewMutex(map[string]int{})` locked where it is used, and a `RwLock` when read often and changed rarely. No `Arc` is needed around any of them: a package variable is already reachable from every task, which is why it needs the lock.
 
-**What a package variable may hold, and from when.** Its type must be `Send`, inferred as above, whether the type is written out or inferred from the value, and a trait used as its type must refine `Send`: `held cannot be a package variable: rc.Rc<Node> stays in its task`, `unit cannot be a package variable: Shape does not refine Send`, checked once every type of the package is complete (`global-declared-not-send`, `global-trait-not-send`; the first build checked the inferred form alone, which the review before the pull request found). Its initializer, until this task, had to be a literal, which both backends refuse otherwise, `a top-level var or const whose value is not a literal`. A `Mutex` or an `Atomic` is made by a call, so the rule needs initializers that call:
+**What a package variable may hold, and from when.** Its type must be `Send`, inferred as above, whether the type is written out or inferred from the value, and a trait used as its type must refine `Send`: `held cannot be a package variable: rc.Rc<Node> stays in its task`, `unit cannot be a package variable: Shape does not refine Send`, checked once every type of the package is complete (`global-declared-not-send`, `global-trait-not-send`; the first build checked the inferred form alone, which the review before the pull request found). Its initializer once had to be a literal, which both backends refuse otherwise, `a top-level var or const whose value is not a literal`. A `Mutex` or an `Atomic` is made by a call, so the rule needs initializers that call:
 
 ```snello
 var registry = sync.NewMutex(map[string]int{})
@@ -149,7 +149,7 @@ Decided, as built: **such a variable is initialized once, on first use, under th
 
 Decided, as built: the functions. `os.Args` is only read, and stays a variable. The two examples that changed a package variable, `examples/run/packaged/report.snello` and `examples/run/text.snello`, were rewritten on a `Counter` and a local, and are the first two programs to show the rule; `testing`'s fourteen variables became one `sync.NewMutex(Config{})` written once by `Main` and one `sync.NewMutex(Registry{})` for the states of the running tests, both made on first use, with the benchmark's state moved into the runtime, `runtime/c/testing.c`, so that `testing.Loop` costs one call and no lock.
 
-**Locals stay as they are.** The owner asked whether Snello should take Scala's `val`/`var` and Rust's `let`/`let mut`, which the two spellings `x := v` and `var x` could carry with no new keyword: `:=` as the `val`, so that `xs := []int{}; xs.Push(1)` reads `xs was declared with :=, which does not change; declare it with var`. Decided (proposed): not now. A local is reachable by one task, so it closes no race; `mut` at every call site already says where a value changes; and the form costs every program that grows a slice declared with `:=`, a new case in the borrow rules, and a second sentence to learn, against the criterion decided for the stage, that the rule a reader can state in one sentence wins. It is recorded here with its example so that it can be reopened with a reason.
+**Locals stay as they are.** Should Snello take Scala's `val`/`var` and Rust's `let`/`let mut`, which the two spellings `x := v` and `var x` could carry with no new keyword: `:=` as the `val`, so that `xs := []int{}; xs.Push(1)` reads `xs was declared with :=, which does not change; declare it with var`? Decided: not now. A local is reachable by one task, so it closes no race; `mut` at every call site already says where a value changes; and the form costs every program that grows a slice declared with `:=`, a new case in the borrow rules, and a second sentence to learn, against the criterion, that the rule a reader can state in one sentence wins. It is recorded here with its example so that it can be reopened with a reason.
 
 **Outside the guarantee.** A bound C function may write anything, and a C library's statics are its own; the rule covers Snello, as `09-testing.md` says of the race detector.
 
@@ -157,7 +157,7 @@ Decided, as built: the functions. `os.Args` is only read, and stays a variable. 
 
 ## How it runs
 
-`06-tasks-and-channels.md` says how a task runs and how a channel hands a value over: the interface the compiler emits, the runtime of stage 3 and the scheduler of stage 4.
+`06-tasks-and-channels.md` says how a task runs and how a channel hands a value over: the interface the compiler emits, the thread-per-task runtime that came first and the scheduler that replaced it.
 
 ## Precedent
 

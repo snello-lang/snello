@@ -2,37 +2,37 @@
 
 The book: how to write Snello. It describes the language on its own terms, one feature at a time, and every code sample is cut from a program in `../../examples/`, so the book and the compiler's acceptance suite cannot drift apart. Readers coming from Go have Appendix B, which says per chapter what carries over and what to unlearn.
 
-The book is written as the language is built. A chapter exists as soon as its feature is decided, and its status line says how much of it the compiler enforces today. The reasoning behind the decisions is not here; it is in `../design/`.
+The book is written as the language is built: a chapter exists as soon as its feature is decided, and says plainly what the compiler does not do yet. The reasoning behind the decisions is not here; it is in `../design/`.
 
 ## Contents
 
-| Chapter | Status |
+| Chapter | What it covers |
 |---|---|
-| [1. Introduction](01-introduction.md) | written at the stage 1 checkpoint; describes core Snello as `snello build` compiles it |
-| [2. Getting started](02-getting-started.md) | `snello build` compiles all of core Snello, `snello build -debug` checks the drops (stage 1, tasks 1.5 and 1.9); the LLVM backend is the default and `-backend c` the reference (stage 4, task 4.7); packages of the program's own, of one file or several, are found through `snello.mod` (stage 5, task 5.3); the tests section 2026-11-07, stage 9's task 9.1 |
-| [3. Basics](03-basics.md) | implemented, checked and compiled (stage 1, task 1.5) |
-| [4. Structs, enums and match](04-structs-enums-match.md) | implemented, checked and compiled (stage 1, task 1.5); the positional struct literal (stage 2, task 2.7); an enum's methods, traits, derived order, printing, type parameters and what it is not written out 2026-11-07 |
-| [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves checked (stage 1, task 1.6); drops at scope exit, return and panic, checked by `snello build -debug` (stage 1, task 1.9); `impl Copy` checked against the fields, and a moved variable given back by assignment on every path (stage 2, task 2.5); what no collector buys measured against Go and Rust by `bench/memory.snello` (stage 4, task 4.6), over the runtime's own allocator (stage 5, task 5.1) |
-| [6. Borrows: `ref` and `mut`](06-borrows.md) | decided; compiled (stage 1, task 1.5); all six rules checked (stage 1, tasks 1.7 and 1.8); a closure copies a `Copy` value it only reads and may then be returned (stage 2, task 2.7) |
-| [7. Owned pointers and recursive data](07-owned-pointers.md) | implemented, checked, compiled and freed (stage 1, tasks 1.5 and 1.9) |
-| [8. Option, Result, `?` and `??`](08-option-result.md) | implemented, checked and compiled (stage 1, task 1.5); `Map` and `MapErr` (stage 2, task 2.6); `?` passing an error into the variant that holds its type or into a trait value (stage 9, task 9.4) |
-| [9. Collections: slices, maps and strings](09-collections.md) | implemented, checked and compiled (stage 1, task 1.5); a map key must be `Eq` and `Hash` (stage 2, task 2.5) |
-| [10. Concurrency: `spawn`, channels, `select`](10-concurrency.md) | the rule of the task boundary decided; `Send` inferred from the structure of every type, with `rc`'s handles kept in their task by a `local` field (stage 3, task 3.1); a `spawn` moves what its closure mentions and checks `Send` at every crossing, `close`, `for range ch` (task 3.2); tasks, channels and `select` run, with a function, a method or a closure spawned (task 3.3); `sync.Arc`, `Mutex`, `RwLock`, `Once` and `WaitGroup` with guards checked by the borrow rules, and `time.After` (task 3.4); the race programs rejected and the stage's decisions recorded (task 3.5): implemented (stage 3); tasks on one worker thread per core, parking when they wait (stage 4, task 4.4); channels and wait groups as owned handles freed by the last one (stage 5, task 5.13) |
-| [11. Traits](11-traits.md) | declarations, `impl`, refinement and bounds checked and compiled (stage 2, task 2.2); default methods, the resolution order, trait fields and `super` (task 2.3); a trait as a type checked and compiled (task 2.4); the standard traits' methods, derivation from the fields and the map key rule checked (task 2.5, first slice); the operator traits with their argument, checked and compiled (second slice); the derived methods and the predeclared types' own compiled (third slice, task 2.5 complete); generic traits and default methods with type parameters of their own (task 2.7); a trait value of `Error` or `fmt.Stringer` printed as its message (stage 9, task 9.4) |
-| [12. Generics](12-generics.md) | generic types and functions checked, inferred and compiled one copy per instance (stage 2, task 2.1); bounds are traits (task 2.2) |
-| [13. Arenas and indices](13-arenas-and-indices.md) | `arena.Arena<T>` and `arena.Index<T>` written in Snello under `std/arena/`, with generation-checked indices (stage 2, task 2.6, seventh slice); a range over an arena waits for the iterator trait |
-| [14. The standard library](14-standard-library.md) | packages written in Snello under `std/`, imported and compiled with the program: `math`, `io`, `os`, `strings`, `strconv`, `sort`, `time`, `arena`, `rc` and `bufio` (stage 2, task 2.6, nine slices); `net` (stage 4, task 4.5); `fmt` printing and checking its formats as Go's does, with `fmt.Stringer`, and `strconv.Kind` (stage 5, after the review of the standard library); every package is declared under `std/`, `fmt` and `os.Exit` without bodies, since the compiler writes them |
-| [15. Binding C](15-binding-c.md) | a package declares a function without a body and defines it in C beside it, under the symbol the compiler derives and the header it writes; what crosses, a handle wrapped with `Drop`, and a system library named by `link` in the module file (stage 5, task 5.5) |
-| [16. Testing](16-testing.md) | test files part of the package only under test, tests as plain functions, the `expect` and `testing` packages, `snello test` with its flags, subtests, parallel tests, benchmarks and golden files, the failure message's form, and how it is built for maintainers (stage 9, task 9.1); every library package tested through `package NAME_test`, `snello test std/NAME`, and the Makefile running the pure Snello targets inside the Linux image (task 9.3) |
-| [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, the message and the cause derived when not written, `?` passing an error into the variant that holds its type or into a trait value, `%+v` printing the chain, and the refusals (stage 9, task 9.4) |
-| [18. No empty values](18-no-empty-values.md) | why no value is ever null or empty: the types with a zero value and those without, what the compiler refuses and what to write instead, `replace`, the library's handles made only by their constructors and its answers where a caller can be wrong, and how the rule stays memory safe (stage 11, task 11.2) |
-| [19. Text: strings, runes and Unicode](19-text.md) | Unicode 18 whole: a range over a string yields runes, `s.Runes()`, `WriteRune` and `ReadRune`; `unicode`, `unicode/utf8` and `unicode/utf16`; full case mapping and `EqualIgnoreCase`; `unicode/norm` and `unicode/segment`; what a string that is not valid UTF-8 reads as, and where each piece lives (stage 9, task 9.6) |
-| [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | implemented (stage 0) |
-| [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | covers chapters 2 to 12 and 14 to 19; grows with them |
+| [1. Introduction](01-introduction.md) | what Snello is, and core Snello as `snello build` compiles it |
+| [2. Getting started](02-getting-started.md) | `snello build`, `-debug` and the two backends; packages of the program's own through `snello.mod`; tests with `snello test` |
+| [3. Basics](03-basics.md) | variables, constants, the number types, functions, control flow, `match` on conditions |
+| [4. Structs, enums and match](04-structs-enums-match.md) | structs and the positional literal; enums, their methods, traits, derived order, printing and type parameters; patterns |
+| [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves, `Copy` checked against the fields, a moved variable given back by assignment, drops at scope exit, return and panic, and what no collector buys, measured by `bench/memory.snello` |
+| [6. Borrows: `ref` and `mut`](06-borrows.md) | the six rules, and closures that copy a `Copy` value they only read |
+| [7. Owned pointers and recursive data](07-owned-pointers.md) | `*T`, `&expr` and recursive types |
+| [8. Option, Result, `?` and `??`](08-option-result.md) | `T?`, `Result`, `Map` and `MapErr`, and `?` passing an error into the variant that holds its type or into a trait value |
+| [9. Collections: slices, maps and strings](09-collections.md) | slices, maps with keys that are `Eq` and `Hash`, and strings |
+| [10. Concurrency: `spawn`, channels, `select`](10-concurrency.md) | the rule of the task boundary, `Send` inferred from structure, `spawn`, channels, `close`, `for range ch` and `select`, `sync`'s handles and guards, `time.After`, package variables, and the races the checker rejects |
+| [11. Traits](11-traits.md) | declarations, `impl`, refinement and bounds; default methods, the resolution order, trait fields and `super`; a trait as a type; the standard and operator traits and derivation; generic traits |
+| [12. Generics](12-generics.md) | generic types and functions, inference, one copy per instance, and bounds |
+| [13. Arenas and indices](13-arenas-and-indices.md) | `arena.Arena<T>` and generation-checked `arena.Index<T>` |
+| [14. The standard library](14-standard-library.md) | the packages under `std/`, `fmt` and its checked formats, and what stays out of the library |
+| [15. Binding C](15-binding-c.md) | a function without a body defined in C beside the package, what crosses, a handle wrapped with `Drop`, and `link` in the module file |
+| [16. Testing](16-testing.md) | test files, tests as plain functions, `expect` and `testing`, `snello test` and its flags, subtests, parallel tests, benchmarks and golden files, and the library's own tests |
+| [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, derived messages, `?` across error types, `%+v` printing the chain |
+| [18. No empty values](18-no-empty-values.md) | why no value is ever null or empty, which types have a zero value, what the compiler refuses and what to write instead, `replace`, and how the rule stays memory safe |
+| [19. Text: strings, runes and Unicode](19-text.md) | runes and Unicode whole: `unicode`, `unicode/utf8`, `unicode/utf16`, case mapping, `unicode/norm` and `unicode/segment` |
+| [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | the keywords and the grammar's fine points |
+| [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | per chapter, what carries over from Go and what to unlearn |
 
 ## How the book is kept current
 
-- A slice that implements or decides a language feature updates the chapter that owns the feature in the same change, as it carries its tests. Each stage's checkpoint has a line for this.
-- Every chapter starts with a status line: what is decided, and through which stage the compiler enforces it. The line changes when the compiler catches up.
+- A change that implements or decides a language feature updates the chapter that owns the feature in the same change, as it carries its tests.
+- A chapter describes what the compiler does today; what it does not do yet is said plainly where it matters.
 - Samples come from `../../examples/`. When an example changes, the chapter quoting it changes with it.
 - The chapters name no other language. Snello is explained by what it is and what it is for. Comparisons for readers coming from Go live in Appendix B, and a chapter that gains a feature adds its row there.

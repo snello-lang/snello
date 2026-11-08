@@ -1,7 +1,5 @@
 # Appendix B. Snello for Go programmers
 
-Status: grows with the chapters; covers chapters 2 to 9, 11, 12 and 14.
-
 The chapters describe Snello on its own terms and name no other language. This appendix is for readers who come from Go: for each chapter, what carries over unchanged and what to unlearn. Snello is not a Go dialect, and Go programs are not Snello programs; the syntax is familiar so that the ideas get your full attention.
 
 ## Chapter 2: Packages and modules
@@ -74,7 +72,7 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 
 The ownership model is not Snello's invention. One owner per value, borrows that are either many readers or one writer, and a `Drop` that runs when the owner is done are the model Rust made mainstream, and before Rust they were the linear types of academic languages. A Rust programmer recognizes Snello's chapters 5 and 6 at once, and that is deliberate: it is the one model with a decade of proof on real systems, and it is what lets Snello drop the garbage collector that Go's simplicity leans on.
 
-Where Snello differs is in what it leaves out, and this is the bet stage 1 of the compiler was built to test:
+Where Snello differs is in what it leaves out, and this is the bet the compiler's first checker was built to test:
 
 | In Rust | In Snello |
 |---|---|

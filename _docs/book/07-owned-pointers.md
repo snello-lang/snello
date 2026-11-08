@@ -1,6 +1,6 @@
 # 7. Owned pointers and recursive data
 
-Status: implemented, checked (stage 1, task 1.4) and compiled to native code (stage 1, task 1.5). `examples/run/boxes.snello`, `examples/core/list.snello`, `bst.snello` and `calc.snello` exercise this chapter. What a pointer owns is freed when the pointer is dropped (stage 1, task 1.9).
+`examples/run/boxes.snello`, `examples/core/list.snello`, `bst.snello` and `calc.snello` exercise this chapter.
 
 A value of type `*T` is an owned pointer: it holds a `T` on the heap and is the one owner of it. `&expr` makes one, moving the value out of the expression into a fresh heap cell:
 

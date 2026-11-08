@@ -1,6 +1,6 @@
 # 11. Traits
 
-Status: generic traits and default methods with type parameters of their own are checked and compiled (stage 2, task 2.7); trait declarations with required methods, the `impl` list and its check, refinement, and traits as bounds on type parameters are checked and compiled (stage 2, task 2.2), and so are default methods with the resolution order that picks one, trait fields and `super` (stage 2, task 2.3); `examples/run/traits.snello` runs them. A trait used as a type is checked and compiled (stage 2, task 2.4); a trait value of `Error` or `fmt.Stringer` prints as its message (stage 9, task 9.4), any other trait value does not yet. The standard traits are predeclared, and `Drop` asks for its method; the others get theirs with task 2.5. The samples are cut from `examples/run/traits.snello` and `examples/07-traits.snello`.
+A trait value of `Error` or `fmt.Stringer` prints as its message; any other trait value does not print yet. The samples are cut from `examples/run/traits.snello` and `examples/07-traits.snello`.
 
 A trait is a set of methods a type promises to have. A type declares which traits it implements, and the compiler checks the promise. A trait is also what a generic function asks of its type parameters: `T: Shape` means any `T` that implements `Shape`, and inside the function `T` has `Shape`'s methods.
 

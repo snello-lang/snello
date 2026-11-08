@@ -7,7 +7,7 @@ These apply to the Go code of the compiler and to the Snello code under `example
 - **No dependencies.** The compiler imports only the Go standard library. `go.mod` has no `require` line. Development tools (linters, formatters) may be used but are never imported.
 - **Model on the Go toolchain.** Each package mirrors its counterpart in Go's own source: `token` on `go/token`, `scanner` on `go/scanner`, `ast` on `go/ast`, `parser` on `go/parser`, the checker on `go/types`. When unsure how to structure something, read how Go did it.
 - **Simple over clever.** A Go developer should read every file on the first pass. If a construct needs a comment to explain what it is doing, rewrite the construct before writing the comment.
-- **The examples are the acceptance suite.** Every stage must process all twenty programs under `examples/`. A change that breaks one is wrong until either the code or the design document is updated.
+- **The examples are the acceptance suite.** Every change keeps all twenty programs under `examples/` processing. A change that breaks one is wrong until either the code or the design document is updated.
 
 ## Files
 

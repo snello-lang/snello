@@ -1,6 +1,6 @@
 # 16. Testing
 
-Status: implemented (stage 9, task 9.1, 2026-11-07): test files, the `testing` and `expect` packages, `snello test` with its flags, subtests, parallel tests, benchmarks and golden files run through both backends, with the failure forms pinned by `compiler/testrun`'s tests; the place of a call kept per task (task 9.1, the same day). Every package of the standard library gets its test file in task 9.3. The design is `../design/09-testing.md`; Appendix B maps the testing tools of other languages onto this chapter.
+The design is `../design/09-testing.md`; Appendix B maps the testing tools of other languages onto this chapter.
 
 This chapter is for two readers: a developer writing the tests of a program or a package, and a maintainer of the compiler, the runtime or the library, who needs to know how the pieces fit and where each lives. The first fourteen sections are for the developer; the last two are for the maintainer.
 
@@ -171,7 +171,7 @@ The time per operation has decimals under a hundred nanoseconds. A benchmark tha
 
 ## Golden files
 
-`expect.Golden(name, ref got)` compares a text with the file `testdata/NAME.golden` beside the package and fails with the first differing line. `snello test -update DIR` makes every `Golden` write its file instead of comparing, which is how the file is made the first time and how it is refreshed when the output changes on purpose; the diff of the file in version control is then the review. The `testdata` directory is made by hand until the library makes directories (task 9.11), and a missing file says so: `open testdata/report.golden: no such file or directory; snello test -update writes the file`.
+`expect.Golden(name, ref got)` compares a text with the file `testdata/NAME.golden` beside the package and fails with the first differing line. `snello test -update DIR` makes every `Golden` write its file instead of comparing, which is how the file is made the first time and how it is refreshed when the output changes on purpose; the diff of the file in version control is then the review. The `testdata` directory is made by hand until the library makes directories, and a missing file says so: `open testdata/report.golden: no such file or directory; snello test -update writes the file`.
 
 ## The flags
 
