@@ -1,4 +1,6 @@
-# Runs the checks and the test suite on every push and pull request.
+# Runs the checks and the test suite on every pull request, and on
+# every push to main: a push to a pull request's branch runs it once,
+# as the pull request, not twice.
 #
 # The suite builds and runs Snello programs through both backends, and
 # the runtime under them has code per processor and per system: the
@@ -29,6 +31,7 @@ name: Tests
 # so a skipped run blocks nothing.
 on:
   push:
+    branches: [main]
     paths-ignore:
       - '**.md'
       - '_docs/**'
@@ -83,7 +86,7 @@ jobs:
           load: true
           cache-from: type=gha,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
           cache-to: type=gha,mode=max,scope=${{ runner.arch }}-${{ hashFiles('build/Dockerfile') }}
-      - uses: actions/cache@v4 # the Go build cache the image's runs write, so a run compiles only what changed
+      - uses: actions/cache@v4 # the Go build cache and Snello's compiled runtime the image's runs write, so a run compiles only what changed
         if: runner.os == 'Linux'
         with:
           path: ~/.cache/snello

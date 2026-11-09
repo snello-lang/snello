@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
-	"github.com/snello-lang/snello/runtime"
 )
 
 // Flags are the options the C compiler is given. Every warning is an
@@ -48,18 +47,21 @@ func Compiler() string {
 	return "cc"
 }
 
-// Build writes the emitted program and the runtime into dir, with the
-// C side of every package that binds C, compiles them with the C
-// compiler, and returns the path of the binary named name. The
-// compiler's output comes back with any error. A debug build compiles
-// the runtime's checks in: see runtime/c/debug.c.
+// Build writes the emitted program and the runtime's headers into dir,
+// with the C side of every package that binds C, compiles them with
+// the C compiler, links them with the runtime's objects, which the
+// cache holds once they are compiled, and returns the path of the
+// binary named name. The compiler's output comes back with any error.
+// A debug build compiles the runtime's checks in: see
+// runtime/c/debug.c.
 func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
-	files := runtime.Files()
-	files[name+".snello.c"] = src // never the name of a runtime file, whatever the program is called
-	for file, data := range files {
-		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
-			return "", nil, err
-		}
+	prog := filepath.Join(dir, name+".snello.c") // never the name of a runtime file, whatever the program is called
+	if err := os.WriteFile(prog, src, 0o644); err != nil {
+		return "", nil, err
+	}
+
+	if err := WriteHeaders(dir); err != nil {
+		return "", nil, err
 	}
 
 	bound, err := BindingSources(dir, bindings)
@@ -74,14 +76,33 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 		args = append(args, Release...)
 	}
 
-	args = append(args, "-I", dir) // snello.h, for a package's C
-	objs, output, err := Objects(Compiler(), args, append(append([]string{filepath.Join(dir, name+".snello.c")}, runtime.Paths(dir)...), bound...))
+	var rt []string
+	var rtOutput []byte
+	var rtErr error
+	done := make(chan struct{})
+	rtArgs := append([]string{}, args...) // the runtime's own: the program's gain -I below
+	go func() {                           // the runtime beside the program
+		rt, rtOutput, rtErr = RuntimeObjects(dir, Compiler(), rtArgs)
+		close(done)
+	}()
+
+	args = append(args, "-I", dir) // snello.h, for the program's C and a package's
+	objs, output, err := Objects(Compiler(), args, append([]string{prog}, bound...))
+	<-done
+	output = append(output, rtOutput...)
 	if err != nil {
 		return "", output, err
 	}
 
+	if rtErr != nil {
+		return "", output, rtErr
+	}
+
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(Compiler(), append(append(append(append(args, "-o", bin), objs...), LinkFlags(bindings)...), "-lm")...).CombinedOutput()
+	link := append(append([]string{}, args...), "-o", bin, objs[0]) // the program, then the runtime, then the packages' C
+	link = append(append(link, rt...), objs[1:]...)
+	link = append(append(link, LinkFlags(bindings)...), "-lm")
+	linked, err := exec.Command(Compiler(), link...).CombinedOutput()
 	return bin, append(output, linked...), err
 }
 

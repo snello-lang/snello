@@ -122,7 +122,7 @@ bin/snello build examples/hello/hello.snello
 | `snello test DIR` | Runs the tests in a directory's `_test.snello` files |
 | `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
 
-`clang` is found on the path, or `CLANG` names it.
+`clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program; `SNELLO_CACHE` names another directory, and `SNELLO_CACHE=off` compiles the runtime with every build.
 
 ## Documentation
 
