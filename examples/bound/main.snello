@@ -1,0 +1,28 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A program with two packages that bind C beside it, found through
+// the module file: tally, with a handle made and dropped by the C
+// side's counter, bytes lent as a view, a buffer filled, and a string
+// parsed into an out-parameter; and mathx, which reaches the system's
+// math library through the module file's link line. Built with snello
+// build examples/bound.
+package main
+
+import ("fmt"; "mathx"; "tally")
+
+func main() {
+	{
+		t := tally.Open(40)
+		fmt.Println(t.Add(2), t.Count(), tally.Live())
+	}
+	fmt.Println(tally.Live()) // the Tally dropped at the block's end gave its counter back
+	xs := []byte{1, 2, 3}
+	fmt.Println(tally.Sum(ref xs))
+	buf := make([]byte, 4)
+	fmt.Println(tally.Fill(mut buf, 7), buf)
+	var n int
+	fmt.Println(tally.Parse("123", mut n), n, tally.Parse("12x", mut n), n)
+	fmt.Printf("%.3f\n", mathx.Cbrt(27)) // to three decimals: a libm's cbrt may be off in the last bit
+}

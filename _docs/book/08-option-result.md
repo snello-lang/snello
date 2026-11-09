@@ -1,6 +1,6 @@
 # 8. Option, Result, `?` and `??`
 
-`examples/run/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../examples/core/errors/` named at the end show the errors.
+`compiler/emit/internal/backendtest/testdata/options.snello`, `boxes.snello` and `slices.snello` exercise this chapter; the programs under `../../compiler/types/testdata/errors/` named at the end show the errors.
 
 Snello has no `nil`. A value that may be absent has an optional type, and an operation that may fail returns a result. Both are enums the language knows, so `match` takes them apart like any enum, and two operators, `?` and `??`, handle the common cases in one character or two.
 

@@ -18,7 +18,7 @@ import (
 // The standard streams as a program's caller sees them: in order, with
 // nothing held back, open even when the caller closed one, and failing
 // at the write that fails. Each test builds a program and runs it the
-// way a shell would, which a run program under examples/run cannot.
+// way a shell would, which a program the backends' tests share cannot.
 
 // release builds src as a release program and returns its binary.
 func release(t *testing.T, name, src string) string {

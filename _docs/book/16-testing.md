@@ -14,7 +14,7 @@ Two packages exist for tests: `expect` asserts and `testing` runs. Both may be i
 
 ## A test is a plain function
 
-A test is a function in a test file whose name begins with `Test` followed by a capital letter, taking nothing and returning nothing. It passes when it returns. It fails by a failed expectation, which is a panic the runner catches at the test's boundary; the values with `Drop` methods the test made since are dropped on the way, a file closed, a directory removed, a lock given back. There is no handle to pass around and no value to return. From `examples/run/packaged/shapes/shapes_test.snello`:
+A test is a function in a test file whose name begins with `Test` followed by a capital letter, taking nothing and returning nothing. It passes when it returns. It fails by a failed expectation, which is a panic the runner catches at the test's boundary; the values with `Drop` methods the test made since are dropped on the way, a file closed, a directory removed, a lock given back. There is no handle to pass around and no value to return. From `examples/packaged/shapes/shapes_test.snello`:
 
 ```go
 package shapes

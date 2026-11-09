@@ -1,6 +1,6 @@
 # 13. Arenas and indices
 
-A range over an arena is not supported yet; it waits for the iterator trait. The tree is cut from `examples/01-tree/tree-arena.snello`, the rest from `examples/run/arena.snello`, which runs stale indices too.
+A range over an arena is not supported yet; it waits for the iterator trait. The tree is cut from `examples/tree/tree-arena.snello`, the rest from `compiler/emit/internal/backendtest/testdata/arena.snello`, which runs stale indices too.
 
 Chapter 7 built a list and a tree from owned pointers, and chapter 6 said what a borrow cannot do: live in a struct. Between them they leave one shape of data out. A node that points back at its parent, a graph whose nodes point at each other, a cache that is both a map and a list: each needs a link that does not own what it names, and Snello has no such pointer. This chapter is the answer, and it is the answer Go programmers already know from any code that cares about speed: put every node in one container and link them by position.
 
@@ -106,4 +106,4 @@ The borrow `Get` returns is tied to the arena's borrow, under the rule of chapte
 
 ## When to reach for something else
 
-An arena is the recommended shape for linked data, not the only one. A value that must outlive any one container, or be shared by several owners, is a job for `rc.Rc<T>` and `rc.Weak<T>`, chapter 14; they cost a count per value, lend the value for changing only to a handle that is alone, and are not sent across tasks. `examples/01-tree/` holds the same tree written three ways: Go's pointers, a slice by hand, and the library arena.
+An arena is the recommended shape for linked data, not the only one. A value that must outlive any one container, or be shared by several owners, is a job for `rc.Rc<T>` and `rc.Weak<T>`, chapter 14; they cost a count per value, lend the value for changing only to a handle that is alone, and are not sent across tasks. `examples/tree/` holds the same tree written three ways: Go's pointers, a slice by hand, and the library arena.

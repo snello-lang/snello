@@ -5,17 +5,20 @@
 
 # Binaries snello build writes next to the example programs, or inside
 # a program directory built from within; at any depth, the sources,
-# a package's C side, the module files, the expected outputs, the
-# READMEs and the fixture directories stay.
-/examples/run/**
-!/examples/run/**/
-!/examples/run/**/*.snello
-!/examples/run/**/*.c
-!/examples/run/**/*.h
-!/examples/run/**/*.out
-!/examples/run/**/snello.mod
-!/examples/run/**/README.md
-!/examples/run/*.files/**
+# a package's C side, the module files, the Go versions and the tests,
+# the expected outputs and scripts, the READMEs and the fixture
+# directories stay.
+/examples/**
+!/examples/**/
+!/examples/**/*.snello
+!/examples/**/*.go
+!/examples/**/*.c
+!/examples/**/*.h
+!/examples/**/*.out
+!/examples/**/*.script
+!/examples/**/snello.mod
+!/examples/**/README.md
+!/examples/*.files/**
 
 # Objects a C compiler leaves when the runtime is compiled by hand; the
 # builds themselves work in a temporary directory.

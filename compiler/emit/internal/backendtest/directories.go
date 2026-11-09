@@ -13,12 +13,23 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// Shared is the folder of the programs of one file both backends'
+// tests build and run, each with its expected output beside it, as a
+// path from a backend's package; Examples is the folder of the example
+// programs, whose programs of several packages the backends' tests
+// build too.
+const (
+	Shared   = "../internal/backendtest/testdata"
+	Examples = "../../../examples"
+)
+
 // Directories returns the programs under dir that are directories, as
 // snello build DIR takes them, in name order: each a directory holding
-// a .snello file, a main package with the packages of its own beside
-// it. Its expected output is beside the directory, name.out, as a
-// program of one file has beside its file, and the suites ask for it
-// as they do for a file. No fixtures are copied beside a directory
+// a snello.mod and a .snello file, a main package with the packages of
+// its own beside it; a folder of separate programs of one file holds
+// no snello.mod. Its expected output is inside the directory, named
+// after it, name.out, and the suites ask for it as they do for a
+// program of one file. No fixtures are copied beside a directory
 // program's binary yet, since none reads a file.
 func Directories(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -29,6 +40,10 @@ func Directories(dir string) ([]string, error) {
 	var dirs []string
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "snello.mod")); err != nil {
 			continue
 		}
 

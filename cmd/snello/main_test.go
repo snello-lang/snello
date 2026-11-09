@@ -26,9 +26,9 @@ func TestProgramName(t *testing.T) {
 		want string
 	}{
 		{"hello.snello", false, "hello"},
-		{"examples/run/fib.snello", false, "fib"},
-		{"examples/run/packaged", true, "packaged"},
-		{"examples/run/packaged/", true, "packaged"},
+		{"compiler/emit/internal/backendtest/testdata/fib.snello", false, "fib"},
+		{"examples/packaged", true, "packaged"},
+		{"examples/packaged/", true, "packaged"},
 		{"x.snello", true, "x"},
 		{".", true, filepath.Base(cwd)},
 		{"..", true, filepath.Base(filepath.Dir(cwd))},
@@ -91,14 +91,13 @@ func TestProgramFiles(t *testing.T) {
 // examples name theirs after what they show, and a slice once refused
 // them all for not being package main.
 func TestEmitExamples(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.snello"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "*", "*.snello"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no examples: %v", err)
 	}
 
 	for _, path := range paths {
-		name := strings.TrimSuffix(filepath.Base(path), ".snello")
-		if _, err := os.Stat(filepath.Join("..", "..", "examples", "expected", name+".out")); err != nil {
+		if _, err := os.Stat(strings.TrimSuffix(path, ".snello") + ".out"); err != nil {
 			continue // pending: the examples suite names it
 		}
 

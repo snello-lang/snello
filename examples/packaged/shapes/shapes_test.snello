@@ -1,0 +1,33 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The tests of package shapes, run by snello test examples/packaged/shapes:
+// a file named _test.snello is part of the package only when it is
+// tested, and testing and expect are imported here alone.
+package shapes
+
+import ("expect"; "testing")
+
+struct Case { name string; kind Kind; want string }
+
+func TestDescribe() {
+	cases := []Case{
+		Case{name: "round", kind: Round, want: "round"},
+		Case{name: "square", kind: Square, want: "square"},
+	}
+	for _, c := range cases {
+		testing.Run(ref c.name, func() { expect.Equal(ref Describe(c.kind), ref c.want) })
+	}
+}
+
+func TestArea() {
+	expect.Equal(ref Area(Rect{W: 2, H: 3}), ref 6.0)
+	expect.True(Area(Circle{Radius: 1}) > 3.14)
+}
+
+func TestLargest() {
+	c := Circle{Radius: 1}
+	r := Rect{W: 1, H: 2}
+	expect.Equal(ref Largest(ref c, ref r), ref c.Area())
+}

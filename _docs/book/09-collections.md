@@ -1,6 +1,6 @@
 # 9. Collections: slices, maps and strings
 
-`examples/run/slices.snello`, `maps.snello` and `closures.snello` exercise this chapter.
+`compiler/emit/internal/backendtest/testdata/slices.snello`, `maps.snello` and `closures.snello` exercise this chapter.
 
 A slice is an owned, growable list. A map is an owned table from keys to values. A string is an owned sequence of bytes holding UTF-8 text. All three own their memory, so the rules of chapter 5 apply to them: they move when assigned or passed by value, they are lent with `ref` and `mut`, and they are freed when their owner is dropped. None of them is ever `nil`; a slice or map declared without a value is empty and ready to use.
 
@@ -74,7 +74,7 @@ Operations on text are methods. Most return views into the string, which cost no
 | `s.ToUpper()`, `s.ToLower()` | A new, owned string, every letter changed by Unicode's simple case mapping |
 | `s.Clone()` | A new, owned copy of `s` |
 
-Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` and `ToLower` change every letter, `"àéî".ToUpper()` is `ÀÉÎ`, white space for `Trim` and `Fields` is what Unicode calls white space, a no-break space or an ideographic space among it, and a byte that is not valid UTF-8 reads as the replacement character U+FFFD, which `ToUpper` writes in its place. `examples/run/unicode.snello` checks each against Go's output. A slice expression out of range stops the program in Go's words, `slice bounds out of range [3:1]` or `[:10] with length 3`, and so does `make` with a negative length or a capacity below it, `makeslice: len out of range`.
+Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` and `ToLower` change every letter, `"àéî".ToUpper()` is `ÀÉÎ`, white space for `Trim` and `Fields` is what Unicode calls white space, a no-break space or an ideographic space among it, and a byte that is not valid UTF-8 reads as the replacement character U+FFFD, which `ToUpper` writes in its place. `compiler/emit/internal/backendtest/testdata/unicode.snello` checks each against Go's output. A slice expression out of range stops the program in Go's words, `slice bounds out of range [3:1]` or `[:10] with length 3`, and so does `make` with a negative length or a capacity below it, `makeslice: len out of range`.
 
 The pieces `Fields` and `Split` yield borrow the string they came from, so `for w := range text.Fields()` lends `text` for the loop. To keep a piece, clone it or build an owned string from it, which is what `wordfreq` does with `w.ToLower()` before using the word as a map key. `SplitOnce` is made for `if` with a binding:
 
@@ -120,7 +120,7 @@ Two maps do not compare with `==`, for the same reason two slices do not.
 
 ## Arrays
 
-An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `examples/run/arrays.snello` and `examples/16-matrix.snello`, whose `Mat4` holds a `[16]f64`, run them.
+An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `compiler/emit/internal/backendtest/testdata/arrays.snello` and `examples/matrix/matrix.snello`, whose `Mat4` holds a `[16]f64`, run them.
 
 ## What the compiler reports
 

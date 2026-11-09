@@ -12,8 +12,8 @@ import (
 // TestBorrows checks the borrow pass rule by rule on small programs:
 // what may be borrowed beside what, how long a borrow lives, what the
 // owner may do while it lends, and how a borrow walks down a chain.
-// The negative programs under examples/core cover the messages; these
-// cover the edges between them.
+// The negative programs under testdata/errors cover the messages;
+// these cover the edges between them.
 func TestBorrows(t *testing.T) {
 	tests := []struct {
 		src  string

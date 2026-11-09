@@ -1,0 +1,194 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A JSON value type with an encoder and decoder.
+//
+// Tests a recursive sum type holding collections, an encoder that
+// reborrows its output for nested calls, and a decoder struct that holds
+// a borrow of its input (a borrow-holding struct, as in the parser example).
+//
+// The low-level helpers (escape, skipSpace, peek, expect, string,
+// number) are ordinary byte handling, at the end.
+
+package json
+
+import ("fmt"; "strconv"; "strings")
+
+enum Value {
+    Null
+    Bool(bool)
+    Number(f64)
+    String(string)
+    Array([]Value)
+    Object(map[string]Value)
+}
+
+struct DecodeError { pos int; msg string }
+
+func (v ref Value) Encode(out mut strings.Builder) {
+    match v {
+        Null      => out.WriteString("null"),
+        Bool(b)   => out.WriteString(if b { "true" } else { "false" }),
+        Number(n) => out.WriteString(strconv.FormatFloat(n)),
+        String(s) => { out.WriteByte('"'); out.WriteString(escape(s)); out.WriteByte('"') },
+        Array(xs) => {
+            out.WriteByte('[')
+            for i, x := range xs {
+                if i > 0 { out.WriteByte(',') }
+                x.Encode(out)             // `out` is reborrowed for the nested call
+            }
+            out.WriteByte(']')
+        },
+        Object(m) => {
+            out.WriteByte('{')
+            first := true
+            for k, x := range m {
+                if !first { out.WriteByte(',') }
+                first = false
+                out.WriteByte('"'); out.WriteString(escape(k)); out.WriteString("\":")
+                x.Encode(out)
+            }
+            out.WriteByte('}')
+        },
+    }
+}
+
+struct Decoder {
+    src ref string          // the Decoder is a borrow
+    pos int
+}
+
+func (d mut Decoder) Value() Result<Value, DecodeError> {
+    d.skipSpace()
+    match d.peek() {
+        'n' => { d.expect("null")?;  return Ok(Null) },
+        't' => { d.expect("true")?;  return Ok(Bool(true)) },
+        'f' => { d.expect("false")?; return Ok(Bool(false)) },
+        '"' => return Ok(String(d.string()?)),
+        '[' => {
+            d.pos += 1
+            xs := []Value{}
+            for d.peekSkip() != ']' {
+                xs.Push(d.Value()?)
+                if d.peekSkip() == ',' { d.pos += 1 }
+            }
+            d.pos += 1
+            return Ok(Array(xs))
+        },
+        '{' => {
+            d.pos += 1
+            m := map[string]Value{}
+            for d.peekSkip() != '}' {
+                k := d.string()?
+                d.skipSpace(); d.expect(":")?
+                m[k] = d.Value()?
+                if d.peekSkip() == ',' { d.pos += 1 }
+            }
+            d.pos += 1
+            return Ok(Object(m))
+        },
+        _ => return Ok(Number(d.number()?)),
+    }
+}
+
+// escape returns s with the quote, the backslash, the newline and the
+// tab written as JSON escapes.
+func escape(s ref string) string {
+    var b strings.Builder
+    for i := 0; i < s.Len(); i++ {
+        c := s[i]
+        match c {
+            '"'  => b.WriteString("\\\""),
+            '\\' => b.WriteString("\\\\"),
+            '\n' => b.WriteString("\\n"),
+            '\t' => b.WriteString("\\t"),
+            _    => b.WriteByte(c),
+        }
+    }
+    return b.String()
+}
+
+// skipSpace moves past spaces, tabs and line ends.
+func (d mut Decoder) skipSpace() {
+    for d.pos < d.src.Len() && (d.src[d.pos] == ' ' || d.src[d.pos] == '\t' || d.src[d.pos] == '\n' || d.src[d.pos] == '\r') {
+        d.pos += 1
+    }
+}
+
+// peek returns the byte at the position, or 0 at the end.
+func (d ref Decoder) peek() byte {
+    if d.pos < d.src.Len() { return d.src[d.pos] }
+    return 0
+}
+
+// peekSkip skips space and returns the byte there.
+func (d mut Decoder) peekSkip() byte {
+    d.skipSpace()
+    return d.peek()
+}
+
+// expect moves past lit, or fails naming the position.
+func (d mut Decoder) expect(lit ref string) Result<(), DecodeError> {
+    end := d.pos + lit.Len()
+    if end > d.src.Len() || d.src[d.pos:end] != lit {
+        return Err(DecodeError{pos: d.pos, msg: "expected ".Clone() + lit})
+    }
+    d.pos = end
+    return Ok(())
+}
+
+// string reads a quoted string, with the four escapes escape writes.
+func (d mut Decoder) string() Result<string, DecodeError> {
+    d.expect("\"")?
+    var b strings.Builder
+    for {
+        if d.pos >= d.src.Len() { return Err(DecodeError{pos: d.pos, msg: "unterminated string"}) }
+        c := d.src[d.pos]
+        d.pos += 1
+        match c {
+            '"'  => return Ok(b.String()),
+            '\\' => {
+                if d.pos >= d.src.Len() { return Err(DecodeError{pos: d.pos, msg: "unterminated escape"}) }
+                e := d.src[d.pos]
+                d.pos += 1
+                match e {
+                    'n' => b.WriteByte('\n'),
+                    't' => b.WriteByte('\t'),
+                    _   => b.WriteByte(e),            // \" and \\ stand for themselves
+                }
+            },
+            _ => b.WriteByte(c),
+        }
+    }
+}
+
+// number reads the digits, sign, point and exponent of a number and
+// parses them.
+func (d mut Decoder) number() Result<f64, DecodeError> {
+    start := d.pos
+    for d.pos < d.src.Len() {
+        c := d.src[d.pos]
+        if (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E' {
+            d.pos += 1
+        } else {
+            break
+        }
+    }
+    text := d.src[start:d.pos]
+    return strconv.ParseFloat(text).MapErr(func(_ strconv.Error) DecodeError {
+        return DecodeError{pos: start, msg: "bad number ".Clone() + text}
+    })
+}
+
+func Decode(src ref string) Result<Value, DecodeError> {
+    d := Decoder{src: src, pos: 0}
+    return d.Value()                      // Value owns everything; d is dropped
+}
+
+func main() {
+    v := Decode(`{"a": [1, 2, {"b": null}], "c": "hi"}`).Expect("valid json")
+    var sb strings.Builder
+    v.Encode(mut sb)
+    fmt.Println(sb.String())
+}

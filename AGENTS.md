@@ -16,7 +16,7 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
 7. `_docs/design/08-packages.md`: a directory as a package, the module file, and how an import path is found.
 8. `_docs/book/README.md`: the user-facing book and which chapters exist.
-9. `examples/README.md`: what each example tests and the decisions they forced.
+9. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
 10. `CODING_STANDARDS.md`: how code is written here.
 11. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
 
@@ -80,22 +80,21 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 |---|---|
 | `_docs/design/` | Design documents, numbered |
 | `_docs/book/` | The language book, written chapter by chapter as features land |
-| `examples/` | The twenty Snello programs, plus Go versions of the first two; `core/` the ownership suite in core Snello, without traits or generics, `run/` the programs that build and run today with their expected output |
+| `examples/` | The programs a reader starts from, one folder each: `hello/`, the twenty design programs, with Go versions beside the first two in `tree/` and `pipeline/`, and two programs of several packages, `packaged/` with a package's tests and `bound/` binding C; each with what it prints beside it, `name.out`, and the files it reads in `name.files/`; `suite_test.go` builds and runs every one that has an `.out` and names the rest as pending |
 | `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Snello program, which carries only `runtime/` and `std/` |
 | `compiler/token/` | Token kinds and positions, modeled on `go/token`; a `FileSet` gives the files of a package distinct positions |
 | `compiler/scanner/` | The lexer, modeled on `go/scanner` |
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
-| `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower; `flow.go` the graph of each body the borrow pass decides liveness on |
+| `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower; `flow.go` the graph of each body the borrow pass decides liveness on; `testdata/errors/` the programs the checker must refuse, one per rule with its message |
 | `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the root `snello.mod` marks, or under a `require` line (`mod.go`), and the main package of a file or a directory for the driver and the tests (`program.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
 | `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
 | `compiler/emit/c/` | The C emitter, the reference backend |
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |
-| `compiler/emit/internal/backendtest/` | The programs both backends' tests build and run, with what each must give, so the backends are held to one list |
+| `compiler/emit/internal/backendtest/` | The programs both backends' tests build and run, with what each must give, so the backends are held to one list; `testdata/` the programs of one file that exercise a feature each, with what each prints beside it |
 | `runtime/` | The C runtime every Snello program links against, under `c/`, one file a part: `snello.c` the core, a program's start and end, panics and what more than one file uses, which `internal.h` declares for the runtime alone; `slice.c`, `sort.c` (Rust's driftsort), `string.c`, `map.c`, `chan.c` and `sync.c` the values, channels and locks; `format.c`, `quote.c` and `parse.c` numbers and quotes as text; `bufio.c`, `os.c`, `print.c`, `math.c` and `time.c` the runtime's half of those packages; `alloc.c` the allocator, `unicode.c` the case, white-space and printable-rune tables `mkunicode.go` writes from Unicode's data files, `pow10.c` the powers of ten `mkpow10.go` writes, `sched.c` the scheduler, `net.c` the poller and sockets, `debug.c` the checking build; embedded by the package for both backends, which compile the files in parallel |
 | `bench/` | The benchmark programs in Snello and Go behind the design document's performance table, timed by `SNELLO_BENCH=1 go test ./bench -run TestBenchmarks -v` |
 | `.github/workflows/` | `commitlint.yml` and `pr-title-checker.yml` hold commit messages and pull request titles to Conventional Commits; `test.yml` checks gofmt and vet, runs `go test ./...` natively on x86-64 Linux, arm64 Linux and arm64 macOS, and times the benchmarks on the two Linux runners into the job's summary, on every push and pull request; the README's badge is its status |
-| `examples/expected/` | The expected output of each example program that runs, `<name>.out`, with the files it reads in `<name>.files/`; `examples/suite_test.go` builds and runs every example that has one and names the rest as pending |
 | `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/snello/` | The command-line driver |
 | `_docs/brand/` | Logo and palette |

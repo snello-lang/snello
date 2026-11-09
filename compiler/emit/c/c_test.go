@@ -22,29 +22,23 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
-// TestRunExamples builds every program under examples/run and the
-// core programs that have an expected output, and compares what each
+// TestRunExamples builds every program the backends' tests share, and
+// the example programs of several packages, and compares what each
 // prints with the .out file beside it, as a release build and as a
 // debug build, which fails a program that touches a released value or
-// ends with a value never released. examples/run is the playground
-// for the backend: each slice adds the programs it makes buildable,
-// and a reader can run any of them with snello build. A core program
-// joins the test when its slice lands, by gaining its .out file.
+// ends with a value never released. Each slice of the backend adds the
+// programs it makes buildable to the shared folder.
 func TestRunExamples(t *testing.T) {
-	run, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
+	run, err := filepath.Glob(filepath.Join(backendtest.Shared, "*.snello"))
 	if err != nil || len(run) == 0 {
-		t.Fatalf("no programs under examples/run: %v", err)
+		t.Fatalf("no programs under %s: %v", backendtest.Shared, err)
 	}
 
-	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.snello"))
-	for _, path := range append(run, core...) {
+	for _, path := range run {
 		name := strings.TrimSuffix(filepath.Base(path), ".snello")
 		want, err := os.ReadFile(strings.TrimSuffix(path, ".snello") + ".out")
 		if err != nil {
-			if filepath.Base(filepath.Dir(path)) == "run" {
-				t.Errorf("%s: every program under examples/run needs its expected output beside it", path)
-			}
-
+			t.Errorf("%s: every program the backends' tests share needs its expected output beside it", path)
 			continue
 		}
 
@@ -68,15 +62,15 @@ func TestRunExamples(t *testing.T) {
 		}
 	}
 
-	dirs, err := backendtest.Directories(filepath.Join("..", "..", "..", "examples", "run"))
+	dirs, err := backendtest.Directories(backendtest.Examples)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, dir := range dirs {
-		want, err := os.ReadFile(dir + ".out")
+		want, err := os.ReadFile(filepath.Join(dir, filepath.Base(dir)+".out"))
 		if err != nil {
-			t.Errorf("%s: every program under examples/run needs its expected output beside it", dir)
+			t.Errorf("%s: every program of several packages needs its expected output beside it", dir)
 			continue
 		}
 
@@ -142,7 +136,7 @@ func TestUnsupported(t *testing.T) {
 	}
 }
 
-// BenchmarkEmit emits every program under examples/run once per
+// BenchmarkEmit emits every program the backends' tests share once per
 // iteration, parsed and checked ahead of time, and reports
 // allocations, the number the coding standards track.
 func BenchmarkEmit(b *testing.B) {
@@ -153,7 +147,7 @@ func BenchmarkEmit(b *testing.B) {
 		libs []lower.Library
 	}
 
-	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
+	paths, _ := filepath.Glob(filepath.Join(backendtest.Shared, "*.snello"))
 	var programs []checked
 	for _, path := range paths {
 		src, err := os.ReadFile(path)

@@ -16,7 +16,7 @@ import (
 // checks the prototype of each form that crosses: a number, a view of
 // a string and of bytes, a buffer, an out-parameter and a bool.
 func TestHeader(t *testing.T) {
-	_, info, libs, err := backendtest.LoadDirectory("../../../examples/run/bound")
+	_, info, libs, err := backendtest.LoadDirectory(backendtest.Examples + "/bound")
 	if err != nil {
 		t.Fatal(err)
 	}

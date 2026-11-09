@@ -108,7 +108,7 @@ To work on the compiler, build it from a clone instead:
 git clone https://github.com/snello-lang/snello
 cd snello
 go build -o bin/snello ./cmd/snello
-bin/snello build examples/run/hello.snello
+bin/snello build examples/hello/hello.snello
 ```
 
 `make build` does the same inside the Linux image CI uses, for a build that matches CI's; it needs Docker, and `NATIVE=1 make build` uses the Go on your machine instead.

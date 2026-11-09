@@ -31,7 +31,7 @@ snello build hello.snello
 ./hello
 ```
 
-`snello build` writes a native executable named after the file, in the current directory, or after the directory when given one: `snello build DIR` builds every `.snello` file in it as one program, which the section on packages below comes to. The file name must end in `.snello`. More programs that build today are under `examples/run/` in the repository, each with the output it prints beside it. The binary contains Snello's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
+`snello build` writes a native executable named after the file, in the current directory, or after the directory when given one: `snello build DIR` builds every `.snello` file in it as one program, which the section on packages below comes to. The file name must end in `.snello`. More programs are under `examples/` in the repository, each with the output it prints beside it. The binary contains Snello's runtime and nothing else; it does not need the compiler, or anything the compiler was built with, to run.
 
 `snello build` writes LLVM IR and has clang compile it, with the optimizer that implies; `snello build -backend c FILE` builds the same program through the C backend, the reference implementation, which hands C to the system's C compiler. The two produce binaries that print the same thing, and the compiler's own tests hold them to it. `snello build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
 
@@ -43,7 +43,7 @@ snello build hello.snello
 
 ## Tests
 
-A package's tests live beside it in files named `NAME_test.snello`, which are part of the package only when it is tested: `snello build` never reads one, and nothing of a test reaches a program's binary. A test is a plain function named `Test` and a capital, taking nothing and returning nothing; it passes when it returns, and it fails by a failed expectation, which is a panic the runner catches at the test's boundary, dropping what the test made. The `expect` package asserts and the `testing` package runs; both may be imported from a test file alone. From `examples/run/packaged/shapes/shapes_test.snello`:
+A package's tests live beside it in files named `NAME_test.snello`, which are part of the package only when it is tested: `snello build` never reads one, and nothing of a test reaches a program's binary. A test is a plain function named `Test` and a capital, taking nothing and returning nothing; it passes when it returns, and it fails by a failed expectation, which is a panic the runner catches at the test's boundary, dropping what the test made. The `expect` package asserts and the `testing` package runs; both may be imported from a test file alone. From `examples/packaged/shapes/shapes_test.snello`:
 
 ```go
 package shapes
@@ -68,7 +68,7 @@ func TestArea() {
 }
 ```
 
-`snello test examples/run/packaged/shapes` builds the package with its tests and a generated `main`, runs it, and prints `ok  	shapes	0.001s`, or each failure with the expression as the test wrote it, then `got` and `want`, and the first difference in words:
+`snello test examples/packaged/shapes` builds the package with its tests and a generated `main`, runs it, and prints `ok  	shapes	0.001s`, or each failure with the expression as the test wrote it, then `got` and `want`, and the first difference in words:
 
 ```
 --- FAIL: TestDescribe/square (0.00s)
