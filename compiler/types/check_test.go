@@ -165,6 +165,17 @@ var handledErrors = map[string]bool{
 	"move-while-borrowed.snello":      true,
 	"assign-through-ref.snello":       true,
 	"mut-through-ref-receiver.snello": true,
+	// The owner outlives every borrow, on every path.
+	"borrow-outlives-block.snello":       true,
+	"borrow-field-outlives-block.snello": true,
+	"borrow-next-pass.snello":            true,
+	"borrow-into-caller.snello":          true,
+	"closure-stores-borrow.snello":       true,
+	"defer-outlives-block.snello":        true,
+	"drop-reads-borrow.snello":           true,
+	"borrow-out-of-block.snello":         true,
+	"closure-used-where-made.snello":     true,
+	"defer-borrows-whole.snello":         true,
 	// Escaping borrows.
 	"borrow-in-slice.snello":        true,
 	"borrow-struct-in-slice.snello": true,

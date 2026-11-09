@@ -6,6 +6,7 @@ package types
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -29,8 +30,15 @@ func (c *Checker) stmts(list []ast.Stmt) bool {
 func (c *Checker) block(b *ast.BlockStmt) bool {
 	c.openScope()
 	leaves := c.stmts(b.List)
+	c.dropScope(c.scope, b.Rbrace, dropBlock)
 	c.closeScope()
 	return leaves
+}
+
+// endScope drops what the current scope declares, at end, and closes it.
+func (c *Checker) endScope(end token.Pos) {
+	c.dropScope(c.scope, end, dropBlock)
+	c.closeScope()
 }
 
 // stmt checks one statement and reports whether control cannot continue
@@ -63,9 +71,10 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		c.expr(s.Call, nil)
 		c.spawning = nil
 	case *ast.DeferStmt:
-		c.expr(s.Call, nil)
+		c.deferStmt(s)
 	case *ast.ReturnStmt:
 		c.returnStmt(s)
+		c.flowReturnDrops(s.Return)
 		return true
 	case *ast.BranchStmt:
 		c.branch(s.Tok, s.Pos())
@@ -252,8 +261,10 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 			return
 		}
 
-		x, holder := c.target(s.Lhs[0])
-		c.stored(s.Lhs[0], x, holder, c.expr(s.Rhs[0], hintOf(x)))
+		x, holder, mark := c.target(s.Lhs[0], true) // the target is evaluated first, as in Go, and given its value after the value is made
+		op := c.expr(s.Rhs[0], hintOf(x))
+		c.putAside(mark)
+		c.stored(s.Lhs[0], x, holder, op)
 		return
 	}
 
@@ -271,7 +282,7 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 // place: the value fits, the place is owned again, and a borrow
 // variable holds what the value lends.
 func (c *Checker) assignTo(lhs ast.Expr, op operand) {
-	x, holder := c.target(lhs)
+	x, holder, _ := c.target(lhs, false)
 	c.stored(lhs, x, holder, op)
 }
 
@@ -285,25 +296,169 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 
 	c.assign(op, x.typ, lhs.Pos(), "assignment")
 	c.revive(lhs)
-	if holder != nil {
-		c.hold(holder, op.expr, lhs.Pos())
-	} else if _, ok := lhs.(*ast.Ident); !ok {
-		c.kept(op, "stored", lhs.Pos()) // a field or element keeps the value
+	p, kind := c.placeOf(lhs)
+	if kind != notPlace && c.storeRefused(p, kind, x, op, lhs.Pos()) {
+		return
 	}
+
+	prefix := ""
+	if kind == placeOwned && holdsBorrow(x.typ) {
+		prefix = refPrefix(p)
+	}
+
+	switch {
+	case holder != nil:
+		c.hold(holder, op.expr, lhs.Pos())
+	case kind == placeOwned && p.path == "" && isSignature(x.typ):
+		if op.expr != nil && c.usedWhereMade(op.expr, "assigned with =", lhs.Pos()) {
+			return
+		}
+
+		c.flowAssign(p.v, "")
+	case kind == placeOwned && holdsBorrow(x.typ) && prefix != "":
+		part := prefix + ".*" + strings.TrimPrefix(p.path, prefix) // w.m.src = ref t, with w.m a mut borrow of h: h holds t
+		c.flowAssign(p.v, part)
+		c.holdIn(p.v, part, x.typ, op.expr, lhs.Pos())
+		c.flowThrough(p.v, prefix, part, lhs.Pos())
+	case kind == placeOwned && holdsBorrow(x.typ):
+		if dropReads(x.typ) {
+			c.flowUse(p.v, lhs.Pos()) // the old value's Drop runs here and reads what it borrows
+		}
+
+		c.flowAssign(p.v, p.path)                        // the part given a value lets go of what it held
+		c.holdIn(p.v, p.path, x.typ, op.expr, lhs.Pos()) // h.src = ref t: h holds t
+	case kind == placeBorrowed && holdsBorrow(x.typ):
+		part := joinPath("*", p.path) // m.src = ref t, through m := mut h: h holds t
+		c.flowAssign(p.v, part)
+		c.holdIn(p.v, part, x.typ, op.expr, lhs.Pos())
+		c.flowThrough(p.v, "", part, lhs.Pos())
+	case kind == placeIndexed && holdsBorrow(x.typ):
+		c.holdIn(p.v, p.path, x.typ, op.expr, lhs.Pos()) // an element, of an index not known here, lets go of nothing
+	default:
+		if _, ok := lhs.(*ast.Ident); !ok {
+			c.kept(op, "stored", lhs.Pos()) // a field or element keeps the value
+		}
+	}
+}
+
+// storeRefused reports, and refuses, a closure's body storing a borrow
+// in a variable from outside it: what the closure borrows ends with
+// each call.
+func (c *Checker) storeRefused(p place, kind placeKind, x, op operand, pos token.Pos) bool {
+	f := c.flow
+	if f == nil || !c.bringsBorrow(x.typ, op) && !(isSignature(x.typ) && c.closureBorrows(op)) {
+		return false
+	}
+
+	if f.outer != token.NoPos && !p.v.global && p.v.pos != token.NoPos && p.v.pos < f.outer {
+		c.errorf(pos, "cannot store a borrow in "+p.v.name+" from inside a closure: "+p.v.name+" is declared outside it, and what the closure borrows ends with each call")
+		return true
+	}
+
+	return false // a store that reaches the caller's places is refused on the graph, where copies and stores through a borrow are followed (checkEscape)
+}
+
+// bringsBorrow reports whether the value op, of type t, brings a
+// borrow with it: one lent or read out of some place, Some(ref s) or r,
+// against None, which carries nothing whatever its type holds.
+func (c *Checker) bringsBorrow(t Type, op operand) bool {
+	if !holdsBorrow(t) || op.expr == nil {
+		return false
+	}
+
+	if c.capturesOf(op.expr) != nil {
+		return true
+	}
+
+	found := false
+	c.sources(op.expr, func(src ast.Expr, _ bool) {
+		if id, ok := unparen(src).(*ast.Ident); ok {
+			if _, isVar := c.resolve(id.Name).(*Var); !isVar {
+				return // a variant or a constant, not a place
+			}
+		}
+
+		found = true
+	})
+
+	return found
+}
+
+// refPrefix returns the part of p's path that names a borrow, w.m in
+// w.m.src with w.m a mut borrow, where a store through it is a store
+// into what it points to; "" for a path through no borrow.
+func refPrefix(p place) string {
+	if p.path == "" {
+		return ""
+	}
+
+	parts := strings.Split(p.path, ".")
+	for i := 1; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i], ".")
+		if isBorrow(placeType(place{p.v, prefix})) {
+			return prefix
+		}
+	}
+
+	return ""
+}
+
+// closureBorrows reports whether a function value borrows: a closure
+// literal that captures by borrow, or a variable holding one.
+func (c *Checker) closureBorrows(op operand) bool {
+	return op.expr != nil && c.closureExprBorrows(op.expr)
+}
+
+// closureExprBorrows reports whether e is a function value that
+// borrows: a closure literal that captures by borrow, or a variable
+// holding one.
+func (c *Checker) closureExprBorrows(e ast.Expr) bool {
+	if c.capturesOf(e) != nil {
+		return true
+	}
+
+	if id, ok := unparen(e).(*ast.Ident); ok {
+		if v, ok := c.resolve(id.Name).(*Var); ok && isSignature(v.typ) {
+			return c.heldBy(v, e.Pos()) != nil
+		}
+	}
+
+	return false
+}
+
+// usedWhereMade refuses a closure that borrows anywhere but where it is
+// made: bound with :=, called, or passed straight to a call. What it
+// borrows is then known where it is used, with nothing to follow.
+func (c *Checker) usedWhereMade(e ast.Expr, how string, pos token.Pos) bool {
+	if !c.closureExprBorrows(e) {
+		return false
+	}
+
+	c.errorf(pos, "a closure that borrows cannot be "+how+": it is used where it is made, bound with :=, called, or passed to a call")
+	return true
 }
 
 // target checks the place an assignment writes, which is not a use of
 // the value there but an access to it, and returns the variable when
 // the place is a borrow variable: the assignment rebinds it.
-func (c *Checker) target(e ast.Expr) (operand, *Var) {
+//
+// With after, the store itself is set aside, to be recorded once the
+// value is checked, and the mark to put it back at is returned.
+func (c *Checker) target(e ast.Expr, after bool) (operand, *Var, int) {
 	c.noUse = true
 	x := c.expr(e, nil)
 	c.noUse = false
-	if x.mode == invalid || !c.writable(e, x) {
-		return x, nil
+	mark := -1
+	if after {
+		mark = c.setAside()
+		defer c.endAside()
 	}
 
-	return x, c.accessExpr(e, writeAccess, accessPos(e))
+	if x.mode == invalid || !c.writable(e, x) {
+		return x, nil, mark
+	}
+
+	return x, c.accessExpr(e, writeAccess, accessPos(e)), mark
 }
 
 func (c *Checker) send(s *ast.SendStmt) {
@@ -356,7 +511,7 @@ func (c *Checker) returnStmt(s *ast.ReturnStmt) {
 
 func (c *Checker) ifStmt(s *ast.IfStmt) bool {
 	c.openScope()
-	defer c.closeScope()
+	defer c.endScope(s.Body.Rbrace)
 	if s.Init != nil {
 		c.stmt(s.Init)
 	}
@@ -411,7 +566,7 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 
 	f := c.forkAt()
 	leaves := c.block(s.Body)
-	c.closeScope()
+	c.endScope(s.Body.Rbrace)
 	return c.elseBranch(&f, s.Else, leaves)
 }
 
@@ -440,13 +595,38 @@ func (c *Checker) forStmt(s *ast.ForStmt) bool {
 		c.condition(s.Cond)
 	}
 
-	if s.Post != nil {
-		c.stmt(s.Post)
-	}
-
+	c.flowPost(s)
 	c.block(s.Body)
 	c.leaveRegion()
+	c.dropScope(c.scope, s.Body.Rbrace, dropBlock)
 	return s.Cond == nil && !hasBreak(s.Body.List)
+}
+
+// flowPost checks a for loop's post statement, which the walk checks
+// before the body but which runs after it, each pass: in the graph it
+// is a block of its own between the body's end, or a continue, and
+// the loop's head, and the body begins after the test.
+func (c *Checker) flowPost(s *ast.ForStmt) {
+	f := c.flow
+	if f == nil {
+		if s.Post != nil {
+			c.stmt(s.Post)
+		}
+
+		return
+	}
+
+	r := &c.regions[len(c.regions)-1]
+	test := f.cur
+	if s.Post != nil {
+		r.cont = f.newBlock()
+		f.cur = r.cont
+		c.stmt(s.Post)
+		f.edge(f.cur, r.head)
+		f.cur = test
+	}
+
+	c.flowLoopBody()
 }
 
 // rangeStmt checks for k, v := range x. A slice or array yields index
@@ -458,6 +638,9 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	c.openScope()
 	defer c.closeScope()
 	var key, val Type = Typ[Invalid], Typ[Invalid]
+	var loopHolder *Var
+	var places []place
+	var placesMut bool
 	if x.mode != invalid {
 		var ok bool
 		if key, val, ok = rangeTypes(x); !ok {
@@ -470,17 +653,24 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		mut, lent := borrowIn(x.typ)
 		switch {
 		case x.mode == variable && isChan(readType(x)):
-			c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
+			loopHolder, places, placesMut = c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
 		case x.mode == variable && isString(readType(x)):
-			c.holdRange(s, false) // a string is lent for the loop: its runes are copies, so consuming it would gain nothing
+			loopHolder, places, placesMut = c.holdRange(s, false) // a string is lent for the loop: its runes are copies, so consuming it would gain nothing
 		case held(s.X, x.mode) && !isBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
 		case lent || x.mode != value:
-			c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
+			loopHolder, places, placesMut = c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
 		}
 	}
 
 	c.enterRegion(true, false, s.For)
+	r := &c.regions[len(c.regions)-1]
+	r.floor, r.end = c.scope.parent, s.Body.Rbrace // the variables are the pass's own, dropped at its end
+	if loopHolder != nil {
+		c.flowUse(loopHolder, s.For) // each pass reads the collection the loop holds
+	}
+
+	c.flowLoopBody()
 	if s.Tok == token.DEFINE {
 		c.rangeVar(s.Key, key)
 		c.rangeVar(s.Value, val)
@@ -489,19 +679,157 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		c.rangePlace(s.Value, val)
 	}
 
+	c.holdElements(s, places, placesMut)
+
 	c.block(s.Body)
 	c.leaveRegion()
 }
 
 // holdRange records the borrow a range loop holds of its collection
-// for the whole body: the loop reads or changes the elements in turn,
-// so nothing may change the collection under it.
-func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) {
+// for every pass: the loop reads or changes the elements in turn, so
+// nothing may change the collection under it. The loop's own variable
+// holds it, read at the start of each pass; it is returned, with the
+// places lent and how.
+func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) (*Var, []place, bool) {
+	var holder *Var
+	var lent []place
 	for _, src := range c.borrowSources(s.X) {
 		if p, kind := through(c.placeOf(src)); kind != notPlace {
-			c.borrows = append(c.borrows, borrow{place: p, mut: mut, pos: s.For, until: s.Body.Rbrace})
+			if holder == nil {
+				holder = NewVar(s.For, "", Typ[Invalid])
+			}
+
+			c.flowLoan(borrow{holder: holder, place: p, mut: mut, pos: s.For, loop: true})
+			lent = append(lent, p)
 		}
 	}
+
+	return holder, lent, mut
+}
+
+// holdElements records that a range loop's variables that are borrows,
+// an element of a borrowed collection or an iterator's item, hold the
+// collection: a use of one keeps it lent, past a break.
+func (c *Checker) holdElements(s *ast.RangeStmt, lent []place, mut bool) {
+	if len(lent) == 0 {
+		return
+	}
+
+	for _, e := range []ast.Expr{s.Key, s.Value} {
+		id, ok := e.(*ast.Ident)
+		if !ok || isBlank(id) {
+			continue
+		}
+
+		v, ok := c.resolve(id.Name).(*Var)
+		if !ok || !holdsBorrow(v.typ) {
+			continue
+		}
+
+		for _, p := range lent {
+			c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: id.Pos()})
+		}
+	}
+}
+
+// deferStmt checks a defer: what the deferred call borrows, its
+// receiver, its arguments and what a deferred closure captures, is held
+// until the function returns, when the call runs.
+func (c *Checker) deferStmt(s *ast.DeferStmt) {
+	call, ok := unparen(s.Call).(*ast.CallExpr)
+	if !ok {
+		c.expr(s.Call, nil)
+		return
+	}
+
+	saved, savedSig := c.deferring, c.deferSig
+	c.deferring, c.deferSig = call, nil
+	c.expr(s.Call, nil)
+	sig := c.deferSig
+	c.deferring, c.deferSig = saved, savedSig
+	holder := c.flowDeferred(s.Pos())
+	if holder == nil {
+		return
+	}
+
+	switch fun := unparen(call.Fun).(type) {
+	case *ast.FuncLit:
+		for _, cap := range c.captured[fun] {
+			if cap.mode != byRef && cap.mode != byMut {
+				continue
+			}
+
+			if holdsBorrow(cap.v.typ) && !isBorrow(cap.v.typ) {
+				c.errorf(s.Pos(), "a deferred call borrows only a whole variable, one that is a borrow or holds none: the closure captures "+cap.v.name+", which holds one")
+				continue
+			}
+
+			b := cap.borrow(holder, s.Pos())
+			b.atExit = true // the closure reaches the variable when it runs, after every other use
+			c.flowLoan(b)
+		}
+	case *ast.Ident:
+		if c.closureExprBorrows(fun) {
+			c.errorf(s.Pos(), "a deferred call cannot call "+fun.Name+": it is a closure that borrows; defer the closure itself, func() { ... }()")
+		}
+	}
+
+	if sig == nil {
+		return
+	}
+
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sig.recv != nil && holdsBorrow(sig.recv.typ) {
+		c.deferHold(holder, sig.recv.typ, sel.X, s.Pos())
+	}
+
+	for i, arg := range call.Args {
+		if i >= len(sig.params) {
+			break
+		}
+
+		if t := sig.params[i].typ; holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
+			c.deferHold(holder, t, arg, s.Pos())
+		}
+	}
+}
+
+// deferHold records what a deferred call borrows through the receiver
+// or argument e, of type t. It may borrow only a whole variable: one
+// that holds no borrow, t in defer t.Add(5) or s in defer show(ref s),
+// which the call reaches when the function returns, after every other
+// use, so it is kept from being moved or dropped and free to be read
+// and changed until then; or a borrow variable, s in defer s.cleanup()
+// with s a mut receiver, which the call reads then, so it may not be
+// pointed elsewhere before, and what it points to is held as the
+// variable is. Anything else, an element, what a borrow points to, a
+// value that holds a borrow or a closure that borrows, is refused: what
+// it points into may move or die before the call runs.
+func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
+	x := unparen(e)
+	if u, ok := x.(*ast.UnaryExpr); ok && (u.Op == token.REF || u.Op == token.MUT) {
+		x = unparen(u.X)
+	}
+
+	if id, ok := x.(*ast.Ident); ok && !isSignature(t) {
+		if p, kind := c.placeOf(id); kind == placeOwned {
+			switch {
+			case isBorrow(p.v.typ):
+				c.flowLoan(borrow{holder: holder, place: p, mut: isMut(p.v.typ), pos: pos, atExit: true, variable: true})
+				return
+			case !holdsBorrow(p.v.typ):
+				mut, _ := borrowIn(t)
+				c.flowLoan(borrow{holder: holder, place: p, mut: mut, pos: pos, atExit: true})
+				return
+			}
+		}
+	}
+
+	fix := "take the value, or call it before the function returns"
+	if isSignature(t) {
+		fix = "defer a closure that makes the call, func() { ... }()"
+	}
+
+	c.errorf(e.Pos(), "a deferred call borrows only a whole variable, one that is a borrow or holds none: "+exprText(e)+" is not one; "+fix)
 }
 
 // rangeTypes returns what the two range variables get for a value, or
@@ -571,7 +899,7 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 		return
 	}
 
-	x, _ := c.target(e)
+	x, _, _ := c.target(e, false)
 	if x.mode != invalid {
 		c.assign(operand{value, t, nil, nil}, x.typ, e.Pos(), "range assignment")
 		c.revive(e)
@@ -592,7 +920,7 @@ func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
 			allLeave = false
 		}
 
-		c.closeScope()
+		c.endScope(cc.Case)
 		c.branchEnd(&f)
 	}
 

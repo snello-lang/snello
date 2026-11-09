@@ -1,0 +1,23 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the owner outlives every borrow. A local is dropped at the end
+// of the block that declares it, so a borrow of it kept in a variable
+// from outside the block cannot be used after the block. Declare the
+// value where the borrow is used, or give the variable another borrow
+// before its next use.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "outer".Clone()
+    r := ref s
+    {
+        t := "inner".Clone()
+        r = ref t                         // ERROR "cannot keep a borrow of t in r: t is dropped at the end of its block"
+    }
+    fmt.Println(*r)
+}

@@ -1,0 +1,24 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure that borrows is used where it is made: bound with :=,
+// called, or passed to a call. It cannot be chosen by if or match, come
+// out of a block, be assigned with = or be copied, since what it
+// borrows would then have to be followed from value to value. Choose
+// inside the closure instead, or bind each closure to its own name.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "shown".Clone()
+    loud := len(s) > 3
+    show := if loud {
+        func() { fmt.Println(s, "!") }    // ERROR "a closure that borrows cannot be chosen by if or match, or come out of a block"
+    } else {
+        func() { fmt.Println("quiet") }
+    }
+    show()
+}

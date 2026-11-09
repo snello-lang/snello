@@ -1,0 +1,23 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure may not store a borrow in a variable declared outside
+// it. What the closure borrows lives only while it is called, and the
+// variable outlives the call. Return the value from the closure and
+// assign it where the variable is declared.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "outer".Clone()
+    r := ref s
+    z := "other".Clone()
+    point := func() {
+        r = ref z                         // ERROR "cannot store a borrow in r from inside a closure: r is declared outside it"
+    }
+    point()
+    fmt.Println(*r)
+}

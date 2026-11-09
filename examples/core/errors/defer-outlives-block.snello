@@ -1,0 +1,19 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a deferred call runs when the function returns, so what it
+// borrows is held until then. A local of an inner block is dropped
+// when the block ends, before the call runs. Defer the call in the
+// block whose value it borrows, or move the value into the call.
+
+package p
+
+func show(s ref string) {}
+
+func main() {
+    {
+        t := "inner".Clone()
+        defer show(ref t)                 // ERROR "cannot keep a borrow of t in the deferred call: t is dropped at the end of its block"
+    }
+}

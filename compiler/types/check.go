@@ -125,6 +125,7 @@ type Checker struct {
 	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
 	dead       bool
 	regions    []region
+	loops      int                     // the loops open here, inside which a borrow made later in the body reaches an access made earlier
 	noUse      bool                    // evaluating an assignment target, which is not a use
 	lentMode   mode                    // what the last ref or mut checked lent: a place, or a value made for it
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
@@ -133,13 +134,15 @@ type Checker struct {
 	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
 	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
 
-	// The borrow pass (borrow.go): the borrows held by variables of the
-	// function being checked, the ones lent for the call or statement
-	// being checked, and the accesses that collided with one, decided
-	// at the end of the function.
-	borrows   []borrow
+	// The borrow pass (borrow.go, flow.go): the graph of the body being
+	// checked, which holds the borrows its variables hold and is solved
+	// at the body's end, with the graphs kept for reuse; and the borrows
+	// lent for the call or statement being checked.
+	flow      *flow
+	pinned    map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
+	deferring *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
+	deferSig  *Signature
 	temps     []borrow
-	conflicts []conflict
 	depth     int // of expression nesting; a lent borrow ends with the full expression
 
 	// The escape pass (escape.go): whether the declarations are resolved
@@ -349,6 +352,10 @@ func (c *Checker) declare(scope *Scope, ident *ast.Ident, obj Object) {
 	if ident.Name == "_" {
 		c.recordDef(ident, obj)
 		return
+	}
+
+	if v, ok := obj.(*Var); ok {
+		c.flowAssign(v, "") // a declaration gives the variable its value: what it held on a loop's last pass is let go
 	}
 
 	if old := scope.Insert(obj); old != nil {

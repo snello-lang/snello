@@ -104,11 +104,11 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 		}
 
 		if !c.noUse || c.inner {
-			obj.lastUse = e.Pos() // a borrow lives to here; assigning the whole variable ends it instead
+			c.flowUse(obj, e.Pos()) // a use keeps what the variable holds lent; assigning the whole variable is not one
 		}
 
 		c.capture(obj, byRef)
-		c.checkUse(e)
+		c.checkUseVar(e, obj)
 		return operand{variable, obj.typ, obj, nil}
 	case *Const:
 		if obj.typ == nil {
@@ -565,7 +565,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			t = r.elem // a borrow of a borrow is a borrow of the value
 		}
 
-		c.lend(e.X, e.Op == token.MUT, e.X.Pos())
+		c.lend(e.X, e.Op == token.MUT)
 		c.lentMode = x.mode
 		if isMut(x.typ) {
 			c.lentMode = mutBorrowed // a mut borrow lent on lends the place it borrows
@@ -673,7 +673,15 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 			return c.operatorCall(e, x, fn)
 		}
 
-		y = c.expr(e.Y, hintOf(x))
+		if e.Op == token.LAND || e.Op == token.LOR {
+			f := c.forkAt()
+			c.branchEnd(&f) // the left decides, and the right is never evaluated
+			y = c.expr(e.Y, hintOf(x))
+			c.branchEnd(&f)
+			c.joinAt(&f, true)
+		} else {
+			y = c.expr(e.Y, hintOf(x))
+		}
 	}
 
 	if x.mode == invalid || y.mode == invalid {
@@ -838,6 +846,13 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 		c.move(e.X, variable) // the value inside leaves the place
 	}
 
+	f := c.forkAt()
+	c.branchEnd(&f) // the path with a value goes on
+	c.flowReturnDrops(e.Question)
+	c.dead = true // the other returns
+	c.branchEnd(&f)
+	c.joinAt(&f, true)
+
 	switch want := c.sig.results.Underlying().(type) {
 	case *Option:
 		if o, ok := xt.Underlying().(*Option); ok {
@@ -955,7 +970,13 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	c.temps = nil // the body runs when the closure is called, not while the call around it is lending
 	mark := len(c.moved)
 	c.floors = append(c.floors, floor{mark: mark})
+	outerFlow := c.flow
+	c.flow = c.newFlow(e.Pos()) // the body is a graph of its own: it runs when the closure is called
+	c.flow.parent = outerFlow
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
+	c.solveFlow()
+	c.freeFlow(c.flow)
+	c.flow = outerFlow
 	c.floors = c.floors[:len(c.floors)-1]
 	c.moved = appendMoves(c.moved[:mark], c.moved[mark:]) // the body may never run: its moves count, as the captures do, but what it gives back does not
 	c.temps = temps
@@ -977,6 +998,21 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 
 	c.closures = c.closures[:len(c.closures)-1]
 	c.sig, c.regions, c.dead = outer, regions, dead
+	for _, cap := range c.captured[e] {
+		b := cap.borrow(nil, e.Pos())
+		what := refAccess
+		switch cap.mode {
+		case byCopy:
+			continue
+		case byMut:
+			what = mutAccess
+		case byMove:
+			what = moveAccess // made here, the closure owns what it moves
+		}
+
+		c.access(&ast.Ident{NamePos: e.Pos(), Name: cap.v.name}, b.place, what, e.Pos()) // made here, the closure borrows what it captures; named for the message
+	}
+
 	return operand{value, sig, nil, nil}
 }
 
@@ -1008,7 +1044,7 @@ func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 // ends in an ordinary statement is ().
 func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	c.openScope()
-	defer c.closeScope()
+	defer c.endScope(b.Rbrace)
 	if len(b.List) == 0 {
 		return operand{value, Unit, nil, nil}
 	}
@@ -1016,7 +1052,9 @@ func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	last := len(b.List) - 1
 	c.stmts(b.List[:last])
 	if es, ok := b.List[last].(*ast.ExprStmt); ok {
-		return c.expr(es.X, expected)
+		op := c.expr(es.X, expected)
+		c.pin(es.X, op.typ) // what takes the value finds the block's names after the block ends
+		return op
 	}
 
 	if c.stmt(b.List[last]) {

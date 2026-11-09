@@ -1,0 +1,29 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a type with a Drop may read what it borrows when it is dropped,
+// so what it borrows must outlive it. Variables are dropped last
+// declared first, so a value declared after the one that borrows it is
+// dropped before. Declare what is borrowed first.
+
+package p
+
+import "fmt"
+
+struct Peek impl Drop {
+    src ref string
+}
+
+func (p mut Peek) Drop() {
+    fmt.Println("dropping", *p.src)
+}
+
+func main() {
+    s := "outer".Clone()
+    p := Peek{src: ref s}
+    {
+        t := "inner".Clone()
+        p.src = ref t                     // ERROR "cannot keep a borrow of t in p: t is dropped at the end of its block"
+    }
+}

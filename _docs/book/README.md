@@ -13,7 +13,7 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [3. Basics](03-basics.md) | variables, constants, the number types, functions, control flow, `match` on conditions |
 | [4. Structs, enums and match](04-structs-enums-match.md) | structs and the positional literal; enums, their methods, traits, derived order, printing and type parameters; patterns |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves, `Copy` checked against the fields, a moved variable given back by assignment, drops at scope exit, return and panic, and what no collector buys, measured by `bench/memory.snello` |
-| [6. Borrows: `ref` and `mut`](06-borrows.md) | the six rules, and closures that copy a `Copy` value they only read |
+| [6. Borrows: `ref` and `mut`](06-borrows.md) | the six rules; how long a borrow lives, along a function's paths: blocks, loops, fields, closures, `mut` parameters, deferred calls and `Drop`; closures that copy a `Copy` value they only read |
 | [7. Owned pointers and recursive data](07-owned-pointers.md) | `*T`, `&expr` and recursive types |
 | [8. Option, Result, `?` and `??`](08-option-result.md) | `T?`, `Result`, `Map` and `MapErr`, and `?` passing an error into the variant that holds its type or into a trait value |
 | [9. Collections: slices, maps and strings](09-collections.md) | slices, maps with keys that are `Eq` and `Hash`, and strings |

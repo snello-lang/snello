@@ -77,15 +77,15 @@ func TestEscapes(t *testing.T) {
 		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; return g }", []string{"closure g captures s by borrow and cannot be returned"}},
 		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; return func() int { return g() } }", []string{"closure captures g by borrow and cannot be returned"}}, // a function value is never copied in: its borrows are g's
 		{"func f() func() { n := 0; g := func() { n += 1 }; return func() { g() } }", []string{"closure captures g by borrow and cannot be returned"}},
-		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; h := g; return h }", []string{"closure h captures s by borrow and cannot be returned"}}, // h holds what g held
-		{"func f() func() int { n := 1; g := func() int { return n }; return func() int { return g() } }", []string{"closure captures g by borrow and cannot be returned"}},     // g itself is borrow-free, but a function value is captured by borrow of the frame holding it
+		{"func f() func() int { s := \"a\".Clone(); g := func() int { return s.Len() }; h := g; return h }", []string{"a closure that borrows cannot be copied to another variable"}}, // h holds what g held
+		{"func f() func() int { n := 1; g := func() int { return n }; return func() int { return g() } }", []string{"closure captures g by borrow and cannot be returned"}},           // g itself is borrow-free, but a function value is captured by borrow of the frame holding it
 
 		{"func f() { n := 0; g := func() { n += 1 }; xs := []func(){}; xs.Push(g) }", []string{"closure g captures n by borrow and cannot be stored"}},
 		{"func f() { n := 0; xs := []func(){func() { n += 1 }} }", []string{"closure captures n by borrow and cannot be stored"}},
 		{"func f() { n := 0; c := Cb{f: func() { n += 1 }} }", []string{"closure captures n by borrow and cannot be stored"}},
 		{"func f() { c := Cb{f: func() {}}; c.f = func() {} }", nil},
 		{"func f() { n := 0; c := Cb{f: func() {}}; c.f = func() { n += 1 } }", []string{"closure captures n by borrow and cannot be stored"}},
-		{"func f() { n := 0; g := func() {}; g = func() { n += 1 }; g() }", nil}, // a variable, not owned data
+		{"func f() { n := 0; g := func() {}; g = func() { n += 1 }; g() }", []string{"a closure that borrows cannot be assigned with ="}}, // a variable, not owned data
 		{"func f() { n := 0; ch := make(chan func(), 1); ch <- func() { n += 1 } }", []string{"closure captures n by borrow and cannot be sent"}},
 		{"func f() { xs := []int{}; spawn count(ref xs) }", []string{"a spawned task cannot hold a borrow"}},
 		{"func f() { xs := []int{}; spawn work(xs) }", nil},

@@ -66,7 +66,7 @@ func TestBorrows(t *testing.T) {
 		{"func f(n mut Node, v string) { cur := mut n.next; for { m := cur ?? { *cur = Some(&Node{value: v, next: None, n: 0}); return }; cur = mut m.next } }", nil},
 		{"func f(n mut Node) { a := mut n.next; b := mut n.next; print(a, b) }", []string{"cannot borrow n.next as mut: n.next is already borrowed as mut by a"}},
 		{"func f(n mut Node) { cur := mut n.next; m := cur ?? return; print(cur); m.n = 1 }", []string{"cannot use cur: cur is borrowed as mut by m"}},
-		{"func f(n mut Node) { cur := mut n.next; m := cur ?? return; x := mut n.next; m.n = 1; print(x) }", []string{"cannot borrow n.next as mut: n.next is already borrowed as mut by cur"}}, // live through m
+		{"func f(n mut Node) { cur := mut n.next; m := cur ?? return; x := mut n.next; m.n = 1; print(x) }", []string{"cannot borrow n.next as mut: n.next is already borrowed as mut by m"}}, // m reborrowed what cur held
 		{"func f(n mut Node) { cur := mut n.next; m := cur ?? return; m.n = 1; x := mut n.next; print(x) }", nil},
 		// A ref is read-only.
 		{"func f(n ref Node) { n.value = \"x\" }", []string{"cannot assign to n.value through a ref borrow"}},

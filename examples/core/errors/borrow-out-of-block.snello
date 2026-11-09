@@ -1,0 +1,24 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a block's value may not borrow what the block declares: the
+// block's locals are dropped as it ends, before the value is taken.
+// Declare the value outside the block, or give the block's value away
+// whole.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "outer".Clone()
+    full := len(s) > 3
+    x := if full {                        // ERROR "cannot keep a borrow of t: t is dropped at the end of its block"
+        t := "inner".Clone()
+        ref t
+    } else {
+        ref s
+    }
+    fmt.Println(*x)
+}

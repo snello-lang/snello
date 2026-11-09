@@ -41,13 +41,17 @@ func (c *Checker) funcBodies(f *ast.File) {
 
 // checkBody checks one function's or method's body against its
 // signature. Each body starts afresh, with no moved places, and its
-// borrows are resolved at its end; a closure's body shares its
-// function's state.
+// borrows are decided on its graph at its end; a closure's body shares
+// its function's moves and has a graph of its own.
 func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param, body *ast.BlockStmt) {
 	c.sig, c.recv = sig, sig.recv
 	c.moved, c.floors, c.dead = c.moved[:0], c.floors[:0], false
+	c.flow = c.newFlow(token.NoPos)
 	c.funcBody(sig, recv, params, body)
-	c.resolveBorrows()
+	c.solveFlow()
+	c.freeFlow(c.flow)
+	c.flow, c.temps = nil, c.temps[:0]
+	clear(c.pinned)
 	c.sig, c.recv = nil, nil
 }
 
@@ -61,6 +65,10 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 	}
 
 	scope := c.openScope()
+	if c.flow != nil && c.flow.fnScope == nil {
+		c.flow.fnScope = scope
+	}
+
 	if recv != nil {
 		c.declare(scope, recv.Name, sig.recv)
 	}
@@ -71,10 +79,15 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 		}
 	}
 
+	if c.hasMutParam(sig) || c.flow != nil && c.flow.outer != token.NoPos {
+		c.flowParams(sig) // what reaches the caller's places is followed; a closure's parameters are its caller's too
+	}
+
 	if !c.stmts(body.List) && sig.results != Unit {
 		c.errorf(body.Rbrace, "missing return at the end of the function")
 	}
 
+	c.dropScopes(scope.parent, body.Rbrace, dropExit)
 	c.closeScope()
 }
 
@@ -189,4 +202,23 @@ func inferred(op operand) Type {
 	}
 
 	return op.typ
+}
+
+// hasMutParam reports whether a function has a receiver or parameter
+// that is, or holds, a mut borrow: one through which it could store into
+// the caller's places.
+func (c *Checker) hasMutParam(sig *Signature) bool {
+	if sig.recv != nil {
+		if mut, ok := borrowIn(sig.recv.typ); ok && mut {
+			return true
+		}
+	}
+
+	for _, p := range sig.params {
+		if mut, ok := borrowIn(p.typ); ok && mut {
+			return true
+		}
+	}
+
+	return false
 }

@@ -10,7 +10,7 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 
 1. `_docs/design/01-language-design.md`: every decision and why.
 2. `_docs/design/00-syntax-conventions.md`: the syntax the examples use.
-3. `_docs/design/02-` to `04-`: the memory model notes.
+3. `_docs/design/02-` to `04-`: the memory model notes; `10-borrow-checking.md`: how the checker decides where a borrow is live, along a function's paths.
 4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
 5. `_docs/design/06-tasks-and-channels.md`: the runtime interface the compiler emits for tasks and channels, and the scheduler behind it.
 6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
@@ -86,7 +86,7 @@ go run ./cmd/snello emit FILE    # print the IR module that build compiles; -bac
 | `compiler/scanner/` | The lexer, modeled on `go/scanner` |
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
-| `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower |
+| `compiler/types/` | Types, objects, scopes and the checker, modeled on `go/types`; `format.go` is the grammar of `fmt`'s formats, which the checker checks and both backends lower; `flow.go` the graph of each body the borrow pass decides liveness on |
 | `compiler/importer/` | Loads the packages a program imports, modeled on `go/importer`: a standard package from the embedded library, a package of the program's own from the directory its path names under the root `snello.mod` marks, or under a `require` line (`mod.go`), and the main package of a file or a directory for the driver and the tests (`program.go`); its tests check every standard package compiles and keep `std/builtin/` in step with the checker |
 | `compiler/emit/lower/` | The rules both backends share: what a backend takes in, the names of the symbols, the library functions the compiler writes |
 | `compiler/emit/c/` | The C emitter, the reference backend |

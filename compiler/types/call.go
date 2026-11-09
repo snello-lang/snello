@@ -80,6 +80,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		tmp = c.args(e, sig)
 	}
 
+	if e == c.deferring {
+		c.deferSig = sig // what the deferred call borrows is held until the function returns (deferStmt)
+	}
+
 	if at, ok := formatted(f.obj); ok {
 		c.printFormat(e, exprText(e.Fun), at, c.variadic)
 	}
@@ -90,7 +94,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		}
 
 		if r, ok := sig.recv.typ.(*Ref); ok {
-			c.lend(sel.X, r.mut, e.Rparen) // the receiver is borrowed last, after the arguments
+			c.lend(sel.X, r.mut) // the receiver is borrowed last, after the arguments
 			if t := c.temporary[sel.X]; t != nil {
 				tmp = t
 			}
@@ -102,6 +106,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	}
 
 	if diverges(f.obj) {
+		c.flowReturnDrops(e.Pos()) // a call that never returns ends the function: what every open block declares is dropped
 		return operand{value, Typ[Never], nil, nil}
 	}
 
@@ -173,7 +178,7 @@ func (c *Checker) keepLent(arg ast.Expr, op operand) {
 	}
 
 	for _, src := range c.borrowSources(arg) {
-		c.lend(src, mut, arg.Pos())
+		c.lend(src, mut)
 	}
 }
 
@@ -245,7 +250,7 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var) 
 	}
 
 	if r, ok := p.typ.(*Ref); ok && op.mode != value {
-		c.lend(arg, r.mut, arg.Pos()) // an owned place or a borrow variable is lent for the call
+		c.lend(arg, r.mut) // an owned place or a borrow variable is lent for the call
 	} else if !isMut(op.typ) {
 		c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
 		c.maybeMove(op, p.typ)
@@ -389,6 +394,7 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.replaceCall(e)
 	case BuiltinPanic:
 		c.exprs(e.Args)
+		c.flowReturnDrops(e.Pos()) // a panic runs the drops of what is still owned, as a return does
 		return operand{value, Typ[Never], nil, nil}
 	case BuiltinClose:
 		return c.closeCall(e)

@@ -26,7 +26,7 @@ x.Describe()                          // a receiver borrows itself: no keyword
 
 Passing an owned value to a `ref` parameter borrows it with no keyword, as a receiver already does; writing `ref` makes the borrow visible and means the same thing. An owned pointer is lent as what it holds: `total(head)` with `head` a `*Node` fits a `ref Node` parameter. `mut` is always written when the argument is an owned value, because a visible mutation is worth a word. A borrow variable is passed on as itself, with no keyword, since its mode is already part of its type: `visit(n)` where `n` is a `ref Node`, `bump(a, b)` where both are `mut int`. Receivers follow the parameter they are: `func (t ref Tree) Path()` reads the tree, `func (t mut Tree) AddChild()` changes it, and `func (f File) Close()` takes it.
 
-A borrow can also be bound to a local name, and then it lives from that line to the last line that uses the name:
+A borrow can also be bound to a local name, and then it lives from that line to its last use, on any path the function can take:
 
 ```go
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
@@ -70,7 +70,97 @@ A value chosen at run time borrows from every place it may come from: `x := if c
 
 A borrow a call returns stays lent while it is passed along. In `fmt.Println(m.Get("a"), m.Remove("b"))` the first argument still points into `m` when `Remove` would change it, which could move the very entry being printed, so the call is refused: `cannot borrow m as mut: m is borrowed as ref at 4:14`. Print the borrow in a statement of its own, or turn it into text first, `fmt.Println(fmt.Sprint(m.Get("a")), m.Remove("b"))`. A borrow read into a value before the call takes its `mut` is over, so `m.Insert("b", *(m.Get("a") ?? ref 0) + 1)` is fine.
 
-While a value is lent `mut`, the owner may not even read it: `a := mut n; fmt.Println(n); *a += 1` is `cannot use n: n is borrowed as mut by a`. A loop counts a use on its next pass, so a borrow created before a loop and used anywhere inside it is live for the whole loop: `used in the next pass of the loop at 12:9`.
+While a value is lent `mut`, the owner may not even read it: `a := mut n; fmt.Println(n); *a += 1` is `cannot use n: n is borrowed as mut by a`.
+
+## How long a borrow lives
+
+A borrow lives while some path the function can take still reaches a use of it. The compiler follows the paths, not the order of the lines: the arms of an `if` and a `match`, the right side of `&&` and `||`, a loop going round, a `break`, a `continue`, a `return` and a `?` that returns, each of which drops what its open blocks declare. Nothing about it is written. This section is what that means in practice; every rule here refuses a program that could read freed or changed memory.
+
+### Branches
+
+An access on one arm of an `if` collides only with the borrows live on that arm, so a write in one arm and a read in the other are fine:
+
+```go
+r := ref s
+if full {
+    s = "b".Clone()                   // fine: no path reaches the read after the write
+} else {
+    fmt.Println(*r)
+}
+```
+
+### Loops
+
+A loop's next pass reaches what its body read before, so a borrow created before a loop and used anywhere inside it is live for the whole loop: `used in the next pass of the loop at 12:9`. A `break` leaves the loop for good: a loop that moves the collection it ranges over and then breaks is fine, since no pass comes round to read it. A range loop's variables are each pass's own, and one that is a borrow of an element keeps the collection lent while it is used.
+
+### Blocks
+
+A local dies at the end of the block that declares it: the closing brace of a block, a loop's body on every pass, an `if` or a `match` arm, or where a `break` or `continue` leaves it. A borrow of it may be kept in a variable declared outside the block, but not used after the block ends:
+
+```go
+s := "outer".Clone()
+r := ref s
+{
+    t := "inner".Clone()
+    r = ref t                         // ERROR "cannot keep a borrow of t in r: t is dropped at the end of its block at 6:1, used at 7:14"
+}
+fmt.Println(*r)
+```
+
+The message names where `t` is dropped and the use that would read it. Give `r` another borrow before that use, `r = ref s`, and the program is fine. In a loop the same holds pass by pass: a borrow of the body's variable may be used later in the same pass, but not read by the next pass before it is given another borrow, `t is dropped at the end of its block at 22:5, used in the next pass of the loop at 19:22`.
+
+A block's value may not borrow what the block declares, since the block's locals are gone by the time the value is taken: `x := if full { t := "inner".Clone(); ref t } else { ref s }` is `cannot keep a borrow of t: t is dropped at the end of its block`, and so is a literal or a variant that holds such a borrow, `Holder{src: ref t}`. A value that borrows from outside the block, or an arm's binding that borrows the matched value, is carried out whole: `x := match m.Get(k) { Some(v) => v, None => return }` keeps `m` lent while `x` is used.
+
+### Fields and borrows of borrows
+
+A struct holds what is stored in its fields: `l.text = ref t` makes `l` hold `t`, and `l` cannot be used after `t`'s block, whichever field is read, until `l.text` is given another borrow. A store through a `mut` borrow is a store into what it points to: with `m := mut l`, `m.text = ref t` makes `l` hold `t`.
+
+A borrow read out of another, `q := r`, or out of a field, `q := l.text`, holds what that one held when it was read, and `r` may then point elsewhere without freeing it. A `mut` borrow read through another, `m := cur ?? return`, keeps that one lent while it lives: `cannot use cur: cur is borrowed as mut by m`.
+
+### Closures
+
+A closure borrows what it captures where it is made, and calling it is a use of what it borrows; a closure that moves what it captures moves it there. A closure that borrows is used where it is made: bound with `:=`, called, or passed to a call. It cannot be chosen by `if` or `match`, come out of a block, be assigned with `=` or be copied to another variable, since what it borrows would have to be followed from value to value: `a closure that borrows cannot be chosen by if or match, or come out of a block: it is used where it is made, bound with :=, called, or passed to a call`. Choose inside the closure instead, or give each closure its own name. A closure that borrows nothing may go anywhere.
+
+A closure that captures a borrow variable reads the variable when it is called, so the variable may not point elsewhere meanwhile: `cannot assign to r: r is borrowed by g`. A closure may not store a borrow in a variable declared outside it, since what the closure borrows lives only while it is called: `cannot store a borrow in r from inside a closure: r is declared outside it, and what the closure borrows ends with each call`. Return the value from the closure, and assign it where the variable is declared.
+
+### A `mut` parameter is the caller's
+
+A function may change what a `mut` parameter holds, but not store in it a borrow of anything else: the caller cannot see from the signature that the parameter now borrows the argument, and would free the argument while the parameter still points at it.
+
+```go
+func rename(l mut Label, name ref string) {
+    l.text = name                     // ERROR "cannot store a borrow of name in l: l is the caller's, and a signature cannot say that it borrows name"
+}
+```
+
+The compiler follows the store however it is written: through a copy of the parameter, `m := l; m.text = name`, inside a literal, `l.inner = Inner{src: name}`, or through a `mut` borrow held in a field of a parameter taken by value. Storing what the parameter held already, `l.text = l.title`, is fine. Take the value by value and own it, or return the new value. Rust refuses the same function unless a lifetime ties the two parameters together; Snello writes no lifetimes, so the function is refused.
+
+### Deferred calls
+
+A deferred call runs when the function returns, after every other use, and before the function's own variables are dropped. It borrows only whole variables: its receiver, an argument, or what a deferred closure captures. One that holds no borrow is reached only when the call runs, so it may be read and changed before then, but not moved away or dropped:
+
+```go
+t := Tally{n: 1, name: "t".Clone()}
+defer t.Add(5)                        // fine: t is reached when the function returns
+t.Add(1)
+keep(t)                               // ERROR "cannot move t: t is borrowed by the deferred call"
+```
+
+A borrow variable, the receiver of `defer s.cleanup()` in a method on `s mut Server`, is read by the call when it runs, so it may not be pointed elsewhere before then, and what it points to is held as it would be by the variable. Anything else may move or die before the call runs, and is refused where the call is deferred: an element, `defer show(ref xs[0])`; what a borrow points to; a value that holds a borrow; a closure that borrows, called or passed: `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`. A local of an inner block is dropped when the block ends, before the call runs: `{ t := "inner".Clone(); defer show(ref t) }` is `cannot keep a borrow of t in the deferred call: t is dropped at the end of its block, and the deferred call runs when the function returns`. Take the value whole, or make the call before the function returns.
+
+### `Drop`
+
+A type with a `Drop` may read what it borrows when it is dropped, so what it borrows must outlive it. Variables are dropped last declared first, so a value declared after the one that borrows it is dropped first:
+
+```go
+p := Peek{src: ref s}
+{
+    t := "inner".Clone()
+    p.src = ref t                     // ERROR "cannot keep a borrow of t in p: t is dropped at the end of its block at 5:1, used when p is dropped at 6:1, by its Drop"
+}
+```
+
+Replacing such a value, `p = Peek{...}`, runs the old one's `Drop` there, which is a use too. A type without a `Drop` anywhere in it borrows only until its last use, like any other.
 
 ## Walking a structure
 
@@ -177,5 +267,19 @@ Every message about a live borrow ends with where it began and the use that keep
 | `Longest returns a borrow but has two borrowed parameters` | `return-two-borrows` |
 | `cannot return a borrow of local s`, `cannot return a borrow of m: a method's returned borrow is tied to its receiver` | `return-local-borrow`, `TestEscapes` in `compiler/types/escape_test.go` |
 | `cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends`, `cannot return a borrow of a temporary: ...` | `TestBorrows`, `TestEscapes` |
+| `cannot keep a borrow of t in r: t is dropped at the end of its block at 21:5, used at 22:18`; `... at the end of the loop's pass ...`, `... where its block is left ...`, `... used in the next pass of the loop ...` | `borrow-outlives-block`, `borrow-field-outlives-block`, `borrow-next-pass`, `TestFlowPaths` in `compiler/types/flow_test.go` |
+| `cannot keep a borrow of t: t is dropped at the end of its block` | `borrow-out-of-block` |
+| `cannot store a borrow of name in l: l is the caller's, and a signature cannot say that it borrows name` | `borrow-into-caller` |
+| `cannot store a borrow in r from inside a closure: r is declared outside it, ...`; `... and r outlives the closure` | `closure-stores-borrow` |
+| `cannot keep a borrow of t in the deferred call: ..., and the deferred call runs when the function returns` | `defer-outlives-block` |
+| `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`, `a deferred call cannot call g: it is a closure that borrows` | `defer-borrows-whole`, `TestFlowModel` |
+| `a closure that borrows cannot be chosen by if or match, or come out of a block`, `... assigned with =`, `... copied to another variable` | `closure-used-where-made`, `TestFlowModel` |
+| `cannot keep a borrow of t in p: ..., used when p is dropped at 5:1, by its Drop` | `drop-reads-borrow` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
 | `closure captures n by borrow and cannot be returned`, `... stored`, `... sent`, `... spawned` | `closure-returned`, `closure-stored`, `TestEscapes` |
+
+## For maintainers
+
+- **The rules.** `compiler/types/borrow.go` decides what collides with what: the access kinds, the borrows a value carries (`hold`, `derive`, `sources`, which tells a borrow read out of a place from one lent by it, and walks literals and variants) and the messages. A borrow lent for one call or statement is a temporary there, checked at once. `stored` in `stmt.go` records a borrow put into a field or through a borrow, a `mut` borrow held in a field among them (`refPrefix`); `storeRefused` refuses a closure's body storing one in a variable outside it; `usedWhereMade` refuses a closure that borrows anywhere but where it is made; `deferStmt` and `deferHold` hold the whole variables a deferred call borrows (`atExit`: only a move or a drop collides; a borrow variable may not be pointed elsewhere) and refuse the rest.
+- **The paths.** `compiler/types/flow.go` records each body as a graph while the checker walks it, from the hooks the move pass already calls at every branch and loop (`forkAt`, `branchEnd`, `joinAt`, `enterRegion`, `leaveRegion`, `branch`), with a match guard's way on to the next arm, which drops what the arm's pattern bound, a loop's test apart from its body, a `for` loop's post statement after it, the right side of `&&` and `||` and the error side of `?` as branches, and the drops of a `return`, a `panic` or a call that never returns. At the body's end it solves the graph: liveness backwards, a `Drop` counting as a use; the borrows in effect and the variables that may be dropped forwards; then every access, drop, new borrow and returned borrow against what is live where it is. A declaration is an assignment in the graph; a drop ends a variable's life but not what it holds, so a value carried out of a block, which `pin` resolves before the block ends, holds it still. A borrow made through a place that holds borrows copies what the place holds at that moment, each in the part of the new holder that reaches it, and a store through a `mut` borrow lets go of what the place held when the borrow has one place it may point to. Each parameter that carries a borrow holds a borrow of a variable standing for what the caller owns behind it (`flowParams`), so that `checkEscape` sees a store reaching the caller's places however it is made. A closure's body has a graph of its own, with a pointer to the one around it. The design is `_docs/design/10-borrow-checking.md`.
+- **The tests.** `TestFlowPaths` in `flow_test.go` covers each kind of edge, `TestFlowModel` how the graph follows evaluation and each rule, `TestBorrows` and `TestLending` in `borrow_test.go` the rules of chapter 6's first half, `TestDropReads` in `predicates_test.go` which types' drops read their borrows, and the programs under `examples/core/errors/` the messages.

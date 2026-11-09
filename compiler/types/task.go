@@ -76,7 +76,7 @@ func (c *Checker) spawnCaptures(lit *ast.FuncLit, pos token.Pos) {
 		cap.mode = byMove
 		c.capture(cap.v, byMove) // a closure around the spawn moves it too, as move does
 		p := place{cap.v, ""}
-		c.access(&ast.Ident{NamePos: pos, Name: cap.v.name}, p, moveAccess, pos, lit.Body.Rbrace) // named for the message
+		c.access(&ast.Ident{NamePos: pos, Name: cap.v.name}, p, moveAccess, pos) // named for the message
 		c.moved = append(c.moved, move{p, pos, false})
 	}
 }

@@ -1,0 +1,23 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the owner outlives every borrow. A loop's body ends on every
+// pass and drops what it declares, so a borrow of it kept in a variable
+// from before the loop cannot be read on the next pass before the
+// variable is given another borrow. Read it in the same pass, after the
+// borrow is made.
+
+package p
+
+import "fmt"
+
+func main() {
+    s := "first".Clone()
+    r := ref s
+    for i := 0; i < 3; i++ {
+        fmt.Println(*r)
+        t := "pass".Clone()
+        r = ref t                         // ERROR "cannot keep a borrow of t in r: t is dropped at the end of its block at 22:5, used in the next pass of the loop"
+    }
+}

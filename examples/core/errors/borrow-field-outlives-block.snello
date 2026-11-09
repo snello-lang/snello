@@ -1,0 +1,28 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the owner outlives every borrow. A borrow stored in a field is
+// held by the struct, and a local is dropped at the end of its block,
+// so the struct cannot be used after the block while the field still
+// borrows it. Store a borrow of a value that lives as long as the
+// struct, or give the field another borrow first.
+
+package p
+
+import "fmt"
+
+struct Label {
+    text ref string
+    size int
+}
+
+func main() {
+    s := "outer".Clone()
+    l := Label{text: ref s, size: 1}
+    {
+        t := "inner".Clone()
+        l.text = ref t                    // ERROR "cannot keep a borrow of t in l: t is dropped at the end of its block"
+    }
+    fmt.Println(*l.text)
+}
