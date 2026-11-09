@@ -239,6 +239,35 @@ func Parse(src ref string) Result<Expr, ParseError> {
 
 It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`, reported where the slice type is written, as `a channel cannot carry a borrow` is; nor be the type argument of a generic type, or of a generic function that takes or returns a value of that type, `a type argument cannot hold Lexer: it holds a borrow`. A generic function that only borrows it, `fmt.Fprintln(mut w, ...)` with a `bufio.Writer`, is fine (chapter 12). A closure that reads a local that is not `Copy`, or assigns a local, captures it by borrow and is a borrow in the same way: it may be passed to a call, bound to a variable and called, but not stored in a field, slice or map, sent, spawned or returned. A `Copy` value the closure only reads is copied in when the closure is made, so the closure holds no borrow and may go anywhere; a function value is never copied in, since what it borrows is known by the variable holding it, not by its type, so a closure calling another closure borrows it: `adder(10)` returns `func(x int) int { return x + offset }`, and `snap := func() int { return n }` keeps the `n` of that moment, whatever is assigned to `n` after. One that captures nothing may go anywhere too; one that moves what it captures owns it, and will be allowed everywhere once the compiler copies moved values into the closure. A `counter()` that returns a closure incrementing a local is rejected, because the closure assigns the local, which dies when `counter` returns; the state goes into a struct with a method instead. A variable bound to a closure holds its borrows, so `g := func() { xs.Push(1) }` keeps `xs` lent `mut` until the last use of `g`.
 
+### Passing a closure to a function
+
+A closure that borrows may be passed to a function that calls it while it runs, as `SortBy` does:
+
+```go
+bias := "ab".Clone()
+xs.SortBy(func(a ref int, b ref int) bool { return *a + bias.Len() < *b }) // fine: SortBy only calls it
+```
+
+It may not be passed to a function that keeps it, one whose body stores it somewhere that outlives the call:
+
+```go
+struct Keeper { f func() string }
+
+func store(k mut Keeper, f func() string) { k.f = f }
+
+func main() {
+    k := Keeper{f: func() string { return "".Clone() }}
+    {
+        s := "hello".Clone()
+        r := ref s
+        store(mut k, func() string { return (*r).Clone() }) // ERROR "closure captures r by borrow and cannot be passed to store, which keeps f: assigned to k.f at 3:45; pass a closure that borrows nothing, or give it what it needs by value"
+    }
+    fmt.Println(k.f())                                       // would read s, dropped at the brace
+}
+```
+
+Nothing in `store`'s signature says it keeps `f`: the compiler reads it from the body. A function keeps a parameter of a function type, or of a type parameter's type, when it stores it in a field, an element, a map or a variant, returns it, sends it, spawns it, gives it to another variable, or passes it to a function that keeps it, in its own body or in a closure written inside it; calling it keeps nothing. Giving the parameter to another variable counts as keeping it, however the variable is then used, so a wrapper that aliases its callback, `g := f; g()`, keeps it; call the parameter directly instead. The message names the line that keeps it. A closure that borrows nothing, or captures only by copy, may be kept. Since a call through a function value cannot see which body it reaches, a function that keeps a parameter can only be called by name, not used as a value, and a closure cannot keep its own parameter; a type's method may keep no more than its trait's declaration of it.
+
 ## What cannot be written
 
 | Not expressible | Idiom instead |
@@ -277,9 +306,11 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot keep a borrow of t in p: ..., used when p is dropped at 5:1, by its Drop` | `drop-reads-borrow` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |
 | `closure captures n by borrow and cannot be returned`, `... stored`, `... sent`, `... spawned` | `closure-returned`, `closure-stored`, `TestEscapes` |
+| `closure captures r by borrow and cannot be passed to store, which keeps f: assigned to k.f at ...`; `cannot use store as a value: it keeps its parameter f, ...`; `a closure cannot keep its parameter f: ...`; `method On keeps its parameter f, ..., which the trait's On does not` | `callback-kept`, `TestKeeps` |
 
 ## For maintainers
 
 - **The rules.** `compiler/types/borrow.go` decides what collides with what: the access kinds, the borrows a value carries (`hold`, `derive`, `sources`, which tells a borrow read out of a place from one lent by it, and walks literals and variants) and the messages. A borrow lent for one call or statement is a temporary there, checked at once. `stored` in `stmt.go` records a borrow put into a field or through a borrow, a `mut` borrow held in a field among them (`refPrefix`); `storeRefused` refuses a closure's body storing one in a variable outside it; `usedWhereMade` refuses a closure that borrows anywhere but where it is made; `deferStmt` and `deferHold` hold the whole variables a deferred call borrows (`atExit`: only a move or a drop collides; a borrow variable may not be pointed elsewhere) and refuse the rest.
+- **What a function keeps.** `compiler/types/keep.go` records, while each body is checked, the parameters it keeps (`keepParam`, from the places that store, return, send or spawn a value) and the ones it passes on (`keepArg`), and at the package's end follows them to a fixed point and checks each call that passed a closure that borrows (`resolveKeeps`).
 - **The paths.** `compiler/types/flow.go` records each body as a graph while the checker walks it, from the hooks the move pass already calls at every branch and loop (`forkAt`, `branchEnd`, `joinAt`, `enterRegion`, `leaveRegion`, `branch`), with a match guard's way on to the next arm, which drops what the arm's pattern bound, a loop's test apart from its body, a `for` loop's post statement after it, the right side of `&&` and `||` and the error side of `?` as branches, and the drops of a `return`, a `panic` or a call that never returns. At the body's end it solves the graph: liveness backwards, a `Drop` counting as a use; the borrows in effect and the variables that may be dropped forwards; then every access, drop, new borrow and returned borrow against what is live where it is. A declaration is an assignment in the graph; a drop ends a variable's life but not what it holds, so a value carried out of a block, which `pin` resolves before the block ends, holds it still. A borrow made through a place that holds borrows copies what the place holds at that moment, each in the part of the new holder that reaches it, and a store through a `mut` borrow lets go of what the place held when the borrow has one place it may point to. Each parameter that carries a borrow holds a borrow of a variable standing for what the caller owns behind it (`flowParams`), so that `checkEscape` sees a store reaching the caller's places however it is made. A closure's body has a graph of its own, with a pointer to the one around it. The design is `_docs/design/10-borrow-checking.md`.
 - **The tests.** `TestFlowPaths` in `flow_test.go` covers each kind of edge, `TestFlowModel` how the graph follows evaluation and each rule, `TestBorrows` and `TestLending` in `borrow_test.go` the rules of chapter 6's first half, `TestDropReads` in `predicates_test.go` which types' drops read their borrows, and the programs under `compiler/types/testdata/errors/` the messages.

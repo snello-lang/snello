@@ -18,7 +18,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots |
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed |
 | 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch), assign-through-ref, mut-through-ref-receiver |
-| 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored |
+| 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored, callback-kept |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |
 | A spawn moves what its closure mentions | use-after-spawn, spawn-twice |
 | What crosses a task boundary is `Send` | spawn-not-send, channel-not-send |

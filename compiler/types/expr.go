@@ -122,6 +122,10 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 			return invalidOperand
 		}
 
+		if c.callee != e {
+			c.keepValueOf(obj, e.Pos()) // a value: it may keep no parameter
+		}
+
 		return operand{value, obj.typ, obj, nil}
 	case *TypeName:
 		return operand{typeOperand, obj.typ, obj, nil}
@@ -234,6 +238,10 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 			}
 
 			c.receiver(e, x, sig)
+			if c.callee != ast.Expr(e) {
+				c.keepValueOf(fn, e.Sel.Pos()) // a method as a value: it may keep no parameter
+			}
+
 			return operand{value, fn.typ, fn, nil}
 		}
 	}
@@ -279,6 +287,10 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	if fn != nil {
 		c.recordUse(e.Sel, fn)
 		c.receiver(e, x, fn.typ.(*Signature))
+		if c.callee != ast.Expr(e) {
+			c.keepValueOf(fn, e.Sel.Pos()) // a method as a value: it may keep no parameter
+		}
+
 		return operand{value, fn.typ, fn, nil}
 	}
 
@@ -324,6 +336,10 @@ func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
 
 	switch obj := obj.(type) {
 	case *Func:
+		if c.callee != ast.Expr(e) {
+			c.keepValueOf(obj, e.Pos()) // a value: it may keep no parameter
+		}
+
 		return operand{value, obj.typ, obj, nil}
 	case *Var:
 		return operand{variable, obj.typ, obj, nil}
@@ -965,6 +981,7 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	sig := c.typ(e.Type).(*Signature)
 	outer, regions, dead := c.sig, c.regions, c.dead
 	c.sig, c.regions, c.dead = sig, nil, false
+	c.enclosing = append(c.enclosing, outer) // a parameter of the function around the closure may be kept from inside it
 	c.closures = append(c.closures, closure{pos: e.Pos()})
 	temps := c.temps
 	c.temps = nil // the body runs when the closure is called, not while the call around it is lending
@@ -973,6 +990,7 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	outerFlow := c.flow
 	c.flow = c.newFlow(e.Pos()) // the body is a graph of its own: it runs when the closure is called
 	c.flow.parent = outerFlow
+	c.keepValues = append(c.keepValues, keepValue{sig: sig, pos: e.Pos(), closure: true}) // a closure is a value: it may keep no parameter
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
 	c.solveFlow()
 	c.freeFlow(c.flow)
@@ -997,6 +1015,7 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	}
 
 	c.closures = c.closures[:len(c.closures)-1]
+	c.enclosing = c.enclosing[:len(c.enclosing)-1]
 	c.sig, c.regions, c.dead = outer, regions, dead
 	for _, cap := range c.captured[e] {
 		b := cap.borrow(nil, e.Pos())

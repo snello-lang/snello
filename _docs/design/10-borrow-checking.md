@@ -110,7 +110,7 @@ The rules are those of the borrows note; the checker applies them on every path,
 
 ## What stays out
 
-- **Across functions.** A borrow lives inside one function, and a call is checked by its signature alone (rules 2 and 3). A function that stores a callback it was given is a separate question, with its own issue.
+- **Across functions.** A borrow lives inside one function, and a call is checked by its signature alone (rules 2 and 3). Which of its parameters a function keeps is the one thing a call learns from the callee's body, decided at the end of the package; the borrows note says how.
 - **Annotations.** Nothing is written in the source: where the computation cannot follow a borrow, a store into a `mut` parameter or out of a closure, the program is refused with a message that says what to write instead.
 
 ## What it costs
