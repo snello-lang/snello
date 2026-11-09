@@ -1,0 +1,20 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a deferred call runs when the function returns, so it borrows
+// only a whole variable: one that holds no borrow, which it reaches
+// then, after every other use, or a borrow variable, which it reads
+// then. An element, what a borrow points to, or a value that holds a
+// borrow may move or die before the call runs. Take the value whole, or
+// make the call before the function returns.
+
+package p
+
+func show(x ref int) {}
+
+func main() {
+    xs := []int{1, 2}
+    defer show(ref xs[0])                 // ERROR "a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one"
+    xs.Push(3)
+}

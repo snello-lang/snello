@@ -62,10 +62,9 @@ type TypeName struct {
 // A Var is a variable: a local, a parameter, a receiver, or a field.
 type Var struct {
 	object
-	field   bool
-	global  bool      // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
-	lastUse token.Pos // the last use seen so far, for the borrow pass; an assignment to the whole variable is not one
-	kept    bool      // a parameter whose argument the callee keeps: Push stores its element
+	field  bool
+	global bool // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
+	kept   bool // a parameter whose argument the callee keeps: Push stores its element
 }
 
 // A Const is a named constant; true and false, and const declarations.

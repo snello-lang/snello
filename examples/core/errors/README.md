@@ -26,13 +26,20 @@ Rules are numbered as in `../../../_docs/design/04-borrows-ref-and-mut.md`; the 
 | The races a task can make: a value used after it was sent, an Arc's value changed, a borrowing closure spawned | use-after-send, mutate-through-arc, borrowing-closure-spawned |
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned |
+| 6. A local dies at the end of its block, on every path: a borrow of it is not used after, through a variable, a field or a loop's next pass | borrow-outlives-block, borrow-field-outlives-block, borrow-next-pass |
+| 6. A block's value does not borrow the block's own local | borrow-out-of-block |
+| 6. A `mut` parameter is the caller's: nothing but itself is stored in it | borrow-into-caller |
+| 6. A closure stores no borrow in a variable outside it | closure-stores-borrow |
+| 6. A deferred call borrows only whole variables, one that holds no borrow or a borrow variable, and keeps them until the function returns | defer-borrows-whole, defer-outlives-block |
+| 6. A closure that borrows is used where it is made | closure-used-where-made |
+| 6. A `Drop` uses what its value borrows, so it must outlive the value | drop-reads-borrow |
 | No `nil` | nil-used |
 | A package variable is read and lent as `ref` by every task, and never assigned, lent as `mut` or moved out of; its type is `Send` | global-assigned, global-mut, global-moved, global-not-send, global-declared-not-send, global-trait-not-send |
 | `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus |
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 
-The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5 and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
+The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5, the ten of rule 6 along a function's paths, and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
 
 ## Message conventions
 

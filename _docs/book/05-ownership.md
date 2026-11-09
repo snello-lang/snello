@@ -150,6 +150,8 @@ func main() {
 
 `Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then every value still owned is dropped, innermost first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose: the deferred calls run first, then the scope's values are dropped, since a deferred call may still be looking at one of them. A deferred call does not run on a panic today; put cleanup that must survive a panic in a `Drop`.
 
+Variables are dropped last declared first, so a value is dropped before anything declared ahead of it. A type with a `Drop` that holds a borrow may read what it borrows in its `Drop`, so what it borrows must outlive it: chapter 6, under `Drop`.
+
 A value moved out of a variable is not dropped twice: the move leaves the variable empty, and dropping an empty variable does nothing. That is what makes a move inside an `if` safe without any bookkeeping on your part, and it is why `take` leaves the zero value behind. A value that no variable holds, such as a string built for a `Println`, is dropped when its statement ends.
 
 A method with a plain value receiver takes its receiver and may drop it. That is how `Close` works on a file. A file closes itself when dropped; `f.Close()` is for when the error matters, since it returns the error that `Drop` cannot. Afterwards `f` is gone, so a closed file cannot be written to and cannot be closed twice:

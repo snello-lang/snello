@@ -22,7 +22,8 @@ func TestRangeString(t *testing.T) {
 		{"func f(s string) { for _, r := range s[1:] { print(r) } }", nil},
 		{"func f(s string) { for _, r := range s { var b byte = r; print(b) } }", []string{"cannot use r (rune) as byte in declaration"}},
 		{"func f(s string) { for _, r := range s { s = \"x\"; print(r) } }", []string{"cannot assign to s: s is borrowed by the range loop"}},
-		{"func f(s string) { for _, r := range s { print(r); keep(s); break } }", []string{"cannot move s: s is borrowed by the range loop"}},
+		{"func f(s string) { for _, r := range s { print(r); keep(s) } }", []string{"s moved in a previous iteration of the loop", "cannot move s: s is borrowed by the range loop"}},
+		{"func f(s string) { for _, r := range s { print(r); keep(s); break } }", nil}, // no pass comes round to read s again
 	}
 	for _, tt := range tests {
 		got := checkErrors(t, prelude+tt.src)

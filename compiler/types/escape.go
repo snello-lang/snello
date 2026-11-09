@@ -5,6 +5,7 @@
 package types
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -48,7 +49,7 @@ const (
 // borrow is the borrow a holder of the closure holds for the capture.
 func (cap capture) borrow(holder *Var, pos token.Pos) borrow {
 	p, _ := through(place{cap.v, ""}, placeOwned)
-	return borrow{holder: holder, place: p, mut: cap.mode == byMut, pos: pos}
+	return borrow{holder: holder, place: p, mut: cap.mode == byMut, pos: pos, variable: isBorrow(cap.v.typ)}
 }
 
 // holdsBorrow reports whether a value of type t carries a borrow: a
@@ -286,11 +287,32 @@ func isSignature(t Type) bool {
 	return ok
 }
 
-// heldBy returns a borrow v holds at pos, or nil.
+// heldBy returns a borrow v was given before pos, itself or through a
+// copy of another variable, or nil: whether a closure variable may hold
+// a borrow when it is stored.
 func (c *Checker) heldBy(v *Var, pos token.Pos) *borrow {
-	for i := range c.borrows {
-		if b := &c.borrows[i]; b.holder == v && b.pos < pos && (b.end == token.NoPos || b.end > pos) {
+	for f := c.flow; f != nil; f = f.parent { // a closure's body sees the variables of the bodies around it
+		if b := heldIn(f, v, pos); b != nil {
 			return b
+		}
+	}
+
+	return nil
+}
+
+// heldIn looks for what heldBy looks for in the graph f.
+func heldIn(f *flow, v *Var, pos token.Pos) *borrow {
+	for i := range f.loans {
+		if b := &f.loans[i]; b.holder == v && b.pos < pos {
+			return b
+		}
+	}
+
+	for _, cp := range f.copies {
+		if cp.to == v && cp.pos < pos && !cp.through {
+			if b := heldIn(f, cp.from, cp.pos); b != nil {
+				return b
+			}
 		}
 	}
 
@@ -448,7 +470,7 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return
 	}
 
-	v, before := p.v, pos
+	v := p.v
 	if v.global {
 		c.errorf(pos, "cannot return a borrow of "+v.name+": a returned borrow is tied to the receiver or a borrowed parameter")
 		return
@@ -459,25 +481,56 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return
 	}
 
-	for !c.isParam(v) {
-		b := c.heldBy(v, before)
-		if b == nil {
-			if !holdsBorrow(v.typ) {
-				c.errorf(pos, "cannot return a borrow of local "+v.name)
-			}
-
-			return // else a borrow with no record to follow: from a call, or built in a literal
-		}
-
-		v, before = b.v, b.pos
+	if !c.isParam(v) {
+		c.flowReturn(v, pos) // followed to its source through the loans in effect at the return, at the function's end
+		return
 	}
 
+	c.sourceParam(v, pos, c.errorf)
+}
+
+// followReturn follows a borrow returned out of v through the loans v
+// may hold at the return, each to the variable it borrows, until it
+// reaches the function's receiver or parameters.
+func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen []*Var) {
+	f := c.flow
+	report := func(pos token.Pos, msg string) { f.errs = append(f.errs, flowError{seq: seq, pos: pos, msg: msg}) }
+	if param := f.outside[v]; param != nil {
+		v = param // what the caller owns behind a parameter is reached through the parameter
+	}
+
+	if c.isParam(v) {
+		c.sourceParam(v, pos, report)
+		return
+	}
+
+	seen = append(seen, v)
+	found := false
+	in.each(func(li int) bool {
+		if b := &f.loans[li]; b.holder == v {
+			found = true
+			if !slices.Contains(seen, b.v) {
+				c.followReturn(b.v, pos, seq, in, seen)
+			}
+		}
+
+		return true
+	})
+
+	if !found && !holdsBorrow(v.typ) {
+		report(pos, "cannot return a borrow of local "+v.name) // else a borrow with no record to follow: from a call, or built in a literal
+	}
+}
+
+// sourceParam reports a returned borrow of the receiver or a parameter
+// that is not the function's source.
+func (c *Checker) sourceParam(v *Var, pos token.Pos, report func(token.Pos, string)) {
 	switch {
 	case c.sig.recv == v && isBorrow(v.typ):
 	case c.sig.recv == v || !holdsBorrow(v.typ):
-		c.errorf(pos, "cannot return a borrow of local "+v.name) // taken by value, it dies at return
+		report(pos, "cannot return a borrow of local "+v.name) // taken by value, it dies at return
 	case c.sig.recv != nil && isBorrow(c.sig.recv.typ):
-		c.errorf(pos, "cannot return a borrow of "+v.name+": a method's returned borrow is tied to its receiver")
+		report(pos, "cannot return a borrow of "+v.name+": a method's returned borrow is tied to its receiver")
 	}
 }
 

@@ -51,29 +51,36 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	consumed := false
 	outer := c.scope
 	for _, arm := range e.Arms {
-		c.openScope()
+		armScope := c.openScope()
 		c.bindsOwned = false
 		c.copies = !isBorrow(x.typ) // a borrow variable binds borrows; a place reached through one copies what is Copy
 		p := c.pattern(arm.Pat, scrutinee, b)
 		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
 			c.bindThrough(arm.Pat, e.X, b)
 			if c.bindsOwned && !consumed && held(e.X, x.mode) {
-				c.moveBefore(e.X, variable, &f) // a part bound by value leaves the place, on every arm; a temporary's part may not leave it
+				c.flowIn(f.from, func() { c.moveBefore(e.X, variable, &f) }) // a part bound by value leaves the place, on every arm, before any; a temporary's part may not leave it
 				consumed = true
 			}
 		})
 
+		guard := -1
 		if arm.Guard != nil {
 			c.guard(arm.Guard, arm.Arrow, e.Conds)
+			guard = c.flowGuard() // a guard that fails goes on to the next arm
 		} else {
 			rows = appendRows(rows, p)
 		}
 
 		v := c.node(arm.Body, expected)
+		if x, ok := arm.Body.(ast.Expr); ok {
+			c.pin(x, v.typ) // the arm's bindings are gone by the time the match's value is taken
+		}
+
 		c.maybeMove(v, v.typ) // the arm's value leaves with the match
 		result = c.unify(result, v, arm.Arrow, "match")
-		c.closeScope()
+		c.endScope(nodeEnd(arm.Body))
 		c.branchEnd(&f)
+		c.flowGuardFails(guard, armScope, arm.Arrow) // a guard that fails drops what the pattern bound, and goes on to the next arm
 	}
 
 	c.joinAt(&f, true)
@@ -504,4 +511,14 @@ func wilds(n int) []pat {
 func isBool(t Type) bool {
 	b, ok := t.Underlying().(*Basic)
 	return ok && b.kind == Bool
+}
+
+// nodeEnd is where a match arm's body ends, for a message: the closing
+// brace of a block, or where an expression begins.
+func nodeEnd(n ast.Node) token.Pos {
+	if b, ok := n.(*ast.BlockStmt); ok {
+		return b.Rbrace
+	}
+
+	return n.Pos()
 }

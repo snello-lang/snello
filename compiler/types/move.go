@@ -59,11 +59,21 @@ type region struct {
 	exits    [][]move
 	ended    int
 	exited   int
+
+	// The borrow pass's graph (flow.go): the block each pass begins in,
+	// the one its test ends in, the one a continue goes to, where its
+	// breaks begin on the graph's list, the scope a pass ends out to,
+	// and the position a pass ends at.
+	head, test, cont, base int
+	floor                  *Scope
+	end                    token.Pos
 }
 
 // A fork remembers the state at a branch point, so that every branch
 // starts from it and their results are joined after.
 type fork struct {
+	from     int // the borrow pass's block the branches begin from, and where their ends begin on the graph's list (flow.go)
+	base     int
 	mark     int
 	dead     bool
 	paths    [][]move // the records of the branches that do not leave, those with any
@@ -134,7 +144,11 @@ func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 			return place{c.recv, ""}, placeOwned
 		}
 
-		v, ok := c.resolve(e.Name).(*Var)
+		v, ok := c.pinned[e]
+		if !ok {
+			v, ok = c.resolve(e.Name).(*Var)
+		}
+
 		if !ok || v.field || v.pos == token.NoPos {
 			return place{}, notPlace
 		}
@@ -203,17 +217,38 @@ func through(p place, kind placeKind) (place, placeKind) {
 // holds: a whole variable may be given a new value, and so may a moved
 // field, but a field of a moved value may not.
 func (c *Checker) checkUse(e ast.Expr) {
-	if c.inner || len(c.moved) == 0 && len(c.borrows) == 0 && len(c.temps) == 0 {
+	if c.skipUse() {
 		return
 	}
 
 	p, kind := c.placeOf(e)
+	c.checkUsePlace(e, p, kind)
+}
+
+// checkUseVar is checkUse for an identifier whose variable is known,
+// which spares the lookup placeOf would make.
+func (c *Checker) checkUseVar(e *ast.Ident, v *Var) {
+	if c.skipUse() || v.field || v.pos == token.NoPos {
+		return
+	}
+
+	c.checkUsePlace(e, place{v, ""}, placeOwned)
+}
+
+// skipUse reports whether a use needs no check: nothing is moved or
+// lent, and no borrow is held yet; outside a loop, a borrow made later
+// cannot reach back to this access.
+func (c *Checker) skipUse() bool {
+	return c.inner || len(c.moved) == 0 && len(c.temps) == 0 && c.loops == 0 && (c.flow == nil || len(c.flow.loans) == 0)
+}
+
+func (c *Checker) checkUsePlace(e ast.Expr, p place, kind placeKind) {
 	if kind == notPlace {
 		return
 	}
 
 	if !c.noUse {
-		c.access(e, p, readAccess, e.Pos(), e.Pos()) // a read collides with a mut borrow
+		c.access(e, p, readAccess, e.Pos()) // a read collides with a mut borrow
 	}
 
 	if len(c.moved) == 0 || c.noUse && kind == placeOwned && p.path == "" {
@@ -358,7 +393,7 @@ func (c *Checker) move(e ast.Expr, m mode) {
 		}
 	case placeOwned:
 		c.capture(p.v, byMove)
-		c.access(e, p, moveAccess, e.Pos(), e.Pos())
+		c.access(e, p, moveAccess, e.Pos())
 		c.moved = append(c.moved, move{p, e.Pos(), false})
 		if c.info != nil {
 			c.info.Moves[e] = true
@@ -553,7 +588,9 @@ func optText(e ast.Expr) string {
 // records begin at its mark, which the floor stack holds for giveBack.
 func (c *Checker) forkAt() fork {
 	c.floors = append(c.floors, floor{mark: len(c.moved)})
-	return fork{mark: len(c.moved), dead: c.dead, all: true}
+	f := fork{mark: len(c.moved), dead: c.dead, all: true}
+	c.flowFork(&f)
+	return f
 }
 
 // watch makes the innermost open branch set watch the place e denotes,
@@ -569,6 +606,7 @@ func (c *Checker) watch(e ast.Expr) {
 // branchEnd ends one branch: its records count after the join unless it
 // left, and the state goes back to the fork for the next branch.
 func (c *Checker) branchEnd(f *fork) {
+	c.flowBranchEnd(f)
 	if !c.dead {
 		f.paths = addPath(f.paths, c.moved[f.mark:])
 		f.live++
@@ -594,6 +632,7 @@ func addPath(paths [][]move, records []move) [][]move {
 // joinAt joins the branches. complete says whether the branches cover
 // every path; otherwise a path with no records continues as well.
 func (c *Checker) joinAt(f *fork, complete bool) {
+	c.flowJoin(f, complete)
 	c.floors = c.floors[:len(c.floors)-1]
 	c.join(f.paths, f.live, complete)
 	c.dead = f.dead || complete && f.all && f.branches > 0
@@ -691,10 +730,19 @@ func inEvery(sets [][]place, p place) bool {
 func (c *Checker) enterRegion(loop, infinite bool, pos token.Pos) {
 	c.regions = append(c.regions, region{loop: loop, infinite: infinite, pos: pos, mark: len(c.moved)})
 	c.floors = append(c.floors, floor{mark: len(c.moved)})
+	if loop {
+		c.loops++
+		c.flowLoop(&c.regions[len(c.regions)-1])
+	}
 }
 
 func (c *Checker) leaveRegion() {
 	r := c.regions[len(c.regions)-1]
+	if r.loop {
+		c.loops--
+		c.flowLoopEnd(&r)
+	}
+
 	c.regions = c.regions[:len(c.regions)-1]
 	c.floors = c.floors[:len(c.floors)-1]
 	if !c.dead {
@@ -752,6 +800,7 @@ func (c *Checker) branch(tok token.Kind, pos token.Pos) {
 			continue // a match or select is not a loop: a break inside one leaves the loop around it
 		}
 
+		c.flowBranch(r, tok, pos)
 		if tok == token.CONTINUE {
 			r.ends, r.ended = addPath(r.ends, c.moved[r.mark:]), r.ended+1
 		} else {

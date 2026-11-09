@@ -4,6 +4,8 @@
 
 package types
 
+import "slices"
+
 // Identical reports whether x and y are the same type. Named types are
 // identical only when they are the same declaration; every other kind
 // is identical when its parts are, as in go/types.
@@ -336,4 +338,41 @@ func allCopyVars(vs []*Var) bool {
 	}
 
 	return true
+}
+
+// dropReads reports whether dropping a value of type t may run a Drop
+// method that reads what the value borrows: t implements Drop, or holds
+// by value a part that does. Such a drop is a use of what the value
+// borrows. What a slice, map or pointer holds cannot hold a borrow, so
+// a Drop behind one reads none, and only the parts held by value count.
+func dropReads(t Type) bool {
+	return dropReadsIn(t, map[*Named]bool{})
+}
+
+func dropReadsIn(t Type, inside map[*Named]bool) bool {
+	switch t := t.(type) {
+	case *Named:
+		if inside[t] {
+			return false // a type that contains itself is refused elsewhere
+		}
+
+		inside[t] = true
+		return implements(t, DropTrait) || t.Underlying() != nil && dropReadsIn(t.Underlying(), inside)
+	case *Struct:
+		return slices.ContainsFunc(t.fields, func(f *Var) bool { return dropReadsIn(f.typ, inside) })
+	case *Enum:
+		return slices.ContainsFunc(t.variants, func(v *Variant) bool {
+			return slices.ContainsFunc(v.fields, func(f *Var) bool { return dropReadsIn(f.typ, inside) })
+		})
+	case *Tuple:
+		return slices.ContainsFunc(t.elems, func(e Type) bool { return dropReadsIn(e, inside) })
+	case *Array:
+		return dropReadsIn(t.elem, inside)
+	case *Option:
+		return dropReadsIn(t.elem, inside)
+	case *Result:
+		return dropReadsIn(t.val, inside) || dropReadsIn(t.err, inside)
+	}
+
+	return false
 }

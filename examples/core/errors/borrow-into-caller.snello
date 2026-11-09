@@ -1,0 +1,20 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a mut parameter belongs to the caller. A function may change
+// it, but not store in it a borrow of anything but itself: the caller
+// cannot see from the signature that it now borrows the argument, and
+// would free it while the parameter still points at it. Take the value
+// by value and own it, or return it.
+
+package p
+
+struct Label {
+    text ref string
+    size int
+}
+
+func rename(l mut Label, name ref string) {
+    l.text = name                         // ERROR "cannot store a borrow of name in l: l is the caller's, and a signature cannot say that it borrows name"
+}
