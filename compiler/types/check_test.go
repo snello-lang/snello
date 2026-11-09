@@ -128,18 +128,6 @@ func TestInfo(t *testing.T) {
 	}
 }
 
-// TestCoreExamples checks every positive core program and expects no
-// errors: every identifier in them resolves.
-func TestCoreExamples(t *testing.T) {
-	conf := libraryConfig()
-	for _, path := range corePrograms(t) {
-		f, file, _ := parseFile(t, path)
-		if _, err := conf.Check("", file, f, nil); err != nil {
-			t.Errorf("%s: %v", path, err)
-		}
-	}
-}
-
 // handledErrors lists the negative programs whose error the checker
 // already reports. Each must produce exactly its annotated error; every
 // other negative program must produce no error at all, since the
@@ -212,7 +200,7 @@ var handledErrors = map[string]bool{
 }
 
 func TestNegativePrograms(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "errors", "*.snello"))
+	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.snello"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no negative programs found: %v", err)
 	}
@@ -264,8 +252,9 @@ func TestNegativePrograms(t *testing.T) {
 
 var errorPattern = regexp.MustCompile(`// ERROR "(.*)"\s*$`)
 
-// BenchmarkCheck resolves every core program once per iteration, with
-// the parse done ahead of time, and reports allocations.
+// BenchmarkCheck resolves every example program that runs once per
+// iteration, with the parse done ahead of time, and reports
+// allocations.
 func BenchmarkCheck(b *testing.B) {
 	type parsed struct {
 		f    *ast.File
@@ -273,7 +262,7 @@ func BenchmarkCheck(b *testing.B) {
 	}
 
 	var files []parsed
-	for _, path := range corePrograms(b) {
+	for _, path := range examplePrograms(b) {
 		f, file, _ := parseFile(b, path)
 		files = append(files, parsed{f, file})
 	}
@@ -310,12 +299,26 @@ func checkErrors(t *testing.T, src string) []string {
 	return msgs
 }
 
-// corePrograms returns the positive core programs under examples/core.
-func corePrograms(tb testing.TB) []string {
+// examplePrograms returns the example programs of one file that run:
+// those with their expected output beside them.
+func examplePrograms(tb testing.TB) []string {
 	tb.Helper()
-	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "core", "*.snello"))
-	if err != nil || len(paths) < 8 {
-		tb.Fatalf("found %d core programs, want at least 8: %v", len(paths), err)
+	var paths []string
+	for _, pattern := range []string{filepath.Join("*", "*.snello")} {
+		matches, err := filepath.Glob(filepath.Join("..", "..", "examples", pattern))
+		if err != nil {
+			tb.Fatal(err)
+		}
+
+		for _, path := range matches {
+			if _, err := os.Stat(strings.TrimSuffix(path, ".snello") + ".out"); err == nil {
+				paths = append(paths, path)
+			}
+		}
+	}
+
+	if len(paths) < 20 {
+		tb.Fatalf("found %d example programs that run, want at least 20", len(paths))
 	}
 
 	return paths

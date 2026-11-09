@@ -1,6 +1,6 @@
 # 15. Binding C
 
-`examples/run/bound/` runs every form below through both backends, as a release and a debug build.
+`examples/bound/` runs every form below through both backends, as a release and a debug build.
 
 The standard library is small on purpose, and what it leaves out is written as libraries outside the compiler, on the packages of chapter 2. Many such libraries are not written from scratch: a database, a compression format or a cryptographic suite already exists as a C library on every system, and the library a Snello program wants is a thin layer over it. This chapter is how a package of your own reaches C: declares a function C defines, passes values to it and gets them back, holds what C hands it, and tells the build which system library C needs.
 
@@ -119,4 +119,4 @@ The compiler checks the types, and the author keeps three promises the compiler 
 
 `snello check tally` checks the package as the library it is, bindings included; `snello build` of the program compiles the package's C beside the runtime and links it. A package that declares a function without a body and has no `.c` file beside it is refused when it is imported, naming the function, and so is a package shipping a file under the name of the header the compiler writes.
 
-The whole of this chapter is `examples/run/bound/` in the repository: `tally` and `mathx` beside a program that uses both, with the output it prints beside the directory.
+The whole of this chapter is `examples/bound/` in the repository: `tally` and `mathx` beside a program that uses both, with the output it prints beside the directory.

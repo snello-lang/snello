@@ -1,52 +1,47 @@
-# Example programs
+# Examples
 
-Twenty programs written in Snello before Snello exists. They are the design's test suite: every rule in `../_docs/design/00-syntax-conventions.md` must let each of these read naturally, and the compiler must run them all. Numbers do not mean difficulty; the first five are the ones most likely to break the memory model.
+Programs written in Snello, one folder each, with what the program prints beside it in `name.out`. Start with `hello/`, then read whichever shows what you came for. `tree/` and `pipeline/` are written in Go as well, to put the two side by side.
 
-| # | File | What it stresses |
-|---|---|---|
-| 01 | 01-tree/ | Parent pointers, three ways: Go pointers, hand-rolled slice, Arena<T> |
-| 02 | 02-pipeline/ | Channels and ownership crossing tasks, Go beside Snello |
-| 03 | cache-server.snello | Long-lived shared state, per-request borrows, Drop for connections; a server over `net` the suite drives with a script |
-| 04 | graph.snello | Arena graph, BFS, heap with Ord bound |
-| 05 | parser.snello | Sum types, match, owned pointers for recursion, a borrow-holding struct |
-| 06 | linked-list.snello | `*Node?` links, take, partial moves, returning a ref from a ref receiver |
-| 07 | traits.snello | impl, default methods, trait fields, super, trait as a type |
-| 08 | generics.snello | Bounds, consume vs borrow in generic functions, conditional impl |
-| 09 | errors.snello | Result, custom error enums, ?, ?? |
-| 10 | wordfreq.snello | Owned string vs borrowed slice, maps, sorting |
-| 11 | json.snello | Recursive enum with collections, encoder/decoder |
-| 12 | worker-pool.snello | select, timeouts, cancellation token |
-| 13 | actor.snello | Task-owned state, message passing, reply channels |
-| 14 | files.snello | Drop vs defer, consuming Close |
-| 15 | lru.snello | Map into an Arena-backed linked list; the two-slots aliasing rule |
-| 16 | matrix.snello | Copy types, operator traits, no hidden allocation |
-| 17 | state-machine.snello | Enum states, consuming transitions, a session's connection closed where its state is dropped |
-| 18 | iterators.snello | Closure capture modes, lazy iterator trait |
-| 19 | cli-grep.snello | Args, stdin/files, per-line borrows, exit codes |
-| 20 | bst.snello | Reborrowing down a chain of boxes, in-place delete |
+To build and run one:
 
-## Decisions these forced
+```
+go build -o snello ./cmd/snello
+./snello build examples/hello/hello.snello
+./hello
+```
 
-Writing the programs surfaced seven questions. All are now decided and recorded in `../_docs/design/00-syntax-conventions.md`; the examples follow them.
+The binary is written to the current directory, named after the file, or after the folder for a program of several packages.
 
-| Question | Decision | Where |
-|---|---|---|
-| A struct holding a borrow (a lexer) | Allowed; such a struct is itself a borrow | 05, 11 |
-| Returning a borrow from a method | Allowed into the receiver only | 06, 15, 20 |
-| Reborrowing down a chain of owned pointers | Allowed; a borrow may be replaced by one derived from itself | 20 |
-| Two `mut` paths into one slice | Rejected; copy values out first | 15 |
-| Moving an element out of a slice | Not by indexing; use `Remove`, `Pop`, or `take` | 19 |
-| Channel receive on a closed channel | `<-ch` yields `T?`; `range ch` yields `T` | 12 |
-| The `??` operator | Kept; the else may `return`, `break`, or `continue` | 06, 09, 20 |
+| Folder | What it shows |
+|---|---|
+| hello/ | The smallest program: one line printed |
+| tree/ | Parent pointers three ways: Go pointers, indices into a slice, an `Arena` |
+| pipeline/ | Channels and ownership crossing tasks, Go beside Snello |
+| cache-server/ | Long-lived shared state, a borrow per request, `Drop` for a connection; a server over `net` |
+| graph/ | A graph in an arena, breadth-first search, a heap with an `Ord` bound |
+| parser/ | Sum types, `match`, owned pointers for recursion, a struct holding a borrow |
+| linked-list/ | `*Node?` links, `take`, partial moves, a borrow returned from a `ref` receiver |
+| traits/ | `impl`, default methods, trait fields, `super`, a trait as a type |
+| generics/ | Bounds, consuming against borrowing in generic functions, a conditional `impl` |
+| errors/ | `Result`, an error enum of one's own, `?` and `??` |
+| wordfreq/ | An owned string against borrowed pieces of it, maps, sorting |
+| json/ | A JSON value type, encoder and decoder written in the example itself, over `strings` and `strconv`: a recursive enum holding collections, a decoder holding a borrow of its input |
+| worker-pool/ | `select`, timeouts, a cancellation token |
+| actor/ | State a task owns, message passing, reply channels |
+| files/ | `Drop` against `defer`, a consuming `Close` |
+| lru/ | A map into a linked list kept in an arena; two `mut` paths into one slice refused |
+| matrix/ | `Copy` types, operator traits, no hidden allocation |
+| state-machine/ | Enum states, consuming transitions, a connection closed where its state is dropped |
+| iterators/ | Closure capture modes, a lazy iterator trait |
+| cli-grep/ | Arguments, standard input and files, a borrow per line, exit codes; waits for `regexp`, so it has no `.out` yet |
+| bst/ | A `mut` borrow walked down a chain of boxes, delete in place |
+| packaged/ | A program of two files with a package of its own beside it, and the package's tests: `snello test examples/packaged/shapes` |
+| bound/ | A program with two packages beside it that bind C: `snello build examples/bound` |
 
-The owned heap pointer is spelled `*T` and created with `&expr`, as in Go; there is no `Box<T>` (05, 06, 20).
+A program that reads files has them in `name.files/` beside it, copied beside the binary before it runs. The cache server serves rather than prints, so `cache-server.script` beside it holds what the suite sends and expects back, a section per connection.
 
 ## The suite
 
-`suite_test.go` builds and runs every program here that has its expected output under `expected/`, as a release build and as a debug build, and names the rest as pending: `go test ./examples`. `suite_test.go` names what each pending program waits for.
+`go test ./examples` builds every program here that has its `.out`, through both backends, as a release and a debug build, and compares what it prints; a program without one must be named as pending in `suite_test.go`, with what it waits for. The two programs of several packages, the folders with a `snello.mod`, are built by the backends' tests.
 
-A program that serves rather than prints has a script beside its expected output, `expected/NAME.script`, which the suite plays against it over the loopback: a section per connection, of lines `> text` sent and `< text` expected back, each section ended by the server closing the connection and the last one stopping the server, whose standard output is then compared as every other program's is. Example 03 is the one such program: it was sketched as an HTTP handler over `net/http`, `db` and `json`, which the library does not have, and was rewritten as a cache server over `net`, speaking `GET`, `SET`, `QUIT` and `SHUTDOWN`, with what it tests unchanged, the store behind `sync.Arc<sync.RwLock<map>>` shared by a task per connection and a `Session` whose `Drop` reports the close (decision 9 of `../_docs/design/05-standard-library.md`).
-
-## The core set
-
-`core/` holds eight of these programs rewritten in core Snello, without traits or user generics, as the core acceptance suite. See `core/README.md`.
+The programs that test one feature at a time are in `compiler/emit/internal/backendtest/testdata/`, and the programs the checker must refuse, one per rule with its message, are in `compiler/types/testdata/errors/`.

@@ -1,6 +1,6 @@
 # 19. Text: strings, runes and Unicode
 
-Snello's text follows Unicode 18.0.0. Every table is tested on every code point and every algorithm on every line of the test file Unicode publishes for it, and `examples/run/runes.snello` runs everything in this chapter.
+Snello's text follows Unicode 18.0.0. Every table is tested on every code point and every algorithm on every line of the test file Unicode publishes for it, and `compiler/emit/internal/backendtest/testdata/runes.snello` runs everything in this chapter.
 
 This chapter is for two readers: a developer handling text, and a maintainer of the compiler, the runtime or the library who needs to know where each piece lives. The last section is the maintainer's.
 

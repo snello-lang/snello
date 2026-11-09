@@ -1,0 +1,89 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A connection state machine.
+//
+// Tests enums carrying different data per state, exhaustive match with
+// guards, and consuming transitions where the old state is moved into the
+// new one. The session owns a real connection, dialled to a listener the
+// program opens, and the listener's side reads the end of it once the
+// state that held the session is dropped.
+
+package conn
+
+import ("fmt"; "net"; "time")
+
+struct Session {
+    id     string
+    socket net.Conn              // owned; closed by Drop
+}
+
+enum State {
+    Closed
+    Connecting(attempt int, since time.Time)
+    Open(session Session)
+    Draining(session Session, deadline time.Time)
+    Failed(reason string)
+}
+
+enum Event {
+    Dial
+    Connected(session Session)
+    Timeout
+    Shutdown
+    Error(msg string)
+}
+
+// step consumes the old state and the event and returns the new state.
+// Because State is moved in, a Session inside it moves into the next
+// state without cloning the socket. Where a state is dropped, its socket
+// closes.
+func step(s State, ev Event) State {
+    return match (s, ev) {
+        (Closed, Dial)                        => Connecting(1, time.Now()),
+        (Connecting(n, _), Timeout) if n < 3  => Connecting(n + 1, time.Now()),
+        (Connecting(_, _), Timeout)           => Failed("gave up"),
+        (Connecting(_, _), Connected(sess))   => Open(sess),
+        (Open(sess), Shutdown)                => Draining(sess, time.Now().Add(5 * time.Second)),
+        (Draining(_, _), Timeout)             => Closed,       // session dropped: socket closed
+        (Open(_), Error(m))                   => Failed(m),    // same
+        (Failed(_), Dial)                     => Connecting(1, time.Now()),
+        (s, _)                                => s,            // ignored event: state moves straight back out
+    }
+}
+
+func (s ref State) Describe() string {
+    return match s {
+        Closed             => "closed",
+        Connecting(n, _)   => fmt.Sprintf("connecting (attempt %d)", n),
+        Open(sess)         => "open " + sess.id,
+        Draining(sess, d)  => fmt.Sprintf("draining %s until %s", sess.id, d),
+        Failed(r)          => "failed: " + r,
+    }
+}
+
+func main() {
+    s := Closed
+    s = step(s, Dial)
+    s = step(s, Timeout)
+    fmt.Println(s.Describe())        // connecting (attempt 2)
+    s = step(s, Timeout)
+    s = step(s, Timeout)
+    fmt.Println(s.Describe())        // failed: gave up
+    s = step(s, Dial)
+    l := net.Listen("127.0.0.1", 0).Expect("listen")
+    conn := net.Dial("127.0.0.1", l.Port()).Expect("dial")
+    s = step(s, Connected(Session{id: "s1", socket: conn}))
+    fmt.Println(s.Describe())        // open s1
+    s = step(s, Shutdown)
+    s = step(s, Timeout)
+    fmt.Println(s.Describe())        // closed
+    // The session was dropped with the Draining state, and its socket
+    // with it: the listener's side reads the end of the connection. The
+    // deadline turns a socket left open into a failure, not a hang.
+    peer := l.Accept().Expect("accept")
+    peer.SetReadDeadline(time.Now().Add(5 * time.Second)).Expect("deadline")
+    buf := make([]byte, 1)
+    fmt.Println("socket closed:", peer.Read(mut buf).Expect("read") == 0)
+}

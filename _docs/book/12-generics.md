@@ -1,6 +1,6 @@
 # 12. Generics
 
-`examples/run/generics.snello` runs generic types, functions and methods. The declarations of `List` and `Map` are cut from `examples/08-generics.snello`; the other samples are the checker's own cases in `compiler/types/generic_test.go`.
+`compiler/emit/internal/backendtest/testdata/generics.snello` runs generic types, functions and methods. The declarations of `List` and `Map` are cut from `examples/generics/generics.snello`; the other samples are the checker's own cases in `compiler/types/generic_test.go`.
 
 A generic type is written once for any element type. Its type parameters follow its name in angle brackets, and its fields use them as types:
 

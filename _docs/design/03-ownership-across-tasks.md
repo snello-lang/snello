@@ -1,6 +1,6 @@
 # Ownership across tasks
 
-Status: decided; `Send` inference implemented in `compiler/types/send.go`. This note explains what may cross a task boundary in Snello and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/02-pipeline/`.
+Status: decided; `Send` inference implemented in `compiler/types/send.go`. This note explains what may cross a task boundary in Snello and why. It is the concurrency half of the memory model in `01-language-design.md`. The worked example is `../../examples/pipeline/`.
 
 ## The problem
 
@@ -59,7 +59,7 @@ Some state genuinely must be reached from several tasks: a cache, a connection p
 
 The library is written as `05-standard-library.md` decides it: `sync.NewArc(v)`, with `Get` lending the value; `sync.NewMutex(v)` and `sync.NewRwLock(v)`, with `Lock`, `Read` and `Write` returning a guard whose `Get` lends the value, `*g.Get() += 1`, and whose `Drop` gives the lock back; `sync.NewOnce()` with `Do`; `sync.NewWaitGroup()` as a `Copy` handle with `Add`, `Done` and `Wait`. A guard is a borrow-holding struct, so storing it, sending it, or keeping it past the statement that made the lock temporary is refused by the rules of `04-borrows-ref-and-mut.md`, with no rule added for it. The one step from a `ref` of the lock to a `mut` of its value is a function the compiler lowers for the library alone, as `rc` has its two.
 
-`../../examples/03-cache-server.snello` shows `Arc<RwLock<T>>` where a cache is shared by every connection task, each holding a clone of the `Arc` and borrowing the map under the lock for one request at a time.
+`../../examples/cache-server/cache-server.snello` shows `Arc<RwLock<T>>` where a cache is shared by every connection task, each holding a clone of the `Arc` and borrowing the map under the lock for one request at a time.
 
 ## What it costs
 
@@ -72,7 +72,7 @@ The library is written as `05-standard-library.md` decides it: `sync.NewArc(v)`,
 - **Data-race freedom at compile time.** The class of bug that Go's race detector hunts at runtime cannot be written, for every value a task owns, borrows or shares through `sync`, and for a package variable, which the section below puts under the same rule.
 - **Deterministic frees across tasks.** A value received from a channel is freed by the receiver when it is done, not by a collector later.
 - **Nothing to annotate.** The pipeline example has one Snello-specific token, a `ref`, and it is there for efficiency rather than safety.
-- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/13-actor.snello` shows it.
+- **Actors for free.** A task that owns its state and receives messages is the natural shape under these rules and needs no locks at all. `../../examples/actor/actor.snello` shows it.
 
 ## What the implementation decided
 
@@ -83,7 +83,7 @@ The implementation follows this note as written and settled four things it had l
 - **The program ends when `main` returns** (`06-tasks-and-channels.md`): the other tasks stop with it, and a program that must wait for them says so with a channel or a `sync.WaitGroup`. A panic in any task ends the program with its message and status 2.
 - **The signal channel is `chan ()`**: `()` is the value that carries nothing, so `done <- ()` says what it does, and anonymous struct types left the grammar with the idiom that needed them.
 
-The race programs live under `../../examples/core/errors/`: a value used after it was sent, an `Arc`'s value changed, a borrowing closure spawned, a borrow across a spawn or on a channel, a value spawned twice, a non-`Send` value spawned or carried, and a lock's guard captured by a task or kept past its statement. Each is rejected with the message its header names, and the concurrency examples 02, 12, 13 and 18 run.
+The race programs live under `../../compiler/types/testdata/errors/`: a value used after it was sent, an `Arc`'s value changed, a borrowing closure spawned, a borrow across a spawn or on a channel, a value spawned twice, a non-`Send` value spawned or carried, and a lock's guard captured by a task or kept past its statement. Each is rejected with the message its header names, and the concurrency examples, pipeline, worker-pool, actor and iterators run.
 
 ## Package variables
 
@@ -110,7 +110,7 @@ The checker's message, for the three ways to change one:
 main.snello:5:9: counter is a package variable, shared by every task; change it through a sync.Mutex or an atomic held in it
 ```
 
-for `counter += 1`, for `bump(mut counter)`, for `names.Push("x")` through a method taking `mut`, for `m := cache` when the type is not `Copy`, and for a `match` arm or an `if v :=` that binds a part of one by value; as built the message names the three holders, `change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds`, and the one check sits where every access of a place goes through, the borrow checker's `access`, with a package variable of another package, `os.Args`, made a place so that the rule reaches it. Reading stays as it is anywhere: `fmt.Println(counter)`, `names[i]`, `ref names`, and copying a `Copy` value out. A `const` is unchanged. `take(mut cache)` needs no rule of its own, since it lends the place as `mut` first. A package variable whose type is not `Send`, an `rc` handle, is refused where it is declared, `shared cannot be a package variable: rc.Rc<Node> stays in its task`. The programs are `global-assigned`, `global-mut`, `global-moved` and `global-not-send` under `../../examples/core/errors/`, and `globals` in the backends' programs runs what is allowed from two tasks.
+for `counter += 1`, for `bump(mut counter)`, for `names.Push("x")` through a method taking `mut`, for `m := cache` when the type is not `Copy`, and for a `match` arm or an `if v :=` that binds a part of one by value; as built the message names the three holders, `change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds`, and the one check sits where every access of a place goes through, the borrow checker's `access`, with a package variable of another package, `os.Args`, made a place so that the rule reaches it. Reading stays as it is anywhere: `fmt.Println(counter)`, `names[i]`, `ref names`, and copying a `Copy` value out. A `const` is unchanged. `take(mut cache)` needs no rule of its own, since it lends the place as `mut` first. A package variable whose type is not `Send`, an `rc` handle, is refused where it is declared, `shared cannot be a package variable: rc.Rc<Node> stays in its task`. The programs are `global-assigned`, `global-mut`, `global-moved` and `global-not-send` under `../../compiler/types/testdata/errors/`, and `globals` in the backends' programs runs what is allowed from two tasks.
 
 The same program, correct, and the first thing anyone writes, so atomics come with package variables rather than with the collections:
 
@@ -147,7 +147,7 @@ Decided, as built: **such a variable is initialized once, on first use, under th
 3. Exempting the three streams in the checker. The least work and exactly the special case the rule exists to avoid.
 4. Keeping them as variables of an `Atomic`-like type the checker knows: a fourth kind of thing.
 
-Decided, as built: the functions. `os.Args` is only read, and stays a variable. The two examples that changed a package variable, `examples/run/packaged/report.snello` and `examples/run/text.snello`, were rewritten on a `Counter` and a local, and are the first two programs to show the rule; `testing`'s fourteen variables became one `sync.NewMutex(Config{})` written once by `Main` and one `sync.NewMutex(Registry{})` for the states of the running tests, both made on first use, with the benchmark's state moved into the runtime, `runtime/c/testing.c`, so that `testing.Loop` costs one call and no lock.
+Decided, as built: the functions. `os.Args` is only read, and stays a variable. The two examples that changed a package variable, `examples/packaged/report.snello` and `compiler/emit/internal/backendtest/testdata/text.snello`, were rewritten on a `Counter` and a local, and are the first two programs to show the rule; `testing`'s fourteen variables became one `sync.NewMutex(Config{})` written once by `Main` and one `sync.NewMutex(Registry{})` for the states of the running tests, both made on first use, with the benchmark's state moved into the runtime, `runtime/c/testing.c`, so that `testing.Loop` costs one call and no lock.
 
 **Locals stay as they are.** Should Snello take Scala's `val`/`var` and Rust's `let`/`let mut`, which the two spellings `x := v` and `var x` could carry with no new keyword: `:=` as the `val`, so that `xs := []int{}; xs.Push(1)` reads `xs was declared with :=, which does not change; declare it with var`? Decided: not now. A local is reachable by one task, so it closes no race; `mut` at every call site already says where a value changes; and the form costs every program that grows a slice declared with `:=`, a new case in the borrow rules, and a second sentence to learn, against the criterion, that the rule a reader can state in one sentence wins. It is recorded here with its example so that it can be reopened with a reason.
 

@@ -22,7 +22,7 @@ You need Go 1.27.2 or later, `clang` for the LLVM backend, and a C compiler, `cc
 git clone https://github.com/snello-lang/snello
 cd snello
 go build -o bin/snello ./cmd/snello
-bin/snello build examples/run/hello.snello
+bin/snello build examples/hello/hello.snello
 ./hello
 ```
 

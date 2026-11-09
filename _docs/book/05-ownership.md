@@ -1,6 +1,6 @@
 # 5. Ownership: moves, `Copy`, `take` and `Drop`
 
-`examples/run/drops.snello` prints the order in which values are dropped, `snello build -debug` checks the drops as the program runs, and `bench/memory.snello` measures what freeing without a collector buys, over the runtime's own allocator. The programs under `../../examples/core/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
+`compiler/emit/internal/backendtest/testdata/drops.snello` prints the order in which values are dropped, `snello build -debug` checks the drops as the program runs, and `bench/memory.snello` measures what freeing without a collector buys, over the runtime's own allocator. The programs under `../../compiler/types/testdata/errors/` show each rule being broken, and every message below is the one the compiler prints, followed by where the value moved: `use of moved value s; moved at 10:9`.
 
 Snello has no garbage collector. Memory is freed at a point the compiler knows, and the rule that makes that possible is ownership: **every value has exactly one owner, and the value is freed when its owner goes out of scope.** The owner is a variable, a field, an element, or a temporary; the compiler knows which, so every free is decided at compile time and costs nothing at run time. This chapter is what that rule asks of you.
 
@@ -207,7 +207,7 @@ func round() int {
 - **No pauses.** Every Snello round costs the same, since each pays for its own frees as it goes. About one Go round in eleven takes over twice the mean, the rounds a collection runs in.
 - **The cost is per object.** Go's mean round is faster: allocating from a collector's heap is a pointer bump, and freeing is batched. Snello pays a call to the allocator for each node, as Rust does, but the runtime's allocator keeps a list of free blocks of each size on every thread, so the call is a few instructions and the mean round is within a tenth of Go's.
 
-Two tests hold this in place. `go test ./bench -run TestNoCollector -v` builds the program with one round, with two thousand and with ten thousand. It fails if the peak with eighty million blocks freed is a tenth over the peak with eight thousand. `SNELLO_BENCH=1 go test ./bench -v` prints the whole table above, for every benchmark and all three languages. The order in which values die is shown by `examples/run/drops.snello`, which prints it, and that nothing is left behind by the debug build of every example, which fails on any block not released.
+Two tests hold this in place. `go test ./bench -run TestNoCollector -v` builds the program with one round, with two thousand and with ten thousand. It fails if the peak with eighty million blocks freed is a tenth over the peak with eight thousand. `SNELLO_BENCH=1 go test ./bench -v` prints the whole table above, for every benchmark and all three languages. The order in which values die is shown by `compiler/emit/internal/backendtest/testdata/drops.snello`, which prints it, and that nothing is left behind by the debug build of every example, which fails on any block not released.
 
 ## What the compiler reports
 

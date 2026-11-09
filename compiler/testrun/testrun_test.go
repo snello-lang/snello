@@ -372,7 +372,7 @@ func TestStdDir(t *testing.T) {
 		t.Errorf("a directory that is no standard package: got %v", err)
 	}
 
-	if IsStdDir(filepath.Join("..", "..", "examples", "run", "packaged", "shapes")) {
+	if IsStdDir(filepath.Join("..", "..", "examples", "packaged", "shapes")) {
 		t.Error("an example package is seen as a standard one")
 	}
 
@@ -480,7 +480,7 @@ func TestRun(t *testing.T) {
 	// The example the book cuts its tests from.
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join("..", "..", "examples", "run", "packaged", "shapes"), backend, nil, &out, &out)
+		code, err := Run(filepath.Join("..", "..", "examples", "packaged", "shapes"), backend, nil, &out, &out)
 		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \tshapes\t") {
 			t.Errorf("%s: the packaged example's tests exited %d, %v, printed %q", backend, code, err, out.String())
 		}

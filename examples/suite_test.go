@@ -27,21 +27,24 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
-// examplePatterns name the twenty example programs: the files here and
-// the Snello programs inside the two folders that hold a Go version
-// beside the Snello one. The core and run suites have their own tests.
-var examplePatterns = []string{"*.snello", "01-tree/*.snello", "02-pipeline/*.snello"}
-
-// programs returns the paths of the example programs.
+// programs returns the paths of the example programs of one file: the
+// Snello files in each example's folder, one in most, two in tree. A
+// folder with a snello.mod holds one program of several packages,
+// packaged and bound, which the backends' tests build as snello build
+// DIR takes it.
 func programs(t testing.TB) []string {
+	matches, err := filepath.Glob(filepath.Join("*", "*.snello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var paths []string
-	for _, pattern := range examplePatterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			t.Fatal(err)
+	for _, path := range matches {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), "snello.mod")); err == nil {
+			continue
 		}
 
-		paths = append(paths, matches...)
+		paths = append(paths, path)
 	}
 
 	sort.Strings(paths)
@@ -104,16 +107,23 @@ func build(dir, name, backend string, src []byte, debug bool, bindings []lower.B
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
 var pendingExamples = map[string]string{
-	"19-cli-grep": "regexp, a later library of stage 8",
+	"cli-grep": "regexp, a later library",
+}
+
+// beside returns the path of the file of a program with another
+// extension, which lies beside it: tree/tree-arena.out for
+// tree/tree-arena.snello.
+func beside(path, ext string) string {
+	return strings.TrimSuffix(path, ".snello") + ext
 }
 
 // TestExamples builds every example program that has its expected
-// output under expected/, through both backends, as a release build
-// and as a debug build, runs it with the files its fixture folder
-// holds, or drives it over a socket when a script lies beside the
-// output, and compares what it prints: the differential test of the
-// two backends, which must print the same thing as each other and as
-// the output recorded. A program without an expected output must be
+// output beside it, name.out, through both backends, as a release
+// build and as a debug build, runs it with the files its fixture
+// folder, name.files, holds, or drives it over a socket when a script,
+// name.script, lies beside it, and compares what it prints: the
+// differential test of the two backends, which must print the same
+// thing as each other and as the output recorded. A program without an expected output must be
 // on the pending list, with its reason; the time each step takes is
 // logged, which is how the compile time of the suite is recorded.
 func TestExamples(t *testing.T) {
@@ -122,7 +132,7 @@ func TestExamples(t *testing.T) {
 	var front, back time.Duration
 	for _, path := range programs(t) {
 		name := strings.TrimSuffix(filepath.Base(path), ".snello")
-		want, err := os.ReadFile(filepath.Join("expected", name+".out"))
+		want, err := os.ReadFile(beside(path, ".out"))
 		if err != nil {
 			if _, known := pendingExamples[name]; !known {
 				t.Errorf("%s has no expected output and is not on the pending list", name)
@@ -136,7 +146,7 @@ func TestExamples(t *testing.T) {
 			t.Errorf("%s has an expected output but is still listed as pending for %s", name, reason)
 		}
 
-		script, err := os.ReadFile(filepath.Join("expected", name+".script"))
+		script, err := os.ReadFile(beside(path, ".script"))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatal(err)
 		}
@@ -161,7 +171,7 @@ func TestExamples(t *testing.T) {
 					}
 
 					back += time.Since(start)
-					placeFixtures(t, name, dir)
+					placeFixtures(t, beside(path, ".files"), dir)
 					stdout, err := run(bin, dir, script)
 					if err != nil {
 						t.Fatalf("%s, debug %v: %v", backend, debug, err)
@@ -204,17 +214,17 @@ func run(bin, dir string, script []byte) ([]byte, error) {
 	return stdout, err
 }
 
-// placeFixtures copies the files of expected/<name>.files/, when the
-// folder exists, into dir, where the program runs.
-func placeFixtures(t *testing.T, name, dir string) {
+// placeFixtures copies the files of the folder fixtures, name.files
+// beside a program, when it exists, into dir, where the program runs.
+func placeFixtures(t *testing.T, fixtures, dir string) {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join("expected", name+".files"))
+	entries, err := os.ReadDir(fixtures)
 	if err != nil {
 		return
 	}
 
 	for _, entry := range entries {
-		data, err := os.ReadFile(filepath.Join("expected", name+".files", entry.Name()))
+		data, err := os.ReadFile(filepath.Join(fixtures, entry.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,8 +241,7 @@ func placeFixtures(t *testing.T, name, dir string) {
 func BenchmarkExamples(b *testing.B) {
 	var paths []string
 	for _, path := range programs(b) {
-		name := strings.TrimSuffix(filepath.Base(path), ".snello")
-		if _, err := os.Stat(filepath.Join("expected", name+".out")); err == nil {
+		if _, err := os.Stat(beside(path, ".out")); err == nil {
 			paths = append(paths, path)
 		}
 	}

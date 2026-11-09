@@ -40,23 +40,22 @@ func TestHello(t *testing.T) {
 	}
 }
 
-// TestRunExamples builds every program under examples/run and the
-// core programs that have an expected output, through the LLVM
-// backend, in both builds, and compares what each prints with the
-// .out file beside it: the same suite the C backend runs, so that the
-// two backends are held to the same output.
+// TestRunExamples builds every program the backends' tests share, and
+// the example programs of several packages, through the LLVM backend,
+// in both builds, and compares what each prints with the .out file
+// beside it: the same suite the C backend runs, so that the two
+// backends are held to the same output.
 func TestRunExamples(t *testing.T) {
-	programs, err := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
+	programs, err := filepath.Glob(filepath.Join(backendtest.Shared, "*.snello"))
 	if err != nil || len(programs) == 0 {
-		t.Fatalf("no programs under examples/run: %v", err)
+		t.Fatalf("no programs under %s: %v", backendtest.Shared, err)
 	}
 
-	core, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "core", "*.snello"))
-	for _, path := range append(programs, core...) {
+	for _, path := range programs {
 		name := strings.TrimSuffix(filepath.Base(path), ".snello")
 		want, err := os.ReadFile(strings.TrimSuffix(path, ".snello") + ".out")
 		if err != nil {
-			continue // a core program without an output yet; the C suite names the ones that need it
+			continue // the C suite names a program without its output
 		}
 
 		for _, debug := range []bool{false, true} {
@@ -80,13 +79,13 @@ func TestRunExamples(t *testing.T) {
 		}
 	}
 
-	dirs, err := backendtest.Directories(filepath.Join("..", "..", "..", "examples", "run"))
+	dirs, err := backendtest.Directories(backendtest.Examples)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, dir := range dirs {
-		want, err := os.ReadFile(dir + ".out")
+		want, err := os.ReadFile(filepath.Join(dir, filepath.Base(dir)+".out"))
 		if err != nil {
 			continue // the C suite names a program without its output
 		}
@@ -118,7 +117,7 @@ func TestNoReservation(t *testing.T) {
 		t.Skip("only Linux enforces a limit on the address space")
 	}
 
-	path := filepath.Join("..", "..", "..", "examples", "run", "alloc.snello")
+	path := filepath.Join(backendtest.Shared, "alloc.snello")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +379,7 @@ func TestCrossCompile(t *testing.T) {
 	}
 }
 
-// BenchmarkEmit emits every program under examples/run once per
+// BenchmarkEmit emits every program the backends' tests share once per
 // iteration, parsed and checked ahead of time, and reports
 // allocations, the number the coding standards track.
 func BenchmarkEmit(b *testing.B) {
@@ -391,7 +390,7 @@ func BenchmarkEmit(b *testing.B) {
 		libs []lower.Library
 	}
 
-	paths, _ := filepath.Glob(filepath.Join("..", "..", "..", "examples", "run", "*.snello"))
+	paths, _ := filepath.Glob(filepath.Join(backendtest.Shared, "*.snello"))
 	var programs []checked
 	for _, path := range paths {
 		src, err := os.ReadFile(path)

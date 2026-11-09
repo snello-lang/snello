@@ -12,7 +12,7 @@ import (
 // TestEscapes checks the escape pass rule by rule: what owned data may
 // hold, where a returned borrow may come from, and what a closure that
 // captures a local may not do. The negative programs under
-// examples/core cover the messages; these cover the edges between them.
+// testdata/errors cover the messages; these cover the edges between them.
 func TestEscapes(t *testing.T) {
 	tests := []struct {
 		src  string

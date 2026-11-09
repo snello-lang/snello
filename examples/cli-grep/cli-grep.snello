@@ -1,0 +1,83 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A small command-line tool: grep.
+//
+// Tests argument parsing, reading stdin or files line by line without
+// allocating per line, exit codes, and buffered output.
+
+package main
+
+import ("bufio"; "fmt"; "io"; "os"; "regexp")
+
+struct Opts {
+    pattern     string
+    files       []string
+    ignoreCase  bool
+    lineNumbers bool
+}
+
+func parseArgs(args []string) Result<Opts, string> {
+    o := Opts{}
+    rest := []string{}
+    for _, a := range args {                        // args consumed; each string moved into a
+        match a {
+            "-i" => o.ignoreCase = true,
+            "-n" => o.lineNumbers = true,
+            s if s.HasPrefix("-") => return Err("unknown flag " + s),
+            s => rest.Push(s),
+        }
+    }
+    if len(rest) == 0 { return Err("usage: grep [-i] [-n] pattern [file...]") }
+    // Indexing an owned slice yields a borrow, so an element cannot be
+    // moved out with rest[0]. Remove moves it out and shifts the rest.
+    o.pattern = rest.Remove(0)
+    o.files = rest
+    return Ok(o)
+}
+
+func scan(name ref string, r mut io.Reader, re ref regexp.Regexp, o ref Opts, out mut bufio.Writer) int {
+    found := 0
+    sc := bufio.NewScanner(r)
+    n := 0
+    for line := range sc.Lines() {                  // iterator; line is ref []byte into the buffer
+        n += 1
+        if re.Match(line) {
+            found += 1
+            if o.lineNumbers {
+                fmt.Fprintf(out, "%s:%d:", name, n)
+            } else {
+                fmt.Fprintf(out, "%s:", name)
+            }
+            out.Write(line)
+            out.WriteByte('\n')
+        }
+    }
+    return found
+}
+
+func main() {
+    o := match parseArgs(os.Args[1:]) {
+        Ok(o)  => o,
+        Err(m) => { fmt.Fprintln(mut os.Stderr(), m); os.Exit(2) },
+    }
+    pat := if o.ignoreCase { "(?i)" + o.pattern } else { o.pattern.Clone() }
+    re := regexp.Compile(ref pat).Expect("bad pattern")
+
+    stdout := os.Stdout()
+    out := bufio.NewWriter(mut stdout)
+    defer out.Flush()
+
+    total := 0
+    if len(o.files) == 0 {
+        total += scan("stdin", mut os.Stdin(), ref re, ref o, mut out)
+    }
+    for _, f := range ref o.files {                 // borrow the slice; f is ref string
+        match os.Open(f) {
+            Ok(file) => total += scan(f, mut file, ref re, ref o, mut out),   // file dropped after
+            Err(e)   => fmt.Fprintln(mut os.Stderr(), f, e),
+        }
+    }
+    os.Exit(if total > 0 { 0 } else { 1 })
+}

@@ -1,6 +1,6 @@
 # 4. Structs, enums and match
 
-`examples/run/shapes.snello` exercises this chapter.
+`compiler/emit/internal/backendtest/testdata/shapes.snello` exercises this chapter.
 
 Snello has two ways to build a type out of others. A struct holds all of its fields at once. An enum holds exactly one of its variants at a time. `match` takes an enum apart, and the compiler checks that no variant is forgotten. Both exist only by declaration: a struct has a name, and there is no struct type written inline. A value that carries nothing is `()`, the unit of chapter 3.
 

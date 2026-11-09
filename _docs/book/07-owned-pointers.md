@@ -1,6 +1,6 @@
 # 7. Owned pointers and recursive data
 
-`examples/run/boxes.snello`, `examples/core/list.snello`, `bst.snello` and `calc.snello` exercise this chapter.
+`compiler/emit/internal/backendtest/testdata/boxes.snello`, `examples/linked-list/linked-list.snello`, `bst.snello` and `parser.snello` exercise this chapter.
 
 A value of type `*T` is an owned pointer: it holds a `T` on the heap and is the one owner of it. `&expr` makes one, moving the value out of the expression into a fresh heap cell:
 
@@ -76,7 +76,7 @@ for {
 }
 ```
 
-The binary search tree in `examples/core/bst.snello` inserts, finds and deletes this way, with no node copied and no slot ever shared.
+The binary search tree in `examples/bst/bst.snello` inserts, finds and deletes this way, with no node copied and no slot ever shared.
 
 ## What a value costs
 

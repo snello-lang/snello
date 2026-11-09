@@ -1,0 +1,104 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An LRU cache.
+//
+// The classic ownership torture test: a hash map pointing into a doubly
+// linked list. The list lives in an arena.Arena<T> and the map holds arena.Index<T>
+// handles, the same approach as the tree example. This is also how
+// the fast LRU libraries are written.
+//
+// It also shows the one aliasing rule that bites: you cannot hold a `mut`
+// borrow of one arena slot while writing to another, because the compiler
+// cannot prove the two indices differ. The idiom is to copy the needed
+// values out first.
+
+package lru
+
+import ("arena"; "fmt")
+
+struct entry<K, V> {
+    key  K
+    val  V
+    prev arena.Index<entry<K, V>>?
+    next arena.Index<entry<K, V>>?
+}
+
+struct Cache<K: Hash + Eq + Clone, V> {
+    cap   int
+    index map[K]arena.Index<entry<K, V>>
+    slots arena.Arena<entry<K, V>>
+    head  arena.Index<entry<K, V>>?          // most recently used
+    tail  arena.Index<entry<K, V>>?          // least recently used
+}
+
+func New<K: Hash + Eq + Clone, V>(cap int) Cache<K, V> {
+    return Cache{cap: cap, index: map[K]arena.Index<entry<K, V>>{}, slots: arena.New(), head: None, tail: None}
+}
+
+// Rejected form, for contrast:
+//
+//   e := c.slots.GetMut(s)?            // mut borrow of slot s...
+//   c.slots.GetMut(e.prev?)?.next = e.next   // ...and a second mut borrow of the arena: error
+//
+// Accepted form: read the two links out as plain values, then write.
+func (c mut Cache<K, V>) unlink(s arena.Index<entry<K, V>>) {
+    e := c.slots.Get(s).Expect("live")
+    prev, next := e.prev, e.next                    // Index is Copy; the borrow of e ends here
+    match prev {
+        Some(p) => c.slots.GetMut(p).Expect("live").next = next,
+        None    => c.head = next,
+    }
+    match next {
+        Some(n) => c.slots.GetMut(n).Expect("live").prev = prev,
+        None    => c.tail = prev,
+    }
+}
+
+func (c mut Cache<K, V>) pushFront(s arena.Index<entry<K, V>>) {
+    old := c.head
+    {
+        e := c.slots.GetMut(s).Expect("live")
+        e.prev = None
+        e.next = old
+    }                                               // borrow of e ends
+    if h := old { c.slots.GetMut(h).Expect("live").prev = Some(s) }
+    c.head = Some(s)
+    if c.tail == None { c.tail = Some(s) }
+}
+
+func (c mut Cache<K, V>) Get(k ref K) ref V? {
+    s := *(c.index.Get(k) ?? return None)              // Index is Copy: the borrow of the map ends here
+    c.unlink(s)
+    c.pushFront(s)
+    return Some(ref c.slots.Get(s).Expect("live").val)
+}
+
+func (c mut Cache<K, V>) Put(k K, v V) {
+    if found := c.index.Get(ref k) {
+        s := *found                                  // copied out; the map is free again
+        c.slots.GetMut(s).Expect("live").val = v
+        c.unlink(s)
+        c.pushFront(s)
+        return
+    }
+    if len(c.index) == c.cap {
+        old := c.tail.Expect("non-empty cache has a tail")
+        c.unlink(old)
+        evicted := c.slots.Remove(old).Expect("live")   // entry moved out; slot freed
+        c.index.Remove(ref evicted.key)
+    }
+    s := c.slots.Insert(entry{key: k.Clone(), val: v, prev: None, next: None})
+    c.index[k] = s
+    c.pushFront(s)
+}
+
+func main() {
+    c := New<string, int>(2)
+    c.Put("a", 1)
+    c.Put("b", 2)
+    fmt.Println(c.Get(ref "a"))      // Some(1)
+    c.Put("c", 3)                    // evicts "b"
+    fmt.Println(c.Get(ref "b"))      // None
+}

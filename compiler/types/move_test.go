@@ -11,7 +11,7 @@ import (
 
 // TestMoves checks the move pass rule by rule on small programs: what
 // moves, what lends, what a branch or a loop does to a move, and what
-// an assignment restores. The negative programs under examples/core
+// an assignment restores. The negative programs under testdata/errors
 // cover the messages; these cover the edges between them.
 func TestMoves(t *testing.T) {
 	tests := []struct {

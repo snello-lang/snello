@@ -67,7 +67,7 @@ Ownership with moves by default and **second-class borrows**.
 - Destructors run deterministically when the owner goes out of scope. `defer` remains for cleanup not tied to a value.
 - Structures that need non-owning links (parent pointers, graphs, LRU caches) use arenas with indices, which is already common Go idiom, or the standard library's `Rc`/`Weak`. Both are library types. See `02-arenas-and-indices.md` for the full reasoning.
 
-The programs in `../../examples/` confirm the model handles trees, graphs, parsers, linked lists, an LRU cache, and a binary search tree with in-place mutation. Open questions they surfaced are listed in `../../examples/README.md`.
+The programs in `../../examples/` confirm the model handles trees, graphs, parsers, linked lists, an LRU cache, and a binary search tree with in-place mutation. The questions they surfaced are decided in `00-syntax-conventions.md`.
 
 ### Why not the alternatives
 
@@ -83,7 +83,7 @@ Add one rule: **a value crossing a task boundary must be moved, immutable, or at
 
 A mutex owns its data, as in Rust: `Mutex<T>` hands out a guard that is a `mut T` borrow and unlocks on drop. This makes lock-protected sharing type-checked and buys data-race freedom, which Go does not have.
 
-**Decision: the task model holds as designed.** The compiler implements the rule above and `03-ownership-across-tasks.md` as written: `Send` inferred from the structure of every type with nothing to annotate, a `spawn` that moves what its closure mentions, channels that move, and a lock whose guard is the only way to its value. Examples 02, 12, 13 and 18 run, and eleven race programs are rejected with the planned message and no other. Four refinements were needed, each recorded where it was decided and none a new concept for the programmer: there is no `Sync`, since a `ref` never changes what it borrows and the only way to a `mut` from a shared value is a lock; `rc` is kept in its task by a `local` field the library writes, not by a table in the compiler; `break` means the innermost loop everywhere, so a `select` case can leave the loop around it; and the signal channel is `chan ()`, with anonymous struct types gone from the grammar. One fact of the compiled program shaped the library: a `ref T` is a copy of the value in C, so a lock boxes its value behind a pointer and one lowered function steps from a `ref` of that pointer to a `mut` of the box, the single place the language does so. The runtime sits behind the interface `06-tasks-and-channels.md` fixes, first a thread per task and locked queues, now the scheduler.
+**Decision: the task model holds as designed.** The compiler implements the rule above and `03-ownership-across-tasks.md` as written: `Send` inferred from the structure of every type with nothing to annotate, a `spawn` that moves what its closure mentions, channels that move, and a lock whose guard is the only way to its value. The pipeline, worker-pool, actor and iterators examples run, and eleven race programs are rejected with the planned message and no other. Four refinements were needed, each recorded where it was decided and none a new concept for the programmer: there is no `Sync`, since a `ref` never changes what it borrows and the only way to a `mut` from a shared value is a lock; `rc` is kept in its task by a `local` field the library writes, not by a table in the compiler; `break` means the innermost loop everywhere, so a `select` case can leave the loop around it; and the signal channel is `chan ()`, with anonymous struct types gone from the grammar. One fact of the compiled program shaped the library: a `ref T` is a copy of the value in C, so a lock boxes its value behind a pointer and one lowered function steps from a `ref` of that pointer to a `mut` of the box, the single place the language does so. The runtime sits behind the interface `06-tasks-and-channels.md` fixes, first a thread per task and locked queues, now the scheduler.
 
 Actors fall out naturally: a task that owns its state and receives messages needs no locks at all.
 
@@ -100,7 +100,7 @@ func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 
 - **Nominal, declared with `impl`.** Go's implicit satisfaction does not combine with default methods and fields, because it becomes ambiguous which default applies and where a field lives. Declaring it costs one word on the type and gives coherence for generics.
 - **No impl blocks.** Rust groups methods by trait in separate blocks. Go's methods-with-receivers already say everything needed, so Snello keeps them. The compiler checks the declared traits are satisfied.
-- **Fields in traits** are stored inline in the implementing struct and set at construction. A trait field obeys the ownership rules of a struct field, with no exception: a default method on a borrowed `Self` returns a borrow of the field or a clone of it, never the field itself (when example 07's `return n.name` was found to move a string out of a borrow).
+- **Fields in traits** are stored inline in the implementing struct and set at construction. A trait field obeys the ownership rules of a struct field, with no exception: a default method on a borrowed `Self` returns a borrow of the field or a clone of it, never the field itself (when the traits example's `return n.name` was found to move a string out of a borrow).
 - **Resolution is at compile time per concrete type.** Own methods first, then the impl list from right to left. `super` calls the next definition in that order. Every call is direct.
 - **Traits are the generic constraint.** Generics are monomorphized by default, with dictionary passing available later to control compile times.
 - **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types. One allocation and one indirect call per value, the same as Go. There is no separate syntax for this.
@@ -214,7 +214,7 @@ Why it fits Snello better than a collected language:
 
 What it will need, as a later stage:
 
-- **A kernel-safe subset** the compiler identifies: no allocation, no tasks, no trait-as-type dispatch, no unbounded recursion. This is the style example 16 already uses; it needs naming and checking, not new syntax.
+- **A kernel-safe subset** the compiler identifies: no allocation, no tasks, no trait-as-type dispatch, no unbounded recursion. This is the style the matrix example already uses; it needs naming and checking, not new syntax.
 - **A `Device<T>` buffer** in the standard library whose moves are the host-to-device copies.
 - **A kernel launch** as a function call with a grid argument.
 

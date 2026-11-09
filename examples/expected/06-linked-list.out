@@ -1,6 +1,0 @@
-Some("b")
-Some("b")
-Some("a")
-None
-Err(QueueFull)
-Some(1)
