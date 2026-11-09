@@ -35,6 +35,8 @@ snello build hello.snello
 
 `snello build` writes LLVM IR and has clang compile it, with the optimizer that implies; `snello build -backend c FILE` builds the same program through the C backend, the reference implementation, which hands C to the system's C compiler. The two produce binaries that print the same thing, and the compiler's own tests hold them to it. `snello build -debug FILE` builds the same program with a checking runtime, which stops it on a value used after its release and reports, at the end, the values never released. Chapter 5 says what it catches and why; a program that passes the checker should never trip it, so it is a tool for finding the compiler's mistakes, not the program's.
 
+The first build compiles Snello's runtime, the C every program links, and keeps it in the cache directory of your system, `~/Library/Caches/snello` on macOS and `~/.cache/snello` on Linux; every later build with the same compiler and mode compiles only the program, which takes a fraction of a second. `SNELLO_CACHE=DIR` keeps it in `DIR` instead, and `SNELLO_CACHE=off` compiles the runtime with every build. Removing the directory clears it.
+
 ## The other commands
 
 `snello check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `snello build` runs first, and it is useful on its own while writing. `snello emit FILE` prints the IR that `snello build` compiles, for reading what the compiler made of a program; `snello emit -backend c FILE` prints the C source.

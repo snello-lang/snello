@@ -12,7 +12,6 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
-	"github.com/snello-lang/snello/runtime"
 )
 
 // Flags are the options clang is given for the module: the standard
@@ -42,12 +41,12 @@ func Compiler() string {
 // The compilers' output comes back with any error. A debug build
 // compiles the runtime's checks in, as the C backend's does.
 func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
-	files := runtime.Files()
-	files[name+".ll"] = module
-	for file, data := range files {
-		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
-			return "", nil, err
-		}
+	if err := os.WriteFile(filepath.Join(dir, name+".ll"), module, 0o644); err != nil {
+		return "", nil, err
+	}
+
+	if err := c.WriteHeaders(dir); err != nil { // snello.h, for a package's C; the runtime's sources are compiled once and kept
+		return "", nil, err
 	}
 
 	bound, err := c.BindingSources(dir, bindings)
@@ -83,8 +82,15 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 		close(done)
 	}()
 
+	rt, output, err := c.RuntimeObjects(dir, cc, rtargs)
 	rtargs = append(rtargs, "-I", dir) // snello.h, for a package's C
-	objs, output, err := c.Objects(cc, rtargs, append(runtime.Paths(dir), bound...))
+	var objs []string
+	if err == nil {
+		var boundOutput []byte
+		objs, boundOutput, err = c.Objects(cc, rtargs, bound)
+		output = append(output, boundOutput...)
+	}
+
 	<-done
 	output = append(compiled, output...)
 	if moduleErr != nil {
@@ -96,7 +102,7 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(cc, append(append(append(append(rtargs, "-o", bin, obj), objs...), c.LinkFlags(bindings)...), "-lm")...).CombinedOutput()
+	linked, err := exec.Command(cc, append(append(append(append(append(rtargs, "-o", bin, obj), rt...), objs...), c.LinkFlags(bindings)...), "-lm")...).CombinedOutput()
 	return bin, append(output, linked...), err
 }
 
