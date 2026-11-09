@@ -306,8 +306,8 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 // receiver checks the receiver of a method against what the method
 // asks of it: a value receiver takes it (takeValue); a mut receiver
 // needs a place that can be changed, which a value reached through a
-// ref is not. The borrow the call creates is checked in call, after the
-// arguments.
+// ref is not, nor a constant. The borrow the call creates is checked in
+// call, after the arguments.
 func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 	r, ok := sig.recv.typ.(*Ref)
 	if !ok {
@@ -319,6 +319,8 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 
 	if r.mut && x.mode == borrowed {
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+	} else if r.mut && c.unchangeable(e.X, x) {
+		c.errorf(e.X.Pos(), e.Sel.Name+" lends its receiver mut, which "+needsPlace(e.X))
 	} else if r.mut && isBorrow(x.typ) && !isMut(x.typ) { // the receiver is itself a ref borrow
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut: "+exprText(e.X)+" is a ref "+c.throughWhat(e.X))
 	}
@@ -490,6 +492,7 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 		if t.kind == String {
 			c.intIndex(e.Index)
 			c.checkUse(e)
+			c.stringByte = e
 			return operand{value, aliases[0], nil, nil} // a byte, by that name
 		}
 	}
@@ -553,9 +556,90 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 	return invalidOperand
 }
 
+// unchangeable reports whether x, checked as the operand op, can never
+// change, so that lending it mut is a mistake: a constant, by its name,
+// written as a literal or computed from constants, or a byte of a
+// string. What is written through such a borrow goes to a copy and is
+// lost. A call's result is a value made for the statement and may be
+// lent: os.Stderr() is the stream itself.
+func (c *Checker) unchangeable(x ast.Expr, op operand) bool {
+	if op.mode != value {
+		return false // a place, or what a borrow reaches
+	}
+
+	if _, ok := op.obj.(*Const); ok {
+		return true
+	}
+
+	return unparen(x) == c.stringByte || c.constantExpr(x)
+}
+
+// constantExpr reports whether x is made of constants alone: a literal,
+// the name of a constant, of this package or another, an operator over
+// constants, -1 or (limit * 2), or a conversion of a constant,
+// int(limit), which makes no value of its own.
+func (c *Checker) constantExpr(x ast.Expr) bool {
+	switch x := unparen(x).(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		_, ok := c.resolve(x.Name).(*Const)
+		return ok
+	case *ast.SelectorExpr:
+		_, ok := c.packageObject(x).(*Const)
+		return ok
+	case *ast.UnaryExpr:
+		return (x.Op == token.SUB || x.Op == token.NOT || x.Op == token.XOR) && c.constantExpr(x.X)
+	case *ast.BinaryExpr:
+		return c.constantExpr(x.X) && c.constantExpr(x.Y)
+	case *ast.CallExpr:
+		return len(x.Args) == 1 && c.isTypeName(x.Fun) && c.constantExpr(x.Args[0])
+	}
+
+	return false
+}
+
+// isTypeName reports whether x names a type, T or pkg.T, so that a call
+// of it is a conversion.
+func (c *Checker) isTypeName(x ast.Expr) bool {
+	switch x := unparen(x).(type) {
+	case *ast.Ident:
+		_, ok := c.resolve(x.Name).(*TypeName)
+		return ok
+	case *ast.SelectorExpr:
+		_, ok := c.packageObject(x).(*TypeName)
+		return ok
+	}
+
+	return false
+}
+
+// packageObject returns what pkg.Name names in another package, or nil
+// when x is not a name of an imported package's.
+func (c *Checker) packageObject(x *ast.SelectorExpr) Object {
+	id, ok := x.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+
+	pkg, ok := c.resolve(id.Name).(*PkgName)
+	if !ok || pkg.pkg == nil {
+		return nil
+	}
+
+	return pkg.pkg.scope.Lookup(x.Sel.Name)
+}
+
+// needsPlace ends the refusal of mut of x, which unchangeable decided.
+func needsPlace(x ast.Expr) string {
+	return "needs a place, a variable or a field, element or *p of one: " + exprText(x) + " is not one"
+}
+
 func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 	switch e.Op {
 	case token.REF, token.MUT:
+		forBuiltin := c.placeFor
+		c.placeFor = false // a mut inside the place is lent for itself
 		x := c.expr(e.X, paramHint(expected))
 		if x.mode == invalid {
 			return invalidOperand
@@ -563,6 +647,11 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 
 		if e.Op == token.MUT && x.mode == borrowed {
 			c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
+			return invalidOperand
+		}
+
+		if e.Op == token.MUT && !forBuiltin && c.unchangeable(e.X, x) { // take and replace refuse every value that is not a place, by their own name
+			c.errorf(e.X.Pos(), "mut "+needsPlace(e.X))
 			return invalidOperand
 		}
 

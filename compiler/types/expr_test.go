@@ -37,6 +37,27 @@ func TestExprErrors(t *testing.T) {
 		{"func f(n NodeID) int { return n }", []string{"cannot use n (NodeID) as int in return"}},
 		{"func f(b byte) bool { return b == '0' }", nil},
 		{"func f() string { return \"a\" + 1 }", []string{"mismatched types string and int in +"}},
+		// mut of a constant or a byte of a string; a call's result may be lent.
+		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f() { bump(mut limit) }", []string{"mut needs a place, a variable or a field, element or *p of one: limit is not one"}},
+		{"func bump(n mut int) {}\nfunc f() { bump(mut 5) }", []string{"mut needs a place, a variable or a field, element or *p of one: 5 is not one"}},
+		{"func bump(n mut int) {}\nfunc f() { bump(mut -1) }", []string{"mut needs a place, a variable or a field, element or *p of one: -1 is not one"}},
+		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f() { bump(mut (limit * 2)) }", []string{"mut needs a place, a variable or a field, element or *p of one: (limit * 2) is not one"}},
+		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f() { bump(mut int(limit)) }", []string{"mut needs a place, a variable or a field, element or *p of one: int(...) is not one"}},
+		{"type Celsius int\nfunc (c mut Celsius) Warm() {}\nconst freezing Celsius = 0\nfunc f() { Celsius(freezing).Warm() }", []string{"Warm lends its receiver mut, which needs a place"}},
+		{"func bump(n mut int) {}\nfunc f() { const k = 4; bump(mut k); bump(mut (k + 1)) }", []string{"k is not one", "(k + 1) is not one"}},
+		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f(limit int) { bump(mut limit); bump(mut (limit * 2)) }", nil}, // a parameter shadows the constant
+		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f() { limit := 1; bump(mut limit); bump(mut (limit + 1)) }", nil},
+		{"func bump(n mut int) {}\nfunc f() { os := 1; bump(mut os) }", nil}, // a variable shadows the package name
+		{"func bump(b mut byte) {}\nfunc f(s string) { bump(mut s[0]) }", []string{"mut needs a place, a variable or a field, element or *p of one: s[0] is not one"}},
+		{"const limit = 3\nfunc f() { c := mut limit; *c = 1 }", []string{"mut needs a place, a variable or a field, element or *p of one: limit is not one"}},
+		{"func f() { c := mut 7; *c = 1 }", []string{"mut needs a place, a variable or a field, element or *p of one: 7 is not one"}},
+		{"func f(s string) { b := mut s[1]; *b = 1 }", []string{"mut needs a place, a variable or a field, element or *p of one: s[1] is not one"}},
+		{"type Celsius int\nfunc (c mut Celsius) Warm() {}\nconst freezing Celsius = 0\nfunc f() { freezing.Warm() }", []string{"Warm lends its receiver mut, which needs a place, a variable or a field, element or *p of one: freezing is not one"}},
+		{"func bump(b mut byte) {}\nfunc f(bs mut []byte) { bump(mut bs[0]) }", nil},
+		{"func bump(n mut int) {}\nfunc f(n mut Node, xs mut []int) { m := 1; bump(mut m); bump(mut n.n); bump(mut xs[0]) }", nil},
+		{"func f() { fmt.Fprintln(mut os.Stderr(), \"a\") }", nil},
+		{"struct Box { n int }\nfunc (b mut Box) Grow() {}\nfunc mk() Box { return Box{n: 1} }\nfunc f() { mk().Grow(); Box{n: 2}.Grow() }", nil},
+		{"func at(n mut int) int { return 0 }\nfunc f() { xs := []int{1}; old := take(mut xs[at(mut 1)]); print(old) }", []string{"mut needs a place, a variable or a field, element or *p of one: 1 is not one"}},
 		// Calls.
 		{"func f() { keep(1) }", []string{"cannot use a value of type int as string in argument"}},
 		{"func f() { keep(\"a\", \"b\") }", []string{"wrong number of arguments: have 2, want 1"}},
@@ -329,4 +350,23 @@ func same(x Result<int, E>) Result<int, E> { return Ok(x?) }
 		}
 	}
 
+}
+
+// A constant of another package is a constant too: mut of math.Pi is
+// refused as mut of a constant of this package is.
+func TestMutOfPackageConstant(t *testing.T) {
+	got := checkErrors(t, "package p\nimport \"math\"\nfunc bump(n mut f64) {}\nfunc f() { bump(mut math.Pi); bump(mut (-math.Pi)) }")
+	want := []string{
+		"mut needs a place, a variable or a field, element or *p of one: math.Pi is not one",
+		"mut needs a place, a variable or a field, element or *p of one: (-math.Pi) is not one",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d errors %q, want %d", len(got), got, len(want))
+	}
+
+	for i := range got {
+		if !strings.Contains(got[i], want[i]) {
+			t.Errorf("got %q, want it to contain %q", got[i], want[i])
+		}
+	}
 }

@@ -570,6 +570,7 @@ func (c *Checker) takeCall(e *ast.CallExpr) operand {
 		return invalidOperand
 	}
 
+	c.placeFor = true
 	x := c.expr(e.Args[0], nil)
 	if x.mode == invalid || !c.lentPlace(u, "take") {
 		return invalidOperand
@@ -602,6 +603,7 @@ func (c *Checker) replaceCall(e *ast.CallExpr) operand {
 		return invalidOperand
 	}
 
+	c.placeFor = true
 	x := c.expr(e.Args[0], nil)
 	if x.mode == invalid || !c.lentPlace(u, "replace") {
 		c.expr(e.Args[1], nil)
