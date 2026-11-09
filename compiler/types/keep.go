@@ -106,6 +106,16 @@ func (c *Checker) ownParam(v *Var) bool {
 	return false
 }
 
+// fixed is the number of parameters a call must give: all of them, or
+// all but the variadic last.
+func (s *Signature) fixed() int {
+	if s.variadic {
+		return len(s.params) - 1
+	}
+
+	return len(s.params)
+}
+
 // has reports whether v is one of the signature's parameters.
 func (s *Signature) has(v *Var) bool {
 	for _, p := range s.params {

@@ -345,11 +345,16 @@ func (c *Checker) derive(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 		return
 	}
 
-	c.sources(e, func(src ast.Expr, read bool) {
+	c.sources(e, func(src ast.Expr, read, deref bool) {
 		p, kind := c.placeOf(src)
 		if kind == placeOwned && read && holdsBorrow(placeType(p)) {
 			if mut, _ := borrowIn(placeType(p)); !mut {
-				c.flowCopy(v, p.v, p.path, path, pos) // a ref borrow is copied: v holds what p holds, and p is free
+				from := p.path
+				if deref && isBorrow(placeType(p)) {
+					from = joinPath(p.path, "*") // x := *r holds what r points at holds, as a copy of it would, and not r's own borrow of it
+				}
+
+				c.flowCopy(v, p.v, from, path, pos) // a ref borrow is copied: v holds what p holds, and p is free
 				return
 			}
 		}
@@ -453,22 +458,23 @@ func (c *Checker) bindThrough(p ast.Pattern, x ast.Expr, b *Ref) {
 // of an if or match expression. None when there is none.
 func (c *Checker) borrowSources(e ast.Expr) []ast.Expr {
 	var srcs []ast.Expr
-	c.sources(e, func(src ast.Expr, _ bool) { srcs = append(srcs, src) })
+	c.sources(e, func(src ast.Expr, _, _ bool) { srcs = append(srcs, src) })
 	return srcs
 }
 
-// sources calls f with each place borrowSources finds, and whether the
+// sources calls f with each place borrowSources finds, whether the
 // borrow is read out of the place, a borrow the place holds, rather
 // than lent from it: r in q := r, h.src in r = h.src, against s in ref
-// s and m in m.Get(k).
-func (c *Checker) sources(e ast.Expr, f func(src ast.Expr, read bool)) {
-	c.sourcesLent(e, false, f)
+// s and m in m.Get(k); and whether it was reached through a *, x := *r,
+// which reads what the borrow r points at and not r's own borrow of it.
+func (c *Checker) sources(e ast.Expr, f func(src ast.Expr, read, deref bool)) {
+	c.sourcesLent(e, false, false, f)
 }
 
-func (c *Checker) sourcesLent(e ast.Expr, lent bool, f func(ast.Expr, bool)) {
+func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, bool, bool)) {
 	if vs, ok := branches(e); ok {
 		for _, v := range vs {
-			c.sourcesLent(v, lent, f)
+			c.sourcesLent(v, lent, deref, f)
 		}
 
 		return
@@ -476,26 +482,29 @@ func (c *Checker) sourcesLent(e ast.Expr, lent bool, f func(ast.Expr, bool)) {
 
 	switch e := e.(type) {
 	case *ast.ParenExpr:
-		c.sourcesLent(e.X, lent, f)
+		c.sourcesLent(e.X, lent, deref, f)
 	case *ast.UnaryExpr:
-		if e.Op == token.REF || e.Op == token.MUT {
-			f(e.X, false)
+		switch e.Op {
+		case token.REF, token.MUT:
+			f(e.X, false, deref)
+		case token.MUL:
+			c.sourcesLent(e.X, lent, true, f) // *f reads what the borrow f points at, a borrow itself when it holds one: x := *f holds what f holds
 		}
 	case *ast.TryExpr:
-		c.sourcesLent(e.X, lent, f)
+		c.sourcesLent(e.X, lent, deref, f)
 	case *ast.SliceExpr:
-		f(e.X, false)
+		f(e.X, false, deref)
 	case *ast.CallExpr:
 		if _, ok := c.calleeOf(e).(*Variant); ok {
 			for _, arg := range e.Args { // Pair(ref a, ref b) carries both
-				c.sourcesLent(arg, lent, f)
+				c.sourcesLent(arg, lent, deref, f)
 			}
 
 			return
 		}
 
 		if src := c.callSource(e); src != nil {
-			c.sourcesLent(src, true, f) // a call's result borrows its source: lent, whatever the source is
+			c.sourcesLent(src, true, deref, f) // a call's result borrows its source: lent, whatever the source is
 		}
 	case *ast.CompositeLit:
 		for _, elt := range e.Elts { // Holder{src: ref t} carries t
@@ -503,10 +512,10 @@ func (c *Checker) sourcesLent(e ast.Expr, lent bool, f func(ast.Expr, bool)) {
 				elt = kv.Value
 			}
 
-			c.sourcesLent(elt, lent, f)
+			c.sourcesLent(elt, lent, deref, f)
 		}
 	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr:
-		f(e, !lent)
+		f(e, !lent, deref)
 	}
 }
 
@@ -638,7 +647,7 @@ func (c *Checker) pin(e ast.Expr, t Type) {
 		return
 	}
 
-	c.sources(e, func(src ast.Expr, _ bool) {
+	c.sources(e, func(src ast.Expr, _, _ bool) {
 		for {
 			switch x := src.(type) {
 			case *ast.ParenExpr:

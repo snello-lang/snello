@@ -25,6 +25,7 @@ The binary is written to the current directory, named after the file, or after t
 | generics/ | Bounds, consuming against borrowing in generic functions, a conditional `impl` |
 | errors/ | `Result`, an error enum of one's own, `?` and `??` |
 | wordfreq/ | An owned string against borrowed pieces of it, maps, sorting |
+| text/ | The everyday methods of strings and slices: searches that give an option, trims that lend, `Replace`, `SplitN`, `GetOrInsert`, `Extend` and `Truncate` |
 | json/ | A JSON value type, encoder and decoder written in the example itself, over `strings` and `strconv`: a recursive enum holding collections, a decoder holding a borrow of its input |
 | worker-pool/ | `select`, timeouts, a cancellation token |
 | actor/ | State a task owns, message passing, reply channels |

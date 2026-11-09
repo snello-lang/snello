@@ -1,0 +1,20 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: Push, Insert and Extend on the pieces of a string store more
+// borrows in the slice, which then holds each string they came from:
+// a piece of a string dropped sooner cannot be kept in it. Fix: clone
+// the piece into a slice of owned strings, or keep the string as long.
+
+package p
+
+func gather(s ref string) int {
+    parts := s.Split(",")
+    {
+        t := "c,d".Clone()
+        more := t.Split(",")
+        parts.Extend(ref more)            // ERROR "cannot keep a borrow of t in parts: t is dropped at the end of its block"
+    }
+    return len(parts)
+}

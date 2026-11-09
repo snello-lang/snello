@@ -57,7 +57,7 @@ v = v*10 + f64(l.src[l.pos] - '0')  // 10 is f64 because v is
 n = n*10 + int(c - '0')
 ```
 
-A literal never carries a type of its own into an expression: `10` is an `f64` in the second line because `v` is, and an `int` in the third because `n` is. Mixing two number types in one expression needs a conversion. Integer arithmetic wraps on overflow; checked arithmetic is a library function that returns `T?` (chapter 8).
+A literal never carries a type of its own into an expression: `10` is an `f64` in the second line because `v` is, and an `int` in the third because `n` is. Mixing two number types in one expression needs a conversion. Integer arithmetic wraps on overflow; checked arithmetic is a method that returns `T?`, `None` where the operator would wrap: `big.CheckedAdd(1)`, `CheckedSub` and `CheckedMul`, on every integer type (chapter 8). Every integer type also has `Clamp(lo, hi)`, and the signed ones `Abs()`, whose minimum stays itself, as the arithmetic wraps.
 
 ## Booleans and strings
 

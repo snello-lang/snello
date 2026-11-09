@@ -37,6 +37,33 @@ func TestExprErrors(t *testing.T) {
 		{"func f(n NodeID) int { return n }", []string{"cannot use n (NodeID) as int in return"}},
 		{"func f(b byte) bool { return b == '0' }", nil},
 		{"func f() string { return \"a\" + 1 }", []string{"mismatched types string and int in +"}},
+		// The everyday methods' signatures, and the bound each slice method asks of the element.
+		{"func f(s string) int? { return s.Index(\"a\") }", nil},
+		{"func f(s string) (int?, int, string, string) { return (s.LastIndex(\"a\"), s.Count(\"a\"), s.Replace(\"a\", \"b\", 1), s.ReplaceAll(\"a\", \"b\")) }", nil},
+		{"func f(s ref string) int { return s.TrimPrefix(\"a\").Len() + s.TrimSuffix(\"a\").Len() + s.TrimSpace().Len() + len(s.SplitN(\",\", 2)) }", nil},
+		{"func f(xs mut []int, ys ref []int) (int?, bool) { xs.Extend(ys); xs.Truncate(1); return (xs.Index(ref 1), xs.First().IsSome() && xs.Last().IsSome()) }", nil},
+		{"func f(b ref []byte, c ref []byte) (bool, int?) { return (b.Equal(c), b.Find(c)) }", nil},
+		{"func f(xs ref []int, ys ref []int) bool { return xs.Equal(ys) }", []string{"Equal is not a field or method of ref []int"}},
+		{"func f(m mut map[string]int) { *m.GetOrInsert(\"k\", 0) += 1 }", nil},
+		{"func f(o int?, r Result<int, string>) (int?, int?, string?) { return (o.AndThen(func(v int) int? { return Some(v) }), r.Ok(), Some(\"a\".Clone()).OrElse(func() string? { return None })) }", nil},
+		{"func f(r Result<int, string>) int { return r.UnwrapOrElse(func(e string) int { return len(e) }) }", nil},
+		{"func f(a int, b u8) (int?, u8?, int, int) { return (a.CheckedAdd(1), b.CheckedMul(2), a.Abs(), a.Clamp(0, 9)) }", nil},
+		{"func f(b u8) u8 { return b.Abs() }", []string{"Abs is not a field or method of u8"}},
+		{"func f(xs ref []Node, n ref Node) bool { return xs.Contains(n) }", []string{"Contains needs the elements to be Eq: Node is not"}},
+		{"func f(xs ref []Node, n ref Node) int? { return xs.Index(n) }", []string{"Index needs the elements to be Eq: Node is not"}},
+		{"func f(xs mut []Node) { xs.Sort() }", []string{"Sort needs the elements to be Ord: Node is not"}},
+		{"func f(xs mut []Node, ys ref []Node) { xs.Extend(ys) }", []string{"Extend needs the elements to be Clone: Node is not"}},
+		{"func f(xs ref []Node) []Node { return xs.Clone() }", []string{"Clone needs the elements to be Clone: Node is not"}},
+		{"func f<T: Eq>(xs ref []T, v ref T) bool { return xs.Contains(v) }", nil},                            // a bound says it
+		{"func f(g ref [][]int, row ref []int) (bool, int?) { return (g.Contains(row), g.Index(row)) }", nil}, // a slice of slices is searched element by element
+		{"func f(g ref [][]Node, row ref []Node) bool { return g.Contains(row) }", []string{"Contains needs the elements to be Eq: []Node is not"}},
+		{"func f(s ref string) (bool, int?) { parts := s.Split(\",\"); cp := parts.Clone(); return (parts.Contains(ref \"a\") && cp.Contains(ref \"b\"), parts.Index(ref \"c\")) }", nil}, // the pieces Split lends compare and copy
+		{"func f(s ref string) { parts := s.Split(\",\"); parts.Sort() }", []string{"Sort needs the elements to be Ord: ref string is not"}},
+		{"type Fold u8\nfunc f(xs ref []Fold, ys ref []Fold) bool { return xs.Equal(ys) }", []string{"Equal is not a field or method of ref []Fold"}}, // a []byte's own, not a slice of a type over u8
+		{"func f(m ref map[int]Node) map[int]Node { return m.Clone() }", []string{"Clone needs the keys and values to be Clone: Node is not"}},
+		{"func f(m ref map[string]int) map[string]int { return m.Clone() }", nil},
+		{"func f<T: Copy>(xs mut []T, ys ref []T) []T { xs.Extend(ys); return xs.Clone() }", nil}, // a Copy element copies
+		{"func f<T>(xs ref []T, v ref T) bool { return xs.Contains(v) }", []string{"Contains needs the elements to be Eq: T is not"}},
 		// mut of a constant or a byte of a string; a call's result may be lent.
 		{"const limit = 3\nfunc bump(n mut int) {}\nfunc f() { bump(mut limit) }", []string{"mut needs a place, a variable or a field, element or *p of one: limit is not one"}},
 		{"func bump(n mut int) {}\nfunc f() { bump(mut 5) }", []string{"mut needs a place, a variable or a field, element or *p of one: 5 is not one"}},

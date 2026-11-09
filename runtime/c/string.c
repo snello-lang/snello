@@ -484,42 +484,165 @@ bool sn_has_suffix(sn_string s, sn_string t) {
     return s.len >= t.len && memcmp(s.ptr + s.len - t.len, t.ptr, (size_t)t.len) == 0;
 }
 
-// rabin_karp returns the offset of t in s, or -1, by a rolling hash of
-// every window of s, compared with t only where the hashes agree: time
-// in proportion to the length of s, whatever t is. It is Go's
-// indexRabinKarp, with Go's prime.
-static int64_t rabin_karp(const uint8_t *s, int64_t n, const uint8_t *t, int64_t m) {
-    const uint32_t prime = 16777619;
-    uint32_t ht = 0, h = 0, pow = 1;
-    for (int64_t i = 0; i < m; i++) {
-        ht = ht * prime + t[i];
-        h = h * prime + s[i];
-        pow *= prime;
-    }
-
-    if (h == ht && memcmp(s, t, (size_t)m) == 0) {
-        return 0;
-    }
-
-    for (int64_t i = m; i < n; i++) {
-        h = h * prime + s[i] - pow * s[i - m];
-        if (h == ht && memcmp(s + i - m + 1, t, (size_t)m) == 0) {
-            return i - m + 1;
+// mismatch returns the index of the first byte where a and b, m bytes
+// each, differ, or m when they are equal: eight bytes at a time, the
+// lowest differing byte of a word picked out of their exclusive or. A
+// search counts what its failed comparisons cost by it. It stays this
+// small so that it is inlined into the filters: a first pass of
+// thirty-two bytes at a time measured the common search two and a half
+// times slower for a tenth gained on a long needle that matches.
+static int64_t mismatch(const uint8_t *a, const uint8_t *b, int64_t m) {
+    int64_t i = 0;
+    for (; i + 8 <= m; i += 8) {
+        uint64_t x, y;
+        memcpy(&x, a + i, 8);
+        memcpy(&y, b + i, 8);
+        if (x != y) {
+            return i + __builtin_ctzll(x ^ y) / 8;
         }
     }
 
-    return -1;
+    while (i < m && a[i] == b[i]) {
+        i++;
+    }
+
+    return i;
 }
 
-// find returns the offset of t in s, or -1, as Go's strings.Index
-// finds it. A one-byte t is memchr. A longer one is found by its first
-// two bytes, eight places of s at a time, as glibc's memmem filters a
-// short needle: the two bytes compared against a word of s and the
-// word one byte on, the places where both match picked out of the
-// difference at once, and the whole of t compared there. Once the
-// misses outrun the progress, the rest of s is searched by rabin_karp,
-// so that no t, however close to matching everywhere, makes a search
-// cost the product of the lengths.
+// TWO_WAY writes the Two-Way search of Crochemore and Perrin, the one
+// glibc's memmem, musl and Rust's str::find make: linear in the lengths
+// whatever the text and the pattern, with no table and no allocation.
+// The pattern is cut where its two maximal suffixes, under the order of
+// bytes and its reverse, say: the right part is matched first, left to
+// right, and the left part after it, right to left; a mismatch moves
+// the window by as much as the part matched allows, and a pattern that
+// repeats remembers how much of it matched already. X(i) and Y(i) read
+// byte i of the pattern x and of the text y, so that one template
+// searches forwards, and backwards over the reversed bytes.
+#define TWO_WAY(name, X, Y)                                                          \
+    static int64_t name(const uint8_t *y, int64_t n, const uint8_t *x, int64_t m) { \
+        int64_t ell, per;                                                            \
+        {                                                                            \
+            int64_t ms[2], ps[2];                                                    \
+            for (int order = 0; order < 2; order++) {                                \
+                int64_t a = -1, j = 0, k = 1, p = 1;                                 \
+                while (j + k < m) {                                                  \
+                    uint8_t u = X(j + k), v = X(a + k);                              \
+                    if (order == 0 ? u < v : u > v) {                                \
+                        j += k;                                                      \
+                        k = 1;                                                       \
+                        p = j - a;                                                   \
+                    } else if (u == v) {                                             \
+                        if (k != p) {                                                \
+                            k++;                                                     \
+                        } else {                                                     \
+                            j += p;                                                  \
+                            k = 1;                                                   \
+                        }                                                            \
+                    } else {                                                         \
+                        a = j;                                                       \
+                        j = a + 1;                                                   \
+                        k = p = 1;                                                   \
+                    }                                                                \
+                }                                                                    \
+                ms[order] = a;                                                       \
+                ps[order] = p;                                                       \
+            }                                                                        \
+            int which = ms[0] > ms[1] ? 0 : 1;                                       \
+            ell = ms[which];                                                         \
+            per = ps[which];                                                         \
+        }                                                                            \
+        bool periodic = per + ell + 1 <= m;                                          \
+        for (int64_t i = 0; periodic && i <= ell; i++) {                             \
+            periodic = X(i) == X(i + per);                                           \
+        }                                                                            \
+        if (periodic) {                                                              \
+            int64_t memory = -1;                                                     \
+            for (int64_t j = 0; j <= n - m;) {                                       \
+                int64_t i = (ell > memory ? ell : memory) + 1;                       \
+                while (i < m && X(i) == Y(i + j)) {                                  \
+                    i++;                                                             \
+                }                                                                    \
+                if (i >= m) {                                                        \
+                    i = ell;                                                         \
+                    while (i > memory && X(i) == Y(i + j)) {                         \
+                        i--;                                                         \
+                    }                                                                \
+                    if (i <= memory) {                                               \
+                        return j;                                                    \
+                    }                                                                \
+                    j += per;                                                        \
+                    memory = m - per - 1;                                            \
+                } else {                                                             \
+                    j += i - ell;                                                    \
+                    memory = -1;                                                     \
+                }                                                                    \
+            }                                                                        \
+        } else {                                                                     \
+            per = (ell + 1 > m - ell - 1 ? ell + 1 : m - ell - 1) + 1;               \
+            for (int64_t j = 0; j <= n - m;) {                                       \
+                int64_t i = ell + 1;                                                 \
+                while (i < m && X(i) == Y(i + j)) {                                  \
+                    i++;                                                             \
+                }                                                                    \
+                if (i >= m) {                                                        \
+                    i = ell;                                                         \
+                    while (i >= 0 && X(i) == Y(i + j)) {                             \
+                        i--;                                                         \
+                    }                                                                \
+                    if (i < 0) {                                                     \
+                        return j;                                                    \
+                    }                                                                \
+                    j += per;                                                        \
+                } else {                                                             \
+                    j += i - ell;                                                    \
+                }                                                                    \
+            }                                                                        \
+        }                                                                            \
+        return -1;                                                                   \
+    }
+
+#define FORWARD_X(i) x[i]
+#define FORWARD_Y(i) y[i]
+#define BACKWARD_X(i) x[m - 1 - (i)]
+#define BACKWARD_Y(i) y[n - 1 - (i)]
+
+// two_way returns the offset of the first x in y, or -1.
+TWO_WAY(two_way, FORWARD_X, FORWARD_Y)
+
+// two_way_back returns the offset, from the end, of the last x in y:
+// the first of the reversed pattern in the reversed text.
+TWO_WAY(two_way_back, BACKWARD_X, BACKWARD_Y)
+
+// two_way_last returns the offset of the last x in y, or -1.
+static int64_t two_way_last(const uint8_t *y, int64_t n, const uint8_t *x, int64_t m) {
+    if (n < m) {
+        return -1;
+    }
+
+    int64_t j = two_way_back(y, n, x, m);
+    return j < 0 ? -1 : n - m - j;
+}
+
+#ifdef SN_DEBUG
+// sn_two_way and sn_two_way_last run the Two-Way search alone, in a
+// checking build, for the runtime's tests: the filter settles most
+// inputs before it would hand them over.
+int64_t sn_two_way(sn_string s, sn_string t) { return two_way(s.ptr, s.len, t.ptr, t.len); }
+int64_t sn_two_way_last(sn_string s, sn_string t) { return two_way_last(s.ptr, s.len, t.ptr, t.len); }
+#endif
+
+// find returns the offset of t in s, or -1. A one-byte t is memchr. A
+// longer one is found by its first two bytes, eight places of s at a
+// time, as glibc's memmem filters a short needle: the two bytes
+// compared against a word of s and the word one byte on, the places
+// where both match picked out of the difference at once, and the whole
+// of t compared there. The bytes those comparisons cost are counted,
+// and once they outrun what the search moved, eight to a byte, with a
+// few hundred and four lengths of t to start, the rest of s is searched
+// by two_way, so that no t,
+// however close to matching everywhere, makes a search cost more than
+// in proportion to the lengths.
 static int64_t find(sn_string s, sn_string t) {
     sn_check_string(s);
     sn_check_string(t);
@@ -541,7 +664,7 @@ static int64_t find(sn_string s, sn_string t) {
     const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u;
     uint64_t first = lo * q[0], second = lo * q[1];
     int64_t last = n - m; // the last offset t fits at
-    int64_t i = 0, fails = 0;
+    int64_t i = 0, work = 0;
     for (; i + 7 <= last; i += 8) { // the word one byte on ends at p[i+8], within s as m is two or more
         uint64_t w0, w1;
         memcpy(&w0, p + i, 8);
@@ -549,12 +672,14 @@ static int64_t find(sn_string s, sn_string t) {
         uint64_t z = (w0 ^ first) | (w1 ^ second);
         for (uint64_t hits = (z - lo) & ~z & hi; hits != 0; hits &= hits - 1) {
             int64_t at = i + __builtin_ctzll(hits) / 8;
-            if (memcmp(p + at, q, (size_t)m) == 0) {
+            int64_t same = mismatch(p + at, q, m);
+            if (same == m) {
                 return at;
             }
 
-            if (++fails >= 4 + (at >> 4)) {
-                int64_t found = rabin_karp(p + at + 1, n - at - 1, q, m);
+            work += same + 1;
+            if (work > 8 * at + 256 + 4 * m) { // one near miss of the whole pattern is not yet a pattern of them
+                int64_t found = two_way(p + at + 1, n - at - 1, q, m);
                 return found < 0 ? -1 : at + 1 + found;
             }
         }
@@ -570,6 +695,281 @@ static int64_t find(sn_string s, sn_string t) {
 }
 
 bool sn_string_contains(sn_string s, sn_string t) { return find(s, t) >= 0; }
+
+int64_t sn_string_index(sn_string s, sn_string t) { return find(s, t); }
+
+// last_byte returns the offset of the last c in p, or -1: the memrchr
+// glibc has and the other C libraries lack, eight bytes at a time from
+// the end, the highest matching byte of a word picked out of it.
+static int64_t last_byte(const uint8_t *p, int64_t n, uint8_t c) {
+    const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u, seven = 0x7f7f7f7f7f7f7f7fu;
+    uint64_t pattern = lo * c;
+    int64_t i = n;
+    for (; i >= 8; i -= 8) {
+        uint64_t w;
+        memcpy(&w, p + i - 8, 8);
+        uint64_t z = w ^ pattern;
+        uint64_t zero = ~(((z & seven) + seven) | z | seven) & hi; // exact: no byte above a zero one is marked
+        if (zero != 0) {
+            return i - 8 + (63 - __builtin_clzll(zero)) / 8;
+        }
+    }
+
+    while (i > 0) {
+        if (p[--i] == c) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// sn_string_last_index returns the offset of the last t in s, or -1,
+// by find's search mirrored: a one-byte t by last_byte; a longer one by
+// its first two bytes, eight places of s at a time from the end, the
+// whole of t compared where both match; and the rest of s searched by
+// two_way_last once what the comparisons cost outruns the progress.
+int64_t sn_string_last_index(sn_string s, sn_string t) {
+    sn_check_string(s);
+    sn_check_string(t);
+    int64_t n = s.len, m = t.len;
+    if (m == 0) {
+        return n;
+    }
+
+    if (m > n) {
+        return -1;
+    }
+
+    const uint8_t *p = s.ptr, *q = t.ptr;
+    if (m == 1) {
+        return last_byte(p, n, q[0]);
+    }
+
+    const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u;
+    uint64_t first = lo * q[0], second = lo * q[1];
+    int64_t last = n - m; // the last offset t fits at
+    int64_t i = last - 7, work = 0;
+    for (; i >= 0; i -= 8) { // the offsets i to i+7, the word one byte on ending at p[i+8], within s as m is two or more
+        uint64_t w0, w1;
+        memcpy(&w0, p + i, 8);
+        memcpy(&w1, p + i + 1, 8);
+        uint64_t z = (w0 ^ first) | (w1 ^ second);
+        uint64_t hits = (z - lo) & ~z & hi; // a marked byte above a true one may be false: the comparison decides
+        while (hits != 0) {
+            int bit = 63 - __builtin_clzll(hits);
+            int64_t at = i + bit / 8;
+            int64_t same = mismatch(p + at, q, m);
+            if (same == m) {
+                return at;
+            }
+
+            work += same + 1;
+            if (work > 8 * (last - at) + 256 + 4 * m) {
+                return two_way_last(p, at + m - 1, q, m);
+            }
+
+            hits &= ~(1ull << bit);
+        }
+    }
+
+    for (int64_t j = i + 7; j >= 0; j--) {
+        if (p[j] == q[0] && p[j + 1] == q[1] && memcmp(p + j, q, (size_t)m) == 0) {
+            return j;
+        }
+    }
+
+    return -1;
+}
+
+// count_byte counts the bytes of p equal to c, in runs of 255 whose
+// count fits a byte: a loop the C compiler turns into vector compares
+// and adds, sixteen or thirty-two bytes at a time.
+static int64_t count_byte(const uint8_t *p, int64_t n, uint8_t c) {
+    int64_t count = 0;
+    for (int64_t i = 0; i < n; i += 255) {
+        int64_t end = n - i < 255 ? n : i + 255;
+        uint8_t run = 0;
+        for (int64_t j = i; j < end; j++) {
+            run += p[j] == c;
+        }
+
+        count += run;
+    }
+
+    return count;
+}
+
+// runes counts the UTF-8 sequences of s, a byte that starts none
+// counting as one, as a range over the string steps.
+static int64_t runes(sn_string s) {
+    int64_t n = 0;
+    int32_t r;
+    for (int64_t i = 0; i < s.len; n++) {
+        i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
+    }
+
+    return n;
+}
+
+// count_upto counts the occurrences of t in s that do not overlap, up
+// to limit, where it stops looking: Replace of the first n needs no
+// more than n.
+static int64_t count_upto(sn_string s, sn_string t, int64_t limit) {
+    if (t.len == 0) {
+        int64_t n = runes(s) + 1;
+        return n < limit ? n : limit;
+    }
+
+    if (t.len == 1 && limit == INT64_MAX) {
+        return count_byte(s.ptr, s.len, t.ptr[0]);
+    }
+
+    int64_t n = 0;
+    for (int64_t start = 0; n < limit;) {
+        int64_t at = find(SN_STR(s.ptr + start, s.len - start), t);
+        if (at < 0) {
+            break;
+        }
+
+        n++;
+        start += at + t.len;
+    }
+
+    return n;
+}
+
+// sn_string_count returns the occurrences of t in s that do not
+// overlap; an empty t counts the places between the runes, their
+// number plus one.
+int64_t sn_string_count(sn_string s, sn_string t) {
+    sn_check_string(s);
+    sn_check_string(t);
+    return count_upto(s, t, INT64_MAX);
+}
+
+// sn_string_replace returns s with its first n occurrences of old
+// replaced by new; n is at most the number of them for every one. The
+// occurrences are counted first and the length computed, so the result
+// is made in one allocation and filled by memcpy. An empty old matches
+// before every rune and at the end. The result is owned: a copy of s
+// when nothing matched or n is not positive.
+sn_string sn_string_replace(sn_string s, sn_string old, sn_string new, int64_t n) {
+    sn_check_string(s);
+    sn_check_string(old);
+    sn_check_string(new);
+    if (n <= 0) {
+        return sn_string_clone(s);
+    }
+
+    int64_t k = count_upto(s, old, n);
+    if (k == 0) {
+        return sn_string_clone(s);
+    }
+
+    int64_t grow, len;
+    if (__builtin_mul_overflow(k, new.len - old.len, &grow) || __builtin_add_overflow(s.len, grow, &len)) {
+        sn_panic(SN_STR("out of memory", 13)); // a result no int can measure, which no allocation would hold
+    }
+
+    if (len == 0) {
+        return SN_STR("", 0);
+    }
+
+    uint8_t *out = sn_alloc((size_t)len), *w = out;
+    int64_t start = 0;
+    for (int64_t i = 0; i < k; i++) {
+        int64_t at;
+        if (old.len == 0) {
+            at = 0;
+            if (i > 0 && start < s.len) { // one rune between this match and the last
+                int32_t r;
+                at = sn_utf8_decode(s.ptr + start, s.len - start, &r);
+            }
+        } else {
+            at = find(SN_STR(s.ptr + start, s.len - start), old);
+        }
+
+        memcpy(w, s.ptr + start, (size_t)at);
+        w += at;
+        memcpy(w, new.ptr, (size_t)new.len);
+        w += new.len;
+        start += at + old.len;
+    }
+
+    memcpy(w, s.ptr + start, (size_t)(s.len - start));
+    return SN_OWNED(out, len);
+}
+
+sn_string sn_trim_prefix(sn_string s, sn_string p) {
+    return sn_has_prefix(s, p) ? SN_STR(s.ptr + p.len, s.len - p.len) : s;
+}
+
+sn_string sn_trim_suffix(sn_string s, sn_string p) {
+    return sn_has_suffix(s, p) ? SN_STR(s.ptr, s.len - p.len) : s;
+}
+
+// sn_split_n splits s at sep into at most n views of s, the last
+// holding the rest, as sn_split splits it; n of zero or less gives
+// none. The cuts are found once to count the pieces, so the result is
+// made at its length.
+void sn_split_n(sn_string s, sn_string sep, int64_t n, sn_slice *out) {
+    sn_check_string(s);
+    sn_check_string(sep);
+    out->ptr = NULL;
+    out->len = 0;
+    out->cap = 0;
+    if (n <= 0 || (sep.len == 0 && s.len == 0)) {
+        return;
+    }
+
+    int64_t pieces = 1;
+    if (sep.len == 0) {
+        pieces = runes(s);
+        if (pieces > n) {
+            pieces = n;
+        }
+    } else {
+        for (int64_t start = 0; pieces < n;) {
+            int64_t at = find(SN_STR(s.ptr + start, s.len - start), sep);
+            if (at < 0) {
+                break;
+            }
+
+            pieces++;
+            start += at + sep.len;
+        }
+    }
+
+    sn_slice_make(out, 0, pieces, sizeof(sn_string));
+    sn_string *f = out->ptr;
+    int64_t start = 0;
+    for (int64_t i = 0; i < pieces - 1; i++) {
+        int64_t at;
+        if (sep.len == 0) {
+            int32_t r;
+            at = sn_utf8_decode(s.ptr + start, s.len - start, &r);
+        } else {
+            at = find(SN_STR(s.ptr + start, s.len - start), sep);
+        }
+
+        f[out->len++] = SN_STR(s.ptr + start, at);
+        start += at + sep.len;
+    }
+
+    f[out->len++] = SN_STR(s.ptr + start, s.len - start);
+}
+
+// sn_bytes_equal reports whether a and b hold the same bytes.
+bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
+    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
+}
+
+// sn_bytes_find returns the offset of the first run of a's bytes equal
+// to b, or -1, by the search a string's Index makes.
+int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) {
+    return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len));
+}
 
 // sn_fields splits s around runs of white space, the runes Go's
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
@@ -760,6 +1160,33 @@ sn_string sn_strings_ownString(sn_slice_u8 b) {
     }
 
     return (sn_string){b.ptr, b.len, b.cap};
+}
+
+// sn_strings_reserve makes room in b for n more bytes, growing it once
+// as a Push grows: the strings package's Builder.Grow. A room no int
+// can measure is a hint that cannot be taken, and changes nothing.
+void sn_strings_reserve(sn_slice_u8 *buf, int64_t n) {
+    sn_slice *b = (sn_slice *)buf; // the same three words
+    sn_slice_own(b, "Grow");
+    int64_t need;
+    if (__builtin_add_overflow(b->len, n, &need)) {
+        return;
+    }
+
+    sn_slice_grow(b, need, 1);
+}
+
+// sn_strings_copyString copies the bytes of s that fit to the start of
+// dst and returns how many: the strings package's Reader.
+int64_t sn_strings_copyString(sn_slice_u8 *dst, sn_string s) {
+    sn_check_slice((sn_slice *)dst);
+    sn_check_string(s);
+    int64_t n = dst->len < s.len ? dst->len : s.len;
+    if (n > 0) {
+        memcpy(dst->ptr, s.ptr, (size_t)n);
+    }
+
+    return n;
 }
 
 // sn_strings_appendString appends the bytes of s to b in one copy,

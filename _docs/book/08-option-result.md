@@ -90,7 +90,16 @@ parse("").MapErr(func(e string) int { return e.Len() })                 // Err(5
 v := parse(s).MapErr(func(e string) int { return e.Len() })?            // the mapped error passes up
 ```
 
-The methods that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `Map` and `MapErr`, take their receiver: the optional is moved into the call and cannot be used after. The tests, `IsSome` and the rest, lend it.
+Four more chain one step after another. `AndThen(f)` calls `f` on the present or successful case, where `f` itself gives an optional or a result, so the two do not nest: `half(8).AndThen(half)` is `Some(2)`. `OrElse(f)` on an optional gives it back when it holds a value and calls `f` for another when it does not. On a result, `Ok()` and `Err()` give the half there is as an optional and drop the other, and `UnwrapOrElse(f)` gives the value or what `f` makes of the error:
+
+```go
+half(8).AndThen(half)                                                   // Some(2)
+half(3).OrElse(func() int? { return Some(0) })                          // Some(0)
+parse("").Ok()                                                          // None, the error dropped
+parse("").UnwrapOrElse(func(e string) int { return -e.Len() })          // -5
+```
+
+The methods that give the inside away, `Expect`, `Unwrap`, `UnwrapOr`, `UnwrapOrElse`, `Map`, `MapErr`, `AndThen`, `OrElse`, `Ok` and `Err`, take their receiver: the optional is moved into the call and cannot be used after. The tests, `IsSome` and the rest, lend it.
 
 ## `??`: a value or an exit
 

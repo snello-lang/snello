@@ -261,6 +261,34 @@ func (xs mut []T) SortBy(less func(a ref T, b ref T) bool)
 // type must be Clone.
 func (xs ref []T) Clone() []T
 
+// Extend appends a clone of every element of ys, growing the slice once
+// to its new length: a Clone the element's type writes runs for each,
+// and an element with none, a number or a struct of them, is copied as
+// its bytes at once. The element type must be Clone.
+func (xs mut []T) Extend(ys ref []T)
+
+// Index returns the position of the first element equal to v, or None
+// when there is none. The element type must be Eq.
+func (xs ref []T) Index(v ref T) int?
+
+// First and Last lend the first and the last element, or None when the
+// slice is empty.
+func (xs ref []T) First() ref T?
+func (xs ref []T) Last() ref T?
+
+// Truncate drops the elements from index n on and keeps the memory; an
+// n at or past the length leaves the slice as it is, and an n of zero
+// or less empties it.
+func (xs mut []T) Truncate(n int)
+
+// Equal reports whether the two slices hold the same bytes.
+func (b ref []byte) Equal(o ref []byte) bool
+
+// Find returns the offset of the first run of bytes equal to sub, or
+// None when there is none; an empty sub is found at 0. Index finds one
+// byte, as it finds one element of any slice.
+func (b ref []byte) Find(sub ref []byte) int?
+
 // Get lends the value under k, or None when the key is absent. A read
 // m[k] gives the value or the zero value instead, and changes nothing.
 func (m ref map[K]V) Get(k ref K) ref V?
@@ -284,6 +312,11 @@ func (m ref map[K]V) Contains(k ref K) bool
 // Clone returns a new map with a clone of every key and value. Both
 // types must be Clone.
 func (m ref map[K]V) Clone() map[K]V
+
+// GetOrInsert lends the value under k for changing, inserting v under k
+// first when the key is absent; when it is present, k and v are
+// dropped. The key is hashed and looked for once.
+func (m mut map[K]V) GetOrInsert(k K, v V) mut V
 
 // Clone returns another handle on the same channel, of the same
 // direction, to hand to another task: a channel handle is owned, moved
@@ -349,6 +382,33 @@ func (s ref string) HasPrefix(t ref string) bool
 func (s ref string) HasSuffix(t ref string) bool
 func (s ref string) Contains(t ref string) bool
 
+// Index and LastIndex return the offset of the first and the last t in
+// the string, or None when it is not there; an empty t is at 0 and at
+// the length.
+func (s ref string) Index(t ref string) int?
+func (s ref string) LastIndex(t ref string) int?
+
+// Count returns how many times t occurs without overlapping; an empty t
+// counts the runes plus one, the places between them.
+func (s ref string) Count(t ref string) int
+
+// Replace returns a new string with the first n occurrences of old
+// replaced by new, and ReplaceAll with every one; an n of zero or less
+// replaces none. An empty old matches before every rune and at the end.
+func (s ref string) Replace(old ref string, new ref string, n int) string
+func (s ref string) ReplaceAll(old ref string, new ref string) string
+
+// TrimPrefix and TrimSuffix lend the string without p at its start or
+// its end, or the whole string when p is not there. TrimSpace lends it
+// without the white space at either end, as Trim does.
+func (s ref string) TrimPrefix(p ref string) ref string
+func (s ref string) TrimSuffix(p ref string) ref string
+func (s ref string) TrimSpace() ref string
+
+// SplitN lends at most n pieces of the string, cut at sep as Split cuts
+// it, the last piece holding the rest; an n of zero or less gives none.
+func (s ref string) SplitN(sep ref string, n int) []ref string
+
 // IsDigit, IsSpace, IsLetter, IsUpper and IsLower say which class an
 // ASCII byte is in: a decimal digit, white space, a letter of either
 // case, an upper-case or a lower-case letter. A byte above 127 is in
@@ -358,6 +418,22 @@ func (c ref byte) IsSpace() bool
 func (c ref byte) IsLetter() bool
 func (c ref byte) IsUpper() bool
 func (c ref byte) IsLower() bool
+
+// CheckedAdd, CheckedSub and CheckedMul return the result, or None when
+// it does not fit in the type, where the operator would wrap. Every
+// integer type has them.
+func (x ref int) CheckedAdd(o int) int?
+func (x ref int) CheckedSub(o int) int?
+func (x ref int) CheckedMul(o int) int?
+
+// Abs returns the magnitude of a signed integer; the type's minimum,
+// whose magnitude does not fit, stays itself, as the arithmetic wraps.
+func (x ref int) Abs() int
+
+// Clamp returns the value held between lo and hi: lo when it is less,
+// hi when it is more; hi when lo is more than hi. Every integer type
+// has it.
+func (x ref int) Clamp(lo int, hi int) int
 
 // Eq, Cmp, Hash and Clone are the standard traits' methods, which the
 // strings, the numbers and bool have: Eq behind ==, Cmp behind <, Hash
@@ -392,6 +468,11 @@ func (o ref T?) IsNone() bool
 // function's name, and U is whatever it gives back.
 func (o T?) Map<U>(f func(v T) U) U?
 
+// AndThen returns f of the value inside, or None; OrElse returns the
+// option when it holds a value, else what f gives.
+func (o T?) AndThen<U>(f func(v T) U?) U?
+func (o T?) OrElse(f func() T?) T?
+
 // Expect returns the Ok value, or panics with msg and the error when
 // the Result is an Err. It takes the Result.
 func (r Result<T, E>) Expect(msg ref string) T
@@ -415,3 +496,13 @@ func (r Result<T, E>) Map<U>(f func(v T) U) Result<U, E>
 // type f gives back; an Ok passes through as it is. It is how an
 // error of one type becomes one of another before ? passes it up.
 func (r Result<T, E>) MapErr<U>(f func(e E) U) Result<T, U>
+
+// Ok returns the value as an option, dropping an error; Err the error,
+// dropping a value.
+func (r Result<T, E>) Ok() T?
+func (r Result<T, E>) Err() E?
+
+// AndThen returns f of the value, or the error as it is; UnwrapOrElse
+// returns the value, or f of the error.
+func (r Result<T, E>) AndThen<U>(f func(v T) Result<U, E>) Result<U, E>
+func (r Result<T, E>) UnwrapOrElse(f func(e E) T) T

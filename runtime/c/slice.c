@@ -128,6 +128,25 @@ static inline __attribute__((always_inline)) void reverse_core(char *p, int64_t 
     }
 }
 
+// sn_slice_reserve makes room in s for at least need elements of size
+// bytes, growing as Push does, after asking that s own its buffer, as
+// every operation that changes a slice's length asks, naming what.
+void sn_slice_reserve(sn_slice *s, int64_t need, size_t size, const char *what) {
+    sn_slice_own(s, what);
+    sn_slice_grow(s, need, size);
+}
+
+// sn_slice_index_byte returns the position of the first element of
+// one byte equal to c among n at p, or -1, by memchr.
+int64_t sn_slice_index_byte(const void *p, int64_t n, uint8_t c) {
+    if (n <= 0) {
+        return -1;
+    }
+
+    const uint8_t *at = memchr(p, c, (size_t)n);
+    return at == NULL ? -1 : at - (const uint8_t *)p;
+}
+
 void sn_slice_reverse(sn_slice *s, size_t size) {
     sn_check_slice(s);
     if (s->len < 2 || size == 0) {

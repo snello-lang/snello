@@ -27,6 +27,37 @@ func TestBorrows(t *testing.T) {
 		{"func f() { s := \"x\"; t := s.Trim(); print(t) }", nil},
 		{"func f() { t := \"  lit  \".Trim(); print(t) }", nil},          // a literal lives for the whole program
 		{"func f() { s := \"x\"; n := s.Clone().Len(); print(n) }", nil}, // n borrows nothing
+		// The pieces Split, SplitN, Fields and Lines lend hold the string, and so do what is cloned from them and what is stored among them.
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); for p := range parts { s = \"c\".Clone(); print(p) } }", []string{"cannot assign to s: s is borrowed by the range loop"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); x := \"\".Trim(); for p := range parts { x = p }; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); g := parts.First() ?? return; x := *g; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}}, // a value read through a borrow holds what the borrow held
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); x := \"\".Trim(); for p := range ref parts { x = *p }; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); r := mut parts; { t := \"c\".Clone(); r.Push(t.Trim()) }; print(len(parts)) }", []string{"cannot keep a borrow in r: Push stores it where the checker cannot follow it"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); for p := range parts { print(p) }; s = \"c\".Clone(); print(s) }", nil}, // the loop is done with the pieces
+		{"func f() { for i := 0; i < 2; i++ { xs := []int{1, i}; for x := range ref xs { print(x) } } }", nil},                              // a loop begun again in an outer loop's next pass holds nothing of the last
+		{"func f(ins ref []string) { for _, s := range ins { fs := s.Fields(); for w := range fs { print(w) } } }", nil},
+		// A deferred call holds what a borrow it is given views, which a write to the place would free.
+		{"func show(x ref string) {}\nfunc f() { s := \"a\".Clone(); t := s.Trim(); defer show(t); s = \"c\".Clone() }", []string{"cannot assign to s: s is borrowed by the deferred call"}},
+		{"func f() { s := \"a\".Clone(); t := s.Trim(); defer fmt.Println(t); s = \"c\".Clone() }", []string{"cannot assign to s: s is borrowed by the deferred call"}},
+		{"func show(x ref string) {}\nfunc f() { s := \"a\".Clone(); defer show(ref s); s = \"c\".Clone() }", nil}, // the call borrows s itself and reads it when it runs
+		{"func f() { s := \"a\".Clone(); defer fmt.Println(s.Trim()); fmt.Println(s) }", nil},                      // a view made for the call holds s until the function returns, and s is only read
+		{"func f() { s := \"a\".Clone(); defer fmt.Println(s.Trim()); s = \"c\".Clone() }", []string{"cannot assign to s: s is borrowed by the deferred call"}},
+		// A closure reads what it captures when it runs: capturing a view keeps the viewed place lent, so capturing that place mut collides.
+		{"func f() { s := \"a\".Clone(); t := s.Trim(); g := func() { s = \"c\".Clone(); fmt.Println(t) }; g() }", []string{"cannot borrow s as mut: s is borrowed as ref by t"}},
+		{"func f() { s := \"a\".Clone(); t := s.Trim(); defer func() { s = \"c\".Clone(); fmt.Println(t) }() }", []string{"cannot borrow s as mut: s is borrowed as ref by t"}},
+		{"func f() { s := \"a\".Clone(); t := s.Trim(); g := func() { fmt.Println(t) }; g(); s = \"c\".Clone(); print(s) }", nil}, // the closure is done with t before s changes
+		{"func f() { n := 1; g := func() { n = 2 }; g(); print(n) }", nil},
+		// A value read through a borrow holds what the borrow points at holds, not the borrow's own loan.
+		{"struct H impl Copy { p ref string }\nfunc f() { s := \"a\".Clone(); h := H{p: s.Trim()}; rh := ref h; h2 := *rh; h = H{p: \"lit\"}; print(h2.p, h.p) }", nil}, // h2 holds s, as a copy of h would, and h is free
+		{"struct H impl Copy { p ref string }\nfunc f() { s := \"a\".Clone(); h := H{p: s.Trim()}; rh := ref h; h2 := *rh; s = \"c\".Clone(); print(h2.p) }", []string{"cannot assign to s: s is borrowed by h2"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); s = \"c\".Clone(); print(len(parts)) }", []string{"cannot assign to s: s is borrowed by parts"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.SplitN(\",\", 2); keep(s); print(len(parts)) }", []string{"cannot move s: s is borrowed by parts"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); cp := parts.Clone(); s = \"c\".Clone(); print(len(cp)) }", []string{"cannot assign to s: s is borrowed by cp"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); { t := \"c,d\".Clone(); more := t.Split(\",\"); parts.Extend(ref more) }; print(len(parts)) }", []string{"cannot keep a borrow of t in parts: t is dropped at the end of its block"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); { t := \"c\".Clone(); parts.Push(t.Trim()) }; print(len(parts)) }", []string{"cannot keep a borrow of t in parts: t is dropped at the end of its block"}},
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); { t := \"c\".Clone(); parts.Insert(0, t.Trim()) }; print(len(parts)) }", []string{"cannot keep a borrow of t in parts: t is dropped at the end of its block"}},
+		{"func f() { s := \"a,b\".Clone(); t := \"c,d\".Clone(); parts := s.Split(\",\"); more := t.Split(\",\"); parts.Extend(ref more); parts.Push(t.Trim()); print(len(parts)) }", nil}, // both strings outlive the slice
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); print(len(parts)); s = \"c\".Clone(); print(s) }", nil},                                                                // the pieces are done with before s changes
 		{"func f() { for w := range \"a b\".Clone().Fields() { print(w) } }", nil},
 		{"func f() { if (k, v) := \"k=v\".Clone().SplitOnce(\"=\") { print(k); print(v) } }", nil},
 		{"func f() { print(\"  x \".Clone().Trim()) }", nil},

@@ -374,7 +374,7 @@ func (c *Checker) bringsBorrow(t Type, op operand) bool {
 	}
 
 	found := false
-	c.sources(op.expr, func(src ast.Expr, _ bool) {
+	c.sources(op.expr, func(src ast.Expr, _, _ bool) {
 		if id, ok := unparen(src).(*ast.Ident); ok {
 			if _, isVar := c.resolve(id.Name).(*Var); !isVar {
 				return // a variant or a constant, not a place
@@ -659,8 +659,8 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 			loopHolder, places, placesMut = c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
 		case x.mode == variable && isString(readType(x)):
 			loopHolder, places, placesMut = c.holdRange(s, false) // a string is lent for the loop: its runes are copies, so consuming it would gain nothing
-		case held(s.X, x.mode) && !isBorrow(x.typ):
-			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends
+		case held(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
+			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends, and so does a slice of borrows, the pieces of a string, whose elements are its string's
 		case lent || x.mode != value:
 			loopHolder, places, placesMut = c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
 		}
@@ -700,6 +700,7 @@ func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) (*Var, []place, bool) {
 		if p, kind := through(c.placeOf(src)); kind != notPlace {
 			if holder == nil {
 				holder = NewVar(s.For, "", Typ[Invalid])
+				c.flowAssign(holder, "") // a loop begun again, in an outer loop's next pass, holds nothing of the last
 			}
 
 			c.flowLoan(borrow{holder: holder, place: p, mut: mut, pos: s.For, loop: true})
@@ -748,7 +749,7 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 	saved, savedSig := c.deferring, c.deferSig
 	c.deferring, c.deferSig = call, nil
 	c.expr(s.Call, nil)
-	sig := c.deferSig
+	sig, rest := c.deferSig, c.variadic // the call's variadic arguments, checked last
 	c.deferring, c.deferSig = saved, savedSig
 	holder := c.flowDeferred(s.Pos())
 	if holder == nil {
@@ -785,9 +786,14 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 		c.deferHold(holder, sig.recv.typ, sel.X, s.Pos())
 	}
 
+	fixed := sig.fixed()
 	for i, arg := range call.Args {
-		if i >= len(sig.params) {
-			break
+		if i >= fixed {
+			if k := i - fixed; sig.variadic && k < len(rest) && holdsBorrow(rest[k].typ) {
+				c.deferView(holder, arg, s.Pos()) // fmt.Println(t) saves t's view as any, which says nothing of it
+			}
+
+			continue
 		}
 
 		if t := sig.params[i].typ; holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
@@ -833,6 +839,27 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 	}
 
 	c.errorf(e.Pos(), "a deferred call borrows only a whole variable, one that is a borrow or holds none: "+exprText(e)+" is not one; "+fix)
+}
+
+// deferView records what a deferred call's variadic argument views, a
+// borrow saved as any when the defer runs: the places it is lent from,
+// held until the function returns, so that none is given a new value
+// before then, which would free what the view sees; a whole variable
+// as deferHold holds it, and a view made for the call, s.Trim(), by its
+// sources, since the view is the call's own and nothing else reads it.
+func (c *Checker) deferView(holder *Var, e ast.Expr, pos token.Pos) {
+	if id, ok := unparen(e).(*ast.Ident); ok {
+		if p, kind := c.placeOf(id); kind == placeOwned {
+			c.deferHold(holder, p.v.typ, e, pos)
+			return
+		}
+	}
+
+	c.sources(e, func(src ast.Expr, _, _ bool) {
+		if p, kind := through(c.placeOf(src)); kind != notPlace {
+			c.flowLoan(borrow{holder: holder, place: p, pos: pos})
+		}
+	})
 }
 
 // rangeTypes returns what the two range variables get for a value, or

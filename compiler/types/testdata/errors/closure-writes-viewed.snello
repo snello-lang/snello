@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure reads what it captures each time it runs, so a view
+// it captures keeps the viewed place lent for as long as the closure
+// may run, and the closure cannot also change that place: the write
+// would free what the view sees. Fix: read the view before the write,
+// or clone it, t.Clone(), to keep the text past the change.
+
+package p
+
+func f() {
+    s := "hello".Clone()
+    t := s.Trim()
+    g := func() {                         // ERROR "cannot borrow s as mut: s is borrowed as ref by t"
+        s = "changed".Clone()
+        print(t)
+    }
+    g()
+}

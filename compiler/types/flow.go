@@ -108,7 +108,6 @@ type flowCopy struct {
 	path, toPath string
 	through      bool
 	flat         bool // the loans copied all go in the part toPath: a borrow of what a borrow variable points to reaches whatever it holds, in parts its own type does not name
-	atExit       bool // the loans copied are a deferred call's, reached when the function returns
 	pos          token.Pos
 	pairs        [][3]int
 }
@@ -250,7 +249,11 @@ func (c *Checker) flowAssign(v *Var, path string) {
 // A place that holds borrows itself, a borrow variable or a struct with
 // a borrow in it, is reached through: the holder takes what the place
 // holds now, as a copy, since that is what it can reach, and what the
-// place holds later is not its concern.
+// place holds later is not its concern. A copy is never a deferred
+// call's whole variable: defer show(t) saves t's view of what it
+// borrows when the defer runs, so a write to that place, which drops
+// the bytes the view sees, collides with it as with any borrow, while
+// the call holds it until the function returns.
 func (c *Checker) flowLoan(b borrow) {
 	f := c.flow
 	if f == nil || c.dead {
@@ -261,11 +264,11 @@ func (c *Checker) flowLoan(b borrow) {
 	c.flowAdd(flowEvent{kind: evLoan, i: len(f.loans) - 1})
 	switch {
 	case isBorrow(b.v.typ):
-		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, toPath: b.hpath, flat: true, atExit: b.atExit, pos: b.pos})
+		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, toPath: b.hpath, flat: true, pos: b.pos})
 	case holdsBorrow(placeType(b.place)) && isBorrow(placeType(place{b.holder, b.hpath})):
-		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, path: b.place.path, toPath: joinPath(b.hpath, "*"), atExit: b.atExit, pos: b.pos}) // m := mut h reaches what h holds through m: m.src = ... lets go of it
+		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, path: b.place.path, toPath: joinPath(b.hpath, "*"), pos: b.pos}) // m := mut h reaches what h holds through m: m.src = ... lets go of it
 	case holdsBorrow(placeType(b.place)):
-		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, path: b.place.path, toPath: b.hpath, atExit: b.atExit, pos: b.pos})
+		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, path: b.place.path, toPath: b.hpath, pos: b.pos})
 	}
 }
 
@@ -783,11 +786,14 @@ func (c *Checker) copyLoans() {
 						hpath = joinPath(cp.toPath, strings.TrimPrefix(strings.TrimPrefix(la.hpath, cp.path), "."))
 					}
 				case pathWithin(cp.path, la.hpath): // a part of what the loan covers is copied
+					if strings.HasSuffix(cp.path, "*") && !strings.Contains(la.hpath, "*") && isBorrow(placeType(place{cp.from, strings.TrimSuffix(strings.TrimSuffix(cp.path, "*"), ".")})) {
+						continue // what a borrow points at is copied, x := *r: r's own borrow of the place is not what x holds
+					}
 				default:
 					continue
 				}
 
-				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable, atExit: cp.atExit}) || grew
+				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable}) || grew
 			}
 		}
 	}
@@ -1198,7 +1204,7 @@ func (c *Checker) liveAfter(bi, ei int) bitset {
 // holderText names a loan's holder for a message.
 func (c *Checker) holderText(b *borrow) string {
 	switch {
-	case b.loop:
+	case b.loop, b.holder.name == "" && (c.flow == nil || !slices.Contains(c.flow.deferred, b.holder)): // a loop's holder has no name, and one copied from what the loop ranges over is still the loop's
 		return "the range loop"
 	case c.flow != nil && slices.Contains(c.flow.deferred, b.holder):
 		return "the deferred call"

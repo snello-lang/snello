@@ -1,0 +1,62 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A summary of log lines, with the methods of strings and slices.
+//
+// Each line is "LEVEL key=value ...". The program counts the levels,
+// finds a field by its key, redacts a password, and keeps the slowest
+// requests. A search that may find nothing gives an option, a trim
+// lends a piece of the line, and a count is never read as "all".
+
+package main
+
+import "fmt"
+
+const log = `INFO  path=/home ms=12
+WARN  path=/login ms=340 password=hunter2
+INFO  path=/api/users ms=48
+ERROR path=/api/orders ms=1200
+INFO  path=/home ms=9`
+
+// field returns the value of key in a line, or None when it is not there.
+func field(line ref string, key string) ref string? {
+    at := line.Index(" " + key + "=")?
+    rest := line[at + key.Len() + 2:]
+    if (value, _) := rest.SplitOnce(" ") {
+        return Some(value)
+    }
+
+    return Some(rest)
+}
+
+func main() {
+    levels := map[string]int{}
+    slow := []string{}
+    for line := range log.Lines() {
+        if (level, _) := line.SplitOnce(" ") {
+            *levels.GetOrInsert(level.Clone(), 0) += 1 // one lookup, whether the level is new or not
+        }
+
+        ms := field(line, "ms") ?? "0"
+        if ms.Len() >= 3 {
+            slow.Push(field(line, "path").Unwrap().TrimPrefix("/").Clone())
+        }
+    }
+
+    fmt.Println("levels:", levels)
+    fmt.Println("slow:", slow, "first:", slow.First(), "last:", slow.Last())
+
+    safe := log.ReplaceAll("password=hunter2", "password=***")
+    fmt.Println("redacted:", safe.Count("***"), "of", log.Count("password="))
+    fmt.Println("api calls:", log.Count("/api/"), "last at byte", log.LastIndex("/api/"))
+
+    parts := "api/users/42/orders".SplitN("/", 3)
+    fmt.Println("route:", parts.First(), "rest:", parts.Last())
+
+    all := []string{"home", "login"}
+    all.Extend(ref slow)
+    fmt.Println("pages:", all, "orders at", all.Index(ref "api/orders"))
+    all.Truncate(2)
+    fmt.Println("kept:", all)
+}

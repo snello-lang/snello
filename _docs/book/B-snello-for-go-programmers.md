@@ -108,8 +108,18 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `var xs []int` is `nil` and `len(xs) == 0` | A slice declared without a value is empty; there is no `nil` |
 | `xs[i]` on a bad index panics | The same, with the same message |
 | `copy(dst, src)`, `sort.Ints(xs)`, `slices.Contains(xs, v)` | `xs.Clone()`, `xs.Sort()`, `xs.Contains(v)`: methods on the slice |
+| `slices.Index(xs, v)` returns -1 when absent | `xs.Index(v)` returns `int?`: `None` when absent |
+| `xs = append(xs, ys...)`, `xs = xs[:n]` | `xs.Extend(ys)`, `xs.Truncate(n)`, which drops the elements it cuts off |
+| `xs[0]`, `xs[len(xs)-1]` on a slice that may be empty | `xs.First()`, `xs.Last()`, `ref T?` |
+| `bytes.Equal(a, b)`, `bytes.Index(a, sep)` | `a.Equal(b)`, `a.Find(sep)`, `int?`; `a.Index(c)` finds one byte, as on every slice |
 | `strings.Fields(s)` returns new strings | `s.Fields()` yields borrows into `s`, and a loop over them lends `s` |
-| `strings.TrimSpace(s)` | `s.Trim()`, a borrow of the middle of `s`; Go's `strings.Trim`, with the bytes to cut, has no counterpart |
+| `strings.TrimSpace(s)` | `s.TrimSpace()` or `s.Trim()`, a borrow of the middle of `s`; Go's `strings.Trim`, with the bytes to cut, has no counterpart |
+| `strings.TrimPrefix(s, p)`, `strings.TrimSuffix(s, p)` | `s.TrimPrefix(p)`, `s.TrimSuffix(p)`, a borrow of `s` |
+| `strings.Index(s, t)`, `strings.LastIndex(s, t)` return -1 when absent | `s.Index(t)`, `s.LastIndex(t)` return `int?` |
+| `strings.Replace(s, old, new, -1)` replaces every one | `s.ReplaceAll(old, new)`; `s.Replace(old, new, n)` with `n` of zero or less replaces none |
+| `strings.Count(s, t)`, `strings.SplitN(s, sep, n)` | `s.Count(t)`, `s.SplitN(sep, n)`, its pieces borrows of `s`; `n` of zero or less gives none |
+| `if _, ok := m[k]; !ok { m[k] = v }` then `m[k]` | `m.GetOrInsert(k, v)`: one lookup, a `mut V` |
+| Integer overflow wraps, with nothing to check it | It wraps; `a.CheckedAdd(b)`, `CheckedSub` and `CheckedMul` give `None` instead, and `Abs` and `Clamp` are methods |
 | `strings.Lines(s)` keeps each newline | `s.Lines()` drops it, and a carriage return before it |
 | `for i, r := range s` yields runes | The same, and an invalid byte reads as U+FFFD and moves on one byte; the string is lent for the loop (chapter 19) |
 | `utf8.EncodeRune(p, r)` writes into a buffer of fixed size | `utf8.AppendRune(mut p, r)` appends, growing the slice (chapter 19) |
@@ -217,7 +227,8 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `err.(*strconv.NumError).Err == strconv.ErrRange` | `e.Kind() == strconv.Range` |
 | `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
 | `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
-| `strings.Builder` | The same, with `WriteString`, `WriteByte`, `Len`, `String` and `Reset` |
+| `strings.Builder` | The same, with `WriteString`, `WriteByte`, `WriteRune`, `Grow`, `Len`, `String` and `Reset` |
+| `strings.NewReader(s)` | The same; the `Reader` owns the string, so `bufio` can hold it |
 | `[]byte(s)` and `string(b)` copy | The same |
 | `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr(), ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait; the streams are functions, since a package variable is never lent `mut` |
 | `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing |

@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the pieces Split, SplitN, Fields and Lines lend are borrows of
+// the string, and the slice holding them holds the string for as long
+// as it is used: the string may not be changed, moved or dropped while
+// the pieces are still to be read. Fix: use the pieces first, or clone
+// each one, p.Clone(), to keep it past the string.
+
+package p
+
+func count(s string) int {
+    parts := s.Split(",")
+    s = "changed".Clone()                 // ERROR "cannot assign to s: s is borrowed by parts"
+    return len(parts)
+}

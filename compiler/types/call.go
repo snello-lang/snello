@@ -102,6 +102,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 				tmp = t
 			}
 		}
+
+		if f.obj == nil {
+			c.storedElement(e, sel, sig)
+		}
 	}
 
 	if _, ok := borrowIn(sig.results); ok && tmp != nil {
@@ -116,16 +120,62 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	return operand{value, sig.results, nil, nil}
 }
 
+// storedElement records what a predeclared method that stores an
+// element keeps, when the element holds a borrow: Push, Insert and
+// Extend on the pieces Split and Fields lend put more borrows into the
+// slice, which then holds what each argument holds, as an assignment's
+// target holds what its value does, so that the slice is not used past
+// the string another piece came from. Only a slice a variable owns can
+// be such a receiver, since no other place can be given its type.
+func (c *Checker) storedElement(e *ast.CallExpr, sel *ast.SelectorExpr, sig *Signature) {
+	arg, elem := -1, Type(nil)
+	switch sel.Sel.Name {
+	case "Push":
+		arg, elem = 0, paramType(sig, 0)
+	case "Insert":
+		arg, elem = 1, paramType(sig, 1)
+	case "Extend":
+		if r, ok := paramType(sig, 0).(*Ref); ok {
+			if s, ok := r.elem.(*Slice); ok {
+				arg, elem = 0, s
+			}
+		}
+	}
+
+	if arg < 0 || arg >= len(e.Args) || elem == nil || !holdsBorrow(elem) {
+		return
+	}
+
+	x := e.Args[arg]
+	if u, ok := unparen(x).(*ast.UnaryExpr); ok && u.Op == token.REF {
+		x = u.X // ref ys: the slice takes what ys holds, not a borrow of ys
+	}
+
+	p, kind := through(c.placeOf(sel.X))
+	if kind != placeOwned { // through a mut borrow of the slice, r := mut parts, the borrow variable is not what holds the pieces
+		c.errorf(x.Pos(), "cannot keep a borrow in "+exprText(sel.X)+": "+sel.Sel.Name+" stores it where the checker cannot follow it")
+		return
+	}
+
+	c.holdIn(p.v, p.path, placeType(p), x, x.Pos())
+}
+
+// paramType returns the type of the i-th parameter of sig, or nil.
+func paramType(sig *Signature, i int) Type {
+	if i < len(sig.params) {
+		return sig.params[i].typ
+	}
+
+	return nil
+}
+
 // args checks the arguments of a call against the parameters. An
 // argument for a ref parameter is checked with the borrowed type as its
 // hint, so a literal or None gets the type the parameter holds. It
 // returns the temporary a borrowed argument lends, if any.
 func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 	params := sig.params
-	fixed := len(params)
-	if sig.variadic {
-		fixed--
-	}
+	fixed := sig.fixed()
 
 	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
 		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
@@ -285,10 +335,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*
 		return nil, nil
 	}
 
-	fixed := len(sig.params)
-	if sig.variadic {
-		fixed--
-	}
+	fixed := sig.fixed()
 
 	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
 		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))

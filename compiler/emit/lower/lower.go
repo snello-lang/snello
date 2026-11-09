@@ -141,6 +141,66 @@ func Located(fn *types.Func) string {
 	return located[fn.Pkg().Path()+"."+fn.Name()]
 }
 
+// ClonesAsBytes reports whether a clone of a value of type t is a copy
+// of its bytes: it is Copy, and no type in it writes a Clone of its
+// own, which every clone the compiler writes calls, a derived Clone
+// calling a field's. A slice's Clone and Extend copy such elements with
+// memcpy and clone the rest one by one.
+func ClonesAsBytes(t types.Type) bool {
+	return types.IsCopy(t) && !WritesClone(t)
+}
+
+// WritesClone reports whether t, or a type inside it, declares a Clone
+// method of its own, which every clone of it the compiler writes must
+// call.
+func WritesClone(t types.Type) bool {
+	return writesClone(t, map[*types.Named]bool{})
+}
+
+func writesClone(t types.Type, seen map[*types.Named]bool) bool {
+	switch t := t.(type) {
+	case *types.Named:
+		if seen[t] {
+			return false
+		}
+
+		seen[t] = true
+		if m := t.Method("Clone"); m != nil && !m.Derived() {
+			return true
+		}
+
+		return writesClone(t.Underlying(), seen)
+	case *types.Struct:
+		for i := 0; i < t.NumFields(); i++ {
+			if writesClone(t.Field(i).Type(), seen) {
+				return true
+			}
+		}
+	case *types.Tuple:
+		for i := 0; i < t.Len(); i++ {
+			if writesClone(t.At(i), seen) {
+				return true
+			}
+		}
+	case *types.Option:
+		return writesClone(t.Elem(), seen)
+	case *types.Result:
+		return writesClone(t.Val(), seen) || writesClone(t.Err(), seen)
+	case *types.Array:
+		return writesClone(t.Elem(), seen)
+	case *types.Enum:
+		for i := 0; i < t.NumVariants(); i++ {
+			for _, f := range t.Variant(i).Fields() {
+				if writesClone(f.Type(), seen) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 // Variable returns the variable an expression names, through
 // parentheses, or nil for any other expression.
 func Variable(info *types.Info, e ast.Expr) *types.Var {

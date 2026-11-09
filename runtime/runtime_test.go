@@ -1074,3 +1074,173 @@ int main(int argc, char **argv) {
 		}
 	}
 }
+
+// TestStringSearch holds the string searches to a plain reference over
+// texts of a few letters, where matches, near matches and overlaps are
+// common: Index, LastIndex, Count, Replace and SplitN, and the byte
+// slice's Find, at every needle length the filters treat differently.
+func TestStringSearch(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+static uint64_t seed = 88172645463325252ull;
+static uint64_t next(void) { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; }
+static int64_t ref_index(sn_string s, sn_string t) {
+    for (int64_t i = 0; i + t.len <= s.len; i++) if (memcmp(s.ptr + i, t.ptr, (size_t)t.len) == 0) return i;
+    return -1;
+}
+static int64_t ref_last(sn_string s, sn_string t) {
+    for (int64_t i = s.len - t.len; i >= 0; i--) if (memcmp(s.ptr + i, t.ptr, (size_t)t.len) == 0) return i;
+    return -1;
+}
+static int64_t ref_count(sn_string s, sn_string t) {
+    int64_t n = 0;
+    for (int64_t i = 0; i + t.len <= s.len;) {
+        if (memcmp(s.ptr + i, t.ptr, (size_t)t.len) == 0) { n++; i += t.len; } else i++;
+    }
+    return n;
+}
+int main(void) {
+    static uint8_t sb[300], tb[40], nb[8], rb[4000];
+    int bad = 0;
+    for (int iter = 0; iter < 20000 && bad < 10; iter++) {
+        int64_t n = (int64_t)(next() % 260), m = 1 + (int64_t)(next() % 24), letters = 1 + (int64_t)(next() % 3);
+        for (int64_t i = 0; i < n; i++) sb[i] = (uint8_t)('a' + next() % letters);
+        for (int64_t i = 0; i < m; i++) tb[i] = (uint8_t)('a' + next() % letters);
+        if (n > m && next() % 2) memcpy(sb + next() % (uint64_t)(n - m), tb, (size_t)m); // a sure match somewhere
+        sn_string s = {sb, n, 0}, t = {tb, m, 0};
+        int64_t got = sn_string_index(s, t), want = ref_index(s, t);
+        if (got != want) { printf("Index %lld want %lld n=%lld m=%lld\n", (long long)got, (long long)want, (long long)n, (long long)m); bad++; }
+        got = sn_string_last_index(s, t), want = ref_last(s, t);
+        if (got != want) { printf("LastIndex %lld want %lld n=%lld m=%lld\n", (long long)got, (long long)want, (long long)n, (long long)m); bad++; }
+        got = sn_string_count(s, t), want = ref_count(s, t);
+        if (got != want) { printf("Count %lld want %lld\n", (long long)got, (long long)want); bad++; }
+        sn_slice_u8 a = {sb, n, n}, b = {tb, m, m};
+        if (sn_bytes_find(a, b) != ref_index(s, t)) { printf("Find\n"); bad++; }
+        int64_t nn = (int64_t)(next() % 4);
+        for (int64_t i = 0; i < nn; i++) nb[i] = (uint8_t)('x' + next() % 2);
+        sn_string nw = {nb, nn, 0};
+        int64_t limit = (int64_t)(next() % 6) - 1;
+        sn_string r = sn_string_replace(s, t, nw, limit);
+        int64_t len = 0, done = 0;
+        for (int64_t i = 0; i < n;) {
+            if (done < limit && i + m <= n && memcmp(sb + i, tb, (size_t)m) == 0) { memcpy(rb + len, nb, (size_t)nn); len += nn; i += m; done++; }
+            else rb[len++] = sb[i++];
+        }
+        if (r.len != len || (len > 0 && memcmp(r.ptr, rb, (size_t)len) != 0)) { printf("Replace n=%lld\n", (long long)limit); bad++; }
+        sn_string_drop(&r);
+        sn_slice out;
+        int64_t pieces = (int64_t)(next() % 5);
+        sn_split_n(s, t, pieces, &out);
+        int64_t at = 0, k = 0;
+        sn_string *f = out.ptr;
+        for (; k < out.len; k++) {
+            int64_t cut = k < out.len - 1 ? ref_index((sn_string){sb + at, n - at, 0}, t) : n - at;
+            if (cut < 0 || f[k].ptr != sb + at || f[k].len != cut) { printf("SplitN piece %lld\n", (long long)k); bad++; break; }
+            at += cut + m;
+        }
+        int64_t want_pieces = pieces <= 0 ? 0 : 1 + ref_count(s, t);
+        if (want_pieces > pieces) want_pieces = pieces;
+        if (out.len != want_pieces) { printf("SplitN %lld want %lld\n", (long long)out.len, (long long)want_pieces); bad++; }
+        sn_slice_free(&out);
+    }
+    // Periodic texts and long needles cut from them, altered at either
+    // end or not: the comparisons fail late, so the searches hand over
+    // to Two-Way, forwards and backwards, which must agree with the
+    // reference too.
+    static uint8_t lb[6000], lt[700];
+    for (int iter = 0; iter < 3000 && bad < 10; iter++) {
+        int64_t period = 1 + (int64_t)(next() % 9), n = 600 + (int64_t)(next() % 5000), m = 2 + (int64_t)(next() % 600);
+        uint8_t pat[9];
+        for (int64_t i = 0; i < period; i++) pat[i] = (uint8_t)('a' + next() % 3);
+        for (int64_t i = 0; i < n; i++) lb[i] = pat[i % period];
+        for (int64_t k = (int64_t)(next() % 4); k > 0; k--) lb[next() % (uint64_t)n] = (uint8_t)('a' + next() % 4); // a few breaks in the period
+        if (m > n) m = n;
+        int64_t from = (int64_t)(next() % (uint64_t)(n - m + 1));
+        memcpy(lt, lb + from, (size_t)m);
+        switch (next() % 3) {
+        case 0: lt[m - 1] = 'z'; break; // fails at its far end, forwards
+        case 1: lt[0] = 'z'; break;     // and backwards
+        }
+        sn_string s = {lb, n, 0}, t = {lt, m, 0};
+        int64_t got = sn_string_index(s, t), want = ref_index(s, t);
+        if (got != want) { printf("long Index %lld want %lld n=%lld m=%lld p=%lld\n", (long long)got, (long long)want, (long long)n, (long long)m, (long long)period); bad++; }
+        got = sn_string_last_index(s, t), want = ref_last(s, t);
+        if (got != want) { printf("long LastIndex %lld want %lld n=%lld m=%lld p=%lld\n", (long long)got, (long long)want, (long long)n, (long long)m, (long long)period); bad++; }
+        got = sn_string_count(s, t), want = ref_count(s, t);
+        if (got != want) { printf("long Count %lld want %lld\n", (long long)got, (long long)want); bad++; }
+    }
+    // Short cases built to end in near misses, a pattern of a block of
+    // one to eight bytes repeated with one byte changed, in a text that
+    // follows the block with a stray byte now and then: Two-Way on its
+    // own, both ways, and the searches that may hand over to it.
+    static uint8_t sb2[320], tb2[48];
+    for (int iter = 0; iter < 200000 && bad < 10; iter++) {
+        int64_t period = 1 + (int64_t)(next() % 8), m = 1 + (int64_t)(next() % 40), n = (int64_t)(next() % 300);
+        uint8_t block[8];
+        for (int64_t i = 0; i < period; i++) block[i] = (uint8_t)('a' + next() % 3);
+        for (int64_t i = 0; i < m; i++) tb2[i] = block[i % period];
+        tb2[next() % (uint64_t)m] = (uint8_t)('a' + next() % 3);
+        for (int64_t i = 0; i < n; i++) sb2[i] = next() % 20 == 0 ? (uint8_t)('a' + next() % 3) : block[i % period];
+        if (n > m && next() % 2) memcpy(sb2 + next() % (uint64_t)(n - m), tb2, (size_t)m);
+        sn_string s = {sb2, n, 0}, t = {tb2, m, 0};
+        int64_t want = ref_index(s, t), last = ref_last(s, t);
+        if (sn_two_way(s, t) != want || sn_string_index(s, t) != want) { printf("short Index want %lld n=%lld m=%lld\n", (long long)want, (long long)n, (long long)m); bad++; }
+        if (sn_two_way_last(s, t) != last || sn_string_last_index(s, t) != last) { printf("short LastIndex want %lld n=%lld m=%lld\n", (long long)last, (long long)n, (long long)m); bad++; }
+        if (sn_string_count(s, t) != ref_count(s, t)) { printf("short Count\n"); bad++; }
+    }
+    sn_string e = {(const uint8_t *)"h\xc3\xa9!", 4, 0}, z = {(const uint8_t *)"", 0, 0}, d = {(const uint8_t *)"-", 1, 0};
+    sn_string r = sn_string_replace(e, z, d, 1 << 20);
+    printf("%lld %lld %lld %.*s\n", (long long)sn_string_index(e, z), (long long)sn_string_last_index(e, z), (long long)sn_string_count(e, z), (int)r.len, (const char *)r.ptr);
+    sn_string_drop(&r);
+    return bad;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "search"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if want := "0 4 4 -h-é-!-\n"; string(out) != want {
+		t.Errorf("an empty needle: got %q, want %q", out, want)
+	}
+}
+
+// TestSearchLinear times the searches on a text and a pattern that
+// repeat with a period of sixteen, the pattern failing only at its far
+// end: a search that compared the whole pattern at every candidate would
+// take n times m over sixteen, seconds here, and Two-Way takes
+// milliseconds.
+func TestSearchLinear(t *testing.T) {
+	probe := `#include "snello.h"
+#include <stdio.h>
+int main(void) {
+    int64_t n = 20000000, m = 200001;
+    uint8_t *s = sn_alloc((size_t)n), *t = sn_alloc((size_t)m);
+    for (int64_t i = 0; i < n; i++) s[i] = i % 16 == 0 ? 'a' : i % 16 == 1 ? 'b' : 'c';
+    for (int64_t i = 0; i < m; i++) t[i] = i % 16 == 0 ? 'a' : i % 16 == 1 ? 'b' : 'c';
+    t[m - 1] = 'd';
+    sn_string S = {s, n, 0}, T = {t, m, 0};
+    printf("%lld %lld %lld\n", (long long)sn_string_index(S, T), (long long)sn_string_last_index(S, T), (long long)sn_string_count(S, T));
+    t[m - 1] = 'c';
+    t[0] = 'd';
+    printf("%lld %lld\n", (long long)sn_string_index(S, T), (long long)sn_string_last_index(S, T));
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "linear"), probe)
+	start := time.Now()
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if want := "-1 -1 0\n-1 -1\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("five searches of a 200,001-byte pattern in 20 MB took %v; a linear search takes milliseconds", took)
+	}
+}

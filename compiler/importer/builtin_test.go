@@ -116,7 +116,7 @@ func TestBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kinds := map[string]string{"sliceMethod": "[]T", "mapMethod": "map[K]V", "chanMethod": "chan T", "stringMethod": "string", "standardMethod": "string", "byteMethod": "byte", "optionMethod": "T?", "resultMethod": "Result<T, E>"}
+	kinds := map[string]string{"sliceMethod": "[]T", "mapMethod": "map[K]V", "chanMethod": "chan T", "stringMethod": "string", "standardMethod": "string", "byteMethod": "byte", "byteSliceMethod": "[]byte", "integerMethod": "int", "optionMethod": "T?", "resultMethod": "Result<T, E>"}
 	have := map[string]bool{}
 	for _, m := range methods {
 		have[m.recv+" "+m.name] = true
