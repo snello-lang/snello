@@ -128,6 +128,8 @@ type Checker struct {
 	loops      int                     // the loops open here, inside which a borrow made later in the body reaches an access made earlier
 	noUse      bool                    // evaluating an assignment target, which is not a use
 	lentMode   mode                    // what the last ref or mut checked lent: a place, or a value made for it
+	stringByte ast.Expr                // the last byte of a string indexed, which mut may not lend
+	placeFor   bool                    // checking the place take or replace is given, which they refuse themselves when it is not one
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
 	bindsOwned bool                    // a pattern bound a non-Copy value by value
 	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)

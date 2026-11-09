@@ -18,6 +18,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots |
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed |
 | 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch), assign-through-ref, mut-through-ref-receiver |
+| `mut` lends something that can change: not a constant, a literal or a byte of a string | mut-of-constant |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored, callback-kept |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |
 | A spawn moves what its closure mentions | use-after-spawn, spawn-twice |
@@ -39,7 +40,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 
-The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, the eight move programs, the seven borrow programs of rules 4 and 5, the ten of rule 6 along a function's paths, and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
+The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, mut-of-constant, the eight move programs, the seven borrow programs of rules 4 and 5, the ten of rule 6 along a function's paths, and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
 
 ## Message conventions
 
@@ -49,6 +50,7 @@ The messages are the plan for the checker, chosen here so that they read the sam
 - A move that is not allowed: `cannot move X out of ...`, `cannot move X: X is borrowed`.
 - A borrow that is not allowed: `cannot borrow X as mut: <reason>`, where the reason is `X is borrowed as ref` or `X is already borrowed as mut`; `... through a ref receiver` for the receiver case. Passing a `ref` where a `mut` is wanted is a type mismatch: `cannot use X (ref T) as mut T`.
 - A write that is not allowed: `cannot assign to X: X is borrowed`, `cannot assign to X through a ref borrow`.
+- A `mut` of something that cannot change: `mut needs a place, a variable or a field, element or *p of one: X is not one`; `take` and `replace` name themselves in place of `mut`, and a `mut` receiver reads `M lends its receiver mut, which needs a place, ...`.
 - An escaping borrow: `cannot return ...`, `... cannot be returned`, `... cannot be stored`, `a spawned task cannot hold a borrow`, `a channel cannot carry a borrow`, `a slice cannot hold a borrow`.
 - A value that is not `Send`: `cannot spawn with X: <why>`, `a channel cannot carry T: <why>`, where the reason names the part that stops the crossing: `rc.Rc<int> stays in its task`, `ref T is a borrow`, `Shape does not refine Send`, `T is not bounded by Send`.
 - A signature that cannot be written (`return-two-borrows`) is reported on the `func` line; a statement that breaks a rule is reported on its own line. An error in a type does not cascade: the line after `[]ref string{}` is not reported again.

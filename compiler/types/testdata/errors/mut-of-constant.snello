@@ -1,0 +1,18 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: mut lends something that can change. A constant never does, so
+// what bump writes would go to a copy and be lost; a literal and a byte
+// of a string are refused the same way. Fix: copy the constant into a
+// variable and lend the variable, n := limit; bump(mut n).
+
+package p
+
+const limit = 3
+
+func bump(n mut int) { *n = *n + 1 }
+
+func f() {
+    bump(mut limit)                       // ERROR "mut needs a place, a variable or a field, element or *p of one: limit is not one"
+}

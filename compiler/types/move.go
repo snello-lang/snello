@@ -564,6 +564,8 @@ func exprText(e ast.Expr) string {
 		}
 
 		return e.Op.String() + exprText(e.X)
+	case *ast.BinaryExpr:
+		return exprText(e.X) + " " + e.Op.String() + " " + exprText(e.Y)
 	case *ast.CallExpr:
 		if len(e.Args) == 0 {
 			return exprText(e.Fun) + "()"
