@@ -61,6 +61,7 @@ type Emitter struct {
 	prologue []string                        // declarations to put at the top of the function being written
 	pre      map[ast.Expr]string             // expressions already evaluated into temporaries, for defer
 	defers   []deferred                      // the deferred calls of the function being written, in order
+	seq      int                             // values and deferred calls registered so far, ordering what a return releases
 	subst    map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
 	generics map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
 	files    map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
@@ -74,11 +75,13 @@ type Emitter struct {
 	errors   []string
 }
 
-// A deferred call is a flag that says the defer statement ran and the
-// lines that make the call.
+// A deferred call is the record its defer statement saved into, whose
+// flag says the statement ran; the function that makes the call from
+// the record; and when the statement registered it.
 type deferred struct {
-	flag string
-	code string
+	rec   string
+	thunk string
+	seq   int
 }
 
 // Emit writes the C program for a checked file, a program of one, and
@@ -260,7 +263,7 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		if d.Const {
 			qualifier += "const "
 		} else if needsDrop(obj.Type()) {
-			e.statics = append(e.statics, owned{lower.ObjName(obj), obj.Type()})
+			e.statics = append(e.statics, owned{name: lower.ObjName(obj), typ: obj.Type()})
 		}
 
 		put(&e.protos, qualifier, e.cType(obj.Type(), name.Pos()), " ", lower.ObjName(obj), " = ", value, ";\n")
@@ -288,7 +291,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 	put(&e.protos, "static SN_UNUSED ", ct, " ", cname, ";\nstatic sn_lazy ", cname, "_lazy;\n")
 	put(&e.protos, "static inline SN_UNUSED ", ct, " *", cname, "_get(void) {\n\tif (!sn_lazy_ready(&", cname, "_lazy)) {\n\t\tsn_lazy_make(&", cname, "_lazy, ", cname, "_init, ", cString(name.Name), ");\n\t}\n\n\treturn &", cname, ";\n}\n\n")
 	if needsDrop(v.Type()) {
-		e.lazies = append(e.lazies, owned{cname, v.Type()})
+		e.lazies = append(e.lazies, owned{name: cname, typ: v.Type()})
 	}
 }
 
@@ -427,10 +430,10 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 // function writes the body of a function or closure whose head was
 // just written: a (void) for each parameter nothing refers to, since
 // the C compiler is asked to treat an unused one as an error, the
-// statements, and for a body that falls off its end the deferred calls
-// and then the drops of its parameters and locals, and the
-// declarations the body asked for at the top. The caller's own state
-// is kept.
+// statements, and for a body that falls off its end the drops of its
+// parameters and locals and the deferred calls, last registered first,
+// and the declarations the body asked for at the top. The caller's own
+// state is kept.
 func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 	outerResult, outerLoops, outerPrologue, outerDefers := e.result, e.loops, e.prologue, e.defers
 	outerFrames, outerTemps, outerDeclared := e.frames, e.temps, e.names.declared
@@ -462,8 +465,8 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 
 	e.stmts(body.List)
 	if sig.Results() == types.Unit {
-		e.runDefers()
-		e.pop(body.Rbrace)
+		e.leaveFunction(body.Rbrace)
+		e.frames = e.frames[:len(e.frames)-1]
 	} else {
 		e.frames = e.frames[:len(e.frames)-1] // the body ended with a statement that left, which dropped everything
 	}

@@ -6,6 +6,7 @@ package llvm
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -598,10 +599,20 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, p string, itemType types.
 	}
 }
 
-// deferStmt writes defer f(x): the arguments, and the receiver unless
-// it is lent mutably, are evaluated now into slots, and a flag records
-// that this defer ran. The call itself is written at every return of
-// the function that the flag reaches, last deferred first.
+// A deferred call runs on every exit of its function, a return or a
+// panic, as the C backend writes it (defer.go there): the defer
+// statement saves what the call needs into a record in the function's
+// frame, the arguments, a receiver it takes by value, a callee that is
+// a value, and the address of a receiver it lends; the call is a function
+// of its own, the thunk, taking the record's address; the statement
+// sets the record's flag and registers the record with the thunk on
+// the runtime's guard stack, and a return takes the guard off and
+// calls the thunk, last registered first among the function's values
+// and deferred calls. The flag is cleared at the function's entry, so
+// a return that a defer statement did not reach skips its call.
+
+// deferStmt writes defer f(x): the saved values, the record, the flag
+// and the guard here, and the thunk into the module.
 func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	call, ok := s.Call.(*ast.CallExpr)
 	if !ok {
@@ -614,57 +625,151 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		return
 	}
 
-	for _, a := range call.Args {
-		e.fn.pre[a] = e.spill(e.expr(a))
+	var saved []ast.Expr
+	var vals []value
+	save := func(x ast.Expr) {
+		saved = append(saved, x)
+		vals = append(vals, e.expr(x))
 	}
 
+	for _, a := range call.Args {
+		save(a)
+	}
+
+	var recv *types.Var // a receiver lent, reached through its address
+	var recvAt string
 	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr: // a method: its receiver, unless lent mutably
-		if e.packageOf(fun.X) == nil && !e.mutReceiver(fun) {
-			e.fn.pre[fun.X] = e.spill(e.expr(fun.X))
+	case *ast.SelectorExpr: // a method: its receiver, by value or by address
+		switch {
+		case e.packageOf(fun.X) != nil:
+		case !e.lentReceiver(fun):
+			save(fun.X)
+		default:
+			recv = lower.Variable(e.info, fun.X)
+			if recv == nil {
+				e.unsupported(fun.X.Pos(), "a deferred call's receiver that is not a variable")
+				return
+			}
+
+			recvAt = e.varSlot(recv, fun.X.Pos())
 		}
 	case *ast.Ident: // a function value in a variable; a named function needs nothing
 		if _, variable := e.info.Uses[fun].(*types.Var); variable {
-			e.fn.pre[fun] = e.spill(e.expr(fun))
+			save(fun)
 		}
 	default:
-		e.fn.pre[fun] = e.spill(e.expr(fun))
+		save(fun)
 	}
 
-	flag := e.slot("i1")
-	e.store(value{"i1", "true"}, flag)
-	e.fn.defers = append(e.fn.defers, deferred{flag, call})
-}
+	members := []string{"i1"}
+	for _, v := range vals {
+		members = append(members, v.typ)
+	}
 
-// runDefers writes the deferred calls of the function, last first,
-// each under its flag.
-func (e *Emitter) runDefers() {
-	for i := len(e.fn.defers) - 1; i >= 0; i-- {
-		d := e.fn.defers[i]
-		set := e.load("i1", d.flag)
-		run, skip := e.block("defer"), e.block("defer.skip")
-		e.branch(set.s, run, skip)
-		e.label(run)
-		e.scoped(d.call.Pos(), func() { // the call's own temporaries are dropped with it
-			v := e.expr(d.call)
-			e.discard(v, e.typeOf(d.call), d.call.Pos())
+	if recv != nil {
+		members = append(members, "ptr")
+	}
+
+	typ := "{ " + strings.Join(members, ", ") + " }"
+	rec := e.slot(typ)
+	put(&e.fn.allocas, "  store i1 false, ptr ", rec, ", align 8\n") // the flag, first in the record, cleared at the entry
+	for i, v := range vals {
+		e.store(v, e.gep(typ, rec, i+1))
+	}
+
+	if recv != nil {
+		e.store(value{"ptr", recvAt}, e.gep(typ, rec, len(vals)+1))
+	}
+
+	e.closures++
+	thunk := "sn_defer_" + strconv.Itoa(e.closures)
+	e.helper(thunk, "void", []string{"ptr %rec"}, func() {
+		for i, x := range saved {
+			e.fn.pre[x] = e.gep(typ, "%rec", i+1)
+		}
+
+		if recv != nil {
+			e.fn.captured = map[*types.Var]string{recv: e.load("ptr", e.gep(typ, "%rec", len(vals)+1)).s}
+		}
+
+		e.scoped(call.Pos(), func() { // the call's own temporaries are dropped with it
+			v := e.expr(call)
+			e.discard(v, e.typeOf(call), call.Pos())
 		})
-		e.jump(skip)
-		e.label(skip)
+
+		e.inst("ret void")
+	})
+
+	e.store(value{"i1", "true"}, rec)
+	e.declare("sn_guard", "declare void @sn_guard(ptr, ptr)")
+	e.inst("call void @sn_guard(ptr " + rec + ", ptr @" + thunk + ")")
+	e.seq++
+	e.fn.defers = append(e.fn.defers, deferred{rec, thunk, e.seq})
+}
+
+// runDefer writes a deferred call at a return: when its statement ran,
+// its guard comes off, so that a panic in the call does not run it
+// again, and the thunk makes the call.
+func (e *Emitter) runDefer(d deferred) {
+	set := e.load("i1", d.rec)
+	run, skip := e.block("defer"), e.block("defer.skip")
+	e.branch(set.s, run, skip)
+	e.label(run)
+	e.declare("sn_unguard", "declare void @sn_unguard(ptr)")
+	e.inst("call void @sn_unguard(ptr " + d.rec + ")")
+	e.inst("call void @" + d.thunk + "(ptr " + d.rec + ")")
+	e.jump(skip)
+	e.label(skip)
+}
+
+// leaveFunction writes what a return runs: the temporaries pending,
+// the variables of every open frame, innermost first, and the deferred
+// calls that ran, each before every value registered before it, so
+// that a deferred call runs before the drops of what it may borrow, as
+// a panic's unwinding of the guard stack runs it.
+func (e *Emitter) leaveFunction(pos token.Pos) {
+	var order []owned
+	for _, v := range slices.Backward(e.fn.temps[e.fn.frames[0].mark:]) {
+		order = append(order, v)
+	}
+
+	for _, f := range slices.Backward(e.fn.frames) {
+		for _, v := range slices.Backward(f.vars) {
+			order = append(order, v)
+		}
+	}
+
+	d := len(e.fn.defers)
+	for _, v := range order {
+		for ; d > 0 && e.fn.defers[d-1].seq > v.seq; d-- {
+			e.runDefer(e.fn.defers[d-1])
+		}
+
+		e.dropVars([]owned{v}, pos)
+	}
+
+	for ; d > 0; d-- {
+		e.runDefer(e.fn.defers[d-1])
 	}
 }
 
-// mutReceiver reports whether a method call lends its receiver
-// mutably.
-func (e *Emitter) mutReceiver(sel *ast.SelectorExpr) bool {
+// lentReceiver reports whether a method call lends its receiver, by
+// ref or mut, so that the deferred call reads the variable when it
+// runs, rather than taking it by value, as Option's and Result's
+// Expect, Unwrap, UnwrapOr, Map and MapErr do; every other predeclared
+// method lends its receiver.
+func (e *Emitter) lentReceiver(sel *ast.SelectorExpr) bool {
 	fn, ok := e.info.Uses[sel.Sel].(*types.Func)
 	if !ok {
-		return mutating[sel.Sel.Name] // a predeclared method
+		return !consuming[sel.Sel.Name]
 	}
 
-	r, ok := fn.Type().(*types.Signature).Recv().Type().(*types.Ref)
-	return ok && r.Mut()
+	_, ok = fn.Type().(*types.Signature).Recv().Type().(*types.Ref)
+	return ok
 }
+
+// The predeclared methods that take their receiver by value.
+var consuming = map[string]bool{"Expect": true, "Unwrap": true, "UnwrapOr": true, "Map": true, "MapErr": true}
 
 func isBlank(x ast.Expr) bool {
 	id, ok := x.(*ast.Ident)

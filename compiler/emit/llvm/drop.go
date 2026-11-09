@@ -40,11 +40,13 @@ type frame struct {
 	mark int
 }
 
-// An owned value the emitter will drop: the address of its slot and
-// its Snello type.
+// An owned value the emitter will drop: the address of its slot, its
+// Snello type, and when it was registered among the function's values
+// and deferred calls, which a return releases last registered first.
 type owned struct {
 	slot string
 	typ  types.Type
+	seq  int
 }
 
 // needsDrop reports whether a value of type t releases something when
@@ -420,7 +422,8 @@ func (e *Emitter) own(slot string, t types.Type) {
 	}
 
 	f := &e.fn.frames[len(e.fn.frames)-1]
-	f.vars = append(f.vars, owned{slot, t})
+	e.seq++
+	f.vars = append(f.vars, owned{slot, t, e.seq})
 	e.guard(slot, t)
 }
 
@@ -428,7 +431,8 @@ func (e *Emitter) own(slot string, t types.Type) {
 // when the statement ends.
 func (e *Emitter) hold(slot string, t types.Type) {
 	if needsDrop(t) {
-		e.fn.temps = append(e.fn.temps, owned{slot, t})
+		e.seq++
+		e.fn.temps = append(e.fn.temps, owned{slot, t, e.seq})
 		e.guard(slot, t)
 	}
 }

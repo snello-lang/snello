@@ -148,7 +148,29 @@ func main() {
 }
 ```
 
-`Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then every value still owned is dropped, innermost first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose: the deferred calls run first, then the scope's values are dropped, since a deferred call may still be looking at one of them. A deferred call does not run on a panic today; put cleanup that must survive a panic in a `Drop`.
+`Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then the deferred calls that ran and every value still owned are run and dropped, last first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose in one order on every exit, a return or a panic: whatever was registered last runs first, a deferred call where its `defer` ran, a value where it was made. A deferred call therefore runs before the drop of every value declared before it, which is everything it may be looking at, and after the drop of a value declared after it, which it cannot name:
+
+```go
+struct Res impl Drop { name string }
+
+func (r mut Res) Drop() { fmt.Println("drop", r.name) }
+
+func work() {
+    a := Res{name: "a"}
+    defer fmt.Println("deferred")
+    b := Res{name: "b"}
+    panic("stop")
+}
+
+// panic: stop
+// drop b
+// deferred
+// drop a
+```
+
+A return from `work` in place of the panic prints the same three lines. A `defer` the function never reached, inside an `if` not taken, does not run. A deferred call that panics on a return runs once: its panic runs the deferred calls and drops still pending, as Go runs the rest of a function's deferred calls. One that panics while a panic is unwinding ends the program with both messages, as a `Drop` that panics does; Snello has no `recover`, so nothing could stop either panic.
+
+For maintainers: each `defer` statement saves what its call needs into a record in the function's frame and registers the record on the runtime's guard stack, where a value with a `Drop` registers itself, beside a function of its own that makes the call. A panic runs the guard stack; a return takes the guard off and makes the call, at the place the order gives (`compiler/emit/c/defer.go`, `deferStmt` and `leaveFunction` in `compiler/emit/llvm/stmt.go`, and `_docs/design/07-lowering.md`). The programs `panic-defers`, `defer-order`, `defer-instances`, `defer-ref-receiver`, `defer-panics`, `defer-panics-unwinding` and `catch-defers` in `compiler/emit/internal/backendtest` hold both backends to it.
 
 Variables are dropped last declared first, so a value is dropped before anything declared ahead of it. A type with a `Drop` that holds a borrow may read what it borrows in its `Drop`, so what it borrows must outlive it: chapter 6, under `Drop`.
 

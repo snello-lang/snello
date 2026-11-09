@@ -905,13 +905,6 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 	return e.inside(val, elem, e.typeOf(x), held, e.typeOf(x.X), x.Pos())
 }
 
-// leaveFunction writes the drops a return from inside an expression
-// runs: the deferred calls, then every open frame.
-func (e *Emitter) leaveFunction(pos token.Pos) {
-	e.runDefers()
-	e.leave(0, pos)
-}
-
 // coalesce writes x ?? else: the value inside when there is one, or
 // the else value; an else that leaves, by return, break or continue,
 // is written as the statement it is. Through a borrow the result is

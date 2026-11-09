@@ -121,7 +121,7 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 
 `if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
-`defer` runs a call when the enclosing function returns, after the return value is computed. The arguments are evaluated where the `defer` stands, and several deferred calls run last first. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+`defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, and several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
 
 ## Built-in functions
 

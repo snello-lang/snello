@@ -71,7 +71,7 @@ Every value is released where the checker said its owner dies, and each backend 
 | Point | What is dropped |
 |---|---|
 | the end of a block | the block's variables, last declared first |
-| before a `return` | the variables of every open frame of the function, innermost first, after the deferred calls run |
+| before a `return` | the statement's temporaries, the variables of every open frame of the function and the deferred calls that ran, last registered first |
 | before a `break` or `continue` | the variables of the frames down to the loop left or continued |
 | the end of a `match` arm | the arm's bindings, and the parts of the scrutinee an arm consumed |
 | the end of a statement | its temporaries |
@@ -81,7 +81,7 @@ Every value is released where the checker said its owner dies, and each backend 
 | a closure capture consumed by the closure's body | the capture, when the body ends |
 | a spawned task ending | the task's parameters and captures, as any function's |
 | the end of `main` | the top-level variables of the program; nothing of other tasks |
-| a panic | the guarded values of the panicking task, innermost first, by the runtime |
+| a panic | the deferred calls that ran and the guarded values of the panicking task, last registered first, by the runtime |
 
 A move empties the place it moves from: an owned pointer becomes null, a string or slice gets a zero length and capacity, a struct with a `Drop` method clears its `sn_live` flag, a composite empties its parts. The drop of an emptied place does nothing, so a place is dropped exactly once whatever path reaches the end of its scope, and a conditional move needs no flag of its own beyond the place. A value that moves in and out of a loop body is handled by the same rule, since the loop's frame drops what the body left.
 
@@ -89,7 +89,15 @@ A value whose type has a `Drop` method, or holds one, is registered with the run
 
 ## Panics
 
-A panic prints its message, runs the drops on the guard stack, and exits with status 2, in any task. The LLVM backend keeps this mechanism in its first step: it is the runtime's, it costs nothing to a program that does not panic except the registration of `Drop`-bearing values, and it is what the differential test compares. Zero-cost unwinding through the IR's `invoke` and landing pads, which would remove the registration and run the drops of every frame from tables, is the step after, recorded here as an option and not a plan: it changes the drop discipline from a runtime list to a static one, and the two must be compared on the same programs before one replaces the other.
+A panic prints its message, runs the deferred calls and the drops on the guard stack, and exits with status 2, in any task. The LLVM backend keeps this mechanism in its first step: it is the runtime's, it costs nothing to a program that does not panic except the registration of `Drop`-bearing values, and it is what the differential test compares. Zero-cost unwinding through the IR's `invoke` and landing pads, which would remove the registration and run the drops of every frame from tables, is the step after, recorded here as an option and not a plan: it changes the drop discipline from a runtime list to a static one, and the two must be compared on the same programs before one replaces the other.
+
+A deferred call runs on a panic too, since a `defer` says what must happen on every exit and a panic is one; Go runs its deferred calls as a panic unwinds, from the chain of `_defer` records its runtime keeps per goroutine, and Snello does the same through the guard stack it already keeps per task. Each `defer` statement becomes a function of its own, its thunk, whose one parameter is a record holding what the statement saved: the arguments, a callee that is a value, a receiver the method takes by value, and the address of a receiver it lends, by `ref` or `mut`, so that the call reads the variable as it is when the call runs, which the borrow rules let the function change until then. The record is a local of the function, at its top, so it lives until the function returns, or until the panic ends the process or reaches a test's mark; its first member is the flag that says the statement ran, clear from the function's entry, so a return the statement did not reach, past an `if` not taken, skips the call. When the statement runs, it sets the flag and registers the record's address and the thunk on the guard stack, as a value with a `Drop` registers its own address and its dropper. The call is written once, in the thunk, and both exits go through it: a return, for each flag set, at its place in the order below, takes the guard off and then calls the thunk, which the C compiler and LLVM inline; a panic calls it from the guard stack as it calls a dropper. The guard comes off before the call, so a deferred call that panics on a return is not run again by its own panic, and the panic runs the deferred calls and drops still registered below it, as Go runs the rest of a function's deferred calls when one panics (`defer.go` in the C backend, `deferStmt` and `leaveFunction` in the LLVM backend's `stmt.go`).
+
+Both exits keep one order, the reverse of registration, as C++ runs its scope guards and destructors and D its `scope(exit)` statements: whatever was registered last, a value or a deferred call, is released first. The unwinding has it from the guard stack; a return writes it, the statement's temporaries, the variables of every open frame and the deferred calls that ran, merged in the order the function registers them, which the source gives, since a `defer` is refused inside a loop and a loop's variables are open at a return only in the pass that returns. A deferred call therefore runs before the drop of every value declared before its statement, which is everything it may borrow, and after the drop of a value declared after it, which it cannot name; the borrow checker's rule that a deferred call runs before the variables it borrows are dropped holds on both exits.
+
+A deferred call that panics while a panic unwinds is a drop that panics: it ends the process with both messages, printed as for a `Drop`, under a test's mark too. Go lets the later panic replace the first because `recover` can stop either; Snello has no `recover`, so the two are reported and the process ends.
+
+The cost is one push and one pop on the task's guard stack for each `defer` statement that runs, the same as one value with a `Drop`. A function with no `defer` pays nothing, and the panic path costs nothing until a panic. `defer` stays refused inside a loop, so every statement has one record and one flag, which a loop would turn into a list.
 
 ## Calls, closures and generics
 

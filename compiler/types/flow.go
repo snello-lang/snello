@@ -84,7 +84,7 @@ const (
 	dropBlock dropWhy = iota // at the end of the block that declares it
 	dropPass                 // at the end of a pass of the loop that declares it
 	dropLeave                // where a break or continue leaves its block
-	dropExit                 // at the end of the function's body, after its deferred calls run
+	dropExit                 // at the end of the function's body, after the deferred calls that borrow the variable run
 )
 
 // A flowDrop is a variable dying where its block ends.
@@ -434,7 +434,8 @@ func (c *Checker) flowGuardFails(fails int, arm *Scope, pos token.Pos) {
 }
 
 // flowReturnDrops records the drops a return makes: every variable of
-// every open scope of the function, after its deferred calls run.
+// every open scope of the function, each after the deferred calls that
+// may borrow it run.
 func (c *Checker) flowReturnDrops(pos token.Pos) {
 	if f := c.flow; f != nil && f.fnScope != nil {
 		c.dropScopes(f.fnScope.parent, pos, dropExit)
@@ -1256,7 +1257,7 @@ func (c *Checker) checkDrop(d *flowDrop, in, live bitset, reported bitset, bi, e
 		}
 
 		if d.why == dropExit && slices.Contains(f.deferred, b.holder) {
-			return true // the deferred calls run before the function's own variables are dropped
+			return true // a deferred call runs before the drop of what it borrows, which is declared before it
 		}
 
 		reported.set(li)
