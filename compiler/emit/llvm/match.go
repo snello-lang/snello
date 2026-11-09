@@ -221,7 +221,7 @@ func (e *Emitter) patternBinds(pat ast.Pattern, p string, t types.Type) []owned 
 
 		e.own(slot, vt)
 		if _, borrow := vt.(*types.Ref); !borrow && needsDrop(vt) {
-			return []owned{{p, vt}}
+			return []owned{{slot: p, typ: vt}}
 		}
 	case *ast.TuplePat:
 		var taken []owned

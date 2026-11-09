@@ -141,6 +141,26 @@ func Located(fn *types.Func) string {
 	return located[fn.Pkg().Path()+"."+fn.Name()]
 }
 
+// Variable returns the variable an expression names, through
+// parentheses, or nil for any other expression.
+func Variable(info *types.Info, e ast.Expr) *types.Var {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+
+		e = p.X
+	}
+
+	if id, ok := e.(*ast.Ident); ok {
+		v, _ := info.Uses[id].(*types.Var)
+		return v
+	}
+
+	return nil
+}
+
 // Simple reports whether an expression may be evaluated twice without
 // anyone noticing: a name, a literal, a field or an element of one, or
 // the predeclared len of one. The parts of a condition are shown for

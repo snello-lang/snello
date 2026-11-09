@@ -198,7 +198,7 @@ func (e *Emitter) patternBinds(p ast.Pattern, place string, t types.Type) []owne
 		e.discardUnused(p.Name)
 		e.own(local, vt)
 		if _, borrow := vt.(*types.Ref); !borrow && needsDrop(vt) {
-			return []owned{{place, vt}}
+			return []owned{{name: place, typ: vt}}
 		}
 	case *ast.TuplePat:
 		var taken []owned

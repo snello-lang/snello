@@ -68,6 +68,7 @@ type Emitter struct {
 	fn         *function                       // the function being written
 	strs       int                             // string constants written so far
 	closures   int                             // closures written so far, numbering their functions
+	seq        int                             // values and deferred calls registered so far, ordering what a return releases
 	tasks      int                             // spawn statements written so far, numbering their trampolines
 	boxWords   int                             // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	boxNeed    int                             // the words a closure of copies written in this pass needed beyond boxWords, which the next pass gives every box
@@ -120,11 +121,14 @@ type loop struct {
 	frame     int
 }
 
-// A deferred call: the slot of the flag saying the defer statement
-// ran, and the call to write at every return.
+// A deferred call: the record its defer statement saved into, whose
+// first member is the flag saying the statement ran; the function that
+// makes the call from the record; and when the statement registered
+// it.
 type deferred struct {
-	flag string
-	call *ast.CallExpr
+	rec   string
+	thunk string
+	seq   int
 }
 
 // Emit writes the IR module for a checked file, a program of one, and
@@ -383,7 +387,7 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 		if d.Const {
 			qualifier = "constant "
 		} else if needsDrop(obj.Type()) {
-			e.statics = append(e.statics, owned{"@" + lower.ObjName(obj), obj.Type()})
+			e.statics = append(e.statics, owned{slot: "@" + lower.ObjName(obj), typ: obj.Type()})
 		}
 
 		put(&e.globalDefs, "@", lower.ObjName(obj), " = internal ", qualifier, t, " ", value, "\n")
@@ -411,7 +415,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
 	put(&e.funcs, "define internal ptr ", g, "_get() {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr ", g, "_init, ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
 	if needsDrop(v.Type()) {
-		e.lazies = append(e.lazies, owned{g, v.Type()})
+		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}
 }
 
@@ -534,10 +538,10 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 
 // function writes the body of a function or closure into the function
 // being written: the parameters moved into slots of their own, the
-// statements, and for a body that falls off its end the deferred calls
-// and then the drops of its parameters and locals, or the mark of code
-// the checker proved unreachable. env, when not nil, is the closure's
-// environment, reached as closure.go says.
+// statements, and for a body that falls off its end the drops of its
+// parameters and locals and the deferred calls, last registered first,
+// or the mark of code the checker proved unreachable. env, when not
+// nil, is the closure's environment, reached as closure.go says.
 func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*types.Var]string, body *ast.BlockStmt) {
 	e.fn.captured = env
 	e.push(false)
@@ -558,8 +562,8 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 	}
 
 	if sig.Results() == types.Unit {
-		e.runDefers()
-		e.pop(body.Rbrace)
+		e.leaveFunction(body.Rbrace)
+		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
 		e.inst("ret void")
 	} else {
 		e.inst("unreachable")

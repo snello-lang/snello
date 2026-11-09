@@ -137,7 +137,7 @@ The compiler follows the store however it is written: through a copy of the para
 
 ### Deferred calls
 
-A deferred call runs when the function returns, after every other use, and before the function's own variables are dropped. It borrows only whole variables: its receiver, an argument, or what a deferred closure captures. One that holds no borrow is reached only when the call runs, so it may be read and changed before then, but not moved away or dropped:
+A deferred call runs when the function returns or panics, after every other use, and before the variables it borrows are dropped, which are declared before it. It borrows only whole variables: its receiver, an argument, or what a deferred closure captures. One that holds no borrow is reached only when the call runs, so it may be read and changed before then, but not moved away or dropped:
 
 ```go
 t := Tally{n: 1, name: "t".Clone()}

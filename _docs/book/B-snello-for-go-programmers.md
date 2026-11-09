@@ -63,7 +63,7 @@ Nothing here has a Go counterpart; the garbage collector made the questions disa
 | Assignment copies the value or the pointer; both names stay valid | Assignment moves; the old name is dead unless the type is `Copy` |
 | Passing a slice or a struct copies its header or its bytes | Passing by value moves; pass `ref` or `mut` to keep it |
 | `defer f.Close()` | A file closes itself when dropped; `f.Close()` consumes it and returns the error |
-| Finalizers run eventually, or never | `Drop` runs at scope exit, early return and panic, in order; a deferred call does not run on a panic |
+| Finalizers run eventually, or never | `Drop` runs at scope exit, early return and panic, in order; deferred calls run on a return and on a panic, as in Go, in one order with the drops |
 | `x := xs[0]` copies the element | `xs[0]` lends the element; `xs.Remove(0)`, `xs.Pop()` or `take` moves it |
 | `tmp := head; head = head.next` | `old := take(mut s.head)` |
 | Copy a struct and hope it had no shared state | `s.Clone()` is the only copy, and it is explicit |

@@ -490,6 +490,144 @@ func main() {
 			Out: "drop c\n", Stderr: "panic: first\npanic: in drop\n", Code: 2,
 		},
 		{
+			Name: "panic-defers", // the deferred calls that ran run as a panic unwinds, last registered first among them and the values: after the drop of a value declared after the defer, before the drop of one declared before it; a receiver lent mutably is read when the call runs; a defer not reached does not run
+			Src: guard + `struct Counter { n int }
+func (c mut Counter) Report() { fmt.Println("count", c.n) }
+func work(skip bool) {
+	a := Guard{name: "a"}
+	c := Counter{n: 0}
+	defer c.Report()
+	defer fmt.Println("deferred")
+	if skip {
+		defer fmt.Println("not reached")
+	}
+	b := Guard{name: "b"}
+	c.n = 2
+	xs := []int{}
+	fmt.Println(xs[len(xs)], b.name)
+}
+func main() { work(false) }
+`,
+			Out: "drop b\ndeferred\ncount 2\ndrop a\n", Stderr: "panic: index out of range", Code: 2,
+		},
+		{
+			Name: "defer-order", // a return runs the deferred calls and the drops in the order a panic does, last registered first, the arguments evaluated at the defer; a body that falls off its end too; a defer not reached does not run
+			Src: guard + `func work(early bool) int {
+	a := Guard{name: "a"}
+	n := 1
+	defer fmt.Println("deferred 1", n)
+	b := Guard{name: "b"}
+	n = 2
+	if early {
+		c := Guard{name: "c"}
+		defer fmt.Println("deferred 2", n)
+		return len(c.name) + len(b.name)
+	}
+
+	defer fmt.Println("deferred 3", n)
+	return len(a.name)
+}
+func tail() {
+	t := Guard{name: "t"}
+	defer fmt.Println("deferred t")
+	h := Guard{name: "h"}
+	fmt.Println(t.name, h.name)
+}
+func main() {
+	fmt.Println(work(true))
+	fmt.Println(work(false))
+	tail()
+}
+`,
+			Out: "deferred 2 2\ndrop c\ndrop b\ndeferred 1 1\ndrop a\n2\n" +
+				"deferred 3 2\ndrop b\ndeferred 1 1\ndrop a\n1\n" +
+				"t h\ndrop h\ndeferred t\ndrop t\n",
+		},
+		{
+			Name: "defer-instances", // each instance of a generic function saves its deferred call's values into a record of its own; a mut receiver is read when the call runs; a defer in a closure runs when the closure returns
+			Src: `package main
+import "fmt"
+struct Server { hits int }
+func (s mut Server) cleanup() { fmt.Println("cleanup", s.hits) }
+func (s mut Server) Run() {
+	defer s.cleanup()
+	s.hits = s.hits + 1
+}
+func show<T>(x T, label string) {
+	defer fmt.Println("deferred", label)
+	fmt.Println("body", label)
+}
+func main() {
+	srv := Server{hits: 1}
+	srv.Run()
+	show(1, "int")
+	show("s", "string")
+	f := func(n int) {
+		defer fmt.Println("inner deferred", n)
+		fmt.Println("inner body", n)
+	}
+	f(7)
+}`,
+			Out: "cleanup 2\nbody int\ndeferred int\nbody string\ndeferred string\ninner body 7\ninner deferred 7\n",
+		},
+		{
+			Name: "defer-ref-receiver", // a receiver lent by ref, a type's own or a predeclared method's, is read when the deferred call runs, on a return and on a panic, so a change the function made before counts; a value the method takes is saved at the defer
+			Src: `package main
+import "fmt"
+struct Tally { name string }
+func (t ref Tally) Show() { fmt.Println("show", t.name) }
+func work() {
+	t := Tally{name: "old".Clone()}
+	xs := []int{1}
+	o := Some(3)
+	defer t.Show()
+	defer fmt.Println("at defer", len(xs))
+	defer xs.Clone()
+	defer fmt.Println(o.Unwrap())
+	t.name = "newer".Clone()
+	xs.Push(2)
+	fmt.Println("body", t.name, len(xs))
+}
+func boom() {
+	t := Tally{name: "old".Clone()}
+	defer t.Show()
+	t.name = "later".Clone()
+	panic("stop")
+}
+func main() {
+	work()
+	boom()
+}`,
+			Out: "body newer 2\n3\nat defer 1\nshow newer\nshow later\n", Stderr: "panic: stop", Code: 2,
+		},
+		{
+			Name: "defer-panics", // a deferred call that panics on a return runs once, and its panic runs the deferred calls and drops still registered
+			Src: guard + `func boom() { fmt.Println("boom"); panic("in defer") }
+func work() {
+	a := Guard{name: "a"}
+	defer fmt.Println("deferred 1")
+	defer boom()
+	fmt.Println("returning", a.name)
+}
+func main() { work() }
+`,
+			Out: "returning a\nboom\ndeferred 1\ndrop a\n", Stderr: "panic: in defer\n", Code: 2,
+		},
+		{
+			Name: "defer-panics-unwinding", // a deferred call that panics while a panic unwinds ends the program with both messages, as a Drop that panics does
+			Src: guard + `func boom() { panic("in defer") }
+func work() {
+	a := Guard{name: "a"}
+	defer boom()
+	if a.name == "a" {
+		panic("first")
+	}
+}
+func main() { work() }
+`,
+			Stderr: "panic: first\npanic: in defer\n", Code: 2,
+		},
+		{
 			Name: "generic-box", // a closure in a generic function copying more than the default box holds
 			Src: `package main
 import "fmt"
@@ -1252,6 +1390,20 @@ func main() {
 			Stderr:      "panic: drop of b failed\n\twhile unwinding from panic: original\n",
 			Code:        2,
 			ReleaseOnly: true, // the abandoned frames are not freed, as catch-abandoned pins
+		},
+		{
+			Name: "catch-defers", // a panic caught at the runtime's mark runs the deferred calls made under it; the caller's run when the caller returns
+			Src: `package main
+import ("expect"; "fmt")
+func main() {
+	defer fmt.Println("main deferred")
+	expect.Panics(func() {
+		defer fmt.Println("inner deferred")
+		panic("boom")
+	})
+	fmt.Println("after")
+}`,
+			Out: "inner deferred\nafter\nmain deferred\n",
 		},
 		{
 			Name: "catch-across-threads", // a mark taken on one thread and jumped to after the task parked and resumed on another: the jump restores the task's own stack and registers, nothing of the thread's
