@@ -36,7 +36,7 @@ fmt.Println(t.Path(b))   // [a b]: b is still alive through a stale pointer
 
 Snello with `Arena<T>`:
 
-```snello
+```go
 t.Remove(a)
 fmt.Println(t.nodes.Get(b))   // None: b was freed, and the index knows it
 ```

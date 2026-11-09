@@ -34,7 +34,7 @@ The last row is in `../03-cache-server.snello`, where shared state is actually n
 
 A task that uses a channel gets a handle of its own, cloned before the `spawn`:
 
-```snello
+```go
 w := out.Clone()
 spawn func() {
     defer close(w)
@@ -47,7 +47,7 @@ In Go the goroutine and the caller share one pointer and the collector frees the
 
 Counting words borrows the text instead of consuming it:
 
-```snello
+```go
 out <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
 ```
 

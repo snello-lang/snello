@@ -48,7 +48,7 @@ The Makefile runs Snello's own tests through `snello test`: `make test` runs the
 - **One issue, one pull request.** Keep it to the issue's scope, and check off its acceptance criteria as you meet them.
 - **Tests with the change.** Every Go file has its `_test.go`. A checker change comes with the programs it must refuse, each with its expected message. Use only Go's `testing` package.
 - **Docs with the change.** A change to the language updates its design note and its chapter of [the book](_docs/book/) in the same pull request.
-- **The style.** [The coding standards](CODING_STANDARDS.md) say how code is written here; every `.go`, `.snello` and `.c` file starts with the license header they show. Markdown is not hard-wrapped.
+- **The style.** [The coding standards](CODING_STANDARDS.md) say how code is written here; every `.go`, `.snello` and `.c` file starts with the license header they show. Markdown is not hard-wrapped, and Snello code in it is fenced as `go`, since GitHub does not highlight Snello.
 - **Conventional Commits.** Commit messages and the pull request's title are `type(scope)!: subject`: the type one of `feat`, `fix`, `docs`, `test`, `ci`, `chore`, `refactor`, `perf` or `revert`, the subject in lower case with no period, body lines at most 100 characters. CI checks both, and a squash merge makes the title the commit on `main`.
 - **You are the author.** You must be able to explain and defend every line in review. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md), which forbids crediting a tool as an author.
 

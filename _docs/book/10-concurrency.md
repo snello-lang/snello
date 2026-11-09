@@ -16,7 +16,7 @@ Each is a move, as chapter 5 describes a move. After `ch <- job`, `job` is gone 
 
 A channel handle is owned too. The channel is one shared object that synchronizes itself; a handle on it is a small value, moved like any other, and `ch.Clone()` gives another handle on the same channel. Each task that sends or receives takes a handle of its own, which is what makes a pipeline a matter of handing a clone of `out` to each worker.
 
-```snello
+```go
 func produce(n int) <-chan Job {
     out := make(chan Job)
     w := out.Clone()                            // rule 3: a handle for the task
@@ -47,7 +47,7 @@ A value may cross a task boundary when its type is `Send`. Nobody writes `Send` 
 
 The last row is the one place structure is not the whole story, and it is settled inside the library rather than by a rule of the compiler: the cell that `rc`'s handles share holds a field of the predeclared type `local`, which holds nothing and is not `Send`, so any type holding it stays in its task. A program cannot write `local`, and cannot list `Send` on a type either; both are read from the fields.
 
-```snello
+```go
 spawn run(Account{balance: initial}, ch.Clone())      // Account is Send: an int and a slice of ints
 ```
 
@@ -59,7 +59,7 @@ There is no second property beside `Send`. Nothing in Snello changes a value thr
 
 A closure written in a `spawn` statement takes every variable it mentions with it. The move happens at the `spawn`, whatever the closure does with the variable inside, so the function cannot use the variable afterwards; a `Copy` value is copied in, as it is for any closure. A channel the closure sends on is a handle like any other, so the task is given a clone of its own, `d` above, and `main` keeps `done`.
 
-```snello
+```go
 names := []string{"a", "b"}
 done := make(chan ())
 d := done.Clone()
@@ -74,7 +74,7 @@ A channel carries only `Send` values, and the compiler says so where the channel
 
 `close(ch)` closes a channel: a receive yields `None` once the values already sent are taken, and a range over the channel ends. A receive-only channel cannot be closed. `for v := range ch` receives until then, and each `v` is owned by the loop body; `for range ch` with no variable drops each value as it arrives.
 
-```snello
+```go
 for r := range merge(workers) {          // `workers` is moved into merge; the range borrows the channel merge returns
     total += r.words
 }
@@ -84,7 +84,7 @@ for r := range merge(workers) {          // `workers` is moved into merge; the r
 
 `select` waits for the first of several channel operations that can proceed and runs that case; with a `default` it does not wait. A receive case binds the `T?` the receive yields, a send case sends, and a bare `<-ch` discards what it receives. When several cases are ready at once, one is chosen at random, so a busy channel cannot starve the others.
 
-```snello
+```go
 select {
 case got := <-tasks:                        // got is Task?; the task is moved out of the channel
     t := got ?? return                      // None: channel closed, no more work
@@ -117,7 +117,7 @@ Some state genuinely must be reached from several tasks: a counter, a cache, a c
 - **`sync.Counter`** is an `int` several tasks add to as one step each, `hits.Add(1)`, with `Load`, `Store` and `CompareAndSwap`: one instruction, no lock, nothing parks. **`sync.Atomic<T>`** holds a value of any `Send`, `Clone` and `Eq` type that tasks read and replace as one step each, a flag, a name, a configuration: `Load` gives a copy, `Store` and `Swap` replace it, and `CompareAndSwap` replaces it when it equals the value expected. Both take `ref self`, as a lock does, since what they hold is what makes a change through a `ref` safe.
 - **`sync.Once`** runs a function the first time `Do` is called and never again; **`sync.WaitGroup`** counts tasks with `Add` and `Done` and waits for zero with `Wait`. A `WaitGroup` is an owned handle like a channel: a task is given its own with `wg.Clone()` before the `spawn`, and the counter is freed with the last handle.
 
-```snello
+```go
 counter := sync.NewArc(sync.NewMutex(0))
 wg := sync.NewWaitGroup()
 for i := 0; i < 4; i++ {
@@ -143,7 +143,7 @@ Each of these types is made with its `New` function, and none has a zero value: 
 
 A `var` at the top level of a file is a package variable, and it is the one value no move ever touches: a `spawn` moves what its closure mentions, a channel moves what it carries, but a package variable is mentioned by no one and reached by every task. So it is under one rule, in three sentences. It may be read from any task and lent as `ref`, and it is never assigned, lent as `mut` or moved out of. Its type is one every task may share, `Send`, so an `rc` handle cannot be one. A change goes through what it holds: a `Counter`, an `Atomic` or a lock.
 
-```snello
+```go
 var names = []string{"round", "square"}       // read anywhere, by any task
 var hits = sync.NewCounter(0)                  // hits.Add(1) from any task, exact
 var state = sync.NewAtomic("idle")             // state.Swap("busy".Clone()), state.Load()

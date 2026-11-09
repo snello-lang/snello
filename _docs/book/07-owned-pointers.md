@@ -4,7 +4,7 @@
 
 A value of type `*T` is an owned pointer: it holds a `T` on the heap and is the one owner of it. `&expr` makes one, moving the value out of the expression into a fresh heap cell:
 
-```snello
+```go
 s.head = Some(&Node{value: v, next: old})       // &x allocates x on the heap
 ```
 
@@ -20,7 +20,7 @@ A pointer is an owned value like any other. Assigning or passing it by value mov
 
 A type cannot hold itself by value, since it would have no finite size; it holds itself through a pointer, a slice or a map. `struct R { r R? }` is refused with `invalid recursive type R: it contains itself; hold it through a pointer, *R`. The link is usually optional, because a chain ends:
 
-```snello
+```go
 struct Node {
     value string
     next  *Node?                 // owned pointer, or None
@@ -29,7 +29,7 @@ struct Node {
 
 `*Node?` reads as "an optional owned pointer to a node"; `?` applies to the pointer, as chapter 8 explains. An expression enum holds its operands the same way, and a `match` reaches them through the pointer with no extra syntax:
 
-```snello
+```go
 enum Expr {
     Lit(f64)
     Neg(*Expr)
@@ -50,7 +50,7 @@ func Eval(e ref Expr) f64 {
 
 Taking a node out of a chain and putting it elsewhere is a move of the pointer, with `take` leaving `None` behind so that no slot ever holds a pointer twice:
 
-```snello
+```go
 func (s mut Stack) Pop() string? {
     n := take(mut s.head) ?? return None
     s.head = n.next                   // moving a field out of the owned node n
@@ -61,7 +61,7 @@ func (s mut Stack) Pop() string? {
 
 Walking down a chain of optional pointers to change one slot is a borrow that moves from slot to slot. `cur` is a `mut *Node?`, a mutable borrow of one slot, and each step rebinds it to a slot one level down:
 
-```snello
+```go
 cur := mut t.root
 for {
     n := cur ?? { *cur = Some(&Node{key: k, val: v, left: None, right: None}); return }

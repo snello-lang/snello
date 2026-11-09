@@ -8,7 +8,7 @@ A slice is an owned, growable list. A map is an owned table from keys to values.
 
 A slice literal lists its elements, and `make` builds one of a given length, filled with the element's zero value; for an element with no zero value, a pointer or a type with `Drop` (chapter 18), `make([]T, 0, n)` reserves the room and `Push` fills it:
 
-```snello
+```go
 xs := []int{3, 1, 2}
 path := []string{}
 buf := make([]int?, cap)
@@ -34,7 +34,7 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 
 `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Swap`, `Reverse` and `Sort` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. `Swap` is how an algorithm moves elements it does not own a copy of: Go's `xs[i], xs[j] = xs[j], xs[i]` would move each element out of the slice, which is refused for a type that is not `Copy`, `cannot move xs[j] out of the slice`. The core tree uses most of them:
 
-```snello
+```go
 t.nodes.Push(Node{value: value, parent: Some(parent), children: []NodeID{}, live: true})
 t.nodes[parent].children.Push(id)
 children := t.nodes[id].children.Clone()
@@ -44,7 +44,7 @@ path.Reverse()
 
 The range form of `for` walks a slice. `for i, x := range xs` gives the index and the element; `for _, x := range xs` only the element; `for i := range xs` only the index. The element is lent, not copied, when the slice is reached through a borrow, so through a `mut` the loop can change it in place:
 
-```snello
+```go
 func (b mut Bag) bump() {
     for _, v := range b.items {
         *v += 1
@@ -78,7 +78,7 @@ Text is UTF-8 and the methods read it as Go's `strings` package does: `ToUpper` 
 
 The pieces `Fields` and `Split` yield borrow the string they came from, so `for w := range text.Fields()` lends `text` for the loop. To keep a piece, clone it or build an owned string from it, which is what `wordfreq` does with `w.ToLower()` before using the word as a map key. `SplitOnce` is made for `if` with a binding:
 
-```snello
+```go
 if (k, v) := line.SplitOnce("=") {
     settings.Insert(k.Trim().Clone(), v.Trim().Clone())
 }
@@ -88,7 +88,7 @@ if (k, v) := line.SplitOnce("=") {
 
 A map holds one value per key. A map literal lists its entries, or none, and `make(map[K]V)` is the same as the empty literal:
 
-```snello
+```go
 kv := map[string]string{}
 counts := map[string]int{}
 ```
@@ -108,7 +108,7 @@ The methods say what happens to the entry:
 
 `Get` and `GetMut` answer with an optional because the entry may be absent, which is what `config` relies on:
 
-```snello
+```go
 text := kv.Get(ref key) ?? return Err(Missing(key))
 ```
 

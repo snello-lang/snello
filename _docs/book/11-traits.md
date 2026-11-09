@@ -8,7 +8,7 @@ A trait is a set of methods a type promises to have. A type declares which trait
 
 A trait lists its methods as method declarations without bodies, with `Self` as the receiver's type. `Self` stands for whatever type implements the trait:
 
-```snello
+```go
 trait Shape {
     func (s ref Self) Area() f64
     func (s ref Self) Name() string
@@ -21,7 +21,7 @@ The receiver is written as any receiver is, `Self`, `ref Self` or `mut Self`, an
 
 A type says what it implements on its declaration, after the word `impl`, and its methods are ordinary methods:
 
-```snello
+```go
 struct Circle impl Shape {
     r f64
 }
@@ -36,14 +36,14 @@ The list is the implementation. A type with an `Area` and a `Name` but no `impl 
 
 A missing method is reported at the trait's name in the `impl` list, with the method as the trait wrote it:
 
-```snello
+```go
 struct Tri impl Shape {}                                  // ERROR "Tri does not implement Shape: missing method Name() string"
 func (t ref Tri) Area() f64 { return 0.0 }
 ```
 
 A method that is there but does not match is reported at the method, with both signatures:
 
-```snello
+```go
 struct Sq impl Named {}
 func (s Sq) Label() int { return 0 }                      // ERROR "method Sq.Label has the wrong signature for Named: have (Sq) Label() int, want (ref Sq) Label() string"
 ```
@@ -56,7 +56,7 @@ A trait's name is looked up as a trait. A package may declare a type with the sa
 
 A trait method may have a body. It is then a default: a type implementing the trait gets the method without declaring it, and may declare its own instead.
 
-```snello
+```go
 trait Shape {
     func (s ref Self) Area() f64
     func (s ref Self) Name() string
@@ -71,7 +71,7 @@ Inside the body, `s` is a value of `Self`, and `Self` has exactly the trait's me
 
 A type that declares the method overrides the default:
 
-```snello
+```go
 func (r ref Rect) Describe() string { return "a rectangle" }
 ```
 
@@ -86,7 +86,7 @@ A type may implement several traits, and more than one of them may provide a def
 
 A refining trait may override a default of the trait it refines:
 
-```snello
+```go
 trait Loud: Shape {
     func (s ref Self) Describe() string {
         name := s.Name()
@@ -101,7 +101,7 @@ struct Square impl Shape, Loud { s f64 }
 
 Two traits that both provide a default for a method, where neither refines the other, leave the choice open, and the compiler refuses to make it:
 
-```snello
+```go
 struct G impl Greeter, Waver {}                           // ERROR "G inherits Greet from both Waver and Greeter: declare G.Greet to choose"
 ```
 
@@ -113,7 +113,7 @@ A default is compiled once per type that takes it, with `Self` read as that type
 
 An override often wants to add to the method it replaces rather than start over. Inside a method, `super.M(args)` calls the next definition of `M` in the resolution order, with the method's own receiver:
 
-```snello
+```go
 trait Loud: Shape {
     func (s ref Self) Describe() string {
         d := super.Describe()
@@ -129,7 +129,7 @@ func (r ref Rect) Describe() string {
 
 "Next" is read in the resolution order of the type the method runs for. Inside a type's own method, the next definition is the first default for `M` among the type's traits, so `Rect`'s `Describe` wraps the one it overrides, and `rects[0].Describe()` prints `a rectangle, rect with area 6`. Inside a trait's default, it is the first default for `M` after that trait in the type's order. Usually that is a trait the current one refines, so `Loud`'s `Describe` wraps `Shape`'s and `sq.Describe()` prints `[loud] square with area 9`. But a type's `impl` list may put another trait's definition between the two, and then `super` reaches that one:
 
-```snello
+```go
 trait Plain { func (p ref Self) Tag() string { return "plain" } }
 trait Fancy: Plain { func (p ref Self) Tag() string { d := super.Tag(); return "fancy " + d } }
 trait Noted: Plain { func (p ref Self) Note() string { d := super.Tag(); return "note: " + d } }
@@ -147,7 +147,7 @@ Which definition is next depends on the type, so the compiler settles it per imp
 
 A trait may declare fields with `var`. Every type implementing the trait stores them, inline, after its own fields, and sets them at construction like any other field:
 
-```snello
+```go
 trait Named {
     var name string
     func (n ref Self) Name() string { return n.name.Clone() }
@@ -163,7 +163,7 @@ rects[1].name = "unit square"
 
 Inside the trait's default methods, a value of `Self` has the trait's fields as well as its methods, so `n.name` reads the field of whatever type implements `Named`; so does `x.name` on an `x` of type `T` bounded by `Named`. A field is a field: reading a `string` out of a borrowed `Self` moves it, which chapter 6 refuses, so the default above clones it, as a method of any struct would have to. The cheaper getter returns a borrow of the field, tied to the receiver as chapter 6 describes, and is what `examples/07-traits.snello` does:
 
-```snello
+```go
 func (n ref Self) Name() ref string { return ref n.name }
 ```
 
@@ -175,7 +175,7 @@ Each field name means one place. A type declaring a field a trait of its also de
 
 A trait may build on another, written with a colon after its name:
 
-```snello
+```go
 trait Solid: Shape {
     func (s ref Self) Volume(h f64) f64
 }
@@ -187,7 +187,7 @@ A type implementing `Solid` must declare `Shape`'s methods as well as `Volume`, 
 
 A type parameter may be bounded by a trait. Inside the function, a value of the parameter's type has the trait's methods, and nothing else:
 
-```snello
+```go
 func TotalArea<T: Shape>(xs ref []T) f64 {
     sum := 0.0
     for _, x := range xs {
@@ -200,14 +200,14 @@ func TotalArea<T: Shape>(xs ref []T) f64 {
 
 A call checks each type argument against the bounds of its parameter, found by inference as chapter 12 describes or written at the call. A type that does not implement the trait is refused with the parameter and the trait named:
 
-```snello
+```go
 TotalArea(ref circles)                                    // fine: Circle implements Shape
 TotalArea(ref blobs)                                      // ERROR "cannot use Blob as the type parameter T of TotalArea: Blob does not implement Shape"
 ```
 
 Without a bound, a type parameter has no methods, since the function must work for every type:
 
-```snello
+```go
 func Bad<T>(x ref T) f64 { return x.Area() }              // ERROR "Area is not a method of ref T: no bound of T declares it"
 ```
 
@@ -215,7 +215,7 @@ Several bounds are joined with `+`, `T: Shape + Named`, and the parameter has th
 
 A generic type takes bounds the same way, and may itself implement a trait by using them:
 
-```snello
+```go
 struct Scaled<T: Shape> impl Shape {
     inner T
     k     f64
@@ -249,7 +249,7 @@ Some traits come with the language and can be listed after `impl` or used as bou
 
 The predeclared types implement these traits by their structure. Every number is `Copy`, `Clone`, `Eq`, `Ord` and `Hash`; a string is all of those but `Copy`; the `error` type is `Error`; a tuple, an array, an option, a slice or a map is what its parts are, so `(int, string)` is `Eq` and `Hash`, and `[]int` is `Clone` but not `Eq`. An enum whose payloads are comparable is `Eq` and `Hash` without saying so, since `==` on an enum has always been allowed. A struct is not: it implements a standard trait by listing it, and then in one of two ways. It can write the method. Or it can list the trait and write nothing, and the compiler derives the method from the fields: `Eq` compares them one by one, `Cmp` orders by the first field that differs, `Hash` combines their hashes, `Clone` clones each. Derivation needs every field to implement the trait, and the first field that does not is reported with its type:
 
-```snello
+```go
 struct Pt impl Copy, Eq, Ord { x, y int }           // Eq and Cmp derived; Copy checked
 struct Bag impl Eq { items []int }                    // ERROR "Bag does not implement Eq: field items has type []int, which is not Eq"
 ```
@@ -266,7 +266,7 @@ A value whose type implements `Error` prints as its message: `fmt.Println("error
 
 The operator traits give a type the arithmetic operators. Each has one method, taking both operands by value and returning `Self`: `Add` asks for `func (a Self) Add(o Self) Self` and gives `+`; `Sub`, `Mul`, `Div` and `Rem` do the same for `-`, `*`, `/` and `%`; `Neg` asks for `func (a Self) Neg() Self` and gives the unary `-`. The right operand has the type of the left unless the trait is listed with an argument: `Mul<f64>` asks for `func (a Self) Mul(k f64) Self`, so a vector scales by a number. `Mul` alone means `Mul<Self>`, and the two spellings are one trait: a `Vec2` listing `Mul` satisfies a bound `T: Mul<Vec2>`, and one listing `Mul<f64>` does not satisfy `T: Mul`, since that method takes a `Vec2`. The argument may be a type parameter of the declaration, `struct P<T: Mul> impl Mul<T>`, or of the bound, `Own<T: Mul<T>>`. A type has one `Mul`, so it lists `Mul` or `Mul<f64>`, not both.
 
-```snello
+```go
 struct Vec2 impl Copy, Eq, Add, Sub, Mul<f64>, Neg {
     x, y f64
 }
@@ -285,7 +285,7 @@ Each trait in the list stands alone: `Add` gives `+` and nothing more. `Vec2` li
 
 A trait's name is also a type. A value of type `Shape` holds a value of any type that implements `Shape`, and a `[]Shape` holds a mix of them:
 
-```snello
+```go
 mixed := []Shape{Circle{r: 1, name: "circle"}, Rect{w: 2, h: 3, name: "rect"}}
 
 func PrintAll(xs ref []Shape) {
@@ -295,7 +295,7 @@ func PrintAll(xs ref []Shape) {
 
 A value of an implementing type becomes a `Shape` wherever a `Shape` is wanted: assigned, passed, returned, or written as an element. The value moves into the trait value, or is copied into it when its type is `Copy`; the trait value owns it from then on, so a trait value is not `Copy` and moves as a `string` does, and it is dropped with what it holds. A borrow does not become a trait value, since there would be nothing to own, and neither does a type that holds a borrow, since the trait value would hide the borrow from the rules of chapter 6. A type that does not list the trait is refused with the reason:
 
-```snello
+```go
 func f(b Blob) Shape { return b }                         // ERROR "cannot use b (Blob) as Shape in return: Blob does not implement Shape"
 ```
 
@@ -307,7 +307,7 @@ The cost is one allocation when the value is made and one indirect call per meth
 
 A trait may take type parameters, written as a type's are, and its methods use them: `trait Iterator<T>` asks for `Next() T?`. A type implements an instance, `impl Iterator<int>`, and gets the methods with the argument in place; a generic type may implement the trait over one of its own parameters, `struct MapIter<I: Iterator<T>, T, U> impl Iterator<U>`, and a bound may name an instance, `I: Iterator<T>`, which a type argument satisfies by implementing exactly that instance. A default method may have type parameters of its own, `Map<U>(f func(T) U)`, inferred at the call from its function argument as a generic function's are; a required method may not, since the implementor's method has none to give it. Inside the trait, `Iterator<T>` names the trait itself, so a default may hand `Self` to a type bounded by it. The sample is cut from `examples/run/iterators.snello`, which `examples/18-iterators.snello` is built on:
 
-```snello
+```go
 trait Iterator<T> {
 	func (it mut Self) Next() T?
 	func (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> { return MapIter{inner: it, f: f} }

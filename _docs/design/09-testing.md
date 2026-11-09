@@ -18,7 +18,7 @@ The standard library's own packages have test files too: `std/strings/strings_te
 
 A test is a function in a test file whose name begins with `Test` followed by a capital letter, taking nothing and returning nothing:
 
-```snello
+```go
 package strings
 
 import ("expect"; "testing")

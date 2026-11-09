@@ -155,7 +155,7 @@ No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; 
 
 Full reasoning in `01-language-design.md`. Traits are Go interfaces that may also carry default methods and fields.
 
-```snello
+```go
 trait Shape {
     func (s ref Self) Area() f64                  // required
     func (s ref Self) Describe() string {             // default

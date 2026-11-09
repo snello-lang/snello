@@ -56,6 +56,7 @@ The work is planned on GitHub, not in the repository. A [milestone](https://gith
 - **The examples are the acceptance suite.** Every change keeps all twenty processing, and each one with an expected output running. Changing an example to make a change pass requires changing the design document in the same change.
 - **License header** on every `.go` and `.snello` file, in the form shown in `CODING_STANDARDS.md`.
 - **Markdown is not hard-wrapped.** One line per paragraph; never reflow prose to a column width.
+- **Snello code in Markdown is fenced as `go`.** GitHub does not know Snello, and Go's highlighting fits its syntax.
 
 ## Commands
 

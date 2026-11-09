@@ -6,7 +6,7 @@ Snello has two ways to build a type out of others. A struct holds all of its fie
 
 ## Structs
 
-```snello
+```go
 struct Node {
     value    string
     parent   NodeID?               // None for the root
@@ -21,7 +21,7 @@ A struct declaration is `struct Name { fields }`, one field per line or separate
 
 A struct is built with a keyed literal and used with dot notation:
 
-```snello
+```go
 n := Node{value: value, parent: None, children: []NodeID{}, live: true}
 v := Vec3{1, 2, 3}                    // every field in order, when the names add nothing
 t := Tree{nodes: []Node{{value: value, parent: None, children: []NodeID{}, live: true}}}
@@ -32,7 +32,7 @@ Every field has a zero value, so `Stack{}` is an empty stack. A named type is co
 
 ### Methods
 
-```snello
+```go
 func (t mut Tree) AddChild(parent NodeID, value string) NodeID { ... }
 func (t ref Tree) Path(id NodeID) []string { ... }
 func (f File) Close() Result<(), error> { ... }
@@ -42,7 +42,7 @@ A method is a function with a receiver in parentheses before its name, called wi
 
 ## Enums
 
-```snello
+```go
 enum State {
     Closed
     Connecting(attempt int)
@@ -67,7 +67,7 @@ An enum whose payloads are all plain values, like `Token` above, is a `Copy` typ
 
 Enums can be recursive through an owned pointer, which is how a tree-shaped value is written:
 
-```snello
+```go
 enum Expr {
     Lit(f64)
     Neg(*Expr)                                  // *T: an owned heap pointer
@@ -81,7 +81,7 @@ enum Expr {
 
 An enum takes methods as a struct does, with a receiver lent `ref` or `mut` or taken by value, and the body reaches the fields of the variant through `match`, as `Describe` below does. What an enum implements is listed after its name, as for a struct:
 
-```snello
+```go
 enum Token impl Copy, Eq {
     Num(f64)
     Plus
@@ -106,7 +106,7 @@ The compiler checks the list: a trait named there is implemented, or the declara
 
 Two of the standard traits an enum has without listing them. `==` compares any two values of an enum whose fields compare, the variants first and then the fields, and such an enum hashes the same way, so it keys a map as it is, `map[State]int{}`; a struct compares and hashes only by listing `Eq` and `Hash`. `Copy` is as the section above says, by structure: listing it makes the intent visible and checked, and the error names the field in the way, `E does not implement Copy: variant B has a field of type string, which is not Copy`. A type with a `Drop` method is never `Copy`, and an enum may have one:
 
-```snello
+```go
 enum Note impl Drop {
     Quiet
     Loud(s string)
@@ -123,7 +123,7 @@ An enum prints as it is written in a program: `fmt.Println(Connecting(2), Closed
 
 An enum may take type parameters, as a struct and a function may (chapter 12):
 
-```snello
+```go
 enum Tree<T> {
     Leaf(v T)
     Branch(left *Tree<T>, right *Tree<T>)
@@ -151,7 +151,7 @@ An enum is not a number. There is no `iota` and no conversion: `int(Red)` on `en
 
 ## Match
 
-```snello
+```go
 func (s ref State) Describe() string {
     return match s {
         Closed            => "closed",
@@ -184,7 +184,7 @@ A name in a pattern is a variant when a variant of that name is in sight, and a 
 
 Patterns nest: `Bin(Plus, l, r)` matches a `Bin` whose first field is `Plus` and binds the other two. Matching on a tuple of two enums writes a state machine's transition table in one place:
 
-```snello
+```go
 func step(s State, ev Event) State {
     return match (s, ev) {
         (Closed, Dial)                       => Connecting(1),
@@ -208,7 +208,7 @@ A guard runs whether or not its arm is taken: when it fails, the next arm is tri
 
 The body of an arm is an expression, a block, or a single statement:
 
-```snello
+```go
 match c {
     '+' => return Ok(Plus),
     '0'..='9' => return Ok(Num(l.number(c))),
@@ -228,7 +228,7 @@ Because a comma ends the arm, a `return` inside an arm carries one expression; t
 
 A `match` with no value takes conditions instead of patterns: the arms are tried in order, and the first whose condition holds runs. It is what Go writes as a `switch` with no value, and what an `if` and `else if` chain does, laid out as a table:
 
-```snello
+```go
 func grade(score int) string {
     return match {
         score >= 90 => "A",
@@ -241,7 +241,7 @@ func grade(score int) string {
 
 Each arm's condition is a `bool`, and its body is what any arm's is: an expression, a block, or one statement, `return`, `break` and `continue` among them:
 
-```snello
+```go
 for _, n := range readings {
     match {
         n < 0  => continue,
@@ -259,7 +259,7 @@ Snello has no `switch`: `match x { ... }` branches on what a value is, `match { 
 
 When only one variant matters, an `if` binding is shorter than a two-arm `match`:
 
-```snello
+```go
 if parent := t.nodes[id].parent {
     t.nodes[parent].children.RemoveValue(id)
 }

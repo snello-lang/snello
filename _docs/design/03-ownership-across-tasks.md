@@ -91,7 +91,7 @@ Status: implemented, as this section says; what the building changed is marked "
 
 **The problem.** Everything above moves: a `spawn` takes what its closure mentions, a channel takes what it carries, and a borrow stays in its frame. A package variable is mentioned by no one and moved by nothing; it is simply there, and so every task reaches it. Found while checking the book's claim that a data race is a compile error:
 
-```snello
+```go
 var counter int = 0
 
 func work(done chan<- ()) {
@@ -114,7 +114,7 @@ for `counter += 1`, for `bump(mut counter)`, for `names.Push("x")` through a met
 
 The same program, correct, and the first thing anyone writes, so atomics come with package variables rather than with the collections:
 
-```snello
+```go
 var hits = sync.NewCounter(0)
 
 func work(done chan<- ()) {
@@ -129,7 +129,7 @@ fmt.Println(hits.Load())   // 2000000, every time
 
 **What a package variable may hold, and from when.** Its type must be `Send`, inferred as above, whether the type is written out or inferred from the value, and a trait used as its type must refine `Send`: `held cannot be a package variable: rc.Rc<Node> stays in its task`, `unit cannot be a package variable: Shape does not refine Send`, checked once every type of the package is complete (`global-declared-not-send`, `global-trait-not-send`; the first build checked the inferred form alone, which the review before the pull request found). Its initializer once had to be a literal, which both backends refuse otherwise, `a top-level var or const whose value is not a literal`. A `Mutex` or an `Atomic` is made by a call, so the rule needs initializers that call:
 
-```snello
+```go
 var registry = sync.NewMutex(map[string]int{})
 var config = load("snello.toml")
 ```

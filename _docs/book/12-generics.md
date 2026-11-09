@@ -4,7 +4,7 @@
 
 A generic type is written once for any element type. Its type parameters follow its name in angle brackets, and its fields use them as types:
 
-```snello
+```go
 struct List<T> {
     items []T
 }
@@ -12,7 +12,7 @@ struct List<T> {
 
 `List` on its own is not a type; `List<int>` and `List<string>` are. Each use names the type arguments, one per parameter, and a value is built as for any struct:
 
-```snello
+```go
 l := List<int>{}
 ```
 
@@ -22,7 +22,7 @@ Two uses with the same arguments are the same type, and uses with different argu
 
 A method of a generic type names the type's parameters in its receiver, and uses them in its signature and body:
 
-```snello
+```go
 func (l mut List<T>) Push(v T)         { l.items.Push(v) }
 func (l ref List<T>) Len() int         { return len(l.items) }
 func (l ref List<T>) Get(i int) ref T? {
@@ -39,13 +39,13 @@ Called on a `List<int>`, `Push` takes an `int` and `Get` returns a `ref int?`: t
 
 Inside the declaration, a value of type `T` is an owned value the compiler knows nothing else about. It moves when it is passed or assigned, as a `string` does, so a method cannot use it twice:
 
-```snello
+```go
 func (l mut List<T>) Twice(v T) { l.Push(v); l.Push(v) }   // ERROR "use of moved value v"
 ```
 
 A bound after the parameter's name says more. `T: Copy` promises that every argument is a `Copy` type, so a value of `T` copies instead of moving:
 
-```snello
+```go
 struct Copied<T: Copy> { v T }
 ```
 
@@ -57,7 +57,7 @@ An instance is `Copy` when its fields are, as any struct is: a `Pair<int, bool>`
 
 An enum may be generic too, and may refer to itself through an owned pointer:
 
-```snello
+```go
 enum Tree<T> { Leaf(v T); Branch(left *Tree<T>, right *Tree<T>) }
 ```
 
@@ -73,7 +73,7 @@ Each use of a generic with its own type arguments becomes a type or function of 
 
 A function takes type parameters the way a type does, after its name:
 
-```snello
+```go
 func Map<T, U>(l List<T>, f func(T) U) List<U> {
     out := List<U>{}
     for _, v := range l.items { out.Push(f(v)) }    // ranging over an owned slice moves
@@ -83,7 +83,7 @@ func Map<T, U>(l List<T>, f func(T) U) List<U> {
 
 A call rarely names the type arguments. They are found from the arguments: in `Map(l, func(x int) int { return x * 2 })`, `l` is a `List<int>`, so `T` is `int`, and the function literal returns an `int`, so `U` is too. When the arguments do not say, the type the result is wanted as does, so `var e List<int> = Empty()` works. Otherwise they are written after the name, all of them or the first few, `Empty<int>()`, and the compiler names the one it could not find:
 
-```snello
+```go
 e := Empty()                          // ERROR "cannot infer the type parameter T of Empty: give it, Empty<...>"
 ```
 
@@ -95,7 +95,7 @@ A struct literal finds its type arguments the same way, from its context and the
 
 A method may have type parameters of its own, after its receiver's, whether its type is generic or not:
 
-```snello
+```go
 func (l ref List<T>) Conv<U>(f func(ref T) U) List<U>
 ```
 

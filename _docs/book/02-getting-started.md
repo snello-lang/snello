@@ -14,7 +14,7 @@ go build -o snello ./cmd/snello
 
 A Snello program is a file in a package `main` with a `func main()`:
 
-```snello
+```go
 package main
 
 import "fmt"
@@ -45,7 +45,7 @@ snello build hello.snello
 
 A package's tests live beside it in files named `NAME_test.snello`, which are part of the package only when it is tested: `snello build` never reads one, and nothing of a test reaches a program's binary. A test is a plain function named `Test` and a capital, taking nothing and returning nothing; it passes when it returns, and it fails by a failed expectation, which is a panic the runner catches at the test's boundary, dropping what the test made. The `expect` package asserts and the `testing` package runs; both may be imported from a test file alone. From `examples/run/packaged/shapes/shapes_test.snello`:
 
-```snello
+```go
 package shapes
 
 import ("expect"; "testing")
@@ -96,7 +96,7 @@ app/
         area.snello     package shapes
 ```
 
-```snello
+```go
 package main
 
 import (
@@ -114,7 +114,7 @@ An import is answered by the standard library first, then by the module's direct
 
 ## A second program
 
-```snello
+```go
 package main
 
 import "fmt"

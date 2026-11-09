@@ -19,7 +19,7 @@ Thirty-one words are reserved and cannot be used as names.
 
 A statement ends at the end of its line when the line ends in a name, a literal, `)`, `]`, `}`, `?`, `>` or `>>`, or one of `return`, `break` and `continue`. Otherwise the statement continues on the next line, so a long call breaks after a comma or an opening bracket, and a method chain breaks after the dot:
 
-```snello
+```go
 return strconv.ParseFloat(text).
     Map(func(v f64) Token { return Num(v) })
 ```

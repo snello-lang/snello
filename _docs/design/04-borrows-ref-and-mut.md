@@ -25,7 +25,7 @@ Without a garbage collector the gap is fatal rather than annoying. If a callee m
 
 The same three modes apply to method receivers:
 
-```snello
+```go
 func (s ref Server) GetUser(...)      // reads the server
 func (t mut Tree) AddChild(...)       // changes the tree
 func (f File) Close() io.Error?       // consumes the file; it cannot be used after
@@ -33,7 +33,7 @@ func (f File) Close() io.Error?       // consumes the file; it cannot be used af
 
 And to local bindings and call sites, where the keyword marks what is being created:
 
-```snello
+```go
 n := ref t.nodes[id]                  // n is a borrow of one node, no copy
 strings.Fields(ref job.text)          // lend the text for the call; `ref` is optional here
 sort.Sort(mut list)                   // lend the list for mutation

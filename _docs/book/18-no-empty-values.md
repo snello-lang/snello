@@ -30,7 +30,7 @@ What it buys:
 
 A variable declared without a value gets its type's zero value when it has one:
 
-```snello
+```go
 var n int
 var s string
 var p Point
@@ -80,13 +80,13 @@ Every way of making the zero of a type that has none is refused, each with what 
 
 A value that depends on a condition is built where it is declared, with an `if` or a `match` expression, rather than declared first and assigned on every path:
 
-```snello
+```go
 lock := if limit > 2 { sync.NewMutex(limit) } else { sync.NewMutex(0) }
 ```
 
 A link that may point at nothing is an optional, given a value later:
 
-```snello
+```go
 var parent rc.Weak<Node>?
 fmt.Println(parent.IsNone())
 parent = Some(root.Downgrade())
@@ -97,7 +97,7 @@ if w := ref parent {
 
 A map of values without a zero value is written as any map is, `m[k] = v`, and read with `Get`, which says whether the key is there:
 
-```snello
+```go
 accounts["ada"] = Account{owner: "ada".Clone(), lock: sync.NewMutex(5)}
 if acct := accounts.Get("ada") {
     fmt.Println(acct.owner, *acct.lock.Lock().Get())
@@ -110,7 +110,7 @@ Generic code is checked once for every type argument, so a type parameter has no
 
 `take(mut place)` moves a value out of a field or an element and leaves the type's zero value behind, so it works only for a type that has one. `replace(mut place, v)` moves the value out and leaves `v`, so the place is never empty, and it works for every type. It is Rust's `mem::replace`:
 
-```snello
+```go
 a := Account{owner: "ada".Clone(), lock: sync.NewMutex(10)}
 old := replace(mut a.lock, sync.NewMutex(20))
 fmt.Println(*old.Lock().Get(), *a.lock.Lock().Get())
@@ -133,7 +133,7 @@ With the rule, the library's handles exist only from their constructors, and the
 - `strings.Repeat(s, n)` returns `string?`: `None` for a negative `n`, or for a string too long for an `int` to count.
 - `WaitGroup.Add(n)` and `Done()` return `bool`: `false`, with the count left as it was, when the count would go below zero, a `Done` with no `Add` before it.
 
-```snello
+```go
 fmt.Println(strings.Repeat("ab", 3) ?? "", strings.Repeat("ab", -1).IsNone())
 // ababab true
 wg := sync.NewWaitGroup()

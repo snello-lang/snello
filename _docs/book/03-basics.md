@@ -4,7 +4,7 @@ This chapter is the shape of a Snello program: files, names, values, functions a
 
 ## A program
 
-```snello
+```go
 package wordfreq
 
 import ("fmt"; "os")
@@ -27,7 +27,7 @@ Names that start with a capital letter are exported from their package; the othe
 
 ## Variables
 
-```snello
+```go
 count := 0
 var x, y int = 1, 2
 path := []string{}
@@ -51,7 +51,7 @@ Assigning a value to a new name hands the value over. For a number or a `bool` n
 
 A literal takes the type its context asks for, and a conversion is a call of the type name:
 
-```snello
+```go
 v := f64(first - '0')               // first is a byte; v is f64
 v = v*10 + f64(l.src[l.pos] - '0')  // 10 is f64 because v is
 n = n*10 + int(c - '0')
@@ -65,7 +65,7 @@ A literal never carries a type of its own into an expression: `10` is an `f64` i
 
 A `string` is a sequence of UTF-8 bytes that owns its memory and never changes. `len(s)` is its length in bytes and `s[i]` is a byte; `for i, r := range s` walks its runes, the code points, each of type `rune`, as chapter 19 describes. Character literals such as `'+'` and `'0'` take the type the context asks for, usually `byte`.
 
-```snello
+```go
 for l.pos < len(l.src) && l.src[l.pos] == ' ' { l.pos += 1 }
 c := l.src[l.pos]
 text := l.src[start:l.pos]
@@ -76,7 +76,7 @@ target := tmp.path + "/copy.txt"
 
 ## Functions
 
-```snello
+```go
 func Copy(src ref string, dst ref string) Result<i64, error> { ... }
 
 func popMin(n *Node) (*Node, *Node?) {
@@ -93,7 +93,7 @@ A parameter says how the function takes its argument. `src ref string` reads it;
 
 Function literals are closures. A closure that only reads a variable borrows it; one that assigns to it borrows it mutably:
 
-```snello
+```go
 count := 0
 t.Walk(0, func(n ref Node) { count += 1 })
 fmt.Println(count)                 // 3
@@ -103,7 +103,7 @@ fmt.Println(count)                 // 3
 
 `if`, `for`, `break`, `continue`, `return` and `defer` take braces and no parentheses around their conditions. Snello has no `switch`: `match`, chapter 4, does its work, on a value, `match x { 1 | 2 => ... }`, checking that every case is covered, and with no value on conditions, `match { x > 0 => ... }`, the first that holds; the word is reserved, and the compiler says so when it meets one. `break` ends the innermost loop and `continue` goes to its next iteration, wherever they stand inside it: a `match` or a `select` is not a loop and does not catch them, and outside a loop both are errors. An `if` may start with a statement: `if x := f(); x > 0 {`. `for` has three forms, an endless `for {`, a condition `for cond {`, and a counter `for i := 0; i < n; i += 1 {`, and a range form: `for i := range xs` yields indexes, `for i, x := range xs` indexes and elements, `for k, v := range m` keys and values, `for x := range ch` the values received from a channel, and `for range ch` receives and discards them.
 
-```snello
+```go
 for i := 0; i < len(s); i += 1 {
     c := s[i]
     if c < '0' || c > '9' { return None }
@@ -115,7 +115,7 @@ for _, k := range []int{5, 3, 8, 1, 4} { t.Insert(k, fmt.Sprint(k)) }
 
 `if` is also an expression when every branch yields a value, and then the `else` is required:
 
-```snello
+```go
 pat := if ci { "(?i)" + p } else { p.Clone() }
 ```
 

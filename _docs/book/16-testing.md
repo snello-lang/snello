@@ -16,7 +16,7 @@ Two packages exist for tests: `expect` asserts and `testing` runs. Both may be i
 
 A test is a function in a test file whose name begins with `Test` followed by a capital letter, taking nothing and returning nothing. It passes when it returns. It fails by a failed expectation, which is a panic the runner catches at the test's boundary; the values with `Drop` methods the test made since are dropped on the way, a file closed, a directory removed, a lock given back. There is no handle to pass around and no value to return. From `examples/run/packaged/shapes/shapes_test.snello`:
 
-```snello
+```go
 package shapes
 
 import ("expect"; "testing")
@@ -84,7 +84,7 @@ Every function of `expect` fails the test when its condition does not hold and d
 
 The names `IsSome`, `IsOk` and `IsErr` carry `Is` because `Some`, `Ok` and `Err` are the variants' own names, which a function of the package would hide from its own `match` patterns. `IsSome` and `IsOk` return what they found, so the style of a test that needs the value is one assertion per line:
 
-```snello
+```go
 v := expect.IsOk(Parse("1"))
 expect.Equal(ref v, ref 1)
 ```
@@ -131,7 +131,7 @@ Two limits follow from how the place is handed over. An assertion written inside
 
 `testing.Log(line)` and `testing.Logf(format, args...)` record a line with the file and line it was logged from, printed under the test's result when the test fails or when `-v` is given, and otherwise not at all. `testing.Skip(reason)` ends the test as skipped, reported as `--- SKIP: TestName` with the reason under it when `-v` is given; `testing.Short()` reports whether `-short` was given, for a test to skip its long part:
 
-```snello
+```go
 func TestLarge() {
     if testing.Short() {
         testing.Skip("large input")
@@ -152,7 +152,7 @@ A test that calls `testing.Parallel()` as its first line runs beside the other p
 
 A benchmark is a function named `Benchmark` and a capital looping over `testing.Loop()`:
 
-```snello
+```go
 func BenchmarkRepeat() {
     testing.ReportAllocs()
     for testing.Loop() {

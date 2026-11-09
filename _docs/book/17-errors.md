@@ -8,7 +8,7 @@ An error in Snello is a value. A function that can fail returns a `Result<T, E>`
 
 A type is an error when it lists the standard trait `Error`:
 
-```snello
+```go
 trait Error {
     func (s ref Self) Error() string
     func (s ref Self) Source() Error?
@@ -17,7 +17,7 @@ trait Error {
 
 `Error()` is the message. `Source()` is the error this one wraps, or `None`. Both are written for you when you write nothing, so the shortest error type is one line:
 
-```snello
+```go
 enum AppError impl Error, Clone {
     Read(cause io.Error)
     Parse(cause strconv.Error)
@@ -32,7 +32,7 @@ The trait's name is also a type, chapter 11: a value of type `Error` holds any e
 
 A type that lists `Error` and writes no `Error()` has it derived: the message is the value as `%v` prints it, chapter 4's form for an enum, a struct or a type declared over a predeclared one. Nothing else is written for the message, so there is no second grammar to learn, and the same rule serves an enum, a struct and `type Code int impl Error`:
 
-```snello
+```go
 struct Pair impl Error { key string; n int }
 type Code int impl Error
 
@@ -42,7 +42,7 @@ fmt.Println(Missing("port"), Empty, Pair{key: "k", n: 1}, Code(42))
 
 A string field prints quoted inside a variant, so `Parse(cause strconv.Error)` prints as `Parse("strconv.Atoi: parsing \"q\": invalid syntax")`, with the cause's message inside. That line is right for a log, a test and a quick program, and it is not a line for an end user. A program that wants its own wording writes `Error()`, as it always could, and `?` and the rest of this chapter apply to it the same:
 
-```snello
+```go
 struct LoadError impl Error, Clone {
     path  string
     cause AppError
@@ -59,7 +59,7 @@ An error prints as its message wherever a value is printed: `Println`, `%v`, `%s
 
 `Source()` gives the error under this one. A type that writes none gives `None`. A type that wraps another error writes it, returning an owned trait value, which is why the field is cloned: a trait value owns what it holds, chapter 11, and the method lends the error it is called on:
 
-```snello
+```go
 func (e ref LoadError) Source() Error? { return Some(e.cause.Clone()) }
 ```
 
@@ -67,7 +67,7 @@ So a type that is a cause lists `Clone`, as `AppError` above does and as the lib
 
 A chain is walked by asking. `Source()` on a trait value of `Error` goes to the method of the value it holds, so one loop serves every error:
 
-```snello
+```go
 if s := boxed.Source() {
     fmt.Println("source:", s)              // source: load /nonexistent/x
 }
@@ -75,7 +75,7 @@ if s := boxed.Source() {
 
 `%+v` prints the chain for you: the message, then each source's message after a colon and a space, down to the error with no source. On an error with no source it prints the same as `%v`:
 
-```snello
+```go
 fmt.Printf("%v\n%+v\n", e, e)
 // load /nonexistent/x
 // load /nonexistent/x: Read("open /nonexistent/x: no such file or directory")
@@ -93,7 +93,7 @@ The `+` flag goes with `v` on an error and nowhere else, with a width but no pre
 
 - **Into the variant that holds its type.** When `E` is an enum with exactly one variant whose only field has the error's type, `?` wraps the error in that variant. `Read(cause io.Error)` takes an `io.Error`, and `Parse(cause strconv.Error)` a `strconv.Error`, with nothing written:
 
-```snello
+```go
 func load(path string) Result<int, AppError> {
     text := os.ReadToString(ref path)?         // an io.Error becomes Read(e)
     n := strconv.Atoi(ref text)?               // a strconv.Error becomes Parse(e)
@@ -103,7 +103,7 @@ func load(path string) Result<int, AppError> {
 
 - **Into a trait value.** When `E` is a trait the error's type implements, `?` makes the trait value. With `Error` itself, a function fails with any error, which is the shape of a function returning `(T, error)` elsewhere:
 
-```snello
+```go
 func loadAny(path string) Result<int, Error> {
     text := os.ReadToString(ref path)?         // an io.Error becomes an Error value
     n := strconv.Atoi(ref text)?               // and so does a strconv.Error
@@ -120,7 +120,7 @@ match loadAny("/nonexistent/x") {
 
 Two variants holding the same type leave the choice to the program, and `?` refuses: `? cannot pass on an error of type io.Error from a function returning Result<string, SyncError>: SyncError holds an io.Error in Read and in Write; convert it`. An enum with no such variant is refused with the reason: `no variant of ConfigError holds an io.Error`. A variant with two fields, `Unreadable(path string, cause io.Error)`, is not a target, since `?` has nothing to put in the other field. In each case the conversion is written as it always was, with `MapErr` or a `match`:
 
-```snello
+```go
 func wrap(path string) Result<int, LoadError> {
     return load(path.Clone()).MapErr(func(e AppError) LoadError {
         return LoadError{path: path, cause: e}
@@ -136,7 +136,7 @@ Every `os` and `net` function that can fail returns an `io.Error`: the operation
 
 A program that must tell failures apart matches on its own enum, and reaches the kind through the field:
 
-```snello
+```go
 match load("app.conf") {
     Ok(n)                                   => fmt.Println(n),
     Err(Read(e)) if e.Kind() == io.NotExist => fmt.Println("no config, using defaults"),

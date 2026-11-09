@@ -8,7 +8,7 @@ The standard library is small on purpose, and what it leaves out is written as l
 
 A function declared without a body in a package is defined in C. The compiler gives it a symbol from the package's path and the function's name, and the package's `.c` files, beside its `.snello` files, define it under that symbol. Here is a package `tally` whose counter lives on the C side:
 
-```snello
+```go
 package tally
 
 func open(start int) int
@@ -50,7 +50,7 @@ The values that cross are the ones the runtime passes already, in the form the r
 
 Everything else is refused where the function is declared, with its type named: `cannot cross to C: map[string]int, in parameter counts`. A struct, a pointer, a slice of anything but bytes, a map, an owned `string`, an option, a result, a tuple, a closure, a trait value or a type parameter does not cross. A library that needs more converts on the Snello side, around the binding, where the ownership rules hold.
 
-```snello
+```go
 // Sum adds the bytes of xs, which C reads as a view.
 func Sum(xs ref []byte) int
 
@@ -65,7 +65,7 @@ func Parse(s ref string, n mut int) bool
 
 A C library hands back something it owns and the program must give back later: a database connection, a file of its own format, a parser. It crosses as an `int`, the pointer's value, which Snello never reads, and the package wraps it in a struct with a `Drop` method, so that dropping the struct gives the thing back:
 
-```snello
+```go
 struct Tally impl Drop { handle int }
 
 func (t mut Tally) Drop() { release(t.handle) }
@@ -77,7 +77,7 @@ func Open(start int) *Tally { return &Tally{handle: open(start)} }
 
 The struct is made and freed by the program as any value is, and chapter 5's rules hold: a `Tally` has one owner, and where that owner dies the counter is released. The program sees it:
 
-```snello
+```go
 {
     t := tally.Open(40)
     fmt.Println(t.Add(2), t.Count(), tally.Live())   // 42 42 1
@@ -95,7 +95,7 @@ link m
 
 That is the math library, and it becomes `-lm` when every program that imports a package of the module is linked; `link sqlite3` or `link z` name the SQLite or zlib libraries the same way. A flag or a path is refused: the line names a library, and the system's linker finds it. Binding one of its functions is then the one-line definition:
 
-```snello
+```go
 package mathx
 
 // Cbrt is the cube root of x, from the system's math library.

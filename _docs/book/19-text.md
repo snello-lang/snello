@@ -10,7 +10,7 @@ Its subject is Unicode text: the encodings, the character properties, case, norm
 
 A `string` holds bytes, never changes, and is UTF-8 by convention: every literal is, and every function that builds a string writes it. `len(s)` counts bytes and `s[i]` is the byte at `i`, of type `byte`, because both take constant time. Text is something else: a rune, of type `rune`, an `i32`, is one Unicode code point, and a code point takes one to four bytes. `"héllo, 世界"` is 14 bytes and 9 runes:
 
-```snello
+```go
 s := "héllo, 世界"
 fmt.Println(len(s), len(s.Runes()), s[1], s.Runes()[1])
 // 14 9 195 233
@@ -22,7 +22,7 @@ fmt.Println(len(s), len(s.Runes()), s[1], s.Runes()[1])
 
 `s.Runes()` gives an owned `[]rune` of exactly the string's runes, for a program that must index them, change them or keep them. `string(rs)` builds the UTF-8 string of a `[]rune`, and `string(r)` that of one rune; a value that is not a code point becomes U+FFFD:
 
-```snello
+```go
 rs := s.Runes()
 rs.Push('!')
 fmt.Println(string(rs), string(rs[1]), string('x')) // back from runes to a string
@@ -35,7 +35,7 @@ Only a `rune` converts to a string, never an `int`: `string(65)` is refused, sin
 
 `for i, r := range s` gives each rune and the byte offset it starts at, so the offsets step by the rune's width:
 
-```snello
+```go
 for i, r := range s {
     fmt.Println(i, r, utf8.RuneLen(r))
 }
@@ -46,7 +46,7 @@ for i, r := range s {
 
 A string need not be valid UTF-8: one read from a file or a socket may hold any bytes. A byte that does not start a valid sequence yields U+FFFD, `utf8.RuneError`, and the loop moves on one byte, so a broken string is read through to its end and every stray byte is seen:
 
-```snello
+```go
 for i, r := range "a\xffb" {
     fmt.Println(i, r, r == utf8.RuneError)
 }
@@ -57,7 +57,7 @@ The same rule holds everywhere the language reads a string as text: `s.Runes()`,
 
 To walk the bytes, write the counted loop. It allocates nothing:
 
-```snello
+```go
 ascii := 0
 for i := 0; i < len(s); i++ {
     if s[i] < 0x80 {
@@ -97,7 +97,7 @@ Others are the properties Unicode derives beyond a category, the ones identifier
 
 `Category(r)` gives the two letters themselves, `Lu` for `A` and `Cn` for a code point Unicode has not assigned. `Script(r)` gives the script by Unicode's name, `Latin`, `Cyrillic`, `Han`, `Common` for a rune many scripts use, such as a digit or `€`, `Inherited` for a mark that takes its letter's, and `Unknown` for an unassigned code point; `ScriptCode(r)` gives its four-letter code, `Latn`, `Hani`, `Zyyy`; `InScript(r, name)` takes either. `DigitValue(r)` gives a decimal digit's value, of any script, and `NumericValue(r)` the value Unicode gives any number, `12` for `Ⅻ`, `0.5` for `½`, and `5` for the ideograph `五`, whose value comes from Unihan; each is `None` for a rune without one.
 
-```snello
+```go
 for _, r := range "A٣€Ж世" {
     fmt.Println(r, unicode.Category(r), unicode.Script(r), unicode.ScriptCode(r), unicode.IsSymbol(r), unicode.IsNumber(r))
 }
@@ -110,7 +110,7 @@ fmt.Println(unicode.DigitValue(0x0663), unicode.NumericValue(0x216B), unicode.Is
 
 Upper-casing the first letter of every word walks the runes and writes each to a builder:
 
-```snello
+```go
 func title(s ref string) string {
     var b strings.Builder
     start := true
@@ -134,7 +134,7 @@ func title(s ref string) string {
 
 A string changes case by Unicode's full case mapping, which a single rune cannot: a rune may become several, so a string may grow. `strings.ToUpper("straße")` is `STRASSE`, and `ﬁ` upper-cases to `FI`. `strings.ToLower` lowers a capital sigma at the end of a word to the final form `ς`, as Greek writes it, and inside a word to `σ`: `ΟΔΥΣΣΕΥΣ` lowers to `οδυσσευς`. The string methods `s.ToUpper()` and `s.ToLower()` are the same functions. `strings.ToTitle` title-cases text as Unicode defines it: in each word, by the word boundaries below, the rune that starts it to its title case and the rest to lower case, so `straße ﬁx ǆungla` is `Straße Fix ǅungla`. A word starts at its first letter, number or symbol, where ICU starts it by default: a quote before it is passed over, so `'tis` is `'Tis`, and a digit that starts it stays as it is, so `3RD` is `3rd`. The mappings are the ones that hold in every language; a language's own rules, such as Turkish `i` upper-casing to `İ`, are a locale's.
 
-```snello
+```go
 fmt.Println(strings.ToUpper("straße"), strings.ToLower("ΟΔΥΣΣΕΥΣ"), strings.ToTitle("straße ﬁx ǆungla"))
 // STRASSE οδυσσευς Straße Fix ǅungla
 fmt.Println(strings.EqualIgnoreCase("Straße", "STRASSE"), strings.EqualIgnoreCase("ı", "I"))
@@ -156,7 +156,7 @@ fmt.Println(strings.EqualIgnoreCase("Straße", "STRASSE"), strings.EqualIgnoreCa
 - `DecodeRune(ref p)` and `DecodeRuneInString(s)` give the first rune and its width; `DecodeLastRune` and `DecodeLastRuneInString` the last one. A byte that starts no valid sequence is `(RuneError, 1)`, and empty input `(RuneError, 0)`.
 - `Valid`, `ValidString`, `RuneCount` and `RuneCountInString` check and count without allocating. `FullRune` and `FullRuneInString` say whether the bytes begin with a whole rune, false only for a rune cut short, which a reader filling a buffer asks before it decodes; `RuneStart(b)` says whether a byte can start one.
 
-```snello
+```go
 p := []byte{}
 utf8.AppendRune(mut p, 'é')
 utf8.AppendRune(mut p, 0x1F600)
@@ -167,7 +167,7 @@ fmt.Println(p, r, n)
 
 `unicode/utf16` is the encoding of Windows, Java and JavaScript, for a program that exchanges text with one of them: a rune below U+10000 is one 16-bit unit and one above it two, a surrogate pair. `Encode(ref runes)` and `Decode(ref units)` convert between `[]rune` and `[]u16`, an unpaired surrogate reading as U+FFFD; `AppendRune`, `EncodeRune`, `DecodeRune`, `RuneLen` and `IsSurrogate` work a rune at a time. `EncodeBytes(s, order, bom)` and `DecodeBytes(p, order)` go between a string and UTF-16 bytes, `utf16.BigEndian` or `utf16.LittleEndian`; a byte-order mark at the start of the bytes says the order instead, and is dropped:
 
-```snello
+```go
 units := utf16.Encode(ref "a😀".Runes())
 fmt.Println(units, utf16.Decode(ref units))
 // [97 55357 56832] [97 128512]
@@ -187,7 +187,7 @@ The same text can be written with different runes: `é` is one rune, U+00E9, or 
 - `norm.NFD`: decompose every rune, each mark after its letter in canonical order.
 - `norm.NFKC` and `norm.NFKD`: the same, and also replace a compatibility character by its plain form, `ﬁ` by `fi` and `²` by `2`, for search and identifiers.
 
-```snello
+```go
 one := "caf\u00E9"
 two := "cafe\u0301"
 fmt.Println(one == two, norm.String(norm.NFC, ref one) == norm.String(norm.NFC, ref two), len(one), len(two))
@@ -208,7 +208,7 @@ What a reader sees as one character can be several runes: a letter and its accen
 
 Each gives the pieces in order, each a borrow into the string, so nothing is copied and the pieces join back to the string; a loop over them lends the string for its duration, as `strings.Fields` does. `segment.Count(kind, s)` counts the segments of `segment.Grapheme`, `segment.Word` or `segment.Sentence` without the slice, and `segment.Next(kind, s, at)` gives the boundary after `at`, for walking a string by offsets: `Some(end)` while a segment starts at `at`, and `None` at the end of the string, as for an offset past it or below 0, so a walk stops on the one answer:
 
-```snello
+```go
 flags := "e\u0301🇫🇷👍🏽"
 fmt.Println(len(flags), utf8.RuneCountInString(flags), segment.Count(segment.Grapheme, ref flags))
 // 19 6 3
@@ -222,7 +222,7 @@ for w := range segment.Words("Hello, wörld! 3.14") {
 
 A walk by offsets reads the same boundaries one at a time:
 
-```snello
+```go
 text := "Hi. Bye."
 at := 0
 for {

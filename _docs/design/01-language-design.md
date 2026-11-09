@@ -93,7 +93,7 @@ The runtime: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, e
 
 A trait is a Go interface that may also carry default methods and fields. A type says what it implements on its declaration, and its methods are ordinary Go methods:
 
-```snello
+```go
 struct Circle impl Shape, Named { r f64 }
 func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 ```

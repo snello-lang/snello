@@ -10,7 +10,7 @@ The container owns every node. A link is a number, the node's place in the conta
 
 Written by hand, that is a slice and an index type:
 
-```snello
+```go
 type NodeID int
 
 struct Node {
@@ -28,7 +28,7 @@ It works, and it has one hole. Remove a node, reuse its slot for another, and ev
 
 ## `arena.Arena<T>` and `arena.Index<T>`
 
-```snello
+```go
 import "arena"
 
 a := arena.New<string>()
@@ -45,7 +45,7 @@ The type is given to `New` when nothing else fixes it, `arena.New<Node>()`; a fi
 
 Every slot in the arena has a generation, and an `Index` remembers the generation its slot had when the value went in. `Remove` empties the slot and raises its generation. From then on every copy of the old index fails the comparison, however many values the slot has held since:
 
-```snello
+```go
 stale := y
 fmt.Println(a.Remove(y), a.Len(), a.Get(stale), a.Remove(stale))   // Some("y") 1 None None
 
@@ -63,7 +63,7 @@ The check is one comparison per lookup, and it is a runtime check, not a compile
 
 A tree keeps its nodes in one arena and its links as indices, in both directions:
 
-```snello
+```go
 struct Node {
 	value    string
 	parent   arena.Index<Node>?         // None for the root
@@ -96,7 +96,7 @@ The parent link is the thing an owned pointer could not express, and here it is 
 
 `GetMut` lends the arena `mut` for as long as the borrow it returns lives, so two values of one arena cannot be changed through two borrows in one expression; the compiler cannot know the two indices differ. The idiom is to read what is needed out as values first, then write:
 
-```snello
+```go
 e := c.slots.Get(s).Expect("live")
 prev, next := e.prev, e.next                // Index is Copy; the borrow of e ends here
 if p := prev { c.slots.GetMut(p).Expect("live").next = next }

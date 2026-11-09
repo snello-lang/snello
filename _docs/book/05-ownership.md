@@ -18,7 +18,7 @@ That is the whole model; the rest of this chapter and the next are its consequen
 
 Assigning a value gives it a new owner. The old name no longer owns anything and cannot be used:
 
-```snello
+```go
 s := "hello"
 t := s
 fmt.Println(s)                        // ERROR "use of moved value s"
@@ -28,7 +28,7 @@ The same happens whenever a value goes somewhere that keeps it: passed to a para
 
 Most code never notices. A value usually flows forward: built here, handed to the function that needs it, kept there. The state machine is the clearest case. `step` takes the old state and the event by value and builds the new state from their parts. The session inside moves from `Open` to `Draining` with nothing copied:
 
-```snello
+```go
 func step(s State, ev Event) State {
     return match (s, ev) {
         (Open(sess), Shutdown)  => Draining(sess, 5),
@@ -44,7 +44,7 @@ When you do want both names, say so: `t := s.Clone()` copies the string and both
 
 Numbers and `bool` are copied, not moved. `y := x` on an `int` leaves `x` usable. A struct or enum whose fields are all of such types is a `Copy` type too; the compiler works this out from the fields, and nothing is declared:
 
-```snello
+```go
 enum Token {                                    // Copy: every payload is Copy
     Num(f64)
     Plus
@@ -52,7 +52,7 @@ enum Token {                                    // Copy: every payload is Copy
 }
 ```
 
-```snello
+```go
 op := p.cur                                 // Token is Copy: a copy, not a move
 ```
 
@@ -64,7 +64,7 @@ A type may say it anyway, `struct Edge impl Copy { from, to int }`, and then the
 
 A move on one path counts on every path after they join, and a move inside a loop happens on every iteration:
 
-```snello
+```go
 s := "hello"
 if len(s) > 3 {
     keep(s)
@@ -80,7 +80,7 @@ Assigning to a moved variable gives it a value again, and it is usable from ther
 
 A move on a path that leaves the function does not count for the paths that stay. This is what makes `??` with a `return` work: the key moves into the error only when the else runs, and is still owned on the line after:
 
-```snello
+```go
 text := kv.Get(ref key) ?? return Err(Missing(key))   // key moves only if the else runs
 n := atoi(text) ?? return Err(BadValue(key, text.Clone()))
 ```
@@ -89,14 +89,14 @@ n := atoi(text) ?? return Err(BadValue(key, text.Clone()))
 
 Indexing an owned slice or map does not move the element out; it lends it (chapter 6). To take an element, use a method that gives it up, `xs.Remove(i)`, `xs.Pop()`, `m.Remove(k)`, or `take`:
 
-```snello
+```go
 first := xs[0]                        // ERROR "cannot move xs[0] out of the slice"
 v := take(mut q.buf[q.head])          // moves the element out and leaves None behind
 ```
 
 A part of a value no name holds stays where it is too: the field of a value a call lent, `pick(mut xs).name` where `pick` returns `mut Node`, is the borrowed value's, and the field of a value a call returned, `row().name`, or of the cell a returned pointer points at, `(*mk()).name`, belongs to a temporary that is dropped when the statement ends, which would drop the part twice. Every operation that takes a value is refused on such a part: an assignment, an argument passed by value, `if v := row().note`, a `match` arm binding by value, `row().note ?? ""`, `row().note?`, and `range` over `row().tags`. Bind the temporary to a name first, `r := row(); s := r.name`, and the move is from `r`. Reading the part where it is, or lending it, is fine, and the whole temporary is dropped once when the statement ends: `len(row().tags)`, `match row().name { ... }`, `if v := ref row().note`, `for _, t := range ref row().tags`, `grow(mut row().tags)`.
 
-```snello
+```go
 s := pick(mut xs).name                // ERROR "cannot move pick(...).name out of a borrow"
 n := (*mk()).name                     // ERROR "cannot move (*mk()).name out of a temporary: bind the temporary to a name first"
 t := row().name                       // ERROR "cannot move row().name out of a temporary: bind the temporary to a name first"
@@ -105,7 +105,7 @@ fmt.Println(row().name, len(row().tags))   // fine: both are read where they are
 
 `take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer, a function value and a type with a `Drop` have no zero value, chapter 18, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind; replace(mut h.ch, v) leaves v`. `replace(mut place, v)` moves the value out and leaves `v` in its place, for every type; or make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
 
-```snello
+```go
 func (s mut Stack) Push(v string) {
     old := take(mut s.head)
     s.head = Some(&Node{value: v, next: old})
@@ -119,7 +119,7 @@ Ranging over an owned collection by value consumes it, moving each element out i
 
 A field may be moved out of an owned value, leaving the rest in place, as long as the whole value is never used again. The usual case is a heap node that is about to be dropped:
 
-```snello
+```go
 func (s mut Stack) Pop() string? {
     n := take(mut s.head) ?? return None
     s.head = n.next                   // moving a field out of the owned node n
@@ -134,7 +134,7 @@ Using `n` as a whole after `n.next` moved out would be an error: `use of partial
 
 When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
 
-```snello
+```go
 struct TempDir impl Drop { path string }
 
 func (t mut TempDir) Drop() { os.RemoveAll(ref t.path) }
@@ -154,7 +154,7 @@ A value moved out of a variable is not dropped twice: the move leaves the variab
 
 A method with a plain value receiver takes its receiver and may drop it. That is how `Close` works on a file. A file closes itself when dropped; `f.Close()` is for when the error matters, since it returns the error that `Drop` cannot. Afterwards `f` is gone, so a closed file cannot be written to and cannot be closed twice:
 
-```snello
+```go
 f.Close()?
 f.WriteString("late")?                // ERROR "use of moved value f"
 ```
@@ -185,7 +185,7 @@ No program the checker accepts should ever fail this way, which is what makes th
 
 Freeing every value on the line its owner dies is not only about leaks. It changes two numbers a program with a collector cannot control: how much memory it holds, and how long it can stall. `bench/memory.snello` shows both. It keeps a tree of a million nodes alive the whole run and, beside it, runs two thousand rounds that each build a small tree, walk it and drop it:
 
-```snello
+```go
 // round builds a small tree, counts it, and frees it on the way out.
 func round() int {
 	t := build(12)

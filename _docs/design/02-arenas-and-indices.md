@@ -26,7 +26,7 @@ Rust solves this with reference counting plus weak pointers, or with lifetime an
 
 Move ownership up one level. One container owns every node, and nodes refer to each other by position in that container instead of by pointer.
 
-```snello
+```go
 type NodeID int
 
 struct Node {
@@ -55,7 +55,7 @@ Every operation on a node needs the arena as well as the index, which is why the
 
 Writing the slice by hand, as above, explains the idea but leaves stale indices unchecked. The standard library provides `Arena<T>` and `Index<T>` so that everyday code gets the checks for free.
 
-```snello
+```go
 import "arena"
 
 type Index<T>                                   // Copy; a slot number plus a generation
