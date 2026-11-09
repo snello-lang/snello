@@ -1,0 +1,20 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a deferred call given a borrow saves it when the defer runs, a
+// view of what it borrows, and reads it when the function returns; the
+// place it views cannot be given a new value before then, which would
+// free what the view sees. A call given ref s itself reads s as it is
+// when it runs, and s may change. Fix: defer show(ref s), or clone the
+// view, t.Clone(), when the call should see the old text.
+
+package p
+
+func show(x ref string) {}
+
+func f(s string) {
+    t := s.Trim()
+    defer show(t)
+    s = "changed".Clone()                 // ERROR "cannot assign to s: s is borrowed by the deferred call"
+}

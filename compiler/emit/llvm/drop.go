@@ -584,6 +584,18 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 			e.storeOption(out, u, e.cloneAt(val, u.Elem(), pos), pos)
 			e.jump(done)
 			e.label(done)
+		case *types.Result: // the flag, then the half there is, in the one place the two share
+			ok := e.load("i1", e.gep(ir, "%v", 0))
+			e.store(ok, e.gep(ir, out, 0))
+			okb, errb, done := e.block("ok"), e.block("err"), e.block("done")
+			e.branch(ok.s, okb, errb)
+			e.label(okb)
+			e.store(e.cloneAt(e.gep(ir, "%v", 1), u.Val(), pos), e.gep(ir, out, 1))
+			e.jump(done)
+			e.label(errb)
+			e.store(e.cloneAt(e.gep(ir, "%v", 1), u.Err(), pos), e.gep(ir, out, 1))
+			e.jump(done)
+			e.label(done)
 		case *types.Tuple:
 			for i := 0; i < u.Len(); i++ {
 				e.store(e.cloneAt(e.gep(ir, "%v", i), u.At(i), pos), e.gep(ir, out, i))
@@ -636,7 +648,7 @@ func (e *Emitter) cloneAt(p string, t types.Type, pos token.Pos) value {
 	}
 
 	switch {
-	case !needsDrop(t):
+	case !needsDrop(t) && !lower.WritesClone(t): // its bytes, unless a type inside writes a Clone, which runs
 		return e.load(ir, p)
 	case isString(t):
 		return e.rt("sn_string_clone", "%sn_string", e.load(ir, p))

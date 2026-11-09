@@ -19,6 +19,10 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed |
 | 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch), assign-through-ref, mut-through-ref-receiver |
 | `mut` lends something that can change: not a constant, a literal or a byte of a string | mut-of-constant |
+| A slice method that compares, orders or copies the elements asks it of their type | element-not-eq |
+| The pieces of a string hold the string, as does a slice they are stored in | pieces-outlive-string, pieces-stored |
+| A deferred call holds what a borrow it is given views | defer-holds-view |
+| A closure that captures a view cannot change the place it views | closure-writes-viewed |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored, callback-kept |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |
 | A spawn moves what its closure mentions | use-after-spawn, spawn-twice |
@@ -40,7 +44,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 
-The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, mut-of-constant, the eight move programs, the seven borrow programs of rules 4 and 5, the ten of rule 6 along a function's paths, and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
+The checker handles every program here: nil-used, missing-arm, wrong-question-kind, ref-as-mut, mut-of-constant, element-not-eq, pieces-outlive-string, pieces-stored, defer-holds-view, closure-writes-viewed, the eight move programs, the seven borrow programs of rules 4 and 5, the ten of rule 6 along a function's paths, and the eight escape programs of rules 2, 3 and 6; `handledErrors` in `compiler/types/check_test.go` lists them, and a program not on the list must produce no error. A message about a live borrow ends with both ends of the conflict: `by r at 16:5, used at 18:17`.
 
 ## Message conventions
 

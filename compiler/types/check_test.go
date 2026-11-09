@@ -154,6 +154,11 @@ var handledErrors = map[string]bool{
 	"assign-through-ref.snello":       true,
 	"mut-through-ref-receiver.snello": true,
 	"mut-of-constant.snello":          true,
+	"element-not-eq.snello":           true,
+	"pieces-outlive-string.snello":    true,
+	"pieces-stored.snello":            true,
+	"defer-holds-view.snello":         true,
+	"closure-writes-viewed.snello":    true,
 	// The owner outlives every borrow, on every path.
 	"borrow-outlives-block.snello":       true,
 	"borrow-field-outlives-block.snello": true,

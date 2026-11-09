@@ -37,6 +37,12 @@ func builtinMethod(recv Type, name string) *Signature {
 			return stringMethod(name)
 		}
 
+		if t.info&IsInteger != 0 {
+			if sig := integerMethod(recv, t, name); sig != nil {
+				return sig
+			}
+		}
+
 		if t.kind == Uint8 {
 			return byteMethod(name)
 		}
@@ -111,9 +117,78 @@ func sliceMethod(t *Slice, name string) *Signature {
 		return changes([]*Var{param("less", less)}, Unit)
 	case "Clone":
 		return reads(nil, t)
+	case "Extend":
+		return changes([]*Var{param("ys", ref(t))}, Unit)
+	case "Index":
+		return reads([]*Var{param("v", ref(elem))}, NewOption(Typ[Int]))
+	case "First", "Last":
+		return reads(nil, NewOption(ref(elem)))
+	case "Truncate":
+		return changes([]*Var{param("n", Typ[Int])}, Unit)
+	}
+
+	if b, ok := elem.(*Basic); ok && b.kind == Uint8 { // a []byte itself, not a slice of a type declared over one, whose Eq may be its own
+		return byteSliceMethod(t, name)
 	}
 
 	return nil
+}
+
+// byteSliceMethod: what a []byte has beside every slice's methods, the
+// comparison and the search a string has for text.
+func byteSliceMethod(t *Slice, name string) *Signature {
+	switch name {
+	case "Equal":
+		return reads([]*Var{param("o", ref(t))}, Typ[Bool])
+	case "Find":
+		return reads([]*Var{param("sub", ref(t))}, NewOption(Typ[Int]))
+	}
+
+	return nil
+}
+
+// elementBound names the trait a slice method needs of the element,
+// which the checker asks as it asks a generic function's bound: the
+// search needs Eq, the sort Ord, and Extend and Clone the Clone they
+// copy with.
+func elementBound(name string) *Trait {
+	switch name {
+	case "Contains", "RemoveValue", "Index":
+		return EqTrait
+	case "Sort":
+		return OrdTrait
+	case "Extend", "Clone":
+		return CloneTrait
+	}
+
+	return nil
+}
+
+// elementHas reports whether a slice's element t meets the bound tr a
+// method asks of it: as a generic function's bound is met; for the
+// searches' Eq, also by a slice whose own elements meet it, compared
+// element by element, so that a slice of slices can be searched, as
+// == on two slices cannot say; for both Eq and Clone, by a borrow of
+// what meets it, the pieces Split and Fields lend compared by what they
+// view and copied as the borrows they are; and for Clone by any Copy
+// element, which copies as its bytes.
+func elementHas(t Type, tr *Trait) bool {
+	if r, ok := t.(*Ref); ok {
+		switch tr {
+		case CloneTrait:
+			return true // a borrow copies
+		case EqTrait:
+			return elementHas(r.elem, tr)
+		}
+
+		return false // a borrow has no order the backends sort by
+	}
+
+	if inner, ok := t.Underlying().(*Slice); ok && tr == EqTrait {
+		return elementHas(inner.elem, tr)
+	}
+
+	return implements(t, tr) || tr == CloneTrait && IsCopy(t)
 }
 
 func mapMethod(t *Map, name string) *Signature {
@@ -130,6 +205,8 @@ func mapMethod(t *Map, name string) *Signature {
 		return reads([]*Var{param("k", ref(t.key))}, Typ[Bool])
 	case "Clone":
 		return reads(nil, t)
+	case "GetOrInsert":
+		return changes([]*Var{keeps("k", t.key), keeps("v", t.value)}, NewRef(t.value, true))
 	}
 
 	return nil
@@ -164,10 +241,22 @@ func stringMethod(name string) *Signature {
 		return reads([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
 	case "SplitOnce":
 		return reads([]*Var{param("sep", ref(s))}, NewOption(NewTuple(ref(s), ref(s))))
-	case "Trim":
+	case "Trim", "TrimSpace":
 		return reads(nil, ref(s))
 	case "HasPrefix", "HasSuffix", "Contains":
 		return reads([]*Var{param("t", ref(s))}, Typ[Bool])
+	case "Index", "LastIndex":
+		return reads([]*Var{param("t", ref(s))}, NewOption(Typ[Int]))
+	case "Count":
+		return reads([]*Var{param("t", ref(s))}, Typ[Int])
+	case "TrimPrefix", "TrimSuffix":
+		return reads([]*Var{param("p", ref(s))}, ref(s))
+	case "Replace":
+		return reads([]*Var{param("old", ref(s)), param("new", ref(s)), param("n", Typ[Int])}, s)
+	case "ReplaceAll":
+		return reads([]*Var{param("old", ref(s)), param("new", ref(s))}, s)
+	case "SplitN":
+		return reads([]*Var{param("sep", ref(s)), param("n", Typ[Int])}, NewSlice(ref(s)))
 	}
 
 	return nil
@@ -185,6 +274,10 @@ func optionMethod(t, elem Type, name string) *Signature {
 		return reads(nil, Typ[Bool])
 	case "Map":
 		return mapping(t, elem, mapU, NewOption(mapU))
+	case "AndThen":
+		return chaining(t, elem, NewOption(mapU))
+	case "OrElse":
+		return takes(t, []*Var{param("f", NewSignature(nil, nil, t))}, t)
 	}
 
 	return nil
@@ -204,6 +297,15 @@ func resultMethod(t, val Type, name string) *Signature {
 		return mapping(t, val, mapU, NewResult(mapU, t.Underlying().(*Result).err))
 	case "MapErr":
 		return mapping(t, t.Underlying().(*Result).err, mapU, NewResult(val, mapU))
+	case "Ok":
+		return takes(t, nil, NewOption(val))
+	case "Err":
+		return takes(t, nil, NewOption(t.Underlying().(*Result).err))
+	case "AndThen":
+		return chaining(t, val, NewResult(mapU, t.Underlying().(*Result).err))
+	case "UnwrapOrElse":
+		f := NewSignature(nil, []*Var{param("e", t.Underlying().(*Result).err)}, val)
+		return takes(t, []*Var{param("f", f)}, val)
 	}
 
 	return nil
@@ -225,6 +327,35 @@ func mapping(t, from Type, u *TypeParam, result Type) *Signature {
 	sig := takes(t, []*Var{param("f", f)}, result)
 	sig.tparams = []*TypeParam{u}
 	return sig
+}
+
+// chaining returns the signature of AndThen on a receiver of type t:
+// it takes the receiver and a function from the value, of type from, to
+// out, an option or a result over mapU, and gives back out.
+func chaining(t, from, out Type) *Signature {
+	f := NewSignature(nil, []*Var{param("v", from)}, out)
+	sig := takes(t, []*Var{param("f", f)}, out)
+	sig.tparams = []*TypeParam{mapU}
+	return sig
+}
+
+// integerMethod: the arithmetic every integer type has beside its
+// operators, on recv, the integer type or a type declared over it:
+// the checked operations give None where the operator would wrap, Abs
+// is the signed types' alone, and Clamp holds the value between two.
+func integerMethod(recv Type, t *Basic, name string) *Signature {
+	switch name {
+	case "CheckedAdd", "CheckedSub", "CheckedMul":
+		return reads([]*Var{param("o", recv)}, NewOption(recv))
+	case "Abs":
+		if t.info&IsUnsigned == 0 {
+			return reads(nil, recv)
+		}
+	case "Clamp":
+		return reads([]*Var{param("lo", recv), param("hi", recv)}, recv)
+	}
+
+	return nil
 }
 
 // byteMethod: the character classes a parser asks of a byte, ASCII

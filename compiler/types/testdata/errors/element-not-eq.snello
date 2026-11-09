@@ -1,0 +1,16 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a slice method that compares, orders or copies the elements
+// asks it of the element type, as a generic function's bound does:
+// Contains, RemoveValue and Index need Eq, Sort needs Ord, Extend and
+// Clone need Clone. Point lists none. Fix: struct Point impl Eq.
+
+package p
+
+struct Point { x int; y int }
+
+func has(ps ref []Point, p ref Point) bool {
+    return ps.Contains(p)                 // ERROR "Contains needs the elements to be Eq: Point is not"
+}

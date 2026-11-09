@@ -5,18 +5,24 @@
 // Package strings builds and transforms text.
 //
 // What a string can do on its own is a method of the string: Len,
-// Fields, Split, SplitOnce, Trim, HasPrefix, HasSuffix, Contains,
-// ToUpper, ToLower and Clone. This package has what works on more than
-// one string, Join, what builds a new one piece by piece, Builder and
-// Repeat, and the transformations as functions, for a call that reads
-// better that way or a function value to pass along.
+// Fields, Lines, Split, SplitN, SplitOnce, Trim, TrimSpace, TrimPrefix,
+// TrimSuffix, HasPrefix, HasSuffix, Contains, Index, LastIndex, Count,
+// Replace, ReplaceAll, ToUpper, ToLower and Clone. This package has
+// what works on more than one string, Join, what builds a new one piece
+// by piece, Builder and Repeat, a Reader that hands a string to what
+// reads bytes, and the transformations as functions, for a call that
+// reads better that way or a function value to pass along.
 //
-// Every parameter here is a borrow, ref string: a call lends its
-// argument and gets a new string back, and the argument stays with its
-// owner.
+// Every parameter here is a borrow, ref string, but NewReader's: a call
+// lends its argument and gets a new string back, and the argument stays
+// with its owner. NewReader takes the string, so that the Reader can be
+// held by what reads it.
 package strings
 
-import "unicode/utf8"
+import (
+	"io"
+	"unicode/utf8"
+)
 
 // A Builder accumulates text piece by piece and gives it back as one
 // string, cheaper than joining with + at every step. Its zero value is
@@ -57,6 +63,46 @@ func (b ref Builder) String() string {
 // Reset empties the builder, ready for new text.
 func (b mut Builder) Reset() {
 	b.buf.Clear()
+}
+
+// Grow makes room for n more bytes, so that writing them does not
+// allocate again: at most one allocation, to twice the room or the
+// length and n, whichever is more, as a Push grows. An n of zero or
+// less, or one no int can add to the length, does nothing.
+func (b mut Builder) Grow(n int) {
+	if n > 0 {
+		reserve(mut b.buf, n)
+	}
+}
+
+// A Reader reads the bytes of a string it owns, as an io.Reader: what
+// reads bytes, bufio or io.Copy, reads a string through it. It owns the
+// string, so that bufio can hold it, as a type argument cannot hold a
+// borrow; a literal is moved in with nothing copied, and a string the
+// caller keeps is cloned into it.
+struct Reader impl io.Reader {
+	s  string
+	at int // the bytes before at have been read
+}
+
+// NewReader returns a Reader over s, which it takes, from its first
+// byte.
+func NewReader(s string) Reader {
+	return Reader{s: s, at: 0}
+}
+
+// Read copies the bytes not read yet that fit into buf, by memcpy, and
+// returns how many: zero at the end of the string, and for an empty
+// buf, as io.Reader says. Reading a string never fails.
+func (r mut Reader) Read(buf mut []byte) Result<int, io.Error> {
+	n := copyString(mut buf, r.s[r.at:])
+	r.at += n
+	return Ok(n)
+}
+
+// Len returns the number of bytes not read yet.
+func (r ref Reader) Len() int {
+	return r.s.Len() - r.at
 }
 
 // Repeat returns s written n times in a row, and the empty string for
@@ -277,6 +323,14 @@ func repeat(s ref string, n int) string
 func toTitle(s ref string) string
 func equalIgnoreCase(s ref string, t ref string) bool
 func toValidUTF8(s ref string, rep ref string) string
+
+// reserve makes room in b for n more bytes, growing it once as a Push
+// grows. The runtime provides it.
+func reserve(b mut []byte, n int)
+
+// copyString copies the bytes of src that fit to the start of dst and
+// returns how many. The runtime provides it, by memcpy.
+func copyString(dst mut []byte, src ref string) int
 
 // ownString makes b, which it takes, the string's bytes, with no copy.
 func ownString(b []byte) string

@@ -132,7 +132,7 @@ Number types, with `int` and `uint` the platform word size and `int` the index t
 | Unsigned integers | `u8`, `u16`, `u32`, `u64`, `uint` |
 | Floating point    | `f32`, `f64`                      |
 
-No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; checked arithmetic is a library function returning `T?`. A literal takes the type its context asks for.
+No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; checked arithmetic is a method returning `T?`: `CheckedAdd`, `CheckedSub` and `CheckedMul` on every integer type. A literal takes the type its context asks for.
 
 - Generics with angle brackets: `List<T>`, `func Map<T, U>(...)`. Bounds with a colon: `T: Ord + Clone`.
 - A method of a generic type names the type's parameters in its receiver, `func (l mut List<T>) Push(v T)`, and may rename them. Each receiver argument must be a name that is not already a type: `func (l ref List<int>) Sum()` is refused, where Go would silently declare a parameter called `int`. A method belongs to every instance.

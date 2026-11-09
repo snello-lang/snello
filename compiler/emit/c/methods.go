@@ -31,6 +31,10 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return e.mapMethod(x, sel, t)
 	case *types.Chan:
 		return e.standardMethod(x, sel, recv) // Clone, another handle
+	case *types.Tuple:
+		if call := e.standardMethod(x, sel, recv); call != "" {
+			return call // Eq, which expect.Equal calls on any Eq type
+		}
 	case *types.Basic:
 		if call := e.standardMethod(x, sel, recv); call != "" {
 			return call
@@ -40,12 +44,26 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 			return e.stringMethod(x, sel)
 		}
 
+		if t.Info()&types.IsInteger != 0 {
+			if call := e.integerMethod(x, sel, recv, t); call != "" {
+				return call
+			}
+		}
+
 		if t.Kind() == types.Uint8 {
 			return e.byteMethod(x, sel)
 		}
 	case *types.Option:
+		if call := e.standardMethod(x, sel, recv); call != "" {
+			return call
+		}
+
 		return e.optionMethod(x, sel, "has", "None")
 	case *types.Result:
+		if call := e.standardMethod(x, sel, recv); call != "" {
+			return call
+		}
+
 		return e.optionMethod(x, sel, "ok", "Err")
 	}
 
@@ -57,6 +75,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
 	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
+	"Extend": true, "Truncate": true, "GetOrInsert": true,
 }
 
 func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice) string {
@@ -102,8 +121,9 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	case "Clear":
 		e.line("sn_slice_own(" + generic + ", \"Clear\");")
 		if needsDrop(t.Elem()) {
-			e.line("for (int64_t i = 0; i < " + place + ".len; i++) {")
-			e.line(e.dropOf(place+".ptr[i]", t.Elem(), x.Pos()))
+			k := e.temp() // a name of its own, which no variable of the program's can be
+			e.line("for (int64_t " + k + " = 0; " + k + " < " + place + ".len; " + k + "++) {")
+			e.line(e.dropOf(place+".ptr["+k+"]", t.Elem(), x.Pos()))
 			e.line("}")
 		}
 
@@ -122,8 +142,8 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		e.line("sn_slice_reverse(" + generic + ", " + size + ");")
 		return ""
 	case "Clone":
-		if needsDrop(t.Elem()) {
-			return e.cloner(t, x.Pos()) + "(" + place + ")" // element by element, so that each copy owns its own
+		if !lower.ClonesAsBytes(t.Elem()) {
+			return e.cloner(t, x.Pos()) + "(" + place + ")" // element by element, so that each copy owns its own and a Clone of the type's own runs
 		}
 
 		return e.into(t, x.Pos(), func(out string) string {
@@ -139,6 +159,63 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		}
 
 		return ""
+	case "Extend": // one growth to the final length, then a copy of the bytes or a clone of each element
+		ys := e.spill(e.looked(x.Args[0], t), t, x.Pos())
+		e.line("if (" + ys + ".len > 0) {")
+		e.line("sn_slice_reserve(" + generic + ", " + place + ".len + " + ys + ".len, " + size + ", \"Extend\");")
+		if !lower.ClonesAsBytes(t.Elem()) { // a Clone a type in the element writes runs; only an element with none is its bytes
+			k := e.temp()
+			e.line("for (int64_t " + k + " = 0; " + k + " < " + ys + ".len; " + k + "++) {")
+			e.line(place + ".ptr[" + place + ".len + " + k + "] = " + e.cloneOf(ys+".ptr["+k+"]", t.Elem(), x.Pos()) + ";")
+			e.line("}")
+		} else {
+			e.line("memcpy(" + place + ".ptr + " + place + ".len, " + ys + ".ptr, (size_t)" + ys + ".len * " + size + ");")
+		}
+
+		e.line(place + ".len += " + ys + ".len;")
+		e.line("}")
+		return ""
+	case "Index":
+		at := e.temp()
+		e.line("int64_t " + at + " = " + e.position(place, e.looked(x.Args[0], t.Elem()), t, x.Pos()) + ";")
+		return e.someIndex(at, x)
+	case "First", "Last":
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("if (" + place + ".len > 0) {")
+		e.line(out + ".has = true;")
+		if sel.Sel.Name == "First" {
+			e.line(out + ".val = " + place + ".ptr[0];")
+		} else {
+			e.line(out + ".val = " + place + ".ptr[" + place + ".len - 1];")
+		}
+
+		e.line("}")
+		return out
+	case "Truncate": // the elements from n on dropped, first to last, as Clear drops them; the memory kept
+		n := e.temp()
+		e.line("int64_t " + n + " = " + e.valueTo(x.Args[0], types.Typ[types.Int]) + ";")
+		e.line("if (" + n + " < 0) {")
+		e.line(n + " = 0;")
+		e.line("}")
+		e.line("if (" + n + " < " + place + ".len) {")
+		e.line("sn_slice_own(" + generic + ", \"Truncate\");")
+		if needsDrop(t.Elem()) {
+			k := e.temp()
+			e.line("for (int64_t " + k + " = " + n + "; " + k + " < " + place + ".len; " + k + "++) {")
+			e.line(e.dropOf(place+".ptr["+k+"]", t.Elem(), x.Pos()))
+			e.line("}")
+		}
+
+		e.line(place + ".len = " + n + ";")
+		e.line("}")
+		return ""
+	case "Equal":
+		return "sn_bytes_equal(" + place + ", " + e.looked(x.Args[0], t) + ")"
+	case "Find":
+		at := e.temp()
+		e.line("int64_t " + at + " = sn_bytes_find(" + place + ", " + e.looked(x.Args[0], t) + ");")
+		return e.someIndex(at, x)
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
@@ -208,6 +285,49 @@ func (e *Emitter) ordering(elem types.Type, pos token.Pos) string {
 	return name
 }
 
+// byteEqual reports whether a value of type t is one byte compared as
+// the byte it is: u8 or i8, or a type declared over one that writes no
+// Eq of its own.
+func byteEqual(t types.Type) bool {
+	t = lower.ValueType(t)
+	if n, ok := t.(*types.Named); ok && written(n, "Eq") {
+		return false
+	}
+
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && (b.Kind() == types.Uint8 || b.Kind() == types.Int8)
+}
+
+// someIndex writes the option a search returns from the offset at, -1
+// when it found nothing.
+func (e *Emitter) someIndex(at string, x *ast.CallExpr) string {
+	out := e.temp()
+	e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {.has = " + at + " >= 0, .val = " + at + "};")
+	return out
+}
+
+// position writes the search Index makes for v in the slice at place:
+// memchr for an element of one byte whose equality is the byte's, and a
+// generated function comparing elements with the element's equality
+// otherwise, an Eq the type writes among them. It gives -1 when no
+// element is equal.
+func (e *Emitter) position(place, v string, t *types.Slice, pos token.Pos) string {
+	if byteEqual(t.Elem()) {
+		return "sn_slice_index_byte(" + place + ".ptr, " + place + ".len, (uint8_t)(" + v + "))"
+	}
+
+	name := "sn_Index_" + lower.Mangle(t.Elem())
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		st, elem := e.cType(t, pos), e.cType(t.Elem(), pos)
+		head := "static int64_t " + name + "(" + st + " *s, " + elem + " v)"
+		put(&e.protos, head, ";\n")
+		put(&e.helpers, head, " {\n\tfor (int64_t i = 0; i < s->len; i++) {\n\t\tif (", e.equal("s->ptr[i]", "v", t.Elem(), pos), ") {\n\t\t\treturn i;\n\t\t}\n\t}\n\n\treturn -1;\n}\n\n")
+	}
+
+	return name + "(&" + place + ", " + v + ")"
+}
+
 // search writes RemoveValue or Contains through a generated function
 // that walks the slice comparing elements with the element's equality.
 func (e *Emitter) search(what, place, v string, t *types.Slice, pos token.Pos) string {
@@ -264,6 +384,9 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		args := e.operands(x.Args, []types.Type{t.Key(), t.Value()})
 		e.mapStore(place, t, args[0], args[1], x.Pos())
 		return ""
+	case "GetOrInsert":
+		args := e.operands(x.Args, []types.Type{t.Key(), t.Value()})
+		return e.mapGetOrInsert(t, x.Pos()) + "(&" + place + ", " + args[0] + ", " + args[1] + ")"
 	case "Remove":
 		out := e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
@@ -272,7 +395,7 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Contains":
 		return "(sn_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ") != NULL)"
 	case "Clone":
-		if needsDrop(t.Key()) || needsDrop(t.Value()) {
+		if !lower.ClonesAsBytes(t.Key()) || !lower.ClonesAsBytes(t.Value()) {
 			return e.cloner(t, x.Pos()) + "(" + place + ")"
 		}
 
@@ -335,6 +458,25 @@ func (e *Emitter) mapStore(place string, t *types.Map, k, v string, pos token.Po
 	e.line(e.mapSetter(t, pos) + "(&" + place + ", " + k + ", " + v + ");")
 }
 
+// mapGetOrInsert returns the name of the function giving the value slot
+// for a key, holding v when the key was absent, written on first use:
+// one hash and one probe, the slot the table finds or makes; a key
+// already there keeps its value, and k and v are dropped.
+func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
+	name := "sn_mapgetins_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	mt, k, v := e.mapType(t, pos), e.cType(t.Key(), pos), e.cType(t.Value(), pos)
+	head := "static " + v + " *" + name + "(" + e.cType(t, pos) + " *m, " + k + " k, " + v + " v)"
+	put(&e.protos, head, ";\n")
+	put(&e.helpers, head, " {\n\tvoid *added;\n\t", v, " *slot = sn_map_slot((sn_map *)m, ", mt, ", &k, &added);\n")
+	put(&e.helpers, "\tif (added == NULL) {\n\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\t", e.dropIfNeeded("v", t.Value(), pos), "\n\t} else {\n\t\t*slot = v;\n\t}\n\n\treturn slot;\n}\n\n")
+	return name
+}
+
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
 // entry.
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) string {
@@ -380,10 +522,72 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
 		e.line(out + ".has = sn_split_once(" + s + ", " + args[0] + ", &" + out + ".val.e0, &" + out + ".val.e1);")
 		return out
+	case "TrimSpace":
+		return "sn_trim(" + s + ")"
+	case "TrimPrefix":
+		return "sn_trim_prefix(" + s + ", " + args[0] + ")"
+	case "TrimSuffix":
+		return "sn_trim_suffix(" + s + ", " + args[0] + ")"
+	case "Index", "LastIndex":
+		fn := "sn_string_index"
+		if sel.Sel.Name == "LastIndex" {
+			fn = "sn_string_last_index"
+		}
+
+		at := e.temp()
+		e.line("int64_t " + at + " = " + fn + "(" + s + ", " + args[0] + ");")
+		return e.someIndex(at, x)
+	case "Count":
+		return "sn_string_count(" + s + ", " + args[0] + ")"
+	case "Replace":
+		return "sn_string_replace(" + s + ", " + args[0] + ", " + args[1] + ", " + args[2] + ")"
+	case "ReplaceAll":
+		return "sn_string_replace(" + s + ", " + args[0] + ", " + args[1] + ", INT64_MAX)"
+	case "SplitN":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split_n(" + s + ", " + args[0] + ", " + args[1] + ", " + out + ")" })
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on strings")
 	return "0"
+}
+
+// integerMethod writes the arithmetic every integer type has beside
+// its operators, on recv, the integer type or one declared over it; ""
+// for any other method. The checked operations are the C compiler's
+// overflow builtins, one instruction and a test of its flag; Abs and
+// Clamp are selects, with no branch the compiler must keep.
+func (e *Emitter) integerMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type, b *types.Basic) string {
+	name := sel.Sel.Name
+	var op string
+	switch name {
+	case "CheckedAdd":
+		op = "add"
+	case "CheckedSub":
+		op = "sub"
+	case "CheckedMul":
+		op = "mul"
+	case "Abs", "Clamp":
+	default:
+		return ""
+	}
+
+	ct := e.cType(recv, x.Pos())
+	a := e.spill(e.looked(sel.X, recv), recv, x.Pos())
+	switch name {
+	case "Abs":
+		return "((" + ct + ")(" + a + " < 0 ? 0 - (uint64_t)" + a + " : (uint64_t)" + a + "))" // the minimum, whose magnitude does not fit, wraps to itself
+	case "Clamp":
+		args := e.operands(x.Args, []types.Type{recv, recv})
+		lo, hi := e.spill(args[0], recv, x.Pos()), e.spill(args[1], recv, x.Pos())
+		m := e.spill(a+" < "+lo+" ? "+lo+" : "+a, recv, x.Pos())
+		return "(" + m + " > " + hi + " ? " + hi + " : " + m + ")"
+	}
+
+	o := e.operands(x.Args, []types.Type{recv})[0]
+	out := e.temp()
+	e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
+	e.line(out + ".has = !__builtin_" + op + "_overflow(" + a + ", " + o + ", &" + out + ".val);")
+	return out
 }
 
 // byteMethod writes the character classes of a byte onto the runtime's
@@ -472,6 +676,8 @@ func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, flag, abs
 		return out
 	case "Map", "MapErr":
 		return e.mapped(x, sel, place, t, held, flag)
+	case "AndThen", "OrElse", "Ok", "Err", "UnwrapOrElse":
+		return e.chained(x, sel, place, t, held, flag)
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on "+t.String())
@@ -526,6 +732,81 @@ func (e *Emitter) mapped(x *ast.CallExpr, sel *ast.SelectorExpr, place string, t
 
 	e.line("}")
 	return out
+}
+
+// chained writes AndThen, OrElse, Ok, Err and UnwrapOrElse on the
+// option or result at place, of type t, which they take: the part each
+// uses moves out of the receiver, into the function argument or the
+// result, and the part it does not use is dropped. The function is
+// called directly, with nothing allocated.
+func (e *Emitter) chained(x *ast.CallExpr, sel *ast.SelectorExpr, place string, t types.Type, held string, flag string) string {
+	name := sel.Sel.Name
+	heldType := e.typeOf(sel.X)
+	rt := e.typeOf(x)
+	out := e.temp()
+	e.line(e.cType(rt, x.Pos()) + " " + out + " = {0};")
+	var f string
+	if len(x.Args) > 0 {
+		fsig := e.funcArg(x, sel)
+		if e.hasEffects(x.Args[0]) {
+			f = e.saved(x.Args[0], fsig)
+		} else {
+			f = e.valueTo(x.Args[0], fsig)
+		}
+	}
+
+	val := func() string { return e.taken(place+".val", valueOf(heldType), held, heldType, x.Pos()) }
+	err := func() string { return e.taken(place+".err", errOf(heldType), held, heldType, x.Pos()) }
+	drop := func(part func() string, pt types.Type) { // the part not given back, moved out and dropped
+		if needsDrop(pt) {
+			tmp := e.spill(part(), pt, x.Pos())
+			e.line(e.dropOf(tmp, pt, x.Pos()))
+		}
+	}
+
+	e.line("if (" + place + "." + flag + ") {")
+	switch name {
+	case "AndThen":
+		e.line(out + " = " + f + ".fn(" + f + ".box, " + val() + ");")
+	case "OrElse", "Ok":
+		e.line(out + ".has = true;")
+		e.line(out + ".val = " + val() + ";")
+	case "Err":
+		drop(val, valueOf(heldType))
+	case "UnwrapOrElse":
+		e.line(out + " = " + val() + ";")
+	}
+
+	e.line("} else {")
+	switch name {
+	case "AndThen":
+		if _, isResult := t.Underlying().(*types.Result); isResult {
+			e.line(out + ".err = " + err() + ";")
+		}
+	case "OrElse":
+		e.line(out + " = " + f + ".fn(" + f + ".box);")
+	case "Ok":
+		drop(err, errOf(heldType))
+	case "Err":
+		e.line(out + ".has = true;")
+		e.line(out + ".val = " + err() + ";")
+	case "UnwrapOrElse":
+		e.line(out + " = " + f + ".fn(" + f + ".box, " + err() + ");")
+	}
+
+	e.line("}")
+	return out
+}
+
+// funcArg returns the type of the function a method of an option or a
+// result takes: from the instance the checker recorded for a generic
+// one, AndThen, and from the method's signature otherwise.
+func (e *Emitter) funcArg(x *ast.CallExpr, sel *ast.SelectorExpr) *types.Signature {
+	if inst, ok := e.info.Instances[sel.Sel]; ok {
+		return e.sub(inst.Type.Params()[0].Type()).(*types.Signature)
+	}
+
+	return e.sub(e.typeOf(x.Args[0])).(*types.Signature)
 }
 
 // valueOf returns the value type of an option or a result, errOf the

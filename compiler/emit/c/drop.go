@@ -474,6 +474,8 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 		})
 	case *types.Option:
 		put(&b, "\tout.has = v.has;\n\tif (v.has) {\n\t\tout.val = ", e.cloneOf("v.val", u.Elem(), pos), ";\n\t}\n")
+	case *types.Result:
+		put(&b, "\tout.ok = v.ok;\n\tif (v.ok) {\n\t\tout.val = ", e.cloneOf("v.val", u.Val(), pos), ";\n\t} else {\n\t\tout.err = ", e.cloneOf("v.err", u.Err(), pos), ";\n\t}\n")
 	case *types.Tuple:
 		for i := 0; i < u.Len(); i++ {
 			f := "e" + strconv.Itoa(i)
@@ -509,7 +511,7 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	}
 
 	switch {
-	case !needsDrop(t):
+	case !needsDrop(t) && !lower.WritesClone(t): // its bytes, unless a type inside writes a Clone, which runs
 		return v
 	case isString(t):
 		return "sn_string_clone(" + v + ")"

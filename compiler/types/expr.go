@@ -247,6 +247,22 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	}
 
 	if sig := builtinMethod(base, e.Sel.Name); sig != nil {
+		if sl, ok := base.Underlying().(*Slice); ok {
+			if tr := elementBound(e.Sel.Name); tr != nil && !elementHas(sl.elem, tr) {
+				c.errorf(e.Sel.Pos(), e.Sel.Name+" needs the elements to be "+tr.obj.name+": "+sl.elem.String()+" is not")
+				return invalidOperand
+			}
+		}
+
+		if m, ok := base.Underlying().(*Map); ok && e.Sel.Name == "Clone" {
+			for _, part := range []Type{m.key, m.value} {
+				if !elementHas(part, CloneTrait) {
+					c.errorf(e.Sel.Pos(), "Clone needs the keys and values to be Clone: "+part.String()+" is not")
+					return invalidOperand
+				}
+			}
+		}
+
 		c.receiver(e, x, sig)
 		return operand{value, sig, nil, nil}
 	}
@@ -1119,6 +1135,12 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 		}
 
 		c.access(&ast.Ident{NamePos: e.Pos(), Name: cap.v.name}, b.place, what, e.Pos()) // made here, the closure borrows what it captures; named for the message
+	}
+
+	for _, cap := range c.captured[e] {
+		if cap.mode != byCopy {
+			c.flowUse(cap.v, e.Pos()) // the closure reads what it captures when it runs: a borrow variable captured keeps what it views lent, so capturing the viewed place mut collides, as it does outside
+		}
 	}
 
 	return operand{value, sig, nil, nil}

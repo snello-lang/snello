@@ -15,8 +15,8 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves, `Copy` checked against the fields, a moved variable given back by assignment, drops at scope exit, return and panic, and what no collector buys, measured by `bench/memory.snello` |
 | [6. Borrows: `ref` and `mut`](06-borrows.md) | the six rules; how long a borrow lives, along a function's paths: blocks, loops, fields, closures, `mut` parameters, deferred calls and `Drop`; closures that copy a `Copy` value they only read |
 | [7. Owned pointers and recursive data](07-owned-pointers.md) | `*T`, `&expr` and recursive types |
-| [8. Option, Result, `?` and `??`](08-option-result.md) | `T?`, `Result`, `Map` and `MapErr`, and `?` passing an error into the variant that holds its type or into a trait value |
-| [9. Collections: slices, maps and strings](09-collections.md) | slices, maps with keys that are `Eq` and `Hash`, and strings |
+| [8. Option, Result, `?` and `??`](08-option-result.md) | `T?`, `Result`, `Map`, `MapErr`, `AndThen`, `OrElse`, `Ok`, `Err` and `UnwrapOrElse`, and `?` passing an error into the variant that holds its type or into a trait value |
+| [9. Collections: slices, maps and strings](09-collections.md) | slices, maps with keys that are `Eq` and `Hash`, and strings, with their methods: searches that give `int?`, trims that lend, `Replace`, `SplitN`, `Extend`, `Truncate`, `GetOrInsert`, and the bound each asks of the element |
 | [10. Concurrency: `spawn`, channels, `select`](10-concurrency.md) | the rule of the task boundary, `Send` inferred from structure, `spawn`, channels, `close`, `for range ch` and `select`, `sync`'s handles and guards, `time.After`, package variables, and the races the checker rejects |
 | [11. Traits](11-traits.md) | declarations, `impl`, refinement and bounds; default methods, the resolution order, trait fields and `super`; a trait as a type; the standard and operator traits and derivation; generic traits |
 | [12. Generics](12-generics.md) | generic types and functions, inference, one copy per instance, and bounds |

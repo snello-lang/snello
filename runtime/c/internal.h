@@ -91,6 +91,11 @@ static inline void sn_spin_hint(void) {
 #endif
 }
 
+#ifdef SN_DEBUG
+int64_t sn_two_way(sn_string s, sn_string t);
+int64_t sn_two_way_last(sn_string s, sn_string t);
+#endif
+
 // sn_slice_grow makes room in s for at least need elements of size
 // bytes, doubling, as Push amortizes to constant time.
 void sn_slice_grow(sn_slice *s, int64_t need, size_t size);

@@ -428,9 +428,164 @@ func main() {
 	hay := strings.Repeat("a", 20000000) ?? ""
 	needle := (strings.Repeat("a", 50000) ?? "") + "b"
 	fmt.Println(hay.Contains(needle), (hay + "b").Contains(needle), hay.SplitOnce(needle).IsNone())
+	back := "b" + (strings.Repeat("a", 50000) ?? "")
+	tail, head := hay + "b", "b" + hay
+	fmt.Println(hay.Index(needle), tail.Index(needle), hay.LastIndex(needle), tail.LastIndex(needle), head.LastIndex(back), hay.LastIndex(back))
+	fmt.Println(hay.Count(needle), tail.Count(needle), hay.ReplaceAll(needle, "x").Len(), tail.ReplaceAll(needle, "x").Len())
+	fmt.Println([]byte(tail).Find(ref []byte(needle)))
 }
 `,
-			Out: "false true true\n", ReleaseOnly: true,
+			Out: "false true true\nNone Some(19950000) None Some(19950000) Some(0) None\n0 1 20000000 19950001\nSome(19950000)\n", ReleaseOnly: true,
+		},
+		{
+			Name: "string-methods", // searches, counts, replacements, trims and SplitN on a string, at the edges: an empty needle, n of zero or less, an empty old, a split of nothing
+			Src: `package main
+import "fmt"
+func main() {
+	s := "go, snello, go"
+	fmt.Println(s.Index("go"), s.LastIndex("go"), s.Index("rust"), s.LastIndex("rust"), s.Index(""), s.LastIndex(""))
+	fmt.Println(s.Count("go"), s.Count("o"), s.Count(""), "héllo".Count(""), "aaaa".Count("aa"))
+	fmt.Println(s.Replace("go", "Go", 1), "|", s.ReplaceAll("go", "Go"), "|", s.Replace("go", "x", 0), "|", s.Replace("go", "x", -1))
+	fmt.Println("hé".ReplaceAll("", "-"), "abc".Replace("", "-", 2), "aaa".ReplaceAll("a", ""), "".ReplaceAll("", "x"))
+	fmt.Println(s.TrimPrefix("go, "), "|", s.TrimSuffix(", go"), "|", s.TrimPrefix("zz"), "|", " \t pad \n".TrimSpace(), "|")
+	fmt.Println(len(s.SplitN(", ", 0)), len(s.SplitN(", ", 1)), len(s.SplitN(", ", 2)), len(s.SplitN(", ", 9)), len("".SplitN(",", 3)), len("".SplitN("", 3)))
+	for p := range s.SplitN(", ", 2) {
+		fmt.Println("[" + p + "]")
+	}
+
+	for p := range "héllo".SplitN("", 3) {
+		fmt.Println("[" + p + "]")
+	}
+
+	parts := s.Split(", ")
+	fmt.Println(parts.Contains(ref "snello"), parts.Index(ref "go"), parts.Clone(), parts.Last())
+}
+`,
+			Out: "Some(0) Some(12) None None Some(0) Some(14)\n2 3 15 6 2\nGo, snello, go | Go, snello, Go | go, snello, go | go, snello, go\n-h-é- -a-bc  x\nsnello, go | go, snello | go, snello, go | pad |\n0 1 2 3 1 0\n[go]\n[snello, go]\n[h]\n[é]\n[llo]\ntrue Some(0) [go snello go] Some(\"go\")\n",
+		},
+		{
+			Name: "slice-methods", // Extend copying Copy elements and cloning the rest, Index, First and Last, Truncate dropping the tail first to last and doing nothing past the end, and []byte's Equal, Find and Index
+			Src: `package main
+import "fmt"
+struct Guard impl Drop, Clone { name string }
+func (g mut Guard) Drop() { fmt.Println("drop", g.name) }
+func (g ref Guard) Clone() Guard { return Guard{name: g.name + "2"} }
+struct Bump impl Clone { n int }
+struct Wrap impl Copy, Clone { b Bump }
+func (b ref Bump) Clone() Bump { return Bump{n: b.n + 100} }
+type Fold u8 impl Eq
+func (a ref Fold) Eq(b ref Fold) bool { return a.Lower() == b.Lower() }
+func (a ref Fold) Lower() u8 {
+	if *a >= 'A' && *a <= 'Z' {
+		return u8(*a) + 32
+	}
+
+	return u8(*a)
+}
+func main() {
+	xs := []int{3, 1, 4}
+	xs.Extend(ref []int{1, 5})
+	xs.Extend(ref []int{})
+	var empty []int
+	fmt.Println(xs, xs.Index(ref 4), xs.Index(ref 9), xs.First(), xs.Last(), empty.First(), empty.Last())
+	xs.Truncate(9)
+	fmt.Println(xs)
+	xs.Truncate(2)
+	fmt.Println(xs)
+	xs.Truncate(-1)
+	fmt.Println(xs, len(xs))
+	gs := []Guard{Guard{name: "a"}}
+	more := []Guard{Guard{name: "b"}, Guard{name: "c"}}
+	gs.Extend(ref more)
+	fmt.Println(len(gs), gs[1].name, gs[2].name, more[0].name)
+	gs.Truncate(1)
+	fmt.Println("kept", gs[0].name)
+	bs := []byte("hello world")
+	fmt.Println(bs.Equal(ref []byte("hello world")), bs.Equal(ref []byte("hello")), bs.Find(ref []byte("world")), bs.Find(ref []byte("xyz")), bs.Find(ref []byte("")), bs.Index(ref 'o'), bs.Index(ref 'z'))
+	names := []string{"ann", "bob"}
+	fmt.Println(names.Index(ref "bob"), names.Index(ref "cy"))
+	folds := []Fold{Fold('a'), Fold('B')}
+	b := Fold('b')
+	fmt.Println(folds.Contains(ref b), folds.Index(ref b)) // the type's own Eq, not the byte's
+	bumps := []Bump{Bump{n: 1}}
+	bumps.Extend(ref []Bump{Bump{n: 2}})
+	fmt.Println(bumps[1].n, bumps.Clone()[0].n) // a Clone the type writes runs, Copy as it is
+	wraps := []Wrap{Wrap{b: Bump{n: 3}}}
+	wraps.Extend(ref []Wrap{Wrap{b: Bump{n: 4}}})
+	fmt.Println(wraps[1].b.n, wraps.Clone()[0].b.n) // and a derived Clone calls it, inside a slice too
+	var r Result<string, string> = Ok("ok".Clone())
+	rs := []Result<string, string>{r}
+	fmt.Println(rs.Clone())
+	i := []int{1, 2, 3} // a variable named as a loop counter of the C backend might be
+	i.Extend(ref []int{4})
+	i.Truncate(2)
+	fmt.Println(i)
+	i.Clear()
+	fmt.Println(len(i))
+}
+`,
+			Out: "[3 1 4 1 5] Some(2) None Some(3) Some(5) None None\n[3 1 4 1 5]\n[3 1]\n[] 0\n3 b2 c2 b\ndrop b2\ndrop c2\nkept a\ntrue false Some(6) None Some(0) Some(4) None\nSome(1) None\ntrue Some(1)\n102 101\n104 103\n[Ok(\"ok\")]\n[1 2]\n0\ndrop b\ndrop c\ndrop a\n",
+		},
+		{
+			Name: "map-option-result-methods", // GetOrInsert inserting once and dropping the key and value it does not need; AndThen, OrElse, Ok, Err and UnwrapOrElse, each dropping the half it does not give back
+			Src: `package main
+import "fmt"
+struct Guard impl Drop, Clone { name string }
+func (g mut Guard) Drop() { fmt.Println("drop", g.name) }
+func (g ref Guard) Clone() Guard { return Guard{name: g.name + "2"} }
+func main() {
+	m := map[string]Guard{}
+	m.GetOrInsert("k", Guard{name: "first"}).name = "first!"
+	m.GetOrInsert("k", Guard{name: "second"}).name += "?"
+	if g := m.Get("k") {
+		fmt.Println(g.name, len(m))
+	}
+
+	counts := map[string]int{}
+	for w := range "a b a c a".Fields() {
+		*counts.GetOrInsert(w.Clone(), 0) += 1
+	}
+
+	fmt.Println(counts)
+	o := Some(4)
+	var none int? = None
+	fmt.Println(o.AndThen(func(v int) int? { return Some(v * 2) }), none.AndThen(func(v int) int? { return Some(v) }), Some(1).OrElse(func() int? { return Some(9) }), none.OrElse(func() int? { return Some(9) }))
+	var ok Result<Guard, string> = Ok(Guard{name: "val"})
+	var bad Result<Guard, string> = Err("bad".Clone())
+	fmt.Println(ok.Err(), bad.Err())
+	var ok2 Result<int, Guard> = Ok(3)
+	var bad2 Result<int, Guard> = Err(Guard{name: "err"})
+	fmt.Println(ok2.Ok(), bad2.Ok())
+	var r Result<int, string> = Ok(3)
+	var e Result<int, string> = Err("bad".Clone())
+	fmt.Println(r.AndThen(func(v int) Result<int, string> { return Ok(v + 1) }), e.AndThen(func(v int) Result<int, string> { return Ok(v + 1) }))
+	var r2 Result<int, string> = Ok(3)
+	var e2 Result<int, string> = Err("worse".Clone())
+	fmt.Println(r2.UnwrapOrElse(func(s string) int { return len(s) }), e2.UnwrapOrElse(func(s string) int { return len(s) }))
+}
+`,
+			Out: "drop second\nfirst!? 1\nmap[a:3 b:1 c:1]\nSome(8) None Some(1) Some(9)\ndrop val\nNone Some(\"bad\")\ndrop err\nSome(3) None\nOk(4) Err(\"bad\")\n3 5\ndrop first!?\n",
+		},
+		{
+			Name: "integer-methods", // checked arithmetic at the bounds of int, i8 and u8, Abs leaving the minimum as it is, Clamp with lo above hi; and Eq on a tuple and an option, called through a bound
+			Src: `package main
+import "fmt"
+func same<T: Eq>(a ref T, b ref T) bool { return a.Eq(b) }
+func main() {
+	big, small := 9223372036854775807, -9223372036854775807 - 1
+	fmt.Println(big.CheckedAdd(1), big.CheckedSub(1), small.CheckedSub(1), small.CheckedAdd(1), big.CheckedMul(2))
+	var a, b i8 = 100, -128
+	fmt.Println(a.CheckedAdd(27), a.CheckedAdd(28), a.CheckedMul(2), b.CheckedSub(1), b.Abs(), a.Abs())
+	var u, z u8 = 250, 0
+	fmt.Println(u.CheckedAdd(5), u.CheckedAdd(6), z.CheckedSub(1), u.CheckedMul(1), u.Clamp(1, 100))
+	n, neg := 15, -5
+	fmt.Println(neg.Abs(), small.Abs(), n.Clamp(0, 10), neg.Clamp(0, 10), n.Clamp(10, 20), n.Clamp(20, 10))
+	t1, t2 := (1, "a"), (1, "b")
+	var o1, o2 int? = Some(1), None
+	fmt.Println(same(ref t1, ref t1), same(ref t1, ref t2), same(ref o1, ref o1), same(ref o1, ref o2))
+}
+`,
+			Out: "None Some(9223372036854775806) None Some(-9223372036854775807) None\nSome(127) None None None -128 100\nSome(255) None None Some(250) 100\n5 -9223372036854775808 10 0 15 10\ntrue false true false\n",
 		},
 		{
 			Name: "divide", // the division the language defines and C and the IR do not

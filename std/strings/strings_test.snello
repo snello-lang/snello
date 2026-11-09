@@ -4,7 +4,7 @@
 
 package strings_test
 
-import ("expect"; "strings"; "testing")
+import ("bufio"; "expect"; "strings"; "testing")
 
 func TestRepeat() {
 	expect.Equal(ref expect.IsSome(strings.Repeat("ab", 3)), "ababab")
@@ -141,4 +141,42 @@ func BenchmarkBuilder() {
 		b.WriteString("two")
 		_ = b.String()
 	}
+}
+
+func TestReader() {
+	r := strings.NewReader("hello, world")
+	buf := make([]byte, 5)
+	var got strings.Builder
+	for {
+		n := r.Read(mut buf).Unwrap()
+		if n == 0 {
+			break
+		}
+
+		got.WriteString(ref string(buf[:n]))
+	}
+
+	expect.Equal(ref got.String(), "hello, world")
+	expect.Equal(ref r.Len(), ref 0)
+	empty := make([]byte, 0)
+	expect.Equal(ref r.Read(mut empty).Unwrap(), ref 0) // nowhere to put a byte
+
+	lines := strings.NewReader("one\ntwo\nthree")
+	sc := bufio.NewScanner(mut lines) // the Reader owns its text, so bufio can hold it
+	var seen strings.Builder
+	for sc.Scan() {
+		seen.WriteString(sc.Text())
+		seen.WriteByte('|')
+	}
+
+	expect.Equal(ref seen.String(), "one|two|three|")
+}
+
+func TestGrow() {
+	var b strings.Builder
+	b.Grow(64)
+	b.Grow(-1) // nothing
+	b.WriteString("grown")
+	expect.Equal(ref b.String(), "grown")
+	expect.Equal(ref b.Len(), ref 5)
 }

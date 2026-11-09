@@ -1,0 +1,7 @@
+levels: map[INFO:3 WARN:1 ERROR:1]
+slow: [login api/orders] first: Some("login") last: Some("api/orders")
+redacted: 1 of 1
+api calls: 2 last at byte Some(104)
+route: Some("api") rest: Some("42/orders")
+pages: [home login login api/orders] orders at Some(3)
+kept: [home login]

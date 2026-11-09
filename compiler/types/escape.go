@@ -53,13 +53,18 @@ func (cap capture) borrow(holder *Var, pos token.Pos) borrow {
 }
 
 // holdsBorrow reports whether a value of type t carries a borrow: a
-// ref or mut, or a struct, enum, option, result, tuple or array with
-// such a part. A slice, map, channel or pointer never does, since one
-// that would is refused as a type.
+// ref or mut, or a struct, enum, option, result, tuple, array or slice
+// with such a part. A program cannot write a slice of borrows, which is
+// refused as a type, but Split, SplitN, Fields and Lines give one, the
+// pieces of the string they lend, and the slice holds that string's
+// borrow for as long as it is used. A map, channel or pointer never
+// does, since one that would is refused as a type.
 func holdsBorrow(t Type) bool {
 	switch t := t.(type) {
 	case *Ref:
 		return true
+	case *Slice:
+		return holdsBorrow(t.elem)
 	case *Option:
 		return holdsBorrow(t.elem)
 	case *Result:
