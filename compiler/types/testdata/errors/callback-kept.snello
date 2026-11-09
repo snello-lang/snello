@@ -1,0 +1,29 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a closure that borrows may be passed to a function that only
+// calls it, but not to one that keeps it. store keeps f, since its body
+// stores it in k, which outlives the call; the closure borrows s, which
+// is dropped at the end of its block, before k.f is called. The
+// compiler reads what a function keeps from its body, as nothing is
+// written in the signature. Pass a closure that borrows nothing, or
+// give the closure what it needs by value.
+
+package p
+
+import "fmt"
+
+struct Keeper { f func() string }
+
+func store(k mut Keeper, f func() string) { k.f = f }
+
+func main() {
+    k := Keeper{f: func() string { return "".Clone() }}
+    {
+        s := "hello".Clone()
+        r := ref s
+        store(mut k, func() string { return (*r).Clone() })     // ERROR "closure captures r by borrow and cannot be passed to store, which keeps f: assigned to k.f at"
+    }
+    fmt.Println(k.f())
+}

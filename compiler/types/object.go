@@ -64,7 +64,16 @@ type Var struct {
 	object
 	field  bool
 	global bool // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
-	kept   bool // a parameter whose argument the callee keeps: Push stores its element
+	kept   bool // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
+	keptBy *keptBy
+}
+
+// A keptBy says how a body keeps a parameter and where, as the
+// declaring package's files place it, for a message; nil for a
+// predeclared method's parameter, which says so itself.
+type keptBy struct {
+	how string // "stored", "returned", "given to g"
+	at  token.Position
 }
 
 // A Const is a named constant; true and false, and const declarations.

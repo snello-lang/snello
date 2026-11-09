@@ -123,6 +123,7 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 		}
 
 		if v, ok := c.scope.Lookup(name.Name).(*Var); ok {
+			c.keepParamIn(ops[i], "given to", name, name.Pos())
 			c.hold(v, ops[i].expr, name.Pos())
 		}
 	}
@@ -238,6 +239,7 @@ func (c *Checker) define(s *ast.AssignStmt) {
 			continue
 		}
 
+		c.keepParamIn(ops[i], "given to", ident, ident.Pos())
 		c.maybeMove(ops[i], inferred(ops[i]))
 		v := NewVar(ident.Pos(), ident.Name, inferred(ops[i]))
 		c.declare(c.scope, ident, v)
@@ -295,6 +297,7 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 	}
 
 	c.assign(op, x.typ, lhs.Pos(), "assignment")
+	c.keepParamIn(op, "assigned to", lhs, lhs.Pos())
 	c.revive(lhs)
 	p, kind := c.placeOf(lhs)
 	if kind != notPlace && c.storeRefused(p, kind, x, op, lhs.Pos()) {

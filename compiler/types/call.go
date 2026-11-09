@@ -66,6 +66,9 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.spawned(e, f, sig)
 	}
 
+	calling := c.calling
+	c.calling = f.obj
+	defer func() { c.calling = calling }() // an argument's own call sets its own
 	var tmp ast.Expr
 	switch {
 	case sig.tparams != nil:
@@ -148,7 +151,7 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 
 		c.keepLent(arg, op)
 
-		if t := c.argEffects(e, arg, op, p); t != nil {
+		if t := c.argEffects(e, arg, op, p, i); t != nil {
 			tmp = t
 		}
 	}
@@ -214,7 +217,10 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 
 	in.unify(v.parent, expected)
 	slots := varTypes(v.fields)
-	ops := c.evaluate(in, e.Args, slots, func(i int, op operand) { c.maybeMove(op, slots[i]) })
+	ops := c.evaluate(in, e.Args, slots, func(i int, op operand) {
+		c.kept(op, "stored", e.Args[i].Pos()) // a variant holds what it is given
+		c.maybeMove(op, slots[i])
+	})
 	targs, ok := c.complete(in, v.name, e.Fun, nil)
 	if !ok {
 		return invalidOperand
@@ -235,8 +241,13 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 // other is moved unless it is Copy. It returns the temporary the
 // argument lends, if any. Only the parameter's shape matters, so a
 // generic call runs it before its type arguments are known.
-func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var) (tmp ast.Expr) {
+func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, i int) (tmp ast.Expr) {
 	switch {
+	case c.keepArg(op, i, arg.Pos()):
+		if e == c.spawning {
+			c.kept(op, "spawned", arg.Pos())
+			c.spawnArg(arg, op)
+		}
 	case p.kept:
 		c.kept(op, "stored", arg.Pos())
 	case e == c.spawning:
@@ -287,7 +298,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*
 
 	var tmp ast.Expr
 	ops := c.evaluate(in, e.Args[:fixed], varTypes(sig.params[:fixed]), func(i int, op operand) {
-		if t := c.argEffects(e, e.Args[i], op, sig.params[i]); t != nil {
+		if t := c.argEffects(e, e.Args[i], op, sig.params[i], i); t != nil {
 			tmp = t
 		}
 	})
@@ -642,7 +653,9 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 		}
 
 		for i, arg := range e.Args {
-			c.assign(c.expr(arg, v.fields[i].typ), v.fields[i].typ, arg.Pos(), "field "+v.fields[i].name)
+			op := c.expr(arg, v.fields[i].typ)
+			c.kept(op, "stored", arg.Pos()) // a variant holds what it is given
+			c.assign(op, v.fields[i].typ, arg.Pos(), "field "+v.fields[i].name)
 		}
 
 		return operand{value, t, nil, nil}
@@ -680,6 +693,8 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 	if x.mode == invalid {
 		return invalidOperand
 	}
+
+	c.kept(x, "stored", e.Args[0].Pos()) // Some(f) holds f
 
 	if hint != nil {
 		c.assign(x, hint, e.Args[0].Pos(), "argument")

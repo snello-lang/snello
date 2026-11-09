@@ -145,6 +145,15 @@ type Checker struct {
 	temps     []borrow
 	depth     int // of expression nesting; a lent borrow ends with the full expression
 
+	// The keeping pass (keep.go): the function a call's arguments are
+	// checked for, and what is decided at the package's end.
+	calling    Object
+	enclosing  []*Signature // the signatures of the functions around the closure being checked, outermost first: a parameter of any of them may be kept from inside the closure
+	keepEdges  []keepEdge
+	keepCalls  []keepCall
+	keepValues []keepValue
+	keepImpls  []keepImpl
+
 	// The escape pass (escape.go): whether the declarations are resolved
 	// and the questions asked before they were, the closures being
 	// checked and what each closure literal captured, and the call a
@@ -312,6 +321,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	}
 
 	c.checkDefaultBodies()
+	c.resolveKeeps() // what each function keeps is known once every body is checked
 	c.checkCallCycles()
 }
 

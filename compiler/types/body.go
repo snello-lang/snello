@@ -47,6 +47,7 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.sig, c.recv = sig, sig.recv
 	c.moved, c.floors, c.dead = c.moved[:0], c.floors[:0], false
 	c.flow = c.newFlow(token.NoPos)
+	c.enclosing = c.enclosing[:0]
 	c.funcBody(sig, recv, params, body)
 	c.solveFlow()
 	c.freeFlow(c.flow)

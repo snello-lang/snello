@@ -270,15 +270,9 @@ func (c *Checker) kept(op operand, how string, pos token.Pos) {
 		return
 	}
 
-	if caps := c.capturesOf(op.expr); caps != nil {
-		c.errorf(pos, "closure captures "+caps[0].v.name+" by borrow and cannot be "+how)
-		return
-	}
-
-	if v, ok := op.obj.(*Var); ok && isSignature(op.typ) {
-		if b := c.heldBy(v, pos); b != nil {
-			c.errorf(pos, "closure "+v.name+" captures "+b.v.name+" by borrow and cannot be "+how)
-		}
+	c.keepParam(op, how, pos) // a parameter of the function, which the function then keeps: its callers are checked against that
+	if what := c.borrowsWhat(op, pos); what != "" {
+		c.errorf(pos, what+" and cannot be "+how)
 	}
 }
 
@@ -325,7 +319,7 @@ func heldIn(f *flow, v *Var, pos token.Pos) *borrow {
 // local, or of a parameter taken by value, dies with the function. A
 // closure that captures a local is a borrow of that local.
 func (c *Checker) returned(e ast.Expr, op operand) {
-	if op.mode == invalid {
+	if op.mode == invalid || c.keepParam(op, "returned", e.Pos()) {
 		return
 	}
 

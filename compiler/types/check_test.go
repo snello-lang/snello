@@ -168,6 +168,7 @@ var handledErrors = map[string]bool{
 	"borrow-in-slice.snello":        true,
 	"borrow-struct-in-slice.snello": true,
 	"closure-stored.snello":         true,
+	"callback-kept.snello":          true,
 	"borrow-across-spawn.snello":    true,
 	"borrow-on-channel.snello":      true,
 	"return-two-borrows.snello":     true,

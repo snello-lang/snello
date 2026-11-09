@@ -1146,7 +1146,12 @@ func (c *Checker) checkRequired(n *Named, listed, owner *Trait, want *Func, pos 
 func (c *Checker) checkSignature(n *Named, owner *Trait, want, have *Func, pos token.Pos) bool {
 	wsig := subst(want.typ, map[*TypeParam]Type{owner.self: n}).(*Signature)
 	hsig := have.typ.(*Signature)
-	if hasInvalid(hsig) || sameMethod(hsig, wsig) {
+	if hasInvalid(hsig) {
+		return true
+	}
+
+	if sameMethod(hsig, wsig) {
+		c.keepImpls = append(c.keepImpls, keepImpl{have, want}) // it may keep no more than the trait's declaration
 		return true
 	}
 
