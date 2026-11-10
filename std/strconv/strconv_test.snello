@@ -212,13 +212,14 @@ func TestFormatFloatPrecision() {
 	expect.Equal(ref strconv.FormatFloat(1.5, 100000).Len(), ref 100002)
 }
 
-func TestFormatFloatBound() {
-	// A million digits at most, whatever the precision: no number a program passes is a text it cannot hold.
+func TestFormatFloatLong() {
+	// As many digits as are asked for: every one a float has, to the 1074th, and zeros after.
 	expect.Equal(ref strconv.FormatFloat(1.5, 1000000).Len(), ref 1000002)
-	expect.Equal(ref strconv.FormatFloat(1.5, 1000001).Len(), ref 1000002)
-	expect.Equal(ref strconv.FormatFloat(1.5, 9223372036854775807).Len(), ref 1000002)
-	expect.Equal(ref strconv.FormatFloat32(f32(1.5), 9223372036854775807).Len(), ref 1000002)
-	expect.HasPrefix(ref strconv.FormatFloat(-1.5, 9223372036854775807), "-1.50000")
+	expect.Equal(ref strconv.FormatFloat(-1.5, 2000001).Len(), ref 2000004)
+	expect.HasPrefix(ref strconv.FormatFloat(-1.5, 2000001), "-1.50000")
+	expect.HasSuffix(ref strconv.FormatFloat(5e-324, 1074), "8265533447265625")
+	expect.HasSuffix(ref strconv.FormatFloat(5e-324, 1075), "82655334472656250")
+	expect.Equal(ref strconv.FormatFloat32(f32(1.5), 1500000).Len(), ref 1500002)
 	expect.Equal(ref strconv.FormatFloat(1.5, -9223372036854775808), "1.5")
 }
 

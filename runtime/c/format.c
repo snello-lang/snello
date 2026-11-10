@@ -117,11 +117,10 @@ sn_string sn_hex_bytes(sn_slice b, bool upper) {
     return sn_hex((sn_string){b.ptr, b.len, 0}, upper, false);
 }
 
-// The most digits a caller may ask of a float, after its point or in
-// all: the largest precision a format takes, which the checker holds a
-// format to and which bounds what one call allocates. More are not
-// written, so that no number a program passes, to strconv's FormatFloat
-// or past the checker, is a size the runtime cannot hold.
+// The most digits a verb asks of a float, after its point or in all:
+// the largest precision a format takes, which the checker holds every
+// format to. The functions the verbs call hold their precision to it
+// as well, so that their memory rests on no check but their own.
 enum { MOST_DIGITS = 1000000 };
 
 // precision holds a precision to what is written: none below zero and
@@ -892,9 +891,34 @@ sn_string sn_f64_fixed(double v, int64_t digits) {
 }
 
 // sn_strconv_formatFixed is strconv's FormatFloat with a precision:
-// prec digits after the point, and MOST_DIGITS for a prec past it.
+// prec digits after the point, prec not negative, however many that
+// is, as Go's writes them. A double is a whole number times a power of
+// two no smaller than 2^-1074, and 2^-k has exactly k digits after its
+// point, so no double has a digit that is not zero past the 1074th:
+// the digits are worked out to there, every one exact, and zeros make
+// up the rest without any arithmetic. A text longer than memory holds
+// is the failure of any allocation.
 sn_string sn_strconv_formatFixed(double v, int64_t prec) {
-    return sn_f64_fixed(v, prec);
+    enum { LAST_DIGIT = 1074 };
+    if (prec <= LAST_DIGIT) {
+        return sn_f64_fixed(v, prec);
+    }
+
+    sn_string s = sn_f64_fixed(v, LAST_DIGIT);
+    if (s.ptr[s.len - 1] < '0' || s.ptr[s.len - 1] > '9') {
+        return s; // an infinity or NaN
+    }
+
+    if (prec - LAST_DIGIT > PTRDIFF_MAX - s.len) {
+        sn_panic(SN_STR("out of memory", 13));
+    }
+
+    int64_t n = s.len + (prec - LAST_DIGIT);
+    uint8_t *p = sn_alloc((size_t)n);
+    memcpy(p, s.ptr, (size_t)s.len);
+    memset(p + s.len, '0', (size_t)(prec - LAST_DIGIT));
+    sn_string_free(s);
+    return SN_OWNED(p, n);
 }
 
 // sn_int_digits gives the decimal text of an integer, which it takes,

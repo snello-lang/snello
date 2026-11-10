@@ -318,9 +318,9 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 		return text{"sn_f64_e(" + deref(v, t) + ", " + strconv.Itoa(places) + ")", true}
 	case (p.Verb == 'v' || p.Verb == 'g') && p.Prec >= 0 && info&types.IsFloat != 0:
 		return text{"sn_f64_g(" + deref(v, t) + ", " + prec + ")", true}
-	case (p.Verb == 'x' || p.Verb == 'X') && info&types.IsInteger != 0:
+	case (p.Verb == 'x' || p.Verb == 'X') && info&types.IsInteger != 0 && !types.PrintsAsText(lower.ValueType(t)):
 		return inBase(16)
-	case (p.Verb == 'x' || p.Verb == 'X') && isByteSlice(lower.ValueType(t)): // the bytes, lent
+	case (p.Verb == 'x' || p.Verb == 'X') && isByteSlice(lower.ValueType(t)) && !types.PrintsAsText(lower.ValueType(t)): // the bytes, lent
 		b := e.spill(deref(v, t), lower.ValueType(t), a.Pos())
 		return text{"sn_hex_bytes((sn_slice){" + b + ".ptr, " + b + ".len, " + b + ".cap}, " + strconv.FormatBool(p.Verb == 'X') + ")", true}
 	case p.Verb == 'g': // the shortest text of the float itself, of its own width, never a String method's
@@ -329,8 +329,9 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 		}
 
 		return text{"sn_f64_to_string((double)(" + deref(v, t) + "))", true}
-	case p.Verb == 'x' || p.Verb == 'X': // the bytes of the string itself, lent
-		return text{"sn_hex(" + deref(v, t) + ", " + strconv.FormatBool(p.Verb == 'X') + ", false)", true}
+	case p.Verb == 'x' || p.Verb == 'X': // the bytes of a string, or of what a type's String or Error returns, as Go's %x prints one
+		s := e.text(v, a)
+		return text{"sn_hex(" + s.s + ", " + strconv.FormatBool(p.Verb == 'X') + ", " + strconv.FormatBool(s.owned) + ")", true}
 	case p.Verb == 'o':
 		return inBase(8)
 	case p.Verb == 'b':

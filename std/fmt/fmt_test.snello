@@ -63,13 +63,14 @@ type Level int impl fmt.Stringer
 
 func (l ref Level) String() string { return "low" }
 
-// Only %v, %s and %q print a value as its String: every other verb
-// prints the value itself.
+// The verbs a string takes, %v, %s, %q, %x and %X, print a value as its
+// String, whatever its type is declared over; every other verb prints
+// the value itself.
 func TestVerbsPrintTheValue() {
 	expect.Equal(ref fmt.Sprintf("%v %s %q %v", Heat(1.5), Tag("ab"), Tag("ab"), Level(7)), "hot TAG \"TAG\" low")
 	expect.Equal(ref fmt.Sprintf("%g %.3g %e %f %08g", Heat(1.5), Heat(1.5), Heat(1.5), Heat(1.5), Heat(1.5)), "1.5 1.5 1.500000e+00 1.500000 000001.5")
-	expect.Equal(ref fmt.Sprintf("%x %X", Tag("ab"), Tag("ab")), "6162 6162")
-	expect.Equal(ref fmt.Sprintf("%d %x %05d %c", Level(7), Level(255), Level(7), Level(65)), "7 ff 00007 A")
+	expect.Equal(ref fmt.Sprintf("%x %X %x", Tag("ab"), Tag("ab"), Level(255)), "544147 544147 6c6f77")
+	expect.Equal(ref fmt.Sprintf("%d %o %b %05d %c", Level(7), Level(8), Level(5), Level(7), Level(65)), "7 10 101 00007 A")
 }
 
 struct sink impl io.Writer { text []byte; writes int }

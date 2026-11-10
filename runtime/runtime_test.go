@@ -1716,8 +1716,9 @@ int main(void) {
 // of every size in every base, floats of every magnitude to a
 // precision in each of the three layouts, the infinities and NaN among
 // them, the digits of a float to its last one that is not zero and
-// past it, and a precision below zero or past the largest a format
-// takes, which is held to what is written.
+// past it, however many are asked for, and for the verbs a precision
+// below zero or past the largest a format takes, which is held to what
+// a format writes.
 func TestNumberFormats(t *testing.T) {
 	probe := `#include "snello.h"
 #include <inttypes.h>
@@ -1833,13 +1834,21 @@ int main(void) {
 		}
 	}
 
-	// A precision is held to what is written: none below zero, and a
-	// million at most, whatever number reaches the runtime.
+	// The functions the verbs call hold their precision to what a
+	// format takes: none below zero, and a million at most, whatever
+	// number reaches them.
 	for _, prec := range []int{-1, -5, math.MinInt64, 1000001, 1 << 40, math.MaxInt64} {
 		held := min(max(prec, 0), 1000000)
-		ask('f', math.Float64bits(1.5), prec, 0, strconv.FormatFloat(1.5, 'f', held, 64))
+		ask('Z', math.Float64bits(1.5), prec, 0, strconv.FormatFloat(1.5, 'f', held, 64))
 		ask('e', math.Float64bits(-1.5), prec, 0, strconv.FormatFloat(-1.5, 'e', held, 64))
 		ask('g', math.Float64bits(1.0/3), prec, 0, strconv.FormatFloat(1.0/3, 'g', held, 64))
+	}
+
+	// strconv's FormatFloat writes as many digits as it is asked for,
+	// past a million too.
+	for _, prec := range []int{1000001, 2500000} {
+		ask('f', math.Float64bits(-1.5), prec, 0, strconv.FormatFloat(-1.5, 'f', prec, 64))
+		ask('f', math.Float64bits(5e-324), prec, 0, strconv.FormatFloat(5e-324, 'f', prec, 64))
 	}
 
 	got := probeLines(t, "formats", probe, in.String())

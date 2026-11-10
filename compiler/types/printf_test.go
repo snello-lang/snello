@@ -34,7 +34,8 @@ func TestPrintf(t *testing.T) {
 		{`fmt.Printf("%x %X %o %b %c %e %g", 255, u8(255), -8, 5, 'A', 2.5, f32(2.5))`, ""},
 		{`fmt.Printf("%x %X %x", "hi", bs, name)`, ""}, // the bytes of a string, of a []u8 and of a type declared over string
 		{`fmt.Printf("%x", 2.5)`, `fmt.Printf format %x takes an integer, a string or a []u8, not f64`},
-		{`fmt.Printf("%X", e)`, `fmt.Printf format %X takes an integer, a string or a []u8, not E`}, // the bytes of a string, not of what a type prints as
+		{`fmt.Printf("%X %x %x %x", e, c, lv, er)`, ""},                                                 // a type that prints as text counts as the string, whatever it is declared over, as in Go
+		{`fmt.Printf("%X", p)`, `fmt.Printf format %X takes an integer, a string or a []u8, not Plain`}, // one that does not is no string
 		{`fmt.Printf("%x", ns)`, `fmt.Printf format %x takes an integer, a string or a []u8, not []int`},
 		{`fmt.Printf("%.4x %.4X %.3o %.8b", 255, 255, 8, 5)`, ""},
 		{`fmt.Printf("%.2x", "hi")`, `fmt.Printf format %x takes no precision on string`},
@@ -57,9 +58,11 @@ func TestPrintf(t *testing.T) {
 		{`fmt.Printf("%.99999999999999999999f", 2.5)`, `fmt takes a width and a precision of 1000000 at most`},
 		{`fmt.Printf("%05v", c)`, `fmt.Printf format %v takes the 0 flag on a number, not on Color`},
 		{`fmt.Printf("%05v", e)`, `fmt.Printf format %v takes the 0 flag on a number, not on E`},
-		{`fmt.Printf("%05v", lv)`, `fmt.Printf format %v takes the 0 flag on a number, not on Level, which prints as its String`}, // a number that prints as text
-		{`fmt.Printf("%08v", cel)`, `fmt.Printf format %v takes the 0 flag on a number, not on Celsius, which prints as its String`},
-		{`fmt.Printf("%05d %05x %08g %08e %08f %g %x", lv, lv, cel, cel, cel, cel, name)`, ""}, // the number itself, whatever its String
+		{`fmt.Printf("%05v", lv)`, `fmt.Printf format %v takes the 0 flag on a number, not on Level, which prints as its text`}, // a number that prints as text
+		{`fmt.Printf("%08v", cel)`, `fmt.Printf format %v takes the 0 flag on a number, not on Celsius, which prints as its text`},
+		{`fmt.Printf("%05x", lv)`, `fmt.Printf format %x takes the 0 flag on a number, not on Level, which prints as its text`},
+		{`fmt.Printf("%.4X", lv)`, `fmt.Printf format %X takes no precision on Level`},
+		{`fmt.Printf("%05d %03o %08b %c %08g %08e %08f %g %x", lv, lv, lv, lv, cel, cel, cel, cel, name)`, ""}, // the number itself, whatever its String, with a verb no string takes
 		{`fmt.Printf("%+d", 1)`, `fmt takes the + flag on %v of an error only`},
 		{`fmt.Printf("%+v", 1)`, `fmt.Printf format %+v takes an error, not int`},
 		{`fmt.Printf("%+.3v", e)`, `fmt.Printf format %+v takes no precision`},

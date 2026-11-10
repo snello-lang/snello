@@ -85,11 +85,11 @@ func main() {
 // base as its magnitude after a sign, widened by its own signedness;
 // the bytes of a string and of a []u8 in hexadecimal; a float with an
 // exponent, six digits unless the format gives a precision; and %g
-// without one as the shortest text of the float, of its own width.
-// Neither %g nor %x prints through a String method: each takes the
-// value itself. The zero flag pads with sn_pad_zero, but not under the
-// minus flag or on an integer with a precision, and Fprint writes its
-// text with the writer's Write.
+// without one as the shortest text of the float, of its own width,
+// never a String method's. %x of a type that prints as its String is
+// the bytes of what String returns, as in Go. The zero flag pads with
+// sn_pad_zero, but not under the minus flag or on an integer with a
+// precision, and Fprint writes its text with the writer's Write.
 func TestVerbs(t *testing.T) {
 	body := irFunction(t, emitSource(t, verbCalls), "sn_main")
 	for _, want := range []string{
@@ -125,7 +125,7 @@ func TestVerbs(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(body, "_String(") {
-		t.Errorf("main prints through a String method where %%g and %%x take the value:\n%s", body)
+	if n := strings.Count(body, "_String("); n != 1 || !strings.Contains(body, "call %sn_string @sn_Tag_String(") {
+		t.Errorf("main calls a String method %d times, want once, for the %%x of the tag and not for the %%g of the heat:\n%s", n, body)
 	}
 }

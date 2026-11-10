@@ -228,12 +228,11 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` has `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g` and `%t`, and no `%T`, `%p`, `%U`, `%E` or `%G`; of the flags it takes the minus, the zero on a number, and the plus on `%v` of an error |
 | `%x` on a float, a hexadecimal float; `%b` on a float | Refused: `%x`, `%X`, `%o` and `%b` take an integer, and `%x` and `%X` the bytes of a string or a `[]u8` |
 | `%05s` pads a string with zeros | Refused: the `0` flag goes with a number |
-| `%x` on a `Stringer` prints the bytes of its `String()` | `%x` prints the value's own bytes; only `%v`, `%s` and `%q` print through `String` |
-| A width or precision of any size, `%.2000000f` | A million at most; a larger one is refused when the program is compiled |
+| `%*d` with a width above a million prints `%!(BADWIDTH)` when the program runs | No `*`: a width or precision is written in the format, a million at most, and a larger one is refused when the program is compiled |
 | `err.(*strconv.NumError).Err == strconv.ErrRange` | `e.Kind() == strconv.Range` |
 | `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
 | `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f, -1)`: the shortest text that reads back, as `fmt` prints it |
-| `strconv.FormatFloat(f, 'f', 2, 64)`, and `'e'` and `'g'` with a precision | `strconv.FormatFloat(f, 2)`: digits after the point, a million at most; an exponent is `fmt.Sprintf("%.2e", f)` |
+| `strconv.FormatFloat(f, 'f', 2, 64)`, and `'e'` and `'g'` with a precision | `strconv.FormatFloat(f, 2)`: digits after the point; an exponent is `fmt.Sprintf("%.2e", f)` |
 | `strconv.ParseFloat(s, 32)` returns a `float64` to convert | `strconv.ParseFloat32(s)` returns an `f32`; `FormatFloat32` writes one |
 | `strconv.ParseInt(s, 16, 64)`, with a `bitSize` | `strconv.ParseInt(s, 16)` reads an `int` and `ParseUint` a `uint`; a narrower type is a comparison with its limit, `math.MaxInt8` |
 | `strconv.FormatInt(n, 37)` panics | `strconv.FormatInt(n, base)` returns a `string?`, `None` for a base that is none |

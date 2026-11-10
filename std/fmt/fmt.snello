@@ -38,11 +38,13 @@
 // whole. A zero before the width pads a number with zeros after its
 // sign instead, %05d, %02x and %08.3f; the minus flag overrides it, and
 // so does a precision on an integer. A width and a precision are
-// 1000000 at most. Only %v, %s and %q print a value as its Error or
-// String method returns it: every other verb prints the value itself,
-// %g the float and %x the string's own bytes. The format is a string
-// literal and reads as many arguments as it has verbs; fmt takes no
-// other verb or flag.
+// 1000000 at most. The verbs a string takes, %v, %s, %q, %x and %X,
+// print a value whose type implements Error or Stringer as what the
+// method returns, whatever the type is declared over, as Go's do;
+// every other verb prints the value itself, so %g of such a float is
+// the float and %d of such an integer the integer. The format is a
+// string literal and reads as many arguments as it has verbs; fmt
+// takes no other verb or flag.
 //
 // Every argument is lent for the call: printing a value leaves it with
 // its owner.

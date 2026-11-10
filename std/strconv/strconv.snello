@@ -12,7 +12,7 @@
 // cannot fail: Itoa, FormatFloat, FormatFloat32, FormatBool and Quote
 // return the text. FormatInt and FormatUint write in a base the caller
 // names, and return None for a base that is none, below 2 or above 36.
-// No function of the package panics on what it is given.
+// No function of the package panics on a text or a base it is given.
 package strconv
 
 import "fmt"
@@ -445,10 +445,11 @@ func ParseFloat32(s ref string) Result<f32, Error> {
 // fmt prints a float and as Go's FormatFloat(f, 'g', -1, 64) writes
 // it: 15 for 15.0, 2.5, 0.1, an exponent from a million up, 1e+06, and
 // below 0.0001, 1e-05. An infinity is +Inf or -Inf and a NaN is NaN,
-// whatever prec is. A prec above 1000000, the largest precision a
-// format takes, writes 1000000 digits: no f64 has a digit that is not
-// zero past the 1074th, and a bound keeps the text within reason
-// whatever number a program passes.
+// whatever prec is. Every digit written is exact, however many are
+// asked for: an f64 is a whole number times a power of two no smaller
+// than 2^-1074, so it has no digit that is not zero past the 1074th
+// after its point, and FormatFloat(5e-324, 1074) is the smallest f64
+// written out in full. The text is as long as prec asks, as Go's is.
 func FormatFloat(f f64, prec int) string {
 	if prec < 0 {
 		return fmt.Sprint(f)
@@ -483,5 +484,5 @@ func unquote(s ref string, ok mut bool) string
 func formatBits(u u64, base int, neg bool) string
 
 // formatFixed writes f with prec digits after the point, prec not
-// negative, and 1000000 at most. The runtime provides it.
+// negative. The runtime provides it.
 func formatFixed(f f64, prec int) string

@@ -183,9 +183,10 @@ func FormatCount(pieces []FormatPiece) int {
 func isFormatFlag(c byte) bool { return c == '-' || c == '+' || c == '#' || c == ' ' || c == '0' }
 
 // FormatMost is the largest width and the largest precision a format
-// takes: a text of a million characters is past any table or number a
-// program prints, and a bound keeps what the runtime allocates for one
-// verb within reason.
+// takes: the bound Go's fmt holds one to when it is passed as an
+// argument, past which it prints %!(BADWIDTH). Here the number is
+// written in the format, so a larger one is refused when the format is
+// checked.
 const FormatMost = 1000000
 
 // formatNumber reads the decimal number at i, returning where it ends
