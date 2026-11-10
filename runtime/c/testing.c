@@ -41,14 +41,15 @@ void sn_testing_benchStart(int64_t n) {
 bool sn_testing_benchLoop(void) {
     if (bench_i == 0) {
         bench_start = sn_time_mono();
-        bench_allocs = atomic_load(&sn_alloc_count);
-        bench_bytes = atomic_load(&sn_alloc_total);
+        sn_alloc_counts(&bench_allocs, &bench_bytes);
     }
 
     if (bench_i >= bench_n) {
+        int64_t allocs, bytes;
         bench_nanos += sn_time_mono() - bench_start;
-        bench_allocs = atomic_load(&sn_alloc_count) - bench_allocs;
-        bench_bytes = atomic_load(&sn_alloc_total) - bench_bytes;
+        sn_alloc_counts(&allocs, &bytes);
+        bench_allocs = allocs - bench_allocs;
+        bench_bytes = bytes - bench_bytes;
         return false;
     }
 
@@ -59,8 +60,7 @@ bool sn_testing_benchLoop(void) {
 void sn_testing_benchReset(void) {
     bench_start = sn_time_mono();
     bench_nanos = 0;
-    bench_allocs = atomic_load(&sn_alloc_count);
-    bench_bytes = atomic_load(&sn_alloc_total);
+    sn_alloc_counts(&bench_allocs, &bench_bytes);
 }
 
 void sn_testing_benchReport(void) {

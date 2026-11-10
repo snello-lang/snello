@@ -136,6 +136,76 @@ typedef struct {
     int64_t slots;     // slots of the index, a power of two, eight or more
 } sn_map;
 
+// The functions of math/bits, which the C backend calls in place of the
+// library's: each is the compiler's builtin, which is the processor's
+// instruction, and every one is defined for zero, which the builtins
+// that count zeros are not. A width under 64 is counted in a 64-bit
+// word with a one set just past the value's bits, so that zero gives
+// the width with no test. A rotation turns by the count modulo the
+// width, a negative count to the right. A compiler with no builtin to
+// reverse bits swaps the neighbours, the pairs and the nibbles and
+// then the bytes, as Go's math/bits does.
+#define SN_ALWAYS_INLINE static inline __attribute__((always_inline))
+
+SN_ALWAYS_INLINE int64_t sn_bits_LeadingZeros64(uint64_t x) { return x == 0 ? 64 : __builtin_clzll(x); }
+SN_ALWAYS_INLINE int64_t sn_bits_TrailingZeros64(uint64_t x) { return x == 0 ? 64 : __builtin_ctzll(x); }
+SN_ALWAYS_INLINE int64_t sn_bits_OnesCount64(uint64_t x) { return __builtin_popcountll(x); }
+SN_ALWAYS_INLINE int64_t sn_bits_Len64(uint64_t x) { return 64 - sn_bits_LeadingZeros64(x); }
+SN_ALWAYS_INLINE uint64_t sn_bits_RotateLeft64(uint64_t x, int64_t k) {
+    unsigned s = (unsigned)k & 63;
+    return x << s | x >> ((64 - s) & 63);
+}
+
+#if defined(__has_builtin) // asked in a line of its own: a compiler without it cannot read the question
+#if __has_builtin(__builtin_bitreverse64)
+#define SN_BITREVERSE 1
+#endif
+#endif
+
+SN_ALWAYS_INLINE uint64_t sn_bits_Reverse64(uint64_t x) {
+#ifdef SN_BITREVERSE
+    return __builtin_bitreverse64(x);
+#else
+    x = (x >> 1 & 0x5555555555555555u) | (x & 0x5555555555555555u) << 1;
+    x = (x >> 2 & 0x3333333333333333u) | (x & 0x3333333333333333u) << 2;
+    x = (x >> 4 & 0x0f0f0f0f0f0f0f0fu) | (x & 0x0f0f0f0f0f0f0f0fu) << 4;
+    return __builtin_bswap64(x);
+#endif
+}
+
+#define SN_BITS(W, T)                                                                                                              \
+    SN_ALWAYS_INLINE int64_t sn_bits_LeadingZeros##W(T x) { return __builtin_clzll((uint64_t)x << (64 - W) | (uint64_t)1 << (63 - W)); } \
+    SN_ALWAYS_INLINE int64_t sn_bits_TrailingZeros##W(T x) { return __builtin_ctzll((uint64_t)x | (uint64_t)1 << W); }               \
+    SN_ALWAYS_INLINE int64_t sn_bits_OnesCount##W(T x) { return __builtin_popcountll(x); }                                           \
+    SN_ALWAYS_INLINE int64_t sn_bits_Len##W(T x) { return W - sn_bits_LeadingZeros##W(x); }                                          \
+    SN_ALWAYS_INLINE T sn_bits_Reverse##W(T x) { return (T)(sn_bits_Reverse64(x) >> (64 - W)); }                                     \
+    SN_ALWAYS_INLINE T sn_bits_RotateLeft##W(T x, int64_t k) {                                                                       \
+        unsigned s = (unsigned)k & (W - 1);                                                                                          \
+        return (T)((T)(x << s) | x >> ((W - s) & (W - 1)));                                                                          \
+    }
+
+SN_BITS(8, uint8_t)
+SN_BITS(16, uint16_t)
+SN_BITS(32, uint32_t)
+#undef SN_BITS
+
+// The same functions under the library's names, for a program that
+// keeps one as a value and calls it through the value.
+#define SN_BITS_NAMED(S, W, T)                  \
+    int64_t sn_math__bits_LeadingZeros##S(T x);  \
+    int64_t sn_math__bits_TrailingZeros##S(T x); \
+    int64_t sn_math__bits_OnesCount##S(T x);     \
+    int64_t sn_math__bits_Len##S(T x);           \
+    T sn_math__bits_Reverse##S(T x);             \
+    T sn_math__bits_RotateLeft##S(T x, int64_t k);
+
+SN_BITS_NAMED(, 64, uint64_t)
+SN_BITS_NAMED(8, 8, uint8_t)
+SN_BITS_NAMED(16, 16, uint16_t)
+SN_BITS_NAMED(32, 32, uint32_t)
+SN_BITS_NAMED(64, 64, uint64_t)
+#undef SN_BITS_NAMED
+
 // A debug build, snello build -debug, compiles the runtime with SN_DEBUG
 // and makes a mistake of the compiler a stopped program instead of a
 // quiet one: every block sn_alloc gives is counted, and a program that
@@ -472,6 +542,36 @@ void sn_eprint_owned(sn_string s);
 // system's error number, zero on success, and store their result
 // through their last parameter.
 double sn_math_Sqrt(double x);
+double sn_math_Cbrt(double x);
+double sn_math_Floor(double x);
+double sn_math_Ceil(double x);
+double sn_math_Trunc(double x);
+double sn_math_Round(double x);
+double sn_math_Mod(double x, double y);
+double sn_math_Pow(double x, double y);
+double sn_math_Exp(double x);
+double sn_math_Log(double x);
+double sn_math_Log2(double x);
+double sn_math_Log10(double x);
+double sn_math_Sin(double x);
+double sn_math_Cos(double x);
+double sn_math_Tan(double x);
+double sn_math_Asin(double x);
+double sn_math_Acos(double x);
+double sn_math_Atan(double x);
+double sn_math_Atan2(double y, double x);
+double sn_math_Sinh(double x);
+double sn_math_Cosh(double x);
+double sn_math_Tanh(double x);
+double sn_math_Hypot(double p, double q);
+double sn_math_Inf(int64_t sign);
+double sn_math_NaN(void);
+bool sn_math_IsNaN(double x);
+bool sn_math_IsInf(double x, int64_t sign);
+bool sn_math_Signbit(double x);
+double sn_math_Copysign(double x, double sign);
+uint64_t sn_math__rand_random(void);
+uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo);
 sn_string sn_io_reason(int64_t code);
 int64_t sn_io_kindOf(int64_t code);
 extern sn_slice sn_os_Args; // the command line, as a slice of sn_string

@@ -94,6 +94,8 @@ static inline void sn_spin_hint(void) {
 #ifdef SN_DEBUG
 int64_t sn_two_way(sn_string s, sn_string t);
 int64_t sn_two_way_last(sn_string s, sn_string t);
+void sn_rand_key(const uint8_t seed[32]);
+extern bool sn_rand_no_system;
 #endif
 
 // sn_slice_grow makes room in s for at least need elements of size
@@ -117,10 +119,13 @@ uint64_t sn_next_random(void);
 // the scheduler starts a worker per and os.Cores reports. sched.c's.
 int64_t sn_cores(void);
 
-// sn_alloc_count and sn_alloc_total count the blocks and the bytes
-// sn_alloc has given out, in a release build and a debug build alike,
-// for a benchmark's allocations per operation. alloc.c's and debug.c's.
-extern _Atomic int64_t sn_alloc_count, sn_alloc_total;
+// sn_alloc_note counts a block of n bytes that sn_alloc gives out, in a
+// release build and a debug build alike, and sn_alloc_counts adds up
+// the blocks and the bytes given out so far, for a benchmark's
+// allocations per operation. alloc.c's, which keeps the counts by
+// thread.
+void sn_alloc_note(size_t n);
+void sn_alloc_counts(int64_t *blocks, int64_t *bytes);
 
 // sn_task_places returns the running task's slots for the place of a
 // test's call: the file and line of a testing.Log, the file, line and

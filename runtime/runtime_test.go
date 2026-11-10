@@ -7,9 +7,12 @@ package runtime
 import (
 	"bytes"
 	"fmt"
+	"math/bits"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -455,6 +458,13 @@ func bit(b bool) int {
 // test without a C compiler.
 func buildProbe(t *testing.T, dir, src string) string {
 	t.Helper()
+	return buildProbeAs(t, dir, src, "-O1", "-DSN_DEBUG")
+}
+
+// buildProbeAs is buildProbe with the options of the build named: a
+// debug build's, or a release build's for a probe that measures.
+func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
+	t.Helper()
 	cc := os.Getenv("CC")
 	if cc == "" {
 		cc = "cc"
@@ -479,7 +489,9 @@ func buildProbe(t *testing.T, dir, src string) string {
 	}
 
 	bin := filepath.Join(dir, "probe")
-	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1", "-DSN_DEBUG", "-o", bin, filepath.Join(dir, "probe.c")}
+	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-pthread"}
+	args = append(args, mode...)
+	args = append(args, "-o", bin, filepath.Join(dir, "probe.c"))
 	args = append(args, Paths(dir)...)
 	args = append(args, "-lm")
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
@@ -1242,5 +1254,200 @@ int main(void) {
 
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("five searches of a 200,001-byte pattern in 20 MB took %v; a linear search takes milliseconds", took)
+	}
+}
+
+// TestRandom holds the runtime's random source against Go's. The
+// thread's generator, keyed with Go's own test seed and drawn from as
+// the package functions draw, gives the numbers Go's ChaCha8 gives,
+// through its refills and past the points where it keys itself again;
+// the 128-bit multiply gives Go's two halves. Four threads that key
+// themselves each draw numbers of their own, about half of whose bits
+// are set, on a system that gives random bytes and on one that gives
+// none, where the key is made of the clock.
+func TestRandom(t *testing.T) {
+	const seed, count = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", 3000
+	pairs := [][2]uint64{{0, 0}, {1, 1}, {1<<64 - 1, 1<<64 - 1}, {1<<64 - 1, 2}, {0x123456789abcdef0, 0xfedcba9876543210}, {1 << 32, 1 << 32}, {1<<63 + 1, 3}}
+	var muls strings.Builder
+	for _, p := range pairs {
+		fmt.Fprintf(&muls, "{%du, %du},", p[0], p[1])
+	}
+
+	// A thread's 4096 numbers hold 262,144 bits, 131,072 of them set give
+	// or take 256: a count more than 1,536 away, six times that, is a
+	// generator that is not even.
+	probe := `#include "internal.h"
+#include <pthread.h>
+#include <stdio.h>
+static uint64_t first[4];
+static int ones[4];
+static void *draw(void *arg) {
+    int k = (int)(intptr_t)arg;
+    first[k] = sn_math__rand_random();
+    for (int i = 0; i < 4096; i++) ones[k] += __builtin_popcountll(sn_math__rand_random());
+    return NULL;
+}
+int main(int argc, char **argv) {
+    (void)argv;
+    sn_rand_no_system = argc > 1;
+    sn_rand_key((const uint8_t *)"` + seed + `");
+    for (int i = 0; i < ` + strconv.Itoa(count) + `; i++) printf("%llx\n", (unsigned long long)sn_math__rand_random());
+    uint64_t pairs[][2] = {` + muls.String() + `};
+    for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+        uint64_t lo, hi = sn_math__rand_mul64(pairs[i][0], pairs[i][1], &lo);
+        printf("%llx %llx\n", (unsigned long long)hi, (unsigned long long)lo);
+    }
+    pthread_t th[4];
+    for (intptr_t k = 0; k < 4; k++) pthread_create(&th[k], NULL, draw, (void *)k);
+    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    int same = 0, off = 0;
+    for (int a = 0; a < 4; a++) {
+        for (int b = a + 1; b < 4; b++) same += first[a] == first[b];
+        off += ones[a] < 131072 - 1536 || ones[a] > 131072 + 1536;
+    }
+    printf("%d %d\n", same, off);
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "random"), probe)
+	var key [32]byte
+	copy(key[:], seed)
+	for _, source := range []string{"the system", "the clock"} {
+		cmd := exec.Command(bin)
+		if source == "the clock" {
+			cmd.Args = append(cmd.Args, "clock")
+		}
+
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("keyed from %s: %v", source, err)
+		}
+
+		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		if len(lines) != count+len(pairs)+1 {
+			t.Fatalf("keyed from %s: got %d lines, want %d", source, len(lines), count+len(pairs)+1)
+		}
+
+		want := rand.NewChaCha8(key)
+		for i := range count {
+			if w := strconv.FormatUint(want.Uint64(), 16); lines[i] != w {
+				t.Fatalf("number %d of the generator: got %s, want %s", i, lines[i], w)
+			}
+		}
+
+		for i, p := range pairs {
+			hi, lo := bits.Mul64(p[0], p[1])
+			if w := fmt.Sprintf("%x %x", hi, lo); lines[count+i] != w {
+				t.Errorf("%d times %d: got %s, want %s", p[0], p[1], lines[count+i], w)
+			}
+		}
+
+		if got := lines[len(lines)-1]; got != "0 0" {
+			t.Errorf("keyed from %s, threads that drew the same first number, and threads whose bits are not about half set: got %s, want 0 0", source, got)
+		}
+	}
+}
+
+// TestAllocCounts holds the counts of what sn_alloc gives out, which
+// each thread keeps for itself: four threads' blocks and bytes are all
+// in the sum, while the threads run and after they have ended, and a
+// block of no bytes is a block.
+func TestAllocCounts(t *testing.T) {
+	probe := `#include "internal.h"
+#include <pthread.h>
+#include <stdio.h>
+static void *work(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 10000; i++) sn_free(sn_alloc(48));
+    return NULL;
+}
+int main(void) {
+    int64_t b0, n0, b1, n1, b2, n2;
+    sn_alloc_counts(&b0, &n0);
+    pthread_t th[4];
+    for (int k = 0; k < 4; k++) pthread_create(&th[k], NULL, work, NULL);
+    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    sn_alloc_counts(&b1, &n1);
+    sn_free(sn_alloc(0));
+    sn_free(sn_alloc(1000));
+    sn_alloc_counts(&b2, &n2);
+    printf("%lld %lld %lld %lld\n", (long long)(b1 - b0), (long long)(n1 - n0), (long long)(b2 - b1), (long long)(n2 - n1));
+}
+`
+	for _, mode := range [][]string{{"-O1", "-DSN_DEBUG"}, {"-O2"}} {
+		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "counts"), probe, mode...)
+		out, err := exec.Command(bin).Output()
+		if err != nil {
+			t.Fatalf("%v: %v", mode, err)
+		}
+
+		if got, want := string(out), "40000 1920000 2 1000\n"; got != want {
+			t.Errorf("%v: blocks and bytes of four threads, then of two blocks more: got %q, want %q", mode, got, want)
+		}
+	}
+}
+
+// TestAllocScales holds what allocating costs a processor when every
+// processor allocates at once to what it costs one alone. Each thread
+// keeps what it allocates and frees to itself, so four threads spend
+// four times one thread's processor time and little more; a word every
+// allocation writes, shared by the threads, has each processor wait
+// for the line of memory it is on, and four threads then spend many
+// times that. Processor time is measured, not the clock's, so that a
+// machine busy with other tests does not look like a shared word.
+func TestAllocScales(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("fewer than four processors")
+	}
+
+	probe := `#include "snello.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <time.h>
+static void *work(void *arg) {
+    (void)arg;
+    void *keep[64] = {0};
+    for (int i = 0; i < 4000000; i++) {
+        int k = i & 63;
+        sn_free(keep[k]);
+        keep[k] = sn_alloc(16 + (size_t)(i & 7) * 16);
+    }
+    for (int k = 0; k < 64; k++) sn_free(keep[k]);
+    return NULL;
+}
+static double spent(int threads) {
+    struct timespec a, b;
+    pthread_t th[8];
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &a);
+    for (int k = 0; k < threads; k++) pthread_create(&th[k], NULL, work, NULL);
+    for (int k = 0; k < threads; k++) pthread_join(th[k], NULL);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &b);
+    return (double)(b.tv_sec - a.tv_sec) + (double)(b.tv_nsec - a.tv_nsec) / 1e9;
+}
+int main(void) {
+    spent(1);
+    double one = spent(1), four = spent(4);
+    printf("%.2f\n", four / (4 * one));
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
+	best := 0.0
+	for range 3 { // the least of three: a machine's other work only ever adds
+		out, err := exec.Command(bin).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ratio, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+		if err != nil {
+			t.Fatalf("%q: %v", out, err)
+		}
+
+		if best == 0 || ratio < best {
+			best = ratio
+		}
+	}
+
+	if best > 2.5 {
+		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, want about 1 and under 2.5", best)
 	}
 }

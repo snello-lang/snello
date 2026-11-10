@@ -7,6 +7,7 @@ package c
 import (
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/lower"
@@ -17,11 +18,21 @@ import (
 // The functions the library declares without a body and the compiler
 // writes are listed in emit/lower, with the reason for each; this file
 // writes them in C: fmt's printing as the runtime's printers chosen by
-// the type of each argument, os.Exit as the runtime's exit, and the
-// primitives of rc and sync as the pointer itself.
+// the type of each argument, os.Exit as the runtime's exit, the
+// primitives of rc and sync as the pointer itself, and the functions
+// of math/bits as the compiler's builtins.
 
 // libraryCall writes the call x of the lowered function key.
 func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
+	if op, width, ok := lower.BitOp(key); ok { // the runtime header's function over the compiler's builtin, always written in place
+		var wants []types.Type
+		for _, p := range e.typeOf(x.Fun).(*types.Signature).Params() {
+			wants = append(wants, p.Type())
+		}
+
+		return "sn_bits_" + op + strconv.Itoa(width) + "(" + strings.Join(e.operands(x.Args, wants), ", ") + ")"
+	}
+
 	switch key {
 	case "fmt.Println": // the line built whole and written at once, so two tasks' lines do not interleave
 		e.line("sn_print_owned(" + e.sprintln(x.Args) + ");")

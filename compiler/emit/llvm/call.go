@@ -328,12 +328,14 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
 		case bits(from) > bits(to):
 			return e.op("fptrunc "+v.typed()+" to "+ir, ir)
 		}
-	case isFloat(from):
+	case isFloat(from): // the fraction dropped, a float past the type's range its nearest end, a NaN zero: the IR's plain conversion leaves a float out of range undefined
+		fn := "llvm.fptosi.sat." + ir + "." + v.typ
 		if isUnsigned(to) {
-			return e.op("fptoui "+v.typed()+" to "+ir, ir)
+			fn = "llvm.fptoui.sat." + ir + "." + v.typ
 		}
 
-		return e.op("fptosi "+v.typed()+" to "+ir, ir)
+		e.declare(fn, "declare "+ir+" @"+fn+"("+v.typ+")")
+		return e.op("call "+ir+" @"+fn+"("+v.typed()+")", ir)
 	case isFloat(to):
 		if isUnsigned(from) {
 			return e.op("uitofp "+v.typed()+" to "+ir, ir)

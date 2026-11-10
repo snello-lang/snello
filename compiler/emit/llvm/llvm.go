@@ -285,6 +285,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	out.Write(e.globalDefs.Bytes())
 	out.Write(e.helpers.Bytes())
 	out.Write(e.funcs.Bytes())
+	out.WriteString(emptyGroup) // every function's attributes, which Targeted fills with the target's (target.go)
 	return out.Bytes(), 0, nil
 }
 
@@ -313,7 +314,7 @@ func (e *Emitter) mainFunc() {
 
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
-	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv) {\nentry:\n")
+	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " {\nentry:\n")
 	e.funcs.Write(e.fn.allocas.Bytes())
 	e.funcs.Write(e.fn.body.Bytes())
 	e.funcs.WriteString("}\n")
@@ -413,7 +414,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	e.making = nil
 	e.declare("sn_lazy_make", "declare void @sn_lazy_make(ptr, ptr, ptr)")
 	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
-	put(&e.funcs, "define internal ptr ", g, "_get() {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr ", g, "_init, ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
+	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr ", g, "_init, ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}
@@ -529,7 +530,7 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 	}
 
 	e.function(sig, params, env, body)
-	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ") {\nentry:\n")
+	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", funcAttrs, " {\nentry:\n")
 	e.funcs.Write(e.fn.allocas.Bytes())
 	e.funcs.Write(e.fn.body.Bytes())
 	e.funcs.WriteString("}\n\n")

@@ -32,7 +32,9 @@ A few library functions are not written in Snello: the runtime provides them in 
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader` and `Writer` traits, `Copy` |
 | `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers |
 | `testing`, `expect` | the test runner and the assertions of chapter 16, imported by test files alone: `testing.Main`, `Run`, `Log`, `Logf`, `Skip`, `TempDir`, `Parallel`, `Loop`, `ResetTimer`, `ReportAllocs`, `Short`; `expect.Equal`, `NotEqual`, `EqualSlice`, `EqualText`, `True`, `False`, `Fail`, `Failf`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Contains`, `ContainsElem`, `HasPrefix`, `HasSuffix`, `Len`, `Empty`, `Golden`, `Panics`, `PanicsWith`, each a panic the runner catches through `testing.Catch`, with the file, line, expression and operands the compiler hands them |
-| `math` | `Pi`; `Sqrt`, `Abs`, `Min`, `Max`, over `f64`, with Go's answers on -0, NaN and the infinities |
+| `math` | `Pi`, `E`, `Ln2`; the functions over `f64`: `Sqrt`, `Cbrt`, `Floor`, `Ceil`, `Trunc`, `Round`, `Mod`, `Pow`, `Exp`, `Log`, `Log2`, `Log10`, `Hypot`, the trigonometric and hyperbolic ones, `Abs`, `Min`, `Max`, `Inf`, `NaN`, `IsInf`, `IsNaN`, `Signbit`, `Copysign`; the limits `MaxInt`, `MinInt`, `MaxFloat64`, `SmallestNonzeroFloat64` and the sized ones, each of its own type (chapter 20) |
+| `math/bits` | `LeadingZeros`, `TrailingZeros`, `OnesCount`, `Len`, `RotateLeft` and `Reverse`, each for `uint` and, as `LeadingZeros8` to `LeadingZeros64`, for `u8` to `u64`; the compiler writes each as the processor's instruction (chapter 20) |
+| `math/rand` | `Rand`, from `New(seed1, seed2)`, a generator that gives the same numbers for the same seed, with `Int`, `Int64`, `IntN` returning `int?`, `Float64`, `Shuffle` and `Perm`; and the same six as package functions over a source keyed from the system (chapter 20) |
 | `strings` | `Builder` with `WriteString`, `WriteByte`, `WriteRune`, `Grow`, `Len`, `String` and `Reset`; `Reader`, from `NewReader`, an `io.Reader` over a string it owns; `Repeat`, a `string?` that is `None` for a negative count, `Join`, `ToLower`, `ToUpper` and `ToTitle` by Unicode's full case mapping, `EqualIgnoreCase`, `ToValidUTF8`, `IndexRune`, `ContainsRune`, `IndexFunc`, `LastIndexFunc`, `TrimFunc`, `TrimLeftFunc`, `TrimRightFunc`, `FieldsFunc`, `Map`, `Fields` |
 | `strconv` | `Atoi`, `Itoa`, `ParseFloat`, `FormatFloat`, and `Error` with `Func`, `Text`, `Msg` and `Kind()`, `Syntax` or `Range`, which is `Clone` so that a program's error may hold one and give it through `Source` (chapter 17) |
 | `sort` | `Sort` and `Search` over any `Ord` element, `SortBy` with an order of the program's own, `IsSorted` |
@@ -71,7 +73,7 @@ An `os.File` implements `Drop`: a file that goes out of scope is closed, on ever
 
 ## math
 
-`math` works over `f64`, as `Pi` is one and every function takes and returns one; a program with another float type converts at the call.
+`math` works over `f64`, as `Pi` is one and every function takes and returns one; a program with another float type converts at the call. Chapter 20 has the whole package, with `math/bits` and `math/rand`; this section is the start of it.
 
 ```go
 func (c ref Circle) Area() f64      { return math.Pi * c.r * c.r }

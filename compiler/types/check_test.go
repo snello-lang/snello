@@ -158,6 +158,7 @@ var handledErrors = map[string]bool{
 	"pieces-outlive-string.snello":    true,
 	"pieces-stored.snello":            true,
 	"defer-holds-view.snello":         true,
+	"literal-overflows.snello":        true,
 	"closure-writes-viewed.snello":    true,
 	// The owner outlives every borrow, on every path.
 	"borrow-outlives-block.snello":       true,

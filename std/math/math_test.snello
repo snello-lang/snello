@@ -25,7 +25,162 @@ func TestPi() {
 	expect.True(math.Pi < 3.1416)
 }
 
+// near reports whether got is within a few units in the last place of
+// want, the precision the system's math library gives.
+func near(got f64, want f64) bool {
+	return math.Abs(got - want) <= 4e-15 * math.Max(1.0, math.Abs(want))
+}
+
+func TestConstants() {
+	expect.True(near(math.E, math.Exp(1.0)))
+	expect.True(near(math.Ln2, math.Log(2.0)))
+	expect.True(math.MaxFloat64 > 1e308 && math.MaxFloat64 * 2.0 == math.Inf(1))
+	expect.True(math.SmallestNonzeroFloat64 > 0.0 && math.SmallestNonzeroFloat64 / 2.0 == 0.0)
+	expect.True(f64(math.MaxFloat32) > 3.4e38 && f64(math.SmallestNonzeroFloat32) < 1.5e-45)
+}
+
+func TestLimits() {
+	expect.Equal(ref math.MaxInt, ref 9223372036854775807)
+	expect.Equal(ref math.MinInt, ref -9223372036854775808)
+	expect.Equal(ref int(math.MaxInt8), ref 127)
+	expect.Equal(ref int(math.MinInt8), ref -128)
+	expect.Equal(ref int(math.MaxInt16), ref 32767)
+	expect.Equal(ref int(math.MinInt16), ref -32768)
+	expect.Equal(ref int(math.MaxInt32), ref 2147483647)
+	expect.Equal(ref int(math.MinInt32), ref -2147483648)
+	expect.Equal(ref int(math.MaxInt64), ref math.MaxInt)
+	expect.Equal(ref int(math.MinInt64), ref math.MinInt)
+	expect.Equal(ref int(math.MaxUint8), ref 255)
+	expect.Equal(ref int(math.MaxUint16), ref 65535)
+	expect.Equal(ref int(math.MaxUint32), ref 4294967295)
+	expect.Equal(ref math.MaxUint64 + 1, ref 0) // one past the largest wraps to zero
+	expect.Equal(ref math.MaxUint + 1, ref 0)
+	a := math.MaxInt8
+	a += 1
+	expect.Equal(ref a, ref math.MinInt8) // a limit has its own type, and wraps in it
+}
+
+func TestRounding() {
+	expect.Equal(ref math.Floor(2.5), ref 2.0)
+	expect.Equal(ref math.Floor(-2.5), ref -3.0)
+	expect.Equal(ref math.Ceil(2.5), ref 3.0)
+	expect.Equal(ref math.Ceil(-2.5), ref -2.0)
+	expect.Equal(ref math.Trunc(2.9), ref 2.0)
+	expect.Equal(ref math.Trunc(-2.9), ref -2.0)
+	expect.Equal(ref math.Round(2.5), ref 3.0)   // a half goes away from zero
+	expect.Equal(ref math.Round(-2.5), ref -3.0)
+	expect.Equal(ref math.Round(2.4), ref 2.0)
+	expect.Equal(ref math.Round(0.49999999999999994), ref 0.0)
+	expect.Equal(ref math.Floor(math.Inf(-1)), ref math.Inf(-1))
+	expect.True(math.IsNaN(math.Ceil(math.NaN())))
+	expect.True(math.Signbit(math.Ceil(-0.5))) // -0
+}
+
+func TestMod() {
+	expect.Equal(ref math.Mod(7.0, 3.0), ref 1.0)
+	expect.Equal(ref math.Mod(-7.0, 3.0), ref -1.0) // the sign of the first
+	expect.Equal(ref math.Mod(7.0, -3.0), ref 1.0)
+	expect.Equal(ref math.Mod(5.5, 2.0), ref 1.5)
+	expect.Equal(ref math.Mod(3.0, math.Inf(1)), ref 3.0)
+	expect.True(math.IsNaN(math.Mod(1.0, 0.0)))
+	expect.True(math.IsNaN(math.Mod(math.Inf(1), 2.0)))
+}
+
+func TestPowers() {
+	expect.True(near(math.Pow(2.0, 10.0), 1024.0))
+	expect.True(near(math.Pow(2.0, -1.0), 0.5))
+	expect.True(near(math.Pow(-2.0, 3.0), -8.0))
+	expect.Equal(ref math.Pow(math.NaN(), 0.0), ref 1.0) // anything to the power zero is one
+	expect.Equal(ref math.Pow(0.0, -1.0), ref math.Inf(1))
+	expect.True(math.IsNaN(math.Pow(-8.0, 0.5)))
+	expect.True(near(math.Cbrt(27.0), 3.0)) // within a unit in the last place, as the system computes it
+	expect.True(near(math.Cbrt(-8.0), -2.0))
+	expect.True(near(math.Hypot(3.0, 4.0), 5.0))
+	expect.True(near(math.Hypot(3e200, 4e200) / 1e200, 5.0)) // no overflow on the way
+	expect.Equal(ref math.Hypot(math.Inf(-1), math.NaN()), ref math.Inf(1))
+	expect.Equal(ref math.Exp(0.0), ref 1.0)
+	expect.Equal(ref math.Exp(math.Inf(-1)), ref 0.0)
+	expect.True(near(math.Exp(2.0), 7.38905609893065))
+}
+
+func TestLogarithms() {
+	expect.Equal(ref math.Log(1.0), ref 0.0)
+	expect.True(near(math.Log(10.0), 2.302585092994046))
+	expect.True(near(math.Log2(8.0), 3.0))
+	expect.True(near(math.Log10(1000.0), 3.0))
+	expect.Equal(ref math.Log(0.0), ref math.Inf(-1))
+	expect.True(math.IsNaN(math.Log(-1.0)))
+	expect.True(math.IsNaN(math.Log2(-1.0)))
+	expect.Equal(ref math.Log10(math.Inf(1)), ref math.Inf(1))
+}
+
+func TestTrigonometry() {
+	expect.Equal(ref math.Sin(0.0), ref 0.0)
+	expect.Equal(ref math.Cos(0.0), ref 1.0)
+	expect.Equal(ref math.Tan(0.0), ref 0.0)
+	expect.True(near(math.Sin(math.Pi / 6.0), 0.5))
+	expect.True(near(math.Cos(math.Pi / 3.0), 0.5))
+	expect.True(near(math.Tan(math.Pi / 4.0), 1.0))
+	expect.True(near(math.Asin(1.0), math.Pi / 2.0))
+	expect.True(near(math.Acos(-1.0), math.Pi))
+	expect.True(near(math.Atan(1.0), math.Pi / 4.0))
+	expect.True(near(math.Atan2(1.0, -1.0), 3.0 * math.Pi / 4.0)) // the quadrant the signs say
+	expect.True(near(math.Atan2(-1.0, -1.0), -3.0 * math.Pi / 4.0))
+	expect.Equal(ref math.Atan2(0.0, 1.0), ref 0.0)
+	expect.True(math.IsNaN(math.Asin(2.0)))
+	expect.True(math.IsNaN(math.Acos(-2.0)))
+	expect.True(math.IsNaN(math.Sin(math.Inf(1))))
+	expect.Equal(ref math.Sinh(0.0), ref 0.0)
+	expect.Equal(ref math.Cosh(0.0), ref 1.0)
+	expect.Equal(ref math.Tanh(math.Inf(1)), ref 1.0)
+	expect.True(near(math.Sinh(1.0), 1.1752011936438014))
+	expect.True(near(math.Cosh(1.0), 1.5430806348152437))
+	expect.True(near(math.Tanh(1.0), 0.7615941559557649))
+}
+
+func TestInfAndNaN() {
+	expect.True(math.Inf(1) > math.MaxFloat64)
+	expect.True(math.Inf(0) > math.MaxFloat64)
+	expect.True(math.Inf(-1) < -math.MaxFloat64)
+	nan := math.NaN()
+	expect.True(nan != nan)
+	expect.True(math.IsNaN(nan))
+	expect.False(math.IsNaN(1.0))
+	expect.False(math.IsNaN(math.Inf(1)))
+	expect.True(math.IsInf(math.Inf(1), 1))
+	expect.True(math.IsInf(math.Inf(1), 0))
+	expect.False(math.IsInf(math.Inf(1), -1))
+	expect.True(math.IsInf(math.Inf(-1), -1))
+	expect.True(math.IsInf(math.Inf(-1), 0))
+	expect.False(math.IsInf(math.Inf(-1), 1))
+	expect.False(math.IsInf(math.MaxFloat64, 0))
+	expect.False(math.IsInf(nan, 0))
+}
+
+func TestSigns() {
+	expect.True(math.Signbit(-1.0))
+	expect.True(math.Signbit(math.Copysign(0.0, -1.0))) // negative zero
+	expect.True(math.Signbit(math.Inf(-1)))
+	expect.False(math.Signbit(0.0))
+	expect.False(math.Signbit(1.0))
+	expect.Equal(ref math.Copysign(3.0, -1.0), ref -3.0)
+	expect.Equal(ref math.Copysign(-3.0, 1.0), ref 3.0)
+	expect.Equal(ref math.Copysign(3.0, math.Inf(-1)), ref -3.0)
+	expect.Equal(ref math.Sqrt(math.Inf(1)), ref math.Inf(1))
+	expect.True(math.IsNaN(math.Sqrt(-1.0)))
+}
+
 func BenchmarkSqrt() {
 	x := 2.0
 	for testing.Loop() { x = math.Sqrt(x + 1.0) }
+}
+
+func BenchmarkFloor() {
+	x := 0.5
+	for testing.Loop() { x = math.Floor(x + 1.5) }
+}
+
+func BenchmarkPow() {
+	x := 1.0001
+	for testing.Loop() { x = math.Pow(x, 0.999) + 0.5 }
 }

@@ -96,7 +96,7 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return ""
 	case "Pop": // a slice of its own with an element, in place; the rest the runtime's
 		out, sp := e.temp(), e.temp()
-		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = " + zeroValue + ";") // whole from the start: an empty slice leaves the value unwritten, and the option is copied whole
 		e.line(e.cType(t, x.Pos()) + " *" + sp + " = &" + place + ";")
 		e.line("if (SN_POP_FAST(*" + sp + ")) {")
 		e.line(out + ".has = true;")

@@ -134,7 +134,7 @@ func TestCompilerID(t *testing.T) {
 	}
 
 	id := func(cc string) string {
-		s, err := compilerID(cc)
+		s, err := CompilerID(cc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestCompilerID(t *testing.T) {
 		t.Error("a compiler rebuilt in place kept its identity")
 	}
 
-	if _, err := compilerID(filepath.Join(dir, "missing")); err == nil {
+	if _, err := CompilerID(filepath.Join(dir, "missing")); err == nil {
 		t.Error("a missing compiler has an identity")
 	}
 }

@@ -1,0 +1,117 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Numbers: the functions of math, the bits of math/bits and the random
+// numbers of math/rand, each on a fixed input.
+//
+// A projectile is thrown and followed with math; a board of a game is
+// kept in the bits of one u64; and a deck is shuffled by a generator
+// with a seed, which deals the same hand on every run. A number the
+// system's math library computes is printed to six places, since its
+// last digit is the system's own.
+
+package main
+
+import (
+	"fmt"
+	"math"
+	"math/bits"
+	"math/rand"
+)
+
+// flight follows a ball thrown at a speed, in metres a second, and an
+// angle, in degrees.
+func flight(speed f64, degrees f64) {
+	angle := degrees * math.Pi / 180
+	vx, vy := speed * math.Cos(angle), speed * math.Sin(angle)
+	air := 2 * vy / 9.81
+	fmt.Printf("thrown at %.0f m/s and %.0f degrees: %.6f s in the air, %.6f m away, %.6f m high\n", speed, degrees, air, vx * air, vy * vy / (2 * 9.81))
+	fmt.Printf("  slope at launch %.6f, speed %.6f, angle back %.6f degrees\n", math.Tan(angle), math.Hypot(vx, vy), math.Atan2(vy, vx) * 180 / math.Pi)
+	fmt.Println("  whole seconds:", math.Floor(air), "to", math.Ceil(air), "nearest", math.Round(air), "without the fraction", math.Trunc(air))
+}
+
+func rounding() {
+	fmt.Println("floor, ceil, round and trunc of -2.5:", math.Floor(-2.5), math.Ceil(-2.5), math.Round(-2.5), math.Trunc(-2.5))
+	fmt.Println("remainders:", math.Mod(7, 3), math.Mod(-7, 3), math.Mod(5.5, 2))
+	fmt.Println("roots:", math.Sqrt(2) * math.Sqrt(2) > 1.99, math.Sqrt(144), math.Abs(-3.5), math.Min(2, 7), math.Max(2, 7))
+}
+
+func growth() {
+	fmt.Printf("powers: %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", math.Pow(2, 10), math.Pow(2, -1), math.Exp(0), math.Log(1), math.Log2(1024), math.Log10(0.001), math.Cbrt(27))
+	fmt.Printf("money doubles at 5%% in %.6f years, e is %.6f, ln 2 is %.6f\n", math.Ln2 / math.Log(1.05), math.E, math.Ln2)
+	fmt.Printf("arcs: %.6f %.6f %.6f, hyperbolic: %.6f %.6f %.6f\n", math.Asin(1), math.Acos(0), math.Atan(1), math.Sinh(1), math.Cosh(1), math.Tanh(1))
+}
+
+func edges() {
+	inf, nan := math.Inf(1), math.NaN()
+	fmt.Println("infinities:", inf, math.Inf(-1), math.IsInf(inf, 1), math.IsInf(inf, -1), math.IsInf(math.MaxFloat64, 0), math.MaxFloat64 * 2)
+	fmt.Println("not a number:", nan, nan == nan, math.IsNaN(nan), math.IsNaN(math.Sqrt(-1)), math.IsNaN(math.Log(-1)))
+	below := math.Copysign(0, -1)
+	fmt.Println("signs:", math.Signbit(below), math.Signbit(0), math.Copysign(3, below), math.Copysign(-3, 1))
+	fmt.Println("floats:", math.MaxFloat64, math.SmallestNonzeroFloat64, math.MaxFloat32, math.SmallestNonzeroFloat32)
+	fmt.Println("int:", math.MinInt, "to", math.MaxInt, "and uint to", math.MaxUint)
+	fmt.Println("i8:", math.MinInt8, "to", math.MaxInt8, "i16:", math.MinInt16, "to", math.MaxInt16)
+	fmt.Println("i32:", math.MinInt32, "to", math.MaxInt32, "i64:", math.MinInt64, "to", math.MaxInt64)
+	fmt.Println("unsigned to:", math.MaxUint8, math.MaxUint16, math.MaxUint32, math.MaxUint64)
+	top := math.MaxUint8
+	top += 1
+	fmt.Println("one past the largest u8 wraps to", top)
+}
+
+// A board of eight by eight squares in one u64, a bit a square.
+func board() {
+	var pieces u64 = 0x00ff00000000ff00 // the two rows of pawns
+	fmt.Println("pieces on the board:", bits.OnesCount64(pieces))
+	fmt.Println("first square taken:", bits.TrailingZeros64(pieces), "last:", bits.Len64(pieces) - 1, "empty above it:", bits.LeadingZeros64(pieces))
+	fmt.Println("turned round:", bits.Reverse64(pieces) == pieces, "a row along:", bits.RotateLeft64(pieces, 8), "a row back:", bits.RotateLeft64(pieces, -8))
+	var row u8 = 0b00010110
+	fmt.Println("a row", row, "holds", bits.OnesCount8(row), "pieces, needs", bits.Len8(row), "bits, mirrored is", bits.Reverse8(row), "and turned by three is", bits.RotateLeft8(row, 3))
+	var empty uint = 0
+	fmt.Println("an empty board:", bits.LeadingZeros(empty), bits.TrailingZeros(empty), bits.OnesCount(empty), bits.Len(empty), bits.Reverse(empty), bits.RotateLeft(empty, 9))
+	var wide u32 = 0x00010000
+	var narrow u16 = 0x0100
+	fmt.Println("widths:", bits.LeadingZeros32(wide), bits.TrailingZeros32(wide), bits.LeadingZeros16(narrow), bits.TrailingZeros16(narrow), bits.Len32(wide), bits.Len16(narrow), bits.LeadingZeros8(row), bits.TrailingZeros8(row))
+	fmt.Println("counted, turned and mirrored at each width:", bits.OnesCount16(narrow), bits.OnesCount32(wide), bits.RotateLeft16(narrow, -8), bits.RotateLeft32(wide, 16), bits.Reverse16(narrow), bits.Reverse32(wide))
+}
+
+// A deck dealt by a generator with a seed: the same hand on every run,
+// and on every system.
+func cards() {
+	r := rand.New(2026, 79)
+	suits := []string{"clubs", "diamonds", "hearts", "spades"}
+	deck := []string{}
+	for _, suit := range suits {
+		for rank := 1; rank <= 13; rank++ {
+			deck.Push(fmt.Sprintf("%d of %s", rank, suit))
+		}
+	}
+
+	r.Shuffle(mut deck)
+	fmt.Println("the hand:", deck[0], "/", deck[1], "/", deck[2])
+	fmt.Println("seats in order:", r.Perm(6))
+	roll := r.IntN(6) ?? 0
+	fmt.Println("a die:", roll + 1, "a coin:", r.Int() % 2 == 0, "a ticket:", r.Int64() % 1000000)
+	fmt.Printf("a chance: %.6f\n", r.Float64())
+	fmt.Println("a die with no faces:", r.IntN(0), "and seats for nobody:", r.Perm(0))
+}
+
+// The package's own functions take no seed: nobody can tell what they
+// will give, so only what must hold of them is printed.
+func unseeded() {
+	roll := rand.IntN(6) ?? -1
+	chance := rand.Float64()
+	order := rand.Perm(5)
+	rand.Shuffle(mut order)
+	fmt.Println("unseeded:", roll >= 0 && roll < 6, chance >= 0 && chance < 1, len(order), rand.Int() >= 0, rand.Int64() >= 0, rand.IntN(0))
+}
+
+func main() {
+	flight(20, 45)
+	rounding()
+	growth()
+	edges()
+	board()
+	cards()
+	unseeded()
+}

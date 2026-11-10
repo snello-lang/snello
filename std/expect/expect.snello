@@ -240,7 +240,7 @@ func Golden(name ref string, got ref string) {
 	path := "testdata/" + name + ".golden"
 	if testing.Update() {
 		if os.WriteString(ref path, got).IsErr() {
-			panic(ref (where() + ": -update could not write " + path + "; the testdata directory is made by hand until the library makes directories (task 9.11)"))
+			panic(ref (where() + ": -update could not write " + path + "; the testdata directory is made by hand until the library makes directories"))
 		}
 
 		return

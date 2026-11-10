@@ -1,0 +1,31 @@
+thrown at 20 m/s and 45 degrees: 2.883208 s in the air, 40.774720 m away, 10.193680 m high
+  slope at launch 1.000000, speed 20.000000, angle back 45.000000 degrees
+  whole seconds: 2 to 3 nearest 3 without the fraction 2
+floor, ceil, round and trunc of -2.5: -3 -2 -3 -2
+remainders: 1 -1 1.5
+roots: true 12 3.5 2 7
+powers: 1024.000000 0.500000 1.000000 0.000000 10.000000 -3.000000 3.000000
+money doubles at 5% in 14.206699 years, e is 2.718282, ln 2 is 0.693147
+arcs: 1.570796 1.570796 0.785398, hyperbolic: 1.175201 1.543081 0.761594
+infinities: +Inf -Inf true false false +Inf
+not a number: NaN false true true true
+signs: true false -3 3
+floats: 1.7976931348623157e+308 5e-324 3.4028235e+38 1e-45
+int: -9223372036854775808 to 9223372036854775807 and uint to 18446744073709551615
+i8: -128 to 127 i16: -32768 to 32767
+i32: -2147483648 to 2147483647 i64: -9223372036854775808 to 9223372036854775807
+unsigned to: 255 65535 4294967295 18446744073709551615
+one past the largest u8 wraps to 0
+pieces on the board: 16
+first square taken: 8 last: 55 empty above it: 8
+turned round: true a row along: 18374686479688335360 a row back: 280375465083135
+a row 22 holds 3 pieces, needs 5 bits, mirrored is 104 and turned by three is 176
+an empty board: 64 64 0 0 0 0
+widths: 15 16 7 8 17 9 3 1
+counted, turned and mirrored at each width: 1 1 1 1 128 32768
+the hand: 5 of hearts / 1 of spades / 1 of clubs
+seats in order: [3 2 1 0 4 5]
+a die: 2 a coin: false a ticket: 763612
+a chance: 0.799149
+a die with no faces: None and seats for nobody: []
+unseeded: true true 5 true true None

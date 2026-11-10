@@ -27,6 +27,7 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, derived messages, `?` across error types, `%+v` printing the chain |
 | [18. No empty values](18-no-empty-values.md) | why no value is ever null or empty, which types have a zero value, what the compiler refuses and what to write instead, `replace`, and how the rule stays memory safe |
 | [19. Text: strings, runes and Unicode](19-text.md) | runes and Unicode whole: `unicode`, `unicode/utf8`, `unicode/utf16`, case mapping, `unicode/norm` and `unicode/segment` |
+| [20. Numbers: `math`, `math/bits` and `math/rand`](20-numbers.md) | the math functions and their special cases, the limits of the number types, the bit operations the compiler writes as instructions, a generator with a seed that gives Go's numbers, and the package functions that draw from the system |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | the keywords and the grammar's fine points |
 | [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | per chapter, what carries over from Go and what to unlearn |
 

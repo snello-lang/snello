@@ -109,6 +109,8 @@ func CheckPrefixes(libraries []Library) error {
 // reference count and the lock are what make them safe there; and
 // testing.Catch runs a function under the runtime's mark, which takes
 // the function as C takes one, through an adapter the backend writes.
+// The functions of math/bits are written too, each as an instruction,
+// and BitOp reads their names.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
@@ -312,11 +314,55 @@ func Key(fn *types.Func) string {
 		return ""
 	}
 
-	if key := fn.Pkg().Path() + "." + fn.Name(); lowered[key] {
+	key := fn.Pkg().Path() + "." + fn.Name()
+	if _, _, ok := BitOp(key); ok || lowered[key] {
 		return key
 	}
 
 	return ""
+}
+
+// BitOp reads the key of a function of math/bits, which both backends
+// write in place of the call as the processor's instruction: the
+// operation, LeadingZeros, TrailingZeros, OnesCount, RotateLeft,
+// Reverse or Len, and the width in bits of the type it is on, which the
+// name ends with, 64 for the one on uint that names none.
+func BitOp(key string) (op string, width int, ok bool) {
+	name, found := strings.CutPrefix(key, "math/bits.")
+	if !found {
+		return "", 0, false
+	}
+
+	op = strings.TrimRight(name, "0123456789")
+	switch op {
+	case "LeadingZeros", "TrailingZeros", "OnesCount", "RotateLeft", "Reverse", "Len":
+	default:
+		return "", 0, false
+	}
+
+	switch name[len(op):] {
+	case "", "64":
+		return op, 64, true
+	case "8":
+		return op, 8, true
+	case "16":
+		return op, 16, true
+	case "32":
+		return op, 32, true
+	}
+
+	return "", 0, false
+}
+
+// HasSymbol reports whether fn is a function the program may name
+// where it does not call it, as a value or as what a task runs: every
+// function but the ones the compiler writes, which have no symbol to
+// name, and of those the functions of math/bits, which the runtime
+// defines as well.
+func HasSymbol(fn *types.Func) bool {
+	key := Key(fn)
+	_, _, bit := BitOp(key)
+	return key == "" || bit
 }
 
 // Links returns the system libraries the bindings link, each once, in

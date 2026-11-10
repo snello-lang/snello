@@ -52,7 +52,7 @@ void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size) {
         sn_panic(SN_STR("makeslice: len out of range", 27));
     }
 
-    if (cap < len) {
+    if (cap < len || (size != 0 && (uint64_t)cap > (uint64_t)PTRDIFF_MAX / size)) { // a capacity whose bytes no address reaches: the product would wrap to a small block
         sn_panic(SN_STR("makeslice: cap out of range", 27));
     }
 

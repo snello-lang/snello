@@ -209,7 +209,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) string {
 	if pkg := e.packageOf(x.X); pkg != nil {
 		switch obj := e.info.Uses[x.Sel].(type) { // a member of a package written in Snello
 		case *types.Func:
-			if lower.Key(obj) != "" {
+			if !lower.HasSymbol(obj) {
 				e.unsupported(x.Pos(), "a function the compiler provides, "+pkg.Name()+"."+x.Sel.Name+", as a value")
 				return "0"
 			}
@@ -385,9 +385,24 @@ func (e *Emitter) literal(x *ast.BasicLit) string {
 			return "0"
 		}
 
-		s := strconv.FormatFloat(f, 'g', -1, 64)
+		single := false // an f32's literal is a float in C: a double beside an f32 would have C work the whole expression out in doubles
+		if t := e.typeOf(x); t != nil {
+			b, ok := lower.ValueType(t).Underlying().(*types.Basic)
+			single = ok && b.Kind() == types.Float32
+		}
+
+		size := 64
+		if single {
+			size = 32
+		}
+
+		s := strconv.FormatFloat(f, 'g', -1, size)
 		if !strings.ContainsAny(s, ".e") {
 			s += ".0" // 1.0 must stay a double in C, or 1.0 / 3.0 divides integers
+		}
+
+		if single {
+			s += "f"
 		}
 
 		return s
@@ -480,7 +495,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 		e.line("bool " + ok + " = sn_chan_recv(" + ch + ", &" + got + ");")
 		return "(" + e.cType(opt, x.Pos()) + "){.has = " + ok + ", .val = " + got + "}"
 	case token.XOR:
-		return "(~" + e.expr(x.X) + ")"
+		return e.wrapped("(~"+e.expr(x.X)+")", lower.ValueType(e.typeOf(x.X)), x.Pos())
 	case token.SUB:
 		if call := e.operatorCall(lower.ValueType(e.typeOf(x.X)), x.Op, true, x.X, nil, x.Pos()); call != "" {
 			return call
@@ -490,7 +505,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) string {
 			return "INT64_MIN" // the one magnitude C cannot negate as a signed literal
 		}
 
-		return "(-" + e.expr(x.X) + ")"
+		return e.wrapped("(-"+e.expr(x.X)+")", lower.ValueType(e.typeOf(x.X)), x.Pos())
 	case token.NOT:
 		return "(!" + e.expr(x.X) + ")"
 	}
@@ -593,7 +608,100 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 		return e.divider(x.Op, t, x.Pos()) + "(" + l + ", " + r + ")"
 	}
 
-	return "(" + l + " " + x.Op.String() + " " + r + ")"
+	if shifts(x.Op, t) {
+		return e.shifter(x.Op, t, x.Pos()) + "(" + l + ", " + r + ")"
+	}
+
+	v := "(" + l + " " + x.Op.String() + " " + r + ")"
+	switch x.Op {
+	case token.ADD, token.SUB, token.MUL:
+		return e.wrapped(v, t, x.Pos())
+	}
+
+	return v
+}
+
+// wrapped writes the result v of arithmetic on values of type t as a
+// value of that type. C works on a type narrower than int as an int,
+// and on any type beside a literal of the emitter's as 64 bits, so a
+// sum of two u8s is not a u8 until it is stored in one: read before
+// that, in a comparison, as an index or an argument, it would be the
+// sum unwrapped. The conversion wraps it, as storing it does. A type
+// of 64 bits is the width C worked in, and a float has no wrapping.
+func (e *Emitter) wrapped(v string, t types.Type, pos token.Pos) string {
+	if width, _ := integer(t); width == 0 || width == 64 {
+		return v
+	}
+
+	return "((" + e.cType(t, pos) + ")" + v + ")"
+}
+
+// integer returns the width in bits of an integer type and whether it
+// is unsigned, or a width of zero for any other type.
+func integer(t types.Type) (width int, unsigned bool) {
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok || b.Info()&types.IsInteger == 0 {
+		return 0, false
+	}
+
+	unsigned = b.Info()&types.IsUnsigned != 0
+	switch b.Kind() {
+	case types.Int8, types.Uint8:
+		return 8, unsigned
+	case types.Int16, types.Uint16:
+		return 16, unsigned
+	case types.Int32, types.Uint32:
+		return 32, unsigned
+	}
+
+	return 64, unsigned
+}
+
+// shifts reports whether op on values of type t is a shift of an
+// integer, which the language defines for every count where C does
+// not.
+func shifts(op token.Kind, t types.Type) bool {
+	width, _ := integer(t)
+	return width != 0 && (op == token.SHL || op == token.SHR)
+}
+
+// shifter returns the name of the function shifting an integer of type
+// t, writing it on first use. A count of the width or more gives zero,
+// or minus one for a negative number shifted right, as the arithmetic
+// implies and the LLVM backend has it, and a count read as unsigned, so
+// a negative one is such a count; C leaves a count of the width or
+// more undefined, and the processors disagree. The left shift is made
+// on the bits as an unsigned number, which C defines for a negative one
+// too.
+func (e *Emitter) shifter(op token.Kind, t types.Type, pos token.Pos) string {
+	name := "sn_shl_" + lower.Mangle(t)
+	if op == token.SHR {
+		name = "sn_shr_" + lower.Mangle(t)
+	}
+
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	ct := e.cType(t, pos)
+	width, unsigned := integer(t)
+	bits := strconv.Itoa(width)
+	count := "(uint" + bits + "_t)n >= " + bits
+	var b strings.Builder
+	put(&b, "static SN_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " n) {\n")
+	switch {
+	case op == token.SHL:
+		put(&b, "\treturn ", count, " ? 0 : (", ct, ")((uint64_t)a << n);\n}\n\n")
+	case unsigned:
+		put(&b, "\treturn ", count, " ? 0 : (", ct, ")(a >> n);\n}\n\n")
+	default:
+		put(&b, "\treturn ", count, " ? (", ct, ")(a < 0 ? -1 : 0) : (", ct, ")(a >> n);\n}\n\n")
+	}
+
+	put(&e.protos, "static SN_UNUSED ", ct, " ", name, "(", ct, " a, ", ct, " n);\n")
+	e.helpers.WriteString(b.String())
+	return name
 }
 
 // divides reports whether op on values of type t is an integer
@@ -911,7 +1019,46 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 		return "sn_string_from_rune(" + v + ")"
 	}
 
+	if width, _ := integer(to); width != 0 && isFloat(from) {
+		return e.truncator(to, x.Pos()) + "(" + v + ")"
+	}
+
 	return "((" + e.cType(to, x.Pos()) + ")(" + v + "))"
+}
+
+// truncator returns the name of the function converting a float to
+// the integer type t, writing it on first use: the fraction is dropped,
+// a float past the type's range gives the nearest end of it, and a NaN
+// gives zero, as Rust's conversion, Java's and WebAssembly's saturating
+// one do. C leaves a float out of the type's range undefined, and what
+// it gave differed by processor and by how the program was optimized.
+// The bounds are powers of two, which a double holds exactly: the
+// largest float under the upper one converts, and the bound itself and
+// all above are the type's largest.
+func (e *Emitter) truncator(t types.Type, pos token.Pos) string {
+	name := "sn_trunc_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	ct := e.cType(t, pos)
+	width, unsigned := integer(t)
+	bits := strconv.Itoa(width)
+	low, high, least, most := "-0x1p"+strconv.Itoa(width-1), "0x1p"+strconv.Itoa(width-1), "INT"+bits+"_MIN", "INT"+bits+"_MAX"
+	if unsigned {
+		low, high, least, most = "0.0", "0x1p"+bits, "0", "UINT"+bits+"_MAX"
+	}
+
+	var b strings.Builder
+	put(&b, "static SN_UNUSED ", ct, " ", name, "(double x) {\n")
+	put(&b, "\tif (x != x) {\n\t\treturn 0;\n\t}\n\n")
+	put(&b, "\tif (x <= ", low, ") {\n\t\treturn ", least, ";\n\t}\n\n")
+	put(&b, "\tif (x >= ", high, ") {\n\t\treturn ", most, ";\n\t}\n\n")
+	put(&b, "\treturn (", ct, ")x;\n}\n\n")
+	put(&e.protos, "static SN_UNUSED ", ct, " ", name, "(double x);\n")
+	e.helpers.WriteString(b.String())
+	return name
 }
 
 // isRune reports whether t is rune, i32, or a type declared over it.

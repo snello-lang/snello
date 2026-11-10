@@ -1,0 +1,72 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package bits counts and moves the bits of the unsigned integer
+// types: LeadingZeros, TrailingZeros, OnesCount, RotateLeft, Reverse
+// and Len, each for uint and, with the width in its name, for u8, u16,
+// u32 and u64.
+//
+// Every function is one instruction of the processor's, or a few,
+// which the compiler writes in place of the call: none is a call when
+// the program runs. Each is defined for every argument, zero included,
+// and none panics.
+package bits
+
+// LeadingZeros returns the number of zero bits above the highest one
+// bit of x, and the width of the type for zero. LeadingZeros8,
+// LeadingZeros16, LeadingZeros32 and LeadingZeros64 are the same for
+// a u8, a u16, a u32 and a u64.
+func LeadingZeros(x uint) int
+func LeadingZeros8(x u8) int
+func LeadingZeros16(x u16) int
+func LeadingZeros32(x u32) int
+func LeadingZeros64(x u64) int
+
+// TrailingZeros returns the number of zero bits below the lowest one
+// bit of x, and the width of the type for zero. TrailingZeros8,
+// TrailingZeros16, TrailingZeros32 and TrailingZeros64 are the same
+// for a u8, a u16, a u32 and a u64.
+func TrailingZeros(x uint) int
+func TrailingZeros8(x u8) int
+func TrailingZeros16(x u16) int
+func TrailingZeros32(x u32) int
+func TrailingZeros64(x u64) int
+
+// OnesCount returns the number of one bits in x. OnesCount8,
+// OnesCount16, OnesCount32 and OnesCount64 are the same for a u8, a
+// u16, a u32 and a u64.
+func OnesCount(x uint) int
+func OnesCount8(x u8) int
+func OnesCount16(x u16) int
+func OnesCount32(x u32) int
+func OnesCount64(x u64) int
+
+// RotateLeft returns x rotated left by k bits, the bits leaving at
+// the top coming back at the bottom; a negative k rotates right by
+// -k, and a k of the width or more turns as k modulo the width does.
+// RotateLeft8, RotateLeft16, RotateLeft32 and RotateLeft64 are the
+// same for a u8, a u16, a u32 and a u64.
+func RotateLeft(x uint, k int) uint
+func RotateLeft8(x u8, k int) u8
+func RotateLeft16(x u16, k int) u16
+func RotateLeft32(x u32, k int) u32
+func RotateLeft64(x u64, k int) u64
+
+// Reverse returns x with its bits in the opposite order. Reverse8,
+// Reverse16, Reverse32 and Reverse64 are the same for a u8, a u16, a
+// u32 and a u64.
+func Reverse(x uint) uint
+func Reverse8(x u8) u8
+func Reverse16(x u16) u16
+func Reverse32(x u32) u32
+func Reverse64(x u64) u64
+
+// Len returns the number of bits needed to write x, which is zero for
+// zero. Len8, Len16, Len32 and Len64 are the same for a u8, a u16, a
+// u32 and a u64.
+func Len(x uint) int
+func Len8(x u8) int
+func Len16(x u16) int
+func Len32(x u32) int
+func Len64(x u64) int
