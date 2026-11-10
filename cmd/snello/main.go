@@ -336,6 +336,9 @@ func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool
 		bindings = lower.Bindings(info, libs)
 		if backend == "llvm" {
 			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
+			if err == nil {
+				out, _ = llvm.Targeted(out) // as build compiles it, so that emit prints the same module; without clang, the module as emitted
+			}
 		} else {
 			out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libs...)
 		}

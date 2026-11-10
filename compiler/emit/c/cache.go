@@ -49,11 +49,11 @@ const (
 	manifestName = "manifest"
 )
 
-// cacheRoot returns the directory the runtime's entries are kept in:
-// runtime/ under SNELLO_CACHE when it names one, else under snello/ in
-// the user's cache directory. SNELLO_CACHE=off, or no cache directory
-// at all, turns the cache off, and every build compiles the runtime.
-func cacheRoot() (string, bool) {
+// CacheDir returns the directory Snello keeps what it need not make
+// twice in: SNELLO_CACHE when it names one, else snello/ in the user's
+// cache directory. SNELLO_CACHE=off, or no cache directory at all,
+// turns the cache off.
+func CacheDir() (string, bool) {
 	dir := os.Getenv("SNELLO_CACHE")
 	switch dir {
 	case "off":
@@ -69,6 +69,18 @@ func cacheRoot() (string, bool) {
 
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs // a relative SNELLO_CACHE would move with the working directory
+	}
+
+	return dir, true
+}
+
+// cacheRoot returns the directory the runtime's entries are kept in,
+// runtime/ in the cache directory; with the cache off, every build
+// compiles the runtime.
+func cacheRoot() (string, bool) {
+	dir, ok := CacheDir()
+	if !ok {
+		return "", false
 	}
 
 	return filepath.Join(dir, "runtime"), true
@@ -197,7 +209,7 @@ func runtimeObjectPaths(dir string) []string {
 // runtimeKey returns the key of the entry for the runtime compiled by
 // cc with args.
 func runtimeKey(cc string, args []string) (string, error) {
-	id, err := compilerID(cc)
+	id, err := CompilerID(cc)
 	if err != nil {
 		return "", err
 	}
@@ -268,10 +280,10 @@ func runtimeSum() []byte {
 
 var compilerIDs sync.Map // the version of each compiler, by its path, size and time
 
-// compilerID identifies the compiler cc: the path it resolves to, the
+// CompilerID identifies the compiler cc: the path it resolves to, the
 // file's size and time, which a compiler rebuilt in place changes, and
 // what it says its version is, asked once per binary.
-func compilerID(cc string) (string, error) {
+func CompilerID(cc string) (string, error) {
 	path, err := exec.LookPath(cc)
 	if err != nil {
 		return "", err

@@ -48,16 +48,13 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 // The header adds 32 bytes, so a block of 993 to 1024 bytes, the
 // heap's largest class in a release build, is the system's in this one.
-_Atomic int64_t sn_alloc_count, sn_alloc_total;
-
 void *sn_alloc(size_t n) {
     block *b = sn_heap_alloc(sizeof *b + (n == 0 ? 1 : n));
     if (b == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
-    atomic_fetch_add_explicit(&sn_alloc_count, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&sn_alloc_total, (int64_t)n, memory_order_relaxed);
+    sn_alloc_note(n);
     pthread_mutex_lock(&lock);
     b->size = n;
     b->magic = LIVE;

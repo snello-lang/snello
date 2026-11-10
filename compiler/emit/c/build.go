@@ -22,9 +22,18 @@ import (
 // -fno-strict-aliasing lets the runtime work on every slice type
 // through sn_slice, which has the same layout. A variable the program
 // assigns and never reads is the checker's to judge, not the C
-// compiler's, so that warning is off. The optimization level is the
-// build's: Release or Debug.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-fwrapv", "-fno-strict-aliasing", "-pthread"}
+// compiler's, so that warning is off, and so is the one that asks for
+// a brace around every level of {0}, which the emitter writes as the
+// zero of any type whatever its shape. Arithmetic on constants that
+// overflows is no mistake either, since the language has it wrap: the
+// two warnings of it, gcc's and clang's, are off, each compiler passing
+// over the other's name. -ffp-contract=off keeps a
+// multiply and an add two operations, each rounded, as the language has
+// them and the LLVM backend writes them: a compiler left to join them
+// into one instruction rounds once, and the last digits of a*b + c
+// would then differ between the backends and between processors. The
+// optimization level is the build's: Release or Debug.
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-pthread"}
 
 // Release are the options of a release build: the standard
 // optimizations, and link-time optimization over the program and the

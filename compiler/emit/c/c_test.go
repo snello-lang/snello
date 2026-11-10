@@ -5,6 +5,7 @@
 package c
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -104,6 +105,58 @@ func TestPrograms(t *testing.T) {
 				t.Skip(why)
 			}
 
+			for _, debug := range p.Builds() {
+				out, stderr, code := run(t, p.Name, p.Src, debug)
+				if bad := p.Check(out, stderr, code); bad != "" {
+					t.Errorf("debug=%v: %s", debug, bad)
+				}
+			}
+		})
+	}
+}
+
+// TestGCC builds programs with gcc where the system has one, since a
+// Linux system's cc is gcc and clang is what every other test here
+// compiles with: the runtime and the C the emitter writes must pass
+// gcc's warnings, which are not clang's. The programs are the ones
+// whose C gcc has refused, an array's zero inside a struct and an
+// option a Pop fills, and the ones that lean on a compiler's own
+// extensions: the bit builtins, of which gcc has no bit reverse, the
+// vector type and the 128-bit product of the random source, and the
+// narrow arithmetic and the shifts.
+func TestGCC(t *testing.T) {
+	version, err := exec.Command("gcc", "--version").Output()
+	if err != nil {
+		t.Skip("no gcc")
+	}
+
+	if bytes.Contains(version, []byte("clang")) { // a Mac's gcc is clang under another name
+		t.Skip("gcc is clang here")
+	}
+
+	t.Setenv("CC", "gcc")
+	chosen := map[string]bool{
+		"heap": true, "heap-edges": true, "bit-functions": true, "math-functions": true, "random-numbers": true,
+		"narrow-integers": true, "narrow-integers-assigned": true, "multiply-then-add": true, "integer-methods": true,
+	}
+	programs := []backendtest.Program{{
+		Name: "array-zero",
+		Src:  "package main\nimport \"fmt\"\nstruct Pair { a [2]int }\nfunc main() {\n\tp := Pair{a: [2]int{}}\n\tfmt.Println(p.a[0], p.a[1])\n}\n",
+		Out:  "0 0\n",
+	}}
+	for _, p := range backendtest.Programs(testing.Short()) {
+		if chosen[p.Name] {
+			delete(chosen, p.Name)
+			programs = append(programs, p)
+		}
+	}
+
+	for name := range chosen {
+		t.Errorf("no program is named %s", name)
+	}
+
+	for _, p := range programs {
+		t.Run(p.Name, func(t *testing.T) {
 			for _, debug := range p.Builds() {
 				out, stderr, code := run(t, p.Name, p.Src, debug)
 				if bad := p.Check(out, stderr, code); bad != "" {

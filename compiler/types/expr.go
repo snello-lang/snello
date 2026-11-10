@@ -745,7 +745,12 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		return invalidOperand
 	}
 
+	if lit, ok := e.X.(*ast.BasicLit); ok && e.Op == token.SUB {
+		c.negated = lit
+	}
+
 	x := c.expr(e.X, expected)
+	c.negated = nil
 	if x.mode == invalid {
 		return invalidOperand
 	}

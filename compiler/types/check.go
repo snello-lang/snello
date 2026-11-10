@@ -165,7 +165,8 @@ type Checker struct {
 	closures []closure
 	captured map[*ast.FuncLit][]capture
 	spawning *ast.CallExpr
-	variadic []operand // the variadic arguments of the call just checked, which a format is checked against
+	variadic []operand     // the variadic arguments of the call just checked, which a format is checked against
+	negated  *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
 
 	// temporary maps an expression lent to a call or a ref to the
 	// temporary its value is or borrows: an owned value no variable

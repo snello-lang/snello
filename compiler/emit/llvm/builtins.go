@@ -27,7 +27,7 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 		return e.mapIndex(x, p, m, write)
 	}
 
-	i := e.valueTo(x.Index, types.Typ[types.Int])
+	i := e.offset(x.Index)
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
 		base := e.load("ptr", e.gep("%sn_slice", p, 0))
@@ -45,6 +45,23 @@ func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
 
 	e.unsupported(x.Pos(), "indexing a value of type "+t.String())
 	return "null"
+}
+
+// offset writes an index or a bound of a slice expression as the 64
+// bits a length is: an index of a narrower type is widened, by its
+// sign, so that a u8 of 200 is 200 and an i8 of -1 is past any length.
+func (e *Emitter) offset(x ast.Expr) value {
+	v := e.valueTo(x, types.Typ[types.Int])
+	if v.typ == "i64" {
+		return v
+	}
+
+	widen := "sext "
+	if isUnsigned(lower.ValueType(e.typeOf(x))) {
+		widen = "zext "
+	}
+
+	return e.op(widen+v.typed()+" to i64", "i64")
 }
 
 // checkIndex writes the check of an index against a length, as
@@ -68,12 +85,12 @@ func (e *Emitter) sliceExpr(x *ast.SliceExpr) value {
 	p, t := e.scrutinee(x.X)
 	lo := value{"i64", "0"}
 	if x.Low != nil {
-		lo = e.valueTo(x.Low, types.Typ[types.Int])
+		lo = e.offset(x.Low)
 	}
 
 	hi := e.load("i64", e.gep("%sn_slice", p, 1)) // a string's length is at the same place
 	if x.High != nil {
-		hi = e.valueTo(x.High, types.Typ[types.Int])
+		hi = e.offset(x.High)
 	}
 
 	if isString(t) {

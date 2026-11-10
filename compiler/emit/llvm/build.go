@@ -41,6 +41,11 @@ func Compiler() string {
 // The compilers' output comes back with any error. A debug build
 // compiles the runtime's checks in, as the C backend's does.
 func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
+	module, err = Targeted(module) // every function compiled for the runtime's processor, so that the two are optimized as one
+	if err != nil {
+		return "", nil, err
+	}
+
 	if err := os.WriteFile(filepath.Join(dir, name+".ll"), module, 0o644); err != nil {
 		return "", nil, err
 	}

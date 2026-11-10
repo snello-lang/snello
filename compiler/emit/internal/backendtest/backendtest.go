@@ -667,6 +667,137 @@ func main() {
 			Out: "4969059760275911952 2147869220224756844 0.5085473976760264 Some(7) Some(234276272) Some(547831175868) Some(2147104640)\n[e d a b c] [0 5 3 1 4 2] [] [] None None\n3558 true 5 true true true None\n",
 		},
 		{
+			Name: "multiply-then-add", // a product and a sum are two operations, each rounded: a compiler that joined them into one instruction would round once and print other last digits, and the two backends would differ; the values come from the arguments' count, so nothing is worked out when the program is compiled; and a literal beside an f32 is an f32, so the sum is rounded as an f32 at each step and not worked out wider
+			Src: `package main
+import ("fmt"; "math"; "os")
+func main() {
+	n := f64(len(os.Args))
+	a, b, c := 1.0 + n * 1e-8, 1.0 - n * 1e-8, -1.0
+	var x, y, z f32 = 1.0 + f32(n) * 1e-4, 1.0 - f32(n) * 1e-4, -1.0
+	fmt.Println(a * b + c, c + a * b, a * b - 1.0, math.Sqrt(a) * math.Sqrt(a) - a, x * y + z)
+	var f f32 = f32(n) * 0.1
+	var h f32 = 16777216.0 * f32(n)
+	fmt.Println(h + 1.0 + 1.0, h + 1.0 == h, f + 0.1 == 0.2, f64(f * 1.1), f / 3.0, f - 0.3)
+}
+`,
+			Out: "-2.220446049250313e-16 -2.220446049250313e-16 -2.220446049250313e-16 0 0\n1.6777216e+07 true true 0.11000000685453415 0.033333335 -0.20000002\n",
+		},
+		{
+			Name: "narrow-integers", // arithmetic on an integer type narrower than 64 bits wraps at the type's width wherever its result is read, in a comparison, a conversion, an argument, an index and a division, and not only where it is stored; negation and the bitwise not wrap too; a shift by the width or more gives zero, or minus one for a negative number shifted right, at every width; the expected output is Go's
+			Src: `package main
+
+import ("fmt"; "os")
+
+const Max i8 = 127
+
+func show(a int, b int, c int) { fmt.Println(a, b, c) }
+
+func main() {
+    n := len(os.Args)
+    var a i8 = 127
+    var b i8 = -128
+    var u u8 = 255
+    var w u16 = 65535
+    var s i16 = 32767
+    var x u32 = 4294967295
+    var y i32 = 2147483647
+    var d u64 = 1
+    var e i64 = -8
+    one := i8(n)
+    fmt.Println(a + one > a, u + u8(n) == 0, w + u16(n) < w, s + i16(n) < s, x + u32(n) == 0, y + i32(n) < y)
+    fmt.Println(a + one, u + u8(n), w * w, s * s, x * x, y * y, u * u, a * a)
+    fmt.Println(-b, -b == b, ^u, ^u == 0, ^w, ^x, a - b, u - w8(n))
+    show(int(a + one), int(u + u8(n)), int(x + u32(n)))
+    fmt.Println(int(a + one), int(u + u8(n)), int(w + u16(n)), int(x + u32(n)), i64(y + i32(n)), u64(u + u8(n)))
+    fmt.Println((a + one) / 2, (u + u8(n)) / 2, (x + u32(n)) / 2, (u + u8(n)) % 7)
+    fmt.Println(u << u8(n), u << u8(n + 7), u << u8(n + 8), u << u8(n + 200), a << i8(n), a << i8(n + 6), a << i8(n + 7), x << u32(n + 30), x << u32(n + 31), x << u32(n + 40))
+    fmt.Println(d << u64(n + 62), d << u64(n + 63), d << u64(n + 99), w << u16(n + 14), w << u16(n + 15), s << i16(n + 20), y << i32(n + 31), e << i64(n + 63))
+    fmt.Println(u >> u8(n + 6), u >> u8(n + 7), b >> i8(n), b >> i8(n + 8), e >> i64(n + 62), e >> i64(n + 63), e >> i64(n + 99), x >> u32(n + 31), d >> u64(n + 63), y >> i32(n + 40), s >> i16(n + 15))
+    fmt.Println(u << u8(n) > u, (u << u8(n + 3)) >> u8(n + 3), int(u << u8(n + 3)), (a << i8(n)) / 2)
+    xs := []int{10, 20, 30}
+    fmt.Println(xs[int(u + u8(n))], min(a + one, a), max(u + u8(n), 1))
+    fmt.Println(xs[u + u8(n) + 1], xs[one], xs[i16(n) + 1], xs[u + u8(n):u8(n) + 1], "abc"[u8(n):u16(n) + 1])
+}
+
+func w8(n int) u8 { return u8(n) + 255 }
+`,
+			Out: "false true true true true true\n-128 0 1 1 1 1 1 1\n-128 true 0 true 0 0 -1 255\n-128 0 0\n-128 0 0 0 -2147483648 0\n-64 0 0 0\n254 0 0 0 -2 -128 0 2147483648 0 0\n9223372036854775808 0 0 32768 0 0 0 0\n1 0 -64 -1 -1 -1 -1 0 0 0 0\nfalse 15 240 -1\n10 -128 1\n20 20 30 [10 20] b\n",
+		},
+		{
+			Name: "narrow-integers-assigned", // the same on a constant of each width, whose sum the C compiler would otherwise refuse to work out, through an operator assignment, with a literal count, on a rune and an element of a slice; the expected output is Go's
+			Src: `package main
+
+import ("fmt"; "os")
+
+const Max i8 = 127
+const Top u16 = 65535
+const Most = 9223372036854775807
+const Last u64 = 18446744073709551615
+
+func main() {
+    n := len(os.Args)
+    fmt.Println(Max + 1, Max + 1 < Max, Top + 1, Top * 2, -Max - 2, Max << 1, Top << 15, Top >> 15)
+    fmt.Println(Most + 1, Most * 2, Most + 1 < Most, Last + 1, Last * Last, -Most - 2)
+    var a i8 = 100
+    a += 100
+    var u u8 = 200
+    u *= 2
+    var w u16 = 1
+    w <<= 15
+    w <<= 1
+    var x u32 = 7
+    x <<= 31
+    x >>= 31
+    var y i32 = -9
+    y >>= 40
+    var d u64 = 1
+    d <<= 64
+    var e i64 = -1
+    e <<= 63
+    e >>= 70
+    fmt.Println(a, u, w, x, y, d, e)
+    var m u8 = 255
+    m &^= 15
+    var k2 i16 = -1
+    k2 &^= 255
+    d = 255
+    d &^= 15 + u64(n)
+    fmt.Println(m, k2, d, m &^ 48)
+    var r rune = 'z'
+    fmt.Println(r - 'a' + 'A', r + rune(n) - 1 == 'z', r * 16777216 * 2, u8('a') + u8(n) * 100 * 3)
+    var b u8 = 250
+    for i := 0; i < 10; i++ { b++ }
+    var c i8 = -128
+    c--
+    fmt.Println(b, c, b + 250, (b + 250) / 3, (b - 5) * 2, -(c), ^b, ^b + 1, ^c)
+    xs := []u8{250, 10}
+    fmt.Println(xs[0] + xs[1], xs[0] + xs[1] < xs[1], int(xs[0] * xs[1]), xs[1] << 7, xs[0] >> 9, u16(xs[0]) + u16(xs[1]))
+    var k u8 = 1
+    var total u64 = 0
+    for i := 0; i < 20; i++ { total += u64(k << u8(i)) + u64(k + u8(i * 30)) }
+    fmt.Println(total, u32(n) - 2, u32(n) - 2 > 5, i16(n) * 30000 * 3)
+}
+`,
+			Out: "-128 true 0 65534 127 -2 32768 1\n-9223372036854775808 -2 true 0 1 9223372036854775807\n-56 144 0 1 -1 0 -1\n240 -256 239 192\n90 true -201326592 141\n4 127 254 84 254 -127 251 252 -128\n4 true 196 0 0 260\n2647 4294967295 true 24464\n",
+		},
+		{
+			Name: "float-to-integer", // a float converted to an integer type drops its fraction, gives the nearest end of the type when it is past the range, and zero when it is not a number, from an f64 and from an f32, to every integer type, at each end of each range, one past it, the infinities and NaN; the expected output is that of Rust's conversion, which has this rule
+			Src: `package main
+
+import ("fmt"; "math"; "os")
+
+func main() {
+    n := f64(len(os.Args))
+    vs := []f64{0.0 * n, 0.9 * n, -0.9 * n, 1.5 * n, -1.5 * n, 127.0 * n, 127.9 * n, 128.0 * n, -128.0 * n, -128.9 * n, -129.0 * n, 255.9 * n, 256.0 * n, 32767.9 * n, 32768.0 * n, -32769.0 * n, 65535.9 * n, 65536.0 * n, 2147483647.0 * n, 2147483648.0 * n, -2147483649.0 * n, 4294967295.0 * n, 4294967296.0 * n, 9223372036854775807.0 * n, 9223372036854774784.0 * n, -9223372036854775808.0 * n, -9223372036854777856.0 * n, 18446744073709551615.0 * n, 18446744073709549568.0 * n, 1e30 * n, -1e30 * n, math.NaN(), math.Inf(1), math.Inf(-1)}
+    for _, v := range vs {
+        w := f32(v)
+        fmt.Println(i8(v), u8(v), i16(v), u16(v), i32(v), u32(v), i64(v), u64(v), int(v), uint(v), i8(w), u8(w), i16(w), u16(w), i32(w), u32(w))
+    }
+}
+`,
+			Out: "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n-1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0\n127 127 127 127 127 127 127 127 127 127 127 127 127 127 127 127\n127 127 127 127 127 127 127 127 127 127 127 127 127 127 127 127\n127 128 128 128 128 128 128 128 128 128 127 128 128 128 128 128\n-128 0 -128 0 -128 0 -128 0 -128 0 -128 0 -128 0 -128 0\n-128 0 -128 0 -128 0 -128 0 -128 0 -128 0 -128 0 -128 0\n-128 0 -129 0 -129 0 -129 0 -129 0 -128 0 -129 0 -129 0\n127 255 255 255 255 255 255 255 255 255 127 255 255 255 255 255\n127 255 256 256 256 256 256 256 256 256 127 255 256 256 256 256\n127 255 32767 32767 32767 32767 32767 32767 32767 32767 127 255 32767 32767 32767 32767\n127 255 32767 32768 32768 32768 32768 32768 32768 32768 127 255 32767 32768 32768 32768\n-128 0 -32768 0 -32769 0 -32769 0 -32769 0 -128 0 -32768 0 -32769 0\n127 255 32767 65535 65535 65535 65535 65535 65535 65535 127 255 32767 65535 65535 65535\n127 255 32767 65535 65536 65536 65536 65536 65536 65536 127 255 32767 65535 65536 65536\n127 255 32767 65535 2147483647 2147483647 2147483647 2147483647 2147483647 2147483647 127 255 32767 65535 2147483647 2147483648\n127 255 32767 65535 2147483647 2147483648 2147483648 2147483648 2147483648 2147483648 127 255 32767 65535 2147483647 2147483648\n-128 0 -32768 0 -2147483648 0 -2147483649 0 -2147483649 0 -128 0 -32768 0 -2147483648 0\n127 255 32767 65535 2147483647 4294967295 4294967295 4294967295 4294967295 4294967295 127 255 32767 65535 2147483647 4294967295\n127 255 32767 65535 2147483647 4294967295 4294967296 4294967296 4294967296 4294967296 127 255 32767 65535 2147483647 4294967295\n127 255 32767 65535 2147483647 4294967295 9223372036854775807 9223372036854775808 9223372036854775807 9223372036854775808 127 255 32767 65535 2147483647 4294967295\n127 255 32767 65535 2147483647 4294967295 9223372036854774784 9223372036854774784 9223372036854774784 9223372036854774784 127 255 32767 65535 2147483647 4294967295\n-128 0 -32768 0 -2147483648 0 -9223372036854775808 0 -9223372036854775808 0 -128 0 -32768 0 -2147483648 0\n-128 0 -32768 0 -2147483648 0 -9223372036854775808 0 -9223372036854775808 0 -128 0 -32768 0 -2147483648 0\n127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709551615 9223372036854775807 18446744073709551615 127 255 32767 65535 2147483647 4294967295\n127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709549568 9223372036854775807 18446744073709549568 127 255 32767 65535 2147483647 4294967295\n127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709551615 9223372036854775807 18446744073709551615 127 255 32767 65535 2147483647 4294967295\n-128 0 -32768 0 -2147483648 0 -9223372036854775808 0 -9223372036854775808 0 -128 0 -32768 0 -2147483648 0\n0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n127 255 32767 65535 2147483647 4294967295 9223372036854775807 18446744073709551615 9223372036854775807 18446744073709551615 127 255 32767 65535 2147483647 4294967295\n-128 0 -32768 0 -2147483648 0 -9223372036854775808 0 -9223372036854775808 0 -128 0 -32768 0 -2147483648 0\n",
+		},
+		{
 			Name: "divide", // the division the language defines and C and the IR do not
 			Src: `package main
 import "fmt"

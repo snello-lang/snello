@@ -230,6 +230,94 @@ func BenchmarkFails() {
 }
 `
 
+// tasksSrc and tasksTest are a package whose benchmark runs eight tasks
+// that each allocate, send, receive and allocate again, five thousand
+// times: every task parks between its two allocations and may resume on
+// another thread.
+const tasksSrc = `package tasks
+
+struct Node {
+	tag int
+	a   int
+	b   int
+}
+
+func work(id int, rounds int, in <-chan int, out chan<- int, done chan<- int) {
+	bad := 0
+	for round := 0; round < rounds; round++ {
+		p := &Node{tag: id, a: round, b: id + round}
+		out <- round
+		v := (<-in) ?? -1
+		q := &Node{tag: id + v, a: round, b: 7}
+		if p.tag != id || q.b != 7 {
+			bad++
+		}
+	}
+	done <- bad
+}
+
+func echo(in <-chan int, out chan<- int) {
+	for v := range in {
+		out <- v
+	}
+}
+
+func Round(n int, rounds int) int {
+	done := make(chan int)
+	for i := 0; i < n; i++ {
+		a := make(chan int)
+		b := make(chan int)
+		ar, bw := a.Clone(), b.Clone()
+		spawn echo(ar, bw)
+		d := done.Clone()
+		spawn work(i, rounds, b, a, d)
+	}
+	total := 0
+	for i := 0; i < n; i++ { total += (<-done) ?? -1 }
+	return total
+}
+`
+
+const tasksTest = `package tasks
+
+import ("expect"; "testing")
+
+func BenchmarkRound() {
+	testing.ReportAllocs()
+	for testing.Loop() {
+		expect.Equal(ref Round(8, 5000), ref 0)
+	}
+}
+`
+
+// TestAllocsAcrossTasks holds the allocator's counts to the blocks a
+// benchmark's tasks are given, every one: 80,000 nodes and the 33
+// blocks of the channels and the tasks themselves, through both
+// backends. Each thread counts what it gives out, and a task that has
+// moved to another thread must count in that thread's counts; one that
+// went on counting in the counts of the thread it left would write
+// them while that thread did, and blocks would go uncounted, a few
+// hundred in each run where a thread's own variables are a register
+// away, as on Linux.
+func TestAllocsAcrossTasks(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"snello.mod":              "",
+		"tasks/tasks.snello":      tasksSrc,
+		"tasks/tasks_test.snello": tasksTest,
+	})
+	for _, backend := range []string{"llvm", "c"} {
+		var out bytes.Buffer
+		code, err := Run(filepath.Join(root, "tasks"), backend, []string{"-run", "Nothing", "-bench", "Round"}, &out, &out)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", backend, err, out.String())
+		}
+
+		if code != 0 || !strings.Contains(out.String(), " 80033 allocs/op") {
+			t.Errorf("%s: exited %d, want 80033 allocs/op:\n%s", backend, code, out.String())
+		}
+	}
+}
+
 // TestMore runs the second fixture: the option, result, containment,
 // text and golden assertions, parallel tests whose lines are held,
 // a benchmark, and the flags, through the default backend, with the

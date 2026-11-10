@@ -79,9 +79,8 @@ type loading struct {
 // dep~2. A module is one whatever route reaches it, since the roots
 // are keyed by directory: a dependency two dependencies require is
 // loaded once and its types are one type, where a name made of the
-// route, b/d and c/d, loaded it twice (2026-11-07, decision 5 of the
-// design note). The id is what keeps the program's util and a
-// dependency's util two packages.
+// route, b/d and c/d, loaded it twice. The id is what keeps the
+// program's util and a dependency's util two packages.
 type root struct {
 	module *Module
 	id     string

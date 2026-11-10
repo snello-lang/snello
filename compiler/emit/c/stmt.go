@@ -155,10 +155,20 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 			return
 		}
 
-		if divides(s.Tok.Binary(), t) { // through a pointer, so the place is reached once
+		if op := s.Tok.Binary(); divides(op, t) || shifts(op, t) { // through a pointer, so the place is reached once
+			fn := e.shifter
+			if divides(op, t) {
+				fn = e.divider
+			}
+
 			at := e.temp()
 			e.line(e.cType(t, s.Pos()) + " *" + at + " = &" + place + ";")
-			e.line("*" + at + " = " + e.divider(s.Tok.Binary(), t, s.Pos()) + "(*" + at + ", " + e.valueTo(rhs, t) + ");")
+			e.line("*" + at + " = " + fn(op, t, s.Pos()) + "(*" + at + ", " + e.valueTo(rhs, t) + ");")
+			return
+		}
+
+		if s.Tok == token.AND_NOT_ASSIGN { // C has no &^: the bits of the right side are cleared with & and ~
+			e.line(place + " &= ~(" + e.valueTo(rhs, t) + ");")
 			return
 		}
 

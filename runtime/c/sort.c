@@ -574,7 +574,7 @@ INLINE void sort_core(char *base, int64_t n, size_t size, less_fn less, void *ct
 // one for each element type and order, when the program is optimized
 // with the runtime: there the element's size and less are constants, so
 // the switch keeps one case and clang inlines the comparison into it.
-__attribute__((always_inline)) void sn_slice_sort(sn_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
+__attribute__((always_inline)) inline void sn_slice_sort(sn_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
     sn_check_slice(s);
     if (s->len < 2 || size == 0) {
         return;

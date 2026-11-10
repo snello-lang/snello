@@ -22,6 +22,8 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values for the types whose zer
 |---|---|
 | `int32`, `float64`, `uint8` | `i32`, `f64`, `u8`; `int`, `uint`, `byte`, `rune` as before |
 | Untyped constants: `x := 10 * 2.5` | A literal takes its type from context; mix types with a conversion |
+| `uint8(f)` for a float past the type's range is whatever the processor gives | `u8(f)` is the nearest end of the range, and 0 for a NaN, on every processor |
+| `x << n` with any integer count | the count has the type of the number shifted; a count of the width or more gives 0 or -1, as in Go |
 | `s[a:b]` copies a string header; the bytes are shared by the GC | `s[a:b]` lends a `ref string`; the original must outlive it |
 | `strings.ToLower(s)`, `strings.Fields(s)` | `s.ToLower()`, `s.Fields()`; the package has the functions too (chapter 14) |
 | `go f(x)` | `spawn f(x)` |

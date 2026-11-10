@@ -37,6 +37,28 @@ func TestExprErrors(t *testing.T) {
 		{"func f(n NodeID) int { return n }", []string{"cannot use n (NodeID) as int in return"}},
 		{"func f(b byte) bool { return b == '0' }", nil},
 		{"func f() string { return \"a\" + 1 }", []string{"mismatched types string and int in +"}},
+		// A literal is a number its type holds: the largest and the smallest of each fit, one past either is refused, and a minus sign before it makes it the negative number.
+		{"func f() { var a u8 = 255; var b i8 = -128; var c i8 = 127; var d u16 = 0xffff; var e u32 = 4294967295; var g u64 = 18446744073709551615; var h int = -9223372036854775808; var i i64 = 9223372036854775807; var j u8 = -0; print(a, b, c, d, e, g, h, i, j) }", nil},
+		{"func f() u8 { return 256 }", []string{"256 overflows u8"}},
+		{"func f() i8 { return 128 }", []string{"128 overflows i8"}},
+		{"func f() i8 { return -129 }", []string{"-129 overflows i8"}},
+		{"func f() u8 { return -1 }", []string{"-1 overflows u8"}},
+		{"func f() i16 { return 0x8000 }", []string{"0x8000 overflows i16"}},
+		{"func f() i32 { return -2147483649 }", []string{"-2147483649 overflows i32"}},
+		{"func f() int { return 9223372036854775808 }", []string{"9223372036854775808 overflows int"}},
+		{"func f() int { return -9223372036854775809 }", []string{"-9223372036854775809 overflows int"}},
+		{"func f() u64 { return 18446744073709551616 }", []string{"18446744073709551616 overflows u64"}},
+		{"func f(b u8) bool { return b == 256 || b < 300 }", []string{"256 overflows u8", "300 overflows u8"}},
+		{"func f(b u8) u8 { return (b | 256) + u8(999) }", []string{"256 overflows u8", "999 overflows u8"}},
+		{"func f() []i8 { return []i8{1, -128, 200} }", []string{"200 overflows i8"}},
+		{"func f(b i8) int { return match b { 300 => 1, _ => 0 } }", []string{"300 overflows i8"}},
+		{"func f() byte { return 'é' }", nil},
+		{"func f() byte { return '世' }", []string{"'世' overflows byte"}},
+		{"func f() rune { return '世' }", nil},
+		{"func f() f32 { return 16777217 }", nil},                // a float takes any integer
+		{"func f() f64 { x := -(1); return f64(x) - 128 }", nil}, // a literal in parentheses is its own number, and an int holds it
+		{"const Past i8 = 128", []string{"128 overflows i8"}},
+		{"func f(b u8) u8 { return b + 255 + 1 }", nil}, // arithmetic wraps: only the numbers written are held to the type
 		// The everyday methods' signatures, and the bound each slice method asks of the element.
 		{"func f(s string) int? { return s.Index(\"a\") }", nil},
 		{"func f(s string) (int?, int, string, string) { return (s.LastIndex(\"a\"), s.Count(\"a\"), s.Replace(\"a\", \"b\", 1), s.ReplaceAll(\"a\", \"b\")) }", nil},

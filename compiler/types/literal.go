@@ -5,23 +5,31 @@
 package types
 
 import (
+	"strconv"
+
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
-	"strconv"
 )
 
 // literal types a literal by the type its context asks for: an integer
 // literal is whatever numeric type is expected, else int; a float is
 // f64 unless a float type is expected; a character is any integer type
-// expected, else rune. There is no untyped constant arithmetic.
+// expected, else rune. There is no untyped constant arithmetic. An
+// integer or a character that the integer type it takes cannot hold is
+// refused, as Go refuses a constant that overflows: arithmetic wraps, a
+// number written down does not, and one written past its type would be
+// another number in each backend.
 func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 	switch lit.Kind {
 	case token.INT:
-		if t := numericExpected(expected, IsNumeric); t != nil {
-			return t
+		t := numericExpected(expected, IsNumeric)
+		if t == nil {
+			t = Typ[Int]
 		}
 
-		return Typ[Int]
+		n, err := strconv.ParseUint(lit.Value, 0, 64) // base 0 reads 0x, 0b, 0o and _
+		c.holds(lit, n, err != nil, t)
+		return t
 	case token.FLOAT:
 		if t := numericExpected(expected, IsFloat); t != nil {
 			return t
@@ -29,16 +37,65 @@ func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 
 		return Typ[Float64]
 	case token.CHAR:
-		if t := numericExpected(expected, IsInteger); t != nil {
-			return t
+		t := numericExpected(expected, IsInteger)
+		if t == nil {
+			t = aliases[1] // rune
 		}
 
-		return aliases[1] // rune
+		if r, _, _, err := strconv.UnquoteChar(lit.Value[1:len(lit.Value)-1], '\''); err == nil {
+			c.holds(lit, uint64(r), false, t)
+		}
+
+		return t
 	case token.STRING:
 		return Typ[String]
 	}
 
 	return Typ[Invalid]
+}
+
+// holds reports a literal of magnitude n, or one past 64 bits, that the
+// integer type t cannot hold. The literal a minus sign is written
+// before is the negative number: -128 is an i8 and 128 is not, and no
+// unsigned type holds a negative but -0. A float type takes any
+// integer.
+func (c *Checker) holds(lit *ast.BasicLit, n uint64, huge bool, t Type) {
+	b, ok := t.Underlying().(*Basic)
+	if !ok || b.info&IsInteger == 0 {
+		return
+	}
+
+	width := 64
+	switch b.kind {
+	case Int8, Uint8:
+		width = 8
+	case Int16, Uint16:
+		width = 16
+	case Int32, Uint32:
+		width = 32
+	}
+
+	negative := c.negated == lit
+	most := uint64(1)<<(width-1) - 1 // the largest of a signed type
+	switch {
+	case b.info&IsUnsigned != 0 && negative:
+		most = 0
+	case b.info&IsUnsigned != 0:
+		most = most*2 + 1
+	case negative:
+		most++ // the smallest's magnitude is one more than the largest
+	}
+
+	if !huge && n <= most {
+		return
+	}
+
+	text := lit.Value
+	if negative {
+		text = "-" + text
+	}
+
+	c.errorf(lit.Pos(), text+" overflows "+t.String())
 }
 
 // numericExpected returns expected when its underlying type is a basic

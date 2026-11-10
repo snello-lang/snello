@@ -25,11 +25,12 @@
 #define _DEFAULT_SOURCE // glibc's mmap flags under -std=c11
 #define _DARWIN_C_SOURCE
 
-#include "snello.h"
+#include "internal.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 
@@ -75,10 +76,29 @@ static size_t reserved;     // its size; zero if none could be made
 static _Atomic size_t used; // what the spans have taken of it
 static uint8_t *span_class; // the class of each span, by its number
 
+// The blocks and the bytes sn_alloc has given out are counted for a
+// benchmark's allocations per operation, by each thread in counts of
+// its own, as Go keeps its allocation statistics by processor, and
+// added up when they are asked for. One pair of counts for every thread
+// would be one line of memory every processor writes at each
+// allocation, and passes to the next: tasks allocating on eight
+// processors then ran seventeen times slower than on counts of their
+// own. A thread's counts are a line to themselves, written by that
+// thread alone and read by any, and outlive the thread, whose
+// allocations stay counted.
+typedef struct counts {
+    _Atomic int64_t blocks, bytes;
+    struct counts *next;
+} counts;
+
+static _Atomic(counts *) threads; // every thread's counts, newest first
+static counts shared;             // the counts of a thread that could be given none
+
 // A free block's first word links it to the next on its list.
 typedef struct cache {
     void *head[nclass];
     int32_t count[nclass];
+    counts *counts;
 } cache;
 
 static _Thread_local cache local;
@@ -211,7 +231,19 @@ static void give_back(cache *k, int c) {
     pthread_mutex_unlock(&z->mu);
 }
 
-void *sn_heap_alloc(size_t n) {
+// A task may resume on another thread after any switch, and a compiler
+// may work out the address of a thread's own variable once in a
+// function and keep it across a call: a task into whose function the
+// allocator was written would then take from, give to and count in the
+// cache of the thread it left, while that thread used it, and the lists
+// of free blocks would be torn. So the thread's cache is read only in
+// the functions marked ENTRY, which the compiler may not write into
+// their callers: each reads it afresh, and none parks a task. The
+// helpers below them read it too, and are written into an ENTRY
+// function and nowhere else.
+#define ENTRY __attribute__((noinline))
+
+static inline void *heap_alloc(size_t n) {
     if (n > largest) {
         return malloc(n);
     }
@@ -228,7 +260,7 @@ void *sn_heap_alloc(size_t n) {
     return p;
 }
 
-void sn_heap_free(void *p) {
+static inline void heap_free(void *p) {
     uintptr_t off = (uintptr_t)p - (uintptr_t)base;
     if (off >= reserved) { // the system's block, or NULL
         free(p);
@@ -244,23 +276,81 @@ void sn_heap_free(void *p) {
     }
 }
 
-// The allocator of a release build; debug.c has the counting,
-// poisoning one of a debug build, over the same heap.
-#ifndef SN_DEBUG
-_Atomic int64_t sn_alloc_count, sn_alloc_total;
+ENTRY void *sn_heap_alloc(size_t n) {
+    return heap_alloc(n);
+}
 
-void *sn_alloc(size_t n) {
-    void *p = sn_heap_alloc(n);
+ENTRY void sn_heap_free(void *p) {
+    heap_free(p);
+}
+
+// enlist gives the thread its counts, a line of memory of their own
+// from the system, 128 bytes since the widest line of a processor
+// Snello runs on is that, and adds them to the list every thread's are
+// on.
+static __attribute__((noinline, cold)) counts *enlist(cache *k) {
+    void *line = NULL;
+    if (posix_memalign(&line, 128, 128) != 0) {
+        return k->counts = &shared;
+    }
+
+    counts *c = memset(line, 0, 128);
+    c->next = atomic_load(&threads);
+    while (!atomic_compare_exchange_weak(&threads, &c->next, c)) {
+    }
+
+    return k->counts = c;
+}
+
+// note counts a block of n bytes given out, in the thread's own counts:
+// a load and a store of each, with no lock on the line, since no other
+// thread writes it.
+static inline void note(size_t n) {
+    cache *k = &local;
+    counts *c = k->counts;
+    if (c == NULL) {
+        c = enlist(k);
+    }
+
+    if (c == &shared) {
+        atomic_fetch_add_explicit(&c->blocks, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&c->bytes, (int64_t)n, memory_order_relaxed);
+        return;
+    }
+
+    atomic_store_explicit(&c->blocks, atomic_load_explicit(&c->blocks, memory_order_relaxed) + 1, memory_order_relaxed);
+    atomic_store_explicit(&c->bytes, atomic_load_explicit(&c->bytes, memory_order_relaxed) + (int64_t)n, memory_order_relaxed);
+}
+
+ENTRY void sn_alloc_note(size_t n) {
+    note(n);
+}
+
+// sn_alloc_counts adds up the blocks and the bytes every thread has
+// been given.
+void sn_alloc_counts(int64_t *blocks, int64_t *bytes) {
+    *blocks = atomic_load_explicit(&shared.blocks, memory_order_relaxed);
+    *bytes = atomic_load_explicit(&shared.bytes, memory_order_relaxed);
+    for (counts *c = atomic_load(&threads); c != NULL; c = c->next) {
+        *blocks += atomic_load_explicit(&c->blocks, memory_order_relaxed);
+        *bytes += atomic_load_explicit(&c->bytes, memory_order_relaxed);
+    }
+}
+
+// The allocator of a release build; debug.c has the poisoning one of a
+// debug build, over the same heap and with the same counts.
+#ifndef SN_DEBUG
+ENTRY void *sn_alloc(size_t n) {
+    void *p = heap_alloc(n);
     if (p == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
-    atomic_fetch_add_explicit(&sn_alloc_count, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&sn_alloc_total, (int64_t)n, memory_order_relaxed);
+    note(n);
     return p;
 }
 
-void sn_free(void *p) {
-    sn_heap_free(p);
+ENTRY void sn_free(void *p) {
+    heap_free(p);
 }
 #endif

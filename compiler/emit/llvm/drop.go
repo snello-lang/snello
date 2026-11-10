@@ -674,7 +674,7 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
 	f()
 	var b strings.Builder
-	b.WriteString("define internal " + result + " @" + name + "(" + strings.Join(params, ", ") + ") {\nentry:\n")
+	b.WriteString("define internal " + result + " @" + name + "(" + strings.Join(params, ", ") + ")" + funcAttrs + " {\nentry:\n")
 	b.Write(e.fn.allocas.Bytes())
 	b.Write(e.fn.body.Bytes())
 	b.WriteString("}\n\n")

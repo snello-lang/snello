@@ -146,7 +146,7 @@ static void *make_context(void *top, void (*entry)(void)) {
 // stack, and cleared when the task resumes, since the wake that
 // resumed it is the one it waited for. Before, a mutex per task
 // guarded a state and a flag, made and destroyed per spawn and taken
-// twice per park and wake (2026-11-07, task 5.10 of stage 5).
+// twice per park and wake.
 enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, WOKEN = 8 };
 
 typedef struct {
@@ -191,7 +191,7 @@ typedef struct sn_task task;
 // queue, so that two tasks handing values back and forth stay on one
 // thread, one switch apart, where a wake through the queue would wake
 // another thread to run the task there.
-enum { ring_size = 256, stack_cache = 32 }; // a cache of 64 was measured no better (2026-11-07)
+enum { ring_size = 256, stack_cache = 32 }; // a cache of 64 was measured no better
 
 typedef struct {
     void *sched_sp;
@@ -286,11 +286,11 @@ static const size_t stack_size = 256 << 10; // a task's stack, as step one's thr
 // a recursion past it faults rather than writes over another task's.
 // Freed stacks are pooled, since mapping is the costly part of a spawn.
 // The pool's lock is a mutex: a spin lock was measured in its place
-// and made a spawn a quarter slower by the median of eleven runs
-// (2026-11-07, under task 5.10 of stage 5), the spinners costing the
-// workers the cores the mutex's sleepers gave them.
+// and made a spawn a quarter slower by the median of eleven runs, the
+// spinners costing the workers the cores the mutex's sleepers gave
+// them.
 static pthread_mutex_t pool_mu = PTHREAD_MUTEX_INITIALIZER;
-static void *pool[256]; // measured against 1024 (2026-11-07): the deeper pool made a spawn a third slower
+static void *pool[256]; // measured against 1024: the deeper pool made a spawn a third slower
 static int pooled;
 
 static void pool_take(void) {
@@ -740,9 +740,9 @@ static task *steal_next(worker *w) {
 // or one a running task pushed, with no thread woken to run it, which
 // is what such a task costs otherwise. One worker spins at a time, and
 // a push or an inject while one does wakes no other; the spinner, once
-// it has found work, wakes a worker for what is left (2026-11-07, for
-// task 5.10 of stage 5: before, every push woke a worker while any was
-// idle, a system call per spawn). The spinning adapts, as an adaptive mutex's
+// it has found work, wakes a worker for what is left: before, every
+// push woke a worker while any was idle, a system call per spawn. The
+// spinning adapts, as an adaptive mutex's
 // does: worth tells whether it has paid lately, raised when a spin finds
 // a task or a worker's sleep ends within spin_for, lowered when a spin
 // finds none, and a worker spins only while it is above zero. A program
@@ -861,6 +861,8 @@ static void *monitor_main(void *arg) {
 
         pause = moved ? next_stale : (pause * 2 < pause_most ? pause * 2 : pause_most);
     }
+
+    return NULL; // never reached: a thread's function has a result to give
 }
 
 // sched_loop runs the worker: the next task, or a spin and then a wait
@@ -1036,7 +1038,7 @@ void sn_spawn(void (*run)(void *), void *arg) {
     }
 
     sn_self();
-    task *t = calloc(1, sizeof *t); // its own block: a record at the top of the task's stack was measured (2026-11-07) and made a spawn two thirds slower
+    task *t = calloc(1, sizeof *t); // its own block: a record at the top of the task's stack was measured and made a spawn two thirds slower
     if (t == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
@@ -1546,7 +1548,7 @@ bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg) {
     t->marks = &m;
     if (sigsetjmp(m.jump, 0) == 0) {
         fn(ctx);
-        t->marks = m.prev;
+        sn_self()->marks = m.prev; // the task asked for again: no local of this frame set before the mark is read after it
         return false;
     }
 

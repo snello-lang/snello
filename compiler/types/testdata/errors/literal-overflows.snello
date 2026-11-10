@@ -1,0 +1,28 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a number written down is the number: an integer or a character
+// its type cannot hold is refused, where arithmetic that passes the
+// type's range wraps. The literal takes its type from its context, a
+// u8 beside a u8, and a minus sign written before it makes it the
+// negative number, so -128 is an i8 and 128 is not. Fix: write a number
+// the type holds, or give the value a wider type.
+
+package p
+
+func level(b u8) bool {
+    return b == 256                       // ERROR "256 overflows u8"
+}
+
+func lowest() i8 {
+    return -129                           // ERROR "-129 overflows i8"
+}
+
+func mask(b u8) u8 {
+    return b | 0x100                      // ERROR "0x100 overflows u8"
+}
+
+func letter() byte {
+    return 'é' + '世'                      // ERROR "'世' overflows byte"
+}

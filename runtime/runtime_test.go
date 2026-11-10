@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -457,6 +458,13 @@ func bit(b bool) int {
 // test without a C compiler.
 func buildProbe(t *testing.T, dir, src string) string {
 	t.Helper()
+	return buildProbeAs(t, dir, src, "-O1", "-DSN_DEBUG")
+}
+
+// buildProbeAs is buildProbe with the options of the build named: a
+// debug build's, or a release build's for a probe that measures.
+func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
+	t.Helper()
 	cc := os.Getenv("CC")
 	if cc == "" {
 		cc = "cc"
@@ -481,7 +489,9 @@ func buildProbe(t *testing.T, dir, src string) string {
 	}
 
 	bin := filepath.Join(dir, "probe")
-	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-O1", "-DSN_DEBUG", "-o", bin, filepath.Join(dir, "probe.c")}
+	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-pthread"}
+	args = append(args, mode...)
+	args = append(args, "-o", bin, filepath.Join(dir, "probe.c"))
 	args = append(args, Paths(dir)...)
 	args = append(args, "-lm")
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
@@ -1334,5 +1344,110 @@ int main(int argc, char **argv) {
 		if got := lines[len(lines)-1]; got != "0 0" {
 			t.Errorf("keyed from %s, threads that drew the same first number, and threads whose bits are not about half set: got %s, want 0 0", source, got)
 		}
+	}
+}
+
+// TestAllocCounts holds the counts of what sn_alloc gives out, which
+// each thread keeps for itself: four threads' blocks and bytes are all
+// in the sum, while the threads run and after they have ended, and a
+// block of no bytes is a block.
+func TestAllocCounts(t *testing.T) {
+	probe := `#include "internal.h"
+#include <pthread.h>
+#include <stdio.h>
+static void *work(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 10000; i++) sn_free(sn_alloc(48));
+    return NULL;
+}
+int main(void) {
+    int64_t b0, n0, b1, n1, b2, n2;
+    sn_alloc_counts(&b0, &n0);
+    pthread_t th[4];
+    for (int k = 0; k < 4; k++) pthread_create(&th[k], NULL, work, NULL);
+    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    sn_alloc_counts(&b1, &n1);
+    sn_free(sn_alloc(0));
+    sn_free(sn_alloc(1000));
+    sn_alloc_counts(&b2, &n2);
+    printf("%lld %lld %lld %lld\n", (long long)(b1 - b0), (long long)(n1 - n0), (long long)(b2 - b1), (long long)(n2 - n1));
+}
+`
+	for _, mode := range [][]string{{"-O1", "-DSN_DEBUG"}, {"-O2"}} {
+		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "counts"), probe, mode...)
+		out, err := exec.Command(bin).Output()
+		if err != nil {
+			t.Fatalf("%v: %v", mode, err)
+		}
+
+		if got, want := string(out), "40000 1920000 2 1000\n"; got != want {
+			t.Errorf("%v: blocks and bytes of four threads, then of two blocks more: got %q, want %q", mode, got, want)
+		}
+	}
+}
+
+// TestAllocScales holds what allocating costs a processor when every
+// processor allocates at once to what it costs one alone. Each thread
+// keeps what it allocates and frees to itself, so four threads spend
+// four times one thread's processor time and little more; a word every
+// allocation writes, shared by the threads, has each processor wait
+// for the line of memory it is on, and four threads then spend many
+// times that. Processor time is measured, not the clock's, so that a
+// machine busy with other tests does not look like a shared word.
+func TestAllocScales(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("fewer than four processors")
+	}
+
+	probe := `#include "snello.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <time.h>
+static void *work(void *arg) {
+    (void)arg;
+    void *keep[64] = {0};
+    for (int i = 0; i < 4000000; i++) {
+        int k = i & 63;
+        sn_free(keep[k]);
+        keep[k] = sn_alloc(16 + (size_t)(i & 7) * 16);
+    }
+    for (int k = 0; k < 64; k++) sn_free(keep[k]);
+    return NULL;
+}
+static double spent(int threads) {
+    struct timespec a, b;
+    pthread_t th[8];
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &a);
+    for (int k = 0; k < threads; k++) pthread_create(&th[k], NULL, work, NULL);
+    for (int k = 0; k < threads; k++) pthread_join(th[k], NULL);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &b);
+    return (double)(b.tv_sec - a.tv_sec) + (double)(b.tv_nsec - a.tv_nsec) / 1e9;
+}
+int main(void) {
+    spent(1);
+    double one = spent(1), four = spent(4);
+    printf("%.2f\n", four / (4 * one));
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
+	best := 0.0
+	for range 3 { // the least of three: a machine's other work only ever adds
+		out, err := exec.Command(bin).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ratio, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+		if err != nil {
+			t.Fatalf("%q: %v", out, err)
+		}
+
+		if best == 0 || ratio < best {
+			best = ratio
+		}
+	}
+
+	if best > 2.5 {
+		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, want about 1 and under 2.5", best)
 	}
 }
