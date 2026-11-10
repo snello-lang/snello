@@ -1067,7 +1067,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 	if pkg := e.packageOf(x.X); pkg != nil {
 		switch obj := e.info.Uses[x.Sel].(type) {
 		case *types.Func:
-			if lower.Key(obj) != "" {
+			if !lower.HasSymbol(obj) {
 				e.unsupported(x.Pos(), "a function the compiler provides, "+pkg.Name()+"."+x.Sel.Name+", as a value")
 				return unit
 			}

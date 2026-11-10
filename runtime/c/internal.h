@@ -94,6 +94,8 @@ static inline void sn_spin_hint(void) {
 #ifdef SN_DEBUG
 int64_t sn_two_way(sn_string s, sn_string t);
 int64_t sn_two_way_last(sn_string s, sn_string t);
+void sn_rand_key(const uint8_t seed[32]);
+extern bool sn_rand_no_system;
 #endif
 
 // sn_slice_grow makes room in s for at least need elements of size

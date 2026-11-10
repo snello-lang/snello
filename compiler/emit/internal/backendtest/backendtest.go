@@ -421,6 +421,19 @@ func main() {
 			Stderr: "panic: makeslice: cap out of range", Code: 2,
 		},
 		{
+			Name: "make-capacity-too-large", // a capacity whose size in bytes passes what an address reaches is refused, as Go's makeslice refuses it: the product, wrapped, would be a block of eight bytes that a push writes past
+			Src: `package main
+import ("fmt")
+func main() {
+	c := 2305843009213693953
+	xs := make([]int, 0, c)
+	for i := 0; i < 1000; i++ { xs.Push(i) }
+	fmt.Println(len(xs))
+}
+`,
+			Stderr: "panic: makeslice: cap out of range", Code: 2,
+		},
+		{
 			Name: "search-long-needle", // a needle that almost matches everywhere: comparing it at every offset takes a minute
 			Src: `package main
 import ("fmt"; "strings")
@@ -586,6 +599,72 @@ func main() {
 }
 `,
 			Out: "None Some(9223372036854775806) None Some(-9223372036854775807) None\nSome(127) None None None -128 100\nSome(255) None None Some(250) 100\n5 -9223372036854775808 10 0 15 10\ntrue false true false\n",
+		},
+		{
+			Name: "math-functions", // every function of math on exact values and its special cases, an infinity, a NaN and a negative zero, the transcendental ones to six places since their last digit is the system's, the constants and the limits each of its own type, and a function kept as a value; the expected output is Go's
+			Src: `package main
+import ("fmt"; "math")
+func main() {
+	fmt.Println(math.Floor(-2.5), math.Ceil(-2.5), math.Trunc(-2.5), math.Round(-2.5), math.Round(2.5), math.Mod(7, 3), math.Mod(-7, 3))
+	fmt.Printf("%.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", math.Pow(2, 10), math.Exp(0), math.Log(1), math.Log2(8), math.Log10(1000), math.Cbrt(27), math.Hypot(3, 4))
+	fmt.Println(math.Sqrt(16))
+	fmt.Printf("%.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", math.Sin(1), math.Cos(1), math.Tan(1), math.Asin(0.5), math.Acos(0.5), math.Atan(1), math.Atan2(1, -1))
+	fmt.Printf("%.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", math.Sinh(1), math.Cosh(1), math.Tanh(1), math.E, math.Ln2, math.Exp(1), math.Log(2))
+	nan, inf := math.NaN(), math.Inf(1)
+	fmt.Println(inf, math.Inf(-1), nan, math.IsNaN(nan), math.IsNaN(inf), math.IsInf(inf, 1), math.IsInf(inf, -1), math.IsInf(math.Inf(-1), 0), math.IsInf(math.MaxFloat64, 0))
+	fmt.Println(math.Signbit(math.Copysign(0, -1)), math.Signbit(0), math.Copysign(3, -1), math.Sqrt(-1), math.Log(0), math.Log(-1), math.Pow(-8, 0.5), math.Mod(1, 0), math.Pow(nan, 0))
+	fmt.Println(math.MaxInt, math.MinInt, math.MaxInt8, math.MinInt8, math.MaxInt16, math.MinInt16, math.MaxInt32, math.MinInt32, math.MaxInt64, math.MinInt64)
+	fmt.Println(math.MaxUint, math.MaxUint8, math.MaxUint16, math.MaxUint32, math.MaxUint64, math.MaxFloat64, math.SmallestNonzeroFloat64, math.MaxFloat32, math.SmallestNonzeroFloat32)
+	f := math.Floor
+	fmt.Println(f(2.5), math.Floor(f64(math.MaxInt32) / 2))
+}
+`,
+			Out: "-3 -2 -2 -3 3 1 -1\n1024.000000 1.000000 0.000000 3.000000 3.000000 3.000000 5.000000\n4\n0.841471 0.540302 1.557408 0.523599 1.047198 0.785398 2.356194\n1.175201 1.543081 0.761594 2.718282 0.693147 2.718282 0.693147\n+Inf -Inf NaN true false true false true false\ntrue false -3 NaN -Inf NaN NaN NaN 1\n9223372036854775807 -9223372036854775808 127 -128 32767 -32768 2147483647 -2147483648 9223372036854775807 -9223372036854775808\n18446744073709551615 255 65535 4294967295 18446744073709551615 1.7976931348623157e+308 5e-324 3.4028235e+38 1e-45\n2 1.073741823e+09\n",
+		},
+		{
+			Name: "bit-functions", // every function of math/bits at each width, on zero, which gives the width, on a rotation by a negative count and by more than the width, through a value of the function, and as what a task runs and what a defer calls; the expected output is Go's
+			Src: `package main
+import ("fmt"; "math/bits")
+func apply(f func(u64) int, x u64) int { return f(x) }
+func main() {
+	var a u8 = 0x81
+	var b u16 = 0x1234
+	var c u32 = 0xf000000f
+	var d u64 = 0x123456789abcdef0
+	var e uint = 0
+	k := -3
+	fmt.Println(bits.LeadingZeros8(a), bits.LeadingZeros16(b), bits.LeadingZeros32(c), bits.LeadingZeros64(d), bits.LeadingZeros(e), bits.LeadingZeros8(0), bits.LeadingZeros16(0), bits.LeadingZeros32(0), bits.LeadingZeros64(0))
+	fmt.Println(bits.TrailingZeros8(a), bits.TrailingZeros16(b), bits.TrailingZeros32(c), bits.TrailingZeros64(d), bits.TrailingZeros(e), bits.TrailingZeros8(0), bits.TrailingZeros16(0), bits.TrailingZeros32(0), bits.TrailingZeros64(0))
+	fmt.Println(bits.OnesCount8(a), bits.OnesCount16(b), bits.OnesCount32(c), bits.OnesCount64(d), bits.OnesCount(e), bits.Len8(a), bits.Len16(b), bits.Len32(c), bits.Len64(d), bits.Len(e))
+	fmt.Println(bits.RotateLeft8(a, 1), bits.RotateLeft8(a, k), bits.RotateLeft16(b, 20), bits.RotateLeft32(c, k), bits.RotateLeft64(d, 64), bits.RotateLeft64(d, -65), bits.RotateLeft(e + 1, 63 - k))
+	fmt.Println(bits.Reverse8(a), bits.Reverse16(b), bits.Reverse32(c), bits.Reverse64(d), bits.Reverse(e + 1))
+	f := bits.OnesCount64
+	fmt.Println(apply(f, d), apply(bits.Len64, d), apply(bits.TrailingZeros64, 0))
+	spawn bits.OnesCount8(a)
+	defer bits.Len16(b)
+}
+`,
+			Out: "0 3 0 3 64 8 16 32 64\n0 2 0 4 64 8 16 32 64\n2 5 8 32 0 8 13 32 61 0\n3 48 9025 4261412865 1311768467463790320 655884233731895160 4\n129 11336 4026531855 1115552785675988040 9223372036854775808\n32 61 64\n",
+		},
+		{
+			Name: "random-numbers", // a generator seeded with 1 and 2 gives the numbers Go's PCG gives for that seed: Int, Int64, Float64, IntN below and above 2^32 and at a power of two, a shuffle of strings and a permutation; a bound with nothing below it gives None and a count below zero none; the package functions give numbers in range
+			Src: `package main
+import ("fmt"; "math/rand")
+func main() {
+	r := rand.New(1, 2)
+	fmt.Println(r.Int(), r.Int64(), r.Float64(), r.IntN(10), r.IntN(1000000007), r.IntN(1099511627776), r.IntN(4294967297))
+	xs := []string{"a".Clone(), "b".Clone(), "c".Clone(), "d".Clone(), "e".Clone()}
+	r.Shuffle(mut xs)
+	fmt.Println(xs, r.Perm(6), r.Perm(0), r.Perm(-1), r.IntN(0), r.IntN(-1))
+	sum := 0
+	for i := 0; i < 1000; i++ { sum += (r.IntN(6) ?? 0) + 1 }
+	g := rand.IntN(6) ?? -1
+	p := rand.Perm(5)
+	rand.Shuffle(mut p)
+	fmt.Println(sum, g >= 0 && g < 6, len(p), rand.Float64() < 1.0, rand.Int() >= 0, rand.Int64() >= 0, rand.IntN(0))
+}
+`,
+			Out: "4969059760275911952 2147869220224756844 0.5085473976760264 Some(7) Some(234276272) Some(547831175868) Some(2147104640)\n[e d a b c] [0 5 3 1 4 2] [] [] None None\n3558 true 5 true true true None\n",
 		},
 		{
 			Name: "divide", // the division the language defines and C and the IR do not

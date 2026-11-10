@@ -7,6 +7,8 @@ package runtime
 import (
 	"bytes"
 	"fmt"
+	"math/bits"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1242,5 +1244,95 @@ int main(void) {
 
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("five searches of a 200,001-byte pattern in 20 MB took %v; a linear search takes milliseconds", took)
+	}
+}
+
+// TestRandom holds the runtime's random source against Go's. The
+// thread's generator, keyed with Go's own test seed and drawn from as
+// the package functions draw, gives the numbers Go's ChaCha8 gives,
+// through its refills and past the points where it keys itself again;
+// the 128-bit multiply gives Go's two halves. Four threads that key
+// themselves each draw numbers of their own, about half of whose bits
+// are set, on a system that gives random bytes and on one that gives
+// none, where the key is made of the clock.
+func TestRandom(t *testing.T) {
+	const seed, count = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", 3000
+	pairs := [][2]uint64{{0, 0}, {1, 1}, {1<<64 - 1, 1<<64 - 1}, {1<<64 - 1, 2}, {0x123456789abcdef0, 0xfedcba9876543210}, {1 << 32, 1 << 32}, {1<<63 + 1, 3}}
+	var muls strings.Builder
+	for _, p := range pairs {
+		fmt.Fprintf(&muls, "{%du, %du},", p[0], p[1])
+	}
+
+	// A thread's 4096 numbers hold 262,144 bits, 131,072 of them set give
+	// or take 256: a count more than 1,536 away, six times that, is a
+	// generator that is not even.
+	probe := `#include "internal.h"
+#include <pthread.h>
+#include <stdio.h>
+static uint64_t first[4];
+static int ones[4];
+static void *draw(void *arg) {
+    int k = (int)(intptr_t)arg;
+    first[k] = sn_math__rand_random();
+    for (int i = 0; i < 4096; i++) ones[k] += __builtin_popcountll(sn_math__rand_random());
+    return NULL;
+}
+int main(int argc, char **argv) {
+    (void)argv;
+    sn_rand_no_system = argc > 1;
+    sn_rand_key((const uint8_t *)"` + seed + `");
+    for (int i = 0; i < ` + strconv.Itoa(count) + `; i++) printf("%llx\n", (unsigned long long)sn_math__rand_random());
+    uint64_t pairs[][2] = {` + muls.String() + `};
+    for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+        uint64_t lo, hi = sn_math__rand_mul64(pairs[i][0], pairs[i][1], &lo);
+        printf("%llx %llx\n", (unsigned long long)hi, (unsigned long long)lo);
+    }
+    pthread_t th[4];
+    for (intptr_t k = 0; k < 4; k++) pthread_create(&th[k], NULL, draw, (void *)k);
+    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    int same = 0, off = 0;
+    for (int a = 0; a < 4; a++) {
+        for (int b = a + 1; b < 4; b++) same += first[a] == first[b];
+        off += ones[a] < 131072 - 1536 || ones[a] > 131072 + 1536;
+    }
+    printf("%d %d\n", same, off);
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "random"), probe)
+	var key [32]byte
+	copy(key[:], seed)
+	for _, source := range []string{"the system", "the clock"} {
+		cmd := exec.Command(bin)
+		if source == "the clock" {
+			cmd.Args = append(cmd.Args, "clock")
+		}
+
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("keyed from %s: %v", source, err)
+		}
+
+		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		if len(lines) != count+len(pairs)+1 {
+			t.Fatalf("keyed from %s: got %d lines, want %d", source, len(lines), count+len(pairs)+1)
+		}
+
+		want := rand.NewChaCha8(key)
+		for i := range count {
+			if w := strconv.FormatUint(want.Uint64(), 16); lines[i] != w {
+				t.Fatalf("number %d of the generator: got %s, want %s", i, lines[i], w)
+			}
+		}
+
+		for i, p := range pairs {
+			hi, lo := bits.Mul64(p[0], p[1])
+			if w := fmt.Sprintf("%x %x", hi, lo); lines[count+i] != w {
+				t.Errorf("%d times %d: got %s, want %s", p[0], p[1], lines[count+i], w)
+			}
+		}
+
+		if got := lines[len(lines)-1]; got != "0 0" {
+			t.Errorf("keyed from %s, threads that drew the same first number, and threads whose bits are not about half set: got %s, want 0 0", source, got)
+		}
 	}
 }

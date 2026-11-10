@@ -201,13 +201,13 @@ func (e *Emitter) spawnCall(task, name string, sig *types.Signature, wants []typ
 func (e *Emitter) spawnee(fun ast.Expr, pos token.Pos) (string, *types.Signature, ast.Expr) {
 	switch fun := fun.(type) {
 	case *ast.Ident:
-		if fn, ok := e.info.Uses[fun].(*types.Func); ok && lower.Key(fn) == "" {
+		if fn, ok := e.info.Uses[fun].(*types.Func); ok && lower.HasSymbol(fn) {
 			name, sig := e.calleeName(fun, fn)
 			return name, sig, nil
 		}
 	case *ast.SelectorExpr:
 		fn, ok := e.info.Uses[fun.Sel].(*types.Func)
-		if !ok || lower.Key(fn) != "" {
+		if !ok || !lower.HasSymbol(fn) {
 			break
 		}
 

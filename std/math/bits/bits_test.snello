@@ -1,0 +1,115 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package bits_test
+
+import ("expect"; "math/bits"; "testing")
+
+func TestLeadingZeros() {
+	expect.Equal(ref bits.LeadingZeros(0), ref 64) // zero has the width in zeros
+	expect.Equal(ref bits.LeadingZeros(1), ref 63)
+	expect.Equal(ref bits.LeadingZeros(18446744073709551615), ref 0)
+	expect.Equal(ref bits.LeadingZeros8(0), ref 8)
+	expect.Equal(ref bits.LeadingZeros8(1), ref 7)
+	expect.Equal(ref bits.LeadingZeros8(255), ref 0)
+	expect.Equal(ref bits.LeadingZeros16(0), ref 16)
+	expect.Equal(ref bits.LeadingZeros16(256), ref 7)
+	expect.Equal(ref bits.LeadingZeros32(0), ref 32)
+	expect.Equal(ref bits.LeadingZeros32(65536), ref 15)
+	expect.Equal(ref bits.LeadingZeros64(0), ref 64)
+	expect.Equal(ref bits.LeadingZeros64(4294967296), ref 31)
+}
+
+func TestTrailingZeros() {
+	expect.Equal(ref bits.TrailingZeros(0), ref 64)
+	expect.Equal(ref bits.TrailingZeros(8), ref 3)
+	expect.Equal(ref bits.TrailingZeros8(0), ref 8)
+	expect.Equal(ref bits.TrailingZeros8(128), ref 7)
+	expect.Equal(ref bits.TrailingZeros16(0), ref 16)
+	expect.Equal(ref bits.TrailingZeros16(32768), ref 15)
+	expect.Equal(ref bits.TrailingZeros32(0), ref 32)
+	expect.Equal(ref bits.TrailingZeros32(2147483648), ref 31)
+	expect.Equal(ref bits.TrailingZeros64(0), ref 64)
+	expect.Equal(ref bits.TrailingZeros64(9223372036854775808), ref 63)
+}
+
+func TestOnesCount() {
+	expect.Equal(ref bits.OnesCount(0), ref 0)
+	expect.Equal(ref bits.OnesCount(18446744073709551615), ref 64)
+	expect.Equal(ref bits.OnesCount8(255), ref 8)
+	expect.Equal(ref bits.OnesCount8(0x5a), ref 4)
+	expect.Equal(ref bits.OnesCount16(65535), ref 16)
+	expect.Equal(ref bits.OnesCount32(4294967295), ref 32)
+	expect.Equal(ref bits.OnesCount64(0x123456789abcdef0), ref 32)
+}
+
+func TestLen() {
+	expect.Equal(ref bits.Len(0), ref 0)
+	expect.Equal(ref bits.Len(1), ref 1)
+	expect.Equal(ref bits.Len(255), ref 8)
+	expect.Equal(ref bits.Len(256), ref 9)
+	expect.Equal(ref bits.Len8(0), ref 0)
+	expect.Equal(ref bits.Len8(255), ref 8)
+	expect.Equal(ref bits.Len16(65535), ref 16)
+	expect.Equal(ref bits.Len32(4294967295), ref 32)
+	expect.Equal(ref bits.Len64(18446744073709551615), ref 64)
+}
+
+func TestRotateLeft() {
+	expect.Equal(ref bits.RotateLeft8(0x81, 1), ref 0x03)
+	expect.Equal(ref bits.RotateLeft8(0x81, -1), ref 0xc0) // a negative count turns right
+	expect.Equal(ref bits.RotateLeft8(0x81, 0), ref 0x81)
+	expect.Equal(ref bits.RotateLeft8(0x81, 8), ref 0x81)  // the count is taken modulo the width
+	expect.Equal(ref bits.RotateLeft8(0x81, 9), ref 0x03)
+	expect.Equal(ref bits.RotateLeft8(0x81, -1000), ref 0x81)
+	expect.Equal(ref bits.RotateLeft16(0x8001, 4), ref 0x0018)
+	expect.Equal(ref bits.RotateLeft16(0x8001, -4), ref 0x1800)
+	expect.Equal(ref bits.RotateLeft32(0xf000000f, 4), ref 0x000000ff)
+	expect.Equal(ref bits.RotateLeft32(0xf000000f, -4), ref 0xff000000)
+	expect.Equal(ref bits.RotateLeft64(0x8000000000000001, 1), ref 3)
+	expect.Equal(ref bits.RotateLeft64(1, 64), ref 1)
+	expect.Equal(ref bits.RotateLeft64(1, -1), ref 9223372036854775808)
+	expect.Equal(ref bits.RotateLeft(1, 63), ref 9223372036854775808)
+	k := 65
+	expect.Equal(ref bits.RotateLeft(1, k), ref 2) // a count the compiler does not know
+	expect.Equal(ref bits.RotateLeft(1, -k), ref 9223372036854775808)
+}
+
+func TestReverse() {
+	expect.Equal(ref bits.Reverse8(0x01), ref 0x80)
+	expect.Equal(ref bits.Reverse8(0x5a), ref 0x5a)
+	expect.Equal(ref bits.Reverse8(0x0f), ref 0xf0)
+	expect.Equal(ref bits.Reverse16(0x0001), ref 0x8000)
+	expect.Equal(ref bits.Reverse16(0x1234), ref 0x2c48)
+	expect.Equal(ref bits.Reverse32(0x12345678), ref 0x1e6a2c48)
+	expect.Equal(ref bits.Reverse64(1), ref 9223372036854775808)
+	expect.Equal(ref bits.Reverse64(0x123456789abcdef0), ref 0x0f7b3d591e6a2c48)
+	expect.Equal(ref bits.Reverse(0), ref 0)
+	expect.Equal(ref bits.Reverse(bits.Reverse(0xdeadbeef)), ref 0xdeadbeef)
+}
+
+// count calls f through its value: a function of the package is one a
+// program may keep and hand on.
+func count(f func(u64) int, x u64) int { return f(x) }
+
+func TestAsValues() {
+	f := bits.OnesCount64
+	expect.Equal(ref count(f, 255), ref 8)
+	expect.Equal(ref count(bits.Len64, 255), ref 8)
+	expect.Equal(ref count(bits.LeadingZeros64, 0), ref 64)
+	expect.Equal(ref count(bits.TrailingZeros64, 0), ref 64)
+	g := bits.RotateLeft8
+	expect.Equal(ref g(0x81, -1), ref 0xc0)
+	h := bits.Reverse16
+	expect.Equal(ref h(0x1234), ref 0x2c48)
+}
+
+func BenchmarkOnesCount() {
+	var x u64 = 0x123456789abcdef0
+	n := 0
+	for testing.Loop() {
+		n += bits.OnesCount64(x)
+		x += u64(n)
+	}
+}

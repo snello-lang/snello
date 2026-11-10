@@ -1,0 +1,232 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package rand_test
+
+import ("expect"; "math/rand"; "sync"; "testing")
+
+// The numbers a generator seeded with 1 and 2 gives are the ones Go's
+// rand.New(rand.NewPCG(1, 2)) gives, in the same order.
+func TestSequence() {
+	r := rand.New(1, 2)
+	expect.Equal(ref r.Int(), ref 4969059760275911952)
+	expect.Equal(ref r.Int(), ref 2147869220224756844)
+	expect.Equal(ref r.Int64(), ref 5246770554000605320)
+	got := []int{}
+	for i := 0; i < 8; i++ { got.Push(r.IntN(10) ?? -1) }
+	expect.EqualSlice(ref got, ref []int{7, 2, 0, 4, 4, 1, 1, 6})
+	expect.Equal(ref r.IntN(1000000007), ref Some(444788973))
+	expect.Equal(ref r.IntN(1099511627776), ref Some(513911575483)) // a power of two keeps the low bits
+	expect.Equal(ref r.Float64(), ref 0.7263900707339023)
+	expect.Equal(ref r.Float64(), ref 0.6974917552729882)
+	expect.EqualSlice(ref r.Perm(8), ref []int{6, 1, 4, 2, 0, 7, 5, 3})
+	xs := []string{"a".Clone(), "b".Clone(), "c".Clone(), "d".Clone(), "e".Clone(), "f".Clone()}
+	r.Shuffle(mut xs) // elements that are not Copy are exchanged, never copied
+	expect.EqualSlice(ref xs, ref []string{"e".Clone(), "f".Clone(), "d".Clone(), "c".Clone(), "a".Clone(), "b".Clone()})
+	expect.Equal(ref r.Int(), ref 5958326403968306401)
+}
+
+// A bound of 2^62 + 1 leaves a quarter of the products among those that
+// must be drawn again: twelve numbers take fifteen draws, three of them
+// redraws, and the numbers and the one after them are Go's.
+func TestRedraw() {
+	r := rand.New(7, 7)
+	got := []int{}
+	for i := 0; i < 12; i++ { got.Push(r.IntN(4611686018427387905) ?? -1) }
+	expect.EqualSlice(ref got, ref []int{
+		4427446930136057200, 89759044314498558, 3500390020061946739, 688931879325644791,
+		1087528441643187924, 1391914115312055587, 896635662835410158, 2599000595625689478,
+		2400664504216027150, 1553466786317107959, 897975817217785052, 2221123842056430110,
+	})
+	expect.Equal(ref r.Int(), ref 3708917314281127625)
+}
+
+func TestSameSeedSameNumbers() {
+	a := rand.New(42, 7)
+	b := rand.New(42, 7)
+	c := rand.New(42, 8)
+	same := 0
+	for i := 0; i < 100; i++ {
+		x := a.Int()
+		expect.Equal(ref x, ref b.Int())
+		if x == c.Int() { same += 1 }
+	}
+
+	expect.Equal(ref same, ref 0)
+}
+
+// A copy of a generator goes on from where the original was: the two
+// give the same numbers, and a generator lent by mut is one sequence.
+func TestCopyReplays() {
+	r := rand.New(9, 9)
+	r.Int()
+	saved := r
+	first := []int{r.Int(), r.IntN(100) ?? -1, r.Int()}
+	again := []int{saved.Int(), saved.IntN(100) ?? -1, saved.Int()}
+	expect.EqualSlice(ref first, ref again)
+	a := draw(mut r)
+	b := draw(mut r)
+	expect.NotEqual(ref a, ref b)
+}
+
+func draw(r mut rand.Rand) int { return r.Int() }
+
+// A bound that leaves nothing to draw from gives None and draws
+// nothing, and a count below zero is a count of none.
+func TestNothingToDraw() {
+	r := rand.New(1, 2)
+	expect.IsNone(r.IntN(0))
+	expect.IsNone(r.IntN(-1))
+	expect.IsNone(r.IntN(-9223372036854775808))
+	expect.Equal(ref r.Int(), ref 4969059760275911952) // the first number still: None drew none
+	expect.Equal(ref len(r.Perm(0)), ref 0)
+	expect.Equal(ref len(r.Perm(-5)), ref 0)
+	expect.EqualSlice(ref r.Perm(1), ref []int{0})
+	none := []int{}
+	r.Shuffle(mut none)
+	one := []int{9}
+	r.Shuffle(mut one)
+	expect.EqualSlice(ref one, ref []int{9})
+	expect.IsNone(rand.IntN(0))
+	expect.IsNone(rand.IntN(-3))
+	expect.Equal(ref len(rand.Perm(-1)), ref 0)
+}
+
+// A count whose numbers no address reaches is refused where the slice
+// is made, as any slice that large is: nothing is written past a block
+// too small for it.
+func TestPermTooLarge() {
+	expect.PanicsWith(func() { rand.Perm(2305843009213693953) }, "makeslice: cap out of range")
+	r := rand.New(1, 2)
+	expect.PanicsWith(func() { r.Perm(9223372036854775807) }, "makeslice: cap out of range")
+	expect.Equal(ref r.Int(), ref 4969059760275911952) // and no number was drawn for it
+}
+
+// isPerm reports whether p holds each of 0 to len(p)-1 once.
+func isPerm(p ref []int) bool {
+	seen := make([]bool, 0, len(p))
+	for i := 0; i < len(p); i++ { seen.Push(false) }
+	for _, v := range p {
+		if v < 0 || v >= len(p) || seen[v] { return false }
+		seen[v] = true
+	}
+
+	return true
+}
+
+func TestBounds() {
+	r := rand.New(3, 4)
+	bounds := []int{1, 2, 3, 7, 10, 255, 256, 1000003, 4294967296, 4294967297, 9223372036854775807}
+	for _, n := range bounds {
+		for i := 0; i < 200; i++ {
+			v := expect.IsSome(r.IntN(n))
+			expect.True(v >= 0 && v < n)
+			w := expect.IsSome(rand.IntN(n))
+			expect.True(w >= 0 && w < n)
+		}
+	}
+
+	for i := 0; i < 1000; i++ {
+		f := r.Float64()
+		expect.True(f >= 0.0 && f < 1.0)
+		g := rand.Float64()
+		expect.True(g >= 0.0 && g < 1.0)
+		expect.True(r.Int() >= 0 && r.Int64() >= 0 && rand.Int() >= 0 && rand.Int64() >= 0)
+	}
+
+	expect.True(isPerm(ref r.Perm(100)))
+	expect.True(isPerm(ref rand.Perm(100)))
+	xs := rand.Perm(50)
+	rand.Shuffle(mut xs)
+	expect.True(isPerm(ref xs))
+}
+
+// Every face of a die comes up about as often as another: 60,000 rolls
+// give each 10,000 give or take 91, and a count more than 500 away,
+// over five times that, is a biased draw.
+func TestEvenly() {
+	r := rand.New(5, 6)
+	seeded := []int{0, 0, 0, 0, 0, 0}
+	global := []int{0, 0, 0, 0, 0, 0}
+	for i := 0; i < 60000; i++ {
+		seeded[r.IntN(6) ?? 0] += 1
+		global[rand.IntN(6) ?? 0] += 1
+	}
+
+	for face := 0; face < 6; face++ {
+		expect.True(seeded[face] > 9500 && seeded[face] < 10500)
+		expect.True(global[face] > 9500 && global[face] < 10500)
+	}
+}
+
+// The package functions draw from a source keyed from the system: two
+// draws of 64 bits are the same once in 2^63 runs.
+func TestUnseeded() {
+	expect.NotEqual(ref rand.Int(), ref rand.Int())
+	a := rand.Perm(40)
+	b := rand.Perm(40)
+	differ := false
+	for i := 0; i < 40; i++ {
+		if a[i] != b[i] { differ = true }
+	}
+
+	expect.True(differ)
+}
+
+// Tasks draw from the package functions with no lock: each thread has a
+// generator of its own, and a task that moves to another thread draws
+// from that one. Eight tasks roll a die 20,000 times each and yield
+// between rolls; every roll is a face, and every face comes up about
+// as often as another.
+func TestFromTasks() {
+	faces := sync.NewArc(sync.NewMutex([]int{0, 0, 0, 0, 0, 0}))
+	wg := sync.NewWaitGroup()
+	for i := 0; i < 8; i++ {
+		f := faces.Clone()
+		w := wg.Clone()
+		wg.Add(1)
+		spawn func() {
+			mine := []int{0, 0, 0, 0, 0, 0}
+			for n := 0; n < 20000; n++ {
+				mine[rand.IntN(6) ?? 0] += 1
+				if n % 1000 == 0 {
+					g := f.Get().Lock() // a lock taken now and then, where the task may move
+					(*g.Get())[0] += 0
+				}
+			}
+
+			g := f.Get().Lock()
+			for face := 0; face < 6; face++ { (*g.Get())[face] += mine[face] }
+			w.Done()
+		}()
+	}
+
+	wg.Wait()
+	g := faces.Get().Lock()
+	total := 0
+	for face := 0; face < 6; face++ {
+		n := (*g.Get())[face]
+		total += n
+		expect.True(n > 25500 && n < 27800) // 26,667 each, give or take
+	}
+
+	expect.Equal(ref total, ref 160000)
+}
+
+func BenchmarkSeeded() {
+	r := rand.New(1, 2)
+	sum := 0
+	for testing.Loop() { sum += r.Int() & 1 }
+}
+
+func BenchmarkIntN() {
+	r := rand.New(1, 2)
+	sum := 0
+	for testing.Loop() { sum += r.IntN(1000003) ?? 0 }
+}
+
+func BenchmarkUnseeded() {
+	sum := 0
+	for testing.Loop() { sum += rand.Int() & 1 }
+}

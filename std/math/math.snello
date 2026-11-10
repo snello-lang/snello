@@ -3,25 +3,139 @@
 // license that can be found in the LICENSE file.
 
 // Package math has the constants and functions of floating-point
-// arithmetic, over f64: Pi, and Sqrt, Abs, Min and Max.
+// arithmetic, over f64, and the limits of the number types.
 //
 // Every function takes and returns an f64. A program working in
 // another float type converts at the call, f64(x), and a literal
 // written as an argument takes the type on its own, so math.Min(2, 7)
 // needs no 2.0.
+//
+// The functions without a body here are the system's math library's,
+// as Rust's and Swift's are. Sqrt, Floor, Ceil, Trunc, Round, Mod, Abs
+// and Copysign are exact, the same on every system; the others are
+// within a few units in the last place of the true result, so their
+// last digits may differ from one system to another. The special cases, an
+// infinity, a NaN or a zero as an argument, are those of IEEE 754 as
+// the C standard lists them, which Go's math follows too.
+//
+// A limit has the type it is the limit of: MaxInt8 is an i8, and
+// MaxUint64 a u64.
 package math
 
-// Pi is the ratio of a circle's circumference to its diameter, to the
-// precision an f64 holds.
+// Pi is the ratio of a circle's circumference to its diameter, E the
+// base of the natural logarithm and Ln2 the natural logarithm of 2,
+// each to the precision an f64 holds.
 const Pi f64 = 3.14159265358979323846264338327950288
+const E f64 = 2.71828182845904523536028747135266249775724709369995957496696763
+const Ln2 f64 = 0.693147180559945309417232121458176568075500134360255254120680009
 
-// Sqrt returns the square root of x. For a negative x the result is not
-// a number, as the system's square root has it. The runtime provides
-// it.
+// MaxFloat64 is the largest finite f64 and SmallestNonzeroFloat64 the
+// smallest above zero; MaxFloat32 and SmallestNonzeroFloat32 are those
+// of an f32.
+const MaxFloat64 f64 = 1.79769313486231570814527423731704356798070e+308
+const SmallestNonzeroFloat64 f64 = 4.9406564584124654417656879286822137236505980e-324
+const MaxFloat32 f32 = 3.40282346638528859811704183484516925440e+38
+const SmallestNonzeroFloat32 f32 = 1.401298464324817070923729583289916131280e-45
+
+// The largest and the smallest value of each integer type. An unsigned
+// type's smallest is zero.
+const MaxInt int = 9223372036854775807
+const MinInt int = -9223372036854775808
+const MaxInt8 i8 = 127
+const MinInt8 i8 = -128
+const MaxInt16 i16 = 32767
+const MinInt16 i16 = -32768
+const MaxInt32 i32 = 2147483647
+const MinInt32 i32 = -2147483648
+const MaxInt64 i64 = 9223372036854775807
+const MinInt64 i64 = -9223372036854775808
+const MaxUint uint = 18446744073709551615
+const MaxUint8 u8 = 255
+const MaxUint16 u16 = 65535
+const MaxUint32 u32 = 4294967295
+const MaxUint64 u64 = 18446744073709551615
+
+// Sqrt returns the square root of x, and Cbrt its cube root. Sqrt of a
+// negative x is NaN.
 func Sqrt(x f64) f64
+func Cbrt(x f64) f64
 
-// largest is the largest finite f64; past it is an infinity.
-const largest f64 = 1.79769313486231570814527423731704356798070e+308
+// Floor returns the greatest whole number not above x, Ceil the least
+// not below it, Trunc x without its fraction, and Round the nearest
+// whole number, a half going away from zero. An infinity, a NaN and a
+// zero are returned as they are.
+func Floor(x f64) f64
+func Ceil(x f64) f64
+func Trunc(x f64) f64
+func Round(x f64) f64
+
+// Mod returns the remainder of x divided by y, with the sign of x and
+// smaller than y in magnitude. It is NaN when x is an infinity or y is
+// zero.
+func Mod(x, y f64) f64
+
+// Pow returns x to the power y. Pow(x, 0) is 1 for every x, and a
+// negative x to a y that is not whole is NaN.
+func Pow(x, y f64) f64
+
+// Exp returns e to the power x.
+func Exp(x f64) f64
+
+// Log returns the natural logarithm of x, Log2 its logarithm to base 2
+// and Log10 to base 10. Each is -Inf for zero and NaN for a negative x.
+func Log(x f64) f64
+func Log2(x f64) f64
+func Log10(x f64) f64
+
+// Sin, Cos and Tan return the sine, cosine and tangent of x, an angle
+// in radians.
+func Sin(x f64) f64
+func Cos(x f64) f64
+func Tan(x f64) f64
+
+// Asin, Acos and Atan return the angle, in radians, whose sine, cosine
+// and tangent is x. Asin and Acos are NaN for an x outside -1 to 1.
+func Asin(x f64) f64
+func Acos(x f64) f64
+func Atan(x f64) f64
+
+// Atan2 returns the angle of the point (x, y) from the x axis, in
+// radians from -Pi to Pi: the arc tangent of y/x in the quadrant the
+// signs of the two say.
+func Atan2(y, x f64) f64
+
+// Sinh, Cosh and Tanh return the hyperbolic sine, cosine and tangent of
+// x.
+func Sinh(x f64) f64
+func Cosh(x f64) f64
+func Tanh(x f64) f64
+
+// Hypot returns the square root of p*p + q*q, without the overflow or
+// the underflow the squares would have on the way.
+func Hypot(p, q f64) f64
+
+// Inf returns the positive infinity when sign is zero or more, and the
+// negative one when it is below zero.
+func Inf(sign int) f64
+
+// NaN returns a value that is not a number.
+func NaN() f64
+
+// IsNaN reports whether x is not a number. A NaN equals nothing, itself
+// included, so x == math.NaN() is always false and this is the test.
+func IsNaN(x f64) bool
+
+// IsInf reports whether x is an infinity: the positive one when sign is
+// above zero, the negative one when it is below, and either when it is
+// zero.
+func IsInf(x f64, sign int) bool
+
+// Signbit reports whether x is negative or negative zero.
+func Signbit(x f64) bool
+
+// Copysign returns a value with the magnitude of x and the sign of
+// sign.
+func Copysign(x, sign f64) f64
 
 // Abs returns the absolute value of x: +0 for -0, +Inf for -Inf, and
 // NaN for NaN, as Go's math.Abs.
@@ -36,11 +150,11 @@ func Abs(x f64) f64 {
 // Min returns the smaller of x and y, as Go's math.Min: -Inf when
 // either is, else NaN when either is, and -0 as the smaller zero.
 func Min(x, y f64) f64 {
-	if x < -largest {
+	if x < -MaxFloat64 {
 		return x
 	}
 
-	if y < -largest {
+	if y < -MaxFloat64 {
 		return y
 	}
 
@@ -70,11 +184,11 @@ func Min(x, y f64) f64 {
 // Max returns the larger of x and y, as Go's math.Max: +Inf when
 // either is, else NaN when either is, and +0 as the larger zero.
 func Max(x, y f64) f64 {
-	if x > largest {
+	if x > MaxFloat64 {
 		return x
 	}
 
-	if y > largest {
+	if y > MaxFloat64 {
 		return y
 	}
 

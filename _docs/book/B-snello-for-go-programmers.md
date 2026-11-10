@@ -232,3 +232,20 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `[]byte(s)` and `string(b)` copy | The same |
 | `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr(), ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait; the streams are functions, since a package variable is never lent `mut` |
 | `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing |
+
+## Chapter 20: Numbers
+
+Unchanged: the names and the arguments of `math`'s functions and their special cases, `math/bits`' names with the width at the end, and the numbers a seeded generator gives, which are those of Go's `rand.New(rand.NewPCG(seed1, seed2))`.
+
+| In Go | In Snello |
+|---|---|
+| `math.MaxInt8` is an untyped constant | `math.MaxInt8` is an `i8`; each limit has the type it is the limit of |
+| `math` is written in Go, with assembly on some processors | the powers, logarithms and trigonometry are the system's math library's, within a few units in the last place |
+| `bits.Mul64`, `Add64`, `Div64`, `ReverseBytes` | not in the package; the six counting and moving operations are |
+| `rand.New(rand.NewPCG(1, 2))`, a `*Rand` over a `Source` | `rand.New(1, 2)`, a `Rand`; one generator, no `Source` to choose |
+| `r.IntN(0)` panics | `r.IntN(0)` is `None`; `IntN` returns `int?` |
+| `r.Perm(-1)` panics | `r.Perm(-1)` is an empty slice |
+| `r.Shuffle(len(xs), func(i, j int) { xs[i], xs[j] = xs[j], xs[i] })` | `r.Shuffle(mut xs)` |
+| A `*Rand` is shared by copying the pointer | A `Rand` is a value: lend it by `mut` to share one sequence; a copy replays from the same point, as a copied `PCG` does |
+| `rand.Uint64`, `Uint32`, `N`, `NormFloat64`, `ExpFloat64` | not in the package |
+

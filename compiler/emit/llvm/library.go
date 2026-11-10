@@ -22,6 +22,10 @@ import (
 
 // libraryCall writes the call x of the lowered function key.
 func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
+	if op, width, ok := lower.BitOp(key); ok {
+		return e.bitOp(x, op, width)
+	}
+
 	switch key {
 	case "fmt.Println": // the line built whole and written at once, so two tasks' lines do not interleave
 		e.print(text{e.sprintln(x.Args, x.Pos()), true})
@@ -311,4 +315,56 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	}
 
 	return truncated(e.textOf(v, t, a.Pos(), false))
+}
+
+// bitOp writes a function of math/bits on a value of the width as
+// LLVM's intrinsic, which is the processor's instruction: ctlz and
+// cttz, told that zero is no poison and gives the width, ctpop,
+// bitreverse, and fshl with the value as both halves, which rotates by
+// the count modulo the width, a negative count to the right. A count
+// widens to the int the function returns, and Len is the width less
+// the zeros above.
+func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
+	var wants []types.Type
+	for _, p := range e.typeOf(x.Fun).(*types.Signature).Params() {
+		wants = append(wants, p.Type())
+	}
+
+	args := e.operands(x.Args, wants)
+	ir := "i" + strconv.Itoa(width)
+	call := func(name, params, list string) value {
+		fn := "llvm." + name + "." + ir
+		e.declare(fn, "declare "+ir+" @"+fn+"("+params+")")
+		return e.op("call "+ir+" @"+fn+"("+list+")", ir)
+	}
+
+	count := func(v value) value {
+		if width == 64 {
+			return v
+		}
+
+		return e.op("zext "+v.typed()+" to i64", "i64")
+	}
+
+	a := args[0]
+	switch op {
+	case "LeadingZeros":
+		return count(call("ctlz", ir+", i1", a.typed()+", i1 false"))
+	case "TrailingZeros":
+		return count(call("cttz", ir+", i1", a.typed()+", i1 false"))
+	case "OnesCount":
+		return count(call("ctpop", ir, a.typed()))
+	case "Len":
+		zeros := count(call("ctlz", ir+", i1", a.typed()+", i1 false"))
+		return e.op("sub i64 "+strconv.Itoa(width)+", "+zeros.s, "i64")
+	case "Reverse":
+		return call("bitreverse", ir, a.typed())
+	}
+
+	k := args[1] // RotateLeft
+	if width != 64 {
+		k = e.op("trunc "+k.typed()+" to "+ir, ir)
+	}
+
+	return call("fshl", ir+", "+ir+", "+ir, a.typed()+", "+a.typed()+", "+k.typed())
 }
