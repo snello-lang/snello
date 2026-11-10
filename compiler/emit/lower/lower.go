@@ -113,7 +113,7 @@ func CheckPrefixes(libraries []Library) error {
 // and BitOp reads their names.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
-	"fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
+	"fmt.Fprint": true, "fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
 	"rc.alias": true, "rc.leak": true, "sync.alias": true, "sync.leak": true, "sync.inside": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
 }

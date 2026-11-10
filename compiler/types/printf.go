@@ -101,13 +101,22 @@ func (c *Checker) named(e ast.Expr) Object {
 
 // verbFits returns what is wrong with printing a value of type t with
 // the verb p, or "". Each verb prints the types Go's fmt prints with it
-// and Snello has: %v any value; %d an integer; %s a string, an error, or
-// a type printing as its Error or String method, which a type
-// parameter bounded by Error or fmt.Stringer and a trait value of a
-// trait refining one do too; %q a string, such a type, or an
-// integer as the rune it is; %f a float; %t a bool. A precision is a
-// float's digits with %f and %v, a string's characters with %s, %q and
-// %v, and an integer's least digits with %d.
+// and Snello has: %v any value; %d, %o and %b an integer, in base ten,
+// eight and two; %x and %X an integer in base sixteen, or the bytes of
+// a string or a []u8, two digits each, a type that prints as its Error
+// or String method counting as the string it returns, whatever it is
+// declared over, as in Go; %c an integer as the character
+// it is; %s a string, an error, or a type printing as its Error or
+// String method, which a type parameter bounded by Error or
+// fmt.Stringer and a trait value of a trait refining one do too; %q a
+// string, such a type, or an integer as the rune it is; %f, %e and %g
+// a float; %t a bool. A precision is a float's digits with %f, %e, %g
+// and %v, a string's characters with %s, %q and %v, and an integer's
+// least digits with %d, %x, %X, %o and %b. The zero flag goes with a
+// number, an integer or a float, printed as one: not with %v, %x or %X
+// of a number whose type prints as its String or Error method. Those
+// three verbs, %s and %q print through the methods, the verbs a string
+// takes; every other verb prints the value itself.
 func verbFits(p FormatPiece, t Type) string {
 	for {
 		switch u := t.(type) {
@@ -124,7 +133,7 @@ func verbFits(p FormatPiece, t Type) string {
 
 	b, _ := t.Underlying().(*Basic)
 	is := func(info BasicInfo) bool { return b != nil && b.info&info != 0 }
-	text := is(IsString) || IsStringer(t) || isErrorType(t)
+	text := is(IsString) || PrintsAsText(t)
 	verb := "%" + string(p.Verb)
 	what := ""
 	switch p.Verb {
@@ -140,9 +149,21 @@ func verbFits(p FormatPiece, t Type) string {
 		if p.Prec >= 0 && !is(IsString) && !is(IsFloat) {
 			return "%." + strconv.Itoa(p.Prec) + "v takes a precision on a string or a float, not on " + t.String()
 		}
-	case 'd':
+	case 'd', 'o', 'b':
 		if !is(IsInteger) {
 			what = "an integer"
+		}
+	case 'x', 'X':
+		if !is(IsInteger) && !text && !isByteSlice(t) {
+			what = "an integer, a string or a []u8"
+		} else if p.Prec >= 0 && (!is(IsInteger) || PrintsAsText(t)) {
+			return verb + " takes no precision on " + t.String()
+		}
+	case 'c':
+		if !is(IsInteger) {
+			what = "an integer"
+		} else if p.Prec >= 0 {
+			return "%c takes no precision"
 		}
 	case 's':
 		if !text {
@@ -154,7 +175,7 @@ func verbFits(p FormatPiece, t Type) string {
 		} else if p.Prec >= 0 && !text {
 			return "%q takes no precision on " + t.String()
 		}
-	case 'f':
+	case 'f', 'e', 'g':
 		if !is(IsFloat) {
 			what = "a float"
 		}
@@ -168,6 +189,14 @@ func verbFits(p FormatPiece, t Type) string {
 
 	if what != "" {
 		return verb + " takes " + what + ", not " + t.String()
+	}
+
+	if p.Zero && !is(IsInteger) && !is(IsFloat) {
+		return verb + " takes the 0 flag on a number, not on " + t.String()
+	}
+
+	if p.Zero && formatHasByte("vxX", p.Verb) && PrintsAsText(t) { // these verbs print its text, which is no number
+		return verb + " takes the 0 flag on a number, not on " + t.String() + ", which prints as its text"
 	}
 
 	return ""

@@ -250,6 +250,15 @@ func refinesStringer(t *Trait) bool {
 	return false
 }
 
+// PrintsAsText reports whether fmt prints a value of type t through a
+// method of its own, String or Error, rather than by what it holds:
+// the verbs that print text, %v, %s, %q, %x and %X, print what the
+// method returns, as Go's fmt does for the verbs a string takes, and
+// every other verb prints the value itself.
+func PrintsAsText(t Type) bool {
+	return IsStringer(t) || isErrorType(t)
+}
+
 // isErrorType reports whether a value of type t prints as its message:
 // the predeclared error, a declared type implementing Error, a type
 // parameter bounded by it, or a trait value of a trait refining it.

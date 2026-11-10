@@ -2,44 +2,57 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package strconv reads numbers from text and writes them back.
+// Package strconv reads numbers, bools and quoted strings from text and
+// writes them back.
 //
-// Reading can fail, so Atoi and ParseFloat return a Result whose error
-// is an Error saying what was tried on which text and why it failed;
-// a program passes it up with ? or handles it with a match. Writing
-// cannot fail: Itoa and FormatFloat return the text.
+// Reading can fail, so Atoi, ParseInt, ParseUint, ParseFloat,
+// ParseFloat32, ParseBool and Unquote return a Result whose error is an
+// Error saying what was tried on which text and why it failed; a
+// program passes it up with ? or handles it with a match. Writing
+// cannot fail: Itoa, FormatFloat, FormatFloat32, FormatBool and Quote
+// return the text. FormatInt and FormatUint write in a base the caller
+// names, and return None for a base that is none, below 2 or above 36.
+// No function of the package panics on a text or a base it is given.
 package strconv
 
 import "fmt"
 
 // An Error says which function could not read which text, and why: the
-// text was not a number of that kind, or the number does not fit the
-// type. It prints as "strconv.Atoi: parsing "4x": invalid syntax".
+// text was not of the kind asked for, the number does not fit the
+// type, or the base is none. It prints as
+// "strconv.Atoi: parsing "4x": invalid syntax".
 struct Error impl Error, Clone {
-	// Func names the function that failed: Atoi or ParseFloat.
+	// Func names the function that failed: Atoi, ParseInt, ParseUint,
+	// ParseFloat, ParseFloat32, ParseBool or Unquote.
 	Func string
 
 	// Text is the text the function was given, copied, so the Error
 	// may outlive it.
 	Text string
 
-	// Msg says why: "invalid syntax" for text that is not a number,
-	// "value out of range" for a number the type does not hold.
+	// Msg says why: "invalid syntax" for text that is not of the kind,
+	// "value out of range" for a number the type does not hold, and
+	// "invalid base 37" for a base below 2 or above 36.
 	Msg string
 }
 
 // A Kind says why a text did not read, as Go's strconv.ErrSyntax and
-// ErrRange do: a program that must tell the two apart asks Kind rather
+// ErrRange do: a program that must tell them apart asks Kind rather
 // than reading the message.
 enum Kind impl Copy, Clone, Eq {
-	// Syntax: the text is not a number of the kind asked for.
+	// Syntax: the text is not of the kind asked for.
 	Syntax
 
 	// Range: the number does not fit the type.
 	Range
+
+	// Base: the base is none, below 2 or above 36 and not 0.
+	Base
 }
 
-const minInt int = -9223372036854775808
+const maxUint64 u64 = 18446744073709551615
+const invalidSyntax string = "invalid syntax"
+const outOfRange string = "value out of range"
 
 // Error returns the message, worded as Go's strconv words it: the
 // function, the text in quotes, and the reason.
@@ -48,60 +61,347 @@ func (e ref Error) Error() string {
 }
 
 // Kind returns why the text did not read: Range for a number that does
-// not fit, Syntax for anything else.
+// not fit, Base for a base that is none, Syntax for anything else.
 func (e ref Error) Kind() Kind {
-	if e.Msg == "value out of range" {
+	if e.Msg == outOfRange {
 		return Range
+	}
+
+	if e.Msg.HasPrefix("invalid base ") {
+		return Base
 	}
 
 	return Syntax
 }
 
+// failed is the Error of the function fn on the text s for the reason
+// msg.
+func failed(fn string, s ref string, msg string) Error {
+	return Error{Func: fn, Text: s.Clone(), Msg: msg}
+}
+
 // Atoi reads a decimal integer: an optional sign and then digits, with
 // nothing before or after, from -9223372036854775808 to
 // 9223372036854775807. Text that is not that is an Error saying
-// invalid syntax; a number that does not fit an int, value out of
-// range.
+// invalid syntax, however large the digits it starts with; a number
+// that does not fit an int, value out of range.
 func Atoi(s ref string) Result<int, Error> {
-	i := 0
-	neg := false
-	if s.Len() > 0 && (s[0] == '+' || s[0] == '-') {
-		neg = s[0] == '-'
-		i = 1
-	}
-
-	if i == s.Len() {
-		return Err(Error{Func: "Atoi", Text: s.Clone(), Msg: "invalid syntax"})
-	}
-
-	// The number is accumulated below zero, so that the most negative
-	// int, whose magnitude no int holds, is reached without wrapping.
-	n := 0
-	for i < s.Len() {
-		c := s[i]
-		if c < '0' || c > '9' {
-			return Err(Error{Func: "Atoi", Text: s.Clone(), Msg: "invalid syntax"})
+	// Eighteen digits are below the largest int whatever they are, so
+	// a text this short is only checked for being digits, as Go's Atoi
+	// reads one.
+	if s.Len() > 0 && s.Len() < 19 {
+		i := 0
+		neg := s[0] == '-'
+		if neg || s[0] == '+' {
+			i = 1
 		}
 
-		d := int(c - '0')
-		if n < (minInt+d)/10 || (!neg && n*10-d == minInt) {
-			return Err(Error{Func: "Atoi", Text: s.Clone(), Msg: "value out of range"})
+		if i == s.Len() {
+			return Err(failed("Atoi", s, invalidSyntax))
 		}
 
-		n = n*10 - d
-		i++
-	}
+		n := 0
+		for i < s.Len() {
+			d := s[i] - '0' // a byte below '0' wraps to one above 9
+			if d > 9 {
+				return Err(failed("Atoi", s, invalidSyntax))
+			}
 
-	if neg {
+			n = n*10 + int(d)
+			i++
+		}
+
+		if neg {
+			n = -n
+		}
+
 		return Ok(n)
 	}
 
-	return Ok(-n)
+	return parseInt("Atoi", s, 10)
 }
 
 // Itoa writes n in decimal, with a minus sign when it is negative.
 func Itoa(n int) string {
 	return fmt.Sprint(n)
+}
+
+// ParseInt reads an integer written in the base given, from 2 to 36:
+// an optional sign and then digits, the letters a to z in either case
+// standing for ten to thirty-five, with nothing before or after. A
+// base of 0 reads the base from the text, as Go's strconv.ParseInt
+// does: 0x for sixteen, 0o or a leading 0 for eight, 0b for two, and
+// ten without one; and only then may an underscore stand between two
+// digits or after the prefix, 1_000 and 0x_ff. Text that is not that
+// is an Error saying invalid syntax, however large the digits it
+// starts with; a number that does not fit an int, value out of range;
+// and a base that is none, invalid base.
+func ParseInt(s ref string, base int) Result<int, Error> {
+	return parseInt("ParseInt", s, base)
+}
+
+// parseInt is ParseInt for the function named fn, which its Error
+// names.
+func parseInt(fn string, s ref string, base int) Result<int, Error> {
+	if s.Len() == 0 {
+		return Err(failed(fn, s, invalidSyntax))
+	}
+
+	neg := s[0] == '-'
+	from := 0
+	if neg || s[0] == '+' {
+		from = 1
+	}
+
+	un := u64(0)
+	code := parseUint(s, from, base, mut un)
+	if code == badSyntax || code == badBase {
+		return Err(failed(fn, s, reason(code, base)))
+	}
+
+	// The most negative int is one further from zero than the largest.
+	limit := u64(1) << 63
+	if code == badRange || (!neg && un >= limit) || (neg && un > limit) {
+		return Err(failed(fn, s, outOfRange))
+	}
+
+	n := int(un)
+	if neg {
+		n = -n
+	}
+
+	return Ok(n)
+}
+
+// ParseUint is ParseInt for a uint: the same text without a sign, from
+// 0 to 18446744073709551615.
+func ParseUint(s ref string, base int) Result<uint, Error> {
+	un := u64(0)
+	code := parseUint(s, 0, base, mut un)
+	if code != 0 {
+		return Err(failed("ParseUint", s, reason(code, base)))
+	}
+
+	return Ok(uint(un))
+}
+
+// Why parseUint did not read a number.
+const badSyntax int = 1
+const badRange int = 2
+const badBase int = 3
+
+// reason is the message of a code parseUint returned.
+func reason(code int, base int) string {
+	if code == badRange {
+		return outOfRange
+	}
+
+	if code == badBase {
+		return fmt.Sprintf("invalid base %d", base)
+	}
+
+	return invalidSyntax
+}
+
+// parseUint reads the digits of s from the index given into out, by
+// Go's strconv.ParseUint, and returns 0 or why it could not. A number
+// past the largest u64 is read to its end all the same, so that text
+// which is no number is badSyntax however large its first digits are,
+// where Go's reports the range as soon as they pass it.
+func parseUint(s ref string, from int, base int, out mut u64) int {
+	if from >= s.Len() {
+		return badSyntax
+	}
+
+	i := from
+	b := u64(base)
+	if base == 0 {
+		b = 10
+		if s[i] == '0' {
+			b = 8
+			i++
+			if s.Len()-from >= 3 {
+				c := s[i] | 0x20
+				if c == 'b' {
+					b = 2
+					i++
+				} else if c == 'o' {
+					i++
+				} else if c == 'x' {
+					b = 16
+					i++
+				}
+			}
+		}
+	} else if base < 2 || base > 36 {
+		return badBase
+	}
+
+	// At cutoff and above, one more digit does not fit.
+	cutoff := maxUint64/b + 1
+	underscores := false
+	over := false
+	n := u64(0)
+	for i < s.Len() {
+		c := s[i]
+		i++
+		d := u64(0)
+		if c == '_' && base == 0 {
+			underscores = true
+			continue
+		} else if c >= '0' && c <= '9' {
+			d = u64(c - '0')
+		} else if (c|0x20) >= 'a' && (c|0x20) <= 'z' {
+			d = u64((c|0x20)-'a') + 10
+		} else {
+			return badSyntax
+		}
+
+		if d >= b {
+			return badSyntax
+		}
+
+		if over || n >= cutoff {
+			over = true
+			continue
+		}
+
+		n *= b
+		over = n+d < n
+		n += d
+	}
+
+	if underscores && !underscoreOK(s) {
+		return badSyntax
+	}
+
+	if over {
+		return badRange
+	}
+
+	*out = n
+	return 0
+}
+
+// underscoreOK reports whether the underscores of s stand where Go's
+// syntax lets them: each between two digits, a base prefix counting as
+// a digit.
+func underscoreOK(s ref string) bool {
+	i := 0
+	if s.Len() >= 1 && (s[0] == '-' || s[0] == '+') {
+		i = 1
+	}
+
+	// What came last: a digit, an underscore, or anything else, the
+	// start included.
+	digit := false
+	underscore := false
+	hex := false
+	if s.Len()-i >= 2 && s[i] == '0' {
+		c := s[i+1] | 0x20
+		if c == 'b' || c == 'o' || c == 'x' {
+			i += 2
+			digit = true
+			hex = c == 'x'
+		}
+	}
+
+	for i < s.Len() {
+		c := s[i]
+		i++
+		if (c >= '0' && c <= '9') || (hex && (c|0x20) >= 'a' && (c|0x20) <= 'f') {
+			digit = true
+			underscore = false
+		} else if c == '_' {
+			if !digit {
+				return false
+			}
+
+			digit = false
+			underscore = true
+		} else {
+			if underscore {
+				return false
+			}
+
+			digit = false
+		}
+	}
+
+	return !underscore
+}
+
+// FormatInt writes n in the base given, from 2 to 36, with a minus
+// sign when it is negative and the letters a to z for the digits from
+// ten up: FormatInt(-255, 16) is "-ff". It returns None for a base
+// that is none.
+func FormatInt(n int, base int) string? {
+	if base < 2 || base > 36 {
+		return None
+	}
+
+	if n < 0 {
+		return Some(formatBits(0-u64(n), base, true))
+	}
+
+	return Some(formatBits(u64(n), base, false))
+}
+
+// FormatUint is FormatInt for a uint.
+func FormatUint(n uint, base int) string? {
+	if base < 2 || base > 36 {
+		return None
+	}
+
+	return Some(formatBits(u64(n), base, false))
+}
+
+// ParseBool reads a bool as Go's strconv.ParseBool does: 1, t, T,
+// true, TRUE and True are true; 0, f, F, false, FALSE and False are
+// false; any other text is an Error saying invalid syntax.
+func ParseBool(s ref string) Result<bool, Error> {
+	if s == "1" || s == "t" || s == "T" || s == "true" || s == "TRUE" || s == "True" {
+		return Ok(true)
+	}
+
+	if s == "0" || s == "f" || s == "F" || s == "false" || s == "FALSE" || s == "False" {
+		return Ok(false)
+	}
+
+	return Err(failed("ParseBool", s, invalidSyntax))
+}
+
+// FormatBool writes b as true or false.
+func FormatBool(b bool) string {
+	if b {
+		return "true"
+	}
+
+	return "false"
+}
+
+// Quote writes s as a string literal in double quotes, as fmt's %q
+// does and Go's strconv.Quote: a quote and a backslash escaped, a
+// character that does not print as its escape, \n, \x00 or \u00a0, and
+// a byte that starts no character as \xNN. Unquote reads it back.
+func Quote(s ref string) string {
+	return fmt.Sprintf("%q", s)
+}
+
+// Unquote reads a literal and returns the text it stands for, as Go's
+// strconv.Unquote does: a string in double quotes with Go's escapes,
+// "a\tb"; a string in back quotes, taken as it is but for its carriage
+// returns; or one character in single quotes, 'x', returned as a
+// string. The whole text is the literal, its quotes included. Text
+// that is not one is an Error saying invalid syntax.
+func Unquote(s ref string) Result<string, Error> {
+	ok := false
+	text := unquote(s, mut ok)
+	if ok {
+		return Ok(text)
+	}
+
+	return Err(failed("Unquote", s, invalidSyntax))
 }
 
 // ParseFloat reads a floating-point number as Go's strconv.ParseFloat
@@ -110,9 +410,11 @@ func Itoa(n int) string {
 // exponent Go asks of it, 0x1p-2; also inf and infinity in any case,
 // with a sign or not, and nan in any case without one. An underscore
 // may stand between two digits, 1_000.5. Nothing may come before or
-// after the number, not even a space. Text that is not that is an Error
-// saying invalid syntax; a number too large for an f64, value out of
-// range, while one too small rounds to zero, as a literal does.
+// after the number, not even a space. The result is the f64 nearest
+// the number written, however many digits it has. Text that is not a
+// number is an Error saying invalid syntax; a number too large for an
+// f64, value out of range, while one too small rounds to zero, as a
+// literal does.
 func ParseFloat(s ref string) Result<f64, Error> {
 	v := 0.0
 	code := parseFloat(s, mut v)
@@ -120,18 +422,67 @@ func ParseFloat(s ref string) Result<f64, Error> {
 		return Ok(v)
 	}
 
-	msg := if code == 1 { "invalid syntax" } else { "value out of range" }
-	return Err(Error{Func: "ParseFloat", Text: s.Clone(), Msg: msg})
+	return Err(failed("ParseFloat", s, reason(code, 0)))
 }
 
-// FormatFloat writes f as the shortest text that reads back as the
-// same number, as fmt prints a float and as Go's FormatFloat(f, 'g',
-// -1, 64) writes it: 15 for 15.0, 2.5, 0.1, an exponent from a million
-// up and below 0.0001, 1e+06 and 1e-05, and +Inf, -Inf and NaN.
-func FormatFloat(f f64) string {
-	return fmt.Sprint(f)
+// ParseFloat32 is ParseFloat for an f32: the f32 nearest the number
+// written, which converting ParseFloat's f64 does not always give,
+// since that rounds twice.
+func ParseFloat32(s ref string) Result<f32, Error> {
+	v := f32(0.0)
+	code := parseFloat32(s, mut v)
+	if code == 0 {
+		return Ok(v)
+	}
+
+	return Err(failed("ParseFloat32", s, reason(code, 0)))
 }
 
-// parseFloat reads s into out and returns 0, or 1 when s is not a
-// number and 2 when it does not fit. The runtime provides it.
+// FormatFloat writes f with prec digits after the point, rounded to
+// them, as fmt's %.2f does: FormatFloat(2.5, 2) is "2.50" and
+// FormatFloat(1e21, 0) is "1000000000000000000000". A negative prec
+// asks for the shortest text that reads back as the same number, as
+// fmt prints a float and as Go's FormatFloat(f, 'g', -1, 64) writes
+// it: 15 for 15.0, 2.5, 0.1, an exponent from a million up, 1e+06, and
+// below 0.0001, 1e-05. An infinity is +Inf or -Inf and a NaN is NaN,
+// whatever prec is. Every digit written is exact, however many are
+// asked for: an f64 is a whole number times a power of two no smaller
+// than 2^-1074, so it has no digit that is not zero past the 1074th
+// after its point, and FormatFloat(5e-324, 1074) is the smallest f64
+// written out in full. The text is as long as prec asks, as Go's is.
+func FormatFloat(f f64, prec int) string {
+	if prec < 0 {
+		return fmt.Sprint(f)
+	}
+
+	return formatFixed(f, prec)
+}
+
+// FormatFloat32 is FormatFloat for an f32: with a negative prec, the
+// shortest text that reads back as the same f32, so that f32(0.1) is
+// "0.1".
+func FormatFloat32(f f32, prec int) string {
+	if prec < 0 {
+		return fmt.Sprint(f)
+	}
+
+	return formatFixed(f64(f), prec)
+}
+
+// parseFloat reads s into out and returns 0, or badSyntax when s is
+// not a number and badRange when it does not fit. The runtime provides
+// it, and parseFloat32, which reads an f32.
 func parseFloat(s ref string, out mut f64) int
+func parseFloat32(s ref string, out mut f32) int
+
+// unquote returns the text the literal s stands for and sets ok, or
+// clears it when s is no literal. The runtime provides it.
+func unquote(s ref string, ok mut bool) string
+
+// formatBits writes u in a base from 2 to 36, after a minus sign when
+// neg says so. The runtime provides it.
+func formatBits(u u64, base int, neg bool) string
+
+// formatFixed writes f with prec digits after the point, prec not
+// negative. The runtime provides it.
+func formatFixed(f f64, prec int) string

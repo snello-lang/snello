@@ -37,6 +37,9 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 	case "fmt.Printf":
 		e.print(text{e.sprintf(x.Args[0], x.Args[1:]), true})
 		return unit
+	case "fmt.Fprint":
+		e.fprint(x, e.sprint(x.Args[1:], x.Pos()))
+		return unit
 	case "fmt.Fprintln":
 		e.fprint(x, e.sprintln(x.Args[1:], x.Pos()))
 		return unit
@@ -222,10 +225,11 @@ func (e *Emitter) fprint(x *ast.CallExpr, s value) {
 	e.dropOf(tmp, types.Typ[types.String], x.Pos())
 }
 
-// sprintf reads the format at compile time and writes the
-// concatenation it stands for. Verbs: %d, %s, %v, %q, %%, and %f with
-// a precision, %.2f, for a float; a width pads with spaces on the left,
-// %6d, or on the right after a minus, %-6s.
+// sprintf reads the format at compile time, with the grammar the
+// checker checked it with, and writes the concatenation it stands for;
+// verb writes each argument's text, and a width pads it with spaces on
+// the left, %6d, on the right after a minus, %-6s, or with zeros after
+// a number's sign, %06d.
 func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) value {
 	format, ok := types.FormatText(e.info, f)
 	pieces, err := types.ParseFormat(format)
@@ -244,8 +248,13 @@ func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) value {
 
 		part := e.verb(p, args[0], parts[0])
 		args, parts = args[1:], parts[1:]
-		if p.Width >= 0 {
-			part = text{e.rt("sn_pad", "%sn_string", part.v, value{"i64", strconv.Itoa(p.Width)}, value{"i1", strconv.FormatBool(p.Minus)}, value{"i1", strconv.FormatBool(part.owned)}), true}
+		width, owned := value{"i64", strconv.Itoa(p.Width)}, value{"i1", strconv.FormatBool(part.owned)}
+		switch {
+		case p.Width < 0:
+		case p.ZeroPads():
+			part = text{e.rt("sn_pad_zero", "%sn_string", part.v, width, owned), true}
+		default:
+			part = text{e.rt("sn_pad", "%sn_string", part.v, width, value{"i1", strconv.FormatBool(p.Minus)}, owned), true}
 		}
 
 		out = append(out, piece{text: part})
@@ -278,18 +287,60 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 		return text{e.rt("sn_truncate", "%sn_string", s.v, prec, value{"i1", strconv.FormatBool(s.owned)}), s.owned}
 	}
 
+	// The digits of an integer in a base, never a String method's text,
+	// as Go's %d prints the number, at least as many as the precision.
+	integer := func(digits value) text {
+		if p.Prec >= 0 {
+			digits = e.rt("sn_int_digits", "%sn_string", digits, prec)
+		}
+
+		return text{digits, true}
+	}
+
+	upper := value{"i1", strconv.FormatBool(p.Verb == 'X')}
+	inBase := func(base int) text {
+		to, signed := "sn_int_base", true
+		if isUnsigned(vt) {
+			to, signed = "sn_uint_base", false
+		}
+
+		return integer(e.rt(to, "%sn_string", e.widen(e.derefTo(v, t, vt), signed), value{"i64", strconv.Itoa(base)}, upper))
+	}
+
+	places := max(p.Prec, 0)
+	if p.Prec < 0 {
+		places = 6 // as Go prints %f and %e
+	}
+
 	switch {
 	case p.Verb == 'v' && p.Plus: // an error's chain
 		return text{e.op("call %sn_string @"+e.chainer(vt, a.Pos())+"(ptr "+e.addressOf(v, t)+")", "%sn_string"), true}
 	case p.Verb == 'f':
-		digits := max(p.Prec, 0)
-		if p.Prec < 0 {
-			digits = 6 // as Go prints %f
+		return text{e.rt("sn_f64_fixed", "%sn_string", float(), value{"i64", strconv.Itoa(places)}), true}
+	case p.Verb == 'e':
+		return text{e.rt("sn_f64_e", "%sn_string", float(), value{"i64", strconv.Itoa(places)}), true}
+	case (p.Verb == 'v' || p.Verb == 'g') && p.Prec >= 0 && isFloat(vt):
+		return text{e.rt("sn_f64_g", "%sn_string", float(), prec), true}
+	case (p.Verb == 'x' || p.Verb == 'X') && isInteger(vt) && !types.PrintsAsText(vt):
+		return inBase(16)
+	case (p.Verb == 'x' || p.Verb == 'X') && isByteSlice(vt) && !types.PrintsAsText(vt): // the bytes, lent
+		return text{e.rt("sn_hex_bytes", "%sn_string", e.derefTo(v, t, vt), upper), true}
+	case p.Verb == 'g': // the shortest text of the float itself, of its own width, never a String method's
+		f := e.derefTo(v, t, vt)
+		if f.typ == "float" {
+			return text{e.rt("sn_f32_to_string", "%sn_string", f), true}
 		}
 
-		return text{e.rt("sn_f64_fixed", "%sn_string", float(), value{"i32", strconv.Itoa(digits)}), true}
-	case p.Verb == 'v' && p.Prec >= 0 && isFloat(vt):
-		return text{e.rt("sn_f64_g", "%sn_string", float(), prec), true}
+		return text{e.rt("sn_f64_to_string", "%sn_string", f), true}
+	case p.Verb == 'x' || p.Verb == 'X': // the bytes of a string, or of what a type's String or Error returns, as Go's %x prints one
+		s := e.textOf(v, t, a.Pos(), false)
+		return text{e.rt("sn_hex", "%sn_string", s.v, upper, value{"i1", strconv.FormatBool(s.owned)}), true}
+	case p.Verb == 'o':
+		return inBase(8)
+	case p.Verb == 'b':
+		return inBase(2)
+	case p.Verb == 'c':
+		return text{e.rt("sn_char", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q' && isInteger(vt):
 		return text{e.rt("sn_quote_rune", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q':
@@ -299,19 +350,13 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 		}
 
 		return text{e.rt("sn_quote", "%sn_string", s.v), true}
-	case p.Verb == 'd': // the number, never a String method's text, as Go's %d prints it
+	case p.Verb == 'd':
 		toString, signed := "sn_int_to_string", true
 		if isUnsigned(vt) {
 			toString, signed = "sn_uint_to_string", false
 		}
 
-		digits := e.rt(toString, "%sn_string", e.widen(e.derefTo(v, t, vt), signed))
-
-		if p.Prec >= 0 {
-			digits = e.rt("sn_int_digits", "%sn_string", digits, prec)
-		}
-
-		return text{digits, true}
+		return integer(e.rt(toString, "%sn_string", e.widen(e.derefTo(v, t, vt), signed)))
 	}
 
 	return truncated(e.textOf(v, t, a.Pos(), false))

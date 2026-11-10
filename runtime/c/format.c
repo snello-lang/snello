@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Numbers as text: integers by two digits a step, floats in Go's
-// shortest form by Ryū and to a precision by Ryū's fixed form, laid out
-// as %e, %f and %g lay them out, and the width and precision fmt pads
-// and cuts to.
+// Numbers as text: integers by two digits a step in base ten and a
+// digit a step in any other, floats in Go's shortest form by Ryū and
+// to a precision by Ryū's fixed form, or from every digit of the float
+// past seventeen, laid out as %e, %f and %g lay them out, bytes in
+// hexadecimal, and the width and precision fmt pads and cuts to, with
+// spaces or with zeros. No float is written by the C library, whose
+// printf writes the point the program's locale names.
 
 #include "internal.h"
 
 #include <float.h>
 #include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 sn_string sn_int_to_string(int64_t v) {
@@ -21,6 +22,111 @@ sn_string sn_int_to_string(int64_t v) {
 
 sn_string sn_uint_to_string(uint64_t v) {
     return sn_format_int(v, false);
+}
+
+// in_base writes u in a base from 2 to 36, after a minus sign when neg
+// says so, as Go's strconv writes one: a power of two by shifts, any
+// other base by dividing, and ten by two digits a step. The digits past
+// nine are letters, capitals when upper says so.
+static sn_string in_base(uint64_t u, int64_t base, bool neg, bool upper) {
+    if (base == 10) {
+        return sn_format_int(u, neg);
+    }
+
+    const char *digits = upper ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz";
+    char buf[65]; // 64 binary digits and a sign
+    char *end = buf + sizeof buf, *p = end;
+    uint64_t b = (uint64_t)base;
+    if ((b & (b - 1)) == 0) {
+        int shift = (int)sn_bits_TrailingZeros64(b);
+        for (; u >= b; u >>= shift) {
+            *--p = digits[u & (b - 1)];
+        }
+    } else {
+        while (u >= b) {
+            uint64_t q = u / b;
+            *--p = digits[u - q * b];
+            u = q;
+        }
+    }
+
+    *--p = digits[u];
+    if (neg) {
+        *--p = '-';
+    }
+
+    size_t n = (size_t)(end - p);
+    uint8_t *q = sn_alloc(n);
+    memcpy(q, p, n);
+    return SN_OWNED(q, (int64_t)n);
+}
+
+// sn_int_base and sn_uint_base print an integer as %x, %X, %o and %b
+// do, in base 16, 8 or 2: a negative number as a minus sign and its
+// magnitude, -ff, as Go prints one.
+sn_string sn_int_base(int64_t v, int64_t base, bool upper) {
+    return v < 0 ? in_base(0 - (uint64_t)v, base, true, upper) : in_base((uint64_t)v, base, false, upper);
+}
+
+sn_string sn_uint_base(uint64_t v, int64_t base, bool upper) {
+    return in_base(v, base, false, upper);
+}
+
+// sn_strconv_formatBits is strconv's FormatInt and FormatUint, which
+// have checked the base: u in it, in small letters, negated when neg
+// says so.
+sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg) {
+    return in_base(u, base, neg, false);
+}
+
+// sn_char prints r as %c does: the character it is, and U+FFFD for a
+// value that is no character, past U+10FFFF or a surrogate.
+sn_string sn_char(int64_t r) {
+    if (r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) {
+        r = 0xFFFD;
+    }
+
+    return sn_string_from_rune((int32_t)r);
+}
+
+// sn_hex prints the bytes of s as %x and %X print a string: two
+// hexadecimal digits a byte. s is dropped when the caller owned it.
+sn_string sn_hex(sn_string s, bool upper, bool owned) {
+    sn_check_string(s);
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    sn_string out = SN_STR("", 0);
+    if (s.len > 0) {
+        uint8_t *p = sn_alloc((size_t)s.len * 2);
+        for (int64_t i = 0; i < s.len; i++) {
+            p[2 * i] = (uint8_t)digits[s.ptr[i] >> 4];
+            p[2 * i + 1] = (uint8_t)digits[s.ptr[i] & 15];
+        }
+
+        out = SN_OWNED(p, s.len * 2);
+    }
+
+    if (owned) {
+        sn_string_free(s);
+    }
+
+    return out;
+}
+
+// sn_hex_bytes is sn_hex for a []u8, which it leaves to its owner.
+sn_string sn_hex_bytes(sn_slice b, bool upper) {
+    return sn_hex((sn_string){b.ptr, b.len, 0}, upper, false);
+}
+
+// The most digits a verb asks of a float, after its point or in all:
+// the largest precision a format takes, which the checker holds every
+// format to. The functions the verbs call hold their precision to it
+// as well, so that their memory rests on no check but their own.
+enum { MOST_DIGITS = 1000000 };
+
+// precision holds a precision to what is written: none below zero and
+// MOST_DIGITS at most.
+static int precision(int64_t prec) {
+    return prec < 0 ? 0 : prec > MOST_DIGITS ? MOST_DIGITS : (int)prec;
 }
 
 // Floats print as Go's strconv prints them. A decimal is the digits of
@@ -299,10 +405,31 @@ static void ryu_shortest(ryu_dec *d, uint64_t mant, int exp, bool f32) {
 
 static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec);
 
+// exact_digits fills a with every digit of v, positive and finite: its
+// mantissa times the power of two of its exponent, worked out in
+// decimal, as Go's strconv writes a float when a multiplication does
+// not give the digits asked for. Nothing here is the C library's,
+// whose printf writes the point the program's locale names.
+static void exact_digits(sn_decimal *a, double v) {
+    uint64_t bits;
+    memcpy(&bits, &v, 8);
+    int exp = (int)(bits >> 52) & 0x7FF;
+    uint64_t mant = bits & (((uint64_t)1 << 52) - 1);
+    if (exp == 0) {
+        exp++;
+    } else {
+        mant |= (uint64_t)1 << 52;
+    }
+
+    sn_decimal_assign(a, mant);
+    sn_decimal_shift(a, exp - 1023 - 52);
+}
+
 // decimal_of fills d with v's digits, v positive and finite: with prec
 // at zero the fewest that read back as v, as a float32 when f32 says v
 // is one, by Ryū; with prec above zero v rounded to prec significant
-// digits, by the C library's correctly rounded %e.
+// digits, by Ryū's fixed form up to seventeen and from every digit of
+// v past them.
 static void decimal_of(double v, int prec, bool f32, decimal *d) {
     if (prec == 0) {
         ryu_dec r;
@@ -360,23 +487,13 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
         return;
     }
 
-    size_t size = (size_t)(prec > 17 ? prec : 17) + 16;
-    char *buf = sn_alloc(size);
-    snprintf(buf, size, "%.*e", prec - 1, v);
-    d->nd = 0;
-    char *p = buf;
-    for (; *p != 'e'; p++) {
-        if (*p != '.') {
-            buf[d->nd++] = *p;
-        }
-    }
-
-    d->dp = atoi(p + 1) + 1;
-    while (d->nd > 1 && buf[d->nd - 1] == '0') {
-        d->nd--;
-    }
-
-    d->d = buf;
+    sn_decimal a;
+    exact_digits(&a, v);
+    sn_decimal_round(&a, prec);
+    d->d = sn_alloc((size_t)a.nd + 1);
+    memcpy(d->d, a.d, (size_t)a.nd);
+    d->nd = a.nd;
+    d->dp = (int)a.dp;
 }
 
 // The text being built: a block from sn_alloc and how much of it is
@@ -402,7 +519,13 @@ static void put_e(out_text *o, const decimal *d, int prec) {
     out_byte(o, 'e');
     out_byte(o, exp < 0 ? '-' : '+');
     exp = exp < 0 ? -exp : exp;
-    o->n += snprintf(o->p + o->n, 8, "%02d", exp);
+    if (exp >= 100) { // two digits at least, and a double's exponent has three at most
+        out_byte(o, (char)('0' + exp / 100));
+        exp %= 100;
+    }
+
+    out_byte(o, (char)('0' + exp / 10));
+    out_byte(o, (char)('0' + exp % 10));
 }
 
 // put_f writes d as %f does, with prec digits after the point.
@@ -508,7 +631,37 @@ sn_string sn_f32_to_string(float v) {
 // sn_f64_g prints v with prec significant digits, as Go's %.3v and
 // %.3g do on a float.
 sn_string sn_f64_g(double v, int64_t prec) {
-    return format_g(v, (int)prec, false);
+    return format_g(v, precision(prec), false);
+}
+
+// sn_f64_e prints v as Go's %e does, one digit before the point and
+// prec after it, rounded to them, then the exponent in two digits at
+// least: 1.234568e+03.
+sn_string sn_f64_e(double v, int64_t digits) {
+    sn_string s;
+    if (special(v, &s)) {
+        return s;
+    }
+
+    int prec = precision(digits);
+    out_text o = {sn_alloc((size_t)prec + 16), 0}; // a sign, a digit, the point, the e and its sign, three digits
+    if (signbit(v)) {
+        out_byte(&o, '-');
+        v = -v;
+    }
+
+    char zero = '0';
+    decimal d = {&zero, 1, 1}; // zero's digits: no power of ten scales it
+    if (v != 0) {
+        decimal_of(v, prec + 1, false, &d);
+    }
+
+    put_e(&o, &d, prec);
+    if (v != 0) {
+        sn_free(d.d);
+    }
+
+    return SN_OWNED(o.p, o.n);
 }
 
 sn_string sn_bool_to_string(bool v) {
@@ -644,8 +797,7 @@ static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec) {
 
 // fixed_digits writes v, not zero, with prec digits after the point as
 // %f does, and reports false when the digits needed are more than
-// seventeen or none, which the C library's correctly rounded printf
-// writes instead.
+// seventeen or none, which are written from every digit of v instead.
 static bool fixed_digits(double v, int prec, sn_string *out) {
     bool neg = signbit(v);
     double a = neg ? -v : v;
@@ -698,19 +850,74 @@ static bool fixed_digits(double v, int prec, sn_string *out) {
 // sn_f64_fixed prints v with prec digits after the point, as %.2f
 // does, however many that takes, and an infinity or NaN as Go spells
 // it.
-sn_string sn_f64_fixed(double v, int prec) {
+sn_string sn_f64_fixed(double v, int64_t digits) {
     sn_string s;
     if (special(v, &s)) {
         return s;
     }
 
-    if (v != 0 && prec >= 0 && prec <= 17 && fixed_digits(v, prec, &s)) {
+    int prec = precision(digits);
+    if (v != 0 && prec <= 17 && fixed_digits(v, prec, &s)) {
         return s;
     }
 
-    int n = snprintf(NULL, 0, "%.*f", prec, v);
-    char *p = sn_alloc((size_t)n + 1);
-    snprintf(p, (size_t)n + 1, "%.*f", prec, v);
+    bool neg = signbit(v);
+    sn_decimal a = {.nd = 0, .dp = 0}; // zero has no digits
+    if (v != 0) {
+        exact_digits(&a, neg ? -v : v);
+        sn_decimal_round(&a, a.dp + prec);
+    }
+
+    int64_t whole = a.dp > 0 ? a.dp : 1;
+    char *p = sn_alloc((size_t)(neg + whole + 1 + prec));
+    int64_t n = 0;
+    if (neg) {
+        p[n++] = '-';
+    }
+
+    for (int64_t i = 0; i < whole; i++) {
+        p[n++] = i < a.dp && i < a.nd ? (char)a.d[i] : '0';
+    }
+
+    if (prec > 0) {
+        p[n++] = '.';
+        for (int64_t i = 0; i < prec; i++) {
+            int64_t at = a.dp + i;
+            p[n++] = at >= 0 && at < a.nd ? (char)a.d[at] : '0';
+        }
+    }
+
+    return SN_OWNED(p, n);
+}
+
+// sn_strconv_formatFixed is strconv's FormatFloat with a precision:
+// prec digits after the point, prec not negative, however many that
+// is, as Go's writes them. A double is a whole number times a power of
+// two no smaller than 2^-1074, and 2^-k has exactly k digits after its
+// point, so no double has a digit that is not zero past the 1074th:
+// the digits are worked out to there, every one exact, and zeros make
+// up the rest without any arithmetic. A text longer than memory holds
+// is the failure of any allocation.
+sn_string sn_strconv_formatFixed(double v, int64_t prec) {
+    enum { LAST_DIGIT = 1074 };
+    if (prec <= LAST_DIGIT) {
+        return sn_f64_fixed(v, prec);
+    }
+
+    sn_string s = sn_f64_fixed(v, LAST_DIGIT);
+    if (s.ptr[s.len - 1] < '0' || s.ptr[s.len - 1] > '9') {
+        return s; // an infinity or NaN
+    }
+
+    if (prec - LAST_DIGIT > PTRDIFF_MAX - s.len) {
+        sn_panic(SN_STR("out of memory", 13));
+    }
+
+    int64_t n = s.len + (prec - LAST_DIGIT);
+    uint8_t *p = sn_alloc((size_t)n);
+    memcpy(p, s.ptr, (size_t)s.len);
+    memset(p + s.len, '0', (size_t)(prec - LAST_DIGIT));
+    sn_string_free(s);
     return SN_OWNED(p, n);
 }
 
@@ -784,6 +991,34 @@ sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned) {
     memset(p, ' ', (size_t)(s.len + fill));
     memcpy(p + (left ? 0 : fill), s.ptr, (size_t)s.len);
     width = s.len + fill;
+    if (owned) {
+        sn_string_free(s);
+    }
+
+    return SN_OWNED(p, width);
+}
+
+// sn_pad_zero widens the text of a number to width with zeros after
+// its sign, as the 0 flag does: 00042, -0042, 0003.142. An infinity or
+// NaN has no digits to follow them and is widened with spaces, as Go
+// widens one. s is dropped when the caller owned it, and the result is
+// owned, as sn_pad's is.
+sn_string sn_pad_zero(sn_string s, int64_t width, bool owned) {
+    sn_check_string(s);
+    int64_t sign = s.len > 0 && (s.ptr[0] == '-' || s.ptr[0] == '+') ? 1 : 0;
+    bool inf = s.len == 4 && memcmp(s.ptr + 1, "Inf", 3) == 0, nan = s.len == 3 && memcmp(s.ptr, "NaN", 3) == 0;
+    if (inf || nan) {
+        return sn_pad(s, width, false, owned);
+    }
+
+    if (s.len >= width) {
+        return owned ? s : sn_string_clone(s);
+    }
+
+    uint8_t *p = sn_alloc((size_t)width);
+    memcpy(p, s.ptr, (size_t)sign);
+    memset(p + sign, '0', (size_t)(width - s.len));
+    memcpy(p + sign + (width - s.len), s.ptr + sign, (size_t)(s.len - sign));
     if (owned) {
         sn_string_free(s);
     }

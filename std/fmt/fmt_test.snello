@@ -4,7 +4,7 @@
 
 package fmt_test
 
-import ("expect"; "fmt"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "testing")
 
 struct Point impl fmt.Stringer { x int; y int }
 
@@ -21,11 +21,81 @@ func TestSprintf() {
 	expect.Equal(ref fmt.Sprintf("%-4d|%4s|", 7, "ab"), "7   |  ab|")
 }
 
+func TestBases() {
+	expect.Equal(ref fmt.Sprintf("%x %X %o %b", 255, 255, 8, 5), "ff FF 10 101")
+	expect.Equal(ref fmt.Sprintf("%x %b %x", -255, i8(-128), u64(18446744073709551615)), "-ff -10000000 ffffffffffffffff")
+	expect.Equal(ref fmt.Sprintf("%.4x|%.0x|%6X|%-6o|", 255, 0, 255, 8), "00ff||    FF|10    |")
+}
+
+func TestHexBytes() {
+	expect.Equal(ref fmt.Sprintf("%x %X", "hi\xff", "hi"), "6869ff 6869")
+	expect.Equal(ref fmt.Sprintf("%x %X %x", []u8{0, 15, 255}, []u8{171}, ""), "000fff AB ")
+}
+
+func TestChar() {
+	expect.Equal(ref fmt.Sprintf("%c%c%c", 'A', 0xE9, 0x1F642), "Aé🙂")
+	expect.Equal(ref fmt.Sprintf("%c %c %c", -1, 0xD800, 0x110000), "\uFFFD \uFFFD \uFFFD")
+}
+
+func TestExponent() {
+	expect.Equal(ref fmt.Sprintf("%e %.2e %.0e", 1234.5678, 0.0, 5.0), "1.234568e+03 0.00e+00 5e+00")
+	expect.Equal(ref fmt.Sprintf("%e %.3e %e", 1e-310, 9.9996, 1e100), "1.000000e-310 1.000e+01 1.000000e+100")
+	expect.Equal(ref fmt.Sprintf("%g %g %g %.3g", 0.1, f32(0.1), 1e21, 1234.5678), "0.1 0.1 1e+21 1.23e+03")
+}
+
+func TestZeroFlag() {
+	expect.Equal(ref fmt.Sprintf("%05d %05d %02x %08b", 42, -42, 7, 5), "00042 -0042 07 00000101")
+	expect.Equal(ref fmt.Sprintf("%08.3f %08.3f %010.2e %06v %06v", 3.14159, -3.14159, 1234.5, 7, -2.5), "0003.142 -003.142 001.23e+03 000007 -002.5")
+	expect.Equal(ref fmt.Sprintf("%-05d|%06.3d|%03d", 42, 42, 123456), "42   |   042|123456") // the minus flag and a precision override it
+	zero := 0.0
+	expect.Equal(ref fmt.Sprintf("%06f|%06v", 1/zero, zero/zero), "  +Inf|   NaN")       // nothing to put zeros before
+}
+
+type Heat f64 impl fmt.Stringer
+
+func (h ref Heat) String() string { return "hot" }
+
+type Tag string impl fmt.Stringer
+
+func (t ref Tag) String() string { return "TAG" }
+
+type Level int impl fmt.Stringer
+
+func (l ref Level) String() string { return "low" }
+
+// The verbs a string takes, %v, %s, %q, %x and %X, print a value as its
+// String, whatever its type is declared over; every other verb prints
+// the value itself.
+func TestVerbsPrintTheValue() {
+	expect.Equal(ref fmt.Sprintf("%v %s %q %v", Heat(1.5), Tag("ab"), Tag("ab"), Level(7)), "hot TAG \"TAG\" low")
+	expect.Equal(ref fmt.Sprintf("%g %.3g %e %f %08g", Heat(1.5), Heat(1.5), Heat(1.5), Heat(1.5), Heat(1.5)), "1.5 1.5 1.500000e+00 1.500000 000001.5")
+	expect.Equal(ref fmt.Sprintf("%x %X %x", Tag("ab"), Tag("ab"), Level(255)), "544147 544147 6c6f77")
+	expect.Equal(ref fmt.Sprintf("%d %o %b %05d %c", Level(7), Level(8), Level(5), Level(7), Level(65)), "7 10 101 00007 A")
+}
+
+struct sink impl io.Writer { text []byte; writes int }
+
+func (s mut sink) Write(p ref []byte) Result<int, io.Error> {
+	for _, b := range p { s.text.Push(b) }
+	s.writes++
+	return Ok(len(p))
+}
+
+func TestFprint() {
+	s := sink{text: []byte{}, writes: 0}
+	fmt.Fprint(mut s, "a", 1, 2, "b", 2.5, true)
+	expect.Equal(ref string(s.text), "a1 2b2.5 true") // a space between two operands when neither is a string
+	expect.Equal(ref s.writes, ref 1)
+	fmt.Fprint(mut s)
+	expect.Equal(ref s.writes, ref 2)
+}
+
 func TestPrint() {
 	fmt.Println("printed by the fmt tests", 1)
 	fmt.Printf("%s %d\n", "and", 2)
 	fmt.Fprintln(mut os.Stdout(), "to", "stdout")
 	fmt.Fprintf(mut os.Stdout(), "%3d\n", 5)
+	fmt.Fprint(mut os.Stdout(), "and", 3, "\n")
 }
 
 func BenchmarkSprintf() {

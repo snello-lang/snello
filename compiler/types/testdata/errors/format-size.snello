@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a width and a precision are a million at most; fmt checks its
+// formats when the program is compiled, and a larger one is refused
+// rather than read as some smaller number.
+// Fix: a width or a precision the text is meant to have.
+
+package p
+
+import "fmt"
+
+func show(ratio f64, count int) {
+    fmt.Printf("%.4294967293f\n", ratio)    // ERROR "fmt.Printf: fmt takes a width and a precision of 1000000 at most"
+    fmt.Printf("%1000001d\n", count)        // ERROR "fmt.Printf: fmt takes a width and a precision of 1000000 at most"
+}

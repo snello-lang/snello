@@ -55,6 +55,13 @@ func TestExprErrors(t *testing.T) {
 		{"func f() byte { return 'é' }", nil},
 		{"func f() byte { return '世' }", []string{"'世' overflows byte"}},
 		{"func f() rune { return '世' }", nil},
+		// A leading zero makes a literal octal, and an 8 or a 9 in it is the wrong digit, not too large a number.
+		{"func f() int { return 08 }", []string{"invalid digit '8' in octal literal 08"}},
+		{"func f() int { return 09 }", []string{"invalid digit '9' in octal literal 09"}},
+		{"func f() u8 { return 0128 }", []string{"invalid digit '8' in octal literal 0128"}},
+		{"func f() int { return -019 }", []string{"invalid digit '9' in octal literal 019"}},
+		{"func f() int { return 0755 + 0o17 + 00 + 0 }", nil},
+		{"func f() u8 { return 0777 }", []string{"0777 overflows u8"}},
 		{"func f() f32 { return 16777217 }", nil},                // a float takes any integer
 		{"func f() f64 { x := -(1); return f64(x) - 128 }", nil}, // a literal in parentheses is its own number, and an int holds it
 		{"const Past i8 = 128", []string{"128 overflows i8"}},

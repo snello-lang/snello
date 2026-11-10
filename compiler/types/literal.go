@@ -5,7 +5,9 @@
 package types
 
 import (
+	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -18,7 +20,10 @@ import (
 // integer or a character that the integer type it takes cannot hold is
 // refused, as Go refuses a constant that overflows: arithmetic wraps, a
 // number written down does not, and one written past its type would be
-// another number in each backend.
+// another number in each backend. An integer that begins with a zero is
+// in base eight, and one with an 8 or a 9 in it is no number of that
+// base: it is refused for the digit, which is what is wrong with it,
+// and not for its size.
 func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 	switch lit.Kind {
 	case token.INT:
@@ -28,6 +33,11 @@ func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 		}
 
 		n, err := strconv.ParseUint(lit.Value, 0, 64) // base 0 reads 0x, 0b, 0o and _
+		if i := strings.IndexAny(lit.Value, "89"); errors.Is(err, strconv.ErrSyntax) && i >= 0 {
+			c.errorf(lit.Pos(), "invalid digit '"+lit.Value[i:i+1]+"' in octal literal "+lit.Value)
+			return t
+		}
+
 		c.holds(lit, n, err != nil, t)
 		return t
 	case token.FLOAT:

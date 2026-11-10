@@ -131,11 +131,12 @@ func TestBitOp(t *testing.T) {
 // math/bits too.
 func TestKey(t *testing.T) {
 	f, file, err := parser.ParseFile("t.snello", []byte(`package main
-import ("fmt"; "math"; "math/bits")
+import ("fmt"; "math"; "math/bits"; "os")
 func twice(n int) int { return n * 2 }
 func main() {
 	fmt.Println(1)
 	_ = fmt.Sprintf("%d", 1)
+	fmt.Fprint(mut os.Stdout(), 1)
 	_ = bits.Len8(1)
 	_ = bits.RotateLeft(1, 2)
 	_ = math.Floor(1)
@@ -156,6 +157,7 @@ func main() {
 	}{
 		{"fmt.Println", false},
 		{"fmt.Sprintf", false},
+		{"fmt.Fprint", false},
 		{"math/bits.Len8", true},
 		{"math/bits.RotateLeft", true},
 		{"", true},

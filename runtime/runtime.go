@@ -8,8 +8,8 @@
 // end of a program, panics, and what more than one file uses, which
 // internal.h declares; each part of the language and the library has a
 // file of its own: slice.c and sort.c, Rust's driftsort, for slices,
-// string.c for strings, format.c, quote.c and parse.c for numbers and
-// quotes as text, map.c for maps, bufio.c, os.c, print.c, math.c and
+// string.c for strings, format.c, quote.c, parse.c and decimal.c for
+// numbers and quotes as text, map.c for maps, bufio.c, os.c, print.c, math.c and
 // time.c for their packages, and chan.c and sync.c for channels and
 // locks. alloc.c is the allocator, unicode.c the tables of case, white
 // space and printable runes that mkunicode.go writes, pow10.c the
@@ -28,12 +28,12 @@ import (
 	"path/filepath"
 )
 
-//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/net.c c/debug.c c/testing.c
+//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/decimal.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/net.c c/debug.c c/testing.c
 var files embed.FS
 
 // sources are the runtime's files a build compiles.
 var sources = []string{
-	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "map.c", "bufio.c",
+	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "decimal.c", "map.c", "bufio.c",
 	"os.c", "print.c", "math.c", "rand.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "rune.c", "norm.c", "segment.c", "pow10.c",
 	"sched.c", "net.c", "debug.c", "testing.c",
 }

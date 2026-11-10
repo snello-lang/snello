@@ -14,20 +14,236 @@ func TestAtoi() {
 	expect.True(e.Kind() == e.Kind())
 }
 
+func TestRangeIsANumbers() {
+	// Digits past the largest integer and then a letter: no number, so the syntax and not the range.
+	for _, s := range []string{"9270000000000000000A", "99999999999999999999999x", "-99999999999999999999999 "} {
+		expect.True(expect.IsErr(strconv.Atoi(ref s)).Kind() == strconv.Syntax)
+		expect.True(expect.IsErr(strconv.ParseInt(ref s, 10)).Kind() == strconv.Syntax)
+		expect.True(expect.IsErr(strconv.ParseInt(ref s, 0)).Kind() == strconv.Syntax)
+		expect.True(expect.IsErr(strconv.ParseUint(ref s, 10)).Kind() == strconv.Syntax)
+	}
+
+	expect.True(expect.IsErr(strconv.ParseInt("1_00000000000000000000000_", 0)).Kind() == strconv.Syntax)
+	expect.True(expect.IsErr(strconv.ParseInt("1_00000000000000000000000", 0)).Kind() == strconv.Range)
+	expect.True(expect.IsErr(strconv.Atoi("99999999999999999999999")).Kind() == strconv.Range)
+	expect.Equal(ref expect.IsErr(strconv.Atoi("99999999999999999999999")).Func, "Atoi")
+}
+
+func TestAtoiEdges() {
+	expect.Equal(ref expect.IsOk(strconv.Atoi("+0")), ref 0)
+	expect.Equal(ref expect.IsOk(strconv.Atoi("-999999999999999999")), ref -999999999999999999) // eighteen digits
+	expect.Equal(ref expect.IsOk(strconv.Atoi("9223372036854775807")), ref 9223372036854775807)
+	expect.Equal(ref expect.IsOk(strconv.Atoi("-9223372036854775808")), ref -9223372036854775808)
+	expect.Equal(ref expect.IsOk(strconv.Atoi("0000000000000000000000042")), ref 42)
+	expect.True(expect.IsErr(strconv.Atoi("9223372036854775808")).Kind() == strconv.Range)
+	expect.True(expect.IsErr(strconv.Atoi("-9223372036854775809")).Kind() == strconv.Range)
+	for _, s := range []string{"", "+", "-", "4x", " 1", "1 ", "1_0", "/", ":", "--1", "0x10"} {
+		expect.True(expect.IsErr(strconv.Atoi(ref s)).Kind() == strconv.Syntax)
+	}
+}
+
 func TestItoa() {
 	expect.Equal(ref strconv.Itoa(0), "0")
 	expect.Equal(ref strconv.Itoa(-120), "-120")
 	expect.Equal(ref strconv.Itoa(9007199254740993), "9007199254740993")
 }
 
+func TestParseInt() {
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("ff", 16)), ref 255)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("-FF", 16)), ref -255)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("+101", 2)), ref 5)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("Zz", 36)), ref 1295)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("9223372036854775807", 10)), ref 9223372036854775807)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("-9223372036854775808", 10)), ref -9223372036854775808)
+	expect.True(expect.IsErr(strconv.ParseInt("9223372036854775808", 10)).Kind() == strconv.Range)
+	expect.True(expect.IsErr(strconv.ParseInt("-9223372036854775809", 10)).Kind() == strconv.Range)
+	expect.True(expect.IsErr(strconv.ParseInt("99999999999999999999999", 10)).Kind() == strconv.Range)
+	for _, s := range []string{"", "+", "-", "12", "1_0", "0x1", " 1", "1 "} {
+		expect.True(expect.IsErr(strconv.ParseInt(ref s, 2)).Kind() == strconv.Syntax)
+	}
+}
+
+func TestParseIntBaseZero() {
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("0x1F", 0)), ref 31)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("-0X_1f", 0)), ref -31)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("0b101", 0)), ref 5)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("0o17", 0)), ref 15)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("0755", 0)), ref 493)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("1_000", 0)), ref 1000)
+	expect.Equal(ref expect.IsOk(strconv.ParseInt("0", 0)), ref 0)
+	for _, s := range []string{"0x", "0b", "08", "1__0", "_1", "1_", "0x1_", "0b2"} {
+		expect.True(expect.IsErr(strconv.ParseInt(ref s, 0)).Kind() == strconv.Syntax)
+	}
+}
+
+func TestParseIntBase() {
+	for _, base := range []int{1, 37, -16, 100} {
+		e := expect.IsErr(strconv.ParseInt("10", base))
+		expect.True(e.Kind() == strconv.Base)
+		expect.HasPrefix(ref e.Msg, "invalid base ")
+		expect.True(expect.IsErr(strconv.ParseUint("10", base)).Kind() == strconv.Base)
+		expect.IsNone(strconv.FormatInt(10, base))
+		expect.IsNone(strconv.FormatUint(10, base))
+	}
+
+	expect.Equal(ref expect.IsErr(strconv.ParseInt("10", 37)).Error(), "strconv.ParseInt: parsing \"10\": invalid base 37")
+	expect.IsNone(strconv.FormatInt(10, 0)) // a base read from the text is for reading only
+}
+
+func TestParseUint() {
+	expect.Equal(ref expect.IsOk(strconv.ParseUint("18446744073709551615", 10)), ref uint(18446744073709551615))
+	expect.Equal(ref expect.IsOk(strconv.ParseUint("0xFFFF_FFFF", 0)), ref uint(4294967295))
+	expect.True(expect.IsErr(strconv.ParseUint("18446744073709551616", 10)).Kind() == strconv.Range)
+	expect.True(expect.IsErr(strconv.ParseUint("-1", 10)).Kind() == strconv.Syntax)
+	expect.True(expect.IsErr(strconv.ParseUint("+1", 10)).Kind() == strconv.Syntax)
+	expect.Equal(ref expect.IsErr(strconv.ParseUint("", 10)).Func, "ParseUint")
+}
+
+func TestFormatInt() {
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(-255, 16)), "-ff")
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(35, 36)), "z")
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(0, 2)), "0")
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(1234567, 7)), "13331215")
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(-9223372036854775808, 10)), "-9223372036854775808")
+	expect.Equal(ref expect.IsSome(strconv.FormatInt(-9223372036854775808, 16)), "-8000000000000000")
+	expect.Equal(ref expect.IsSome(strconv.FormatUint(18446744073709551615, 2)).Len(), ref 64)
+	expect.Equal(ref expect.IsSome(strconv.FormatUint(18446744073709551615, 36)), "3w5e11264sgsf")
+}
+
+func TestIntRoundTrip() {
+	for _, n := range []int{0, 1, -1, 255, -256, 9223372036854775807, -9223372036854775808} {
+		for base := 2; base <= 36; base++ {
+			expect.Equal(ref expect.IsOk(strconv.ParseInt(ref expect.IsSome(strconv.FormatInt(n, base)), base)), ref n)
+		}
+	}
+}
+
+func TestBool() {
+	for _, s := range []string{"1", "t", "T", "true", "TRUE", "True"} { expect.True(expect.IsOk(strconv.ParseBool(ref s))) }
+	for _, s := range []string{"0", "f", "F", "false", "FALSE", "False"} { expect.False(expect.IsOk(strconv.ParseBool(ref s))) }
+	for _, s := range []string{"", "yes", "tRUE", "2", " true"} {
+		e := expect.IsErr(strconv.ParseBool(ref s))
+		expect.True(e.Kind() == strconv.Syntax)
+		expect.Equal(ref e.Func, "ParseBool")
+	}
+
+	expect.Equal(ref strconv.FormatBool(true), "true")
+	expect.Equal(ref strconv.FormatBool(false), "false")
+}
+
+func TestQuote() {
+	expect.Equal(ref strconv.Quote("a\tb\"c\\"), "\"a\\tb\\\"c\\\\\"")
+	expect.Equal(ref strconv.Quote(""), "\"\"")
+	expect.Equal(ref strconv.Quote("é\x00\xff"), "\"é\\x00\\xff\"")
+}
+
+func TestUnquote() {
+	expect.Equal(ref expect.IsOk(strconv.Unquote("\"a\\tb\\u00e9\\x41\\101\\\"\"")), "a\tbéAA\"")
+	expect.Equal(ref expect.IsOk(strconv.Unquote("`raw\\n\r`")), "raw\\n") // as it is, without its carriage returns
+	expect.Equal(ref expect.IsOk(strconv.Unquote("'x'")), "x")
+	expect.Equal(ref expect.IsOk(strconv.Unquote("'\\''")), "'")
+	expect.Equal(ref expect.IsOk(strconv.Unquote("'🙂'")), "🙂")
+	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\"")), "")
+	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\xff\"")), "\uFFFD") // a byte that starts no character
+	for _, s := range []string{"", "\"", "a", "\"a", "a\"", "''", "'ab'", "\"\\q\"", "\"a\nb\"", "\"\\'\"", "'\\\"'", "\"\\ud800\"", "\"\\400\"", "\"\\x4\"", "\"a\"b\"", "`a`b`"} {
+		e := expect.IsErr(strconv.Unquote(ref s))
+		expect.True(e.Kind() == strconv.Syntax)
+		expect.Equal(ref e.Func, "Unquote")
+	}
+}
+
+func TestQuoteRoundTrip() {
+	for _, s := range []string{"", "plain", "tab\tnew\nline", "quote\"back\\slash", "é 日本語 🙂", "\x00\x01\x7f", "`'"} {
+		expect.Equal(ref expect.IsOk(strconv.Unquote(ref strconv.Quote(ref s))), ref s)
+	}
+}
+
 func TestFloat() {
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("1.5")), ref 1.5)
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("-2e3")), ref -2000.0)
 	expect.IsErr(strconv.ParseFloat("abc"))
-	expect.Equal(ref strconv.FormatFloat(1.5), "1.5")
-	expect.Equal(ref strconv.FormatFloat(0.1), "0.1")
+	expect.Equal(ref strconv.FormatFloat(1.5, -1), "1.5")
+	expect.Equal(ref strconv.FormatFloat(0.1, -1), "0.1")
+}
+
+func TestParseFloatRounds() {
+	// A tie between two doubles goes to the even one, and a digit past it, however far, to the one above.
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("9007199254740993")), ref 9007199254740992.0)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("9007199254740993.00000000000000000000")), ref 9007199254740992.0)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("9007199254740993.00000000000000000001")), ref 9007199254740994.0)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("0.1000000000000000055511151231257827021181583404541015625")), ref 0.1)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("1.7976931348623158e308")), ref 1.7976931348623157e308)
+	expect.True(expect.IsErr(strconv.ParseFloat("1.7976931348623159e308")).Kind() == strconv.Range)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("2.5e-324")), ref 5e-324)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("2.4e-324")), ref 0.0)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("0x1.8p1")), ref 3.0)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat("1_000.5")), ref 1000.5)
+}
+
+func TestParseFloat32() {
+	// The nearest f32, where the nearest f64 converted is the one above.
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("1.00000017881393432617187499")), ref f32(1.0000001))
+	expect.NotEqual(ref f32(expect.IsOk(strconv.ParseFloat("1.00000017881393432617187499"))), ref f32(1.0000001))
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("16777217")), ref f32(16777216.0))
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("3.4028235e38")), ref f32(3.4028235e38))
+	expect.True(expect.IsErr(strconv.ParseFloat32("3.4028236e38")).Kind() == strconv.Range)
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("1e-46")), ref f32(0.0))
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("0x1p-149")), ref f32(1e-45))
+	e := expect.IsErr(strconv.ParseFloat32("1.5x"))
+	expect.True(e.Kind() == strconv.Syntax)
+	expect.Equal(ref e.Func, "ParseFloat32")
+}
+
+func TestFormatFloatPrecision() {
+	expect.Equal(ref strconv.FormatFloat(2.5, 2), "2.50")
+	expect.Equal(ref strconv.FormatFloat(2.5, 0), "2")  // a tie goes to the even digit
+	expect.Equal(ref strconv.FormatFloat(3.5, 0), "4")
+	expect.Equal(ref strconv.FormatFloat(1e21, 0), "1000000000000000000000")
+	expect.Equal(ref strconv.FormatFloat(1e21, -1), "1e+21")
+	expect.Equal(ref strconv.FormatFloat(1e21, -7), "1e+21") // any negative precision is the shortest form
+	expect.Equal(ref strconv.FormatFloat(0.000123456, 4), "0.0001")
+	expect.Equal(ref strconv.FormatFloat(-0.0, 1), "-0.0")
+	zero := 0.0
+	expect.Equal(ref strconv.FormatFloat(1/zero, 3), "+Inf")
+	expect.Equal(ref strconv.FormatFloat(zero/zero, 2000), "NaN")
+	tiny := strconv.FormatFloat(5e-324, 1080) // every digit of the smallest double, 1074 of them, and zeros after
+	expect.Equal(ref tiny.Len(), ref 1082)
+	expect.HasSuffix(ref tiny, "625000000")
+	expect.Equal(ref strconv.FormatFloat(1.5, 100000).Len(), ref 100002)
+}
+
+func TestFormatFloatLong() {
+	// As many digits as are asked for: every one a float has, to the 1074th, and zeros after.
+	expect.Equal(ref strconv.FormatFloat(1.5, 1000000).Len(), ref 1000002)
+	expect.Equal(ref strconv.FormatFloat(-1.5, 2000001).Len(), ref 2000004)
+	expect.HasPrefix(ref strconv.FormatFloat(-1.5, 2000001), "-1.50000")
+	expect.HasSuffix(ref strconv.FormatFloat(5e-324, 1074), "8265533447265625")
+	expect.HasSuffix(ref strconv.FormatFloat(5e-324, 1075), "82655334472656250")
+	expect.Equal(ref strconv.FormatFloat32(f32(1.5), 1500000).Len(), ref 1500002)
+	expect.Equal(ref strconv.FormatFloat(1.5, -9223372036854775808), "1.5")
+}
+
+func TestFormatFloat32() {
+	f := f32(0.1)
+	expect.Equal(ref strconv.FormatFloat32(f, -1), "0.1")
+	expect.Equal(ref strconv.FormatFloat(f64(f), -1), "0.10000000149011612")
+	expect.Equal(ref strconv.FormatFloat32(f, 3), "0.100")
+	expect.Equal(ref strconv.FormatFloat32(f, 12), "0.100000001490")
+	expect.Equal(ref expect.IsOk(strconv.ParseFloat32(ref strconv.FormatFloat32(f, -1))), ref f)
 }
 
 func BenchmarkAtoi() {
 	for testing.Loop() { _ = strconv.Atoi("123456") }
+}
+
+func BenchmarkParseInt() {
+	for testing.Loop() { _ = strconv.ParseInt("7fffffff", 16) }
+}
+
+func BenchmarkParseFloat() {
+	for testing.Loop() { _ = strconv.ParseFloat("123456.789e3") }
+}
+
+func BenchmarkUnquote() {
+	for testing.Loop() { _ = strconv.Unquote("\"a quoted\\tline\"") }
 }

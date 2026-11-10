@@ -33,3 +33,83 @@ _1 invalid syntax false
 {root} {root} 3
 rc.Weak()
 arena[y z] arena[]
+[ff] [FF] [10] [101] [é] [-ff] [-10000000] [ffffffffffffffff] [310]
+[00ff] [] [    ff] [FF    ] [-000ff] [   0ff] [🙂] [�] [�]
+[6869ff] [68C3A96C6C6F] [000fff] [AB] [] [    6162]
+[1.234568e+03] [0.00e+00] [-0e+00] [1.000000e-310] [+Inf] [1.000e+01] [  1.000e+100] [NaN         ]
+[0.1] [0.1] [1e+21] [1.23e+03] [0.3333333333] [NaN] [1.000000e-01] [-0]
+[00042] [-0042] [42   ] [   042] [c8] [11001000] [123456]
+[0003.142] [-003.142] [0001.234e+03] [000007] [-002.5] [  +Inf] [   NaN] [000000.5]
+Fprint:1 2three4.5 -128
+ff Ok(255)
+-FF Ok(-255)
+7fffffffffffffff Ok(9223372036854775807)
+8000000000000000 Err("strconv.ParseInt: parsing \"8000000000000000\": value out of range")
+-8000000000000000 Ok(-9223372036854775808)
+-8000000000000001 Err("strconv.ParseInt: parsing \"-8000000000000001\": value out of range")
+g Err("strconv.ParseInt: parsing \"g\": invalid syntax")
+ Err("strconv.ParseInt: parsing \"\": invalid syntax")
++ Err("strconv.ParseInt: parsing \"+\": invalid syntax")
+1_0 Err("strconv.ParseInt: parsing \"1_0\": invalid syntax")
+0x_1F Ok(31)
+0b101 Ok(5)
+0o17 Ok(15)
+0755 Ok(493)
+1_000 Ok(1000)
+0x Err("strconv.ParseInt: parsing \"0x\": invalid syntax")
+1__0 Err("strconv.ParseInt: parsing \"1__0\": invalid syntax")
+_1 Err("strconv.ParseInt: parsing \"_1\": invalid syntax")
+-0X10 Ok(-16)
+08 Err("strconv.ParseInt: parsing \"08\": invalid syntax")
+0 Ok(0)
+-0 Ok(0)
+Err("strconv.ParseInt: parsing \"10\": invalid base 1") Err("strconv.ParseInt: parsing \"10\": invalid base 37") Ok(1295) Ok(-5) Err("strconv.ParseInt: parsing \"12\": invalid syntax")
+Ok(18446744073709551615) Err("strconv.ParseUint: parsing \"18446744073709551616\": value out of range") Err("strconv.ParseUint: parsing \"-1\": invalid syntax") Ok(4294967295) Err("strconv.ParseUint: parsing \"1\": invalid base -2")
+invalid base 99 true false ParseInt
+Some("-ff") Some("z") Some("-1000000000000000000000000000000000000000000000000000000000000000") Some("255") Some("0")
+None None None Some("ffffffffffffffff") Some("11112220022122120101211020120210210211220") None
+1=true t=true T=true true=true TRUE=true True=true 0=false f=false F=false false=false FALSE=false False=false "yes":invalid syntax "tRUE":invalid syntax "":invalid syntax true false
+"tab\t \"q\" é \x00 \xff" ""
+"a\tb\u00e9\x41\101" -> "a\tbéAA"
+`raw\n` -> "raw\\n"
+'x' -> "x"
+'\'' -> "'"
+'é' -> "é"
+"" -> ""
+"�" -> "�"
+"''": invalid syntax
+"'ab'": invalid syntax
+"\"a": invalid syntax
+"a": invalid syntax
+"\"\\q\"": invalid syntax
+"\"a\nb\"": invalid syntax
+"\"\\'\"": invalid syntax
+"'\\\"'": invalid syntax
+"\"\\ud800\"": invalid syntax
+"\"\\400\"": invalid syntax
+2.50 2 4 1000000000000000000000 0.0001 0.33333333333333331483
++Inf NaN -0.0 1082 true 100002
+0.1 0.100 0.100000001490 16777216.0 +Inf
+1.00000017881393432617187499 1.0000001
+16777217 1.6777216e+07
+3.4028235e38 3.4028235e+38
+3.4028236e38 value out of range true
+1e39 value out of range true
+1e-46 0
+0x1p-150 0
+0x1.fffffep+127 3.4028235e+38
+-0 -0
+nan NaN
+-Inf -Inf
+1.5x invalid syntax false
+1_0.5 10.5
+9007199254740993 9.007199254740992e+15 9.007199e+15
+9007199254740993.00000000000000000000 9.007199254740992e+15 9.007199e+15
+9007199254740993.00000000000000000001 9.007199254740994e+15 9.007199e+15
+0.1000000000000000055511151231257827021181583404541015625 0.1 1.000000e-01
+2.2250738585072011e-308 2.225073858507201e-308 2.225074e-308
+1.7976931348623158e308 1.7976931348623157e+308 1.797693e+308
+1.7976931348623159e308 value out of range
+4.9e-324 5e-324 4.940656e-324
+2.4e-324 0 0.000000e+00
+2.5e-324 5e-324 4.940656e-324

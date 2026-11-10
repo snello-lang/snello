@@ -30,7 +30,7 @@ func (v ref Value) Encode(out mut strings.Builder) {
     match v {
         Null      => out.WriteString("null"),
         Bool(b)   => out.WriteString(if b { "true" } else { "false" }),
-        Number(n) => out.WriteString(strconv.FormatFloat(n)),
+        Number(n) => out.WriteString(strconv.FormatFloat(n, -1)),
         String(s) => { out.WriteByte('"'); out.WriteString(escape(s)); out.WriteByte('"') },
         Array(xs) => {
             out.WriteByte('[')

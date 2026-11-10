@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the 0 flag pads a number with zeros after its sign; fmt checks
+// its formats when the program is compiled and takes the flag on
+// nothing else.
+// Fix: a width alone, which pads with spaces.
+
+package p
+
+import "fmt"
+
+func show(name string, done bool) {
+    fmt.Printf("%08s\n", name)              // ERROR "fmt.Printf: fmt takes the 0 flag on a number only, not with %s"
+    fmt.Printf("%08v\n", done)              // ERROR "fmt.Printf format %v takes the 0 flag on a number, not on bool"
+}
