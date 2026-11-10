@@ -205,6 +205,10 @@ var handledErrors = map[string]bool{
 	"try-no-variant.snello":    true,
 	"error-unprintable.snello": true,
 	"format-plus.snello":       true,
+	// Formats, checked when the program is compiled.
+	"format-verb.snello": true,
+	"format-zero.snello": true,
+	"format-size.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

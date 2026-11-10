@@ -69,7 +69,7 @@ func main() {
 	fmt.Println(strconv.Atoi("4x"), strconv.Atoi(""), strconv.Atoi("-"))
 	fmt.Println(strconv.Atoi("9223372036854775807"), strconv.Atoi("9223372036854775808"))
 	fmt.Println(strconv.Atoi("-9223372036854775808"), strconv.Atoi("-9223372036854775809"))
-	fmt.Println(strconv.Itoa(-15), strconv.FormatFloat(2.5), strconv.FormatFloat(3), strconv.FormatFloat(0.1))
+	fmt.Println(strconv.Itoa(-15), strconv.FormatFloat(2.5, -1), strconv.FormatFloat(3, -1), strconv.FormatFloat(0.1, -1))
 	fmt.Println(strconv.ParseFloat("1.5e3"), strconv.ParseFloat("-0.25"), strconv.ParseFloat("abc"), strconv.ParseFloat(" 1"), strconv.ParseFloat("1e999"))
 	match strconv.Atoi("x") {
 		Ok(n) => fmt.Println(n),

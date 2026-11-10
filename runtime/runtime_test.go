@@ -6,7 +6,10 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"math"
+	"math/big"
 	"math/bits"
 	"math/rand/v2"
 	"os"
@@ -1449,5 +1452,472 @@ int main(void) {
 
 	if best > 2.5 {
 		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, want about 1 and under 2.5", best)
+	}
+}
+
+// floatTexts writes texts for the float readers: the numbers of Go's
+// own tests, then for doubles and floats of every magnitude, the
+// subnormals among them, the text in the shortest form, with an
+// exponent and digits to spare, in hexadecimal and as a fraction; the
+// point halfway to the next one written out in full, which a reader
+// must round to the even side, with a digit added, taken away and
+// changed after it, which it must not, the digit added standing past
+// the eight hundredth too, further than the exact reading keeps
+// digits; and texts changed a byte at a time, most of them no number.
+func floatTexts() []string {
+	r := rand.New(rand.NewPCG(1, 2))
+	texts := []string{
+		"", "0", "-0", "+1", "1.5", "-2e3", "1e400", "-1e400", "1e-400", ".5", "5.", ".", "e1", "1e", "1e+", "1_000.5", "1__0", "_1", "1_", "0x1p-2", "0X1.8p1", "0x1", "0x_1p0", "0x1p", "0x.p1",
+		"inf", "+Infinity", "-INF", "infinit", "infinityx", "nan", "NaN", "+nan", "-nan", "nan(1)", " 1", "1 ", "1.5x", "0b1", "1e1_0", "1e_10", "1e99999999999999999999", "1e-99999999999999999999",
+		"0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e100", "100000000000000000000000000000000000000000000000000000000000000000000000000000e-70",
+		"0x1.fffffffffffff7fffp1023", "0x1.fffffffffffff8p1023", "0x0.0000000000001p-1022", "0x1p-1075", "0x1.00000000000008p0", "0x1.000001p0", "0x1.0000010000000000000001p0", "0x8p-1078",
+		"4.9e-324", "2.4703282292062327e-324", "2.4703282292062328e-324", "1.7976931348623158e308", "1.7976931348623159e308", "3.4028235e38", "3.4028236e38", "1.401298464324817e-45", "7e-46",
+	}
+
+	for i := 0; i < 12000; i++ {
+		var v float64
+		switch r.IntN(4) {
+		case 0:
+			v = math.Float64frombits(r.Uint64())
+		case 1:
+			v = math.Float64frombits(r.Uint64() & (1<<52 - 1)) // a subnormal
+		case 2:
+			v = float64(math.Float32frombits(r.Uint32()))
+		default:
+			v = math.Ldexp(float64(r.Int64N(1<<53)), r.IntN(200)-100)
+		}
+
+		if v != v || math.IsInf(v, 0) {
+			continue
+		}
+
+		texts = append(texts,
+			strconv.FormatFloat(v, 'g', -1, 64), strconv.FormatFloat(v, 'e', r.IntN(40), 64), strconv.FormatFloat(v, 'x', -1, 64), strconv.FormatFloat(v, 'x', r.IntN(20), 64),
+			strconv.FormatFloat(float64(float32(v)), 'g', -1, 32))
+		if a := math.Abs(v); a > 1e-30 && a < 1e30 {
+			texts = append(texts, strconv.FormatFloat(v, 'f', r.IntN(40), 64))
+		}
+
+		for _, narrow := range []bool{false, true} {
+			above := math.Nextafter(v, math.Inf(1))
+			if narrow {
+				f := float32(v)
+				v, above = float64(f), float64(math.Nextafter32(f, float32(math.Inf(1))))
+			}
+
+			if math.IsInf(v, 0) || math.IsInf(above, 0) {
+				continue
+			}
+
+			half := new(big.Float).SetPrec(2200).SetFloat64(v)
+			half.Add(half, new(big.Float).SetPrec(2200).SetFloat64(above))
+			half.Quo(half, big.NewFloat(2))
+			digits, exp, _ := strings.Cut(half.Text('e', 800), "e")
+			digits = strings.TrimRight(digits, "0")
+			texts = append(texts, digits+"e"+exp, digits+"1e"+exp, digits+strings.Repeat("0", r.IntN(30))+"1e"+exp)
+			if i%16 == 0 {
+				texts = append(texts, digits+strings.Repeat("0", 830-len(digits))+"1e"+exp)
+			}
+			if len(digits) > 3 {
+				texts = append(texts, digits[:len(digits)-1]+"e"+exp, digits[:2+r.IntN(len(digits)-2)]+"e"+exp)
+			}
+		}
+	}
+
+	const alphabet = "0123456789.eEpPxX_+-infINFnaNtyY bo"
+	for i, n := 0, len(texts); i < n; i += 5 {
+		b := []byte(texts[i])
+		if len(b) == 0 || len(b) > 60 {
+			continue
+		}
+
+		for range 3 {
+			c := append([]byte(nil), b...)
+			switch r.IntN(3) {
+			case 0:
+				c[r.IntN(len(c))] = alphabet[r.IntN(len(alphabet))]
+			case 1:
+				j := r.IntN(len(c) + 1)
+				c = append(c[:j], append([]byte{alphabet[r.IntN(len(alphabet))]}, c[j:]...)...)
+			default:
+				j := r.IntN(len(c))
+				c = append(c[:j], c[j+1:]...)
+			}
+
+			texts = append(texts, string(c))
+		}
+	}
+
+	return texts
+}
+
+// TestParseFloat holds the runtime's float readers to Go's strconv on
+// the texts of floatTexts: the same texts are numbers, the same are
+// past the largest float, and every other reads as the same bits, as a
+// double and as a float.
+func TestParseFloat(t *testing.T) {
+	probe := `#include "snello.h"
+#include <stdio.h>
+#include <string.h>
+int main(void) {
+    static char line[1 << 16];
+    while (fgets(line, sizeof line, stdin) != NULL) {
+        size_t n = strlen(line);
+        if (n > 0 && line[n - 1] == '\n') n--;
+        sn_string s = {(const uint8_t *)line, (int64_t)n, 0};
+        double d = 0;
+        float f = 0;
+        int64_t cd = sn_strconv_parseFloat(s, &d), cf = sn_strconv_parseFloat32(s, &f);
+        uint64_t bd;
+        uint32_t bf;
+        memcpy(&bd, &d, 8);
+        memcpy(&bf, &f, 4);
+        printf("%lld %016llx %lld %08x\n", (long long)cd, (unsigned long long)(cd ? 0 : bd), (long long)cf, cf ? 0 : bf);
+    }
+    return 0;
+}
+`
+	code := func(err error) int {
+		switch {
+		case err == nil:
+			return 0
+		case err.(*strconv.NumError).Err == strconv.ErrRange:
+			return 2
+		}
+
+		return 1
+	}
+
+	texts := floatTexts()
+	got := probeLines(t, "parsefloat", probe, strings.Join(texts, "\n")+"\n")
+	if len(got) != len(texts) {
+		t.Fatalf("the probe answered %d of %d texts", len(got), len(texts))
+	}
+
+	bad := 0
+	for i, s := range texts {
+		d, errD := strconv.ParseFloat(s, 64)
+		f, errF := strconv.ParseFloat(s, 32)
+		bd, bf := math.Float64bits(d), math.Float32bits(float32(f))
+		switch { // a NaN is the one the runtime makes, and a text that does not read gives no bits
+		case errD != nil:
+			bd = 0
+		case d != d:
+			bd = 0x7ff8000000000001
+		}
+
+		switch {
+		case errF != nil:
+			bf = 0
+		case f != f:
+			bf = 0x7fc00000
+		}
+
+		if want := fmt.Sprintf("%d %016x %d %08x", code(errD), bd, code(errF), bf); got[i] != want {
+			if bad++; bad <= 10 {
+				t.Errorf("%.120q: got %s, want %s", s, got[i], want)
+			}
+		}
+	}
+}
+
+// TestUnquote holds the runtime's quote reader to Go's strconv.Unquote
+// on literals of the three kinds, well formed and not, made from
+// pieces that meet every rule of the syntax and changed a byte at a
+// time; the one text they differ on is the empty character literal,
+// which Go takes for the empty string. The probe reads each text from
+// a block of its own size, so that a read past it is a read past the
+// block.
+func TestUnquote(t *testing.T) {
+	probe := `#include "snello.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static int hex(char c) { return c <= '9' ? c - '0' : c - 'a' + 10; }
+int main(void) {
+    static char line[1 << 16];
+    while (fgets(line, sizeof line, stdin) != NULL) {
+        size_t n = strlen(line);
+        if (n > 0 && line[n - 1] == '\n') n--;
+        uint8_t *bytes = malloc(n / 2 + 1);
+        for (size_t i = 0; i < n / 2; i++) bytes[i] = (uint8_t)(hex(line[2 * i]) << 4 | hex(line[2 * i + 1]));
+        bool ok;
+        sn_string out = sn_strconv_unquote((sn_string){bytes, (int64_t)(n / 2), 0}, &ok);
+        printf("%d ", ok);
+        for (int64_t i = 0; i < out.len; i++) printf("%02x", out.ptr[i]);
+        printf("\n");
+        sn_string_drop(&out);
+        free(bytes);
+    }
+    return 0;
+}
+`
+	r := rand.New(rand.NewPCG(3, 4))
+	pieces := []string{
+		"a", "b", "\\", "\"", "'", "`", "\n", "\r", "\t", "x", "u", "U", "0", "1", "7", "8", "f", "F", "g", "\x80", "\xff", "é", "日", "\U0001F600", "\xed\xa0\x80",
+		`\n`, `\x41`, `\u00e9`, `\U0001F600`, `\377`, `\400`, `\ud800`, `\U00110000`, `\'`, `\"`, " ", "\x00", "\x7f",
+	}
+
+	texts := []string{"", `"`, `""`, "''", "``", "`", "'", `"a`, `a"`, `"a"b"`, "`a`b`", "'ab'", "'\xff'", "\"\xff\"", `'\''`, `'"'`, `"'"`}
+	for range 60000 {
+		s := ""
+		for range r.IntN(8) {
+			s += pieces[r.IntN(len(pieces))]
+		}
+
+		switch r.IntN(6) {
+		case 0:
+			s = strconv.Quote(s)
+		case 1:
+			s = "\"" + s + "\""
+		case 2:
+			s = "'" + s + "'"
+		case 3:
+			s = "`" + s + "`"
+		case 4:
+			s = strconv.QuoteRune(rune(r.IntN(0x11000)))
+		}
+
+		texts = append(texts, s)
+		if b := []byte(s); len(b) > 0 && r.IntN(3) == 0 {
+			b[r.IntN(len(b))] = byte(r.IntN(256))
+			texts = append(texts, string(b))
+		}
+	}
+
+	var in strings.Builder
+	for _, s := range texts {
+		in.WriteString(hex.EncodeToString([]byte(s)) + "\n")
+	}
+
+	got := probeLines(t, "unquote", probe, in.String())
+	if len(got) != len(texts) {
+		t.Fatalf("the probe answered %d of %d texts", len(got), len(texts))
+	}
+
+	bad := 0
+	for i, s := range texts {
+		want := "0 "
+		if text, err := strconv.Unquote(s); err == nil && s != "''" {
+			want = "1 " + hex.EncodeToString([]byte(text))
+		}
+
+		if got[i] != want {
+			if bad++; bad <= 10 {
+				t.Errorf("%q: got %s, want %s", s, got[i], want)
+			}
+		}
+	}
+}
+
+// TestNumberFormats holds what the runtime writes for the verbs of a
+// base, a character and an exponent, for the zero flag and for
+// strconv's FormatInt and FormatFloat to Go's fmt and strconv: integers
+// of every size in every base, floats of every magnitude to a
+// precision in each of the three layouts, the infinities and NaN among
+// them, the digits of a float to its last one that is not zero and
+// past it, and a precision below zero or past the largest a format
+// takes, which is held to what is written.
+func TestNumberFormats(t *testing.T) {
+	probe := `#include "snello.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
+static void show(sn_string s) {
+    fwrite(s.ptr, 1, (size_t)s.len, stdout); // every byte, a zero among them
+    putchar('\n');
+    sn_string_drop(&s);
+}
+int main(void) {
+    char op;
+    uint64_t bits;
+    long long a, b;
+    while (scanf(" %c %" SCNx64 " %lld %lld", &op, &bits, &a, &b) == 4) {
+        double v;
+        memcpy(&v, &bits, 8);
+        switch (op) {
+        case 'i': show(sn_int_base((int64_t)bits, a, b != 0)); break;
+        case 'u': show(sn_uint_base(bits, a, b != 0)); break;
+        case 'b': show(sn_strconv_formatBits(bits, a, b != 0)); break;
+        case 'c': show(sn_char((int64_t)bits)); break;
+        case 'e': show(sn_f64_e(v, a)); break;
+        case 'g': show(sn_f64_g(v, a)); break;
+        case 'f': show(sn_strconv_formatFixed(v, a)); break;
+        case 'z': show(sn_pad_zero(sn_int_base((int64_t)bits, a, false), b, true)); break;
+        case 'Z': show(sn_pad_zero(sn_f64_fixed(v, a), b, true)); break;
+        case 'E': show(sn_pad_zero(sn_f64_e(v, a), b, true)); break;
+        case 'h': {
+            uint8_t raw[8];
+            memcpy(raw, &bits, 8);
+            show(sn_hex((sn_string){raw, a, 0}, b != 0, false));
+            show(sn_hex_bytes((sn_slice){raw, a, a}, b != 0));
+            break;
+        }
+        }
+    }
+    return 0;
+}
+`
+	r := rand.New(rand.NewPCG(5, 6))
+	var in strings.Builder
+	var want []string
+	ask := func(op byte, bits uint64, a, b int, answers ...string) {
+		fmt.Fprintf(&in, "%c %x %d %d\n", op, bits, a, b)
+		want = append(want, answers...)
+	}
+
+	upper := func(s string, yes int) string {
+		if yes != 0 {
+			return strings.ToUpper(s)
+		}
+
+		return s
+	}
+
+	ints := []uint64{0, 1, 9, 10, 35, 36, 255, 1 << 31, 1<<63 - 1, 1 << 63, 1<<64 - 1}
+	for range 3000 {
+		ints = append(ints, r.Uint64()>>r.IntN(64))
+	}
+
+	for _, u := range ints {
+		base, up, width := []int{2, 8, 16}[r.IntN(3)], r.IntN(2), r.IntN(70)
+		ask('i', u, base, up, upper(strconv.FormatInt(int64(u), base), up))
+		ask('u', u, base, up, upper(strconv.FormatUint(u, base), up))
+		ask('z', u, base, width, zeroPadded(strconv.FormatInt(int64(u), base), width))
+		base = 2 + r.IntN(35)
+		ask('b', u, base, 0, strconv.FormatUint(u, base))
+		ask('b', u, base, 1, "-"+strconv.FormatUint(u, base))
+		n := r.IntN(9)
+		raw := make([]byte, 8)
+		for i := range raw {
+			raw[i] = byte(u >> (8 * i))
+		}
+
+		text := upper(hex.EncodeToString(raw[:n]), up)
+		ask('h', u, n, up, text, text)
+	}
+
+	for _, c := range []int64{0, 'A', 0xE9, 0x1F642, 0x10FFFF, 0x110000, 0xD800, 0xDFFF, 0xD7FF, 0xE000, -1, math.MinInt64, math.MaxInt64, 1<<32 + 'A'} {
+		ch := rune(0xFFFD)
+		if c >= 0 && c <= 0x10FFFF && (c < 0xD800 || c > 0xDFFF) {
+			ch = rune(c)
+		}
+
+		ask('c', uint64(c), 0, 0, string(ch))
+	}
+
+	floats := []float64{0, math.Copysign(0, -1), 1, -1, 0.1, 2.5, 3.5, 9.9996, 1e21, 1e22, 1e-7, 1e100, 1e-310, 5e-324, math.MaxFloat64, math.Inf(1), math.Inf(-1), math.NaN()}
+	for range 3000 {
+		floats = append(floats, math.Float64frombits(r.Uint64()), math.Ldexp(r.Float64(), r.IntN(120)-60))
+	}
+
+	for _, v := range floats {
+		prec, width := r.IntN(25), r.IntN(40)
+		ask('e', math.Float64bits(v), prec, 0, strconv.FormatFloat(v, 'e', prec, 64))
+		ask('g', math.Float64bits(v), 1+prec, 0, strconv.FormatFloat(v, 'g', 1+prec, 64))
+		ask('E', math.Float64bits(v), prec, width, fmt.Sprintf("%0*.*e", width, prec, v))
+		if a := math.Abs(v); !(a > 1e40) { // a NaN among them
+			ask('f', math.Float64bits(v), prec, 0, strconv.FormatFloat(v, 'f', prec, 64))
+			ask('Z', math.Float64bits(v), prec, width, fmt.Sprintf("%0*.*f", width, prec, v))
+		}
+	}
+
+	for _, v := range []float64{5e-324, 1.5, math.MaxFloat64, 1.0 / 3, 0.5, 2.5, 0.999, 9.5e-10, math.Inf(-1), math.NaN(), 0, math.Copysign(0, -1)} { // past a double's last digit
+		for _, prec := range []int{0, 1, 9, 18, 60, 400, 1073, 1074, 1075, 1100, 5000} {
+			ask('f', math.Float64bits(v), prec, 0, strconv.FormatFloat(v, 'f', prec, 64))
+			ask('f', math.Float64bits(-v), prec, 0, strconv.FormatFloat(-v, 'f', prec, 64))
+			if prec <= 1100 {
+				ask('e', math.Float64bits(v), prec, 0, strconv.FormatFloat(v, 'e', prec, 64))
+				ask('g', math.Float64bits(v), prec, 0, strconv.FormatFloat(v, 'g', prec, 64))
+			}
+		}
+	}
+
+	// A precision is held to what is written: none below zero, and a
+	// million at most, whatever number reaches the runtime.
+	for _, prec := range []int{-1, -5, math.MinInt64, 1000001, 1 << 40, math.MaxInt64} {
+		held := min(max(prec, 0), 1000000)
+		ask('f', math.Float64bits(1.5), prec, 0, strconv.FormatFloat(1.5, 'f', held, 64))
+		ask('e', math.Float64bits(-1.5), prec, 0, strconv.FormatFloat(-1.5, 'e', held, 64))
+		ask('g', math.Float64bits(1.0/3), prec, 0, strconv.FormatFloat(1.0/3, 'g', held, 64))
+	}
+
+	got := probeLines(t, "formats", probe, in.String())
+	if len(got) != len(want) {
+		t.Fatalf("the probe wrote %d lines, want %d", len(got), len(want))
+	}
+
+	bad := 0
+	for i := range want {
+		if got[i] != want[i] {
+			if bad++; bad <= 10 {
+				t.Errorf("line %d: got %.200s, want %.200s", i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// zeroPadded is the text of an integer made up to width with zeros
+// after its sign, as Go's %0*d writes one in base ten.
+func zeroPadded(s string, width int) string {
+	sign := ""
+	if strings.HasPrefix(s, "-") {
+		sign, s = "-", s[1:]
+	}
+
+	for len(sign)+len(s) < width {
+		s = "0" + s
+	}
+
+	return sign + s
+}
+
+// TestNumbersWhateverTheLocale reads and writes floats after the
+// program's locale is set to one that writes a comma for the point, as
+// a C library a program binds may set it: the runtime reads and writes
+// a point all the same, since no float goes through the C library. It
+// is skipped where the system has no such locale.
+func TestNumbersWhateverTheLocale(t *testing.T) {
+	probe := `#include "snello.h"
+#include <locale.h>
+#include <stdio.h>
+static void show(sn_string s) {
+    fwrite(s.ptr, 1, (size_t)s.len, stdout);
+    putchar('\n');
+    sn_string_drop(&s);
+}
+int main(void) {
+    const char *names[] = {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de_DE", "fr_FR"};
+    const char *set = NULL;
+    for (size_t i = 0; set == NULL && i < sizeof names / sizeof names[0]; i++) set = setlocale(LC_ALL, names[i]);
+    if (set == NULL || localeconv()->decimal_point[0] != ',') {
+        puts("no locale");
+        return 0;
+    }
+    double d = 0;
+    float f = 0;
+    printf("%lld %lld %lld\n", (long long)sn_strconv_parseFloat(SN_STR("1.5", 3), &d), (long long)sn_strconv_parseFloat32(SN_STR("2.5", 3), &f), (long long)sn_strconv_parseFloat(SN_STR("1,5", 3), &d));
+    show(sn_f64_to_string(d));
+    show(sn_f32_to_string(f));
+    show(sn_f64_fixed(1.5, 2));
+    show(sn_f64_fixed(1.5, 20));
+    show(sn_f64_fixed(1e20, 3));
+    show(sn_f64_g(1.5, 20));
+    show(sn_f64_e(1.5, 20));
+    show(sn_strconv_formatFixed(0.1, 30));
+    return 0;
+}
+`
+	got := probeLines(t, "locale", probe, "")
+	if len(got) == 1 && got[0] == "no locale" {
+		t.Skip("the system has no locale that writes a comma for the point")
+	}
+
+	want := []string{
+		"0 0 1", "1.5", "2.5", "1.50", "1.50000000000000000000", "100000000000000000000.000", "1.5", "1.50000000000000000000e+00",
+		"0.100000000000000005551115123126",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

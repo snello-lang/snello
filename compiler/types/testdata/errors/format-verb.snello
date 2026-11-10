@@ -1,0 +1,18 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: fmt checks its formats when the program is compiled, and each
+// verb prints the types it is for: %x an integer or the bytes of a
+// string or a []u8, %c an integer as its character, %e a float.
+// Fix: the verb that prints the argument's type, %v for any.
+
+package p
+
+import "fmt"
+
+func show(ratio f64, name string) {
+    fmt.Printf("%x\n", ratio)               // ERROR "fmt.Printf format %x takes an integer, a string or a []u8, not f64"
+    fmt.Printf("%c\n", name)                // ERROR "fmt.Printf format %c takes an integer, not string"
+    fmt.Printf("%e\n", 3)                   // ERROR "fmt.Printf format %e takes a float, not int"
+}

@@ -8,8 +8,11 @@
 // strconv.Quote escapes, and an integer quoted as its rune; a type
 // implementing fmt.Stringer printed as its String, inside a struct
 // too; math.Abs, Min and Max and the predeclared min and max on -0 and
-// NaN; ParseFloat's grammar and the Kind of its error; and an Rc, a
-// Weak and an Arena printed as what they hold.
+// NaN; ParseFloat's grammar and the Kind of its error; an Rc, a Weak
+// and an Arena printed as what they hold; the verbs of a base, %x, %X,
+// %o and %b, of a character, %c, and of an exponent, %e and %g, with
+// the zero flag; Fprint; and strconv's integers in a base, bools,
+// quoting and unquoting, floats to a precision and f32.
 
 package main
 
@@ -17,6 +20,7 @@ import (
 	"arena"
 	"fmt"
 	"math"
+	"os"
 	"rc"
 	"strconv"
 )
@@ -45,7 +49,7 @@ func main() {
 	fmt.Println(inf, -inf, nan, 9007199254740993.0, Some(inf), []f64{nan, 1})
 	var f f32 = 0.1
 	var g f32 = 16777216.0
-	fmt.Println(f, g, f*3, strconv.FormatFloat(1e20), strconv.FormatFloat(-inf))
+	fmt.Println(f, g, f*3, strconv.FormatFloat(1e20, -1), strconv.FormatFloat(-inf, -1))
 	fmt.Printf("[%.3f] [%.2f] [%f] [%.0f] [%d]\n", inf, nan, 2.5, 2.5, len(fmt.Sprintf("%.500f", 1.0)))
 	fmt.Printf("[%.1v] [%.3v] [%.10v] [%.3v] [%.2s] [%.4v]\n", 3.14159, 1e10, 1.0/3, 100.0, "héllo", "abcdef")
 	fmt.Printf("[%.3d] [%8.3d] [%.3d] [%.0d] [%-5d|] [%t]\n", 7, 7, -7, 0, 42, false)
@@ -86,4 +90,66 @@ func main() {
 	a.Insert("z".Clone())
 	a.Remove(x)
 	fmt.Println(a, arena.New<int>())
+
+	var low i8 = -128
+	fmt.Printf("[%x] [%X] [%o] [%b] [%c] [%x] [%b] [%x] [%o]\n", 255, 255, 8, 5, 'é', -255, low, big, small)
+	fmt.Printf("[%.4x] [%.0x] [%6x] [%-6X] [%06x] [%06.3x] [%c] [%c] [%c]\n", 255, 0, 255, 255, -255, 255, 0x1F642, -1, 0xD800)
+	fmt.Printf("[%x] [%X] [%x] [%X] [%x] [%8x]\n", "hi\xff", "héllo", []u8{0, 15, 255}, []u8{171}, "", "ab")
+	fmt.Printf("[%e] [%.2e] [%.0e] [%e] [%e] [%.3e] [%12.3e] [%-12.2e]\n", 1234.5678, zero, -zero, 1e-310, inf, 9.9996, 1e100, nan)
+	fmt.Printf("[%g] [%g] [%g] [%.3g] [%.10g] [%g] [%e] [%g]\n", 0.1, f, 1e21, 1234.5678, 1.0/3, nan, f, -zero)
+	fmt.Printf("[%05d] [%05d] [%-05d] [%06.3d] [%02x] [%08b] [%03d]\n", 42, -42, 42, 42, small, small, 123456)
+	fmt.Printf("[%08.3f] [%08.3f] [%012.3e] [%06v] [%06v] [%06f] [%06v] [%08g]\n", 3.14159, -3.14159, 1234.5, 7, -2.5, inf, nan, 0.5)
+	fmt.Fprint(mut os.Stdout(), "Fprint:", 1, 2, "three", 4.5, low, "\n")
+
+	for _, s := range []string{"ff", "-FF", "7fffffffffffffff", "8000000000000000", "-8000000000000000", "-8000000000000001", "g", "", "+", "1_0"} {
+		fmt.Println(s, strconv.ParseInt(ref s, 16))
+	}
+
+	for _, s := range []string{"0x_1F", "0b101", "0o17", "0755", "1_000", "0x", "1__0", "_1", "-0X10", "08", "0", "-0"} {
+		fmt.Println(s, strconv.ParseInt(ref s, 0))
+	}
+
+	fmt.Println(strconv.ParseInt("10", 1), strconv.ParseInt("10", 37), strconv.ParseInt("Zz", 36), strconv.ParseInt("-101", 2), strconv.ParseInt("12", 2))
+	fmt.Println(strconv.ParseUint("18446744073709551615", 10), strconv.ParseUint("18446744073709551616", 10), strconv.ParseUint("-1", 10), strconv.ParseUint("0xFFFF_FFFF", 0), strconv.ParseUint("1", -2))
+	match strconv.ParseInt("10", 99) {
+		Ok(n) => fmt.Println(n),
+		Err(e) => fmt.Println(e.Msg, e.Kind() == strconv.Base, e.Kind() == strconv.Syntax, e.Func),
+	}
+
+	fmt.Println(strconv.FormatInt(-255, 16), strconv.FormatInt(35, 36), strconv.FormatInt(-9223372036854775808, 2), strconv.FormatInt(255, 10), strconv.FormatInt(0, 7))
+	fmt.Println(strconv.FormatInt(1, 1), strconv.FormatInt(1, 37), strconv.FormatInt(1, -16), strconv.FormatUint(uint(big), 16), strconv.FormatUint(uint(big), 3), strconv.FormatUint(1, 0))
+	for _, s := range []string{"1", "t", "T", "true", "TRUE", "True", "0", "f", "F", "false", "FALSE", "False", "yes", "tRUE", ""} {
+		match strconv.ParseBool(ref s) {
+			Ok(b) => fmt.Printf("%s=%v ", s, b),
+			Err(e) => fmt.Printf("%q:%s ", s, e.Msg),
+		}
+	}
+
+	fmt.Println(strconv.FormatBool(true), strconv.FormatBool(false))
+	fmt.Println(strconv.Quote("tab\t \"q\" é \x00 \xff"), strconv.Quote(""))
+	for _, s := range []string{"\"a\\tb\\u00e9\\x41\\101\"", "`raw\\n\r`", "'x'", "'\\''", "'é'", "\"\"", "\"\xff\"", "''", "'ab'", "\"a", "a", "\"\\q\"", "\"a\nb\"", "\"\\'\"", "'\\\"'", "\"\\ud800\"", "\"\\400\""} {
+		match strconv.Unquote(ref s) {
+			Ok(text) => fmt.Printf("%s -> %q\n", s, text),
+			Err(e) => fmt.Printf("%q: %s\n", s, e.Msg),
+		}
+	}
+
+	fmt.Println(strconv.FormatFloat(2.5, 2), strconv.FormatFloat(2.5, 0), strconv.FormatFloat(3.5, 0), strconv.FormatFloat(1e21, 0), strconv.FormatFloat(0.000123456, 4), strconv.FormatFloat(1.0/3, 20))
+	fmt.Println(strconv.FormatFloat(inf, 3), strconv.FormatFloat(nan, 0), strconv.FormatFloat(-zero, 1), strconv.FormatFloat(5e-324, 1080).Len(), strconv.FormatFloat(5e-324, 1080).HasSuffix("625000000"), strconv.FormatFloat(1.5, 100000).Len())
+	fmt.Println(strconv.FormatFloat32(f, -1), strconv.FormatFloat32(f, 3), strconv.FormatFloat32(f, 12), strconv.FormatFloat32(g, 1), strconv.FormatFloat32(f32(inf), 2))
+	for _, s := range []string{"1.00000017881393432617187499", "16777217", "3.4028235e38", "3.4028236e38", "1e39", "1e-46", "0x1p-150", "0x1.fffffep+127", "-0", "nan", "-Inf", "1.5x", "1_0.5"} {
+		match strconv.ParseFloat32(ref s) {
+			Ok(v) => fmt.Println(s, v),
+			Err(e) => fmt.Println(s, e.Msg, e.Kind() == strconv.Range),
+		}
+	}
+
+	// A double read from more digits than an integer holds: at a tie
+	// between two doubles, the digits past the nineteenth decide.
+	for _, s := range []string{"9007199254740993", "9007199254740993.00000000000000000000", "9007199254740993.00000000000000000001", "0.1000000000000000055511151231257827021181583404541015625", "2.2250738585072011e-308", "1.7976931348623158e308", "1.7976931348623159e308", "4.9e-324", "2.4e-324", "2.5e-324"} {
+		match strconv.ParseFloat(ref s) {
+			Ok(v) => fmt.Printf("%s %v %e\n", s, v, v),
+			Err(e) => fmt.Println(s, e.Msg),
+		}
+	}
 }

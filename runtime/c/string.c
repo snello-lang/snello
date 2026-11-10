@@ -92,8 +92,12 @@ int sn_string_cmp(sn_string a, sn_string b) {
 
 sn_string sn_string_clone(sn_string s) {
     sn_check_string(s);
-    if (s.len == 0) {
-        return SN_STR("", 0); // an owned string of no bytes would be a block with cap 0, which nothing frees
+    // An owned string of no bytes would be a block with cap 0, which
+    // nothing frees. No length is below zero, and the test says so to a
+    // compiler that joins this to its caller and, not knowing it, takes
+    // the copy below for one of a size no block has.
+    if (s.len <= 0) {
+        return SN_STR("", 0);
     }
 
     uint8_t *p = sn_alloc((size_t)s.len);

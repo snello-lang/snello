@@ -225,15 +225,27 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `errors.New("message")` for a one-off error | An enum variant, or a struct listing `Error`: the message is derived from the value |
 | A `From` conversion, or wrapping by hand, at every `return err` | `?` wraps the error in the one variant of the function's error enum that holds its type |
 | A type with a `String() string` method prints as it, a `fmt.Stringer` | A type prints as its `String` when it lists `impl fmt.Stringer`; traits are named, not matched by method |
-| `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` takes no `%x`, `%e`, `%T` or flags but the minus and the plus on `%v` of an error yet |
+| `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` has `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g` and `%t`, and no `%T`, `%p`, `%U`, `%E` or `%G`; of the flags it takes the minus, the zero on a number, and the plus on `%v` of an error |
+| `%x` on a float, a hexadecimal float; `%b` on a float | Refused: `%x`, `%X`, `%o` and `%b` take an integer, and `%x` and `%X` the bytes of a string or a `[]u8` |
+| `%05s` pads a string with zeros | Refused: the `0` flag goes with a number |
+| `%x` on a `Stringer` prints the bytes of its `String()` | `%x` prints the value's own bytes; only `%v`, `%s` and `%q` print through `String` |
+| A width or precision of any size, `%.2000000f` | A million at most; a larger one is refused when the program is compiled |
 | `err.(*strconv.NumError).Err == strconv.ErrRange` | `e.Kind() == strconv.Range` |
 | `strconv.Atoi(s)` returns `(int, error)`; `*strconv.NumError` | `strconv.Atoi(s)` returns `Result<int, strconv.Error>`, with `Func`, `Text` and `Msg` |
-| `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f)`: the shortest text that reads back, as `fmt` prints it |
+| `strconv.FormatFloat(f, 'g', -1, 64)` | `strconv.FormatFloat(f, -1)`: the shortest text that reads back, as `fmt` prints it |
+| `strconv.FormatFloat(f, 'f', 2, 64)`, and `'e'` and `'g'` with a precision | `strconv.FormatFloat(f, 2)`: digits after the point, a million at most; an exponent is `fmt.Sprintf("%.2e", f)` |
+| `strconv.ParseFloat(s, 32)` returns a `float64` to convert | `strconv.ParseFloat32(s)` returns an `f32`; `FormatFloat32` writes one |
+| `strconv.ParseInt(s, 16, 64)`, with a `bitSize` | `strconv.ParseInt(s, 16)` reads an `int` and `ParseUint` a `uint`; a narrower type is a comparison with its limit, `math.MaxInt8` |
+| `strconv.FormatInt(n, 37)` panics | `strconv.FormatInt(n, base)` returns a `string?`, `None` for a base that is none |
+| `strconv.Atoi("99999999999999999999x")` is `ErrRange` | `Syntax`: a range is a number's, and this text is none |
+| `strconv.Unquote("''")` is the empty string | An error: an empty character literal is no literal, as in a program |
+| `strconv.AppendInt`, `QuoteToASCII`, `QuoteRune`, `ParseComplex` | Not in the library: `%q` quotes a rune, and a `strings.Builder` takes what `Sprintf` writes |
 | `strings.Builder` | The same, with `WriteString`, `WriteByte`, `WriteRune`, `Grow`, `Len`, `String` and `Reset` |
 | `strings.NewReader(s)` | The same; the `Reader` owns the string, so `bufio` can hold it |
 | `[]byte(s)` and `string(b)` copy | The same |
 | `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr(), ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait; the streams are functions, since a package variable is never lent `mut` |
-| `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing |
+| `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing, and so do `Fprint` and `Fprintf` |
+| `fmt.Print`, `fmt.Errorf`, `fmt.Sscanf` | Not in the library: `Printf` or `Fprint` to `os.Stdout()`; an error is a type with `Error()` and `Source()`; text is read with `bufio.Scanner` and `strconv` |
 
 ## Chapter 20: Numbers
 

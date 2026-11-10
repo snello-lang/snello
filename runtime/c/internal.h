@@ -108,6 +108,28 @@ void sn_slice_grow(sn_slice *s, int64_t need, size_t size);
 char *sn_format_uint(uint64_t u, char *end);
 sn_string sn_format_int(uint64_t u, bool neg);
 
+// A number as decimal digits with a point among them, which
+// multiplies and divides by powers of two exactly: decimal.c's.
+// sn_decimal_assign sets one to an integer, sn_decimal_shift
+// multiplies it by 2^k, or divides it for a negative k,
+// sn_decimal_round cuts it to nd digits, rounded to nearest with a tie
+// to the even digit, and sn_decimal_rounds_up says which way that cut
+// goes.
+enum { SN_DECIMAL_DIGITS = 800 };
+
+typedef struct {
+    uint8_t d[SN_DECIMAL_DIGITS]; // the digits, the most significant first
+    int nd;                       // how many
+    int64_t dp;                   // the point's place among them
+    bool neg;
+    bool trunc; // digits that were not zero lie past d
+} sn_decimal;
+
+void sn_decimal_assign(sn_decimal *a, uint64_t v);
+void sn_decimal_shift(sn_decimal *a, int k);
+void sn_decimal_round(sn_decimal *a, int64_t nd);
+bool sn_decimal_rounds_up(const sn_decimal *a, int64_t nd);
+
 // sn_write_fd writes every byte of p to fd and returns how many it
 // wrote, all of len or fewer with errno saying why.
 int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len);

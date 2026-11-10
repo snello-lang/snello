@@ -3,12 +3,12 @@
 // license that can be found in the LICENSE file.
 
 // This file reads the formats of fmt's printing functions: the grammar
-// of Go's fmt, of which Snello's fmt takes the verbs %d, %s, %v, %q, %f
-// and %t, a width, a precision, the minus flag and the plus flag on %v
-// of an error, which prints its chain. The checker checks a
-// format against its arguments with it, as go vet's printf check does,
-// and both backends lower a format with it, so the three read one
-// grammar.
+// of Go's fmt, of which Snello's fmt takes the verbs %v, %d, %x, %X,
+// %o, %b, %c, %s, %q, %f, %e, %g and %t, a width, a precision, the
+// minus flag, the zero flag on a number and the plus flag on %v of an
+// error, which prints its chain. The checker checks a format against
+// its arguments with it, as go vet's printf check does, and both
+// backends lower a format with it, so the three read one grammar.
 
 package types
 
@@ -62,13 +62,25 @@ type FormatPiece struct {
 	Text  string // the text, when Verb is 0
 	Verb  byte   // one of FormatVerbs
 	Minus bool   // pad on the right, %-6s
+	Zero  bool   // pad a number with zeros after its sign, %06d; never set with Minus, which overrides it
 	Plus  bool   // print an error's chain, %+v
 	Width int    // the width, or -1
 	Prec  int    // the precision, or -1
 }
 
 // FormatVerbs are the verbs Snello's fmt prints.
-const FormatVerbs = "dfqstv"
+const FormatVerbs = "bcdefgoqstvxX"
+
+// integerVerbs are the verbs that print an integer's digits, in one
+// base or another, and take a precision as the least of them.
+const integerVerbs = "bdoxX"
+
+// ZeroPads reports whether the piece's width is made up with zeros
+// rather than spaces: the zero flag, but for an integer with a
+// precision, whose digits the precision has already made up, as in Go.
+func (p FormatPiece) ZeroPads() bool {
+	return p.Zero && !(p.Prec >= 0 && formatHasByte(integerVerbs, p.Verb))
+}
 
 // An FormatError says what is wrong with a format.
 type FormatError struct {
@@ -98,6 +110,8 @@ func ParseFormat(format string) ([]FormatPiece, error) {
 				p.Minus = true
 			case '+':
 				p.Plus = true
+			case '0':
+				p.Zero = true
 			default:
 				return nil, &FormatError{"fmt takes no " + string(format[i]) + " flag: " + formatQuoted(format)}
 			}
@@ -109,12 +123,16 @@ func ParseFormat(format string) ([]FormatPiece, error) {
 			p.Prec = max(p.Prec, 0) // %.f is a precision of zero, as in Go
 		}
 
+		if p.Width > FormatMost || p.Prec > FormatMost {
+			return nil, &FormatError{"fmt takes a width and a precision of " + strconv.Itoa(FormatMost) + " at most: " + formatQuoted(format)}
+		}
+
 		if i >= len(format) {
 			return nil, &FormatError{"the format ends in a verb with no letter: " + formatQuoted(format)}
 		}
 
 		switch c := format[i]; {
-		case c == '%' && p.Width < 0 && p.Prec < 0 && !p.Minus:
+		case c == '%' && p.Width < 0 && p.Prec < 0 && !p.Minus && !p.Zero:
 			text = append(text, '%')
 			continue
 		case c == '*':
@@ -128,6 +146,12 @@ func ParseFormat(format string) ([]FormatPiece, error) {
 		if p.Plus && p.Verb != 'v' {
 			return nil, &FormatError{"fmt takes the + flag on %v of an error only: " + formatQuoted(format)}
 		}
+
+		if p.Zero && formatHasByte("cqst", p.Verb) {
+			return nil, &FormatError{"fmt takes the 0 flag on a number only, not with %" + string(p.Verb) + ": " + formatQuoted(format)}
+		}
+
+		p.Zero = p.Zero && !p.Minus
 
 		if len(text) > 0 {
 			pieces = append(pieces, FormatPiece{Text: string(text)})
@@ -158,12 +182,20 @@ func FormatCount(pieces []FormatPiece) int {
 
 func isFormatFlag(c byte) bool { return c == '-' || c == '+' || c == '#' || c == ' ' || c == '0' }
 
-// formatNumber reads the decimal formatNumber at i, returning where it ends and its
-// value, or -1 when there is none.
+// FormatMost is the largest width and the largest precision a format
+// takes: a text of a million characters is past any table or number a
+// program prints, and a bound keeps what the runtime allocates for one
+// verb within reason.
+const FormatMost = 1000000
+
+// formatNumber reads the decimal number at i, returning where it ends
+// and its value, or -1 when there is none. A number past FormatMost
+// reads as one past it, however many digits it has, so that none wraps
+// into a small one.
 func formatNumber(s string, i int) (int, int) {
 	n := -1
 	for ; i < len(s) && '0' <= s[i] && s[i] <= '9'; i++ {
-		n = max(n, 0)*10 + int(s[i]-'0')
+		n = min(max(n, 0)*10+int(s[i]-'0'), FormatMost+1)
 	}
 
 	return i, n

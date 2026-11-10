@@ -55,3 +55,77 @@ func TestBitOps(t *testing.T) {
 		t.Errorf("main lacks the library's function for the value of OnesCount64:\n%s", body)
 	}
 }
+
+// verbCalls prints with each verb past %v, %d, %s, %q, %f and %t, with
+// the zero flag where it pads and where it does not, with %g and %x on
+// types that print as their String, and with Fprint.
+const verbCalls = `package main
+import ("fmt"; "os")
+type Heat f64 impl fmt.Stringer
+func (h ref Heat) String() string { return "hot" }
+type Tag string impl fmt.Stringer
+func (t ref Tag) String() string { return "TAG" }
+func main() {
+	var n i8 = -5
+	var u u8 = 200
+	bs := []u8{1, 255}
+	s := "hi"
+	heat := Heat(1.5)
+	tag := Tag("ab")
+	fmt.Printf("%x %X %o %b %c %.4x\n", n, u, n, u, u, n)
+	fmt.Printf("%x %X\n", s, bs)
+	fmt.Printf("%e %.2e %g %.3g\n", 2.5, 2.5, f32(2.5), 2.5)
+	fmt.Printf("%05d %-05d %06.3d %08.3f %5d\n", n, n, n, 2.5, n)
+	fmt.Printf("%g %x\n", heat, tag)
+	fmt.Fprint(mut os.Stdout(), n, s)
+}
+`
+
+// A verb is a call of the runtime's function for it: an integer in a
+// base as its magnitude after a sign, widened by its own signedness;
+// the bytes of a string and of a []u8 in hexadecimal; a float with an
+// exponent, six digits unless the format gives a precision; and %g
+// without one as the shortest text of the float, of its own width.
+// Neither %g nor %x prints through a String method: each takes the
+// value itself. The zero flag pads with sn_pad_zero, but not under the
+// minus flag or on an integer with a precision, and Fprint writes its
+// text with the writer's Write.
+func TestVerbs(t *testing.T) {
+	body := irFunction(t, emitSource(t, verbCalls), "sn_main")
+	for _, want := range []string{
+		"sext i8 %", "zext i8 %", ", i64 16, i1 zeroext false)", ", i64 16, i1 zeroext true)", ", i64 8, i1 zeroext false)", ", i64 2, i1 zeroext false)",
+		"@sn_hex_bytes(", "@sn_f32_to_string(", "@sn_sn_os_File_Write(",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main lacks %s:\n%s", want, body)
+		}
+	}
+
+	for call, last := range map[string][]string{ // each call's precision or digits, its last argument
+		"@sn_f64_e(": {", i64 6)", ", i64 2)"}, "@sn_f64_g(": {", i64 3)"}, "@sn_f64_fixed(": {", i64 3)"}, "@sn_int_digits(": {", i64 4)", ", i64 3)"},
+	} {
+		var got []string
+		for _, line := range strings.Split(body, "\n") {
+			if i := strings.LastIndex(line, ", i64 "); i >= 0 && strings.Contains(line, "call void "+call) {
+				got = append(got, line[i:])
+			}
+		}
+
+		if strings.Join(got, " ") != strings.Join(last, " ") {
+			t.Errorf("the calls of %s end in %q, want %q:\n%s", call, got, last, body)
+		}
+	}
+
+	for name, want := range map[string]int{
+		"@sn_int_base(": 3, "@sn_uint_base(": 2, "@sn_char(": 1, "@sn_int_digits(": 2, "@sn_hex(": 2, "@sn_f64_e(": 2, "@sn_f64_g(": 1,
+		"@sn_pad_zero(": 2, "@sn_pad(": 3, "@sn_f64_to_string(": 1,
+	} {
+		if n := strings.Count(body, "call void "+name); n != want {
+			t.Errorf("main calls %s %d times, want %d:\n%s", name, n, want, body)
+		}
+	}
+
+	if strings.Contains(body, "_String(") {
+		t.Errorf("main prints through a String method where %%g and %%x take the value:\n%s", body)
+	}
+}

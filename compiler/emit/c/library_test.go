@@ -48,3 +48,60 @@ func TestBitOps(t *testing.T) {
 		t.Errorf("main names the library's functions %d times, want once, for the value of OnesCount64:\n%s", n, body)
 	}
 }
+
+// verbCalls prints with each verb past %v, %d, %s, %q, %f and %t, with
+// the zero flag where it pads and where it does not, with %g and %x on
+// types that print as their String, and with Fprint.
+const verbCalls = `package main
+import ("fmt"; "os")
+type Heat f64 impl fmt.Stringer
+func (h ref Heat) String() string { return "hot" }
+type Tag string impl fmt.Stringer
+func (t ref Tag) String() string { return "TAG" }
+func main() {
+	var n i8 = -5
+	var u u8 = 200
+	bs := []u8{1, 255}
+	s := "hi"
+	heat := Heat(1.5)
+	tag := Tag("ab")
+	fmt.Printf("%x %X %o %b %c %.4x\n", n, u, n, u, u, n)
+	fmt.Printf("%x %X\n", s, bs)
+	fmt.Printf("%e %.2e %g %.3g\n", 2.5, 2.5, f32(2.5), 2.5)
+	fmt.Printf("%05d %-05d %06.3d %08.3f %5d\n", n, n, n, 2.5, n)
+	fmt.Printf("%g %x\n", heat, tag)
+	fmt.Fprint(mut os.Stdout(), n, s)
+}
+`
+
+// A verb is a call of the runtime's function for it: an integer in a
+// base as its magnitude after a sign, widened by its own signedness;
+// the bytes of a string and of a []u8 in hexadecimal; a float with an
+// exponent, six digits unless the format gives a precision; and %g
+// without one as the shortest text of the float, of its own width.
+// Neither %g nor %x prints through a String method: each takes the
+// value itself. The zero flag pads with sn_pad_zero, but not under the
+// minus flag or on an integer with a precision, and Fprint writes its
+// text with the writer's Write.
+func TestVerbs(t *testing.T) {
+	body := cFunction(t, emitSource(t, verbCalls), "static SN_UNUSED void sn_main(void)")
+	for _, want := range []string{
+		"sn_int_base((int64_t)(n), 16, false)", "sn_uint_base((uint64_t)(u), 16, true)", "sn_int_base((int64_t)(n), 8, false)",
+		"sn_uint_base((uint64_t)(u), 2, false)", "sn_char((int64_t)(u))", "sn_int_digits(sn_int_base((int64_t)(n), 16, false), 4)",
+		"sn_hex(s, false, false)", "sn_hex(tag, false, false)", "sn_hex_bytes((sn_slice){", ".cap}, true)",
+		", 6);", ", 2);", "sn_f32_to_string(", "sn_f64_g(2.5, 3)", "sn_f64_to_string((double)(heat))",
+		"sn_pad_zero(sn_int_to_string((int64_t)(n)), 5, true)", "sn_pad(sn_int_to_string((int64_t)(n)), 5, true, true)",
+		"sn_pad(sn_int_digits(sn_int_to_string((int64_t)(n)), 3), 6, false, true)", "sn_pad_zero(sn_f64_fixed(2.5, 3), 8, true)",
+		"sn_sn_os_File_Write(",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("main lacks %s:\n%s", want, body)
+		}
+	}
+
+	for name, want := range map[string]int{"sn_hex(": 2, "sn_f64_e(": 2, "sn_pad_zero(": 2, "_String(": 0} {
+		if n := strings.Count(body, name); n != want {
+			t.Errorf("main calls %s %d times, want %d:\n%s", name, n, want, body)
+		}
+	}
+}

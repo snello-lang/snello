@@ -44,6 +44,9 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	case "fmt.Printf":
 		e.line("sn_print_owned(" + e.sprintf(x.Args[0], x.Args[1:]) + ");")
 		return ""
+	case "fmt.Fprint":
+		e.fprint(x, e.sprint(x.Args[1:]))
+		return ""
 	case "fmt.Fprintln":
 		e.fprint(x, e.sprintln(x.Args[1:]))
 		return ""
@@ -249,7 +252,11 @@ func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) string {
 
 		part := e.verb(p, args[0], parts[0])
 		args, parts = args[1:], parts[1:]
-		if p.Width >= 0 {
+		switch {
+		case p.Width < 0:
+		case p.ZeroPads():
+			part = text{"sn_pad_zero(" + part.s + ", " + strconv.Itoa(p.Width) + ", " + strconv.FormatBool(part.owned) + ")", true}
+		default:
 			part = text{"sn_pad(" + part.s + ", " + strconv.Itoa(p.Width) + ", " + strconv.FormatBool(p.Minus) + ", " + strconv.FormatBool(part.owned) + ")", true}
 		}
 
@@ -278,18 +285,58 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 		return text{"sn_truncate(" + s.s + ", " + prec + ", " + strconv.FormatBool(s.owned) + ")", s.owned}
 	}
 
+	// The digits of an integer in a base, never a String method's text,
+	// as Go's %d prints the number, at least as many as the precision.
+	integer := func(digits string) text {
+		if p.Prec >= 0 {
+			digits = "sn_int_digits(" + digits + ", " + prec + ")"
+		}
+
+		return text{digits, true}
+	}
+
+	inBase := func(base int) text {
+		to, as := "sn_int_base", "int64_t"
+		if info&types.IsUnsigned != 0 {
+			to, as = "sn_uint_base", "uint64_t"
+		}
+
+		return integer(to + "((" + as + ")(" + deref(v, t) + "), " + strconv.Itoa(base) + ", " + strconv.FormatBool(p.Verb == 'X') + ")")
+	}
+
+	places := max(p.Prec, 0)
+	if p.Prec < 0 {
+		places = 6 // as Go prints %f and %e
+	}
+
 	switch {
 	case p.Verb == 'v' && p.Plus: // an error's chain
 		return text{e.chainer(lower.ValueType(t), a.Pos()) + "(" + deref(v, t) + ")", true}
 	case p.Verb == 'f':
-		digits := max(p.Prec, 0)
-		if p.Prec < 0 {
-			digits = 6 // as Go prints %f
+		return text{"sn_f64_fixed(" + deref(v, t) + ", " + strconv.Itoa(places) + ")", true}
+	case p.Verb == 'e':
+		return text{"sn_f64_e(" + deref(v, t) + ", " + strconv.Itoa(places) + ")", true}
+	case (p.Verb == 'v' || p.Verb == 'g') && p.Prec >= 0 && info&types.IsFloat != 0:
+		return text{"sn_f64_g(" + deref(v, t) + ", " + prec + ")", true}
+	case (p.Verb == 'x' || p.Verb == 'X') && info&types.IsInteger != 0:
+		return inBase(16)
+	case (p.Verb == 'x' || p.Verb == 'X') && isByteSlice(lower.ValueType(t)): // the bytes, lent
+		b := e.spill(deref(v, t), lower.ValueType(t), a.Pos())
+		return text{"sn_hex_bytes((sn_slice){" + b + ".ptr, " + b + ".len, " + b + ".cap}, " + strconv.FormatBool(p.Verb == 'X') + ")", true}
+	case p.Verb == 'g': // the shortest text of the float itself, of its own width, never a String method's
+		if b, ok := lower.ValueType(t).Underlying().(*types.Basic); ok && b.Kind() == types.Float32 {
+			return text{"sn_f32_to_string(" + deref(v, t) + ")", true}
 		}
 
-		return text{"sn_f64_fixed(" + deref(v, t) + ", " + strconv.Itoa(digits) + ")", true}
-	case p.Verb == 'v' && p.Prec >= 0 && info&types.IsFloat != 0:
-		return text{"sn_f64_g(" + deref(v, t) + ", " + prec + ")", true}
+		return text{"sn_f64_to_string((double)(" + deref(v, t) + "))", true}
+	case p.Verb == 'x' || p.Verb == 'X': // the bytes of the string itself, lent
+		return text{"sn_hex(" + deref(v, t) + ", " + strconv.FormatBool(p.Verb == 'X') + ", false)", true}
+	case p.Verb == 'o':
+		return inBase(8)
+	case p.Verb == 'b':
+		return inBase(2)
+	case p.Verb == 'c':
+		return text{"sn_char((int64_t)(" + deref(v, t) + "))", true}
 	case p.Verb == 'q' && info&types.IsInteger != 0:
 		return text{"sn_quote_rune((int64_t)(" + deref(v, t) + "))", true}
 	case p.Verb == 'q':
@@ -299,17 +346,12 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 		}
 
 		return text{"sn_quote(" + s.s + ")", true}
-	case p.Verb == 'd': // the number, never a String method's text, as Go's %d prints it
-		digits := "sn_int_to_string((int64_t)(" + deref(v, t) + "))"
+	case p.Verb == 'd':
 		if info&types.IsUnsigned != 0 {
-			digits = "sn_uint_to_string((uint64_t)(" + deref(v, t) + "))"
+			return integer("sn_uint_to_string((uint64_t)(" + deref(v, t) + "))")
 		}
 
-		if p.Prec >= 0 {
-			digits = "sn_int_digits(" + digits + ", " + prec + ")"
-		}
-
-		return text{digits, true}
+		return integer("sn_int_to_string((int64_t)(" + deref(v, t) + "))")
 	}
 
 	return truncated(e.text(v, a))
