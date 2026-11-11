@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package os is the program's view of its system: files, the three
-// standard streams, the command line, temporary directories, and the
-// way out.
+// Package os is the program's view of its system: files and
+// directories, the three standard streams, the command line, the
+// environment, and the way out.
 //
 // Every function that can fail returns a Result<T, io.Error>, so a
 // failure is passed up with ? or handled with a match on Ok and Err.
@@ -13,7 +13,7 @@
 // argument.
 package os
 
-import "io"
+import ("fmt"; "io"; "time")
 
 // A File is an open file, or one of the standard streams. It
 // implements io.Reader and io.Writer, so it is what io.Copy and
@@ -30,6 +30,13 @@ struct File impl Drop, io.Reader, io.Writer, io.Seeker {
 	name   string
 	stream bool // one of the three standard streams, which stay open for the program's life
 }
+
+// The error numbers the package reports of its own accord, where the
+// system was not asked: each is the same number on every system Snello
+// runs on.
+const eexist int = 17  // file exists
+const enotdir int = 20 // not a directory
+const einval int = 22  // invalid argument
 
 // Args is the command line: the program's name first, then its
 // arguments, as the shell split them. The runtime fills it before main
@@ -174,7 +181,7 @@ func Remove(path ref string) Result<(), io.Error> {
 // failed, as Go's does: "unlinkat /tmp/d/locked/f: permission denied".
 func RemoveAll(path ref string) Result<(), io.Error> {
 	if path == "." || path.HasSuffix("/.") {
-		return Err(io.Errno("RemoveAll", path, 22)) // EINVAL, the same number on every system Snello runs on
+		return Err(io.Errno("RemoveAll", path, einval))
 	}
 
 	failed := ""
@@ -185,6 +192,498 @@ func RemoveAll(path ref string) Result<(), io.Error> {
 	}
 
 	return Ok(())
+}
+
+// The flags of OpenFile, Go's names: one of O_RDONLY, O_WRONLY and
+// O_RDWR says how the file is opened, and the rest are added to it with
+// |. The numbers are Snello's own and the same on every system, where
+// Go's are the system's and differ from one to the next.
+const O_RDONLY int = 0   // open for reading only
+const O_WRONLY int = 1   // open for writing only
+const O_RDWR int = 2     // open for reading and writing
+const O_APPEND int = 8   // every write goes to the end of the file
+const O_CREATE int = 64  // make the file when it does not exist
+const O_EXCL int = 128   // with O_CREATE: fail when the file exists
+const O_SYNC int = 256   // every write waits for the device
+const O_TRUNC int = 512  // empty the file when it is opened
+
+// A FileMode is a file's kind and its permissions, with Go's bits: the
+// permissions in the low nine, as the system writes them, 0644, and a
+// bit for each kind of file that is not a regular one. It prints as ls
+// prints a mode, drwxr-xr-x.
+type FileMode u32 impl fmt.Stringer
+
+const ModeDir FileMode = 0x80000000        // d: a directory
+const ModeSymlink FileMode = 0x08000000    // L: a symbolic link
+const ModeDevice FileMode = 0x04000000     // D: a device file
+const ModeNamedPipe FileMode = 0x02000000  // p: a named pipe
+const ModeSocket FileMode = 0x01000000     // S: a socket
+const ModeSetuid FileMode = 0x00800000     // u: runs as its owner
+const ModeSetgid FileMode = 0x00400000     // g: runs as its group
+const ModeCharDevice FileMode = 0x00200000 // c: with ModeDevice, a character device
+const ModeSticky FileMode = 0x00100000     // t: the sticky bit
+const ModeIrregular FileMode = 0x00080000  // ?: a file of a kind nothing else names
+
+// ModeType is the bits that say what kind of file it is, and ModePerm
+// the permissions.
+const ModeType FileMode = 0x8f280000
+const ModePerm FileMode = 0o777
+
+// IsDir reports whether m is a directory's mode.
+func (m FileMode) IsDir() bool {
+	return m & ModeDir != 0
+}
+
+// IsRegular reports whether m is a regular file's mode: no bit of a
+// kind is set.
+func (m FileMode) IsRegular() bool {
+	return m & ModeType == 0
+}
+
+// Perm returns the permissions of m.
+func (m FileMode) Perm() FileMode {
+	return m & ModePerm
+}
+
+// Type returns the bits of m that say what kind of file it is.
+func (m FileMode) Type() FileMode {
+	return m & ModeType
+}
+
+// String returns the mode as Go prints it and ls does: a letter for
+// each bit of a kind that is set, a dash when none is, then the
+// permissions, "drwxr-xr-x", "-rw-r--r--", "Lrwxrwxrwx".
+func (m ref FileMode) String() string {
+	bits := u32(*m)
+	letters := "dalTLDpSugct?"
+	buf := []byte{}
+	for i := 0; i < letters.Len(); i++ {
+		if bits & (u32(1) << u32(31-i)) != 0 {
+			buf.Push(letters[i])
+		}
+	}
+
+	if len(buf) == 0 {
+		buf.Push('-')
+	}
+
+	rwx := "rwxrwxrwx"
+	for i := 0; i < 9; i++ {
+		if bits & (u32(1) << u32(8-i)) != 0 {
+			buf.Push(rwx[i])
+		} else {
+			buf.Push('-')
+		}
+	}
+
+	return string(buf)
+}
+
+// A FileInfo is what the system says of a file: Stat and Lstat return
+// one.
+struct FileInfo {
+	name    string
+	size    i64
+	mode    FileMode
+	modTime time.Time
+	dev     u64 // the device and the file's number on it, which name the file whatever its path
+	ino     u64
+}
+
+// Name returns the last element of the path the FileInfo was asked for.
+func (fi ref FileInfo) Name() ref string {
+	return ref fi.name
+}
+
+// Size returns the file's length in bytes; what a directory's is
+// depends on the system.
+func (fi ref FileInfo) Size() i64 {
+	return fi.size
+}
+
+// Mode returns the file's kind and permissions.
+func (fi ref FileInfo) Mode() FileMode {
+	return fi.mode
+}
+
+// ModTime returns when the file was last changed.
+func (fi ref FileInfo) ModTime() time.Time {
+	return fi.modTime
+}
+
+// IsDir reports whether the file is a directory.
+func (fi ref FileInfo) IsDir() bool {
+	return fi.mode.IsDir()
+}
+
+// A DirEntry is one name in a directory, as ReadDir returns it: the
+// name and the kind of file it is, which reading the directory gives
+// without asking about each file. Stat or Lstat of the name says the
+// rest.
+struct DirEntry {
+	name string
+	typ  FileMode // the bits of its kind alone
+}
+
+// Name returns the entry's name, the last element of its path.
+func (e ref DirEntry) Name() ref string {
+	return ref e.name
+}
+
+// IsDir reports whether the entry is a directory.
+func (e ref DirEntry) IsDir() bool {
+	return e.typ.IsDir()
+}
+
+// Type returns the bits of the entry's kind: ModeDir for a directory,
+// ModeSymlink for a symbolic link, which is not followed, and none for
+// a regular file.
+func (e ref DirEntry) Type() FileMode {
+	return e.typ
+}
+
+// OpenFile opens the named file as flag says, O_RDONLY, O_WRONLY or
+// O_RDWR with any of O_APPEND, O_CREATE, O_EXCL, O_SYNC and O_TRUNC
+// added by |, as Go's does: os.OpenFile(ref path,
+// os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644) is a log to append to. A
+// file it makes has the permissions perm, before the umask. A flag the
+// package does not name is an invalid argument. Open and Create are
+// the two commonest calls of it.
+func OpenFile(path ref string, flag int, perm FileMode) Result<File, io.Error> {
+	fd := 0
+	code := openFile(path, flag, u32(perm), mut fd)
+	if code != 0 {
+		return Err(io.Errno("open", path, code))
+	}
+
+	return Ok(File{fd: fd, name: path.Clone(), stream: false})
+}
+
+// ReadFile reads the whole of the named file as bytes, into one block
+// of the size the file reports. An Error's Op says which step failed:
+// "open", or "read" for a path that opens but cannot be read, as a
+// directory cannot.
+func ReadFile(path ref string) Result<[]byte, io.Error> {
+	data := []byte{}
+	inRead := 0
+	code := readFile(path, mut data, mut inRead)
+	if code != 0 {
+		op := if inRead == 1 { "read" } else { "open" }
+		return Err(io.Errno(op, path, code))
+	}
+
+	return Ok(data)
+}
+
+// WriteFile writes data to the named file, made with the permissions
+// perm, before the umask, when it does not exist, and emptied when it
+// does, as Go's does.
+func WriteFile(path ref string, data ref []byte, perm FileMode) Result<(), io.Error> {
+	f := OpenFile(path, O_WRONLY|O_CREATE|O_TRUNC, perm)?
+	f.Write(data)?
+	return f.Close()
+}
+
+// Stat returns what the system says of the named file. A symbolic link
+// is followed: the FileInfo is of the file it leads to.
+func Stat(path ref string) Result<FileInfo, io.Error> {
+	var fi FileInfo
+	code := statInto(path, true, mut fi)
+	if code != 0 {
+		return Err(io.Errno("stat", path, code))
+	}
+
+	return Ok(fi)
+}
+
+// Lstat is Stat that does not follow a symbolic link: the FileInfo is
+// of the link itself.
+func Lstat(path ref string) Result<FileInfo, io.Error> {
+	var fi FileInfo
+	code := statInto(path, false, mut fi)
+	if code != 0 {
+		return Err(io.Errno("lstat", path, code))
+	}
+
+	return Ok(fi)
+}
+
+// statInto fills fi with what the system says of path and returns the
+// system's error number, zero on success.
+func statInto(path ref string, follow bool, fi mut FileInfo) int {
+	var size i64 = 0
+	var mode u32 = 0
+	var sec i64 = 0
+	var nsec i64 = 0
+	var dev u64 = 0
+	var ino u64 = 0
+	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
+	if code == 0 {
+		fi.name = basename(path)
+		fi.size = size
+		fi.mode = FileMode(mode)
+		fi.modTime = time.Unix(sec, nsec)
+		fi.dev = dev
+		fi.ino = ino
+	}
+
+	return code
+}
+
+// basename is the last element of a path, as Go's os names a FileInfo:
+// the slashes at its end dropped, then what follows the last slash
+// left.
+func basename(path ref string) string {
+	end := path.Len()
+	for end > 1 && path[end-1] == '/' {
+		end--
+	}
+
+	start := end - 1
+	for start >= 0 && path[start] != '/' {
+		start--
+	}
+
+	if end == 1 && path[0] == '/' {
+		return "/"
+	}
+
+	return path[start+1:end].Clone()
+}
+
+// ReadDir returns the names in the named directory, sorted by name,
+// each with the kind of file it is; the entries . and .. are left out.
+// A path that is not a directory fails as Go's does, "open PATH: not a
+// directory".
+func ReadDir(path ref string) Result<[]DirEntry, io.Error> {
+	packed := []byte{} // each entry: the four bytes of its FileMode, lowest first, its name, a zero byte
+	op := ""
+	code := readDir(path, mut packed, mut op)
+	if code != 0 {
+		return Err(io.Errno(op, path, code))
+	}
+
+	entries := []DirEntry{}
+	at := 0
+	for at < len(packed) {
+		typ := u32(packed[at]) | u32(packed[at+1])<<8 | u32(packed[at+2])<<16 | u32(packed[at+3])<<24
+		end := at + 4
+		for packed[end] != 0 {
+			end++
+		}
+
+		entries.Push(DirEntry{name: string(packed[at+4:end]), typ: FileMode(typ)})
+		at = end + 1
+	}
+
+	entries.SortBy(func(a ref DirEntry, b ref DirEntry) bool { return a.name < b.name })
+	return Ok(entries)
+}
+
+// Mkdir makes the named directory with the permissions perm, before
+// the umask. Its parent must exist, and the directory must not.
+func Mkdir(path ref string, perm FileMode) Result<(), io.Error> {
+	code := mkdir(path, u32(perm))
+	if code != 0 {
+		return Err(io.Errno("mkdir", path, code))
+	}
+
+	return Ok(())
+}
+
+// MkdirAll makes the named directory and every parent of it that does
+// not exist, each with the permissions perm, as Go's does. A path that
+// is a directory already is no failure; one that is a file, or that
+// passes through one, is "mkdir PATH: not a directory".
+func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
+	var fi FileInfo
+	if statInto(path, true, mut fi) == 0 { // the fast path: it is there
+		if fi.IsDir() {
+			return Ok(())
+		}
+
+		return Err(io.Errno("mkdir", path, enotdir))
+	}
+
+	// The parent first: the path without its last element and the
+	// slashes around it.
+	i := path.Len() - 1
+	for i >= 0 && path[i] == '/' {
+		i--
+	}
+
+	for i >= 0 && path[i] != '/' {
+		i--
+	}
+
+	if i > 0 {
+		MkdirAll(path[0:i], perm)?
+	}
+
+	match Mkdir(path, perm) {
+		Ok(_) => return Ok(()),
+		Err(e) => {
+			// A directory another task made meanwhile, or a path
+			// ending in a slash or a dot, is there already.
+			if statInto(path, false, mut fi) == 0 && fi.IsDir() {
+				return Ok(())
+			}
+
+			return Err(e)
+		},
+	}
+}
+
+// Rename renames the file or directory from to to, moving it when to
+// is in another directory, and replacing a file that to names. A to
+// that is a directory is refused as "file exists", as Go refuses it,
+// unless it is from itself under another spelling. The Error is Go's:
+// "rename FROM TO: no such file or directory".
+func Rename(from ref string, to ref string) Result<(), io.Error> {
+	var target FileInfo
+	if statInto(to, false, mut target) == 0 && target.IsDir() {
+		var source FileInfo
+		code := statInto(from, false, mut source)
+		if code != 0 {
+			return Err(io.Errno("rename", ref (from + " " + to), code))
+		}
+
+		if from == to || source.dev != target.dev || source.ino != target.ino {
+			return Err(io.Errno("rename", ref (from + " " + to), eexist))
+		}
+	}
+
+	code := rename(from, to)
+	if code != 0 {
+		return Err(io.Errno("rename", ref (from + " " + to), code))
+	}
+
+	return Ok(())
+}
+
+// Getwd returns the path of the current directory, as Go's does: the
+// PWD of the environment when it names the current directory, which is
+// the path the user came by, through a symbolic link or not, and what
+// the system says otherwise.
+func Getwd() Result<string, io.Error> {
+	dir := Getenv("PWD")
+	if dir.HasPrefix("/") {
+		var dot FileInfo
+		code := statInto(".", true, mut dot)
+		if code != 0 {
+			return Err(io.Errno("stat", ".", code))
+		}
+
+		var named FileInfo
+		if statInto(ref dir, true, mut named) == 0 && named.dev == dot.dev && named.ino == dot.ino {
+			return Ok(dir)
+		}
+	}
+
+	out := ""
+	code := getcwd(mut out)
+	if code != 0 {
+		return Err(syscallError("getwd", code))
+	}
+
+	return Ok(out)
+}
+
+// Chdir makes the named directory the current one, which a path that
+// does not start with a slash is read from: for the whole program,
+// every task of it, as the system has one.
+func Chdir(path ref string) Result<(), io.Error> {
+	code := chdir(path)
+	if code != 0 {
+		return Err(io.Errno("chdir", path, code))
+	}
+
+	return Ok(())
+}
+
+// Hostname returns the name the system gives the machine.
+func Hostname() Result<string, io.Error> {
+	name := ""
+	code := hostname(mut name)
+	if code != 0 {
+		return Err(syscallError("hostname", code))
+	}
+
+	return Ok(name)
+}
+
+// Getpid returns the number of the program's process. The runtime
+// provides it.
+func Getpid() int
+
+// TempDir returns the directory for temporary files: the TMPDIR of the
+// environment, or /tmp when it is unset or empty. It is not checked to
+// exist. The runtime provides it.
+func TempDir() string
+
+// Getenv returns the value of the environment variable key, and an
+// empty string when it is not set; LookupEnv tells an empty value from
+// none.
+//
+// The environment is a copy the runtime makes of the one the program
+// was started with and keeps under a lock, as Go keeps its own, so any
+// task may read it while another sets a variable. Setenv and Unsetenv
+// change that copy: what the program reads after, and not what a C
+// library bound to it reads, which is the environment the program was
+// started with.
+//
+// A variable the program started with is lent from a block that lives
+// as long as the program, with nothing copied, as a string literal is;
+// one the program set is returned as a copy, since a later Setenv
+// frees its bytes.
+func Getenv(key ref string) string {
+	value := ""
+	_ = lookupEnv(key, mut value)
+	return value
+}
+
+// LookupEnv returns the value of the environment variable key, or None
+// when it is not set: a variable set to nothing is Some("").
+func LookupEnv(key ref string) string? {
+	value := ""
+	if lookupEnv(key, mut value) {
+		return Some(value)
+	}
+
+	return None
+}
+
+// Setenv sets the environment variable key to value. A key that is
+// empty or holds an = or a zero byte, and a value that holds a zero
+// byte, fail as Go's do: "setenv: invalid argument".
+func Setenv(key ref string, value ref string) Result<(), io.Error> {
+	code := setenv(key, value)
+	if code != 0 {
+		return Err(syscallError("setenv", code))
+	}
+
+	return Ok(())
+}
+
+// Unsetenv unsets the environment variable key; one that is not set is
+// nothing to unset. The runtime provides it.
+func Unsetenv(key ref string)
+
+// Environ returns the environment, a string a variable as KEY=value,
+// as it is at one moment: a variable the program started with lent as
+// Getenv lends it, and one the program set as a copy.
+func Environ() []string {
+	vars := []string{}
+	environ(mut vars)
+	return vars
+}
+
+// syscallError builds the Error of a system call that was on no path,
+// from the system's error number, worded as Go's NewSyscallError words
+// it: "setenv: invalid argument".
+func syscallError(op string, code int) io.Error {
+	e := io.Errno(op, "", code)
+	return io.NewError(e.Op.Clone(), "", e.Msg.Clone(), e.Kind())
 }
 
 // Name returns the path the file was opened with, or the name of the
@@ -302,3 +801,20 @@ func writeString(fd int, s ref string, n mut int) int
 func syncFile(fd int) int
 func closeFile(fd int) int
 func seek(fd int, whence int, off i64, at mut u64) int
+func openFile(path ref string, flag int, perm u32, fd mut int) int
+func readFile(path ref string, out mut []byte, inRead mut int) int
+func stat(path ref string, follow bool, size mut i64, mode mut u32, sec mut i64, nsec mut i64, dev mut u64, ino mut u64) int
+func readDir(path ref string, out mut []byte, op mut string) int
+func mkdir(path ref string, perm u32) int
+func rename(from ref string, to ref string) int
+func getcwd(out mut string) int
+func chdir(path ref string) int
+func hostname(out mut string) int
+
+// The environment's: lookupEnv stores the value of key and reports
+// whether it is set, setenv returns the system's error number for a key or a
+// value it refuses, and environ fills a slice that holds nothing with
+// every variable.
+func lookupEnv(key ref string, value mut string) bool
+func setenv(key ref string, value ref string) int
+func environ(out mut []string)

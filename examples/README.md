@@ -31,7 +31,8 @@ The binary is written to the current directory, named after the file, or after t
 | json/ | A JSON value type, encoder and decoder written in the example itself, over `strings` and `strconv`: a recursive enum holding collections, a decoder holding a borrow of its input |
 | worker-pool/ | `select`, timeouts, a cancellation token |
 | actor/ | State a task owns, message passing, reply channels |
-| files/ | `Drop` against `defer`, a consuming `Close` |
+| files/ | `Drop` against `defer`, a consuming `Close`; then `os.OpenFile` to append to a log, `MkdirAll`, `Rename`, `ReadDir` and `Stat` |
+| paths/ | `path` on paths as a user types them: `Clean` to see a path that climbs out of its directory, `Join`, `Split`, `Dir`, `Base`, `Ext` and `IsAbs`, with the environment read by `os.LookupEnv` and set by `os.Setenv` |
 | lru/ | A map into a linked list kept in an arena; two `mut` paths into one slice refused |
 | matrix/ | `Copy` types, operator traits, no hidden allocation |
 | state-machine/ | Enum states, consuming transitions, a connection closed where its state is dropped |

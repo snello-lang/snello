@@ -92,6 +92,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -300,6 +301,15 @@ func queued() int {
 	return b.Len()
 }
 
+// pathed answers with what each function of package path makes of a
+// path, in hexadecimal: Clean, Dir, Base, Ext, the two parts of Split,
+// IsAbs, and the Join of its two halves.
+func pathed(p ref string) string {
+	dir, file := path.Split(p)
+	half := p.Len() / 2
+	return fmt.Sprintf("%x %x %x %x %x %x %t %x", path.Clean(p), path.Dir(p), path.Base(p), path.Ext(p), dir, file, path.IsAbs(p), path.Join(p[0:half], p[half:]))
+}
+
 func nibble(c u8) u8 {
 	if c <= '9' {
 		return c - '0'
@@ -357,7 +367,9 @@ func main() {
 				Ok(answer) => fmt.Println(answer),
 				Err(e) => fmt.Println("error:", e),
 			}
-		} else if line[0] == 'k' {
+		} else if line[0] == 'p' {
+			fmt.Println(pathed(ref s))
+		} else if line[0] == 'k' { // the queue's: q is Unquote's, which is every letter no branch names
 			fmt.Println(queued())
 		} else {
 			match strconv.Unquote(ref s) {
@@ -868,6 +880,32 @@ func FuzzReader(f *testing.F) {
 		payload = append(append(payload, ops...), data...)
 		if got, want := ask(t, 'r', string(payload)), goReads(data, sizes, ops); got != want {
 			t.Errorf("the Reader of %q, read in pieces of %v, asked %q:\ngot  %.600s\nwant %.600s", data, sizes, ops, got, want)
+		}
+	})
+}
+
+// FuzzPath holds package path to Go's on any string, a path or not:
+// Clean, Dir, Base, Ext, Split, IsAbs and Join each give what Go's
+// gives, byte for byte.
+func FuzzPath(f *testing.F) {
+	for _, s := range []string{
+		"", ".", "..", "/", "//", "a", "a/", "/a", "a/b/c.txt", "a//b/./c/../d/", "../../a", "/../a", "a/..", "a/../..",
+		"./a", "..a/b", "a/b/..", "/a/b/../../..", "a.b/c", "a/b.c/", ".hidden", "x/.y.tar.gz", "/usr/local//lib/./snello/../snello/std/path.snello/",
+		"\x00/\xff/..", "a/./../b", "...", ".../.", "a/.../b",
+	} {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, p string) {
+		if len(p) > 1<<12 {
+			return
+		}
+
+		dir, file := path.Split(p)
+		half := len(p) / 2
+		want := fmt.Sprintf("%x %x %x %x %x %x %t %x", path.Clean(p), path.Dir(p), path.Base(p), path.Ext(p), dir, file, path.IsAbs(p), path.Join(p[:half], p[half:]))
+		if got := ask(t, 'p', p); got != want {
+			t.Errorf("the path %q:\ngot  %s\nwant %s", p, got, want)
 		}
 	})
 }

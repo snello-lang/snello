@@ -1,0 +1,23 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package filepath_test
+
+import ("expect"; "path/filepath")
+
+// Each name answers as package path's does, which that package's tests
+// hold to Go's: here, that every one is there and reaches it.
+func TestNames() {
+	expect.Equal(ref filepath.Clean("/usr//lib/../bin/"), "/usr/bin")
+	expect.Equal(ref filepath.Join("/usr", "lib/snello"), "/usr/lib/snello")
+	expect.Equal(ref filepath.Dir("/usr/lib/snello"), "/usr/lib")
+	expect.Equal(filepath.Base("/usr/lib/snello"), "snello")
+	expect.Equal(filepath.Ext("notes.txt"), ".txt")
+	dir, file := filepath.Split("/tmp/notes.txt")
+	expect.Equal(dir, "/tmp/")
+	expect.Equal(file, "notes.txt")
+	expect.True(filepath.IsAbs("/tmp"))
+	expect.False(filepath.IsAbs("tmp"))
+	expect.Equal(ref filepath.Separator, ref '/')
+}

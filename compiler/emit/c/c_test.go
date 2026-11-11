@@ -271,21 +271,34 @@ func TestDebugChecks(t *testing.T) {
 // connection and an accepted one print their number, then whether each
 // flag is set.
 func TestDescriptorFlags(t *testing.T) {
-	body := `int64_t fds[5] = {0}, port = 0, bad = 0; sn_string call;
+	body := `int64_t fds[6] = {0}, port = 0, bad = 0; sn_string call;
 	bad += sn_os_create(SN_STR("flags.txt", 9), &fds[0]);
 	bad += sn_os_open(SN_STR("flags.txt", 9), &fds[1]);
 	bad += sn_net_listen(SN_STR("127.0.0.1", 9), 0, &fds[2], &port, &call);
 	bad += sn_net_dial(SN_STR("127.0.0.1", 9), port, 0, &fds[3], &call);
 	bad += sn_net_accept(fds[2], &fds[4]);
-	for (int i = 0; i < 5; i++) {
+	bad += sn_os_openFile(SN_STR("flags.txt", 9), 2 | 8 | 256, 0, &fds[5]); // os.O_RDWR|os.O_APPEND|os.O_SYNC
+	for (int i = 0; i < 6; i++) {
 		char line[32];
 		int n = snprintf(line, sizeof line, "%d %d %d\n", i, (fcntl((int)fds[i], F_GETFD) & FD_CLOEXEC) != 0, (fcntl((int)fds[i], F_GETFL) & O_NONBLOCK) != 0);
 		sn_print_string(SN_STR(line, n));
 	}
+	// The flags os.OpenFile was given are the file's: read and write, append, and synchronous writes.
+	int fl = fcntl((int)fds[5], F_GETFL);
+	sn_print_string((fl & O_ACCMODE) == O_RDWR && (fl & O_APPEND) != 0 && (fl & O_SYNC) != 0 ? SN_STR("flags kept\n", 11) : SN_STR("flags lost\n", 11));
+	// A directory read leaves no descriptor open: the next one opened
+	// has the number the one before the read had.
+	sn_slice_u8 names = {0}; sn_string op = {0}; int64_t before = 0, after = 0;
+	bad += sn_os_open(SN_STR("flags.txt", 9), &before);
+	bad += sn_os_closeFile(before);
+	bad += sn_os_readDir(SN_STR(".", 1), &names, &op);
+	bad += sn_os_open(SN_STR("flags.txt", 9), &after);
+	sn_print_string(before == after && names.len > 0 ? SN_STR("dir closed\n", 11) : SN_STR("dir left open\n", 14));
+	sn_slice_free((sn_slice *)&names);
 	sn_print_int(bad);`
 	csrc := "#include \"snello.h\"\n#include <fcntl.h>\n#include <stdio.h>\nint main(int argc, char **argv) { sn_init(argc, argv); " + body + " return sn_finish(); }\n"
 	out, stderr, code := execute(t, t.TempDir(), "flags", []byte(csrc), false)
-	if want := "0 1 0\n1 1 0\n2 1 1\n3 1 1\n4 1 1\n0"; out != want || code != 0 {
+	if want := "0 1 0\n1 1 0\n2 1 1\n3 1 1\n4 1 1\n5 1 0\nflags kept\ndir closed\n0"; out != want || code != 0 {
 		t.Errorf("exit %d, printed %q%s, want %q", code, out, stderr, want)
 	}
 }

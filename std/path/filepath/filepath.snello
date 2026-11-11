@@ -1,0 +1,54 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package filepath works on the paths of files, with the separator the
+// system uses, as Go's path/filepath does. Every system Snello runs on
+// separates the elements of a path with a slash, so its functions are
+// package path's, under the name a program working on files reads them
+// by: a program that means a file's path says filepath, and one that
+// means a path in a URL says path.
+package filepath
+
+import "path"
+
+// Separator is what the system puts between the elements of a path.
+const Separator rune = '/'
+
+// Clean returns the shortest path that names what p names, by the rules
+// path.Clean applies.
+func Clean(p ref string) string {
+	return path.Clean(p)
+}
+
+// Split cuts p just after its last separator and lends the two parts,
+// the directory and the file.
+func Split(p ref string) (ref string, ref string) {
+	return path.Split(p)
+}
+
+// Join joins two paths with a separator between them and cleans the
+// result; an empty one is left out.
+func Join(a ref string, b ref string) string {
+	return path.Join(a, b)
+}
+
+// Ext lends the extension of p's last element, its dot included.
+func Ext(p ref string) ref string {
+	return path.Ext(p)
+}
+
+// Base lends the last element of p.
+func Base(p ref string) ref string {
+	return path.Base(p)
+}
+
+// IsAbs reports whether p starts at the root.
+func IsAbs(p ref string) bool {
+	return path.IsAbs(p)
+}
+
+// Dir returns all of p but its last element, cleaned.
+func Dir(p ref string) string {
+	return path.Dir(p)
+}

@@ -1,0 +1,18 @@
+to /backup
+notes.txt                          /backup/home/notes.txt
+                                     notes.txt in /backup/home, txt; split as "/backup/home/" and "notes.txt"
+./photos//2026/../2025/beach.jpg   /backup/home/photos/2025/beach.jpg
+                                     beach.jpg in /backup/home/photos/2025, jpg; split as "/backup/home/photos/2025/" and "beach.jpg"
+/etc/hosts                         /backup/etc/hosts
+                                     hosts in /backup/etc, no extension; split as "/backup/etc/" and "hosts"
+music/                             /backup/home/music
+                                     music in /backup/home, no extension; split as "/backup/home/" and "music"
+archive.tar.gz                     /backup/home/archive.tar.gz
+                                     archive.tar.gz in /backup/home, gz; split as "/backup/home/" and "archive.tar.gz"
+../neighbour/secret.key            refused: outside the home directory
+work/../../etc/passwd              refused: outside the home directory
+.profile                           /backup/home/.profile
+                                     .profile in /backup/home, profile; split as "/backup/home/" and ".profile"
+to /mnt/disk/backups
+./photos//2026/../2025/beach.jpg   /mnt/disk/backups/home/photos/2025/beach.jpg
+                                     beach.jpg in /mnt/disk/backups/home/photos/2025, jpg; split as "/mnt/disk/backups/home/photos/2025/" and "beach.jpg"

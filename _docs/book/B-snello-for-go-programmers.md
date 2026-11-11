@@ -214,7 +214,13 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | Each package is compiled once and linked | The library is compiled with the program, into one binary, so the C compiler inlines across the boundary |
 | `GOROOT` holds the library's source | The library's source is inside the compiler; a build needs no path and no environment |
 | A function with no body is implemented in assembly | A function with no body is the runtime's, in C; only the library may declare one |
-| `os.ReadFile` returns bytes and an error | `os.ReadToString` returns `Result<string, io.Error>` (chapter 8) |
+| `os.ReadFile` returns bytes and an error | `os.ReadFile` returns `Result<[]byte, io.Error>`, and `os.ReadToString` a string (chapter 8) |
+| `os.LookupEnv` returns `(string, bool)` | `os.LookupEnv` returns a `string?`: `os.LookupEnv("HOME") ?? "/"` |
+| `os.Setenv` also sets the C library's environment under cgo | `os.Setenv` changes the program's copy alone: a bound C library reads the environment the program started with |
+| `os.O_RDONLY` and the other flags are the system's numbers | The same names, with numbers of Snello's own, the same on every system |
+| `os.FileInfo` and `os.DirEntry` are interfaces | Structs with the same methods: `Name`, `Size`, `Mode`, `ModTime`, `IsDir`; `Name`, `IsDir`, `Type` |
+| `path.Join(a, b, c)` takes any number | `path.Join(a, b)` takes two: `path.Join(ref path.Join(a, b), c)` |
+| `path.Base`, `path.Ext` and `path.Split` return strings sharing the argument's memory | They lend parts of the argument: a `ref string`, nothing copied |
 | `runtime.NumCPU()` | `os.Cores()`; there is no `runtime` package, and no `GOMAXPROCS`: the runtime runs one worker per processor |
 | `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
 | `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |

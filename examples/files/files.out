@@ -1,2 +1,11 @@
 copied 12 bytes
+in the directory:
+  copy.log, 29 bytes, the owner's alone
+  kept/
+in kept/2026/copies:
+  input.txt, 12 bytes
+the log:
+copied input.txt
+archived it
+the copy moved: true
 done

@@ -30,7 +30,9 @@ A few library functions are not written in Snello: the runtime provides them in 
 |---|---|
 | `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader`, `Writer` and `Seeker` traits and `SeekFrom`, `Copy`, `ReadAll`, `ReadFull`, `Discard` |
-| `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers |
+| `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers; `OpenFile` with the flags `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_APPEND`, `O_CREATE`, `O_EXCL`, `O_SYNC` and `O_TRUNC`, `ReadFile` and `WriteFile` for bytes; `Stat` and `Lstat` returning a `FileInfo` with `Name`, `Size`, `Mode`, `ModTime` and `IsDir`, `FileMode` with `IsDir`, `IsRegular`, `Perm` and `Type`, `ReadDir` returning `DirEntry` values with `Name`, `IsDir` and `Type`, `Mkdir`, `MkdirAll`, `Rename`, `Getwd`, `Chdir`; the environment, `Getenv`, `LookupEnv`, `Setenv`, `Unsetenv` and `Environ`; `TempDir`, `Getpid` and `Hostname` |
+| `path` | `Clean`, `Join`, `Split`, `Dir`, `Base`, `Ext` and `IsAbs` on paths separated by slashes, as pure functions of strings |
+| `path/filepath` | The same seven under the name for the paths of files, and `Separator` |
 | `testing`, `expect` | the test runner and the assertions of chapter 16, imported by test files alone: `testing.Main`, `Run`, `Log`, `Logf`, `Skip`, `TempDir`, `Parallel`, `Loop`, `ResetTimer`, `ReportAllocs`, `Short`; `expect.Equal`, `NotEqual`, `EqualSlice`, `EqualText`, `True`, `False`, `Fail`, `Failf`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Contains`, `ContainsElem`, `HasPrefix`, `HasSuffix`, `Len`, `Empty`, `Golden`, `Panics`, `PanicsWith`, each a panic the runner catches through `testing.Catch`, with the file, line, expression and operands the compiler hands them |
 | `math` | `Pi`, `E`, `Ln2`; the functions over `f64`: `Sqrt`, `Cbrt`, `Floor`, `Ceil`, `Trunc`, `Round`, `Mod`, `Pow`, `Exp`, `Log`, `Log2`, `Log10`, `Hypot`, the trigonometric and hyperbolic ones, `Abs`, `Min`, `Max`, `Inf`, `NaN`, `IsInf`, `IsNaN`, `Signbit`, `Copysign`; the limits `MaxInt`, `MinInt`, `MaxFloat64`, `SmallestNonzeroFloat64` and the sized ones, each of its own type (chapter 20) |
 | `math/bits` | `LeadingZeros`, `TrailingZeros`, `OnesCount`, `Len`, `RotateLeft` and `Reverse`, each for `uint` and, as `LeadingZeros8` to `LeadingZeros64`, for `u8` to `u64`; the compiler writes each as the processor's instruction (chapter 20) |
@@ -92,6 +94,64 @@ rest := io.ReadAll(mut f)?
 size := f.Seek(io.End(0))?
 ```
 
+### Opening a file with flags
+
+`os.Open` reads and `os.Create` makes or empties. Everything else is `os.OpenFile(path, flag, perm)`, with Go's flags: one of `os.O_RDONLY`, `os.O_WRONLY` and `os.O_RDWR`, and any of `os.O_APPEND`, `os.O_CREATE`, `os.O_EXCL`, `os.O_SYNC` and `os.O_TRUNC` added with `|`. `perm` is the permissions of a file the call makes, before the umask, written in octal as the system writes them.
+
+```go
+func log(path ref string, line ref string) Result<(), io.Error> {
+	f := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)?   // made when missing, every write at the end
+	f.WriteString(line)?
+	return f.Close()
+}
+```
+
+`O_CREATE|O_EXCL` fails with an error of kind `io.Exists` when the file is there, which is how a program takes a lock file or refuses to overwrite. The flags' numbers are Snello's own, the same on every system, where Go's are the system's and differ between Linux and macOS; a flag the package does not name is an invalid argument. `os.ReadFile(path)` reads a whole file as bytes, into one block of the size the file reports, and `os.WriteFile(path, data, perm)` writes one, beside `ReadToString` and `WriteString` for text.
+
+### What the system says of a file
+
+`os.Stat(path)` returns a `FileInfo`: `Name()`, the last element of the path, `Size()` in bytes, `Mode()`, `ModTime()`, a `time.Time`, and `IsDir()`. `Stat` follows a symbolic link and describes the file it leads to; `os.Lstat` describes the link itself. A `FileInfo` is a struct, not Go's interface, since there is one kind of it.
+
+`Mode()` is an `os.FileMode`, with Go's bits: the nine permission bits as the system writes them, and a bit for each kind of file that is not a regular one, `os.ModeDir`, `os.ModeSymlink`, `os.ModeNamedPipe`, `os.ModeSocket`, `os.ModeDevice`, `os.ModeCharDevice`, and `os.ModeSetuid`, `os.ModeSetgid` and `os.ModeSticky`. `m.IsDir()`, `m.IsRegular()`, `m.Perm()` and `m.Type()` read it, and it prints as `ls` prints a mode:
+
+```go
+fi := os.Stat("notes.txt")?
+fmt.Println(fi.Name(), fi.Size(), fi.Mode())      // notes.txt 5 -rw-r--r--
+if fi.Mode().Perm() & 0o077 != 0 {
+	fmt.Println("others can read it")
+}
+```
+
+### Directories
+
+`os.ReadDir(path)` returns what a directory holds as a slice of `DirEntry`, sorted by name, without `.` and `..`. An entry has `Name()`, `IsDir()` and `Type()`, the bits of its kind, which reading the directory gives without asking the system about each file; `os.Stat` of the name says the rest. `os.Mkdir(path, perm)` makes one directory, whose parent must exist, and `os.MkdirAll(path, perm)` makes it and every parent it lacks, and is no failure when it is there already. `os.Rename(from, to)` renames or moves a file or a directory and replaces a file `to` names; a `to` that is a directory is refused as `file exists`, as Go refuses it.
+
+```go
+for _, e := range ref os.ReadDir(dir)? {
+	if e.IsDir() {
+		fmt.Println(e.Name() + "/")
+	}
+}
+```
+
+`os.Getwd()` returns the current directory and `os.Chdir(path)` changes it, for the whole program, every task of it, as the system has one. `Getwd` is Go's: the `PWD` of the environment when it names the current directory, which is the path the user came by, and what the system says otherwise.
+
+Every error is worded as Go's is, so a program's messages read the same in both: `mkdir /a/b: no such file or directory`, `open /tmp/x: not a directory` for a `ReadDir` of a file, `rename old new: no such file or directory`.
+
+### The environment
+
+`os.Getenv(key)` returns a variable's value, and an empty string when it is not set. `os.LookupEnv(key)` returns a `string?` that tells the two apart: `None` when the variable is not set, `Some("")` when it is set to nothing, where Go returns a string and a `bool`.
+
+```go
+root := os.LookupEnv("BACKUP_ROOT") ?? "/backup"
+```
+
+`os.Setenv(key, value)` sets a variable and `os.Unsetenv(key)` removes one; `os.Environ()` returns them all, each as `KEY=value`. `Setenv` refuses an empty key, a key holding `=` and a zero byte in either, with Go's error, `setenv: invalid argument`.
+
+The environment a program reads is a copy the runtime makes, the first time it is asked, of the one the program was started with, kept under a lock with an index by key, as Go keeps its own. Any task may read it while another sets a variable. The variables the program started with lie in one block that lives as long as the program, and a read lends a string from it with nothing copied, as a string literal and an argument of the command line are lent; a variable the program set owns its bytes, which a later `Setenv` may free, so a read of it returns a copy. `Setenv` changes that copy and never the C library's environment: the C library's `setenv` moves memory another thread's `getenv` may be reading, which is why Rust made its `set_var` unsafe. So a C library bound to the program (chapter 14's last section) reads the environment the program was started with.
+
+`os.TempDir()` is the directory for temporary files, `TMPDIR` or `/tmp`; `os.Getpid()` the number of the process; `os.Hostname()` the machine's name.
+
 ## bytes
 
 `bytes.Buffer` is a run of bytes written at its end and read from its front: what an encoder writes into and a decoder reads from. It is an `io.Writer`, an `io.Reader` and a `fmt.Stringer`, so `fmt.Fprintf` writes into it, `io.Copy` and `io.ReadAll` read from it, and `fmt.Println` prints what it holds. Its zero value is ready, `var b bytes.Buffer`, and `NewBuffer(b)` takes a slice to read, `NewBufferString(s)` a copy of a string.
@@ -109,6 +169,28 @@ fmt.Println(b.Len(), b.ReadByte())         // 7 Some(82)
 The Buffer is Go's: one slice, and an index into it where reading has got to. All of it is dropped once everything is read. When the slice is full, the bytes not read yet move to its start only if they fill at most half of it, and otherwise the slice grows, which is Go's rule: a move of some bytes always makes room for as many more, so a queue with a long backlog does not move the backlog on every write. Ten million writes of eight bytes, each followed by a read of seven, take 0.02 s and peak at 58 MB, against 0.06 s and 84 MB for Go's.
 
 Go's `bytes` package also has searches and comparisons on `[]byte` as functions; in Snello they are methods of the slice, `b.Equal(o)` and `b.Find(sub)` (chapter 9), so the package has only the Buffer. Go's `ReadFrom` and `WriteTo` are left out: they exist so that Go's `io.Copy` can find a faster path by asking an interface at run time, which Snello's `io.Copy`, compiled for the two types it is given, has no counterpart for.
+
+## path
+
+`path` works on paths as strings: it asks the system nothing, so it serves a path in a URL as well as a file's. Its functions are Go's, with Go's results.
+
+```go
+path.Clean("a//b/./c/../d/")        // "a/b/d": the shortest path naming the same place
+path.Join("/usr/lib", "../bin")     // "/usr/bin": joined with a slash, then cleaned
+path.Dir("/usr/lib/snello")         // "/usr/lib"
+path.Base("/usr/lib/snello")        // "snello"
+path.Ext("notes.tar.gz")            // ".gz"
+dir, file := path.Split("a/b/c.txt") // "a/b/" and "c.txt"
+path.IsAbs("/usr")                  // true
+```
+
+`Clean` applies four rules until none applies: several slashes become one, an element that is a single dot is dropped, an element that is two dots is dropped with the element before it, and two dots at the start of a path that starts with a slash are dropped. So a path a user typed that climbs out of where it started shows it after `Clean`, by starting with two dots, which `examples/paths/paths.snello` uses to refuse one.
+
+`Join` takes two paths, where Go's takes any number, since a Snello function has a fixed number of parameters; three are joined two at a time, `path.Join(ref path.Join(a, b), c)`. An empty one is left out, and the result is cleaned.
+
+`Base`, `Ext` and `Split` lend parts of the path they are given: nothing is copied, and the borrow rules keep the path alive while the part is used. `Clean`, `Join` and `Dir` return a new string. A path that is clean already, which most are, is checked in one pass and copied; one that is not is rewritten an element at a time.
+
+`path/filepath` is the same seven functions under the name Go gives the paths of files, with `filepath.Separator`. Every system Snello runs on separates a path's elements with a slash, so the two packages agree; a program that means a file's path says `filepath`, and one that means a path in a URL says `path`.
 
 ## math
 

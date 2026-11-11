@@ -614,6 +614,22 @@ int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);
 int64_t sn_os_syncFile(int64_t fd);
 int64_t sn_os_closeFile(int64_t fd);
 int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
+int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead);
+int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev, uint64_t *ino);
+int64_t sn_os_mkdir(sn_string path, uint32_t perm);
+int64_t sn_os_rename(sn_string from, sn_string to);
+int64_t sn_os_chdir(sn_string path);
+int64_t sn_os_getcwd(sn_string *out);
+int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd);
+int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op);
+int64_t sn_os_Getpid(void);
+int64_t sn_os_hostname(sn_string *out);
+bool sn_os_lookupEnv(sn_string key, sn_string *value);
+int64_t sn_os_setenv(sn_string key, sn_string value);
+void sn_os_Unsetenv(sn_string key);
+sn_string sn_os_TempDir(void);
+void sn_os_environ(void *out); // a []string that holds nothing
+void sn_os_env_free(void); // the copy of the environment, released at the end of a debug build
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
