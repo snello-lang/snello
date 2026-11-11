@@ -4,7 +4,7 @@
 
 package io_test
 
-import ("expect"; "io"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "strings"; "testing")
 
 func TestError() {
 	e := io.NewError("open".Clone(), "/x".Clone(), "boom".Clone(), io.NotExist)
@@ -29,6 +29,94 @@ func TestCopy() {
 	expect.Equal(ref expect.IsOk(io.Copy(mut out, mut in)), ref i64(11))
 	expect.IsOk(out.Close())
 	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("dst"))), "copied text")
+}
+
+// A Drip hands out at most step bytes a call, and fails with its error
+// once it has handed out fail bytes, when fail is not below zero.
+struct Drip impl io.Reader {
+	data []byte
+	at   int
+	step int
+	fail int
+}
+
+func (d mut Drip) Read(buf mut []byte) Result<int, io.Error> {
+	if d.fail >= 0 && d.at >= d.fail {
+		return Err(io.NewError("read".Clone(), "drip".Clone(), "broken".Clone(), io.Other))
+	}
+
+	n := min(d.step, len(buf), len(d.data)-d.at)
+	for i := 0; i < n; i++ {
+		buf[i] = d.data[d.at+i]
+	}
+
+	d.at += n
+	return Ok(n)
+}
+
+// counting returns n bytes, each its index modulo 251, so that a byte
+// out of place shows.
+func counting(n int) []byte {
+	b := make([]byte, n)
+	for i := 0; i < n; i++ {
+		b[i] = byte(i % 251)
+	}
+
+	return b
+}
+
+func TestReadAll() {
+	for _, n := range []int{0, 1, 511, 512, 513, 4096, 100000, 1000003} { // within the first block, at its edge, and across many
+		var d = Drip{data: counting(n), at: 0, step: 4093, fail: -1}
+		got := expect.IsOk(io.ReadAll(mut d))
+		expect.Equal(ref len(got), ref n)
+		expect.True(got.Equal(ref counting(n)))
+	}
+
+	var slow = Drip{data: counting(3000), at: 0, step: 1, fail: -1} // a byte a call
+	expect.True(expect.IsOk(io.ReadAll(mut slow)).Equal(ref counting(3000)))
+	var broken = Drip{data: counting(5000), at: 0, step: 100, fail: 700}
+	expect.Equal(ref expect.IsErr(io.ReadAll(mut broken)).Error(), "read drip: broken")
+	in := strings.NewReader("from a string".Clone())
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut in))), "from a string")
+}
+
+func TestReadFull() {
+	var d = Drip{data: counting(10), at: 0, step: 3, fail: -1}
+	buf := make([]byte, 4)
+	expect.Equal(ref expect.IsOk(io.ReadFull(mut d, mut buf)), ref 4) // two reads make up the four
+	expect.True(buf.Equal(ref []byte{0, 1, 2, 3}))
+	expect.Equal(ref expect.IsOk(io.ReadFull(mut d, mut buf)), ref 4)
+	e := expect.IsErr(io.ReadFull(mut d, mut buf)) // two bytes left of four
+	expect.True(e.Kind() == io.UnexpectedEOF)
+	expect.Equal(ref e.Error(), "unexpected EOF")
+	expect.Equal(ref expect.IsOk(io.ReadFull(mut d, mut buf)), ref 0) // the end, with nothing read
+	none := []byte{}
+	expect.Equal(ref expect.IsOk(io.ReadFull(mut d, mut none)), ref 0)
+	var broken = Drip{data: counting(10), at: 0, step: 2, fail: 2}
+	expect.Equal(ref expect.IsErr(io.ReadFull(mut broken, mut buf)).Error(), "read drip: broken")
+}
+
+func TestDiscard() {
+	var w io.Discard // the zero value is ready
+	expect.Equal(ref expect.IsOk(w.Write(ref counting(1000))), ref 1000)
+	in := strings.NewReader("copied nowhere".Clone())
+	expect.Equal(ref expect.IsOk(io.Copy(mut w, mut in)), ref i64(14))
+	fmt.Fprintln(mut io.Discard{}, "written nowhere") // or one made where it is used
+}
+
+func TestSeekFrom() {
+	expect.True(io.Start(3) == io.Start(3))
+	expect.True(io.Current(-1) != io.End(-1))
+}
+
+func BenchmarkReadAll() {
+	data := counting(1 << 20)
+	testing.ResetTimer()
+	for testing.Loop() {
+		var d = Drip{data: data.Clone(), at: 0, step: 32768, fail: -1}
+		_ = io.ReadAll(mut d)
+	}
 }
 
 func BenchmarkNewError() {

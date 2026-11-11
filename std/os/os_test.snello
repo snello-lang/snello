@@ -36,6 +36,31 @@ func TestFiles() {
 	expect.Contains(ref e.Error(), "no such file")
 }
 
+func TestSeek() {
+	dir := testing.TempDir()
+	path := dir.Join("seek.txt")
+	expect.IsOk(os.WriteString(ref path, "hello world"))
+	f := expect.IsOk(os.Open(ref path))
+	expect.Equal(ref expect.IsOk(f.Seek(io.End(-5))), ref u64(6))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Current(0))), ref u64(6))
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 5)
+	expect.True(buf.Equal(ref []byte("world")))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Start(0))), ref u64(0))
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 5)
+	expect.True(buf.Equal(ref []byte("hello")))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Start(100))), ref u64(100)) // past the end is allowed
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 0)
+	before := expect.IsErr(f.Seek(io.Current(-1000)))
+	expect.Contains(ref before.Error(), "seek ")
+	expect.Contains(ref before.Error(), "invalid argument")
+	expect.IsErr(f.Seek(io.Start(18446744073709551615))) // past what a position holds
+	in := os.Stdin()
+	if in.Seek(io.Current(0)).IsErr() { // a pipe or a terminal has no position; a file redirected in has one
+		expect.Contains(ref expect.IsErr(in.Seek(io.Current(0))).Error(), "seek /dev/stdin")
+	}
+}
+
 func TestDirs() {
 	dir := testing.TempDir()
 	inner := expect.IsOk(os.MkdirTemp(dir.Path(), "work"))

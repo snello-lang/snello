@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
@@ -87,10 +88,217 @@ const answerer = `package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 )
+
+// A Chunks hands out its bytes in pieces of the sizes it is given, in
+// turn, a size of zero counting as one, and one a call when it is
+// given none.
+struct Chunks impl io.Reader {
+	data  []byte
+	at    int
+	sizes []byte
+	turn  int
+}
+
+func (c mut Chunks) Read(buf mut []byte) Result<int, io.Error> {
+	size := 1
+	if len(c.sizes) > 0 {
+		size = max(int(c.sizes[c.turn%len(c.sizes)]), 1)
+		c.turn++
+	}
+
+	n := min(size, len(buf), len(c.data)-c.at)
+	for i := 0; i < n; i++ {
+		buf[i] = c.data[c.at+i]
+	}
+
+	c.at += n
+	return Ok(n)
+}
+
+// scanned scans the input of a question with a line Scanner, or a word
+// Scanner when words says so: two bytes of the limit, zero for the
+// default, a byte of the count of read sizes, the sizes, then the data.
+// It answers with every line or word in hexadecimal between brackets,
+// then end, or the error that ended the scan.
+func scanned(raw ref []byte, words bool) string {
+	limit := int(raw[0])<<8 | int(raw[1])
+	k := int(raw[2])
+	var src = Chunks{data: raw[3+k:].Clone(), at: 0, sizes: raw[3:3+k].Clone(), turn: 0}
+	sc := if words { bufio.Words(mut src) } else { bufio.NewScanner(mut src) }
+	if limit > 0 {
+		sc.Buffer(limit)
+	}
+
+	var out strings.Builder
+	for sc.Scan() {
+		out.WriteString(fmt.Sprintf("[%x]", sc.Bytes()))
+	}
+
+	match sc.Err() {
+		Some(e) => out.WriteString(" " + e.Error()),
+		None => out.WriteString(" end"),
+	}
+
+	return out.String()
+}
+
+// buffered runs the operations of a question on a bytes.Buffer, each a
+// byte of the operation and a byte of its argument, a write taking the
+// bytes after them, and answers with what each returned and the length
+// after it, then the bytes left.
+func buffered(raw ref []byte) string {
+	var b bytes.Buffer
+	var out strings.Builder
+	i := 0
+	for i+1 < len(raw) {
+		op := int(raw[i]) % 14
+		arg := raw[i+1]
+		i += 2
+		if op <= 1 {
+			k := min(int(arg)%8, len(raw)-i)
+			if op == 0 {
+				s := string(raw[i:i+k])
+				b.WriteString(ref s)
+			} else {
+				_ = b.Write(raw[i:i+k])
+			}
+
+			i += k
+		} else if op == 2 {
+			b.WriteByte(arg)
+		} else if op == 3 {
+			v := int(arg) << 8
+			if i < len(raw) {
+				v = v | int(raw[i])
+				i++
+			}
+
+			b.WriteRune(rune(v*18 - 300))
+		} else if op == 4 {
+			p := make([]byte, int(arg)%9)
+			n := b.Read(mut p) ?? 0
+			out.WriteString(fmt.Sprintf("r%x", p[0:n]))
+		} else if op == 5 {
+			out.WriteString(fmt.Sprintf("n%x", b.Next(int(arg)%9)))
+		} else if op == 6 {
+			match b.ReadByte() {
+				Some(c) => out.WriteString(fmt.Sprintf("b%d", c)),
+				None => out.WriteString("b-"),
+			}
+		} else if op == 7 {
+			match b.ReadRune() {
+				Some((r, n)) => out.WriteString(fmt.Sprintf("u%d/%d", r, n)),
+				None => out.WriteString("u-"),
+			}
+		} else if op == 8 {
+			out.WriteString(fmt.Sprintf("B%t", b.UnreadByte()))
+		} else if op == 9 {
+			out.WriteString(fmt.Sprintf("U%t", b.UnreadRune()))
+		} else if op == 10 {
+			match b.ReadBytes(arg) {
+				Some(l) => out.WriteString(fmt.Sprintf("l%x", l)),
+				None => out.WriteString("l-"),
+			}
+		} else if op == 11 {
+			match b.ReadString(arg) {
+				Some(l) => out.WriteString(fmt.Sprintf("s%x", l)),
+				None => out.WriteString("s-"),
+			}
+		} else if op == 12 {
+			b.Truncate(int(arg) - 3)
+		} else if arg%4 == 0 {
+			b.Reset()
+		} else {
+			b.Grow(int(arg))
+		}
+
+		out.WriteString(fmt.Sprintf(":%d ", b.Len()))
+	}
+
+	out.WriteString(fmt.Sprintf("=%x/%x", b.Bytes(), b.String()))
+	return out.String()
+}
+
+// reads runs the operations of a question on a bufio.Reader over a
+// Chunks: a byte of the count of read sizes, the sizes, two bytes of
+// the length of the operations, the operations, each a byte of the
+// operation and a byte of its argument, then the data. It answers with
+// what each operation returned.
+func reads(raw ref []byte) Result<string, io.Error> {
+	k := int(raw[0])
+	at := 3 + k
+	end := at + (int(raw[1+k])<<8 | int(raw[2+k]))
+	var src = Chunks{data: raw[end:].Clone(), at: 0, sizes: raw[1:1+k].Clone(), turn: 0}
+	r := bufio.NewReader(mut src)
+	var out strings.Builder
+	for at+1 < end {
+		op := int(raw[at]) % 9
+		arg := int(raw[at+1])
+		at += 2
+		if op == 0 || op == 8 {
+			n := arg%7 + 1
+			if op == 0 {
+				n = if arg < 200 { arg % 41 } else { 4096 + (arg-200)*40 }
+			}
+
+			p := make([]byte, n)
+			got := r.Read(mut p)?
+			out.WriteString(fmt.Sprintf("r%x ", p[0:got]))
+		} else if op == 1 {
+			match r.ReadByte()? {
+				Some(c) => out.WriteString(fmt.Sprintf("b%d ", c)),
+				None => out.WriteString("b- "),
+			}
+		} else if op == 2 {
+			match r.ReadRune()? {
+				Some((c, n)) => out.WriteString(fmt.Sprintf("u%d/%d ", c, n)),
+				None => out.WriteString("u- "),
+			}
+		} else if op == 3 {
+			out.WriteString(fmt.Sprintf("B%t ", r.UnreadByte()))
+		} else if op == 4 {
+			out.WriteString(fmt.Sprintf("U%t ", r.UnreadRune()))
+		} else if op == 5 {
+			match r.ReadBytes(byte(arg))? {
+				Some(l) => out.WriteString(fmt.Sprintf("l%x ", l)),
+				None => out.WriteString("l- "),
+			}
+		} else if op == 6 {
+			match r.ReadString(byte(arg))? {
+				Some(l) => out.WriteString(fmt.Sprintf("s%x ", l)),
+				None => out.WriteString("s- "),
+			}
+		} else {
+			n := if arg < 200 { arg % 50 } else if arg < 240 { 4096 - (arg-200)*5 } else { 239 - arg }
+			match r.Peek(n) {
+				Ok(p) => out.WriteString(fmt.Sprintf("p%x ", p)),
+				Err(_) => out.WriteString("p! "),
+			}
+		}
+	}
+
+	return Ok(out.String())
+}
+
+// queued runs a Buffer as a queue behind a backlog of 8 MiB that fills
+// its slice, a record read and one written a hundred thousand times,
+// and answers with what it holds at the end.
+func queued() int {
+	b := bytes.NewBuffer(make([]byte, 1<<23))
+	for i := 0; i < 100000; i++ {
+		_ = b.Next(16)
+		b.WriteString("0123456789abcdef")
+	}
+
+	return b.Len()
+}
 
 func nibble(c u8) u8 {
 	if c <= '9' {
@@ -140,6 +348,17 @@ func main() {
 				Err(e) => reason(ref e),
 			}
 			fmt.Println(ten, any)
+		} else if line[0] == 'l' || line[0] == 'w' {
+			fmt.Println(scanned(ref raw, line[0] == 'w'))
+		} else if line[0] == 'b' {
+			fmt.Println(buffered(ref raw))
+		} else if line[0] == 'r' {
+			match reads(ref raw) {
+				Ok(answer) => fmt.Println(answer),
+				Err(e) => fmt.Println("error:", e),
+			}
+		} else if line[0] == 'k' {
+			fmt.Println(queued())
 		} else {
 			match strconv.Unquote(ref s) {
 				Ok(text) => fmt.Printf("ok %x\n", text),
@@ -197,21 +416,46 @@ func ask(t *testing.T, letter byte, input string) string {
 		asked.cmd, asked.in, asked.out = cmd, in, bufio.NewReader(out)
 	}
 
-	_, err := fmt.Fprintf(asked.in, "%c%x\n", letter, input)
-	var answer string
-	if err == nil {
-		answer, err = asked.out.ReadString('\n')
+	type reply struct {
+		answer string
+		err    error
 	}
 
-	if err != nil {
+	done := make(chan reply, 1)
+	go func() {
+		_, err := fmt.Fprintf(asked.in, "%c%x\n", letter, input)
+		var answer string
+		if err == nil {
+			answer, err = asked.out.ReadString('\n')
+		}
+
+		done <- reply{answer, err}
+	}()
+
+	var r reply
+	select {
+	case r = <-done:
+	case <-time.After(askLimit):
+		asked.cmd.Process.Kill()
+		r = <-done // the pipes close with the process
+		r.err = fmt.Errorf("no answer in %v", askLimit)
+	}
+
+	if r.err != nil {
 		asked.in.Close()
 		state := asked.cmd.Wait()
 		asked.cmd = nil
-		t.Fatalf("the answerer stopped on %c of %q: %v, %v", letter, input, err, state)
+		t.Fatalf("the answerer stopped on %c of %.300q: %v, %v", letter, input, r.err, state)
 	}
 
-	return strings.TrimSuffix(answer, "\n")
+	return strings.TrimSuffix(r.answer, "\n")
 }
+
+// askLimit is how long the answerer has to answer one question: a
+// question no input of the fuzz tests takes a second over, so that a
+// function of the library that never returns is a failure with the
+// input that made it hang, not a fuzzer that stops.
+const askLimit = 20 * time.Second
 
 // buildAnswerer compiles the answerer into dir as a debug build through
 // the C backend.
@@ -296,6 +540,353 @@ func FuzzParseFloat(f *testing.F) {
 			t.Errorf("ParseFloat and ParseFloat32 of %q: got %s, want %s", s, got, want)
 		}
 	})
+}
+
+// chunks hands out its bytes in pieces of the sizes it is given, in
+// turn, as the answerer's Chunks does.
+type chunks struct {
+	data, sizes []byte
+	turn        int
+}
+
+func (c *chunks) Read(p []byte) (int, error) {
+	if len(c.data) == 0 {
+		return 0, io.EOF
+	}
+
+	size := 1
+	if len(c.sizes) > 0 {
+		size = max(int(c.sizes[c.turn%len(c.sizes)]), 1)
+		c.turn++
+	}
+
+	n := copy(p[:min(size, len(p))], c.data)
+	c.data = c.data[n:]
+	return n, nil
+}
+
+// goScanned is what Go's bufio.Scanner makes of the data, read in the
+// pieces the sizes give, with lines or with ScanWords, the limit set by
+// Buffer when it is not zero: every token in hexadecimal between
+// brackets, then end or the error that ended the scan.
+func goScanned(data, sizes []byte, limit int, words bool) string {
+	sc := bufio.NewScanner(&chunks{data: data, sizes: sizes})
+	if words {
+		sc.Split(bufio.ScanWords)
+	}
+
+	if limit > 0 {
+		sc.Buffer(nil, limit)
+	}
+
+	var b strings.Builder
+	for sc.Scan() {
+		fmt.Fprintf(&b, "[%x]", sc.Bytes())
+	}
+
+	if err := sc.Err(); err != nil {
+		b.WriteString(" " + err.Error())
+	} else {
+		b.WriteString(" end")
+	}
+
+	return b.String()
+}
+
+// FuzzScanner holds bufio's Scanner, by lines and by words, to Go's
+// bufio.Scanner on any input read in any pieces, down to a byte a
+// read, under any limit: the same lines and words come out in the same
+// order, so no byte is lost or read twice, a line or word past the
+// limit ends the scan with "token too long" where Go's does, and none
+// is handed out past it.
+func FuzzScanner(f *testing.F) {
+	type seed struct {
+		data, sizes string
+		limit       uint16
+		words       bool
+	}
+
+	for _, s := range []seed{
+		{"one\ntwo\n\nthree", "", 0, false},
+		{"a\r\nb\rc\r", "\x01", 0, false},
+		{"exactly8", "\x03\x05", 8, false},
+		{"exactly8\n", "", 8, false},
+		{"exactly8\n", "", 9, false},
+		{strings.Repeat("x", 5000) + "\nshort", "\xff", 4096, false},
+		{strings.Repeat("y", 70000), "\x10", 0, false},
+		{"\n\n\n", "", 1, false},
+		{"  one two\tthree\u3000four\n\n five\xffsix  ", "\x01", 0, true},
+		{"\u0085\u00a0\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000x", "\x02", 0, true},
+		{strings.Repeat(" ", 10000) + "end", "\x07", 16, true},
+		{"word" + strings.Repeat("z", 20), "", 10, true},
+		{"\xe3\x80", "\x01", 0, true},
+	} {
+		f.Add([]byte(s.data), []byte(s.sizes), s.limit, s.words)
+	}
+
+	f.Fuzz(func(t *testing.T, data, sizes []byte, limit uint16, words bool) {
+		small := len(sizes) == 0 // the reads that hand out a few bytes each
+		for _, s := range sizes {
+			small = small || s < 64
+		}
+
+		// Go's ScanWords decodes a word again from its start after every
+		// read, so a long input read in small pieces takes the reference
+		// seconds; such an input is kept short.
+		if len(data) > 1<<17 || len(sizes) > 255 || (small && len(data) > 1<<13) {
+			return
+		}
+
+		payload := append([]byte{byte(limit >> 8), byte(limit), byte(len(sizes))}, sizes...)
+		payload = append(payload, data...)
+		letter := byte('l')
+		if words {
+			letter = 'w'
+		}
+
+		if got, want := ask(t, letter, string(payload)), goScanned(data, sizes, int(limit), words); got != want {
+			t.Errorf("the Scanner of %q, words %t, read in pieces of %v, limit %d:\ngot  %.300s\nwant %.300s", data, words, sizes, limit, got, want)
+		}
+	})
+}
+
+// goBuffered is what Go's bytes.Buffer makes of the operations the
+// answerer's buffered runs, in the same words. Go's Buffer puts a byte
+// back in two places where Snello's refuses, which stale marks: after a
+// Grow, where Go steps back into bytes the Grow may have dropped, and
+// after a line read that found nothing, where Go steps back over a byte
+// an earlier call read.
+func goBuffered(raw []byte) string {
+	var b bytes.Buffer
+	var out strings.Builder
+	stale := false
+	for i := 0; i+1 < len(raw); {
+		op, arg := int(raw[i])%14, raw[i+1]
+		i += 2
+		was := stale
+		stale = false
+		switch op {
+		case 0, 1:
+			k := min(int(arg)%8, len(raw)-i)
+			if op == 0 {
+				b.WriteString(string(raw[i : i+k]))
+			} else {
+				b.Write(raw[i : i+k])
+			}
+
+			i += k
+		case 2:
+			b.WriteByte(arg)
+		case 3:
+			v := int(arg) << 8
+			if i < len(raw) {
+				v |= int(raw[i])
+				i++
+			}
+
+			b.WriteRune(rune(v*18 - 300))
+		case 4:
+			p := make([]byte, int(arg)%9)
+			n, _ := b.Read(p)
+			fmt.Fprintf(&out, "r%x", p[:n])
+		case 5:
+			fmt.Fprintf(&out, "n%x", b.Next(int(arg)%9))
+		case 6:
+			if c, err := b.ReadByte(); err == nil {
+				fmt.Fprintf(&out, "b%d", c)
+			} else {
+				out.WriteString("b-")
+			}
+		case 7:
+			if r, n, err := b.ReadRune(); err == nil {
+				fmt.Fprintf(&out, "u%d/%d", r, n)
+			} else {
+				out.WriteString("u-")
+			}
+		case 8, 9:
+			put := false
+			if was {
+				stale = true
+			} else if op == 8 {
+				put = b.UnreadByte() == nil
+			} else {
+				put = b.UnreadRune() == nil
+			}
+
+			fmt.Fprintf(&out, "%c%t", "BU"[op-8], put)
+		case 10, 11:
+			if line, _ := b.ReadBytes(arg); len(line) > 0 {
+				fmt.Fprintf(&out, "%c%x", "ls"[op-10], line)
+			} else {
+				fmt.Fprintf(&out, "%c-", "ls"[op-10])
+				stale = true
+			}
+		case 12:
+			if n := int(arg) - 3; n <= 0 {
+				b.Reset()
+			} else {
+				b.Truncate(min(n, b.Len()))
+			}
+		default:
+			if arg%4 == 0 {
+				b.Reset()
+			} else {
+				b.Grow(int(arg))
+				stale = true
+			}
+		}
+
+		fmt.Fprintf(&out, ":%d ", b.Len())
+	}
+
+	fmt.Fprintf(&out, "=%x/%x", b.Bytes(), b.String())
+	return out.String()
+}
+
+// FuzzBuffer holds bytes.Buffer to Go's on any sequence of its
+// operations: every write, read, unread, Truncate, Reset and Grow gives
+// what Go's gives and leaves the bytes Go's leaves, so no sequence
+// loses a byte, reads one twice or puts back one that was not read.
+func FuzzBuffer(f *testing.F) {
+	for _, s := range []string{
+		"\x00\x05hello\x04\x03\x08\x00\x08\x00\x06\x00",
+		"\x00\x02ab\x06\x00\x06\x00\x0d\x0a\x08\x00\x00\x01x",                  // an unread after a Grow of an emptied Buffer
+		"\x00\x06h\xc3\xa9llo\x06\x00\x07\x00\x0d\xff\x09\x00\x08\x00",         // and after one that moves the bytes
+		"\x01\x07a\nb\nc\nd\x0a\x0a\x0b\x0a\x0b\x7a\x0a\x0a\x08\x00",           // lines, and an unread after one that found nothing
+		"\x03\x0c\x00\x03\xf0\x00\x03\x00\x00\x07\x00\x09\x00\x07\x00\x07\x00", // a surrogate, a value past the last code point, one below zero
+		"\x00\x07abcdefg\x05\x03\x0c\x05\x0c\x00\x0c\xff\x0d\x00",
+	} {
+		f.Add([]byte(s))
+	}
+
+	f.Fuzz(func(t *testing.T, ops []byte) {
+		if len(ops) > 1<<12 {
+			return
+		}
+
+		if got, want := ask(t, 'b', string(ops)), goBuffered(ops); got != want {
+			t.Errorf("the Buffer of %q:\ngot  %.600s\nwant %.600s", ops, got, want)
+		}
+	})
+}
+
+// goReads is what Go's bufio.Reader makes of the operations the
+// answerer's reads runs, over the same data in the same pieces, in the
+// same words. An UnreadRune that does not come straight after a
+// ReadRune is refused without asking Go: its documentation says it
+// fails there, and its implementation lets a few through, after a Peek
+// refused for its count and after some reads that gave nothing.
+func goReads(data, sizes, ops []byte) string {
+	r := bufio.NewReaderSize(&chunks{data: data, sizes: sizes}, 4096)
+	var out strings.Builder
+	last := -1
+	for i := 0; i+1 < len(ops); i += 2 {
+		op, arg := int(ops[i])%9, int(ops[i+1])
+		before := last
+		last = op
+		switch op {
+		case 0, 8:
+			n := arg%7 + 1
+			if op == 0 {
+				n = arg % 41
+				if arg >= 200 {
+					n = 4096 + (arg-200)*40
+				}
+			}
+
+			p := make([]byte, n)
+			got, _ := r.Read(p)
+			fmt.Fprintf(&out, "r%x ", p[:got])
+		case 1:
+			if c, err := r.ReadByte(); err == nil {
+				fmt.Fprintf(&out, "b%d ", c)
+			} else {
+				out.WriteString("b- ")
+			}
+		case 2:
+			if c, n, err := r.ReadRune(); err == nil {
+				fmt.Fprintf(&out, "u%d/%d ", c, n)
+			} else {
+				out.WriteString("u- ")
+			}
+		case 3:
+			fmt.Fprintf(&out, "B%t ", r.UnreadByte() == nil)
+		case 4:
+			fmt.Fprintf(&out, "U%t ", before == 2 && r.UnreadRune() == nil)
+		case 5, 6:
+			if line, _ := r.ReadBytes(byte(arg)); len(line) > 0 {
+				fmt.Fprintf(&out, "%c%x ", "ls"[op-5], line)
+			} else {
+				fmt.Fprintf(&out, "%c- ", "ls"[op-5])
+			}
+		default:
+			n := 239 - arg
+			if arg < 200 {
+				n = arg % 50
+			} else if arg < 240 {
+				n = 4096 - (arg-200)*5
+			}
+
+			if p, err := r.Peek(n); err == nil || err == io.EOF {
+				fmt.Fprintf(&out, "p%x ", p)
+			} else {
+				out.WriteString("p! ")
+			}
+		}
+	}
+
+	return out.String()
+}
+
+// FuzzReader holds bufio's Reader to Go's on any sequence of its reads,
+// peeks and unreads over any input read in any pieces: each gives the
+// bytes Go's gives, a Peek reads none, UnreadByte puts a byte back
+// where Go's does and nowhere else, and UnreadRune a rune only straight
+// after the ReadRune that read it.
+func FuzzReader(f *testing.F) {
+	type seed struct{ data, sizes, ops string }
+	long := strings.Repeat("0123456789", 500) // a line past the buffer's 4096 bytes
+	for _, s := range []seed{
+		{"abc\ndef", "", "\x01\x00\x03\x00\x03\x00\x06\x0a\x03\x00\x00\x02\x02\x00\x04\x00\x03\x00"},
+		{"x", "\x01", "\x01\x00\x01\x00\x03\x00\x01\x00\x00\x05\x06\x0a\x03\x00\x01\x00"},         // an unread after reads that gave nothing
+		{"\xc3\xa9!", "\x01", "\x02\x00\x07\xf0\x04\x00\x02\x00\x01\x00\x01\x00\x04\x00\x03\x00"}, // a Peek refused for its count, then the unreads
+		{long + "\n" + long, "\xff\x07", "\x07\xc8\x05\x0a\x03\x00\x00\xd2\x03\x00\x06\x39\x02\x00\x04\x00\x07\x0a"},
+		{"\xe4\xb8\x96\xe4\xb8", "\x02\x01", "\x02\x00\x02\x00\x04\x00\x02\x00\x02\x00\x03\x00\x01\x00"},
+		{"\xc3\xa9ab", "", "\x02\x00\x08\x00\x04\x00\x01\x00\x02\x00\x02\x00\x03\x00\x01\x00"}, // a rune, a Read, the unreads; then a ReadRune at the end
+		{"\xe4", "0", "802010"}, // a rune cut short at the end, a line read that finds nothing, then UnreadRune, which Go lets through
+	} {
+		f.Add([]byte(s.data), []byte(s.sizes), []byte(s.ops))
+	}
+
+	f.Fuzz(func(t *testing.T, data, sizes, ops []byte) {
+		if len(data) > 1<<15 || len(sizes) > 255 || len(ops) > 1<<10 {
+			return
+		}
+
+		payload := append([]byte{byte(len(sizes))}, sizes...)
+		payload = append(payload, byte(len(ops)>>8), byte(len(ops)))
+		payload = append(append(payload, ops...), data...)
+		if got, want := ask(t, 'r', string(payload)), goReads(data, sizes, ops); got != want {
+			t.Errorf("the Reader of %q, read in pieces of %v, asked %q:\ngot  %.600s\nwant %.600s", data, sizes, ops, got, want)
+		}
+	})
+}
+
+// TestBufferQueue holds a bytes.Buffer used as a queue to a cost that
+// does not grow with what it holds: a record read and a record written,
+// a hundred thousand times, behind a backlog of 8 MiB that fills the
+// slice. A Buffer that moved the backlog to make room for each record
+// would move 800 GB.
+func TestBufferQueue(t *testing.T) {
+	ask(t, 'i', "0") // the answerer, built and started
+	start := time.Now()
+	if got := ask(t, 'k', ""); got != "8388608" {
+		t.Errorf("the queue holds %s bytes at the end, want 8388608", got)
+	}
+
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("100,000 records through a queue of 8 MiB took %v; a Buffer that moves only what it must takes milliseconds", took)
+	}
 }
 
 // wellFormed reports whether s is an integer in the syntax ParseInt

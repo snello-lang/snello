@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package io has what reading and writing share: the Reader and Writer
-// traits, which files implement and other sources and sinks of bytes
-// will, the Error a failed operation reports, and Copy, which moves
-// everything a Reader has into a Writer.
+// Package io has what reading and writing share: the Reader, Writer
+// and Seeker traits, which files implement and other sources and sinks
+// of bytes will, the Error a failed operation reports, Copy, which
+// moves everything a Reader has into a Writer, ReadAll and ReadFull,
+// which read a whole input and an exact count of bytes, and Discard, a
+// Writer that keeps nothing.
 //
 // A function of this package or of os that can fail returns a
 // Result<T, Error>, never a value and an error side by side, so a
@@ -62,6 +64,10 @@ enum Kind impl Copy, Clone, Eq {
 	// TimedOut: the other side did not answer in the time the system
 	// waits.
 	TimedOut
+
+	// UnexpectedEOF: the input ended partway through what had to be
+	// read whole, as ReadFull reports it.
+	UnexpectedEOF
 }
 
 // A Reader is a source of bytes. Read fills the buffer it is given
@@ -78,6 +84,30 @@ trait Reader {
 // length; a Writer that cannot take them all fails instead.
 trait Writer {
 	func (w mut Self) Write(buf ref []byte) Result<int, Error>
+}
+
+// A Seeker is a source or sink of bytes with a position in it, which
+// Seek moves: a file is one. Seek returns the new position, counted in
+// bytes from the start. Moving before the start fails, and moving past
+// the end is allowed, as the system allows it of a file.
+trait Seeker {
+	func (s mut Self) Seek(pos SeekFrom) Result<u64, Error>
+}
+
+// A SeekFrom says where Seek moves to: a position from the start, or an
+// offset from the current position or from the end, which may be
+// negative. A position from the start cannot be negative, so it is a
+// u64, and no other way to count holds.
+enum SeekFrom impl Copy, Clone, Eq {
+	// Start is the position counted from the first byte.
+	Start(u64)
+
+	// Current is an offset from the current position.
+	Current(i64)
+
+	// End is an offset from the end: End(0) is just past the last byte,
+	// and End(-2) the last byte but one.
+	End(i64)
 }
 
 // Error returns the message, Op, Path and Msg in one line, as Go words
@@ -190,6 +220,90 @@ func Copy<W: Writer, R: Reader>(dst mut W, src mut R) Result<i64, Error> {
 		total += i64(n)
 	}
 }
+
+// ReadAll reads r until its end and returns everything it read, as
+// Go's ReadAll does: into blocks that grow by half each time, starting
+// from 512 bytes, then copied once into a slice of the exact length, so
+// that no block is copied as it grows. The first failure of r ends the
+// read with its Error, and what was read before it is not returned. r
+// is lent mut for the duration: io.ReadAll(mut f).
+func ReadAll<R: Reader>(r mut R) Result<[]byte, Error> {
+	b := make([]byte, 512)
+	filled := 0
+	next := 256
+	blocks := [][]byte{}
+	total := 0
+	for {
+		n := r.Read(mut b[filled:])?
+		if n == 0 {
+			break
+		}
+
+		filled += n
+		if len(b)-filled < len(b)/16 { // nearly full: a larger block takes the rest
+			b.Truncate(filled)
+			total += filled
+			blocks.Push(b)
+			b = make([]byte, next)
+			filled = 0
+			next += next / 2
+		}
+	}
+
+	b.Truncate(filled)
+	if len(blocks) == 0 {
+		return Ok(b)
+	}
+
+	all := []byte{}
+	reserve(mut all, total+filled)
+	for _, block := range ref blocks {
+		all.Extend(block)
+	}
+
+	all.Extend(ref b)
+	return Ok(all)
+}
+
+// ReadFull reads exactly len(buf) bytes from r into buf and returns
+// that count, as Go's ReadFull does: Read is asked as often as it takes.
+// It returns 0 when r ends before any byte, as Read does at the end; an
+// end partway through is an Error of Kind UnexpectedEOF, "unexpected
+// EOF", since the bytes it had to read whole are not all there. A
+// failure of r ends the read with its Error.
+func ReadFull<R: Reader>(r mut R, buf mut []byte) Result<int, Error> {
+	n := 0
+	for n < len(buf) {
+		m := r.Read(mut buf[n:])?
+		if m == 0 {
+			if n == 0 {
+				return Ok(0)
+			}
+
+			return Err(NewError("", "", "unexpected EOF", UnexpectedEOF))
+		}
+
+		n += m
+	}
+
+	return Ok(n)
+}
+
+// A Discard is a Writer that takes every byte it is given and keeps
+// none, as Go's io.Discard: for output a program must write and does
+// not want. It holds nothing, so its zero value is ready: var sink
+// io.Discard, then fmt.Fprintln(mut sink, ...). It is a type and not a
+// package variable, since a package variable is never lent mut.
+struct Discard impl Writer {}
+
+// Write takes all of buf and keeps none of it.
+func (d mut Discard) Write(buf ref []byte) Result<int, Error> {
+	return Ok(len(buf))
+}
+
+// reserve makes room in b for n more bytes, in at most one allocation.
+// The runtime provides it.
+func reserve(b mut []byte, n int)
 
 // reason returns the system's text for an error number, with its first
 // letter in lower case. The runtime provides it.

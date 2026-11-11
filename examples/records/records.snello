@@ -1,0 +1,152 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Records in a file format of the program's own.
+//
+// Tests bytes.Buffer as what an encoder writes into and a decoder reads
+// from, io.ReadFull for fields of a fixed size, Seek to go back to a
+// record, bufio's Peek to look at a header before reading it, ReadBytes
+// and UnreadByte, a Scanner of words, io.ReadAll and io.Discard.
+
+package records
+
+import ("bufio"; "bytes"; "fmt"; "io"; "os")
+
+// A record file starts with this, so that a reader knows it is one.
+const magic string = "REC1"
+
+struct Record {
+    id   u16
+    name string
+}
+
+// Encode writes the records into a Buffer: the magic, then each record
+// as its id in two bytes, the length of its name in one, and the name.
+func Encode(rs ref []Record) bytes.Buffer {
+    var b bytes.Buffer                          // the zero value is ready
+    b.WriteString(magic)
+    for _, r := range rs {
+        b.WriteByte(byte(r.id >> 8))
+        b.WriteByte(byte(r.id))
+        b.WriteByte(byte(r.name.Len()))
+        b.WriteString(ref r.name)
+    }
+
+    return b
+}
+
+// Decode reads records from any reader, a field of a fixed size at a
+// time: ReadFull gives 0 at a clean end, and an error when the input
+// stops partway through a record.
+func Decode<R: io.Reader>(r mut R) Result<[]Record, io.Error> {
+    head := make([]byte, 4)
+    if io.ReadFull(mut r, mut head)? == 0 || string(head) != magic {
+        return Err(io.NewError("decode", "", "not a record file", io.Other))
+    }
+
+    out := []Record{}
+    field := make([]byte, 3)
+    for io.ReadFull(mut r, mut field)? == 3 {
+        name := make([]byte, int(field[2]))
+        io.ReadFull(mut r, mut name)?
+        out.Push(Record{id: u16(field[0]) << 8 | u16(field[1]), name: string(name)})
+    }
+
+    return Ok(out)
+}
+
+func show(rs ref []Record) {
+    for _, r := range rs {
+        fmt.Printf("  %3d %s\n", r.id, r.name)
+    }
+}
+
+func run(dir ref string) Result<(), io.Error> {
+    rs := []Record{
+        Record{id: 1, name: "ada lovelace"},
+        Record{id: 2, name: "alan turing"},
+        Record{id: 300, name: "grace brewster hopper"},
+    }
+
+    b := Encode(ref rs)
+    fmt.Printf("encoded %d bytes, starting %x\n", b.Len(), b.Bytes()[0:7])
+
+    // A Buffer is an io.Reader: decode a copy of it in memory.
+    var mem = bytes.NewBuffer(b.Bytes().Clone())
+    fmt.Println("decoded from memory:")
+    show(ref Decode(mut mem)?)
+
+    // A cut record is an error, not a short record.
+    var cut = bytes.NewBuffer(b.Bytes()[0:b.Len()-3].Clone())
+    match Decode(mut cut) {
+        Ok(_) => fmt.Println("a cut file decoded"),
+        Err(e) => fmt.Println("a cut file:", e, e.Kind() == io.UnexpectedEOF),
+    }
+
+    // Into a file, and back through a bufio.Reader that peeks at the
+    // header first: the peeked bytes are lent until the next read.
+    path := dir + "/people.rec"
+    out := os.Create(ref path)?
+    io.Copy(mut out, mut b)?
+    out.Close()?
+    in := os.Open(ref path)?
+    r := bufio.NewReader(mut in)
+    match r.Peek(4) {
+        Ok(head) => fmt.Println("the file starts with", string(head)),
+        Err(e) => return Err(e),
+    }
+
+    fmt.Println("decoded from the file:")
+    show(ref Decode(mut r)?)
+
+    // Seek straight to the third record and read the rest of the file.
+    again := os.Open(ref path)?
+    at := again.Seek(io.Start(4 + 3 + 12 + 3 + 11))?
+    rest := io.ReadAll(mut again)?
+    fmt.Printf("at byte %d: %d bytes left, id %d, name %q\n", at, len(rest), u16(rest[0]) << 8 | u16(rest[1]), string(rest[3:]))
+    end := again.Seek(io.End(0))?
+    fmt.Println("the file is", end, "bytes long")
+
+    // Lines with ReadBytes, and a byte put back with UnreadByte.
+    var text bytes.Buffer
+    for _, rec := range ref rs {
+        text.WriteString(ref rec.name)
+        text.WriteRune('\n')
+    }
+
+    lines := bufio.NewReader(mut text)
+    first := lines.ReadBytes(byte(10))? ?? []byte{}
+    fmt.Printf("first line: %q\n", string(first))
+    lines.UnreadByte()
+    put := lines.ReadByte()? ?? byte(0)
+    fmt.Printf("the byte put back: %q\n", rune(put))
+
+    // Words across the names, and what the count writes to nowhere.
+    var names bytes.Buffer
+    for _, rec := range ref rs {
+        names.WriteString(ref rec.name)
+        names.WriteString("\t\n ")
+    }
+
+    words := bufio.Words(mut names)
+    count := 0
+    for words.Scan() {
+        count++
+    }
+
+    var sink io.Discard
+    fmt.Fprintf(mut sink, "%d words\n", count)
+    fmt.Println("words in the names:", count)
+    return Ok(())
+}
+
+func main() {
+    dir := os.MkdirTemp("", "records") ?? "/tmp"
+    match run(ref dir) {
+        Ok(_) => {},
+        Err(e) => fmt.Println("error:", e),
+    }
+
+    os.RemoveAll(ref dir)
+}

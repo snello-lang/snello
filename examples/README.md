@@ -27,6 +27,7 @@ The binary is written to the current directory, named after the file, or after t
 | wordfreq/ | An owned string against borrowed pieces of it, maps, sorting |
 | text/ | The everyday methods of strings and slices: searches that give an option, trims that lend, `Replace`, `SplitN`, `GetOrInsert`, `Extend` and `Truncate` |
 | numbers/ | `math`, `math/bits` and `math/rand`: a throw followed with the math functions, the limits of the number types, a board kept in the bits of a `u64`, and a deck shuffled by a generator with a seed, which deals the same hand on every run |
+| records/ | `bytes`, `io` and `bufio` for a file format of the program's own: records encoded into a `bytes.Buffer` and decoded from any reader with `io.ReadFull`, a cut record reported as an error, `Seek` back to a record, a header looked at with `Peek`, `ReadBytes`, `UnreadByte`, a word `Scanner`, `io.ReadAll` and `io.Discard` |
 | json/ | A JSON value type, encoder and decoder written in the example itself, over `strings` and `strconv`: a recursive enum holding collections, a decoder holding a borrow of its input |
 | worker-pool/ | `select`, timeouts, a cancellation token |
 | actor/ | State a task owns, message passing, reply channels |

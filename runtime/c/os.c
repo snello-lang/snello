@@ -435,6 +435,36 @@ int64_t sn_os_syncFile(int64_t fd) {
     return fsync((int)fd) == 0 ? 0 : errno;
 }
 
+// sn_os_seek moves the file's position as lseek does, whence one of
+// SEEK_SET, SEEK_CUR and SEEK_END, which io.SeekFrom's variants are in
+// order, and stores the new position counted from the start. A position
+// past what an off_t holds, a Start of more than 2^63 - 1 bytes, is an
+// invalid argument, as the system says of one before the start. The
+// offset goes to lseek whole, so off_t must hold every int64_t.
+_Static_assert(sizeof(off_t) == sizeof(int64_t), "off_t is not 64 bits");
+
+int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
+    static const int whences[] = {SEEK_SET, SEEK_CUR, SEEK_END};
+    if (whence < 0 || whence > 2) {
+        return EINVAL;
+    }
+
+    off_t got = lseek((int)fd, (off_t)off, whences[whence]);
+    if (got < 0) {
+        return errno;
+    }
+
+    *at = (uint64_t)got;
+    return 0;
+}
+
+// sn_io_reserve makes room in b for n more bytes in one allocation:
+// io.ReadAll's slice of the exact length, before its blocks are copied
+// in.
+void sn_io_reserve(sn_slice_u8 *buf, int64_t n) {
+    sn_strings_reserve(buf, n);
+}
+
 // The standard streams are written as any file is, straight to the
 // descriptor with nothing held back, as Go's os.Stdout is: what fmt
 // prints, what is written to os.Stdout and os.Stderr, and a panic's

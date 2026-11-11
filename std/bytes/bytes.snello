@@ -1,0 +1,300 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package bytes has Buffer, a growable run of bytes that is written to
+// at its end and read from its front: the structure an encoder writes
+// into and a decoder reads from, an io.Writer and an io.Reader both.
+//
+// The searches and comparisons Go's bytes package has as functions are
+// methods of []byte in Snello, b.Equal(o) and b.Find(sub), so this
+// package has only the Buffer.
+package bytes
+
+import ("fmt"; "io"; "unicode/utf8")
+
+// A Buffer holds bytes written to it until they are read. Its zero value
+// is an empty Buffer ready to use: var b bytes.Buffer. It owns its
+// bytes and is passed mut to be written to or read from, and it
+// implements io.Writer, io.Reader and fmt.Stringer, so fmt.Fprintf
+// writes into it, io.Copy reads from it, and fmt.Println prints what it
+// holds.
+//
+// The Buffer is Go's: one slice, written at its end and read from an
+// index into it. What was read is dropped when the slice is full and
+// the bytes not read yet fill at most half of it, and the whole of it
+// once everything was read, so that a Buffer used as a queue neither
+// grows without a bound nor moves its bytes on every write.
+struct Buffer impl io.Writer, io.Reader, fmt.Stringer {
+	buf      []byte
+	off      int // the bytes before off have been read
+	lastRead int // what the last call read: 0 for no read, -1 for bytes, or the width of the rune ReadRune read
+}
+
+// NewBuffer returns a Buffer holding buf, which it takes: the bytes to
+// read, and the slice the writes after them go on.
+func NewBuffer(buf []byte) Buffer {
+	return Buffer{buf: buf, off: 0, lastRead: 0}
+}
+
+// NewBufferString returns a Buffer holding a copy of the bytes of s.
+func NewBufferString(s ref string) Buffer {
+	return Buffer{buf: []byte(s), off: 0, lastRead: 0}
+}
+
+// Bytes lends the bytes not read yet, for as long as nothing else is
+// asked of the Buffer: the compiler holds a program to that, where Go's
+// Bytes says the slice is valid only until the next change.
+func (b ref Buffer) Bytes() ref []byte {
+	return b.buf[b.off:]
+}
+
+// String returns the bytes not read yet as a new string. The Buffer
+// keeps them.
+func (b ref Buffer) String() string {
+	return string(b.buf[b.off:])
+}
+
+// Len returns how many bytes are not read yet.
+func (b ref Buffer) Len() int {
+	return len(b.buf) - b.off
+}
+
+// Truncate keeps the first n bytes not read yet and drops the rest, as
+// a slice's Truncate does: an n at or past Len keeps them all, and an n
+// of zero or less drops them all.
+func (b mut Buffer) Truncate(n int) {
+	b.lastRead = 0
+	if n <= 0 {
+		b.Reset()
+		return
+	}
+
+	if n < b.Len() {
+		b.buf.Truncate(b.off + n)
+	}
+}
+
+// Reset empties the Buffer and keeps its memory for what is written
+// next.
+func (b mut Buffer) Reset() {
+	b.buf.Clear()
+	b.off = 0
+	b.lastRead = 0
+}
+
+// Grow makes room for n more bytes, so that writing them does not
+// allocate again, as strings.Builder's Grow does: at most one
+// allocation; an n of zero or less, or one no int can add to the
+// length, does nothing. Like a write, it ends what UnreadByte and
+// UnreadRune can put back.
+func (b mut Buffer) Grow(n int) {
+	b.lastRead = 0
+	if n > 0 {
+		b.room(n)
+		reserve(mut b.buf, n)
+	}
+}
+
+// Write appends the bytes of p and returns their count. A Buffer takes
+// every byte, so it never fails. It is io.Writer's method.
+func (b mut Buffer) Write(p ref []byte) Result<int, io.Error> {
+	b.lastRead = 0
+	b.room(len(p))
+	b.buf.Extend(p)
+	return Ok(len(p))
+}
+
+// WriteString appends the bytes of s, in one copy.
+func (b mut Buffer) WriteString(s ref string) {
+	b.lastRead = 0
+	b.room(s.Len())
+	appendString(mut b.buf, s)
+}
+
+// WriteByte appends one byte.
+func (b mut Buffer) WriteByte(c byte) {
+	b.lastRead = 0
+	b.room(1)
+	b.buf.Push(c)
+}
+
+// WriteRune appends the UTF-8 bytes of r, and those of U+FFFD for a
+// value that is not a code point.
+func (b mut Buffer) WriteRune(r rune) {
+	b.lastRead = 0
+	b.room(utf8.UTFMax)
+	utf8.AppendRune(mut b.buf, r)
+}
+
+// room drops what was read before n more bytes are written, by Go's
+// rule: all of the slice when every byte was read; and when the slice is
+// full, the bytes not read yet move to its start only if that leaves it
+// at least half empty. Otherwise the slice grows, as any slice does, so
+// that a move of m bytes always makes room for m more, and a queue with
+// a long backlog does not move it on every write.
+func (b mut Buffer) room(n int) {
+	if b.off == 0 {
+		return
+	}
+
+	m := b.Len()
+	if m == 0 {
+		b.buf.Clear()
+		b.off = 0
+		return
+	}
+
+	if n > cap(b.buf)-len(b.buf) && n <= cap(b.buf)/2-m {
+		end := len(b.buf)
+		slide(mut b.buf, b.off, end)
+		b.buf.Truncate(m)
+		b.off = 0
+	}
+}
+
+// Read copies the bytes not read yet that fit into p, and returns how
+// many: zero once every byte was read, which is the end of a Buffer, as
+// io.Reader says. It never fails. It is io.Reader's method.
+func (b mut Buffer) Read(p mut []byte) Result<int, io.Error> {
+	b.lastRead = 0
+	if b.Len() == 0 {
+		b.Reset()
+		return Ok(0)
+	}
+
+	n := copyBytes(mut p, b.buf[b.off:])
+	b.off += n
+	if n > 0 {
+		b.lastRead = -1
+	}
+
+	return Ok(n)
+}
+
+// Next reads the next n bytes and lends them, for as long as nothing
+// else is asked of the Buffer: fewer when fewer are left, and none for
+// an n of zero or less.
+func (b mut Buffer) Next(n int) ref []byte {
+	b.lastRead = 0
+	n = min(max(n, 0), b.Len())
+	from := b.off
+	b.off += n
+	if n > 0 {
+		b.lastRead = -1
+	}
+
+	return b.buf[from:b.off]
+}
+
+// ReadByte reads the next byte, or None once every byte was read.
+func (b mut Buffer) ReadByte() byte? {
+	b.lastRead = 0
+	if b.Len() == 0 {
+		b.Reset()
+		return None
+	}
+
+	c := b.buf[b.off]
+	b.off++
+	b.lastRead = -1
+	return Some(c)
+}
+
+// ReadRune reads the next rune and how many bytes it took, or None once
+// every byte was read. A byte that does not start a valid UTF-8
+// sequence reads as U+FFFD of width one, as a range over a string reads
+// it.
+func (b mut Buffer) ReadRune() (rune, int)? {
+	b.lastRead = 0
+	if b.Len() == 0 {
+		b.Reset()
+		return None
+	}
+
+	r, n := utf8.DecodeRune(b.buf[b.off:])
+	b.off += n
+	b.lastRead = n
+	return Some((r, n))
+}
+
+// UnreadRune puts back the rune the last call read, when that call was
+// ReadRune, so the next read gives it again; after any other call it
+// returns false and changes nothing.
+func (b mut Buffer) UnreadRune() bool {
+	if b.lastRead <= 0 {
+		return false
+	}
+
+	b.off -= b.lastRead
+	b.lastRead = 0
+	return true
+}
+
+// UnreadByte puts back the last byte the last call read, when that call
+// read one: Read, Next, ReadByte, ReadRune, ReadBytes or ReadString.
+// After any other call, a write or Grow among them, it returns false
+// and changes nothing.
+func (b mut Buffer) UnreadByte() bool {
+	if b.lastRead == 0 {
+		return false
+	}
+
+	b.lastRead = 0
+	b.off--
+	return true
+}
+
+// ReadBytes reads up to and including the first delim and returns what
+// it read, delim included, as bytes the caller owns; when no delim is
+// left it returns the bytes left, and None once every byte was read.
+func (b mut Buffer) ReadBytes(delim byte) ([]byte)? {
+	return match b.line(delim) {
+		Some(end) => {
+			line := b.buf[b.off:end].Clone()
+			b.off = end
+			Some(line)
+		},
+		None => None,
+	}
+}
+
+// ReadString is ReadBytes giving a string.
+func (b mut Buffer) ReadString(delim byte) string? {
+	return match b.line(delim) {
+		Some(end) => {
+			line := string(b.buf[b.off:end])
+			b.off = end
+			Some(line)
+		},
+		None => None,
+	}
+}
+
+// line returns where the next line ends, just past the first delim or at
+// the end of what is left, or None once every byte was read.
+func (b mut Buffer) line(delim byte) int? {
+	b.lastRead = 0
+	if b.Len() == 0 {
+		b.Reset()
+		return None
+	}
+
+	b.lastRead = -1
+	i := indexByte(b.buf[b.off:], delim)
+	if i < 0 {
+		return Some(len(b.buf))
+	}
+
+	return Some(b.off + i + 1)
+}
+
+// The runtime provides these, the moves of bytes bufio makes too: Go's
+// copy, by memmove; IndexByte, by memchr; an append of a string's bytes
+// in one copy; room for n more bytes in at most one allocation; and the
+// move of b[lo:hi] to the start of b.
+func copyBytes(dst mut []byte, src ref []byte) int
+func indexByte(p ref []byte, c byte) int
+func appendString(b mut []byte, s ref string)
+func reserve(b mut []byte, n int)
+func slide(b mut []byte, lo int, hi int)

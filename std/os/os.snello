@@ -17,14 +17,15 @@ import "io"
 
 // A File is an open file, or one of the standard streams. It
 // implements io.Reader and io.Writer, so it is what io.Copy and
-// fmt.Fprintln write to.
+// fmt.Fprintln write to, and io.Seeker, so a program reading a format
+// of its own moves about in it.
 //
 // A File implements Drop: when it goes out of scope, on every path out
 // of its function, its descriptor is closed. Close consumes the File
 // and reports a failure to close, which Drop cannot; so a program that
 // cares about that failure calls Close, and one that does not lets the
 // File go. A File is not Copy: it is moved, or lent with ref and mut.
-struct File impl Drop, io.Reader, io.Writer {
+struct File impl Drop, io.Reader, io.Writer, io.Seeker {
 	fd     int
 	name   string
 	stream bool // one of the three standard streams, which stay open for the program's life
@@ -232,6 +233,27 @@ func (f mut File) WriteString(s ref string) Result<int, io.Error> {
 	return Ok(n)
 }
 
+// Seek moves the file's position, where the next Read and Write begin,
+// and returns the new position, counted in bytes from the start:
+// f.Seek(io.Start(0)) goes back to the start, f.Seek(io.End(0)) to the
+// end, and f.Seek(io.Current(0)) only reports where the file is. A
+// position before the start fails as an invalid argument, and a stream
+// that has no position, a pipe or a terminal, fails as an illegal seek.
+// It is io.Seeker's method.
+func (f mut File) Seek(pos io.SeekFrom) Result<u64, io.Error> {
+	at := u64(0)
+	code := match pos {
+		io.Start(n) => seek(f.fd, 0, i64(n), mut at), // past 2^63 - 1 it wraps below zero, which the system refuses
+		io.Current(n) => seek(f.fd, 1, n, mut at),
+		io.End(n) => seek(f.fd, 2, n, mut at),
+	}
+	if code != 0 {
+		return Err(io.Errno("seek", ref f.name, code))
+	}
+
+	return Ok(at)
+}
+
 // Sync asks the system to write what the file holds in memory to the
 // device, and waits for it.
 func (f mut File) Sync() Result<(), io.Error> {
@@ -279,3 +301,4 @@ func write(fd int, buf ref []byte, n mut int) int
 func writeString(fd int, s ref string, n mut int) int
 func syncFile(fd int) int
 func closeFile(fd int) int
+func seek(fd int, whence int, off i64, at mut u64) int

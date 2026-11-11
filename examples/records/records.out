@@ -1,0 +1,16 @@
+encoded 57 bytes, starting 5245433100010c
+decoded from memory:
+    1 ada lovelace
+    2 alan turing
+  300 grace brewster hopper
+a cut file: unexpected EOF true
+the file starts with REC1
+decoded from the file:
+    1 ada lovelace
+    2 alan turing
+  300 grace brewster hopper
+at byte 33: 24 bytes left, id 300, name "grace brewster hopper"
+the file is 57 bytes long
+first line: "ada lovelace\n"
+the byte put back: '\n'
+words in the names: 7
