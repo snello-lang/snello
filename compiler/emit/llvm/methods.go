@@ -569,7 +569,7 @@ func (e *Emitter) optionOf(t types.Type, has, v value, pos token.Pos) value {
 func (e *Emitter) mapIndex(x *ast.IndexExpr, p string, t *types.Map, write bool) string {
 	if write {
 		k := e.valueTo(x.Index, t.Key())
-		if e.isRead(x.Index) && !e.info.Moves[x.Index] {
+		if e.isLent(x.Index) && !e.info.Moves[x.Index] {
 			return e.op("call ptr @"+e.mapLentSlotter(t, x.Pos())+"(ptr "+p+", ptr "+e.spill(k)+")", "ptr").s
 		}
 

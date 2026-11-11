@@ -148,7 +148,7 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 			r := e.temp()
 			e.line("sn_string " + r + " = " + e.valueTo(rhs, t) + ";")
 			e.line("sn_string_append(&" + place + ", &" + r + ");")
-			if !e.isRead(rhs) {
+			if !e.isLent(rhs) {
 				e.line("sn_string_drop(&" + r + ");")
 			}
 

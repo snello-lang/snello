@@ -367,7 +367,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) value {
 		vals := e.operands(parts, wants)
 		pieces := make([]piece, len(parts))
 		for i, v := range vals {
-			pieces[i] = piece{text: text{v, !e.isRead(parts[i])}}
+			pieces[i] = piece{text: text{v, !e.isLent(parts[i])}}
 		}
 
 		return e.concat(pieces, x.Pos())
@@ -401,7 +401,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) value {
 
 	if isString(t) {
 		if x.Op == token.ADD {
-			return e.join(text{l, !e.isRead(x.X)}, text{r, !e.isRead(x.Y)}).v // a side built here is freed after the join
+			return e.join(text{l, !e.isLent(x.X)}, text{r, !e.isLent(x.Y)}).v // a side built here is freed after the join
 		}
 
 		c := e.rt("sn_string_cmp", "i32", l, r)
@@ -788,7 +788,7 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		return false // a literal owns nothing
 	}
 
-	return !e.isRead(x) && needsDrop(e.typeOf(x))
+	return !e.isLent(x) && needsDrop(e.typeOf(x))
 }
 
 // borrowed returns the value an operand lends: the operand of a ref,

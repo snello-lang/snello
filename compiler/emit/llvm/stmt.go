@@ -168,7 +168,7 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
 			r := e.spill(e.valueTo(rhs, t))
 			e.rt("sn_string_append", "void", value{"ptr", p}, value{"ptr", r})
-			if !e.isRead(rhs) {
+			if !e.isLent(rhs) {
 				e.dropOf(r, t, s.TokPos)
 			}
 

@@ -16,6 +16,7 @@ The binary is written to the current directory, named after the file.
 |---|---|
 | fib.snello | Recursion, integer and float arithmetic, sized integers, conversions |
 | strings.snello | `Lines` over text with a carriage return, an empty line, an empty string and a trailing newline; the character classes of a byte; `min` and `max` over integers, floats and a literal; A `ref string` parameter, concatenation, comparison, byte indexing, `Sprintf`, `Printf`, `Sprint` |
+| lent.snello | Borrows a call returns, of a string, a slice, a map, a struct, a value with a `Drop`, an option and a `Result`, in every place the compiler could take one for a value made there and release it: on either side of a `+` and in a chain of them, through `??`, an `if` and a `match`, as a statement of its own, passed, compared, converted, ranged over, sliced and printed; after each form the lender holds what it was made with, and a debug build reports a block released early or left at the end |
 | control.snello | `if`/`else if`, the three forms of `for`, `continue` and `break`, a loop whose condition and step call functions, a named number type, swap by parallel assignment, `defer` |
 | corners.snello | What the lowering to C must get right: literal bases, wrapping overflow, trigraph-looking strings, float printing |
 | shapes.snello | Structs and enums: literals, `ref` and `mut` receivers, `match` with bindings, a guard and an or-pattern, a payload changed in place, printing of composite values |
