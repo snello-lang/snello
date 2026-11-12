@@ -173,6 +173,32 @@ func (r mut Rc<T>) Drop() {
 	leak(p)
 }
 
+// TryUnwrap takes the value out of the Rc when this is its only Rc, and
+// gives the Rc back otherwise, so that nothing is lost either way: a
+// value shared while it was built and owned outright after. A Weak on
+// the value finds it gone, as it does after the last Rc is dropped.
+//
+//	v := shared.TryUnwrap() ?? return
+func (r Rc<T>) TryUnwrap() Result<T, Rc<T>> {
+	if r.StrongCount() != 1 {
+		return Err(r)
+	}
+
+	p := take(mut r.p) ?? return Err(r) // an Rc that counts one holds its cell
+	if v := take(mut p.value) {
+		p.strong = 0
+		if p.weak == 0 {
+			return Ok(v) // no handle left: p goes out of scope here and frees the cell
+		}
+
+		leak(p)
+		return Ok(v)
+	}
+
+	r.p = Some(p) // a cell without its value, which an Rc never holds: the handle goes back as it came
+	return Err(r)
+}
+
 // Upgrade returns an Rc on the value when it is still there, and None
 // when its last Rc is gone.
 func (w ref Weak<T>) Upgrade() Rc<T>? {

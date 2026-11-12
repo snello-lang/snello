@@ -1,0 +1,73 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package set_test
+
+import ("expect"; "fmt"; "set"; "testing")
+
+func TestInsertContainsRemove() {
+	var s set.Set<string>
+	expect.True(s.IsEmpty())
+	expect.True(s.Insert("a".Clone()))
+	expect.True(s.Insert("b".Clone()))
+	expect.False(s.Insert("a".Clone())) // there already
+	expect.Equal(ref s.Len(), ref 2)
+	expect.True(s.Contains("a"))
+	expect.False(s.Contains("z"))
+	expect.True(s.Remove("a"))
+	expect.False(s.Remove("a"))
+	expect.Equal(ref s.Len(), ref 1)
+	expect.False(s.Contains("a"))
+	expect.Equal(ref fmt.Sprint(s), "set[b]")
+	expect.True(s.Insert("a".Clone())) // back, and at the end of the order
+	expect.Equal(ref fmt.Sprint(s), "set[b a]")
+	seen := ""
+	for v := range s.Iter() {
+		seen = seen + v
+	}
+
+	expect.Equal(ref seen, "ba")
+	words := set.From([]string{"x".Clone(), "y".Clone(), "x".Clone()})
+	expect.Equal(ref words.Len(), ref 2)
+	expect.Equal(ref fmt.Sprint(words), "set[x y]")
+	words.Clear()
+	expect.True(words.Insert("z".Clone()))
+	expect.Equal(ref fmt.Sprint(words), "set[z]")
+}
+
+func TestOrderAndPrint() {
+	s := set.From([]int{3, 1, 3, 2, 1})
+	expect.Equal(ref s.Len(), ref 3)
+	expect.Equal(ref fmt.Sprint(s), "set[3 1 2]") // insertion order, each once
+	sum := 0
+	for v := range s.Iter() {
+		sum += *v
+	}
+
+	expect.Equal(ref sum, ref 6)
+	s.Clear()
+	expect.True(s.IsEmpty())
+	for range s.Iter() {
+		expect.Fail("an empty set yielded a value")
+	}
+
+	expect.Equal(ref fmt.Sprint(s), "set[]")
+}
+
+func TestRemovedValuesAreSkipped() {
+	s := set.New<int>()
+	for i := 0; i < 6; i++ {
+		s.Insert(i)
+	}
+
+	expect.True(s.Remove(ref 0))
+	expect.True(s.Remove(ref 3))
+	expect.True(s.Remove(ref 5))
+	seen := []int{}
+	for v := range s.Iter() {
+		seen.Push(*v)
+	}
+
+	expect.Equal(ref fmt.Sprint(seen), "[1 2 4]")
+}

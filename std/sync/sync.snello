@@ -139,6 +139,13 @@ func (c ref Counter) CompareAndSwap(old int, new int) bool {
 	return cellSwap(c.h, i64(old), i64(new))
 }
 
+// Swap sets the count to v as one step and returns the count it
+// replaced: how one task of many takes what was counted and leaves
+// nothing.
+func (c ref Counter) Swap(v int) int {
+	return int(cellExchange(c.h, i64(v)))
+}
+
 // Drop frees the word.
 func (c mut Counter) Drop() {
 	cellFree(c.h)
@@ -388,6 +395,27 @@ func (w ref WaitGroup) Wait() {
 	wait(w.handle())
 }
 
+// Go runs f(a) in a task of its own, counted in the group: one is
+// added before the task starts and counted out when f returns, so a
+// Wait waits for it. The task's value a is moved into the task, as the
+// argument of a spawned call is, so it must be Send; what the task needs
+// goes there, a handle or a tuple of them, since a closure stored in a
+// func value captures copies alone, and f itself captures nothing but
+// copies.
+//
+//	wg.Go(func(h sync.Arc<Counter>) { h.Get().Add(1) }, hits.Clone())
+//	wg.Wait()
+func (w ref WaitGroup) Go<A: Send>(f func(A), a A) {
+	w.Add(1)
+	spawn counted(w.Clone(), f, a)
+}
+
+// counted runs f on a and counts it out of the group.
+func counted<A: Send>(done WaitGroup, f func(A), a A) {
+	f(a)
+	done.Done()
+}
+
 // handle returns the runtime's lock of the group.
 func (w ref WaitGroup) handle() int {
 	return w.a.Get().h
@@ -445,4 +473,5 @@ func cellLoad(h int) i64
 func cellStore(h int, v i64)
 func cellAdd(h int, d i64) i64
 func cellSwap(h int, old i64, new i64) bool
+func cellExchange(h int, v i64) i64
 func cellFree(h int)

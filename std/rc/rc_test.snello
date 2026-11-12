@@ -45,3 +45,34 @@ func BenchmarkClone() {
 	r := rc.New(1)
 	for testing.Loop() { _ = r.Clone() }
 }
+
+func TestTryUnwrapAlone() {
+	r := rc.New([]string{"kept".Clone()})
+	xs := match r.TryUnwrap() { // no other handle, no Weak: the cell is freed and the value comes out
+		Ok(v) => v,
+		Err(_) => []string{},
+	}
+	expect.Equal(ref len(xs), ref 1)
+	expect.Equal(ref xs[0], "kept")
+}
+
+func TestTryUnwrap() {
+	a := rc.New("only".Clone())
+	{
+		b := a.Clone()
+		a = match a.TryUnwrap() { // shared: the handle comes back
+			Ok(v) => { expect.Fail("unwrapped a shared value"); rc.New(v) },
+			Err(r) => r,
+		}
+		expect.Equal(ref a.StrongCount(), ref 2)
+		expect.Equal(ref b.StrongCount(), ref 2)
+	}
+
+	w := a.Downgrade()
+	v := match a.TryUnwrap() { // alone: the value comes out
+		Ok(v) => v,
+		Err(r) => { expect.Fail("kept the only handle"); r.Get().Clone() },
+	}
+	expect.Equal(ref v, "only")
+	expect.IsNone(w.Upgrade()) // the value is gone from the cell
+}

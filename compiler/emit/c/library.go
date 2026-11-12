@@ -62,6 +62,8 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		}
 
 		return e.operands(x.Args, []types.Type{types.NewRef(t, false)})[0]
+	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove":
+		return e.rawCall(x, key)
 	case "rc.leak", "sync.leak": // the pointer moves in and nothing frees it
 		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
 		return ""
@@ -356,4 +358,71 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 	}
 
 	return truncated(e.text(v, a))
+}
+
+// rawCall writes a primitive of the deque's buffer: a block of slots of
+// the element type, held by the deque as its address, each slot holding
+// an element or nothing. The deque knows which: its head and its count
+// name the slots that hold one, so a slot is written only when it holds
+// nothing, read only when it holds one, and the elements are moved, not
+// copied. rawAlloc makes a block of n slots, n above zero, and rawFree
+// frees one; rawPut moves an element into a slot and rawTake moves one
+// out; rawRef and rawMut lend the element in a slot, as a map's Get and
+// GetMut lend an entry, the borrow tied to the deque; rawMove moves n
+// elements from one run of slots to another as one block. The element
+// type is the call's type argument.
+func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
+	ints := func(n int) []types.Type {
+		out := make([]types.Type, n)
+		for i := range out {
+			out[i] = types.Typ[types.Int]
+		}
+
+		return out
+	}
+
+	if key == "deque.rawFree" {
+		e.line("sn_free((void *)(intptr_t)(" + e.operands(x.Args, ints(1))[0] + "));")
+		return ""
+	}
+
+	id, ok := x.Fun.(*ast.Ident) // the library calls its own function by name
+	if sel, isSel := x.Fun.(*ast.SelectorExpr); isSel {
+		id, ok = sel.Sel, true
+	}
+
+	inst, found := e.info.Instances[id]
+	if !ok || !found || len(inst.TypeArgs) != 1 {
+		e.unsupported(x.Pos(), "a primitive of the deque's buffer without its element type")
+		return "0"
+	}
+
+	t := e.sub(inst.TypeArgs[0])
+	ct := e.cType(t, x.Pos())
+	slots := func(p string) string { return "((" + ct + " *)(intptr_t)(" + p + "))" }
+	switch key {
+	case "deque.rawAlloc":
+		n := e.operands(x.Args, ints(1))[0]
+		return "((sn_int)(intptr_t)sn_alloc((size_t)(" + n + ") * sizeof(" + ct + ")))"
+	case "deque.rawPut":
+		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
+		e.line(slots(args[0]) + "[" + args[1] + "] = " + args[2] + ";")
+		return ""
+	case "deque.rawTake":
+		args := e.operands(x.Args, ints(2))
+		out := e.temp()
+		e.line(ct + " " + out + " = " + slots(args[0]) + "[" + args[1] + "];") // the slot holds nothing from here on, which the deque's count says
+		return out
+	case "deque.rawRef", "deque.rawMut":
+		args := e.operands(x.Args[:2], ints(2))
+		if key == "deque.rawRef" {
+			return slots(args[0]) + "[" + args[1] + "]" // a ref is the value it views, as a map's Get lends it
+		}
+
+		return "(&" + slots(args[0]) + "[" + args[1] + "])"
+	default: // rawMove
+		args := e.operands(x.Args, ints(5))
+		e.line("__builtin_memmove(" + slots(args[0]) + " + " + args[1] + ", " + slots(args[2]) + " + " + args[3] + ", (size_t)(" + args[4] + ") * sizeof(" + ct + "));")
+		return ""
+	}
 }

@@ -106,8 +106,11 @@ func CheckPrefixes(libraries []Library) error {
 // say it never returns yet; and the primitives of rc and sync are the
 // pointer itself, since a second owner of one pointer, and a mut
 // reached through a ref, are what the language refuses and the
-// reference count and the lock are what make them safe there; and
-// testing.Catch runs a function under the runtime's mark, which takes
+// reference count and the lock are what make them safe there; the
+// slots of a deque's buffer, which hold an element or nothing and so
+// cannot be values of the language, which the deque's count and head
+// make safe there; and testing.Catch runs a function under the
+// runtime's mark, which takes
 // the function as C takes one, through an adapter the backend writes.
 // The functions of math/bits are written too, each as an instruction,
 // and BitOp reads their names.
@@ -115,6 +118,8 @@ var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprint": true, "fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
 	"rc.alias": true, "rc.leak": true, "sync.alias": true, "sync.leak": true, "sync.inside": true,
+	"deque.rawAlloc": true, "deque.rawFree": true, "deque.rawPut": true, "deque.rawTake": true,
+	"deque.rawRef": true, "deque.rawMut": true, "deque.rawMove": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
 }
 

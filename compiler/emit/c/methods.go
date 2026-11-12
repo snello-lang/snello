@@ -394,6 +394,17 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		return out
 	case "Contains":
 		return "(sn_map_find(&" + place + ", " + mt + ", &" + e.key(x.Args[0], t.Key()) + ") != NULL)"
+	case "Entry": // the next entry's place, key and value, the borrows as the values they view
+		out, at := e.temp(), e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("int64_t " + at + " = sn_map_next(&" + place + ", (int64_t)(" + e.valueTo(x.Args[0], types.Typ[types.Int]) + "));")
+		e.line("if (" + at + " >= 0) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val.e0 = " + at + ";")
+		e.line(out + ".val.e1 = ((" + e.cType(t.Key(), x.Pos()) + " *)" + place + ".keys)[" + at + "];")
+		e.line(out + ".val.e2 = ((" + val + " *)" + place + ".vals)[" + at + "];")
+		e.line("}")
+		return out
 	case "Clone":
 		if !lower.ClonesAsBytes(t.Key()) || !lower.ClonesAsBytes(t.Value()) {
 			return e.cloner(t, x.Pos()) + "(" + place + ")"

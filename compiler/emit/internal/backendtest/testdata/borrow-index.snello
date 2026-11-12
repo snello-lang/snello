@@ -1,0 +1,90 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An element reached by an index that calls is a place: a match, an
+// if-binding, a ref or a mut of it, take and replace work on the
+// element where it lies, and the index is computed once. Every form
+// here once copied the element in the C backend, which then dropped the
+// copy while the collection still held the original; a debug build
+// catches a string used after its release.
+
+package main
+
+import ("fmt"; "sync")
+
+struct Ring { buf []string?; head int }
+
+func (r ref Ring) at(i int) int {
+	return (r.head + i) % len(r.buf)
+}
+
+func (r ref Ring) Get(i int) ref string? {
+	return match ref r.buf[r.at(i)] {
+		Some(v) => Some(v),
+		None => None,
+	}
+}
+
+func (r mut Ring) GetMut(i int) mut string? {
+	return match mut r.buf[r.at(i)] {
+		Some(v) => Some(v),
+		None => None,
+	}
+}
+
+var calls = sync.NewCounter(0)
+
+func next() int {
+	return calls.Add(1) - 1
+}
+
+func mk() []string {
+	return []string{"m0".Clone(), "m1".Clone()}
+}
+
+struct Grid { rows [][]string }
+
+func (g ref Grid) at(i int) int {
+	return i % len(g.rows)
+}
+
+func show(s ref string) {
+	fmt.Println("show", s)
+}
+
+func main() {
+	r := Ring{buf: make([]string?, 4), head: 2}
+	r.buf[r.at(0)] = Some("a".Clone())
+	r.buf[r.at(1)] = Some("b".Clone())
+	fmt.Println(r.Get(0), r.Get(1), r.Get(2))
+	if v := r.GetMut(1) { *v = "B".Clone() }
+	fmt.Println(r.Get(1))
+	if v := ref r.buf[r.at(0)] { fmt.Println("bound", v) }
+	match ref r.buf[r.at(1)] {
+		Some(v) => fmt.Println("matched", v),
+		None => fmt.Println("none"),
+	}
+
+	xs := []string{"x".Clone(), "y".Clone(), "z".Clone()}
+	show(ref xs[next()])
+	show(ref xs[next()])
+	s := ref xs[next()]
+	fmt.Println(s, calls.Load())
+	taken := take(mut xs[next() % 3])
+	fmt.Println(taken, xs, calls.Load())
+	old := replace(mut xs[next() % 3], "w".Clone())
+	fmt.Println(old, xs, calls.Load())
+	fmt.Println(r.Get(0), r.Get(1))
+	match ref mk()[next() % 2] { // an element of a call's result: the result is held for the statement
+		v => fmt.Println("from a call", v),
+	}
+
+	g := Grid{rows: [][]string{[]string{"g00".Clone(), "g01".Clone()}, []string{"g10".Clone()}}}
+	if v := Some(ref g.rows[g.at(0)][g.at(1)]) { fmt.Println("nested", v) }
+	match mut g.rows[g.at(1)][g.at(0)] {
+		v => *v = "G10".Clone(),
+	}
+
+	fmt.Println(g.rows)
+}

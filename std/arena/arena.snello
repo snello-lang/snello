@@ -116,6 +116,35 @@ func (a mut Arena<T>) Remove(i Index<T>) T? {
 	return Some(v)
 }
 
+// Iter returns a walk over the values in the order of their slots,
+// lending each with the Index that names it for as long as the Arena
+// is lent: for i, v := range a.Iter(). The Arena is lent for the walk,
+// so nothing is inserted or removed meanwhile.
+func (a ref Arena<T>) Iter() Iter<T> {
+	return Iter<T>{a: a, slot: 0}
+}
+
+// An Iter walks an Arena's values in the order of their slots.
+struct Iter<T> {
+	a    ref Arena<T>
+	slot int
+}
+
+// Next returns the next value with its Index, or None once the walk is
+// over.
+func (it mut Iter<T>) Next() (Index<T>, ref T)? {
+	for it.slot < len(it.a.slots) {
+		i := it.slot
+		it.slot++
+		s := ref it.a.slots[i]
+		if v := ref s.value {
+			return Some((Index<T>{slot: i, gen: s.gen}, v))
+		}
+	}
+
+	return None
+}
+
 // Len returns how many values the Arena holds, not counting free
 // slots.
 func (a ref Arena<T>) Len() int {

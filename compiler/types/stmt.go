@@ -634,8 +634,19 @@ func (c *Checker) flowPost(s *ast.ForStmt) {
 
 // rangeStmt checks for k, v := range x. A slice or array yields index
 // and element, a map key and value, a string index and byte, a channel
-// or an iterator each item. Ranging over a borrowed collection yields
-// borrows of its elements; ranging over an owned one moves them out.
+// each value, and an iterator each item. Ranging over a borrowed
+// collection yields borrows of its elements; ranging over an owned one
+// moves them out.
+//
+// An iterator is a value whose type has a method Next on a mut
+// receiver, taking nothing and returning U?: its shape makes it one,
+// and no trait names it. The loop calls Next until it gives None, and
+// yields each U, or the two parts of a U that is a pair, for i, v :=
+// range a.Iter(). An iterator that is a variable is consumed, as a
+// slice is, unless it holds a borrow or is Copy, when it is lent mut
+// for the loop, as range mut it lends it, since Next changes it where
+// it lies; one that is a call's result lives for the loop and is
+// dropped after it.
 func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	x := c.expr(s.X, nil)
 	c.openScope()
@@ -646,11 +657,25 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	var placesMut bool
 	if x.mode != invalid {
 		var ok bool
-		if key, val, ok = rangeTypes(x); !ok {
-			c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
-		} else if val == Typ[Invalid] && s.Value != nil { // a channel's or an iterator's one variable: the value, or the item
-			c.errorf(s.Value.Pos(), "range over "+exprText(s.X)+" permits only one iteration variable")
-			key = Typ[Invalid]
+		item, iterator, shared := iteratorItem(x)
+		switch {
+		case iterator && shared:
+			c.errorf(s.X.Pos(), "cannot range over "+exprText(s.X)+": Next changes the iterator, which a ref lends for reading; range over the variable, or mut of it")
+		case iterator && s.Value == nil:
+			key, ok = item, true
+		case iterator:
+			if pair, isPair := item.Underlying().(*Tuple); isPair && pair.Len() == 2 {
+				key, val, ok = pair.At(0), pair.At(1), true
+			} else {
+				c.errorf(s.Value.Pos(), "range over "+exprText(s.X)+" yields one "+item.String()+" at a time, which takes one iteration variable")
+			}
+		default:
+			if key, val, ok = rangeTypes(x); !ok {
+				c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
+			} else if val == Typ[Invalid] && s.Value != nil { // a channel's one variable: the value
+				c.errorf(s.Value.Pos(), "range over "+exprText(s.X)+" permits only one iteration variable")
+				key = Typ[Invalid]
+			}
 		}
 
 		mut, lent := borrowIn(x.typ)
@@ -659,8 +684,14 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 			loopHolder, places, placesMut = c.holdRange(s, mut) // a handle is lent for the loop, never consumed: the loop receives through a ref of it, as every operation on a channel does
 		case x.mode == variable && isString(readType(x)):
 			loopHolder, places, placesMut = c.holdRange(s, false) // a string is lent for the loop: its runes are copies, so consuming it would gain nothing
+		case iterator && x.mode == variable && IsCopy(x.typ):
+			loopHolder, places, placesMut = c.holdRange(s, mut)
+			loopHolder = c.holdIterator(s, loopHolder) // a Copy iterator is not moved out of its variable, which Next changes in place: lent mut for the loop
 		case held(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends, and so does a slice of borrows, the pieces of a string, whose elements are its string's
+		case iterator && x.mode == variable:
+			loopHolder, places, placesMut = c.holdRange(s, mut)
+			loopHolder = c.holdIterator(s, loopHolder) // the iterator itself is changed by every Next: lent mut for the loop, beside what it borrows
 		case lent || x.mode != value:
 			loopHolder, places, placesMut = c.holdRange(s, mut || x.mode == mutBorrowed) // the collection, or what an iterator borrows, is lent for the loop
 		}
@@ -709,6 +740,24 @@ func (c *Checker) holdRange(s *ast.RangeStmt, mut bool) (*Var, []place, bool) {
 	}
 
 	return holder, lent, mut
+}
+
+// holdIterator lends the iterator variable a loop ranges over, mut, for
+// the loop, as holdRange lends a collection: Next changes it on every
+// pass, so nothing else reaches it meanwhile.
+func (c *Checker) holdIterator(s *ast.RangeStmt, holder *Var) *Var {
+	p, kind := through(c.placeOf(s.X))
+	if kind == notPlace {
+		return holder
+	}
+
+	if holder == nil {
+		holder = NewVar(s.For, "", Typ[Invalid])
+		c.flowAssign(holder, "")
+	}
+
+	c.flowLoan(borrow{holder: holder, place: p, mut: true, pos: s.For, loop: true})
+	return holder
 }
 
 // holdElements records that a range loop's variables that are borrows,
@@ -893,9 +942,53 @@ func rangeTypes(x operand) (key, val Type, ok bool) {
 	return Typ[Invalid], Typ[Invalid], false
 }
 
-// isIterator reports whether a slice type stands for an iterator: the
-// library types Fields and Split as a slice of borrows, a type no
-// program can write, until the iterator trait exists.
+// IteratorNext returns the method that makes a value of type t an
+// iterator a range loop calls: Next, on a mut receiver, taking nothing
+// and returning an option, the item; or nil. The backends call it to
+// write the loop as the checker read it.
+func IteratorNext(t Type) *Func {
+	n, ok := t.(*Named)
+	if !ok {
+		return nil
+	}
+
+	fn := n.Method("Next")
+	if fn == nil {
+		return nil
+	}
+
+	sig, ok := fn.typ.(*Signature)
+	if !ok || sig.recv == nil || len(sig.params) != 0 || len(sig.tparams) != 0 {
+		return nil
+	}
+
+	if r, ok := sig.recv.typ.(*Ref); !ok || !r.mut {
+		return nil
+	}
+
+	if _, ok := sig.results.(*Option); !ok {
+		return nil
+	}
+
+	return fn
+}
+
+// iteratorItem returns the item a range over x yields when x is an
+// iterator, whether it is one, and whether it is reached through a ref,
+// which cannot lend it for the mut receiver Next takes.
+func iteratorItem(x operand) (item Type, ok, shared bool) {
+	base, m := deref(x)
+	fn := IteratorNext(base)
+	if fn == nil {
+		return nil, false, false
+	}
+
+	return fn.typ.(*Signature).results.(*Option).elem, true, m == borrowed
+}
+
+// isIterator reports whether a slice type stands for the iterator the
+// library's Fields and Split give, a slice of borrows, a type no
+// program can write.
 func isIterator(t *Slice) bool {
 	_, ok := t.elem.(*Ref)
 	return ok

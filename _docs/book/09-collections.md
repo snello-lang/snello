@@ -131,6 +131,32 @@ A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, boolea
 
 Two maps do not compare with `==`, for the same reason two slices do not.
 
+## Deques and sets
+
+Two collections of the standard library stand beside the slice and the map. A `deque.Deque<T>` is a queue with two ends: `PushBack` and `PopFront` make a queue, `PushBack` and `PopBack` a stack, and `Front`, `Back` and `Get` read without removing. Each takes constant time, a push amortized over the doubling of the buffer, since the elements lie in a ring over one buffer, where a slice used as a queue moves every remaining element down on each `Remove(0)`. A deque has no zero value, since it frees its buffer when it goes: one comes from `deque.New<T>()` or `deque.WithCapacity<T>(n)`. A deque prints as `deque[a b c]` and a set as `set[a b c]`.
+
+```go
+queue := deque.New<NodeID>()
+queue.PushBack(start)
+for {
+	n := queue.PopFront() ?? break
+	visit(n)
+}
+```
+
+A `set.Set<T>` holds each value once, for a `T` that is `Eq` and `Hash` as a map's key is. `Insert` adds a value and reports whether it was new, `Contains` asks, `Remove` takes one out and reports whether it was there, and `set.From(xs)` makes one from a slice. It is a map of the values to nothing, as Go writes `map[T]struct{}`, so it costs what the map costs.
+
+```go
+seen := set.New<string>()
+for _, w := range ref words {
+	if !seen.Insert(w.Clone()) {
+		fmt.Println("again:", w)
+	}
+}
+```
+
+Both are walked with `range` over their `Iter`, which lends each element for the loop: `for v := range d.Iter()` from front to back, and `for v := range s.Iter()` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, and the loop holds the collection lent until it ends, so the body reads it and cannot change it.
+
 ## Arrays
 
 An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `compiler/emit/internal/backendtest/testdata/arrays.snello` and `examples/matrix/matrix.snello`, whose `Mat4` holds a `[16]f64`, run them.

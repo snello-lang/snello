@@ -266,7 +266,14 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 
 		return ok && v.IsField()
 	case *ast.IndexExpr:
-		return !e.hasEffects(x.Index)
+		// An element is a place whatever its index and whatever its
+		// collection: index saves an index that has effects, and the
+		// collection is a place or the temporary scrutinee holds for the
+		// statement, so the element is named once and reached where it
+		// lies. A copy here instead would be an owned second value of
+		// the element, dropped while the collection still holds the
+		// first.
+		return true
 	case *ast.UnaryExpr:
 		return x.Op == token.MUL
 	}

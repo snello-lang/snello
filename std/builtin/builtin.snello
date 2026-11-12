@@ -318,6 +318,14 @@ func (m ref map[K]V) Clone() map[K]V
 // dropped. The key is hashed and looked for once.
 func (m mut map[K]V) GetOrInsert(k K, v V) mut V
 
+// Entry lends the first entry at the place i or after it, with its
+// place, or None when there is none: the entries lie in insertion
+// order at places from 0, a removed one leaving its place empty until
+// the map grows; a place below 0 is 0. A range over the map walks them
+// so; Entry is for a type built over a map that walks them itself, as
+// set's Iter does, from 0 and from each place found plus one.
+func (m ref map[K]V) Entry(i int) (int, ref K, ref V)?
+
 // Clone returns another handle on the same channel, of the same
 // direction, to hand to another task: a channel handle is owned, moved
 // by assignment, a call, a capture or a send, and the channel is freed

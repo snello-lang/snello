@@ -387,6 +387,10 @@ void sn_map_clone(const sn_map *m, const sn_map_type *t, sn_map *out) {
 
 int64_t sn_map_next(const sn_map *m, int64_t i) {
     sn_check_map(m);
+    if (i < 0) {
+        i = 0; // a place before the first is the first: Entry takes any int
+    }
+
     for (; i < m->len; i++) {
         if (m->hashes[i] != 0) {
             return i;

@@ -670,6 +670,7 @@ int64_t sn_sync_cellLoad(int64_t h);
 void sn_sync_cellStore(int64_t h, int64_t v);
 int64_t sn_sync_cellAdd(int64_t h, int64_t d);
 bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v);
+int64_t sn_sync_cellExchange(int64_t h, int64_t v);
 void sn_sync_cellFree(int64_t h);
 int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call); // the net package's, in net.c
 int64_t sn_net_accept(int64_t fd, int64_t *out);

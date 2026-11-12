@@ -1,0 +1,139 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A range over an iterator: any value whose type has a method Next on
+// a mut receiver returning an option. The loop calls Next until it
+// gives None and binds each item, or the two parts of an item that is
+// a pair. An iterator that borrows a collection lends it for the loop;
+// one that is a variable is lent mut when it is Copy or borrows, and
+// consumed when it owns its items; one made for the loop is dropped
+// after it, and an item the loop binds nothing to is dropped at once.
+// A map or channel type with Next is ranged as an iterator, and a
+// map's Entry walks its entries by place, from any place.
+
+package main
+
+import "fmt"
+
+struct Bag { xs []string }
+
+struct Walk { b ref Bag; i int }
+
+func (b ref Bag) Iter() Walk {
+	return Walk{b: b, i: 0}
+}
+
+func (w mut Walk) Next() (int, ref string)? {
+	if w.i >= len(w.b.xs) {
+		return None
+	}
+
+	w.i++
+	return Some((w.i - 1, ref w.b.xs[w.i - 1]))
+}
+
+// Count makes what it yields, a string for each pass; it is Copy, so a
+// range lends it.
+struct Count { n int; limit int }
+
+// Names owns its items and is not Copy: a range consumes it.
+struct Names { left []string }
+
+func (n mut Names) Next() string? {
+	return n.left.Pop()
+}
+
+// Counted is a map type that is also an iterator: a range calls Next.
+type Counted map[string]int
+
+func (m mut Counted) Next() string? {
+	return None
+}
+
+func (c mut Count) Next() string? {
+	if c.n >= c.limit {
+		return None
+	}
+
+	c.n++
+	return Some(fmt.Sprint("item", c.n))
+}
+
+func main() {
+	b := Bag{xs: []string{"x", "y", "z"}}
+	for p := range b.Iter() {
+		fmt.Println(p)
+	}
+
+	for i, s := range b.Iter() {
+		fmt.Println(i, s)
+	}
+
+	for _, s := range b.Iter() {
+		fmt.Println(s)
+	}
+
+	it := b.Iter()
+	for i := range mut it {
+		fmt.Println("first", i)
+		break
+	}
+
+	for i, _ := range it { // lent mut for the loop, and still here after it
+		fmt.Println("rest", i)
+	}
+
+	c := Count{n: 0, limit: 3}
+	for s := range c { // lent: Next changes c where it lies
+		fmt.Println(s)
+	}
+
+	fmt.Println("count after", c.n)
+	names := Names{left: []string{"z".Clone(), "y".Clone()}}
+	for s := range names { // consumed: it owns its items, popped from the back
+		fmt.Println(s)
+	}
+
+	counted := Counted(map[string]int{})
+	counted["a"] = 1
+	for k := range counted {
+		fmt.Println("never", k)
+	}
+
+	byName := map[string]int{"one": 1, "two": 2, "three": 3}
+	byName.Remove("one")
+	at := -5 // a place below 0 is 0
+	for {
+		if (i, k, v) := byName.Entry(at) {
+			fmt.Println(i, k, v)
+			at = i + 1
+		} else {
+			break
+		}
+	}
+
+	fmt.Println(byName.Entry(1000000).IsNone())
+	if (i, k, _) := byName.Entry(-100000000) { // far below 0, which once read before the map's block
+		fmt.Println("far below", i, k)
+	}
+	byNumber := map[int]string{7: "seven".Clone()}
+	if (i, k, v) := byNumber.Entry(0) {
+		fmt.Println(i, k, v)
+	}
+
+	for range (Count{n: 0, limit: 2}) { // each item dropped unbound
+		fmt.Println("tick")
+	}
+
+	total := 0
+	for i, _ := range b.Iter() {
+		if i == 1 {
+			continue
+		}
+
+		total += i
+	}
+
+	fmt.Println(total, len(b.xs))
+}

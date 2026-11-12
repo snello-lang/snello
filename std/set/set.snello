@@ -1,0 +1,107 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package set holds each value once. Insert adds a value and reports
+// whether it was new, Contains asks after one, Remove takes one out,
+// and a range over Iter gives each value once, in the order they were
+// inserted, as a range over a map does. A Set is a map of its values to
+// nothing, map[T](): it costs what the map costs, a hash and a look-up
+// per operation, and hashes with the map's seed.
+package set
+
+import "fmt"
+
+// A Set owns its values and lends them for reading. It is moved, or
+// lent with ref and mut; when it goes out of scope, the values are
+// dropped. The zero value, var s Set<T>, is an empty set ready for
+// Insert. T is Eq and Hash, as a map's key is.
+struct Set<T: Eq + Hash> impl fmt.Stringer {
+	m map[T]()
+}
+
+// New returns an empty set.
+func New<T: Eq + Hash>() Set<T> {
+	return Set<T>{}
+}
+
+// From returns a set of the values of xs, which it takes; a value that
+// comes twice is kept once.
+func From<T: Eq + Hash>(xs []T) Set<T> {
+	s := Set<T>{m: make(map[T](), len(xs))}
+	for _, x := range xs {
+		s.Insert(x)
+	}
+
+	return s
+}
+
+// Insert adds v, which the set owns from then on, and reports whether
+// it was new; a value already in the set is left as it was, and v is
+// dropped. The value is hashed and looked for once.
+func (s mut Set<T>) Insert(v T) bool {
+	n := len(s.m)
+	s.m.GetOrInsert(v, ())
+	return len(s.m) != n
+}
+
+// Contains reports whether v is in the set.
+func (s ref Set<T>) Contains(v ref T) bool {
+	return s.m.Contains(v)
+}
+
+// Remove takes v out of the set and reports whether it was there.
+func (s mut Set<T>) Remove(v ref T) bool {
+	return s.m.Remove(v).IsSome()
+}
+
+// Len returns how many values the set holds.
+func (s ref Set<T>) Len() int {
+	return len(s.m)
+}
+
+// IsEmpty reports whether the set holds no value.
+func (s ref Set<T>) IsEmpty() bool {
+	return len(s.m) == 0
+}
+
+// Clear drops every value, and the memory they were held in with them:
+// the map is replaced, and its table goes with it.
+func (s mut Set<T>) Clear() {
+	s.m = map[T](){}
+}
+
+// Iter returns a walk over the values in the order they were inserted,
+// lending each for as long as the set is lent: for v := range s.Iter().
+func (s ref Set<T>) Iter() Iter<T> {
+	return Iter<T>{s: s, at: 0}
+}
+
+// An Iter walks a set's values in insertion order.
+struct Iter<T: Eq + Hash> {
+	s  ref Set<T>
+	at int
+}
+
+// Next lends the next value, or None once the walk is over.
+func (it mut Iter<T>) Next() ref T? {
+	if (i, v, _) := it.s.m.Entry(it.at) {
+		it.at = i + 1
+		return Some(v)
+	}
+
+	return None
+}
+
+// String returns the values in insertion order, written as a slice of
+// them is printed: set[a b c]. It is how fmt prints a Set.
+func (s ref Set<T>) String() string {
+	out := "set["
+	sep := ""
+	for v := range s.Iter() {
+		out = out + sep + fmt.Sprint(v)
+		sep = " "
+	}
+
+	return out + "]"
+}

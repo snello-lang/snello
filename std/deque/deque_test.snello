@@ -1,0 +1,133 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package deque_test
+
+import ("deque"; "expect"; "fmt"; "testing")
+
+func TestQueue() {
+	d := deque.New<int>()
+	expect.True(d.IsEmpty())
+	expect.IsNone(d.PopFront())
+	expect.IsNone(d.PopBack())
+	expect.True(d.Front().IsNone())
+	expect.True(d.Back().IsNone())
+	expect.True(d.Get(0).IsNone())
+	expect.True(d.GetMut(0).IsNone())
+	for i := 1; i <= 10; i++ {
+		d.PushBack(i)
+	}
+
+	expect.Equal(ref d.Len(), ref 10)
+	if v := d.Front() { expect.Equal(v, ref 1) } else { expect.Fail("no front") }
+	if v := d.Back() { expect.Equal(v, ref 10) } else { expect.Fail("no back") }
+	for i := 1; i <= 10; i++ {
+		expect.Equal(ref expect.IsSome(d.PopFront()), ref i)
+	}
+
+	expect.True(d.IsEmpty())
+}
+
+func TestBothEnds() {
+	d := deque.New<string>()
+	d.PushFront("b".Clone()) // on an empty deque: the head wraps to the buffer's last slot
+	if v := d.Front() { expect.Equal(v, "b") } else { expect.Fail("no front") }
+	if v := d.Back() { expect.Equal(v, "b") } else { expect.Fail("no back") }
+	d.PushFront("a".Clone())
+	d.PushBack("c".Clone())
+	expect.Equal(ref fmt.Sprint(d), "deque[a b c]")
+	if v := d.Get(1) { expect.Equal(v, "b") } else { expect.Fail("no middle element") }
+	expect.True(d.Get(3).IsNone())
+	expect.True(d.Get(-1).IsNone())
+	if v := d.GetMut(1) { *v = "B".Clone() } else { expect.Fail("no middle element") }
+	expect.Equal(ref expect.IsSome(d.PopBack()), "c")
+	expect.Equal(ref expect.IsSome(d.PopFront()), "a")
+	expect.Equal(ref expect.IsSome(d.PopFront()), "B")
+	expect.IsNone(d.PopBack())
+}
+
+// The ring wraps round its buffer and grows with the elements in order,
+// strings as ints: a grow with the head past the start lays them out
+// straight, and each is moved, not copied.
+func TestWrapAndGrow() {
+	d := deque.WithCapacity<string>(4)
+	expect.Equal(ref d.Cap(), ref 4)
+	for i := 0; i < 3; i++ {
+		d.PushBack(fmt.Sprint("s", i))
+	}
+
+	expect.Equal(ref expect.IsSome(d.PopFront()), "s0")
+	expect.Equal(ref expect.IsSome(d.PopFront()), "s1")
+	for i := 3; i < 9; i++ { // past the end of the buffer, then past its room
+		d.PushBack(fmt.Sprint("s", i))
+	}
+
+	d.PushFront("s1".Clone())
+	expect.Equal(ref fmt.Sprint(d), "deque[s1 s2 s3 s4 s5 s6 s7 s8]")
+	expect.Equal(ref d.Cap(), ref 8)
+	n := 0
+	for v := range d.Iter() { // a full ring, wrapped
+		expect.Equal(v, ref fmt.Sprint("s", n + 1))
+		n++
+	}
+
+	expect.Equal(ref n, ref 8)
+	d.Clear()
+	expect.True(d.IsEmpty())
+	expect.Equal(ref d.Cap(), ref 8)
+	for range d.Iter() {
+		expect.Fail("an empty deque yielded an element")
+	}
+
+	d.PushBack("again".Clone())
+	expect.Equal(ref fmt.Sprint(d), "deque[again]")
+}
+
+// A full ring grows with its elements in order wherever its head is:
+// at the start, so that it has not wrapped, or past it, so that a run
+// lies at the start and a run at the end.
+func TestGrowKeepsOrder() {
+	for _, head := range []int{0, 2, 6} {
+		d := deque.WithCapacity<string>(8)
+		for i := 0; i < head; i++ { // move the head to where the case wants it
+			d.PushBack("x".Clone())
+			_ = d.PopFront()
+		}
+
+		for i := 0; i < 8; i++ {
+			d.PushBack(fmt.Sprint(i))
+		}
+
+		expect.Equal(ref d.Cap(), ref 8)
+		d.PushBack("8".Clone()) // full: it grows
+		d.PushFront("-1".Clone())
+		expect.Equal(ref d.Cap(), ref 16)
+		expect.Equal(ref fmt.Sprint(d), "deque[-1 0 1 2 3 4 5 6 7 8]")
+		for want := -1; want <= 8; want++ {
+			expect.Equal(ref expect.IsSome(d.PopFront()), ref fmt.Sprint(want))
+		}
+	}
+}
+
+func TestCapacity() {
+	expect.Equal(ref deque.WithCapacity<int>(0).Cap(), ref 0)
+	expect.Equal(ref deque.WithCapacity<int>(-3).Cap(), ref 0)
+	expect.Equal(ref deque.WithCapacity<int>(5).Cap(), ref 8)
+	expect.Equal(ref deque.WithCapacity<int>(17).Cap(), ref 32)
+	d := deque.New<int>()
+	expect.Equal(ref d.Cap(), ref 0)
+	d.PushFront(1)
+	expect.Equal(ref d.Cap(), ref 4)
+}
+
+// Elements are dropped with the deque, and a popped element is the
+// caller's.
+func TestOwnership() {
+	d := deque.New<[]int>()
+	d.PushBack([]int{1, 2})
+	d.PushFront([]int{0})
+	xs := expect.IsSome(d.PopFront())
+	expect.Equal(ref len(xs), ref 1)
+	expect.Equal(ref d.Len(), ref 1)
+}

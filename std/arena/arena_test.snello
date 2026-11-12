@@ -38,3 +38,41 @@ func BenchmarkInsertRemove() {
 		_ = a.Remove(i)
 	}
 }
+
+func TestIter() {
+	a := arena.New<string>()
+	i := a.Insert("one".Clone())
+	j := a.Insert("two".Clone())
+	k := a.Insert("three".Clone())
+	expect.IsSome(a.Remove(j))
+	seen := []string{}
+	for idx, v := range a.Iter() {
+		expect.True(idx == i || idx == k)
+		seen.Push(v.Clone())
+	}
+
+	expect.Equal(ref len(seen), ref 2)
+	expect.Equal(ref seen[0], "one")
+	expect.Equal(ref seen[1], "three")
+	n := 0
+	for range a.Iter() {
+		n++
+	}
+
+	expect.Equal(ref n, ref 2)
+	empty := arena.New<int>()
+	for range empty.Iter() {
+		expect.Fail("an empty arena yielded a value")
+	}
+
+	l := a.Insert("four".Clone()) // reuses the slot two left, on its next generation
+	for idx, v := range a.Iter() {
+		if v == "four" {
+			expect.True(idx == l)
+			expect.True(idx != j) // the stale index names nothing
+		}
+	}
+
+	expect.True(a.Get(j).IsNone())
+	if v := a.Get(l) { expect.Equal(v, "four") } else { expect.Fail("four is missing") }
+}

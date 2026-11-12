@@ -1,6 +1,6 @@
 # 13. Arenas and indices
 
-A range over an arena is not supported yet; it waits for the iterator trait. The tree is cut from `examples/tree/tree-arena.snello`, the rest from `compiler/emit/internal/backendtest/testdata/arena.snello`, which runs stale indices too.
+The tree is cut from `examples/tree/tree-arena.snello`, the rest from `compiler/emit/internal/backendtest/testdata/arena.snello`, which runs stale indices too.
 
 Chapter 7 built a list and a tree from owned pointers, and chapter 6 said what a borrow cannot do: live in a struct. Between them they leave one shape of data out. A node that points back at its parent, a graph whose nodes point at each other, a cache that is both a map and a list: each needs a link that does not own what it names, and Snello has no such pointer. This chapter is the answer, and it is the answer Go programmers already know from any code that cares about speed: put every node in one container and link them by position.
 
@@ -58,6 +58,18 @@ The slot is reused, so an arena that inserts and removes for a long time does no
 An index belongs to the arena that issued it, and the type says only the element type: an `Index<string>` from one `Arena<string>` used on another `Arena<string>` is not refused, and names whatever that arena holds in the same slot on the same generation, a value it has nothing to do with, which `Remove` would take out. Keep each index with its arena, as a field beside it or in a structure that owns both; the arena libraries of other languages leave the same rule to the program. An arena prints the values it holds, in the order of their slots: `fmt.Println(a)` prints `arena[y z]`.
 
 The check is one comparison per lookup, and it is a runtime check, not a compile-time one. The compiler proves who owns a value; it cannot prove an index is live. Code that keeps indices across removals handles `None`.
+
+## Walking an arena
+
+`a.Iter()` walks the values in the order of their slots, each with the index that names it, and a `range` over it lends them for the loop:
+
+```go
+for i, v := range a.Iter() {
+	fmt.Println(i, v)      // an Index<T> and a ref T
+}
+```
+
+The arena is lent for as long as the loop runs, so the body cannot insert or remove meanwhile; collect the indices to change in a slice, and change after the loop. A walk is a value with a `Next` method, as every walk over a collection of the standard library's packages is, chapter 3.
 
 ## A tree
 

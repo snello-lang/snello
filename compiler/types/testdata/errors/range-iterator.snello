@@ -1,0 +1,132 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a range over an iterator, a value whose type has Next on a mut
+// receiver returning an option, calls Next on it, so a ref of one
+// cannot be ranged over; the loop takes one variable, or two for an
+// item that is a pair; what the iterator borrows is lent for the loop,
+// and an iterator variable is lent mut, so neither is changed or
+// reached again inside the loop.
+// An iterator that is Copy is lent mut for the loop as one that borrows
+// is, since Next changes it where it lies, and an item that borrows the
+// collection keeps it lent for as long as the item is used.
+// Fix: range over the variable or mut of it; one variable for an item
+// that is not a pair; change the collection or call Next after the
+// loop, or clone what is kept.
+
+package p
+
+import "fmt"
+
+struct Bag { xs []string }
+
+struct Walk { b ref Bag; i int }
+
+func (b ref Bag) Iter() Walk {
+    return Walk{b: b, i: 0}
+}
+
+func (w mut Walk) Next() (int, ref string)? {
+    if w.i >= len(w.b.xs) { return None }
+    w.i++
+    return Some((w.i - 1, ref w.b.xs[w.i - 1]))
+}
+
+struct Count { n int; limit int }
+
+func (c mut Count) Next() string? {
+    if c.n >= c.limit { return None }
+    c.n++
+    return Some(fmt.Sprint("item", c.n))
+}
+
+func shared(it ref Walk) {
+    for p := range it {                     // ERROR "cannot range over it: Next changes the iterator, which a ref lends for reading; range over the variable, or mut of it"
+        fmt.Println(p)
+    }
+}
+
+func two() {
+    c := Count{n: 0, limit: 3}
+    for i, s := range c {                   // ERROR "range over c yields one string at a time, which takes one iteration variable"
+        fmt.Println(i, s)
+    }
+}
+
+struct Triple { n int }
+
+func (t mut Triple) Next() (int, int, int)? {
+    if t.n > 0 { return None }
+    t.n++
+    return Some((1, 2, 3))
+}
+
+func three() {
+    t := Triple{n: 0}
+    for a, b := range t {                   // ERROR "range over t yields one (int, int, int) at a time, which takes one iteration variable"
+        fmt.Println(a, b)
+    }
+}
+
+func changed() {
+    b := Bag{xs: []string{"x"}}
+    for p := range b.Iter() {
+        b.xs.Push("y".Clone())              // ERROR "cannot borrow b.xs as mut: b is borrowed as ref by the range loop"
+        fmt.Println(p)
+    }
+}
+
+func copied() {
+    c := Count{n: 0, limit: 3}
+    for s := range c {
+        fmt.Println(s, c.n)                 // ERROR "cannot use c.n: c is borrowed as mut by the range loop"
+    }
+}
+
+func kept() {
+    b := Bag{xs: []string{"x"}}
+    none := "none"
+    last := ref none
+    for _, s := range b.Iter() { // last takes an item, which keeps b lent past the loop
+        last = s
+    }
+
+    b.xs.Push("y".Clone())                  // ERROR "cannot borrow b.xs as mut"
+    fmt.Println(last)
+}
+
+struct Cells { xs []string }
+
+struct CellWalk { c mut Cells; i int }
+
+func (c mut Cells) Iter() CellWalk {
+    return CellWalk{c: c, i: 0}
+}
+
+func (w mut CellWalk) Next() mut string? {
+    if w.i >= len(w.c.xs) { return None }
+    w.i++
+    return Some(mut w.c.xs[w.i - 1])
+}
+
+func keptMut(c mut Cells) {
+    for s := range c.Iter() {
+        *s = "changed".Clone()
+        fmt.Println(len(c.xs))              // ERROR "cannot use c.xs"
+    }
+}
+
+func param(it mut Walk) {
+    for p := range mut it {
+        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as ref: it is already borrowed as mut by the range loop"
+    }
+}
+
+func reentered() {
+    b := Bag{xs: []string{"x"}}
+    it := b.Iter()
+    for p := range it {
+        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as ref: it is already borrowed as mut by the range loop"
+    }
+}

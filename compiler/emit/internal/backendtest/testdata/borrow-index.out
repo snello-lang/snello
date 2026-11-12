@@ -1,0 +1,13 @@
+Some("a") Some("b") None
+Some("B")
+bound a
+matched B
+show x
+show y
+z 3
+x [ y z] 4
+y [ w z] 5
+Some("a") Some("B")
+from a call m1
+nested g01
+[[g00 g01] [G10]]

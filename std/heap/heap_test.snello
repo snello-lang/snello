@@ -42,3 +42,17 @@ func BenchmarkPushPop() {
 		_ = h.Pop()
 	}
 }
+
+func TestReverse() {
+	h := heap.New<heap.Reverse<int>>()
+	for _, v := range []int{4, 9, 1, 7} {
+		h.Push(heap.Reverse<int>{V: v})
+	}
+
+	expect.Equal(ref expect.IsSome(h.Pop()).V, ref 9) // the greatest first
+	expect.Equal(ref expect.IsSome(h.Pop()).V, ref 7)
+	expect.True(heap.Reverse<int>{V: 1} == heap.Reverse<int>{V: 1})
+	expect.True(heap.Reverse<int>{V: 1}.Cmp(ref heap.Reverse<int>{V: 2}) == Greater)
+	words := heap.From([]heap.Reverse<string>{heap.Reverse<string>{V: "b".Clone()}, heap.Reverse<string>{V: "c".Clone()}, heap.Reverse<string>{V: "a".Clone()}})
+	expect.Equal(ref expect.IsSome(words.Pop()).V, "c")
+}

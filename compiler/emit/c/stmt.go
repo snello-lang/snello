@@ -431,6 +431,12 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	i := e.temp()
 	e.loops = append(e.loops, "") // continue reaches the loop's own step
 	defer func() { e.loops = e.loops[:len(e.loops)-1] }()
+	if fn := types.IteratorNext(t); fn != nil {
+		e.rangeNext(s, place, t.(*types.Named), fn)
+		e.line("}")
+		return
+	}
+
 	if m, ok := t.Underlying().(*types.Map); ok {
 		e.line("for (int64_t " + i + " = sn_map_next(&" + place + ", 0); " + i + " >= 0; " + i + " = sn_map_next(&" + place + ", " + i + " + 1)) {")
 		e.push(true)
@@ -480,6 +486,49 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	e.pop(s.Body.Rbrace)
 	e.line("}")
 	e.line("}")
+}
+
+// rangeNext writes a loop over an iterator at place, calling its Next
+// until it gives None and binding each item, or the two parts of an
+// item that is a pair; an item the loop binds nothing to is dropped.
+func (e *Emitter) rangeNext(s *ast.RangeStmt, place string, t *types.Named, fn *types.Func) {
+	name, sig := e.methodNameOf(nil, t, fn.Name(), s.Pos())
+	if sig == nil {
+		return
+	}
+
+	item := sig.Results().(*types.Option).Elem()
+	got := e.temp()
+	e.line("for (;;) {")
+	e.push(true)
+	e.line(e.cType(sig.Results(), s.Pos()) + " " + got + " = " + name + "(&" + place + ");")
+	e.line("if (!" + got + ".has) { break; }")
+	if s.Value == nil {
+		e.rangeItem(s.Key, s.Tok, got+".val", item, s.Pos())
+	} else {
+		k, kt := tupleElem(got+".val", item, 0)
+		v, vt := tupleElem(got+".val", item, 1)
+		e.rangeItem(s.Key, s.Tok, k, kt, s.Pos())
+		e.rangeItem(s.Value, s.Tok, v, vt, s.Pos())
+	}
+
+	e.stmts(s.Body.List)
+	e.pop(s.Body.Rbrace)
+	e.line("}")
+}
+
+// rangeItem binds x to an iterator's item at place, which is the loop's
+// own to move out of, or drops the item when the loop binds nothing.
+func (e *Emitter) rangeItem(x ast.Expr, tok token.Kind, place string, t types.Type, pos token.Pos) {
+	if x == nil || isBlank(x) {
+		if needsDrop(t) {
+			e.line(e.dropOf(place, t, pos))
+		}
+
+		return
+	}
+
+	e.rangeVar(x, tok, place, t, true)
 }
 
 // rangeString writes a loop over the runes of the string at place: each

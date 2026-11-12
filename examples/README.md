@@ -18,7 +18,7 @@ The binary is written to the current directory, named after the file, or after t
 | tree/ | Parent pointers three ways: Go pointers, indices into a slice, an `Arena` |
 | pipeline/ | Channels and ownership crossing tasks, Go beside Snello |
 | cache-server/ | Long-lived shared state, a borrow per request, `Drop` for a connection; a server over `net` |
-| graph/ | A graph in an arena, breadth-first search, a heap with an `Ord` bound |
+| graph/ | A graph in an arena, breadth-first search over a deque, a heap with an `Ord` bound |
 | parser/ | Sum types, `match`, owned pointers for recursion, a struct holding a borrow |
 | linked-list/ | `*Node?` links, `take`, partial moves, a borrow returned from a `ref` receiver |
 | traits/ | `impl`, default methods, trait fields, `super`, a trait as a type |

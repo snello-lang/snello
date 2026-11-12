@@ -420,6 +420,12 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	}
 
 	consume := held != ""
+	if fn := types.IteratorNext(t); fn != nil { // first: a map or channel type with Next is an iterator, as the checker read it
+		e.rangeNext(s, p, t.(*types.Named), fn)
+		e.pop(s.Body.Rbrace)
+		return
+	}
+
 	switch u := t.Underlying().(type) {
 	case *types.Map:
 		e.rangeMap(s, p, u, consume)
@@ -435,6 +441,61 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 	}
 
 	e.pop(s.Body.Rbrace)
+}
+
+// rangeNext writes a loop over the iterator at p, calling its Next
+// until it gives None and binding each item, or the two parts of an
+// item that is a pair; an item the loop binds nothing to is dropped.
+func (e *Emitter) rangeNext(s *ast.RangeStmt, p string, t *types.Named, fn *types.Func) {
+	name, sig := e.methodNameOf(nil, t, fn.Name(), s.Pos())
+	if sig == nil {
+		return
+	}
+
+	opt := sig.Results().(*types.Option)
+	ir := e.irType(sig.Results(), s.Pos())
+	cond, body, end := e.block("range.cond"), e.block("range.body"), e.block("range.end")
+	e.jump(cond)
+	e.label(cond)
+	got := e.spill(e.callValues(name, sig, []types.Type{sig.Recv().Type()}, []value{{"ptr", p}}, s.Pos()))
+	has, val := e.optionParts(ir, got, opt)
+	e.branch(has.s, body, end)
+	e.label(body)
+	e.fn.loops = append(e.fn.loops, loop{next: cond, end: end, frame: len(e.fn.frames)})
+	e.push(true)
+	if s.Value == nil {
+		e.rangeItem(s.Key, s.Tok, val, opt.Elem())
+	} else {
+		k, kt := e.tupleElem(val, opt.Elem(), 0)
+		v, vt := e.tupleElem(val, opt.Elem(), 1)
+		e.rangeItem(s.Key, s.Tok, k, kt)
+		e.rangeItem(s.Value, s.Tok, v, vt)
+	}
+
+	e.stmts(s.Body.List)
+	if !e.fn.terminated {
+		e.pop(s.Body.Rbrace)
+		e.jump(cond)
+	} else {
+		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+	}
+
+	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
+	e.label(end)
+}
+
+// rangeItem binds x to an iterator's item at p, which is the loop's own
+// to move out of, or drops the item when the loop binds nothing.
+func (e *Emitter) rangeItem(x ast.Expr, tok token.Kind, p string, t types.Type) {
+	if x == nil || isBlank(x) {
+		if needsDrop(t) {
+			e.dropOf(p, t, token.NoPos)
+		}
+
+		return
+	}
+
+	e.rangeVar(x, tok, p, t, true)
 }
 
 // rangeString writes a loop over the runes of the string at p: each

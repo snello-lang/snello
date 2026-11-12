@@ -44,6 +44,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus |
 | A format is checked when the program is compiled: each verb prints the types it is for, the `0` flag pads a number, and a width and a precision are a million at most | format-verb, format-zero, format-size |
 | A bare name in a pattern binds, or names a variant or `true` and `false`; a constant's name is refused, since it would bind and match every value | match-constant |
+| A range over an iterator calls `Next` on it: not through a `ref`; one variable, or two for a pair; what it borrows, and the iterator variable itself, are lent for the loop | range-iterator |
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 
