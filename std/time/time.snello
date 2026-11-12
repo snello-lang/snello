@@ -239,7 +239,9 @@ func (t mut Ticker) Stop() {
 }
 
 // Reset makes the Ticker tick every d from now on, the first tick d
-// from now; for a d of zero or less it stops it.
+// from now; for a d of zero or less it stops it. A tick sent before and
+// not received is taken back, so the next one C gives is the new
+// period's.
 func (t mut Ticker) Reset(d Duration) {
 	if d > 0 {
 		_ = resetTimer(t.C.Clone(), d, d)

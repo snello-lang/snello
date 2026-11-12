@@ -74,8 +74,9 @@ func main() {
 
 	// The calendar: a date made and read back, a leap day, a day that
 	// does not exist, AddDate keeping to the month's last day, Truncate
-	// and Round from year 1, a layout written and read, and a Timer and
-	// a Ticker stopped before they send.
+	// and Round from year 1, a layout written and read, a Timer and a
+	// Ticker stopped before they send, and a Ticker stopped and one reset
+	// after a tick came that no one received.
 	d := time.Date(2024, time.February, 29, 13, 4, 5, 6).Expect("a leap day")
 	fmt.Println(d.Year(), d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Weekday(), d.YearDay())
 	fmt.Println(time.Date(2023, time.February, 29, 0, 0, 0, 0).IsNone(), time.Date(2024, time.February, 30, 0, 0, 0, 0).IsNone())
@@ -98,4 +99,29 @@ func main() {
 	case <-time.After(5 * time.Millisecond):
 		fmt.Println("stopped", first.After(t))
 	}
+
+	// A tick sent before Stop or Reset, which no one received, is taken
+	// back: the sleep lets one come and wait in C.
+	left := false
+	stale := time.NewTicker(time.Millisecond)
+	_ = <-stale.C
+	time.Sleep(3 * time.Millisecond)
+	stale.Stop()
+	select {
+	case <-stale.C:
+		left = true
+	default:
+	}
+
+	moved := time.NewTicker(time.Millisecond)
+	_ = <-moved.C
+	time.Sleep(3 * time.Millisecond)
+	moved.Reset(time.Hour)
+	select {
+	case <-moved.C:
+		left = true
+	default:
+	}
+
+	fmt.Println("nothing left after Stop and Reset", !left)
 }

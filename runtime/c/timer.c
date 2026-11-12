@@ -587,7 +587,9 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
 // that no one received yet, which is taken back. It waits for a timer
 // of the wheel firing now to be done first, so that once it returns
 // nothing more is sent and nothing sent before is left to receive, as
-// Go's Stop promises since its timers' channels hold nothing back.
+// Go's Stop promises since its timers' channels hold nothing back: a
+// Ticker is still in its wheel after it has sent, so a tick it sent
+// before is taken back too.
 static bool timer_stop(sn_chan *c) {
     wheel *w = home(sn_chan_home(c));
     wheel_lock(w);
@@ -606,6 +608,8 @@ static bool timer_stop(sn_chan *c) {
         timers_done(w, 1);
         sn_chan_drop(&x->ch);
         sn_free(x);
+        sn_time unread;
+        sn_chan_poll(c, &unread); // a tick sent before, which no one received
         return true;
     }
 
@@ -624,39 +628,14 @@ bool sn_time_stopTimer(sn_chan *ch) {
 
 // sn_time_resetTimer is package time's resetTimer: it makes the timer
 // of ch send d from now and then every period when every is above zero,
-// and reports what a stop would have. A timer still in its wheel is
-// moved there, with nothing freed or made, and ch, the handle it was
-// given to name the channel by, is dropped; one that fired is started
-// again with ch as its own handle.
+// and reports what a stop would have. It is a stop, which takes back a
+// time sent before and no one received, as Go's Reset does since its
+// timers' channels hold nothing back, and then a new timer with ch as
+// its own handle: taking back the time sent before the timer is in its
+// wheel again keeps a new period that comes at once from being taken
+// back with it.
 bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
-    int64_t when = deadline(d);
-    wheel *w = home(sn_chan_home(ch));
-    wheel_lock(w);
-    while (w->firing > 0) {
-        wheel_unlock(w);
-        sched_yield();
-        wheel_lock(w);
-    }
-
-    timer *x = (timer *)(intptr_t)sn_chan_timer(ch);
-    if (x != (timer *)(intptr_t)-1) {
-        wheel_remove(w, x);
-        wheel_renew(w);
-        x->when = when;
-        x->every = every;
-        bool tell = wheel_place(w, x);
-        wheel_unlock(w);
-        sn_chan_drop(&ch);
-        if (tell) {
-            sn_sched_timer_set(when);
-        }
-
-        return true;
-    }
-
-    wheel_unlock(w);
-    sn_time unread;
-    bool stopped = sn_chan_poll(ch, &unread);
+    bool stopped = timer_stop(ch);
     sn_time_startTimer(ch, d, every);
     return stopped;
 }
