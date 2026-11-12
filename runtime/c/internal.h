@@ -20,6 +20,12 @@
 #include <os/lock.h>
 #endif
 
+// SN_CACHE_LINE is the widest cache line of the processors the runtime
+// runs on, Apple's arm64 cores', which data written by one thread and
+// read by others is aligned to so that it shares a line with nothing
+// else.
+#define SN_CACHE_LINE 128
+
 // The most one read or write asks of the system, as Go's runtime caps
 // it: Darwin refuses a count past INT_MAX, so a larger buffer is read
 // or written in turns.
@@ -202,6 +208,24 @@ void sn_sched_recheck(void);
 void sn_sched_timer_set(int64_t when);
 void sn_sched_owe(int64_t when);
 
+// A handoff is how a wake reaches a task from a thread that holds no
+// lock the task takes after its wait: a timer that fires, the poller's
+// thread, a resolver's. Such a waker finds the task in a word and takes
+// it out, and the task may then go on without parking, after a wake
+// kept from an earlier wait or a look at a flag the waker set first,
+// end, and be freed, while the waker has yet to wake it. So the waker
+// wakes through the handoff, which says waking before the wake reads
+// the task and woken once nothing of the task is read but to queue a
+// task claimed, which is runnable and running nowhere and cannot be
+// freed; and a task a waker took out leaves its wait only once the
+// handoff says woken, parking while it is open and spinning the few
+// instructions it says waking. A handoff starts open, and the task
+// opens it again before it next puts itself where a waker finds it.
+typedef _Atomic int sn_handoff;
+enum { SN_HANDOFF_OPEN = 0, SN_HANDOFF_WAKING = 1, SN_HANDOFF_WOKEN = 2 };
+void sn_handoff_wake(sn_handoff *h, sn_task *t);
+void sn_handoff_wait(sn_handoff *h);
+
 // sn_chan_home is where the channel records the wheel its timers go in,
 // for timer.c; chan.c's.
 _Atomic int32_t *sn_chan_home(sn_chan *c);
@@ -298,5 +322,20 @@ int sn_uc_wb(int32_t r);
 int sn_uc_sb(int32_t r);
 bool sn_uc_extpict(int32_t r);
 int sn_uc_incb(int32_t r);
+
+// What the net package's runtime calls return beside the system's error
+// numbers, net.snello's codes: a host that is not an IP address but a
+// name, a deadline or a timeout passed, a name with no address, and a
+// failure of the resolver's own, whose reason it stores.
+enum { SN_NET_NOT_ADDRESS = -1, SN_NET_TIMED_OUT = -2, SN_NET_NO_SUCH_HOST = -3, SN_NET_RESOLVER_FAILED = -4 };
+
+// Addresses as text, lookup.c's, for the sockets of net.c: an IP
+// address read into a socket address with its port, returning the
+// address's length, 0 for a host that is not one, and a socket address
+// printed as Go prints it, with its port or without, as an owned string.
+struct sockaddr;
+struct sockaddr_storage;
+int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr);
+sn_string sn_net_format(const struct sockaddr *addr, bool port);
 
 #endif

@@ -159,7 +159,12 @@ static int poller = -1;
 // counts, from just before the task goes in until it is taken out:
 // by the poller, which wakes it and then keeps the promise, as a timer
 // that fires does, or by the task itself, after a wake that came for
-// something else.
+// something else. A waker that takes the task out holds no lock the
+// task takes, so it wakes the task through the direction's handoff
+// (internal.h), and a task that finds itself taken out waits for the
+// handoff before it goes on: it may have been taken out while running,
+// past a deadline or out of a park a kept wake ended, and could
+// otherwise end and be freed before its waker reads it.
 //
 // Each direction also has its deadline, as Go's pollDesc has rd and wd:
 // 0 for none, -1 once it has passed, and above zero while its timer is
@@ -171,14 +176,11 @@ static int poller = -1;
 // sees the other and no task waits past its deadline.
 enum { pd_none = 0, pd_ready = 1 };
 
-// pd_timeout is what a wait, and the calls below, return once the
-// deadline has passed: no error number, so that the library tells it
-// from the system's own ETIMEDOUT, which Go words differently.
-enum { pd_timeout = -2 };
-
 typedef struct {
     _Atomic uintptr_t r;
     _Atomic uintptr_t w;
+    sn_handoff rh; // the handoffs the wakers of r and w wake through
+    sn_handoff wh;
     _Atomic int64_t rd;
     _Atomic int64_t wd;
     sn_deadline rt; // timer.c's, under its wheel's lock
@@ -222,7 +224,7 @@ static poll_desc *pd_of(int fd) {
 // idle worker looking at that moment finds work and not a program in
 // which nothing can run. The woken task tries its call again, which
 // finds what the event was for.
-static void ready(_Atomic uintptr_t *word) {
+static void ready(_Atomic uintptr_t *word, sn_handoff *woken) {
     uintptr_t old = atomic_load_explicit(word, memory_order_acquire);
     for (;;) {
         if (old == pd_ready) {
@@ -236,7 +238,7 @@ static void ready(_Atomic uintptr_t *word) {
     }
 
     if (old != pd_none) {
-        sn_wake((sn_task *)old);
+        sn_handoff_wake(woken, (sn_task *)old);
         sn_outside(-1);
     }
 }
@@ -251,7 +253,11 @@ static void *poll_main(void *arg) {
         int n = kevent(poller, NULL, 0, events, 64, NULL);
         for (int i = 0; i < n; i++) {
             poll_desc *pd = events[i].udata;
-            ready(events[i].filter == EVFILT_WRITE ? &pd->w : &pd->r);
+            if (events[i].filter == EVFILT_WRITE) {
+                ready(&pd->w, &pd->wh);
+            } else {
+                ready(&pd->r, &pd->rh);
+            }
         }
 #else
         struct epoll_event events[64];
@@ -260,11 +266,11 @@ static void *poll_main(void *arg) {
             poll_desc *pd = events[i].data.ptr;
             uint32_t e = events[i].events;
             if (e & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                ready(&pd->r);
+                ready(&pd->r, &pd->rh);
             }
 
             if (e & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
-                ready(&pd->w);
+                ready(&pd->w, &pd->wh);
             }
         }
 #endif
@@ -309,7 +315,7 @@ static void expire(poll_desc *pd, bool write) {
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     uintptr_t old = atomic_load(word);
     if (old > pd_ready && atomic_compare_exchange_strong(word, &old, pd_none)) {
-        sn_wake((sn_task *)old);
+        sn_handoff_wake(write ? &pd->wh : &pd->rh, (sn_task *)old);
         sn_outside(-1);
     }
 }
@@ -358,19 +364,27 @@ static const char *watch(int fd) {
 // wait_fd waits until fd may be ready to read, or to write: at once
 // when an event came since the caller's call failed, and otherwise by
 // parking until the poller wakes the task, or the direction's deadline
-// does, when it returns pd_timeout. The park may also end for an earlier
-// wait's wake, which the scheduler keeps, so every caller tries its call
-// again and waits again while the socket is not ready; the task takes
-// itself out of the word before it returns, unless the poller or the
-// deadline took it out first.
+// does, when it returns SN_NET_TIMED_OUT. The park may also end for an
+// earlier wait's wake, which the scheduler keeps, so every caller tries
+// its call again and waits again while the socket is not ready; the
+// task takes itself out of the word before it returns, unless the
+// poller or the deadline took it out first, and then waits for that
+// waker to be done with it.
 static int wait_fd(int fd, bool write) {
     poll_desc *pd = pd_of(fd);
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
+    sn_handoff *woken = write ? &pd->wh : &pd->rh;
     uintptr_t self = (uintptr_t)sn_self();
+    // No waker is at the handoff: a direction has one task waiting at a
+    // time, the last waker that took it out was waited for, and the
+    // program cannot close a socket while a task waits on it, since a
+    // Conn is held by one task. The compare-and-swap that puts the task
+    // in the word orders this before any waker's look.
+    atomic_store_explicit(woken, SN_HANDOFF_OPEN, memory_order_relaxed);
     for (;;) {
         if (atomic_load(dl) < 0) {
-            return pd_timeout;
+            return SN_NET_TIMED_OUT;
         }
 
         uintptr_t old = pd_ready;
@@ -397,9 +411,11 @@ static int wait_fd(int fd, bool write) {
     uintptr_t mine = self;
     if (atomic_compare_exchange_strong(word, &mine, pd_none)) {
         sn_outside(-1);
+    } else {
+        sn_handoff_wait(woken);
     }
 
-    return atomic_load(dl) < 0 ? pd_timeout : 0;
+    return atomic_load(dl) < 0 ? SN_NET_TIMED_OUT : 0;
 }
 
 // sn_net_setDeadline sets when fd's reads, or its writes, stop waiting:
@@ -436,25 +452,14 @@ static void unwatch(int fd) {
     atomic_store(&pd->rd, 0);
     atomic_store(&pd->wd, 0);
     _Atomic uintptr_t *words[2] = {&pd->r, &pd->w};
+    sn_handoff *woken[2] = {&pd->rh, &pd->wh};
     for (int i = 0; i < 2; i++) {
         uintptr_t old = atomic_exchange(words[i], pd_none);
         if (old > pd_ready) {
-            sn_wake((sn_task *)old);
+            sn_handoff_wake(woken[i], (sn_task *)old);
             sn_outside(-1);
         }
     }
-}
-
-// ipv4 reads the IPv4 address host, "127.0.0.1", into addr.
-static bool ipv4(sn_string host, struct in_addr *addr) {
-    char text[64];
-    if (host.len >= (int64_t)sizeof text) {
-        return false;
-    }
-
-    memcpy(text, host.ptr, (size_t)host.len);
-    text[host.len] = '\0';
-    return inet_pton(AF_INET, text, addr) == 1;
 }
 
 // fail closes s, when there is one, and returns the error of the call
@@ -471,26 +476,30 @@ static int64_t fail(int s, const char *name, sn_string *call) {
     return code;
 }
 
-// sn_net_listen opens a TCP socket listening on the IPv4 address host,
-// "0.0.0.0" for every address of the machine, at the port, 0 for one
-// the system picks, and stores the descriptor and the port it listens
-// on; a failure stores the call that failed. A host that is not an
-// IPv4 address is -1, which the library words; the port is in range.
-int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
-    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
-    if (!ipv4(host, &addr.sin_addr)) {
-        return -1;
-    }
+// port_of returns the port of a socket address of either family.
+static int64_t port_of(const struct sockaddr_storage *a) {
+    return ntohs(a->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)a)->sin6_port : ((const struct sockaddr_in *)a)->sin_port);
+}
 
-    int s = socket(AF_INET, SOCK_STREAM | SN_SOCK_FLAGS, 0);
+// listen_on opens a socket listening on addr and stores its descriptor;
+// dual makes a socket on the IPv6 address :: take IPv4 connections too,
+// their addresses mapped into IPv6, as Go makes every listener on a
+// wildcard address, which some systems do not by default. A failure
+// returns the error number and stores the call that failed.
+static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, bool dual, int64_t *fd, sn_string *call) {
+    int s = socket(addr->ss_family, SOCK_STREAM | SN_SOCK_FLAGS, 0);
     if (s < 0) {
         return fail(s, "socket", call);
     }
 
     int yes = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-    socklen_t len = sizeof addr;
-    if (bind(s, (struct sockaddr *)&addr, len) != 0) {
+    int no = 0;
+    if (dual && setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no) != 0) {
+        return fail(s, "setsockopt", call);
+    }
+
+    if (bind(s, (const struct sockaddr *)addr, len) != 0) {
         return fail(s, "bind", call);
     }
 
@@ -507,12 +516,43 @@ int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, s
         return fail(s, failed, call);
     }
 
-    if (getsockname(s, (struct sockaddr *)&addr, &len) != 0) {
-        return fail(s, "getsockname", call);
+    *fd = s;
+    return 0;
+}
+
+// sn_net_listen opens a TCP socket listening on the IP address host at
+// the port, 0 for one the system picks, and stores the descriptor and
+// the port it listens on; a failure stores the call that failed. A
+// wildcard address listens on every address of the machine: "0.0.0.0"
+// on IPv4's, "::" on both families', and an empty host on both where
+// the system has IPv6 and on IPv4's where it has not, as Go's empty
+// host. A host that is not an IP address is SN_NET_NOT_ADDRESS, a name
+// the library looks up; the port is in range.
+int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
+    bool every = host.len == 0;
+    struct sockaddr_storage addr;
+    socklen_t len = (socklen_t)sn_net_parse(every ? SN_STR("::", 2) : host, port, &addr);
+    if (len == 0) {
+        return SN_NET_NOT_ADDRESS;
     }
 
-    *fd = s;
-    *got = ntohs(addr.sin_port);
+    bool dual = addr.ss_family == AF_INET6 && IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *)&addr)->sin6_addr);
+    int64_t code = listen_on(&addr, len, dual, fd, call);
+    if (every && (code == EAFNOSUPPORT || code == EPROTONOSUPPORT || code == EADDRNOTAVAIL)) { // a system without IPv6
+        len = (socklen_t)sn_net_parse(SN_STR("0.0.0.0", 7), port, &addr);
+        code = listen_on(&addr, len, false, fd, call);
+    }
+
+    if (code != 0) {
+        return code;
+    }
+
+    len = sizeof addr;
+    if (getsockname((int)*fd, (struct sockaddr *)&addr, &len) != 0) {
+        return fail((int)*fd, "getsockname", call);
+    }
+
+    *got = port_of(&addr);
     return 0;
 }
 
@@ -525,7 +565,7 @@ int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, s
 int64_t sn_net_accept(int64_t fd, int64_t *out) {
     for (;;) {
         if (passed((int)fd, false)) {
-            return pd_timeout;
+            return SN_NET_TIMED_OUT;
         }
 
 #if SN_SOCK_FLAGS != 0
@@ -558,28 +598,29 @@ int64_t sn_net_accept(int64_t fd, int64_t *out) {
             return code;
         }
 
-        if (wait_fd((int)fd, false) == pd_timeout) {
-            return pd_timeout;
+        if (wait_fd((int)fd, false) == SN_NET_TIMED_OUT) {
+            return SN_NET_TIMED_OUT;
         }
     }
 }
 
-// sn_net_dial connects to the IPv4 address host at the port and stores
+// sn_net_dial connects to the IP address host at the port and stores
 // the connection's descriptor, or on a failure the call that failed. A
-// host that is not an IPv4 address is -1, which the library words; a
-// connection not made within timeout nanoseconds, when it is above
-// zero, is pd_timeout, the deadline held on the socket's writes while it
-// connects and cleared once it has. A connection in progress is checked
+// host that is not an IP address is SN_NET_NOT_ADDRESS, a name the
+// library looks up; a connection not made within timeout nanoseconds,
+// when it is above zero, is SN_NET_TIMED_OUT, the deadline held on the
+// socket's writes while it connects and cleared once it has. A connection in progress is checked
 // again after every wake, as Go checks it: a wake can come for another
 // wait, so a socket with no error yet is connected only once it has a
 // peer.
 int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call) {
-    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
-    if (!ipv4(host, &addr.sin_addr)) {
-        return -1;
+    struct sockaddr_storage addr;
+    socklen_t addr_len = (socklen_t)sn_net_parse(host, port, &addr);
+    if (addr_len == 0) {
+        return SN_NET_NOT_ADDRESS;
     }
 
-    int s = socket(AF_INET, SOCK_STREAM | SN_SOCK_FLAGS, 0);
+    int s = socket(addr.ss_family, SOCK_STREAM | SN_SOCK_FLAGS, 0);
     if (s < 0) {
         return fail(s, "socket", call);
     }
@@ -597,16 +638,16 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
         sn_net_setDeadline(s, 1, timeout, 1);
     }
 
-    if (connect(s, (struct sockaddr *)&addr, sizeof addr) != 0) {
+    if (connect(s, (struct sockaddr *)&addr, addr_len) != 0) {
         if (last_error() != EINPROGRESS && last_error() != EINTR) {
             return fail(s, "connect", call);
         }
 
         for (;;) {
-            if (wait_fd(s, true) == pd_timeout) {
+            if (wait_fd(s, true) == SN_NET_TIMED_OUT) {
                 unwatch(s);
                 close(s);
-                return pd_timeout;
+                return SN_NET_TIMED_OUT;
             }
 
             int err = 0;
@@ -624,7 +665,7 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
                 return fail(s, "connect", call);
             }
 
-            struct sockaddr_in peer;
+            struct sockaddr_storage peer;
             socklen_t plen = sizeof peer;
             if (err == EISCONN || getpeername(s, (struct sockaddr *)&peer, &plen) == 0) {
                 break;
@@ -640,33 +681,19 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
     return 0;
 }
 
-// address formats the IPv4 address and port of a socket as Go prints
-// them, "127.0.0.1:8080", as an owned string.
-static sn_string address(const struct sockaddr_in *a) {
-    char ip[INET_ADDRSTRLEN];
-    if (inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip) == NULL) {
-        return SN_STR("", 0);
-    }
-
-    char text[INET_ADDRSTRLEN + 8];
-    int n = snprintf(text, sizeof text, "%s:%d", ip, ntohs(a->sin_port));
-    uint8_t *p = sn_alloc((size_t)n);
-    memcpy(p, text, (size_t)n);
-    return SN_OWNED(p, n);
-}
-
 // sn_net_addrs stores the local and the remote address of a socket,
-// the remote one empty when it has no peer, as a listening socket.
+// as Go prints them, "127.0.0.1:8080" or "[::1]:8080", the remote one
+// empty when it has no peer, as a listening socket.
 int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
-    struct sockaddr_in a;
+    struct sockaddr_storage a;
     socklen_t len = sizeof a;
     if (getsockname((int)fd, (struct sockaddr *)&a, &len) != 0) {
         return last_error();
     }
 
-    *local = address(&a);
+    *local = sn_net_format((struct sockaddr *)&a, true);
     len = sizeof a;
-    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? address(&a) : SN_STR("", 0);
+    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? sn_net_format((struct sockaddr *)&a, true) : SN_STR("", 0);
     return 0;
 }
 
@@ -682,7 +709,7 @@ int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
 
     for (;;) {
         if (passed((int)fd, false)) { // as Go's: a passed deadline fails the read even with bytes waiting
-            return pd_timeout;
+            return SN_NET_TIMED_OUT;
         }
 
         ssize_t got = read((int)fd, buf->ptr, (size_t)buf->len);
@@ -699,8 +726,8 @@ int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
             return last_error();
         }
 
-        if (wait_fd((int)fd, false) == pd_timeout) {
-            return pd_timeout;
+        if (wait_fd((int)fd, false) == SN_NET_TIMED_OUT) {
+            return SN_NET_TIMED_OUT;
         }
     }
 }
@@ -715,7 +742,7 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
     while (done < buf.len) {
         if (passed((int)fd, true)) {
             *n = done;
-            return pd_timeout;
+            return SN_NET_TIMED_OUT;
         }
 
         ssize_t put = send((int)fd, buf.ptr + done, (size_t)(buf.len - done), SN_NOSIGNAL);
@@ -733,9 +760,9 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
             return last_error();
         }
 
-        if (wait_fd((int)fd, true) == pd_timeout) {
+        if (wait_fd((int)fd, true) == SN_NET_TIMED_OUT) {
             *n = done;
-            return pd_timeout;
+            return SN_NET_TIMED_OUT;
         }
     }
 

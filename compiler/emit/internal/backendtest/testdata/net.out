@@ -4,6 +4,10 @@ served 2
 dial tcp 127.0.0.1:1: connect: connection refused true
 listen tcp: address 70000: invalid port
 dial tcp: address -1: invalid port
-dial tcp: lookup localhost: host names are not looked up; give an IPv4 address
-dial tcp: address ::1: IPv6 addresses are not supported
+true
 Ok(0) true
+true true true true
+dial tcp [::1]:1: connect: connection refused
+true true
+true Ok([::1])
+true true true

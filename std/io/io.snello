@@ -45,7 +45,7 @@ enum Kind impl Copy, Clone, Eq {
 	// Other is any failure the other kinds do not name.
 	Other
 
-	// NotExist: the path named nothing.
+	// NotExist: the path named nothing, or the host name no address.
 	NotExist
 
 	// Permission: the system refused the operation.

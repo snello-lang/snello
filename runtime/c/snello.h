@@ -214,8 +214,9 @@ SN_BITS_NAMED(64, 64, uint64_t)
 // a dropped place is filled with it too, so a string, slice, map,
 // pointer or file read after its release is seen by the runtime
 // function that reads it, which panics naming it; an owned pointer
-// read after it moved, which leaves a null, panics the same way. A
-// release build does none of this.
+// read after it moved, which leaves a null, panics the same way; and a
+// task that ends is kept unfreed for a while, so that a wake that
+// reaches it stops the program. A release build does none of this.
 // The character classes of a byte, ASCII only, as a byte is one.
 static inline bool sn_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
 static inline bool sn_is_space(uint8_t c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
@@ -681,6 +682,7 @@ int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote);
 int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_net_closeConn(int64_t fd);
+int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason); // in lookup.c
 
 // Tasks and channels, as _docs/design/06-tasks-and-channels.md lays
 // them out: this is the whole interface the emitted code uses, and the
