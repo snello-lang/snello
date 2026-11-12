@@ -7,11 +7,13 @@
 // Nodes refer to each other by integer id. The graph is append-only, so a
 // plain slice with a NodeID is enough; Arena<T> (the tree example) is for
 // structures that also remove. A graph of ids is the shape most graph
-// code already has, so the ownership rules cost nothing here.
+// code already has, so the ownership rules cost nothing here. The BFS
+// queue is a deque, which pops its front in constant time where a slice
+// would move the rest down on every Remove(0).
 
 package graph
 
-import ("fmt"; "heap")
+import ("deque"; "fmt"; "heap")
 
 type NodeID int
 
@@ -41,15 +43,16 @@ func (g mut Graph) AddEdge(from, to NodeID, w int) {
 func (g ref Graph) BFS(start NodeID) []NodeID {
     seen := make([]bool, len(g.adj))
     order := []NodeID{}
-    queue := []NodeID{start}
+    queue := deque.New<NodeID>()
+    queue.PushBack(start)
     seen[start] = true
-    for len(queue) > 0 {
-        n := queue.Remove(0)
+    for {
+        n := queue.PopFront() ?? break
         order.Push(n)
         for _, e := range g.adj[n] {            // g is a borrow, so e is ref Edge
             if !seen[e.to] {
                 seen[e.to] = true
-                queue.Push(e.to)
+                queue.PushBack(e.to)
             }
         }
     }

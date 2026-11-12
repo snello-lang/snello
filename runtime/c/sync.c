@@ -318,6 +318,10 @@ bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v) {
     return __atomic_compare_exchange_n((int64_t *)(intptr_t)h, &old, v, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
 
+int64_t sn_sync_cellExchange(int64_t h, int64_t v) {
+    return __atomic_exchange_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST);
+}
+
 void sn_sync_cellFree(int64_t h) {
     sn_free((void *)(intptr_t)h);
 }

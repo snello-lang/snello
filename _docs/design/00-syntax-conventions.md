@@ -6,7 +6,7 @@ Status: decided. These are the rules the programs in `../../examples/` assume. E
 
 `package`, `import`, `func`, `type ... struct`, `:=`, `var`, `for`, `if`, `defer`, channels and `select`, slices, maps, methods with named receivers, multiple return values, exported names by capitalization, zero values for the types that have one (below), mutable parameters and locals.
 
-`for` ranges exactly as in Go: `for i := range xs` yields the index, `for i, x := range xs` the index and element, `for k, v := range m` key and value, `for x := range ch` the received value. An iterator ranges like a channel: `for x := range it` yields each item.
+`for` ranges exactly as in Go: `for i := range xs` yields the index, `for i, x := range xs` the index and element, `for k, v := range m` key and value, `for x := range ch` the received value. An iterator ranges like a channel: `for x := range it` yields each item, and `for i, v := range it` the two parts of an item that is a pair.
 
 ## Ownership and borrowing
 
@@ -39,6 +39,7 @@ These came out of writing the parser and are binding on every example.
 - **A newline after `>` ends the line**, as it does after an identifier, a `)` or a `?`. Go inserts no semicolon after `>`, but in Snello a line ends in `>` or `>>` whenever a generic type closes it: `cache Arc<RwLock<Entry>>`. The cost is that a comparison or a shift cannot break its line after the operator; keep the right operand on the same line.
 - **`var` and `const`** declare one name list per keyword: `var x, y int = 1, 2`. Grouping with parentheses is not decided yet; nothing in the examples needs it.
 - **`??` sits below every other operator and groups to the right.** `a ?? b == c` is `a ?? (b == c)`, and `a ?? b ?? c` is `a ?? (b ?? c)`. Its right side may be an expression, a block, or a `return`, `break` or `continue`.
+- **An iterator is any value whose type has `Next` on a `mut` receiver, taking nothing and returning `T?`.** A range loop over one calls `Next` until it gives `None`, as Rust's `for` calls `next` and as Go 1.23 ranges over a function by its shape: no trait names an iterator, so the `Iterator` trait a program declares for its adapters is its own, and a standard collection gives its iterator from a method, `for i, v := range a.Iter()`, `for v := range s.Iter()`, as Go's `maps.All` and Rust's `iter` do. One variable takes the item; two take the parts of an item that is a pair, `(Index<T>, ref T)`. A `ref` of an iterator cannot be ranged over, since `Next` changes it; a variable is lent `mut` for the loop, as `range mut it` lends it, or consumed when it owns its items and holds no borrow, as a slice is; what the iterator borrows is lent for the loop; an iterator made for the loop, a call's result, is dropped after it, and an item the loop binds nothing to is dropped at once.
 - **A range over a string yields runes** (`05-standard-library.md`, decided 12). `for i, r := range s` gives each rune and the byte offset it starts at, and `for i := range s` the offsets alone; a byte that does not start a valid UTF-8 sequence yields U+FFFD and the loop moves on one byte. `len(s)` and `s[i]` stay in bytes.
 - **Postfix `?` binds tighter than any prefix operator.** `-x?` is `-(x?)` and `ref x?` is `ref (x?)`.
 - **`?` passes an error on where an assignment would take it, and into the one variant that holds its type** (`05-standard-library.md`, decided 11). In a function returning `Result<T, E>`, `x?` on a `Result<U, F>` returns the error as it is when `F` is `E`, as a trait value when `E` is a trait `F` implements, and wrapped in the variant when `E` is an enum with exactly one variant whose only field has type `F`; two such variants are refused as ambiguous, and none as today. The conversion is one step and belongs to `?` alone.
@@ -107,12 +108,13 @@ A declaration is not given a value later: `var m T` followed by an assignment on
 
 **In the library**
 
-- `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop`, so a program gets one only from its `New` function. Their "empty handle" panics can no longer be reached, and a `Weak` that may point at nothing is a `Weak<T>?`.
+- `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop`, so a program gets one only from its `New` function. Their "empty handle" panics are gone, and a `Weak` that may point at nothing is a `Weak<T>?`.
 - `strings.Repeat` returns `string?`: `None` for a negative count, or a string too long for an `int`.
 - `WaitGroup.Add` and `Done` return `bool`: `false`, with the count unchanged, when the count would go below zero.
 - `arena.Remove` takes its value without `Expect`.
+- `testing.Parallel` returns `bool`: `false`, changing nothing, when the test runs in parallel already or the call is on a task that is no test's own.
 
-With these, the library panics on no mistake a caller can make. A branch inside `rc` and `sync` that only a broken invariant could reach keeps a panic that says so.
+With these, the library panics on no mistake a caller can make, and has no branch that only a broken invariant could reach: `rc`'s and `sync`'s handles hold their cells by address, with no empty state, and a cell's value is where its count says it is, so `Get`, `Lock`, `Read` and `Write` have no case for a handle without its value. What still panics in the library is how a test fails or skips, which the test runner catches: `expect`, `testing.Skip`, and `testing.TempDir` when the system makes no directory.
 
 ## Heap allocation
 
@@ -212,4 +214,4 @@ A closure captures each variable in the weakest mode its body needs: by copy if 
 
 ## Destructors
 
-A type that implements `Drop` has `func (t mut T) Drop()`, run when the owner goes out of scope, on every exit path including panic unwinding. `defer` remains for cleanup not tied to a value.
+A type that implements `Drop` has `func (t mut T) Drop()`, run when the owner goes out of scope, on every exit path including panic unwinding. The language runs it, once: a program does not call `Drop` by hand, take it as a method value, defer it or reach it through a `T: Drop` bound, since the language would then run it again on a value whose resources are gone, as Rust refuses an explicit call of its destructor; `_ = v` drops a value early. `defer` remains for cleanup not tied to a value.

@@ -1,0 +1,38 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A zero-length array, [0]T, holds nothing and takes no bytes of its
+// own: its literal, its zero value, a field of one in a struct of a
+// type parameter, printed and dropped. Its element type
+// still counts: a struct with a [0]T field moves as T does. The C
+// backend once wrote its zero value as {0}, which C refuses for a
+// struct of no members.
+
+package main
+
+import "fmt"
+
+struct Holder<T> impl Drop {
+	elems [0]T
+	n     int
+}
+
+func (h mut Holder<T>) Drop() {
+	fmt.Println("dropped", h.n)
+}
+
+func make1<T>(n int) Holder<T> {
+	return Holder<T>{elems: [0]T{}, n: n}
+}
+
+func main() {
+	a := [0]int{}
+	var b [0]string
+	fmt.Println(len(a), len(b), a, b)
+	h := make1<string>(1)
+	moved := h // a string is not Copy: neither is a Holder of strings
+	fmt.Println(moved.n)
+	k := make1<[]int>(2)
+	fmt.Println(k.n, len(k.elems))
+}

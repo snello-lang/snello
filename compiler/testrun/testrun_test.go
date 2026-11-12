@@ -219,9 +219,22 @@ func BenchmarkRepeat() {
 }
 
 func TestParallelTwice() {
-	testing.Parallel()
-	testing.Parallel()
+	expect.True(testing.Parallel())
+	expect.False(testing.Parallel()) // a second notice changes nothing and says so
 }
+
+func TestParallelSub() {
+	expect.True(testing.Parallel())
+	testing.Run("inner", func() { expect.False(testing.Parallel()) }) // the subtest runs on its parallel parent's state
+}
+
+func TestFromTask() {
+	got := make(chan bool, 1)
+	spawn func(out chan<- bool) { out <- testing.Parallel() }(got.Clone()) // a task that is no test's has no round to tell
+	expect.False(<-got ?? true)
+}
+
+func TestFromTaskThen() {}
 
 func BenchmarkFails() {
 	for testing.Loop() {
@@ -366,7 +379,9 @@ func TestMore(t *testing.T) {
 		"--- FAIL: TestTextDiff (0.00s)\n    more_test.snello:" + lineOf(moreTest, "line 2\\nline three") + ": expect.EqualText(ref Report(), \"line one\\nline 2\\nline three\\n\")\n        line 2: got \"line two\" where \"line 2\" was wanted\n",
 		"--- FAIL: TestParallelB (0.00s)\n    more_test.snello:" + lineOf(moreTest, "b done") + ": b done\n    more_test.snello:" + lineOf(moreTest, "expect.True(1 > 2)") + ": expect.True(1 > 2) is false\n",
 		"--- PASS: TestParallelA (0.00s)\n    more_test.snello:" + lineOf(moreTest, "a done") + ": a done\n",
-		"--- FAIL: TestParallelTwice (0.00s)\n    testing.Parallel called twice\n",
+		"--- PASS: TestParallelTwice (0.00s)\n",
+		"--- PASS: TestParallelSub/inner",
+		"--- PASS: TestFromTask (0.00s)\n",
 		"FAIL\nFAIL\tmore\t",
 	} {
 		if !strings.Contains(out, want) {
@@ -374,9 +389,17 @@ func TestMore(t *testing.T) {
 		}
 	}
 
-	// The parallel tests start after every sequential one has ended,
-	// and their lines are held until each ends.
-	if a, b, last := strings.Index(out, "=== RUN   TestParallelA"), strings.Index(out, "=== RUN   TestParallelB"), strings.Index(out, "--- PASS: TestTextDiff"); !(a < b) || last > a && last < 0 {
+	// A task a test spawned calling Parallel tells no round: the test
+	// stays sequential, and the next one starts after it has ended.
+	if passed, next := strings.Index(out, "--- PASS: TestFromTask"), strings.Index(out, "=== RUN   TestFromTaskThen"); passed < 0 || next < passed {
+		t.Errorf("a helper task's Parallel let the next test start early:\n%s", out)
+	}
+
+	// The parallel tests start in order, and their results, held until
+	// each ends, come after the last sequential test's, TestTextDiff's.
+	a, b := strings.Index(out, "=== RUN   TestParallelA"), strings.Index(out, "=== RUN   TestParallelB")
+	last, held := strings.Index(out, "--- FAIL: TestTextDiff"), strings.Index(out, "--- PASS: TestParallelA")
+	if a < 0 || b < a || last < 0 || held < last {
 		t.Errorf("parallel tests out of order:\n%s", out)
 	}
 

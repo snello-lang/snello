@@ -47,6 +47,18 @@ _Noreturn void sn_slice_bounds(int64_t lo, int64_t hi, int64_t n) {
     sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
 }
 
+// sn_alloc_elems is a block of n elements of size bytes, uninitialized,
+// for a buffer a library keeps outside a slice: a count whose bytes no
+// address reaches is out of memory, as make's capacity is, since the
+// product would wrap to a small block.
+void *sn_alloc_elems(int64_t n, size_t size) {
+    if (n < 0 || (size != 0 && (uint64_t)n > (uint64_t)PTRDIFF_MAX / size)) {
+        sn_panic(SN_STR("out of memory: no buffer holds that many elements", 49));
+    }
+
+    return sn_alloc((size_t)n * size);
+}
+
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size) {
     if (len < 0) {
         sn_panic(SN_STR("makeslice: len out of range", 27));

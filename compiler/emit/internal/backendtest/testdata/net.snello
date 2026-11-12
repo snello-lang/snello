@@ -7,8 +7,11 @@
 // dialing it, bufio over a connection, the end of a connection seen as
 // a read of nothing, the error of dialing a port nothing listens on,
 // worded as Go words it and of Kind Refused, the Errors of a port out
-// of range, a host name and an IPv6 address, a dial with no host, and
-// a read into a buffer with no room.
+// of range and of a name with no address, a dial with no host, a read
+// into a buffer with no room, a listener and a dial on IPv6 and the
+// addresses they print, a name listened on and dialed, whose
+// addresses the dial tries in turn, and an IPv4 client of a listener on
+// every address of both families, whose address prints as IPv4.
 
 package main
 
@@ -17,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 )
 
 // serve answers one connection line by line, in upper case, until the
@@ -57,14 +61,35 @@ func main() {
 
 	fmt.Println(message(net.Listen("127.0.0.1", 70000)))
 	fmt.Println(message(net.Dial("127.0.0.1", -1)))
-	fmt.Println(message(net.Dial("localhost", 80)))
-	fmt.Println(message(net.Dial("::1", 80)))
+	match net.Dial("nosuch.invalid", 80) {
+		Ok(_) => fmt.Println("connected"),
+		Err(e) => fmt.Println(e.Error().HasPrefix("dial tcp: lookup nosuch.invalid: ")), // no such host, or no name server reached; std/net's tests hold the wording
+	}
 
 	l2 := net.Listen("127.0.0.1", 0).Expect("listen")
 	d := net.Dial("", l2.Port()).Expect("dial with no host") // this machine, as in Go
 	a := l2.Accept().Expect("accept")
 	empty := []byte{}
 	fmt.Println(d.Read(mut empty), a.Close().IsOk()) // a buf with no room reads nothing, at once
+
+	l6 := net.Listen("::1", 0).Expect("listen on IPv6")
+	at6 := strconv.Itoa(l6.Port())
+	c6 := net.Dial("::1", l6.Port()).Expect("dial IPv6")
+	a6 := l6.Accept().Expect("accept on IPv6")
+	fmt.Println(l6.Addr() == "[::1]:" + at6, c6.RemoteAddr() == l6.Addr(), c6.LocalAddr() == a6.RemoteAddr(), a6.LocalAddr() == l6.Addr())
+	fmt.Println(message(net.Dial("::1", 1)))
+
+	ln := net.Listen("localhost", 0).Expect("listen on a name") // its first IPv4 address
+	cn := net.Dial("localhost", ln.Port()).Expect("dial a name") // ::1 first where localhost has it, refused, then 127.0.0.1
+	fmt.Println(ln.Addr() == "127.0.0.1:" + strconv.Itoa(ln.Port()), cn.RemoteAddr() == ln.Addr())
+	found := net.LookupHost("localhost").Expect("lookup")
+	fmt.Println(found.Contains("127.0.0.1") || found.Contains("::1"), net.LookupHost("::1"))
+
+	le := net.Listen("", 0).Expect("listen on every address")
+	at := strconv.Itoa(le.Port())
+	ce := net.Dial("127.0.0.1", le.Port()).Expect("dial IPv4 into both families")
+	ae := le.Accept().Expect("accept IPv4")
+	fmt.Println(le.Addr() == "[::]:" + at, ae.LocalAddr() == "127.0.0.1:" + at, ae.RemoteAddr() == ce.LocalAddr())
 }
 
 // message gives what an operation reported: ok, or its Error's message.

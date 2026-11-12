@@ -1,0 +1,26 @@
+(0, x)
+(1, y)
+(2, z)
+0 x
+1 y
+2 z
+x
+y
+z
+first (0, x)
+rest 1
+rest 2
+item1
+item2
+item3
+count after 3
+y
+z
+1 two 2
+2 three 3
+true
+far below 1 two
+0 7 seven
+tick
+tick
+2 3

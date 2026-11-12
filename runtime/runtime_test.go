@@ -447,6 +447,176 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestHandoff holds a waker that wakes from no lock to the handoff's
+// promise: a task it took out while the task was running, as a task out
+// of a park a kept wake ended is, goes on only once the waker is done
+// with it. The waker here, a thread of the test's, takes the task out of
+// its word and waits 50 ms before it wakes it, as a waker the system
+// descheduled would; a task that went on meanwhile would end, and the
+// runtime free it, before the wake read it.
+func TestHandoff(t *testing.T) {
+	probe := `#define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
+#include "internal.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <time.h>
+static _Atomic uintptr_t word;
+static sn_handoff woken;
+static _Atomic int ended;
+static int ended_at_wake = -1;
+static sn_chan *done;
+static void *waker(void *arg) {
+    (void)arg;
+    uintptr_t task;
+    while ((task = atomic_exchange(&word, 0)) == 0) {
+        sn_spin_hint();
+    }
+
+    struct timespec pause = {0, 50000000};
+    nanosleep(&pause, NULL);
+    ended_at_wake = atomic_load(&ended);
+    sn_handoff_wake(&woken, (sn_task *)task);
+    sn_outside(-1);
+    return NULL;
+}
+static void run(void *arg) {
+    (void)arg;
+    sn_outside(1);
+    atomic_store(&word, (uintptr_t)sn_self());
+    while (atomic_load(&word) != 0) { // taken out while running, never parked
+        sn_spin_hint();
+    }
+
+    sn_handoff_wait(&woken);
+    atomic_store(&ended, 1);
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    pthread_t id;
+    pthread_create(&id, NULL, waker, NULL);
+    sn_spawn(run, NULL);
+    int64_t got;
+    sn_chan_recv(done, &got);
+    pthread_join(id, NULL);
+    printf("ended before the wake: %d\n", ended_at_wake);
+    sn_chan_drop(&done);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if string(out) != "ended before the wake: 0\n" {
+		t.Fatalf("got %q: the task went on before its waker was done with it", out)
+	}
+}
+
+// TestLookupsOffTheWorkers holds lookups to running beside the workers:
+// a name server that does not answer, here a getaddrinfo of the test's
+// own that blocks until the test lets it go, which the linker takes
+// over the system's, holds twice as many lookups as there are workers,
+// and a task spawned after them still computes, while a lookup with a
+// timeout of 50 ms gives up on time. A lookup that held its worker
+// would leave the computation none to run on, and the test's alarm
+// would end it.
+func TestLookupsOffTheWorkers(t *testing.T) {
+	probe := `#define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
+#include "internal.h"
+#include <errno.h>
+#include <netdb.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <time.h>
+#include <unistd.h>
+static pthread_mutex_t gate_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gate_cv = PTHREAD_COND_INITIALIZER;
+static bool gate_open;
+int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
+    (void)node, (void)service, (void)hints;
+    *res = NULL;
+    pthread_mutex_lock(&gate_mu);
+    while (!gate_open) {
+        pthread_cond_wait(&gate_cv, &gate_mu);
+    }
+
+    pthread_mutex_unlock(&gate_mu);
+    return EAI_NONAME;
+}
+void freeaddrinfo(struct addrinfo *ai) {
+    (void)ai;
+}
+static sn_chan *results;
+static sn_chan *computed;
+static void look(void *arg) {
+    int64_t timeout = (int64_t)(intptr_t)arg;
+    sn_slice out = {0};
+    sn_string reason = SN_STR("", 0);
+    int64_t code = sn_net_lookup(SN_STR("hangs.test", 10), timeout, &out, &reason);
+    sn_chan_send(results, &code);
+}
+static void compute(void *arg) {
+    (void)arg;
+    volatile int64_t sum = 0;
+    for (int64_t i = 0; i < 100000000; i++) {
+        sum += i % 7;
+    }
+
+    int64_t got = sum;
+    sn_chan_send(computed, &got);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    alarm(30);
+    int64_t n = 2 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    results = sn_chan_make(sizeof(int64_t), n + 1, NULL);
+    computed = sn_chan_make(sizeof(int64_t), 1, NULL);
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(look, NULL);
+    }
+
+    sn_spawn(look, (void *)(intptr_t)50000000);
+    sn_spawn(compute, NULL);
+    int64_t sum;
+    sn_chan_recv(computed, &sum);
+    printf("computed %lld\n", (long long)sum);
+    int64_t code;
+    sn_chan_recv(results, &code);
+    printf("first back: %s\n", code == SN_NET_TIMED_OUT ? "timed out" : "something else");
+    pthread_mutex_lock(&gate_mu);
+    gate_open = true;
+    pthread_cond_broadcast(&gate_cv);
+    pthread_mutex_unlock(&gate_mu);
+    int64_t none = 0;
+    for (int64_t i = 0; i < n; i++) {
+        sn_chan_recv(results, &code);
+        none += code == SN_NET_NO_SUCH_HOST;
+    }
+
+    printf("no such host: %s\n", none == n ? "all" : "not all");
+    sn_chan_drop(&results);
+    sn_chan_drop(&computed);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if want := "computed 299999995\nfirst back: timed out\nno such host: all\n"; string(out) != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}
+
 func bit(b bool) int {
 	if b {
 		return 1

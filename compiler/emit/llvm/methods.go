@@ -532,6 +532,29 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 	case "Contains":
 		found := e.rt("sn_map_find", "ptr", m, mt, value{"ptr", e.key(x.Args[0], t.Key())})
 		return e.op("icmp ne ptr "+found.s+", null", "i1")
+	case "Entry": // the next entry's place, key and value, the borrows as addresses into the map
+		e.declare("sn_map_next", "declare i64 @sn_map_next(ptr, i64)")
+		at := e.op("call i64 @sn_map_next(ptr "+p+", "+e.operands(x.Args, []types.Type{types.Typ[types.Int]})[0].typed()+")", "i64")
+		has := e.op("icmp sge i64 "+at.s+", 0", "i1")
+		keys := e.load("ptr", e.gep("%sn_map", p, 0))
+		vals := e.load("ptr", e.gep("%sn_map", p, 1))
+		k := e.elem(e.irType(t.Key(), x.Pos()), keys.s, at.s)
+		v := e.elem(e.irType(t.Value(), x.Pos()), vals.s, at.s)
+		item := lower.ValueType(e.typeOf(x)).Underlying().(*types.Option).Elem()
+		pair := item.Underlying().(*types.Tuple)
+		kv, vv := value{"ptr", k}, value{"ptr", v}
+		if depth(pair.At(1)) == 0 { // a ref of a string or a slice is the view itself, not an address
+			kv = e.load(e.irType(t.Key(), x.Pos()), k)
+		}
+
+		if depth(pair.At(2)) == 0 {
+			vv = e.load(e.irType(t.Value(), x.Pos()), v)
+		}
+
+		tup := e.insert(value{e.irType(item, x.Pos()), "zeroinitializer"}, at, 0)
+		tup = e.insert(tup, kv, 1)
+		tup = e.insert(tup, vv, 2)
+		return e.optionOf(e.typeOf(x), has, tup, x.Pos())
 	case "Clone":
 		if !lower.ClonesAsBytes(t.Key()) || !lower.ClonesAsBytes(t.Value()) {
 			return e.op("call %sn_map @"+e.cloner(t, x.Pos())+"(ptr "+p+")", "%sn_map")

@@ -207,6 +207,8 @@ func mapMethod(t *Map, name string) *Signature {
 		return reads(nil, t)
 	case "GetOrInsert":
 		return changes([]*Var{keeps("k", t.key), keeps("v", t.value)}, NewRef(t.value, true))
+	case "Entry":
+		return reads([]*Var{param("i", Typ[Int])}, NewOption(NewTuple(Typ[Int], ref(t.key), ref(t.value))))
 	}
 
 	return nil

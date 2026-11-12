@@ -212,6 +212,11 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	}
 
 	base, m := deref(x)
+	if e.Sel.Name == "Drop" && implements(base, DropTrait) {
+		c.errorf(e.Sel.Pos(), dropByHand(e.X))
+		return invalidOperand
+	}
+
 	if named, ok := base.(*Named); ok {
 		if st, ok := named.Underlying().(*Struct); ok {
 			if f := fieldNamed(st.fields, e.Sel.Name); f != nil {
@@ -1218,4 +1223,13 @@ func (c *Checker) unify(a, b operand, pos token.Pos, what string) operand {
 
 	c.errorf(pos, what+" branches have different types: "+a.typ.String()+" and "+b.typ.String())
 	return invalidOperand
+}
+
+// dropByHand is the message for a program reaching a type's Drop as a
+// method: Drop runs when its value goes, once, and the language runs
+// it, so a call by hand, a method value or a deferred call of it would
+// run it a second time on a value whose resources are gone. Dropping
+// a value early is moving it into the blank identifier.
+func dropByHand(x ast.Expr) string {
+	return "cannot call Drop by hand: it runs once, when " + exprText(x) + " goes; to drop it now, write _ = " + exprText(x)
 }

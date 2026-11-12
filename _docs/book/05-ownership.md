@@ -132,7 +132,7 @@ Using `n` as a whole after `n.next` moved out would be an error: `use of partial
 
 ## Dropping
 
-When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
+When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A program never calls a `Drop` itself, `conn.Drop()`, nor takes it as a value or defers it: the language runs it once, when the value goes, and a second run would close a closed file or free freed memory, so the compiler refuses the call and names `_ = conn` as the way. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
 
 ```go
 struct TempDir impl Drop { path string }
@@ -201,7 +201,7 @@ snello: 3 blocks (9 bytes) not released
   3 bytes: t h e
 ```
 
-Released memory is filled with a poison byte and kept from reuse for a while, and a released place is poisoned too. A string, slice, map, pointer or file read after its release is seen by the runtime operation that reads it, which panics with `a released string was used`, naming the kind of value; an owned pointer read after its value moved away panics with `a moved pointer was used`. A release build does none of this and runs at full speed.
+Released memory is filled with a poison byte and kept from reuse for a while, and a released place is poisoned too. A string, slice, map, pointer or file read after its release is seen by the runtime operation that reads it, which panics with `a released string was used`, naming the kind of value; an owned pointer read after its value moved away panics with `a moved pointer was used`. A task that ends is kept unfreed for a while too, so that a wake the runtime gives it late stops the program with `fatal error: a wake reached a task that has ended`, a mistake of the runtime's and never of a program. A release build does none of this and runs at full speed.
 
 No program the checker accepts should ever fail this way, which is what makes the debug build useful to the compiler's own tests: every example program runs under it, so a drop the compiler forgets, or places wrongly, is a failing test rather than a slow leak. Its first find was a rule the checker lacked: a borrow of a temporary, `t := s.Clone().Trim()`, printed poison once the clone was dropped at the end of its statement, and is now refused (chapter 6). It also catches the one escape the checker does not see yet, a closure capturing a local that a function stores through a parameter of function type, when the closure is called after the local is gone.
 

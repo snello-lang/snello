@@ -126,3 +126,27 @@ func BenchmarkMutexLock() {
 		*g.Get() += 1
 	}
 }
+
+func TestCounterSwap() {
+	c := sync.NewCounter(3)
+	expect.Equal(ref c.Swap(10), ref 3)
+	expect.Equal(ref c.Load(), ref 10)
+	expect.Equal(ref c.Swap(0), ref 10)
+}
+
+func TestWaitGroupGo() {
+	hits := sync.NewArc(sync.NewCounter(0))
+	wg := sync.NewWaitGroup()
+	for i := 0; i < 8; i++ {
+		wg.Go(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
+	}
+
+	wg.Go(func(p (sync.Arc<sync.Counter>, int)) {
+		if (h, n) := Some(p) {
+			h.Get().Add(n)
+		}
+	}, (hits.Clone(), 2))
+
+	wg.Wait()
+	expect.Equal(ref hits.Get().Load(), ref 10)
+}

@@ -137,7 +137,12 @@ func (e *Emitter) define(t types.Type, pos token.Pos) {
 		})
 	case *types.Array: // a struct, so that it is copied and passed as a value; the element is defined whole, since it is inside
 		e.defineStruct(t, pos, func() string {
-			return "\t" + e.cType(t.Elem(), pos) + " at[" + strconv.FormatInt(t.Len(), 10) + "];\n"
+			at := "\t" + e.cType(t.Elem(), pos) + " at[" + strconv.FormatInt(t.Len(), 10) + "];\n"
+			if t.Len() == 0 {
+				return "\tuint8_t sn_none; // a struct of no members takes no {0}, which every zero value is written as\n" + at
+			}
+
+			return at
 		})
 	case *types.Signature:
 		e.defineStruct(t, pos, func() string {

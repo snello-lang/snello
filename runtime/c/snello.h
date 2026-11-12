@@ -214,8 +214,9 @@ SN_BITS_NAMED(64, 64, uint64_t)
 // a dropped place is filled with it too, so a string, slice, map,
 // pointer or file read after its release is seen by the runtime
 // function that reads it, which panics naming it; an owned pointer
-// read after it moved, which leaves a null, panics the same way. A
-// release build does none of this.
+// read after it moved, which leaves a null, panics the same way; and a
+// task that ends is kept unfreed for a while, so that a wake that
+// reaches it stops the program. A release build does none of this.
 // The character classes of a byte, ASCII only, as a byte is one.
 static inline bool sn_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
 static inline bool sn_is_space(uint8_t c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
@@ -418,6 +419,7 @@ void sn_release(void **p); // frees the block an owned pointer holds and empties
 void sn_init(int argc, char **argv);
 
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size);
+void *sn_alloc_elems(int64_t n, size_t size);
 // SN_PUSH_FAST and SN_POP_FAST say when the C backend's Push and Pop
 // write in place, without the runtime: a push with room, and a pop of a
 // slice that owns its elements and has one; a sub-slice's capacity,
@@ -670,6 +672,7 @@ int64_t sn_sync_cellLoad(int64_t h);
 void sn_sync_cellStore(int64_t h, int64_t v);
 int64_t sn_sync_cellAdd(int64_t h, int64_t d);
 bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v);
+int64_t sn_sync_cellExchange(int64_t h, int64_t v);
 void sn_sync_cellFree(int64_t h);
 int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call); // the net package's, in net.c
 int64_t sn_net_accept(int64_t fd, int64_t *out);
@@ -679,6 +682,7 @@ int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote);
 int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_net_closeConn(int64_t fd);
+int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason); // in lookup.c
 
 // Tasks and channels, as _docs/design/06-tasks-and-channels.md lays
 // them out: this is the whole interface the emitted code uses, and the

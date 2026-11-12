@@ -212,6 +212,10 @@ var handledErrors = map[string]bool{
 	"time-layout.snello": true,
 	// A constant's name is no pattern.
 	"match-constant.snello": true,
+	// A range over an iterator: a value with Next on a mut receiver.
+	"range-iterator.snello": true,
+	// A Drop runs once, by the language.
+	"drop-by-hand.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

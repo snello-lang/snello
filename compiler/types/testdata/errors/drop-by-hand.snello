@@ -1,0 +1,31 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a type's Drop runs once, when its value goes, and the language
+// runs it; a program does not reach it as a method, in a call, a method
+// value, a deferred call or through a bound, since the language would
+// then run it again on a value whose resources are gone.
+// Fix: move the value into the blank identifier, _ = v, which drops it
+// there.
+
+package p
+
+import "rc"
+
+struct Res impl Drop { n int }
+
+func (r mut Res) Drop() {}
+
+func close<T: Drop>(v mut T) {
+    v.Drop()                              // ERROR "cannot call Drop by hand: it runs once, when v goes; to drop it now, write _ = v"
+}
+
+func main() {
+    r := Res{n: 1}
+    r.Drop()                              // ERROR "cannot call Drop by hand: it runs once, when r goes"
+    f := r.Drop                           // ERROR "cannot call Drop by hand"
+    defer r.Drop()                        // ERROR "cannot call Drop by hand"
+    shared := rc.New(1)
+    shared.Drop()                         // ERROR "cannot call Drop by hand: it runs once, when shared goes"
+}

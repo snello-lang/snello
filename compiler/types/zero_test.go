@@ -89,7 +89,7 @@ func TestZeroAcrossPackages(t *testing.T) {
 		want []string
 	}{
 		{"func f() { var m sync.Mutex<int>; print(m) }", []string{"cannot declare m without a value: sync.Mutex<int> has no zero value"}},
-		{"func f() { m := sync.Mutex<int>{}; print(m) }", []string{"cannot build a sync.Mutex<int> with a literal: it has no zero value, and its field p is not exported; use its package's functions"}},
+		{"func f() { m := sync.Mutex<int>{}; print(m) }", []string{"cannot build a sync.Mutex<int> with a literal: it has no zero value, and its field box is not exported; use its package's functions"}},
 		{"func f() { var w sync.WaitGroup; print(w) }", []string{"cannot declare w without a value: sync.WaitGroup has no zero value"}}, // it holds an Arc
 		{"func f() { var o sync.Once; print(o) }", []string{"cannot declare o without a value: sync.Once has no zero value"}},           // it holds a Mutex
 		{"func f() { var r rc.Rc<int>; print(r) }", []string{"cannot declare r without a value: rc.Rc<int> has no zero value"}},         // it implements Drop

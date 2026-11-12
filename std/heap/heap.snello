@@ -4,8 +4,8 @@
 
 // Package heap is a priority queue: a binary min-heap over a slice,
 // ordered by the Cmp of its element type, as sort orders a slice. Pop
-// returns the least element first; a type that wants the greatest
-// first, or another order, gives itself a Cmp that says so.
+// returns the least element first; for the greatest first the elements
+// go in a Reverse, and another order is a Cmp of the type's own.
 //
 // The elements are kept in a slice laid out as a complete binary tree:
 // the children of the element at index i are at 2i+1 and 2i+2, and no
@@ -18,6 +18,21 @@
 // one. Elements that compare Equal come out in no particular order: a
 // heap is not a stable sort.
 package heap
+
+// A Reverse holds a value and orders the other way round: a
+// Heap<Reverse<T>> hands back the greatest first. The value is the field
+// V, read and written as any field is.
+//
+//	h := heap.New<heap.Reverse<int>>()
+//	h.Push(heap.Reverse<int>{V: 3})
+struct Reverse<T: Ord> impl Eq, Ord {
+	V T
+}
+
+// Cmp orders a Reverse the other way round from its value.
+func (r ref Reverse<T>) Cmp(o ref Reverse<T>) Ordering {
+	return o.V.Cmp(ref r.V)
+}
 
 // A Heap owns its elements and hands them back least first. It is
 // moved, or lent with ref and mut; when it goes out of scope, the

@@ -3,15 +3,27 @@
 // license that can be found in the LICENSE file.
 
 // Rule: what a task takes in must be Send, and an rc handle is not: its
-// count of handles is not atomic. Fix: share the value through sync.Arc.
+// count of handles is not atomic. Nor is a collection or a handle that
+// holds one, though each holds its cells by address: its type says what
+// the cells hold. Fix: share the value through sync.Arc.
 
 package p
 
-import "rc"
+import ("deque"; "rc"; "sync")
 
 func show(r rc.Rc<int>) {}
+
+func queue(d deque.Deque<rc.Rc<int>>) {}
+
+func weak(w rc.Weak<int>) {}
+
+func shared(a sync.Arc<rc.Rc<int>>) {}
 
 func main() {
     r := rc.New(1)
     spawn show(r.Clone())                 // ERROR "cannot spawn with r.Clone(): rc.Rc<int> stays in its task"
+    d := deque.New<rc.Rc<int>>()
+    spawn queue(d)                        // ERROR "cannot spawn with d"
+    spawn weak(r.Downgrade())             // ERROR "cannot spawn with r.Downgrade()"
+    spawn shared(sync.NewArc(r.Clone()))  // ERROR "cannot spawn with sync.NewArc(...): rc.Rc<int> stays in its task"
 }

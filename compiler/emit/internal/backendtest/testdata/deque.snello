@@ -1,0 +1,38 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The deque's buffer, whose slots the compiler reads and writes for the
+// deque alone: strings and structs that own memory pushed at both ends,
+// wrapped round the buffer, grown with the head past the start, changed
+// in place, popped, cleared and pushed again, and dropped with elements
+// left in it. A debug build counts every block at the end, so an
+// element dropped twice or never, or a buffer not freed, fails it.
+
+package main
+
+import ("deque"; "fmt")
+
+struct Box { name string; parts []string }
+
+func main() {
+    d := deque.WithCapacity<string>(4)
+    for i := 0; i < 3; i++ { d.PushBack(fmt.Sprint("s", i)) }
+    _ = d.PopFront()
+    _ = d.PopFront()
+    for i := 3; i < 20; i++ { d.PushBack(fmt.Sprint("s", i)) }
+    d.PushFront("front".Clone())
+    if v := d.GetMut(2) { *v = "changed".Clone() }
+    fmt.Println(d.Len(), d.Cap(), d.Get(0), d.Get(2), d.Back())
+    for i := 0; i < 5; i++ { _ = d.PopBack() }
+    taken := d.PopFront() ?? "none".Clone()
+    fmt.Println(taken, d)
+    d.Clear()
+    d.PushBack("after clear".Clone())
+    boxes := deque.New<Box>()
+    for i := 0; i < 9; i++ {
+        boxes.PushFront(Box{name: fmt.Sprint("b", i), parts: []string{"x".Clone(), fmt.Sprint(i)}})
+    }
+    _ = boxes.PopBack()
+    fmt.Println(boxes.Len(), d) // both dropped at the end with elements left
+}

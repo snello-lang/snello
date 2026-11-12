@@ -315,6 +315,38 @@ func main() {
 			Out: "done\n", Stderr: "fatal error: all tasks are asleep - deadlock!", Code: 2,
 		},
 		{
+			Name: "lookup-promises", // every lookup takes back the wake it promised the deadlock detector, whether it finished, timed out or raced its timer, so a program that deadlocks after lookups is reported, not left hanging
+			Src: `package main
+import ("fmt"; "net"; "time")
+func look(done chan int) {
+	n := 0
+	for i := 0; i < 50; i++ {
+		_ = net.LookupHost("localhost")
+		_ = net.DialTimeout("localhost", 1, time.Duration(i % 10) * time.Duration(100) * time.Microsecond + time.Nanosecond)
+		n += 1
+	}
+
+	done <- n
+}
+func main() {
+	done := make(chan int)
+	for i := 0; i < 4; i++ {
+		spawn look(done.Clone())
+	}
+
+	total := 0
+	for i := 0; i < 4; i++ {
+		total += <-done ?? 0
+	}
+
+	fmt.Println(total)
+	never := make(chan int)
+	<-never
+}
+`,
+			Out: "200\n", Stderr: "fatal error: all tasks are asleep - deadlock!", Code: 2,
+		},
+		{
 			Name: "sleep-under-load", // a sleep ends on time while every worker has two tasks trading messages through its run-next slot: the slot's task yields to the queue
 			Src: `package main
 import ("fmt"; "os"; "time")
