@@ -80,19 +80,19 @@ void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
 // digits a step from a table, from the end of a buffer on the stack,
 // then copied once into a block of exactly their length. 0 to 99 are
 // Go's small numbers, views of the table that own nothing.
-static const char digit_pairs[201] = "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+const char sn_digit_pairs[201] = "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
 
 char *sn_format_uint(uint64_t u, char *end) {
     while (u >= 100) {
         uint64_t two = (u % 100) * 2;
         u /= 100;
-        *--end = digit_pairs[two + 1];
-        *--end = digit_pairs[two];
+        *--end = sn_digit_pairs[two + 1];
+        *--end = sn_digit_pairs[two];
     }
 
     if (u >= 10) {
-        *--end = digit_pairs[u * 2 + 1];
-        *--end = digit_pairs[u * 2];
+        *--end = sn_digit_pairs[u * 2 + 1];
+        *--end = sn_digit_pairs[u * 2];
     } else {
         *--end = (char)('0' + u);
     }
@@ -102,7 +102,7 @@ char *sn_format_uint(uint64_t u, char *end) {
 
 sn_string sn_format_int(uint64_t u, bool neg) {
     if (!neg && u < 100) {
-        return SN_STR(digit_pairs + u * 2 + (u < 10), u < 10 ? 1 : 2);
+        return SN_STR(sn_digit_pairs + u * 2 + (u < 10), u < 10 ? 1 : 2);
     }
 
     char buf[24];

@@ -209,6 +209,7 @@ var handledErrors = map[string]bool{
 	"format-verb.snello": true,
 	"format-zero.snello": true,
 	"format-size.snello": true,
+	"time-layout.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

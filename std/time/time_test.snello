@@ -4,7 +4,7 @@
 
 package time_test
 
-import ("expect"; "testing"; "time")
+import ("expect"; "fmt"; "testing"; "time")
 
 func TestDurations() {
 	d := time.Duration(1500) * time.Millisecond
@@ -17,6 +17,11 @@ func TestDurations() {
 	expect.Equal(ref (time.Duration(90) * time.Second).Minutes(), ref 1.5)
 	expect.Equal(ref d.Truncate(time.Second), ref time.Second)
 	expect.Equal(ref d.Round(time.Second), ref time.Duration(2)*time.Second)
+	longest := time.Duration(9223372036854775807)
+	shortest := time.Duration(-9223372036854775808)
+	expect.Equal(ref longest.Round(time.Second), ref longest) // rounding up would overflow: the longest stays
+	expect.Equal(ref shortest.Round(time.Second), ref shortest)
+	expect.Equal(ref time.Duration(-1500*time.Millisecond).Truncate(time.Second), ref -time.Second)
 	expect.Equal(ref (time.Duration(-3) * time.Second).Abs(), ref time.Duration(3)*time.Second)
 	expect.Equal(ref time.Microsecond.String(), "1µs")
 	expect.Equal(ref time.Nanosecond.String(), "1ns")
@@ -56,6 +61,425 @@ func TestAfterTick() {
 	second := <-ticks
 	expect.True(first.IsSome())
 	expect.True(second.IsSome())
+}
+
+// at returns the Time of a date and time that exist.
+func at(year int, month time.Month, day int, hour int, min int, sec int, nsec int) time.Time {
+	return expect.IsSome(time.Date(year, month, day, hour, min, sec, nsec))
+}
+
+func TestDate() {
+	t := at(2026, time.November, 11, 21, 4, 5, 123456789)
+	expect.Equal(ref t.Unix(), ref i64(1794431045))
+	expect.Equal(ref t.Year(), ref 2026)
+	expect.True(t.Month() == time.November)
+	expect.Equal(ref t.Month().Number(), ref 11)
+	expect.Equal(ref t.Day(), ref 11)
+	expect.Equal(ref t.Hour(), ref 21)
+	expect.Equal(ref t.Minute(), ref 4)
+	expect.Equal(ref t.Second(), ref 5)
+	expect.Equal(ref t.Nanosecond(), ref 123456789)
+	expect.True(t.Weekday() == time.Wednesday)
+	expect.Equal(ref t.YearDay(), ref 315)
+	expect.Equal(ref fmt.Sprint(t.Month(), t.Weekday()), "November Wednesday") // each prints as its name
+	expect.True(at(1970, time.January, 1, 0, 0, 0, 0) == time.Unix(0, 0))
+	expect.True(at(1969, time.December, 31, 23, 59, 59, 999999999) == time.Unix(-1, 999999999))
+	expect.Equal(ref at(-1, time.March, 1, 0, 0, 0, 0).Year(), ref -1) // before year 0
+	expect.Equal(ref at(2024, time.December, 31, 0, 0, 0, 0).YearDay(), ref 366)
+	expect.Equal(ref at(2026, time.March, 1, 0, 0, 0, 0).YearDay(), ref 60)
+	expect.Equal(ref at(2024, time.March, 1, 0, 0, 0, 0).YearDay(), ref 61)
+}
+
+// A date that does not exist is None, and nothing is guessed for it.
+func TestDateThatIsNone() {
+	expect.IsNone(time.Date(2026, time.February, 30, 0, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.February, 29, 0, 0, 0, 0))
+	expect.IsSome(time.Date(2024, time.February, 29, 0, 0, 0, 0))
+	expect.IsSome(time.Date(2000, time.February, 29, 0, 0, 0, 0)) // divides by four hundred: a leap year
+	expect.IsNone(time.Date(1900, time.February, 29, 0, 0, 0, 0)) // divides by a hundred and not four hundred: not one
+	expect.IsNone(time.Date(2026, time.April, 31, 0, 0, 0, 0))
+	expect.IsSome(time.Date(2026, time.April, 30, 0, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, 0, 0, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, -1, 0, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, 24, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, -1, 0, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, 60, 0, 0))
+	// The years at the ends: the day count starts on 1 March of the
+	// first, so that year is out, and the last holds only the seconds
+	// an i64 reaches into it, so it is out too.
+	expect.IsNone(time.Date(-292277022400, time.December, 31, 0, 0, 0, 0))
+	expect.IsNone(time.Date(292277026596, time.January, 1, 0, 0, 0, 0))
+	first := at(-292277022399, time.January, 1, 0, 0, 0, 0)
+	expect.Equal(ref first.Year(), ref -292277022399)
+	expect.True(first.Month() == time.January)
+	expect.Equal(ref first.Day(), ref 1)
+	last := at(292277026595, time.December, 31, 23, 59, 59, 999999999)
+	expect.Equal(ref last.Year(), ref 292277026595)
+	expect.True(last.Month() == time.December)
+	expect.Equal(ref last.Day(), ref 31)
+	expect.True(last.After(first))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, -1, 0, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, 0, 60, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, 0, -1, 0))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, 0, 0, 1000000000))
+	expect.IsNone(time.Date(2026, time.January, 1, 0, 0, 0, -1))
+	expect.IsSome(time.Date(2026, time.December, 31, 23, 59, 59, 999999999))
+}
+
+// Every day from year -400 to 2800, by the civil calendar's own rules:
+// a month has the days its name says, February twenty-nine in a year
+// that divides by four, but by a hundred only when by four hundred too,
+// and the weekdays follow one another. The Time of each day says the
+// same date, weekday and day of the year, and Date makes that Time
+// from them.
+func TestCalendarByItsRules() {
+	lengths := []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+	months := []time.Month{time.January, time.February, time.March, time.April, time.May, time.June, time.July, time.August, time.September, time.October, time.November, time.December}
+	days := []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday, time.Sunday}
+	sec := i64(-74790000000) // 1 January of year -400, 865,625 days before 1970
+	weekday := 5              // which was a Saturday
+	wrong := 0
+	for year := -400; year < 2800; year++ {
+		leap := year%4 == 0 && (year%100 != 0 || year%400 == 0)
+		yday := 0
+		for m := 0; m < 12; m++ {
+			n := lengths[m]
+			if m == 1 && leap {
+				n = 29
+			}
+
+			for d := 1; d <= n; d++ {
+				yday++
+				t := time.Unix(sec, 0)
+				if t.Year() != year || t.Month() != months[m] || t.Day() != d || t.Weekday() != days[weekday] || t.YearDay() != yday {
+					wrong++
+				}
+
+				if (time.Date(year, months[m], d, 0, 0, 0, 0) ?? time.Unix(1, 1)) != t {
+					wrong++
+				}
+
+				sec += 86400
+				weekday = (weekday + 1) % 7
+			}
+
+			if time.Date(year, months[m], n+1, 0, 0, 0, 0).IsSome() { // the day after a month's last is no day of it
+				wrong++
+			}
+		}
+	}
+
+	expect.Equal(ref wrong, ref 0)
+	expect.Equal(ref sec, ref i64(26192246400)) // 1 January 2800, where the count ends
+}
+
+// A month is added on the calendar: the day stays when the new month
+// has it, and is that month's last when it has not.
+func TestAddDate() {
+	jan31 := at(2026, time.January, 31, 12, 30, 15, 7)
+	expect.True(jan31.AddDate(0, 1, 0) == at(2026, time.February, 28, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 2, 0) == at(2026, time.March, 31, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 3, 0) == at(2026, time.April, 30, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, -1, 0) == at(2025, time.December, 31, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, -2, 0) == at(2025, time.November, 30, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 13, 0) == at(2027, time.February, 28, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, -13, 0) == at(2024, time.December, 31, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(2, 1, 0) == at(2028, time.February, 29, 12, 30, 15, 7)) // a leap year's last day
+	expect.True(at(2026, time.March, 31, 0, 0, 0, 0).AddDate(0, -1, 0) == at(2026, time.February, 28, 0, 0, 0, 0))
+	leap := at(2024, time.February, 29, 0, 0, 0, 0)
+	expect.True(leap.AddDate(1, 0, 0) == at(2025, time.February, 28, 0, 0, 0, 0))
+	expect.True(leap.AddDate(4, 0, 0) == at(2028, time.February, 29, 0, 0, 0, 0))
+	expect.True(leap.AddDate(-24, 0, 0) == at(2000, time.February, 29, 0, 0, 0, 0))
+	expect.True(leap.AddDate(-124, 0, 0) == at(1900, time.February, 28, 0, 0, 0, 0))
+	// Days are days, each twenty-four hours, added after the months.
+	expect.True(jan31.AddDate(0, 0, 1) == at(2026, time.February, 1, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 0, -31) == at(2025, time.December, 31, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 1, 1) == at(2026, time.March, 1, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 0, 365) == at(2027, time.January, 31, 12, 30, 15, 7))
+	expect.True(jan31.AddDate(0, 0, 0) == jan31)
+	expect.True(at(1, time.January, 15, 0, 0, 0, 0).AddDate(-1, -1, 0) == at(-1, time.December, 15, 0, 0, 0, 0)) // through year 0
+}
+
+func TestTruncateAndRound() {
+	t := at(2026, time.November, 11, 21, 4, 5, 123456789)
+	expect.True(t.Truncate(time.Hour) == at(2026, time.November, 11, 21, 0, 0, 0))
+	expect.True(t.Truncate(time.Minute) == at(2026, time.November, 11, 21, 4, 0, 0))
+	expect.True(t.Truncate(time.Second) == at(2026, time.November, 11, 21, 4, 5, 0))
+	expect.True(t.Truncate(time.Millisecond) == at(2026, time.November, 11, 21, 4, 5, 123000000))
+	expect.True(t.Truncate(24 * time.Hour) == at(2026, time.November, 11, 0, 0, 0, 0))
+	expect.True(t.Truncate(7 * 24 * time.Hour) == at(2026, time.November, 9, 0, 0, 0, 0)) // the Monday the week began
+	expect.True(t.Truncate(7 * 24 * time.Hour).Weekday() == time.Monday)
+	expect.True(t.Truncate(333 * time.Millisecond) == at(2026, time.November, 11, 21, 4, 4, 800000000)) // a span that divides nothing: the long division
+	expect.True(t.Round(time.Hour) == at(2026, time.November, 11, 21, 0, 0, 0))
+	expect.True(t.Round(10 * time.Minute) == at(2026, time.November, 11, 21, 0, 0, 0))
+	expect.True(at(2026, time.November, 11, 21, 5, 0, 0).Round(10 * time.Minute) == at(2026, time.November, 11, 21, 10, 0, 0)) // halfway rounds up
+	expect.True(at(2026, time.November, 11, 21, 4, 59, 999999999).Round(10 * time.Minute) == at(2026, time.November, 11, 21, 0, 0, 0))
+	expect.True(t.Round(time.Second) == at(2026, time.November, 11, 21, 4, 5, 0))
+	expect.True(t.Truncate(0) == t)
+	expect.True(t.Round(-time.Hour) == t)
+	before := time.Unix(-1, 5) // before 1970, and before year 1 below: rounded down all the same
+	expect.True(before.Truncate(time.Second) == time.Unix(-1, 0))
+	expect.True(time.Unix(-100000000000, 5).Round(7 * time.Second) == time.Unix(-99999999999, 0))
+	expect.True(time.Now().Truncate(time.Second).Nanosecond() == 0)
+}
+
+// Every directive, on a time whose every field is its own, and on one
+// early in a year and a day, where the weeks and the paddings differ.
+func TestFormat() {
+	t := at(2026, time.November, 11, 21, 4, 5, 123456789)
+	expect.Equal(ref t.Format("%Y %C %y %m %B %b %h %d %e %j"), "2026 20 26 11 November Nov Nov 11 11 315")
+	expect.Equal(ref t.Format("%A %a %u %w %G %g %V %U %W"), "Wednesday Wed 3 3 2026 26 46 45 45")
+	expect.Equal(ref t.Format("%H %I %M %S %p %P"), "21 09 04 05 PM pm")
+	expect.Equal(ref t.Format("%f|%.f|%.3f|%.6f|%.9f"), "123456789|.123456789|.123|.123456|.123456789")
+	expect.Equal(ref t.Format("%z %:z %Z"), "+0000 +00:00 UTC")
+	expect.Equal(ref t.Format("%F|%T|%X|%R|%D|%x|%r"), "2026-11-11|21:04:05|21:04:05|21:04|11/11/26|11/11/26|09:04:05 PM")
+	expect.Equal(ref t.Format("%c|%s|%n|%t|%%"), "Wed Nov 11 21:04:05 2026|1794431045|\n|\t|%")
+	expect.Equal(ref t.Format("%-m %_m %-d %_d %-H %_H %-I %_I %-M %-S %-j %_j %-y"), "11 11 11 11 21 21 9  9 4 5 315 315 26")
+	early := at(2021, time.January, 3, 0, 5, 9, 500000000)
+	expect.Equal(ref early.Format("%A %e %j %U %W %V %G %g %I%p %.f"), "Sunday  3 003 01 00 53 2020 20 12AM .500")
+	expect.Equal(ref early.Format("%-d %_d %-H:%-M:%-S %_j %-j %u %w"), "3  3 0:5:9   3 3 7 0")
+	expect.Equal(ref at(2026, time.June, 1, 12, 0, 0, 1000).Format("%I %p %.f %B %b"), "12 PM .000001 June Jun")
+	expect.Equal(ref at(2026, time.June, 1, 13, 0, 0, 0).Format("%I%P|%.f|%.3f"), "01pm||.000") // no fraction, nothing written for %.f
+	expect.Equal(ref at(2018, time.December, 31, 0, 0, 0, 0).Format("%G-W%V-%u %U %W"), "2019-W01-1 52 53") // a Monday that is in the next year's first week
+	expect.Equal(ref at(-5, time.March, 1, 0, 0, 0, 0).Format("%Y %y %C %F"), "-0005 95 -01 -0005-03-01")
+	expect.Equal(ref at(12345, time.March, 1, 0, 0, 0, 0).Format("%Y-%m-%d %C"), "12345-03-01 123")
+	expect.Equal(ref at(7, time.March, 1, 0, 0, 0, 0).Format("%Y %-Y %_Y"), "0007 7    7")
+	expect.Equal(ref t.Format(""), "")
+	expect.Equal(ref t.Format("no directive, and a 100%% of text"), "no directive, and a 100% of text")
+	expect.Equal(ref t.Format(time.RFC3339), "2026-11-11T21:04:05+00:00")
+	expect.Equal(ref t.Format(time.RFC3339Nano), "2026-11-11T21:04:05.123456789+00:00")
+	expect.Equal(ref t.Format(time.DateTime), "2026-11-11 21:04:05")
+	expect.Equal(ref t.Format(time.DateOnly), "2026-11-11")
+	expect.Equal(ref t.Format(time.TimeOnly), "21:04:05")
+	expect.Equal(ref t.Format(time.Kitchen), "9:04PM")
+	expect.Equal(ref at(12345, time.March, 1, 2, 3, 4, 0).Format(time.RFC3339), "12345-03-01T02:03:04+00:00") // a year past four digits: the layout read
+	// A layout longer than what a string is first made for.
+	expect.Equal(ref t.Format("%A %A %A %A %A %A %A %A %A %A %c %c %c %c").Len(), ref 10*10+4*25-1)
+}
+
+func TestParse() {
+	t := at(2026, time.November, 11, 21, 4, 5, 0)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339, "2026-11-11T21:04:05Z")) == t)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339, "2026-11-11T21:04:05+00:00")) == t)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339, "2026-11-11T23:04:05+02:00")) == t) // an offset: the moment in UTC
+	expect.True(expect.IsOk(time.Parse(time.RFC3339, "2026-11-11T13:04:05-08:00")) == t)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339, "2026-11-12T02:34:05+05:30")) == t)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339Nano, "2026-11-11T21:04:05.5Z")) == t.Add(500 * time.Millisecond))
+	expect.True(expect.IsOk(time.Parse(time.RFC3339Nano, "2026-11-11T21:04:05.123456789Z")) == t.Add(123456789))
+	expect.True(expect.IsOk(time.Parse(time.RFC3339Nano, "2026-11-11T21:04:05Z")) == t) // no fraction is none
+	expect.True(expect.IsOk(time.Parse(time.DateTime, "2026-11-11 21:04:05")) == t)
+	expect.True(expect.IsOk(time.Parse(time.DateOnly, "2026-11-11")) == at(2026, time.November, 11, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse(time.DateOnly, "12345-03-01")) == at(12345, time.March, 1, 0, 0, 0, 0)) // a year of more than four digits, as Format writes it
+	expect.True(expect.IsOk(time.Parse(time.DateOnly, "-0005-03-01")) == at(-5, time.March, 1, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y-%m-%d %Z", "2026-11-11 utc")) == at(2026, time.November, 11, 0, 0, 0, 0)) // a zone's name in either case
+	expect.True(expect.IsOk(time.Parse(time.TimeOnly, "21:04:05")) == at(1970, time.January, 1, 21, 4, 5, 0)) // no date: 1 January 1970
+	expect.True(expect.IsOk(time.Parse(time.Kitchen, "9:04PM")) == at(1970, time.January, 1, 21, 4, 0, 0))
+	expect.True(expect.IsOk(time.Parse(time.Kitchen, "12:04AM")) == at(1970, time.January, 1, 0, 4, 0, 0))
+	expect.True(expect.IsOk(time.Parse(time.Kitchen, "12:04pm")) == at(1970, time.January, 1, 12, 4, 0, 0)) // the case of AM and PM apart
+	expect.True(expect.IsOk(time.Parse("%A, %-d %B %Y", "Wednesday, 11 November 2026")) == at(2026, time.November, 11, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%a %b %e %T %Y", "sun JAN  3 00:05:09 2021")) == at(2021, time.January, 3, 0, 5, 9, 0))
+	expect.True(expect.IsOk(time.Parse("%c", "Wed Nov 11 21:04:05 2026")) == t)
+	expect.True(expect.IsOk(time.Parse("%D %r", "11/11/26 09:04:05 PM")) == t)
+	expect.True(expect.IsOk(time.Parse("%F %R", "2026-11-11 21:04")) == at(2026, time.November, 11, 21, 4, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%y%m%d", "690101")) == at(1969, time.January, 1, 0, 0, 0, 0)) // two digits: 1969 to 2068
+	expect.True(expect.IsOk(time.Parse("%y%m%d", "680101")) == at(2068, time.January, 1, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y %j", "2024 366")) == at(2024, time.December, 31, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y %j %m", "2026 060 03")) == at(2026, time.March, 1, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y-%m-%d %Z", "2026-11-11 UTC")) == at(2026, time.November, 11, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y-%m-%d %Z", "2026-11-11 GMT")) == at(2026, time.November, 11, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%Y-%m-%d %H%z", "2026-11-11 21+0100")) == at(2026, time.November, 11, 20, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%H:%M:%S%.3f", "21:04:05.123")) == at(1970, time.January, 1, 21, 4, 5, 123000000))
+	expect.True(expect.IsOk(time.Parse("%S.%f", "05.000000007")) == at(1970, time.January, 1, 0, 0, 5, 7))
+	expect.True(expect.IsOk(time.Parse("%-m/%-d/%Y %-H:%-M", "3/7/2026 4:5")) == at(2026, time.March, 7, 4, 5, 0, 0))
+	expect.True(expect.IsOk(time.Parse("%_m/%_d/%Y", " 3/ 7/2026")) == at(2026, time.March, 7, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("100%% %n%t%Y", "100% \n\t2026")) == at(2026, time.January, 1, 0, 0, 0, 0))
+	expect.True(expect.IsOk(time.Parse("", "")) == time.Unix(0, 0))
+	// What Format writes, Parse reads back to the same Time.
+	full := at(2024, time.February, 29, 23, 59, 59, 999999999)
+	expect.True(expect.IsOk(time.Parse(time.RFC3339Nano, ref full.Format(time.RFC3339Nano))) == full)
+	expect.True(expect.IsOk(time.Parse("%A %d %B %Y %I:%M:%S%.9f %p %z", ref full.Format("%A %d %B %Y %I:%M:%S%.9f %p %z"))) == full)
+	expect.True(expect.IsOk(time.Parse("%c %f", ref full.Format("%c %f"))) == full)
+}
+
+// refused returns why Parse refuses a text, without the text and the
+// layout every message starts with.
+func refused(r Result<time.Time, time.ParseError>) string {
+	msg := expect.IsErr(r).Error()
+	return msg[(msg.Index("\": ") ?? 0)+3:].Clone()
+}
+
+func TestParseRefuses() {
+	expect.Equal(ref expect.IsErr(time.Parse(time.DateOnly, "2026-02-30")).Error(), "parsing time \"2026-02-30\" as \"%Y-%m-%d\": day out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-02-29")), "day out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-13-01")), "month out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-00-01")), "month out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-01-00")), "day out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-01-32")), "day out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "999999999999-01-01")), "year out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "-999999999999-01-01")), "year out of range")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "123-01-01")), "cannot parse \"123-01-01\" as %Y")
+	expect.Equal(ref refused(time.Parse("%%n%Y", "%x2026")), "cannot find \"n\" at \"x2026\"")
+	expect.Equal(ref refused(time.Parse(time.TimeOnly, "24:00:00")), "hour out of range")
+	expect.Equal(ref refused(time.Parse(time.TimeOnly, "23:60:00")), "minute out of range")
+	expect.Equal(ref refused(time.Parse(time.TimeOnly, "23:59:60")), "second out of range")
+	expect.Equal(ref refused(time.Parse(time.Kitchen, "13:04PM")), "hour out of range")
+	expect.Equal(ref refused(time.Parse(time.Kitchen, "0:04PM")), "hour out of range")
+	expect.Equal(ref refused(time.Parse("%Y %j", "2026 366")), "day of the year out of range")
+	expect.Equal(ref refused(time.Parse("%Y %j", "2026 000")), "day of the year out of range")
+	expect.Equal(ref refused(time.Parse("%Y %j %m", "2026 060 02")), "day of the year does not match the date")
+	expect.Equal(ref refused(time.Parse("%A, %-d %B %Y", "Tuesday, 11 November 2026")), "weekday does not match the date")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-11-11x")), "extra text \"x\"")
+	expect.Equal(ref refused(time.Parse(time.DateTime, "2026-11-11")), "cannot find \" \" at \"\"")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11 21:04:05Z")), "cannot find \"T\" at \" 21:04:05Z\"")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "26-11-11")), "cannot parse \"26-11-11\" as %Y")
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-1-11")), "cannot parse \"1-11\" as %m") // a field as wide as Format writes it
+	expect.Equal(ref refused(time.Parse(time.DateOnly, "2026-11-1")), "cannot parse \"1\" as %d")
+	expect.Equal(ref refused(time.Parse("%-d", "x")), "cannot parse \"x\" as %d")
+	expect.Equal(ref refused(time.Parse("%j", "12")), "cannot parse \"12\" as %j")
+	expect.Equal(ref refused(time.Parse("%f", "12345678")), "cannot parse \"12345678\" as %f")
+	expect.Equal(ref refused(time.Parse("%B", "Novem")), "cannot parse \"Novem\" as the name of a month")
+	expect.Equal(ref refused(time.Parse("%b", "No")), "cannot parse \"No\" as the name of a month")
+	expect.Equal(ref refused(time.Parse("%A", "Wednes")), "cannot parse \"Wednes\" as the name of a weekday")
+	expect.Equal(ref refused(time.Parse("%I%p", "09XM")), "cannot parse \"XM\" as AM or PM")
+	expect.Equal(ref refused(time.Parse("%H:%M:%S%.3f", "21:04:05.1234")), "cannot parse \".1234\" as a fraction of a second")
+	expect.Equal(ref refused(time.Parse("%H:%M:%S%.3f", "21:04:05")), "cannot parse \"\" as a fraction of a second")
+	expect.Equal(ref refused(time.Parse("%S%.f", "05.")), "cannot parse \".\" as a fraction of a second")
+	expect.Equal(ref refused(time.Parse("%S%.f", "05.1234567890")), "cannot parse \".1234567890\" as a fraction of a second")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11T21:04:05")), "cannot parse \"\" as an offset from UTC")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11T21:04:05+0200")), "cannot parse \"+0200\" as an offset from UTC")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11T21:04:05+2:00")), "cannot parse \"+2:00\" as an offset from UTC")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11T21:04:05+24:00")), "offset from UTC out of range")
+	expect.Equal(ref refused(time.Parse(time.RFC3339, "2026-11-11T21:04:05+02:60")), "offset from UTC out of range")
+	expect.Equal(ref refused(time.Parse("%Y-%m-%d %Z", "2026-11-11 CET")), "cannot parse \"CET\" as %Z: a Time is in UTC, and the zone is UTC or GMT")
+	expect.Equal(ref refused(time.Parse("%Y-%m-%d %Z", "2026-11-11 UT")), "cannot parse \"UT\" as %Z: a Time is in UTC, and the zone is UTC or GMT")
+	expect.Equal(ref refused(time.Parse("%F", "2026-11")), "cannot parse \"2026-11\" as %F")
+	expect.Equal(ref refused(time.Parse("%T", "21:04:5")), "cannot parse \"21:04:5\" as %T")
+	expect.Equal(ref refused(time.Parse("%Y%%", "2026")), "cannot find %% at \"\"")
+	expect.Equal(ref refused(time.Parse("%Y%n", "2026 ")), "cannot find %n at \" \"")
+	expect.Equal(ref refused(time.Parse("a\tb", "a b")), "cannot find \"\\t\" at \" b\"")
+}
+
+func TestParseDuration() {
+	expect.Equal(ref expect.IsOk(time.ParseDuration("1h30m")), ref 90*time.Minute)
+	expect.Equal(ref expect.IsOk(time.ParseDuration("1.5h")), ref 90*time.Minute)
+	expect.Equal(ref expect.IsOk(time.ParseDuration("-2m3.5s")), ref -(2*time.Minute + 3500*time.Millisecond))
+	expect.Equal(ref expect.IsOk(time.ParseDuration("+5m")), ref 5*time.Minute)
+	expect.Equal(ref expect.IsOk(time.ParseDuration(".5s")), ref 500*time.Millisecond)
+	expect.Equal(ref expect.IsOk(time.ParseDuration("5.s")), ref 5*time.Second)
+	expect.Equal(ref expect.IsOk(time.ParseDuration("1µs2ns")), ref time.Duration(1002)) // the micro sign
+	expect.Equal(ref expect.IsOk(time.ParseDuration("1μs")), ref time.Microsecond)       // and the Greek letter mu
+	expect.Equal(ref expect.IsOk(time.ParseDuration("3us4ms")), ref 3*time.Microsecond+4*time.Millisecond)
+	expect.Equal(ref expect.IsOk(time.ParseDuration("0")), ref time.Duration(0))
+	expect.Equal(ref expect.IsOk(time.ParseDuration("-0")), ref time.Duration(0))
+	expect.Equal(ref expect.IsOk(time.ParseDuration("2562047h47m16.854775807s")), ref time.Duration(9223372036854775807))  // the longest
+	expect.Equal(ref expect.IsOk(time.ParseDuration("-2562047h47m16.854775808s")), ref time.Duration(-9223372036854775808))
+	expect.Equal(ref expect.IsOk(time.ParseDuration("0.100000000000000000000h")), ref 6*time.Minute) // more digits than a number holds
+	// What String writes, ParseDuration reads back.
+	for _, d := range ref []time.Duration{0, 1, 999, 1500, 90 * time.Minute, -time.Hour, 123456789012345} {
+		expect.Equal(ref expect.IsOk(time.ParseDuration(ref d.String())), d)
+	}
+
+	expect.Equal(ref expect.IsErr(time.ParseDuration("")).Error(), "time: invalid duration \"\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("-")).Error(), "time: invalid duration \"-\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("3")).Error(), "time: missing unit in duration \"3\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("1h1")).Error(), "time: missing unit in duration \"1h1\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("1x")).Error(), "time: unknown unit \"x\" in duration \"1x\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("1 h")).Error(), "time: unknown unit \" h\" in duration \"1 h\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("h")).Error(), "time: invalid duration \"h\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration(".s")).Error(), "time: invalid duration \".s\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("999999999999h")).Error(), "time: invalid duration \"999999999999h\"")
+	expect.Equal(ref expect.IsErr(time.ParseDuration("2562047h47m16.854775808s")).Error(), "time: invalid duration \"2562047h47m16.854775808s\"") // one past the longest
+	expect.Equal(ref expect.IsErr(time.ParseDuration("99999999999999999999ns")).Error(), "time: invalid duration \"99999999999999999999ns\"")
+}
+
+// A Timer stopped before it fires sends nothing; one stopped after it
+// fired and before anyone received has its time taken back.
+func TestTimer() {
+	t := time.NewTimer(20 * time.Millisecond)
+	expect.True(t.Stop())
+	expect.False(t.Stop()) // stopped already
+	select {
+	case <-t.C:
+		expect.Fail("a stopped Timer sent")
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	late := time.NewTimer(5 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+	expect.True(late.Stop()) // fired, and not received: called off all the same
+	select {
+	case <-late.C:
+		expect.Fail("a time sent before Stop was left to receive")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	expect.False(late.Reset(5 * time.Millisecond)) // it was stopped
+	start := time.Now()
+	expect.True((<-late.C).IsSome())
+	expect.True(time.Since(start) < 500*time.Millisecond)
+	expect.False(late.Stop()) // received: nothing to call off
+	expect.False(late.Reset(time.Hour))
+	expect.True(late.Reset(5 * time.Millisecond)) // pending: moved from an hour to now
+	expect.True((<-late.C).IsSome())
+	now := time.NewTimer(0)
+	expect.True((<-now.C).IsSome()) // a wait of nothing fires at once
+}
+
+// A Ticker ticks on its period until it is stopped, and one dropped
+// ticks no more.
+func TestTicker() {
+	tick := time.NewTicker(5 * time.Millisecond)
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		expect.True((<-tick.C).IsSome())
+	}
+
+	expect.True(time.Since(start) >= 15*time.Millisecond)
+	tick.Stop()
+	select {
+	case <-tick.C:
+		expect.Fail("a stopped Ticker ticked")
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	tick.Reset(5 * time.Millisecond)
+	expect.True((<-tick.C).IsSome())
+	tick.Reset(0) // no period: stopped
+	select {
+	case <-tick.C:
+		expect.Fail("a Ticker reset to no period ticked")
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	watching := time.NewTicker(time.Millisecond).C.Clone() // the Ticker is dropped at the end of this statement
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-watching:
+		expect.Fail("a dropped Ticker ticked")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	never := time.NewTicker(-time.Second)
+	select {
+	case <-never.C:
+		expect.Fail("a Ticker of no period ticked")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func BenchmarkFormat() {
+	t := time.Unix(1794431045, 123456789)
+	n := 0
+	for testing.Loop() {
+		n += t.Format(time.DateTime).Len()
+	}
+}
+
+func BenchmarkParse() {
+	n := 0
+	for testing.Loop() {
+		n += int((time.Parse(time.DateTime, "2026-11-11 21:04:05") ?? time.Unix(0, 0)).Unix() & 1)
+	}
 }
 
 func BenchmarkNow() {
