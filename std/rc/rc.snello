@@ -31,25 +31,31 @@ package rc
 
 import "fmt"
 
-// A cell is what the handles on one value share: the value, gone once
-// the last Rc goes, and the two counts. The counts are plain numbers,
-// changed by whichever handle is cloned or dropped, so a cell and the
-// handles on it stay in the task that made them: the local field says
-// so to the compiler, which refuses to send a handle to another task
-// or to capture one in a spawn.
+// A cell is what the handles on one value share: the value and the two
+// counts. The value is there while any Rc is, and gone once the last
+// Rc goes, which the strong count says, so the cell holds it with no
+// tag beside it. The counts are plain numbers, changed by whichever
+// handle is cloned or dropped, so a cell and the handles on it stay in
+// the task that made them: the local field says so to the compiler,
+// which refuses to send a handle to another task or to capture one in
+// a spawn.
 struct cell<T> {
 	_      local
 	strong int
 	weak   int
-	value  T?
+	value  T
 }
 
 // An Rc is a handle on a shared value, one of its owners. It is moved,
 // cloned for another owner, and lent with ref; when it goes out of
 // scope the count goes down, and the value with it when the count
-// reaches zero. It prints as the value it holds.
+// reaches zero. It prints as the value it holds. It holds its cell by
+// address, since no one handle owns it, and carries a pointer to the
+// cell's type, so that it stays in its task as the cell does and a
+// value may hold a handle on a cell of its own type.
 struct Rc<T> impl Clone, Drop, fmt.Stringer {
-	p *cell<T>?
+	cell     int        // the address of the shared cell, which no one handle owns
+	cellType [0]*cell<T> // holds nothing: it gives the handle the cell's type, so that it stays in its task as the cell does, and a pointer, so that a value may hold a handle on a cell of its own type
 }
 
 // A Weak is a handle that does not own the value: a link back to a
@@ -57,120 +63,91 @@ struct Rc<T> impl Clone, Drop, fmt.Stringer {
 // cloned and lent as an Rc is, and prints as the value while it is
 // there.
 struct Weak<T> impl Clone, Drop, fmt.Stringer {
-	p *cell<T>?
+	cell     int        // the address of the shared cell, which no one handle owns
+	cellType [0]*cell<T> // holds nothing: it gives the handle the cell's type, so that it stays in its task as the cell does, and a pointer, so that a value may hold a handle on a cell of its own type
+}
+
+// New puts v in a new shared cell and returns the first handle on it.
+func New<T>(v T) Rc<T> {
+	return Rc<T>{cell: rawNew<cell<T>>(cell<T>{strong: 1, weak: 0, value: v}), cellType: [0]*cell<T>{}}
 }
 
 // String returns the text of the value, as fmt prints it, so that an
 // Rc, and a struct holding one, print as the value they share.
 func (r ref Rc<T>) String() string {
-	return text(ref r.p, "rc.Rc()")
+	return fmt.Sprint(r.Get())
 }
 
 // String returns the text of the value while it is there, as an Rc
 // prints, and rc.Weak() once it is gone.
 func (w ref Weak<T>) String() string {
-	return text(ref w.p, "rc.Weak()")
-}
-
-// text returns the text of the value a cell holds, or none when the
-// cell is gone or holds none.
-func text<T>(p ref (*cell<T>?), none string) string {
-	if c := ref p {
-		if v := ref c.value {
-			return fmt.Sprint(v)
-		}
+	c := rawMut<cell<T>, Weak<T>>(w.cell, w)
+	if c.strong == 0 {
+		return "rc.Weak()"
 	}
 
-	return none
-}
-
-// New puts v in a new shared cell and returns the first handle on it.
-func New<T>(v T) Rc<T> {
-	return Rc<T>{p: Some(&cell<T>{strong: 1, weak: 0, value: Some(v)})}
+	return fmt.Sprint(ref c.value)
 }
 
 // Get lends the value for reading, for as long as the Rc is lent.
 func (r ref Rc<T>) Get() ref T {
-	if p := ref r.p {
-		if v := ref p.value {
-			return v
-		}
-	}
-
-	panic("rc: an Rc without its value: a broken invariant of the package") // an Rc holds its cell and the value until its Drop, which runs once
+	return ref rawMut<cell<T>, Rc<T>>(r.cell, r).value
 }
 
 // GetMut lends the value for changing when this is the only handle on
 // it, strong or weak, and None otherwise.
 func (r mut Rc<T>) GetMut() mut T? {
-	if p := mut r.p {
-		if p.strong == 1 && p.weak == 0 {
-			return match mut p.value {
-				Some(v) => Some(v),
-				None => None,
-			}
-		}
+	c := rawMut<cell<T>, Rc<T>>(r.cell, r)
+	if c.strong != 1 || c.weak != 0 {
+		return None
 	}
 
-	return None
+	return Some(mut c.value)
 }
 
 // Clone returns another handle on the same value; the value is not
 // copied.
 func (r ref Rc<T>) Clone() Rc<T> {
-	q := retain(r.p) ?? return Rc<T>{p: None}
-	q.strong++
-	return Rc<T>{p: Some(q)}
+	rawMut<cell<T>, Rc<T>>(r.cell, r).strong++
+	return Rc<T>{cellType: [0]*cell<T>{}, cell: r.cell}
 }
 
 // Downgrade returns a Weak handle on the value, which does not keep it
 // alive.
 func (r ref Rc<T>) Downgrade() Weak<T> {
-	q := retain(r.p) ?? return Weak<T>{p: None}
-	q.weak++
-	return Weak<T>{p: Some(q)}
+	rawMut<cell<T>, Rc<T>>(r.cell, r).weak++
+	return Weak<T>{cellType: [0]*cell<T>{}, cell: r.cell}
 }
 
 // StrongCount returns how many Rc handles the value has, this one
 // included.
 func (r ref Rc<T>) StrongCount() int {
-	if p := ref r.p {
-		return p.strong
-	}
-
-	return 0
+	return rawMut<cell<T>, Rc<T>>(r.cell, r).strong
 }
 
 // WeakCount returns how many Weak handles the value has.
 func (r ref Rc<T>) WeakCount() int {
-	if p := ref r.p {
-		return p.weak
-	}
-
-	return 0
+	return rawMut<cell<T>, Rc<T>>(r.cell, r).weak
 }
 
 // Drop gives up this handle: the value is dropped with the last Rc, and
 // the cell released with the last handle of either kind.
 func (r mut Rc<T>) Drop() {
-	p := take(mut r.p) ?? return // dropped already
-	p.strong--
-	if p.strong > 0 {
-		leak(p)
+	c := rawMut<cell<T>, Rc<T>>(r.cell, r)
+	c.strong--
+	if c.strong > 0 {
 		return
 	}
 
 	// The last owner: the value goes. Dropping it may drop Weaks on this
 	// cell, its last one included, so this handle counts as one more Weak
 	// until the value is gone, and the cell outlives the value's drop.
-	p.weak++
-	_ = take(mut p.value)
-	p.weak--
-	if p.weak == 0 {
-		return // no handle left: p goes out of scope here and frees the cell
+	c.weak++
+	_ = moveOut<T>(mut c.value)
+	c.weak--
+	if c.weak == 0 {
+		rawFree(r.cell)
 	}
-
-	leak(p)
 }
 
 // TryUnwrap takes the value out of the Rc when this is its only Rc, and
@@ -180,75 +157,63 @@ func (r mut Rc<T>) Drop() {
 //
 //	v := shared.TryUnwrap() ?? return
 func (r Rc<T>) TryUnwrap() Result<T, Rc<T>> {
-	if r.StrongCount() != 1 {
+	c := rawMut<cell<T>, Rc<T>>(r.cell, ref r)
+	if c.strong != 1 {
 		return Err(r)
 	}
 
-	p := take(mut r.p) ?? return Err(r) // an Rc that counts one holds its cell
-	if v := take(mut p.value) {
-		p.strong = 0
-		if p.weak == 0 {
-			return Ok(v) // no handle left: p goes out of scope here and frees the cell
-		}
-
-		leak(p)
-		return Ok(v)
+	c.strong = 0
+	v := moveOut<T>(mut c.value)
+	last := c.weak == 0
+	at := r.cell
+	leak(r) // its count is spent and its value taken: its Drop must not run
+	if last {
+		rawFree(at)
 	}
 
-	r.p = Some(p) // a cell without its value, which an Rc never holds: the handle goes back as it came
-	return Err(r)
+	return Ok(v)
 }
 
 // Upgrade returns an Rc on the value when it is still there, and None
 // when its last Rc is gone.
 func (w ref Weak<T>) Upgrade() Rc<T>? {
-	if p := ref w.p {
-		if p.strong > 0 {
-			q := retain(w.p) ?? return None
-			q.strong++
-			return Some(Rc<T>{p: Some(q)})
-		}
+	c := rawMut<cell<T>, Weak<T>>(w.cell, w)
+	if c.strong == 0 {
+		return None
 	}
 
-	return None
+	c.strong++
+	return Some(Rc<T>{cellType: [0]*cell<T>{}, cell: w.cell})
 }
 
 // Clone returns another Weak handle on the same value.
 func (w ref Weak<T>) Clone() Weak<T> {
-	q := retain(w.p) ?? return Weak<T>{p: None}
-	q.weak++
-	return Weak<T>{p: Some(q)}
+	rawMut<cell<T>, Weak<T>>(w.cell, w).weak++
+	return Weak<T>{cellType: [0]*cell<T>{}, cell: w.cell}
 }
 
 // Drop gives up this handle; the cell is released when it was the
 // last handle of either kind.
 func (w mut Weak<T>) Drop() {
-	p := take(mut w.p) ?? return // dropped already
-	p.weak--
-	if p.strong == 0 && p.weak == 0 {
-		return // the last handle: p goes out of scope here and frees the cell
+	c := rawMut<cell<T>, Weak<T>>(w.cell, w)
+	c.weak--
+	if c.strong == 0 && c.weak == 0 {
+		rawFree(w.cell)
 	}
-
-	leak(p)
 }
 
-// retain returns an owned copy of the pointer a handle holds, for a new
-// handle on the same cell, or None for a handle whose Drop has run. The
-// caller raises the count the new handle is counted in.
-func retain<T>(p ref (*cell<T>?)) *cell<T>? {
-	if q := ref p {
-		return Some(alias(q))
-	}
-
-	return None
-}
-
-// The compiler provides these two, the one unsafe step reference
-// counting needs. alias returns a second owned copy of the pointer a
-// borrow lends, which costs nothing: a borrow of a pointer and the
-// pointer are the same word in the compiled program. leak takes a
-// pointer and frees nothing, so the cell outlives the handle that held
-// it. Neither is reachable from a program, and the counts are what
-// make them safe here.
-func alias<T>(p ref *cell<T>) *cell<T>
-func leak<T>(p *cell<T>)
+// The compiler writes these for this package alone, the steps of
+// reference counting the language refuses elsewhere, which the counts
+// make safe here: rawNew moves a cell into a block of its own and
+// returns its address; rawMut lends the cell at an address, a mut
+// through a ref, for as long as the handle is lent, its fields read in
+// place, since the counts are this task's alone; rawFree frees
+// a cell whose value is gone; moveOut moves the value out of the cell
+// and leaves its place to nothing, which the strong count, at zero from
+// then on, says no one reads; and leak gives a handle up without its
+// Drop, when its count is already spent.
+func rawNew<C>(c C) int
+func rawMut<C, H>(at int, h ref H) mut C
+func rawFree(at int)
+func moveOut<T>(v mut T) T
+func leak<H>(h H)

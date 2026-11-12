@@ -103,21 +103,21 @@ func CheckPrefixes(libraries []Library) error {
 // path and name: fmt's printing is written by the type of each
 // argument, with the format read at compile time, so the runtime has
 // no formatter; os.Exit is the runtime's exit, since a function cannot
-// say it never returns yet; and the primitives of rc and sync are the
-// pointer itself, since a second owner of one pointer, and a mut
-// reached through a ref, are what the language refuses and the
-// reference count and the lock are what make them safe there; the
-// slots of a deque's buffer, which hold an element or nothing and so
-// cannot be values of the language, which the deque's count and head
-// make safe there; and testing.Catch runs a function under the
-// runtime's mark, which takes
-// the function as C takes one, through an adapter the backend writes.
+// say it never returns yet; the cells of rc and sync, held by their
+// handles as an address, since several handles own one cell and a mut
+// is reached through a ref, which the language refuses and the count
+// and the lock make safe there; the slots of a deque's buffer, which
+// hold an element or nothing and so cannot be values of the language,
+// which the deque's count and head make safe there; and testing.Catch
+// runs a function under the runtime's mark, which takes the function
+// as C takes one, through an adapter the backend writes.
 // The functions of math/bits are written too, each as an instruction,
 // and BitOp reads their names.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprint": true, "fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
-	"rc.alias": true, "rc.leak": true, "sync.alias": true, "sync.leak": true, "sync.inside": true,
+	"rc.rawNew": true, "rc.rawMut": true, "rc.rawFree": true, "rc.moveOut": true, "rc.leak": true,
+	"sync.rawNew": true, "sync.rawMut": true, "sync.rawTake": true,
 	"deque.rawAlloc": true, "deque.rawFree": true, "deque.rawPut": true, "deque.rawTake": true,
 	"deque.rawRef": true, "deque.rawMut": true, "deque.rawMove": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,

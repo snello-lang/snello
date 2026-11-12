@@ -119,6 +119,10 @@ func TestCapacity() {
 	expect.Equal(ref d.Cap(), ref 0)
 	d.PushFront(1)
 	expect.Equal(ref d.Cap(), ref 4)
+	// A room whose bytes no address reaches is out of memory, where the
+	// size would otherwise wrap to a small block written past its end.
+	expect.PanicsWith(func() { _ = deque.WithCapacity<int>(2305843009213693952) }, "out of memory: no buffer holds that many elements")
+	expect.PanicsWith(func() { _ = deque.WithCapacity<string>(4611686018427387905) }, "out of memory: no buffer holds that many elements")
 }
 
 // Elements are dropped with the deque, and a popped element is the

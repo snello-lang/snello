@@ -132,7 +132,7 @@ Using `n` as a whole after `n.next` moved out would be an error: `use of partial
 
 ## Dropping
 
-When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
+When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A program never calls a `Drop` itself, `conn.Drop()`, nor takes it as a value or defers it: the language runs it once, when the value goes, and a second run would close a closed file or free freed memory, so the compiler refuses the call and names `_ = conn` as the way. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
 
 ```go
 struct TempDir impl Drop { path string }

@@ -28,14 +28,10 @@
 //
 // None of these types has a zero value: each implements Drop, or holds
 // one that does, so var m Mutex<int> is refused and a handle comes only
-// from its New function. A handle always holds what it stands for, and
-// no operation on one panics over a handle being empty.
+// from its New function. A handle holds its cell by address, which no
+// empty state stands in for, so no operation on one has a case for a
+// handle without its value.
 package sync
-
-// broken is the message of the one panic left in the package: a handle
-// with no cell or box, which no program can make, since a handle comes
-// only from its New function and a Drop runs once.
-const broken string = "sync: a handle without its value: a broken invariant of the package"
 
 // An acell is what the handles on one value share: the value, and the
 // count of handles, changed atomically so that handles in different
@@ -54,51 +50,41 @@ struct acell<T> {
 // of handles that is never released cannot be built without a lock,
 // whose own T is Send.
 struct Arc<T> impl Clone, Drop {
-	p *acell<T>?
+	cell     int          // the address of the shared cell, which no one handle owns
+	cellType [0]*acell<T> // holds nothing: it gives the handle the cell's type, so that an Arc is Send as its value is, and a pointer, so that a value may hold an Arc of its own type
 }
 
 // NewArc puts v in a new shared cell and returns the first handle on
 // it.
 func NewArc<T>(v T) Arc<T> {
-	return Arc<T>{p: Some(&acell<T>{count: 1, value: v})}
+	return Arc<T>{cellType: [0]*acell<T>{}, cell: rawNew<acell<T>>(acell<T>{count: 1, value: v})}
 }
 
 // Get lends the value for reading, for as long as the Arc is lent.
 func (a ref Arc<T>) Get() ref T {
-	if p := ref a.p {
-		return ref p.value
-	}
-
-	panic(broken)
+	return ref rawMut<acell<T>, Arc<T>>(a.cell, a).value
 }
 
 // Clone returns another handle on the same value; the value is not
 // copied.
 func (a ref Arc<T>) Clone() Arc<T> {
-	q := retain(a.p) ?? return Arc<T>{p: None}
-	atomicAdd(mut q.count, 1)
-	return Arc<T>{p: Some(q)}
+	atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, 1)
+	return Arc<T>{cellType: [0]*acell<T>{}, cell: a.cell}
 }
 
 // Count returns how many handles the value has, this one included.
 // Another task may clone or drop a handle right after, so the count is
 // a reading, not a promise.
 func (a ref Arc<T>) Count() i64 {
-	q := retain(a.p) ?? return 0
-	n := atomicAdd(mut q.count, 0) // read as one step, as the adds that change it write
-	leak(q)
-	return n
+	return atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, 0) // read as one step, as the adds that change it write
 }
 
 // Drop gives up this handle: the value and its cell are dropped with
 // the last one.
 func (a mut Arc<T>) Drop() {
-	p := take(mut a.p) ?? return // dropped already
-	if atomicAdd(mut p.count, -1) == 0 {
-		return // the last handle: p goes out of scope here and frees the cell, the value with it
+	if atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, -1) == 0 {
+		_ = rawTake<acell<T>>(a.cell) // the last handle: the cell is freed and the value dropped with it
 	}
-
-	leak(p)
 }
 
 // A Counter is an int that several tasks add to as one step each, a
@@ -220,29 +206,25 @@ struct box<T> {
 // Arc<Mutex<T>> lends it to every task holding a handle. When it goes
 // out of scope the value is dropped with it.
 struct Mutex<T: Send> impl Drop {
-	p *box<T>?
+	box     int        // the address of the box, the lock and the value
+	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
 }
 
 // NewMutex puts v behind a new lock.
 func NewMutex<T: Send>(v T) Mutex<T> {
-	return Mutex<T>{p: Some(&box<T>{lock: newLock(), value: v})}
+	return Mutex<T>{boxType: [0]*box<T>{}, box: rawNew<box<T>>(box<T>{lock: newLock(), value: v})}
 }
 
 // Lock waits until no other task holds the lock, takes it, and returns
 // the Guard that holds it.
 func (m ref Mutex<T>) Lock() Guard<T> {
-	if p := ref m.p {
-		return guard(p)
-	}
-
-	panic(broken)
+	return guard(rawMut<box<T>, Mutex<T>>(m.box, m))
 }
 
-// Drop releases the runtime's lock; the value is dropped with the box.
+// Drop releases the runtime's lock and drops the value with the box.
 func (m mut Mutex<T>) Drop() {
-	if p := ref m.p {
-		freeLock(p.lock)
-	}
+	b := rawTake<box<T>>(m.box)
+	freeLock(b.lock)
 }
 
 // A Guard holds a lock and the mut borrow of the value under it, from
@@ -271,40 +253,33 @@ func (g mut Guard<T>) Drop() {
 // for a writer. Like a Mutex it is moved or lent with ref, and drops
 // its value with itself.
 struct RwLock<T: Send> impl Drop {
-	p *box<T>?
+	box     int        // the address of the box, the lock and the value
+	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
 }
 
 // NewRwLock puts v behind a new lock.
 func NewRwLock<T: Send>(v T) RwLock<T> {
-	return RwLock<T>{p: Some(&box<T>{lock: newRwLock(), value: v})}
+	return RwLock<T>{boxType: [0]*box<T>{}, box: rawNew<box<T>>(box<T>{lock: newRwLock(), value: v})}
 }
 
 // Read waits until no task holds the lock for writing, takes it for
 // reading, and returns the ReadGuard that holds it.
 func (l ref RwLock<T>) Read() ReadGuard<T> {
-	if p := ref l.p {
-		lockShared(p.lock)
-		return ReadGuard<T>{lock: p.lock, v: ref p.value}
-	}
-
-	panic(broken)
+	h := rawMut<box<T>, RwLock<T>>(l.box, l).lock
+	lockShared(h)
+	return ReadGuard<T>{lock: h, v: ref rawMut<box<T>, RwLock<T>>(l.box, l).value} // lent once the lock is held, so that it is the value as the lock keeps it
 }
 
 // Write waits until no task holds the lock at all, takes it for
 // writing, and returns the Guard that holds it.
 func (l ref RwLock<T>) Write() Guard<T> {
-	if p := ref l.p {
-		return guard(p)
-	}
-
-	panic(broken)
+	return guard(rawMut<box<T>, RwLock<T>>(l.box, l))
 }
 
-// Drop releases the runtime's lock; the value is dropped with the box.
+// Drop releases the runtime's lock and drops the value with the box.
 func (l mut RwLock<T>) Drop() {
-	if p := ref l.p {
-		freeLock(p.lock)
-	}
+	b := rawTake<box<T>>(l.box)
+	freeLock(b.lock)
 }
 
 // A ReadGuard holds a lock for reading and the ref borrow of the value
@@ -421,37 +396,25 @@ func (w ref WaitGroup) handle() int {
 	return w.a.Get().h
 }
 
-// guard takes the lock of the box p points at, for writing, and returns
-// the Guard holding it and the value: the one function that steps from
-// a ref of the lock to a mut of its value, for Lock and Write alike.
-func guard<T>(p ref *box<T>) Guard<T> {
-	b := inside(p)
+// guard takes the lock of the box b, for writing, and returns the Guard
+// holding it and the value: the one function that steps from the box a
+// lock lends to the mut of its value, for Lock and Write alike.
+func guard<T>(b mut box<T>) Guard<T> {
 	lock(b.lock)
 	return Guard<T>{lock: b.lock, v: mut b.value}
 }
 
-// retain returns an owned copy of the pointer a handle holds, for a new
-// handle on the same cell, or None for a handle whose Drop has run. The
-// caller raises the count the new handle is counted in.
-func retain<T>(p ref (*acell<T>?)) *acell<T>? {
-	if q := ref p {
-		return Some(alias(q))
-	}
-
-	return None
-}
-
-// The compiler provides these three. alias and leak are rc's: a second
-// owned copy of the pointer a borrow lends, and a pointer that moves in
-// and is not freed, which the atomic count makes safe here as the plain
-// count does there. inside returns the box a borrow of its pointer
-// lends, as a mut: the one place in the language a mut comes from a
-// ref, and the reason a lock exists. It is only called with the lock
-// taken, or about to be, so that no other task reaches the value at the
-// same time; it is not reachable from a program.
-func alias<T>(p ref *acell<T>) *acell<T>
-func leak<T>(p *acell<T>)
-func inside<T>(p ref *box<T>) mut box<T>
+// The compiler writes these for this package alone, the steps sharing
+// the language refuses elsewhere, which the count and the lock make
+// safe here: rawNew moves a cell or a box into a block of its own and
+// returns its address; rawMut lends the block at an address, a mut
+// through a ref, for as long as the handle is lent, its fields read in
+// place, the value changed only under the lock and the count only by an
+// atomic add; and rawTake moves the cell or box out and frees the
+// block, for the last handle.
+func rawNew<C>(c C) int
+func rawMut<C, H>(at int, h ref H) mut C
+func rawTake<C>(at int) C
 
 // The runtime provides these. A lock is held as an int, as a file is,
 // the runtime's own handle on it, never 0, and freed by the Mutex,

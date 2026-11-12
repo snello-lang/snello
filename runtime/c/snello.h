@@ -418,6 +418,7 @@ void sn_release(void **p); // frees the block an owned pointer holds and empties
 void sn_init(int argc, char **argv);
 
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size);
+void *sn_alloc_elems(int64_t n, size_t size);
 // SN_PUSH_FAST and SN_POP_FAST say when the C backend's Push and Pop
 // write in place, without the runtime: a push with room, and a pop of a
 // slice that owns its elements and has one; a sub-slice's capacity,

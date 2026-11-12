@@ -32,10 +32,11 @@ const most int = 4611686018427387904
 // is moved, or lent with ref and mut; when it goes out of scope, the
 // elements still in it are dropped with it. It has no zero value, as no
 // type that frees what it holds has: one comes from New or
-// WithCapacity. The empty array of T carries the element type, so that
-// a Deque is Send, Copy or neither as its elements are.
+// WithCapacity. The empty array of pointers to T carries the element
+// type, so that a Deque is Send as its elements are, and a pointer, so
+// that a type may hold a Deque of itself.
 struct Deque<T> impl Drop, fmt.Stringer {
-	elems [0]T
+	elemType [0]*T // holds nothing: it gives the deque its elements' type, so that it is Send as they are, and a pointer, so that a type may hold a Deque of itself
 	buf   int // the block of slots, 0 before the first is made
 	cap   int // the slots, a power of two, or 0
 	head  int // the slot of the front element
@@ -44,7 +45,7 @@ struct Deque<T> impl Drop, fmt.Stringer {
 
 // New returns an empty deque.
 func New<T>() Deque<T> {
-	return Deque<T>{elems: [0]T{}, buf: 0, cap: 0, head: 0, len: 0}
+	return Deque<T>{elemType: [0]*T{}, buf: 0, cap: 0, head: 0, len: 0}
 }
 
 // WithCapacity returns an empty deque with room for n elements before

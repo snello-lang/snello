@@ -55,18 +55,11 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		return ""
 	case "os.Exit":
 		return "sn_exit((int)(" + e.expr(x.Args[0]) + "))"
-	case "rc.alias", "sync.alias", "sync.inside": // a second copy of the pointer a borrow lends, owned by the caller, or the cell it points at as a mut: a ref borrow of a pointer is the pointer in C, and so is a mut of what it points at
-		t := e.typeOf(x.Args[0])
-		if r, ok := t.(*types.Ref); ok {
-			t = r.Elem()
-		}
-
-		return e.operands(x.Args, []types.Type{types.NewRef(t, false)})[0]
+	case "rc.rawNew", "rc.rawMut", "rc.rawFree", "rc.moveOut", "rc.leak",
+		"sync.rawNew", "sync.rawMut", "sync.rawTake":
+		return e.cellCall(x, key)
 	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove":
 		return e.rawCall(x, key)
-	case "rc.leak", "sync.leak": // the pointer moves in and nothing frees it
-		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
-		return ""
 	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
 		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
 		e.locate(x, fn)
@@ -386,24 +379,16 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 		return ""
 	}
 
-	id, ok := x.Fun.(*ast.Ident) // the library calls its own function by name
-	if sel, isSel := x.Fun.(*ast.SelectorExpr); isSel {
-		id, ok = sel.Sel, true
-	}
-
-	inst, found := e.info.Instances[id]
-	if !ok || !found || len(inst.TypeArgs) != 1 {
-		e.unsupported(x.Pos(), "a primitive of the deque's buffer without its element type")
+	t, ok := e.primitiveType(x)
+	if !ok {
 		return "0"
 	}
-
-	t := e.sub(inst.TypeArgs[0])
 	ct := e.cType(t, x.Pos())
 	slots := func(p string) string { return "((" + ct + " *)(intptr_t)(" + p + "))" }
 	switch key {
 	case "deque.rawAlloc":
 		n := e.operands(x.Args, ints(1))[0]
-		return "((sn_int)(intptr_t)sn_alloc((size_t)(" + n + ") * sizeof(" + ct + ")))"
+		return "((sn_int)(intptr_t)sn_alloc_elems(" + n + ", sizeof(" + ct + ")))"
 	case "deque.rawPut":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
 		e.line(slots(args[0]) + "[" + args[1] + "] = " + args[2] + ";")
@@ -425,4 +410,75 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 		e.line("__builtin_memmove(" + slots(args[0]) + " + " + args[1] + ", " + slots(args[2]) + " + " + args[3] + ", (size_t)(" + args[4] + ") * sizeof(" + ct + "));")
 		return ""
 	}
+}
+
+// cellCall writes a primitive of the cells rc and sync share among
+// handles: a cell is a block the handles hold as its address, which no
+// handle owns alone, so none drops it, and whichever handle the counts
+// say is last frees it. rawNew moves a value into a new cell; rawMut
+// lends the cell, the borrow tied to the handle, a mut through a ref,
+// which the count or the lock makes safe, its fields read in place and
+// never the whole cell copied; rawTake moves
+// the value out and frees the cell; rawFree frees a cell whose value is
+// gone; moveOut moves a value out of its place and leaves the place to
+// nothing, which the counts say is not read again; and leak gives a
+// handle up without its Drop. The cell's type is the first type
+// argument.
+func (e *Emitter) cellCall(x *ast.CallExpr, key string) string {
+	name := key[strings.IndexByte(key, '.')+1:]
+	word := []types.Type{types.Typ[types.Int]}
+	switch name {
+	case "rawFree":
+		e.line("sn_free((void *)(intptr_t)(" + e.operands(x.Args, word)[0] + "));")
+		return ""
+	case "leak": // the handle moves in and its Drop does not run
+		e.line("(void)" + e.operands(x.Args, []types.Type{e.typeOf(x.Args[0])})[0] + ";")
+		return ""
+	}
+
+	t, ok := e.primitiveType(x)
+	if !ok {
+		return "0"
+	}
+	ct := e.cType(t, x.Pos())
+	switch name {
+	case "rawNew":
+		v := e.spill(e.operands(x.Args, []types.Type{t})[0], t, x.Pos())
+		b := e.temp()
+		e.line(ct + " *" + b + " = sn_alloc(sizeof(" + ct + "));")
+		e.line("*" + b + " = " + v + ";")
+		return "((sn_int)(intptr_t)" + b + ")"
+	case "rawMut":
+		return "((" + ct + " *)(intptr_t)(" + e.operands(x.Args[:1], word)[0] + "))"
+	case "rawTake":
+		p := e.saved(x.Args[0], types.Typ[types.Int])
+		out := e.temp()
+		e.line(ct + " " + out + " = *(" + ct + " *)(intptr_t)(" + p + ");")
+		e.line("sn_free((void *)(intptr_t)(" + p + "));")
+		return out
+	default: // moveOut: the place is left to nothing, which the counts say is not read again
+		place := e.operands(x.Args, []types.Type{types.NewRef(t, true)})[0]
+		out := e.temp()
+		e.line(ct + " " + out + " = *" + place + ";")
+		return out
+	}
+}
+
+// primitiveType is the type a primitive the compiler writes for the
+// library works on, its call's first type argument: the element of the
+// deque's buffer, or the cell or box a handle holds. A call without one,
+// which the library never writes, is reported.
+func (e *Emitter) primitiveType(x *ast.CallExpr) (types.Type, bool) {
+	id, ok := x.Fun.(*ast.Ident) // the library calls its own function by name
+	if sel, isSel := x.Fun.(*ast.SelectorExpr); isSel {
+		id, ok = sel.Sel, true
+	}
+
+	inst, found := e.info.Instances[id]
+	if !ok || !found || len(inst.TypeArgs) == 0 {
+		e.unsupported(x.Pos(), "a primitive of the library's without its type")
+		return nil, false
+	}
+
+	return e.sub(inst.TypeArgs[0]), true
 }

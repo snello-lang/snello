@@ -838,6 +838,11 @@ func (c *Checker) superCall(e *ast.SelectorExpr) operand {
 		return invalidOperand
 	}
 
+	if e.Sel.Name == "Drop" { // a Drop runs once, by the language, as the selector says
+		c.errorf(e.Sel.Pos(), dropByHand(e.X))
+		return invalidOperand
+	}
+
 	recv := c.recv
 	base := receiverBase(recv.typ)
 	var order []*Trait        // the traits that may define the next M, most specific first

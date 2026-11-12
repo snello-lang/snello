@@ -70,7 +70,7 @@ Every way of making the zero of a type that has none is refused, each with what 
 |---|---|---|
 | `var m sync.Mutex<int>` | `cannot declare m without a value: sync.Mutex<int> has no zero value; give it one, or declare it sync.Mutex<int>?` | `m := sync.NewMutex(0)` |
 | `Box{n: 1}`, where `Box` has a field `p *int` | `missing field p in a Box literal: *int has no zero value; name it` | `Box{p: &x, n: 1}` |
-| `sync.Mutex<int>{}` | `cannot build a sync.Mutex<int> with a literal: it has no zero value, and its field p is not exported; use its package's functions` | `sync.NewMutex(0)` |
+| `sync.Mutex<int>{}` | `cannot build a sync.Mutex<int> with a literal: it has no zero value, and its field box is not exported; use its package's functions` | `sync.NewMutex(0)` |
 | `[2]*int{&a}` | `too few elements for [2]*int: 1 of 2, and *int has no zero value for the rest` | `[2]*int{&a, &b}` |
 | `make([]*Node, n)` | `make cannot fill a []*Node: *Node has no zero value; use make([]*Node, 0, n) and Push` | `make([]*Node, 0, n)`, then `Push` |
 | `print(m[k])`, the map's values `*Node` | `cannot read m[k]: *Node has no zero value for a key the map does not hold; use m.Get(k)` | `m.Get(k)`, a `ref *Node?` |
@@ -132,6 +132,7 @@ With the rule, the library's handles exist only from their constructors, and the
 - `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop` or hold a type that does, so a program gets one only from its `New` function, or from `Clone` and `Downgrade`. The panics an empty handle used to give are gone.
 - `strings.Repeat(s, n)` returns `string?`: `None` for a negative `n`, or for a string too long for an `int` to count.
 - `WaitGroup.Add(n)` and `Done()` return `bool`: `false`, with the count left as it was, when the count would go below zero, a `Done` with no `Add` before it.
+- `testing.Parallel()` returns `bool`: `false`, changing nothing, when the test runs in parallel already or the call is on a task the test spawned.
 
 ```go
 fmt.Println(strings.Repeat("ab", 3) ?? "", strings.Repeat("ab", -1).IsNone())
@@ -141,7 +142,7 @@ fmt.Println(wg.Done(), wg.Add(1), wg.Done())
 // false true true
 ```
 
-What still panics is what the language itself traps, a program's bug rather than a caller's choice: an index out of range, a division by zero, `Unwrap` on `None`, a send on a closed channel, and running out of memory. Inside `rc` and `sync`, a branch that only a broken invariant of the package could reach, a handle whose cell is gone before its `Drop`, keeps a panic that says so.
+What still panics is what the language itself traps, a program's bug rather than a caller's choice: an index out of range, a division by zero, `Unwrap` on `None`, a send on a closed channel, and running out of memory. Inside `rc` and `sync` no branch is left for a broken invariant: a handle holds its cell by address, with no empty state to check, so `Get`, `GetMut`, `Lock`, `Read` and `Write` have no case for a handle without its value, and since a program cannot call a `Drop` by hand, no handle outlives its cell. The library's other panics are how a test fails or skips, which the runner catches: `expect`, `testing.Skip`, and `testing.TempDir` when the system makes no directory.
 
 ## How this stays memory safe without a collector
 

@@ -45,6 +45,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A format is checked when the program is compiled: each verb prints the types it is for, the `0` flag pads a number, and a width and a precision are a million at most | format-verb, format-zero, format-size |
 | A bare name in a pattern binds, or names a variant or `true` and `false`; a constant's name is refused, since it would bind and match every value | match-constant |
 | A range over an iterator calls `Next` on it: not through a `ref`; one variable, or two for a pair; what it borrows, and the iterator variable itself, are lent for the loop | range-iterator |
+| A type's `Drop` runs once, when its value goes: a program does not call it, take it as a value, defer it or reach it through a bound; `_ = v` drops a value early | drop-by-hand |
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 

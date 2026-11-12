@@ -1,0 +1,89 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A type may hold handles on values of its own type: a tree whose nodes
+// own their children through Rc and point at their parent through a
+// Weak, a list of Arcs, and a node with a Deque of nodes. Each handle
+// holds its cell by address and carries a pointer to the cell's type,
+// so the type does not contain itself. A value may hold a Weak on
+// another cell of its own type, which outlives that cell's last Rc and
+// frees it when the value goes, and TryUnwrap leaves a cell to the Weaks
+// still alive. A debug build counts every block at the end, so a cell
+// freed twice or never fails it.
+
+package main
+
+import ("deque"; "fmt"; "rc"; "sync")
+
+struct Node {
+	name     string
+	parent   rc.Weak<Node>?
+	children []rc.Rc<Node>
+}
+
+struct Link {
+	value int
+	next  sync.Arc<Link>?
+}
+
+struct Selfish {
+	name string
+	me   rc.Weak<Selfish>?
+}
+
+struct Task {
+	name string
+	subs deque.Deque<Task>
+}
+
+func main() {
+	root := rc.New(Node{name: "root".Clone(), parent: None, children: []rc.Rc<Node>{}})
+	child := rc.New(Node{name: "child".Clone(), parent: Some(root.Downgrade()), children: []rc.Rc<Node>{}})
+	if parent := ref child.Get().parent {
+		if p := parent.Upgrade() {
+			fmt.Println(child.Get().name, "has parent", p.Get().name)
+		}
+	}
+
+	fmt.Println(root.StrongCount(), root.WeakCount(), child.StrongCount())
+	tail := sync.NewArc(Link{value: 2, next: None})
+	head := sync.NewArc(Link{value: 1, next: Some(tail.Clone())})
+	if next := ref head.Get().next {
+		fmt.Println(head.Get().value, "then", next.Get().value, tail.Count())
+	}
+
+	s := rc.New(Selfish{name: "selfish".Clone(), me: None})
+	w := s.Downgrade()
+	if m := s.GetMut() {
+		m.me = Some(w.Clone()) // refused while w is alive: GetMut needs the only handle
+	} else {
+		fmt.Println("GetMut refused while a Weak lives")
+	}
+
+	drop1 := rc.New(Selfish{name: "dropped".Clone(), me: None})
+	keep := drop1.Downgrade()
+	alone := match drop1.TryUnwrap() {
+		Ok(v) => v,
+		Err(_) => Selfish{name: "shared".Clone(), me: None},
+	}
+	mine := Selfish{name: alone.name.Clone(), me: Some(keep)} // a value holding a Weak on the cell its value left
+	if me := ref mine.me {
+		fmt.Println(mine.name, "points at a cell whose value is gone:", me.Upgrade().IsNone())
+	}
+
+	{
+		cyc := rc.New(Selfish{name: "cycle".Clone(), me: None})
+		weakCyc := cyc.Downgrade()
+		holder := rc.New(Selfish{name: "holder".Clone(), me: Some(weakCyc)})
+		fmt.Println(holder.Get().name, cyc.WeakCount())
+	} // cyc goes first, its cell kept for the Weak holder carries; then holder, whose value's drop frees that cell
+
+	fmt.Println(w.Upgrade().IsSome())
+	top := Task{name: "top".Clone(), subs: deque.New<Task>()}
+	top.subs.PushBack(Task{name: "a".Clone(), subs: deque.New<Task>()})
+	top.subs.PushFront(Task{name: "b".Clone(), subs: deque.New<Task>()})
+	for t := range top.subs.Iter() {
+		fmt.Println(top.name, "has", t.name, t.subs.Len())
+	}
+}

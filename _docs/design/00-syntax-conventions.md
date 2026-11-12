@@ -108,12 +108,13 @@ A declaration is not given a value later: `var m T` followed by an assignment on
 
 **In the library**
 
-- `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop`, so a program gets one only from its `New` function. Their "empty handle" panics can no longer be reached, and a `Weak` that may point at nothing is a `Weak<T>?`.
+- `sync`'s `Arc`, `Mutex`, `RwLock`, `Once`, `Counter` and `WaitGroup`, and `rc`'s `Rc` and `Weak`, implement `Drop`, so a program gets one only from its `New` function. Their "empty handle" panics are gone, and a `Weak` that may point at nothing is a `Weak<T>?`.
 - `strings.Repeat` returns `string?`: `None` for a negative count, or a string too long for an `int`.
 - `WaitGroup.Add` and `Done` return `bool`: `false`, with the count unchanged, when the count would go below zero.
 - `arena.Remove` takes its value without `Expect`.
+- `testing.Parallel` returns `bool`: `false`, changing nothing, when the test runs in parallel already or the call is on a task that is no test's own.
 
-With these, the library panics on no mistake a caller can make. A branch inside `rc` and `sync` that only a broken invariant could reach keeps a panic that says so.
+With these, the library panics on no mistake a caller can make, and has no branch that only a broken invariant could reach: `rc`'s and `sync`'s handles hold their cells by address, with no empty state, and a cell's value is where its count says it is, so `Get`, `Lock`, `Read` and `Write` have no case for a handle without its value. What still panics in the library is how a test fails or skips, which the test runner catches: `expect`, `testing.Skip`, and `testing.TempDir` when the system makes no directory.
 
 ## Heap allocation
 
@@ -213,4 +214,4 @@ A closure captures each variable in the weakest mode its body needs: by copy if 
 
 ## Destructors
 
-A type that implements `Drop` has `func (t mut T) Drop()`, run when the owner goes out of scope, on every exit path including panic unwinding. `defer` remains for cleanup not tied to a value.
+A type that implements `Drop` has `func (t mut T) Drop()`, run when the owner goes out of scope, on every exit path including panic unwinding. The language runs it, once: a program does not call `Drop` by hand, take it as a method value, defer it or reach it through a `T: Drop` bound, since the language would then run it again on a value whose resources are gone, as Rust refuses an explicit call of its destructor; `_ = v` drops a value early. `defer` remains for cleanup not tied to a value.

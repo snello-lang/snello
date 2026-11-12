@@ -47,8 +47,11 @@ func TempDir() Dir {
 
 // A State is one running test's: its name, with its subtests' after a
 // /, the lines it logged, whether it failed, whether Skip ended it and
-// why, whether it runs in parallel, and the lines it printed while it
-// did, held until it ends so that parallel tests' lines never mix.
+// why, whether it runs in parallel, the lines it printed while it did,
+// held until it ends so that parallel tests' lines never mix, and its
+// round's channels, the one it reports on and the gate a parallel test
+// waits at. A task that is no test's has no State, and so no round to
+// report to.
 struct State {
 	name     string
 	logged   string
@@ -57,6 +60,8 @@ struct State {
 	reason   string
 	parallel bool
 	held     string
+	done     chan Result
+	gate     chan ()
 }
 
 // A Result is what a test's task tells Main as it ends, or as it
@@ -68,17 +73,14 @@ struct Result {
 	held     string
 }
 
-// The registry: a state per running test, by the task it runs on, the
-// gate parallel tests wait at, and the channel their tasks report on,
-// in a lock, as a package variable every task changes must be; it is
-// made on first use, since its initializer is a call.
+// The registry: a state per running test, by the task it runs on, in a
+// lock, as a package variable every task changes must be; it is made on
+// first use, since its initializer is a call.
 struct Registry {
 	states map[int]State
-	gate   (chan ())?
-	done   (chan Result)?
 }
 
-var reg = sync.NewMutex(Registry{states: map[int]State{}, gate: None, done: None})
+var reg = sync.NewMutex(Registry{states: map[int]State{}})
 
 // The flags, as Main read them, stored once before any test runs and
 // read by the tests: a configuration, which is what an Atomic holds.
@@ -109,27 +111,6 @@ func with(f func(st mut State)) {
 	if st := g.Get().states.GetMut(ref task()) {
 		f(st)
 	}
-}
-
-// doneChan and gateChan are handles of the round's channels, taken
-// under the lock and used outside it, since a send or a receive may
-// wait, and nothing waits while holding the registry.
-func doneChan() (chan Result)? {
-	g := reg.Lock()
-	if d := ref g.Get().done {
-		return Some(d.Clone())
-	}
-
-	return None
-}
-
-func gateChan() (chan ())? {
-	g := reg.Lock()
-	if gate := ref g.Get().gate {
-		return Some(gate.Clone())
-	}
-
-	return None
 }
 
 // say prints a line of the running test's report, or holds it when
@@ -169,26 +150,29 @@ func Skip(why ref string) {
 
 // Parallel says the test runs beside the other parallel tests of the
 // package, after the sequential ones: the test waits here until they
-// are done, and Main goes on to the next test meanwhile.
-func Parallel() {
-	name := ""
-	twice := false
+// are done, and Main goes on to the next test meanwhile. It reports
+// whether it did: false, changing nothing, when the test runs in
+// parallel already, since a second notice would stand in for the
+// test's result, or when it is called on a task that is no test's own,
+// one a test spawned or a benchmark's, which has no round to tell. The
+// channels are taken under the registry's lock and used outside it,
+// since a send or a receive may wait, and nothing waits while holding
+// the registry.
+func Parallel() bool {
+	var notice (string, chan Result, chan ())?
 	with(func(st mut State) {
-		twice = st.parallel
-		st.parallel = true
-		name = st.name.Clone()
+		if !st.parallel {
+			st.parallel = true
+			notice = Some((st.name.Clone(), st.done.Clone(), st.gate.Clone()))
+		}
 	})
-	if twice { // a second notice would stand in for the test's result
-		panic("testing.Parallel called twice")
-	}
-
-	if done := doneChan() {
+	if (name, done, gate) := notice {
 		done <- Result{name: name, passed: true, parallel: true, held: ""}
+		<-gate
+		return true
 	}
 
-	if gate := gateChan() {
-		<-gate
-	}
+	return false
 }
 
 // Run runs f as a subtest named after the running test, Parent/name,
@@ -281,25 +265,24 @@ func sayLogged(logged ref string) {
 	}
 }
 
-// runTest is a test's task: it registers the test's state, runs it,
-// and reports the result with the lines held.
-func runTest(t Test) {
+// runTest is a test's task: it registers the test's state, with its
+// round's channels, runs it, and reports the result with the lines
+// held.
+func runTest(t Test, done chan Result, gate chan ()) {
 	id := task()
-	register(id, ref t.Name)
+	register(id, ref t.Name, done.Clone(), gate)
 	passed := run(t.F)
 	held := unregister(id)
-	if done := doneChan() {
-		done <- Result{name: t.Name.Clone(), passed: passed, parallel: false, held: held}
-	}
+	done <- Result{name: t.Name.Clone(), passed: passed, parallel: false, held: held}
 }
 
 // register and unregister keep the state of the test running on the
 // task id, under the registry's lock; unregister returns the lines the
 // test held.
-func register(id int, name ref string) {
+func register(id int, name ref string, done chan Result, gate chan ()) {
 	g := reg.Lock()
 	r := g.Get()
-	r.states[id] = State{name: name.Clone(), logged: "", failed: false, skipped: false, reason: "", parallel: false, held: ""}
+	r.states[id] = State{name: name.Clone(), logged: "", failed: false, skipped: false, reason: "", parallel: false, held: "", done: done, gate: gate}
 }
 
 func unregister(id int) string {
@@ -503,9 +486,8 @@ func Main(pkg ref string, tests []Test) {
 // its own, the sequential ones one at a time, the parallel ones
 // together after them, and returns how many failed.
 func round(tests ref []Test, order ref []int, only ref string) int {
-	openRound(len(tests))
-	done := doneChan() ?? panic("testing: no round open")
-	gate := gateChan() ?? panic("testing: no round open")
+	done := make(chan Result, len(tests)) // room for every test's report, so that no task waits to report
+	gate := make(chan (), 0)              // closed once the sequential tests are done: the parallel ones wait at it
 	failures := 0
 	waiting := 0
 	for _, i := range order {
@@ -518,7 +500,7 @@ func round(tests ref []Test, order ref []int, only ref string) int {
 			break
 		}
 
-		spawn runTest(Test{Name: t.Name.Clone(), F: t.F})
+		spawn runTest(Test{Name: t.Name.Clone(), F: t.F}, done.Clone(), gate.Clone())
 		if r := <-done {
 			if r.parallel {
 				waiting += 1
@@ -539,16 +521,6 @@ func round(tests ref []Test, order ref []int, only ref string) int {
 	}
 
 	return failures
-}
-
-// openRound gives the registry a round's channels: the gate the
-// parallel tests wait at, and the channel every test reports on, with
-// room for all so that no task waits to report.
-func openRound(n int) {
-	g := reg.Lock()
-	r := g.Get()
-	r.gate = Some(make(chan (), 0))
-	r.done = Some(make(chan Result, n))
 }
 
 // setFlags records the flags, before any test runs.
