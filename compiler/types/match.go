@@ -226,6 +226,14 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 			return pat{ctor: 1}
 		}
+
+		// A name that is a constant would bind a new variable and match
+		// everything, which is never what its writer meant: a Rust
+		// match takes a constant by its value, and a Go switch any
+		// expression. Until a constant is a pattern here, the arm says
+		// so.
+		c.errorf(p.Name.Pos(), p.Name.Name+" is a constant, not a pattern: write its value, or a guard, _ if x == "+p.Name.Name)
+		return wild
 	}
 
 	if b == nil && !IsCopy(t) {

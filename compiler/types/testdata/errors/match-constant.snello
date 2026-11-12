@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a bare name in a pattern binds a new variable, or names a
+// variant or true and false; a constant's name is refused, since it
+// would bind and match every value rather than its own.
+// Fix: the constant's value as a literal, or a guard, _ if x == name.
+
+package p
+
+const low int = 1
+const high int = 2
+
+func word(x int) string {
+    return match x {
+        low => "low",                       // ERROR "low is a constant, not a pattern: write its value, or a guard, _ if x == low"
+        _ if x == high => "high",
+        _ => "other",
+    }
+}
