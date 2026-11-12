@@ -651,6 +651,8 @@ typedef struct {
 
 sn_time sn_time_read(void);
 void sn_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono); // package time's clock
+sn_string sn_time_format(sn_string layout, int64_t sec, int64_t nsec);
+int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock, int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li);
 int64_t sn_time_mono(void); // the monotonic clock, in nanoseconds, never 0
 void sn_outside(int64_t n); // wakes promised by a thread that is not a worker; see sched.c
 int64_t sn_sync_newLock(void); // a sync lock's handle is its address; see the lock section of snello.c
@@ -730,6 +732,9 @@ void sn_chan_drop(sn_chan **c);
 void sn_chan_send(sn_chan *c, const void *v);
 bool sn_chan_offer(sn_chan *c, const void *v);
 void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
+bool sn_time_stopTimer(sn_chan *ch);
+bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every);
+bool sn_chan_poll(sn_chan *c, void *out);
 bool sn_chan_recv(sn_chan *c, void *out);
 void sn_chan_close(sn_chan *c);
 int64_t sn_chan_len(sn_chan *c);

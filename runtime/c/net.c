@@ -157,15 +157,15 @@ static int poller = -1;
 // compare-and-swap alone, so a wait takes no lock. A task in a word is
 // a wake promised from outside the workers, which the deadlock detector
 // counts, from just before the task goes in until it is taken out:
-// by the poller, which wakes it and then keeps the promise, as the
-// timer thread does, or by the task itself, after a wake that came for
+// by the poller, which wakes it and then keeps the promise, as a timer
+// that fires does, or by the task itself, after a wake that came for
 // something else.
 //
 // Each direction also has its deadline, as Go's pollDesc has rd and wd:
 // 0 for none, -1 once it has passed, and above zero while its timer is
-// in the timers' heap, kept at rt or wt. The timer fires on the timers'
-// thread: it marks the deadline passed and takes out the task waiting,
-// if one is, which finds it passed. A task puts itself in its word and
+// in a timing wheel, kept at rt or wt. When the timer fires, on a
+// worker between two tasks, it marks the deadline passed and takes out
+// the task waiting, if one is, which finds it passed. A task puts itself in its word and
 // then looks at the deadline, and the timer marks the deadline and then
 // looks at the word, both sequentially consistent, so one of the two
 // sees the other and no task waits past its deadline.
@@ -181,8 +181,8 @@ typedef struct {
     _Atomic uintptr_t w;
     _Atomic int64_t rd;
     _Atomic int64_t wd;
-    int64_t rt; // under the timers' lock
-    int64_t wt;
+    sn_deadline rt; // timer.c's, under its wheel's lock
+    sn_deadline wt;
 } poll_desc;
 
 // The descriptors are found by number in a table that never moves, so a
@@ -302,8 +302,8 @@ static void poller_start(void) {
 
 // expire marks a direction's deadline passed and takes out the task
 // waiting in its word, if one is, waking it to find the deadline passed.
-// It runs on the timers' thread when the deadline comes, and at once for
-// a deadline set in the past.
+// It runs on the thread that fires the deadline's timer when the
+// deadline comes, and at once for a deadline set in the past.
 static void expire(poll_desc *pd, bool write) {
     atomic_store(write ? &pd->wd : &pd->rd, -1);
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
@@ -342,6 +342,8 @@ static const char *watch(int fd) {
     atomic_store(&pd->w, pd_none);
     atomic_store(&pd->rd, 0);
     atomic_store(&pd->wd, 0);
+    atomic_store(&pd->rt.home, 0); // the wheel of the first deadline this socket arms, not the last socket's with its number
+    atomic_store(&pd->wt.home, 0);
 #if defined(__APPLE__)
     struct kevent ev[2];
     EV_SET(&ev[0], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, pd);
@@ -409,7 +411,7 @@ static int wait_fd(int fd, bool write) {
 int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
     poll_desc *pd = pd_of((int)fd);
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
-    int64_t *at = write ? &pd->wt : &pd->rt;
+    sn_deadline *at = write ? &pd->wt : &pd->rt;
     sn_deadline_disarm(at);
     if (set == 0) {
         atomic_store(dl, 0);

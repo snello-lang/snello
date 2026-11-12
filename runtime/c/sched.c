@@ -17,7 +17,8 @@
 // task that computes without ever waiting keeps its worker, and the
 // others keep running on the rest; a task it wakes meanwhile goes to
 // another worker through the monitor thread below, so that it holds
-// no task but its own.
+// no task but its own. The timers are timer.c's; the workers fire them
+// between their tasks, as the section on them below says.
 //
 // The main thread's own stack is the main task's. When the main task
 // first parks, the main thread takes a scheduler stack of its own and
@@ -43,8 +44,15 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef __linux__
+#if defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/event.h>
+#endif
+
 #include <sched.h>
+
+#ifdef __linux__
+#include <sys/prctl.h>
 #endif
 
 // sn_switch saves the callee-saved registers and the stack pointer of
@@ -193,6 +201,21 @@ typedef struct sn_task task;
 // another thread to run the task there.
 enum { ring_size = 256, stack_cache = 32 }; // a cache of 64 was measured no better
 
+// A worker with tasks to run looks past them once in outside_turns: it
+// fires the other wheels' timers that are due and takes a task from the
+// inject queue before its own, so that what the poller woke waits for
+// no queue to empty. It is the interval at which Go's worker looks at
+// its global queue and Tokio's looks past its tasks at its timers and
+// sockets: a prime, so that it falls in step with no period a program
+// has.
+//
+// Two tasks handing a value back and forth wake each other into the
+// runnext slot, which runs before the queue, and would keep the worker
+// between them for as long as they trade while the tasks queued behind
+// them wait. The slot's task runs first next_most times in a row, as
+// Tokio's does, and then the queue's head does.
+enum { outside_turns = 61, next_most = 3 };
+
 typedef struct {
     void *sched_sp;
     void *sched_stack;
@@ -214,6 +237,9 @@ typedef struct {
     // lock, half the cache at a time.
     void *stacks[stack_cache];
     int nstacks;
+    int turns;       // tasks it runs before it looks at what comes from outside again: the other wheels' timers and the inject queue
+    int streak;      // tasks it has run out of its runnext slot in a row
+    int64_t owes_at; // a deadline it may have left no one to wake for: it sees to it before its next task, or keeps time itself in its wait; the greatest time for none
 } worker;
 
 static worker *workers;
@@ -251,16 +277,63 @@ static pthread_mutex_t idle_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t idle_cond = PTHREAD_COND_INITIALIZER;
 static _Atomic int idle; // workers waiting for work
 static _Atomic int spinning; // workers looking for work before they wait, at most one
-static _Atomic int64_t outside; // wakes promised by threads that are not workers: the timers in the heap, the sockets the poller watches
+static _Atomic int64_t outside; // wakes promised by the poller's thread: the sockets it watches
 
-// sn_outside counts n more wakes promised by a thread that is not a
-// worker, or n fewer once one has reached its task. When none is left,
-// the idle workers look again at whether any task can still be woken.
+// Who fires the timers, which timer.c keeps in a wheel per worker. No
+// thread is kept for them: a timer is fired by a worker, on its way
+// from one task to the next, so that the task it wakes runs next on the
+// thread that fired it and no other thread is woken for it.
+//
+// A worker with tasks to run fires its own wheel's as they come due,
+// and looks at the other wheels once in outside_turns of them. A worker
+// with nothing to run fires what is due before it looks for work, and
+// while it spins. One of the workers that wait for work keeps time: the
+// keeper sleeps until the earliest deadline of any wheel and no longer,
+// as the one thread of a scheduler without threads sleeps until its
+// earliest, and the others wait for work alone. When every worker is
+// busy with tasks that do not let go, no task a timer woke could run,
+// and the monitor fires what is due at each of its looks, so that a
+// task polling a timer's channel without a wait still finds its time
+// there.
+//
+// keeping says a worker is the keeper and wake_at the time it wakes at,
+// the greatest when none keeps; both are written under idle_mu. Whoever
+// starts a timer before wake_at wakes the keeper to read the deadlines
+// again, or a waiting worker to be the keeper: it writes the deadline
+// before it reads how many are idle, and a worker counts itself idle
+// before it reads the deadlines, so one of the two sees the other. A
+// keeper that wakes looks at the deadlines again before it waits or
+// runs a task, so wake_at rises only when someone is looking.
+static _Atomic int64_t wake_at = INT64_MAX;
+static bool keeping;
+static void keeper_wake(void);
+
+// sn_sched_recheck has the waiting workers look again at whether any
+// task can still be woken, when every worker waits.
+void sn_sched_recheck(void) {
+    if (atomic_load(&idle) != nworkers) {
+        return;
+    }
+
+    pthread_mutex_lock(&idle_mu);
+    pthread_cond_broadcast(&idle_cond);
+    if (keeping) {
+        keeper_wake();
+    }
+
+    pthread_mutex_unlock(&idle_mu);
+}
+
+// sn_outside counts n more wakes promised by the poller's thread, or n
+// fewer once one has reached its task. When none is left
+// and every worker is idle, the idle workers look again at whether any
+// task can still be woken. While a worker is busy there is no one to
+// tell: it counts itself idle before it reads this count, and this
+// reads the idle count after it changes its own, so one of the two
+// sees the other.
 void sn_outside(int64_t n) {
     if (atomic_fetch_add(&outside, n) + n == 0) {
-        pthread_mutex_lock(&idle_mu);
-        pthread_cond_broadcast(&idle_cond);
-        pthread_mutex_unlock(&idle_mu);
+        sn_sched_recheck();
     }
 }
 
@@ -277,7 +350,12 @@ void sn_outside(int64_t n) {
 // program cannot end. Go's runtime stops such a program with the same
 // message.
 static bool deadlocked(void) {
-    return atomic_load(&idle) == nworkers && atomic_load(&nexts) == 0 && atomic_load(&queued) == 0 && atomic_load(&outside) == 0;
+    // Whoever keeps a promise queues the task first and takes the
+    // promise off its count second, and the monitor queues a slot's task
+    // before it takes it off the count of slots, so the counts are read
+    // in the other order: a promise or a slot read gone means the task
+    // it put on a queue is counted there by the time the queue is read.
+    return atomic_load(&idle) == nworkers && atomic_load(&outside) == 0 && sn_timers_pending() == 0 && atomic_load(&nexts) == 0 && atomic_load(&queued) == 0;
 }
 
 static const size_t stack_size = 256 << 10; // a task's stack, as step one's thread stack was
@@ -394,7 +472,7 @@ sn_string *sn_task_places(void) {
     return sn_self()->places;
 }
 
-static _Atomic int waiting; // workers blocked in the idle wait, under idle_mu
+static _Atomic int waiting; // workers blocked in the idle wait for work alone, the keeper not among them, under idle_mu
 static int handed;          // spins given to signalled workers not yet back from the wait, under idle_mu
 
 // wake_idle wakes one worker blocked waiting for work, if one is and
@@ -407,7 +485,9 @@ static int handed;          // spins given to signalled workers not yet back fro
 // worker a broadcast or a spurious return woke finds none handed and
 // takes nothing, so there is one spinner at a time still. A signal
 // goes only to a worker counted blocked, under the lock it blocks
-// with, so a spin is never handed to no one.
+// with, so a spin is never handed to no one. The keeper is woken only
+// when no other worker waits, so that the timers keep their keeper
+// while there is another to run the work.
 static void wake_idle(void) {
     if (atomic_load(&idle) == 0 || atomic_load(&spinning) != 0) {
         return;
@@ -415,9 +495,13 @@ static void wake_idle(void) {
 
     pthread_mutex_lock(&idle_mu);
     int expected = 0;
-    if (atomic_load(&waiting) > 0 && atomic_compare_exchange_strong(&spinning, &expected, 1)) {
+    if ((atomic_load(&waiting) > 0 || keeping) && atomic_compare_exchange_strong(&spinning, &expected, 1)) {
         handed++;
-        pthread_cond_signal(&idle_cond);
+        if (atomic_load(&waiting) > 0) {
+            pthread_cond_signal(&idle_cond);
+        } else {
+            keeper_wake();
+        }
     }
 
     pthread_mutex_unlock(&idle_mu);
@@ -636,14 +720,25 @@ static task *take_next(worker *w, int64_t stale) {
     return t;
 }
 
+// next_task is the task w runs next: the one in its runnext slot, then
+// its queue's head, the inject queue's, and half of another worker's
+// queue. Once the slot's task has run first next_most times in a row,
+// the queue's head runs before it.
 static task *next_task(worker *w) {
-    task *t = take_next(w, 0);
+    bool turn_over = w->streak >= next_most;
+    task *t = turn_over ? NULL : take_next(w, 0);
+    if (t != NULL) {
+        w->streak++;
+        return t;
+    }
+
+    w->streak = 0;
+    t = pop(w);
     if (t != NULL) {
         return t;
     }
 
-    t = pop(w);
-    if (t != NULL) {
+    if (turn_over && (t = take_next(w, 0)) != NULL) { // nothing was queued behind it
         return t;
     }
 
@@ -780,8 +875,16 @@ static bool spin(bool holding) {
             break;
         }
 
-        if (i % 64 == 0 && sn_time_mono() > until) {
-            break;
+        if (i % 64 == 0) {
+            int64_t now = sn_time_mono();
+            if (sn_timers_next() <= now) { // a timer came due: firing it is the work
+                found = true;
+                break;
+            }
+
+            if (now > until) {
+                break;
+            }
         }
 
         sn_spin_hint();
@@ -791,6 +894,104 @@ static bool spin(bool holding) {
     found = found || atomic_load(&queued) > 0; // a push or an inject that saw it spinning woke no one: it looks once more
     spun(found);
     return found;
+}
+
+// The keeper's wait: until a time of the monotonic clock, which the
+// system never sets back, so that a change of the wall clock moves no
+// timer, or until keeper_wake. How it sleeps is each system's most
+// exact way that another thread can end: measured, a wait on a
+// condition returns a quarter of the wait late on Darwin, where a
+// kqueue's critical timer returns a fiftieth late, and Linux adds its
+// timer slack of 50 µs to a thread's every timed wait unless the thread
+// asks for none, as each worker does when it starts. A deadline nearer
+// than keeper_near, which no sleep in the kernel returns in time for,
+// is waited for by spinning. The caller holds idle_mu, which the wait
+// lets go of while it sleeps, as a condition's does. A wake that finds
+// the keeper between two waits is kept for the next, which then returns
+// at once to a keeper that reads the deadlines again.
+static const int64_t keeper_near = 20000; // 20 µs
+
+static _Atomic bool keeper_woken;
+
+#if defined(__APPLE__)
+enum { keeper_timer = 1, keeper_user = 2 }; // the two events of the keeper's queue
+
+static int keeper_queue = -1;
+
+static void keeper_start(void) {
+    keeper_queue = kqueue();
+    struct kevent ev;
+    EV_SET(&ev, keeper_user, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (keeper_queue < 0 || fcntl(keeper_queue, F_SETFD, FD_CLOEXEC) < 0 || kevent(keeper_queue, &ev, 1, NULL, 0, NULL) < 0) {
+        sn_panic(SN_STR("cannot start the scheduler", 26));
+    }
+}
+
+static void keeper_sleep(int64_t when, int64_t now) {
+    pthread_mutex_unlock(&idle_mu);
+    struct kevent ev, got[2];
+    EV_SET(&ev, keeper_timer, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS | NOTE_CRITICAL, when - now, NULL);
+    (void)kevent(keeper_queue, &ev, 1, got, 2, NULL); // a wait cut short is a wake: the keeper reads the deadlines again
+    pthread_mutex_lock(&idle_mu);
+}
+
+static void keeper_rouse(void) {
+    struct kevent ev;
+    EV_SET(&ev, keeper_user, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    (void)kevent(keeper_queue, &ev, 1, NULL, 0, NULL);
+}
+#else
+static pthread_cond_t keeper_cond;
+
+static void keeper_start(void) {
+    pthread_condattr_t attr;
+    pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&keeper_cond, &attr);
+    pthread_condattr_destroy(&attr);
+}
+
+static void keeper_sleep(int64_t when, int64_t now) {
+    (void)now;
+    when--; // a reading is the clock's and one, so that none is 0
+    struct timespec ts = {(time_t)(when / 1000000000), (long)(when % 1000000000)};
+    pthread_cond_timedwait(&keeper_cond, &idle_mu, &ts);
+}
+
+static void keeper_rouse(void) {
+    pthread_cond_signal(&keeper_cond);
+}
+#endif
+
+// keeper_wait is the keeper's wait until when; now is the clock's
+// reading a moment ago.
+static void keeper_wait(int64_t when, int64_t now) {
+    atomic_store(&keeper_woken, false);
+    if (when - now > keeper_near) {
+        keeper_sleep(when, now);
+        return;
+    }
+
+    pthread_mutex_unlock(&idle_mu);
+    while (!atomic_load(&keeper_woken) && sn_time_mono() < when) {
+        sn_spin_hint();
+    }
+
+    pthread_mutex_lock(&idle_mu);
+}
+
+// keeper_wake ends the keeper's wait; the caller holds idle_mu and has
+// found a keeper. wake_at is the least time from here until the keeper
+// has the lock again, so that no one who starts a timer meanwhile wakes
+// it twice: it is on its way to read the deadlines.
+static void keeper_wake(void) {
+    if (atomic_load(&keeper_woken)) {
+        return;
+    }
+
+    atomic_store(&keeper_woken, true);
+    atomic_store(&wake_at, INT64_MIN);
+    keeper_rouse();
 }
 
 // The monitor thread watches the workers for the one thing a scheduler
@@ -852,7 +1053,11 @@ static void *monitor_main(void *arg) {
         pthread_mutex_unlock(&monitor_mu);
         struct timespec until = {0, (long)pause};
         nanosleep(&until, NULL);
-        bool moved = false;
+        bool moved = sn_timers_fire(sn_time_mono()); // what came due with every worker busy
+        if (moved) {
+            sn_sched_timer_set(sn_timers_next()); // a worker may wait by now, and for no deadline
+        }
+
         if (atomic_load(&nexts) > 0) {
             for (int i = 0; i < nworkers; i++) {
                 moved = move_next(&workers[i]) || moved;
@@ -865,13 +1070,40 @@ static void *monitor_main(void *arg) {
     return NULL; // never reached: a thread's function has a result to give
 }
 
-// sched_loop runs the worker: the next task, or a spin and then a wait
-// for one.
+// sched_loop runs the worker: the next task, or the timers that are
+// due, a spin and then a wait for one.
 static void sched_loop(worker *w) {
+#ifdef __linux__
+    prctl(PR_SET_TIMERSLACK, 1UL, 0UL, 0UL, 0UL); // a keeper's wait ends at its deadline, not the 50 µs after it a thread's timed wait is given by default
+#endif
     bool woken = false;   // out of a wait or a spin with work found: the pushes meanwhile woke no one, so it wakes a worker for what it leaves
     bool holding = false; // woken to spin, and holding the spin until it finds work or spins it out
+    int64_t index = w - workers;
     for (;;) {
-        task *t = next_task(w);
+        // Its own wheel's timers are fired before it takes its next
+        // task, so that a task a timer wakes into the slot is the one it
+        // takes; the clock is read only when its wheel holds a timer,
+        // since a reading costs about what a switch does. The other
+        // wheels are looked at once in outside_turns.
+        task *t = NULL;
+        bool look = --w->turns <= 0;
+        if (look || sn_timers_next_of(index) != INT64_MAX) {
+            int64_t now = sn_time_mono();
+            bool fired = look ? sn_timers_fire(now) : sn_timers_fire_own(index, now);
+            if (fired && atomic_load(&idle) > 0) {
+                sn_sched_timer_set(sn_timers_next()); // what it fired may run long here: a waiting worker keeps time for the rest
+            }
+        }
+
+        if (look) {
+            w->turns = outside_turns;
+            t = take_injected();
+        }
+
+        if (t == NULL) {
+            t = next_task(w);
+        }
+
         if (t == NULL) {
             t = steal_next(w);
         }
@@ -880,6 +1112,12 @@ static void sched_loop(worker *w) {
             if (holding) {
                 holding = false;
                 atomic_store(&spinning, 0);
+            }
+
+            if (w->owes_at != INT64_MAX) { // the task may run long: a waiting worker keeps time
+                int64_t at = w->owes_at;
+                w->owes_at = INT64_MAX;
+                sn_sched_timer_set(at);
             }
 
             if (woken) {
@@ -893,10 +1131,16 @@ static void sched_loop(worker *w) {
             continue;
         }
 
+        if (sn_timers_fire(sn_time_mono())) {
+            w->owes_at = sn_timers_next();
+            continue; // next_task takes what a timer woke
+        }
+
         if (spin(holding)) {
             holding = false; // spin gave the spin up
             woken = true;
-            continue; // next_task takes what was found: the inject queue, or a steal
+            w->owes_at = sn_timers_next(); // a timer started while it spun was told to no one, since a spinner is what a wake finds first
+            continue; // next_task takes what was found, the inject queue or a steal, or a timer came due
         }
 
         holding = false;
@@ -920,9 +1164,27 @@ static void sched_loop(worker *w) {
             }
 
             int64_t asleep = sn_time_mono();
-            atomic_fetch_add(&waiting, 1);
-            pthread_cond_wait(&idle_cond, &idle_mu);
-            atomic_fetch_sub(&waiting, 1);
+            int64_t first = sn_timers_next();
+            if (first <= asleep) {
+                break; // a timer is due: it leaves the wait to fire it
+            }
+
+            if (!keeping && first != INT64_MAX) { // no one wakes for the timers: it does
+                keeping = true;
+                atomic_store(&wake_at, first);
+                keeper_wait(first, asleep);
+                keeping = false;
+                atomic_store(&wake_at, INT64_MAX);
+            } else {
+                if (keeping && first < atomic_load(&wake_at)) {
+                    keeper_wake(); // the keeper sleeps past the earliest timer: it reads the deadlines again
+                }
+
+                atomic_fetch_add(&waiting, 1);
+                pthread_cond_wait(&idle_cond, &idle_mu);
+                atomic_fetch_sub(&waiting, 1);
+            }
+
             if (handed > 0) { // a signal with a spin woke it; a broadcast or a spurious return hands none
                 handed--;
                 holding = true;
@@ -936,6 +1198,7 @@ static void sched_loop(worker *w) {
         bool first = atomic_fetch_sub(&idle, 1) == nworkers;
         pthread_mutex_unlock(&idle_mu);
         woken = true;
+        w->owes_at = sn_timers_next(); // it may have been the keeper, or woken to be: before it runs a task, another keeps
         if (first) {
             monitor_wake(); // the first worker busy again: the monitor's lock is never taken under idle_mu
         }
@@ -990,7 +1253,7 @@ int64_t sn_cores(void) {
 }
 
 // start makes the workers, the main thread the first and one thread
-// per further core, and the monitor when there is more than one.
+// per further core, the timers' wheels and the monitor.
 static void start(void) {
     pthread_mutex_lock(&start_mu);
     if (!started) {
@@ -1004,8 +1267,15 @@ static void start(void) {
             pthread_mutex_init(&workers[i].mu, NULL);
         }
 
+        keeper_start();
+        sn_timers_start(nworkers);
+
         if (my_worker() == NULL) {
             self_worker = &workers[0]; // the main thread
+        }
+
+        for (int i = 0; i < nworkers; i++) {
+            workers[i].owes_at = INT64_MAX;
         }
 
         started = true;
@@ -1013,12 +1283,59 @@ static void start(void) {
             start_thread(worker_main, &workers[i]);
         }
 
-        if (nworkers > 1) {
-            start_thread(monitor_main, NULL); // with one worker there is none to move a task to
-        }
+        start_thread(monitor_main, NULL);
     }
 
     pthread_mutex_unlock(&start_mu);
+}
+
+// sn_sched_start starts the workers if they are not, for a timer
+// started before any task was spawned; sn_worker_index is the index of
+// the current thread's worker, which every thread that starts a timer
+// has.
+void sn_sched_start(void) {
+    if (!started) {
+        start();
+    }
+}
+
+int64_t sn_worker_index(void) {
+    return my_worker() - workers;
+}
+
+// sn_sched_timer_set has a worker keep time for a timer started at
+// when, if the keeper sleeps past it or there is none: the keeper reads
+// the deadlines again, or a waiting worker is woken as it is for work,
+// one at a time, and finds no task and keeps time in its wait; until it
+// is there no other is woken, so that the workers running tasks that
+// sleep take no lock for each. With no worker idle there is no one to
+// tell: the first to wait reads the deadlines itself.
+void sn_sched_timer_set(int64_t when) {
+    int64_t kept = atomic_load(&wake_at);
+    if (when >= kept || atomic_load(&idle) == 0) {
+        return;
+    }
+
+    if (kept == INT64_MAX) {
+        wake_idle();
+        return;
+    }
+
+    pthread_mutex_lock(&idle_mu);
+    if (keeping && when < atomic_load(&wake_at)) {
+        keeper_wake();
+    }
+
+    pthread_mutex_unlock(&idle_mu);
+}
+
+// sn_sched_owe notes a deadline the worker sees to once the task that
+// started it has parked: on its way to its next task, or in its wait.
+void sn_sched_owe(int64_t when) {
+    worker *w = my_worker();
+    if (when < w->owes_at) {
+        w->owes_at = when;
+    }
 }
 
 // task_entry is where a task's context begins: the function with its
@@ -1100,390 +1417,45 @@ void sn_park(void) {
     }
 }
 
-// sn_wake makes a parked task runnable, or keeps the wake for a task
-// still running or parking, which consumes it at its next park.
-void sn_wake(sn_task *t) {
+// A wake has two halves. sn_wake_claim makes a parked task runnable
+// and reports that the caller is to queue it, or keeps the wake for a
+// task still running or parking, which consumes it at its next park,
+// and reports that there is nothing to queue. sn_wake_queue queues a
+// task claimed. Between the two the task is the caller's alone: no one else
+// can run it, so what is on its stack stands, and a caller that claimed
+// under a lock of its own may queue once it has let the lock go.
+bool sn_wake_claim(sn_task *t) {
     for (;;) {
         int s = atomic_load(&t->state);
         if (s == PARKED) {
-            if (!atomic_compare_exchange_strong(&t->state, &s, RUNNABLE)) {
-                continue;
+            if (atomic_compare_exchange_strong(&t->state, &s, RUNNABLE)) {
+                return true;
             }
 
-            worker *w = my_worker();
-            if (w != NULL) {
-                put_next(w, t); // woken by a task: it runs next on this worker
-            } else {
-                inject(t); // by the timer's or the poller's thread
-            }
-
-            return;
+            continue;
         }
 
         if ((s & WOKEN) != 0 || s == DONE || atomic_compare_exchange_strong(&t->state, &s, s | WOKEN)) {
-            return; // the wake is kept for the task's park, or was already
+            return false; // the wake is kept for the task's park, or was already
         }
     }
 }
 
-// Timers: a heap of deadlines, served by one thread that sleeps until
-// the earliest. A timer either wakes a sleeping task, or, for After and
-// Tick, puts the time in a channel, or calls a function of the runtime's
-// own, as a socket's deadline does; a ticking one goes back in the heap
-// for its next tick. An After or a Tick is so an entry in the heap, as
-// in Go's runtime, and no task waits for it. A channel's timer holds a
-// handle of its own: an After drops it once it fired, a Tick once no
-// other handle is left to receive with, and so the channel of an After
-// no one received from is freed when it fires.
-typedef struct {
-    int64_t when;
-    task *t;
-    bool *fired;    // the sleeping task's own flag, set under timers_mu
-    sn_chan *ch;    // or the channel the time goes to
-    int64_t every;  // and, for a Tick, its period
-    void (*fire)(void *); // or the function to call, with arg
-    void *arg;
-    int64_t *at; // where the function's timer is kept: one more than its index in the heap, 0 when out of it
-} timer;
-
-// The deadlines are on the monotonic clock, which the system never sets
-// back, so a change of the wall clock moves no timer. timers_cond is
-// made by start_timing, waiting on that clock where the system lets a
-// condition choose it, and the timer's thread waits a relative time
-// where it does not.
-static pthread_mutex_t timers_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t timers_cond;
-static timer *timers;
-static int64_t ntimers, captimers;
-static bool timing;
-static int64_t firing;   // channel timers fired and not yet done with their handle
-static bool stopping;    // the program is ending: no timer fires again
-static pthread_cond_t fired_cond = PTHREAD_COND_INITIALIZER;
-
-// place puts x at index i of the heap, and tells a channel's timer
-// where it is, so that the timer can be taken out when no one is left
-// to receive what it would send. The caller holds timers_mu.
-static void place(int64_t i, timer x) {
-    timers[i] = x;
-    if (x.ch != NULL) {
-        sn_chan_placeTimer(x.ch, i);
-    } else if (x.at != NULL) {
-        *x.at = i + 1;
+void sn_wake_queue(sn_task *t) {
+    worker *w = my_worker();
+    if (w != NULL) {
+        put_next(w, t); // woken on a worker: it runs next there
+    } else {
+        inject(t); // by the poller's thread or the monitor
     }
 }
 
-// sift_up and sift_down put x where the heap's order wants it, from the
-// hole at i.
-static void sift_up(int64_t i, timer x) {
-    while (i > 0 && timers[(i - 1) / 2].when > x.when) {
-        place(i, timers[(i - 1) / 2]);
-        i = (i - 1) / 2;
+// sn_wake makes a parked task runnable, or keeps the wake for a task
+// still running or parking.
+void sn_wake(sn_task *t) {
+    if (sn_wake_claim(t)) {
+        sn_wake_queue(t);
     }
-
-    place(i, x);
-}
-
-static void sift_down(int64_t i, timer x) {
-    for (;;) {
-        int64_t l = 2 * i + 1, r = l + 1, m = i;
-        if (l < ntimers && timers[l].when < x.when) {
-            m = l;
-        }
-
-        if (r < ntimers && timers[r].when < (m == i ? x.when : timers[m].when)) {
-            m = r;
-        }
-
-        if (m == i) {
-            break;
-        }
-
-        place(i, timers[m]);
-        i = m;
-    }
-
-    place(i, x);
-}
-
-// timer_push puts x in the heap; the caller holds timers_mu. Every
-// timer is counted outside until what it wakes is woken.
-static void timer_push(timer x) {
-    sn_outside(1);
-    if (ntimers == captimers) {
-        captimers = captimers == 0 ? 64 : captimers * 2;
-        timers = realloc(timers, (size_t)captimers * sizeof *timers);
-        if (timers == NULL) {
-            sn_panic(SN_STR("out of memory", 13));
-        }
-    }
-
-    sift_up(ntimers++, x);
-}
-
-// timer_remove takes the timer at i out of the heap and returns it; the
-// caller holds timers_mu.
-static timer timer_remove(int64_t i) {
-    timer gone = timers[i];
-    timer x = timers[--ntimers];
-    if (i < ntimers) {
-        if (i > 0 && timers[(i - 1) / 2].when > x.when) {
-            sift_up(i, x);
-        } else {
-            sift_down(i, x);
-        }
-    }
-
-    if (gone.ch != NULL) {
-        sn_chan_placeTimer(gone.ch, -1);
-    } else if (gone.at != NULL) {
-        *gone.at = 0;
-    }
-
-    return gone;
-}
-
-static timer timer_pop(void) {
-    return timer_remove(0);
-}
-
-static void *timer_main(void *arg) {
-    (void)arg;
-    pthread_mutex_lock(&timers_mu);
-    for (;;) {
-        if (ntimers == 0 || stopping) {
-            pthread_cond_wait(&timers_cond, &timers_mu);
-            continue;
-        }
-
-        int64_t when = timers[0].when;
-        int64_t now = sn_time_mono();
-        if (when <= now) {
-            timer due = timer_pop();
-            if (due.fire != NULL) { // under the lock, so that a disarm either takes it out first or waits for it to finish
-                due.fire(due.arg);
-                sn_outside(-1);
-                continue;
-            }
-
-            if (due.ch == NULL) { // wake first, then fire, both under the lock: once the task sees its flag, nothing here touches it again
-                sn_wake(due.t);
-                *due.fired = true;
-                sn_outside(-1);
-                continue;
-            }
-
-            // A Tick's next tick is on the period, past the ticks a slow
-            // receiver missed.
-            int64_t next = due.every > 0 ? now + due.every - (now - due.when) % due.every : 0;
-            firing++;
-            pthread_mutex_unlock(&timers_mu); // the channel's lock is never taken under this one
-            sn_time at = sn_time_read();
-            bool heard = sn_chan_offer(due.ch, &at);
-            pthread_mutex_lock(&timers_mu);
-            bool again = heard && due.every > 0 && !stopping;
-            if (again) {
-                due.when = next;
-                timer_push(due); // counted outside before this one stops counting, so the count never passes through zero
-                if (sn_chan_alone(due.ch)) {
-                    // The program's last handle went after the offer and
-                    // before the push, so its drop found no timer in the
-                    // heap to take out: this does it. The drop takes away
-                    // its handle before it looks for the timer, and the
-                    // push places the timer before this looks at the
-                    // handles, so one of the two always sees the other.
-                    timer_remove(sn_chan_timer(due.ch));
-                    sn_outside(-1);
-                    again = false;
-                }
-            }
-
-            if (again) {
-                due.ch = NULL; // the handle went back in the heap with the Tick
-            }
-
-            pthread_mutex_unlock(&timers_mu);
-            sn_chan_drop(&due.ch); // an After's handle, or a Tick's no one can receive from: nothing when it went back in the heap
-            sn_outside(-1);
-            pthread_mutex_lock(&timers_mu);
-            firing--;
-            pthread_cond_broadcast(&fired_cond);
-            continue;
-        }
-
-#if defined(__APPLE__)
-        int64_t wait = when - now;
-        struct timespec rel = {(time_t)(wait / 1000000000), (long)(wait % 1000000000)};
-        pthread_cond_timedwait_relative_np(&timers_cond, &timers_mu, &rel);
-#else
-        struct timespec ts = {(time_t)(when / 1000000000), (long)(when % 1000000000)};
-        pthread_cond_timedwait(&timers_cond, &timers_mu, &ts);
-#endif
-    }
-
-    return NULL;
-}
-
-// deadline is the time d from now on the monotonic clock, the largest
-// time when that is past it, so that a Sleep or an After of the longest
-// Duration waits for as long as there is rather than wrapping round to
-// fire at once.
-static int64_t deadline(int64_t d) {
-    int64_t now = sn_time_mono();
-    return d > INT64_MAX - now ? INT64_MAX : now + d;
-}
-
-// start_timing makes the timer's condition and starts its thread, once;
-// the caller holds timers_mu.
-static void start_timing(void) {
-    if (timing) {
-        return;
-    }
-
-    pthread_condattr_t cattr;
-    pthread_condattr_init(&cattr);
-#if !defined(__APPLE__)
-    pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
-#endif
-    pthread_cond_init(&timers_cond, &cattr);
-    pthread_condattr_destroy(&cattr);
-    pthread_t id;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&id, &attr, timer_main, NULL) != 0) {
-        sn_panic(SN_STR("cannot start the timer", 22));
-    }
-
-    pthread_attr_destroy(&attr);
-    timing = true;
-}
-
-// sn_deadline_arm calls fire with arg d from now, on the timers'
-// thread, under timers_mu: a function that takes no lock the timers'
-// thread waits behind. The timer is kept at *at, which is 0 while it is
-// out of the heap; arming it again moves it. Like every timer it is a
-// wake promised from outside the workers until it fires or is disarmed.
-void sn_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg) {
-    pthread_mutex_lock(&timers_mu);
-    start_timing();
-    if (*at > 0) {
-        timer_remove(*at - 1);
-        sn_outside(-1);
-    }
-
-    timer_push((timer){.when = deadline(d), .fire = fire, .arg = arg, .at = at});
-    pthread_cond_signal(&timers_cond);
-    pthread_mutex_unlock(&timers_mu);
-}
-
-// sn_deadline_disarm takes the timer kept at *at out of the heap, if it
-// is in it. Once it returns, the timer's function is not running and
-// will not run.
-void sn_deadline_disarm(int64_t *at) {
-    pthread_mutex_lock(&timers_mu);
-    if (*at > 0) {
-        timer_remove(*at - 1);
-        sn_outside(-1);
-    }
-
-    pthread_mutex_unlock(&timers_mu);
-}
-
-// sn_time_startTimer puts the time in ch once, d from now, and then
-// every period, when every is above zero.
-void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
-    pthread_mutex_lock(&timers_mu);
-    start_timing();
-    timer_push((timer){.when = deadline(d), .ch = ch, .every = every});
-    pthread_cond_signal(&timers_cond);
-    pthread_mutex_unlock(&timers_mu);
-}
-
-// sn_timer_abandon drops a handle of c, whose After or Tick was in the
-// heap a moment ago, and reports whether it did. Under the timers'
-// lock, which the timers' thread holds to take a timer out, the timer
-// is in the heap or it is not: if it is, the handle comes down there,
-// and when it was the last but the timer's own, no one can receive
-// what the timer would send, so it is no promise of a wake, and the
-// timer is taken out and its handle, the last, frees the channel now
-// rather than at its deadline. A timer that fired meanwhile, or the end
-// of the program, which drops the timers' handles in sn_timers_stop,
-// leaves the handle to the caller, who drops it as any other.
-bool sn_timer_abandon(sn_chan *c) {
-    pthread_mutex_lock(&timers_mu);
-    int64_t at = sn_chan_timer(c);
-    if (at < 0 || stopping) {
-        pthread_mutex_unlock(&timers_mu);
-        return false;
-    }
-
-    if (!sn_chan_release(c)) { // another handle of the program's remains
-        pthread_mutex_unlock(&timers_mu);
-        return true;
-    }
-
-    timer gone = timer_remove(at);
-    pthread_mutex_unlock(&timers_mu);
-    sn_outside(-1);
-    sn_chan_drop(&gone.ch);
-    return true;
-}
-
-// sn_timers_stop stops the timers as the program ends and drops the
-// handles the channel timers hold, after any timer firing now is done
-// with its own, so that a debug build's count of blocks finds the
-// channels of a pending After or a running Tick freed.
-void sn_timers_stop(void) {
-    pthread_mutex_lock(&timers_mu);
-    stopping = true;
-    while (firing > 0) {
-        pthread_cond_wait(&fired_cond, &timers_mu);
-    }
-
-    int64_t n = 0;
-    sn_chan **held = malloc((size_t)(ntimers > 0 ? ntimers : 1) * sizeof *held);
-    if (held == NULL) {
-        sn_panic(SN_STR("out of memory", 13));
-    }
-
-    for (int64_t i = 0; i < ntimers; i++) {
-        if (timers[i].ch != NULL) {
-            held[n++] = timers[i].ch;
-        }
-    }
-
-    ntimers = 0; // the heap held the handles taken here, and no entry may point at a channel they free
-    pthread_mutex_unlock(&timers_mu);
-    for (int64_t i = 0; i < n; i++) {
-        sn_chan_drop(&held[i]);
-    }
-
-    free(held);
-}
-
-// sn_sleep parks the task until its timer fires. A park can return for
-// a wake meant for an earlier wait, one a select's second channel sent
-// before the select unlinked from it, so the task parks until its own
-// flag says the timer fired; returning sooner would cut the sleep short
-// and leave the timer to wake a task that may be gone.
-void sn_sleep(int64_t d) {
-    if (d <= 0) {
-        return;
-    }
-
-    task *t = sn_self();
-    pthread_mutex_lock(&timers_mu);
-    start_timing();
-    bool fired = false;
-    timer_push((timer){.when = deadline(d), .t = t, .fired = &fired});
-    pthread_cond_signal(&timers_cond);
-    while (!fired) {
-        pthread_mutex_unlock(&timers_mu);
-        sn_park();
-        pthread_mutex_lock(&timers_mu);
-    }
-
-    pthread_mutex_unlock(&timers_mu);
 }
 
 // The guard stack of a task: the values a panic drops, innermost

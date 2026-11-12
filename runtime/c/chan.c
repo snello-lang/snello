@@ -24,7 +24,8 @@
 struct sn_chan {
     sn_qlock mu;
     _Atomic int64_t handles;
-    _Atomic int64_t timer; // where the channel's After or Tick is in the timers' heap, -1 when it has none there
+    _Atomic int64_t timer; // the channel's After or Tick while it is in a timing wheel, -1 when it has none there
+    _Atomic int32_t home;  // the wheel its timers go in, as timer.c records it
     void (*drop)(void *); // drops one element
     size_t size;  // of one element
     int64_t cap;  // zero for an unbuffered channel, which has no ring
@@ -64,11 +65,15 @@ bool sn_chan_release(sn_chan *c) {
     return atomic_fetch_sub(&c->handles, 1) == 2;
 }
 
-// sn_chan_timer and sn_chan_placeTimer read and set where the
-// channel's timer is in the timers' heap, which sched.c keeps under its
+// sn_chan_timer and sn_chan_placeTimer read and set the channel's timer
+// while it is in a timing wheel, which timer.c keeps under the wheel's
 // lock; -1 is none.
 int64_t sn_chan_timer(sn_chan *c) {
     return atomic_load(&c->timer);
+}
+
+_Atomic int32_t *sn_chan_home(sn_chan *c) {
+    return &c->home;
 }
 
 void sn_chan_placeTimer(sn_chan *c, int64_t at) {
@@ -89,13 +94,14 @@ sn_chan *sn_chan_clone(sn_chan *c) {
 // sn_chan_drop drops the handle at *c, leaving the place empty, as a
 // move does; the last handle frees the channel and what it holds. When
 // the one left is a pending timer's, which only a timer still in the
-// heap holds, no one can receive from the channel again, and the timer
+// wheel holds, no one can receive from the channel again, and the timer
 // is taken out and its handle dropped at once, so a select that took
 // another case leaves no After behind it until its deadline. That is
-// decided in sn_timer_abandon, under the timers' lock, since a channel
-// is never touched after its handle is given up: the other holder may
-// drop the last and free it the moment the count comes down, and the
-// timers' thread once read the timer of a channel freed and reused.
+// decided in sn_timer_abandon, under the lock of the timer's wheel,
+// since a channel is never touched after its handle is given up: the
+// other holder may drop the last and free it the moment the count comes
+// down, and a timer firing once read the timer of a channel freed and
+// reused.
 void sn_chan_drop(sn_chan **h) {
     sn_chan *c = *h;
     *h = NULL;
@@ -248,6 +254,16 @@ bool sn_chan_offer(sn_chan *c, const void *v) {
 
     sn_qlock_give(&c->mu);
     return true;
+}
+
+// sn_chan_poll takes a value c holds into out, without waiting, and
+// reports whether there was one: a stopped Timer takes back so the time
+// it sent and no one received.
+bool sn_chan_poll(sn_chan *c, void *out) {
+    sn_qlock_take(&c->mu);
+    bool got = try_recv(c, out);
+    sn_qlock_give(&c->mu);
+    return got;
 }
 
 void sn_chan_close(sn_chan *c) {

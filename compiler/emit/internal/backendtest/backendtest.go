@@ -53,7 +53,7 @@ func (p Program) Check(out, stderr string, code int) string {
 	case code != p.Code:
 		return "exit code " + strconv.Itoa(code) + ", want " + strconv.Itoa(p.Code) + "; stderr: " + strconv.Quote(stderr)
 	case !p.AnyOut && out != p.Out:
-		return "output " + strconv.Quote(out) + ", want " + strconv.Quote(p.Out)
+		return "output " + strconv.Quote(out) + ", want " + strconv.Quote(p.Out) + "; stderr: " + strconv.Quote(stderr)
 	case !strings.Contains(stderr, p.Stderr):
 		return "stderr " + strconv.Quote(stderr) + ", want it to contain " + strconv.Quote(p.Stderr)
 	}
@@ -313,6 +313,45 @@ func main() {
 }
 `,
 			Out: "done\n", Stderr: "fatal error: all tasks are asleep - deadlock!", Code: 2,
+		},
+		{
+			Name: "sleep-under-load", // a sleep ends on time while every worker has two tasks trading messages through its run-next slot: the slot's task yields to the queue
+			Src: `package main
+import ("fmt"; "os"; "time")
+func echo(in chan int, out chan int) {
+	for v := range in {
+		out <- v
+	}
+}
+func pinger(n int, done chan ()) {
+	in := make(chan int)
+	out := make(chan int)
+	spawn echo(in.Clone(), out.Clone())
+	for i := 0; i < n; i++ {
+		in <- i
+		<-out
+	}
+	close(in)
+	done <- ()
+}
+func main() {
+	cores := os.Cores()
+	done := make(chan (), cores)
+	for w := 0; w < cores; w++ {
+		spawn pinger(1500000, done.Clone())
+	}
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	took := time.Since(start)
+	fmt.Println(took < 200*time.Millisecond) // twenty sleeps of a millisecond: about 25 ms; starved by the pairs, over 400
+	for w := 0; w < cores; w++ {
+		<-done
+	}
+}
+`,
+			Out: "true\n", ReleaseOnly: true, MinCPUs: 2,
 		},
 		{
 			Name: "pad-lent", // a width pads a lent string, a variable, a field or a ref parameter, into a string of its own: the caller keeps its bytes
