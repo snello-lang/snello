@@ -569,7 +569,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 		vals := e.operands(parts, wants)
 		pieces := make([]piece, len(parts))
 		for i, v := range vals {
-			pieces[i] = piece{text: text{v, !e.isRead(parts[i])}}
+			pieces[i] = piece{text: text{v, !e.isLent(parts[i])}}
 		}
 
 		return e.concat(pieces)
@@ -594,7 +594,7 @@ func (e *Emitter) binary(x *ast.BinaryExpr) string {
 
 	if isString(t) {
 		if x.Op == token.ADD {
-			return join(text{l, !e.isRead(x.X)}, text{r, !e.isRead(x.Y)}).s // a side built here is freed after the join
+			return join(text{l, !e.isLent(x.X)}, text{r, !e.isLent(x.Y)}).s // a side built here is freed after the join
 		}
 
 		return "(sn_string_cmp(" + l + ", " + r + ") " + x.Op.String() + " 0)"

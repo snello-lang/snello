@@ -91,6 +91,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.printFormat(e, exprText(e.Fun), at, c.variadic)
 	}
 
+	if parsed, ok := timeLayout(e, f.obj, sig); ok {
+		c.checkTimeLayout(e, exprText(e.Fun), parsed)
+	}
+
 	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
 		if n, ok := receiverBase(sig.recv.typ).(*Named); ok && n.orig != nil {
 			c.recordCall(n.orig.tparams, n.targs, e.Lparen, n.obj.name) // the method is an instance's, made per type argument

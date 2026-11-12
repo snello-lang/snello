@@ -1,0 +1,169 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package bytes_test
+
+import ("bytes"; "expect"; "fmt"; "io"; "strings"; "testing")
+
+func TestWrite() {
+	var b bytes.Buffer // the zero value is ready
+	expect.Equal(ref b.Len(), ref 0)
+	b.WriteString("hello ")
+	expect.Equal(ref expect.IsOk(b.Write(ref []byte("wo"))), ref 2)
+	b.WriteByte(byte(114))
+	b.WriteRune('ł')
+	b.WriteRune(rune(0x110000)) // no code point: U+FFFD
+	fmt.Fprintf(mut b, "|%d", 42)
+	expect.Equal(ref b.String(), "hello worł�|42")
+	expect.Equal(ref b.Len(), ref 17)
+	expect.True(b.Bytes().Equal(ref []byte("hello worł�|42")))
+	expect.Equal(ref fmt.Sprint(b), "hello worł�|42") // a Stringer
+}
+
+func TestRead() {
+	b := bytes.NewBufferString("abc\ndef")
+	buf := make([]byte, 2)
+	expect.Equal(ref expect.IsOk(b.Read(mut buf)), ref 2)
+	expect.True(buf.Equal(ref []byte("ab")))
+	expect.Equal(ref expect.IsSome(b.ReadByte()), ref byte(99))
+	expect.Equal(ref expect.IsSome(b.ReadString(byte(10))), "\n")
+	expect.True(expect.IsSome(b.ReadBytes(byte(10))).Equal(ref []byte("def"))) // no delim left: the rest
+	expect.IsNone(b.ReadBytes(byte(10)))
+	expect.IsNone(b.ReadString(byte(10)))
+	expect.IsNone(b.ReadByte())
+	expect.IsNone(b.ReadRune())
+	expect.Equal(ref expect.IsOk(b.Read(mut buf)), ref 0) // the end of a Buffer
+	expect.Equal(ref b.Len(), ref 0)
+}
+
+func TestNext() {
+	b := bytes.NewBuffer([]byte("0123456789"))
+	expect.True(b.Next(3).Equal(ref []byte("012")))
+	expect.True(b.Next(0).Equal(ref []byte{}))
+	expect.True(b.Next(-5).Equal(ref []byte{})) // none for a count below zero
+	expect.True(b.UnreadByte() == false)        // Next of nothing read nothing
+	expect.True(b.Next(100).Equal(ref []byte("3456789"))) // fewer when fewer are left
+	expect.Equal(ref b.Len(), ref 0)
+}
+
+func TestRunes() {
+	b := bytes.NewBufferString("aé世\xff")
+	widths := []int{1, 2, 3, 1}
+	runes := []rune{'a', 'é', '世', '�'} // a byte that starts no sequence is U+FFFD
+	for i, want := range ref runes {
+		r, n := expect.IsSome(b.ReadRune())
+		expect.Equal(ref r, want)
+		expect.Equal(ref n, widths[i])
+		if i == 2 {
+			expect.True(b.UnreadRune())
+			expect.False(b.UnreadRune()) // once a read
+			r, n = expect.IsSome(b.ReadRune())
+			expect.Equal(ref r, want)
+		}
+	}
+}
+
+func TestUnreadByte() {
+	b := bytes.NewBufferString("xyz")
+	expect.False(b.UnreadByte()) // nothing read yet
+	expect.Equal(ref expect.IsSome(b.ReadByte()), ref byte(120))
+	expect.True(b.UnreadByte())
+	expect.False(b.UnreadByte())
+	expect.Equal(ref expect.IsSome(b.ReadString(byte(121))), "xy")
+	expect.True(b.UnreadByte()) // the last byte of the string read
+	expect.Equal(ref b.String(), "yz")
+	b.WriteString("!")
+	expect.False(b.UnreadByte()) // a write is no read
+	r, _ := expect.IsSome(b.ReadRune())
+	expect.Equal(ref r, ref 'y')
+	expect.True(b.UnreadByte())
+	expect.False(b.UnreadRune()) // an UnreadByte is no ReadRune
+}
+
+func TestTruncateAndReset() {
+	b := bytes.NewBufferString("abcdef")
+	expect.IsSome(b.ReadByte())
+	b.Truncate(3) // the first three not read yet
+	expect.Equal(ref b.String(), "bcd")
+	b.Truncate(10) // past Len: all kept
+	expect.Equal(ref b.String(), "bcd")
+	b.Truncate(-1) // below zero: none kept
+	expect.Equal(ref b.Len(), ref 0)
+	b.WriteString("again")
+	b.Reset()
+	expect.Equal(ref b.String(), "")
+}
+
+func TestGrow() {
+	var b bytes.Buffer
+	b.Grow(100)
+	b.Grow(0)
+	b.Grow(-3)
+	b.WriteString("fits")
+	b.Grow(9223372036854775807) // no int adds it to the length of four: nothing
+	expect.Equal(ref b.String(), "fits")
+}
+
+// A Grow drops the bytes that were read, so nothing is put back after
+// one: the Buffer holds what it held.
+func TestGrowEndsUnread() {
+	b := bytes.NewBufferString("ab")
+	expect.IsSome(b.ReadByte())
+	expect.IsSome(b.ReadByte())
+	b.Grow(10)
+	expect.False(b.UnreadByte())
+	expect.Equal(ref b.Len(), ref 0)
+	r := bytes.NewBufferString("héllo")
+	expect.IsSome(r.ReadByte())
+	expect.IsSome(r.ReadRune())
+	r.Grow(1000)
+	expect.False(r.UnreadRune())
+	expect.False(r.UnreadByte())
+	expect.Equal(ref r.String(), "llo")
+}
+
+// A Buffer read as it is written gives every byte once, in the order
+// they were written, through the moves and the growth of its slice.
+func TestQueue() {
+	q := bytes.NewBuffer([]byte{})
+	letters := "abcdefgh"
+	at := 0 // the bytes read so far, of the letters written over and over
+	for i := 0; i < 100000; i++ {
+		q.WriteString(letters)
+		got := q.Next(7)
+		for k := 0; k < 7; k++ {
+			if got[k] != letters[(at+k)%8] {
+				expect.Fail("a byte out of order")
+			}
+		}
+
+		at += 7
+	}
+
+	expect.Equal(ref q.Len(), ref 100000)
+}
+
+func TestReaderAndWriter() {
+	src := bytes.NewBufferString("through io")
+	var dst bytes.Buffer
+	expect.Equal(ref expect.IsOk(io.Copy(mut dst, mut src)), ref i64(10))
+	expect.Equal(ref dst.String(), "through io")
+	all := expect.IsOk(io.ReadAll(mut dst))
+	expect.True(all.Equal(ref []byte("through io")))
+	in := strings.NewReader("from a reader".Clone())
+	var into bytes.Buffer
+	expect.IsOk(io.Copy(mut into, mut in))
+	expect.Equal(ref into.String(), "from a reader")
+}
+
+func BenchmarkWrite() {
+	var b bytes.Buffer
+	p := []byte("a line of bytes\n")
+	for testing.Loop() {
+		_ = b.Write(ref p)
+		if b.Len() > 1 << 20 {
+			b.Reset()
+		}
+	}
+}

@@ -37,6 +37,10 @@ import (
 	"time"
 )
 
+// timedOut is what the runtime's calls return for a deadline passed,
+// which is no error number of the system's.
+const timedOut = -2
+
 // A Listener is a TCP socket listening on a port. It implements Drop:
 // the socket closes when the Listener goes out of scope.
 struct Listener impl Drop {
@@ -236,10 +240,6 @@ func newConn(fd int) Conn {
 	addrs(fd, mut local, mut remote)
 	return Conn{fd: fd, name: "tcp " + local + "->" + remote}
 }
-
-// timedOut is what the runtime's calls return for a deadline passed,
-// which is no error number of the system's.
-const timedOut = -2
 
 // setDeadlineOf sets the deadline of fd's reads, or its writes when
 // write is 1, to t, or clears it for the zero Time.

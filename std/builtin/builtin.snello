@@ -21,6 +21,10 @@
 // compiler has is here.
 package builtin
 
+// true and false are the two values of bool.
+const true bool = true
+const false bool = false
+
 // bool is true or false. It is Copy, Eq and Hash.
 type bool bool
 
@@ -62,10 +66,6 @@ type f64 f64
 // compiler writes, fmt.Println(args ...ref any), which takes an
 // argument of any type by its own type. A program cannot name it.
 type any any
-
-// true and false are the two values of bool.
-const true bool = true
-const false bool = false
 
 // An Option<T>, written T?, is a value of T or nothing: Some(v) or
 // None. It is what a lookup that may find nothing returns, and it is

@@ -71,4 +71,31 @@ func main() {
 	for _, s := range stamps {
 		fmt.Println(time.Unix(s[0], s[1]))
 	}
+
+	// The calendar: a date made and read back, a leap day, a day that
+	// does not exist, AddDate keeping to the month's last day, Truncate
+	// and Round from year 1, a layout written and read, and a Timer and
+	// a Ticker stopped before they send.
+	d := time.Date(2024, time.February, 29, 13, 4, 5, 6).Expect("a leap day")
+	fmt.Println(d.Year(), d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Weekday(), d.YearDay())
+	fmt.Println(time.Date(2023, time.February, 29, 0, 0, 0, 0).IsNone(), time.Date(2024, time.February, 30, 0, 0, 0, 0).IsNone())
+	jan31 := time.Date(2025, time.January, 31, 0, 0, 0, 0).Expect("a date")
+	fmt.Println(jan31.AddDate(0, 1, 0).Format(time.DateOnly), jan31.AddDate(1, 1, 0).Format(time.DateOnly), jan31.AddDate(0, 0, 1).Format(time.DateOnly), d.AddDate(1, 0, 0).Format(time.DateOnly))
+	fmt.Println(d.Truncate(time.Hour).Format(time.DateTime), d.Round(time.Hour).Format(time.DateTime), d.Truncate(24*time.Hour).Format(time.DateTime))
+	fmt.Println(d.Format(time.RFC3339), d.Format(time.RFC3339Nano), d.Format(time.Kitchen), d.Format("%A %d %B %Y, day %j, %I:%M %p"))
+	fmt.Println(time.Parse(time.RFC3339, "2024-02-29T15:04:05+02:00").Expect("a time").Format(time.DateTime) == d.Truncate(time.Second).Format(time.DateTime))
+	fmt.Println(time.Parse(time.DateOnly, "2024-02-30").IsErr(), time.Parse(time.DateTime, "2024-02-29 13:04").IsErr())
+	fmt.Println(time.ParseDuration("1h30m").Expect("a duration"), time.ParseDuration("1.5µs").Expect("a duration"), time.ParseDuration("-2h45m0.5s").Expect("a duration"), time.ParseDuration("1x").IsErr())
+
+	timer := time.NewTimer(time.Hour)
+	fmt.Println(timer.Stop(), timer.Stop())
+	tick := time.NewTicker(time.Millisecond)
+	first := (<-tick.C).Expect("a tick")
+	tick.Stop()
+	select {
+	case <-tick.C:
+		fmt.Println("a stopped Ticker ticked")
+	case <-time.After(5 * time.Millisecond):
+		fmt.Println("stopped", first.After(t))
+	}
 }

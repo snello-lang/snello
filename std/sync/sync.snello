@@ -32,6 +32,11 @@
 // no operation on one panics over a handle being empty.
 package sync
 
+// broken is the message of the one panic left in the package: a handle
+// with no cell or box, which no program can make, since a handle comes
+// only from its New function and a Drop runs once.
+const broken string = "sync: a handle without its value: a broken invariant of the package"
+
 // An acell is what the handles on one value share: the value, and the
 // count of handles, changed atomically so that handles in different
 // tasks may be cloned and dropped at the same moment.
@@ -387,11 +392,6 @@ func (w ref WaitGroup) Wait() {
 func (w ref WaitGroup) handle() int {
 	return w.a.Get().h
 }
-
-// broken is the message of the one panic left in the package: a handle
-// with no cell or box, which no program can make, since a handle comes
-// only from its New function and a Drop runs once.
-const broken string = "sync: a handle without its value: a broken invariant of the package"
 
 // guard takes the lock of the box p points at, for writing, and returns
 // the Guard holding it and the value: the one function that steps from

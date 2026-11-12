@@ -171,7 +171,7 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		return false // a literal owns nothing
 	}
 
-	return !e.isRead(x) && needsDrop(e.typeOf(x))
+	return !e.isLent(x) && needsDrop(e.typeOf(x))
 }
 
 // borrowed returns the value an operand lends: the operand of a ref,

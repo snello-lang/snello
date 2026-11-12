@@ -1,0 +1,188 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package path_test
+
+import ("expect"; "path"; "testing")
+
+// The cases are those of Go's own tests of its path package, so that
+// each function answers as Go's does.
+
+func TestClean() {
+	expect.Equal(ref path.Clean(""), ".")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("abc/def"), "abc/def")
+	expect.Equal(ref path.Clean("a/b/c"), "a/b/c")
+	expect.Equal(ref path.Clean("."), ".")
+	expect.Equal(ref path.Clean(".."), "..")
+	expect.Equal(ref path.Clean("../.."), "../..")
+	expect.Equal(ref path.Clean("../../abc"), "../../abc")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("/"), "/")
+	expect.Equal(ref path.Clean("abc/"), "abc")
+	expect.Equal(ref path.Clean("abc/def/"), "abc/def")
+	expect.Equal(ref path.Clean("a/b/c/"), "a/b/c")
+	expect.Equal(ref path.Clean("./"), ".")
+	expect.Equal(ref path.Clean("../"), "..")
+	expect.Equal(ref path.Clean("../../"), "../..")
+	expect.Equal(ref path.Clean("/abc/"), "/abc")
+	expect.Equal(ref path.Clean("abc//def//ghi"), "abc/def/ghi")
+	expect.Equal(ref path.Clean("//abc"), "/abc")
+	expect.Equal(ref path.Clean("///abc"), "/abc")
+	expect.Equal(ref path.Clean("//abc//"), "/abc")
+	expect.Equal(ref path.Clean("abc//"), "abc")
+	expect.Equal(ref path.Clean("abc/./def"), "abc/def")
+	expect.Equal(ref path.Clean("/./abc/def"), "/abc/def")
+	expect.Equal(ref path.Clean("abc/."), "abc")
+	expect.Equal(ref path.Clean("abc/def/ghi/../jkl"), "abc/def/jkl")
+	expect.Equal(ref path.Clean("abc/def/../ghi/../jkl"), "abc/jkl")
+	expect.Equal(ref path.Clean("abc/def/.."), "abc")
+	expect.Equal(ref path.Clean("abc/def/../.."), ".")
+	expect.Equal(ref path.Clean("/abc/def/../.."), "/")
+	expect.Equal(ref path.Clean("abc/def/../../.."), "..")
+	expect.Equal(ref path.Clean("/abc/def/../../.."), "/")
+	expect.Equal(ref path.Clean("abc/def/../../../ghi/jkl/../../../mno"), "../../mno")
+	expect.Equal(ref path.Clean("abc/./../def"), "def")
+	expect.Equal(ref path.Clean("abc//./../def"), "def")
+	expect.Equal(ref path.Clean("abc/../../././../def"), "../../def")
+}
+
+// A clean path cleans to itself, whichever way Clean reached it.
+func TestCleanOfClean() {
+	expect.Equal(ref path.Clean("."), ".")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("abc/def"), "abc/def")
+	expect.Equal(ref path.Clean("a/b/c"), "a/b/c")
+	expect.Equal(ref path.Clean("."), ".")
+	expect.Equal(ref path.Clean(".."), "..")
+	expect.Equal(ref path.Clean("../.."), "../..")
+	expect.Equal(ref path.Clean("../../abc"), "../../abc")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("/"), "/")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("abc/def"), "abc/def")
+	expect.Equal(ref path.Clean("a/b/c"), "a/b/c")
+	expect.Equal(ref path.Clean("."), ".")
+	expect.Equal(ref path.Clean(".."), "..")
+	expect.Equal(ref path.Clean("../.."), "../..")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("abc/def/ghi"), "abc/def/ghi")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("/abc"), "/abc")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("abc/def"), "abc/def")
+	expect.Equal(ref path.Clean("/abc/def"), "/abc/def")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("abc/def/jkl"), "abc/def/jkl")
+	expect.Equal(ref path.Clean("abc/jkl"), "abc/jkl")
+	expect.Equal(ref path.Clean("abc"), "abc")
+	expect.Equal(ref path.Clean("."), ".")
+	expect.Equal(ref path.Clean("/"), "/")
+	expect.Equal(ref path.Clean(".."), "..")
+	expect.Equal(ref path.Clean("/"), "/")
+	expect.Equal(ref path.Clean("../../mno"), "../../mno")
+	expect.Equal(ref path.Clean("def"), "def")
+	expect.Equal(ref path.Clean("def"), "def")
+	expect.Equal(ref path.Clean("../../def"), "../../def")
+}
+
+func split(p ref string, dir ref string, file ref string) {
+	d, f := path.Split(p)
+	expect.Equal(d, dir)
+	expect.Equal(f, file)
+}
+
+func TestSplit() {
+	split("a/b", "a/", "b")
+	split("a/b/", "a/b/", "")
+	split("a/", "a/", "")
+	split("a", "", "a")
+	split("/", "/", "")
+}
+
+func TestJoin() {
+	expect.Equal(ref path.Join("a", "b"), "a/b")
+	expect.Equal(ref path.Join("a", ""), "a")
+	expect.Equal(ref path.Join("", "b"), "b")
+	expect.Equal(ref path.Join("/", "a"), "/a")
+	expect.Equal(ref path.Join("/", ""), "/")
+	expect.Equal(ref path.Join("a/", "b"), "a/b")
+	expect.Equal(ref path.Join("a/", ""), "a")
+	expect.Equal(ref path.Join("", ""), "")
+	expect.Equal(ref path.Join("a/b", "../../../c"), "../c") // the joined path is cleaned
+	expect.Equal(ref path.Join(ref path.Join("a", "b"), "c"), "a/b/c") // three, two at a time
+}
+
+func TestExt() {
+	expect.Equal(path.Ext("path.go"), ".go")
+	expect.Equal(path.Ext("path.pb.go"), ".go")
+	expect.Equal(path.Ext("a.dir/b"), "")
+	expect.Equal(path.Ext("a.dir/b.go"), ".go")
+	expect.Equal(path.Ext("a.dir/"), "")
+}
+
+func TestBase() {
+	expect.Equal(path.Base(""), ".")
+	expect.Equal(path.Base("."), ".")
+	expect.Equal(path.Base("/."), ".")
+	expect.Equal(path.Base("/"), "/")
+	expect.Equal(path.Base("////"), "/")
+	expect.Equal(path.Base("x/"), "x")
+	expect.Equal(path.Base("abc"), "abc")
+	expect.Equal(path.Base("abc/def"), "def")
+	expect.Equal(path.Base("a/b/.x"), ".x")
+	expect.Equal(path.Base("a/b/c."), "c.")
+	expect.Equal(path.Base("a/b/c.x"), "c.x")
+}
+
+func TestDir() {
+	expect.Equal(ref path.Dir(""), ".")
+	expect.Equal(ref path.Dir("."), ".")
+	expect.Equal(ref path.Dir("/."), "/")
+	expect.Equal(ref path.Dir("/"), "/")
+	expect.Equal(ref path.Dir("////"), "/")
+	expect.Equal(ref path.Dir("/foo"), "/")
+	expect.Equal(ref path.Dir("x/"), "x")
+	expect.Equal(ref path.Dir("abc"), ".")
+	expect.Equal(ref path.Dir("abc/def"), "abc")
+	expect.Equal(ref path.Dir("abc////def"), "abc")
+	expect.Equal(ref path.Dir("a/b/.x"), "a/b")
+	expect.Equal(ref path.Dir("a/b/c."), "a/b")
+	expect.Equal(ref path.Dir("a/b/c.x"), "a/b")
+}
+
+func TestIsAbs() {
+	expect.Equal(ref path.IsAbs(""), ref false)
+	expect.Equal(ref path.IsAbs("/"), ref true)
+	expect.Equal(ref path.IsAbs("/usr/bin/gcc"), ref true)
+	expect.Equal(ref path.IsAbs(".."), ref false)
+	expect.Equal(ref path.IsAbs("/a/../bb"), ref true)
+	expect.Equal(ref path.IsAbs("."), ref false)
+	expect.Equal(ref path.IsAbs("./"), ref false)
+	expect.Equal(ref path.IsAbs("lala"), ref false)
+}
+
+func BenchmarkClean() {
+	p := "/usr/local/lib/snello/std/path.snello"
+	n := 0
+	for testing.Loop() {
+		n += path.Clean(p).Len()
+	}
+}
+
+func BenchmarkCleanRewritten() {
+	p := "/usr/local//lib/./snello/../snello/std/path.snello/"
+	n := 0
+	for testing.Loop() {
+		n += path.Clean(p).Len()
+	}
+}
+
+func BenchmarkJoin() {
+	n := 0
+	for testing.Loop() {
+		n += path.Join("/usr/local/lib/snello", "std/path.snello").Len()
+	}
+}

@@ -24,6 +24,9 @@ import (
 	"unicode/utf8"
 )
 
+// maxInt is the largest int, the longest a string can be.
+const maxInt int = 9223372036854775807
+
 // A Builder accumulates text piece by piece and gives it back as one
 // string, cheaper than joining with + at every step. Its zero value is
 // ready to use: var b strings.Builder. A Builder owns the bytes it
@@ -304,9 +307,6 @@ func Map(f func(rune) rune, s ref string) string {
 
 	return b.String()
 }
-
-// maxInt is the largest int, the longest a string can be.
-const maxInt int = 9223372036854775807
 
 // appendString appends the bytes of s to b in one copy, growing b
 // once. The runtime provides it.

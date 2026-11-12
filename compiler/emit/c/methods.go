@@ -420,7 +420,7 @@ func (e *Emitter) mapIndex(x *ast.IndexExpr, place string, t *types.Map, write b
 	if write {
 		slot := e.temp()
 		k := e.valueTo(x.Index, t.Key())
-		if e.isRead(x.Index) && !e.info.Moves[x.Index] {
+		if e.isLent(x.Index) && !e.info.Moves[x.Index] {
 			e.line(val + " *" + slot + " = " + e.mapLentSlotter(t, x.Pos()) + "(&" + place + ", " + e.spill(k, t.Key(), x.Pos()) + ");")
 		} else {
 			e.line(val + " *" + slot + " = " + e.mapSlotter(t, x.Pos()) + "(&" + place + ", " + k + ");")

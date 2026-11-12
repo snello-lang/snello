@@ -8,7 +8,8 @@
 
 // The bufio package's moves of bytes, which its buffers make in blocks
 // as Go's bufio does with copy and bytes.IndexByte: memmove and memchr,
-// which the C library writes with vector instructions.
+// which the C library writes with vector instructions. The bytes
+// package's Buffer makes the same moves, through the same functions.
 
 // sn_bufio_copyBytes copies the bytes of src that fit to the start of
 // dst, as Go's copy does, the two possibly overlapping, and returns how
@@ -80,4 +81,25 @@ void sn_bufio_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) {
     if (lo > 0 && hi > lo) {
         memmove(buf->ptr, (uint8_t *)buf->ptr + lo, (size_t)(hi - lo));
     }
+}
+
+// The bytes package's Buffer moves its bytes as bufio does.
+int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src) {
+    return sn_bufio_copyBytes(dst, src);
+}
+
+int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c) {
+    return sn_bufio_indexByte(p, c);
+}
+
+void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) {
+    sn_bufio_slide(buf, lo, hi);
+}
+
+void sn_bytes_appendString(sn_slice_u8 *buf, sn_string s) {
+    sn_strings_appendString(buf, s);
+}
+
+void sn_bytes_reserve(sn_slice_u8 *buf, int64_t n) {
+    sn_strings_reserve(buf, n);
 }

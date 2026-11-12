@@ -342,6 +342,11 @@ int64_t sn_bufio_indexByte(sn_slice_u8 p, uint8_t c);
 void sn_bufio_appendBytes(sn_slice_u8 *b, sn_slice_u8 p);
 void sn_bufio_slide(sn_slice_u8 *b, int64_t lo, int64_t hi);
 sn_slice_u8 sn_bufio_bytesOf(sn_string s);
+int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
+int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c);
+void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi);
+void sn_bytes_appendString(sn_slice_u8 *buf, sn_string s);
+void sn_bytes_reserve(sn_slice_u8 *buf, int64_t n);
 
 int32_t sn_rune_upper(int32_t r);
 int32_t sn_rune_lower(int32_t r);
@@ -608,6 +613,24 @@ int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);
 int64_t sn_os_syncFile(int64_t fd);
 int64_t sn_os_closeFile(int64_t fd);
+int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
+int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead);
+int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev, uint64_t *ino);
+int64_t sn_os_mkdir(sn_string path, uint32_t perm);
+int64_t sn_os_rename(sn_string from, sn_string to);
+int64_t sn_os_chdir(sn_string path);
+int64_t sn_os_getcwd(sn_string *out);
+int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd);
+int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op);
+int64_t sn_os_Getpid(void);
+int64_t sn_os_hostname(sn_string *out);
+bool sn_os_lookupEnv(sn_string key, sn_string *value);
+int64_t sn_os_setenv(sn_string key, sn_string value);
+void sn_os_Unsetenv(sn_string key);
+sn_string sn_os_TempDir(void);
+void sn_os_environ(void *out); // a []string that holds nothing
+void sn_os_env_free(void); // the copy of the environment, released at the end of a debug build
+void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
 sn_string sn_strconv_unquote(sn_string s, bool *ok);
@@ -628,6 +651,8 @@ typedef struct {
 
 sn_time sn_time_read(void);
 void sn_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono); // package time's clock
+sn_string sn_time_format(sn_string layout, int64_t sec, int64_t nsec);
+int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock, int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li);
 int64_t sn_time_mono(void); // the monotonic clock, in nanoseconds, never 0
 void sn_outside(int64_t n); // wakes promised by a thread that is not a worker; see sched.c
 int64_t sn_sync_newLock(void); // a sync lock's handle is its address; see the lock section of snello.c
@@ -707,6 +732,9 @@ void sn_chan_drop(sn_chan **c);
 void sn_chan_send(sn_chan *c, const void *v);
 bool sn_chan_offer(sn_chan *c, const void *v);
 void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
+bool sn_time_stopTimer(sn_chan *ch);
+bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every);
+bool sn_chan_poll(sn_chan *c, void *out);
 bool sn_chan_recv(sn_chan *c, void *out);
 void sn_chan_close(sn_chan *c);
 int64_t sn_chan_len(sn_chan *c);

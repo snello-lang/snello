@@ -1,0 +1,35 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: package time checks its layouts when the program is compiled,
+// as fmt checks its formats: a layout is a string literal or a
+// constant, every percent sign in it starts a directive the package
+// has, and a layout that Parse takes has only directives it reads.
+// So a mistake in a layout is a compile error, never text in the
+// output.
+// Fix: the directive meant, %m for the month and %M for the minute;
+// %% for a percent sign; for Parse, %H in place of %I, or %p beside it.
+
+package p
+
+import "time"
+
+const stamp string = "%Y-%m-%d %H:%M:%S"
+const broken string = "%Y-%m-%E"
+
+func show(t time.Time, layout ref string, value ref string) {
+    _ = t.Format("%Y-%m-%d")
+    _ = t.Format(stamp)
+    _ = t.Format(time.RFC3339)
+    _ = t.Format("%Y-%m-%Q")                // ERROR "t.Format: %Q is not a directive"
+    _ = t.Format(broken)                    // ERROR "t.Format: %E is not a directive"
+    _ = t.Format("100%")                    // ERROR "t.Format: a % at the end names no directive: %% writes a percent sign"
+    _ = t.Format("%-B")                     // ERROR "t.Format: %-B is not a directive: - goes before a number, and %B writes none"
+    _ = t.Format(layout)                    // ERROR "t.Format takes its layout as a string literal or a constant"
+    _ = t.Format("week %U")
+    _ = time.Parse(stamp, value)
+    _ = time.Parse("week %U", value)        // ERROR "time.Parse: %U does not say which day or time it is, and Parse does not read it"
+    _ = time.Parse("%I:%M", value)          // ERROR "time.Parse: %I is an hour of a half day, and the layout has no %p to say which half"
+    _ = time.Parse(layout, value)           // ERROR "time.Parse takes its layout as a string literal or a constant"
+}

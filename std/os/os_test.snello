@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "io"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "testing"; "time")
 
 func TestArgsCoresStreams() {
 	expect.True(len(os.Args) > 0)
@@ -36,13 +36,392 @@ func TestFiles() {
 	expect.Contains(ref e.Error(), "no such file")
 }
 
+func TestSeek() {
+	dir := testing.TempDir()
+	path := dir.Join("seek.txt")
+	expect.IsOk(os.WriteString(ref path, "hello world"))
+	f := expect.IsOk(os.Open(ref path))
+	expect.Equal(ref expect.IsOk(f.Seek(io.End(-5))), ref u64(6))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Current(0))), ref u64(6))
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 5)
+	expect.True(buf.Equal(ref []byte("world")))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Start(0))), ref u64(0))
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 5)
+	expect.True(buf.Equal(ref []byte("hello")))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Start(100))), ref u64(100)) // past the end is allowed
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 0)
+	before := expect.IsErr(f.Seek(io.Current(-1000)))
+	expect.Contains(ref before.Error(), "seek ")
+	expect.Contains(ref before.Error(), "invalid argument")
+	expect.IsErr(f.Seek(io.Start(18446744073709551615))) // past what a position holds
+	in := os.Stdin()
+	if in.Seek(io.Current(0)).IsErr() { // a pipe or a terminal has no position; a file redirected in has one
+		expect.Contains(ref expect.IsErr(in.Seek(io.Current(0))).Error(), "seek /dev/stdin")
+	}
+}
+
 func TestDirs() {
 	dir := testing.TempDir()
 	inner := expect.IsOk(os.MkdirTemp(dir.Path(), "work"))
 	expect.HasPrefix(ref inner, dir.Path())
 	expect.IsOk(os.WriteString(ref (inner.Clone() + "/a.txt"), "a"))
+	refused := expect.IsErr(os.RemoveAll(ref (inner.Clone() + "/."))) // a directory is not removed from inside itself
+	expect.Equal(ref refused.Error(), ref ("RemoveAll " + inner + "/.: invalid argument"))
+	expect.Equal(ref expect.IsErr(os.RemoveAll(".")).Error(), "RemoveAll .: invalid argument")
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref (inner.Clone() + "/a.txt"))), "a") // nothing was removed
 	expect.IsOk(os.RemoveAll(ref inner))
 	expect.IsErr(os.Open(ref (inner.Clone() + "/a.txt")))
+}
+
+func TestEnv() {
+	key := "SNELLO_TEST_ENV"
+	os.Unsetenv(ref key)
+	expect.IsNone(os.LookupEnv(ref key))
+	expect.Equal(ref os.Getenv(ref key), "")
+	expect.IsOk(os.Setenv(ref key, "one"))
+	expect.Equal(ref os.Getenv(ref key), "one")
+	expect.IsOk(os.Setenv(ref key, "two=2")) // set again, and an = in a value is the value's
+	expect.Equal(ref expect.IsSome(os.LookupEnv(ref key)), "two=2")
+	expect.ContainsElem(ref os.Environ(), "SNELLO_TEST_ENV=two=2")
+	expect.IsOk(os.Setenv(ref key, ""))
+	expect.Equal(ref expect.IsSome(os.LookupEnv(ref key)), "") // set to nothing is set
+	os.Unsetenv(ref key)
+	os.Unsetenv(ref key) // one that is not set is nothing to unset
+	expect.IsNone(os.LookupEnv(ref key))
+	expect.IsNone(os.LookupEnv(""))
+	expect.IsNone(os.LookupEnv("SNELLO_TEST")) // a key is not found by its start
+	for _, kv := range ref os.Environ() {
+		if kv.HasPrefix("SNELLO_TEST_ENV=") {
+			expect.Fail("an unset variable is in Environ")
+		}
+	}
+}
+
+func TestSetenvRefused() {
+	expect.Equal(ref expect.IsErr(os.Setenv("", "v")).Error(), "setenv: invalid argument")
+	expect.Equal(ref expect.IsErr(os.Setenv("a=b", "v")).Error(), "setenv: invalid argument")
+	expect.Equal(ref expect.IsErr(os.Setenv("a\x00b", "v")).Error(), "setenv: invalid argument")
+	expect.Equal(ref expect.IsErr(os.Setenv("K", "a\x00b")).Error(), "setenv: invalid argument")
+	expect.IsNone(os.LookupEnv("a"))
+	expect.IsNone(os.LookupEnv("K"))
+}
+
+// Many variables set, read and unset, round after round under new
+// names: the index is built again as the places of unset ones fill it,
+// and the environment ends as it began.
+func TestEnvMany() {
+	before := len(os.Environ())
+	for round := 0; round < 6; round++ {
+		for i := 0; i < 500; i++ {
+			expect.IsOk(os.Setenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i), ref fmt.Sprint(i * 7)))
+		}
+
+		expect.Equal(ref len(os.Environ()), ref before + 500)
+		for i := 0; i < 500; i++ {
+			expect.Equal(ref os.Getenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i)), ref fmt.Sprint(i * 7))
+		}
+
+		for i := 0; i < 500; i += 2 {
+			os.Unsetenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i))
+		}
+
+		for i := 0; i < 500; i++ {
+			expect.Equal(ref os.LookupEnv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i)).IsSome(), ref i % 2 == 1)
+		}
+
+		for i := 1; i < 500; i += 2 {
+			os.Unsetenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i))
+		}
+
+		expect.Equal(ref len(os.Environ()), ref before)
+		expect.IsNone(os.LookupEnv(ref fmt.Sprintf("SNELLO_MANY_%d_0", round)))
+	}
+}
+
+// Tasks reading the environment while another sets it: each read is a
+// value that was set, whole.
+func TestEnvTasks() {
+	expect.IsOk(os.Setenv("SNELLO_SHARED", "0000000000"))
+	done := make(chan bool, 4)
+	for t := 0; t < 4; t++ {
+		spawn func(out chan<- bool) {
+			ok := true
+			for i := 0; i < 20000; i++ {
+				v := os.Getenv("SNELLO_SHARED")
+				ok = ok && v.Len() == 10 && v[0] == v[9]
+			}
+
+			out <- ok
+		}(done.Clone())
+	}
+
+	for i := 0; i < 20000; i++ {
+		d := fmt.Sprint(i % 10)
+		expect.IsOk(os.Setenv("SNELLO_SHARED", ref (d + "00000000" + d)))
+	}
+
+	for t := 0; t < 4; t++ {
+		expect.True(<-done ?? false)
+	}
+
+	os.Unsetenv("SNELLO_SHARED")
+}
+
+func TestTempDir() {
+	was := os.LookupEnv("TMPDIR")
+	expect.IsOk(os.Setenv("TMPDIR", "/somewhere/else"))
+	expect.Equal(ref os.TempDir(), "/somewhere/else")
+	expect.IsOk(os.Setenv("TMPDIR", ""))
+	expect.Equal(ref os.TempDir(), "/tmp") // empty is as unset
+	os.Unsetenv("TMPDIR")
+	expect.Equal(ref os.TempDir(), "/tmp")
+	match was {
+		Some(dir) => expect.IsOk(os.Setenv("TMPDIR", ref dir)),
+		None => {},
+	}
+}
+
+func TestFileMode() {
+	expect.Equal(ref fmt.Sprint(os.FileMode(0o644)), "-rw-r--r--")
+	expect.Equal(ref fmt.Sprint(os.ModeDir | 0o755), "drwxr-xr-x")
+	expect.Equal(ref fmt.Sprint(os.ModeSymlink | 0o777), "Lrwxrwxrwx")
+	expect.Equal(ref fmt.Sprint(os.ModeDevice | os.ModeCharDevice | 0o620), "Dcrw--w----")
+	expect.Equal(ref fmt.Sprint(os.ModeSetuid | os.ModeSetgid | os.ModeSticky | 0o711), "ugtrwx--x--x")
+	expect.Equal(ref fmt.Sprint(os.ModeNamedPipe | os.ModeSocket | os.ModeIrregular), "pS?---------")
+	dir := os.ModeDir | os.ModeSticky | 0o1750 // a bit above the nine is no permission
+	expect.True(dir.IsDir())
+	expect.False(dir.IsRegular())
+	expect.True(dir.Perm() == 0o750)
+	expect.True(dir.Type() == os.ModeDir)
+	expect.True(os.FileMode(0o600).IsRegular())
+	expect.False(os.FileMode(0o600).IsDir())
+	expect.False(os.ModeSymlink.IsRegular())
+}
+
+func TestStat() {
+	dir := testing.TempDir()
+	path := dir.Join("notes.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("hello"), 0o600))
+	fi := expect.IsOk(os.Stat(ref path))
+	expect.Equal(fi.Name(), "notes.txt")
+	expect.Equal(ref fi.Size(), ref i64(5))
+	expect.False(fi.IsDir())
+	expect.Equal(ref fmt.Sprint(fi.Mode()), "-rw-------")
+	age := time.Since(fi.ModTime())
+	expect.True(age > -time.Minute && age < time.Minute) // changed just now
+	di := expect.IsOk(os.Stat(ref (dir.Path() + "/")))
+	expect.True(di.IsDir())
+	expect.True(di.Mode().IsDir())
+	expect.Equal(ref fmt.Sprint(di.Mode()), "drwx------")
+	expect.Equal(ref expect.IsOk(os.Stat("/")).Name().Clone(), "/")
+	expect.Equal(ref expect.IsOk(os.Stat(".")).Name().Clone(), ".")
+	missing := expect.IsErr(os.Stat(ref dir.Join("gone")))
+	expect.True(missing.Kind() == io.NotExist)
+	expect.Equal(ref missing.Error(), ref ("stat " + dir.Join("gone") + ": no such file or directory"))
+	expect.Equal(ref expect.IsErr(os.Lstat(ref dir.Join("gone"))).Error(), ref ("lstat " + dir.Join("gone") + ": no such file or directory"))
+	expect.IsErr(os.Stat("a\x00b")) // a zero byte is no path
+}
+
+// Lstat is of a symbolic link itself, where Stat is of what it leads
+// to: every system has one among these.
+func TestLstat() {
+	found := false
+	for _, link := range ref []string{"/tmp".Clone(), "/dev/stdin".Clone(), "/dev/fd".Clone(), "/var/run".Clone(), "/etc/mtab".Clone()} {
+		match os.Lstat(link) {
+			Ok(li) => {
+				if li.Mode() & os.ModeSymlink != 0 {
+					found = true
+					expect.False(li.IsDir())
+					expect.False(li.Mode().IsRegular())
+					expect.True(expect.IsOk(os.Stat(link)).Mode() & os.ModeSymlink == 0)
+				}
+			},
+			Err(_) => {},
+		}
+	}
+
+	expect.True(found)
+}
+
+func TestReadDir() {
+	dir := testing.TempDir()
+	expect.Equal(ref len(expect.IsOk(os.ReadDir(dir.Path()))), ref 0)
+	for _, name := range ref []string{"b.txt".Clone(), "a.txt".Clone(), "é".Clone(), "Z".Clone(), ".hidden".Clone()} {
+		expect.IsOk(os.WriteString(ref dir.Join(name), "x"))
+	}
+
+	expect.IsOk(os.Mkdir(ref dir.Join("sub"), 0o755))
+	entries := expect.IsOk(os.ReadDir(dir.Path()))
+	names := []string{}
+	for _, e := range ref entries {
+		names.Push(e.Name().Clone())
+		expect.Equal(ref e.IsDir(), ref *e.Name() == "sub")
+		if e.IsDir() {
+			expect.True(e.Type() == os.ModeDir)
+		} else {
+			expect.True(e.Type() == 0)
+		}
+	}
+
+	// By name, as bytes compare, with no . and ..
+	expect.EqualSlice(ref names, ref []string{".hidden".Clone(), "Z".Clone(), "a.txt".Clone(), "b.txt".Clone(), "sub".Clone(), "é".Clone()})
+	expect.Equal(ref expect.IsErr(os.ReadDir(ref dir.Join("gone"))).Error(), ref ("open " + dir.Join("gone") + ": no such file or directory"))
+	expect.Equal(ref expect.IsErr(os.ReadDir(ref dir.Join("a.txt"))).Error(), ref ("open " + dir.Join("a.txt") + ": not a directory"))
+}
+
+// More names than one read of the directory gives, each once and in
+// order.
+func TestReadDirMany() {
+	dir := testing.TempDir()
+	for i := 0; i < 700; i++ {
+		expect.IsOk(os.WriteString(ref dir.Join(ref fmt.Sprintf("file-%04d-with-a-name-long-enough-to-fill-a-block", i)), ""))
+	}
+
+	entries := expect.IsOk(os.ReadDir(dir.Path()))
+	expect.Equal(ref len(entries), ref 700)
+	for i, e := range ref entries {
+		expect.Equal(e.Name(), ref fmt.Sprintf("file-%04d-with-a-name-long-enough-to-fill-a-block", i))
+	}
+}
+
+func TestMkdir() {
+	dir := testing.TempDir()
+	sub := dir.Join("sub")
+	expect.IsOk(os.Mkdir(ref sub, 0o700))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sub)).Mode()), "drwx------")
+	again := expect.IsErr(os.Mkdir(ref sub, 0o700))
+	expect.True(again.Kind() == io.Exists)
+	expect.Equal(ref again.Error(), ref ("mkdir " + sub + ": file exists"))
+	orphan := expect.IsErr(os.Mkdir(ref dir.Join("no/parent"), 0o700))
+	expect.True(orphan.Kind() == io.NotExist)
+	sticky := dir.Join("sticky")
+	expect.IsOk(os.Mkdir(ref sticky, os.ModeSticky | 0o700)) // a bit above the nine, which some systems drop from a new directory's mode
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sticky)).Mode()), "dtrwx------")
+}
+
+func TestMkdirAll() {
+	dir := testing.TempDir()
+	deep := dir.Join("a/b/c")
+	expect.IsOk(os.MkdirAll(ref deep, 0o755))
+	expect.True(expect.IsOk(os.Stat(ref deep)).IsDir())
+	expect.IsOk(os.MkdirAll(ref deep, 0o755)) // there already
+	expect.IsOk(os.MkdirAll(ref (deep + "/d/"), 0o755)) // a slash at the end
+	expect.True(expect.IsOk(os.Stat(ref (deep + "/d"))).IsDir())
+	expect.IsOk(os.MkdirAll(ref (deep + "/./e/../f"), 0o755)) // through a dot and two dots
+	expect.True(expect.IsOk(os.Stat(ref (deep + "/f"))).IsDir())
+	file := dir.Join("file")
+	expect.IsOk(os.WriteString(ref file, "x"))
+	expect.Equal(ref expect.IsErr(os.MkdirAll(ref file, 0o755)).Error(), ref ("mkdir " + file + ": not a directory"))
+	expect.Equal(ref expect.IsErr(os.MkdirAll(ref (file + "/x/y"), 0o755)).Error(), ref ("mkdir " + file + ": not a directory"))
+}
+
+func TestRename() {
+	dir := testing.TempDir()
+	from := dir.Join("from.txt")
+	to := dir.Join("to.txt")
+	expect.IsOk(os.WriteString(ref from, "moved"))
+	expect.IsOk(os.WriteString(ref to, "replaced"))
+	expect.IsOk(os.Rename(ref from, ref to)) // onto a file: it is replaced
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref to)), "moved")
+	gone := expect.IsErr(os.Rename(ref from, ref to))
+	expect.True(gone.Kind() == io.NotExist)
+	expect.Equal(ref gone.Error(), ref ("rename " + from + " " + to + ": no such file or directory"))
+	sub := dir.Join("sub")
+	expect.IsOk(os.Mkdir(ref sub, 0o755))
+	onto := expect.IsErr(os.Rename(ref to, ref sub)) // onto a directory: refused
+	expect.True(onto.Kind() == io.Exists)
+	expect.Equal(ref onto.Error(), ref ("rename " + to + " " + sub + ": file exists"))
+	expect.Equal(ref expect.IsErr(os.Rename(ref from, ref sub)).Error(), ref ("rename " + from + " " + sub + ": no such file or directory"))
+	expect.IsOk(os.Rename(ref to, ref (sub + "/in.txt"))) // into another directory
+	expect.IsOk(os.Rename(ref sub, ref dir.Join("renamed")))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("renamed/in.txt"))), "moved")
+	itself := expect.IsErr(os.Rename(ref dir.Join("renamed"), ref dir.Join("renamed"))) // a directory onto itself, as Go refuses it
+	expect.True(itself.Kind() == io.Exists)
+}
+
+func TestGetwdAndChdir() {
+	was := expect.IsOk(os.Getwd())
+	pwd := os.LookupEnv("PWD")
+	expect.True(was.HasPrefix("/"))
+	dir := testing.TempDir()
+	expect.IsOk(os.Chdir(dir.Path()))
+	expect.IsOk(os.WriteString("relative.txt", "here")) // a path with no slash is read from it
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("relative.txt"))), "here")
+	expect.IsOk(os.Setenv("PWD", dir.Path()))
+	expect.Equal(ref expect.IsOk(os.Getwd()), dir.Path()) // PWD names it: the path as it was given
+	expect.IsOk(os.Setenv("PWD", "/"))
+	now := expect.IsOk(os.Getwd()) // PWD names another directory: the system's answer
+	expect.True(now != "/" && expect.IsOk(os.Stat(ref (now + "/relative.txt"))).Size() == 4)
+	gone := expect.IsErr(os.Chdir(ref dir.Join("gone")))
+	expect.Equal(ref gone.Error(), ref ("chdir " + dir.Join("gone") + ": no such file or directory"))
+	expect.IsOk(os.Chdir(ref was))
+	match pwd {
+		Some(p) => expect.IsOk(os.Setenv("PWD", ref p)),
+		None => os.Unsetenv("PWD"),
+	}
+	expect.Equal(ref expect.IsOk(os.Getwd()), ref was)
+}
+
+func TestOpenFile() {
+	dir := testing.TempDir()
+	path := dir.Join("log.txt")
+	expect.Equal(ref expect.IsErr(os.OpenFile(ref path, os.O_WRONLY, 0)).Error(), ref ("open " + path + ": no such file or directory"))
+	f := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600))
+	expect.IsOk(f.WriteString("one\n"))
+	expect.IsOk(f.Close())
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-------")
+	taken := expect.IsErr(os.OpenFile(ref path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600))
+	expect.True(taken.Kind() == io.Exists)
+	for _, line := range ref []string{"two\n".Clone(), "three\n".Clone()} {
+		a := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600))
+		expect.IsOk(a.Seek(io.Start(0))) // an append goes to the end wherever the position is
+		expect.IsOk(a.WriteString(line))
+	}
+
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "one\ntwo\nthree\n")
+	rw := expect.IsOk(os.OpenFile(ref path, os.O_RDWR, 0))
+	expect.IsOk(rw.WriteString("ONE"))
+	expect.IsOk(rw.Seek(io.Start(0)))
+	buf := make([]byte, 7)
+	expect.Equal(ref expect.IsOk(rw.Read(mut buf)), ref 7)
+	expect.True(buf.Equal(ref []byte("ONE\ntwo")))
+	ro := expect.IsOk(os.OpenFile(ref path, os.O_RDONLY, 0))
+	expect.IsErr(ro.WriteString("x")) // open for reading only
+	wo := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_TRUNC, 0))
+	expect.IsErr(wo.Read(mut buf)) // open for writing only
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Size(), ref i64(0)) // emptied
+	synced := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_CREATE|os.O_SYNC, 0o600)) // every write waits for the device
+	expect.IsOk(synced.WriteString("synced"))
+	expect.IsOk(synced.Close())
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "synced")
+	expect.Equal(ref expect.IsErr(os.OpenFile(ref path, 1<<20, 0)).Error(), ref ("open " + path + ": invalid argument")) // a flag the package does not name
+	expect.Equal(ref expect.IsErr(os.OpenFile(ref path, os.O_WRONLY|os.O_RDWR, 0)).Error(), ref ("open " + path + ": invalid argument"))
+}
+
+func TestReadFileAndWriteFile() {
+	dir := testing.TempDir()
+	path := dir.Join("data.bin")
+	data := []byte{0, 255, 104, 105, 0, 10}
+	expect.IsOk(os.WriteFile(ref path, ref data, 0o644))
+	expect.True(expect.IsOk(os.ReadFile(ref path)).Equal(ref data))
+	expect.IsOk(os.WriteFile(ref path, ref []byte{}, 0o644)) // emptied, the mode of the file kept
+	expect.Equal(ref len(expect.IsOk(os.ReadFile(ref path))), ref 0)
+	big := make([]byte, 300000)
+	for i := 0; i < len(big); i++ {
+		big[i] = byte(i * 31)
+	}
+
+	expect.IsOk(os.WriteFile(ref path, ref big, 0o644))
+	expect.True(expect.IsOk(os.ReadFile(ref path)).Equal(ref big))
+	expect.Equal(ref expect.IsErr(os.ReadFile(ref dir.Join("gone"))).Error(), ref ("open " + dir.Join("gone") + ": no such file or directory"))
+	expect.Equal(ref expect.IsErr(os.ReadFile(dir.Path())).Error(), ref ("read " + *dir.Path() + ": is a directory"))
+	expect.Equal(ref expect.IsErr(os.WriteFile(ref dir.Join("no/dir"), ref data, 0o644)).Error(), ref ("open " + dir.Join("no/dir") + ": no such file or directory"))
+}
+
+func TestHostnameAndGetpid() {
+	expect.True(expect.IsOk(os.Hostname()).Len() > 0)
+	expect.True(os.Getpid() > 1)
 }
 
 func BenchmarkReadToString() {
@@ -51,4 +430,36 @@ func BenchmarkReadToString() {
 	expect.IsOk(os.WriteString(ref path, "some text to read back"))
 	testing.ResetTimer()
 	for testing.Loop() { _ = os.ReadToString(ref path) }
+}
+
+func BenchmarkGetenv() {
+	expect.IsOk(os.Setenv("SNELLO_BENCH", "a value of some length"))
+	n := 0
+	for testing.Loop() {
+		n += os.Getenv("SNELLO_BENCH").Len()
+	}
+
+	os.Unsetenv("SNELLO_BENCH")
+}
+
+func BenchmarkStat() {
+	dir := testing.TempDir()
+	path := dir.Join("file")
+	expect.IsOk(os.WriteString(ref path, "x"))
+	n := 0
+	for testing.Loop() {
+		n += int(expect.IsOk(os.Stat(ref path)).Size())
+	}
+}
+
+func BenchmarkReadDir() {
+	dir := testing.TempDir()
+	for i := 0; i < 200; i++ {
+		expect.IsOk(os.WriteString(ref dir.Join(ref fmt.Sprintf("file-%d.txt", i)), ""))
+	}
+
+	n := 0
+	for testing.Loop() {
+		n += len(expect.IsOk(os.ReadDir(dir.Path())))
+	}
 }

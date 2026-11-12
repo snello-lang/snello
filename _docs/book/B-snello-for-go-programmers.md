@@ -214,7 +214,13 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | Each package is compiled once and linked | The library is compiled with the program, into one binary, so the C compiler inlines across the boundary |
 | `GOROOT` holds the library's source | The library's source is inside the compiler; a build needs no path and no environment |
 | A function with no body is implemented in assembly | A function with no body is the runtime's, in C; only the library may declare one |
-| `os.ReadFile` returns bytes and an error | `os.ReadToString` returns `Result<string, io.Error>` (chapter 8) |
+| `os.ReadFile` returns bytes and an error | `os.ReadFile` returns `Result<[]byte, io.Error>`, and `os.ReadToString` a string (chapter 8) |
+| `os.LookupEnv` returns `(string, bool)` | `os.LookupEnv` returns a `string?`: `os.LookupEnv("HOME") ?? "/"` |
+| `os.Setenv` also sets the C library's environment under cgo | `os.Setenv` changes the program's copy alone: a bound C library reads the environment the program started with |
+| `os.O_RDONLY` and the other flags are the system's numbers | The same names, with numbers of Snello's own, the same on every system |
+| `os.FileInfo` and `os.DirEntry` are interfaces | Structs with the same methods: `Name`, `Size`, `Mode`, `ModTime`, `IsDir`; `Name`, `IsDir`, `Type` |
+| `path.Join(a, b, c)` takes any number | `path.Join(a, b)` takes two: `path.Join(ref path.Join(a, b), c)` |
+| `path.Base`, `path.Ext` and `path.Split` return strings sharing the argument's memory | They lend parts of the argument: a `ref string`, nothing copied |
 | `runtime.NumCPU()` | `os.Cores()`; there is no `runtime` package, and no `GOMAXPROCS`: the runtime runs one worker per processor |
 | `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
 | `*fs.PathError` with `Op`, `Path`, `Err`; `errors.Is(err, fs.ErrNotExist)` | `io.Error` with `Op`, `Path`, `Msg`; `e.Kind() == NotExist` |
@@ -243,6 +249,15 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `strings.NewReader(s)` | The same; the `Reader` owns the string, so `bufio` can hold it |
 | `[]byte(s)` and `string(b)` copy | The same |
 | `fmt.Fprintln(os.Stderr, ...)`, `fmt.Fprintln(w, ...)` with `w io.Writer` | `fmt.Fprintln(mut os.Stderr(), ...)`: the writer is lent `mut`, and must implement the `io.Writer` trait; the streams are functions, since a package variable is never lent `mut` |
+| `f.Seek(offset, io.SeekStart)`, a `whence` of 0, 1 or 2 | `f.Seek(io.Start(n))`, `io.Current(n)` or `io.End(n)`: a `SeekFrom`, and the position a `u64` |
+| `io.ReadFull` returns `io.EOF` with nothing read, `io.ErrUnexpectedEOF` partway | `Ok(0)` with nothing read, an error of `Kind` `io.UnexpectedEOF` partway |
+| `io.Discard`, a variable | `io.Discard`, a type: `var sink io.Discard` |
+| `sc.Split(bufio.ScanWords)`, which panics after `Scan` | `bufio.Words(mut r)`, a second constructor |
+| `r.Peek(n)` returns bytes valid until the next read | The same bytes lent: using them after the next read is a compile error |
+| `r.UnreadByte()` returns an `error` | `r.UnreadByte()` returns a `bool`, as `UnreadRune` does |
+| `bytes.Buffer`'s `WriteString` and `WriteByte` return an error that is always `nil`; `ReadByte` returns `io.EOF` at the end | They return nothing; `ReadByte` returns a `byte?` |
+| `b.Truncate(n)` panics for an `n` out of range | Keeps all for an `n` past the length and none for one below zero, as a slice's `Truncate` does |
+| `bytes.Equal(a, b)`, `bytes.Index(a, b)` | `a.Equal(b)`, `a.Find(b)`: methods of `[]byte` |
 | `fmt.Fprintln` returns `(n, err)` | `fmt.Fprintln` returns nothing, and so do `Fprint` and `Fprintf` |
 | `fmt.Print`, `fmt.Errorf`, `fmt.Sscanf` | Not in the library: `Printf` or `Fprint` to `os.Stdout()`; an error is a type with `Error()` and `Source()`; text is read with `bufio.Scanner` and `strconv` |
 

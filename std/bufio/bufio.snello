@@ -4,7 +4,7 @@
 
 // Package bufio puts a buffer between a program and a reader or a
 // writer, so that many small reads or writes become a few large ones,
-// and reads text by lines.
+// and reads text by lines or by words.
 //
 // Each type borrows the reader or writer under it, mut, for as long as
 // it lives: out := os.Stdout(); bufio.NewWriter(mut out) is a Writer<os.File> that
@@ -36,7 +36,17 @@
 // between the program and the writer or reader under it, with no copy.
 package bufio
 
-import ("io"; "unicode/utf8")
+import ("io"; "unicode"; "unicode/utf8")
+
+// MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
+// ending included, unless Buffer sets another: a longer one ends the
+// scan with "bufio.Scanner: token too long" rather than grow the
+// buffer without a bound on input a program does not control.
+const MaxScanTokenSize int = 65536
+
+// The size of a Writer's and a Reader's buffer, and the first size of a
+// Scanner's, as Go's bufio has them.
+const blockSize int = 4096
 
 // A Writer collects what is written to it and writes it to the writer
 // under it in blocks, when its buffer is full and on Flush. It is made
@@ -52,38 +62,31 @@ struct Writer<W: io.Writer> impl io.Writer {
 // in the pieces asked for: bytes, lines, and what an io.Reader is
 // asked. It is made with NewReader.
 struct Reader<R: io.Reader> impl io.Reader {
-	r   mut R
-	buf []byte // what was read and not handed out lies from rp up to wp
-	rp     int
-	wp     int
-	unread int // the width of the rune the last ReadRune returned, which UnreadRune can step back over, or -1
+	r        mut R
+	buf      []byte // what was read and not handed out lies from rp up to wp
+	rp       int
+	wp       int
+	unread   int // the width of the rune the last ReadRune returned, which UnreadRune can step back over, or -1
+	lastByte int // the last byte read, which UnreadByte puts back, or -1
 }
 
-// A Scanner reads a reader line by line: Scan reads the next line, and
-// Bytes or Text give it, without its line ending. It is made with
-// NewScanner.
+// A Scanner reads a reader line by line, or word by word: Scan reads
+// the next line or word, and Bytes or Text give it, a line without its
+// line ending. It is made with NewScanner for lines and with Words for
+// words.
 struct Scanner<R: io.Reader> {
 	r        mut R
 	buf      []byte // what was read and not scanned lies from start up to end
 	start    int
 	end      int
-	searched int // from start up to here holds no newline
+	searched int // from start up to here holds no newline, or for words no white space
 	line0    int // the line Scan gave last is buf[line0:line1]
 	line1    int
 	done     bool
 	err      io.Error?
-	max      int // the longest line, its ending included
+	max      int // the longest line, its ending included, or the longest word
+	words    bool // Scan reads words, not lines
 }
-
-// MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
-// ending included, unless Buffer sets another: a longer one ends the
-// scan with "bufio.Scanner: token too long" rather than grow the
-// buffer without a bound on input a program does not control.
-const MaxScanTokenSize int = 65536
-
-// The size of a Writer's and a Reader's buffer, and the first size of a
-// Scanner's, as Go's bufio has them.
-const blockSize int = 4096
 
 // NewWriter returns a Writer that writes to w, borrowed for as long as
 // the Writer lives. Its buffer holds 4096 bytes before it is written
@@ -105,17 +108,31 @@ func NewWriterSize<W: io.Writer>(w mut W, size int) Writer<W> {
 // NewReader returns a Reader that reads from r, borrowed for as long as
 // the Reader lives.
 func NewReader<R: io.Reader>(r mut R) Reader<R> {
-	return Reader<R>{r: r, buf: make([]byte, blockSize), rp: 0, wp: 0, unread: -1}
+	return Reader<R>{r: r, buf: make([]byte, blockSize), rp: 0, wp: 0, unread: -1, lastByte: -1}
 }
 
 // NewScanner returns a Scanner over r, borrowed for as long as the
-// Scanner lives, with no line read yet.
+// Scanner lives, that reads lines, with no line read yet.
 func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
-	return Scanner<R>{r: r, buf: []byte{}, start: 0, end: 0, searched: 0, line0: 0, line1: 0, done: false, err: None, max: MaxScanTokenSize}
+	return Scanner<R>{r: r, buf: []byte{}, start: 0, end: 0, searched: 0, line0: 0, line1: 0, done: false, err: None, max: MaxScanTokenSize, words: false}
+}
+
+// Words returns a Scanner over r, borrowed for as long as the Scanner
+// lives, that reads words, with none read yet: the runs of runes
+// between white space, as Go's ScanWords splits them, white space being
+// what unicode.IsSpace says it is, and a byte that starts no rune
+// counting as part of a word. A word is at most MaxScanTokenSize bytes
+// long, or what Buffer sets; a longer one ends the scan as a long line
+// does. It is a constructor of its own where Go has a Split method, so
+// that a Scanner reads one kind of piece from its first Scan to its
+// last.
+func Words<R: io.Reader>(r mut R) Scanner<R> {
+	return Scanner<R>{r: r, buf: []byte{}, start: 0, end: 0, searched: 0, line0: 0, line1: 0, done: false, err: None, max: MaxScanTokenSize, words: true}
 }
 
 // Buffer sets the longest line the Scanner reads, its ending included,
-// in place of MaxScanTokenSize; a size below one is one. Go's Buffer
+// or the longest word, in place of MaxScanTokenSize; a size below one
+// is one. Go's Buffer
 // also takes the first buffer to read into, which a Snello Scanner makes
 // itself.
 func (s mut Scanner<R>) Buffer(size int) {
@@ -294,7 +311,12 @@ func (r mut Reader<R>) Read(p mut []byte) Result<int, io.Error> {
 
 	if r.rp == r.wp {
 		if len(p) >= len(r.buf) {
-			return r.r.Read(p)
+			n := r.r.Read(p)?
+			if n > 0 {
+				r.lastByte = int(p[n-1])
+			}
+
+			return Ok(n)
 		}
 
 		r.rp = 0
@@ -309,6 +331,7 @@ func (r mut Reader<R>) Read(p mut []byte) Result<int, io.Error> {
 
 	k := copyBytes(p, r.buf[r.rp:r.wp])
 	r.rp += k
+	r.lastByte = int(r.buf[r.rp-1])
 	return Ok(k)
 }
 
@@ -321,6 +344,7 @@ func (r mut Reader<R>) ReadByte() Result<byte?, io.Error> {
 
 	c := r.buf[r.rp]
 	r.rp++
+	r.lastByte = int(c)
 	return Ok(Some(c))
 }
 
@@ -346,12 +370,14 @@ func (r mut Reader<R>) ReadRune() Result<(rune, int)?, io.Error> {
 	c, n := utf8.DecodeRune(r.buf[r.rp:r.wp])
 	r.rp += n
 	r.unread = n
+	r.lastByte = int(r.buf[r.rp-1])
 	return Ok(Some((c, n)))
 }
 
 // UnreadRune puts back the rune the last call returned, so the next
 // read gives it again, when that call was ReadRune; after any other
-// call it returns false and changes nothing.
+// call it returns false and changes nothing. It is stricter than
+// UnreadByte, as Go's documentation says of its own.
 func (r mut Reader<R>) UnreadRune() bool {
 	if r.unread < 0 || r.rp < r.unread {
 		return false
@@ -359,6 +385,7 @@ func (r mut Reader<R>) UnreadRune() bool {
 
 	r.rp -= r.unread
 	r.unread = -1
+	r.lastByte = -1
 	return true
 }
 
@@ -367,21 +394,47 @@ func (r mut Reader<R>) UnreadRune() bool {
 // what was left, and None once nothing is. A later call asks the
 // reader under it again, and gives what has arrived since.
 func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
+	return match r.collect(delim)? {
+		None => Ok(None),
+		Some((long, from)) => {
+			if len(long) == 0 { // the whole line lay in the buffer: one copy, into the string
+				return Ok(Some(string(r.buf[from:r.rp])))
+			}
+
+			appendBytes(mut long, r.buf[from:r.rp])
+			Ok(Some(string(long)))
+		},
+	}
+}
+
+// ReadBytes is ReadString giving the line as bytes the caller owns.
+func (r mut Reader<R>) ReadBytes(delim byte) Result<([]byte)?, io.Error> {
+	return match r.collect(delim)? {
+		None => Ok(None),
+		Some((long, from)) => {
+			appendBytes(mut long, r.buf[from:r.rp])
+			Ok(Some(long))
+		},
+	}
+}
+
+// collect finds the next line, up to and including the first delim, or
+// to the end of the input, and moves past it: the line is the bytes it
+// returns, set aside when it was longer than the buffer, then those of
+// the buffer from the index it returns up to rp. It returns None at the
+// end of the input when nothing is left. On a failure of the reader
+// under it, what it had set aside goes back in front of the buffer, so
+// the next call reads it again: a failure costs no byte.
+func (r mut Reader<R>) collect(delim byte) Result<([]byte, int)?, io.Error> {
 	r.unread = -1
 	long := []byte{} // the first parts of a line longer than the buffer
 	for {
 		i := indexByte(r.buf[r.rp:r.wp], delim)
 		if i >= 0 {
-			end := r.rp + i + 1
-			if len(long) == 0 {
-				line := string(r.buf[r.rp:end])
-				r.rp = end
-				return Ok(Some(line))
-			}
-
-			appendBytes(mut long, r.buf[r.rp:end])
-			r.rp = end
-			return Ok(Some(string(long)))
+			from := r.rp
+			r.rp += i + 1
+			r.lastByte = int(delim)
+			return Ok(Some((long, from)))
 		}
 
 		if r.wp-r.rp == len(r.buf) { // full of one line: set it aside and read on
@@ -404,15 +457,65 @@ func (r mut Reader<R>) ReadString(delim byte) Result<string?, io.Error> {
 		}
 
 		if !more { // the end of the input: what is left is the last line
-			appendBytes(mut long, r.buf[r.rp:r.wp])
+			from := r.rp
 			r.rp = r.wp
-			if len(long) == 0 {
+			if from < r.wp {
+				r.lastByte = int(r.buf[r.wp-1])
+			} else if len(long) > 0 {
+				r.lastByte = int(long[len(long)-1])
+			} else {
 				return Ok(None)
 			}
 
-			return Ok(Some(string(long)))
+			return Ok(Some((long, from)))
 		}
 	}
+}
+
+// Peek lends the next n bytes without reading past them, so that the
+// next read gives them again: fewer when the input ends first, and none
+// at its end. The bytes are the buffer's, lent for as long as nothing
+// else is asked of the Reader, which the compiler holds a program to,
+// where Go's Peek says they stop being valid at the next read. A count
+// below zero is an Error, "bufio: negative count", and one past the
+// buffer's 4096 bytes another, "bufio: buffer full", since the buffer
+// cannot hold what was asked.
+func (r mut Reader<R>) Peek(n int) Result<ref []byte, io.Error> {
+	r.unread = -1
+	if n < 0 {
+		return Err(io.NewError("bufio", "", "negative count", io.Other))
+	}
+
+	r.lastByte = -1
+	if n > len(r.buf) {
+		return Err(io.NewError("bufio", "", "buffer full", io.Other))
+	}
+
+	for r.wp-r.rp < n && r.fill()? {}
+	return Ok(r.buf[r.rp:min(r.rp+n, r.wp)])
+}
+
+// UnreadByte puts back the last byte read, so the next read gives it
+// again, as Go's UnreadByte does: the last byte Read, ReadByte,
+// ReadRune, ReadString or ReadBytes returned, a read that returned
+// nothing at the end of the input leaving it the last. Before any byte
+// was read, and after Peek, UnreadRune or another UnreadByte, it
+// returns false and changes nothing.
+func (r mut Reader<R>) UnreadByte() bool {
+	if r.lastByte < 0 || (r.rp == 0 && r.wp > 0) {
+		return false
+	}
+
+	if r.rp > 0 {
+		r.rp--
+	} else { // a read straight into the caller's buffer left this one empty
+		r.wp = 1
+	}
+
+	r.buf[r.rp] = byte(r.lastByte)
+	r.lastByte = -1
+	r.unread = -1
+	return true
 }
 
 // fill moves what the buffer holds to its start and reads into the room
@@ -435,23 +538,28 @@ func (r mut Reader<R>) fill() Result<bool, io.Error> {
 	return Ok(n > 0)
 }
 
-// Scan reads the next line and reports whether there was one; false at
-// the end of the input, or when a read failed, which Err then says;
-// what was read before a failure is given as the last line first. The
-// line is read without its ending, a newline or a carriage return and
-// a newline; a last line without one is a line too.
+// Scan reads the next line, or the next word, and reports whether there
+// was one; false at the end of the input, or when a read failed, which
+// Err then says; what was read before a failure is given as the last
+// line or word first. A line is read without its ending, a newline or a
+// carriage return and a newline; a last line without one is a line too.
 func (s mut Scanner<R>) Scan() bool {
 	for {
-		if i := s.newline() {
+		if s.words {
+			if s.word() {
+				return true
+			}
+		} else if i := s.newline() {
 			s.line0 = s.start
 			s.line1 = i + 1
 			s.start = i + 1
 			s.searched = s.start
 			return true
+		} else {
+			s.searched = s.end
 		}
 
-		s.searched = s.end
-		if s.done { // the input ended, or a read failed: what is left is the last line
+		if s.done { // the input ended, or a read failed: what is left is the last line; word took the last word already
 			s.line0 = s.start
 			s.line1 = s.end
 			s.start = s.end
@@ -498,6 +606,59 @@ func (s mut Scanner<R>) Scan() bool {
 	}
 }
 
+// word finds the next word in what was read and not scanned, by the
+// rules of Go's ScanWords, and reports whether there is one: the white
+// space before it is passed over whether or not a word follows, so that
+// it never fills the buffer, and a word that reaches the end of what was
+// read is one only when the input ended, since the next read may
+// lengthen it. A rune cut short at that end is decoded once the rest is
+// read, and at the end of the input as a byte that starts no rune, part
+// of a word. The search goes on from where the last one stopped, which
+// searched keeps, so that a word read in many small pieces is decoded
+// once, where Go's ScanWords decodes it again from its start after every
+// read.
+func (s mut Scanner<R>) word() bool {
+	if s.searched <= s.start { // not past the white space yet; a rune cut short stops the pass below
+		for s.start < s.end {
+			c, w := utf8.DecodeRune(s.buf[s.start:s.end])
+			if !unicode.IsSpace(c) {
+				break
+			}
+
+			s.start += w
+		}
+
+		s.searched = s.start
+	}
+
+	for s.searched < s.end {
+		if !s.done && !utf8.FullRune(s.buf[s.searched:s.end]) {
+			return false
+		}
+
+		c, w := utf8.DecodeRune(s.buf[s.searched:s.end])
+		if unicode.IsSpace(c) {
+			s.line0 = s.start
+			s.line1 = s.searched
+			s.start = s.searched + w
+			s.searched = s.start
+			return true
+		}
+
+		s.searched += w
+	}
+
+	if s.done && s.start < s.end {
+		s.line0 = s.start
+		s.line1 = s.end
+		s.start = s.end
+		s.searched = s.end
+		return true
+	}
+
+	return false
+}
+
 // newline returns the index of the first newline in what has not been
 // looked at yet, from searched on, or None.
 func (s ref Scanner<R>) newline() int? {
@@ -509,9 +670,10 @@ func (s ref Scanner<R>) newline() int? {
 	return Some(s.searched + i)
 }
 
-// Bytes lends the last line Scan read, without its line ending; the
-// borrow lasts as long as the Scanner's. Before Scan, or after it
-// returned false, the line is empty.
+// Bytes lends the last line Scan read, without its line ending, or the
+// last word, which ends in neither a newline nor a carriage return,
+// both being white space; the borrow lasts as long as the Scanner's.
+// Before Scan, or after it returned false, it is empty.
 func (s ref Scanner<R>) Bytes() ref []byte {
 	end := s.line1
 	if end > s.line0 && s.buf[end-1] == '\n' {
@@ -526,7 +688,7 @@ func (s ref Scanner<R>) Bytes() ref []byte {
 }
 
 // Text returns the last line Scan read as a new string, without its
-// line ending.
+// line ending, or the last word.
 func (s ref Scanner<R>) Text() string {
 	return string(s.Bytes())
 }

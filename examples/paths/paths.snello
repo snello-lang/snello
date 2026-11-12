@@ -1,0 +1,76 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Where each file of a backup goes.
+//
+// Tests package path on paths as a user types them: Clean for the
+// shortest spelling, which shows a path that climbs out of where it
+// started, Join to place it under a root, Split, Dir, Base and Ext to
+// take the result apart, IsAbs, and the environment for where the
+// backup lives.
+
+package paths
+
+import ("fmt"; "os"; "path")
+
+// A Plan is where one file is copied to.
+struct Plan {
+    to  string
+    ext string // the extension without its dot, or that there is none
+}
+
+// plan places a path under root: one from the root of the system keeps
+// its directories, and one from the home directory goes under home. A
+// path that climbs out of the home directory is refused, which its
+// clean form shows by starting with two dots.
+func plan(root ref string, given ref string) Plan? {
+    clean := path.Clean(given)
+    if clean == ".." || clean.HasPrefix("../") {
+        return None
+    }
+
+    under := if path.IsAbs(ref clean) { clean[1:].Clone() } else { path.Join("home", ref clean) }
+    dotted := path.Ext(ref clean)
+    ext := if dotted.Len() > 1 { dotted[1:].Clone() } else { "no extension".Clone() }
+    return Some(Plan{to: path.Join(root, ref under), ext: ext})
+}
+
+func show(root ref string, given ref string) {
+    match plan(root, given) {
+        None => fmt.Printf("%-34s refused: outside the home directory\n", given),
+        Some(p) => {
+            dir, file := path.Split(ref p.to)
+            fmt.Printf("%-34s %s\n", given, p.to)
+            fmt.Printf("%-34s   %s in %s, %s; split as %q and %q\n", "", path.Base(ref p.to), path.Dir(ref p.to), p.ext, dir, file)
+        },
+    }
+}
+
+func main() {
+    given := []string{
+        "notes.txt".Clone(),
+        "./photos//2026/../2025/beach.jpg".Clone(),
+        "/etc/hosts".Clone(),
+        "music/".Clone(),
+        "archive.tar.gz".Clone(),
+        "../neighbour/secret.key".Clone(),
+        "work/../../etc/passwd".Clone(),
+        ".profile".Clone(),
+    }
+
+    // The root of the backup is the environment's to set, and /backup
+    // when it does not.
+    os.Unsetenv("BACKUP_ROOT")
+    root := os.LookupEnv("BACKUP_ROOT") ?? "/backup"
+    fmt.Println("to", root)
+    for _, g := range ref given {
+        show(ref root, g)
+    }
+
+    // Set as a user would type it, and cleaned before it is used.
+    os.Setenv("BACKUP_ROOT", "/mnt//disk/./backups/").Expect("setenv")
+    root = path.Clean(ref os.Getenv("BACKUP_ROOT"))
+    fmt.Println("to", root)
+    show(ref root, ref given[1])
+}

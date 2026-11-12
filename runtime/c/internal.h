@@ -98,6 +98,10 @@ void sn_rand_key(const uint8_t seed[32]);
 extern bool sn_rand_no_system;
 #endif
 
+// sn_digit_pairs is 00 to 99, two digits each, one after another: what
+// a number is written from two digits at a time.
+extern const char sn_digit_pairs[201];
+
 // sn_slice_grow makes room in s for at least need elements of size
 // bytes, doubling, as Push amortizes to constant time.
 void sn_slice_grow(sn_slice *s, int64_t need, size_t size);
@@ -156,12 +160,51 @@ void sn_alloc_counts(int64_t *blocks, int64_t *bytes);
 enum { SN_PLACE_LINE, SN_PLACE_CALL, SN_PLACE_PARTS };
 sn_string *sn_task_places(void);
 
-// sn_deadline_arm calls fire(arg) d nanoseconds from now on the timers'
-// thread, keeping the timer at *at, 0 while it is out of the heap, so
-// that arming it again moves it and sn_deadline_disarm takes it out;
-// once that returns, fire is not running and will not run. sched.c's.
-void sn_deadline_arm(int64_t *at, int64_t d, void (*fire)(void *), void *arg);
-void sn_deadline_disarm(int64_t *at);
+// The timers, timer.c's. A deadline is where a timer of the runtime's
+// own is kept: the timer while it is in a wheel, and the wheel it goes
+// in, the index and one of the worker's that first armed it, 0 before.
+// sn_deadline_arm calls fire(arg) d nanoseconds from now, on whichever
+// thread fires the timer, and arming it again moves it; sn_deadline_disarm
+// takes it out, and once that returns, fire is not running and will not
+// run. A deadline starts as all zero.
+typedef struct {
+    void *timer;
+    _Atomic int32_t home;
+} sn_deadline;
+
+void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg);
+void sn_deadline_disarm(sn_deadline *at);
+
+// What the scheduler asks of the timers: a wheel per worker made before
+// any thread but the first runs, the earliest deadline any wheel holds
+// and one wheel's, firing what is due at now, on the calling thread, at
+// every wheel or at one worker's, and how many timers have yet to wake
+// what they wake.
+void sn_timers_start(int64_t nworkers);
+int64_t sn_timers_next(void);
+int64_t sn_timers_next_of(int64_t worker);
+bool sn_timers_fire(int64_t now);
+bool sn_timers_fire_own(int64_t worker, int64_t now);
+int64_t sn_timers_pending(void);
+
+// What the timers ask of the scheduler, sched.c's: the workers started,
+// the index of the current thread's worker, a wake in two halves (a
+// parked task claimed, which the claimer alone may then queue, so that
+// a timer's lock is held across no queue), a look by the idle workers
+// at whether any task can still be woken, and someone to wake for a
+// timer started at when: now, or, for a task that parks on its own
+// timer, once its worker is on its way to its next task.
+void sn_sched_start(void);
+int64_t sn_worker_index(void);
+bool sn_wake_claim(sn_task *t);
+void sn_wake_queue(sn_task *t);
+void sn_sched_recheck(void);
+void sn_sched_timer_set(int64_t when);
+void sn_sched_owe(int64_t when);
+
+// sn_chan_home is where the channel records the wheel its timers go in,
+// for timer.c; chan.c's.
+_Atomic int32_t *sn_chan_home(sn_chan *c);
 
 // The queues of waiters: sn_enqueue adds w at the tail of q and
 // sn_remove_waiter takes it out wherever it is; sn_dequeue takes the

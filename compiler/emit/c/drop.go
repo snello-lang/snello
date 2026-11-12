@@ -404,16 +404,21 @@ func (e *Emitter) rawPlace(x ast.Expr) string {
 	return e.expr(x)
 }
 
-// isRead reports whether x reads a place someone else owns, so that
-// its value is lent to the expression around it, never a temporary to
-// drop.
-func (e *Emitter) isRead(x ast.Expr) bool {
+// isLent reports whether the value of x is someone else's, lent to the
+// expression around it and never a temporary to drop: a read of a
+// variable, a field or an element, or a borrow whatever gave it, as a
+// call that returns ref string lends its caller's string.
+func (e *Emitter) isLent(x ast.Expr) bool {
+	if _, borrow := e.typeOf(x).(*types.Ref); borrow {
+		return true
+	}
+
 	switch x := x.(type) {
 	case *ast.Ident:
 		_, ok := e.info.Uses[x].(*types.Var)
 		return ok
 	case *ast.ParenExpr:
-		return e.isRead(x.X)
+		return e.isLent(x.X)
 	case *ast.SelectorExpr:
 		_, ok := e.info.Uses[x.Sel].(*types.Var)
 		return ok

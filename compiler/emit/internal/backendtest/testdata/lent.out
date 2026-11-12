@@ -1,0 +1,76 @@
+ok call + lit
+ok lit + call
+ok call + call
+ok chain of four
+ok += deref of call
+ok return call + lit
+ok generic call + lit
+ok generic call of field + lit
+ok field of call + lit
+ok index of call + lit
+ok deref of call + lit
+ok slice of call + lit
+ok slice of field + lit
+ok ?? + lit
+ok ?? call + lit
+ok if expression + lit
+ok match expression + lit
+ok assign call + lit
+ok push call + lit
+ok statement: call lending a string
+ok statement: call lending a slice
+ok statement: call lending an option
+ok statement: call lending a result
+ok statement: call lending a Drop value
+ok blank assign of a lent option
+ok blank assign of a lent result, Err
+ok len of lent slice
+ok index of lent slice
+ok range over lent slice
+ok range over lent map
+ok range over lent bytes
+ok clone of lent slice
+ok clone of lent bytes
+ok string of lent bytes
+ok bytes of lent string
+ok lent string to ref parameter
+ok lent slice to generic
+ok two lent to one call
+ok lent Drop value to ref parameter
+ok local holding lent Drop value
+ok field of lent struct
+ok lent struct local
+ok option: ??
+ok option: if binding
+ok option: match
+ok option: IsSome
+ok result: match Ok
+ok result: match Err
+ok result: ??
+ok result: IsOk
+ok compare lent strings
+ok compare lent slices
+ok lent string methods
+ok slice of lent string and bytes
+drop k
+ok map lookup with lent key
+ok map insert with cloned lent key
+ok push of clone of lent
+ok extend from lent slice
+ok Sprintf of lent values
+ok Sprint of lent values
+ok strings.Join of lent slice
+ok builder fed lent strings
+ok buffer fed lent bytes
+ok mut borrow from a call
+ok append to mut borrow from a call
+ok closure reading lent
+ok return of lent through a function
+ok if expression of lent
+ok match expression of lent
+ok tuple of lent parts
+ok nested calls on lent
+ok lent in arithmetic of lengths
+/home/of/a/string/long/enough/to/own/a/block
+drop res
+done 7134

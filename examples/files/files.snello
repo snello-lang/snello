@@ -5,11 +5,13 @@
 // File copying with deterministic cleanup.
 //
 // Tests Drop versus defer, and that a closed file cannot be used again
-// because Close consumes it.
+// because Close consumes it; then the rest a program does with files: a
+// log opened to append to, directories made and renamed, and a
+// directory listed with what the system says of each name.
 
 package files
 
-import ("fmt"; "io"; "os")
+import ("fmt"; "io"; "os"; "path/filepath")
 
 // os.File implements Drop: going out of scope closes the descriptor. An
 // explicit Close() consumes the file and reports the error, which Drop
@@ -38,6 +40,49 @@ func NewTempDir() Result<TempDir, io.Error> {
 
 func (t mut TempDir) Drop() { os.RemoveAll(ref t.path) }
 
+// Log adds a line to a file, making it first when it is not there: the
+// flags of OpenFile say how it is opened, and 0600 who may read it.
+func Log(path ref string, line ref string) Result<(), io.Error> {
+    f := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)?
+    f.WriteString(line)?
+    f.WriteString("\n")?
+    return f.Close()
+}
+
+// List prints what a directory holds, in the order ReadDir gives, by
+// name: the entry says what kind of file it is, and Stat the rest.
+func List(dir ref string) Result<(), io.Error> {
+    for _, e := range ref os.ReadDir(dir)? {
+        if e.IsDir() {
+            fmt.Printf("  %s/\n", e.Name())
+            continue
+        }
+
+        fi := os.Stat(ref filepath.Join(dir, e.Name()))?
+        fmt.Printf("  %s, %d bytes%s\n", e.Name(), fi.Size(), if fi.Mode().Perm() == 0o600 { ", the owner's alone" } else { "" })
+    }
+
+    return Ok(())
+}
+
+// Archive moves the copy into a directory made for it, with every
+// parent it lacks, and logs each step.
+func Archive(root ref string) Result<(), io.Error> {
+    log := filepath.Join(root, "copy.log")
+    Log(ref log, "copied input.txt")?
+    kept := filepath.Join(root, "kept/2026/copies")
+    os.MkdirAll(ref kept, 0o755)?
+    os.Rename(ref filepath.Join(root, "copy.txt"), ref filepath.Join(ref kept, "input.txt"))?
+    Log(ref log, "archived it")?
+    fmt.Println("in the directory:")
+    List(root)?
+    fmt.Println("in kept/2026/copies:")
+    List(ref kept)?
+    fmt.Printf("the log:\n%s", os.ReadToString(ref log)?)
+    fmt.Println("the copy moved:", os.Stat(ref filepath.Join(root, "copy.txt")).IsErr())
+    return Ok(())
+}
+
 func main() {
     tmp := NewTempDir().Expect("tempdir")
     target := tmp.path + "/copy.txt"       // `+` borrows both sides and returns a new string
@@ -48,6 +93,11 @@ func main() {
     match Copy("input.txt", ref target) {
         Ok(n)  => fmt.Println("copied", n, "bytes"),
         Err(e) => fmt.Println("copy failed:", e),
+    }
+
+    match Archive(ref tmp.path) {
+        Ok(_)  => {},
+        Err(e) => fmt.Println("archive failed:", e),
     }
     // tmp dropped here: directory removed. Then the deferred print runs.
 }

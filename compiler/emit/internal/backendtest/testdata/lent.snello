@@ -1,0 +1,432 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Lent values: what a borrow may be used for without the one who lent
+// it losing what it owns. A Home lends its string, its slices, its map,
+// a struct, a value with a Drop, an option and a Result of a borrow,
+// from calls; each form below uses one where the compiler could take
+// it for a value made there and release it: on either side of a +, in a
+// chain of them, through ??, an if and a match, as a statement of its
+// own, passed, compared, converted, ranged over, sliced, printed. After
+// each, the Home must hold what it was made with; a debug build stops
+// at the first read of a released block, and reports a block left at
+// the end. The Res is dropped once, when the Home is.
+
+package main
+
+import ("bytes"; "fmt"; "strings")
+
+struct Res impl Drop { name string }
+
+func (r mut Res) Drop() { fmt.Println("drop", r.name) }
+
+struct Inner { name string; res Res }
+
+struct Home {
+	path  string
+	names []string
+	data  []byte
+	inner Inner
+	table map[string]string
+	maybe string?
+}
+
+func (h ref Home) Path() ref string { return ref h.path }
+func (h ref Home) Names() ref []string { return ref h.names }
+func (h ref Home) Data() ref []byte { return ref h.data }
+func (h ref Home) Inner() ref Inner { return ref h.inner }
+func (h ref Home) Res() ref Res { return ref h.inner.res }
+func (h ref Home) Table() ref map[string]string { return ref h.table }
+func (h ref Home) Maybe(ok bool) ref string? {
+	if ok { return Some(ref h.path) }
+	return None
+}
+func (h ref Home) Found(ok bool) Result<ref string, string> {
+	if ok { return Ok(ref h.path) }
+	return Err("not found, in a string long enough to own a block".Clone())
+}
+func (h mut Home) Mut() mut string { return mut h.path }
+
+func first<T>(xs ref []T) ref T { return ref xs[0] }
+func length(s ref string) int { return s.Len() }
+func count<T>(xs ref []T) int { return len(xs) }
+func show(r ref Res) int { return r.name.Len() }
+func both(a ref string, b ref []string) int { return a.Len() + len(b) }
+
+// whole reports whether everything the Home owns is as it was made.
+func whole(h ref Home) bool {
+	return h.path == "/home/of/a/string/long/enough/to/own/a/block" && len(h.names) == 2 && h.names[0] == "the first name, long enough to own" && h.names[1] == "the second name, as long as the first" && string(h.data) == "bytes enough to own a block of their own" && h.inner.name == "an inner name long enough to own a block" && h.inner.res.name == "res" && len(h.table) == 1 && h.table["a key long enough to own a block of its own"] == "a value long enough to own a block too"
+}
+
+// ok says whether the Home is whole after a form, by the form's name.
+func ok(form ref string, h ref Home) {
+	if whole(h) {
+		fmt.Println("ok", form)
+	} else {
+		fmt.Println("BROKEN after", form)
+	}
+}
+
+func build(h ref Home) string { return h.Path() + "!" }
+
+func run() int {
+	h := Home{
+		path: "/home/of/a/string/long/enough/to/own/a/block".Clone(),
+		names: []string{"the first name, long enough to own".Clone(), "the second name, as long as the first".Clone()},
+		data: []byte("bytes enough to own a block of their own"),
+		inner: Inner{name: "an inner name long enough to own a block".Clone(), res: Res{name: "res".Clone()}},
+		table: map[string]string{},
+		maybe: None,
+	}
+	h.table["a key long enough to own a block of its own".Clone()] = "a value long enough to own a block too".Clone()
+	n := 0
+	{
+		n += (h.Path() + "/").Len()
+	}
+	ok("call + lit", ref h)
+	{
+		n += ("/" + h.Path()).Len()
+	}
+	ok("lit + call", ref h)
+	{
+		n += (h.Path() + h.Path()).Len()
+	}
+	ok("call + call", ref h)
+	{
+		n += ("<" + h.Path() + ">" + h.Path()).Len()
+	}
+	ok("chain of four", ref h)
+	{
+		e := "x".Clone()
+		e += *h.Path()
+		n += e.Len()
+	}
+	ok("+= deref of call", ref h)
+	{
+		n += build(ref h).Len()
+	}
+	ok("return call + lit", ref h)
+	{
+		n += (first(h.Names()) + "!").Len()
+	}
+	ok("generic call + lit", ref h)
+	{
+		n += (first(ref h.names) + "!").Len()
+	}
+	ok("generic call of field + lit", ref h)
+	{
+		n += (h.Inner().name + "!").Len()
+	}
+	ok("field of call + lit", ref h)
+	{
+		n += (h.Names()[0] + "!").Len()
+	}
+	ok("index of call + lit", ref h)
+	{
+		n += (*h.Path() + "!").Len()
+	}
+	ok("deref of call + lit", ref h)
+	{
+		n += (h.Path()[1:5] + "!").Len()
+	}
+	ok("slice of call + lit", ref h)
+	{
+		n += (h.path[1:5] + "!").Len()
+	}
+	ok("slice of field + lit", ref h)
+	{
+		n += ((h.Maybe(true) ?? "none") + "!").Len()
+	}
+	ok("?? + lit", ref h)
+	{
+		n += ((h.Maybe(false) ?? h.Path()) + "!").Len()
+	}
+	ok("?? call + lit", ref h)
+	{
+		n += ((if n == 0 { h.Path() } else { first(h.Names()) }) + "!").Len()
+	}
+	ok("if expression + lit", ref h)
+	{
+		n += ((match h.Maybe(true) { Some(s) => s, None => h.Path() }) + "!").Len()
+	}
+	ok("match expression + lit", ref h)
+	{
+		u := h.Path().Clone()
+		u = h.Path() + "?"
+		n += u.Len()
+	}
+	ok("assign call + lit", ref h)
+	{
+		parts := []string{}
+		parts.Push(h.Path() + "/x")
+		n += strings.Join(ref parts, ",").Len()
+	}
+	ok("push call + lit", ref h)
+	{
+		h.Path()
+	}
+	ok("statement: call lending a string", ref h)
+	{
+		h.Names()
+	}
+	ok("statement: call lending a slice", ref h)
+	{
+		h.Maybe(true)
+	}
+	ok("statement: call lending an option", ref h)
+	{
+		h.Found(true)
+	}
+	ok("statement: call lending a result", ref h)
+	{
+		h.Res()
+	}
+	ok("statement: call lending a Drop value", ref h)
+	{
+		_ = h.Maybe(true)
+	}
+	ok("blank assign of a lent option", ref h)
+	{
+		_ = h.Found(false)
+	}
+	ok("blank assign of a lent result, Err", ref h)
+	{
+		n += len(h.Names()) + len(h.Data()) + len(h.Table())
+	}
+	ok("len of lent slice", ref h)
+	{
+		n += h.Names()[1].Len() + int(h.Data()[0])
+	}
+	ok("index of lent slice", ref h)
+	{
+		for i, name := range h.Names() {
+			n += i + name.Len()
+		}
+	}
+	ok("range over lent slice", ref h)
+	{
+		for k, v := range h.Table() {
+			n += k.Len() + v.Len()
+		}
+	}
+	ok("range over lent map", ref h)
+	{
+		for _, c := range h.Data() {
+			n += int(c)
+		}
+	}
+	ok("range over lent bytes", ref h)
+	{
+		c := h.Names().Clone()
+		n += len(c)
+	}
+	ok("clone of lent slice", ref h)
+	{
+		c := h.Data().Clone()
+		n += len(c)
+	}
+	ok("clone of lent bytes", ref h)
+	{
+		n += string(h.Data()).Len()
+	}
+	ok("string of lent bytes", ref h)
+	{
+		n += len([]byte(h.Path()))
+	}
+	ok("bytes of lent string", ref h)
+	{
+		n += length(h.Path())
+	}
+	ok("lent string to ref parameter", ref h)
+	{
+		n += count(h.Names()) + first(h.Names()).Len()
+	}
+	ok("lent slice to generic", ref h)
+	{
+		n += both(h.Path(), h.Names())
+	}
+	ok("two lent to one call", ref h)
+	{
+		n += show(h.Res())
+	}
+	ok("lent Drop value to ref parameter", ref h)
+	{
+		r := h.Res()
+		n += show(r)
+	}
+	ok("local holding lent Drop value", ref h)
+	{
+		n += h.Inner().name.Len() + h.Inner().res.name.Len()
+	}
+	ok("field of lent struct", ref h)
+	{
+		in := h.Inner()
+		n += in.name.Len()
+	}
+	ok("lent struct local", ref h)
+	{
+		n += (h.Maybe(true) ?? "none").Len() + (h.Maybe(false) ?? "none").Len()
+	}
+	ok("option: ??", ref h)
+	{
+		if s := h.Maybe(true) {
+			n += s.Len()
+		}
+	}
+	ok("option: if binding", ref h)
+	{
+		n += match h.Maybe(true) {
+			Some(s) => s.Len(),
+			None => 0,
+		}
+	}
+	ok("option: match", ref h)
+	{
+		if h.Maybe(true).IsSome() && h.Maybe(false).IsNone() { n++ }
+	}
+	ok("option: IsSome", ref h)
+	{
+		n += match h.Found(true) {
+			Ok(s) => s.Len(),
+			Err(e) => e.Len(),
+		}
+	}
+	ok("result: match Ok", ref h)
+	{
+		n += match h.Found(false) {
+			Ok(s) => s.Len(),
+			Err(e) => e.Len(),
+		}
+	}
+	ok("result: match Err", ref h)
+	{
+		n += (h.Found(false) ?? h.Path()).Len() + (h.Found(true) ?? "x").Len()
+	}
+	ok("result: ??", ref h)
+	{
+		if h.Found(true).IsOk() && h.Found(false).IsErr() { n++ }
+	}
+	ok("result: IsOk", ref h)
+	{
+		if h.Path() == h.Path() && !(h.Path() < h.Path()) && *h.Path() != "x" { n++ }
+	}
+	ok("compare lent strings", ref h)
+	{
+		if h.Data().Equal(h.Data()) { n++ }
+	}
+	ok("compare lent slices", ref h)
+	{
+		n += h.Path().ToUpper().Len() + h.Path().Trim().Len() + len(h.Path().Split("/")) + (h.Path().Index("of") ?? 0)
+	}
+	ok("lent string methods", ref h)
+	{
+		n += h.Path()[1:5].Len() + len(h.Data()[2:6])
+	}
+	ok("slice of lent string and bytes", ref h)
+	{
+		k := "a key long enough to own a block of its own".Clone()
+		hk := Home{path: k, names: []string{}, data: []byte{}, inner: Inner{name: "", res: Res{name: "k".Clone()}}, table: map[string]string{}, maybe: None}
+		n += h.table[*hk.Path()].Len()
+	}
+	ok("map lookup with lent key", ref h)
+	{
+		t := map[string]int{}
+		t[h.Path().Clone()] = 1
+		t[h.Path().Clone()] = 2
+		n += len(t) + t[*h.Path()]
+	}
+	ok("map insert with cloned lent key", ref h)
+	{
+		xs := []string{}
+		xs.Push(h.Path().Clone())
+		xs.Push(first(h.Names()).Clone())
+		n += len(xs)
+	}
+	ok("push of clone of lent", ref h)
+	{
+		bs := []byte{}
+		bs.Extend(h.Data())
+		bs.Extend(h.Data()[0:3])
+		n += len(bs)
+	}
+	ok("extend from lent slice", ref h)
+	{
+		n += fmt.Sprintf("%s %v %q %v %v %d", h.Path(), h.Path(), h.Path(), h.Names(), h.Maybe(true), len(h.Data())).Len()
+	}
+	ok("Sprintf of lent values", ref h)
+	{
+		n += fmt.Sprint(h.Path(), h.Names(), h.Data(), h.Maybe(false)).Len()
+	}
+	ok("Sprint of lent values", ref h)
+	{
+		n += strings.Join(h.Names(), h.Path()).Len()
+	}
+	ok("strings.Join of lent slice", ref h)
+	{
+		var sb strings.Builder
+		sb.WriteString(h.Path())
+		sb.WriteString(first(h.Names()))
+		n += sb.String().Len()
+	}
+	ok("builder fed lent strings", ref h)
+	{
+		var bb bytes.Buffer
+		_ = bb.Write(h.Data())
+		bb.WriteString(h.Path())
+		n += bb.Len() + len(bb.Bytes())
+	}
+	ok("buffer fed lent bytes", ref h)
+	{
+		p := h.Mut()
+		*p = "/home/of/a/string/long/enough/to/own/a/block".Clone()
+		n += h.Mut().Len()
+	}
+	ok("mut borrow from a call", ref h)
+	{
+		*h.Mut() += ""
+		n += h.path.Len()
+	}
+	ok("append to mut borrow from a call", ref h)
+	{
+		f := func(s ref string) int { return s.Len() + h.Path().Len() }
+		n += f(h.Path())
+	}
+	ok("closure reading lent", ref h)
+	{
+		n += first(h.Names()).Len() + first(ref h.names).Len()
+	}
+	ok("return of lent through a function", ref h)
+	{
+		s := if n == 0 { h.Path() } else { first(h.Names()) }
+		n += s.Len()
+	}
+	ok("if expression of lent", ref h)
+	{
+		s := match h.Maybe(false) { Some(v) => v, None => h.Path() }
+		n += s.Len()
+	}
+	ok("match expression of lent", ref h)
+	{
+		match h.Path().SplitOnce("/of/") {
+			Some((a, b)) => n += a.Len() + b.Len(),
+			None => n += 0,
+		}
+	}
+	ok("tuple of lent parts", ref h)
+	{
+		n += first(h.Names()).ToUpper().ToLower().Len() + h.Path().Clone().Len()
+	}
+	ok("nested calls on lent", ref h)
+	{
+		n += h.Path().Len() * len(h.Names()) - len(h.Data())
+	}
+	ok("lent in arithmetic of lengths", ref h)
+	fmt.Println(h.Path())
+	return n
+}
+
+func main() {
+	n := run()
+	fmt.Println("done", n)
+}

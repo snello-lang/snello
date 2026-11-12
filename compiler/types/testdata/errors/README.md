@@ -43,6 +43,7 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A package variable is read and lent as `ref` by every task, and never assigned, lent as `mut` or moved out of; its type is `Send` | global-assigned, global-mut, global-moved, global-not-send, global-declared-not-send, global-trait-not-send |
 | `?` passes an error into the one variant of the function's error enum that holds its type, or into a trait value; a derived `Error()` needs printable fields; `%+v` prints an error's chain and nothing else | try-ambiguous, try-no-variant, error-unprintable, format-plus |
 | A format is checked when the program is compiled: each verb prints the types it is for, the `0` flag pads a number, and a width and a precision are a million at most | format-verb, format-zero, format-size |
+| A bare name in a pattern binds, or names a variant or `true` and `false`; a constant's name is refused, since it would bind and match every value | match-constant |
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 

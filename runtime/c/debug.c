@@ -159,6 +159,7 @@ int sn_finish(void) {
     }
 
     sn_slice_free(&sn_os_Args);
+    sn_os_env_free();
     int64_t n = sn_tasks_running();
     for (int i = 0; n > 0 && i < 200; i++) { // a task that has sent its last word may still be ending
         sn_time_Sleep(1000000);
