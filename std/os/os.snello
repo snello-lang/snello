@@ -15,6 +15,45 @@ package os
 
 import ("fmt"; "io"; "time")
 
+// The error numbers the package reports of its own accord, where the
+// system was not asked: each is the same number on every system Snello
+// runs on.
+const eexist int = 17  // file exists
+const enotdir int = 20 // not a directory
+const einval int = 22  // invalid argument
+
+// The flags of OpenFile, Go's names: one of O_RDONLY, O_WRONLY and
+// O_RDWR says how the file is opened, and the rest are added to it with
+// |. The numbers are Snello's own and the same on every system, where
+// Go's are the system's and differ from one to the next.
+const O_RDONLY int = 0   // open for reading only
+const O_WRONLY int = 1   // open for writing only
+const O_RDWR int = 2     // open for reading and writing
+const O_APPEND int = 8   // every write goes to the end of the file
+const O_CREATE int = 64  // make the file when it does not exist
+const O_EXCL int = 128   // with O_CREATE: fail when the file exists
+const O_SYNC int = 256   // every write waits for the device
+const O_TRUNC int = 512  // empty the file when it is opened
+
+// The bits of a FileMode above its nine of permissions: one for each
+// kind of file that is not a regular one, and three for how a file
+// runs. The letter is what String prints for the bit.
+const ModeDir FileMode = 0x80000000        // d: a directory
+const ModeSymlink FileMode = 0x08000000    // L: a symbolic link
+const ModeDevice FileMode = 0x04000000     // D: a device file
+const ModeNamedPipe FileMode = 0x02000000  // p: a named pipe
+const ModeSocket FileMode = 0x01000000     // S: a socket
+const ModeSetuid FileMode = 0x00800000     // u: runs as its owner
+const ModeSetgid FileMode = 0x00400000     // g: runs as its group
+const ModeCharDevice FileMode = 0x00200000 // c: with ModeDevice, a character device
+const ModeSticky FileMode = 0x00100000     // t: the sticky bit
+const ModeIrregular FileMode = 0x00080000  // ?: a file of a kind nothing else names
+
+// ModeType is the bits that say what kind of file it is, and ModePerm
+// the permissions.
+const ModeType FileMode = 0x8f280000
+const ModePerm FileMode = 0o777
+
 // A File is an open file, or one of the standard streams. It
 // implements io.Reader and io.Writer, so it is what io.Copy and
 // fmt.Fprintln write to, and io.Seeker, so a program reading a format
@@ -30,13 +69,6 @@ struct File impl Drop, io.Reader, io.Writer, io.Seeker {
 	name   string
 	stream bool // one of the three standard streams, which stay open for the program's life
 }
-
-// The error numbers the package reports of its own accord, where the
-// system was not asked: each is the same number on every system Snello
-// runs on.
-const eexist int = 17  // file exists
-const enotdir int = 20 // not a directory
-const einval int = 22  // invalid argument
 
 // Args is the command line: the program's name first, then its
 // arguments, as the shell split them. The runtime fills it before main
@@ -194,40 +226,11 @@ func RemoveAll(path ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// The flags of OpenFile, Go's names: one of O_RDONLY, O_WRONLY and
-// O_RDWR says how the file is opened, and the rest are added to it with
-// |. The numbers are Snello's own and the same on every system, where
-// Go's are the system's and differ from one to the next.
-const O_RDONLY int = 0   // open for reading only
-const O_WRONLY int = 1   // open for writing only
-const O_RDWR int = 2     // open for reading and writing
-const O_APPEND int = 8   // every write goes to the end of the file
-const O_CREATE int = 64  // make the file when it does not exist
-const O_EXCL int = 128   // with O_CREATE: fail when the file exists
-const O_SYNC int = 256   // every write waits for the device
-const O_TRUNC int = 512  // empty the file when it is opened
-
 // A FileMode is a file's kind and its permissions, with Go's bits: the
 // permissions in the low nine, as the system writes them, 0644, and a
 // bit for each kind of file that is not a regular one. It prints as ls
 // prints a mode, drwxr-xr-x.
 type FileMode u32 impl fmt.Stringer
-
-const ModeDir FileMode = 0x80000000        // d: a directory
-const ModeSymlink FileMode = 0x08000000    // L: a symbolic link
-const ModeDevice FileMode = 0x04000000     // D: a device file
-const ModeNamedPipe FileMode = 0x02000000  // p: a named pipe
-const ModeSocket FileMode = 0x01000000     // S: a socket
-const ModeSetuid FileMode = 0x00800000     // u: runs as its owner
-const ModeSetgid FileMode = 0x00400000     // g: runs as its group
-const ModeCharDevice FileMode = 0x00200000 // c: with ModeDevice, a character device
-const ModeSticky FileMode = 0x00100000     // t: the sticky bit
-const ModeIrregular FileMode = 0x00080000  // ?: a file of a kind nothing else names
-
-// ModeType is the bits that say what kind of file it is, and ModePerm
-// the permissions.
-const ModeType FileMode = 0x8f280000
-const ModePerm FileMode = 0o777
 
 // IsDir reports whether m is a directory's mode.
 func (m FileMode) IsDir() bool {

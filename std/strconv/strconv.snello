@@ -17,6 +17,17 @@ package strconv
 
 import "fmt"
 
+// The largest u64, which a number read may not pass, and the two
+// reasons an Error gives.
+const maxUint64 u64 = 18446744073709551615
+const invalidSyntax string = "invalid syntax"
+const outOfRange string = "value out of range"
+
+// Why parseUint did not read a number.
+const badSyntax int = 1
+const badRange int = 2
+const badBase int = 3
+
 // An Error says which function could not read which text, and why: the
 // text was not of the kind asked for, the number does not fit the
 // type, or the base is none. It prints as
@@ -49,10 +60,6 @@ enum Kind impl Copy, Clone, Eq {
 	// Base: the base is none, below 2 or above 36 and not 0.
 	Base
 }
-
-const maxUint64 u64 = 18446744073709551615
-const invalidSyntax string = "invalid syntax"
-const outOfRange string = "value out of range"
 
 // Error returns the message, worded as Go's strconv words it: the
 // function, the text in quotes, and the reason.
@@ -184,11 +191,6 @@ func ParseUint(s ref string, base int) Result<uint, Error> {
 
 	return Ok(uint(un))
 }
-
-// Why parseUint did not read a number.
-const badSyntax int = 1
-const badRange int = 2
-const badBase int = 3
 
 // reason is the message of a code parseUint returned.
 func reason(code int, base int) string {

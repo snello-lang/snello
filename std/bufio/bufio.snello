@@ -38,6 +38,16 @@ package bufio
 
 import ("io"; "unicode"; "unicode/utf8")
 
+// MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
+// ending included, unless Buffer sets another: a longer one ends the
+// scan with "bufio.Scanner: token too long" rather than grow the
+// buffer without a bound on input a program does not control.
+const MaxScanTokenSize int = 65536
+
+// The size of a Writer's and a Reader's buffer, and the first size of a
+// Scanner's, as Go's bufio has them.
+const blockSize int = 4096
+
 // A Writer collects what is written to it and writes it to the writer
 // under it in blocks, when its buffer is full and on Flush. It is made
 // with NewWriter.
@@ -77,16 +87,6 @@ struct Scanner<R: io.Reader> {
 	max      int // the longest line, its ending included, or the longest word
 	words    bool // Scan reads words, not lines
 }
-
-// MaxScanTokenSize is the longest line a Scanner reads, 64 KiB, its
-// ending included, unless Buffer sets another: a longer one ends the
-// scan with "bufio.Scanner: token too long" rather than grow the
-// buffer without a bound on input a program does not control.
-const MaxScanTokenSize int = 65536
-
-// The size of a Writer's and a Reader's buffer, and the first size of a
-// Scanner's, as Go's bufio has them.
-const blockSize int = 4096
 
 // NewWriter returns a Writer that writes to w, borrowed for as long as
 // the Writer lives. Its buffer holds 4096 bytes before it is written
