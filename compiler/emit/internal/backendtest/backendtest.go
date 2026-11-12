@@ -2413,9 +2413,9 @@ func main() {
 		Err(e) => fmt.Println("accept timed out", e.Kind() == io.TimedOut, e.Error().HasPrefix("accept tcp 127.0.0.1:"), e.Error().HasSuffix(": i/o timeout")),
 	}
 
+	big := make([]byte, 64 << 20) // made before the deadline is set, which then bounds the write alone: filling 64 MB can outlast 100 ms on a loaded machine
 	s := net.Dial("127.0.0.1", port).Expect("dial stuck")
 	s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)).Expect("write deadline")
-	big := make([]byte, 64 << 20)
 	match s.Write(ref big) {
 		Ok(n) => fmt.Println("wrote", n),
 		Err(e) => fmt.Println("write timed out", e.Kind() == io.TimedOut, e.Written() > 0, e.Written() < len(big)),
