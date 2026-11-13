@@ -5,6 +5,8 @@
 package c
 
 import (
+	goruntime "runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -51,5 +53,19 @@ func TestHeader(t *testing.T) {
 		if !strings.Contains(header, want) {
 			t.Errorf("header lacks %q:\n%s", want, header)
 		}
+	}
+}
+
+// TestSystemLinkFlags checks every link ends with the mathematics, and
+// binds every import as the program starts where the system would wait
+// for its first call.
+func TestSystemLinkFlags(t *testing.T) {
+	flags := SystemLinkFlags()
+	if !slices.Contains(flags, mathLibrary) {
+		t.Errorf("flags %v, want %s", flags, mathLibrary)
+	}
+
+	if now := slices.Contains(flags, bindNow); now != (goruntime.GOOS == linux) {
+		t.Errorf("flags %v on %s: %s is for Linux alone", flags, goruntime.GOOS, bindNow)
 	}
 }

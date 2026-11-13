@@ -239,11 +239,15 @@ static void give_back(cache *k, int c) {
 // of free blocks would be torn. So the thread's cache is read only in
 // the functions marked ENTRY, which the compiler may not write into
 // their callers: each reads it afresh, and none parks a task. The
-// helpers below them read it too, and are written into an ENTRY
-// function and nowhere else.
+// helpers below them, marked HELPER, read it too, and are written into
+// an ENTRY function and nowhere else, always: left to the inliner, one
+// with two ENTRY callers was kept a function of its own, and every
+// allocation paid a call and a second read of the thread's cache, which
+// made a program that allocates on every core a tenth slower on Darwin.
 #define ENTRY __attribute__((noinline))
+#define HELPER static inline __attribute__((always_inline))
 
-static inline void *heap_alloc(size_t n) {
+HELPER void *heap_alloc(size_t n) {
     if (n > largest) {
         return malloc(n);
     }
@@ -260,7 +264,7 @@ static inline void *heap_alloc(size_t n) {
     return p;
 }
 
-static inline void heap_free(void *p) {
+HELPER void heap_free(void *p) {
     uintptr_t off = (uintptr_t)p - (uintptr_t)base;
     if (off >= reserved) { // the system's block, or NULL
         free(p);
@@ -305,7 +309,7 @@ static __attribute__((noinline, cold)) counts *enlist(cache *k) {
 // note counts a block of n bytes given out, in the thread's own counts:
 // a load and a store of each, with no lock on the line, since no other
 // thread writes it.
-static inline void note(size_t n) {
+HELPER void note(size_t n) {
     cache *k = &local;
     counts *c = k->counts;
     if (c == NULL) {

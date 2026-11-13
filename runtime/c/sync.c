@@ -109,9 +109,9 @@ static void wake_one(sn_lock *l) {
     sn_qlock_give(&l->mu);
 }
 
-// spin waits a little for a lock held by a running task, and returns
+// sync_spin waits a little for a lock held by a running task, and returns
 // the word as it last read it.
-static int32_t spin(sn_lock *l) {
+static int32_t sync_spin(sn_lock *l) {
     int32_t s = atomic_load_explicit(&l->state, memory_order_relaxed);
     for (int i = 0; i < 100 && s == 1; i++) {
         sn_spin_hint();
@@ -127,7 +127,7 @@ static void mutex_lock(sn_lock *l) {
         return;
     }
 
-    s = spin(l);
+    s = sync_spin(l);
     if (s == 0 && atomic_compare_exchange_strong_explicit(&l->state, &s, 1, memory_order_acquire, memory_order_relaxed)) {
         return;
     }
@@ -139,7 +139,7 @@ static void mutex_lock(sn_lock *l) {
         }
 
         park_while(l);
-        s = spin(l);
+        s = sync_spin(l);
     }
 }
 

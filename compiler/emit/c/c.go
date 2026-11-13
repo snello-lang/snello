@@ -176,6 +176,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	var out bytes.Buffer
 	put(&out, "// Emitted by the Snello compiler from ", strings.Join(names, ", "), ". Do not edit.\n\n#include \"snello.h\"\n\n")
 	put(&out, "#define SN_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
+	e.stackBounds(&out)
 	out.Write(e.decls.Bytes())
 	out.WriteString("\n")
 	out.Write(e.types.Bytes())
@@ -286,10 +287,10 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 	e.info.Types[cell] = v.Type()
 	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
 	e.making = v
-	e.writeFunction(cname+"_init", types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.writeFunction(lower.LazyInit(cname), types.NewSignature(nil, nil, nil), body, name.Pos())
 	e.making = nil
 	put(&e.protos, "static SN_UNUSED ", ct, " ", cname, ";\nstatic sn_lazy ", cname, "_lazy;\n")
-	put(&e.protos, "static inline SN_UNUSED ", ct, " *", cname, "_get(void) {\n\tif (!sn_lazy_ready(&", cname, "_lazy)) {\n\t\tsn_lazy_make(&", cname, "_lazy, ", cname, "_init, ", cString(name.Name), ");\n\t}\n\n\treturn &", cname, ";\n}\n\n")
+	put(&e.protos, "static inline SN_UNUSED ", ct, " *", cname, "_get(void) {\n\tif (!sn_lazy_ready(&", cname, "_lazy)) {\n\t\tsn_lazy_make(&", cname, "_lazy, ", lower.LazyInit(cname), ", ", cString(name.Name), ");\n\t}\n\n\treturn &", cname, ";\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{name: cname, typ: v.Type()})
 	}

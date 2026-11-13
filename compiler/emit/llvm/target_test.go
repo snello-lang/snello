@@ -176,6 +176,10 @@ func TestTargeted(t *testing.T) {
 	}
 
 	body, group, _ := bytes.Cut(filled, []byte("\nattributes #0 = { "))
+	if !bytes.Contains(group, []byte(noJumpTables)) {
+		t.Errorf("the group does not keep switches out of jump tables: %s", group)
+	}
+
 	if !bytes.Equal(body, module[:len(module)-len("\n"+emptyGroup)]) || !bytes.HasPrefix(group, []byte(`"target-cpu"="`)) || !bytes.HasSuffix(group, []byte("\" }\n")) {
 		t.Errorf("the filled module is not the module with its group naming a processor:\n%s", filled[max(0, len(filled)-300):])
 	}

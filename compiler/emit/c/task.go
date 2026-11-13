@@ -55,7 +55,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 
 	wants, values := e.callOperands(recv, x.Args, sig)
 	e.tasks++
-	e.spawnCall("sn_task_"+strconv.Itoa(e.tasks), name, wants, values, sig.Results(), s.Pos())
+	e.spawnCall(e.tasks-1, name, wants, values, sig.Results(), s.Pos())
 }
 
 // spawnClosure lifts a spawned closure to a function of its captures
@@ -102,9 +102,9 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 		list = []string{"void"}
 	}
 
+	k := e.tasks
 	e.tasks++
-	task := "sn_task_" + strconv.Itoa(e.tasks)
-	name := task + "_fn"
+	name := lower.SpawnTask(k) + "_fn"
 	head := "static " + e.resultType(lifted, pos) + " " + name + "(" + strings.Join(list, ", ") + ")"
 	put(&e.protos, head, ";\n")
 	outer, outerCaptured := e.body, e.captured
@@ -114,15 +114,15 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	e.line("")
 	e.helpers.Write(e.body.Bytes())
 	e.body, e.captured = outer, outerCaptured
-	e.spawnCall(task, name, wants, values, sig.Results(), pos)
+	e.spawnCall(k, name, wants, values, sig.Results(), pos)
 }
 
 // spawnCall writes the block of a task's values, named after the
 // task, the trampoline that calls the function with them and frees
 // the block, and the spawn. A result the function returns is dropped
 // by the trampoline, as the statement discards it.
-func (e *Emitter) spawnCall(task, name string, wants []types.Type, values []string, results types.Type, pos token.Pos) {
-	st := "struct " + task
+func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []string, results types.Type, pos token.Pos) {
+	st := "struct " + lower.SpawnTask(k)
 	fields, args := "\tchar sn_pad;\n", make([]string, len(values))
 	if len(values) > 0 {
 		var b strings.Builder
@@ -150,14 +150,14 @@ func (e *Emitter) spawnCall(task, name string, wants []types.Type, values []stri
 	}
 
 	put(&e.types, st, " {\n", fields, "};\n\n")
-	put(&e.helpers, "static void ", task, "_run(void *p) {\n", unpack, call, "\tsn_free(p);\n}\n\n")
+	put(&e.helpers, "static void ", lower.SpawnEntry(k), "(void *p) {\n", unpack, call, "\tsn_free(p);\n}\n\n")
 	block := e.temp()
 	e.line(st + " *" + block + " = sn_alloc(sizeof *" + block + ");")
 	for i, v := range values {
 		e.line(block + "->a" + strconv.Itoa(i) + " = " + v + ";")
 	}
 
-	e.line("sn_spawn(" + task + "_run, " + block + ");")
+	e.line("sn_spawn(" + lower.SpawnEntry(k) + ", " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]);")
 }
 
 // spawnee names the C function a spawned call of fun runs, with its
@@ -342,4 +342,15 @@ func receiveOf(comm ast.Stmt) *ast.UnaryExpr {
 	}
 
 	return x.(*ast.UnaryExpr)
+}
+
+// stackBounds writes the table of the stack each spawn's task can use,
+// lower.StackBounds, every entry lower.Unbounded until the analysis of
+// the linked program writes the bounds it proves; volatile, so that no
+// optimizer reads an entry as the constant it starts as. A program with
+// no spawn has a table of one entry, which the runtime never reads.
+func (e *Emitter) stackBounds(out *bytes.Buffer) {
+	n := max(e.tasks, 1)
+	entries := strings.Repeat(strconv.FormatUint(lower.Unbounded, 10)+"u, ", n)
+	put(out, "volatile uint32_t ", lower.StackBounds, "[", strconv.Itoa(n), "] = {", strings.TrimSuffix(entries, ", "), "};\n\n")
 }

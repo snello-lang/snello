@@ -386,6 +386,8 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings .
 		t.Fatalf("%v\n%s\n--- emitted C ---\n%s", err, out, csrc)
 	}
 
+	backendtest.Bounded(t, name, bin)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a program that hangs fails rather than stalling the suite
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)

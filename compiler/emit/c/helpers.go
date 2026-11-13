@@ -329,14 +329,14 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 
 	e.state[name] = defined
 	key := e.cType(t.Key(), pos)
-	hash, eq := "sn_khash_"+lower.Mangle(t.Key()), "sn_keq_"+lower.Mangle(t.Key())
+	hash, eq := lower.KeyHash(t.Key()), lower.KeyEq(t.Key())
 	if e.state[hash] == undeclared {
 		e.state[hash] = defined
 		put(&e.helpers, "static uint64_t ", hash, "(const void *p) {\n\t", key, " k = *(", key, " const *)p; // const after the type, so a pointer type reads right\n\t(void)k;\n\treturn ", e.hash("k", t.Key(), pos), ";\n}\n\n")
 		put(&e.helpers, "static bool ", eq, "(const void *a, const void *b) {\n\treturn ", e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos), ";\n}\n\n")
 	}
 
-	put(&e.helpers, "static const sn_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.dropFn(t.Key(), pos), ", ", e.dropFn(t.Value(), pos), "};\n\n")
+	put(&e.helpers, "static const sn_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.elemDropper(t.Key(), pos), ", ", e.elemDropper(t.Value(), pos), "};\n\n")
 	return "&" + name
 }
 

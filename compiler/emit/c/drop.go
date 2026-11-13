@@ -527,16 +527,19 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	return e.cloner(t, pos) + "(" + v + ")"
 }
 
-// elemDropper returns what drops one element of a channel of elem, for
-// the channel's last handle to drop what it still holds: an adapter
-// over the element's dropper that takes the runtime's untyped pointer,
-// or NULL for an element that owns nothing.
+// elemDropper returns what drops one element of a channel, or a key or
+// a value of a map, of type elem, for the runtime to drop what the
+// container still holds: an adapter over the element's dropper that
+// takes the runtime's untyped pointer, named by lower.ElemDrop, which
+// the analysis of the linked program takes for the targets of the
+// runtime's calls of such drops; or NULL for an element that owns
+// nothing.
 func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
 	if !needsDrop(elem) {
 		return "NULL"
 	}
 
-	name := "sn_dropv_" + lower.Mangle(elem)
+	name := lower.ElemDrop(elem)
 	if e.state[name] != undeclared {
 		return name
 	}

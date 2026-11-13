@@ -669,7 +669,7 @@ bool sn_timer_abandon(sn_chan *c) {
     sn_chan_placeTimer(c, -1);
     wheel_unlock(w);
     timers_done(w, 1);
-    sn_chan_drop(&x->ch);
+    sn_chan_drop_untimed(x->ch); // the timer is out of its wheel: no drop of a timer's handle comes back here
     sn_free(x);
     return true;
 }

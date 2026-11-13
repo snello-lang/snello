@@ -4,6 +4,13 @@
 
 // Maps: wyhash, and a Swiss table indexing the entries in the order
 // they were inserted.
+//
+// Every call this file makes through a pointer is of a map type's key
+// hash, key equality or element drop, from a function named sn_map_ or
+// one of the static ones the analysis of a linked program names: that
+// analysis takes the functions the backends write for map types for
+// the targets of those calls, and a call through any other pointer here
+// would be counted wrong (compiler/emit/stack).
 
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE

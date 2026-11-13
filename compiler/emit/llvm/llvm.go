@@ -282,6 +282,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	}
 
 	out.WriteString("\n")
+	e.stackBounds(&out)
 	out.Write(e.globalDefs.Bytes())
 	out.Write(e.helpers.Bytes())
 	out.Write(e.funcs.Bytes())
@@ -410,11 +411,11 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	e.info.Types[cell] = v.Type()
 	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
 	e.making = v
-	e.writeFunction(lower.ObjName(v)+"_init", types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.writeFunction(lower.LazyInit(lower.ObjName(v)), types.NewSignature(nil, nil, nil), body, name.Pos())
 	e.making = nil
 	e.declare("sn_lazy_make", "declare void @sn_lazy_make(ptr, ptr, ptr)")
 	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
-	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr ", g, "_init, ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
+	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}

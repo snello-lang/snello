@@ -760,7 +760,7 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 	}
 
 	e.state[name] = true
-	hash, eq := "sn_khash_"+lower.Mangle(t.Key()), "sn_keq_"+lower.Mangle(t.Key())
+	hash, eq := lower.KeyHash(t.Key()), lower.KeyEq(t.Key())
 	if !e.state[hash] {
 		e.state[hash] = true
 		e.helper(hash, "i64", []string{"ptr %p"}, func() {
@@ -775,11 +775,11 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 
 	kdrop, vdrop := "null", "null"
 	if needsDrop(t.Key()) {
-		kdrop = "@" + e.dropper(t.Key(), pos)
+		kdrop = "@" + e.elemDropper(t.Key(), pos)
 	}
 
 	if needsDrop(t.Value()) {
-		vdrop = "@" + e.dropper(t.Value(), pos)
+		vdrop = "@" + e.elemDropper(t.Value(), pos)
 	}
 
 	put(&e.consts, "@", name, " = internal constant %sn_map_type { i64 ", e.sizeOf(t.Key()).s, ", i64 ", e.sizeOf(t.Value()).s, ", ptr @", hash, ", ptr @", eq, ", ptr ", kdrop, ", ptr ", vdrop, " }\n")

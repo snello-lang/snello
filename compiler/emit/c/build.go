@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/emit/stack"
 )
 
 // Flags are the options the C compiler is given. Every warning is an
@@ -31,9 +32,19 @@ import (
 // multiply and an add two operations, each rounded, as the language has
 // them and the LLVM backend writes them: a compiler left to join them
 // into one instruction rounds once, and the last digits of a*b + c
-// would then differ between the backends and between processors. The
-// optimization level is the build's: Release or Debug.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-pthread"}
+// would then differ between the backends and between processors.
+// -fno-stack-protector leaves out the check a C compiler may add to a
+// function with an array of its own, against a write past it, which
+// some systems' compilers add by default: a Snello program checks every
+// index, and the check's failure path, deeper than any function the
+// runtime calls, would set the bound of nearly every task's stack.
+// -fno-jump-tables writes a switch as comparisons, not as a table of
+// addresses jumped through by a register, which the analysis of a
+// task's stack cannot follow, so that a task reaching a switch keeps
+// its bound: x86-64's compilers made tables of the switches over an
+// error's number, and left every task that reads a socket unbounded.
+// The optimization level is the build's: Release or Debug.
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-fno-stack-protector", "-fno-jump-tables", "-pthread"}
 
 // Release are the options of a release build: the standard
 // optimizations, and link-time optimization over the program and the
@@ -60,7 +71,9 @@ func Compiler() string {
 // with the C side of every package that binds C, compiles them with
 // the C compiler, links them with the runtime's objects, which the
 // cache holds once they are compiled, and returns the path of the
-// binary named name. The compiler's output comes back with any error.
+// binary named name, with the bound of each task's stack the analysis
+// of the linked binary proves written into it. The compiler's output
+// comes back with any error.
 // A debug build compiles the runtime's checks in: see
 // runtime/c/debug.c.
 func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
@@ -110,8 +123,12 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 	bin = filepath.Join(dir, name)
 	link := append(append([]string{}, args...), "-o", bin, objs[0]) // the program, then the runtime, then the packages' C
 	link = append(append(link, rt...), objs[1:]...)
-	link = append(append(link, LinkFlags(bindings)...), "-lm")
+	link = append(append(link, LinkFlags(bindings)...), SystemLinkFlags()...)
 	linked, err := exec.Command(Compiler(), link...).CombinedOutput()
+	if err == nil {
+		stack.Patch(bin) // a program it cannot bound keeps its tasks on guarded stacks, which is always safe
+	}
+
 	return bin, append(output, linked...), err
 }
 

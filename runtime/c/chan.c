@@ -16,16 +16,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+// A select of up to select_inline cases keeps its working arrays in its
+// own frame, of a size known before it runs; one of more takes them from
+// the system, once, for the select.
+enum { select_inline = 8 };
+
 // The channel counts its handles: Clone adds one, a handle's drop takes
 // one away, and the last frees the channel, dropping the values still
 // in the ring with the element's drop the compiler gave, NULL for one
 // that owns nothing. No task can be waiting on it then, since a waiting
 // task holds a handle, and nothing else can reach it.
+// The counts a handle's clone and drop change are a cache line away
+// from what a send and a receive change, the lock and the ring, so
+// that a task cloning a handle as tasks on other cores send does not
+// take the line from under them: one spawn a task, each given a handle
+// of one channel it sends to, made a spawn 8% slower when they shared
+// it. A channel is allocated with no more than the allocator's
+// alignment, so the two are kept apart by distance, a line of padding.
 struct sn_chan {
-    sn_qlock mu;
     _Atomic int64_t handles;
     _Atomic int64_t timer; // the channel's After or Tick while it is in a timing wheel, -1 when it has none there
     _Atomic int32_t home;  // the wheel its timers go in, as timer.c records it
+    char apart[SN_CACHE_LINE];
+    sn_qlock mu;
     void (*drop)(void *); // drops one element
     size_t size;  // of one element
     int64_t cap;  // zero for an unbuffered channel, which has no ring
@@ -113,14 +126,31 @@ void sn_chan_drop(sn_chan **h) {
         return;
     }
 
+    sn_chan_drop_untimed(c);
+}
+
+// chan_drop_elements drops the values still in a channel whose last
+// handle is gone. It is the one function that calls the drop a channel
+// holds, and is never inlined, so that the analysis of the linked
+// program finds that call here by name and takes the drops the backend
+// writes for channels for its targets.
+static __attribute__((noinline)) void chan_drop_elements(sn_chan *c) {
+    for (int64_t i = 0; i < c->len; i++) {
+        c->drop(slot(c, c->head + i));
+    }
+}
+
+// sn_chan_drop_untimed takes one handle of c away, freeing the channel
+// with the last, for a channel with no timer in a wheel: the timer's
+// own handle, which sn_timer_abandon drops once it has taken the timer
+// out, or a handle sn_chan_drop has found no timer for.
+void sn_chan_drop_untimed(sn_chan *c) {
     if (atomic_fetch_sub(&c->handles, 1) != 1) {
         return;
     }
 
     if (c->drop != NULL) {
-        for (int64_t i = 0; i < c->len; i++) {
-            c->drop(slot(c, c->head + i));
-        }
+        chan_drop_elements(c);
     }
 
     sn_qlock_free(&c->mu);
@@ -337,10 +367,32 @@ static void unlock_all(sn_chan **chans, int m) {
 // of several that can is as likely; with none, a default returns -1,
 // and otherwise the select waits on every case's channel at once until
 // an operation takes one of its waiters.
+static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order, sn_waiter *waiters);
+
 int sn_select(sn_case *cases, int n, bool has_default) {
-    sn_chan *chans[n > 0 ? n : 1];
-    int order[n > 0 ? n : 1];
-    sn_waiter waiters[n > 0 ? n : 1];
+    if (n <= select_inline) {
+        sn_chan *chans[select_inline];
+        int order[select_inline];
+        sn_waiter waiters[select_inline];
+        return select_in(cases, n, has_default, chans, order, waiters);
+    }
+
+    sn_chan **chans = malloc((size_t)n * sizeof *chans); // the system's: working space no program value holds
+    int *order = malloc((size_t)n * sizeof *order);
+    sn_waiter *waiters = malloc((size_t)n * sizeof *waiters);
+    if (chans == NULL || order == NULL || waiters == NULL) {
+        sn_panic(SN_STR("out of memory", 13));
+    }
+
+    int i = select_in(cases, n, has_default, chans, order, waiters);
+    free(chans);
+    free(order);
+    free(waiters);
+    return i;
+}
+
+// select_in is sn_select over working arrays of n places each.
+static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order, sn_waiter *waiters) {
     int m = channels_of(cases, n, chans);
     for (int i = 0; i < n; i++) { // a uniform permutation, built from the front
         int j = (int)(sn_next_random() % (uint64_t)(i + 1));
