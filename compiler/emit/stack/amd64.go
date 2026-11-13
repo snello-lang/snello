@@ -18,6 +18,7 @@ const (
 	amd64OpEnter   = "enter" // a frame of its first operand's bytes, and the frame pointer pushed
 	amd64OpCall    = "call"
 	amd64OpJump    = "jmp"
+	amd64OpReturn  = "ret"
 	amd64OpCond    = "j"    // the start of every conditional jump, je or jne
 	amd64OpLoop    = "loop" // the start of loop, loope and loopne
 	amd64OpSub     = "sub"
@@ -83,7 +84,10 @@ func (d *decoder) amd64() {
 			} else {
 				d.call(parseTarget(in.args, in.note))
 			}
+		case in.op == amd64OpReturn:
+			d.stop(in)
 		case in.op == amd64OpJump:
+			d.stop(in)
 			if strings.HasPrefix(in.args, amd64Indirect) {
 				if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
 					d.f.calls = append(d.f.calls, call{kind: library, target: m[1]})

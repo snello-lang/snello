@@ -37,9 +37,14 @@ import (
 // function with an array of its own, against a write past it, which
 // some systems' compilers add by default: a Snello program checks every
 // index, and the check's failure path, deeper than any function the
-// runtime calls, would set the bound of nearly every task's stack. The
-// optimization level is the build's: Release or Debug.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-fno-stack-protector", "-pthread"}
+// runtime calls, would set the bound of nearly every task's stack.
+// -fno-jump-tables writes a switch as comparisons, not as a table of
+// addresses jumped through by a register, which the analysis of a
+// task's stack cannot follow, so that a task reaching a switch keeps
+// its bound: x86-64's compilers made tables of the switches over an
+// error's number, and left every task that reads a socket unbounded.
+// The optimization level is the build's: Release or Debug.
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-fno-stack-protector", "-fno-jump-tables", "-pthread"}
 
 // Release are the options of a release build: the standard
 // optimizations, and link-time optimization over the program and the

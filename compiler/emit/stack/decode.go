@@ -15,9 +15,11 @@ type decoder struct {
 	starts map[uint64]string // the first address of every function
 	tlv    [2]uint64         // macOS's thread-local descriptors
 
-	decrements []uint64        // the addresses of the instructions that move the stack pointer down
-	backward   [][2]uint64     // the local branches that go back, as target and branch
-	targets    map[uint64]bool // the addresses local branches go to
+	decrements []uint64            // the addresses of the instructions that move the stack pointer down
+	backward   bool                // a local branch goes back, so the function may have a cycle
+	targets    map[uint64]bool     // the addresses local branches go to
+	edges      map[uint64][]uint64 // each local branch's targets, by its address
+	stops      map[uint64]bool     // the instructions that never go on to the next: a jump, a return
 }
 
 func (d *decoder) decode() {
@@ -26,6 +28,8 @@ func (d *decoder) decode() {
 	}
 
 	d.targets = map[uint64]bool{}
+	d.edges = map[uint64][]uint64{}
+	d.stops = map[uint64]bool{}
 	switch d.img.arch {
 	case arm64:
 		d.arm64()
@@ -33,13 +37,70 @@ func (d *decoder) decode() {
 		d.amd64()
 	}
 
-	for _, b := range d.backward {
-		for _, a := range d.decrements {
-			if a >= b[0] && a <= b[1] && d.f.unknown == "" {
-				d.f.unknown = fmt.Sprintf("a stack decrement in a loop in %s", d.img.plain(d.f.name))
+	if d.backward && len(d.decrements) > 0 {
+		if why := d.looped(); why != "" {
+			d.unknown(why)
+		}
+	}
+}
+
+// looped returns why the function's frame is not a sum of its
+// decrements: a decrement on a cycle of its flow, which may move the
+// stack pointer down any number of times, or a branch to an address no
+// instruction starts at, whose flow the analysis cannot follow; or ""
+// when neither. The flow is the local branches and every instruction's
+// way on to the next, but a jump's and a return's, so a call goes on,
+// one that never returns too, which only adds a way: a decrement found
+// on no cycle is on none. A decrement a backward branch merely spans
+// is no loop: gcc puts the panics of a function after its end, each
+// making room for its call's arguments, and branches back from below
+// them to where two paths of its body meet.
+func (d *decoder) looped() string {
+	index := make(map[uint64]int, len(d.insts))
+	for i, in := range d.insts {
+		index[in.addr] = i
+	}
+
+	next := make([][]int, len(d.insts))
+	for i, in := range d.insts {
+		if !d.stops[in.addr] && i+1 < len(d.insts) {
+			next[i] = append(next[i], i+1)
+		}
+
+		for _, to := range d.edges[in.addr] {
+			j, ok := index[to]
+			if !ok {
+				return fmt.Sprintf("a branch to %#x, inside an instruction of %s", to, d.img.plain(d.f.name))
+			}
+
+			next[i] = append(next[i], j)
+		}
+	}
+
+	for _, a := range d.decrements {
+		start := index[a]
+		seen := make([]bool, len(d.insts))
+		work := append([]int(nil), next[start]...)
+		for len(work) > 0 {
+			i := work[len(work)-1]
+			work = work[:len(work)-1]
+			if i == start {
+				return fmt.Sprintf("a stack decrement in a loop in %s", d.img.plain(d.f.name))
+			}
+
+			if !seen[i] {
+				seen[i] = true
+				work = append(work, next[i]...)
 			}
 		}
 	}
+
+	return ""
+}
+
+// stop records an instruction that never goes on to the next one.
+func (d *decoder) stop(in inst) {
+	d.stops[in.addr] = true
 }
 
 // within reports whether addr is in the function being decoded.
@@ -86,9 +147,8 @@ func (d *decoder) branch(in inst, t target) bool {
 // local records a branch inside the function, and whether it goes back.
 func (d *decoder) local(in inst, to uint64) {
 	d.targets[to] = true
-	if to <= in.addr {
-		d.backward = append(d.backward, [2]uint64{to, in.addr})
-	}
+	d.edges[in.addr] = append(d.edges[in.addr], to)
+	d.backward = d.backward || to <= in.addr
 }
 
 // call records a call at in to t, which is never local.

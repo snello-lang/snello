@@ -87,3 +87,59 @@ func TestDecodeSharedTail(t *testing.T) {
 		t.Fatalf("got %+v", b)
 	}
 }
+
+// TestDecodeLoops holds a decrement of the stack pointer to the cycles
+// of the function's flow: one a backward branch spans but no path from
+// its target reaches, as gcc lays out the panics after a function's end,
+// counts in the frame; one inside a loop, and one a backward branch
+// reaches through a fall through, make the function unknown, as does a
+// branch into the middle of an instruction.
+func TestDecodeLoops(t *testing.T) {
+	cases := []struct {
+		name, listing string
+		frame         int64
+		unknown       string
+	}{
+		{"panics after the end", `0000000000401000 <f>:
+  401000:	push   %rbx
+  401001:	je     401010 <f+0x10>
+  401003:	nop
+  401004:	pop    %rbx
+  401005:	ret
+  401010:	sub    $0x20,%rsp
+  401014:	call   402000 <g>
+  401019:	jmp    401003 <f+0x3>
+`, 8 + 0x20, ""},
+		{"push in a loop", `0000000000401000 <f>:
+  401000:	nop
+  401001:	push   %rbx
+  401002:	jne    401001 <f+0x1>
+  401004:	ret
+`, 0, "a stack decrement in a loop in f"},
+		{"falls into the loop", `0000000000401000 <f>:
+  401000:	nop
+  401001:	sub    $0x10,%rsp
+  401005:	nop
+  401006:	jmp    401001 <f+0x1>
+`, 0, "a stack decrement in a loop in f"},
+		{"into an instruction", `0000000000401000 <f>:
+  401000:	push   %rbx
+  401001:	nop
+  401002:	jne    401003 <f+0x3>
+  401004:	ret
+  401005:	jmp    401001 <f+0x1>
+`, 0, "inside an instruction of f"},
+	}
+
+	for _, c := range cases {
+		img := &Image{arch: amd64, os: linux, functions: map[string]*function{}, cLibrary: map[string]bool{}}
+		img.read([]byte(c.listing), [2]uint64{})
+		f := img.functions["f"]
+		switch {
+		case c.unknown == "" && (f.unknown != "" || f.frame != c.frame):
+			t.Errorf("%s: got frame %d, %q; want %d", c.name, f.frame, f.unknown, c.frame)
+		case c.unknown != "" && !strings.Contains(f.unknown, c.unknown):
+			t.Errorf("%s: got %q, want %q", c.name, f.unknown, c.unknown)
+		}
+	}
+}

@@ -41,9 +41,14 @@ import (
 // module's attribute group, after its parameters, and emptyGroup the
 // group as the emitter writes it, the last line of a module: a group
 // may not be empty, and the mark is an attribute LLVM reads past.
+// noJumpTables is the attribute the group is filled with beside the
+// target's: a switch is written as comparisons, as the C backend's
+// -fno-jump-tables writes the runtime's, since the analysis of a task's
+// stack cannot follow a jump through a table of addresses.
 const (
-	funcAttrs  = " #0"
-	emptyGroup = "attributes #0 = { \"snello-target\"=\"unset\" }\n"
+	funcAttrs    = " #0"
+	emptyGroup   = "attributes #0 = { \"snello-target\"=\"unset\" }\n"
+	noJumpTables = "\"no-jump-tables\"=\"true\""
 )
 
 // targetKeys are the attributes of a function that say what processor
@@ -78,7 +83,7 @@ func Targeted(module []byte) ([]byte, error) {
 
 	out := make([]byte, 0, len(module)+len(attrs)+1)
 	out = append(out, module[:len(module)-len(emptyGroup)]...)
-	return append(out, "attributes #0 = { "+attrs+" }\n"...), nil
+	return append(out, "attributes #0 = { "+attrs+" "+noJumpTables+" }\n"...), nil
 }
 
 // target returns the attributes clang gives every function it compiles

@@ -116,10 +116,16 @@ func (d *decoder) arm64() {
 
 			arm64Clobber(state, thunk)
 		case arm64JumpReg(in.op):
+			d.stop(in)
 			d.unknown("a jump through a register in " + d.img.plain(d.f.name))
 		case arm64Branch(in.op):
+			if in.op == arm64OpBranch {
+				d.stop(in)
+			}
+
 			d.branch(in, parseTarget(arm64Last(in.args), in.note))
 		case strings.HasPrefix(in.op, arm64OpReturn):
+			d.stop(in)
 		default:
 			d.arm64Track(in, state, thunk)
 		}
