@@ -12,6 +12,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/emit/stack"
 )
 
 // Flags are the options clang is given for the module: the standard
@@ -37,8 +38,9 @@ func Compiler() string {
 // Build writes the module and the runtime into dir, with the C side of
 // every package that binds C, compiles the module to an object with
 // clang, links it with the runtime and that C compiled by the C
-// compiler, and returns the path of the binary named name.
-// The compilers' output comes back with any error. A debug build
+// compiler, and returns the path of the binary named name, with the
+// bound of each task's stack the analysis of the linked binary proves
+// written into it. The compilers' output comes back with any error. A debug build
 // compiles the runtime's checks in, as the C backend's does.
 func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
 	module, err = Targeted(module) // every function compiled for the runtime's processor, so that the two are optimized as one
@@ -107,7 +109,11 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(cc, append(append(append(append(append(rtargs, "-o", bin, obj), rt...), objs...), c.LinkFlags(bindings)...), "-lm")...).CombinedOutput()
+	linked, err := exec.Command(cc, append(append(append(append(append(rtargs, "-o", bin, obj), rt...), objs...), c.LinkFlags(bindings)...), c.SystemLinkFlags()...)...).CombinedOutput()
+	if err == nil {
+		stack.Patch(bin) // a program it cannot bound keeps its tasks on guarded stacks, which is always safe
+	}
+
 	return bin, append(output, linked...), err
 }
 

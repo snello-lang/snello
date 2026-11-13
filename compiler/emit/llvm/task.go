@@ -5,6 +5,7 @@
 package llvm
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 
@@ -120,7 +121,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 
 	wants, values := e.callOperands(recv, x.Args, sig)
 	e.tasks++
-	e.spawnCall("sn_task_"+strconv.Itoa(e.tasks), name, sig, wants, values, s.Pos())
+	e.spawnCall(e.tasks-1, name, sig, wants, values, s.Pos())
 }
 
 // spawnClosure lifts a spawned closure to a function of its captures
@@ -152,24 +153,25 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	lifted := types.NewSignature(nil, params, sig.Results())
 	argWants, args := e.callOperands(nil, x.Args, sig)
 	wants, values = append(wants, argWants...), append(values, args...)
+	k := e.tasks
 	e.tasks++
-	task := "sn_task_" + strconv.Itoa(e.tasks)
-	e.writeBody(task+"_fn", lifted, params, nil, nil, lit.Body, pos)
-	e.spawnCall(task, task+"_fn", lifted, wants, values, pos)
+	name := lower.SpawnTask(k) + "_fn"
+	e.writeBody(name, lifted, params, nil, nil, lit.Body, pos)
+	e.spawnCall(k, name, lifted, wants, values, pos)
 }
 
 // spawnCall writes the block of a task's values, the trampoline that
 // calls the function with them and frees the block, and the spawn. A
 // result the function returns is dropped by the trampoline, as the
 // statement discards it.
-func (e *Emitter) spawnCall(task, name string, sig *types.Signature, wants []types.Type, values []value, pos token.Pos) {
+func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []types.Type, values []value, pos token.Pos) {
 	parts := make([]string, len(values))
 	for i, v := range values {
 		parts[i] = v.typ
 	}
 
 	st := "{ " + strings.Join(parts, ", ") + " }"
-	e.helper(task+"_run", "void", []string{"ptr %p"}, func() {
+	e.helper(lower.SpawnEntry(k), "void", []string{"ptr %p"}, func() {
 		args := make([]value, len(values))
 		for i, v := range values {
 			args[i] = e.load(v.typ, e.gep(st, "%p", i))
@@ -189,8 +191,9 @@ func (e *Emitter) spawnCall(task, name string, sig *types.Signature, wants []typ
 		e.store(v, e.gep(st, block.s, i))
 	}
 
-	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr)")
-	e.inst("call void @sn_spawn(ptr @" + task + "_run, " + block.typed() + ")")
+	bound := e.op("load volatile i32, ptr getelementptr inbounds (i32, ptr @"+lower.StackBounds+", i64 "+strconv.Itoa(k)+")", "i32")
+	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i32)")
+	e.inst("call void @sn_spawn(ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", " + bound.typed() + ")")
 }
 
 // spawnee names the function a spawned call of fun runs, with its
@@ -407,4 +410,16 @@ func receiveOf(comm ast.Stmt) *ast.UnaryExpr {
 	}
 
 	return x.(*ast.UnaryExpr)
+}
+
+// stackBounds writes the table of the stack each spawn's task can use,
+// lower.StackBounds, every entry lower.Unbounded until the analysis of
+// the linked program writes the bounds it proves; each spawn loads its
+// entry volatile, so that no optimizer reads it as the constant it
+// starts as. A program with no spawn has a table of one entry.
+func (e *Emitter) stackBounds(out *bytes.Buffer) {
+	n := max(e.tasks, 1)
+	unbounded := uint32(lower.Unbounded)
+	entries := strings.Repeat("i32 "+strconv.Itoa(int(int32(unbounded)))+", ", n) // the IR writes an i32 signed
+	put(out, "@", lower.StackBounds, " = global [", strconv.Itoa(n), " x i32] [", strings.TrimSuffix(entries, ", "), "]\n\n")
 }

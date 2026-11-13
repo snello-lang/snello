@@ -711,7 +711,12 @@ typedef struct {
     bool ok;
 } sn_case;
 
-void sn_spawn(void (*run)(void *), void *arg);
+// SN_UNBOUNDED is the bound sn_spawn is given for a task whose stack
+// the analysis of the linked program could not bound, the entry of the
+// program's table of bounds until the analysis writes one.
+#define SN_UNBOUNDED UINT32_MAX
+
+void sn_spawn(void (*run)(void *), void *arg, uint32_t bound);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
 void sn_timers_stop(void);

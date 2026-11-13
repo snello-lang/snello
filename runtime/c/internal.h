@@ -224,7 +224,31 @@ void sn_sched_owe(int64_t when);
 typedef _Atomic int sn_handoff;
 enum { SN_HANDOFF_OPEN = 0, SN_HANDOFF_WAKING = 1, SN_HANDOFF_WOKEN = 2 };
 void sn_handoff_wake(sn_handoff *h, sn_task *t);
+bool sn_handoff_claim(sn_handoff *h, sn_task *t);
+
+// The sockets' poller, net.c's for the scheduler. No thread is kept for
+// it: a worker that runs out of tasks looks at it without waiting, and
+// the idle worker that keeps time waits in it too. sn_net_poller makes
+// it once, as the scheduler starts, and returns its descriptor, which
+// is readable while it holds events, or -1 when it cannot be made.
+// sn_net_waiting is how many tasks wait on a socket: no one looks while
+// none does. sn_net_poll takes the events the poller holds, at most
+// SN_POLL_EVENTS, without waiting, and stores the tasks they made
+// runnable in woke, at most twice as many, returning how many, and in
+// taken how many tasks it took out of their sockets' words, whose wakes
+// the caller counts kept with sn_net_kept once those in woke are queued
+// or running.
+enum { SN_POLL_EVENTS = 64 };
+int sn_net_poller(void);
+int64_t sn_net_waiting(void);
+int sn_net_poll(sn_task **woke, int *taken);
+void sn_net_kept(int64_t taken);
 void sn_handoff_wait(sn_handoff *h);
+
+// sn_chan_drop_untimed, chan.c's for timer.c, takes one handle of a
+// channel with no timer in a wheel away, and frees the channel with the
+// last: the handle a timer held, once the timer is out of its wheel.
+void sn_chan_drop_untimed(sn_chan *c);
 
 // sn_chan_home is where the channel records the wheel its timers go in,
 // for timer.c; chan.c's.

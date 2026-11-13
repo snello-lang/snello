@@ -78,6 +78,7 @@ return tok, lit
 - Unexported helpers are verbs: `scanNumber`, `skipWhitespace`.
 - Single-letter receivers, consistent within a type: `s *Scanner`, `p *Parser`.
 - Abbreviations only when universal in Go: `pos`, `lit`, `tok`, `src`, `err`.
+- A static function of the C runtime has a name no other file of the runtime gives one. The analysis of a task's stack reads the linked binary by function name and reads two local functions of one name as one, the deeper; `TestStaticNamesUnique` fails on a second. A helper that would share a name takes its file's: `sync_spin`, `norm_push`.
 
 ### Comments
 

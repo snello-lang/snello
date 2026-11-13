@@ -113,9 +113,9 @@ static void init(chacha8 *s, const uint64_t seed[4]) {
     s->ready = true;
 }
 
-// refill draws the next 32 numbers. The refill before the counter
+// rand_refill draws the next 32 numbers. The refill before the counter
 // comes round gives four fewer: its last four are the key of the next.
-static void refill(chacha8 *s) {
+static void rand_refill(chacha8 *s) {
     s->c += counter_step;
     if (s->c == counter_max) {
         memcpy(s->seed, s->buf + chunk - rekey, sizeof s->seed);
@@ -129,7 +129,7 @@ static void refill(chacha8 *s) {
 
 static uint64_t draw(chacha8 *s) {
     if (s->i >= s->n) {
-        refill(s);
+        rand_refill(s);
     }
 
     return s->buf[s->i++];
@@ -222,7 +222,7 @@ static _Thread_local chacha8 source;
 // its key at the thread's first draw.
 static __attribute__((noinline, cold)) void refresh(chacha8 *s) {
     if (s->ready) {
-        refill(s);
+        rand_refill(s);
         return;
     }
 

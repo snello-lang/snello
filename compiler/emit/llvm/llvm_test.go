@@ -512,6 +512,8 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures []st
 		t.Fatalf("%v\n%s\n--- emitted IR ---\n%s", err, out, module)
 	}
 
+	backendtest.Bounded(t, name, bin)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a program that hangs fails rather than stalling the suite
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)

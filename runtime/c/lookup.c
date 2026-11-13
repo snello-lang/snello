@@ -7,16 +7,15 @@
 // "[::1]:8080". A host name is looked up through the system's resolver,
 // getaddrinfo, which reads the hosts file and asks the name servers and
 // blocks for as long as they take to answer, or to fail to: a name
-// server that does not answer holds it for seconds. A task's lookup must
-// hold neither its worker so long, nor the poller's thread, whose wait
-// every socket's events go through: it runs on a thread of a pool of the
-// runtime's own while the task parks, and the thread that finishes it
-// wakes the task. A thread starts when a lookup finds none idle, up to
-// resolvers_most of them, and one left idle for resolver_idle seconds
-// ends. A lookup with a timeout parks on a timer as well, and the first
-// of the two to come wakes the task; a lookup its task gave up on runs
-// to its end on its thread, since getaddrinfo cannot be stopped, and is
-// freed there.
+// server that does not answer holds it for seconds. A task's lookup
+// must not hold its worker so long, which also watches the sockets
+// between tasks: it runs on a thread of a pool of the runtime's own
+// while the task parks, and the thread that finishes it wakes the task.
+// A thread starts when a lookup finds none idle, up to resolvers_most
+// of them, and one left idle for resolver_idle seconds ends. A lookup
+// with a timeout parks on a timer as well, and the first of the two to
+// come wakes the task; a lookup its task gave up on runs to its end on
+// its thread, since getaddrinfo cannot be stopped, and is freed there.
 
 #define _GNU_SOURCE // glibc's EAI_NODATA and the socket calls under -std=c11
 #define _DARWIN_C_SOURCE
@@ -204,10 +203,10 @@ static void take_out(lookup *l) {
     }
 }
 
-// expire is the timer's: the timeout has passed, and the task is
+// lookup_expire is the timer's: the timeout has passed, and the task is
 // woken unless the lookup woke it first. The task tells the two apart
 // by done, and takes the answer when it has one.
-static void expire(void *arg) {
+static void lookup_expire(void *arg) {
     take_out(arg);
 }
 
@@ -388,7 +387,7 @@ int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *rea
     }
 
     if (timeout > 0) {
-        sn_deadline_arm(&l->timer, timeout, expire, l);
+        sn_deadline_arm(&l->timer, timeout, lookup_expire, l);
     }
 
     // A park may end for an earlier wait's wake, which the scheduler

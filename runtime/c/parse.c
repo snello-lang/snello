@@ -62,10 +62,10 @@ static bool fold(const uint8_t *p, int64_t n, const char *word) {
     return true;
 }
 
-// special reads an infinity or NaN: inf or infinity in any case, with a
+// parse_special reads an infinity or NaN: inf or infinity in any case, with a
 // sign or none, and nan in any case without one. It reports whether s
 // is one, and writes it.
-static bool special(sn_string s, double *out) {
+static bool parse_special(sn_string s, double *out) {
     const uint8_t *p = s.ptr;
     int64_t i = s.len > 0 && (p[0] == '+' || p[0] == '-') ? 1 : 0;
     if (fold(p + i, s.len - i, "inf") || fold(p + i, s.len - i, "infinity")) {
@@ -527,7 +527,7 @@ static uint64_t exact_bits(sn_string s, const float_info *flt, bool *range);
 // zero, as a literal does.
 int64_t sn_strconv_parseFloat(sn_string s, double *out) {
     sn_check_string(s);
-    if (special(s, out)) {
+    if (parse_special(s, out)) {
         return 0;
     }
 
@@ -571,7 +571,7 @@ int64_t sn_strconv_parseFloat(sn_string s, double *out) {
 int64_t sn_strconv_parseFloat32(sn_string s, float *out) {
     sn_check_string(s);
     double wide;
-    if (special(s, &wide)) {
+    if (parse_special(s, &wide)) {
         *out = (float)wide;
         return 0;
     }

@@ -144,10 +144,10 @@ static int64_t count(const uint8_t *p, int64_t n) {
 int64_t sn_unicode__utf8_count(sn_slice_u8 p) { return count(p.ptr, p.len); }
 int64_t sn_unicode__utf8_countString(sn_string s) { return count(s.ptr, s.len); }
 
-// full reports whether the n bytes at p begin with a whole rune, or
+// rune_full reports whether the n bytes at p begin with a whole rune, or
 // with a byte sequence that is no rune's start and so reads as U+FFFD
 // whatever follows; false only for the start of a rune cut short.
-static bool full(const uint8_t *p, int64_t n) {
+static bool rune_full(const uint8_t *p, int64_t n) {
     if (n == 0) {
         return false;
     }
@@ -182,8 +182,8 @@ static bool full(const uint8_t *p, int64_t n) {
     return false;
 }
 
-bool sn_unicode__utf8_full(sn_slice_u8 p) { return full(p.ptr, p.len); }
-bool sn_unicode__utf8_fullString(sn_string s) { return full(s.ptr, s.len); }
+bool sn_unicode__utf8_full(sn_slice_u8 p) { return rune_full(p.ptr, p.len); }
+bool sn_unicode__utf8_fullString(sn_string s) { return rune_full(s.ptr, s.len); }
 
 // last reads the rune that ends the n bytes at p into r and returns its
 // width: the decoder's reading of the last rune that starts within four

@@ -6,7 +6,8 @@
 // none is, a send case that goes when there is room, a send on an
 // unbuffered channel that goes only once a receiver waits for it, a
 // bare receive, a choice among several ready cases, and a break inside
-// a case that ends the loop around the select. The tasks hand over one
+// a case that ends the loop around the select, and a select of ten
+// cases, more than fit in its own frame. The tasks hand over one
 // value at a time, so the order of what main prints does not depend on
 // which task ran first, and a sum does not depend on the choice.
 
@@ -108,4 +109,46 @@ func main() {
 	}
 
 	fmt.Println((<-got).Expect("handed over"))
+
+	// A select of more cases than fit in its own frame, which takes its
+	// working space from the system: it waits on ten channels until a
+	// task sends on the last.
+	c0 := make(chan int)
+	c1 := make(chan int)
+	c2 := make(chan int)
+	c3 := make(chan int)
+	c4 := make(chan int)
+	c5 := make(chan int)
+	c6 := make(chan int)
+	c7 := make(chan int)
+	c8 := make(chan int)
+	c9 := make(chan int)
+	spawn send(c9.Clone(), 99)
+	select {
+	case v := <-c0:
+		fmt.Println("case 0", v ?? -1)
+	case v := <-c1:
+		fmt.Println("case 1", v ?? -1)
+	case v := <-c2:
+		fmt.Println("case 2", v ?? -1)
+	case v := <-c3:
+		fmt.Println("case 3", v ?? -1)
+	case v := <-c4:
+		fmt.Println("case 4", v ?? -1)
+	case v := <-c5:
+		fmt.Println("case 5", v ?? -1)
+	case v := <-c6:
+		fmt.Println("case 6", v ?? -1)
+	case v := <-c7:
+		fmt.Println("case 7", v ?? -1)
+	case v := <-c8:
+		fmt.Println("case 8", v ?? -1)
+	case v := <-c9:
+		fmt.Println("case 9", v ?? -1)
+	}
+}
+
+// send sends v on c.
+func send(c chan<- int, v int) {
+	c <- v
 }

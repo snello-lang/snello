@@ -8,9 +8,16 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/token"
+)
+
+const (
+	linux       = "linux"      // the system whose links bindNow is for
+	mathLibrary = "-lm"        // the C library's mathematics, a library of its own on Linux
+	bindNow     = "-Wl,-z,now" // binds every import as the program starts
 )
 
 // Header writes the header the compiler gives a package that binds C
@@ -72,6 +79,20 @@ func BindingSources(dir string, bindings []lower.Binding) ([]string, error) {
 	}
 
 	return srcs, nil
+}
+
+// SystemLinkFlags returns what the link of every program ends with: the
+// C library's mathematics, and on Linux the binding of every function
+// the program imports as it starts, not at its first call, so that no
+// call runs the dynamic linker's resolver on a task's stack, which the
+// bound of the stack a task can use does not count. macOS binds every
+// import as the program starts already.
+func SystemLinkFlags() []string {
+	if goruntime.GOOS == linux {
+		return []string{mathLibrary, bindNow}
+	}
+
+	return []string{mathLibrary}
 }
 
 // LinkFlags returns the -l flags of the system libraries the bindings

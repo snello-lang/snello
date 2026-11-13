@@ -7,8 +7,9 @@
 // and runs as event-driven code. Every socket is non-blocking and is
 // registered with the system's poller, kqueue or epoll, once, when it
 // is made; an operation that would block parks the task until the
-// poller says the socket changed, and one thread waits on the poller
-// and wakes the task the event is for, which retries. A write to a
+// poller says the socket changed, and the worker that hears of the
+// event, looking at the poller between tasks or waiting in it while
+// idle (sched.c), runs the task, which retries. A write to a
 // connection the other side closed fails with EPIPE rather than raising
 // SIGPIPE, per socket, so that the rest of the program, its pipes
 // included, keeps the system's behavior. These are the system calls the
@@ -143,7 +144,19 @@ static int backlog(void) {
 #endif
 
 static pthread_mutex_t poller_mu = PTHREAD_MUTEX_INITIALIZER;
-static int poller = -1;
+static _Atomic int poller = -1; // made once under poller_mu, read by any thread without it
+
+// waiting counts the tasks in a socket's word, which only a look at the
+// poller wakes: while it is zero no worker looks, and a program without
+// sockets makes no call into the poller.
+static _Atomic int64_t waiting;
+
+// promise counts n more tasks waiting on a socket, or n fewer once
+// their wakes are kept, among the wakes the deadlock detector counts.
+static void promise(int64_t n) {
+    atomic_fetch_add(&waiting, n);
+    sn_outside(n);
+}
 
 // A socket's poll_desc is Go's pollDesc: what the poller knows of it,
 // one word for reading and one for writing, each holding nothing,
@@ -219,16 +232,18 @@ static poll_desc *pd_of(int fd) {
     return &c[fd % pd_chunk];
 }
 
-// ready marks a word ready, or wakes the task waiting in it and keeps
-// the promise: the task is on a queue before the count goes down, so an
-// idle worker looking at that moment finds work and not a program in
-// which nothing can run. The woken task tries its call again, which
-// finds what the event was for.
-static void ready(_Atomic uintptr_t *word, sn_handoff *woken) {
+// ready marks a word ready, or takes the task waiting in it out and
+// claims it, and returns the task it took out, or NULL, with whether
+// the claim made it runnable, which the caller then queues or runs.
+// The caller counts the wakes kept only once the tasks are on a queue
+// or running, so that an idle worker looking at that moment finds work
+// and not a program in which nothing can run. The woken task tries its
+// call again, which finds what the event was for.
+static sn_task *ready(_Atomic uintptr_t *word, sn_handoff *woken, bool *claimed) {
     uintptr_t old = atomic_load_explicit(word, memory_order_acquire);
     for (;;) {
         if (old == pd_ready) {
-            return;
+            return NULL;
         }
 
         uintptr_t next = old == pd_none ? pd_ready : pd_none;
@@ -237,73 +252,93 @@ static void ready(_Atomic uintptr_t *word, sn_handoff *woken) {
         }
     }
 
-    if (old != pd_none) {
-        sn_handoff_wake(woken, (sn_task *)old);
-        sn_outside(-1);
+    if (old == pd_none) {
+        return NULL;
+    }
+
+    *claimed = sn_handoff_claim(woken, (sn_task *)old);
+    return (sn_task *)old;
+}
+
+// take adds the task ready took out, if it did, to the tasks taken, and
+// to those woke holds when the claim made it runnable.
+static void take(sn_task *t, bool claimed, sn_task **woke, int *n, int *taken) {
+    if (t != NULL) {
+        (*taken)++;
+        if (claimed) {
+            woke[(*n)++] = t;
+        }
     }
 }
 
-// poll_main waits on the poller and passes each event to the word of
-// its socket it is for.
-static void *poll_main(void *arg) {
-    (void)arg;
-    for (;;) {
+int64_t sn_net_waiting(void) {
+    return atomic_load(&waiting);
+}
+
+void sn_net_kept(int64_t taken) {
+    if (taken > 0) {
+        promise(-taken);
+    }
+}
+
+int sn_net_poll(sn_task **woke, int *taken) {
+    int n = 0;
+    *taken = 0;
 #if defined(__APPLE__)
-        struct kevent events[64];
-        int n = kevent(poller, NULL, 0, events, 64, NULL);
-        for (int i = 0; i < n; i++) {
-            poll_desc *pd = events[i].udata;
-            if (events[i].filter == EVFILT_WRITE) {
-                ready(&pd->w, &pd->wh);
-            } else {
-                ready(&pd->r, &pd->rh);
-            }
-        }
-#else
-        struct epoll_event events[64];
-        int n = epoll_wait(poller, events, 64, -1);
-        for (int i = 0; i < n; i++) {
-            poll_desc *pd = events[i].data.ptr;
-            uint32_t e = events[i].events;
-            if (e & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                ready(&pd->r, &pd->rh);
-            }
-
-            if (e & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
-                ready(&pd->w, &pd->wh);
-            }
-        }
-#endif
+    struct kevent events[SN_POLL_EVENTS];
+    struct timespec now = {0, 0};
+    int got = kevent(poller, NULL, 0, events, SN_POLL_EVENTS, &now);
+    for (int i = 0; i < got; i++) {
+        poll_desc *pd = events[i].udata;
+        bool write = events[i].filter == EVFILT_WRITE, claimed = false;
+        sn_task *t = write ? ready(&pd->w, &pd->wh, &claimed) : ready(&pd->r, &pd->rh, &claimed);
+        take(t, claimed, woke, &n, taken);
     }
+#else
+    struct epoll_event events[SN_POLL_EVENTS];
+    int got = epoll_wait(poller, events, SN_POLL_EVENTS, 0);
+    for (int i = 0; i < got; i++) {
+        poll_desc *pd = events[i].data.ptr;
+        uint32_t e = events[i].events;
+        bool claimed = false;
+        if (e & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+            sn_task *t = ready(&pd->r, &pd->rh, &claimed);
+            take(t, claimed, woke, &n, taken);
+        }
 
-    return NULL;
+        claimed = false;
+        if (e & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
+            sn_task *t = ready(&pd->w, &pd->wh, &claimed);
+            take(t, claimed, woke, &n, taken);
+        }
+    }
+#endif
+    return n;
 }
 
-// poller_start makes the poller and its thread once.
-static void poller_start(void) {
+int sn_net_poller(void) {
+    int made = atomic_load(&poller);
+    if (made >= 0) {
+        return made;
+    }
+
     pthread_mutex_lock(&poller_mu);
-    if (poller < 0) {
+    made = atomic_load(&poller);
+    if (made < 0) {
 #if defined(__APPLE__)
-        poller = kqueue();
+        made = kqueue();
+        if (made >= 0 && fcntl(made, F_SETFD, FD_CLOEXEC) < 0) {
+            close(made);
+            made = -1;
+        }
 #else
-        poller = epoll_create1(0);
+        made = epoll_create1(EPOLL_CLOEXEC);
 #endif
-        if (poller < 0) {
-            sn_panic(SN_STR("cannot make the poller", 22));
-        }
-
-        pthread_t id;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        if (pthread_create(&id, &attr, poll_main, NULL) != 0) {
-            sn_panic(SN_STR("cannot start the poller", 23));
-        }
-
-        pthread_attr_destroy(&attr);
+        atomic_store(&poller, made);
     }
 
     pthread_mutex_unlock(&poller_mu);
+    return made;
 }
 
 // expire marks a direction's deadline passed and takes out the task
@@ -316,7 +351,7 @@ static void expire(poll_desc *pd, bool write) {
     uintptr_t old = atomic_load(word);
     if (old > pd_ready && atomic_compare_exchange_strong(word, &old, pd_none)) {
         sn_handoff_wake(write ? &pd->wh : &pd->rh, (sn_task *)old);
-        sn_outside(-1);
+        promise(-1);
     }
 }
 
@@ -339,8 +374,12 @@ static bool passed(int fd, bool write) {
 // with the same number left. On a failure it returns the name of the
 // call that failed, and NULL otherwise.
 static const char *watch(int fd) {
-    if (poller < 0) {
-        poller_start();
+    if (sn_net_poller() < 0) { // made here when the main task makes a socket before the scheduler starts
+#if defined(__APPLE__)
+        return "kqueue";
+#else
+        return "epoll_create1";
+#endif
     }
 
     poll_desc *pd = pd_of(fd);
@@ -392,13 +431,13 @@ static int wait_fd(int fd, bool write) {
             return 0;
         }
 
-        sn_outside(1);
+        promise(1);
         old = pd_none;
         if (atomic_compare_exchange_strong(word, &old, self)) {
             break;
         }
 
-        sn_outside(-1);
+        promise(-1);
         if (old != pd_ready) {
             sn_panic(SN_STR("net: two tasks wait on one socket", 33));
         }
@@ -410,7 +449,7 @@ static int wait_fd(int fd, bool write) {
 
     uintptr_t mine = self;
     if (atomic_compare_exchange_strong(word, &mine, pd_none)) {
-        sn_outside(-1);
+        promise(-1);
     } else {
         sn_handoff_wait(woken);
     }
@@ -457,7 +496,7 @@ static void unwatch(int fd) {
         uintptr_t old = atomic_exchange(words[i], pd_none);
         if (old > pd_ready) {
             sn_handoff_wake(woken[i], (sn_task *)old);
-            sn_outside(-1);
+            promise(-1);
         }
     }
 }

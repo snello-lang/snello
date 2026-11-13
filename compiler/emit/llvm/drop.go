@@ -165,6 +165,28 @@ func (e *Emitter) dropIfNeeded(p string, t types.Type, pos token.Pos) {
 	}
 }
 
+// elemDropper returns the name of the function the runtime is given to
+// drop an element of a channel, or a key or a value of a map, of type
+// elem with, writing it on first use: dropper's under the name of
+// lower.ElemDrop, which the analysis of the linked program takes for
+// the targets of the runtime's calls of such drops.
+func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
+	name := lower.ElemDrop(elem)
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	drop := e.dropper(elem, pos)
+	e.helper(name, "void", []string{"ptr %v"}, func() {
+		e.inst("call void @" + drop + "(ptr %v)")
+		e.inst("ret void")
+		e.fn.terminated = true
+	})
+
+	return name
+}
+
 // dropper returns the name of the function dropping a value of type t
 // at an address, writing it on first use: a Drop method first, when
 // the value is live, then each part that owns something, and the

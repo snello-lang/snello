@@ -62,7 +62,7 @@ static bool get(cursor *c, int64_t k) {
     return true;
 }
 
-static void release(cursor *c) {
+static void segment_release(cursor *c) {
     if (c->r != c->small_r) {
         sn_free(c->r);
         sn_free(c->off);
@@ -365,6 +365,6 @@ int64_t sn_unicode__segment_next(sn_string s, int64_t at, int64_t kind) {
         break;
     }
 
-    release(&c);
+    segment_release(&c);
     return n;
 }

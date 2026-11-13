@@ -7,6 +7,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,6 +27,11 @@ import (
 // ucd is the copy of the Unicode Character Database the tables are
 // written from, checked in so that the tests read it offline.
 var ucd = filepath.Join("testdata", "ucd", "18.0.0")
+
+// staticFunction matches the line that begins a static function's
+// definition or declaration in the runtime's C, attributes and all,
+// alloc.c's HELPER among them, and names the function.
+var staticFunction = regexp.MustCompile(`(?m)^(?:static\s+(?:inline\s+)?(?:__attribute__\(\([^)]*\)\)\s+)?(?:inline\s+)?(?:_Noreturn\s+)?|HELPER\s+)[A-Za-z_][\w \*]*?[ \*](\w+)\(`)
 
 // TestUnicodeTables checks that c/unicode.c is what mkunicode.go writes
 // from the database under testdata, so the tables cannot be edited by
@@ -425,7 +432,7 @@ int main(int argc, char **argv) {
     sn_init(argc, argv);
     path = SN_STR(argv[1], (int64_t)strlen(argv[1]));
     done = sn_chan_make(sizeof(int64_t), 1, NULL); // buffered: the sender is done with it once its value is in
-    sn_spawn(run, NULL);
+    sn_spawn(run, NULL, SN_UNBOUNDED);
     int64_t code;
     sn_chan_recv(done, &code);
     sn_chan_drop(&done); // the task's work is over: the last handle frees the channel
@@ -447,6 +454,42 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestStaticNamesUnique holds the runtime to one static function of a
+// name across its files. The analysis of a task's stack reads the
+// linked binary by function name, and reads two local functions of one
+// name as one, the deeper of the two, so that a task calling the
+// shallow one is bounded by the other: a lock's spin read as the
+// scheduler's, which looks at the sockets' poller, gave every task that
+// takes a lock a deeper stack than it uses, and a socket's preparation
+// read as the scheduler's start left the net programs unbounded.
+func TestStaticNamesUnique(t *testing.T) {
+	defined := map[string]string{}
+	for name, data := range Files() {
+		if filepath.Ext(name) != ".c" {
+			continue
+		}
+
+		seen := map[string]bool{}
+		for _, m := range staticFunction.FindAllSubmatch(data, -1) {
+			f := string(m[1])
+			if seen[f] {
+				continue // a declaration before the definition
+			}
+
+			seen[f] = true
+			if other, ok := defined[f]; ok {
+				t.Errorf("%s and %s both define a static function %s", other, name, f)
+			}
+
+			defined[f] = name
+		}
+	}
+
+	if len(defined) == 0 {
+		t.Fatal("no static function found: the pattern no longer reads the runtime")
+	}
+}
+
 // TestHandoff holds a waker that wakes from no lock to the handoff's
 // promise: a task it took out while the task was running, as a task out
 // of a park a kept wake ended is, goes on only once the waker is done
@@ -454,6 +497,114 @@ int main(int argc, char **argv) {
 // its word and waits 50 ms before it wakes it, as a waker the system
 // descheduled would; a task that went on meanwhile would end, and the
 // runtime free it, before the wake read it.
+// TestSmallStacks spawns tasks of every class of stack, a bound given
+// as the analysis of a linked program gives one, twice over, so that
+// stacks pass between the workers' caches and the pools; panics on a
+// small stack under a mark, twice, with a drop deeper than the stack's
+// bound, which a debug build stops for unless the panic runs on a stack
+// of its own; and, in a debug build, checks a task that writes deeper
+// than its bound stops the program.
+func TestSmallStacks(t *testing.T) {
+	probe := `#include "snello.h"
+#include <stdio.h>
+enum { rounds = 2, tasks = 20000 };
+static const uint32_t bounds[] = {2000, 4000, 8000, 16000, 32000, 64000, SN_UNBOUNDED};
+static sn_chan *done;
+static int dropped;
+// fill writes every byte of a stack's region, each a volatile store
+// that no optimizer leaves out.
+static void fill(volatile uint8_t *p, size_t n, uint8_t v) {
+    for (size_t i = 0; i < n; i++) {
+        p[i] = v;
+    }
+}
+// work writes a quarter of its bound into its stack, the rest left to
+// what a task runs besides.
+static void work(void *arg) {
+    uint32_t b = (uint32_t)(uintptr_t)arg;
+    size_t n = b == SN_UNBOUNDED ? 16384 : b / 4;
+    volatile uint8_t *buf = __builtin_alloca(n);
+    fill(buf, n, 1);
+    int64_t one = buf[n - 1];
+    sn_chan_send(done, &one);
+}
+// deep_drop is a drop with a frame deeper than the bound of the task
+// that panics.
+static void deep_drop(void *p) {
+    (void)p;
+    volatile uint8_t frame[6000];
+    fill(frame, sizeof frame, 2);
+    dropped += frame[0] - 1;
+}
+static void boom(void *ctx) {
+    sn_guard(ctx, deep_drop);
+    sn_panic(SN_STR("boom", 4));
+}
+static void catcher(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 2; i++) {
+        sn_string msg = SN_STR("", 0);
+        int value;
+        bool caught = sn_catch(boom, &value, &msg);
+        printf("caught %d %.*s dropped %d\n", caught, (int)msg.len, (const char *)msg.ptr, dropped);
+        sn_string_drop(&msg);
+    }
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+static void too_deep(void *arg) {
+    (void)arg;
+    volatile uint8_t frame[1000];
+    fill(frame, sizeof frame, 3);
+    int64_t one = frame[0] - 2;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    int n = (int)(sizeof bounds / sizeof bounds[0]);
+    done = sn_chan_make(sizeof(int64_t), rounds * tasks + 1, NULL); // buffered: no task parks to send
+    if (argc > 1) {
+        sn_spawn(too_deep, NULL, 100);
+        int64_t v;
+        sn_chan_recv(done, &v);
+        sn_chan_drop(&done);
+        return sn_finish();
+    }
+    sn_spawn(catcher, NULL, 4000);
+    int64_t v, sum = 0;
+    sn_chan_recv(done, &v);
+    for (int r = 0; r < rounds; r++) {
+        for (int i = 0; i < tasks; i++) {
+            sn_spawn(work, (void *)(uintptr_t)bounds[i % n], bounds[i % n]);
+        }
+        for (int i = 0; i < tasks; i++) {
+            sn_chan_recv(done, &v);
+            sum += v;
+        }
+    }
+    printf("%lld\n", (long long)sum);
+    sn_chan_drop(&done);
+    return sn_finish();
+}
+`
+	want := "caught 1 boom dropped 1\ncaught 1 boom dropped 2\n" + fmt.Sprint(2*20000) + "\n"
+	for _, mode := range [][]string{{"-O1", "-DSN_DEBUG"}, {"-O2"}} {
+		dir := filepath.Join(t.TempDir(), "build")
+		bin := buildProbeAs(t, dir, probe, mode...)
+		out, err := exec.Command(bin).CombinedOutput()
+		if err != nil || string(out) != want {
+			t.Fatalf("%v: %v\n%s", mode, err, out)
+		}
+	}
+
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin, "deep").CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "past the bound of 100 bytes") {
+		t.Fatalf("a task past its bound in a debug build: %v\n%s", err, out)
+	}
+}
+
 func TestHandoff(t *testing.T) {
 	probe := `#define _GNU_SOURCE
 #define _DARWIN_C_SOURCE
@@ -498,7 +649,7 @@ int main(int argc, char **argv) {
     done = sn_chan_make(sizeof(int64_t), 1, NULL);
     pthread_t id;
     pthread_create(&id, NULL, waker, NULL);
-    sn_spawn(run, NULL);
+    sn_spawn(run, NULL, SN_UNBOUNDED);
     int64_t got;
     sn_chan_recv(done, &got);
     pthread_join(id, NULL);
@@ -515,6 +666,95 @@ int main(int argc, char **argv) {
 
 	if string(out) != "ended before the wake: 0\n" {
 		t.Fatalf("got %q: the task went on before its waker was done with it", out)
+	}
+}
+
+// TestSocketsWithEveryWorkerBusy holds a socket's task to waking while
+// every worker is busy: chains of tasks, each spawning the next before
+// it ends, keep every worker's own queue full, so that no worker runs
+// out of tasks to look at the sockets' poller and none waits in it,
+// and a client outside the scheduler connects once they do. Only the
+// monitor's look hears of the connection; without it the accepting task
+// would wait for ever, and the test's alarm would end it.
+func TestSocketsWithEveryWorkerBusy(t *testing.T) {
+	probe := `#define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
+#include "internal.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+static _Atomic bool accepted;
+static int64_t listener, port;
+static sn_chan *done;
+static void chain(void *arg) {
+    (void)arg;
+    volatile int64_t sum = 0;
+    for (int64_t i = 0; i < 20000; i++) {
+        sum += i;
+    }
+
+    if (!atomic_load(&accepted)) {
+        sn_spawn(chain, NULL, SN_UNBOUNDED);
+    }
+}
+static void serve(void *arg) {
+    (void)arg;
+    int64_t conn = -1;
+    int64_t code = sn_net_accept(listener, &conn);
+    atomic_store(&accepted, true);
+    sn_chan_send(done, &code);
+}
+static void *client(void *arg) {
+    (void)arg;
+    struct timespec pause = {0, 300000000};
+    nanosleep(&pause, NULL);
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(s, (struct sockaddr *)&to, sizeof to) != 0) {
+        perror("connect");
+    }
+
+    return NULL;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    alarm(20);
+    sn_string call = SN_STR("", 0);
+    if (sn_net_listen(SN_STR("127.0.0.1", 9), 0, &listener, &port, &call) != 0) {
+        puts("listen failed");
+        return 1;
+    }
+
+    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    sn_spawn(serve, NULL, SN_UNBOUNDED);
+    int64_t n = 4 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(chain, NULL, SN_UNBOUNDED);
+    }
+
+    pthread_t id;
+    pthread_create(&id, NULL, client, NULL);
+    int64_t code;
+    sn_chan_recv(done, &code);
+    pthread_join(id, NULL);
+    printf("accepted: %lld\n", (long long)code);
+    sn_chan_drop(&done);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if string(out) != "accepted: 0\n" {
+		t.Fatalf("got %q, want the connection accepted", out)
 	}
 }
 
@@ -579,11 +819,11 @@ int main(int argc, char **argv) {
     results = sn_chan_make(sizeof(int64_t), n + 1, NULL);
     computed = sn_chan_make(sizeof(int64_t), 1, NULL);
     for (int64_t i = 0; i < n; i++) {
-        sn_spawn(look, NULL);
+        sn_spawn(look, NULL, SN_UNBOUNDED);
     }
 
-    sn_spawn(look, (void *)(intptr_t)50000000);
-    sn_spawn(compute, NULL);
+    sn_spawn(look, (void *)(intptr_t)50000000, SN_UNBOUNDED);
+    sn_spawn(compute, NULL, SN_UNBOUNDED);
     int64_t sum;
     sn_chan_recv(computed, &sum);
     printf("computed %lld\n", (long long)sum);

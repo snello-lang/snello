@@ -36,7 +36,7 @@ typedef struct {
     int64_t n, cap;
 } runes;
 
-static void push(runes *b, int32_t r) {
+static void norm_push(runes *b, int32_t r) {
     if (b->n == b->cap) {
         int64_t cap = b->cap < 16 ? 16 : b->cap * 2;
         int32_t *grown = sn_alloc((size_t)cap * sizeof(int32_t));
@@ -59,10 +59,10 @@ static void push(runes *b, int32_t r) {
 static void decompose(runes *b, int32_t r, bool compat) {
     if (r >= S_BASE && r < S_BASE + S_COUNT) {
         int32_t s = r - S_BASE;
-        push(b, L_BASE + s / N_COUNT);
-        push(b, V_BASE + (s % N_COUNT) / T_COUNT);
+        norm_push(b, L_BASE + s / N_COUNT);
+        norm_push(b, V_BASE + (s % N_COUNT) / T_COUNT);
         if (s % T_COUNT != 0) {
-            push(b, T_BASE + s % T_COUNT);
+            norm_push(b, T_BASE + s % T_COUNT);
         }
 
         return;
@@ -71,7 +71,7 @@ static void decompose(runes *b, int32_t r, bool compat) {
     const int32_t *to;
     int n = sn_uc_decomp(r, compat, &to);
     if (n == 0) {
-        push(b, r);
+        norm_push(b, r);
         return;
     }
 
