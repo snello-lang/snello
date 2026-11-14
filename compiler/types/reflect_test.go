@@ -38,6 +38,7 @@ func TestReflection(t *testing.T) {
 		"func f<T>(v ref T) int { return match T { enum => match v { for c := range variants(T) => { n := len(c.name); for f := range fields(c) { g(ref v.[f]) }; n } }, _ => 0 } }\nfunc g<U>(u ref U) {}",
 		"func f<T>(name ref string) T? { match T { enum => { for c := range variants(T) { if name == c.name { return Some(c(for f := range fields(c) { zero<f.type>() ?? return None })) } } }, _ => {} }; return None }",
 		"func f<T>(v ref T) { match T { []E => g(v), _ => {} } }\nfunc g<U>(u ref []U) {}",
+		"func f<T>(v ref T) int { n := 0; match T { struct => { for f := range fields(T) { match f.type { int => { if v.[f] > 0 { n += v.[f] } }, _ => {} } } }, _ => {} }; return n }", // the field reads as the arm's type
 	}
 	for _, src := range tests {
 		if got := checkErrors(t, "package p\n"+reflectDecls+src); len(got) != 0 {

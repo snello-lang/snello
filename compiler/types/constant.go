@@ -274,7 +274,7 @@ func (c *Checker) notConstant(x ast.Expr) ast.Expr {
 
 		return c.notConstant(x.Y)
 	case *ast.CallExpr:
-		if len(x.Args) == 1 && c.isNumberType(x.Fun) {
+		if len(x.Args) == 1 && c.isConstantType(x.Fun) {
 			return c.notConstant(x.Args[0])
 		}
 	}
@@ -282,9 +282,11 @@ func (c *Checker) notConstant(x ast.Expr) ast.Expr {
 	return x
 }
 
-// isNumberType reports whether x names a number type, T or pkg.T, so
-// that a call of it is a conversion a constant expression may make.
-func (c *Checker) isNumberType(x ast.Expr) bool {
+// isConstantType reports whether x names a number, string or bool type,
+// T or pkg.T, a type declared over one among them, so that a call of it
+// is a conversion a constant expression may make: Celsius(21.5),
+// json.Name("host").
+func (c *Checker) isConstantType(x ast.Expr) bool {
 	var obj Object
 	switch x := unparen(x).(type) {
 	case *ast.Ident:
@@ -299,7 +301,7 @@ func (c *Checker) isNumberType(x ast.Expr) bool {
 	}
 
 	c.resolveEarly(tn.typ)
-	return hasInfo(tn.typ, IsNumeric)
+	return hasInfo(tn.typ, IsNumeric|IsString|IsBoolean)
 }
 
 // notConstantValue is notConstant for a constant's value, which may
@@ -587,6 +589,13 @@ func (c *Checker) foldConversion(x *ast.CallExpr, t Type) (Constant, bool) {
 	}
 
 	switch {
+	case hasInfo(t, IsString) || hasInfo(t, IsBoolean): // a string stays a string, a bool a bool, under the type's name
+		if hasInfo(t, IsString) != (v.kind == ConstString) || hasInfo(t, IsBoolean) != (v.kind == ConstBool) {
+			c.errorf(x.Pos(), "constant "+v.text()+" does not convert to "+t.String()+": a constant conversion keeps a string a string and a bool a bool")
+			return failed()
+		}
+
+		return c.represent(v, t, x)
 	case v.kind == ConstString || v.kind == ConstBool:
 		return failed() // a conversion of a string or a bool to a number type, which the check refused
 	case hasInfo(t, IsInteger) && v.kind == ConstFloat:

@@ -150,7 +150,7 @@ A struct is an object of its fields, under the names they are declared with; an 
 
 Reading holds the text to JSON's grammar: `01`, `+1`, `.5`, a member without its comma, a raw control character in a string and text after the value are errors with their offset. Arrays and objects nest at most 128 deep, in a value read or one passed over, since a task's stack does not grow: ten thousand `[` are an error, `exceeded max depth`, not a crash. A float is written by its shortest text, in plain decimals from `1e-6` up to `1e21` and with an exponent outside, an `f32` by its own, `0.1`; a string with its quotes, backslashes and control characters escaped and invalid UTF-8 as `\ufffd`, and nothing escaped for HTML.
 
-A field is written under its declared name, and there is no tag syntax to rename it: a type that wants other names writes its own encoding, which is the code reflection would write with other strings.
+A field is written under its declared name unless an attribute says otherwise: `@json.Name("host")` renames a field, a variant or a variant's field, `@json.OmitEmpty` leaves a field out when it is `None`, `""`, `[]` or `{}` and reads it back as empty, and `@json.Skip` keeps a field out of the text both ways (chapter 25).
 
 ## Memory safe, no collector
 

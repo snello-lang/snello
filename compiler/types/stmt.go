@@ -573,7 +573,7 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 		c.pattern(s.Pat, Typ[Invalid], nil)
 	}
 
-	if c.bindsOwned && held(s.Value, x.mode) {
+	if c.bindsOwned && c.fromPlace(s.Value, x.mode) {
 		c.resolvingIn(outer, func() { c.move(s.Value, variable) }) // a part bound by value leaves the place; a temporary's part may not leave it
 	}
 
@@ -702,7 +702,7 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		case iterator && x.mode == variable && IsCopy(x.typ):
 			loopHolder, places, placesMut = c.holdRange(s, mut)
 			loopHolder = c.holdIterator(s, loopHolder) // a Copy iterator is not moved out of its variable, which Next changes in place: lent mut for the loop
-		case held(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
+		case c.fromPlace(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends, and so does a slice of borrows, the pieces of a string, whose elements are its string's
 		case iterator && x.mode == variable:
 			loopHolder, places, placesMut = c.holdRange(s, mut)

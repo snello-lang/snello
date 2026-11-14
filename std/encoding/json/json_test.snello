@@ -27,6 +27,28 @@ enum Ev { Say(msg string); Both(string, string); Quiet }
 
 struct Node { V int; Up *Node? }
 
+// Attributes: keys renamed, empty fields left out and read back as
+// empty, a field never written or read, and variants renamed.
+struct Conf {
+	Host   string = "localhost" @json.Name("host")
+	Port   int = 8080 @json.Name("port")
+	Tags   []string @json.OmitEmpty
+	Note   string? @json.OmitEmpty @json.Name("note")
+	Label  string @json.OmitEmpty
+	Secret string = "hidden" @json.Skip
+}
+
+enum Kind { Plain @json.Name("plain"); Sized(n int) @json.Name("sized"); Duo(a int, b int @json.Name("second")) }
+
+// A skipped field of a type with no empty value and no default, a
+// renamed field the text must hold, and a variant whose named fields are
+// skipped, left out when empty and renamed.
+struct Strict { N int @json.Name("n"); Hidden int @json.Skip }
+
+struct Loose { Key string @json.Name("k"); Gone string @json.Skip }
+
+enum Ev2 { V(x string @json.Skip, y string @json.OmitEmpty, z int @json.Name("Z")) }
+
 // The JSON example's value, a recursive enum holding collections.
 enum Value {
 	Null
@@ -127,4 +149,48 @@ func TestFloatsAndText() {
 	expect.Equal(ref expect.IsOk(json.Marshal(ref []f64{1e20, 1e-6, 1e-7, 123456789.0, 0.5, 1e21, -2.5e-8})), "[100000000000000000000,0.000001,1e-7,123456789,0.5,1e+21,-2.5e-8]")
 	expect.Equal(ref expect.IsOk(json.Marshal(ref f32(0.1))), "0.1")
 	expect.Equal(ref expect.IsOk(json.Marshal(ref string([]byte{0x61, 0xff, 0x62}))), "\"a\\ufffdb\"")
+}
+
+// Attributes rename a field's and a variant's key, leave an empty field
+// out and read it back as empty, and keep a skipped field out of the
+// text both ways.
+func TestAttributes() {
+	c := Conf{Host: "h".Clone(), Port: 1, Tags: []string{}, Note: None, Label: "".Clone(), Secret: "s".Clone()}
+	expect.Equal(ref expect.IsOk(json.Marshal(ref c)), `{"host":"h","port":1}`)
+	back := expect.IsOk(json.Unmarshal<Conf>(`{"host":"h","port":1,"Secret":"leaked"}`))
+	expect.Equal(ref back.Host, "h")
+	expect.Equal(ref back.Port, ref 1)
+	expect.Equal(ref len(back.Tags), ref 0)
+	expect.IsNone(back.Note)
+	expect.Equal(ref back.Label, "")
+	expect.Equal(ref back.Secret, "hidden") // its default, whatever the text holds
+	full := Conf{Host: "h".Clone(), Port: 2, Tags: []string{"a".Clone()}, Note: Some("n".Clone()), Label: "l".Clone(), Secret: "s".Clone()}
+	text := expect.IsOk(json.Marshal(ref full))
+	expect.Equal(ref text, `{"host":"h","port":2,"Tags":["a"],"note":"n","Label":"l"}`)
+	roundTrip<Conf>(ref text)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Kind{Plain, Sized(3), Duo(1, 2)})), `["plain",{"sized":{"n":3}},{"Duo":{"a":1,"second":2}}]`)
+	roundTrip<[]Kind>(`["plain",{"sized":{"n":3}},{"Duo":{"a":1,"second":2}}]`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Kind>(`"Plain"`)).Error(), "no variant Plain")
+}
+
+// Skip and OmitEmpty apply to a variant's named fields as to a struct's;
+// a skipped field takes its type's empty value, and one with none and no
+// default is an error that says so; a missing renamed key is named by
+// its key in the text.
+func TestAttributeEdges() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{"n":1,"Hidden":2}`)).Error(), "json: field Hidden is skipped and has no default at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{}`)).Error(), "json: missing field n at offset 0")
+	l := expect.IsOk(json.Unmarshal<Loose>(`{"k":"a","Gone":"b"}`))
+	expect.Equal(ref l.Gone, "")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref V("s".Clone(), "".Clone(), 3))), `{"V":{"Z":3}}`)
+	match expect.IsOk(json.Unmarshal<Ev2>(`{"V":{"Z":3,"x":"leaked"}}`)) {
+		V(x, y, z) => {
+			expect.Equal(ref x, "")
+			expect.Equal(ref y, "")
+			expect.Equal(ref z, ref 3)
+		}
+	}
+
+	expect.Equal(ref expect.IsOk(json.Marshal(ref V("s".Clone(), "y".Clone(), 4))), `{"V":{"y":"y","Z":4}}`)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Kind>(`{"Duo":{"a":1}}`)).Error(), "json: missing field second at offset 7")
 }

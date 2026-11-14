@@ -3,8 +3,9 @@
 // license that can be found in the LICENSE file.
 
 // Rule: a constant's value is computed by the compiler, from literals,
-// other constants, the operators and the conversions between number
-// types. A call runs when the program does, a variable can change, an
+// other constants, the operators, the conversions between number types
+// and those that keep a string a string or a bool a bool under another
+// name, Name("host"); a rune does not become a string. A call runs when the program does, a variable can change, an
 // element is read from memory, and none of them is known to the
 // compiler; a constant also needs a value to have one. Fix: make it a
 // var, which takes any value, var n = size(), or compute it from
@@ -19,7 +20,7 @@ var count = 2
 const fromCall = size() + 1                 // ERROR "size() is not constant"
 const fromVar = count * 2                   // ERROR "count is not constant"
 const fromLen = len("abc")                  // ERROR "len(...) is not constant"
-const toString = string('A')                // ERROR "string(...) is not constant"
+const toString = string('A')                // ERROR "constant 65 does not convert to string: a constant conversion keeps a string a string"
 const missing int                           // ERROR "const missing needs a value"
 
 struct Point { x int; y int }

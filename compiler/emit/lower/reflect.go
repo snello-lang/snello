@@ -180,6 +180,45 @@ func fieldCopies(info *types.Info, st *types.Struct, part *types.Part, sub map[*
 	return copies
 }
 
+// AttrOf returns the attribute attr(x, A) reads in the copy and the
+// instance being written, and whether one is written: the attribute of
+// type A on the field or variant of x's copy, or on the type x names,
+// with sub in place. Both backends write it, None when there is none.
+func AttrOf(info *types.Info, call *ast.CallExpr, sub map[*types.TypeParam]types.Type, copies map[*types.Part]PartCopy) (types.Attribute, bool) {
+	opt, ok := info.Types[call].(*types.Option)
+	if !ok {
+		return types.Attribute{}, false
+	}
+
+	t := opt.Elem()
+	if p := PartUsed(info, call.Args[0]); p != nil {
+		c, ok := copies[p]
+		switch {
+		case !ok:
+		case c.Field != nil && c.Variant != nil: // fields(c): a variant's field
+			return info.VariantFieldAttr(c.Variant, c.Index, t)
+		case c.Field != nil: // fields(T): the struct T stands for in this instance
+			if n, ok := types.Subst(p.Of(), sub).(*types.Named); ok {
+				return info.FieldAttr(n, c.Index, t)
+			}
+		case c.Variant != nil:
+			return info.VariantAttr(c.Variant, t)
+		}
+
+		return types.Attribute{}, false
+	}
+
+	if id, ok := call.Args[0].(*ast.Ident); ok {
+		if tn, ok := info.Uses[id].(*types.TypeName); ok {
+			if n, ok := types.Subst(tn.Type(), sub).(*types.Named); ok {
+				return info.TypeAttr(n, t) // an instance has its declaration's
+			}
+		}
+	}
+
+	return types.Attribute{}, false
+}
+
 // withParam returns sub with t in place of the part's type, f.type.
 func withParam(sub map[*types.TypeParam]types.Type, part *types.Part, t types.Type) map[*types.TypeParam]types.Type {
 	param, _ := part.Type().(*types.TypeParam)

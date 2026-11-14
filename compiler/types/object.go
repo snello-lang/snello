@@ -25,6 +25,7 @@ const (
 	BuiltinReplace
 	BuiltinFields
 	BuiltinVariants
+	BuiltinAttr
 )
 
 // An Object is a named entity of a program: a type name, a variable,

@@ -577,7 +577,7 @@ func (c *Checker) partExpr(e *ast.PartExpr) operand {
 	}
 
 	c.sawParts = true
-	return operand{m, p.typ, nil, nil}
+	return operand{m, c.refine(p.typ), nil, nil} // in an arm of match f.type, the field reads as the type the arm matched
 }
 
 // selectParts replaces each v.[f] of the checked body with a selector,

@@ -146,6 +146,18 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		v := e.load(e.irType(t, x.Pos()), p)
 		e.zero(p, t, x.Pos())
 		return v
+	case types.BuiltinAttr: // a constant in the copy and instance being written
+		t := e.typeOf(x)
+		a, ok := lower.AttrOf(e.info, x, e.subst, e.partCopy)
+		switch {
+		case !ok:
+			return e.variantValue(t, types.NoneVariant, nil, x.Pos())
+		case a.Value == nil: // a struct with no fields, written by its name: its one value
+			ir := e.irType(a.Type, x.Pos())
+			return e.variantValue(t, types.SomeVariant, []value{{ir, zero(ir)}}, x.Pos())
+		}
+
+		return e.variantValue(t, types.SomeVariant, []value{e.valueTo(lower.Folded(e.info, a.Value), a.Type)}, x.Pos())
 	case types.BuiltinReplace: // the place's address first, since v may be a call that runs before the place is read
 		target := x.Args[0].(*ast.UnaryExpr).X
 		p := e.placeTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other

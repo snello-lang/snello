@@ -1179,6 +1179,17 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		return e.takeCall(x)
 	case types.BuiltinReplace:
 		return e.replaceCall(x)
+	case types.BuiltinAttr: // a constant in the copy and instance being written
+		t := e.typeOf(x)
+		a, ok := lower.AttrOf(e.info, x, e.subst, e.partCopy)
+		switch {
+		case !ok:
+			return e.variantValue(t, types.NoneVariant, nil, x.Pos())
+		case a.Value == nil: // a struct with no fields, written by its name: its one value
+			return e.variantValue(t, types.SomeVariant, []string{e.zero(a.Type, x.Pos())}, x.Pos())
+		}
+
+		return e.variantValue(t, types.SomeVariant, []string{e.valueTo(lower.Folded(e.info, a.Value), a.Type)}, x.Pos())
 	case types.BuiltinPanic:
 		return "sn_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:

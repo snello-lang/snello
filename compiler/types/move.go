@@ -340,7 +340,7 @@ func (c *Checker) operandOf(e ast.Expr, hint Type) operand {
 // as does dropping it into the blank; passing it to a call
 // lends it again, which the caller handles.
 func (c *Checker) maybeMove(op operand, t Type) {
-	if op.expr == nil || !held(op.expr, op.mode) && op.mode != borrowed && op.mode != mutBorrowed {
+	if op.expr == nil || !c.fromPlace(op.expr, op.mode) && op.mode != borrowed && op.mode != mutBorrowed {
 		return
 	}
 
@@ -356,21 +356,30 @@ func (c *Checker) maybeMove(op operand, t Type) {
 	c.move(op.expr, m)
 }
 
-// held reports whether an operation that takes the value of e, reached
+// fromPlace reports whether an operation that takes the value of e, reached
 // as m says, takes it from a place: a variable, or a part of a value
 // built here, which the move refuses, since the whole is the
 // statement's and is dropped with it.
-func held(e ast.Expr, m mode) bool {
-	return m == variable || m == value && partOf(e)
+func (c *Checker) fromPlace(e ast.Expr, m mode) bool {
+	return m == variable || m == value && c.isPart(e)
 }
 
-// partOf reports whether e names a part of a value, a field, an element
-// or what a pointer points at, rather than a whole.
-func partOf(e ast.Expr) bool {
+// isPart reports whether e names a part of a value, a field, an element
+// or what a pointer points at, rather than a whole; a package's member,
+// lib.Base, is a whole.
+func (c *Checker) isPart(e ast.Expr) bool {
 	switch e := e.(type) {
 	case *ast.ParenExpr:
-		return partOf(e.X)
-	case *ast.SelectorExpr, *ast.IndexExpr:
+		return c.isPart(e.X)
+	case *ast.SelectorExpr:
+		if id, ok := e.X.(*ast.Ident); ok {
+			if _, pkg := c.resolve(id.Name).(*PkgName); pkg {
+				return false
+			}
+		}
+
+		return true
+	case *ast.IndexExpr:
 		return true
 	case *ast.UnaryExpr:
 		return e.Op == token.MUL
@@ -476,7 +485,7 @@ func (c *Checker) move(e ast.Expr, m mode) {
 	case notPlace:
 		if m == borrowed || m == mutBorrowed {
 			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a borrow")
-		} else if m == variable && partOf(e) {
+		} else if m == variable && c.isPart(e) {
 			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a temporary: bind the temporary to a name first")
 		}
 	case placeOwned:

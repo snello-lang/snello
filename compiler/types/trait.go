@@ -1069,6 +1069,11 @@ func (c *Checker) checkImpls(f *ast.File) {
 				continue // one mistake, one message: the methods Drop asks for are not asked again
 			}
 
+			if listed.Refines(AttributeTrait) && (n.tparams != nil || !constType(n)) { // an attribute is a constant, which only these types have
+				c.errorf(t.Pos(), n.obj.name+" cannot be an attribute: an attribute is a constant, a number, a string, a bool or a struct of them, and not generic")
+				continue
+			}
+
 			c.deriveListed(n, listed, t.Pos()) // before the methods are required, since a derived one answers
 			listed.eachRequired(func(owner *Trait, want *Func) {
 				c.checkRequired(n, listed, owner, want, t.Pos())

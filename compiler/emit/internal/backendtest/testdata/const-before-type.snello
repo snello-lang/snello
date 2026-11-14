@@ -1,0 +1,27 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Struct constants declared before their struct's type, one inside
+// another, and given to an attribute: the type is defined once, where
+// the first of them needs it.
+
+package main
+
+import "fmt"
+
+const Default = Lim{lo: 1, hi: 2}
+
+const Outer = Box{inner: Lim{lo: 3, hi: 4}, name: "box"}
+
+struct Lim impl Attribute { lo int; hi int }
+
+struct Box { inner Lim; name string }
+
+struct Port { n int @Default }
+
+func main() {
+	l := Default
+	b := Outer
+	fmt.Println(l.lo, l.hi, b.inner.hi, b.name)
+}

@@ -82,3 +82,77 @@ func TestReflect(t *testing.T) {
 		t.Error("a name the checker never saw stands for a part")
 	}
 }
+
+// TestAttrOf asks what attr(x, A) reads in each copy and instance: the
+// attribute on the copy's field or variant, the one on the type a type
+// parameter stands for, an instance of a generic type reading its
+// declaration's, and none where none is written.
+func TestAttrOf(t *testing.T) {
+	f, info := checkSource(t, `package main
+type Key string impl Attribute
+struct S @Key("s") { a int @Key("x"); b int }
+struct G<T> @Key("g") { v T }
+func keys<T>() int {
+	return match T {
+		struct => { n := 0; for f := range fields(T) { if attr(f, Key).IsSome() { n += 1 } }; if attr(T, Key).IsSome() { n += 10 }; n },
+		_ => 0,
+	}
+}
+func main() { print(keys<S>(), keys<G<int>>()) }`)
+	keys := f.Decls[3].(*ast.FuncDecl)
+	match := keys.Body.List[0].(*ast.ReturnStmt).Results[0].(*ast.MatchExpr)
+	body := match.Arms[0].Body.(*ast.BlockStmt)
+	loop := body.List[1].(*ast.RangeStmt)
+	ifField := loop.Body.List[0].(*ast.IfStmt)
+	fieldCall := ifField.Cond.(*ast.CallExpr).Fun.(*ast.SelectorExpr).X.(*ast.CallExpr)
+	typeCall := body.List[2].(*ast.IfStmt).Cond.(*ast.CallExpr).Fun.(*ast.SelectorExpr).X.(*ast.CallExpr)
+	tp := MatchedParam(info, match)
+	key := info.Defs[f.Decls[0].(*ast.TypeDecl).Name].Type()
+	for _, tt := range []struct {
+		typ   string
+		field []string // the expression of the attribute on each field, "" for none
+		ty    bool
+	}{
+		{"S", []string{`Key("x")`, ""}, true},
+		{"G", []string{""}, true},
+	} {
+		named := info.Defs[declNamed(f, tt.typ)].Type().(*types.Named)
+		var arg types.Type = named
+		if named.TypeParams() != nil {
+			arg = types.Instantiate(named, []types.Type{types.Typ[types.Int]})
+		}
+
+		sub := map[*types.TypeParam]types.Type{tp: arg}
+		part, copies := PartsOf(info, loop, sub, nil)
+		for i, c := range copies {
+			a, ok := AttrOf(info, fieldCall, c.Sub, map[*types.Part]PartCopy{part: c})
+			got := ""
+			if ok {
+				got = ast.Source(a.Value)
+			}
+
+			if got != tt.field[i] {
+				t.Errorf("%s field %d: got attribute %q (found %v), want %q", tt.typ, i, got, ok, tt.field[i])
+			}
+
+			if !types.Identical(a.Type, key) && ok {
+				t.Errorf("%s field %d: attribute of type %v, want Key", tt.typ, i, a.Type)
+			}
+		}
+
+		if _, ok := AttrOf(info, typeCall, sub, nil); ok != tt.ty {
+			t.Errorf("%s: type attribute found %v, want %v", tt.typ, ok, tt.ty)
+		}
+	}
+}
+
+// declNamed returns the name of the type declaration called name in f.
+func declNamed(f *ast.File, name string) *ast.Ident {
+	for _, d := range f.Decls {
+		if td, ok := d.(*ast.TypeDecl); ok && td.Name.Name == name {
+			return td.Name
+		}
+	}
+
+	return nil
+}

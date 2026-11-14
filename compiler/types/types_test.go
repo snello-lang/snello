@@ -278,8 +278,8 @@ func TestUniverse(t *testing.T) {
 		t.Error("byte and u8 are not identical")
 	}
 
-	if n := Universe.Len(); n != 56 {
-		t.Errorf("universe has %d names, want 56: 20 types, 2 constants, 12 builtins, 7 variants, 15 traits", n)
+	if n := Universe.Len(); n != 61 {
+		t.Errorf("universe has %d names, want 61: 20 types, 2 constants, 13 builtins, 7 variants, 19 traits", n)
 	}
 }
 

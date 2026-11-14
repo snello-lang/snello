@@ -69,6 +69,7 @@ type Info struct {
 	Values    map[ast.Expr]Constant         // the value of each constant's value expression, and of each field a struct constant's literal gives
 	Arms      map[*ast.MatchArm]TypeArm     // what each arm of a match on a type parameter matches
 	Parts     map[*Part][]*ast.SelectorExpr // the selectors each v.[f] of a part f became, whose field a backend names in each copy of the loop
+	Attrs     map[Object][]Attribute        // the attributes written on each field, variant and type name, by the declaration
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -374,6 +375,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 		enter(i)
 		c.checkRefinements(f)
 		c.checkImpls(f)
+		c.checkAttrs(f) // an attribute's type lists Attribute, known once the impl lists are
 	}
 
 	c.collectUninferred(fs)

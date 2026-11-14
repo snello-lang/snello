@@ -206,6 +206,7 @@ func (p *Parser) parseStructOrEnumDecl() *ast.TypeDecl {
 	}
 
 	d.Impls = p.parseImpls()
+	p.parseAttrs(d, true)
 	d.Def = p.parseStructOrEnumBody(kind, pos)
 	return d
 }
@@ -322,7 +323,7 @@ func (p *Parser) parseVariants() []*ast.Variant {
 		v := &ast.Variant{Name: p.parseIdent()}
 		variants = append(variants, v)
 		if p.tok == token.LPAREN {
-			v.Fields = p.parseParams()
+			v.Fields = p.params(true)
 		} else if typeStart[p.tok] {
 			p.errorExpected(p.pos, "'(' or newline")
 			if !p.skipFieldLine() {
@@ -332,6 +333,7 @@ func (p *Parser) parseVariants() []*ast.Variant {
 			continue
 		}
 
+		p.parseAttrs(v, false)
 		if !p.expectSemi() && !p.skipFieldLine() {
 			return variants
 		}

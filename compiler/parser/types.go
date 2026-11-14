@@ -248,6 +248,13 @@ func (p *Parser) parseFuncType() *ast.FuncType {
 // A group of names shares one Type node, so (from, to NodeID) yields
 // two Param values whose Type fields point at the same NamedType.
 func (p *Parser) parseParams() []*ast.Param {
+	return p.params(false)
+}
+
+// params parses a parameter list; variant says it is a variant's fields,
+// which take attributes as a struct's fields do, where a function's
+// parameters, and those of a function type inside the list, take none.
+func (p *Parser) params(variant bool) []*ast.Param {
 	p.expect(token.LPAREN)
 
 	// Identifiers whose role is not yet known. Parameter lists are short,
@@ -263,6 +270,7 @@ func (p *Parser) parseParams() []*ast.Param {
 			continue
 		}
 
+		group := len(params) // the first parameter the type just read is given to
 		if p.tok == token.IDENT && (typeStart[p.peek()] || p.peek() == token.ELLIPSIS) {
 			names = append(names, p.parseIdent())
 			dots := p.parseDots()
@@ -272,8 +280,21 @@ func (p *Parser) parseParams() []*ast.Param {
 			}
 		} else {
 			params = appendTypeParams(params, names)
+			group = len(params)
 			dots := p.parseDots()
 			params = append(params, &ast.Param{Dots: dots, Type: p.parseType()})
+		}
+
+		if p.tok == token.AT { // a variant's field takes attributes as a struct's does; a function's parameter takes none
+			at := p.pos
+			attrs := p.readAttrs()
+			if !variant {
+				p.error(at, "an attribute is written on a field, a variant or a struct or enum: a parameter takes none")
+			} else {
+				for _, param := range params[group:] {
+					p.keepAttrs(attrs, param)
+				}
+			}
 		}
 
 		names = names[:0]
@@ -498,5 +519,6 @@ func (p *Parser) parseField() *ast.Field {
 		field.Defaults = &ast.FieldDefaults{Assign: pos, Values: p.parseExprList(token.SEMICOLON)}
 	}
 
+	p.parseAttrs(field, false)
 	return field
 }

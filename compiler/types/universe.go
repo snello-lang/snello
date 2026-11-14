@@ -47,24 +47,34 @@ var (
 	// reflecting function reaches all its fields and variants, and builds
 	// it from them, which its package says by listing it.
 	ReflectTrait = standardTrait("Reflect")
-	CloneTrait   = standardTrait("Clone")
-	EqTrait      = standardTrait("Eq")
-	OrdTrait     = standardTrait("Ord")
-	HashTrait    = standardTrait("Hash")
-	DropTrait    = standardTrait("Drop")
-	ErrorTrait   = standardTrait("Error")
-	AddTrait     = standardTrait("Add")
-	SubTrait     = standardTrait("Sub")
-	MulTrait     = standardTrait("Mul")
-	DivTrait     = standardTrait("Div")
-	RemTrait     = standardTrait("Rem")
-	NegTrait     = standardTrait("Neg")
-	SendTrait    = standardTrait("Send")
+	// AttributeTrait makes a type's constants attributes, written with @
+	// on a field, a variant or a type and read at compile time by attr.
+	AttributeTrait = standardTrait("Attribute")
+	// FieldAttributeTrait, VariantAttributeTrait and TypeAttributeTrait
+	// are Attribute limited to where it is written: a type that lists
+	// any of them is an attribute of those places alone.
+	FieldAttributeTrait   = standardTrait("FieldAttribute")
+	VariantAttributeTrait = standardTrait("VariantAttribute")
+	TypeAttributeTrait    = standardTrait("TypeAttribute")
+	CloneTrait            = standardTrait("Clone")
+	EqTrait               = standardTrait("Eq")
+	OrdTrait              = standardTrait("Ord")
+	HashTrait             = standardTrait("Hash")
+	DropTrait             = standardTrait("Drop")
+	ErrorTrait            = standardTrait("Error")
+	AddTrait              = standardTrait("Add")
+	SubTrait              = standardTrait("Sub")
+	MulTrait              = standardTrait("Mul")
+	DivTrait              = standardTrait("Div")
+	RemTrait              = standardTrait("Rem")
+	NegTrait              = standardTrait("Neg")
+	SendTrait             = standardTrait("Send")
 )
 
 var standardTraits = [...]*Trait{
 	CopyTrait, CloneTrait, EqTrait, OrdTrait, HashTrait, DropTrait, ErrorTrait,
-	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait, ReflectTrait,
+	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait, ReflectTrait, AttributeTrait,
+	FieldAttributeTrait, VariantAttributeTrait, TypeAttributeTrait,
 }
 
 var predeclaredBuiltins = [...]struct {
@@ -83,6 +93,7 @@ var predeclaredBuiltins = [...]struct {
 	{"replace", BuiltinReplace},
 	{"fields", BuiltinFields},
 	{"variants", BuiltinVariants},
+	{"attr", BuiltinAttr},
 }
 
 func init() {
@@ -127,6 +138,9 @@ func init() {
 	also(ErrorTrait, "Source", NewOption(ErrorTrait)) // the cause, an owned trait value: a borrowed one is not a type
 	refines(OrdTrait, EqTrait)                        // what is ordered can be compared
 	refines(HashTrait, EqTrait)                       // equal values must hash alike
+	refines(FieldAttributeTrait, AttributeTrait)      // an attribute limited to where it is written is one
+	refines(VariantAttributeTrait, AttributeTrait)
+	refines(TypeAttributeTrait, AttributeTrait)
 	for _, o := range operators {
 		operator(o.trait, o.name, true)
 	}

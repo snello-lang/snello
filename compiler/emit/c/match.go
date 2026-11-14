@@ -100,7 +100,8 @@ func (e *Emitter) variantMatch(x *ast.MatchExpr) string {
 
 // typeMatch writes a match on a type: the one arm the type the instance
 // being written gives the parameter takes, with what its shape binds,
-// as a block; the other arms are not written.
+// as a block; the other arms are not written, and a local only they
+// read is marked read (touch), which C would otherwise warn of.
 func (e *Emitter) typeMatch(x *ast.MatchExpr) string {
 	resultType := e.typeOf(x)
 	result := ""
@@ -119,6 +120,12 @@ func (e *Emitter) typeMatch(x *ast.MatchExpr) string {
 	e.subst = sub
 	e.line("{")
 	e.push(false)
+	for _, other := range x.Arms {
+		if other != arm {
+			e.touch(other.Body)
+		}
+	}
+
 	e.node(arm.Body, result, resultType)
 	e.pop(arm.Pos())
 	e.line("}")

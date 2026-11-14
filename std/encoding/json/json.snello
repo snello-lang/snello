@@ -16,7 +16,8 @@
 // an enum's variant without fields is its name, "Dot", and one with
 // fields an object of one key, {"Rect":{"w":1,"h":2}}.
 // A struct of another package is reached through the fields it exports,
-// or through all of them when it lists Reflect.
+// or through all of them when it lists Reflect. Attributes change the
+// keys and leave fields out: Name, OmitEmpty and Skip, below.
 //
 // Reading finds each field of a struct by its key, wherever the text
 // puts it, and passes over a key the struct has no field for. A field
@@ -42,6 +43,24 @@ const nameSeparator byte = ':'
 const valueSeparator byte = ','
 const quotationMark byte = '"'
 const escape byte = '\\'
+
+// Name is the key a field or a variant is written and read under, in
+// place of the name it is declared with: Host string @json.Name("host").
+type Name string impl FieldAttribute, VariantAttribute
+
+// OmitEmpty leaves a field out of the object it is written in when its
+// value is empty, as JSON writes it: None, or an empty string, slice or
+// map. A number, a bool and a struct are never empty. Read, a field
+// whose key is missing takes its default, or the empty value it was
+// left out for, so what is written reads back.
+struct OmitEmpty impl FieldAttribute {}
+
+// Skip leaves a field out of JSON: it is never written, and read, it
+// takes its default, or the empty value of its type, None, "", [] or {},
+// whatever the text holds. A skipped field of another type declares a
+// default, or reading it is an error. On a variant, Skip and OmitEmpty
+// apply to its named fields; an unnamed field keeps its place.
+struct Skip impl FieldAttribute {}
 
 // maxDepth is how deep arrays and objects may nest in the text read, so
 // that a text cannot run the stack out: a task's stack does not grow,
@@ -155,14 +174,17 @@ func write<T>(v ref T, w mut writer) {
 			w.out.WriteByte(beginObject)
 			first := true
 			for f := range fields(T) {
-				if !first {
-					w.out.WriteByte(valueSeparator)
-				}
+				if attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && empty(ref v.[f])) {
+					if !first {
+						w.out.WriteByte(valueSeparator)
+					}
 
-				first = false
-				quote(f.name, mut w.out)
-				w.out.WriteByte(nameSeparator)
-				write(ref v.[f], mut w)
+					first = false
+					quote(ref keyOf(attr(f, Name), f.name), mut w.out)
+
+					w.out.WriteByte(nameSeparator)
+					write(ref v.[f], mut w)
+				}
 			}
 
 			w.out.WriteByte(endObject)
@@ -176,12 +198,14 @@ func write<T>(v ref T, w mut writer) {
 				}
 
 				if n == 0 {
-					quote(c.name, mut w.out)
+					quote(ref keyOf(attr(c, Name), c.name), mut w.out)
+
 					return
 				}
 
 				w.out.WriteByte(beginObject)
-				quote(c.name, mut w.out)
+				quote(ref keyOf(attr(c, Name), c.name), mut w.out)
+
 				w.out.WriteByte(nameSeparator)
 				if named {
 					w.out.WriteByte(beginObject)
@@ -191,17 +215,20 @@ func write<T>(v ref T, w mut writer) {
 
 				first := true
 				for f := range fields(c) {
-					if !first {
-						w.out.WriteByte(valueSeparator)
-					}
+					if !named || attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && empty(ref v.[f])) { // a named field is left out as a struct's is; an unnamed one keeps its place
+						if !first {
+							w.out.WriteByte(valueSeparator)
+						}
 
-					first = false
-					if named {
-						quote(f.name, mut w.out)
-						w.out.WriteByte(nameSeparator)
-					}
+						first = false
+						if named {
+							quote(ref keyOf(attr(f, Name), f.name), mut w.out)
 
-					write(ref v.[f], mut w)
+							w.out.WriteByte(nameSeparator)
+						}
+
+						write(ref v.[f], mut w)
+					}
 				}
 
 				if named {
@@ -213,6 +240,43 @@ func write<T>(v ref T, w mut writer) {
 				w.out.WriteByte(endObject)
 			}
 		},
+	}
+}
+
+// keyOf is the key a field or a variant is written and read under: its
+// Name attribute, or the name it is declared with.
+func keyOf(name Name?, declared string) string {
+	return match name {
+		Some(k) => string(k),
+		None => declared,
+	}
+}
+
+// empty reports whether v is a value OmitEmpty leaves out: None, or an
+// empty string, slice or map, which JSON writes as null, "", [] or {}.
+func empty<T>(v ref T) bool {
+	return match T {
+		E? => v.IsNone(),
+		string => len(v) == 0,
+		[]E => len(v) == 0,
+		map[K]V => len(v) == 0,
+		_ => false,
+	}
+}
+
+// omitted returns the empty value of T that OmitEmpty leaves out, when
+// omit says the field has it, read for a key that is missing; None for
+// a type with no empty value, or a field without OmitEmpty.
+func omitted<T>(omit bool) T? {
+	if !omit {
+		return None
+	}
+
+	return match T {
+		string => Some(""),
+		[]E => Some([]E{}),
+		map[K]V => Some(map[K]V{}),
+		_ => None,
 	}
 }
 
@@ -470,12 +534,12 @@ func read<T>(r mut reader) Result<T, Error> {
 			r.enter()?
 			o := object{start: start, keys: []key{}, scanned: false, read: 0, end: 0}
 			v := T{ for f := range fields(T) {
-				[f]: if r.member(mut o, f.name)? {
+				[f]: if attr(f, Skip).IsNone() && r.member(mut o, ref keyOf(attr(f, Name), f.name))? {
 					read<f.type>(mut r)?
 				} else {
 					match f.type {
 						E? => None,
-						_ => f.default ?? return Err(missing(start, f.name)),
+						_ => f.default ?? omitted<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absent(start, ref keyOf(attr(f, Name), f.name), attr(f, Skip).IsSome())),
 					}
 				}
 			} }
@@ -494,7 +558,7 @@ func read<T>(r mut reader) Result<T, Error> {
 						n += 1
 					}
 
-					if name == c.name && n == 0 {
+					if n == 0 && name == keyOf(attr(c, Name), c.name) {
 						return Ok(c(for f := range fields(c) { read<f.type>(mut r)? }))
 					}
 				}
@@ -510,7 +574,7 @@ func read<T>(r mut reader) Result<T, Error> {
 			r.expect(nameSeparator)?
 			r.space()
 			for c := range variants(T) {
-				if name == c.name {
+				if name == keyOf(attr(c, Name), c.name) {
 					n, named := 0, false
 					for f := range fields(c) {
 						n += 1
@@ -522,12 +586,12 @@ func read<T>(r mut reader) Result<T, Error> {
 						r.expect(beginObject)?
 						o := object{start: start, keys: []key{}, scanned: false, read: 0, end: 0}
 						v := c(for f := range fields(c) {
-							if r.member(mut o, f.name)? {
+							if attr(f, Skip).IsNone() && r.member(mut o, ref keyOf(attr(f, Name), f.name))? {
 								read<f.type>(mut r)?
 							} else {
 								match f.type {
 									E? => None,
-									_ => return Err(missing(start, f.name)),
+									_ => omitted<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absent(start, ref keyOf(attr(f, Name), f.name), attr(f, Skip).IsSome())),
 								}
 							}
 						})
@@ -594,6 +658,17 @@ func (r ref reader) fail(msg string) Error {
 // leaves out.
 func missing(at int, name ref string) Error {
 	return Error{at: at, msg: "missing field " + name}
+}
+
+// absent is the error for a field read with no value to take, at the
+// object at: missing from the text, or skipped, when its type has no
+// empty value and it declares no default.
+func absent(at int, name ref string, skipped bool) Error {
+	if skipped {
+		return Error{at: at, msg: "field " + name + " is skipped and has no default"}
+	}
+
+	return missing(at, name)
 }
 
 // expect moves past the byte c, or fails.

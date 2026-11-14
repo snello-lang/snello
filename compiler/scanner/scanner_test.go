@@ -55,6 +55,12 @@ func TestTokens(t *testing.T) {
 			{token.IDENT, "T"}, {token.SHR, ""}, {token.SEMICOLON, "\n"}, {token.IDENT, "n"}, {token.DEFINE, ""},
 			{token.IDENT, "a"}, {token.GTR, ""}, {token.SEMICOLON, "\n"}, {token.IDENT, "b"}, {token.SEMICOLON, "\n"},
 		}},
+		{"Port int = 80 @json.Name(\"port\") @json.OmitEmpty\n", []elt{
+			{token.IDENT, "Port"}, {token.IDENT, "int"}, {token.ASSIGN, ""}, {token.INT, "80"}, {token.AT, ""},
+			{token.IDENT, "json"}, {token.PERIOD, ""}, {token.IDENT, "Name"}, {token.LPAREN, ""}, {token.STRING, "\"port\""},
+			{token.RPAREN, ""}, {token.AT, ""}, {token.IDENT, "json"}, {token.PERIOD, ""}, {token.IDENT, "OmitEmpty"},
+			{token.SEMICOLON, "\n"},
+		}},
 		{"out <- job // moved\n", []elt{
 			{token.IDENT, "out"}, {token.ARROW, ""}, {token.IDENT, "job"}, {token.SEMICOLON, "\n"},
 		}},

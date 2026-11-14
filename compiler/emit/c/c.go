@@ -219,7 +219,10 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	switch named.Underlying().(type) {
 	case *types.Struct, *types.Enum:
 		name := lower.NamedName(named)
-		e.state[name] = declared
+		if e.state[name] == undeclared { // a constant before the declaration may have defined the struct already, which declaring it again would write twice
+			e.state[name] = declared
+		}
+
 		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
 	default:
 		e.define(named, d.Pos())

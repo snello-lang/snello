@@ -33,9 +33,10 @@ A constant's value is a constant expression:
 - the comparisons, `== != < <= > >=`, and `&& || !` over booleans;
 - `+` joining strings;
 - the conversions between number types, `f64(KB)`, `u8(Limit)`, `Celsius(100)` for a type declared over a number type;
+- a string or a bool given another name of its kind, `Name("host")` for `type Name string`, which is how an attribute over a string is written (chapter 25);
 - parentheses.
 
-Nothing else is constant, since its value is known only when the program runs. A call, a variable, an element of a slice, `len` and a conversion to a string are refused, each naming the part that is not constant:
+Nothing else is constant, since its value is known only when the program runs. A call, a variable, an element of a slice, `len` and a conversion of a number to a string, `string('A')`, are refused, each with its reason: the part that is not constant, or `constant 65 does not convert to string`:
 
 ```go
 const n = size()        // size() is not constant

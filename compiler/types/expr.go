@@ -962,7 +962,7 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 		if through.mut {
 			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
 		}
-	} else if held(e.X, m) && !IsCopy(result) {
+	} else if c.fromPlace(e.X, m) && !IsCopy(result) {
 		c.move(e.X, variable) // the value inside leaves the place
 	}
 
@@ -1005,7 +1005,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
-	if held(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
+	if c.fromPlace(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
 		c.move(e.X, variable) // the value inside leaves the place
 	}
 

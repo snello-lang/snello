@@ -149,6 +149,14 @@ func fields(t any) any
 // fields(c) { value }) builds it.
 func variants(t any) any
 
+// attr gives the attribute of type A written on x, an A?: Some of it, or
+// None when none is written. x is a part a loop over fields or variants
+// gives, attr(f, json.Name), or a type parameter an arm matched as a
+// struct or an enum, attr(T, Usage). The value is a constant in
+// each copy of the loop and each instance of the function, and nothing
+// of it is kept when the program runs.
+func attr(x any, a any) any
+
 // min and max return the least and the greatest of two or more numbers
 // of one type, which is the result's; a literal among them takes the
 // type of the others.
@@ -229,6 +237,24 @@ trait Send {}
 // name, so a type of another package that keeps a field to itself is
 // neither read nor built by reflection.
 trait Reflect {}
+
+// Attribute makes a type's constants attributes: @ and a value of it,
+// written after a field, Host string @json.Name("host"), after a
+// variant, or on a struct or an enum before its body. A struct with no
+// fields is written by its name, @json.OmitEmpty. Any package declares
+// its own; a reflecting function reads them with attr.
+trait Attribute {}
+
+// FieldAttribute, VariantAttribute and TypeAttribute are Attribute
+// limited to where it is written: a type that lists any of them is an
+// attribute of those places alone, and is refused on the others, as
+// struct Skip impl FieldAttribute {} is on a type. A variant's field is
+// a field. A type that lists only Attribute is written on any of them.
+trait FieldAttribute: Attribute {}
+
+trait VariantAttribute: Attribute {}
+
+trait TypeAttribute: Attribute {}
 
 // local is a field that holds nothing and makes the type holding it
 // stay in its task: a value of that type is not Send. Only the

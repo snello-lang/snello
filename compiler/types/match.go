@@ -57,7 +57,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		p := c.pattern(arm.Pat, scrutinee, b)
 		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
 			c.bindThrough(arm.Pat, e.X, b)
-			if c.bindsOwned && !consumed && held(e.X, x.mode) {
+			if c.bindsOwned && !consumed && c.fromPlace(e.X, x.mode) {
 				c.flowIn(f.from, func() { c.moveBefore(e.X, variable, &f) }) // a part bound by value leaves the place, on every arm, before any; a temporary's part may not leave it
 				consumed = true
 			}

@@ -7,6 +7,7 @@ package types
 import (
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -100,10 +101,29 @@ func TestFoldBoolsAndStrings(t *testing.T) {
 		{"const v = 1 < 2 && \"a\" != \"b\"", "true"},
 		{"const v = !(2.5 > 3.0) || false", "true"},
 		{"const v = \"ab\" < \"a\"", "false"},
+		{"type Name string\nconst v = Name(\"host\")", `"host"`}, // a string converts to a type declared over string, as a number to its own
+		{"type Flag bool\nconst On = true\nconst v = Flag(On)", "true"},
 	} {
 		_, v := constAt(t, tt.src)
 		if v.text() != tt.want {
 			t.Errorf("%q: got %s, want %s", tt.src, v.text(), tt.want)
+		}
+	}
+}
+
+// A constant conversion keeps a string a string and a bool a bool: a
+// number does not become a string type, nor a string a bool type.
+func TestConversionKinds(t *testing.T) {
+	for _, tt := range []struct {
+		src  string
+		want string
+	}{
+		{"type Name string\nconst v = Name('A')", "constant 65 does not convert to Name: a constant conversion keeps a string a string and a bool a bool"},
+		{"type Flag bool\nconst v = Flag(\"x\")", "cannot convert string to Flag"}, // refused by the conversion's own check, before folding
+	} {
+		got := strings.Join(checkErrors(t, "package p\n"+tt.src), "\n")
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("%q:\n  got %q\n  want an error containing %q", tt.src, got, tt.want)
 		}
 	}
 }

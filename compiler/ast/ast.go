@@ -62,6 +62,16 @@ type File struct {
 	Name    *Ident
 	Imports []*ImportSpec
 	Decls   []Decl
+	Attrs   map[Node][]*Attr // the attributes of the fields, variants and declarations written with any; nil when none is
+}
+
+// An Attr is an attribute, @ and a constant expression, written after
+// a field, after a variant or before a struct's or enum's body. A file
+// keeps them beside its tree, by what they are written on, as go/ast
+// keeps comments, so a node written without any is no larger.
+type Attr struct {
+	At token.Pos
+	X  Expr
 }
 
 // An ImportSpec is one import path with an optional local name.

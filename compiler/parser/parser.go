@@ -79,6 +79,10 @@ type Parser struct {
 	// nothing for them.
 	fn     *ast.FuncDecl
 	shapes []string
+
+	// attrs are the attributes read so far, by the field, variant or
+	// declaration each is written on; nil until the file has one.
+	attrs map[ast.Node][]*ast.Attr
 }
 
 // A lookahead is one scanned token held for peek.
@@ -339,7 +343,48 @@ func (p *Parser) parseFile() *ast.File {
 		}
 	}
 
+	f.Attrs = p.attrs
 	return f
+}
+
+// parseAttrs parses {"@" PrimaryExpr}, the attributes written on n, and
+// keeps them for the file. Before a body, the body's '{' is not read as
+// a composite literal, as in a control clause: @json.OmitEmpty {.
+func (p *Parser) parseAttrs(n ast.Node, beforeBody bool) {
+	if p.tok != token.AT {
+		return
+	}
+
+	if beforeBody {
+		old := p.exprLev
+		p.exprLev = -1
+		defer func() { p.exprLev = old }()
+	}
+
+	p.keepAttrs(p.readAttrs(), n)
+}
+
+// readAttrs parses {"@" PrimaryExpr}.
+func (p *Parser) readAttrs() []*ast.Attr {
+	var attrs []*ast.Attr
+	for p.tok == token.AT {
+		at := p.pos
+		p.next()
+		attrs = append(attrs, &ast.Attr{At: at, X: p.parsePrimaryExpr()})
+	}
+
+	return attrs
+}
+
+// keepAttrs keeps attrs, written on each of ns, for the file.
+func (p *Parser) keepAttrs(attrs []*ast.Attr, ns ...ast.Node) {
+	if p.attrs == nil {
+		p.attrs = make(map[ast.Node][]*ast.Attr)
+	}
+
+	for _, n := range ns {
+		p.attrs[n] = attrs
+	}
 }
 
 // parseImportDecl parses a single import or a parenthesized group.
