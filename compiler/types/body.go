@@ -36,7 +36,7 @@ func (c *Checker) funcBodies(f *ast.File) {
 			fn := c.objs[i].(*Func)
 			c.checkBody(fn.typ.(*Signature), d.Recv, d.Params, d.Body)
 			c.scope = outer
-			if d.Body != nil && genericDecl(fn) {
+			if d.Body != nil && (genericDecl(fn) || d.Of != nil && len(d.Of.Args) > 0) { // a function of a generic type is generic over the type's parameters
 				fn.decl = d
 			}
 		}

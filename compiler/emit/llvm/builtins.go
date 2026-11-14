@@ -20,9 +20,16 @@ import (
 
 // index writes x[i] on a slice, a string or an array, with the index
 // checked, or on a map, and returns the element's address; write says
-// whether the element is about to be assigned.
+// whether the element is about to be assigned, and then its collection
+// is a place being changed too, m[k][i] = v making the entry m[k] when
+// k is new.
 func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
-	p, t := e.scrutinee(x.X)
+	scrutinee := e.scrutinee
+	if write {
+		scrutinee = e.changed
+	}
+
+	p, t := scrutinee(x.X)
 	if m, ok := t.Underlying().(*types.Map); ok {
 		return e.mapIndex(x, p, m, write)
 	}

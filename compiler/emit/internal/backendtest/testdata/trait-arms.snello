@@ -1,0 +1,168 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Arms of a match on a type that name a trait: a type that implements it
+// takes the arm, its method called on a value and its function on the
+// type, before a type's own arm and a kind's; a type that does not
+// implements none and takes the next arm. Inside a trait arm, a kind's
+// arm reaches the type's parts: a struct's fields read, built and their
+// attributes looked up, an enum's variants named, two trait arms deep
+// as well as one; and a trait arm inside a kind's, which keeps the kind.
+
+package main
+
+import ("fmt"; "strconv")
+
+type Note string impl Attribute
+
+trait Show { func (s ref Self) Show() string }
+
+trait Make { func Make(n int) Self }
+
+struct Temp impl Show, Make { c int }
+
+func (t ref Temp) Show() string { return strconv.Itoa(t.c) + "C" }
+
+func Temp.Make(n int) Temp { return Temp{c: n} }
+
+struct Plain { n int }
+
+trait Tag { func Tag() string }
+
+trait Loud { func Loud() string }
+
+struct P impl Tag, Loud @Note("noted") { X int; Y int }
+
+func P.Tag() string { return "p" }
+
+func P.Loud() string { return "P!" }
+
+enum E impl Tag { A; B }
+
+func E.Tag() string { return "e" }
+
+func show<T>(v ref T) string {
+	return match T {
+		Show => v.Show(),
+		int => strconv.Itoa(v),
+		struct => "a struct",
+		_ => "?",
+	}
+}
+
+func make<T>(n int) T? {
+	return match T {
+		Make => Some(T.Make(n)),
+		_ => None,
+	}
+}
+
+// kind reads a trait arm and then a match inside it on T so bounded.
+func kind<T>(v ref T) string {
+	return match T {
+		Show => match T {
+			struct => "struct " + v.Show(),
+			_ => v.Show(),
+		},
+		_ => "?",
+	}
+}
+
+// parts reads a struct's fields and an enum's variants in a kind's arm
+// inside a trait arm.
+func parts<T>(v ref T) string {
+	return match T {
+		Tag => match T {
+			struct => {
+				var n int
+				for f := range fields(T) {
+					n += match f.type { int => v.[f], _ => 0 }
+				}
+
+				T.Tag() + strconv.Itoa(n) + match attr(T, Note) { Some(k) => string(k), None => "-" }
+			},
+			enum => {
+				var s string
+				for c := range variants(T) {
+					s += c.name
+				}
+
+				T.Tag() + s
+			},
+			_ => "?",
+		},
+		_ => "none",
+	}
+}
+
+// sevens builds a struct from its fields in a kind's arm inside a trait
+// arm.
+func sevens<T>() T? {
+	return match T {
+		Tag => match T {
+			struct => Some(T{ for f := range fields(T) { [f]: match f.type { int => 7, _ => return None } } }),
+			_ => None,
+		},
+		_ => None,
+	}
+}
+
+// deep reads and builds a struct in a kind's arm two trait arms deep.
+func deep<T>(v ref T) string {
+	return match T {
+		Tag => match T {
+			Loud => match T {
+				struct => {
+					var n int
+					for f := range fields(T) {
+						n += match f.type { int => v.[f], _ => 0 }
+					}
+
+					built := T{ for f := range fields(T) { [f]: match f.type { int => 1, _ => return "?" } } }
+					var ones int
+					for f := range fields(T) {
+						ones += match f.type { int => built.[f], _ => 0 }
+					}
+
+					T.Tag() + T.Loud() + strconv.Itoa(n) + "/" + strconv.Itoa(ones)
+				},
+				_ => "not a struct",
+			},
+			_ => "not loud",
+		},
+		_ => "none",
+	}
+}
+
+// kindThenTrait reads a struct's fields in a trait arm inside the
+// struct arm.
+func kindThenTrait<T>(v ref T) string {
+	return match T {
+		struct => match T {
+			Tag => {
+				var n int
+				for f := range fields(T) {
+					n += match f.type { int => v.[f], _ => 0 }
+				}
+
+				T.Tag() + strconv.Itoa(n)
+			},
+			_ => "a struct with no tag",
+		},
+		_ => "not a struct",
+	}
+}
+
+func main() {
+	fmt.Println(kindThenTrait(ref P{X: 2, Y: 5}), kindThenTrait(ref Plain{n: 1}), kindThenTrait(ref 1))
+	fmt.Println(deep(ref P{X: 3, Y: 4}), deep(ref 1))
+	fmt.Println(parts(ref P{X: 1, Y: 2}), parts(ref A), parts(ref 3), match sevens<P>() { Some(q) => q.Y, None => -1 })
+	fmt.Println(kind(ref Temp{c: 1}), kind(ref 2))
+	fmt.Println(show(ref Temp{c: 21}), show(ref 3), show(ref Plain{n: 1}))
+	match make<Temp>(5) {
+		Some(t) => fmt.Println(t.c),
+		None => fmt.Println("none"),
+	}
+	fmt.Println(make<Plain>(5).IsNone())
+}

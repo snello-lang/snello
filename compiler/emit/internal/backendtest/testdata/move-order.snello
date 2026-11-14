@@ -1,0 +1,48 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Operands are evaluated left to right when a later one moves a value an
+// earlier one reads: a tuple, a call's arguments, a method's, a struct,
+// a slice, a map and a variant literal, and a nested call.
+
+package main
+
+import "fmt"
+
+struct S { n int; s string }
+
+enum E { Two(string, string) }
+
+struct Box { v string }
+
+func (b ref Box) Join(x string, y string) string { return x + "/" + y + "/" + b.v }
+
+func both(a string, b string) string { return a + "+" + b }
+
+func pair(v string) (string, string) { return (v.Clone(), v) }
+
+func main() {
+	a, b := pair("t".Clone())
+	fmt.Println(a, b)
+	v := "c".Clone()
+	fmt.Println(both(v.Clone(), v))
+	w := "s".Clone()
+	s := S{n: len(w), s: w}
+	fmt.Println(s.n, s.s)
+	x := "x".Clone()
+	xs := []string{x.Clone(), x}
+	fmt.Println(xs)
+	k := "k".Clone()
+	m := map[string]int{k.Clone(): len(k), k: 2}
+	fmt.Println(len(m))
+	y := "y".Clone()
+	match Two(y.Clone(), y) {
+		Two(p, q) => fmt.Println(p, q),
+	}
+	z := "z".Clone()
+	box := Box{v: "b".Clone()}
+	fmt.Println(box.Join(z.Clone(), z))
+	u := "u".Clone()
+	fmt.Println(both(both(u.Clone(), "-".Clone()), u))
+}

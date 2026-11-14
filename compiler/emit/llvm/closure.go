@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
-	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -147,15 +146,9 @@ func (e *Emitter) captures(x *ast.FuncLit) []types.Capture {
 // funcValue writes a named function as a function value: an adapter
 // that drops the environment, written once, paired with no
 // environment.
-func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) value {
-	sig := fn.Type().(*types.Signature)
+func (e *Emitter) funcValue(sig *types.Signature, symbol string, pos token.Pos) value {
 	pair := e.irType(sig, pos)
-	if e.generics[fn] != nil {
-		e.unsupported(pos, "a generic function as a value")
-		return value{pair, "zeroinitializer"}
-	}
-
-	name := "sn_fnval_" + lower.FuncName(fn)
+	name := "sn_fnval_" + symbol
 	if !e.state[name] {
 		e.state[name] = true
 		params := []string{"ptr %env"}
@@ -171,7 +164,7 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) value {
 				wants[i] = p.Type()
 			}
 
-			r := e.callValues(lower.FuncName(fn), sig, wants, args, pos)
+			r := e.callValues(symbol, sig, wants, args, pos)
 			if sig.Results() == types.Unit {
 				e.inst("ret void")
 			} else {

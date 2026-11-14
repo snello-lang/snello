@@ -63,6 +63,12 @@ func TestReach(t *testing.T) {
 		// A type declared over another package's struct opens none of its fields, Reflect listed or not.
 		{"type Mine refl.Own\nfunc count<T>() int { return match T { struct => { n := 0; for f := range fields(T) { n += 1 }; n }, _ => 0 } }\nfunc f() int { return count<Mine>() }", "count<Mine>: field hidden of Mine is not exported by refl, which declares it"},
 		{"type Open refl.Own impl Reflect\nfunc count<T>() int { return match T { struct => { n := 0; for f := range fields(T) { n += 1 }; n }, _ => 0 } }\nfunc f() int { return count<Open>() }", "count<Open>: field hidden of Open is not exported by refl, which declares it"},
+		// A trait value takes an arm naming its trait only when a value reaches all the trait has.
+		{"trait Same { func (s ref Self) Same(o ref Self) bool }\nstruct A impl Same { n int }\nfunc (a ref A) Same(o ref A) bool { return a.n == o.n }\nfunc same<T>(v ref T, w ref T) bool { return match T { Same => v.Same(w), _ => false } }\nfunc f() bool { var x Same = A{n: 1}; var y Same = A{n: 1}; return same(ref x, ref y) }", "same<Same>: a value of Same takes the arm Same, whose method Same mentions Self"},
+		{"trait Mk { func (s ref Self) Show() string; func Make(n int) Self }\nstruct M impl Mk { c int }\nfunc (m ref M) Show() string { return \"m\" }\nfunc M.Make(n int) M { return M{c: n} }\nfunc mk<T>(v ref T) string { return match T { Mk => T.Make(3).Show(), _ => \"?\" } }\nfunc f() string { var y Mk = M{c: 2}; return mk(ref y) }", "mk<Mk>: a value of Mk takes the arm Mk, whose function Make takes no value"},
+		{"trait Sh { func (s ref Self) Show() string }\nstruct T1 impl Sh { c int }\nfunc (t ref T1) Show() string { return \"t\" }\nfunc show<T>(v ref T) string { return match T { Sh => v.Show(), _ => \"?\" } }\nfunc f() string { var x Sh = T1{c: 1}; return show(ref x) }", ""},
+		// A function of a generic type's instance is walked with the instance's arguments.
+		{"struct G<A> { a A }\nfunc G<A>.Kind(v ref A) int { return refl.Show(v) }\nfunc f() int { return G<bool>.Kind(ref true) }", "Kind<bool>, refl.Show<bool>: no arm of the match on T takes bool"},
 		// An arm may name the function's other type parameters; they are put in before it is chosen.
 		{"func same<T, U>() int { return match U { []T => 1, T => 2, _ => 3 } }\nfunc f() int { return same<int, chan int>() }", ""},
 	}

@@ -33,6 +33,8 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [23. Default field values](23-default-field-values.md) | a field's default, a constant; literals that leave fields out, positional ones included; why such a struct has no zero value; settings passed as a struct, `os.OpenOptions` |
 | [24. Reflection at compile time](24-reflection.md) | why a function looks at the type it was given, `match T`, a struct's fields with `fields(T)` and `v.[f]`, building a value from its fields, an enum's variants, what reflection may reach and `Reflect`, `encoding/json` |
 | [25. Attributes](25-attributes.md) | why a field, a variant or a type carries a typed constant, `@` and the `Attribute` trait, where one may be written, `FieldAttribute`, `VariantAttribute` and `TypeAttribute`, reading one at compile time with `attr`, a library's own attributes beside another's, what is refused and why |
+| [26. Functions of a type](26-functions-of-a-type.md) | why a type has functions that take no value of it, `func Point.Of(...)`, on a generic type, with parameters of their own, as values, and required by a trait, `T.Parse(s)` |
+| [27. Writing Snello](27-writing-snello.md) | the one way Snello code is written: a file top to bottom, a type's exported methods before its helpers, names that say what a thing does, named constants and `match` on conditions where an arm would compare with one, comments that state the rule, errors as values, what a signature says of ownership, and the layout |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | the keywords and the grammar's fine points |
 | [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | per chapter, what carries over from Go and what to unlearn |
 

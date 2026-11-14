@@ -904,13 +904,18 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 // and changed until then; or a borrow variable, s in defer s.cleanup()
 // with s a mut receiver, which the call reads then, so it may not be
 // pointed elsewhere before, and what it points to is held as the
-// variable is. Anything else, an element, what a borrow points to, a
+// variable is. A literal or a constant outlives the function and is
+// held as it is. Anything else, an element, what a borrow points to, a
 // value that holds a borrow or a closure that borrows, is refused: what
 // it points into may move or die before the call runs.
 func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 	x := unparen(e)
 	if u, ok := x.(*ast.UnaryExpr); ok && (u.Op == token.REF || u.Op == token.MUT) {
 		x = unparen(u.X)
+	}
+
+	if c.static(x) { // a literal or a constant, which outlives the function: fmt.Printf's format
+		return
 	}
 
 	if id, ok := x.(*ast.Ident); ok && !isSignature(t) {
@@ -946,6 +951,11 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 // A call that reaches a variable when it runs holds it by deferHold
 // instead, which lets it change.
 func (c *Checker) deferView(holder *Var, e ast.Expr, pos token.Pos) {
+	if tmp := c.temporaryOf(e); tmp != nil && unparen(tmp) != unparen(e) { // a part of a value the defer statement drops, which the call would read after
+		c.errorf(e.Pos(), "a deferred call reads what it prints when it runs, after the defer statement drops "+exprText(unparen(tmp))+": keep "+exprText(unparen(tmp))+" in a variable first, and print from it")
+		return
+	}
+
 	if p, kind := c.placeOf(unparen(e)); kind == placeOwned && !isBorrow(p.v.typ) {
 		if !IsCopy(placeType(p)) { // a Copy value saved is a copy, which owns nothing the place could free
 			c.flowLoan(borrow{holder: holder, place: p, pos: pos}) // an owned place the saved view sees: s, t.name, xs[i]

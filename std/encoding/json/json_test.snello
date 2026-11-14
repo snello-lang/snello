@@ -4,7 +4,10 @@
 
 package json_test
 
-import ("encoding/json"; "expect"; "strings"; "testing")
+import ("encoding/json"; "expect"; "strconv"; "strings"; "testing")
+
+const docText = ` {"name": "lab", "n": 3, "pi": 2.5, "ok": true, "none": null,
+ "tags": ["a", "b\n", "c"], "a/b": {"m~n": 7}, "escA": "x\ty", "srv": {"X": 1, "Y": 2}} `
 
 struct Point { X int; Y int }
 
@@ -39,6 +42,41 @@ struct Conf {
 }
 
 enum Kind { Plain @json.Name("plain"); Sized(n int) @json.Name("sized"); Duo(a int, b int @json.Name("second")) }
+
+// A type with its own JSON: a temperature written as a string with its
+// unit, and read back from one, refusing any other text.
+struct Celsius impl json.Marshaler, json.Unmarshaler { deg int }
+
+func (c ref Celsius) MarshalJSON() Result<string, json.Error> {
+	return Ok("\"" + strconv.Itoa(c.deg) + "C\"")
+}
+
+func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error> {
+	if len(text) < 4 || !text.HasPrefix("\"") || !text.HasSuffix("C\"") {
+		return Err(json.Error.At(0, "a temperature is a string like \"21C\""))
+	}
+
+	n := strconv.Atoi(text[1:len(text) - 2]) ?? return Err(json.Error.At(1, "a temperature is a whole number"))
+	return Ok(Celsius{deg: n})
+}
+
+struct Bad impl json.Marshaler { n int }
+
+func (b ref Bad) MarshalJSON() Result<string, json.Error> { return Ok("{oops") }
+
+// Spaced is written with space and lines, which Marshal takes out but
+// in its strings, whose escaped quote does not end one and whose escaped
+// backslash does not escape the quote after it; Refused fails to write
+// itself.
+struct Spaced impl json.Marshaler { n int }
+
+func (s ref Spaced) MarshalJSON() Result<string, json.Error> { return Ok(" {\n  \"a\\\" b\" : [ 1 , \"c\\\\\" , 2 ]\n} ") }
+
+struct Refused impl json.Marshaler { n int }
+
+func (r ref Refused) MarshalJSON() Result<string, json.Error> { return Err(json.Error.At(-1, "no text for it")) }
+
+struct Room { Name string; Temp Celsius; Seen Celsius? }
 
 // A skipped field of a type with no empty value and no default, a
 // renamed field the text must hold, and a variant whose named fields are
@@ -140,6 +178,7 @@ func TestStrict() {
 	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
 	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>(ref ("{\"X\":1,\"Y\":2,\"Z\":" + deep + "}"))).Error(), "exceeded max depth") // a key passed over is held to it too
 	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"\ud800A\ud800\ud800\udc00"`)), "\ufffdA\ufffd\U00010000") // a half alone is U+FFFD, and the pair after it its rune
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"\ud83d\ude00\udc00x"`)), "\U0001F600\ufffdx") // a pair first, then a low half alone
 }
 
 // Floats are written in plain decimals from 1e-6 up to 1e21 and with an
@@ -193,4 +232,111 @@ func TestAttributeEdges() {
 
 	expect.Equal(ref expect.IsOk(json.Marshal(ref V("s".Clone(), "y".Clone(), 4))), `{"V":{"y":"y","Z":4}}`)
 	expect.Equal(ref expect.IsErr(json.Unmarshal<Kind>(`{"Duo":{"a":1}}`)).Error(), "json: missing field second at offset 7")
+}
+
+// A type that writes and reads its own JSON is written and read its own
+// way, inside other values too; text it writes that is not one JSON
+// value is an error, and an offset in its own error counts from where
+// its value began.
+func TestOwnCodec() {
+	r := Room{Name: "lab".Clone(), Temp: Celsius{deg: 21}, Seen: Some(Celsius{deg: -3})}
+	text := expect.IsOk(json.Marshal(ref r))
+	expect.Equal(ref text, `{"Name":"lab","Temp":"21C","Seen":"-3C"}`)
+	roundTrip<Room>(ref text)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Room>(`{"Name":"x","Temp":"21F","Seen":null}`)).Error(), "json: a temperature is a string like \"21C\" at offset 19")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Room>(`{"Name":"x","Temp":"aC","Seen":null}`)).Error(), "json: a temperature is a whole number at offset 20")
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Bad{n: 1})).Error(), "json: MarshalJSON gave text that is not one JSON value")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Spaced{Spaced{n: 1}})), `[{"a\" b":[1,"c\\",2]}]`)
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Refused{n: 1})).Error(), "json: MarshalJSON: no text for it")
+}
+
+// Every kind of value, read by its kind's accessor, and None from an
+// accessor of another kind.
+func TestDocValues() {
+	doc := json.Parse(docText).Expect("parse")
+	root := doc.Root()
+	expect.True(doc.Kind(root) == json.Object)
+	expect.Equal(ref doc.Len(root), ref 9)
+	name := expect.IsSome(doc.Get(root, "name"))
+	expect.Equal(ref expect.IsSome(doc.String(name)), "lab")
+	expect.Equal(ref doc.StringInPlace(name).Expect("read in place"), "lab")
+	expect.Equal(ref expect.IsSome(doc.Int(expect.IsSome(doc.Get(root, "n")))), ref 3)
+	expect.Equal(ref expect.IsSome(doc.Float(expect.IsSome(doc.Get(root, "pi")))), ref 2.5)
+	expect.Equal(ref expect.IsSome(doc.Bool(expect.IsSome(doc.Get(root, "ok")))), ref true)
+	expect.True(doc.Kind(expect.IsSome(doc.Get(root, "none"))) == json.Null)
+	expect.IsNone(doc.Int(name))
+	expect.IsNone(doc.Get(root, "missing"))
+	expect.Equal(ref doc.Text(expect.IsSome(doc.Get(root, "tags"))), `["a", "b\n", "c"]`)
+}
+
+// An array's elements and an object's members in the order the text
+// has them; a string with an escape decoded by Str, and given no view.
+func TestDocLoops() {
+	doc := json.Parse(docText).Expect("parse")
+	tags := expect.IsSome(doc.Get(doc.Root(), "tags"))
+	var b strings.Builder
+	for e := range doc.Elements(tags) {
+		b.WriteString(expect.IsSome(doc.String(e)))
+		b.WriteString("|")
+	}
+
+	expect.Equal(ref b.String(), "a|b\n|c|")
+	expect.True(doc.StringInPlace(expect.IsSome(doc.Index(tags, 1))).IsNone())
+	expect.IsNone(doc.Index(tags, 3))
+	var keys strings.Builder
+	for m := range doc.Members(doc.Root()) {
+		keys.WriteString(m.Key)
+		keys.WriteString(",")
+	}
+
+	expect.Equal(ref keys.String(), `name,n,pi,ok,none,tags,a/b,escA,srv,`)
+	expect.Equal(ref expect.IsSome(doc.String(expect.IsSome(doc.Get(doc.Root(), "escA")))), "x\ty") // a key with an escape found by what it decodes to
+}
+
+// RFC 6901 pointers: a member, an element, ~1 for / and ~0 for ~ in a
+// key, the empty pointer for the node itself, and None where nothing is
+// and for an index RFC 6901 does not write: 01, +1, -0 or empty.
+func TestDocPointer() {
+	doc := json.Parse(docText).Expect("parse")
+	root := doc.Root()
+	expect.Equal(ref expect.IsSome(doc.String(expect.IsSome(doc.At(root, "/tags/2")))), "c")
+	expect.Equal(ref expect.IsSome(doc.Int(expect.IsSome(doc.At(root, "/a~1b/m~0n")))), ref 7)
+	expect.True(expect.IsSome(doc.At(root, "")) == root)
+	expect.IsNone(doc.At(root, "/tags/9"))
+	expect.IsNone(doc.At(root, "/n/x"))
+	expect.IsNone(doc.At(root, "tags"))
+	expect.IsNone(doc.At(root, "/tags/01")) // an index is 0 or digits without a leading 0, and no sign
+	expect.IsNone(doc.At(root, "/tags/+1"))
+	expect.IsNone(doc.At(root, "/tags/-0"))
+	expect.IsNone(doc.At(root, "/tags/"))
+}
+
+// One part read as a type, in place, and an error in it counted from
+// the start of the whole text.
+func TestDocDecode() {
+	doc := json.Parse(docText).Expect("parse")
+	p := expect.IsOk(doc.Decode<Point>(expect.IsSome(doc.Get(doc.Root(), "srv"))))
+	expect.Equal(ref p.Y, ref 2)
+	bad := json.Parse(`{"p": {"X": "one", "Y": 2}}`).Expect("parse")
+	expect.Equal(ref expect.IsErr(bad.Decode<Point>(expect.IsSome(bad.Get(bad.Root(), "p")))).Error(), "json: expected an integer, found nothing at offset 12")
+}
+
+// Text that is not one JSON value is refused, as Unmarshal refuses it;
+// a key given twice is kept, and Get gives the first; a node of another
+// document answers nothing.
+func TestDocStrict() {
+	expect.Contains(ref expect.IsSome(json.Parse(`{"a": 1,}`).Err()).Error(), "expected a key")
+	expect.Contains(ref expect.IsSome(json.Parse(`[1 2]`).Err()).Error(), "expected ]")
+	expect.Contains(ref expect.IsSome(json.Parse(`"a`).Err()).Error(), "unterminated string")
+	expect.Contains(ref expect.IsSome(json.Parse(`1 2`).Err()).Error(), "text after the value")
+	expect.Contains(ref expect.IsSome(json.Parse("\"a\x01\"").Err()).Error(), "invalid character in string")
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsSome(json.Parse(ref deep).Err()).Error(), "exceeded max depth")
+	dup := json.Parse(`{"k": 1, "k": 2}`).Expect("parse")
+	expect.Equal(ref expect.IsSome(dup.Int(expect.IsSome(dup.Get(dup.Root(), "k")))), ref 1)
+	small := json.Parse("5").Expect("parse")
+	big := json.Parse(docText).Expect("parse")
+	far := expect.IsSome(big.At(big.Root(), "/srv/Y"))
+	expect.True(small.Kind(far) == json.Null)
+	expect.Equal(ref small.Text(far), "")
 }

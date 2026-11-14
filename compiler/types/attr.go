@@ -388,7 +388,7 @@ func (c *Checker) attrSubject(x ast.Expr) bool {
 	}
 
 	tp, ok := tn.typ.(*TypeParam)
-	if !ok || c.kinds[tp] == "" {
+	if !ok || c.kinds[c.armParam(tp)] == "" {
 		return false
 	}
 

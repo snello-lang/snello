@@ -341,7 +341,15 @@ func TestTraits(t *testing.T) {
 		// Wrong declarations.
 		{"trait T { func (s ref Self) F(); func (s ref Self) F() }", []string{"method T.F redeclared; first declared at"}},
 		{"trait T { func (s ref Circle) F() }", []string{"a trait method's receiver is Self, ref Self or mut Self"}},
-		{"trait T { func F() }", []string{"a trait method needs a receiver: (s ref Self)"}},
+		{"trait T { func F() }", nil}, // a function of the implementing type
+		{"trait T { func F<U>() }", []string{"a required function cannot have type parameters"}},
+		{"trait T { func F() int { return 1 } }", []string{"a trait's function has no default body"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }", []string{"Q does not implement P: missing function Q.Parse(ref string) Q?"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }\nfunc (q ref Q) Parse(s ref string) Q? { return None }", []string{"Q.Parse is a method, and P wants a function of the type"}},
+		{"trait P { func (s ref Self) Show() string }\nstruct Q impl P { n int }\nfunc Q.Show() string { return \"q\" }", []string{"Q.Show is a function of the type, and P wants a method"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }\nfunc Q.Parse(s ref string) Q? { return Some(Q{n: len(s)}) }\nfunc parsed<T: P>(s ref string) T? { return T.Parse(s) }\nfunc f() Q? { return parsed<Q>(\"ab\") }", nil},
+		{"trait C { func Count() int; func (s ref Self) Twice() int { return Self.Count() * 2 } }\nstruct Q impl C { n int }\nfunc Q.Count() int { return 3 }\nfunc f(q ref Q) int { return q.Twice() }", nil}, // a default body calls a function of the type that inherits it
+		{"func f() int { return Self.Count() }", []string{"Self is only defined inside a trait"}},
 		{"trait T: T {}", []string{"trait T refines itself"}},
 		{"trait A: B {}\ntrait B: A {}", []string{"trait A refines itself"}},
 		{"trait T<U> { func (s ref Self) F() U }", nil},

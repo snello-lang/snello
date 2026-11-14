@@ -128,7 +128,12 @@ func (e *Emitter) ident(x *ast.Ident) value {
 
 		return e.load(e.irType(e.typeOf(x), x.Pos()), "@"+sym)
 	case *types.Func:
-		return e.funcValue(obj, x.Pos())
+		if e.generics[obj] != nil {
+			e.unsupported(x.Pos(), "a generic function as a value")
+			return value{e.irType(e.typeOf(x), x.Pos()), "zeroinitializer"}
+		}
+
+		return e.funcValue(obj.Type().(*types.Signature), lower.FuncName(obj), x.Pos())
 	case *types.Var:
 		t := e.irType(e.sub(obj.Type()), x.Pos())
 		return e.load(t, e.varSlot(obj, x.Pos()))
@@ -1180,7 +1185,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 				return unit
 			}
 
-			return e.funcValue(obj, x.Pos())
+			return e.funcValue(obj.Type().(*types.Signature), lower.FuncName(obj), x.Pos())
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
 		case *types.Var:
@@ -1188,6 +1193,15 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 		}
 
 		return e.load(e.irType(e.typeOf(x), x.Pos()), "@"+lower.ObjName(e.info.Uses[x.Sel]))
+	}
+
+	if lower.TypeFunc(e.info, x) { // Point.Of, Pair<int, bool>.Of as a value: a function, named after its type
+		name, sig := e.staticCallee(x, x.Pos())
+		if sig == nil {
+			return unit
+		}
+
+		return e.funcValue(sig, name, x.Pos())
 	}
 
 	f, ok := e.info.Uses[x.Sel].(*types.Var)

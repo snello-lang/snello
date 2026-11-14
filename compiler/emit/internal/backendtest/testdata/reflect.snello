@@ -11,7 +11,9 @@
 // value built from its fields, a ? leaving after owned fields are made,
 // which drops them once; an enum's variants, one arm each, their fields
 // read and the variant built back by its name, a recursive enum among
-// them; and a field's default and an option's None for a field missing.
+// them; a field's default and an option's None for a field missing;
+// and a trait's default body matching on the trait's type parameter, and
+// passing Self to a generic function that matches on it.
 
 package main
 
@@ -160,7 +162,27 @@ func show<T>(v ref T) string {
 	return b.String()
 }
 
+trait Holds<T> {
+	func (s ref Self) Held() T
+	func (s ref Self) Holds() string {
+		return match T {
+			int => "holds an int",
+			[]E => "holds a slice",
+			_ => "holds something",
+		} + ", is " + kind(s)
+	}
+}
+
+struct Ints impl Holds<[]int> { xs []int }
+
+func (i ref Ints) Held() []int { return i.xs.Clone() }
+
+struct One impl Holds<int> { n int }
+
+func (o ref One) Held() int { return o.n }
+
 func main() {
+	fmt.Println(Ints{xs: []int{1}}.Holds(), One{n: 1}.Holds())
 	fmt.Println(kind(ref Celsius(21.5)), kind(ref Point{x: 4, name: "p".Clone()}), kind(ref true), kind(ref i8(3)), kind(ref Some(4)))
 	fmt.Println(kind(ref map[string]int{"a": 1}), kind(ref &3), kind(ref Box<int>{item: 5}), kind(ref []int{}), kind(ref []string{}), kind(ref 2.5))
 	l := Line{from: Point{x: 1, name: "a".Clone()}, to: Point{x: 2, name: "b".Clone()}, tags: []string{"t".Clone(), "u".Clone()}}

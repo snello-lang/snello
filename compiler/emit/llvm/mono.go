@@ -53,7 +53,8 @@ func (e *Emitter) typeOf(x ast.Expr) types.Type {
 // than once, and keeps its declaration for the instances to come.
 func (e *Emitter) generic(d *ast.FuncDecl, fn *types.Func) bool {
 	sig := fn.Type().(*types.Signature)
-	if sig.TypeParams() == nil && len(recvParams(sig)) == 0 {
+	owner := lower.TypeOwner(e.info, d)
+	if sig.TypeParams() == nil && len(recvParams(sig)) == 0 && (owner == nil || owner.TypeParams() == nil) {
 		return false
 	}
 
@@ -97,7 +98,11 @@ func (e *Emitter) request(fn *types.Func, targs []types.Type) string {
 	sig := origin.Type().(*types.Signature)
 	name := lower.FuncName(origin)
 	own := targs
-	if recv := sig.Recv(); recv != nil {
+	if owner := lower.TypeOwner(e.info, e.generics[origin]); owner != nil { // a function of a generic type: the type's arguments first
+		k := len(owner.TypeParams())
+		own = targs[k:]
+		name = lower.MethodName(types.Instantiate(owner, targs[:k]), origin.Name())
+	} else if recv := sig.Recv(); recv != nil {
 		k := len(recvParams(sig))
 		own = targs[k:]
 		if selfMethod(origin) {
@@ -134,7 +139,12 @@ func (e *Emitter) instances() {
 // its substitution in effect for the body.
 func (e *Emitter) writeInstance(inst instance) {
 	sig := inst.fn.Type().(*types.Signature)
-	tparams := append(recvParams(sig), sig.TypeParams()...)
+	tparams := recvParams(sig)
+	if owner := lower.TypeOwner(e.info, inst.decl); owner != nil { // a function of a generic type takes the type's parameters as a method of it does
+		tparams = owner.TypeParams()
+	}
+
+	tparams = append(tparams, sig.TypeParams()...)
 	outer := e.subst
 	e.subst = make(map[*types.TypeParam]types.Type, len(tparams))
 	for i, p := range tparams {

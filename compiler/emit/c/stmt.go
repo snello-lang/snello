@@ -45,7 +45,7 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 			e.discard(x, e.typeOf(s.X), s.Pos())
 		}
 	case *ast.IncDecStmt:
-		e.line(e.expr(s.X) + s.Tok.String() + ";")
+		e.line(e.lvalue(s.X) + s.Tok.String() + ";") // the place, as x += 1 writes it: m[k]++ finds the map's slot
 	case *ast.AssignStmt:
 		e.assign(s)
 	case *ast.ReturnStmt:
@@ -409,7 +409,7 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	if s.Cond != nil && !e.hasEffects(s.Cond) {
 		mark, start := len(e.temps), e.body.Len()
 		cond = e.expr(s.Cond)
-		if len(e.temps) > mark { // a temporary the condition needs is built and dropped on every pass, in the body
+		if len(e.temps) > mark || e.body.Len() > start { // a statement the condition needs, a temporary or a map's key saved, runs on every pass, in the body
 			e.body.Truncate(start)
 			e.temps, cond = e.temps[:mark], ""
 		}
@@ -417,8 +417,12 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 
 	post, label := "", ""
 	if s.Post != nil {
+		mark, start := len(e.temps), e.body.Len()
 		var ok bool
-		if post, ok = e.simpleStmt(s.Post); !ok {
+		post, ok = e.simpleStmt(s.Post)
+		if !ok || e.body.Len() > start || len(e.temps) > mark { // writing it wrote statements, which would run once, before the loop: it is written in the body
+			e.body.Truncate(start)
+			e.temps, post = e.temps[:mark], ""
 			label = e.temp() + "_post"
 		}
 	}
@@ -693,19 +697,25 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType typ
 }
 
 // simpleStmt writes a statement that C accepts as an expression, for
-// the post clause of a for: x++, x += 1, x = e. A value that calls or
-// needs statements cannot go there, as they would run once, before the
-// loop; the caller writes such a statement in the body.
+// the post clause of a for: x++, x += 1, x = e. A value that calls, or
+// a value or place whose writing needs statements, cannot go there, as
+// they would run once, before the loop; the caller refuses what wrote
+// statements, xs[at()] = i and m[k] += 1 among them, and writes such a
+// statement in the body.
 func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 	switch s := s.(type) {
 	case *ast.IncDecStmt:
-		return e.expr(s.X) + s.Tok.String(), true
+		return e.lvalue(s.X) + s.Tok.String(), true
 	case *ast.AssignStmt:
 		if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Tok == token.DEFINE || e.hasEffects(s.Rhs[0]) {
 			return "", false
 		}
 
 		t := lower.ValueType(e.typeOf(s.Lhs[0]))
+		if needsDrop(t) { // the old value is dropped, and a moved one emptied, statements the loop's step runs each pass
+			return "", false
+		}
+
 		if s.Tok == token.ASSIGN {
 			return e.lvalue(s.Lhs[0]) + " = " + e.valueTo(s.Rhs[0], t), true
 		}

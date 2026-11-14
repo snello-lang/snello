@@ -97,6 +97,7 @@ type Func struct {
 	object
 	origin  *Func
 	derived bool          // written by the compiler from the type's fields, for a standard trait the type listed without the method
+	static  bool          // a function of a type, func Point.Parse(...): it takes no value of the type
 	trait   *Trait        // for a default method a type inherited: the trait, or instance of one, it came from
 	decl    *ast.FuncDecl // a generic function's declaration, whose body the questions a type answers walk (reach.go); it fits in the bytes the fields above leave free
 }
@@ -105,6 +106,10 @@ type Func struct {
 // an instance of a generic trait with its arguments, or nil for a
 // method the type declared itself.
 func (f *Func) FromTrait() *Trait { return f.trait }
+
+// Static reports whether fn is a function of a type, func Point.Parse,
+// which takes no value of it, rather than a method.
+func (f *Func) Static() bool { return f.static }
 
 // Derived reports whether the method was derived from its type's
 // fields rather than declared: Eq, Cmp, Hash or Clone of a type that

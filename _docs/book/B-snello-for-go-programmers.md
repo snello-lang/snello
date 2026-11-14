@@ -312,5 +312,16 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `reflect.TypeOf(v).Kind()` when the program runs | `match T { int => ..., struct => ... }`, decided when the program is compiled, one arm kept per type |
 | `for i := 0; i < t.NumField(); i++ { f := t.Field(i) }` | `for f := range fields(T) { ... v.[f] ... }`, written out once per field, `f.name` a constant |
 | `encoding/json` skips unexported fields in silence | a field the function cannot reach is a compile error, unless the type lists `Reflect` |
+| `func ParsePoint(s string) Point`, a package function per type | `func Point.Parse(s ref string) Point?`, a function of the type, which a trait may require and a generic function call, `T.Parse(s)` (chapter 26) |
+| `json.Marshaler` and `json.Unmarshaler`, the latter a method on a zero value | the same traits, `UnmarshalJSON` a function of the type that returns the value: `func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error>` |
 | `json:"name,omitempty"` tags rename a field and leave it out | typed attributes the compiler checks: `Host string @json.Name("host") @json.OmitEmpty`, and `@json.Skip` for `json:"-"` (chapter 25) |
 | `json.Marshal` of a channel field fails when it runs | refused when the program is compiled, naming the type no arm takes |
+
+## Chapter 27: Writing Snello
+
+| In Go | In Snello |
+|---|---|
+| gofmt's layout and Effective Go's names | the same layout and the same naming, plus the file order of chapter 27: constants, types, exported API, then helpers |
+| `switch c { case beginObject: }`, a constant in a case | `match { c == beginObject => ... }`: a constant is no pattern |
+| `panic` in a library on a bad argument | an option or a `Result` with an error that says where; the standard library does not panic |
+| a pointer parameter says nothing of who keeps the value | `ref T` read, `mut T` changed, `T` kept: the signature says it |

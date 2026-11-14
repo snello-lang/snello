@@ -79,6 +79,23 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 		d.TypeParams = p.parseTypeParams()
 	}
 
+	if p.tok == token.PERIOD && d.Recv == nil { // func Point.Parse or func Pair<A, B>.Of: what was read names the type
+		p.next()
+		d.Of = &ast.NamedType{Name: d.Name}
+		for _, tp := range d.TypeParams {
+			if len(tp.Bounds) > 0 { // the type declares its parameters' bounds; a function of it names them
+				p.error(tp.Name.Pos(), "a function of a type names its type's parameters, whose bounds the type declares: "+tp.Name.Name+" takes none here")
+			}
+
+			d.Of.Args = append(d.Of.Args, &ast.NamedType{Name: tp.Name})
+		}
+
+		d.Name, d.TypeParams = p.parseIdent(), nil
+		if p.tok == token.LSS {
+			d.TypeParams = p.parseTypeParams()
+		}
+	}
+
 	d.Params = p.parseParams()
 	d.Results = p.parseResults()
 	if p.tok == token.LBRACE {
@@ -91,8 +108,9 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 }
 
 // isTypeParam reports whether name is a type parameter of the function
-// d, its own or one its receiver's type names, as T of Box<T> in
-// (b ref Box<T>).
+// d: its own, one its receiver's type names, as T of Box<T> in
+// (b ref Box<T>), or one of the type it belongs to, as T in
+// func Box<T>.Of().
 func isTypeParam(d *ast.FuncDecl, name string) bool {
 	if d == nil {
 		return false
@@ -104,18 +122,23 @@ func isTypeParam(d *ast.FuncDecl, name string) bool {
 		}
 	}
 
+	owner := d.Of
 	if d.Recv != nil {
 		recv := d.Recv.Type
 		if r, ok := recv.(*ast.RefType); ok {
 			recv = r.Elem
 		}
 
-		if n, ok := recv.(*ast.NamedType); ok {
-			for _, a := range n.Args {
-				if an, ok := a.(*ast.NamedType); ok && an.Pkg == nil && an.Args == nil && an.Name.Name == name {
-					return true
-				}
-			}
+		owner, _ = recv.(*ast.NamedType)
+	}
+
+	if owner == nil {
+		return false
+	}
+
+	for _, a := range owner.Args {
+		if an, ok := a.(*ast.NamedType); ok && an.Pkg == nil && an.Args == nil && an.Name.Name == name {
+			return true
 		}
 	}
 
@@ -370,6 +393,8 @@ func (p *Parser) parseTraitDecl() *ast.TraitDecl {
 		return d
 	}
 
+	p.trait = d
+	defer func() { p.trait = nil }()
 	for p.tok != token.RBRACE && p.tok != token.EOF {
 		switch p.tok {
 		case token.VAR:

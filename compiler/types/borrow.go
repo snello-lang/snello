@@ -298,14 +298,17 @@ func (c *Checker) markPart(e, x ast.Expr, op operand) {
 	}
 }
 
-// static reports whether e is a literal or a constant, whose value
-// outlives every statement.
+// static reports whether e is a literal or a constant, this package's
+// or another's, time.TimeOnly, whose value outlives every statement.
 func (c *Checker) static(e ast.Expr) bool {
 	switch e := unparen(e).(type) {
 	case *ast.BasicLit:
 		return true
 	case *ast.Ident:
 		_, ok := c.resolve(e.Name).(*Const)
+		return ok
+	case *ast.SelectorExpr:
+		_, ok := c.named(e).(*Const)
 		return ok
 	}
 

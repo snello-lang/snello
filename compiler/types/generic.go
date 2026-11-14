@@ -340,5 +340,5 @@ func substVar(v *Var, m map[*TypeParam]Type) *Var {
 // the method it was made from: an instance's method from the generic
 // declaration's, or a type parameter's from its bound's.
 func substFunc(fn *Func, m map[*TypeParam]Type) *Func {
-	return &Func{object: object{fn.name, subst(fn.typ, m), fn.pos, fn.pkg}, origin: fn, derived: fn.derived, trait: fn.trait}
+	return &Func{object: object{fn.name, subst(fn.typ, m), fn.pos, fn.pkg}, origin: fn, derived: fn.derived, static: fn.static, trait: fn.trait}
 }

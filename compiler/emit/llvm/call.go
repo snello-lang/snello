@@ -269,6 +269,10 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 		return e.methodCall(x, sel) // a predeclared method, which the checker records no object for
 	}
 
+	if fn.Static() {
+		return e.staticCall(x, sel)
+	}
+
 	sig := fn.Type().(*types.Signature)
 	if id, ok := sel.X.(*ast.Ident); ok && id.Name == "super" {
 		return e.superCall(x, sel, fn)
@@ -292,6 +296,51 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 	}
 
 	return e.callNamed(name, sig, sel.X, x.Args, x.Ellipsis.IsValid(), x.Pos())
+}
+
+// staticCall writes T.F(args), a function of a type: the function of
+// the type T stands for in the instance being written, Point.Parse, or
+// a generic type's instance's, called directly with no receiver.
+func (e *Emitter) staticCall(x *ast.CallExpr, sel *ast.SelectorExpr) value {
+	name, sig := e.staticCallee(sel, x.Pos())
+	if sig == nil {
+		return unit
+	}
+
+	return e.callNamed(name, sig, nil, x.Args, x.Ellipsis.IsValid(), x.Pos())
+}
+
+// staticCallee names the function T.F a call or a spawn of sel runs,
+// with its signature in the instance being written, or nil after an
+// unsupported case.
+func (e *Emitter) staticCallee(sel *ast.SelectorExpr, pos token.Pos) (string, *types.Signature) {
+	owner, ok := lower.ValueType(e.sub(e.typeOf(sel.X))).(*types.Named)
+	var fn *types.Func
+	if ok {
+		fn = owner.Method(sel.Sel.Name)
+	}
+
+	if fn == nil {
+		e.unsupported(pos, "the function "+sel.Sel.Name+" of "+e.typeOf(sel.X).String())
+		return "", nil
+	}
+
+	sig := e.sub(fn.Type()).(*types.Signature)
+	name := lower.MethodName(owner, fn.Name())
+	if e.generics[fn.Origin()] != nil {
+		targs := append([]types.Type(nil), owner.TypeArgs()...)
+		if inst, ok := e.info.Instances[sel.Sel]; ok {
+			for _, t := range inst.TypeArgs {
+				targs = append(targs, e.sub(t))
+			}
+
+			sig = e.sub(inst.Type).(*types.Signature)
+		}
+
+		name = e.request(fn, targs)
+	}
+
+	return name, sig
 }
 
 // superCall writes super.M(args): the next definition of M in the

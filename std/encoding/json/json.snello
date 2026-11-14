@@ -17,7 +17,8 @@
 // fields an object of one key, {"Rect":{"w":1,"h":2}}.
 // A struct of another package is reached through the fields it exports,
 // or through all of them when it lists Reflect. Attributes change the
-// keys and leave fields out: Name, OmitEmpty and Skip, below.
+// keys and leave fields out: Name, OmitEmpty and Skip, below; a type
+// that lists Marshaler or Unmarshaler writes or reads its own JSON.
 //
 // Reading finds each field of a struct by its key, wherever the text
 // puts it, and passes over a key the struct has no field for. A field
@@ -27,14 +28,16 @@
 // not JSON, and arrays and objects nested more than 128 deep.
 package json
 
-import ("strconv"; "strings"; "unicode/utf8")
+import ("math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
 
 // hex are the digits of a \u escape, by their value.
 const hex = "0123456789abcdef"
 
 // The structural characters of JSON text, named as RFC 8259 names them,
-// and the quotation mark and escape a string is written with. A match
-// arm writes its character itself, since a name there binds.
+// the quotation mark and escape a string is written with, and the
+// solidus, an escape's letter in a string and the separator of a JSON
+// Pointer's tokens. A constant is no pattern, so the code chooses by
+// them with match { c == ... }.
 const beginArray byte = '['
 const endArray byte = ']'
 const beginObject byte = '{'
@@ -43,9 +46,34 @@ const nameSeparator byte = ':'
 const valueSeparator byte = ','
 const quotationMark byte = '"'
 const escape byte = '\\'
+const solidus byte = '/'
+
+// The literal names of JSON text, as RFC 8259 calls them; a value that
+// starts with the first byte of one is that literal or nothing.
+const literalTrue = "true"
+const literalFalse = "false"
+const literalNull = "null"
+
+// The escapes of a JSON Pointer's token, as RFC 6901 writes them: ~1
+// for the solidus, which separates the tokens, and ~0 for the tilde
+// that begins an escape.
+const tilde = "~"
+const solidusText = "/"
+const escapedSolidus = "~1"
+const escapedTilde = "~0"
+
+// maxDepth is how deep arrays and objects may nest in the text read, so
+// that a text cannot run the stack out: a task's stack does not grow,
+// and each level of nesting the reader goes into takes a frame of it.
+const maxDepth = 128
+
+// controlEnd is where the control characters end, U+0000 to U+001F,
+// which RFC 8259 has a string escape and never hold as they are.
+const controlEnd byte = 0x20
 
 // Name is the key a field or a variant is written and read under, in
-// place of the name it is declared with: Host string @json.Name("host").
+// place of the name it is declared with: Host string
+// @json.Name("host").
 type Name string impl FieldAttribute, VariantAttribute
 
 // OmitEmpty leaves a field out of the object it is written in when its
@@ -56,16 +84,22 @@ type Name string impl FieldAttribute, VariantAttribute
 struct OmitEmpty impl FieldAttribute {}
 
 // Skip leaves a field out of JSON: it is never written, and read, it
-// takes its default, or the empty value of its type, None, "", [] or {},
-// whatever the text holds. A skipped field of another type declares a
-// default, or reading it is an error. On a variant, Skip and OmitEmpty
-// apply to its named fields; an unnamed field keeps its place.
+// takes its default, or the empty value of its type, None, "", [] or
+// {}, whatever the text holds. A skipped field of another type declares
+// a default, or reading it is an error. On a variant, Skip and
+// OmitEmpty apply to its named fields; an unnamed field keeps its
+// place.
 struct Skip impl FieldAttribute {}
 
-// maxDepth is how deep arrays and objects may nest in the text read, so
-// that a text cannot run the stack out: a task's stack does not grow,
-// and each level of nesting the reader goes into takes a frame of it.
-const maxDepth = 128
+// Marshaler is a type that writes its own JSON: MarshalJSON returns the
+// text of one JSON value, which Marshal writes as it is in place of the
+// value's fields, once it has checked the text is one JSON value.
+trait Marshaler { func (v ref Self) MarshalJSON() Result<string, Error> }
+
+// Unmarshaler is a type that reads its own JSON: UnmarshalJSON is given
+// the text of the one value read for it, as the input has it, and an
+// offset in the error it returns counts from that text's start.
+trait Unmarshaler { func UnmarshalJSON(text ref string) Result<Self, Error> }
 
 // An Error says what in the text could not be read, and where: the
 // offset in bytes it was met at. Marshal reports a float that is not a
@@ -73,6 +107,100 @@ const maxDepth = 128
 struct Error impl Error {
 	at  int
 	msg string
+}
+
+// Kind is the kind of a JSON value.
+enum Kind { Null; Bool; Number; String; Array; Object }
+
+// A Doc is JSON text checked once and indexed, read without a type: a
+// value of it is a Node, which the Doc answers for. It borrows the
+// text, which it copies none of.
+struct Doc {
+	text  ref string
+	nodes []entry
+}
+
+// A Node is a value of a Doc, an index into it, which only the Doc it
+// came from answers for: a number a program copies and keeps.
+struct Node impl Copy, Eq {
+	i int
+}
+
+// A Member is one member of an object: its key as the text writes it,
+// between its quotes, the key's node, which Str decodes when it has an
+// escape, and its value.
+struct Member {
+	Key   ref string
+	Name  Node
+	Value Node
+}
+
+// Elements is a loop over an array's elements, in order.
+struct Elements {
+	doc ref Doc
+	at  int
+	end int
+}
+
+// Members is a loop over an object's members, in the order the text
+// has them.
+struct Members {
+	doc ref Doc
+	at  int
+	end int
+}
+
+// A writer is the text written so far, and the first thing it could not
+// write, which ends the writing.
+struct writer {
+	out strings.Builder
+	bad string?
+}
+
+// A reader is the text being read, lent, the offset it has reached,
+// and whether the element of an array of a variant's fields it reads
+// next is the first, which no comma comes before.
+struct reader {
+	text  ref string
+	at    int
+	first bool
+	depth int
+	ends  map[int]int // where each array or object skipped ends, by where it begins, so that one is skipped once however deep the scans that skip it
+}
+
+// An objectKey is one key of an object being read: the bytes of its
+// name in the text, from and to, whether they hold an escape, and the
+// offset of its value.
+struct objectKey {
+	from    int
+	to      int
+	escaped bool
+	at      int
+}
+
+// An objectState is the state of reading an object's members into a
+// struct's fields. While the members come in the order of the fields,
+// each is read where it stands, in one pass; once one does not, the
+// object is scanned whole, where each key's value lies noted, and the
+// fields are found by key. read counts the members read in order.
+struct objectState {
+	start   int
+	keys    []objectKey
+	scanned bool
+	read    int
+	end     int
+}
+
+// An entry is a node's place in the text: where its text starts and
+// ends, the index of the node after it and all it holds, its kind, and
+// for a string whether its text holds an escape. An object's members
+// are its key's node and its value's, one after the other.
+struct entry {
+	start   int
+	end     int
+	next    int
+	kind    Kind
+	escaped bool
 }
 
 // Error returns the message, with the offset when it has one:
@@ -90,10 +218,16 @@ func (e ref Error) Offset() int {
 	return e.at
 }
 
+// Error.At returns an error met at the offset at, in the text a type's
+// UnmarshalJSON was given, or -1 for one a MarshalJSON met.
+func Error.At(at int, msg string) Error {
+	return Error{at: at, msg: msg}
+}
+
 // Marshal returns v as JSON text: one line, no space between its parts.
 func Marshal<T>(v ref T) Result<string, Error> {
 	w := writer{out: strings.Builder{}, bad: None}
-	write(v, mut w)
+	writeValue(v, mut w)
 	if msg := take(mut w.bad) {
 		return Err(Error{at: -1, msg: msg})
 	}
@@ -105,34 +239,275 @@ func Marshal<T>(v ref T) Result<string, Error> {
 // alone, with space around it.
 func Unmarshal<T>(text ref string) Result<T, Error> {
 	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
-	v := read<T>(mut r)?
-	r.space()
+	v := readValue<T>(mut r)?
+	r.skipSpace()
 	if r.at < len(r.text) {
-		return Err(r.fail("text after the value"))
+		return Err(r.errorHere("text after the value"))
 	}
 
 	return Ok(v)
 }
 
-// A writer is the text written so far, and the first thing it could not
-// write, which ends the writing.
-struct writer {
-	out strings.Builder
-	bad string?
+// Parse checks text, one JSON value with space around it, and indexes
+// it: one entry for each value, made in one pass.
+func Parse(text ref string) Result<Doc, Error> {
+	d := Doc{text: text, nodes: []entry{}}
+	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
+	d.indexValue(mut r)?
+	r.skipSpace()
+	if r.at < len(text) {
+		return Err(r.errorHere("text after the value"))
+	}
+
+	return Ok(d)
 }
 
-func write<T>(v ref T, w mut writer) {
+// Root returns the node of the document's value.
+func (d ref Doc) Root() Node {
+	return Node{i: 0}
+}
+
+// Kind returns the kind of the node n, Null for a node of another Doc.
+func (d ref Doc) Kind(n Node) Kind {
+	if n.i < 0 || n.i >= len(d.nodes) {
+		return Null
+	}
+
+	return d.nodes[n.i].kind
+}
+
+// Text returns the text of the node n as the input has it, with nothing
+// copied, or "" for a node of another Doc.
+func (d ref Doc) Text(n Node) ref string {
+	if n.i < 0 || n.i >= len(d.nodes) {
+		return d.text[0:0]
+	}
+
+	return d.text[d.nodes[n.i].start:d.nodes[n.i].end]
+}
+
+// Bool returns the node's bool, or None for a node of another kind.
+func (d ref Doc) Bool(n Node) bool? {
+	if d.Kind(n) != Bool {
+		return None
+	}
+
+	return Some(d.text[d.nodes[n.i].start] == literalTrue[0])
+}
+
+// Int returns the node's number as an int, or None for a node of
+// another kind or a number an int does not hold.
+func (d ref Doc) Int(n Node) int? {
+	if d.Kind(n) != Number {
+		return None
+	}
+
+	return strconv.ParseInt(d.Text(n), 10).Ok()
+}
+
+// Float returns the node's number, or None for a node of another kind.
+func (d ref Doc) Float(n Node) f64? {
+	if d.Kind(n) != Number {
+		return None
+	}
+
+	return strconv.ParseFloat(d.Text(n)).Ok()
+}
+
+// StringInPlace returns the value of the string n read in place: a
+// borrow of the Doc's text between the string's quotes, with nothing
+// copied and nothing allocated. That text is the string's value only
+// when it holds no escape, so for a string with one, "a\nb" or
+// "\u00e9", it returns None, as it does for a node that is no string.
+// The borrow lives as long as the Doc's own borrow of the text.
+//
+// It is for reading many strings fast, keys, IDs and names, which
+// rarely hold an escape; String reads any string, at the cost of a
+// copy: doc.StringInPlace(n) ?? return slowPath(doc.String(n)).
+func (d ref Doc) StringInPlace(n Node) (ref string)? {
+	if d.Kind(n) != String || d.nodes[n.i].escaped {
+		return None
+	}
+
+	return Some(d.text[d.nodes[n.i].start + 1:d.nodes[n.i].end - 1])
+}
+
+// String returns the value of the string n as a string of its own, its
+// escapes decoded, or None for a node that is no string. It copies the
+// value, so the result outlives the Doc and its text; StringInPlace
+// reads a string without an escape with no copy.
+func (d ref Doc) String(n Node) string? {
+	if d.Kind(n) != String {
+		return None
+	}
+
+	if !d.nodes[n.i].escaped {
+		return Some(d.text[d.nodes[n.i].start + 1:d.nodes[n.i].end - 1].Clone())
+	}
+
+	r := reader{text: d.text, at: d.nodes[n.i].start, first: false, depth: 0, ends: map[int]int{}}
+	return r.readString().Ok()
+}
+
+// Len returns the number of an array's elements or an object's members,
+// or 0 for a node of another kind.
+func (d ref Doc) Len(n Node) int {
+	count := 0
+	for _ := range d.Elements(n) {
+		count += 1
+	}
+
+	for _ := range d.Members(n) {
+		count += 1
+	}
+
+	return count
+}
+
+// Index returns the i'th element of an array, or None.
+func (d ref Doc) Index(n Node, i int) Node? {
+	k := 0
+	for e := range d.Elements(n) {
+		if k == i {
+			return Some(e)
+		}
+
+		k += 1
+	}
+
+	return None
+}
+
+// Get returns the value of the first member of an object whose key is
+// key, or None.
+func (d ref Doc) Get(n Node, key ref string) Node? {
+	for m := range d.Members(n) {
+		if !d.nodes[m.Name.i].escaped && m.Key == key || d.nodes[m.Name.i].escaped && (d.String(m.Name) ?? "") == key {
+			return Some(m.Value)
+		}
+	}
+
+	return None
+}
+
+// At returns the node an RFC 6901 pointer names from n: "" is n, and
+// each /token after it a member's key, ~1 for / and ~0 for ~ in it, or
+// an array's index; None when no node is there.
+func (d ref Doc) At(n Node, pointer ref string) Node? {
+	if len(pointer) == 0 {
+		return Some(n)
+	}
+
+	if pointer[0] != solidus {
+		return None
+	}
+
+	cur := n
+	start := 1
+	for i := 1; i <= len(pointer); i++ {
+		if i < len(pointer) && pointer[i] != solidus {
+			continue
+		}
+
+		token := pointer[start:i]
+		if token.Contains(tilde) { // an escape: the token is decoded into a string of its own
+			decoded := unescapePointer(token)
+			cur = d.childByToken(cur, ref decoded) ?? return None
+		} else { // read in place, with nothing copied
+			cur = d.childByToken(cur, token) ?? return None
+		}
+
+		start = i + 1
+	}
+
+	return Some(cur)
+}
+
+// Decode reads the node n as a value of T, as Unmarshal reads one, from
+// the text in place: an offset in its error counts from the start of
+// the whole text.
+func (d ref Doc) Decode<T>(n Node) Result<T, Error> {
+	if n.i < 0 || n.i >= len(d.nodes) {
+		return Err(Error{at: -1, msg: "a node of another document"})
+	}
+
+	r := reader{text: d.text, at: d.nodes[n.i].start, first: false, depth: 0, ends: map[int]int{}}
+	return readValue<T>(mut r)
+}
+
+// Elements returns a loop over the elements of the array n, none for a
+// node of another kind.
+func (d ref Doc) Elements(n Node) Elements {
+	if d.Kind(n) != Array {
+		return Elements{doc: d, at: 0, end: 0}
+	}
+
+	return Elements{doc: d, at: n.i + 1, end: d.nodes[n.i].next}
+}
+
+// Members returns a loop over the members of the object n, none for a
+// node of another kind.
+func (d ref Doc) Members(n Node) Members {
+	if d.Kind(n) != Object {
+		return Members{doc: d, at: 0, end: 0}
+	}
+
+	return Members{doc: d, at: n.i + 1, end: d.nodes[n.i].next}
+}
+
+// Next returns the next element, or None after the last.
+func (e mut Elements) Next() Node? {
+	if e.at >= e.end {
+		return None
+	}
+
+	n := Node{i: e.at}
+	e.at = e.doc.nodes[e.at].next
+	return Some(n)
+}
+
+// Next returns the next member, or None after the last.
+func (m mut Members) Next() Member? {
+	if m.at >= m.end {
+		return None
+	}
+
+	name := m.at
+	value := m.doc.nodes[name].next
+	m.at = m.doc.nodes[value].next
+	return Some(Member{Key: m.doc.text[m.doc.nodes[name].start + 1:m.doc.nodes[name].end - 1], Name: Node{i: name}, Value: Node{i: value}})
+}
+
+// writeValue writes v as JSON, chosen by its type: a type's own text
+// when it lists Marshaler, then by what T is, a struct by its fields
+// and an enum by its variants. What it cannot write is noted in w.bad,
+// and the writing goes on to the end without it.
+func writeValue<T>(v ref T, w mut writer) {
 	match T {
-		bool => w.out.WriteString(if v { "true" } else { "false" }),
+		Marshaler => match v.MarshalJSON() {
+			Ok(text) => {
+				if isOneValue(ref text) {
+					writeCompact(ref text, mut w.out)
+				} else if w.bad.IsNone() {
+					w.bad = Some("MarshalJSON gave text that is not one JSON value")
+				}
+			}
+			Err(e) => {
+				if w.bad.IsNone() {
+					w.bad = Some("MarshalJSON: " + e.msg)
+				}
+			}
+		},
+		bool => w.out.WriteString(if v { literalTrue } else { literalFalse }),
 		i8 | i16 | i32 | i64 | int => w.out.WriteString(strconv.Itoa(int(v))),
 		u8 | u16 | u32 | u64 | uint => w.out.WriteString(strconv.FormatUint(uint(v), 10) ?? ""),
 		f32 => writeFloat(f64(v), strconv.FormatFloat32(v, -1), mut w),
 		f64 => writeFloat(v, strconv.FormatFloat(v, -1), mut w),
-		*E => write(ref **v, mut w),
-		string => quote(v, mut w.out),
+		*E => writeValue(ref **v, mut w),
+		string => writeQuoted(v, mut w.out),
 		E? => match v {
-			Some(x) => write(x, mut w),
-			None => w.out.WriteString("null"),
+			Some(x) => writeValue(x, mut w),
+			None => w.out.WriteString(literalNull),
 		},
 		[]E => {
 			w.out.WriteByte(beginArray)
@@ -141,7 +516,7 @@ func write<T>(v ref T, w mut writer) {
 					w.out.WriteByte(valueSeparator)
 				}
 
-				write(e, mut w)
+				writeValue(e, mut w)
 			}
 
 			w.out.WriteByte(endArray)
@@ -160,10 +535,10 @@ func write<T>(v ref T, w mut writer) {
 						w.out.WriteByte(valueSeparator)
 					}
 
-					quote(k, mut w.out)
+					writeQuoted(k, mut w.out)
 					w.out.WriteByte(nameSeparator)
 					if x := v.Get(k) {
-						write(x, mut w)
+						writeValue(x, mut w)
 					}
 				}
 
@@ -174,16 +549,16 @@ func write<T>(v ref T, w mut writer) {
 			w.out.WriteByte(beginObject)
 			first := true
 			for f := range fields(T) {
-				if attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && empty(ref v.[f])) {
+				if attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && isEmpty(ref v.[f])) {
 					if !first {
 						w.out.WriteByte(valueSeparator)
 					}
 
 					first = false
-					quote(ref keyOf(attr(f, Name), f.name), mut w.out)
+					writeQuoted(ref fieldKey(attr(f, Name), f.name), mut w.out)
 
 					w.out.WriteByte(nameSeparator)
-					write(ref v.[f], mut w)
+					writeValue(ref v.[f], mut w)
 				}
 			}
 
@@ -198,13 +573,13 @@ func write<T>(v ref T, w mut writer) {
 				}
 
 				if n == 0 {
-					quote(ref keyOf(attr(c, Name), c.name), mut w.out)
+					writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
 
 					return
 				}
 
 				w.out.WriteByte(beginObject)
-				quote(ref keyOf(attr(c, Name), c.name), mut w.out)
+				writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
 
 				w.out.WriteByte(nameSeparator)
 				if named {
@@ -215,19 +590,19 @@ func write<T>(v ref T, w mut writer) {
 
 				first := true
 				for f := range fields(c) {
-					if !named || attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && empty(ref v.[f])) { // a named field is left out as a struct's is; an unnamed one keeps its place
+					if !named || attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && isEmpty(ref v.[f])) { // a named field is left out as a struct's is; an unnamed one keeps its place
 						if !first {
 							w.out.WriteByte(valueSeparator)
 						}
 
 						first = false
 						if named {
-							quote(ref keyOf(attr(f, Name), f.name), mut w.out)
+							writeQuoted(ref fieldKey(attr(f, Name), f.name), mut w.out)
 
 							w.out.WriteByte(nameSeparator)
 						}
 
-						write(ref v.[f], mut w)
+						writeValue(ref v.[f], mut w)
 					}
 				}
 
@@ -243,18 +618,66 @@ func write<T>(v ref T, w mut writer) {
 	}
 }
 
-// keyOf is the key a field or a variant is written and read under: its
-// Name attribute, or the name it is declared with.
-func keyOf(name Name?, declared string) string {
+// isOneValue reports whether text is one JSON value, with space around
+// it.
+func isOneValue(text ref string) bool {
+	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
+	if r.skipValue().IsErr() {
+		return false
+	}
+
+	r.skipSpace()
+	return r.at == len(text)
+}
+
+// writeCompact writes text, one JSON value, without the space between
+// its parts, as Marshal writes every value: a string's bytes are kept
+// as they are.
+func writeCompact(text ref string, out mut strings.Builder) {
+	inString, escaped := false, false
+	start := 0
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		match {
+			inString => {
+				if escaped {
+					escaped = false
+				} else if c == escape {
+					escaped = true
+				} else if c == quotationMark {
+					inString = false
+				}
+			}
+			c == quotationMark => inString = true,
+			isSpace(c) => {
+				if start < i {
+					out.WriteString(text[start:i])
+				}
+
+				start = i + 1
+			}
+			_ => {},
+		}
+	}
+
+	if start < len(text) {
+		out.WriteString(text[start:len(text)])
+	}
+}
+
+// fieldKey is the key a field or a variant is written and read under:
+// its Name attribute, or the name it is declared with.
+func fieldKey(name Name?, declared string) string {
 	return match name {
 		Some(k) => string(k),
 		None => declared,
 	}
 }
 
-// empty reports whether v is a value OmitEmpty leaves out: None, or an
-// empty string, slice or map, which JSON writes as null, "", [] or {}.
-func empty<T>(v ref T) bool {
+// isEmpty reports whether v is a value OmitEmpty leaves out: None, or
+// an empty string, slice or map, which JSON writes as null, "", [] or
+// {}.
+func isEmpty<T>(v ref T) bool {
 	return match T {
 		E? => v.IsNone(),
 		string => len(v) == 0,
@@ -264,10 +687,10 @@ func empty<T>(v ref T) bool {
 	}
 }
 
-// omitted returns the empty value of T that OmitEmpty leaves out, when
-// omit says the field has it, read for a key that is missing; None for
-// a type with no empty value, or a field without OmitEmpty.
-func omitted<T>(omit bool) T? {
+// omittedValue returns the empty value of T that OmitEmpty leaves out,
+// when omit says the field has it, read for a key that is missing; None
+// for a type with no empty value, or a field without OmitEmpty.
+func omittedValue<T>(omit bool) T? {
 	if !omit {
 		return None
 	}
@@ -290,7 +713,7 @@ func writeFloat(f f64, short ref string, w mut writer) {
 			w.bad = Some("unsupported value: " + short)
 		}
 
-		w.out.WriteString("null")
+		w.out.WriteString(literalNull)
 		return
 	}
 
@@ -314,12 +737,12 @@ func writeFloat(f f64, short ref string, w mut writer) {
 		return
 	}
 
-	plain(short, e, mut w.out)
+	writePlainDecimal(short, e, mut w.out)
 }
 
-// plain writes the shortest text short of a float in plain decimals: its
-// digits, before e, moved by the exponent after it.
-func plain(short ref string, e int, out mut strings.Builder) {
+// writePlainDecimal writes the shortest text short of a float in plain
+// decimals: its digits, before e, moved by the exponent after it.
+func writePlainDecimal(short ref string, e int, out mut strings.Builder) {
 	exp := strconv.Atoi(short[e + 1:len(short)]) ?? 0
 	start := 0
 	if short[0] == '-' {
@@ -367,15 +790,15 @@ func plain(short ref string, e int, out mut strings.Builder) {
 	out.WriteString(d[point:len(d)])
 }
 
-// quote writes s as a JSON string: the quote, the backslash and every
-// control character escaped, the runs of other bytes between them as
-// they are, each run in one write.
-func quote(s ref string, out mut strings.Builder) {
+// writeQuoted writes s as a JSON string: the quote, the backslash and
+// every control character escaped, the runs of other bytes between them
+// as they are, each run in one write.
+func writeQuoted(s ref string, out mut strings.Builder) {
 	out.WriteByte(quotationMark)
 	start := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c >= 0x80 { // a rune of several bytes, written as it is; a byte that starts none is U+FFFD
+		if c >= byte(utf8.RuneSelf) { // a rune of several bytes, written as it is; a byte that starts none is U+FFFD
 			r, size := utf8.DecodeRuneInString(s[i:len(s)])
 			if r != utf8.RuneError || size > 1 {
 				i += size - 1
@@ -391,7 +814,7 @@ func quote(s ref string, out mut strings.Builder) {
 			continue
 		}
 
-		if c >= 0x20 && c != quotationMark && c != escape {
+		if c >= controlEnd && c != quotationMark && c != escape {
 			continue
 		}
 
@@ -399,12 +822,12 @@ func quote(s ref string, out mut strings.Builder) {
 			out.WriteString(s[start:i])
 		}
 
-		match c {
-			'"' => out.WriteString("\\\""),
-			'\\' => out.WriteString("\\\\"),
-			'\n' => out.WriteString("\\n"),
-			'\r' => out.WriteString("\\r"),
-			'\t' => out.WriteString("\\t"),
+		match {
+			c == quotationMark => out.WriteString("\\\""),
+			c == escape => out.WriteString("\\\\"),
+			c == '\n' => out.WriteString("\\n"),
+			c == '\r' => out.WriteString("\\r"),
+			c == '\t' => out.WriteString("\\t"),
 			_ => {
 				out.WriteString("\\u00")
 				out.WriteByte(hex[c >> 4])
@@ -422,79 +845,57 @@ func quote(s ref string, out mut strings.Builder) {
 	out.WriteByte(quotationMark)
 }
 
-// A reader is the text being read, lent, the offset it has reached,
-// and whether the element of an array of a variant's fields it reads
-// next is the first, which no comma comes before.
-struct reader {
-	text  ref string
-	at    int
-	first bool
-	depth int
-	ends  map[int]int // where each array or object skipped ends, by where it begins, so that one is skipped once however deep the scans that skip it
-}
-
-// A key is one key of an object being read: the bytes of its name in
-// the text, from and to, whether they hold an escape, and the offset of
-// its value.
-struct key {
-	from    int
-	to      int
-	escaped bool
-	at      int
-}
-
-// An object is the state of reading an object's members into a struct's
-// fields. While the members come in the order of the fields, each is read
-// where it stands, in one pass; once one does not, the object is scanned
-// whole, where each key's value lies noted, and the fields are found by
-// key. read counts the members read in order.
-struct object {
-	start   int
-	keys    []key
-	scanned bool
-	read    int
-	end     int
-}
-
-func read<T>(r mut reader) Result<T, Error> {
-	r.space()
+// readValue reads one value of T at the reader's offset, after space,
+// chosen by its type: a type's own reading when it lists Unmarshaler,
+// then by what T is, a struct's fields by their keys and an enum by its
+// variants' names; it stops at the first error.
+func readValue<T>(r mut reader) Result<T, Error> {
+	r.skipSpace()
 	return match T {
-		bool => r.boolean(),
-		i8 => Ok(i8(r.integer(-128, 127)?)),
-		i16 => Ok(i16(r.integer(-32768, 32767)?)),
-		i32 => Ok(i32(r.integer(-2147483648, 2147483647)?)),
-		i64 | int => Ok(T(r.integer(-9223372036854775807 - 1, 9223372036854775807)?)),
-		u8 => Ok(u8(r.unsigned(255)?)),
-		u16 => Ok(u16(r.unsigned(65535)?)),
-		u32 => Ok(u32(r.unsigned(4294967295)?)),
-		u64 | uint => Ok(T(r.unsigned(18446744073709551615)?)),
+		Unmarshaler => {
+			start := r.at
+			r.skipValue()?
+			match T.UnmarshalJSON(r.text[start:r.at]) {
+				Ok(v) => Ok(v),
+				Err(e) => Err(Error{at: start + max(e.at, 0), msg: e.msg}),
+			}
+		}
+		bool => r.readBool(),
+		i8 => Ok(i8(r.readInt(int(math.MinInt8), int(math.MaxInt8))?)),
+		i16 => Ok(i16(r.readInt(int(math.MinInt16), int(math.MaxInt16))?)),
+		i32 => Ok(i32(r.readInt(int(math.MinInt32), int(math.MaxInt32))?)),
+		i64 | int => Ok(T(r.readInt(math.MinInt, math.MaxInt)?)),
+		u8 => Ok(u8(r.readUint(uint(math.MaxUint8))?)),
+		u16 => Ok(u16(r.readUint(uint(math.MaxUint16))?)),
+		u32 => Ok(u32(r.readUint(uint(math.MaxUint32))?)),
+		u64 | uint => Ok(T(r.readUint(math.MaxUint)?)),
 		f32 => {
 			start := r.at
-			f := r.float()?
+			f := r.readFloat()?
 			if f > 3.4028234663852886e38 || f < -3.4028234663852886e38 {
 				return Err(Error{at: start, msg: strconv.FormatFloat(f, -1) + " overflows its field"})
 			}
 
 			Ok(f32(f))
 		}
-		*E => Ok(&read<E>(mut r)?),
-		f64 => r.float(),
-		string => r.str(),
+		*E => Ok(&readValue<E>(mut r)?),
+		f64 => r.readFloat(),
+		string => r.readString(),
 		E? => {
-			if r.literal("null") {
+			if r.skipLiteral(literalNull) {
 				return Ok(None)
 			}
 
-			Ok(Some(read<E>(mut r)?))
+			Ok(Some(readValue<E>(mut r)?))
 		}
 		[]E => {
-			r.expect(beginArray)?
-			r.enter()?
+			r.expectByte(beginArray)?
+			r.enterNested()?
 			xs := []E{}
-			if !r.next(endArray)? {
-				xs.Push(read<E>(mut r)?)
-				for r.more(endArray)? {
-					xs.Push(read<E>(mut r)?)
+			if !r.skipClose(endArray)? {
+				xs.Push(readValue<E>(mut r)?)
+				for r.hasNextElement(endArray)? {
+					xs.Push(readValue<E>(mut r)?)
 				}
 			}
 
@@ -503,22 +904,22 @@ func read<T>(r mut reader) Result<T, Error> {
 		}
 		map[K]V => match K {
 			string => {
-				r.expect(beginObject)?
-				r.enter()?
+				r.expectByte(beginObject)?
+				r.enterNested()?
 				m := map[string]V{}
-				if !r.next(endObject)? {
+				if !r.skipClose(endObject)? {
 					for {
-						r.space()
+						r.skipSpace()
 						at := r.at
-						k := r.str()?
+						k := r.readString()?
 						if m.Contains(ref k) {
 							return Err(Error{at: at, msg: "key " + k + " given twice"})
 						}
 
-						r.space()
-						r.expect(nameSeparator)?
-						m[k] = read<V>(mut r)?
-						if !r.more(endObject)? {
+						r.skipSpace()
+						r.expectByte(nameSeparator)?
+						m[k] = readValue<V>(mut r)?
+						if !r.hasNextElement(endObject)? {
 							break
 						}
 					}
@@ -530,51 +931,51 @@ func read<T>(r mut reader) Result<T, Error> {
 		},
 		struct => {
 			start := r.at
-			r.expect(beginObject)?
-			r.enter()?
-			o := object{start: start, keys: []key{}, scanned: false, read: 0, end: 0}
+			r.expectByte(beginObject)?
+			r.enterNested()?
+			o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
 			v := T{ for f := range fields(T) {
-				[f]: if attr(f, Skip).IsNone() && r.member(mut o, ref keyOf(attr(f, Name), f.name))? {
-					read<f.type>(mut r)?
+				[f]: if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
+					readValue<f.type>(mut r)?
 				} else {
 					match f.type {
 						E? => None,
-						_ => f.default ?? omitted<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absent(start, ref keyOf(attr(f, Name), f.name), attr(f, Skip).IsSome())),
+						_ => f.default ?? omittedValue<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absentFieldError(start, ref fieldKey(attr(f, Name), f.name), attr(f, Skip).IsSome())),
 					}
 				}
 			} }
 
-			r.close(mut o)?
+			r.finishObject(mut o)?
 			r.depth -= 1
 			Ok(v)
 		}
 		enum => {
 			start := r.at
 			if r.peek() == quotationMark {
-				name := r.str()?
+				name := r.readString()?
 				for c := range variants(T) {
 					n := 0
 					for f := range fields(c) {
 						n += 1
 					}
 
-					if n == 0 && name == keyOf(attr(c, Name), c.name) {
-						return Ok(c(for f := range fields(c) { read<f.type>(mut r)? }))
+					if n == 0 && name == fieldKey(attr(c, Name), c.name) {
+						return Ok(c(for f := range fields(c) { readValue<f.type>(mut r)? }))
 					}
 				}
 
 				return Err(Error{at: start, msg: "no variant " + name + " without fields"})
 			}
 
-			r.expect(beginObject)?
-			r.enter()?
-			r.space()
-			name := r.str()?
-			r.space()
-			r.expect(nameSeparator)?
-			r.space()
+			r.expectByte(beginObject)?
+			r.enterNested()?
+			r.skipSpace()
+			name := r.readString()?
+			r.skipSpace()
+			r.expectByte(nameSeparator)?
+			r.skipSpace()
 			for c := range variants(T) {
-				if name == keyOf(attr(c, Name), c.name) {
+				if name == fieldKey(attr(c, Name), c.name) {
 					n, named := 0, false
 					for f := range fields(c) {
 						n += 1
@@ -583,34 +984,34 @@ func read<T>(r mut reader) Result<T, Error> {
 
 					v := if named {
 						start := r.at
-						r.expect(beginObject)?
-						o := object{start: start, keys: []key{}, scanned: false, read: 0, end: 0}
+						r.expectByte(beginObject)?
+						o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
 						v := c(for f := range fields(c) {
-							if attr(f, Skip).IsNone() && r.member(mut o, ref keyOf(attr(f, Name), f.name))? {
-								read<f.type>(mut r)?
+							if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
+								readValue<f.type>(mut r)?
 							} else {
 								match f.type {
 									E? => None,
-									_ => omitted<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absent(start, ref keyOf(attr(f, Name), f.name), attr(f, Skip).IsSome())),
+									_ => omittedValue<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absentFieldError(start, ref fieldKey(attr(f, Name), f.name), attr(f, Skip).IsSome())),
 								}
 							}
 						})
 
-						r.close(mut o)?
+						r.finishObject(mut o)?
 						v
 					} else if n == 1 {
-						c(for f := range fields(c) { read<f.type>(mut r)? })
+						c(for f := range fields(c) { readValue<f.type>(mut r)? })
 					} else {
-						r.expect(beginArray)?
+						r.expectByte(beginArray)?
 						r.first = true
-						v := c(for f := range fields(c) { element<f.type>(mut r)? })
-						r.space()
-						r.expect(endArray)?
+						v := c(for f := range fields(c) { readVariantElement<f.type>(mut r)? })
+						r.skipSpace()
+						r.expectByte(endArray)?
 						v
 					}
 
-					r.space()
-					r.expect(endObject)?
+					r.skipSpace()
+					r.expectByte(endObject)?
 					r.depth -= 1
 					return Ok(v)
 				}
@@ -621,23 +1022,29 @@ func read<T>(r mut reader) Result<T, Error> {
 	}
 }
 
-// element reads the next element of an array of a variant's unnamed
-// fields: a comma before it but for the first.
-func element<T>(r mut reader) Result<T, Error> {
-	r.space()
+// readVariantElement reads the next element of an array of a variant's
+// unnamed fields: a comma before it but for the first.
+func readVariantElement<T>(r mut reader) Result<T, Error> {
+	r.skipSpace()
 	if !r.first {
-		r.expect(valueSeparator)?
+		r.expectByte(valueSeparator)?
 	}
 
 	r.first = false
-	return read<T>(mut r)
+	return readValue<T>(mut r)
 }
 
-// space moves past spaces, tabs and line ends.
-func (r mut reader) space() {
-	for r.at < len(r.text) && (r.text[r.at] == ' ' || r.text[r.at] == '\t' || r.text[r.at] == '\n' || r.text[r.at] == '\r') {
+// skipSpace moves past spaces, tabs and line ends.
+func (r mut reader) skipSpace() {
+	for r.at < len(r.text) && isSpace(r.text[r.at]) {
 		r.at += 1
 	}
+}
+
+// isSpace reports whether c is white space between the parts of JSON
+// text: a space, a tab or a line end.
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // peek returns the byte at the offset, or 0 at the end.
@@ -649,42 +1056,42 @@ func (r ref reader) peek() byte {
 	return 0
 }
 
-// fail returns the error for what is at the offset.
-func (r ref reader) fail(msg string) Error {
+// errorHere returns the error for what is at the offset.
+func (r ref reader) errorHere(msg string) Error {
 	return Error{at: r.at, msg: msg}
 }
 
-// missing returns the error for a field the object at the offset at
-// leaves out.
-func missing(at int, name ref string) Error {
+// missingFieldError returns the error for a field the object at the
+// offset at leaves out.
+func missingFieldError(at int, name ref string) Error {
 	return Error{at: at, msg: "missing field " + name}
 }
 
-// absent is the error for a field read with no value to take, at the
-// object at: missing from the text, or skipped, when its type has no
-// empty value and it declares no default.
-func absent(at int, name ref string, skipped bool) Error {
+// absentFieldError returns the error for a field read with no value to
+// take, at the object at: missing from the text, or skipped, when its
+// type has no empty value and it declares no default.
+func absentFieldError(at int, name ref string, skipped bool) Error {
 	if skipped {
 		return Error{at: at, msg: "field " + name + " is skipped and has no default"}
 	}
 
-	return missing(at, name)
+	return missingFieldError(at, name)
 }
 
-// expect moves past the byte c, or fails.
-func (r mut reader) expect(c byte) Result<(), Error> {
+// expectByte moves past the byte c, or fails.
+func (r mut reader) expectByte(c byte) Result<(), Error> {
 	if r.peek() != c {
-		return Err(r.fail("expected " + string(rune(c))))
+		return Err(r.errorHere("expected " + string(rune(c))))
 	}
 
 	r.at += 1
 	return Ok(())
 }
 
-// next moves past the closing byte close when it comes next, after
+// skipClose moves past the closing byte close when it comes next, after
 // space, and reports whether it did.
-func (r mut reader) next(close byte) Result<bool, Error> {
-	r.space()
+func (r mut reader) skipClose(close byte) Result<bool, Error> {
+	r.skipSpace()
 	if r.peek() == close {
 		r.at += 1
 		return Ok(true)
@@ -693,24 +1100,22 @@ func (r mut reader) next(close byte) Result<bool, Error> {
 	return Ok(false)
 }
 
-// more reads what comes after an element: a comma, and there is
+// hasNextElement reads what comes after an element: a comma, and there is
 // another, or the closing byte, and there is none.
-func (r mut reader) more(close byte) Result<bool, Error> {
-	r.space()
-	match r.peek() {
-		',' => {
-			r.at += 1
-			return Ok(true)
-		}
-		_ => {
-			r.expect(close)?
-			return Ok(false)
-		}
+func (r mut reader) hasNextElement(close byte) Result<bool, Error> {
+	r.skipSpace()
+	if r.peek() == valueSeparator {
+		r.at += 1
+		return Ok(true)
 	}
+
+	r.expectByte(close)?
+	return Ok(false)
 }
 
-// literal moves past lit when it comes next, and reports whether it did.
-func (r mut reader) literal(lit ref string) bool {
+// skipLiteral moves past lit when it comes next, and reports whether it
+// did.
+func (r mut reader) skipLiteral(lit ref string) bool {
 	end := r.at + len(lit)
 	if end <= len(r.text) && r.text[r.at:end] == lit {
 		r.at = end
@@ -720,35 +1125,35 @@ func (r mut reader) literal(lit ref string) bool {
 	return false
 }
 
-// boolean reads true or false.
-func (r mut reader) boolean() Result<bool, Error> {
-	if r.literal("true") {
+// readBool reads true or false.
+func (r mut reader) readBool() Result<bool, Error> {
+	if r.skipLiteral(literalTrue) {
 		return Ok(true)
 	}
 
-	if r.literal("false") {
+	if r.skipLiteral(literalFalse) {
 		return Ok(false)
 	}
 
-	return Err(r.fail("expected true or false"))
+	return Err(r.errorHere("expected true or false"))
 }
 
-// enter goes one level deeper into the arrays and objects of the text,
-// and refuses a text nested deeper than maxDepth.
-func (r mut reader) enter() Result<(), Error> {
+// enterNested goes one level deeper into the arrays and objects of the
+// text, and refuses a text nested deeper than maxDepth.
+func (r mut reader) enterNested() Result<(), Error> {
 	r.depth += 1
 	if r.depth > maxDepth {
-		return Err(r.fail("exceeded max depth"))
+		return Err(r.errorHere("exceeded max depth"))
 	}
 
 	return Ok(())
 }
 
-// token returns the bytes of a number at the offset, as JSON writes one,
-// and moves past them: a minus, digits with no leading zero, a fraction
-// and an exponent, each with a digit; nothing when no number begins
-// there.
-func (r mut reader) token() Result<ref string, Error> {
+// readNumberText returns the bytes of a number at the offset, as JSON
+// writes one, and moves past them: a minus, digits with no leading
+// zero, a fraction and an exponent, each with a digit; nothing when no
+// number begins there.
+func (r mut reader) readNumberText() Result<ref string, Error> {
 	start := r.at
 	if r.peek() == '-' {
 		r.at += 1
@@ -756,14 +1161,14 @@ func (r mut reader) token() Result<ref string, Error> {
 
 	if r.peek() == '0' {
 		r.at += 1
-	} else if !r.digits() {
+	} else if !r.skipDigits() {
 		r.at = start
 		return Ok(r.text[start:start])
 	}
 
 	if r.peek() == '.' {
 		r.at += 1
-		if !r.digits() {
+		if !r.skipDigits() {
 			return Err(Error{at: start, msg: "invalid number " + r.text[start:r.at]})
 		}
 	}
@@ -774,7 +1179,7 @@ func (r mut reader) token() Result<ref string, Error> {
 			r.at += 1
 		}
 
-		if !r.digits() {
+		if !r.skipDigits() {
 			return Err(Error{at: start, msg: "invalid number " + r.text[start:r.at]})
 		}
 	}
@@ -786,9 +1191,9 @@ func (r mut reader) token() Result<ref string, Error> {
 	return Ok(r.text[start:r.at])
 }
 
-// digits moves past the digits at the offset, and reports whether there
-// was one.
-func (r mut reader) digits() bool {
+// skipDigits moves past the digits at the offset, and reports whether
+// there was one.
+func (r mut reader) skipDigits() bool {
 	start := r.at
 	for r.at < len(r.text) && r.text[r.at] >= '0' && r.text[r.at] <= '9' {
 		r.at += 1
@@ -797,11 +1202,11 @@ func (r mut reader) digits() bool {
 	return r.at > start
 }
 
-// integer reads a whole number from lo to hi.
-func (r mut reader) integer(lo int, hi int) Result<int, Error> {
+// readInt reads a whole number from lo to hi.
+func (r mut reader) readInt(lo int, hi int) Result<int, Error> {
 	start := r.at
-	text := r.token()?
-	n := strconv.ParseInt(text, 10) ?? return Err(Error{at: start, msg: "expected an integer, found " + quoted(text)})
+	text := r.readNumberText()?
+	n := strconv.ParseInt(text, 10) ?? return Err(Error{at: start, msg: "expected an integer, found " + quotedForMessage(text)})
 	if n < lo || n > hi {
 		return Err(Error{at: start, msg: text + " overflows its field"})
 	}
@@ -809,11 +1214,11 @@ func (r mut reader) integer(lo int, hi int) Result<int, Error> {
 	return Ok(n)
 }
 
-// unsigned reads a whole number from 0 to hi.
-func (r mut reader) unsigned(hi uint) Result<uint, Error> {
+// readUint reads a whole number from 0 to hi.
+func (r mut reader) readUint(hi uint) Result<uint, Error> {
 	start := r.at
-	text := r.token()?
-	n := strconv.ParseUint(text, 10) ?? return Err(Error{at: start, msg: "expected an unsigned integer, found " + quoted(text)})
+	text := r.readNumberText()?
+	n := strconv.ParseUint(text, 10) ?? return Err(Error{at: start, msg: "expected an unsigned integer, found " + quotedForMessage(text)})
 	if n > hi {
 		return Err(Error{at: start, msg: text + " overflows its field"})
 	}
@@ -821,15 +1226,15 @@ func (r mut reader) unsigned(hi uint) Result<uint, Error> {
 	return Ok(n)
 }
 
-// float reads a number.
-func (r mut reader) float() Result<f64, Error> {
+// readFloat reads a number.
+func (r mut reader) readFloat() Result<f64, Error> {
 	start := r.at
-	text := r.token()?
-	return Ok(strconv.ParseFloat(text) ?? return Err(Error{at: start, msg: "expected a number, found " + quoted(text)}))
+	text := r.readNumberText()?
+	return Ok(strconv.ParseFloat(text) ?? return Err(Error{at: start, msg: "expected a number, found " + quotedForMessage(text)}))
 }
 
-// quoted returns text for a message, or "nothing".
-func quoted(text ref string) string {
+// quotedForMessage returns text for a message, or "nothing".
+func quotedForMessage(text ref string) string {
 	if len(text) == 0 {
 		return "nothing"
 	}
@@ -837,12 +1242,13 @@ func quoted(text ref string) string {
 	return text.Clone()
 }
 
-// str reads a JSON string, its escapes decoded, a \u escape with the
-// low half of a pair after a high one read as the one rune they encode.
-func (r mut reader) str() Result<string, Error> {
-	r.expect(quotationMark)?
+// readString reads a JSON string, its escapes decoded, a \u escape with
+// the low half of a pair after a high one read as the one rune they
+// encode.
+func (r mut reader) readString() Result<string, Error> {
+	r.expectByte(quotationMark)?
 	start := r.at
-	for r.at < len(r.text) && r.text[r.at] != quotationMark && r.text[r.at] != escape && r.text[r.at] >= 0x20 {
+	for r.at < len(r.text) && r.text[r.at] != quotationMark && r.text[r.at] != escape && r.text[r.at] >= controlEnd {
 		r.at += 1
 	}
 
@@ -855,37 +1261,35 @@ func (r mut reader) str() Result<string, Error> {
 	b.WriteString(r.text[start:r.at])
 	for {
 		if r.at >= len(r.text) {
-			return Err(r.fail("unterminated string"))
+			return Err(r.errorHere("unterminated string"))
 		}
 
 		c := r.text[r.at]
 		r.at += 1
-		match c {
-			'"' => return Ok(b.String()),
-			'\\' => {
+		match {
+			c == quotationMark => return Ok(b.String()),
+			c == escape => {
 				if r.at >= len(r.text) {
-					return Err(r.fail("unterminated escape"))
+					return Err(r.errorHere("unterminated escape"))
 				}
 
 				e := r.text[r.at]
 				r.at += 1
-				match e {
-					'"' => b.WriteByte(quotationMark),
-					'\\' => b.WriteByte(escape),
-					'/' => b.WriteByte('/'),
-					'b' => b.WriteByte(0x08),
-					'f' => b.WriteByte(0x0c),
-					'n' => b.WriteByte('\n'),
-					'r' => b.WriteByte('\r'),
-					't' => b.WriteByte('\t'),
-					'u' => b.WriteRune(r.escaped()?),
-					_ => return Err(r.fail("invalid escape")),
+				match { // the letter after the escape, and the byte it stands for
+					e == quotationMark || e == escape || e == solidus => b.WriteByte(e),
+					e == 'b' => b.WriteByte('\b'),
+					e == 'f' => b.WriteByte('\f'),
+					e == 'n' => b.WriteByte('\n'),
+					e == 'r' => b.WriteByte('\r'),
+					e == 't' => b.WriteByte('\t'),
+					e == 'u' => b.WriteRune(r.readUnicodeEscape()?),
+					_ => return Err(r.errorHere("invalid escape")),
 				}
 			}
 			_ => {
-				if c < 0x20 {
+				if c < controlEnd {
 					r.at -= 1
-					return Err(r.fail("invalid character in string"))
+					return Err(r.errorHere("invalid character in string"))
 				}
 
 				b.WriteByte(c)
@@ -894,36 +1298,69 @@ func (r mut reader) str() Result<string, Error> {
 	}
 }
 
-// escaped reads what follows \u: a rune, the two halves of a pair read
-// as the one rune they encode; a half without its other is U+FFFD.
-func (r mut reader) escaped() Result<rune, Error> {
-	u := r.hex4()?
-	if u >= 0xdc00 && u < 0xe000 { // a low half alone
-		return Ok(utf8.RuneError)
+// skipString moves past a string, checked as readString checks one, and
+// reports whether it holds an escape, without making a string of it.
+func (r mut reader) skipString() Result<bool, Error> {
+	r.expectByte(quotationMark)?
+	escaped := false
+	for r.at < len(r.text) {
+		c := r.text[r.at]
+		match {
+			c == quotationMark => {
+				r.at += 1
+				return Ok(escaped)
+			}
+			c == escape => { // checked as readString reads it: one of its letters, or a \u escape and its four digits
+				escaped = true
+				r.at += 1
+				if r.at >= len(r.text) {
+					return Err(r.errorHere("unterminated escape"))
+				}
+
+				e := r.text[r.at]
+				r.at += 1
+				match {
+					e == quotationMark || e == escape || e == solidus || e == 'b' || e == 'f' || e == 'n' || e == 'r' || e == 't' => {},
+					e == 'u' => _ = r.readUnicodeEscape()?,
+					_ => return Err(r.errorHere("invalid escape")),
+				}
+			}
+			c < controlEnd => return Err(r.errorHere("invalid character in string")),
+			_ => r.at += 1,
+		}
 	}
 
-	if u < 0xd800 || u >= 0xdc00 {
-		return Ok(rune(u))
+	return Err(r.errorHere("unterminated string"))
+}
+
+// readUnicodeEscape reads what follows \u: a rune, the two halves of a
+// pair read as the one rune they encode; a half without its other is
+// U+FFFD.
+func (r mut reader) readUnicodeEscape() Result<rune, Error> {
+	u := rune(r.readFourHex()?)
+	if !utf16.IsSurrogate(u) {
+		return Ok(u)
 	}
 
 	if r.at + 6 <= len(r.text) && r.text[r.at] == escape && r.text[r.at + 1] == 'u' {
 		at := r.at
 		r.at += 2
-		low := r.hex4()?
-		if low >= 0xdc00 && low < 0xe000 {
-			return Ok(rune(((u - 0xd800) << 10 | (low - 0xdc00)) + 0x10000))
+		paired := utf16.DecodeRune(u, rune(r.readFourHex()?))
+		if paired != utf8.RuneError { // a high half and then a low one
+			return Ok(paired)
 		}
 
-		r.at = at // not a low half: read as an escape of its own
+		r.at = at // no pair: the next escape is read as one of its own
 	}
 
 	return Ok(utf8.RuneError)
 }
 
-// hex4 reads the four hex digits of a \u escape, and nothing else.
-func (r mut reader) hex4() Result<int, Error> {
+// readFourHex reads the four hex digits of a \u escape, and nothing
+// else.
+func (r mut reader) readFourHex() Result<int, Error> {
 	if r.at + 4 > len(r.text) {
-		return Err(r.fail("short \\u escape"))
+		return Err(r.errorHere("short \\u escape"))
 	}
 
 	n := 0
@@ -933,8 +1370,9 @@ func (r mut reader) hex4() Result<int, Error> {
 			c >= '0' && c <= '9' => int(c - '0'),
 			c >= 'a' && c <= 'f' => int(c - 'a') + 10,
 			c >= 'A' && c <= 'F' => int(c - 'A') + 10,
-			_ => return Err(r.fail("invalid \\u escape")),
+			_ => return Err(r.errorHere("invalid \\u escape")),
 		}
+
 		n = n * 16 + d
 	}
 
@@ -942,11 +1380,11 @@ func (r mut reader) hex4() Result<int, Error> {
 	return Ok(n)
 }
 
-// skip moves past one JSON value of any kind. An array or object it
-// has skipped before, in an earlier scan of an object around it, is
+// skipValue moves past one JSON value of any kind. An array or object
+// it has skipped before, in an earlier scan of an object around it, is
 // passed over at once, from where it was found to end.
-func (r mut reader) skip() Result<(), Error> {
-	r.space()
+func (r mut reader) skipValue() Result<(), Error> {
+	r.skipSpace()
 	start := r.at
 	match r.ends.Get(start) {
 		Some(end) => {
@@ -956,40 +1394,41 @@ func (r mut reader) skip() Result<(), Error> {
 		None => {},
 	}
 
-	match r.peek() {
-		'"' => {
-			_ = r.str()?
+	c := r.peek()
+	match {
+		c == quotationMark => {
+			_ = r.readString()?
 		}
-		'[' => {
+		c == beginArray => {
 			r.at += 1
-			r.enter()?
-			if !r.next(endArray)? {
-				r.skip()?
-				for r.more(endArray)? {
-					r.skip()?
+			r.enterNested()?
+			if !r.skipClose(endArray)? {
+				r.skipValue()?
+				for r.hasNextElement(endArray)? {
+					r.skipValue()?
 				}
 			}
 
 			r.depth -= 1
 			r.ends[start] = r.at
 		}
-		'{' => {
-			r.enter()?
-			_ = r.keys(false)?
+		c == beginObject => {
+			r.enterNested()?
+			_ = r.scanKeys(false)?
 			r.depth -= 1
 			r.ends[start] = r.at
 		}
-		't' | 'f' => {
-			_ = r.boolean()?
+		c == literalTrue[0] || c == literalFalse[0] => {
+			_ = r.readBool()?
 		}
-		'n' => {
-			if !r.literal("null") {
-				return Err(r.fail("expected a value"))
+		c == literalNull[0] => {
+			if !r.skipLiteral(literalNull) {
+				return Err(r.errorHere("expected a value"))
 			}
 		}
 		_ => {
-			if len(r.token()?) == 0 {
-				return Err(r.fail("expected a value"))
+			if len(r.readNumberText()?) == 0 {
+				return Err(r.errorHere("expected a value"))
 			}
 		}
 	}
@@ -997,44 +1436,44 @@ func (r mut reader) skip() Result<(), Error> {
 	return Ok(())
 }
 
-// keys reads an object's members from its {, noting each key and the
-// offset of its value when note says so, passing over the values, and
-// leaves the offset after its }. A key given twice is an error.
-func (r mut reader) keys(note bool) Result<[]key, Error> {
-	r.space()
-	r.expect(beginObject)?
-	keys := []key{}
-	if r.next(endObject)? {
+// scanKeys reads an object's members from its {, noting each key and
+// the offset of its value when note says so, passing over the values,
+// and leaves the offset after its }. A key given twice is an error.
+func (r mut reader) scanKeys(note bool) Result<[]objectKey, Error> {
+	r.skipSpace()
+	r.expectByte(beginObject)?
+	keys := []objectKey{}
+	if r.skipClose(endObject)? {
 		return Ok(keys)
 	}
 
 	for {
-		r.space()
-		k := r.keySpan()?
+		r.skipSpace()
+		k := r.readKeySpan()?
 		if note {
-			if r.find(ref keys, ref k) != None {
-				return Err(Error{at: k.from - 1, msg: "key " + r.keyName(ref k) + " given twice"})
+			if r.findKeyValue(ref keys, ref k) != None {
+				return Err(Error{at: k.from - 1, msg: "key " + r.decodeKey(ref k) + " given twice"})
 			}
 		}
 
-		r.space()
-		r.expect(nameSeparator)?
-		r.space()
+		r.skipSpace()
+		r.expectByte(nameSeparator)?
+		r.skipSpace()
 		if note {
-			keys.Push(key{from: k.from, to: k.to, escaped: k.escaped, at: r.at})
+			keys.Push(objectKey{from: k.from, to: k.to, escaped: k.escaped, at: r.at})
 		}
 
-		r.skip()?
-		if !r.more(endObject)? {
+		r.skipValue()?
+		if !r.hasNextElement(endObject)? {
 			return Ok(keys)
 		}
 	}
 }
 
-// keySpan reads a key as the bytes between its quotes, and whether they
-// hold an escape, without making a string of it.
-func (r mut reader) keySpan() Result<key, Error> {
-	r.expect(quotationMark)?
+// readKeySpan reads a key as the bytes between its quotes, and whether
+// they hold an escape, without making a string of it.
+func (r mut reader) readKeySpan() Result<objectKey, Error> {
+	r.expectByte(quotationMark)?
 	from := r.at
 	escaped := false
 	for r.at < len(r.text) && r.text[r.at] != quotationMark {
@@ -1047,43 +1486,44 @@ func (r mut reader) keySpan() Result<key, Error> {
 	}
 
 	if r.at >= len(r.text) {
-		return Err(r.fail("unterminated string"))
+		return Err(r.errorHere("unterminated string"))
 	}
 
 	r.at += 1
-	return Ok(key{from: from, to: r.at - 1, escaped: escaped, at: 0})
+	return Ok(objectKey{from: from, to: r.at - 1, escaped: escaped, at: 0})
 }
 
-// keyName returns the key k as a string, its escapes decoded.
-func (r ref reader) keyName(k ref key) string {
+// decodeKey returns the key k as a string, its escapes decoded.
+func (r ref reader) decodeKey(k ref objectKey) string {
 	if !k.escaped {
 		return r.text[k.from:k.to].Clone()
 	}
 
 	sub := reader{text: r.text, at: k.from - 1, first: false}
-	return sub.str() ?? r.text[k.from:k.to].Clone()
+	return sub.readString() ?? r.text[k.from:k.to].Clone()
 }
 
-// keyIs reports whether the key k is name.
-func (r ref reader) keyIs(k ref key, name ref string) bool {
+// keyEquals reports whether the key k is name.
+func (r ref reader) keyEquals(k ref objectKey, name ref string) bool {
 	if !k.escaped {
 		return r.text[k.from:k.to] == name
 	}
 
-	return r.keyName(k) == name
+	return r.decodeKey(k) == name
 }
 
-// find returns the offset of the value of the key that is the key k, or
+// findKeyValue returns the offset of the value of the key that is the
+// key k, or None.
+func (r ref reader) findKeyValue(keys ref []objectKey, k ref objectKey) int? {
+	name := r.decodeKey(k)
+	return r.findNamedValue(keys, ref name)
+}
+
+// findNamedValue returns the offset of the value of the key name, or
 // None.
-func (r ref reader) find(keys ref []key, k ref key) int? {
-	name := r.keyName(k)
-	return r.findName(keys, ref name)
-}
-
-// findName returns the offset of the value of the key name, or None.
-func (r ref reader) findName(keys ref []key, name ref string) int? {
+func (r ref reader) findNamedValue(keys ref []objectKey, name ref string) int? {
 	for _, k := range keys {
-		if r.keyIs(k, name) {
+		if r.keyEquals(k, name) {
 			return Some(k.at)
 		}
 	}
@@ -1091,40 +1531,40 @@ func (r ref reader) findName(keys ref []key, name ref string) int? {
 	return None
 }
 
-// member moves to the value of the member name of the object o, and
+// seekField moves to the value of the member name of the object o, and
 // reports whether the object has one. While the members come in the
 // order of the fields, the next one is read where it stands; the first
 // that does not makes the object scanned whole from its {, and every
 // field after is found by its key.
-func (r mut reader) member(o mut object, name ref string) Result<bool, Error> {
+func (r mut reader) seekField(o mut objectState, name ref string) Result<bool, Error> {
 	if !o.scanned {
 		at := r.at
-		r.space()
+		r.skipSpace()
 		comma := o.read == 0
 		if o.read > 0 && r.peek() == valueSeparator {
 			r.at += 1
-			r.space()
+			r.skipSpace()
 			comma = true
 		}
 
 		if comma && r.peek() == quotationMark { // a member in order, after the comma that must come before it
-			k := r.keySpan()?
+			k := r.readKeySpan()?
 			if !k.escaped && r.text[k.from:k.to] == name {
-				r.space()
-				r.expect(nameSeparator)?
-				r.space()
+				r.skipSpace()
+				r.expectByte(nameSeparator)?
+				r.skipSpace()
 				o.read += 1
 				return Ok(true)
 			}
 		}
 
 		r.at = o.start // out of order, or no member here: the object whole
-		o.keys = r.keys(true)?
+		o.keys = r.scanKeys(true)?
 		o.end, o.scanned = r.at, true
 		r.at = at
 	}
 
-	match r.findName(ref o.keys, name) {
+	match r.findNamedValue(ref o.keys, name) {
 		Some(at) => {
 			r.at = at
 			return Ok(true)
@@ -1133,23 +1573,135 @@ func (r mut reader) member(o mut object, name ref string) Result<bool, Error> {
 	}
 }
 
-// close leaves the offset after the object o: at its end, when it was
-// scanned whole; past its }, when every member was read in order; and
-// otherwise, members left after the fields, scanned whole, which passes
-// over keys the struct has no field for and finds a key given twice.
-func (r mut reader) close(o mut object) Result<(), Error> {
+// finishObject leaves the offset after the object o: at its end, when
+// it was scanned whole; past its }, when every member was read in
+// order; and otherwise, members left after the fields, scanned whole,
+// which passes over keys the struct has no field for and finds a key
+// given twice.
+func (r mut reader) finishObject(o mut objectState) Result<(), Error> {
 	if !o.scanned {
-		r.space()
+		r.skipSpace()
 		if r.peek() == endObject {
 			r.at += 1
 			return Ok(())
 		}
 
 		r.at = o.start
-		_ = r.keys(true)?
+		_ = r.scanKeys(true)?
 		return Ok(())
 	}
 
 	r.at = o.end
 	return Ok(())
+}
+
+// indexValue reads one value at the reader's offset and records it,
+// then what it holds, in the order the text has them.
+func (d mut Doc) indexValue(r mut reader) Result<(), Error> {
+	r.skipSpace()
+	i := len(d.nodes)
+	start := r.at
+	d.nodes.Push(entry{start: start, end: start, next: 0, kind: Null, escaped: false})
+	c := r.peek()
+	match {
+		c == quotationMark => {
+			d.nodes[i].kind = String
+			d.nodes[i].escaped = r.skipString()?
+		}
+		c == beginArray => {
+			d.nodes[i].kind = Array
+			r.at += 1
+			r.enterNested()?
+			if !r.skipClose(endArray)? {
+				d.indexValue(mut r)?
+				for r.hasNextElement(endArray)? {
+					d.indexValue(mut r)?
+				}
+			}
+
+			r.depth -= 1
+		}
+		c == beginObject => {
+			d.nodes[i].kind = Object
+			r.at += 1
+			r.enterNested()?
+			if !r.skipClose(endObject)? {
+				d.indexMember(mut r)?
+				for r.hasNextElement(endObject)? {
+					d.indexMember(mut r)?
+				}
+			}
+
+			r.depth -= 1
+		}
+		c == literalTrue[0] || c == literalFalse[0] => {
+			d.nodes[i].kind = Bool
+			_ = r.readBool()?
+		}
+		c == literalNull[0] => {
+			if !r.skipLiteral(literalNull) {
+				return Err(r.errorHere("expected a value"))
+			}
+		}
+		_ => {
+			d.nodes[i].kind = Number
+			if len(r.readNumberText()?) == 0 {
+				return Err(r.errorHere("expected a value"))
+			}
+		}
+	}
+
+	d.nodes[i].end = r.at
+	d.nodes[i].next = len(d.nodes)
+	return Ok(())
+}
+
+// indexMember reads one member of an object: its key, a string, its
+// colon and its value.
+func (d mut Doc) indexMember(r mut reader) Result<(), Error> {
+	r.skipSpace()
+	if r.peek() != quotationMark {
+		return Err(r.errorHere("expected a key"))
+	}
+
+	d.indexValue(mut r)?
+	r.skipSpace()
+	r.expectByte(nameSeparator)?
+	return d.indexValue(mut r)
+}
+
+// childByToken returns the node one pointer token names under n: an
+// object's member by its key, or an array's element by its index.
+func (d ref Doc) childByToken(n Node, token ref string) Node? {
+	match d.Kind(n) {
+		Object => return d.Get(n, token),
+		Array => {
+			i := arrayIndex(token) ?? return None
+			return d.Index(n, i)
+		}
+		_ => return None,
+	}
+}
+
+// arrayIndex returns the index a pointer token names in an array, as
+// RFC 6901 writes one: 0, or digits that do not begin with 0; None for
+// any other token, 01, +1 or -0 among them.
+func arrayIndex(token ref string) int? {
+	if len(token) == 0 || len(token) > 1 && token[0] == '0' {
+		return None
+	}
+
+	for i := 0; i < len(token); i++ {
+		if token[i] < '0' || token[i] > '9' {
+			return None
+		}
+	}
+
+	return strconv.Atoi(token).Ok()
+}
+
+// unescapePointer decodes a pointer token that holds an escape: ~1 is
+// the solidus and ~0 the tilde, ~1 first, so that ~01 is ~1.
+func unescapePointer(token ref string) string {
+	return token.ReplaceAll(escapedSolidus, solidusText).ReplaceAll(escapedTilde, tilde)
 }

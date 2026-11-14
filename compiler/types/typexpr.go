@@ -75,13 +75,24 @@ func (c *Checker) typ(e ast.Type) Type {
 	return Typ[Invalid]
 }
 
+// languageResult reports whether e names the language's own Result,
+// which no program has declared one of its own in place of.
+func (c *Checker) languageResult(e *ast.NamedType) bool {
+	if e.Pkg != nil || e.Name.Name != "Result" {
+		return false
+	}
+
+	_, declared := c.scope.LookupParent("Result")
+	return declared == nil
+}
+
 // namedType resolves a name to a type. Result<T, E> is the one name
 // written with type arguments that the language itself knows, unless
 // the program declares a Result of its own, which shadows it as any
 // declaration shadows a predeclared name. A qualified name, io.Error,
 // is looked up in the imported package.
 func (c *Checker) namedType(e *ast.NamedType) Type {
-	if _, declared := c.scope.LookupParent("Result"); e.Pkg == nil && e.Name.Name == "Result" && declared == nil {
+	if c.languageResult(e) {
 		if len(e.Args) != 2 {
 			c.errorf(e.Pos(), "Result takes two type arguments: Result<T, E>")
 			return Typ[Invalid]

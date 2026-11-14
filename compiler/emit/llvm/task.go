@@ -221,6 +221,11 @@ func (e *Emitter) spawnee(fun ast.Expr, pos token.Pos) (string, *types.Signature
 			return name, sig, nil
 		}
 
+		if fn.Static() { // a function of a type: no receiver
+			name, sig := e.staticCallee(fun, pos)
+			return name, sig, nil
+		}
+
 		sig := fn.Type().(*types.Signature)
 		if named, ok := lower.ValueType(sig.Recv().Type()).(*types.Named); ok {
 			name, sig := e.methodNameOf(fun.Sel, named, fun.Sel.Name, pos)

@@ -60,7 +60,7 @@ func (c *Checker) collectDecls(f *ast.File) {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
 			fn := NewFunc(d.Name.Pos(), d.Name.Name, nil)
-			if d.Recv == nil { // a method is attached to its type in resolveDecls
+			if d.Recv == nil && d.Of == nil { // a method, and a function of a type, is attached to its type in resolveDecls
 				c.declare(c.pkg.scope, d.Name, fn)
 			}
 
@@ -317,8 +317,36 @@ func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {
 // receiver names, on a generic type or not: they are in a scope inside
 // the receiver's, so the method's signature and body see both.
 func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
+	var owner *Scope     // the type parameters the function's type names, G<A> of func G<A>.Of
+	var ownerName string // G
+	var ofType Type      // that type, read before the function's own type parameters are in scope
+	if d.Of != nil {     // func Point.Parse: a function of the type, which names its parameters as a receiver does
+		fn.static = true
+		if c.refuseOwner(d) {
+			fn.typ = NewSignature(nil, nil, Unit)
+			c.badMethods[d] = true
+			return
+		}
+
+		scope, ok := c.receiverParams(d.Of, "a function of a type")
+		if !ok {
+			fn.typ = NewSignature(nil, nil, Unit)
+			c.badMethods[d] = true
+			return
+		}
+
+		if scope != nil {
+			c.typeScopes[d] = scope
+			owner, ownerName = scope, d.Of.Name.Name
+			defer c.closeScope()
+		}
+
+		ofType = c.typ(d.Of)
+	}
+
+	var recv *Var
 	if d.Recv != nil {
-		scope, ok := c.receiverParams(d.Recv.Type)
+		scope, ok := c.receiverParams(d.Recv.Type, "a method's receiver")
 		if !ok {
 			fn.typ = NewSignature(nil, nil, Unit)
 			c.badMethods[d] = true // reported once; its signature and body would only repeat the error
@@ -327,20 +355,24 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 
 		if scope != nil {
 			c.typeScopes[d] = scope
+			owner, ownerName = scope, receiverName(d.Recv.Type)
 			defer c.closeScope()
 		}
+
+		recv = NewVar(d.Recv.Pos(), d.Recv.Name.Name, c.typ(d.Recv.Type))
 	}
 
 	var tparams []*TypeParam
 	if len(d.TypeParams) > 0 {
+		for _, tp := range d.TypeParams {
+			if owner != nil && owner.Lookup(tp.Name.Name) != nil { // its own would hide the type's in the signature and body
+				c.errorf(tp.Name.Pos(), tp.Name.Name+" is already a type parameter of "+ownerName+": name "+d.Name.Name+"'s own another way")
+			}
+		}
+
 		tparams = c.typeParams(d.TypeParams)
 		c.typeScopes[d] = c.resolveBounds(d.TypeParams, tparams)
 		defer c.closeScope()
-	}
-
-	var recv *Var
-	if d.Recv != nil {
-		recv = NewVar(d.Recv.Pos(), d.Recv.Name.Name, c.typ(d.Recv.Type))
 	}
 
 	params, variadic := c.params(d.Params)
@@ -361,6 +393,11 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 		default:
 			c.checkBinding(d, sig) // a package's binding to C
 		}
+	}
+
+	if d.Of != nil {
+		c.attachFunc(d, fn, ofType)
+		return
 	}
 
 	if d.Recv == nil {
@@ -384,6 +421,28 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	}
 }
 
+// attachFunc attaches a function of a type, func Point.Parse, to t, the
+// type it names, a declared type of this package, beside its methods,
+// whose names it shares: a type has one member of each name.
+func (c *Checker) attachFunc(d *ast.FuncDecl, fn *Func, t Type) {
+	c.recordDef(d.Name, fn)
+	if t == Typ[Invalid] {
+		return // reported where the type is written
+	}
+
+	named, ok := t.(*Named)
+	if !ok {
+		c.errorf(d.Of.Pos(), "a function of a type is declared on a declared type: func Point."+d.Name.Name+"(...)")
+		return
+	}
+
+	c.recordUse(d.Of.Name, named.obj) // the type it belongs to, which a backend names it after
+
+	if old := named.AddMethod(fn); old != nil {
+		c.errorf(d.Name.Pos(), named.obj.name+"."+d.Name.Name+" redeclared; first declared at "+c.lineCol(old.Pos()))
+	}
+}
+
 func (c *Checker) resolveVar(d *ast.VarDecl) {
 	if d.Type == nil {
 		return
@@ -401,15 +460,61 @@ func (c *Checker) resolveVar(d *ast.VarDecl) {
 	}
 }
 
+// refuseOwner refuses, once, a function of a type declared on what can
+// have none: a trait, a generic one too, func Show.Default(), whose
+// functions belong to the types that implement it; and a declared type
+// of the language, func Result<T, E>.Of(), which no package adds to. It
+// reports whether it did.
+func (c *Checker) refuseOwner(d *ast.FuncDecl) bool {
+	if c.languageResult(d.Of) {
+		c.errorf(d.Of.Pos(), "cannot define new functions on non-local type Result")
+		return true
+	}
+
+	_, obj := c.scope.LookupParent(d.Of.Name.Name)
+	tn, ok := obj.(*TypeName)
+	if !ok {
+		return false
+	}
+
+	switch t := tn.typ.(type) {
+	case *Trait:
+		c.errorf(d.Of.Pos(), t.obj.name+" is a trait: it lists the functions it requires, func "+d.Name.Name+"(...), and each type that implements it declares its own")
+		return true
+	case *Named:
+		if tn.pkg != c.pkg {
+			c.errorf(d.Of.Pos(), "cannot define new functions on non-local type "+t.obj.name)
+			return true
+		}
+	}
+
+	return false
+}
+
+// receiverName returns the name of the type a receiver's type t names,
+// List of (l mut List<T>).
+func receiverName(t ast.Type) string {
+	if r, ok := t.(*ast.RefType); ok {
+		t = r.Elem
+	}
+
+	if n, ok := t.(*ast.NamedType); ok {
+		return n.Name.Name
+	}
+
+	return ""
+}
+
 // receiverParams opens the scope of the type parameters a method's
-// receiver names, (l mut List<T>), when its type is generic, and
-// returns it; it returns nil, with no scope open, for any other
-// receiver. Each argument of the receiver type must be a plain name,
-// as it declares the parameter in that position; a name that is
-// already a type, List<int>, is refused rather than shadowing it,
-// unless it is the declaration's own name for that parameter. ok is
-// false after an error, which leaves the method out.
-func (c *Checker) receiverParams(t ast.Type) (scope *Scope, ok bool) {
+// receiver names, (l mut List<T>), or a function of a type names,
+// func List<T>.Of, when its type is generic, and returns it; it returns
+// nil, with no scope open, for any other type. Each argument of the
+// type must be a plain name, as it declares the parameter in that
+// position; a name that is already a type, List<int>, is refused rather
+// than shadowing it, unless it is the declaration's own name for that
+// parameter, and what says which declaration it is in the message. ok
+// is false after an error, which leaves the function out.
+func (c *Checker) receiverParams(t ast.Type, what string) (scope *Scope, ok bool) {
 	if r, ok := t.(*ast.RefType); ok {
 		t = r.Elem
 	}
@@ -437,7 +542,7 @@ func (c *Checker) receiverParams(t ast.Type) (scope *Scope, ok bool) {
 	names := make([]*ast.Ident, len(n.Args))
 	for i, arg := range n.Args {
 		if names[i] = c.freshName(arg, named.tparams[i]); names[i] == nil {
-			c.errorf(arg.Pos(), "a method's receiver names the type's parameters: "+named.String())
+			c.errorf(arg.Pos(), what+" names the type's parameters: "+named.String())
 			return nil, false
 		}
 	}

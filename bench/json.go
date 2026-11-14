@@ -61,8 +61,20 @@ func main() {
 	}
 
 	decode := time.Since(start)
+	start = time.Now()
+	sum := 0
+	for r := 0; r < rounds; r++ { // untyped: the text read into any, each record's ID read back
+		var doc any
+		_ = json.Unmarshal(raw, &doc)
+		for _, e := range doc.([]any) {
+			sum += int(e.(map[string]any)["ID"].(float64))
+		}
+	}
+
+	untyped := time.Since(start)
 	first := text[0:strings.Index(text, "},")]
 	fmt.Println(len(text), n/rounds, m/rounds, first)
+	fmt.Println(sum / rounds)
 	per := int64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per)
+	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per)
 }

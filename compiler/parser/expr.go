@@ -168,6 +168,8 @@ func (p *Parser) parsePrimaryExpr() ast.Expr {
 
 			if p.tok == token.LPAREN {
 				x = p.parseCall(x, args)
+			} else if p.tok == token.PERIOD { // Pair<int, string>.Of(...): an instance, then a function of it
+				x = &ast.TypeExpr{Type: namedType(x, args)}
 			} else if isLiteralType(x) {
 				x = p.parseCompositeLit(namedType(x, args))
 			} else {
@@ -199,7 +201,8 @@ func (p *Parser) parsePrimaryExpr() ast.Expr {
 // The rule, written in the syntax conventions: it is a type argument
 // list only when x is a name, the tokens up to the matching ">" are all
 // tokens that can occur in a type, and that ">" is directly followed by
-// "(" or "{". The decision is made by a scan over tokens that builds no
+// "(", "{" or ".", the last naming a function of the instance,
+// Pair<int, string>.Of(...). The decision is made by a scan over tokens that builds no
 // nodes, so the common case, a comparison like i < n, costs a few token
 // reads and no allocation. Only when the scan succeeds is the list
 // parsed for real.
@@ -228,7 +231,7 @@ func (p *Parser) parseTypeArgsIfAny(x ast.Expr) []ast.Type {
 		}
 	}
 
-	ok := depth == 0 && (p.tok == token.LPAREN || p.tok == token.LBRACE && p.exprLev >= 0)
+	ok := depth == 0 && (p.tok == token.LPAREN || p.tok == token.LBRACE && p.exprLev >= 0 || p.tok == token.PERIOD)
 	p.restore(saved)
 	if !ok {
 		return nil
@@ -243,6 +246,7 @@ func (p *Parser) parseTypeArgsIfAny(x ast.Expr) []ast.Type {
 //	x, 42, "s", 'c'     Ident, BasicLit
 //	(a, b), (x)         TupleExpr, ParenExpr
 //	[]int, map[K]V      TypeExpr, usually followed by a literal body or a call
+//	Self                TypeExpr, followed by a function of the type, Self.Count()
 //	func(x int) int { }     FuncLit
 //	if c { a } else { b }   IfExpr
 //	match e { ... }         MatchExpr
@@ -260,7 +264,7 @@ func (p *Parser) parseOperand() ast.Expr {
 		return x
 	case token.LPAREN:
 		return p.parseParenOrTuple()
-	case token.LBRACK, token.MAP, token.CHAN, token.STRUCT:
+	case token.LBRACK, token.MAP, token.CHAN, token.STRUCT, token.SELF:
 		return &ast.TypeExpr{Type: p.parseType()}
 	case token.FUNC:
 		typ := p.parseFuncType()
@@ -499,6 +503,11 @@ func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 	} else {
 		x.X = p.parseControlExpr()
 		x.OnType = p.namesType(x.X)
+		if t, ok := x.X.(*ast.TypeExpr); ok {
+			if _, self := t.Type.(*ast.SelfType); self { // its arms are read as a type's, so that this is the one error
+				p.error(t.Pos(), "a match on a type is on a type parameter by its name, and Self is none: pass it to a generic function, describe<Self>(s), and match there")
+			}
+		}
 	}
 
 	if !p.expectLbrace() {
@@ -552,13 +561,34 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 }
 
 // namesType reports whether x, the value of a match, names a type the
-// match is on: a type parameter in scope, or a field's type, f.type.
+// match is on: a type parameter in scope, the function's, its type's,
+// its trait's or a shape's, or a field's type, f.type; or Self, which
+// parseMatchExpr refuses.
 func (p *Parser) namesType(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.Ident:
-		return isTypeParam(p.fn, x.Name) || slices.Contains(p.shapes, x.Name)
+		return isTypeParam(p.fn, x.Name) || p.traitParam(x.Name) || slices.Contains(p.shapes, x.Name)
+	case *ast.TypeExpr:
+		_, self := x.Type.(*ast.SelfType)
+		return self
 	case *ast.SelectorExpr:
 		return x.Sel.Name == "type"
+	}
+
+	return false
+}
+
+// traitParam reports whether name is a type parameter of the trait whose
+// default bodies are being parsed, T of trait Kinds<T>.
+func (p *Parser) traitParam(name string) bool {
+	if p.trait == nil {
+		return false
+	}
+
+	for _, tp := range p.trait.TypeParams {
+		if tp.Name.Name == name {
+			return true
+		}
 	}
 
 	return false

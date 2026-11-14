@@ -74,10 +74,12 @@ type Parser struct {
 
 	// fn is the function whose body is being parsed, whose type
 	// parameters, its own and its receiver's, a match on a type may be
-	// on; shapes are the names the arms around the parse bind, E of []E.
-	// Both are read only when a match is met, so a function allocates
-	// nothing for them.
+	// on; trait is the trait whose default bodies are being parsed, whose
+	// type parameters it may be on too; shapes are the names the arms
+	// around the parse bind, E of []E. They are read only when a match is
+	// met, so a function allocates nothing for them.
 	fn     *ast.FuncDecl
+	trait  *ast.TraitDecl
 	shapes []string
 
 	// attrs are the attributes read so far, by the field, variant or

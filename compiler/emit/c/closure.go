@@ -219,10 +219,9 @@ func (e *Emitter) closureParamList(sig *types.Signature, pos token.Pos) string {
 // funcValue writes a named function as a function value: an adapter
 // that drops the environment, written once, paired with no
 // environment.
-func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
-	sig := fn.Type().(*types.Signature)
+func (e *Emitter) funcValue(sig *types.Signature, symbol string, pos token.Pos) string {
 	pair := e.cType(sig, pos)
-	name := "sn_fnval_" + lower.FuncName(fn)
+	name := "sn_fnval_" + symbol
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		args := make([]string, len(sig.Params()))
@@ -230,7 +229,7 @@ func (e *Emitter) funcValue(fn *types.Func, pos token.Pos) string {
 			args[i] = e.localName(p)
 		}
 
-		call := lower.FuncName(fn) + "(" + strings.Join(args, ", ") + ")"
+		call := symbol + "(" + strings.Join(args, ", ") + ")"
 		if sig.Results() != types.Unit {
 			call = "return " + call
 		}

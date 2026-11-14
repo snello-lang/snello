@@ -86,6 +86,10 @@ func (c *Checker) typeParamOf(x ast.Expr) *TypeParam {
 	}
 
 	if t, known := c.refined[tp]; known {
+		if _, ok := t.(*TypeParam); ok { // an arm naming a trait bounded T and left it open: the match is on T so bounded, by every trait arm around it
+			return c.armParam(tp)
+		}
+
 		c.errorf(id.Pos(), id.Name+" is known here to be "+t.String()+": a match on it would take one arm")
 		return nil
 	}
@@ -166,8 +170,41 @@ func (c *Checker) matchArm(arm *ast.MatchArm, tp *TypeParam) armKnown {
 			break
 		}
 
+		if nt, ok := p.Types[0].(*ast.NamedType); ok && nt.Pkg == nil && len(nt.Args) == 0 && !c.inScope(nt.Name.Name) { // a misspelled type would bind any type, as _ does
+			c.errorf(nt.Pos(), nt.Name.Name+" names no type or trait: an arm for any type is _")
+			ta.Type = Typ[Invalid]
+			if tp != nil {
+				known = c.refineIn(tp, Typ[Invalid])
+			}
+
+			break
+		}
+
 		ta.Binds = c.shapeNames(p.Types[0])
-		ta.Type = c.typ(p.Types[0])
+		if nt, ok := p.Types[0].(*ast.NamedType); ok && len(nt.Args) > 0 && c.namesTrait(nt) {
+			c.errorf(p.Types[0].Pos(), "an arm names a trait without type arguments in this version: "+ast.SourceType(nt)+" is a generic trait's instance")
+			ta.Type = Typ[Invalid]
+		} else {
+			ta.Type = c.typ(p.Types[0])
+		}
+
+		if ta.Type == Typ[Invalid] && tp != nil { // reported: the arm's body reads T as invalid, and says nothing more of it
+			known = c.refineIn(tp, Typ[Invalid])
+			break
+		}
+
+		if tr, ok := ta.Type.(*Trait); ok && tp != nil { // json.Marshaler => ...: any type that implements it, T bounded by it in the arm
+			bounded := NewTypeParam(NewTypeName(p.Types[0].Pos(), tp.obj.name, nil), tp.index)
+			bounded.bounds = append(append([]*Trait(nil), tp.bounds...), tr)
+			if kind, known := c.kinds[tp]; known { // struct => match T { Tag => ... }: still a struct, its parts reachable
+				c.kinds[bounded] = kind
+			}
+
+			ta.Binds = []*TypeParam{bounded}
+			known = c.refineIn(tp, bounded)
+			break
+		}
+
 		if tp != nil && ta.Type != Typ[Invalid] && !Identical(ta.Type, tp) && contains(ta.Type, tp) {
 			c.errorf(p.Types[0].Pos(), "no type is "+ta.Type.String()+": it holds "+tp.obj.name+", the type the match is on; a shape names its parts with names of its own")
 			ta.Type = Typ[Invalid]
@@ -175,13 +212,7 @@ func (c *Checker) matchArm(arm *ast.MatchArm, tp *TypeParam) armKnown {
 
 		if tp != nil && ta.Type != Typ[Invalid] {
 			c.armFits(tp, ta.Type, p.Types[0].Pos())
-			known = armKnown{tp: tp}
-			known.oldType, known.had = c.refined[tp]
-			if c.refined == nil {
-				c.refined = make(map[*TypeParam]Type)
-			}
-
-			c.refined[tp] = ta.Type
+			known = c.refineIn(tp, ta.Type)
 		}
 	case *ast.WildcardPat:
 	}
@@ -194,6 +225,30 @@ func (c *Checker) matchArm(arm *ast.MatchArm, tp *TypeParam) armKnown {
 		c.info.Arms[arm] = ta
 	}
 
+	return known
+}
+
+// armParam returns the type parameter the arm being checked reads tp
+// as: the one a trait arm bounded it as, which an arm nested in that one
+// records its kind on, or tp itself.
+func (c *Checker) armParam(tp *TypeParam) *TypeParam {
+	if bounded, ok := c.refine(tp).(*TypeParam); ok {
+		return bounded
+	}
+
+	return tp
+}
+
+// refineIn makes tp read as t in the arm being checked, and returns what
+// was known of it before, which forget puts back after the arm.
+func (c *Checker) refineIn(tp *TypeParam, t Type) armKnown {
+	known := armKnown{tp: tp}
+	known.oldType, known.had = c.refined[tp]
+	if c.refined == nil {
+		c.refined = make(map[*TypeParam]Type)
+	}
+
+	c.refined[tp] = t
 	return known
 }
 
@@ -225,7 +280,7 @@ func (c *Checker) shapeNames(t ast.Type) []*TypeParam {
 		switch t := t.(type) {
 		case *ast.NamedType:
 			if t.Pkg == nil && len(t.Args) == 0 {
-				if _, obj := c.scope.LookupParent(t.Name.Name); obj == nil {
+				if !c.inScope(t.Name.Name) {
 					tn := NewTypeName(t.Name.Pos(), t.Name.Name, nil)
 					p := NewTypeParam(tn, len(binds))
 					if key {
@@ -255,6 +310,13 @@ func (c *Checker) shapeNames(t ast.Type) []*TypeParam {
 
 	walk(t, false)
 	return binds
+}
+
+// inScope reports whether name names something in the open scopes; in
+// an arm's type, a name that does not names a part of a shape.
+func (c *Checker) inScope(name string) bool {
+	_, obj := c.scope.LookupParent(name)
+	return obj != nil
 }
 
 // armFits refuses an arm whose type the type parameter tp can never
@@ -323,6 +385,10 @@ func ChooseArm(arms []TypeArm, t Type) (int, map[*TypeParam]Type) {
 			if Identical(t, a.Type) {
 				return i, nil
 			}
+		case isTraitArm(a):
+			if implements(t, a.Type.(*Trait)) {
+				return i, map[*TypeParam]Type{a.Binds[0]: t}
+			}
 		default:
 			binds := make(map[*TypeParam]Type, len(a.Binds))
 			if unifyShape(a.Type, t, a.Binds, binds) {
@@ -332,6 +398,28 @@ func ChooseArm(arms []TypeArm, t Type) (int, map[*TypeParam]Type) {
 	}
 
 	return -1, nil
+}
+
+// namesTrait reports whether the named type nt names a trait, of this
+// package or another.
+func (c *Checker) namesTrait(nt *ast.NamedType) bool {
+	var obj Object
+	if nt.Pkg != nil {
+		if pkg, ok := c.resolve(nt.Pkg.Name).(*PkgName); ok && pkg.pkg != nil {
+			obj = pkg.pkg.scope.Lookup(nt.Name.Name)
+		}
+	} else {
+		obj = c.resolve(nt.Name.Name)
+	}
+
+	return traitOf(obj) != nil
+}
+
+// isTraitArm reports whether the arm a names a trait, which a type
+// takes when it implements it.
+func isTraitArm(a TypeArm) bool {
+	_, ok := a.Type.(*Trait)
+	return ok
 }
 
 // kindOf returns "struct" or "enum" for a declared struct or enum type,
@@ -470,8 +558,8 @@ func (c *Checker) partsOf(call *ast.CallExpr, b *Builtin) (Type, *Part) {
 	if ok {
 		switch obj := c.lookup(id).(type) {
 		case *TypeName:
-			if tp, ok := obj.typ.(*TypeParam); ok && c.kinds[tp] == want {
-				return tp, nil
+			if tp, ok := obj.typ.(*TypeParam); ok && c.kinds[c.armParam(tp)] == want {
+				return c.armParam(tp), nil
 			}
 		case *Part:
 			if obj.variant && b.id == BuiltinFields {

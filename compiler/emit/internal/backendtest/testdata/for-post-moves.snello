@@ -1,0 +1,97 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A for loop's post statement that moves or replaces an owned value runs
+// on every pass: a string moved in from a variable the body makes again,
+// a struct's field given a new string, an option of a string emptied,
+// and an int counted as before. So does one whose place is found by a
+// call, an element at an index a function gives and a field of what a
+// function lends, and a map's slot while the body grows the map.
+
+package main
+
+import ("fmt"; "strconv")
+
+struct Count { n int; calls int }
+
+func at(n mut int) int {
+	*n += 1
+	return *n % 3
+}
+
+func (c mut Count) pick() mut Count {
+	c.calls += 1
+	return c
+}
+
+struct Box { s string }
+
+func main() {
+	cur := "a".Clone()
+	next := "b".Clone()
+	n := 0
+	for ; n < 3; cur = next {
+		fmt.Println(cur)
+		next = cur.Clone() + "+"
+		n += 1
+	}
+
+	b := Box{s: "x".Clone()}
+	for i := 0; i < 2; b.s = b.s.Clone() + "y" {
+		fmt.Println(b.s)
+		i += 1
+	}
+
+	var o string? = Some("o".Clone())
+	for m := 0; m < 2; o = None {
+		fmt.Println(o.IsSome())
+		m += 1
+	}
+
+	k := 0
+	for j := 0; j < 4; j = j + 2 {
+		k += 1
+	}
+
+	fmt.Println(k)
+	xs := []int{0, 0, 0}
+	ys := []int{0, 0, 0}
+	zs := []int{0, 0, 0}
+	c, d, e := 0, 0, 0
+	for i := 0; i < 3; xs[at(mut c)] = i {
+		i += 1
+	}
+
+	for i := 0; i < 3; ys[at(mut d)] += 2 {
+		i += 1
+	}
+
+	for i := 0; i < 3; zs[at(mut e)]++ {
+		i += 1
+	}
+
+	fmt.Println(xs, ys, zs, c, d, e)
+	m := map[string]int{}
+	m["a"] = 0
+	m["b"] = 0
+	for g := 0; g < 3; m["a"] += 1 {
+		for i := 0; i < 200; i++ {
+			m[strconv.Itoa(g * 1000 + i)] = i
+		}
+
+		g += 1
+	}
+
+	for g := 0; g < 3; m["b"]++ {
+		g += 1
+	}
+
+	fmt.Println(m["a"], m["b"], len(m))
+	var cnt Count
+	for i := 0; i < 4; cnt.pick().n += 1 {
+		i += 1
+	}
+
+	fmt.Println(cnt.n, cnt.calls)
+}

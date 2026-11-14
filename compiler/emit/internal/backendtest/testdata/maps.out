@@ -12,3 +12,6 @@ a b true map[(1, 2):a (2, 1):b]
 map[a:6 b:4 c:2]
 map[a:[1 2]] 0 map[a:[1 2]]
 zero false
+map[x:2 y:-1]
+map[a:map[b:1] new:map[c:1]] map[k:[0 7 1]]
+[4 0] map[z:1]

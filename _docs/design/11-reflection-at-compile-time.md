@@ -13,12 +13,12 @@ Package `encoding/json` in the standard library is written this way, and shows h
 Encoding, for any type the arms cover:
 
 ```go
-func write<T>(v ref T, out mut strings.Builder) {
+func writeValue<T>(v ref T, out mut strings.Builder) {
     match T {
         bool => out.WriteString(if v { "true" } else { "false" })
         i8 | i16 | i32 | i64 | int => out.WriteString(strconv.Itoa(int(v)))
         f64 => out.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
-        string => quote(mut out, v)
+        string => writeQuoted(ref v, mut out)
         E? => match v { Some(x) => write(x, mut out), None => out.WriteString("null") }
         []E => {
             out.WriteByte('[')
@@ -34,16 +34,16 @@ func write<T>(v ref T, out mut strings.Builder) {
             for f := range fields(T) {              // written out once per field
                 if !first { out.WriteByte(',') }
                 first = false
-                quote(mut out, f.name)               // a constant string
+                writeQuoted(ref f.name, mut out)               // a constant string
                 out.WriteByte(':')
-                write(ref v.[f], mut out)            // the field, lent
+                writeValue(ref v.[f], mut out)            // the field, lent
             }
             out.WriteByte('}')
         }
         enum => match v {
             for c := range variants(T) => {         // one arm per variant: v holds c in it
                 out.WriteString("{")
-                quote(mut out, c.name)
+                writeQuoted(ref c.name, mut out)
                 out.WriteString(":{")
                 ...                                  // fields(c), as a struct's
                 out.WriteString("}}")
@@ -53,29 +53,29 @@ func write<T>(v ref T, out mut strings.Builder) {
 }
 ```
 
-For `struct Point { X int; Y int }`, `write<Point>` is compiled as if it read:
+For `struct Point { X int; Y int }`, `writeValue<Point>` is compiled as if it read:
 
 ```go
 out.WriteByte('{')
-quote(mut out, "X"); out.WriteByte(':'); write<int>(ref v.X, mut out)
+writeQuoted(ref "X", mut out); out.WriteByte(':'); writeValue<int>(ref v.X, mut out)
 out.WriteByte(',')
-quote(mut out, "Y"); out.WriteByte(':'); write<int>(ref v.Y, mut out)
+writeQuoted(ref "Y", mut out); out.WriteByte(':'); writeValue<int>(ref v.Y, mut out)
 out.WriteByte('}')
 ```
 
-and `write<int>` as the one line of its arm.
+and `writeValue<int>` as the one line of its arm.
 
 Decoding builds the value from its fields, each found in the input by its name, of the field's own type:
 
 ```go
-func read<T>(r mut reader) Result<T, Error> {
+func readValue<T>(r mut reader) Result<T, Error> {
     match T {
         ...
         struct => {
-            r.object()?                              // notes where each key's value lies
+            var o objectState                            // where each key's value lies, once a key comes out of order
             return Ok(T{ for f := range fields(T) {
-                [f]: if r.key(f.name) { read<f.type>(mut r)? }
-                     else { f.default ?? return Err(r.missing(f.name)) }
+                [f]: if r.seekField(mut o, f.name)? { readValue<f.type>(mut r)? }
+                     else { f.default ?? return Err(missingFieldError(r.at, f.name)) }
             } })
         }
     }
@@ -102,9 +102,12 @@ A `match` on a type parameter of the function, or of its receiver's type, choose
 | `E?`, `[]E`, `*E` | an option, a slice, an owned pointer | `E` is a type parameter of the arm's |
 | `map[K]V` | a map | `K` and `V`, `K` with `Eq` and `Hash` |
 | `struct`, `enum` | any struct, any enum | `T`'s fields or variants are reached |
+| `json.Marshaler`, a trait | any type that implements it | `T` is bounded by the trait: its methods and functions are called |
 | `_` | any other type | |
 
 - **Arms are tried in order**, the first that fits taken: `Point` before `struct` handles `Point` its own way.
+- **An arm may name a trait.** It takes any type that implements the trait, and in it `T` is bounded by the trait as a `T: json.Marshaler` would be, so `v.MarshalJSON(...)` and `T.UnmarshalJSON(...)`, a function of the type (`00-syntax-conventions.md`, Functions of a type), are called on it; each instance calls the type's own. A library puts it first, so a type with its own encoding is written its own way and every other by its fields. A generic trait is not named in an arm in this version, with its arguments, `Conv<int>`, or binding them, `Iterator<E>`: `an arm names a trait without type arguments in this version`. A match inside the arm is on `T` so bounded, and its `struct` or `enum` arm reaches the parts as any does, the trait's methods still callable.
+- **An arm's name names something.** A whole arm that is a name nothing declares, `Shw`, would bind any type as a shape's name does and take every type the arms after it are for, so it is refused: `Shw names no type or trait: an arm for any type is _`.
 - **An arm naming a type takes that type alone.** A type declared over another, `type Celsius f64`, is a type of its own, as it is to assignment, and takes an arm that names it, its kind's, `struct` for a type declared over a struct, or `_`, never the `f64` arm: a `Celsius` written as an `f64` would lose what its name says, and an arm that wants every type declared over `f64` would have no way to name them. Go's type switch matches a declared type by its name alone, as here.
 - **An arm reads `T` as what it matched.** `v` of type `ref T` in an `int` arm is a `ref int`, and in a `[]E` arm a `ref []E` whose elements are `E`. A shape's names, `E`, `K`, `V`, are type parameters of the arm, and a `match` on one of them is a match on a type as `match T` is.
 - **It is not exhaustive by itself.** A type no arm matches is refused where the function is used with it (section 4); an arm `_` takes every type the others do not.
@@ -115,7 +118,7 @@ A `match` on a type parameter of the function, or of its receiver's type, choose
 
 In a `struct` arm, `fields(T)` gives the struct's fields to a `for` loop, which the compiler writes out once for each:
 
-- **`f.name`** is the field's name as declared, a constant string. **`f.type`** is its type, written where a type is, `read<f.type>(...)`, and matched with `match f.type`. **`f.default`** is its default (`00-syntax-conventions.md`, Default field values), an `f.type?`, `None` for a field that declares none.
+- **`f.name`** is the field's name as declared, a constant string. **`f.type`** is its type, written where a type is, `readValue<f.type>(...)`, and matched with `match f.type`. **`f.default`** is its default (`00-syntax-conventions.md`, Default field values), an `f.type?`, `None` for a field that declares none.
 - **`v.[f]`** is the field `f` of `v`, as `v.x` is the field `x`. It is lent: read through a `ref`, changed through a `mut`, never moved out of `v`, since the function cannot know whether `T` implements `Drop` (`00-syntax-conventions.md`, Destructors), and a field moved out of such a value would be read by its `Drop`. Its type is `f.type`, a type parameter of the loop with no bounds.
 - **A value is built from its fields** by a literal with one loop in it, `T{ for f := range fields(T) { [f]: value } }`, which names every field, each given its line's value in the order of the fields; a `?` that leaves drops the fields made before it, as in any literal.
 - **The loop holds no `break`, `continue`, `defer` or `select`.** It is written out once per field, and each copy is a block of its own.
@@ -136,7 +139,7 @@ match v {
 
 Reflection reaches what code written by hand could, and a type opens itself to more by saying so:
 
-- **A function reaches the fields its package can name**: every field of a type of its own package, the exported fields of another's. A struct of another package with a field the function cannot name is refused where the function is used with it, naming the field: `json.Marshal<Config>, json.write<Config>: field port of Config is not exported; export it, or list Reflect on Config`. Nothing is passed over in silence.
+- **A function reaches the fields its package can name**: every field of a type of its own package, the exported fields of another's. A struct of another package with a field the function cannot name is refused where the function is used with it, naming the field: `json.Marshal<Config>, json.writeValue<Config>: field port of Config is not exported; export it, or list Reflect on Config`. Nothing is passed over in silence.
 - **`Reflect` opens a type to every package.** A type that lists the predeclared marker trait `Reflect`, `struct Config impl Reflect { port int }`, has all its fields reached by any reflecting function, and may be built by one: its package says so where it declares the type. A type that does not list it keeps what it keeps, so an `rc.Rc`, an `os.File` or a `sync.Mutex`, none of which lists it, is never read or forged by reflection.
 - **`Reflect` opens what its package declares.** A type declared over another package's struct, `type Mine refl.Own`, is a type of the program's, but the fields are `refl`'s: listing `Reflect` on `Mine` opens none of them, `field hidden of Mine is not exported by refl, which declares it`, since a package cannot open what another keeps.
 - **A variant** is reached by the same rule as a field: an enum of another package with a variant the function cannot name is refused unless the enum lists `Reflect`. A variant's fields are reached where the variant is, by their place, as a pattern of another package binds them whatever their names.
@@ -146,7 +149,7 @@ Reflection reaches what code written by hand could, and a type opens itself to m
 
 A reflecting function is checked once. What depends on the type it is used with is asked by the checker, after the package's functions are checked, for each type a reflecting function is used with, directly or through another generic function: from every call with types known, it follows the calls of generic functions inside, with the types each is given, through the arms each type takes and the fields each loop gives. Each question is asked once per function and type, and a mistake is reported once, at the call the program wrote, with the chain that led there:
 
-- **No arm matches.** `json.Marshal<Server>, json.write<Server>, json.write<chan int>: no arm of the match on T takes chan int`.
+- **No arm matches.** `json.Marshal<Server>, json.writeValue<Server>, json.writeValue<chan int>: no arm of the match on T takes chan int`.
 - **A field or variant is not reached** (section 3), or holds a borrow.
 - **The types grow without end.** A function given a type that holds the type an earlier call of it on the chain was given, which holds the type a call before that was given, so that the types have grown twice through its arms, is refused: `f<int>, f<[]int>: f<[][]int> holds f<[]int>, which holds f<int>; the types grow without end`. A recursive type, an enum `Value` holding `[]Value`, does not grow: `write<Value>` asks for `write<[]Value>`, which asks for `write<Value>`, already asked for.
 - **The calls go deeper than the checker follows.** A chain of more than 256 calls of generic functions, each with types not asked about before, is refused at the call it began from, naming its ends, `f0<string>, ..., f255<string>, f256<string>: the calls of generic functions go deeper than 256, more than the compiler follows`, so that every instance a backend compiles has been asked about.
@@ -171,6 +174,7 @@ Package `encoding/json` is written over reflection, with nothing per type: `Mars
 - **Nesting is bounded at 128**, `serde_json`'s limit, in a value read and in one passed over: a task's stack does not grow, and each level the reader goes into takes a frame of it, so a text of ten thousand `[` is an error, `exceeded max depth`, not a crash. Go's reader nests to 10000 on a stack that grows.
 - **A float is written as Go's `encoding/json` writes it**: its shortest text, in plain decimals from `1e-6` up to `1e21` and with an exponent outside, `1e-7`, `1e+21`; an `f32` by its own shortest text, `0.1`, not the `f64`'s.
 - **A string is written as it is**, with `"`, `\`, the control characters escaped and a byte of invalid UTF-8 written `\ufffd`, as Go writes it. Nothing is escaped for HTML, as `serde_json` writes it: Go's escapes `<`, `>` and `&` by default, for a text pasted into a page, which a library for data has no reason to assume.
+- **A type with its own JSON.** A type that lists `json.Marshaler` is written by its `MarshalJSON`, whose text `Marshal` checks is one JSON value, as Go's does; one that lists `json.Unmarshaler` is read by `UnmarshalJSON`, a function of the type (`00-syntax-conventions.md`, Functions of a type), given the raw text of its value, so a type with no zero value decodes itself, which Go's method on a zero value cannot do; an offset in its error counts from where the value began. Both arms come first in json's match on `T`.
 - **An owned pointer, `*E`,** is the value it points at, and reading one allocates it, so a recursive struct through a pointer, `struct Node { V int; Up *Node? }`, round-trips.
 
 ## 7. What it costs
@@ -202,3 +206,52 @@ The precedents: Go writes a field's options in a struct tag, a string the compil
 Memory safe, no collector: an attribute is a constant, of the types a constant may have, held by the compiler in a table by the declaration it is written on, so that two packages' declarations at the same offset of their files never share attributes (after a table keyed by position gave one package's field another's); `attr` writes it in the code as any constant is written, and nothing of it is allocated, kept or freed when the program runs.
 
 For maintainers: `@` is `token.AT`. The parser keeps a file's attributes beside its tree, `ast.File.Attrs`, by the field, variant or declaration each is written on, as `go/ast` keeps comments, so a node written without any is no larger (`parseAttrs`). The checker's `checkAttrs` in `compiler/types/attr.go` checks them once the impl lists are known: each a constant by the constant rules, a constant's name or the name of a struct with no fields, of a type that lists `Attribute`, none twice; it records them in `Info.Attrs` by the declaration they are written on, a type's name, a field or a variant, so that a `Var` grows by nothing; `Info.TypeAttr`, `FieldAttr`, `VariantAttr` and `VariantFieldAttr` find an instance's through its generic type's declaration. A conversion that keeps a string a string or a bool a bool is a constant expression for this, `json.Name("host")`. `attrCall` checks `attr`; `lower.AttrOf` finds the attribute a copy and an instance read, and both backends write it as `Some` of the folded constant, `Some` of the type's zero for a struct with no fields, or `None`.
+
+## 9. JSON without a type: `json.Doc`, `json.Value` and `json.Raw`
+
+A program does not always know the type of the JSON it reads: a configuration with keys it passes through, a response it reads one field of, a document it edits. Go reads such text into `any`, a tree of `map[string]any`, `[]any` and `float64` the program then asserts its way through, with an allocation for every value and every number made a `float64`, so an ID past 2^53 comes back changed. Snello gives two kinds of untyped JSON, a borrowed view that reads and an owned tree that edits, and a raw field that passes a value through.
+
+### `json.Doc`, a view of the text
+
+`json.Parse(text ref string) Result<Doc, Error>` checks the text once and builds nothing but an index: where each value begins and ends, and where a container's values end. A `Doc` borrows the text, so the text outlives it, which the borrow checker holds a program to with no lifetime written; nothing in the text is copied.
+
+A value of the document is a `json.Node`, an index into the `Doc`, and the `Doc` answers what each node is, as Snello's arenas answer for their indices (`02-arenas-and-indices.md`):
+
+```go
+doc := json.Parse(ref text)?
+port := doc.At(doc.Root(), "/servers/0/port")         // an RFC 6901 pointer, a Node?
+n := doc.Int(port ?? return Err(missing)) ?? 8080
+for m := range doc.Members(doc.Root()) {              // in the order the text has them
+    fmt.Println(m.Key, doc.Text(m.Value))              // ref strings into the text
+}
+cfg := doc.Decode<Config>(node)?                      // one part read as a type
+```
+
+- **What a node is.** `doc.Kind(n)`, and `doc.Bool(n)`, `doc.Int(n)`, `doc.Float(n)`, `doc.String(n)`, each an option, `None` for a node of another kind or a number its type cannot hold; `doc.Text(n)` the node's text as the input has it, a `ref string` with nothing copied.
+- **Where its parts are.** `doc.Get(n, key)`, `doc.Index(n, i)`, `doc.At(n, pointer)`, each a `Node?`; `doc.Len(n)`; `doc.Elements(n)` and `doc.Members(n)`, loops over an array's elements and an object's members, a member's key a `ref string` into the text.
+- **`String` copies; `StringInPlace` does not.** `doc.StringInPlace(n)` is the string's value read in place, a borrow of the text between its quotes with nothing copied, which it can give only when the string holds no escape, `None` when it does; `doc.String(n)` decodes the value into a string of its own either way, which outlives the `Doc`. A program reads keys, IDs and names in place and falls back to `String`, `doc.StringInPlace(n) ?? return slowPath(doc.String(n))`.
+- **`Decode<T>(n)` reads one part as a type**, the typed decoder of this package over that part's text, so a program reads the one object it knows the shape of and leaves the rest untouched; an offset in its error counts from the start of the whole text.
+- **Why an index and not a node holding the document.** A node that held a borrow of the `Doc` and handed out views of the text would need the borrow it returns to come from the one a value it was given holds, which Snello's rule for returned borrows does not reach: a returned borrow comes from a borrowed parameter (`04-borrows-ref-and-mut.md`). Rust says it with a lifetime on the node, `Node<'a>`, which Snello does not write. Every view a `Doc` gives is of its own `ref` receiver, which the rule reaches, and a node is a number a program may copy and keep.
+- **The index is made in one pass.** It is built while the text is checked, a few words for each value; a skipped value is passed over in one step from the index, not byte by byte. A pass with SIMD in the C runtime, as simdjson finds the structural characters sixteen or thirty-two bytes at a time, is the next step if the measurement asks for it.
+
+### `json.Value`, an owned tree
+
+```go
+enum Value { Null; Bool(bool); Number(Number); String(string); Array([]Value); Object(Object) }
+```
+
+- **A number keeps its text**, `Number`, so a 64-bit ID or a long decimal round-trips exactly; `Int()`, `Float()` and `Text()` read it as wanted. Go's `any` makes it a `float64`.
+- **An object keeps its members in order**, as the text had them, and is written back in that order, as C#'s `JsonNode` and `serde_json` with `preserve_order` do; `Get`, `Set` and `Remove` reach a member by key.
+- **It is read and written as any type is**, `Unmarshal<json.Value>(text)` and `Marshal(ref v)`, or made from a node of a `Doc`, `doc.Value(n)`, and has `At` for a pointer as a `Doc` does.
+
+### `json.Raw`, a value passed through
+
+A field of type `json.Raw` keeps the text of its value as the input has it, checked to be one value, and `Marshal` writes it as it is, compacted: a struct reads the part it knows and passes the rest on. It owns its text, since a field of a value `Unmarshal` returns cannot borrow the input (section 3); a program that wants the text without a copy reads it from a `Doc`.
+
+### Memory safe, no collector
+
+A `Doc` borrows the text and is checked as every borrow is, and its nodes are numbers: the text cannot change or go while a `Doc` of it is used, and nothing is freed by a collector, since a `Doc` owns its index alone and a `Value` is a tree of owned values dropped once. The SIMD pass reads the text within its bounds, its last block padded, and writes only the index it owns.
+
+### What it costs
+
+`bench/json` measures, against Go's standard library: parsing a document and reading a few fields with a `Doc` against `encoding/json.Unmarshal` into `any` and reading the same fields; `json.Valid` against `Parse`; and a round trip through `Value` against one through `any`. A `Doc` is to make one allocation for its index where Go's `any` makes one for every value.

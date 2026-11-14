@@ -40,8 +40,8 @@ func TestClone(t *testing.T) {
 }
 
 // TestRewrite replaces expressions wherever they stand under a node,
-// inside a statement, an argument list and a nested call, and leaves
-// the rest as it was.
+// inside a statement, an argument list, a nested call and a match arm's
+// value, whose slot is a Node, and leaves the rest as it was.
 func TestRewrite(t *testing.T) {
 	body := &BlockStmt{List: []Stmt{
 		&ExprStmt{X: &CallExpr{Fun: &Ident{Name: "f"}, Args: []Expr{&Ident{Name: "a"}, &CallExpr{Fun: &Ident{Name: "g"}, Args: []Expr{&Ident{Name: "a"}}}}}},
@@ -62,6 +62,18 @@ func TestRewrite(t *testing.T) {
 
 	if got := Source(body.List[1].(*ReturnStmt).Results[0]); got != "b" {
 		t.Errorf("the result is %s, want b", got)
+	}
+	arm := &MatchArm{Pat: &WildcardPat{}, Body: &Ident{Name: "a"}} // a value arm's body is a Node
+	Rewrite(arm, func(x Expr) Expr {
+		if id, ok := x.(*Ident); ok && id.Name == "a" {
+			return &Ident{Name: "b"}
+		}
+
+		return x
+	})
+
+	if got := Source(arm.Body.(Expr)); got != "b" {
+		t.Errorf("the arm's value is %s, want b", got)
 	}
 }
 

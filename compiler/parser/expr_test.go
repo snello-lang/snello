@@ -102,6 +102,7 @@ func TestExprs(t *testing.T) {
 		{"if match { T{a: 1}.a == x => c, _ => d } { a } else { b }", "if match { (T{a: 1}.a == x) => c; _ => d } {...} else {...}"}, // the arms are a body of their own, even in a control clause
 		{"match match { T{a: 1}.a == x => 1, _ => 2 } { 1 => a, _ => b }", "match match { (T{a: 1}.a == x) => 1; _ => 2 } { 1 => a; _ => b }"},
 		{"f(if c { a } else { b })", "f(if c {...} else {...})"},
+		{"Self.Count() * 2", "(Self.Count() * 2)"}, // a function of the implementing type, in a trait's default body
 	}
 	for _, tt := range tests {
 		x, errs := parseExprString(tt.src)
@@ -329,6 +330,7 @@ func TestReflection(t *testing.T) {
 		{"func F<T>(v ref T) { x := match T { bool => 1, i8 | int => 2, []E => 3, map[K]V => 4, E? => 5, struct => 6, enum => 7, _ => 9 } }",
 			"match T { bool => 1; i8 | int => 2; []E => 3; map[K]V => 4; (E)? => 5; struct => 6; enum => 7; _ => 9 }"},
 		{"func (b ref Box<T>) F() { x := match T { int => 1, _ => 2 } }", "match T { int => 1; _ => 2 }"}, // the receiver's type parameter
+		{"func Box<T>.K() { x := match T { []E => 1, _ => 2 } }", "match T { []E => 1; _ => 2 }"},         // the type parameter of the type a function belongs to
 		{"func F<T>(v ref T) { x := v.[f] }", "v.[f]"},
 		{"func F<T>(v ref T) { x := v.[f].[g] }", "v.[f].[g]"},
 		{"func F<T>() T { x := T{ for f := range fields(T) { [f]: F() } } }", "T{for f := range fields(T) { [f]: F() }}"},
@@ -358,6 +360,8 @@ func TestReflection(t *testing.T) {
 	errs := []struct{ src, want string }{
 		{"func F<T>() { x := match T { int if true => 1, _ => 2 } }", "an arm of a match on a type takes no guard"},
 		{"func F<T>(v T) { x := v.[1] }", "expected identifier, found '1'"},
+		{"func Box<T>.K() { x := match U { []E => 1, _ => 2 } }", "expected"}, // U is no type parameter, so its arms are values
+		{"trait D { func (s ref Self) D() int { return match Self { struct => 1, _ => 2 } } }", "a match on a type is on a type parameter by its name, and Self is none"},
 	}
 	for _, tt := range errs {
 		_, _, err := ParseFile("test.snello", []byte("package p\n"+tt.src))

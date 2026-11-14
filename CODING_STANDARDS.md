@@ -117,6 +117,7 @@ Compile time is a feature, and in Go the way to lose it is allocation: every obj
 
 ## Snello code in `examples/` and `std/`
 
+- Snello code is written as chapter 27 of the book, `_docs/book/27-writing-snello.md`, sets down: the file layout, names, named constants, method order, comments, errors and signatures. Every package under `std/` is held to it.
 - Each file under `examples/` begins with a comment stating what the program tests; each package under `std/` begins with a package comment, as a Go package does, and every exported name has a doc comment that starts with the name.
 - A library function the runtime provides is declared without a body, and its doc comment says so.
 - Syntax follows `_docs/design/00-syntax-conventions.md`. When an example needs something the conventions do not cover, the conventions change first, then the example.

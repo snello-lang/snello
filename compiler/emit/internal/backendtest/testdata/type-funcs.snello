@@ -1,0 +1,102 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Functions of a type: one calling another of its type, one with type
+// parameters of its own, one of a generic type's instance, one a trait
+// requires called through a bound on a type parameter, one taken as a
+// value, a generic type's instance's taken as one, deferred and spawned
+// ones, and a value boxed into a trait that requires one, whose methods
+// are called through the trait value, one a trait's default body calls
+// on Self, and one of a generic type that matches on the type's
+// parameter and walks its fields.
+
+package main
+
+import "fmt"
+
+struct Point { x int; y int }
+
+func Point.Of(x int, y int) Point { return Point{x: x, y: y} }
+
+func Point.Diag(n int) Point { return Point.Of(n, n) }
+
+func Point.Twice<T: Clone>(v T) (T, T) { return (v.Clone(), v) }
+
+struct Pair<A, B> { a A; b B }
+
+func Pair<A, B>.With<C>(a A, b B, c C) (Pair<A, B>, C) { return (Pair<A, B>{a: a, b: b}, c) }
+
+func Pair<A, B>.Of(a A, b B) Pair<A, B> { return Pair<A, B>{a: a, b: b} }
+
+trait Parse { func Parse(s ref string) Self? }
+
+struct Q impl Parse { n int }
+
+func Q.Parse(s ref string) Q? { return Some(Q{n: len(s)}) }
+
+func parsed<T: Parse>(s ref string) T? { return T.Parse(s) }
+
+func Point.Say(s string) { fmt.Println("say", s) }
+
+func Point.Ping(done chan int) { done <- 1 }
+
+trait Named {
+	func (s ref Self) Name() string
+	func Count() int
+	func (s ref Self) Twice() int { return Self.Count() * 2 }
+}
+
+struct A impl Named { n int }
+
+func (a ref A) Name() string { return "a" }
+
+func A.Count() int { return 1 }
+
+struct Box<E> { v E }
+
+struct Rgb { R int; G int; B int }
+
+func Box<E>.Kind() string {
+	return match E {
+		int => "int",
+		struct => {
+			var n int
+			for f := range fields(E) {
+				n += 1
+			}
+			"struct of " + fmt.Sprint(n)
+		},
+		_ => "other",
+	}
+}
+
+func greet() {
+	defer Point.Say("deferred".Clone())
+	fmt.Println("body")
+}
+
+func main() {
+	d := Point.Diag(5)
+	fmt.Println(d.x, d.y)
+	t0, t1 := Point.Twice<string>("s".Clone())
+	fmt.Println(t0, t1)
+	w, c := Pair<int, bool>.With<string>(1, true, "c".Clone())
+	fmt.Println(w.a, w.b, c)
+	match parsed<Q>("abc") {
+		Some(q) => fmt.Println(q.n),
+		None => fmt.Println("none"),
+	}
+
+	f := Point.Of
+	fmt.Println(f(7, 8).y)
+	g := Pair<int, bool>.Of
+	fmt.Println(g(2, false).a)
+	greet()
+	done := make(chan int)
+	spawn Point.Ping(done.Clone())
+	fmt.Println(<-done)
+	var x Named = A{n: 1}
+	fmt.Println(x.Name(), A.Count(), x.Twice(), A{n: 2}.Twice())
+	fmt.Println(Box<int>.Kind(), Box<Rgb>.Kind(), Box<bool>.Kind())
+}

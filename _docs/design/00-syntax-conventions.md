@@ -248,6 +248,15 @@ func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 - **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types; each element owns its value. One allocation and one indirect call per value, the same cost as Go. Such a value is `Send` only if the trait requires it: `trait Shape: Send { ... }`. A trait value satisfies its own trait as a bound only when no method or field of the bound's traits is written with `Self`, since the body may reach them through the parameter and a trait value cannot.
 - Not in version one: self-types, implicits.
 
+### Functions of a type
+
+A type may declare a function that takes no value of it, written with **the type's name, a dot and the function's name**, as it is called: `func Point.Parse(text ref string) Result<Point, ParseError>`, called `Point.Parse("1,2")`. A generic type writes its parameters, `func Pair<A, B>.Of(a A, b B) Pair<A, B>`. It is a function, compiled as any is, that lives in the type's name. Where the type is known it is no different from a package function, `NewPoint`: the same direct call, a name in another place. What a plain function cannot do is be required by a trait and called on a type parameter, `T.Parse(s)`, which generic code needs to make a value of a type it does not know, as `encoding/json` does with `T.UnmarshalJSON(text)`; that is why it is in the language.
+
+- **A trait may require one.** A trait declares a function without a receiver, `func Parse(text ref string) Result<Self, ParseError>`, which `Self` is the implementing type in, and a type that lists the trait writes it as its own, `func Point.Parse(...)`; a default method of the trait calls it on `Self`, the type that inherits the default, `Self.Parse(text)`; a trait's function has no default body in this version. A trait value has no type to call it on, so a trait with one is used through a bound or a match on a type, never through a value: `cannot call Parse through Named: it is a function of the type, which takes no value`, and a trait with one is no type argument for a bound of itself.
+- **Called on a type parameter.** `T.Parse(text)` calls the function of the type `T` stands for, where `T` is bounded by the trait, `func read<T: Parse>(...)`, or matched by an arm naming it (`11-reflection-at-compile-time.md`, section 1). Each instance calls the type's own function directly; nothing is looked up when the program runs.
+- **The precedents.** Rust calls these associated functions, `T::parse(s)`, and a trait may require one; C# 11 added static abstract members to interfaces for the same reason; Swift's protocols require static functions. Go has none: a package function per type, `ParseDuration`, or a method on a zero value the caller makes first, `var t Time; t.UnmarshalJSON(b)`, which needs a zero value Snello does not give every type (Zero values above).
+- **Memory safe, no collector.** A function of a type is a function: it takes and returns values by the rules every function does, and a call of one is a direct call.
+
 ## Concurrency
 
 Full reasoning in `03-ownership-across-tasks.md`.

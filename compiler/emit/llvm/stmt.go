@@ -750,7 +750,7 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr: // a method: its receiver, by value or by address
 		switch {
-		case e.packageOf(fun.X) != nil:
+		case e.packageOf(fun.X) != nil, lower.TypeFunc(e.info, fun): // a function of a package or of a type: no receiver to save
 		case !e.lentReceiver(fun):
 			save(fun.X)
 		default:

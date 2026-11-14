@@ -1,0 +1,121 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Operands evaluated left to right when a later one moves, somewhere
+// inside it, a value an earlier one reads: a struct, an option, a slice,
+// a tuple and a map literal around the moved value, a nested struct, a
+// field moved whole, a channel send and a return of a tuple; a map
+// literal's key moved or made by a call, after an earlier operand reads
+// or calls; and a closure, called by an earlier operand, reading a value
+// a later one moves.
+
+package main
+
+import "fmt"
+
+struct Box { s string }
+struct S { n int; b Box }
+struct T2 { a string; b string }
+struct H { n int; m map[string]int }
+
+func take(s string) int { return len(s) }
+func tb(n int, b Box) string { return fmt.Sprint(n) + ":" + b.s }
+func to(a string, b string?) string { return a + "|" + (b ?? "none") }
+func tl(a string, b []string) string { return a + fmt.Sprint(b) }
+func tt(a string, b (string, int)) string { p, _ := b; return a + p }
+
+func first() {
+	v := "v1".Clone()
+	fmt.Println(tb(len(v), Box{s: v}))
+	w := "w2".Clone()
+	fmt.Println(to(w.Clone(), Some(w)))
+	x := "x3".Clone()
+	fmt.Println(tl(x.Clone(), []string{x}))
+	y := "y4".Clone()
+	fmt.Println(tt(y.Clone(), (y, 1)))
+	z := "z5".Clone()
+	s := S{n: len(z), b: Box{s: z}}
+	fmt.Println(s.n, s.b.s)
+	u := "u6".Clone()
+	fmt.Println(len(u) + take(u))
+	t := T2{a: "a".Clone(), b: "b".Clone()}
+	t2 := T2{a: t.b.Clone(), b: t.a}
+	fmt.Println(t2.a, t2.b)
+	q := Box{s: "q7".Clone()}
+	fmt.Println(tb(len(q.s), q))
+}
+
+
+func give(s string) string { return s + "!" }
+func pair(a string, b Box) (string, Box) { return (a, b) }
+
+func second() {
+	a := "a1".Clone()
+	r := a.Clone() + give(a)
+	fmt.Println(r)
+	b := "b2".Clone()
+	m := map[string]Box{b.Clone(): Box{s: b}}
+	fmt.Println(len(m))
+	c := "c3".Clone()
+	p, q := (c.Clone(), Box{s: c})
+	fmt.Println(p, q.s)
+	d := "d4".Clone()
+	if n := len(d) + len(give(d)); n > 0 {
+		fmt.Println(n)
+	}
+	e := "e5".Clone()
+	match (len(e), Box{s: e}) {
+		(n, bx) => fmt.Println(n, bx.s),
+	}
+	f := "f6".Clone()
+	xs := [](string, Box){(f.Clone(), Box{s: f})}
+	fmt.Println(len(xs))
+	g := "g7".Clone()
+	ys := []Box{Box{s: g.Clone()}, Box{s: g}}
+	fmt.Println(ys[0].s, ys[1].s)
+	h := "h8".Clone()
+	ch := make(chan (int, Box), 1)
+	ch <- (len(h), Box{s: h})
+	k, kb := (<-ch)?? (0, Box{s: ""})
+	fmt.Println(k, kb.s)
+	i := "i9".Clone()
+	fmt.Println(ret(i))
+}
+
+func ret(i string) (int, Box) { return (len(i), Box{s: i}) }
+
+func both(a string, b string) string { return a + "+" + b }
+func third() {
+	w := "w2".Clone()
+	g := func() int { return len(w) }
+	fmt.Println(both(fmt.Sprint(g()), w))
+}
+
+func said(s string, n int) int {
+	fmt.Println("said", s)
+	return n
+}
+
+func key(s string) string {
+	fmt.Println("key", s)
+	return s.Clone()
+}
+
+func fourth() {
+	k := "key".Clone()
+	h := H{n: len(k), m: map[string]int{k: 1}}
+	fmt.Println(h.n, h.m)
+	j := "jj".Clone()
+	t := (len(j), map[string]int{j: 2})
+	fmt.Println(t)
+	p := H{n: said("first", 1), m: map[string]int{key("second"): 2}}
+	fmt.Println(p.n, p.m)
+}
+
+func main() {
+	first()
+	second()
+	third()
+	fourth()
+}

@@ -154,6 +154,13 @@ func TestFlowModel(t *testing.T) {
 		{"func f() { c := Count{n: 1, name: \"c\"}; defer bump(mut c); keep2(c) }", []string{"cannot move c: c is borrowed by the deferred call"}},
 		{"func f() { s := \"a\"; h := Holder{src: ref s, n: 1}; defer show(mut h); h.n = 2 }", []string{"a deferred call borrows only a whole variable, one that is a borrow or holds none: mut h is not one"}}, // what h borrows would be read when the call runs
 		{"func f() { xs := []int{1}; defer peek(ref xs[0]); grow(mut xs) }", []string{"a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one"}},               // an element may move before then
+		{"struct G { a string }\nfunc of(a string) G { return G{a: a} }\nfunc f() { defer fmt.Println(of(\"d\".Clone()).a) }", []string{"a deferred call reads what it prints when it runs, after the defer statement drops of(...): keep of(...) in a variable first"}},
+		{"struct G { a string }\nfunc of(a string) G { return G{a: a} }\nfunc f() { g := of(\"d\".Clone()); defer fmt.Println(g.a) }", nil},
+		{"const shown = \"%v %v\\n\"\nfunc f() { g := \"x\".Clone(); defer fmt.Printf(\"%v\\n\", g); defer fmt.Printf(shown, g, 1) }", nil},                                   // a format, a literal or a constant, outlives the function
+		{"func f() { defer peek(ref os.O_RDONLY); defer peek(ref 3) }", nil},                                                                                                  // another package's constant outlives the function as this one's does
+		{"struct G { a string }\nfunc of(a string) G { return G{a: a} }\nfunc f() { defer print(of(\"d\".Clone()).a) }", []string{"after the defer statement drops of(...)"}}, // a built-in prints a part of a temporary too
+		{"struct G { a string; xs []string }\nstruct H { g G }\nfunc h(a string) H { return H{g: G{a: a}} }\nfunc f() { defer fmt.Println(h(\"d\".Clone()).g.xs[0]) }", []string{"after the defer statement drops h(...)"}},
+		{"func v() []string { return []string{\"v\".Clone()} }\nfunc f() { defer fmt.Println(v()[0]); defer fmt.Println(v()[0].Len()) }", []string{"after the defer statement drops v()"}},
 		// A deferred call on a borrow variable reads it when it runs: it may not be pointed elsewhere before, and what it points to is held as it would be by the variable.
 		{"func (s mut Server) Run() { defer s.cleanup(); s.n = 1 }", nil},
 		{"func f(a mut Server, b mut Server) { s := mut *a; defer s.cleanup(); s = mut *b }", []string{"cannot assign to s: s is borrowed by the deferred call"}},

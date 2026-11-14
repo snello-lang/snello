@@ -129,6 +129,11 @@ func (w *reachWalk) call(id *ast.Ident, fn *Func, recv Type, sub map[*TypeParam]
 		bound, args := receiverBinds(pointee(osig.recv.typ), pointee(Subst(recv, sub)))
 		params = append(slices.Clip(params), bound...) // a copy when it grows: the declaration's own list is left alone
 		targs = append(targs, args...)
+	} else if origin.static && recv != nil { // G<bool>.Kind: the instance before the dot gives its type's parameters
+		if n, ok := pointee(Subst(recv, sub)).(*Named); ok && n.orig != nil {
+			params = append(slices.Clip(params), n.orig.tparams...)
+			targs = append(targs, n.targs...)
+		}
 	}
 
 	if len(params) == 0 || len(targs) != len(params) || anyParam(targs) {
@@ -330,6 +335,13 @@ func (w *reachWalk) typeArm(x *ast.MatchExpr, sub map[*TypeParam]Type, pkg *Pack
 		return
 	}
 
+	if tv, ok := t.(*Trait); ok && isTraitArm(arms[i]) { // a trait value stands for its trait in the arm only when a value can reach what the trait has
+		if what, why := arms[i].Type.(*Trait).unreachable(); what != "" {
+			w.report(w.where() + "a value of " + tv.String() + " takes the arm " + arms[i].Type.String() + ", whose " + what + " " + why)
+			return
+		}
+	}
+
 	if len(binds) > 0 {
 		s := make(map[*TypeParam]Type, len(sub)+len(binds))
 		for p, a := range sub {
@@ -509,7 +521,7 @@ func (w *reachWalk) where() string {
 }
 
 // step writes one call of a chain, its package named when it is not
-// the walk's: json.write<int>.
+// the walk's: json.writeValue<int>.
 func (w *reachWalk) step(b *strings.Builder, s reachStep) {
 	if s.fn.pkg != nil && s.fn.pkg != w.pkg && s.fn.pkg.name != "" {
 		b.WriteString(s.fn.pkg.name)

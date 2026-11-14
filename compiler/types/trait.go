@@ -654,6 +654,8 @@ func (t *Trait) valueMethod(name string) (fn *Func, why string) {
 func valueGap(m *Func, owner *Trait) string {
 	sig := m.typ.(*Signature)
 	switch {
+	case m.static:
+		return "it is a function of the type, which takes no value: call it on a type, T." + m.name + "(...)"
 	case mentions(sig, owner.self): // the signature's parameters and results, not the receiver
 		return "its signature mentions Self"
 	case len(sig.tparams) > 0:
@@ -1000,9 +1002,8 @@ func ownMethod(t *Trait, name string) *Func {
 // whose receiver must be Self, ref Self or mut Self; nil after an
 // error.
 func (c *Checker) traitMethod(m *ast.FuncDecl) *Func {
-	if m.Recv == nil {
-		c.errorf(m.Name.Pos(), "a trait method needs a receiver: (s ref Self)")
-		return nil
+	if m.Recv == nil { // func Parse(text ref string) Result<Self, E>: a function of the implementing type
+		return c.traitFunc(m)
 	}
 
 	recvType := m.Recv.Type
@@ -1031,6 +1032,50 @@ func (c *Checker) traitMethod(m *ast.FuncDecl) *Func {
 	sig.tparams = tparams
 	sig.variadic = variadic
 	fn := NewFunc(m.Name.Pos(), m.Name.Name, sig)
+	c.recordDef(m.Name, fn)
+	c.checkSources(m.Name.Name, sig, m.Name.Pos())
+	return fn
+}
+
+// funcKind names what fn is, for a message: a method, or a function of
+// a type.
+func funcKind(fn *Func) string {
+	if fn.static {
+		return "a function of the type"
+	}
+
+	return "a method"
+}
+
+// traitFunc resolves a function a trait declares without a receiver,
+// a function of the type that implements it, Self read as that type:
+// required, or a default with a body.
+func (c *Checker) traitFunc(m *ast.FuncDecl) *Func {
+	if m.Of != nil {
+		c.errorf(m.Of.Pos(), "a trait's function is of the type that implements it: func "+m.Name.Name+"(...), with Self for the type")
+	}
+
+	if m.Body != nil {
+		c.errorf(m.Name.Pos(), "a trait's function has no default body: each type that implements the trait writes its own, func Point."+m.Name.Name+"(...)")
+	}
+
+	if len(m.TypeParams) > 0 {
+		c.errorf(m.Name.Pos(), "a required function cannot have type parameters: an implementor's function has none")
+	}
+
+	var tparams []*TypeParam
+	if len(m.TypeParams) > 0 {
+		tparams = c.typeParams(m.TypeParams)
+		c.resolveBounds(m.TypeParams, tparams)
+		defer c.closeScope()
+	}
+
+	params, variadic := c.params(m.Params)
+	sig := NewSignature(nil, params, c.results(m.Results))
+	sig.tparams = tparams
+	sig.variadic = variadic
+	fn := NewFunc(m.Name.Pos(), m.Name.Name, sig)
+	fn.static = true
 	c.recordDef(m.Name, fn)
 	c.checkSources(m.Name.Name, sig, m.Name.Pos())
 	return fn
@@ -1166,6 +1211,9 @@ func (c *Checker) checkRequired(n *Named, listed, owner *Trait, want *Func, pos 
 	if have == nil {
 		wsig := subst(want.typ, map[*TypeParam]Type{owner.self: n}).(*Signature)
 		msg := n.obj.name + " does not implement " + listed.String() + ": missing method " + methodText(want.name, wsig)
+		if want.static {
+			msg = n.obj.name + " does not implement " + listed.String() + ": missing function " + n.obj.name + "." + methodText(want.name, wsig)
+		}
 		if owner != listed {
 			msg += ", required by " + owner.String()
 		}
@@ -1187,6 +1235,11 @@ func (c *Checker) checkSignature(n *Named, owner *Trait, want, have *Func, pos t
 	hsig := have.typ.(*Signature)
 	if hasInvalid(hsig) {
 		return true
+	}
+
+	if have.static != want.static { // a method takes a value of the type, a function of it none: neither stands for the other
+		c.errorf(have.pos, n.obj.name+"."+have.name+" is "+funcKind(have)+", and "+owner.String()+" wants "+funcKind(want))
+		return false
 	}
 
 	if sameMethod(hsig, wsig) {
@@ -1220,8 +1273,8 @@ func hasInvalid(sig *Signature) bool {
 // parameters and results, and no type parameters of its own, which a
 // trait method cannot have.
 func sameMethod(have, want *Signature) bool {
-	return have.recv != nil && have.tparams == nil && have.variadic == want.variadic &&
-		Identical(have.recv.typ, want.recv.typ) && identicalVars(have.params, want.params) && Identical(have.results, want.results)
+	sameRecv := have.recv == nil && want.recv == nil || have.recv != nil && want.recv != nil && Identical(have.recv.typ, want.recv.typ) // none, for a function of the type
+	return sameRecv && have.tparams == nil && have.variadic == want.variadic && identicalVars(have.params, want.params) && Identical(have.results, want.results)
 }
 
 // satisfies checks each type argument against the bounds of its
@@ -1275,6 +1328,8 @@ func (t *Trait) unreachable() (what, why string) {
 		for _, ms := range [][]*Func{tr.required, tr.defaults} {
 			for _, m := range ms {
 				switch {
+				case m.static:
+					return "function " + m.name, "takes no value, and a trait value has no type to call it on"
 				case mentions(m.typ, tr.self):
 					return "method " + m.name, "mentions Self"
 				case len(m.typ.(*Signature).tparams) > 0:

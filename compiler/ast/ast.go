@@ -127,7 +127,8 @@ type TypeParam struct {
 // is nil for a required method inside a trait.
 type FuncDecl struct {
 	Func       token.Pos
-	Recv       *Param // (t mut Tree): Name t, Type *RefType{Mut, Tree}
+	Recv       *Param     // (t mut Tree): Name t, Type *RefType{Mut, Tree}
+	Of         *NamedType // Point in func Point.Parse(...): a function of the type, which takes no value of it
 	Name       *Ident
 	TypeParams []*TypeParam
 	Params     []*Param

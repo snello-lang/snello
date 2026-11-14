@@ -252,3 +252,41 @@ func typeParamList(params []*ast.TypeParam) string {
 
 	return "<" + strings.Join(parts, ", ") + ">"
 }
+
+// TestFuncOfType checks a function of a type: the type's name, with
+// its parameters for a generic one, a dot and the function's name, and
+// type parameters of the function's own after it.
+func TestFuncOfType(t *testing.T) {
+	f, _, err := ParseFile("of.snello", []byte("package p\nfunc Point.Parse(s ref string) Point? { return None }\nfunc Pair<A, B>.Of<C>(a A, b B, c C) Pair<A, B> {}\nfunc plain<T>(x T) {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, want := range []struct {
+		of, name      string
+		args, tparams int
+	}{
+		{"Point", "Parse", 0, 0},
+		{"Pair", "Of", 2, 1},
+		{"", "plain", 0, 1},
+	} {
+		d := f.Decls[i].(*ast.FuncDecl)
+		of, args := "", 0
+		if d.Of != nil {
+			of, args = d.Of.Name.Name, len(d.Of.Args)
+		}
+
+		if of != want.of || d.Name.Name != want.name || args != want.args || len(d.TypeParams) != want.tparams {
+			t.Errorf("decl %d: got %s.%s with %d type arguments and %d type parameters, want %s.%s with %d and %d", i, of, d.Name.Name, args, len(d.TypeParams), want.of, want.name, want.args, want.tparams)
+		}
+	}
+}
+
+// TestFuncOfTypeBounds checks that a function of a generic type names
+// its type's parameters without bounds, which the type declares.
+func TestFuncOfTypeBounds(t *testing.T) {
+	_, _, err := ParseFile("b.snello", []byte("package p\nfunc G<A: Clone, B>.Dup(a ref A) A { return a }\n"))
+	if err == nil || !strings.Contains(err.Error(), "whose bounds the type declares: A takes none here") {
+		t.Errorf("a bound on a function of a type's parameter: got %v, want it refused", err)
+	}
+}

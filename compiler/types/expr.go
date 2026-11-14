@@ -228,15 +228,24 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 	}
 
-	wasInner := c.inner
+	wasInner, wantType := c.inner, c.wantType
 	c.inner = isPlaceChain(e.X) // the whole selector is the use, checked below
+	c.wantType = unparen(e.X)   // Point.Parse: a type before a function of it
 	x := c.expr(e.X, nil)
-	c.inner = wasInner
+	c.inner, c.wantType = wasInner, wantType
 	if x.mode == invalid {
 		return invalidOperand
 	}
 
+	if x.mode == typeOperand {
+		return c.typeFunc(e, x.typ)
+	}
+
 	base, m := deref(x)
+	if base == Typ[Invalid] {
+		return invalidOperand // reported where the type went wrong, a ref of it among them
+	}
+
 	if e.Sel.Name == "Drop" && implements(base, DropTrait) {
 		c.errorf(e.Sel.Pos(), dropByHand(e.X))
 		return invalidOperand
@@ -258,6 +267,11 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
 			if !c.visible(named, e.Sel, nil) {
+				return invalidOperand
+			}
+
+			if fn.static {
+				c.errorf(e.Sel.Pos(), fn.name+" is a function of "+named.obj.name+", which takes no value of it: call "+named.obj.name+"."+fn.name+"(...)")
 				return invalidOperand
 			}
 
@@ -323,6 +337,11 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 			fn = t.boundMethod(e.Sel.Name)
 		}
 
+		if fn != nil && fn.static {
+			c.errorf(e.Sel.Pos(), fn.name+" is a function of "+t.obj.name+", which takes no value of it: call "+t.obj.name+"."+fn.name+"(...)")
+			return invalidOperand
+		}
+
 		param = t
 	}
 
@@ -374,6 +393,60 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 	}
 
 	c.noteTemporary(e.X, x)
+}
+
+// typeFunc checks T.Name, a function of the type t, func Point.Parse,
+// or of the type a type parameter stands for, T.Parse with T bounded by
+// a trait that requires it: a value of the function's signature, which
+// a call calls directly.
+func (c *Checker) typeFunc(e *ast.SelectorExpr, t Type) operand {
+	var fn *Func
+	switch t := t.(type) {
+	case *Named:
+		if _, bare := unparen(e.X).(*ast.Ident); bare && t.tparams != nil { // G.Count: no instance to call it on
+			c.errorf(e.X.Pos(), t.obj.name+" is generic: name an instance, "+t.obj.name+"<...>."+e.Sel.Name)
+			return invalidOperand
+		}
+
+		fn = t.Method(e.Sel.Name)
+		if fn != nil && !c.visible(t, e.Sel, nil) {
+			return invalidOperand
+		}
+	case *TypeParam:
+		fn = t.boundMethod(e.Sel.Name)
+	}
+
+	switch {
+	case fn == nil:
+		c.errorf(e.Sel.Pos(), noFunction(t, e.Sel.Name))
+		return invalidOperand
+	case !fn.static:
+		c.errorf(e.Sel.Pos(), e.Sel.Name+" is a method of "+t.String()+": call it on a value of it")
+		return invalidOperand
+	}
+
+	if fn.typ.(*Signature).tparams != nil && c.callee != ast.Expr(e) { // the selector itself, which call unparenthesized
+		c.errorf(e.Sel.Pos(), "cannot use the generic function "+fn.name+" without calling it")
+		return invalidOperand
+	}
+
+	c.recordUse(e.Sel, fn)
+	return operand{value, fn.typ, fn, nil}
+}
+
+// noFunction says that t has no function name, and, when name is one of
+// its variants, how a variant is written.
+func noFunction(t Type, name string) string {
+	msg := t.String() + " has no function " + name
+	if en, ok := t.Underlying().(*Enum); ok {
+		for _, v := range en.variants {
+			if v.name == name {
+				return msg + ": " + name + " is a variant of it, written by its name, " + name
+			}
+		}
+	}
+
+	return msg
 }
 
 // packageMember resolves pkg.Name as a value: a function, variable,

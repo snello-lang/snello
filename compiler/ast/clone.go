@@ -6,11 +6,8 @@ package ast
 
 import "reflect"
 
-// The interface types the walks look for, which are never written.
-var (
-	exprType = reflect.TypeFor[Expr]() // the expressions Rewrite replaces
-	nodeType = reflect.TypeFor[Node]() // the nodes Inspect visits
-)
+// The nodes Inspect visits, an interface type that is never written.
+var nodeType = reflect.TypeFor[Node]()
 
 // Clone returns a deep copy of n: every node under it is a node of its
 // own, at the same positions, so that the copy can be checked apart
@@ -100,13 +97,22 @@ func rewriteValue(v reflect.Value, f func(Expr) Expr) {
 }
 
 // rewriteSlot rewrites a field or element: its expressions, then the
-// slot itself when it holds an Expr.
+// slot itself when it holds an Expr, whether the slot is typed Expr or
+// is wider, as a match arm's body is a Node that is a block or a value.
+// The result is set when the slot can hold it.
 func rewriteSlot(slot reflect.Value, f func(Expr) Expr) {
 	rewriteValue(slot, f)
-	if slot.Kind() == reflect.Interface && slot.Type() == exprType && !slot.IsNil() && slot.CanSet() {
-		if x := f(slot.Interface().(Expr)); x != nil {
-			slot.Set(reflect.ValueOf(x))
-		}
+	if slot.Kind() != reflect.Interface || slot.IsNil() || !slot.CanSet() {
+		return
+	}
+
+	x, ok := slot.Interface().(Expr)
+	if !ok {
+		return
+	}
+
+	if y := f(x); y != nil && reflect.TypeOf(y).AssignableTo(slot.Type()) {
+		slot.Set(reflect.ValueOf(y))
 	}
 }
 

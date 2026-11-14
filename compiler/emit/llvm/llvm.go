@@ -510,6 +510,8 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	name := lower.FuncName(fn)
 	if recv := sig.Recv(); recv != nil {
 		name = lower.MethodName(recv.Type(), d.Name.Name)
+	} else if owner := lower.TypeOwner(e.info, d); owner != nil { // func Point.Parse: named after its type, as a method is
+		name = lower.MethodName(owner, d.Name.Name)
 	}
 
 	e.writeFunction(name, sig, d.Body, d.Pos())

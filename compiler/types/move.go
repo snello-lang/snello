@@ -676,6 +676,14 @@ func exprText(e ast.Expr) string {
 		}
 
 		return exprText(e.Fun) + "(...)"
+	case *ast.TypeExpr:
+		return ast.SourceType(e.Type)
+	case *ast.CompositeLit:
+		if e.Type == nil {
+			return "{...}"
+		}
+
+		return ast.SourceType(e.Type) + "{...}"
 	}
 
 	return "..."

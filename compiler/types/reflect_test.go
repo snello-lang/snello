@@ -38,7 +38,12 @@ func TestReflection(t *testing.T) {
 		"func f<T>(v ref T) int { return match T { enum => match v { for c := range variants(T) => { n := len(c.name); for f := range fields(c) { g(ref v.[f]) }; n } }, _ => 0 } }\nfunc g<U>(u ref U) {}",
 		"func f<T>(name ref string) T? { match T { enum => { for c := range variants(T) { if name == c.name { return Some(c(for f := range fields(c) { zero<f.type>() ?? return None })) } } }, _ => {} }; return None }",
 		"func f<T>(v ref T) { match T { []E => g(v), _ => {} } }\nfunc g<U>(u ref []U) {}",
-		"func f<T>(v ref T) int { n := 0; match T { struct => { for f := range fields(T) { match f.type { int => { if v.[f] > 0 { n += v.[f] } }, _ => {} } } }, _ => {} }; return n }", // the field reads as the arm's type
+		"trait Show { func (s ref Self) Show() string }\nfunc f<T>(v ref T) string { return match T { Show => match T { struct => \"s\" + v.Show(), _ => v.Show() }, _ => \"?\" } }", // a match inside an arm naming a trait is on T bounded by it
+		"type Note string impl Attribute\ntrait Show { func (s ref Self) Show() string }\nfunc f<T>(v ref T) int { return match T { Show => match T { struct => { var n int; for f := range fields(T) { n += match f.type { int => v.[f], _ => 0 } }; _ = attr(T, Note); n }, _ => 0 }, _ => 0 } }\nfunc g<T>() T? { return match T { Show => match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { int => 7, _ => return None } } }), _ => None }, _ => None } }", // a kind's arm inside a trait arm reaches the parts: read, attributes, built
+		"trait Show { func (s ref Self) Show() string }\ntrait Loud { func Loud() string }\nfunc f<T>(v ref T) int { return match T { Show => match T { Loud => match T { struct => { var n int; for f := range fields(T) { n += match f.type { int => v.[f], _ => 0 } }; n }, _ => 0 }, _ => 0 }, _ => 0 } }",                                                                                                                                                                          // two trait arms deep
+		"trait Show { func (s ref Self) Show() string }\nfunc f<T>(v ref T) int { return match T { struct => match T { Show => { var n int; for f := range fields(T) { n += match f.type { int => v.[f], _ => 0 } }; n }, _ => 0 }, _ => 0 } }",                                                                                                                                                                                                                                         // a trait arm inside a kind's keeps the kind
+		"trait Kinds<T> { func (s ref Self) Get() T; func (s ref Self) Kind() string { return match T { int => \"int\", []E => \"slice\", _ => \"other\" } } }\nstruct W impl Kinds<int> { n int }\nfunc (w ref W) Get() int { return w.n }\nfunc g(w ref W) string { return w.Kind() }",                                                                                                                                                                                                // a generic trait's parameter, in a default body
+		"func f<T>(v ref T) int { n := 0; match T { struct => { for f := range fields(T) { match f.type { int => { if v.[f] > 0 { n += v.[f] } }, _ => {} } } }, _ => {} }; return n }",                                                                                                                                                                                                                                                                                                 // the field reads as the arm's type
 	}
 	for _, src := range tests {
 		if got := checkErrors(t, "package p\n"+reflectDecls+src); len(got) != 0 {
@@ -56,7 +61,10 @@ func TestReflectionErrors(t *testing.T) {
 	}{
 		{"func f<T: Sh>(v ref T) { match T { int => {}, _ => {} } }", "T is never int: int does not implement Sh"},
 		{"func f<T>() { match T { []E => match E { E? => {}, _ => {} }, _ => {} } }", "no type is E?: it holds E, the type the match is on"},
+		{"func f<T>() string { return match T { int => \"i\", Shw => \"s\", _ => \"?\" } }", "Shw names no type or trait: an arm for any type is _"}, // a misspelled name would take every type
+		{"func f<T>() string { return match T { int | Shw => \"i\", _ => \"?\" } }", "Shw names no type or trait"},
 		{"func f<T>(v ref T) { T := 1; match T { int => {}, _ => {} } }", "T is a value here, which hides the type parameter"},
+		{"trait Conv<U> { func (s ref Self) To() U }\nfunc f<T>(v ref T) int { return match T { Conv<int> => v.To(), _ => 0 } }", "an arm names a trait without type arguments in this version: Conv<int> is a generic trait's instance"},
 		{"func f<T>(v ref T) { match T { int => match T { int => {}, _ => {} }, _ => {} } }", "T is known here to be int: a match on it would take one arm"},
 		{"func f<T>(g int) { match g.type { int => {}, _ => {} } }", "g.type is no field's type"},
 		{"func f<T>() { x := fields(T) }", "fields gives a type's parts to a loop"},
@@ -88,6 +96,17 @@ func TestReflectionErrors(t *testing.T) {
 			t.Errorf("%s:\n  got %q\n  want an error containing %q", tt.src, got, tt.want)
 		}
 	}
+
+	// One fault, one error: an arm whose type is reported reads T as
+	// invalid, and its body says nothing more of it.
+	for _, src := range []string{
+		"func f<T>(v ref T) int { return match T { Nope<int> => v.Size() + T.Make(), _ => 0 } }",
+		"func f<T>(v ref T) int { return match T { Shw => v.Size() + T.Make(), _ => 0 } }",
+	} {
+		if got := checkErrors(t, "package p\n"+reflectDecls+src); len(got) != 1 {
+			t.Errorf("%s:\n  got %d errors %q, want 1", src, len(got), got)
+		}
+	}
 }
 
 // TestChooseArm checks which arm a type takes: its own and no other, a
@@ -115,5 +134,20 @@ func TestChooseArm(t *testing.T) {
 
 	if i, _ := ChooseArm(arms[:3], Typ[Bool]); i != -1 {
 		t.Errorf("bool took arm %d of arms with no wildcard, want none", i)
+	}
+
+	// A trait arm takes a type that implements the trait, binding the
+	// arm's parameter to it, ahead of the kind arm after it.
+	shown := NewTrait(NewTypeName(0, "Shown", nil))
+	sp := NewTypeParam(NewTypeName(0, "T", nil), 0)
+	impl := NewNamed(NewTypeName(0, "Impl", nil), NewStruct(nil), nil)
+	impl.impls = []*Trait{shown}
+	traitArms := []TypeArm{{Type: shown, Binds: []*TypeParam{sp}}, {Kind: "struct"}}
+	if i, binds := ChooseArm(traitArms, impl); i != 0 || binds[sp] != Type(impl) {
+		t.Errorf("Impl took arm %d with T = %v, want the trait arm with T = Impl", i, binds[sp])
+	}
+
+	if i, _ := ChooseArm(traitArms, NewNamed(NewTypeName(0, "Other", nil), NewStruct(nil), nil)); i != 1 {
+		t.Errorf("a struct not implementing the trait took arm %d, want the struct arm", i)
 	}
 }

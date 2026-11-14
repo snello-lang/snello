@@ -52,8 +52,23 @@ func main() {
 	}
 
 	decode := time.Since(start)
+	start = time.Now()
+	sum := 0
+	for r := 0; r < rounds; r++ { // untyped: the text indexed by a Doc, each record's ID read back
+		match json.Parse(ref text) {
+			Ok(doc) => {
+				for e := range doc.Elements(doc.Root()) {
+					sum += doc.Int(doc.Get(e, "ID") ?? doc.Root()) ?? 0
+				}
+			}
+			Err(_) => {},
+		}
+	}
+
+	untyped := time.Since(start)
 	first := text[0:text.Index("},") ?? 0]
 	fmt.Println(len(text), n / rounds, m / rounds, first)
+	fmt.Println(sum / rounds)
 	per := i64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per)
+	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per)
 }

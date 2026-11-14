@@ -1,3 +1,4 @@
+holds a slice, is other holds an int, is other
 other point 8 true 3 some 4
 map of 1 pointer to int box of 5 ints slice 2.5
 {from:{x:1;name:a;};to:{x:2;name:b;};tags:[t,u];}
