@@ -237,16 +237,29 @@ cfg := doc.Decode<Config>(node)?                      // one part read as a type
 ### `json.Value`, an owned tree
 
 ```go
-enum Value { Null; Bool(bool); Number(Number); String(string); Array([]Value); Object(Object) }
+enum Value {
+	Null
+	Bool(bool)
+	Number(string)
+	String(string)
+	Array([]Value)
+	Object([]Field)
+}
+
+struct Field {
+	Key   string
+	Value Value
+}
 ```
 
-- **A number keeps its text**, `Number`, so a 64-bit ID or a long decimal round-trips exactly; `Int()`, `Float()` and `Text()` read it as wanted. Go's `any` makes it a `float64`.
-- **An object keeps its members in order**, as the text had them, and is written back in that order, as C#'s `JsonNode` and `serde_json` with `preserve_order` do; `Get`, `Set` and `Remove` reach a member by key.
-- **It is read and written as any type is**, `Unmarshal<json.Value>(text)` and `Marshal(ref v)`, or made from a node of a `Doc`, `doc.Value(n)`, and has `At` for a pointer as a `Doc` does.
+- **A number keeps its text**, `Number(string)`, so a 64-bit ID or a long decimal round-trips exactly; `Int()` and `Float()` read it as wanted, and `Marshal` refuses a `Number` whose text is no JSON number. Go's `any` makes every number a `float64`.
+- **An object keeps its members in order**, as the text had them, and is written back in that order, as C#'s `JsonNode` and `serde_json` with `preserve_order` do. `Get` finds a member by key, the first of a key given twice, as a `Doc` does; `Set` replaces a member in its place or adds it at the end, and `Remove` takes one out.
+- **It is read and written as any type is**, `Unmarshal<json.Value>(text)` and `Marshal(ref v)`, or made from a node of a `Doc`, `doc.Value(n)`, and has `Kind`, `Len`, `Index` and `At` for a pointer, as a `Doc` does; a program matches on it for the rest, `match v { json.Number(t) => ..., json.Object(fields) => ... }`.
+- **Its variants take JSON's names**, `json.Null`, `json.Object`, since a program builds and matches values far more than it compares kinds; `Kind`'s variants say what they are, `json.ObjectKind`.
 
-### `json.Raw`, a value passed through
+### `json.Text`, a value passed through
 
-A field of type `json.Raw` keeps the text of its value as the input has it, checked to be one value, and `Marshal` writes it as it is, compacted: a struct reads the part it knows and passes the rest on. It owns its text, since a field of a value `Unmarshal` returns cannot borrow the input (section 3); a program that wants the text without a copy reads it from a `Doc`.
+A field of type `json.Text` keeps the text of its value as the input has it, checked to be one value, and `Marshal` writes it back compacted: a struct reads the part it knows and passes the rest on. It owns its text, since a field of a value `Unmarshal` returns cannot borrow the input (section 3); `t.JSON()` reads it, and `json.Text.Of(text)` makes one from text it checks. A program that wants the text without a copy reads it from a `Doc`, `doc.Text(n)`.
 
 ### Memory safe, no collector
 
@@ -254,4 +267,4 @@ A `Doc` borrows the text and is checked as every borrow is, and its nodes are nu
 
 ### What it costs
 
-`bench/json` measures, against Go's standard library: parsing a document and reading a few fields with a `Doc` against `encoding/json.Unmarshal` into `any` and reading the same fields; `json.Valid` against `Parse`; and a round trip through `Value` against one through `any`. A `Doc` is to make one allocation for its index where Go's `any` makes one for every value.
+`bench/json` measures, against Go's standard library, per record of a thousand: indexing the text with a `Doc` and reading each record's ID, 280 ns against `Unmarshal` into `any`, 2,449 ns; and a round trip through a `Value`, read and written back, 710 ns against one through `any`, 3,275 ns. A `Doc` makes one allocation for its index where Go's `any` makes one for every value.

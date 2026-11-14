@@ -9,7 +9,10 @@ import ("encoding/json"; "expect"; "strconv"; "strings"; "testing")
 const docText = ` {"name": "lab", "n": 3, "pi": 2.5, "ok": true, "none": null,
  "tags": ["a", "b\n", "c"], "a/b": {"m~n": 7}, "escA": "x\ty", "srv": {"X": 1, "Y": 2}} `
 
-struct Point { X int; Y int }
+struct Point {
+	X int
+	Y int
+}
 
 struct Server {
 	Host  string = "localhost"
@@ -22,13 +25,25 @@ struct Server {
 	Debug bool
 }
 
-enum Shape { Dot; Circle(r f64); Pair(int, int); Box(Point) }
+enum Shape {
+	Dot
+	Circle(r f64)
+	Pair(int, int)
+	Box(Point)
+}
 
 // Variants holding owned values, named and unnamed, and a recursive
 // struct through an owned pointer.
-enum Ev { Say(msg string); Both(string, string); Quiet }
+enum Ev {
+	Say(msg string)
+	Both(string, string)
+	Quiet
+}
 
-struct Node { V int; Up *Node? }
+struct Node {
+	V  int
+	Up *Node?
+}
 
 // Attributes: keys renamed, empty fields left out and read back as
 // empty, a field never written or read, and variants renamed.
@@ -41,7 +56,11 @@ struct Conf {
 	Secret string = "hidden" @json.Skip
 }
 
-enum Kind { Plain @json.Name("plain"); Sized(n int) @json.Name("sized"); Duo(a int, b int @json.Name("second")) }
+enum Kind {
+	Plain @json.Name("plain")
+	Sized(n int) @json.Name("sized")
+	Duo(a int, b int @json.Name("second"))
+}
 
 // A type with its own JSON: a temperature written as a string with its
 // unit, and read back from one, refusing any other text.
@@ -65,9 +84,9 @@ struct Bad impl json.Marshaler { n int }
 func (b ref Bad) MarshalJSON() Result<string, json.Error> { return Ok("{oops") }
 
 // Spaced is written with space and lines, which Marshal takes out but
-// in its strings, whose escaped quote does not end one and whose escaped
-// backslash does not escape the quote after it; Refused fails to write
-// itself.
+// in its strings, whose escaped quote does not end one and whose
+// escaped backslash does not escape the quote after it; Refused fails
+// to write itself.
 struct Spaced impl json.Marshaler { n int }
 
 func (s ref Spaced) MarshalJSON() Result<string, json.Error> { return Ok(" {\n  \"a\\\" b\" : [ 1 , \"c\\\\\" , 2 ]\n} ") }
@@ -76,14 +95,30 @@ struct Refused impl json.Marshaler { n int }
 
 func (r ref Refused) MarshalJSON() Result<string, json.Error> { return Err(json.Error.At(-1, "no text for it")) }
 
-struct Room { Name string; Temp Celsius; Seen Celsius? }
+struct Room {
+	Name string
+	Temp Celsius
+	Seen Celsius?
+}
+
+// An Envelope reads the part it knows and passes the rest through.
+struct Envelope {
+	Kind string
+	Body json.Text
+}
 
 // A skipped field of a type with no empty value and no default, a
-// renamed field the text must hold, and a variant whose named fields are
-// skipped, left out when empty and renamed.
-struct Strict { N int @json.Name("n"); Hidden int @json.Skip }
+// renamed field the text must hold, and a variant whose named fields
+// are skipped, left out when empty and renamed.
+struct Strict {
+	N      int @json.Name("n")
+	Hidden int @json.Skip
+}
 
-struct Loose { Key string @json.Name("k"); Gone string @json.Skip }
+struct Loose {
+	Key  string @json.Name("k")
+	Gone string @json.Skip
+}
 
 enum Ev2 { V(x string @json.Skip, y string @json.OmitEmpty, z int @json.Name("Z")) }
 
@@ -119,8 +154,8 @@ func TestRoundTrip() {
 }
 
 // Reading takes a struct's fields in any order and passes over keys the
-// type has no field for; a field left out takes its default, or None for
-// an option, and is an error otherwise.
+// type has no field for; a field left out takes its default, or None
+// for an option, and is an error otherwise.
 func TestFields() {
 	s := expect.IsOk(json.Unmarshal<Server>(` { "Small": 7, "Debug": false, "unknown": [1, {"a": null}], "Tags": [], "Peers": {}, "Ratio": 2 } `))
 	expect.Equal(ref s.Host, "localhost")
@@ -212,10 +247,10 @@ func TestAttributes() {
 	expect.Contains(ref expect.IsErr(json.Unmarshal<Kind>(`"Plain"`)).Error(), "no variant Plain")
 }
 
-// Skip and OmitEmpty apply to a variant's named fields as to a struct's;
-// a skipped field takes its type's empty value, and one with none and no
-// default is an error that says so; a missing renamed key is named by
-// its key in the text.
+// Skip and OmitEmpty apply to a variant's named fields as to a
+// struct's; a skipped field takes its type's empty value, and one with
+// none and no default is an error that says so; a missing renamed key
+// is named by its key in the text.
 func TestAttributeEdges() {
 	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{"n":1,"Hidden":2}`)).Error(), "json: field Hidden is skipped and has no default at offset 0")
 	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{}`)).Error(), "json: missing field n at offset 0")
@@ -255,7 +290,7 @@ func TestOwnCodec() {
 func TestDocValues() {
 	doc := json.Parse(docText).Expect("parse")
 	root := doc.Root()
-	expect.True(doc.Kind(root) == json.Object)
+	expect.True(doc.Kind(root) == json.ObjectKind)
 	expect.Equal(ref doc.Len(root), ref 9)
 	name := expect.IsSome(doc.Get(root, "name"))
 	expect.Equal(ref expect.IsSome(doc.String(name)), "lab")
@@ -263,7 +298,7 @@ func TestDocValues() {
 	expect.Equal(ref expect.IsSome(doc.Int(expect.IsSome(doc.Get(root, "n")))), ref 3)
 	expect.Equal(ref expect.IsSome(doc.Float(expect.IsSome(doc.Get(root, "pi")))), ref 2.5)
 	expect.Equal(ref expect.IsSome(doc.Bool(expect.IsSome(doc.Get(root, "ok")))), ref true)
-	expect.True(doc.Kind(expect.IsSome(doc.Get(root, "none"))) == json.Null)
+	expect.True(doc.Kind(expect.IsSome(doc.Get(root, "none"))) == json.NullKind)
 	expect.IsNone(doc.Int(name))
 	expect.IsNone(doc.Get(root, "missing"))
 	expect.Equal(ref doc.Text(expect.IsSome(doc.Get(root, "tags"))), `["a", "b\n", "c"]`)
@@ -337,6 +372,55 @@ func TestDocStrict() {
 	small := json.Parse("5").Expect("parse")
 	big := json.Parse(docText).Expect("parse")
 	far := expect.IsSome(big.At(big.Root(), "/srv/Y"))
-	expect.True(small.Kind(far) == json.Null)
+	expect.True(small.Kind(far) == json.NullKind)
 	expect.Equal(ref small.Text(far), "")
+}
+
+// A Value read without a type keeps a number's text and an object's
+// order, and is written back as it was read, compacted.
+func TestValueRoundTrip() {
+	text := `{"id": 9007199254740993, "pi": 3.141592653589793238, "z": 1, "a": [true, null, "x\ny"], "o": {}}`
+	v := expect.IsOk(json.Unmarshal<json.Value>(text))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"id":9007199254740993,"pi":3.141592653589793238,"z":1,"a":[true,null,"x\ny"],"o":{}}`)
+	expect.True(v.Kind() == json.ObjectKind)
+	expect.Equal(ref v.Len(), ref 5)
+	expect.Equal(ref expect.IsSome(v.Get("id").Expect("id").Int()), ref 9007199254740993)
+	expect.Equal(ref expect.IsSome(v.Get("pi").Expect("pi").Float()), ref 3.141592653589793)
+	expect.True(v.At("/a/1").Expect("/a/1").Kind() == json.NullKind)
+	expect.True(v.At("/a/01").IsNone())
+	expect.True(v.Get("missing").IsNone())
+	expect.True(v.Get("a").Expect("a").Index(3).IsNone())
+}
+
+// Set replaces a member in its place or adds it at the end, Remove
+// takes one out, and neither touches a value that is no object.
+func TestValueChange() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a": 1, "b": 2}`))
+	expect.True(v.Set("a".Clone(), json.String("one".Clone())))
+	expect.True(v.Set("c".Clone(), json.Null))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","b":2,"c":null}`)
+	expect.True(expect.IsSome(v.Remove("b")).Kind() == json.NumberKind)
+	expect.IsNone(v.Remove("b"))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","c":null}`)
+	var n json.Value = json.Number("12".Clone())
+	expect.False(n.Set("a".Clone(), json.Null))
+	expect.Equal(ref expect.IsErr(json.Marshal(ref json.Number("1x".Clone()))).Error(), "json: a json.Number holds \"1x\", which is no JSON number")
+}
+
+// A Doc's node made into a Value is the Value Unmarshal reads.
+func TestDocValue() {
+	doc := json.Parse(docText).Expect("parse")
+	v := doc.Value(doc.Root())
+	u := expect.IsOk(json.Unmarshal<json.Value>(docText))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), expect.IsOk(json.Marshal(ref u)))
+}
+
+// A Text field holds its part of the input unread and is written back
+// compacted; Text.Of refuses text that is not one JSON value.
+func TestText() {
+	e := expect.IsOk(json.Unmarshal<Envelope>(`{"Kind": "point", "Body": { "x": 1, "y": [2, 3] }}`))
+	expect.Equal(ref e.Body.JSON(), `{ "x": 1, "y": [2, 3] }`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref e)), `{"Kind":"point","Body":{"x":1,"y":[2,3]}}`)
+	expect.Equal(ref expect.IsOk(json.Text.Of(" [1, 2] ")).JSON(), "[1, 2]")
+	expect.Contains(ref expect.IsErr(json.Text.Of("[1, 2")).Error(), "expected ]")
 }

@@ -110,7 +110,14 @@ struct Error impl Error {
 }
 
 // Kind is the kind of a JSON value.
-enum Kind { Null; Bool; Number; String; Array; Object }
+enum Kind {
+	NullKind
+	BoolKind
+	NumberKind
+	StringKind
+	ArrayKind
+	ObjectKind
+}
 
 // A Doc is JSON text checked once and indexed, read without a type: a
 // value of it is a Node, which the Doc answers for. It borrows the
@@ -149,6 +156,36 @@ struct Members {
 	at  int
 	end int
 }
+
+// A Value is JSON read without a type, owned, so that it outlives the
+// text it was read from. A number keeps its text, so that a 64-bit
+// integer or a long decimal is written back as it was read; an object
+// keeps its members in the order the text has them, a key given twice
+// kept twice, Get finding the first. It is read and written as any type
+// is, Unmarshal<json.Value>(text) and Marshal(ref v), or made from a
+// node of a Doc, doc.Value(n). Null is JSON's null, a value the text
+// holds, {"a": null}; a member the text leaves out is no value at all,
+// and Get gives None for it, as Snello gives None for anything absent.
+enum Value {
+	Null
+	Bool(bool)
+	Number(string)
+	String(string)
+	Array([]Value)
+	Object([]Field)
+}
+
+// A Field is one member of an object Value: its key and its value.
+struct Field {
+	Key   string
+	Value Value
+}
+
+// A Text is one JSON value kept as its text: a struct's field of type
+// Text passes the part of the input it holds through unread, and
+// Marshal writes it back compacted. It owns its text, so it outlives
+// the input; Text.Of makes one from text it checks.
+struct Text { text string }
 
 // A writer is the text written so far, and the first thing it could not
 // write, which ends the writing.
@@ -267,10 +304,11 @@ func (d ref Doc) Root() Node {
 	return Node{i: 0}
 }
 
-// Kind returns the kind of the node n, Null for a node of another Doc.
+// Kind returns the kind of the node n, NullKind for a node of another
+// Doc.
 func (d ref Doc) Kind(n Node) Kind {
 	if n.i < 0 || n.i >= len(d.nodes) {
-		return Null
+		return NullKind
 	}
 
 	return d.nodes[n.i].kind
@@ -288,7 +326,7 @@ func (d ref Doc) Text(n Node) ref string {
 
 // Bool returns the node's bool, or None for a node of another kind.
 func (d ref Doc) Bool(n Node) bool? {
-	if d.Kind(n) != Bool {
+	if d.Kind(n) != BoolKind {
 		return None
 	}
 
@@ -298,7 +336,7 @@ func (d ref Doc) Bool(n Node) bool? {
 // Int returns the node's number as an int, or None for a node of
 // another kind or a number an int does not hold.
 func (d ref Doc) Int(n Node) int? {
-	if d.Kind(n) != Number {
+	if d.Kind(n) != NumberKind {
 		return None
 	}
 
@@ -307,7 +345,7 @@ func (d ref Doc) Int(n Node) int? {
 
 // Float returns the node's number, or None for a node of another kind.
 func (d ref Doc) Float(n Node) f64? {
-	if d.Kind(n) != Number {
+	if d.Kind(n) != NumberKind {
 		return None
 	}
 
@@ -325,7 +363,7 @@ func (d ref Doc) Float(n Node) f64? {
 // rarely hold an escape; String reads any string, at the cost of a
 // copy: doc.StringInPlace(n) ?? return slowPath(doc.String(n)).
 func (d ref Doc) StringInPlace(n Node) (ref string)? {
-	if d.Kind(n) != String || d.nodes[n.i].escaped {
+	if d.Kind(n) != StringKind || d.nodes[n.i].escaped {
 		return None
 	}
 
@@ -337,7 +375,7 @@ func (d ref Doc) StringInPlace(n Node) (ref string)? {
 // value, so the result outlives the Doc and its text; StringInPlace
 // reads a string without an escape with no copy.
 func (d ref Doc) String(n Node) string? {
-	if d.Kind(n) != String {
+	if d.Kind(n) != StringKind {
 		return None
 	}
 
@@ -435,10 +473,38 @@ func (d ref Doc) Decode<T>(n Node) Result<T, Error> {
 	return readValue<T>(mut r)
 }
 
+// Value returns the node n as an owned Value, which outlives the Doc
+// and its text: a number's text kept, an object's members in their
+// order; Null for a node of another Doc.
+func (d ref Doc) Value(n Node) Value {
+	return match d.Kind(n) {
+		NullKind => Null,
+		BoolKind => Bool(d.Bool(n) ?? false),
+		NumberKind => Number(d.Text(n).Clone()),
+		StringKind => String(d.String(n) ?? ""),
+		ArrayKind => {
+			items := make([]Value, 0, d.Len(n))
+			for e := range d.Elements(n) {
+				items.Push(d.Value(e))
+			}
+
+			Array(items)
+		},
+		ObjectKind => {
+			fields := make([]Field, 0, d.Len(n))
+			for m := range d.Members(n) {
+				fields.Push(Field{Key: d.String(m.Name) ?? "", Value: d.Value(m.Value)})
+			}
+
+			Object(fields)
+		},
+	}
+}
+
 // Elements returns a loop over the elements of the array n, none for a
 // node of another kind.
 func (d ref Doc) Elements(n Node) Elements {
-	if d.Kind(n) != Array {
+	if d.Kind(n) != ArrayKind {
 		return Elements{doc: d, at: 0, end: 0}
 	}
 
@@ -448,7 +514,7 @@ func (d ref Doc) Elements(n Node) Elements {
 // Members returns a loop over the members of the object n, none for a
 // node of another kind.
 func (d ref Doc) Members(n Node) Members {
-	if d.Kind(n) != Object {
+	if d.Kind(n) != ObjectKind {
 		return Members{doc: d, at: 0, end: 0}
 	}
 
@@ -478,12 +544,165 @@ func (m mut Members) Next() Member? {
 	return Some(Member{Key: m.doc.text[m.doc.nodes[name].start + 1:m.doc.nodes[name].end - 1], Name: Node{i: name}, Value: Node{i: value}})
 }
 
+// Kind returns the kind of the value.
+func (v ref Value) Kind() Kind {
+	return match v {
+		Null => NullKind,
+		Bool(_) => BoolKind,
+		Number(_) => NumberKind,
+		String(_) => StringKind,
+		Array(_) => ArrayKind,
+		Object(_) => ObjectKind,
+	}
+}
+
+// Len returns the number of an array's elements or an object's members,
+// or 0 for a value of another kind.
+func (v ref Value) Len() int {
+	return match v {
+		Array(items) => len(items),
+		Object(fields) => len(fields),
+		_ => 0,
+	}
+}
+
+// Get returns the value of the first member of an object whose key is
+// key, or None when it has none or v is no object.
+func (v ref Value) Get(key ref string) (ref Value)? {
+	match v {
+		Object(fields) => {
+			for _, f := range fields {
+				if f.Key == key {
+					return Some(ref f.Value)
+				}
+			}
+		}
+		_ => {},
+	}
+
+	return None
+}
+
+// Index returns the i'th element of an array, or None when it has none
+// or v is no array.
+func (v ref Value) Index(i int) (ref Value)? {
+	match v {
+		Array(items) => {
+			if i >= 0 && i < len(items) {
+				return Some(ref items[i])
+			}
+		}
+		_ => {},
+	}
+
+	return None
+}
+
+// At returns the value an RFC 6901 pointer names in v: "" is v, and
+// each /token after it a member's key, ~1 for / and ~0 for ~ in it, or
+// an array's index; None when no value is there.
+func (v ref Value) At(pointer ref string) (ref Value)? {
+	if len(pointer) == 0 {
+		return Some(v)
+	}
+
+	if pointer[0] != solidus {
+		return None
+	}
+
+	end := len(pointer)
+	if next := pointer[1:len(pointer)].Index(solidusText) {
+		end = next + 1
+	}
+
+	token := pointer[1:end]
+	var child (ref Value)?
+	if token.Contains(tilde) { // an escape: the token is decoded into a string of its own
+		decoded := unescapePointer(token)
+		child = v.childByToken(ref decoded)
+	} else {
+		child = v.childByToken(token)
+	}
+
+	found := child ?? return None
+	return found.At(pointer[end:len(pointer)])
+}
+
+// Int returns a number whose text is a whole number an int holds, or
+// None.
+func (v ref Value) Int() int? {
+	return match v {
+		Number(text) => strconv.ParseInt(text, 10).Ok(),
+		_ => None,
+	}
+}
+
+// Float returns a number as the f64 nearest it, or None for a value
+// that is no number.
+func (v ref Value) Float() f64? {
+	return match v {
+		Number(text) => strconv.ParseFloat(text).Ok(),
+		_ => None,
+	}
+}
+
+// Set gives the object's member key the value value: in its place when
+// the object has one, at the end when it has none. It reports whether v
+// is an object, which alone has members.
+func (v mut Value) Set(key string, value Value) bool {
+	match v {
+		Object(fields) => {
+			for _, f := range fields {
+				if f.Key == key {
+					f.Value = value
+					return true
+				}
+			}
+
+			fields.Push(Field{Key: key, Value: value})
+			return true
+		}
+		_ => return false,
+	}
+}
+
+// Remove takes the object's first member key out and returns its value,
+// or None when it has none or v is no object.
+func (v mut Value) Remove(key ref string) Value? {
+	match v {
+		Object(fields) => {
+			for i := 0; i < len(fields); i++ {
+				if fields[i].Key == key {
+					removed := fields.Remove(i)
+					return Some(removed.Value)
+				}
+			}
+		}
+		_ => {},
+	}
+
+	return None
+}
+
+// Text.Of returns text as a Text when it is one JSON value, with space
+// around it, or the error that says where it is not.
+func Text.Of(text ref string) Result<Text, Error> {
+	return Unmarshal<Text>(text)
+}
+
+// JSON returns the text the Text holds.
+func (t ref Text) JSON() ref string {
+	return t.text
+}
+
 // writeValue writes v as JSON, chosen by its type: a type's own text
 // when it lists Marshaler, then by what T is, a struct by its fields
 // and an enum by its variants. What it cannot write is noted in w.bad,
 // and the writing goes on to the end without it.
 func writeValue<T>(v ref T, w mut writer) {
 	match T {
+		Value => writeUntyped(v, mut w),
+		Text => writeCompact(ref v.text, mut w.out),
 		Marshaler => match v.MarshalJSON() {
 			Ok(text) => {
 				if isOneValue(ref text) {
@@ -845,6 +1064,58 @@ func writeQuoted(s ref string, out mut strings.Builder) {
 	out.WriteByte(quotationMark)
 }
 
+// writeUntyped writes a Value as the JSON it holds, an object's members
+// in their order; a Number whose text is no JSON number is noted in
+// w.bad.
+func writeUntyped(v ref Value, w mut writer) {
+	match v {
+		Null => w.out.WriteString(literalNull),
+		Bool(b) => w.out.WriteString(if b { literalTrue } else { literalFalse }),
+		Number(text) => {
+			if isNumberText(text) {
+				w.out.WriteString(text)
+			} else if w.bad.IsNone() {
+				w.bad = Some("a json.Number holds " + strconv.Quote(text) + ", which is no JSON number")
+			}
+		}
+		String(s) => writeQuoted(s, mut w.out),
+		Array(items) => {
+			w.out.WriteByte(beginArray)
+			for i, item := range items {
+				if i > 0 {
+					w.out.WriteByte(valueSeparator)
+				}
+
+				writeUntyped(item, mut w)
+			}
+
+			w.out.WriteByte(endArray)
+		}
+		Object(fields) => {
+			w.out.WriteByte(beginObject)
+			for i, f := range fields {
+				if i > 0 {
+					w.out.WriteByte(valueSeparator)
+				}
+
+				writeQuoted(ref f.Key, mut w.out)
+				w.out.WriteByte(nameSeparator)
+				writeUntyped(ref f.Value, mut w)
+			}
+
+			w.out.WriteByte(endObject)
+		}
+	}
+}
+
+// isNumberText reports whether text is one JSON number and nothing
+// else.
+func isNumberText(text ref string) bool {
+	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
+	number := r.readNumberText().Ok() ?? return false
+	return len(number) > 0 && r.at == len(text)
+}
+
 // readValue reads one value of T at the reader's offset, after space,
 // chosen by its type: a type's own reading when it lists Unmarshaler,
 // then by what T is, a struct's fields by their keys and an enum by its
@@ -852,6 +1123,12 @@ func writeQuoted(s ref string, out mut strings.Builder) {
 func readValue<T>(r mut reader) Result<T, Error> {
 	r.skipSpace()
 	return match T {
+		Value => r.readUntyped(),
+		Text => {
+			start := r.at
+			r.skipValue()?
+			Ok(Text{text: r.text[start:r.at].Clone()})
+		}
 		Unmarshaler => {
 			start := r.at
 			r.skipValue()?
@@ -1100,8 +1377,8 @@ func (r mut reader) skipClose(close byte) Result<bool, Error> {
 	return Ok(false)
 }
 
-// hasNextElement reads what comes after an element: a comma, and there is
-// another, or the closing byte, and there is none.
+// hasNextElement reads what comes after an element: a comma, and there
+// is another, or the closing byte, and there is none.
 func (r mut reader) hasNextElement(close byte) Result<bool, Error> {
 	r.skipSpace()
 	if r.peek() == valueSeparator {
@@ -1206,7 +1483,7 @@ func (r mut reader) skipDigits() bool {
 func (r mut reader) readInt(lo int, hi int) Result<int, Error> {
 	start := r.at
 	text := r.readNumberText()?
-	n := strconv.ParseInt(text, 10) ?? return Err(Error{at: start, msg: "expected an integer, found " + quotedForMessage(text)})
+	n := strconv.ParseInt(text, 10) ?? return Err(Error{at: start, msg: "expected an integer, found " + foundText(text)})
 	if n < lo || n > hi {
 		return Err(Error{at: start, msg: text + " overflows its field"})
 	}
@@ -1218,7 +1495,7 @@ func (r mut reader) readInt(lo int, hi int) Result<int, Error> {
 func (r mut reader) readUint(hi uint) Result<uint, Error> {
 	start := r.at
 	text := r.readNumberText()?
-	n := strconv.ParseUint(text, 10) ?? return Err(Error{at: start, msg: "expected an unsigned integer, found " + quotedForMessage(text)})
+	n := strconv.ParseUint(text, 10) ?? return Err(Error{at: start, msg: "expected an unsigned integer, found " + foundText(text)})
 	if n > hi {
 		return Err(Error{at: start, msg: text + " overflows its field"})
 	}
@@ -1230,11 +1507,11 @@ func (r mut reader) readUint(hi uint) Result<uint, Error> {
 func (r mut reader) readFloat() Result<f64, Error> {
 	start := r.at
 	text := r.readNumberText()?
-	return Ok(strconv.ParseFloat(text) ?? return Err(Error{at: start, msg: "expected a number, found " + quotedForMessage(text)}))
+	return Ok(strconv.ParseFloat(text) ?? return Err(Error{at: start, msg: "expected a number, found " + foundText(text)}))
 }
 
-// quotedForMessage returns text for a message, or "nothing".
-func quotedForMessage(text ref string) string {
+// foundText returns the text an error says was found, or "nothing".
+func foundText(text ref string) string {
 	if len(text) == 0 {
 		return "nothing"
 	}
@@ -1595,21 +1872,89 @@ func (r mut reader) finishObject(o mut objectState) Result<(), Error> {
 	return Ok(())
 }
 
+// readUntyped reads one JSON value of any kind at the reader's offset,
+// after space, as an owned Value.
+func (r mut reader) readUntyped() Result<Value, Error> {
+	r.skipSpace()
+	c := r.peek()
+	match {
+		c == quotationMark => return Ok(String(r.readString()?)),
+		c == beginArray => {
+			r.at += 1
+			r.enterNested()?
+			var items []Value
+			if !r.skipClose(endArray)? {
+				items.Push(r.readUntyped()?)
+				for r.hasNextElement(endArray)? {
+					items.Push(r.readUntyped()?)
+				}
+			}
+
+			r.depth -= 1
+			return Ok(Array(items))
+		}
+		c == beginObject => {
+			r.at += 1
+			r.enterNested()?
+			var fields []Field
+			if !r.skipClose(endObject)? {
+				fields.Push(r.readField()?)
+				for r.hasNextElement(endObject)? {
+					fields.Push(r.readField()?)
+				}
+			}
+
+			r.depth -= 1
+			return Ok(Object(fields))
+		}
+		c == literalTrue[0] || c == literalFalse[0] => return Ok(Bool(r.readBool()?)),
+		c == literalNull[0] => {
+			if !r.skipLiteral(literalNull) {
+				return Err(r.errorHere("expected a value"))
+			}
+
+			return Ok(Null)
+		}
+		_ => {
+			number := r.readNumberText()?
+			if len(number) == 0 {
+				return Err(r.errorHere("expected a value"))
+			}
+
+			return Ok(Number(number.Clone()))
+		}
+	}
+}
+
+// readField reads one member of an object into a Field: its key, a
+// string, its colon and its value.
+func (r mut reader) readField() Result<Field, Error> {
+	r.skipSpace()
+	if r.peek() != quotationMark {
+		return Err(r.errorHere("expected a key"))
+	}
+
+	key := r.readString()?
+	r.skipSpace()
+	r.expectByte(nameSeparator)?
+	return Ok(Field{Key: key, Value: r.readUntyped()?})
+}
+
 // indexValue reads one value at the reader's offset and records it,
 // then what it holds, in the order the text has them.
 func (d mut Doc) indexValue(r mut reader) Result<(), Error> {
 	r.skipSpace()
 	i := len(d.nodes)
 	start := r.at
-	d.nodes.Push(entry{start: start, end: start, next: 0, kind: Null, escaped: false})
+	d.nodes.Push(entry{start: start, end: start, next: 0, kind: NullKind, escaped: false})
 	c := r.peek()
 	match {
 		c == quotationMark => {
-			d.nodes[i].kind = String
+			d.nodes[i].kind = StringKind
 			d.nodes[i].escaped = r.skipString()?
 		}
 		c == beginArray => {
-			d.nodes[i].kind = Array
+			d.nodes[i].kind = ArrayKind
 			r.at += 1
 			r.enterNested()?
 			if !r.skipClose(endArray)? {
@@ -1622,7 +1967,7 @@ func (d mut Doc) indexValue(r mut reader) Result<(), Error> {
 			r.depth -= 1
 		}
 		c == beginObject => {
-			d.nodes[i].kind = Object
+			d.nodes[i].kind = ObjectKind
 			r.at += 1
 			r.enterNested()?
 			if !r.skipClose(endObject)? {
@@ -1635,7 +1980,7 @@ func (d mut Doc) indexValue(r mut reader) Result<(), Error> {
 			r.depth -= 1
 		}
 		c == literalTrue[0] || c == literalFalse[0] => {
-			d.nodes[i].kind = Bool
+			d.nodes[i].kind = BoolKind
 			_ = r.readBool()?
 		}
 		c == literalNull[0] => {
@@ -1644,7 +1989,7 @@ func (d mut Doc) indexValue(r mut reader) Result<(), Error> {
 			}
 		}
 		_ => {
-			d.nodes[i].kind = Number
+			d.nodes[i].kind = NumberKind
 			if len(r.readNumberText()?) == 0 {
 				return Err(r.errorHere("expected a value"))
 			}
@@ -1674,8 +2019,8 @@ func (d mut Doc) indexMember(r mut reader) Result<(), Error> {
 // object's member by its key, or an array's element by its index.
 func (d ref Doc) childByToken(n Node, token ref string) Node? {
 	match d.Kind(n) {
-		Object => return d.Get(n, token),
-		Array => {
+		ObjectKind => return d.Get(n, token),
+		ArrayKind => {
 			i := arrayIndex(token) ?? return None
 			return d.Index(n, i)
 		}
@@ -1704,4 +2049,17 @@ func arrayIndex(token ref string) int? {
 // the solidus and ~0 the tilde, ~1 first, so that ~01 is ~1.
 func unescapePointer(token ref string) string {
 	return token.ReplaceAll(escapedSolidus, solidusText).ReplaceAll(escapedTilde, tilde)
+}
+
+// childByToken returns the value one pointer token names in v: an
+// object's member by its key, or an array's element by its index.
+func (v ref Value) childByToken(token ref string) (ref Value)? {
+	match v {
+		Object(_) => return v.Get(token),
+		Array(_) => {
+			i := arrayIndex(token) ?? return None
+			return v.Index(i)
+		}
+		_ => return None,
+	}
 }

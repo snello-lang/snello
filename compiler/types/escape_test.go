@@ -31,6 +31,12 @@ func TestEscapes(t *testing.T) {
 		{"struct S { l Lexer; o ref int? }", nil}, // a struct holding a borrow is a borrow, which is allowed
 		{"func f(s ref string) Lexer { return Lexer{src: s, pos: 0} }", nil},
 		{"func f(s ref string, n int) Lexer { return Lexer{src: s, pos: n} }", nil}, // a count beside the borrow carries none
+		// A part reached through a local borrow is what the borrow lends, not the local's: returned when that is the parameter's.
+		{"func f(xs ref []int) ref int { ys := xs; return ref ys[0] }", nil},
+		{"struct W { a []int }\nfunc f(w ref W) ref int { v := w; return ref v.a[0] }", nil},
+		{"enum E { A([]int); B(int) }\nfunc f(e ref E) (ref int)? { return match e { A(items) => Some(ref items[0]), _ => None } }", nil}, // a binding of a borrowed value
+		{"func f(xs ref []int) ref []int { ys := xs; return ref ys }", []string{"cannot return a borrow of local ys"}},                    // the local itself
+		{"func f() ref int { xs := []int{1}; ys := ref xs; return ref ys[0] }", []string{"cannot return a borrow of local xs"}},           // what it borrows is local
 		{"struct Box { v int }\nfunc (b ref Box) Get() ref int { return ref b.v }\nfunc f() ref int { b := Box{v: 1}; return b.Get() }", []string{"cannot return a borrow of local b"}},
 		{"func first(xs ref []int) ref int { return ref xs[0] }\nfunc f() ref int { xs := []int{1}; return first(xs) }", []string{"cannot return a borrow of local xs"}},
 		{"func f() ref int { xs := []int{1}; return xs[0] }", []string{"cannot return a borrow of local xs"}},

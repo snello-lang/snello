@@ -72,9 +72,20 @@ func main() {
 	}
 
 	untyped := time.Since(start)
+	start = time.Now()
+	items, written := 0, 0
+	for r := 0; r < rounds; r++ { // a tree: the text read into any and written back
+		var v any
+		_ = json.Unmarshal(raw, &v)
+		items += len(v.([]any))
+		b, _ := json.Marshal(v)
+		written += len(b)
+	}
+
+	tree := time.Since(start)
 	first := text[0:strings.Index(text, "},")]
 	fmt.Println(len(text), n/rounds, m/rounds, first)
-	fmt.Println(sum / rounds)
+	fmt.Println(sum/rounds, items/rounds, written > 0)
 	per := int64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per)
+	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per, "tree", tree.Nanoseconds()/per)
 }

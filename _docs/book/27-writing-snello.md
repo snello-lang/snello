@@ -92,7 +92,27 @@ An owned value is moved, not copied: `.Clone()` is written only where two owners
 
 ## Layout
 
-The layout is Go's: tabs, braces on the line of the statement they open, one statement per line. A blank line comes before and after a block that spans lines, unless the block opens or closes the block around it:
+The layout is Go's: tabs, braces on the line of the statement they open, one statement per line. A struct, an enum or a trait of two or more members is written one member per line, a struct's field types in one column, so that each member can be read, and commented, on its own; one of a single member may stay on one line:
+
+```go
+enum Value {
+	Null
+	Bool(bool)
+	Number(string)
+	String(string)
+	Array([]Value)
+	Object([]Field)
+}
+
+struct Field {
+	Key   string
+	Value Value
+}
+
+struct Text { text string }
+```
+
+A blank line comes before and after a block that spans lines, unless the block opens or closes the block around it:
 
 ```go
 start := r.at

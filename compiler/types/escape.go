@@ -480,7 +480,8 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return
 	}
 
-	if lent && kind != placeBorrowed && !c.isParam(v) {
+	throughBorrow := kind == placeBorrowed || isBorrow(v.typ) && (kind != placeOwned || p.path != "") // ref ys[0], ys a borrow: what ys borrows, not ys
+	if lent && !throughBorrow && !c.isParam(v) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name)
 		return
 	}
