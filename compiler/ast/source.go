@@ -88,7 +88,8 @@ func writeExpr(b *strings.Builder, e Expr) {
 	case *UnaryExpr:
 		switch x.Op {
 		case token.REF, token.MUT:
-			b.WriteString(x.Op.String() + " ")
+			b.WriteString(x.Op.String())
+			b.WriteString(" ")
 		default:
 			b.WriteString(x.Op.String())
 		}
@@ -96,7 +97,9 @@ func writeExpr(b *strings.Builder, e Expr) {
 		writeExpr(b, x.X)
 	case *BinaryExpr:
 		writeExpr(b, x.X)
-		b.WriteString(" " + x.Op.String() + " ")
+		b.WriteString(" ")
+		b.WriteString(x.Op.String())
+		b.WriteString(" ")
 		writeExpr(b, x.Y)
 	case *CoalesceExpr:
 		writeExpr(b, x.X)
@@ -168,7 +171,8 @@ func writeParams(b *strings.Builder, ps []*Param) {
 		}
 
 		if p.Name != nil {
-			b.WriteString(p.Name.Name + " ")
+			b.WriteString(p.Name.Name)
+			b.WriteString(" ")
 		}
 
 		writeType(b, p.Type)
@@ -201,7 +205,8 @@ func writeType(b *strings.Builder, t Type) {
 		b.WriteString("?")
 	case *NamedType:
 		if x.Pkg != nil {
-			b.WriteString(x.Pkg.Name + ".")
+			b.WriteString(x.Pkg.Name)
+			b.WriteString(".")
 		}
 
 		b.WriteString(x.Name.Name)

@@ -185,7 +185,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n" + finish + "\treturn sn_finish();\n}\n")
+	put(&out, "int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
 	return out.Bytes(), nil
 }
 

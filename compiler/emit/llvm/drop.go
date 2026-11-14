@@ -700,12 +700,19 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 	outer := e.fn
 	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
 	f()
-	var b strings.Builder
-	b.WriteString("define internal " + result + " @" + name + "(" + strings.Join(params, ", ") + ")" + funcAttrs + " {\nentry:\n")
-	b.Write(e.fn.allocas.Bytes())
-	b.Write(e.fn.body.Bytes())
-	b.WriteString("}\n\n")
-	e.helpers.WriteString(b.String())
+	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
+	for i, p := range params {
+		if i > 0 {
+			e.helpers.WriteString(", ")
+		}
+
+		e.helpers.WriteString(p)
+	}
+
+	put(&e.helpers, ")", funcAttrs, " {\nentry:\n")
+	e.helpers.Write(e.fn.allocas.Bytes())
+	e.helpers.Write(e.fn.body.Bytes())
+	e.helpers.WriteString("}\n\n")
 	e.fn = outer
 }
 
