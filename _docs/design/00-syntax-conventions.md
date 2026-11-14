@@ -59,7 +59,7 @@ These came out of writing the parser and are binding on every example.
 
 ## Constants
 
-A `const` names a value the compiler computes, at the top level of a file or inside a function: `const KB = 1 << 10`, `const Limit u8 = 3 * 80`, `const Greeting = "hello, " + Name`.
+A `const` names a value the compiler computes, at the top level of a file or inside a function: `const KB = 1 << 10`, `const Limit u8 = 3 * 80`, `const Greeting = "hello, " + Name`. It gives a fixed value one name and one place, checks it when the program is compiled, so an overflow, a division by zero or a lost fraction is an error there and not a wrong number at run time, as Go checks it and C's `#define` does not (a `uint8_t` given 300 holds 44 with a warning), and costs nothing when the program runs.
 
 - **A constant expression** is made of literals, the names of constants, of this package or another's, `math.MaxInt8`, the operators over numbers, booleans and strings, `+ - * / %`, `& | ^ &^ << >>`, the comparisons, `&& || !` and the unary `-` and `^`, the conversions between number types, `f64(KB)`, `u8(Limit)`, and parentheses. Anything else is not constant, and a `const` that takes it is refused naming the part: `f() is not constant`, `n is not constant`. A call runs at run time and a variable can change, and neither is computed by the compiler. There is no `iota`, since an `enum` names its cases, and no function runs at compile time, which Rust's `const fn` and C++'s `constexpr` do and which a compiler written in Go would have to interpret.
 - **Typed as every expression is.** A literal takes its type from its context, as everywhere in Snello: the constant's declared type, or `int`, `f64`, `rune`, `string` or `bool` by itself. There is no untyped constant arithmetic (01-language-design.md, what Snello leaves out), so `const MB i64 = KB * KB` is refused when `KB` is an `int`, as the same assignment is anywhere, and is written `i64(KB) * i64(KB)`.
@@ -73,7 +73,7 @@ A `const` names a value the compiler computes, at the top level of a file or ins
 
 ## Variadic functions
 
-The last parameter of a function, a method or a closure may take any number of arguments, as Go's does, in one of two forms that say what happens to the arguments, as every parameter says it.
+The last parameter of a function, a method or a closure may take any number of arguments, as Go's does, in one of two forms that say what happens to the arguments, as every parameter says it. Each argument is checked against its type, where C's variadic functions check none (`printf("%s", 42)` compiles and crashes); a slice passed on with `...` is moved or lent, never shared as Go shares the caller's array, which a function writing to it changes behind the caller's back; and a lent argument cannot outlive the call.
 
 ```go
 func Sum(xs ...int) int

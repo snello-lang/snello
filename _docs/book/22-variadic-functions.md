@@ -23,6 +23,15 @@ Join(", ", words...)      // the slice lent
 
 `compiler/emit/internal/backendtest/testdata/variadic.snello` is the program this chapter is cut from, run through both backends in release and debug builds.
 
+## Why it is there
+
+A function such as a sum, a join or a logger takes as many values as its caller has. Without a variadic parameter, every call builds a slice by hand, `Sum([]int{1, 2, 3})`, which costs an allocation and says nothing about who owns the values. The two forms make the call short and say what happens to the arguments, and the checker holds both sides to it:
+
+- **Every argument is checked against its type.** C's variadic functions check none: `printf("%s\n", 42)` compiles with a warning and crashes when it runs, and a function that reads one argument more than it was given reads whatever lies on the stack. In Snello, an argument of the wrong type is a compile error, and the function sees exactly the arguments it was passed.
+- **No hidden sharing.** In Go, `scale(s...)` hands the function the caller's own array, so a function that writes `xs[0] *= 10` changes the caller's `s` behind its back. With `...T` the slice moves into the function, so the caller cannot use it after the call and no one sees a change made to it; with `...ref T` the function borrows it and cannot change it at all.
+- **No borrow outlives its owner.** A `...ref T` argument is lent for the call alone: the function cannot return it or store it, so no pointer into the caller's frame is left dangling after the call.
+- **No allocation.** The arguments are laid out on the caller's stack, so a call costs what a call with fixed parameters costs, and a variadic function is no reason to avoid one on a hot path.
+
 ## `...T`: the function takes the arguments
 
 Inside the function, `xs ...T` is an owned `[]T`: a slice made for the call, the arguments moved into it in order. The function ranges over it, indexes it, keeps it or passes it on, and drops it at its end like any slice it owns, dropping the elements with it.

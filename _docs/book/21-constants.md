@@ -14,6 +14,15 @@ var buffer [4 * KB]byte
 
 `compiler/emit/internal/backendtest/testdata/constants.snello` is the program this chapter is cut from: every kind of constant, built through both backends and set beside the same arithmetic done at run time.
 
+## Why it is there
+
+A value that never changes belongs in one place, under a name, worked out once. Without constants it is a number copied by hand wherever it is needed, or a package variable that costs a load at every use and could be any value as far as the compiler knows. A constant gives the value a name, computes it while the program is compiled, and checks it there:
+
+- **A value out of its type's range is a compile error.** `const Limit u8 = 300` is refused, `constant 300 overflows u8`. In C, `#define LIMIT 300` assigned to a `uint8_t` compiles with a warning and holds 44. Go refuses it too; Snello holds every constant to the same rule, a struct's field and an array's length included.
+- **Division by zero, a lost fraction and a constant defined through itself are caught before the program runs**, each named in its message, not met as a crash or a wrong number in production.
+- **One name, one value.** A limit, a size or a mask is changed in one place, and every use follows, the arrays it sizes among them: `var buffer [4 * KB]byte` grows when `KB` does.
+- **No cost when the program runs.** The value is written into the program as a literal would be: nothing to compute at start-up, nothing to load, and the C compiler or LLVM sees a number it can fold further.
+
 ## What a constant is made of
 
 A constant's value is a constant expression:
