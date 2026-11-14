@@ -362,6 +362,54 @@ func OpenFile(path ref string, flag int, perm FileMode) Result<File, io.Error> {
 	return Ok(File{fd: fd, name: path.Clone(), stream: false})
 }
 
+// OpenOptions says how Open opens a file, each way a field a literal
+// names, the rest taking their defaults: reading alone, and a file made
+// with permissions 0666 before the umask.
+//
+//	f := os.OpenOptions{Write: true, Append: true, Create: true}.Open(ref path)?
+//
+// Append implies Write. Create, Truncate and Exclusive need Write or
+// Append, and Truncate cannot go with Append, so a file opened for
+// reading alone is never made or emptied.
+struct OpenOptions {
+	Read      bool = true      // open for reading
+	Write     bool             // open for writing
+	Append    bool             // every write goes to the end of the file
+	Create    bool             // make the file when it does not exist
+	Truncate  bool             // empty the file when it is opened
+	Exclusive bool             // make the file, failing when it exists
+	Perm      FileMode = 0o666 // the permissions of a file it makes
+}
+
+// Open opens the named file as o says. Options that open the file for
+// neither reading nor writing, or that ask to make or empty a file
+// opened for reading alone, are an invalid argument, with Op "open".
+func (o ref OpenOptions) Open(path ref string) Result<File, io.Error> {
+	write := o.Write || o.Append
+	if !o.Read && !write || !write && (o.Create || o.Truncate || o.Exclusive) || o.Truncate && o.Append {
+		return Err(io.Errno("open", path, einval))
+	}
+
+	flag := if o.Read && write { O_RDWR } else if write { O_WRONLY } else { O_RDONLY }
+	if o.Append {
+		flag |= O_APPEND
+	}
+
+	if o.Create || o.Exclusive {
+		flag |= O_CREATE
+	}
+
+	if o.Exclusive {
+		flag |= O_EXCL
+	}
+
+	if o.Truncate {
+		flag |= O_TRUNC
+	}
+
+	return OpenFile(path, flag, o.Perm)
+}
+
 // ReadFile reads the whole of the named file as bytes, into one block
 // of the size the file reports. An Error's Op says which step failed:
 // "open", or "read" for a path that opens but cannot be read, as a

@@ -282,7 +282,7 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 		return
 	}
 
-	for _, elt := range e.Elts {
+	for i, elt := range e.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 
 		key, ok := kv.Key.(*ast.Ident)
@@ -296,6 +296,15 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 		if f == nil {
 			c.errorf(key.Pos(), "unknown field "+key.Name)
 			c.expr(kv.Value, nil)
+			continue
+		}
+
+		if keyedBefore(e.Elts[:i], key.Name) {
+			c.errorf(key.Pos(), "duplicate field "+key.Name+" in a "+t.String()+" literal")
+			if _, evaluated := done[kv.Value]; !evaluated {
+				c.expr(kv.Value, nil)
+			}
+
 			continue
 		}
 
@@ -317,6 +326,19 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 	}
 
 	c.zeroFields(e, t, st)
+}
+
+// keyedBefore reports whether one of elts, the pairs of a struct
+// literal before a key, names the field name. A literal names few
+// fields, so a scan costs less than a set.
+func keyedBefore(elts []ast.Expr, name string) bool {
+	for _, elt := range elts {
+		if key, ok := elt.(*ast.KeyValueExpr).Key.(*ast.Ident); ok && key.Name == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 // keyed makes every element of a struct literal a key: value pair, and
@@ -344,8 +366,13 @@ func (c *Checker) keyed(e *ast.CompositeLit, t Type, st *Struct) bool {
 		return false
 	}
 
-	if positional != len(st.fields) {
-		c.errorf(e.Lbrace, "a positional struct literal gives every field: "+t.String()+" has "+plural(len(st.fields), "field")+", not "+strconv.Itoa(positional))
+	if positional > len(st.fields) || positional < len(st.fields) && !st.defaultsFrom(positional) {
+		rule := "a positional struct literal gives every field: "
+		if st.hasDefaults() {
+			rule = "a positional struct literal gives every field but the last ones that declare a default: "
+		}
+
+		c.errorf(e.Lbrace, rule+t.String()+" has "+plural(len(st.fields), "field")+", not "+strconv.Itoa(positional))
 		c.looseElements(e.Elts)
 		return false
 	}

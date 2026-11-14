@@ -86,8 +86,16 @@ type BasicLit struct {
 // A Field is one or more names sharing a type, in a struct or a trait.
 // Names is empty for an embedded field, as in Go.
 type Field struct {
-	Names []*Ident
-	Type  Type
+	Names    []*Ident
+	Type     Type
+	Defaults *FieldDefaults // the defaults after the type, or nil: a pointer, so a field without them is no larger
+}
+
+// FieldDefaults are the defaults written after a field's type, = and a
+// constant expression for each name.
+type FieldDefaults struct {
+	Assign token.Pos // the =
+	Values []Expr
 }
 
 // A Param is a function parameter; Dots is the position of the ... of

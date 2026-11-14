@@ -38,6 +38,7 @@ func TestDecls(t *testing.T) {
 		{"struct Node { id int; next *Node? }", "struct Node {id int; next (*Node)?}"},
 		{"struct Rect { w, h f64; Point }", "struct Rect {w, h f64; Point}"},
 		{"struct Empty {}", "struct Empty {}"},
+		{"struct Opts { port int = 80; w, h int = 1, 2 * k; name string }", "struct Opts {port int = 80; w, h int = 1, (2 * k); name string}"}, // a default after =, one per name
 		{"struct Cache<K: Hash + Eq + Clone, V> {}", "struct Cache<K: Hash + Eq + Clone, V> {}"},
 		{"struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}", "struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}"},
 		{"enum Expr {\n\tLit(f64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "enum Expr {Lit(f64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
@@ -88,6 +89,7 @@ func TestDeclErrors(t *testing.T) {
 		{"struct T<K Ord> {}", "expected '>', found 'Ord'", 1},               // the stray '>' is on the same line, so not reported
 		{"struct T { a int\ntype", "expected field or '}', found 'type'", 2}, // then the stray type declaration ends at EOF
 		{"struct T { a int b }", "expected ';' or newline, found 'b'", 1},
+		{"struct T { a int = }", "expected expression, found '}'", 1},
 		{"trait T {\n\tx int\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T {\n\tx int\n\tfunc (s ref Self) F()\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T { 3 func (s ref Self) F() }", "expected method, field or '}', found '3'", 1}, // resumes at func

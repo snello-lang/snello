@@ -474,6 +474,15 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 			parts[i] = e.irType(st.Field(i).Type(), x.Pos()) + " " + v
 		}
 
+		for _, i := range lower.LeftOut(st, x) { // a field left out takes its default
+			v := e.staticValue(st.Default(i), st.Field(i).Type())
+			if v == "" {
+				return ""
+			}
+
+			parts[i] = e.irType(st.Field(i).Type(), x.Pos()) + " " + v
+		}
+
 		if hasDrop(t) {
 			parts = append(parts, "i1 true")
 		}

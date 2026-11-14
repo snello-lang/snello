@@ -398,6 +398,49 @@ func rangesOver(info *types.Info, list []ast.Stmt, xs *types.Var, out *[]ast.Exp
 	}
 }
 
+// Taken returns what a conversion's operand of type t is evaluated as,
+// the wanted types of operands: t when its value is not Copy, which the
+// conversion takes, as an argument by value is taken, so a temporary is
+// not dropped after it and a variable is moved; none for a Copy value,
+// which is only read.
+func Taken(t types.Type) []types.Type {
+	if types.IsCopy(t) {
+		return nil
+	}
+
+	return []types.Type{t}
+}
+
+// LeftOut returns the indices of the fields of st, a struct literal's
+// type, that the literal x leaves out and that declare a default, in
+// the order of the struct, each of which the literal gives its
+// default's folded value.
+func LeftOut(st *types.Struct, x *ast.CompositeLit) []int {
+	var out []int
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Default(i) == nil || named(x, st.Field(i).Name()) {
+			continue
+		}
+
+		out = append(out, i)
+	}
+
+	return out
+}
+
+// named reports whether the keyed literal x gives the field name.
+func named(x *ast.CompositeLit, name string) bool {
+	for _, elt := range x.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // unborrowed strips a ref written before an argument, ref s, to the
 // place it lends.
 func unborrowed(e ast.Expr) ast.Expr {

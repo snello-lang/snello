@@ -399,6 +399,46 @@ func TestOpenFile() {
 	expect.Equal(ref expect.IsErr(os.OpenFile(ref path, os.O_WRONLY|os.O_RDWR, 0)).Error(), ref ("open " + path + ": invalid argument"))
 }
 
+// OpenOptions: the defaults read alone and make files 0666 before the
+// umask, each field adds its flag, and the options that cannot go
+// together are an invalid argument.
+func TestOpenOptions() {
+	dir := testing.TempDir()
+	path := dir.Join("opts.txt")
+	invalid := "open " + path + ": invalid argument"
+	expect.Equal(ref expect.IsErr(os.OpenOptions{}.Open(ref path)).Error(), ref ("open " + path + ": no such file or directory"))
+	f := expect.IsOk(os.OpenOptions{Read: false, Write: true, Exclusive: true, Perm: 0o600}.Open(ref path))
+	expect.IsOk(f.WriteString("one\n"))
+	expect.IsOk(f.Close())
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-------")
+	expect.True(expect.IsErr(os.OpenOptions{Write: true, Exclusive: true}.Open(ref path)).Kind() == io.Exists)
+	a := expect.IsOk(os.OpenOptions{Append: true, Create: true}.Open(ref path)) // Append implies Write
+	expect.IsOk(a.Seek(io.Start(0))) // an append goes to the end wherever the position is
+	expect.IsOk(a.WriteString("two\n"))
+	expect.IsOk(a.Seek(io.Start(0)))
+	buf := make([]byte, 4)
+	expect.Equal(ref expect.IsOk(a.Read(mut buf)), ref 4) // and Read stays true
+	expect.True(buf.Equal(ref []byte("one\n")))
+	ro := expect.IsOk(os.OpenOptions{}.Open(ref path))
+	expect.IsErr(ro.WriteString("x")) // open for reading only
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "one\ntwo\n")
+	wo := expect.IsOk(os.OpenOptions{Read: false, Write: true, Truncate: true}.Open(ref path))
+	expect.IsErr(wo.Read(mut buf)) // open for writing only
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Size(), ref i64(0))
+	d := os.OpenOptions{}
+	expect.True(d.Read && !d.Write && !d.Append && !d.Create && !d.Truncate && !d.Exclusive)
+	expect.Equal(ref fmt.Sprint(d.Perm), "-rw-rw-rw-")
+	for _, o := range ref []os.OpenOptions{
+		os.OpenOptions{Read: false},                               // neither reading nor writing
+		os.OpenOptions{Create: true},                              // made for reading alone
+		os.OpenOptions{Truncate: true},                            // emptied for reading alone
+		os.OpenOptions{Exclusive: true},                           // made for reading alone
+		os.OpenOptions{Write: true, Append: true, Truncate: true}, // emptied and appended to
+	} {
+		expect.Equal(ref expect.IsErr(o.Open(ref path)).Error(), ref invalid)
+	}
+}
+
 func TestReadFileAndWriteFile() {
 	dir := testing.TempDir()
 	path := dir.Join("data.bin")

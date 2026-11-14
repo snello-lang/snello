@@ -262,10 +262,10 @@ func (c *Checker) resolveEarly(t Type) {
 	}
 
 	p.checking = true
-	file, scope, objs := c.file, c.scope, c.objs
+	at := c.here()
 	c.enter(p.file)
 	c.resolveType(p.decl, n)
-	c.file, c.scope, c.objs = file, scope, objs
+	c.restore(at)
 	p.checking, p.done = false, true
 }
 
@@ -296,7 +296,7 @@ func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {
 
 	switch def := d.Def.(type) {
 	case *ast.StructType:
-		own := c.fields(def.Fields)
+		own := c.fields(def.Fields, true)
 		fields := append(own, c.traitFields(named, own, d.Name.Pos())...) // a trait's fields are stored inline, after the type's own
 		named.SetUnderlying(NewStruct(fields))
 	case *ast.EnumType:

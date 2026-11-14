@@ -30,6 +30,8 @@ if !t.nodes[id].live { return }
 
 Every field has a zero value, so `Stack{}` is an empty stack. A named type is converted with a call of its name, `NodeID(len(t.nodes))`.
 
+A field may declare a default after its type, `port int = 8080`, which a literal that leaves the field out takes: `Server{backlog: 16}` listens on 8080, and a positional literal may stop before the last fields that have one, `Size{3}`. A function takes its settings as such a struct. Chapter 23 tells the whole of it.
+
 ### Methods
 
 ```go

@@ -350,6 +350,15 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 			parts = append(parts, "."+lower.Ident(key.Name)+" = "+v)
 		}
 
+		for _, i := range lower.LeftOut(st, x) { // a field left out takes its default
+			v := e.staticValue(st.Default(i), st.Field(i).Type())
+			if v == "" {
+				return ""
+			}
+
+			parts = append(parts, "."+lower.Ident(st.Field(i).Name())+" = "+v)
+		}
+
 		if hasDrop(t) {
 			parts = append(parts, ".sn_live = true")
 		}

@@ -1,0 +1,12 @@
+localhost 8080 16 420 0.25 -0.5 -1 255 true 5 2
+localhost 9 420 0.25 -0.5 -1 255 true 5 2
+1 1
+2 1
+3 4
+4 9 5
+x 3 3
+tag named 2
+drop named 2
+drop tag 1
+true false false -rw-rw-rw-
+true true -rw-------

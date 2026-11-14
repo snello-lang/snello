@@ -3,3 +3,16 @@
 [0 0 0 9] [0 0 0 0] 4
 true
 false
+0 a!
+1 b!
+124 [a! b!]
+got 1
+drop 1
+got 2
+drop 2
+drop 3
+drop 1
+got 2
+drop 2
+got 3
+drop 3

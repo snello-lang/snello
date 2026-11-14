@@ -304,7 +304,9 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 		live = ".sn_live = true"
 	}
 
-	if len(x.Elts) == 0 {
+	st := t.Underlying().(*types.Struct)
+	left := lower.LeftOut(st, x) // given their defaults, after the fields the literal gives
+	if len(x.Elts)+len(left) == 0 {
 		if live == "" {
 			return "(" + e.cType(t, x.Pos()) + "){0}"
 		}
@@ -312,16 +314,21 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 		return "(" + e.cType(t, x.Pos()) + "){" + live + "}"
 	}
 
-	st := t.Underlying().(*types.Struct)
-	values := make([]ast.Expr, len(x.Elts))
-	wants := make([]types.Type, len(x.Elts))
-	names := make([]string, len(x.Elts))
-	for i, elt := range x.Elts {
+	values := make([]ast.Expr, 0, len(x.Elts)+len(left))
+	wants := make([]types.Type, 0, len(x.Elts)+len(left))
+	names := make([]string, 0, len(x.Elts)+len(left))
+	for _, elt := range x.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 		key := kv.Key.(*ast.Ident)
-		values[i] = kv.Value
-		wants[i] = fieldType(st, key.Name) // the literal's own type's field, with any type arguments in place
-		names[i] = lower.Ident(key.Name)
+		values = append(values, kv.Value)
+		wants = append(wants, fieldType(st, key.Name)) // the literal's own type's field, with any type arguments in place
+		names = append(names, lower.Ident(key.Name))
+	}
+
+	for _, i := range left {
+		values = append(values, lower.Folded(e.info, st.Default(i)))
+		wants = append(wants, st.Field(i).Type())
+		names = append(names, lower.Ident(st.Field(i).Name()))
 	}
 
 	parts := e.operands(values, wants)
@@ -1096,13 +1103,21 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 		return "sn_string_from_runes((sn_slice){" + t + ".ptr, " + t + ".len, " + t + ".cap})"
 	}
 
-	v := e.operands([]ast.Expr{x}, nil)[0]
+	v := e.operands([]ast.Expr{x}, lower.Taken(from))[0]
 	if isRune(from) && isString(to) {
 		return "sn_string_from_rune(" + v + ")"
 	}
 
 	if width, _ := integer(to); width != 0 && isFloat(from) {
 		return e.truncator(to, x.Pos()) + "(" + v + ")"
+	}
+
+	if _, ok := to.Underlying().(*types.Struct); ok { // a struct and a type declared over it: the same fields, two C structs, which no cast converts
+		if e.cType(from, x.Pos()) == e.cType(to, x.Pos()) {
+			return v
+		}
+
+		return "(*(" + e.cType(to, x.Pos()) + " *)&" + e.spill(v, from, x.Pos()) + ")"
 	}
 
 	return "((" + e.cType(to, x.Pos()) + ")(" + v + "))"

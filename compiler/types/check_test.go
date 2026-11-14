@@ -244,6 +244,12 @@ var handledErrors = map[string]bool{
 	"variadic-spread.snello":   true,
 	"variadic-deferred.snello": true,
 	"variadic-kept.snello":     true,
+	// A field's default is a constant of its type, and a struct that
+	// declares one has no zero value.
+	"default-not-constant.snello": true,
+	"default-no-zero.snello":      true,
+	// A conversion moves the value, and takes no borrow of it.
+	"conversion-moves.snello": true,
 	// A deferred print or built-in saves views of its arguments.
 	"defer-printed.snello": true,
 	// A range over an iterator: a value with Next on a mut receiver.
@@ -518,6 +524,10 @@ func TestCheckFiles(t *testing.T) {
 		{[]string{"package p\nfunc f() int { return g() }", "package p\nfunc g() int { return h }"}, []string{"b.snello:2:23: undefined: h"}},
 		{[]string{"package p\ntrait Named { func (s ref Self) Name() string }\nstruct T impl Named {}", "package p\nfunc (t ref T) Name() string { return \"t\" }\nfunc f(t ref T) string { return t.Name() }"}, nil}, // a trait and its implementation across files
 		{[]string{"package p\nconst MB = KB * KB\nstruct Page { bytes [KB]byte }", "package p\nimport \"math\"\nconst KB = 1 << 10\nconst Pi2 = math.Pi * 2.0"}, nil},                                                 // a constant of another file, needed by a type before the constants are checked, with that file's imports
+		// A field's default is checked with its own file's imports, after a declaration of another file was checked on demand: an array length, a type declared over a later one, and a name the other file gives another package.
+		{[]string{"package p\nimport \"os\"\nstruct Conf { arr [N]int; perm os.FileMode = os.ModePerm }", "package p\nconst N = 3"}, nil},
+		{[]string{"package p\nimport \"os\"\ntype Alias Later\nstruct Conf { perm os.FileMode = os.ModePerm }", "package p\ntype Later int"}, nil},
+		{[]string{"package p\nimport \"os\"\nstruct Conf { arr [N]int; perm int = int(os.ModePerm) }", "package p\nimport os \"math\"\nconst N = 3\nconst Pi2 = os.Pi * 2.0"}, nil},
 		{[]string{"package p\nconst A = B + 1", "package p\nconst B = A * 2"}, []string{"a.snello:2:7: initialization cycle: A refers to B, B refers to A"}},
 		{[]string{"package p\nconst Low u8 = High - 300", "package p\nconst High u8 = 255"}, []string{"a.snello:2:23: 300 overflows u8"}}, // the literal, typed u8 by its context, before any arithmetic
 	}

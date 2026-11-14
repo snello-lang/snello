@@ -199,6 +199,15 @@ func fieldString(f *ast.Field) string {
 		s = strings.Join(names, ", ") + " " + s
 	}
 
+	if f.Defaults != nil {
+		var values []string
+		for _, v := range f.Defaults.Values {
+			values = append(values, exprString(v))
+		}
+
+		s += " = " + strings.Join(values, ", ")
+	}
+
 	return s
 }
 

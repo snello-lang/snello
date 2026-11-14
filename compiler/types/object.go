@@ -4,7 +4,10 @@
 
 package types
 
-import "github.com/snello-lang/snello/compiler/token"
+import (
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
+)
 
 // BuiltinID identifies a predeclared function.
 type BuiltinID int
@@ -63,9 +66,10 @@ type TypeName struct {
 type Var struct {
 	object
 	field  bool
-	global bool // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
-	kept   bool // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
-	lent   bool // a variadic ...ref parameter, whose arguments the caller lays out for the call alone: no borrow of it leaves the function, from its body or a closure's
+	global bool  // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
+	kept   bool  // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
+	lent   bool  // a variadic ...ref parameter, whose arguments the caller lays out for the call alone: no borrow of it leaves the function, from its body or a closure's
+	def    int32 // a struct field's default, 1 + its index in its package's defaults, or 0 for none: an index fits beside the flags, so no variable grows
 	keptBy *keptBy
 }
 
@@ -199,6 +203,16 @@ func (o *object) isObject()      {}
 
 // IsField reports whether the variable is a struct or variant field.
 func (v *Var) IsField() bool { return v.field }
+
+// Default returns the default a struct field declares, a constant
+// expression a literal that leaves the field out gives it, or nil.
+func (v *Var) Default() ast.Expr {
+	if v.def == 0 {
+		return nil
+	}
+
+	return v.pkg.defaults[v.def-1]
+}
 
 // Val returns the constant's folded value.
 func (c *Const) Val() Constant { return c.val }

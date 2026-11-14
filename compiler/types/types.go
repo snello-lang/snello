@@ -16,6 +16,8 @@ package types
 import (
 	"strconv"
 	"strings"
+
+	"github.com/snello-lang/snello/compiler/ast"
 )
 
 // BasicKind identifies a predeclared basic type.
@@ -411,6 +413,33 @@ func (s *Struct) NumFields() int { return len(s.fields) }
 
 // Field returns the i'th field.
 func (s *Struct) Field(i int) *Var { return s.fields[i] }
+
+// Default returns the default the i'th field declares, a constant
+// expression a literal that leaves the field out gives it, or nil.
+func (s *Struct) Default(i int) ast.Expr { return s.fields[i].Default() }
+
+// hasDefaults reports whether a field of s declares a default.
+func (s *Struct) hasDefaults() bool {
+	for _, f := range s.fields {
+		if f.def != 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// defaultsFrom reports whether every field of s from the i'th on
+// declares a default, which a positional literal may then leave out.
+func (s *Struct) defaultsFrom(i int) bool {
+	for ; i < len(s.fields); i++ {
+		if s.Default(i) == nil {
+			return false
+		}
+	}
+
+	return true
+}
 
 // NumVariants returns the number of variants.
 func (e *Enum) NumVariants() int { return len(e.variants) }

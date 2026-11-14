@@ -5,6 +5,7 @@
 package lower
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -303,6 +304,50 @@ func TestMayLeave(t *testing.T) {
 		x := f.Decls[0].(*ast.FuncDecl).Body.List[0].(*ast.AssignStmt).Rhs[0]
 		if got := MayLeave(x); got != tt.want {
 			t.Errorf("%s: MayLeave %v, want %v", tt.src, got, tt.want)
+		}
+	}
+}
+
+// TestLeftOut finds the fields with defaults that a struct literal
+// leaves out, in the struct's order, a positional literal's included,
+// and none of a struct that declares no default.
+func TestLeftOut(t *testing.T) {
+	f, info := checkSource(t, `package main
+struct Size { w int; h int = 1; d int = 2 }
+struct Plain { a int; b int }
+func main() {
+	print(Size{}, Size{d: 5}, Size{3}, Size{3, 4, 5}, Size{w: 1, d: 2, h: 3}, Plain{})
+}`)
+	main := f.Decls[len(f.Decls)-1].(*ast.FuncDecl)
+	args := main.Body.List[0].(*ast.ExprStmt).X.(*ast.CallExpr).Args
+	for i, want := range []string{"h d", "h", "h d", "", "", ""} {
+		lit := args[i].(*ast.CompositeLit)
+		var got []string
+		st := info.Types[lit].Underlying().(*types.Struct)
+		for _, i := range LeftOut(st, lit) {
+			got = append(got, st.Field(i).Name())
+		}
+
+		if strings.Join(got, " ") != want {
+			t.Errorf("%s: left out %q, want %q", ast.Source(lit), got, want)
+		}
+	}
+}
+
+// TestTaken makes a conversion take an operand that is not Copy, as an
+// argument by value is taken, and only read a Copy one.
+func TestTaken(t *testing.T) {
+	for _, tt := range []struct {
+		t    types.Type
+		want bool
+	}{
+		{types.Typ[types.String], true},
+		{types.NewSlice(types.Typ[types.Int]), true},
+		{types.Typ[types.Int], false},
+		{types.Typ[types.Float64], false},
+	} {
+		if got := Taken(tt.t); (got != nil) != tt.want || got != nil && got[0] != tt.t {
+			t.Errorf("Taken(%s) = %v, want taken %v", tt.t, got, tt.want)
 		}
 	}
 }

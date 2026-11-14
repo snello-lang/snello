@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/token"
 )
 
@@ -308,5 +310,54 @@ func TestScope(t *testing.T) {
 
 	if fn.Parent() != pkg || Universe.Parent() != nil {
 		t.Error("Parent chain is wrong")
+	}
+}
+
+// TestStructDefault checks the defaults a struct keeps: the expression
+// each field's declaration writes, nil for a field without one, the
+// same in an instance of a generic struct as in the struct, and none
+// for the fields a trait adds after the type's own, or for a struct
+// that declares none; the package keeps each default once.
+func TestStructDefault(t *testing.T) {
+	src := "package p\nconst k = 4\nstruct Size { w int; h int = k * 2 }\nstruct Box<T> { item T; n int = 3 }\ntrait Named { var name string }\nstruct Tag impl Named { n int = 1 }\nstruct Plain { a int }\nfunc f() Box<string> { return Box<string>{item: \"a\"} }"
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := libraryConfig().Check("", file, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	def := func(t Type, i int) string {
+		st := t.Underlying().(*Struct)
+		if x := st.Default(i); x != nil {
+			return ast.Source(x)
+		}
+
+		return "none"
+	}
+
+	lookup := func(name string) Type { return pkg.Scope().Lookup(name).Type() }
+	inst := lookup("f").(*Signature).Results()
+	for _, tt := range []struct {
+		what, got, want string
+	}{
+		{"Size.w", def(lookup("Size"), 0), "none"},
+		{"Size.h", def(lookup("Size"), 1), "k * 2"},
+		{"Box<string>.item", def(inst, 0), "none"},
+		{"Box<string>.n", def(inst, 1), "3"},
+		{"Tag.n", def(lookup("Tag"), 0), "1"},
+		{"Tag.name", def(lookup("Tag"), 1), "none"}, // the trait's field, after the type's own
+		{"Plain.a", def(lookup("Plain"), 0), "none"},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("%s: default %s, want %s", tt.what, tt.got, tt.want)
+		}
+	}
+
+	if n := len(pkg.defaults); n != 3 {
+		t.Errorf("the package holds %d defaults, want 3: Size.h, Box.n, which its instance shares, and Tag.n", n)
 	}
 }

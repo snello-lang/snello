@@ -412,12 +412,18 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
 		return e.rt("sn_string_from_rune", "%sn_string", e.looked(x, from))
 	}
 
-	v := e.derefTo(e.operands([]ast.Expr{x}, nil)[0], e.typeOf(x), from)
+	v := e.derefTo(e.operands([]ast.Expr{x}, lower.Taken(from))[0], e.typeOf(x), from)
 	ir := e.irType(to, x.Pos())
 	switch {
 	case !(isInteger(from) || isFloat(from)) || !(isInteger(to) || isFloat(to)):
 		if e.irType(from, x.Pos()) == ir {
 			return value{ir, v.s} // the same shape under another name
+		}
+
+		if _, ok := to.Underlying().(*types.Struct); ok { // a struct and a type declared over it: the same fields, under two names the IR keeps apart
+			p := e.slot(v.typ)
+			e.store(v, p)
+			return e.load(ir, p)
 		}
 
 		e.unsupported(x.Pos(), "converting "+from.String()+" to "+to.String())

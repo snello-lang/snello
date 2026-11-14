@@ -32,7 +32,7 @@ Simplicity is a goal with the same weight as the others, and it is kept by subtr
 | Exceptions | Hidden control flow, costly without a GC | `Result` and `?` |
 | `switch` | Two ways to branch on a value, one of which checks nothing | `match`, which checks that every case is covered; with no value, `match { cond => ..., _ => ... }` runs the first arm whose condition holds |
 | Labels on `break` and `continue` | Leaving several loops at once almost always means found or give up | `break` and `continue` mean the innermost loop; a nested exit is a small function that `return`s, with a `T?` result and `??` |
-| Parameter defaults and overloading | Defaults are trailing only, cannot skip one and are lost through a function value; overloading makes `Max(1, 2)` and `f := Max` ambiguous once literals and type arguments are inferred | Defaults on struct fields, a constant each, and the settings of a function taken as such a struct, every setting named, in any order, any of them skipped (planned) |
+| Parameter defaults and overloading | Defaults are trailing only, cannot skip one and are lost through a function value; overloading makes `Max(1, 2)` and `f := Max` ambiguous once literals and type arguments are inferred | Defaults on struct fields, a constant each, and the settings of a function taken as such a struct, every setting named, in any order, any of them skipped |
 | Inheritance | Fragile base classes | Traits with defaults, and Go embedding |
 | Impl blocks, `dyn`, `Box` | Rust vocabulary with Go equivalents | `impl` on the type line, a trait as a type, `*T` |
 | async/await | Function coloring | Tasks that block, as goroutines do |

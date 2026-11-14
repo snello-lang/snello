@@ -17,10 +17,11 @@ import (
 // empty for the program being compiled, whether it is the standard
 // library's, and the scope holding its top-level declarations.
 type Package struct {
-	name  string
-	path  string
-	std   bool
-	scope *Scope
+	name     string
+	path     string
+	std      bool
+	scope    *Scope
+	defaults []ast.Expr // the defaults its structs' fields declare, which each field names by index (Var.def)
 }
 
 // An Importer loads the package an import path names, as
@@ -173,13 +174,15 @@ type Checker struct {
 	// package by what checks each, the constants being checked, outermost
 	// first, the types of the constant expression being folded, and the
 	// package variables whose type their value gives, until it does.
-	early      map[*Named]*pendingType // the types declared over another, which a constant may need resolved before their turn (resolve.go)
-	consts     map[*Const]*pendingConst
-	constOrder []*Const
-	constPath  []*Const
-	folding    map[ast.Expr]Type
-	foldTypes  map[ast.Expr]Type // the map folding reuses
-	uninferred map[*Var]bool
+	early         map[*Named]*pendingType // the types declared over another, which a constant may need resolved before their turn (resolve.go)
+	fieldDefaults []pendingDefault        // the struct fields' defaults, checked once the constants are (checkDefaults)
+	fileIndex     int                     // the index of the file being walked, which entering a file sets
+	consts        map[*Const]*pendingConst
+	constOrder    []*Const
+	constPath     []*Const
+	folding       map[ast.Expr]Type
+	foldTypes     map[ast.Expr]Type // the map folding reuses
+	uninferred    map[*Var]bool
 
 	// Each file's scope of its imports and table of declared objects,
 	// by the index of the file, which entering a file makes current.
@@ -333,6 +336,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.resolvePending()
 	c.resolvePendingBounds()
 	c.checkConsts()
+	c.checkDefaults()
 	for i, f := range fs {
 		enter(i)
 		c.resolveSignatures(f)
@@ -372,7 +376,29 @@ type fileState struct {
 // enter makes the file of index i the one being walked: its scope of
 // imports, under the package scope, and its table of declared objects.
 func (c *Checker) enter(i int) {
-	c.file, c.scope, c.objs = c.files[i], c.fileState[i].scope, c.fileState[i].objs
+	c.file, c.scope, c.objs, c.fileIndex = c.files[i], c.fileState[i].scope, c.fileState[i].objs, i
+}
+
+// A walkPlace is where the checker walks: the file, its index, the
+// innermost scope open and the file's declared objects, all that enter
+// changes.
+type walkPlace struct {
+	file  *token.File
+	index int
+	scope *Scope
+	objs  []Object
+}
+
+// here returns where the checker walks, for restore after it checks a
+// declaration of another file on demand.
+func (c *Checker) here() walkPlace {
+	return walkPlace{c.file, c.fileIndex, c.scope, c.objs}
+}
+
+// restore makes p, which here returned, the place walked again, every
+// part of it, so that nothing checked after it reads the other file's.
+func (c *Checker) restore(p walkPlace) {
+	c.file, c.fileIndex, c.scope, c.objs = p.file, p.index, p.scope, p.objs
 }
 
 // errorf reports an error at pos. Error paths may allocate freely.

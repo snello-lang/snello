@@ -446,8 +446,8 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("}")
 }
 
-// rangeStmt writes for k, v := range x over a slice or a string: an
-// index loop, with the key and value bound at the top of each pass. A
+// rangeStmt writes for k, v := range x over a slice, an array or a
+// string: an index loop, with the key and value bound at the top of each pass. A
 // value reached through a mut borrow is bound as a pointer into the
 // slice. Fields and Split yield a slice of borrows whose one variable
 // is the item.
@@ -492,19 +492,21 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
-	e.line("for (sn_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
-	elem := place + ".ptr[" + i + "]"
+	n, elem := place+".len", place+".ptr["+i+"]"
 	var elemType types.Type = types.Typ[types.Uint8]
 	iterator := false
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
 		elemType = u.Elem()
 		_, iterator = elemType.(*types.Ref)
+	case *types.Array:
+		n, elem, elemType = strconv.FormatInt(u.Len(), 10), place+".at["+i+"]", u.Elem()
 	case *types.Basic:
 	default:
 		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
 	}
 
+	e.line("for (sn_int " + i + " = 0; " + i + " < " + n + "; " + i + "++) {")
 	e.push(true)
 	if iterator {
 		e.rangeVar(s.Key, s.Tok, elem, elemType, consume)

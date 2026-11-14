@@ -452,12 +452,15 @@ func (p *Parser) skipFieldLine() bool {
 	return false
 }
 
-// parseField parses: ident {"," ident} Type | Type. As in parseParams,
-// an identifier is a name only if a comma or a type follows it; an
-// identifier followed by the end of the line is an embedded type.
+// parseField parses: ident {"," ident} Type ["=" ExprList] | Type. As in
+// parseParams, an identifier is a name only if a comma or a type follows
+// it; an identifier followed by the end of the line is an embedded type.
+// The expressions after = are the fields' defaults, which the checker
+// requires to be constant, one for each name.
 //
 //	id int          Field{Names: [id], Type: int}
 //	w, h float64    Field{Names: [w, h], Type: float64}
+//	port int = 80   Field{Names: [port], Type: int, Defaults: {Values: [80]}}
 //	Point           Field{Names: nil, Type: Point}
 //	pkg.Base        Field{Names: nil, Type: NamedType{Pkg: pkg}}
 func (p *Parser) parseField() *ast.Field {
@@ -474,5 +477,11 @@ func (p *Parser) parseField() *ast.Field {
 	}
 
 	field.Type = p.parseType()
+	if p.tok == token.ASSIGN {
+		pos := p.pos
+		p.next()
+		field.Defaults = &ast.FieldDefaults{Assign: pos, Values: p.parseExprList(token.SEMICOLON)}
+	}
+
 	return field
 }

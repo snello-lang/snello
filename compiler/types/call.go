@@ -544,14 +544,23 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 	}
 
 	v := valueType(x)
-	if r, ok := x.typ.(*Ref); ok && (isString(r.elem) || isByteSlice(r.elem) || isRuneSlice(r.elem)) {
-		v = r.elem // a conversion between a string and its bytes or runes copies, so it reads a borrowed operand as well
+	r, lent := x.typ.(*Ref)
+	lent = lent && !IsCopy(r.elem) // a borrow of a value that is not Copy, which valueType keeps
+	if lent {
+		v = r.elem
 	}
 
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
 	case Identical(v.Underlying(), t.Underlying()):
+		if lent { // the value itself, which a borrow does not give: two owners would free it twice
+			c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String()+": the conversion takes the value, and a borrow lends it; convert a value of its own, a clone or one moved in")
+			break
+		}
+
 		c.zeroConversion(e, v, t)
+		c.maybeMove(x, t) // the value itself, under another name: it moves, as an argument by value does
+	// A conversion between a string and its bytes or runes copies, so it reads a borrowed operand as well.
 	case isString(v) && isByteSlice(t), isByteSlice(v) && isString(t):
 	case isRune(v) && isString(t), isRuneSlice(v) && isString(t):
 	default:

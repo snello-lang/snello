@@ -157,6 +157,48 @@ func TestFoldRecorded(t *testing.T) {
 	}
 }
 
+// A field's default is folded in its field's type and recorded for the
+// backends, a constant declared after the struct included.
+func TestFoldDefaults(t *testing.T) {
+	src := "package p\nstruct S { a int = N * 2; b f64 = 1; c string = \"x\" + \"y\"; d u8 = 255 }\nconst N = 21"
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &Info{}
+	pkg, err := libraryConfig().Check("", file, f, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"N * 2 = 42 int", "1 = 1 f64", "\"x\" + \"y\" = \"xy\" string", "255 = 255 u8"}
+	st := pkg.Scope().Lookup("S").Type().Underlying().(*Struct)
+	for i, v := range st.fields {
+		x := st.Default(i)
+		got := ast.Source(x) + " = " + info.Values[x].text() + " " + info.Types[x].String()
+		if got != want[i] {
+			t.Errorf("field %s: %s, want %s", v.Name(), got, want[i])
+		}
+	}
+}
+
+// A refused default stays the field's default, so a literal that
+// leaves the field out, keyed or positional, is not refused for it a
+// second time, whatever the field's type: the one mistake is the one
+// error.
+func TestRefusedDefault(t *testing.T) {
+	for _, src := range []string{
+		"func size() int { return 4 }\nstruct A { n int = size() }\nfunc f() { print(A{}) }",
+		"struct A { m int; n int = \"four\" }\nfunc f() { print(A{}, A{1}) }",
+		"struct In { a int = 2 }\nconst cIn = In{a: 7}\nstruct S { x int; in In = cIn }\nfunc f() { print(S{x: 1}, S{}, S{2}) }", // In has no zero value
+	} {
+		if got := checkErrors(t, "package p\n"+src); len(got) != 1 {
+			t.Errorf("%s: got %q, want the default's error alone", src, got)
+		}
+	}
+}
+
 func TestIntRange(t *testing.T) {
 	for _, tt := range []struct {
 		kind        BasicKind

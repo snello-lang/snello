@@ -167,7 +167,7 @@ Inside the trait's default methods, a value of `Self` has the trait's fields as 
 func (n ref Self) Name() ref string { return ref n.name }
 ```
 
-A trait field has no initial value; `var name string = "x"` is a syntax error.
+A trait field has no initial value: `var name string = "x"` is refused, `a trait field takes no default: the type that implements the trait gives the field its value`. A struct's own fields may declare one (chapter 23).
 
 Each field name means one place. A type declaring a field a trait of its also declares is refused at the type's field, and two traits giving one type a field of the same name are refused at the type, since neither could be meant. A trait with fields can be implemented only by a struct; an enum has nowhere to store them. A field whose type puts `Self` inside owned data, `var kids []Self`, is checked again for each implementing type, so a type holding a borrow cannot be stored through it, as it could not be stored in a slice of its own (chapter 6).
 

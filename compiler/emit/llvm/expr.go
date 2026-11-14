@@ -1176,15 +1176,22 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) value {
 			out = e.insert(out, value{"i1", "true"}, liveIndex(t.(*types.Named)))
 		}
 
-		values := make([]ast.Expr, len(x.Elts))
-		wants := make([]types.Type, len(x.Elts))
-		indices := make([]int, len(x.Elts))
-		for i, elt := range x.Elts {
+		left := lower.LeftOut(u, x) // given their defaults, after the fields the literal gives
+		values := make([]ast.Expr, 0, len(x.Elts)+len(left))
+		wants := make([]types.Type, 0, len(x.Elts)+len(left))
+		indices := make([]int, 0, len(x.Elts)+len(left))
+		for _, elt := range x.Elts {
 			kv := elt.(*ast.KeyValueExpr)
 			key := kv.Key.(*ast.Ident)
-			values[i] = kv.Value
-			indices[i] = fieldIndex(u, key.Name)
-			wants[i] = u.Field(indices[i]).Type()
+			values = append(values, kv.Value)
+			indices = append(indices, fieldIndex(u, key.Name))
+			wants = append(wants, u.Field(indices[len(indices)-1]).Type())
+		}
+
+		for _, i := range left {
+			values = append(values, lower.Folded(e.info, u.Default(i)))
+			indices = append(indices, i)
+			wants = append(wants, u.Field(i).Type())
 		}
 
 		for i, p := range e.operands(values, wants) {

@@ -1,0 +1,32 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a struct with a field that declares a default has no zero
+// value, since zeros would skip the defaults it declares: a variable
+// declared without a value, make of a slice and a map read are refused,
+// and a positional literal leaves out only the last fields, those that
+// declare a default. Fix: write the literal, f := F{}, which takes
+// every default, or name the fields, F{other: 1}.
+
+package p
+
+struct F { port int = 80; other int }
+
+func declared() {
+	var f F                            // ERROR "cannot declare f without a value: F declares defaults, which a zero value would skip; write f := F{}"
+	print(f)
+}
+
+func made() {
+	fs := make([]F, 2)                 // ERROR "make cannot fill a []F"
+	print(fs)
+}
+
+func read(m map[string]F) {
+	print(m["a"])                      // ERROR "for a key the map does not hold; use m.Get"
+}
+
+func positional() {
+	print(F{1})                        // ERROR "a positional struct literal gives every field but the last ones that declare a default: F has 2 fields, not 1"
+}

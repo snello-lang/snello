@@ -295,3 +295,12 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | one form | `...ref T` lends each argument for the call, laid out on the caller's stack, with no allocation; the function returns no borrow of them |
 | `f(xs...)` with `xs []T` | the same; for `...ref T`, `xs` is lent, and a variadic function passes its own `xs...` on for free |
 | `func(...int)` is a type of its own | the same, written `func(...int)` or `func(...ref string)` |
+
+## Chapter 23: Default field values
+
+| In Go | In Snello |
+|---|---|
+| A settings struct whose zero fields mean "the default", read with `if o.Port == 0 { port = 8080 }` | `port int = 8080` in the struct; a literal that leaves the field out takes it, and `0` stays a value of its own |
+| Functional options, `NewServer(WithPort(9000), WithVerbose())` | a struct literal, `Server{port: 9000}`, every setting named, any of them skipped |
+| `os.OpenFile(path, os.O_WRONLY\|os.O_APPEND\|os.O_CREATE, 0o644)` | the same, or `os.OpenOptions{Append: true, Create: true}.Open(path)` |
+| Every struct has a zero value, `var o Options` | a struct with a default has none: `var o Options` is refused, `o := Options{}` takes every default |

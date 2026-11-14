@@ -30,6 +30,14 @@ const (
 // ConstKind says which part of a Constant holds its value.
 type ConstKind int
 
+// A pendingDefault is a struct field's default, x, of the type typ,
+// checked in the file that declares the field.
+type pendingDefault struct {
+	x    ast.Expr
+	typ  Type
+	file int
+}
+
 // A pendingConst is what checks a top-level constant: the declaration,
 // the index of its name, the file it is in, and how far it has gone:
 // being checked, so that a use met now is a cycle, or checked.
@@ -91,14 +99,14 @@ func failed() (Constant, bool)           { return Constant{}, false }
 func folded(v Constant) (Constant, bool) { return v, true }
 
 // constValue checks x, the value of a constant, against the type t the
-// declaration gives it, or none, folds it, and records the value of x
+// declaration gives it, or none, as what, folds it, and records the value of x
 // and of each field a struct literal gives. It returns the operand the
 // check gave and the value; a struct constant's value is unknown, as
 // only its fields have one. Nothing is folded after the check reported
 // an error, which would be reported again; and a value that cannot be
 // folded is always reported, here if nowhere else, so that no constant
 // reaches the backends without one.
-func (c *Checker) constValue(x ast.Expr, t Type) (operand, Constant) {
+func (c *Checker) constValue(x ast.Expr, t Type, what string) (operand, Constant) {
 	if bad := c.notConstantValue(x); bad != nil {
 		c.errorf(bad.Pos(), exprText(bad)+" is not constant")
 		return invalidOperand, Constant{}
@@ -108,7 +116,7 @@ func (c *Checker) constValue(x ast.Expr, t Type) (operand, Constant) {
 	before := len(c.errors)
 	op := c.expr(x, t)
 	if op.mode != invalid && t != nil {
-		c.assign(op, t, x.Pos(), "declaration")
+		c.assign(op, t, x.Pos(), what)
 	}
 
 	if op.mode == invalid || len(c.errors) > before {
@@ -783,6 +791,21 @@ func (c *Checker) collectConsts(fs []*ast.File) {
 	}
 }
 
+// checkDefaults checks each struct field's default as a constant's
+// value of the field's type, in the file that declares the field, once
+// every constant has its value: a default is folded, and its value
+// recorded, as a constant's is. A refused one stays the field's
+// default, so a literal that leaves the field out is not refused for
+// it a second time; the program builds no further.
+func (c *Checker) checkDefaults() {
+	for _, d := range c.fieldDefaults {
+		c.enter(d.file)
+		c.constValue(d.x, d.typ, "field default")
+	}
+
+	c.fieldDefaults = nil
+}
+
 // checkConsts checks the top-level constants nothing has needed yet,
 // in the order they are declared.
 func (c *Checker) checkConsts() {
@@ -811,7 +834,7 @@ func (c *Checker) checkConst(k *Const) {
 	}
 
 	p.checking = true
-	file, scope, objs, folding := c.file, c.scope, c.objs, c.folding
+	at, folding := c.here(), c.folding
 	callee, wantType, inner, negated, names := c.callee, c.wantType, c.inner, c.negated, c.names
 	c.callee, c.wantType, c.inner, c.negated, c.names = nil, nil, false, nil, nil
 	c.enter(p.file)
@@ -838,7 +861,8 @@ func (c *Checker) checkConst(k *Const) {
 	}
 
 	c.constPath = c.constPath[:len(c.constPath)-1]
-	c.file, c.scope, c.objs, c.folding = file, scope, objs, folding
+	c.restore(at)
+	c.folding = folding
 	c.callee, c.wantType, c.inner, c.negated, c.names = callee, wantType, inner, negated, names
 	p.checking, p.done = false, true
 }
@@ -879,7 +903,7 @@ func (c *Checker) constCycle(k *Const) {
 // constInit gives the constant k the type and the value of x, its value
 // in its declaration, under the type declared for it, or none.
 func (c *Checker) constInit(k *Const, x ast.Expr, declared Type) {
-	op, v := c.constValue(x, declared)
+	op, v := c.constValue(x, declared, "declaration")
 	if k.typ == Typ[Invalid] { // refused as part of a cycle while its value was checked
 		return
 	}

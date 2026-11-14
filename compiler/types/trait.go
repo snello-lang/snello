@@ -270,7 +270,7 @@ func (c *Checker) resolveTraitLists(f *ast.File) {
 
 			tr.refines = c.traitList(d.Refines, "after the colon")
 			c.self = tr.self
-			tr.fields = c.fields(d.Fields)
+			tr.fields = c.fields(d.Fields, false)
 			c.self = nil
 			if tr.tparams != nil {
 				c.closeScope()

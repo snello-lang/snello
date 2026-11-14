@@ -55,7 +55,7 @@ func (c *Checker) typ(e ast.Type) Type {
 
 		return NewTuple(elems...)
 	case *ast.StructType:
-		return NewStruct(c.fields(e.Fields))
+		return NewStruct(c.fields(e.Fields, true))
 	case *ast.EnumType:
 		variants := make([]*Variant, len(e.Variants))
 		for i, v := range e.Variants {
@@ -264,18 +264,30 @@ func (c *Checker) results(rs []ast.Type) Type {
 	return NewTuple(elems...)
 }
 
-// fields turns struct fields into variables; a field with several
-// names, `x, y f64`, becomes one variable per name.
-func (c *Checker) fields(fs []*ast.Field) []*Var {
+// fields turns struct or trait fields into variables; a field with
+// several names, `x, y f64`, becomes one variable per name. A struct
+// field's default, one per name, goes in the package's table of
+// defaults, which the variable names by index, and is checked once the
+// constants are (checkDefaults); a field of a type that holds a type
+// parameter, an embedded one and a trait's take none.
+func (c *Checker) fields(fs []*ast.Field, defaults bool) []*Var {
 	var vars []*Var
 	seen := NewScope(nil)
 	for _, f := range fs {
 		t := c.typ(f.Type)
-		for _, name := range f.Names {
+		given := f.Defaults != nil && c.defaultsFit(f, t, defaults)
+
+		for i, name := range f.Names {
 			v := NewField(name.Pos(), name.Name, t)
 			v.pkg = c.pkg // the package that declares the field decides who may name it, whatever type is declared over the struct
 			if old := seen.Insert(v); old != nil {
 				c.errorf(name.Pos(), "duplicate field "+name.Name)
+			}
+
+			if given {
+				c.pkg.defaults = append(c.pkg.defaults, f.Defaults.Values[i])
+				v.def = int32(len(c.pkg.defaults))
+				c.fieldDefaults = append(c.fieldDefaults, pendingDefault{x: f.Defaults.Values[i], typ: t, file: c.fileIndex})
 			}
 
 			c.recordDef(name, v)
@@ -284,6 +296,38 @@ func (c *Checker) fields(fs []*ast.Field) []*Var {
 	}
 
 	return vars
+}
+
+// defaultsFit reports whether the defaults written after a field may
+// be its defaults, and refuses them when not: one for each name, on a
+// struct's field with names, of a type that holds no type parameter.
+func (c *Checker) defaultsFit(f *ast.Field, t Type, defaults bool) bool {
+	d := f.Defaults
+	switch {
+	case !defaults:
+		c.errorf(d.Assign, "a trait field takes no default: the type that implements the trait gives the field its value")
+	case len(f.Names) == 0:
+		c.errorf(d.Assign, "an embedded field takes no default")
+	case len(d.Values) != len(f.Names):
+		c.errorf(d.Assign, "a default for each field: "+plural(len(f.Names), "name")+" but "+plural(len(d.Values), "default"))
+	case holdsTypeParam(t):
+		c.errorf(d.Assign, "a field of type "+t.String()+" takes no default: no constant has every type a type parameter stands for")
+	default:
+		return true
+	}
+
+	return false
+}
+
+// holdsTypeParam reports whether t is a type parameter or holds one.
+func holdsTypeParam(t Type) bool {
+	held := false
+	walkTypes(t, func(t Type) {
+		_, ok := t.(*TypeParam)
+		held = held || ok
+	})
+
+	return held
 }
 
 // variantFields resolves the field types of each variant declaration
