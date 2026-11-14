@@ -277,3 +277,12 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | A `*Rand` is shared by copying the pointer | A `Rand` is a value: lend it by `mut` to share one sequence; a copy replays from the same point, as a copied `PCG` does |
 | `rand.Uint64`, `Uint32`, `N`, `NormFloat64`, `ExpFloat64` | not in the package |
 
+## Chapter 21: Constants
+
+| In Go | In Snello |
+|---|---|
+| `const KB = 1 << 10`, untyped, exact to any size, folded wherever a constant expression is written | Typed by its context, folded in its own type with an overflow refused, in a `const` and an array length; elsewhere `x := KB * KB` is run-time arithmetic and wraps |
+| `iota` in a `const` block | an `enum`, whose cases are named |
+| `-0.0` is a zero | `-0.0` is a negative zero, as at run time |
+| `len("abc")` is a constant | `len` is not constant; write the number, or make it a `var` |
+| a constant is a basic type | a struct of constant fields may be a constant too, read by its fields |

@@ -92,8 +92,8 @@ func init() {
 		def(NewTypeName(token.NoPos, t.name, t))
 	}
 
-	def(NewConst(token.NoPos, "true", Typ[Bool], "true"))
-	def(NewConst(token.NoPos, "false", Typ[Bool], "false"))
+	def(NewConst(token.NoPos, "true", Typ[Bool], boolConst(true)))
+	def(NewConst(token.NoPos, "false", Typ[Bool], boolConst(false)))
 	for _, b := range predeclaredBuiltins {
 		def(NewBuiltin(b.name, b.id))
 	}

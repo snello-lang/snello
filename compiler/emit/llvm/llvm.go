@@ -350,16 +350,21 @@ func (e *Emitter) declare(name, decl string) {
 }
 
 // varDecl writes a top-level variable or constant as a global of the
-// module. The value must be a literal: a number, character, boolean
-// or string, a negated number, or a struct of such, since anything
-// else would need a computation, which the module does not run before
-// main. A library variable declared without a value is the runtime's,
+// module. A constant is written from the value the checker folded; a
+// variable's value must be a literal, a number, character, boolean or
+// string, a negated number, or a struct of such, or it is made the
+// first time the variable is used, since the module runs nothing
+// before main. A library variable declared without a value is the runtime's,
 // defined in it under the variable's name; a program's variable
 // without a value starts at zero. A variable that may come to own
 // something, by assignment, is dropped when main returns, so that a
 // debug build reports what the program itself leaked.
 func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 	for i, name := range d.Names {
+		if d.Const && name.Name == "_" {
+			continue // its value was checked, and nothing reads it
+		}
+
 		obj := e.info.Defs[name]
 		if v, ok := obj.(*types.Var); ok {
 			e.globals[v] = true
@@ -426,7 +431,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 // number, or a struct literal of such, with the live flag of a Drop
 // type set. It is empty for anything else.
 func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
-	switch x := x.(type) {
+	switch x := lower.Folded(e.info, x).(type) {
 	case *ast.BasicLit:
 		return e.literal(x).s
 	case *ast.Ident:

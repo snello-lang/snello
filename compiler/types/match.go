@@ -220,7 +220,7 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 	case *Const:
 		if obj.typ == Typ[Bool] && isBool(t) {
 			c.recordUse(p.Name, obj)
-			if obj.value == "true" {
+			if obj.val.kind == ConstBool && obj.val.b {
 				return pat{ctor: 0}
 			}
 

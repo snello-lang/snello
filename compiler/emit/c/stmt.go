@@ -85,6 +85,11 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 // cast, as the C compiler is asked to treat an unused variable as an
 // error.
 func (e *Emitter) declStmt(d *ast.VarDecl) {
+	if d.Const {
+		e.localConsts(d)
+		return
+	}
+
 	var parts []string
 	if len(d.Values) == 1 && len(d.Names) > 1 {
 		parts = e.spread(d.Values[0], len(d.Names))
@@ -107,6 +112,32 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 		e.line(decl + ";")
 		e.discardUnused(name)
 		e.own(local, vt)
+	}
+}
+
+// localConsts writes the constants a function declares as statics of
+// the file, from the values the checker folded, as the top-level ones
+// are, each under a name of its own, since two functions may each
+// declare one of a name; the copies of a generic function share theirs,
+// whose value no type argument changes. A use of one names the static,
+// from the function or from a closure inside it, and one nothing uses
+// costs nothing.
+func (e *Emitter) localConsts(d *ast.VarDecl) {
+	for i, name := range d.Names {
+		k, ok := e.info.Defs[name].(*types.Const)
+		if _, written := e.consts[k]; !ok || written || name.Name == "_" || i >= len(d.Values) {
+			continue // a blank constant's value was checked, and nothing reads it
+		}
+
+		value := e.staticValue(d.Values[i], k.Type())
+		if value == "" {
+			e.unsupported(name.Pos(), "a const whose value is not a literal")
+			return
+		}
+
+		sym := lower.ObjName(k) + "_" + strconv.Itoa(len(e.consts))
+		e.consts[k] = sym
+		put(&e.protos, "static SN_UNUSED const ", e.cType(k.Type(), name.Pos()), " ", sym, " = ", value, ";\n")
 	}
 }
 

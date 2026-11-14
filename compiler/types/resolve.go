@@ -139,19 +139,11 @@ func (c *Checker) openTypeParams(names []*ast.Ident, tparams []*TypeParam) *Scop
 // declareVars declares the names of a var or const declaration with
 // type t, which is nil when the type is declared later (a top-level
 // declaration) or inferred (the expression checker's job). A constant
-// keeps the text of the literal it is given, which is what a format
-// that names it reads.
+// is given its value when its declaration is checked.
 func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
-	for i, name := range d.Names {
+	for _, name := range d.Names {
 		if d.Const {
-			text := ""
-			if i < len(d.Values) {
-				if lit, ok := unparen(d.Values[i]).(*ast.BasicLit); ok {
-					text = lit.Value
-				}
-			}
-
-			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, text))
+			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, Constant{}))
 		} else {
 			v := NewVar(name.Pos(), name.Name, t)
 			v.global = scope == c.pkg.scope // its type is checked for Send in initializersOf, once every type is complete
@@ -175,21 +167,106 @@ func (c *Checker) globalType(name *ast.Ident, t Type) {
 }
 
 // resolveTypes gives each declared type of a file its struct fields,
-// enum variants or underlying type, and returns them for the cycle
-// check over the whole package. The order of the phases over a
+// enum variants or underlying type, and appends them to named for the
+// cycle check over the whole package. The order of the phases over a
 // package's files is checkFiles's: the trait lists come first, the
 // types next, and the signatures after every type of every file.
-func (c *Checker) resolveTypes(f *ast.File) []*Named {
-	var named []*Named
+func (c *Checker) resolveTypes(f *ast.File, named []*Named) []*Named {
 	for i, d := range f.Decls {
 		if d, ok := d.(*ast.TypeDecl); ok {
 			n := c.objs[i].(*TypeName).typ.(*Named)
+			if p := c.early[n]; p != nil {
+				if p.done {
+					named = append(named, n) // resolved already, where a constant or another such type needed it
+					continue
+				}
+
+				p.checking = true
+			}
+
 			c.resolveType(d, n)
+			if p := c.early[n]; p != nil {
+				p.checking, p.done = false, true
+			}
+
 			named = append(named, n)
 		}
 	}
 
 	return named
+}
+
+// A pendingType is a type declared over another type, neither a struct
+// nor an enum nor generic, which may be resolved before its turn: the
+// declaration, the file it is in, and how far it has gone.
+type pendingType struct {
+	decl     *ast.TypeDecl
+	file     int
+	checking bool
+	done     bool
+}
+
+// collectEarly notes every type of the package's files declared over
+// another type, type Celsius f64, which is all a constant's type or a
+// conversion in a constant expression can be besides a predeclared
+// type.
+func (c *Checker) collectEarly(fs []*ast.File) {
+	var named []*Named
+	var pending []pendingType
+	for i, f := range fs {
+		for j, d := range f.Decls {
+			d, ok := d.(*ast.TypeDecl)
+			if !ok || d.TypeParams != nil {
+				continue
+			}
+
+			switch d.Def.(type) {
+			case *ast.StructType, *ast.EnumType:
+				continue
+			}
+
+			if tn, ok := c.fileState[i].objs[j].(*TypeName); ok {
+				if n, ok := tn.typ.(*Named); ok {
+					named = append(named, n)
+					pending = append(pending, pendingType{decl: d, file: i})
+				}
+			}
+		}
+	}
+
+	if len(named) == 0 {
+		return
+	}
+
+	c.early = make(map[*Named]*pendingType, len(named)) // made once every record is in place, so that none moves
+	for i, n := range named {
+		c.early[n] = &pending[i]
+	}
+}
+
+// resolveEarly resolves t now when it is a type declared over another
+// that has not had its turn, in the file that declares it, so that a
+// constant, which may be needed by an array length before every type is
+// resolved, and a type declared over a later one see its underlying
+// type. A type met again while it is resolved is left to the check of
+// recursive types.
+func (c *Checker) resolveEarly(t Type) {
+	n, ok := t.(*Named)
+	if !ok {
+		return
+	}
+
+	p := c.early[n]
+	if p == nil || p.done || p.checking {
+		return
+	}
+
+	p.checking = true
+	file, scope, objs := c.file, c.scope, c.objs
+	c.enter(p.file)
+	c.resolveType(p.decl, n)
+	c.file, c.scope, c.objs = file, scope, objs
+	p.checking, p.done = false, true
 }
 
 // resolveSignatures gives each trait of a file its methods, each
@@ -226,7 +303,9 @@ func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {
 		c.variantFields(def.Variants, named.underlying.(*Enum).variants)
 		c.refuseTraitFields(named, d.Name.Pos())
 	default:
-		named.SetUnderlying(c.typ(def).Underlying())
+		t := c.typ(def)
+		c.resolveEarly(t) // type A B before type B f64
+		named.SetUnderlying(t.Underlying())
 		c.refuseTraitFields(named, d.Name.Pos())
 	}
 }
@@ -306,13 +385,14 @@ func (c *Checker) resolveVar(d *ast.VarDecl) {
 		return
 	}
 
+	if d.Const {
+		return // its type was given with its value (checkConst)
+	}
+
 	t := c.typ(d.Type)
 	for _, name := range d.Names {
-		switch obj := c.pkg.scope.Lookup(name.Name).(type) {
-		case *Var:
-			obj.typ = t
-		case *Const:
-			obj.typ = t
+		if v, ok := c.pkg.scope.Lookup(name.Name).(*Var); ok {
+			v.typ = t
 		}
 	}
 }

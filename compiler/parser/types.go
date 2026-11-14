@@ -165,10 +165,11 @@ func (p *Parser) parseTypeArgs() []ast.Type {
 // parseSliceOrArrayType parses "[" "]" Type or "[" N "]" Type, the
 // two forms that begin with a bracket. The decision is made by the
 // token after the bracket: a "]" means slice, anything else is the
-// array length.
+// array length, an expression the checker requires to be constant.
 //
 //	[]*Node        SliceType{PointerType{NamedType}}
 //	[16]float64    ArrayType{Len: BasicLit 16, Elem: NamedType}
+//	[2 * N]byte    ArrayType{Len: BinaryExpr, Elem: NamedType}
 func (p *Parser) parseSliceOrArrayType() ast.Type {
 	pos := p.expect(token.LBRACK)
 	if p.tok == token.RBRACK {
@@ -176,13 +177,7 @@ func (p *Parser) parseSliceOrArrayType() ast.Type {
 		return &ast.SliceType{Lbrack: pos, Elem: p.parseType()}
 	}
 
-	// Until expressions arrive, an array length is an integer literal.
-	if p.tok != token.INT {
-		p.errorExpected(p.pos, "array length")
-	}
-
-	length := &ast.BasicLit{ValuePos: p.pos, Kind: token.INT, Value: p.lit}
-	p.next()
+	length := p.parseExpr()
 	p.expect(token.RBRACK)
 	return &ast.ArrayType{Lbrack: pos, Len: length, Elem: p.parseType()}
 }

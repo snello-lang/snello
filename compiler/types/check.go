@@ -65,6 +65,7 @@ type Info struct {
 	Instances map[*ast.Ident]Instance    // the name of each generic function at a call, with the arguments inferred for it
 	Captures  map[*ast.FuncLit][]Capture // the variables of the enclosing functions each closure refers to, in the order first seen
 	Wraps     map[*ast.TryExpr]*Variant  // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
+	Values    map[ast.Expr]Constant      // the value of each constant's value expression, and of each field a struct constant's literal gives
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -168,6 +169,22 @@ type Checker struct {
 	variadic []operand     // the variadic arguments of the call just checked, which a format is checked against
 	negated  *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
 
+	// The constants (constant.go): the top-level constants of the
+	// package by what checks each, the constants being checked, outermost
+	// first, the types of the constant expression being folded, and the
+	// package variables whose type their value gives, until it does.
+	early      map[*Named]*pendingType // the types declared over another, which a constant may need resolved before their turn (resolve.go)
+	consts     map[*Const]*pendingConst
+	constOrder []*Const
+	constPath  []*Const
+	folding    map[ast.Expr]Type
+	foldTypes  map[ast.Expr]Type // the map folding reuses
+	uninferred map[*Var]bool
+
+	// Each file's scope of its imports and table of declared objects,
+	// by the index of the file, which entering a file makes current.
+	fileState []fileState
+
 	// temporary maps an expression lent to a call or a ref to the
 	// temporary its value is or borrows: an owned value no variable
 	// holds, which the statement drops at its end, so that a borrow of
@@ -241,6 +258,10 @@ func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File,
 		if info.Wraps == nil {
 			info.Wraps = make(map[*ast.TryExpr]*Variant)
 		}
+
+		if info.Values == nil {
+			info.Values = make(map[ast.Expr]Constant)
+		}
 	}
 
 	c.checkFiles(fs)
@@ -268,39 +289,50 @@ func (p *Package) Scope() *Scope { return p.scope }
 // checkFiles walks the package's files together, a phase at a time
 // over all of them, so that a declaration in one file is known to
 // every other before any body is entered: the imports and the
-// declared names of each file, then the types, then the signatures,
-// then the bodies. Each file has its own scope for its imports, under
+// declared names of each file, then the types, then the constants,
+// any of which a type's array length checked earlier, then the
+// signatures, then the initializers of the variables, then the
+// bodies. Each file has its own scope for its imports, under
 // the package scope, and its own table of declared objects, by the
 // index of the declaration in the file.
 func (c *Checker) checkFiles(fs []*ast.File) {
-	scopes := make([]*Scope, len(fs))
-	objs := make([][]Object, len(fs))
-	enter := func(i int) {
-		c.file, c.scope, c.objs = c.files[i], scopes[i], objs[i]
+	c.fileState = make([]fileState, len(fs))
+	enter := c.enter
+	for i, f := range fs {
+		c.fileState[i].scope = NewScope(c.pkg.scope)
+		enter(i)
+		c.collectImports(f, c.fileState[i].scope)
+		c.collectDecls(f)
+		c.fileState[i].objs = c.objs
 	}
 
-	for i, f := range fs {
-		scopes[i] = NewScope(c.pkg.scope)
-		enter(i)
-		c.collectImports(f, scopes[i])
-		c.collectDecls(f)
-		objs[i] = c.objs
-	}
+	c.collectEarly(fs)
+	c.collectConsts(fs)
 
 	for i, f := range fs {
 		enter(i)
 		c.resolveTraitLists(f)
 	}
 
-	var named []*Named
+	types := 0
+	for _, f := range fs {
+		for _, d := range f.Decls {
+			if _, ok := d.(*ast.TypeDecl); ok {
+				types++
+			}
+		}
+	}
+
+	named := make([]*Named, 0, types)
 	for i, f := range fs {
 		enter(i)
-		named = append(named, c.resolveTypes(f)...)
+		named = c.resolveTypes(f, named)
 	}
 
 	c.checkTypeCycles(named)
 	c.resolvePending()
 	c.resolvePendingBounds()
+	c.checkConsts()
 	for i, f := range fs {
 		enter(i)
 		c.resolveSignatures(f)
@@ -313,6 +345,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 		c.checkImpls(f)
 	}
 
+	c.collectUninferred(fs)
 	for i, f := range fs {
 		enter(i)
 		c.initializers(f)
@@ -326,6 +359,20 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.checkDefaultBodies()
 	c.resolveKeeps() // what each function keeps is known once every body is checked
 	c.checkCallCycles()
+}
+
+// A fileState is a file's scope of its imports, under the package
+// scope, and its table of declared objects, by the index of the
+// declaration in the file.
+type fileState struct {
+	scope *Scope
+	objs  []Object
+}
+
+// enter makes the file of index i the one being walked: its scope of
+// imports, under the package scope, and its table of declared objects.
+func (c *Checker) enter(i int) {
+	c.file, c.scope, c.objs = c.files[i], c.fileState[i].scope, c.fileState[i].objs
 }
 
 // errorf reports an error at pos. Error paths may allocate freely.
@@ -431,5 +478,9 @@ func (c *Checker) recordUse(ident *ast.Ident, obj Object) {
 func (c *Checker) recordType(e ast.Expr, t Type) {
 	if c.info != nil {
 		c.info.Types[e] = t
+	}
+
+	if c.folding != nil {
+		c.folding[e] = t
 	}
 }

@@ -95,6 +95,10 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 func (e *Emitter) declStmt(d *ast.VarDecl) {
 	if d.Const {
 		for i, name := range d.Names {
+			if name.Name == "_" {
+				continue // its value was checked, and nothing reads it
+			}
+
 			k := e.info.Defs[name].(*types.Const)
 			sym := lower.ObjName(k) + "." + strconv.Itoa(len(e.localConst))
 			value := ""

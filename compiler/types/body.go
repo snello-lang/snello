@@ -16,7 +16,7 @@ import (
 // inferred from its value.
 func (c *Checker) initializers(f *ast.File) {
 	for _, d := range f.Decls {
-		if d, ok := d.(*ast.VarDecl); ok {
+		if d, ok := d.(*ast.VarDecl); ok && !d.Const { // a constant was checked with the types (checkConsts)
 			c.initializersOf(d, c.pkg.scope)
 		}
 	}
@@ -92,9 +92,9 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 	c.closeScope()
 }
 
-// initializersOf checks the values of a var or const declaration whose
-// names are already declared in scope, giving an untyped name the type
-// of its value.
+// initializersOf checks the values of a var declaration whose names
+// are already declared in scope, giving an untyped name the type of its
+// value.
 func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 	if len(d.Values) == 0 { // the parser requires a type when there is no value, resolved already
 		if scope == c.pkg.scope {
@@ -123,7 +123,11 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 		t := declared
 		if declared == nil {
 			t = inferred(ops[i])
-			c.setType(scope.Lookup(name.Name), t)
+			obj := scope.Lookup(name.Name)
+			c.setType(obj, t)
+			if v, ok := obj.(*Var); ok {
+				delete(c.uninferred, v)
+			}
 		}
 
 		if scope == c.pkg.scope { // every type is complete in this phase, declared or inferred

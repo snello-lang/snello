@@ -102,6 +102,11 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 		t = c.typ(d.Type)
 	}
 
+	if d.Const {
+		c.localConsts(d, t)
+		return
+	}
+
 	if len(d.Values) == 0 {
 		c.declareVars(c.scope, d, t)
 		if t == nil {

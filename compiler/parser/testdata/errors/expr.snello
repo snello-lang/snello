@@ -12,7 +12,7 @@ func f() {
     z := if c { 1 }                         // ERROR "expected 'else', found 'newline'"
     w := a.b.c<T>{}                         // ERROR "expected '(', found '{'"
     var m map[K                             // ERROR "expected ']', found 'newline'"
-    var a [n]int                            // ERROR "expected array length, found 'n'"
+    var a [n int                            // ERROR "expected ']', found 'int'"
     var c <-chan<- T                        // ERROR "expected 'chan', found 'T'"
     g(x, y, z, w)
 }

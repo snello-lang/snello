@@ -1017,7 +1017,8 @@ func (e *Emitter) replaceCall(x *ast.CallExpr) string {
 	return out
 }
 
-// lenCall writes len(x) and cap(x) on a slice, a string or a map.
+// lenCall writes len(x) and cap(x) on a slice, a string, an array, a
+// map or a channel.
 func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	place, t := e.scrutinee(x.Args[0])
 	if _, ok := t.Underlying().(*types.Map); ok && b.ID() == types.BuiltinLen {
@@ -1032,8 +1033,8 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 		return place + "." + b.Name()
 	}
 
-	if a, ok := t.Underlying().(*types.Array); ok {
-		return strconv.FormatInt(a.Len(), 10) // len and cap alike
+	if a, ok := t.Underlying().(*types.Array); ok { // len and cap alike, beside the array, so that C sees the variable used
+		return "((void)" + place + ", " + strconv.FormatInt(a.Len(), 10) + "LL)"
 	}
 
 	if _, ok := t.Underlying().(*types.Chan); ok {

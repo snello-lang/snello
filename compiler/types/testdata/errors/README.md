@@ -21,6 +21,8 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | `mut` lends something that can change: not a constant, a literal or a byte of a string | mut-of-constant |
 | A slice method that compares, orders or copies the elements asks it of their type | element-not-eq |
 | A number written down is one its type holds | literal-overflows |
+| A constant is computed by the compiler: from literals, constants, operators and conversions between number types, in its type's arithmetic, with no overflow, division by zero or fraction lost, and from no constant that leads back to it | const-not-constant, const-overflows, const-cycle |
+| A package variable's inferred type is known once its declaration is checked, in the order of the files | global-before-type |
 | The pieces of a string hold the string, as does a slice they are stored in | pieces-outlive-string, pieces-stored |
 | A deferred call holds what a borrow it is given views | defer-holds-view |
 | A closure that captures a view cannot change the place it views | closure-writes-viewed |

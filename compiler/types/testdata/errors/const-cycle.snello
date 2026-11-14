@@ -1,0 +1,15 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the constants of a package may name each other in any order,
+// and the compiler computes each the first time another needs it, but
+// a constant cannot need its own value, through others or by itself.
+// Fix: give one of them a value that does not lead back.
+
+package p
+
+const A = B + 1                             // ERROR "initialization cycle: A refers to B, B refers to A"
+const B = A * 2
+
+const C = C + 1                             // ERROR "initialization cycle: C refers to itself"

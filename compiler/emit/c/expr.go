@@ -143,6 +143,10 @@ func (e *Emitter) ident(x *ast.Ident) string {
 			return obj.Name() // true, false: C has them with stdbool.h
 		}
 
+		if sym, ok := e.consts[obj]; ok {
+			return sym // declared in a function
+		}
+
 		return lower.ObjName(obj)
 	case *types.Func:
 		return e.funcValue(obj, x.Pos()) // a function named outside a call is a value

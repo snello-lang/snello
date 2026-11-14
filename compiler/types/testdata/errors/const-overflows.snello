@@ -1,0 +1,33 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a constant is folded in the arithmetic of its type and must be
+// a value of it: an integer the type cannot hold, a float too large for
+// it, a division by zero, a negative shift count and a float with a
+// fraction made an integer are refused, where the same arithmetic on
+// variables at run time would wrap or be undefined. Fix: give the
+// constant a type that holds the value, or change the expression.
+
+package p
+
+const KB = 1 << 10
+const Narrow i32 = 1 << 40                  // ERROR "constant 1099511627776 overflows i32"
+const Wraps u8 = 200 + 100                  // ERROR "constant 300 overflows u8"
+const Below u8 = 1 - 2                      // ERROR "constant -1 overflows u8"
+const Huge = KB * KB * KB * KB * KB * KB * KB // ERROR "constant 1180591620717411303424 overflows int"
+const Far = 1e308 * 10.0                    // ERROR "constant 1e308 * 10.0 overflows f64"
+const Halved = KB / 0                       // ERROR "division by zero"
+const Left = KB % (KB - KB)                 // ERROR "division by zero"
+const Back = 1 << -1                        // ERROR "negative shift count -1"
+const Cut = int(2.5)                        // ERROR "constant 2.5 truncated to int"
+const Byte = u8(KB)                         // ERROR "constant 1024 overflows u8"
+const Single = f32(1e300)                   // ERROR "constant 1e300 overflows f32"
+const Double = f32(1e30) * f32(1e30)        // ERROR "constant f32(...) * f32(...) overflows f32"
+const Written = 1e400                       // ERROR "constant 1e400 overflows f64"
+const Digits f32 = 999999999999999999999999999999999999999999 // ERROR "constant 999999999999999999999999999999999999999999 overflows f32"
+
+func f() {
+    const below = -1e400                    // ERROR "constant -1e400 overflows f64"
+    print(below)
+}

@@ -40,7 +40,8 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 - `struct Name impl A, B { fields }`, `enum Name { variants }`, `trait Name { ... }`, `type Name T`, `func`, `var`, `const`. The `impl` list comes after the name.
 - `var` and `const` declare one name list per keyword: `var x, y int = 1, 2`.
 - Parameter names and types: in `func(from, to NodeID, w int)` the names before a type share it; in `func(T, U) V` the identifiers are types. An identifier followed by a comma is decided by what ends its group.
-- Array lengths are integer literals.
+- An array length is a constant expression of an integer type: `[4]int`, `[N]byte`, `[2 * N]int`.
+- A `const` takes a constant expression: literals, constants, the operators and conversions between number types, folded by the compiler.
 - A match arm is `pattern [if guard] => body`, ended by a comma or a newline. A `match` with no value, `match {`, has arms `condition => body`, and its last arm is `_ => body`. A `return` in an arm takes one expression; several values are returned as a tuple.
 - `spawn` and `defer` take a call. `for range ch {` ranges with no variable.
 - One name on the left of `:=` or `=` takes one expression on the right; a list takes a list, `a, b := b, a`.

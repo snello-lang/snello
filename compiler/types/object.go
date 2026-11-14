@@ -79,7 +79,7 @@ type keptBy struct {
 // A Const is a named constant; true and false, and const declarations.
 type Const struct {
 	object
-	value string // the literal's text, typed by context
+	val Constant // the folded value; unknown for a struct constant, whose fields have theirs, and after an error
 }
 
 // A Func is a function or a method; its type is a *Signature. A method
@@ -148,9 +148,10 @@ func NewField(pos token.Pos, name string, typ Type) *Var {
 	return &Var{object: object{name, typ, pos, nil}, field: true}
 }
 
-// NewConst returns a named constant with the given literal text.
-func NewConst(pos token.Pos, name string, typ Type, value string) *Const {
-	return &Const{object{name, typ, pos, nil}, value}
+// NewConst returns a named constant of the given value, which its
+// declaration's check gives a constant the program declares.
+func NewConst(pos token.Pos, name string, typ Type, val Constant) *Const {
+	return &Const{object: object{name, typ, pos, nil}, val: val}
 }
 
 // NewFunc returns a function or method.
@@ -198,8 +199,8 @@ func (o *object) isObject()      {}
 // IsField reports whether the variable is a struct or variant field.
 func (v *Var) IsField() bool { return v.field }
 
-// Value returns the constant's literal text.
-func (c *Const) Value() string { return c.value }
+// Val returns the constant's folded value.
+func (c *Const) Val() Constant { return c.val }
 
 // Parent returns the enum the variant belongs to, or nil for Some,
 // None, Ok and Err.

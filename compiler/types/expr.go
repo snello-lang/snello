@@ -100,6 +100,10 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 	switch obj := obj.(type) {
 	case *Var:
 		if obj.typ == nil {
+			if c.uninferred[obj] { // a package variable whose value, which gives its type, is checked after this
+				c.errorf(e.Pos(), e.Name+" is used before its type is known: declare "+e.Name+" before this, or with its type")
+			}
+
 			return invalidOperand // declared with an error
 		}
 
@@ -111,6 +115,7 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 		c.checkUseVar(e, obj)
 		return operand{variable, obj.typ, obj, nil}
 	case *Const:
+		c.checkConst(obj) // a top-level constant is checked the first time it is needed
 		if obj.typ == nil {
 			return invalidOperand
 		}

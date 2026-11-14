@@ -2778,7 +2778,6 @@ var Refusals = []Refusal{
 	{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
 	{"struct P { f func() }\nfunc main() { print(P{f: func() {}}) }", "printing values of type func()"},
 	{"struct W<T> impl Error { t T }\nfunc main() { print(W{t: func() {}}) }", "printing values of type func()"}, // a derived message on an instance over a function: the declaration passed the checker
-	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level const whose value is not a literal"},
 	{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
 	{"import \"expect\"\nfunc main() { ok := expect.True; ok(true) }", "expect.True as a value: it is called, so that a failure names its line"},
 	{"import \"testing\"\nfunc main() { log := testing.Log; log(\"x\") }", "testing.Log as a value"},

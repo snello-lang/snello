@@ -173,19 +173,6 @@ func plural(n int, thing string) string {
 	return strconv.Itoa(n) + " " + thing + "s"
 }
 
-// arrayLen reads an array length, which the grammar limits to an
-// integer literal.
-func (c *Checker) arrayLen(e ast.Expr) int64 {
-	if lit, ok := e.(*ast.BasicLit); ok {
-		if n, err := strconv.ParseInt(lit.Value, 0, 64); err == nil && n >= 0 {
-			return n
-		}
-	}
-
-	c.errorf(e.Pos(), "array length must be a non-negative integer literal")
-	return 0
-}
-
 // params turns parameter declarations into variables. A function body
 // declares them in its scope later (funcBody); a function type never
 // does.

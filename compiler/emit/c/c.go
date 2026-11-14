@@ -52,6 +52,7 @@ type Emitter struct {
 	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
 	jumped   map[string]bool                 // the labels a continue has jumped to, the ones written
 	lazy     map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	consts   map[*types.Const]string         // the constants declared in a function, each a static of the file under a name of its own
 	lazies   []owned                         // the lazy variables owning something, dropped when main returns if they were made
 	making   *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
 	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
@@ -237,6 +238,10 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 // program itself leaked.
 func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 	for i, name := range d.Names {
+		if d.Const && name.Name == "_" {
+			continue // its value was checked, and nothing reads it
+		}
+
 		obj := e.info.Defs[name]
 		if v, ok := obj.(*types.Var); ok {
 			e.names.globals[v] = true
@@ -297,13 +302,14 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 }
 
 // staticValue writes x as a C initializer a static variable of type t
-// can have: a number, character, boolean or string literal, the
-// negation of a number, or a struct literal of such, with the live flag
+// can have: a constant's value as the checker folded it, a number,
+// character, boolean or string literal, the negation of a number, or a
+// struct literal of such, with the live flag
 // of a Drop type set. A string is written as the fields of a sn_string
 // over the C literal, since the SN_STR macro is a compound literal,
 // which C does not allow at file scope. It is empty for anything else.
 func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
-	switch x := x.(type) {
+	switch x := lower.Folded(e.info, x).(type) {
 	case *ast.BasicLit:
 		if x.Kind != token.STRING {
 			return e.literal(x)
@@ -395,6 +401,7 @@ func newEmitter(info *types.Info, file *token.File, fs []*ast.File) *Emitter {
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
 		lazy:     make(map[*types.Var]bool),
+		consts:   make(map[*types.Const]string),
 		done:     make(map[string]bool),
 		names:    newNaming(fs),
 		jumped:   make(map[string]bool),
