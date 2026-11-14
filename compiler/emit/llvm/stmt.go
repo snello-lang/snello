@@ -411,12 +411,45 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.pop(s.Body.Rbrace)
 }
 
+// partsLoop writes a loop over a type's parts once for each part of the
+// type the instance being written gives it, each copy a scope of its
+// own with the part's field named and its type in place of f.type; a
+// copy that returns leaves the next to a block of its own.
+func (e *Emitter) partsLoop(s *ast.RangeStmt, part *types.Part, copies []lower.PartCopy) {
+	outer := e.subst
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	for _, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		e.push(false)
+		e.stmts(s.Body.List)
+		if !e.fn.terminated {
+			e.pop(s.Body.Rbrace)
+		} else {
+			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+			e.label(e.block("parts.next"))
+		}
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+}
+
 // rangeStmt writes for k, v := range x over a slice, an array, a
 // string, a map or a channel: an index loop with the key and value
 // bound at the top of each pass. A value reached through a mut borrow
 // is bound as a pointer into the collection. An owned collection is
-// used up by the loop and dropped after it.
+// used up by the loop and dropped after it. A loop over a type's parts
+// is written out per part by partsLoop.
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	if part, copies := lower.PartsOf(e.info, s, e.subst, e.partCopy); part != nil {
+		e.partsLoop(s, part, copies)
+		return
+	}
+
 	e.push(false)
 	p, t, held := e.consumed(s.X)
 	if held != "" {

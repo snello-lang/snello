@@ -233,6 +233,15 @@ func exprString(x ast.Expr) string {
 		return s + "{" + exprList(x.Elts) + "}"
 	case *ast.KeyValueExpr:
 		return exprString(x.Key) + ": " + exprString(x.Value)
+	case *ast.PartExpr:
+		return exprString(x.X) + ".[" + x.Part.Name + "]"
+	case *ast.PartsElt:
+		key := ""
+		if x.Key != nil {
+			key = "[" + x.Key.Name + "]: "
+		}
+
+		return "for " + x.Var.Name + " := range " + exprString(x.X) + " { " + key + exprString(x.Value) + " }"
 	case *ast.FuncLit:
 		return typeString(x.Type) + " {...}"
 	case *ast.IfExpr:
@@ -307,4 +316,53 @@ func exprList(list []ast.Expr) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// TestReflection parses the forms a function reflecting on its type
+// parameter writes: a match on a type parameter, of the function or of
+// its receiver's type, whose arms are types, shapes and kinds; a part
+// reached through a loop, x.[f]; and a literal element written once for
+// each part. A match on a value is unchanged, outside a generic
+// function and on a name that is no type parameter.
+func TestReflection(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{"func F<T>(v ref T) { x := match T { bool => 1, i8 | int => 2, []E => 3, map[K]V => 4, E? => 5, struct => 6, enum => 7, _ => 9 } }",
+			"match T { bool => 1; i8 | int => 2; []E => 3; map[K]V => 4; (E)? => 5; struct => 6; enum => 7; _ => 9 }"},
+		{"func (b ref Box<T>) F() { x := match T { int => 1, _ => 2 } }", "match T { int => 1; _ => 2 }"}, // the receiver's type parameter
+		{"func F<T>(v ref T) { x := v.[f] }", "v.[f]"},
+		{"func F<T>(v ref T) { x := v.[f].[g] }", "v.[f].[g]"},
+		{"func F<T>() T { x := T{ for f := range fields(T) { [f]: F() } } }", "T{for f := range fields(T) { [f]: F() }}"},
+		{"func F<T>() T { x := [N]E{ for i := range N { F() } } }", "[N]E{for i := range N { F() }}"},
+		{"func F(T int) { x := match T { 1 => 2, _ => 3 } }", "match T { 1 => 2; _ => 3 }"},                                                         // a value named T, no type parameter
+		{"func F<T>() { x := match T { []E => match E { int => 1, _ => 2 }, _ => 3 } }", "match T { []E => match E { int => 1; _ => 2 }; _ => 3 }"}, // a shape's name is matched on as a type
+		{"func F<T>() { x := match f.type { int => 1, _ => 2 } }", "match f.type { int => 1; _ => 2 }"},                                             // a field's type
+		{"func F<T>() { x := read<f.type>(r) }", "read<f.type>(r)"},
+		{"func F<T>() { x := f.default ?? 1 }", "(f.default ?? 1)"},                                                                          // a field's default
+		{"func F<T>(v ref T) { x := match v { for c := range variants(T) => c.name } }", "match v { for c := range variants(T) => c.name }"}, // an arm written once per variant
+		{"func F<T>() T { x := c(for f := range fields(c) { F() }) }", "c(for f := range fields(c) { F() })"},                                // a variant built from its fields
+	}
+	for _, tt := range tests {
+		f, _, err := ParseFile("test.snello", []byte("package p\n"+tt.src))
+		if err != nil {
+			t.Errorf("%s: %v", tt.src, err)
+			continue
+		}
+
+		body := f.Decls[0].(*ast.FuncDecl).Body
+		got := exprString(body.List[0].(*ast.AssignStmt).Rhs[0])
+		if got != tt.want {
+			t.Errorf("%s:\n  got  %s\n  want %s", tt.src, got, tt.want)
+		}
+	}
+
+	errs := []struct{ src, want string }{
+		{"func F<T>() { x := match T { int if true => 1, _ => 2 } }", "an arm of a match on a type takes no guard"},
+		{"func F<T>(v T) { x := v.[1] }", "expected identifier, found '1'"},
+	}
+	for _, tt := range errs {
+		_, _, err := ParseFile("test.snello", []byte("package p\n"+tt.src))
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: got %v, want an error containing %q", tt.src, err, tt.want)
+		}
+	}
 }

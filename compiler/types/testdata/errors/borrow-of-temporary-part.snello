@@ -1,0 +1,83 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value no variable holds, a call's result, is dropped when its
+// statement ends, and so is every part of it: a field, an element, a
+// piece, and what an owned pointer it is points at. A borrow of any of
+// them, written with ref or made where a borrow is wanted, as in a
+// typed declaration, an assignment, a literal's field or an option,
+// cannot be kept past the statement.
+// Fix: keep the value in a variable first, v := boxed(), and borrow
+// from the variable.
+
+package p
+
+import "fmt"
+
+struct Row { name string; tags []string }
+
+struct L { r ref Row }
+
+enum Held<T> { Hold(ref T); Empty }
+
+func (r ref Row) NameRef() ref string { return ref r.name }
+
+func row() Row { return Row{name: "r".Clone(), tags: []string{"t".Clone()}} }
+
+func boxed() *Row { return &row() }
+
+func twice() **Row { return &boxed() }
+
+func pstr() *string { return &"p".Clone() }
+
+func name(r ref Row) ref string { return ref r.name }
+
+func rows() map[string]Row { return map[string]Row{"a": row()} }
+
+func implicit() {
+    var r ref Row = boxed()               // ERROR "cannot keep a borrow of a temporary: boxed() is dropped when the statement ends"
+    var s ref string = pstr()             // ERROR "cannot keep a borrow of a temporary: pstr() is dropped"
+    l := L{r: boxed()}                    // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    var o (ref Row)? = Some(boxed())      // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    var a ref string = boxed().NameRef()  // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    fmt.Println(r.name, s, l.r.name, o.IsSome(), a)
+}
+
+func assigned(x Row) {
+    r := ref x
+    r = boxed()                           // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    fmt.Println(r.name)
+}
+
+func pointed() {
+    r := ref *boxed()                     // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    var q ref Row = *boxed()              // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    l := L{r: *boxed()}                   // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    n := (*boxed()).NameRef()             // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    m := name(*boxed())                   // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    w := (**twice()).name.Trim()          // ERROR "cannot keep a borrow of a temporary: twice() is dropped"
+    fmt.Println(r.name, q.name, l.r.name, n, m, w)
+}
+
+func parts() {
+    a := (*boxed()).name.Trim()           // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    b := boxed().name.Trim()              // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    c := row().name.Trim()                // ERROR "cannot keep a borrow of a temporary: row() is dropped"
+    var d ref string = ref row().name     // ERROR "cannot keep a borrow of a temporary: row() is dropped"
+    e := ref boxed().tags                 // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    f := (*boxed()).tags[0].Trim()        // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    g := (*boxed()).tags[0:1]             // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    h := row().name[0:1]                  // ERROR "cannot keep a borrow of a temporary: row() is dropped"
+    i := rows()["a"].name.Trim()          // ERROR "cannot keep a borrow of a temporary: rows() is dropped"
+    fmt.Println(a, b, c, d, len(e), f, g, h, i)
+}
+
+func wrapped() {
+    var q ref Row = (boxed())             // ERROR "cannot keep a borrow of a temporary: (boxed()) is dropped"
+    h := Hold(boxed())                    // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
+    match h {
+        Hold(r) => fmt.Println(r.name, q.name),
+        Empty => {},
+    }
+}

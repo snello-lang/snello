@@ -251,6 +251,7 @@ type Named struct {
 	tparams   []*TypeParam // a generic declaration's parameters
 	instances []*Named     // a generic declaration's instances, one per argument list
 	ready     bool         // a generic declaration is resolved, so its instances can expand
+	refused   bool         // a generic declaration refused for growing: it has no instances, and one written is the invalid type
 	orig      *Named       // an instance's declaration
 	targs     []Type       // an instance's arguments
 }

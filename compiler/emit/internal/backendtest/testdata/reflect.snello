@@ -1,0 +1,199 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Reflection at compile time: a match on a type parameter taking the
+// arm of a type, a type declared over it taking the wildcard and not
+// its underlying type's arm, a declared type's own arm with its method,
+// a shape, an option, a slice, a map, an owned pointer, a generic
+// type, and a nested match on a shape's name; a loop over a struct's
+// fields reading each, nested structs and slices of them; a
+// value built from its fields, a ? leaving after owned fields are made,
+// which drops them once; an enum's variants, one arm each, their fields
+// read and the variant built back by its name, a recursive enum among
+// them; and a field's default and an option's None for a field missing.
+
+package main
+
+import ("fmt"; "strconv"; "strings")
+
+type Celsius f64
+
+struct Point { x int; name string }
+
+func (p ref Point) Twice() int { return p.x * 2 }
+
+struct Box<T> { item T }
+
+struct Line { from Point; to Point; tags []string }
+
+struct Config { host string = "localhost"; port int = 8080; name string; note string? }
+
+enum Shape { Dot; Circle(r int); Rect(w int, h int) }
+
+enum Value { Null; Num(int); Str(string); Arr([]Value) }
+
+func kind<T>(v ref T) string {
+	return match T {
+		f64 => fmt.Sprint(f64(v)),
+		Point => "point " + strconv.Itoa(v.Twice()),
+		bool => if v { "true" } else { "false" },
+		i8 | i16 | int => strconv.Itoa(int(v)),
+		string => v.Clone(),
+		E? => match v { Some(x) => "some " + kind(x), None => "none" },
+		map[K]V => "map of " + strconv.Itoa(len(v)),
+		*E => "pointer to " + match E { int => "int", _ => "?" },
+		Box<E> => "box of " + kind(ref v.item),
+		[]E => match E { int => "ints", _ => "slice" },
+		_ => "other",
+	}
+}
+
+func write<T>(v ref T, out mut strings.Builder) {
+	match T {
+		int => out.WriteString(strconv.Itoa(v)),
+		string => out.WriteString(v),
+		[]E => {
+			out.WriteByte('[')
+			for i, e := range v {
+				if i > 0 {
+					out.WriteByte(',')
+				}
+
+				write(e, mut out)
+			}
+
+			out.WriteByte(']')
+		}
+		struct => {
+			out.WriteByte('{')
+			for f := range fields(T) {
+				out.WriteString(f.name)
+				out.WriteByte(':')
+				write(ref v.[f], mut out)
+				out.WriteByte(';')
+			}
+
+			out.WriteByte('}')
+		}
+		enum => match v {
+			for c := range variants(T) => {
+				out.WriteString(c.name)
+				out.WriteByte('(')
+				for f := range fields(c) {
+					write(ref v.[f], mut out)
+					out.WriteByte(' ')
+				}
+
+				out.WriteByte(')')
+			}
+		},
+		_ => out.WriteString("?"),
+	}
+}
+
+struct Reader { vals []string; at int }
+
+func next(r mut Reader) Result<string, string> {
+	if r.at >= len(r.vals) {
+		return Err("out of input")
+	}
+
+	r.at += 1
+	return Ok(r.vals[r.at - 1].Clone())
+}
+
+func read<T>(r mut Reader) Result<T, string> {
+	match T {
+		int => {
+			s := next(mut r)?
+			return Ok(strconv.Atoi(ref s) ?? 0)
+		}
+		string => return next(mut r),
+		[]E => {
+			n := read<int>(mut r)?
+			xs := []E{}
+			for i := 0; i < n; i++ {
+				xs.Push(read<E>(mut r)?)
+			}
+
+			return Ok(xs)
+		}
+		struct => return Ok(T{ for f := range fields(T) { [f]: read<f.type>(mut r)? } }),
+		enum => {
+			name := next(mut r)?
+			for c := range variants(T) {
+				if name == c.name {
+					return Ok(c(for f := range fields(c) { read<f.type>(mut r)? }))
+				}
+			}
+
+			return Err("no variant " + name)
+		}
+		_ => return Err("unsupported"),
+	}
+}
+
+func load<T>(m ref map[string]string) Result<T, string> {
+	return match T {
+		struct => Ok(T{ for f := range fields(T) {
+			[f]: match m.Get(f.name) {
+				Some(v) => match f.type {
+					int => strconv.Atoi(v) ?? 0,
+					string => v.Clone(),
+					E? => Some(match E { string => v.Clone(), _ => return Err("unsupported") }),
+					_ => return Err("unsupported"),
+				},
+				None => match f.type {
+					E? => None,
+					_ => f.default ?? return Err("missing " + f.name),
+				},
+			}
+		} }),
+		_ => Err("unsupported"),
+	}
+}
+
+func show<T>(v ref T) string {
+	b := strings.Builder{}
+	write(v, mut b)
+	return b.String()
+}
+
+func main() {
+	fmt.Println(kind(ref Celsius(21.5)), kind(ref Point{x: 4, name: "p".Clone()}), kind(ref true), kind(ref i8(3)), kind(ref Some(4)))
+	fmt.Println(kind(ref map[string]int{"a": 1}), kind(ref &3), kind(ref Box<int>{item: 5}), kind(ref []int{}), kind(ref []string{}), kind(ref 2.5))
+	l := Line{from: Point{x: 1, name: "a".Clone()}, to: Point{x: 2, name: "b".Clone()}, tags: []string{"t".Clone(), "u".Clone()}}
+	fmt.Println(show(ref l))
+	fmt.Println(show(ref []Shape{Dot, Circle(2), Rect(3, 4)}), show(ref Arr([]Value{Num(1), Str("x".Clone()), Null})))
+	r := Reader{vals: []string{"3", "a", "4", "b", "1", "t", "Rect", "5", "6", "Dot", "Oval"}, at: 0}
+	match read<Line>(mut r) {
+		Ok(v) => fmt.Println("read", show(ref v)),
+		Err(e) => fmt.Println("error", e),
+	}
+
+	for i := 0; i < 3; i++ {
+		match read<Shape>(mut r) {
+			Ok(s) => fmt.Println("read", show(ref s)),
+			Err(e) => fmt.Println("error", e),
+		}
+	}
+
+	short := Reader{vals: []string{"1", "a", "2"}, at: 0}
+	match read<Line>(mut short) {
+		Ok(v) => fmt.Println("read", show(ref v)),
+		Err(e) => fmt.Println("error", e),
+	}
+
+	full := map[string]string{"name": "app".Clone(), "port": "9000".Clone(), "note": "n".Clone()}
+	match load<Config>(ref full) {
+		Ok(c) => fmt.Println(c.host, c.port, c.name, kind(ref c.note)),
+		Err(e) => fmt.Println("error", e),
+	}
+
+	partial := map[string]string{"host": "h".Clone()}
+	match load<Config>(ref partial) {
+		Ok(c) => fmt.Println(c.host, c.port, c.name),
+		Err(e) => fmt.Println("error", e),
+	}
+}

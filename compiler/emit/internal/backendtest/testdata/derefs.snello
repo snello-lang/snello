@@ -1,0 +1,44 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// What an owned pointer points at, reached through the pointer and
+// through a borrow of it: read, written, lent ref and mut, a field of a
+// struct it points at, and a string, each at the place of the value
+// and no deeper, in both backends.
+
+package main
+
+import "fmt"
+
+struct P { x int; name string }
+
+func read(v ref int) int { return v }
+
+func bump(v mut int) { *v += 1 }
+
+func viaRef(p ref *int) int { return read(ref **p) }
+
+func viaMut(p mut *int) { bump(mut **p) }
+
+func set(p mut *int) { **p = 40 }
+
+func length(s ref *string) int { return len(**s) }
+
+func field(p ref *P) int { return (**p).x + len((**p).name) }
+
+func main() {
+	p := &1
+	fmt.Println(*p, read(ref *p), viaRef(ref p))
+	bump(mut *p)
+	viaMut(mut p)
+	fmt.Println(*p)
+	set(mut p)
+	*p += 2
+	fmt.Println(*p)
+	s := &"abc".Clone()
+	fmt.Println(length(ref s), len(*s))
+	q := &P{x: 5, name: "nm".Clone()}
+	q.x += 1
+	fmt.Println(field(ref q), q.x, (*q).name)
+}

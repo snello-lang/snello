@@ -83,6 +83,29 @@ func (e *Emitter) callValues(name string, sig *types.Signature, wants []types.Ty
 	return e.op(call, e.irType(sig.Results(), pos))
 }
 
+// unframe gives the slice at slot p, laid out in a caller's frame for a
+// variadic ...T parameter, a buffer of its own, of elements of type
+// elem: for a function that may keep it past its call, and for a call
+// that outlives the frame, a spawn's.
+func (e *Emitter) unframe(p string, elem types.Type) {
+	e.declare("sn_slice_unframe", "declare void @sn_slice_unframe(ptr, i64)")
+	e.inst("call void @sn_slice_unframe(ptr " + p + ", i64 " + e.sizeOf(elem).s + ")")
+}
+
+// unframeLast gives the slice a call packs for a variadic ...T
+// parameter, the last of values, a buffer of its own, for a call that
+// outlives the caller's frame, a spawn's.
+func (e *Emitter) unframeLast(sig *types.Signature, spread bool, values []value) {
+	kind, elem := sig.VariadicParam()
+	if kind != types.VariadicOwned || spread || len(values) == 0 {
+		return
+	}
+
+	slot := e.spill(values[len(values)-1])
+	e.unframe(slot, e.sub(elem))
+	values[len(values)-1] = e.load("%sn_slice", slot)
+}
+
 // callOperands evaluates a call's receiver, when there is one, and its
 // arguments, each converted to the type the signature wants, and
 // returns those types with the values. The arguments a variadic
@@ -91,29 +114,6 @@ func (e *Emitter) callValues(name string, sig *types.Signature, wants []types.Ty
 // its element's type, a lent one as the borrow it is, so that a
 // temporary it lends is dropped after the call, and then made the one
 // value the parameter takes (variadicValue).
-// unframe gives the slice at slot p, laid out in a caller's frame for a
-// variadic ...T parameter, a buffer of its own, of elements of type
-// elem: for a function that may keep it past its call, and for a call
-// that outlives the frame, a spawn's.
-func (e *Emitter) unframe(p string, elem types.Type, pos token.Pos) {
-	e.declare("sn_slice_unframe", "declare void @sn_slice_unframe(ptr, i64)")
-	e.inst("call void @sn_slice_unframe(ptr " + p + ", i64 " + e.sizeOf(elem).s + ")")
-}
-
-// unframeLast gives the slice a call packs for a variadic ...T
-// parameter, the last of values, a buffer of its own, for a call that
-// outlives the caller's frame, a spawn's.
-func (e *Emitter) unframeLast(sig *types.Signature, spread bool, values []value, pos token.Pos) {
-	kind, elem := sig.VariadicParam()
-	if kind != types.VariadicOwned || spread || len(values) == 0 {
-		return
-	}
-
-	slot := e.spill(values[len(values)-1])
-	e.unframe(slot, e.sub(elem), pos)
-	values[len(values)-1] = e.load("%sn_slice", slot)
-}
-
 func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, spread bool, sig *types.Signature) ([]types.Type, []value) {
 	kind, elem := sig.VariadicParam()
 	packed := !spread && (kind == types.VariadicOwned || kind == types.VariadicLent)
@@ -206,6 +206,10 @@ func (e *Emitter) variadicValue(kind types.VariadicKind, elem types.Type, values
 func (e *Emitter) call(x *ast.CallExpr) value {
 	if _, ok := x.Fun.(*ast.TypeExpr); ok { // a conversion to a type written out, []byte(s)
 		return e.conversion(x.Args[0], e.typeOf(x))
+	}
+
+	if p := lower.PartUsed(e.info, x.Fun); p != nil { // c(for f := range fields(c) { value }), a variant built from its fields
+		return e.variantBuild(x, p)
 	}
 
 	if id, ok := x.Fun.(*ast.Ident); ok {

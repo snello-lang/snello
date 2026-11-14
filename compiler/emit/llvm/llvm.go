@@ -77,6 +77,7 @@ type Emitter struct {
 	used       map[types.Object]bool           // the objects the program refers to
 	guards     map[*types.Named]bool           // whether dropping a value of a declared type runs a Drop method (drop.go)
 	subst      map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy   map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
 	generics   map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
 	files      map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
 	external   map[*types.Var]bool             // the library variables the runtime defines
@@ -570,7 +571,7 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 		slot := e.local(p)
 		e.inst("store " + e.irType(p.Type(), p.Pos()) + " %a" + strconv.Itoa(i) + ", ptr " + slot + ", align 8")
 		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
-			e.unframe(slot, e.sub(p.Type()).(*types.Slice).Elem(), p.Pos())
+			e.unframe(slot, e.sub(p.Type()).(*types.Slice).Elem())
 		}
 
 		e.own(slot, e.sub(p.Type()))

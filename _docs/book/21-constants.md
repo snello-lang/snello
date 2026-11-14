@@ -48,7 +48,7 @@ A constant is a number, a boolean or a string, or a type declared over one of th
 
 ## Its type
 
-A constant's literals take their type from the constant, as every literal takes its type from its context: `Limit` above is a `u8`, and `KB` is an `int`, since nothing says otherwise. A float literal is an `f64`, a character a `rune`. Arithmetic is between values of one type, as everywhere, so `const MB i64 = KB * KB` is refused while `KB` is an `int`, `cannot use a value of type int as i64 in declaration`, and is written `i64(KB) * i64(KB)`.
+A constant's literals take their type from the constant, as every literal takes its type from its context: `Limit` above is a `u8`, and `KB` is an `int`, since nothing says otherwise. A float literal is an `f64`, a character a `rune`, unless the constant gives another type: `const Comma byte = ','` is a `byte`, which `WriteByte` takes and a byte of a string compares with, as `encoding/json` names JSON's punctuation. Arithmetic is between values of one type, as everywhere, so `const MB i64 = KB * KB` is refused while `KB` is an `int`, `cannot use a value of type int as i64 in declaration`, and is written `i64(KB) * i64(KB)`.
 
 ## How it is computed
 

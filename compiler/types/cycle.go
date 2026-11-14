@@ -85,7 +85,7 @@ func (c *Checker) checkTypeCycles(decls []*Named) {
 	for _, d := range decls {
 		if inst := growingInstance(d, edges); inst != nil {
 			c.errorf(d.obj.pos, d.String()+" refers to itself as "+inst.String()+", whose arguments grow with each instance: it would need instances without end")
-			d.ready = false
+			d.ready, d.refused = false, true
 		}
 	}
 

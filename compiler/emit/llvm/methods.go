@@ -832,7 +832,7 @@ func (e *Emitter) eachElementIndexed(s string, elem types.Type, pos token.Pos, b
 
 // sliceMake writes a slice of n elements of type elem, with room for c,
 // into the slot out.
-func (e *Emitter) sliceMake(out string, n, c value, elem types.Type, pos token.Pos) {
+func (e *Emitter) sliceMake(out string, n, c value, elem types.Type) {
 	e.rt("sn_slice_make", "void", value{"ptr", out}, n, c, e.sizeOf(elem))
 }
 
@@ -862,7 +862,7 @@ func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) value
 }
 
 // sliceLit writes []T{a, b}: a slice made to size, then filled.
-func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) value {
+func (e *Emitter) sliceLit(x *ast.CompositeLit, st *types.Slice) value {
 	if len(x.Elts) == 0 {
 		return value{"%sn_slice", "zeroinitializer"}
 	}
@@ -875,7 +875,7 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) v
 	parts := e.operands(x.Elts, wants)
 	n := value{"i64", strconv.Itoa(len(parts))}
 	out := e.slot("%sn_slice")
-	e.sliceMake(out, n, n, st.Elem(), x.Pos())
+	e.sliceMake(out, n, n, st.Elem())
 	base := e.load("ptr", e.gep("%sn_slice", out, 0))
 	et := e.irType(st.Elem(), x.Pos())
 	for i, p := range parts {
@@ -1116,7 +1116,7 @@ func (e *Emitter) optionMethod(x *ast.CallExpr, sel *ast.SelectorExpr, absent st
 		e.label(done)
 		return e.load(e.irType(rt, x.Pos()), out)
 	case "Map", "MapErr":
-		return e.mapped(x, sel, p, t, held, has, val)
+		return e.mapped(x, sel, t, held, has, val)
 	case "AndThen", "OrElse", "Ok", "Err", "UnwrapOrElse":
 		return e.chained(x, sel, t, held, has, val)
 	}
@@ -1220,7 +1220,7 @@ func (e *Emitter) chained(x *ast.CallExpr, sel *ast.SelectorExpr, t types.Type, 
 // moved out of the receiver, and the other part, when there is one,
 // moves into the result as it is. The function's type comes from the
 // instance the checker recorded for the call.
-func (e *Emitter) mapped(x *ast.CallExpr, sel *ast.SelectorExpr, p string, t types.Type, held string, has value, val string) value {
+func (e *Emitter) mapped(x *ast.CallExpr, sel *ast.SelectorExpr, t types.Type, held string, has value, val string) value {
 	inst, ok := e.info.Instances[sel.Sel]
 	if !ok {
 		e.unsupported(x.Pos(), sel.Sel.Name+" without its instance")

@@ -221,7 +221,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			free, done := e.block("free"), e.block("done")
 			e.branch(owned.s, free, done)
 			e.label(free)
-			e.check(ir, "%v", t)
+			e.check(ir, "%v")
 			e.declare("sn_free", "declare void @sn_free(ptr)")
 			e.inst("call void @sn_free(ptr " + e.load("ptr", e.gep(ir, "%v", 0)).s + ")")
 			e.jump(done)
@@ -399,7 +399,7 @@ func (e *Emitter) poison(p string, t types.Type) {
 // check writes a debug build's check of the string at the address p
 // before its bytes are released or read: a poisoned length or
 // capacity is negative, and an owned string's block must be live.
-func (e *Emitter) check(ir, p string, t types.Type) {
+func (e *Emitter) check(ir, p string) {
 	if !e.cfg.Debug {
 		return
 	}
@@ -645,14 +645,14 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 			copy, done := e.block("copy"), e.block("done")
 			e.branch(isNull.s, done, copy)
 			e.label(copy)
-			cell := e.alloc(u.Elem(), pos)
+			cell := e.alloc(u.Elem())
 			e.store(e.cloneAt(e.deref(p).s, u.Elem(), pos), cell)
 			e.store(value{"ptr", cell}, out)
 			e.jump(done)
 			e.label(done)
 		case *types.Slice:
 			n := e.load("i64", e.gep(ir, "%v", 1))
-			e.sliceMake(out, n, n, u.Elem(), pos)
+			e.sliceMake(out, n, n, u.Elem())
 			dst := e.load("ptr", e.gep(ir, out, 0))
 			et := e.irType(u.Elem(), pos)
 			e.eachElementIndexed("%v", u.Elem(), pos, func(p, i string) {

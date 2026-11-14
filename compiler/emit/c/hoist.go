@@ -195,7 +195,16 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		return false // a literal owns nothing
 	}
 
-	return !e.isLent(x) && needsDrop(e.typeOf(x))
+	if e.isLent(x) {
+		return false
+	}
+
+	t := e.typeOf(x)
+	if want != nil && e.builtPointer(x, t, want) {
+		return false // held whole by valueTo, which reads through it
+	}
+
+	return needsDrop(t)
 }
 
 // borrowed returns the value an operand lends: the operand of a ref,

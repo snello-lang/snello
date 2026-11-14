@@ -141,14 +141,14 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		return e.makeCall(x)
 	case types.BuiltinTake:
 		target := x.Args[0].(*ast.UnaryExpr).X
-		p := e.placeAt(e.lvalue(target), e.typeOf(target))
+		p := e.placeTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 		t := e.typeOf(x)
 		v := e.load(e.irType(t, x.Pos()), p)
 		e.zero(p, t, x.Pos())
 		return v
 	case types.BuiltinReplace: // the place's address first, since v may be a call that runs before the place is read
 		target := x.Args[0].(*ast.UnaryExpr).X
-		p := e.placeAt(e.lvalue(target), e.typeOf(target))
+		p := e.placeTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 		t := e.typeOf(x)
 		v := e.operands(x.Args[1:], []types.Type{t})[0]
 		old := e.load(e.irType(t, x.Pos()), p)
@@ -156,7 +156,7 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		return old
 	case types.BuiltinPanic: // the text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
 		v := e.operands(x.Args, nil)[0]
-		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos(), false).v
+		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos()).v
 		if msg.typ == "" {
 			msg = e.constString("")
 		}
@@ -171,7 +171,7 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 	case types.BuiltinPrint:
 		parts := e.operands(x.Args, nil)
 		for i, a := range x.Args {
-			s := e.textOf(parts[i], e.typeOf(a), a.Pos(), false)
+			s := e.textOf(parts[i], e.typeOf(a), a.Pos())
 			if s.owned {
 				e.callWords("sn_eprint_owned", s.v)
 			} else {
@@ -303,7 +303,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 		}
 
 		out := e.slot("%sn_slice")
-		e.sliceMake(out, n, c, u.Elem(), x.Pos())
+		e.sliceMake(out, n, c, u.Elem())
 		return e.load("%sn_slice", out)
 	}
 

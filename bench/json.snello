@@ -1,0 +1,59 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// JSON over reflection at compile time: a thousand records of numbers,
+// strings, a slice, a nested struct and an option, encoded with
+// encoding/json two hundred times and the text decoded back two hundred
+// times; it prints the text's length and first record, then the cost of
+// encoding and of decoding a record, in nanoseconds.
+
+package main
+
+import ("encoding/json"; "fmt"; "strconv"; "time")
+
+struct Owner { Name string; Age int }
+
+struct Record {
+	ID     int
+	Name   string
+	Tags   []string
+	Score  f64
+	Active bool
+	Owner  Owner
+	Note   string?
+}
+
+func main() {
+	rounds := 200
+	records := []Record{}
+	for i := 0; i < 1000; i++ {
+		var note string? = None
+		if i % 3 == 0 {
+			note = Some("note " + strconv.Itoa(i))
+		}
+
+		records.Push(Record{ID: i, Name: "record " + strconv.Itoa(i), Tags: []string{"a".Clone(), "bb".Clone(), "ccc".Clone()}, Score: f64(i) / 8.0, Active: i % 2 == 0, Owner: Owner{Name: "owner".Clone(), Age: i % 90}, Note: note})
+	}
+
+	text := json.Marshal(ref records) ?? ""
+	start := time.Now()
+	n := 0
+	for r := 0; r < rounds; r++ {
+		n += len(json.Marshal(ref records) ?? "")
+	}
+
+	encode := time.Since(start)
+	start = time.Now()
+	m := 0
+	for r := 0; r < rounds; r++ {
+		back := json.Unmarshal<[]Record>(ref text) ?? []Record{}
+		m += len(back)
+	}
+
+	decode := time.Since(start)
+	first := text[0:text.Index("},") ?? 0]
+	fmt.Println(len(text), n / rounds, m / rounds, first)
+	per := i64(rounds * 1000)
+	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per)
+}

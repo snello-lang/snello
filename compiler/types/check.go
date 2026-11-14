@@ -61,12 +61,14 @@ type Config struct {
 type Info struct {
 	Defs      map[*ast.Ident]Object
 	Uses      map[*ast.Ident]Object
-	Types     map[ast.Expr]Type          // the type of every expression that has one
-	Moves     map[ast.Expr]bool          // the place expressions whose value moves away: the emitter empties the place
-	Instances map[*ast.Ident]Instance    // the name of each generic function at a call, with the arguments inferred for it
-	Captures  map[*ast.FuncLit][]Capture // the variables of the enclosing functions each closure refers to, in the order first seen
-	Wraps     map[*ast.TryExpr]*Variant  // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
-	Values    map[ast.Expr]Constant      // the value of each constant's value expression, and of each field a struct constant's literal gives
+	Types     map[ast.Expr]Type             // the type of every expression that has one
+	Moves     map[ast.Expr]bool             // the place expressions whose value moves away: the emitter empties the place
+	Instances map[*ast.Ident]Instance       // the name of each generic function at a call, with the arguments inferred for it
+	Captures  map[*ast.FuncLit][]Capture    // the variables of the enclosing functions each closure refers to, in the order first seen
+	Wraps     map[*ast.TryExpr]*Variant     // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
+	Values    map[ast.Expr]Constant         // the value of each constant's value expression, and of each field a struct constant's literal gives
+	Arms      map[*ast.MatchArm]TypeArm     // what each arm of a match on a type parameter matches
+	Parts     map[*Part][]*ast.SelectorExpr // the selectors each v.[f] of a part f became, whose field a backend names in each copy of the loop
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -79,6 +81,15 @@ type Info struct {
 type Capture struct {
 	Var    *Var
 	Copied bool
+}
+
+// A TypeArm is what an arm of a match on a type parameter matches: a
+// type, which may be a shape whose type parameters the arm binds, []E;
+// a kind, struct, enum or tuple; or, with neither, any type.
+type TypeArm struct {
+	Type  Type
+	Binds []*TypeParam
+	Kind  string
 }
 
 type Instance struct {
@@ -99,7 +110,22 @@ type Checker struct {
 	scope  *Scope     // the innermost scope open at the current point
 	objs   []Object   // the object of each top-level declaration, by index; nil for var and const
 	sig    *Signature // the function whose body is being checked, a closure's inside one; nil at the top level
-	recv   *Var       // the receiver of the method whose body is being checked, through any closures; nil elsewhere
+
+	// refined holds what an arm of a match on a type knows of a type
+	// parameter: the type or shape the arm matched, int or []E, which
+	// every type written with the parameter is read as inside the arm.
+	refined map[*TypeParam]Type
+	// kinds holds the kind an arm matched a type parameter as, struct,
+	// enum or tuple, which lets the arm reach its parts.
+	kinds map[*TypeParam]string
+	// sawParts says the body being checked reaches a field with v.[f],
+	// which selectParts makes a selector once the body is checked.
+	sawParts bool
+	// held is what a match whose arm is written once per variant holds,
+	// for each variant part: the value it matched, whose fields v.[f]
+	// reaches.
+	held map[*Part]*Var
+	recv *Var // the receiver of the method whose body is being checked, through any closures; nil elsewhere
 
 	// typeScopes holds, for a generic function and for a method of a
 	// generic type, the scope that declares its type parameters, under
@@ -134,6 +160,7 @@ type Checker struct {
 	placeFor   bool                    // checking the place take or replace is given, which they refuse themselves when it is not one
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
 	bindsOwned bool                    // a pattern bound a non-Copy value by value
+	dropOwner  Type                    // the type with a Drop whose variant a pattern is inside, by value; nil for none
 	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)
 	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
 	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
@@ -363,6 +390,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.checkDefaultBodies()
 	c.resolveKeeps() // what each function keeps is known once every body is checked
 	c.checkCallCycles()
+	c.reach(fs)
 }
 
 // A fileState is a file's scope of its imports, under the package
@@ -401,9 +429,19 @@ func (c *Checker) restore(p walkPlace) {
 	c.file, c.fileIndex, c.scope, c.objs = p.file, p.index, p.scope, p.objs
 }
 
-// errorf reports an error at pos. Error paths may allocate freely.
+// errorf reports an error at pos, once: an arm of a match on a type
+// that lists several types is checked once for each, from copies of
+// one body, and its mistakes are one each. Error paths may allocate
+// freely.
 func (c *Checker) errorf(pos token.Pos, msg string) {
-	c.errors.Add(c.position(pos), msg)
+	at := c.position(pos)
+	for _, e := range c.errors {
+		if e.Pos == at && e.Msg == msg {
+			return
+		}
+	}
+
+	c.errors.Add(at, msg)
 }
 
 // position resolves pos through the file of the package it is in,

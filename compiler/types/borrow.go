@@ -262,9 +262,10 @@ func (c *Checker) holdIn(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 
 // noteTemporary records that e, lent to a call or a ref, is a
 // temporary when its value is owned and no variable holds it, other
-// than a literal or a constant, which live for the whole program.
+// than a literal or a constant, which live for the whole program, and
+// an expression that never finishes, panic(...), which makes no value.
 func (c *Checker) noteTemporary(e ast.Expr, x operand) {
-	if x.mode == value && !isBorrow(x.typ) && !c.static(e) {
+	if x.mode == value && !isBorrow(x.typ) && !isNever(x.typ) && !c.static(e) && c.temporaryOf(e) == nil { // a part of a temporary already names the whole, row() for row().name
 		c.markTemporary(e, e)
 	}
 }
@@ -276,7 +277,25 @@ func (c *Checker) markTemporary(e, tmp ast.Expr) {
 		c.temporary = make(map[ast.Expr]ast.Expr)
 	}
 
-	c.temporary[e] = tmp
+	c.temporary[unparen(e)] = tmp
+}
+
+// temporaryOf returns the temporary the value of e is, borrows or is a
+// part of, or nil.
+func (c *Checker) temporaryOf(e ast.Expr) ast.Expr {
+	return c.temporary[unparen(e)]
+}
+
+// markPart records that e, a field, an element or a piece of the value
+// of x, or what x points at, lives where that value does: in x itself when x is a value no
+// variable holds, boxed().name, or in the temporary x is a part of,
+// (*boxed()).name. A borrow of such a part is a borrow of the temporary.
+func (c *Checker) markPart(e, x ast.Expr, op operand) {
+	if tmp := c.temporaryOf(x); tmp != nil {
+		c.markTemporary(e, tmp)
+	} else if op.mode == value && !isBorrow(op.typ) && !isNever(op.typ) && !c.static(x) {
+		c.markTemporary(e, x)
+	}
 }
 
 // static reports whether e is a literal or a constant, whose value
@@ -329,9 +348,17 @@ func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
 				return tmp
 			}
 		}
+	case *ast.CallExpr:
+		if _, ok := c.calleeOf(x).(*Variant); ok { // Some(boxed()) holds what its argument lends
+			for _, arg := range x.Args {
+				if tmp := c.borrowOfTemporary(arg); tmp != nil {
+					return tmp
+				}
+			}
+		}
 	}
 
-	return c.temporary[e]
+	return c.temporaryOf(e)
 }
 
 // derive records that the part path of v, of type t, holds what e

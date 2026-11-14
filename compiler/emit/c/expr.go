@@ -61,6 +61,16 @@ func (e *Emitter) expr(x ast.Expr) string {
 	case *ast.IfExpr:
 		return e.ifExpr(x)
 	case *ast.MatchExpr:
+		if x.OnType {
+			return e.typeMatch(x)
+		}
+
+		if len(x.Arms) > 0 {
+			if _, ok := x.Arms[0].Pat.(*ast.PartsPat); ok {
+				return e.variantMatch(x)
+			}
+		}
+
 		return e.matchExpr(x)
 	default:
 		e.unsupported(x.Pos(), "this kind of expression")
@@ -85,6 +95,12 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
 		}
 	}
 
+	if e.builtPointer(x, have, want) { // an owned pointer built here and read through as a borrow: held whole for the statement, then dropped with what it points at
+		tmp := e.spill(e.expr(x), have, x.Pos())
+		e.hold(tmp, have)
+		return derefTo(tmp, have, want)
+	}
+
 	if depth(have) < depth(want) {
 		if !e.isPlace(x) { // a value built here and lent mut lives in a temporary for the statement
 			tmp := e.spill(e.expr(x), have, x.Pos())
@@ -99,6 +115,15 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
 	}
 
 	return derefTo(e.expr(x), have, want)
+}
+
+// builtPointer reports whether x, of type have, is an owned pointer
+// built in the statement that is read through as the borrow want, as
+// the receiver of boxed().Size() is: nothing else owns it, so the
+// operation holds it until the statement ends.
+func (e *Emitter) builtPointer(x ast.Expr, have, want types.Type) bool {
+	_, ptr := have.(*types.Pointer)
+	return ptr && isBorrowType(want) && !e.isPlace(x) && depth(have) >= depth(want)
 }
 
 // lvalue writes x as a place about to be written or lent mutably: as
@@ -210,6 +235,20 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 // front of the struct. Package members and methods are only reached
 // through calls.
 func (e *Emitter) selector(x *ast.SelectorExpr) string {
+	if p := lower.PartUsed(e.info, x.X); p != nil { // f.name and f.default, constants in each copy of the loop
+		c := e.partCopy[p]
+		if x.Sel.Name == "default" {
+			t := e.typeOf(x)
+			if c.Default == nil {
+				return e.variantValue(t, types.NoneVariant, nil, x.Pos())
+			}
+
+			return e.variantValue(t, types.SomeVariant, []string{e.valueTo(c.Default, c.Field.Type())}, x.Pos())
+		}
+
+		return literal(c.Name)
+	}
+
 	if pkg := e.packageOf(x.X); pkg != nil {
 		switch obj := e.info.Uses[x.Sel].(type) { // a member of a package written in Snello
 		case *types.Func:
@@ -271,6 +310,72 @@ func (e *Emitter) tuple(x *ast.TupleExpr) string {
 
 // compositeLit writes a struct literal; fields left out are zero, as
 // a C compound literal leaves them.
+// variantBuild writes c(for f := range fields(c) { value }), the variant
+// the loop around it gives c built from its fields: each field's value
+// made in order, under its copy, held until every one is made, then
+// taken by the variant.
+func (e *Emitter) variantBuild(x *ast.CallExpr, p *types.Part) string {
+	v := e.partCopy[p].Variant
+	elt := x.Args[0].(*ast.PartsElt)
+	held := e.partValues(elt, x.Pos())
+	return e.variantValue(e.typeOf(x), v, held, x.Pos())
+}
+
+// partValues writes the value of a literal's loop over a type's fields
+// once for each field, in order, each under its copy and held until all
+// are made, so that a ? leaving drops the ones made before it, and
+// returns them taken.
+func (e *Emitter) partValues(elt *ast.PartsElt, pos token.Pos) []string {
+	part, copies := lower.EltParts(e.info, elt, e.subst, e.partCopy)
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	outer := e.subst
+	held := make([]string, len(copies))
+	for i, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		ft := c.Field.Type()
+		held[i] = e.temp()
+		e.line(e.cType(ft, pos) + " " + held[i] + " = " + e.valueTo(elt.Value, ft) + ";")
+		e.hold(held[i], ft)
+	}
+
+	if len(copies) == 0 {
+		e.touch(elt.Value)
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+	for i, c := range copies {
+		ft := c.Field.Type()
+		held[i] = e.taken(held[i], ft, held[i], ft, pos)
+	}
+
+	return held
+}
+
+// partsLit writes T{ for f := range fields(T) { [f]: value } } for the
+// type the instance being written gives T: the value of each field
+// made in the order of the fields, under that field's copy of the loop,
+// and held until every one is made, so that a ? leaving drops the ones
+// made before it; the literal then takes them all.
+func (e *Emitter) partsLit(x *ast.CompositeLit, elt *ast.PartsElt, t types.Type, live string) string {
+	_, copies := lower.EltParts(e.info, elt, e.subst, e.partCopy)
+	values := e.partValues(elt, x.Pos())
+	parts := make([]string, 0, len(copies)+1)
+	for i, c := range copies {
+		parts = append(parts, "."+lower.Ident(c.Name)+" = "+values[i])
+	}
+
+	if live != "" {
+		parts = append(parts, live)
+	}
+
+	return "(" + e.cType(t, x.Pos()) + "){" + strings.Join(parts, ", ") + "}"
+}
+
 func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 	t := e.typeOf(x)
 	if st, ok := t.Underlying().(*types.Slice); ok {
@@ -302,6 +407,12 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) string {
 	live := ""
 	if hasDrop(t) {
 		live = ".sn_live = true"
+	}
+
+	if len(x.Elts) == 1 {
+		if elt, ok := x.Elts[0].(*ast.PartsElt); ok {
+			return e.partsLit(x, elt, t, live)
+		}
 	}
 
 	st := t.Underlying().(*types.Struct)
@@ -763,6 +874,10 @@ func (e *Emitter) divider(op token.Kind, t types.Type, pos token.Pos) string {
 func (e *Emitter) call(x *ast.CallExpr) string {
 	if _, ok := x.Fun.(*ast.TypeExpr); ok { // a conversion to a type written out, []byte(s)
 		return e.conversion(x.Args[0], e.typeOf(x))
+	}
+
+	if p := lower.PartUsed(e.info, x.Fun); p != nil { // c(for f := range fields(c) { value }), a variant built from its fields
+		return e.variantBuild(x, p)
 	}
 
 	if id, ok := x.Fun.(*ast.Ident); ok {

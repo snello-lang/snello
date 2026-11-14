@@ -33,8 +33,12 @@ func (c *Checker) funcBodies(f *ast.File) {
 				c.scope = scope // the type parameters the receiver names
 			}
 
-			c.checkBody(c.objs[i].(*Func).typ.(*Signature), d.Recv, d.Params, d.Body)
+			fn := c.objs[i].(*Func)
+			c.checkBody(fn.typ.(*Signature), d.Recv, d.Params, d.Body)
 			c.scope = outer
+			if d.Body != nil && genericDecl(fn) {
+				fn.decl = d
+			}
 		}
 	}
 }
@@ -54,6 +58,11 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.flow, c.temps = nil, c.temps[:0]
 	clear(c.pinned)
 	c.sig, c.recv = nil, nil
+	if c.sawParts && c.info != nil {
+		c.selectParts(body)
+	}
+
+	c.sawParts = false
 }
 
 // funcBody opens the function scope, declares the receiver and the

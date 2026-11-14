@@ -301,11 +301,16 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 		return
 	}
 
+	if id, ok := unparen(lhs).(*ast.Ident); ok && c.heldVariant(id) {
+		c.errorf(lhs.Pos(), "cannot assign to "+id.Name+": the arm written for each variant holds it, and v.[f] reads the variant it holds")
+		return
+	}
+
 	c.assign(op, x.typ, lhs.Pos(), "assignment")
 	c.keepParamIn(op, "assigned to", lhs, lhs.Pos())
 	c.revive(lhs)
 	p, kind := c.placeOf(lhs)
-	if kind != notPlace && c.storeRefused(p, kind, x, op, lhs.Pos()) {
+	if kind != notPlace && c.storeRefused(p, x, op, lhs.Pos()) {
 		return
 	}
 
@@ -352,7 +357,7 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 // storeRefused reports, and refuses, a closure's body storing a borrow
 // in a variable from outside it: what the closure borrows ends with
 // each call.
-func (c *Checker) storeRefused(p place, kind placeKind, x, op operand, pos token.Pos) bool {
+func (c *Checker) storeRefused(p place, x, op operand, pos token.Pos) bool {
 	f := c.flow
 	if f == nil || !c.bringsBorrow(x.typ, op) && !(isSignature(x.typ) && c.closureBorrows(op)) {
 		return false
@@ -491,7 +496,7 @@ func (c *Checker) send(s *ast.SendStmt) {
 // returnStmt checks the results against the function's result type:
 // none for (), one value, or one tuple value or a list for several.
 func (c *Checker) returnStmt(s *ast.ReturnStmt) {
-	want := c.sig.results
+	want := c.refine(c.sig.results)
 	switch {
 	case len(s.Results) == 0:
 		if want != Unit {
@@ -653,6 +658,11 @@ func (c *Checker) flowPost(s *ast.ForStmt) {
 // it lies; one that is a call's result lives for the loop and is
 // dropped after it.
 func (c *Checker) rangeStmt(s *ast.RangeStmt) {
+	if call, b := c.partsCall(s.X); call != nil {
+		c.partsLoop(s, call, b)
+		return
+	}
+
 	x := c.expr(s.X, nil)
 	c.openScope()
 	defer c.closeScope()
@@ -793,7 +803,23 @@ func (c *Checker) holdElements(s *ast.RangeStmt, lent []place, mut bool) {
 // deferStmt checks a defer: what the deferred call borrows, its
 // receiver, its arguments and what a deferred closure captures, is held
 // until the function returns, when the call runs.
+// inParts reports whether a loop over a type's parts is around the
+// statement being checked, in the function being checked.
+func (c *Checker) inParts() bool {
+	for i := range c.regions {
+		if c.regions[i].parts {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Checker) deferStmt(s *ast.DeferStmt) {
+	if c.inParts() {
+		c.errorf(s.Defer, "defer cannot be inside a loop over a type's parts, which is written out once per part: defer before the loop")
+	}
+
 	call, ok := unparen(s.Call).(*ast.CallExpr)
 	if !ok {
 		c.expr(s.Call, nil)
@@ -1054,6 +1080,10 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 }
 
 func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
+	if c.inParts() {
+		c.errorf(s.Select, "select cannot be inside a loop over a type's parts, which is written out once per part: select in a function the loop calls")
+	}
+
 	allLeave := true
 	c.enterRegion(false, false, s.Select)
 	f := c.forkAt()

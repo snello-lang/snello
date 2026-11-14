@@ -320,6 +320,11 @@ func TestTraits(t *testing.T) {
 		{"func f(a Comparable, b Comparable) bool { return a.Same(b) }", []string{"cannot call Same through Comparable: its signature mentions Self"}},
 		{"trait Mk { func (s ref Self) Dup() Self }\nfunc f(m ref Mk) { m.Dup() }", []string{"cannot call Dup through Mk: its signature mentions Self"}}, // Self in a result
 		{"trait Lk { var next *Self? }\nfunc f(l ref Lk) { print(l.next) }", []string{"cannot reach next through Lk: its type mentions Self"}},
+		// A default with type parameters of its own is a function for each type argument, which no entry of a trait value's table holds.
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc f(g ref Gen) int { return g.N() }", nil},
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc f(g ref Gen) int { return g.Dup(ref 3) }", []string{"cannot call Dup through Gen: it has type parameters, compiled for each type, which a trait value's table cannot hold; take the value as a bound"}},
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\ntrait Kin: Gen {}\nfunc f(g ref Kin) int { return g.Dup(ref 3) }", []string{"cannot call Dup through Kin: it has type parameters"}}, // through a refining trait
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc G<T: Gen>(x ref T) int { return x.Dup(ref 3) }\nfunc f(g Gen) int { return G(ref g) }", []string{"cannot use Gen as the type parameter T of G: the method Dup of Gen has type parameters"}},
 		{"func f(t Logged) f64 { return t.Area() }", nil}, // a refined trait's method, through the value
 		{"func f(l ref Loud) string { return l.label.Clone() + l.Label() }", nil},
 		{"func f(c Circle) f64 { var s Shape = c; return c.r + s.Area() }", nil}, // a Copy value is copied into the trait value

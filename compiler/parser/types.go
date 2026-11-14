@@ -116,17 +116,19 @@ func (p *Parser) parseCoreType() ast.Type {
 	return &ast.NamedType{Name: &ast.Ident{NamePos: pos, Name: "_"}}
 }
 
-// parseNamedType parses: ident ["." ident] ["<" types ">"]. The first
-// identifier is the name until a "." shows it was a package.
+// parseNamedType parses: ident ["." (ident | "type")] ["<" types ">"].
+// The first identifier is the name until a "." shows it was a package,
+// or the field of a loop over a type's fields, whose type is f.type.
 //
 //	int                 NamedType{Name: int}
 //	http.Request        NamedType{Pkg: http, Name: Request}
 //	arena.Index<Node>   NamedType{Pkg: arena, Name: Index, Args: [Node]}
+//	f.type              NamedType{Pkg: f, Name: type}
 func (p *Parser) parseNamedType() *ast.NamedType {
 	typ := &ast.NamedType{Name: p.parseIdent()}
 	if p.tok == token.PERIOD {
 		p.next()
-		typ.Pkg, typ.Name = typ.Name, p.parseIdent()
+		typ.Pkg, typ.Name = typ.Name, p.parseNameOrType()
 	}
 
 	if p.tok == token.LSS {
@@ -134,6 +136,19 @@ func (p *Parser) parseNamedType() *ast.NamedType {
 	}
 
 	return typ
+}
+
+// parseNameOrType parses an identifier, or the keyword type or default,
+// read as a name: what follows the "." of f.type, a field's type, and
+// of f.default, its default.
+func (p *Parser) parseNameOrType() *ast.Ident {
+	if p.tok == token.TYPE || p.tok == token.DEFAULT {
+		id := &ast.Ident{NamePos: p.pos, Name: p.tok.String()}
+		p.next()
+		return id
+	}
+
+	return p.parseIdent()
 }
 
 // parseTypeArgs parses "<" Type {"," Type} ">". In a type, "<" always

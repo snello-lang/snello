@@ -82,10 +82,44 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 	d.Params = p.parseParams()
 	d.Results = p.parseResults()
 	if p.tok == token.LBRACE {
+		p.fn = d
 		d.Body = p.parseBlock()
+		p.fn = nil
 	}
 
 	return d
+}
+
+// isTypeParam reports whether name is a type parameter of the function
+// d, its own or one its receiver's type names, as T of Box<T> in
+// (b ref Box<T>).
+func isTypeParam(d *ast.FuncDecl, name string) bool {
+	if d == nil {
+		return false
+	}
+
+	for _, tp := range d.TypeParams {
+		if tp.Name.Name == name {
+			return true
+		}
+	}
+
+	if d.Recv != nil {
+		recv := d.Recv.Type
+		if r, ok := recv.(*ast.RefType); ok {
+			recv = r.Elem
+		}
+
+		if n, ok := recv.(*ast.NamedType); ok {
+			for _, a := range n.Args {
+				if an, ok := a.(*ast.NamedType); ok && an.Pkg == nil && an.Args == nil && an.Name.Name == name {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // parseReceiver parses "(" ident Type ")". The type is one of the three

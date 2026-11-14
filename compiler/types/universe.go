@@ -42,25 +42,29 @@ var (
 // methods with the operators. Send asks for no method either: a type
 // is Send by its structure (send.go), and listing it is refused.
 var (
-	CopyTrait  = standardTrait("Copy")
-	CloneTrait = standardTrait("Clone")
-	EqTrait    = standardTrait("Eq")
-	OrdTrait   = standardTrait("Ord")
-	HashTrait  = standardTrait("Hash")
-	DropTrait  = standardTrait("Drop")
-	ErrorTrait = standardTrait("Error")
-	AddTrait   = standardTrait("Add")
-	SubTrait   = standardTrait("Sub")
-	MulTrait   = standardTrait("Mul")
-	DivTrait   = standardTrait("Div")
-	RemTrait   = standardTrait("Rem")
-	NegTrait   = standardTrait("Neg")
-	SendTrait  = standardTrait("Send")
+	CopyTrait = standardTrait("Copy")
+	// ReflectTrait opens a type to reflection from every package: a
+	// reflecting function reaches all its fields and variants, and builds
+	// it from them, which its package says by listing it.
+	ReflectTrait = standardTrait("Reflect")
+	CloneTrait   = standardTrait("Clone")
+	EqTrait      = standardTrait("Eq")
+	OrdTrait     = standardTrait("Ord")
+	HashTrait    = standardTrait("Hash")
+	DropTrait    = standardTrait("Drop")
+	ErrorTrait   = standardTrait("Error")
+	AddTrait     = standardTrait("Add")
+	SubTrait     = standardTrait("Sub")
+	MulTrait     = standardTrait("Mul")
+	DivTrait     = standardTrait("Div")
+	RemTrait     = standardTrait("Rem")
+	NegTrait     = standardTrait("Neg")
+	SendTrait    = standardTrait("Send")
 )
 
 var standardTraits = [...]*Trait{
 	CopyTrait, CloneTrait, EqTrait, OrdTrait, HashTrait, DropTrait, ErrorTrait,
-	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait,
+	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait, ReflectTrait,
 }
 
 var predeclaredBuiltins = [...]struct {
@@ -77,6 +81,8 @@ var predeclaredBuiltins = [...]struct {
 	{"max", BuiltinMax},
 	{"close", BuiltinClose},
 	{"replace", BuiltinReplace},
+	{"fields", BuiltinFields},
+	{"variants", BuiltinVariants},
 }
 
 func init() {

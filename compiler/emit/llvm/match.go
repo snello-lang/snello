@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -55,6 +56,93 @@ func (e *Emitter) matchExpr(x *ast.MatchExpr) value {
 	}
 
 	return e.load(e.irType(m.resultType, x.Pos()), m.result)
+}
+
+// variantMatch writes match v { for c := range variants(T) => body }
+// for the enum the instance being written gives T: the arm once for
+// each variant, tested by the variant's tag, with the variant bound to
+// c; v is lent, and nothing is taken out of it.
+func (e *Emitter) variantMatch(x *ast.MatchExpr) value {
+	resultType := e.typeOf(x)
+	result := ""
+	if yields(resultType) {
+		result = e.slot(e.irType(resultType, x.Pos()))
+	}
+
+	arm := x.Arms[0]
+	part, copies := lower.ArmParts(e.info, arm.Pat.(*ast.PartsPat), e.subst)
+	place, t, held := e.consumed(x.X)
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	end := e.block("match.end")
+	for _, c := range copies {
+		body, next := e.block("variant.body"), e.block("variant.next")
+		e.branch(e.tagTest(place, t, c.Variant).s, body, next)
+		e.label(body)
+		e.partCopy[part] = c
+		e.push(false)
+		e.node(arm.Body, result, resultType)
+		if !e.fn.terminated {
+			e.pop(arm.Pos())
+			e.jump(end)
+		} else {
+			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		}
+
+		e.label(next)
+	}
+
+	delete(e.partCopy, part)
+	if held != "" {
+		e.hold(held, e.typeOf(x.X)) // a temporary matched is dropped when the statement ends
+	}
+
+	e.panic(e.constString("no match arm matched"))
+	e.label(end)
+	if result == "" {
+		return unit
+	}
+
+	return e.load(e.irType(resultType, x.Pos()), result)
+}
+
+// typeMatch writes a match on a type: the one arm the type the instance
+// being written gives the parameter takes, with what its shape binds;
+// the other arms are not written.
+func (e *Emitter) typeMatch(x *ast.MatchExpr) value {
+	resultType := e.typeOf(x)
+	result := ""
+	if yields(resultType) {
+		result = e.slot(e.irType(resultType, x.Pos()))
+	}
+
+	arm, sub := lower.TypeArm(e.info, x, e.sub(lower.MatchedParam(e.info, x)), e.subst)
+	if arm == nil {
+		e.unsupported(x.Pos(), "a type no arm of this match takes")
+		return unit
+	}
+
+	outer := e.subst
+	e.subst = sub
+	end := e.block("match.end")
+	e.push(false)
+	e.node(arm.Body, result, resultType)
+	if !e.fn.terminated {
+		e.pop(arm.Pos())
+		e.jump(end)
+	} else {
+		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+	}
+
+	e.label(end)
+	e.subst = outer
+	if result == "" {
+		return unit
+	}
+
+	return e.load(e.irType(resultType, x.Pos()), result)
 }
 
 func (e *Emitter) arm(m *match, arm *ast.MatchArm) {

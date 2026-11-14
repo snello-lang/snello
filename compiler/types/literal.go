@@ -167,6 +167,10 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 		return invalidOperand
 	}
 
+	if tp, ok := t.(*TypeParam); ok && c.kinds[tp] == "struct" {
+		return c.partsLit(e, tp)
+	}
+
 	switch u := t.Underlying().(type) {
 	case *Struct:
 		c.structLit(e, t, u, nil)
@@ -270,7 +274,12 @@ func (c *Checker) genericLit(e *ast.CompositeLit, g *Named, expected Type) opera
 		done[v] = ops[i]
 	}
 
-	c.structLit(e, t, t.Underlying().(*Struct), done)
+	fields, ok := t.Underlying().(*Struct)
+	if !ok { // a declaration refused for growing has no instances, and was reported where it is declared
+		return invalidOperand
+	}
+
+	c.structLit(e, t, fields, done)
 	return operand{value, t, nil, nil}
 }
 
@@ -386,19 +395,21 @@ func (c *Checker) keyed(e *ast.CompositeLit, t Type, st *Struct) bool {
 
 // looseElements checks the elements of a literal whose type is unknown,
 // so their own errors are reported; a bare key is a field name and is
-// left alone.
+// left alone. The literal's error is reported already, so each element
+// is given the invalid type as its context: None, which takes its type
+// from the context, is not reported again.
 func (c *Checker) looseElements(elts []ast.Expr) {
 	for _, elt := range elts {
 		if kv, ok := elt.(*ast.KeyValueExpr); ok {
 			if _, isName := kv.Key.(*ast.Ident); !isName {
-				c.expr(kv.Key, nil)
+				c.expr(kv.Key, Typ[Invalid])
 			}
 
-			c.expr(kv.Value, nil)
+			c.expr(kv.Value, Typ[Invalid])
 			continue
 		}
 
-		c.expr(elt, nil)
+		c.expr(elt, Typ[Invalid])
 	}
 }
 

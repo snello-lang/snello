@@ -23,6 +23,8 @@ const (
 	BuiltinMax
 	BuiltinClose
 	BuiltinReplace
+	BuiltinFields
+	BuiltinVariants
 )
 
 // An Object is a named entity of a program: a type name, a variable,
@@ -93,8 +95,9 @@ type Const struct {
 type Func struct {
 	object
 	origin  *Func
-	derived bool   // written by the compiler from the type's fields, for a standard trait the type listed without the method
-	trait   *Trait // for a default method a type inherited: the trait, or instance of one, it came from
+	derived bool          // written by the compiler from the type's fields, for a standard trait the type listed without the method
+	trait   *Trait        // for a default method a type inherited: the trait, or instance of one, it came from
+	decl    *ast.FuncDecl // a generic function's declaration, whose body the questions a type answers walk (reach.go); it fits in the bytes the fields above leave free
 }
 
 // FromTrait returns the trait a type inherited the default method from,
@@ -124,6 +127,29 @@ type Builtin struct {
 	object
 	id BuiltinID
 }
+
+// A Part is a field or a variant that a loop over a type's parts
+// gives, for f := range fields(T): known to the compiler alone, named
+// in the loop and never a value. A field's type is a type parameter of
+// the loop's own, f.type, which a backend binds to the field's type in
+// each copy of the loop it writes; a variant has none.
+type Part struct {
+	object
+	of      Type  // the type parameter whose part it is
+	in      *Part // the variant a field of a variant belongs to, or nil
+	variant bool
+}
+
+// Of returns the type parameter whose part, or whose variant's field,
+// the part is.
+func (p *Part) Of() Type { return p.of }
+
+// In returns the variant a field of a variant belongs to, or nil for a
+// struct's field and a variant.
+func (p *Part) In() *Part { return p.in }
+
+// IsVariant reports whether the part is a variant, from variants(T).
+func (p *Part) IsVariant() bool { return p.variant }
 
 // A PkgName is an imported package, the name before the dot: a
 // package written in Snello, loaded by the importer, or one of the

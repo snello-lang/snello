@@ -234,11 +234,14 @@ func TestUniverse(t *testing.T) {
 		{"max", "*types.Builtin", ""},
 		{"close", "*types.Builtin", ""},
 		{"replace", "*types.Builtin", ""},
+		{"fields", "*types.Builtin", ""},
+		{"variants", "*types.Builtin", ""},
 		{"Some", "*types.Variant", ""},
 		{"None", "*types.Variant", ""},
 		{"Ok", "*types.Variant", ""},
 		{"Err", "*types.Variant", ""},
 		{"Send", "*types.TypeName", "Send"},
+		{"Reflect", "*types.TypeName", "Reflect"},
 		{"local", "*types.TypeName", "local"},
 		{"nil", "", ""},
 		{"int32", "", ""},
@@ -275,8 +278,8 @@ func TestUniverse(t *testing.T) {
 		t.Error("byte and u8 are not identical")
 	}
 
-	if n := Universe.Len(); n != 53 {
-		t.Errorf("universe has %d names, want 53: 20 types, 2 constants, 10 builtins, 7 variants, 14 traits", n)
+	if n := Universe.Len(); n != 56 {
+		t.Errorf("universe has %d names, want 56: 20 types, 2 constants, 12 builtins, 7 variants, 15 traits", n)
 	}
 }
 

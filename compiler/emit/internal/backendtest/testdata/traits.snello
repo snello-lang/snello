@@ -8,7 +8,8 @@
 // refining trait's version of it, a generic type implementing the trait
 // by calling the methods of its own bounded parameter, generic functions
 // bounded by the traits whose calls go to each type argument's own
-// method, and a Drop method checked against the standard trait.
+// method, a Drop method checked against the standard trait, and a
+// trait with a generic default, boxed into trait values.
 
 package main
 
@@ -104,6 +105,20 @@ struct Scaled<T: Shape> impl Shape {
 
 func (s ref Scaled<T>) Area() f64    { return s.inner.Area() * s.k * s.k }
 func (s ref Scaled<T>) Name() string { return "scaled " + s.inner.Name() }
+
+// A trait with a default of type parameters of its own, which a trait
+// value's table holds no entry for: its values are boxed and called by
+// the other methods, and the generic one is called through a bound.
+trait Tagged {
+	func (s ref Self) Tag() string
+	func (s ref Self) Pair<U: Clone>(u ref U) (string, U) { return (s.Tag(), u.Clone()) }
+}
+
+struct Label impl Tagged { s string }
+
+func (l ref Label) Tag() string { return l.s.Clone() }
+
+func Paired<T: Tagged>(x ref T) (string, string) { return x.Pair(ref "pair") }
 
 func TotalArea<T: Shape>(xs ref []T) f64 {
 	sum := 0.0
@@ -287,6 +302,12 @@ func main() {
 	seen := map[Pt]int{p: 3}
 	fmt.Println(p == q, p.Eq(ref q), p != Pt{x: 2, y: 2}, seen[q])
 
+	tagged := []Tagged{Label{s: "first".Clone()}, Label{s: "second".Clone()}}
+	for _, x := range ref tagged {
+		fmt.Println(x.Tag())
+	}
+
+	fmt.Println(Paired(ref Label{s: "bound".Clone()}))
 	c := Counter{name: "c"}
 	t := Tally{n: 2}
 	fmt.Println(c.name, t.n)

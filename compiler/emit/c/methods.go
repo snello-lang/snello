@@ -45,7 +45,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		}
 
 		if t.Info()&types.IsInteger != 0 {
-			if call := e.integerMethod(x, sel, recv, t); call != "" {
+			if call := e.integerMethod(x, sel, recv); call != "" {
 				return call
 			}
 		}
@@ -577,7 +577,7 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 // for any other method. The checked operations are the C compiler's
 // overflow builtins, one instruction and a test of its flag; Abs and
 // Clamp are selects, with no branch the compiler must keep.
-func (e *Emitter) integerMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type, b *types.Basic) string {
+func (e *Emitter) integerMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type) string {
 	name := sel.Sel.Name
 	var op string
 	switch name {
@@ -996,7 +996,7 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) s
 // behind.
 func (e *Emitter) takeCall(x *ast.CallExpr) string {
 	target := x.Args[0].(*ast.UnaryExpr).X
-	place := deref(e.lvalue(target), e.typeOf(target))
+	place := derefTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 	t := e.typeOf(x)
 	if e.hasEffects(target) { // the place is named twice below: a call in it runs once
 		at := e.temp()
@@ -1015,7 +1015,7 @@ func (e *Emitter) takeCall(x *ast.CallExpr) string {
 // may be a call that runs before the place is read.
 func (e *Emitter) replaceCall(x *ast.CallExpr) string {
 	target := x.Args[0].(*ast.UnaryExpr).X
-	place := deref(e.lvalue(target), e.typeOf(target))
+	place := derefTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 	t := e.typeOf(x)
 	ct := e.cType(t, x.Pos())
 	at := e.temp()

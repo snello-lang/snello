@@ -250,12 +250,21 @@ var handledErrors = map[string]bool{
 	"default-no-zero.snello":      true,
 	// A conversion moves the value, and takes no borrow of it.
 	"conversion-moves.snello": true,
+	// No part leaves a value whose type implements Drop.
+	"move-out-of-drop.snello": true,
+	// A field reflection reaches is lent, and a loop over a type's parts
+	// is written out per part.
+	"reflect-lent.snello": true,
+	"reflect-loop.snello": true,
 	// A deferred print or built-in saves views of its arguments.
 	"defer-printed.snello": true,
 	// A range over an iterator: a value with Next on a mut receiver.
 	"range-iterator.snello": true,
-	// A Drop runs once, by the language.
-	"drop-by-hand.snello": true,
+	// A borrow of a temporary, or of a part of one, dies with its statement.
+	"borrow-of-temporary-part.snello": true,
+	// A Drop runs once, by the language, on a struct or an enum.
+	"drop-by-hand.snello":       true,
+	"drop-not-composite.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {
@@ -447,6 +456,7 @@ type sourceImporter struct {
 	conf   Config
 	srcs   map[string]string
 	loaded map[string]*Package
+	info   *Info // the tables the packages share, as the compiler's importer shares them; nil for none
 }
 
 func (imp *sourceImporter) Import(path string) (*Package, error) {
@@ -465,7 +475,7 @@ func (imp *sourceImporter) Import(path string) (*Package, error) {
 	}
 
 	std := Config{Importer: imp.conf.Importer, Standard: true}
-	pkg, err := std.Check(path, file, f, nil)
+	pkg, err := std.Check(path, file, f, imp.info)
 	if err != nil {
 		return nil, err
 	}

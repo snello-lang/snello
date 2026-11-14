@@ -38,7 +38,7 @@ func (e *Emitter) box(v value, from *types.Named, to *types.Trait, pos token.Pos
 		e.table(name, from, to, pos)
 	}
 
-	p := e.alloc(from, pos)
+	p := e.alloc(from)
 	e.store(v, p)
 	out := e.insert(value{"%sn_trait", "zeroinitializer"}, value{"ptr", "@" + name + "_tab"}, 0)
 	return e.insert(out, value{"ptr", p}, 1)

@@ -304,3 +304,13 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | Functional options, `NewServer(WithPort(9000), WithVerbose())` | a struct literal, `Server{port: 9000}`, every setting named, any of them skipped |
 | `os.OpenFile(path, os.O_WRONLY\|os.O_APPEND\|os.O_CREATE, 0o644)` | the same, or `os.OpenOptions{Append: true, Create: true}.Open(path)` |
 | Every struct has a zero value, `var o Options` | a struct with a default has none: `var o Options` is refused, `o := Options{}` takes every default |
+
+## Chapter 24: Reflection at compile time
+
+| In Go | In Snello |
+|---|---|
+| `reflect.TypeOf(v).Kind()` when the program runs | `match T { int => ..., struct => ... }`, decided when the program is compiled, one arm kept per type |
+| `for i := 0; i < t.NumField(); i++ { f := t.Field(i) }` | `for f := range fields(T) { ... v.[f] ... }`, written out once per field, `f.name` a constant |
+| `encoding/json` skips unexported fields in silence | a field the function cannot reach is a compile error, unless the type lists `Reflect` |
+| `json:"name"` tags rename a field | no tags: a field is written under its declared name, and a type that wants others writes its own encoding |
+| `json.Marshal` of a channel field fails when it runs | refused when the program is compiled, naming the type no arm takes |

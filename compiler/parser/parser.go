@@ -71,6 +71,14 @@ type Parser struct {
 	// clause, where a '{' opens the body rather than a composite
 	// literal: `if x == y {` must not read `y {` as a literal.
 	exprLev int
+
+	// fn is the function whose body is being parsed, whose type
+	// parameters, its own and its receiver's, a match on a type may be
+	// on; shapes are the names the arms around the parse bind, E of []E.
+	// Both are read only when a match is met, so a function allocates
+	// nothing for them.
+	fn     *ast.FuncDecl
+	shapes []string
 }
 
 // A lookahead is one scanned token held for peek.

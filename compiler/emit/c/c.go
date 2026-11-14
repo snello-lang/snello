@@ -64,6 +64,7 @@ type Emitter struct {
 	defers   []deferred                      // the deferred calls of the function being written, in order
 	seq      int                             // values and deferred calls registered so far, ordering what a return releases
 	subst    map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
 	generics map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
 	files    map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
 	external map[*types.Var]bool             // the library variables the runtime defines, read through their runtime declaration

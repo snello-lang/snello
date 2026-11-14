@@ -77,7 +77,7 @@ Every way of making the zero of a type that has none is refused, each with what 
 | `print(m[k])`, the map's values `*Node` | `cannot read m[k]: *Node has no zero value for a key the map does not hold; use m.Get(k)` | `m.Get(k)`, a `ref *Node?` |
 | `m[k].n = 5`, the map's values `Box` | `cannot write through m[k]: Box has no zero value for a key the map does not hold; use m.GetMut(k)` | `if b := m.GetMut(k) { b.n = 5 }`, or `m[k] = Box{...}` whole |
 | `sync.Counter(c)`, `c` of a type declared over it | `cannot convert MyC to sync.Counter: sync.Counter has no zero value, and a value of it is built and taken apart only by its own package` | `sync.NewCounter(n)` |
-| `take(mut b.p)`, `b.p` a `*int` | `cannot take b.p: *int has no zero value to leave behind; replace(mut b.p, v) leaves v` | `replace(mut b.p, &x)` |
+| `take(mut b.p)`, `b.p` a `*int` | `cannot take b.p: *int has no zero value to leave behind; replace(mut b.p, value) leaves value in its place` | `replace(mut b.p, &x)` |
 
 A value that depends on a condition is built where it is declared, with an `if` or a `match` expression, rather than declared first and assigned on every path:
 

@@ -139,6 +139,25 @@ func writeExpr(b *strings.Builder, e Expr) {
 		writeExpr(b, x.Key)
 		b.WriteString(": ")
 		writeExpr(b, x.Value)
+	case *PartExpr:
+		writeExpr(b, x.X)
+		b.WriteString(".[")
+		b.WriteString(x.Part.Name)
+		b.WriteString("]")
+	case *PartsElt:
+		b.WriteString("for ")
+		b.WriteString(x.Var.Name)
+		b.WriteString(" := range ")
+		writeExpr(b, x.X)
+		b.WriteString(" { ")
+		if x.Key != nil {
+			b.WriteString("[")
+			b.WriteString(x.Key.Name)
+			b.WriteString("]: ")
+		}
+
+		writeExpr(b, x.Value)
+		b.WriteString(" }")
 	case *FuncLit:
 		b.WriteString("func(")
 		writeParams(b, x.Type.Params)

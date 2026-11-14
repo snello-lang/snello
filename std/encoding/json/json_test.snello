@@ -1,0 +1,130 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package json_test
+
+import ("encoding/json"; "expect"; "strings"; "testing")
+
+struct Point { X int; Y int }
+
+struct Server {
+	Host  string = "localhost"
+	Port  int = 8080
+	Tags  []string
+	Peers map[string]Point
+	At    Point?
+	Ratio f64
+	Small u8
+	Debug bool
+}
+
+enum Shape { Dot; Circle(r f64); Pair(int, int); Box(Point) }
+
+// Variants holding owned values, named and unnamed, and a recursive
+// struct through an owned pointer.
+enum Ev { Say(msg string); Both(string, string); Quiet }
+
+struct Node { V int; Up *Node? }
+
+// The JSON example's value, a recursive enum holding collections.
+enum Value {
+	Null
+	Bool(bool)
+	Number(f64)
+	String(string)
+	Array([]Value)
+	Object(map[string]Value)
+}
+
+// roundTrip reads text as a T and writes it back, which gives the text.
+func roundTrip<T>(text ref string) {
+	v := expect.IsOk(json.Unmarshal<T>(text))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), text)
+}
+
+// Every kind a value is made of written as JSON, and read back into the
+// same value: numbers, strings, options, slices, maps with their keys
+// sorted, nested structs, and an enum's variants of each shape.
+func TestRoundTrip() {
+	s := Server{Host: "h".Clone(), Port: 1, Tags: []string{"a".Clone(), "b".Clone()}, Peers: map[string]Point{"z": Point{X: 1, Y: 2}, "a": Point{X: 3, Y: 4}}, At: Some(Point{X: 5, Y: 6}), Ratio: 0.5, Small: 255, Debug: true}
+	text := expect.IsOk(json.Marshal(ref s))
+	expect.Equal(ref text, `{"Host":"h","Port":1,"Tags":["a","b"],"Peers":{"a":{"X":3,"Y":4},"z":{"X":1,"Y":2}},"At":{"X":5,"Y":6},"Ratio":0.5,"Small":255,"Debug":true}`)
+	roundTrip<Server>(ref text)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Shape{Dot, Circle(1.5), Pair(1, 2), Box(Point{X: 7, Y: 8})})), `["Dot",{"Circle":{"r":1.5}},{"Pair":[1,2]},{"Box":{"X":7,"Y":8}}]`)
+	roundTrip<[]Shape>(`["Dot",{"Circle":{"r":1.5}},{"Pair":[1,2]},{"Box":{"X":7,"Y":8}}]`)
+	roundTrip<Value>(`{"Object":{"a":{"Array":[{"Number":1},{"Bool":true},"Null",{"String":"x"}]},"b":"Null"}}`)
+	roundTrip<int?>("null")
+	roundTrip<[]i64>("[-9223372036854775808,9223372036854775807]")
+}
+
+// Reading takes a struct's fields in any order and passes over keys the
+// type has no field for; a field left out takes its default, or None for
+// an option, and is an error otherwise.
+func TestFields() {
+	s := expect.IsOk(json.Unmarshal<Server>(` { "Small": 7, "Debug": false, "unknown": [1, {"a": null}], "Tags": [], "Peers": {}, "Ratio": 2 } `))
+	expect.Equal(ref s.Host, "localhost")
+	expect.Equal(ref s.Port, ref 8080)
+	expect.Equal(ref s.Small, ref u8(7))
+	expect.IsNone(s.At)
+	e := expect.IsErr(json.Unmarshal<Server>(`{"Small": 7, "Debug": false, "Peers": {}, "Ratio": 2}`))
+	expect.Equal(ref e.Error(), "json: missing field Tags at offset 0") // the object it is missing from
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>(`{"X": 1, "X": 2, "Y": 3}`)).Error(), "key X given twice")
+}
+
+// Numbers are held to their type, strings read their escapes, and text
+// that is no value, or more than one, is an error with its offset.
+func TestErrors() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<u8>("300")).Error(), "json: 300 overflows its field at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<i8>("-129")).Error(), "json: -129 overflows its field at offset 0")
+	expect.Equal(ref expect.IsOk(json.Unmarshal<i8>("-128")), ref i8(-128))
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"a\"b\\c\né😀"`)), "a\"b\\c\né😀")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref "tab\tquote\"\u0001")), `"tab\tquote\"\u0001"`)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<int>("1 2")).Error(), "json: text after the value at offset 2")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<bool>("yes")).Error(), "json: expected true or false at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Shape>(`"Oval"`)).Error(), "json: no variant Oval without fields at offset 0")
+	nan := 0.0
+	expect.Equal(ref expect.IsErr(json.Marshal(ref (nan / nan))).Error(), "json: unsupported value: NaN")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<int>("1 2")).Offset(), ref 2)
+}
+
+// A variant's owned fields, named or unnamed, are read and kept whole,
+// and a struct reaches itself through an owned pointer.
+func TestOwnedParts() {
+	roundTrip<[]Ev>(`[{"Say":{"msg":"hello"}},{"Both":["p","q"]},"Quiet"]`)
+	e := expect.IsOk(json.Unmarshal<Ev>(`{"Say":{"msg":"hello"}}`))
+	match e {
+		Say(msg) => expect.Equal(ref msg, "hello"),
+		_ => expect.Fail("not Say"),
+	}
+
+	roundTrip<Node>(`{"V":1,"Up":{"V":2,"Up":null}}`)
+}
+
+// Text that is not JSON is refused: a member without its comma, a
+// number JSON does not write, a raw control character or a broken
+// escape in a string, a float its field cannot hold, a key a map is
+// given twice, and nesting past 128.
+func TestStrict() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Point>(`{"X":1 "Y":2}`)).Error(), "json: expected } at offset 7")
+	for _, bad := range []string{"01", "+1", ".5", "1.", "01.5", "-", "1.2.3", "1e"} {
+		expect.IsErr(json.Unmarshal<f64>(ref bad))
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<string>("\"a\nb\"")).Error(), "invalid character in string")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<string>(`"\u+041"`)).Error(), "invalid \\u escape")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<f32>("1e300")).Error(), "overflows its field")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[string]int>(`{"a":1,"a":2}`)).Error(), "key a given twice")
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>(ref ("{\"X\":1,\"Y\":2,\"Z\":" + deep + "}"))).Error(), "exceeded max depth") // a key passed over is held to it too
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"\ud800A\ud800\ud800\udc00"`)), "\ufffdA\ufffd\U00010000") // a half alone is U+FFFD, and the pair after it its rune
+}
+
+// Floats are written in plain decimals from 1e-6 up to 1e21 and with an
+// exponent outside, an f32 by its own shortest text, and a string's
+// invalid UTF-8 as U+FFFD.
+func TestFloatsAndText() {
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []f64{1e20, 1e-6, 1e-7, 123456789.0, 0.5, 1e21, -2.5e-8})), "[100000000000000000000,0.000001,1e-7,123456789,0.5,1e+21,-2.5e-8]")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref f32(0.1))), "0.1")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref string([]byte{0x61, 0xff, 0x62}))), "\"a\\ufffdb\"")
+}

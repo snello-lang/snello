@@ -354,7 +354,7 @@ func TestMore(t *testing.T) {
 	}
 
 	// The golden file is missing, then written by -update, then read.
-	if out, code := run("-run", "Golden"); code != 1 || !strings.Contains(out, "more_test.snello:"+lineOf(moreTest, "expect.Golden(")+": expect.Golden(\"report\", ref Report()): open testdata/report.golden: no such file or directory; snello test -update writes the file") {
+	if out, code := run("-run", "Golden"); code != 1 || !strings.Contains(out, "more_test.snello:"+lineOf("expect.Golden(")+": expect.Golden(\"report\", ref Report()): open testdata/report.golden: no such file or directory; snello test -update writes the file") {
 		t.Errorf("golden missing: exited %d\n%s", code, out)
 	}
 
@@ -375,10 +375,10 @@ func TestMore(t *testing.T) {
 		"--- PASS: TestGolden (0.00s)\n",
 		"--- PASS: TestOptions (0.00s)\n",
 		"--- PASS: TestStrings (0.00s)\n",
-		"--- FAIL: TestOk (0.00s)\n    more_test.snello:" + lineOf(moreTest, "v := expect.IsOk(Parse(\"x\"))") + ": expect.IsOk(Parse(\"x\")): is Err, Ok was wanted\n        error: parse x: not a number\n",
-		"--- FAIL: TestTextDiff (0.00s)\n    more_test.snello:" + lineOf(moreTest, "line 2\\nline three") + ": expect.EqualText(ref Report(), \"line one\\nline 2\\nline three\\n\")\n        line 2: got \"line two\" where \"line 2\" was wanted\n",
-		"--- FAIL: TestParallelB (0.00s)\n    more_test.snello:" + lineOf(moreTest, "b done") + ": b done\n    more_test.snello:" + lineOf(moreTest, "expect.True(1 > 2)") + ": expect.True(1 > 2) is false\n",
-		"--- PASS: TestParallelA (0.00s)\n    more_test.snello:" + lineOf(moreTest, "a done") + ": a done\n",
+		"--- FAIL: TestOk (0.00s)\n    more_test.snello:" + lineOf("v := expect.IsOk(Parse(\"x\"))") + ": expect.IsOk(Parse(\"x\")): is Err, Ok was wanted\n        error: parse x: not a number\n",
+		"--- FAIL: TestTextDiff (0.00s)\n    more_test.snello:" + lineOf("line 2\\nline three") + ": expect.EqualText(ref Report(), \"line one\\nline 2\\nline three\\n\")\n        line 2: got \"line two\" where \"line 2\" was wanted\n",
+		"--- FAIL: TestParallelB (0.00s)\n    more_test.snello:" + lineOf("b done") + ": b done\n    more_test.snello:" + lineOf("expect.True(1 > 2)") + ": expect.True(1 > 2) is false\n",
+		"--- PASS: TestParallelA (0.00s)\n    more_test.snello:" + lineOf("a done") + ": a done\n",
 		"--- PASS: TestParallelTwice (0.00s)\n",
 		"--- PASS: TestParallelSub/inner",
 		"--- PASS: TestFromTask (0.00s)\n",
@@ -407,7 +407,7 @@ func TestMore(t *testing.T) {
 		t.Errorf("-short: exited %d\n%s", code, out)
 	}
 
-	if out, _ := run("-v", "-short", "-run", "Short"); !strings.Contains(out, "--- SKIP: TestShort (0.00s)\n    more_test.snello:"+lineOf(moreTest, "testing.Skip(\"short\")")+": short\n") {
+	if out, _ := run("-v", "-short", "-run", "Short"); !strings.Contains(out, "--- SKIP: TestShort (0.00s)\n    more_test.snello:"+lineOf("testing.Skip(\"short\")")+": short\n") {
 		t.Errorf("-short -v:\n%s", out)
 	}
 
@@ -442,7 +442,7 @@ func TestMore(t *testing.T) {
 		t.Errorf("-run .: exited %d\n%s", code, out)
 	}
 
-	if out, code := run("-run", "Nothing", "-bench", "Fails"); code != 1 || !strings.Contains(out, "--- FAIL: BenchmarkFails\n    more_test.snello:"+lineOf(moreTest, "expect.True(2 > 3)")+": expect.True(2 > 3) is false\n") {
+	if out, code := run("-run", "Nothing", "-bench", "Fails"); code != 1 || !strings.Contains(out, "--- FAIL: BenchmarkFails\n    more_test.snello:"+lineOf("expect.True(2 > 3)")+": expect.True(2 > 3) is false\n") {
 		t.Errorf("-bench Fails: exited %d\n%s", code, out)
 	}
 }
@@ -623,10 +623,10 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// lineOf is the line of the first line holding needle in src, for the
-// expected messages, which name the fixture's lines.
-func lineOf(src, needle string) string {
-	for i, line := range strings.Split(src, "\n") {
+// lineOf is the number of the first line of the fixture moreTest
+// holding needle, for the expected messages, which name its lines.
+func lineOf(needle string) string {
+	for i, line := range strings.Split(moreTest, "\n") {
 		if strings.Contains(line, needle) {
 			return strconv.Itoa(i + 1)
 		}

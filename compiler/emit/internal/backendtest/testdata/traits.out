@@ -27,6 +27,9 @@ true
 true true
 2 1
 true true true 3
+first
+second
+(bound, pair)
 c 2
 drop counted
 drop c

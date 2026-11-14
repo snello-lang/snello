@@ -31,6 +31,7 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [21. Constants](21-constants.md) | what a constant is made of, its type, how the compiler computes it and what it refuses, constants in any order, array lengths |
 | [22. Variadic functions](22-variadic-functions.md) | `...T`, which owns its arguments, `...ref T`, which borrows them for the call, `f(xs...)` passing a slice on, and what each costs |
 | [23. Default field values](23-default-field-values.md) | a field's default, a constant; literals that leave fields out, positional ones included; why such a struct has no zero value; settings passed as a struct, `os.OpenOptions` |
+| [24. Reflection at compile time](24-reflection.md) | why a function looks at the type it was given, `match T`, a struct's fields with `fields(T)` and `v.[f]`, building a value from its fields, an enum's variants, what reflection may reach and `Reflect`, `encoding/json` |
 | [Appendix A. Keywords and grammar notes](A-keywords-and-grammar.md) | the keywords and the grammar's fine points |
 | [Appendix B. Snello for Go programmers](B-snello-for-go-programmers.md) | per chapter, what carries over from Go and what to unlearn |
 

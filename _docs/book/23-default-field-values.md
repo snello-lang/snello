@@ -94,7 +94,7 @@ A struct with a field that declares a default has no zero value. A zero would fi
 | `var o os.OpenOptions` | `cannot declare o without a value: os.OpenOptions declares defaults, which a zero value would skip; write o := os.OpenOptions{}` | `o := os.OpenOptions{}` |
 | `make([]Server, n)` | `make cannot fill a []Server: Server has no zero value; use make([]Server, 0, n) and Push` | `make([]Server, 0, n)`, then `Push` |
 | `print(m[k])`, the map's values `Server` | `cannot read m[k]: Server has no zero value for a key the map does not hold; use m.Get(k)` | `m.Get(k)` |
-| `take(mut c.server)` | `cannot take c.server: Server has no zero value to leave behind; replace(mut c.server, v) leaves v` | `replace(mut c.server, Server{})` |
+| `take(mut c.server)` | `cannot take c.server: Server has no zero value to leave behind; replace(mut c.server, value) leaves value in its place` | `replace(mut c.server, Server{})` |
 
 `T{}` is the value with every default, and the message for a declaration offers it when it builds the value. A type that holds such a struct has no zero value either, as a type that holds a pointer has none. A literal of it names that field, since a field is never filled with another type's defaults: `Holds{d: Def{}}`, not `Holds{}`. `Server?`, `[]Server` and `map[string]Server` still have one, `None` and empty. A type declared over such a struct, `type Local Server`, shares its defaults, so the two convert to each other as any declared type and its underlying type do.
 

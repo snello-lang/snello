@@ -92,6 +92,10 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 
 	var obj Object
 	if e.Pkg != nil {
+		if p := c.partNamed(e.Pkg); p != nil && e.Name.Name == "type" && !p.variant {
+			return p.typ // f.type, the type of the field f a loop gives
+		}
+
 		obj = c.qualified(e.Pkg, e.Name)
 	} else {
 		obj = c.lookup(e.Name)
@@ -129,7 +133,7 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 			return Typ[Invalid]
 		}
 
-		return tn.typ
+		return c.refine(tn.typ)
 	}
 
 	return c.instance(e, named)
@@ -157,7 +161,7 @@ func (c *Checker) instance(e *ast.NamedType, named *Named) Type {
 		}
 	}
 
-	if !c.satisfies(named.tparams, targs, e.Pos(), e.Name.Name) {
+	if !c.satisfies(named.tparams, targs, e.Pos(), e.Name.Name) || named.refused { // a refused declaration was reported where it is declared
 		return Typ[Invalid]
 	}
 

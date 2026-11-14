@@ -110,37 +110,32 @@ func (d *decoder) within(addr uint64) bool {
 
 // branch records a branch at in to t, the instruction's target: a
 // local branch, a tail call to another function or to a library's, or
-// a branch to a place the analysis cannot name. It reports whether the
-// branch stays in the function.
-func (d *decoder) branch(in inst, t target) bool {
+// a branch to a place the analysis cannot name.
+func (d *decoder) branch(in inst, t target) {
 	switch {
 	case !t.known:
 		d.unknown("a branch to a place not named in " + d.img.plain(d.f.name))
-		return false
 	case t.library:
 		d.f.calls = append(d.f.calls, call{kind: library, target: t.name})
-		return false
 	case t.name != "":
 		if t.name == d.f.name && t.offset > 0 {
 			d.local(in, d.insts[0].addr+t.offset)
-			return true
+			return
 		}
 
 		d.f.calls = append(d.f.calls, call{kind: direct, target: t.name}) // into its middle too: see call
-		return false
 	default:
 		if d.within(t.addr) && t.addr != d.insts[0].addr {
 			d.local(in, t.addr)
-			return true
+			return
 		}
 
 		if name, ok := d.starts[t.addr]; ok {
 			d.f.calls = append(d.f.calls, call{kind: direct, target: name})
-			return false
+			return
 		}
 
 		d.unknown(fmt.Sprintf("a branch to %#x, the start of no function", t.addr))
-		return false
 	}
 }
 

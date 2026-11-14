@@ -446,12 +446,62 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("}")
 }
 
+// partsLoop writes a loop over a type's parts once for each part of the
+// type the instance being written gives it, each copy a block of its
+// own with the part's field named and its type in place of f.type.
+func (e *Emitter) partsLoop(s *ast.RangeStmt, part *types.Part, copies []lower.PartCopy) {
+	outer := e.subst
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	for _, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		e.line("{")
+		e.push(false)
+		e.stmts(s.Body.List)
+		e.pop(s.Body.Rbrace)
+		e.line("}")
+	}
+
+	if len(copies) == 0 {
+		e.touch(s.Body)
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+}
+
+// touch marks as read each local declared before the node n that n
+// reads, for a loop over a type's parts the type has none of: written
+// out no times, it leaves unread a local only it reads, which C would
+// warn of. A name declared inside n is never declared at all.
+func (e *Emitter) touch(n ast.Node) {
+	start := n.Pos()
+	ast.Inspect(n, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if v, ok := e.info.Uses[id].(*types.Var); ok && !v.IsField() && !e.names.globals[v] && v.Pos() < start {
+				e.line("(void)" + e.localName(v) + ";")
+			}
+		}
+
+		return true
+	})
+}
+
 // rangeStmt writes for k, v := range x over a slice, an array or a
-// string: an index loop, with the key and value bound at the top of each pass. A
-// value reached through a mut borrow is bound as a pointer into the
-// slice. Fields and Split yield a slice of borrows whose one variable
-// is the item.
+// string: an index loop, with the key and value bound at the top of
+// each pass. A value reached through a mut borrow is bound as a pointer
+// into the slice. Fields and Split yield a slice of borrows whose one
+// variable is the item. A loop over a type's parts is written out per
+// part by partsLoop.
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	if part, copies := lower.PartsOf(e.info, s, e.subst, e.partCopy); part != nil {
+		e.partsLoop(s, part, copies)
+		return
+	}
+
 	place, t, held := e.consumed(s.X)
 	if held != "" {
 		e.hold(held, e.typeOf(s.X)) // an owned collection is used up by the loop and dropped after it

@@ -1,0 +1,75 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A block whose value is a local declared in it, as an arm of an if or
+// a match expression, and of a match on a type: the value leaves the
+// block before its locals are dropped, so it is freed once, by what
+// takes it. A string, a slice, a field of a local, a value with a Drop,
+// nested blocks, a block that loops before its value, and a block whose
+// value is a variable declared outside it.
+
+package main
+
+import "fmt"
+
+struct Pair { a string; b string }
+
+struct Tag impl Drop { name string }
+
+func (t mut Tag) Drop() { fmt.Println("drop", t.name) }
+
+func ifString(n int) string {
+	return if n == 1 { t := "if".Clone(); t } else { "else".Clone() }
+}
+
+func ifSlice(n int) []int {
+	return if n == 1 { t := []int{1, 2, 3}; t } else { []int{} }
+}
+
+func matchString(n int) string {
+	return match n { 1 => { t := "match".Clone(); t }, _ => "other".Clone() }
+}
+
+func field(n int) string {
+	return if n == 1 { p := Pair{a: "a".Clone(), b: "b".Clone()}; p.a } else { "none".Clone() }
+}
+
+func tag(n int) Tag {
+	return match n { 1 => { t := Tag{name: "made".Clone()}; t }, _ => Tag{name: "other".Clone()} }
+}
+
+func nested(n int) string {
+	return if n == 1 { v := if n > 0 { t := "inner".Clone(); t } else { "x".Clone() }; v } else { "y".Clone() }
+}
+
+func looped(n int) string {
+	return if n > 0 {
+		s := "".Clone()
+		for i := 0; i < n; i++ {
+			s += "l"
+		}
+
+		s
+	} else {
+		"".Clone()
+	}
+}
+
+func outer(n int) string {
+	o := "outer".Clone()
+	return if n == 1 { o } else { "else".Clone() }
+}
+
+func typed<T>(v ref T) string {
+	return match T {
+		int => { t := "int".Clone(); t },
+		_ => { t := "other".Clone(); t },
+	}
+}
+
+func main() {
+	fmt.Println(ifString(1), len(ifSlice(1)), matchString(1), field(1), nested(1), looped(3), outer(1), typed(ref 1), typed(ref "s"))
+	t := tag(1)
+	fmt.Println(t.name)
+}

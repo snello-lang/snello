@@ -1,0 +1,168 @@
+# 24. Reflection at compile time
+
+A generic function can look at the type it was given: which kind of type it is, a struct's fields by name, an enum's variants. One function then serves every type:
+
+```go
+func Show<T>(v ref T) string {
+    return match T {
+        int => strconv.Itoa(v),
+        string => v.Clone(),
+        []E => "a list of " + strconv.Itoa(len(v)),
+        struct => {
+            s := "{"
+            for f := range fields(T) {          // written out once per field
+                s += f.name + ":" + Show(ref v.[f]) + " "
+            }
+            s + "}"
+        }
+        _ => "?",
+    }
+}
+```
+
+`Show(ref Point{x: 1, y: 2})` gives `{x:1 y:2 }`, and no line of `Show` names `Point`. All of it happens while the program is compiled: for `Point`, the compiler keeps the `struct` arm and writes the loop out twice, once for `x` and once for `y`, as if `Show<Point>` had been written by hand for `Point`. Nothing describes a type when the program runs.
+
+`compiler/emit/internal/backendtest/testdata/reflect.snello` is the program this chapter is cut from, built through both backends in release and debug builds, and `std/encoding/json` is the library written this way.
+
+## Why it is there
+
+A program has code that does the same thing to every type, field by field: write it as JSON, read it back, print it for debugging, compare two values in a failed test and say which field differs, fill a struct of settings from the command line or a configuration file. Without reflection, that code is written again for every type, by hand or by a generator, and drifts from the type when a field is added. Reflection writes it once.
+
+Go does it when the program runs: `reflect` reads a description of the type, kept in the binary, and `encoding/json` walks it for every value it encodes. That costs on every call, and its mistakes come when the program runs:
+
+- **A type the code cannot handle is found at run time.** Go's `json.Marshal` of a struct with a channel field returns an error when it runs. In Snello, `json.Marshal` of such a type is refused when the program is compiled: `json.Marshal<Server>, json.write<Server>, json.write<chan int>: no arm of the match on T takes chan int`.
+- **A field a package keeps to itself is read anyway, or skipped in silence.** Go's `encoding/json` skips unexported fields, so a struct of lowercase fields encodes as `{}`, and `reflect` with `unsafe` reads them all. Snello refuses at compile time, naming the field, unless the type lists `Reflect`: nothing is skipped in silence, and nothing a package hides is read without its say.
+- **A value is forged from its fields.** Code that builds any type from parts can build one its package never meant to exist: a reference count of its choosing, a file over any descriptor. Snello builds a value from its fields only where a literal of it could be written, so an `rc.Rc`, an `os.File` or a lock cannot be made this way.
+- **No cost on every call.** What runs is the code written per type: each field's name a constant, each call direct and open to inlining, with no description walked and nothing looked up.
+
+## Which type: `match T`
+
+A `match` on a type parameter chooses an arm by the type, the first that fits:
+
+| Arm | Takes | In the arm |
+|---|---|---|
+| `int`, `string`, `f64` | that type alone | `T` is read as the arm's type |
+| `i8 \| i16 \| i32` | any of them | the arm is checked once for each |
+| `Point`, `Box<int>` | that declared type | `T` is read as it, its methods and fields too |
+| `E?`, `[]E`, `*E`, `Box<E>` | a type of that form | `E` names what is inside |
+| `map[K]V` | a map | `K` and `V`, `K` with `Eq` and `Hash` |
+| `struct`, `enum` | any struct, any enum | `fields(T)` or `variants(T)` |
+| `_` | any other type | |
+
+Inside an arm, `T` is what the arm matched: in the `int` arm, `v` of type `ref T` is a `ref int`, and in a `[]E` arm a `ref []E` whose elements are `E`. A name a shape binds is a type parameter of the arm, and a match on it, `match E { int => ..., _ => ... }`, is a match on a type too. An arm takes no guard, since a type is matched by what it is.
+
+An arm naming a type takes that type and no other. `type Celsius f64` is a type of its own, as it is when assigned, so it takes an arm that names `Celsius`, its kind's arm, `struct` for a type declared over a struct, or `_`, never the `f64` arm: written as an `f64`, a temperature would lose what its name says. A `Celsius` that should be written as a number says so in its own arm, `Celsius => write(ref f64(*v), mut out)`.
+
+The arms need not cover every type. A type that no arm takes is refused where the function is used with it, with the chain of calls that led there: `json.Marshal<Server>, json.write<Server>, json.write<chan int>: no arm of the match on T takes chan int`, the field `Events` of `Server` being a channel.
+
+## A struct's fields
+
+In a `struct` arm, `fields(T)` gives the struct's fields to a loop, which the compiler writes out once for each:
+
+- `f.name` is the field's name, a constant string;
+- `f.type` is its type, written where a type is, `read<f.type>(mut r)`, or matched, `match f.type { E? => ..., _ => ... }`;
+- `f.default` is its default (chapter 23), an `f.type?`, `None` for a field without one;
+- `v.[f]` is the field `f` of `v`, as `v.x` is the field `x`.
+
+`v.[f]` is lent, read through a `ref` and changed through a `mut`, never moved out of `v`: the function is compiled for types it does not know, and one of them may implement `Drop`, whose `Drop` reads every field (chapter 5). `consume(v.[f])` is refused, `a field a loop over a type's parts reaches is lent`.
+
+Since each copy of the loop is a block of its own, no `break` or `continue` leaves the loop, and it holds no `defer` or `select`; test the field with an `if`.
+
+## Building a value from its fields
+
+A literal with one loop in it builds a value of the struct's type, each field given what its line computes:
+
+```go
+func read<T>(r mut Reader) Result<T, Error> {
+    return match T {
+        int => r.integer(),
+        struct => Ok(T{ for f := range fields(T) { [f]: read<f.type>(mut r)? } }),
+        ...
+    }
+}
+```
+
+The fields are made in order, and a `?` that leaves drops the ones already made, as in any literal. The value is built by a literal naming every field, so no zero value is made of a type without one, and no value is ever half made. A field the input leaves out can take its default, or `None` for an option:
+
+```go
+[f]: match r.find(ref keys, f.name) {
+    Some(at) => {
+        r.at = at
+        read<f.type>(mut r)?
+    }
+    None => match f.type {
+        E? => None,
+        _ => f.default ?? return Err(missing(start, f.name)),
+    },
+}
+```
+
+as `encoding/json` does: the object's keys are noted with where each value lies, and each field is found by its key.
+
+## An enum's variants
+
+In an `enum` arm, a match on the value takes one arm written out for each variant, so it covers them all:
+
+```go
+enum => match v {
+    for c := range variants(T) => {     // v holds the variant c in this copy
+        out.WriteString(c.name)
+        for f := range fields(c) {
+            write(ref v.[f], mut out)    // the field of the variant v holds
+        }
+    }
+}
+```
+
+The arm holds `v`: its fields are read as the variant `c`'s, so while it runs `v` is not assigned, moved or lent `mut`, `cannot assign to v: the arm written for each variant holds it`, as an arm binding a variant's fields holds the value it matched.
+
+`c.name` is the variant's name and `fields(c)` its fields, as a struct's; a variant's field without a name has `""` for `f.name`. A variant is built by its constructor with one loop for its arguments, `c(for f := range fields(c) { read<f.type>(mut r)? })`, and the variant to build from an input is found by its name, in a loop over the variants written out once each:
+
+```go
+for c := range variants(T) {
+    if name == c.name {
+        return Ok(c(for f := range fields(c) { read<f.type>(mut r)? }))
+    }
+}
+```
+
+## What reflection reaches
+
+A reflecting function reaches what code written by hand where it stands could:
+
+- **every field of a type of its own package, and the exported fields of another's.** A struct of another package with a field the function cannot name is refused where the function is used with it: `json.Marshal<Config>, json.write<Config>: field port of Config is not exported; export it, or list Reflect on Config`.
+- **every field and variant of a type that lists `Reflect`.** `struct Config impl Reflect { port int }` is its package saying that any reflecting function may read and build it. A type that does not list it keeps what it keeps. A package opens only what it declares: `type Mine refl.Own impl Reflect` opens none of `refl.Own`'s fields, `field hidden of Mine is not exported by refl, which declares it`.
+- **a variant's fields where the variant is,** by their place, as a pattern does.
+- **no field that holds a borrow,** which is refused with the field named, as any type argument that holds a borrow is.
+
+Types that grow without end are refused too: a function that, through its arms, calls itself with a larger type each time, `f<int>`, `f<[]int>`, `f<[][]int>`. A recursive type is not one: `write<Value>` asks for `write<[]Value>`, which asks for `write<Value>` again, already written. A chain of more than 256 calls of generic functions, each with types not asked about before, is refused at the call it began from, naming its first and last calls, since the checker follows no deeper and every instance compiled must have been asked about.
+
+## `encoding/json`
+
+```go
+struct Server { Host string = "localhost"; Port int = 8080; Tags []string; At Point? }
+
+text := json.Marshal(ref server)?             // {"Host":"h","Port":1,"Tags":["a"],"At":null}
+back := json.Unmarshal<Server>(ref text)?
+```
+
+A struct is an object of its fields, under the names they are declared with; an option `null` or its value; a slice an array; a map with string keys an object with its keys sorted; an enum's variant its name, `"Dot"`, or an object of one key, `{"Circle":{"r":1.5}}`, `{"Bool":true}` for one unnamed field and `{"Pair":[1,2]}` for several. Reading finds each field by its key, wherever the text puts it, passes over a key the type has no field for, takes a missing field's default or `None`, and refuses any other missing field, a number its field cannot hold and a key given twice, each with its offset: `json: missing field Tags at offset 0`. `Marshal` refuses only a float JSON has no text for, a NaN or an infinity. An owned pointer is the value it points at, so `struct Node { V int; Up *Node? }` round-trips.
+
+Reading holds the text to JSON's grammar: `01`, `+1`, `.5`, a member without its comma, a raw control character in a string and text after the value are errors with their offset. Arrays and objects nest at most 128 deep, in a value read or one passed over, since a task's stack does not grow: ten thousand `[` are an error, `exceeded max depth`, not a crash. A float is written by its shortest text, in plain decimals from `1e-6` up to `1e21` and with an exponent outside, an `f32` by its own, `0.1`; a string with its quotes, backslashes and control characters escaped and invalid UTF-8 as `\ufffd`, and nothing escaped for HTML.
+
+A field is written under its declared name, and there is no tag syntax to rename it: a type that wants other names writes its own encoding, which is the code reflection would write with other strings.
+
+## Memory safe, no collector
+
+Reflection adds no kind of value and nothing to the program when it runs. A reflecting function is a generic function: checked once against the rules every function is, then compiled per type with its loops written out, so what runs is ordinary code over ordinary values, each owned once and dropped once. A field is lent and never moved, so no `Drop` reads a field taken from it. A value is built by a literal naming every field, so none is half made, and a `?` drops the fields made before it. A type is built from its fields only where a literal of it could be written, or where its package listed `Reflect`, so nothing is forged. Field and variant names are constant strings in the code written per type, and nothing describes a type at run time.
+
+## For maintainers
+
+- **The design.** `_docs/design/11-reflection-at-compile-time.md`, and the bullet "Reflection is at compile time" in `00-syntax-conventions.md`.
+- **The parser.** `parseMatchExpr` in `compiler/parser/expr.go` reads a match whose value names a type parameter in scope, or `f.type`, as one on a type, `MatchExpr.OnType`, with `parseTypeArm`'s arms of types, shapes and kinds, `ast.TypePat`; `Parser.fn` is the function being parsed, whose type parameters, its own and its receiver's, `isTypeParam` in `decl.go` reads when a match is met, and `Parser.shapes` the names a shape binds in its arm (`shapeNames`), made only inside a type arm. `x.[f]` is `ast.PartExpr`; a literal's or a call's loop, `ast.PartsElt`, is `parsePartsElt`; the arm written per variant, `ast.PartsPat`, is `parsePartsPat`. `f.type` and `f.default` are read by `parseNameOrType` in `types.go`.
+- **The match on a type.** `typeMatch` in `compiler/types/reflect.go`: `splitAlternatives` makes an arm listing several types one per type, copying the body with `ast.Clone`; `matchArm` records `Info.Arms` and makes the arm known, `Checker.refined` for a type or shape, read by `refine` wherever a name's type, a written type and a function's results are read, `Checker.kinds` for a kind; `shapeNames` declares a shape's names, a map's key bound by `Hash`. `ChooseArm` decides which arm a type takes, for the checker's walk and the backends alike: a type's own arm by identity, a shape's by unifying it, a kind's by the type's underlying type, then `_`. An arm whose type holds the matched parameter, `E?` in a match on `E`, is refused, since no type is one.
+- **Parts.** `partsLoop` checks a loop over `fields` or `variants`, two predeclared built-ins, declaring the loop's `Part`, an object in `object.go` whose type is the field's type parameter; `partSelector` checks `f.name`, `f.default` and `c.name`; `partExpr` checks `v.[f]`, lent; `partsLit` a struct built from its fields; `variantMatch` the arm written per variant; `variantBuild` a variant built from its fields. After a body is checked, `selectParts` rewrites each `v.[f]` into a selector, with `ast.Rewrite`, listed in `Info.Parts`. The loop is a region of the move pass marked `parts`, which `branch` and `inParts` read to refuse `break`, `continue`, `defer` and `select`.
+- **The questions a type answers.** `reach` in `compiler/types/reach.go`, after the package's bodies, walks, when anything in the build matches on a type, from every call with its types known through each generic function's declaration, which its `Func` keeps in bytes its fields leave free, choosing each arm with `ChooseArm` and going through each loop's parts: `reachable` refuses a field the function cannot reach and one holding a borrow, `grows` types that grow twice along the chain, a chain past `maxChain` is reported once at its root, and every message carries the chain, `where` and `step`. The walk's roots are the bodies of the package's functions that are not generic, in the order written, so a mistake is reported at the first call that leads to it; a call binds a method's receiver type arguments, or `Self` for a trait's default, before the callee's own. `reachWalk` holds no `Checker`, so that a check that never walks keeps its `Checker` off the heap.
+- **The backends.** `compiler/emit/lower/reflect.go` holds what both ask: `TypeArm` and `MatchedParam` for a match on a type; `PartsOf`, `EltParts` and `ArmParts` the copies of a loop, each a `PartCopy` with its field or variant, its default and its substitution; `NameParts` names the field of each rewritten selector for a copy. The C backend writes them in `typeMatch` and `variantMatch` in `compiler/emit/c/match.go`, `partsLoop` and `touch` in `stmt.go`, `partsLit`, `partValues` and `variantBuild` in `expr.go`, and a variant's field in `field` in `trait.go`; the LLVM backend in the functions of the same names in `compiler/emit/llvm`, a variant's field in `fieldAddr`.
+- **The library.** `std/encoding/json/json.snello`, and `Reflect` in `compiler/types/universe.go` with `fields` and `variants`, documented in `std/builtin/builtin.snello`.
+- **The tests.** The parser's `TestReflection`; `compiler/types/reflect_test.go`, `reach_test.go` and `testdata/errors/reflect-lent.snello` and `reflect-loop.snello`; `compiler/emit/lower/reflect_test.go`; `compiler/ast/clone_test.go` for `Clone`, `Rewrite` and `Inspect`; `reflect.snello` through both backends; and `std/encoding/json/json_test.snello`, which round-trips the values of the JSON example, a recursive enum holding collections.

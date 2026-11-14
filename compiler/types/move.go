@@ -6,6 +6,7 @@ package types
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -52,6 +53,7 @@ type move struct {
 // but not kept.
 type region struct {
 	loop     bool
+	parts    bool // a loop over a type's parts, written out once per part: no break or continue leaves it
 	infinite bool // a loop with no condition: only a break reaches the point after it
 	pos      token.Pos
 	mark     int // len(moved) at entry
@@ -195,6 +197,17 @@ func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 		}
 
 		return p, placeIndexed
+	case *ast.PartExpr:
+		p, kind := through(c.placeOf(e.X)) // v.[f], a field: a part of v, named [f] in its path
+		if kind == placeOwned || kind == placeBorrowed {
+			if p.path == "" {
+				p.path = "[" + e.Part.Name + "]"
+			} else {
+				p.path += ".[" + e.Part.Name + "]"
+			}
+		}
+
+		return p, kind
 	}
 
 	return place{}, notPlace
@@ -376,6 +389,68 @@ func isBorrow(t Type) bool {
 	return ok
 }
 
+// dropHolder returns the innermost whole the place p is a field of
+// whose type implements Drop, as text, and that type; "" when there is
+// none. Such a whole's Drop reads its fields when it goes, so none of
+// them may leave it first. The wholes are the variable and each field
+// along p's path, before the last.
+func dropHolder(p place) (string, Type) {
+	if p.path == "" {
+		return "", nil
+	}
+
+	holder, at := -1, 0 // the bytes of p.path naming the whole found, and the whole whose field is next; the text is built only for one found
+	var held Type
+	t := p.v.typ
+	for rest := p.path; ; {
+		name, tail, more := strings.Cut(rest, ".")
+		t = pointee(t)
+		if implements(t, DropTrait) {
+			holder, held = at, t
+		}
+
+		st, ok := t.Underlying().(*Struct)
+		if !ok {
+			break
+		}
+
+		f := fieldNamed(st.fields, name)
+		if f == nil || !more {
+			break
+		}
+
+		t, rest = f.typ, tail
+		if at > 0 {
+			at++ // the dot before name
+		}
+
+		at += len(name)
+	}
+
+	switch holder {
+	case -1:
+		return "", nil
+	case 0:
+		return p.v.name, held
+	}
+
+	return p.v.name + "." + p.path[:holder], held
+}
+
+// pointee returns what a borrow or an owned pointer t reaches, or t.
+func pointee(t Type) Type {
+	for {
+		switch u := t.(type) {
+		case *Ref:
+			t = u.elem
+		case *Pointer:
+			t = u.elem
+		default:
+			return t
+		}
+	}
+}
+
 // move records that the place e denotes, reached as m says, is moved,
 // or reports why it cannot be: nothing moves out through a borrow, an
 // element is lent by its index, never moved, and a part of a value no
@@ -383,6 +458,19 @@ func isBorrow(t Type) bool {
 // pointer points at, has nowhere to go: the whole is dropped with the
 // statement, and the part would be dropped twice.
 func (c *Checker) move(e ast.Expr, m mode) {
+	if sel, ok := unparen(e).(*ast.SelectorExpr); ok { // f.name or f.default: a value made in each copy of the loop, no part of one
+		if id, ok := sel.X.(*ast.Ident); ok {
+			if _, isPart := c.resolve(id.Name).(*Part); isPart {
+				return
+			}
+		}
+	}
+
+	if part, ok := unparen(e).(*ast.PartExpr); ok {
+		c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of "+exprText(part.X)+": a field a loop over a type's parts reaches is lent, since the type may implement Drop, which reads its fields; lend it with ref, or clone it")
+		return
+	}
+
 	p, kind := c.placeOf(e)
 	switch kind {
 	case notPlace:
@@ -392,6 +480,11 @@ func (c *Checker) move(e ast.Expr, m mode) {
 			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a temporary: bind the temporary to a name first")
 		}
 	case placeOwned:
+		if holder, t := dropHolder(p); holder != "" {
+			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of "+holder+": "+t.String()+" implements Drop, which reads its fields when "+holder+" goes; clone it, or take it with replace(mut "+exprText(e)+", value), which leaves value in its place")
+			return
+		}
+
 		c.capture(p.v, byMove)
 		c.access(e, p, moveAccess, e.Pos())
 		c.moved = append(c.moved, move{p, e.Pos(), false})
@@ -554,6 +647,8 @@ func exprText(e ast.Expr) string {
 		return "(" + exprText(e.X) + ")"
 	case *ast.SelectorExpr:
 		return exprText(e.X) + "." + e.Sel.Name
+	case *ast.PartExpr:
+		return exprText(e.X) + ".[" + e.Part.Name + "]"
 	case *ast.IndexExpr:
 		return exprText(e.X) + "[" + exprText(e.Index) + "]"
 	case *ast.SliceExpr:
@@ -800,6 +895,11 @@ func (c *Checker) branch(tok token.Kind, pos token.Pos) {
 		r := &c.regions[i]
 		if !r.loop {
 			continue // a match or select is not a loop: a break inside one leaves the loop around it
+		}
+
+		if r.parts {
+			c.errorf(pos, tok.String()+" cannot leave a loop over a type's parts: it is written out once per part, each copy a block of its own; test the part with an if")
+			return
 		}
 
 		c.flowBranch(r, tok, pos)

@@ -120,7 +120,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 	}
 
 	wants, values := e.callOperands(recv, x.Args, x.Ellipsis.IsValid(), sig)
-	e.unframeLast(sig, x.Ellipsis.IsValid(), values, s.Pos()) // the task outlives this frame
+	e.unframeLast(sig, x.Ellipsis.IsValid(), values) // the task outlives this frame
 	e.tasks++
 	e.spawnCall(e.tasks-1, name, sig, wants, values, s.Pos())
 }
@@ -153,7 +153,7 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	params = append(params, e.info.Types[lit].(*types.Signature).Params()...) // the declaration's own objects, which the body names
 	lifted := types.NewSignature(nil, params, sig.Results())
 	argWants, args := e.callOperands(nil, x.Args, x.Ellipsis.IsValid(), sig)
-	e.unframeLast(sig, x.Ellipsis.IsValid(), args, pos) // the task outlives this frame
+	e.unframeLast(sig, x.Ellipsis.IsValid(), args) // the task outlives this frame
 	wants, values = append(wants, argWants...), append(values, args...)
 	k := e.tasks
 	e.tasks++

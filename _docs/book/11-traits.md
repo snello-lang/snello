@@ -244,6 +244,7 @@ Some traits come with the language and can be listed after `impl` or used as bou
 | `Hash`, refining `Eq` | `func (s ref Self) Hash() u64` | use as a map key |
 | `Drop` | `func (s mut Self) Drop()` | code that runs when the value dies (chapter 5) |
 | `Error` | `func (s ref Self) Error() string`, `func (s ref Self) Source() Error?` | the message of an error value and the error it wraps; both derived when not written (chapter 17) |
+| `Reflect` | none | every field and variant open to reflection from any package, and the value built from them (chapter 24) |
 
 `Ordering` is a predeclared enum with the three cases named above, and every number and string has `Cmp`: `a.Cmp(b)` on two `int` values, `s.Cmp(t)` on two `ref string`.
 

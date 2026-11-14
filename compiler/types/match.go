@@ -238,6 +238,9 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 	if b == nil && !IsCopy(t) {
 		c.bindsOwned = true
+		if c.dropOwner != nil {
+			c.errorf(p.Name.Pos(), "cannot bind "+p.Name.Name+" by value out of a value of "+c.dropOwner.String()+", which implements Drop and reads its parts when the value goes; match on a borrow of it")
+		}
 	}
 
 	if c.copies && IsCopy(t) {
@@ -279,6 +282,12 @@ func (c *Checker) variantPat(p *ast.VariantPat, t Type, b *Ref) pat {
 	if i >= 0 && len(fields) != len(p.Args) {
 		c.errorf(p.Path.Pos(), v.name+" has "+strconv.Itoa(len(fields))+" fields, not "+strconv.Itoa(len(p.Args)))
 		i = wildcard
+	}
+
+	if b == nil && t != nil && implements(t, DropTrait) { // a part bound by value would leave a value whose Drop reads it
+		outer := c.dropOwner
+		c.dropOwner = t
+		defer func() { c.dropOwner = outer }()
 	}
 
 	args := make([]pat, len(p.Args))

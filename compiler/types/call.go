@@ -35,6 +35,9 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	if ident, ok := e.Fun.(*ast.Ident); ok {
 		if _, obj := c.scope.LookupParent(ident.Name); obj != nil {
 			switch obj := obj.(type) {
+			case *Part:
+				c.recordUse(ident, obj)
+				return c.variantBuild(e, obj)
 			case *Builtin:
 				c.recordUse(ident, obj)
 				if len(e.TypeArgs) > 0 {
@@ -117,7 +120,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 
 		if r, ok := sig.recv.typ.(*Ref); ok {
 			c.lend(sel.X, r.mut) // the receiver is borrowed last, after the arguments
-			if t := c.temporary[sel.X]; t != nil {
+			if t := c.temporaryOf(sel.X); t != nil {
 				tmp = t
 			}
 		}
@@ -385,9 +388,16 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 	}
 
 	t := Instantiate(v.parent, targs)
-	fields := t.Underlying().(*Enum).variants[v.index].fields
+	en, ok := t.Underlying().(*Enum)
+	if !ok { // a declaration refused for growing has no instances, and was reported where it is declared
+		return invalidOperand
+	}
+
+	fields := en.variants[v.index].fields
 	for i, op := range ops {
-		c.fits(op, fields[i].typ, e.Args[i].Pos(), "field "+fields[i].name)
+		if c.fits(op, fields[i].typ, e.Args[i].Pos(), "field "+fields[i].name) {
+			c.implicitBorrow(op, fields[i].typ)
+		}
 	}
 
 	return operand{value, t, nil, nil}
@@ -415,7 +425,7 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, 
 
 	if _, ok := pt.(*Ref); ok {
 		c.noteTemporary(arg, op)
-		tmp = c.temporary[arg]
+		tmp = c.temporaryOf(arg)
 	}
 
 	if r, ok := pt.(*Ref); ok && op.mode != value {
@@ -580,6 +590,9 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.takeCall(e)
 	case BuiltinReplace:
 		return c.replaceCall(e)
+	case BuiltinFields, BuiltinVariants:
+		c.errorf(e.Pos(), b.name+" gives a type's parts to a loop, for f := range "+b.name+"(T), which the compiler writes out once per part; it is no value")
+		return invalidOperand
 	case BuiltinPanic:
 		c.exprs(e.Args)
 		c.flowReturnDrops(e.Pos()) // a panic runs the drops of what is still owned, as a return does
@@ -755,7 +768,7 @@ func (c *Checker) takeCall(e *ast.CallExpr) operand {
 
 	t := x.typ.(*Ref).elem
 	if !hasZero(t) {
-		c.errorf(e.Args[0].Pos(), "cannot take "+exprText(u.X)+": "+t.String()+" has no zero value to leave behind; replace(mut "+exprText(u.X)+", v) leaves v")
+		c.errorf(e.Args[0].Pos(), "cannot take "+exprText(u.X)+": "+t.String()+" has no zero value to leave behind; replace(mut "+exprText(u.X)+", value) leaves value in its place")
 		return invalidOperand
 	}
 

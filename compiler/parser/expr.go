@@ -5,6 +5,8 @@
 package parser
 
 import (
+	"slices"
+
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -22,6 +24,7 @@ var typeArgToken = newKindSet(
 	token.IDENT, token.SELF, token.PERIOD, token.COMMA, token.LSS, token.GTR, token.SHR,
 	token.MUL, token.REF, token.MUT, token.QUESTION, token.LBRACK, token.RBRACK, token.INT,
 	token.MAP, token.CHAN, token.ARROW, token.FUNC, token.LPAREN, token.RPAREN,
+	token.TYPE, // the type of a field a loop over a type's fields gives, f.type
 )
 
 // parseExpr parses an expression. The grammar, from loosest to tightest
@@ -94,7 +97,15 @@ func (p *Parser) parseBinaryExpr(prec1 int) ast.Expr {
 //	cur ?? { *cur = ...; return }   BlockStmt
 func (p *Parser) parseCoalesceElse() ast.Node {
 	switch p.tok {
-	case token.RETURN, token.BREAK, token.CONTINUE, token.LBRACE:
+	case token.RETURN: // one result, as a return in an arm: a comma after it ends the arm or the element it stands in; several are a tuple
+		ret := &ast.ReturnStmt{Return: p.pos}
+		p.next()
+		if !exprEnd[p.tok] {
+			ret.Results = []ast.Expr{p.parseExpr()}
+		}
+
+		return ret
+	case token.BREAK, token.CONTINUE, token.LBRACE:
 		return p.parseStmt()
 	}
 
@@ -135,7 +146,16 @@ func (p *Parser) parsePrimaryExpr() ast.Expr {
 		switch p.tok {
 		case token.PERIOD:
 			p.next()
-			x = &ast.SelectorExpr{X: x, Sel: p.parseIdent()}
+			if p.tok == token.LBRACK { // x.[f], a part a loop over a type's parts gives
+				part := &ast.PartExpr{X: x, Lbrack: p.pos}
+				p.next()
+				part.Part = p.parseIdent()
+				part.Rbrack = p.expect(token.RBRACK)
+				x = part
+				continue
+			}
+
+			x = &ast.SelectorExpr{X: x, Sel: p.parseNameOrType()}
 		case token.LBRACK:
 			x = p.parseIndexOrSlice(x)
 		case token.LPAREN:
@@ -310,7 +330,9 @@ func (p *Parser) parseIndexOrSlice(x ast.Expr) ast.Expr {
 func (p *Parser) parseCall(fun ast.Expr, typeArgs []ast.Type) *ast.CallExpr {
 	call := &ast.CallExpr{Fun: fun, TypeArgs: typeArgs, Lparen: p.expect(token.LPAREN)}
 	p.exprLev++
-	if p.tok != token.RPAREN {
+	if p.tok == token.FOR { // c(for f := range fields(c) { value }), a variant built from its fields
+		call.Args = []ast.Expr{p.parsePartsElt()}
+	} else if p.tok != token.RPAREN {
 		call.Args = p.parseExprList(token.RPAREN)
 	}
 
@@ -372,8 +394,12 @@ func (p *Parser) parseCompositeLit(typ ast.Type) *ast.CompositeLit {
 
 // parseElement parses one element of a composite literal: a value, or
 // key ":" value, where either side may be a literal with its type
-// elided.
+// elided, or an element written once for each part of a type.
 func (p *Parser) parseElement() ast.Expr {
+	if p.tok == token.FOR {
+		return p.parsePartsElt()
+	}
+
 	x := p.parseElementValue()
 	if p.tok != token.COLON {
 		return x
@@ -381,6 +407,34 @@ func (p *Parser) parseElement() ast.Expr {
 
 	p.next()
 	return &ast.KeyValueExpr{Key: x, Value: p.parseElementValue()}
+}
+
+// parsePartsElt parses "for" ident ":=" "range" Expr "{" ["[" ident
+// "]" ":"] Value "}", an element of a literal written once for each
+// part the range gives: a field and its value, or an array's element.
+//
+//	for f := range fields(T) { [f]: parse(mut r)? }
+func (p *Parser) parsePartsElt() *ast.PartsElt {
+	elt := &ast.PartsElt{For: p.expect(token.FOR)}
+	elt.Var = p.parseIdent()
+	p.expect(token.DEFINE)
+	p.expect(token.RANGE)
+	elt.X = p.parseControlExpr()
+	p.expect(token.LBRACE)
+	if p.tok == token.LBRACK {
+		p.next()
+		elt.Key = p.parseIdent()
+		p.expect(token.RBRACK)
+		p.expect(token.COLON)
+	}
+
+	elt.Value = p.parseElementValue()
+	if p.tok == token.SEMICOLON { // a newline before the }
+		p.next()
+	}
+
+	p.expect(token.RBRACE)
+	return elt
 }
 
 func (p *Parser) parseElementValue() ast.Expr {
@@ -444,6 +498,7 @@ func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 		x.X = &ast.TupleExpr{Lparen: x.Match}
 	} else {
 		x.X = p.parseControlExpr()
+		x.OnType = p.namesType(x.X)
 	}
 
 	if !p.expectLbrace() {
@@ -456,6 +511,8 @@ func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 	for p.tok != token.RBRACE && p.tok != token.EOF {
 		if x.Conds {
 			x.Arms = append(x.Arms, p.parseCondArm())
+		} else if x.OnType {
+			x.Arms = append(x.Arms, p.parseTypeArm())
 		} else {
 			x.Arms = append(x.Arms, p.parseMatchArm())
 		}
@@ -481,6 +538,10 @@ func (p *Parser) parseMatchExpr() *ast.MatchExpr {
 // its "=>" is reported once and skipped to the end of the arm, with
 // Body left nil.
 func (p *Parser) parseMatchArm() *ast.MatchArm {
+	if p.tok == token.FOR {
+		return p.parseArmRest(&ast.MatchArm{Pat: p.parsePartsPat()})
+	}
+
 	arm := &ast.MatchArm{Pat: p.parsePattern()}
 	if p.tok == token.IF {
 		p.next()
@@ -488,6 +549,113 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 	}
 
 	return p.parseArmRest(arm)
+}
+
+// namesType reports whether x, the value of a match, names a type the
+// match is on: a type parameter in scope, or a field's type, f.type.
+func (p *Parser) namesType(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.Ident:
+		return isTypeParam(p.fn, x.Name) || slices.Contains(p.shapes, x.Name)
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "type"
+	}
+
+	return false
+}
+
+// parseTypeArm parses an arm of a match on a type parameter: _, a kind
+// of type, struct or enum, or types joined by |, each a type or a shape
+// such as []E; then "=>" and the body. A type is matched by
+// what it is, so the arm takes no guard.
+//
+//	i8 | i16 => ...   TypePat{Types: [i8, i16]}
+//	struct => ...     TypePat{Kind: "struct"}
+func (p *Parser) parseTypeArm() *ast.MatchArm {
+	arm := &ast.MatchArm{}
+	switch {
+	case p.tok == token.IDENT && p.lit == "_":
+		arm.Pat = &ast.WildcardPat{Underscore: p.pos}
+		p.next()
+	case p.tok == token.STRUCT || p.tok == token.ENUM:
+		arm.Pat = &ast.TypePat{KindPos: p.pos, Kind: p.tok.String()}
+		p.next()
+	default:
+		pat := &ast.TypePat{Types: []ast.Type{p.parseType()}}
+		for p.tok == token.OR {
+			p.next()
+			pat.Types = append(pat.Types, p.parseType())
+		}
+
+		arm.Pat = pat
+	}
+
+	if p.tok == token.IF {
+		p.error(p.pos, "an arm of a match on a type takes no guard: a type is matched by what it is")
+		p.next()
+		p.parseExpr()
+	}
+
+	outer := p.shapes
+	if pat, ok := arm.Pat.(*ast.TypePat); ok { // a shape's names are type parameters in its body, E in []E
+		p.shapes = shapeNames(pat.Types, outer)
+	}
+
+	arm = p.parseArmRest(arm)
+	p.shapes = outer
+	return arm
+}
+
+// shapeNames returns outer and every plain name in ts, the names a
+// shape may bind; one that is a type of its own is not matched on, and
+// the checker says so.
+func shapeNames(ts []ast.Type, outer []string) []string {
+	names := outer
+	var walk func(t ast.Type)
+	walk = func(t ast.Type) {
+		switch t := t.(type) {
+		case *ast.NamedType:
+			if t.Pkg == nil && t.Args == nil {
+				if len(names) == len(outer) {
+					names = append([]string(nil), outer...)
+				}
+
+				names = append(names, t.Name.Name)
+			}
+
+			for _, a := range t.Args {
+				walk(a)
+			}
+		case *ast.OptionType:
+			walk(t.Elem)
+		case *ast.SliceType:
+			walk(t.Elem)
+		case *ast.PointerType:
+			walk(t.Elem)
+		case *ast.MapType:
+			walk(t.Key)
+			walk(t.Value)
+		}
+	}
+
+	for _, t := range ts {
+		walk(t)
+	}
+
+	return names
+}
+
+// parsePartsPat parses "for" ident ":=" "range" Expr, the head of an
+// arm written once for each variant of an enum, before its "=>".
+//
+//	for c := range variants(T) => ...   PartsPat{Var: c, X: variants(T)}
+func (p *Parser) parsePartsPat() *ast.PartsPat {
+	pat := &ast.PartsPat{For: p.expect(token.FOR)}
+	pat.Var = p.parseIdent()
+	p.expect(token.DEFINE)
+	p.expect(token.RANGE)
+	pat.X = p.parseExpr()
+	return pat
 }
 
 // parseCondArm parses an arm of a match with no value, Cond "=>" Body,

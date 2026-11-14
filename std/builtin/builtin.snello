@@ -133,6 +133,22 @@ func panic(msg ref string)
 // for programs that import nothing; fmt is the library's way.
 func print(args ...ref any)
 
+// fields gives the fields of a type to a loop, for f := range fields(T),
+// in a generic function's arm that matched T as a struct, match T {
+// struct => ... }, or the fields of a variant a loop gives, fields(c).
+// The compiler writes the loop out once for each field of the type the
+// function is compiled for, with f.name the field's name, f.type its
+// type and f.default its default, and v.[f] the field of v; it is no
+// value, and nothing of it is kept when the program runs.
+func fields(t any) any
+
+// variants gives the variants of an enum to a loop, for c := range
+// variants(T), or to the arm of a match written once for each variant,
+// match v { for c := range variants(T) => ... }, in an arm that matched T
+// as an enum; c.name is the variant's name and c(for f := range
+// fields(c) { value }) builds it.
+func variants(t any) any
+
 // min and max return the least and the greatest of two or more numbers
 // of one type, which is the result's; a literal among them takes the
 // type of the others.
@@ -205,6 +221,14 @@ trait Neg { func (a Self) Neg() Self }
 // parameter only when bounded by it, T: Send. A type that holds a
 // local field is not Send.
 trait Send {}
+
+// Reflect opens a type to reflection from every package: a reflecting
+// function, one that loops over a type's fields with fields(T), reaches
+// every field and variant of a type that lists it, and builds it from
+// them. Without it, a function reaches the fields its own package can
+// name, so a type of another package that keeps a field to itself is
+// neither read nor built by reflection.
+trait Reflect {}
 
 // local is a field that holds nothing and makes the type holding it
 // stay in its task: a value of that type is not Send. Only the

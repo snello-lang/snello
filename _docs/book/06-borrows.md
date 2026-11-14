@@ -61,7 +61,14 @@ Rule 6 reaches one value the others do not name: a temporary, a value no variabl
 t := s.Clone().Trim()                 // ERROR "cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends"
 ```
 
-Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program. A temporary's fields and elements are places in it, read and lent where they are, `len(row().tags)`, `grow(mut row().tags)`, and dropped with it once; none is moved out of it (chapter 5).
+Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program. A temporary's fields and elements are places in it, read and lent where they are, `len(row().tags)`, `grow(mut row().tags)`, and dropped with it once; none is moved out of it (chapter 5). They die with it, and so does what a pointer the statement made points at, so a borrow of any of them is a borrow of the temporary, kept nowhere:
+
+```go
+n := boxed().name.Trim()              // ERROR "cannot keep a borrow of a temporary: boxed() is dropped when the statement ends"
+var r ref Row = boxed()               // ERROR "cannot keep a borrow of a temporary: boxed() is dropped when the statement ends"
+```
+
+The second has no `ref` written, but a `ref Row` made from the `*Row` the call returns borrows it all the same. Bind the pointer first, `p := boxed()`, and borrow from `p`.
 
 Rule 4 is the one you will meet first. A method with a `mut` receiver creates a `mut` borrow, so a `ref` held across the call is a conflict:
 
