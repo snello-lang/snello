@@ -80,3 +80,52 @@ func TestReplaceAndTake(t *testing.T) {
 		}
 	}
 }
+
+// A program's own variadic parameters: the arguments checked one by one
+// against the element, after ... the slice against the parameter; a
+// generic element inferred from every argument; a variadic function as
+// a value of its own type, which a function of a slice is not; a trait
+// method variadic as the trait's is; and the type written as it is
+// declared.
+func TestVariadicCalls(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f(s []int) int { return sum() + sum(1, 2) + sum(s...) }", nil},
+		{"func show(sep string, xs ...ref string) {}\nfunc f(a string, s []string) { show(\",\", ref a, a); show(\",\", s...); print(a, s) }", nil},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count(1, 2) + count(\"a\".Clone()) }", nil},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count(1, \"a\") }", []string{"cannot use"}},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count() }", []string{"cannot infer the type parameter T of count"}},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { g := sum; print(g(1, 2)) }", nil},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { var g func([]int) int = sum; print(g) }", []string{"cannot use"}},
+		{"func f() { g := func(xs ...int) int { return len(xs) }; print(g(1, 2, 3)) }", nil},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { print(sum(1, 2.5)) }", []string{"cannot use"}},
+		{"trait Logger { func (l ref Self) Log(parts ...ref string) }\nstruct L impl Logger {}\nfunc (l ref L) Log(parts ...ref string) {}", nil},
+		{"trait Logger { func (l ref Self) Log(parts ...ref string) }\nstruct L impl Logger {}\nfunc (l ref L) Log(parts []string) {}", []string{"method L.Log has the wrong signature for Logger: have (ref L) Log([]string), want (ref L) Log(...ref string)"}},
+		{"enum E { Many(xs ...int) }", []string{"a variant's field is not variadic"}},
+	}
+	for _, tt := range tests {
+		got := checkErrors(t, prelude+tt.src)
+		if len(got) != len(tt.want) {
+			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
+			continue
+		}
+
+		for i := range got {
+			if !strings.Contains(got[i], tt.want[i]) {
+				t.Errorf("%s:\n  got %q\n  want it to contain %q", tt.src, got[i], tt.want[i])
+			}
+		}
+	}
+
+	for _, tt := range []struct{ sig, want string }{
+		{"func(xs ...int) int", "func(...int) int"},
+		{"func(sep string, xs ...ref string)", "func(string, ...ref string)"},
+	} {
+		got := checkErrors(t, prelude+"func f() { var g "+tt.sig+" = 1 }")
+		if len(got) != 1 || !strings.Contains(got[0], tt.want) {
+			t.Errorf("%s: got %q, want a message naming %s", tt.sig, got, tt.want)
+		}
+	}
+}

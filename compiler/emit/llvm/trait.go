@@ -129,7 +129,7 @@ func (e *Emitter) traitCall(x *ast.CallExpr, sel *ast.SelectorExpr, recvType typ
 	tab, data := e.extract(v, 0, "ptr"), e.extract(v, 1, "ptr")
 	fn := e.load("ptr", e.elem("ptr", tab.s, strconv.Itoa(e.entry(tr, sel.Sel.Name))))
 	parts := []string{data.typed()}
-	_, values := e.callOperands(nil, x.Args, sig)
+	_, values := e.callOperands(nil, x.Args, x.Ellipsis.IsValid(), sig)
 	for _, a := range values {
 		parts = append(parts, a.typed())
 	}

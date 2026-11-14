@@ -837,17 +837,28 @@ func (e *Emitter) sliceMake(out string, n, c value, elem types.Type, pos token.P
 }
 
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
-// entry.
+// entry, the map held while it is built when an entry may leave the
+// statement, so that leaving drops what it holds so far.
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) value {
 	out := e.slot("%sn_map")
 	e.store(value{"%sn_map", "zeroinitializer"}, out)
+	leaves := lower.MayLeave(x)
+	if leaves {
+		e.hold(out, t) // an entry may leave the statement: the map so far, and what it holds, is dropped then
+	}
+
 	for _, elt := range x.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 		parts := e.operands([]ast.Expr{kv.Key, kv.Value}, []types.Type{mt.Key(), mt.Value()})
 		e.mapSet(out, mt, parts[0], parts[1], x.Pos())
 	}
 
-	return e.load("%sn_map", out)
+	m := e.load("%sn_map", out)
+	if leaves {
+		e.zero(out, t, x.Pos()) // built whole: the map is the literal's, and the slot drops nothing
+	}
+
+	return m
 }
 
 // sliceLit writes []T{a, b}: a slice made to size, then filled.

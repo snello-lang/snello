@@ -1,0 +1,33 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the arguments of a variadic ...T parameter move into a slice
+// the function owns and may keep, as a slice literal's elements do, so
+// a closure that borrows cannot be one, directly, through a generic
+// function, or relayed by a parameter of another function. Fix: give
+// the closure what it needs by value, func() { print(w.Clone()) } of a
+// copy it owns, or call it where it is made.
+
+package p
+
+func keep(fs ...func()) []func() { return fs }
+
+func keepAny<T>(xs ...T) []T { return xs }
+
+func relay(f func()) []func() { return keep(f) }
+
+func direct() []func() {
+    w := "w".Clone()
+    return keep(func() { print(w) })        // ERROR "closure captures w by borrow and cannot be stored"
+}
+
+func generic() []func() {
+    w := "w".Clone()
+    return keepAny(func() { print(w) })     // ERROR "closure captures w by borrow and cannot be stored"
+}
+
+func relayed() []func() {
+    w := "w".Clone()
+    return relay(func() { print(w) })       // ERROR "closure captures w by borrow and cannot be passed to relay, which keeps f"
+}

@@ -552,6 +552,7 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*types.Var]string, body *ast.BlockStmt) {
 	e.fn.captured = env
 	e.push(false)
+	framed, stays := lower.FramedVariadic(e.info, sig, body)
 	for i, p := range params {
 		if p.Name() == "" || p.Name() == "_" {
 			continue
@@ -559,6 +560,10 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 
 		slot := e.local(p)
 		e.inst("store " + e.irType(p.Type(), p.Pos()) + " %a" + strconv.Itoa(i) + ", ptr " + slot + ", align 8")
+		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
+			e.unframe(slot, e.sub(p.Type()).(*types.Slice).Elem(), p.Pos())
+		}
+
 		e.own(slot, e.sub(p.Type()))
 	}
 

@@ -697,8 +697,19 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		vals = append(vals, e.expr(x))
 	}
 
-	for _, a := range call.Args {
-		save(a)
+	lent := lower.DeferredLent(e.info, call)
+	var vars []*types.Var // the variables arguments are lent from, reached through their addresses when the call runs
+	var varsAt []string
+	for i, a := range call.Args {
+		if i >= len(lent) || lent[i] == nil {
+			save(a)
+			continue
+		}
+
+		if v := lent[i]; !slices.Contains(vars, v) {
+			vars = append(vars, v)
+			varsAt = append(varsAt, e.varSlot(v, a.Pos()))
+		}
 	}
 
 	var recv *types.Var // a receiver lent, reached through its address
@@ -735,6 +746,10 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		members = append(members, "ptr")
 	}
 
+	for range vars {
+		members = append(members, "ptr")
+	}
+
 	typ := "{ " + strings.Join(members, ", ") + " }"
 	rec := e.slot(typ)
 	put(&e.fn.allocas, "  store i1 false, ptr ", rec, ", align 8\n") // the flag, first in the record, cleared at the entry
@@ -742,8 +757,14 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		e.store(v, e.gep(typ, rec, i+1))
 	}
 
+	at := len(vals) + 1 // the first address after the saved values
 	if recv != nil {
-		e.store(value{"ptr", recvAt}, e.gep(typ, rec, len(vals)+1))
+		e.store(value{"ptr", recvAt}, e.gep(typ, rec, at))
+		at++
+	}
+
+	for i := range vars {
+		e.store(value{"ptr", varsAt[i]}, e.gep(typ, rec, at+i))
 	}
 
 	e.closures++
@@ -753,8 +774,18 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 			e.fn.pre[x] = e.gep(typ, "%rec", i+1)
 		}
 
+		if recv != nil || len(vars) > 0 {
+			e.fn.captured = make(map[*types.Var]string, len(vars)+1)
+		}
+
+		at := len(vals) + 1
 		if recv != nil {
-			e.fn.captured = map[*types.Var]string{recv: e.load("ptr", e.gep(typ, "%rec", len(vals)+1)).s}
+			e.fn.captured[recv] = e.load("ptr", e.gep(typ, "%rec", at)).s
+			at++
+		}
+
+		for i, v := range vars {
+			e.fn.captured[v] = e.load("ptr", e.gep(typ, "%rec", at+i)).s
 		}
 
 		e.scoped(call.Pos(), func() { // the call's own temporaries are dropped with it

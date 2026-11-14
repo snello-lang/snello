@@ -5,6 +5,7 @@
 package llvm
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -12,6 +13,11 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
+
+// snCaller is the runtime's SN_CALLER, INT64_MIN + 1, the capacity of
+// the slice a call lays out in its frame for a variadic ...T parameter:
+// the function owns its elements but not its buffer.
+const snCaller = "-9223372036854775807"
 
 // Calls: of the program's functions and methods, of generic instances,
 // through a bound or a trait value, of the operators a declared type
@@ -33,13 +39,14 @@ func (e *Emitter) operatorCall(t types.Type, op token.Kind, unary bool, recv ast
 		return unit, true
 	}
 
-	return e.callNamed(name, sig, recv, args, pos), true
+	return e.callNamed(name, sig, recv, args, false, pos), true
 }
 
 // callNamed writes a call of the function name, of signature sig, on
-// the receiver and arguments given.
-func (e *Emitter) callNamed(name string, sig *types.Signature, recv ast.Expr, args []ast.Expr, pos token.Pos) value {
-	wants, values := e.callOperands(recv, args, sig)
+// the receiver and arguments given, the last a slice for the variadic
+// parameter when spread.
+func (e *Emitter) callNamed(name string, sig *types.Signature, recv ast.Expr, args []ast.Expr, spread bool, pos token.Pos) value {
+	wants, values := e.callOperands(recv, args, spread, sig)
 	return e.callValues(name, sig, wants, values, pos)
 }
 
@@ -78,8 +85,49 @@ func (e *Emitter) callValues(name string, sig *types.Signature, wants []types.Ty
 
 // callOperands evaluates a call's receiver, when there is one, and its
 // arguments, each converted to the type the signature wants, and
-// returns those types with the values.
-func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signature) ([]types.Type, []value) {
+// returns those types with the values. The arguments a variadic
+// parameter of the program's takes one by one, when the call does not
+// spread a slice, are evaluated in their turn with the others, each to
+// its element's type, a lent one as the borrow it is, so that a
+// temporary it lends is dropped after the call, and then made the one
+// value the parameter takes (variadicValue).
+// unframe gives the slice at slot p, laid out in a caller's frame for a
+// variadic ...T parameter, a buffer of its own, of elements of type
+// elem: for a function that may keep it past its call, and for a call
+// that outlives the frame, a spawn's.
+func (e *Emitter) unframe(p string, elem types.Type, pos token.Pos) {
+	e.declare("sn_slice_unframe", "declare void @sn_slice_unframe(ptr, i64)")
+	e.inst("call void @sn_slice_unframe(ptr " + p + ", i64 " + e.sizeOf(elem).s + ")")
+}
+
+// unframeLast gives the slice a call packs for a variadic ...T
+// parameter, the last of values, a buffer of its own, for a call that
+// outlives the caller's frame, a spawn's.
+func (e *Emitter) unframeLast(sig *types.Signature, spread bool, values []value, pos token.Pos) {
+	kind, elem := sig.VariadicParam()
+	if kind != types.VariadicOwned || spread || len(values) == 0 {
+		return
+	}
+
+	slot := e.spill(values[len(values)-1])
+	e.unframe(slot, e.sub(elem), pos)
+	values[len(values)-1] = e.load("%sn_slice", slot)
+}
+
+func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, spread bool, sig *types.Signature) ([]types.Type, []value) {
+	kind, elem := sig.VariadicParam()
+	packed := !spread && (kind == types.VariadicOwned || kind == types.VariadicLent)
+	fixed := len(sig.Params())
+	var each types.Type
+	if packed {
+		fixed--
+		elem = e.sub(elem)
+		each = elem
+		if kind == types.VariadicLent {
+			each = types.NewRef(elem, false)
+		}
+	}
+
 	wants := make([]types.Type, 0, len(args)+1)
 	exprs := make([]ast.Expr, 0, len(args)+1)
 	if recv != nil {
@@ -89,7 +137,10 @@ func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signat
 
 	for i, a := range args {
 		var want types.Type
-		if i < len(sig.Params()) {
+		switch {
+		case packed && i >= fixed:
+			want = each
+		case i < len(sig.Params()):
 			want = sig.Params()[i].Type()
 		}
 
@@ -97,7 +148,57 @@ func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signat
 		exprs = append(exprs, a)
 	}
 
-	return wants, e.operands(exprs, wants)
+	values := e.operands(exprs, wants)
+	if !packed {
+		return wants, values
+	}
+
+	at := len(exprs) - (len(args) - fixed) // the first of the packed arguments
+	param := e.sub(sig.Params()[fixed].Type())
+	pos := sig.Params()[fixed].Pos()
+	if len(args) > fixed {
+		pos = args[fixed].Pos()
+	}
+
+	values = append(values[:at], e.variadicValue(kind, elem, values[at:], pos))
+	return append(wants[:at], param), values
+}
+
+// variadicValue makes the value a variadic parameter of the program's
+// takes from the arguments' values, laid out in an array in a slot of
+// the caller's frame, for the call: for ...T a slice of capacity
+// SN_CALLER, whose elements, moved in, the function owns and drops, and
+// whose buffer nothing frees; for ...ref T a slice over the arguments'
+// values, each the argument's own, lent, which nothing drops: read
+// through the borrow, or the borrow itself for a string or a slice,
+// which a ref borrow views. Neither allocates.
+func (e *Emitter) variadicValue(kind types.VariadicKind, elem types.Type, values []value, pos token.Pos) value {
+	if len(values) == 0 {
+		return value{"%sn_slice", "zeroinitializer"}
+	}
+
+	n := value{"i64", strconv.Itoa(len(values))}
+	et := e.irType(elem, pos)
+	out := e.slot("%sn_slice")
+	room := n
+	if kind == types.VariadicOwned {
+		room = value{"i64", snCaller}
+	}
+
+	base := value{"ptr", e.slot("[" + n.s + " x " + et + "]")}
+	e.store(base, e.gep("%sn_slice", out, 0))
+	e.store(n, e.gep("%sn_slice", out, 1))
+	e.store(room, e.gep("%sn_slice", out, 2))
+
+	for i, v := range values {
+		if kind == types.VariadicLent && !viewed(elem) {
+			v = e.load(et, v.s) // the value the borrow reaches
+		}
+
+		e.store(v, e.elem(et, base.s, strconv.Itoa(i)))
+	}
+
+	return e.load("%sn_slice", out)
 }
 
 // call writes a conversion, a built-in, a variant constructor, a
@@ -186,7 +287,7 @@ func (e *Emitter) call(x *ast.CallExpr) value {
 		return unit
 	}
 
-	return e.callNamed(name, sig, sel.X, x.Args, x.Pos())
+	return e.callNamed(name, sig, sel.X, x.Args, x.Ellipsis.IsValid(), x.Pos())
 }
 
 // superCall writes super.M(args): the next definition of M in the
@@ -208,7 +309,7 @@ func (e *Emitter) superCall(x *ast.CallExpr, sel *ast.SelectorExpr, fn *types.Fu
 	}
 
 	name, sig := e.callInstance(nil, target, named)
-	return e.callNamed(name, sig, sel.X, x.Args, x.Pos())
+	return e.callNamed(name, sig, sel.X, x.Args, x.Ellipsis.IsValid(), x.Pos())
 }
 
 // boundCall writes a call of a method a bound declares, x.Area() with
@@ -231,7 +332,7 @@ func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv ty
 		return unit
 	}
 
-	return e.callNamed(name, sig, sel.X, x.Args, x.Pos())
+	return e.callNamed(name, sig, sel.X, x.Args, x.Ellipsis.IsValid(), x.Pos())
 }
 
 // methodNameOf returns the name of the method the declared type t has
@@ -277,10 +378,10 @@ func (e *Emitter) methodNameOf(id *ast.Ident, t *types.Named, name string, pos t
 func (e *Emitter) funcCall(x *ast.CallExpr, id *ast.Ident, fn *types.Func) value {
 	if e.generics[fn] != nil {
 		name, sig := e.callInstance(id, fn, nil)
-		return e.callNamed(name, sig, nil, x.Args, x.Pos())
+		return e.callNamed(name, sig, nil, x.Args, x.Ellipsis.IsValid(), x.Pos())
 	}
 
-	return e.callNamed(lower.FuncName(fn), fn.Type().(*types.Signature), nil, x.Args, x.Pos())
+	return e.callNamed(lower.FuncName(fn), fn.Type().(*types.Signature), nil, x.Args, x.Ellipsis.IsValid(), x.Pos())
 }
 
 // packageOf returns the package an identifier names, or nil.

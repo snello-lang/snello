@@ -284,7 +284,7 @@ fmt.Println(strconv.Quote("a\tb"), strconv.Unquote("\"a\\tb\""), strconv.Unquote
 
 ## fmt
 
-`fmt` is the one package the compiler writes itself: `Println` and its kin take arguments of any type, `func Println(args ...ref any)` as `std/fmt/fmt.snello` declares it, and the compiler chooses how to print each one from its type, so no formatting happens at run time and the format of `Printf` is read when the program is compiled. `...ref any` is the library's spelling for that; a program's own function takes arguments of the types it names. `Fprint`, `Fprintln` and `Fprintf` write where they are told, to any value implementing `io.Writer`, lent `mut`:
+`fmt` is the one package the compiler writes itself: `Println` and its kin take arguments of any type, `func Println(args ...ref any)` as `std/fmt/fmt.snello` declares it, and the compiler chooses how to print each one from its type, so no formatting happens at run time and the format of `Printf` is read when the program is compiled. `...ref any` is the library's spelling for that; a program's own variadic function takes arguments of the type it names, `...T` or `...ref T`, as chapter 22 says. `Fprint`, `Fprintln` and `Fprintf` write where they are told, to any value implementing `io.Writer`, lent `mut`:
 
 ```go
 fmt.Fprintln(mut os.Stdout(), "to", "stdout", 1)                       // to stdout 1

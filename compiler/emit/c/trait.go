@@ -223,8 +223,8 @@ func (e *Emitter) traitCall(x *ast.CallExpr, sel *ast.SelectorExpr, recvType typ
 	e.line(e.cType(recvType, x.Pos()) + " " + v + " = " + recv + ";")
 	v = deref(v, recvType)
 	call := v + ".tab->" + lower.Ident(sel.Sel.Name) + "(" + v + ".data"
-	if len(x.Args) > 0 {
-		call += ", " + e.args(nil, x.Args, sig)
+	if args := e.args(nil, x.Args, x.Ellipsis.IsValid(), sig); args != "" { // a variadic parameter takes a value even when no argument is written
+		call += ", " + args
 	}
 
 	return call + ")"

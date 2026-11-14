@@ -1008,9 +1008,10 @@ func (c *Checker) traitMethod(m *ast.FuncDecl) *Func {
 	}
 
 	recv := NewVar(m.Recv.Pos(), m.Recv.Name.Name, c.typ(m.Recv.Type))
-	params, _ := c.params(m.Params)
+	params, variadic := c.params(m.Params)
 	sig := NewSignature(recv, params, c.results(m.Results))
 	sig.tparams = tparams
+	sig.variadic = variadic
 	fn := NewFunc(m.Name.Pos(), m.Name.Name, sig)
 	c.recordDef(m.Name, fn)
 	c.checkSources(m.Name.Name, sig, m.Name.Pos())

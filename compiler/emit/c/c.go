@@ -458,6 +458,7 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 		e.own(e.localName(recv), recv.Type())
 	}
 
+	framed, stays := lower.FramedVariadic(e.info, sig, body)
 	for _, p := range sig.Params() {
 		if p.Name() == "" {
 			continue
@@ -466,6 +467,10 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 		e.names.declared[e.localName(p)] = true
 		if !e.used[p] {
 			e.line("(void)" + e.localName(p) + ";")
+		}
+
+		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
+			e.line("sn_slice_unframe((sn_slice *)&" + e.localName(p) + ", sizeof *" + e.localName(p) + ".ptr);")
 		}
 
 		e.own(e.localName(p), p.Type())

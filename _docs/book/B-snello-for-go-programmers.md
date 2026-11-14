@@ -286,3 +286,12 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `-0.0` is a zero | `-0.0` is a negative zero, as at run time |
 | `len("abc")` is a constant | `len` is not constant; write the number, or make it a `var` |
 | a constant is a basic type | a struct of constant fields may be a constant too, read by its fields |
+
+## Chapter 22: Variadic functions
+
+| In Go | In Snello |
+|---|---|
+| `func Sum(xs ...int)` receives a slice, `Sum(s...)` shares the caller's array | `...T` receives an owned slice the arguments are moved into; `Sum(s...)` moves `s` in, so the function owns it |
+| one form | `...ref T` lends each argument for the call, laid out on the caller's stack, with no allocation; the function returns no borrow of them |
+| `f(xs...)` with `xs []T` | the same; for `...ref T`, `xs` is lent, and a variadic function passes its own `xs...` on for free |
+| `func(...int)` is a type of its own | the same, written `func(...int)` or `func(...ref string)` |

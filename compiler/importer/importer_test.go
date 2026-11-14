@@ -75,7 +75,7 @@ func TestImports(t *testing.T) {
 		{"import (\"fmt\"; \"os\")\nfunc f() { fmt.Fprintln(os.Stderr(), 1) }", []string{"3:25: cannot use a value of type os.File as mut os.File in argument"}},
 		{"import \"fmt\"\nfunc f(n int) { fmt.Fprintln(mut n, 1) }", []string{"3:17: cannot use int as the type parameter W of fmt.Fprintln: int does not implement Writer"}},
 		{"import (\"fmt\"; \"io\")\nfunc f(e mut io.Error) { fmt.Fprintln(mut e, 1) }", []string{"3:26: cannot use io.Error as the type parameter W of fmt.Fprintln: io.Error does not implement Writer"}},
-		{"func f(args ...ref any) {}", []string{"2:13: a variadic parameter is not supported yet"}}, // the library's alone
+		{"func f(args ...ref any) {}", []string{"2:16: ...ref any is the library's printing functions' alone"}}, // the library's alone
 		{"import \"arena\"\nfunc f() { a := arena.New<string>(); i := a.Insert(\"x\"); if s := a.Get(i) { print(s.Len()) }; if s := a.GetMut(i) { *s = \"y\" }; print(a.Remove(i).IsSome(), a.Len()) }", nil},
 		{"import \"arena\"\nfunc f(i arena.Index<int>) bool { j := i; m := map[arena.Index<int>]int{}; m[i] = 1; return i == j && len(m) == 1 }", nil}, // Index is Copy, Eq and Hash
 		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<int>) bool { return a.Get(i).IsSome() }", []string{"3:75: cannot use i (arena.Index<int>) as arena.Index<string> in argument"}},

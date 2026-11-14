@@ -746,9 +746,22 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 
 // operands writes a list of operands evaluated left to right, each
 // converted to the wanted type when wants gives one. A value built
-// here that the operation only looks at is held for the statement.
+// here that the operation only looks at is held for the statement. An
+// owned value the operation takes is held until every operand is
+// evaluated when one after it may leave the statement, by ? or a
+// return in its else, and only then moved out of its slot, so that
+// leaving drops it and taking it drops nothing twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
+	leaves := -1
+	for i, x := range xs {
+		if lower.MayLeave(x) {
+			leaves = i
+		}
+	}
+
 	parts := make([]value, len(xs))
+	var kept []int     // the owned values held until the last operand that may leave
+	var slots []string // and the slots they are held in
 	for i, x := range xs {
 		var want types.Type
 		if wants != nil {
@@ -756,16 +769,33 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
 		}
 
 		parts[i] = e.valueTo(x, want)
-		if e.lent(x, want) { // built here and only lent: dropped when the statement ends
+		switch {
+		case e.lent(x, want): // built here and only lent: dropped when the statement ends
 			if want != nil && depth(e.typeOf(x)) < depth(want) {
 				e.hold(parts[i].s, e.typeOf(x)) // the slot valueTo lent it from
 			} else {
 				e.hold(e.spill(parts[i]), e.typeOf(x))
 			}
+		case i < leaves && want != nil && !isRef(want) && needsDrop(want):
+			slot := e.spill(parts[i])
+			e.hold(slot, want)
+			kept, slots = append(kept, i), append(slots, slot)
 		}
 	}
 
+	for k, i := range kept { // every operand is in: the operation takes the value, and the slot is emptied
+		parts[i] = e.load(parts[i].typ, slots[k])
+		e.zero(slots[k], wants[i], xs[i].Pos())
+	}
+
 	return parts
+}
+
+// isRef reports whether t is a borrow, which an operation lends rather
+// than takes.
+func isRef(t types.Type) bool {
+	_, ok := t.(*types.Ref)
+	return ok
 }
 
 // lent reports whether x is a value built here that the operation

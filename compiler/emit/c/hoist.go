@@ -116,16 +116,25 @@ func anyHoist(xs []ast.Expr) bool {
 // operands writes a list of operands evaluated left to right, each
 // converted to the wanted type when wants gives one. Every operand to
 // the left of the last one that calls or needs statements is saved in
-// a temporary, so it is evaluated before that one.
+// a temporary, so it is evaluated before that one. An owned value so
+// saved, which the operation takes, is held until every operand is
+// evaluated when one after it may leave the statement, by ? or a
+// return in its else, and only then moved out of its temporary, so
+// that leaving drops it and taking it drops nothing twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
-	last := -1
+	last, leaves := -1, -1
 	for i, x := range xs {
 		if e.hasEffects(x) {
 			last = i
 		}
+
+		if lower.MayLeave(x) {
+			leaves = i
+		}
 	}
 
 	parts := make([]string, len(xs))
+	var kept []int // the owned values held until the last operand that may leave
 	for i, x := range xs {
 		var want types.Type
 		if wants != nil {
@@ -142,13 +151,28 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 			tmp := e.temp()
 			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[i] + ";")
 			parts[i] = tmp
-			if e.lent(x, want) {
+			switch {
+			case e.lent(x, want):
 				e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
+			case i < leaves && want != nil && !isBorrowType(want) && needsDrop(t):
+				e.hold(tmp, t)
+				kept = append(kept, i)
 			}
 		}
 	}
 
+	for _, i := range kept {
+		parts[i] = e.taken(parts[i], wants[i], parts[i], wants[i], xs[i].Pos()) // every operand is in: the operation takes it, and the temporary is emptied
+	}
+
 	return parts
+}
+
+// isBorrowType reports whether t is a borrow, which an operation
+// lends rather than takes.
+func isBorrowType(t types.Type) bool {
+	_, ok := t.(*types.Ref)
+	return ok
 }
 
 // lent reports whether x is a value built here that the operation

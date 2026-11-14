@@ -1,0 +1,41 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a deferred call holds what it borrows until the function
+// returns, a variadic argument as any other: a ...ref argument, or a
+// slice passed on with ... to one. So it borrows only whole variables
+// that live that long, which nothing moves before it runs; a closure
+// that borrows is no argument of a ...T parameter at all, deferred or
+// not. Fix: defer a closure that makes the call,
+// defer func() { show(w) }(), or pass values.
+
+package p
+
+func show(xs ...ref string) {}
+
+func run(fs ...func()) {}
+
+func own(xs ...string) {}
+
+func block() {
+    {
+        w := "w".Clone()
+        defer show(w)                       // ERROR "cannot keep a borrow of w in the deferred call"
+    }
+}
+
+func temporary() {
+    defer show(ref "t".Clone())             // ERROR "a deferred call borrows only a whole variable"
+}
+
+func moved() {
+    ws := []string{"a".Clone()}
+    defer show(ws...)
+    own(ws...)                              // ERROR "cannot move ws: ws is borrowed by the deferred call"
+}
+
+func closure() {
+    w := "w".Clone()
+    defer run(func() { print(w) })          // ERROR "closure captures w by borrow and cannot be stored"
+}

@@ -833,6 +833,14 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 	}
 
 	if sig == nil {
+		if id, ok := unparen(call.Fun).(*ast.Ident); ok {
+			if _, builtin := c.resolve(id.Name).(*Builtin); builtin {
+				for _, arg := range call.Args { // print(s), close(ch): saved when the defer runs, so what they read is held until the call does
+					c.deferView(holder, arg, s.Pos())
+				}
+			}
+		}
+
 		return
 	}
 
@@ -841,16 +849,22 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 	}
 
 	fixed := sig.fixed()
+	kind, each := sig.variadicArg()
 	for i, arg := range call.Args {
-		if i >= fixed {
-			if k := i - fixed; sig.variadic && k < len(rest) && holdsBorrow(rest[k].typ) {
-				c.deferView(holder, arg, s.Pos()) // fmt.Println(t) saves t's view as any, which says nothing of it
+		if i >= fixed && kind == VariadicAny {
+			if k := i - fixed; k < len(rest) && rest[k].mode != invalid {
+				c.deferView(holder, arg, s.Pos()) // fmt.Println(t) saves t as a view, any lent, whatever its type
 			}
 
 			continue
 		}
 
-		if t := sig.params[i].typ; holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
+		_, t, _, packed := argSlot(sig, i, call.Ellipsis.IsValid(), kind, each) // an argument of a variadic parameter of the program's is held as its element, or as the slice after ...
+		if packed {
+			continue // moved into the function's own slice, and held by nothing: one that borrows was refused as stored
+		}
+
+		if holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
 			c.deferHold(holder, t, arg, s.Pos())
 		}
 	}
@@ -895,18 +909,23 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 	c.errorf(e.Pos(), "a deferred call borrows only a whole variable, one that is a borrow or holds none: "+exprText(e)+" is not one; "+fix)
 }
 
-// deferView records what a deferred call's variadic argument views, a
-// borrow saved as any when the defer runs: the places it is lent from,
-// held until the function returns, so that none is given a new value
-// before then, which would free what the view sees; a whole variable
-// as deferHold holds it, and a view made for the call, s.Trim(), by its
-// sources, since the view is the call's own and nothing else reads it.
+// deferView records what a deferred call saves as a view when the
+// defer runs, an argument of the printing functions' ...ref any or of a
+// built-in, print(s), close(ch): the places it is lent from, a whole
+// variable among them, held until the function returns, so that none
+// is given a new value or moved away before then, which would free what
+// the saved view sees, unless its type is Copy and the saved value a
+// copy; a view made for the call, s.Trim(), by its sources, since the
+// view is the call's own and nothing else reads it.
+// A call that reaches a variable when it runs holds it by deferHold
+// instead, which lets it change.
 func (c *Checker) deferView(holder *Var, e ast.Expr, pos token.Pos) {
-	if id, ok := unparen(e).(*ast.Ident); ok {
-		if p, kind := c.placeOf(id); kind == placeOwned {
-			c.deferHold(holder, p.v.typ, e, pos)
-			return
+	if p, kind := c.placeOf(unparen(e)); kind == placeOwned && !isBorrow(p.v.typ) {
+		if !IsCopy(placeType(p)) { // a Copy value saved is a copy, which owns nothing the place could free
+			c.flowLoan(borrow{holder: holder, place: p, pos: pos}) // an owned place the saved view sees: s, t.name, xs[i]
 		}
+
+		return
 	}
 
 	c.sources(e, func(src ast.Expr, _, _ bool) {

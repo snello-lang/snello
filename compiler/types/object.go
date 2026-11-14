@@ -65,6 +65,7 @@ type Var struct {
 	field  bool
 	global bool // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
 	kept   bool // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
+	lent   bool // a variadic ...ref parameter, whose arguments the caller lays out for the call alone: no borrow of it leaves the function, from its body or a closure's
 	keptBy *keptBy
 }
 

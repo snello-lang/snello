@@ -11,6 +11,17 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// The callees that take no slice after ..., which noSpread names.
+const (
+	spreadBuiltin spreadless = iota
+	spreadVariant
+	spreadConversion
+)
+
+// spreadless says what kind of callee a call with ... names that takes
+// no slice.
+type spreadless int
+
 // call checks a conversion, a built-in, a variant constructor, or a
 // call of a function or method value.
 func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
@@ -30,15 +41,18 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 					c.errorf(e.Lparen, obj.name+" takes no type arguments")
 				}
 
+				c.noSpread(e, spreadBuiltin, obj.name)
 				return c.builtinCall(e, obj)
 			case *Variant:
 				c.recordUse(ident, obj)
+				c.noSpread(e, spreadVariant, obj.name)
 				return c.variantCall(e, obj, expected)
 			}
 		}
 	}
 
 	if v := c.packageVariant(e.Fun); v != nil {
+		c.noSpread(e, spreadVariant, v.name)
 		return c.variantCall(e, v, expected)
 	}
 
@@ -52,6 +66,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	}
 
 	if f.mode == typeOperand {
+		c.noSpread(e, spreadConversion, "")
 		return c.conversion(e, f.typ)
 	}
 
@@ -175,42 +190,131 @@ func paramType(sig *Signature, i int) Type {
 
 // args checks the arguments of a call against the parameters. An
 // argument for a ref parameter is checked with the borrowed type as its
-// hint, so a literal or None gets the type the parameter holds. It
-// returns the temporary a borrowed argument lends, if any.
+// hint, so a literal or None gets the type the parameter holds. Each
+// argument past the fixed parameters is checked against the variadic
+// parameter's element, T for ...T and ref T for ...ref T, as if it were
+// a parameter of its own, or, after ..., the one argument against the
+// parameter's slice. It returns the temporary a borrowed argument
+// lends, if any.
 func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
-	params := sig.params
 	fixed := sig.fixed()
-
-	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
-		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
+	if !c.argCount(e, sig) {
 		c.exprs(e.Args)
 		return nil
 	}
 
+	kind, each := sig.variadicArg()
 	var rest []operand
 	defer func() { c.variadic = rest }() // after the arguments' own calls, which set it too
 	for i, arg := range e.Args {
-		if i >= fixed {
+		if i >= fixed && kind == VariadicAny {
 			op := c.expr(arg, nil) // a variadic any parameter takes anything
 			c.keepLent(arg, op)
 			rest = append(rest, op)
 			continue
 		}
 
-		p := params[i]
-		op := c.expr(arg, paramHint(p.typ))
-		if !c.fits(op, p.typ, arg.Pos(), "argument") {
+		p, pt, at, packed := argSlot(sig, i, e.Ellipsis.IsValid(), kind, each)
+		op := c.expr(arg, paramHint(pt))
+		if !c.fits(op, pt, arg.Pos(), "argument") {
 			continue
 		}
 
 		c.keepLent(arg, op)
 
-		if t := c.argEffects(e, arg, op, p, i); t != nil {
+		if t := c.argEffects(e, arg, op, p, pt, at, packed); t != nil {
 			tmp = t
 		}
 	}
 
 	return tmp
+}
+
+// noSpread refuses ... in a call that passes no slice: of a built-in, a
+// variant or a conversion, which callee says, named name. The message
+// is made only when there is one to report. The arguments are checked
+// as they are written.
+func (c *Checker) noSpread(e *ast.CallExpr, callee spreadless, name string) {
+	if !e.Ellipsis.IsValid() {
+		return
+	}
+
+	why := "a conversion takes one value"
+	switch callee {
+	case spreadBuiltin:
+		why = "the built-in " + name + " takes its arguments one by one"
+	case spreadVariant:
+		why = name + " is a variant, whose fields take one value each"
+	}
+
+	c.errorf(e.Ellipsis, "cannot use ... in a call of "+ast.Source(e.Fun)+": "+why)
+}
+
+// argCount checks the number of a call's arguments against sig, and
+// a ..., which passes a slice as the variadic parameter of a program's
+// own: one argument for each fixed parameter, and any number more, or
+// one more after ..., for a variadic one.
+func (c *Checker) argCount(e *ast.CallExpr, sig *Signature) bool {
+	fixed := sig.fixed()
+	kind, _ := sig.VariadicParam()
+	if e.Ellipsis.IsValid() {
+		switch {
+		case kind == NotVariadic:
+			c.errorf(e.Ellipsis, "cannot use ... in a call of "+exprText(e.Fun)+": it has no variadic parameter")
+			return false
+		case kind == VariadicAny:
+			c.errorf(e.Ellipsis, "cannot use ... in a call of "+exprText(e.Fun)+": it takes each argument by its own type, not a slice")
+			return false
+		case len(e.Args) != fixed+1 && fixed == 0:
+			c.errorf(e.Ellipsis, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+" with ..., want 1: the slice alone")
+			return false
+		case len(e.Args) != fixed+1:
+			c.errorf(e.Ellipsis, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+" with ..., want "+strconv.Itoa(fixed+1)+": "+plural(fixed, "fixed argument")+", then the slice")
+			return false
+		}
+
+		return true
+	}
+
+	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
+		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
+		return false
+	}
+
+	return true
+}
+
+// argSlot returns what the i-th argument of a call of sig is checked
+// against: the parameter, the type the argument must have, the index of
+// the parameter, and whether the argument is packed into a slice the
+// function owns. An argument past the fixed parameters goes to the
+// variadic one: after ... the slice itself, and otherwise one element,
+// of the type each, which variadicArg gives once per call; an element
+// of a ...T parameter is moved into the function's slice, which it may
+// keep, as a slice literal's element is.
+func argSlot(sig *Signature, i int, spread bool, kind VariadicKind, each Type) (*Var, Type, int, bool) {
+	fixed := sig.fixed()
+	if i < fixed || !sig.variadic {
+		return sig.params[i], sig.params[i].typ, i, false
+	}
+
+	p := sig.params[fixed]
+	if spread {
+		return p, p.typ, fixed, false
+	}
+
+	return p, each, fixed, kind == VariadicOwned
+}
+
+// variadicArg says what the variadic parameter of s takes, and the
+// type each argument for it must have: T for ...T, ref T for ...ref T.
+func (s *Signature) variadicArg() (VariadicKind, Type) {
+	kind, elem := s.VariadicParam()
+	if kind == VariadicLent {
+		return kind, NewRef(elem, false)
+	}
+
+	return kind, elem
 }
 
 // keepLent keeps lent, until the call an argument is passed to returns,
@@ -295,30 +399,30 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 // other is moved unless it is Copy. It returns the temporary the
 // argument lends, if any. Only the parameter's shape matters, so a
 // generic call runs it before its type arguments are known.
-func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, i int) (tmp ast.Expr) {
+func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, pt Type, i int, packed bool) (tmp ast.Expr) {
 	switch {
 	case c.keepArg(op, i, arg.Pos()):
 		if e == c.spawning {
 			c.kept(op, "spawned", arg.Pos())
 			c.spawnArg(arg, op)
 		}
-	case p.kept:
+	case p.kept, packed:
 		c.kept(op, "stored", arg.Pos())
 	case e == c.spawning:
 		c.kept(op, "spawned", arg.Pos())
 		c.spawnArg(arg, op)
 	}
 
-	if _, ok := p.typ.(*Ref); ok {
+	if _, ok := pt.(*Ref); ok {
 		c.noteTemporary(arg, op)
 		tmp = c.temporary[arg]
 	}
 
-	if r, ok := p.typ.(*Ref); ok && op.mode != value {
+	if r, ok := pt.(*Ref); ok && op.mode != value {
 		c.lend(arg, r.mut) // an owned place or a borrow variable is lent for the call
 	} else if !isMut(op.typ) {
 		c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
-		c.maybeMove(op, p.typ)
+		c.maybeMove(op, pt)
 	}
 
 	return tmp
@@ -340,21 +444,32 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*
 	}
 
 	fixed := sig.fixed()
-
-	if len(e.Args) < fixed || (!sig.variadic && len(e.Args) > fixed) {
-		c.errorf(e.Lparen, "wrong number of arguments: have "+strconv.Itoa(len(e.Args))+", want "+strconv.Itoa(fixed))
+	if !c.argCount(e, sig) {
 		c.exprs(e.Args)
 		return nil, nil
 	}
 
+	kind, each := sig.variadicArg()
+	spread := e.Ellipsis.IsValid()
+	checked := len(e.Args) // the arguments checked against a parameter: all but those a variadic any takes
+	if kind == VariadicAny {
+		checked = fixed
+	}
+
+	slots := make([]Type, checked)
+	for i := range slots {
+		_, slots[i], _, _ = argSlot(sig, i, spread, kind, each)
+	}
+
 	var tmp ast.Expr
-	ops := c.evaluate(in, e.Args[:fixed], varTypes(sig.params[:fixed]), func(i int, op operand) {
-		if t := c.argEffects(e, e.Args[i], op, sig.params[i], i); t != nil {
+	ops := c.evaluate(in, e.Args[:checked], slots, func(i int, op operand) {
+		p, _, at, packed := argSlot(sig, i, spread, kind, each)
+		if t := c.argEffects(e, e.Args[i], op, p, slots[i], at, packed); t != nil {
 			tmp = t
 		}
 	})
 	var rest []operand
-	for _, arg := range e.Args[fixed:] {
+	for _, arg := range e.Args[checked:] {
 		rest = append(rest, c.expr(arg, nil)) // a variadic any parameter takes anything
 	}
 
@@ -366,8 +481,10 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*
 	}
 
 	inst := in.apply(sig).(*Signature)
+	instKind, instEach := inst.variadicArg()
 	for i, op := range ops {
-		c.fits(op, inst.params[i].typ, e.Args[i].Pos(), "argument")
+		_, want, _, _ := argSlot(inst, i, spread, instKind, instEach)
+		c.fits(op, want, e.Args[i].Pos(), "argument")
 	}
 
 	c.recordCall(sig.tparams, targs, e.Lparen, name)

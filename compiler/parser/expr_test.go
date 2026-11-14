@@ -47,6 +47,8 @@ func TestExprs(t *testing.T) {
 
 		// Calls, indexing, slicing, tuples.
 		{"f(a, b,)", "f(a, b)"},
+		{"f(xs...)", "f(xs...)"}, // a slice passed as the variadic parameter
+		{"f(a, ref xs...,)", "f(a, (ref xs)...)"},
 		{"Ok(())", "Ok(())"},
 		{"(k, v)", "(k, v)"},
 		{"a[i]", "a[i]"},
@@ -120,6 +122,7 @@ func TestExprErrors(t *testing.T) {
 		{"1 +", "expected expression, found 'EOF'"}, // no semicolon after an operator, as in Go
 		{")", "expected expression, found ')'"},
 		{"f(a", "expected ')', found 'newline'"},
+		{"f(xs..., b)", "can only use ... with the final argument"},
 		{"a[", "expected expression, found 'EOF'"},
 		{"T{a: }", "expected expression, found '}'"},
 		{"if c { a }", "expected 'else', found 'newline'"},
@@ -201,6 +204,10 @@ func exprString(x ast.Expr) string {
 		s := exprString(x.Fun)
 		if len(x.TypeArgs) > 0 {
 			s += "<" + typeList(x.TypeArgs, ", ") + ">"
+		}
+
+		if x.Ellipsis.IsValid() {
+			return s + "(" + exprList(x.Args) + "...)"
 		}
 
 		return s + "(" + exprList(x.Args) + ")"

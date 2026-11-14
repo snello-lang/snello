@@ -489,14 +489,24 @@ func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
 }
 
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
-// entry.
+// entry, the map held while it is built when an entry may leave the
+// statement, so that leaving drops what it holds so far.
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) string {
 	out := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
+	leaves := lower.MayLeave(x)
+	if leaves {
+		e.hold(out, t) // an entry may leave the statement: the map so far, and what it holds, is dropped then
+	}
+
 	for _, elt := range x.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 		parts := e.operands([]ast.Expr{kv.Key, kv.Value}, []types.Type{mt.Key(), mt.Value()})
 		e.mapStore(out, mt, parts[0], parts[1], x.Pos())
+	}
+
+	if leaves {
+		return e.taken(out, t, out, t, x.Pos())
 	}
 
 	return out

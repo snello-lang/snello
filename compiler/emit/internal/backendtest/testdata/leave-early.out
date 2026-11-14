@@ -1,0 +1,37 @@
+fail true
+drop arg
+Err("failed")
+drop recv
+Err("failed")
+drop pair
+Err("failed")
+drop tuple
+Err("failed")
+drop slice
+Err("failed")
+drop map
+Err("failed")
+drop many
+Err("failed")
+fail false
+drop arg2
+drop arg
+Ok(2)
+drop recv2
+drop recv
+Ok(1)
+drop pair
+drop pair2
+Ok(4)
+drop tuple2
+drop tuple
+Ok(11)
+drop slice
+drop slice2
+Ok(2)
+drop map
+drop map2
+Ok(2)
+drop many
+drop many2
+Ok(2)

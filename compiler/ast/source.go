@@ -84,6 +84,10 @@ func writeExpr(b *strings.Builder, e Expr) {
 
 		b.WriteString("(")
 		writeExprs(b, x.Args)
+		if x.Ellipsis.IsValid() {
+			b.WriteString("...")
+		}
+
 		b.WriteString(")")
 	case *UnaryExpr:
 		switch x.Op {

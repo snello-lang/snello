@@ -1,0 +1,25 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a variadic ...T parameter is an owned slice the arguments move
+// into, so an argument that is not Copy is gone after the call, as one
+// passed to any parameter by value is; a slice passed on with ... moves
+// whole. Fix: pass a clone, keep(s.Clone()), or take the arguments as
+// ...ref T, which only lends them.
+
+package p
+
+func keep(parts ...string) {}
+
+func f() {
+    s := "a".Clone()
+    keep(s, "b".Clone())
+    print(s)                                // ERROR "use of moved value s"
+}
+
+func g() {
+    xs := []string{"a".Clone()}
+    keep(xs...)
+    print(xs)                               // ERROR "use of moved value xs"
+}

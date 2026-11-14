@@ -82,6 +82,10 @@ func TestResolve(t *testing.T) {
 		{"package p\nconst X i8 = -129", []string{"2:15: -129 overflows i8"}}, // once, by the check of the literal
 		{"package p\nfunc f() { const x i8 = -(129); print(x) }", []string{"2:27: 129 overflows i8"}},
 		{"package p\nconst KB = 1 << 40\nconst X i64 = KB * KB", []string{"3:15: cannot use a value of type int as i64 in declaration"}}, // the type before the value
+		{"package p\nfunc main(x int) {}", []string{"2:6: func main must have no type parameters, no parameters and no results"}},
+		{"package p\nfunc main() int { return 0 }", []string{"2:6: func main must have"}},
+		{"package p\nfunc main<T>() {}", []string{"2:6: func main must have"}},
+		{"package p\nstruct S {}\nfunc (s ref S) main(x int) {}", nil}, // a method may be called main
 		{"package p\nfunc f() { x := 1; print(x) }\nfunc g() { print(x) }", []string{"3:18: undefined: x"}},
 	}
 	for _, tt := range tests {
@@ -233,6 +237,15 @@ var handledErrors = map[string]bool{
 	"const-overflows.snello":    true,
 	"const-cycle.snello":        true,
 	"global-before-type.snello": true,
+	// A variadic parameter: the arguments move into ...T and are lent
+	// for the call alone to ...ref T; ... passes the slice itself.
+	"variadic-moved.snello":    true,
+	"variadic-lent.snello":     true,
+	"variadic-spread.snello":   true,
+	"variadic-deferred.snello": true,
+	"variadic-kept.snello":     true,
+	// A deferred print or built-in saves views of its arguments.
+	"defer-printed.snello": true,
 	// A range over an iterator: a value with Next on a mut receiver.
 	"range-iterator.snello": true,
 	// A Drop runs once, by the language.

@@ -349,6 +349,10 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	sig.variadic = variadic
 	fn.typ = sig
 	c.checkSources(d.Name.Name, fn.typ.(*Signature), d.Name.Pos())
+	if c.pkg.path == "" && d.Recv == nil && d.Name.Name == "main" && (len(params) > 0 || sig.results != Unit || tparams != nil) {
+		c.errorf(d.Name.Pos(), "func main must have no type parameters, no parameters and no results: the program calls it with none and reads os.Args for its arguments")
+	}
+
 	if d.Body == nil {
 		switch {
 		case c.pkg.std: // the runtime defines it

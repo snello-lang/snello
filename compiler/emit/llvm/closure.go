@@ -192,7 +192,7 @@ func (e *Emitter) callValue(x *ast.CallExpr, sig *types.Signature) value {
 	f := e.spill(e.valueTo(x.Fun, sig))
 	fn := e.load("ptr", e.gep(pair, f, 0))
 	parts := []string{"ptr " + e.gep(pair, f, 1)}
-	_, values := e.callOperands(nil, x.Args, sig)
+	_, values := e.callOperands(nil, x.Args, x.Ellipsis.IsValid(), sig)
 	for _, v := range values {
 		parts = append(parts, v.typed())
 	}

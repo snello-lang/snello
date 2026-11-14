@@ -21,7 +21,7 @@ func main() {
 }
 ```
 
-A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. Chapter 14 lists the packages. A program starts at `func main()` in package `main`.
+A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. Chapter 14 lists the packages. A program starts at `func main()`, in the package that declares it, whatever its name: `main` takes no parameters and gives no result, since the program calls it with none, `func main must have no type parameters, no parameters and no results`, and reads its arguments from `os.Args`.
 
 Names that start with a capital letter are exported from their package; the others are private to it. Comments run from `//` to the end of the line. A statement ends at the end of its line; a line ends after a name, a literal, a closing bracket, `?` or `>`, so a comparison or a shift keeps its right operand on the same line as the operator. Braces open on the line of the `func`, `if` or `for` they belong to.
 
@@ -101,6 +101,8 @@ A function is declared with `func`, its parameters are named before their types,
 
 A parameter says how the function takes its argument. `src ref string` reads it; `out mut File` changes it in place; a plain `n *Node` takes ownership of it. Chapter 6 covers the three modes. Until then, read `ref` as "borrowed to read" and `mut` as "borrowed to change".
 
+The last parameter may take any number of arguments, `func Sum(xs ...int) int`, called `Sum(1, 2, 3)` or `Sum(nums...)`; `...ref T` borrows them instead of taking them. [Chapter 22](22-variadic-functions.md) covers both forms.
+
 Function literals are closures. A closure that only reads a variable borrows it; one that assigns to it borrows it mutably:
 
 ```go
@@ -131,7 +133,7 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 
 `if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
-`defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, and several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+`defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, but for a variable lent to a `ref` parameter, which the call reads as it is when the call runs, chapter 6 says why; several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
 
 ## Built-in functions
 

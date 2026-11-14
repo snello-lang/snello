@@ -47,7 +47,7 @@ func Identical(x, y Type) bool {
 		return ok && identicalLists(x.elems, y.elems)
 	case *Signature:
 		y, ok := y.(*Signature)
-		return ok && identicalVars(x.params, y.params) && Identical(x.results, y.results)
+		return ok && x.variadic == y.variadic && identicalVars(x.params, y.params) && Identical(x.results, y.results)
 	case *Struct:
 		y, ok := y.(*Struct)
 		return ok && identicalFields(x.fields, y.fields)

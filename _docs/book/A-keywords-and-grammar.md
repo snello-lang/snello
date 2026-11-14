@@ -41,6 +41,7 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 - `var` and `const` declare one name list per keyword: `var x, y int = 1, 2`.
 - Parameter names and types: in `func(from, to NodeID, w int)` the names before a type share it; in `func(T, U) V` the identifiers are types. An identifier followed by a comma is decided by what ends its group.
 - An array length is a constant expression of an integer type: `[4]int`, `[N]byte`, `[2 * N]int`.
+- The last parameter may be variadic, `xs ...T` or `xs ...ref T`, and `...` after a call's last argument passes a slice as it, `f(a, xs...)`.
 - A `const` takes a constant expression: literals, constants, the operators and conversions between number types, folded by the compiler.
 - A match arm is `pattern [if guard] => body`, ended by a comma or a newline. A `match` with no value, `match {`, has arms `condition => body`, and its last arm is `_ => body`. A `return` in an arm takes one expression; several values are returned as a tuple.
 - `spawn` and `defer` take a call. `for range ch {` ranges with no variable.

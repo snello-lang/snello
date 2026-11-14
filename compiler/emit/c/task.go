@@ -53,7 +53,8 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 		return
 	}
 
-	wants, values := e.callOperands(recv, x.Args, sig)
+	wants, values := e.callOperands(recv, x.Args, x.Ellipsis.IsValid(), sig)
+	e.unframeLast(sig, x.Ellipsis.IsValid(), values, s.Pos()) // the task outlives this frame
 	e.tasks++
 	e.spawnCall(e.tasks-1, name, wants, values, sig.Results(), s.Pos())
 }
@@ -89,7 +90,8 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 
 	params = append(params, sig.Params()...)
 	lifted := types.NewSignature(nil, params, sig.Results())
-	_, args := e.callOperands(nil, x.Args, sig)
+	_, args := e.callOperands(nil, x.Args, x.Ellipsis.IsValid(), sig)
+	e.unframeLast(sig, x.Ellipsis.IsValid(), args, pos) // the task outlives this frame
 	values = append(values, args...)
 	wants := make([]types.Type, len(params))
 	list := make([]string, len(params))

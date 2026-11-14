@@ -54,14 +54,18 @@ _Noreturn void sn_bounds(int64_t i, int64_t len) {
 }
 
 // sn_slice_grow makes room for at least need elements, doubling as Snello's
-// Push amortizes to constant time.
+// Push amortizes to constant time. A slice laid out in a caller's frame,
+// SN_CALLER, always moves to a buffer of its own, of at least its length,
+// and the frame's is not freed.
 void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
     sn_check_slice(s);
-    if (need <= s->cap) {
+    bool framed = s->cap == SN_CALLER;
+    if (need <= s->cap && !framed) {
         return;
     }
 
-    int64_t cap = s->cap < 4 ? 4 : s->cap * 2;
+    int64_t have = framed ? s->len : s->cap;
+    int64_t cap = have < 4 ? 4 : have * 2;
     if (cap < need) {
         cap = need;
     }
@@ -71,7 +75,10 @@ void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
         memcpy(p, s->ptr, (size_t)s->len * size);
     }
 
-    sn_free(s->ptr);
+    if (!framed) {
+        sn_free(s->ptr);
+    }
+
     s->ptr = p;
     s->cap = cap;
 }

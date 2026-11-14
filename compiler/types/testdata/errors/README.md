@@ -23,8 +23,10 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A number written down is one its type holds | literal-overflows |
 | A constant is computed by the compiler: from literals, constants, operators and conversions between number types, in its type's arithmetic, with no overflow, division by zero or fraction lost, and from no constant that leads back to it | const-not-constant, const-overflows, const-cycle |
 | A package variable's inferred type is known once its declaration is checked, in the order of the files | global-before-type |
+| A variadic `...T` parameter owns its arguments, a closure that borrows none of them; a `...ref T` one lends them for the call alone, no borrow of them returned; `...` passes a slice to a variadic parameter of the program's alone; a deferred call holds what its variadic arguments lend | variadic-moved, variadic-kept, variadic-lent, variadic-spread, variadic-deferred |
 | The pieces of a string hold the string, as does a slice they are stored in | pieces-outlive-string, pieces-stored |
 | A deferred call holds what a borrow it is given views | defer-holds-view |
+| A deferred print or built-in saves a view of each argument, so what it sees is held until the call runs, a Copy value aside | defer-printed |
 | A closure that captures a view cannot change the place it views | closure-writes-viewed |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored, callback-kept |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |

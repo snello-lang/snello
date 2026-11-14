@@ -24,7 +24,7 @@ The LLVM backend walks the checked syntax tree as the C emitter does, reading th
 | enum | `int tag` and a union of one struct per variant with fields | `{i32, [n x i8]}`, `n` the size of the largest variant's struct, each variant read and written through its own struct type at the payload's address | LLVM has no union; the byte array with the variants' alignment is the same layout |
 | `T?` | `{bool has; T val}` | `{i1, T}`, except `*T?` and `(mut T)?`, which are the pointer with null for `None` | the one layout the backends differ on, below |
 | `Result<T, E>` | `{bool ok; union {T val; E err}}` | `{i1, [n x i8]}` as an enum of two variants | |
-| `[]T` | `{T *ptr; int64 len; int64 cap}` | `{ptr, i64, i64}` | the one shape the runtime's slice functions take, whatever `T` |
+| `[]T` | `{T *ptr; int64 len; int64 cap}` | `{ptr, i64, i64}` | the one shape the runtime's slice functions take, whatever `T`; two capacities below zero say whose the buffer is: `SN_VIEW`, a sub-slice's, lent from its slice, and `SN_CALLER`, a variadic `...T` parameter's, laid out in the caller's frame, whose elements the function owns, freed by neither, and moved to a buffer of its own when its length changes or the function keeps it |
 | `[n]T` | a struct holding `T at[n]` | `[n x T]` inside a struct | a struct, so an array is copied and passed as a value |
 | `map[K]V` | `sn_map`, eight words | the same | the runtime keeps the entries; the backend gives it the sizes, hash and equality of the key type |
 | tuple | a struct of `e0`, `e1`, ... | a struct of the elements | |

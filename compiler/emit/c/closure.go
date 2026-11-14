@@ -253,7 +253,7 @@ func (e *Emitter) callValue(x *ast.CallExpr, sig *types.Signature) string {
 		f = e.valueTo(x.Fun, sig)
 	}
 
-	args := e.args(nil, x.Args, sig)
+	args := e.args(nil, x.Args, x.Ellipsis.IsValid(), sig)
 	if args != "" {
 		args = ", " + args
 	}

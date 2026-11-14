@@ -310,7 +310,19 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			}
 
 			e.declare("sn_slice_free", "declare void @sn_slice_free(ptr)")
+			if e.cfg.Debug { // the runtime's checks on every drop
+				e.inst("call void @sn_slice_free(ptr %v)")
+				break
+			}
+
+			buf := e.op("icmp ne ptr "+e.load("ptr", e.gep("%sn_slice", "%v", 0)).s+", null", "i1")
+			own := e.op("icmp ne i64 "+e.load("i64", e.gep("%sn_slice", "%v", 2)).s+", "+snCaller, "i1")
+			free, done := e.block("free"), e.block("done")
+			e.branch(e.op("and i1 "+buf.s+", "+own.s, "i1").s, free, done) // an emptied slice and one laid out in a caller's frame have no buffer to free
+			e.label(free)
 			e.inst("call void @sn_slice_free(ptr %v)")
+			e.jump(done)
+			e.label(done)
 		case *types.Array:
 			for i := int64(0); i < u.Len(); i++ {
 				e.dropOf(e.gep(ir, "%v", int(i)), u.Elem(), pos)

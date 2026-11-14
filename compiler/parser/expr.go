@@ -301,11 +301,36 @@ func (p *Parser) parseIndexOrSlice(x ast.Expr) ast.Expr {
 	return &ast.IndexExpr{X: x, Lbrack: pos, Index: low}
 }
 
-// parseCall parses "(" [ExprList] ")" after the function and any type
-// arguments already read.
+// parseCall parses "(" [ExprList ["..."]] ")" after the function and
+// any type arguments already read: the ... after the last argument
+// passes a slice as the variadic parameter, f(xs...). A ... after
+// another argument is reported, and the arguments after it are still
+// parsed. Inside the parentheses the expression level is raised, as in
+// parseParenExprs.
 func (p *Parser) parseCall(fun ast.Expr, typeArgs []ast.Type) *ast.CallExpr {
-	lparen, args, rparen := p.parseParenExprs()
-	return &ast.CallExpr{Fun: fun, TypeArgs: typeArgs, Lparen: lparen, Args: args, Rparen: rparen}
+	call := &ast.CallExpr{Fun: fun, TypeArgs: typeArgs, Lparen: p.expect(token.LPAREN)}
+	p.exprLev++
+	if p.tok != token.RPAREN {
+		call.Args = p.parseExprList(token.RPAREN)
+	}
+
+	if p.tok == token.ELLIPSIS {
+		call.Ellipsis = p.pos
+		p.next()
+		if p.tok == token.COMMA {
+			p.next()
+		}
+
+		if p.tok != token.RPAREN && p.tok != token.EOF {
+			p.error(call.Ellipsis, "can only use ... with the final argument")
+			call.Ellipsis = token.NoPos
+			call.Args = append(call.Args, p.parseExprList(token.RPAREN)...)
+		}
+	}
+
+	p.exprLev--
+	call.Rparen = p.expect(token.RPAREN)
+	return call
 }
 
 // parseParenExprs parses "(" [ExprList] ")" and returns the positions

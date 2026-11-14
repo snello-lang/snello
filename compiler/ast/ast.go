@@ -432,6 +432,7 @@ type CallExpr struct {
 	TypeArgs []Type
 	Lparen   token.Pos
 	Args     []Expr
+	Ellipsis token.Pos // the ... after the last argument, f(xs...), or NoPos
 	Rparen   token.Pos
 }
 

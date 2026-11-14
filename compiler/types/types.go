@@ -93,6 +93,16 @@ const (
 	RecvOnly                // <-chan T
 )
 
+// VariadicKind says what a variadic last parameter takes.
+type VariadicKind int
+
+const (
+	NotVariadic   VariadicKind = iota // the last parameter takes one argument
+	VariadicAny                       // ...ref any, the library's printing functions'
+	VariadicOwned                     // ...T, an owned []T
+	VariadicLent                      // ...ref T, a ref []T lent for the call
+)
+
 // Typ holds the one instance of each basic type, indexed by kind.
 var Typ = [...]*Basic{
 	Invalid: {Invalid, 0, "invalid type"},
@@ -368,8 +378,30 @@ func (s *Signature) Params() []*Var { return s.params }
 func (s *Signature) Results() Type { return s.results }
 
 // Variadic reports whether the last parameter takes any number of
-// arguments, as the printing functions do.
+// arguments.
 func (s *Signature) Variadic() bool { return s.variadic }
+
+// VariadicParam says what the variadic last parameter of s takes, and
+// the type of each argument it takes: the library's ...ref any, whose
+// arguments the compiler takes each by its own type; ...T, an owned
+// []T the arguments are moved into; or ...ref T, a ref []T of the
+// arguments, each lent for the call alone.
+func (s *Signature) VariadicParam() (VariadicKind, Type) {
+	if !s.variadic {
+		return NotVariadic, nil
+	}
+
+	switch t := s.params[len(s.params)-1].typ.(type) {
+	case *Slice:
+		return VariadicOwned, t.elem
+	case *Ref:
+		if sl, ok := t.elem.(*Slice); ok {
+			return VariadicLent, sl.elem
+		}
+	}
+
+	return VariadicAny, Typ[Any]
+}
 
 // TypeParams returns a generic function's type parameters, or nil.
 func (s *Signature) TypeParams() []*TypeParam { return s.tparams }
@@ -536,6 +568,16 @@ func signatureString(s *Signature) string {
 
 		if s.variadic && i == len(s.params)-1 {
 			b.WriteString("...")
+			kind, elem := s.VariadicParam()
+			switch kind {
+			case VariadicOwned:
+				b.WriteString(elem.String())
+				continue
+			case VariadicLent:
+				b.WriteString("ref ")
+				b.WriteString(elem.String())
+				continue
+			}
 		}
 
 		b.WriteString(p.typ.String())

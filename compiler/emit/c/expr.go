@@ -533,7 +533,7 @@ func (e *Emitter) operatorCall(t types.Type, op token.Kind, unary bool, recv ast
 		return "0"
 	}
 
-	return name + "(" + e.args(recv, args, sig) + ")"
+	return name + "(" + e.args(recv, args, false, sig) + ")"
 }
 
 // binary writes x op y. Strings have no operators in C: + is a
@@ -832,7 +832,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 		return "0"
 	}
 
-	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
+	return name + "(" + e.args(sel.X, x.Args, x.Ellipsis.IsValid(), sig) + ")"
 }
 
 // superCall writes super.M(args): the next definition of M in the
@@ -855,7 +855,7 @@ func (e *Emitter) superCall(x *ast.CallExpr, sel *ast.SelectorExpr, fn *types.Fu
 	}
 
 	name, sig := e.callInstance(nil, target, named)
-	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
+	return name + "(" + e.args(sel.X, x.Args, x.Ellipsis.IsValid(), sig) + ")"
 }
 
 // boundCall writes a call of a method a bound declares, x.Area() with
@@ -880,20 +880,38 @@ func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv ty
 		return "0"
 	}
 
-	return name + "(" + e.args(sel.X, x.Args, sig) + ")"
+	return name + "(" + e.args(sel.X, x.Args, x.Ellipsis.IsValid(), sig) + ")"
 }
 
 // args writes the arguments of a call, the receiver first when there
-// is one, each converted to its parameter's type.
-func (e *Emitter) args(recv ast.Expr, args []ast.Expr, sig *types.Signature) string {
-	_, values := e.callOperands(recv, args, sig)
+// is one, each converted to its parameter's type, the last a slice for
+// the variadic parameter when spread.
+func (e *Emitter) args(recv ast.Expr, args []ast.Expr, spread bool, sig *types.Signature) string {
+	_, values := e.callOperands(recv, args, spread, sig)
 	return strings.Join(values, ", ")
 }
 
 // callOperands evaluates a call's receiver, when there is one, and its
 // arguments, each converted to the type the signature wants, and
-// returns those types with the values.
-func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signature) ([]types.Type, []string) {
+// returns those types with the values. The arguments a variadic
+// parameter of the program's takes one by one, when the call does not
+// spread a slice, are evaluated in their turn with the others, each to
+// its element's type, and then made the one value the parameter takes
+// (variadicValue).
+func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, spread bool, sig *types.Signature) ([]types.Type, []string) {
+	kind, elem := sig.VariadicParam()
+	packed := !spread && (kind == types.VariadicOwned || kind == types.VariadicLent)
+	fixed := len(sig.Params())
+	each := elem // the type each packed argument is evaluated to: a lent one as the borrow it is, so that a temporary it lends is dropped after the call
+	if packed {
+		fixed--
+		elem = e.sub(elem)
+		each = elem
+		if kind == types.VariadicLent {
+			each = types.NewRef(elem, false)
+		}
+	}
+
 	wants := make([]types.Type, 0, len(args)+1)
 	exprs := make([]ast.Expr, 0, len(args)+1)
 	if recv != nil {
@@ -903,7 +921,10 @@ func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signat
 
 	for i, a := range args {
 		var want types.Type
-		if i < len(sig.Params()) {
+		switch {
+		case packed && i >= fixed:
+			want = each
+		case i < len(sig.Params()):
 			want = sig.Params()[i].Type()
 		}
 
@@ -911,7 +932,64 @@ func (e *Emitter) callOperands(recv ast.Expr, args []ast.Expr, sig *types.Signat
 		exprs = append(exprs, a)
 	}
 
-	return wants, e.operands(exprs, wants)
+	values := e.operands(exprs, wants)
+	if !packed {
+		return wants, values
+	}
+
+	at := len(exprs) - (len(args) - fixed) // the first of the packed arguments
+	param := e.sub(sig.Params()[fixed].Type())
+	pos := sig.Params()[fixed].Pos()
+	if len(args) > fixed {
+		pos = args[fixed].Pos()
+	}
+
+	values = append(values[:at], e.variadicValue(kind, param, elem, values[at:], pos))
+	return append(wants[:at], param), values
+}
+
+// variadicValue makes the value a variadic parameter of the program's
+// takes from the arguments' values, laid out in an array on the
+// caller's stack, for the call: for ...T a slice of capacity SN_CALLER,
+// whose elements, moved in, the function owns and drops, and whose
+// buffer nothing frees; for ...ref T a slice over the arguments'
+// values, each the argument's own, lent, which nothing drops. Neither
+// allocates.
+func (e *Emitter) variadicValue(kind types.VariadicKind, param, elem types.Type, values []string, pos token.Pos) string {
+	st := e.cType(param, pos)
+	if len(values) == 0 {
+		return "(" + st + "){0}"
+	}
+
+	n, et := strconv.Itoa(len(values)), e.cType(elem, pos)
+	view := e.temp()
+	e.line(et + " " + view + "[" + n + "];")
+	for i, v := range values {
+		e.line(view + "[" + strconv.Itoa(i) + "] = " + v + ";")
+	}
+
+	room := n
+	if kind == types.VariadicOwned {
+		room = "SN_CALLER"
+	}
+
+	return "(" + st + "){" + view + ", " + n + ", " + room + "}"
+}
+
+// unframeLast gives the slice a call packs for a variadic ...T
+// parameter, the last of values, a buffer of its own, for a call that
+// outlives the caller's frame, a spawn's.
+func (e *Emitter) unframeLast(sig *types.Signature, spread bool, values []string, pos token.Pos) {
+	kind, elem := sig.VariadicParam()
+	if kind != types.VariadicOwned || spread || len(values) == 0 {
+		return
+	}
+
+	param := e.sub(sig.Params()[len(sig.Params())-1].Type())
+	tmp := e.temp()
+	e.line(e.cType(param, pos) + " " + tmp + " = " + values[len(values)-1] + ";")
+	e.line("sn_slice_unframe((sn_slice *)&" + tmp + ", sizeof(" + e.cType(e.sub(elem), pos) + "));")
+	values[len(values)-1] = tmp
 }
 
 // minCall writes min(a, b, ...) and max(a, b, ...) as nested
@@ -1093,10 +1171,10 @@ func isByteSlice(t types.Type) bool {
 func (e *Emitter) funcCall(x *ast.CallExpr, id *ast.Ident, fn *types.Func) string {
 	if e.generics[fn] != nil {
 		name, sig := e.callInstance(id, fn, nil)
-		return name + "(" + e.args(nil, x.Args, sig) + ")"
+		return name + "(" + e.args(nil, x.Args, x.Ellipsis.IsValid(), sig) + ")"
 	}
 
-	return lower.FuncName(fn) + "(" + e.args(nil, x.Args, fn.Type().(*types.Signature)) + ")"
+	return lower.FuncName(fn) + "(" + e.args(nil, x.Args, x.Ellipsis.IsValid(), fn.Type().(*types.Signature)) + ")"
 }
 
 // packageOf returns the package an identifier names, or nil.

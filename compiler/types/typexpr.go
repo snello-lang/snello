@@ -173,14 +173,9 @@ func plural(n int, thing string) string {
 	return strconv.Itoa(n) + " " + thing + "s"
 }
 
-// params turns parameter declarations into variables. A function body
-// declares them in its scope later (funcBody); a function type never
-// does.
-// params resolves a parameter list and reports whether its last
-// parameter is variadic. A variadic parameter is ...ref any, the type
-// of fmt's arguments, and only a library package declares one, since
-// the compiler writes the function that takes it; a program's own is
-// not supported yet.
+// params turns parameter declarations into variables, and reports
+// whether the last is variadic. A function body declares them in its
+// scope later (funcBody); a function type never does.
 func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 	if len(ps) == 0 {
 		return nil, false
@@ -189,15 +184,11 @@ func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 	vars = make([]*Var, len(ps))
 	for i, p := range ps {
 		var t Type
-		switch {
-		case !p.Dots.IsValid():
-			t = c.typ(p.Type)
-		case !c.pkg.std:
-			c.errorf(p.Dots, "a variadic parameter is not supported yet")
-			t = Typ[Invalid]
-		default:
+		if p.Dots.IsValid() {
 			t = c.variadicType(p.Type)
-			variadic = true
+			variadic = t != Typ[Invalid]
+		} else {
+			t = c.typ(p.Type)
 		}
 
 		name := ""
@@ -206,26 +197,54 @@ func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 		}
 
 		vars[i] = NewVar(p.Pos(), name, t)
+		vars[i].lent = p.Dots.IsValid() && isBorrow(t)
 	}
 
 	return vars, variadic
 }
 
-// variadicType resolves the type of a variadic parameter, which is any,
-// written ref any or any: the compiler takes each argument by its own
-// type. Another type is reported.
+// variadicType resolves the type of a variadic parameter, as the
+// function's body sees it: ...T is an owned []T, the arguments moved
+// into it, and ...ref T a ref []T, the arguments lent for the call
+// alone. A library's ...ref any, or ...any, is the printing functions'
+// any, whose arguments the compiler takes each by its own type. A
+// ...mut T would lend each argument mut, which no slice can hold apart,
+// and is refused.
 func (c *Checker) variadicType(t ast.Type) Type {
-	if r, ok := t.(*ast.RefType); ok && !r.Mut {
-		t = r.Elem
+	elem, lent := t, false
+	if r, ok := t.(*ast.RefType); ok {
+		if r.Mut {
+			c.errorf(t.Pos(), "a variadic parameter is ...T or ...ref T, not ...mut T: pass a mut slice instead, xs mut []T")
+			return Typ[Invalid]
+		}
+
+		elem, lent = r.Elem, true
 	}
 
-	if n, ok := t.(*ast.NamedType); ok && n.Pkg == nil && n.Name.Name == "any" && len(n.Args) == 0 {
+	if n, ok := elem.(*ast.NamedType); ok && n.Pkg == nil && n.Name.Name == "any" && len(n.Args) == 0 && c.resolve("any") == Universe.Lookup("any") {
+		if !c.pkg.std {
+			c.errorf(t.Pos(), "...ref any is the library's printing functions' alone: a variadic parameter names the type of its arguments, ...T or ...ref T")
+			return Typ[Invalid]
+		}
+
 		c.recordUse(n.Name, Universe.Lookup("any"))
 		return Typ[Any]
 	}
 
-	c.errorf(t.Pos(), "a variadic parameter is ...ref any; the compiler takes each argument by its type")
-	return Typ[Invalid]
+	e := c.typ(elem)
+	if e == Typ[Invalid] {
+		return e
+	}
+
+	if !c.storable(e, "a variadic parameter", t.Pos()) {
+		return Typ[Invalid]
+	}
+
+	if lent {
+		return NewRef(NewSlice(e), false)
+	}
+
+	return NewSlice(e)
 }
 
 // results turns a result list into Unit, one type, or a tuple.
@@ -271,7 +290,11 @@ func (c *Checker) fields(fs []*ast.Field) []*Var {
 // into the variant objects, which were created when the names were.
 func (c *Checker) variantFields(vs []*ast.Variant, variants []*Variant) {
 	for i, v := range vs {
-		fields, _ := c.params(v.Fields)
+		fields, variadic := c.params(v.Fields)
+		if variadic {
+			c.errorf(v.Fields[len(v.Fields)-1].Dots, "a variant's field is not variadic: it holds one value, a slice for many, []T")
+		}
+
 		for j, f := range fields {
 			f.field = true
 			if v.Fields[j].Name != nil {
