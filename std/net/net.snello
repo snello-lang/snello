@@ -8,12 +8,18 @@
 // program writes a connection as blocking code; underneath, an
 // operation that would block parks the task and the runtime's poller
 // wakes it when the socket is ready, so a task per connection costs
-// no thread (_docs/design/06-tasks-and-channels.md).
+// no thread.
 //
-// A failure is an io.Error worded as Go words it: the operation, the
-// network and the address, then the system call and the system's
-// reason, "dial tcp 127.0.0.1:1: connect: connection refused" or "read
-// tcp 127.0.0.1:50338->127.0.0.1:8080: read: connection reset by peer".
+//	l := net.Listen("127.0.0.1", 8080)?
+//	for {
+//		c := l.Accept()?
+//		spawn serve(c)
+//	}
+//
+// A failure is an io.Error that names the operation, the network and
+// the address, then the system call and the system's reason, "dial tcp
+// 127.0.0.1:1: connect: connection refused" or "read tcp
+// 127.0.0.1:50338->127.0.0.1:8080: read: connection reset by peer".
 // Its Kind tells a refused dial, a reset connection and a timed out one
 // from the rest, so a program need not read the message.
 //
@@ -24,21 +30,24 @@
 // then the name servers. A lookup can wait seconds on a name server
 // that does not answer, and the task parks meanwhile, on a thread of
 // the runtime's that does nothing else, so that it holds no worker and
-// stops no other task's sockets. Addresses print as Go prints them,
-// "127.0.0.1:8080" and "[::1]:8080"; a name that has no address is an
-// Error of Kind io.NotExist, "dial tcp: lookup nosuch.invalid: no such
-// host".
+// stops no other task's sockets. Addresses print with an IPv6 host in
+// brackets, "127.0.0.1:8080" and "[::1]:8080"; a name that has no
+// address is an Error of Kind io.NotExist, "dial tcp: lookup
+// nosuch.invalid: no such host".
 //
-// A deadline is Go's: a point in time after which a read, a write or an
-// Accept that has not finished fails with an Error of Kind io.TimedOut,
-// "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout", instead of
-// waiting. It holds for every operation from when it is set until it is
-// moved, so one deadline bounds a whole request of many reads, which a
-// timeout per call cannot; a server sets one per request,
-// c.SetReadDeadline(time.Now().Add(30 * time.Second)), so that a client
-// that stops sending cannot hold its task for ever. A write whose
-// deadline passes partway has written the first e.Written() bytes.
-
+// A deadline is a point in time after which a read, a write or an
+// Accept that has not finished fails with an Error of Kind
+// io.TimedOut, "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o
+// timeout", instead of waiting. It holds for every operation from when
+// it is set until it is moved, so one deadline bounds a whole request
+// of many reads, which a timeout per call cannot; a server sets one per
+// request, so that a client that stops sending cannot hold its task
+// for ever:
+//
+//	c.SetReadDeadline(time.Now().Add(30 * time.Second))?
+//
+// A write whose deadline passes partway has written the first
+// e.Written() bytes.
 package net
 
 import (
@@ -57,37 +66,83 @@ const timedOut = -2
 const noSuchHost = -3
 const resolverFailed = -4
 
-// attemptLeast is the least time DialTimeout gives each address of a
-// name it tries in turn, unless less than that is left in all.
-const attemptLeast time.Duration = 2000000000
+// The error numbers the package reports of its own accord, where the
+// system was not asked: each is the same number on every system Snello
+// runs on.
+const enoent int = 2  // no such file or directory: Kind NotExist
+const einval int = 22 // invalid argument: Kind Other
 
-// A Listener is a TCP socket listening on a port. It implements Drop:
-// the socket closes when the Listener goes out of scope.
+// The direction setDeadline sets the deadline of: a socket's reads, or
+// its writes.
+const deadlineReads = 0
+const deadlineWrites = 1
+
+// closedFD is the descriptor of a Listener or a Conn that Close has
+// closed, so that Drop has nothing left to do.
+const closedFD = -1
+
+// maxPort is the largest TCP port: a port is 16 bits, and 0 asks the
+// system to pick one.
+const maxPort = 65535
+
+// loopbackIPv4 is the host Dial connects to for an empty host: this
+// machine, on its IPv4 loopback address.
+const loopbackIPv4 = "127.0.0.1"
+
+// ipv6Separator separates the groups of an IPv6 address, and is in no
+// IPv4 address and no name: a host that holds it is an IPv6 address,
+// written in brackets before a port.
+const ipv6Separator = ":"
+
+// minAttemptTimeout is the least time DialTimeout gives each address of
+// a name it tries in turn, unless less than that is left in all.
+const minAttemptTimeout time.Duration = 2 * time.Second
+
+// A Listener is a TCP socket listening on a port, made by Listen; its
+// Accept waits for the next connection. It implements Drop: the socket
+// closes when the Listener goes out of scope, on every path out of its
+// function. A Listener is not Copy: it is moved, or lent with ref and
+// mut, and a task that accepts on it owns it.
 struct Listener impl Drop {
 	fd   int
 	port int
 	addr string // the address it listens on, "127.0.0.1:8080"
 }
 
-// A Conn is one TCP connection. It implements Drop, io.Reader and
-// io.Writer: the connection closes when the Conn goes out of scope,
-// unless Close closed it first.
+// A Conn is one TCP connection, made by Dial or by a Listener's Accept,
+// with Nagle's delay off, so that a small write leaves at once. It
+// implements io.Reader and io.Writer, so bufio and io.Copy work over
+// it, and Drop: the connection closes when the Conn goes out of scope,
+// unless Close closed it first. A Conn is not Copy: it is moved, or
+// lent with ref and mut, and one task reads and writes it at a time.
 struct Conn impl Drop, io.Reader, io.Writer {
 	fd     int
 	local  string // this side's address, "127.0.0.1:50338"
 	remote string // the other side's, "127.0.0.1:8080"
 }
 
-// Listen opens a socket listening on the address host at the port, or
-// at a port the system picks when port is 0, which Port reports.
-// "127.0.0.1" and "::1" are this machine alone; "0.0.0.0" is every IPv4
-// address it has, reachable from the network, "::" every address of
-// both families, and an empty host, as in Go, every address of both
-// families where the system has IPv6 and of IPv4 where it has not. A
-// name listens on the first IPv4 address it has, or its first address
-// when it has none, as Go's: "localhost" is 127.0.0.1.
+// Listen opens a TCP socket listening on host at port and returns its
+// Listener, which owns the socket. port is from 0 to 65535, 0 asking
+// the system to pick a free one, which Port then reports:
+//
+//	l := net.Listen("127.0.0.1", 0)?
+//	fmt.Println(l.Addr()) // 127.0.0.1:50338
+//
+// host says which of the machine's addresses it listens on:
+// "127.0.0.1" and "::1" are this machine alone; "0.0.0.0" is every
+// IPv4 address it has, reachable from the network, "::" every address
+// of both families, and an empty host every address of both families
+// where the system has IPv6 and of IPv4 where it has not. A name is
+// looked up, and the socket listens on its first IPv4 address, or its
+// first address when it has none: "localhost" is 127.0.0.1. host is
+// only read.
+//
+// A port out of range is an Error, "listen tcp: address 70000: invalid
+// port"; so is a name with no address, of Kind io.NotExist, and a port
+// taken already, "listen tcp 127.0.0.1:8080: bind: address already in
+// use".
 func Listen(host ref string, port int) Result<Listener, io.Error> {
-	if port < 0 || port > 65535 {
+	if port < 0 || port > maxPort {
 		return Err(addressError("listen", "address " + strconv.Itoa(port) + ": invalid port"))
 	}
 
@@ -103,7 +158,7 @@ func Listen(host ref string, port int) Result<Listener, io.Error> {
 
 		at := 0
 		for i, a := range ref found {
-			if !a.Contains(":") {
+			if !a.Contains(ipv6Separator) {
 				at = i
 				break
 			}
@@ -111,12 +166,12 @@ func Listen(host ref string, port int) Result<Listener, io.Error> {
 
 		code = listen(ref found[at], port, mut fd, mut got, mut call)
 		if code != 0 {
-			return Err(opError("listen", "tcp " + hostPort(ref found[at], port), ref call, code))
+			return Err(opError("listen", "tcp " + joinHostPort(ref found[at], port), ref call, code))
 		}
 	}
 
 	if code != 0 {
-		return Err(opError("listen", "tcp " + hostPort(host, port), ref call, code))
+		return Err(opError("listen", "tcp " + joinHostPort(host, port), ref call, code))
 	}
 
 	local := ""
@@ -125,20 +180,29 @@ func Listen(host ref string, port int) Result<Listener, io.Error> {
 	return Ok(Listener{fd: fd, port: got, addr: local})
 }
 
-// Port returns the port the Listener listens on.
+// Port returns the port the Listener listens on: the one Listen was
+// given, or the one the system picked for a port of 0.
 func (l ref Listener) Port() int {
 	return l.port
 }
 
-// Addr returns the address the Listener listens on, as Go prints it:
-// "127.0.0.1:8080", "[::1]:8080", or "[::]:8080" for one on every
-// address of both families.
+// Addr returns the address the Listener listens on, its host and port,
+// an IPv6 host in brackets: "127.0.0.1:8080", "[::1]:8080", or
+// "[::]:8080" for one on every address of both families. It is a
+// borrow of the Listener's own string, with nothing copied.
 func (l ref Listener) Addr() ref string {
 	return ref l.addr
 }
 
-// Accept waits for the next connection and returns it; the task parks
-// meanwhile, until the Listener's deadline, if it has one.
+// Accept waits for the next connection to the Listener and returns it,
+// as a Conn of its own that the caller owns. The task parks meanwhile,
+// holding no thread, until a connection comes or the Listener's
+// deadline passes, which is an Error of Kind io.TimedOut, "accept tcp
+// 127.0.0.1:8080: i/o timeout"; the Listener stays open and may Accept
+// again. It is lent mut for the call:
+//
+//	c := l.Accept()?
+//	spawn serve(c)
 func (l mut Listener) Accept() Result<Conn, io.Error> {
 	fd := 0
 	code := accept(l.fd, mut fd)
@@ -153,24 +217,39 @@ func (l mut Listener) Accept() Result<Conn, io.Error> {
 	return Ok(newConn(fd))
 }
 
-// SetDeadline sets the time after which Accept stops waiting and fails
-// with an Error of Kind io.TimedOut; the zero Time means none.
+// SetDeadline sets the time t after which an Accept that is waiting, or
+// one called later, stops waiting and fails with an Error of Kind
+// io.TimedOut; the zero Time means no deadline. A deadline that has
+// passed stays passed until it is set again. It fails only when the
+// system refuses the setting.
+//
+//	l.SetDeadline(time.Now().Add(5 * time.Second))?
 func (l mut Listener) SetDeadline(t time.Time) Result<(), io.Error> {
-	return setDeadlineOf(l.fd, 0, t)
+	return setSocketDeadline(l.fd, deadlineReads, t)
 }
 
-// Drop closes the listening socket.
+// Drop closes the listening socket when the Listener goes out of scope.
+// A connection already accepted stays open, owned by its Conn.
 func (l mut Listener) Drop() {
 	if l.fd >= 0 {
 		closeConn(l.fd)
 	}
 }
 
-// Dial connects to the address host at the port: an IP address,
-// "127.0.0.1" or "::1", or a name, which it looks up and whose
-// addresses it tries in the order the system prefers them until one
-// connects, reporting the first one's failure when none does. An empty
-// host is this machine, as in Go.
+// Dial connects to host at port and returns the connection, which the
+// caller owns. host is an IP address, "127.0.0.1" or "::1", or a name,
+// which it looks up and whose addresses it tries in the order the
+// system prefers them until one connects, reporting the first one's
+// failure when none does; an empty host is this machine, 127.0.0.1.
+// host is only read. The task parks while it looks up and connects,
+// for as long as the system waits; DialTimeout bounds that.
+//
+//	c := net.Dial("example.com", 80)?
+//
+// Nothing listening is an Error of Kind io.Refused, "dial tcp
+// 127.0.0.1:1: connect: connection refused", a name with no address
+// one of Kind io.NotExist, and a port out of range "dial tcp: address
+// 70000: invalid port".
 func Dial(host ref string, port int) Result<Conn, io.Error> {
 	return DialTimeout(host, port, 0)
 }
@@ -178,15 +257,18 @@ func Dial(host ref string, port int) Result<Conn, io.Error> {
 // DialTimeout is Dial that gives up once timeout has passed without a
 // connection, with an Error of Kind io.TimedOut, "dial tcp
 // 10.0.0.9:80: i/o timeout"; a timeout of zero or less waits as long
-// as the system does, as Dial. The timeout covers the lookup of a name,
-// "dial tcp: lookup example.com: i/o timeout", and the time left after
-// it is shared among the addresses still to try, each given at least
-// two seconds unless less is left, as Go shares it, so that one address
-// that does not answer leaves time for the next. The connection it
-// returns has no deadline.
+// as the system does, as Dial does.
+//
+//	c := net.DialTimeout(host, 443, 3 * time.Second)?
+//
+// The timeout covers the lookup of a name, "dial tcp: lookup
+// example.com: i/o timeout", and the time left after it is shared
+// among the addresses still to try, each given at least two seconds
+// unless less is left, so that one address that does not answer leaves
+// time for the next. The connection it returns has no deadline.
 func DialTimeout(host ref string, port int, timeout time.Duration) Result<Conn, io.Error> {
-	h := if host.Len() == 0 { "127.0.0.1".Clone() } else { host.Clone() }
-	if port < 0 || port > 65535 {
+	h := if host.Len() == 0 { loopbackIPv4.Clone() } else { host.Clone() }
+	if port < 0 || port > maxPort {
 		return Err(addressError("dial", "address " + strconv.Itoa(port) + ": invalid port"))
 	}
 
@@ -214,10 +296,10 @@ func DialTimeout(host ref string, port int, timeout time.Duration) Result<Conn, 
 		if timeout > 0 {
 			left := timeout - time.Since(start)
 			if left <= 0 {
-				return Err(if failed { first } else { timeoutError("dial", "tcp " + hostPort(ref a, port)) })
+				return Err(if failed { first } else { timeoutError("dial", "tcp " + joinHostPort(ref a, port)) })
 			}
 
-			limit = share(left, len(found) - i)
+			limit = attemptTimeout(left, len(found) - i)
 		}
 
 		code = dial(ref a, port, i64(limit), mut fd, mut call)
@@ -236,101 +318,135 @@ func DialTimeout(host ref string, port int, timeout time.Duration) Result<Conn, 
 
 // LookupHost looks the name host up through the system's resolver, the
 // hosts file and then the name servers, and returns its addresses, IPv6
-// and IPv4, in the order the system prefers them, as Go's LookupHost
-// returns them through the system's resolver; an IP address is its own
-// one address. The task parks while the name is looked up, holding no
-// worker. A name with no address is an Error of Kind io.NotExist,
-// "lookup nosuch.invalid: no such host".
+// and IPv4, as strings of their own, in the order the system prefers
+// them; an IP address is its own one address, as given. host is only
+// read. The task parks while the name is looked up, on a thread of the
+// runtime's, holding no worker, and a name server that does not answer
+// can keep it seconds.
+//
+//	addrs := net.LookupHost("localhost")? // ["::1", "127.0.0.1"]
+//
+// A name with no address, an empty one included, is an Error of Kind
+// io.NotExist, "lookup nosuch.invalid: no such host"; a resolver that
+// fails for another reason gives its own, of Kind io.Other.
 func LookupHost(host ref string) Result<[]string, io.Error> {
 	return lookupWithin(host, 0)
 }
 
-// Read reads what the connection has into buf and returns how many
-// bytes it read, 0 once the other side has closed. A buf with no room
-// reads nothing and returns 0 at once, so 0 means the end only for a
-// buf with room, as for every io.Reader. It is io.Reader's method.
+// Read reads what the connection has into buf, from its front, and
+// returns how many bytes it read, at most len(buf); 0 once the other
+// side has closed its end. The task parks until a byte comes, the
+// other side closes, or the read deadline passes, which is an Error of
+// Kind io.TimedOut. A buf with no room reads nothing and returns 0 at
+// once, so 0 means the end only for a buf with room, as for every
+// io.Reader. A connection the other side reset is an Error of Kind
+// io.Reset. It is io.Reader's method.
+//
+//	n := c.Read(mut buf)?
 func (c mut Conn) Read(buf mut []byte) Result<int, io.Error> {
 	n := 0
 	code := read(c.fd, buf, mut n)
 	if code == timedOut {
-		return Err(timeoutError("read", c.path()))
+		return Err(timeoutError("read", c.errorPath()))
 	}
 
 	if code != 0 {
-		return Err(opError("read", ref c.path(), "read", code))
+		return Err(opError("read", ref c.errorPath(), "read", code))
 	}
 
 	return Ok(n)
 }
 
-// Write writes all of buf to the connection and returns how many
-// bytes it wrote, the length of buf. It is io.Writer's method. A write
-// that fails partway, its deadline passed or the connection broken,
-// has written the Error's Written() bytes.
+// Write writes all of buf to the connection and returns how many bytes
+// it wrote, the length of buf; buf is only read, and kept by nothing.
+// The task parks while the system's buffer is full, until it has taken
+// every byte or the write deadline passes. It is io.Writer's method. A
+// write that fails partway, its deadline passed or the connection
+// broken, has written the Error's Written() bytes; a connection the
+// other side closed is an Error of Kind io.Reset.
 func (c mut Conn) Write(buf ref []byte) Result<int, io.Error> {
 	n := 0
 	code := write(c.fd, buf, mut n)
 	if code == timedOut {
-		return Err(timeoutError("write", c.path()).WithWritten(n))
+		return Err(timeoutError("write", c.errorPath()).WithWritten(n))
 	}
 
 	if code != 0 {
-		return Err(opError("write", ref c.path(), "write", code).WithWritten(n))
+		return Err(opError("write", ref c.errorPath(), "write", code).WithWritten(n))
 	}
 
 	return Ok(n)
 }
 
 // SetDeadline sets the deadline of the connection's reads and writes
-// both: the time after which one that has not finished fails with an
-// Error of Kind io.TimedOut instead of waiting. The zero Time means
-// none. A deadline passed stays passed, failing every read and write,
-// until it is set again.
+// both to t: the time after which one that has not finished, or one
+// begun later, fails with an Error of Kind io.TimedOut instead of
+// waiting. The zero Time means no deadline. A deadline passed stays
+// passed, failing every read and write, until it is set again. It
+// fails only when the system refuses the setting.
+//
+//	c.SetDeadline(time.Now().Add(10 * time.Second))?
 func (c mut Conn) SetDeadline(t time.Time) Result<(), io.Error> {
-	setDeadlineOf(c.fd, 0, t)?
-	return setDeadlineOf(c.fd, 1, t)
+	setSocketDeadline(c.fd, deadlineReads, t)?
+	return setSocketDeadline(c.fd, deadlineWrites, t)
 }
 
-// SetReadDeadline sets the deadline of the connection's reads alone.
+// SetReadDeadline sets the deadline of the connection's reads alone to
+// t, as SetDeadline does for both; the zero Time means none. A server
+// sets one per request, so that a client that stops sending cannot
+// hold its task.
 func (c mut Conn) SetReadDeadline(t time.Time) Result<(), io.Error> {
-	return setDeadlineOf(c.fd, 0, t)
+	return setSocketDeadline(c.fd, deadlineReads, t)
 }
 
-// SetWriteDeadline sets the deadline of the connection's writes alone.
+// SetWriteDeadline sets the deadline of the connection's writes alone
+// to t, as SetDeadline does for both; the zero Time means none. It
+// bounds a write to a peer that stops reading.
 func (c mut Conn) SetWriteDeadline(t time.Time) Result<(), io.Error> {
-	return setDeadlineOf(c.fd, 1, t)
+	return setSocketDeadline(c.fd, deadlineWrites, t)
 }
 
-// WriteString writes all of s to the connection.
+// WriteString writes all of s to the connection, as Write writes a
+// slice of bytes, and returns how many bytes it wrote, the length of
+// s; it fails as Write fails. It copies s into a slice of bytes first.
+//
+//	c.WriteString("HELLO\n")?
 func (c mut Conn) WriteString(s ref string) Result<int, io.Error> {
 	return c.Write(ref []byte(s))
 }
 
-// Close closes the connection now, so that the other side sees its
-// end, and reports a failure to. It consumes the Conn, as os.File's
-// Close does: a closed connection cannot be used again.
+// Close takes the connection and closes it now, so that the other side
+// sees its end, and reports a failure to. A closed connection cannot
+// be used again: the compiler refuses a use after Close as a use of a
+// moved value. A program that does not care for the failure lets the
+// Conn go out of scope, and Drop closes it.
 func (c Conn) Close() Result<(), io.Error> {
 	code := closeConn(c.fd)
-	c.fd = -1 // closed: Drop has nothing left to do
+	c.fd = closedFD
 	if code != 0 {
-		return Err(opError("close", ref c.path(), "close", code))
+		return Err(opError("close", ref c.errorPath(), "close", code))
 	}
 
 	return Ok(())
 }
 
-// LocalAddr returns this side's address, as Go prints it:
-// "127.0.0.1:50338", "[::1]:50338".
+// LocalAddr returns this side's address, its host and port, an IPv6
+// host in brackets: "127.0.0.1:50338", "[::1]:50338". It is a borrow
+// of the Conn's own string, with nothing copied.
 func (c ref Conn) LocalAddr() ref string {
 	return ref c.local
 }
 
-// RemoteAddr returns the other side's address, as Go prints it.
+// RemoteAddr returns the other side's address, written as LocalAddr
+// writes this side's: "127.0.0.1:8080". It is a borrow of the Conn's
+// own string, with nothing copied.
 func (c ref Conn) RemoteAddr() ref string {
 	return ref c.remote
 }
 
-// Drop closes the connection unless Close already did.
+// Drop closes the connection when the Conn goes out of scope, unless
+// Close already did. A failure to close is lost; a program that cares
+// calls Close.
 func (c mut Conn) Drop() {
 	if c.fd >= 0 {
 		closeConn(c.fd)
@@ -346,16 +462,16 @@ func newConn(fd int) Conn {
 	return Conn{fd: fd, local: local, remote: remote}
 }
 
-// path names the connection in the Errors it reports, as Go does: "tcp
-// 127.0.0.1:50338->127.0.0.1:8080".
-func (c ref Conn) path() string {
+// errorPath names the connection in the Errors it reports: the network
+// and both addresses, "tcp 127.0.0.1:50338->127.0.0.1:8080".
+func (c ref Conn) errorPath() string {
 	return "tcp " + c.local + "->" + c.remote
 }
 
 // dialError is the Error of a dial of the IP address addr at the port
 // whose call to the runtime failed with code, having called call.
 func dialError(addr ref string, port int, code int, call ref string) io.Error {
-	path := "tcp " + hostPort(addr, port)
+	path := "tcp " + joinHostPort(addr, port)
 	if code == timedOut {
 		return timeoutError("dial", path)
 	}
@@ -370,7 +486,7 @@ func lookupWithin(host ref string, timeout time.Duration) Result<[]string, io.Er
 	reason := ""
 	code := lookup(host, i64(timeout), mut found, mut reason)
 	if code == noSuchHost {
-		e := io.Errno("lookup", host, 2) // ENOENT, which is 2 on every system Snello runs on: Kind NotExist, and the host named even when empty, "lookup : no such host", as Go names it
+		e := io.Errno("lookup", host, enoent) // Kind NotExist, and the host named even when empty, "lookup : no such host"
 		e.Msg = "no such host"
 		return Err(e)
 	}
@@ -390,33 +506,34 @@ func lookupWithin(host ref string, timeout time.Duration) Result<[]string, io.Er
 	return Ok(found)
 }
 
-// share is the time to give the next of n addresses still to try when
-// left is left: an equal share, but at least attemptLeast, or all that
-// is left when that is less.
-func share(left time.Duration, n int) time.Duration {
+// attemptTimeout is the time to give the next of n addresses still to
+// try when left is left: an equal share, but at least
+// minAttemptTimeout, or all that is left when that is less.
+func attemptTimeout(left time.Duration, n int) time.Duration {
 	part := left / time.Duration(n)
-	if part >= attemptLeast {
+	if part >= minAttemptTimeout {
 		return part
 	}
 
-	return if left < attemptLeast { left } else { attemptLeast }
+	return if left < minAttemptTimeout { left } else { minAttemptTimeout }
 }
 
-// hostPort joins a host and a port as Go prints an address, an IPv6
-// one in brackets: "127.0.0.1:80", "[::1]:80", ":80" for no host.
-func hostPort(host ref string, port int) string {
-	if host.Contains(":") {
+// joinHostPort joins a host and a port into an address, an IPv6 host
+// in brackets: "127.0.0.1:80", "[::1]:80", ":80" for no host.
+func joinHostPort(host ref string, port int) string {
+	if host.Contains(ipv6Separator) {
 		return "[" + host + "]:" + strconv.Itoa(port)
 	}
 
 	return host + ":" + strconv.Itoa(port)
 }
 
-// setDeadlineOf sets the deadline of fd's reads, or its writes when
-// write is 1, to t, or clears it for the zero Time.
-func setDeadlineOf(fd int, write int, t time.Time) Result<(), io.Error> {
+// setSocketDeadline sets the deadline of fd's reads or its writes, as
+// direction says, deadlineReads or deadlineWrites, to t, or clears it
+// for the zero Time.
+func setSocketDeadline(fd int, direction int, t time.Time) Result<(), io.Error> {
 	set := if t.IsZero() { 0 } else { 1 }
-	code := setDeadline(fd, write, i64(t.Sub(time.Now())), set)
+	code := setDeadline(fd, direction, i64(t.Sub(time.Now())), set)
 	if code != 0 {
 		return Err(io.Errno("set deadline", "tcp", code))
 	}
@@ -424,16 +541,15 @@ func setDeadlineOf(fd int, write int, t time.Time) Result<(), io.Error> {
 	return Ok(())
 }
 
-// timeoutError is the Error of an operation whose deadline passed,
-// worded as Go words it: "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o
-// timeout".
+// timeoutError is the Error of an operation whose deadline passed:
+// "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout".
 func timeoutError(op string, path string) io.Error {
 	return io.NewError(op, path, "i/o timeout", io.TimedOut)
 }
 
 // opError is the Error of a socket call that failed with the system's
-// error number code, worded as Go words it: the operation, the network
-// and address in path, then the call, "connect: connection refused".
+// error number code: the operation, the network and address in path,
+// then the call, "dial tcp 127.0.0.1:1: connect: connection refused".
 func opError(op string, path ref string, call ref string, code int) io.Error {
 	e := io.Errno(op, path, code)
 	e.Msg = call + ": " + e.Msg
@@ -443,26 +559,50 @@ func opError(op string, path ref string, call ref string, code int) io.Error {
 // addressError is the Error of an address the operation op cannot use,
 // with the reason msg: "listen tcp: address 70000: invalid port".
 func addressError(op string, msg string) io.Error {
-	e := io.Errno(op, "tcp", 22) // EINVAL, which is 22 on every system Snello runs on: Kind Other
+	e := io.Errno(op, "tcp", einval)
 	e.Msg = msg
 	return e
 }
 
-// The runtime provides these; each returns the system's error number,
-// zero on success, and stores its result through its last parameters.
-// listen and dial return notAddress for a host that is not an IP
-// address, and store the name of the system call that failed in call;
-// accept, dial, read and write return timedOut once the deadline has
-// passed, and write stores how much it wrote even when it fails; lookup
-// fills a slice that holds nothing with the addresses of a name, and
-// returns noSuchHost, timedOut or resolverFailed, with the resolver's
-// reason, as well.
+// listen opens a socket listening on the IP address host at port,
+// storing its descriptor in fd, the port it got in got, and the name
+// of the system call that failed in call; it returns notAddress for a
+// host that is not an IP address. The runtime provides it, as it does
+// every function below: each returns the system's error number, zero
+// on success, and stores its results through its last parameters.
 func listen(host ref string, port int, fd mut int, got mut int, call mut string) int
+
+// accept waits for a connection on the listening socket fd and stores
+// its descriptor in out, or returns timedOut once the deadline passes.
 func accept(fd int, out mut int) int
+
+// dial connects to the IP address host at port within timeout, none
+// when it is zero, storing the descriptor in fd and the name of the
+// system call that failed in call; it returns notAddress for a host
+// that is not an IP address, and timedOut once the timeout passes.
 func dial(host ref string, port int, timeout i64, fd mut int, call mut string) int
+
+// setDeadline sets the deadline of fd's reads, or its writes when
+// write is deadlineWrites, d nanoseconds from now, at once for d of
+// zero or less, and clears it when set is 0.
 func setDeadline(fd int, write int, d i64, set int) int
+
+// addrs stores the local and the remote address of the socket fd.
 func addrs(fd int, local mut string, remote mut string) int
+
+// lookup fills out, which holds nothing, with the addresses of the name
+// host, within timeout, none when it is zero; it returns noSuchHost,
+// timedOut, or resolverFailed with the resolver's reason in reason.
 func lookup(host ref string, timeout i64, out mut []string, reason mut string) int
+
+// read reads what the connection fd has into buf and stores how many
+// bytes in n, or returns timedOut once the read deadline passes.
 func read(fd int, buf mut []byte, n mut int) int
+
+// write writes all of buf to the connection fd and stores in n how
+// many bytes it wrote, even when it fails; it returns timedOut once the
+// write deadline passes.
 func write(fd int, buf ref []byte, n mut int) int
+
+// closeConn closes the socket fd, a connection's or a listener's.
 func closeConn(fd int) int

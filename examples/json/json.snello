@@ -24,7 +24,10 @@ enum Value {
     Object(map[string]Value)
 }
 
-struct DecodeError { pos int; msg string }
+struct DecodeError {
+	pos int
+	msg string
+}
 
 func (v ref Value) Encode(out mut strings.Builder) {
     match v {

@@ -61,7 +61,10 @@ func (g ref Graph) BFS(start NodeID) []NodeID {
 
 // Dijkstra with the standard library heap. Items are small Copy structs
 // that the heap owns.
-struct item impl Copy, Ord { node NodeID; dist int }
+struct item impl Copy, Ord {
+	node NodeID
+	dist int
+}
 
 func (a ref item) Cmp(b ref item) Ordering { return a.dist.Cmp(b.dist) }
 

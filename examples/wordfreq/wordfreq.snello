@@ -11,7 +11,10 @@ package wordfreq
 
 import ("fmt"; "os"; "sort"; "strings")
 
-struct Count { word string; n int }
+struct Count {
+	word string
+	n    int
+}
 
 func main() {
     text := os.ReadToString("input.txt").Expect("read input")

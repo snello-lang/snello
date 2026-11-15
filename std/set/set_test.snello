@@ -6,6 +6,8 @@ package set_test
 
 import ("expect"; "fmt"; "set"; "testing")
 
+// Insert, Contains and Remove keep each value once, and a value
+// inserted again after its removal goes to the end of the order.
 func TestInsertContainsRemove() {
 	var s set.Set<string>
 	expect.True(s.IsEmpty())
@@ -36,6 +38,8 @@ func TestInsertContainsRemove() {
 	expect.Equal(ref fmt.Sprint(words), "set[z]")
 }
 
+// A set walks and prints its values in the order they were first
+// inserted, and an empty one walks none.
 func TestOrderAndPrint() {
 	s := set.From([]int{3, 1, 3, 2, 1})
 	expect.Equal(ref s.Len(), ref 3)
@@ -55,6 +59,7 @@ func TestOrderAndPrint() {
 	expect.Equal(ref fmt.Sprint(s), "set[]")
 }
 
+// A walk passes over the values removed before it.
 func TestRemovedValuesAreSkipped() {
 	s := set.New<int>()
 	for i := 0; i < 6; i++ {

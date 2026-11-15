@@ -68,12 +68,31 @@ What stays as a literal is what is its own definition: the escape table of a str
 
 ## Comments state the rule
 
-Every exported name has a doc comment that starts with its name and says what it does, what it gives back and when it fails. An unexported function has one when the name alone does not say all of that. A comment says what the code means, a rule it keeps or a reason a reader cannot see; it does not repeat the code, and it does not point at a document, a date, a task or another language: the comment is read with the code it sits on, long after any of those has moved.
+A doc comment is what a reader new to the package learns the function from, so it is written for them, rich and plain. Every exported name has one that starts with its name and says:
+
+- what it does, in words the reader already has;
+- what each parameter means;
+- what it returns, and exactly when it returns `None` or an error, and what that error means;
+- what it borrows, keeps or takes of its arguments: a `ref` it only reads, a `mut` it changes, a value it keeps;
+- what it costs when that matters: an allocation, a copy, a call that blocks, its complexity;
+- an example, on an indented line, where one makes the use clearer.
 
 ```go
-// skipClose moves past the closing byte close when it comes next, after
-// space, and reports whether it did.
+// StringInPlace returns the value of the string n read in place: a
+// borrow of the Doc's text between the string's quotes, with nothing
+// copied and nothing allocated. That text is the string's value only
+// when it holds no escape, so for a string with one, "a\nb" or
+// "\u00e9", it returns None, as it does for a node that is no string.
+// The borrow lives as long as the Doc's own borrow of the text.
+//
+// It is for reading many strings fast, keys, IDs and names, which
+// rarely hold an escape; String reads any string, at the cost of a
+// copy:
+//
+//	name := doc.StringInPlace(n) ?? return slowPath(doc.String(n))
 ```
+
+An unexported function has a comment when its name alone does not say all of that. A comment says what the code means, a rule it keeps or a reason a reader cannot see; it does not repeat the code, and it does not point at a document, a date, a task or another language: the comment is read with the code it sits on, long after any of those has moved.
 
 ## Errors are values
 

@@ -12,21 +12,41 @@ package set
 
 import "fmt"
 
-// A Set owns its values and lends them for reading. It is moved, or
-// lent with ref and mut; when it goes out of scope, the values are
-// dropped. The zero value, var s Set<T>, is an empty set ready for
-// Insert. T is Eq and Hash, as a map's key is.
+// A Set is a collection of values of type T, each held once. It owns
+// its values and lends them for reading. It is moved, or lent with ref
+// and mut; when it goes out of scope, the values are dropped. The zero
+// value is an empty set ready for Insert:
+//
+//	var s set.Set<string>
+//	s.Insert("a")
+//	s.Contains("a") // true
+//
+// T is Eq and Hash, as a map's key is. A Set prints as set[a b], its
+// values in the order they were inserted.
 struct Set<T: Eq + Hash> impl fmt.Stringer {
 	m map[T]()
 }
 
-// New returns an empty set.
+// An Iter walks a set's values in the order they were inserted, lending
+// each; it lends the set for as long as it lives, so the set cannot
+// change during the walk. Set.Iter makes one.
+struct Iter<T: Eq + Hash> {
+	s  ref Set<T>
+	at int
+}
+
+// New returns an empty set of values of type T, the same set as the
+// zero value.
 func New<T: Eq + Hash>() Set<T> {
 	return Set<T>{}
 }
 
-// From returns a set of the values of xs, which it takes; a value that
-// comes twice is kept once.
+// From returns a set of the values of xs, which it takes: each value is
+// moved into the set, and one that comes twice is kept once, the first
+// time it comes, and the second dropped. The set's table is allocated
+// once, with room for len(xs) values.
+//
+//	s := set.From([]int{3, 1, 3}) // set[3 1]
 func From<T: Eq + Hash>(xs []T) Set<T> {
 	s := Set<T>{m: make(map[T](), len(xs))}
 	for _, x := range xs {
@@ -36,21 +56,25 @@ func From<T: Eq + Hash>(xs []T) Set<T> {
 	return s
 }
 
-// Insert adds v, which the set owns from then on, and reports whether
-// it was new; a value already in the set is left as it was, and v is
-// dropped. The value is hashed and looked for once.
+// Insert adds v, which the set takes and owns from then on, and reports
+// whether it was new; a value already in the set is left as it was, and
+// v is dropped. The value is hashed and looked for once.
+//
+//	if !s.Insert(name) { ... } // name was there already
 func (s mut Set<T>) Insert(v T) bool {
 	n := len(s.m)
 	s.m.GetOrInsert(v, ())
 	return len(s.m) != n
 }
 
-// Contains reports whether v is in the set.
+// Contains reports whether v is in the set. v is only read: one hash
+// and one look-up.
 func (s ref Set<T>) Contains(v ref T) bool {
 	return s.m.Contains(v)
 }
 
-// Remove takes v out of the set and reports whether it was there.
+// Remove takes v out of the set, dropping the set's value, and reports
+// whether it was there. v is only read.
 func (s mut Set<T>) Remove(v ref T) bool {
 	return s.m.Remove(v).IsSome()
 }
@@ -66,35 +90,22 @@ func (s ref Set<T>) IsEmpty() bool {
 }
 
 // Clear drops every value, and the memory they were held in with them:
-// the map is replaced, and its table goes with it.
+// the map is replaced by an empty one, and its table goes with it.
 func (s mut Set<T>) Clear() {
 	s.m = map[T](){}
 }
 
 // Iter returns a walk over the values in the order they were inserted,
-// lending each for as long as the set is lent: for v := range s.Iter().
+// lending each for as long as the set is lent; nothing is copied.
+//
+//	for v := range s.Iter() { ... }
 func (s ref Set<T>) Iter() Iter<T> {
 	return Iter<T>{s: s, at: 0}
 }
 
-// An Iter walks a set's values in insertion order.
-struct Iter<T: Eq + Hash> {
-	s  ref Set<T>
-	at int
-}
-
-// Next lends the next value, or None once the walk is over.
-func (it mut Iter<T>) Next() ref T? {
-	if (i, v, _) := it.s.m.Entry(it.at) {
-		it.at = i + 1
-		return Some(v)
-	}
-
-	return None
-}
-
-// String returns the values in insertion order, written as a slice of
-// them is printed: set[a b c]. It is how fmt prints a Set.
+// String returns the values in insertion order as a new string, written
+// as a slice of them is printed, each by fmt.Sprint: set[a b c]. It is
+// how fmt prints a Set.
 func (s ref Set<T>) String() string {
 	out := "set["
 	sep := ""
@@ -104,4 +115,14 @@ func (s ref Set<T>) String() string {
 	}
 
 	return out + "]"
+}
+
+// Next lends the next value of the walk, or None once the walk is over.
+func (it mut Iter<T>) Next() ref T? {
+	if (i, v, _) := it.s.m.Entry(it.at) {
+		it.at = i + 1
+		return Some(v)
+	}
+
+	return None
 }

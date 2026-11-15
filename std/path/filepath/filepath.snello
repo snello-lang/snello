@@ -3,52 +3,89 @@
 // license that can be found in the LICENSE file.
 
 // Package filepath works on the paths of files, with the separator the
-// system uses, as Go's path/filepath does. Every system Snello runs on
-// separates the elements of a path with a slash, so its functions are
-// package path's, under the name a program working on files reads them
-// by: a program that means a file's path says filepath, and one that
-// means a path in a URL says path.
+// system uses. Every system Snello runs on separates the elements of a
+// path with a slash, so its functions are package path's, under the
+// name a program working on files reads them by: a program that means
+// a file's path says filepath, and one that means a path in a URL says
+// path.
+//
+// Its functions read and build strings and ask the system nothing: a
+// path is cleaned or split as written, whether or not it names a file.
+// Base, Ext and Split lend parts of the path they are given, with
+// nothing copied; Clean, Join and Dir return a new string.
 package filepath
 
 import "path"
 
-// Separator is what the system puts between the elements of a path.
+// Separator is what the system puts between the elements of a path,
+// a slash on every system Snello runs on.
 const Separator rune = '/'
 
-// Clean returns the shortest path that names what p names, by the rules
-// path.Clean applies.
+// Clean returns the shortest path that names what p names, read as
+// written, with no link followed: several separators in a row become
+// one, an element "." is dropped, an element ".." is dropped with the
+// element before it, and ".." at the start of a rooted path is
+// dropped. The result ends in a separator only when it is the root,
+// and an empty result is ".". p is only read; the result is a new
+// string, a copy of p when p is clean already, in one pass over it:
+//
+//	filepath.Clean("/usr//lib/../bin/") // "/usr/bin"
 func Clean(p ref string) string {
 	return path.Clean(p)
 }
 
-// Split cuts p just after its last separator and lends the two parts,
-// the directory and the file.
+// Split cuts p just after its last separator and returns the two
+// parts, the directory with its separator and the file, as borrows of
+// p with nothing copied, which live as long as p's borrow. A path with
+// no separator has an empty directory, and one that ends in a
+// separator an empty file; "/tmp/notes.txt" gives "/tmp/" and
+// "notes.txt":
+//
+//	dir, file := filepath.Split(ref p)
 func Split(p ref string) (ref string, ref string) {
 	return path.Split(p)
 }
 
-// Join joins two paths with a separator between them and cleans the
-// result; an empty one is left out.
+// Join returns a and b joined with a separator between them, cleaned
+// as Clean cleans a path; an empty one is left out, and two empty ones
+// give an empty string. Both are only read; the result is a new
+// string. More than two are joined two at a time:
+//
+//	filepath.Join("/usr", "lib/snello") // "/usr/lib/snello"
+//	filepath.Join(ref filepath.Join(dir, "a"), "b")
 func Join(a ref string, b ref string) string {
 	return path.Join(a, b)
 }
 
-// Ext lends the extension of p's last element, its dot included.
+// Ext returns the extension of p's last element: what follows its last
+// dot, the dot included, or "" when the last element has no dot. It is
+// a borrow of p, with nothing copied:
+//
+//	filepath.Ext("notes.txt") // ".txt"
 func Ext(p ref string) ref string {
 	return path.Ext(p)
 }
 
-// Base lends the last element of p.
+// Base returns the last element of p, the separators at its end left
+// out, as a borrow of p with nothing copied: "." for an empty path, and
+// "/" for a path of separators alone.
+//
+//	filepath.Base("/usr/lib/snello") // "snello"
 func Base(p ref string) ref string {
 	return path.Base(p)
 }
 
-// IsAbs reports whether p starts at the root.
+// IsAbs reports whether p is absolute: whether it starts at the root,
+// with a separator. p is only read.
 func IsAbs(p ref string) bool {
 	return path.IsAbs(p)
 }
 
-// Dir returns all of p but its last element, cleaned.
+// Dir returns all of p but its last element, cleaned as Clean cleans a
+// path: "." when p has no separator, and "/" for a path in the root. p
+// is only read; the result is a new string.
+//
+//	filepath.Dir("/usr/lib/snello") // "/usr/lib"
 func Dir(p ref string) string {
 	return path.Dir(p)
 }

@@ -6,6 +6,8 @@ package strings_test
 
 import ("bufio"; "expect"; "strings"; "testing")
 
+// Repeat writes a string n times, and refuses a negative count and one
+// whose result no int can measure.
 func TestRepeat() {
 	expect.Equal(ref expect.IsSome(strings.Repeat("ab", 3)), "ababab")
 	expect.Equal(ref expect.IsSome(strings.Repeat("x", 0)), "")
@@ -14,18 +16,22 @@ func TestRepeat() {
 	expect.IsNone(strings.Repeat("ab", 9223372036854775807)) // longer than an int can count
 }
 
+// Join puts the separator between every two parts and nowhere else; no
+// part gives the empty string.
 func TestJoin() {
 	expect.Equal(ref strings.Join(ref []string{"a", "b", "c"}, "-"), "a-b-c")
 	expect.Equal(ref strings.Join(ref []string{}, "-"), "")
 	expect.Equal(ref strings.Join(ref []string{"one"}, ", "), "one")
 }
 
+// ToUpper and ToLower map ASCII and the letters past it.
 func TestCase() {
 	testing.Run("upper", func() { expect.Equal(ref strings.ToUpper("snello"), "SNELLO") })
 	testing.Run("lower", func() { expect.Equal(ref strings.ToLower("SNELLO"), "snello") })
 	testing.Run("mixed", func() { expect.Equal(ref strings.ToUpper("Café 1"), "CAFÉ 1") })
 }
 
+// Fields splits at runs of white space and gives no empty word.
 func TestFields() {
 	fields := strings.Fields("  two   words ")
 	expect.Equal(ref len(fields), ref 2)
@@ -34,6 +40,8 @@ func TestFields() {
 	expect.Equal(ref len(strings.Fields("   ")), ref 0)
 }
 
+// The full case mappings: a rune that grows to several, the final
+// sigma, and title case by words.
 func TestFullCase() {
 	expect.Equal(ref strings.ToUpper("straße"), "STRASSE") // a rune grows to two
 	expect.Equal(ref strings.ToUpper("ﬁ"), "FI")
@@ -51,6 +59,8 @@ func TestFullCase() {
 	expect.Equal(ref strings.ToUpper("snello"), "SNELLO") // ASCII stays byte for byte
 }
 
+// EqualIgnoreCase compares by the full case folding, where ß is ss and
+// the sigmas are one.
 func TestEqualIgnoreCase() {
 	expect.True(strings.EqualIgnoreCase("Straße", "STRASSE"))
 	expect.True(strings.EqualIgnoreCase("Snello", "sNELLO"))
@@ -62,6 +72,7 @@ func TestEqualIgnoreCase() {
 	expect.False(strings.EqualIgnoreCase("ı", "I")) // dotless i folds to itself outside Turkish
 }
 
+// ToValidUTF8 replaces each run of bytes that are not UTF-8 once.
 func TestValidUTF8() {
 	expect.Equal(ref strings.ToValidUTF8("a\xffb\xfe\xfdc", "?"), "a?b?c") // one replacement a run
 	expect.Equal(ref strings.ToValidUTF8("añ", "?"), "añ")
@@ -69,6 +80,7 @@ func TestValidUTF8() {
 	expect.Equal(ref strings.ToValidUTF8("", "?"), "")
 }
 
+// The functions that take a predicate find, trim and split by it.
 func TestFuncs() {
 	space := func(r rune) bool { return r == ' ' || r == ',' }
 	expect.Equal(ref strings.IndexFunc("ab, c", space), ref 2)
@@ -86,6 +98,8 @@ func TestFuncs() {
 	expect.Equal(ref len(strings.FieldsFunc("", space)), ref 0)
 }
 
+// IndexRune finds a rune, a stray byte as RuneError, and Map maps each
+// rune or drops it.
 func TestRunes() {
 	expect.Equal(ref strings.IndexRune("añb", 'b'), ref 3)
 	expect.Equal(ref strings.IndexRune("añb", 'z'), ref -1)
@@ -101,9 +115,12 @@ func TestRunes() {
 
 		return r
 	}
+
 	expect.Equal(ref strings.Map(drop, "banana"), "bnn")
 }
 
+// WriteRune writes one to four bytes, and U+FFFD for a value that is
+// not a code point.
 func TestWriteRune() {
 	var b strings.Builder
 	b.WriteRune('h')
@@ -114,6 +131,7 @@ func TestWriteRune() {
 	expect.Equal(ref b.Len(), ref 9)
 }
 
+// A Builder joins what is written to it, and Reset empties it.
 func TestBuilder() {
 	var b strings.Builder
 	b.WriteString("one")
@@ -126,6 +144,7 @@ func TestBuilder() {
 	expect.Equal(ref b.String(), "")
 }
 
+// How long Repeat takes for a short string, and what it allocates.
 func BenchmarkRepeat() {
 	testing.ReportAllocs()
 	for testing.Loop() {
@@ -133,6 +152,7 @@ func BenchmarkRepeat() {
 	}
 }
 
+// How long a Builder takes to make a short string from three writes.
 func BenchmarkBuilder() {
 	for testing.Loop() {
 		var b strings.Builder
@@ -143,6 +163,8 @@ func BenchmarkBuilder() {
 	}
 }
 
+// A Reader hands out its string in pieces of any size, and bufio reads
+// lines through it.
 func TestReader() {
 	r := strings.NewReader("hello, world")
 	buf := make([]byte, 5)
@@ -172,6 +194,8 @@ func TestReader() {
 	expect.Equal(ref seen.String(), "one|two|three|")
 }
 
+// Grow makes room that the writes after it use, and does nothing for a
+// count of zero or less.
 func TestGrow() {
 	var b strings.Builder
 	b.Grow(64)

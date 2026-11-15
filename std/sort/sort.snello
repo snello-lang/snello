@@ -12,23 +12,40 @@
 package sort
 
 // Sort orders xs in place, least first, by the Cmp of its element type.
-// Elements that compare Equal keep their order.
+// It is stable: elements that compare Equal keep their order. xs is
+// lent mut and its elements are moved within it, never copied. It makes
+// O(n log n) comparisons for a slice of n elements, fewer for one that
+// is partly in order already, and may allocate a buffer of up to half
+// the slice for its merges.
+//
+//	xs := []int{3, 1, 2}
+//	sort.Sort(mut xs) // [1 2 3]
 func Sort<T: Ord>(xs mut []T) {
 	xs.SortBy(func(a ref T, b ref T) bool { return a.Cmp(b) == Less })
 }
 
-// SortBy orders xs in place by less, which says whether its first
-// argument comes before its second: sort.SortBy(mut list, func(a ref
-// Count, b ref Count) bool { return a.n > b.n }). Elements neither of
-// which comes before the other keep their order.
+// SortBy orders xs in place by less, which is given two elements, lent,
+// and says whether its first argument comes before its second. It is
+// stable: elements neither of which comes before the other keep their
+// order. It costs what Sort costs, with a call of less for each
+// comparison. A less that is not a consistent order leaves the elements
+// in an order not specified, but each of them still in xs once.
+//
+//	more := func(a ref Count, b ref Count) bool { return a.n > b.n }
+//	sort.SortBy(mut counts, more)
 func SortBy<T>(xs mut []T, less func(a ref T, b ref T) bool) {
 	xs.SortBy(less)
 }
 
 // Search finds x in xs, which must be sorted least first, and returns
 // its index, or the index where x would be inserted to keep the order
-// when it is not there: len(xs) when every element is less than x. It
-// looks at about log2(len(xs)) elements.
+// when it is not there: len(xs) when every element is less than x.
+// When x is in xs more than once, it returns the index of the first.
+// Both are only read. It looks at about log2(len(xs)) elements, by
+// binary search; on a slice that is not sorted its answer means
+// nothing.
+//
+//	sort.Search(ref []int{1, 3, 5}, ref 4) // 2
 func Search<T: Ord>(xs ref []T, x ref T) int {
 	lo, hi := 0, len(xs)
 	for lo < hi {
@@ -43,7 +60,10 @@ func Search<T: Ord>(xs ref []T, x ref T) int {
 	return lo
 }
 
-// IsSorted reports whether xs is ordered least first.
+// IsSorted reports whether xs is ordered least first, by the Cmp of its
+// element type: whether no element is less than the one before it. xs
+// is only read, once, from the start, up to the first element out of
+// order.
 func IsSorted<T: Ord>(xs ref []T) bool {
 	for i := 1; i < len(xs); i++ {
 		if xs[i].Cmp(xs[i-1]) == Less {

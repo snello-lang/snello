@@ -6,6 +6,8 @@ package heap_test
 
 import ("expect"; "heap"; "testing")
 
+// TestPushPop pushes elements out of order and pops them least first,
+// then None once the heap is empty.
 func TestPushPop() {
 	h := heap.New<int>()
 	expect.True(h.IsEmpty())
@@ -19,6 +21,8 @@ func TestPushPop() {
 	expect.IsNone(h.Pop())
 }
 
+// TestFromPeekClear builds a heap from a slice, peeks at its least
+// element without removing it, and clears it.
 func TestFromPeekClear() {
 	h := heap.From([]int{4, 2, 9})
 	expect.Equal(ref h.Len(), ref 3)
@@ -28,11 +32,13 @@ func TestFromPeekClear() {
 	expect.True(h.Peek().IsNone())
 }
 
+// TestStrings orders strings by their Cmp.
 func TestStrings() {
 	h := heap.From([]string{"pear".Clone(), "apple".Clone()})
 	expect.Equal(ref expect.IsSome(h.Pop()), "apple")
 }
 
+// BenchmarkPushPop measures two pushes and two pops on a small heap.
 func BenchmarkPushPop() {
 	h := heap.New<int>()
 	for testing.Loop() {
@@ -43,6 +49,8 @@ func BenchmarkPushPop() {
 	}
 }
 
+// TestReverse hands back the greatest first through Reverse, and
+// orders two Reverse values the other way round from their values.
 func TestReverse() {
 	h := heap.New<heap.Reverse<int>>()
 	for _, v := range []int{4, 9, 1, 7} {

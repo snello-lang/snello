@@ -5,7 +5,10 @@
 package shapes
 
 // Kind says whether a shape has corners.
-enum Kind impl Copy, Clone, Eq { Round; Square }
+enum Kind impl Copy, Clone, Eq {
+	Round
+	Square
+}
 
 // Describe names a kind.
 func Describe(k Kind) string {

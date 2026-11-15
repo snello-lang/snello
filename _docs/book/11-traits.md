@@ -319,7 +319,10 @@ trait Iterator<T> {
 	}
 }
 
-struct Range impl Iterator<int> { cur int; end int }
+struct Range impl Iterator<int> {
+	cur int
+	end int
+}
 
 evens := Range{0, 5}.Map(plusTen).Filter(func(x ref int) bool { return x % 2 == 0 }).Collect()   // [10 12 14]
 ```

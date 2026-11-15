@@ -74,7 +74,10 @@ A keyed literal may leave out any field that declares a default. Each field it l
 A positional literal may stop before the last fields, when every field it leaves out declares a default:
 
 ```go
-struct Size { w int; h int = 1 }
+struct Size {
+	w int
+	h int = 1
+}
 
 Size{3}         // w 3, h 1
 Size{3, 4}      // w 3, h 4

@@ -23,53 +23,61 @@ package deque
 
 import "fmt"
 
-// The buffer a Deque first allocates, in elements, and the largest
-// power of two an int holds.
-const least int = 4
-const most int = 4611686018427387904
+// The capacities of a Deque's buffer, in elements: the first buffer it
+// allocates, and the largest power of two an int holds, past which no
+// capacity grows.
+const minCapacity int = 4
+const maxCapacity int = 1 << 62
 
-// A Deque owns its elements and lends them for reading or changing. It
-// is moved, or lent with ref and mut; when it goes out of scope, the
-// elements still in it are dropped with it. It has no zero value, as no
-// type that frees what it holds has: one comes from New or
-// WithCapacity. The empty array of pointers to T carries the element
-// type, so that a Deque is Send as its elements are, and a pointer, so
-// that a type may hold a Deque of itself.
+// A Deque is a double-ended queue of elements of type T. It owns its
+// elements and lends them for reading or changing. It is moved, or lent
+// with ref and mut; when it goes out of scope, the elements still in it
+// are dropped with it. It has no zero value, as no type that frees what
+// it holds has: one comes from New or WithCapacity.
+//
+//	d := deque.New<string>()
+//	d.PushBack("a")
+//	d.PushFront("b")
+//	first := d.PopFront() // Some("b")
+//
+// It prints as deque[b a], the elements from front to back. It is Send
+// when T is, so it may be sent to another task whole.
 struct Deque<T> impl Drop, fmt.Stringer {
 	elemType [0]*T // holds nothing: it gives the deque its elements' type, so that it is Send as they are, and a pointer, so that a type may hold a Deque of itself
-	buf   int // the block of slots, 0 before the first is made
-	cap   int // the slots, a power of two, or 0
-	head  int // the slot of the front element
-	len   int // the elements, in the slots from the head round the end
+	buf      int   // the block of slots, 0 before the first is made
+	cap      int   // the slots, a power of two, or 0
+	head     int   // the slot of the front element
+	len      int   // the elements, in the slots from the head round the end
 }
 
-// New returns an empty deque.
+// An Iter walks a deque from front to back, lending each element; it
+// lends the deque for as long as it lives, so the deque cannot change
+// during the walk. Deque.Iter makes one.
+struct Iter<T> {
+	d ref Deque<T>
+	i int
+}
+
+// New returns an empty deque of elements of type T. It allocates
+// nothing: the first push allocates a buffer of four elements.
 func New<T>() Deque<T> {
 	return Deque<T>{elemType: [0]*T{}, buf: 0, cap: 0, head: 0, len: 0}
 }
 
 // WithCapacity returns an empty deque with room for n elements before
-// it grows.
+// it grows: one allocation of n rounded up to a power of two, at least
+// four, and none for an n of zero or less. An n no memory can hold
+// panics, out of memory, as any allocation that fails does.
+//
+//	d := deque.WithCapacity<int>(100) // Cap() is 128
 func WithCapacity<T>(n int) Deque<T> {
 	d := New<T>()
 	if n > 0 {
-		d.cap = roundUp(n)
+		d.cap = capacityFor(n)
 		d.buf = rawAlloc<T>(d.cap)
 	}
 
 	return d
-}
-
-// roundUp returns the least power of two that is at least n and at
-// least the smallest buffer; past the largest power of two an int
-// holds it is that power, which no allocation gives.
-func roundUp(n int) int {
-	c := least
-	for c < n && c < most {
-		c *= 2
-	}
-
-	return c
 }
 
 // Len returns how many elements the deque holds.
@@ -82,13 +90,160 @@ func (d ref Deque<T>) IsEmpty() bool {
 	return d.len == 0
 }
 
-// Cap returns how many elements the deque holds before it grows.
+// Cap returns how many elements the deque holds before it grows: 0
+// before its first buffer, and a power of two after.
 func (d ref Deque<T>) Cap() int {
 	return d.cap
 }
 
-// slot returns the slot of the element i from the front.
-func (d ref Deque<T>) slot(i int) int {
+// PushBack adds v at the back, which the deque takes and owns from then
+// on. It costs constant time, amortized: when the buffer is full it
+// doubles, in one allocation and two block moves of the elements.
+func (d mut Deque<T>) PushBack(v T) {
+	if d.len == d.cap {
+		d.grow()
+	}
+
+	rawPut<T>(d.buf, d.slotIndex(d.len), v)
+	d.len++
+}
+
+// PushFront adds v at the front, which the deque takes and owns from
+// then on. It costs constant time, amortized, as PushBack does.
+func (d mut Deque<T>) PushFront(v T) {
+	if d.len == d.cap {
+		d.grow()
+	}
+
+	d.head = (d.head - 1) & (d.cap - 1)
+	rawPut<T>(d.buf, d.head, v)
+	d.len++
+}
+
+// PopFront removes the front element and returns it, which the caller
+// owns from then on, or None when the deque is empty. It costs constant
+// time and never shrinks the buffer.
+func (d mut Deque<T>) PopFront() T? {
+	if d.len == 0 {
+		return None
+	}
+
+	v := rawTake<T>(d.buf, d.head)
+	d.head = (d.head + 1) & (d.cap - 1)
+	d.len--
+	return Some(v)
+}
+
+// PopBack removes the back element and returns it, which the caller
+// owns from then on, or None when the deque is empty. It costs constant
+// time and never shrinks the buffer.
+func (d mut Deque<T>) PopBack() T? {
+	if d.len == 0 {
+		return None
+	}
+
+	d.len--
+	return Some(rawTake<T>(d.buf, d.slotIndex(d.len)))
+}
+
+// Front lends the front element, the next PopFront gives, or None when
+// the deque is empty. The borrow keeps the deque lent for as long as
+// it lives.
+func (d ref Deque<T>) Front() ref T? {
+	return d.Get(0)
+}
+
+// Back lends the back element, the next PopBack gives, or None when
+// the deque is empty. The borrow keeps the deque lent for as long as
+// it lives.
+func (d ref Deque<T>) Back() ref T? {
+	return d.Get(d.len - 1)
+}
+
+// Get lends the element i from the front, 0 for the front and Len()-1
+// for the back, or None when i is negative or Len() or more. It costs
+// constant time; the borrow keeps the deque lent for as long as it
+// lives.
+//
+//	if v := d.Get(2) { ... }
+func (d ref Deque<T>) Get(i int) ref T? {
+	if i < 0 || i >= d.len {
+		return None
+	}
+
+	return Some(rawRef<T>(d.buf, d.slotIndex(i), d))
+}
+
+// GetMut lends the element i from the front for changing in place, or
+// None when i is negative or Len() or more. The borrow keeps the deque
+// lent mut for as long as it lives.
+//
+//	if v := d.GetMut(0) { *v = 7 }
+func (d mut Deque<T>) GetMut(i int) mut T? {
+	if i < 0 || i >= d.len {
+		return None
+	}
+
+	return Some(rawMut<T>(d.buf, d.slotIndex(i), d))
+}
+
+// Clear drops every element, from the back, and keeps the buffer for
+// the next push. It costs one drop for each element.
+func (d mut Deque<T>) Clear() {
+	for d.len > 0 {
+		_ = d.PopBack()
+	}
+
+	d.head = 0
+}
+
+// Drop drops the elements still in the deque and frees the buffer. The
+// compiler calls it when the deque goes out of scope; a program does
+// not call it.
+func (d mut Deque<T>) Drop() {
+	d.Clear()
+	if d.buf != 0 {
+		rawFree(d.buf)
+		d.buf = 0
+	}
+}
+
+// Iter returns a walk over the elements from front to back, lending
+// each for as long as the deque is lent; nothing is copied.
+//
+//	for v := range d.Iter() { ... }
+func (d ref Deque<T>) Iter() Iter<T> {
+	return Iter<T>{d: d, i: 0}
+}
+
+// String returns the elements from front to back as a new string,
+// written as a slice of them is printed, each by fmt.Sprint:
+// deque[a b c]. It is how fmt prints a Deque.
+func (d ref Deque<T>) String() string {
+	out := "deque["
+	sep := ""
+	for v := range d.Iter() {
+		out = out + sep + fmt.Sprint(v)
+		sep = " "
+	}
+
+	return out + "]"
+}
+
+// Next lends the next element of the walk, or None once the walk is
+// over.
+func (it mut Iter<T>) Next() ref T? {
+	if it.i >= it.d.len {
+		return None
+	}
+
+	it.i++
+	return it.d.Get(it.i - 1)
+}
+
+// slotIndex returns the slot of the buffer that holds the element i
+// from the front.
+func (d ref Deque<T>) slotIndex(i int) int {
 	return (d.head + i) & (d.cap - 1)
 }
 
@@ -97,8 +252,8 @@ func (d ref Deque<T>) slot(i int) int {
 // old buffer and from its start, laid out straight from the new start.
 func (d mut Deque<T>) grow() {
 	n := d.cap * 2
-	if n < least {
-		n = least
+	if n < minCapacity {
+		n = minCapacity
 	}
 
 	fresh := rawAlloc<T>(n)
@@ -118,145 +273,42 @@ func (d mut Deque<T>) grow() {
 	d.head = 0
 }
 
-// PushBack adds v at the back, which the deque owns from then on.
-func (d mut Deque<T>) PushBack(v T) {
-	if d.len == d.cap {
-		d.grow()
+// capacityFor returns the capacity of a buffer for n elements: the
+// least power of two that is at least n and at least minCapacity. Past
+// maxCapacity it is maxCapacity, which no allocation gives.
+func capacityFor(n int) int {
+	c := minCapacity
+	for c < n && c < maxCapacity {
+		c *= 2
 	}
 
-	rawPut<T>(d.buf, d.slot(d.len), v)
-	d.len++
+	return c
 }
 
-// PushFront adds v at the front, which the deque owns from then on.
-func (d mut Deque<T>) PushFront(v T) {
-	if d.len == d.cap {
-		d.grow()
-	}
-
-	d.head = (d.head - 1) & (d.cap - 1)
-	rawPut<T>(d.buf, d.head, v)
-	d.len++
-}
-
-// PopFront removes the front element and returns it, or None when the
-// deque is empty.
-func (d mut Deque<T>) PopFront() T? {
-	if d.len == 0 {
-		return None
-	}
-
-	v := rawTake<T>(d.buf, d.head)
-	d.head = (d.head + 1) & (d.cap - 1)
-	d.len--
-	return Some(v)
-}
-
-// PopBack removes the back element and returns it, or None when the
-// deque is empty.
-func (d mut Deque<T>) PopBack() T? {
-	if d.len == 0 {
-		return None
-	}
-
-	d.len--
-	return Some(rawTake<T>(d.buf, d.slot(d.len)))
-}
-
-// Front lends the front element, or None when the deque is empty. The
-// borrow lasts as long as the deque's.
-func (d ref Deque<T>) Front() ref T? {
-	return d.Get(0)
-}
-
-// Back lends the back element, or None when the deque is empty.
-func (d ref Deque<T>) Back() ref T? {
-	return d.Get(d.len - 1)
-}
-
-// Get lends the element i from the front, 0 for the front, or None when
-// there is no such element.
-func (d ref Deque<T>) Get(i int) ref T? {
-	if i < 0 || i >= d.len {
-		return None
-	}
-
-	return Some(rawRef<T>(d.buf, d.slot(i), d))
-}
-
-// GetMut lends the element i from the front for changing, or None when
-// there is no such element.
-func (d mut Deque<T>) GetMut(i int) mut T? {
-	if i < 0 || i >= d.len {
-		return None
-	}
-
-	return Some(rawMut<T>(d.buf, d.slot(i), d))
-}
-
-// Clear drops every element and keeps the buffer for the next push.
-func (d mut Deque<T>) Clear() {
-	for d.len > 0 {
-		_ = d.PopBack()
-	}
-
-	d.head = 0
-}
-
-// Drop drops the elements still in the deque and frees the buffer.
-func (d mut Deque<T>) Drop() {
-	d.Clear()
-	if d.buf != 0 {
-		rawFree(d.buf)
-		d.buf = 0
-	}
-}
-
-// Iter returns a walk over the elements from front to back, lending
-// each for as long as the deque is lent: for v := range d.Iter().
-func (d ref Deque<T>) Iter() Iter<T> {
-	return Iter<T>{d: d, i: 0}
-}
-
-// An Iter walks a deque from front to back.
-struct Iter<T> {
-	d ref Deque<T>
-	i int
-}
-
-// Next lends the next element, or None once the walk is over.
-func (it mut Iter<T>) Next() ref T? {
-	if it.i >= it.d.len {
-		return None
-	}
-
-	it.i++
-	return it.d.Get(it.i - 1)
-}
-
-// String returns the elements from front to back, written as a slice
-// of them is printed: deque[a b c]. It is how fmt prints a Deque.
-func (d ref Deque<T>) String() string {
-	out := "deque["
-	sep := ""
-	for v := range d.Iter() {
-		out = out + sep + fmt.Sprint(v)
-		sep = " "
-	}
-
-	return out + "]"
-}
-
-// The compiler writes these for this package alone, over the block of
-// slots: rawAlloc makes n slots, n above zero, and rawFree frees them;
-// rawPut moves v into a slot that holds nothing, and rawTake moves the
-// element out of a slot that holds one; rawRef and rawMut lend the
-// element in a slot, the borrow the deque's; rawMove moves n elements
-// from the run of slots at si to the run at di, which holds nothing.
+// rawAlloc makes a block of n slots of T, n above zero, and returns its
+// address. The compiler writes it for this package alone.
 func rawAlloc<T>(n int) int
+
+// rawFree frees the block of slots at p. The compiler writes it.
 func rawFree(p int)
+
+// rawPut moves v into the slot i of the block p, which holds nothing.
+// The compiler writes it.
 func rawPut<T>(p int, i int, v T)
+
+// rawTake moves the element out of the slot i of the block p, which
+// holds one. The compiler writes it.
 func rawTake<T>(p int, i int) T
+
+// rawRef lends the element in the slot i of the block p, the borrow
+// the deque's. The compiler writes it.
 func rawRef<T>(p int, i int, d ref Deque<T>) ref T
+
+// rawMut lends the element in the slot i of the block p for changing,
+// the borrow the deque's. The compiler writes it.
 func rawMut<T>(p int, i int, d mut Deque<T>) mut T
+
+// rawMove moves n elements from the run of slots at si of the block
+// src to the run at di of the block dst, which holds nothing. The
+// compiler writes it.
 func rawMove<T>(dst int, di int, src int, si int, n int)

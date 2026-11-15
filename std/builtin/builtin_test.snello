@@ -6,6 +6,9 @@ package builtin_test
 
 import ("expect"; "testing")
 
+// The slice methods change the slice in place: Push and Pop at the end,
+// Insert and Remove at an index, the searches, Swap, the sorts,
+// Reverse, Clone and Clear.
 func TestSlices() {
 	xs := []int{3, 1, 2}
 	xs.Push(4)
@@ -32,6 +35,8 @@ func TestSlices() {
 	expect.IsNone(xs.Pop())
 }
 
+// The map methods: Insert, Contains, Get and GetMut lending a value,
+// Remove taking one out, and Clone.
 func TestMaps() {
 	m := map[string]int{}
 	m.Insert("a".Clone(), 1)
@@ -47,6 +52,8 @@ func TestMaps() {
 	expect.True(n.Get("z").IsNone())
 }
 
+// Clone gives another handle on the same channel, of each direction,
+// and a value sent on one handle is received on another.
 func TestChannels() {
 	ch := make(chan int, 2)
 	c2 := ch.Clone()
@@ -60,6 +67,9 @@ func TestChannels() {
 	expect.Equal(ref (<-r2 ?? 0), ref 8)
 }
 
+// The string methods: the length, the trims, the case mappings, the
+// tests for a prefix, a suffix and a substring, the splits, and the
+// standard traits' methods.
 func TestStrings() {
 	s := "  Hello, World  "
 	expect.Equal(ref s.Len(), ref 16)
@@ -80,11 +90,12 @@ func TestStrings() {
 	expect.Equal(ref "abc".Clone(), "abc")
 }
 
+// The ASCII classes of a byte.
 func TestBytes() {
-	d := byte(55)
-	sp := byte(32)
-	a := byte(97)
-	u := byte(81)
+	d := byte('7')
+	sp := byte(' ')
+	a := byte('a')
+	u := byte('Q')
 	expect.True(d.IsDigit())
 	expect.False(a.IsDigit())
 	expect.True(sp.IsSpace())
@@ -94,6 +105,8 @@ func TestBytes() {
 	expect.False(u.IsLower())
 }
 
+// The option methods: the tests, Expect, Unwrap, UnwrapOr and Map, and
+// Expect's panic on None with its message.
 func TestOptions() {
 	var some int? = Some(3)
 	var none int? = None
@@ -107,6 +120,8 @@ func TestOptions() {
 	expect.PanicsWith(func() { var n int? = None; n.Expect("needed") }, "needed")
 }
 
+// The result methods: the tests, Expect, Unwrap, UnwrapOr, Map and
+// MapErr, and Unwrap's panic on an Err.
 func TestResults() {
 	var ok Result<int, string> = Ok(4)
 	var bad Result<int, string> = Err("bad".Clone())
@@ -123,9 +138,11 @@ func TestResults() {
 		Err(n) => expect.Equal(ref n, ref 3),
 		Ok(_) => expect.Fail("an Err mapped to Ok"),
 	}
+
 	expect.Panics(func() { var r Result<int, string> = Err("no".Clone()); r.Unwrap() })
 }
 
+// A Push and a Pop on a slice that keeps its memory between them.
 func BenchmarkPushPop() {
 	xs := []int{}
 	for testing.Loop() {

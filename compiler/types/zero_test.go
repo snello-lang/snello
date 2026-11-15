@@ -109,8 +109,8 @@ func TestZeroAcrossPackages(t *testing.T) {
 		{"func f() { var o os.OpenOptions; print(o.Read) }", []string{"cannot declare o without a value: os.OpenOptions declares defaults, which a zero value would skip; write o := os.OpenOptions{}"}},
 		{"func f() { o := os.OpenOptions{Write: true}; print(o.Read, o.Write) }", nil},
 		// A type declared over another package's struct opens none of its fields, and does not convert to it.
-		{"type MyC sync.Counter\nfunc f(m MyC) int { return m.h }", []string{"h of MyC is not exported"}},
-		{"type MyC sync.Counter\nfunc f() MyC { return MyC{h: 5} }", []string{"h of MyC is not exported"}},
+		{"type MyC sync.Counter\nfunc f(m MyC) int { return m.handle }", []string{"handle of MyC is not exported"}},
+		{"type MyC sync.Counter\nfunc f() MyC { return MyC{handle: 5} }", []string{"handle of MyC is not exported"}},
 		{"type MyC sync.Counter\nfunc f(m MyC) sync.Counter { return sync.Counter(m) }", []string{"cannot convert MyC to sync.Counter: sync.Counter has no zero value"}},
 	}
 	for _, tt := range tests {

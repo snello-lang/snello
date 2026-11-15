@@ -6,30 +6,9 @@ package io_test
 
 import ("expect"; "fmt"; "io"; "os"; "strings"; "testing")
 
-func TestError() {
-	e := io.NewError("open".Clone(), "/x".Clone(), "boom".Clone(), io.NotExist)
-	expect.Equal(ref e.Error(), "open /x: boom")
-	expect.True(e.Kind() == io.NotExist)
-	expect.Equal(ref e.Written(), ref 0)
-	e2 := e.Clone().WithWritten(3)
-	expect.Equal(ref e2.Written(), ref 3)
-	expect.Equal(ref io.ShortWrite().Error(), "write: short write")
-	missing := io.Errno("open".Clone(), "/nope", 2)
-	expect.True(missing.Kind() == io.NotExist)
-	expect.Contains(ref missing.Error(), "/nope")
-}
-
-func TestCopy() {
-	dir := testing.TempDir()
-	src := expect.IsOk(os.Create(ref dir.Join("src")))
-	expect.IsOk(src.WriteString("copied text"))
-	expect.IsOk(src.Close())
-	in := expect.IsOk(os.Open(ref dir.Join("src")))
-	out := expect.IsOk(os.Create(ref dir.Join("dst")))
-	expect.Equal(ref expect.IsOk(io.Copy(mut out, mut in)), ref i64(11))
-	expect.IsOk(out.Close())
-	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("dst"))), "copied text")
-}
+// enoent is the error number of a missing file, the same on every
+// system Snello runs on.
+const enoent = 2
 
 // A Drip hands out at most step bytes a call, and fails with its error
 // once it has handed out fail bytes, when fail is not below zero.
@@ -40,6 +19,8 @@ struct Drip impl io.Reader {
 	fail int
 }
 
+// Read hands out the next bytes of d, at most step of them, or fails
+// once fail bytes are out.
 func (d mut Drip) Read(buf mut []byte) Result<int, io.Error> {
 	if d.fail >= 0 && d.at >= d.fail {
 		return Err(io.NewError("read".Clone(), "drip".Clone(), "broken".Clone(), io.Other))
@@ -54,15 +35,29 @@ func (d mut Drip) Read(buf mut []byte) Result<int, io.Error> {
 	return Ok(n)
 }
 
-// counting returns n bytes, each its index modulo 251, so that a byte
-// out of place shows.
-func counting(n int) []byte {
-	b := make([]byte, n)
-	for i := 0; i < n; i++ {
-		b[i] = byte(i % 251)
-	}
+func TestError() {
+	e := io.NewError("open".Clone(), "/x".Clone(), "boom".Clone(), io.NotExist)
+	expect.Equal(ref e.Error(), "open /x: boom")
+	expect.True(e.Kind() == io.NotExist)
+	expect.Equal(ref e.Written(), ref 0)
+	e2 := e.Clone().WithWritten(3)
+	expect.Equal(ref e2.Written(), ref 3)
+	expect.Equal(ref io.ShortWrite().Error(), "write: short write")
+	missing := io.Errno("open".Clone(), "/nope", enoent)
+	expect.True(missing.Kind() == io.NotExist)
+	expect.Contains(ref missing.Error(), "/nope")
+}
 
-	return b
+func TestCopy() {
+	dir := testing.TempDir()
+	src := expect.IsOk(os.Create(ref dir.Join("src")))
+	expect.IsOk(src.WriteString("copied text"))
+	expect.IsOk(src.Close())
+	in := expect.IsOk(os.Open(ref dir.Join("src")))
+	out := expect.IsOk(os.Create(ref dir.Join("dst")))
+	expect.Equal(ref expect.IsOk(io.Copy(mut out, mut in)), ref i64(11))
+	expect.IsOk(out.Close())
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("dst"))), "copied text")
 }
 
 func TestReadAll() {
@@ -121,4 +116,15 @@ func BenchmarkReadAll() {
 
 func BenchmarkNewError() {
 	for testing.Loop() { _ = io.NewError("op".Clone(), "p".Clone(), "m".Clone(), io.Other) }
+}
+
+// counting returns n bytes, each its index modulo 251, so that a byte
+// out of place shows.
+func counting(n int) []byte {
+	b := make([]byte, n)
+	for i := 0; i < n; i++ {
+		b[i] = byte(i % 251)
+	}
+
+	return b
 }

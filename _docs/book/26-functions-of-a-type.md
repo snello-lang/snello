@@ -3,7 +3,10 @@
 Some functions belong to a type but have no value of it to work on: a constructor that makes one, `Point.Of(1, 2)`, a parser that turns text into one, `Duration.Parse("5s")`, a decoder that turns JSON into one. A method cannot be one of them, since a method is called on a value that already exists, and making that value is the whole job. Snello lets a type have such functions, written with **the type's name, a dot and the function's name**, as they are called:
 
 ```go
-struct Point { x int; y int }
+struct Point {
+	x int
+	y int
+}
 
 func Point.Of(x int, y int) Point { return Point{x: x, y: y} }
 

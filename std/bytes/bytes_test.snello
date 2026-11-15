@@ -6,6 +6,8 @@ package bytes_test
 
 import ("bytes"; "expect"; "fmt"; "io"; "strings"; "testing")
 
+// Every kind of write appends to a Buffer, fmt.Fprintf among them, and
+// a Buffer prints as what it holds.
 func TestWrite() {
 	var b bytes.Buffer // the zero value is ready
 	expect.Equal(ref b.Len(), ref 0)
@@ -21,6 +23,8 @@ func TestWrite() {
 	expect.Equal(ref fmt.Sprint(b), "hello worł�|42") // a Stringer
 }
 
+// Every kind of read takes from the front, and each gives its own end
+// once every byte was read.
 func TestRead() {
 	b := bytes.NewBufferString("abc\ndef")
 	buf := make([]byte, 2)
@@ -37,6 +41,8 @@ func TestRead() {
 	expect.Equal(ref b.Len(), ref 0)
 }
 
+// Next lends the bytes it reads, fewer when fewer are left and none for
+// a count of zero or less.
 func TestNext() {
 	b := bytes.NewBuffer([]byte("0123456789"))
 	expect.True(b.Next(3).Equal(ref []byte("012")))
@@ -47,6 +53,8 @@ func TestNext() {
 	expect.Equal(ref b.Len(), ref 0)
 }
 
+// ReadRune reads each rune with its width, a stray byte as U+FFFD, and
+// UnreadRune puts one back once.
 func TestRunes() {
 	b := bytes.NewBufferString("aé世\xff")
 	widths := []int{1, 2, 3, 1}
@@ -64,6 +72,8 @@ func TestRunes() {
 	}
 }
 
+// UnreadByte puts back the last byte read by any read, once, and
+// nothing after a write.
 func TestUnreadByte() {
 	b := bytes.NewBufferString("xyz")
 	expect.False(b.UnreadByte()) // nothing read yet
@@ -81,6 +91,8 @@ func TestUnreadByte() {
 	expect.False(b.UnreadRune()) // an UnreadByte is no ReadRune
 }
 
+// Truncate keeps the first bytes not read yet, all of them past Len and
+// none below zero, and Reset empties the Buffer.
 func TestTruncateAndReset() {
 	b := bytes.NewBufferString("abcdef")
 	expect.IsSome(b.ReadByte())
@@ -95,6 +107,7 @@ func TestTruncateAndReset() {
 	expect.Equal(ref b.String(), "")
 }
 
+// Grow leaves what the Buffer holds as it was, whatever the count.
 func TestGrow() {
 	var b bytes.Buffer
 	b.Grow(100)
@@ -144,6 +157,8 @@ func TestQueue() {
 	expect.Equal(ref q.Len(), ref 100000)
 }
 
+// A Buffer is an io.Reader and an io.Writer: io.Copy and io.ReadAll
+// move bytes through it.
 func TestReaderAndWriter() {
 	src := bytes.NewBufferString("through io")
 	var dst bytes.Buffer
@@ -157,6 +172,7 @@ func TestReaderAndWriter() {
 	expect.Equal(ref into.String(), "from a reader")
 }
 
+// How long a Write of a short line takes.
 func BenchmarkWrite() {
 	var b bytes.Buffer
 	p := []byte("a line of bytes\n")

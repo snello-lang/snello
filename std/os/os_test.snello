@@ -6,6 +6,19 @@ package os_test
 
 import ("expect"; "fmt"; "io"; "os"; "testing"; "time")
 
+// The variables TestEnvMany sets in each of its rounds, and the rounds.
+const manyVars = 500
+const envRounds = 6
+
+// The tasks TestEnvTasks reads the environment from, and the reads
+// each makes while the test sets the variable as many times.
+const readerTasks = 4
+const envChanges = 20000
+
+// manyNames is how many files TestReadDirMany makes: more than one
+// read of a directory gives.
+const manyNames = 700
+
 func TestArgsCoresStreams() {
 	expect.True(len(os.Args) > 0)
 	expect.True(os.Cores() > 0)
@@ -107,30 +120,30 @@ func TestSetenvRefused() {
 	expect.IsNone(os.LookupEnv("K"))
 }
 
-// Many variables set, read and unset, round after round under new
-// names: the index is built again as the places of unset ones fill it,
-// and the environment ends as it began.
+// TestEnvMany sets, reads and unsets many variables, round after round
+// under new names: the index is built again as the places of unset
+// ones fill it, and the environment ends as it began.
 func TestEnvMany() {
 	before := len(os.Environ())
-	for round := 0; round < 6; round++ {
-		for i := 0; i < 500; i++ {
+	for round := 0; round < envRounds; round++ {
+		for i := 0; i < manyVars; i++ {
 			expect.IsOk(os.Setenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i), ref fmt.Sprint(i * 7)))
 		}
 
-		expect.Equal(ref len(os.Environ()), ref before + 500)
-		for i := 0; i < 500; i++ {
+		expect.Equal(ref len(os.Environ()), ref before + manyVars)
+		for i := 0; i < manyVars; i++ {
 			expect.Equal(ref os.Getenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i)), ref fmt.Sprint(i * 7))
 		}
 
-		for i := 0; i < 500; i += 2 {
+		for i := 0; i < manyVars; i += 2 {
 			os.Unsetenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i))
 		}
 
-		for i := 0; i < 500; i++ {
+		for i := 0; i < manyVars; i++ {
 			expect.Equal(ref os.LookupEnv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i)).IsSome(), ref i % 2 == 1)
 		}
 
-		for i := 1; i < 500; i += 2 {
+		for i := 1; i < manyVars; i += 2 {
 			os.Unsetenv(ref fmt.Sprintf("SNELLO_MANY_%d_%d", round, i))
 		}
 
@@ -139,15 +152,15 @@ func TestEnvMany() {
 	}
 }
 
-// Tasks reading the environment while another sets it: each read is a
-// value that was set, whole.
+// TestEnvTasks reads the environment from tasks while another sets
+// it: each read is a value that was set, whole.
 func TestEnvTasks() {
 	expect.IsOk(os.Setenv("SNELLO_SHARED", "0000000000"))
-	done := make(chan bool, 4)
-	for t := 0; t < 4; t++ {
+	done := make(chan bool, readerTasks)
+	for t := 0; t < readerTasks; t++ {
 		spawn func(out chan<- bool) {
 			ok := true
-			for i := 0; i < 20000; i++ {
+			for i := 0; i < envChanges; i++ {
 				v := os.Getenv("SNELLO_SHARED")
 				ok = ok && v.Len() == 10 && v[0] == v[9]
 			}
@@ -156,12 +169,12 @@ func TestEnvTasks() {
 		}(done.Clone())
 	}
 
-	for i := 0; i < 20000; i++ {
+	for i := 0; i < envChanges; i++ {
 		d := fmt.Sprint(i % 10)
 		expect.IsOk(os.Setenv("SNELLO_SHARED", ref (d + "00000000" + d)))
 	}
 
-	for t := 0; t < 4; t++ {
+	for t := 0; t < readerTasks; t++ {
 		expect.True(<-done ?? false)
 	}
 
@@ -223,8 +236,8 @@ func TestStat() {
 	expect.IsErr(os.Stat("a\x00b")) // a zero byte is no path
 }
 
-// Lstat is of a symbolic link itself, where Stat is of what it leads
-// to: every system has one among these.
+// TestLstat checks that Lstat is of a symbolic link itself, where Stat
+// is of what it leads to: every system has one among these.
 func TestLstat() {
 	found := false
 	for _, link := range ref []string{"/tmp".Clone(), "/dev/stdin".Clone(), "/dev/fd".Clone(), "/var/run".Clone(), "/etc/mtab".Clone()} {
@@ -270,16 +283,16 @@ func TestReadDir() {
 	expect.Equal(ref expect.IsErr(os.ReadDir(ref dir.Join("a.txt"))).Error(), ref ("open " + dir.Join("a.txt") + ": not a directory"))
 }
 
-// More names than one read of the directory gives, each once and in
-// order.
+// TestReadDirMany reads more names than one read of the directory
+// gives, each once and in order.
 func TestReadDirMany() {
 	dir := testing.TempDir()
-	for i := 0; i < 700; i++ {
+	for i := 0; i < manyNames; i++ {
 		expect.IsOk(os.WriteString(ref dir.Join(ref fmt.Sprintf("file-%04d-with-a-name-long-enough-to-fill-a-block", i)), ""))
 	}
 
 	entries := expect.IsOk(os.ReadDir(dir.Path()))
-	expect.Equal(ref len(entries), ref 700)
+	expect.Equal(ref len(entries), ref manyNames)
 	for i, e := range ref entries {
 		expect.Equal(e.Name(), ref fmt.Sprintf("file-%04d-with-a-name-long-enough-to-fill-a-block", i))
 	}
@@ -336,7 +349,7 @@ func TestRename() {
 	expect.IsOk(os.Rename(ref to, ref (sub + "/in.txt"))) // into another directory
 	expect.IsOk(os.Rename(ref sub, ref dir.Join("renamed")))
 	expect.Equal(ref expect.IsOk(os.ReadToString(ref dir.Join("renamed/in.txt"))), "moved")
-	itself := expect.IsErr(os.Rename(ref dir.Join("renamed"), ref dir.Join("renamed"))) // a directory onto itself, as Go refuses it
+	itself := expect.IsErr(os.Rename(ref dir.Join("renamed"), ref dir.Join("renamed"))) // a directory onto itself is refused
 	expect.True(itself.Kind() == io.Exists)
 }
 
@@ -360,6 +373,7 @@ func TestGetwdAndChdir() {
 		Some(p) => expect.IsOk(os.Setenv("PWD", ref p)),
 		None => os.Unsetenv("PWD"),
 	}
+
 	expect.Equal(ref expect.IsOk(os.Getwd()), ref was)
 }
 
@@ -399,9 +413,9 @@ func TestOpenFile() {
 	expect.Equal(ref expect.IsErr(os.OpenFile(ref path, os.O_WRONLY|os.O_RDWR, 0)).Error(), ref ("open " + path + ": invalid argument"))
 }
 
-// OpenOptions: the defaults read alone and make files 0666 before the
-// umask, each field adds its flag, and the options that cannot go
-// together are an invalid argument.
+// TestOpenOptions checks that the defaults read alone and make files
+// 0666 before the umask, that each field adds its flag, and that the
+// options that cannot go together are an invalid argument.
 func TestOpenOptions() {
 	dir := testing.TempDir()
 	path := dir.Join("opts.txt")

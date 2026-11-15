@@ -6,8 +6,11 @@ package rc_test
 
 import ("expect"; "fmt"; "rc"; "testing")
 
+// A Node is a value the tests share between handles.
 struct Node { name string }
 
+// TestCounts counts the strong and weak handles as they are cloned,
+// downgraded and upgraded.
 func TestCounts() {
 	r := rc.New(Node{name: "root".Clone()})
 	expect.Equal(ref r.StrongCount(), ref 1)
@@ -21,17 +24,22 @@ func TestCounts() {
 	expect.Equal(ref u.StrongCount(), ref 3)
 }
 
+// TestGetMut changes the value through the one handle, and is refused
+// once another handle shares it.
 func TestGetMut() {
 	r := rc.New(1)
 	if v := r.GetMut() {
 		*v = 2
 	}
+
 	expect.Equal(ref *r.Get(), ref 2)
 	s := r.Clone()
 	expect.True(r.GetMut().IsNone())
 	expect.Equal(ref *s.Get(), ref 2)
 }
 
+// TestWeakOutlives upgrades a Weak whose value is gone to None, and
+// prints a Weak and an Rc.
 func TestWeakOutlives() {
 	w := rc.New("gone".Clone()).Downgrade()
 	expect.IsNone(w.Upgrade())
@@ -41,21 +49,26 @@ func TestWeakOutlives() {
 	expect.Contains(ref fmt.Sprint(rc.New(3)), "3")
 }
 
+// BenchmarkClone measures a Clone and the Drop of the handle it made.
 func BenchmarkClone() {
 	r := rc.New(1)
 	for testing.Loop() { _ = r.Clone() }
 }
 
+// TestTryUnwrapAlone takes the value out of the only handle.
 func TestTryUnwrapAlone() {
 	r := rc.New([]string{"kept".Clone()})
 	xs := match r.TryUnwrap() { // no other handle, no Weak: the cell is freed and the value comes out
 		Ok(v) => v,
 		Err(_) => []string{},
 	}
+
 	expect.Equal(ref len(xs), ref 1)
 	expect.Equal(ref xs[0], "kept")
 }
 
+// TestTryUnwrap gives a shared handle back, and takes the value out
+// once the handle is alone, which a Weak then finds gone.
 func TestTryUnwrap() {
 	a := rc.New("only".Clone())
 	{
@@ -64,6 +77,7 @@ func TestTryUnwrap() {
 			Ok(v) => { expect.Fail("unwrapped a shared value"); rc.New(v) },
 			Err(r) => r,
 		}
+
 		expect.Equal(ref a.StrongCount(), ref 2)
 		expect.Equal(ref b.StrongCount(), ref 2)
 	}
@@ -73,6 +87,7 @@ func TestTryUnwrap() {
 		Ok(v) => v,
 		Err(r) => { expect.Fail("kept the only handle"); r.Get().Clone() },
 	}
+
 	expect.Equal(ref v, "only")
 	expect.IsNone(w.Upgrade()) // the value is gone from the cell
 }

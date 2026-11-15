@@ -10,63 +10,165 @@
 // Every function is one instruction of the processor's, or a few,
 // which the compiler writes in place of the call: none is a call when
 // the program runs. Each is defined for every argument, zero included,
-// and none panics.
+// and none panics. Each takes its argument by value, since the
+// integers are Copy, allocates nothing and runs in constant time.
+//
+//	n := bits.OnesCount8(0b1011_0000) // 3
 package bits
 
 // LeadingZeros returns the number of zero bits above the highest one
-// bit of x, and the width of the type for zero. LeadingZeros8,
-// LeadingZeros16, LeadingZeros32 and LeadingZeros64 are the same for
-// a u8, a u16, a u32 and a u64.
+// bit of x, a uint of 64 bits: 0 when the top bit is set, and 64 for a
+// zero x, which has no one bit at all. Width minus LeadingZeros is
+// Len.
+//
+//	bits.LeadingZeros(1) // 63
 func LeadingZeros(x uint) int
+
+// LeadingZeros8 returns the number of zero bits above the highest one
+// bit of the u8 x, and 8 for a zero x.
+//
+//	bits.LeadingZeros8(1) // 7
 func LeadingZeros8(x u8) int
+
+// LeadingZeros16 returns the number of zero bits above the highest one
+// bit of the u16 x, and 16 for a zero x.
 func LeadingZeros16(x u16) int
+
+// LeadingZeros32 returns the number of zero bits above the highest one
+// bit of the u32 x, and 32 for a zero x.
 func LeadingZeros32(x u32) int
+
+// LeadingZeros64 returns the number of zero bits above the highest one
+// bit of the u64 x, and 64 for a zero x.
 func LeadingZeros64(x u64) int
 
 // TrailingZeros returns the number of zero bits below the lowest one
-// bit of x, and the width of the type for zero. TrailingZeros8,
-// TrailingZeros16, TrailingZeros32 and TrailingZeros64 are the same
-// for a u8, a u16, a u32 and a u64.
+// bit of x, a uint of 64 bits: 0 for an odd x, and 64 for a zero x,
+// which has no one bit at all. For a nonzero x it is the exponent of
+// the largest power of two that divides x.
+//
+//	bits.TrailingZeros(8) // 3
 func TrailingZeros(x uint) int
+
+// TrailingZeros8 returns the number of zero bits below the lowest one
+// bit of the u8 x, and 8 for a zero x.
+//
+//	bits.TrailingZeros8(128) // 7
 func TrailingZeros8(x u8) int
+
+// TrailingZeros16 returns the number of zero bits below the lowest one
+// bit of the u16 x, and 16 for a zero x.
 func TrailingZeros16(x u16) int
+
+// TrailingZeros32 returns the number of zero bits below the lowest one
+// bit of the u32 x, and 32 for a zero x.
 func TrailingZeros32(x u32) int
+
+// TrailingZeros64 returns the number of zero bits below the lowest one
+// bit of the u64 x, and 64 for a zero x.
 func TrailingZeros64(x u64) int
 
-// OnesCount returns the number of one bits in x. OnesCount8,
-// OnesCount16, OnesCount32 and OnesCount64 are the same for a u8, a
-// u16, a u32 and a u64.
+// OnesCount returns the number of one bits in x, a uint of 64 bits,
+// from 0 for zero to 64 for a uint with every bit set: the population
+// count, which the processor counts in one instruction where it has
+// one.
+//
+//	bits.OnesCount(0b1011) // 3
 func OnesCount(x uint) int
+
+// OnesCount8 returns the number of one bits in the u8 x, from 0 to 8.
+//
+//	bits.OnesCount8(255) // 8
 func OnesCount8(x u8) int
+
+// OnesCount16 returns the number of one bits in the u16 x, from 0 to
+// 16.
 func OnesCount16(x u16) int
+
+// OnesCount32 returns the number of one bits in the u32 x, from 0 to
+// 32.
 func OnesCount32(x u32) int
+
+// OnesCount64 returns the number of one bits in the u64 x, from 0 to
+// 64.
 func OnesCount64(x u64) int
 
-// RotateLeft returns x rotated left by k bits, the bits leaving at
-// the top coming back at the bottom; a negative k rotates right by
-// -k, and a k of the width or more turns as k modulo the width does.
-// RotateLeft8, RotateLeft16, RotateLeft32 and RotateLeft64 are the
-// same for a u8, a u16, a u32 and a u64.
+// RotateLeft returns x, a uint of 64 bits, rotated left by k bits: the
+// bits leaving at the top come back at the bottom, so none is lost. A
+// negative k rotates right by -k, and a k of 64 or more, or of -64 or
+// less, turns as k modulo 64 does, so every k is a rotation.
+//
+//	bits.RotateLeft(1, 63)  // 1 << 63
+//	bits.RotateLeft(1, -1)  // 1 << 63 as well
 func RotateLeft(x uint, k int) uint
+
+// RotateLeft8 returns the u8 x rotated left by k bits, the bits
+// leaving at the top coming back at the bottom; a negative k rotates
+// right by -k, and k turns modulo 8.
+//
+//	bits.RotateLeft8(0x81, 1) // 0x03
 func RotateLeft8(x u8, k int) u8
+
+// RotateLeft16 returns the u16 x rotated left by k bits, the bits
+// leaving at the top coming back at the bottom; a negative k rotates
+// right by -k, and k turns modulo 16.
 func RotateLeft16(x u16, k int) u16
+
+// RotateLeft32 returns the u32 x rotated left by k bits, the bits
+// leaving at the top coming back at the bottom; a negative k rotates
+// right by -k, and k turns modulo 32.
 func RotateLeft32(x u32, k int) u32
+
+// RotateLeft64 returns the u64 x rotated left by k bits, the bits
+// leaving at the top coming back at the bottom; a negative k rotates
+// right by -k, and k turns modulo 64.
 func RotateLeft64(x u64, k int) u64
 
-// Reverse returns x with its bits in the opposite order. Reverse8,
-// Reverse16, Reverse32 and Reverse64 are the same for a u8, a u16, a
-// u32 and a u64.
+// Reverse returns x, a uint of 64 bits, with its bits in the opposite
+// order: bit 0 becomes bit 63, bit 1 bit 62, and so on. Reversing
+// twice gives x back.
+//
+//	bits.Reverse(1) // 1 << 63
 func Reverse(x uint) uint
+
+// Reverse8 returns the u8 x with its bits in the opposite order, bit 0
+// becoming bit 7.
+//
+//	bits.Reverse8(0x0f) // 0xf0
 func Reverse8(x u8) u8
+
+// Reverse16 returns the u16 x with its bits in the opposite order, bit
+// 0 becoming bit 15.
 func Reverse16(x u16) u16
+
+// Reverse32 returns the u32 x with its bits in the opposite order, bit
+// 0 becoming bit 31.
 func Reverse32(x u32) u32
+
+// Reverse64 returns the u64 x with its bits in the opposite order, bit
+// 0 becoming bit 63.
 func Reverse64(x u64) u64
 
-// Len returns the number of bits needed to write x, which is zero for
-// zero. Len8, Len16, Len32 and Len64 are the same for a u8, a u16, a
-// u32 and a u64.
+// Len returns the number of bits needed to write x, a uint of 64 bits:
+// one more than the position of its highest one bit, and 0 for zero,
+// which needs none. It is 64 minus LeadingZeros(x).
+//
+//	bits.Len(255) // 8
+//	bits.Len(256) // 9
 func Len(x uint) int
+
+// Len8 returns the number of bits needed to write the u8 x, from 0 for
+// zero to 8.
 func Len8(x u8) int
+
+// Len16 returns the number of bits needed to write the u16 x, from 0
+// for zero to 16.
 func Len16(x u16) int
+
+// Len32 returns the number of bits needed to write the u32 x, from 0
+// for zero to 32.
 func Len32(x u32) int
+
+// Len64 returns the number of bits needed to write the u64 x, from 0
+// for zero to 64.
 func Len64(x u64) int

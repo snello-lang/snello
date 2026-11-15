@@ -6,6 +6,8 @@ package deque_test
 
 import ("deque"; "expect"; "fmt"; "testing")
 
+// A deque pushed at the back and popped at the front is a queue, and an
+// empty one gives None at both ends.
 func TestQueue() {
 	d := deque.New<int>()
 	expect.True(d.IsEmpty())
@@ -29,6 +31,8 @@ func TestQueue() {
 	expect.True(d.IsEmpty())
 }
 
+// Pushes and pops at both ends, and Get and GetMut by index, the head
+// wrapping round the buffer.
 func TestBothEnds() {
 	d := deque.New<string>()
 	d.PushFront("b".Clone()) // on an empty deque: the head wraps to the buffer's last slot
@@ -110,6 +114,8 @@ func TestGrowKeepsOrder() {
 	}
 }
 
+// A capacity is rounded up to a power of two, at least four, and one no
+// memory can hold is out of memory.
 func TestCapacity() {
 	expect.Equal(ref deque.WithCapacity<int>(0).Cap(), ref 0)
 	expect.Equal(ref deque.WithCapacity<int>(-3).Cap(), ref 0)

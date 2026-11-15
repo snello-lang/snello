@@ -12,8 +12,8 @@ package norm
 
 // A Form is one of the four normalization forms.
 enum Form impl Copy, Eq {
-	// NFC: canonical decomposition, then canonical composition; the form
-	// most text is written in, and the one to compare by.
+	// NFC: canonical decomposition, then canonical composition; the
+	// form most text is written in, and the one to compare by.
 	NFC
 
 	// NFD: canonical decomposition, every mark after its letter in
@@ -27,22 +27,28 @@ enum Form impl Copy, Eq {
 	NFKD
 }
 
-// String returns s in the form f, a new string. A byte that is not
-// UTF-8 becomes U+FFFD, as a range over s reads it, so a string with
-// one is in no form.
+// String returns s in the form f, as a new string the caller owns; s is
+// only read. A byte that is not UTF-8 becomes U+FFFD, as a range over s
+// reads it, so a string with one is in no form. Two strings that are
+// the same text written two ways are equal once both are in the same
+// form.
+//
+//	norm.String(norm.NFC, "é") == "é" // true
+//	norm.String(norm.NFKC, "ﬁ²")                 // "fi2"
 func String(f Form, s ref string) string {
-	return normalize(s, code(f))
+	return normalize(s, formCode(f))
 }
 
-// IsNormalString reports whether s is in the form f already: by the
-// standard's quick check, which reads the string once and allocates
-// nothing, and by normalizing it only when the quick check cannot tell.
+// IsNormalString reports whether s is in the form f already, so that
+// String would return it unchanged. s is only read: by the standard's
+// quick check, which reads the string once and allocates nothing, and
+// by normalizing it only when the quick check cannot tell.
 func IsNormalString(f Form, s ref string) bool {
-	return isNormal(s, code(f))
+	return isNormal(s, formCode(f))
 }
 
-// code numbers the forms as the runtime does.
-func code(f Form) int {
+// formCode returns the number the runtime knows the form f by.
+func formCode(f Form) int {
 	return match f {
 		NFC => 0,
 		NFD => 1,
@@ -51,5 +57,10 @@ func code(f Form) int {
 	}
 }
 
+// normalize returns s in the form numbered form. The runtime provides
+// it.
 func normalize(s ref string, form int) string
+
+// isNormal reports whether s is in the form numbered form already. The
+// runtime provides it.
 func isNormal(s ref string, form int) bool

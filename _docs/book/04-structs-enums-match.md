@@ -14,7 +14,10 @@ struct Node {
     live     bool                  // false after Remove; the slot is kept
 }
 
-struct Count { word string; n int }
+struct Count {
+	word string
+	n    int
+}
 ```
 
 A struct declaration is `struct Name { fields }`, one field per line or separated by `;`, each a name and a type. The traits a struct implements are listed on the same line, `struct TempDir impl Drop { path string }` (chapter 11). `type Name T` gives a new name to an existing type, as in `type NodeID int`.

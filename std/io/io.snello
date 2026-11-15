@@ -16,22 +16,55 @@
 // value is printed.
 package io
 
-// An Error is what a file operation reports when it fails: the
-// operation, the path or stream it was on, and the system's reason.
-// A program that must tell one failure from another asks Kind; one
-// that only reports it prints the Error, or calls Error for the text.
+// copyBufferSize is the size of the buffer Copy moves bytes through,
+// 32 KiB: large enough that a copy of a file takes few system calls,
+// small enough that a copy per task costs little memory.
+const copyBufferSize = 32768
+
+// The blocks ReadAll reads into: the first is firstBlockSize bytes,
+// and each one after it is half the size of all the blocks before it
+// together, so that the room grows by half each time. A block is
+// taken as full once less than one part in nearlyFullFraction of it is
+// left, so that a reader that hands out a few bytes a call does not
+// end a block on a sliver.
+const firstBlockSize = 512
+const nearlyFullFraction = 16
+
+// The numbers the runtime's kindOf sorts an error number into, one for
+// each Kind it names; any other number is Other.
+const kindCodeNotExist = 1
+const kindCodePermission = 2
+const kindCodeExists = 3
+const kindCodeRefused = 4
+const kindCodeReset = 5
+const kindCodeTimedOut = 6
+
+// An Error is what an operation on a file, a connection or another
+// source or sink of bytes reports when it fails: the operation, the
+// path or stream it was on, and the reason. A program that must tell
+// one failure from another asks Kind; one that only reports it prints
+// the Error, or calls Error for the text:
+//
+//	f := match os.Open(path) {
+//		Ok(f) => f,
+//		Err(e) if e.Kind() == io.NotExist => return Ok(()),
+//		Err(e) => return Err(e),
+//	}
+//
+// An Error is a value of its own, owning its strings: it outlives the
+// operation and the path it was made from, and Clone copies it.
 struct Error impl Error, Clone {
 	// Op names the operation that failed, as the system call is
 	// named: open, read, write, close, sync, remove, mkdirtemp.
-	Op string
+	Op      string
 
 	// Path is the path the operation was given, or the name of the
 	// stream it was on, /dev/stdout for the standard output.
-	Path string
+	Path    string
 
-	// Msg is the system's reason, in lower case: "no such file or
-	// directory", "permission denied".
-	Msg string
+	// Msg is the reason, in lower case: "no such file or directory",
+	// "permission denied".
+	Msg     string
 
 	kind    Kind
 	hasPath bool // the operation was on a path, empty or not, which the message shows
@@ -39,8 +72,12 @@ struct Error impl Error, Clone {
 }
 
 // A Kind sorts the failures a program may want to tell apart from the
-// rest, since the reasons the system gives are many. A failure the
-// Kind does not name is Other.
+// rest, since the reasons the system gives are many: a missing file, a
+// refused permission, a dial nobody answers. A failure the Kind does
+// not name is Other. A Kind is copied as a number is, and compared
+// with ==:
+//
+//	if e.Kind() == io.TimedOut { retry() }
 enum Kind impl Copy, Clone, Eq {
 	// Other is any failure the other kinds do not name.
 	Other
@@ -62,7 +99,7 @@ enum Kind impl Copy, Clone, Eq {
 	Reset
 
 	// TimedOut: the other side did not answer in the time the system
-	// waits.
+	// waits, or a deadline passed.
 	TimedOut
 
 	// UnexpectedEOF: the input ended partway through what had to be
@@ -70,26 +107,47 @@ enum Kind impl Copy, Clone, Eq {
 	UnexpectedEOF
 }
 
-// A Reader is a source of bytes. Read fills the buffer it is given
-// from the front, with as many bytes as it has at hand, and returns
-// how many it wrote; zero means the end of the data. A Read into an
-// empty buffer returns zero too, having nowhere to put a byte, so a
-// caller reads into a buffer of at least one. A failure is an Error.
+// A Reader is a source of bytes: a file, a connection, a string read
+// through strings.Reader, or a type of a program's own.
+//
+// Read fills the buffer it is lent from the front, with as many bytes
+// as it has at hand, at most len(buf), and returns how many it wrote;
+// the bytes past that count are left as they were. Zero means the end
+// of the data. A Read into an empty buffer returns zero too, having
+// nowhere to put a byte, so a caller reads into a buffer of at least
+// one. A failure is an Error, and Read may block until a byte comes
+// or the source ends:
+//
+//	buf := make([]byte, 4096)
+//	n := f.Read(mut buf)?
 trait Reader {
 	func (r mut Self) Read(buf mut []byte) Result<int, Error>
 }
 
-// A Writer is a sink of bytes. Write takes every byte of the buffer it
-// is given and returns how many it wrote, which is the buffer's
-// length; a Writer that cannot take them all fails instead.
+// A Writer is a sink of bytes: a file, a connection, a bufio.Writer
+// or a type of a program's own.
+//
+// Write takes every byte of the buffer it is lent, keeping none of the
+// buffer itself, and returns how many it wrote, which is the buffer's
+// length; a Writer that cannot take them all fails instead, with an
+// Error whose Written says how many it took. Write may block until
+// the sink has taken the bytes:
+//
+//	n := conn.Write(ref []byte("hello\n"))?
 trait Writer {
 	func (w mut Self) Write(buf ref []byte) Result<int, Error>
 }
 
 // A Seeker is a source or sink of bytes with a position in it, which
-// Seek moves: a file is one. Seek returns the new position, counted in
-// bytes from the start. Moving before the start fails, and moving past
-// the end is allowed, as the system allows it of a file.
+// Seek moves: a file is one, a pipe and a connection are not.
+//
+// Seek moves the position to where pos says and returns the new
+// position, counted in bytes from the start. Moving before the start
+// fails, and moving past the end is allowed, as the system allows it
+// of a file; a write there leaves a gap of zero bytes:
+//
+//	size := f.Seek(io.End(0))?
+//	f.Seek(io.Start(0))?
 trait Seeker {
 	func (s mut Self) Seek(pos SeekFrom) Result<u64, Error>
 }
@@ -97,7 +155,8 @@ trait Seeker {
 // A SeekFrom says where Seek moves to: a position from the start, or an
 // offset from the current position or from the end, which may be
 // negative. A position from the start cannot be negative, so it is a
-// u64, and no other way to count holds.
+// u64, and no other way to count holds. It is copied as a number is,
+// and compared with ==.
 enum SeekFrom impl Copy, Clone, Eq {
 	// Start is the position counted from the first byte.
 	Start(u64)
@@ -110,12 +169,25 @@ enum SeekFrom impl Copy, Clone, Eq {
 	End(i64)
 }
 
-// Error returns the message, Op, Path and Msg in one line, as Go words
-// it: "open /nonexistent: no such file or directory", with the space
-// before the colon even for an empty path, "open : no such file or
-// directory". An Error that was on no path, as a short write is not,
-// leaves the path out, "write: short write", and one with no Op is its
-// Msg alone.
+// A Discard is a Writer that takes every byte it is given and keeps
+// none: for output a program must write and does not want. It holds
+// nothing, so its zero value is ready, and writing to it costs no
+// allocation and no system call:
+//
+//	var sink io.Discard
+//	fmt.Fprintln(mut sink, "dropped")
+//
+// It is a type and not a package variable, since a package variable is
+// never lent mut, and a Write needs a mut.
+struct Discard impl Writer {}
+
+// Error returns the Error's message, Op, Path and Msg in one line:
+// "open /nonexistent: no such file or directory". The space before the
+// colon stays even for an empty path, "open : no such file or
+// directory", since the operation was on a path; an Error that was on
+// no path, as a short write is not, leaves the path out, "write: short
+// write", and one with no Op is its Msg alone. It allocates the line
+// it returns.
 func (e ref Error) Error() string {
 	if e.Op.Len() == 0 {
 		return e.Msg.Clone()
@@ -128,74 +200,92 @@ func (e ref Error) Error() string {
 	return e.Op + " " + e.Path + ": " + e.Msg
 }
 
-// Kind returns which kind of failure this is.
+// Kind returns which kind of failure e is, so that a program can tell
+// a missing file or a refused dial from the rest without reading the
+// message: e.Kind() == io.NotExist.
 func (e ref Error) Kind() Kind {
 	return e.kind
 }
 
-// Written returns how many bytes a write had taken before it failed,
-// which Go's Write returns beside its error: a connection whose
-// deadline passed partway through a large write, or a disk that filled,
-// took the first Written bytes and not the rest. It is 0 for every
-// other failure. A Result holds a count or an Error and not both, so
-// the Error holds the count, as Java's InterruptedIOException holds
-// bytesTransferred.
+// Written returns how many bytes a write had taken before it failed: a
+// connection whose deadline passed partway through a large write, or a
+// disk that filled, took the first Written bytes and not the rest, so
+// a program that retries writes from buf[e.Written():]. It is 0 for
+// every other failure. A Result holds a count or an Error and not
+// both, so the Error holds the count.
 func (e ref Error) Written() int {
 	return e.written
 }
 
-// WithWritten returns e saying that n bytes were written before it: for
-// a Writer of a program's own that fails partway, as a connection's
-// Write does.
+// WithWritten takes e and returns it saying that n bytes were written
+// before it failed, which Written then reports: for a Writer of a
+// program's own that fails partway, as a connection's Write does.
+//
+//	e := io.NewError("write", "", "disk full", io.Other)
+//	return Err(e.WithWritten(n))
 func (e Error) WithWritten(n int) Error {
 	e.written = n
 	return e
 }
 
-// NewError builds an Error a program reports: a Reader or a Writer of
-// its own, a parser of a file format. Op is what was tried, Path what
-// it was on, empty for none, Msg why it failed, and kind which Kind of
-// failure it is, Other when none fits.
+// NewError returns an Error a program reports itself: from a Reader or
+// a Writer of its own, or a parser of a file format. op is what was
+// tried, path what it was on, empty for none, msg why it failed, and
+// kind which Kind of failure it is, Other when none fits. It takes the
+// three strings and keeps them, with no copy:
+//
+//	io.NewError("parse", path.Clone(), "bad header", io.Other)
 func NewError(op string, path string, msg string, kind Kind) Error {
 	has := path.Len() > 0
 	return Error{Op: op, Path: path, Msg: msg, kind: kind, hasPath: has}
 }
 
-// ShortWrite is the Error for a writer that took none of the bytes it
-// was given and reported no failure: Op "write", Kind Other, message
-// "short write". Copy and bufio's Flush report it rather than ask
-// forever.
+// ShortWrite returns the Error of a Writer that took none of the bytes
+// it was given and reported no failure: Op "write", no path, Kind
+// Other, and the message "write: short write". Copy and bufio's Flush
+// report it rather than ask such a Writer again for ever.
 func ShortWrite() Error {
 	return NewError("write", "", "short write", Other)
 }
 
-// Errno builds the Error for a system call that failed with the given
-// error number: op and path say what was tried, and the runtime turns
-// the number into its reason and its Kind. It is for a package that
-// calls the system, as os does; a program meets the Errors it makes.
+// Errno returns the Error of a system call that failed with the error
+// number code: op and path say what was tried and on what, and the
+// runtime turns the number into its reason, "no such file or
+// directory", and its Kind, NotExist. It takes op, and copies path,
+// which it only borrows. It is for a package that calls the system, as
+// os and net do; a program meets the Errors they make.
+//
+//	return Err(io.Errno("open", path, code))
 func Errno(op string, path ref string, code int) Error {
-	kind := match kindOf(code) {
-		1 => NotExist,
-		2 => Permission,
-		3 => Exists,
-		4 => Refused,
-		5 => Reset,
-		6 => TimedOut,
+	k := kindOf(code)
+	kind := match {
+		k == kindCodeNotExist => NotExist,
+		k == kindCodePermission => Permission,
+		k == kindCodeExists => Exists,
+		k == kindCodeRefused => Refused,
+		k == kindCodeReset => Reset,
+		k == kindCodeTimedOut => TimedOut,
 		_ => Other,
 	}
+
 	return Error{Op: op, Path: path.Clone(), Msg: reason(code), kind: kind, hasPath: true}
 }
 
-// Copy reads src until its end and writes everything to dst, through a
-// buffer of 32 KiB, and returns the number of bytes copied. The first
-// failure of either side ends the copy with its Error; a Writer that
-// takes fewer bytes than it was given is asked again for the rest, one
-// that takes none fails the copy with a short write, and one that
-// claims more than it was given fails it with "invalid write result",
-// as Go's Copy does. Both are lent mut for the duration: io.Copy(mut
-// out, mut in).
+// Copy reads src until its end and writes everything it read to dst,
+// and returns the number of bytes copied. Both are lent mut for the
+// call and kept by neither side:
+//
+//	n := io.Copy(mut out, mut in)?
+//
+// It moves the bytes through one buffer of 32 KiB, which it allocates
+// once. The first failure of either side ends the copy with its
+// Error, the bytes before it written; a Writer that takes fewer bytes
+// than it was given is asked again for the rest, one that takes none
+// fails the copy with ShortWrite, and one that claims more than it was
+// given fails it with "invalid write result". It blocks as long as src
+// and dst do.
 func Copy<W: Writer, R: Reader>(dst mut W, src mut R) Result<i64, Error> {
-	buf := make([]byte, 32768)
+	buf := make([]byte, copyBufferSize)
 	var total i64 = 0
 	for {
 		n := src.Read(mut buf)?
@@ -221,16 +311,21 @@ func Copy<W: Writer, R: Reader>(dst mut W, src mut R) Result<i64, Error> {
 	}
 }
 
-// ReadAll reads r until its end and returns everything it read, as
-// Go's ReadAll does: into blocks that grow by half each time, starting
-// from 512 bytes, then copied once into a slice of the exact length, so
-// that no block is copied as it grows. The first failure of r ends the
-// read with its Error, and what was read before it is not returned. r
-// is lent mut for the duration: io.ReadAll(mut f).
+// ReadAll reads r until its end and returns everything it read, as one
+// slice of the exact length. r is lent mut for the call:
+//
+//	data := io.ReadAll(mut f)?
+//
+// It reads into blocks, the first of 512 bytes and each after it half
+// the size of all before it, then copies them once into the slice it
+// returns, so that no byte is copied twice however long the input; an
+// input that fits the first block is returned in it, with no copy. The
+// first failure of r ends the read with its Error, and what was read
+// before it is not returned.
 func ReadAll<R: Reader>(r mut R) Result<[]byte, Error> {
-	b := make([]byte, 512)
+	b := make([]byte, firstBlockSize)
 	filled := 0
-	next := 256
+	next := firstBlockSize / 2
 	blocks := [][]byte{}
 	total := 0
 	for {
@@ -240,7 +335,7 @@ func ReadAll<R: Reader>(r mut R) Result<[]byte, Error> {
 		}
 
 		filled += n
-		if len(b)-filled < len(b)/16 { // nearly full: a larger block takes the rest
+		if len(b)-filled < len(b)/nearlyFullFraction { // nearly full: a larger block takes the rest
 			b.Truncate(filled)
 			total += filled
 			blocks.Push(b)
@@ -266,11 +361,17 @@ func ReadAll<R: Reader>(r mut R) Result<[]byte, Error> {
 }
 
 // ReadFull reads exactly len(buf) bytes from r into buf and returns
-// that count, as Go's ReadFull does: Read is asked as often as it takes.
-// It returns 0 when r ends before any byte, as Read does at the end; an
-// end partway through is an Error of Kind UnexpectedEOF, "unexpected
-// EOF", since the bytes it had to read whole are not all there. A
-// failure of r ends the read with its Error.
+// that count, asking Read as often as it takes; r and buf are lent mut
+// for the call, and nothing is allocated:
+//
+//	header := make([]byte, 16)
+//	io.ReadFull(mut f, mut header)?
+//
+// It returns 0 when r ends before any byte, as Read does at the end,
+// so a loop over records stops cleanly. An end partway through is an
+// Error of Kind UnexpectedEOF, "unexpected EOF", since the bytes it
+// had to read whole are not all there; buf then holds the bytes read
+// before it. A failure of r ends the read with its Error.
 func ReadFull<R: Reader>(r mut R, buf mut []byte) Result<int, Error> {
 	n := 0
 	for n < len(buf) {
@@ -289,14 +390,8 @@ func ReadFull<R: Reader>(r mut R, buf mut []byte) Result<int, Error> {
 	return Ok(n)
 }
 
-// A Discard is a Writer that takes every byte it is given and keeps
-// none, as Go's io.Discard: for output a program must write and does
-// not want. It holds nothing, so its zero value is ready: var sink
-// io.Discard, then fmt.Fprintln(mut sink, ...). It is a type and not a
-// package variable, since a package variable is never lent mut.
-struct Discard impl Writer {}
-
-// Write takes all of buf and keeps none of it.
+// Write takes all of buf, keeps none of it, and returns its length; it
+// never fails and never blocks.
 func (d mut Discard) Write(buf ref []byte) Result<int, Error> {
 	return Ok(len(buf))
 }
@@ -309,8 +404,7 @@ func reserve(b mut []byte, n int)
 // letter in lower case. The runtime provides it.
 func reason(code int) string
 
-// kindOf sorts an error number into a Kind: 1 for a missing file, 2
-// for a permission refused, 3 for a file that exists, 4 for a
-// connection refused, 5 for one reset or broken, 6 for one timed out,
-// 0 otherwise. The runtime provides it.
+// kindOf sorts an error number into one of the kind codes,
+// kindCodeNotExist to kindCodeTimedOut, or 0 for a number no Kind
+// names. The runtime provides it.
 func kindOf(code int) int

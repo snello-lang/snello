@@ -79,7 +79,7 @@ func TestImports(t *testing.T) {
 		{"import \"arena\"\nfunc f() { a := arena.New<string>(); i := a.Insert(\"x\"); if s := a.Get(i) { print(s.Len()) }; if s := a.GetMut(i) { *s = \"y\" }; print(a.Remove(i).IsSome(), a.Len()) }", nil},
 		{"import \"arena\"\nfunc f(i arena.Index<int>) bool { j := i; m := map[arena.Index<int>]int{}; m[i] = 1; return i == j && len(m) == 1 }", nil}, // Index is Copy, Eq and Hash
 		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<int>) bool { return a.Get(i).IsSome() }", []string{"3:75: cannot use i (arena.Index<int>) as arena.Index<string> in argument"}},
-		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<string>) bool { return a.live(i) }", []string{"3:74: live of arena.Arena<string> is not exported"}},
+		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<string>) bool { return a.isLive(i) }", []string{"3:74: isLive of arena.Arena<string> is not exported"}},
 		{"import \"arena\"\nfunc f() int { a := arena.New(); return a.Len() }", []string{"3:21: cannot infer the type parameter T of arena.New: give it, arena.New<...>"}},
 		{"import \"rc\"\nfunc f() int { a := rc.New(\"x\"); b := a.Clone(); w := a.Downgrade(); if s := a.GetMut() { *s = \"y\" }; n := a.Get().Len() + b.StrongCount() + a.WeakCount(); if up := w.Upgrade() { n += up.Get().Len() }; return n }", nil},
 		{"import \"rc\"\nfunc dup<T: Clone>(x ref T) T { return x.Clone() }\nfunc f(r ref rc.Rc<int>) rc.Rc<int> { return dup(r) }", nil},             // Rc<T> is Clone for any T

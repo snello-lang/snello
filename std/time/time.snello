@@ -4,19 +4,24 @@
 
 // Package time measures time: a Duration is a span of it and a Time an
 // instant, both Copy values that compare as numbers do. A Time prints
-// as Go's does, in UTC: 2006-01-02 15:04:05.999999999 +0000 UTC, and
-// a Duration as Go's does, 1h30m0s or 1.5µs.
+// in UTC, 2006-01-02 15:04:05.999999999 +0000 UTC, and a Duration in
+// hours, minutes and seconds, 1h30m0s, or in the unit under a second
+// that fits it, 1.5µs.
 //
 // Now reads the system clock, Sleep waits, and the constants from
 // Nanosecond to Hour let a Duration be written as a product, 10 *
 // time.Millisecond, since a literal takes the Duration type from the
 // constant beside it. After and Tick hand a Time over a channel, once
-// or every so often, for a select to wait on.
+// or every so often, for a select to wait on; a Timer and a Ticker do
+// the same and can be stopped. Date makes the Time of a date, Format
+// writes a Time as a layout says and Parse reads one back.
 package time
 
-import "fmt"
+import ("fmt"; "math")
 
-// Nanosecond is the unit of Duration; the others are its multiples.
+// The units of a Duration, each a count of nanoseconds: Nanosecond is
+// the unit and the others its multiples, so 90 * time.Second is a
+// minute and a half.
 const Nanosecond Duration = 1
 const Microsecond Duration = 1000
 const Millisecond Duration = 1000000
@@ -24,23 +29,168 @@ const Second Duration = 1000000000
 const Minute Duration = 60000000000
 const Hour Duration = 3600000000000
 
+// The layouts programs exchange times in, for Format and Parse.
+//
+// A layout says how a Time is written as text, for Format, and read
+// from it, for Parse. It is text with directives in it, each a percent
+// sign and a letter, as POSIX strftime has them: "%Y-%m-%d %H:%M:%S"
+// is 2026-11-11 21:04:05. Every part of a layout that stands for
+// something starts with a percent sign, so a mistake in one is not
+// taken for text: the compiler refuses a layout with a directive there
+// is none of, as it refuses a format of fmt's with a verb there is
+// none of, and so a layout is a string literal or a constant.
+//
+// The date:
+//
+//	%Y  the year, four digits or more    %C  the century, two digits
+//	%y  the year in its century, 00-99   %m  the month, 01-12
+//	%B  the month's name, November       %b  %h  its first three letters
+//	%d  the day of the month, 01-31      %e  the same, a space for the zero
+//	%j  the day of the year, 001-366     %A  the weekday's name, Wednesday
+//	%a  its first three letters          %u  its number, 1 for Monday to 7
+//	%w  its number, 0 for Sunday to 6    %G  the year of the ISO 8601 week
+//	%g  that year in its century         %V  the ISO 8601 week, 01-53
+//	%U  the week of the year from the first Sunday, 00-53
+//	%W  the week of the year from the first Monday, 00-53
+//
+// The time of day:
+//
+//	%H  the hour, 00-23                  %I  the hour of the half day, 01-12
+//	%M  the minute, 00-59                %S  the second, 00-59
+//	%p  AM or PM                         %P  am or pm
+//	%f  the nanoseconds, nine digits     %.f  a point and the fraction of a
+//	second in as few of three, six or nine digits as hold it, or nothing
+//	%.3f  %.6f  %.9f  a point and the fraction in that many digits
+//
+// The zone, which is always UTC:
+//
+//	%z  +0000        %:z  +00:00        %Z  UTC
+//
+// Several at once, and the rest:
+//
+//	%F  %Y-%m-%d     %T  %X  %H:%M:%S   %R  %H:%M     %D  %x  %m/%d/%y
+//	%r  %I:%M:%S %p  %c  %a %b %e %H:%M:%S %Y          %s  the seconds since 1970
+//	%n  a newline    %t  a tab          %%  a percent sign
+//
+// A number is written with zeros before it up to its width; a - after
+// the percent sign writes it without them, %-d, and a _ with spaces,
+// %_d.
+//
+// Parse reads the same directives, but for those that do not say which
+// day or time it is: %C, %G, %g, %V, %U, %W, %u, %w and %s. It reads
+// %z and %:z as an offset from UTC, or a Z, and gives the moment in
+// UTC; %Z as UTC or GMT.
+const RFC3339 string = "%Y-%m-%dT%H:%M:%S%:z"
+const RFC3339Nano string = "%Y-%m-%dT%H:%M:%S%.f%:z"
+const DateTime string = "%Y-%m-%d %H:%M:%S"
+const DateOnly string = "%Y-%m-%d"
+const TimeOnly string = "%H:%M:%S"
+const Kitchen string = "%-I:%M%p"
+
 // The longest Duration, which Sub gives when the span between two
 // Times is longer than a Duration holds, and the longest the other
 // way, which Round gives when its result would be past either.
-const maxDuration Duration = 9223372036854775807
-const minDuration Duration = -9223372036854775808
+const maxDuration Duration = Duration(math.MaxInt64)
+const minDuration Duration = Duration(math.MinInt64)
+
+// The units of the clock, each counted in the one below it.
+const nanosecondsPerSecond i64 = 1000000000
+const secondsPerMinute int = 60
+const minutesPerHour int = 60
+const secondsPerHour int = 3600
+const hoursPerDay int = 24
+const secondsPerDay u64 = 86400
+
+// The decimal digits of the nanoseconds in a microsecond, a
+// millisecond and a second: how many digits a fraction of each unit
+// is written with.
+const digitsPerMicrosecond int = 3
+const digitsPerMillisecond int = 6
+const digitsPerSecond int = 9
+
+// The bytes a Time's fraction of a second is written in, a point and
+// nine digits, and a Duration is written in, more than the longest,
+// -2562047h47m16.854775808s, takes.
+const fractionLen int = 10
+const durationLen int = 32
+
+// The text a Time ends with, its zone, which is always UTC.
+const utcSuffix = " +0000 UTC"
+
+// The symbols of the units a Duration is written and read with. A
+// microsecond is written with the micro sign, U+00B5, and read with it,
+// with the Greek small letter mu, U+03BC, or with a u.
+const nanosecondSymbol = "ns"
+const microsecondSymbol = "µs"
+const microsecondGreekSymbol = "μs"
+const microsecondASCIISymbol = "us"
+const millisecondSymbol = "ms"
+const secondSymbol = "s"
+const minuteSymbol = "m"
+const hourSymbol = "h"
+
+// The characters of a Duration's text besides its digits and units:
+// the signs before the first number and the point before a fraction;
+// and the text of the zero Duration, which needs no unit.
+const minusSign byte = '-'
+const plusSign byte = '+'
+const decimalPoint byte = '.'
+const zeroDurationText = "0"
+
+// percentSign starts a directive in a layout.
+const percentSign byte = '%'
 
 // The civil date of a Time is computed as Neri and Schneider compute
-// it, from the seconds since an absolute epoch, March 1 of the year
-// -absoluteYears, far enough back that every second a Time holds is
-// counted from it as an unsigned number; unixToAbsolute is what the
-// seconds since 1970 are shifted by, and marchThruDecember the days
-// from March 1 to the end of a year, since a year counted from March
-// puts the leap day last.
+// it, in the proleptic Gregorian calendar, from the seconds since an
+// absolute epoch, March 1 of the year -absoluteYears, far enough back
+// that every second a Time holds is counted from it as an unsigned
+// number; unixToAbsolute is what the seconds since 1970 are shifted
+// by, and daysMarchToDecember the days from March 1 to the end of a
+// year, since a year counted from March puts the leap day last. Their
+// algorithms ("Euclidean affine functions and their application to
+// calendar algorithms") find a year, a month and a day with
+// multiplications and shifts in place of divisions, and no table of
+// months.
 const absoluteYears i64 = 292277022400
 const unixToAbsolute u64 = 9223372028741760000
-const marchThruDecember u64 = 306
-const secondsPerDay u64 = 86400
+const daysMarchToDecember u64 = 306
+
+// The lengths the calendar is made of: the days of the 400 years after
+// which the Gregorian calendar repeats, and of four years in a century,
+// the years of a century, the months of a year and the days of a week.
+const daysPer400Years u64 = 146097
+const daysPer4Years u32 = 1461
+const yearsPerCentury u64 = 100
+const monthsPerYear int = 12
+const daysPerWeek u64 = 7
+
+// The fixed-point factors of Neri and Schneider's algorithms:
+// yearOfQuarterDays / 2^32 is a year in quarter-days, 1 / 1461, and
+// monthOfDays / 2^16 a month in days, 1 / 30.6, which monthOfDaysOffset
+// shifts so that the day of a year counted from March falls in its
+// month; (daysBeforeMonthFactor * m - daysBeforeMonthOffset) / 32 is
+// the days of such a year before its month m, from 3 for March to 14
+// for February.
+const yearOfQuarterDays u64 = 2939745
+const monthOfDays u64 = 2141
+const monthOfDaysOffset u64 = 197913
+const daysBeforeMonthFactor u32 = 979
+const daysBeforeMonthOffset u32 = 2919
+
+// The numbers of the two months the calendar's rules single out:
+// February, which is the one whose length changes, and March, where a
+// year counted for the leap day starts.
+const februaryNumber int = 2
+const marchNumber int = 3
+
+// epochWeekday is the weekday of the absolute epoch's first day, a
+// Wednesday, counted from 0 for Monday.
+const epochWeekday u64 = 2
+
+// The low 32 bits and the low 16 bits of a u64: the fraction of a
+// fixed-point product, and the low word of a number held in two.
+const low32Bits u64 = 0xFFFFFFFF
+const low16Bits u64 = 0xFFFF
 
 // The years a date can be in, both left out: the first is the year the
 // unsigned day count starts in, on its 1 March, so its January and
@@ -53,112 +203,52 @@ const maxYear int = 292277026596
 // which Truncate and Round count from.
 const unixToYearOne i64 = 62135596800
 
-// The layouts programs exchange times in.
-const RFC3339 string = "%Y-%m-%dT%H:%M:%S%:z"
-const RFC3339Nano string = "%Y-%m-%dT%H:%M:%S%.f%:z"
-const DateTime string = "%Y-%m-%d %H:%M:%S"
-const DateOnly string = "%Y-%m-%d"
-const TimeOnly string = "%H:%M:%S"
-const Kitchen string = "%-I:%M%p"
-
 // The ways a text is not what a layout says, as parse numbers them, and
-// one more that Parse finds once it has the date.
-const wrongByte int = 1    // the text at at is not the layout's byte at li
-const wrongField int = 2   // the text at at is not what the directive at li reads
-const wrongMonth int = 3   // a field out of its range, this one and the six after it
+// those Parse finds once it has the date. textMatches is none of them.
+const textMatches int = 0
+const wrongByte int = 1       // the text at at is not the layout's byte at li
+const wrongField int = 2      // the text at at is not what the directive at li reads
+const wrongMonth int = 3      // a field out of its range, this one and the six after it
 const wrongDay int = 4
 const wrongHour int = 5
 const wrongMinute int = 6
 const wrongSecond int = 7
 const wrongYearDay int = 8
 const wrongOffset int = 9
-const unreadField int = 10 // the directive at li says no day or time
-const extraText int = 11   // text is left at at
-const halfUnsaid int = 12  // %I without %p
-const wrongDate int = 13   // the day of the year is not the date's
+const unreadField int = 10    // the directive at li says no day or time
+const extraText int = 11      // text is left at at
+const halfDayMissing int = 12 // %I without %p
+const wrongDate int = 13      // the day of the year is not the date's
 const wrongWeekday int = 14
-const wrongYear int = 15   // a year past what a Time holds
+const wrongYear int = 15      // a year past what a Time holds
+
+// noWeekday is the weekday parse gives for a text that names none.
+const noWeekday int = -1
 
 // A Duration is a span of time, counted in nanoseconds, as an i64: the
-// longest is about 290 years. It is a number: it adds, subtracts,
-// compares and multiplies by an integer. fmt prints it in Go's form,
-// 72h3m0.5s, through its String.
+// longest is about 290 years either way. It is a number: it adds,
+// subtracts, compares and multiplies by an integer, and it is Copy, so
+// it is passed and kept by value. fmt prints it through its String,
+// 72h3m0.5s.
 type Duration i64 impl fmt.Stringer
 
-// A Time is an instant, as Go's is: the seconds since the start of
-// 1970 in UTC and the nanoseconds past them, which reach hundreds of
-// billions of years either way, and for a Time Now read, the reading
-// of the monotonic clock beside them. The system may set its wall clock
-// back or forward, never the monotonic one, so when both Times hold a
-// reading, comparing them and Sub use it, and a Duration measured
-// between two Nows is never thrown off by a change of the clock. Two
-// Times compare with ==, <, Before and After, all meaning the same
-// instant or the earlier one, and Sub gives the Duration between them.
-// A Time prints as String gives it. Its civil date is defined from
-// 1 March of the year -292277022400, where the day count starts, to
-// the last second an i64 holds; Date gives None outside those years.
+// A Time is an instant: the seconds since the start of 1970 in UTC and
+// the nanoseconds past them, which reach hundreds of billions of years
+// either way, and for a Time Now read, the reading of the monotonic
+// clock beside them. The system may set its wall clock back or
+// forward, never the monotonic one, so when both Times hold a reading,
+// comparing them and Sub use it, and a Duration measured between two
+// Nows is never thrown off by a change of the clock. Two Times compare
+// with ==, <, Before and After, all meaning the same instant or the
+// earlier one, and Sub gives the Duration between them. A Time is
+// Copy, sixteen bytes and a reading, passed by value. It prints as
+// String gives it. Its civil date is defined from 1 March of the year
+// -292277022400, where the day count starts, to the last second an i64
+// holds; Date gives None outside those years.
 struct Time impl Copy, Eq, Ord, fmt.Stringer {
 	sec  i64 // since the start of 1970 in UTC
 	nsec i64 // past sec, from 0 up to a second
 	mono i64 // the monotonic clock's nanoseconds when Now read it, or 0
-}
-
-// Now returns the current time: the system's clock, and the monotonic
-// clock's reading.
-func Now() Time {
-	var t Time
-	clock(mut t.sec, mut t.nsec, mut t.mono)
-	return t
-}
-
-// Unix returns the Time sec seconds and nsec nanoseconds after the
-// start of 1970 in UTC. An nsec outside zero up to a second is carried
-// into the seconds, so Unix(1, -1) is the last nanosecond of the
-// first second. The Time holds no monotonic reading.
-func Unix(sec i64, nsec i64) Time {
-	sec += nsec / 1000000000
-	nsec = nsec % 1000000000
-	if nsec < 0 {
-		nsec += 1000000000
-		sec--
-	}
-
-	return Time{sec: sec, nsec: nsec, mono: 0}
-}
-
-// Since returns the time elapsed since t: Now().Sub(t).
-func Since(t Time) Duration {
-	return Now().Sub(t)
-}
-
-// Sleep pauses the task for d, and returns at once for a d of zero or
-// less. The runtime provides it.
-func Sleep(d Duration)
-
-// After returns a channel that gets the time once, d from now: a
-// deadline for a select to wait on beside its other cases. The channel
-// holds the one value, and the runtime's timer puts it there, so no
-// task waits for it, and a program that does not receive it loses
-// nothing. A d past the largest time waits for as long as there is.
-func After(d Duration) <-chan Time {
-	ch := make(chan Time, 1)
-	startTimer(ch.Clone(), d, 0)
-	return ch
-}
-
-// Tick returns a channel that gets the time every d, for as long as the
-// program runs, on the period rather than d after the last tick, so the
-// ticks do not drift. A tick that arrives while the one before it is
-// still unreceived is dropped, so a slow receiver sees the ticks it can
-// keep up with and never a backlog of them. For a d of zero or less no
-// tick ever comes, as Go's Tick then gives a channel nothing sends on.
-func Tick(d Duration) <-chan Time {
-	ch := make(chan Time, 1)
-	if d > 0 {
-		startTimer(ch.Clone(), d, d)
-	}
-
-	return ch
 }
 
 // A Timer sends the time on its channel once, a while after it was
@@ -179,276 +269,118 @@ struct Timer impl Drop {
 	C <-chan Time
 }
 
-// NewTimer returns a Timer that sends the time on its channel once, d
-// from now, or at once for a d of zero or less.
-func NewTimer(d Duration) Timer {
-	ch := make(chan Time, 1)
-	startTimer(ch.Clone(), d, 0)
-	return Timer{C: ch}
-}
-
-// Stop calls the Timer off, and reports whether it did: true when the
-// time had not been received yet, whether or not the moment had come,
-// and false when it had been, or the Timer was stopped already. Once
-// Stop returns nothing is left to receive from C: a time sent and not
-// yet received is taken back, as Go's Stop does since Go 1.23, so no
-// program needs to empty the channel after it.
-func (t mut Timer) Stop() bool {
-	return stopTimer(t.C.Clone())
-}
-
-// Reset makes the Timer fire d from now, whatever it was to do before,
-// and reports what Stop would have: whether the time it was to send had
-// not been received yet.
-func (t mut Timer) Reset(d Duration) bool {
-	return resetTimer(t.C.Clone(), d, 0)
-}
-
-// Drop stops the Timer when it goes out of scope.
-func (t mut Timer) Drop() {
-	_ = stopTimer(t.C.Clone())
-}
-
 // A Ticker sends the time on its channel every so often, until it is
 // stopped: on the period, not that long after the last tick, so the
 // ticks do not drift, and a tick that comes while the one before it is
 // still unreceived is dropped, as Tick's are. A Ticker that goes out of
 // scope ticks no more, by its Drop; time.Tick is for a program that
 // ticks for as long as it runs.
+//
+//	tick := time.NewTicker(time.Second)
+//	for {
+//		select {
+//		case <-tick.C:
+//			report()
+//		case <-done:
+//			return
+//		}
+//	}
 struct Ticker impl Drop {
 	// C gets the time at each tick.
 	C <-chan Time
 }
 
-// NewTicker returns a Ticker that sends the time on its channel every
-// d. For a d of zero or less it never ticks, as Tick does not, where
-// Go's NewTicker stops the program.
-func NewTicker(d Duration) Ticker {
-	ch := make(chan Time, 1)
-	if d > 0 {
-		startTimer(ch.Clone(), d, d)
-	}
-
-	return Ticker{C: ch}
+// A Month is a month of the year. It is an enum, so no value of it is a
+// thirteenth month; Number gives its number, 1 for January. It prints
+// as its name, November.
+enum Month impl Copy, Clone, Eq {
+	January
+	February
+	March
+	April
+	May
+	June
+	July
+	August
+	September
+	October
+	November
+	December
 }
 
-// Stop ends the ticks. Once it returns nothing is left to receive from
-// C.
-func (t mut Ticker) Stop() {
-	_ = stopTimer(t.C.Clone())
+// A Weekday is a day of the week, in the order ISO 8601 gives them,
+// from Monday. It prints as its name, Wednesday.
+enum Weekday impl Copy, Clone, Eq {
+	Monday
+	Tuesday
+	Wednesday
+	Thursday
+	Friday
+	Saturday
+	Sunday
 }
 
-// Reset makes the Ticker tick every d from now on, the first tick d
-// from now; for a d of zero or less it stops it. A tick sent before and
-// not received is taken back, so the next one C gives is the new
-// period's.
-func (t mut Ticker) Reset(d Duration) {
-	if d > 0 {
-		_ = resetTimer(t.C.Clone(), d, d)
-	} else {
-		t.Stop()
-	}
+// A ParseError says why Parse or ParseDuration refused a text. It
+// prints as its message, which names the text, the layout for Parse,
+// and what was wrong: parsing time "2026-02-30" as "%Y-%m-%d": day out
+// of range, or time: invalid duration "1x".
+struct ParseError impl Error, Clone {
+	msg string
 }
 
-// Drop stops the Ticker when it goes out of scope.
-func (t mut Ticker) Drop() {
-	t.Stop()
-}
-
-// stopTimer stops the timer that sends on ch, and takes back a time it
-// sent that no one received; it reports whether it stopped either.
-// resetTimer does the same and then has the timer send on ch d from
-// now, and every period after when every is above zero. Each takes a
-// handle of the channel of its own. The runtime provides them.
-func stopTimer(ch <-chan Time) bool
-func resetTimer(ch <-chan Time, d Duration, every Duration) bool
-
-// startTimer has the runtime's timer put the time in ch d from now, and
-// then every period when every is above zero. The timer owns the
-// handle, and drops it once it has fired for the last time, so a
-// channel no one receives from is freed with the timer. The runtime
-// provides it.
-func startTimer(ch chan<- Time, d Duration, every Duration)
-
-// String returns the Time as Go's String prints one in UTC, the date,
-// the clock with the nanoseconds past the second when there are any,
-// without their trailing zeros, and the zone: 2006-01-02
-// 15:04:05.999999999 +0000 UTC. Go's String prints the local zone and,
-// for a Time from Now, the monotonic reading after m=; this one prints
-// UTC and no reading. It is fmt.Stringer's method, so a Time prints
-// this way.
-func (t ref Time) String() string {
-	year := i64(0)
-	month := i64(0)
-	day := i64(0)
-	t.date(mut year, mut month, mut day)
-	clock := i64((u64(t.sec) + unixToAbsolute) % secondsPerDay)
-	hour := clock / 3600
-	minute := clock % 3600 / 60
-	second := clock % 60
-	s := fmt.Sprintf("%.4d-%.2d-%.2d %.2d:%.2d:%.2d", year, month, day, hour, minute, second)
-	if t.nsec != 0 {
-		buf := make([]byte, 10)
-		w := len(buf)
-		v := u64(t.nsec)
-		fmtFrac(mut buf, mut w, mut v, 9)
-		s += string(buf[w:])
-	}
-
-	return s + " +0000 UTC"
-}
-
-// Add returns the time d after t, or before it for a negative d. A
-// monotonic reading moves with it, and is dropped when it would not
-// fit.
-func (t Time) Add(d Duration) Time {
-	sec := t.sec + i64(d/Second)
-	nsec := t.nsec + i64(d%Second)
-	if nsec >= 1000000000 {
-		sec++
-		nsec -= 1000000000
-	} else if nsec < 0 {
-		sec--
-		nsec += 1000000000
-	}
-
-	mono := t.mono
-	if mono != 0 {
-		mono += i64(d)
-		if d < 0 && mono > t.mono || d > 0 && mono < t.mono || mono == 0 {
-			mono = 0
-		}
-	}
-
-	return Time{sec: sec, nsec: nsec, mono: mono}
-}
-
-// Sub returns the Duration from u to t, negative when t is before u.
-// When both hold a monotonic reading the readings are subtracted, so
-// the clock being set between them changes nothing. A span longer than
-// a Duration holds gives the longest Duration of its sign.
-func (t Time) Sub(u Time) Duration {
-	if t.mono != 0 && u.mono != 0 {
-		d := Duration(t.mono - u.mono)
-		if d < 0 && t.mono > u.mono {
-			return maxDuration
-		}
-
-		if d > 0 && t.mono < u.mono {
-			return minDuration
-		}
-
-		return d
-	}
-
-	d := Duration(t.sec-u.sec)*Second + Duration(t.nsec-u.nsec)
-	if u.wall().Add(d) == t.wall() {
-		return d
-	}
-
-	if t.wall().Before(u.wall()) {
-		return minDuration
-	}
-
-	return maxDuration
-}
-
-// Cmp orders two Times by the instant: by their monotonic readings when
-// both hold one, by the wall clock otherwise.
-func (t ref Time) Cmp(u ref Time) Ordering {
-	if t.mono != 0 && u.mono != 0 {
-		return t.mono.Cmp(u.mono)
-	}
-
-	if t.sec != u.sec {
-		return t.sec.Cmp(u.sec)
-	}
-
-	return t.nsec.Cmp(u.nsec)
-}
-
-// Eq reports whether two Times are the same instant, as Cmp orders
-// them; it is what == on Times means.
-// IsZero reports whether t is the zero Time, var t time.Time, as Go's
-// IsZero does; Snello's zero Time is the start of 1970 in UTC, where Go's
-// is the first instant of year 1. A deadline of the zero Time is none.
-func (t Time) IsZero() bool {
-	return t.sec == 0 && t.nsec == 0
-}
-
-func (t ref Time) Eq(u ref Time) bool {
-	return t.Cmp(u) == Equal
-}
-
-// Before reports whether t is earlier than u.
-func (t Time) Before(u Time) bool {
-	return t.Cmp(u) == Less
-}
-
-// After reports whether t is later than u.
-func (t Time) After(u Time) bool {
-	return t.Cmp(u) == Greater
-}
-
-// Unix returns the seconds since the start of 1970 in UTC, rounded
-// down, as Go's does: the second the instant is in.
-func (t Time) Unix() i64 {
-	return t.sec
-}
-
-// UnixNano returns the nanoseconds since the start of 1970 in UTC. A
-// Time more than about 292 years from 1970 has more than an i64 holds,
-// and the result is then not meaningful, as in Go.
-func (t Time) UnixNano() i64 {
-	return t.sec*1000000000 + t.nsec
-}
-
-// wall returns t without its monotonic reading, for arithmetic on the
-// wall clock alone.
-func (t Time) wall() Time {
-	return Time{sec: t.sec, nsec: t.nsec, mono: 0}
-}
-
-// Nanoseconds returns the duration as a count of nanoseconds.
+// Nanoseconds returns d as a count of nanoseconds, which is what a
+// Duration holds, so nothing is lost.
 func (d Duration) Nanoseconds() i64 {
 	return i64(d)
 }
 
-// Microseconds returns the duration as a count of whole microseconds.
+// Microseconds returns d as a count of whole microseconds, the
+// nanoseconds past the last one dropped, toward zero:
+// (1999 * time.Nanosecond).Microseconds() is 1.
 func (d Duration) Microseconds() i64 {
-	return i64(d) / 1000
+	return i64(d / Microsecond)
 }
 
-// Milliseconds returns the duration as a count of whole milliseconds.
+// Milliseconds returns d as a count of whole milliseconds, the
+// nanoseconds past the last one dropped, toward zero.
 func (d Duration) Milliseconds() i64 {
-	return i64(d) / 1000000
+	return i64(d / Millisecond)
 }
 
-// Seconds returns the duration in seconds, with the fraction.
+// Seconds returns d in seconds, with the fraction, as an f64:
+// (1500 * time.Millisecond).Seconds() is 1.5. A Duration of more than
+// about 104 days has more nanoseconds than an f64 holds exactly, and
+// the result is then the nearest f64.
 func (d Duration) Seconds() f64 {
-	return f64(d) / 1000000000.0
+	return f64(d) / f64(Second)
 }
 
-// Minutes returns the duration in minutes, with the fraction.
+// Minutes returns d in minutes, with the fraction, as an f64:
+// (90 * time.Second).Minutes() is 1.5.
 func (d Duration) Minutes() f64 {
-	return f64(d) / 60000000000.0
+	return f64(d) / f64(Minute)
 }
 
-// Hours returns the duration in hours, with the fraction.
+// Hours returns d in hours, with the fraction, as an f64:
+// (90 * time.Minute).Hours() is 1.5.
 func (d Duration) Hours() f64 {
-	return f64(d) / 3600000000000.0
+	return f64(d) / f64(Hour)
 }
 
-// String returns the duration as Go's String prints one, 72h3m0.5s:
-// hours, minutes and seconds, the leading units that are zero left
-// out, and the fraction of a second without its trailing zeros. A
-// duration under a second is given in the unit that makes its first
-// digit nonzero, 1.5ms, 2µs or 999ns, and the zero duration is 0s. It
-// is Go's algorithm, so the longest Duration prints as
+// String returns d as text, 72h3m0.5s: hours, minutes and seconds, the
+// leading units that are zero left out, and the fraction of a second
+// without its trailing zeros. A Duration under a second is given in
+// the unit that makes its first digit nonzero, 1.5ms, 2µs or 999ns,
+// and the zero Duration is 0s. Hours is the largest unit, since days
+// are not all the same length, so the longest Duration prints as
 // 2562047h47m16.854775807s and the longest negative one as
-// -2562047h47m16.854775808s.
+// -2562047h47m16.854775808s. It reads d through the borrow, allocates
+// the one string it returns, and is fmt.Stringer's method, so fmt
+// prints a Duration this way. ParseDuration reads the text back.
+//
+//	(90 * time.Minute).String()   // 1h30m0s
 func (d ref Duration) String() string {
-	buf := make([]byte, 32)
+	buf := make([]byte, durationLen)
 	w := len(buf)
 	u := u64(*d)
 	neg := *d < 0
@@ -458,69 +390,71 @@ func (d ref Duration) String() string {
 
 	if u < u64(Second) {
 		// Under a second: a smaller unit, so the first digit is not 0.
-		prec := 0
+		digits := 0
 		w--
-		buf[w] = 's'
+		buf[w] = secondSymbol[0]
 		w--
-		match u {
-			0 => {
+		match {
+			u == 0 => {
 				buf[w] = '0'
 				return string(buf[w:])
 			},
-			1..=999 => { // nanoseconds
-				prec = 0
-				buf[w] = 'n'
+			u < u64(Microsecond) => {
+				digits = 0
+				buf[w] = nanosecondSymbol[0]
 			},
-			1000..=999999 => { // microseconds
-				prec = 3
-				w-- // the micro sign is two bytes, U+00B5
-				buf[w] = 0xC2
-				buf[w+1] = 0xB5
+			u < u64(Millisecond) => {
+				digits = digitsPerMicrosecond
+				w-- // the micro sign is two bytes
+				buf[w] = microsecondSymbol[0]
+				buf[w+1] = microsecondSymbol[1]
 			},
-			_ => { // milliseconds
-				prec = 6
-				buf[w] = 'm'
+			_ => {
+				digits = digitsPerMillisecond
+				buf[w] = millisecondSymbol[0]
 			},
 		}
 
-		fmtFrac(mut buf, mut w, mut u, prec)
-		fmtInt(mut buf, mut w, u)
+		writeFraction(mut buf, mut w, mut u, digits)
+		writeDigits(mut buf, mut w, u)
 	} else {
 		w--
-		buf[w] = 's'
-		fmtFrac(mut buf, mut w, mut u, 9)
+		buf[w] = secondSymbol[0]
+		writeFraction(mut buf, mut w, mut u, digitsPerSecond)
 
 		// u is now whole seconds.
-		fmtInt(mut buf, mut w, u%60)
-		u /= 60
+		writeDigits(mut buf, mut w, u%u64(secondsPerMinute))
+		u /= u64(secondsPerMinute)
 
 		// u is now whole minutes.
 		if u > 0 {
 			w--
-			buf[w] = 'm'
-			fmtInt(mut buf, mut w, u%60)
-			u /= 60
+			buf[w] = minuteSymbol[0]
+			writeDigits(mut buf, mut w, u%u64(minutesPerHour))
+			u /= u64(minutesPerHour)
 
 			// u is now whole hours; days are not all the same length,
 			// so hours is the largest unit.
 			if u > 0 {
 				w--
-				buf[w] = 'h'
-				fmtInt(mut buf, mut w, u)
+				buf[w] = hourSymbol[0]
+				writeDigits(mut buf, mut w, u)
 			}
 		}
 	}
 
 	if neg {
 		w--
-		buf[w] = '-'
+		buf[w] = minusSign
 	}
 
 	return string(buf[w:])
 }
 
 // Truncate returns d rounded toward zero to a multiple of m, or d
-// itself when m is zero or less.
+// itself when m is zero or less:
+// (1500 * time.Millisecond).Truncate(time.Second) is one second, and
+// so is -1.5 seconds truncated to minus one.
 func (d Duration) Truncate(m Duration) Duration {
 	if m <= 0 {
 		return d
@@ -530,8 +464,9 @@ func (d Duration) Truncate(m Duration) Duration {
 }
 
 // Round returns d rounded to the nearest multiple of m, a half rounded
-// away from zero, or d itself when m is zero or less. A result past
-// the longest Duration of its sign is that Duration.
+// away from zero, or d itself when m is zero or less: 1.5 seconds
+// rounds to two seconds. A result past the longest Duration of its
+// sign is that Duration, so rounding never wraps around.
 func (d Duration) Round(m Duration) Duration {
 	if m <= 0 {
 		return d
@@ -540,7 +475,7 @@ func (d Duration) Round(m Duration) Duration {
 	r := d % m
 	if d < 0 {
 		r = -r
-		if lessThanHalf(r, m) {
+		if isLessThanHalf(r, m) {
 			return d + r
 		}
 
@@ -552,7 +487,7 @@ func (d Duration) Round(m Duration) Duration {
 		return minDuration // overflow
 	}
 
-	if lessThanHalf(r, m) {
+	if isLessThanHalf(r, m) {
 		return d - r
 	}
 
@@ -578,106 +513,667 @@ func (d Duration) Abs() Duration {
 	return -d
 }
 
-// date computes the civil date of t in UTC. The days are counted in a
-// calendar whose year starts on March 1, so that the leap day falls at
-// the end of a year, and from an epoch that starts a 400-year cycle of
-// 146097 days. The cycle the day is in gives the century; within the
-// cycle, the year and the day of the year come from fixed-point
-// multiplications in place of divisions, 2939745 / 2^32 being a year
-// in quarter-days (1 / 1461) and 2141 / 2^16 a month in days
-// (1 / 30.6), which the compiler's integer arithmetic makes exact over
-// the range; a day in January or February then belongs to the next
-// calendar year.
-func (t ref Time) date(year mut i64, month mut i64, day mut i64) {
-	days := (u64(t.sec) + unixToAbsolute) / secondsPerDay
-	d := 4*days + 3
-	century := d / 146097
-	cd := u64(u32(d%146097) | 3)
-	cyear := (2939745 * cd) >> 32
-	ayday := ((2939745 * cd) & 0xFFFFFFFF) / 2939745 / 4
-	md := 2141*ayday + 197913
-	amonth := md >> 16
-	janFeb := u64(0)
-	if ayday >= marchThruDecember {
-		janFeb = 1
+// ParseDuration reads a Duration from s, which it only borrows, as
+// String writes one: numbers, each with a unit and perhaps a fraction,
+// one after another, with a sign before the first: 1h30m, -2m3.5s,
+// 1.5h, 250ms. The units are ns, us or µs, ms, s, m and h, and 0 is
+// the zero Duration without one. It returns a ParseError when s is not
+// such a text, time: invalid duration "1x", when a number has no unit,
+// time: missing unit in duration "3", when a unit is none of those,
+// time: unknown unit "x" in duration "1x", and when the span is longer
+// than a Duration holds, as an invalid duration. Digits of a fraction
+// past what a u64 holds are dropped. It reads s once, and allocates
+// only a ParseError's message.
+//
+//	timeout := time.ParseDuration("1m30s")?   // 90 * time.Second
+func ParseDuration(s ref string) Result<Duration, ParseError> {
+	total := u64(0)
+	at := 0
+	end := s.Len()
+	neg := false
+	if end > 0 && (s[0] == minusSign || s[0] == plusSign) {
+		neg = s[0] == minusSign
+		at = 1
 	}
 
-	*year = i64(century)*100 - absoluteYears + i64(cyear) + i64(janFeb)
-	*month = i64(amonth) - i64(janFeb)*12
-	*day = 1 + i64((md&0xFFFF)/2141)
-}
+	if s[at:] == zeroDurationText {
+		return Ok(0)
+	}
 
-// fmtFrac writes the fraction v/10**prec, .12345, into buf before w,
-// without its trailing zeros and without the point when the fraction
-// is zero, moves w to where it starts, and leaves v/10**prec in v.
-func fmtFrac(buf mut []byte, w mut int, v mut u64, prec int) {
-	print := false
-	for i := 0; i < prec; i++ {
-		digit := *v % 10
-		print = print || digit != 0
-		if print {
-			*w--
-			buf[*w] = byte(digit) + '0'
+	if at == end {
+		return Err(invalidDurationError(s))
+	}
+
+	limit := u64(1) << 63
+	for at < end {
+		if s[at] != decimalPoint && (s[at] < '0' || s[at] > '9') {
+			return Err(invalidDurationError(s))
 		}
 
-		*v /= 10
+		// The whole part, which may not pass 2^63.
+		v := u64(0)
+		whole := at
+		for at < end && s[at] >= '0' && s[at] <= '9' {
+			if v > limit/10 {
+				return Err(invalidDurationError(s))
+			}
+
+			v = v*10 + u64(s[at]-'0')
+			if v > limit {
+				return Err(invalidDurationError(s))
+			}
+
+			at++
+		}
+
+		pre := at != whole
+
+		// The fraction: its digits as a number, and the power of ten it
+		// is over; digits past what a u64 holds are dropped.
+		f := u64(0)
+		scale := 1.0
+		post := false
+		if at < end && s[at] == decimalPoint {
+			at++
+			start := at
+			full := false
+			for at < end && s[at] >= '0' && s[at] <= '9' {
+				if !full {
+					if f > (limit-1)/10 {
+						full = true
+					} else {
+						y := f*10 + u64(s[at]-'0')
+						if y > limit {
+							full = true
+						} else {
+							f = y
+							scale *= 10
+						}
+					}
+				}
+
+				at++
+			}
+
+			post = at != start
+		}
+
+		if !pre && !post {
+			return Err(invalidDurationError(s))
+		}
+
+		// The unit: what follows up to the next number.
+		start := at
+		for at < end && s[at] != decimalPoint && (s[at] < '0' || s[at] > '9') {
+			at++
+		}
+
+		if at == start {
+			return Err(ParseError{msg: "time: missing unit in duration " + quote(s)})
+		}
+
+		name := s[start:at]
+		unit := u64(0)
+		if name == nanosecondSymbol {
+			unit = u64(Nanosecond)
+		} else if name == microsecondASCIISymbol || name == microsecondSymbol || name == microsecondGreekSymbol {
+			unit = u64(Microsecond)
+		} else if name == millisecondSymbol {
+			unit = u64(Millisecond)
+		} else if name == secondSymbol {
+			unit = u64(Second)
+		} else if name == minuteSymbol {
+			unit = u64(Minute)
+		} else if name == hourSymbol {
+			unit = u64(Hour)
+		} else {
+			return Err(ParseError{msg: "time: unknown unit " + quote(name) + " in duration " + quote(s)})
+		}
+
+		if v > limit/unit {
+			return Err(invalidDurationError(s))
+		}
+
+		v *= unit
+		if f > 0 {
+			v += u64(f64(f) * (f64(unit) / scale))
+			if v > limit {
+				return Err(invalidDurationError(s))
+			}
+		}
+
+		total += v
+		if total > limit {
+			return Err(invalidDurationError(s))
+		}
 	}
 
-	if print {
-		*w--
-		buf[*w] = '.'
+	if neg {
+		return Ok(-Duration(total))
+	}
+
+	if total > limit-1 {
+		return Err(invalidDurationError(s))
+	}
+
+	return Ok(Duration(total))
+}
+
+// Now returns the current time: the system's wall clock, and the
+// monotonic clock's reading, which Sub and the comparisons use between
+// two Times Now read. It asks the system for both clocks, and does not
+// block.
+//
+//	start := time.Now()
+//	work()
+//	elapsed := time.Since(start)
+func Now() Time {
+	var t Time
+	clock(mut t.sec, mut t.nsec, mut t.mono)
+	return t
+}
+
+// Unix returns the Time sec seconds and nsec nanoseconds after the
+// start of 1970 in UTC, before it for negative counts. An nsec outside
+// zero up to a second is carried into the seconds, so Unix(1, -1) is
+// the last nanosecond of the first second. The Time holds no monotonic
+// reading.
+//
+//	t := time.Unix(1700000000, 0)   // 2023-11-14 22:13:20 +0000 UTC
+func Unix(sec i64, nsec i64) Time {
+	sec += nsec / nanosecondsPerSecond
+	nsec = nsec % nanosecondsPerSecond
+	if nsec < 0 {
+		nsec += nanosecondsPerSecond
+		sec--
+	}
+
+	return Time{sec: sec, nsec: nsec, mono: 0}
+}
+
+// Since returns the time elapsed since t, Now().Sub(t): measured on
+// the monotonic clock when t came from Now, so a change of the wall
+// clock in between does not throw it off.
+func Since(t Time) Duration {
+	return Now().Sub(t)
+}
+
+// Date returns the Time of a date and a time of day in UTC: year,
+// month and day, the hour from 0 to 23, the minute min and the second
+// sec from 0 to 59, and nsec nanoseconds below a second. It returns
+// None when there is no such moment: a day the month does not have, 30
+// February or 29 February of a year that is not a leap year, a field
+// out of its range or negative, or a year past what a Time holds. It
+// guesses nothing: a value out of range is not carried into the next
+// unit, so 30 February is no date rather than 2 March.
+//
+//	deadline := time.Date(2026, time.November, 11, 21, 4, 5, 0)?
+func Date(year int, month Month, day int, hour int, min int, sec int, nsec int) Time? {
+	m := month.Number()
+	if year <= minYear || year >= maxYear || day < 1 || day > daysInMonth(m, year) {
+		return None
+	}
+
+	if hour < 0 || hour >= hoursPerDay || min < 0 || min >= minutesPerHour || sec < 0 || sec >= secondsPerMinute || nsec < 0 || nsec >= int(nanosecondsPerSecond) {
+		return None
+	}
+
+	return Some(timeOf(year, m, day, hour*secondsPerHour+min*secondsPerMinute+sec, nsec))
+}
+
+// Parse reads value as layout says and returns the Time it names, in
+// UTC; it borrows both and keeps neither. The layout's directives are
+// those the layout constants' comment lists, and the compiler takes
+// the layout only as a string literal or a constant, which it checks.
+// Parse is strict: value must be what the layout says and nothing
+// more, in fields as wide as Format writes them, and a date must
+// exist, so "2026-02-30" is refused rather than taken for 2 March. A
+// weekday must be the date's. %z and %:z read an offset from UTC,
+// +02:00, or a Z, and the Time is the moment in UTC; %Z reads UTC or
+// GMT, in either case, and no other name, since a Time keeps no zone
+// to remember one in. %Y reads a sign and four digits or more, as
+// Format writes a year. A layout without a year, a month or a day
+// starts from 1 January 1970, and one without a time from midnight.
+//
+// It returns a ParseError that names the text, the layout and what is
+// wrong: parsing time "2026-02-30" as "%Y-%m-%d": day out of range;
+// a field out of its range, a year past what a Time holds, a byte or a
+// field the text does not have, text left after the layout, %I without
+// %p, and a weekday or a day of the year that is not the date's each
+// have their own message. It reads value once and allocates only the
+// error's message.
+//
+//	t := time.Parse(time.RFC3339, "2026-11-11T21:04:05+02:00")?   // 19:04:05 UTC
+func Parse(layout ref string, value ref string) Result<Time, ParseError> {
+	year := 0
+	month := 0
+	day := 0
+	clock := 0
+	nsec := 0
+	offset := 0
+	weekday := 0
+	at := 0
+	li := 0
+	wrong := parse(layout, value, mut year, mut month, mut day, mut clock, mut nsec, mut offset, mut weekday, mut at, mut li)
+	if wrong == textMatches && (year <= minYear || year >= maxYear) {
+		wrong = wrongYear
+	}
+
+	if wrong == textMatches {
+		t := timeOf(year, month, day, clock, nsec)
+		if weekday == noWeekday || weekday == t.weekdayNumber() {
+			return Ok(Time{sec: t.sec - i64(offset), nsec: t.nsec, mono: 0})
+		}
+
+		wrong = wrongWeekday
+	}
+
+	return Err(ParseError{msg: "parsing time " + quote(value) + " as " + quote(layout) + ": " + failureMessage(wrong, layout, value, at, li)})
+}
+
+// String returns t as text in UTC: the date, the clock with the
+// nanoseconds past the second when there are any, without their
+// trailing zeros, and the zone, 2006-01-02 15:04:05.999999999 +0000
+// UTC. A year is written with four digits or more. The monotonic
+// reading is not written. It reads t through the borrow, allocates the
+// string it returns, and is fmt.Stringer's method, so fmt prints a
+// Time this way; Format writes any other form.
+func (t ref Time) String() string {
+	year, month, day := t.yearMonthDay()
+	clock := t.secondsOfDay()
+	hour := clock / secondsPerHour
+	minute := clock % secondsPerHour / secondsPerMinute
+	second := clock % secondsPerMinute
+	s := fmt.Sprintf("%.4d-%.2d-%.2d %.2d:%.2d:%.2d", year, month, day, hour, minute, second)
+	if t.nsec != 0 {
+		buf := make([]byte, fractionLen)
+		w := len(buf)
+		v := u64(t.nsec)
+		writeFraction(mut buf, mut w, mut v, digitsPerSecond)
+		s += string(buf[w:])
+	}
+
+	return s + utcSuffix
+}
+
+// Add returns the Time d after t, or before it for a negative d; t
+// itself, a Copy value, is unchanged. A monotonic reading moves with
+// it, and is dropped when it would not fit, so Sub then measures on
+// the wall clock.
+//
+//	deadline := time.Now().Add(5 * time.Second)
+func (t Time) Add(d Duration) Time {
+	sec := t.sec + i64(d/Second)
+	nsec := t.nsec + i64(d%Second)
+	if nsec >= nanosecondsPerSecond {
+		sec++
+		nsec -= nanosecondsPerSecond
+	} else if nsec < 0 {
+		sec--
+		nsec += nanosecondsPerSecond
+	}
+
+	mono := t.mono
+	if mono != 0 {
+		mono += i64(d)
+		if d < 0 && mono > t.mono || d > 0 && mono < t.mono || mono == 0 {
+			mono = 0
+		}
+	}
+
+	return Time{sec: sec, nsec: nsec, mono: mono}
+}
+
+// Sub returns the Duration from u to t, t - u, negative when t is
+// before u. When both hold a monotonic reading the readings are
+// subtracted, so the clock being set between them changes nothing. A
+// span longer than a Duration holds, about 292 years, gives the
+// longest Duration of its sign.
+//
+//	elapsed := time.Now().Sub(start)
+func (t Time) Sub(u Time) Duration {
+	if t.mono != 0 && u.mono != 0 {
+		d := Duration(t.mono - u.mono)
+		if d < 0 && t.mono > u.mono {
+			return maxDuration
+		}
+
+		if d > 0 && t.mono < u.mono {
+			return minDuration
+		}
+
+		return d
+	}
+
+	d := Duration(t.sec-u.sec)*Second + Duration(t.nsec-u.nsec)
+	if u.withoutMonotonic().Add(d) == t.withoutMonotonic() {
+		return d
+	}
+
+	if t.withoutMonotonic().Before(u.withoutMonotonic()) {
+		return minDuration
+	}
+
+	return maxDuration
+}
+
+// Cmp returns how t orders against u, both borrowed: Less when t is
+// the earlier instant, Greater when it is the later, Equal when they
+// are the same. It compares the monotonic readings when both hold one,
+// and the wall clock otherwise. It is Ord's method, so < and > on
+// Times mean it.
+func (t ref Time) Cmp(u ref Time) Ordering {
+	if t.mono != 0 && u.mono != 0 {
+		return t.mono.Cmp(u.mono)
+	}
+
+	if t.sec != u.sec {
+		return t.sec.Cmp(u.sec)
+	}
+
+	return t.nsec.Cmp(u.nsec)
+}
+
+// Eq reports whether t and u, both borrowed, are the same instant, as
+// Cmp orders them; it is what == on Times means.
+func (t ref Time) Eq(u ref Time) bool {
+	return t.Cmp(u) == Equal
+}
+
+// IsZero reports whether t is the zero Time, the Time a var t
+// time.Time holds: the start of 1970 in UTC. A deadline of the zero
+// Time is none.
+func (t Time) IsZero() bool {
+	return t.sec == 0 && t.nsec == 0
+}
+
+// Before reports whether t is an earlier instant than u, as Cmp
+// orders them.
+func (t Time) Before(u Time) bool {
+	return t.Cmp(u) == Less
+}
+
+// After reports whether t is a later instant than u, as Cmp orders
+// them.
+func (t Time) After(u Time) bool {
+	return t.Cmp(u) == Greater
+}
+
+// Unix returns the seconds since the start of 1970 in UTC, rounded
+// down: the second the instant is in, so a Time before 1970 gives a
+// negative count.
+func (t Time) Unix() i64 {
+	return t.sec
+}
+
+// UnixNano returns the nanoseconds since the start of 1970 in UTC. A
+// Time more than about 292 years from 1970 has more than an i64 holds,
+// and the result is then not meaningful.
+func (t Time) UnixNano() i64 {
+	return t.sec*nanosecondsPerSecond + t.nsec
+}
+
+// Year returns the year t is in, in UTC; a year before year 1 is 0 or
+// negative, as the proleptic Gregorian calendar counts it.
+func (t Time) Year() int {
+	year, _, _ := t.yearMonthDay()
+	return year
+}
+
+// Month returns the month t is in, in UTC.
+func (t Time) Month() Month {
+	_, month, _ := t.yearMonthDay()
+	return monthOf(month)
+}
+
+// Day returns the day of the month t is in, in UTC, from 1.
+func (t Time) Day() int {
+	_, _, day := t.yearMonthDay()
+	return day
+}
+
+// Hour returns the hour of the day t is in, in UTC, from 0 to 23.
+func (t Time) Hour() int {
+	return t.secondsOfDay() / secondsPerHour
+}
+
+// Minute returns the minute of the hour t is in, from 0 to 59.
+func (t Time) Minute() int {
+	return t.secondsOfDay() % secondsPerHour / secondsPerMinute
+}
+
+// Second returns the second of the minute t is in, from 0 to 59.
+func (t Time) Second() int {
+	return t.secondsOfDay() % secondsPerMinute
+}
+
+// Nanosecond returns the nanoseconds past the second, from 0 to
+// 999999999.
+func (t Time) Nanosecond() int {
+	return int(t.nsec)
+}
+
+// Weekday returns the day of the week t is in, in UTC.
+func (t Time) Weekday() Weekday {
+	return weekdayOf(t.weekdayNumber())
+}
+
+// YearDay returns the day of the year t is in, in UTC, from 1 for 1
+// January to 365, or 366 in a leap year.
+func (t Time) YearDay() int {
+	year, month, day := t.yearMonthDay()
+	before := (214*month - 211) / 7 // the days of a year before month, were February thirty days long
+	if month >= marchNumber {
+		before -= 2
+		if isLeap(year) {
+			before++
+		}
+	}
+
+	return before + day
+}
+
+// AddDate returns t with years, months and days added, each of which
+// may be negative: the years and months first, then the days. A month
+// is added on the calendar, so the day of the month stays what it was
+// when the new month has such a day, and is that month's last day when
+// it has not: a month after 31 January is 28 February, or 29 in a leap
+// year, and a month before 31 March is that same day, rather than the
+// days being carried over into 3 March. That is what a bill due monthly
+// means. The days are then added as days: each is 24 hours. The time
+// of day is kept, and the result holds no monotonic reading. When the
+// years and months would take the date past the years a Time holds, t
+// is returned as it is.
+//
+//	due := start.AddDate(0, 1, 0)   // from 31 January, 28 February
+func (t Time) AddDate(years int, months int, days int) Time {
+	year, month, day := t.yearMonthDay()
+	total := year*monthsPerYear + (month - 1) + years*monthsPerYear + months
+	year = total / monthsPerYear
+	month = total % monthsPerYear
+	if month < 0 {
+		month += monthsPerYear
+		year--
+	}
+
+	month++
+	if year <= minYear || year >= maxYear {
+		return t // past what a Time holds: nothing is added
+	}
+
+	last := daysInMonth(month, year)
+	if day > last {
+		day = last
+	}
+
+	moved := timeOf(year, month, day, t.secondsOfDay(), int(t.nsec))
+	return Time{sec: moved.sec + i64(days)*i64(secondsPerDay), nsec: moved.nsec, mono: 0}
+}
+
+// Truncate returns t rounded down to a multiple of d, counted from the
+// first instant of year 1, which was a Monday at midnight: so
+// Truncate(time.Hour) is the start of the hour, and Truncate(7 * 24 *
+// time.Hour) the Monday the week began. For a d of zero or less it
+// returns t. The result holds no monotonic reading.
+//
+//	day := time.Now().Truncate(24 * time.Hour)   // midnight UTC
+func (t Time) Truncate(d Duration) Time {
+	if d <= 0 {
+		return t.withoutMonotonic()
+	}
+
+	return t.withoutMonotonic().Add(-t.remainderSinceYearOne(d))
+}
+
+// Round returns t rounded to the nearest multiple of d, counted as
+// Truncate counts, a time halfway between two rounded up. For a d of
+// zero or less it returns t. The result holds no monotonic reading.
+func (t Time) Round(d Duration) Time {
+	if d <= 0 {
+		return t.withoutMonotonic()
+	}
+
+	r := t.remainderSinceYearOne(d)
+	if isLessThanHalf(r, d) {
+		return t.withoutMonotonic().Add(-r)
+	}
+
+	return t.withoutMonotonic().Add(d - r)
+}
+
+// Format returns t written as layout says, in UTC; it borrows the
+// layout and allocates the string it returns, made once. The layout's
+// directives are those the layout constants' comment lists, and the
+// compiler takes the layout only as a string literal or a constant,
+// which it checks, so Format cannot fail.
+//
+//	t.Format("%A, %-d %B %Y")          // Wednesday, 11 November 2026
+//	t.Format(time.RFC3339)             // 2026-11-11T21:04:05+00:00
+func (t Time) Format(layout ref string) string {
+	return format(layout, t.sec, t.nsec)
+}
+
+// Sleep pauses the task for d, and returns at once for a d of zero or
+// less. It blocks only the task that calls it: the worker it ran on
+// runs other tasks meanwhile. The runtime provides it.
+//
+//	time.Sleep(100 * time.Millisecond)
+func Sleep(d Duration)
+
+// After returns a channel that gets the time once, d from now: a
+// deadline for a select to wait on beside its other cases. The channel
+// holds the one value, and the runtime's timer puts it there, so no
+// task waits for it, and a program that does not receive it loses
+// nothing. A d past the largest time waits for as long as there is.
+// Each call makes a channel and a timer.
+//
+//	select {
+//	case reply := <-replies:
+//		use(reply)
+//	case <-time.After(time.Second):
+//		// too late
+//	}
+func After(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	startTimer(ch.Clone(), d, 0)
+	return ch
+}
+
+// Tick returns a channel that gets the time every d, for as long as the
+// program runs, on the period rather than d after the last tick, so the
+// ticks do not drift. A tick that arrives while the one before it is
+// still unreceived is dropped, so a slow receiver sees the ticks it can
+// keep up with and never a backlog of them. For a d of zero or less no
+// tick ever comes: the channel is one nothing sends on. Its timer is
+// never stopped; NewTicker makes a Ticker that can be.
+//
+//	for t := range time.Tick(time.Second) {
+//		report(t)
+//	}
+func Tick(d Duration) <-chan Time {
+	ch := make(chan Time, 1)
+	if d > 0 {
+		startTimer(ch.Clone(), d, d)
+	}
+
+	return ch
+}
+
+// NewTimer returns a Timer that sends the time on its channel C once,
+// d from now, or at once for a d of zero or less. The Timer owns the
+// timer the runtime keeps for it, which Stop calls off and Drop stops
+// when the Timer goes out of scope.
+//
+//	deadline := time.NewTimer(5 * time.Second)
+func NewTimer(d Duration) Timer {
+	ch := make(chan Time, 1)
+	startTimer(ch.Clone(), d, 0)
+	return Timer{C: ch}
+}
+
+// Stop calls the Timer off, and reports whether it did: true when the
+// time had not been received yet, whether or not the moment had come,
+// and false when it had been, or the Timer was stopped already. Once
+// Stop returns nothing is left to receive from C: a time sent and not
+// yet received is taken back, so no program needs to empty the channel
+// after it. It does not block.
+func (t mut Timer) Stop() bool {
+	return stopTimer(t.C.Clone())
+}
+
+// Reset makes the Timer fire d from now, whatever it was to do before,
+// and reports what Stop would have: whether the time it was to send had
+// not been received yet. A time sent and not received is taken back,
+// so what C gives next is the new one.
+func (t mut Timer) Reset(d Duration) bool {
+	return resetTimer(t.C.Clone(), d, 0)
+}
+
+// Drop stops the Timer when it goes out of scope, so its timer does
+// not outlive it.
+func (t mut Timer) Drop() {
+	_ = stopTimer(t.C.Clone())
+}
+
+// NewTicker returns a Ticker that sends the time on its channel C
+// every d, the first tick d from now. For a d of zero or less it never
+// ticks, as Tick does not, rather than failing. The Ticker owns the
+// timer the runtime keeps for it, which Stop ends and Drop ends when
+// the Ticker goes out of scope.
+//
+//	tick := time.NewTicker(500 * time.Millisecond)
+func NewTicker(d Duration) Ticker {
+	ch := make(chan Time, 1)
+	if d > 0 {
+		startTimer(ch.Clone(), d, d)
+	}
+
+	return Ticker{C: ch}
+}
+
+// Stop ends the ticks. Once it returns nothing is left to receive from
+// C: a tick sent and not received is taken back. Reset starts the
+// Ticker again.
+func (t mut Ticker) Stop() {
+	_ = stopTimer(t.C.Clone())
+}
+
+// Reset makes the Ticker tick every d from now on, the first tick d
+// from now; for a d of zero or less it stops it. A tick sent before and
+// not received is taken back, so the next one C gives is the new
+// period's.
+func (t mut Ticker) Reset(d Duration) {
+	if d > 0 {
+		_ = resetTimer(t.C.Clone(), d, d)
+	} else {
+		t.Stop()
 	}
 }
 
-// fmtInt writes the digits of v into buf before w and moves w to where
-// they start.
-func fmtInt(buf mut []byte, w mut int, v u64) {
-	if v == 0 {
-		*w--
-		buf[*w] = '0'
-		return
-	}
-
-	for v > 0 {
-		*w--
-		buf[*w] = byte(v%10) + '0'
-		v /= 10
-	}
-}
-
-// lessThanHalf reports whether x+x < y without overflowing, for an x
-// and a y that are both positive.
-func lessThanHalf(x Duration, y Duration) bool {
-	return u64(x)+u64(x) < u64(y)
-}
-
-// clock reads the system's wall clock into sec and nsec and the
-// monotonic clock into mono. The runtime provides it.
-func clock(sec mut i64, nsec mut i64, mono mut i64)
-
-// The calendar is the civil one, the proleptic Gregorian calendar, in
-// UTC: a Time's year, month and day, and the Time of a date. A date and
-// a count of days are turned into each other by the algorithms of Neri
-// and Schneider ("Euclidean affine functions and their application to
-// calendar algorithms"), which find a year, a month and a day with
-// multiplications and shifts in place of divisions, and no table of
-// months; date is the one from days to a date.
-
-// A Month is a month of the year. It is an enum, so no value of it is a
-// thirteenth month; Number gives its number, 1 for January.
-enum Month impl Copy, Clone, Eq {
-	January
-	February
-	March
-	April
-	May
-	June
-	July
-	August
-	September
-	October
-	November
-	December
+// Drop stops the Ticker when it goes out of scope, so its timer does
+// not outlive it.
+func (t mut Ticker) Drop() {
+	t.Stop()
 }
 
 // Number returns the month's number in the year, from 1 for January to
@@ -699,268 +1195,72 @@ func (m Month) Number() int {
 	}
 }
 
-// monthOf returns the month of a number from 1 to 12.
-func monthOf(n int) Month {
-	return match n {
-		1 => January,
-		2 => February,
-		3 => March,
-		4 => April,
-		5 => May,
-		6 => June,
-		7 => July,
-		8 => August,
-		9 => September,
-		10 => October,
-		11 => November,
-		_ => December,
-	}
+// Error returns the message, which names the text, the layout for
+// Parse, and what was wrong: parsing time "2026-02-30" as "%Y-%m-%d":
+// day out of range. It copies the message, which the ParseError keeps.
+func (e ref ParseError) Error() string {
+	return e.msg.Clone()
 }
 
-// A Weekday is a day of the week, in the order ISO 8601 gives them, from
-// Monday.
-enum Weekday impl Copy, Clone, Eq {
-	Monday
-	Tuesday
-	Wednesday
-	Thursday
-	Friday
-	Saturday
-	Sunday
+// withoutMonotonic returns t without its monotonic reading, for
+// arithmetic on the wall clock alone.
+func (t Time) withoutMonotonic() Time {
+	return Time{sec: t.sec, nsec: t.nsec, mono: 0}
 }
 
-// weekdayOf returns the day of the week of a number from 0 for Monday
-// to 6 for Sunday.
-func weekdayOf(n int) Weekday {
-	return match n {
-		0 => Monday,
-		1 => Tuesday,
-		2 => Wednesday,
-		3 => Thursday,
-		4 => Friday,
-		5 => Saturday,
-		_ => Sunday,
-	}
-}
-
-// isLeap reports whether year is a leap year: one that divides by four,
-// but by a hundred only when it divides by four hundred too.
-func isLeap(year int) bool {
-	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
-}
-
-// daysIn returns how many days month, a number from 1 to 12, has in
-// year.
-func daysIn(month int, year int) int {
-	if month == 2 {
-		if isLeap(year) {
-			return 29
-		}
-
-		return 28
-	}
-
-	return 30 + ((month + (month >> 3)) & 1)
-}
-
-// daysOf returns the days from the absolute epoch to the day of a date
-// that exists, year being within the years a Time can be in.
-func daysOf(year int, month int, day int) u64 {
-	amonth := u32(month)
-	janFeb := u32(0)
-	if amonth < 3 {
+// yearMonthDay returns the civil date of t in UTC: its year, its
+// month's number and its day. The days are counted in a calendar whose
+// year starts on March 1, so that the leap day falls at the end of a
+// year, and from an epoch that starts a 400-year cycle of 146097 days.
+// The cycle the day is in gives the century; within the cycle, the
+// year and the day of the year come from fixed-point multiplications
+// in place of divisions, by yearOfQuarterDays and monthOfDays, which
+// the compiler's integer arithmetic makes exact over the range; a day
+// in January or February then belongs to the next calendar year.
+func (t Time) yearMonthDay() (int, int, int) {
+	days := t.absoluteDay()
+	d := 4*days + 3
+	century := d / daysPer400Years
+	cd := u64(u32(d%daysPer400Years) | 3)
+	cyear := (yearOfQuarterDays * cd) >> 32
+	ayday := ((yearOfQuarterDays * cd) & low32Bits) / yearOfQuarterDays / 4
+	md := monthOfDays*ayday + monthOfDaysOffset
+	amonth := md >> 16
+	janFeb := u64(0)
+	if ayday >= daysMarchToDecember {
 		janFeb = 1
 	}
 
-	amonth += 12 * janFeb
-	y := u64(year) - u64(janFeb) + u64(absoluteYears)
-	ayday := (979*amonth - 2919) >> 5
-	century := y / 100
-	cyear := u32(y % 100)
-	cday := 1461 * cyear / 4
-	centurydays := 146097 * century / 4
-	return centurydays + u64(i64(cday+ayday)+i64(day)-1)
-}
-
-// timeOf returns the Time of a date that exists and a clock within the
-// day.
-func timeOf(year int, month int, day int, seconds int, nsec int) Time {
-	abs := daysOf(year, month, day)*secondsPerDay + u64(seconds)
-	return Time{sec: i64(abs - unixToAbsolute), nsec: i64(nsec), mono: 0}
-}
-
-// Date returns the Time of a date and a time of day in UTC, or None
-// when there is no such moment: a day the month does not have, 30
-// February or 29 February of a year that is not a leap year, an hour
-// past 23, a minute or a second past 59, a negative one, a count of
-// nanoseconds that is not below a second, or a year past what a Time
-// holds. It guesses nothing: where Go's Date carries a value out of
-// range into the next unit, so that 30 February is 2 March, this one
-// says the date does not exist, as Java's and Rust's do.
-//
-//	deadline := time.Date(2026, time.November, 11, 21, 4, 5, 0)?
-func Date(year int, month Month, day int, hour int, min int, sec int, nsec int) Time? {
-	m := month.Number()
-	if year <= minYear || year >= maxYear || day < 1 || day > daysIn(m, year) {
-		return None
-	}
-
-	if hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 59 || nsec < 0 || nsec > 999999999 {
-		return None
-	}
-
-	return Some(timeOf(year, m, day, hour*3600+min*60+sec, nsec))
-}
-
-// days returns the days from the absolute epoch to the day t is in.
-func (t Time) days() u64 {
-	return (u64(t.sec) + unixToAbsolute) / secondsPerDay
-}
-
-// clock returns the seconds since midnight of the day t is in.
-func (t Time) clock() int {
-	return int((u64(t.sec) + unixToAbsolute) % secondsPerDay)
-}
-
-// civil returns the year, the month's number and the day of t.
-func (t Time) civil() (int, int, int) {
-	year := i64(0)
-	month := i64(0)
-	day := i64(0)
-	t.date(mut year, mut month, mut day)
+	year := i64(century)*i64(yearsPerCentury) - absoluteYears + i64(cyear) + i64(janFeb)
+	month := i64(amonth) - i64(janFeb)*i64(monthsPerYear)
+	day := 1 + i64((md&low16Bits)/monthOfDays)
 	return (int(year), int(month), int(day))
 }
 
-// Year returns the year t is in.
-func (t Time) Year() int {
-	year, _, _ := t.civil()
-	return year
+// absoluteDay returns the days from the absolute epoch to the day t is
+// in.
+func (t Time) absoluteDay() u64 {
+	return (u64(t.sec) + unixToAbsolute) / secondsPerDay
 }
 
-// Month returns the month t is in.
-func (t Time) Month() Month {
-	_, month, _ := t.civil()
-	return monthOf(month)
+// secondsOfDay returns the seconds since midnight of the day t is in.
+func (t Time) secondsOfDay() int {
+	return int((u64(t.sec) + unixToAbsolute) % secondsPerDay)
 }
 
-// Day returns the day of the month t is in, from 1.
-func (t Time) Day() int {
-	_, _, day := t.civil()
-	return day
+// weekdayNumber returns the day of the week t is in as a number, 0 for
+// Monday to 6 for Sunday.
+func (t Time) weekdayNumber() int {
+	return int((t.absoluteDay() + epochWeekday) % daysPerWeek)
 }
 
-// Hour returns the hour of the day, from 0 to 23.
-func (t Time) Hour() int {
-	return t.clock() / 3600
-}
-
-// Minute returns the minute of the hour, from 0 to 59.
-func (t Time) Minute() int {
-	return t.clock() % 3600 / 60
-}
-
-// Second returns the second of the minute, from 0 to 59.
-func (t Time) Second() int {
-	return t.clock() % 60
-}
-
-// Nanosecond returns the nanoseconds past the second, from 0 to
-// 999999999.
-func (t Time) Nanosecond() int {
-	return int(t.nsec)
-}
-
-// Weekday returns the day of the week t is in.
-func (t Time) Weekday() Weekday {
-	return weekdayOf(int((t.days() + 2) % 7)) // the absolute epoch's first day is a Wednesday
-}
-
-// YearDay returns the day of the year t is in, from 1 for 1 January to
-// 365, or 366 in a leap year.
-func (t Time) YearDay() int {
-	year, month, day := t.civil()
-	before := (214*month - 211) / 7 // the days of a year before month, were February thirty days long
-	if month >= 3 {
-		before -= 2
-		if isLeap(year) {
-			before++
-		}
-	}
-
-	return before + day
-}
-
-// AddDate returns t with years, months and days added, each of which
-// may be negative: the years and months first, then the days. A month
-// is added on the calendar, so the day of the month stays what it was
-// when the new month has such a day, and is that month's last day when
-// it has not: a month after 31 January is 28 February, or 29 in a leap
-// year, and a month before 31 March is that same day, where Go's
-// AddDate carries the days over and gives 3 March for both. That is
-// the rule of Java's plusMonths and of Rust's, and what a bill due
-// monthly means. The days are then added as days: each is 24 hours.
-// The time of day is kept.
-func (t Time) AddDate(years int, months int, days int) Time {
-	year, month, day := t.civil()
-	total := year*12 + (month - 1) + years*12 + months
-	year = total / 12
-	month = total % 12
-	if month < 0 {
-		month += 12
-		year--
-	}
-
-	month++
-	if year <= minYear || year >= maxYear {
-		return t // past what a Time holds: nothing is added
-	}
-
-	last := daysIn(month, year)
-	if day > last {
-		day = last
-	}
-
-	moved := timeOf(year, month, day, t.clock(), int(t.nsec))
-	return Time{sec: moved.sec + i64(days)*86400, nsec: moved.nsec, mono: 0}
-}
-
-// Truncate returns t rounded down to a multiple of d, counted from the
-// first instant of year 1, which was a Monday at midnight: so
-// Truncate(time.Hour) is the start of the hour, and Truncate(7 * 24 *
-// time.Hour) the Monday the week began, as Go's Truncate gives. For a
-// d of zero or less it returns t. The result holds no monotonic
-// reading.
-func (t Time) Truncate(d Duration) Time {
-	if d <= 0 {
-		return t.wall()
-	}
-
-	return t.wall().Add(-t.remainder(d))
-}
-
-// Round returns t rounded to the nearest multiple of d, counted as
-// Truncate counts, a time halfway between two rounded up. For a d of
-// zero or less it returns t.
-func (t Time) Round(d Duration) Time {
-	if d <= 0 {
-		return t.wall()
-	}
-
-	r := t.remainder(d)
-	if lessThanHalf(r, d) {
-		return t.wall().Add(-r)
-	}
-
-	return t.wall().Add(d - r)
-}
-
-// remainder returns what is left of the time since year 1 after the
-// last whole multiple of d, a d above zero: from zero up to d. The time
-// since year 1 in nanoseconds does not fit sixty-four bits, so it is
-// divided as Go's div divides it: by the nanoseconds alone when d
-// divides a second, by the seconds alone when d is a whole count of
-// them, and by a long division of the two words otherwise.
-func (t Time) remainder(d Duration) Duration {
+// remainderSinceYearOne returns what is left of the time since year 1
+// after the last whole multiple of d, a d above zero: from zero up to
+// d. The time since year 1 in nanoseconds does not fit sixty-four
+// bits, so it is divided by the nanoseconds alone when d divides a
+// second, by the seconds alone when d is a whole count of them, and by
+// a long division of the two words otherwise.
+func (t Time) remainderSinceYearOne(d Duration) Duration {
 	sec := t.sec + unixToYearOne
 	nsec := t.nsec
 	neg := false
@@ -969,7 +1269,7 @@ func (t Time) remainder(d Duration) Duration {
 		sec = -sec
 		nsec = -nsec
 		if nsec < 0 {
-			nsec += 1000000000
+			nsec += nanosecondsPerSecond
 			sec--
 		}
 	}
@@ -983,10 +1283,10 @@ func (t Time) remainder(d Duration) Duration {
 	} else {
 		// sec*1e9 + nsec in two words, u1 the upper.
 		s := u64(sec)
-		tmp := (s >> 32) * 1000000000
+		tmp := (s >> 32) * u64(nanosecondsPerSecond)
 		u1 := tmp >> 32
 		u0 := tmp << 32
-		tmp = (s & 0xFFFFFFFF) * 1000000000
+		tmp = (s & low32Bits) * u64(nanosecondsPerSecond)
 		was := u0
 		u0 += tmp
 		if u0 < was {
@@ -1037,149 +1337,177 @@ func (t Time) remainder(d Duration) Duration {
 	return r
 }
 
-// A layout says how a Time is written as text, for Format, and read
-// from it, for Parse. It is text with directives in it, each a percent
-// sign and a letter, as the strftime of C and POSIX has them, which
-// Python, Ruby, Rust's chrono and C++ use too: "%Y-%m-%d %H:%M:%S"
-// is 2026-11-11 21:04:05. Every part of a layout that stands for
-// something starts with a percent sign, so a mistake in one is not
-// taken for text: the compiler refuses a layout with a directive there
-// is none of, as it refuses a format of fmt's with a verb there is
-// none of, and so a layout is a string literal or a constant.
-//
-// The date:
-//
-//	%Y  the year, four digits or more    %C  the century, two digits
-//	%y  the year in its century, 00-99   %m  the month, 01-12
-//	%B  the month's name, November       %b  %h  its first three letters
-//	%d  the day of the month, 01-31      %e  the same, a space for the zero
-//	%j  the day of the year, 001-366     %A  the weekday's name, Wednesday
-//	%a  its first three letters          %u  its number, 1 for Monday to 7
-//	%w  its number, 0 for Sunday to 6    %G  the year of the ISO 8601 week
-//	%g  that year in its century         %V  the ISO 8601 week, 01-53
-//	%U  the week of the year from the first Sunday, 00-53
-//	%W  the week of the year from the first Monday, 00-53
-//
-// The time of day:
-//
-//	%H  the hour, 00-23                  %I  the hour of the half day, 01-12
-//	%M  the minute, 00-59                %S  the second, 00-59
-//	%p  AM or PM                         %P  am or pm
-//	%f  the nanoseconds, nine digits     %.f  a point and the fraction of a
-//	second in as few of three, six or nine digits as hold it, or nothing
-//	%.3f  %.6f  %.9f  a point and the fraction in that many digits
-//
-// The zone, which is always UTC:
-//
-//	%z  +0000        %:z  +00:00        %Z  UTC
-//
-// Several at once, and the rest:
-//
-//	%F  %Y-%m-%d     %T  %X  %H:%M:%S   %R  %H:%M     %D  %x  %m/%d/%y
-//	%r  %I:%M:%S %p  %c  %a %b %e %H:%M:%S %Y          %s  the seconds since 1970
-//	%n  a newline    %t  a tab          %%  a percent sign
-//
-// A number is written with zeros before it up to its width; a - after
-// the percent sign writes it without them, %-d, and a _ with spaces,
-// %_d.
-//
-// Parse reads the same directives, but for those that do not say which
-// day or time it is: %C, %G, %g, %V, %U, %W, %u, %w and %s. It reads
-// %z and %:z as an offset from UTC, or a Z, and gives the moment in
-// UTC; %Z as UTC or GMT.
+// clock reads the system's wall clock into sec and nsec and the
+// monotonic clock into mono. The runtime provides it.
+func clock(sec mut i64, nsec mut i64, mono mut i64)
 
-// Format returns t written as layout says, in UTC.
-//
-//	t.Format("%A, %-d %B %Y")          // Wednesday, 11 November 2026
-//	t.Format(time.RFC3339)             // 2026-11-11T21:04:05+00:00
-func (t Time) Format(layout ref string) string {
-	return format(layout, t.sec, t.nsec)
-}
+// startTimer has the runtime's timer put the time in ch d from now, and
+// then every period when every is above zero. The timer owns the
+// handle, and drops it once it has fired for the last time, so a
+// channel no one receives from is freed with the timer. The runtime
+// provides it.
+func startTimer(ch chan<- Time, d Duration, every Duration)
+
+// stopTimer stops the timer that sends on ch, and takes back a time it
+// sent that no one received; it reports whether it stopped either. It
+// takes a handle of the channel of its own. The runtime provides it.
+func stopTimer(ch <-chan Time) bool
+
+// resetTimer does what stopTimer does and then has the timer send on
+// ch d from now, and every period after when every is above zero. It
+// takes a handle of the channel of its own. The runtime provides it.
+func resetTimer(ch <-chan Time, d Duration, every Duration) bool
 
 // format writes the moment of sec and nsec as layout says. The runtime
 // provides it, as it provides what fmt and strconv write: a string made
 // once.
 func format(layout ref string, sec i64, nsec i64) string
 
-// weekday returns the day of the week t is in as a number, 0 for
-// Monday to 6 for Sunday.
-func (t Time) weekday() int {
-	return int((t.days() + 2) % 7)
-}
-
-// A ParseError says why Parse or ParseDuration refused a text. It
-// prints as its message.
-struct ParseError impl Error, Clone {
-	msg string
-}
-
-// Error returns the message: parsing time "2026-02-30" as "%Y-%m-%d":
-// day out of range.
-func (e ref ParseError) Error() string {
-	return e.msg.Clone()
-}
-
-// Parse reads value as layout says and returns the Time it names, in
-// UTC, or why it does not name one. It is strict: value must be what
-// the layout says and nothing more, in fields as wide as Format writes
-// them, and a date must exist, so "2026-02-30" is refused where Go's
-// Parse takes it for 2 March. A weekday must be the date's. %z and %:z
-// read an offset from UTC, +02:00, or a Z, and the Time is the moment
-// in UTC; %Z reads UTC or GMT, in either case, and no other name, since
-// a Time keeps no zone to remember one in. %Y reads a sign and four
-// digits or more, as Format writes a year, and a year past what a Time
-// holds is refused. A layout without a year, a month or a day starts
-// from 1 January 1970, and one without a time from midnight.
-//
-//	t := time.Parse(time.RFC3339, "2026-11-11T21:04:05+02:00")?   // 19:04:05 UTC
-func Parse(layout ref string, value ref string) Result<Time, ParseError> {
-	year := 0
-	month := 0
-	day := 0
-	clock := 0
-	nsec := 0
-	offset := 0
-	weekday := 0
-	at := 0
-	li := 0
-	wrong := parse(layout, value, mut year, mut month, mut day, mut clock, mut nsec, mut offset, mut weekday, mut at, mut li)
-	if wrong == 0 && (year <= minYear || year >= maxYear) {
-		wrong = wrongYear
-	}
-
-	if wrong == 0 {
-		t := timeOf(year, month, day, clock, nsec)
-		if weekday < 0 || weekday == t.weekday() {
-			return Ok(Time{sec: t.sec - i64(offset), nsec: t.nsec, mono: 0})
-		}
-
-		wrong = wrongWeekday
-	}
-
-	return Err(ParseError{msg: "parsing time " + quote(value) + " as " + quote(layout) + ": " + why(wrong, layout, value, at, li)})
-}
-
 // parse reads value as layout says into the date and the seconds since
 // midnight it names, its nanoseconds, the seconds its offset is east of
-// UTC, and its weekday, 0 for Monday, or -1 when it names none. It
-// returns 0, or which of the ways below value is not what layout says,
-// with at where in value and li where in layout. The runtime provides
-// it.
+// UTC, and its weekday, 0 for Monday, or noWeekday when it names none.
+// It returns textMatches, or which of the ways a text can be wrong
+// value is, with at where in value and li where in layout. The runtime
+// provides it.
 func parse(layout ref string, value ref string, year mut int, month mut int, day mut int, clock mut int, nsec mut int, offset mut int, weekday mut int, at mut int, li mut int) int
 
-// why words what is wrong with value.
-func why(wrong int, layout ref string, value ref string, at int, li int) string {
+// writeFraction writes the fraction v/10**digits, .12345, into buf
+// before w, without its trailing zeros and without the point when the
+// fraction is zero, moves w to where it starts, and leaves
+// v/10**digits in v.
+func writeFraction(buf mut []byte, w mut int, v mut u64, digits int) {
+	print := false
+	for i := 0; i < digits; i++ {
+		digit := *v % 10
+		print = print || digit != 0
+		if print {
+			*w--
+			buf[*w] = byte(digit) + '0'
+		}
+
+		*v /= 10
+	}
+
+	if print {
+		*w--
+		buf[*w] = decimalPoint
+	}
+}
+
+// writeDigits writes the decimal digits of v into buf before w and
+// moves w to where they start.
+func writeDigits(buf mut []byte, w mut int, v u64) {
+	if v == 0 {
+		*w--
+		buf[*w] = '0'
+		return
+	}
+
+	for v > 0 {
+		*w--
+		buf[*w] = byte(v%10) + '0'
+		v /= 10
+	}
+}
+
+// isLessThanHalf reports whether x+x < y without overflowing, for an x
+// and a y that are both positive.
+func isLessThanHalf(x Duration, y Duration) bool {
+	return u64(x)+u64(x) < u64(y)
+}
+
+// monthOf returns the month of a number from 1 to 12.
+func monthOf(n int) Month {
+	return match n {
+		1 => January,
+		2 => February,
+		3 => March,
+		4 => April,
+		5 => May,
+		6 => June,
+		7 => July,
+		8 => August,
+		9 => September,
+		10 => October,
+		11 => November,
+		_ => December,
+	}
+}
+
+// weekdayOf returns the day of the week of a number from 0 for Monday
+// to 6 for Sunday.
+func weekdayOf(n int) Weekday {
+	return match n {
+		0 => Monday,
+		1 => Tuesday,
+		2 => Wednesday,
+		3 => Thursday,
+		4 => Friday,
+		5 => Saturday,
+		_ => Sunday,
+	}
+}
+
+// isLeap reports whether year is a leap year: one that divides by four,
+// but by a hundred only when it divides by four hundred too.
+func isLeap(year int) bool {
+	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
+}
+
+// daysInMonth returns how many days month, a number from 1 to 12, has
+// in year.
+func daysInMonth(month int, year int) int {
+	if month == februaryNumber {
+		if isLeap(year) {
+			return 29
+		}
+
+		return 28
+	}
+
+	return 30 + ((month + (month >> 3)) & 1)
+}
+
+// absoluteDayOf returns the days from the absolute epoch to the day of
+// a date that exists, year being within the years a Time can be in.
+func absoluteDayOf(year int, month int, day int) u64 {
+	amonth := u32(month)
+	janFeb := u32(0)
+	if amonth < u32(marchNumber) {
+		janFeb = 1
+	}
+
+	amonth += u32(monthsPerYear) * janFeb
+	y := u64(year) - u64(janFeb) + u64(absoluteYears)
+	ayday := (daysBeforeMonthFactor*amonth - daysBeforeMonthOffset) >> 5
+	century := y / yearsPerCentury
+	cyear := u32(y % yearsPerCentury)
+	cday := daysPer4Years * cyear / 4
+	centurydays := daysPer400Years * century / 4
+	return centurydays + u64(i64(cday+ayday)+i64(day)-1)
+}
+
+// timeOf returns the Time of a date that exists and a clock within the
+// day, in seconds since midnight, with nsec nanoseconds past it.
+func timeOf(year int, month int, day int, seconds int, nsec int) Time {
+	abs := absoluteDayOf(year, month, day)*secondsPerDay + u64(seconds)
+	return Time{sec: i64(abs - unixToAbsolute), nsec: i64(nsec), mono: 0}
+}
+
+// failureMessage words what is wrong with value, as parse's code wrong
+// says, at the offset at in value and li in layout.
+func failureMessage(wrong int, layout ref string, value ref string, at int, li int) string {
 	rest := quote(value[at:])
 	d := if li < layout.Len() { layout[li] } else { byte(0) }
 	if wrong == wrongByte {
 		// A letter is a directive's when an odd run of % stands before
 		// it: %n is a newline, and %%n a percent sign and the letter.
 		percents := 0
-		for k := li - 1; k >= 0 && layout[k] == '%'; k-- {
+		for k := li - 1; k >= 0 && layout[k] == percentSign; k-- {
 			percents++
 		}
 
-		if percents%2 == 1 && (d == 'n' || d == 't' || d == '%') {
+		if percents%2 == 1 && (d == 'n' || d == 't' || d == percentSign) {
 			return "cannot find %" + layout[li:li+1] + " at " + rest
 		}
 
@@ -1187,7 +1515,7 @@ func why(wrong int, layout ref string, value ref string, at int, li int) string 
 	}
 
 	if wrong == wrongField {
-		if d == '%' {
+		if d == percentSign {
 			return "cannot parse " + rest + " as a fraction of a second"
 		}
 
@@ -1214,169 +1542,31 @@ func why(wrong int, layout ref string, value ref string, at int, li int) string 
 		return "cannot parse " + rest + " as %" + layout[li:li+1]
 	}
 
-	// A bare name in a pattern binds, so each arm names its constant in
-	// a guard.
-	return match wrong {
-		_ if wrong == wrongMonth => "month out of range",
-		_ if wrong == wrongDay => "day out of range",
-		_ if wrong == wrongHour => "hour out of range",
-		_ if wrong == wrongMinute => "minute out of range",
-		_ if wrong == wrongSecond => "second out of range",
-		_ if wrong == wrongYearDay => "day of the year out of range",
-		_ if wrong == wrongOffset => "offset from UTC out of range",
-		_ if wrong == unreadField => "%" + layout[li:li+1] + " does not say which day or time it is, and is not read",
-		_ if wrong == extraText => "extra text " + rest,
-		_ if wrong == halfUnsaid => "%I needs %p to say which half of the day",
-		_ if wrong == wrongDate => "day of the year does not match the date",
-		_ if wrong == wrongYear => "year out of range",
+	return match {
+		wrong == wrongMonth => "month out of range",
+		wrong == wrongDay => "day out of range",
+		wrong == wrongHour => "hour out of range",
+		wrong == wrongMinute => "minute out of range",
+		wrong == wrongSecond => "second out of range",
+		wrong == wrongYearDay => "day of the year out of range",
+		wrong == wrongOffset => "offset from UTC out of range",
+		wrong == unreadField => "%" + layout[li:li+1] + " does not say which day or time it is, and is not read",
+		wrong == extraText => "extra text " + rest,
+		wrong == halfDayMissing => "%I needs %p to say which half of the day",
+		wrong == wrongDate => "day of the year does not match the date",
+		wrong == wrongYear => "year out of range",
 		_ => "weekday does not match the date",
 	}
 }
 
-// quote returns s between double quotes, for a message.
+// quote returns s between double quotes, its special characters
+// escaped, for a message.
 func quote(s ref string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// ParseDuration reads a Duration as String writes one, and as Go's
-// ParseDuration reads it: numbers, each with a unit and perhaps a
-// fraction, one after another, with a sign before the first: 1h30m,
-// -2m3.5s, 1.5h, 250ms. The units are ns, us or µs, ms, s, m and h. A
-// text that is not one, or a span longer than a Duration holds, is a
-// ParseError: time: invalid duration "1x".
-func ParseDuration(s ref string) Result<Duration, ParseError> {
-	total := u64(0)
-	at := 0
-	end := s.Len()
-	neg := false
-	if end > 0 && (s[0] == '-' || s[0] == '+') {
-		neg = s[0] == '-'
-		at = 1
-	}
-
-	if s[at:] == "0" {
-		return Ok(0)
-	}
-
-	if at == end {
-		return Err(invalidDuration(s))
-	}
-
-	limit := u64(1) << 63
-	for at < end {
-		if s[at] != '.' && (s[at] < '0' || s[at] > '9') {
-			return Err(invalidDuration(s))
-		}
-
-		// The whole part, which may not pass 2^63.
-		v := u64(0)
-		whole := at
-		for at < end && s[at] >= '0' && s[at] <= '9' {
-			if v > limit/10 {
-				return Err(invalidDuration(s))
-			}
-
-			v = v*10 + u64(s[at]-'0')
-			if v > limit {
-				return Err(invalidDuration(s))
-			}
-
-			at++
-		}
-
-		pre := at != whole
-
-		// The fraction: its digits as a number, and the power of ten it
-		// is over; digits past what a u64 holds are dropped.
-		f := u64(0)
-		scale := 1.0
-		post := false
-		if at < end && s[at] == '.' {
-			at++
-			start := at
-			full := false
-			for at < end && s[at] >= '0' && s[at] <= '9' {
-				if !full {
-					if f > (limit-1)/10 {
-						full = true
-					} else {
-						y := f*10 + u64(s[at]-'0')
-						if y > limit {
-							full = true
-						} else {
-							f = y
-							scale *= 10
-						}
-					}
-				}
-
-				at++
-			}
-
-			post = at != start
-		}
-
-		if !pre && !post {
-			return Err(invalidDuration(s))
-		}
-
-		// The unit: what follows up to the next number.
-		start := at
-		for at < end && s[at] != '.' && (s[at] < '0' || s[at] > '9') {
-			at++
-		}
-
-		if at == start {
-			return Err(ParseError{msg: "time: missing unit in duration " + quote(s)})
-		}
-
-		name := s[start:at]
-		unit := u64(0)
-		if name == "ns" {
-			unit = u64(Nanosecond)
-		} else if name == "us" || name == "µs" || name == "μs" {
-			unit = u64(Microsecond)
-		} else if name == "ms" {
-			unit = u64(Millisecond)
-		} else if name == "s" {
-			unit = u64(Second)
-		} else if name == "m" {
-			unit = u64(Minute)
-		} else if name == "h" {
-			unit = u64(Hour)
-		} else {
-			return Err(ParseError{msg: "time: unknown unit " + quote(name) + " in duration " + quote(s)})
-		}
-
-		if v > limit/unit {
-			return Err(invalidDuration(s))
-		}
-
-		v *= unit
-		if f > 0 {
-			v += u64(f64(f) * (f64(unit) / scale))
-			if v > limit {
-				return Err(invalidDuration(s))
-			}
-		}
-
-		total += v
-		if total > limit {
-			return Err(invalidDuration(s))
-		}
-	}
-
-	if neg {
-		return Ok(-Duration(total))
-	}
-
-	if total > limit-1 {
-		return Err(invalidDuration(s))
-	}
-
-	return Ok(Duration(total))
-}
-
-func invalidDuration(s ref string) ParseError {
+// invalidDurationError returns the ParseError of a text ParseDuration
+// cannot read as a Duration.
+func invalidDurationError(s ref string) ParseError {
 	return ParseError{msg: "time: invalid duration " + quote(s)}
 }

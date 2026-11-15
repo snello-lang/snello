@@ -26,43 +26,66 @@ enum Kind impl Copy, Eq {
 	Sentence
 }
 
-// Graphemes returns the grapheme clusters of s.
+// Graphemes returns the grapheme clusters of s, in order, each a borrow
+// into s: what a reader sees as one character, a letter with its
+// accents, a flag, an emoji with its modifiers. No piece is copied;
+// only the slice that holds them is allocated. An empty s gives none.
+//
+//	segment.Graphemes("é👍🏽") // "é", "👍🏽"
 func Graphemes(s ref string) []ref string {
 	return split(s, Grapheme)
 }
 
-// Words returns the pieces of s between word boundaries: the words, and
-// the runs of spaces and the punctuation between them, each a piece of
-// its own, as annex 29 places the boundaries. IsWord tells the words
-// from the rest.
+// Words returns the pieces of s between word boundaries, in order, each
+// a borrow into s: the words, and the runs of spaces and the
+// punctuation between them, each a piece of its own, as annex 29
+// places the boundaries. IsWord tells the words from the rest. No piece
+// is copied; only the slice that holds them is allocated.
+//
+//	segment.Words("Hi, you.") // "Hi", ",", " ", "you", "."
 func Words(s ref string) []ref string {
 	return split(s, Word)
 }
 
-// Sentences returns the sentences of s, each with the spaces after it.
+// Sentences returns the sentences of s, in order, each a borrow into s
+// with the spaces after it. No piece is copied; only the slice that
+// holds them is allocated.
+//
+//	segment.Sentences("One. Two?") // "One. ", "Two?"
 func Sentences(s ref string) []ref string {
 	return split(s, Sentence)
 }
 
-// Next returns the byte offset of the first boundary of kind k after the
-// boundary at, for walking s without the slice, at going from 0 until
-// there is none: None when no segment starts at at, at the end of s,
-// past it or below 0.
+// Next returns the byte offset of the first boundary of kind k after
+// the boundary at, for walking s with no slice allocated, at going from
+// 0 until there is none. It returns None when no segment starts at at:
+// at the end of s, past it or below 0. at must be a boundary of kind k,
+// 0 or an offset Next returned.
+//
+//	at := 0
+//	for {
+//		end := segment.Next(segment.Word, ref s, at) ?? break
+//		piece := s[at:end]
+//		at = end
+//	}
 func Next(k Kind, s ref string, at int) int? {
 	if at < 0 || at >= len(s) {
 		return None
 	}
 
-	return Some(boundary(s, at, k))
+	return Some(nextBoundary(s, at, k))
 }
 
-// Count returns how many segments of kind k s holds, without the slice:
-// Count(Grapheme, s) is the number of characters a reader sees.
+// Count returns how many segments of kind k s holds, with no slice
+// allocated: Count(Grapheme, s) is the number of characters a reader
+// sees, where len(s) counts bytes.
+//
+//	segment.Count(segment.Grapheme, "é") // 1
 func Count(k Kind, s ref string) int {
 	n := 0
 	at := 0
 	for at < len(s) {
-		at = boundary(s, at, k)
+		at = nextBoundary(s, at, k)
 		n += 1
 	}
 
@@ -71,7 +94,7 @@ func Count(k Kind, s ref string) int {
 
 // IsWord reports whether a piece Words gave is a word, one holding a
 // letter or a number, as an ideograph and a kana are letters; a run of
-// spaces or of punctuation is not.
+// spaces or of punctuation is not. piece is only read.
 func IsWord(piece ref string) bool {
 	for _, r := range piece {
 		if unicode.IsLetter(r) || unicode.IsNumber(r) {
@@ -87,7 +110,7 @@ func split(s ref string, k Kind) []ref string {
 	out := []ref string{}
 	at := 0
 	for at < len(s) {
-		end := boundary(s, at, k)
+		end := nextBoundary(s, at, k)
 		out.Push(s[at:end])
 		at = end
 	}
@@ -95,14 +118,14 @@ func split(s ref string, k Kind) []ref string {
 	return out
 }
 
-// boundary returns the first boundary of kind k after the boundary at,
-// an offset within s.
-func boundary(s ref string, at int, k Kind) int {
-	return at + next(s, at, code(k))
+// nextBoundary returns the first boundary of kind k after the boundary
+// at, an offset within s.
+func nextBoundary(s ref string, at int, k Kind) int {
+	return at + next(s, at, kindCode(k))
 }
 
-// code numbers the kinds as the runtime does.
-func code(k Kind) int {
+// kindCode returns the number the runtime knows the kind k by.
+func kindCode(k Kind) int {
 	return match k {
 		Grapheme => 0,
 		Word => 1,
@@ -111,5 +134,5 @@ func code(k Kind) int {
 }
 
 // next returns the length in bytes of the segment of the kind that
-// starts at the boundary at.
+// starts at the boundary at. The runtime provides it.
 func next(s ref string, at int, kind int) int
