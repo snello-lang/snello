@@ -223,9 +223,35 @@ An enum is written by default as its variant's name, alone or as an object's one
 
 JSON without a type has two readers. `json.Parse(ref text)` checks the text once and indexes it into a `json.Doc`, which reads in place: `doc.Get(n, "servers")`, `doc.At(n, "/servers/0/port")`, `doc.Int(n)`, `doc.StringInPlace(n)` with nothing copied, and `doc.Decode<Server>(n)` for one part as a type. `json.Unmarshal<json.Value>(text)` reads an owned tree instead, which outlives the text: a number keeps its text, `json.Number("9007199254740993")`, an object its members in order, each key once, and `Marshal` writes it back compacted, its numbers and its members' order kept. A field of type `json.Text` passes its part of the input through unread.
 
+A stream of values, a file or a connection, is read and written a value at a time. `json.NewEncoder(mut w)` writes to any `io.Writer`: `enc.Encode(ref v)` writes the value and a line break after it, in one write, so the stream has one value to a line, and `enc.SetIndent("", "  ")` lays each out. `json.NewDecoder(mut r)` reads from any `io.Reader`: `dec.Decode<T>()` returns the next value, or `None` at the end of the input, whatever the space between the values and however the reads cut their text.
+
+```go
+enc := json.NewEncoder(mut conn)
+enc.Encode(ref event)?
+
+dec := json.NewDecoder(mut conn)
+for {
+	ev := dec.Decode<Event>()? ?? break
+	handle(ev)
+}
+```
+
+One large array or object is read a piece at a time, so it is never held whole: `BeginArray` reads its `[`, `Decode` an element while `More` says one comes, and `EndArray` its `]`; in an object `Key` reads each member's key before `Decode` reads its value. `Peek` tells the kind of what comes next, so a program can walk JSON it knows nothing of.
+
+```go
+dec.BeginArray()?
+for dec.More()? {
+	rec := dec.Decode<Record>()? ?? break
+	total += rec.Amount
+}
+dec.EndArray()?
+```
+
+A value is read by `Unmarshal`'s rules, and an error's offset counts from the start of the input. A value its type refuses is passed, so the next `Decode` reads the one after it; text cut off by the end of the input is `unexpected end of input`, again at each call. When the reader fails, every later call returns its failure, which `dec.IoError()` gives, so the program can see an `io.TimedOut` from an `io.Reset`; an Encoder whose writer failed does the same, since the writer may hold part of a value. `dec.Offset()` is where the next byte lies in the input, and `dec.Buffered()` lends the bytes read past the JSON, for an input that goes on in another form.
+
 ## Memory safe, no collector
 
-Reflection adds no kind of value and nothing to the program when it runs. A reflecting function is a generic function: checked once against the rules every function is, then compiled per type with its loops written out, so what runs is ordinary code over ordinary values, each owned once and dropped once. A field is lent and never moved, so no `Drop` reads a field taken from it. A value is built by a literal naming every field, so none is half made, and a `?` drops the fields made before it. A type is built from its fields only where a literal of it could be written, or where its package listed `Reflect`, so nothing is forged. Field and variant names are constant strings in the code written per type, and nothing describes a type at run time.
+Reflection adds no kind of value and nothing to the program when it runs. A reflecting function is a generic function: checked once against the rules every function is, then compiled per type with its loops written out, so what runs is ordinary code over ordinary values, each owned once and dropped once. A field is lent and never moved, so no `Drop` reads a field taken from it. A value is built by a literal naming every field, so none is half made, and a `?` drops the fields made before it. A type is built from its fields only where a literal of it could be written, or where its package listed `Reflect`, so nothing is forged. Field and variant names are constant strings in the code written per type, and nothing describes a type at run time. An Encoder and a Decoder hold a `mut` borrow of their writer or reader, so nothing else uses it while they live; a Decoder reads each value where it lies in its block, a borrow of the block that ends before the next read moves it.
 
 ## For maintainers
 

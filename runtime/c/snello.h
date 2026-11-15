@@ -349,6 +349,7 @@ int64_t sn_strings_copyString(sn_slice_u8 *dst, sn_string s);
 sn_string sn_strings_repeat(sn_string s, int64_t n);
 void sn_string_append(sn_string *s, const sn_string *x);
 sn_string sn_strings_ownString(sn_slice_u8 b);
+sn_string sn_encoding__json_textOf(sn_slice_u8 b);
 int64_t sn_bufio_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
 int64_t sn_bufio_copyString(sn_slice_u8 *dst, sn_string s);
 int64_t sn_bufio_indexByte(sn_slice_u8 p, uint8_t c);

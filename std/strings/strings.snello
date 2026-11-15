@@ -87,6 +87,14 @@ func (b ref Builder) String() string {
 	return string(b.buf)
 }
 
+// Bytes lends the bytes written so far, with no copy, for as long as
+// the builder is not written to: what an io.Writer is handed.
+//
+//	w.Write(b.Bytes())?
+func (b ref Builder) Bytes() ref []byte {
+	return b.buf
+}
+
 // Reset empties the builder, ready for new text, and keeps its buffer,
 // so that the text written next reuses the memory.
 func (b mut Builder) Reset() {

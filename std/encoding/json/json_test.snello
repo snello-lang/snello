@@ -4,7 +4,7 @@
 
 package json_test
 
-import ("encoding/json"; "expect"; "strconv"; "strings"; "testing")
+import ("bytes"; "encoding/json"; "expect"; "io"; "strconv"; "strings"; "testing")
 
 const docText = ` {"name": "lab", "n": 3, "pi": 2.5, "ok": true, "none": null,
  "tags": ["a", "b\n", "c"], "a/b": {"m~n": 7}, "escA": "x\ty", "srv": {"X": 1, "Y": 2}} `
@@ -180,6 +180,79 @@ enum Value {
 	String(string)
 	Array([]Value)
 	Object(map[string]Value)
+}
+
+// A Trickle is a reader that hands out its text step bytes at a time,
+// so that a value's text comes to a Decoder cut into pieces; it ends
+// once at the offset pause, then goes on, and at the end of the text
+// fails, when fail says so, in place of ending.
+struct Trickle impl io.Reader {
+	text  string
+	at    int
+	step  int
+	pause int
+	fail  bool
+}
+
+func (t mut Trickle) Read(buf mut []byte) Result<int, io.Error> {
+	if t.at == t.pause {
+		t.pause = -1
+		return Ok(0)
+	}
+
+	if t.at == len(t.text) {
+		if t.fail {
+			return Err(io.NewError("read", "", "connection reset", io.Reset))
+		}
+
+		return Ok(0)
+	}
+
+	n := 0
+	for n < t.step && n < len(buf) && t.at < len(t.text) && t.at != t.pause {
+		buf[n] = t.text[t.at]
+		n += 1
+		t.at += 1
+	}
+
+	return Ok(n)
+}
+
+// A Full is a writer that takes nothing.
+struct Full impl io.Writer {}
+
+func (f mut Full) Write(buf ref []byte) Result<int, io.Error> {
+	return Err(io.NewError("write", "", "disk full", io.Other))
+}
+
+// trickle returns a Trickle over text, step bytes a read.
+func trickle(text ref string, step int) Trickle {
+	return Trickle{text: text.Clone(), at: 0, step: step, pause: -1, fail: false}
+}
+
+// remarshal writes v back as JSON, to compare what was read.
+func remarshal<T>(v ref T) string {
+	return expect.IsOk(json.Marshal(v))
+}
+
+// writeFailure returns the kind of the failure enc's writer met, or
+// None.
+func writeFailure<W: io.Writer>(enc ref json.Encoder<W>) io.Kind? {
+	if f := enc.IoError() {
+		return Some(f.Kind())
+	}
+
+	return None
+}
+
+// readFailure returns the kind of the failure dec's reader met, or
+// None.
+func readFailure<R: io.Reader>(dec ref json.Decoder<R>) io.Kind? {
+	if f := dec.IoError() {
+		return Some(f.Kind())
+	}
+
+	return None
 }
 
 // roundTrip reads text as a T and writes it back, which gives the text.
@@ -655,4 +728,274 @@ func TestEnumLayouts() {
 
 	expect.Contains(ref expect.IsErr(json.Unmarshal<Nest>(ref deep)).Error(), "untagged values nest too deep to try each variant") // refused at once, where each level would double the time
 	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref Disc(1.5), "", " ")), "{\n \"type\": \"Disc\",\n \"r\": 1.5\n}")
+}
+
+// An Encoder writes each value and a line break after it, compact or
+// laid out, in one write; a value Marshal refuses writes nothing, and
+// the writer's failure comes back with IoError.
+func TestEncoder() {
+	out := bytes.NewBuffer(make([]byte, 0))
+	{
+		enc := json.NewEncoder(mut out)
+		expect.IsOk(enc.Encode(ref Point{X: 1, Y: 2}))
+		expect.IsOk(enc.Encode(ref []int{1, 2}))
+		nan := 0.0
+		expect.Equal(ref expect.IsErr(enc.Encode(ref (nan / nan))).Error(), "json: unsupported value: NaN")
+		enc.SetIndent("", "  ")
+		expect.IsOk(enc.Encode(ref map[string][]int{"a": []int{1}, "b": []int{}}))
+		enc.SetIndent("", "")
+		expect.IsOk(enc.Encode("s"))
+	}
+
+	expect.Equal(ref out.String(), "{\"X\":1,\"Y\":2}\n[1,2]\n{\n  \"a\": [\n    1\n  ],\n  \"b\": []\n}\n\"s\"\n")
+	full := Full{}
+	enc := json.NewEncoder(mut full)
+	expect.IsNone(writeFailure(ref enc))
+	expect.Equal(ref expect.IsErr(enc.Encode(ref 1)).Error(), "json: write: disk full")
+	expect.Equal(ref writeFailure(ref enc), ref Some(io.Other))
+	expect.Equal(ref expect.IsErr(enc.Encode(ref 2)).Error(), "json: write: disk full") // and again, written or not
+}
+
+// A Decoder reads the values of a stream one by one, each whole however
+// the reads cut its text, and None at the end of the input; what an
+// Encoder writes reads back.
+func TestDecoder() {
+	stream := " {\"X\":1,\"Y\":2}\n[1, 2]\"a\\\"b\" 12 true null{\"X\":3,\"Y\":4} -7"
+	for step := 1; step <= len(stream); step++ {
+		r := trickle(ref stream, step)
+		dec := json.NewDecoder(mut r)
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>()))), `{"X":1,"Y":2}`)
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<[]int>()))), `[1,2]`)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<string>())), "a\"b")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 12)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<bool>())), ref true)
+		expect.IsNone(expect.IsSome(expect.IsOk(dec.Decode<int?>())))
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>()))), `{"X":3,"Y":4}`)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref -7) // ended by the end of the input
+		expect.IsNone(expect.IsOk(dec.Decode<int>()))
+		expect.IsNone(expect.IsOk(dec.Decode<int>())) // asked again
+		expect.Equal(ref dec.Offset(), ref len(stream))
+	}
+
+	out := bytes.NewBuffer(make([]byte, 0))
+	{
+		enc := json.NewEncoder(mut out)
+		for i := 0; i < 3; i++ {
+			expect.IsOk(enc.Encode(ref Server{Host: "h".Clone(), Port: i, Tags: []string{}, Peers: map[string]Point{}, At: None, Ratio: 0.5, Small: 1, Debug: false}))
+		}
+	}
+
+	r := trickle(ref out.String(), 7)
+	dec := json.NewDecoder(mut r)
+	for i := 0; i < 3; i++ {
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<Server>())).Port, ref i)
+	}
+
+	expect.IsNone(expect.IsOk(dec.Decode<Server>()))
+	long := expect.IsSome(strings.Repeat("ab", 10000)) // past the first block, which doubles
+	text := "[\"" + long + "\"] 1"
+	big := trickle(ref text, 1000)
+	dec2 := json.NewDecoder(mut big)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<[]string>()))[0], ref long)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<int>())), ref 1)
+}
+
+// A value whose text is wrong is refused at its offset in the input and
+// passed, and the next value is read; text cut off ends in an error,
+// and a reader's failure is returned by each later call.
+func TestDecoderErrors() {
+	r := trickle(`{"X":1,"Y":2} {"X":"a","Y":2} {"X":3,"Y":4} {"X":5`, 3)
+	dec := json.NewDecoder(mut r)
+	expect.IsOk(dec.Decode<Point>())
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: expected an integer, found nothing at offset 19")
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>())).X, ref 3)
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: unexpected end of input at offset 50")
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: unexpected end of input at offset 50") // the text cut off is no end
+	stray := trickle(`1 ] 2`, 3)
+	strayDec := json.NewDecoder(mut stray)
+	expect.IsOk(strayDec.Decode<int>())
+	expect.Equal(ref expect.IsErr(strayDec.Decode<int>()).Error(), "json: expected a value at offset 2")
+	expect.Equal(ref expect.IsErr(strayDec.Decode<int>()).Error(), "json: expected a value at offset 2") // a bracket where a value begins is not passed
+	for _, text := range []string{`"open`, `[1, [2]`, `{"a":"\"}`} {
+		cut := trickle(ref text, 2)
+		d := json.NewDecoder(mut cut)
+		expect.Contains(ref expect.IsErr(d.Decode<json.Value>()).Error(), "unexpected end of input")
+	}
+
+	failing := Trickle{text: "1 [2,".Clone(), at: 0, step: 2, pause: -1, fail: true}
+	dec2 := json.NewDecoder(mut failing)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<int>())), ref 1)
+	expect.IsNone(readFailure(ref dec2))
+	expect.Equal(ref expect.IsErr(dec2.Decode<[]int>()).Error(), "json: read: connection reset at offset 5")
+	expect.Equal(ref readFailure(ref dec2), ref Some(io.Reset))
+	expect.Equal(ref expect.IsErr(dec2.Decode<int>()).Error(), "json: read: connection reset at offset 5") // and again
+	expect.Equal(ref expect.IsErr(dec2.Peek()).Error(), "json: read: connection reset at offset 5") // what is held is not read on
+	expect.Equal(ref expect.IsErr(dec2.BeginArray()).Error(), "json: read: connection reset at offset 5")
+	expect.Equal(ref dec2.Offset(), ref 2)
+	paused := Trickle{text: "[1,2] 9".Clone(), at: 0, step: 8, pause: 3, fail: false}
+	dec3 := json.NewDecoder(mut paused) // the input ends inside the array, once, and goes on
+	expect.Equal(ref expect.IsErr(dec3.Decode<json.Value>()).Error(), "json: unexpected end of input at offset 3")
+	expect.IsOk(dec3.BeginArray()) // read on piece by piece: what was looked through for the cut value is not this element's
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 1)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 2)
+	expect.IsOk(dec3.EndArray())
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 9)
+}
+
+// An array or object is read piece by piece: BeginArray, an element at
+// a time while More holds, EndArray; and BeginObject, Key and the
+// member's value, EndObject; nested, and with Peek telling what comes
+// next. What its grammar does not allow is refused where it stands.
+func TestDecoderPieces() {
+	text := ` [ {"X":1,"Y":2} , {"X":3,"Y":4} ] {"a": [true], "b" : {"c": null}, "d": []} "rest"`
+	for step := 1; step < 6; step++ {
+		r := trickle(ref text, step)
+		dec := json.NewDecoder(mut r)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.ArrayKind)
+		expect.IsOk(dec.BeginArray())
+		sum := 0
+		for expect.IsOk(dec.More()) {
+			sum += expect.IsSome(expect.IsOk(dec.Decode<Point>())).Y
+		}
+
+		expect.Equal(ref sum, ref 6)
+		expect.IsNone(expect.IsOk(dec.Peek()))
+		expect.IsOk(dec.EndArray())
+		expect.IsOk(dec.BeginObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "a")
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<[]bool>()))), `[true]`)
+		expect.True(expect.IsOk(dec.More()))
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.StringKind) // the key
+		expect.Equal(ref expect.IsOk(dec.Key()), "b")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.ObjectKind)
+		expect.IsOk(dec.BeginObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "c")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.NullKind)
+		expect.IsNone(expect.IsSome(expect.IsOk(dec.Decode<int?>())))
+		expect.False(expect.IsOk(dec.More()))
+		expect.IsOk(dec.EndObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "d")
+		expect.IsOk(dec.BeginArray())
+		expect.False(expect.IsOk(dec.More()))
+		expect.IsOk(dec.EndArray())
+		expect.IsOk(dec.EndObject())
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<string>())), "rest")
+		expect.IsNone(expect.IsOk(dec.Peek()))
+	}
+
+	for _, text := range []string{`[] 7`, `[1,] 7`, `{"a":} 7`} { // a closing bracket where Decode wants a value stays to be read
+		r := trickle(ref text, 2)
+		dec := json.NewDecoder(mut r)
+		if text[0] == '[' {
+			expect.IsOk(dec.BeginArray())
+			if text[1] == '1' {
+				expect.IsOk(dec.Decode<int>())
+			}
+		} else {
+			expect.IsOk(dec.BeginObject())
+			expect.IsOk(dec.Key())
+		}
+
+		at := dec.Offset()
+		e := expect.IsErr(dec.Decode<int>())
+		expect.Contains(ref e.Error(), "expected a value")
+		expect.True(dec.Offset() <= at + 1) // the comma at most, never the bracket
+		if text == `[] 7` {
+			expect.IsOk(dec.EndArray())
+			expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 7)
+		}
+	}
+
+	refusals := []string{
+		`[1 2]`, "json: expected , or ] at offset 3",
+		`[1,]`, "json: expected a value at offset 3",
+		`{"a" 1}`, "json: expected : at offset 5",
+		`{"a":1 "b":2}`, "json: expected , or } at offset 7",
+		`{1:2}`, "json: expected a key at offset 1",
+	}
+	for i := 0; i < len(refusals); i += 2 {
+		r := trickle(ref refusals[i], 2)
+		dec := json.NewDecoder(mut r)
+		e := walk(mut dec)
+		expect.Equal(ref expect.IsSome(e).Error(), ref refusals[i + 1])
+	}
+
+	missing := trickle(`[1 2]`, 1)
+	peeked := json.NewDecoder(mut missing)
+	expect.IsOk(peeked.BeginArray())
+	expect.IsOk(peeked.Decode<int>())
+	expect.Equal(ref expect.IsErr(peeked.Peek()).Error(), "json: expected , or ] at offset 3") // Peek holds the text to the grammar too
+	r := trickle(`[1] {}`, 1)
+	dec := json.NewDecoder(mut r)
+	expect.Equal(ref expect.IsErr(dec.EndArray()).Error(), "json: expected ] at offset 0")
+	expect.Equal(ref expect.IsErr(dec.Key()).Error(), "json: expected a value at offset 0")
+	expect.IsOk(dec.BeginArray())
+	expect.Equal(ref expect.IsErr(dec.EndObject()).Error(), "json: expected } at offset 1")
+	expect.Equal(ref expect.IsErr(dec.BeginObject()).Error(), "json: expected { at offset 1")
+	expect.IsOk(dec.Decode<int>())
+	expect.IsOk(dec.EndArray())
+	expect.Equal(ref expect.IsErr(dec.Decode<int>()).Error(), "json: expected an integer, found nothing at offset 4")
+	expect.Equal(ref dec.Offset(), ref 6)
+}
+
+// What follows the JSON in the input, read into the block and not
+// decoded, is lent by Buffered, from the Offset of the next byte.
+func TestDecoderBuffered() {
+	r := trickle(`{"X":1,"Y":2} tail`, 64)
+	dec := json.NewDecoder(mut r)
+	expect.IsOk(dec.Decode<Point>())
+	expect.Equal(ref dec.Offset(), ref 13)
+	expect.Equal(ref string(dec.Buffered()), " tail")
+}
+
+// walk reads the one array or object at the top of dec piece by piece,
+// whatever its elements and members hold, and returns the first error.
+func walk<R: io.Reader>(dec mut json.Decoder<R>) json.Error? {
+	match dec.Peek() {
+		Err(e) => return Some(e),
+		Ok(None) => return None,
+		Ok(Some(json.ArrayKind)) => {
+			if e := dec.BeginArray().Err() {
+				return Some(e)
+			}
+
+			for {
+				match dec.More() {
+					Err(e) => return Some(e),
+					Ok(false) => break,
+					Ok(true) => {
+						if e := walk(mut dec) {
+							return Some(e)
+						}
+					}
+				}
+			}
+
+			return dec.EndArray().Err()
+		}
+		Ok(Some(json.ObjectKind)) => {
+			if e := dec.BeginObject().Err() {
+				return Some(e)
+			}
+
+			for {
+				match dec.More() {
+					Err(e) => return Some(e),
+					Ok(false) => break,
+					Ok(true) => {
+						if e := dec.Key().Err() {
+							return Some(e)
+						}
+
+						if e := walk(mut dec) {
+							return Some(e)
+						}
+					}
+				}
+			}
+
+			return dec.EndObject().Err()
+		}
+		Ok(Some(_)) => return dec.Decode<json.Value>().Err(),
+	}
 }

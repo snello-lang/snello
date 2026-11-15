@@ -7,11 +7,12 @@
 // encoding/json two hundred times and the text decoded back two hundred
 // times; it prints the text's length and first record, then the cost of
 // encoding and of decoding a record, in nanoseconds, untyped, through a
-// json.Value and laid out with MarshalIndent.
+// json.Value, laid out with MarshalIndent, and streamed: written by an
+// Encoder, a line each, and read back by a Decoder.
 
 package main
 
-import ("encoding/json"; "fmt"; "strconv"; "time")
+import ("bytes"; "encoding/json"; "fmt"; "strconv"; "time")
 
 struct Owner { Name string; Age int }
 
@@ -87,9 +88,32 @@ func main() {
 	}
 
 	indented := time.Since(start)
+	start = time.Now()
+	streamed := 0
+	for r := 0; r < rounds; r++ { // a stream: each record written by an Encoder, a line each, and read back by a Decoder
+		buf := bytes.NewBuffer(make([]byte, 0))
+		{
+			enc := json.NewEncoder(mut buf)
+			for i := 0; i < len(records); i++ {
+				if enc.Encode(ref records[i]).IsErr() {
+					break
+				}
+			}
+		}
+
+		dec := json.NewDecoder(mut buf)
+		for {
+			match dec.Decode<Record>() {
+				Ok(Some(back)) => streamed += back.ID % 2,
+				_ => break,
+			}
+		}
+	}
+
+	stream := time.Since(start)
 	first := text[0:text.Index("},") ?? 0]
 	fmt.Println(len(text), n / rounds, m / rounds, first)
-	fmt.Println(sum / rounds, items / rounds, written > 0, laid / rounds)
+	fmt.Println(sum / rounds, items / rounds, written > 0, laid / rounds, streamed / rounds)
 	per := i64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per, "tree", tree.Nanoseconds() / per, "indent", indented.Nanoseconds() / per)
+	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per, "tree", tree.Nanoseconds() / per, "indent", indented.Nanoseconds() / per, "stream", stream.Nanoseconds() / per)
 }

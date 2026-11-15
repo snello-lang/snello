@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -91,9 +92,32 @@ func main() {
 	}
 
 	indented := time.Since(start)
+	start = time.Now()
+	streamed := 0
+	for r := 0; r < rounds; r++ { // a stream: each record written by an Encoder, a line each, and read back by a Decoder
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		for i := range records {
+			if enc.Encode(&records[i]) != nil {
+				break
+			}
+		}
+
+		dec := json.NewDecoder(&buf)
+		for {
+			var back Record
+			if dec.Decode(&back) != nil {
+				break
+			}
+
+			streamed += back.ID % 2
+		}
+	}
+
+	stream := time.Since(start)
 	first := text[0:strings.Index(text, "},")]
 	fmt.Println(len(text), n/rounds, m/rounds, first)
-	fmt.Println(sum/rounds, items/rounds, written > 0, laid/rounds)
+	fmt.Println(sum/rounds, items/rounds, written > 0, laid/rounds, streamed/rounds)
 	per := int64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per, "tree", tree.Nanoseconds()/per, "indent", indented.Nanoseconds()/per)
+	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per, "tree", tree.Nanoseconds()/per, "indent", indented.Nanoseconds()/per, "stream", stream.Nanoseconds()/per)
 }

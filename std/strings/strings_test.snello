@@ -131,7 +131,8 @@ func TestWriteRune() {
 	expect.Equal(ref b.Len(), ref 9)
 }
 
-// A Builder joins what is written to it, and Reset empties it.
+// A Builder joins what is written to it, lends it with Bytes, and Reset
+// empties it.
 func TestBuilder() {
 	var b strings.Builder
 	b.WriteString("one")
@@ -139,9 +140,11 @@ func TestBuilder() {
 	b.WriteString("two")
 	expect.Equal(ref b.Len(), ref 7)
 	expect.Equal(ref b.String(), "one two")
+	expect.EqualSlice(b.Bytes(), ref []byte("one two")) // lent, not copied
 	b.Reset()
 	expect.Equal(ref b.Len(), ref 0)
 	expect.Equal(ref b.String(), "")
+	expect.Empty(b.Bytes())
 }
 
 // How long Repeat takes for a short string, and what it allocates.

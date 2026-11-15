@@ -23,7 +23,9 @@
 // keys and leave fields out: Name, OmitEmpty and Skip, below; a type
 // that lists Marshaler or Unmarshaler writes or reads its own JSON.
 // MarshalIndent writes the same text laid out to be read, and Indent
-// lays out text already written.
+// lays out text already written. An Encoder writes values to an
+// io.Writer one after another, and a Decoder reads them from an
+// io.Reader, a large array or object a piece at a time.
 //
 // Reading finds each field of a struct by its key, wherever the text
 // puts it, and passes over a key the struct has no field for. A field
@@ -33,7 +35,7 @@
 // not JSON, and arrays and objects nested more than 128 deep.
 package json
 
-import ("math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
+import ("io"; "math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
 
 // hex are the digits of a \u escape, by their value.
 const hex = "0123456789abcdef"
@@ -102,6 +104,10 @@ const untriedBudget = 1024
 // laid out text is made in starts at.
 const indentedGrowth = 2
 
+// streamBlock is the size of the block a Decoder reads its input into,
+// to start; it doubles whenever a value outgrows it.
+const streamBlock = 4096
+
 // Name is the key a field or a variant is written and read under, in
 // place of the name it is declared with: Host string
 // @json.Name("host").
@@ -161,7 +167,9 @@ trait Unmarshaler { func UnmarshalJSON(text ref string) Result<Self, Error> }
 
 // An Error says what in the text could not be read, and where: the
 // offset in bytes it was met at. Marshal reports a float that is not a
-// number, which JSON cannot write, with an offset of -1.
+// number, which JSON cannot write, with an offset of -1. An Encoder or
+// a Decoder whose writer or reader fails returns one with the failure's
+// message, and keeps the failure itself, which its IoError gives.
 struct Error impl Error {
 	at  int
 	msg string
@@ -246,6 +254,50 @@ struct Field {
 // the input; Text.Of makes one from text it checks.
 struct Text { text string }
 
+// An Encoder writes values to the writer under it as JSON text, each
+// followed by a line break, so that a Decoder reads them back one by
+// one: JSON separated by line breaks. It is made with NewEncoder, and
+// holds a mut borrow of the writer for as long as it lives. It makes
+// each value's text in a block it keeps, so that a stream of values
+// reuses one block, and hands the text to the writer in one write.
+//
+//	enc := json.NewEncoder(mut conn)
+//	enc.Encode(ref event)?
+struct Encoder<W: io.Writer> {
+	writer mut W
+	w      writer          // the compact text of the value being written
+	layout strings.Builder // the text laid out, when SetIndent asked for that
+	prefix string
+	indent string
+	err    io.Error? // the writer's failure, which every later Encode returns
+}
+
+// A Decoder reads JSON values one after another from the reader under
+// it: the values of a stream, with space between them, as an Encoder
+// writes them, or the elements of an array or the members of an object
+// one by one, so that a large one is never held whole. It is made with
+// NewDecoder, and holds a mut borrow of the reader for as long as it
+// lives. It reads the input in blocks and keeps what it has read and
+// not decoded; a value is read once its text has come whole, by
+// Unmarshal's rules.
+//
+//	dec := json.NewDecoder(mut f)
+//	for {
+//		ev := dec.Decode<Event>()? ?? break
+//		handle(ev)
+//	}
+struct Decoder<R: io.Reader> {
+	reader mut R
+	buf    []byte        // what was read and not decoded lies from start up to end
+	start  int
+	end    int
+	base   int           // the offset in the input of the block's first byte
+	scan   valueScan     // how far the value at start was looked through for its end
+	err    io.Error?     // the reader's first error, which every later read returns
+	state  streamState   // what may come next
+	outer  []streamState // the states of the arrays and objects the one being read is in, innermost last
+}
+
 // A writer is the text written so far, and the first thing it could not
 // write, which ends the writing.
 struct writer {
@@ -286,6 +338,35 @@ struct objectState {
 	scanned bool
 	read    int
 	end     int
+}
+
+// A valueScan is how far a Decoder looked through a value for its end
+// before the bytes read ran out: the offset in the input the value
+// begins at, the bytes passed, how many arrays and objects are open
+// there, and whether that is in a string, just after an escape. It is
+// kept until more is read, so that the look goes on from there and a
+// value read in many small pieces is looked through once; a value at
+// another offset starts a look of its own.
+struct valueScan impl Copy {
+	at       int
+	passed   int
+	depth    int
+	inString bool
+	escaped  bool
+}
+
+// A streamState is where a Decoder stands in what it reads, and so
+// what may come next.
+enum streamState impl Copy, Eq {
+	atTop          // a value, or the end of the input
+	arrayOpened    // after [: an element or ]
+	elementDue     // after a comma in an array: an element
+	elementRead    // after an element: a comma or ]
+	objectOpened   // after {: a key or }
+	keyDue         // after a comma in an object: a key
+	keyRead        // after a key: a colon
+	memberValueDue // after the colon: the member's value
+	memberRead     // after a member's value: a comma or }
 }
 
 // An entry is a node's place in the text: where its text starts and
@@ -812,6 +893,236 @@ func (t ref Text) JSON() ref string {
 	return t.text
 }
 
+// NewEncoder returns an Encoder that writes to w, borrowed mut for as
+// long as the Encoder lives: compact text, one value to a line, until
+// SetIndent lays it out.
+//
+//	enc := json.NewEncoder(mut f)
+func NewEncoder<W: io.Writer>(w mut W) Encoder<W> {
+	return Encoder<W>{writer: w, w: writer{out: strings.Builder{}, bad: None}, layout: strings.Builder{}, prefix: "", indent: "", err: None}
+}
+
+// SetIndent lays out each value Encode writes from now on as
+// MarshalIndent lays out one, with prefix and indent, and a line break
+// after it still. An empty prefix and indent write compact text again.
+//
+//	enc.SetIndent("", "  ")
+func (e mut Encoder<W>) SetIndent(prefix string, indent string) {
+	e.prefix = prefix
+	e.indent = indent
+}
+
+// Encode writes v as JSON text and a line break after it, in one write
+// to the writer under the Encoder: compact, as Marshal writes it, or
+// laid out when SetIndent asked. It fails where Marshal fails, having
+// written nothing, and when the writer fails, with its message: the
+// failure, which IoError gives, is returned by every later call, since
+// the writer may hold part of the value. v is borrowed for the call.
+//
+//	enc.Encode(ref event)?
+func (e mut Encoder<W>) Encode<T>(v ref T) Result<(), Error> {
+	if f := ref e.err {
+		return Err(streamError(f, -1))
+	}
+
+	e.w.out.Reset()
+	writeValue(v, mut e.w)
+	if msg := take(mut e.w.bad) {
+		return Err(Error{at: -1, msg: msg})
+	}
+
+	if len(e.prefix) == 0 && len(e.indent) == 0 {
+		e.w.out.WriteByte(newline)
+		return writeAll(mut e.writer, e.w.out.Bytes(), mut e.err)
+	}
+
+	e.layout.Reset()
+	layOut(textOf(e.w.out.Bytes()), ref e.prefix, ref e.indent, mut e.layout)
+	e.layout.WriteByte(newline)
+	return writeAll(mut e.writer, e.layout.Bytes(), mut e.err)
+}
+
+// IoError returns the writer's failure that ended the writing, which
+// every Encode since has returned, or None.
+//
+//	if f := enc.IoError() {
+//		retry = f.Kind() == io.TimedOut
+//	}
+func (e ref Encoder<W>) IoError() (ref io.Error)? {
+	if f := ref e.err {
+		return Some(f)
+	}
+
+	return None
+}
+
+// NewDecoder returns a Decoder that reads from r, borrowed mut for as
+// long as the Decoder lives. Its block of 4096 bytes is allocated
+// here, and doubles whenever a value outgrows it.
+//
+//	dec := json.NewDecoder(mut conn)
+func NewDecoder<R: io.Reader>(r mut R) Decoder<R> {
+	return Decoder<R>{reader: r, buf: make([]byte, streamBlock), start: 0, end: 0, base: 0, scan: valueScan{at: -1, passed: 0, depth: 0, inString: false, escaped: false}, err: None, state: atTop, outer: []streamState{}}
+}
+
+// Decode reads the next value as a T, by Unmarshal's rules, and
+// returns it, or None at the end of the input: at the top, the next
+// value of the stream; in an array BeginArray opened, its next
+// element; and in an object, after Key, the member's value. A value
+// whose text is wrong for T is passed, and the next Decode reads what
+// comes after it; a closing bracket, a comma or a colon where a value
+// begins is refused and left to be read, by EndArray or EndObject; a
+// failure of the reader is returned again by every later call. An
+// error's offset counts from the start of the input.
+//
+//	for {
+//		ev := dec.Decode<Event>()? ?? break
+//		handle(ev)
+//	}
+func (d mut Decoder<R>) Decode<T>() Result<T?, Error> {
+	d.separate()?
+	if !d.valueDue() {
+		return Err(d.expected())
+	}
+
+	c := d.next()? ?? {
+		if d.state == atTop {
+			return Ok(None)
+		}
+
+		return Err(d.ended())
+	}
+
+	if c == endArray || c == endObject || c == valueSeparator || c == nameSeparator {
+		return Err(d.errorHere("expected a value")) // left to be read: a bracket EndArray or EndObject reads
+	}
+
+	end := d.valueEnd()?
+	v := d.read<T>(end)
+	d.valueRead()
+	return Ok(Some(v?))
+}
+
+// More reports whether another element of the array being read comes
+// next, or another member of the object, or at the top another value:
+// false at the bracket that closes the array or object, and at the end
+// of the input.
+//
+//	dec.BeginArray()?
+//	for dec.More()? {
+//		ev := dec.Decode<Event>()? ?? break
+//	}
+//	dec.EndArray()?
+func (d mut Decoder<R>) More() Result<bool, Error> {
+	c := d.next()? ?? return Ok(false)
+	return Ok(c != endArray && c != endObject)
+}
+
+// Peek returns the kind of the value that comes next, without reading
+// it: a key is a StringKind. It gives None at the bracket that closes
+// the array or object being read, and at the end of the input. A comma
+// or a colon before the value is passed.
+//
+//	if dec.Peek()? == Some(json.ArrayKind) {
+//		dec.BeginArray()?
+//	}
+func (d mut Decoder<R>) Peek() Result<Kind?, Error> {
+	d.separate()?
+	c := d.next()? ?? return Ok(None)
+	if c == endArray || c == endObject {
+		return Ok(None)
+	}
+
+	if d.state == elementRead || d.state == memberRead {
+		return Err(d.expected()) // no comma came
+	}
+
+	match {
+		c == quotationMark => return Ok(Some(StringKind)),
+		c == beginArray => return Ok(Some(ArrayKind)),
+		c == beginObject => return Ok(Some(ObjectKind)),
+		c == literalTrue[0] || c == literalFalse[0] => return Ok(Some(BoolKind)),
+		c == literalNull[0] => return Ok(Some(NullKind)),
+		c == '-' || c >= '0' && c <= '9' => return Ok(Some(NumberKind)),
+		_ => return Err(d.errorHere("expected a value")),
+	}
+}
+
+// BeginArray reads the [ that opens an array, whose elements Decode
+// then reads one by one, until More is false and EndArray reads the ].
+func (d mut Decoder<R>) BeginArray() Result<(), Error> {
+	return d.open(beginArray, arrayOpened)
+}
+
+// EndArray reads the ] that closes the array being read, after its
+// last element.
+func (d mut Decoder<R>) EndArray() Result<(), Error> {
+	return d.close(endArray, arrayOpened, elementRead)
+}
+
+// BeginObject reads the { that opens an object, whose members Key and
+// Decode then read one by one, until More is false and EndObject reads
+// the }.
+//
+//	dec.BeginObject()?
+//	for dec.More()? {
+//		name := dec.Key()?
+//		total := dec.Decode<int>()? ?? break
+//	}
+//	dec.EndObject()?
+func (d mut Decoder<R>) BeginObject() Result<(), Error> {
+	return d.open(beginObject, objectOpened)
+}
+
+// EndObject reads the } that closes the object being read, after its
+// last member.
+func (d mut Decoder<R>) EndObject() Result<(), Error> {
+	return d.close(endObject, objectOpened, memberRead)
+}
+
+// Key reads the key of the next member of the object being read, its
+// escapes decoded, and returns it; Decode then reads the member's
+// value.
+func (d mut Decoder<R>) Key() Result<string, Error> {
+	d.separate()?
+	if d.state != objectOpened && d.state != keyDue {
+		return Err(d.expected())
+	}
+
+	c := d.next()? ?? return Err(d.ended())
+	if c != quotationMark {
+		return Err(d.errorHere("expected a key"))
+	}
+
+	end := d.valueEnd()?
+	key := d.read<string>(end)
+	d.state = keyRead
+	return key
+}
+
+// IoError returns the reader's failure that ended the reading, which
+// every call since has returned, or None.
+func (d ref Decoder<R>) IoError() (ref io.Error)? {
+	if f := ref d.err {
+		return Some(f)
+	}
+
+	return None
+}
+
+// Offset returns the offset in the input of the first byte not read
+// yet: the byte after the last value, bracket or key read.
+func (d ref Decoder<R>) Offset() int {
+	return d.base + d.start
+}
+
+// Buffered lends the bytes the Decoder read from the reader and has not
+// decoded, which come next in the input: the start of what follows the
+// JSON, when the input goes on in another form.
+func (d ref Decoder<R>) Buffered() ref []byte {
+	return d.buf[d.start:d.end]
+}
+
 // writeValue writes v as JSON, chosen by its type: a type's own text
 // when it lists Marshaler, then by what T is, a struct by its fields
 // and an enum by its variants. What it cannot write is noted in w.bad,
@@ -1108,15 +1419,22 @@ func checkOneValue(text ref string) Result<(), Error> {
 	return Ok(())
 }
 
-// indented returns text, one JSON value, as Indent lays it out: a line
-// break, prefix and indent once for each level before each element and
-// member and before the bracket that closes them, and a space after a
-// colon. Space between the parts is dropped; a string's bytes are kept
-// as they are. The text is made in one block, twice text's length to
-// start, which a layout of two spaces seldom outgrows.
+// indented returns text, one JSON value, as Indent lays it out, made
+// in one block, twice text's length to start, which a layout of two
+// spaces seldom outgrows.
 func indented(text ref string, prefix ref string, indent ref string) string {
 	out := strings.Builder{}
 	out.Grow(len(text) * indentedGrowth)
+	layOut(text, prefix, indent, mut out)
+	return out.String()
+}
+
+// layOut writes text, one JSON value, to out as Indent lays it out: a
+// line break, prefix and indent once for each level before each
+// element and member and before the bracket that closes them, and a
+// space after a colon. Space between the parts is dropped; a string's
+// bytes are kept as they are.
+func layOut(text ref string, prefix ref string, indent ref string, out mut strings.Builder) {
 	depth := 0
 	inString, escaped := false, false
 	for i := 0; i < len(text); i++ {
@@ -1171,8 +1489,6 @@ func indented(text ref string, prefix ref string, indent ref string) string {
 			_ => out.WriteByte(c),
 		}
 	}
-
-	return out.String()
 }
 
 // writeLineStart begins a line of indented text: a line break, prefix,
@@ -2799,3 +3115,292 @@ func (v ref Value) childByToken(token ref string) (ref Value)? {
 		_ => return None,
 	}
 }
+
+// writeAll writes text, a value an Encoder made, to w in one write; w's
+// failure it keeps in failed and returns as an Error.
+func writeAll<W: io.Writer>(w mut W, text ref []byte, failed mut (io.Error?)) Result<(), Error> {
+	match w.Write(text) {
+		Ok(_) => return Ok(()),
+		Err(f) => {
+			e := streamError(ref f, -1)
+			*failed = Some(f)
+			return Err(e)
+		}
+	}
+}
+
+// streamError returns the Error for f, the failure of the writer or
+// reader under an Encoder or a Decoder, met at the offset at.
+func streamError(f ref io.Error, at int) Error {
+	return Error{at: at, msg: f.Error()}
+}
+
+// next passes the space at start and returns the byte after it, which
+// stays to be read, reading more of the input as it needs to: None at
+// the end of the input. After the reader failed, it returns the
+// failure, though bytes read before it are held.
+func (d mut Decoder<R>) next() Result<byte?, Error> {
+	if f := ref d.err {
+		return Err(streamError(f, d.base + d.end))
+	}
+
+	for {
+		for d.start < d.end && isSpace(d.buf[d.start]) {
+			d.start += 1
+		}
+
+		if d.start < d.end {
+			return Ok(Some(d.buf[d.start]))
+		}
+
+		if !d.fill()? {
+			return Ok(None)
+		}
+	}
+}
+
+// fill moves what was read and not decoded to the start of the block,
+// doubles the block when that leaves it full, and reads into the room
+// after it. It reports whether it read anything: false at the end of
+// the input, which is asked about again the next time, since the reader
+// may have more by then.
+func (d mut Decoder<R>) fill() Result<bool, Error> {
+	if f := ref d.err {
+		return Err(streamError(f, d.base + d.end))
+	}
+
+	if d.start > 0 {
+		for i := d.start; i < d.end; i++ {
+			d.buf[i - d.start] = d.buf[i]
+		}
+
+		d.base += d.start
+		d.end -= d.start
+		d.start = 0
+	}
+
+	if d.end == len(d.buf) {
+		d.buf.Extend(ref make([]byte, len(d.buf)))
+	}
+
+	match d.reader.Read(mut d.buf[d.end:]) {
+		Ok(n) => {
+			d.end += n
+			return Ok(n > 0)
+		}
+		Err(f) => {
+			e := streamError(ref f, d.base + d.end)
+			d.err = Some(f)
+			return Err(e)
+		}
+	}
+}
+
+// valueEnd returns where the value at start ends, reading more of the
+// input until it does: after the bracket that closes an array or an
+// object, or the quotation mark that closes a string. Brackets are
+// counted, not matched, and nothing else is checked: Unmarshal checks
+// the value once its text is whole.
+func (d mut Decoder<R>) valueEnd() Result<int, Error> {
+	if d.scan.at != d.base + d.start {
+		d.scan = valueScan{at: d.base + d.start, passed: 0, depth: 0, inString: false, escaped: false}
+	}
+
+	first := d.buf[d.start]
+	if first != quotationMark && first != beginArray && first != beginObject {
+		return d.scalarEnd()
+	}
+
+	for {
+		s := d.scan
+		i := d.start + s.passed
+		for i < d.end {
+			c := d.buf[i]
+			i += 1
+			if s.inString {
+				match {
+					s.escaped => s.escaped = false,
+					c == escape => s.escaped = true,
+					c == quotationMark => {
+						s.inString = false
+						if s.depth == 0 {
+							return Ok(i)
+						}
+					}
+					_ => {},
+				}
+
+				continue
+			}
+
+			match {
+				c == quotationMark => s.inString = true,
+				c == beginArray || c == beginObject => s.depth += 1,
+				c == endArray || c == endObject => {
+					s.depth -= 1
+					if s.depth == 0 {
+						return Ok(i)
+					}
+				}
+				_ => {},
+			}
+		}
+
+		s.passed = i - d.start
+		d.scan = s
+		if !d.fill()? {
+			return Err(d.ended())
+		}
+	}
+}
+
+// scalarEnd returns where the number or literal at start ends, reading
+// more of the input until it does: at the space or the structural
+// character after it, or the end of the input.
+func (d mut Decoder<R>) scalarEnd() Result<int, Error> {
+	for {
+		i := d.start + d.scan.passed
+		for i < d.end && !endsScalar(d.buf[i]) {
+			i += 1
+		}
+
+		if i < d.end {
+			return Ok(i)
+		}
+
+		d.scan.passed = i - d.start
+		if !d.fill()? {
+			return Ok(d.end)
+		}
+	}
+}
+
+// endsScalar reports whether c ends a number or a literal: space, or a
+// structural character, or the quotation mark that begins a string.
+func endsScalar(c byte) bool {
+	return isSpace(c) || c == beginArray || c == endArray || c == beginObject || c == endObject || c == nameSeparator || c == valueSeparator || c == quotationMark
+}
+
+// read reads the value at start, whose text ends at end, as a T, and
+// moves past it whether or not it reads. The value is read where it
+// lies in the block, with no copy; an error's offset is moved to count
+// from the start of the input.
+func (d mut Decoder<R>) read<T>(end int) Result<T, Error> {
+	at := d.base + d.start
+	result := Unmarshal<T>(textOf(d.buf[d.start:end]))
+	d.start = end
+	match result {
+		Ok(v) => return Ok(v),
+		Err(e) => {
+			if e.at >= 0 {
+				e.at += at
+			}
+
+			return Err(e)
+		}
+	}
+}
+
+// separate passes the separator before what is read next: the comma
+// after an element or a member, when one comes, and the colon after a
+// key, which must.
+func (d mut Decoder<R>) separate() Result<(), Error> {
+	if d.state != elementRead && d.state != memberRead && d.state != keyRead {
+		return Ok(())
+	}
+
+	c := d.next()? ?? return Ok(()) // the end of the input, which what reads next reports
+	match {
+		d.state == keyRead => {
+			if c != nameSeparator {
+				return Err(d.errorHere("expected :"))
+			}
+
+			d.state = memberValueDue
+		}
+		c != valueSeparator => return Ok(()),
+		d.state == elementRead => d.state = elementDue,
+		_ => d.state = keyDue,
+	}
+
+	d.start += 1
+	return Ok(())
+}
+
+// open reads bracket, which opens an array or an object, where a value
+// may come, and goes into it: inside is what may come first in it.
+func (d mut Decoder<R>) open(bracket byte, inside streamState) Result<(), Error> {
+	d.separate()?
+	if !d.valueDue() {
+		return Err(d.expected())
+	}
+
+	c := d.next()? ?? return Err(d.ended())
+	if c != bracket {
+		return Err(d.errorHere("expected " + string(rune(bracket))))
+	}
+
+	d.start += 1
+	d.outer.Push(d.state)
+	d.state = inside
+	return Ok(())
+}
+
+// close reads bracket, which closes the array or object being read,
+// after nothing, opened, or after an element or a member, read, but
+// never after a comma, and goes back out to where it was.
+func (d mut Decoder<R>) close(bracket byte, opened streamState, read streamState) Result<(), Error> {
+	c := d.next()? ?? return Err(d.ended())
+	if d.state == elementDue || d.state == keyDue {
+		return Err(d.expected()) // a comma before the bracket
+	}
+
+	if c != bracket || d.state != opened && d.state != read {
+		return Err(d.errorHere("expected " + string(rune(bracket))))
+	}
+
+	d.start += 1
+	d.state = d.outer.Pop() ?? atTop
+	d.valueRead()
+	return Ok(())
+}
+
+// valueDue reports whether a value may come next.
+func (d ref Decoder<R>) valueDue() bool {
+	return d.state == atTop || d.state == arrayOpened || d.state == elementDue || d.state == memberValueDue
+}
+
+// valueRead moves past a value read whole: in an array, to the comma or
+// bracket after an element, and in an object to those after a member.
+func (d mut Decoder<R>) valueRead() {
+	match {
+		d.state == arrayOpened || d.state == elementDue => d.state = elementRead,
+		d.state == memberValueDue => d.state = memberRead,
+		_ => {},
+	}
+}
+
+// expected returns the error for what comes next where the state wants
+// something else, which it names.
+func (d ref Decoder<R>) expected() Error {
+	match {
+		d.state == elementRead => return d.errorHere("expected , or ]"),
+		d.state == memberRead => return d.errorHere("expected , or }"),
+		d.state == keyRead => return d.errorHere("expected :"),
+		d.state == objectOpened || d.state == keyDue => return d.errorHere("expected a key"),
+		_ => return d.errorHere("expected a value"),
+	}
+}
+
+// ended returns the error for the end of the input where more must come.
+func (d ref Decoder<R>) ended() Error {
+	return Error{at: d.base + d.end, msg: "unexpected end of input"}
+}
+
+// errorHere returns the error for what is at start.
+func (d ref Decoder<R>) errorHere(msg string) Error {
+	return Error{at: d.base + d.start, msg: msg}
+}
+
+// textOf lends the bytes of b as a string, with no copy.
+func textOf(b ref []byte) ref string
