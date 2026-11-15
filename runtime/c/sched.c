@@ -204,6 +204,11 @@ typedef struct {
     void (*drop)(void *);
 } guard;
 
+// few_guards is the room a task's record holds for its first guards,
+// so that a task holding a channel handle or a value with a Drop
+// method, which most tasks do, registers it without an allocation.
+enum { few_guards = 4 };
+
 struct sn_task {
     void *sp;        // the saved context, while not running
     void *stack;     // the reservation, NULL for the main task
@@ -216,8 +221,9 @@ struct sn_task {
     void *arg;
     _Atomic int state;
     struct sn_task *next; // on a queue
-    guard *guards;        // the values a panic drops, innermost last
+    guard *guards;        // the values a panic drops, innermost last: few, then a block of the system's
     int64_t nguards, guardcap;
+    guard few[few_guards];
     bool unwinding;
     sn_string unwound;     // the message of the panic being unwound to a mark, for a drop that panics meanwhile to report
     struct sn_mark *marks; // the marks a panic unwinds to, innermost first; none for a program's task
@@ -1155,7 +1161,10 @@ static void settle(worker *w) {
             stack_free(w, t->large, guarded);
         }
 
-        free(t->guards);
+        if (t->guards != t->few) {
+            free(t->guards);
+        }
+
         sn_string_drop(&t->places[SN_PLACE_PARTS]);
 #ifdef SN_DEBUG
         free(w->ended[w->nended % ended_kept]); // the oldest kept, or none yet
@@ -2051,21 +2060,31 @@ void sn_wake(sn_task *t) {
 }
 
 // The guard stack of a task: the values a panic drops, innermost
-// last. It grows with the system allocator, not sn_alloc, so a debug
-// build does not count it among the program's blocks. A panic unwinds
-// the task it happens in and no other, since the others are on other
-// workers or parked in the middle of their work.
+// last. Its first few are in the task's record; past them it grows
+// with the system allocator, not sn_alloc, so a debug build does not
+// count it among the program's blocks. A panic unwinds the task it
+// happens in and no other, since the others are on other workers or
+// parked in the middle of their work.
 void sn_guard(void *p, void (*drop)(void *)) {
     task *t = sn_self();
     if (t->nguards == t->guardcap) {
-        int64_t cap = t->guardcap < 16 ? 16 : t->guardcap * 2;
-        guard *more = realloc(t->guards, (size_t)cap * sizeof *more);
-        if (more == NULL) {
-            sn_panic(SN_STR("out of memory", 13)); // the stack so far is intact for the unwinding
-        }
+        if (t->guards == NULL) {
+            t->guards = t->few;
+            t->guardcap = few_guards;
+        } else {
+            int64_t cap = t->guardcap < 16 ? 16 : t->guardcap * 2;
+            guard *more = t->guards == t->few ? malloc((size_t)cap * sizeof *more) : realloc(t->guards, (size_t)cap * sizeof *more);
+            if (more == NULL) {
+                sn_panic(SN_STR("out of memory", 13)); // the stack so far is intact for the unwinding
+            }
 
-        t->guards = more;
-        t->guardcap = cap;
+            if (t->guards == t->few) {
+                memcpy(more, t->few, sizeof t->few);
+            }
+
+            t->guards = more;
+            t->guardcap = cap;
+        }
     }
 
     t->guards[t->nguards++] = (guard){p, drop};

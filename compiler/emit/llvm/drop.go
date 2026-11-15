@@ -70,12 +70,15 @@ func needsDrop(t types.Type) bool {
 }
 
 // guarded reports whether dropping a value of type t runs a Drop
-// method, its own or one of a part, which a panic must still run. The
-// answer for a declared type is kept, as a type may hold a pointer to
-// itself.
+// method, its own or one of a part, or gives up a channel handle, which
+// a panic must still do. The answer for a declared type is kept, as a
+// type may hold a pointer to itself.
 func (e *Emitter) guarded(t types.Type) bool {
-	if _, ok := t.(*types.Trait); ok {
+	switch t.(type) {
+	case *types.Trait:
 		return true // whatever the value holds may have a Drop method
+	case *types.Chan:
+		return true // a handle a panic abandoned would keep the channel open for every other handle, where plain memory only stays allocated
 	}
 
 	n, ok := t.(*types.Named)

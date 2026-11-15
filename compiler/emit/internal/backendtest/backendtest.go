@@ -2989,6 +2989,16 @@ func main() {
 			Src:  tasks + "func main() {\n\th := spawn boom()\n\tmatch h.Join() {\n\t\tOk(_) => fmt.Println(\"returned\"),\n\t\tErr(p) => fmt.Println(\"contained:\", p.Message()),\n\t}\n\tfmt.Println(\"still serving\")\n}\n",
 			Out:  "contained: in a task\nstill serving\n", Stderr: "panic: in a task\n",
 		},
+		{
+			Name: "handle-releases-channel", // a channel handle a failed task held is released as its Drop values are, so the channel ends with the last handle, which a debug build's leak report holds it to
+			Src:  tasks + "func holds(ch chan int, u chan ()) { panic(\"holding\") }\nfunc main() {\n\tch := make(chan int, 1)\n\tu := make(chan ())\n\t_ = (spawn holds(ch.Clone(), u.Clone())).Join()\n\tch <- 1\n\tfmt.Println(len(ch))\n}\n",
+			Out:  "1\n", Stderr: "panic: holding\n",
+		},
+		{
+			Name: "argument-released-on-panic", // an owned argument evaluated before an argument that panics is released with the task's guarded values: the clone of a channel and of an Arc, which a debug build's leak report and the Arc's count hold it to
+			Src:  tasks + "func explode() int { panic(\"boom\") }\nfunc two(ch chan int, n int) {}\nfunc twoArc(x sync.Arc<int>, n int) {}\nfunc f(ch chan int, x sync.Arc<int>) { two(ch.Clone(), explode()); twoArc(x.Clone(), explode()) }\nfunc g(ch chan int, x sync.Arc<int>) { twoArc(x.Clone(), explode()) }\nfunc main() {\n\tch := make(chan int, 1)\n\tx := sync.NewArc(1)\n\t_ = (spawn f(ch.Clone(), x.Clone())).Join()\n\t_ = (spawn g(ch.Clone(), x.Clone())).Join()\n\tch <- 1\n\tfmt.Println(len(ch), x.Count())\n}\n",
+			Out:  "1 1\n", Stderr: "panic: boom\n",
+		},
 	}
 
 	for _, misuse := range []struct{ name, body, err string }{

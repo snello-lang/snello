@@ -864,19 +864,24 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 // converted to the wanted type when wants gives one. A value built
 // here that the operation only looks at is held for the statement. An
 // owned value the operation takes is held until every operand is
-// evaluated when one after it may leave the statement, by ? or a
-// return in its else, and only then moved out of its slot, so that
-// leaving drops it and taking it drops nothing twice.
+// evaluated when one after it may end the statement, by ? or a return
+// in its else, or by a panic in a call, an index or a division, and
+// only then moved out of its slot, so that leaving or a panic drops it
+// and taking it drops nothing twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
-	leaves := -1
+	leaves, last := -1, -1 // the last operand that may leave the statement, and the last that may end it, by leaving or by a panic
 	for i, x := range xs {
 		if lower.MayLeave(x) {
 			leaves = i
 		}
+
+		if lower.MayEnd(x) {
+			last = i
+		}
 	}
 
 	parts := make([]value, len(xs))
-	var kept []int     // the owned values held until the last operand that may leave
+	var kept []int     // the owned values held until the last operand that may end the statement
 	var slots []string // and the slots they are held in
 	for i, x := range xs {
 		var want types.Type
@@ -892,7 +897,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
 			} else {
 				e.hold(e.spill(parts[i]), e.typeOf(x))
 			}
-		case i < leaves && want != nil && !isRef(want) && needsDrop(want):
+		case want != nil && !isRef(want) && (i < leaves && needsDrop(want) || i < last && e.guarded(want)): // leaving drops anything, a panic only what is guarded
 			slot := e.spill(parts[i])
 			e.hold(slot, want)
 			kept, slots = append(kept, i), append(slots, slot)

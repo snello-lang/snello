@@ -308,6 +308,41 @@ func TestMayLeave(t *testing.T) {
 	}
 }
 
+// TestMayEnd finds what may end a statement: what may leave it, and a
+// call, a spawn, an index, a slice, a division or a remainder, which
+// may panic; a variable, a field, a sum and a literal of such cannot.
+func TestMayEnd(t *testing.T) {
+	for _, tt := range []struct {
+		src  string
+		want bool
+	}{
+		{"a", false},
+		{"a.b", false},
+		{"a + b", false},
+		{"T{a: 1, b: c}", false},
+		{"(a, b)", false},
+		{"f(1)", true},
+		{"a.b[c]", true},
+		{"a[1:2]", true},
+		{"a / b", true},
+		{"a % b", true},
+		{"-g()", true},
+		{"T{a: g()}", true},
+		{"g()?", true},
+		{"spawn g()", true},
+	} {
+		f, _, err := parser.ParseFile("t.snello", []byte("package p\nfunc h() { _ = "+tt.src+" }"))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+
+		x := f.Decls[0].(*ast.FuncDecl).Body.List[0].(*ast.AssignStmt).Rhs[0]
+		if got := MayEnd(x); got != tt.want {
+			t.Errorf("%s: MayEnd %v, want %v", tt.src, got, tt.want)
+		}
+	}
+}
+
 // TestLeftOut finds the fields with defaults that a struct literal
 // leaves out, in the struct's order, a positional literal's included,
 // and none of a struct that declares no default.

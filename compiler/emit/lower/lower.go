@@ -327,6 +327,54 @@ func anyLeaves(xs []ast.Expr) bool {
 	return false
 }
 
+// MayEnd reports whether evaluating x may end the statement before it
+// ends: leave it, as MayLeave says, or panic in it, by a call, a spawn,
+// an index, a slice, a division or a remainder. A value made before
+// such an operand, and given to what the statement builds after it, is
+// held until then, so that a panic whose task has a handle drops it.
+func MayEnd(x ast.Expr) bool {
+	if MayLeave(x) {
+		return true
+	}
+
+	switch x := x.(type) {
+	case *ast.CallExpr, *ast.SpawnExpr, *ast.IndexExpr, *ast.SliceExpr:
+		return true
+	case *ast.ParenExpr:
+		return MayEnd(x.X)
+	case *ast.TupleExpr:
+		return anyEnds(x.Elts)
+	case *ast.SelectorExpr:
+		return MayEnd(x.X)
+	case *ast.UnaryExpr:
+		return MayEnd(x.X)
+	case *ast.BinaryExpr:
+		return x.Op == token.QUO || x.Op == token.REM || MayEnd(x.X) || MayEnd(x.Y)
+	case *ast.CompositeLit:
+		for _, elt := range x.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			if MayEnd(elt) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func anyEnds(xs []ast.Expr) bool {
+	for _, x := range xs {
+		if MayEnd(x) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // FramedVariadic returns the variadic ...T parameter of the function of
 // signature sig and body, and whether the slice it is given may stay in
 // its caller's frame for the whole call: true unless the body moves the
