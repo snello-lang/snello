@@ -10,6 +10,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // TestVarDefault reads a field's default through the index it holds
@@ -68,5 +69,26 @@ func TestDefaultSizes(t *testing.T) {
 
 	if got := unsafe.Sizeof(Struct{}); got > 24 {
 		t.Errorf("a Struct is %d bytes, want 24 at most", got)
+	}
+}
+
+// TestSymbol keeps the symbol a backend writes on a type name, a
+// function and a named type, "" before one is set.
+func TestSymbol(t *testing.T) {
+	tn := NewTypeName(token.NoPos, "Box", nil)
+	fn := NewFunc(token.NoPos, "f", NewSignature(nil, nil, Unit))
+	named := NewNamed(tn, NewStruct(nil), nil)
+	for _, s := range []interface {
+		Symbol() string
+		SetSymbol(string)
+	}{tn, fn, named} {
+		if s.Symbol() != "" {
+			t.Errorf("%T: symbol %q before one is set", s, s.Symbol())
+		}
+
+		s.SetSymbol("sn_x")
+		if s.Symbol() != "sn_x" {
+			t.Errorf("%T: symbol %q after SetSymbol, want sn_x", s, s.Symbol())
+		}
 	}
 }

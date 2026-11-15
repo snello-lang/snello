@@ -254,6 +254,7 @@ type Named struct {
 	refused   bool         // a generic declaration refused for growing: it has no instances, and one written is the invalid type
 	orig      *Named       // an instance's declaration
 	targs     []Type       // an instance's arguments
+	symbol    string       // the name a backend writes for the type, kept once the lowering made it
 }
 
 // NewPointer returns the type *elem.
@@ -450,6 +451,12 @@ func (e *Enum) Variant(i int) *Variant { return e.variants[i] }
 
 // Obj returns the type name of a named type.
 func (n *Named) Obj() *TypeName { return n.obj }
+
+// Symbol returns the name a backend writes for the type, or "" before
+// the lowering made it; SetSymbol keeps it. A declaration's instances
+// are one Named each, so an instance's symbol is made once too.
+func (n *Named) Symbol() string     { return n.symbol }
+func (n *Named) SetSymbol(s string) { n.symbol = s }
 
 // SetUnderlying sets the underlying type of a named type declared
 // before its definition was known.

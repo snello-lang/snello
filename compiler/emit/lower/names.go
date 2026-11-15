@@ -18,6 +18,11 @@ import (
 // qualified by its import path in the runtime's sn_ space, and Snello's
 // main is sn_main, which the runtime's main calls (ObjName).
 
+// symbolRoom is the room a builder of a symbol takes first, which holds
+// nearly every symbol, so that one is built in one allocation and not
+// in one per piece as the builder doubles.
+const symbolRoom = 64
+
 // reserved holds the identifiers an emitted program must not reuse:
 // C's keywords and the libc names the C output refers to. The IR
 // output has no such words, but a symbol must be one name in both,
@@ -77,6 +82,30 @@ func capitals(name string) bool {
 // optimization makes the program and the runtime one unit. The
 // program's types keep their names, which no linker sees.
 func ObjName(obj types.Object) string {
+	if obj.Pkg() == nil { // predeclared: shared by every compilation in the process, so nothing is written to it; its symbol is its name, made without allocating
+		return objName(obj)
+	}
+
+	switch o := obj.(type) { // a type or a function is written at every use: its symbol is kept on it
+	case *types.TypeName:
+		if o.Symbol() == "" {
+			o.SetSymbol(objName(obj))
+		}
+
+		return o.Symbol()
+	case *types.Func:
+		if o.Symbol() == "" {
+			o.SetSymbol(objName(obj))
+		}
+
+		return o.Symbol()
+	}
+
+	return objName(obj)
+}
+
+// objName writes the symbol of obj as ObjName says.
+func objName(obj types.Object) string {
 	if p := obj.Pkg(); p != nil && p.Path() != "" {
 		if p.Standard() {
 			return qualified("sn_", p.Path(), obj.Name())
@@ -153,9 +182,20 @@ func MethodName(recv types.Type, name string) string {
 }
 
 // NamedName writes the symbol of a declared type: its own, or for an
-// instance its name followed by its arguments.
+// instance its name followed by its arguments. The symbol is kept on
+// the type, since a backend writes it at every value of the type.
 func NamedName(t *types.Named) string {
-	return withArgs(ObjName(t.Obj()), t.TypeArgs())
+	if t.Obj().Pkg() == nil { // predeclared, as ObjName says: nothing is written to it
+		return withArgs(ObjName(t.Obj()), t.TypeArgs())
+	}
+
+	if s := t.Symbol(); s != "" {
+		return s
+	}
+
+	s := withArgs(ObjName(t.Obj()), t.TypeArgs())
+	t.SetSymbol(s)
+	return s
 }
 
 // TraitName writes the symbol of a trait used as a type as a declared
@@ -169,79 +209,121 @@ func TraitName(t *types.Trait) string {
 
 // withArgs writes name and each of args after it, mangled, separated
 // by _: name itself, with nothing allocated, for a type that is not an
-// instance of a generic one; one concatenation, which Go makes in one
-// allocation, for one argument; and one builder for more, in place of a
-// string made again for each.
+// instance of a generic one, and one builder for an instance.
 func withArgs(name string, args []types.Type) string {
-	switch len(args) {
-	case 0:
+	if len(args) == 0 {
 		return name
-	case 1:
-		return name + "_" + Mangle(args[0])
 	}
 
 	var b strings.Builder
+	b.Grow(symbolRoom)
 	b.WriteString(name)
 	for _, a := range args {
 		b.WriteByte('_')
-		b.WriteString(Mangle(a))
+		mangle(&b, a)
 	}
 
 	return b.String()
 }
 
-// Mangle writes a type as a fragment of a symbol.
+// Mangle writes a type as a fragment of a symbol: a declared type's
+// symbol, and a type made of others with a word for its kind before
+// each of them, in one allocation however deep the type.
 func Mangle(t types.Type) string {
 	switch t := t.(type) {
 	case *types.Basic:
 		return types.Typ[t.Kind()].Name()
 	case *types.Named:
 		return NamedName(t)
-	case *types.TypeParam:
-		return Ident(t.Obj().Name()) // never written: every type is substituted first
-	case *types.Trait:
-		return TraitName(t)
-	case *types.Ref:
-		if t.Mut() {
-			return "mut_" + Mangle(t.Elem())
-		}
-
-		return "ref_" + Mangle(t.Elem())
-	case *types.Pointer:
-		return "ptr_" + Mangle(t.Elem())
-	case *types.Chan:
-		return "chan_" + Mangle(t.Elem())
-	case *types.Option:
-		return "opt_" + Mangle(t.Elem())
-	case *types.Result:
-		return "res_" + Mangle(t.Val()) + "_" + Mangle(t.Err())
-	case *types.Slice:
-		return "slice_" + Mangle(t.Elem())
-	case *types.Array:
-		return "array_" + strconv.FormatInt(t.Len(), 10) + "_" + Mangle(t.Elem())
-	case *types.Map:
-		return "map_" + Mangle(t.Key()) + "_" + Mangle(t.Value())
-	case *types.Signature:
-		parts := make([]string, len(t.Params()))
-		for i, p := range t.Params() {
-			parts[i] = Mangle(p.Type())
-		}
-
-		return "fn" + strconv.Itoa(len(parts)) + "_" + strings.Join(append(parts, Mangle(t.Results())), "_")
-	case *types.Tuple:
-		if t == types.Unit {
-			return "unit"
-		}
-
-		parts := make([]string, t.Len())
-		for i := range parts {
-			parts[i] = Mangle(t.At(i))
-		}
-
-		return "tup" + strconv.Itoa(t.Len()) + "_" + strings.Join(parts, "_")
 	}
 
-	return "unknown"
+	var b strings.Builder
+	b.Grow(symbolRoom)
+	mangle(&b, t)
+	return b.String()
+}
+
+// Symbol writes a type's mangled name after prefix, in one allocation:
+// the name of a function or a struct type a backend writes for the type.
+func Symbol(prefix string, t types.Type) string {
+	var b strings.Builder
+	b.Grow(symbolRoom)
+	b.WriteString(prefix)
+	mangle(&b, t)
+	return b.String()
+}
+
+// mangle writes t as a fragment of a symbol into b.
+func mangle(b *strings.Builder, t types.Type) {
+	switch t := t.(type) {
+	case *types.Basic:
+		b.WriteString(types.Typ[t.Kind()].Name())
+	case *types.Named:
+		b.WriteString(NamedName(t))
+	case *types.TypeParam:
+		b.WriteString(Ident(t.Obj().Name())) // never written: every type is substituted first
+	case *types.Trait:
+		b.WriteString(TraitName(t))
+	case *types.Ref:
+		if t.Mut() {
+			b.WriteString("mut_")
+		} else {
+			b.WriteString("ref_")
+		}
+
+		mangle(b, t.Elem())
+	case *types.Pointer:
+		b.WriteString("ptr_")
+		mangle(b, t.Elem())
+	case *types.Chan:
+		b.WriteString("chan_")
+		mangle(b, t.Elem())
+	case *types.Option:
+		b.WriteString("opt_")
+		mangle(b, t.Elem())
+	case *types.Result:
+		b.WriteString("res_")
+		mangle(b, t.Val())
+		b.WriteByte('_')
+		mangle(b, t.Err())
+	case *types.Slice:
+		b.WriteString("slice_")
+		mangle(b, t.Elem())
+	case *types.Array:
+		b.WriteString("array_")
+		b.WriteString(strconv.FormatInt(t.Len(), 10))
+		b.WriteByte('_')
+		mangle(b, t.Elem())
+	case *types.Map:
+		b.WriteString("map_")
+		mangle(b, t.Key())
+		b.WriteByte('_')
+		mangle(b, t.Value())
+	case *types.Signature:
+		b.WriteString("fn")
+		b.WriteString(strconv.Itoa(len(t.Params())))
+		for _, p := range t.Params() {
+			b.WriteByte('_')
+			mangle(b, p.Type())
+		}
+
+		b.WriteByte('_')
+		mangle(b, t.Results())
+	case *types.Tuple:
+		if t == types.Unit {
+			b.WriteString("unit")
+			return
+		}
+
+		b.WriteString("tup")
+		b.WriteString(strconv.Itoa(t.Len()))
+		for i := 0; i < t.Len(); i++ {
+			b.WriteByte('_')
+			mangle(b, t.At(i))
+		}
+	default:
+		b.WriteString("unknown")
+	}
 }
 
 // ValueType strips the borrows and owned pointers in front of a type,

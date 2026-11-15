@@ -5,6 +5,7 @@
 package llvm
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 
@@ -550,24 +551,9 @@ func isByteSlice(t types.Type) bool {
 // passed and returned through a slot, a small scalar is extended by
 // the caller. ret is the IR type of the result, or void.
 func (e *Emitter) rt(name, ret string, args ...value) value {
-	var decl, call []string
 	sret := ""
 	if ret == "%sn_string" || ret == "%sn_slice" {
 		sret = e.slot(ret)
-		decl = append(decl, e.abi.result(ret))
-		call = append(call, e.abi.result(ret)+" "+sret)
-	}
-
-	for _, a := range args {
-		switch a.typ {
-		case "%sn_string", "%sn_slice":
-			slot := e.spill(a)
-			decl = append(decl, e.abi.words(a.typ))
-			call = append(call, e.abi.words(a.typ)+" "+slot)
-		default:
-			decl = append(decl, a.typ+e.abi.small(a.typ))
-			call = append(call, a.typ+e.abi.small(a.typ)+" "+a.s)
-		}
 	}
 
 	result := ret
@@ -577,18 +563,50 @@ func (e *Emitter) rt(name, ret string, args ...value) value {
 		result = ext[1:] + " " + ret
 	}
 
-	e.declare(name, "declare "+result+" @"+name+"("+strings.Join(decl, ", ")+")")
-	text := "call " + result + " @" + name + "(" + strings.Join(call, ", ") + ")"
+	_, declared := e.decls[name]
+	var decl, call bytes.Buffer // the call, and the declaration the first call writes
+	if !declared {
+		put(&decl, "declare ", result, " @", name, "(")
+	}
+
+	put(&call, "call ", result, " @", name, "(")
+	if sret != "" {
+		put(&decl, e.abi.result(ret))
+		put(&call, e.abi.result(ret), " ", sret)
+	}
+
+	for i, a := range args {
+		if i > 0 || sret != "" {
+			decl.WriteString(", ")
+			call.WriteString(", ")
+		}
+
+		switch a.typ {
+		case "%sn_string", "%sn_slice":
+			put(&decl, e.abi.words(a.typ))
+			put(&call, e.abi.words(a.typ), " ", e.spill(a))
+		default:
+			put(&decl, a.typ, e.abi.small(a.typ))
+			put(&call, a.typ, e.abi.small(a.typ), " ", a.s)
+		}
+	}
+
+	call.WriteByte(')')
+	if !declared {
+		decl.WriteByte(')')
+		e.declare(name, decl.String())
+	}
+
 	switch {
 	case sret != "":
-		e.inst(text)
+		e.inst(call.String())
 		return e.load(ret, sret)
 	case ret == "void":
-		e.inst(text)
+		e.inst(call.String())
 		return unit
 	}
 
-	return e.op(text, ret)
+	return e.op(call.String(), ret)
 }
 
 // callWords calls a runtime function of no result taking one
