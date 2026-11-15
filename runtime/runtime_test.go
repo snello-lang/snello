@@ -866,6 +866,8 @@ static void partner(void *arg) {
 
     sn_chan_drop(&go_in, SN_CHAN_RECV);
     sn_chan_drop(&back_out, SN_CHAN_SEND);
+    int64_t one = 1;
+    sn_chan_send(done, &one);
 }
 static void waker(void *arg) {
     (void)arg;
@@ -899,7 +901,12 @@ int main(int argc, char **argv) {
     sn_spawn(partner, NULL, 0, SN_UNBOUNDED);
     sn_spawn(waker, NULL, 0, SN_UNBOUNDED);
     int64_t got;
+    sn_chan_recv(done, &got); // both tasks have said their last word, and end
     sn_chan_recv(done, &got);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     printf("runs %lld\n", (long long)atomic_load(&runs));
     sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
