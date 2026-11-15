@@ -1672,15 +1672,25 @@ int main(void) {
 	}
 }
 
-// TestPieces holds the appends, which copy a short piece without
-// memcpy, to a byte-by-byte reference: pieces of every length to forty
-// appended to a builder and to a string.
-func TestPieces(t *testing.T) {
+// TestPiecesAndScans holds the appends, which copy a short piece
+// without memcpy, and the JSON scan, which reads eight bytes at a time,
+// to byte-by-byte references: pieces of every length to forty appended
+// to a builder and to a string, and scans of random texts of quotes,
+// backslashes, control characters, bytes of 0x80 and more and letters,
+// from random offsets, with and without stopping at the high bytes.
+func TestPiecesAndScans(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
 #include <string.h>
 static uint64_t seed = 88172645463325252ull;
 static uint64_t next(void) { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; }
+static int64_t ref_scan(sn_string s, int64_t at, bool high) {
+    for (int64_t i = at; i < s.len; i++) {
+        uint8_t c = (uint8_t)s.ptr[i];
+        if (c == '"' || c == '\\' || c < 0x20 || (high && c >= 0x80)) return i;
+    }
+    return s.len;
+}
 int main(void) {
     static uint8_t piece[41], want[4000];
     int bad = 0;
@@ -1699,6 +1709,17 @@ int main(void) {
     }
     sn_slice_free((sn_slice *)&built);
     sn_string_drop(&joined);
+    static uint8_t text[200];
+    static const uint8_t specials[] = {'"', '\\', 0, 0x1f, 0x80, 0xff, 'a', 'b', ' ', '~'};
+    for (int iter = 0; iter < 20000 && bad < 10; iter++) {
+        int64_t n = (int64_t)(next() % 200);
+        for (int64_t i = 0; i < n; i++) text[i] = next() % 8 == 0 ? specials[next() % sizeof specials] : (uint8_t)('a' + next() % 26);
+        sn_string s = {text, n, 0};
+        int64_t at = (int64_t)(next() % (uint64_t)(n + 2)) - 1;
+        bool high = next() % 2;
+        int64_t got = sn_encoding__json_scanString(s, at, high), w = ref_scan(s, at < 0 ? 0 : at, high);
+        if (got != w) { printf("scan at %lld high %d: %lld want %lld\n", (long long)at, high, (long long)got, (long long)w); bad++; }
+    }
     return bad;
 }
 `

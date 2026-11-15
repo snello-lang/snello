@@ -1173,6 +1173,49 @@ sn_string sn_encoding__json_textOf(sn_slice_u8 b) {
     return SN_STR(b.ptr, b.len);
 }
 
+// sn_encoding__json_scanString returns the offset of the first byte of
+// s at or after at, which reads from 0 when negative, that a JSON string
+// cannot hold as it is, a quote, a backslash or a control character,
+// and, when high says so, a byte of 0x80 or more; or s.len when there
+// is none. Eight bytes at a time: a
+// word's bytes that are a quote or a backslash are those zero after
+// the exclusive or with a word of them, and a zero byte or one below
+// 0x20 is found by the borrow its subtraction leaves in its high bit,
+// which only an earlier byte's borrow can set falsely, so the lowest
+// bit set is a byte found; the lowest byte comes first, as the targets
+// order bytes. The writer stops at every byte of 0x80 or more, since a
+// rune that is not UTF-8 is written as U+FFFD; the reader keeps them.
+int64_t sn_encoding__json_scanString(sn_string s, int64_t at, bool high) {
+    sn_check_string(s);
+    const uint64_t ones = 0x0101010101010101u, highs = 0x8080808080808080u;
+    const uint64_t quotes = ones * '"', backslashes = ones * '\\', controls = ones * 0x20;
+    const uint8_t *p = (const uint8_t *)s.ptr;
+    int64_t i = at < 0 ? 0 : at;
+    for (; s.len - i >= 8; i += 8) {
+        uint64_t w;
+        memcpy(&w, p + i, 8);
+        uint64_t q = w ^ quotes, b = w ^ backslashes;
+        uint64_t found = ((q - ones) & ~q) | ((b - ones) & ~b) | ((w - controls) & ~w);
+        found &= highs;
+        if (high) {
+            found |= w & highs;
+        }
+
+        if (found != 0) {
+            return i + __builtin_ctzll(found) / 8;
+        }
+    }
+
+    for (; i < s.len; i++) {
+        uint8_t c = p[i];
+        if (c == '"' || c == '\\' || c < 0x20 || (high && c >= 0x80)) {
+            return i;
+        }
+    }
+
+    return s.len;
+}
+
 // sn_strings_reserve makes room in b for n more bytes, growing it once
 // as a Push grows: the strings package's Builder.Grow. A room no int
 // can measure is a hint that cannot be taken, and changes nothing.
