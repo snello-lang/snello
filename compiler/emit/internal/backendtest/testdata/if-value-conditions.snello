@@ -1,0 +1,39 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An if used as a value drops its condition's temporaries once the
+// condition is decided, before either branch runs, as an if statement
+// does: an else if's condition lends a constant, builds a string or
+// takes a lock, and its branch takes the same lock again.
+
+package main
+
+import ("fmt"; "sync")
+
+const word = "lit"
+
+func long(s ref string) bool {
+	return len(s) > 2
+}
+
+func pick(a bool, s ref string) int {
+	return if a { 1 } else if long(word) && long(s) { 2 } else { 3 }
+}
+
+func built(a bool, s ref string) string {
+	return if a { "a".Clone() } else if long(s + "!") { s + "?" } else { "short".Clone() }
+}
+
+func locked(a bool, m ref sync.Mutex<int>) int {
+	return if a { 0 } else if *m.Lock().Get() > 0 { *m.Lock().Get() + 1 } else { *m.Lock().Get() - 1 }
+}
+
+func main() {
+	fmt.Println(pick(false, "abc"), pick(false, "a"), pick(true, ""))
+	fmt.Println(built(false, "ab"), built(false, ""), built(true, ""))
+	m := sync.NewMutex(5)
+	fmt.Println(locked(false, ref m), locked(true, ref m))
+	n := sync.NewMutex(0)
+	fmt.Println(locked(false, ref n))
+}

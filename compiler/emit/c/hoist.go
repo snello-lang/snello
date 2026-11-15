@@ -430,8 +430,12 @@ func (e *Emitter) ifExpr(x *ast.IfExpr) string {
 	return result
 }
 
+// ifExprInto writes the branches of if c { a } else { b } into result.
+// The condition's temporaries are dropped once it is decided, before
+// either branch runs, as an if statement's are: an else if's are made
+// and dropped inside the else's block, where its condition is written.
 func (e *Emitter) ifExprInto(x *ast.IfExpr, result string, rt types.Type) {
-	e.line("if " + e.cond(x.Cond) + " {")
+	e.line("if " + parenthesized(e.boolean(x.Cond)) + " {")
 	e.blockValue(x.Then, result, rt)
 	e.line("} else {")
 	switch els := x.Else.(type) {
