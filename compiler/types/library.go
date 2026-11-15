@@ -6,11 +6,10 @@ package types
 
 import "github.com/snello-lang/snello/compiler/token"
 
-// The methods section 1 of _docs/design/05-standard-library.md
-// predeclares on slices, maps, strings, options and results, each a
-// mapping onto a runtime function of the same meaning. The library's
-// packages are written in Snello under std/ and loaded through the
-// Config's Importer.
+// The methods the language predeclares on slices, maps, strings,
+// options and results, each a mapping onto a runtime function of the
+// same meaning. The library's packages are written in Snello under
+// std/ and loaded through the Config's Importer.
 
 // BuiltinMethod is builtinMethod for the test that keeps the library's
 // documentation of the predeclared methods, std/builtin, in step with
@@ -215,10 +214,16 @@ func mapMethod(t *Map, name string) *Signature {
 }
 
 // chanMethod: Clone gives another handle on the same channel, of the
-// same direction.
+// same direction; Open, on a handle that sends, reports whether a
+// receiving handle remains.
 func chanMethod(t *Chan, name string) *Signature {
-	if name == "Clone" {
+	switch name {
+	case "Clone":
 		return reads(nil, t)
+	case "Open":
+		if t.dir != RecvOnly {
+			return reads(nil, Typ[Bool])
+		}
 	}
 
 	return nil

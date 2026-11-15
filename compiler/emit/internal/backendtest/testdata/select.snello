@@ -17,11 +17,9 @@ import "fmt"
 
 func feed(data chan<- int, quit chan<- ()) {
 	for i := 1; i <= 5; i++ {
-		data <- i // taken before the next is offered: nothing waits in data when quit closes
+		data <- i // taken before the next is offered: nothing waits in data when quit ends
 	}
-
-	close(quit)
-}
+} // quit dropped here, the last sending handle: the channel ends
 
 func take(u <-chan string, ready chan<- (), got chan<- string) {
 	ready <- ()
@@ -32,12 +30,13 @@ func main() {
 	data := make(chan int)
 	quit := make(chan ())
 	spawn feed(data.Clone(), quit.Clone())
+	var stop <-chan () = quit // main keeps the receiving end alone, so feed's handle is the last sender
 	sum := 0
 	for {
 		select {
 		case v := <-data:
 			sum += v.Expect("a number")
-		case <-quit:
+		case <-stop:
 			break // ends the for: a select is not a loop
 		}
 	}

@@ -275,11 +275,29 @@ void sn_handoff_wait(sn_handoff *h);
 // sn_chan_drop_untimed, chan.c's for timer.c, takes one handle of a
 // channel with no timer in a wheel away, and frees the channel with the
 // last: the handle a timer held, once the timer is out of its wheel.
-void sn_chan_drop_untimed(sn_chan *c);
+void sn_chan_drop_untimed(sn_chan *c, int dir);
+
+// sn_chan_given finishes the giving up of a handle of direction dir,
+// the count having been before: the end of the channel for its kind
+// when it was the last, and the freeing when it was the last of all.
+// For sn_timer_abandon, which takes the count down under the wheel's
+// lock and finishes once it has let the wheel go; chan.c's.
+void sn_chan_given(sn_chan *c, int dir, int64_t before);
 
 // sn_chan_home is where the channel records the wheel its timers go in,
 // for timer.c; chan.c's.
 _Atomic int32_t *sn_chan_home(sn_chan *c);
+
+// sn_task_waits records that the task t, the running one, waits on
+// the channel c in direction dir, or on none for NULL, for the
+// deadlock report; sched.c's for chan.c.
+void sn_task_waits(sn_task *t, sn_chan *c, int dir);
+
+// sn_chan_report writes, for the deadlock report, what a task waiting
+// on c in direction dir waits for: where the channel was made, the
+// handles that remain on it and the tasks waiting on it; chan.c's for
+// sched.c.
+void sn_chan_report(sn_chan *c, int dir);
 
 // The queues of waiters: sn_enqueue adds w at the tail of q and
 // sn_remove_waiter takes it out wherever it is; sn_dequeue takes the
@@ -297,25 +315,93 @@ void sn_await_wait(sn_wait_state *ws);
 // and Indic_Conjunct_Break. Each list is in the generator's order, and
 // the generator stops on a value it does not know.
 enum {
-    SN_GC_Cn, SN_GC_Lu, SN_GC_Ll, SN_GC_Lt, SN_GC_Lm, SN_GC_Lo, SN_GC_Mn, SN_GC_Mc, SN_GC_Me, SN_GC_Nd,
-    SN_GC_Nl, SN_GC_No, SN_GC_Pc, SN_GC_Pd, SN_GC_Ps, SN_GC_Pe, SN_GC_Pi, SN_GC_Pf, SN_GC_Po, SN_GC_Sm,
-    SN_GC_Sc, SN_GC_Sk, SN_GC_So, SN_GC_Zs, SN_GC_Zl, SN_GC_Zp, SN_GC_Cc, SN_GC_Cf, SN_GC_Cs, SN_GC_Co,
+    SN_GC_Cn,
+    SN_GC_Lu,
+    SN_GC_Ll,
+    SN_GC_Lt,
+    SN_GC_Lm,
+    SN_GC_Lo,
+    SN_GC_Mn,
+    SN_GC_Mc,
+    SN_GC_Me,
+    SN_GC_Nd,
+    SN_GC_Nl,
+    SN_GC_No,
+    SN_GC_Pc,
+    SN_GC_Pd,
+    SN_GC_Ps,
+    SN_GC_Pe,
+    SN_GC_Pi,
+    SN_GC_Pf,
+    SN_GC_Po,
+    SN_GC_Sm,
+    SN_GC_Sc,
+    SN_GC_Sk,
+    SN_GC_So,
+    SN_GC_Zs,
+    SN_GC_Zl,
+    SN_GC_Zp,
+    SN_GC_Cc,
+    SN_GC_Cf,
+    SN_GC_Cs,
+    SN_GC_Co,
 };
 
 enum {
-    SN_GCB_Other, SN_GCB_CR, SN_GCB_LF, SN_GCB_Control, SN_GCB_Extend, SN_GCB_ZWJ, SN_GCB_RI,
-    SN_GCB_Prepend, SN_GCB_SpacingMark, SN_GCB_L, SN_GCB_V, SN_GCB_T, SN_GCB_LV, SN_GCB_LVT,
+    SN_GCB_Other,
+    SN_GCB_CR,
+    SN_GCB_LF,
+    SN_GCB_Control,
+    SN_GCB_Extend,
+    SN_GCB_ZWJ,
+    SN_GCB_RI,
+    SN_GCB_Prepend,
+    SN_GCB_SpacingMark,
+    SN_GCB_L,
+    SN_GCB_V,
+    SN_GCB_T,
+    SN_GCB_LV,
+    SN_GCB_LVT,
 };
 
 enum {
-    SN_WB_Other, SN_WB_CR, SN_WB_LF, SN_WB_Newline, SN_WB_Extend, SN_WB_ZWJ, SN_WB_RI, SN_WB_Format,
-    SN_WB_Katakana, SN_WB_Hebrew_Letter, SN_WB_ALetter, SN_WB_Single_Quote, SN_WB_Double_Quote,
-    SN_WB_MidNumLet, SN_WB_MidLetter, SN_WB_MidNum, SN_WB_Numeric, SN_WB_ExtendNumLet, SN_WB_WSegSpace,
+    SN_WB_Other,
+    SN_WB_CR,
+    SN_WB_LF,
+    SN_WB_Newline,
+    SN_WB_Extend,
+    SN_WB_ZWJ,
+    SN_WB_RI,
+    SN_WB_Format,
+    SN_WB_Katakana,
+    SN_WB_Hebrew_Letter,
+    SN_WB_ALetter,
+    SN_WB_Single_Quote,
+    SN_WB_Double_Quote,
+    SN_WB_MidNumLet,
+    SN_WB_MidLetter,
+    SN_WB_MidNum,
+    SN_WB_Numeric,
+    SN_WB_ExtendNumLet,
+    SN_WB_WSegSpace,
 };
 
 enum {
-    SN_SB_Other, SN_SB_CR, SN_SB_LF, SN_SB_Extend, SN_SB_Sep, SN_SB_Format, SN_SB_Sp, SN_SB_Lower,
-    SN_SB_Upper, SN_SB_OLetter, SN_SB_Numeric, SN_SB_ATerm, SN_SB_SContinue, SN_SB_STerm, SN_SB_Close,
+    SN_SB_Other,
+    SN_SB_CR,
+    SN_SB_LF,
+    SN_SB_Extend,
+    SN_SB_Sep,
+    SN_SB_Format,
+    SN_SB_Sp,
+    SN_SB_Lower,
+    SN_SB_Upper,
+    SN_SB_OLetter,
+    SN_SB_Numeric,
+    SN_SB_ATerm,
+    SN_SB_SContinue,
+    SN_SB_STerm,
+    SN_SB_Close,
 };
 
 enum { SN_INCB_None, SN_INCB_Linker, SN_INCB_Consonant, SN_INCB_Extend };

@@ -13,13 +13,13 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
-// The shapes of _docs/design/07-lowering.md. A borrow, an owned
-// pointer and a channel handle are a ptr; a string and every slice
-// are three words; an option of a pointer or of a mut borrow is the
-// pointer itself, null for None, and any other option is a flag and
-// the value; a result and an enum are a tag and a payload of words
-// large enough for their largest case, read and written through a
-// pointer as the case's own struct; a function value is a function
+// The shapes of the lowered values, the same under both backends. A
+// borrow, an owned pointer and a channel handle are a ptr; a string and
+// every slice are three words; an option of a pointer or of a mut
+// borrow is the pointer itself, null for None, and any other option is
+// a flag and the value; a result and an enum are a tag and a payload of
+// words large enough for their largest case, read and written through
+// a pointer as the case's own struct; a function value is a function
 // pointer and a box of words; a trait value is a table pointer and a
 // data pointer. A declared struct or enum is a named type of the
 // module, which the IR lets refer to itself through a ptr.

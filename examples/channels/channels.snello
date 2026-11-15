@@ -1,0 +1,99 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Channels that end by ownership: a channel ends when its last sending
+// handle is dropped, so a producer that returns ends its channel and a
+// consumer's range ends with it, with no close to call and no one to
+// call it twice; a stop is the drop of a sending handle the stopper
+// holds, which every task waiting on the channel sees; and a sender
+// whose receiver is gone drops its value and goes on, asking Open when
+// it wants to stop, where a goroutine would block forever.
+
+package main
+
+import ("fmt"; "time")
+
+// produce sends n numbers and returns: out is dropped as it returns,
+// and since the caller kept only the receiving end, the channel ends.
+func produce(n int, out chan<- int) {
+	for i := 1; i <= n; i++ {
+		out <- i
+	}
+}
+
+// numbers starts a producer and hands the receiving end back: the
+// function's own handle is moved where a <-chan int is wanted, so it
+// keeps that end alone, and the producer's is the one sender left.
+func numbers(n int) <-chan int {
+	ch := make(chan int)
+	spawn produce(n, ch.Clone())
+	return ch
+}
+
+// worker serves until told to stop: a value from jobs, or the end of
+// stop, which comes when whoever holds its sending end lets it go. It
+// reports what it served on counts as it leaves.
+func worker(jobs <-chan int, stop <-chan (), counts chan<- int) {
+	count := 0
+	for {
+		select {
+		case got := <-jobs:
+			count += got ?? break
+		case <-stop:
+			break
+		}
+	}
+
+	counts <- count
+}
+
+// report sends readings for as long as someone receives them: a send
+// with no receiver left drops its value, and Open says when to stop.
+// It reports on sent that it stopped.
+func report(out chan<- int, sent chan<- bool) {
+	n := 0
+	for out.Open() {
+		out <- n
+		n += 1
+		time.Sleep(time.Millisecond)
+	}
+
+	sent <- true
+}
+
+func main() {
+	// A producer that returns ends its channel: the range ends with it.
+	total := 0
+	for v := range numbers(5) {
+		total += v
+	}
+
+	fmt.Println("total", total)
+
+	// A stop channel: main holds its one sending end, and letting it go
+	// is the stop; the workers hold receiving ends and select on them.
+	jobs := make(chan int, 4)
+	stop := make(chan ())
+	counts := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		spawn worker(jobs.Clone(), stop.Clone(), counts.Clone())
+	}
+
+	var jobsIn chan<- int = jobs // main keeps the sending end of jobs alone
+	jobsIn <- 10
+	jobsIn <- 20
+	time.Sleep(10 * time.Millisecond)
+	_ = stop // the one sending end: both workers see the end
+	served := (<-counts).Expect("a count") + (<-counts).Expect("a count")
+	fmt.Println("both workers stopped, having served", served)
+
+	// A sender whose receiver has gone: the reading is dropped, Open
+	// says so, and the task that would have hung in Go ends.
+	readings := make(chan int)
+	stopped := make(chan bool, 1)
+	spawn report(readings.Clone(), stopped.Clone())
+	first := <-readings
+	_ = readings // the last receiving end goes with it
+	fmt.Println("first reading", first ?? -1, "and the reporter stopped:", (<-stopped).Expect("a report"))
+}

@@ -184,9 +184,6 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		return unit
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)
-	case types.BuiltinClose:
-		e.rt("sn_chan_close", "void", e.chanOperand(x.Args[0]))
-		return unit
 	case types.BuiltinPrint:
 		parts := e.operands(x.Args, nil)
 		for i, a := range x.Args {
@@ -308,7 +305,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 			drop.s = "@" + e.elemDropper(u.Elem(), x.Pos())
 		}
 
-		return e.rt("sn_chan_make", "ptr", e.sizeOf(u.Elem()), n, drop)
+		return e.rt("sn_chan_make", "ptr", e.sizeOf(u.Elem()), n, drop, value{"ptr", e.constBytes(e.madeAt(x.Pos()))})
 	case *types.Slice:
 		wants := []types.Type{types.Typ[types.Int], types.Typ[types.Int]}[:len(x.Args)-1]
 		sizes := e.operands(x.Args[1:], wants)

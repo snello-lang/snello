@@ -115,9 +115,9 @@ func (d *decoder) arm64() {
 			}
 
 			arm64Clobber(state, thunk)
-		case arm64JumpReg(in.op):
+		case arm64JumpReg(in.op): // a tail call through a pointer, which the compiler writes for a call that ends a function, since both backends build with jump tables off, so the switches are tables of comparisons: a call, counted over this frame, then the end
+			d.f.calls = append(d.f.calls, call{kind: pointer})
 			d.stop(in)
-			d.unknown("a jump through a register in " + d.img.plain(d.f.name))
 		case arm64Branch(in.op):
 			if in.op == arm64OpBranch {
 				d.stop(in)

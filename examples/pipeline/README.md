@@ -37,13 +37,12 @@ A task that uses a channel gets a handle of its own, cloned before the `spawn`:
 ```go
 w := out.Clone()
 spawn func() {
-    defer close(w)
-    ...
+    ...                 // w goes with the task, and the channel ends when the task does
 }()
-return out
+return out              // a receiving handle from here on
 ```
 
-In Go the goroutine and the caller share one pointer and the collector frees the channel once both are gone. Snello has no collector, so the handles are counted, and the clone is the one place the count goes up: an atomic add where a channel is handed to another task, nothing where a function in the same task only borrows it.
+In Go the goroutine and the caller share one pointer and the collector frees the channel once both are gone. Snello has no collector, so the handles are counted, and the clone is the one place the count goes up: an atomic add where a channel is handed to another task, nothing where a function in the same task only borrows it. There is no `close` either: the task's `w` is the one sending handle once `out` is returned as a `<-chan Job`, and its drop at the task's end is what ends the channel.
 
 Counting words borrows the text instead of consuming it:
 

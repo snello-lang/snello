@@ -50,7 +50,7 @@ func (e *Emitter) chanOperand(x ast.Expr) value {
 }
 
 // receive writes <-ch: the value received as Some, or None once the
-// channel is closed and empty.
+// channel has ended and is empty.
 func (e *Emitter) receive(x *ast.UnaryExpr) value {
 	opt := e.typeOf(x)
 	elem := lower.ValueType(opt).Underlying().(*types.Option).Elem()
@@ -70,9 +70,9 @@ func (e *Emitter) sendStmt(s *ast.SendStmt) {
 	e.rt("sn_chan_send", "void", ch, value{"ptr", v})
 }
 
-// rangeChan writes a loop receiving from the channel ch until it is
-// closed and empty. Each value received is owned by the loop variable,
-// or dropped at once when the loop binds none.
+// rangeChan writes a loop receiving from the channel ch until it has
+// ended and is empty. Each value received is owned by the loop
+// variable, or dropped at once when the loop binds none.
 func (e *Emitter) rangeChan(s *ast.RangeStmt, ch value, elem types.Type) {
 	got := e.slot(e.irType(elem, s.Pos()))
 	again, body, end := e.block("range.recv"), e.block("range.body"), e.block("range.end")
@@ -242,8 +242,8 @@ func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []ty
 	}
 
 	if h != nil {
-		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(h.elem, pos)})
-		e.store(e.rt("sn_chan_clone", "ptr", h.done), e.gep(st, block.s, len(values)))
+		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(h.elem, pos)}, value{"ptr", e.constBytes(e.madeAt(pos))})
+		e.store(e.rt("sn_chan_clone", "ptr", h.done, value{"i32", strconv.Itoa(lower.HandleBoth)}), e.gep(st, block.s, len(values)))
 	}
 
 	bound := e.op("load volatile i32, ptr getelementptr inbounds (i32, ptr @"+lower.StackBounds+", i64 "+strconv.Itoa(k)+")", "i32")
@@ -298,7 +298,7 @@ func (e *Emitter) caughtEntry(k int, st string, call func() value, results, elem
 		e.dropOf(r, elem, pos)
 		e.jump(end)
 		e.label(end)
-		e.rt("sn_chan_drop", "void", value{"ptr", done})
+		e.rt("sn_chan_drop", "void", value{"ptr", done}, value{"i32", strconv.Itoa(lower.HandleBoth)})
 		e.freeBlock()
 	})
 }

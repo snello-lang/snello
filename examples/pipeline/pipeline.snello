@@ -38,8 +38,7 @@ struct Result {
 func produce(n int) <-chan Job {
     out := make(chan Job)
     w := out.Clone()                            // rule 3: a handle for the task
-    spawn func() {                              // rule 4: `w` is moved into the task
-        defer close(w)
+    spawn func() {                              // rule 4: `w` is moved into the task, and dropped when the task ends: the channel ends with it
         for i := 0; i < n; i++ {
             job := Job{id: i, text: strings.Repeat("snello ", i) ?? ""}
             w <- job                         // rule 1: job is moved into the channel
@@ -54,7 +53,6 @@ func count(jobs <-chan Job) <-chan Result {
     out := make(chan Result)
     w := out.Clone()
     spawn func() {
-        defer close(w)
         for job := range jobs {              // rule 2: this task now owns job
             w <- Result{id: job.id, words: len(strings.Fields(ref job.text))}
         }                                    // job dropped here; its string is freed
@@ -62,24 +60,18 @@ func count(jobs <-chan Job) <-chan Result {
     return out
 }
 
-// Stage 3: merge several result channels into one.
+// Stage 3: merge several result channels into one. The merged channel
+// ends when the last forwarder ends, since each holds a sending handle
+// and the caller gets a receiving one: no task counts the forwarders.
 func merge(inputs []<-chan Result) <-chan Result {
     out := make(chan Result)
-    done := make(chan ())
-    n := len(inputs)
     for _, in := range inputs {              // ranging over an owned slice moves each element
-        w, d := out.Clone(), done.Clone()
-        spawn func() {                          // rule 4: `in`, `w` and `d` are moved into this task
+        w := out.Clone()
+        spawn func() {                          // rule 4: `in` and `w` are moved into this task
             for r := range in { w <- r }
-            d <- ()
         }()
     }
-    w := out.Clone()
-    spawn func() {
-        for i := 0; i < n; i++ { <-done }    // wait for every forwarder
-        close(w)
-    }()
-    return out
+    return out                               // a receiving handle from here on: the forwarders hold the senders
 }
 
 func main() {

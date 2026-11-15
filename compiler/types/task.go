@@ -175,30 +175,11 @@ func (c *Checker) sendable(elem Type, pos token.Pos) bool {
 	return false
 }
 
-// closeCall checks close(ch): the channel is one this side may send on,
-// and nothing is sent on it afterwards.
+// closeCall refuses close(ch): a channel ends when its last sending
+// handle is dropped, and the name stays predeclared so that a program
+// written with the call is told what to write instead.
 func (c *Checker) closeCall(e *ast.CallExpr) operand {
-	if len(e.Args) != 1 {
-		c.errorf(e.Lparen, "close takes one channel")
-		c.exprs(e.Args)
-		return invalidOperand
-	}
-
-	x := c.expr(e.Args[0], nil)
-	if x.mode == invalid {
-		return invalidOperand
-	}
-
-	ch, ok := readType(x).Underlying().(*Chan)
-	if !ok {
-		c.errorf(e.Args[0].Pos(), "cannot close a value of type "+x.typ.String())
-		return invalidOperand
-	}
-
-	if ch.dir == RecvOnly {
-		c.errorf(e.Args[0].Pos(), "cannot close a receive-only channel")
-		return invalidOperand
-	}
-
-	return operand{value, Unit, nil, nil}
+	c.errorf(e.Pos(), "close is gone: a channel ends when its last sending handle is dropped")
+	c.exprs(e.Args)
+	return invalidOperand
 }

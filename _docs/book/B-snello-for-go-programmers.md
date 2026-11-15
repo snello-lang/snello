@@ -159,18 +159,19 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 
 ## Chapter 10: Concurrency
 
-Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for range ch`, `select`, a task is a function started and forgotten. Changed: a channel is not copied freely; a goroutine that shares one gets its own handle, `go produce(jobs)` is `spawn produce(jobs.Clone())`, since the last handle frees the channel and there is no collector to find it.
+Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `for range ch`, `select`, a task is a function started and forgotten. Changed: a channel is not copied freely; a goroutine that shares one gets its own handle, `go produce(jobs)` is `spawn produce(jobs.Clone())`, since the last handle frees the channel and there is no collector to find it. There is no `close`: a channel ends when its last sending handle is dropped, a `chan T` handle counting as one, so a producer hands the receiving end away as a `<-chan T` and lets its sender go; a send with no receiver left drops its value, and `ch.Open()` says whether one remains.
 
 | In Go | In Snello |
 |---|---|
 | `go f(x)` | `spawn f(x)` |
 | `done := make(chan struct{})`; `done <- struct{}{}` | `done := make(chan ())`; `done <- ()` |
 | A panic in any goroutine ends the process, unless that goroutine `recover`s; `go` returns nothing | `spawn f(x)` as a statement is the same; `h := spawn f(x)` gives a `task.Handle<T>`, and `h.Join()` returns the result or the panic that ended the task (chapter 28) |
-| `errgroup.Group`: `g.Go(f)`, `g.Wait()` returning the first error, a context cancelled when one goroutine fails | `task.Group`: `g.Add(spawn f(x))`, `g.Wait()` returning the first panic, `g.Done()` a channel closed when one task fails (chapter 28) |
+| `errgroup.Group`: `g.Go(f)`, `g.Wait()` returning the first error, a context cancelled when one goroutine fails | `task.Group`: `g.Add(spawn f(x))`, `g.Wait()` returning the first panic, `g.Done()` a channel that ends when one task fails (chapter 28) |
 | `for { select { case <-timer: break } }` loops forever: the `break` ends the `select` | The `break` ends the `for` |
 | A goroutine may reach any value the spawning function can; sharing a map between two goroutines compiles and races | `spawn` moves what the task takes in; a second task cannot take the same value, and a borrow cannot cross at all |
 | Sending copies the value; the sender keeps using it | Sending moves the value; the sender has given it up |
-| `v, ok := <-ch` | `<-ch` is a `T?`, `None` once the channel is closed and drained |
+| `v, ok := <-ch` | `<-ch` is a `T?`, `None` once the channel has ended, its last sender gone, and is drained |
+| `close(ch)`; a send on a closed channel, a double close and a close by the wrong side panic at run time; a goroutine blocked forever on a channel no one will ever use | The end of a channel is the drop of its last sending handle, so none of the five can be written; a send with no receiver left drops its value (chapter 29) |
 | Whether a value may safely cross goroutines is the programmer's problem; `go vet` and the race detector find some cases at run time | `Send` is inferred from the type and checked at compile time at every crossing |
 | `sync.Mutex` beside the data; forgetting to lock compiles | `sync.Mutex<T>` owns the data; the only way to it is through the guard `Lock` hands out, `*g.Get() += 1`, and the lock is released when the guard goes out of scope; `sync.RwLock<T>` the same with `Read` and `Write` |
 | `var mu sync.Mutex`, `var once sync.Once`: the zero value is ready | `sync.NewMutex(v)`, `sync.NewRwLock(v)`, `sync.NewOnce()`, `sync.NewWaitGroup()`: a lock owns a value and is made with it; it has no zero value, and `var mu sync.Mutex<int>` is refused |

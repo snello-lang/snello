@@ -14,11 +14,11 @@ import (
 )
 
 // The predeclared methods of slices, strings, options and results, and
-// the built-ins that work on them, are lowered here onto the runtime:
-// the library table of _docs/design/05-standard-library.md.
-// An operation that produces a new slice writes it into a temporary
-// through the runtime, since C cannot convert between the slice types
-// the emitter declares.
+// the built-ins that work on them, are lowered here onto the runtime,
+// each onto the runtime function of the same meaning. An operation
+// that produces a new slice writes it into a temporary through the
+// runtime, since C cannot convert between the slice types the emitter
+// declares.
 
 // methodCall writes a call of a predeclared method on x.X.
 func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
@@ -30,6 +30,10 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 	case *types.Map:
 		return e.mapMethod(x, sel, t)
 	case *types.Chan:
+		if name == "Open" {
+			return "sn_chan_open(" + e.looked(sel.X, recv) + ")"
+		}
+
 		return e.standardMethod(x, sel, recv) // Clone, another handle
 	case *types.Tuple:
 		if call := e.standardMethod(x, sel, recv); call != "" {
@@ -495,9 +499,9 @@ func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) string {
 	out := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
-	leaves := lower.MayEnd(x)
-	if leaves {
-		e.hold(out, t) // an entry may leave the statement: the map so far, and what it holds, is dropped then
+	ends := lower.MayEnd(x)
+	if ends {
+		e.hold(out, t) // an entry may end the statement: the map so far, and what it holds, is dropped then
 	}
 
 	for _, elt := range x.Elts {
@@ -506,7 +510,7 @@ func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) strin
 		e.mapStore(out, mt, parts[0], parts[1], x.Pos())
 	}
 
-	if leaves {
+	if ends {
 		return e.taken(out, t, out, t, x.Pos())
 	}
 
@@ -955,7 +959,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 			n = "(int64_t)(" + e.valueTo(x.Args[1], types.Typ[types.Int]) + ")"
 		}
 
-		return "sn_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ")"
+		return "sn_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ", " + e.madeAt(x.Pos()) + ")"
 	}
 
 	st, ok := t.Underlying().(*types.Slice)

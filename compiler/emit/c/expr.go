@@ -116,6 +116,10 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
 		return "&" + e.lvalue(x)
 	}
 
+	if kept, ok := lower.Narrowed(have, want); ok { // a handle of both ends moved where one end is wanted: the other is given up
+		return "sn_chan_narrow(" + e.expr(x) + ", " + strconv.Itoa(kept) + ")"
+	}
+
 	return derefTo(e.expr(x), have, want)
 }
 
@@ -855,9 +859,9 @@ func divides(op token.Kind, t types.Type) bool {
 // divider returns the name of the function dividing two integers of
 // type t, or taking the remainder, writing it on first use: a divisor
 // of zero panics, and the smallest number divided by minus one wraps
-// to itself with a remainder of zero, as _docs/design/07-lowering.md
-// settles for both backends. C leaves both undefined, and the
-// processors disagree: x86-64 traps where arm64 goes on.
+// to itself with a remainder of zero, the same under both backends. C
+// leaves both undefined, and the processors disagree: x86-64 traps
+// where arm64 goes on.
 func (e *Emitter) divider(op token.Kind, t types.Type, pos token.Pos) string {
 	name := "sn_quo_" + lower.Mangle(t)
 	if op == token.REM {
@@ -1269,8 +1273,6 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		return "sn_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)
-	case types.BuiltinClose:
-		return "sn_chan_close(" + e.looked(x.Args[0], lower.ValueType(e.typeOf(x.Args[0]))) + ")"
 	case types.BuiltinPrint:
 		parts := e.evaluated(x.Args)
 		for i, a := range x.Args {

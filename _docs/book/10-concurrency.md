@@ -20,14 +20,13 @@ A channel handle is owned too. The channel is one shared object that synchronize
 func produce(n int) <-chan Job {
     out := make(chan Job)
     w := out.Clone()                            // rule 3: a handle for the task
-    spawn func() {                              // rule 4: `w` is moved into the task
-        defer close(w)
+    spawn func() {                              // rule 4: `w` is moved into the task, and dropped when the task ends: the channel ends with it
         for i := 0; i < n; i++ {
             job := Job{id: i, text: "..."}
             w <- job                         // rule 1: job is moved into the channel
         }
     }()
-    return out
+    return out                                  // moved where a <-chan Job is wanted: a receiving handle from here on
 }
 ```
 
@@ -72,7 +71,7 @@ Each variable the closure takes, each argument of a spawned call, and a receiver
 
 A channel carries only `Send` values, and the compiler says so where the channel type is written rather than at each send: `make(chan rc.Rc<int>)` is refused with `a channel cannot carry rc.Rc<int>: rc.Rc<int> stays in its task`, and `make(chan ref string)` with `a channel cannot carry a borrow`. A send then needs no check beyond the move it is, and a receive yields a `T?` the task owns.
 
-`close(ch)` closes a channel: a receive yields `None` once the values already sent are taken, and a range over the channel ends. A receive-only channel cannot be closed. `for v := range ch` receives until then, and each `v` is owned by the loop body; `for range ch` with no variable drops each value as it arrives.
+A channel ends when its last sending handle is dropped, which is chapter 29's subject: a receive then yields `None` once the values already sent are taken, and a range over the channel ends. There is no `close`, and nothing for it to do: `w` above goes with the task, and the channel ends when the task does. A `chan T` handle sends and receives, so a producer that keeps one keeps its channel open; `produce` hands the receiving end away, since `out` is moved where a `<-chan Job` is wanted, and the task's `w` is the one sender left. `for v := range ch` receives until the end, and each `v` is owned by the loop body; `for range ch` with no variable drops each value as it arrives. The other way round, a send on a channel whose last receiving handle is gone drops its value and goes on, where a Go goroutine would block forever; a producer that wants to stop asks `w.Open()`, which says whether a receiver remains. The five ways a Go program goes wrong with a channel, a send on a closed one, a close of a closed one, a close by a receiver or by one of several senders, a receive no one will send to and a send no one will receive, have no way to be written.
 
 ```go
 for r := range merge(workers) {          // `workers` is moved into merge; the range borrows the channel merge returns
@@ -87,7 +86,7 @@ for r := range merge(workers) {          // `workers` is moved into merge; the r
 ```go
 select {
 case got := <-tasks:                        // got is Task?; the task is moved out of the channel
-    t := got ?? return                      // None: channel closed, no more work
+    t := got ?? return                      // None: the channel has ended, no more work
     out <- Done{id: t.id, size: len(t.payload)}
 case <-cancel.Done():
     return
@@ -101,7 +100,7 @@ A send case goes only when the send would not wait: when the channel has room, o
 A task is not a thread. The runtime keeps one worker thread per core and runs the tasks on them: `spawn` gives the task a small stack of its own and puts it on a worker's queue, and a task runs until it waits, on a channel, a lock, a timer or a socket, when the worker switches to the next task and whoever the first was waiting for puts it back. Starting a task costs about a third of a microsecond and switching between two about a tenth, so a program may have a hundred thousand of them waiting at once. A task that computes without ever waiting keeps its worker; the others run on the rest. A value sent on a channel is copied into the channel and the sender's variable is empty from then on; a value received is copied out into memory the receiving task owns, so each value is owned by exactly one task at any moment, which is what the rules above promise. An unbuffered channel hands a value over directly, and the sender continues only once a receiver has taken it; a buffered one holds up to its capacity. Three things to know:
 
 - **The program ends when `main` returns**, whatever the other tasks are doing. A program that needs its tasks to finish waits for them, on a channel as `compiler/emit/internal/backendtest/testdata/tasks.snello` does.
-- **A channel is freed by its last handle.** A handle is an owned value: assigning it, passing it or capturing it in a `spawn` moves it, and `ch.Clone()` makes another handle on the same channel, so each task that sends or receives gets its own, `spawn produce(jobs.Clone())`. Sending, receiving, `close`, `len`, `for range` and `select` only borrow the handle, so a loop sends on one handle as often as it likes, and a function in the same task that only uses a channel takes it by `ref`. When the last handle is dropped the channel is freed, with any values still in it. Closing stays explicit: the last handle going does not close a channel, since no one is left to see it. Two handles are equal, `==`, when they are on one channel, as in Go, so a channel can be a map key.
+- **A channel is freed by its last handle.** A handle is an owned value: assigning it, passing it or capturing it in a `spawn` moves it, and `ch.Clone()` makes another handle on the same channel, so each task that sends or receives gets its own, `spawn produce(jobs.Clone())`. Sending, receiving, `len`, `for range` and `select` only borrow the handle, so a loop sends on one handle as often as it likes, and a function in the same task that only uses a channel takes it by `ref`. A handle's type says which ends it holds: a `chan T` moved where a `<-chan T` or a `chan<- T` is wanted, into a parameter, a field, a result, a send or a variable declared with that type, keeps that end and gives the other up, and the channel ends when the last sending handle is gone. When the last handle of either kind is dropped the channel is freed, with any values still in it. Two handles are equal, `==`, when they are on one channel, as in Go, so a channel can be a map key.
 - **A panic in a task started with a `spawn` statement ends the program**, with the message, the drops of that task's own values, and exit status 2, as a panic in `main` does. A task started with `spawn` as an expression, `h := spawn work(job)`, keeps its panic to itself: `h.Join()` returns it, and the program goes on. Chapter 28 is about those tasks.
 - **A program that can never go on stops.** When every task waits, the main task among them, and nothing is left that could wake one, no timer and no socket, the program ends with `fatal error: all tasks are asleep - deadlock!` and status 2, as Go's does: a receive no task will ever send to, a `WaitGroup` that never reaches zero, two tasks each waiting for the other. A task asleep in `time.Sleep`, or waiting on a socket, or a pending `time.After`, is something that can still wake one, so such a program waits.
 

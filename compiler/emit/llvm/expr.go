@@ -642,6 +642,10 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) value {
 		return value{"ptr", e.lvalue(x)}
 	}
 
+	if kept, ok := lower.Narrowed(have, want); ok { // a handle of both ends moved where one end is wanted: the other is given up
+		return e.rt("sn_chan_narrow", "ptr", e.expr(x), value{"i32", strconv.Itoa(kept)})
+	}
+
 	return e.derefTo(e.expr(x), have, want)
 }
 

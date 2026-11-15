@@ -268,6 +268,8 @@ var handledErrors = map[string]bool{
 	// A handle carries a task's result to the task that joins, so the
 	// result is Send.
 	"handle-not-send.snello": true,
+	// A channel ends when its last sending handle is dropped: close is gone.
+	"close-gone.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

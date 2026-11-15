@@ -88,7 +88,7 @@ func main() {
 		Err(p) => fmt.Println("a batch failed:", p.Message()),
 	}
 
-	// A server and an audit: the audit's bug closes Done, the server
+	// A server and an audit: the audit's bug ends Done, the server
 	// stops, and Wait reports the bug once both have ended.
 	requests := make(chan string, 2)
 	requests <- "ping".Clone()

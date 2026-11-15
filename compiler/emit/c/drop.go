@@ -238,7 +238,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 	case *types.Map:
 		put(&b, "\tsn_map_free((sn_map *)v, ", e.mapType(u, pos), ");\n")
 	case *types.Chan:
-		b.WriteString("\tsn_chan_drop(v);\n")
+		put(&b, "\tsn_chan_drop(v, ", strconv.Itoa(lower.HandleDir(u)), ");\n")
 	case *types.Trait:
 		traitDrop(&b)
 	default:
@@ -525,7 +525,7 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	case isString(t):
 		return "sn_string_clone(" + v + ")"
 	case isChan(t):
-		return "sn_chan_clone(" + v + ")" // another handle on the same channel
+		return "sn_chan_clone(" + v + ", " + strconv.Itoa(lower.HandleDir(t)) + ")" // another handle on the same channel, of the same direction
 	}
 
 	return e.cloner(t, pos) + "(" + v + ")"

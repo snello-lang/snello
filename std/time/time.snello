@@ -267,6 +267,7 @@ struct Time impl Copy, Eq, Ord, fmt.Stringer {
 struct Timer impl Drop {
 	// C gets the time when the Timer fires.
 	C <-chan Time
+	w chan<- Time // the sending end, kept so that C does not end while the Timer lives, and cloned for the timer of a Reset
 }
 
 // A Ticker sends the time on its channel every so often, until it is
@@ -288,6 +289,7 @@ struct Timer impl Drop {
 struct Ticker impl Drop {
 	// C gets the time at each tick.
 	C <-chan Time
+	w chan<- Time // the sending end, as a Timer keeps one
 }
 
 // A Month is a month of the year. It is an enum, so no value of it is a
@@ -1084,8 +1086,9 @@ func After(d Duration) <-chan Time {
 // ticks do not drift. A tick that arrives while the one before it is
 // still unreceived is dropped, so a slow receiver sees the ticks it can
 // keep up with and never a backlog of them. For a d of zero or less no
-// tick ever comes: the channel is one nothing sends on. Its timer is
-// never stopped; NewTicker makes a Ticker that can be.
+// tick ever comes: the channel has no sender, so it has ended, and a
+// receive yields None at once. Its timer is never stopped; NewTicker
+// makes a Ticker that can be.
 //
 //	for t := range time.Tick(time.Second) {
 //		report(t)
@@ -1108,7 +1111,7 @@ func Tick(d Duration) <-chan Time {
 func NewTimer(d Duration) Timer {
 	ch := make(chan Time, 1)
 	startTimer(ch.Clone(), d, 0)
-	return Timer{C: ch}
+	return Timer{C: ch.Clone(), w: ch}
 }
 
 // Stop calls the Timer off, and reports whether it did: true when the
@@ -1126,7 +1129,7 @@ func (t mut Timer) Stop() bool {
 // not been received yet. A time sent and not received is taken back,
 // so what C gives next is the new one.
 func (t mut Timer) Reset(d Duration) bool {
-	return resetTimer(t.C.Clone(), d, 0)
+	return resetTimer(t.w.Clone(), d, 0)
 }
 
 // Drop stops the Timer when it goes out of scope, so its timer does
@@ -1148,7 +1151,7 @@ func NewTicker(d Duration) Ticker {
 		startTimer(ch.Clone(), d, d)
 	}
 
-	return Ticker{C: ch}
+	return Ticker{C: ch.Clone(), w: ch}
 }
 
 // Stop ends the ticks. Once it returns nothing is left to receive from
@@ -1164,7 +1167,7 @@ func (t mut Ticker) Stop() {
 // period's.
 func (t mut Ticker) Reset(d Duration) {
 	if d > 0 {
-		_ = resetTimer(t.C.Clone(), d, d)
+		_ = resetTimer(t.w.Clone(), d, d)
 	} else {
 		t.Stop()
 	}
@@ -1355,8 +1358,9 @@ func stopTimer(ch <-chan Time) bool
 
 // resetTimer does what stopTimer does and then has the timer send on
 // ch d from now, and every period after when every is above zero. It
-// takes a handle of the channel of its own. The runtime provides it.
-func resetTimer(ch <-chan Time, d Duration, every Duration) bool
+// takes a sending handle of the channel, which the new timer owns. The
+// runtime provides it.
+func resetTimer(ch chan<- Time, d Duration, every Duration) bool
 
 // format writes the moment of sec and nsec as layout says. The runtime
 // provides it, as it provides what fmt and strconv write: a string made

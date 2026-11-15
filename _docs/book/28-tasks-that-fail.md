@@ -94,7 +94,7 @@ A method call gives a handle as a function call does, `spawn c.Twice()` with the
 
 ## A group of tasks
 
-A function that starts several tasks and needs all of them has `task.Group`: it waits for them together and hears of the first that failed. `g.Add(h)` puts a task started for a handle in the group, `g.Wait()` returns once every member has ended, `Ok` when each returned and `Err` with the first panic among them, and `g.Done()` gives a channel the group closes when a member fails, so that the others can stop. The samples are cut from `examples/group/group.snello`.
+A function that starts several tasks and needs all of them has `task.Group`: it waits for them together and hears of the first that failed. `g.Add(h)` puts a task started for a handle in the group, `g.Wait()` returns once every member has ended, `Ok` when each returned and `Err` with the first panic among them, and `g.Done()` gives a channel that ends when a member fails, so that the others can stop. The samples are cut from `examples/group/group.snello`.
 
 ```go
 totals := make(chan (int, int), 3)
@@ -110,7 +110,7 @@ match batches.Wait() {
 
 A member is a task of no result, a `task.Handle<()>`: the group is for the tasks a function runs for their effect, as a server's are, and a member with a value to give back sends it on a channel, as `summarize` sends its total. A `Result` a member computes is a value it already holds and reports as it likes; what a member cannot report itself is a panic, and that is what the group hears of.
 
-`Done` is for the members that would otherwise run forever. A server that answers requests until told to stop selects on it beside its requests, as the worker pool of chapter 10 selects on its cancel; when the audit beside it fails, the group closes `Done`, the server leaves its loop, and `Wait` returns with the audit's panic once both have ended:
+`Done` is for the members that would otherwise run forever. A server that answers requests until told to stop selects on it beside its requests, as the worker pool of chapter 10 selects on its cancel; when the audit beside it fails, the group ends `Done`, the server leaves its loop, and `Wait` returns with the audit's panic once both have ended:
 
 ```go
 func serve(requests <-chan string, stop <-chan (), served chan<- int) {
@@ -138,7 +138,7 @@ match g.Wait() {
 }
 ```
 
-The stop is asked for and never forced: `Done` is closed once, when the first member fails, and never otherwise, and a member that does not select on it is waited for. There is no kill, as a handle has none, so a member that ignores `Done` and never ends is waited for forever, and the deadlock report says so when nothing else can run. `Wait` takes the group, so a group is waited for once, by the function that owns it; a group dropped without a `Wait` leaves its members running, as a handle dropped leaves its task. A group is that function's value and its members are that function's tasks: there is no tree of groups, and no group outlives the function that made it.
+The stop is asked for and never forced: `Done` ends when the first member fails, by the drop of the one sending handle the group keeps, as chapter 10 says a channel ends, and otherwise with the group itself once `Wait` has taken it; a member that does not select on it is waited for. There is no kill, as a handle has none, so a member that ignores `Done` and never ends is waited for forever, and the deadlock report says so when nothing else can run. `Wait` takes the group, so a group is waited for once, by the function that owns it; a group dropped without a `Wait` leaves its members running, as a handle dropped leaves its task. A group is that function's value and its members are that function's tasks: there is no tree of groups, and no group outlives the function that made it.
 
 ## Starting a task again
 
@@ -165,7 +165,7 @@ The call is spawned as a statement's is: every argument, every variable a closur
 ## For maintainers
 
 - **The parser** reads `spawn` where an expression is as an `ast.SpawnExpr`, holding the call as an `ast.SpawnStmt` does; `spawn` at the start of a statement is still the statement. **The checker** spawns the call under the statement's rules, refuses a result that is not `Send`, loads the `task` package through the importer whether or not the program imports it, and gives the expression the type `task.Handle<T>`.
-- **The library** is `std/task`: `Handle<T: Send>` holds a channel of one slot carrying `Result<T, Panic>`, `Join` takes the handle and receives from it, and `Panic` holds the message. The channel is never closed, so a receive waits for the task's one value. `Group` holds a `sync.Arc<sync.Mutex<Panic?>>` for the first panic, the `Done` channel and a `sync.WaitGroup` counting its watchers: `Add` counts one in and spawns a watcher, a task that joins the member and, if it failed, keeps the panic when none is kept yet and closes `Done` under the cell's lock, then counts itself out; `Wait` is the `WaitGroup`'s wait and then takes the panic out of the cell. Nothing in the runtime observes a handle but a receive on it, which is why a member has a watcher, a small bounded task.
+- **The library** is `std/task`: `Handle<T: Send>` holds a channel of one slot carrying `Result<T, Panic>`, `Join` takes the handle and receives from it, and `Panic` holds the message. The task holds a sending handle until it has sent, so a receive waits for the task's one value. `Group` holds a `sync.Arc<sync.Mutex<failure>>`, the first panic and `Done`'s one sending handle, the receiving end of `Done` and a `sync.WaitGroup` counting its watchers: `Add` counts one in and spawns a watcher, a task that joins the member and, if it failed, keeps the panic when none is kept yet and takes the sending handle out of the cell, which drops it and ends `Done`, under the cell's lock, then counts itself out; `Wait` is the `WaitGroup`'s wait and then takes the panic out of the cell. Nothing in the runtime observes a handle but a receive on it, which is why a member has a watcher, a small bounded task.
 - **Both backends** make the channel at the spawn, put a clone of its handle in the task's block beside the arguments, and write the call in a function of its own, named with the prefix `lower.CaughtPrefix`, which the task's entry runs under the runtime's mark with `sn_catch`. The entry then offers the handle `Ok` with the result or `Err` with the panic, drops the value when the offer finds the handle gone, drops the task's channel handle and frees the block. The value of the expression is the handle struct holding the channel.
 - **The runtime's** `sn_catch` takes whether to print the panic: a task's entry asks for the print, `testing.Catch` does not. The mark otherwise is the one a test's failure unwinds to, and the drops and deferred calls are its.
 - **The stack analysis** knows `sn_catch` calls through a pointer to one of the functions named with `lower.CaughtPrefix`, as it knows the channel's drops, so a task with a handle keeps a small stack when its call is bounded: about 6 KB for the example's tasks.

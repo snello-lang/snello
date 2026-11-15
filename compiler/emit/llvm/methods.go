@@ -16,7 +16,7 @@ import (
 
 // The predeclared methods of slices, maps, strings, bytes, options and
 // results, and the built-ins that work on them, are lowered here onto
-// the runtime: the library table of _docs/design/05-standard-library.md.
+// the runtime, each onto the runtime function of the same meaning.
 // What snello.h writes as a static inline function, an index check or a
 // character class, is written here as the instructions it is, since
 // the IR cannot call what the C compiler never emits.
@@ -30,6 +30,10 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 	case *types.Map:
 		return e.mapMethod(x, sel, t)
 	case *types.Chan:
+		if sel.Sel.Name == "Open" {
+			return e.rt("sn_chan_open", "i1", e.chanOperand(sel.X))
+		}
+
 		call, _ := e.standardMethod(x, sel, recv) // Clone, another handle
 		return call
 	case *types.Tuple:
@@ -843,9 +847,9 @@ func (e *Emitter) sliceMake(out string, n, c value, elem types.Type) {
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) value {
 	out := e.slot("%sn_map")
 	e.store(value{"%sn_map", "zeroinitializer"}, out)
-	leaves := lower.MayEnd(x)
-	if leaves {
-		e.hold(out, t) // an entry may leave the statement: the map so far, and what it holds, is dropped then
+	ends := lower.MayEnd(x)
+	if ends {
+		e.hold(out, t) // an entry may end the statement: the map so far, and what it holds, is dropped then
 	}
 
 	for _, elt := range x.Elts {
@@ -855,7 +859,7 @@ func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) value
 	}
 
 	m := e.load("%sn_map", out)
-	if leaves {
+	if ends {
 		e.zero(out, t, x.Pos()) // built whole: the map is the literal's, and the slot drops nothing
 	}
 

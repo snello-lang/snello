@@ -4,7 +4,7 @@
 
 // A group of tasks: members added by their handles and waited for
 // together, Wait Ok once every member returned, the first panic among
-// them when one failed, Done closed for the members that stop when
+// them when one failed, Done ended for the members that stop when
 // told, a group of a thousand members, a group of none, and what a
 // failed member owned dropped before Wait returns.
 
@@ -12,8 +12,10 @@ package main
 
 import ("fmt"; "task")
 
-// bug is what the failing member panics with.
+// bug is what the failing member panics with; many is the size of the
+// large group.
 const bug = "a member's bug"
+const many = 1000
 
 // A Note says, when dropped, that it was.
 struct Note impl Drop {
@@ -29,7 +31,7 @@ func tick(out chan int, n int) { out <- n }
 // is a literal, since a panic abandons the plain memory of its frame.
 func crash(note Note) { panic(bug) }
 
-// stopWhenTold waits until done is closed, which nothing sends on, then
+// stopWhenTold waits until done has ended, which nothing sends on, then
 // sends once.
 func stopWhenTold(done <-chan (), out chan int) {
 	_ = <-done
@@ -53,7 +55,7 @@ func main() {
 		Err(p) => fmt.Println("failed:", p.Message()),
 	}
 
-	// One member fails: its note is dropped, Done closes, the member
+	// One member fails: its note is dropped, Done ends, the member
 	// waiting on Done ends, and Wait reports the panic.
 	dropped := make(chan (), 1)
 	stopped := make(chan int, 1)
@@ -65,7 +67,7 @@ func main() {
 		Err(p) => fmt.Println("failed:", p.Message(), "stopped", len(stopped), "dropped", len(dropped)),
 	}
 
-	// Three members fail at once: one panic is kept, Done is closed once.
+	// Three members fail at once: one panic is kept, Done ends once.
 	g = task.NewGroup()
 	done := g.Done()
 	g.Add(spawn fails("first"))
@@ -77,35 +79,39 @@ func main() {
 			m := p.Message()
 			select {
 			case <-done:
-				fmt.Println("three failed, one kept:", m == "first" || m == "second" || m == "third", "Done closed")
+				fmt.Println("three failed, one kept:", m == "first" || m == "second" || m == "third", "Done ended")
 			default:
 				fmt.Println("three failed, Done open")
 			}
 		},
 	}
 
-	// Done stays open when no member fails.
+	// Done stays open while the group lives and no member fails, and
+	// ends with the group, whose sending handle goes with it.
 	one := make(chan int, 1)
 	g = task.NewGroup()
 	open := g.Done()
 	g.Add(spawn tick(one.Clone(), 4))
-	_ = g.Wait()
+	_ = <-one
 	select {
 	case <-open:
-		fmt.Println("Done closed")
+		fmt.Println("Done ended early")
 	default:
 		fmt.Println("Done open")
 	}
 
+	_ = g.Wait()
+	fmt.Println("Done ended with the group:", (<-open).IsNone())
+
 	// A thousand members, and none.
-	many := make(chan int, 1000)
+	sent := make(chan int, many)
 	g = task.NewGroup()
-	for i := 0; i < 1000; i++ {
-		g.Add(spawn tick(many.Clone(), i))
+	for i := 0; i < many; i++ {
+		g.Add(spawn tick(sent.Clone(), i))
 	}
 
 	match g.Wait() {
-		Ok(_) => fmt.Println("a thousand returned, sent", len(many)),
+		Ok(_) => fmt.Println("a thousand returned, sent", len(sent)),
 		Err(p) => fmt.Println("failed:", p.Message()),
 	}
 

@@ -70,7 +70,8 @@ func TestSpawnHandle(t *testing.T) {
 // TestTaskBoundaries checks what crosses into a spawned task and onto
 // a channel: a spawned closure moves what it captures, every capture,
 // argument and receiver is Send, a channel carries only Send values,
-// close and range take the channel directions into account.
+// a send and Open take the channel directions into account, and close
+// is gone.
 func TestTaskBoundaries(t *testing.T) {
 	const prelude = "package main\nimport \"rc\"\n" +
 		"struct W { r rc.Rc<int> }\nfunc (w W) Run() {}\n" +
@@ -103,26 +104,29 @@ func TestTaskBoundaries(t *testing.T) {
 		// A channel handle is owned: moved by an assignment, a call and a
 		// capture, cloned for another task, borrowed by every operation.
 		{"func f() { ch := make(chan int); c := ch; ch <- 1; c <- 2 }", []string{"use of moved value ch"}},
-		{"func use(ch chan int) {}\nfunc f() { ch := make(chan int); use(ch); close(ch) }", []string{"use of moved value ch"}},
+		{"func use(ch chan int) {}\nfunc f() { ch := make(chan int); use(ch); ch <- 1 }", []string{"use of moved value ch"}},
 		{"func f() { ch := make(chan int); spawn func() { ch <- 1 }(); print(<-ch) }", []string{"use of moved value ch"}},
 		{"func f() { ch := make(chan int); for i := 0; i < 2; i++ { spawn func() { ch <- i }() } }", []string{"ch moved in a previous iteration of the loop"}},
 		{"func f() { ch := make(chan int); c := ch.Clone(); spawn func() { c <- 1 }(); print(<-ch) }", nil},
-		{"func f() { ch := make(chan int, 4); ch <- 1; print(<-ch); print(len(ch), cap(ch)); for v := range ch { print(v) }; select { case v := <-ch: print(v); case ch <- 3: print(0) }; close(ch); for range ch {}; c := ch; close(c) }", nil},
-		{"func f(in <-chan int) { c := in.Clone(); close(c) }", []string{"cannot close a receive-only channel"}}, // a clone keeps the direction
+		{"func f() { ch := make(chan int, 4); ch <- 1; print(<-ch); print(len(ch), cap(ch)); for v := range ch { print(v) }; select { case v := <-ch: print(v); case ch <- 3: print(0) }; for range ch {}; c := ch; print(c.Open()) }", nil},
+		{"func f(in <-chan int) { c := in.Clone(); c <- 1 }", []string{"cannot send on a receive-only channel"}}, // a clone keeps the direction
 		{"struct H { ch chan int }\nfunc (h ref H) C() chan int { return h.ch }", []string{"cannot move h.ch out of a borrow"}},
 		{"struct H impl Copy { ch chan int }", []string{"H does not implement Copy: field ch has type chan int, which is not Copy"}},
 		{"struct H impl Clone { ch chan int }\nfunc f(h ref H) { h2 := h.Clone(); h2.ch <- 1 }", nil},
 		{"func f() { ch := make(chan int); _ = ch; ch <- 1 }", []string{"use of moved value ch"}}, // the blank drops the handle
-		{"func f() { ch := make(chan int); c := ch; select { case v := <-ch: print(v) }; close(c) }", []string{"use of moved value ch"}},
-		{"func f() { ch := make(chan int); c := ch; select { case ch <- 1: print(0) }; close(c) }", []string{"use of moved value ch"}},
+		{"func f() { ch := make(chan int); c := ch; select { case v := <-ch: print(v) }; c <- 1 }", []string{"use of moved value ch"}},
+		{"func f() { ch := make(chan int); c := ch; select { case ch <- 1: print(0) }; c <- 1 }", []string{"use of moved value ch"}},
 		{"func f(ch chan string) { s := \"a\"; select { case ch <- s: print(0) }; t := s; print(t) }", []string{"use of moved value s"}}, // a select's send moves the value, as a send statement does
 		{"func f(ch chan int) { print(len(ref ch)) }", nil},
 		{"struct H { ch chan int }\nfunc f(h mut H) { c := take(mut h.ch); c <- 1 }", []string{"cannot take h.ch: chan int has no zero value to leave behind"}}, // take would leave a null handle
 
 		// A function in the same task borrows the handle, and a borrow of a
 		// channel both ways converts to a borrow of either direction.
-		{"func one(in ref <-chan int) int { return <-in ?? 0 }\nfunc put(out ref chan<- int) { out <- 1; close(out) }\nfunc all(in ref <-chan int) { for v := range in { print(v) } }\nfunc f() { ch := make(chan int, 2); put(ref ch); print(one(ref ch), len(ch)); all(ref ch); put(mut ch); close(ch) }", nil},
-		{"func f(in ref <-chan int) { close(in) }", []string{"cannot close a receive-only channel"}},
+		{"func one(in ref <-chan int) int { return <-in ?? 0 }\nfunc put(out ref chan<- int) { out <- 1; print(out.Open()) }\nfunc all(in ref <-chan int) { for v := range in { print(v) } }\nfunc f() { ch := make(chan int, 2); put(ref ch); print(one(ref ch), len(ch)); all(ref ch); put(mut ch) }", nil},
+		{"func f(in ref <-chan int) { in <- 1 }", []string{"cannot send on a receive-only channel"}},
+		{"func f(out chan<- int) { print(<-out) }", []string{"cannot receive from a send-only channel"}},
+		{"func f(out chan<- int) { select { case v := <-out: print(v) } }", []string{"cannot receive from a send-only channel"}},
+		{"func f(out ref chan<- int) { for v := range out { print(v) } }", []string{"cannot range over a value of type ref chan<- int"}},
 		{"func both(c ref chan int) {}\nfunc f(in <-chan int) { both(ref in) }", []string{"cannot use a value of type ref <-chan int as ref chan int"}},
 		{"func recv(c mut <-chan int) {}\nfunc f(ch chan int) { recv(mut ch) }", []string{"cannot use a value of type mut chan int as mut <-chan int"}}, // a mut borrow could store a narrower handle in the wider place
 
@@ -133,11 +137,10 @@ func TestTaskBoundaries(t *testing.T) {
 		{"func f<T: Send>(v T) { ch := make(chan T); print(cap(ch)) }", nil},
 		{"struct Q { in <-chan rc.Rc<int> }", []string{"a channel cannot carry rc.Rc<int>: rc.Rc<int> stays in its task"}}, // asked before the declarations were resolved
 
-		// close and range, by channel direction.
-		{"func f(ch chan int, out chan<- int) { close(ch); close(out) }", nil},
-		{"func f(in <-chan int) { close(in) }", []string{"cannot close a receive-only channel"}},
-		{"func f() { close(1) }", []string{"cannot close a value of type int"}},
-		{"func f(ch chan int) { close(ch, ch) }", []string{"close takes one channel"}},
+		// close is gone, Open asks a sending handle whether a receiver remains, and range, by channel direction.
+		{"func f(ch chan int, out chan<- int) { print(ch.Open(), out.Open()) }", nil},
+		{"func f(ch chan int) { close(ch) }", []string{"close is gone: a channel ends when its last sending handle is dropped"}},
+		{"func f(in <-chan int) { print(in.Open()) }", []string{"Open is not a field or method of <-chan int"}},
 		{"func f(in <-chan int, ch chan int) { for v := range in { print(v) }; for range ch {} }", nil},
 		{"func f(out chan<- int) { for v := range out { print(v) } }", []string{"cannot range over a value of type chan<- int"}},
 		{"func f(in <-chan int) { for i, v := range in { print(i, v) } }", []string{"range over in permits only one iteration variable"}},             // the value received is the one variable, as in Go

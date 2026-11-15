@@ -29,7 +29,7 @@ func size(i int) int {
 // block each slot held, then sends rounds blocks to the next task in
 // batches and drops the batches the previous task sends it, and
 // reports the bytes it allocated.
-func churn(id int, out chan [][]byte, in chan [][]byte, done chan int) {
+func churn(id int, out chan<- [][]byte, in <-chan [][]byte, done chan int) {
 	ring := make([][]byte, slots)
 	made := 0
 	for i := 0; i < rounds; i++ {
@@ -50,7 +50,7 @@ func churn(id int, out chan [][]byte, in chan [][]byte, done chan int) {
 		<-in // the previous task's batch, dropped here
 	}
 
-	close(out)
+	_ = out // the next task's channel ends with its last sender
 	for range in {
 	}
 
@@ -69,6 +69,7 @@ func main() {
 		spawn churn(i, chans[i].Clone(), chans[(i+1)%workers].Clone(), done.Clone())
 	}
 
+	_ = chans // main's handles, which would keep every channel open
 	total := 0
 	for i := 0; i < workers; i++ {
 		total += <-done ?? 0

@@ -103,7 +103,7 @@ func TestArm64Unknown(t *testing.T) {
 		setsSP           bool
 	}{
 		{"dynamic frame", "0000000100000010\tsub\tsp, sp, x8\n", "depends on a value", false},
-		{"jump table", "0000000100000010\tbr\tx8\n", "jump through a register", false},
+		{"tail call", "0000000100000010\tbr\tx8\n", "", false}, // a call through a pointer that ends the function, counted as a call
 		{"sets sp", "0000000100000010\tmov\tsp, x1\n", "", true},
 		{"probe loop", "000000010000000c\tnop\n0000000100000010\tsub\tsp, sp, #0x1, lsl #12\n0000000100000014\tstr\txzr, [sp]\n0000000100000018\tcmp\tsp, x9\n000000010000001c\tb.ne\t0x100000010\n", "in a loop", false},
 		{"nowhere", "0000000100000010\tb\t0x100009000\n", "start of no function", false},

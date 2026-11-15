@@ -92,7 +92,7 @@ func (d *decoder) amd64() {
 				if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
 					d.f.calls = append(d.f.calls, call{kind: library, target: m[1]})
 				} else {
-					d.unknown("a jump through a register in " + d.img.plain(d.f.name))
+					d.f.calls = append(d.f.calls, call{kind: pointer}) // a tail call through a pointer, which the compiler writes for a call that ends a function, since both backends build with jump tables off, so the switches are tables of comparisons: a call, counted over this frame, then the end
 				}
 			} else {
 				d.branch(in, parseTarget(in.args, in.note))

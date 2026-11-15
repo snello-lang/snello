@@ -86,12 +86,18 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 	return unit
 }
 
+// madeAt writes where a channel is made, its file and line, which the
+// channel keeps for the deadlock report.
+func (e *Emitter) madeAt(pos token.Pos) string {
+	p := e.file.Position(pos)
+	return filepath.Base(p.Filename) + ":" + strconv.Itoa(p.Line)
+}
+
 // locate hands the runtime, before a call of a located function, the
 // place of the call for the running task, file:line, with the call's
 // text and its parts for an assertion: the type of what Equal
 // compares, or the operands of a condition with their values, when
-// they are simple enough to read twice (_docs/design/09-testing.md,
-// section 4).
+// they are simple enough to read twice.
 func (e *Emitter) locate(x *ast.CallExpr, fn *types.Func) {
 	mode := lower.Located(fn)
 	if mode == "" {

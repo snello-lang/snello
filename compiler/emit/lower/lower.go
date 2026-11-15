@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package lower holds the decisions every backend makes the same way,
-// as _docs/design/07-lowering.md records them: what a backend takes
-// in, which library functions the compiler writes in place of a body,
-// and in time the names of symbols and the predicates over types that
-// say what a value needs when it is dropped. A backend walks the
-// checked syntax tree on its own and writes its own text; what it
+// Package lower holds the decisions every backend makes the same way:
+// what a backend takes in, which library functions the compiler writes
+// in place of a body, the names of symbols and the predicates over
+// types that say what a value needs when it is dropped. A backend walks
+// the checked syntax tree on its own and writes its own text; what it
 // must agree on with the others lives here, so that the differential
 // test between backends compares two walks of one set of rules.
 package lower
@@ -21,6 +20,14 @@ import (
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
+)
+
+// The directions of a channel handle as the runtime numbers them: the
+// bits of the ends the handle holds.
+const (
+	HandleSend = 1
+	HandleRecv = 2
+	HandleBoth = HandleSend | HandleRecv
 )
 
 // A Library is a package written in Snello that the program imports, as
@@ -38,11 +45,10 @@ type Library struct {
 }
 
 // A Binding is a package's C side, which the backends compile with the
-// program (_docs/design/08-packages.md, section 6): its import path,
-// the symbol prefix that names its directory in a build, the header the
-// compiler writes there for its C to include, the .c and .h files of
-// its directory, and the functions it declares without a body, bound
-// to C under their derived symbols.
+// program: its import path, the symbol prefix that names its directory
+// in a build, the header the compiler writes there for its C to
+// include, the .c and .h files of its directory, and the functions it
+// declares without a body, bound to C under their derived symbols.
 type Binding struct {
 	Path   string
 	Prefix string
@@ -84,8 +90,7 @@ func Bindings(info *types.Info, libraries []Library) []Binding {
 
 // CheckPrefixes refuses two libraries whose import paths would share
 // one symbol prefix, example.com/a.b and example.com/a_b, since their
-// names could then collide in the output; no real program meets it
-// (_docs/design/08-packages.md).
+// names could then collide in the output; no real program meets it.
 func CheckPrefixes(libraries []Library) error {
 	paths := make(map[string]string, len(libraries))
 	for _, lib := range libraries {
@@ -128,11 +133,10 @@ var lowered = map[string]bool{
 // of their call before the call, the file and line alone; every
 // exported function of expect is handed the whole call's text as
 // well, so that a test's failure names its file and line, the
-// expression as the test wrote it and the values of its parts
-// (_docs/design/09-testing.md, section 4): the backend hands the
-// runtime the place, and for expect the parts, which it keeps for the
-// running task and the package's where and parts read back, and then
-// writes the call as any other.
+// expression as the test wrote it and the values of its parts: the
+// backend hands the runtime the place, and for expect the parts, which
+// it keeps for the running task and the package's where and parts read
+// back, and then writes the call as any other.
 var located = map[string]string{"testing.Log": "line", "testing.Logf": "line", "testing.Skip": "line"}
 
 // Located returns how the place of a call of fn is handed to it: call,
@@ -325,6 +329,38 @@ func anyLeaves(xs []ast.Expr) bool {
 	}
 
 	return false
+}
+
+// HandleDir returns the direction of a channel handle of type t as the
+// runtime numbers them: a chan<- T sends, a <-chan T receives, a chan T
+// does both.
+func HandleDir(t types.Type) int {
+	switch t.Underlying().(*types.Chan).Dir() {
+	case types.SendOnly:
+		return HandleSend
+	case types.RecvOnly:
+		return HandleRecv
+	}
+
+	return HandleBoth
+}
+
+// Narrowed reports whether a value of type have, a chan T, is wanted as
+// a handle of one end, and which end that is as the runtime numbers
+// them: the handle keeps that end and gives the other up where it
+// meets the type wanted.
+func Narrowed(have, want types.Type) (int, bool) {
+	hc, ok := have.Underlying().(*types.Chan)
+	if !ok || hc.Dir() != types.SendRecv {
+		return 0, false
+	}
+
+	wc, ok := want.Underlying().(*types.Chan)
+	if !ok || wc.Dir() == types.SendRecv {
+		return 0, false
+	}
+
+	return HandleDir(want), true
 }
 
 // MayEnd reports whether evaluating x may end the statement before it

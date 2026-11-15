@@ -334,8 +334,8 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			e.declare("sn_map_free", "declare void @sn_map_free(ptr, ptr)")
 			e.inst("call void @sn_map_free(ptr %v, ptr " + e.mapType(u, pos) + ")")
 		case *types.Chan:
-			e.declare("sn_chan_drop", "declare void @sn_chan_drop(ptr)")
-			e.inst("call void @sn_chan_drop(ptr %v)")
+			e.declare("sn_chan_drop", "declare void @sn_chan_drop(ptr, i32)")
+			e.inst("call void @sn_chan_drop(ptr %v, i32 ", strconv.Itoa(lower.HandleDir(u)), ")")
 		case *types.Trait:
 			tab := e.load("ptr", e.gep(ir, "%v", 0))
 			isNull := e.op("icmp eq ptr "+tab.s+", null", "i1")
@@ -695,7 +695,7 @@ func (e *Emitter) cloneAt(p string, t types.Type, pos token.Pos) value {
 	case isString(t):
 		return e.rt("sn_string_clone", "%sn_string", e.load(ir, p))
 	case isChan(t):
-		return e.rt("sn_chan_clone", "ptr", e.load(ir, p)) // another handle on the same channel
+		return e.rt("sn_chan_clone", "ptr", e.load(ir, p), value{"i32", strconv.Itoa(lower.HandleDir(t))}) // another handle on the same channel, of the same direction
 	}
 
 	return e.op("call "+ir+" @"+e.cloner(t, pos)+"(ptr "+p+")", ir)

@@ -3,8 +3,8 @@
 // license that can be found in the LICENSE file.
 
 // Rule: a deferred call of the printing functions or of a built-in,
-// fmt.Println(s), print(s), close(ch), saves its arguments when the
-// defer runs, a view of each, and reads them when the function returns,
+// fmt.Println(s), print(s), saves its arguments when the defer runs, a
+// view of each, and reads them when the function returns,
 // so what a saved view sees cannot be given a new value, moved away or
 // dropped before then; a Copy value, an int, is saved whole and may
 // change. Fix: print a clone, defer fmt.Println(s.Clone()), or defer a
@@ -24,12 +24,6 @@ func builtin() {
     s := "old".Clone()
     defer print(s)
     s = "new".Clone()                       // ERROR "cannot assign to s: s is borrowed by the deferred call"
-}
-
-func closed() {
-    ch := make(chan int)
-    defer close(ch)
-    ch = make(chan int)                     // ERROR "cannot assign to ch: ch is borrowed by the deferred call"
 }
 
 func inner() {

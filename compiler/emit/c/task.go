@@ -194,8 +194,8 @@ func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []str
 
 	if h != nil {
 		h.done = e.temp()
-		e.line("sn_chan *" + h.done + " = sn_chan_make(sizeof(" + e.cType(h.elem, pos) + "), 1, " + e.elemDropper(h.elem, pos) + ");")
-		e.line(block + "->sn_done = sn_chan_clone(" + h.done + ");")
+		e.line("sn_chan *" + h.done + " = sn_chan_make(sizeof(" + e.cType(h.elem, pos) + "), 1, " + e.elemDropper(h.elem, pos) + ", " + e.madeAt(pos) + ");")
+		e.line(block + "->sn_done = sn_chan_clone(" + h.done + ", " + strconv.Itoa(lower.HandleBoth) + ");")
 	}
 
 	e.line("sn_spawn(" + lower.SpawnEntry(k) + ", " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]);")
@@ -260,7 +260,7 @@ func (e *Emitter) caughtEntry(k int, st, call string, unpack bool, results, elem
 		"\tif (!sn_chan_offer(a->sn_done, &r)) {\n",
 		"\t\t", e.dropOf("r", elem, pos), "\n",
 		"\t}\n",
-		"\tsn_chan_drop(&a->sn_done);\n",
+		"\tsn_chan_drop(&a->sn_done, "+strconv.Itoa(lower.HandleBoth)+");\n",
 		"\tsn_free(p);\n}\n\n")
 }
 
