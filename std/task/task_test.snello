@@ -25,6 +25,32 @@ func fail(note Note) int { panic(bug) }
 
 func nothing() {}
 
+// tick sends once on out and returns: a member run for its effect.
+func tick(out chan int, n int) { out <- n }
+
+// crash panics with the bug, dropping its note on the way out.
+func crash(note Note) { panic(bug) }
+
+// fails panics with the message: one of several members failing at
+// once.
+func fails(message string) { panic(message) }
+
+// stopWhenTold waits until the group's done channel is closed, which
+// nothing sends on, then sends once: a member that stops when another
+// has failed.
+func stopWhenTold(done <-chan (), out chan int) {
+	_ = <-done
+	out <- 1
+}
+
+// returned fails the test when a group's Wait reports a panic.
+func returned(r Result<(), task.Panic>) {
+	match r {
+		Ok(_) => {},
+		Err(p) => expect.Fail(p.Message()),
+	}
+}
+
 // TestJoinReturnsTheResult joins a task that returned.
 func TestJoinReturnsTheResult() {
 	match (spawn add(2, 3)).Join() {
@@ -78,4 +104,93 @@ func TestJoinedElsewhere() {
 		Ok(n) => expect.Equal(ref n, ref 2),
 		Err(p) => expect.Fail(p.Message()),
 	}
+}
+
+// TestGroupWaitsForEveryMember waits for members that return: Wait is
+// Ok, and each had sent before it.
+func TestGroupWaitsForEveryMember() {
+	out := make(chan int, 3)
+	g := task.NewGroup()
+	for i := 1; i <= 3; i++ {
+		g.Add(spawn tick(out.Clone(), i))
+	}
+
+	returned(g.Wait())
+
+	expect.Equal(ref len(out), ref 3)
+}
+
+// TestGroupReportsTheFirstPanic waits for a member that fails beside
+// one that stops when told: Wait is the panic, Done was closed for the
+// other member, which ended before Wait returned, and what the failed
+// member owned was dropped.
+func TestGroupReportsTheFirstPanic() {
+	dropped := make(chan (), 1)
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	g.Add(spawn stopWhenTold(g.Done(), out.Clone()))
+	g.Add(spawn crash(Note{out: dropped.Clone()}))
+	match g.Wait() {
+		Ok(_) => expect.Fail("every member returned"),
+		Err(p) => expect.Equal(p.Message(), bug),
+	}
+
+	expect.Equal(ref len(out), ref 1)
+	expect.IsSome(<-dropped)
+}
+
+// TestGroupDoneStaysOpen waits for members that all return: Done is
+// never closed, so a receive on it is not ready.
+func TestGroupDoneStaysOpen() {
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	done := g.Done()
+	g.Add(spawn tick(out.Clone(), 1))
+	returned(g.Wait())
+	select {
+	case <-done:
+		expect.Fail("Done closed with no member failed")
+	default:
+	}
+}
+
+// TestGroupOfAThousand waits for a thousand members at once.
+func TestGroupOfAThousand() {
+	out := make(chan int, 1000)
+	g := task.NewGroup()
+	for i := 0; i < 1000; i++ {
+		g.Add(spawn tick(out.Clone(), i))
+	}
+
+	returned(g.Wait())
+	expect.Equal(ref len(out), ref 1000)
+}
+
+// TestGroupFirstOfMany waits for three members that fail at once: one
+// of their panics is kept, and Done is closed once, by the watcher
+// that kept it.
+func TestGroupFirstOfMany() {
+	g := task.NewGroup()
+	done := g.Done()
+	g.Add(spawn fails("first".Clone()))
+	g.Add(spawn fails("second".Clone()))
+	g.Add(spawn fails("third".Clone()))
+	match g.Wait() {
+		Ok(_) => expect.Fail("every member returned"),
+		Err(p) => {
+			m := p.Message()
+			expect.True(m == "first" || m == "second" || m == "third")
+		},
+	}
+
+	select {
+	case <-done:
+	default:
+		expect.Fail("Done open after three members failed")
+	}
+}
+
+// TestGroupOfNoMember waits for nothing.
+func TestGroupOfNoMember() {
+	returned(task.NewGroup().Wait())
 }

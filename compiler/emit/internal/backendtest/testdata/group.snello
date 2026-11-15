@@ -1,0 +1,116 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A group of tasks: members added by their handles and waited for
+// together, Wait Ok once every member returned, the first panic among
+// them when one failed, Done closed for the members that stop when
+// told, a group of a thousand members, a group of none, and what a
+// failed member owned dropped before Wait returns.
+
+package main
+
+import ("fmt"; "task")
+
+// bug is what the failing member panics with.
+const bug = "a member's bug"
+
+// A Note says, when dropped, that it was.
+struct Note impl Drop {
+	out chan ()
+}
+
+func (n mut Note) Drop() { n.out <- () }
+
+// tick sends n once and returns.
+func tick(out chan int, n int) { out <- n }
+
+// crash fails with the bug, dropping its note on the way out; the bug
+// is a literal, since a panic abandons the plain memory of its frame.
+func crash(note Note) { panic(bug) }
+
+// stopWhenTold waits until done is closed, which nothing sends on, then
+// sends once.
+func stopWhenTold(done <-chan (), out chan int) {
+	_ = <-done
+	out <- 1
+}
+
+// fails panics with the message: one of several members failing at
+// once.
+func fails(message string) { panic(message) }
+
+func main() {
+	// Every member returns.
+	out := make(chan int, 3)
+	g := task.NewGroup()
+	for i := 1; i <= 3; i++ {
+		g.Add(spawn tick(out.Clone(), i))
+	}
+
+	match g.Wait() {
+		Ok(_) => fmt.Println("three returned, sent", len(out)),
+		Err(p) => fmt.Println("failed:", p.Message()),
+	}
+
+	// One member fails: its note is dropped, Done closes, the member
+	// waiting on Done ends, and Wait reports the panic.
+	dropped := make(chan (), 1)
+	stopped := make(chan int, 1)
+	g = task.NewGroup()
+	g.Add(spawn stopWhenTold(g.Done(), stopped.Clone()))
+	g.Add(spawn crash(Note{out: dropped.Clone()}))
+	match g.Wait() {
+		Ok(_) => fmt.Println("every member returned"),
+		Err(p) => fmt.Println("failed:", p.Message(), "stopped", len(stopped), "dropped", len(dropped)),
+	}
+
+	// Three members fail at once: one panic is kept, Done is closed once.
+	g = task.NewGroup()
+	done := g.Done()
+	g.Add(spawn fails("first"))
+	g.Add(spawn fails("second"))
+	g.Add(spawn fails("third"))
+	match g.Wait() {
+		Ok(_) => fmt.Println("every member returned"),
+		Err(p) => {
+			m := p.Message()
+			select {
+			case <-done:
+				fmt.Println("three failed, one kept:", m == "first" || m == "second" || m == "third", "Done closed")
+			default:
+				fmt.Println("three failed, Done open")
+			}
+		},
+	}
+
+	// Done stays open when no member fails.
+	one := make(chan int, 1)
+	g = task.NewGroup()
+	open := g.Done()
+	g.Add(spawn tick(one.Clone(), 4))
+	_ = g.Wait()
+	select {
+	case <-open:
+		fmt.Println("Done closed")
+	default:
+		fmt.Println("Done open")
+	}
+
+	// A thousand members, and none.
+	many := make(chan int, 1000)
+	g = task.NewGroup()
+	for i := 0; i < 1000; i++ {
+		g.Add(spawn tick(many.Clone(), i))
+	}
+
+	match g.Wait() {
+		Ok(_) => fmt.Println("a thousand returned, sent", len(many)),
+		Err(p) => fmt.Println("failed:", p.Message()),
+	}
+
+	match task.NewGroup().Wait() {
+		Ok(_) => fmt.Println("none returned"),
+		Err(p) => fmt.Println("failed:", p.Message()),
+	}
+}

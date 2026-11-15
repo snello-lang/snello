@@ -40,6 +40,7 @@ The binary is written to the current directory, named after the file, or after t
 | cli-grep/ | Arguments, standard input and files, a borrow per line, exit codes; waits for `regexp`, so it has no `.out` yet |
 | bst/ | A `mut` borrow walked down a chain of boxes, delete in place |
 | handles/ | `spawn` as an expression: a handle on a task, `Join` giving the result or the panic that ended the task, handles joined by another task |
+| group/ | `task.Group`: batches waited for together, a server stopped by `Done` when another task's bug fails it and `Wait` reporting the bug, and a task started again by a loop over `Join` with its limit |
 | packaged/ | A program of two files with a package of its own beside it, and the package's tests: `snello test examples/packaged/shapes` |
 | bound/ | A program with two packages beside it that bind C: `snello build examples/bound` |
 

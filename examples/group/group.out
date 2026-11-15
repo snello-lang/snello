@@ -1,0 +1,8 @@
+every batch reported, 3 totals
+served ping
+served status
+server stopping: another task failed
+a task failed: index out of range [3] with length 3
+retrying: the first attempt found nothing
+retrying: the second attempt found nothing
+succeeded on attempt 3
