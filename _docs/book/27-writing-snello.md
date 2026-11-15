@@ -109,7 +109,7 @@ A signature says what a function does with what it is given:
 
 An owned value is moved, not copied: `.Clone()` is written only where two owners are wanted.
 
-A struct is held and passed by value, lent with `ref` or `mut`, and optional as `T?`; `*T` is written where a type holds itself, `*Node?`, or where a large struct that moves often is measured to move faster through one. A value with several owners is an `rc.Rc<T>`, a `sync.Arc<T>` across tasks, or an arena's `Index<T>` when its links can form a cycle. Chapter 7, When to use a pointer, has the table.
+A number or a string that means something the compiler should keep apart, an identifier, a unit, a kind of key, is a type of its own, `type OrderID int`, converted where it meets a plain number, `OrderID(n)`; `type` declares nothing else. A struct is held and passed by value, lent with `ref` or `mut`, and optional as `T?`; `*T` is written where a type holds itself, `*Node?`, or where a large struct that moves often is measured to move faster through one. A value with several owners is an `rc.Rc<T>`, a `sync.Arc<T>` across tasks, or an arena's `Index<T>` when its links can form a cycle. Chapter 7, When to use a pointer, has the table.
 
 ## Layout
 

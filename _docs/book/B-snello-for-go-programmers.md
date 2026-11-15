@@ -43,11 +43,14 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values for the types whose zer
 
 ## Chapter 4: Structs, enums and match
 
-Unchanged: struct fields, keyed literals, dot access, methods with receivers, `type Name T`.
+Unchanged: struct fields, keyed literals, dot access, methods with receivers.
 
 | In Go | In Snello |
 |---|---|
-| `type Node struct { ... }` | `struct Node { ... }` |
+| `type Node struct { ... }` | `struct Node { ... }`; Go's spelling is refused with Snello's |
+| `type Shape interface { ... }` | `trait Shape { ... }` (chapter 11) |
+| `type Celsius float64`, a new type over another | the same, `type Celsius f64`, and the only thing `type` declares: no assignment from `f64` without `Celsius(x)`, none of `f64`'s methods, its own and the traits it lists, `type Celsius f64 impl fmt.Stringer` |
+| `type Name = Other`, an alias | None: `expected type, found '='`; a name is one type. `byte` and `rune` are the predeclared aliases of `u8` and `i32` |
 | Value and pointer receivers, `(t Tree)` and `(t *Tree)` | Three receivers: `(t ref Tree)` reads, `(t mut Tree)` changes, `(t Tree)` takes |
 | A `const` block with `iota`, or an interface with one struct per case | `enum`, with fields per variant |
 | A type switch | `match`, exhaustive, usable as an expression |

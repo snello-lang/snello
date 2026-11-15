@@ -84,6 +84,7 @@ func TestDeclErrors(t *testing.T) {
 		{"struct T\nfunc f() {}", "expected '{', found 'newline'", 1},
 		{"type T struct {}", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1}, // Go's spelling
 		{"type T enum { A }", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1},
+		{"type I interface { F() }\nfunc f() {}", "an interface is a trait, spelled 'trait I { ... }'", 1}, // Go's spelling, and the declaration after it parses
 		{"enum E {\n\tLit f64\n}", "expected '(' or newline, found 'f64'", 1},
 		{"enum E {\n\t3\n}", "expected variant or '}', found '3'", 1},
 		{"struct T<K Ord> {}", "expected '>', found 'Ord'", 1},               // the stray '>' is on the same line, so not reported

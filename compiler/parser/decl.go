@@ -9,6 +9,10 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// goInterface is the word Go declares an interface with, which Snello
+// spells trait: a declaration that uses it is told so.
+const goInterface = "interface"
+
 // parseDecl parses one top-level declaration and the semicolon that
 // ends it. On a token that starts no declaration it reports the error,
 // consumes the token and skips to the next declaration start, so the
@@ -279,8 +283,33 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	}
 
 	d.Def = p.parseType()
+	if nt, ok := d.Def.(*ast.NamedType); ok && nt.Pkg == nil && nt.Name.Name == goInterface && p.tok == token.LBRACE {
+		p.error(d.TokPos, "an interface is a trait, spelled 'trait "+d.Name.Name+" { ... }'")
+		p.skipBraces() // so that the declarations after it parse
+		return d
+	}
+
 	d.Impls = p.parseImpls()
 	return d
+}
+
+// skipBraces moves past a block in braces, the one the parser is at,
+// and the blocks inside it.
+func (p *Parser) skipBraces() {
+	depth := 0
+	for p.tok != token.EOF {
+		switch p.tok {
+		case token.LBRACE:
+			depth++
+		case token.RBRACE:
+			depth--
+		}
+
+		p.next()
+		if depth == 0 {
+			return
+		}
+	}
 }
 
 // parseImpls parses an optional "impl" Trait {"," Trait} list and
