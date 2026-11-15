@@ -12,10 +12,9 @@ import (
 
 // Source writes an expression as a program writes it, on one line: the
 // text a test's failure shows for the expression that failed, which
-// the compiler hands the expect functions (_docs/design/09-testing.md,
-// section 4), since the syntax tree keeps no source text. A function
-// literal, an if or a match is abridged to its head, with { ... } for
-// its body, as a line can hold.
+// the compiler hands the expect functions, since the syntax tree keeps
+// no source text. A function literal, an if or a match is abridged to
+// its head, with { ... } for its body, as a line can hold.
 func Source(e Expr) string {
 	var b strings.Builder
 	writeExpr(&b, e)

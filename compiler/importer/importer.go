@@ -5,8 +5,8 @@
 // Package importer loads the packages a program imports, as
 // go/importer serves go/types: a standard package from the copy std
 // embeds in the compiler, and a package of the program's own from the
-// directory its import path names under the program's module
-// (_docs/design/08-packages.md), each parsed and checked once.
+// directory its import path names under the program's module, each
+// parsed and checked once.
 package importer
 
 import (
@@ -209,9 +209,9 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 // base_test: the test files of base's directory whose package clause
 // is base_test, a package of their own that imports base as its users
 // do, so that a package the test harness itself depends on, sync under
-// testing, is tested without an import cycle (_docs/design/09-testing.md,
-// section 1). A standard package's is loaded with the library's
-// privileges, from the embedded copy or from StdDir.
+// testing, is tested without an import cycle. A standard package's is
+// loaded with the library's privileges, from the embedded copy or from
+// StdDir.
 func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, error) {
 	if _, err := imp.stdFile(base + "/" + path.Base(base) + ".snello"); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {

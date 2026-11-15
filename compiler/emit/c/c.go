@@ -3,9 +3,9 @@
 // license that can be found in the LICENSE file.
 
 // Package c emits C source for a checked core Snello program and
-// provides the runtime it links against. It is the first backend
-// (_docs/design/01-language-design.md, "Backend: C first, LLVM
-// later"); LLVM IR replaces it and keeps the runtime.
+// provides the runtime it links against. It is the first backend and
+// the reference one; the LLVM backend writes IR in its place and keeps
+// the runtime.
 //
 // The lowering: numbers are C integers and doubles, a string is the
 // runtime's sn_string view, a struct is a C struct, an enum a tagged
@@ -286,8 +286,7 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 // runtime's lazy beside it; the initializer as a function of its own,
 // an assignment to the cell written as any statement is; and the
 // getter every use of the variable goes through, which makes it on
-// the first (_docs/design/03-ownership-across-tasks.md, package
-// variables).
+// the first.
 func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 	e.lazy[v] = true
 	cname := lower.ObjName(v)

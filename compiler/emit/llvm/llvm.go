@@ -4,13 +4,12 @@
 
 // Package llvm writes a checked Snello program as LLVM IR, which clang
 // turns into a native binary over the C runtime the C backend uses,
-// linked unchanged. The layouts and the release points are those of
-// _docs/design/07-lowering.md, shared with the C backend through
-// emit/lower; what differs is the text, and the three layouts the note
-// gives the IR alone. The emitter reads the types, moves and captures
-// the checker recorded and decides nothing about ownership. A
-// construct it does not lower yet is an error naming it, never silent
-// wrong code.
+// linked unchanged. The layouts and the release points are the C
+// backend's, shared through emit/lower; what differs is the text, and
+// the three layouts the IR alone needs. The emitter reads the types,
+// moves and captures the checker recorded and decides nothing about
+// ownership. A construct it does not lower yet is an error naming it,
+// never silent wrong code.
 //
 // Every local and parameter lives in a stack slot allocated at the top
 // of its function and is read and written through it; the optimizer
@@ -444,8 +443,7 @@ func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 // runtime's lazy beside it; the initializer as a function of its own,
 // an assignment to the cell written as any statement is; and the
 // getter every use of the variable goes through, which makes it on
-// the first (_docs/design/03-ownership-across-tasks.md, package
-// variables).
+// the first.
 func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t string) {
 	e.lazy[v] = true
 	g := "@" + lower.ObjName(v)
