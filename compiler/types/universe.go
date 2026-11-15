@@ -125,6 +125,7 @@ func init() {
 	EqualVariant = NewVariant(token.NoPos, "Equal", Ordering, 1, nil)
 	GreaterVariant = NewVariant(token.NoPos, "Greater", Ordering, 2, nil)
 	Ordering.SetUnderlying(NewEnum([]*Variant{LessVariant, EqualVariant, GreaterVariant}))
+	Ordering.copyState, Ordering.borrowState, Ordering.sendState = copyYes, copyNo, copyYes // settled here: the type is shared by every check in the process, so no check writes to it
 	def(Ordering.obj)
 	def(LessVariant)
 	def(EqualVariant)

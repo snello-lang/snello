@@ -1436,16 +1436,24 @@ func indented(text ref string, prefix ref string, indent ref string) string {
 // bytes are kept as they are.
 func layOut(text ref string, prefix ref string, indent ref string, out mut strings.Builder) {
 	depth := 0
-	inString, escaped := false, false
+	inString := false
 	for i := 0; i < len(text); i++ {
 		c := text[i]
-		if inString {
+		if inString { // each run up to a quote or an escape in one write, the escape with the byte after it
+			run := scanString(text, i, false)
+			out.WriteString(text[i:run])
+			if run >= len(text) {
+				break
+			}
+
+			c = text[run]
 			out.WriteByte(c)
-			match {
-				escaped => escaped = false,
-				c == escape => escaped = true,
-				c == quotationMark => inString = false,
-				_ => {},
+			i = run
+			if c == escape && run + 1 < len(text) {
+				out.WriteByte(text[run + 1])
+				i = run + 1
+			} else if c == quotationMark {
+				inString = false
 			}
 
 			continue
@@ -1705,29 +1713,31 @@ func writePlainDecimal(short ref string, e int, out mut strings.Builder) {
 
 // writeQuoted writes s as a JSON string: the quote, the backslash and
 // every control character escaped, the runs of other bytes between them
-// as they are, each run in one write.
+// as they are, each run found by scanString and written in one write.
 func writeQuoted(s ref string, out mut strings.Builder) {
 	out.WriteByte(quotationMark)
 	start := 0
-	for i := 0; i < len(s); i++ {
+	i := scanString(s, 0, true)
+	for i < len(s) {
 		c := s[i]
-		if c >= byte(utf8.RuneSelf) { // a rune of several bytes, written as it is; a byte that starts none is U+FFFD
-			r, size := utf8.DecodeRuneInString(s[i:len(s)])
-			if r != utf8.RuneError || size > 1 {
-				i += size - 1
-				continue
+		if c >= byte(utf8.RuneSelf) { // a run of runes of several bytes, each written as it is; a byte that starts none is U+FFFD
+			for i < len(s) && s[i] >= byte(utf8.RuneSelf) {
+				r, size := utf8.DecodeRuneInString(s[i:len(s)])
+				if r != utf8.RuneError || size > 1 {
+					i += size
+					continue
+				}
+
+				if start < i {
+					out.WriteString(s[start:i])
+				}
+
+				out.WriteString("\\ufffd")
+				i += 1
+				start = i
 			}
 
-			if start < i {
-				out.WriteString(s[start:i])
-			}
-
-			out.WriteString("\\ufffd")
-			start = i + 1
-			continue
-		}
-
-		if c >= controlEnd && c != quotationMark && c != escape {
+			i = scanString(s, i, true)
 			continue
 		}
 
@@ -1749,6 +1759,7 @@ func writeQuoted(s ref string, out mut strings.Builder) {
 		}
 
 		start = i + 1
+		i = scanString(s, start, true)
 	}
 
 	if start < len(s) {
@@ -1911,7 +1922,7 @@ func readValue<T>(r mut reader) Result<T, Error> {
 			r.enterNested()?
 			o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
 			v := T{ for f := range fields(T) {
-				[f]: if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
+				[f]: if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name), attr(f, Name).IsNone())? {
 					readValue<f.type>(mut r)?
 				} else {
 					match f.type {
@@ -1969,7 +1980,7 @@ func readValue<T>(r mut reader) Result<T, Error> {
 									r.expectByte(beginObject)?
 									o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
 									v := c(for f := range fields(c) {
-										if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
+										if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name), attr(f, Name).IsNone())? {
 											readValue<f.type>(mut r)?
 										} else {
 											match f.type {
@@ -2079,7 +2090,7 @@ func readVariantFields<T>(r mut reader, o mut objectState, name ref string, star
 			for c := range variants(T) {
 				if name == fieldKey(attr(c, Name), c.name) {
 					return Ok(c(for f := range fields(c) {
-						if attr(f, Skip).IsNone() && r.seekField(o, ref fieldKey(attr(f, Name), f.name))? {
+						if attr(f, Skip).IsNone() && r.seekField(o, ref fieldKey(attr(f, Name), f.name), attr(f, Name).IsNone())? {
 							readValue<f.type>(mut r)?
 						} else {
 							match f.type {
@@ -2107,7 +2118,7 @@ func readTagged<T>(r mut reader, withContent bool) Result<T, Error> {
 	r.expectByte(beginObject)?
 	r.enterNested()?
 	o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
-	if !r.seekField(mut o, ref tag)? {
+	if !r.seekField(mut o, ref tag, false)? {
 		return Err(missingFieldError(start, ref tag))
 	}
 
@@ -2118,7 +2129,7 @@ func readTagged<T>(r mut reader, withContent bool) Result<T, Error> {
 
 	v := if !withContent {
 		readVariantFields<T>(mut r, mut o, ref name, start)?
-	} else if !r.seekField(mut o, ref content)? {
+	} else if !r.seekField(mut o, ref content, false)? {
 		if hasFields<T>(ref name) {
 			return Err(missingFieldError(start, ref content))
 		}
@@ -2475,10 +2486,7 @@ func foundText(text ref string) string {
 func (r mut reader) readString() Result<string, Error> {
 	r.expectByte(quotationMark)?
 	start := r.at
-	for r.at < len(r.text) && r.text[r.at] != quotationMark && r.text[r.at] != escape && r.text[r.at] >= controlEnd {
-		r.at += 1
-	}
-
+	r.at = scanString(r.text, r.at, false)
 	if r.at < len(r.text) && r.text[r.at] == quotationMark { // no escape: the bytes as they are, in one copy
 		r.at += 1
 		return Ok(r.text[start:r.at - 1].Clone())
@@ -2514,13 +2522,15 @@ func (r mut reader) readString() Result<string, Error> {
 				}
 			}
 			_ => {
-				if c < controlEnd {
-					r.at -= 1
-					return Err(r.errorHere("invalid character in string"))
-				}
-
-				b.WriteByte(c)
+				r.at -= 1
+				return Err(r.errorHere("invalid character in string"))
 			}
+		}
+
+		run := scanString(r.text, r.at, false) // the bytes up to the next escape, as they are
+		if run > r.at {
+			b.WriteString(r.text[r.at:run])
+			r.at = run
 		}
 	}
 }
@@ -2530,7 +2540,12 @@ func (r mut reader) readString() Result<string, Error> {
 func (r mut reader) skipString() Result<bool, Error> {
 	r.expectByte(quotationMark)?
 	escaped := false
-	for r.at < len(r.text) {
+	for {
+		r.at = scanString(r.text, r.at, false)
+		if r.at >= len(r.text) {
+			return Err(r.errorHere("unterminated string"))
+		}
+
 		c := r.text[r.at]
 		match {
 			c == quotationMark => {
@@ -2552,12 +2567,9 @@ func (r mut reader) skipString() Result<bool, Error> {
 					_ => return Err(r.errorHere("invalid escape")),
 				}
 			}
-			c < controlEnd => return Err(r.errorHere("invalid character in string")),
-			_ => r.at += 1,
+			_ => return Err(r.errorHere("invalid character in string")),
 		}
 	}
-
-	return Err(r.errorHere("unterminated string"))
 }
 
 // readUnicodeEscape reads what follows \u: a rune, the two halves of a
@@ -2698,22 +2710,29 @@ func (r mut reader) scanKeys(note bool) Result<[]objectKey, Error> {
 }
 
 // readKeySpan reads a key as the bytes between its quotes, and whether
-// they hold an escape, without making a string of it.
+// they hold an escape, without making a string of it; a control
+// character in it is refused, as readString refuses one.
 func (r mut reader) readKeySpan() Result<objectKey, Error> {
 	r.expectByte(quotationMark)?
 	from := r.at
 	escaped := false
-	for r.at < len(r.text) && r.text[r.at] != quotationMark {
-		if r.text[r.at] == escape {
-			escaped = true
-			r.at += 1
+	for {
+		r.at = scanString(r.text, r.at, false)
+		if r.at >= len(r.text) {
+			return Err(r.errorHere("unterminated string"))
 		}
 
-		r.at += 1
-	}
+		c := r.text[r.at]
+		if c == quotationMark {
+			break
+		}
 
-	if r.at >= len(r.text) {
-		return Err(r.errorHere("unterminated string"))
+		if c != escape {
+			return Err(r.errorHere("invalid character in string"))
+		}
+
+		escaped = true
+		r.at += 2
 	}
 
 	r.at += 1
@@ -2817,8 +2836,9 @@ func (r ref reader) findNamedValue(keys ref []objectKey, name ref string) int? {
 // reports whether the object has one. While the members come in the
 // order of the fields, the next one is read where it stands; the first
 // that does not makes the object scanned whole from its {, and every
-// field after is found by its key.
-func (r mut reader) seekField(o mut objectState, name ref string) Result<bool, Error> {
+// field after is found by its key. plain says the name holds no quote
+// and no backslash, which a declared field's name cannot.
+func (r mut reader) seekField(o mut objectState, name ref string, plain bool) Result<bool, Error> {
 	if !o.scanned {
 		at := r.at
 		r.skipSpace()
@@ -2829,15 +2849,12 @@ func (r mut reader) seekField(o mut objectState, name ref string) Result<bool, E
 			comma = true
 		}
 
-		if comma && r.peek() == quotationMark { // a member in order, after the comma that must come before it
-			k := r.readKeySpan()?
-			if !k.escaped && r.text[k.from:k.to] == name {
-				r.skipSpace()
-				r.expectByte(nameSeparator)?
-				r.skipSpace()
-				o.read += 1
-				return Ok(true)
-			}
+		if comma && r.peek() == quotationMark && r.matchKey(name, plain)? { // a member in order, after the comma that must come before it
+			r.skipSpace()
+			r.expectByte(nameSeparator)?
+			r.skipSpace()
+			o.read += 1
+			return Ok(true)
 		}
 
 		r.at = o.start // out of order, or no member here: the object whole
@@ -2853,6 +2870,24 @@ func (r mut reader) seekField(o mut objectState, name ref string) Result<bool, E
 		}
 		None => return Ok(false),
 	}
+}
+
+// matchKey moves past the key at the offset and reports whether it is
+// name as it is: in one comparison when the text holds the name's bytes
+// between quotes, which only a name that is written as it is can
+// match, and by its span otherwise. plain says the name holds no quote
+// and no backslash, as a declared field's cannot; a name given by an
+// attribute is scanned for them. A key with an escape is not matched
+// here; the object is scanned whole and it is found decoded.
+func (r mut reader) matchKey(name ref string, plain bool) Result<bool, Error> {
+	end := r.at + 1 + len(name)
+	if end < len(r.text) && r.text[end] == quotationMark && r.text[r.at + 1:end] == name && (plain || scanString(name, 0, false) == len(name)) {
+		r.at = end + 1
+		return Ok(true)
+	}
+
+	k := r.readKeySpan()?
+	return Ok(!k.escaped && r.text[k.from:k.to] == name)
 }
 
 // finishObject leaves the offset after the object o: at its end, when
@@ -3215,11 +3250,21 @@ func (d mut Decoder<R>) valueEnd() Result<int, Error> {
 		s := d.scan
 		i := d.start + s.passed
 		for i < d.end {
-			c := d.buf[i]
-			i += 1
-			if s.inString {
+			if s.inString { // the bytes up to the next quote or escape passed in one scan
+				if s.escaped {
+					s.escaped = false
+					i += 1
+					continue
+				}
+
+				i += scanString(textOf(d.buf[i:d.end]), 0, false)
+				if i >= d.end {
+					break
+				}
+
+				c := d.buf[i]
+				i += 1
 				match {
-					s.escaped => s.escaped = false,
 					c == escape => s.escaped = true,
 					c == quotationMark => {
 						s.inString = false
@@ -3233,6 +3278,8 @@ func (d mut Decoder<R>) valueEnd() Result<int, Error> {
 				continue
 			}
 
+			c := d.buf[i]
+			i += 1
 			match {
 				c == quotationMark => s.inString = true,
 				c == beginArray || c == beginObject => s.depth += 1,
@@ -3404,3 +3451,10 @@ func (d ref Decoder<R>) errorHere(msg string) Error {
 
 // textOf lends the bytes of b as a string, with no copy.
 func textOf(b ref []byte) ref string
+
+// scanString returns the offset of the first byte of s at or after at
+// that a JSON string cannot hold as it is, a quote, a backslash or a
+// control character, and, when high says so, a byte of 0x80 or more;
+// or len(s) when there is none. The runtime provides it, eight bytes
+// at a time.
+func scanString(s ref string, at int, high bool) int

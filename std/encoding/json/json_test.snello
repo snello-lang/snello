@@ -14,6 +14,11 @@ struct Point {
 	Y int
 }
 
+// A Slashed has a field whose key holds a backslash.
+struct Slashed {
+	A int @json.Name("a\\b")
+}
+
 struct Server {
 	Host  string = "localhost"
 	Port  int = 8080
@@ -346,6 +351,42 @@ func TestFloatsAndText() {
 	expect.Equal(ref expect.IsOk(json.Marshal(ref []f64{1e20, 1e-6, 1e-7, 123456789.0, 0.5, 1e21, -2.5e-8})), "[100000000000000000000,0.000001,1e-7,123456789,0.5,1e+21,-2.5e-8]")
 	expect.Equal(ref expect.IsOk(json.Marshal(ref f32(0.1))), "0.1")
 	expect.Equal(ref expect.IsOk(json.Marshal(ref string([]byte{0x61, 0xff, 0x62}))), "\"a\\ufffdb\"")
+}
+
+// A string is scanned eight bytes at a time for what must be escaped,
+// so a quote, a backslash, a control character and a rune of several
+// bytes are found at every offset of a word, and a string of only
+// clean bytes of every length round-trips as it is.
+func TestScannedStrings() {
+	for _, special := range []string{`"`, `\`, "\t", "\x01", "é", "\U0001F600"} {
+		for at := 0; at < 20; at++ {
+			s := (strings.Repeat("a", at) ?? "") + special + (strings.Repeat("b", 19 - at) ?? "")
+			text := expect.IsOk(json.Marshal(ref s))
+			expect.Equal(ref expect.IsOk(json.Unmarshal<string>(ref text)), ref s)
+			expect.True(expect.IsOk(json.Unmarshal<map[string]int>(ref ("{" + text + ":1}"))).Contains(ref s))
+		}
+	}
+
+	for n := 0; n < 20; n++ {
+		s := strings.Repeat("x", n) ?? ""
+		expect.Equal(ref expect.IsOk(json.Marshal(ref s)), ref ("\"" + s + "\""))
+		expect.Equal(ref expect.IsOk(json.Unmarshal<string>(ref ("\"" + s + "\""))), ref s)
+	}
+
+	runes := "日本語 and été \U0001F600" + string([]byte{0xff}) + "x" // runs of runes of several bytes, and a byte that starts none
+	expect.Equal(ref expect.IsOk(json.Marshal(ref runes)), "\"日本語 and été 😀\\ufffdx\"")
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"a\"b\\c\ndée"`)), "a\"b\\c\ndée")
+}
+
+// A field whose key holds a backslash or a quote is found only where
+// the text writes it escaped: the raw bytes of the key are never taken
+// for the name, and a control character inside a key is refused as it
+// is inside any string.
+func TestAwkwardKeys() {
+	expect.Equal(ref expect.IsOk(json.Unmarshal<Slashed>(`{"a\\b":1}`)).A, ref 1)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Slashed>(`{"a\b":1}`)).Error(), "missing field")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Slashed>("{\"a\x01b\":1}")).Error(), "invalid character in string")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>("{\"X\x01\":1,\"Y\":2}")).Error(), "invalid character in string")
 }
 
 // Attributes rename a field's and a variant's key, leave an empty field

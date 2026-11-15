@@ -171,7 +171,7 @@ func (e *Emitter) dropMethod(t types.Type) string {
 // when the value is live, then each part that owns something, and the
 // memory a pointer, slice or map holds.
 func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
-	name := "sn_drop_" + lower.Mangle(t)
+	name := lower.Symbol("sn_drop_", t)
 	if e.state[name] != undeclared {
 		return name
 	}

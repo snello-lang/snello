@@ -89,6 +89,9 @@ type Emitter struct {
 	making     *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
 	done       map[string]bool                 // the instances asked for, by name
 	work       []instance                      // the instances still to write
+	registers  []string                        // the register names written so far, %t1 at 1, each made once for every function that numbers that far
+	slots      []string                        // the slot names, %s1 at 1, the same way
+	spare      []*function                     // the records of functions written, kept for the next ones with their buffers and tables
 	errors     []string
 }
 
@@ -297,7 +300,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 func (e *Emitter) mainFunc() {
 	e.declare("sn_init", "declare void @sn_init(i32, ptr)")
 	e.declare("sn_finish", "declare i32 @sn_finish()")
-	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
+	outer := e.begin(nil)
 	e.inst("call void @sn_init(i32 %argc, ptr %argv)")
 	e.inst("call void @sn_main()")
 	for i := len(e.statics) - 1; i >= 0; i-- {
@@ -318,10 +321,43 @@ func (e *Emitter) mainFunc() {
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
 	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " {\nentry:\n")
-	e.funcs.Write(e.fn.allocas.Bytes())
-	e.funcs.Write(e.fn.body.Bytes())
+	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n")
-	e.fn = nil
+}
+
+// begin starts writing a function and returns the one being written
+// before, which end takes back. The record comes from the ones kept
+// by end when there is one, so that a module of thousands of functions
+// grows a function's buffers and tables from nothing a few times, not
+// once per function.
+func (e *Emitter) begin(sig *types.Signature) *function {
+	outer := e.fn
+	if n := len(e.spare); n > 0 {
+		e.fn = e.spare[n-1]
+		e.spare = e.spare[:n-1]
+		e.fn.sig = sig
+	} else {
+		e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string), sig: sig}
+	}
+
+	return outer
+}
+
+// end writes the function being written into section, its allocas
+// before its body, keeps its record emptied for the next begin, and
+// goes back to writing outer.
+func (e *Emitter) end(section *bytes.Buffer, outer *function) {
+	f := e.fn
+	section.Write(f.allocas.Bytes())
+	section.Write(f.body.Bytes())
+	f.body.Reset()
+	f.allocas.Reset()
+	clear(f.vars)
+	clear(f.pre)
+	f.loops, f.frames, f.temps, f.defers = f.loops[:0], f.frames[:0], f.temps[:0], f.defers[:0]
+	f.captured, f.sig, f.tmp, f.terminated = nil, nil, 0, false
+	e.spare = append(e.spare, f)
+	e.fn = outer
 }
 
 // An Error lists the constructs the emitter cannot lower yet, one per
@@ -536,8 +572,7 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 // each captured variable. A function is written whole into its own
 // text, so one can be written while another is being written.
 func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.Var, leading []string, prologue func() map[*types.Var]string, body *ast.BlockStmt, pos token.Pos) {
-	outer := e.fn
-	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string), sig: sig}
+	outer := e.begin(sig)
 	list := append([]string(nil), leading...)
 	for i, p := range params {
 		list = append(list, e.irType(p.Type(), pos)+" %a"+strconv.Itoa(i))
@@ -550,10 +585,8 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 
 	e.function(sig, params, env, body)
 	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", funcAttrs, " {\nentry:\n")
-	e.funcs.Write(e.fn.allocas.Bytes())
-	e.funcs.Write(e.fn.body.Bytes())
+	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n\n")
-	e.fn = outer
 }
 
 // function writes the body of a function or closure into the function
@@ -614,15 +647,24 @@ func (e *Emitter) local(v *types.Var) string {
 	return slot
 }
 
-// inst writes one instruction of the function being written. An
-// instruction after a terminator, which the checker allows as code
-// after a return, opens a block of its own.
-func (e *Emitter) inst(s string) {
+// inst writes one instruction of the function being written, given in
+// pieces, so that a line is built in the body and not as a string
+// first. An instruction after a terminator, which the checker allows
+// as code after a return, opens a block of its own.
+func (e *Emitter) inst(pieces ...string) {
+	e.open()
+	e.fn.body.WriteString("  ")
+	put(&e.fn.body, pieces...)
+	e.fn.body.WriteByte('\n')
+}
+
+// open makes sure an instruction can be written: after a terminator,
+// which the checker allows as code after a return, a block of its own
+// is opened.
+func (e *Emitter) open() {
 	if e.fn.terminated {
 		e.label(e.block("unreachable"))
 	}
-
-	put(&e.fn.body, "  ", s, "\n")
 }
 
 // block returns a fresh block label with the given stem.
@@ -661,14 +703,38 @@ func (e *Emitter) branchLikely(c, then, els string) {
 // temp returns a fresh register name.
 func (e *Emitter) temp() string {
 	e.fn.tmp++
-	return "%t" + strconv.Itoa(e.fn.tmp)
+	return numbered(&e.registers, "%t", e.fn.tmp)
+}
+
+// numbered returns the name prefix followed by n, from the names made
+// so far, which every function numbers from one: the name is made the
+// first time any function counts to n, and read after.
+func numbered(names *[]string, prefix string, n int) string {
+	for len(*names) <= n {
+		*names = append(*names, "")
+	}
+
+	if (*names)[n] == "" {
+		(*names)[n] = prefix + strconv.Itoa(n)
+	}
+
+	return (*names)[n]
 }
 
 // op writes an instruction computing into a fresh register of the IR
 // type t.
 func (e *Emitter) op(s, t string) value {
+	return e.compute(t, s)
+}
+
+// compute writes the instruction given in pieces, computing into a
+// fresh register of the IR type t.
+func (e *Emitter) compute(t string, pieces ...string) value {
 	r := e.temp()
-	e.inst(r + " = " + s)
+	e.open()
+	put(&e.fn.body, "  ", r, " = ")
+	put(&e.fn.body, pieces...)
+	e.fn.body.WriteByte('\n')
 	return value{t, r}
 }
 
@@ -676,7 +742,7 @@ func (e *Emitter) op(s, t string) value {
 // allocated at the top of the function.
 func (e *Emitter) slot(t string) string {
 	e.fn.tmp++
-	name := "%s" + strconv.Itoa(e.fn.tmp)
+	name := numbered(&e.slots, "%s", e.fn.tmp)
 	put(&e.fn.allocas, "  ", name, " = alloca ", t, ", align 8\n")
 	return name
 }
@@ -690,24 +756,24 @@ func (e *Emitter) spill(v value) string {
 
 // load reads the value of IR type t at the address p.
 func (e *Emitter) load(t, p string) value {
-	return e.op("load "+t+", ptr "+p+", align 8", t)
+	return e.compute(t, "load ", t, ", ptr ", p, ", align 8")
 }
 
 // store writes v at the address p.
 func (e *Emitter) store(v value, p string) {
-	e.inst("store " + v.typed() + ", ptr " + p + ", align 8")
+	e.inst("store ", v.typ, " ", v.s, ", ptr ", p, ", align 8")
 }
 
 // gep returns the address of member i of the aggregate of IR type t
 // at the address p.
 func (e *Emitter) gep(t, p string, i int) string {
-	return e.op("getelementptr inbounds "+t+", ptr "+p+", i32 0, i32 "+strconv.Itoa(i), "ptr").s
+	return e.compute("ptr", "getelementptr inbounds ", t, ", ptr ", p, ", i32 0, i32 ", strconv.Itoa(i)).s
 }
 
 // elem returns the address of element i, an i64, of the array of
 // elements of IR type t starting at the address p.
 func (e *Emitter) elem(t, p, i string) string {
-	return e.op("getelementptr inbounds "+t+", ptr "+p+", i64 "+i, "ptr").s
+	return e.compute("ptr", "getelementptr inbounds ", t, ", ptr ", p, ", i64 ", i).s
 }
 
 // extract reads member i of the aggregate value v, of IR type t.

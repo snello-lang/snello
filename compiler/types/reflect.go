@@ -521,7 +521,7 @@ func (c *Checker) partsLoop(s *ast.RangeStmt, call *ast.CallExpr, b *Builtin) {
 	if key == nil || s.Value != nil || s.Tok != token.DEFINE {
 		c.errorf(s.For, "a loop over a type's parts names one part: for f := range "+b.name+"(T)")
 	} else if of != nil {
-		part := &Part{object: object{key.Name, nil, key.Pos(), c.pkg}, of: of, in: in, variant: b.id == BuiltinVariants}
+		part := &Part{object: object{name: key.Name, pos: key.Pos(), pkg: c.pkg}, of: of, in: in, variant: b.id == BuiltinVariants}
 		if !part.variant {
 			part.typ = NewTypeParam(NewTypeName(key.Pos(), key.Name+".type", nil), 0)
 		}
@@ -720,7 +720,7 @@ func (c *Checker) partsLit(e *ast.CompositeLit, tp *TypeParam) operand {
 			c.errorf(elt.X.Pos(), "a value of "+tp.obj.name+" is built from fields("+tp.obj.name+"), not of "+of.String())
 		}
 
-		part = &Part{object: object{elt.Var.Name, NewTypeParam(NewTypeName(elt.Var.Pos(), elt.Var.Name+".type", nil), 0), elt.Var.Pos(), c.pkg}, of: tp}
+		part = &Part{object: object{name: elt.Var.Name, typ: NewTypeParam(NewTypeName(elt.Var.Pos(), elt.Var.Name+".type", nil), 0), pos: elt.Var.Pos(), pkg: c.pkg}, of: tp}
 		c.scope.Insert(part)
 		c.recordDef(elt.Var, part)
 	}
@@ -805,7 +805,7 @@ func (c *Checker) variantMatch(e *ast.MatchExpr, expected Type) operand {
 			c.errorf(e.X.Pos(), "the match is on a value of "+of.String()+", whose variants the arm goes through, not of "+base.String())
 		}
 
-		part = &Part{object: object{pat.Var.Name, nil, pat.Var.Pos(), c.pkg}, of: of, variant: true}
+		part = &Part{object: object{name: pat.Var.Name, pos: pat.Var.Pos(), pkg: c.pkg}, of: of, variant: true}
 		c.scope.Insert(part)
 		c.recordDef(pat.Var, part)
 	}
@@ -881,7 +881,7 @@ func (c *Checker) variantBuild(e *ast.CallExpr, p *Part) operand {
 	} else if _, in := c.partsOf(call, b); in != p {
 		c.errorf(elt.X.Pos(), "the variant "+p.name+" is built from its own fields, fields("+p.name+")")
 	} else {
-		field = &Part{object: object{elt.Var.Name, NewTypeParam(NewTypeName(elt.Var.Pos(), elt.Var.Name+".type", nil), 0), elt.Var.Pos(), c.pkg}, of: p.of, in: p}
+		field = &Part{object: object{name: elt.Var.Name, typ: NewTypeParam(NewTypeName(elt.Var.Pos(), elt.Var.Name+".type", nil), 0), pos: elt.Var.Pos(), pkg: c.pkg}, of: p.of, in: p}
 		c.scope.Insert(field)
 		c.recordDef(elt.Var, field)
 	}

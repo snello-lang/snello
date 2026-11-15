@@ -64,6 +64,7 @@ type object struct {
 // predeclared type.
 type TypeName struct {
 	object
+	symbol string // the name a backend writes for the type, kept once the lowering made it
 }
 
 // A Var is a variable: a local, a parameter, a receiver, or a field.
@@ -101,6 +102,7 @@ type Func struct {
 	static  bool          // a function of a type, func Point.Parse(...): it takes no value of the type
 	trait   *Trait        // for a default method a type inherited: the trait, or instance of one, it came from
 	decl    *ast.FuncDecl // a generic function's declaration, whose body the questions a type answers walk (reach.go); it fits in the bytes the fields above leave free
+	symbol  string        // the name a backend writes for the function, kept once the lowering made it
 }
 
 // FromTrait returns the trait a type inherited the default method from,
@@ -173,28 +175,28 @@ type PkgName struct {
 // NewTypeName returns a type name; its type is set by NewNamed, or is
 // the predeclared type.
 func NewTypeName(pos token.Pos, name string, typ Type) *TypeName {
-	return &TypeName{object{name, typ, pos, nil}}
+	return &TypeName{object: object{name: name, typ: typ, pos: pos}}
 }
 
 // NewVar returns a local, parameter or receiver.
 func NewVar(pos token.Pos, name string, typ Type) *Var {
-	return &Var{object: object{name, typ, pos, nil}}
+	return &Var{object: object{name: name, typ: typ, pos: pos}}
 }
 
 // NewField returns a struct or variant field.
 func NewField(pos token.Pos, name string, typ Type) *Var {
-	return &Var{object: object{name, typ, pos, nil}, field: true}
+	return &Var{object: object{name: name, typ: typ, pos: pos}, field: true}
 }
 
 // NewConst returns a named constant of the given value, which its
 // declaration's check gives a constant the program declares.
 func NewConst(pos token.Pos, name string, typ Type, val Constant) *Const {
-	return &Const{object: object{name, typ, pos, nil}, val: val}
+	return &Const{object: object{name: name, typ: typ, pos: pos}, val: val}
 }
 
 // NewFunc returns a function or method.
 func NewFunc(pos token.Pos, name string, sig *Signature) *Func {
-	return &Func{object: object{name, sig, pos, nil}}
+	return &Func{object: object{name: name, typ: sig, pos: pos}}
 }
 
 // Origin returns the declared method this one was made from by
@@ -211,7 +213,7 @@ func (fn *Func) Origin() *Func {
 
 // NewVariant returns the index'th variant of parent with the given fields.
 func NewVariant(pos token.Pos, name string, parent *Named, index int, fields []*Var) *Variant {
-	v := &Variant{object{name, nil, pos, nil}, parent, fields, index}
+	v := &Variant{object{name: name, pos: pos}, parent, fields, index}
 	if parent != nil { // a nil *Named must not become a non-nil Type
 		v.typ = parent
 	}
@@ -221,18 +223,34 @@ func NewVariant(pos token.Pos, name string, parent *Named, index int, fields []*
 
 // NewBuiltin returns a predeclared function.
 func NewBuiltin(name string, id BuiltinID) *Builtin {
-	return &Builtin{object{name, nil, token.NoPos, nil}, id}
+	return &Builtin{object{name: name, pos: token.NoPos}, id}
 }
 
 // NewPkgName returns an imported package name.
 func NewPkgName(pos token.Pos, name, path string) *PkgName {
-	return &PkgName{object: object{name, nil, pos, nil}, path: path}
+	return &PkgName{object: object{name: name, pos: pos}, path: path}
 }
 
 func (o *object) Name() string   { return o.name }
 func (o *object) Type() Type     { return o.typ }
 func (o *object) Pos() token.Pos { return o.pos }
 func (o *object) isObject()      {}
+
+// Symbol returns the name a backend writes for the type, or "" before
+// the lowering made it. A backend writes the symbol at every value of
+// the type, so it is made once; a variable has none, since the checker
+// makes one for every name and keeps it small.
+func (t *TypeName) Symbol() string { return t.symbol }
+
+// SetSymbol keeps the name a backend writes for the type.
+func (t *TypeName) SetSymbol(s string) { t.symbol = s }
+
+// Symbol returns the name a backend writes for the function, or ""
+// before the lowering made it, as a TypeName's does for its calls.
+func (f *Func) Symbol() string { return f.symbol }
+
+// SetSymbol keeps the name a backend writes for the function.
+func (f *Func) SetSymbol(s string) { f.symbol = s }
 
 // IsField reports whether the variable is a struct or variant field.
 func (v *Var) IsField() bool { return v.field }

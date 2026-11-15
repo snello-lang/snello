@@ -193,7 +193,7 @@ func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
 // memory a string, pointer, slice or map holds; in a debug build the
 // place is poisoned after, as the C runtime's drops poison it.
 func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
-	name := "sn_drop_" + lower.Mangle(t)
+	name := lower.Symbol("sn_drop_", t)
 	if e.state[name] {
 		return name
 	}
@@ -709,8 +709,7 @@ func written(n *types.Named, name string) bool {
 // the given result type and parameters, its body written by f into a
 // function of its own.
 func (e *Emitter) helper(name, result string, params []string, f func()) {
-	outer := e.fn
-	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
+	outer := e.begin(nil)
 	f()
 	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
 	for i, p := range params {
@@ -722,10 +721,8 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 	}
 
 	put(&e.helpers, ")", funcAttrs, " {\nentry:\n")
-	e.helpers.Write(e.fn.allocas.Bytes())
-	e.helpers.Write(e.fn.body.Bytes())
+	e.end(&e.helpers, outer)
 	e.helpers.WriteString("}\n\n")
-	e.fn = outer
 }
 
 func isChan(t types.Type) bool {

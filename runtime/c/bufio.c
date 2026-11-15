@@ -59,7 +59,7 @@ void sn_bufio_appendBytes(sn_slice_u8 *buf, sn_slice_u8 p) {
 
     sn_slice_own(b, "append");
     sn_slice_grow(b, b->len + p.len, 1);
-    memmove((uint8_t *)b->ptr + b->len, p.ptr, (size_t)p.len);
+    sn_copy_piece((uint8_t *)b->ptr + b->len, p.ptr, (size_t)p.len);
     b->len += p.len;
 }
 

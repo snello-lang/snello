@@ -68,7 +68,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	case *types.Option, *types.Result, *types.Slice, *types.Array, *types.Signature:
 		return e.declare(t)
 	case *types.Map:
-		name := "sn_" + lower.Mangle(t)
+		name := lower.Symbol("sn_", t)
 		if e.state[name] == undeclared {
 			e.state[name] = defined
 			put(&e.decls, "typedef sn_map ", name, ";\n")
@@ -99,7 +99,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 // declare writes the forward declaration of a synthesized struct type
 // once and returns its name.
 func (e *Emitter) declare(t types.Type) string {
-	name := "sn_" + lower.Mangle(t)
+	name := lower.Symbol("sn_", t)
 	if e.state[name] == undeclared {
 		e.state[name] = declared
 		put(&e.decls, "typedef struct ", name, " ", name, ";\n")

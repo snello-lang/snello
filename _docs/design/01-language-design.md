@@ -173,7 +173,7 @@ Measured on an eight-core arm64 laptop by `bench/`: each binary run once for not
 | `tasks`, a spawn | 367 ns | 577 ns | 175 ns |
 | `tasks`, a context switch | 115 ns | 116 ns | 124 ns |
 | `variadic`, a call of `...int`; of `...ref string`; given a slice | 0; 0; 0.6 ns | 0.9; 0; 0.6 ns | 2.2; 2.5; 2.2 ns |
-| `json`, encoding a record; decoding it | 235; 334 ns | 236; 317 ns | 436; 922 ns |
+| `json`, encoding a record; decoding it | 202; 278 ns | 205; 275 ns | 433; 906 ns |
 | `memory`, peak memory | 33 MB | 66 MB | 78 MB |
 | `memory`, the mean round; rounds over twice it | 92 µs; none | 113 µs; none | 99 µs; 104 of 2,000, up to 0.8 ms |
 
@@ -194,7 +194,7 @@ What the numbers say against the expectations: CPU-bound code is where the table
 
 The `variadic` row is a variadic call, which Go makes by building a slice of the arguments and, when its escape analysis proves the function does not keep it, putting it on the stack. Snello's caller always lays the arguments out on its own stack, and the function's slice stays there unless the function keeps it or grows it, so neither form allocates; a 0 is a call the C compiler or LLVM inlined and folded away, which Go's inliner did not.
 
-The `json` row is `encoding/json` over reflection at compile time against Go's `encoding/json`, the same records to the same text. What runs for a record is the code a programmer would write for its type, the field names constants and each field a direct call, where Go's walks the type's description for every value and reaches each field through `reflect`: encoding takes about half Go's time and decoding about a third.
+The `json` row is `encoding/json` over reflection at compile time against Go's `encoding/json`, the same records to the same text. What runs for a record is the code a programmer would write for its type, the field names constants and each field a direct call, where Go's walks the type's description for every value and reaches each field through `reflect`: encoding takes under half Go's time and decoding under a third, the strings scanned eight bytes at a time and a member in order matched in one comparison.
 
 The `memory` rows measure the two expectations no other row does, footprint and latency, with a tree of a million nodes kept alive while two thousand small ones are built and dropped beside it. Both hold. Snello's peak is the live tree, however many small trees die: `TestNoCollector` in `bench/` builds the program with one, two thousand and ten thousand rounds and fails if the peak grows by a tenth. Go's peak is 2.4 times the live tree, the headroom its collector leaves garbage before a cycle. Snello's rounds are even, and Go's are slower on average than the LLVM backend's, 99 µs against 92, and about one in nineteen takes over twice its mean, up to 0.8 ms in this run and 1.7 ms in the slowest of the ten, when a cycle walks the live tree. The mean was the allocator row again, Go's bump allocation against a free per node, a gap the runtime's allocator closed from 184 µs to 103 and the measurement by median puts at 92. The C backend's peak is twice the LLVM backend's because its `*Node?` is a pointer and a flag, where the LLVM backend's is a bare pointer, the zero-cost option the first of the details below promises.
 

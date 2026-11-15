@@ -112,6 +112,33 @@ extern const char sn_digit_pairs[201];
 // bytes, doubling, as Push amortizes to constant time.
 void sn_slice_grow(sn_slice *s, int64_t need, size_t size);
 
+// sn_copy_piece copies the n bytes at src to dst, which do not overlap:
+// a piece of at most sixteen bytes, as the pieces a text is built from
+// are, by two loads and two stores that overlap each other, since a
+// call of memcpy costs more than copying a short piece does; a longer
+// piece by memcpy.
+static inline void sn_copy_piece(uint8_t *dst, const uint8_t *src, size_t n) {
+    if (n > 16) {
+        memcpy(dst, src, n);
+    } else if (n >= 8) {
+        uint64_t head, tail;
+        memcpy(&head, src, 8);
+        memcpy(&tail, src + n - 8, 8);
+        memcpy(dst, &head, 8);
+        memcpy(dst + n - 8, &tail, 8);
+    } else if (n >= 4) {
+        uint32_t head, tail;
+        memcpy(&head, src, 4);
+        memcpy(&tail, src + n - 4, 4);
+        memcpy(dst, &head, 4);
+        memcpy(dst + n - 4, &tail, 4);
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            dst[i] = src[i];
+        }
+    }
+}
+
 // sn_format_uint writes u's decimal digits ending at end and returns
 // where they begin; sn_format_int makes the owned string of u, negated
 // when neg.
