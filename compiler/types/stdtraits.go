@@ -105,11 +105,18 @@ func (c *Checker) operatorInstance(t *Trait, rhs Type) *Trait {
 		}
 	}
 
+	inst := newOperatorInstance(t, rhs)
+	c.instances = append(c.instances, inst)
+	return inst
+}
+
+// newOperatorInstance makes the operator trait t with rhs, the type of
+// the other operand, in place of Self in its one method's parameter.
+func newOperatorInstance(t *Trait, rhs Type) *Trait {
 	want := t.required[0]
 	sig := want.typ.(*Signature)
 	inst := &Trait{obj: t.obj, self: t.self, standard: true, orig: t, rhs: rhs}
 	inst.required = []*Func{NewFunc(token.NoPos, want.name, NewSignature(sig.recv, []*Var{NewVar(token.NoPos, "o", rhs)}, sig.results))}
-	c.instances = append(c.instances, inst)
 	return inst
 }
 
@@ -360,7 +367,7 @@ func derivable(tr *Trait) bool {
 // once, since the refined traits' derivations fail on the same field.
 func (c *Checker) deriveListed(n *Named, listed *Trait, pos token.Pos) {
 	refused := ""
-	for _, tr := range listed.lineage() {
+	for tr := range listed.lineage() {
 		msg := deriveMethod(n, listed, tr)
 		if refused == "" {
 			refused = msg

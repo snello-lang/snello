@@ -27,3 +27,10 @@ func kindOf<S: shapes.Shape>(s ref S) shapes.Kind {
 
 	return shapes.Square
 }
+
+// Pointed and Ranked are listed by types of main.snello and refine
+// traits of it: the types' resolution orders are drawn once both files'
+// lists are known, so the defaults of the traits refined reach them.
+trait Pointed: Shape {}
+
+trait Ranked<T>: Score<T> {}

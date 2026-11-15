@@ -77,7 +77,7 @@ func (e *Emitter) entry(fn *types.Func, pos token.Pos) string {
 
 // tableType is the C name of a trait's table type.
 func tableType(t *types.Trait) string {
-	return "sn_" + lower.Ident(t.Obj().Name()) + "_tab"
+	return "sn_" + lower.TraitName(t) + "_tab"
 }
 
 // fieldAccessor is the table entry reaching a trait field, apart from
@@ -90,7 +90,7 @@ func fieldAccessor(f *types.Var) string {
 // into a value of the trait type to: the function doing it is written
 // once per pair, with the table it points at.
 func (e *Emitter) box(v string, from *types.Named, to *types.Trait, pos token.Pos) string {
-	name := "sn_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
+	name := "sn_" + lower.NamedName(from) + "_as_" + lower.TraitName(to)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		e.table(name, from, to, pos)

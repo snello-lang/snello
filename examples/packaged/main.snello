@@ -5,12 +5,39 @@
 // A program of two files, main.snello and report.snello, with a
 // package of its own beside it, shapes, imported by its directory's
 // name under the root snello.mod marks: a struct, an enum, a trait and
-// the generic functions of the package used across the boundary. Built
-// with snello build examples/packaged, which names the binary
+// the generic functions of the package used across the boundary; a
+// trait of the program's own named as the package's is, a value of
+// each beside the other; and types of this file that list traits the
+// second file declares, which refine traits of this one with defaults.
+// Built with snello build examples/packaged, which names the binary
 // after the directory.
 package main
 
 import ("fmt"; "shapes")
+
+// Shape is the program's own trait, named as the package's is: each
+// has its own table. Triangle reaches it through Pointed, which
+// report.snello declares, so its default Sides comes from a trait of
+// this file through one of the next.
+trait Shape {
+	func (s ref Self) Corners() int
+	func (s ref Self) Sides() int { return s.Corners() }
+}
+
+struct Triangle impl Pointed { side f64 }
+
+func (t ref Triangle) Corners() int { return 3 }
+
+// Score is a generic trait whose default Medal reaches through Ranked,
+// an instance of the next file's generic trait.
+trait Score<T> {
+	func (s ref Self) Value() T
+	func (s ref Self) Doubled() int { return 2 }
+}
+
+struct Medal impl Ranked<int> { points int }
+
+func (m ref Medal) Value() int { return m.points }
 
 func main() {
 	c := shapes.Circle{Radius: 1}
@@ -20,4 +47,9 @@ func main() {
 	fmt.Println(shapes.Describe(kindOf(ref c)), shapes.Describe(kindOf(ref r)), kindOf(ref r) == shapes.Square)
 	fmt.Println(report(ref c), report(ref r))
 	fmt.Println(shapes.Area(c) > 3, shapes.Area(r), reports.Load())
+	var mine Shape = Triangle{side: 1}
+	var theirs shapes.Shape = shapes.Rect{W: 1, H: 2}
+	fmt.Println(mine.Corners(), mine.Sides(), theirs.Name())
+	var score Score<int> = Medal{points: 7}
+	fmt.Println(score.Value(), score.Doubled())
 }

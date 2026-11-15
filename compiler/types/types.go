@@ -487,8 +487,30 @@ func (n *Named) Method(name string) *Func {
 // or a trait refining it; an instance implements what its declaration
 // does.
 func (n *Named) Implements(trait *Trait) bool {
+	asksInstance := trait.targs != nil || trait.rhs != nil // only then can a generic type's arguments change the answer
+	var m map[*TypeParam]Type
 	for _, t := range n.Origin().impls {
-		if t != nil && t.Refines(trait) {
+		if t == nil {
+			continue
+		}
+
+		if asksInstance && n.orig != nil && (t.targs != nil || t.rhs != nil) {
+			if m == nil {
+				m = n.substitution()
+			}
+
+			if t.rhs != nil { // W<T> lists Mul<T>: W<int> implements Mul<int>, the other operand compared with nothing built
+				if trait.rhs != nil && t.origin() == trait.origin() && Identical(subst(t.rhs, m), trait.rhs) {
+					return true
+				}
+
+				continue // an operator trait refines nothing
+			}
+
+			t = substInstance(t, m) // Single<T> lists It<T>: Single<int> implements It<int>
+		}
+
+		if t.Refines(trait) {
 			return true
 		}
 	}

@@ -1,0 +1,132 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An instance of a generic trait as a type: a slice of Iterator<int>
+// holds iterators of different types, generic ones among them, one
+// implementing the trait over its own parameter, Single<T>, each
+// called through its table, a default method included; an
+// Iterator<string> beside it has a table of its own; a generic function
+// takes Iterator<T>, with T read off the value; a field holds one; and
+// a bound's arguments are read off the type that meets it. Each value
+// owns what it holds, strings included, and drops it.
+
+package main
+
+import "fmt"
+
+trait Iterator<T> {
+	func (it mut Self) Next() T?
+	func (it mut Self) Count() int {
+		n := 0
+		for {
+			it.Next() ?? break
+			n += 1
+		}
+
+		return n
+	}
+}
+
+struct Range impl Iterator<int> {
+	cur int
+	end int
+}
+
+func (r mut Range) Next() int? {
+	if r.cur >= r.end {
+		return None
+	}
+
+	r.cur += 1
+	return Some(r.cur - 1)
+}
+
+struct Lengths impl Iterator<int> {
+	words []string
+	at    int
+}
+
+func (l mut Lengths) Next() int? {
+	if l.at >= len(l.words) {
+		return None
+	}
+
+	l.at += 1
+	return Some(len(l.words[l.at - 1]))
+}
+
+struct Doubled<I: Iterator<int>> impl Iterator<int> {
+	inner I
+}
+
+func (d mut Doubled<I>) Next() int? {
+	return Some(d.inner.Next()? * 2)
+}
+
+struct Single<T> impl Iterator<T> {
+	value T?
+}
+
+func (o mut Single<T>) Next() T? {
+	return take(mut o.value)
+}
+
+struct Names impl Iterator<string> {
+	names []string
+	at    int
+}
+
+func (n mut Names) Next() string? {
+	if n.at >= len(n.names) {
+		return None
+	}
+
+	n.at += 1
+	return Some(n.names[n.at - 1].Clone())
+}
+
+struct Source<T> {
+	label string
+	it    Iterator<T>
+}
+
+func sum(it mut Iterator<int>) int {
+	total := 0
+	for {
+		total += it.Next() ?? break
+	}
+
+	return total
+}
+
+func first<T>(it mut Iterator<T>) T? {
+	return it.Next()
+}
+
+func countAll<T, I: Iterator<T>>(it mut I) int {
+	return it.Count()
+}
+
+func main() {
+	its := []Iterator<int>{
+		Range{cur: 0, end: 4},
+		Lengths{words: []string{"a".Clone(), "bcd".Clone(), "ef".Clone()}, at: 0},
+		Doubled<Range>{inner: Range{cur: 1, end: 4}},
+		Single<int>{value: Some(40)},
+	}
+	for i := 0; i < len(its); i++ {
+		fmt.Println(sum(mut its[i]))
+	}
+
+	its.Push(Range{cur: 5, end: 8})
+	fmt.Println(its[4].Count(), first(mut its[1]))
+	var names Iterator<string> = Names{names: []string{"ada".Clone(), "lin".Clone()}, at: 0}
+	fmt.Println(first(mut names), names.Count())
+	var single Iterator<string> = Single<string>{value: Some("once".Clone())}
+	fmt.Println(first(mut single), first(mut single))
+	src := Source<int>{label: "range".Clone(), it: Range{cur: 2, end: 5}}
+	fmt.Println(src.label, first(mut src.it), src.it.Count())
+	r := Range{cur: 0, end: 6}
+	fmt.Println(countAll(mut r))
+}

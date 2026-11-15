@@ -321,14 +321,14 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	case *Trait:
 		var mentionsSelf bool
 		if f, mentionsSelf = t.valueField(e.Sel.Name); mentionsSelf {
-			c.errorf(e.Sel.Pos(), "cannot reach "+e.Sel.Name+" through "+t.obj.name+": its type mentions Self")
+			c.errorf(e.Sel.Pos(), "cannot reach "+e.Sel.Name+" through "+t.String()+": its type mentions Self")
 			return invalidOperand
 		}
 
 		if f == nil {
 			var why string
 			if fn, why = t.valueMethod(e.Sel.Name); why != "" {
-				c.errorf(e.Sel.Pos(), "cannot call "+e.Sel.Name+" through "+t.obj.name+": "+why)
+				c.errorf(e.Sel.Pos(), "cannot call "+e.Sel.Name+" through "+t.String()+": "+why)
 				return invalidOperand
 			}
 		}

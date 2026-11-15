@@ -329,8 +329,38 @@ evens := Range{0, 5}.Map(plusTen).Filter(func(x ref int) bool { return x % 2 == 
 
 Each instance of a generic trait is its own trait to the checker, made once per argument list, and a type lists one instance of it, as a type has one `Mul`. A default method of a generic trait compiles once per implementing type, with the trait's arguments and the method's own in place.
 
-Two limits stand for now. A generic trait is not a type: `func drain(it mut Iterator<int>)` is refused, and a type parameter bounded by the instance, `drain<I: Iterator<int>>(it mut I)`, is the way to write it. And a bound's arguments are not inferred from the type that meets it: `CountAll<T, I: Iterator<T>>(it mut I)` is called as `CountAll<int, Range>(mut r)`, since `T` is not read off `Range`'s `impl Iterator<int>`.
+## An instance of a generic trait as a type
+
+An instance with every argument given is a type, as a trait's name is, and its value is a trait value, which does what a `Shape` value does. Take a trait a program declares for the events it raises:
+
+```go
+trait Listener<E> {
+	func (l mut Self) On(e ref E)
+	func (l mut Self) OnAll(es ref []E) {
+		for i := 0; i < len(es); i++ { l.On(ref es[i]) }
+	}
+}
+
+struct Audit impl Listener<Order> { seen int }
+struct Revenue impl Listener<Order> { sum int }
+struct Logged<E> impl Listener<E> { prefix string }
+
+func notify<E>(ls mut []Listener<E>, e ref E) {
+	for i := 0; i < len(ls); i++ { ls[i].On(e) }
+}
+
+listeners := []Listener<Order>{Audit{seen: 0}, Revenue{sum: 0}, Logged<Order>{prefix: "order seen"}}
+notify(mut listeners, ref Order{id: 1, total: 30})
+```
+
+`[]Listener<Order>` holds listeners of different types, which a bound cannot: `L: Listener<Order>` stands for one type in each instance of the code. It holds a value of any type that implements that instance, `Audit` or `Logged<Order>`, and each instance is its own type: `cannot use l (Listener<Order>) as Listener<Refund> in return: Listener<Order> and Listener<Refund> are two instances of Listener, each its own type`. In generic code the argument may be a type parameter, as `notify` writes it, and a field may hold one, `struct Bus<E> { listeners []Listener<E> }`. An argument cannot be a borrow, `Listener<ref string>`, since the value would hide it. Ranging over an iterator needs no trait of this kind: `range` takes any type with `Next`, by its shape.
+
+Its methods are the instance's, called through its table: `On` and the default `OnAll`. A method the table cannot hold is refused, as on any trait value: one written with `Self`, and one with type parameters of its own, which is one function for each type argument; the compiler names the method and the reason. For the same reason such a value meets its own instance as a bound only when its trait has no such method.
+
+A type implements a generic trait at one argument, counting the traits it reaches through refinement: with `trait Refunds: Listener<Refund>`, `struct Audit impl Listener<Order>, Refunds` is refused, `Audit implements Listener<Order> and through Refunds, Listener<Refund>: a type implements a generic trait at one argument`. So which `Listener` a type implements has one answer, and a bound's arguments are read off it: with `struct Counter impl Listener<i64>`, `send<E, L: Listener<E>>(l mut L, e E)` is called `send(mut counter, 5)`, `E` an `i64` from `Counter`'s instance and the 5 an `i64` with it. A type that implements none is named: `cannot infer the type parameter E of count: Blob implements no Listener`.
+
+The value costs what a trait value costs: one allocation when it is made and one indirect call per method call, with a table for each pair of a type and an instance, built when the program is compiled. `compiler/emit/internal/backendtest/testdata/generic-trait-values.snello` runs the rest, with a slice of iterators of different types.
 
 ## What is still to come
 
-A generic trait as a type, `[]Iterator<int>`, and the inference of a bound's arguments from the implementing type, above; and a trait value of a generic instance waits for a program that needs one.
+A value of a refining trait where the trait it refines is wanted, a `Logged` as a `Shape`, above.

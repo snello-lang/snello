@@ -66,6 +66,7 @@ func TotalArea<T: Shape>(xs ref []T) f64 {
 // trait's methods and admits only the types that implement it, and the
 // errors of a wrong declaration or use.
 func TestTraits(t *testing.T) {
+	const gen = "trait It<U> { func (s mut Self) Next() U?\nfunc (s mut Self) Count() int { return 0 }\nfunc (s Self) Map<V>(f func(U) V) V? { return None } }\nstruct R impl It<int> { n int }\nfunc (r mut R) Next() int? { return None }\n"
 	tests := []struct {
 		src  string
 		want []string
@@ -365,7 +366,35 @@ func TestTraits(t *testing.T) {
 		{"trait It<U> { func (s mut Self) Next() U?\nfunc (s mut Self) Count() int { return 0 } }\ntrait Two<U>: It<U> { func (s mut Self) Twice() int { return 2 } }\nstruct R impl Two<int> { n int }\nfunc (r mut R) Next() int? { return None }\nfunc f(r mut R) int { return r.Count() + r.Twice() }", nil}, // the refined instance's defaults come along
 		{"trait It<U> { func (s mut Self) Next() U? }\ntrait Two<U>: It<U> {}\nstruct R impl Two<int> { n int }\nfunc (r mut R) Next() int? { return None }\nfunc Sum<I: It<int>>(it mut I) int { return 0 }\nfunc f(r mut R) int { return Sum(mut r) }", nil},                                                   // and a bound on the refined trait is met
 		{"trait It<U> { func (s mut Self) Next() U? }\nstruct R impl It<int>, It<string> { n int }\nfunc (r mut R) Next() int? { return None }", []string{"It<string> listed with another instance of It: a type implements a generic trait at one argument"}},
-		{"trait It<U> { func (s mut Self) Next() U? }\nfunc f(it mut It<int>) {}", []string{"It is a generic trait and is not a type yet: bound a type parameter by it, I: It<...>"}},
+		// An instance of a generic trait as a type: a trait value of that instance.
+		{gen + "func f(it mut It<int>) int { return it.Count() }", nil},
+		{gen + "func f(xs mut []It<int>) { xs.Push(R{n: 1}) }", nil},
+		{gen + "func first<T>(it mut It<T>) T? { return it.Next() }\nfunc f(it mut It<int>) int? { return first(mut it) }", nil}, // T read off the instance
+		{gen + "struct Wrap<T> { it It<T> }\nfunc f(w mut Wrap<int>) int? { return w.it.Next() }", nil},
+		{gen + "func f(it It) {}", []string{"It is a generic trait: as a type it takes its arguments, It<...>"}},
+		{gen + "func f(it It<ref string>) {}", []string{"a type argument cannot hold a borrow"}},
+		{gen + "func f(it It<int>) int? { return it.Map(func(x int) int { return x }) }", []string{"cannot call Map through It<int>: it has type parameters"}},
+		{gen + "func g<I: It<int>>(it mut I) {}\nfunc f(it mut It<int>) { g(mut it) }", []string{"cannot use It<int> as the type parameter I of g: the method Map of It has type parameters"}}, // a value meets its bound only when the table holds every method
+		{gen + "func f(it It<int>) It<i64> { return it }", []string{"cannot use it (It<int>) as It<i64> in return: It<int> and It<i64> are two instances of It, each its own type"}},
+		{gen + "trait Pk<U>: It<U> {}\nfunc f(p Pk<int>) It<int> { return p }", []string{"cannot use p (Pk<int>) as It<int> in return: a trait value cannot be used as another trait yet"}},
+		{gen + "trait K { func (s ref Self) Kids() It<Self> }\nfunc f(k ref K) { k.Kids() }", []string{"cannot call Kids through K: its signature mentions Self"}},
+		// A bound's arguments read off the one instance the type implements.
+		{gen + "func c<T, I: It<T>>(it mut I) int { return 0 }\nfunc f(r mut R) int { return c(mut r) }", nil},
+		{gen + "struct B { n int }\nfunc c<T, I: It<T>>(it mut I) int { return 0 }\nfunc f(b mut B) int { return c(mut b) }", []string{"cannot infer the type parameter T of c: B implements no It"}},
+		{gen + "func c<T, I: It<T>>(it mut I, init T) T { return init }\nfunc f(r mut R) i64 { return i64(c(mut r, 0)) }", nil}, // the bound gives T before the literal takes a type
+		// One instance per type, counting those reached through refinement.
+		{"trait Mk<U> {}\ntrait Sb: Mk<string> {}\nstruct X impl Mk<int>, Sb { k int }", []string{"X implements Mk<int> and through Sb, Mk<string>: a type implements a generic trait at one argument"}},
+		{"trait Mk<U> {}\ntrait Sb: Mk<string> {}\nfunc g<J: Mk<int> + Sb>() {}", []string{"J implements Mk<int> and through Sb, Mk<string>"}},
+		{"trait Mk<U> {}\ntrait Sb: Mk<int> {}\nstruct X impl Mk<int>, Sb { k int }", nil}, // the same instance twice is one
+		{"trait Mk<U> {}\ntrait A: Mk<int> {}\ntrait B: Mk<string> {}\ntrait Both: A, B {}", []string{"Both refines through A, Mk<int> and through B, Mk<string>: a type implements a generic trait at one argument"}},
+		{"trait Mk<U> {}\nstruct X impl Mk<int>, Mk<int> { k int }", []string{"Mk<int> listed twice"}},
+		// A generic type implementing the trait over its own parameter implements each instance.
+		{"struct W<T> impl Mul<T> { x int }\nfunc (a W<T>) Mul(b T) W<T> { return W<T>{x: a.x * 2} }\nfunc twice<A: Mul<int>>(a A, b int) A { return a * b }\nfunc f() int { return twice(W<int>{x: 1}, 3).x }", nil}, // an operator trait over the parameter
+		{"struct V<T> impl Add<V<T>> { x int }\nfunc (a V<T>) Add(b V<T>) V<T> { return a }\nfunc sum<A: Add<A>>(a A, b A) A { return a + b }\nfunc f() int { return sum(V<int>{x: 1}, V<int>{x: 2}).x }", nil},       // and one whose operand is the instance itself
+		{gen + "struct Single<T> impl It<T> { v T? }\nfunc (o mut Single<T>) Next() T? { return take(mut o.v) }\nfunc f() It<int> { return Single<int>{v: Some(1)} }", nil},
+		{gen + "struct Single<T> impl It<T> { v T? }\nfunc (o mut Single<T>) Next() T? { return take(mut o.v) }\nfunc g<I: It<int>>(it mut I) {}\nfunc f(o mut Single<int>) { g(mut o) }", nil},
+		{gen + "struct Single<T> impl It<T> { v T? }\nfunc (o mut Single<T>) Next() T? { return take(mut o.v) }\nfunc c<T, I: It<T>>(it mut I) T? { return it.Next() }\nfunc f(o mut Single<string>) string? { return c(mut o) }", nil},
+		{gen + "struct Single<T> impl It<T> { v T? }\nfunc (o mut Single<T>) Next() T? { return take(mut o.v) }\nfunc f() It<int> { return Single<string>{v: None} }", []string{"Single does not implement It<int>"}},
 		{"trait It<U> { func (s mut Self) Next() U?\nfunc (s Self) With<V>(v V) V { return v } }\nstruct R impl It<int> { n int }\nfunc (r mut R) Next() int? { return None }\nfunc mk() R { return R{n: 0} }\nfunc f() int { return mk().With(1) }", nil}, // a generic method on a call's result
 	}
 	for _, tt := range tests {

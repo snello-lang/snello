@@ -293,6 +293,8 @@ func subst(t Type, m map[*TypeParam]Type) Type {
 		return s
 	case *Struct:
 		return NewStruct(substVars(t.fields, m))
+	case *Trait:
+		return substInstance(t, m) // Iterator<T> as a type, in generic code
 	}
 
 	return t

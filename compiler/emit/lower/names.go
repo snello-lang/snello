@@ -79,10 +79,10 @@ func capitals(name string) bool {
 func ObjName(obj types.Object) string {
 	if p := obj.Pkg(); p != nil && p.Path() != "" {
 		if p.Standard() {
-			return StdPrefix(p.Path()) + obj.Name()
+			return qualified("sn_", p.Path(), obj.Name())
 		}
 
-		return PathPrefix(p.Path()) + obj.Name()
+		return qualified("snm_", p.Path(), obj.Name())
 	}
 
 	switch obj.(type) {
@@ -103,17 +103,21 @@ func ObjName(obj types.Object) string {
 // (_docs/design/08-packages.md). StdPrefix is the standard library's
 // form, sn_fmt_ and sn_net__http_, the names the runtime defines.
 func PathPrefix(path string) string {
-	return prefix("snm_", path)
+	return qualified("snm_", path, "")
 }
 
 // StdPrefix writes the start of every symbol of the standard package
 // at an import path.
 func StdPrefix(path string) string {
-	return prefix("sn_", path)
+	return qualified("sn_", path, "")
 }
 
-func prefix(space, path string) string {
+// qualified writes a symbol in the space space of the package at path,
+// the path's separators and the characters no C identifier may hold
+// written as _, then name, in one block sized for all of it.
+func qualified(space, path, name string) string {
 	var b strings.Builder
+	b.Grow(len(space) + 2*len(path) + 1 + len(name)) // a / is written as two bytes
 	b.WriteString(space)
 	for i := 0; i < len(path); i++ {
 		switch path[i] {
@@ -127,6 +131,7 @@ func prefix(space, path string) string {
 	}
 
 	b.WriteByte('_')
+	b.WriteString(name)
 	return b.String()
 }
 
@@ -150,12 +155,39 @@ func MethodName(recv types.Type, name string) string {
 // NamedName writes the symbol of a declared type: its own, or for an
 // instance its name followed by its arguments.
 func NamedName(t *types.Named) string {
-	name := ObjName(t.Obj())
-	for _, a := range t.TypeArgs() {
-		name += "_" + Mangle(a)
+	return withArgs(ObjName(t.Obj()), t.TypeArgs())
+}
+
+// TraitName writes the symbol of a trait used as a type as a declared
+// type's is written: its name, qualified by its package, so that two
+// packages may each declare a Shape, and for an instance of a generic
+// trait its arguments after it, so that Iterator<int> and
+// Iterator<string> have a table type each.
+func TraitName(t *types.Trait) string {
+	return withArgs(ObjName(t.Obj()), t.TypeArgs())
+}
+
+// withArgs writes name and each of args after it, mangled, separated
+// by _: name itself, with nothing allocated, for a type that is not an
+// instance of a generic one; one concatenation, which Go makes in one
+// allocation, for one argument; and one builder for more, in place of a
+// string made again for each.
+func withArgs(name string, args []types.Type) string {
+	switch len(args) {
+	case 0:
+		return name
+	case 1:
+		return name + "_" + Mangle(args[0])
 	}
 
-	return name
+	var b strings.Builder
+	b.WriteString(name)
+	for _, a := range args {
+		b.WriteByte('_')
+		b.WriteString(Mangle(a))
+	}
+
+	return b.String()
 }
 
 // Mangle writes a type as a fragment of a symbol.
@@ -168,7 +200,7 @@ func Mangle(t types.Type) string {
 	case *types.TypeParam:
 		return Ident(t.Obj().Name()) // never written: every type is substituted first
 	case *types.Trait:
-		return Ident(t.Obj().Name())
+		return TraitName(t)
 	case *types.Ref:
 		if t.Mut() {
 			return "mut_" + Mangle(t.Elem())
