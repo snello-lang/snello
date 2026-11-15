@@ -38,3 +38,19 @@ func main() { b := Box{name: "a".Clone()}; old := replace(mut b.name, "b".Clone(
 		t.Errorf("main does not read the place through %s and then write the new value:\n%s", p, body)
 	}
 }
+
+// A channel of the unit value is made with an element size of zero: C
+// gives the unit a byte, which a ring of done signals would hold one of
+// per slot, a line every sender writes. Any other element keeps its
+// size.
+func TestMakeChannelOfUnit(t *testing.T) {
+	body := cFunction(t, emitSource(t, `package main
+func main() { done := make(chan (), 4); n := make(chan int, 4); done <- (); n <- 1; <-done; <-n }`), "static SN_UNUSED void sn_main(void)")
+	if !strings.Contains(body, "sn_chan_make(0, (int64_t)(4LL)") {
+		t.Errorf("the channel of the unit value is not made with an element size of zero:\n%s", body)
+	}
+
+	if !strings.Contains(body, "sn_chan_make(sizeof(sn_int), (int64_t)(4LL)") {
+		t.Errorf("the channel of ints is not made with its element's size:\n%s", body)
+	}
+}

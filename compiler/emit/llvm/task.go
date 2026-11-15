@@ -229,14 +229,13 @@ func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []ty
 	if h == nil {
 		e.helper(lower.SpawnEntry(k), "void", []string{"ptr %p"}, func() {
 			e.discard(call(), results, pos)
-			e.freeBlock()
+			e.endEntry()
 		})
 	} else {
 		e.caughtEntry(k, st, call, results, h.elem, len(values), pos)
 	}
 
-	e.declare("sn_alloc", "declare ptr @sn_alloc(i64)")
-	block := e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.structSize(fields), 1), 10)+")", "ptr")
+	block := value{"ptr", e.slot(st)} // in the spawning function's frame: the runtime copies it into the task's record
 	for i, v := range values {
 		e.store(v, e.gep(st, block.s, i))
 	}
@@ -247,8 +246,8 @@ func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []ty
 	}
 
 	bound := e.op("load volatile i32, ptr getelementptr inbounds (i32, ptr @"+lower.StackBounds+", i64 "+strconv.Itoa(k)+")", "i32")
-	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i32)")
-	e.inst("call void @sn_spawn(ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", " + bound.typed() + ")")
+	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i64, i32)")
+	e.inst("call void @sn_spawn(ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", i64 " + strconv.FormatInt(e.structSize(fields), 10) + ", " + bound.typed() + ")")
 }
 
 // caughtEntry writes the trampoline of a task with a handle: the call
@@ -299,15 +298,13 @@ func (e *Emitter) caughtEntry(k int, st string, call func() value, results, elem
 		e.jump(end)
 		e.label(end)
 		e.rt("sn_chan_drop", "void", value{"ptr", done}, value{"i32", strconv.Itoa(lower.HandleBoth)})
-		e.freeBlock()
+		e.endEntry()
 	})
 }
 
-// freeBlock ends a task's trampoline: the block of the task's values
-// is freed and the function returns.
-func (e *Emitter) freeBlock() {
-	e.declare("sn_free", "declare void @sn_free(ptr)")
-	e.inst("call void @sn_free(ptr %p)")
+// endEntry ends a task's trampoline: the function returns, and the
+// record's copy of the block goes with the task.
+func (e *Emitter) endEntry() {
 	e.inst("ret void")
 	e.fn.terminated = true
 }

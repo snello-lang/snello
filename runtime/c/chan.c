@@ -83,7 +83,19 @@ static int64_t senders(int64_t handles) { return handles & senders_mask; }
 
 static int64_t receivers(int64_t handles) { return handles >> receiver_shift; }
 
-static uint8_t *slot(sn_chan *c, int64_t i) { return c->buf + (size_t)(i % c->cap) * c->size; }
+// slot is the ring's place i, counted from the ring's start, for i
+// below twice the capacity: the oldest element is at head, below the
+// capacity, and the newest at head + len - 1, so no place is further.
+static uint8_t *slot(sn_chan *c, int64_t i) {
+    if (i >= c->cap) {
+        i -= c->cap;
+    }
+
+    return c->buf + (size_t)i * c->size;
+}
+
+// shift moves the ring's oldest place on by one.
+static void shift(sn_chan *c) { c->head = c->head + 1 == c->cap ? 0 : c->head + 1; }
 
 // sn_chan_make makes a channel with its first handle. Its memory is
 // sn_alloc's, so a debug build reports a channel no handle freed.
@@ -189,16 +201,16 @@ void sn_chan_given(sn_chan *c, int dir, int64_t before) {
     }
 
     sn_qlock_take(&c->mu);
+    sn_waitq *waiting = &c->sendq;
     if (last_sender) {
         c->ended = true;
-        for (sn_waiter *w; (w = sn_dequeue(&c->recvq)) != NULL;) {
-            sn_finish_wait(w, false);
-        }
+        waiting = &c->recvq;
     } else {
         c->receiverless = true;
-        for (sn_waiter *w; (w = sn_dequeue(&c->sendq)) != NULL;) {
-            sn_finish_wait(w, false);
-        }
+    }
+
+    for (sn_waiter *w; (w = sn_dequeue(waiting)) != NULL;) { // under the lock: a channel ends once
+        sn_queue_claimed(sn_finish_wait(w, false));
     }
 
     sn_qlock_give(&c->mu);
@@ -289,13 +301,15 @@ static void wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
 }
 
 // try_send sends v on c without waiting, the caller holding c's lock:
-// straight to a waiting receiver, or into the ring when it has room.
-// It reports whether it could.
-static bool try_send(sn_chan *c, const void *v) {
+// straight to a waiting receiver, whose task it leaves in *woken for
+// the caller to queue once it has let the lock go, or into the ring
+// when it has room. It reports whether it could.
+static bool try_send(sn_chan *c, const void *v, sn_task **woken) {
+    *woken = NULL;
     sn_waiter *w = sn_dequeue(&c->recvq);
     if (w != NULL) {
         memcpy(w->elem, v, c->size);
-        sn_finish_wait(w, true);
+        *woken = sn_finish_wait(w, true);
         return true;
     }
 
@@ -311,8 +325,10 @@ static bool try_send(sn_chan *c, const void *v) {
 // try_recv receives from c without waiting, the caller holding c's
 // lock: from a waiting sender, which on a buffered channel means the
 // ring is full and the sender's value goes in behind the one taken, or
-// from the ring. It reports whether it could.
-static bool try_recv(sn_chan *c, void *out) {
+// from the ring. The sender's task is left in *woken for the caller to
+// queue once it has let the lock go. It reports whether it could.
+static bool try_recv(sn_chan *c, void *out, sn_task **woken) {
+    *woken = NULL;
     sn_waiter *w = sn_dequeue(&c->sendq);
     if (w != NULL) {
         if (c->cap == 0) {
@@ -320,16 +336,16 @@ static bool try_recv(sn_chan *c, void *out) {
         } else {
             memcpy(out, slot(c, c->head), c->size);
             memcpy(slot(c, c->head), w->elem, c->size); // the full ring's oldest place becomes its newest
-            c->head = (c->head + 1) % c->cap;
+            shift(c);
         }
 
-        sn_finish_wait(w, true);
+        *woken = sn_finish_wait(w, true);
         return true;
     }
 
     if (c->len > 0) {
         memcpy(out, slot(c, c->head), c->size);
-        c->head = (c->head + 1) % c->cap;
+        shift(c);
         c->len--;
         return true;
     }
@@ -349,8 +365,10 @@ void sn_chan_send(sn_chan *c, const void *v) {
         return;
     }
 
-    if (try_send(c, v)) {
+    sn_task *woken;
+    if (try_send(c, v, &woken)) {
         sn_qlock_give(&c->mu);
+        sn_queue_claimed(woken);
         return;
     }
 
@@ -359,8 +377,6 @@ void sn_chan_send(sn_chan *c, const void *v) {
     sn_enqueue(&c->sendq, &me);
     sn_qlock_give(&c->mu);
     wait_on(me.t, c, SN_CHAN_SEND, &ws);
-    sn_qlock_take(&c->mu); // the operation that took the wait is done with it
-    sn_qlock_give(&c->mu);
     if (!me.success) {
         drop_value(c, (void *)v); // the last receiver went while the send waited
     }
@@ -371,8 +387,10 @@ void sn_chan_send(sn_chan *c, const void *v) {
 // and the ring is empty.
 bool sn_chan_recv(sn_chan *c, void *out) {
     sn_qlock_take(&c->mu);
-    if (try_recv(c, out)) {
+    sn_task *woken;
+    if (try_recv(c, out, &woken)) {
         sn_qlock_give(&c->mu);
+        sn_queue_claimed(woken);
         return true;
     }
 
@@ -386,8 +404,6 @@ bool sn_chan_recv(sn_chan *c, void *out) {
     sn_enqueue(&c->recvq, &me);
     sn_qlock_give(&c->mu);
     wait_on(me.t, c, SN_CHAN_RECV, &ws);
-    sn_qlock_take(&c->mu);
-    sn_qlock_give(&c->mu);
     return me.success;
 }
 
@@ -413,8 +429,10 @@ bool sn_chan_offer(sn_chan *c, const void *v) {
     }
 
     sn_qlock_take(&c->mu);
-    (void)try_send(c, v);
+    sn_task *woken;
+    (void)try_send(c, v, &woken);
     sn_qlock_give(&c->mu);
+    sn_queue_claimed(woken);
     return true;
 }
 
@@ -423,8 +441,10 @@ bool sn_chan_offer(sn_chan *c, const void *v) {
 // it sent and no one received.
 bool sn_chan_poll(sn_chan *c, void *out) {
     sn_qlock_take(&c->mu);
-    bool got = try_recv(c, out);
+    sn_task *woken;
+    bool got = try_recv(c, out, &woken);
     sn_qlock_give(&c->mu);
+    sn_queue_claimed(woken);
     return got;
 }
 
@@ -499,9 +519,9 @@ static void unlock_all(sn_chan **chans, int m) {
     }
 }
 
-// sn_select is Go's selectgo: the cases are tried in a random order,
-// each without waiting, and the first that can proceed does, so each
-// of several that can is as likely; with none, a default returns -1,
+// sn_select tries the cases in a random order, each without waiting,
+// and the first that can proceed does, so each of several that can is
+// as likely; with none, a default returns -1,
 // and otherwise the select waits on every case's channel at once until
 // an operation takes one of its waiters.
 static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order, sn_waiter *waiters);
@@ -538,6 +558,7 @@ static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, i
     }
 
     lock_all(chans, m);
+    sn_task *woken;
     for (int o = 0; o < n; o++) {
         int i = order[o];
         sn_case *k = &cases[i];
@@ -549,13 +570,15 @@ static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, i
                 return i;
             }
 
-            if (try_send(c, k->value)) {
+            if (try_send(c, k->value, &woken)) {
                 unlock_all(chans, m);
+                sn_queue_claimed(woken);
                 return i;
             }
-        } else if (try_recv(c, k->value)) {
+        } else if (try_recv(c, k->value, &woken)) {
             k->ok = true;
             unlock_all(chans, m);
+            sn_queue_claimed(woken);
             return i;
         } else if (c->ended) { // ended and empty: the case proceeds with nothing
             k->ok = false;

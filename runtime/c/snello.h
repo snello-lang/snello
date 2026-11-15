@@ -762,7 +762,10 @@ typedef struct {
 // program's table of bounds until the analysis writes one.
 #define SN_UNBOUNDED UINT32_MAX
 
-void sn_spawn(void (*run)(void *), void *arg, uint32_t bound);
+// sn_spawn starts a task that runs run on a copy of the size bytes at
+// args, which the task's record holds, so that a spawn allocates
+// nothing for them; the copy lives until the task ends.
+void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
 int64_t

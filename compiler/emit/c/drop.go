@@ -555,6 +555,18 @@ func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
 	return name
 }
 
+// elemSize writes the size of an element of a channel of type elem for
+// the runtime: zero for the unit value, which C gives a byte to, so that
+// a send of one copies nothing and a ring of them holds no byte, a line
+// every sender of a done signal would otherwise write.
+func (e *Emitter) elemSize(elem types.Type, pos token.Pos) string {
+	if elem == types.Unit {
+		return "0"
+	}
+
+	return "sizeof(" + e.cType(elem, pos) + ")"
+}
+
 func isChan(t types.Type) bool {
 	_, ok := t.Underlying().(*types.Chan)
 	return ok

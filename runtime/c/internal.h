@@ -16,9 +16,6 @@
 
 #include <pthread.h>
 #include <stdatomic.h>
-#ifdef __APPLE__
-#include <os/lock.h>
-#endif
 
 // SN_CACHE_LINE is the widest cache line of the processors the runtime
 // runs on, Apple's arm64 cores', which data written by one thread and
@@ -31,6 +28,22 @@
 // or written in turns.
 #define SN_IO_MAX ((size_t)1 << 30)
 
+// A handoff is how a wake reaches a task from a thread that holds no
+// lock the task takes after its wait: a timer that fires, the poller's
+// thread, a resolver's. Such a waker finds the task in a word and takes
+// it out, and the task may then go on without parking, after a wake
+// kept from an earlier wait or a look at a flag the waker set first,
+// end, and be freed, while the waker has yet to wake it. So the waker
+// wakes through the handoff, which says waking before the wake reads
+// the task and woken once nothing of the task is read but to queue a
+// task claimed, which is runnable and running nowhere and cannot be
+// freed; and a task a waker took out leaves its wait only once the
+// handoff says woken, parking while it is open and spinning the few
+// instructions it says waking. A handoff starts open, and the task
+// opens it again before it next puts itself where a waker finds it.
+typedef _Atomic int sn_handoff;
+enum { SN_HANDOFF_OPEN = 0, SN_HANDOFF_WAKING = 1, SN_HANDOFF_WOKEN = 2 };
+
 // A task waiting on a channel is a waiter on the channel's queue of
 // senders or of receivers, as Go's sudog is: the task, and the value it
 // sends or the place it receives into. An operation that finds a
@@ -42,11 +55,14 @@
 // the waiters share a state the taking operation claims with one
 // compare-and-swap, and a waiter of a select already taken is dropped
 // when another operation meets it. Waiters live in the frame of the
-// wait; the operation that takes one finishes with it under the lock
-// of its channel, which the woken task takes before its frame ends.
+// wait; the operation that takes one writes everything it has to say
+// into it and then wakes its task through the wait's handoff, which
+// says woken only once the waker has claimed the task and reads nothing
+// of it any more, so the woken task's frame may end as soon as the
+// handoff says woken, and the waker never reaches a task that has ended.
 typedef struct {
     _Atomic int claimed; // 0 until an operation takes the wait
-    _Atomic int done;    // set by that operation once it is done
+    sn_handoff done;     // open until that operation is done with the waiter and its task
     int fired;           // the case it took, for a select
 } sn_wait_state;
 
@@ -68,25 +84,51 @@ typedef struct {
 
 // sn_qlock is the lock over the queues of a channel or of a lock. It is
 // held for a few instructions, by tasks on every worker at once when
-// many send to one channel, and never across a park: the system's
-// fastest lock, os_unfair_lock on Darwin, whose pthread mutex is fair
-// and hands off through the kernel, and glibc's pthread mutex on Linux,
-// a futex with no system call when uncontended. A task never parks
-// holding it, so the thread that takes it is the one that gives it
-// back, as os_unfair_lock requires.
-#ifdef __APPLE__
-typedef os_unfair_lock sn_qlock;
-static inline void sn_qlock_init(sn_qlock *l) { *l = OS_UNFAIR_LOCK_INIT; }
-static inline void sn_qlock_take(sn_qlock *l) { os_unfair_lock_lock(l); }
-static inline void sn_qlock_give(sn_qlock *l) { os_unfair_lock_unlock(l); }
+// many send to one channel, and never across a park, so the thread that
+// takes it is the one that gives it back. It is one word of three
+// states: free, held, and held with contenders perhaps asleep on it. A
+// contender that finds it held spins for it, a few rounds of pauses and
+// one yield of its processor, while no one sleeps on it, and otherwise
+// marks it slept on and sleeps on the word through the system's wait on
+// an address, a futex; a holder giving a lock marked slept on back
+// wakes one sleeper, and the sleeper that takes the lock marks it slept
+// on again, since others may sleep behind it. The system's own locks
+// were measured against it: they put every contender but one to sleep
+// at once and hand the lock off through the kernel, which eight tasks
+// sending to one channel spent three times the program's run in. This
+// is the futex mutex the lock of the sync package is built from too.
+enum { SN_LOCK_FREE = 0, SN_LOCK_HELD = 1, SN_LOCK_SLEPT_ON = 2 };
+
+typedef struct {
+    _Atomic uint32_t state;
+} sn_qlock;
+
+static inline void sn_qlock_init(sn_qlock *l) { atomic_init(&l->state, SN_LOCK_FREE); }
+
 static inline void sn_qlock_free(sn_qlock *l) { (void)l; }
-#else
-typedef pthread_mutex_t sn_qlock;
-static inline void sn_qlock_init(sn_qlock *l) { pthread_mutex_init(l, NULL); }
-static inline void sn_qlock_take(sn_qlock *l) { pthread_mutex_lock(l); }
-static inline void sn_qlock_give(sn_qlock *l) { pthread_mutex_unlock(l); }
-static inline void sn_qlock_free(sn_qlock *l) { pthread_mutex_destroy(l); }
-#endif
+
+// sn_qlock_contended takes a lock found held, and sn_qlock_wake wakes a
+// sleeper of a lock given back; snello.c's. sn_word_wait sleeps the
+// thread while the word holds v, and sn_word_wake wakes one thread
+// asleep on the word: what the lock and an idle worker sleep through.
+void sn_qlock_contended(sn_qlock *l);
+void sn_qlock_wake(sn_qlock *l);
+void sn_word_wait(_Atomic uint32_t *w, uint32_t v);
+void sn_word_wake(_Atomic uint32_t *w);
+
+static inline void sn_qlock_take(sn_qlock *l) {
+    uint32_t free = SN_LOCK_FREE;
+    if (!atomic_compare_exchange_strong_explicit(&l->state, &free, SN_LOCK_HELD, memory_order_acquire,
+                                                 memory_order_relaxed)) {
+        sn_qlock_contended(l);
+    }
+}
+
+static inline void sn_qlock_give(sn_qlock *l) {
+    if (atomic_exchange_explicit(&l->state, SN_LOCK_FREE, memory_order_release) == SN_LOCK_SLEPT_ON) {
+        sn_qlock_wake(l);
+    }
+}
 
 // sn_spin_hint tells the core a loop is waiting on memory.
 static inline void sn_spin_hint(void) {
@@ -229,27 +271,25 @@ int64_t sn_timers_pending(void);
 // timer, once its worker is on its way to its next task.
 void sn_sched_start(void);
 int64_t sn_worker_index(void);
+int64_t sn_sched_workers(void); // how many workers run tasks, settled before the first task runs
 bool sn_wake_claim(sn_task *t);
 void sn_wake_queue(sn_task *t);
+
+// sn_queue_claimed queues the task a claim returned, once the lock the
+// claim was made under is let go, and nothing for NULL, the wake that
+// a running task consumes at its park.
+static inline void sn_queue_claimed(sn_task *t) {
+    if (t != NULL) {
+        sn_wake_queue(t);
+    }
+}
 void sn_sched_recheck(void);
 void sn_sched_timer_set(int64_t when);
 void sn_sched_owe(int64_t when);
 
-// A handoff is how a wake reaches a task from a thread that holds no
-// lock the task takes after its wait: a timer that fires, the poller's
-// thread, a resolver's. Such a waker finds the task in a word and takes
-// it out, and the task may then go on without parking, after a wake
-// kept from an earlier wait or a look at a flag the waker set first,
-// end, and be freed, while the waker has yet to wake it. So the waker
-// wakes through the handoff, which says waking before the wake reads
-// the task and woken once nothing of the task is read but to queue a
-// task claimed, which is runnable and running nowhere and cannot be
-// freed; and a task a waker took out leaves its wait only once the
-// handoff says woken, parking while it is open and spinning the few
-// instructions it says waking. A handoff starts open, and the task
-// opens it again before it next puts itself where a waker finds it.
-typedef _Atomic int sn_handoff;
-enum { SN_HANDOFF_OPEN = 0, SN_HANDOFF_WAKING = 1, SN_HANDOFF_WOKEN = 2 };
+// sn_handoff_wake wakes t through h, and sn_handoff_claim is its first
+// half, the claim, which reports whether the caller is to queue t;
+// sched.c's.
 void sn_handoff_wake(sn_handoff *h, sn_task *t);
 bool sn_handoff_claim(sn_handoff *h, sn_task *t);
 
@@ -302,12 +342,14 @@ void sn_chan_report(sn_chan *c, int dir);
 // The queues of waiters: sn_enqueue adds w at the tail of q and
 // sn_remove_waiter takes it out wherever it is; sn_dequeue takes the
 // first waiter whose wait is still open and claims it; sn_finish_wait
-// ends a wait sn_dequeue took and wakes its task; sn_await_wait parks
-// until an operation has finished the wait.
+// ends a wait sn_dequeue took and claims its task's wake, returning the
+// task for the caller to queue with sn_wake_queue once it has let the
+// lock go, or NULL when the task consumes the wake at its park;
+// sn_await_wait parks until an operation has finished the wait.
 void sn_enqueue(sn_waitq *q, sn_waiter *w);
 void sn_remove_waiter(sn_waitq *q, sn_waiter *w);
 sn_waiter *sn_dequeue(sn_waitq *q);
-void sn_finish_wait(sn_waiter *w, bool success);
+sn_task *sn_finish_wait(sn_waiter *w, bool success);
 void sn_await_wait(sn_wait_state *ws);
 
 // Unicode's properties, as mkunicode.go numbers them in unicode.c: the

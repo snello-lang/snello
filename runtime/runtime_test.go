@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +24,10 @@ import (
 	"testing"
 	"time"
 )
+
+// probeTimeout bounds a probe whose failure is a hang, a lost wake,
+// which the deadline turns into a failure.
+const probeTimeout = 30 * time.Second
 
 // ucd is the copy of the Unicode Character Database the tables are
 // written from, checked in so that the tests read it offline.
@@ -432,7 +437,7 @@ int main(int argc, char **argv) {
     sn_init(argc, argv);
     path = SN_STR(argv[1], (int64_t)strlen(argv[1]));
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe"); // buffered: the sender is done with it once its value is in
-    sn_spawn(run, NULL, SN_UNBOUNDED);
+    sn_spawn(run, NULL, 0, SN_UNBOUNDED);
     int64_t code;
     sn_chan_recv(done, &code);
     sn_chan_drop(&done, SN_CHAN_BOTH); // the task's work is over: the last handle frees the channel
@@ -521,7 +526,7 @@ static void fill(volatile uint8_t *p, size_t n, uint8_t v) {
 // work writes a quarter of its bound into its stack, the rest left to
 // what a task runs besides.
 static void work(void *arg) {
-    uint32_t b = (uint32_t)(uintptr_t)arg;
+    uint32_t b = *(uint32_t *)arg;
     size_t n = b == SN_UNBOUNDED ? 16384 : b / 4;
     volatile uint8_t *buf = __builtin_alloca(n);
     fill(buf, n, 1);
@@ -564,18 +569,18 @@ int main(int argc, char **argv) {
     int n = (int)(sizeof bounds / sizeof bounds[0]);
     done = sn_chan_make(sizeof(int64_t), rounds * tasks + 1, NULL, "probe"); // buffered: no task parks to send
     if (argc > 1) {
-        sn_spawn(too_deep, NULL, 100);
+        sn_spawn(too_deep, NULL, 0, 100);
         int64_t v;
         sn_chan_recv(done, &v);
         sn_chan_drop(&done, SN_CHAN_BOTH);
         return sn_finish();
     }
-    sn_spawn(catcher, NULL, 4000);
+    sn_spawn(catcher, NULL, 0, 4000);
     int64_t v, sum = 0;
     sn_chan_recv(done, &v);
     for (int r = 0; r < rounds; r++) {
         for (int i = 0; i < tasks; i++) {
-            sn_spawn(work, (void *)(uintptr_t)bounds[i % n], bounds[i % n]);
+            sn_spawn(work, &bounds[i % n], sizeof bounds[i % n], bounds[i % n]);
         }
         for (int i = 0; i < tasks; i++) {
             sn_chan_recv(done, &v);
@@ -630,7 +635,7 @@ static void catcher(void *arg) {
 int main(int argc, char **argv) {
     sn_init(argc, argv);
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
-    sn_spawn(catcher, NULL, SN_UNBOUNDED);
+    sn_spawn(catcher, NULL, 0, SN_UNBOUNDED);
     int64_t v;
     sn_chan_recv(done, &v);
     sn_chan_drop(&done, SN_CHAN_BOTH);
@@ -689,7 +694,7 @@ int main(int argc, char **argv) {
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     pthread_t id;
     pthread_create(&id, NULL, waker, NULL);
-    sn_spawn(run, NULL, SN_UNBOUNDED);
+    sn_spawn(run, NULL, 0, SN_UNBOUNDED);
     int64_t got;
     sn_chan_recv(done, &got);
     pthread_join(id, NULL);
@@ -706,6 +711,280 @@ int main(int argc, char **argv) {
 
 	if string(out) != "ended before the wake: 0\n" {
 		t.Fatalf("got %q: the task went on before its waker was done with it", out)
+	}
+}
+
+// TestQueueLockUnderContention has eight threads take and give one
+// queue lock two hundred thousand times each, the holder yielding its
+// processor now and then so that the contenders run out of spin and
+// sleep on the lock's word, and holds the lock to a count that adds up;
+// a sleeper left behind would be a lost wake, a thread that never
+// returns, which the deadline on the run turns into a failure. A second
+// run has two threads and a holder that sleeps while holding, so that
+// every take goes through the sleep.
+func TestQueueLockUnderContention(t *testing.T) {
+	probe := `#define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
+#include "internal.h"
+#include <pthread.h>
+#include <sched.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+static sn_qlock lock;
+static int64_t count;
+static int threads, rounds, holds;
+static void *contend(void *arg) {
+    (void)arg;
+    for (int i = 0; i < rounds; i++) {
+        sn_qlock_take(&lock);
+        count++;
+        if (i % 64 == 0) {
+            if (holds > 0) {
+                usleep(holds); // held long enough for every contender to sleep
+            } else {
+                sched_yield();
+            }
+        }
+
+        sn_qlock_give(&lock);
+    }
+
+    return NULL;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    sn_sched_start(); // the workers, whose count lets a contender spin
+    threads = atoi(argv[1]);
+    rounds = atoi(argv[2]);
+    holds = atoi(argv[3]);
+    sn_qlock_init(&lock);
+    pthread_t ids[64];
+    for (int i = 0; i < threads; i++) {
+        pthread_create(&ids[i], NULL, contend, NULL);
+    }
+
+    for (int i = 0; i < threads; i++) {
+        pthread_join(ids[i], NULL);
+    }
+
+    printf("count %lld\n", (long long)count);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	for _, c := range []struct {
+		threads, rounds, holds int
+	}{{8, 200000, 0}, {2, 20000, 1}} {
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		out, err := exec.CommandContext(ctx, bin, strconv.Itoa(c.threads), strconv.Itoa(c.rounds), strconv.Itoa(c.holds)).CombinedOutput()
+		cancel()
+		want := fmt.Sprintf("count %d\n", c.threads*c.rounds)
+		if err != nil || string(out) != want {
+			t.Fatalf("%d threads: %v\n%s", c.threads, err, out)
+		}
+	}
+}
+
+// TestWakeAfterWaitEnds has tasks leave a channel wait and end at once,
+// many times over, while their wakers are still finishing the wake, in
+// a debug build whose runtime stops the program when a wake reaches a
+// task that has ended: each receiver carries a kept wake into its wait,
+// so its park returns at once, into the few instructions of the waker's
+// claim, and the wait's handoff keeps it there until the claim is done,
+// so the stop never comes.
+func TestWakeAfterWaitEnds(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 20000 };
+static sn_chan *ch, *done;
+static void receiver(void *arg) {
+    (void)arg;
+    sn_wake(sn_self()); // a wake kept for its park: the park returns at once, into the waker's claim
+    int64_t v;
+    sn_chan_recv(ch, &v); // woken by the sender, and gone before the sender has queued it, when it can
+}
+static void sender(void *arg) {
+    (void)arg;
+    int64_t v = 1;
+    sn_chan_send(ch, &v);
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    ch = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+    for (int r = 0; r < rounds; r++) {
+        if (r % 2 == 0) { // the receiver first, so that the sender wakes it, and the other way round
+            sn_spawn(receiver, NULL, 0, SN_UNBOUNDED);
+            sn_spawn(sender, NULL, 0, SN_UNBOUNDED);
+        } else {
+            sn_spawn(sender, NULL, 0, SN_UNBOUNDED);
+            sn_spawn(receiver, NULL, 0, SN_UNBOUNDED);
+        }
+
+        int64_t got;
+        sn_chan_recv(done, &got);
+    }
+
+    printf("rounds %d\n", rounds);
+    sn_chan_drop(&ch, SN_CHAN_BOTH);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || string(out) != "rounds 20000\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestSlotTakenOnce has a task wake its partner into its worker's slot
+// many times over, sometimes parking at once, so that the worker takes
+// the slot itself, and sometimes computing a few microseconds first, so
+// that an idle worker takes it: the partner counts its runs, and the
+// count holds the slot to one take per wake, neither lost nor doubled,
+// in a debug build whose runtime stops the program when a wake reaches
+// a task that has ended.
+func TestSlotTakenOnce(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 20000 };
+static sn_chan *go, *go_in, *back, *back_out, *done; // a handle a task, as a program's tasks hold them
+static _Atomic int64_t runs;
+static void partner(void *arg) {
+    (void)arg;
+    int64_t v;
+    while (sn_chan_recv(go_in, &v)) {
+        atomic_fetch_add(&runs, 1);
+        sn_chan_send(back_out, &v);
+    }
+
+    sn_chan_drop(&go_in, SN_CHAN_RECV);
+    sn_chan_drop(&back_out, SN_CHAN_SEND);
+}
+static void waker(void *arg) {
+    (void)arg;
+    for (int64_t r = 0; r < rounds; r++) {
+        sn_chan_send(go, &r); // wakes the partner into this worker's slot
+        if (r % 2 == 0) {
+            volatile int64_t spin = 0;
+            while (spin < 4000) { // a few microseconds without parking: a thief takes the slot
+                spin++;
+            }
+        }
+
+        int64_t v;
+        sn_chan_recv(back, &v); // parks: the slot's task runs here, unless a thief took it
+    }
+
+    sn_chan_drop(&go, SN_CHAN_SEND); // the partner's receive ends
+    sn_chan_drop(&back, SN_CHAN_RECV);
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    go = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    go_in = sn_chan_clone(go, SN_CHAN_RECV);
+    go = sn_chan_narrow(go, SN_CHAN_SEND);
+    back = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    back_out = sn_chan_clone(back, SN_CHAN_SEND);
+    back = sn_chan_narrow(back, SN_CHAN_RECV);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+    sn_spawn(partner, NULL, 0, SN_UNBOUNDED);
+    sn_spawn(waker, NULL, 0, SN_UNBOUNDED);
+    int64_t got;
+    sn_chan_recv(done, &got);
+    printf("runs %lld\n", (long long)atomic_load(&runs));
+    sn_chan_drop(&done, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || string(out) != "runs 20000\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestMonitorMovesStaleSlot has the main task wake a task into its
+// worker's slot and then compute for fifty milliseconds without
+// parking, while chains of tasks, each spawning the next before it
+// ends, keep every other worker's own queue full, so that none runs out
+// of tasks and takes the slot as a thief: the task runs only once the
+// monitor has moved it to the inject queue, at its first look at which
+// the worker has switched to no task since the look before, and a busy
+// worker takes it from there at one of its looks, within a few
+// milliseconds on a quiet machine and well within the fifty the main
+// task computes on a loaded one. Without the move it would wait for the
+// main task to park, fifty milliseconds on.
+func TestMonitorMovesStaleSlot(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <unistd.h>
+static sn_chan *go;
+static _Atomic int64_t ran_at;
+static _Atomic bool stop;
+static void chain(void *arg) {
+    (void)arg;
+    volatile int64_t sum = 0;
+    for (int64_t i = 0; i < 20000; i++) {
+        sum += i;
+    }
+
+    if (!atomic_load(&stop)) {
+        sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
+    }
+}
+static void waiter(void *arg) {
+    (void)arg;
+    int64_t v;
+    sn_chan_recv(go, &v);
+    atomic_store(&ran_at, sn_time_mono());
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    go = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    sn_spawn(waiter, NULL, 0, SN_UNBOUNDED);
+    sn_sleep(1000000); // the waiter parks on its receive
+    int64_t n = 2 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
+    }
+
+    sn_sleep(1000000); // every worker is in a chain by now
+    int64_t one = 1;
+    int64_t woke = sn_time_mono();
+    sn_chan_send(go, &one); // the waiter wakes into this worker's slot
+    while (sn_time_mono() - woke < 50000000) { // computing, never parking
+    }
+
+    atomic_store(&stop, true);
+    int64_t at = atomic_load(&ran_at);
+    printf("ran after %lld ms\n", at == 0 ? -1LL : (long long)((at - woke) / 1000000));
+    sn_sleep(5000000); // the chains end
+    sn_chan_drop(&go, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	var ms int
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if _, err := fmt.Sscanf(string(out), "ran after %d ms", &ms); err != nil || ms < 0 || ms > 40 {
+		t.Fatalf("the slot's task ran after %d ms, wanted well within the 50 the sender computes: %s", ms, out)
 	}
 }
 
@@ -746,8 +1025,8 @@ int main(int argc, char **argv) {
         sn_chan_send(c, &v); // a value left in the ring goes with the channel
         handle sender = { sn_chan_clone(c, SN_CHAN_SEND), SN_CHAN_SEND, r };
         handle receiver = { sn_chan_narrow(c, SN_CHAN_RECV), SN_CHAN_RECV, r };
-        sn_spawn(dropper, &sender, SN_UNBOUNDED);
-        sn_spawn(dropper, &receiver, SN_UNBOUNDED);
+        sn_spawn(dropper, &sender, sizeof sender, SN_UNBOUNDED);
+        sn_spawn(dropper, &receiver, sizeof receiver, SN_UNBOUNDED);
         atomic_store(&round_on, r);
         int64_t got;
         sn_chan_recv(done, &got);
@@ -813,7 +1092,7 @@ static void chain(void *arg) {
     }
 
     if (!atomic_load(&accepted)) {
-        sn_spawn(chain, NULL, SN_UNBOUNDED);
+        sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
     }
 }
 static void serve(void *arg) {
@@ -846,10 +1125,10 @@ int main(int argc, char **argv) {
     }
 
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
-    sn_spawn(serve, NULL, SN_UNBOUNDED);
+    sn_spawn(serve, NULL, 0, SN_UNBOUNDED);
     int64_t n = 4 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
     for (int64_t i = 0; i < n; i++) {
-        sn_spawn(chain, NULL, SN_UNBOUNDED);
+        sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
     }
 
     pthread_t id;
@@ -911,7 +1190,7 @@ void freeaddrinfo(struct addrinfo *ai) {
 static sn_chan *results;
 static sn_chan *computed;
 static void look(void *arg) {
-    int64_t timeout = (int64_t)(intptr_t)arg;
+    int64_t timeout = *(int64_t *)arg;
     sn_slice out = {0};
     sn_string reason = SN_STR("", 0);
     int64_t code = sn_net_lookup(SN_STR("hangs.test", 10), timeout, &out, &reason);
@@ -934,11 +1213,13 @@ int main(int argc, char **argv) {
     results = sn_chan_make(sizeof(int64_t), n + 1, NULL, "probe");
     computed = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     for (int64_t i = 0; i < n; i++) {
-        sn_spawn(look, NULL, SN_UNBOUNDED);
+        int64_t none = 0;
+        sn_spawn(look, &none, sizeof none, SN_UNBOUNDED);
     }
 
-    sn_spawn(look, (void *)(intptr_t)50000000, SN_UNBOUNDED);
-    sn_spawn(compute, NULL, SN_UNBOUNDED);
+    int64_t late = 50000000;
+    sn_spawn(look, &late, sizeof late, SN_UNBOUNDED);
+    sn_spawn(compute, NULL, 0, SN_UNBOUNDED);
     int64_t sum;
     sn_chan_recv(computed, &sum);
     printf("computed %lld\n", (long long)sum);

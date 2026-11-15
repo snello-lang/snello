@@ -959,7 +959,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) string {
 			n = "(int64_t)(" + e.valueTo(x.Args[1], types.Typ[types.Int]) + ")"
 		}
 
-		return "sn_chan_make(sizeof(" + e.cType(ch.Elem(), x.Pos()) + "), " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ", " + e.madeAt(x.Pos()) + ")"
+		return "sn_chan_make(" + e.elemSize(ch.Elem(), x.Pos()) + ", " + n + ", " + e.elemDropper(ch.Elem(), x.Pos()) + ", " + e.madeAt(x.Pos()) + ")"
 	}
 
 	st, ok := t.Underlying().(*types.Slice)

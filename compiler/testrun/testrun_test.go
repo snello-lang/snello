@@ -304,9 +304,9 @@ func BenchmarkRound() {
 `
 
 // TestAllocsAcrossTasks holds the allocator's counts to the blocks a
-// benchmark's tasks are given, every one: 80,000 nodes and the 33
-// blocks of the channels and the tasks themselves, through both
-// backends. Each thread counts what it gives out, and a task that has
+// benchmark's tasks are given, every one: 80,000 nodes and the 17
+// blocks of the channels, through both backends; a spawn allocates
+// nothing, since its arguments go in the task's record. Each thread counts what it gives out, and a task that has
 // moved to another thread must count in that thread's counts; one that
 // went on counting in the counts of the thread it left would write
 // them while that thread did, and blocks would go uncounted, a few
@@ -325,8 +325,8 @@ func TestAllocsAcrossTasks(t *testing.T) {
 			t.Fatalf("%s: %v\n%s", backend, err, out.String())
 		}
 
-		if code != 0 || !strings.Contains(out.String(), " 80033 allocs/op") {
-			t.Errorf("%s: exited %d, want 80033 allocs/op:\n%s", backend, code, out.String())
+		if code != 0 || !strings.Contains(out.String(), " 80017 allocs/op") {
+			t.Errorf("%s: exited %d, want 80017 allocs/op:\n%s", backend, code, out.String())
 		}
 	}
 }

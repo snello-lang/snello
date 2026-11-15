@@ -47,12 +47,15 @@
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <os/lock.h>
+#include <os/os_sync_wait_on_address.h>
 #include <sys/event.h>
 #include <sys/random.h>
 #include <sys/sysctl.h>
 #else
+#include <linux/futex.h>
 #include <sys/epoll.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #endif
 
 enum { stack_bytes = 1 << 20, paint = 0xA5 };
@@ -345,6 +348,8 @@ CASE(clock_gettime_nsec_np, sink = (long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
 CASE(sysctlbyname, { int v; size_t n = sizeof v; sysctlbyname("kern.ipc.somaxconn", &v, &n, NULL, 0); })
 CASE(os_unfair_lock_lock, { os_unfair_lock l = OS_UNFAIR_LOCK_INIT; os_unfair_lock_lock(&l); os_unfair_lock_unlock(&l); })
 CASE(os_unfair_lock_unlock, { os_unfair_lock l = OS_UNFAIR_LOCK_INIT; os_unfair_lock_lock(&l); os_unfair_lock_unlock(&l); })
+CASE(os_sync_wait_on_address, { _Atomic uint32_t w = 1; os_sync_wait_on_address(&w, 0, sizeof w, OS_SYNC_WAIT_ON_ADDRESS_NONE); })
+CASE(os_sync_wake_by_address_any, { _Atomic uint32_t w = 1; os_sync_wake_by_address_any(&w, sizeof w, OS_SYNC_WAKE_BY_ADDRESS_NONE); })
 CASE(kqueue, queue = kqueue())
 CASE(kevent, { struct kevent ev; EV_SET(&ev, 0, EVFILT_READ, EV_ADD, 0, 0, NULL); struct timespec z = {0, 0}; kevent(queue, &ev, 1, NULL, 0, NULL); kevent(queue, NULL, 0, &ev, 1, &z); close(queue); })
 CASE(__error, sink = *__error())
@@ -360,6 +365,7 @@ CASE(epoll_ctl, { struct epoll_event ev = {.events = EPOLLIN}; epoll_ctl(queue, 
 CASE(epoll_wait, { struct epoll_event ev; epoll_wait(queue, &ev, 1, 0); close(queue); })
 CASE(__errno_location, sink = *__errno_location())
 CASE(__sched_cpucount, { cpu_set_t set; CPU_ZERO(&set); CPU_SET(0, &set); sink = CPU_COUNT(&set); })
+CASE(syscall, { _Atomic uint32_t w = 1; syscall(SYS_futex, &w, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0); })
 #endif
 
 #define MEASURE(name) {#name, NULL, case_##name, false}
@@ -397,11 +403,12 @@ int main(void) {
         MEASURE(hypot), MEASURE(cbrt), MEASURE(sqrt),
 #if defined(__APPLE__)
         MEASURE(bzero), MEASURE(clock_gettime_nsec_np), MEASURE(sysctlbyname), MEASURE(os_unfair_lock_lock),
-        MEASURE(os_unfair_lock_unlock), MEASURE(kqueue), MEASURE(kevent), MEASURE(__error),
+        MEASURE(os_unfair_lock_unlock), MEASURE(os_sync_wait_on_address), MEASURE(os_sync_wake_by_address_any), MEASURE(kqueue),
+        MEASURE(kevent), MEASURE(__error),
 #else
         MEASURE(pthread_mutex_destroy), MEASURE(pthread_condattr_init), MEASURE(pthread_condattr_setclock),
         MEASURE(pthread_condattr_destroy), MEASURE(sched_getaffinity), MEASURE(prctl), MEASURE(epoll_create1), MEASURE(epoll_ctl),
-        MEASURE(epoll_wait), MEASURE(__errno_location), MEASURE(__sched_cpucount),
+        MEASURE(epoll_wait), MEASURE(__errno_location), MEASURE(__sched_cpucount), MEASURE(syscall),
 #endif
     };
 
