@@ -1,0 +1,119 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Variadic functions of a program's own: ...T, an owned slice the
+// arguments move into, of numbers and of values with a Drop, which the
+// function drops; ...ref T, the arguments lent for the call alone, a
+// temporary among them dropped after the call, and owned values lent
+// without ref; a slice passed on with ..., moved or lent, and a lent
+// one passed on from another variadic function; no arguments at all; a
+// method, a trait's method through a trait value and through a bound,
+// a generic function of each form, a function value and a closure; a
+// deferred and a spawned call; a lent call in a loop; and the
+// arguments evaluated left to right.
+
+package main
+
+import "fmt"
+
+struct Tag impl Drop { name string }
+
+func (t mut Tag) Drop() { fmt.Println("drop", t.name) }
+
+struct Log { lines []string }
+
+func (l mut Log) Add(parts ...string) {
+	for _, p := range parts {
+		l.lines.Push(p)
+	}
+}
+
+func Sum(xs ...int) int {
+	total := 0
+	for _, x := range xs {
+		total += x
+	}
+
+	return total
+}
+
+func Keep(tags ...Tag) int { return len(tags) }
+
+func Join(sep string, parts ...ref string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out = out + sep
+		}
+
+		out = out + p
+	}
+
+	return out
+}
+
+func Bracket(parts ...ref string) string { return "[" + Join("|", parts...) + "]" }
+
+trait Shout { func (s ref Self) Say(words ...ref string) string }
+
+struct Loud impl Shout { mark string }
+
+func (l ref Loud) Say(words ...ref string) string { return Join(l.mark.Clone(), words...) + l.mark.Clone() }
+
+func Twice<S: Shout>(s ref S, w ref string) string { return s.Say(w, w) }
+
+func Count<T>(xs ...T) int { return len(xs) }
+
+func Longest<T>(xs ...ref T) int { return len(xs) }
+
+func step(n int) int {
+	fmt.Println("arg", n)
+	return n
+}
+
+func made(s string) string { return s.Clone() }
+
+func total(done chan<- int, xs ...int) { done <- Sum(xs...) }
+
+func main() {
+	fmt.Println(Sum(), Sum(1, 2, 3), Sum([]int{4, 5}...))
+
+	fmt.Println(Keep(Tag{name: "a".Clone()}, Tag{name: "b".Clone()}))
+	tags := []Tag{Tag{name: "c".Clone()}}
+	fmt.Println(Keep(tags...))
+
+	a, b := "x".Clone(), "y".Clone()
+	words := []string{"p".Clone(), "q".Clone()}
+	fmt.Println(Join("-"), Join("-", ref a, ref b), Join("+", ref words...), Bracket(ref a, ref made("t")))
+	fmt.Println(Join("/", a, b), Join("=", words...)) // an owned value lent without ref, as to a ref parameter
+	fmt.Println(a, b, words)
+
+	var log Log = Log{lines: []string{}}
+	log.Add("one".Clone(), "two".Clone())
+	fmt.Println(log.lines)
+
+	fmt.Println(Count(1, 2, 3), Count("s".Clone()), Longest(ref a, ref b), Longest<int>())
+
+	var loud Shout = Loud{mark: "!".Clone()}
+	plain := Loud{mark: "?".Clone()}
+	fmt.Println(loud.Say(a, b), loud.Say(), plain.Say(), Twice(ref plain, ref a))
+
+	add := Sum
+	fold := func(xs ...int) int { return Sum(xs...) * 2 }
+	fmt.Println(add(7, 8), fold(1, 2))
+
+	fmt.Println(Sum(step(1), step(2), step(3)))
+
+	for i := 0; i < 3; i++ {
+		c := fmt.Sprint(i)
+		fmt.Println(Join(":", ref a, ref c))
+	}
+
+	done := make(chan int)
+	spawn total(done.Clone(), 10, 20, 30)
+	fmt.Println(<-done ?? 0)
+
+	defer fmt.Println("deferred", Sum(4, 4))
+	defer log.Add("late".Clone())
+}

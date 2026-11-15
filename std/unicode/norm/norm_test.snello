@@ -6,6 +6,8 @@ package norm_test
 
 import ("expect"; "testing"; "unicode/norm")
 
+// Each form composes or decomposes, and the compatibility forms replace
+// what the canonical ones keep.
 func TestForms() {
 	composed := "é"     // é, one rune
 	decomposed := "é" // e and a combining acute accent
@@ -31,6 +33,7 @@ func TestHangul() {
 	expect.Equal(ref norm.String(norm.NFC, "한"), "한")
 }
 
+// IsNormalString tells a string in the form from one that is not.
 func TestIsNormal() {
 	expect.True(norm.IsNormalString(norm.NFC, "é"))
 	expect.False(norm.IsNormalString(norm.NFD, "é"))
@@ -39,6 +42,7 @@ func TestIsNormal() {
 	expect.True(norm.IsNormalString(norm.NFC, "plain ASCII"))
 }
 
+// How long NFC takes for a short text of accented letters.
 func BenchmarkNFC() {
 	s := "Amélie écrit à Zürich"
 	for testing.Loop() {

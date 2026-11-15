@@ -67,7 +67,25 @@ func TestResolve(t *testing.T) {
 		{"package p\nstruct S<T> { x T }", nil},
 		{"package p\ntrait Shape { func (s ref Self) Area() f64 }\nstruct C impl Shape {}\nfunc (c ref C) Area() f64 { return 1.0 }", nil},
 		{"package p\nfunc f(x int) { match x { 1 => y, _ => 0 } }", []string{"2:32: undefined: y"}},
-		{"package p\nfunc f(xs [99999999999999999999]int) {}", []string{"2:12: array length must be a non-negative integer literal"}},
+		{"package p\nfunc f(xs [99999999999999999999]int) {}", []string{"2:12: 99999999999999999999 overflows int"}},
+		{"package p\nfunc f(xs [-1]int) {}", []string{"2:12: array length must be a non-negative integer constant, not -1"}},
+		{"package p\nfunc f(xs [2.5]int) {}", []string{"2:12: array length must be a non-negative integer constant, not 2.5"}},
+		{"package p\nvar n = 3\nfunc f(xs [n]int) {}", []string{"3:12: array length must be a non-negative integer constant: n is not constant"}},
+		{"package p\nconst N = 4\nfunc f(xs [2 * N]int) {}", nil},
+		{"package p\nstruct Grid { cells [Rows * Cols]int }\nconst Rows = 2\nconst Cols = Rows + 1\nfunc f(g ref Grid) [6]int { return g.cells }", nil}, // the length of a field, from constants declared after the type, is the array the function returns
+		{"package p\nstruct Grid { cells [Rows]int }\nconst Rows = len(\"ab\")", []string{"3:14: len(...) is not constant"}},                            // reported at the constant, not again at the length
+		{"package p\nstruct S { a [N]int }\nconst N Count = 4\ntype Count int", nil},                                                                    // a constant an array length needs, of a type declared after both
+		{"package p\nstruct S { a [N]int }\nconst N = int(Celsius(4.0))\ntype Celsius f64", nil},                                                        // a conversion to a type declared after it
+		{"package p\ntype A B\ntype B f64\nconst X A = 2.5\nfunc f() f64 { return f64(X) }", nil},                                                       // a type declared over a later one
+		{"package p\nconst _ = nope + 1", []string{"2:11: undefined: nope"}},                                                                            // a blank constant is checked too
+		{"package p\nconst _ u8 = 300", []string{"2:14: 300 overflows u8"}},
+		{"package p\nconst X i8 = -129", []string{"2:15: -129 overflows i8"}}, // once, by the check of the literal
+		{"package p\nfunc f() { const x i8 = -(129); print(x) }", []string{"2:27: 129 overflows i8"}},
+		{"package p\nconst KB = 1 << 40\nconst X i64 = KB * KB", []string{"3:15: cannot use a value of type int as i64 in declaration"}}, // the type before the value
+		{"package p\nfunc main(x int) {}", []string{"2:6: func main must have no type parameters, no parameters and no results"}},
+		{"package p\nfunc main() int { return 0 }", []string{"2:6: func main must have"}},
+		{"package p\nfunc main<T>() {}", []string{"2:6: func main must have"}},
+		{"package p\nstruct S {}\nfunc (s ref S) main(x int) {}", nil}, // a method may be called main
 		{"package p\nfunc f() { x := 1; print(x) }\nfunc g() { print(x) }", []string{"3:18: undefined: x"}},
 	}
 	for _, tt := range tests {
@@ -212,10 +230,41 @@ var handledErrors = map[string]bool{
 	"time-layout.snello": true,
 	// A constant's name is no pattern.
 	"match-constant.snello": true,
+	// A constant is computed by the compiler, in the arithmetic of its
+	// type, in any order but none that leads back to it; a package
+	// variable's inferred type is known after its declaration.
+	"const-not-constant.snello": true,
+	"const-overflows.snello":    true,
+	"const-cycle.snello":        true,
+	"global-before-type.snello": true,
+	// A variadic parameter: the arguments move into ...T and are lent
+	// for the call alone to ...ref T; ... passes the slice itself.
+	"variadic-moved.snello":    true,
+	"variadic-lent.snello":     true,
+	"variadic-spread.snello":   true,
+	"variadic-deferred.snello": true,
+	"variadic-kept.snello":     true,
+	// A field's default is a constant of its type, and a struct that
+	// declares one has no zero value.
+	"default-not-constant.snello": true,
+	"default-no-zero.snello":      true,
+	// A conversion moves the value, and takes no borrow of it.
+	"conversion-moves.snello": true,
+	// No part leaves a value whose type implements Drop.
+	"move-out-of-drop.snello": true,
+	// A field reflection reaches is lent, and a loop over a type's parts
+	// is written out per part.
+	"reflect-lent.snello": true,
+	"reflect-loop.snello": true,
+	// A deferred print or built-in saves views of its arguments.
+	"defer-printed.snello": true,
 	// A range over an iterator: a value with Next on a mut receiver.
 	"range-iterator.snello": true,
-	// A Drop runs once, by the language.
-	"drop-by-hand.snello": true,
+	// A borrow of a temporary, or of a part of one, dies with its statement.
+	"borrow-of-temporary-part.snello": true,
+	// A Drop runs once, by the language, on a struct or an enum.
+	"drop-by-hand.snello":       true,
+	"drop-not-composite.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {
@@ -407,6 +456,7 @@ type sourceImporter struct {
 	conf   Config
 	srcs   map[string]string
 	loaded map[string]*Package
+	info   *Info // the tables the packages share, as the compiler's importer shares them; nil for none
 }
 
 func (imp *sourceImporter) Import(path string) (*Package, error) {
@@ -425,7 +475,7 @@ func (imp *sourceImporter) Import(path string) (*Package, error) {
 	}
 
 	std := Config{Importer: imp.conf.Importer, Standard: true}
-	pkg, err := std.Check(path, file, f, nil)
+	pkg, err := std.Check(path, file, f, imp.info)
 	if err != nil {
 		return nil, err
 	}
@@ -483,6 +533,13 @@ func TestCheckFiles(t *testing.T) {
 		{[]string{"package p\nstruct A { b B }", "package p\nstruct B { a A }"}, []string{"a.snello:2:8: invalid recursive type A"}},
 		{[]string{"package p\nfunc f() int { return g() }", "package p\nfunc g() int { return h }"}, []string{"b.snello:2:23: undefined: h"}},
 		{[]string{"package p\ntrait Named { func (s ref Self) Name() string }\nstruct T impl Named {}", "package p\nfunc (t ref T) Name() string { return \"t\" }\nfunc f(t ref T) string { return t.Name() }"}, nil}, // a trait and its implementation across files
+		{[]string{"package p\nconst MB = KB * KB\nstruct Page { bytes [KB]byte }", "package p\nimport \"math\"\nconst KB = 1 << 10\nconst Pi2 = math.Pi * 2.0"}, nil},                                                 // a constant of another file, needed by a type before the constants are checked, with that file's imports
+		// A field's default is checked with its own file's imports, after a declaration of another file was checked on demand: an array length, a type declared over a later one, and a name the other file gives another package.
+		{[]string{"package p\nimport \"os\"\nstruct Conf { arr [N]int; perm os.FileMode = os.ModePerm }", "package p\nconst N = 3"}, nil},
+		{[]string{"package p\nimport \"os\"\ntype Alias Later\nstruct Conf { perm os.FileMode = os.ModePerm }", "package p\ntype Later int"}, nil},
+		{[]string{"package p\nimport \"os\"\nstruct Conf { arr [N]int; perm int = int(os.ModePerm) }", "package p\nimport os \"math\"\nconst N = 3\nconst Pi2 = os.Pi * 2.0"}, nil},
+		{[]string{"package p\nconst A = B + 1", "package p\nconst B = A * 2"}, []string{"a.snello:2:7: initialization cycle: A refers to B, B refers to A"}},
+		{[]string{"package p\nconst Low u8 = High - 300", "package p\nconst High u8 = 255"}, []string{"a.snello:2:23: 300 overflows u8"}}, // the literal, typed u8 by its context, before any arithmetic
 	}
 	for _, tt := range tests {
 		fset := token.NewFileSet()

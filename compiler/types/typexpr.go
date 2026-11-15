@@ -55,7 +55,7 @@ func (c *Checker) typ(e ast.Type) Type {
 
 		return NewTuple(elems...)
 	case *ast.StructType:
-		return NewStruct(c.fields(e.Fields))
+		return NewStruct(c.fields(e.Fields, true))
 	case *ast.EnumType:
 		variants := make([]*Variant, len(e.Variants))
 		for i, v := range e.Variants {
@@ -75,13 +75,24 @@ func (c *Checker) typ(e ast.Type) Type {
 	return Typ[Invalid]
 }
 
+// languageResult reports whether e names the language's own Result,
+// which no program has declared one of its own in place of.
+func (c *Checker) languageResult(e *ast.NamedType) bool {
+	if e.Pkg != nil || e.Name.Name != "Result" {
+		return false
+	}
+
+	_, declared := c.scope.LookupParent("Result")
+	return declared == nil
+}
+
 // namedType resolves a name to a type. Result<T, E> is the one name
 // written with type arguments that the language itself knows, unless
 // the program declares a Result of its own, which shadows it as any
 // declaration shadows a predeclared name. A qualified name, io.Error,
 // is looked up in the imported package.
 func (c *Checker) namedType(e *ast.NamedType) Type {
-	if _, declared := c.scope.LookupParent("Result"); e.Pkg == nil && e.Name.Name == "Result" && declared == nil {
+	if c.languageResult(e) {
 		if len(e.Args) != 2 {
 			c.errorf(e.Pos(), "Result takes two type arguments: Result<T, E>")
 			return Typ[Invalid]
@@ -92,6 +103,10 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 
 	var obj Object
 	if e.Pkg != nil {
+		if p := c.partNamed(e.Pkg); p != nil && e.Name.Name == "type" && !p.variant {
+			return p.typ // f.type, the type of the field f a loop gives
+		}
+
 		obj = c.qualified(e.Pkg, e.Name)
 	} else {
 		obj = c.lookup(e.Name)
@@ -129,7 +144,7 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 			return Typ[Invalid]
 		}
 
-		return tn.typ
+		return c.refine(tn.typ)
 	}
 
 	return c.instance(e, named)
@@ -157,7 +172,7 @@ func (c *Checker) instance(e *ast.NamedType, named *Named) Type {
 		}
 	}
 
-	if !c.satisfies(named.tparams, targs, e.Pos(), e.Name.Name) {
+	if !c.satisfies(named.tparams, targs, e.Pos(), e.Name.Name) || named.refused { // a refused declaration was reported where it is declared
 		return Typ[Invalid]
 	}
 
@@ -173,27 +188,9 @@ func plural(n int, thing string) string {
 	return strconv.Itoa(n) + " " + thing + "s"
 }
 
-// arrayLen reads an array length, which the grammar limits to an
-// integer literal.
-func (c *Checker) arrayLen(e ast.Expr) int64 {
-	if lit, ok := e.(*ast.BasicLit); ok {
-		if n, err := strconv.ParseInt(lit.Value, 0, 64); err == nil && n >= 0 {
-			return n
-		}
-	}
-
-	c.errorf(e.Pos(), "array length must be a non-negative integer literal")
-	return 0
-}
-
-// params turns parameter declarations into variables. A function body
-// declares them in its scope later (funcBody); a function type never
-// does.
-// params resolves a parameter list and reports whether its last
-// parameter is variadic. A variadic parameter is ...ref any, the type
-// of fmt's arguments, and only a library package declares one, since
-// the compiler writes the function that takes it; a program's own is
-// not supported yet.
+// params turns parameter declarations into variables, and reports
+// whether the last is variadic. A function body declares them in its
+// scope later (funcBody); a function type never does.
 func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 	if len(ps) == 0 {
 		return nil, false
@@ -202,15 +199,11 @@ func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 	vars = make([]*Var, len(ps))
 	for i, p := range ps {
 		var t Type
-		switch {
-		case !p.Dots.IsValid():
-			t = c.typ(p.Type)
-		case !c.pkg.std:
-			c.errorf(p.Dots, "a variadic parameter is not supported yet")
-			t = Typ[Invalid]
-		default:
+		if p.Dots.IsValid() {
 			t = c.variadicType(p.Type)
-			variadic = true
+			variadic = t != Typ[Invalid]
+		} else {
+			t = c.typ(p.Type)
 		}
 
 		name := ""
@@ -219,26 +212,54 @@ func (c *Checker) params(ps []*ast.Param) (vars []*Var, variadic bool) {
 		}
 
 		vars[i] = NewVar(p.Pos(), name, t)
+		vars[i].lent = p.Dots.IsValid() && isBorrow(t)
 	}
 
 	return vars, variadic
 }
 
-// variadicType resolves the type of a variadic parameter, which is any,
-// written ref any or any: the compiler takes each argument by its own
-// type. Another type is reported.
+// variadicType resolves the type of a variadic parameter, as the
+// function's body sees it: ...T is an owned []T, the arguments moved
+// into it, and ...ref T a ref []T, the arguments lent for the call
+// alone. A library's ...ref any, or ...any, is the printing functions'
+// any, whose arguments the compiler takes each by its own type. A
+// ...mut T would lend each argument mut, which no slice can hold apart,
+// and is refused.
 func (c *Checker) variadicType(t ast.Type) Type {
-	if r, ok := t.(*ast.RefType); ok && !r.Mut {
-		t = r.Elem
+	elem, lent := t, false
+	if r, ok := t.(*ast.RefType); ok {
+		if r.Mut {
+			c.errorf(t.Pos(), "a variadic parameter is ...T or ...ref T, not ...mut T: pass a mut slice instead, xs mut []T")
+			return Typ[Invalid]
+		}
+
+		elem, lent = r.Elem, true
 	}
 
-	if n, ok := t.(*ast.NamedType); ok && n.Pkg == nil && n.Name.Name == "any" && len(n.Args) == 0 {
+	if n, ok := elem.(*ast.NamedType); ok && n.Pkg == nil && n.Name.Name == "any" && len(n.Args) == 0 && c.resolve("any") == Universe.Lookup("any") {
+		if !c.pkg.std {
+			c.errorf(t.Pos(), "...ref any is the library's printing functions' alone: a variadic parameter names the type of its arguments, ...T or ...ref T")
+			return Typ[Invalid]
+		}
+
 		c.recordUse(n.Name, Universe.Lookup("any"))
 		return Typ[Any]
 	}
 
-	c.errorf(t.Pos(), "a variadic parameter is ...ref any; the compiler takes each argument by its type")
-	return Typ[Invalid]
+	e := c.typ(elem)
+	if e == Typ[Invalid] {
+		return e
+	}
+
+	if !c.storable(e, "a variadic parameter", t.Pos()) {
+		return Typ[Invalid]
+	}
+
+	if lent {
+		return NewRef(NewSlice(e), false)
+	}
+
+	return NewSlice(e)
 }
 
 // results turns a result list into Unit, one type, or a tuple.
@@ -258,18 +279,30 @@ func (c *Checker) results(rs []ast.Type) Type {
 	return NewTuple(elems...)
 }
 
-// fields turns struct fields into variables; a field with several
-// names, `x, y f64`, becomes one variable per name.
-func (c *Checker) fields(fs []*ast.Field) []*Var {
+// fields turns struct or trait fields into variables; a field with
+// several names, `x, y f64`, becomes one variable per name. A struct
+// field's default, one per name, goes in the package's table of
+// defaults, which the variable names by index, and is checked once the
+// constants are (checkDefaults); a field of a type that holds a type
+// parameter, an embedded one and a trait's take none.
+func (c *Checker) fields(fs []*ast.Field, defaults bool) []*Var {
 	var vars []*Var
 	seen := NewScope(nil)
 	for _, f := range fs {
 		t := c.typ(f.Type)
-		for _, name := range f.Names {
+		given := f.Defaults != nil && c.defaultsFit(f, t, defaults)
+
+		for i, name := range f.Names {
 			v := NewField(name.Pos(), name.Name, t)
 			v.pkg = c.pkg // the package that declares the field decides who may name it, whatever type is declared over the struct
 			if old := seen.Insert(v); old != nil {
 				c.errorf(name.Pos(), "duplicate field "+name.Name)
+			}
+
+			if given {
+				c.pkg.defaults = append(c.pkg.defaults, f.Defaults.Values[i])
+				v.def = int32(len(c.pkg.defaults))
+				c.fieldDefaults = append(c.fieldDefaults, pendingDefault{x: f.Defaults.Values[i], typ: t, file: c.fileIndex})
 			}
 
 			c.recordDef(name, v)
@@ -280,11 +313,47 @@ func (c *Checker) fields(fs []*ast.Field) []*Var {
 	return vars
 }
 
+// defaultsFit reports whether the defaults written after a field may
+// be its defaults, and refuses them when not: one for each name, on a
+// struct's field with names, of a type that holds no type parameter.
+func (c *Checker) defaultsFit(f *ast.Field, t Type, defaults bool) bool {
+	d := f.Defaults
+	switch {
+	case !defaults:
+		c.errorf(d.Assign, "a trait field takes no default: the type that implements the trait gives the field its value")
+	case len(f.Names) == 0:
+		c.errorf(d.Assign, "an embedded field takes no default")
+	case len(d.Values) != len(f.Names):
+		c.errorf(d.Assign, "a default for each field: "+plural(len(f.Names), "name")+" but "+plural(len(d.Values), "default"))
+	case holdsTypeParam(t):
+		c.errorf(d.Assign, "a field of type "+t.String()+" takes no default: no constant has every type a type parameter stands for")
+	default:
+		return true
+	}
+
+	return false
+}
+
+// holdsTypeParam reports whether t is a type parameter or holds one.
+func holdsTypeParam(t Type) bool {
+	held := false
+	walkTypes(t, func(t Type) {
+		_, ok := t.(*TypeParam)
+		held = held || ok
+	})
+
+	return held
+}
+
 // variantFields resolves the field types of each variant declaration
 // into the variant objects, which were created when the names were.
 func (c *Checker) variantFields(vs []*ast.Variant, variants []*Variant) {
 	for i, v := range vs {
-		fields, _ := c.params(v.Fields)
+		fields, variadic := c.params(v.Fields)
+		if variadic {
+			c.errorf(v.Fields[len(v.Fields)-1].Dots, "a variant's field is not variadic: it holds one value, a slice for many, []T")
+		}
+
 		for j, f := range fields {
 			f.field = true
 			if v.Fields[j].Name != nil {

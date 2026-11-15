@@ -3,7 +3,9 @@
 // license that can be found in the LICENSE file.
 
 // Maps: literals, insertion by index and by Insert, reading a missing
-// key as the zero value, += on an entry, Get, GetMut, Contains, Remove,
+// key as the zero value, += and ++ on an entry, a write through an entry
+// into the map, array or struct it holds, making the entry when its key
+// is new, Get, GetMut, Contains, Remove,
 // Clone, range in insertion order, a tuple as a key, a map declared
 // without a value, and growth with removals.
 
@@ -81,7 +83,28 @@ func main() {
 	reals := map[f64]string{}
 	reals[0.0] = "zero"
 	fmt.Println(reals[-0.0], reals.Contains(0.5))
+
+	seen := map[string]int{}
+	seen["x"]++ // a new entry, counted from zero
+	seen["x"]++
+	seen["y"]--
+	fmt.Println(seen)
+
+	nested := map[string]map[string]int{}
+	nested["a"] = map[string]int{}
+	nested["a"]["b"]++
+	nested["new"]["c"] = 1 // the outer entry is made
+	arrays := map[string][3]int{}
+	arrays["k"][1] = 7
+	arrays["k"][2]++
+	fmt.Println(nested, arrays)
+	holders := map[string]Holder{}
+	holders["h"].xs[0] = 4
+	holders["h"].m["z"]++
+	fmt.Println(holders["h"].xs, holders["h"].m)
 }
+
+struct Holder { xs [2]int; m map[string]int }
 
 func double(m mut map[string]int) {
 	for _, v := range m {

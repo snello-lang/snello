@@ -30,7 +30,8 @@ A few library functions are not written in Snello: the runtime provides them in 
 |---|---|
 | `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader`, `Writer` and `Seeker` traits and `SeekFrom`, `Copy`, `ReadAll`, `ReadFull`, `Discard` |
-| `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers; `OpenFile` with the flags `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_APPEND`, `O_CREATE`, `O_EXCL`, `O_SYNC` and `O_TRUNC`, `ReadFile` and `WriteFile` for bytes; `Stat` and `Lstat` returning a `FileInfo` with `Name`, `Size`, `Mode`, `ModTime` and `IsDir`, `FileMode` with `IsDir`, `IsRegular`, `Perm` and `Type`, `ReadDir` returning `DirEntry` values with `Name`, `IsDir` and `Type`, `Mkdir`, `MkdirAll`, `Rename`, `Getwd`, `Chdir`; the environment, `Getenv`, `LookupEnv`, `Setenv`, `Unsetenv` and `Environ`; `TempDir`, `Getpid` and `Hostname` |
+| `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers; `OpenFile` with the flags `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_APPEND`, `O_CREATE`, `O_EXCL`, `O_SYNC` and `O_TRUNC`, `OpenOptions` with `Open`, `ReadFile` and `WriteFile` for bytes; `Stat` and `Lstat` returning a `FileInfo` with `Name`, `Size`, `Mode`, `ModTime` and `IsDir`, `FileMode` with `IsDir`, `IsRegular`, `Perm` and `Type`, `ReadDir` returning `DirEntry` values with `Name`, `IsDir` and `Type`, `Mkdir`, `MkdirAll`, `Rename`, `Getwd`, `Chdir`; the environment, `Getenv`, `LookupEnv`, `Setenv`, `Unsetenv` and `Environ`; `TempDir`, `Getpid` and `Hostname` |
+| `encoding/json` | `Marshal` and `Unmarshal` of any type, with no code written for it, over reflection at compile time (chapter 24); `Error` with `Offset` |
 | `path` | `Clean`, `Join`, `Split`, `Dir`, `Base`, `Ext` and `IsAbs` on paths separated by slashes, as pure functions of strings |
 | `path/filepath` | The same seven under the name for the paths of files, and `Separator` |
 | `testing`, `expect` | the test runner and the assertions of chapter 16, imported by test files alone: `testing.Main`, `Run`, `Log`, `Logf`, `Skip`, `TempDir`, `Parallel`, `Loop`, `ResetTimer`, `ReportAllocs`, `Short`; `expect.Equal`, `NotEqual`, `EqualSlice`, `EqualText`, `True`, `False`, `Fail`, `Failf`, `IsSome`, `IsNone`, `IsOk`, `IsErr`, `Contains`, `ContainsElem`, `HasPrefix`, `HasSuffix`, `Len`, `Empty`, `Golden`, `Panics`, `PanicsWith`, each a panic the runner catches through `testing.Catch`, with the file, line, expression and operands the compiler hands them |
@@ -106,6 +107,12 @@ func log(path ref string, line ref string) Result<(), io.Error> {
 	f.WriteString(line)?
 	return f.Close()
 }
+```
+
+`os.OpenOptions` says the same with named settings, each a field with a default (chapter 23): `Read` is `true`, `Perm` is `0o666`, and the rest are `false`. `Append` implies `Write`. `Create`, `Truncate` and `Exclusive` need `Write` or `Append`, and `Truncate` cannot go with `Append`, so a file opened for reading alone is never made or emptied; any other combination is an invalid argument.
+
+```go
+f := os.OpenOptions{Append: true, Create: true, Perm: 0o600}.Open(path)?   // the log above
 ```
 
 `O_CREATE|O_EXCL` fails with an error of kind `io.Exists` when the file is there, which is how a program takes a lock file or refuses to overwrite. The flags' numbers are Snello's own, the same on every system, where Go's are the system's and differ between Linux and macOS; a flag the package does not name is an invalid argument. `os.ReadFile(path)` reads a whole file as bytes, into one block of the size the file reports, and `os.WriteFile(path, data, perm)` writes one, beside `ReadToString` and `WriteString` for text.
@@ -284,7 +291,7 @@ fmt.Println(strconv.Quote("a\tb"), strconv.Unquote("\"a\\tb\""), strconv.Unquote
 
 ## fmt
 
-`fmt` is the one package the compiler writes itself: `Println` and its kin take arguments of any type, `func Println(args ...ref any)` as `std/fmt/fmt.snello` declares it, and the compiler chooses how to print each one from its type, so no formatting happens at run time and the format of `Printf` is read when the program is compiled. `...ref any` is the library's spelling for that; a program's own function takes arguments of the types it names. `Fprint`, `Fprintln` and `Fprintf` write where they are told, to any value implementing `io.Writer`, lent `mut`:
+`fmt` is the one package the compiler writes itself: `Println` and its kin take arguments of any type, `func Println(args ...ref any)` as `std/fmt/fmt.snello` declares it, and the compiler chooses how to print each one from its type, so no formatting happens at run time and the format of `Printf` is read when the program is compiled. `...ref any` is the library's spelling for that; a program's own variadic function takes arguments of the type it names, `...T` or `...ref T`, as chapter 22 says. `Fprint`, `Fprintln` and `Fprintf` write where they are told, to any value implementing `io.Writer`, lent `mut`:
 
 ```go
 fmt.Fprintln(mut os.Stdout(), "to", "stdout", 1)                       // to stdout 1

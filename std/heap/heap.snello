@@ -12,78 +12,94 @@
 // element is less than its parent, so the least is at index 0. Push and
 // Pop restore that order by moving one element along a path of the
 // tree, so each costs O(log n) comparisons; From builds a heap from a
-// slice in O(n), Floyd's construction. This is the layout and algorithm
-// of Go's container/heap and Rust's BinaryHeap, and Pop is Rust's:
-// Floyd's bottom-up descent, about half the comparisons of the textbook
-// one. Elements that compare Equal come out in no particular order: a
-// heap is not a stable sort.
+// slice in O(n), Floyd's construction. Pop takes the element that
+// replaces the root down to a leaf and back up, Floyd's bottom-up
+// descent, which makes about half the comparisons of comparing it
+// with a child at every level. Elements that compare Equal come out in
+// no particular order: a heap is not a stable sort.
 package heap
 
-// A Reverse holds a value and orders the other way round: a
-// Heap<Reverse<T>> hands back the greatest first. The value is the field
-// V, read and written as any field is.
+// A Heap owns its elements and hands them back least first, by the Cmp
+// of T. It is moved, or lent with ref and mut; when it goes out of
+// scope, the elements still in it are dropped. The zero value, var h
+// Heap<T>, is an empty heap ready for Push, as New's is.
 //
-//	h := heap.New<heap.Reverse<int>>()
-//	h.Push(heap.Reverse<int>{V: 3})
-struct Reverse<T: Ord> impl Eq, Ord {
-	V T
-}
-
-// Cmp orders a Reverse the other way round from its value.
-func (r ref Reverse<T>) Cmp(o ref Reverse<T>) Ordering {
-	return o.V.Cmp(ref r.V)
-}
-
-// A Heap owns its elements and hands them back least first. It is
-// moved, or lent with ref and mut; when it goes out of scope, the
-// elements still in it are dropped. The zero value, var h Heap<T>, is
-// an empty heap ready for Push.
+//	h := heap.New<int>()
+//	h.Push(3)
+//	h.Push(1)
+//	least := h.Pop() // Some(1)
 struct Heap<T: Ord> {
 	items []T
 }
 
-// New returns an empty heap.
+// A Reverse holds a value and orders the other way round from it, so
+// that a Heap<Reverse<T>> hands back the greatest first. The value is
+// the field V, read and written as any field is; a Reverse is Eq and
+// Ord whenever T is Ord.
+//
+//	h := heap.New<heap.Reverse<int>>()
+//	h.Push(heap.Reverse<int>{V: 3})
+//	greatest := h.Pop() // Some(Reverse{V: 3})
+struct Reverse<T: Ord> impl Eq, Ord {
+	V T
+}
+
+// New returns an empty heap of T, which allocates nothing until the
+// first Push. The type is given when nothing infers it.
+//
+//	h := heap.New<string>()
 func New<T: Ord>() Heap<T> {
 	return Heap<T>{}
 }
 
-// From returns a heap holding the elements of xs, which it takes and
-// reorders in place, in O(n): each parent, from the last to the root,
-// is moved down below its children until it is not greater than
-// either. That costs less than pushing the elements one by one, which
-// is O(n log n).
+// From returns a heap holding the elements of xs. It takes xs, owned,
+// and reorders it in place into the heap's order, allocating nothing:
+// each parent, from the last to the root, is moved down below its
+// children until it is not greater than either. That is O(n)
+// comparisons, less than the O(n log n) of pushing the elements one by
+// one.
+//
+//	h := heap.From([]int{4, 2, 9}) // h.Peek() is Some(2)
 func From<T: Ord>(xs []T) Heap<T> {
 	h := Heap<T>{items: xs}
 	for i := len(h.items)/2 - 1; i >= 0; i-- {
-		h.down(i)
+		h.siftDown(i)
 	}
 
 	return h
 }
 
-// Len returns how many elements the heap holds.
+// Len returns how many elements the heap holds, in O(1).
 func (h ref Heap<T>) Len() int {
 	return len(h.items)
 }
 
-// IsEmpty reports whether the heap holds no element.
+// IsEmpty reports whether the heap holds no element, in O(1).
 func (h ref Heap<T>) IsEmpty() bool {
 	return len(h.items) == 0
 }
 
-// Clear drops every element and keeps the memory for the next Push.
+// Clear drops every element the heap holds and keeps the memory of its
+// slice for the next Push, so that a heap reused in a loop does not
+// allocate again.
 func (h mut Heap<T>) Clear() {
 	h.items.Clear()
 }
 
-// Push adds v to the heap, which owns it from then on.
+// Push adds v to the heap, which takes v, owned, and keeps it until Pop
+// returns it or the heap is dropped. It costs O(log n) comparisons, and
+// an allocation when the heap's slice is full and grows.
 func (h mut Heap<T>) Push(v T) {
 	h.items.Push(v)
-	h.up(len(h.items) - 1)
+	h.siftUp(len(h.items) - 1)
 }
 
-// Pop removes the least element and returns it, or None when the heap
-// is empty.
+// Pop removes the least element and returns it, owned by the caller
+// from then on, or None when the heap is empty. Of elements that
+// compare Equal, any one may come first. It costs O(log n)
+// comparisons and allocates nothing.
+//
+//	v := h.Pop() ?? return
 func (h mut Heap<T>) Pop() T? {
 	n := len(h.items) - 1
 	if n < 0 {
@@ -92,19 +108,41 @@ func (h mut Heap<T>) Pop() T? {
 
 	h.items.Swap(0, n)
 	v := h.items.Pop()
-	h.bottom()
+	h.siftRootDown()
 	return v
 }
 
-// bottom puts the element at the root in its place after a Pop moved
-// the last element there. That element is one of the greatest, so it
-// belongs near a leaf: it goes down the path of lesser children to the
-// bottom, one comparison a level, between the two children, and then
-// up while it is less than its parent, which is rarely more than a
-// level or two. The textbook descent compares it with a child at every
-// level too, twice the comparisons, which counts when Cmp is costly, as
-// for strings.
-func (h mut Heap<T>) bottom() {
+// Peek lends the least element without removing it, or returns None
+// when the heap is empty. The borrow lasts as long as the heap's, so
+// the heap is not changed while it lives. It costs O(1).
+//
+//	if top := h.Peek() {
+//		fmt.Println(top)
+//	}
+func (h ref Heap<T>) Peek() ref T? {
+	if len(h.items) == 0 {
+		return None
+	}
+
+	return Some(ref h.items[0])
+}
+
+// Cmp orders a Reverse the other way round from its value: it returns
+// Less when o's value is less than r's, Greater when it is greater, and
+// Equal when they are equal. Both are lent, read only.
+func (r ref Reverse<T>) Cmp(o ref Reverse<T>) Ordering {
+	return o.V.Cmp(ref r.V)
+}
+
+// siftRootDown puts the element at the root in its place after a Pop
+// moved the last element there. That element is one of the greatest,
+// so it belongs near a leaf: it goes down the path of lesser children
+// to the bottom, one comparison a level, between the two children, and
+// then up while it is less than its parent, which is rarely more than a
+// level or two. Comparing it with a child at every level on the way
+// down would make twice the comparisons, which counts when Cmp is
+// costly, as for strings.
+func (h mut Heap<T>) siftRootDown() {
 	n := len(h.items)
 	i := 0
 	child := 1
@@ -123,22 +161,12 @@ func (h mut Heap<T>) bottom() {
 		i = child
 	}
 
-	h.up(i)
+	h.siftUp(i)
 }
 
-// Peek lends the least element without removing it, or None when the
-// heap is empty. The borrow lasts as long as the heap's.
-func (h ref Heap<T>) Peek() ref T? {
-	if len(h.items) == 0 {
-		return None
-	}
-
-	return Some(ref h.items[0])
-}
-
-// up moves the element at i towards the root while it is less than its
-// parent.
-func (h mut Heap<T>) up(i int) {
+// siftUp moves the element at i towards the root while it is less than
+// its parent.
+func (h mut Heap<T>) siftUp(i int) {
 	for i > 0 {
 		parent := (i - 1) / 2
 		if h.items[i].Cmp(h.items[parent]) != Less {
@@ -150,9 +178,9 @@ func (h mut Heap<T>) up(i int) {
 	}
 }
 
-// down moves the element at i away from the root while one of its
+// siftDown moves the element at i away from the root while one of its
 // children is less than it, swapping it with the lesser child.
-func (h mut Heap<T>) down(i int) {
+func (h mut Heap<T>) siftDown(i int) {
 	n := len(h.items)
 	for {
 		least := 2*i + 1

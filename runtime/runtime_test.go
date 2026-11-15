@@ -916,10 +916,10 @@ func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
 
 // probeLines runs a probe built against the whole runtime with input
 // on its standard input and returns its output lines.
-func probeLines(t *testing.T, name, src, input string, args ...string) []string {
+func probeLines(t *testing.T, name, src, input string) []string {
 	t.Helper()
 	bin := buildProbe(t, filepath.Join(t.TempDir(), name), src)
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command(bin)
 	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.Output()
 	if err != nil {

@@ -33,14 +33,6 @@
 // handle without its value.
 package sync
 
-// An acell is what the handles on one value share: the value, and the
-// count of handles, changed atomically so that handles in different
-// tasks may be cloned and dropped at the same moment.
-struct acell<T> {
-	count i64
-	value T
-}
-
 // An Arc is a handle on a shared value, one of its owners, that may
 // be in another task than its clones. It is moved, cloned for another
 // owner and lent with ref; when it goes out of scope the count goes
@@ -49,92 +41,27 @@ struct acell<T> {
 // only as a ref, so no link can be set through a handle, and a cycle
 // of handles that is never released cannot be built without a lock,
 // whose own T is Send.
+//
+//	total := sync.NewArc(sync.NewMutex(0))
+//	spawn work(total.Clone()) // the task holds a handle of its own
 struct Arc<T> impl Clone, Drop {
-	cell     int          // the address of the shared cell, which no one handle owns
-	cellType [0]*acell<T> // holds nothing: it gives the handle the cell's type, so that an Arc is Send as its value is, and a pointer, so that a value may hold an Arc of its own type
-}
-
-// NewArc puts v in a new shared cell and returns the first handle on
-// it.
-func NewArc<T>(v T) Arc<T> {
-	return Arc<T>{cellType: [0]*acell<T>{}, cell: rawNew<acell<T>>(acell<T>{count: 1, value: v})}
-}
-
-// Get lends the value for reading, for as long as the Arc is lent.
-func (a ref Arc<T>) Get() ref T {
-	return ref rawMut<acell<T>, Arc<T>>(a.cell, a).value
-}
-
-// Clone returns another handle on the same value; the value is not
-// copied.
-func (a ref Arc<T>) Clone() Arc<T> {
-	atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, 1)
-	return Arc<T>{cellType: [0]*acell<T>{}, cell: a.cell}
-}
-
-// Count returns how many handles the value has, this one included.
-// Another task may clone or drop a handle right after, so the count is
-// a reading, not a promise.
-func (a ref Arc<T>) Count() i64 {
-	return atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, 0) // read as one step, as the adds that change it write
-}
-
-// Drop gives up this handle: the value and its cell are dropped with
-// the last one.
-func (a mut Arc<T>) Drop() {
-	if atomicAdd(mut rawMut<acell<T>, Arc<T>>(a.cell, a).count, -1) == 0 {
-		_ = rawTake<acell<T>>(a.cell) // the last handle: the cell is freed and the value dropped with it
-	}
+	cell     int            // the address of the shared cell, which no one handle owns
+	cellType [0]*arcCell<T> // holds nothing: it gives the handle the cell's type, so that an Arc is Send as its value is, and a pointer, so that a value may hold an Arc of its own type
 }
 
 // A Counter is an int that several tasks add to as one step each, a
-// count of requests, a generation, a size: Add, Load, Store and
+// count of requests, a generation, a size: Add, Load, Store, Swap and
 // CompareAndSwap take a ref, since the counter itself is what makes a
 // change through a ref safe, as a lock is, and each is one instruction
 // on a word of the runtime's that the handle names, so a Counter is
-// Send and a package variable may hold one, var hits = sync.NewCounter(0),
-// which every task reaches and none can race on. It has no zero value:
-// one comes only from NewCounter.
+// Send and a package variable may hold one, which every task reaches
+// and none can race on. It has no zero value: one comes only from
+// NewCounter.
+//
+//	var hits = sync.NewCounter(0)
+//	hits.Add(1)
 struct Counter impl Drop {
-	h int
-}
-
-// NewCounter returns a Counter holding v.
-func NewCounter(v int) Counter {
-	return Counter{h: cellNew(i64(v))}
-}
-
-// Add adds d to the count as one step and returns the new count.
-func (c ref Counter) Add(d int) int {
-	return int(cellAdd(c.h, i64(d)))
-}
-
-// Load returns the count as one step, which no Add or Store tears.
-func (c ref Counter) Load() int {
-	return int(cellLoad(c.h))
-}
-
-// Store sets the count.
-func (c ref Counter) Store(v int) {
-	cellStore(c.h, i64(v))
-}
-
-// CompareAndSwap sets the count to new when it is old, as one step,
-// and reports whether it did: how one task of many takes a turn.
-func (c ref Counter) CompareAndSwap(old int, new int) bool {
-	return cellSwap(c.h, i64(old), i64(new))
-}
-
-// Swap sets the count to v as one step and returns the count it
-// replaced: how one task of many takes what was counted and leaves
-// nothing.
-func (c ref Counter) Swap(v int) int {
-	return int(cellExchange(c.h, i64(v)))
-}
-
-// Drop frees the word.
-func (c mut Counter) Drop() {
-	cellFree(c.h)
+	handle int
 }
 
 // An Atomic<T> holds a value of any type that several tasks read and
@@ -146,48 +73,96 @@ func (c mut Counter) Drop() {
 // of any size. T is Send, since the value is shared between tasks,
 // Clone, since Load hands out a copy, and Eq, for CompareAndSwap. The
 // methods take a ref, as a lock's do, so a package variable may hold
-// one, var state = sync.NewAtomic("idle"), reached by every task and
-// raced on by none; a value that is only a count is a Counter, which
-// adds in one instruction.
+// one, reached by every task and raced on by none; a value that is
+// only a count is a Counter, which adds in one instruction.
+//
+//	var state = sync.NewAtomic("idle".Clone())
+//	state.Store("busy".Clone())
 struct Atomic<T: Send + Clone + Eq> {
-	m Mutex<T>
+	mutex Mutex<T>
 }
 
-// NewAtomic returns an Atomic holding v.
-func NewAtomic<T: Send + Clone + Eq>(v T) Atomic<T> {
-	return Atomic<T>{m: NewMutex(v)}
+// A Mutex owns a value and lends it for changing to one task at a
+// time: Lock waits for the lock, takes it, and returns a Guard holding
+// a mut borrow of the value; the lock is given back when the Guard is
+// dropped. A Mutex is moved, or lent with ref, which is how an
+// Arc<Mutex<T>> lends it to every task holding a handle. When it goes
+// out of scope the value is dropped with it.
+//
+//	m := sync.NewMutex([]int{})
+//	g := m.Lock()
+//	g.Get().Push(1) // the lock is given back when g goes
+struct Mutex<T: Send> impl Drop {
+	box     int        // the address of the box, the lock and the value
+	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
 }
 
-// Load returns a copy of the value.
-func (a ref Atomic<T>) Load() T {
-	g := a.m.Lock()
-	return g.Get().Clone()
+// A Guard holds a lock and the mut borrow of the value under it, from
+// Mutex.Lock or RwLock.Write until the Guard is dropped, which gives
+// the lock back. Get lends the value: *g.Get() += 1 changes a number,
+// g.Get().Push(v) a slice. A Guard is tied to the lock it came from,
+// as any borrow is, and cannot be stored or sent.
+struct Guard<T> impl Drop {
+	lock  int
+	value mut T
 }
 
-// Store replaces the value, dropping the old one.
-func (a ref Atomic<T>) Store(v T) {
-	g := a.m.Lock()
-	*g.Get() = v
+// An RwLock owns a value and lends it either for reading to any number
+// of tasks at once, with Read, or for changing to one task alone, with
+// Write; a writer waits for the readers to finish, and readers wait
+// for a writer, including one that is waiting, so that readers cannot
+// keep a writer out for ever. Like a Mutex it is moved or lent with
+// ref, and drops its value with itself.
+//
+//	l := sync.NewRwLock(config)
+//	r := l.Read()
+//	fmt.Println(r.Get().name)
+struct RwLock<T: Send> impl Drop {
+	box     int        // the address of the box, the lock and the value
+	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
 }
 
-// Swap replaces the value and returns the old one, moved out from
-// under the lock with v left in its place.
-func (a ref Atomic<T>) Swap(v T) T {
-	g := a.m.Lock()
-	return replace(mut *g.Get(), v)
+// A ReadGuard holds a lock for reading and the ref borrow of the value
+// under it, from RwLock.Read until the ReadGuard is dropped, which
+// gives the lock back. Like a Guard it cannot be stored or sent.
+struct ReadGuard<T> impl Drop {
+	lock  int
+	value ref T
 }
 
-// CompareAndSwap replaces the value with new when it equals old, as
-// one step, and reports whether it did; new is taken either way, and
-// dropped when the value was not old.
-func (a ref Atomic<T>) CompareAndSwap(old ref T, new T) bool {
-	g := a.m.Lock()
-	if !g.Get().Eq(old) {
-		return false
-	}
+// A Once runs one function once: the first Do runs it, and every Do
+// after, in any task, returns without running anything, after the
+// first has finished. It is lent with ref, which is how an Arc shares
+// it.
+//
+//	once := sync.NewOnce()
+//	once.Do(func() { setup() })
+struct Once {
+	done Mutex<bool>
+}
 
-	*g.Get() = new
-	return true
+// A WaitGroup counts the tasks a program waits for: Add counts tasks
+// in, Done counts one out, and Wait returns once the count is zero. It
+// is a handle on a counter the runtime keeps, shared through an Arc:
+// Clone gives another handle on the same count, which a task is given
+// before the spawn so that it counts itself out on the one the program
+// waits on, and the last handle to go frees the counter. Add, Done and
+// Wait borrow the handle; Go counts a task in, spawns it and counts it
+// out in one call.
+//
+//	wg := sync.NewWaitGroup()
+//	wg.Spawn(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
+//	wg.Wait()
+struct WaitGroup impl Clone {
+	counter Arc<waitCounter>
+}
+
+// An arcCell is what the handles on one value share: the value, and the
+// count of handles, changed atomically so that handles in different
+// tasks may be cloned and dropped at the same moment.
+struct arcCell<T> {
+	count i64
+	value T
 }
 
 // A box holds the value a lock protects, with the handle of the
@@ -199,123 +174,270 @@ struct box<T> {
 	value T
 }
 
-// A Mutex owns a value and lends it for changing to one task at a
-// time: Lock waits for the lock, takes it, and returns a Guard holding
-// a mut borrow of the value; the lock is given back when the Guard is
-// dropped. A Mutex is moved, or lent with ref, which is how an
-// Arc<Mutex<T>> lends it to every task holding a handle. When it goes
-// out of scope the value is dropped with it.
-struct Mutex<T: Send> impl Drop {
-	box     int        // the address of the box, the lock and the value
-	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
+// A waitCounter is the runtime's lock a WaitGroup counts with, freed
+// when the last handle on it drops it.
+struct waitCounter impl Drop {
+	lock int
 }
 
-// NewMutex puts v behind a new lock.
+// NewArc puts v in a new shared cell and returns the first handle on
+// it, with a count of one. It takes v, owned: the value lives in the
+// cell until the last handle is dropped. It allocates the cell, once;
+// Clone allocates nothing.
+//
+//	a := sync.NewArc("shared".Clone())
+func NewArc<T>(v T) Arc<T> {
+	return Arc<T>{cellType: [0]*arcCell<T>{}, cell: rawNew<arcCell<T>>(arcCell<T>{count: 1, value: v})}
+}
+
+// Get lends the value for reading, for as long as the Arc is lent.
+// Every handle, in any task, may lend it at once; none copies it.
+//
+//	n := a.Get().Len()
+func (a ref Arc<T>) Get() ref T {
+	return ref rawMut<arcCell<T>, Arc<T>>(a.cell, a).value
+}
+
+// Clone returns another handle on the same value and counts it with one
+// atomic add: the value is not copied and nothing is allocated. The
+// clone may be moved into another task when T is Send.
+func (a ref Arc<T>) Clone() Arc<T> {
+	atomicAdd(mut rawMut<arcCell<T>, Arc<T>>(a.cell, a).count, 1)
+	return Arc<T>{cellType: [0]*arcCell<T>{}, cell: a.cell}
+}
+
+// Count returns how many handles the value has, this one included.
+// Another task may clone or drop a handle right after, so the count is
+// a reading, not a promise.
+func (a ref Arc<T>) Count() i64 {
+	return atomicAdd(mut rawMut<arcCell<T>, Arc<T>>(a.cell, a).count, 0) // read as one step, as the adds that change it write
+}
+
+// Drop gives up this handle, with one atomic add: the value and its
+// cell are dropped with the last one, in whichever task drops it. The
+// compiler calls it when the Arc goes out of scope.
+func (a mut Arc<T>) Drop() {
+	if atomicAdd(mut rawMut<arcCell<T>, Arc<T>>(a.cell, a).count, -1) == 0 {
+		_ = rawTake<arcCell<T>>(a.cell) // the last handle: the cell is freed and the value dropped with it
+	}
+}
+
+// NewCounter returns a Counter holding v. It allocates the counter's
+// word, which Drop frees.
+//
+//	requests := sync.NewCounter(0)
+func NewCounter(v int) Counter {
+	return Counter{handle: cellNew(i64(v))}
+}
+
+// Add adds d, which may be negative, to the count as one step and
+// returns the count after it. It is one atomic instruction and never
+// blocks.
+//
+//	id := next.Add(1)
+func (c ref Counter) Add(d int) int {
+	return int(cellAdd(c.handle, i64(d)))
+}
+
+// Load returns the count as one step, which no Add or Store tears. It
+// never blocks.
+func (c ref Counter) Load() int {
+	return int(cellLoad(c.handle))
+}
+
+// Store sets the count to v as one step. It never blocks.
+func (c ref Counter) Store(v int) {
+	cellStore(c.handle, i64(v))
+}
+
+// CompareAndSwap sets the count to new when it is old, as one step,
+// and reports whether it did: how one task of many takes a turn. It
+// never blocks.
+//
+//	if turn.CompareAndSwap(0, 1) {
+//		// this task won the turn
+//	}
+func (c ref Counter) CompareAndSwap(old int, new int) bool {
+	return cellSwap(c.handle, i64(old), i64(new))
+}
+
+// Swap sets the count to v as one step and returns the count it
+// replaced: how one task of many takes what was counted and leaves
+// nothing. It never blocks.
+//
+//	pending := counted.Swap(0)
+func (c ref Counter) Swap(v int) int {
+	return int(cellExchange(c.handle, i64(v)))
+}
+
+// Drop frees the counter's word. The compiler calls it when the Counter
+// goes out of scope.
+func (c mut Counter) Drop() {
+	cellFree(c.handle)
+}
+
+// NewAtomic returns an Atomic holding v, which it takes, owned. It
+// allocates the lock and the box that holds v.
+//
+//	flag := sync.NewAtomic(false)
+func NewAtomic<T: Send + Clone + Eq>(v T) Atomic<T> {
+	return Atomic<T>{mutex: NewMutex(v)}
+}
+
+// Load returns a copy of the value, made by its Clone under the lock:
+// the caller owns the copy, and a later Store does not change it. It
+// blocks while another task holds the lock.
+func (a ref Atomic<T>) Load() T {
+	g := a.mutex.Lock()
+	return g.Get().Clone()
+}
+
+// Store replaces the value with v, which it takes, owned, and drops the
+// old one, under the lock. It blocks while another task holds the lock.
+func (a ref Atomic<T>) Store(v T) {
+	g := a.mutex.Lock()
+	*g.Get() = v
+}
+
+// Swap replaces the value with v, which it takes, owned, and returns
+// the old one, moved out from under the lock with no copy. It blocks
+// while another task holds the lock.
+//
+//	last := state.Swap("idle".Clone())
+func (a ref Atomic<T>) Swap(v T) T {
+	g := a.mutex.Lock()
+	return replace(mut *g.Get(), v)
+}
+
+// CompareAndSwap replaces the value with new when it equals old, by
+// its Eq, as one step, and reports whether it did. It reads old, lent,
+// and takes new, owned, either way, dropping it when the value was not
+// old. It blocks while another task holds the lock.
+//
+//	if state.CompareAndSwap("idle", "busy".Clone()) {
+//		// this task moved the state from idle to busy
+//	}
+func (a ref Atomic<T>) CompareAndSwap(old ref T, new T) bool {
+	g := a.mutex.Lock()
+	if !g.Get().Eq(old) {
+		return false
+	}
+
+	*g.Get() = new
+	return true
+}
+
+// NewMutex puts v behind a new lock. It takes v, owned: the Mutex holds
+// it until it is dropped, and lends it only through Lock. It allocates
+// the lock and the box that holds v, once.
+//
+//	m := sync.NewMutex(0)
 func NewMutex<T: Send>(v T) Mutex<T> {
 	return Mutex<T>{boxType: [0]*box<T>{}, box: rawNew<box<T>>(box<T>{lock: newLock(), value: v})}
 }
 
 // Lock waits until no other task holds the lock, takes it, and returns
-// the Guard that holds it.
+// the Guard that holds it and lends the value for changing; the lock is
+// given back when the Guard is dropped. It blocks, parking the task,
+// while another task holds the lock; a task that calls Lock again while
+// its own Guard lives waits for ever.
+//
+//	g := m.Lock()
+//	*g.Get() += 1
 func (m ref Mutex<T>) Lock() Guard<T> {
-	return guard(rawMut<box<T>, Mutex<T>>(m.box, m))
+	return lockBox(rawMut<box<T>, Mutex<T>>(m.box, m))
 }
 
 // Drop releases the runtime's lock and drops the value with the box.
+// The compiler calls it when the Mutex goes out of scope, when no Guard
+// on it lives any more.
 func (m mut Mutex<T>) Drop() {
 	b := rawTake<box<T>>(m.box)
 	freeLock(b.lock)
 }
 
-// A Guard holds a lock and the mut borrow of the value under it, from
-// Lock or Write until the Guard is dropped. Get lends the value: *g.Get()
-// += 1 changes a number, g.Get().Push(v) a slice. A Guard is tied to
-// the lock it came from, as any borrow is, and cannot be stored or
-// sent.
-struct Guard<T> impl Drop {
-	lock int
-	v    mut T
-}
-
-// Get lends the value for changing, for as long as the Guard is lent.
+// Get lends the value under the lock for changing, for as long as the
+// Guard is lent.
+//
+//	g.Get().Push(4)
 func (g mut Guard<T>) Get() mut T {
-	return mut g.v
+	return mut g.value
 }
 
-// Drop gives the lock back.
+// Drop gives the lock back, waking a task that waits for it. The
+// compiler calls it when the Guard goes out of scope.
 func (g mut Guard<T>) Drop() {
 	unlock(g.lock)
 }
 
-// An RwLock owns a value and lends it either for reading to any number
-// of tasks at once, with Read, or for changing to one task alone, with
-// Write; a writer waits for the readers to finish, and readers wait
-// for a writer. Like a Mutex it is moved or lent with ref, and drops
-// its value with itself.
-struct RwLock<T: Send> impl Drop {
-	box     int        // the address of the box, the lock and the value
-	boxType [0]*box<T> // holds nothing: it gives the lock the box's type, so that it is Send as its value is
-}
-
-// NewRwLock puts v behind a new lock.
+// NewRwLock puts v behind a new lock for readers and writers. It takes
+// v, owned: the RwLock holds it until it is dropped, and lends it only
+// through Read and Write. It allocates the lock and the box that holds
+// v, once.
+//
+//	l := sync.NewRwLock([]int{1, 2, 3})
 func NewRwLock<T: Send>(v T) RwLock<T> {
 	return RwLock<T>{boxType: [0]*box<T>{}, box: rawNew<box<T>>(box<T>{lock: newRwLock(), value: v})}
 }
 
-// Read waits until no task holds the lock for writing, takes it for
-// reading, and returns the ReadGuard that holds it.
+// Read waits until no task holds the lock for writing, or waits to,
+// takes it for reading, and returns the ReadGuard that holds it and
+// lends the value for reading; other readers may hold it at the same
+// time. It blocks while a writer holds the lock or waits for it; a task
+// that calls Read again while its own ReadGuard lives may wait for ever
+// behind a writer.
+//
+//	r := l.Read()
+//	n := len(r.Get())
 func (l ref RwLock<T>) Read() ReadGuard<T> {
 	h := rawMut<box<T>, RwLock<T>>(l.box, l).lock
 	lockShared(h)
-	return ReadGuard<T>{lock: h, v: ref rawMut<box<T>, RwLock<T>>(l.box, l).value} // lent once the lock is held, so that it is the value as the lock keeps it
+	return ReadGuard<T>{lock: h, value: ref rawMut<box<T>, RwLock<T>>(l.box, l).value} // lent once the lock is held, so that it is the value as the lock keeps it
 }
 
 // Write waits until no task holds the lock at all, takes it for
-// writing, and returns the Guard that holds it.
+// writing, and returns the Guard that holds it and lends the value for
+// changing. It blocks while any reader or writer holds the lock.
+//
+//	w := l.Write()
+//	w.Get().Push(4)
 func (l ref RwLock<T>) Write() Guard<T> {
-	return guard(rawMut<box<T>, RwLock<T>>(l.box, l))
+	return lockBox(rawMut<box<T>, RwLock<T>>(l.box, l))
 }
 
 // Drop releases the runtime's lock and drops the value with the box.
+// The compiler calls it when the RwLock goes out of scope, when no
+// guard on it lives any more.
 func (l mut RwLock<T>) Drop() {
 	b := rawTake<box<T>>(l.box)
 	freeLock(b.lock)
 }
 
-// A ReadGuard holds a lock for reading and the ref borrow of the value
-// under it, from Read until the ReadGuard is dropped.
-struct ReadGuard<T> impl Drop {
-	lock int
-	v    ref T
-}
-
-// Get lends the value for reading, for as long as the ReadGuard is
-// lent.
+// Get lends the value under the lock for reading, for as long as the
+// ReadGuard is lent.
 func (g ref ReadGuard<T>) Get() ref T {
-	return g.v
+	return g.value
 }
 
-// Drop gives the lock back.
+// Drop gives the lock for reading back; the last reader to go wakes a
+// writer that waits. The compiler calls it when the ReadGuard goes out
+// of scope.
 func (g mut ReadGuard<T>) Drop() {
 	unlockShared(g.lock)
 }
 
-// A Once runs one function once: the first Do runs it, and every Do
-// after, in any task, returns without running anything, after the
-// first has finished. It is lent with ref, which is how an Arc shares
-// it.
-struct Once {
-	done Mutex<bool>
-}
-
-// NewOnce returns a Once that has run nothing yet.
+// NewOnce returns a Once that has run nothing yet. It allocates the
+// lock it runs under.
 func NewOnce() Once {
 	return Once{done: NewMutex(false)}
 }
 
 // Do runs f if no Do on this Once has run a function before, and waits
-// for that run to finish otherwise. A Do called from inside f waits
-// forever.
+// for that run to finish otherwise: it blocks while another task's Do
+// runs its f. f is run at most once over the life of the Once, in the
+// task of the first Do. A Do called from inside f waits for ever.
+//
+//	once.Do(func() { fmt.Println("once") })
 func (o ref Once) Do(f func()) {
 	g := o.done.Lock()
 	if !*g.Get() {
@@ -324,117 +446,156 @@ func (o ref Once) Do(f func()) {
 	}
 }
 
-// A WaitGroup counts the tasks a program waits for: Add counts tasks
-// in, Done counts one out, and Wait returns once the count is zero. It
-// is a handle on a counter the runtime keeps, shared through an Arc:
-// Clone gives another handle on the same count, which a task is given
-// before the spawn so that it counts itself out on the one the program
-// waits on, and the last handle to go frees the counter. Add, Done and
-// Wait borrow the handle.
-struct WaitGroup impl Clone {
-	a Arc<counter>
-}
-
-// A counter is the runtime's lock a WaitGroup counts with, freed when
-// the last handle on it drops it.
-struct counter impl Drop {
-	h int
-}
-
-func (c mut counter) Drop() {
-	freeLock(c.h)
-}
-
-// NewWaitGroup returns a WaitGroup counting nothing.
+// NewWaitGroup returns a WaitGroup counting nothing. It allocates the
+// runtime's counter, which the last handle frees.
 func NewWaitGroup() WaitGroup {
-	return WaitGroup{a: NewArc(counter{h: newLock()})}
+	return WaitGroup{counter: NewArc(waitCounter{lock: newLock()})}
 }
 
 // Add adds n, which may be negative, to the count, and reports whether
 // it did: false, with the count left as it was, when the count would go
-// below zero, a Done with no Add before it. Add is called before the
-// task it counts is spawned, so that Wait cannot return between the
-// spawn and the Add.
+// below zero, a Done with no Add before it, or past what an int holds.
+// Add is called before the task it counts is spawned, so that Wait
+// cannot return between the spawn and the Add. A count that reaches
+// zero wakes every task in Wait.
+//
+//	wg.Add(1)
+//	spawn work(wg.Clone())
 func (w ref WaitGroup) Add(n int) bool {
-	return count(w.handle(), n)
+	return count(w.lockHandle(), n)
 }
 
 // Done counts one task out, Add(-1), and reports whether it did: false
 // when the count is zero already.
 func (w ref WaitGroup) Done() bool {
-	return count(w.handle(), -1)
+	return count(w.lockHandle(), -1)
 }
 
-// Wait returns once the count is zero, at once when it already is.
+// Wait returns once the count is zero, at once when it already is; it
+// blocks, parking the task, until then.
 func (w ref WaitGroup) Wait() {
-	wait(w.handle())
+	wait(w.lockHandle())
 }
 
-// Go runs f(a) in a task of its own, counted in the group: one is
-// added before the task starts and counted out when f returns, so a
-// Wait waits for it. The task's value a is moved into the task, as the
-// argument of a spawned call is, so it must be Send; what the task needs
-// goes there, a handle or a tuple of them, since a closure stored in a
-// func value captures copies alone, and f itself captures nothing but
-// copies.
+// Spawn runs f(a) in a task of its own, as spawn f(a) does, counted in
+// the group: one is added before the task starts and counted out when f
+// returns, so a Wait waits for it. The task's value a is moved into the
+// task, as the argument of a spawned call is, so it must be Send; what
+// the task needs goes there, a handle or a tuple of them, since a
+// closure stored in a func value captures copies alone, and f itself
+// captures nothing but copies. It returns at once, without waiting for
+// the task, and allocates the task and a handle on the group for it.
 //
-//	wg.Go(func(h sync.Arc<Counter>) { h.Get().Add(1) }, hits.Clone())
+//	wg.Spawn(func(h sync.Arc<Counter>) { h.Get().Add(1) }, hits.Clone())
 //	wg.Wait()
-func (w ref WaitGroup) Go<A: Send>(f func(A), a A) {
+func (w ref WaitGroup) Spawn<A: Send>(f func(A), a A) {
 	w.Add(1)
-	spawn counted(w.Clone(), f, a)
+	spawn runCounted(w.Clone(), f, a)
 }
 
-// counted runs f on a and counts it out of the group.
-func counted<A: Send>(done WaitGroup, f func(A), a A) {
+// Drop frees the runtime's lock, when the last WaitGroup handle drops
+// the counter.
+func (c mut waitCounter) Drop() {
+	freeLock(c.lock)
+}
+
+// lockHandle returns the handle of the runtime's lock the group counts
+// with.
+func (w ref WaitGroup) lockHandle() int {
+	return w.counter.Get().lock
+}
+
+// runCounted runs f on a, then counts one task out of the group done.
+func runCounted<A: Send>(done WaitGroup, f func(A), a A) {
 	f(a)
 	done.Done()
 }
 
-// handle returns the runtime's lock of the group.
-func (w ref WaitGroup) handle() int {
-	return w.a.Get().h
-}
-
-// guard takes the lock of the box b, for writing, and returns the Guard
-// holding it and the value: the one function that steps from the box a
-// lock lends to the mut of its value, for Lock and Write alike.
-func guard<T>(b mut box<T>) Guard<T> {
+// lockBox takes the lock of the box b, for writing, and returns the
+// Guard holding it and the value: the one function that steps from the
+// box a lock lends to the mut of its value, for Lock and Write alike.
+func lockBox<T>(b mut box<T>) Guard<T> {
 	lock(b.lock)
-	return Guard<T>{lock: b.lock, v: mut b.value}
+	return Guard<T>{lock: b.lock, value: mut b.value}
 }
 
-// The compiler writes these for this package alone, the steps sharing
-// the language refuses elsewhere, which the count and the lock make
-// safe here: rawNew moves a cell or a box into a block of its own and
-// returns its address; rawMut lends the block at an address, a mut
-// through a ref, for as long as the handle is lent, its fields read in
-// place, the value changed only under the lock and the count only by an
-// atomic add; and rawTake moves the cell or box out and frees the
-// block, for the last handle.
+// The functions below without a body are written by the compiler, for
+// this package alone: the steps of sharing the language refuses
+// elsewhere, which the count and the lock make safe here.
+
+// rawNew moves a cell or a box into a block of its own and returns its
+// address.
 func rawNew<C>(c C) int
+
+// rawMut lends the block at an address, a mut through a ref, for as
+// long as the handle h is lent: its fields are read in place, the value
+// changed only under the lock and the count only by an atomic add.
 func rawMut<C, H>(at int, h ref H) mut C
+
+// rawTake moves the cell or box out of its block and frees the block,
+// for the last handle.
 func rawTake<C>(at int) C
 
-// The runtime provides these. A lock is held as an int, as a file is,
-// the runtime's own handle on it, never 0, and freed by the Mutex,
-// RwLock or WaitGroup counter that owns it.
+// The functions below without a body are the runtime's. A lock is held
+// as an int, as a file is, the runtime's own handle on it, never 0, and
+// freed by the Mutex, RwLock or WaitGroup counter that owns it.
+
+// newLock makes a lock held by one task at a time and returns its
+// handle.
+func newLock() int
+
+// newRwLock makes a lock for readers and writers and returns its
+// handle.
+func newRwLock() int
+
+// freeLock frees the lock h, which no task holds or waits on.
+func freeLock(h int)
+
+// lock waits until no other task holds the lock h, and takes it.
+func lock(h int)
+
+// unlock gives the lock h back, waking a task that waits for it.
+func unlock(h int)
+
+// lockShared waits until no writer holds the lock h or waits for it,
+// and takes it for reading.
+func lockShared(h int)
+
+// unlockShared gives back the lock h held for reading.
+func unlockShared(h int)
+
+// count adds n to the count of the WaitGroup lock h, waking the tasks
+// that wait when it reaches zero, and reports whether it did: a count
+// that would go below zero, or past what an int holds, is left as it
+// was.
+func count(h int, n int) bool
+
+// wait waits until the count of the WaitGroup lock h is zero.
+func wait(h int)
+
 // atomicAdd adds d to n as one step that no other task's add can
 // interleave with, and returns the new value.
-func newLock() int
-func newRwLock() int
-func freeLock(h int)
-func lock(h int)
-func unlock(h int)
-func lockShared(h int)
-func unlockShared(h int)
-func count(h int, n int) bool
-func wait(h int)
 func atomicAdd(n mut i64, d i64) i64
+
+// cellNew makes a Counter's word holding v and returns its handle.
 func cellNew(v i64) int
+
+// cellLoad reads the word h as one step.
 func cellLoad(h int) i64
+
+// cellStore writes v to the word h as one step.
 func cellStore(h int, v i64)
+
+// cellAdd adds d to the word h as one step and returns the new value.
 func cellAdd(h int, d i64) i64
+
+// cellSwap writes new to the word h when it holds old, as one step,
+// and reports whether it did.
 func cellSwap(h int, old i64, new i64) bool
+
+// cellExchange writes v to the word h as one step and returns the
+// value it replaced.
 func cellExchange(h int, v i64) i64
+
+// cellFree frees the word h.
 func cellFree(h int)

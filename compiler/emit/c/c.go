@@ -43,6 +43,7 @@ type Emitter struct {
 	protos   bytes.Buffer // function prototypes
 	helpers  bytes.Buffer // generated functions, such as the printers of composite types
 	body     bytes.Buffer // function definitions
+	scratch  []byte       // the statements saveBefore holds aside, reused so that holding them allocates nothing
 	boxWords int          // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	tmp      int
 	used     map[types.Object]bool
@@ -52,6 +53,7 @@ type Emitter struct {
 	loops    []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
 	jumped   map[string]bool                 // the labels a continue has jumped to, the ones written
 	lazy     map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	consts   map[*types.Const]string         // the constants declared in a function, each a static of the file under a name of its own
 	lazies   []owned                         // the lazy variables owning something, dropped when main returns if they were made
 	making   *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
 	captured map[*types.Var]string           // inside a closure: how each captured variable is reached
@@ -63,6 +65,7 @@ type Emitter struct {
 	defers   []deferred                      // the deferred calls of the function being written, in order
 	seq      int                             // values and deferred calls registered so far, ordering what a return releases
 	subst    map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
 	generics map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
 	files    map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
 	external map[*types.Var]bool             // the library variables the runtime defines, read through their runtime declaration
@@ -184,7 +187,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	out.WriteString("int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n" + finish + "\treturn sn_finish();\n}\n")
+	put(&out, "int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -217,7 +220,10 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 	switch named.Underlying().(type) {
 	case *types.Struct, *types.Enum:
 		name := lower.NamedName(named)
-		e.state[name] = declared
+		if e.state[name] == undeclared { // a constant before the declaration may have defined the struct already, which declaring it again would write twice
+			e.state[name] = declared
+		}
+
 		put(&e.decls, "typedef struct ", name, " ", name, ";\n")
 	default:
 		e.define(named, d.Pos())
@@ -237,6 +243,10 @@ func (e *Emitter) typeDecl(d *ast.TypeDecl) {
 // program itself leaked.
 func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 	for i, name := range d.Names {
+		if d.Const && name.Name == "_" {
+			continue // its value was checked, and nothing reads it
+		}
+
 		obj := e.info.Defs[name]
 		if v, ok := obj.(*types.Var); ok {
 			e.names.globals[v] = true
@@ -297,13 +307,14 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 }
 
 // staticValue writes x as a C initializer a static variable of type t
-// can have: a number, character, boolean or string literal, the
-// negation of a number, or a struct literal of such, with the live flag
+// can have: a constant's value as the checker folded it, a number,
+// character, boolean or string literal, the negation of a number, or a
+// struct literal of such, with the live flag
 // of a Drop type set. A string is written as the fields of a sn_string
 // over the C literal, since the SN_STR macro is a compound literal,
 // which C does not allow at file scope. It is empty for anything else.
 func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
-	switch x := x.(type) {
+	switch x := lower.Folded(e.info, x).(type) {
 	case *ast.BasicLit:
 		if x.Kind != token.STRING {
 			return e.literal(x)
@@ -344,6 +355,15 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 			parts = append(parts, "."+lower.Ident(key.Name)+" = "+v)
 		}
 
+		for _, i := range lower.LeftOut(st, x) { // a field left out takes its default
+			v := e.staticValue(st.Default(i), st.Field(i).Type())
+			if v == "" {
+				return ""
+			}
+
+			parts = append(parts, "."+lower.Ident(st.Field(i).Name())+" = "+v)
+		}
+
 		if hasDrop(t) {
 			parts = append(parts, ".sn_live = true")
 		}
@@ -374,6 +394,8 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	name := lower.FuncName(fn)
 	if recv := sig.Recv(); recv != nil {
 		name = lower.MethodName(recv.Type(), d.Name.Name)
+	} else if owner := lower.TypeOwner(e.info, d); owner != nil { // func Point.Parse: named after its type, as a method is
+		name = lower.MethodName(owner, d.Name.Name)
 	}
 
 	e.writeFunction(name, sig, d.Body, d.Pos())
@@ -395,6 +417,7 @@ func newEmitter(info *types.Info, file *token.File, fs []*ast.File) *Emitter {
 		files:    make(map[*ast.FuncDecl]*token.File),
 		external: make(map[*types.Var]bool),
 		lazy:     make(map[*types.Var]bool),
+		consts:   make(map[*types.Const]string),
 		done:     make(map[string]bool),
 		names:    newNaming(fs),
 		jumped:   make(map[string]bool),
@@ -451,6 +474,7 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 		e.own(e.localName(recv), recv.Type())
 	}
 
+	framed, stays := lower.FramedVariadic(e.info, sig, body)
 	for _, p := range sig.Params() {
 		if p.Name() == "" {
 			continue
@@ -459,6 +483,10 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 		e.names.declared[e.localName(p)] = true
 		if !e.used[p] {
 			e.line("(void)" + e.localName(p) + ";")
+		}
+
+		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
+			e.line("sn_slice_unframe((sn_slice *)&" + e.localName(p) + ", sizeof *" + e.localName(p) + ".ptr);")
 		}
 
 		e.own(e.localName(p), p.Type())

@@ -102,6 +102,53 @@ func anyHoldsBorrow(vs []*Var) bool {
 	return false
 }
 
+// HoldsMutBorrow reports whether a value of type t carries a mut
+// borrow: a mut, or a struct, enum, option, result, tuple, array or
+// slice with one in a part. A call given such a value may change what
+// the borrow points to.
+func HoldsMutBorrow(t Type) bool {
+	if !holdsBorrow(t) {
+		return false // a type that holds no borrow, the most, is answered from the named type's cache
+	}
+
+	switch t := t.(type) {
+	case *Ref:
+		return t.mut
+	case *Slice:
+		return HoldsMutBorrow(t.elem)
+	case *Option:
+		return HoldsMutBorrow(t.elem)
+	case *Result:
+		return HoldsMutBorrow(t.val) || HoldsMutBorrow(t.err)
+	case *Array:
+		return HoldsMutBorrow(t.elem)
+	case *Tuple:
+		return slices.ContainsFunc(t.elems, HoldsMutBorrow)
+	case *Struct:
+		return anyHoldsMutBorrow(t.fields)
+	case *Enum:
+		for _, v := range t.variants {
+			if anyHoldsMutBorrow(v.fields) {
+				return true
+			}
+		}
+	case *Named:
+		return HoldsMutBorrow(t.Underlying()) // a type holding a borrow never holds itself: a slice of one is refused, and an option of one has no size
+	}
+
+	return false
+}
+
+func anyHoldsMutBorrow(vs []*Var) bool {
+	for _, v := range vs {
+		if HoldsMutBorrow(v.typ) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // holdsBorrow caches the answer on the named type, as isCopy does, with
 // the same provisional answer for a declaration that reaches itself.
 func (n *Named) holdsBorrow() bool {
@@ -199,7 +246,7 @@ func (c *Checker) checkSources(name string, sig *Signature, pos token.Pos) {
 
 	n := 0
 	for _, p := range sig.params {
-		if holdsBorrow(p.typ) {
+		if holdsBorrow(p.typ) && !p.lent { // a variadic ...ref parameter is never the source
 			n++
 		}
 	}
@@ -346,11 +393,7 @@ func (c *Checker) returned(e ast.Expr, op operand) {
 // source finds the places the borrows in e come from and checks each,
 // in every branch of a value chosen at run time.
 func (c *Checker) source(e ast.Expr, pos token.Pos) {
-	if vs, ok := branches(e); ok {
-		for _, v := range vs {
-			c.source(v, pos)
-		}
-
+	if eachBranch(e, func(v ast.Expr) { c.source(v, pos) }) {
 		return
 	}
 
@@ -439,12 +482,12 @@ func (c *Checker) calleeOf(e *ast.CallExpr) Object {
 }
 
 // borrowedParam is the index of the one parameter that holds a borrow,
-// or -1. A generic function may take a borrow through a type parameter
+// a variadic ...ref one aside, since no borrow of it is returned, or -1. A generic function may take a borrow through a type parameter
 // instead, wrap(ref s), so with no borrowed parameter the first one of
 // a type parameter's type is the source.
 func borrowedParam(sig *Signature) int {
 	for i, p := range sig.params {
-		if holdsBorrow(p.typ) {
+		if holdsBorrow(p.typ) && !p.lent {
 			return i
 		}
 	}
@@ -475,7 +518,13 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return
 	}
 
-	if lent && kind != placeBorrowed && !c.isParam(v) {
+	if v.lent {
+		c.errorf(pos, lentReturn(v)) // a closure's own return too, where v is no parameter of its signature
+		return
+	}
+
+	throughBorrow := kind == placeBorrowed || kind == placeIndexed && isBorrow(v.typ) // ref ys[0], ys a borrow: what ys borrows, not ys
+	if lent && !throughBorrow && !c.isParam(v) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name)
 		return
 	}
@@ -498,6 +547,11 @@ func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen [
 		v = param // what the caller owns behind a parameter is reached through the parameter
 	}
 
+	if v.lent {
+		report(pos, lentReturn(v))
+		return
+	}
+
 	if c.isParam(v) {
 		c.sourceParam(v, pos, report)
 		return
@@ -516,7 +570,13 @@ func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen [
 		return true
 	})
 
-	if !found && !holdsBorrow(v.typ) {
+	switch {
+	case found:
+	case f.temporary[v]:
+		report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped when its statement ends")
+	case f.outer != token.NoPos && v.pos < f.outer: // a closure's body: the variable is the enclosing function's, captured
+		report(pos, "cannot return a borrow of "+v.name+" from a closure: "+v.name+" is captured, and a closure's returned borrow is tied to its parameters")
+	case !holdsBorrow(v.typ):
 		report(pos, "cannot return a borrow of local "+v.name) // else a borrow with no record to follow: from a call, or built in a literal
 	}
 }
@@ -525,12 +585,21 @@ func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen [
 // that is not the function's source.
 func (c *Checker) sourceParam(v *Var, pos token.Pos, report func(token.Pos, string)) {
 	switch {
+	case v.lent:
+		report(pos, lentReturn(v))
 	case c.sig.recv == v && isBorrow(v.typ):
 	case c.sig.recv == v || !holdsBorrow(v.typ):
 		report(pos, "cannot return a borrow of local "+v.name) // taken by value, it dies at return
 	case c.sig.recv != nil && isBorrow(c.sig.recv.typ):
 		report(pos, "cannot return a borrow of "+v.name+": a method's returned borrow is tied to its receiver")
 	}
+}
+
+// lentReturn refuses a returned borrow of v, a variadic ...ref
+// parameter, whose arguments the caller lays out for the call alone,
+// from the function's body or from a closure inside it.
+func lentReturn(v *Var) string {
+	return "cannot return a borrow of " + v.name + ": the arguments of a variadic ...ref parameter are lent for the call alone"
 }
 
 // carriesBorrow reports whether an operand of a literal can bring a

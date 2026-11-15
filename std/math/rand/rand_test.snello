@@ -6,8 +6,9 @@ package rand_test
 
 import ("expect"; "math/rand"; "sync"; "testing")
 
-// The numbers a generator seeded with 1 and 2 gives are the ones Go's
-// rand.New(rand.NewPCG(1, 2)) gives, in the same order.
+// The numbers a generator seeded with 1 and 2 gives are the reference
+// PCG-DXSM sequence for that state, high word 1 and low word 2, in the
+// same order, through every method that draws.
 func TestSequence() {
 	r := rand.New(1, 2)
 	expect.Equal(ref r.Int(), ref 4969059760275911952)
@@ -29,7 +30,8 @@ func TestSequence() {
 
 // A bound of 2^62 + 1 leaves a quarter of the products among those that
 // must be drawn again: twelve numbers take fifteen draws, three of them
-// redraws, and the numbers and the one after them are Go's.
+// redraws, and the numbers and the one after them are the reference
+// sequence's.
 func TestRedraw() {
 	r := rand.New(7, 7)
 	got := []int{}
@@ -39,9 +41,12 @@ func TestRedraw() {
 		1087528441643187924, 1391914115312055587, 896635662835410158, 2599000595625689478,
 		2400664504216027150, 1553466786317107959, 897975817217785052, 2221123842056430110,
 	})
+
 	expect.Equal(ref r.Int(), ref 3708917314281127625)
 }
 
+// Two generators of one seed give one sequence, and a seed a word apart
+// gives numbers that never meet it.
 func TestSameSeedSameNumbers() {
 	a := rand.New(42, 7)
 	b := rand.New(42, 7)
@@ -70,6 +75,8 @@ func TestCopyReplays() {
 	expect.NotEqual(ref a, ref b)
 }
 
+// draw takes a number from a generator lent to it, so that two calls go
+// on one sequence.
 func draw(r mut rand.Rand) int { return r.Int() }
 
 // A bound that leaves nothing to draw from gives None and draws
@@ -103,8 +110,8 @@ func TestPermTooLarge() {
 	expect.Equal(ref r.Int(), ref 4969059760275911952) // and no number was drawn for it
 }
 
-// isPerm reports whether p holds each of 0 to len(p)-1 once.
-func isPerm(p ref []int) bool {
+// isPermutation reports whether p holds each of 0 to len(p)-1 once.
+func isPermutation(p ref []int) bool {
 	seen := make([]bool, 0, len(p))
 	for i := 0; i < len(p); i++ { seen.Push(false) }
 	for _, v := range p {
@@ -115,6 +122,9 @@ func isPerm(p ref []int) bool {
 	return true
 }
 
+// Every draw lies in its range, for bounds small, odd, a power of two
+// and the largest int, from a seeded generator and from the runtime's
+// source alike.
 func TestBounds() {
 	r := rand.New(3, 4)
 	bounds := []int{1, 2, 3, 7, 10, 255, 256, 1000003, 4294967296, 4294967297, 9223372036854775807}
@@ -135,11 +145,11 @@ func TestBounds() {
 		expect.True(r.Int() >= 0 && r.Int64() >= 0 && rand.Int() >= 0 && rand.Int64() >= 0)
 	}
 
-	expect.True(isPerm(ref r.Perm(100)))
-	expect.True(isPerm(ref rand.Perm(100)))
+	expect.True(isPermutation(ref r.Perm(100)))
+	expect.True(isPermutation(ref rand.Perm(100)))
 	xs := rand.Perm(50)
 	rand.Shuffle(mut xs)
-	expect.True(isPerm(ref xs))
+	expect.True(isPermutation(ref xs))
 }
 
 // Every face of a die comes up about as often as another: 60,000 rolls
@@ -214,18 +224,21 @@ func TestFromTasks() {
 	expect.Equal(ref total, ref 160000)
 }
 
+// Int from a seeded generator.
 func BenchmarkSeeded() {
 	r := rand.New(1, 2)
 	sum := 0
 	for testing.Loop() { sum += r.Int() & 1 }
 }
 
+// IntN of a bound that is no power of two, from a seeded generator.
 func BenchmarkIntN() {
 	r := rand.New(1, 2)
 	sum := 0
 	for testing.Loop() { sum += r.IntN(1000003) ?? 0 }
 }
 
+// Int from the runtime's source.
 func BenchmarkUnseeded() {
 	sum := 0
 	for testing.Loop() { sum += rand.Int() & 1 }

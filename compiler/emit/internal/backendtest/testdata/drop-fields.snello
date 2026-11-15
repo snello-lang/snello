@@ -1,0 +1,59 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A value whose type implements Drop gives up a field only by leaving
+// another in its place: replace and take, then a clone and a borrow of
+// a variant's part, each with the value's Drop seeing a field that
+// holds a value when the value goes; and replace and take of an owned
+// pointer, in a field, through a borrow of its struct, lent itself, and
+// an optional one, each the place of the pointer and not of what it
+// points at.
+
+package main
+
+import "fmt"
+
+struct S impl Drop { name string; p *int }
+
+func (s mut S) Drop() { fmt.Println("drop", s.name, *s.p) }
+
+enum E impl Drop { A(name string); B }
+
+func (e mut E) Drop() {
+	match e {
+		A(n) => fmt.Println("drop A", n),
+		B => fmt.Println("drop B"),
+	}
+}
+
+struct H { p *int; q *int? }
+
+func swap(h mut H) *int { return replace(mut h.p, &20) }
+
+func swapPtr(p mut *int) *int { return replace(mut p, &30) }
+
+func main() {
+	s := S{name: "first".Clone(), p: &1}
+	old := replace(mut s.name, "second".Clone())
+	fmt.Println("replaced", old)
+	q := replace(mut s.p, &2)
+	fmt.Println("pointer", *q)
+	t := S{name: "taken".Clone(), p: &3}
+	fmt.Println("took", take(mut t.name))
+	c := t.name.Clone()
+	fmt.Println("clone", c)
+	e := A("payload".Clone())
+	match ref e {
+		A(n) => fmt.Println("lent", n),
+		B => {},
+	}
+
+	h := H{p: &10, q: Some(&11)}
+	fmt.Println("through a borrow", *swap(mut h), *h.p)
+	r := &40
+	fmt.Println("a pointer lent", *swapPtr(mut r), *r)
+	if q := take(mut h.q) {
+		fmt.Println("taken option", *q, h.q == None)
+	}
+}

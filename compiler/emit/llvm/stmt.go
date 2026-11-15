@@ -95,6 +95,10 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 func (e *Emitter) declStmt(d *ast.VarDecl) {
 	if d.Const {
 		for i, name := range d.Names {
+			if name.Name == "_" {
+				continue // its value was checked, and nothing reads it
+			}
+
 			k := e.info.Defs[name].(*types.Const)
 			sym := lower.ObjName(k) + "." + strconv.Itoa(len(e.localConst))
 			value := ""
@@ -141,12 +145,17 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 
 // assign writes x := v, x = v and x op= v.
 func (e *Emitter) assign(s *ast.AssignStmt) {
+	if s.Tok != token.DEFINE {
+		defer e.forget(e.orderAssignment(s.Lhs, s.Rhs))
+	}
+
 	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
 		e.assignMany(s)
 		return
 	}
 
 	lhs, rhs := s.Lhs[0], s.Rhs[0]
+
 	switch s.Tok {
 	case token.DEFINE, token.ASSIGN:
 		t := e.target(lhs, s.Tok)
@@ -163,21 +172,116 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 			return
 		}
 
-		p := e.placeAt(e.lvalue(lhs), e.typeOf(lhs))
-		ir := e.irType(t, lhs.Pos())
-		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
-			r := e.spill(e.valueTo(rhs, t))
-			e.rt("sn_string_append", "void", value{"ptr", p}, value{"ptr", r})
-			if !e.isLent(rhs) {
-				e.dropOf(r, t, s.TokPos)
-			}
-
+		if lower.OldReadFirst(e.info, lhs, rhs, s.Tok) {
+			e.changedCompound(s, t)
 			return
 		}
 
-		old := e.load(ir, p)
-		v := e.arith(s.Tok.Binary(), old, e.valueTo(rhs, t), t, s.TokPos)
-		e.store(v, p)
+		ir := e.irType(t, lhs.Pos())
+		var v value
+		early := lower.ThroughMap(e.info, lhs) // a map's entry, which reaching the place makes: the value is evaluated before, and sees no entry
+		if early {
+			v = e.valueTo(rhs, t)
+		}
+
+		p := e.placeAt(e.lvalue(lhs), e.typeOf(lhs))
+		if !early && !isString(t) {
+			old := e.load(ir, p)
+			e.store(e.arith(s.Tok.Binary(), old, e.valueTo(rhs, t), t, s.TokPos), p)
+			return
+		}
+
+		if isString(t) {
+			if !early {
+				v = e.valueTo(rhs, t)
+			}
+
+			e.appendString(p, v, rhs, s.TokPos)
+			return
+		}
+
+		old := e.load(ir, p) // a map's entry, its value already evaluated
+		e.store(e.arith(s.Tok.Binary(), old, v, t, s.TokPos), p)
+	}
+}
+
+// changedCompound writes x op= v when v may change what x reads. The
+// old value is read first, left to right, a copy of a string, then v is
+// evaluated, and only then is the place reached again and given the
+// result: a value that grows the slice or the map x is in, or replaces
+// the string x holds, leaves no pointer to the place behind, and
+// xs[0] += grow(mut xs) adds to the element as it was, in the slice as
+// it is. A map's entry is made by the store, after the value.
+func (e *Emitter) changedCompound(s *ast.AssignStmt, t types.Type) {
+	lhs, rhs := s.Lhs[0], s.Rhs[0]
+	old := e.expr(lhs)
+	if isString(t) {
+		old = e.rt("sn_string_clone", "%sn_string", old)
+	}
+
+	v := e.valueTo(rhs, t)
+	p := e.placeAt(e.lvalue(lhs), e.typeOf(lhs))
+	if !isString(t) {
+		e.store(e.arith(s.Tok.Binary(), old, v, t, s.TokPos), p)
+		return
+	}
+
+	e.dropOf(p, t, s.TokPos)
+	e.store(old, p)
+	e.appendString(p, v, rhs, s.TokPos)
+}
+
+// appendString writes s += v for the string at p and the string v, the
+// value of rhs: in place when s owns the room, else into a block twice
+// as large; v is dropped after unless rhs lent it.
+func (e *Emitter) appendString(p string, v value, rhs ast.Expr, pos token.Pos) {
+	r := e.spill(v)
+	e.rt("sn_string_append", "void", value{"ptr", p}, value{"ptr", r})
+	if !e.isLent(rhs) {
+		e.dropOf(r, types.Typ[types.String], pos)
+	}
+}
+
+// orderAssignment evaluates what an assignment evaluates before it
+// reaches its places, in this order: the index and key operands of each
+// place in lhs, left to right, then the values rhs. The values are
+// written before the places, so a place's operand whose order against a
+// value is visible is saved first in a slot, which expr reads back
+// while the assignment is written: m[tick()] = tick() puts the first
+// tick's value under the key, and ys[i] = f() writes ys at i as it was
+// before f changed it; with several places, every operand is saved
+// before any store. A map's entry is made by the store, after the
+// values. It returns what it saved, for forget.
+func (e *Emitter) orderAssignment(lhs, rhs []ast.Expr) []ast.Expr {
+	var opsSmall [8]ast.Expr
+	ops := opsSmall[:0]
+	for _, place := range lhs {
+		lower.PlaceOperands(place, func(op ast.Expr) { ops = append(ops, op) })
+	}
+
+	several := len(lhs) > 1 // each store is made in turn, and may change a later place's operand: i, xs[i] = 2, 5 writes xs at the old i
+	var saved []ast.Expr
+	for k, op := range ops {
+		if lower.IsConstant(e.info, op) || !several && !lower.OrderedBefore(e.info, op, ops[k+1:]) && !lower.OrderedBefore(e.info, op, rhs) {
+			continue
+		}
+
+		if e.fn.pre == nil {
+			e.fn.pre = make(map[ast.Expr]string)
+		}
+
+		e.fn.pre[op] = e.spill(e.expr(op))
+		saved = append(saved, op)
+	}
+
+	return saved
+}
+
+// forget drops what orderAssignment saved, once the assignment is
+// written.
+func (e *Emitter) forget(saved []ast.Expr) {
+	for _, x := range saved {
+		delete(e.fn.pre, x)
 	}
 }
 
@@ -407,12 +511,45 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.pop(s.Body.Rbrace)
 }
 
+// partsLoop writes a loop over a type's parts once for each part of the
+// type the instance being written gives it, each copy a scope of its
+// own with the part's field named and its type in place of f.type; a
+// copy that returns leaves the next to a block of its own.
+func (e *Emitter) partsLoop(s *ast.RangeStmt, part *types.Part, copies []lower.PartCopy) {
+	outer := e.subst
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	for _, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		e.push(false)
+		e.stmts(s.Body.List)
+		if !e.fn.terminated {
+			e.pop(s.Body.Rbrace)
+		} else {
+			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+			e.label(e.block("parts.next"))
+		}
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+}
+
 // rangeStmt writes for k, v := range x over a slice, an array, a
 // string, a map or a channel: an index loop with the key and value
 // bound at the top of each pass. A value reached through a mut borrow
 // is bound as a pointer into the collection. An owned collection is
-// used up by the loop and dropped after it.
+// used up by the loop and dropped after it. A loop over a type's parts
+// is written out per part by partsLoop.
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	if part, copies := lower.PartsOf(e.info, s, e.subst, e.partCopy); part != nil {
+		e.partsLoop(s, part, copies)
+		return
+	}
+
 	e.push(false)
 	p, t, held := e.consumed(s.X)
 	if held != "" {
@@ -693,8 +830,19 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		vals = append(vals, e.expr(x))
 	}
 
-	for _, a := range call.Args {
-		save(a)
+	lent := lower.DeferredLent(e.info, call)
+	var vars []*types.Var // the variables arguments are lent from, reached through their addresses when the call runs
+	var varsAt []string
+	for i, a := range call.Args {
+		if i >= len(lent) || lent[i] == nil {
+			save(a)
+			continue
+		}
+
+		if v := lent[i]; !slices.Contains(vars, v) {
+			vars = append(vars, v)
+			varsAt = append(varsAt, e.varSlot(v, a.Pos()))
+		}
 	}
 
 	var recv *types.Var // a receiver lent, reached through its address
@@ -702,7 +850,7 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr: // a method: its receiver, by value or by address
 		switch {
-		case e.packageOf(fun.X) != nil:
+		case e.packageOf(fun.X) != nil, lower.TypeFunc(e.info, fun): // a function of a package or of a type: no receiver to save
 		case !e.lentReceiver(fun):
 			save(fun.X)
 		default:
@@ -731,6 +879,10 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		members = append(members, "ptr")
 	}
 
+	for range vars {
+		members = append(members, "ptr")
+	}
+
 	typ := "{ " + strings.Join(members, ", ") + " }"
 	rec := e.slot(typ)
 	put(&e.fn.allocas, "  store i1 false, ptr ", rec, ", align 8\n") // the flag, first in the record, cleared at the entry
@@ -738,8 +890,14 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		e.store(v, e.gep(typ, rec, i+1))
 	}
 
+	at := len(vals) + 1 // the first address after the saved values
 	if recv != nil {
-		e.store(value{"ptr", recvAt}, e.gep(typ, rec, len(vals)+1))
+		e.store(value{"ptr", recvAt}, e.gep(typ, rec, at))
+		at++
+	}
+
+	for i := range vars {
+		e.store(value{"ptr", varsAt[i]}, e.gep(typ, rec, at+i))
 	}
 
 	e.closures++
@@ -749,8 +907,18 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 			e.fn.pre[x] = e.gep(typ, "%rec", i+1)
 		}
 
+		if recv != nil || len(vars) > 0 {
+			e.fn.captured = make(map[*types.Var]string, len(vars)+1)
+		}
+
+		at := len(vals) + 1
 		if recv != nil {
-			e.fn.captured = map[*types.Var]string{recv: e.load("ptr", e.gep(typ, "%rec", len(vals)+1)).s}
+			e.fn.captured[recv] = e.load("ptr", e.gep(typ, "%rec", at)).s
+			at++
+		}
+
+		for i, v := range vars {
+			e.fn.captured[v] = e.load("ptr", e.gep(typ, "%rec", at+i)).s
 		}
 
 		e.scoped(call.Pos(), func() { // the call's own temporaries are dropped with it

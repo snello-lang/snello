@@ -1,0 +1,26 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a loop over a type's parts is written out once for each part,
+// each copy a block of its own, so no break or continue leaves it and it
+// holds no defer or select, whose statements are written once per
+// function. Fix: test the part with an if, and defer or select outside
+// the loop or in a function it calls.
+
+package p
+
+func walk<T>(v ref T) {
+	match T {
+		struct => {
+			for f := range fields(T) {
+				if f.name == "skip" {
+					continue           // ERROR "continue cannot leave a loop over a type's parts"
+				}
+
+				defer print(f.name)    // ERROR "defer cannot be inside a loop over a type's parts"
+			}
+		}
+		_ => {},
+	}
+}

@@ -4,7 +4,10 @@
 
 package types
 
-import "github.com/snello-lang/snello/compiler/token"
+import (
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
+)
 
 // BuiltinID identifies a predeclared function.
 type BuiltinID int
@@ -20,6 +23,10 @@ const (
 	BuiltinMax
 	BuiltinClose
 	BuiltinReplace
+	BuiltinFields
+	BuiltinVariants
+	BuiltinAttr
+	BuiltinRefuse
 )
 
 // An Object is a named entity of a program: a type name, a variable,
@@ -63,8 +70,10 @@ type TypeName struct {
 type Var struct {
 	object
 	field  bool
-	global bool // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
-	kept   bool // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
+	global bool  // a package variable: reached from every task, so never assigned, lent as mut or moved out of (borrow.go, access)
+	kept   bool  // a parameter whose argument the callee keeps: Push stores its element, or a body that stores it (keep.go)
+	lent   bool  // a variadic ...ref parameter, whose arguments the caller lays out for the call alone: no borrow of it leaves the function, from its body or a closure's
+	def    int32 // a struct field's default, 1 + its index in its package's defaults, or 0 for none: an index fits beside the flags, so no variable grows
 	keptBy *keptBy
 }
 
@@ -79,7 +88,7 @@ type keptBy struct {
 // A Const is a named constant; true and false, and const declarations.
 type Const struct {
 	object
-	value string // the literal's text, typed by context
+	val Constant // the folded value; unknown for a struct constant, whose fields have theirs, and after an error
 }
 
 // A Func is a function or a method; its type is a *Signature. A method
@@ -88,14 +97,20 @@ type Const struct {
 type Func struct {
 	object
 	origin  *Func
-	derived bool   // written by the compiler from the type's fields, for a standard trait the type listed without the method
-	trait   *Trait // for a default method a type inherited: the trait, or instance of one, it came from
+	derived bool          // written by the compiler from the type's fields, for a standard trait the type listed without the method
+	static  bool          // a function of a type, func Point.Parse(...): it takes no value of the type
+	trait   *Trait        // for a default method a type inherited: the trait, or instance of one, it came from
+	decl    *ast.FuncDecl // a generic function's declaration, whose body the questions a type answers walk (reach.go); it fits in the bytes the fields above leave free
 }
 
 // FromTrait returns the trait a type inherited the default method from,
 // an instance of a generic trait with its arguments, or nil for a
 // method the type declared itself.
 func (f *Func) FromTrait() *Trait { return f.trait }
+
+// Static reports whether fn is a function of a type, func Point.Parse,
+// which takes no value of it, rather than a method.
+func (f *Func) Static() bool { return f.static }
 
 // Derived reports whether the method was derived from its type's
 // fields rather than declared: Eq, Cmp, Hash or Clone of a type that
@@ -119,6 +134,29 @@ type Builtin struct {
 	object
 	id BuiltinID
 }
+
+// A Part is a field or a variant that a loop over a type's parts
+// gives, for f := range fields(T): known to the compiler alone, named
+// in the loop and never a value. A field's type is a type parameter of
+// the loop's own, f.type, which a backend binds to the field's type in
+// each copy of the loop it writes; a variant has none.
+type Part struct {
+	object
+	of      Type  // the type parameter whose part it is
+	in      *Part // the variant a field of a variant belongs to, or nil
+	variant bool
+}
+
+// Of returns the type parameter whose part, or whose variant's field,
+// the part is.
+func (p *Part) Of() Type { return p.of }
+
+// In returns the variant a field of a variant belongs to, or nil for a
+// struct's field and a variant.
+func (p *Part) In() *Part { return p.in }
+
+// IsVariant reports whether the part is a variant, from variants(T).
+func (p *Part) IsVariant() bool { return p.variant }
 
 // A PkgName is an imported package, the name before the dot: a
 // package written in Snello, loaded by the importer, or one of the
@@ -148,9 +186,10 @@ func NewField(pos token.Pos, name string, typ Type) *Var {
 	return &Var{object: object{name, typ, pos, nil}, field: true}
 }
 
-// NewConst returns a named constant with the given literal text.
-func NewConst(pos token.Pos, name string, typ Type, value string) *Const {
-	return &Const{object{name, typ, pos, nil}, value}
+// NewConst returns a named constant of the given value, which its
+// declaration's check gives a constant the program declares.
+func NewConst(pos token.Pos, name string, typ Type, val Constant) *Const {
+	return &Const{object: object{name, typ, pos, nil}, val: val}
 }
 
 // NewFunc returns a function or method.
@@ -198,8 +237,18 @@ func (o *object) isObject()      {}
 // IsField reports whether the variable is a struct or variant field.
 func (v *Var) IsField() bool { return v.field }
 
-// Value returns the constant's literal text.
-func (c *Const) Value() string { return c.value }
+// Default returns the default a struct field declares, a constant
+// expression a literal that leaves the field out gives it, or nil.
+func (v *Var) Default() ast.Expr {
+	if v.def == 0 {
+		return nil
+	}
+
+	return v.pkg.defaults[v.def-1]
+}
+
+// Val returns the constant's folded value.
+func (c *Const) Val() Constant { return c.val }
 
 // Parent returns the enum the variant belongs to, or nil for Some,
 // None, Ok and Err.

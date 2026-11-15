@@ -1,0 +1,79 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Conversions between a declared type and its underlying type, each a
+// value that owns memory moved under the other name and freed once: a
+// string, a slice, a map, an option, an array, a struct both ways, and
+// a slice of values with a Drop, dropped once each; from a variable, a
+// field, a call's result and in a loop, as an argument and returned;
+// and a struct without a zero value only for its defaults, the
+// library's os.OpenOptions among them.
+
+package main
+
+import ("fmt"; "os")
+
+type Name string
+
+type Ints []int
+
+type Dict map[string]string
+
+type Maybe string?
+
+type Pair [2]string
+
+struct P { x int; s string }
+
+type P2 P
+
+struct H { n Name; k int }
+
+struct Tok impl Drop { n int }
+
+func (t mut Tok) Drop() { fmt.Println("drop", t.n) }
+
+type Toks []Tok
+
+struct D { x int; y int = 7 }
+
+type D2 D
+
+type MyOpts os.OpenOptions
+
+func made(s string) Name { return Name(s) }
+
+func length(s string) int { return len(s) }
+
+func main() {
+	n := Name("name".Clone())
+	s := string(n)
+	back := Name(s)
+	fmt.Println(string(back))
+	xs := []int(Ints([]int{1, 2, 3}))
+	fmt.Println(xs)
+	d := map[string]string(Dict(map[string]string{"k": "v".Clone()}))
+	fmt.Println(d["k"])
+	opt := Some("some".Clone())
+	m := Maybe(opt)
+	fmt.Println(m)
+	p := [2]string(Pair([2]string{"a".Clone(), "b".Clone()}))
+	fmt.Println(p)
+	q := P2(P{x: 1, s: "struct".Clone()})
+	r := P(q)
+	fmt.Println(r.x, r.s)
+	h := H{n: Name("field".Clone()), k: 2}
+	f := string(h.n)
+	fmt.Println(f, h.k)
+	fmt.Println(string(made("call".Clone())), length(string(Name("arg".Clone()))))
+	for i := 0; i < 3; i++ {
+		fmt.Println(string(Name(fmt.Sprint(i))))
+	}
+
+	ts := []Tok(Toks([]Tok{Tok{n: 1}, Tok{n: 2}}))
+	fmt.Println(len(ts))
+	e := D(D2{x: 3})
+	o := os.OpenOptions(MyOpts{Write: true})
+	fmt.Println(e.x, e.y, o.Read, o.Write, o.Perm)
+}

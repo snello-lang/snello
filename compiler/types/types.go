@@ -16,6 +16,8 @@ package types
 import (
 	"strconv"
 	"strings"
+
+	"github.com/snello-lang/snello/compiler/ast"
 )
 
 // BasicKind identifies a predeclared basic type.
@@ -91,6 +93,16 @@ const (
 	SendRecv ChanDir = iota // chan T
 	SendOnly                // chan<- T
 	RecvOnly                // <-chan T
+)
+
+// VariadicKind says what a variadic last parameter takes.
+type VariadicKind int
+
+const (
+	NotVariadic   VariadicKind = iota // the last parameter takes one argument
+	VariadicAny                       // ...ref any, the library's printing functions'
+	VariadicOwned                     // ...T, an owned []T
+	VariadicLent                      // ...ref T, a ref []T lent for the call
 )
 
 // Typ holds the one instance of each basic type, indexed by kind.
@@ -239,6 +251,7 @@ type Named struct {
 	tparams   []*TypeParam // a generic declaration's parameters
 	instances []*Named     // a generic declaration's instances, one per argument list
 	ready     bool         // a generic declaration is resolved, so its instances can expand
+	refused   bool         // a generic declaration refused for growing: it has no instances, and one written is the invalid type
 	orig      *Named       // an instance's declaration
 	targs     []Type       // an instance's arguments
 }
@@ -368,8 +381,30 @@ func (s *Signature) Params() []*Var { return s.params }
 func (s *Signature) Results() Type { return s.results }
 
 // Variadic reports whether the last parameter takes any number of
-// arguments, as the printing functions do.
+// arguments.
 func (s *Signature) Variadic() bool { return s.variadic }
+
+// VariadicParam says what the variadic last parameter of s takes, and
+// the type of each argument it takes: the library's ...ref any, whose
+// arguments the compiler takes each by its own type; ...T, an owned
+// []T the arguments are moved into; or ...ref T, a ref []T of the
+// arguments, each lent for the call alone.
+func (s *Signature) VariadicParam() (VariadicKind, Type) {
+	if !s.variadic {
+		return NotVariadic, nil
+	}
+
+	switch t := s.params[len(s.params)-1].typ.(type) {
+	case *Slice:
+		return VariadicOwned, t.elem
+	case *Ref:
+		if sl, ok := t.elem.(*Slice); ok {
+			return VariadicLent, sl.elem
+		}
+	}
+
+	return VariadicAny, Typ[Any]
+}
 
 // TypeParams returns a generic function's type parameters, or nil.
 func (s *Signature) TypeParams() []*TypeParam { return s.tparams }
@@ -379,6 +414,33 @@ func (s *Struct) NumFields() int { return len(s.fields) }
 
 // Field returns the i'th field.
 func (s *Struct) Field(i int) *Var { return s.fields[i] }
+
+// Default returns the default the i'th field declares, a constant
+// expression a literal that leaves the field out gives it, or nil.
+func (s *Struct) Default(i int) ast.Expr { return s.fields[i].Default() }
+
+// hasDefaults reports whether a field of s declares a default.
+func (s *Struct) hasDefaults() bool {
+	for _, f := range s.fields {
+		if f.def != 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// defaultsFrom reports whether every field of s from the i'th on
+// declares a default, which a positional literal may then leave out.
+func (s *Struct) defaultsFrom(i int) bool {
+	for ; i < len(s.fields); i++ {
+		if s.Default(i) == nil {
+			return false
+		}
+	}
+
+	return true
+}
 
 // NumVariants returns the number of variants.
 func (e *Enum) NumVariants() int { return len(e.variants) }
@@ -536,6 +598,16 @@ func signatureString(s *Signature) string {
 
 		if s.variadic && i == len(s.params)-1 {
 			b.WriteString("...")
+			kind, elem := s.VariadicParam()
+			switch kind {
+			case VariadicOwned:
+				b.WriteString(elem.String())
+				continue
+			case VariadicLent:
+				b.WriteString("ref ")
+				b.WriteString(elem.String())
+				continue
+			}
 		}
 
 		b.WriteString(p.typ.String())

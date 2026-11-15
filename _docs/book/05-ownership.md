@@ -24,7 +24,7 @@ t := s
 fmt.Println(s)                        // ERROR "use of moved value s"
 ```
 
-The same happens whenever a value goes somewhere that keeps it: passed to a parameter declared by value, returned, stored in a field or a slice, sent on a channel, or captured by a task. Each of these is a **move**. Nothing is copied; the value now lives under its new owner and the old name is dead. The compiler reports the use and the move together, and the message is the same whatever moved it, including a closure that consumes the variable and a method that consumes its receiver, such as `f.Close()`. Such a method cannot be called on a borrow of a value that moves, since the borrower has no value to give: `cannot move f out of a borrow`.
+The same happens whenever a value goes somewhere that keeps it: passed to a parameter declared by value, returned, stored in a field or a slice, sent on a channel, captured by a task, or converted between a declared type and its underlying type, `string(name)` for `type Name string`, which gives the value itself under the other name. Each of these is a **move**. Nothing is copied; the value now lives under its new owner and the old name is dead. The compiler reports the use and the move together, and the message is the same whatever moved it, including a closure that consumes the variable and a method that consumes its receiver, such as `f.Close()`. Such a method cannot be called on a borrow of a value that moves, since the borrower has no value to give: `cannot move f out of a borrow`. A conversion of a borrow is refused for the same reason, `cannot convert ref Name to string: the conversion takes the value, and a borrow lends it`; convert a clone, or take the value. `[]byte(s)` and `string(b)` are the exception: they copy, so they read a borrow as well.
 
 Most code never notices. A value usually flows forward: built here, handed to the function that needs it, kept there. The state machine is the clearest case. `step` takes the old state and the event by value and builds the new state from their parts. The session inside moves from `Open` to `Draining` with nothing copied:
 
@@ -103,7 +103,7 @@ t := row().name                       // ERROR "cannot move row().name out of a 
 fmt.Println(row().name, len(row().tags))   // fine: both are read where they are
 ```
 
-`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer, a function value and a type with a `Drop` have no zero value, chapter 18, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind; replace(mut h.ch, v) leaves v`. `replace(mut place, v)` moves the value out and leaves `v` in its place, for every type; or make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
+`take(mut place)` moves the value out of a field or an element and leaves the type's zero value in its place: `None` for an optional, `""` for a string, `0` for a number. A channel handle, an owned pointer, a function value and a type with a `Drop` have no zero value, chapter 18, so `take` refuses them and any struct, tuple, array or enum holding one: `cannot take h.ch: chan int has no zero value to leave behind; replace(mut h.ch, value) leaves value in its place`. `replace(mut place, v)` moves the value out and leaves `v` in its place, for every type; or make the field optional, `(chan int)?`, and `take` leaves `None`. It is how a linked structure is rebuilt without a temporary placeholder:
 
 ```go
 func (s mut Stack) Push(v string) {
@@ -130,6 +130,8 @@ func (s mut Stack) Pop() string? {
 
 Using `n` as a whole after `n.next` moved out would be an error: `use of partially moved value n`.
 
+A value whose type implements `Drop` is the exception: its `Drop` reads its fields when it goes, so none may leave it first. `t := s.name` on such an `s` is refused, `cannot move s.name out of s: S implements Drop, which reads its fields when s goes`, and so is a pattern that binds a variant's part by value out of an enum with a `Drop`. Clone the field, take it with `replace(mut s.name, v)`, which leaves `v` for the `Drop` to read, or `take(mut s.name)`, which leaves the zero value; match on `ref e` to lend the parts.
+
 ## Dropping
 
 When an owner goes out of scope, its value is freed, and so is everything the value owns, recursively. A tree of `*Node?` links is freed by dropping its root. To drop a value before its scope ends, discard it: `_ = conn` moves `conn` into the blank and drops it there, so a later use of `conn` is a use of a moved value and the end of the scope drops nothing. A program never calls a `Drop` itself, `conn.Drop()`, nor takes it as a value or defers it: the language runs it once, when the value goes, and a second run would close a closed file or free freed memory, so the compiler refuses the call and names `_ = conn` as the way. A struct that must do something when it is freed, close a file, remove a directory, implements `Drop`:
@@ -147,6 +149,8 @@ func main() {
 
 }
 ```
+
+A type with a `Drop` is a struct or an enum, or a type declared over one, whether it lists `Drop` itself or a trait that requires it. Whether a value of it is live, built and not yet moved away, is kept in a flag beside its fields, so that its `Drop` runs once; a type declared over a number, a string or a slice has no fields to keep it beside, so `type Handle int impl Drop` is refused: `Handle cannot implement Drop: it is declared over int, and only a struct or an enum has a Drop; hold the int in a field, struct Handle { v int }`. A handle is a struct of one field, `struct Handle impl Drop { fd int }`, and costs nothing more than the `int` and its flag.
 
 `Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then the deferred calls that ran and every value still owned are run and dropped, last first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose in one order on every exit, a return or a panic: whatever was registered last runs first, a deferred call where its `defer` ran, a value where it was made. A deferred call therefore runs before the drop of every value declared before it, which is everything it may be looking at, and after the drop of a value declared after it, which it cannot name:
 

@@ -73,7 +73,19 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 		return c.funcLit(e)
 	case *ast.IfExpr:
 		return c.ifExpr(e, expected)
+	case *ast.PartExpr:
+		return c.partExpr(e)
 	case *ast.MatchExpr:
+		if e.OnType {
+			return c.typeMatch(e, expected)
+		}
+
+		if len(e.Arms) > 0 {
+			if _, ok := e.Arms[0].Pat.(*ast.PartsPat); ok {
+				return c.variantMatch(e, expected)
+			}
+		}
+
 		return c.matchExpr(e, expected)
 	}
 
@@ -100,6 +112,10 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 	switch obj := obj.(type) {
 	case *Var:
 		if obj.typ == nil {
+			if c.uninferred[obj] { // a package variable whose value, which gives its type, is checked after this
+				c.errorf(e.Pos(), e.Name+" is used before its type is known: declare "+e.Name+" before this, or with its type")
+			}
+
 			return invalidOperand // declared with an error
 		}
 
@@ -109,13 +125,17 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 
 		c.capture(obj, byRef)
 		c.checkUseVar(e, obj)
-		return operand{variable, obj.typ, obj, nil}
+		return operand{variable, c.refine(obj.typ), obj, nil}
 	case *Const:
+		c.checkConst(obj) // a top-level constant is checked the first time it is needed
 		if obj.typ == nil {
 			return invalidOperand
 		}
 
 		return operand{value, obj.typ, obj, nil}
+	case *Part:
+		c.errorf(e.Pos(), e.Name+" is a "+partKind(obj)+" of a type, known to the compiler alone: it gives "+partGives(obj))
+		return invalidOperand
 	case *Func:
 		if sig, ok := obj.typ.(*Signature); ok && sig.tparams != nil && c.callee != e {
 			c.errorf(e.Pos(), "cannot use the generic function "+obj.name+" without calling it")
@@ -128,7 +148,7 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 
 		return operand{value, obj.typ, obj, nil}
 	case *TypeName:
-		return operand{typeOperand, obj.typ, obj, nil}
+		return operand{typeOperand, c.refine(obj.typ), obj, nil} // a type parameter an arm of a match on a type knows, read as what the arm matched
 	case *Builtin:
 		c.errorf(e.Pos(), obj.name+" must be called")
 	case *Variant:
@@ -200,18 +220,32 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 				c.recordUse(ident, pkg)
 				return c.packageMember(e, pkg)
 			}
+
+			if p, ok := obj.(*Part); ok {
+				c.recordUse(ident, p)
+				return c.partSelector(e, p)
+			}
 		}
 	}
 
-	wasInner := c.inner
+	wasInner, wantType := c.inner, c.wantType
 	c.inner = isPlaceChain(e.X) // the whole selector is the use, checked below
+	c.wantType = unparen(e.X)   // Point.Parse: a type before a function of it
 	x := c.expr(e.X, nil)
-	c.inner = wasInner
+	c.inner, c.wantType = wasInner, wantType
 	if x.mode == invalid {
 		return invalidOperand
 	}
 
+	if x.mode == typeOperand {
+		return c.typeFunc(e, x.typ)
+	}
+
 	base, m := deref(x)
+	if base == Typ[Invalid] {
+		return invalidOperand // reported where the type went wrong, a ref of it among them
+	}
+
 	if e.Sel.Name == "Drop" && implements(base, DropTrait) {
 		c.errorf(e.Sel.Pos(), dropByHand(e.X))
 		return invalidOperand
@@ -226,12 +260,18 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 
 				c.recordUse(e.Sel, f)
 				c.checkUse(e)
+				c.markPart(e, e.X, x) // row().name lives in the row the statement holds
 				return operand{m, f.typ, f, nil}
 			}
 		}
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
 			if !c.visible(named, e.Sel, nil) {
+				return invalidOperand
+			}
+
+			if fn.static {
+				c.errorf(e.Sel.Pos(), fn.name+" is a function of "+named.obj.name+", which takes no value of it: call "+named.obj.name+"."+fn.name+"(...)")
 				return invalidOperand
 			}
 
@@ -286,14 +326,20 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 
 		if f == nil {
-			if fn, mentionsSelf = t.valueMethod(e.Sel.Name); mentionsSelf {
-				c.errorf(e.Sel.Pos(), "cannot call "+e.Sel.Name+" through "+t.obj.name+": its signature mentions Self")
+			var why string
+			if fn, why = t.valueMethod(e.Sel.Name); why != "" {
+				c.errorf(e.Sel.Pos(), "cannot call "+e.Sel.Name+" through "+t.obj.name+": "+why)
 				return invalidOperand
 			}
 		}
 	case *TypeParam:
 		if f = t.boundField(e.Sel.Name); f == nil {
 			fn = t.boundMethod(e.Sel.Name)
+		}
+
+		if fn != nil && fn.static {
+			c.errorf(e.Sel.Pos(), fn.name+" is a function of "+t.obj.name+", which takes no value of it: call "+t.obj.name+"."+fn.name+"(...)")
+			return invalidOperand
 		}
 
 		param = t
@@ -347,6 +393,60 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 	}
 
 	c.noteTemporary(e.X, x)
+}
+
+// typeFunc checks T.Name, a function of the type t, func Point.Parse,
+// or of the type a type parameter stands for, T.Parse with T bounded by
+// a trait that requires it: a value of the function's signature, which
+// a call calls directly.
+func (c *Checker) typeFunc(e *ast.SelectorExpr, t Type) operand {
+	var fn *Func
+	switch t := t.(type) {
+	case *Named:
+		if _, bare := unparen(e.X).(*ast.Ident); bare && t.tparams != nil { // G.Count: no instance to call it on
+			c.errorf(e.X.Pos(), t.obj.name+" is generic: name an instance, "+t.obj.name+"<...>."+e.Sel.Name)
+			return invalidOperand
+		}
+
+		fn = t.Method(e.Sel.Name)
+		if fn != nil && !c.visible(t, e.Sel, nil) {
+			return invalidOperand
+		}
+	case *TypeParam:
+		fn = t.boundMethod(e.Sel.Name)
+	}
+
+	switch {
+	case fn == nil:
+		c.errorf(e.Sel.Pos(), noFunction(t, e.Sel.Name))
+		return invalidOperand
+	case !fn.static:
+		c.errorf(e.Sel.Pos(), e.Sel.Name+" is a method of "+t.String()+": call it on a value of it")
+		return invalidOperand
+	}
+
+	if fn.typ.(*Signature).tparams != nil && c.callee != ast.Expr(e) { // the selector itself, which call unparenthesized
+		c.errorf(e.Sel.Pos(), "cannot use the generic function "+fn.name+" without calling it")
+		return invalidOperand
+	}
+
+	c.recordUse(e.Sel, fn)
+	return operand{value, fn.typ, fn, nil}
+}
+
+// noFunction says that t has no function name, and, when name is one of
+// its variants, how a variant is written.
+func noFunction(t Type, name string) string {
+	msg := t.String() + " has no function " + name
+	if en, ok := t.Underlying().(*Enum); ok {
+		for _, v := range en.variants {
+			if v.name == name {
+				return msg + ": " + name + " is a variant of it, written by its name, " + name
+			}
+		}
+	}
+
+	return msg
 }
 
 // packageMember resolves pkg.Name as a value: a function, variable,
@@ -491,10 +591,12 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	case *Slice:
 		c.intIndex(e.Index)
 		c.checkUse(e)
+		c.markPart(e, e.X, x) // row().tags[0] lives in the row the statement holds
 		return operand{m, t.elem, nil, nil}
 	case *Array:
 		c.intIndex(e.Index)
 		c.checkUse(e)
+		c.markPart(e, e.X, x)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
 		if c.noUse { // m[k] = v: the map keeps the key
@@ -508,6 +610,7 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 		}
 
 		c.checkUse(e)
+		c.markPart(e, e.X, x)
 		return operand{m, t.value, nil, nil}
 	case *Basic:
 		if t.kind == String {
@@ -564,6 +667,7 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 		c.readOnly[e] = true
 	}
 
+	c.markPart(e, e.X, x) // a view of row().tags borrows the row the statement holds
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		return operand{value, NewRef(t, false), nil, nil} // a view: it never owns or grows the elements, so it is never mut
@@ -698,7 +802,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		}
 
 		c.noteTemporary(e.X, x)
-		if tmp := c.temporary[e.X]; tmp != nil {
+		if tmp := c.temporaryOf(e.X); tmp != nil {
 			c.markTemporary(e, tmp) // ref s.Clone() borrows the clone
 		}
 
@@ -731,6 +835,7 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 
 			return operand{m, t.elem, nil, nil}
 		case *Pointer:
+			c.markPart(e, e.X, x) // *boxed() lives in the pointer the statement holds
 			return operand{variable, t.elem, nil, nil}
 		}
 
@@ -930,7 +1035,7 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 		if through.mut {
 			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
 		}
-	} else if held(e.X, m) && !IsCopy(result) {
+	} else if c.fromPlace(e.X, m) && !IsCopy(result) {
 		c.move(e.X, variable) // the value inside leaves the place
 	}
 
@@ -973,7 +1078,7 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
-	if held(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
+	if c.fromPlace(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
 		c.move(e.X, variable) // the value inside leaves the place
 	}
 
@@ -1193,7 +1298,9 @@ func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	c.stmts(b.List[:last])
 	if es, ok := b.List[last].(*ast.ExprStmt); ok {
 		op := c.expr(es.X, expected)
-		c.pin(es.X, op.typ) // what takes the value finds the block's names after the block ends
+		c.pin(es.X, op.typ)     // what takes the value finds the block's names after the block ends
+		c.maybeMove(op, op.typ) // the value leaves the block while its names are in scope, so that the end of the block drops no local the value is
+		op.expr = nil           // moved here: what takes the block's value takes a value made here
 		return op
 	}
 

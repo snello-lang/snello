@@ -6,8 +6,8 @@ package filepath_test
 
 import ("expect"; "path/filepath")
 
-// Each name answers as package path's does, which that package's tests
-// hold to Go's: here, that every one is there and reaches it.
+// TestNames checks that every name is there and answers as package
+// path's does, whose own tests hold the rules.
 func TestNames() {
 	expect.Equal(ref filepath.Clean("/usr//lib/../bin/"), "/usr/bin")
 	expect.Equal(ref filepath.Join("/usr", "lib/snello"), "/usr/lib/snello")

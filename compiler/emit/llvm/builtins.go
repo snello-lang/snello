@@ -20,9 +20,16 @@ import (
 
 // index writes x[i] on a slice, a string or an array, with the index
 // checked, or on a map, and returns the element's address; write says
-// whether the element is about to be assigned.
+// whether the element is about to be assigned, and then its collection
+// is a place being changed too, m[k][i] = v making the entry m[k] when
+// k is new.
 func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
-	p, t := e.scrutinee(x.X)
+	scrutinee := e.scrutinee
+	if write {
+		scrutinee = e.changed
+	}
+
+	p, t := scrutinee(x.X)
 	if m, ok := t.Underlying().(*types.Map); ok {
 		return e.mapIndex(x, p, m, write)
 	}
@@ -141,22 +148,34 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		return e.makeCall(x)
 	case types.BuiltinTake:
 		target := x.Args[0].(*ast.UnaryExpr).X
-		p := e.placeAt(e.lvalue(target), e.typeOf(target))
+		p := e.placeTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 		t := e.typeOf(x)
 		v := e.load(e.irType(t, x.Pos()), p)
 		e.zero(p, t, x.Pos())
 		return v
+	case types.BuiltinAttr: // a constant in the copy and instance being written
+		t := e.typeOf(x)
+		a, ok := lower.AttrOf(e.info, x, e.subst, e.partCopy)
+		switch {
+		case !ok:
+			return e.variantValue(t, types.NoneVariant, nil, x.Pos())
+		case a.Value == nil: // a struct with no fields, written by its name: its one value
+			ir := e.irType(a.Type, x.Pos())
+			return e.variantValue(t, types.SomeVariant, []value{{ir, zero(ir)}}, x.Pos())
+		}
+
+		return e.variantValue(t, types.SomeVariant, []value{e.valueTo(lower.Folded(e.info, a.Value), a.Type)}, x.Pos())
 	case types.BuiltinReplace: // the place's address first, since v may be a call that runs before the place is read
 		target := x.Args[0].(*ast.UnaryExpr).X
-		p := e.placeAt(e.lvalue(target), e.typeOf(target))
+		p := e.placeTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 		t := e.typeOf(x)
 		v := e.operands(x.Args[1:], []types.Type{t})[0]
 		old := e.load(e.irType(t, x.Pos()), p)
 		e.store(v, p)
 		return old
-	case types.BuiltinPanic: // the text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
+	case types.BuiltinPanic, types.BuiltinRefuse: // a refuse the compiler let pass is on a path no instance takes, and panics as one would. The text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
 		v := e.operands(x.Args, nil)[0]
-		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos(), false).v
+		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos()).v
 		if msg.typ == "" {
 			msg = e.constString("")
 		}
@@ -171,7 +190,7 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 	case types.BuiltinPrint:
 		parts := e.operands(x.Args, nil)
 		for i, a := range x.Args {
-			s := e.textOf(parts[i], e.typeOf(a), a.Pos(), false)
+			s := e.textOf(parts[i], e.typeOf(a), a.Pos())
 			if s.owned {
 				e.callWords("sn_eprint_owned", s.v)
 			} else {
@@ -303,7 +322,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 		}
 
 		out := e.slot("%sn_slice")
-		e.sliceMake(out, n, c, u.Elem(), x.Pos())
+		e.sliceMake(out, n, c, u.Elem())
 		return e.load("%sn_slice", out)
 	}
 

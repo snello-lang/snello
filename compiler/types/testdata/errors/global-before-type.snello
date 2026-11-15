@@ -1,0 +1,13 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable declared without a type takes the type of
+// its value, which is checked in the order of the declarations, so one
+// declared after another that uses it has no type yet when it is used.
+// Fix: declare it before the use, or with its type, var limit int = 3.
+
+package p
+
+var twice = limit * 2                       // ERROR "limit is used before its type is known: declare limit before this, or with its type"
+var limit = 3

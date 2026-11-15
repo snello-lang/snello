@@ -16,6 +16,8 @@ func join(pieces ref []ref string) (string, int) {
 	return (out, len(pieces))
 }
 
+// Graphemes keeps a letter with its accent, a flag, an emoji with its
+// skin tone, a line ending and a conjunct each one piece.
 func TestGraphemes() {
 	s := "é🇫🇷👍🏽\r\nक्षि"
 	g := segment.Graphemes(ref s)
@@ -30,6 +32,8 @@ func TestGraphemes() {
 	expect.Equal(ref len(segment.Graphemes("")), ref 0)
 }
 
+// Words gives the words and each piece between them, a number with its
+// point and a word with an apostrophe one piece.
 func TestWords() {
 	w := segment.Words("Hello, wörld! 3.14 can't")
 	expect.Equal(ref len(w), ref 9) // the words, the comma, the bang and the spaces between, each a piece
@@ -40,6 +44,8 @@ func TestWords() {
 	expect.Equal(w[8], "can't")
 }
 
+// Sentences ends a sentence at its full stop, not at an abbreviation's,
+// each with the spaces after it.
 func TestSentences() {
 	s := "Mr. Smith left. He said: \"Hi!\" Then went."
 	p := segment.Sentences(ref s)
@@ -51,6 +57,8 @@ func TestSentences() {
 	expect.Equal(ref n, ref 4)
 }
 
+// Next walks the boundaries one at a time, and Count counts the
+// segments of each kind.
 func TestWalk() {
 	s := "e\u0301🇫🇷 ok"
 	expect.Equal(ref segment.Count(segment.Grapheme, ref s), ref 5) // é, the flag, the space, o, k
@@ -62,6 +70,8 @@ func TestWalk() {
 	expect.Equal(ref segment.Count(segment.Grapheme, ""), ref 0)
 }
 
+// Next gives None at the end, past it and before the start, and a walk
+// with it ends.
 func TestNextAtTheEnd() {
 	s := "abc"
 	expect.IsNone(segment.Next(segment.Grapheme, ref s, len(s)))
@@ -84,6 +94,8 @@ func TestNextAtTheEnd() {
 	expect.Equal(ref at, ref 12)
 }
 
+// IsWord tells the words Words gives from the spaces and punctuation
+// between them.
 func TestIsWord() {
 	words := 0
 	for w := range segment.Words("Hello, wörld! 3.14 世界") {
@@ -97,6 +109,7 @@ func TestIsWord() {
 	expect.True(segment.IsWord("3.14"))
 }
 
+// How long Graphemes takes for a text of several scripts and emoji.
 func BenchmarkGraphemes() {
 	s := "Snello è veloce, 世界 🇫🇷👍🏽 क्षि"
 	for testing.Loop() {

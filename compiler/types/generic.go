@@ -333,12 +333,12 @@ func substVars(vs []*Var, m map[*TypeParam]Type) []*Var {
 // substVar copies a variable, a field or a parameter, with its type
 // substituted; whether a parameter keeps its argument carries over.
 func substVar(v *Var, m map[*TypeParam]Type) *Var {
-	return &Var{object: object{v.name, subst(v.typ, m), v.pos, v.pkg}, field: v.field, kept: v.kept}
+	return &Var{object: object{v.name, subst(v.typ, m), v.pos, v.pkg}, field: v.field, kept: v.kept, lent: v.lent, def: v.def}
 }
 
 // substFunc copies a method with its signature substituted, remembering
 // the method it was made from: an instance's method from the generic
 // declaration's, or a type parameter's from its bound's.
 func substFunc(fn *Func, m map[*TypeParam]Type) *Func {
-	return &Func{object: object{fn.name, subst(fn.typ, m), fn.pos, fn.pkg}, origin: fn, derived: fn.derived, trait: fn.trait}
+	return &Func{object: object{fn.name, subst(fn.typ, m), fn.pos, fn.pkg}, origin: fn, derived: fn.derived, static: fn.static, trait: fn.trait}
 }

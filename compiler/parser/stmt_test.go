@@ -303,6 +303,19 @@ func patString(pat ast.Pattern) string {
 		return pat.Name.Name
 	case *ast.WildcardPat:
 		return "_"
+	case *ast.PartsPat:
+		return "for " + pat.Var.Name + " := range " + exprString(pat.X)
+	case *ast.TypePat:
+		if pat.Kind != "" {
+			return pat.Kind
+		}
+
+		var ts []string
+		for _, t := range pat.Types {
+			ts = append(ts, typeString(t))
+		}
+
+		return strings.Join(ts, " | ")
 	case *ast.LitPat:
 		return pat.Lit.Value
 	case *ast.RangePat:

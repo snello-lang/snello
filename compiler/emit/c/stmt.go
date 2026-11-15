@@ -45,7 +45,7 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 			e.discard(x, e.typeOf(s.X), s.Pos())
 		}
 	case *ast.IncDecStmt:
-		e.line(e.expr(s.X) + s.Tok.String() + ";")
+		e.line(e.lvalue(s.X) + s.Tok.String() + ";") // the place, as x += 1 writes it: m[k]++ finds the map's slot
 	case *ast.AssignStmt:
 		e.assign(s)
 	case *ast.ReturnStmt:
@@ -85,6 +85,11 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 // cast, as the C compiler is asked to treat an unused variable as an
 // error.
 func (e *Emitter) declStmt(d *ast.VarDecl) {
+	if d.Const {
+		e.localConsts(d)
+		return
+	}
+
 	var parts []string
 	if len(d.Values) == 1 && len(d.Names) > 1 {
 		parts = e.spread(d.Values[0], len(d.Names))
@@ -110,6 +115,32 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 	}
 }
 
+// localConsts writes the constants a function declares as statics of
+// the file, from the values the checker folded, as the top-level ones
+// are, each under a name of its own, since two functions may each
+// declare one of a name; the copies of a generic function share theirs,
+// whose value no type argument changes. A use of one names the static,
+// from the function or from a closure inside it, and one nothing uses
+// costs nothing.
+func (e *Emitter) localConsts(d *ast.VarDecl) {
+	for i, name := range d.Names {
+		k, ok := e.info.Defs[name].(*types.Const)
+		if _, written := e.consts[k]; !ok || written || name.Name == "_" || i >= len(d.Values) {
+			continue // a blank constant's value was checked, and nothing reads it
+		}
+
+		value := e.staticValue(d.Values[i], k.Type())
+		if value == "" {
+			e.unsupported(name.Pos(), "a const whose value is not a literal")
+			return
+		}
+
+		sym := lower.ObjName(k) + "_" + strconv.Itoa(len(e.consts))
+		e.consts[k] = sym
+		put(&e.protos, "static SN_UNUSED const ", e.cType(k.Type(), name.Pos()), " ", sym, " = ", value, ";\n")
+	}
+}
+
 // discardUnused writes (void)x for a declared name nothing refers to.
 func (e *Emitter) discardUnused(name *ast.Ident) {
 	if name.Name == "_" {
@@ -122,12 +153,17 @@ func (e *Emitter) discardUnused(name *ast.Ident) {
 }
 
 func (e *Emitter) assign(s *ast.AssignStmt) {
+	if s.Tok != token.DEFINE {
+		defer e.forget(e.orderAssignment(s.Lhs, s.Rhs, s.Tok))
+	}
+
 	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
 		e.assignMany(s)
 		return
 	}
 
 	lhs, rhs := s.Lhs[0], s.Rhs[0]
+
 	switch s.Tok {
 	case token.DEFINE, token.ASSIGN:
 		t := e.target(lhs, s.Tok)
@@ -138,32 +174,28 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 		e.store(lhs, s.Tok, e.valueTo(rhs, t), t)
 	default:
 		t := lower.ValueType(e.typeOf(lhs))
+		if lower.OldReadFirst(e.info, lhs, rhs, s.Tok) {
+			e.changedCompound(s, t)
+			return
+		}
+
 		place := e.lvalue(lhs)
 		if call := e.operatorCall(t, s.Tok.Binary(), false, lhs, []ast.Expr{rhs}, s.Pos()); call != "" {
 			e.line(place + " = " + call + ";") // a += b on a type with an Add: the old value goes into the method
 			return
 		}
 
-		if isString(t) { // s += t appends in place when s owns the room, and grows by doubling when not
+		if isString(t) {
 			r := e.temp()
 			e.line("sn_string " + r + " = " + e.valueTo(rhs, t) + ";")
-			e.line("sn_string_append(&" + place + ", &" + r + ");")
-			if !e.isLent(rhs) {
-				e.line("sn_string_drop(&" + r + ");")
-			}
-
+			e.appendString(place, r, rhs)
 			return
 		}
 
 		if op := s.Tok.Binary(); divides(op, t) || shifts(op, t) { // through a pointer, so the place is reached once
-			fn := e.shifter
-			if divides(op, t) {
-				fn = e.divider
-			}
-
 			at := e.temp()
 			e.line(e.cType(t, s.Pos()) + " *" + at + " = &" + place + ";")
-			e.line("*" + at + " = " + fn(op, t, s.Pos()) + "(*" + at + ", " + e.valueTo(rhs, t) + ");")
+			e.line("*" + at + " = " + e.combined(op, "*"+at, e.valueTo(rhs, t), t, s.Pos()) + ";")
 			return
 		}
 
@@ -173,6 +205,116 @@ func (e *Emitter) assign(s *ast.AssignStmt) {
 		}
 
 		e.line(place + " " + s.Tok.String() + " " + e.valueTo(rhs, t) + ";")
+	}
+}
+
+// changedCompound writes x op= v when v may change what x reads. The
+// old value is read first, left to right, a copy of a string, then v is
+// evaluated, and only then is the place reached again and given the
+// result: a value that grows the slice or the map x is in, or replaces
+// the string x holds, leaves no pointer to the place behind, and
+// xs[0] += grow(mut xs) adds to the element as it was, in the slice as
+// it is. A map's entry is made by the store, after the value. A type
+// with an Add takes its old value and v in the call, and the place is
+// reached after it.
+func (e *Emitter) changedCompound(s *ast.AssignStmt, t types.Type) {
+	lhs, rhs := s.Lhs[0], s.Rhs[0]
+	ct := e.cType(t, s.Pos())
+	if call := e.operatorCall(t, s.Tok.Binary(), false, lhs, []ast.Expr{rhs}, s.Pos()); call != "" {
+		result := e.temp() // a += b on a type with an Add: the old value goes into the method, then b
+		e.line(ct + " " + result + " = " + call + ";")
+		e.line(e.lvalue(lhs) + " = " + result + ";")
+		return
+	}
+
+	old, value := e.temp(), e.temp()
+	e.line(ct + " " + old + " = " + e.cloneOf(e.expr(lhs), t, s.Pos()) + ";")
+	e.line(ct + " " + value + " = " + e.valueTo(rhs, t) + ";")
+	place := e.lvalue(lhs)
+	if !isString(t) {
+		e.line(place + " = " + e.combined(s.Tok.Binary(), old, value, t, s.Pos()) + ";")
+		return
+	}
+
+	e.line(e.dropOf(place, t, s.Pos()))
+	e.line(place + " = " + old + ";")
+	e.appendString(place, value, rhs)
+}
+
+// appendString writes s += t for the string place and the string t
+// holds, the value of rhs: in place when s owns the room, else into a
+// block twice as large; t is dropped after unless rhs lent it.
+func (e *Emitter) appendString(place, t string, rhs ast.Expr) {
+	e.line("sn_string_append(&" + place + ", &" + t + ");")
+	if !e.isLent(rhs) {
+		e.line("sn_string_drop(&" + t + ");")
+	}
+}
+
+// combined writes old op value for a number of type t: a division and a
+// shift through the helpers that check them, &^ as & and ~.
+func (e *Emitter) combined(op token.Kind, old, value string, t types.Type, pos token.Pos) string {
+	switch {
+	case divides(op, t):
+		return e.divider(op, t, pos) + "(" + old + ", " + value + ")"
+	case shifts(op, t):
+		return e.shifter(op, t, pos) + "(" + old + ", " + value + ")"
+	case op == token.AND_NOT:
+		return old + " & ~(" + value + ")"
+	}
+
+	return old + " " + op.String() + " " + value
+}
+
+// orderAssignment evaluates what an assignment evaluates before it
+// reaches its places, in this order: the index and key operands of each
+// place in lhs, left to right, then the values rhs. An operand is saved
+// in a temporary, which expr reads back while the assignment is
+// written, when its order against a later operand or a value is
+// visible: m[tick()] = tick() puts the first tick's value under the key,
+// and ys[i] = f() writes ys at i as it was before f changed it. One
+// value is saved when the place lies in a map's entry, which the store
+// may make, growing the map the value may read through any borrow of
+// it: n["a"] = len(n) counts no entry for "a". It returns what it
+// saved, for forget.
+func (e *Emitter) orderAssignment(lhs, rhs []ast.Expr, tok token.Kind) []ast.Expr {
+	var opsSmall [8]ast.Expr
+	ops := opsSmall[:0]
+	for _, place := range lhs {
+		lower.PlaceOperands(place, func(op ast.Expr) { ops = append(ops, op) })
+	}
+
+	var saved []ast.Expr
+	save := func(x ast.Expr) {
+		tmp := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + tmp + " = " + e.expr(x) + ";")
+		if e.pre == nil {
+			e.pre = make(map[ast.Expr]string)
+		}
+
+		e.pre[x] = tmp
+		saved = append(saved, x)
+	}
+
+	several := len(lhs) > 1 // each store is made in turn, and may change a later place's operand: i, xs[i] = 2, 5 writes xs at the old i
+	for k, op := range ops {
+		if !lower.IsConstant(e.info, op) && (several || lower.OrderedBefore(e.info, op, ops[k+1:]) || lower.OrderedBefore(e.info, op, rhs)) {
+			save(op)
+		}
+	}
+
+	if len(lhs) == 1 && len(rhs) == 1 && !lower.IsConstant(e.info, rhs[0]) && lower.ThroughMap(e.info, lhs[0]) && !lower.OldReadFirst(e.info, lhs[0], rhs[0], tok) {
+		save(rhs[0]) // the store may make the entry, growing the map, which the value may read through any borrow of it
+	}
+
+	return saved
+}
+
+// forget drops what orderAssignment saved, once the assignment is
+// written.
+func (e *Emitter) forget(saved []ast.Expr) {
+	for _, x := range saved {
+		delete(e.pre, x)
 	}
 }
 
@@ -250,6 +392,10 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type
 		e.line(e.cType(t, lhs.Pos()) + " " + tmp + " = " + value + ";")
 		e.line(e.dropOf(place, t, lhs.Pos()))
 		value = tmp
+	}
+
+	if value == place && !e.hasEffects(lhs) {
+		return // x = x, a place given what it holds, stores nothing
 	}
 
 	e.line(place + " = " + value + ";")
@@ -378,7 +524,7 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	if s.Cond != nil && !e.hasEffects(s.Cond) {
 		mark, start := len(e.temps), e.body.Len()
 		cond = e.expr(s.Cond)
-		if len(e.temps) > mark { // a temporary the condition needs is built and dropped on every pass, in the body
+		if len(e.temps) > mark || e.body.Len() > start { // a statement the condition needs, a temporary or a map's key saved, runs on every pass, in the body
 			e.body.Truncate(start)
 			e.temps, cond = e.temps[:mark], ""
 		}
@@ -386,8 +532,12 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 
 	post, label := "", ""
 	if s.Post != nil {
+		mark, start := len(e.temps), e.body.Len()
 		var ok bool
-		if post, ok = e.simpleStmt(s.Post); !ok {
+		post, ok = e.simpleStmt(s.Post)
+		if !ok || e.body.Len() > start || len(e.temps) > mark { // writing it wrote statements, which would run once, before the loop: it is written in the body
+			e.body.Truncate(start)
+			e.temps, post = e.temps[:mark], ""
 			label = e.temp() + "_post"
 		}
 	}
@@ -415,12 +565,62 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 	e.line("}")
 }
 
-// rangeStmt writes for k, v := range x over a slice or a string: an
-// index loop, with the key and value bound at the top of each pass. A
-// value reached through a mut borrow is bound as a pointer into the
-// slice. Fields and Split yield a slice of borrows whose one variable
-// is the item.
+// partsLoop writes a loop over a type's parts once for each part of the
+// type the instance being written gives it, each copy a block of its
+// own with the part's field named and its type in place of f.type.
+func (e *Emitter) partsLoop(s *ast.RangeStmt, part *types.Part, copies []lower.PartCopy) {
+	outer := e.subst
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	for _, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		e.line("{")
+		e.push(false)
+		e.stmts(s.Body.List)
+		e.pop(s.Body.Rbrace)
+		e.line("}")
+	}
+
+	if len(copies) == 0 {
+		e.touch(s.Body)
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+}
+
+// touch marks as read each local declared before the node n that n
+// reads, for a loop over a type's parts the type has none of: written
+// out no times, it leaves unread a local only it reads, which C would
+// warn of. A name declared inside n is never declared at all.
+func (e *Emitter) touch(n ast.Node) {
+	start := n.Pos()
+	ast.Inspect(n, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if v, ok := e.info.Uses[id].(*types.Var); ok && !v.IsField() && !e.names.globals[v] && v.Pos() < start {
+				e.line("(void)" + e.localName(v) + ";")
+			}
+		}
+
+		return true
+	})
+}
+
+// rangeStmt writes for k, v := range x over a slice, an array or a
+// string: an index loop, with the key and value bound at the top of
+// each pass. A value reached through a mut borrow is bound as a pointer
+// into the slice. Fields and Split yield a slice of borrows whose one
+// variable is the item. A loop over a type's parts is written out per
+// part by partsLoop.
 func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
+	if part, copies := lower.PartsOf(e.info, s, e.subst, e.partCopy); part != nil {
+		e.partsLoop(s, part, copies)
+		return
+	}
+
 	place, t, held := e.consumed(s.X)
 	if held != "" {
 		e.hold(held, e.typeOf(s.X)) // an owned collection is used up by the loop and dropped after it
@@ -461,19 +661,21 @@ func (e *Emitter) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
-	e.line("for (sn_int " + i + " = 0; " + i + " < " + place + ".len; " + i + "++) {")
-	elem := place + ".ptr[" + i + "]"
+	n, elem := place+".len", place+".ptr["+i+"]"
 	var elemType types.Type = types.Typ[types.Uint8]
 	iterator := false
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
 		elemType = u.Elem()
 		_, iterator = elemType.(*types.Ref)
+	case *types.Array:
+		n, elem, elemType = strconv.FormatInt(u.Len(), 10), place+".at["+i+"]", u.Elem()
 	case *types.Basic:
 	default:
 		e.unsupported(s.X.Pos(), "ranging over a value of type "+t.String())
 	}
 
+	e.line("for (sn_int " + i + " = 0; " + i + " < " + n + "; " + i + "++) {")
 	e.push(true)
 	if iterator {
 		e.rangeVar(s.Key, s.Tok, elem, elemType, consume)
@@ -610,21 +812,32 @@ func (e *Emitter) rangeVar(x ast.Expr, tok token.Kind, item string, itemType typ
 }
 
 // simpleStmt writes a statement that C accepts as an expression, for
-// the post clause of a for: x++, x += 1, x = e. A value that calls or
-// needs statements cannot go there, as they would run once, before the
-// loop; the caller writes such a statement in the body.
+// the post clause of a for: x++, x += 1, x = e. A value that calls, or
+// a value or place whose writing needs statements, cannot go there, as
+// they would run once, before the loop; the caller refuses what wrote
+// statements, xs[at()] = i and m[k] += 1 among them, and writes such a
+// statement in the body.
 func (e *Emitter) simpleStmt(s ast.Stmt) (string, bool) {
 	switch s := s.(type) {
 	case *ast.IncDecStmt:
-		return e.expr(s.X) + s.Tok.String(), true
+		return e.lvalue(s.X) + s.Tok.String(), true
 	case *ast.AssignStmt:
 		if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Tok == token.DEFINE || e.hasEffects(s.Rhs[0]) {
 			return "", false
 		}
 
 		t := lower.ValueType(e.typeOf(s.Lhs[0]))
+		if needsDrop(t) { // the old value is dropped, and a moved one emptied, statements the loop's step runs each pass
+			return "", false
+		}
+
 		if s.Tok == token.ASSIGN {
-			return e.lvalue(s.Lhs[0]) + " = " + e.valueTo(s.Rhs[0], t), true
+			place, value := e.lvalue(s.Lhs[0]), e.valueTo(s.Rhs[0], t)
+			if value == place {
+				return "", false // x = x stores nothing, as a statement
+			}
+
+			return place + " = " + value, true
 		}
 
 		if isString(t) {

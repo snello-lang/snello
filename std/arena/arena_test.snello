@@ -6,6 +6,8 @@ package arena_test
 
 import ("arena"; "expect"; "fmt"; "testing")
 
+// TestInsertGetRemove inserts two values, reads them back, and removes
+// one, whose Index is stale from then on.
 func TestInsertGetRemove() {
 	a := arena.New<string>()
 	i := a.Insert("one".Clone())
@@ -20,17 +22,22 @@ func TestInsertGetRemove() {
 	expect.IsNone(a.Remove(i))
 }
 
+// TestGetMut changes a value in place through GetMut, and prints the
+// Arena.
 func TestGetMut() {
 	a := arena.New<int>()
 	i := a.Insert(1)
 	if v := a.GetMut(i) {
 		*v += 41
 	}
+
 	if v := a.Get(i) { expect.Equal(v, ref 42) } else { expect.Fail("the slot is empty") }
 	expect.Equal(ref fmt.Sprint(a), "arena[42]")
 	expect.Equal(ref a.String(), "arena[42]")
 }
 
+// BenchmarkInsertRemove measures an Insert into a reused slot and the
+// Remove that frees it again.
 func BenchmarkInsertRemove() {
 	a := arena.New<int>()
 	for testing.Loop() {
@@ -39,6 +46,8 @@ func BenchmarkInsertRemove() {
 	}
 }
 
+// TestIter walks the values in slot order, passing over a free slot,
+// and finds a reused slot on its next generation.
 func TestIter() {
 	a := arena.New<string>()
 	i := a.Insert("one".Clone())

@@ -12,6 +12,11 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// assignedInPlace is how many places an assignment or declaration has
+// before the list of what their values carry is allocated: nearly every
+// one has fewer.
+const assignedInPlace = 4
+
 // stmts checks a statement list and reports whether it ends in a
 // statement that leaves the function, so that a function with results
 // can be checked for a missing return as Go does.
@@ -45,8 +50,11 @@ func (c *Checker) endScope(end token.Pos) {
 // past it: a return, a call that never returns, or a compound statement
 // all of whose paths leave.
 func (c *Checker) stmt(s ast.Stmt) bool {
-	lent := len(c.temps)
-	defer func() { c.temps = c.temps[:lent] }() // what the statement lent is given back
+	lent, temps := len(c.temps), c.tempMark()
+	defer func() {
+		c.temps = c.temps[:lent]          // what the statement lent is given back
+		c.dropTemporaries(temps, s.Pos()) // named by where the statement begins, the one position a statement has
+	}()
 	switch s := s.(type) {
 	case *ast.BlockStmt:
 		return c.block(s)
@@ -100,6 +108,11 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 	var t Type
 	if d.Type != nil {
 		t = c.typ(d.Type)
+	}
+
+	if d.Const {
+		c.localConsts(d, t)
+		return
 	}
 
 	if len(d.Values) == 0 {
@@ -221,6 +234,8 @@ func (c *Checker) define(s *ast.AssignStmt) {
 		ops = c.values(len(s.Lhs), s.Rhs, nil, s.TokPos) // the right side cannot see the new names
 	}
 
+	var small [assignedInPlace]carried
+	from := c.carryAll(s, ops, small[:0])
 	declared := false
 	for i, lhs := range s.Lhs {
 		ident, ok := lhs.(*ast.Ident)
@@ -235,7 +250,7 @@ func (c *Checker) define(s *ast.AssignStmt) {
 		}
 
 		if c.scope.Lookup(ident.Name) != nil {
-			c.assignTo(ident, ops[i])
+			c.assignTo(ident, ops[i], from[i])
 			continue
 		}
 
@@ -243,7 +258,7 @@ func (c *Checker) define(s *ast.AssignStmt) {
 		c.maybeMove(ops[i], inferred(ops[i]))
 		v := NewVar(ident.Pos(), ident.Name, inferred(ops[i]))
 		c.declare(c.scope, ident, v)
-		c.hold(v, ops[i].expr, ident.Pos())
+		c.holdCarried(v, "", v.typ, from[i], ident.Pos())
 		declared = true
 	}
 
@@ -265,34 +280,134 @@ func (c *Checker) plainAssign(s *ast.AssignStmt) {
 
 		x, holder, mark := c.target(s.Lhs[0], true) // the target is evaluated first, as in Go, and given its value after the value is made
 		op := c.expr(s.Rhs[0], hintOf(x))
+		from := c.carry(x.typ, op.expr, s.Lhs, s.Lhs[0].Pos())
 		c.putAside(mark)
-		c.stored(s.Lhs[0], x, holder, op)
+		c.stored(s.Lhs[0], x, holder, op, from)
 		return
 	}
 
 	ops := c.values(len(s.Lhs), s.Rhs, nil, s.TokPos)
+	var small [assignedInPlace]carried
+	from := c.carryAll(s, ops, small[:0])
 	for i, lhs := range s.Lhs {
 		if isBlank(lhs) {
 			c.maybeMove(ops[i], inferred(ops[i]))
 		} else {
-			c.assignTo(lhs, ops[i])
+			c.assignTo(lhs, ops[i], from[i])
 		}
 	}
+}
+
+// A carried is what a value given to a place lends: the loans its
+// expression lends, or the loans the holder held took from it before
+// the statement gave any place a value.
+type carried struct {
+	expr ast.Expr
+	held *Var
+}
+
+// carryAll appends to from what the value given to each place of s
+// carries, in order, and returns it. A part of a tuple taken apart,
+// a, b := t, lends what the tuple lends.
+func (c *Checker) carryAll(s *ast.AssignStmt, ops []operand, from []carried) []carried {
+	spread := len(s.Rhs) == 1 && len(s.Lhs) > 1
+	for i, op := range ops {
+		e := op.expr
+		if spread {
+			e = s.Rhs[0]
+		}
+
+		from = append(from, c.carry(inferred(op), e, s.Lhs, s.Lhs[i].Pos()))
+	}
+
+	return from
+}
+
+// carry returns what the value e, of type t, gives a place of the
+// statement whose places are lhs. A value that reads a variable one of
+// them names has its loans taken into a holder now, before any of them
+// is given a value or declared, as the value itself is made before it
+// is stored: a = id(a), a, b = b, a and r := r keep what the value read.
+func (c *Checker) carry(t Type, e ast.Expr, lhs []ast.Expr, pos token.Pos) carried {
+	if e == nil || !holdsBorrow(t) || !c.readsAny(e, lhs) {
+		return carried{expr: e}
+	}
+
+	held := NewVar(e.Pos(), exprText(unparen(e)), t)
+	c.flowAssign(held, "") // a loop's next pass takes the value again
+	c.hold(held, e, pos)
+	return carried{held: held}
+}
+
+// readsAny reports whether the value e carries a borrow out of a
+// variable one of the places lhs names. A name a declaration
+// introduces counts by its name: the value read the variable it
+// shadows.
+func (c *Checker) readsAny(e ast.Expr, lhs []ast.Expr) bool {
+	found := false
+	c.sources(e, func(src ast.Expr, _, _ bool) {
+		p, kind := c.placeOf(src)
+		if kind == notPlace {
+			return
+		}
+
+		for _, l := range lhs {
+			if c.namedVar(l) == p.v.name {
+				found = true
+			}
+		}
+	})
+
+	return found
+}
+
+// namedVar returns the name of the variable the place e is part of, or
+// "" when e is no place.
+func (c *Checker) namedVar(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		if isBlank(id) {
+			return ""
+		}
+
+		return id.Name
+	}
+
+	if p, kind := c.placeOf(e); kind != notPlace {
+		return p.v.name
+	}
+
+	return ""
+}
+
+// holdCarried records that the part path of v, of type t, holds what
+// the value from carries.
+func (c *Checker) holdCarried(v *Var, path string, t Type, from carried, pos token.Pos) {
+	if from.held != nil {
+		c.flowCopy(v, from.held, "", path, pos)
+		return
+	}
+
+	c.holdIn(v, path, t, from.expr, pos)
 }
 
 // assignTo checks an assignment of an already checked value to a
 // place: the value fits, the place is owned again, and a borrow
 // variable holds what the value lends.
-func (c *Checker) assignTo(lhs ast.Expr, op operand) {
+func (c *Checker) assignTo(lhs ast.Expr, op operand, from carried) {
 	x, holder, _ := c.target(lhs, false)
-	c.stored(lhs, x, holder, op)
+	c.stored(lhs, x, holder, op, from)
 }
 
 // stored finishes an assignment once its two sides are checked: x is
-// the target, holder the borrow variable it names, if any, and op the
-// value.
-func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
+// the target, holder the borrow variable it names, if any, op the
+// value and from what it lends.
+func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand, from carried) {
 	if x.mode == invalid {
+		return
+	}
+
+	if id, ok := unparen(lhs).(*ast.Ident); ok && c.heldVariant(id) {
+		c.errorf(lhs.Pos(), "cannot assign to "+id.Name+": the arm written for each variant holds it, and v.[f] reads the variant it holds")
 		return
 	}
 
@@ -300,7 +415,7 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 	c.keepParamIn(op, "assigned to", lhs, lhs.Pos())
 	c.revive(lhs)
 	p, kind := c.placeOf(lhs)
-	if kind != notPlace && c.storeRefused(p, kind, x, op, lhs.Pos()) {
+	if kind != notPlace && c.storeRefused(p, x, op, lhs.Pos()) {
 		return
 	}
 
@@ -311,7 +426,7 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 
 	switch {
 	case holder != nil:
-		c.hold(holder, op.expr, lhs.Pos())
+		c.holdCarried(holder, "", holder.typ, from, lhs.Pos())
 	case kind == placeOwned && p.path == "" && isSignature(x.typ):
 		if op.expr != nil && c.usedWhereMade(op.expr, "assigned with =", lhs.Pos()) {
 			return
@@ -321,22 +436,22 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 	case kind == placeOwned && holdsBorrow(x.typ) && prefix != "":
 		part := prefix + ".*" + strings.TrimPrefix(p.path, prefix) // w.m.src = ref t, with w.m a mut borrow of h: h holds t
 		c.flowAssign(p.v, part)
-		c.holdIn(p.v, part, x.typ, op.expr, lhs.Pos())
+		c.holdCarried(p.v, part, x.typ, from, lhs.Pos())
 		c.flowThrough(p.v, prefix, part, lhs.Pos())
 	case kind == placeOwned && holdsBorrow(x.typ):
 		if dropReads(x.typ) {
 			c.flowUse(p.v, lhs.Pos()) // the old value's Drop runs here and reads what it borrows
 		}
 
-		c.flowAssign(p.v, p.path)                        // the part given a value lets go of what it held
-		c.holdIn(p.v, p.path, x.typ, op.expr, lhs.Pos()) // h.src = ref t: h holds t
+		c.flowAssign(p.v, p.path)                          // the part given a value lets go of what it held
+		c.holdCarried(p.v, p.path, x.typ, from, lhs.Pos()) // h.src = ref t: h holds t
 	case kind == placeBorrowed && holdsBorrow(x.typ):
 		part := joinPath("*", p.path) // m.src = ref t, through m := mut h: h holds t
 		c.flowAssign(p.v, part)
-		c.holdIn(p.v, part, x.typ, op.expr, lhs.Pos())
+		c.holdCarried(p.v, part, x.typ, from, lhs.Pos())
 		c.flowThrough(p.v, "", part, lhs.Pos())
 	case kind == placeIndexed && holdsBorrow(x.typ):
-		c.holdIn(p.v, p.path, x.typ, op.expr, lhs.Pos()) // an element, of an index not known here, lets go of nothing
+		c.holdCarried(p.v, p.path, x.typ, from, lhs.Pos()) // an element, of an index not known here, lets go of nothing
 	default:
 		if _, ok := lhs.(*ast.Ident); !ok {
 			c.kept(op, "stored", lhs.Pos()) // a field or element keeps the value
@@ -347,7 +462,7 @@ func (c *Checker) stored(lhs ast.Expr, x operand, holder *Var, op operand) {
 // storeRefused reports, and refuses, a closure's body storing a borrow
 // in a variable from outside it: what the closure borrows ends with
 // each call.
-func (c *Checker) storeRefused(p place, kind placeKind, x, op operand, pos token.Pos) bool {
+func (c *Checker) storeRefused(p place, x, op operand, pos token.Pos) bool {
 	f := c.flow
 	if f == nil || !c.bringsBorrow(x.typ, op) && !(isSignature(x.typ) && c.closureBorrows(op)) {
 		return false
@@ -486,7 +601,7 @@ func (c *Checker) send(s *ast.SendStmt) {
 // returnStmt checks the results against the function's result type:
 // none for (), one value, or one tuple value or a list for several.
 func (c *Checker) returnStmt(s *ast.ReturnStmt) {
-	want := c.sig.results
+	want := c.refine(c.sig.results)
 	switch {
 	case len(s.Results) == 0:
 		if want != Unit {
@@ -554,17 +669,22 @@ func (c *Checker) ifBind(s *ast.IfBindStmt) bool {
 			b := borrowOf(m)
 			c.copies = !isBorrow(x.typ)
 			c.pattern(s.Pat, o.elem, b)
-			c.resolvingIn(outer, func() { c.bindThrough(s.Pat, s.Value, b) }) // if o := o binds a new o out of the old
+			c.resolvingIn(outer, func() { // if o := o binds a new o out of the old
+				if c.bindsOwned && c.fromPlace(s.Value, x.mode) {
+					c.move(s.Value, variable) // a part bound by value leaves the place before the binding holds it; a temporary's part may not leave it
+				}
+
+				c.bindThrough(s.Pat, s.Value, b)
+			})
+			if tmp := c.borrowOfTemporary(s.Value); tmp != nil { // if first := mk().First(): what binds a borrow holds the temporary
+				c.lendTemporary(c.scope, c.flowTemporary(tmp), s.Pat.Pos())
+			}
 		} else {
 			c.errorf(s.Value.Pos(), "if x := v binds an option; "+x.typ.String()+" is not one")
 			c.pattern(s.Pat, Typ[Invalid], nil)
 		}
 	} else {
 		c.pattern(s.Pat, Typ[Invalid], nil)
-	}
-
-	if c.bindsOwned && held(s.Value, x.mode) {
-		c.resolvingIn(outer, func() { c.move(s.Value, variable) }) // a part bound by value leaves the place; a temporary's part may not leave it
 	}
 
 	f := c.forkAt()
@@ -648,6 +768,11 @@ func (c *Checker) flowPost(s *ast.ForStmt) {
 // it lies; one that is a call's result lives for the loop and is
 // dropped after it.
 func (c *Checker) rangeStmt(s *ast.RangeStmt) {
+	if call, b := c.partsCall(s.X); call != nil {
+		c.partsLoop(s, call, b)
+		return
+	}
+
 	x := c.expr(s.X, nil)
 	c.openScope()
 	defer c.closeScope()
@@ -687,7 +812,7 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 		case iterator && x.mode == variable && IsCopy(x.typ):
 			loopHolder, places, placesMut = c.holdRange(s, mut)
 			loopHolder = c.holdIterator(s, loopHolder) // a Copy iterator is not moved out of its variable, which Next changes in place: lent mut for the loop
-		case held(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
+		case c.fromPlace(s.X, x.mode) && !isBorrow(x.typ) && !holdsBorrow(x.typ):
 			c.maybeMove(x, x.typ) // ranging over an owned collection by value consumes it; through a borrow it lends, and so does a slice of borrows, the pieces of a string, whose elements are its string's
 		case iterator && x.mode == variable:
 			loopHolder, places, placesMut = c.holdRange(s, mut)
@@ -714,9 +839,34 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	}
 
 	c.holdElements(s, places, placesMut)
+	c.holdRangedTemporary(s)
 
 	c.block(s.Body)
 	c.leaveRegion()
+}
+
+// holdRangedTemporary makes the loop's variables that hold a borrow,
+// declared by it or assigned, hold the temporary the ranged value lends
+// from, for x := range mk().Items(): the temporary lives through the
+// loop and is dropped where the for statement ends, so that no borrow
+// of it is kept past the loop.
+func (c *Checker) holdRangedTemporary(s *ast.RangeStmt) {
+	tmp := c.borrowOfTemporary(s.X)
+	if tmp == nil {
+		return
+	}
+
+	holder := c.flowTemporary(tmp)
+	if s.Tok == token.DEFINE {
+		c.lendTemporary(c.scope, holder, s.For)
+		return
+	}
+
+	for _, e := range []ast.Expr{s.Key, s.Value} {
+		if p, kind := c.placeOf(e); kind == placeOwned && holder != nil && holdsBorrow(p.v.typ) {
+			c.flowLoan(borrow{holder: p.v, place: place{holder, ""}, pos: s.For})
+		}
+	}
 }
 
 // holdRange records the borrow a range loop holds of its collection
@@ -788,7 +938,23 @@ func (c *Checker) holdElements(s *ast.RangeStmt, lent []place, mut bool) {
 // deferStmt checks a defer: what the deferred call borrows, its
 // receiver, its arguments and what a deferred closure captures, is held
 // until the function returns, when the call runs.
+// inParts reports whether a loop over a type's parts is around the
+// statement being checked, in the function being checked.
+func (c *Checker) inParts() bool {
+	for i := range c.regions {
+		if c.regions[i].parts {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Checker) deferStmt(s *ast.DeferStmt) {
+	if c.inParts() {
+		c.errorf(s.Defer, "defer cannot be inside a loop over a type's parts, which is written out once per part: defer before the loop")
+	}
+
 	call, ok := unparen(s.Call).(*ast.CallExpr)
 	if !ok {
 		c.expr(s.Call, nil)
@@ -828,6 +994,14 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 	}
 
 	if sig == nil {
+		if id, ok := unparen(call.Fun).(*ast.Ident); ok {
+			if _, builtin := c.resolve(id.Name).(*Builtin); builtin {
+				for _, arg := range call.Args { // print(s), close(ch): saved when the defer runs, so what they read is held until the call does
+					c.deferView(holder, arg, s.Pos())
+				}
+			}
+		}
+
 		return
 	}
 
@@ -836,16 +1010,22 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 	}
 
 	fixed := sig.fixed()
+	kind, each := sig.variadicArg()
 	for i, arg := range call.Args {
-		if i >= fixed {
-			if k := i - fixed; sig.variadic && k < len(rest) && holdsBorrow(rest[k].typ) {
-				c.deferView(holder, arg, s.Pos()) // fmt.Println(t) saves t's view as any, which says nothing of it
+		if i >= fixed && kind == VariadicAny {
+			if k := i - fixed; k < len(rest) && rest[k].mode != invalid {
+				c.deferView(holder, arg, s.Pos()) // fmt.Println(t) saves t as a view, any lent, whatever its type
 			}
 
 			continue
 		}
 
-		if t := sig.params[i].typ; holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
+		_, t, _, packed := argSlot(sig, i, call.Ellipsis.IsValid(), kind, each) // an argument of a variadic parameter of the program's is held as its element, or as the slice after ...
+		if packed {
+			continue // moved into the function's own slice, and held by nothing: one that borrows was refused as stored
+		}
+
+		if holdsBorrow(t) || isSignature(t) && c.closureExprBorrows(arg) {
 			c.deferHold(holder, t, arg, s.Pos())
 		}
 	}
@@ -859,13 +1039,18 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 // and changed until then; or a borrow variable, s in defer s.cleanup()
 // with s a mut receiver, which the call reads then, so it may not be
 // pointed elsewhere before, and what it points to is held as the
-// variable is. Anything else, an element, what a borrow points to, a
+// variable is. A literal or a constant outlives the function and is
+// held as it is. Anything else, an element, what a borrow points to, a
 // value that holds a borrow or a closure that borrows, is refused: what
 // it points into may move or die before the call runs.
 func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 	x := unparen(e)
-	if u, ok := x.(*ast.UnaryExpr); ok && (u.Op == token.REF || u.Op == token.MUT) {
-		x = unparen(u.X)
+	if lends(x) {
+		x = unparen(x.(*ast.UnaryExpr).X)
+	}
+
+	if c.static(x) { // a literal or a constant, which outlives the function: fmt.Printf's format
+		return
 	}
 
 	if id, ok := x.(*ast.Ident); ok && !isSignature(t) {
@@ -890,18 +1075,28 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 	c.errorf(e.Pos(), "a deferred call borrows only a whole variable, one that is a borrow or holds none: "+exprText(e)+" is not one; "+fix)
 }
 
-// deferView records what a deferred call's variadic argument views, a
-// borrow saved as any when the defer runs: the places it is lent from,
-// held until the function returns, so that none is given a new value
-// before then, which would free what the view sees; a whole variable
-// as deferHold holds it, and a view made for the call, s.Trim(), by its
-// sources, since the view is the call's own and nothing else reads it.
+// deferView records what a deferred call saves as a view when the
+// defer runs, an argument of the printing functions' ...ref any or of a
+// built-in, print(s), close(ch): the places it is lent from, a whole
+// variable among them, held until the function returns, so that none
+// is given a new value or moved away before then, which would free what
+// the saved view sees, unless its type is Copy and the saved value a
+// copy; a view made for the call, s.Trim(), by its sources, since the
+// view is the call's own and nothing else reads it.
+// A call that reaches a variable when it runs holds it by deferHold
+// instead, which lets it change.
 func (c *Checker) deferView(holder *Var, e ast.Expr, pos token.Pos) {
-	if id, ok := unparen(e).(*ast.Ident); ok {
-		if p, kind := c.placeOf(id); kind == placeOwned {
-			c.deferHold(holder, p.v.typ, e, pos)
-			return
+	if tmp := c.temporaryOf(e); tmp != nil && unparen(tmp) != unparen(e) { // a part of a value the defer statement drops, which the call would read after
+		c.errorf(e.Pos(), "a deferred call reads what it prints when it runs, after the defer statement drops "+exprText(unparen(tmp))+": keep "+exprText(unparen(tmp))+" in a variable first, and print from it")
+		return
+	}
+
+	if p, kind := c.placeOf(unparen(e)); kind == placeOwned && !isBorrow(p.v.typ) {
+		if !IsCopy(placeType(p)) { // a Copy value saved is a copy, which owns nothing the place could free
+			c.flowLoan(borrow{holder: holder, place: p, pos: pos}) // an owned place the saved view sees: s, t.name, xs[i]
 		}
+
+		return
 	}
 
 	c.sources(e, func(src ast.Expr, _, _ bool) {
@@ -1030,6 +1225,10 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 }
 
 func (c *Checker) selectStmt(s *ast.SelectStmt) bool {
+	if c.inParts() {
+		c.errorf(s.Select, "select cannot be inside a loop over a type's parts, which is written out once per part: select in a function the loop calls")
+	}
+
 	allLeave := true
 	c.enterRegion(false, false, s.Select)
 	f := c.forkAt()

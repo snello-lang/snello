@@ -142,10 +142,21 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 
 		op := c.expr(elt, hint)
 		elems[i] = valueType(op)
+		if isBorrow(op.typ) && (isBorrow(hint) || lends(elt)) {
+			elems[i] = op.typ // (mut j, 1) holds the borrow, as a name given mut j does, and so does a part a borrow is wanted for
+		}
+
 		c.maybeMove(op, elems[i]) // the part moves into the tuple
 	}
 
 	return operand{value, NewTuple(elems...), nil, nil}
+}
+
+// lends reports whether e is a ref or a mut of a place, which makes a
+// borrow, against a borrow read out of a variable.
+func lends(e ast.Expr) bool {
+	u, ok := unparen(e).(*ast.UnaryExpr)
+	return ok && (u.Op == token.REF || u.Op == token.MUT)
 }
 
 // compositeLit checks T{...}. A struct literal names its fields; a
@@ -165,6 +176,10 @@ func (c *Checker) compositeLit(e *ast.CompositeLit, expected Type) operand {
 		c.errorf(e.Lbrace, "a composite literal needs a type here")
 		c.looseElements(e.Elts)
 		return invalidOperand
+	}
+
+	if tp, ok := t.(*TypeParam); ok && c.kinds[tp] == "struct" {
+		return c.partsLit(e, tp)
 	}
 
 	switch u := t.Underlying().(type) {
@@ -270,7 +285,12 @@ func (c *Checker) genericLit(e *ast.CompositeLit, g *Named, expected Type) opera
 		done[v] = ops[i]
 	}
 
-	c.structLit(e, t, t.Underlying().(*Struct), done)
+	fields, ok := t.Underlying().(*Struct)
+	if !ok { // a declaration refused for growing has no instances, and was reported where it is declared
+		return invalidOperand
+	}
+
+	c.structLit(e, t, fields, done)
 	return operand{value, t, nil, nil}
 }
 
@@ -282,7 +302,7 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 		return
 	}
 
-	for _, elt := range e.Elts {
+	for i, elt := range e.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 
 		key, ok := kv.Key.(*ast.Ident)
@@ -296,6 +316,15 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 		if f == nil {
 			c.errorf(key.Pos(), "unknown field "+key.Name)
 			c.expr(kv.Value, nil)
+			continue
+		}
+
+		if keyedBefore(e.Elts[:i], key.Name) {
+			c.errorf(key.Pos(), "duplicate field "+key.Name+" in a "+t.String()+" literal")
+			if _, evaluated := done[kv.Value]; !evaluated {
+				c.expr(kv.Value, nil)
+			}
+
 			continue
 		}
 
@@ -317,6 +346,19 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 	}
 
 	c.zeroFields(e, t, st)
+}
+
+// keyedBefore reports whether one of elts, the pairs of a struct
+// literal before a key, names the field name. A literal names few
+// fields, so a scan costs less than a set.
+func keyedBefore(elts []ast.Expr, name string) bool {
+	for _, elt := range elts {
+		if key, ok := elt.(*ast.KeyValueExpr).Key.(*ast.Ident); ok && key.Name == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 // keyed makes every element of a struct literal a key: value pair, and
@@ -344,8 +386,13 @@ func (c *Checker) keyed(e *ast.CompositeLit, t Type, st *Struct) bool {
 		return false
 	}
 
-	if positional != len(st.fields) {
-		c.errorf(e.Lbrace, "a positional struct literal gives every field: "+t.String()+" has "+plural(len(st.fields), "field")+", not "+strconv.Itoa(positional))
+	if positional > len(st.fields) || positional < len(st.fields) && !st.defaultsFrom(positional) {
+		rule := "a positional struct literal gives every field: "
+		if st.hasDefaults() {
+			rule = "a positional struct literal gives every field but the last ones that declare a default: "
+		}
+
+		c.errorf(e.Lbrace, rule+t.String()+" has "+plural(len(st.fields), "field")+", not "+strconv.Itoa(positional))
 		c.looseElements(e.Elts)
 		return false
 	}
@@ -359,19 +406,21 @@ func (c *Checker) keyed(e *ast.CompositeLit, t Type, st *Struct) bool {
 
 // looseElements checks the elements of a literal whose type is unknown,
 // so their own errors are reported; a bare key is a field name and is
-// left alone.
+// left alone. The literal's error is reported already, so each element
+// is given the invalid type as its context: None, which takes its type
+// from the context, is not reported again.
 func (c *Checker) looseElements(elts []ast.Expr) {
 	for _, elt := range elts {
 		if kv, ok := elt.(*ast.KeyValueExpr); ok {
 			if _, isName := kv.Key.(*ast.Ident); !isName {
-				c.expr(kv.Key, nil)
+				c.expr(kv.Key, Typ[Invalid])
 			}
 
-			c.expr(kv.Value, nil)
+			c.expr(kv.Value, Typ[Invalid])
 			continue
 		}
 
-		c.expr(elt, nil)
+		c.expr(elt, Typ[Invalid])
 	}
 }
 

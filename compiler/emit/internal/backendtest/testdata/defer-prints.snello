@@ -1,0 +1,30 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A deferred print holds what it prints until the function returns: a
+// whole temporary it owns, a value worked out of a temporary's part when
+// the defer statement runs, and a part of a variable that lives as long;
+// a format, a literal or a constant, held as it is.
+package main
+
+import "fmt"
+
+const shown = "%v and %v\n"
+
+struct G { a string; xs []string }
+
+func of(a string) G { return G{a: a.Clone(), xs: []string{a}} }
+
+func mk() string { return "made".Clone() }
+
+func main() {
+	defer fmt.Println(mk())
+	defer fmt.Println(of("whole".Clone()))
+	defer fmt.Println(of("four".Clone()).a.Len(), len(of("x".Clone()).xs))
+	g := of("kept".Clone())
+	defer fmt.Println(g.a, g.xs[0])
+	defer fmt.Printf("%v!\n", g.a)
+	defer fmt.Printf(shown, g.xs[0], 2)
+	fmt.Println("body")
+}

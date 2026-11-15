@@ -43,6 +43,11 @@ typedef struct {
 // Snello; every emitted function carries this.
 #define SN_UNUSED __attribute__((unused))
 
+// A failure the program passes on with ?, which it seldom takes: the
+// compiler lays the path that goes on straight and keeps the calls on
+// it inline, as it does for a path that panics.
+#define SN_UNLIKELY(c) __builtin_expect(!!(c), 0)
+
 // A slice of T is emitted as a struct of a T pointer, a length and a
 // capacity, in this order, so every one has the shape of sn_slice and
 // the operations below work on any of them given the element size.
@@ -56,6 +61,13 @@ typedef struct {
 // buffer of the slice it was cut from, so it may change its elements
 // but not its length, and it is never freed.
 #define SN_VIEW INT64_MIN
+
+// SN_CALLER is the capacity of the slice a variadic ...T parameter is
+// given from the arguments of its call, laid out in the caller's frame:
+// its elements are the function's, which it drops, but not its buffer,
+// which is never freed, and the first change of its length moves it
+// to a buffer of its own, as sn_slice_unframe does.
+#define SN_CALLER (INT64_MIN + 1)
 
 void *sn_alloc(size_t n);
 void sn_free(void *p);
@@ -247,7 +259,7 @@ static inline void sn_check_string(sn_string s) {
 }
 
 static inline void sn_check_slice(const sn_slice *s) {
-    if (s->len < 0 || (s->cap < 0 && s->cap != SN_VIEW)) {
+    if (s->len < 0 || (s->cap < 0 && s->cap != SN_VIEW && s->cap != SN_CALLER)) {
         sn_released("slice");
     }
 }
@@ -337,6 +349,7 @@ int64_t sn_strings_copyString(sn_slice_u8 *dst, sn_string s);
 sn_string sn_strings_repeat(sn_string s, int64_t n);
 void sn_string_append(sn_string *s, const sn_string *x);
 sn_string sn_strings_ownString(sn_slice_u8 b);
+sn_string sn_encoding__json_textOf(sn_slice_u8 b);
 int64_t sn_bufio_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
 int64_t sn_bufio_copyString(sn_slice_u8 *dst, sn_string s);
 int64_t sn_bufio_indexByte(sn_slice_u8 p, uint8_t c);
@@ -414,6 +427,22 @@ bool sn_unicode__norm_isNormal(sn_string s, int64_t form);
 int64_t sn_unicode__segment_next(sn_string s, int64_t at, int64_t kind);
 
 void sn_slice_free(sn_slice *s);
+
+// SN_SLICE_FREE frees the buffer of the slice a drop ends with, calling
+// the runtime only for a buffer of its own: an emptied slice and one a
+// caller laid out in its frame, SN_CALLER, have none, so a function of
+// a variadic ...T parameter that keeps its slice in the frame calls
+// nothing. A debug build always calls the runtime, for its checks.
+#ifdef SN_DEBUG
+#define SN_SLICE_FREE(s) sn_slice_free((sn_slice *)(s))
+#else
+#define SN_SLICE_FREE(s) \
+    do { \
+        if ((s)->ptr != NULL && (s)->cap != SN_CALLER) { \
+            sn_slice_free((sn_slice *)(s)); \
+        } \
+    } while (0)
+#endif
 void sn_release(void **p); // frees the block an owned pointer holds and empties the pointer
 
 void sn_init(int argc, char **argv);
@@ -438,6 +467,7 @@ void sn_slice_insert(sn_slice *s, int64_t i, const void *v, size_t size);
 void sn_slice_remove(sn_slice *s, int64_t i, void *out, size_t size);
 int64_t sn_slice_index_byte(const void *p, int64_t n, uint8_t c);
 void sn_slice_reserve(sn_slice *s, int64_t need, size_t size, const char *what);
+void sn_slice_unframe(sn_slice *s, size_t size);
 void sn_slice_reverse(sn_slice *s, size_t size);
 void sn_slice_clone(const sn_slice *s, sn_slice *out, size_t size);
 void sn_slice_sub(const sn_slice *s, int64_t lo, int64_t hi, sn_slice *out, size_t size);

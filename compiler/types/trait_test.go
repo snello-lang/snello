@@ -320,6 +320,11 @@ func TestTraits(t *testing.T) {
 		{"func f(a Comparable, b Comparable) bool { return a.Same(b) }", []string{"cannot call Same through Comparable: its signature mentions Self"}},
 		{"trait Mk { func (s ref Self) Dup() Self }\nfunc f(m ref Mk) { m.Dup() }", []string{"cannot call Dup through Mk: its signature mentions Self"}}, // Self in a result
 		{"trait Lk { var next *Self? }\nfunc f(l ref Lk) { print(l.next) }", []string{"cannot reach next through Lk: its type mentions Self"}},
+		// A default with type parameters of its own is a function for each type argument, which no entry of a trait value's table holds.
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc f(g ref Gen) int { return g.N() }", nil},
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc f(g ref Gen) int { return g.Dup(ref 3) }", []string{"cannot call Dup through Gen: it has type parameters, compiled for each type, which a trait value's table cannot hold; take the value as a bound"}},
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\ntrait Kin: Gen {}\nfunc f(g ref Kin) int { return g.Dup(ref 3) }", []string{"cannot call Dup through Kin: it has type parameters"}}, // through a refining trait
+		{"trait Gen { func (s ref Self) N() int\nfunc (s ref Self) Dup<U: Clone>(u ref U) U { return u.Clone() } }\nfunc G<T: Gen>(x ref T) int { return x.Dup(ref 3) }\nfunc f(g Gen) int { return G(ref g) }", []string{"cannot use Gen as the type parameter T of G: the method Dup of Gen has type parameters"}},
 		{"func f(t Logged) f64 { return t.Area() }", nil}, // a refined trait's method, through the value
 		{"func f(l ref Loud) string { return l.label.Clone() + l.Label() }", nil},
 		{"func f(c Circle) f64 { var s Shape = c; return c.r + s.Area() }", nil}, // a Copy value is copied into the trait value
@@ -336,7 +341,15 @@ func TestTraits(t *testing.T) {
 		// Wrong declarations.
 		{"trait T { func (s ref Self) F(); func (s ref Self) F() }", []string{"method T.F redeclared; first declared at"}},
 		{"trait T { func (s ref Circle) F() }", []string{"a trait method's receiver is Self, ref Self or mut Self"}},
-		{"trait T { func F() }", []string{"a trait method needs a receiver: (s ref Self)"}},
+		{"trait T { func F() }", nil}, // a function of the implementing type
+		{"trait T { func F<U>() }", []string{"a required function cannot have type parameters"}},
+		{"trait T { func F() int { return 1 } }", []string{"a trait's function has no default body"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }", []string{"Q does not implement P: missing function Q.Parse(ref string) Q?"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }\nfunc (q ref Q) Parse(s ref string) Q? { return None }", []string{"Q.Parse is a method, and P wants a function of the type"}},
+		{"trait P { func (s ref Self) Show() string }\nstruct Q impl P { n int }\nfunc Q.Show() string { return \"q\" }", []string{"Q.Show is a function of the type, and P wants a method"}},
+		{"trait P { func Parse(s ref string) Self? }\nstruct Q impl P { n int }\nfunc Q.Parse(s ref string) Q? { return Some(Q{n: len(s)}) }\nfunc parsed<T: P>(s ref string) T? { return T.Parse(s) }\nfunc f() Q? { return parsed<Q>(\"ab\") }", nil},
+		{"trait C { func Count() int; func (s ref Self) Twice() int { return Self.Count() * 2 } }\nstruct Q impl C { n int }\nfunc Q.Count() int { return 3 }\nfunc f(q ref Q) int { return q.Twice() }", nil}, // a default body calls a function of the type that inherits it
+		{"func f() int { return Self.Count() }", []string{"Self is only defined inside a trait"}},
 		{"trait T: T {}", []string{"trait T refines itself"}},
 		{"trait A: B {}\ntrait B: A {}", []string{"trait A refines itself"}},
 		{"trait T<U> { func (s ref Self) F() U }", nil},

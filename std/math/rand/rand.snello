@@ -6,185 +6,243 @@
 // which gives the same numbers for the same seed, and from the
 // package's own functions, which give numbers nobody can foretell.
 //
-//     r := rand.New(1, 2)           // the same numbers on every run
-//     roll := r.IntN(6) ?? 0        // 0 to 5
-//     pick := rand.IntN(len(xs))    // None when xs is empty
+//	r := rand.New(1, 2)        // the same numbers on every run
+//	roll := r.IntN(6) ?? 0     // 0 to 5
+//	pick := rand.IntN(len(xs)) // None when xs is empty
 //
-// A generator made by New is Go's PCG: the permuted congruential
-// generator PCG-DXSM, 128 bits of state, with the numbers Go's
-// math/rand/v2 gives for rand.New(rand.NewPCG(seed1, seed2)), so a
-// sequence a program records stays the sequence. It is for simulations,
-// tests and games, where a run must be repeatable; what it gives can be
+// A generator made by New is PCG-DXSM, the permuted congruential
+// generator with 128 bits of state: each step multiplies the state by
+// PCG's 128-bit multiplier and adds its increment, and the number given
+// is the new state through DXSM, double xorshift multiply. The seed's
+// two words are the state's high and low halves, so the same seed gives
+// the same sequence on every system and in every build, and a sequence
+// a program records stays the sequence. It is for simulations, tests
+// and games, where a run must be repeatable; what it gives can be
 // worked out from what it gave, and it is no source of secrets.
 //
 // The package functions, Int, IntN, Int64, Float64, Shuffle and Perm,
-// draw from the runtime's source: ChaCha8 keyed from the system when a
-// program first draws, as Go's are, whose numbers cannot be told from
-// the ones before. They take no seed and need no lock. A system that
-// gives no random bytes, which none Snello runs on does, leaves a key
-// made of the clock, and numbers one who knows when the program started
-// could work out.
+// draw from the runtime's source: ChaCha8, one generator a thread,
+// keyed from the system when a program first draws, whose numbers
+// cannot be told from the ones before. They take no seed and need no
+// lock. A system that gives no random bytes, which none Snello runs on
+// does, leaves a key made of the clock, and numbers one who knows when
+// the program started could work out.
 //
 // A number below a bound is drawn without the bias a remainder has, by
 // Lemire's multiplication with its rare redraw, and a shuffle is Fisher
-// and Yates's, both as Go writes them. No function here panics on a
-// mistake of its caller's: a bound that leaves nothing to draw from
-// gives None, and a count below zero is a count of none. Perm allocates
-// the numbers it returns, and a count more than memory holds ends the
-// program as any allocation that fails does.
+// and Yates's. No function here panics on a mistake of its caller's: a
+// bound that leaves nothing to draw from gives None, and a count below
+// zero is a count of none. Perm allocates the numbers it returns, and a
+// count more than memory holds ends the program as any allocation that
+// fails does.
 package rand
 
-// A source gives the next 64 random bits. The generator and the
-// runtime's source are the two, and every drawing below is written once
-// over either.
-trait source {
-	func (s mut Self) next() u64
-}
+// The multiplier and the increment of PCG's 128-bit linear congruential
+// step, state*multiplier + increment, each as its high and its low
+// word.
+const pcgMultiplierHigh u64 = 2549297995355413924
+const pcgMultiplierLow u64 = 4865540595714422341
+const pcgIncrementHigh u64 = 6364136223846793005
+const pcgIncrementLow u64 = 1442695040888963407
+
+// dxsmMultiplier is the 64-bit multiplier of DXSM's permutation, the
+// cheap multiplier PCG names, which the high half of the state is
+// multiplied by between its two xorshifts.
+const dxsmMultiplier u64 = 0xda942042e4dd58b5
+
+// An f64 holds every multiple of 2^-53 from 0 up to 1 exactly, 53 being
+// the precision of its significand: a float drawn keeps the low 53 bits
+// of 64 random bits, the spare 11 above them shifted out, and scales
+// them by 2^-53, float64Scale being 2^53.
+const float64SpareBits u64 = 11
+const float64Scale f64 = 9007199254740992.0
 
 // Rand is a generator with a seed: two words, the whole of its state.
 // It is copied as any struct of plain values is, and a copy goes on
 // from where the original was, giving the same numbers: s := r keeps
 // the place to replay from. To draw one sequence from several
-// functions, lend the generator, mut r.
+// functions, lend the generator, mut r. Its methods allocate nothing
+// but Perm's result, and each draw is a few multiplications.
 struct Rand impl source {
 	hi u64
 	lo u64
 }
 
-// New returns a generator seeded with the two words. The same seed
-// gives the same numbers, on every system and in every build.
+// A source gives the next 64 random bits. The generator and the
+// runtime's source are the two, and every drawing is written once over
+// either.
+trait source {
+	func (s mut Self) nextBits() u64
+}
+
+// A runtimeSource is the runtime's source, one ChaCha8 generator a
+// thread, which holds no state of its own: a value of it is made for
+// each draw.
+struct runtimeSource impl source {}
+
+// New returns a generator seeded with the two words seed1 and seed2,
+// the high and the low half of its 128 bits of state. The same seed
+// gives the same numbers, on every system and in every build; any two
+// words are a seed, zeros included.
+//
+//	r := rand.New(42, 7)
+//	a := r.Int() // the same number on every run
 func New(seed1, seed2 u64) Rand {
 	return Rand{hi: seed1, lo: seed2}
 }
 
-// next steps the state, state*mul + inc over 128 bits, and returns the
-// permutation DXSM, double xorshift multiply, of the new state.
-func (r mut Rand) next() u64 {
+// Int returns a random int that is not negative, from 0 to
+// math.MaxInt, every one as likely as another: the 63 low bits of the
+// generator's next 64. It steps the generator, lent mut, once.
+func (r mut Rand) Int() int { return drawInt(r) }
+
+// Int64 returns a random i64 that is not negative, from 0 to
+// math.MaxInt64, as Int does. It steps the generator, lent mut, once.
+func (r mut Rand) Int64() i64 { return i64(drawInt(r)) }
+
+// IntN returns a random int from 0 up to, and not including, n, every
+// one as likely as another, or None when n is zero or negative and
+// there is no such number; None draws nothing, so the generator is
+// where it was. It steps the generator, lent mut, once, or in rare
+// cases a few times, to keep the draw unbiased.
+//
+//	face := r.IntN(6) ?? 0 // 0 to 5
+func (r mut Rand) IntN(n int) int? { return drawIntN(r, n) }
+
+// Float64 returns a random f64 from 0 up to, and not including, 1: one
+// of the 2^53 multiples of 2^-53 there, every one as likely as another.
+// It steps the generator, lent mut, once.
+func (r mut Rand) Float64() f64 { return drawFloat64(r) }
+
+// Shuffle puts the elements of xs, lent mut, in a random order, every
+// order as likely as another, in place: the elements are exchanged,
+// never copied, so a slice of values that are not Copy shuffles as one
+// of numbers does. It allocates nothing and steps the generator once
+// for each element after the first.
+func (r mut Rand) Shuffle<T>(xs mut []T) { shuffle(r, xs) }
+
+// Perm returns the numbers 0 to n-1 in a random order, every order as
+// likely as another, in a new slice of n ints the caller owns, and an
+// empty slice when n is zero or negative. A count more than memory
+// holds ends the program, as any allocation that fails does.
+//
+//	order := r.Perm(len(players))
+func (r mut Rand) Perm(n int) []int { return permutation(r, n) }
+
+// Int returns a random int that is not negative, from 0 to
+// math.MaxInt, from the runtime's source: a different number on every
+// run.
+func Int() int {
+	g := runtimeSource{}
+	return drawInt(mut g)
+}
+
+// Int64 returns a random i64 that is not negative, from 0 to
+// math.MaxInt64, from the runtime's source.
+func Int64() i64 {
+	g := runtimeSource{}
+	return i64(drawInt(mut g))
+}
+
+// IntN returns a random int from 0 up to, and not including, n, every
+// one as likely as another, from the runtime's source, or None when n
+// is zero or negative and there is no such number.
+//
+//	pick := rand.IntN(len(xs)) ?? return None
+func IntN(n int) int? {
+	g := runtimeSource{}
+	return drawIntN(mut g, n)
+}
+
+// Float64 returns a random f64 from 0 up to, and not including, 1, one
+// of the 2^53 multiples of 2^-53 there, from the runtime's source.
+func Float64() f64 {
+	g := runtimeSource{}
+	return drawFloat64(mut g)
+}
+
+// Shuffle puts the elements of xs, lent mut, in a random order, every
+// order as likely as another, from the runtime's source. It exchanges
+// the elements in place and allocates nothing.
+func Shuffle<T>(xs mut []T) {
+	g := runtimeSource{}
+	shuffle(mut g, xs)
+}
+
+// Perm returns the numbers 0 to n-1 in a random order, from the
+// runtime's source, in a new slice the caller owns, and an empty slice
+// when n is zero or negative.
+func Perm(n int) []int {
+	g := runtimeSource{}
+	return permutation(mut g, n)
+}
+
+// nextBits steps the state, state*multiplier + increment over 128
+// bits, and returns the permutation DXSM, double xorshift multiply, of
+// the new state.
+func (r mut Rand) nextBits() u64 {
 	var lo u64 = 0
-	hi := mul64(r.lo, 4865540595714422341, mut lo)
-	hi += r.hi * 4865540595714422341 + r.lo * 2549297995355413924
-	sum := lo + 1442695040888963407
+	hi := mul64(r.lo, pcgMultiplierLow, mut lo)
+	hi += r.hi * pcgMultiplierLow + r.lo * pcgMultiplierHigh
+	sum := lo + pcgIncrementLow
 	if sum < lo { // the carry out of the low half
 		hi += 1
 	}
 
-	hi += 6364136223846793005
+	hi += pcgIncrementHigh
 	r.lo = sum
 	r.hi = hi
 
 	hi ^= hi >> 32
-	hi *= 0xda942042e4dd58b5
+	hi *= dxsmMultiplier
 	hi ^= hi >> 48
 	hi *= sum | 1
 	return hi
 }
 
-// Int returns a random int that is not negative.
-func (r mut Rand) Int() int { return anyInt(r) }
+// nextBits returns the runtime source's next 64 bits.
+func (g mut runtimeSource) nextBits() u64 { return random() }
 
-// Int64 returns a random i64 that is not negative.
-func (r mut Rand) Int64() i64 { return i64(anyInt(r)) }
-
-// IntN returns a random int from 0 up to, and not including, n, every
-// one as likely as another, or None when n is zero or negative and
-// there is no such number.
-func (r mut Rand) IntN(n int) int? { return intN(r, n) }
-
-// Float64 returns a random f64 from 0 up to, and not including, 1.
-func (r mut Rand) Float64() f64 { return float64(r) }
-
-// Shuffle puts the elements of xs in a random order, every order as
-// likely as another.
-func (r mut Rand) Shuffle<T>(xs mut []T) { shuffle(r, xs) }
-
-// Perm returns the numbers 0 to n-1 in a random order, and no numbers
-// when n is zero or negative.
-func (r mut Rand) Perm(n int) []int { return perm(r, n) }
-
-// global is the runtime's source, one generator a thread.
-struct global impl source {}
-
-func (g mut global) next() u64 { return random() }
-
-// Int returns a random int that is not negative, from the runtime's
-// source.
-func Int() int {
-	g := global{}
-	return anyInt(mut g)
+// drawInt returns a random int that is not negative: 64 random bits
+// with the sign bit cleared.
+func drawInt<S: source>(s mut S) int {
+	return int(s.nextBits() << 1 >> 1)
 }
 
-// Int64 returns a random i64 that is not negative, from the runtime's
-// source.
-func Int64() i64 {
-	g := global{}
-	return i64(anyInt(mut g))
-}
-
-// IntN returns a random int from 0 up to, and not including, n, from
-// the runtime's source, or None when n is zero or negative.
-func IntN(n int) int? {
-	g := global{}
-	return intN(mut g, n)
-}
-
-// Float64 returns a random f64 from 0 up to, and not including, 1, from
-// the runtime's source.
-func Float64() f64 {
-	g := global{}
-	return float64(mut g)
-}
-
-// Shuffle puts the elements of xs in a random order, from the runtime's
-// source.
-func Shuffle<T>(xs mut []T) {
-	g := global{}
-	shuffle(mut g, xs)
-}
-
-// Perm returns the numbers 0 to n-1 in a random order, from the
-// runtime's source, and no numbers when n is zero or negative.
-func Perm(n int) []int {
-	g := global{}
-	return perm(mut g, n)
-}
-
-// anyInt clears the sign bit of 64 random bits.
-func anyInt<S: source>(s mut S) int {
-	return int(s.next() << 1 >> 1)
-}
-
-func intN<S: source>(s mut S, n int) int? {
+// drawIntN returns a random int from 0 up to, and not including, n, or
+// None, drawing nothing, when n is zero or negative.
+func drawIntN<S: source>(s mut S, n int) int? {
 	if n <= 0 {
 		return None
 	}
 
-	return Some(int(below(s, u64(n))))
+	return Some(int(drawBelow(s, u64(n))))
 }
 
-// float64 is one of the 2^53 values an f64 holds from 0 up to 1, 53
-// random bits over 2^53.
-func float64<S: source>(s mut S) f64 {
-	return f64(s.next() << 11 >> 11) / 9007199254740992.0
+// drawFloat64 returns one of the 2^53 values an f64 holds from 0 up to
+// 1 at a step of 2^-53: 53 random bits over 2^53.
+func drawFloat64<S: source>(s mut S) f64 {
+	return f64(s.nextBits() << float64SpareBits >> float64SpareBits) / float64Scale
 }
 
-// below returns a number from 0 up to, and not including, n, which is
-// not zero. A power of two keeps the low bits. Any other n takes the
+// drawBelow returns a number from 0 up to, and not including, n, which
+// is not zero. A power of two keeps the low bits. Any other n takes the
 // high half of the 128-bit product of 64 random bits and n, which is
 // the bits scaled down to n; the low half says when the product fell
 // among the few that would make some numbers likelier than others, and
 // those are drawn again. The test against n first spares the division
 // almost always, since the low half is rarely below n.
-func below<S: source>(s mut S, n u64) u64 {
+func drawBelow<S: source>(s mut S, n u64) u64 {
 	if n & (n - 1) == 0 {
-		return s.next() & (n - 1)
+		return s.nextBits() & (n - 1)
 	}
 
 	var lo u64 = 0
-	hi := mul64(s.next(), n, mut lo)
+	hi := mul64(s.nextBits(), n, mut lo)
 	if lo < n {
-		thresh := (0 - n) % n
-		for lo < thresh {
-			hi = mul64(s.next(), n, mut lo)
+		threshold := (0 - n) % n
+		for lo < threshold {
+			hi = mul64(s.nextBits(), n, mut lo)
 		}
 	}
 
@@ -195,11 +253,13 @@ func below<S: source>(s mut S, n u64) u64 {
 // exchanged with one drawn from those up to it, itself included.
 func shuffle<S: source, T>(s mut S, xs mut []T) {
 	for i := len(xs) - 1; i > 0; i-- {
-		xs.Swap(i, int(below(s, u64(i + 1))))
+		xs.Swap(i, int(drawBelow(s, u64(i + 1))))
 	}
 }
 
-func perm<S: source>(s mut S, n int) []int {
+// permutation returns the numbers 0 to n-1 shuffled, in a new slice of
+// n, and an empty one for an n of zero or less.
+func permutation<S: source>(s mut S, n int) []int {
 	p := make([]int, 0, max(n, 0))
 	for i := 0; i < n; i++ {
 		p.Push(i)
@@ -209,8 +269,10 @@ func perm<S: source>(s mut S, n int) []int {
 	return p
 }
 
-// random is the next number of the runtime's source, and mul64 the
-// 128-bit product of x and y, the high half returned and the low half
-// stored in lo. The runtime provides both.
+// random returns the next 64 bits of the runtime's source, the running
+// thread's ChaCha8 generator. The runtime provides it.
 func random() u64
+
+// mul64 returns the high half of the 128-bit product of x and y and
+// stores the low half in lo. The runtime provides it.
 func mul64(x, y u64, lo mut u64) u64

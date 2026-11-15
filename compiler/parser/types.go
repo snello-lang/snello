@@ -116,17 +116,19 @@ func (p *Parser) parseCoreType() ast.Type {
 	return &ast.NamedType{Name: &ast.Ident{NamePos: pos, Name: "_"}}
 }
 
-// parseNamedType parses: ident ["." ident] ["<" types ">"]. The first
-// identifier is the name until a "." shows it was a package.
+// parseNamedType parses: ident ["." (ident | "type")] ["<" types ">"].
+// The first identifier is the name until a "." shows it was a package,
+// or the field of a loop over a type's fields, whose type is f.type.
 //
 //	int                 NamedType{Name: int}
 //	http.Request        NamedType{Pkg: http, Name: Request}
 //	arena.Index<Node>   NamedType{Pkg: arena, Name: Index, Args: [Node]}
+//	f.type              NamedType{Pkg: f, Name: type}
 func (p *Parser) parseNamedType() *ast.NamedType {
 	typ := &ast.NamedType{Name: p.parseIdent()}
 	if p.tok == token.PERIOD {
 		p.next()
-		typ.Pkg, typ.Name = typ.Name, p.parseIdent()
+		typ.Pkg, typ.Name = typ.Name, p.parseNameOrType()
 	}
 
 	if p.tok == token.LSS {
@@ -134,6 +136,19 @@ func (p *Parser) parseNamedType() *ast.NamedType {
 	}
 
 	return typ
+}
+
+// parseNameOrType parses an identifier, or the keyword type or default,
+// read as a name: what follows the "." of f.type, a field's type, and
+// of f.default, its default.
+func (p *Parser) parseNameOrType() *ast.Ident {
+	if p.tok == token.TYPE || p.tok == token.DEFAULT {
+		id := &ast.Ident{NamePos: p.pos, Name: p.tok.String()}
+		p.next()
+		return id
+	}
+
+	return p.parseIdent()
 }
 
 // parseTypeArgs parses "<" Type {"," Type} ">". In a type, "<" always
@@ -165,10 +180,11 @@ func (p *Parser) parseTypeArgs() []ast.Type {
 // parseSliceOrArrayType parses "[" "]" Type or "[" N "]" Type, the
 // two forms that begin with a bracket. The decision is made by the
 // token after the bracket: a "]" means slice, anything else is the
-// array length.
+// array length, an expression the checker requires to be constant.
 //
 //	[]*Node        SliceType{PointerType{NamedType}}
 //	[16]float64    ArrayType{Len: BasicLit 16, Elem: NamedType}
+//	[2 * N]byte    ArrayType{Len: BinaryExpr, Elem: NamedType}
 func (p *Parser) parseSliceOrArrayType() ast.Type {
 	pos := p.expect(token.LBRACK)
 	if p.tok == token.RBRACK {
@@ -176,13 +192,7 @@ func (p *Parser) parseSliceOrArrayType() ast.Type {
 		return &ast.SliceType{Lbrack: pos, Elem: p.parseType()}
 	}
 
-	// Until expressions arrive, an array length is an integer literal.
-	if p.tok != token.INT {
-		p.errorExpected(p.pos, "array length")
-	}
-
-	length := &ast.BasicLit{ValuePos: p.pos, Kind: token.INT, Value: p.lit}
-	p.next()
+	length := p.parseExpr()
 	p.expect(token.RBRACK)
 	return &ast.ArrayType{Lbrack: pos, Len: length, Elem: p.parseType()}
 }
@@ -238,6 +248,13 @@ func (p *Parser) parseFuncType() *ast.FuncType {
 // A group of names shares one Type node, so (from, to NodeID) yields
 // two Param values whose Type fields point at the same NamedType.
 func (p *Parser) parseParams() []*ast.Param {
+	return p.params(false)
+}
+
+// params parses a parameter list; variant says it is a variant's fields,
+// which take attributes as a struct's fields do, where a function's
+// parameters, and those of a function type inside the list, take none.
+func (p *Parser) params(variant bool) []*ast.Param {
 	p.expect(token.LPAREN)
 
 	// Identifiers whose role is not yet known. Parameter lists are short,
@@ -253,6 +270,7 @@ func (p *Parser) parseParams() []*ast.Param {
 			continue
 		}
 
+		group := len(params) // the first parameter the type just read is given to
 		if p.tok == token.IDENT && (typeStart[p.peek()] || p.peek() == token.ELLIPSIS) {
 			names = append(names, p.parseIdent())
 			dots := p.parseDots()
@@ -262,8 +280,21 @@ func (p *Parser) parseParams() []*ast.Param {
 			}
 		} else {
 			params = appendTypeParams(params, names)
+			group = len(params)
 			dots := p.parseDots()
 			params = append(params, &ast.Param{Dots: dots, Type: p.parseType()})
+		}
+
+		if p.tok == token.AT { // a variant's field takes attributes as a struct's does; a function's parameter takes none
+			at := p.pos
+			attrs := p.readAttrs()
+			if !variant {
+				p.error(at, "an attribute is written on a field, a variant or a struct or enum: a parameter takes none")
+			} else {
+				for _, param := range params[group:] {
+					p.keepAttrs(attrs, param)
+				}
+			}
 		}
 
 		names = names[:0]
@@ -457,12 +488,15 @@ func (p *Parser) skipFieldLine() bool {
 	return false
 }
 
-// parseField parses: ident {"," ident} Type | Type. As in parseParams,
-// an identifier is a name only if a comma or a type follows it; an
-// identifier followed by the end of the line is an embedded type.
+// parseField parses: ident {"," ident} Type ["=" ExprList] | Type. As in
+// parseParams, an identifier is a name only if a comma or a type follows
+// it; an identifier followed by the end of the line is an embedded type.
+// The expressions after = are the fields' defaults, which the checker
+// requires to be constant, one for each name.
 //
 //	id int          Field{Names: [id], Type: int}
 //	w, h float64    Field{Names: [w, h], Type: float64}
+//	port int = 80   Field{Names: [port], Type: int, Defaults: {Values: [80]}}
 //	Point           Field{Names: nil, Type: Point}
 //	pkg.Base        Field{Names: nil, Type: NamedType{Pkg: pkg}}
 func (p *Parser) parseField() *ast.Field {
@@ -479,5 +513,12 @@ func (p *Parser) parseField() *ast.Field {
 	}
 
 	field.Type = p.parseType()
+	if p.tok == token.ASSIGN {
+		pos := p.pos
+		p.next()
+		field.Defaults = &ast.FieldDefaults{Assign: pos, Values: p.parseExprList(token.SEMICOLON)}
+	}
+
+	p.parseAttrs(field, false)
 	return field
 }

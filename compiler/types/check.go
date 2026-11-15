@@ -17,10 +17,11 @@ import (
 // empty for the program being compiled, whether it is the standard
 // library's, and the scope holding its top-level declarations.
 type Package struct {
-	name  string
-	path  string
-	std   bool
-	scope *Scope
+	name     string
+	path     string
+	std      bool
+	scope    *Scope
+	defaults []ast.Expr // the defaults its structs' fields declare, which each field names by index (Var.def)
 }
 
 // An Importer loads the package an import path names, as
@@ -60,11 +61,15 @@ type Config struct {
 type Info struct {
 	Defs      map[*ast.Ident]Object
 	Uses      map[*ast.Ident]Object
-	Types     map[ast.Expr]Type          // the type of every expression that has one
-	Moves     map[ast.Expr]bool          // the place expressions whose value moves away: the emitter empties the place
-	Instances map[*ast.Ident]Instance    // the name of each generic function at a call, with the arguments inferred for it
-	Captures  map[*ast.FuncLit][]Capture // the variables of the enclosing functions each closure refers to, in the order first seen
-	Wraps     map[*ast.TryExpr]*Variant  // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
+	Types     map[ast.Expr]Type             // the type of every expression that has one
+	Moves     map[ast.Expr]bool             // the place expressions whose value moves away: the emitter empties the place
+	Instances map[*ast.Ident]Instance       // the name of each generic function at a call, with the arguments inferred for it
+	Captures  map[*ast.FuncLit][]Capture    // the variables of the enclosing functions each closure refers to, in the order first seen
+	Wraps     map[*ast.TryExpr]*Variant     // the variant each x? wraps the error in, when the function's error enum holds the error's type in one
+	Values    map[ast.Expr]Constant         // the value of each constant's value expression, and of each field a struct constant's literal gives
+	Arms      map[*ast.MatchArm]TypeArm     // what each arm of a match on a type parameter matches
+	Parts     map[*Part][]*ast.SelectorExpr // the selectors each v.[f] of a part f became, whose field a backend names in each copy of the loop
+	Attrs     map[Object][]Attribute        // the attributes written on each field, variant and type name, by the declaration
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -77,6 +82,15 @@ type Info struct {
 type Capture struct {
 	Var    *Var
 	Copied bool
+}
+
+// A TypeArm is what an arm of a match on a type parameter matches: a
+// type, which may be a shape whose type parameters the arm binds, []E;
+// a kind, struct, enum or tuple; or, with neither, any type.
+type TypeArm struct {
+	Type  Type
+	Binds []*TypeParam
+	Kind  string
 }
 
 type Instance struct {
@@ -97,7 +111,25 @@ type Checker struct {
 	scope  *Scope     // the innermost scope open at the current point
 	objs   []Object   // the object of each top-level declaration, by index; nil for var and const
 	sig    *Signature // the function whose body is being checked, a closure's inside one; nil at the top level
-	recv   *Var       // the receiver of the method whose body is being checked, through any closures; nil elsewhere
+
+	// refined holds what an arm of a match on a type knows of a type
+	// parameter: the type or shape the arm matched, int or []E, which
+	// every type written with the parameter is read as inside the arm.
+	refined map[*TypeParam]Type
+	// kinds holds the kind an arm matched a type parameter as, struct,
+	// enum or tuple, which lets the arm reach its parts.
+	kinds map[*TypeParam]string
+	// refuses says a refuse was checked, which the walk of reach.go
+	// reports where it is reached.
+	refuses bool
+	// sawParts says the body being checked reaches a field with v.[f],
+	// which selectParts makes a selector once the body is checked.
+	sawParts bool
+	// held is what a match whose arm is written once per variant holds,
+	// for each variant part: the value it matched, whose fields v.[f]
+	// reaches.
+	held map[*Part]*Var
+	recv *Var // the receiver of the method whose body is being checked, through any closures; nil elsewhere
 
 	// typeScopes holds, for a generic function and for a method of a
 	// generic type, the scope that declares its type parameters, under
@@ -132,6 +164,7 @@ type Checker struct {
 	placeFor   bool                    // checking the place take or replace is given, which they refuse themselves when it is not one
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
 	bindsOwned bool                    // a pattern bound a non-Copy value by value
+	dropOwner  Type                    // the type with a Drop whose variant a pattern is inside, by value; nil for none
 	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)
 	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
 	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
@@ -167,6 +200,24 @@ type Checker struct {
 	spawning *ast.CallExpr
 	variadic []operand     // the variadic arguments of the call just checked, which a format is checked against
 	negated  *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
+
+	// The constants (constant.go): the top-level constants of the
+	// package by what checks each, the constants being checked, outermost
+	// first, the types of the constant expression being folded, and the
+	// package variables whose type their value gives, until it does.
+	early         map[*Named]*pendingType // the types declared over another, which a constant may need resolved before their turn (resolve.go)
+	fieldDefaults []pendingDefault        // the struct fields' defaults, checked once the constants are (checkDefaults)
+	fileIndex     int                     // the index of the file being walked, which entering a file sets
+	consts        map[*Const]*pendingConst
+	constOrder    []*Const
+	constPath     []*Const
+	folding       map[ast.Expr]Type
+	foldTypes     map[ast.Expr]Type // the map folding reuses
+	uninferred    map[*Var]bool
+
+	// Each file's scope of its imports and table of declared objects,
+	// by the index of the file, which entering a file makes current.
+	fileState []fileState
 
 	// temporary maps an expression lent to a call or a ref to the
 	// temporary its value is or borrows: an owned value no variable
@@ -241,6 +292,10 @@ func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File,
 		if info.Wraps == nil {
 			info.Wraps = make(map[*ast.TryExpr]*Variant)
 		}
+
+		if info.Values == nil {
+			info.Values = make(map[ast.Expr]Constant)
+		}
 	}
 
 	c.checkFiles(fs)
@@ -268,39 +323,51 @@ func (p *Package) Scope() *Scope { return p.scope }
 // checkFiles walks the package's files together, a phase at a time
 // over all of them, so that a declaration in one file is known to
 // every other before any body is entered: the imports and the
-// declared names of each file, then the types, then the signatures,
-// then the bodies. Each file has its own scope for its imports, under
+// declared names of each file, then the types, then the constants,
+// any of which a type's array length checked earlier, then the
+// signatures, then the initializers of the variables, then the
+// bodies. Each file has its own scope for its imports, under
 // the package scope, and its own table of declared objects, by the
 // index of the declaration in the file.
 func (c *Checker) checkFiles(fs []*ast.File) {
-	scopes := make([]*Scope, len(fs))
-	objs := make([][]Object, len(fs))
-	enter := func(i int) {
-		c.file, c.scope, c.objs = c.files[i], scopes[i], objs[i]
+	c.fileState = make([]fileState, len(fs))
+	enter := c.enter
+	for i, f := range fs {
+		c.fileState[i].scope = NewScope(c.pkg.scope)
+		enter(i)
+		c.collectImports(f, c.fileState[i].scope)
+		c.collectDecls(f)
+		c.fileState[i].objs = c.objs
 	}
 
-	for i, f := range fs {
-		scopes[i] = NewScope(c.pkg.scope)
-		enter(i)
-		c.collectImports(f, scopes[i])
-		c.collectDecls(f)
-		objs[i] = c.objs
-	}
+	c.collectEarly(fs)
+	c.collectConsts(fs)
 
 	for i, f := range fs {
 		enter(i)
 		c.resolveTraitLists(f)
 	}
 
-	var named []*Named
+	types := 0
+	for _, f := range fs {
+		for _, d := range f.Decls {
+			if _, ok := d.(*ast.TypeDecl); ok {
+				types++
+			}
+		}
+	}
+
+	named := make([]*Named, 0, types)
 	for i, f := range fs {
 		enter(i)
-		named = append(named, c.resolveTypes(f)...)
+		named = c.resolveTypes(f, named)
 	}
 
 	c.checkTypeCycles(named)
 	c.resolvePending()
 	c.resolvePendingBounds()
+	c.checkConsts()
+	c.checkDefaults()
 	for i, f := range fs {
 		enter(i)
 		c.resolveSignatures(f)
@@ -311,8 +378,10 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 		enter(i)
 		c.checkRefinements(f)
 		c.checkImpls(f)
+		c.checkAttrs(f) // an attribute's type lists Attribute, known once the impl lists are
 	}
 
+	c.collectUninferred(fs)
 	for i, f := range fs {
 		enter(i)
 		c.initializers(f)
@@ -326,11 +395,58 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.checkDefaultBodies()
 	c.resolveKeeps() // what each function keeps is known once every body is checked
 	c.checkCallCycles()
+	c.reach(fs)
 }
 
-// errorf reports an error at pos. Error paths may allocate freely.
+// A fileState is a file's scope of its imports, under the package
+// scope, and its table of declared objects, by the index of the
+// declaration in the file.
+type fileState struct {
+	scope *Scope
+	objs  []Object
+}
+
+// enter makes the file of index i the one being walked: its scope of
+// imports, under the package scope, and its table of declared objects.
+func (c *Checker) enter(i int) {
+	c.file, c.scope, c.objs, c.fileIndex = c.files[i], c.fileState[i].scope, c.fileState[i].objs, i
+}
+
+// A walkPlace is where the checker walks: the file, its index, the
+// innermost scope open and the file's declared objects, all that enter
+// changes.
+type walkPlace struct {
+	file  *token.File
+	index int
+	scope *Scope
+	objs  []Object
+}
+
+// here returns where the checker walks, for restore after it checks a
+// declaration of another file on demand.
+func (c *Checker) here() walkPlace {
+	return walkPlace{c.file, c.fileIndex, c.scope, c.objs}
+}
+
+// restore makes p, which here returned, the place walked again, every
+// part of it, so that nothing checked after it reads the other file's.
+func (c *Checker) restore(p walkPlace) {
+	c.file, c.fileIndex, c.scope, c.objs = p.file, p.index, p.scope, p.objs
+}
+
+// errorf reports an error at pos, once: an arm of a match on a type
+// that lists several types is checked once for each, from copies of
+// one body, and its mistakes are one each. Error paths may allocate
+// freely.
 func (c *Checker) errorf(pos token.Pos, msg string) {
-	c.errors.Add(c.position(pos), msg)
+	at := c.position(pos)
+	for _, e := range c.errors {
+		if e.Pos == at && e.Msg == msg {
+			return
+		}
+	}
+
+	c.errors.Add(at, msg)
 }
 
 // position resolves pos through the file of the package it is in,
@@ -431,5 +547,9 @@ func (c *Checker) recordUse(ident *ast.Ident, obj Object) {
 func (c *Checker) recordType(e ast.Expr, t Type) {
 	if c.info != nil {
 		c.info.Types[e] = t
+	}
+
+	if c.folding != nil {
+		c.folding[e] = t
 	}
 }

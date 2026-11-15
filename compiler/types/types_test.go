@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/token"
 )
 
@@ -210,6 +212,36 @@ func TestIsCopy(t *testing.T) {
 	}
 }
 
+// TestHoldsMutBorrow checks which types carry a mut borrow in a part,
+// and that a ref, or a type holding none, does not.
+func TestHoldsMutBorrow(t *testing.T) {
+	lent := NewNamed(NewTypeName(token.NoPos, "Lent", nil), nil, nil)
+	lent.SetUnderlying(NewStruct([]*Var{NewField(token.NoPos, "n", integer), NewField(token.NoPos, "p", NewRef(integer, true))}))
+	list := NewNamed(NewTypeName(token.NoPos, "List", nil), nil, nil) // struct List { n int; next *List }
+	list.SetUnderlying(NewStruct([]*Var{NewField(token.NoPos, "n", integer), NewField(token.NoPos, "next", NewPointer(list))}))
+	tests := []struct {
+		typ  Type
+		want bool
+	}{
+		{NewRef(integer, true), true},
+		{NewRef(integer, false), false},
+		{lent, true}, // its second field is a mut
+		{NewOption(NewRef(integer, true)), true},
+		{NewTuple(integer, NewRef(str, true)), true},
+		{NewTuple(NewRef(str, false), integer), false},
+		{NewResult(integer, lent), true},
+		{NewArray(lent, 2), true},
+		{node, false},
+		{list, false}, // reaches itself through a pointer, and holds no borrow
+		{Typ[Int], false},
+	}
+	for _, tt := range tests {
+		if got := HoldsMutBorrow(tt.typ); got != tt.want {
+			t.Errorf("HoldsMutBorrow(%s) = %v, want %v", tt.typ, got, tt.want)
+		}
+	}
+}
+
 func TestUniverse(t *testing.T) {
 	tests := []struct {
 		name string
@@ -232,12 +264,16 @@ func TestUniverse(t *testing.T) {
 		{"max", "*types.Builtin", ""},
 		{"close", "*types.Builtin", ""},
 		{"replace", "*types.Builtin", ""},
+		{"fields", "*types.Builtin", ""},
+		{"variants", "*types.Builtin", ""},
 		{"Some", "*types.Variant", ""},
 		{"None", "*types.Variant", ""},
 		{"Ok", "*types.Variant", ""},
 		{"Err", "*types.Variant", ""},
 		{"Send", "*types.TypeName", "Send"},
+		{"Reflect", "*types.TypeName", "Reflect"},
 		{"local", "*types.TypeName", "local"},
+		{"refuse", "*types.Builtin", ""},
 		{"nil", "", ""},
 		{"int32", "", ""},
 		{"float64", "", ""},
@@ -273,8 +309,8 @@ func TestUniverse(t *testing.T) {
 		t.Error("byte and u8 are not identical")
 	}
 
-	if n := Universe.Len(); n != 53 {
-		t.Errorf("universe has %d names, want 53: 20 types, 2 constants, 10 builtins, 7 variants, 14 traits", n)
+	if n := Universe.Len(); n != 62 {
+		t.Errorf("universe has %d names, want 62: 20 types, 2 constants, 14 builtins, 7 variants, 19 traits", n)
 	}
 }
 
@@ -308,5 +344,54 @@ func TestScope(t *testing.T) {
 
 	if fn.Parent() != pkg || Universe.Parent() != nil {
 		t.Error("Parent chain is wrong")
+	}
+}
+
+// TestStructDefault checks the defaults a struct keeps: the expression
+// each field's declaration writes, nil for a field without one, the
+// same in an instance of a generic struct as in the struct, and none
+// for the fields a trait adds after the type's own, or for a struct
+// that declares none; the package keeps each default once.
+func TestStructDefault(t *testing.T) {
+	src := "package p\nconst k = 4\nstruct Size { w int; h int = k * 2 }\nstruct Box<T> { item T; n int = 3 }\ntrait Named { var name string }\nstruct Tag impl Named { n int = 1 }\nstruct Plain { a int }\nfunc f() Box<string> { return Box<string>{item: \"a\"} }"
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := libraryConfig().Check("", file, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	def := func(t Type, i int) string {
+		st := t.Underlying().(*Struct)
+		if x := st.Default(i); x != nil {
+			return ast.Source(x)
+		}
+
+		return "none"
+	}
+
+	lookup := func(name string) Type { return pkg.Scope().Lookup(name).Type() }
+	inst := lookup("f").(*Signature).Results()
+	for _, tt := range []struct {
+		what, got, want string
+	}{
+		{"Size.w", def(lookup("Size"), 0), "none"},
+		{"Size.h", def(lookup("Size"), 1), "k * 2"},
+		{"Box<string>.item", def(inst, 0), "none"},
+		{"Box<string>.n", def(inst, 1), "3"},
+		{"Tag.n", def(lookup("Tag"), 0), "1"},
+		{"Tag.name", def(lookup("Tag"), 1), "none"}, // the trait's field, after the type's own
+		{"Plain.a", def(lookup("Plain"), 0), "none"},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("%s: default %s, want %s", tt.what, tt.got, tt.want)
+		}
+	}
+
+	if n := len(pkg.defaults); n != 3 {
+		t.Errorf("the package holds %d defaults, want 3: Size.h, Box.n, which its instance shares, and Tag.n", n)
 	}
 }

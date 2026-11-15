@@ -19,13 +19,25 @@ void sn_slice_own(const sn_slice *s, const char *what) {
 }
 
 int64_t sn_slice_cap(const sn_slice *s) {
-    return s->cap == SN_VIEW ? s->len : s->cap;
+    return s->cap == SN_VIEW || s->cap == SN_CALLER ? s->len : s->cap;
+}
+
+// sn_slice_unframe gives a slice laid out in a caller's frame a buffer
+// of its own, for a function that keeps the slice past its call: its
+// elements are copied as they are, since they are the function's.
+void sn_slice_unframe(sn_slice *s, size_t size) {
+    if (s->cap == SN_CALLER) {
+        sn_slice_grow(s, s->len, size);
+    }
 }
 
 void sn_slice_free(sn_slice *s) {
     sn_check_slice(s);
     sn_slice_own(s, "replacing");
-    sn_free(s->ptr);
+    if (s->cap != SN_CALLER) { // a caller's frame holds it
+        sn_free(s->ptr);
+    }
+
     s->ptr = NULL;
     s->len = 0;
     s->cap = 0;

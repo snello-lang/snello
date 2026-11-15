@@ -84,11 +84,16 @@ func writeExpr(b *strings.Builder, e Expr) {
 
 		b.WriteString("(")
 		writeExprs(b, x.Args)
+		if x.Ellipsis.IsValid() {
+			b.WriteString("...")
+		}
+
 		b.WriteString(")")
 	case *UnaryExpr:
 		switch x.Op {
 		case token.REF, token.MUT:
-			b.WriteString(x.Op.String() + " ")
+			b.WriteString(x.Op.String())
+			b.WriteString(" ")
 		default:
 			b.WriteString(x.Op.String())
 		}
@@ -96,7 +101,9 @@ func writeExpr(b *strings.Builder, e Expr) {
 		writeExpr(b, x.X)
 	case *BinaryExpr:
 		writeExpr(b, x.X)
-		b.WriteString(" " + x.Op.String() + " ")
+		b.WriteString(" ")
+		b.WriteString(x.Op.String())
+		b.WriteString(" ")
 		writeExpr(b, x.Y)
 	case *CoalesceExpr:
 		writeExpr(b, x.X)
@@ -132,6 +139,25 @@ func writeExpr(b *strings.Builder, e Expr) {
 		writeExpr(b, x.Key)
 		b.WriteString(": ")
 		writeExpr(b, x.Value)
+	case *PartExpr:
+		writeExpr(b, x.X)
+		b.WriteString(".[")
+		b.WriteString(x.Part.Name)
+		b.WriteString("]")
+	case *PartsElt:
+		b.WriteString("for ")
+		b.WriteString(x.Var.Name)
+		b.WriteString(" := range ")
+		writeExpr(b, x.X)
+		b.WriteString(" { ")
+		if x.Key != nil {
+			b.WriteString("[")
+			b.WriteString(x.Key.Name)
+			b.WriteString("]: ")
+		}
+
+		writeExpr(b, x.Value)
+		b.WriteString(" }")
 	case *FuncLit:
 		b.WriteString("func(")
 		writeParams(b, x.Type.Params)
@@ -168,7 +194,8 @@ func writeParams(b *strings.Builder, ps []*Param) {
 		}
 
 		if p.Name != nil {
-			b.WriteString(p.Name.Name + " ")
+			b.WriteString(p.Name.Name)
+			b.WriteString(" ")
 		}
 
 		writeType(b, p.Type)
@@ -201,7 +228,8 @@ func writeType(b *strings.Builder, t Type) {
 		b.WriteString("?")
 	case *NamedType:
 		if x.Pkg != nil {
-			b.WriteString(x.Pkg.Name + ".")
+			b.WriteString(x.Pkg.Name)
+			b.WriteString(".")
 		}
 
 		b.WriteString(x.Name.Name)

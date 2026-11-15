@@ -6,6 +6,8 @@ package strconv_test
 
 import ("expect"; "strconv"; "testing")
 
+// TestAtoi checks a decimal integer read, and the Error of a text that
+// is none.
 func TestAtoi() {
 	expect.Equal(ref expect.IsOk(strconv.Atoi("42")), ref 42)
 	expect.Equal(ref expect.IsOk(strconv.Atoi("-7")), ref -7)
@@ -14,6 +16,9 @@ func TestAtoi() {
 	expect.True(e.Kind() == e.Kind())
 }
 
+// TestRangeIsANumbers checks that a text is out of range only when it
+// is a number: a run of figures past the largest integer followed by a
+// byte that is no figure is invalid syntax.
 func TestRangeIsANumbers() {
 	// Digits past the largest integer and then a letter: no number, so the syntax and not the range.
 	for _, s := range []string{"9270000000000000000A", "99999999999999999999999x", "-99999999999999999999999 "} {
@@ -29,6 +34,9 @@ func TestRangeIsANumbers() {
 	expect.Equal(ref expect.IsErr(strconv.Atoi("99999999999999999999999")).Func, "Atoi")
 }
 
+// TestAtoiEdges checks the largest and the smallest int, the lengths
+// around the one Atoi reads without checking for overflow, and the
+// texts that are no decimal integer.
 func TestAtoiEdges() {
 	expect.Equal(ref expect.IsOk(strconv.Atoi("+0")), ref 0)
 	expect.Equal(ref expect.IsOk(strconv.Atoi("-999999999999999999")), ref -999999999999999999) // eighteen digits
@@ -42,12 +50,16 @@ func TestAtoiEdges() {
 	}
 }
 
+// TestItoa checks an int written in decimal.
 func TestItoa() {
 	expect.Equal(ref strconv.Itoa(0), "0")
 	expect.Equal(ref strconv.Itoa(-120), "-120")
 	expect.Equal(ref strconv.Itoa(9007199254740993), "9007199254740993")
 }
 
+// TestParseInt checks integers read in bases from 2 to 36, either case
+// of a letter, the ends of an int, and the texts that are no number in
+// base 2.
 func TestParseInt() {
 	expect.Equal(ref expect.IsOk(strconv.ParseInt("ff", 16)), ref 255)
 	expect.Equal(ref expect.IsOk(strconv.ParseInt("-FF", 16)), ref -255)
@@ -63,6 +75,8 @@ func TestParseInt() {
 	}
 }
 
+// TestParseIntBaseZero checks the base read from the prefix of the
+// text, and where its underscores may stand.
 func TestParseIntBaseZero() {
 	expect.Equal(ref expect.IsOk(strconv.ParseInt("0x1F", 0)), ref 31)
 	expect.Equal(ref expect.IsOk(strconv.ParseInt("-0X_1f", 0)), ref -31)
@@ -76,6 +90,8 @@ func TestParseIntBaseZero() {
 	}
 }
 
+// TestParseIntBase checks that a base that is none is an Error to read
+// in and None to write in.
 func TestParseIntBase() {
 	for _, base := range []int{1, 37, -16, 100} {
 		e := expect.IsErr(strconv.ParseInt("10", base))
@@ -90,6 +106,8 @@ func TestParseIntBase() {
 	expect.IsNone(strconv.FormatInt(10, 0)) // a base read from the text is for reading only
 }
 
+// TestParseUint checks the largest uint, a base read from the text, and
+// that a sign is no part of an unsigned number.
 func TestParseUint() {
 	expect.Equal(ref expect.IsOk(strconv.ParseUint("18446744073709551615", 10)), ref uint(18446744073709551615))
 	expect.Equal(ref expect.IsOk(strconv.ParseUint("0xFFFF_FFFF", 0)), ref uint(4294967295))
@@ -99,6 +117,8 @@ func TestParseUint() {
 	expect.Equal(ref expect.IsErr(strconv.ParseUint("", 10)).Func, "ParseUint")
 }
 
+// TestFormatInt checks integers written in bases from 2 to 36, the
+// smallest int and the largest uint among them.
 func TestFormatInt() {
 	expect.Equal(ref expect.IsSome(strconv.FormatInt(-255, 16)), "-ff")
 	expect.Equal(ref expect.IsSome(strconv.FormatInt(35, 36)), "z")
@@ -110,6 +130,8 @@ func TestFormatInt() {
 	expect.Equal(ref expect.IsSome(strconv.FormatUint(18446744073709551615, 36)), "3w5e11264sgsf")
 }
 
+// TestIntRoundTrip checks that what FormatInt writes, ParseInt reads
+// back, in every base.
 func TestIntRoundTrip() {
 	for _, n := range []int{0, 1, -1, 255, -256, 9223372036854775807, -9223372036854775808} {
 		for base := 2; base <= 36; base++ {
@@ -118,6 +140,8 @@ func TestIntRoundTrip() {
 	}
 }
 
+// TestBool checks every text ParseBool reads as true or false, the
+// texts it refuses, and FormatBool.
 func TestBool() {
 	for _, s := range []string{"1", "t", "T", "true", "TRUE", "True"} { expect.True(expect.IsOk(strconv.ParseBool(ref s))) }
 	for _, s := range []string{"0", "f", "F", "false", "FALSE", "False"} { expect.False(expect.IsOk(strconv.ParseBool(ref s))) }
@@ -131,12 +155,15 @@ func TestBool() {
 	expect.Equal(ref strconv.FormatBool(false), "false")
 }
 
+// TestQuote checks a string written as a literal, its escapes included.
 func TestQuote() {
 	expect.Equal(ref strconv.Quote("a\tb\"c\\"), "\"a\\tb\\\"c\\\\\"")
 	expect.Equal(ref strconv.Quote(""), "\"\"")
 	expect.Equal(ref strconv.Quote("é\x00\xff"), "\"é\\x00\\xff\"")
 }
 
+// TestUnquote checks each kind of literal Unquote reads, its escapes,
+// and the texts that are no literal.
 func TestUnquote() {
 	expect.Equal(ref expect.IsOk(strconv.Unquote("\"a\\tb\\u00e9\\x41\\101\\\"\"")), "a\tbéAA\"")
 	expect.Equal(ref expect.IsOk(strconv.Unquote("`raw\\n\r`")), "raw\\n") // as it is, without its carriage returns
@@ -152,12 +179,14 @@ func TestUnquote() {
 	}
 }
 
+// TestQuoteRoundTrip checks that what Quote writes, Unquote reads back.
 func TestQuoteRoundTrip() {
 	for _, s := range []string{"", "plain", "tab\tnew\nline", "quote\"back\\slash", "é 日本語 🙂", "\x00\x01\x7f", "`'"} {
 		expect.Equal(ref expect.IsOk(strconv.Unquote(ref strconv.Quote(ref s))), ref s)
 	}
 }
 
+// TestFloat checks a float read and written in its shortest form.
 func TestFloat() {
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("1.5")), ref 1.5)
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("-2e3")), ref -2000.0)
@@ -166,6 +195,8 @@ func TestFloat() {
 	expect.Equal(ref strconv.FormatFloat(0.1, -1), "0.1")
 }
 
+// TestParseFloatRounds checks that ParseFloat gives the f64 nearest the
+// number written, however long it is, a tie going to the even one.
 func TestParseFloatRounds() {
 	// A tie between two doubles goes to the even one, and a digit past it, however far, to the one above.
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("9007199254740993")), ref 9007199254740992.0)
@@ -180,6 +211,9 @@ func TestParseFloatRounds() {
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat("1_000.5")), ref 1000.5)
 }
 
+// TestParseFloat32 checks that ParseFloat32 gives the f32 nearest the
+// number written, which converting the nearest f64 does not always
+// give.
 func TestParseFloat32() {
 	// The nearest f32, where the nearest f64 converted is the one above.
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat32("1.00000017881393432617187499")), ref f32(1.0000001))
@@ -194,6 +228,8 @@ func TestParseFloat32() {
 	expect.Equal(ref e.Func, "ParseFloat32")
 }
 
+// TestFormatFloatPrecision checks floats written to a given precision
+// after the point, rounded to it, and the infinities and NaN.
 func TestFormatFloatPrecision() {
 	expect.Equal(ref strconv.FormatFloat(2.5, 2), "2.50")
 	expect.Equal(ref strconv.FormatFloat(2.5, 0), "2")  // a tie goes to the even digit
@@ -212,6 +248,9 @@ func TestFormatFloatPrecision() {
 	expect.Equal(ref strconv.FormatFloat(1.5, 100000).Len(), ref 100002)
 }
 
+// TestFormatFloatLong checks that FormatFloat writes as long a fraction
+// as is asked for: all of it a float has, to the 1074th place, and
+// zeros after.
 func TestFormatFloatLong() {
 	// As many digits as are asked for: every one a float has, to the 1074th, and zeros after.
 	expect.Equal(ref strconv.FormatFloat(1.5, 1000000).Len(), ref 1000002)
@@ -223,6 +262,8 @@ func TestFormatFloatLong() {
 	expect.Equal(ref strconv.FormatFloat(1.5, -9223372036854775808), "1.5")
 }
 
+// TestFormatFloat32 checks an f32 written in its own shortest form and
+// to a given precision.
 func TestFormatFloat32() {
 	f := f32(0.1)
 	expect.Equal(ref strconv.FormatFloat32(f, -1), "0.1")
@@ -232,18 +273,22 @@ func TestFormatFloat32() {
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat32(ref strconv.FormatFloat32(f, -1))), ref f)
 }
 
+// BenchmarkAtoi measures reading a short decimal integer.
 func BenchmarkAtoi() {
 	for testing.Loop() { _ = strconv.Atoi("123456") }
 }
 
+// BenchmarkParseInt measures reading an integer in base 16.
 func BenchmarkParseInt() {
 	for testing.Loop() { _ = strconv.ParseInt("7fffffff", 16) }
 }
 
+// BenchmarkParseFloat measures reading a float with an exponent.
 func BenchmarkParseFloat() {
 	for testing.Loop() { _ = strconv.ParseFloat("123456.789e3") }
 }
 
+// BenchmarkUnquote measures reading a literal with an escape.
 func BenchmarkUnquote() {
 	for testing.Loop() { _ = strconv.Unquote("\"a quoted\\tline\"") }
 }

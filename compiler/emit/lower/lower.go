@@ -15,6 +15,7 @@ package lower
 import (
 	"errors"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -226,6 +227,228 @@ func Variable(info *types.Info, e ast.Expr) *types.Var {
 	}
 
 	return nil
+}
+
+// DeferredLent returns, for each argument of a deferred call, the local
+// variable the call lends it from, or nil: a whole variable passed to a
+// ref parameter, with ref or without, a variadic ...ref one's included,
+// and after ... a slice lent to one. The deferred call reaches such a
+// variable when it runs, through its address, which the record of the
+// defer keeps: what the variable holds then is what the call reads,
+// since the checker lets the variable be read and given a new value in
+// between and only refuses moving it away. A ref lends its value in
+// both backends, so a copy taken when the defer ran would read a value
+// the variable had since dropped.
+func DeferredLent(info *types.Info, call *ast.CallExpr) []*types.Var {
+	sig, ok := ValueType(info.Types[call.Fun]).(*types.Signature)
+	if !ok {
+		return nil
+	}
+
+	kind, _ := sig.VariadicParam()
+	fixed := len(sig.Params())
+	if kind == types.VariadicOwned || kind == types.VariadicLent {
+		fixed--
+	}
+
+	var lent []*types.Var
+	for i, a := range call.Args {
+		lends := kind == types.VariadicLent && i >= fixed // an element of a ...ref parameter, or the slice after ...
+		if i < fixed {
+			r, ok := sig.Params()[i].Type().(*types.Ref)
+			lends = ok && !r.Mut()
+		}
+
+		v := Variable(info, unborrowed(a))
+		if !lends || v == nil || v.Pkg() != nil || v.IsField() {
+			continue
+		}
+
+		if lent == nil {
+			lent = make([]*types.Var, len(call.Args))
+		}
+
+		lent[i] = v
+	}
+
+	return lent
+}
+
+// MayLeave reports whether evaluating x may leave the statement before
+// it ends, by a return or a jump out of a loop: x holds a ?, a ??
+// whose else may leave, or an if or match whose arms may, outside the
+// body of a closure, which leaves only itself. A value made before such
+// an operand, and given to what the statement builds after it, is held
+// until then, so that leaving drops it.
+func MayLeave(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.TryExpr, *ast.CoalesceExpr, *ast.IfExpr, *ast.MatchExpr:
+		return true
+	case *ast.ParenExpr:
+		return MayLeave(x.X)
+	case *ast.TupleExpr:
+		return anyLeaves(x.Elts)
+	case *ast.SelectorExpr:
+		return MayLeave(x.X)
+	case *ast.IndexExpr:
+		return MayLeave(x.X) || MayLeave(x.Index)
+	case *ast.SliceExpr:
+		return MayLeave(x.X) || x.Low != nil && MayLeave(x.Low) || x.High != nil && MayLeave(x.High)
+	case *ast.CallExpr:
+		return MayLeave(x.Fun) || anyLeaves(x.Args)
+	case *ast.UnaryExpr:
+		return MayLeave(x.X)
+	case *ast.BinaryExpr:
+		return MayLeave(x.X) || MayLeave(x.Y)
+	case *ast.CompositeLit:
+		for _, elt := range x.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
+			if MayLeave(elt) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func anyLeaves(xs []ast.Expr) bool {
+	for _, x := range xs {
+		if MayLeave(x) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// FramedVariadic returns the variadic ...T parameter of the function of
+// signature sig and body, and whether the slice it is given may stay in
+// its caller's frame for the whole call: true unless the body moves the
+// slice away whole, other than consuming it in a range loop, or a
+// closure captures it, either of which may keep it past the call. A
+// function that may keep it gives it a buffer of its own when it starts
+// (sn_slice_unframe); one that only reads it, ranges over it, changes
+// its elements or lends it uses the caller's, with no allocation, and a
+// change of its length moves it then. A range loop the walk does not
+// reach, inside a match's arm, counts as a move that keeps: what is
+// missed costs an allocation, never the frame.
+func FramedVariadic(info *types.Info, sig *types.Signature, body *ast.BlockStmt) (*types.Var, bool) {
+	if kind, _ := sig.VariadicParam(); kind != types.VariadicOwned || body == nil {
+		return nil, false
+	}
+
+	xs := sig.Params()[len(sig.Params())-1]
+	var ranged []ast.Expr // the range loops over xs itself, which consume it in the function
+	rangesOver(info, body.List, xs, &ranged)
+	for x, moved := range info.Moves {
+		if id, ok := x.(*ast.Ident); ok && moved && sameParam(info.Uses[id], xs) && !slices.Contains(ranged, x) {
+			return xs, false
+		}
+	}
+
+	for _, caps := range info.Captures {
+		for _, c := range caps {
+			if sameParam(c.Var, xs) {
+				return xs, false
+			}
+		}
+	}
+
+	return xs, true
+}
+
+// sameParam reports whether obj is the parameter p, or the parameter of
+// the generic declaration an instance's p was made from, which keeps its
+// name and its place, and which the body's names refer to.
+func sameParam(obj types.Object, p *types.Var) bool {
+	v, ok := obj.(*types.Var)
+	return ok && (v == p || v.Pos() == p.Pos() && v.Name() == p.Name())
+}
+
+// rangesOver collects the range loops over the variable xs in a list of
+// statements and the blocks inside them.
+func rangesOver(info *types.Info, list []ast.Stmt, xs *types.Var, out *[]ast.Expr) {
+	for _, st := range list {
+		switch st := st.(type) {
+		case *ast.RangeStmt:
+			if id, ok := st.X.(*ast.Ident); ok && sameParam(info.Uses[id], xs) {
+				*out = append(*out, st.X)
+			}
+
+			rangesOver(info, st.Body.List, xs, out)
+		case *ast.BlockStmt:
+			rangesOver(info, st.List, xs, out)
+		case *ast.ForStmt:
+			rangesOver(info, st.Body.List, xs, out)
+		case *ast.IfStmt:
+			rangesOver(info, st.Body.List, xs, out)
+			if st.Else != nil {
+				rangesOver(info, []ast.Stmt{st.Else}, xs, out)
+			}
+		case *ast.IfBindStmt:
+			rangesOver(info, st.Body.List, xs, out)
+			if st.Else != nil {
+				rangesOver(info, []ast.Stmt{st.Else}, xs, out)
+			}
+		}
+	}
+}
+
+// Taken returns what a conversion's operand of type t is evaluated as,
+// the wanted types of operands: t when its value is not Copy, which the
+// conversion takes, as an argument by value is taken, so a temporary is
+// not dropped after it and a variable is moved; none for a Copy value,
+// which is only read.
+func Taken(t types.Type) []types.Type {
+	if types.IsCopy(t) {
+		return nil
+	}
+
+	return []types.Type{t}
+}
+
+// LeftOut returns the indices of the fields of st, a struct literal's
+// type, that the literal x leaves out and that declare a default, in
+// the order of the struct, each of which the literal gives its
+// default's folded value.
+func LeftOut(st *types.Struct, x *ast.CompositeLit) []int {
+	var out []int
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Default(i) == nil || named(x, st.Field(i).Name()) {
+			continue
+		}
+
+		out = append(out, i)
+	}
+
+	return out
+}
+
+// named reports whether the keyed literal x gives the field name.
+func named(x *ast.CompositeLit, name string) bool {
+	for _, elt := range x.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// unborrowed strips a ref written before an argument, ref s, to the
+// place it lends.
+func unborrowed(e ast.Expr) ast.Expr {
+	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.REF {
+		return u.X
+	}
+
+	return e
 }
 
 // Simple reports whether an expression may be evaluated twice without

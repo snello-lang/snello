@@ -3,19 +3,30 @@
 // license that can be found in the LICENSE file.
 
 // Package path works on paths whose elements are separated by slashes,
-// as the paths in a URL are, with Go's functions of the same names:
-// what a path's last element is, what directory it is in, what it is
-// when two are joined, and what the shortest path naming the same
-// place is. They read and build strings and ask the system nothing; a
-// path that names a file on the system is path/filepath's, which is
-// this package under the name Go gives it.
+// as the paths in a URL are: what a path's last element is, what
+// directory it is in, what it is when two are joined, and what the
+// shortest path naming the same place is. They read and build strings
+// and ask the system nothing.
 //
 // Base, Ext and Split lend parts of the path they are given, with
 // nothing copied. Clean, Join and Dir return a new string.
 package path
 
-// Clean returns the shortest path that names what p names, by Go's
-// rules, applied until none applies:
+// The bytes a path is made of: the separator between its elements, and
+// the dot that names the current directory alone and its parent
+// doubled.
+const separator byte = '/'
+const dot byte = '.'
+
+// The paths a function returns when nothing is left of what it was
+// given: the current directory, and the root, a path of a separator
+// alone. separatorText is the separator Join writes between two paths.
+const currentDirectory = "."
+const root = "/"
+const separatorText = "/"
+
+// Clean returns the shortest path that names what p names, as a new
+// string, by these rules, applied until none applies:
 //
 //   - several slashes in a row become one;
 //   - an element that is a single dot is dropped;
@@ -25,11 +36,15 @@ package path
 //     dropped: /.. is /.
 //
 // The path ends in a slash only when it is the root, /, and an empty
-// result is ".".
+// result is ".". p is only read. A path that is clean already is
+// checked in one pass and copied; any other is cleaned in one pass
+// into one allocation of its length.
+//
+//	path.Clean("a//b/./c/..") // "a/b"
 func Clean(p ref string) string {
 	n := p.Len()
 	if n == 0 {
-		return "."
+		return currentDirectory
 	}
 
 	if isClean(p) { // most paths are clean already: one pass that writes nothing, and a copy
@@ -38,50 +53,50 @@ func Clean(p ref string) string {
 
 	// An element at a time into buf, which is never longer than what
 	// was read of p, since every rule drops bytes and none adds any.
-	rooted := p[0] == '/'
+	rooted := p[0] == separator
 	buf := make([]byte, n)
 	w := 0      // the bytes written
 	dotdot := 0 // the output up to here is not gone back over: the root, and the two dots a path starts with
 	if rooted {
-		buf[0] = '/'
+		buf[0] = separator
 		w = 1
 		dotdot = 1
 	}
 
 	r := 0
 	for r < n {
-		if p[r] == '/' { // an empty element
+		if p[r] == separator { // an empty element
 			r++
 			continue
 		}
 
 		end := r + 1
-		for end < n && p[end] != '/' {
+		for end < n && p[end] != separator {
 			end++
 		}
 
-		if end-r == 1 && p[r] == '.' {
+		if end-r == 1 && p[r] == dot {
 			// a single dot: dropped
-		} else if end-r == 2 && p[r] == '.' && p[r+1] == '.' {
+		} else if end-r == 2 && p[r] == dot && p[r+1] == dot {
 			if w > dotdot { // go back over the element before
 				w--
-				for w > dotdot && buf[w] != '/' {
+				for w > dotdot && buf[w] != separator {
 					w--
 				}
 			} else if !rooted { // nothing to go back over: the two dots stay
 				if w > 0 {
-					buf[w] = '/'
+					buf[w] = separator
 					w++
 				}
 
-				buf[w] = '.'
-				buf[w+1] = '.'
+				buf[w] = dot
+				buf[w+1] = dot
 				w += 2
 				dotdot = w
 			}
 		} else { // an element: a slash before it when it is not the first, then its bytes
 			if w > dotdot || (!rooted && w != 0) {
-				buf[w] = '/'
+				buf[w] = separator
 				w++
 			}
 
@@ -95,10 +110,109 @@ func Clean(p ref string) string {
 	}
 
 	if w == 0 {
-		return "."
+		return currentDirectory
 	}
 
 	return string(buf[0:w])
+}
+
+// Split cuts p just after its last slash and lends the two parts, the
+// directory with its slash and the file, with nothing copied: both
+// keep p lent for as long as they live. A path with no slash has an
+// empty directory, and one that ends in a slash an empty file; the two
+// joined back are p.
+//
+//	dir, file := path.Split("a/b/c.txt") // "a/b/", "c.txt"
+func Split(p ref string) (ref string, ref string) {
+	i := lastSlashIndex(p)
+	return (p[0:i+1], p[i+1:])
+}
+
+// Join returns the path of b inside a: the two joined with a slash
+// between them and cleaned, as a new string. An empty one is left out,
+// so Join of a path and "" is that path cleaned, and two empty ones
+// give an empty string. Both are only read. Three are joined by
+// joining two and then the third:
+//
+//	path.Join("a/b", "../c") // "a/c"
+//	path.Join(ref path.Join("a", "b"), "c") // "a/b/c"
+func Join(a ref string, b ref string) string {
+	if a.Len() == 0 && b.Len() == 0 {
+		return ""
+	}
+
+	if a.Len() == 0 {
+		return Clean(b)
+	}
+
+	return Clean(ref (a + separatorText + b)) // an empty b leaves a slash at the end, which Clean drops
+}
+
+// Ext lends the extension of p's last element, with nothing copied:
+// what follows its last dot, the dot included, ".txt", and the empty
+// string when the last element has no dot.
+//
+//	path.Ext("a/b.tar.gz") // ".gz"
+func Ext(p ref string) ref string {
+	for i := p.Len() - 1; i >= 0 && p[i] != separator; i-- {
+		if p[i] == dot {
+			return p[i:]
+		}
+	}
+
+	return ""
+}
+
+// Base lends the last element of p, with nothing copied, the slashes
+// at its end left out: "." for an empty path, and "/" for one of
+// slashes alone.
+//
+//	path.Base("a/b/c.txt/") // "c.txt"
+func Base(p ref string) ref string {
+	if p.Len() == 0 {
+		return currentDirectory
+	}
+
+	end := p.Len()
+	for end > 0 && p[end-1] == separator {
+		end--
+	}
+
+	if end == 0 {
+		return root
+	}
+
+	return p[lastSlashIndex(p[0:end])+1 : end]
+}
+
+// IsAbs reports whether p is absolute: whether it starts with a slash.
+func IsAbs(p ref string) bool {
+	return p.Len() > 0 && p[0] == separator
+}
+
+// Dir returns the directory p is in, as a new string: all of p but its
+// last element, cleaned. It is "." when p has no slash, and "/" for a
+// path in the root.
+//
+//	path.Dir("a/b/c.txt") // "a/b"
+func Dir(p ref string) string {
+	// What is before the last slash, without the slashes that end it,
+	// which Clean would drop: so a directory that is clean already is
+	// copied and no more.
+	end := lastSlashIndex(p) + 1
+	if end == 0 {
+		return currentDirectory
+	}
+
+	for end > 0 && p[end-1] == separator {
+		end--
+	}
+
+	if end == 0 {
+		return root
+	}
+
+	return Clean(p[0:end])
 }
 
 // isClean reports whether Clean would return p as it is: no element is
@@ -111,32 +225,32 @@ func isClean(p ref string) bool {
 		return true
 	}
 
-	if p[n-1] == '/' {
+	if p[n-1] == separator {
 		return false
 	}
 
 	r := 0
 	leading := true // only elements of two dots so far, in a path that does not start with a slash
-	if p[0] == '/' {
+	if p[0] == separator {
 		r = 1
 		leading = false
 	}
 
 	for r < n {
-		if p[r] == '/' {
+		if p[r] == separator {
 			return false
 		}
 
 		end := r + 1
-		for end < n && p[end] != '/' {
+		for end < n && p[end] != separator {
 			end++
 		}
 
-		if p[r] != '.' || end-r > 2 {
+		if p[r] != dot || end-r > 2 {
 			leading = false
 		} else if end-r == 1 {
 			return false
-		} else if p[r+1] != '.' {
+		} else if p[r+1] != dot {
 			leading = false
 		} else if !leading {
 			return false
@@ -148,92 +262,11 @@ func isClean(p ref string) bool {
 	return true
 }
 
-// Split cuts p just after its last slash and lends the two parts, the
-// directory with its slash and the file: "a/b/c.txt" gives "a/b/" and
-// "c.txt". A path with no slash has an empty directory.
-func Split(p ref string) (ref string, ref string) {
-	i := lastSlash(p)
-	return (p[0:i+1], p[i+1:])
-}
-
-// Join joins two paths with a slash between them and cleans the result,
-// as Go's Join does with its elements: an empty one is left out, and
-// two empty ones give an empty string. Three are joined by joining two
-// and then the third, path.Join(ref path.Join(a, b), c).
-func Join(a ref string, b ref string) string {
-	if a.Len() == 0 && b.Len() == 0 {
-		return ""
-	}
-
-	if a.Len() == 0 {
-		return Clean(b)
-	}
-
-	return Clean(ref (a + "/" + b)) // an empty b leaves a slash at the end, which Clean drops
-}
-
-// Ext lends the extension of p's last element: what follows its last
-// dot, the dot included, ".txt", and nothing when it has no dot.
-func Ext(p ref string) ref string {
-	for i := p.Len() - 1; i >= 0 && p[i] != '/'; i-- {
-		if p[i] == '.' {
-			return p[i:]
-		}
-	}
-
-	return ""
-}
-
-// Base lends the last element of p, the slashes at its end left out:
-// "." for an empty path, and "/" for one of slashes alone.
-func Base(p ref string) ref string {
-	if p.Len() == 0 {
-		return "."
-	}
-
-	end := p.Len()
-	for end > 0 && p[end-1] == '/' {
-		end--
-	}
-
-	if end == 0 {
-		return "/"
-	}
-
-	return p[lastSlash(p[0:end])+1 : end]
-}
-
-// IsAbs reports whether p starts with a slash.
-func IsAbs(p ref string) bool {
-	return p.Len() > 0 && p[0] == '/'
-}
-
-// Dir returns all of p but its last element, cleaned: "a/b" for
-// "a/b/c.txt", "." when p has no slash, and "/" for a path in the root.
-func Dir(p ref string) string {
-	// What is before the last slash, without the slashes that end it,
-	// which Clean would drop: so a directory that is clean already is
-	// copied and no more.
-	end := lastSlash(p) + 1
-	if end == 0 {
-		return "."
-	}
-
-	for end > 0 && p[end-1] == '/' {
-		end--
-	}
-
-	if end == 0 {
-		return "/"
-	}
-
-	return Clean(p[0:end])
-}
-
-// lastSlash returns the index of the last slash of p, or -1.
-func lastSlash(p ref string) int {
+// lastSlashIndex returns the index of the last slash of p, or -1 when p
+// has none.
+func lastSlashIndex(p ref string) int {
 	for i := p.Len() - 1; i >= 0; i-- {
-		if p[i] == '/' {
+		if p[i] == separator {
 			return i
 		}
 	}

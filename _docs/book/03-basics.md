@@ -9,7 +9,10 @@ package wordfreq
 
 import ("fmt"; "os")
 
-struct Count { word string; n int }
+struct Count {
+	word string
+	n    int
+}
 
 func main() {
     text := os.ReadToString("input.txt").Expect("read input")
@@ -21,7 +24,7 @@ func main() {
 }
 ```
 
-A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. Chapter 14 lists the packages. A program starts at `func main()` in package `main`.
+A file starts with `package`, then its imports, then declarations in any order. Imports are grouped in parentheses, one per line or separated by `;`, and every imported package is referred to by its name: `fmt.Println`, `os.Exit`. Chapter 14 lists the packages. A program starts at `func main()`, in the package that declares it, whatever its name: `main` takes no parameters and gives no result, since the program calls it with none, `func main must have no type parameters, no parameters and no results`, and reads its arguments from `os.Args`.
 
 Names that start with a capital letter are exported from their package; the others are private to it. Comments run from `//` to the end of the line. A statement ends at the end of its line; a line ends after a name, a literal, a closing bracket, `?` or `>`, so a comparison or a shift keeps its right operand on the same line as the operator. Braces open on the line of the `func`, `if` or `for` they belong to.
 
@@ -34,9 +37,19 @@ path := []string{}
 s := Stack{}            // zero value: every field at its zero value
 ```
 
-`:=` declares a variable and infers its type from the value. `var` declares with a type written out, and a variable declared without a value starts at its type's zero value: `0`, `false`, `""`, `None`, an empty slice or map, a struct with every field at its zero value. A type whose zero would be empty, a pointer, a channel or a type with a `Drop`, has no zero value, and a variable of it is declared with its value; chapter 18 says which and why. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest. `const` declares a name for a literal, `const Scale f64 = 2.5`, inside a function or at the top level of a file. A `var` at the top level of a file is a package variable: every task of the program can read it and none can assign it, and a value that must change while shared is held in a `sync.Counter`, a `sync.Atomic` or a lock, as chapter 10 says; its initializer may be a call, which runs once, the first time the variable is used.
+`:=` declares a variable and infers its type from the value. `var` declares with a type written out, and a variable declared without a value starts at its type's zero value: `0`, `false`, `""`, `None`, an empty slice or map, a struct with every field at its zero value. A type whose zero would be empty, a pointer, a channel or a type with a `Drop`, has no zero value, and a variable of it is declared with its value; chapter 18 says which and why. Assignment is `=`, and compound assignment is `+=`, `-=` and the rest. `const` declares a value the compiler computes, as the next section says. A `var` at the top level of a file is a package variable: every task of the program can read it and none can assign it, and a value that must change while shared is held in a `sync.Counter`, a `sync.Atomic` or a lock, as chapter 10 says; its initializer may be a call, which runs once, the first time the variable is used.
 
 Assigning a value to a new name hands the value over. For a number or a `bool` nothing is lost: `y := x` leaves both names usable. For a string, a slice, a struct or anything else that owns memory, `t := s` moves the value to `t`, and `s` cannot be used afterwards. Chapter 5 explains the rule; most code never meets it, because a value usually flows forward from where it is made to where it is needed.
+
+## Constants
+
+```go
+const KB = 1 << 10
+const Greeting = "hello, " + Name
+var buffer [4 * KB]byte
+```
+
+`const` names a value the compiler computes from literals, other constants, the operators and conversions between number types, at the top level of a file or inside a function, and an array's length is such a value too. The compiler refuses a constant its type cannot hold, and the constants of a package may be declared in any order. [Chapter 21](21-constants.md) says what a constant may be made of, how it is computed, and what is refused.
 
 ## Numbers
 
@@ -91,6 +104,8 @@ A function is declared with `func`, its parameters are named before their types,
 
 A parameter says how the function takes its argument. `src ref string` reads it; `out mut File` changes it in place; a plain `n *Node` takes ownership of it. Chapter 6 covers the three modes. Until then, read `ref` as "borrowed to read" and `mut` as "borrowed to change".
 
+The last parameter may take any number of arguments, `func Sum(xs ...int) int`, called `Sum(1, 2, 3)` or `Sum(nums...)`; `...ref T` borrows them instead of taking them. [Chapter 22](22-variadic-functions.md) covers both forms.
+
 Function literals are closures. A closure that only reads a variable borrows it; one that assigns to it borrows it mutably:
 
 ```go
@@ -121,10 +136,24 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 
 `if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
-`defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, and several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+`defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, but for a variable lent to a `ref` parameter, which the call reads as it is when the call runs, chapter 6 says why; several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+
+## Order of evaluation
+
+Everything is evaluated left to right: a call's arguments, a literal's elements, the two sides of an operator. An assignment evaluates, left to right, the indexes and keys of the places it writes, then the values it writes, and only then stores them:
+
+```go
+xs[i], i = 5, 2          // writes xs at the old i, then sets i
+m[next()] = next()       // the first call gives the key, the second the value
+n["a"] = len(n)          // len counts no entry for "a": the entry is made by the store
+```
+
+A compound assignment reads its place first, as the left operand of the operator it stands for, then evaluates its value, and only then reaches the place again to store. `c += tick(mut c)` adds to `c` as it was before `tick` ran; `s += f(mut s)` appends to the old text, and `m["a"] += f(mut m)` adds to the entry as it was, the zero value when there was none, the entry made by the store. A value that grows the slice the place is in, `xs[0] += grow(mut xs)`, has the sum written into the slice as it is after the growth.
+
+`&&` and `||` evaluate their right side only when the left one leaves the answer open, as in Go.
 
 ## Built-in functions
 
-`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `min` and `max` give the least and the greatest of two or more numbers of one type; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
+`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `min` and `max` give the least and the greatest of two or more numbers of one type; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5. `fields`, `variants`, `attr` and `refuse` belong to reflection, chapter 24: `refuse` refuses a program where it is compiled, with a message.
 
 Slices and maps have methods rather than functions: `xs.Push(v)`, `m.Remove(k)` (chapter 9). `&expr` allocates a value on the heap (chapter 7). There is no `nil`: a value that may be absent has type `T?` (chapter 8).

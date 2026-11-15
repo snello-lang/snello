@@ -76,8 +76,23 @@ func main() {
 
 	// Deferred calls run at return, last deferred first, with their
 	// arguments as they were at the defer; a mut receiver is lent, not
-	// copied, so the call changes it.
+	// copied, so the call changes it; a variable lent to a ref parameter
+	// is read as it is when the call runs, after it was given new values.
 	fmt.Println(ordered(2), tally())
+	later()
+}
+
+func show(label string, s ref string, n ref int) { fmt.Println(label, s, *n) }
+
+func both(xs ...ref string) { fmt.Println("both", xs[0], xs[1]) }
+
+func later() {
+	s := "old".Clone()
+	n := 1
+	defer show("lent", s, ref n)
+	defer both(s, ref s)
+	s = "new".Clone()
+	n = 2
 }
 
 func ordered(n int) int {

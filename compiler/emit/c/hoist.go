@@ -19,136 +19,181 @@ import (
 // calls: Snello evaluates operands left to right, as Go does, and C
 // leaves the order of arguments and initializers open.
 
-// needsHoist reports whether writing x produces statements.
-func needsHoist(x ast.Expr) bool {
-	switch x := x.(type) {
-	case *ast.MatchExpr, *ast.TryExpr, *ast.CoalesceExpr, *ast.IfExpr:
-		return true
-	case *ast.ParenExpr:
-		return needsHoist(x.X)
-	case *ast.TupleExpr:
-		return anyHoist(x.Elts)
-	case *ast.SelectorExpr:
-		return needsHoist(x.X)
-	case *ast.IndexExpr:
-		return needsHoist(x.X) || needsHoist(x.Index)
-	case *ast.CallExpr:
-		return needsHoist(x.Fun) || anyHoist(x.Args)
-	case *ast.UnaryExpr:
-		return x.Op == token.AND || needsHoist(x.X)
-	case *ast.BinaryExpr:
-		return needsHoist(x.X) || needsHoist(x.Y)
-	case *ast.CompositeLit:
-		for _, elt := range x.Elts {
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				elt = kv.Value
-			}
-
-			if needsHoist(elt) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// hasEffects reports whether evaluating x may call a function or
-// needs statements, so that its order among its neighbors is visible.
-// len and cap only read, so they count as what their argument is.
+// hasEffects reports whether evaluating x has effects whose order is
+// visible, as lower.HasEffects decides.
 func (e *Emitter) hasEffects(x ast.Expr) bool {
-	switch x := x.(type) {
-	case *ast.CallExpr:
-		if id, ok := x.Fun.(*ast.Ident); ok {
-			if b, ok := e.info.Uses[id].(*types.Builtin); ok && (b.ID() == types.BuiltinLen || b.ID() == types.BuiltinCap) {
-				return e.anyEffects(x.Args)
-			}
-		}
-
-		return true
-	case *ast.ParenExpr:
-		return e.hasEffects(x.X)
-	case *ast.TupleExpr:
-		return e.anyEffects(x.Elts)
-	case *ast.SelectorExpr:
-		return e.hasEffects(x.X)
-	case *ast.IndexExpr:
-		return e.hasEffects(x.X) || e.hasEffects(x.Index)
-	case *ast.UnaryExpr:
-		return e.hasEffects(x.X)
-	case *ast.BinaryExpr:
-		return e.hasEffects(x.X) || e.hasEffects(x.Y)
-	case *ast.CompositeLit:
-		for _, elt := range x.Elts {
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				elt = kv.Value
-			}
-
-			if e.hasEffects(elt) {
-				return true
-			}
-		}
-	}
-
-	return needsHoist(x)
-}
-
-func (e *Emitter) anyEffects(xs []ast.Expr) bool {
-	for _, x := range xs {
-		if e.hasEffects(x) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func anyHoist(xs []ast.Expr) bool {
-	for _, x := range xs {
-		if needsHoist(x) {
-			return true
-		}
-	}
-
-	return false
+	return lower.HasEffects(e.info, x)
 }
 
 // operands writes a list of operands evaluated left to right, each
-// converted to the wanted type when wants gives one. Every operand to
-// the left of the last one that calls or needs statements is saved in
-// a temporary, so it is evaluated before that one.
+// converted to the wanted type when wants gives one. C leaves the order
+// of a call's arguments and of an initializer's elements open, so an
+// operand is saved in a temporary, evaluated before the ones after it,
+// when its order against a later one is visible (ordered); and when a
+// later operand moves a variable it reads out of, (v.Clone(), v). An
+// operand whose writing wrote statements of its own, a map read saving
+// its key, has them run where it stands: an earlier operand still to
+// be evaluated whose order against it is visible is saved before them.
+// An owned value so saved, which the operation takes, is held until
+// every operand is evaluated when one after it may leave the statement,
+// by ? or a return in its else, and only then moved out of its
+// temporary, so that leaving drops it and taking it drops nothing
+// twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
-	last := -1
+	leaves := -1
 	for i, x := range xs {
-		if e.hasEffects(x) {
-			last = i
+		if lower.MayLeave(x) {
+			leaves = i
 		}
 	}
 
 	parts := make([]string, len(xs))
+	var savedSmall [8]bool
+	saved := savedSmall[:0]
+	if len(xs) <= len(savedSmall) {
+		saved = savedSmall[:len(xs)]
+	} else {
+		saved = make([]bool, len(xs))
+	}
+
+	var kept []int // the owned values held until the last operand that may leave
+	save := func(k int) {
+		x := xs[k]
+		var want types.Type
+		if wants != nil {
+			want = wants[k]
+		}
+
+		t := want
+		if t == nil {
+			t = e.typeOf(x)
+		}
+
+		tmp := e.temp()
+		e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[k] + ";")
+		parts[k], saved[k] = tmp, true
+		switch {
+		case e.lent(x, want):
+			e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
+		case k < leaves && want != nil && !isBorrowType(want) && needsDrop(t):
+			e.hold(tmp, t)
+			kept = append(kept, k)
+		}
+	}
+
 	for i, x := range xs {
 		var want types.Type
 		if wants != nil {
 			want = wants[i]
 		}
 
+		mark := e.body.Len()
 		parts[i] = e.valueTo(x, want)
-		t := want
-		if t == nil {
-			t = e.typeOf(x)
+		if e.body.Len() > mark { // x wrote statements: an earlier operand ordered against it goes before them
+			e.saveBefore(mark, func() {
+				for k := range i {
+					if !saved[k] && !lower.IsConstant(e.info, xs[k]) && lower.Ordered(e.info, xs[k], x) {
+						save(k)
+					}
+				}
+			})
 		}
 
-		if i < last || e.lent(x, want) {
-			tmp := e.temp()
-			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[i] + ";")
-			parts[i] = tmp
-			if e.lent(x, want) {
-				e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
-			}
+		if !saved[i] && (lower.OrderedBefore(e.info, x, xs[i+1:]) || e.lent(x, want) || e.readsMoved(x, xs[i+1:])) {
+			save(i)
 		}
 	}
 
+	for _, i := range kept {
+		parts[i] = e.taken(parts[i], wants[i], parts[i], wants[i], xs[i].Pos()) // every operand is in: the operation takes it, and the temporary is emptied
+	}
+
 	return parts
+}
+
+// saveBefore writes, with write, statements that must run before the
+// ones written since the body's length was mark: those are taken out,
+// write writes, and they are put back after.
+func (e *Emitter) saveBefore(mark int, write func()) {
+	tail := append(e.scratch[:0], e.body.Bytes()[mark:]...)
+	e.body.Truncate(mark)
+	write()
+	e.body.Write(tail)
+	e.scratch = tail[:0]
+}
+
+// readsMoved reports whether x reads a variable one of the operands
+// after it moves away, anywhere inside them, (len(v), Box{s: v}): the
+// move is written before the expression that holds x is, and empties
+// the variable first.
+func (e *Emitter) readsMoved(x ast.Expr, after []ast.Expr) bool {
+	for _, y := range after {
+		if e.movesRead(y, x) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// movesRead reports whether y, or an expression inside it outside a
+// function literal, moves a place whose variable x may read; an
+// expression it does not look into is taken to.
+func (e *Emitter) movesRead(y, x ast.Expr) bool {
+	if y == nil { // a slice's bound left out
+		return false
+	}
+
+	if e.info.Moves[y] {
+		if v := lower.PlaceRoot(e.info, y); v != nil && lower.Mentions(e.info, x, v) {
+			return true
+		}
+	}
+
+	switch y := y.(type) {
+	case *ast.Ident, *ast.BasicLit, *ast.TypeExpr, *ast.FuncLit: // a literal's body runs when it is called, not here
+		return false
+	case *ast.ParenExpr:
+		return e.movesRead(y.X, x)
+	case *ast.TryExpr:
+		return e.movesRead(y.X, x)
+	case *ast.SliceExpr:
+		return e.movesRead(y.X, x) || e.movesRead(y.Low, x) || e.movesRead(y.High, x)
+	case *ast.SelectorExpr:
+		return e.movesRead(y.X, x)
+	case *ast.IndexExpr:
+		return e.movesRead(y.X, x) || e.movesRead(y.Index, x)
+	case *ast.UnaryExpr:
+		return e.movesRead(y.X, x)
+	case *ast.BinaryExpr:
+		return e.movesRead(y.X, x) || e.movesRead(y.Y, x)
+	case *ast.CallExpr:
+		return e.anyMovesRead(y.Args, x)
+	case *ast.TupleExpr:
+		return e.anyMovesRead(y.Elts, x)
+	case *ast.CompositeLit:
+		return lower.AnyElement(y, func(z ast.Expr) bool { return e.movesRead(z, x) })
+	}
+
+	return true
+}
+
+// anyMovesRead is movesRead over several expressions.
+func (e *Emitter) anyMovesRead(ys []ast.Expr, x ast.Expr) bool {
+	for _, y := range ys {
+		if e.movesRead(y, x) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isBorrowType reports whether t is a borrow, which an operation
+// lends rather than takes.
+func isBorrowType(t types.Type) bool {
+	_, ok := t.(*types.Ref)
+	return ok
 }
 
 // lent reports whether x is a value built here that the operation
@@ -171,7 +216,16 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		return false // a literal owns nothing
 	}
 
-	return !e.isLent(x) && needsDrop(e.typeOf(x))
+	if e.isLent(x) {
+		return false
+	}
+
+	t := e.typeOf(x)
+	if want != nil && e.builtPointer(x, t, want) {
+		return false // held whole by valueTo, which reads through it
+	}
+
+	return needsDrop(t)
 }
 
 // borrowed returns the value an operand lends: the operand of a ref,
@@ -282,16 +336,16 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 }
 
 // try writes x?: the value inside, after a return of the absent or
-// failed case as the function's own result.
+// failed case as the function's own result, marked unlikely.
 func (e *Emitter) try(x *ast.TryExpr) string {
 	place, t, held := e.consumed(x.X)
 	switch u := t.Underlying().(type) {
 	case *types.Option:
-		e.line("if (!" + place + ".has) {")
+		e.line("if (SN_UNLIKELY(!" + place + ".has)) {")
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.NoneVariant, nil, x.Pos()) + ";")
 	case *types.Result:
-		e.line("if (!" + place + ".ok) {")
+		e.line("if (SN_UNLIKELY(!" + place + ".ok)) {")
 		err := e.passed(x, e.taken(place+".err", u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{err}, x.Pos()) + ";")
@@ -376,8 +430,12 @@ func (e *Emitter) ifExpr(x *ast.IfExpr) string {
 	return result
 }
 
+// ifExprInto writes the branches of if c { a } else { b } into result.
+// The condition's temporaries are dropped once it is decided, before
+// either branch runs, as an if statement's are: an else if's are made
+// and dropped inside the else's block, where its condition is written.
 func (e *Emitter) ifExprInto(x *ast.IfExpr, result string, rt types.Type) {
-	e.line("if " + e.cond(x.Cond) + " {")
+	e.line("if " + parenthesized(e.boolean(x.Cond)) + " {")
 	e.blockValue(x.Then, result, rt)
 	e.line("} else {")
 	switch els := x.Else.(type) {

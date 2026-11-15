@@ -6,6 +6,8 @@ package bits_test
 
 import ("expect"; "math/bits"; "testing")
 
+// The zeros above the highest one bit, at each width, and the whole
+// width for zero.
 func TestLeadingZeros() {
 	expect.Equal(ref bits.LeadingZeros(0), ref 64) // zero has the width in zeros
 	expect.Equal(ref bits.LeadingZeros(1), ref 63)
@@ -21,6 +23,8 @@ func TestLeadingZeros() {
 	expect.Equal(ref bits.LeadingZeros64(4294967296), ref 31)
 }
 
+// The zeros below the lowest one bit, at each width, and the whole
+// width for zero.
 func TestTrailingZeros() {
 	expect.Equal(ref bits.TrailingZeros(0), ref 64)
 	expect.Equal(ref bits.TrailingZeros(8), ref 3)
@@ -34,6 +38,7 @@ func TestTrailingZeros() {
 	expect.Equal(ref bits.TrailingZeros64(9223372036854775808), ref 63)
 }
 
+// The one bits counted at each width, from none to every bit set.
 func TestOnesCount() {
 	expect.Equal(ref bits.OnesCount(0), ref 0)
 	expect.Equal(ref bits.OnesCount(18446744073709551615), ref 64)
@@ -44,6 +49,8 @@ func TestOnesCount() {
 	expect.Equal(ref bits.OnesCount64(0x123456789abcdef0), ref 32)
 }
 
+// The bits needed to write a number at each width, none for zero and
+// one more at each power of two.
 func TestLen() {
 	expect.Equal(ref bits.Len(0), ref 0)
 	expect.Equal(ref bits.Len(1), ref 1)
@@ -56,6 +63,9 @@ func TestLen() {
 	expect.Equal(ref bits.Len64(18446744073709551615), ref 64)
 }
 
+// A rotation brings the bits leaving at one end back at the other; a
+// negative count turns right and any count turns modulo the width,
+// whether the compiler knows it or not.
 func TestRotateLeft() {
 	expect.Equal(ref bits.RotateLeft8(0x81, 1), ref 0x03)
 	expect.Equal(ref bits.RotateLeft8(0x81, -1), ref 0xc0) // a negative count turns right
@@ -76,6 +86,8 @@ func TestRotateLeft() {
 	expect.Equal(ref bits.RotateLeft(1, -k), ref 9223372036854775808)
 }
 
+// The bits in the opposite order at each width, and reversing twice
+// gives the number back.
 func TestReverse() {
 	expect.Equal(ref bits.Reverse8(0x01), ref 0x80)
 	expect.Equal(ref bits.Reverse8(0x5a), ref 0x5a)
@@ -93,6 +105,8 @@ func TestReverse() {
 // program may keep and hand on.
 func count(f func(u64) int, x u64) int { return f(x) }
 
+// A function of the package is a value a program keeps and calls later,
+// though the compiler writes each call in place.
 func TestAsValues() {
 	f := bits.OnesCount64
 	expect.Equal(ref count(f, 255), ref 8)
@@ -105,6 +119,8 @@ func TestAsValues() {
 	expect.Equal(ref h(0x1234), ref 0x2c48)
 }
 
+// OnesCount64 in a loop whose input depends on the last result, so that
+// no call is folded away.
 func BenchmarkOnesCount() {
 	var x u64 = 0x123456789abcdef0
 	n := 0

@@ -5,7 +5,11 @@
 // Arrays in the backend: an array of strings written to, printed,
 // cloned inside a struct and dropped with every element released; an
 // array of arrays; an array copied whole and changed apart; a struct
-// holding an array compared field by field through its own Eq.
+// holding an array compared field by field through its own Eq; and a
+// range over an array in every form, by value, ref and mut, of a
+// variable, a package variable, a field and a call's result, an owned
+// one consumed element by element with each dropped once, those left
+// after a break included.
 
 package main
 
@@ -16,6 +20,60 @@ struct Grid impl Clone { cells [2][2]int; name string }
 struct Pair impl Eq { a [2]int }
 
 func (p ref Pair) Eq(o ref Pair) bool { return p.a[0] == o.a[0] && p.a[1] == o.a[1] }
+
+struct Tok impl Drop { n int }
+
+func (t mut Tok) Drop() { fmt.Println("drop", t.n) }
+
+var digits = [3]int{1, 2, 3}
+
+func toks() [3]Tok { return [3]Tok{Tok{n: 1}, Tok{n: 2}, Tok{n: 3}} }
+
+func ranges() {
+	sum := 0
+	for _, d := range digits {
+		sum += d
+	}
+
+	for i, d := range ref digits {
+		sum += i * d
+	}
+
+	words := [2]string{"a".Clone(), "b".Clone()}
+	for _, w := range mut words {
+		*w = *w + "!"
+	}
+
+	for i, w := range ref words {
+		fmt.Println(i, w)
+	}
+
+	p := Pair{a: [2]int{5, 6}}
+	for _, x := range mut p.a {
+		*x *= 10
+	}
+
+	for _, x := range ref p.a {
+		sum += x
+	}
+
+	fmt.Println(sum, words)
+	ts := toks()
+	for _, t := range ts {
+		fmt.Println("got", t.n)
+		if t.n == 2 {
+			break
+		}
+	}
+
+	for i, t := range toks() {
+		if i == 0 {
+			continue
+		}
+
+		fmt.Println("got", t.n)
+	}
+}
 
 func main() {
 	var words [3]string
@@ -41,4 +99,5 @@ func main() {
 	fmt.Println(p == q)
 	q.a[1] = 1
 	fmt.Println(p == q)
+	ranges()
 }

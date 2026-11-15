@@ -67,6 +67,7 @@ type Emitter struct {
 	localConst map[*types.Const]string         // the constants declared in a function, each a global of its own
 	fn         *function                       // the function being written
 	strs       int                             // string constants written so far
+	constants  map[string]value                // the constant written for each constant value lent, by its text: its type and its global
 	closures   int                             // closures written so far, numbering their functions
 	seq        int                             // values and deferred calls registered so far, ordering what a return releases
 	tasks      int                             // spawn statements written so far, numbering their trampolines
@@ -77,6 +78,7 @@ type Emitter struct {
 	used       map[types.Object]bool           // the objects the program refers to
 	guards     map[*types.Named]bool           // whether dropping a value of a declared type runs a Drop method (drop.go)
 	subst      map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy   map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
 	generics   map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
 	files      map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
 	external   map[*types.Var]bool             // the library variables the runtime defines
@@ -350,16 +352,21 @@ func (e *Emitter) declare(name, decl string) {
 }
 
 // varDecl writes a top-level variable or constant as a global of the
-// module. The value must be a literal: a number, character, boolean
-// or string, a negated number, or a struct of such, since anything
-// else would need a computation, which the module does not run before
-// main. A library variable declared without a value is the runtime's,
+// module. A constant is written from the value the checker folded; a
+// variable's value must be a literal, a number, character, boolean or
+// string, a negated number, or a struct of such, or it is made the
+// first time the variable is used, since the module runs nothing
+// before main. A library variable declared without a value is the runtime's,
 // defined in it under the variable's name; a program's variable
 // without a value starts at zero. A variable that may come to own
 // something, by assignment, is dropped when main returns, so that a
 // debug build reports what the program itself leaked.
 func (e *Emitter) varDecl(d *ast.VarDecl, library bool) {
 	for i, name := range d.Names {
+		if d.Const && name.Name == "_" {
+			continue // its value was checked, and nothing reads it
+		}
+
 		obj := e.info.Defs[name]
 		if v, ok := obj.(*types.Var); ok {
 			e.globals[v] = true
@@ -426,7 +433,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 // number, or a struct literal of such, with the live flag of a Drop
 // type set. It is empty for anything else.
 func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
-	switch x := x.(type) {
+	switch x := lower.Folded(e.info, x).(type) {
 	case *ast.BasicLit:
 		return e.literal(x).s
 	case *ast.Ident:
@@ -469,6 +476,15 @@ func (e *Emitter) staticValue(x ast.Expr, t types.Type) string {
 			parts[i] = e.irType(st.Field(i).Type(), x.Pos()) + " " + v
 		}
 
+		for _, i := range lower.LeftOut(st, x) { // a field left out takes its default
+			v := e.staticValue(st.Default(i), st.Field(i).Type())
+			if v == "" {
+				return ""
+			}
+
+			parts[i] = e.irType(st.Field(i).Type(), x.Pos()) + " " + v
+		}
+
 		if hasDrop(t) {
 			parts = append(parts, "i1 true")
 		}
@@ -495,6 +511,8 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 	name := lower.FuncName(fn)
 	if recv := sig.Recv(); recv != nil {
 		name = lower.MethodName(recv.Type(), d.Name.Name)
+	} else if owner := lower.TypeOwner(e.info, d); owner != nil { // func Point.Parse: named after its type, as a method is
+		name = lower.MethodName(owner, d.Name.Name)
 	}
 
 	e.writeFunction(name, sig, d.Body, d.Pos())
@@ -547,6 +565,7 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*types.Var]string, body *ast.BlockStmt) {
 	e.fn.captured = env
 	e.push(false)
+	framed, stays := lower.FramedVariadic(e.info, sig, body)
 	for i, p := range params {
 		if p.Name() == "" || p.Name() == "_" {
 			continue
@@ -554,6 +573,10 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 
 		slot := e.local(p)
 		e.inst("store " + e.irType(p.Type(), p.Pos()) + " %a" + strconv.Itoa(i) + ", ptr " + slot + ", align 8")
+		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
+			e.unframe(slot, e.sub(p.Type()).(*types.Slice).Elem())
+		}
+
 		e.own(slot, e.sub(p.Type()))
 	}
 
@@ -624,6 +647,15 @@ func (e *Emitter) jump(to string) {
 func (e *Emitter) branch(c, then, els string) {
 	e.inst("br i1 " + c + ", label %" + then + ", label %" + els)
 	e.fn.terminated = true
+}
+
+// branchLikely writes a branch on c that goes to then nearly always:
+// the optimizer lays that path straight and keeps the calls on it
+// inline, as for x?, whose failure is seldom taken.
+func (e *Emitter) branchLikely(c, then, els string) {
+	e.declare("llvm.expect.i1", "declare i1 @llvm.expect.i1(i1, i1)")
+	expected := e.op("call i1 @llvm.expect.i1(i1 "+c+", i1 true)", "i1")
+	e.branch(expected.s, then, els)
 }
 
 // temp returns a fresh register name.

@@ -228,7 +228,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			put(&b, "\tfor (int64_t i = 0; i < v->len; i++) {\n\t\t", e.dropOf("v->ptr[i]", u.Elem(), pos), "\n\t}\n\n")
 		}
 
-		b.WriteString("\tsn_slice_free((sn_slice *)v);\n")
+		b.WriteString("\tSN_SLICE_FREE(v);\n")
 	case *types.Array:
 		put(&b, "\tfor (int64_t i = 0; i < ", strconv.FormatInt(u.Len(), 10), "; i++) {\n\t\t", e.dropOf("v->at[i]", u.Elem(), pos), "\n\t}\n")
 	case *types.Map:
@@ -547,7 +547,7 @@ func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
 	e.state[name] = defined
 	head := "static void " + name + "(void *v)"
 	put(&e.protos, head, ";\n")
-	e.helpers.WriteString(head + " {\n\t" + e.dropOf("*("+e.cType(elem, pos)+" *)v", elem, pos) + "\n}\n\n")
+	put(&e.helpers, head, " {\n\t", e.dropOf("*("+e.cType(elem, pos)+" *)v", elem, pos), "\n}\n\n")
 	return name
 }
 

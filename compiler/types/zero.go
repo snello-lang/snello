@@ -16,9 +16,33 @@ import (
 // instead. A refusal only makes the checker accept fewer programs, so
 // each keeps every guarantee the borrow rules give.
 
+// filledByDefaults reports whether t, without a zero value, has none
+// only for the defaults it declares, so that T{} builds it: a struct
+// that declares a default and implements no Drop, each field of which
+// declares one or has a zero value.
+func filledByDefaults(t Type) bool {
+	st, ok := t.Underlying().(*Struct)
+	if !ok || !st.hasDefaults() || !hasOwnZero(t) {
+		return false
+	}
+
+	for i, f := range st.fields {
+		if st.Default(i) == nil && !hasZero(f.typ) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // zeroDecl refuses var x T with no value when T has no zero value.
 func (c *Checker) zeroDecl(d *ast.VarDecl, t Type) {
 	if t == Typ[Invalid] || hasZero(t) {
+		return
+	}
+
+	if filledByDefaults(t) {
+		c.errorf(d.Names[0].Pos(), "cannot declare "+d.Names[0].Name+" without a value: "+t.String()+" declares defaults, which a zero value would skip; write "+d.Names[0].Name+" := "+t.String()+"{}")
 		return
 	}
 
@@ -40,17 +64,17 @@ func (c *Checker) zeroFields(e *ast.CompositeLit, t Type, st *Struct) {
 		}
 	}
 
-	for _, f := range st.fields {
-		if given[f.name] {
+	for i, f := range st.fields {
+		if given[f.name] || st.Default(i) != nil { // left out, a field takes its default
 			continue
 		}
 
 		if !hasZero(f.typ) {
-			c.errorf(e.Lbrace, "missing field "+f.name+" in a "+t.String()+" literal: "+f.typ.String()+" has no zero value; name it")
+			c.errorf(e.Lbrace, "missing field "+f.name+" in a "+t.String()+" literal: "+f.typ.String()+" has no zero value; name it, or give it a default in "+t.String())
 			continue
 		}
 
-		if owner := fieldOwner(t, f); owner != nil && owner != c.pkg && !ast.IsExported(f.name) && !hasZero(t) {
+		if owner := fieldOwner(t, f); owner != nil && owner != c.pkg && !ast.IsExported(f.name) && !hasOwnZero(t) {
 			c.errorf(e.Lbrace, "cannot build a "+t.String()+" with a literal: it has no zero value, and its field "+f.name+" is not exported; use its package's functions")
 			return
 		}
@@ -75,14 +99,16 @@ func fieldOwner(t Type, f *Var) *Package {
 // no zero value: a value of such a type is built only by its own
 // package, and a type declared over its struct would otherwise build
 // one with any fields it chose, sync.Counter(MyCounter{h: 5}), or take
-// one apart and lose its Drop.
+// one apart and lose its Drop. A struct without one only for the
+// defaults it declares is no such type: any literal builds it, and the
+// type declared over it shares its defaults.
 func (c *Checker) zeroConversion(e *ast.CallExpr, from, to Type) {
 	if Identical(from, to) {
 		return
 	}
 
 	for _, t := range []Type{to, from} {
-		if !hasZero(t) {
+		if !hasOwnZero(t) {
 			c.errorf(e.Args[0].Pos(), "cannot convert "+from.String()+" to "+to.String()+": "+t.String()+" has no zero value, and a value of it is built and taken apart only by its own package")
 			return
 		}

@@ -17,7 +17,7 @@ import (
 // block loop would never advance.
 var exprStart = newKindSet(
 	token.IDENT, token.SUPER, token.INT, token.FLOAT, token.CHAR, token.STRING,
-	token.LPAREN, token.LBRACK, token.MAP, token.CHAN, token.STRUCT, token.FUNC, token.IF, token.MATCH,
+	token.LPAREN, token.LBRACK, token.MAP, token.CHAN, token.STRUCT, token.SELF, token.FUNC, token.IF, token.MATCH,
 	token.SUB, token.NOT, token.XOR, token.ARROW, token.AND, token.MUL, token.REF, token.MUT,
 )
 

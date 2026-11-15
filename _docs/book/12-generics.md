@@ -58,7 +58,10 @@ An instance is `Copy` when its fields are, as any struct is: a `Pair<int, bool>`
 An enum may be generic too, and may refer to itself through an owned pointer:
 
 ```go
-enum Tree<T> { Leaf(v T); Branch(left *Tree<T>, right *Tree<T>) }
+enum Tree<T> {
+	Leaf(v T)
+	Branch(left *Tree<T>, right *Tree<T>)
+}
 ```
 
 A `match` on a `Tree<string>` binds `v` as a `string`, and must cover every variant as for any enum. A variant finds its type arguments the way a generic function does, below: `Leaf(1)` is a `Tree<int>`, and `var t Tree<f64> = Leaf(1)` makes the `1` an `f64`. A variant without fields has only its context to go by, so `o := Nothing` is refused, while `var o Opt<int> = Nothing` is fine.

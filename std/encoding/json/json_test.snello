@@ -1,0 +1,1001 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package json_test
+
+import ("bytes"; "encoding/json"; "expect"; "io"; "strconv"; "strings"; "testing")
+
+const docText = ` {"name": "lab", "n": 3, "pi": 2.5, "ok": true, "none": null,
+ "tags": ["a", "b\n", "c"], "a/b": {"m~n": 7}, "escA": "x\ty", "srv": {"X": 1, "Y": 2}} `
+
+struct Point {
+	X int
+	Y int
+}
+
+struct Server {
+	Host  string = "localhost"
+	Port  int = 8080
+	Tags  []string
+	Peers map[string]Point
+	At    Point?
+	Ratio f64
+	Small u8
+	Debug bool
+}
+
+enum Shape {
+	Dot
+	Circle(r f64)
+	Pair(int, int)
+	Box(Point)
+}
+
+// Variants holding owned values, named and unnamed, and a recursive
+// struct through an owned pointer.
+enum Ev {
+	Say(msg string)
+	Both(string, string)
+	Quiet
+}
+
+struct Node {
+	V  int
+	Up *Node?
+}
+
+// Attributes: keys renamed, empty fields left out and read back as
+// empty, a field never written or read, and variants renamed.
+struct Conf {
+	Host   string = "localhost" @json.Name("host")
+	Port   int = 8080 @json.Name("port")
+	Tags   []string @json.OmitEmpty
+	Note   string? @json.OmitEmpty @json.Name("note")
+	Label  string @json.OmitEmpty
+	Secret string = "hidden" @json.Skip
+}
+
+enum Kind {
+	Plain @json.Name("plain")
+	Sized(n int) @json.Name("sized")
+	Duo(a int, b int @json.Name("second"))
+}
+
+// A type with its own JSON: a temperature written as a string with its
+// unit, and read back from one, refusing any other text.
+struct Celsius impl json.Marshaler, json.Unmarshaler { deg int }
+
+func (c ref Celsius) MarshalJSON() Result<string, json.Error> {
+	return Ok("\"" + strconv.Itoa(c.deg) + "C\"")
+}
+
+func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error> {
+	if len(text) < 4 || !text.HasPrefix("\"") || !text.HasSuffix("C\"") {
+		return Err(json.Error.At(0, "a temperature is a string like \"21C\""))
+	}
+
+	n := strconv.Atoi(text[1:len(text) - 2]) ?? return Err(json.Error.At(1, "a temperature is a whole number"))
+	return Ok(Celsius{deg: n})
+}
+
+struct Bad impl json.Marshaler { n int }
+
+func (b ref Bad) MarshalJSON() Result<string, json.Error> { return Ok("{oops") }
+
+// Spaced is written with space and lines, which Marshal takes out but
+// in its strings, whose escaped quote does not end one and whose
+// escaped backslash does not escape the quote after it; Refused fails
+// to write itself.
+struct Spaced impl json.Marshaler { n int }
+
+func (s ref Spaced) MarshalJSON() Result<string, json.Error> { return Ok(" {\n  \"a\\\" b\" : [ 1 , \"c\\\\\" , 2 ]\n} ") }
+
+struct Refused impl json.Marshaler { n int }
+
+func (r ref Refused) MarshalJSON() Result<string, json.Error> { return Err(json.Error.At(-1, "no text for it")) }
+
+struct Room {
+	Name string
+	Temp Celsius
+	Seen Celsius?
+}
+
+// Latin writes a byte that is no UTF-8.
+struct Latin impl json.Marshaler { n int }
+
+func (l ref Latin) MarshalJSON() Result<string, json.Error> { return Ok("\"caf\xe9\"") }
+
+// An Envelope reads the part it knows and passes the rest through.
+struct Envelope {
+	Kind string
+	Body json.Text
+}
+
+// Three layouts of an enum: a tag beside the variant's fields, a tag
+// and a content key, and the value alone.
+enum Figure @json.Tag("type") {
+	Blank
+	Disc(r f64)
+	Frame(w f64, h f64 @json.Name("height")) @json.Name("frame")
+	Caption(text string? @json.OmitEmpty)
+}
+
+enum Message @json.Tag("t") @json.Content("c") {
+	Ping
+	Speak(msg string)
+	Step(int, int)
+	Pin(Point)
+	Toggle(bool)
+}
+
+enum Bare @json.Untagged {
+	Nothing
+	Count(int)
+	Words([]string)
+	Spot(Point)
+	Called(name string)
+	Couple(bool, string)
+}
+
+// Clash has a field keyed as its tag, which json refuses both ways.
+enum Clash @json.Tag("kind") {
+	Ring(kind string, r f64)
+}
+
+// Nest is an untagged enum whose variants hold it, each read whole
+// before the last field tells them apart.
+enum Nest @json.Untagged {
+	Left(*Nest, int)
+	Right(*Nest, string)
+	Leaf(int)
+}
+
+// Ledger holds maps of integer keys, one inside another.
+struct Ledger {
+	Rows   map[i32]string
+	Nested map[u8]map[int]bool
+}
+
+// A skipped field of a type with no empty value and no default, a
+// renamed field the text must hold, and a variant whose named fields
+// are skipped, left out when empty and renamed.
+struct Strict {
+	N      int @json.Name("n")
+	Hidden int @json.Skip
+}
+
+struct Loose {
+	Key  string @json.Name("k")
+	Gone string @json.Skip
+}
+
+enum Ev2 { V(x string @json.Skip, y string @json.OmitEmpty, z int @json.Name("Z")) }
+
+// The JSON example's value, a recursive enum holding collections.
+enum Value {
+	Null
+	Bool(bool)
+	Number(f64)
+	String(string)
+	Array([]Value)
+	Object(map[string]Value)
+}
+
+// A Trickle is a reader that hands out its text step bytes at a time,
+// so that a value's text comes to a Decoder cut into pieces; it ends
+// once at the offset pause, then goes on, and at the end of the text
+// fails, when fail says so, in place of ending.
+struct Trickle impl io.Reader {
+	text  string
+	at    int
+	step  int
+	pause int
+	fail  bool
+}
+
+func (t mut Trickle) Read(buf mut []byte) Result<int, io.Error> {
+	if t.at == t.pause {
+		t.pause = -1
+		return Ok(0)
+	}
+
+	if t.at == len(t.text) {
+		if t.fail {
+			return Err(io.NewError("read", "", "connection reset", io.Reset))
+		}
+
+		return Ok(0)
+	}
+
+	n := 0
+	for n < t.step && n < len(buf) && t.at < len(t.text) && t.at != t.pause {
+		buf[n] = t.text[t.at]
+		n += 1
+		t.at += 1
+	}
+
+	return Ok(n)
+}
+
+// A Full is a writer that takes nothing.
+struct Full impl io.Writer {}
+
+func (f mut Full) Write(buf ref []byte) Result<int, io.Error> {
+	return Err(io.NewError("write", "", "disk full", io.Other))
+}
+
+// trickle returns a Trickle over text, step bytes a read.
+func trickle(text ref string, step int) Trickle {
+	return Trickle{text: text.Clone(), at: 0, step: step, pause: -1, fail: false}
+}
+
+// remarshal writes v back as JSON, to compare what was read.
+func remarshal<T>(v ref T) string {
+	return expect.IsOk(json.Marshal(v))
+}
+
+// writeFailure returns the kind of the failure enc's writer met, or
+// None.
+func writeFailure<W: io.Writer>(enc ref json.Encoder<W>) io.Kind? {
+	if f := enc.IoError() {
+		return Some(f.Kind())
+	}
+
+	return None
+}
+
+// readFailure returns the kind of the failure dec's reader met, or
+// None.
+func readFailure<R: io.Reader>(dec ref json.Decoder<R>) io.Kind? {
+	if f := dec.IoError() {
+		return Some(f.Kind())
+	}
+
+	return None
+}
+
+// roundTrip reads text as a T and writes it back, which gives the text.
+func roundTrip<T>(text ref string) {
+	v := expect.IsOk(json.Unmarshal<T>(text))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), text)
+}
+
+// Every kind a value is made of written as JSON, and read back into the
+// same value: numbers, strings, options, slices, maps with their keys
+// sorted, nested structs, and an enum's variants of each shape.
+func TestRoundTrip() {
+	s := Server{Host: "h".Clone(), Port: 1, Tags: []string{"a".Clone(), "b".Clone()}, Peers: map[string]Point{"z": Point{X: 1, Y: 2}, "a": Point{X: 3, Y: 4}}, At: Some(Point{X: 5, Y: 6}), Ratio: 0.5, Small: 255, Debug: true}
+	text := expect.IsOk(json.Marshal(ref s))
+	expect.Equal(ref text, `{"Host":"h","Port":1,"Tags":["a","b"],"Peers":{"a":{"X":3,"Y":4},"z":{"X":1,"Y":2}},"At":{"X":5,"Y":6},"Ratio":0.5,"Small":255,"Debug":true}`)
+	roundTrip<Server>(ref text)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Shape{Dot, Circle(1.5), Pair(1, 2), Box(Point{X: 7, Y: 8})})), `["Dot",{"Circle":{"r":1.5}},{"Pair":[1,2]},{"Box":{"X":7,"Y":8}}]`)
+	roundTrip<[]Shape>(`["Dot",{"Circle":{"r":1.5}},{"Pair":[1,2]},{"Box":{"X":7,"Y":8}}]`)
+	roundTrip<Value>(`{"Object":{"a":{"Array":[{"Number":1},{"Bool":true},"Null",{"String":"x"}]},"b":"Null"}}`)
+	roundTrip<int?>("null")
+	roundTrip<[]i64>("[-9223372036854775808,9223372036854775807]")
+}
+
+// Reading takes a struct's fields in any order and passes over keys the
+// type has no field for; a field left out takes its default, or None
+// for an option, and is an error otherwise.
+func TestFields() {
+	s := expect.IsOk(json.Unmarshal<Server>(` { "Small": 7, "Debug": false, "unknown": [1, {"a": null}], "Tags": [], "Peers": {}, "Ratio": 2 } `))
+	expect.Equal(ref s.Host, "localhost")
+	expect.Equal(ref s.Port, ref 8080)
+	expect.Equal(ref s.Small, ref u8(7))
+	expect.IsNone(s.At)
+	e := expect.IsErr(json.Unmarshal<Server>(`{"Small": 7, "Debug": false, "Peers": {}, "Ratio": 2}`))
+	expect.Equal(ref e.Error(), "json: missing field Tags at offset 0") // the object it is missing from
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>(`{"X": 1, "X": 2, "Y": 3}`)).Error(), "key X given twice")
+}
+
+// Numbers are held to their type, strings read their escapes, and text
+// that is no value, or more than one, is an error with its offset.
+func TestErrors() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<u8>("300")).Error(), "json: 300 overflows its field at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<i8>("-129")).Error(), "json: -129 overflows its field at offset 0")
+	expect.Equal(ref expect.IsOk(json.Unmarshal<i8>("-128")), ref i8(-128))
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"a\"b\\c\né😀"`)), "a\"b\\c\né😀")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref "tab\tquote\"\u0001")), `"tab\tquote\"\u0001"`)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<int>("1 2")).Error(), "json: text after the value at offset 2")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<bool>("yes")).Error(), "json: expected true or false at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Shape>(`"Oval"`)).Error(), "json: no variant Oval without fields at offset 0")
+	nan := 0.0
+	expect.Equal(ref expect.IsErr(json.Marshal(ref (nan / nan))).Error(), "json: unsupported value: NaN")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<int>("1 2")).Offset(), ref 2)
+}
+
+// A variant's owned fields, named or unnamed, are read and kept whole,
+// and a struct reaches itself through an owned pointer.
+func TestOwnedParts() {
+	roundTrip<[]Ev>(`[{"Say":{"msg":"hello"}},{"Both":["p","q"]},"Quiet"]`)
+	e := expect.IsOk(json.Unmarshal<Ev>(`{"Say":{"msg":"hello"}}`))
+	match e {
+		Say(msg) => expect.Equal(ref msg, "hello"),
+		_ => expect.Fail("not Say"),
+	}
+
+	roundTrip<Node>(`{"V":1,"Up":{"V":2,"Up":null}}`)
+}
+
+// Text that is not JSON is refused: a member without its comma, a
+// number JSON does not write, a raw control character or a broken
+// escape in a string, a float its field cannot hold, a key a map is
+// given twice, and nesting past 128.
+func TestStrict() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Point>(`{"X":1 "Y":2}`)).Error(), "json: expected } at offset 7")
+	for _, bad := range []string{"01", "+1", ".5", "1.", "01.5", "-", "1.2.3", "1e"} {
+		expect.IsErr(json.Unmarshal<f64>(ref bad))
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<string>("\"a\nb\"")).Error(), "invalid character in string")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<string>(`"\u+041"`)).Error(), "invalid \\u escape")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<f32>("1e300")).Error(), "overflows its field")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[string]int>(`{"a":1,"a":2}`)).Error(), "key a given twice")
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Point>(ref ("{\"X\":1,\"Y\":2,\"Z\":" + deep + "}"))).Error(), "exceeded max depth") // a key passed over is held to it too
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"\ud800A\ud800\ud800\udc00"`)), "\ufffdA\ufffd\U00010000") // a half alone is U+FFFD, and the pair after it its rune
+	expect.Equal(ref expect.IsOk(json.Unmarshal<string>(`"\ud83d\ude00\udc00x"`)), "\U0001F600\ufffdx") // a pair first, then a low half alone
+}
+
+// Floats are written in plain decimals from 1e-6 up to 1e21 and with an
+// exponent outside, an f32 by its own shortest text, and a string's
+// invalid UTF-8 as U+FFFD.
+func TestFloatsAndText() {
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []f64{1e20, 1e-6, 1e-7, 123456789.0, 0.5, 1e21, -2.5e-8})), "[100000000000000000000,0.000001,1e-7,123456789,0.5,1e+21,-2.5e-8]")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref f32(0.1))), "0.1")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref string([]byte{0x61, 0xff, 0x62}))), "\"a\\ufffdb\"")
+}
+
+// Attributes rename a field's and a variant's key, leave an empty field
+// out and read it back as empty, and keep a skipped field out of the
+// text both ways.
+func TestAttributes() {
+	c := Conf{Host: "h".Clone(), Port: 1, Tags: []string{}, Note: None, Label: "".Clone(), Secret: "s".Clone()}
+	expect.Equal(ref expect.IsOk(json.Marshal(ref c)), `{"host":"h","port":1}`)
+	back := expect.IsOk(json.Unmarshal<Conf>(`{"host":"h","port":1,"Secret":"leaked"}`))
+	expect.Equal(ref back.Host, "h")
+	expect.Equal(ref back.Port, ref 1)
+	expect.Equal(ref len(back.Tags), ref 0)
+	expect.IsNone(back.Note)
+	expect.Equal(ref back.Label, "")
+	expect.Equal(ref back.Secret, "hidden") // its default, whatever the text holds
+	full := Conf{Host: "h".Clone(), Port: 2, Tags: []string{"a".Clone()}, Note: Some("n".Clone()), Label: "l".Clone(), Secret: "s".Clone()}
+	text := expect.IsOk(json.Marshal(ref full))
+	expect.Equal(ref text, `{"host":"h","port":2,"Tags":["a"],"note":"n","Label":"l"}`)
+	roundTrip<Conf>(ref text)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Kind{Plain, Sized(3), Duo(1, 2)})), `["plain",{"sized":{"n":3}},{"Duo":{"a":1,"second":2}}]`)
+	roundTrip<[]Kind>(`["plain",{"sized":{"n":3}},{"Duo":{"a":1,"second":2}}]`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Kind>(`"Plain"`)).Error(), "no variant Plain")
+}
+
+// Skip and OmitEmpty apply to a variant's named fields as to a
+// struct's; a skipped field takes its type's empty value, and one with
+// none and no default is an error that says so; a missing renamed key
+// is named by its key in the text.
+func TestAttributeEdges() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{"n":1,"Hidden":2}`)).Error(), "json: field Hidden is skipped and has no default at offset 0")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Strict>(`{}`)).Error(), "json: missing field n at offset 0")
+	l := expect.IsOk(json.Unmarshal<Loose>(`{"k":"a","Gone":"b"}`))
+	expect.Equal(ref l.Gone, "")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref V("s".Clone(), "".Clone(), 3))), `{"V":{"Z":3}}`)
+	match expect.IsOk(json.Unmarshal<Ev2>(`{"V":{"Z":3,"x":"leaked"}}`)) {
+		V(x, y, z) => {
+			expect.Equal(ref x, "")
+			expect.Equal(ref y, "")
+			expect.Equal(ref z, ref 3)
+		}
+	}
+
+	expect.Equal(ref expect.IsOk(json.Marshal(ref V("s".Clone(), "y".Clone(), 4))), `{"V":{"y":"y","Z":4}}`)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Kind>(`{"Duo":{"a":1}}`)).Error(), "json: missing field second at offset 7")
+}
+
+// A type that writes and reads its own JSON is written and read its own
+// way, inside other values too; text it writes that is not one JSON
+// value is an error, and an offset in its own error counts from where
+// its value began.
+func TestOwnCodec() {
+	r := Room{Name: "lab".Clone(), Temp: Celsius{deg: 21}, Seen: Some(Celsius{deg: -3})}
+	text := expect.IsOk(json.Marshal(ref r))
+	expect.Equal(ref text, `{"Name":"lab","Temp":"21C","Seen":"-3C"}`)
+	roundTrip<Room>(ref text)
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Room>(`{"Name":"x","Temp":"21F","Seen":null}`)).Error(), "json: a temperature is a string like \"21C\" at offset 19")
+	expect.Equal(ref expect.IsErr(json.Unmarshal<Room>(`{"Name":"x","Temp":"aC","Seen":null}`)).Error(), "json: a temperature is a whole number at offset 20")
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Bad{n: 1})).Error(), "json: MarshalJSON gave text that is not one JSON value")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref []Spaced{Spaced{n: 1}})), `[{"a\" b":[1,"c\\",2]}]`)
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Refused{n: 1})).Error(), "json: MarshalJSON: no text for it")
+}
+
+// Every kind of value, read by its kind's accessor, and None from an
+// accessor of another kind.
+func TestDocValues() {
+	doc := json.Parse(docText).Expect("parse")
+	root := doc.Root()
+	expect.True(doc.Kind(root) == json.ObjectKind)
+	expect.Equal(ref doc.Len(root), ref 9)
+	name := expect.IsSome(doc.Get(root, "name"))
+	expect.Equal(ref expect.IsSome(doc.String(name)), "lab")
+	expect.Equal(ref doc.StringInPlace(name).Expect("read in place"), "lab")
+	expect.Equal(ref expect.IsSome(doc.Int(expect.IsSome(doc.Get(root, "n")))), ref 3)
+	expect.Equal(ref expect.IsSome(doc.Float(expect.IsSome(doc.Get(root, "pi")))), ref 2.5)
+	expect.Equal(ref expect.IsSome(doc.Bool(expect.IsSome(doc.Get(root, "ok")))), ref true)
+	expect.True(doc.Kind(expect.IsSome(doc.Get(root, "none"))) == json.NullKind)
+	expect.IsNone(doc.Int(name))
+	expect.IsNone(doc.Get(root, "missing"))
+	expect.Equal(ref doc.Text(expect.IsSome(doc.Get(root, "tags"))), `["a", "b\n", "c"]`)
+}
+
+// An array's elements and an object's members in the order the text
+// has them; a string with an escape decoded by Str, and given no view.
+func TestDocLoops() {
+	doc := json.Parse(docText).Expect("parse")
+	tags := expect.IsSome(doc.Get(doc.Root(), "tags"))
+	var b strings.Builder
+	for e := range doc.Elements(tags) {
+		b.WriteString(expect.IsSome(doc.String(e)))
+		b.WriteString("|")
+	}
+
+	expect.Equal(ref b.String(), "a|b\n|c|")
+	expect.True(doc.StringInPlace(expect.IsSome(doc.Index(tags, 1))).IsNone())
+	expect.IsNone(doc.Index(tags, 3))
+	var keys strings.Builder
+	for m := range doc.Members(doc.Root()) {
+		keys.WriteString(m.Key)
+		keys.WriteString(",")
+	}
+
+	expect.Equal(ref keys.String(), `name,n,pi,ok,none,tags,a/b,escA,srv,`)
+	expect.Equal(ref expect.IsSome(doc.String(expect.IsSome(doc.Get(doc.Root(), "escA")))), "x\ty") // a key with an escape found by what it decodes to
+}
+
+// RFC 6901 pointers: a member, an element, ~1 for / and ~0 for ~ in a
+// key, the empty pointer for the node itself, and None where nothing is
+// and for an index RFC 6901 does not write: 01, +1, -0 or empty.
+func TestDocPointer() {
+	doc := json.Parse(docText).Expect("parse")
+	root := doc.Root()
+	expect.Equal(ref expect.IsSome(doc.String(expect.IsSome(doc.At(root, "/tags/2")))), "c")
+	expect.Equal(ref expect.IsSome(doc.Int(expect.IsSome(doc.At(root, "/a~1b/m~0n")))), ref 7)
+	expect.True(expect.IsSome(doc.At(root, "")) == root)
+	expect.IsNone(doc.At(root, "/tags/9"))
+	expect.IsNone(doc.At(root, "/n/x"))
+	expect.IsNone(doc.At(root, "tags"))
+	expect.IsNone(doc.At(root, "/tags/01")) // an index is 0 or digits without a leading 0, and no sign
+	expect.IsNone(doc.At(root, "/tags/+1"))
+	expect.IsNone(doc.At(root, "/tags/-0"))
+	expect.IsNone(doc.At(root, "/tags/"))
+}
+
+// One part read as a type, in place, and an error in it counted from
+// the start of the whole text.
+func TestDocDecode() {
+	doc := json.Parse(docText).Expect("parse")
+	p := expect.IsOk(doc.Decode<Point>(expect.IsSome(doc.Get(doc.Root(), "srv"))))
+	expect.Equal(ref p.Y, ref 2)
+	bad := json.Parse(`{"p": {"X": "one", "Y": 2}}`).Expect("parse")
+	expect.Equal(ref expect.IsErr(bad.Decode<Point>(expect.IsSome(bad.Get(bad.Root(), "p")))).Error(), "json: expected an integer, found nothing at offset 12")
+}
+
+// Text that is not one JSON value is refused, as Unmarshal refuses it;
+// a key given twice is kept, and Get gives the first; a node of another
+// document answers nothing.
+func TestDocStrict() {
+	expect.Contains(ref expect.IsSome(json.Parse(`{"a": 1,}`).Err()).Error(), "expected a key")
+	expect.Contains(ref expect.IsSome(json.Parse(`[1 2]`).Err()).Error(), "expected ]")
+	expect.Contains(ref expect.IsSome(json.Parse(`"a`).Err()).Error(), "unterminated string")
+	expect.Contains(ref expect.IsSome(json.Parse(`1 2`).Err()).Error(), "text after the value")
+	expect.Contains(ref expect.IsSome(json.Parse("\"a\x01\"").Err()).Error(), "invalid character in string")
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsSome(json.Parse(ref deep).Err()).Error(), "exceeded max depth")
+	dup := json.Parse(`{"k": 1, "k": 2}`).Expect("parse")
+	expect.Equal(ref expect.IsSome(dup.Int(expect.IsSome(dup.Get(dup.Root(), "k")))), ref 1)
+	small := json.Parse("5").Expect("parse")
+	big := json.Parse(docText).Expect("parse")
+	far := expect.IsSome(big.At(big.Root(), "/srv/Y"))
+	expect.True(small.Kind(far) == json.NullKind)
+	expect.Equal(ref small.Text(far), "")
+}
+
+// A Value read without a type keeps a number's text and an object's
+// order, and is written back as it was read, compacted.
+func TestValueRoundTrip() {
+	text := `{"id": 9007199254740993, "pi": 3.141592653589793238, "z": 1, "a": [true, null, "x\ny"], "o": {}}`
+	v := expect.IsOk(json.Unmarshal<json.Value>(text))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"id":9007199254740993,"pi":3.141592653589793238,"z":1,"a":[true,null,"x\ny"],"o":{}}`)
+	expect.True(v.Kind() == json.ObjectKind)
+	expect.Equal(ref v.Len(), ref 5)
+	expect.Equal(ref expect.IsSome(v.Get("id").Expect("id").Int()), ref 9007199254740993)
+	expect.Equal(ref expect.IsSome(v.Get("pi").Expect("pi").Float()), ref 3.141592653589793)
+	expect.True(v.At("/a/1").Expect("/a/1").Kind() == json.NullKind)
+	expect.True(v.At("/a/01").IsNone())
+	expect.True(v.Get("missing").IsNone())
+	expect.True(v.Get("a").Expect("a").Index(3).IsNone())
+}
+
+// Set replaces a member in its place or adds it at the end, Remove
+// takes one out, and neither touches a value that is no object.
+func TestValueChange() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a": 1, "b": 2}`))
+	expect.True(v.Set("a".Clone(), json.String("one")))
+	expect.True(v.Set("c".Clone(), json.Null))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","b":2,"c":null}`)
+	expect.True(expect.IsSome(v.Remove("b")).Kind() == json.NumberKind)
+	expect.IsNone(v.Remove("b"))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","c":null}`)
+	var n json.Value = json.Number("12")
+	expect.False(n.Set("a".Clone(), json.Null))
+	expect.Equal(ref expect.IsErr(json.Marshal(ref json.Number("1x"))).Error(), "json: a json.Number holds \"1x\", which is no JSON number")
+}
+
+// A Doc's node made into a Value is the Value Unmarshal reads.
+func TestDocValue() {
+	doc := json.Parse(docText).Expect("parse")
+	v := doc.Value(doc.Root())
+	u := expect.IsOk(json.Unmarshal<json.Value>(docText))
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), expect.IsOk(json.Marshal(ref u)))
+}
+
+// A Text field holds its part of the input unread and is written back
+// compacted; Text.Of refuses text that is not one JSON value.
+func TestText() {
+	e := expect.IsOk(json.Unmarshal<Envelope>(`{"Kind": "point", "Body": { "x": 1, "y": [2, 3] }}`))
+	expect.Equal(ref e.Body.JSON(), `{ "x": 1, "y": [2, 3] }`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref e)), `{"Kind":"point","Body":{"x":1,"y":[2,3]}}`)
+	expect.Equal(ref expect.IsOk(json.Text.Of(" [1, 2] ")).JSON(), "[1, 2]")
+	expect.Contains(ref expect.IsErr(json.Text.Of("[1, 2")).Error(), "expected ]")
+}
+
+// A Value holds no key twice: Unmarshal refuses one, as it does for a
+// struct, and a Doc's node keeps the first, as Get finds it.
+func TestValueKeys() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<json.Value>(`{"role": "user", "role": "admin"}`)).Error(), "json: key role given twice at offset 17")
+	many := `{"k0":0,"k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10,"k11":11,"k12":12,"k13":13,"k14":14,"k15":15,"k16":16,"k3":3}`
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(many)).Error(), "key k3 given twice") // past the members it scans, found in the set
+	doc := json.Parse(`{"role": "user", "role": "admin"}`).Expect("parse")
+	v := doc.Value(doc.Root())
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"role":"user"}`)
+}
+
+// The edges of reading a Value: an array's kind and length, an index out
+// of range either way, pointers with escapes, a bad escape and no
+// leading /, the depth limit, and text that is no JSON value.
+func TestValueEdges() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a/b": {"m~n": [1, 2]}, "arr": [10, 20, 30]}`))
+	arr := v.Get("arr").Expect("arr")
+	expect.True(arr.Kind() == json.ArrayKind)
+	expect.Equal(ref arr.Len(), ref 3)
+	expect.True(arr.Index(-1).IsNone())
+	expect.True(arr.Index(3).IsNone())
+	expect.Equal(ref expect.IsSome(v.At("/a~1b/m~0n/1").Expect("pointer").Int()), ref 2)
+	expect.True(v.At("/a~2b").IsNone())
+	expect.True(v.At("/arr~").IsNone())
+	expect.True(v.At("arr").IsNone())
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(ref deep)).Error(), "exceeded max depth")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`{"a" 1}`)).Error(), "expected :")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`{1: 2}`)).Error(), "expected a key")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`[1, -]`)).Error(), "expected")
+	doc := json.Parse(`{"a/b": 1}`).Expect("parse")
+	expect.True(doc.At(doc.Root(), "/a~2b").IsNone())
+}
+
+// Int takes an integer as JSON writes one and Float any number; neither
+// takes a Number whose text is no JSON number, which Marshal refuses.
+func TestValueNumbers() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`[1.0, 1e2, 1e400, -7]`))
+	expect.True(v.Index(0).Expect("1.0").Int().IsNone())
+	expect.True(v.Index(1).Expect("1e2").Int().IsNone())
+	expect.Equal(ref expect.IsSome(v.Index(1).Expect("1e2").Float()), ref 100.0)
+	expect.True(v.Index(2).Expect("1e400").Float().IsNone())
+	expect.Equal(ref expect.IsSome(v.Index(3).Expect("-7").Int()), ref -7)
+	for _, text := range []string{"007", "+5", "NaN", ""} {
+		n := json.Number(text.Clone())
+		expect.True(n.Int().IsNone())
+		expect.True(n.Float().IsNone())
+		expect.Contains(ref expect.IsErr(json.Marshal(ref n)).Error(), "which is no JSON number")
+	}
+}
+
+// Text written back as it is must be UTF-8, as JSON text is: a Text or
+// a MarshalJSON result holding other bytes is refused.
+func TestTextUTF8() {
+	expect.Contains(ref expect.IsErr(json.Text.Of("\"a\xffb\"")).Error(), "invalid UTF-8")
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Latin{n: 1})).Error(), "json: MarshalJSON gave text that is not one JSON value")
+}
+
+// MarshalIndent lays out what Marshal writes, as Go's MarshalIndent
+// does: a line for each element and member, prefix and indent per
+// level, a space after a colon, [] and {} kept, and a string's
+// brackets, commas, colons and escapes untouched.
+func TestMarshalIndent() {
+	s := Server{Host: "a{b}[c],:".Clone(), Port: 1, Tags: []string{}, Peers: map[string]Point{"p": Point{X: 1, Y: 2}}, At: None, Ratio: 0.5, Small: 2, Debug: true}
+	want := `{
+  "Host": "a{b}[c],:",
+  "Port": 1,
+  "Tags": [],
+  "Peers": {
+    "p": {
+      "X": 1,
+      "Y": 2
+    }
+  },
+  "At": null,
+  "Ratio": 0.5,
+  "Small": 2,
+  "Debug": true
+}`
+	text := expect.IsOk(json.MarshalIndent(ref s, "", "  "))
+	expect.Equal(ref text, want)
+	back := expect.IsOk(json.Unmarshal<Server>(ref text)) // read back, it is the same value
+	expect.Equal(ref expect.IsOk(json.Marshal(ref back)), ref expect.IsOk(json.Marshal(ref s)))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref []int{1, 2}, ">", "\t")), "[\n>\t1,\n>\t2\n>]")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref 7, "> ", "  ")), "7")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref "q\"u,o:te\\".Clone(), "", "  ")), `"q\"u,o:te\\"`)
+	expect.IsErr(json.MarshalIndent(ref Bad{}, "", "  "))
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a":[1,{}],"b":null}`))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref v, "", " ")), "{\n \"a\": [\n  1,\n  {}\n ],\n \"b\": null\n}")
+	e := expect.IsOk(json.Unmarshal<Envelope>(`{"Kind": "p", "Body": { "x" : [ 1 ] }}`))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref e, "", " ")), "{\n \"Kind\": \"p\",\n \"Body\": {\n  \"x\": [\n   1\n  ]\n }\n}") // a Text's own space is laid out anew
+}
+
+// Indent lays out any JSON text, dropping the space it had, and refuses
+// text that is not one value.
+func TestIndent() {
+	expect.Equal(ref expect.IsOk(json.Indent(" { \"a\" : [ 1 , { } , [ ] ] , \"b\" : \"s p\" } ", "", "  ")), "{\n  \"a\": [\n    1,\n    {},\n    []\n  ],\n  \"b\": \"s p\"\n}")
+	expect.Equal(ref expect.IsOk(json.Indent("[ ]", "", "  ")), "[]")
+	expect.Contains(ref expect.IsErr(json.Indent("[1, 2", "", "  ")).Error(), "expected ]")
+	expect.Contains(ref expect.IsErr(json.Indent("[1] x", "", "  ")).Error(), "text after the value at offset 4")
+	expect.Contains(ref expect.IsErr(json.Indent(string([]byte{0x22, 0xff, 0x22}), "", "  ")).Error(), "invalid UTF-8")
+	expect.Equal(ref expect.IsOk(json.Indent(`["a\\",{"k\\":1}]`, "", "  ")), "[\n  \"a\\\\\",\n  {\n    \"k\\\\\": 1\n  }\n]") // an escaped backslash does not escape the quote after it
+	expect.Equal(ref expect.IsOk(json.Indent("[1]", "//", "\t")), "[\n//\t1\n//]")
+	expect.Equal(ref expect.IsOk(json.Indent("  42  ", "", "  ")), "42")
+	expect.IsErr(json.Indent("", "", "  "))
+	deep := (strings.Repeat("[", 200) ?? "") + (strings.Repeat("]", 200) ?? "")
+	expect.Contains(ref expect.IsErr(json.Indent(ref deep, "", "  ")).Error(), "exceeded max depth")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref map[string]int{}, "", "  ")), "{}")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref []int{}, "", "  ")), "[]")
+}
+
+// A map with integer keys is an object whose keys are the integers'
+// decimals, written in the order of their values, and read back from
+// keys written as JSON writes an integer that the key type holds, each
+// once.
+func TestIntegerKeys() {
+	m := map[int]string{10: "ten", 2: "two", -3: "minus", 0: "zero"}
+	text := expect.IsOk(json.Marshal(ref m))
+	expect.Equal(ref text, `{"-3":"minus","0":"zero","2":"two","10":"ten"}`)
+	roundTrip<map[int]string>(ref text)
+	roundTrip<map[u8]bool>(`{"0":false,"255":true}`)
+	roundTrip<map[i8]int>(`{"-128":1,"127":2}`)
+	roundTrip<map[i64]int>(`{"-9223372036854775808":1,"9223372036854775807":2}`)
+	roundTrip<map[u64]int>(`{"18446744073709551615":1}`)
+	roundTrip<map[string]map[u16]int>(`{"a":{"3":1,"65535":2},"b":{}}`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<map[int]int>(` { "2" : 1 , "\u0031\u0030" : 2 } `)))), `{"2":1,"10":2}`)
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref map[int]int{2: 1, 10: 2}, "", " ")), "{\n \"2\": 1,\n \"10\": 2\n}")
+	for _, bad := range []string{`{"01":1}`, `{"+1":1}`, `{" 1":1}`, `{"1 ":1}`, `{"1.0":1}`, `{"1e2":1}`, `{"":1}`, `{"-":1}`, `{"a":1}`} {
+		expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(ref bad)).Error(), "is not an integer at offset 1")
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u8]int>(`{"256":1}`)).Error(), "key \"256\" is out of range for its map's key type at offset 1")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u8]int>(`{"-1":1}`)).Error(), "key \"-1\" is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"99999999999999999999":1}`)).Error(), "is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[i16]int>(`{"-32769":1}`)).Error(), "is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u32]int>(`{"4294967296":1}`)).Error(), "is out of range")
+	roundTrip<map[i16]int>(`{"-32768":1,"32767":2}`)
+	roundTrip<map[i32]int>(`{"-2147483648":1,"2147483647":2}`)
+	roundTrip<map[u32]int>(`{"4294967295":1}`)
+	roundTrip<map[uint]int>(`{"18446744073709551615":1}`)
+	roundTrip<Ledger>(`{"Rows":{"-1":"a","7":"b"},"Nested":{"2":{"3":true}}}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"1":1,"1":2}`)).Error(), "key 1 given twice at offset 7")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"0":1,"-0":2}`)).Error(), "key 0 given twice")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"1\":1,\"\\u0031\":2}")).Error(), "key 1 given twice at offset 7") // the key decoded, as it is read
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[string]int>("{\"a\":1,\"\\u0061\":2}")).Error(), "key a given twice at offset 7")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"\\x31\":1}")).Error(), "invalid escape") // a broken escape, as in any string
+}
+
+// An enum laid out with json.Tag, json.Tag and json.Content, or
+// json.Untagged is written and read back in that layout, its tag found
+// wherever it stands, and a text that fits no variant refused with its
+// offset.
+func TestEnumLayouts() {
+	figures := expect.IsOk(json.Marshal(ref []Figure{Blank, Disc(1.5), Frame(2, 3), Caption(None), Caption(Some("x".Clone()))}))
+	expect.Equal(ref figures, `[{"type":"Blank"},{"type":"Disc","r":1.5},{"type":"frame","w":2,"height":3},{"type":"Caption"},{"type":"Caption","text":"x"}]`)
+	roundTrip<[]Figure>(ref figures)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Figure>(`{"r": 4, "type": "Disc", "extra": [1]}`)))), `{"type":"Disc","r":4}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"r":4}`)).Error(), "missing field type at offset 0")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"type":"Hex"}`)).Error(), "no variant Hex at offset 0")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"type":"Disc"}`)).Error(), "missing field r")
+	messages := expect.IsOk(json.Marshal(ref []Message{Ping, Speak("hi".Clone()), Step(1, 2), Pin(Point{X: 3, Y: 4}), Toggle(true)}))
+	expect.Equal(ref messages, `[{"t":"Ping"},{"t":"Speak","c":{"msg":"hi"}},{"t":"Step","c":[1,2]},{"t":"Pin","c":{"X":3,"Y":4}},{"t":"Toggle","c":true}]`)
+	roundTrip<[]Message>(ref messages)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Message>(`{"c":[5,6],"t":"Step"}`)))), `{"t":"Step","c":[5,6]}`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Message>(`{"t":"Ping","c":null}`)))), `{"t":"Ping"}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Message>(`{"t":"Speak"}`)).Error(), "missing field c at offset 0")
+	loose := expect.IsOk(json.Marshal(ref []Bare{Nothing, Count(3), Words([]string{"a".Clone()}), Spot(Point{X: 1, Y: 2}), Called("n".Clone()), Couple(true, "d".Clone())}))
+	expect.Equal(ref loose, `[null,3,["a"],{"X":1,"Y":2},{"name":"n"},[true,"d"]]`)
+	roundTrip<[]Bare>(ref loose)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Bare>("true")).Error(), "no variant fits the text at offset 0")
+	expect.Contains(ref expect.IsErr(json.Marshal(ref Ring("x".Clone(), 1.0))).Error(), "json.Tag writes Ring's name under the key kind, which one of its fields has too")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Clash>(`{"kind":"Ring","kind":"x","r":1}`)).Error(), "which one of its fields has too")
+	roundTrip<Nest>(`[[[1,"s"],2],"s"]`)
+	deep := "1"
+	for i := 0; i < 40; i++ {
+		deep = "[" + deep + ",\"s\"]"
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Nest>(ref deep)).Error(), "untagged values nest too deep to try each variant") // refused at once, where each level would double the time
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref Disc(1.5), "", " ")), "{\n \"type\": \"Disc\",\n \"r\": 1.5\n}")
+}
+
+// An Encoder writes each value and a line break after it, compact or
+// laid out, in one write; a value Marshal refuses writes nothing, and
+// the writer's failure comes back with IoError.
+func TestEncoder() {
+	out := bytes.NewBuffer(make([]byte, 0))
+	{
+		enc := json.NewEncoder(mut out)
+		expect.IsOk(enc.Encode(ref Point{X: 1, Y: 2}))
+		expect.IsOk(enc.Encode(ref []int{1, 2}))
+		nan := 0.0
+		expect.Equal(ref expect.IsErr(enc.Encode(ref (nan / nan))).Error(), "json: unsupported value: NaN")
+		enc.SetIndent("", "  ")
+		expect.IsOk(enc.Encode(ref map[string][]int{"a": []int{1}, "b": []int{}}))
+		enc.SetIndent("", "")
+		expect.IsOk(enc.Encode("s"))
+	}
+
+	expect.Equal(ref out.String(), "{\"X\":1,\"Y\":2}\n[1,2]\n{\n  \"a\": [\n    1\n  ],\n  \"b\": []\n}\n\"s\"\n")
+	full := Full{}
+	enc := json.NewEncoder(mut full)
+	expect.IsNone(writeFailure(ref enc))
+	expect.Equal(ref expect.IsErr(enc.Encode(ref 1)).Error(), "json: write: disk full")
+	expect.Equal(ref writeFailure(ref enc), ref Some(io.Other))
+	expect.Equal(ref expect.IsErr(enc.Encode(ref 2)).Error(), "json: write: disk full") // and again, written or not
+}
+
+// A Decoder reads the values of a stream one by one, each whole however
+// the reads cut its text, and None at the end of the input; what an
+// Encoder writes reads back.
+func TestDecoder() {
+	stream := " {\"X\":1,\"Y\":2}\n[1, 2]\"a\\\"b\" 12 true null{\"X\":3,\"Y\":4} -7"
+	for step := 1; step <= len(stream); step++ {
+		r := trickle(ref stream, step)
+		dec := json.NewDecoder(mut r)
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>()))), `{"X":1,"Y":2}`)
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<[]int>()))), `[1,2]`)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<string>())), "a\"b")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 12)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<bool>())), ref true)
+		expect.IsNone(expect.IsSome(expect.IsOk(dec.Decode<int?>())))
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>()))), `{"X":3,"Y":4}`)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref -7) // ended by the end of the input
+		expect.IsNone(expect.IsOk(dec.Decode<int>()))
+		expect.IsNone(expect.IsOk(dec.Decode<int>())) // asked again
+		expect.Equal(ref dec.Offset(), ref len(stream))
+	}
+
+	out := bytes.NewBuffer(make([]byte, 0))
+	{
+		enc := json.NewEncoder(mut out)
+		for i := 0; i < 3; i++ {
+			expect.IsOk(enc.Encode(ref Server{Host: "h".Clone(), Port: i, Tags: []string{}, Peers: map[string]Point{}, At: None, Ratio: 0.5, Small: 1, Debug: false}))
+		}
+	}
+
+	r := trickle(ref out.String(), 7)
+	dec := json.NewDecoder(mut r)
+	for i := 0; i < 3; i++ {
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<Server>())).Port, ref i)
+	}
+
+	expect.IsNone(expect.IsOk(dec.Decode<Server>()))
+	long := expect.IsSome(strings.Repeat("ab", 10000)) // past the first block, which doubles
+	text := "[\"" + long + "\"] 1"
+	big := trickle(ref text, 1000)
+	dec2 := json.NewDecoder(mut big)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<[]string>()))[0], ref long)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<int>())), ref 1)
+}
+
+// A value whose text is wrong is refused at its offset in the input and
+// passed, and the next value is read; text cut off ends in an error,
+// and a reader's failure is returned by each later call.
+func TestDecoderErrors() {
+	r := trickle(`{"X":1,"Y":2} {"X":"a","Y":2} {"X":3,"Y":4} {"X":5`, 3)
+	dec := json.NewDecoder(mut r)
+	expect.IsOk(dec.Decode<Point>())
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: expected an integer, found nothing at offset 19")
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<Point>())).X, ref 3)
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: unexpected end of input at offset 50")
+	expect.Equal(ref expect.IsErr(dec.Decode<Point>()).Error(), "json: unexpected end of input at offset 50") // the text cut off is no end
+	stray := trickle(`1 ] 2`, 3)
+	strayDec := json.NewDecoder(mut stray)
+	expect.IsOk(strayDec.Decode<int>())
+	expect.Equal(ref expect.IsErr(strayDec.Decode<int>()).Error(), "json: expected a value at offset 2")
+	expect.Equal(ref expect.IsErr(strayDec.Decode<int>()).Error(), "json: expected a value at offset 2") // a bracket where a value begins is not passed
+	for _, text := range []string{`"open`, `[1, [2]`, `{"a":"\"}`} {
+		cut := trickle(ref text, 2)
+		d := json.NewDecoder(mut cut)
+		expect.Contains(ref expect.IsErr(d.Decode<json.Value>()).Error(), "unexpected end of input")
+	}
+
+	failing := Trickle{text: "1 [2,".Clone(), at: 0, step: 2, pause: -1, fail: true}
+	dec2 := json.NewDecoder(mut failing)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<int>())), ref 1)
+	expect.IsNone(readFailure(ref dec2))
+	expect.Equal(ref expect.IsErr(dec2.Decode<[]int>()).Error(), "json: read: connection reset at offset 5")
+	expect.Equal(ref readFailure(ref dec2), ref Some(io.Reset))
+	expect.Equal(ref expect.IsErr(dec2.Decode<int>()).Error(), "json: read: connection reset at offset 5") // and again
+	expect.Equal(ref expect.IsErr(dec2.Peek()).Error(), "json: read: connection reset at offset 5") // what is held is not read on
+	expect.Equal(ref expect.IsErr(dec2.BeginArray()).Error(), "json: read: connection reset at offset 5")
+	expect.Equal(ref dec2.Offset(), ref 2)
+	paused := Trickle{text: "[1,2] 9".Clone(), at: 0, step: 8, pause: 3, fail: false}
+	dec3 := json.NewDecoder(mut paused) // the input ends inside the array, once, and goes on
+	expect.Equal(ref expect.IsErr(dec3.Decode<json.Value>()).Error(), "json: unexpected end of input at offset 3")
+	expect.IsOk(dec3.BeginArray()) // read on piece by piece: what was looked through for the cut value is not this element's
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 1)
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 2)
+	expect.IsOk(dec3.EndArray())
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec3.Decode<int>())), ref 9)
+}
+
+// An array or object is read piece by piece: BeginArray, an element at
+// a time while More holds, EndArray; and BeginObject, Key and the
+// member's value, EndObject; nested, and with Peek telling what comes
+// next. What its grammar does not allow is refused where it stands.
+func TestDecoderPieces() {
+	text := ` [ {"X":1,"Y":2} , {"X":3,"Y":4} ] {"a": [true], "b" : {"c": null}, "d": []} "rest"`
+	for step := 1; step < 6; step++ {
+		r := trickle(ref text, step)
+		dec := json.NewDecoder(mut r)
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.ArrayKind)
+		expect.IsOk(dec.BeginArray())
+		sum := 0
+		for expect.IsOk(dec.More()) {
+			sum += expect.IsSome(expect.IsOk(dec.Decode<Point>())).Y
+		}
+
+		expect.Equal(ref sum, ref 6)
+		expect.IsNone(expect.IsOk(dec.Peek()))
+		expect.IsOk(dec.EndArray())
+		expect.IsOk(dec.BeginObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "a")
+		expect.Equal(ref remarshal(ref expect.IsSome(expect.IsOk(dec.Decode<[]bool>()))), `[true]`)
+		expect.True(expect.IsOk(dec.More()))
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.StringKind) // the key
+		expect.Equal(ref expect.IsOk(dec.Key()), "b")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.ObjectKind)
+		expect.IsOk(dec.BeginObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "c")
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Peek())), ref json.NullKind)
+		expect.IsNone(expect.IsSome(expect.IsOk(dec.Decode<int?>())))
+		expect.False(expect.IsOk(dec.More()))
+		expect.IsOk(dec.EndObject())
+		expect.Equal(ref expect.IsOk(dec.Key()), "d")
+		expect.IsOk(dec.BeginArray())
+		expect.False(expect.IsOk(dec.More()))
+		expect.IsOk(dec.EndArray())
+		expect.IsOk(dec.EndObject())
+		expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<string>())), "rest")
+		expect.IsNone(expect.IsOk(dec.Peek()))
+	}
+
+	for _, text := range []string{`[] 7`, `[1,] 7`, `{"a":} 7`} { // a closing bracket where Decode wants a value stays to be read
+		r := trickle(ref text, 2)
+		dec := json.NewDecoder(mut r)
+		if text[0] == '[' {
+			expect.IsOk(dec.BeginArray())
+			if text[1] == '1' {
+				expect.IsOk(dec.Decode<int>())
+			}
+		} else {
+			expect.IsOk(dec.BeginObject())
+			expect.IsOk(dec.Key())
+		}
+
+		at := dec.Offset()
+		e := expect.IsErr(dec.Decode<int>())
+		expect.Contains(ref e.Error(), "expected a value")
+		expect.True(dec.Offset() <= at + 1) // the comma at most, never the bracket
+		if text == `[] 7` {
+			expect.IsOk(dec.EndArray())
+			expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 7)
+		}
+	}
+
+	refusals := []string{
+		`[1 2]`, "json: expected , or ] at offset 3",
+		`[1,]`, "json: expected a value at offset 3",
+		`{"a" 1}`, "json: expected : at offset 5",
+		`{"a":1 "b":2}`, "json: expected , or } at offset 7",
+		`{1:2}`, "json: expected a key at offset 1",
+	}
+	for i := 0; i < len(refusals); i += 2 {
+		r := trickle(ref refusals[i], 2)
+		dec := json.NewDecoder(mut r)
+		e := walk(mut dec)
+		expect.Equal(ref expect.IsSome(e).Error(), ref refusals[i + 1])
+	}
+
+	missing := trickle(`[1 2]`, 1)
+	peeked := json.NewDecoder(mut missing)
+	expect.IsOk(peeked.BeginArray())
+	expect.IsOk(peeked.Decode<int>())
+	expect.Equal(ref expect.IsErr(peeked.Peek()).Error(), "json: expected , or ] at offset 3") // Peek holds the text to the grammar too
+	r := trickle(`[1] {}`, 1)
+	dec := json.NewDecoder(mut r)
+	expect.Equal(ref expect.IsErr(dec.EndArray()).Error(), "json: expected ] at offset 0")
+	expect.Equal(ref expect.IsErr(dec.Key()).Error(), "json: expected a value at offset 0")
+	expect.IsOk(dec.BeginArray())
+	expect.Equal(ref expect.IsErr(dec.EndObject()).Error(), "json: expected } at offset 1")
+	expect.Equal(ref expect.IsErr(dec.BeginObject()).Error(), "json: expected { at offset 1")
+	expect.IsOk(dec.Decode<int>())
+	expect.IsOk(dec.EndArray())
+	expect.Equal(ref expect.IsErr(dec.Decode<int>()).Error(), "json: expected an integer, found nothing at offset 4")
+	expect.Equal(ref dec.Offset(), ref 6)
+}
+
+// What follows the JSON in the input, read into the block and not
+// decoded, is lent by Buffered, from the Offset of the next byte.
+func TestDecoderBuffered() {
+	r := trickle(`{"X":1,"Y":2} tail`, 64)
+	dec := json.NewDecoder(mut r)
+	expect.IsOk(dec.Decode<Point>())
+	expect.Equal(ref dec.Offset(), ref 13)
+	expect.Equal(ref string(dec.Buffered()), " tail")
+}
+
+// walk reads the one array or object at the top of dec piece by piece,
+// whatever its elements and members hold, and returns the first error.
+func walk<R: io.Reader>(dec mut json.Decoder<R>) json.Error? {
+	match dec.Peek() {
+		Err(e) => return Some(e),
+		Ok(None) => return None,
+		Ok(Some(json.ArrayKind)) => {
+			if e := dec.BeginArray().Err() {
+				return Some(e)
+			}
+
+			for {
+				match dec.More() {
+					Err(e) => return Some(e),
+					Ok(false) => break,
+					Ok(true) => {
+						if e := walk(mut dec) {
+							return Some(e)
+						}
+					}
+				}
+			}
+
+			return dec.EndArray().Err()
+		}
+		Ok(Some(json.ObjectKind)) => {
+			if e := dec.BeginObject().Err() {
+				return Some(e)
+			}
+
+			for {
+				match dec.More() {
+					Err(e) => return Some(e),
+					Ok(false) => break,
+					Ok(true) => {
+						if e := dec.Key().Err() {
+							return Some(e)
+						}
+
+						if e := walk(mut dec) {
+							return Some(e)
+						}
+					}
+				}
+			}
+
+			return dec.EndObject().Err()
+		}
+		Ok(Some(_)) => return dec.Decode<json.Value>().Err(),
+	}
+}

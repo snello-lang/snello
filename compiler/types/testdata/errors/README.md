@@ -15,14 +15,22 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | Indexing lends; it does not move | move-out-of-slice |
 | Nothing moves out through a borrow | move-out-of-borrow |
 | A partial move ends the whole | partial-move |
+| No part leaves a value whose type implements `Drop`, whose `Drop` reads it when the value goes: no move, return or pattern binding by value takes a field or a variant's part out | move-out-of-drop |
 | 4. Any number of `ref`, or exactly one `mut` | mut-while-ref, two-mut, two-slots |
 | 4. The owner is frozen while borrowed | assign-while-borrowed, move-while-borrowed |
 | 5. A borrow passes on narrower or equal | ref-as-mut (a type mismatch), assign-through-ref, mut-through-ref-receiver |
 | `mut` lends something that can change: not a constant, a literal or a byte of a string | mut-of-constant |
 | A slice method that compares, orders or copies the elements asks it of their type | element-not-eq |
 | A number written down is one its type holds | literal-overflows |
+| A constant is computed by the compiler: from literals, constants, operators and conversions between number types, in its type's arithmetic, with no overflow, division by zero or fraction lost, and from no constant that leads back to it | const-not-constant, const-overflows, const-cycle |
+| A package variable's inferred type is known once its declaration is checked, in the order of the files | global-before-type |
+| A variadic `...T` parameter owns its arguments, a closure that borrows none of them; a `...ref T` one lends them for the call alone, no borrow of them returned; `...` passes a slice to a variadic parameter of the program's alone; a deferred call holds what its variadic arguments lend | variadic-moved, variadic-kept, variadic-lent, variadic-spread, variadic-deferred |
+| A field's default is a constant expression of the field's type, one for each name, none for a field of a type parameter, an embedded one or a trait's; a struct that declares a default has no zero value, so a declaration without a value, `make` and a map read are refused, and a positional literal leaves out only the last fields, those with a default | default-not-constant, default-no-zero |
+| A conversion between a declared type and its underlying type moves a value that is not `Copy`, and takes no borrow of one | conversion-moves |
+| A field a loop over a type's parts reaches is lent, never moved; such a loop, written out once per part, takes no `break`, `continue`, `defer` or `select` | reflect-lent, reflect-loop |
 | The pieces of a string hold the string, as does a slice they are stored in | pieces-outlive-string, pieces-stored |
 | A deferred call holds what a borrow it is given views | defer-holds-view |
+| A deferred print or built-in saves a view of each argument, so what it sees is held until the call runs, a Copy value aside | defer-printed |
 | A closure that captures a view cannot change the place it views | closure-writes-viewed |
 | 2. A borrow cannot be stored | borrow-in-slice, borrow-struct-in-slice, closure-stored, callback-kept |
 | 2. A borrow cannot cross a task boundary | borrow-across-spawn, borrow-on-channel |
@@ -46,6 +54,8 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A bare name in a pattern binds, or names a variant or `true` and `false`; a constant's name is refused, since it would bind and match every value | match-constant |
 | A range over an iterator calls `Next` on it: not through a `ref`; one variable, or two for a pair; what it borrows, and the iterator variable itself, are lent for the loop | range-iterator |
 | A type's `Drop` runs once, when its value goes: a program does not call it, take it as a value, defer it or reach it through a bound; `_ = v` drops a value early | drop-by-hand |
+| A value no variable holds is dropped when its statement ends, with every part of it, a field, an element, a piece, what a pointer it is points at: a borrow of any of them, written with `ref` or made where a borrow is wanted, is not kept past the statement | borrow-of-temporary-part |
+| A type that implements `Drop` is a struct or an enum, or a type declared over one, whose live flag is kept beside its fields | drop-not-composite |
 | `match` is exhaustive | missing-arm |
 | `?` propagates to the same kind | wrong-question-kind |
 

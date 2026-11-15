@@ -184,11 +184,7 @@ func (c *Checker) paramNamed(e ast.Expr) *Var {
 // itself, or what each branch of an if or match expression yields, to
 // any depth.
 func (c *Checker) eachValue(e ast.Expr, f func(ast.Expr)) {
-	if vs, ok := branches(e); ok {
-		for _, v := range vs {
-			c.eachValue(v, f)
-		}
-
+	if eachBranch(e, func(v ast.Expr) { c.eachValue(v, f) }) {
 		return
 	}
 

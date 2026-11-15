@@ -6,12 +6,15 @@ package math_test
 
 import ("expect"; "math"; "testing")
 
+// The square root, exact for a perfect square and for zero.
 func TestSqrt() {
 	expect.Equal(ref math.Sqrt(16.0), ref 4.0)
 	expect.Equal(ref math.Sqrt(0.0), ref 0.0)
 	expect.True(math.Abs(math.Sqrt(2.0)*math.Sqrt(2.0)-2.0) < 1e-12)
 }
 
+// Abs drops the sign, and Min and Max pick the smaller and the larger
+// of two ordinary numbers.
 func TestAbsMinMax() {
 	expect.Equal(ref math.Abs(-2.5), ref 2.5)
 	expect.Equal(ref math.Abs(2.5), ref 2.5)
@@ -20,6 +23,7 @@ func TestAbsMinMax() {
 	expect.Equal(ref math.Min(-0.5, 3.0), ref -0.5)
 }
 
+// Pi holds the digits a float holds.
 func TestPi() {
 	expect.True(math.Pi > 3.14159)
 	expect.True(math.Pi < 3.1416)
@@ -31,6 +35,9 @@ func near(got f64, want f64) bool {
 	return math.Abs(got - want) <= 4e-15 * math.Max(1.0, math.Abs(want))
 }
 
+// E and Ln2 agree with the library's Exp and Log, and the float limits
+// are the edges of their types: past the largest is an infinity, below
+// the smallest is zero.
 func TestConstants() {
 	expect.True(near(math.E, math.Exp(1.0)))
 	expect.True(near(math.Ln2, math.Log(2.0)))
@@ -39,6 +46,8 @@ func TestConstants() {
 	expect.True(f64(math.MaxFloat32) > 3.4e38 && f64(math.SmallestNonzeroFloat32) < 1.5e-45)
 }
 
+// The integer limits hold their values, each in its own type, and one
+// past a limit wraps in that type.
 func TestLimits() {
 	expect.Equal(ref math.MaxInt, ref 9223372036854775807)
 	expect.Equal(ref math.MinInt, ref -9223372036854775808)
@@ -60,6 +69,9 @@ func TestLimits() {
 	expect.Equal(ref a, ref math.MinInt8) // a limit has its own type, and wraps in it
 }
 
+// Floor, Ceil, Trunc and Round on halves and fractions of either sign,
+// a half going away from zero, and an infinity, a NaN and a negative
+// zero kept.
 func TestRounding() {
 	expect.Equal(ref math.Floor(2.5), ref 2.0)
 	expect.Equal(ref math.Floor(-2.5), ref -3.0)
@@ -76,6 +88,8 @@ func TestRounding() {
 	expect.True(math.Signbit(math.Ceil(-0.5))) // -0
 }
 
+// The remainder has the sign of the first operand, and is NaN for a
+// zero divisor or an infinite dividend.
 func TestMod() {
 	expect.Equal(ref math.Mod(7.0, 3.0), ref 1.0)
 	expect.Equal(ref math.Mod(-7.0, 3.0), ref -1.0) // the sign of the first
@@ -86,6 +100,8 @@ func TestMod() {
 	expect.True(math.IsNaN(math.Mod(math.Inf(1), 2.0)))
 }
 
+// Pow, Cbrt, Hypot and Exp on ordinary arguments and on the special
+// cases IEEE 754 sets for them.
 func TestPowers() {
 	expect.True(near(math.Pow(2.0, 10.0), 1024.0))
 	expect.True(near(math.Pow(2.0, -1.0), 0.5))
@@ -103,6 +119,8 @@ func TestPowers() {
 	expect.True(near(math.Exp(2.0), 7.38905609893065))
 }
 
+// The three logarithms on ordinary arguments, -Inf for zero, NaN for a
+// negative argument and +Inf for +Inf.
 func TestLogarithms() {
 	expect.Equal(ref math.Log(1.0), ref 0.0)
 	expect.True(near(math.Log(10.0), 2.302585092994046))
@@ -114,6 +132,8 @@ func TestLogarithms() {
 	expect.Equal(ref math.Log10(math.Inf(1)), ref math.Inf(1))
 }
 
+// The circular and hyperbolic functions and their inverses at known
+// angles, Atan2 in each quadrant, and NaN outside a domain.
 func TestTrigonometry() {
 	expect.Equal(ref math.Sin(0.0), ref 0.0)
 	expect.Equal(ref math.Cos(0.0), ref 1.0)
@@ -138,6 +158,8 @@ func TestTrigonometry() {
 	expect.True(near(math.Tanh(1.0), 0.7615941559557649))
 }
 
+// Inf, NaN, IsNaN and IsInf with each sign: a NaN equals nothing,
+// itself included.
 func TestInfAndNaN() {
 	expect.True(math.Inf(1) > math.MaxFloat64)
 	expect.True(math.Inf(0) > math.MaxFloat64)
@@ -157,6 +179,8 @@ func TestInfAndNaN() {
 	expect.False(math.IsInf(nan, 0))
 }
 
+// Signbit reads the sign bit, a negative zero's included, and Copysign
+// gives a magnitude the sign of another value.
 func TestSigns() {
 	expect.True(math.Signbit(-1.0))
 	expect.True(math.Signbit(math.Copysign(0.0, -1.0))) // negative zero
@@ -170,16 +194,19 @@ func TestSigns() {
 	expect.True(math.IsNaN(math.Sqrt(-1.0)))
 }
 
+// Sqrt in a loop where each result feeds the next call.
 func BenchmarkSqrt() {
 	x := 2.0
 	for testing.Loop() { x = math.Sqrt(x + 1.0) }
 }
 
+// Floor in a loop where each result feeds the next call.
 func BenchmarkFloor() {
 	x := 0.5
 	for testing.Loop() { x = math.Floor(x + 1.5) }
 }
 
+// Pow in a loop where each result feeds the next call.
 func BenchmarkPow() {
 	x := 1.0001
 	for testing.Loop() { x = math.Pow(x, 0.999) + 0.5 }

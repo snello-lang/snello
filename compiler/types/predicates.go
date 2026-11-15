@@ -47,7 +47,7 @@ func Identical(x, y Type) bool {
 		return ok && identicalLists(x.elems, y.elems)
 	case *Signature:
 		y, ok := y.(*Signature)
-		return ok && identicalVars(x.params, y.params) && Identical(x.results, y.results)
+		return ok && x.variadic == y.variadic && identicalVars(x.params, y.params) && Identical(x.results, y.results)
 	case *Struct:
 		y, ok := y.(*Struct)
 		return ok && identicalFields(x.fields, y.fields)
@@ -181,34 +181,46 @@ func (n *Named) isCopy() bool {
 // none either. A declaration, a literal, make, a map read and take may
 // not make the zero of a type without one.
 func hasZero(t Type) bool {
-	return zeroIn(t, nil)
+	return zeroIn(t, nil, true)
+}
+
+// hasOwnZero is hasZero with a field's default counted as no part of
+// the type: whether the type would have a zero value but for the
+// defaults it declares, which a literal of another package may still
+// build from its exported fields.
+func hasOwnZero(t Type) bool {
+	return zeroIn(t, nil, false)
 }
 
 // zeroIn is hasZero with the declared types it is inside, so that a
 // type that contains itself, which is reported as invalid elsewhere,
 // ends the walk: one met again counts as having a zero value.
-func zeroIn(t Type, inside map[*Named]bool) bool {
+func zeroIn(t Type, inside map[*Named]bool, defaults bool) bool {
 	switch t := t.(type) {
 	case *Basic:
 		return t.kind != Any && t.kind != Never
 	case *Option, *Slice, *Map:
 		return true
 	case *Result:
-		return zeroIn(t.err, inside)
+		return zeroIn(t.err, inside, defaults)
 	case *Array:
-		return zeroIn(t.elem, inside)
+		return zeroIn(t.elem, inside, defaults)
 	case *Tuple:
 		for _, e := range t.elems {
-			if !zeroIn(e, inside) {
+			if !zeroIn(e, inside, defaults) {
 				return false
 			}
 		}
 
 		return true
 	case *Struct:
-		return allHaveZero(t.fields, inside)
+		if defaults && t.hasDefaults() {
+			return false // a zero would fill the fields past the defaults the type declares
+		}
+
+		return allHaveZero(t.fields, inside, defaults)
 	case *Enum:
-		return len(t.variants) > 0 && allHaveZero(t.variants[0].fields, inside)
+		return len(t.variants) > 0 && allHaveZero(t.variants[0].fields, inside, defaults)
 	case *Named:
 		if inside[t] {
 			return true
@@ -220,15 +232,15 @@ func zeroIn(t Type, inside map[*Named]bool) bool {
 
 		inside[t] = true
 		defer delete(inside, t)
-		return !implements(t, DropTrait) && zeroIn(t.Underlying(), inside)
+		return !implements(t, DropTrait) && zeroIn(t.Underlying(), inside, defaults)
 	}
 
 	return false // channels, pointers, borrows, functions, traits, type parameters
 }
 
-func allHaveZero(vs []*Var, inside map[*Named]bool) bool {
+func allHaveZero(vs []*Var, inside map[*Named]bool, defaults bool) bool {
 	for _, v := range vs {
-		if !zeroIn(v.typ, inside) {
+		if !zeroIn(v.typ, inside, defaults) {
 			return false
 		}
 	}

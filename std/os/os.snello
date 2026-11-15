@@ -22,10 +22,10 @@ const eexist int = 17  // file exists
 const enotdir int = 20 // not a directory
 const einval int = 22  // invalid argument
 
-// The flags of OpenFile, Go's names: one of O_RDONLY, O_WRONLY and
-// O_RDWR says how the file is opened, and the rest are added to it with
-// |. The numbers are Snello's own and the same on every system, where
-// Go's are the system's and differ from one to the next.
+// The flags of OpenFile: one of O_RDONLY, O_WRONLY and O_RDWR says how
+// the file is opened, and the rest are added to it with |. The numbers
+// are Snello's own and the same on every system, where the system's
+// own differ from one to the next.
 const O_RDONLY int = 0   // open for reading only
 const O_WRONLY int = 1   // open for writing only
 const O_RDWR int = 2     // open for reading and writing
@@ -54,6 +54,67 @@ const ModeIrregular FileMode = 0x00080000  // ?: a file of a kind nothing else n
 const ModeType FileMode = 0x8f280000
 const ModePerm FileMode = 0o777
 
+// How FileMode.String writes a mode: modeLetters has a letter for each
+// bit from the top one, topModeBit, down, the letter at i standing for
+// bit topModeBit - i; permLetters has one for each of the permBits
+// bits of permissions, from the owner's read down to the others'
+// execute; noBitLetter stands for a bit that is not set.
+const modeLetters = "dalTLDpSugct?"
+const permLetters = "rwxrwxrwx"
+const noBitLetter byte = '-'
+const topModeBit = 31
+const permBits = 9
+
+// The descriptors of the three standard streams, and the names their
+// Files carry, which an Error on one shows as its path.
+const stdinFD = 0
+const stdoutFD = 1
+const stderrFD = 2
+const stdinName = "/dev/stdin"
+const stdoutName = "/dev/stdout"
+const stderrName = "/dev/stderr"
+
+// closedFD is the descriptor of a File that Close has closed, so that
+// Drop has nothing left to do.
+const closedFD = -1
+
+// failedInRead is what the runtime's readToString and readFile store
+// when the path opened and the read of it failed, so that the Error
+// names the read; they store 0 when the open failed.
+const failedInRead = 1
+
+// The places Seek counts from, as the runtime's seek takes them, named
+// as the system names them: the start of the file, the current
+// position, and the end.
+const seekSet = 0
+const seekCur = 1
+const seekEnd = 2
+
+// The pieces of a path the package reads: the separator between its
+// elements, as a byte and as a string, the root, and the element that
+// names the directory it is in, alone and at the end of a path.
+const pathSeparator byte = '/'
+const separatorText = "/"
+const rootPath = "/"
+const currentDir = "."
+const currentDirSuffix = "/."
+
+// packedModeSize is how many bytes of the runtime's readDir hold an
+// entry's FileMode, lowest first, before its name.
+const packedModeSize = 4
+
+// envPWD is the environment variable a shell keeps the path of the
+// current directory in, as the user reached it.
+const envPWD = "PWD"
+
+// Args is the command line: the program's name first, then its
+// arguments, as the shell split them. The runtime fills it before main
+// runs, and it is read only: a program that wants to change it copies
+// it first.
+//
+//	for _, arg := range ref os.Args[1:] { fmt.Println(arg) }
+var Args []string
+
 // A File is an open file, or one of the standard streams. It
 // implements io.Reader and io.Writer, so it is what io.Copy and
 // fmt.Fprintln write to, and io.Seeker, so a program reading a format
@@ -64,61 +125,137 @@ const ModePerm FileMode = 0o777
 // and reports a failure to close, which Drop cannot; so a program that
 // cares about that failure calls Close, and one that does not lets the
 // File go. A File is not Copy: it is moved, or lent with ref and mut.
+//
+// Its reads and writes are the system's, with nothing held back in
+// memory: each call is one system call, or as many as a write of all
+// of its bytes takes, so a program that reads or writes in small
+// pieces wraps the File in a bufio.Reader or a bufio.Writer.
 struct File impl Drop, io.Reader, io.Writer, io.Seeker {
 	fd     int
 	name   string
 	stream bool // one of the three standard streams, which stay open for the program's life
 }
 
-// Args is the command line: the program's name first, then its
-// arguments, as the shell split them. The runtime fills it before main
-// runs.
-var Args []string
+// A FileMode is a file's kind and its permissions: the permissions in
+// the low nine bits, as the system writes them, 0644, and a bit for
+// each kind of file that is not a regular one, ModeDir, ModeSymlink and
+// the rest. It is a number, copied as one, and its bits are tested
+// with & or with its methods. It prints as ls prints a mode:
+//
+//	fmt.Println(os.ModeDir | 0o755) // drwxr-xr-x
+type FileMode u32 impl fmt.Stringer
 
-// Exit ends the program at once with code as its status, 0 for
-// success. Nothing after the call runs, no Drop and no deferred call,
-// and the compiler knows that, as it knows it of panic: a match arm or
-// an if branch may end in Exit where a value is wanted. What was
-// printed is flushed first. The compiler provides it.
-func Exit(code int)
-
-// Cores returns the number of processors the program may run on, as
-// Go's runtime.NumCPU does, the processors the program is allowed by
-// taskset or a container on Linux and the processors online elsewhere:
-// the count the runtime starts a worker for, so a pool of that many
-// tasks keeps every core busy. The runtime provides it.
-func Cores() int
-
-// Stdin returns a handle on the standard input, open for reading. The
-// three streams are functions and not package variables, since a
-// package variable is never lent mut and a Read or a Write needs a
-// mut: each call gives a fresh File on the descriptor, lent for the
-// call, fmt.Fprintln(mut os.Stderr(), ...), or held in a local for a
-// bufio.Reader; dropping it never closes the descriptor, and two tasks
-// writing through two handles share no memory, which is what the
-// descriptor already guarantees.
-func Stdin() File {
-	return File{fd: 0, name: "/dev/stdin", stream: true}
+// A FileInfo is what the system says of a file at one moment: its
+// name, size, mode and the time it was last changed. Stat and Lstat
+// return one; it owns its name, and it is not updated when the file
+// changes after.
+struct FileInfo {
+	name    string
+	size    i64
+	mode    FileMode
+	modTime time.Time
+	dev     u64 // the device and the file's number on it, which name the file whatever its path
+	ino     u64
 }
 
-// Stdout returns a handle on the standard output, open for writing.
+// A DirEntry is one name in a directory, as ReadDir returns it: the
+// name and the kind of file it is, which reading the directory gives
+// without asking about each file. Stat or Lstat of the name says the
+// rest.
+struct DirEntry {
+	name string
+	typ  FileMode // the bits of its kind alone
+}
+
+// OpenOptions says how Open opens a file, each way a field a literal
+// names, the rest taking their defaults: reading alone, and a file made
+// with permissions 0666 before the umask.
+//
+//	o := os.OpenOptions{Write: true, Append: true, Create: true}
+//	f := o.Open(ref path)?
+//
+// Append implies Write. Create, Truncate and Exclusive need Write or
+// Append, and Truncate cannot go with Append, so a file opened for
+// reading alone is never made or emptied.
+struct OpenOptions {
+	Read      bool = true      // open for reading
+	Write     bool             // open for writing
+	Append    bool             // every write goes to the end of the file
+	Create    bool             // make the file when it does not exist
+	Truncate  bool             // empty the file when it is opened
+	Exclusive bool             // make the file, failing when it exists
+	Perm      FileMode = 0o666 // the permissions of a file it makes
+}
+
+// Exit ends the program at once with code as its status, 0 for success
+// and anything else, 1 by custom, for a failure the shell sees. Nothing
+// after the call runs, no Drop and no deferred call, and the compiler
+// knows that, as it knows it of panic: a match arm or an if branch may
+// end in Exit where a value is wanted. What fmt printed is written out
+// first. The compiler provides it.
+//
+//	if len(os.Args) < 2 {
+//		fmt.Println("usage: grep PATTERN [FILE]")
+//		os.Exit(2)
+//	}
+func Exit(code int)
+
+// Cores returns the number of processors the program may run on: the
+// ones it is allowed by taskset or a container on Linux, and the ones
+// online elsewhere. It is the count the runtime starts a worker for,
+// so a pool of that many tasks keeps every core busy. The runtime
+// provides it.
+func Cores() int
+
+// Stdin returns a handle on the standard input, open for reading.
+//
+// The three streams are functions and not package variables, since a
+// package variable is never lent mut and a Read or a Write needs a
+// mut: each call gives a fresh File on the descriptor, which costs no
+// allocation and no system call, lent for one call or held in a local
+// for a bufio.Reader:
+//
+//	r := bufio.NewReader(mut os.Stdin())
+//
+// Dropping it never closes the descriptor, and two tasks writing
+// through two handles share no memory, which is what the descriptor
+// already guarantees.
+func Stdin() File {
+	return File{fd: stdinFD, name: stdinName, stream: true}
+}
+
+// Stdout returns a handle on the standard output, open for writing, a
+// fresh File as Stdin is, which dropping never closes.
+//
+//	fmt.Fprintln(mut os.Stdout(), "done")
+//
 // Nothing is held back: what fmt prints and what is written here go to
 // the output at once, in the order they were made, interleaved rightly
 // with Stderr, and a prompt without a newline shows before the program
 // reads its answer. A program that writes much in small pieces wraps
 // it in a bufio.Writer.
 func Stdout() File {
-	return File{fd: 1, name: "/dev/stdout", stream: true}
+	return File{fd: stdoutFD, name: stdoutName, stream: true}
 }
 
 // Stderr returns a handle on the standard error output, open for
-// writing.
+// writing, a fresh File as Stdin is, which dropping never closes. It
+// is where a program reports what went wrong, apart from its output:
+//
+//	fmt.Fprintln(mut os.Stderr(), "grep:", e)
 func Stderr() File {
-	return File{fd: 2, name: "/dev/stderr", stream: true}
+	return File{fd: stderrFD, name: stderrName, stream: true}
 }
 
-// Open opens the named file for reading. A missing file is an Error of
-// Kind NotExist, with Op "open".
+// Open opens the file path names for reading and returns it, a File
+// the caller owns, which closes when it goes out of scope. path is
+// only read; the File keeps a copy of it, for Name and its Errors.
+//
+//	f := os.Open("/etc/hosts")?
+//
+// A missing file is an Error of Kind io.NotExist, "open /x: no such
+// file or directory", and one the program may not read an Error of
+// Kind io.Permission. A directory opens, and fails at its first Read.
 func Open(path ref string) Result<File, io.Error> {
 	fd := 0
 	code := open(path, mut fd)
@@ -129,9 +266,17 @@ func Open(path ref string) Result<File, io.Error> {
 	return Ok(File{fd: fd, name: path.Clone(), stream: false})
 }
 
-// Create opens the named file for writing, making it when it does not
-// exist, with permissions 0666 before the umask, and emptying it when
-// it does.
+// Create opens the file path names for writing and returns it, a File
+// the caller owns. A file that does not exist is made, with
+// permissions 0666 before the umask; one that does is emptied first.
+// path is only read; the File keeps a copy of it.
+//
+//	f := os.Create(ref out)?
+//	f.WriteString("hello\n")?
+//
+// A directory on the path that does not exist is an Error of Kind
+// io.NotExist, and one the program may not write in an Error of Kind
+// io.Permission, with Op "open".
 func Create(path ref string) Result<File, io.Error> {
 	fd := 0
 	code := create(path, mut fd)
@@ -142,44 +287,118 @@ func Create(path ref string) Result<File, io.Error> {
 	return Ok(File{fd: fd, name: path.Clone(), stream: false})
 }
 
-// ReadToString reads the whole of the named file into one string. The
-// bytes are taken as they are, so a file that is not UTF-8 gives a
-// string that is not either. An Error's Op says which step failed:
-// "open", or "read" for a path that opens but cannot be read, as a
-// directory cannot.
+// OpenFile opens the file path names as flag says and returns it, a
+// File the caller owns. flag is O_RDONLY, O_WRONLY or O_RDWR with any
+// of O_APPEND, O_CREATE, O_EXCL, O_SYNC and O_TRUNC added by |; perm is
+// the permissions of a file it makes, before the umask, and is not
+// used otherwise. path is only read; the File keeps a copy of it. Open
+// and Create are the two commonest calls of it, and OpenOptions says
+// the same with names:
+//
+//	flag := os.O_WRONLY | os.O_APPEND | os.O_CREATE
+//	log := os.OpenFile(ref path, flag, 0o644)?
+//
+// A flag the package does not name, or O_WRONLY and O_RDWR together,
+// is an invalid argument; a file that O_EXCL finds is an Error of Kind
+// io.Exists, and a missing one without O_CREATE of Kind io.NotExist,
+// all with Op "open".
+func OpenFile(path ref string, flag int, perm FileMode) Result<File, io.Error> {
+	fd := 0
+	code := openFile(path, flag, u32(perm), mut fd)
+	if code != 0 {
+		return Err(io.Errno("open", path, code))
+	}
+
+	return Ok(File{fd: fd, name: path.Clone(), stream: false})
+}
+
+// ReadToString reads the whole of the file path names into one string
+// and returns it, the caller's own. It reads into one block of the
+// size the file reports, which the string takes with no copy, so a
+// file is read in one allocation; a file that reports no size, a pipe,
+// is read into a block that grows. The bytes are taken as they are,
+// so a file that is not UTF-8 gives a string that is not either.
+//
+//	text := os.ReadToString("notes.txt")?
+//
+// An Error's Op says which step failed: "open", for a missing file,
+// of Kind io.NotExist, or "read" for a path that opens but cannot be
+// read, as a directory cannot, "read /tmp: is a directory".
 func ReadToString(path ref string) Result<string, io.Error> {
 	text := ""
 	inRead := 0
 	code := readToString(path, mut text, mut inRead)
 	if code != 0 {
-		op := if inRead == 1 { "read" } else { "open" }
+		op := if inRead == failedInRead { "read" } else { "open" }
 		return Err(io.Errno(op, path, code))
 	}
 
 	return Ok(text)
 }
 
-// WriteString writes s to the named file, made with permissions 0666
-// before the umask when it does not exist and emptied when it does, as
-// Go's os.WriteFile does with its bytes; ReadToString reads it back.
+// WriteString writes s to the file path names, which is made with
+// permissions 0666 before the umask when it does not exist and emptied
+// when it does; ReadToString reads it back. Both are only read. It
+// opens, writes and closes the file, and reports the first of the
+// three that fails, with its Op: "open", "write" or "close".
+//
+//	os.WriteString("out.txt", ref report)?
 func WriteString(path ref string, s ref string) Result<(), io.Error> {
 	f := Create(path)?
 	f.WriteString(s)?
 	return f.Close()
 }
 
+// ReadFile reads the whole of the file path names as bytes and returns
+// them, the caller's own, read into one block of the size the file
+// reports, as ReadToString reads text. An Error's Op says which step
+// failed: "open", or "read" for a path that opens but cannot be read,
+// as a directory cannot.
+//
+//	data := os.ReadFile(ref path)?
+func ReadFile(path ref string) Result<[]byte, io.Error> {
+	data := []byte{}
+	inRead := 0
+	code := readFile(path, mut data, mut inRead)
+	if code != 0 {
+		op := if inRead == failedInRead { "read" } else { "open" }
+		return Err(io.Errno(op, path, code))
+	}
+
+	return Ok(data)
+}
+
+// WriteFile writes data to the file path names, which is made with the
+// permissions perm, before the umask, when it does not exist, and
+// emptied when it does, its permissions kept. path and data are only
+// read. It opens, writes and closes the file, and reports the first of
+// the three that fails, with its Op.
+//
+//	os.WriteFile("key.bin", ref key, 0o600)?
+func WriteFile(path ref string, data ref []byte, perm FileMode) Result<(), io.Error> {
+	f := OpenFile(path, O_WRONLY|O_CREATE|O_TRUNC, perm)?
+	f.Write(data)?
+	return f.Close()
+}
+
 // MkdirTemp makes a new directory, with permissions 0700, and returns
-// its path. The directory is under dir, or under the system's
-// temporary directory, TMPDIR or /tmp, when dir is empty. Its name is
-// pattern with its last * replaced by a random number, or with the
-// number after it when it has no *, as Go names it, so "build-*.tmp"
-// gives build-2817162.tmp; a name taken already is tried again with
-// another number. A pattern holding a / is refused, and a dir that
-// does not exist is reported as Go reports it, by the stat of dir:
-// stat /tmp/gone: no such file or directory. The caller removes the
-// directory, with RemoveAll, when it is done.
+// its path, a string of its own. The directory is under dir, or under
+// the system's temporary directory, TempDir, when dir is empty. Its
+// name is pattern with its last * replaced by a random number, or with
+// the number after it when it has no *, so "build-*.tmp" gives
+// build-2817162.tmp; a name taken already is tried again with another
+// number. Both are only read. The caller removes the directory, with
+// RemoveAll, when it is done:
+//
+//	dir := os.MkdirTemp("", "build-*")?
+//	build(ref dir)?
+//	os.RemoveAll(ref dir)?
+//
+// A pattern holding a / is refused, "mkdirtemp build/*: pattern
+// contains path separator", and a dir that does not exist is reported
+// by its stat: "stat /tmp/gone: no such file or directory".
 func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
-	if pattern.Contains("/") {
+	if pattern.Contains(separatorText) {
 		return Err(io.NewError("mkdirtemp", pattern.Clone(), "pattern contains path separator", io.Other))
 	}
 
@@ -193,8 +412,11 @@ func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
 	return Ok(path)
 }
 
-// Remove removes the named file, or the named directory when it is
-// empty. A path that names nothing is an Error of Kind NotExist.
+// Remove removes the file path names, or the directory when it is
+// empty; path is only read. A path that names nothing is an Error of
+// Kind io.NotExist, "remove /x: no such file or directory", and a
+// directory with something in it one of "directory not empty";
+// RemoveAll removes a directory and all it holds.
 func Remove(path ref string) Result<(), io.Error> {
 	code := remove(path)
 	if code != 0 {
@@ -204,15 +426,21 @@ func Remove(path ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// RemoveAll removes the named file, or the named directory and
-// everything under it. A path that names nothing is nothing to
-// remove, not a failure. A path whose last element is ".", as "." or
-// "dir/." are, is refused before anything is removed, as Go refuses
-// it: the directory it names cannot be removed from inside itself. A
-// failure part way names the entry it failed on and the call that
-// failed, as Go's does: "unlinkat /tmp/d/locked/f: permission denied".
+// RemoveAll removes the file path names, or the directory and
+// everything under it, however deep; path is only read. A path that
+// names nothing is nothing to remove, not a failure. A symbolic link
+// is removed, not followed.
+//
+//	os.RemoveAll(ref dir)?
+//
+// A path whose last element is ".", as "." or "dir/." are, is refused
+// before anything is removed, "RemoveAll .: invalid argument": the
+// directory it names cannot be removed from inside itself. A failure
+// part way leaves what was not yet removed, and names the entry it
+// failed on and the call that failed: "unlinkat /tmp/d/locked/f:
+// permission denied".
 func RemoveAll(path ref string) Result<(), io.Error> {
-	if path == "." || path.HasSuffix("/.") {
+	if path == currentDir || path.HasSuffix(currentDirSuffix) {
 		return Err(io.Errno("RemoveAll", path, einval))
 	}
 
@@ -226,169 +454,17 @@ func RemoveAll(path ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// A FileMode is a file's kind and its permissions, with Go's bits: the
-// permissions in the low nine, as the system writes them, 0644, and a
-// bit for each kind of file that is not a regular one. It prints as ls
-// prints a mode, drwxr-xr-x.
-type FileMode u32 impl fmt.Stringer
-
-// IsDir reports whether m is a directory's mode.
-func (m FileMode) IsDir() bool {
-	return m & ModeDir != 0
-}
-
-// IsRegular reports whether m is a regular file's mode: no bit of a
-// kind is set.
-func (m FileMode) IsRegular() bool {
-	return m & ModeType == 0
-}
-
-// Perm returns the permissions of m.
-func (m FileMode) Perm() FileMode {
-	return m & ModePerm
-}
-
-// Type returns the bits of m that say what kind of file it is.
-func (m FileMode) Type() FileMode {
-	return m & ModeType
-}
-
-// String returns the mode as Go prints it and ls does: a letter for
-// each bit of a kind that is set, a dash when none is, then the
-// permissions, "drwxr-xr-x", "-rw-r--r--", "Lrwxrwxrwx".
-func (m ref FileMode) String() string {
-	bits := u32(*m)
-	letters := "dalTLDpSugct?"
-	buf := []byte{}
-	for i := 0; i < letters.Len(); i++ {
-		if bits & (u32(1) << u32(31-i)) != 0 {
-			buf.Push(letters[i])
-		}
-	}
-
-	if len(buf) == 0 {
-		buf.Push('-')
-	}
-
-	rwx := "rwxrwxrwx"
-	for i := 0; i < 9; i++ {
-		if bits & (u32(1) << u32(8-i)) != 0 {
-			buf.Push(rwx[i])
-		} else {
-			buf.Push('-')
-		}
-	}
-
-	return string(buf)
-}
-
-// A FileInfo is what the system says of a file: Stat and Lstat return
-// one.
-struct FileInfo {
-	name    string
-	size    i64
-	mode    FileMode
-	modTime time.Time
-	dev     u64 // the device and the file's number on it, which name the file whatever its path
-	ino     u64
-}
-
-// Name returns the last element of the path the FileInfo was asked for.
-func (fi ref FileInfo) Name() ref string {
-	return ref fi.name
-}
-
-// Size returns the file's length in bytes; what a directory's is
-// depends on the system.
-func (fi ref FileInfo) Size() i64 {
-	return fi.size
-}
-
-// Mode returns the file's kind and permissions.
-func (fi ref FileInfo) Mode() FileMode {
-	return fi.mode
-}
-
-// ModTime returns when the file was last changed.
-func (fi ref FileInfo) ModTime() time.Time {
-	return fi.modTime
-}
-
-// IsDir reports whether the file is a directory.
-func (fi ref FileInfo) IsDir() bool {
-	return fi.mode.IsDir()
-}
-
-// A DirEntry is one name in a directory, as ReadDir returns it: the
-// name and the kind of file it is, which reading the directory gives
-// without asking about each file. Stat or Lstat of the name says the
-// rest.
-struct DirEntry {
-	name string
-	typ  FileMode // the bits of its kind alone
-}
-
-// Name returns the entry's name, the last element of its path.
-func (e ref DirEntry) Name() ref string {
-	return ref e.name
-}
-
-// IsDir reports whether the entry is a directory.
-func (e ref DirEntry) IsDir() bool {
-	return e.typ.IsDir()
-}
-
-// Type returns the bits of the entry's kind: ModeDir for a directory,
-// ModeSymlink for a symbolic link, which is not followed, and none for
-// a regular file.
-func (e ref DirEntry) Type() FileMode {
-	return e.typ
-}
-
-// OpenFile opens the named file as flag says, O_RDONLY, O_WRONLY or
-// O_RDWR with any of O_APPEND, O_CREATE, O_EXCL, O_SYNC and O_TRUNC
-// added by |, as Go's does: os.OpenFile(ref path,
-// os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644) is a log to append to. A
-// file it makes has the permissions perm, before the umask. A flag the
-// package does not name is an invalid argument. Open and Create are
-// the two commonest calls of it.
-func OpenFile(path ref string, flag int, perm FileMode) Result<File, io.Error> {
-	fd := 0
-	code := openFile(path, flag, u32(perm), mut fd)
-	if code != 0 {
-		return Err(io.Errno("open", path, code))
-	}
-
-	return Ok(File{fd: fd, name: path.Clone(), stream: false})
-}
-
-// ReadFile reads the whole of the named file as bytes, into one block
-// of the size the file reports. An Error's Op says which step failed:
-// "open", or "read" for a path that opens but cannot be read, as a
-// directory cannot.
-func ReadFile(path ref string) Result<[]byte, io.Error> {
-	data := []byte{}
-	inRead := 0
-	code := readFile(path, mut data, mut inRead)
-	if code != 0 {
-		op := if inRead == 1 { "read" } else { "open" }
-		return Err(io.Errno(op, path, code))
-	}
-
-	return Ok(data)
-}
-
-// WriteFile writes data to the named file, made with the permissions
-// perm, before the umask, when it does not exist, and emptied when it
-// does, as Go's does.
-func WriteFile(path ref string, data ref []byte, perm FileMode) Result<(), io.Error> {
-	f := OpenFile(path, O_WRONLY|O_CREATE|O_TRUNC, perm)?
-	f.Write(data)?
-	return f.Close()
-}
-
-// Stat returns what the system says of the named file. A symbolic link
-// is followed: the FileInfo is of the file it leads to.
+// Stat returns what the system says of the file path names: its name,
+// size, mode and the time it was last changed, as a FileInfo of its
+// own. A symbolic link is followed, so the FileInfo is of the file it
+// leads to; Lstat is of the link. path is only read. It makes one
+// system call and copies the last element of path.
+//
+//	fi := os.Stat(ref path)?
+//	fmt.Println(fi.Name(), fi.Size())
+//
+// A path that names nothing is an Error of Kind io.NotExist, "stat
+// /x: no such file or directory".
 func Stat(path ref string) Result<FileInfo, io.Error> {
 	var fi FileInfo
 	code := statInto(path, true, mut fi)
@@ -400,7 +476,9 @@ func Stat(path ref string) Result<FileInfo, io.Error> {
 }
 
 // Lstat is Stat that does not follow a symbolic link: the FileInfo is
-// of the link itself.
+// of the link itself, whose Mode has ModeSymlink set. For any other
+// file it is Stat. A path that names nothing is an Error of Kind
+// io.NotExist, "lstat /x: no such file or directory".
 func Lstat(path ref string) Result<FileInfo, io.Error> {
 	var fi FileInfo
 	code := statInto(path, false, mut fi)
@@ -411,55 +489,21 @@ func Lstat(path ref string) Result<FileInfo, io.Error> {
 	return Ok(fi)
 }
 
-// statInto fills fi with what the system says of path and returns the
-// system's error number, zero on success.
-func statInto(path ref string, follow bool, fi mut FileInfo) int {
-	var size i64 = 0
-	var mode u32 = 0
-	var sec i64 = 0
-	var nsec i64 = 0
-	var dev u64 = 0
-	var ino u64 = 0
-	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
-	if code == 0 {
-		fi.name = basename(path)
-		fi.size = size
-		fi.mode = FileMode(mode)
-		fi.modTime = time.Unix(sec, nsec)
-		fi.dev = dev
-		fi.ino = ino
-	}
-
-	return code
-}
-
-// basename is the last element of a path, as Go's os names a FileInfo:
-// the slashes at its end dropped, then what follows the last slash
-// left.
-func basename(path ref string) string {
-	end := path.Len()
-	for end > 1 && path[end-1] == '/' {
-		end--
-	}
-
-	start := end - 1
-	for start >= 0 && path[start] != '/' {
-		start--
-	}
-
-	if end == 1 && path[0] == '/' {
-		return "/"
-	}
-
-	return path[start+1:end].Clone()
-}
-
-// ReadDir returns the names in the named directory, sorted by name,
-// each with the kind of file it is; the entries . and .. are left out.
-// A path that is not a directory fails as Go's does, "open PATH: not a
-// directory".
+// ReadDir returns the names in the directory path names, sorted by
+// name, byte by byte, each with the kind of file it is, as DirEntry
+// values of their own; the entries . and .. are left out. path is only
+// read. It reads the directory whole, asking about a file only where
+// the directory does not give its kind, and sorts the names in O(n log
+// n) for n of them.
+//
+//	for _, e := range ref os.ReadDir(ref dir)? {
+//		fmt.Println(e.Name())
+//	}
+//
+// A path that names nothing is an Error of Kind io.NotExist, and one
+// that is not a directory is "open PATH: not a directory".
 func ReadDir(path ref string) Result<[]DirEntry, io.Error> {
-	packed := []byte{} // each entry: the four bytes of its FileMode, lowest first, its name, a zero byte
+	packed := []byte{} // each entry: the bytes of its FileMode, lowest first, its name, a zero byte
 	op := ""
 	code := readDir(path, mut packed, mut op)
 	if code != 0 {
@@ -470,12 +514,12 @@ func ReadDir(path ref string) Result<[]DirEntry, io.Error> {
 	at := 0
 	for at < len(packed) {
 		typ := u32(packed[at]) | u32(packed[at+1])<<8 | u32(packed[at+2])<<16 | u32(packed[at+3])<<24
-		end := at + 4
+		end := at + packedModeSize
 		for packed[end] != 0 {
 			end++
 		}
 
-		entries.Push(DirEntry{name: string(packed[at+4:end]), typ: FileMode(typ)})
+		entries.Push(DirEntry{name: string(packed[at+packedModeSize:end]), typ: FileMode(typ)})
 		at = end + 1
 	}
 
@@ -483,8 +527,13 @@ func ReadDir(path ref string) Result<[]DirEntry, io.Error> {
 	return Ok(entries)
 }
 
-// Mkdir makes the named directory with the permissions perm, before
-// the umask. Its parent must exist, and the directory must not.
+// Mkdir makes the directory path names, with the permissions perm,
+// before the umask; path is only read. Its parent must exist, and the
+// directory must not: a path taken already is an Error of Kind
+// io.Exists, "mkdir /tmp/a: file exists", and a missing parent one of
+// Kind io.NotExist. MkdirAll makes the parents too.
+//
+//	os.Mkdir("out", 0o755)?
 func Mkdir(path ref string, perm FileMode) Result<(), io.Error> {
 	code := mkdir(path, u32(perm))
 	if code != 0 {
@@ -494,10 +543,15 @@ func Mkdir(path ref string, perm FileMode) Result<(), io.Error> {
 	return Ok(())
 }
 
-// MkdirAll makes the named directory and every parent of it that does
-// not exist, each with the permissions perm, as Go's does. A path that
-// is a directory already is no failure; one that is a file, or that
-// passes through one, is "mkdir PATH: not a directory".
+// MkdirAll makes the directory path names and every parent of it that
+// does not exist, each with the permissions perm, before the umask;
+// path is only read. A path that is a directory already is no failure,
+// so a program calls it without asking first; one that is a file, or
+// that passes through one, is "mkdir PATH: not a directory". It stats
+// the path once when it is there, and makes one call per missing
+// directory otherwise.
+//
+//	os.MkdirAll("out/logs/2026", 0o755)?
 func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
 	var fi FileInfo
 	if statInto(path, true, mut fi) == 0 { // the fast path: it is there
@@ -509,13 +563,13 @@ func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
 	}
 
 	// The parent first: the path without its last element and the
-	// slashes around it.
+	// separators around it.
 	i := path.Len() - 1
-	for i >= 0 && path[i] == '/' {
+	for i >= 0 && path[i] == pathSeparator {
 		i--
 	}
 
-	for i >= 0 && path[i] != '/' {
+	for i >= 0 && path[i] != pathSeparator {
 		i--
 	}
 
@@ -527,7 +581,7 @@ func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
 		Ok(_) => return Ok(()),
 		Err(e) => {
 			// A directory another task made meanwhile, or a path
-			// ending in a slash or a dot, is there already.
+			// ending in a separator or a dot, is there already.
 			if statInto(path, false, mut fi) == 0 && fi.IsDir() {
 				return Ok(())
 			}
@@ -538,10 +592,15 @@ func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
 }
 
 // Rename renames the file or directory from to to, moving it when to
-// is in another directory, and replacing a file that to names. A to
-// that is a directory is refused as "file exists", as Go refuses it,
-// unless it is from itself under another spelling. The Error is Go's:
-// "rename FROM TO: no such file or directory".
+// is in another directory of the same file system, and replacing a
+// file that to names; both are only read.
+//
+//	os.Rename(ref tmp, ref final)? // a write made whole at once
+//
+// A to that is a directory is refused as "file exists", of Kind
+// io.Exists, unless it is from itself under another spelling. A from
+// that names nothing is an Error of Kind io.NotExist, "rename FROM TO:
+// no such file or directory".
 func Rename(from ref string, to ref string) Result<(), io.Error> {
 	var target FileInfo
 	if statInto(to, false, mut target) == 0 && target.IsDir() {
@@ -564,17 +623,23 @@ func Rename(from ref string, to ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// Getwd returns the path of the current directory, as Go's does: the
-// PWD of the environment when it names the current directory, which is
-// the path the user came by, through a symbolic link or not, and what
-// the system says otherwise.
+// Getwd returns the path of the current directory, a string of its
+// own: the PWD of the environment when it names the current directory,
+// which is the path the user came by, through a symbolic link or not,
+// and what the system says otherwise. It stats the two to compare
+// them, and asks the system only when they differ.
+//
+//	wd := os.Getwd()?
+//
+// It fails when the current directory cannot be stated or no longer
+// exists, "getwd: no such file or directory".
 func Getwd() Result<string, io.Error> {
-	dir := Getenv("PWD")
-	if dir.HasPrefix("/") {
+	dir := Getenv(envPWD)
+	if dir.HasPrefix(separatorText) {
 		var dot FileInfo
-		code := statInto(".", true, mut dot)
+		code := statInto(currentDir, true, mut dot)
 		if code != 0 {
-			return Err(io.Errno("stat", ".", code))
+			return Err(io.Errno("stat", currentDir, code))
 		}
 
 		var named FileInfo
@@ -592,9 +657,14 @@ func Getwd() Result<string, io.Error> {
 	return Ok(out)
 }
 
-// Chdir makes the named directory the current one, which a path that
-// does not start with a slash is read from: for the whole program,
-// every task of it, as the system has one.
+// Chdir makes the directory path names the current one, which a path
+// that does not start with a separator is read from; path is only
+// read. It is for the whole program, every task of it, as the system
+// has one current directory per process, so a program with many tasks
+// prefers whole paths. A path that names nothing is an Error of Kind
+// io.NotExist, "chdir /x: no such file or directory".
+//
+//	os.Chdir(ref dir)?
 func Chdir(path ref string) Result<(), io.Error> {
 	code := chdir(path)
 	if code != 0 {
@@ -604,7 +674,9 @@ func Chdir(path ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// Hostname returns the name the system gives the machine.
+// Hostname returns the name the system gives the machine, a string of
+// its own, "build-01" or "laptop.local". It fails only when the system
+// does, "hostname: " and the reason.
 func Hostname() Result<string, io.Error> {
 	name := ""
 	code := hostname(mut name)
@@ -615,25 +687,28 @@ func Hostname() Result<string, io.Error> {
 	return Ok(name)
 }
 
-// Getpid returns the number of the program's process. The runtime
-// provides it.
+// Getpid returns the number of the program's process, the one ps and
+// kill know it by. The runtime provides it.
 func Getpid() int
 
 // TempDir returns the directory for temporary files: the TMPDIR of the
 // environment, or /tmp when it is unset or empty. It is not checked to
-// exist. The runtime provides it.
+// exist, and nothing is made; MkdirTemp makes a directory of one's own
+// under it. The runtime provides it.
 func TempDir() string
 
 // Getenv returns the value of the environment variable key, and an
 // empty string when it is not set; LookupEnv tells an empty value from
-// none.
+// none. key is only read.
+//
+//	home := os.Getenv("HOME")
 //
 // The environment is a copy the runtime makes of the one the program
-// was started with and keeps under a lock, as Go keeps its own, so any
-// task may read it while another sets a variable. Setenv and Unsetenv
-// change that copy: what the program reads after, and not what a C
-// library bound to it reads, which is the environment the program was
-// started with.
+// was started with and keeps under a lock, so any task may read it
+// while another sets a variable; a read finds the variable through an
+// index, in constant time. Setenv and Unsetenv change that copy: what
+// the program reads after, and not what a C library bound to it reads,
+// which is the environment the program was started with.
 //
 // A variable the program started with is lent from a block that lives
 // as long as the program, with nothing copied, as a string literal is;
@@ -646,7 +721,10 @@ func Getenv(key ref string) string {
 }
 
 // LookupEnv returns the value of the environment variable key, or None
-// when it is not set: a variable set to nothing is Some("").
+// when it is not set: a variable set to nothing is Some(""). key is
+// only read, and the value is lent or copied as Getenv's is.
+//
+//	editor := os.LookupEnv("EDITOR") ?? "vi"
 func LookupEnv(key ref string) string? {
 	value := ""
 	if lookupEnv(key, mut value) {
@@ -656,9 +734,13 @@ func LookupEnv(key ref string) string? {
 	return None
 }
 
-// Setenv sets the environment variable key to value. A key that is
-// empty or holds an = or a zero byte, and a value that holds a zero
-// byte, fail as Go's do: "setenv: invalid argument".
+// Setenv sets the environment variable key to value, in the program's
+// copy of the environment, for every task of it; both are only read,
+// and copied. A key that is empty or holds an = or a zero byte, and a
+// value that holds a zero byte, are refused: "setenv: invalid
+// argument". A later Getenv of key sees value.
+//
+//	os.Setenv("LANG", "C")?
 func Setenv(key ref string, value ref string) Result<(), io.Error> {
 	code := setenv(key, value)
 	if code != 0 {
@@ -668,37 +750,40 @@ func Setenv(key ref string, value ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
-// Unsetenv unsets the environment variable key; one that is not set is
-// nothing to unset. The runtime provides it.
+// Unsetenv unsets the environment variable key in the program's copy
+// of the environment; key is only read, and one that is not set is
+// nothing to unset. It never fails. The runtime provides it.
 func Unsetenv(key ref string)
 
-// Environ returns the environment, a string a variable as KEY=value,
-// as it is at one moment: a variable the program started with lent as
-// Getenv lends it, and one the program set as a copy.
+// Environ returns the environment as it is at one moment, a string per
+// variable as KEY=value, in a slice made once for their count: a
+// variable the program started with lent as Getenv lends it, and one
+// the program set as a copy.
+//
+//	for _, kv := range ref os.Environ() { fmt.Println(kv) }
 func Environ() []string {
 	vars := []string{}
 	environ(mut vars)
 	return vars
 }
 
-// syscallError builds the Error of a system call that was on no path,
-// from the system's error number, worded as Go's NewSyscallError words
-// it: "setenv: invalid argument".
-func syscallError(op string, code int) io.Error {
-	e := io.Errno(op, "", code)
-	return io.NewError(e.Op.Clone(), "", e.Msg.Clone(), e.Kind())
-}
-
 // Name returns the path the file was opened with, or the name of the
 // stream, /dev/stdout; it is what an Error on the file carries as its
-// Path.
+// Path. It is a borrow of the File's own string, with nothing copied.
 func (f ref File) Name() ref string {
 	return ref f.name
 }
 
-// Read fills buf from the file, as much as one read gives, and returns
-// how many bytes it wrote; zero at the end of the file. It is
-// io.Reader's method.
+// Read fills buf from the file, from its front and at the file's
+// position, with as much as one read gives, at most len(buf), and
+// returns how many bytes it wrote; zero at the end of the file, and
+// for an empty buf. It is one system call, which blocks until the
+// system answers. It is io.Reader's method.
+//
+//	n := f.Read(mut buf)?
+//
+// A file open for writing only fails, "read /x: bad file descriptor",
+// and so does a directory, "read /tmp: is a directory".
 func (f mut File) Read(buf mut []byte) Result<int, io.Error> {
 	n := 0
 	code := read(f.fd, buf, mut n)
@@ -709,10 +794,13 @@ func (f mut File) Read(buf mut []byte) Result<int, io.Error> {
 	return Ok(n)
 }
 
-// Write writes all of buf to the file and returns how many bytes it
-// wrote, the length of buf. It is io.Writer's method. A write that
-// fails partway, on a disk that filled, has written the Error's
-// Written() bytes.
+// Write writes all of buf to the file, at its position or at its end
+// for a file opened with O_APPEND, and returns how many bytes it
+// wrote, the length of buf; buf is only read. It asks the system as
+// often as it takes to write every byte. It is io.Writer's method. A
+// write that fails partway, on a disk that filled, has written the
+// Error's Written() bytes, and a file open for reading only fails with
+// none written.
 func (f mut File) Write(buf ref []byte) Result<int, io.Error> {
 	n := 0
 	code := write(f.fd, buf, mut n)
@@ -724,7 +812,10 @@ func (f mut File) Write(buf ref []byte) Result<int, io.Error> {
 }
 
 // WriteString writes all of s to the file and returns how many bytes
-// it wrote, the length of s.
+// it wrote, the length of s, as Write does with bytes, and with no
+// copy of s; it fails as Write fails.
+//
+//	f.WriteString("line\n")?
 func (f mut File) WriteString(s ref string) Result<int, io.Error> {
 	n := 0
 	code := writeString(f.fd, s, mut n)
@@ -736,19 +827,26 @@ func (f mut File) WriteString(s ref string) Result<int, io.Error> {
 }
 
 // Seek moves the file's position, where the next Read and Write begin,
-// and returns the new position, counted in bytes from the start:
-// f.Seek(io.Start(0)) goes back to the start, f.Seek(io.End(0)) to the
-// end, and f.Seek(io.Current(0)) only reports where the file is. A
-// position before the start fails as an invalid argument, and a stream
-// that has no position, a pipe or a terminal, fails as an illegal seek.
-// It is io.Seeker's method.
+// to where pos says, and returns the new position, counted in bytes
+// from the start. It is io.Seeker's method:
+//
+//	f.Seek(io.Start(0))?            // back to the start
+//	size := f.Seek(io.End(0))?      // to the end, which is the size
+//	at := f.Seek(io.Current(0))?    // where it is, not moving
+//
+// A position past the end is allowed, and a write there leaves a gap
+// that reads as zero bytes. A position before the start fails as an
+// invalid argument, as does one past what a position holds, 2^63 - 1;
+// a stream that has no position, a pipe or a terminal, fails as an
+// illegal seek.
 func (f mut File) Seek(pos io.SeekFrom) Result<u64, io.Error> {
 	at := u64(0)
 	code := match pos {
-		io.Start(n) => seek(f.fd, 0, i64(n), mut at), // past 2^63 - 1 it wraps below zero, which the system refuses
-		io.Current(n) => seek(f.fd, 1, n, mut at),
-		io.End(n) => seek(f.fd, 2, n, mut at),
+		io.Start(n) => seek(f.fd, seekSet, i64(n), mut at), // past 2^63 - 1 it wraps below zero, which the system refuses
+		io.Current(n) => seek(f.fd, seekCur, n, mut at),
+		io.End(n) => seek(f.fd, seekEnd, n, mut at),
 	}
+
 	if code != 0 {
 		return Err(io.Errno("seek", ref f.name, code))
 	}
@@ -756,8 +854,11 @@ func (f mut File) Seek(pos io.SeekFrom) Result<u64, io.Error> {
 	return Ok(at)
 }
 
-// Sync asks the system to write what the file holds in memory to the
-// device, and waits for it.
+// Sync asks the system to write what it holds in memory of the file to
+// the device, and waits until it has, so that what was written
+// survives a crash or a loss of power. It is slow, a wait on the
+// device, and is called where that matters, before a rename that
+// makes a file whole.
 func (f mut File) Sync() Result<(), io.Error> {
 	code := syncFile(f.fd)
 	if code != 0 {
@@ -767,12 +868,16 @@ func (f mut File) Sync() Result<(), io.Error> {
 	return Ok(())
 }
 
-// Close closes the file and reports a failure to. It consumes the
-// file: a closed file cannot be used again, and the compiler refuses a
-// use after Close as a use of a moved value.
+// Close takes the file, closes it, and reports a failure to: on some
+// file systems a write's failure shows only then. A closed file cannot
+// be used again: the compiler refuses a use after Close as a use of a
+// moved value. A program that does not care for the failure lets the
+// File go out of scope, and Drop closes it.
+//
+//	f.Close()?
 func (f File) Close() Result<(), io.Error> {
 	code := closeFile(f.fd)
-	f.fd = -1 // closed: Drop has nothing left to do
+	f.fd = closedFD
 	if code != 0 {
 		return Err(io.Errno("close", ref f.name, code))
 	}
@@ -790,34 +895,290 @@ func (f mut File) Drop() {
 	}
 }
 
-// The runtime provides these; each returns the system's error number,
-// zero on success, and stores its result through its last parameter.
+// IsDir reports whether m is a directory's mode: whether ModeDir is
+// set.
+func (m FileMode) IsDir() bool {
+	return m & ModeDir != 0
+}
+
+// IsRegular reports whether m is a regular file's mode: whether no bit
+// of ModeType, no kind, is set.
+func (m FileMode) IsRegular() bool {
+	return m & ModeType == 0
+}
+
+// Perm returns the permissions of m, its low nine bits, with the bits
+// of its kind and of how it runs cleared: 0o755 of drwxr-xr-x.
+func (m FileMode) Perm() FileMode {
+	return m & ModePerm
+}
+
+// Type returns the bits of m that say what kind of file it is, its
+// bits of ModeType: ModeDir for a directory, 0 for a regular file.
+func (m FileMode) Type() FileMode {
+	return m & ModeType
+}
+
+// String returns the mode as ls writes it: a letter for each bit above
+// the permissions that is set, "d" for ModeDir and the letters the
+// constants show, or a dash when none is, then the nine permissions,
+// "drwxr-xr-x", "-rw-r--r--", "Lrwxrwxrwx". It allocates the string
+// it returns.
+func (m ref FileMode) String() string {
+	bits := u32(*m)
+	buf := []byte{}
+	for i := 0; i < modeLetters.Len(); i++ {
+		if bits & (u32(1) << u32(topModeBit-i)) != 0 {
+			buf.Push(modeLetters[i])
+		}
+	}
+
+	if len(buf) == 0 {
+		buf.Push(noBitLetter)
+	}
+
+	for i := 0; i < permBits; i++ {
+		if bits & (u32(1) << u32(permBits-1-i)) != 0 {
+			buf.Push(permLetters[i])
+		} else {
+			buf.Push(noBitLetter)
+		}
+	}
+
+	return string(buf)
+}
+
+// Name returns the last element of the path the FileInfo was asked
+// for, "notes.txt" of "/tmp/notes.txt", or "/" for the root. It is a
+// borrow of the FileInfo's own string, with nothing copied.
+func (fi ref FileInfo) Name() ref string {
+	return ref fi.name
+}
+
+// Size returns the file's length in bytes; what a directory's is
+// depends on the system.
+func (fi ref FileInfo) Size() i64 {
+	return fi.size
+}
+
+// Mode returns the file's kind and permissions; for Lstat of a
+// symbolic link, ModeSymlink is set.
+func (fi ref FileInfo) Mode() FileMode {
+	return fi.mode
+}
+
+// ModTime returns when the file's contents were last changed, as the
+// system records it, to the nanosecond where it keeps that.
+func (fi ref FileInfo) ModTime() time.Time {
+	return fi.modTime
+}
+
+// IsDir reports whether the file is a directory, as Mode().IsDir()
+// does.
+func (fi ref FileInfo) IsDir() bool {
+	return fi.mode.IsDir()
+}
+
+// Name returns the entry's name, the last element of its path, with no
+// directory before it. It is a borrow of the DirEntry's own string,
+// with nothing copied.
+func (e ref DirEntry) Name() ref string {
+	return ref e.name
+}
+
+// IsDir reports whether the entry is a directory. A symbolic link to a
+// directory is not, since it is not followed.
+func (e ref DirEntry) IsDir() bool {
+	return e.typ.IsDir()
+}
+
+// Type returns the bits of the entry's kind: ModeDir for a directory,
+// ModeSymlink for a symbolic link, which is not followed, and none for
+// a regular file. The permissions are not among them; Stat of the
+// name gives those.
+func (e ref DirEntry) Type() FileMode {
+	return e.typ
+}
+
+// Open opens the file path names as o says and returns it, a File the
+// caller owns, as OpenFile does with the flags o stands for; o and path
+// are only read.
+//
+//	o := os.OpenOptions{Write: true, Create: true, Perm: 0o600}
+//	f := o.Open(ref path)?
+//
+// Options that open the file for neither reading nor writing, that ask
+// to make or empty a file opened for reading alone, or that empty a
+// file appended to, are an invalid argument, with Op "open", and the
+// file is not touched. Otherwise it fails as OpenFile fails.
+func (o ref OpenOptions) Open(path ref string) Result<File, io.Error> {
+	write := o.Write || o.Append
+	if !o.Read && !write || !write && (o.Create || o.Truncate || o.Exclusive) || o.Truncate && o.Append {
+		return Err(io.Errno("open", path, einval))
+	}
+
+	flag := if o.Read && write { O_RDWR } else if write { O_WRONLY } else { O_RDONLY }
+	if o.Append {
+		flag |= O_APPEND
+	}
+
+	if o.Create || o.Exclusive {
+		flag |= O_CREATE
+	}
+
+	if o.Exclusive {
+		flag |= O_EXCL
+	}
+
+	if o.Truncate {
+		flag |= O_TRUNC
+	}
+
+	return OpenFile(path, flag, o.Perm)
+}
+
+// statInto fills fi with what the system says of path, following a
+// symbolic link when follow is set, and returns the system's error
+// number, zero on success; fi is left as it was on a failure.
+func statInto(path ref string, follow bool, fi mut FileInfo) int {
+	var size i64 = 0
+	var mode u32 = 0
+	var sec i64 = 0
+	var nsec i64 = 0
+	var dev u64 = 0
+	var ino u64 = 0
+	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
+	if code == 0 {
+		fi.name = basename(path)
+		fi.size = size
+		fi.mode = FileMode(mode)
+		fi.modTime = time.Unix(sec, nsec)
+		fi.dev = dev
+		fi.ino = ino
+	}
+
+	return code
+}
+
+// basename is the last element of a path, as a FileInfo is named: the
+// separators at its end dropped, then what follows the last separator
+// left, or the root for a path of separators alone.
+func basename(path ref string) string {
+	end := path.Len()
+	for end > 1 && path[end-1] == pathSeparator {
+		end--
+	}
+
+	start := end - 1
+	for start >= 0 && path[start] != pathSeparator {
+		start--
+	}
+
+	if end == 1 && path[0] == pathSeparator {
+		return rootPath
+	}
+
+	return path[start+1:end].Clone()
+}
+
+// syscallError is the Error of a system call that was on no path,
+// from the system's error number, worded with the call and the reason
+// alone: "setenv: invalid argument".
+func syscallError(op string, code int) io.Error {
+	e := io.Errno(op, "", code)
+	return io.NewError(e.Op.Clone(), "", e.Msg.Clone(), e.Kind())
+}
+
+// open opens path for reading and stores its descriptor in fd. The
+// runtime provides it, as it does every function below; each that
+// returns an int returns the system's error number, zero on success,
+// and stores its results through its last parameters.
 func open(path ref string, fd mut int) int
+
+// create opens path for writing, made 0666 before the umask when it
+// does not exist and emptied when it does, and stores its descriptor
+// in fd.
 func create(path ref string, fd mut int) int
+
+// readToString reads the file path whole into out, storing in inRead
+// failedInRead when the read failed and 0 when the open did.
 func readToString(path ref string, out mut string, inRead mut int) int
+
+// mkdirTemp makes a directory named after pattern under dir and
+// stores its path in out; on a failure, out holds the path the error
+// is about and op the call that failed.
 func mkdirTemp(dir ref string, pattern ref string, out mut string, op mut string) int
+
+// removeAll removes path and all it holds; on a failure, failed holds
+// the entry it failed on and op the call that failed.
 func removeAll(path ref string, failed mut string, op mut string) int
+
+// remove removes a file or an empty directory.
 func remove(path ref string) int
+
+// read reads from the descriptor fd into buf and stores how many bytes
+// in n.
 func read(fd int, buf mut []byte, n mut int) int
+
+// write writes all of buf to the descriptor fd and stores in n how
+// many bytes it wrote, all of them or those before a failure.
 func write(fd int, buf ref []byte, n mut int) int
+
+// writeString writes all of s to the descriptor fd, as write does.
 func writeString(fd int, s ref string, n mut int) int
+
+// syncFile waits until the device holds what was written to fd.
 func syncFile(fd int) int
+
+// closeFile closes the descriptor fd.
 func closeFile(fd int) int
+
+// seek moves the position of fd by off from where whence says,
+// seekSet, seekCur or seekEnd, and stores the new position in at.
 func seek(fd int, whence int, off i64, at mut u64) int
+
+// openFile opens path with the package's flags and the permissions
+// perm, for a file it makes, and stores its descriptor in fd.
 func openFile(path ref string, flag int, perm u32, fd mut int) int
+
+// readFile reads the file path whole into out, storing in inRead
+// failedInRead when the read failed and 0 when the open did.
 func readFile(path ref string, out mut []byte, inRead mut int) int
+
+// stat stores the size, the FileMode, the time of the last change in
+// seconds and nanoseconds since 1970, and the device and file numbers
+// of path, following a symbolic link when follow is set.
 func stat(path ref string, follow bool, size mut i64, mode mut u32, sec mut i64, nsec mut i64, dev mut u64, ino mut u64) int
+
+// readDir stores the entries of the directory path in out, each as
+// the packedModeSize bytes of its FileMode, its name and a zero byte;
+// on a failure, op names the call that failed.
 func readDir(path ref string, out mut []byte, op mut string) int
+
+// mkdir makes the directory path with the permissions perm.
 func mkdir(path ref string, perm u32) int
+
+// rename renames from to to, as the system does.
 func rename(from ref string, to ref string) int
+
+// getcwd stores the path of the current directory in out, as the
+// system gives it.
 func getcwd(out mut string) int
+
+// chdir makes path the current directory.
 func chdir(path ref string) int
+
+// hostname stores the name the system gives the machine in out.
 func hostname(out mut string) int
 
-// The environment's: lookupEnv stores the value of key and reports
-// whether it is set, setenv returns the system's error number for a key or a
-// value it refuses, and environ fills a slice that holds nothing with
-// every variable.
+// lookupEnv stores the value of the environment variable key in value
+// and reports whether it is set.
 func lookupEnv(key ref string, value mut string) bool
+
+// setenv sets the environment variable key to value, returning the
+// system's error number for a key or a value it refuses.
 func setenv(key ref string, value ref string) int
+
+// environ fills out, a slice that holds nothing, with every variable
+// of the environment as KEY=value.
 func environ(out mut []string)

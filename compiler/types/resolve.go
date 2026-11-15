@@ -60,7 +60,7 @@ func (c *Checker) collectDecls(f *ast.File) {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
 			fn := NewFunc(d.Name.Pos(), d.Name.Name, nil)
-			if d.Recv == nil { // a method is attached to its type in resolveDecls
+			if d.Recv == nil && d.Of == nil { // a method, and a function of a type, is attached to its type in resolveDecls
 				c.declare(c.pkg.scope, d.Name, fn)
 			}
 
@@ -139,19 +139,11 @@ func (c *Checker) openTypeParams(names []*ast.Ident, tparams []*TypeParam) *Scop
 // declareVars declares the names of a var or const declaration with
 // type t, which is nil when the type is declared later (a top-level
 // declaration) or inferred (the expression checker's job). A constant
-// keeps the text of the literal it is given, which is what a format
-// that names it reads.
+// is given its value when its declaration is checked.
 func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
-	for i, name := range d.Names {
+	for _, name := range d.Names {
 		if d.Const {
-			text := ""
-			if i < len(d.Values) {
-				if lit, ok := unparen(d.Values[i]).(*ast.BasicLit); ok {
-					text = lit.Value
-				}
-			}
-
-			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, text))
+			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, Constant{}))
 		} else {
 			v := NewVar(name.Pos(), name.Name, t)
 			v.global = scope == c.pkg.scope // its type is checked for Send in initializersOf, once every type is complete
@@ -175,21 +167,106 @@ func (c *Checker) globalType(name *ast.Ident, t Type) {
 }
 
 // resolveTypes gives each declared type of a file its struct fields,
-// enum variants or underlying type, and returns them for the cycle
-// check over the whole package. The order of the phases over a
+// enum variants or underlying type, and appends them to named for the
+// cycle check over the whole package. The order of the phases over a
 // package's files is checkFiles's: the trait lists come first, the
 // types next, and the signatures after every type of every file.
-func (c *Checker) resolveTypes(f *ast.File) []*Named {
-	var named []*Named
+func (c *Checker) resolveTypes(f *ast.File, named []*Named) []*Named {
 	for i, d := range f.Decls {
 		if d, ok := d.(*ast.TypeDecl); ok {
 			n := c.objs[i].(*TypeName).typ.(*Named)
+			if p := c.early[n]; p != nil {
+				if p.done {
+					named = append(named, n) // resolved already, where a constant or another such type needed it
+					continue
+				}
+
+				p.checking = true
+			}
+
 			c.resolveType(d, n)
+			if p := c.early[n]; p != nil {
+				p.checking, p.done = false, true
+			}
+
 			named = append(named, n)
 		}
 	}
 
 	return named
+}
+
+// A pendingType is a type declared over another type, neither a struct
+// nor an enum nor generic, which may be resolved before its turn: the
+// declaration, the file it is in, and how far it has gone.
+type pendingType struct {
+	decl     *ast.TypeDecl
+	file     int
+	checking bool
+	done     bool
+}
+
+// collectEarly notes every type of the package's files declared over
+// another type, type Celsius f64, which is all a constant's type or a
+// conversion in a constant expression can be besides a predeclared
+// type.
+func (c *Checker) collectEarly(fs []*ast.File) {
+	var named []*Named
+	var pending []pendingType
+	for i, f := range fs {
+		for j, d := range f.Decls {
+			d, ok := d.(*ast.TypeDecl)
+			if !ok || d.TypeParams != nil {
+				continue
+			}
+
+			switch d.Def.(type) {
+			case *ast.StructType, *ast.EnumType:
+				continue
+			}
+
+			if tn, ok := c.fileState[i].objs[j].(*TypeName); ok {
+				if n, ok := tn.typ.(*Named); ok {
+					named = append(named, n)
+					pending = append(pending, pendingType{decl: d, file: i})
+				}
+			}
+		}
+	}
+
+	if len(named) == 0 {
+		return
+	}
+
+	c.early = make(map[*Named]*pendingType, len(named)) // made once every record is in place, so that none moves
+	for i, n := range named {
+		c.early[n] = &pending[i]
+	}
+}
+
+// resolveEarly resolves t now when it is a type declared over another
+// that has not had its turn, in the file that declares it, so that a
+// constant, which may be needed by an array length before every type is
+// resolved, and a type declared over a later one see its underlying
+// type. A type met again while it is resolved is left to the check of
+// recursive types.
+func (c *Checker) resolveEarly(t Type) {
+	n, ok := t.(*Named)
+	if !ok {
+		return
+	}
+
+	p := c.early[n]
+	if p == nil || p.done || p.checking {
+		return
+	}
+
+	p.checking = true
+	at := c.here()
+	c.enter(p.file)
+	c.resolveType(p.decl, n)
+	c.restore(at)
+	p.checking, p.done = false, true
 }
 
 // resolveSignatures gives each trait of a file its methods, each
@@ -219,14 +296,16 @@ func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {
 
 	switch def := d.Def.(type) {
 	case *ast.StructType:
-		own := c.fields(def.Fields)
+		own := c.fields(def.Fields, true)
 		fields := append(own, c.traitFields(named, own, d.Name.Pos())...) // a trait's fields are stored inline, after the type's own
 		named.SetUnderlying(NewStruct(fields))
 	case *ast.EnumType:
 		c.variantFields(def.Variants, named.underlying.(*Enum).variants)
 		c.refuseTraitFields(named, d.Name.Pos())
 	default:
-		named.SetUnderlying(c.typ(def).Underlying())
+		t := c.typ(def)
+		c.resolveEarly(t) // type A B before type B f64
+		named.SetUnderlying(t.Underlying())
 		c.refuseTraitFields(named, d.Name.Pos())
 	}
 }
@@ -238,8 +317,36 @@ func (c *Checker) resolveType(d *ast.TypeDecl, named *Named) {
 // receiver names, on a generic type or not: they are in a scope inside
 // the receiver's, so the method's signature and body see both.
 func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
+	var owner *Scope     // the type parameters the function's type names, G<A> of func G<A>.Of
+	var ownerName string // G
+	var ofType Type      // that type, read before the function's own type parameters are in scope
+	if d.Of != nil {     // func Point.Parse: a function of the type, which names its parameters as a receiver does
+		fn.static = true
+		if c.refuseOwner(d) {
+			fn.typ = NewSignature(nil, nil, Unit)
+			c.badMethods[d] = true
+			return
+		}
+
+		scope, ok := c.receiverParams(d.Of, "a function of a type")
+		if !ok {
+			fn.typ = NewSignature(nil, nil, Unit)
+			c.badMethods[d] = true
+			return
+		}
+
+		if scope != nil {
+			c.typeScopes[d] = scope
+			owner, ownerName = scope, d.Of.Name.Name
+			defer c.closeScope()
+		}
+
+		ofType = c.typ(d.Of)
+	}
+
+	var recv *Var
 	if d.Recv != nil {
-		scope, ok := c.receiverParams(d.Recv.Type)
+		scope, ok := c.receiverParams(d.Recv.Type, "a method's receiver")
 		if !ok {
 			fn.typ = NewSignature(nil, nil, Unit)
 			c.badMethods[d] = true // reported once; its signature and body would only repeat the error
@@ -248,20 +355,24 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 
 		if scope != nil {
 			c.typeScopes[d] = scope
+			owner, ownerName = scope, receiverName(d.Recv.Type)
 			defer c.closeScope()
 		}
+
+		recv = NewVar(d.Recv.Pos(), d.Recv.Name.Name, c.typ(d.Recv.Type))
 	}
 
 	var tparams []*TypeParam
 	if len(d.TypeParams) > 0 {
+		for _, tp := range d.TypeParams {
+			if owner != nil && owner.Lookup(tp.Name.Name) != nil { // its own would hide the type's in the signature and body
+				c.errorf(tp.Name.Pos(), tp.Name.Name+" is already a type parameter of "+ownerName+": name "+d.Name.Name+"'s own another way")
+			}
+		}
+
 		tparams = c.typeParams(d.TypeParams)
 		c.typeScopes[d] = c.resolveBounds(d.TypeParams, tparams)
 		defer c.closeScope()
-	}
-
-	var recv *Var
-	if d.Recv != nil {
-		recv = NewVar(d.Recv.Pos(), d.Recv.Name.Name, c.typ(d.Recv.Type))
 	}
 
 	params, variadic := c.params(d.Params)
@@ -270,6 +381,10 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	sig.variadic = variadic
 	fn.typ = sig
 	c.checkSources(d.Name.Name, fn.typ.(*Signature), d.Name.Pos())
+	if c.pkg.path == "" && d.Recv == nil && d.Name.Name == "main" && (len(params) > 0 || sig.results != Unit || tparams != nil) {
+		c.errorf(d.Name.Pos(), "func main must have no type parameters, no parameters and no results: the program calls it with none and reads os.Args for its arguments")
+	}
+
 	if d.Body == nil {
 		switch {
 		case c.pkg.std: // the runtime defines it
@@ -278,6 +393,11 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 		default:
 			c.checkBinding(d, sig) // a package's binding to C
 		}
+	}
+
+	if d.Of != nil {
+		c.attachFunc(d, fn, ofType)
+		return
 	}
 
 	if d.Recv == nil {
@@ -301,31 +421,100 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 	}
 }
 
+// attachFunc attaches a function of a type, func Point.Parse, to t, the
+// type it names, a declared type of this package, beside its methods,
+// whose names it shares: a type has one member of each name.
+func (c *Checker) attachFunc(d *ast.FuncDecl, fn *Func, t Type) {
+	c.recordDef(d.Name, fn)
+	if t == Typ[Invalid] {
+		return // reported where the type is written
+	}
+
+	named, ok := t.(*Named)
+	if !ok {
+		c.errorf(d.Of.Pos(), "a function of a type is declared on a declared type: func Point."+d.Name.Name+"(...)")
+		return
+	}
+
+	c.recordUse(d.Of.Name, named.obj) // the type it belongs to, which a backend names it after
+
+	if old := named.AddMethod(fn); old != nil {
+		c.errorf(d.Name.Pos(), named.obj.name+"."+d.Name.Name+" redeclared; first declared at "+c.lineCol(old.Pos()))
+	}
+}
+
 func (c *Checker) resolveVar(d *ast.VarDecl) {
 	if d.Type == nil {
 		return
 	}
 
+	if d.Const {
+		return // its type was given with its value (checkConst)
+	}
+
 	t := c.typ(d.Type)
 	for _, name := range d.Names {
-		switch obj := c.pkg.scope.Lookup(name.Name).(type) {
-		case *Var:
-			obj.typ = t
-		case *Const:
-			obj.typ = t
+		if v, ok := c.pkg.scope.Lookup(name.Name).(*Var); ok {
+			v.typ = t
 		}
 	}
 }
 
+// refuseOwner refuses, once, a function of a type declared on what can
+// have none: a trait, a generic one too, func Show.Default(), whose
+// functions belong to the types that implement it; and a declared type
+// of the language, func Result<T, E>.Of(), which no package adds to. It
+// reports whether it did.
+func (c *Checker) refuseOwner(d *ast.FuncDecl) bool {
+	if c.languageResult(d.Of) {
+		c.errorf(d.Of.Pos(), "cannot define new functions on non-local type Result")
+		return true
+	}
+
+	_, obj := c.scope.LookupParent(d.Of.Name.Name)
+	tn, ok := obj.(*TypeName)
+	if !ok {
+		return false
+	}
+
+	switch t := tn.typ.(type) {
+	case *Trait:
+		c.errorf(d.Of.Pos(), t.obj.name+" is a trait: it lists the functions it requires, func "+d.Name.Name+"(...), and each type that implements it declares its own")
+		return true
+	case *Named:
+		if tn.pkg != c.pkg {
+			c.errorf(d.Of.Pos(), "cannot define new functions on non-local type "+t.obj.name)
+			return true
+		}
+	}
+
+	return false
+}
+
+// receiverName returns the name of the type a receiver's type t names,
+// List of (l mut List<T>).
+func receiverName(t ast.Type) string {
+	if r, ok := t.(*ast.RefType); ok {
+		t = r.Elem
+	}
+
+	if n, ok := t.(*ast.NamedType); ok {
+		return n.Name.Name
+	}
+
+	return ""
+}
+
 // receiverParams opens the scope of the type parameters a method's
-// receiver names, (l mut List<T>), when its type is generic, and
-// returns it; it returns nil, with no scope open, for any other
-// receiver. Each argument of the receiver type must be a plain name,
-// as it declares the parameter in that position; a name that is
-// already a type, List<int>, is refused rather than shadowing it,
-// unless it is the declaration's own name for that parameter. ok is
-// false after an error, which leaves the method out.
-func (c *Checker) receiverParams(t ast.Type) (scope *Scope, ok bool) {
+// receiver names, (l mut List<T>), or a function of a type names,
+// func List<T>.Of, when its type is generic, and returns it; it returns
+// nil, with no scope open, for any other type. Each argument of the
+// type must be a plain name, as it declares the parameter in that
+// position; a name that is already a type, List<int>, is refused rather
+// than shadowing it, unless it is the declaration's own name for that
+// parameter, and what says which declaration it is in the message. ok
+// is false after an error, which leaves the function out.
+func (c *Checker) receiverParams(t ast.Type, what string) (scope *Scope, ok bool) {
 	if r, ok := t.(*ast.RefType); ok {
 		t = r.Elem
 	}
@@ -353,7 +542,7 @@ func (c *Checker) receiverParams(t ast.Type) (scope *Scope, ok bool) {
 	names := make([]*ast.Ident, len(n.Args))
 	for i, arg := range n.Args {
 		if names[i] = c.freshName(arg, named.tparams[i]); names[i] == nil {
-			c.errorf(arg.Pos(), "a method's receiver names the type's parameters: "+named.String())
+			c.errorf(arg.Pos(), what+" names the type's parameters: "+named.String())
 			return nil, false
 		}
 	}

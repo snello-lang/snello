@@ -61,7 +61,14 @@ Rule 6 reaches one value the others do not name: a temporary, a value no variabl
 t := s.Clone().Trim()                 // ERROR "cannot keep a borrow of a temporary: s.Clone() is dropped when the statement ends"
 ```
 
-Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program. A temporary's fields and elements are places in it, read and lent where they are, `len(row().tags)`, `grow(mut row().tags)`, and dropped with it once; none is moved out of it (chapter 5).
+Bind the clone first, `c := s.Clone(); t := c.Trim()`, and `t` borrows `c`, which lives to the end of the scope. A literal is not a temporary: `t := "  lit  ".Trim()` is fine, since the literal lives for the whole program. A temporary's fields and elements are places in it, read and lent where they are, `len(row().tags)`, `grow(mut row().tags)`, and dropped with it once; none is moved out of it (chapter 5). They die with it, and so does what a pointer the statement made points at, so a borrow of any of them is a borrow of the temporary, kept nowhere:
+
+```go
+n := boxed().name.Trim()              // ERROR "cannot keep a borrow of a temporary: boxed() is dropped when the statement ends"
+var r ref Row = boxed()               // ERROR "cannot keep a borrow of a temporary: boxed() is dropped when the statement ends"
+```
+
+The second has no `ref` written, but a `ref Row` made from the `*Row` the call returns borrows it all the same. Bind the pointer first, `p := boxed()`, and borrow from `p`.
 
 Rule 4 is the one you will meet first. A method with a `mut` receiver creates a `mut` borrow, so a `ref` held across the call is a conflict:
 
@@ -115,7 +122,7 @@ r := ref s
 fmt.Println(*r)
 ```
 
-The message names where `t` is dropped and the use that would read it. Give `r` another borrow before that use, `r = ref s`, and the program is fine. In a loop the same holds pass by pass: a borrow of the body's variable may be used later in the same pass, but not read by the next pass before it is given another borrow, `t is dropped at the end of its block at 22:5, used in the next pass of the loop at 19:22`.
+The message names where `t` is dropped and the use that would read it. Give `r` another borrow before that use, `r = ref s`, and the program is fine. A value is made before it is stored, so what it reads it keeps: `r = pick(r)`, `r = r` and `a, b = b, a` leave each place holding what its value held, and `r := r` in an inner block holds what the outer `r` holds, so none of them hides `t` from the check. A tuple holds the borrow a part makes: `(mut j, 1)` is a `(mut int, int)`, as a name given `mut j` is a `mut int`, and passed to a call it lends `j` once, for the call. In a loop the same holds pass by pass: a borrow of the body's variable may be used later in the same pass, but not read by the next pass before it is given another borrow, `t is dropped at the end of its block at 22:5, used in the next pass of the loop at 19:22`.
 
 A block's value may not borrow what the block declares, since the block's locals are gone by the time the value is taken: `x := if full { t := "inner".Clone(); ref t } else { ref s }` is `cannot keep a borrow of t: t is dropped at the end of its block`, and so is a literal or a variant that holds such a borrow, `Holder{src: ref t}`. A value that borrows from outside the block, or an arm's binding that borrows the matched value, is carried out whole: `x := match m.Get(k) { Some(v) => v, None => return }` keeps `m` lent while `x` is used.
 
@@ -154,7 +161,7 @@ t.Add(1)
 keep(t)                               // ERROR "cannot move t: t is borrowed by the deferred call"
 ```
 
-A borrow variable, the receiver of `defer s.cleanup()` in a method on `s mut Server`, is read by the call when it runs, so it may not be pointed elsewhere before then, and what it points to is held as it would be by the variable: the place it views cannot be given a new value before the call runs, since that would free what the view sees, `t := s.Trim(); defer show(t); s = u` being `cannot assign to s: s is borrowed by the deferred call`; `defer show(ref s)` reads `s` as it is when it runs, and `s` may change. Anything else may move or die before the call runs, and is refused where the call is deferred: an element, `defer show(ref xs[0])`; what a borrow points to; a value that holds a borrow; a closure that borrows, called or passed: `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`. A local of an inner block is dropped when the block ends, before the call runs: `{ t := "inner".Clone(); defer show(ref t) }` is `cannot keep a borrow of t in the deferred call: t is dropped at the end of its block, and the deferred call runs when the function returns`. Take the value whole, or make the call before the function returns.
+A borrow variable, the receiver of `defer s.cleanup()` in a method on `s mut Server`, is read by the call when it runs, so it may not be pointed elsewhere before then, and what it points to is held as it would be by the variable: the place it views cannot be given a new value before the call runs, since that would free what the view sees, `t := s.Trim(); defer show(t); s = u` being `cannot assign to s: s is borrowed by the deferred call`; `defer show(ref s)` reads `s` as it is when it runs, and `s` may change. A deferred print or built-in, `defer fmt.Println(s)`, `defer print(s)`, `defer close(ch)`, saves its arguments when the `defer` runs, a view of each, so what it sees is held until the call does: `s = u` after it is `cannot assign to s: s is borrowed by the deferred call`, while a `Copy` value, an `int`, is saved whole and may change. A part of a value the statement makes, `defer fmt.Println(of("d").a)`, has nothing to view by then, as the `defer` drops the value it made: `a deferred call reads what it prints when it runs, after the defer statement drops of(...): keep of(...) in a variable first, and print from it`; a value made whole, `defer fmt.Println(of("d"))`, is the call's own and is printed as it is. Anything else may move or die before the call runs, and is refused where the call is deferred: an element, `defer show(ref xs[0])`; what a borrow points to; a value that holds a borrow; a closure that borrows, called or passed: `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`. A local of an inner block is dropped when the block ends, before the call runs: `{ t := "inner".Clone(); defer show(ref t) }` is `cannot keep a borrow of t in the deferred call: t is dropped at the end of its block, and the deferred call runs when the function returns`. Take the value whole, or make the call before the function returns.
 
 ### `Drop`
 
@@ -311,6 +318,7 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot store a borrow in r from inside a closure: r is declared outside it, ...`; `... and r outlives the closure` | `closure-stores-borrow` |
 | `cannot keep a borrow of t in the deferred call: ..., and the deferred call runs when the function returns` | `defer-outlives-block` |
 | `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`, `a deferred call cannot call g: it is a closure that borrows` | `defer-borrows-whole`, `TestFlowModel` |
+| `a deferred call reads what it prints when it runs, after the defer statement drops of(...): keep of(...) in a variable first, and print from it` | `TestFlowModel`, `defer-prints.snello` |
 | `a closure that borrows cannot be chosen by if or match, or come out of a block`, `... assigned with =`, `... copied to another variable` | `closure-used-where-made`, `TestFlowModel` |
 | `cannot keep a borrow of t in p: ..., used when p is dropped at 5:1, by its Drop` | `drop-reads-borrow` |
 | `a slice cannot hold Lexer: it holds a borrow` | `borrow-struct-in-slice` |

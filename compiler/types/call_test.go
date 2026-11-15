@@ -9,6 +9,47 @@ import (
 	"testing"
 )
 
+// A conversion between a declared type and its underlying type gives
+// the value itself under the other name: it moves a value that is not
+// Copy, as an argument by value does, and takes no borrow of one, which
+// would leave two owners to free it; a Copy value, a number and the
+// conversions to a string's bytes or runes copy. A struct without a
+// zero value only for its defaults converts, one that implements Drop
+// does not.
+func TestConversionMoves(t *testing.T) {
+	const decls = "type Name string\ntype Ints []int\nstruct P { x int; s string }\ntype P2 P\nstruct D { x int; y int = 1 }\ntype D2 D\nstruct H { n Name }\ntype Celsius f64\n"
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{"func f(n Name) string { return string(n) }", nil},
+		{"func f(n Name) string { s := string(n); print(n); return s }", []string{"use of moved value n"}},
+		{"func f(xs Ints) { ys := []int(xs); print(xs, ys) }", []string{"use of moved value xs"}},
+		{"func f(p P) P2 { q := P2(p); print(p.x); return q }", []string{"use of moved value p"}},
+		{"func f(h H) string { s := string(h.n); print(h.n); return s }", []string{"use of moved value h.n"}},
+		{"func f(ns []Name) string { return string(ns[0]) }", []string{"cannot move ns[0] out of the slice"}},
+		{"func f(n ref Name) string { return string(n) }", []string{"cannot convert ref Name to string: the conversion takes the value, and a borrow lends it"}},
+		{"func f(n mut Name) string { return string(n) }", []string{"cannot convert mut Name to string: the conversion takes the value, and a borrow lends it"}},
+		{"func f(xs ref Ints) []int { return []int(xs) }", []string{"cannot convert ref Ints to []int: the conversion takes the value, and a borrow lends it"}},
+		{"func f(n ref Name) []byte { return []byte(n) }", nil},                // a string's bytes are copied
+		{"func f(c ref Celsius) f64 { x := f64(c); print(c); return x }", nil}, // Copy: read, not moved
+		{"func f() D { return D(D2{x: 1}) }", nil},                             // no zero value only for the defaults
+	}
+	for _, tt := range tests {
+		got := checkErrors(t, "package p\n"+decls+tt.src)
+		if len(got) != len(tt.want) {
+			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
+			continue
+		}
+
+		for i := range got {
+			if !strings.Contains(got[i], tt.want[i]) {
+				t.Errorf("%s:\n  got %q\n  want it to contain %q", tt.src, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
 // The conversions to a string: from its bytes, from a rune, a character
 // literal typed as a rune, and from a []rune, borrowed operands too; an
 // int is not a rune, so string(65) is refused rather than meaning "A".
@@ -77,6 +118,55 @@ func TestReplaceAndTake(t *testing.T) {
 			if !strings.Contains(got[i], tt.want[i]) {
 				t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got[i], tt.want[i])
 			}
+		}
+	}
+}
+
+// A program's own variadic parameters: the arguments checked one by one
+// against the element, after ... the slice against the parameter; a
+// generic element inferred from every argument; a variadic function as
+// a value of its own type, which a function of a slice is not; a trait
+// method variadic as the trait's is; and the type written as it is
+// declared.
+func TestVariadicCalls(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f(s []int) int { return sum() + sum(1, 2) + sum(s...) }", nil},
+		{"func show(sep string, xs ...ref string) {}\nfunc f(a string, s []string) { show(\",\", ref a, a); show(\",\", s...); print(a, s) }", nil},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count(1, 2) + count(\"a\".Clone()) }", nil},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count(1, \"a\") }", []string{"cannot use"}},
+		{"func count<T>(xs ...T) int { return len(xs) }\nfunc f() int { return count() }", []string{"cannot infer the type parameter T of count"}},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { g := sum; print(g(1, 2)) }", nil},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { var g func([]int) int = sum; print(g) }", []string{"cannot use"}},
+		{"func f() { g := func(xs ...int) int { return len(xs) }; print(g(1, 2, 3)) }", nil},
+		{"func sum(xs ...int) int { return len(xs) }\nfunc f() { print(sum(1, 2.5)) }", []string{"cannot use"}},
+		{"trait Logger { func (l ref Self) Log(parts ...ref string) }\nstruct L impl Logger {}\nfunc (l ref L) Log(parts ...ref string) {}", nil},
+		{"trait Logger { func (l ref Self) Log(parts ...ref string) }\nstruct L impl Logger {}\nfunc (l ref L) Log(parts []string) {}", []string{"method L.Log has the wrong signature for Logger: have (ref L) Log([]string), want (ref L) Log(...ref string)"}},
+		{"enum E { Many(xs ...int) }", []string{"a variant's field is not variadic"}},
+	}
+	for _, tt := range tests {
+		got := checkErrors(t, prelude+tt.src)
+		if len(got) != len(tt.want) {
+			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
+			continue
+		}
+
+		for i := range got {
+			if !strings.Contains(got[i], tt.want[i]) {
+				t.Errorf("%s:\n  got %q\n  want it to contain %q", tt.src, got[i], tt.want[i])
+			}
+		}
+	}
+
+	for _, tt := range []struct{ sig, want string }{
+		{"func(xs ...int) int", "func(...int) int"},
+		{"func(sep string, xs ...ref string)", "func(string, ...ref string)"},
+	} {
+		got := checkErrors(t, prelude+"func f() { var g "+tt.sig+" = 1 }")
+		if len(got) != 1 || !strings.Contains(got[0], tt.want) {
+			t.Errorf("%s: got %q, want a message naming %s", tt.sig, got, tt.want)
 		}
 	}
 }

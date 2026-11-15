@@ -1,0 +1,74 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Default field values: a constant expression each, of every kind a
+// constant has, a struct one among them, folded once; a keyed literal
+// that leaves fields out and a positional one that stops before the
+// last; literals in package variables, the static values, an array of
+// them included; a generic struct's default; a struct with a Drop, its
+// string default dropped with it; values passed and returned; and the
+// library's os.OpenOptions, read alone and 0666 unless a literal says
+// otherwise.
+
+package main
+
+import ("fmt"; "os")
+
+const Base = 8000
+
+type Mode u16
+
+struct Point { x int = 1; y int = 2 }
+
+struct Options {
+	host    string = "localhost"
+	port    int = Base + 80
+	backlog int
+	mode    Mode = 0o644
+	ratio   f64 = 1.0 / 4.0
+	scale   f32 = -0.5
+	level   int = -1
+	top     u8 = 255
+	verbose bool = true
+	at      Point = Point{x: 5}
+}
+
+struct Size { w int; h int = 1 }
+
+struct Box<T> { item T; count int = 3 }
+
+struct Tag impl Drop { name string = "tag"; n int }
+
+func (t mut Tag) Drop() { fmt.Println("drop", t.name, t.n) }
+
+var global = Options{port: 9}
+
+var sizes = [3]Size{Size{1}, Size{w: 2}, Size{3, 4}}
+
+func square(n int) Size { return Size{w: n, h: n} }
+
+func area(s Size) int { return s.w * s.h }
+
+func main() {
+	o := Options{backlog: 16}
+	fmt.Println(o.host, o.port, o.backlog, o.mode, o.ratio, o.scale, o.level, o.top, o.verbose, o.at.x, o.at.y)
+	fmt.Println(global.host, global.port, global.mode, global.ratio, global.scale, global.level, global.top, global.verbose, global.at.x, global.at.y)
+	for _, s := range ref sizes {
+		fmt.Println(s.w, s.h)
+	}
+
+	fmt.Println(area(Size{4}), area(square(3)), Size{4, 5}.h)
+	b := Box<string>{item: "x".Clone()}
+	fmt.Println(b.item, b.count, Box<f64>{item: 1.5}.count)
+	{
+		t := Tag{n: 1}
+		u := Tag{name: "named".Clone(), n: 2}
+		fmt.Println(t.name, u.name, Point{}.y)
+	}
+
+	opts := os.OpenOptions{}
+	fmt.Println(opts.Read, opts.Write, opts.Create, opts.Perm)
+	w := os.OpenOptions{Write: true, Perm: 0o600}
+	fmt.Println(w.Read, w.Write, w.Perm)
+}

@@ -42,25 +42,39 @@ var (
 // methods with the operators. Send asks for no method either: a type
 // is Send by its structure (send.go), and listing it is refused.
 var (
-	CopyTrait  = standardTrait("Copy")
-	CloneTrait = standardTrait("Clone")
-	EqTrait    = standardTrait("Eq")
-	OrdTrait   = standardTrait("Ord")
-	HashTrait  = standardTrait("Hash")
-	DropTrait  = standardTrait("Drop")
-	ErrorTrait = standardTrait("Error")
-	AddTrait   = standardTrait("Add")
-	SubTrait   = standardTrait("Sub")
-	MulTrait   = standardTrait("Mul")
-	DivTrait   = standardTrait("Div")
-	RemTrait   = standardTrait("Rem")
-	NegTrait   = standardTrait("Neg")
-	SendTrait  = standardTrait("Send")
+	CopyTrait = standardTrait("Copy")
+	// ReflectTrait opens a type to reflection from every package: a
+	// reflecting function reaches all its fields and variants, and builds
+	// it from them, which its package says by listing it.
+	ReflectTrait = standardTrait("Reflect")
+	// AttributeTrait makes a type's constants attributes, written with @
+	// on a field, a variant or a type and read at compile time by attr.
+	AttributeTrait = standardTrait("Attribute")
+	// FieldAttributeTrait, VariantAttributeTrait and TypeAttributeTrait
+	// are Attribute limited to where it is written: a type that lists
+	// any of them is an attribute of those places alone.
+	FieldAttributeTrait   = standardTrait("FieldAttribute")
+	VariantAttributeTrait = standardTrait("VariantAttribute")
+	TypeAttributeTrait    = standardTrait("TypeAttribute")
+	CloneTrait            = standardTrait("Clone")
+	EqTrait               = standardTrait("Eq")
+	OrdTrait              = standardTrait("Ord")
+	HashTrait             = standardTrait("Hash")
+	DropTrait             = standardTrait("Drop")
+	ErrorTrait            = standardTrait("Error")
+	AddTrait              = standardTrait("Add")
+	SubTrait              = standardTrait("Sub")
+	MulTrait              = standardTrait("Mul")
+	DivTrait              = standardTrait("Div")
+	RemTrait              = standardTrait("Rem")
+	NegTrait              = standardTrait("Neg")
+	SendTrait             = standardTrait("Send")
 )
 
 var standardTraits = [...]*Trait{
 	CopyTrait, CloneTrait, EqTrait, OrdTrait, HashTrait, DropTrait, ErrorTrait,
-	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait,
+	AddTrait, SubTrait, MulTrait, DivTrait, RemTrait, NegTrait, SendTrait, ReflectTrait, AttributeTrait,
+	FieldAttributeTrait, VariantAttributeTrait, TypeAttributeTrait,
 }
 
 var predeclaredBuiltins = [...]struct {
@@ -77,6 +91,10 @@ var predeclaredBuiltins = [...]struct {
 	{"max", BuiltinMax},
 	{"close", BuiltinClose},
 	{"replace", BuiltinReplace},
+	{"fields", BuiltinFields},
+	{"variants", BuiltinVariants},
+	{"attr", BuiltinAttr},
+	{"refuse", BuiltinRefuse},
 }
 
 func init() {
@@ -92,8 +110,8 @@ func init() {
 		def(NewTypeName(token.NoPos, t.name, t))
 	}
 
-	def(NewConst(token.NoPos, "true", Typ[Bool], "true"))
-	def(NewConst(token.NoPos, "false", Typ[Bool], "false"))
+	def(NewConst(token.NoPos, "true", Typ[Bool], boolConst(true)))
+	def(NewConst(token.NoPos, "false", Typ[Bool], boolConst(false)))
 	for _, b := range predeclaredBuiltins {
 		def(NewBuiltin(b.name, b.id))
 	}
@@ -121,6 +139,9 @@ func init() {
 	also(ErrorTrait, "Source", NewOption(ErrorTrait)) // the cause, an owned trait value: a borrowed one is not a type
 	refines(OrdTrait, EqTrait)                        // what is ordered can be compared
 	refines(HashTrait, EqTrait)                       // equal values must hash alike
+	refines(FieldAttributeTrait, AttributeTrait)      // an attribute limited to where it is written is one
+	refines(VariantAttributeTrait, AttributeTrait)
+	refines(TypeAttributeTrait, AttributeTrait)
 	for _, o := range operators {
 		operator(o.trait, o.name, true)
 	}

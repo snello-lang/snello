@@ -50,6 +50,11 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 
 	consumed := false
 	outer := c.scope
+	var holder *Var // what the arms' bindings that hold a borrow borrow, when the scrutinee lends a temporary: match ref mk() or match mk().First()
+	if tmp := c.borrowOfTemporary(e.X); tmp != nil {
+		holder = c.flowTemporary(tmp)
+	}
+
 	for _, arm := range e.Arms {
 		armScope := c.openScope()
 		c.bindsOwned = false
@@ -57,7 +62,8 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		p := c.pattern(arm.Pat, scrutinee, b)
 		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
 			c.bindThrough(arm.Pat, e.X, b)
-			if c.bindsOwned && !consumed && held(e.X, x.mode) {
+			c.lendTemporary(armScope, holder, arm.Pat.Pos())
+			if c.bindsOwned && !consumed && c.fromPlace(e.X, x.mode) {
 				c.flowIn(f.from, func() { c.moveBefore(e.X, variable, &f) }) // a part bound by value leaves the place, on every arm, before any; a temporary's part may not leave it
 				consumed = true
 			}
@@ -220,7 +226,7 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 	case *Const:
 		if obj.typ == Typ[Bool] && isBool(t) {
 			c.recordUse(p.Name, obj)
-			if obj.value == "true" {
+			if obj.val.kind == ConstBool && obj.val.b {
 				return pat{ctor: 0}
 			}
 
@@ -238,6 +244,9 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 
 	if b == nil && !IsCopy(t) {
 		c.bindsOwned = true
+		if c.dropOwner != nil {
+			c.errorf(p.Name.Pos(), "cannot bind "+p.Name.Name+" by value out of a value of "+c.dropOwner.String()+", which implements Drop and reads its parts when the value goes; match on a borrow of it")
+		}
 	}
 
 	if c.copies && IsCopy(t) {
@@ -279,6 +288,12 @@ func (c *Checker) variantPat(p *ast.VariantPat, t Type, b *Ref) pat {
 	if i >= 0 && len(fields) != len(p.Args) {
 		c.errorf(p.Path.Pos(), v.name+" has "+strconv.Itoa(len(fields))+" fields, not "+strconv.Itoa(len(p.Args)))
 		i = wildcard
+	}
+
+	if b == nil && t != nil && implements(t, DropTrait) { // a part bound by value would leave a value whose Drop reads it
+		outer := c.dropOwner
+		c.dropOwner = t
+		defer func() { c.dropOwner = outer }()
 	}
 
 	args := make([]pat, len(p.Args))
@@ -365,9 +380,12 @@ func appendRows(rows [][]pat, p pat) [][]pat {
 // missing reports a value the rows do not match, as a witness pattern
 // per column, or nil when the rows are exhaustive. It is the usefulness
 // check of Maranget's "Warnings for pattern matching": a wildcard row is
-// useful exactly when the match is not exhaustive. Each step splits the
-// first column by its constructors; a column whose type has too many
-// values to list keeps only the rows that accept anything there.
+// useful exactly when the match is not exhaustive. A step splits the
+// first column by its constructors when its rows name every one of
+// them; otherwise it keeps the rows that accept anything there, and a
+// value they miss is one with a constructor no row names. So it opens a
+// type only as deep as the patterns go, and ends for a type that holds
+// itself, as one refused for holding itself by value does.
 func missing(types []Type, rows [][]pat) []string {
 	if len(types) == 0 {
 		if len(rows) == 0 {
@@ -379,7 +397,7 @@ func missing(types []Type, rows [][]pat) []string {
 
 	t := types[0]
 	n := numCtors(t)
-	if n < 0 {
+	if absent := absentCtor(rows, n); n < 0 || absent >= 0 {
 		var rest [][]pat
 		for _, row := range rows {
 			if row[0].ctor == wildcard {
@@ -387,11 +405,15 @@ func missing(types []Type, rows [][]pat) []string {
 			}
 		}
 
-		if w := missing(types[1:], rest); w != nil {
+		w := missing(types[1:], rest)
+		switch {
+		case w == nil:
+			return nil
+		case n < 0:
 			return append([]string{"_"}, w...)
 		}
 
-		return nil
+		return append([]string{ctorString(t, absent, wildStrings(len(ctorArgs(t, absent))))}, w...)
 	}
 
 	for ctor := 0; ctor < n; ctor++ {
@@ -403,6 +425,48 @@ func missing(types []Type, rows [][]pat) []string {
 	}
 
 	return nil
+}
+
+// absentCtor returns the first of a type's n constructors no row names
+// in its first column, or -1 when the rows name them all or the type's
+// values are too many to list.
+func absentCtor(rows [][]pat, n int) int {
+	if n <= 0 {
+		return -1
+	}
+
+	var namedSmall [8]bool // most types have few constructors: no list is made for them
+	var named []bool
+	if n <= len(namedSmall) {
+		named = namedSmall[:n]
+	} else {
+		named = make([]bool, n)
+	}
+
+	for _, row := range rows {
+		if c := row[0].ctor; c >= 0 && c < n {
+			named[c] = true
+		}
+	}
+
+	for c, ok := range named {
+		if !ok {
+			return c
+		}
+	}
+
+	return -1
+}
+
+// wildStrings returns k wildcards, the arguments a witness gives a
+// constructor no row names.
+func wildStrings(k int) []string {
+	w := make([]string, k)
+	for i := range w {
+		w[i] = "_"
+	}
+
+	return w
 }
 
 // specialize keeps the rows that can match the constructor in the first

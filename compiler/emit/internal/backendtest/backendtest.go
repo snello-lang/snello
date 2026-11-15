@@ -2673,6 +2673,275 @@ func main() {
 			Out: "r 2 {1 2} 2\nd t2 2 7\nbb 1 2\nmatched\nnote n\nif n\ntag t1\ntag t2\nb 2 {b [t1 t2] {1 2} Some(\"n\")}\ntrue 1 r! true\nd\n",
 		},
 		{
+			Name: "pointer-temporaries", // an owned pointer built in the statement and read through, *f(), **g() or f() as a method's ref or mut receiver: held whole and dropped once when the statement ends, and a pointer in a variable read through to its own depth
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func count(xs ref []string) int { return len(xs) }
+func main() {
+	fmt.Println((*boxed()).name, len((*boxed()).tags), (*boxed()).tags[1], (*boxed()).Size(), boxed().Size())
+	(*boxed()).Add()
+	boxed().Add()
+	(*boxed()).tags.Push("x".Clone())
+	(*boxed()).name = "w".Clone()
+	fmt.Println((**twice()).name, (*twice()).name, (**twice()).Size(), (*twice()).Size(), twice().Size())
+	fmt.Println(count(ref (*boxed()).tags), (*boxed()).name == "b", (*boxed()).name + "!", (*boxed()).name.Len())
+	match ref (*boxed()).note {
+		Some(n) => fmt.Println("note", n),
+		None => fmt.Println("none"),
+	}
+	match ref (**twice()).note {
+		Some(n) => fmt.Println("note", n),
+		None => fmt.Println("none"),
+	}
+	if n := ref (*boxed()).note { fmt.Println("if", n) }
+	for _, t := range ref (*boxed()).tags { fmt.Println("tag", t) }
+	fmt.Println(*boxed(), **twice())
+	c := (*boxed()).name.Clone()
+	fmt.Println(c)
+	v := boxed()
+	(*v).Add()
+	v.Add()
+	(*v).name = "w".Clone()
+	fmt.Println((*v).name, v.name, (*v).Size(), v.Size(), *v)
+	pp := twice()
+	(**pp).tags.Push("t3".Clone())
+	(**pp).Add()
+	fmt.Println((**pp).name, (*pp).name, pp.name, (**pp).Size(), (*pp).Size(), pp.Size())
+	old := replace(mut (*v).name, "x".Clone())
+	took := take(mut (**pp).note)
+	fmt.Println(old, took, *v, **pp)
+}
+`,
+			Out: "b 2 t2 2 2\nb b 2 2 2\n2 true b! 1\nnote n\nnote n\nif n\ntag t1\ntag t2\n{b [t1 t2] Some(\"n\")} {b [t1 t2] Some(\"n\")}\nb\nw w 4 4 {w [t1 t2 t9 t9] Some(\"n\")}\nb b b 4 4 4\nw Some(\"n\") {x [t1 t2 t9 t9] Some(\"n\")} {b [t1 t2 t3 t9] None}\n",
+		},
+		{
+			Name: "temporaries-lent", // a value no variable holds, or a part of it, lent for its statement alone: to a call, a receiver, a print, an if binding, a range and a match, read through a pointer by value or field, and a borrow kept only of a variable's value
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+struct L { r ref Row }
+struct LS { s ref string }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) NameRef() ref string { return ref r.name }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func pstr() *string { return &"p".Clone() }
+func look(r ref Row) int { return len(r.tags) }
+func name(r ref Row) ref string { return ref r.name }
+func mrow() map[string]Row { return map[string]Row{"a": row("m")} }
+func main() {
+	fmt.Println(look(boxed()), look(*boxed()), boxed().Size(), len(boxed().name), (*boxed()).name.Trim(), row("v").name.Trim())
+	boxed().Add()
+	c := boxed().name.Clone()
+	c2 := (*boxed()).name.Trim().Clone()
+	c3 := (*boxed()).tags[0].Trim().Clone()
+	fmt.Println(c, c2, c3, len((*boxed()).tags[0:1]), mrow()["a"].name.Trim())
+	if n := ref (*boxed()).note { fmt.Println("if", n) }
+	for _, t := range ref (*boxed()).tags { fmt.Println("tag", t) }
+	match ref (*boxed()).note {
+		Some(n) => fmt.Println("note", n),
+		None => fmt.Println("none"),
+	}
+	x := row("x")
+	var r ref Row = ref x
+	v := boxed()
+	var q ref Row = v
+	var s ref string = ref (*v).name
+	var o (ref Row)? = Some(ref x)
+	w := (*v).tags[0:1]
+	t := x.name.Trim()
+	fmt.Println(r.name, q.name, s, o.IsSome(), w, t, name(*v), (*v).NameRef())
+}
+`,
+			Out: "2 2 2 1 b v\nb b t1 1 m\nif n\ntag t1\ntag t2\nnote n\nx b b true [t1] x b b\n",
+		},
+		{
+			Name: "pointer-temporaries-leave", // a pointer built here held beside a later operand that leaves by ?, ?? return, ?? continue or ?? break: dropped once on every path
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func (r ref Row) Show() { fmt.Println("show", r.name, len(r.tags)) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func look(r ref Row) int { return len(r.tags) }
+func poke(r mut Row) int { r.Add(); return len(r.tags) }
+func lookp(p ref *Row) int { return len(p.tags) }
+func maybe(ok bool) int? { if ok { return Some(1) }; return None }
+func mbox(ok bool) (*Row)? { if ok { return Some(boxed()) }; return None }
+func both(a ref Row, n int, b ref Row) int { return len(a.tags) + n + len(b.tags) }
+func f(ok bool) int {
+	x := both(boxed(), maybe(ok) ?? return -1, boxed().Again())
+	return x
+}
+func g(ok bool) int? {
+	return Some(both(boxed().Again(), maybe(ok)?, *boxed()))
+}
+func main() {
+	fmt.Println(f(true), f(false), g(true), g(false))
+	n := 0
+	for i := 0; i < 4; i++ {
+		v := look(boxed()) + (maybe(i % 2 == 0) ?? continue) + boxed().Size()
+		w := both(boxed(), maybe(i < 3) ?? break, boxed())
+		n += v + w
+	}
+	fmt.Println(n)
+}
+`,
+			Out: "5 -1 Some(5) None\n20\n",
+		},
+		{
+			Name: "pointer-temporaries-kinds", // pointers to a slice, a string and an int built and read through, an option of a pointer through ?, and a generic function given a pointer, whose borrow depths differ by backend
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func (r ref Row) Show() { fmt.Println("show", r.name, len(r.tags)) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func look(r ref Row) int { return len(r.tags) }
+func poke(r mut Row) int { r.Add(); return len(r.tags) }
+func lookp(p ref *Row) int { return len(p.tags) }
+func maybe(ok bool) int? { if ok { return Some(1) }; return None }
+func mbox(ok bool) (*Row)? { if ok { return Some(boxed()) }; return None }
+func ps() *[]string { return &[]string{"a".Clone(), "b".Clone()} }
+func pstr() *string { return &"hey".Clone() }
+func pi() *int { return &5 }
+func cnt(xs ref []string) int { return len(xs) }
+func slen(s ref string) int { return len(s) }
+func iv(x ref int) int { return x + 1 }
+func any1<T>(x ref T) int { return 1 }
+func viaGen<T>(mk func() T) int { return any1(mk()) + any1(ref mk()) }
+func t(ok bool) int? {
+	a := look(mbox(ok)?)
+	b := mbox(ok)?.Size()
+	c := mbox(ok)?.Again().Size()
+	return Some(a + b + c)
+}
+func main() {
+	fmt.Println(cnt(ps()), len(*ps()), (*ps())[1], slen(pstr()), len(*pstr()), iv(pi()), *pi() + 1)
+	fmt.Println(t(true), t(false))
+	f := func() *Row { return boxed() }
+	fmt.Println(look(f()), f().Size(), viaGen(boxed), viaGen(f))
+	fmt.Println(*pstr() == "hey", *pstr() + "!", pstr().Len(), (*ps()).Contains("a"), ps().Contains("b"))
+}
+`,
+			Out: "2 2 b 3 3 6 6\nSome(6) None\n2 2 2 2\ntrue hey! 3 true true\n",
+		},
+		{
+			Name: "pointer-temporaries-generic", // pointers built and lent to bounded and unbounded generic functions, as ref T and ref *T, a generic type's methods on a pointer built here, and a Drop that prints once per pointer
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func (r ref Row) Show() { fmt.Println("show", r.name, len(r.tags)) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func look(r ref Row) int { return len(r.tags) }
+func poke(r mut Row) int { r.Add(); return len(r.tags) }
+func lookp(p ref *Row) int { return len(p.tags) }
+func maybe(ok bool) int? { if ok { return Some(1) }; return None }
+func mbox(ok bool) (*Row)? { if ok { return Some(boxed()) }; return None }
+trait Sizer { func (s ref Self) Size() int }
+struct Bag impl Sizer, Drop { xs []string }
+func (b ref Bag) Size() int { return len(b.xs) }
+func (b mut Bag) Drop() { fmt.Println("drop bag", len(b.xs)) }
+func bag() *Bag { return &Bag{xs: []string{"a".Clone()}} }
+func sz<T: Sizer>(x ref T) int { return x.Size() }
+func any1<T>(x ref T) int { return 1 }
+func anyp<T>(x ref *T) int { return 2 }
+func gen<T>(x ref T, f func(ref T) int) int { return f(x) }
+struct Wrap<T> { v T }
+func (w ref Wrap<T>) Get() ref T { return ref w.v }
+func (w ref Wrap<T>) Look<U>(u ref U) int { return 5 }
+func wrapped() *Wrap<Row> { return &Wrap<Row>{v: row("w")} }
+func ws() *Wrap<*Row> { return &Wrap<*Row>{v: boxed()} }
+func main() {
+	fmt.Println(bag().Size())
+	fmt.Println(sz<Bag>(bag()), sz(*bag()), any1(boxed()), any1(bag()), anyp(bag()))
+	fmt.Println(wrapped().Get().Size(), look(wrapped().Get()), ws().Get().Size(), look(*ws().Get()))
+	fmt.Println(wrapped().Look(boxed()), ws().Look(bag()), gen(boxed(), lookp), gen<Row>(boxed(), look))
+}
+`,
+			Out: "1\ndrop bag 1\n1 1 1 1 2\ndrop bag 1\ndrop bag 1\ndrop bag 1\ndrop bag 1\n2 2 2 2\n5 5 2 2\ndrop bag 1\n",
+		},
+		{
+			Name: "pointer-temporaries-variadic", // pointers built here passed to ...ref Row, ...*Row and ...ref string, read through and dropped once
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func (r ref Row) Show() { fmt.Println("show", r.name, len(r.tags)) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func look(r ref Row) int { return len(r.tags) }
+func poke(r mut Row) int { r.Add(); return len(r.tags) }
+func lookp(p ref *Row) int { return len(p.tags) }
+func maybe(ok bool) int? { if ok { return Some(1) }; return None }
+func mbox(ok bool) (*Row)? { if ok { return Some(boxed()) }; return None }
+func all(xs ...ref Row) int { n := 0; for _, x := range xs { n += len(x.tags) }; return n }
+func allp(xs ...*Row) int { n := 0; for _, x := range xs { n += len(x.tags) }; return n }
+func ss(xs ...ref string) int { return len(xs) }
+func pstr() *string { return &"hey".Clone() }
+func main() {
+	fmt.Println(all(boxed(), *boxed(), boxed().Again()), allp(boxed(), boxed()), ss(pstr(), (*boxed()).name, "x"))
+	r := row("q")
+	fmt.Println(all(ref r, boxed()), all())
+}
+`,
+			Out: "6 4 3\n4 0\n",
+		},
+		{
+			Name: "pointer-temporaries-trait", // a trait's default method called on a pointer built here, whose Drop prints once
+			Src: `package main
+import "fmt"
+struct Row { name string; tags []string; note string? }
+func (r ref Row) Size() int { return len(r.tags) }
+func (r mut Row) Add() { r.tags.Push("t9".Clone()) }
+func (r ref Row) Again() *Row { return &row(r.name.Clone()) }
+func (r ref Row) Show() { fmt.Println("show", r.name, len(r.tags)) }
+func row(n string) Row { return Row{name: n.Clone(), tags: []string{"t1".Clone(), "t2".Clone()}, note: Some("n".Clone())} }
+func boxed() *Row { return &row("b") }
+func twice() **Row { return &boxed() }
+func look(r ref Row) int { return len(r.tags) }
+func poke(r mut Row) int { r.Add(); return len(r.tags) }
+func lookp(p ref *Row) int { return len(p.tags) }
+func maybe(ok bool) int? { if ok { return Some(1) }; return None }
+func mbox(ok bool) (*Row)? { if ok { return Some(boxed()) }; return None }
+trait Sizer { func (s ref Self) Sz() int; func (s ref Self) Twice() int { return s.Sz() * 2 } }
+struct Bag impl Sizer, Drop { xs []string }
+func (b ref Bag) Sz() int { return len(b.xs) }
+func (b mut Bag) Drop() { fmt.Println("drop bag") }
+func bag() *Bag { return &Bag{xs: []string{"a".Clone()}} }
+func gsz<T: Sizer>(mk func() *T) int { return mk().Sz() + mk().Twice() }
+func main() {
+	fmt.Println(bag().Twice(), gsz(bag))
+}
+`,
+			Out: "drop bag\ndrop bag\n2 3\ndrop bag\n",
+		},
+		{
 			Name: "mut-temporaries", // a value built here and lent mut is held once and dropped once, whole or a field of it
 			Src: `package main
 import "fmt"
@@ -2778,7 +3047,6 @@ var Refusals = []Refusal{
 	{"trait S { func (s ref Self) A() int }\nstruct X impl S { n int }\nfunc (x ref X) A() int { return x.n }\nfunc main() { var s S = X{n: 1}; print(s) }", "printing values of type S"},
 	{"struct P { f func() }\nfunc main() { print(P{f: func() {}}) }", "printing values of type func()"},
 	{"struct W<T> impl Error { t T }\nfunc main() { print(W{t: func() {}}) }", "printing values of type func()"}, // a derived message on an instance over a function: the declaration passed the checker
-	{"const n = len(\"abc\")\nfunc main() { print(n) }", "a top-level const whose value is not a literal"},
 	{"import \"os\"\nfunc main() { quit := os.Exit; quit(0) }", "a function the compiler provides, os.Exit, as a value"},
 	{"import \"expect\"\nfunc main() { ok := expect.True; ok(true) }", "expect.True as a value: it is called, so that a failure names its line"},
 	{"import \"testing\"\nfunc main() { log := testing.Log; log(\"x\") }", "testing.Log as a value"},

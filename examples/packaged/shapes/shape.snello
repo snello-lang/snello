@@ -20,7 +20,10 @@ func (c ref Circle) Name() string { return "circle" }
 
 func (c ref Circle) Area() f64 { return math.Pi * c.Radius * c.Radius }
 
-struct Rect impl Shape { W f64; H f64 }
+struct Rect impl Shape {
+	W f64
+	H f64
+}
 
 func (r ref Rect) Name() string { return "rect" }
 

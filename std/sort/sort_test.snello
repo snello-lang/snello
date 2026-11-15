@@ -6,6 +6,7 @@ package sort_test
 
 import ("expect"; "sort"; "testing")
 
+// Sort orders a slice least first, and an empty slice stays empty.
 func TestSort() {
 	xs := []int{3, 1, 2}
 	sort.Sort(mut xs)
@@ -16,6 +17,7 @@ func TestSort() {
 	expect.Empty(ref empty)
 }
 
+// SortBy orders by the function it is given.
 func TestSortBy() {
 	words := []string{"pear".Clone(), "fig".Clone(), "banana".Clone()}
 	sort.SortBy(mut words, func(a ref string, b ref string) bool { return a.Len() < b.Len() })
@@ -23,6 +25,8 @@ func TestSortBy() {
 	expect.Equal(ref words[2], "banana")
 }
 
+// Search finds a value, where one would go, and the end for one past
+// every element; IsSorted sees a slice out of order.
 func TestSearch() {
 	xs := []int{1, 3, 5, 7}
 	expect.Equal(ref sort.Search(ref xs, ref 5), ref 2)
@@ -31,6 +35,7 @@ func TestSearch() {
 	expect.False(sort.IsSorted(ref []int{2, 1}))
 }
 
+// How long Sort takes for ten numbers in reverse order.
 func BenchmarkSort() {
 	for testing.Loop() {
 		xs := []int{9, 8, 7, 6, 5, 4, 3, 2, 1, 0}

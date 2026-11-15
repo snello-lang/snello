@@ -6,6 +6,8 @@ package utf16_test
 
 import ("expect"; "testing"; "unicode/utf16")
 
+// RuneLen gives one unit or two, and -1 for a surrogate and a value
+// outside the code points.
 func TestRuneLen() {
 	expect.Equal(ref utf16.RuneLen('a'), ref 1)
 	expect.Equal(ref utf16.RuneLen(0xFFFF), ref 1)
@@ -16,6 +18,8 @@ func TestRuneLen() {
 	expect.False(utf16.IsSurrogate(0xE000) || utf16.IsSurrogate('a'))
 }
 
+// A rune past U+FFFF is a surrogate pair and back, and anything else is
+// U+FFFD.
 func TestPair() {
 	r1, r2 := utf16.EncodeRune(0x1F600)
 	expect.Equal(ref r1, ref 0xD83D)
@@ -27,6 +31,8 @@ func TestPair() {
 	expect.Equal(ref r2, ref 0xFFFD)
 }
 
+// Encode and Decode go between runes and units, an unpaired surrogate
+// read as U+FFFD.
 func TestEncodeDecode() {
 	units := utf16.Encode(ref []rune{'a', 'é', 0x1F600})
 	expect.EqualSlice(ref units, ref []u16{97, 233, 0xD83D, 0xDE00})
@@ -38,6 +44,8 @@ func TestEncodeDecode() {
 	expect.EqualSlice(ref p, ref []u16{0xD83D, 0xDE00, 0xFFFD})
 }
 
+// EncodeBytes and DecodeBytes in each byte order, with and without a
+// byte-order mark.
 func TestBytes() {
 	expect.EqualSlice(ref utf16.EncodeBytes("a😀", utf16.BigEndian, false), ref []byte{0, 97, 0xD8, 0x3D, 0xDE, 0x00})
 	expect.EqualSlice(ref utf16.EncodeBytes("a", utf16.LittleEndian, true), ref []byte{0xFF, 0xFE, 97, 0}) // the byte-order mark first
@@ -64,6 +72,7 @@ func TestRoundTrip() {
 	}
 }
 
+// How long Encode takes for a short text.
 func BenchmarkEncode() {
 	runes := "Snello è veloce, 世界 😀".Runes()
 	for testing.Loop() {

@@ -1,0 +1,61 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Variadic calls: twenty million calls of a function taking its
+// arguments, ...int, of one borrowing them, ...ref string, and of the
+// second given a slice with ...; it prints the sum, then the cost of a
+// call of each, in tenths of a nanosecond.
+
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func Sum(xs ...int) int {
+	total := 0
+	for _, x := range xs {
+		total += x
+	}
+
+	return total
+}
+
+func Width(parts ...ref string) int {
+	n := 0
+	for _, p := range parts {
+		n += len(p)
+	}
+
+	return n
+}
+
+func main() {
+	const rounds = 20000000
+	a, b, c := "alpha".Clone(), "be".Clone(), "c".Clone()
+	words := []string{"alpha".Clone(), "be".Clone(), "c".Clone()}
+	total := 0
+	start := time.Now()
+	for i := 0; i < rounds; i++ {
+		total += Sum(i, 2, 3)
+	}
+
+	owned := time.Since(start)
+	start = time.Now()
+	for i := 0; i < rounds; i++ {
+		total += Width(a, b, c) + i
+	}
+
+	lent := time.Since(start)
+	start = time.Now()
+	for i := 0; i < rounds; i++ {
+		total += Width(words...) + i
+	}
+
+	spread := time.Since(start)
+	n := i64(rounds)
+	fmt.Println(total)
+	fmt.Println("owned", owned.Nanoseconds() * 10 / n, "lent", lent.Nanoseconds() * 10 / n, "spread", spread.Nanoseconds() * 10 / n)
+}

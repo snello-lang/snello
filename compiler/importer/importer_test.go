@@ -75,11 +75,11 @@ func TestImports(t *testing.T) {
 		{"import (\"fmt\"; \"os\")\nfunc f() { fmt.Fprintln(os.Stderr(), 1) }", []string{"3:25: cannot use a value of type os.File as mut os.File in argument"}},
 		{"import \"fmt\"\nfunc f(n int) { fmt.Fprintln(mut n, 1) }", []string{"3:17: cannot use int as the type parameter W of fmt.Fprintln: int does not implement Writer"}},
 		{"import (\"fmt\"; \"io\")\nfunc f(e mut io.Error) { fmt.Fprintln(mut e, 1) }", []string{"3:26: cannot use io.Error as the type parameter W of fmt.Fprintln: io.Error does not implement Writer"}},
-		{"func f(args ...ref any) {}", []string{"2:13: a variadic parameter is not supported yet"}}, // the library's alone
+		{"func f(args ...ref any) {}", []string{"2:16: ...ref any is the library's printing functions' alone"}}, // the library's alone
 		{"import \"arena\"\nfunc f() { a := arena.New<string>(); i := a.Insert(\"x\"); if s := a.Get(i) { print(s.Len()) }; if s := a.GetMut(i) { *s = \"y\" }; print(a.Remove(i).IsSome(), a.Len()) }", nil},
 		{"import \"arena\"\nfunc f(i arena.Index<int>) bool { j := i; m := map[arena.Index<int>]int{}; m[i] = 1; return i == j && len(m) == 1 }", nil}, // Index is Copy, Eq and Hash
 		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<int>) bool { return a.Get(i).IsSome() }", []string{"3:75: cannot use i (arena.Index<int>) as arena.Index<string> in argument"}},
-		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<string>) bool { return a.live(i) }", []string{"3:74: live of arena.Arena<string> is not exported"}},
+		{"import \"arena\"\nfunc f(a ref arena.Arena<string>, i arena.Index<string>) bool { return a.isLive(i) }", []string{"3:74: isLive of arena.Arena<string> is not exported"}},
 		{"import \"arena\"\nfunc f() int { a := arena.New(); return a.Len() }", []string{"3:21: cannot infer the type parameter T of arena.New: give it, arena.New<...>"}},
 		{"import \"rc\"\nfunc f() int { a := rc.New(\"x\"); b := a.Clone(); w := a.Downgrade(); if s := a.GetMut() { *s = \"y\" }; n := a.Get().Len() + b.StrongCount() + a.WeakCount(); if up := w.Upgrade() { n += up.Get().Len() }; return n }", nil},
 		{"import \"rc\"\nfunc dup<T: Clone>(x ref T) T { return x.Clone() }\nfunc f(r ref rc.Rc<int>) rc.Rc<int> { return dup(r) }", nil},             // Rc<T> is Clone for any T
@@ -92,6 +92,15 @@ func TestImports(t *testing.T) {
 		{"import (\"bufio\"; \"os\")\nfunc f(ws mut []bufio.Writer<os.File>) {}", []string{"3:15: a slice cannot hold Writer: it holds a borrow"}},
 		{"import (\"bufio\"; \"os\")\nfunc f(src mut os.File) int { sc := bufio.NewScanner(mut src); sc.Scan(); line := sc.Bytes(); sc.Scan(); return len(line) }", []string{"cannot borrow sc as mut: sc is borrowed as ref"}},
 		{"func f(x any) {}", []string{"2:10: any is only the type of a variadic parameter, ...ref any; a value of any type is a trait value"}},
+		{"import \"encoding/json\"\nfunc f() bool { return json.Marshal(ref map[int]bool{1: true}).IsOk() && json.Unmarshal<map[u8]string>(\"{}\").IsOk() }", nil},                                                        // a map of integer keys is an object
+		{"import \"encoding/json\"\nfunc f() bool { return json.Marshal(ref map[bool]int{true: 1}).IsOk() }", []string{"json.Marshal<map[bool]int>, json.writeValue<map[bool]int>: no arm of the match on K takes bool"}}, // one error, at the map, not one for each helper
+		{"import \"encoding/json\"\nfunc f() bool { return json.Unmarshal<map[f64]int>(\"{}\").IsOk() }", []string{"json.Unmarshal<map[f64]int>, json.readValue<map[f64]int>: no arm of the match on K takes f64"}},
+		{"import \"encoding/json\"\nenum E @json.Tag(\"t\") @json.Content(\"c\") { A; B(int) }\nenum U @json.Untagged { X; Y(bool) }\nfunc f() bool { return json.Marshal(ref A).IsOk() && json.Unmarshal<U>(\"true\").IsOk() }", nil}, // the layouts json writes
+		{"import \"encoding/json\"\nenum E @json.Content(\"c\") { A; B(int) }\nfunc f() bool { return json.Marshal(ref A).IsOk() }", []string{"json.Marshal<E>, json.writeValue<E>, json.checkLayout<E>: json.Content needs json.Tag, the key a variant's name is written under"}},
+		{"import \"encoding/json\"\nenum E @json.Untagged @json.Tag(\"t\") { A }\nfunc f() bool { return json.Unmarshal<E>(\"null\").IsOk() }", []string{"json.Unmarshal<E>, json.readValue<E>, json.checkLayout<E>: json.Untagged writes no variant's name, so it takes no json.Tag"}},
+		{"import \"encoding/json\"\nenum E @json.Untagged @json.Content(\"c\") { A }\nfunc f() bool { return json.Marshal(ref A).IsOk() }", []string{"json.Untagged writes no variant's name, so it takes no json.Content"}},
+		{"import \"encoding/json\"\nenum E @json.Tag(\"t\") { A; B(n int); C(int) }\nfunc f() bool { return json.Marshal(ref A).IsOk() }", []string{"json.Marshal<E>, json.writeValue<E>, json.checkLayout<E>: json.Tag writes a variant's fields beside its name, and C has an unnamed one: name it, or add json.Content"}},
+		{"import \"encoding/json\"\nstruct S @json.Untagged { N int }\nfunc f() bool { return json.Marshal(ref S{N: 1}).IsOk() }", []string{"json.Marshal<S>, json.writeValue<S>, json.noLayout<S>: json.Untagged lays out an enum's variants, and a struct has none"}},
 		{"import \"os\"\nfunc f(r Result<int, string>) int { return match r { Ok(n) => n, Err(_) => os.Exit(2) } }", nil}, // Exit never returns, so the arm needs no value
 		{"import \"io\"\nfunc f(k io.Kind) int { return match k { NotExist => 1, io.Exists => 3, _ => 0 } }", nil},        // variants of another package's enum, bare and qualified
 		{"import \"io\"\nfunc f(k io.Kind) bool { return k == io.NotExist }", nil},

@@ -167,7 +167,7 @@ Inside the trait's default methods, a value of `Self` has the trait's fields as 
 func (n ref Self) Name() ref string { return ref n.name }
 ```
 
-A trait field has no initial value; `var name string = "x"` is a syntax error.
+A trait field has no initial value: `var name string = "x"` is refused, `a trait field takes no default: the type that implements the trait gives the field its value`. A struct's own fields may declare one (chapter 23).
 
 Each field name means one place. A type declaring a field a trait of its also declares is refused at the type's field, and two traits giving one type a field of the same name are refused at the type, since neither could be meant. A trait with fields can be implemented only by a struct; an enum has nowhere to store them. A field whose type puts `Self` inside owned data, `var kids []Self`, is checked again for each implementing type, so a type holding a borrow cannot be stored through it, as it could not be stored in a slice of its own (chapter 6).
 
@@ -244,6 +244,7 @@ Some traits come with the language and can be listed after `impl` or used as bou
 | `Hash`, refining `Eq` | `func (s ref Self) Hash() u64` | use as a map key |
 | `Drop` | `func (s mut Self) Drop()` | code that runs when the value dies (chapter 5) |
 | `Error` | `func (s ref Self) Error() string`, `func (s ref Self) Source() Error?` | the message of an error value and the error it wraps; both derived when not written (chapter 17) |
+| `Reflect` | none | every field and variant open to reflection from any package, and the value built from them (chapter 24) |
 
 `Ordering` is a predeclared enum with the three cases named above, and every number and string has `Cmp`: `a.Cmp(b)` on two `int` values, `s.Cmp(t)` on two `ref string`.
 
@@ -318,7 +319,10 @@ trait Iterator<T> {
 	}
 }
 
-struct Range impl Iterator<int> { cur int; end int }
+struct Range impl Iterator<int> {
+	cur int
+	end int
+}
 
 evens := Range{0, 5}.Map(plusTen).Filter(func(x ref int) bool { return x % 2 == 0 }).Collect()   // [10 12 14]
 ```

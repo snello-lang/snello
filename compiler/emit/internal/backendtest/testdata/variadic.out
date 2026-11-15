@@ -1,0 +1,22 @@
+0 6 9
+drop a
+drop b
+2
+drop c
+1
+ x-y p+q [x|t]
+x/y p=q
+x y [p q]
+[one two]
+3 1 2 0
+x!y! ! ? x?x?
+15 6
+arg 1
+arg 2
+arg 3
+6
+x:0
+x:1
+x:2
+60
+deferred 8

@@ -119,7 +119,8 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 		return
 	}
 
-	wants, values := e.callOperands(recv, x.Args, sig)
+	wants, values := e.callOperands(recv, x.Args, x.Ellipsis.IsValid(), sig)
+	e.unframeLast(sig, x.Ellipsis.IsValid(), values) // the task outlives this frame
 	e.tasks++
 	e.spawnCall(e.tasks-1, name, sig, wants, values, s.Pos())
 }
@@ -151,7 +152,8 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 
 	params = append(params, e.info.Types[lit].(*types.Signature).Params()...) // the declaration's own objects, which the body names
 	lifted := types.NewSignature(nil, params, sig.Results())
-	argWants, args := e.callOperands(nil, x.Args, sig)
+	argWants, args := e.callOperands(nil, x.Args, x.Ellipsis.IsValid(), sig)
+	e.unframeLast(sig, x.Ellipsis.IsValid(), args) // the task outlives this frame
 	wants, values = append(wants, argWants...), append(values, args...)
 	k := e.tasks
 	e.tasks++
@@ -216,6 +218,11 @@ func (e *Emitter) spawnee(fun ast.Expr, pos token.Pos) (string, *types.Signature
 
 		if e.packageOf(fun.X) != nil {
 			name, sig := e.calleeName(fun.Sel, fn)
+			return name, sig, nil
+		}
+
+		if fn.Static() { // a function of a type: no receiver
+			name, sig := e.staticCallee(fun, pos)
 			return name, sig, nil
 		}
 

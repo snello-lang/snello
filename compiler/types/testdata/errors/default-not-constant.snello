@@ -1,0 +1,34 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a field's default is a constant expression of the field's
+// type, one for each name the field declares, so the compiler knows it
+// and every literal gets the same value; a field whose type is a type
+// parameter, or an embedded field, takes none, since no constant fits
+// every type it stands for, and a trait's field takes none, since the
+// type that implements the trait gives it its value. Fix: write a
+// constant, or give the value in a function that builds the struct,
+// func NewA() A { return A{n: size()} }.
+
+package p
+
+func size() int { return 4 }
+
+var count = 2
+
+struct Point { x int }
+
+struct A { n int = size() }            // ERROR "size() is not constant"
+
+struct B { n int = "four" }            // ERROR "cannot use a value of type string as int in field default"
+
+struct C<T> { item T = 0 }             // ERROR "a field of type T takes no default"
+
+struct D { Point = Point{} }           // ERROR "an embedded field takes no default"
+
+struct E { w, h int = 1 }              // ERROR "a default for each field: 2 names but 1 default"
+
+struct G { n int = count }             // ERROR "count is not constant"
+
+trait Named { var name string = "x" } // ERROR "a trait field takes no default"

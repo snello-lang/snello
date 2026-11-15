@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -57,6 +58,79 @@ func (e *Emitter) matchExpr(x *ast.MatchExpr) string {
 
 	e.line("}")
 	return m.result
+}
+
+// variantMatch writes match v { for c := range variants(T) => body }
+// for the enum the instance being written gives T: the arm once for
+// each variant, tested by the variant's tag, with the variant bound to
+// c; v is lent, and nothing is taken out of it.
+func (e *Emitter) variantMatch(x *ast.MatchExpr) string {
+	resultType := e.typeOf(x)
+	result := ""
+	if yields(resultType) {
+		result = e.temp()
+		e.line(e.cType(resultType, x.Pos()) + " " + result + ";")
+	}
+
+	arm := x.Arms[0]
+	part, copies := lower.ArmParts(e.info, arm.Pat.(*ast.PartsPat), e.subst)
+	place, t := e.scrutinee(x.X)
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	end := e.temp() + "_end"
+	e.line("{")
+	for _, c := range copies {
+		e.partCopy[part] = c
+		e.line("if (" + e.tagTest(place, t, c.Variant) + ") {")
+		e.push(false)
+		e.node(arm.Body, result, resultType)
+		e.pop(arm.Pos())
+		e.line("goto " + end + ";")
+		e.line("}")
+	}
+
+	delete(e.partCopy, part)
+	e.line("sn_panic(" + literal("no match arm matched") + ");")
+	e.line(end + ":;")
+	e.line("}")
+	return result
+}
+
+// typeMatch writes a match on a type: the one arm the type the instance
+// being written gives the parameter takes, with what its shape binds,
+// as a block; the other arms are not written, and a local only they
+// read is marked read (touch), which C would otherwise warn of.
+func (e *Emitter) typeMatch(x *ast.MatchExpr) string {
+	resultType := e.typeOf(x)
+	result := ""
+	if yields(resultType) {
+		result = e.temp()
+		e.line(e.cType(resultType, x.Pos()) + " " + result + ";")
+	}
+
+	arm, sub := lower.TypeArm(e.info, x, e.sub(lower.MatchedParam(e.info, x)), e.subst)
+	if arm == nil {
+		e.unsupported(x.Pos(), "a type no arm of this match takes")
+		return result
+	}
+
+	outer := e.subst
+	e.subst = sub
+	e.line("{")
+	e.push(false)
+	for _, other := range x.Arms {
+		if other != arm {
+			e.touch(other.Body)
+		}
+	}
+
+	e.node(arm.Body, result, resultType)
+	e.pop(arm.Pos())
+	e.line("}")
+	e.subst = outer
+	return result
 }
 
 func (e *Emitter) arm(m *match, arm *ast.MatchArm) {

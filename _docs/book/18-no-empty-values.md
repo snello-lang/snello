@@ -58,6 +58,7 @@ These have none:
 | `*T`, `chan T`, a function, a trait value | the zero would be a null that every use follows |
 | a type that implements `Drop` | it owns something, a cell, a lock, a file; its zero would own nothing |
 | a type parameter | the type argument may be any of these |
+| a struct with a field that declares a default | its zero would skip the defaults the type chose; `T{}` is the value with every default (chapter 23) |
 | a struct, tuple, array, enum or `Result` holding one of these | that part has no zero value |
 
 An option has a zero value whatever it holds, `None`, and so does a slice or a map, empty: `var next *Node?` and `var accounts map[string]Account` are fine.
@@ -69,14 +70,14 @@ Every way of making the zero of a type that has none is refused, each with what 
 | Refused | Message | Write instead |
 |---|---|---|
 | `var m sync.Mutex<int>` | `cannot declare m without a value: sync.Mutex<int> has no zero value; give it one, or declare it sync.Mutex<int>?` | `m := sync.NewMutex(0)` |
-| `Box{n: 1}`, where `Box` has a field `p *int` | `missing field p in a Box literal: *int has no zero value; name it` | `Box{p: &x, n: 1}` |
+| `Box{n: 1}`, where `Box` has a field `p *int` | `missing field p in a Box literal: *int has no zero value; name it, or give it a default in Box` | `Box{p: &x, n: 1}` |
 | `sync.Mutex<int>{}` | `cannot build a sync.Mutex<int> with a literal: it has no zero value, and its field box is not exported; use its package's functions` | `sync.NewMutex(0)` |
 | `[2]*int{&a}` | `too few elements for [2]*int: 1 of 2, and *int has no zero value for the rest` | `[2]*int{&a, &b}` |
 | `make([]*Node, n)` | `make cannot fill a []*Node: *Node has no zero value; use make([]*Node, 0, n) and Push` | `make([]*Node, 0, n)`, then `Push` |
 | `print(m[k])`, the map's values `*Node` | `cannot read m[k]: *Node has no zero value for a key the map does not hold; use m.Get(k)` | `m.Get(k)`, a `ref *Node?` |
 | `m[k].n = 5`, the map's values `Box` | `cannot write through m[k]: Box has no zero value for a key the map does not hold; use m.GetMut(k)` | `if b := m.GetMut(k) { b.n = 5 }`, or `m[k] = Box{...}` whole |
 | `sync.Counter(c)`, `c` of a type declared over it | `cannot convert MyC to sync.Counter: sync.Counter has no zero value, and a value of it is built and taken apart only by its own package` | `sync.NewCounter(n)` |
-| `take(mut b.p)`, `b.p` a `*int` | `cannot take b.p: *int has no zero value to leave behind; replace(mut b.p, v) leaves v` | `replace(mut b.p, &x)` |
+| `take(mut b.p)`, `b.p` a `*int` | `cannot take b.p: *int has no zero value to leave behind; replace(mut b.p, value) leaves value in its place` | `replace(mut b.p, &x)` |
 
 A value that depends on a condition is built where it is declared, with an `if` or a `match` expression, rather than declared first and assigned on every path:
 

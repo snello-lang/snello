@@ -1,0 +1,8 @@
+self s!
+parts t? s! t? 2
+swap right left
+swap define left right
+shadow outer
+outer outer
+owned owned [a] {bag [i]} 1 3
+drop 1

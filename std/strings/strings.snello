@@ -21,49 +21,82 @@ package strings
 
 import (
 	"io"
+	"math"
 	"unicode/utf8"
 )
 
-// maxInt is the largest int, the longest a string can be.
-const maxInt int = 9223372036854775807
-
 // A Builder accumulates text piece by piece and gives it back as one
-// string, cheaper than joining with + at every step. Its zero value is
-// ready to use: var b strings.Builder. A Builder owns the bytes it
-// holds and is passed mut to be written to.
+// string, cheaper than joining with + at every step, which copies the
+// whole text each time. Its zero value is ready to use:
+//
+//	var b strings.Builder
+//	b.WriteString("one")
+//	b.WriteByte(' ')
+//	s := b.String() // "one "
+//
+// A Builder owns the bytes it holds and is passed mut to be written
+// to. Its buffer grows as a slice's does, doubling, so n bytes written
+// one piece at a time cost O(n) in all.
 struct Builder {
 	buf []byte
 }
 
-// WriteString appends the bytes of s, in one copy.
+// A Reader reads the bytes of a string it owns, as an io.Reader: what
+// reads bytes, bufio or io.Copy, reads a string through it. It owns the
+// string, so that bufio can hold it, as a type argument cannot hold a
+// borrow; a literal is moved in with nothing copied, and a string the
+// caller keeps is cloned into it:
+//
+//	r := strings.NewReader("one\ntwo")
+//	sc := bufio.NewScanner(mut r)
+struct Reader impl io.Reader {
+	s  string
+	at int // the bytes before at have been read
+}
+
+// WriteString appends the bytes of s, which it only reads, to the
+// builder, in one copy that grows the buffer at most once.
 func (b mut Builder) WriteString(s ref string) {
 	appendString(mut b.buf, s)
 }
 
-// WriteByte appends one byte.
+// WriteByte appends the one byte c to the builder, as it is: a byte of
+// 0x80 or more is no rune of its own, and WriteRune writes a rune.
 func (b mut Builder) WriteByte(c byte) {
 	b.buf.Push(c)
 }
 
-// WriteRune appends the UTF-8 bytes of r, and those of U+FFFD for a
-// value that is not a code point.
+// WriteRune appends the UTF-8 bytes of r to the builder, one to four of
+// them, and those of utf8.RuneError, U+FFFD, for a value that is not a
+// code point: a negative one, a surrogate or one past utf8.MaxRune.
 func (b mut Builder) WriteRune(r rune) {
 	utf8.AppendRune(mut b.buf, r)
 }
 
-// Len returns the number of bytes written so far.
+// Len returns the number of bytes written to the builder so far, which
+// is the length of what String would return.
 func (b ref Builder) Len() int {
 	return len(b.buf)
 }
 
-// String returns what was written so far, as a new string. The builder
-// keeps its text and may go on; call it again after more writes for
-// the longer text.
+// String returns what was written so far as a new string, which the
+// caller owns: one allocation and a copy of the bytes. The builder
+// keeps its text and may go on; a call after more writes gives the
+// longer text.
 func (b ref Builder) String() string {
 	return string(b.buf)
 }
 
-// Reset empties the builder, ready for new text.
+// Bytes lends the bytes written so far, with no copy, for as long as
+// the builder is not written to: what an io.Writer is handed.
+//
+//	w.Write(b.Bytes())?
+func (b ref Builder) Bytes() ref []byte {
+	return b.buf
+}
+
+// Reset empties the builder, ready for new text, and keeps its buffer,
+// so that the text written next reuses the memory.
 func (b mut Builder) Reset() {
 	b.buf.Clear()
 }
@@ -72,56 +105,57 @@ func (b mut Builder) Reset() {
 // allocate again: at most one allocation, to twice the room or the
 // length and n, whichever is more, as a Push grows. An n of zero or
 // less, or one no int can add to the length, does nothing.
+//
+//	b.Grow(len(name) + 2) // then two writes that allocate nothing
 func (b mut Builder) Grow(n int) {
 	if n > 0 {
 		reserve(mut b.buf, n)
 	}
 }
 
-// A Reader reads the bytes of a string it owns, as an io.Reader: what
-// reads bytes, bufio or io.Copy, reads a string through it. It owns the
-// string, so that bufio can hold it, as a type argument cannot hold a
-// borrow; a literal is moved in with nothing copied, and a string the
-// caller keeps is cloned into it.
-struct Reader impl io.Reader {
-	s  string
-	at int // the bytes before at have been read
-}
-
-// NewReader returns a Reader over s, which it takes, from its first
-// byte.
+// NewReader returns a Reader over s from its first byte. It takes s,
+// which the Reader owns from then on: a literal moves in with nothing
+// copied, and a string the caller keeps is passed as s.Clone().
 func NewReader(s string) Reader {
 	return Reader{s: s, at: 0}
 }
 
-// Read copies the bytes not read yet that fit into buf, by memcpy, and
+// Read copies into buf the bytes not read yet that fit, by memcpy, and
 // returns how many: zero at the end of the string, and for an empty
-// buf, as io.Reader says. Reading a string never fails.
+// buf, as io.Reader says. buf is lent mut and only written to; the
+// Reader moves past the bytes it copied. Reading a string never fails,
+// so the result is always Ok.
 func (r mut Reader) Read(buf mut []byte) Result<int, io.Error> {
 	n := copyString(mut buf, r.s[r.at:])
 	r.at += n
 	return Ok(n)
 }
 
-// Len returns the number of bytes not read yet.
+// Len returns the number of bytes of the string not read yet.
 func (r ref Reader) Len() int {
 	return r.s.Len() - r.at
 }
 
-// Repeat returns s written n times in a row, and the empty string for
-// an n of zero; None for a negative n, or one that would make a string
-// longer than an int can count.
+// Repeat returns a new string of s written n times in a row, and the
+// empty string for an n of zero. It returns None for a negative n, or
+// one that would make a string longer than an int can count. s is only
+// read; the result is made in one allocation of its whole length.
+//
+//	strings.Repeat("ab", 3) // Some("ababab")
 func Repeat(s ref string, n int) string? {
-	if n < 0 || s.Len() > 0 && n > maxInt / s.Len() {
+	if n < 0 || s.Len() > 0 && n > math.MaxInt / s.Len() {
 		return None
 	}
 
 	return Some(repeat(s, n))
 }
 
-// Join writes the parts one after another with sep between every two,
-// and none before the first or after the last: Join(ref parts, ", ").
-// An empty slice gives the empty string.
+// Join returns a new string of the parts one after another, with sep
+// between every two and none before the first or after the last; an
+// empty slice gives the empty string. The parts and sep are only read,
+// and the result is made in one allocation of its whole length.
+//
+//	strings.Join(ref []string{"a", "b", "c"}, ", ") // "a, b, c"
 func Join(parts ref []string, sep ref string) string {
 	size := 0
 	for i, p := range parts {
@@ -144,11 +178,14 @@ func Join(parts ref []string, sep ref string) string {
 	return ownString(buf)
 }
 
-// Fields splits s around runs of white space, as Go's unicode.IsSpace
-// knows it, and yields
-// each word as a borrow into s, so no word is copied; a loop over them
-// lends s for its duration, for w := range strings.Fields(ref text).
-// It is the string's Fields method as a function.
+// Fields splits s around runs of white space, the runes
+// unicode.IsSpace reports, and returns the words, each a borrow into s:
+// no word is copied, and only the slice that holds them is allocated.
+// The words keep s lent for as long as they live; a string of white
+// space alone, or an empty one, gives no word. It is the string's
+// Fields method as a function.
+//
+//	for w := range strings.Fields(ref text) { ... }
 func Fields(s ref string) []ref string {
 	return s.Fields()
 }
@@ -156,37 +193,45 @@ func Fields(s ref string) []ref string {
 // ToLower returns a new string with every letter of s in lower case,
 // by Unicode's full case mapping: the mappings that hold in every
 // language, and a capital sigma at the end of a word lowered to the
-// final form ς.
+// final form ς, so "ΟΔΥΣΣΕΥΣ" is "οδυσσευς". A rune with no lower case
+// is copied as it is.
 func ToLower(s ref string) string {
 	return s.ToLower()
 }
 
 // ToUpper returns a new string with every letter of s in upper case,
 // by Unicode's full case mapping, so a rune may become several and the
-// string grow: ß upper-cases to SS, ﬁ to FI.
+// string grow: ß upper-cases to SS, ﬁ to FI. A rune with no upper case
+// is copied as it is.
 func ToUpper(s ref string) string {
 	return s.ToUpper()
 }
 
-// ToTitle returns s in title case as Unicode defines it: in each word,
-// by the word boundaries of annex 29, the rune that starts it in title
-// case and the rest in lower case, by the full case mappings, so
-// "straße ﬁx" is "Straße Fix" and "ǆungla" is "ǅungla". A word starts
-// at its first letter, number or symbol, as ICU starts it by default:
-// a quote before it is passed over, "'tis" is "'Tis", and a digit that
-// starts it stays, "3RD" is "3rd".
+// ToTitle returns a new string of s in title case as Unicode defines
+// it: in each word, by the word boundaries of annex 29, the rune that
+// starts it in title case and the rest in lower case, by the full case
+// mappings, so "straße ﬁx" is "Straße Fix" and "ǆungla" is "ǅungla". A
+// word starts at its first letter, number or symbol: a quote before it
+// is passed over, "'tis" is "'Tis", and a digit that starts it stays,
+// "3RD" is "3rd".
 func ToTitle(s ref string) string {
 	return toTitle(s)
 }
 
-// ToValidUTF8 returns a copy of s with each run of bytes that are not
-// UTF-8 replaced by rep, once a run, so the result is valid UTF-8.
+// ToValidUTF8 returns a new string of s with each run of bytes that are
+// not UTF-8 replaced by rep, once a run, so that the result is valid
+// UTF-8 when rep is; an empty rep drops the runs. Both strings are only
+// read.
+//
+//	strings.ToValidUTF8("a\xff\xfeb", "?") // "a?b"
 func ToValidUTF8(s ref string, rep ref string) string {
 	return toValidUTF8(s, rep)
 }
 
-// IndexFunc returns the byte offset of the first rune of s for which f
-// is true, or -1.
+// IndexFunc returns the byte offset in s of the first rune for which f
+// returns true, or -1 when there is none. It calls f on each rune in
+// turn, from the start, and stops at the first true; a byte that is not
+// UTF-8 is passed to f as utf8.RuneError.
 func IndexFunc(s ref string, f func(rune) bool) int {
 	for i, r := range s {
 		if f(r) {
@@ -197,8 +242,9 @@ func IndexFunc(s ref string, f func(rune) bool) int {
 	return -1
 }
 
-// LastIndexFunc returns the byte offset of the last rune of s for which
-// f is true, or -1.
+// LastIndexFunc returns the byte offset in s of the last rune for which
+// f returns true, or -1 when there is none. It calls f on each rune in
+// turn, from the end, and stops at the first true.
 func LastIndexFunc(s ref string, f func(rune) bool) int {
 	end := len(s)
 	for end > 0 {
@@ -212,14 +258,18 @@ func LastIndexFunc(s ref string, f func(rune) bool) int {
 	return -1
 }
 
-// TrimFunc returns s without the runes at either end for which f is
-// true, as a borrow of s.
+// TrimFunc returns s without the runes at either end for which f
+// returns true, as a borrow of s, with nothing copied: the result keeps
+// s lent for as long as it lives.
+//
+//	dash := func(r rune) bool { return r == '-' }
+//	strings.TrimFunc("--a-b--", dash) // "a-b"
 func TrimFunc(s ref string, f func(rune) bool) ref string {
 	return TrimRightFunc(TrimLeftFunc(s, f), f)
 }
 
-// TrimLeftFunc returns s without the runes at its start for which f is
-// true, as a borrow of s.
+// TrimLeftFunc returns s without the runes at its start for which f
+// returns true, as a borrow of s, with nothing copied.
 func TrimLeftFunc(s ref string, f func(rune) bool) ref string {
 	for i, r := range s {
 		if !f(r) {
@@ -230,8 +280,8 @@ func TrimLeftFunc(s ref string, f func(rune) bool) ref string {
 	return s[len(s):]
 }
 
-// TrimRightFunc returns s without the runes at its end for which f is
-// true, as a borrow of s.
+// TrimRightFunc returns s without the runes at its end for which f
+// returns true, as a borrow of s, with nothing copied.
 func TrimRightFunc(s ref string, f func(rune) bool) ref string {
 	end := len(s)
 	for end > 0 {
@@ -246,8 +296,13 @@ func TrimRightFunc(s ref string, f func(rune) bool) ref string {
 	return s[:end]
 }
 
-// FieldsFunc splits s around each run of runes for which f is true and
-// yields the pieces between, each a borrow into s, none of them empty.
+// FieldsFunc splits s around each run of runes for which f returns true
+// and returns the pieces between, each a borrow into s, none of them
+// empty: no piece is copied, and only the slice that holds them is
+// allocated.
+//
+//	comma := func(r rune) bool { return r == ',' }
+//	strings.FieldsFunc("a,,b", comma) // "a", "b"
 func FieldsFunc(s ref string, f func(rune) bool) []ref string {
 	out := []ref string{}
 	start := -1
@@ -273,13 +328,14 @@ func FieldsFunc(s ref string, f func(rune) bool) []ref string {
 // Unicode's full case folding, its default caseless match: Straße and
 // STRASSE are equal, as are Σ, σ and ς. A byte that is not UTF-8 reads
 // as U+FFFD, so two strings that differ only in such bytes are equal.
+// Both strings are only read, and nothing is allocated.
 func EqualIgnoreCase(s ref string, t ref string) bool {
 	return equalIgnoreCase(s, t)
 }
 
-// IndexRune returns the byte offset of the first r in s, or -1. A
-// RuneError matches a byte that starts no valid UTF-8 sequence too, as
-// a range over s reads one.
+// IndexRune returns the byte offset of the first r in s, or -1 when s
+// holds none. A search for utf8.RuneError also finds a byte that starts
+// no valid UTF-8 sequence, as a range over s reads one.
 func IndexRune(s ref string, r rune) int {
 	for i, c := range s {
 		if c == r {
@@ -290,13 +346,16 @@ func IndexRune(s ref string, r rune) int {
 	return -1
 }
 
-// ContainsRune reports whether r is in s.
+// ContainsRune reports whether the rune r is in s.
 func ContainsRune(s ref string, r rune) bool {
 	return IndexRune(s, r) >= 0
 }
 
-// Map returns a new string of the runes of s each passed through f; a
-// rune for which f returns a negative value is dropped.
+// Map returns a new string of the runes of s each passed through f, in
+// order; a rune for which f returns a negative value is dropped, and a
+// value that is not a code point is written as utf8.RuneError.
+//
+//	strings.Map(func(r rune) rune { return r + 1 }, "abc") // "bcd"
 func Map(f func(rune) rune, s ref string) string {
 	var b Builder
 	for _, r := range s {
@@ -313,15 +372,20 @@ func Map(f func(rune) rune, s ref string) string {
 func appendString(b mut []byte, s ref string)
 
 // repeat writes s n times into one allocation, by doubling: s once,
-// then what is written so far again, until the length is reached, as
-// Go's Repeat does. The runtime provides it.
+// then what is written so far again, until the length is reached. The
+// runtime provides it.
 func repeat(s ref string, n int) string
 
-// toTitle, equalIgnoreCase and toValidUTF8 are the runtime's title
-// casing by words, its full case folding, and its repair of bytes that
-// are not UTF-8.
+// toTitle returns s in title case, by word boundaries and the full case
+// mappings. The runtime provides it.
 func toTitle(s ref string) string
+
+// equalIgnoreCase compares s and t by their full case folding. The
+// runtime provides it.
 func equalIgnoreCase(s ref string, t ref string) bool
+
+// toValidUTF8 returns s with each run of bytes that are not UTF-8
+// replaced by rep. The runtime provides it.
 func toValidUTF8(s ref string, rep ref string) string
 
 // reserve makes room in b for n more bytes, growing it once as a Push
@@ -333,4 +397,5 @@ func reserve(b mut []byte, n int)
 func copyString(dst mut []byte, src ref string) int
 
 // ownString makes b, which it takes, the string's bytes, with no copy.
+// The runtime provides it.
 func ownString(b []byte) string

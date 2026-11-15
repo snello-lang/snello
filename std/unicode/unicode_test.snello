@@ -6,6 +6,8 @@ package unicode_test
 
 import ("expect"; "testing"; "unicode")
 
+// The classes a rune is in: letters, digits, spaces, case and printable
+// runes, past ASCII too.
 func TestClasses() {
 	testing.Run("letter", func() {
 		expect.True(unicode.IsLetter('a') && unicode.IsLetter('Z') && unicode.IsLetter('é') && unicode.IsLetter('Ж') && unicode.IsLetter('世'))
@@ -29,6 +31,7 @@ func TestClasses() {
 	})
 }
 
+// Each general category, and its two-letter name.
 func TestCategories() {
 	testing.Run("title", func() { expect.True(unicode.IsTitle(0x01C5) && !unicode.IsTitle('A')) }) // ǅ
 	testing.Run("mark", func() { expect.True(unicode.IsMark(0x0301) && unicode.IsMark(0x093E) && !unicode.IsMark('a')) })
@@ -60,6 +63,8 @@ func TestDerived() {
 	expect.False(unicode.IsIDContinue('-') || unicode.IsIDContinue(' '))
 }
 
+// The value of a decimal digit of any script, and the numeric value of
+// numbers, fractions and ideographs.
 func TestValues() {
 	expect.Equal(ref expect.IsSome(unicode.DigitValue('7')), ref 7)
 	expect.Equal(ref expect.IsSome(unicode.DigitValue(0x0663)), ref 3) // ٣
@@ -74,6 +79,7 @@ func TestValues() {
 	expect.IsNone(unicode.NumericValue('a'))
 }
 
+// A rune's script by its name and by its four-letter code.
 func TestScripts() {
 	expect.Equal(ref unicode.Script('a'), "Latin")
 	expect.Equal(ref unicode.Script('Ж'), "Cyrillic")
@@ -90,6 +96,8 @@ func TestScripts() {
 	expect.Equal(ref unicode.ScriptCode(0x0378), "Zzzz")
 }
 
+// The simple case mappings and the case folding, a rune with no case
+// kept as it is.
 func TestMappings() {
 	expect.Equal(ref unicode.ToUpper('a'), ref 'A')
 	expect.Equal(ref unicode.ToUpper('é'), ref 'É')
@@ -119,6 +127,7 @@ func TestNotACodePoint() {
 	}
 }
 
+// How long IsLetter takes for each rune of a short text.
 func BenchmarkIsLetter() {
 	n := 0
 	for testing.Loop() {

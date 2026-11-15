@@ -265,3 +265,77 @@ func exampleFiles(tb testing.TB) []exampleFile {
 
 	return files
 }
+
+// TestAttrs checks that the attributes written after a field, after a
+// variant and before a struct's or enum's body are kept beside the
+// tree, each by what it is written on, and that a body's brace after an
+// attribute opens the body, not a composite literal.
+func TestAttrs(t *testing.T) {
+	src := `package p
+struct Server impl Reflect @json.Rename(json.Lower) @json.Strict {
+	Host string @json.Name("host")
+	Port int = 8080 @json.Name("port") @json.OmitEmpty
+	Debug bool
+}
+enum Shape @json.Tagged("type") { Dot @json.Name("dot"); Circle(r f64) @json.Name("circle"); Box; Pair(a, b int @json.Name("n"), f func(x int)) }
+`
+	f, _, err := ParseFile("attrs.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := func(n ast.Node) string {
+		var parts []string
+		for _, a := range f.Attrs[n] {
+			parts = append(parts, ast.Source(a.X))
+		}
+
+		return strings.Join(parts, " ")
+	}
+
+	server := f.Decls[0].(*ast.TypeDecl)
+	fields := server.Def.(*ast.StructType).Fields
+	shape := f.Decls[1].(*ast.TypeDecl)
+	variants := shape.Def.(*ast.EnumType).Variants
+	for _, tt := range []struct {
+		what string
+		n    ast.Node
+		want string
+	}{
+		{"Server", server, "json.Rename(json.Lower) json.Strict"},
+		{"Host", fields[0], `json.Name("host")`},
+		{"Port", fields[1], `json.Name("port") json.OmitEmpty`},
+		{"Debug", fields[2], ""},
+		{"Shape", shape, `json.Tagged("type")`},
+		{"Dot", variants[0], `json.Name("dot")`},
+		{"Circle", variants[1], `json.Name("circle")`},
+		{"Box", variants[2], ""},
+		{"Pair.a", variants[3].Fields[0], `json.Name("n")`},
+		{"Pair.b", variants[3].Fields[1], `json.Name("n")`},
+		{"Pair.f", variants[3].Fields[2], ""},
+	} {
+		if got := text(tt.n); got != tt.want {
+			t.Errorf("%s: got attributes %q, want %q", tt.what, got, tt.want)
+		}
+	}
+
+	if len(fields) != 3 || len(variants) != 4 {
+		t.Errorf("got %d fields and %d variants, want 3 and 4", len(fields), len(variants))
+	}
+
+	lit, _, err := ParseFile("lit.snello", []byte("package p\nstruct S @(R{lo: 1, hi: 2}) { a int }\n")) // a composite literal before a body is parenthesized, as in a condition
+	if err != nil || len(lit.Attrs) != 1 || len(lit.Decls[0].(*ast.TypeDecl).Def.(*ast.StructType).Fields) != 1 {
+		t.Errorf("a parenthesized literal before a body: %v, %d attribute lists", err, len(lit.Attrs))
+	}
+
+	for _, src := range []string{"func f(x int @json.Name(\"x\")) {}", "enum E { A(f func(x int @json.Name(\"x\"))) }"} {
+		if _, _, err := ParseFile("param.snello", []byte("package p\n"+src)); err == nil || !strings.Contains(err.Error(), "a parameter takes none") {
+			t.Errorf("%s: got %v, want an attribute on a parameter refused", src, err)
+		}
+	}
+
+	plain, _, err := ParseFile("plain.snello", []byte("package p\nstruct P { x int }\n"))
+	if err != nil || plain.Attrs != nil {
+		t.Errorf("a file without attributes: Attrs %v, err %v; want nil, nil", plain.Attrs, err)
+	}
+}

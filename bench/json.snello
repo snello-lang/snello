@@ -1,0 +1,119 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// JSON over reflection at compile time: a thousand records of numbers,
+// strings, a slice, a nested struct and an option, encoded with
+// encoding/json two hundred times and the text decoded back two hundred
+// times; it prints the text's length and first record, then the cost of
+// encoding and of decoding a record, in nanoseconds, untyped, through a
+// json.Value, laid out with MarshalIndent, and streamed: written by an
+// Encoder, a line each, and read back by a Decoder.
+
+package main
+
+import ("bytes"; "encoding/json"; "fmt"; "strconv"; "time")
+
+struct Owner { Name string; Age int }
+
+struct Record {
+	ID     int
+	Name   string
+	Tags   []string
+	Score  f64
+	Active bool
+	Owner  Owner
+	Note   string?
+}
+
+func main() {
+	rounds := 200
+	records := []Record{}
+	for i := 0; i < 1000; i++ {
+		var note string? = None
+		if i % 3 == 0 {
+			note = Some("note " + strconv.Itoa(i))
+		}
+
+		records.Push(Record{ID: i, Name: "record " + strconv.Itoa(i), Tags: []string{"a".Clone(), "bb".Clone(), "ccc".Clone()}, Score: f64(i) / 8.0, Active: i % 2 == 0, Owner: Owner{Name: "owner".Clone(), Age: i % 90}, Note: note})
+	}
+
+	text := json.Marshal(ref records) ?? ""
+	start := time.Now()
+	n := 0
+	for r := 0; r < rounds; r++ {
+		n += len(json.Marshal(ref records) ?? "")
+	}
+
+	encode := time.Since(start)
+	start = time.Now()
+	m := 0
+	for r := 0; r < rounds; r++ {
+		back := json.Unmarshal<[]Record>(ref text) ?? []Record{}
+		m += len(back)
+	}
+
+	decode := time.Since(start)
+	start = time.Now()
+	sum := 0
+	for r := 0; r < rounds; r++ { // untyped: the text indexed by a Doc, each record's ID read back
+		match json.Parse(ref text) {
+			Ok(doc) => {
+				for e := range doc.Elements(doc.Root()) {
+					sum += doc.Int(doc.Get(e, "ID") ?? doc.Root()) ?? 0
+				}
+			}
+			Err(_) => {},
+		}
+	}
+
+	untyped := time.Since(start)
+	start = time.Now()
+	items, written := 0, 0
+	for r := 0; r < rounds; r++ { // a tree: the text read into a json.Value and written back
+		match json.Unmarshal<json.Value>(ref text) {
+			Ok(v) => {
+				items += v.Len()
+				written += len(json.Marshal(ref v) ?? "")
+			}
+			Err(_) => {},
+		}
+	}
+
+	tree := time.Since(start)
+	start = time.Now()
+	laid := 0
+	for r := 0; r < rounds; r++ { // laid out for a person to read
+		laid += len(json.MarshalIndent(ref records, "", "  ") ?? "")
+	}
+
+	indented := time.Since(start)
+	start = time.Now()
+	streamed := 0
+	for r := 0; r < rounds; r++ { // a stream: each record written by an Encoder, a line each, and read back by a Decoder
+		buf := bytes.NewBuffer(make([]byte, 0))
+		{
+			enc := json.NewEncoder(mut buf)
+			for i := 0; i < len(records); i++ {
+				if enc.Encode(ref records[i]).IsErr() {
+					break
+				}
+			}
+		}
+
+		dec := json.NewDecoder(mut buf)
+		for {
+			match dec.Decode<Record>() {
+				Ok(Some(back)) => streamed += back.ID % 2,
+				_ => break,
+			}
+		}
+	}
+
+	stream := time.Since(start)
+	first := text[0:text.Index("},") ?? 0]
+	fmt.Println(len(text), n / rounds, m / rounds, first)
+	fmt.Println(sum / rounds, items / rounds, written > 0, laid / rounds, streamed / rounds)
+	per := i64(rounds * 1000)
+	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per, "tree", tree.Nanoseconds() / per, "indent", indented.Nanoseconds() / per, "stream", stream.Nanoseconds() / per)
+}

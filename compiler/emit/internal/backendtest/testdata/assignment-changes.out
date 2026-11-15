@@ -1,0 +1,43 @@
+compound self 1
+compound index [10 0 0]
+compound map map[a:1]
+map value grows map[q:1 z:1 a:2]
+nested map map[x:map[y:0]]
+define pair 1 1
+multi [1 0 0] 0
+multi map map[0:1 1:1]
+string elems [a b!]
+coalesce [0 3 0 1 0]
+field map[a:{1}]
+nested map[x:map[y:1]]
+plain map[a:1]
+slice value map[a:[0]]
+mul self 0
+sub self -1
+elem self [-1 2]
+2 [5 0 0]
+7 map[1:8]
+[1 0 0] 2 [3 0 0]
+param [9 6 7]
+receiver [7 2 3]
+map map[0:9]
+literal [9 6 7]
+literal compound [10 1 1]
+held [9 6 7]
+option [9 6 7]
+tuple [9 6 7]
+tuple made here 9 2
+value receiver [9 6 7]
+borrow of holder [9 6 7]
+self divide 4
+entry map[a:15]
+missing entry map[a:3]
+string ar
+string element [ar b]
+string entry map[a:at]
+missing string entry map[a:t]
+grown 6 1001
+grown string a! 1001
+grown add 6 1001
+closure map[a:0]
+borrow var map[a:0]

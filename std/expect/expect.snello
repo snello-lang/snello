@@ -4,124 +4,120 @@
 
 // Package expect asserts, in a test: a failed expectation panics with
 // a message that says what was expected and what was found, and the
-// test runner reports the test failed with it, the expression as the
-// test wrote it, then got, then want (_docs/design/09-testing.md,
-// section 4). It is imported by test files alone.
+// test runner reports the test failed with it: the file and line of
+// the assertion and the expression as the test wrote it, then what was
+// got, then what was wanted. It is imported by test files alone.
+//
+//	expect.Equal(ref sum(xs), ref 6)
+//	n := expect.IsSome(m.Get("k"))
+//	expect.EqualSlice(ref got, ref []int{1, 2, 3})
+//
+// Each function is a plain call: the compiler hands the runtime the
+// place of the call and the parts of its arguments before it, which
+// the function reads back for its message, since no function can know
+// where it was called from or how its arguments were spelled. A
+// failure is a panic by design, the one place the standard library
+// panics on what its caller gives it: failing the test that called it
+// is what an assertion is for. The test runner catches the panic at
+// the test's boundary, drops what the test owned, and goes on with the
+// next test. Every value compared is lent, and nothing of it is kept.
 package expect
 
 import ("fmt"; "os"; "testing")
 
-// where() and parts are the place of the assertion being made,
-// file:line and the call as the test wrote it, and its parts, the type
-// compared or the operands of a condition with their values: the
-// compiler hands both to the runtime before every call of a function
-// of this package, since no function can know where it was called
-// from or what its arguments were spelled as, and the runtime keeps
-// them for the running task, so that parallel tests never share them
-// (runtime/c/testing.c).
-func where() string
-func parts() string
+// Where Golden keeps its files: testdata/NAME.golden, beside the
+// package's sources.
+const goldenDir = "testdata/"
+const goldenSuffix = ".golden"
 
-// Equal fails unless got equals want, printing both.
+// Equal fails unless got equals want, as == compares them, printing
+// both with %v, and the type compared when the compiler handed it. T
+// is any type that is Eq; both are lent.
+//
+//	expect.Equal(ref len(xs), ref 3)
+//	expect.Equal(ref name, "ada") // a string literal is already a borrow
 func Equal<T: Eq>(got ref T, want ref T) {
 	if !got.Eq(want) {
-		panic(ref fmt.Sprintf("%s\n        got:  %v\n        want: %v%s", where(), got, want, typed()))
+		panic(ref fmt.Sprintf("%s\n        got:  %v\n        want: %v%s", where(), got, want, typeNote()))
 	}
 }
 
-// NotEqual fails when got equals want.
+// NotEqual fails when got equals want, printing the value both are.
+// T is any type that is Eq; both are lent.
+//
+//	expect.NotEqual(ref a.Int(), ref b.Int())
 func NotEqual<T: Eq>(got ref T, want ref T) {
 	if got.Eq(want) {
-		panic(ref fmt.Sprintf("%s\n        both are %v%s", where(), got, typed()))
+		panic(ref fmt.Sprintf("%s\n        both are %v%s", where(), got, typeNote()))
 	}
-}
-
-// typed names the type compared, after the values, when the compiler
-// handed it.
-func typed() string {
-	p := parts()
-	if p.Len() == 0 {
-		return ""
-	}
-
-	return "   (" + p + ")"
 }
 
 // Failf fails with a message of the test's own, formatted as
-// fmt.Sprintf formats it. The compiler provides it.
+// fmt.Sprintf formats it: the format is a string literal or a
+// constant, checked against the arguments when the test is compiled,
+// and the arguments are lent. The message follows the place of the
+// call. The compiler provides it.
+//
+//	expect.Failf("read %d bytes, want %d", n, want)
 func Failf(format ref string, args ...ref any)
 
 // EqualSlice fails unless got and want hold equal elements in order,
-// saying where they first differ and by how much they differ in length.
+// printing both slices with their lengths, the index and the values of
+// the first elements that differ, or, when one is a prefix of the
+// other, how many agree and by how much got is longer or shorter. T
+// is any type that is Eq; both slices are lent, and comparing stops at
+// the first difference.
+//
+//	expect.EqualSlice(ref xs, ref []int{1, 2, 3})
 func EqualSlice<T: Eq>(got ref []T, want ref []T) {
 	n := min(len(got), len(want))
 	for i := 0; i < n; i++ {
 		if !got[i].Eq(ref want[i]) {
-			panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        element %d: got %v where %v was wanted%s", where(), got, parts(), count(len(got)), want, count(len(want)), i, got[i], want[i], lengths(len(got), len(want))))
+			panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        element %d: got %v where %v was wanted%s", where(), got, parts(), elementCount(len(got)), want, elementCount(len(want)), i, got[i], want[i], lengthDifference(len(got), len(want))))
 		}
 	}
 
 	if len(got) != len(want) {
-		panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        the first %d agree%s", where(), got, parts(), count(len(got)), want, count(len(want)), n, lengths(len(got), len(want))))
+		panic(ref fmt.Sprintf("%s\n        got:  %v   (%s, %s)\n        want: %v   (%s)\n        the first %d agree%s", where(), got, parts(), elementCount(len(got)), want, elementCount(len(want)), n, lengthDifference(len(got), len(want))))
 	}
 }
 
-// count writes a count of elements, with the noun in its number.
-func count(n int) string {
-	if n == 1 {
-		return "1 element"
-	}
-
-	return fmt.Sprintf("%d elements", n)
-}
-
-// lengths says how the lengths differ, or nothing when they do not.
-func lengths(got int, want int) string {
-	if got > want {
-		return fmt.Sprintf("; got has %d more", got-want)
-	}
-
-	if got < want {
-		return fmt.Sprintf("; got has %d fewer", want-got)
-	}
-
-	return ""
-}
-
-// True fails unless cond holds, saying so with the operands of a
-// comparison and their values when the compiler handed them.
+// True fails unless cond holds. The message is the condition as the
+// test wrote it, "is false", and, for a comparison, its operands with
+// their values, when the compiler handed them.
+//
+//	expect.True(n > 0 && n < 10)
 func True(cond bool) {
 	if !cond {
-		panic(ref (where() + " is false" + operands()))
+		panic(ref (where() + " is false" + operandsLine()))
 	}
 }
 
-// False fails when cond holds.
+// False fails when cond holds, saying so with the condition as the test
+// wrote it and, for a comparison, its operands with their values.
+//
+//	expect.False(set.Contains(ref 3))
 func False(cond bool) {
 	if cond {
-		panic(ref (where() + " is true" + operands()))
+		panic(ref (where() + " is true" + operandsLine()))
 	}
 }
 
-// operands writes the parts of a condition on a line of their own.
-func operands() string {
-	p := parts()
-	if p.Len() == 0 {
-		return ""
-	}
-
-	return "\n        " + p
-}
-
-// Fail fails with a message of the test's own.
+// Fail fails with a message of the test's own, msg, lent, after the
+// place of the call. Failf formats one.
+//
+//	expect.Fail("the handler was never called")
 func Fail(msg ref string) {
 	panic(ref (where() + ": " + msg))
 }
 
-// IsSome fails unless o holds a value, and returns it. The assertions
-// on options and results are named with Is, since Some, None, Ok and
-// Err are the variants' names, which a function of this package would
-// hide from its own patterns.
+// IsSome fails unless o holds a value, and returns that value, so that
+// a test asserts and unwraps in one step. It takes the option. The
+// assertions on options and results are named with Is, since Some,
+// None, Ok and Err are the variants' names, which a function of this
+// package would hide from its own patterns.
+//
+//	v := expect.IsSome(m.Get("key"))
 func IsSome<T>(o T?) T {
 	match o {
 		Some(v) => return v,
@@ -129,15 +125,21 @@ func IsSome<T>(o T?) T {
 	}
 }
 
-// IsNone fails when o holds a value, printing it.
+// IsNone fails when o holds a value, printing that value. It takes the
+// option.
+//
+//	expect.IsNone(xs.Pop())
 func IsNone<T>(o T?) {
 	if v := o {
 		panic(ref fmt.Sprintf("%s: holds %v, None was wanted", where(), v))
 	}
 }
 
-// IsOk fails unless r is Ok, printing the error it holds, and returns
-// the value.
+// IsOk fails unless r is Ok, printing the error it holds by its Error
+// method, and returns the value, so that a test asserts and unwraps in
+// one step. It takes the result; E is any type that implements Error.
+//
+//	f := expect.IsOk(os.Open(ref path))
 func IsOk<T, E: Error>(r Result<T, E>) T {
 	match r {
 		Ok(v) => return v,
@@ -146,7 +148,9 @@ func IsOk<T, E: Error>(r Result<T, E>) T {
 }
 
 // IsErr fails unless r is Err, printing the value it holds, and returns
-// the error.
+// the error, for the test to look at. It takes the result.
+//
+//	e := expect.IsErr(strconv.Atoi("x"))
 func IsErr<T, E>(r Result<T, E>) E {
 	match r {
 		Ok(v) => panic(ref fmt.Sprintf("%s: is Ok, Err was wanted\n        value: %v", where(), v)),
@@ -154,90 +158,93 @@ func IsErr<T, E>(r Result<T, E>) E {
 	}
 }
 
-// Contains fails unless s holds sub.
+// Contains fails unless the string s holds sub, printing both quoted.
+// Both are lent; an empty sub is in every string.
+//
+//	expect.Contains(ref e.Error(), "offset 12")
 func Contains(s ref string, sub ref string) {
 	if !s.Contains(sub) {
 		panic(ref fmt.Sprintf("%s\n        %q does not contain %q", where(), s, sub))
 	}
 }
 
-// ContainsElem fails unless xs holds v.
+// ContainsElem fails unless the slice xs holds an element equal to v,
+// printing both. T is any type that is Eq; both are lent, and the
+// search is linear.
+//
+//	expect.ContainsElem(ref names, "ada")
 func ContainsElem<T: Eq>(xs ref []T, v ref T) {
 	if !xs.Contains(v) {
 		panic(ref fmt.Sprintf("%s\n        %v does not contain %v", where(), xs, v))
 	}
 }
 
-// HasPrefix fails unless s starts with prefix.
+// HasPrefix fails unless the string s starts with prefix, printing both
+// quoted. Both are lent.
+//
+//	expect.HasPrefix(ref line, "--- FAIL")
 func HasPrefix(s ref string, prefix ref string) {
 	if !s.HasPrefix(prefix) {
 		panic(ref fmt.Sprintf("%s\n        %q does not start with %q", where(), s, prefix))
 	}
 }
 
-// HasSuffix fails unless s ends with suffix.
+// HasSuffix fails unless the string s ends with suffix, printing both
+// quoted. Both are lent.
+//
+//	expect.HasSuffix(ref path, ".snello")
 func HasSuffix(s ref string, suffix ref string) {
 	if !s.HasSuffix(suffix) {
 		panic(ref fmt.Sprintf("%s\n        %q does not end with %q", where(), s, suffix))
 	}
 }
 
-// Len fails unless xs has n elements.
+// Len fails unless the slice xs, lent, has n elements, printing the
+// length it has, the one wanted and the slice.
+//
+//	expect.Len(ref ys, 3)
 func Len<T>(xs ref []T, n int) {
 	if len(xs) != n {
-		panic(ref fmt.Sprintf("%s\n        got %s, want %s: %v", where(), count(len(xs)), count(n), xs))
+		panic(ref fmt.Sprintf("%s\n        got %s, want %s: %v", where(), elementCount(len(xs)), elementCount(n), xs))
 	}
 }
 
-// Empty fails unless xs has no element.
+// Empty fails unless the slice xs, lent, has no element, printing how
+// many it has and what they are.
+//
+//	expect.Empty(ref xs)
 func Empty<T>(xs ref []T) {
 	if len(xs) != 0 {
-		panic(ref fmt.Sprintf("%s\n        got %s, want none: %v", where(), count(len(xs)), xs))
+		panic(ref fmt.Sprintf("%s\n        got %s, want none: %v", where(), elementCount(len(xs)), xs))
 	}
 }
 
-// EqualText fails unless got and want are the same text, saying which
-// line first differs, for text of several lines.
+// EqualText fails unless got and want are the same text, for text of
+// several lines: the message names the first line that differs, by its
+// number from 1, with what it holds in each, or, when one text is a
+// prefix of the other, how many lines agree and by how many got is
+// longer or shorter. Both are lent.
+//
+//	expect.EqualText(ref report, ref want)
 func EqualText(got ref string, want ref string) {
 	if got == want {
 		return
 	}
 
-	panic(ref (where() + "\n" + textDiff(got, want)))
+	panic(ref (where() + "\n" + textDifference(got, want)))
 }
 
-// textDiff says where two texts first differ, line by line: the line's
-// number, what it holds in each, and the lines around it from got.
-func textDiff(got ref string, want ref string) string {
-	gl := got.Lines()
-	wl := want.Lines()
-	n := min(len(gl), len(wl))
-	for i := 0; i < n; i++ {
-		if gl[i] != wl[i] {
-			return fmt.Sprintf("        line %d: got %q where %q was wanted%s", i+1, gl[i], wl[i], lineCounts(len(gl), len(wl)))
-		}
-	}
-
-	return fmt.Sprintf("        the first %d lines agree%s", n, lineCounts(len(gl), len(wl)))
-}
-
-func lineCounts(got int, want int) string {
-	if got > want {
-		return fmt.Sprintf("; got has %d lines more", got-want)
-	}
-
-	if got < want {
-		return fmt.Sprintf("; got has %d lines fewer", want-got)
-	}
-
-	return ""
-}
-
-// Golden compares got with the file testdata/NAME.golden beside the
-// package, failing with the first differing line; snello test -update
-// writes the file instead, as goldie does for Go.
+// Golden compares got, lent, with the file testdata/NAME.golden beside
+// the package, failing with the first line that differs, as EqualText
+// does, or with the error that kept the file from being read. Under
+// snello test -update it writes got to the file instead, so a golden
+// file is made, or remade after a change meant to alter it, by running
+// the tests once with -update; the testdata directory must exist, and
+// a failure to write fails the test.
+//
+//	expect.Golden("report", ref render(doc))
 func Golden(name ref string, got ref string) {
-	path := "testdata/" + name + ".golden"
+	path := goldenDir + name + goldenSuffix
 	if testing.Update() {
 		if os.WriteString(ref path, got).IsErr() {
 			panic(ref (where() + ": -update could not write " + path + "; the testdata directory is made by hand until the library makes directories"))
@@ -249,15 +256,18 @@ func Golden(name ref string, got ref string) {
 	match os.ReadToString(ref path) {
 		Ok(want) => {
 			if got != want {
-				panic(ref (where() + "\n        differs from " + path + "\n" + textDiff(got, ref want)))
+				panic(ref (where() + "\n        differs from " + path + "\n" + textDifference(got, ref want)))
 			}
 		},
 		Err(e) => panic(ref (where() + ": " + e.Error() + "; snello test -update writes the file")),
 	}
 }
 
-// Panics fails unless f panics; the panic is caught and its values
-// dropped, and the test goes on.
+// Panics fails unless calling f panics. The panic is caught: the values
+// f made are dropped as a panic drops them, what the test holds is
+// untouched, and the test goes on after the call.
+//
+//	expect.Panics(func() { xs.Remove(9) })
 func Panics(f func()) {
 	at := where()
 	if testing.Catch(f).IsNone() {
@@ -265,7 +275,11 @@ func Panics(f func()) {
 	}
 }
 
-// PanicsWith fails unless f panics with exactly the message msg.
+// PanicsWith fails unless calling f panics with exactly the message
+// msg, lent, printing the message it panicked with when that differs.
+// The panic is caught, as Panics catches it, and the test goes on.
+//
+//	expect.PanicsWith(func() { check(-1) }, "check: a negative count")
 func PanicsWith(f func(), msg ref string) {
 	at := where()
 	match testing.Catch(f) {
@@ -277,3 +291,94 @@ func PanicsWith(f func(), msg ref string) {
 		},
 	}
 }
+
+// typeNote returns the type compared, in parentheses after the values,
+// when the compiler handed it, and "" when it did not.
+func typeNote() string {
+	p := parts()
+	if p.Len() == 0 {
+		return ""
+	}
+
+	return "   (" + p + ")"
+}
+
+// elementCount returns a count of elements as text, with the noun in
+// its number: "1 element", "3 elements".
+func elementCount(n int) string {
+	if n == 1 {
+		return "1 element"
+	}
+
+	return fmt.Sprintf("%d elements", n)
+}
+
+// lengthDifference returns how the lengths of got and want differ, as
+// the end of a message, "; got has 2 more", or "" when they do not.
+func lengthDifference(got int, want int) string {
+	if got > want {
+		return fmt.Sprintf("; got has %d more", got-want)
+	}
+
+	if got < want {
+		return fmt.Sprintf("; got has %d fewer", want-got)
+	}
+
+	return ""
+}
+
+// operandsLine returns the operands of a condition with their values,
+// on a line of their own, or "" when the compiler handed none.
+func operandsLine() string {
+	p := parts()
+	if p.Len() == 0 {
+		return ""
+	}
+
+	return "\n        " + p
+}
+
+// textDifference returns where two texts first differ, line by line:
+// the line's number from 1 and what it holds in each, or how many
+// lines agree when one text is a prefix of the other, with how the
+// counts of lines differ.
+func textDifference(got ref string, want ref string) string {
+	gotLines := got.Lines()
+	wantLines := want.Lines()
+	n := min(len(gotLines), len(wantLines))
+	for i := 0; i < n; i++ {
+		if gotLines[i] != wantLines[i] {
+			return fmt.Sprintf("        line %d: got %q where %q was wanted%s", i+1, gotLines[i], wantLines[i], lineCountDifference(len(gotLines), len(wantLines)))
+		}
+	}
+
+	return fmt.Sprintf("        the first %d lines agree%s", n, lineCountDifference(len(gotLines), len(wantLines)))
+}
+
+// lineCountDifference returns how the counts of lines of got and want
+// differ, as the end of a message, "; got has 2 lines more", or ""
+// when they do not.
+func lineCountDifference(got int, want int) string {
+	if got > want {
+		return fmt.Sprintf("; got has %d lines more", got-want)
+	}
+
+	if got < want {
+		return fmt.Sprintf("; got has %d lines fewer", want-got)
+	}
+
+	return ""
+}
+
+// where returns the place of the assertion being made, file:line and
+// the call as the test wrote it, which the compiler hands the runtime
+// before every call of an exported function of this package and the
+// runtime keeps for the running task, so that parallel tests never
+// share it. The runtime provides it.
+func where() string
+
+// parts returns the parts of the assertion being made, the type
+// compared or the operands of a condition with their values, handed
+// and kept as where's place is, or "" when there are none. The runtime
+// provides it.
+func parts() string

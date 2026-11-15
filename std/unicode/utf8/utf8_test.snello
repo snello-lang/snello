@@ -6,6 +6,8 @@ package utf8_test
 
 import ("expect"; "testing"; "unicode/utf8")
 
+// RuneLen gives one to four bytes, and -1 for a surrogate and a value
+// outside the code points.
 func TestRuneLen() {
 	expect.Equal(ref utf8.RuneLen('a'), ref 1)
 	expect.Equal(ref utf8.RuneLen('é'), ref 2)
@@ -16,6 +18,8 @@ func TestRuneLen() {
 	expect.Equal(ref utf8.RuneLen(utf8.MaxRune + 1), ref -1)
 }
 
+// Valid refuses a stray byte, a sequence cut short, an encoded
+// surrogate and an overlong encoding.
 func TestValid() {
 	expect.True(utf8.ValidString("añ世😀"))
 	expect.True(utf8.ValidString(""))
@@ -29,6 +33,7 @@ func TestValid() {
 	expect.False(utf8.ValidRune(0xDFFF) || utf8.ValidRune(-1) || utf8.ValidRune(utf8.MaxRune + 1))
 }
 
+// RuneSelf is where a rune starts taking two bytes.
 func TestConstants() {
 	expect.Equal(ref utf8.RuneSelf, ref 0x80)
 	expect.Equal(ref utf8.UTFMax, ref 4)
@@ -36,6 +41,7 @@ func TestConstants() {
 	expect.Equal(ref utf8.RuneLen(utf8.RuneSelf), ref 2)
 }
 
+// A count of runes counts a stray byte as one.
 func TestCount() {
 	expect.Equal(ref utf8.RuneCountInString("añ世😀"), ref 4)
 	expect.Equal(ref utf8.RuneCountInString(""), ref 0)
@@ -43,6 +49,8 @@ func TestCount() {
 	expect.Equal(ref utf8.RuneCount(ref []byte{228, 184, 150, 97}), ref 2)
 }
 
+// FullRune is false only for a rune cut short, and RuneStart tells a
+// continuation byte from a first one.
 func TestFullRune() {
 	expect.True(utf8.FullRuneInString("a") && utf8.FullRuneInString("世"))
 	expect.False(utf8.FullRuneInString("\xe4\xb8")) // more bytes would complete it
@@ -55,6 +63,8 @@ func TestFullRune() {
 	expect.False(utf8.RuneStart(0xB8))
 }
 
+// The last rune of a string or of bytes, and RuneError with its width
+// where the end is not UTF-8.
 func TestDecodeLast() {
 	tests := []string{"añ", "a", "", "a\xff", "世", "\xb8", "a\xe4\xb8"}
 	runes := []rune{'ñ', 'a', utf8.RuneError, utf8.RuneError, '世', utf8.RuneError, utf8.RuneError}
@@ -70,6 +80,7 @@ func TestDecodeLast() {
 	expect.Equal(ref n, ref 4)
 }
 
+// AppendRune writes each rune's bytes, and RuneError's for a surrogate.
 func TestAppendRune() {
 	p := []byte{}
 	utf8.AppendRune(mut p, 'a')
@@ -78,6 +89,8 @@ func TestAppendRune() {
 	expect.EqualSlice(ref p, ref []byte{97, 228, 184, 150, 239, 191, 189})
 }
 
+// The first rune of a string or of bytes, and RuneError with its width
+// where the start is not UTF-8.
 func TestDecode() {
 	tests := []string{"é!", "", "\xff", "\xe4\xb8", "\xed\xa0\x80", "\xf0\x9f\x98\x80"}
 	runes := []rune{'é', utf8.RuneError, utf8.RuneError, utf8.RuneError, utf8.RuneError, 0x1F600} // a cut-short sequence and an encoded surrogate are RuneError
@@ -117,6 +130,7 @@ func TestRoundTrip() {
 	}
 }
 
+// How long DecodeRuneInString takes for the first rune of a text.
 func BenchmarkDecodeRune() {
 	s := "Snello è veloce, 世界"
 	for testing.Loop() {

@@ -1,0 +1,37 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a constant's value is computed by the compiler, from literals,
+// other constants, the operators, the conversions between number types
+// and those that keep a string a string or a bool a bool under another
+// name, Name("host"); a rune does not become a string. A call runs when the program does, a variable can change, an
+// element is read from memory, and none of them is known to the
+// compiler; a constant also needs a value to have one. Fix: make it a
+// var, which takes any value, var n = size(), or compute it from
+// constants alone.
+
+package p
+
+func size() int { return 4 }
+
+var count = 2
+
+const fromCall = size() + 1                 // ERROR "size() is not constant"
+const fromVar = count * 2                   // ERROR "count is not constant"
+const fromLen = len("abc")                  // ERROR "len(...) is not constant"
+const toString = string('A')                // ERROR "constant 65 does not convert to string: a constant conversion keeps a string a string"
+const missing int                           // ERROR "const missing needs a value"
+
+struct Point { x int; y int }
+
+const Origin = Point{x: 0, y: 0}
+const Again = Origin                        // ERROR "Origin is not constant: a struct constant is no part of a constant expression"
+const Pair = [2]int{1, 2}                   // ERROR "a constant is a number, a bool, a string or a struct of them, not a [2]int"
+const List = []int{1, 2}                    // ERROR "a constant is a number, a bool, a string or a struct of them, not a []int"
+
+func f() {
+    n := 3
+    const local = n + 1                     // ERROR "n is not constant"
+    print(local)
+}

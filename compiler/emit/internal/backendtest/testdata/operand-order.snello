@@ -1,0 +1,88 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Operands evaluated left to right whatever writing each takes: a call
+// that changes a variable before an operand that reads it through a map
+// read, a borrowed map, a slice or array literal, a string built in
+// place, a closure, a struct field, a slice, a match or an if; the right
+// side of && and || evaluated only when the left one leaves the answer
+// open; a channel receive, and a mut borrow of a map entry that makes
+// the entry, each in its turn.
+
+package main
+
+import "fmt"
+
+struct W {
+	xs []int
+	n  int
+}
+
+func tick(c mut int) int {
+	*c += 1
+	return *c
+}
+
+func two(a int, b int) string { return fmt.Sprint(a, " ", b) }
+
+func three(a int, b int, d int) string { return fmt.Sprint(a, " ", b, " ", d) }
+
+func listed(a int, b []int) string { return fmt.Sprint(a, " ", b) }
+
+func flag(a int, b bool) string { return fmt.Sprint(a, " ", b) }
+
+func get(c int) int? {
+	if c > 0 {
+		return Some(c * 100)
+	}
+
+	return None
+}
+
+func guarded(m ref map[int]int, xs ref []int, i int) bool {
+	return i < len(xs) && m[xs[i]] == 1
+}
+
+func borrowed(m ref map[int]int) string {
+	c := 0
+	return two(tick(mut c), m[c])
+}
+
+func setLater(n int, p mut int) string {
+	*p = 5
+	return fmt.Sprint(n)
+}
+
+func main() {
+	m := map[int]int{0: 10, 1: 20, 2: 30}
+	fmt.Println(borrowed(ref m), guarded(ref m, ref []int{1}, 5))
+	c := 0
+	fmt.Println(two(tick(mut c), m[c + 0]))
+	c = 0
+	fmt.Println(listed(tick(mut c), []int{c, c}))
+	strs := []string{"0", "1", "2"}
+	c = 0
+	fmt.Println(flag(tick(mut c), strs[c] + "y" == "1y"), strs[c] + "y" + "z")
+	c = 0
+	g0, g1 := (tick(mut c), func() int { return c * 10 })
+	fmt.Println(g0, g1())
+	c = 0
+	w0, w1 := (tick(mut c), W{xs: []int{c}, n: c})
+	fmt.Println(w0, w1.xs, w1.n)
+	c = 0
+	fmt.Println(three(tick(mut c), len(strs[c:]), match get(c) { Some(v) => v, None => 0 }))
+	c = 0
+	fmt.Println(three(c, if tick(mut c) > 0 { m[c] } else { 0 }, c))
+	xs := []int{}
+	i := 3
+	fmt.Println(i < len(xs) && m[xs[i]] == 1, i >= len(xs) || len([]int{xs[i]}) == 1)
+	ch := make(chan int, 4)
+	ch <- 1
+	ch <- 2
+	fmt.Println(len(ch), <-ch)
+	var none int? = None
+	fmt.Println(len(ch) > 5 && <-ch == none, len(ch))
+	e := map[string]int{"a": 1}
+	fmt.Println(setLater(len(e), mut e["new"]), e)
+}

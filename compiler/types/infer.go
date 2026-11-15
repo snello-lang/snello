@@ -29,10 +29,11 @@ import (
 type inference struct {
 	tparams []*TypeParam
 	m       map[*TypeParam]Type
+	invalid bool // a value it would learn from was invalid, and reported
 }
 
 func newInference(tparams []*TypeParam) *inference {
-	return &inference{tparams, make(map[*TypeParam]Type, len(tparams))}
+	return &inference{tparams: tparams, m: make(map[*TypeParam]Type, len(tparams))}
 }
 
 // unify matches the slot type param against the value type arg and
@@ -220,6 +221,7 @@ func (c *Checker) evaluate(in *inference, values []ast.Expr, slots []Type, effec
 
 			ops[i] = c.expr(v, hint)
 			if ops[i].mode == invalid {
+				in.invalid = true
 				continue
 			}
 
@@ -238,6 +240,10 @@ func (c *Checker) evaluate(in *inference, values []ast.Expr, slots []Type, effec
 // instance would store, and it implements the bounds of its parameter.
 func (c *Checker) complete(in *inference, name string, pos ast.Node, sig *Signature) ([]Type, bool) {
 	if p := in.missing(); p != nil {
+		if in.invalid { // what would have bound p was reported already
+			return nil, false
+		}
+
 		c.errorf(pos.Pos(), "cannot infer the type parameter "+p.obj.name+" of "+name+": give it, "+name+"<...>")
 		return nil, false
 	}

@@ -14,7 +14,10 @@ struct Node {
     live     bool                  // false after Remove; the slot is kept
 }
 
-struct Count { word string; n int }
+struct Count {
+	word string
+	n    int
+}
 ```
 
 A struct declaration is `struct Name { fields }`, one field per line or separated by `;`, each a name and a type. The traits a struct implements are listed on the same line, `struct TempDir impl Drop { path string }` (chapter 11). `type Name T` gives a new name to an existing type, as in `type NodeID int`.
@@ -29,6 +32,8 @@ if !t.nodes[id].live { return }
 ```
 
 Every field has a zero value, so `Stack{}` is an empty stack. A named type is converted with a call of its name, `NodeID(len(t.nodes))`.
+
+A field may declare a default after its type, `port int = 8080`, which a literal that leaves the field out takes: `Server{backlog: 16}` listens on 8080, and a positional literal may stop before the last fields that have one, `Size{3}`. A function takes its settings as such a struct. Chapter 23 tells the whole of it.
 
 ### Methods
 
@@ -147,7 +152,86 @@ The variants of an enum from another package are named through the package when 
 
 ### What an enum is not
 
-An enum is not a number. There is no `iota` and no conversion: `int(Red)` on `enum Color { Red; Green }` is `cannot convert Color to int`. An enumeration that is a number with names, a port, a flag word, a code from the system, is a type declared over the number with constants, as Go writes it, `type Color int` and `const Red Color = 0`; chapter 3 covers declared types. The fields of a value are reached through `match` or an `if` binding and nowhere else: there is no `s.attempt`, since the value may not be a `Connecting`, and the compiler does not guess. A `match` that leaves a variant out is refused with the variant named, `match is not exhaustive: missing Connecting(_)`, and that is the point of writing an enum: every place that takes the value apart is checked against every shape the value can have.
+An enum is not a number. There is no `iota` and no conversion: `int(Red)` on `enum Color { Red; Green }` is `cannot convert Color to int`. An enumeration that is a number with names, a port, a flag word, a code from the system, is a type declared over the number with constants, as Go writes it, `type Color int` and `const Red Color = 0`; the next section covers declared types. The fields of a value are reached through `match` or an `if` binding and nowhere else: there is no `s.attempt`, since the value may not be a `Connecting`, and the compiler does not guess. A `match` that leaves a variant out is refused with the variant named, `match is not exhaustive: missing Connecting(_)`, and that is the point of writing an enum: every place that takes the value apart is checked against every shape the value can have.
+
+## A new type over another: `type`
+
+`type Name T` declares a new type whose values are made as `T`'s are, but which is a type of its own. It is what Go's `type Celsius float64` is, and the only thing `type` declares in Snello:
+
+```go
+type ID int
+type Celsius f64 impl fmt.Stringer      // what it lists comes after the type
+type Pos Point                          // over a struct: the same fields, Pos{X: 1, Y: 2}
+```
+
+### A new type is not the type under it
+
+An `ID` is never an `int`. The compiler refuses to mix them, and a value moves between the two only through a conversion written with the type's name:
+
+```go
+type ID int
+
+n := 4
+var a ID = n        // error: cannot use n (int) as ID in assignment
+var b ID = 3        // a constant takes the type it is given
+c := ID(n)          // int to ID
+d := int(c)         // ID to int
+print(c == n)       // error: mismatched types ID and int in ==
+```
+
+Converting a value that is not `Copy`, a string or a struct that owns one, moves it, as passing it to a function does.
+
+### What it keeps, and what it does not
+
+A new type keeps how its values work:
+
+- A type over a number has the number's operators and comparisons: `ID(3) + ID(4)` is an `ID`, `a < b` compares two, an `ID` keys a map, and printing one prints the number.
+- A type over a struct has the struct's fields: it is built as `Pos{X: 1, Y: 2}` and read as `p.X`.
+
+It does not keep the methods written for the type under it. Convert to reach them:
+
+```go
+struct Point {
+    X int
+    Y int
+}
+
+func (p ref Point) Sum() int { return p.X + p.Y }
+
+type Pos Point
+
+p := Pos{X: 1, Y: 2}
+p.Sum()             // error: Sum is not a field or method of Pos
+Point(p).Sum()      // 3
+```
+
+It has what is written for it: its own methods, and the traits it lists after its type:
+
+```go
+type Celsius f64 impl fmt.Stringer
+
+func (c ref Celsius) String() string { return strconv.FormatFloat(f64(*c), 1) + "°C" }
+```
+
+A reflecting function sees it as its own type too: in a `match` on a type, a `Celsius` takes the arm for `Celsius`, never the one for `f64` (chapter 24).
+
+Declare one to give a number or a string a meaning the compiler checks: an identifier that must not be mixed with a count, a unit, a key of one kind; or to give it methods, as `time.Duration` is an `i64` with `String`.
+
+### How `type` differs from Go's
+
+Go's `type` does three things. Snello's does the first of them only:
+
+- **A new type over another,** `type Celsius float64`: the same in Snello, `type Celsius f64`.
+- **A struct or an interface,** `type Node struct { ... }`, `type Shape interface { ... }`: Snello spells each with a keyword of its own, `struct Node { ... }`, `enum State { ... }`, `trait Shape { ... }` (chapter 11). Go's spelling is refused with Snello's: `a struct or enum declaration is spelled 'struct Node {' or 'enum Node {'`, and `an interface is a trait, spelled 'trait Shape { ... }'`.
+- **An alias,** `type Name = Other`, a second name for one type, which Go added so that a type could move from one package to another without breaking the code that names it: Snello has none, and `type Name = Other` is `expected type, found '='`. A name in Snello is one type, so a reader who sees two names sees two types. The only aliases are predeclared: `byte` is `u8` and `rune` is `i32`, the same type under two names, as in Go.
+
+### Why one meaning is the better design
+
+- **The first word says what is declared.** In Go, `type Shape` may go on to a struct, an interface, a function type, another type or `=`, and the reader learns which further along the line. In Snello `struct`, `enum`, `trait` and `type` each begin one kind of declaration, so a reader scanning a file, and a search for `trait Shape`, find a declaration by its first word.
+- **Two names are always two types.** Go's `type Celsius float64` and `type Celsius = float64` differ by one character and mean the opposite: the first is a type the compiler keeps apart from `float64`, the second is `float64` itself, which takes any `float64` with no conversion. A reader of Go must find the `=` to know whether a name protects anything. In Snello there is only the first, so a name in a signature always gives the protection it looks like it gives: a function that takes a `Celsius` is never handed a bare `f64` by mistake.
+- **A new type says what it is where it is declared.** `type Duration i64 impl fmt.Stringer` lists the traits it implements on its declaration, and the compiler checks the list against its methods; a Go type satisfies an interface by having the methods, which a reader learns by reading every method in the package.
+
+The cost is the alias's one use. Go added aliases so that a type could move from one package to another while code still named its old place, for a large program repaired in steps. In Snello a type that moves is renamed at every use at once, and the compiler finds each one, an error naming the type. Snello takes that cost so that a name always means one type.
 
 ## Match
 

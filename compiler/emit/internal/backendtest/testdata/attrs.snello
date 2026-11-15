@@ -1,0 +1,75 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Attributes read at compile time: on a field, a variant and a type, a
+// conversion over a string, a struct of constants, a struct with no
+// fields written by its name and a constant's name; an instance of a
+// generic type reading its declaration's; None where none is written.
+
+package main
+
+import ("fmt"; "strings")
+
+type Key string impl Attribute
+
+struct Limit impl Attribute { lo int; hi int }
+
+struct Hidden impl Attribute {}
+
+const Wide = Limit{lo: 0, hi: 99}
+
+struct Server @Key("srv") {
+	Host string @Key("host")
+	Port int = 8080 @Key("port") @Limit{lo: 1, hi: 65535}
+	Note string @Hidden
+	Load int @Wide
+	Plain bool
+}
+
+enum Shape @Key("shape") { Dot @Key("dot"); Circle(r int) @Hidden; Box }
+
+struct Pair<T> @Key("pair") { left T @Key("l"); right T }
+
+// describe writes each field's key, its limit and whether it is hidden,
+// and the type's key.
+func describe<T>() string {
+	var b strings.Builder
+	match T {
+		struct => {
+			b.WriteString(match attr(T, Key) { Some(k) => string(k), None => "-" })
+			for f := range fields(T) {
+				b.WriteString(" ")
+				b.WriteString(match attr(f, Key) { Some(k) => string(k), None => f.name })
+				match attr(f, Limit) {
+					Some(l) => b.WriteString(fmt.Sprintf("[%d,%d]", l.lo, l.hi)),
+					None => {},
+				}
+
+				if attr(f, Hidden).IsSome() {
+					b.WriteString("!")
+				}
+			}
+		}
+		enum => {
+			b.WriteString(match attr(T, Key) { Some(k) => string(k), None => "-" })
+			for c := range variants(T) {
+				b.WriteString(" ")
+				b.WriteString(match attr(c, Key) { Some(k) => string(k), None => c.name })
+				if attr(c, Hidden).IsSome() {
+					b.WriteString("!")
+				}
+			}
+		}
+		_ => {},
+	}
+
+	return b.String()
+}
+
+func main() {
+	fmt.Println(describe<Server>())
+	fmt.Println(describe<Shape>())
+	fmt.Println(describe<Pair<int>>())
+	fmt.Println(describe<Pair<string>>())
+}

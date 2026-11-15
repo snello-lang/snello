@@ -1,0 +1,99 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A value is made before it is stored, borrows too: a borrow given
+// itself, through a call, a match or an if; two borrows swapped; a
+// field, an option and a tuple given what they hold; and a name that
+// shadows the borrow it is declared from. Each keeps what it read. An
+// owned value given to its own place, a string, a slice, a struct, one
+// with a Drop and an int, is kept whole and dropped once.
+
+package main
+
+import "fmt"
+
+struct Holder {
+	src ref string
+	n   int
+}
+
+struct Bag {
+	name  string
+	items []string
+}
+
+struct Loud impl Drop {
+	n int
+}
+
+func (l mut Loud) Drop() {
+	fmt.Println("drop", l.n)
+}
+
+func pass(s ref string) ref string {
+	return s
+}
+
+func selfAssigned() {
+	s := "s".Clone() + "!"
+	t := "t".Clone() + "?"
+	a := ref s
+	a = pass(a)
+	a = match 1 {
+		_ => a,
+	}
+	a = if len(*a) > 0 { a } else { ref t }
+	fmt.Println("self", *a)
+	h := Holder{src: ref t, n: 1}
+	h.src = h.src
+	o := Some(ref s)
+	o = o
+	p := (ref t, 2)
+	p, _ = p, 0
+	first, count := p
+	fmt.Println("parts", *h.src, *(o ?? ref t), *first, count)
+}
+
+func swapped() {
+	s := "left".Clone()
+	t := "right".Clone()
+	a := ref s
+	b := ref t
+	a, b = b, a
+	fmt.Println("swap", *a, *b)
+	a, c := b, a
+	fmt.Println("swap define", *a, *c)
+}
+
+func shadowed() {
+	s := "outer".Clone()
+	r := ref s
+	{
+		r := r
+		fmt.Println("shadow", *r)
+	}
+	fmt.Println("outer", *r)
+}
+
+func ownedSelf() {
+	s := "own".Clone() + "ed"
+	s = s
+	xs := []string{"a".Clone()}
+	xs = xs
+	b := Bag{name: "bag".Clone(), items: []string{"i".Clone()}}
+	b = b
+	b.name = b.name
+	l := Loud{n: 1}
+	l = l
+	n := 3
+	n = n
+	fmt.Println("owned", s, xs, b, l.n, n)
+}
+
+func main() {
+	selfAssigned()
+	swapped()
+	shadowed()
+	ownedSelf()
+}

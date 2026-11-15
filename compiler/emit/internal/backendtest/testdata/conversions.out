@@ -1,0 +1,15 @@
+name
+[1 2 3]
+v
+Some("some")
+[a b]
+1 struct
+field 2
+call 3
+0
+1
+2
+2
+3 7 true true -rw-rw-rw-
+drop 1
+drop 2

@@ -38,6 +38,7 @@ func TestDecls(t *testing.T) {
 		{"struct Node { id int; next *Node? }", "struct Node {id int; next (*Node)?}"},
 		{"struct Rect { w, h f64; Point }", "struct Rect {w, h f64; Point}"},
 		{"struct Empty {}", "struct Empty {}"},
+		{"struct Opts { port int = 80; w, h int = 1, 2 * k; name string }", "struct Opts {port int = 80; w, h int = 1, (2 * k); name string}"}, // a default after =, one per name
 		{"struct Cache<K: Hash + Eq + Clone, V> {}", "struct Cache<K: Hash + Eq + Clone, V> {}"},
 		{"struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}", "struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {}"},
 		{"enum Expr {\n\tLit(f64)\n\tNeg(*Expr)\n\tBin(op Token, lhs *Expr, rhs *Expr)\n}", "enum Expr {Lit(f64); Neg(*Expr); Bin(op Token, lhs *Expr, rhs *Expr)}"},
@@ -83,11 +84,13 @@ func TestDeclErrors(t *testing.T) {
 		{"struct T\nfunc f() {}", "expected '{', found 'newline'", 1},
 		{"type T struct {}", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1}, // Go's spelling
 		{"type T enum { A }", "a struct or enum declaration is spelled 'struct T {' or 'enum T {'", 1},
+		{"type I interface { F() }\nfunc f() {}", "an interface is a trait, spelled 'trait I { ... }'", 1}, // Go's spelling, and the declaration after it parses
 		{"enum E {\n\tLit f64\n}", "expected '(' or newline, found 'f64'", 1},
 		{"enum E {\n\t3\n}", "expected variant or '}', found '3'", 1},
 		{"struct T<K Ord> {}", "expected '>', found 'Ord'", 1},               // the stray '>' is on the same line, so not reported
 		{"struct T { a int\ntype", "expected field or '}', found 'type'", 2}, // then the stray type declaration ends at EOF
 		{"struct T { a int b }", "expected ';' or newline, found 'b'", 1},
+		{"struct T { a int = }", "expected expression, found '}'", 1},
 		{"trait T {\n\tx int\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T {\n\tx int\n\tfunc (s ref Self) F()\n}", "expected method, field or '}', found 'x'", 1},
 		{"trait T { 3 func (s ref Self) F() }", "expected method, field or '}', found '3'", 1}, // resumes at func
@@ -249,4 +252,42 @@ func typeParamList(params []*ast.TypeParam) string {
 	}
 
 	return "<" + strings.Join(parts, ", ") + ">"
+}
+
+// TestFuncOfType checks a function of a type: the type's name, with
+// its parameters for a generic one, a dot and the function's name, and
+// type parameters of the function's own after it.
+func TestFuncOfType(t *testing.T) {
+	f, _, err := ParseFile("of.snello", []byte("package p\nfunc Point.Parse(s ref string) Point? { return None }\nfunc Pair<A, B>.Of<C>(a A, b B, c C) Pair<A, B> {}\nfunc plain<T>(x T) {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, want := range []struct {
+		of, name      string
+		args, tparams int
+	}{
+		{"Point", "Parse", 0, 0},
+		{"Pair", "Of", 2, 1},
+		{"", "plain", 0, 1},
+	} {
+		d := f.Decls[i].(*ast.FuncDecl)
+		of, args := "", 0
+		if d.Of != nil {
+			of, args = d.Of.Name.Name, len(d.Of.Args)
+		}
+
+		if of != want.of || d.Name.Name != want.name || args != want.args || len(d.TypeParams) != want.tparams {
+			t.Errorf("decl %d: got %s.%s with %d type arguments and %d type parameters, want %s.%s with %d and %d", i, of, d.Name.Name, args, len(d.TypeParams), want.of, want.name, want.args, want.tparams)
+		}
+	}
+}
+
+// TestFuncOfTypeBounds checks that a function of a generic type names
+// its type's parameters without bounds, which the type declares.
+func TestFuncOfTypeBounds(t *testing.T) {
+	_, _, err := ParseFile("b.snello", []byte("package p\nfunc G<A: Clone, B>.Dup(a ref A) A { return a }\n"))
+	if err == nil || !strings.Contains(err.Error(), "whose bounds the type declares: A takes none here") {
+		t.Errorf("a bound on a function of a type's parameter: got %v, want it refused", err)
+	}
 }

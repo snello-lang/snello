@@ -9,6 +9,10 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// goInterface is the word Go declares an interface with, which Snello
+// spells trait: a declaration that uses it is told so.
+const goInterface = "interface"
+
 // parseDecl parses one top-level declaration and the semicolon that
 // ends it. On a token that starts no declaration it reports the error,
 // consumes the token and skips to the next declaration start, so the
@@ -79,13 +83,70 @@ func (p *Parser) parseFuncDecl() *ast.FuncDecl {
 		d.TypeParams = p.parseTypeParams()
 	}
 
+	if p.tok == token.PERIOD && d.Recv == nil { // func Point.Parse or func Pair<A, B>.Of: what was read names the type
+		p.next()
+		d.Of = &ast.NamedType{Name: d.Name}
+		for _, tp := range d.TypeParams {
+			if len(tp.Bounds) > 0 { // the type declares its parameters' bounds; a function of it names them
+				p.error(tp.Name.Pos(), "a function of a type names its type's parameters, whose bounds the type declares: "+tp.Name.Name+" takes none here")
+			}
+
+			d.Of.Args = append(d.Of.Args, &ast.NamedType{Name: tp.Name})
+		}
+
+		d.Name, d.TypeParams = p.parseIdent(), nil
+		if p.tok == token.LSS {
+			d.TypeParams = p.parseTypeParams()
+		}
+	}
+
 	d.Params = p.parseParams()
 	d.Results = p.parseResults()
 	if p.tok == token.LBRACE {
+		p.fn = d
 		d.Body = p.parseBlock()
+		p.fn = nil
 	}
 
 	return d
+}
+
+// isTypeParam reports whether name is a type parameter of the function
+// d: its own, one its receiver's type names, as T of Box<T> in
+// (b ref Box<T>), or one of the type it belongs to, as T in
+// func Box<T>.Of().
+func isTypeParam(d *ast.FuncDecl, name string) bool {
+	if d == nil {
+		return false
+	}
+
+	for _, tp := range d.TypeParams {
+		if tp.Name.Name == name {
+			return true
+		}
+	}
+
+	owner := d.Of
+	if d.Recv != nil {
+		recv := d.Recv.Type
+		if r, ok := recv.(*ast.RefType); ok {
+			recv = r.Elem
+		}
+
+		owner, _ = recv.(*ast.NamedType)
+	}
+
+	if owner == nil {
+		return false
+	}
+
+	for _, a := range owner.Args {
+		if an, ok := a.(*ast.NamedType); ok && an.Pkg == nil && an.Args == nil && an.Name.Name == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 // parseReceiver parses "(" ident Type ")". The type is one of the three
@@ -172,6 +233,7 @@ func (p *Parser) parseStructOrEnumDecl() *ast.TypeDecl {
 	}
 
 	d.Impls = p.parseImpls()
+	p.parseAttrs(d, true)
 	d.Def = p.parseStructOrEnumBody(kind, pos)
 	return d
 }
@@ -221,8 +283,33 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	}
 
 	d.Def = p.parseType()
+	if nt, ok := d.Def.(*ast.NamedType); ok && nt.Pkg == nil && nt.Name.Name == goInterface && p.tok == token.LBRACE {
+		p.error(d.TokPos, "an interface is a trait, spelled 'trait "+d.Name.Name+" { ... }'")
+		p.skipBraces() // so that the declarations after it parse
+		return d
+	}
+
 	d.Impls = p.parseImpls()
 	return d
+}
+
+// skipBraces moves past a block in braces, the one the parser is at,
+// and the blocks inside it.
+func (p *Parser) skipBraces() {
+	depth := 0
+	for p.tok != token.EOF {
+		switch p.tok {
+		case token.LBRACE:
+			depth++
+		case token.RBRACE:
+			depth--
+		}
+
+		p.next()
+		if depth == 0 {
+			return
+		}
+	}
 }
 
 // parseImpls parses an optional "impl" Trait {"," Trait} list and
@@ -288,7 +375,7 @@ func (p *Parser) parseVariants() []*ast.Variant {
 		v := &ast.Variant{Name: p.parseIdent()}
 		variants = append(variants, v)
 		if p.tok == token.LPAREN {
-			v.Fields = p.parseParams()
+			v.Fields = p.params(true)
 		} else if typeStart[p.tok] {
 			p.errorExpected(p.pos, "'(' or newline")
 			if !p.skipFieldLine() {
@@ -298,6 +385,7 @@ func (p *Parser) parseVariants() []*ast.Variant {
 			continue
 		}
 
+		p.parseAttrs(v, false)
 		if !p.expectSemi() && !p.skipFieldLine() {
 			return variants
 		}
@@ -334,6 +422,8 @@ func (p *Parser) parseTraitDecl() *ast.TraitDecl {
 		return d
 	}
 
+	p.trait = d
+	defer func() { p.trait = nil }()
 	for p.tok != token.RBRACE && p.tok != token.EOF {
 		switch p.tok {
 		case token.VAR:

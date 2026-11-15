@@ -33,7 +33,10 @@ The trait's name is also a type, chapter 11: a value of type `Error` holds any e
 A type that lists `Error` and writes no `Error()` has it derived: the message is the value as `%v` prints it, chapter 4's form for an enum, a struct or a type declared over a predeclared one. Nothing else is written for the message, so there is no second grammar to learn, and the same rule serves an enum, a struct and `type Code int impl Error`:
 
 ```go
-struct Pair impl Error { key string; n int }
+struct Pair impl Error {
+	key string
+	n   int
+}
 type Code int impl Error
 
 fmt.Println(Missing("port"), Empty, Pair{key: "k", n: 1}, Code(42))

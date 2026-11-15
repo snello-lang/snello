@@ -94,6 +94,7 @@ const (
 	COALESCE // ?? (unwrap or else)
 	FATARROW // => (match arm)
 	RANGEINC // ..= (inclusive range pattern)
+	AT       // @ (an attribute)
 	operatorEnd
 
 	keywordBeg
@@ -216,6 +217,7 @@ var tokens = [...]string{
 	COALESCE: "??",
 	FATARROW: "=>",
 	RANGEINC: "..=",
+	AT:       "@",
 
 	BREAK:    "break",
 	CASE:     "case",

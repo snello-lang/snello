@@ -52,7 +52,9 @@ A function's body is cut into blocks, straight runs of events, joined by the edg
 | `break`, `continue` | to the point after the loop, or to its post statement or head |
 | `return`, a `?` that returns, a call that never returns, `panic` | nowhere, after dropping what every open block declares: nothing after them is used |
 
-A match that binds a part of its value by value moves the value before any arm runs, so the move is recorded where the arms begin. A closure's body is a function of its own, with a graph of its own, which points to the graph of the body it is written in.
+A match that binds a part of its value by value moves the value before any arm runs, so the move is recorded where the arms begin; an if-binding moves it before its binding holds it, the same way, so `if p := o` with `o` an option of a `mut` borrow binds what `o` held instead of colliding with its own binding.
+
+A value is made before it is stored, and its loans are taken with it. When a value reads a variable the statement gives a value to or declares, `a = id(a)`, `a, b = b, a`, `h.src = h.src`, `r := r` in an inner block, a holder takes the value's loans before any of the statement's assignments or declarations, and each place copies them from the holder after its own assignment (`carry` in `stmt.go`). Without it the assignment to `a` ended what `a` held before the copy out of `a` ran, so `a` held nothing and a borrow of a dropped local was accepted; and `r := r` read the new `r`, declared by then, instead of the one it shadows. A value that reads no such variable carries its loans directly, as before, and no holder is made. A closure's body is a function of its own, with a graph of its own, which points to the graph of the body it is written in.
 
 The events, each in its block, in the order the program does them:
 
@@ -98,6 +100,7 @@ The rules the computation adds, each a refusal of a program that would read free
 | A `mut` parameter is the caller's | `func rename(l mut Label, name ref string) { l.text = name }` | `cannot store a borrow of name in l: l is the caller's, and a signature cannot say that it borrows name` |
 | A closure may not store a borrow outside itself | `func() { r = ref z }` | `cannot store a borrow in r from inside a closure: r is declared outside it, and what the closure borrows ends with each call` |
 | A deferred call borrows only a whole variable, one that is a borrow or holds none | `defer show(ref xs[0])` | `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one` |
+| A deferred print views no part of a value the statement makes and drops | `defer fmt.Println(of("d").a)` | `a deferred call reads what it prints when it runs, after the defer statement drops of(...): keep of(...) in a variable first, and print from it` |
 | A deferred call keeps those until the function returns | `{ t := ...; defer show(ref t) }` | `cannot keep a borrow of t in the deferred call: ..., and the deferred call runs when the function returns` |
 | A closure that borrows is used where it is made | `g := if c { func() { use(s) } } else { ... }` | `a closure that borrows cannot be chosen by if or match, or come out of a block: it is used where it is made, bound with :=, called, or passed to a call` |
 | A `Drop` uses what its value borrows | `p := Peek{src: ref s}; { t := ...; p.src = ref t }` | `... used when p is dropped at 5:1, by its Drop` |

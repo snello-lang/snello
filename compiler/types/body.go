@@ -16,7 +16,7 @@ import (
 // inferred from its value.
 func (c *Checker) initializers(f *ast.File) {
 	for _, d := range f.Decls {
-		if d, ok := d.(*ast.VarDecl); ok {
+		if d, ok := d.(*ast.VarDecl); ok && !d.Const { // a constant was checked with the types (checkConsts)
 			c.initializersOf(d, c.pkg.scope)
 		}
 	}
@@ -33,8 +33,12 @@ func (c *Checker) funcBodies(f *ast.File) {
 				c.scope = scope // the type parameters the receiver names
 			}
 
-			c.checkBody(c.objs[i].(*Func).typ.(*Signature), d.Recv, d.Params, d.Body)
+			fn := c.objs[i].(*Func)
+			c.checkBody(fn.typ.(*Signature), d.Recv, d.Params, d.Body)
 			c.scope = outer
+			if d.Body != nil && (genericDecl(fn) || d.Of != nil && len(d.Of.Args) > 0) { // a function of a generic type is generic over the type's parameters
+				fn.decl = d
+			}
 		}
 	}
 }
@@ -54,6 +58,11 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.flow, c.temps = nil, c.temps[:0]
 	clear(c.pinned)
 	c.sig, c.recv = nil, nil
+	if c.sawParts && c.info != nil {
+		c.selectParts(body)
+	}
+
+	c.sawParts = false
 }
 
 // funcBody opens the function scope, declares the receiver and the
@@ -92,9 +101,9 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 	c.closeScope()
 }
 
-// initializersOf checks the values of a var or const declaration whose
-// names are already declared in scope, giving an untyped name the type
-// of its value.
+// initializersOf checks the values of a var declaration whose names
+// are already declared in scope, giving an untyped name the type of its
+// value.
 func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 	if len(d.Values) == 0 { // the parser requires a type when there is no value, resolved already
 		if scope == c.pkg.scope {
@@ -123,7 +132,11 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 		t := declared
 		if declared == nil {
 			t = inferred(ops[i])
-			c.setType(scope.Lookup(name.Name), t)
+			obj := scope.Lookup(name.Name)
+			c.setType(obj, t)
+			if v, ok := obj.(*Var); ok {
+				delete(c.uninferred, v)
+			}
 		}
 
 		if scope == c.pkg.scope { // every type is complete in this phase, declared or inferred

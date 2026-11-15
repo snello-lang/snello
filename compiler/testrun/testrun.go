@@ -332,7 +332,9 @@ func (p *Plan) Source() []byte {
 	b.WriteString("package main\n\nimport \"testing\"\n")
 	prefix := ""
 	if !p.Main {
-		b.WriteString("import pkg " + strconv.Quote(p.Path) + "\n")
+		b.WriteString("import pkg ")
+		b.WriteString(strconv.Quote(p.Path))
+		b.WriteString("\n")
 		prefix = "pkg."
 	}
 
@@ -341,13 +343,20 @@ func (p *Plan) Source() []byte {
 		label = path.Base(filepath.ToSlash(p.Dir))
 	}
 
-	b.WriteString("\nfunc main() {\n\ttesting.Main(" + strconv.Quote(label) + ", []testing.Test{")
+	b.WriteString("\nfunc main() {\n\ttesting.Main(")
+	b.WriteString(strconv.Quote(label))
+	b.WriteString(", []testing.Test{")
 	for i, name := range p.Names {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 
-		b.WriteString("testing.Test{Name: " + strconv.Quote(name) + ", F: " + prefix + name + "}")
+		b.WriteString("testing.Test{Name: ")
+		b.WriteString(strconv.Quote(name))
+		b.WriteString(", F: ")
+		b.WriteString(prefix)
+		b.WriteString(name)
+		b.WriteString("}")
 	}
 
 	b.WriteString("})\n}\n")

@@ -62,6 +62,16 @@ type File struct {
 	Name    *Ident
 	Imports []*ImportSpec
 	Decls   []Decl
+	Attrs   map[Node][]*Attr // the attributes of the fields, variants and declarations written with any; nil when none is
+}
+
+// An Attr is an attribute, @ and a constant expression, written after
+// a field, after a variant or before a struct's or enum's body. A file
+// keeps them beside its tree, by what they are written on, as go/ast
+// keeps comments, so a node written without any is no larger.
+type Attr struct {
+	At token.Pos
+	X  Expr
 }
 
 // An ImportSpec is one import path with an optional local name.
@@ -86,8 +96,16 @@ type BasicLit struct {
 // A Field is one or more names sharing a type, in a struct or a trait.
 // Names is empty for an embedded field, as in Go.
 type Field struct {
-	Names []*Ident
-	Type  Type
+	Names    []*Ident
+	Type     Type
+	Defaults *FieldDefaults // the defaults after the type, or nil: a pointer, so a field without them is no larger
+}
+
+// FieldDefaults are the defaults written after a field's type, = and a
+// constant expression for each name.
+type FieldDefaults struct {
+	Assign token.Pos // the =
+	Values []Expr
 }
 
 // A Param is a function parameter; Dots is the position of the ... of
@@ -109,7 +127,8 @@ type TypeParam struct {
 // is nil for a required method inside a trait.
 type FuncDecl struct {
 	Func       token.Pos
-	Recv       *Param // (t mut Tree): Name t, Type *RefType{Mut, Tree}
+	Recv       *Param     // (t mut Tree): Name t, Type *RefType{Mut, Tree}
+	Of         *NamedType // Point in func Point.Parse(...): a function of the type, which takes no value of it
 	Name       *Ident
 	TypeParams []*TypeParam
 	Params     []*Param
@@ -432,6 +451,7 @@ type CallExpr struct {
 	TypeArgs []Type
 	Lparen   token.Pos
 	Args     []Expr
+	Ellipsis token.Pos // the ... after the last argument, f(xs...), or NoPos
 	Rparen   token.Pos
 }
 
@@ -481,6 +501,27 @@ type CompositeLit struct {
 	Elts   []Expr
 }
 
+// A PartExpr is x.[f]: the part f of x, a field or a variant, that a
+// loop over a type's parts, for f := range fields(T), gives.
+type PartExpr struct {
+	X      Expr
+	Lbrack token.Pos
+	Part   *Ident
+	Rbrack token.Pos
+}
+
+// A PartsElt is an element of a composite literal written once for
+// each part a loop gives: for f := range fields(T) { [f]: value }, a
+// field and its value, or for an array for i := range N { value }, an
+// element.
+type PartsElt struct {
+	For   token.Pos
+	Var   *Ident
+	X     Expr   // fields(T), fields(c) or a length
+	Key   *Ident // the part named in [f], or nil for an element
+	Value Expr
+}
+
 // A KeyValueExpr is key: value inside a composite literal.
 type KeyValueExpr struct {
 	Key   Expr
@@ -506,10 +547,11 @@ type IfExpr struct {
 // body }: X is then the unit (), each arm's condition its Guard on a
 // wildcard, and the arm _ that ends it an unguarded wildcard.
 type MatchExpr struct {
-	Match token.Pos
-	X     Expr
-	Arms  []*MatchArm
-	Conds bool
+	Match  token.Pos
+	X      Expr
+	Arms   []*MatchArm
+	Conds  bool
+	OnType bool // X names a type parameter, and each arm's pattern is a *TypePat: a match on the type, decided when the function is compiled for one
 }
 
 // A MatchArm is pat [if guard] => body. Body is an Expr, a *BlockStmt,
@@ -520,6 +562,25 @@ type MatchArm struct {
 	Guard Expr
 	Arrow token.Pos
 	Body  Node
+}
+
+// A TypePat is an arm of a match on a type parameter: types joined by
+// |, any of which the type may be, each a type or a shape whose names
+// the arm binds, []E, map[K]V; or a kind of type, struct or enum, for
+// any of that kind.
+type TypePat struct {
+	Types   []Type    // nil for a kind
+	KindPos token.Pos // the kind's position, or NoPos
+	Kind    string    // "struct" or "enum", or ""
+}
+
+// A PartsPat is the arm of a match on a value of an enum type
+// parameter written once for each variant, for c := range variants(T),
+// so that the arms cover every variant; in each, the value holds c.
+type PartsPat struct {
+	For token.Pos
+	Var *Ident
+	X   Expr // variants(T)
 }
 
 // A WildcardPat is _.
@@ -619,11 +680,15 @@ func (x *TypeExpr) Pos() token.Pos     { return x.Type.Pos() }
 func (x *TryExpr) Pos() token.Pos      { return x.X.Pos() }
 func (x *CompositeLit) Pos() token.Pos { return compositePos(x) }
 func (x *KeyValueExpr) Pos() token.Pos { return x.Key.Pos() }
+func (x *PartExpr) Pos() token.Pos     { return x.X.Pos() }
+func (x *PartsElt) Pos() token.Pos     { return x.For }
 func (x *FuncLit) Pos() token.Pos      { return x.Type.Pos() }
 func (x *IfExpr) Pos() token.Pos       { return x.If }
 func (x *MatchExpr) Pos() token.Pos    { return x.Match }
 func (x *MatchArm) Pos() token.Pos     { return x.Pat.Pos() }
 func (x *WildcardPat) Pos() token.Pos  { return x.Underscore }
+func (x *TypePat) Pos() token.Pos      { return typePatPos(x) }
+func (x *PartsPat) Pos() token.Pos     { return x.For }
 func (x *IdentPat) Pos() token.Pos     { return x.Name.Pos() }
 func (x *LitPat) Pos() token.Pos       { return x.Lit.Pos() }
 func (x *RangePat) Pos() token.Pos     { return x.Lo.Pos() }
@@ -673,6 +738,8 @@ func (*TypeExpr) exprNode()     {}
 func (*TryExpr) exprNode()      {}
 func (*CompositeLit) exprNode() {}
 func (*KeyValueExpr) exprNode() {}
+func (*PartExpr) exprNode()     {}
+func (*PartsElt) exprNode()     {}
 func (*FuncLit) exprNode()      {}
 func (*IfExpr) exprNode()       {}
 func (*MatchExpr) exprNode()    {}
@@ -698,6 +765,16 @@ func (*RangePat) patternNode()    {}
 func (*TuplePat) patternNode()    {}
 func (*VariantPat) patternNode()  {}
 func (*OrPat) patternNode()       {}
+func (*TypePat) patternNode()     {}
+func (*PartsPat) patternNode()    {}
+
+func typePatPos(x *TypePat) token.Pos {
+	if x.Kind != "" {
+		return x.KindPos
+	}
+
+	return x.Types[0].Pos()
+}
 
 func compositePos(x *CompositeLit) token.Pos {
 	if x.Type != nil {

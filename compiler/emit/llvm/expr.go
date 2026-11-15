@@ -7,6 +7,7 @@ package llvm
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -94,6 +95,16 @@ func (e *Emitter) expr(x ast.Expr) value {
 	case *ast.IfExpr:
 		return e.ifExpr(x)
 	case *ast.MatchExpr:
+		if x.OnType {
+			return e.typeMatch(x)
+		}
+
+		if len(x.Arms) > 0 {
+			if _, ok := x.Arms[0].Pat.(*ast.PartsPat); ok {
+				return e.variantMatch(x)
+			}
+		}
+
 		return e.matchExpr(x)
 	}
 
@@ -117,7 +128,12 @@ func (e *Emitter) ident(x *ast.Ident) value {
 
 		return e.load(e.irType(e.typeOf(x), x.Pos()), "@"+sym)
 	case *types.Func:
-		return e.funcValue(obj, x.Pos())
+		if e.generics[obj] != nil {
+			e.unsupported(x.Pos(), "a generic function as a value")
+			return value{e.irType(e.typeOf(x), x.Pos()), "zeroinitializer"}
+		}
+
+		return e.funcValue(obj.Type().(*types.Signature), lower.FuncName(obj), x.Pos())
 	case *types.Var:
 		t := e.irType(e.sub(obj.Type()), x.Pos())
 		return e.load(t, e.varSlot(obj, x.Pos()))
@@ -279,7 +295,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 		return e.derefTo(v, e.typeOf(x.X), e.typeOf(x))
 	case token.AND:
 		elem := e.typeOf(x).(*types.Pointer).Elem()
-		cell := e.alloc(elem, x.Pos())
+		cell := e.alloc(elem)
 		e.store(e.valueTo(x.X, elem), cell)
 		return value{"ptr", cell}
 	case token.ARROW:
@@ -310,7 +326,7 @@ func (e *Emitter) unary(x *ast.UnaryExpr) value {
 
 // alloc returns the address of a new block on the heap for a value of
 // type t.
-func (e *Emitter) alloc(t types.Type, pos token.Pos) string {
+func (e *Emitter) alloc(t types.Type) string {
 	e.declare("sn_alloc", "declare ptr @sn_alloc(i64)")
 	return e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.size(t), 1), 10)+")", "ptr").s
 }
@@ -599,7 +615,19 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) value {
 		}
 	}
 
+	if e.builtPointer(x, have, want) { // an owned pointer built here and read through as a borrow: held whole for the statement, then dropped with what it points at
+		v := e.expr(x)
+		e.hold(e.spill(v), have)
+		return e.derefTo(v, have, want)
+	}
+
 	if depth(have) < depth(want) {
+		if r, ok := want.(*types.Ref); ok && !r.Mut() { // a constant lent is its global, which outlives the function: ref math.MaxInt64 may be returned
+			if addr, ok := e.constAddr(x); ok {
+				return value{"ptr", addr}
+			}
+		}
+
 		if !e.isPlace(x) { // a value built here and lent lives in a temporary for the statement
 			slot := e.spill(e.expr(x))
 			if r, ok := want.(*types.Ref); ok && r.Mut() {
@@ -613,6 +641,68 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) value {
 	}
 
 	return e.derefTo(e.expr(x), have, want)
+}
+
+// constAddr returns the address of the constant x denotes, which lives
+// as long as the program: a named constant's global, this package's or
+// another's, or one written here for a literal; false for anything
+// else, which a borrow lends from a temporary.
+func (e *Emitter) constAddr(x ast.Expr) (string, bool) {
+	var obj types.Object
+	switch x := x.(type) {
+	case *ast.ParenExpr:
+		return e.constAddr(x.X)
+	case *ast.BasicLit:
+		return e.constGlobal(e.expr(x)), true
+	case *ast.Ident:
+		obj = e.info.Uses[x]
+	case *ast.SelectorExpr:
+		obj = e.info.Uses[x.Sel]
+	}
+
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return "", false
+	}
+
+	if c.Pos() == token.NoPos { // true and false, which have no global of their own
+		return e.constGlobal(value{"i1", c.Name()}), true
+	}
+
+	sym, local := e.localConst[c]
+	if !local {
+		sym = lower.ObjName(c)
+	}
+
+	return "@" + sym, true
+}
+
+// constGlobal returns the address of a private constant of the module
+// holding the constant value v, written the first time v is lent: a
+// literal lent twice is one constant.
+func (e *Emitter) constGlobal(v value) string {
+	if c, ok := e.constants[v.s]; ok && c.typ == v.typ {
+		return c.s
+	}
+
+	name := "@.const." + strconv.Itoa(e.strs)
+	e.strs++
+	put(&e.consts, name, " = private unnamed_addr constant ", v.typ, " ", v.s, "\n")
+	if e.constants == nil {
+		e.constants = make(map[string]value)
+	}
+
+	e.constants[v.s] = value{v.typ, name}
+	return name
+}
+
+// builtPointer reports whether x, of type have, is an owned pointer
+// built in the statement that is read through as the borrow want, as
+// the receiver of boxed().Add() is: nothing else owns it, so the
+// operation holds it until the statement ends.
+func (e *Emitter) builtPointer(x ast.Expr, have, want types.Type) bool {
+	_, ptr := have.(*types.Pointer)
+	return ptr && isRef(want) && !e.isPlace(x) && depth(have) >= depth(want)
 }
 
 // lvalue returns the address of the storage x denotes, about to be
@@ -644,8 +734,16 @@ func (e *Emitter) addr(x ast.Expr, write bool) string {
 	case *ast.IndexExpr:
 		return e.index(x, write)
 	case *ast.UnaryExpr:
-		if x.Op == token.MUL {
-			return e.placeOf(x.X, write)
+		if x.Op == token.MUL { // the address of what *X denotes: X read down to the depth of *X's own type, which placeOf reads on from
+			var p string
+			if e.isPlace(x.X) {
+				p = e.addr(x.X, write)
+			} else { // a value built here, held in a temporary and dropped when the statement ends
+				p = e.spill(e.expr(x.X))
+				e.hold(p, e.typeOf(x.X))
+			}
+
+			return e.placeTo(p, e.typeOf(x.X), e.typeOf(x))
 		}
 	}
 
@@ -674,7 +772,14 @@ func (e *Emitter) placeOf(x ast.Expr, write bool) string {
 // placeAt reads from the address p, holding a value of type t, down
 // to the address of the value under its borrows and pointers.
 func (e *Emitter) placeAt(p string, t types.Type) string {
-	for depth(t) > 0 {
+	return e.placeTo(p, t, nil)
+}
+
+// placeTo is placeAt stopping at the depth of want: the place of a
+// value of type want, which may itself be an owned pointer, as the
+// field p of replace(mut s.p, v) is.
+func (e *Emitter) placeTo(p string, t, want types.Type) string {
+	for depth(t) > depth(want) {
 		v := e.load("ptr", p)
 		if _, ok := t.(*types.Pointer); ok {
 			v = e.deref(v)
@@ -698,6 +803,15 @@ func (e *Emitter) placeAt(p string, t types.Type) string {
 func (e *Emitter) fieldAddr(p string, base types.Type, f *types.Var, pos token.Pos) string {
 	if tr, ok := base.(*types.Trait); ok {
 		return e.traitField(p, tr, f)
+	}
+
+	if en, ok := base.Underlying().(*types.Enum); ok { // a variant's field, v.[f] in the arm written for the variant
+		for i := range en.NumVariants() {
+			if j := slices.Index(en.Variant(i).Fields(), f); j >= 0 {
+				addr, _ := e.payload(p, base, en.Variant(i), j)
+				return addr
+			}
+		}
 	}
 
 	st := base.Underlying().(*types.Struct)
@@ -746,9 +860,22 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 
 // operands writes a list of operands evaluated left to right, each
 // converted to the wanted type when wants gives one. A value built
-// here that the operation only looks at is held for the statement.
+// here that the operation only looks at is held for the statement. An
+// owned value the operation takes is held until every operand is
+// evaluated when one after it may leave the statement, by ? or a
+// return in its else, and only then moved out of its slot, so that
+// leaving drops it and taking it drops nothing twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
+	leaves := -1
+	for i, x := range xs {
+		if lower.MayLeave(x) {
+			leaves = i
+		}
+	}
+
 	parts := make([]value, len(xs))
+	var kept []int     // the owned values held until the last operand that may leave
+	var slots []string // and the slots they are held in
 	for i, x := range xs {
 		var want types.Type
 		if wants != nil {
@@ -756,16 +883,33 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []value {
 		}
 
 		parts[i] = e.valueTo(x, want)
-		if e.lent(x, want) { // built here and only lent: dropped when the statement ends
+		switch {
+		case e.lent(x, want): // built here and only lent: dropped when the statement ends
 			if want != nil && depth(e.typeOf(x)) < depth(want) {
 				e.hold(parts[i].s, e.typeOf(x)) // the slot valueTo lent it from
 			} else {
 				e.hold(e.spill(parts[i]), e.typeOf(x))
 			}
+		case i < leaves && want != nil && !isRef(want) && needsDrop(want):
+			slot := e.spill(parts[i])
+			e.hold(slot, want)
+			kept, slots = append(kept, i), append(slots, slot)
 		}
 	}
 
+	for k, i := range kept { // every operand is in: the operation takes the value, and the slot is emptied
+		parts[i] = e.load(parts[i].typ, slots[k])
+		e.zero(slots[k], wants[i], xs[i].Pos())
+	}
+
 	return parts
+}
+
+// isRef reports whether t is a borrow, which an operation lends rather
+// than takes.
+func isRef(t types.Type) bool {
+	_, ok := t.(*types.Ref)
+	return ok
 }
 
 // lent reports whether x is a value built here that the operation
@@ -788,7 +932,16 @@ func (e *Emitter) lent(x ast.Expr, want types.Type) bool {
 		return false // a literal owns nothing
 	}
 
-	return !e.isLent(x) && needsDrop(e.typeOf(x))
+	if e.isLent(x) {
+		return false
+	}
+
+	t := e.typeOf(x)
+	if want != nil && e.builtPointer(x, t, want) {
+		return false // held whole by valueTo, which reads through it
+	}
+
+	return needsDrop(t)
 }
 
 // borrowed returns the value an operand lends: the operand of a ref,
@@ -873,7 +1026,7 @@ func (e *Emitter) inside(p string, elem, want types.Type, held string, heldType 
 }
 
 // try writes x?: the value inside, after a return of the absent or
-// failed case as the function's own result.
+// failed case as the function's own result, marked unlikely.
 func (e *Emitter) try(x *ast.TryExpr) value {
 	p, t, held := e.consumed(x.X)
 	fail, ok := e.block("try.fail"), e.block("try")
@@ -884,7 +1037,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		var has value
 		elem = u.Elem()
 		has, val = e.optionParts(e.irType(t, x.Pos()), p, u)
-		e.branch(has.s, ok, fail)
+		e.branchLikely(has.s, ok, fail)
 		e.label(fail)
 		e.leaveFunction(x.Pos())
 		e.inst("ret " + e.variantValue(e.fn.sig.Results(), types.NoneVariant, nil, x.Pos()).typed())
@@ -893,7 +1046,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		elem = u.Val()
 		okFlag := e.load("i1", e.gep(ir, p, 0))
 		val = e.gep(ir, p, 1)
-		e.branch(okFlag.s, ok, fail)
+		e.branchLikely(okFlag.s, ok, fail)
 		e.label(fail)
 		err := e.passed(x, e.taken(val, u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
@@ -1064,6 +1217,20 @@ func yields(t types.Type) bool {
 // selector writes a field access through any borrows and pointers in
 // front of the struct, or a member of a package.
 func (e *Emitter) selector(x *ast.SelectorExpr) value {
+	if p := lower.PartUsed(e.info, x.X); p != nil { // f.name and f.default, constants in each copy of the loop
+		c := e.partCopy[p]
+		if x.Sel.Name == "default" {
+			t := e.typeOf(x)
+			if c.Default == nil {
+				return e.variantValue(t, types.NoneVariant, nil, x.Pos())
+			}
+
+			return e.variantValue(t, types.SomeVariant, []value{e.valueTo(c.Default, c.Field.Type())}, x.Pos())
+		}
+
+		return e.constString(c.Name)
+	}
+
 	if pkg := e.packageOf(x.X); pkg != nil {
 		switch obj := e.info.Uses[x.Sel].(type) {
 		case *types.Func:
@@ -1077,7 +1244,7 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 				return unit
 			}
 
-			return e.funcValue(obj, x.Pos())
+			return e.funcValue(obj.Type().(*types.Signature), lower.FuncName(obj), x.Pos())
 		case *types.Variant:
 			return e.variantValue(e.typeOf(x), obj, nil, x.Pos())
 		case *types.Var:
@@ -1085,6 +1252,15 @@ func (e *Emitter) selector(x *ast.SelectorExpr) value {
 		}
 
 		return e.load(e.irType(e.typeOf(x), x.Pos()), "@"+lower.ObjName(e.info.Uses[x.Sel]))
+	}
+
+	if lower.TypeFunc(e.info, x) { // Point.Of, Pair<int, bool>.Of as a value: a function, named after its type
+		name, sig := e.staticCallee(x, x.Pos())
+		if sig == nil {
+			return unit
+		}
+
+		return e.funcValue(sig, name, x.Pos())
 	}
 
 	f, ok := e.info.Uses[x.Sel].(*types.Var)
@@ -1118,6 +1294,55 @@ func (e *Emitter) tuple(x *ast.TupleExpr) value {
 	return out
 }
 
+// partsLit writes T{ for f := range fields(T) { [f]: value } } for the
+// type the instance being written gives T, into out: the value of each
+// field made in the order of the fields, under that field's copy of the
+// loop, and held in a slot until every one is made, so that a ? leaving
+// drops the ones made before it; the literal then takes them all.
+func (e *Emitter) partsLit(x *ast.CompositeLit, elt *ast.PartsElt, out value) value {
+	for i, v := range e.partValues(elt, x.Pos()) {
+		out = e.insert(out, v, i)
+	}
+
+	return out
+}
+
+// partValues writes the value of a literal's loop over a type's fields
+// once for each field, in order, each under its copy and held in a slot
+// until all are made, so that a ? leaving drops the ones made before it,
+// and returns them taken.
+func (e *Emitter) partValues(elt *ast.PartsElt, pos token.Pos) []value {
+	part, copies := lower.EltParts(e.info, elt, e.subst, e.partCopy)
+	if e.partCopy == nil {
+		e.partCopy = make(map[*types.Part]lower.PartCopy)
+	}
+
+	outer := e.subst
+	slots := make([]string, len(copies))
+	for i, c := range copies {
+		lower.NameParts(e.info, part, c)
+		e.subst, e.partCopy[part] = c.Sub, c
+		slots[i] = e.spill(e.valueTo(elt.Value, c.Field.Type()))
+		e.hold(slots[i], c.Field.Type())
+	}
+
+	e.subst = outer
+	delete(e.partCopy, part)
+	values := make([]value, len(copies))
+	for i, c := range copies {
+		ft := c.Field.Type()
+		values[i] = e.taken(slots[i], ft, slots[i], ft, pos)
+	}
+
+	return values
+}
+
+// variantBuild writes c(for f := range fields(c) { value }), the variant
+// the loop around it gives c built from its fields, each taken by it.
+func (e *Emitter) variantBuild(x *ast.CallExpr, p *types.Part) value {
+	return e.variantValue(e.typeOf(x), e.partCopy[p].Variant, e.partValues(x.Args[0].(*ast.PartsElt), x.Pos()), x.Pos())
+}
+
 // compositeLit writes a struct, slice, map or array literal; fields
 // left out are zero.
 func (e *Emitter) compositeLit(x *ast.CompositeLit) value {
@@ -1125,7 +1350,7 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) value {
 	ir := e.irType(t, x.Pos())
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
-		return e.sliceLit(x, t, u)
+		return e.sliceLit(x, u)
 	case *types.Map:
 		return e.mapLit(x, t, u)
 	case *types.Array:
@@ -1146,15 +1371,28 @@ func (e *Emitter) compositeLit(x *ast.CompositeLit) value {
 			out = e.insert(out, value{"i1", "true"}, liveIndex(t.(*types.Named)))
 		}
 
-		values := make([]ast.Expr, len(x.Elts))
-		wants := make([]types.Type, len(x.Elts))
-		indices := make([]int, len(x.Elts))
-		for i, elt := range x.Elts {
+		if len(x.Elts) == 1 {
+			if elt, ok := x.Elts[0].(*ast.PartsElt); ok {
+				return e.partsLit(x, elt, out)
+			}
+		}
+
+		left := lower.LeftOut(u, x) // given their defaults, after the fields the literal gives
+		values := make([]ast.Expr, 0, len(x.Elts)+len(left))
+		wants := make([]types.Type, 0, len(x.Elts)+len(left))
+		indices := make([]int, 0, len(x.Elts)+len(left))
+		for _, elt := range x.Elts {
 			kv := elt.(*ast.KeyValueExpr)
 			key := kv.Key.(*ast.Ident)
-			values[i] = kv.Value
-			indices[i] = fieldIndex(u, key.Name)
-			wants[i] = u.Field(indices[i]).Type()
+			values = append(values, kv.Value)
+			indices = append(indices, fieldIndex(u, key.Name))
+			wants = append(wants, u.Field(indices[len(indices)-1]).Type())
+		}
+
+		for _, i := range left {
+			values = append(values, lower.Folded(e.info, u.Default(i)))
+			indices = append(indices, i)
+			wants = append(wants, u.Field(i).Type())
 		}
 
 		for i, p := range e.operands(values, wants) {

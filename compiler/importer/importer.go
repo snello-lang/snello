@@ -167,11 +167,9 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 // names from dir: its canonical name, its directory, and the module it
 // is a directory of, whose links it carries.
 func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir string, owner *root, err error) {
-	var r *root
-	if n := len(imp.loading); n > 0 && imp.loading[n-1].std {
-		r = nil // dir is a directory of the embedded library, not one on disk
-	} else if r, err = imp.rootFor(dir); err != nil {
-		return "", "", nil, err
+	var r *root // none for a directory of the embedded library, which is not one on disk
+	if n := len(imp.loading); n == 0 || !imp.loading[n-1].std {
+		r = imp.rootFor(dir)
 	}
 
 	if r == nil {
@@ -445,9 +443,9 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 // enter recorded when the require was followed. A module file deeper
 // in either tree is not looked for (section 7 of the design note). A
 // program with no module has none.
-func (imp *Importer) rootFor(dir string) (*root, error) {
+func (imp *Importer) rootFor(dir string) *root {
 	if imp.Module == nil {
-		return nil, nil
+		return nil
 	}
 
 	own := canonDir(imp.Module.Dir)
@@ -457,11 +455,11 @@ func (imp *Importer) rootFor(dir string) (*root, error) {
 
 	for d := canonDir(dir); ; d = filepath.Dir(d) {
 		if r, ok := imp.roots[d]; ok {
-			return r, nil
+			return r
 		}
 
 		if parent := filepath.Dir(d); parent == d {
-			return imp.roots[own], nil // outside every tree reached: the program's own rules
+			return imp.roots[own] // outside every tree reached: the program's own rules
 		}
 	}
 }

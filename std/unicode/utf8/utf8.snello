@@ -7,10 +7,13 @@
 // and the first rune of some bytes or of a string. A byte that does
 // not start a valid sequence reads as RuneError of width one, the rule
 // a range over a string and every string function follow.
+//
+// Every function only reads the bytes it is given, and none allocates
+// but AppendRune, which grows the slice it writes to.
 package utf8
 
-// RuneError is U+FFFD, the replacement rune, read where the bytes are
-// not UTF-8 and written for a value that is not a code point.
+// RuneError is U+FFFD, the replacement character, read where the bytes
+// are not UTF-8 and written for a value that is not a code point.
 const RuneError rune = 0xFFFD
 
 // MaxRune is the largest code point, U+10FFFF.
@@ -23,6 +26,16 @@ const UTFMax int = 4
 // byte is the rune it encodes.
 const RuneSelf rune = 0x80
 
+// The first runes that take three and four bytes; below
+// firstThreeByteRune, and from RuneSelf on, a rune takes two.
+const firstThreeByteRune rune = 0x800
+const firstFourByteRune rune = 0x10000
+
+// The surrogates, U+D800 to U+DFFF, which UTF-16 pairs to write a rune
+// past U+FFFF and which are no code point UTF-8 holds.
+const surrogateMin rune = 0xD800
+const surrogateMax rune = 0xDFFF
+
 // ValidRune reports whether r is a code point UTF-8 can hold: 0 to
 // MaxRune, the surrogates U+D800 to U+DFFF left out.
 func ValidRune(r rune) bool {
@@ -30,56 +43,85 @@ func ValidRune(r rune) bool {
 }
 
 // RuneStart reports whether b can be the first byte of a rune: any but
-// a continuation byte, 10xxxxxx.
+// a continuation byte, 10xxxxxx. Stepping back over the bytes for which
+// it is false finds the start of the rune a byte is in.
 func RuneStart(b byte) bool {
 	return b & 0xC0 != 0x80
 }
 
-// Valid reports whether p is UTF-8 throughout.
+// Valid reports whether p is UTF-8 throughout: every rune encoded in
+// its shortest form, and no surrogate. An empty p is valid.
 func Valid(p ref []byte) bool {
 	return valid(p)
 }
 
-// ValidString reports whether s is UTF-8 throughout.
+// ValidString reports whether s is UTF-8 throughout, as Valid does for
+// bytes.
 func ValidString(s ref string) bool {
 	return validString(s)
 }
 
 // RuneCount returns the number of runes in p, as a range over a string
-// reads them: each byte that starts no valid sequence one rune.
+// reads them: each byte that starts no valid sequence counts as one
+// rune.
 func RuneCount(p ref []byte) int {
 	return count(p)
 }
 
-// RuneCountInString returns the number of runes in s without making
-// them a slice.
+// RuneCountInString returns the number of runes in s, as RuneCount
+// counts them, without making them a slice.
+//
+//	utf8.RuneCountInString("héllo") // 5, where len is 6
 func RuneCountInString(s ref string) int {
 	return countString(s)
 }
 
 // FullRune reports whether p begins with a whole rune, or with bytes
-// that are no rune's start and read as RuneError whatever follows:
-// false only for the start of a rune cut short, which more bytes would
-// complete.
+// that are no rune's start and read as RuneError whatever follows. It
+// is false only for the start of a rune cut short, which more bytes
+// would complete: what a reader of a stream asks before it decodes.
 func FullRune(p ref []byte) bool {
 	return full(p)
 }
 
-// FullRuneInString is FullRune over a string's bytes.
+// FullRuneInString reports whether s begins with a whole rune, as
+// FullRune does for bytes.
 func FullRuneInString(s ref string) bool {
 	return fullString(s)
 }
 
+// DecodeRune returns the first rune of p and how many bytes it takes,
+// one to four: (RuneError, 1) when p does not start with a valid
+// sequence, and (RuneError, 0) when p is empty, so a loop that moves on
+// by the width always ends.
+//
+//	r, n := utf8.DecodeRune(p)
+//	p = p[n:]
+func DecodeRune(p ref []byte) (rune, int) {
+	var r rune = RuneError
+	n := decode(p, mut r)
+	return (r, n)
+}
+
+// DecodeRuneInString returns the first rune of s and how many bytes it
+// takes, as DecodeRune does for bytes.
+func DecodeRuneInString(s ref string) (rune, int) {
+	var r rune = RuneError
+	n := decodeString(s, mut r)
+	return (r, n)
+}
+
 // DecodeLastRune returns the rune that ends p and how many bytes it
-// takes: (RuneError, 1) when p does not end with a valid sequence, and
-// (RuneError, 0) when p is empty.
+// takes, one to four: (RuneError, 1) when p does not end with a valid
+// sequence, and (RuneError, 0) when p is empty.
 func DecodeLastRune(p ref []byte) (rune, int) {
 	var r rune = RuneError
 	n := decodeLast(p, mut r)
 	return (r, n)
 }
 
-// DecodeLastRuneInString is DecodeLastRune over a string's bytes.
+// DecodeLastRuneInString returns the rune that ends s and how many
+// bytes it takes, as DecodeLastRune does for bytes.
 func DecodeLastRuneInString(s ref string) (rune, int) {
 	var r rune = RuneError
 	n := decodeLastString(s, mut r)
@@ -89,29 +131,32 @@ func DecodeLastRuneInString(s ref string) (rune, int) {
 // RuneLen returns how many bytes r takes in UTF-8, from one to four,
 // or -1 for a value that is not a code point: a negative one, one past
 // MaxRune, or a surrogate, U+D800 to U+DFFF.
+//
+//	utf8.RuneLen('a') // 1
+//	utf8.RuneLen('€') // 3
 func RuneLen(r rune) int {
-	if r < 0 || r >= 0xD800 && r <= 0xDFFF || r > MaxRune {
+	if r < 0 || r >= surrogateMin && r <= surrogateMax || r > MaxRune {
 		return -1
 	}
 
-	if r < 0x80 {
+	if r < RuneSelf {
 		return 1
 	}
 
-	if r < 0x800 {
+	if r < firstThreeByteRune {
 		return 2
 	}
 
-	if r < 0x10000 {
+	if r < firstFourByteRune {
 		return 3
 	}
 
 	return 4
 }
 
-// AppendRune appends the UTF-8 bytes of r to p, and those of RuneError
-// for a value that is not a code point. The slice grows as Push grows
-// it.
+// AppendRune appends the UTF-8 bytes of r to p, one to four of them,
+// and those of RuneError for a value that is not a code point. p is
+// lent mut and grows as Push grows it.
 func AppendRune(p mut []byte, r rune) {
 	c := r
 	if RuneLen(r) < 0 {
@@ -124,6 +169,9 @@ func AppendRune(p mut []byte, r rune) {
 		return
 	}
 
+	// The lead byte holds the length in its tag, 110, 1110 or 11110,
+	// and the rune's high bits; each continuation byte, tagged 10,
+	// holds six more bits.
 	if n == 2 {
 		p.Push(byte(0xC0 | c >> 6))
 	} else if n == 3 {
@@ -138,35 +186,41 @@ func AppendRune(p mut []byte, r rune) {
 	p.Push(byte(0x80 | c & 0x3F))
 }
 
-// DecodeRune returns the first rune of p and how many bytes it takes:
-// (RuneError, 1) when p does not start with a valid sequence, and
-// (RuneError, 0) when p is empty.
-func DecodeRune(p ref []byte) (rune, int) {
-	var r rune = RuneError
-	n := decode(p, mut r)
-	return (r, n)
-}
-
-// DecodeRuneInString is DecodeRune over a string's bytes.
-func DecodeRuneInString(s ref string) (rune, int) {
-	var r rune = RuneError
-	n := decodeString(s, mut r)
-	return (r, n)
-}
-
-// decode and decodeString read the first rune through the runtime's
-// one decoder, writing it to r and returning its width, zero for no
-// bytes.
+// decode reads the first rune of p into r and returns its width, zero
+// for no bytes. The runtime provides it, by its one decoder.
 func decode(p ref []byte, r mut rune) int
+
+// decodeString reads the first rune of s into r and returns its width,
+// zero for no bytes. The runtime provides it.
 func decodeString(s ref string, r mut rune) int
 
-// The runtime's validation, counting, completeness and last rune, by
-// the same decoder.
+// valid reports whether p is UTF-8 throughout. The runtime provides
+// it, by the same decoder.
 func valid(p ref []byte) bool
+
+// validString reports whether s is UTF-8 throughout. The runtime
+// provides it.
 func validString(s ref string) bool
+
+// count returns the number of runes in p. The runtime provides it.
 func count(p ref []byte) int
+
+// countString returns the number of runes in s. The runtime provides
+// it.
 func countString(s ref string) int
+
+// full reports whether p begins with a whole rune. The runtime
+// provides it.
 func full(p ref []byte) bool
+
+// fullString reports whether s begins with a whole rune. The runtime
+// provides it.
 func fullString(s ref string) bool
+
+// decodeLast reads the rune that ends p into r and returns its width.
+// The runtime provides it.
 func decodeLast(p ref []byte, r mut rune) int
+
+// decodeLastString reads the rune that ends s into r and returns its
+// width. The runtime provides it.
 func decodeLastString(s ref string, r mut rune) int

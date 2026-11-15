@@ -6,20 +6,10 @@ package net_test
 
 import ("bufio"; "expect"; "io"; "net"; "strconv"; "testing"; "time")
 
-// serve answers one connection line by line, in upper case, until the
-// client closes its side, and reports how many lines it saw.
-func serve(l net.Listener, done chan<- int) {
-	conn := l.Accept().Expect("accept")
-	lines := 0
-	r := bufio.NewReader(mut conn)
-	for {
-		line := r.ReadString('\n').Expect("read") ?? break
-		r.Get().WriteString(ref line.ToUpper()).Expect("write")
-		lines += 1
-	}
-
-	done <- lines
-}
+// The tasks TestLookupTimeouts races dials with, and the dials each
+// makes.
+const racers = 8
+const dialsPerRacer = 100
 
 func TestEcho() {
 	l := expect.IsOk(net.Listen("127.0.0.1", 0))
@@ -53,28 +43,6 @@ func TestListenerDeadline() {
 	l := expect.IsOk(net.Listen("127.0.0.1", 0))
 	expect.IsOk(l.SetDeadline(time.Now().Add(time.Duration(20) * time.Millisecond)))
 	expect.IsErr(l.Accept())
-}
-
-// needIPv6 skips a test on a system with no IPv6 loopback, as Go's
-// tests skip one.
-func needIPv6() {
-	if net.Listen("::1", 0).IsErr() {
-		testing.Skip("no IPv6 loopback")
-	}
-}
-
-// needNameServer skips a test when the system's resolver reaches no
-// name server: a name under .invalid then fails for that, "Temporary
-// failure in name resolution", and not for having no address.
-func needNameServer() {
-	match net.LookupHost("nosuch.invalid") {
-		Ok(_) => {},
-		Err(e) => {
-			if e.Kind() != io.NotExist {
-				testing.Skip("no name server: " + e.Error())
-			}
-		},
-	}
 }
 
 func TestIPv6() {
@@ -139,6 +107,64 @@ func TestDialName() {
 	expect.Equal(ref expect.IsErr(net.Dial("localhost", 1)).Error(), ref ("dial tcp " + at + ": connect: connection refused")) // the first address's failure, of all it tried
 }
 
+func TestLookupTimeouts() {
+	l := expect.IsOk(net.Listen("localhost", 0))
+	port := l.Port()
+	spawn accepting(l)
+	done := make(chan bool)
+	for i := 0; i < racers; i++ {
+		spawn race(port, dialsPerRacer, done.Clone())
+	}
+
+	for i := 0; i < racers; i++ {
+		expect.True(<-done ?? false)
+	}
+}
+
+func BenchmarkDial() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	port := l.Port()
+	spawn func(l net.Listener) { for { _ = l.Accept() } }(l)
+	testing.ResetTimer()
+	for testing.Loop() { _ = net.Dial("127.0.0.1", port) }
+}
+
+// serve answers one connection line by line, in upper case, until the
+// client closes its side, and reports how many lines it saw.
+func serve(l net.Listener, done chan<- int) {
+	conn := l.Accept().Expect("accept")
+	lines := 0
+	r := bufio.NewReader(mut conn)
+	for {
+		line := r.ReadString('\n').Expect("read") ?? break
+		r.Get().WriteString(ref line.ToUpper()).Expect("write")
+		lines += 1
+	}
+
+	done <- lines
+}
+
+// needIPv6 skips a test on a system with no IPv6 loopback.
+func needIPv6() {
+	if net.Listen("::1", 0).IsErr() {
+		testing.Skip("no IPv6 loopback")
+	}
+}
+
+// needNameServer skips a test when the system's resolver reaches no
+// name server: a name under .invalid then fails for that, "Temporary
+// failure in name resolution", and not for having no address.
+func needNameServer() {
+	match net.LookupHost("nosuch.invalid") {
+		Ok(_) => {},
+		Err(e) => {
+			if e.Kind() != io.NotExist {
+				testing.Skip("no name server: " + e.Error())
+			}
+		},
+	}
+}
+
 // accepting takes every connection l is dialed with and drops it.
 func accepting(l net.Listener) {
 	for {
@@ -161,26 +187,4 @@ func race(port int, n int, done chan<- bool) {
 	}
 
 	done <- ok
-}
-
-func TestLookupTimeouts() {
-	l := expect.IsOk(net.Listen("localhost", 0))
-	port := l.Port()
-	spawn accepting(l)
-	done := make(chan bool)
-	for i := 0; i < 8; i++ {
-		spawn race(port, 100, done.Clone())
-	}
-
-	for i := 0; i < 8; i++ {
-		expect.True(<-done ?? false)
-	}
-}
-
-func BenchmarkDial() {
-	l := expect.IsOk(net.Listen("127.0.0.1", 0))
-	port := l.Port()
-	spawn func(l net.Listener) { for { _ = l.Accept() } }(l)
-	testing.ResetTimer()
-	for testing.Loop() { _ = net.Dial("127.0.0.1", port) }
 }

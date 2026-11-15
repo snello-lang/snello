@@ -55,15 +55,27 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 		saved = append(saved, x)
 	}
 
-	for _, a := range call.Args {
-		save(a)
+	lent := lower.DeferredLent(e.info, call)
+	var vars []*types.Var // the variables arguments are lent from, reached through their addresses when the call runs
+	for i, a := range call.Args {
+		if i >= len(lent) || lent[i] == nil {
+			save(a)
+			continue
+		}
+
+		if v := lent[i]; !slices.Contains(vars, v) {
+			field := "v" + strconv.Itoa(len(vars))
+			put(&fields, "\t", e.cType(e.sub(v.Type()), a.Pos()), " *", field, ";\n")
+			e.line(rec + "." + field + " = &" + e.rawPlace(lentPlace(a)) + ";")
+			vars = append(vars, v)
+		}
 	}
 
 	var recv *types.Var // a receiver lent, reached through its address
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr: // a method: its receiver, by value or by address
 		switch {
-		case e.packageOf(fun.X) != nil:
+		case e.packageOf(fun.X) != nil, lower.TypeFunc(e.info, fun): // a function of a package or of a type: no receiver to save
 		case !e.lentReceiver(fun):
 			save(fun.X)
 		default:
@@ -86,7 +98,7 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 
 	put(&e.types, typ, " {\n\tbool on;\n", fields.String(), "};\n\n")
 	put(&e.protos, "static void ", thunk, "(void *sn_p);\n")
-	e.thunk(thunk, typ, call, saved, recv)
+	e.thunk(thunk, typ, call, saved, recv, vars)
 	e.line(rec + ".on = true;")
 	e.line("sn_guard(&" + rec + ", " + thunk + ");")
 	e.seq++
@@ -95,14 +107,19 @@ func (e *Emitter) deferStmt(s *ast.DeferStmt) {
 
 // thunk writes the function that makes the deferred call from its
 // record: the saved values read from the record's fields, a lent
-// receiver through its address, and the call's own temporaries
-// dropped with it. The function being written is kept.
-func (e *Emitter) thunk(name, typ string, call *ast.CallExpr, saved []ast.Expr, recv *types.Var) {
+// receiver and the variables lent to the call through their addresses,
+// and the call's own temporaries dropped with it. The function being
+// written is kept.
+func (e *Emitter) thunk(name, typ string, call *ast.CallExpr, saved []ast.Expr, recv *types.Var, vars []*types.Var) {
 	outerBody, outerPrologue, outerFrames, outerTemps, outerCaptured := e.body, e.prologue, e.frames, e.temps, e.captured
 	e.body, e.prologue, e.frames, e.temps = bytes.Buffer{}, nil, nil, nil
-	e.captured = make(map[*types.Var]string, 1) // the function's own variables are out of reach here, and the call names none but the receiver
+	e.captured = make(map[*types.Var]string, len(vars)+1) // the function's own variables are out of reach here, and the call names none but the receiver and the variables it borrows
 	if recv != nil {
 		e.captured[recv] = "(*sn_d->r)"
+	}
+
+	for i, v := range vars {
+		e.captured[v] = "(*sn_d->v" + strconv.Itoa(i) + ")"
 	}
 
 	for i, x := range saved {
@@ -187,3 +204,13 @@ func (e *Emitter) lentReceiver(sel *ast.SelectorExpr) bool {
 
 // The predeclared methods that take their receiver by value.
 var consuming = map[string]bool{"Expect": true, "Unwrap": true, "UnwrapOr": true, "Map": true, "MapErr": true}
+
+// lentPlace is the place an argument lends, the variable after a ref
+// written before it, ref s, or the argument itself.
+func lentPlace(a ast.Expr) ast.Expr {
+	if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.REF {
+		return u.X
+	}
+
+	return a
+}

@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package arena holds values of one type in numbered slots and hands out
-// an Index to each, so that a tree, a graph or a linked list is written
-// as indices into one arena instead of pointers between its parts. The
-// arena owns every value; the structure's links are indices, which are
-// plain numbers and so are Copy, can be stored anywhere, and give the
-// ownership rules nothing to check.
+// Package arena holds values of one type in numbered slots and hands
+// out an Index to each, so that a tree, a graph or a linked list is
+// written as indices into one arena instead of pointers between its
+// parts. The arena owns every value; the structure's links are indices,
+// which are plain numbers and so are Copy, can be stored anywhere, and
+// give the ownership rules nothing to check.
 //
 // An Index can go stale: the value it named was removed, and its slot
 // may hold another value by now. Every slot carries a generation, which
@@ -20,16 +20,32 @@ package arena
 
 import "fmt"
 
-// An Index names a value in an Arena of T: the slot and the generation
-// the value was put there with. It is Copy, Eq and Hash, so it is
-// stored in a struct, a slice or a map, and passed around as a number
-// is. An Index into an Arena of one type is not an Index into an Arena
-// of another; it is not checked against the Arena it came from, so used
-// in another Arena of the same type it may name an unrelated value.
-// The zero Index, var i Index<T>, names nothing.
+// firstGeneration is the generation of a slot's first value; each time
+// the slot is emptied its generation goes up by one, so that no Index
+// issued before matches it again. The zero Index, on generation 0,
+// matches no slot.
+const firstGeneration = 1
+
+// How String writes an Arena: its values between the opening and the
+// closing text, separated by one space, arena[a b c].
+const stringOpen = "arena["
+const stringClose = "]"
+const stringSeparator = " "
+
+// An Index names a value in an Arena of T: the slot the value is in
+// and the generation it was put there with. It is Copy, Eq and Hash, so
+// it is stored in a struct, a slice or a map, and passed around as a
+// number is, with no borrow of the Arena. An Index into an Arena of one
+// type is not an Index into an Arena of another; it is not checked
+// against the Arena it came from, so used in another Arena of the same
+// type it may name an unrelated value. The zero Index, var i Index<T>,
+// names nothing: every lookup with it answers None.
+//
+//	i := a.Insert(node)
+//	parent.children.Push(i) // an Index, stored where a pointer would be
 struct Index<T> impl Copy, Eq, Hash {
-	slot int
-	gen  int
+	slot       int
+	generation int
 }
 
 // An Arena owns values of T in slots that are reused: Insert puts a
@@ -38,44 +54,72 @@ struct Index<T> impl Copy, Eq, Hash {
 // bound. Get and GetMut lend a value for as long as the Arena is lent;
 // the borrow cannot be stored, but the Index can. An Arena is moved,
 // or lent with ref and mut; when it goes out of scope, every value
-// still in it is dropped.
+// still in it is dropped. Its zero value, var a Arena<T>, is an empty
+// Arena, as New's is.
+//
+//	a := arena.New<string>()
+//	i := a.Insert("one".Clone())
+//	v := a.Get(i) ?? return // a ref to "one"
 struct Arena<T> impl fmt.Stringer {
 	slots []slot<T>
 	free  []int
 	count int
 }
 
-// A slot holds a value, or nothing when it is free, and the generation
-// it is on: 1 for its first value, one more each time it is emptied.
-struct slot<T> {
-	value T?
-	gen   int
+// An Iter walks an Arena's values in the order of their slots, from
+// Arena.Iter. It holds a ref borrow of the Arena, so the Arena is not
+// changed while the walk lives.
+struct Iter<T> {
+	arena ref Arena<T>
+	next  int
 }
 
-// New returns an empty Arena. The type is given when nothing infers
-// it: arena.New<Node>().
+// A slot holds a value, or nothing when it is free, and the generation
+// it is on: firstGeneration for its first value, one more each time it
+// is emptied.
+struct slot<T> {
+	value      T?
+	generation int
+}
+
+// New returns an empty Arena of T, which allocates nothing until the
+// first Insert. The type is given when nothing infers it.
+//
+//	a := arena.New<Node>()
 func New<T>() Arena<T> {
 	return Arena<T>{}
 }
 
-// Insert puts v in the Arena, which owns it from then on, and returns
-// its Index. A slot emptied by Remove is reused before the Arena grows.
+// Insert puts v in the Arena and returns the Index that names it. The
+// Arena takes v, owned, and keeps it until Remove returns it or the
+// Arena is dropped. A slot emptied by Remove is reused, on its next
+// generation, before the Arena grows; growing may allocate, as a
+// slice's Push does. It costs O(1), amortized.
+//
+//	i := a.Insert(Node{name: "root".Clone()})
 func (a mut Arena<T>) Insert(v T) Index<T> {
 	a.count++
 	if n := a.free.Pop() {
 		a.slots[n].value = Some(v)
-		return Index<T>{slot: n, gen: a.slots[n].gen}
+		return Index<T>{slot: n, generation: a.slots[n].generation}
 	}
 
-	a.slots.Push(slot<T>{value: Some(v), gen: 1})
-	return Index<T>{slot: len(a.slots) - 1, gen: 1}
+	a.slots.Push(slot<T>{value: Some(v), generation: firstGeneration})
+	return Index<T>{slot: len(a.slots) - 1, generation: firstGeneration}
 }
 
-// Get lends the value i names, or None when i is stale: its value was
-// removed, whether or not the slot holds another by now. The borrow
-// lasts as long as the Arena's.
+// Get lends the value i names, for reading, or returns None when i is
+// stale: its value was removed, whether or not the slot holds another
+// by now, or i is the zero Index or one of another Arena that names no
+// slot here. The borrow lasts as long as the Arena's ref borrow, so the
+// Arena is not changed while it lives. It costs O(1) and copies
+// nothing.
+//
+//	if v := a.Get(i) {
+//		fmt.Println(v)
+//	}
 func (a ref Arena<T>) Get(i Index<T>) ref T? {
-	if !a.live(i) {
+	if !a.isLive(i) {
 		return None
 	}
 
@@ -85,12 +129,16 @@ func (a ref Arena<T>) Get(i Index<T>) ref T? {
 	}
 }
 
-// GetMut lends the value i names for changing, or None when i is
-// stale. The Arena is lent mut for as long as the borrow lasts, so two
-// values of one Arena are not changed through two borrows at once;
-// read the one, then change the other.
+// GetMut lends the value i names for changing, or returns None when i
+// is stale, as Get does. The Arena is lent mut for as long as the
+// borrow lasts, so two values of one Arena are not changed through two
+// borrows at once: read the one, then change the other. It costs O(1).
+//
+//	if v := a.GetMut(i) {
+//		*v += 1
+//	}
 func (a mut Arena<T>) GetMut(i Index<T>) mut T? {
-	if !a.live(i) {
+	if !a.isLive(i) {
 		return None
 	}
 
@@ -100,75 +148,79 @@ func (a mut Arena<T>) GetMut(i Index<T>) mut T? {
 	}
 }
 
-// Remove moves the value i names out of the Arena and returns it, or
-// None when i is stale. The slot's generation goes up, so i and every
+// Remove moves the value i names out of the Arena and returns it, owned
+// by the caller from then on, or returns None when i is stale, leaving
+// the Arena as it was. The slot's generation goes up, so i and every
 // copy of it are stale from then on, and the slot is free for the next
-// Insert.
+// Insert. It costs O(1), amortized.
+//
+//	v := a.Remove(i) ?? return
 func (a mut Arena<T>) Remove(i Index<T>) T? {
-	if !a.live(i) {
+	if !a.isLive(i) {
 		return None
 	}
 
 	v := take(mut a.slots[i.slot].value) ?? return None // a live slot holds its value
-	a.slots[i.slot].gen++
+	a.slots[i.slot].generation++
 	a.free.Push(i.slot)
 	a.count--
 	return Some(v)
 }
 
 // Iter returns a walk over the values in the order of their slots,
-// lending each with the Index that names it for as long as the Arena
-// is lent: for i, v := range a.Iter(). The Arena is lent for the walk,
-// so nothing is inserted or removed meanwhile.
+// which gives each value lent for reading with the Index that names it.
+// The walk holds a ref borrow of the Arena for as long as it lives, so
+// nothing is inserted or removed meanwhile; it allocates nothing, and a
+// whole walk costs O(n) in the number of slots, free ones included.
+//
+//	for i, v := range a.Iter() {
+//		fmt.Println(i, v)
+//	}
 func (a ref Arena<T>) Iter() Iter<T> {
-	return Iter<T>{a: a, slot: 0}
+	return Iter<T>{arena: a, next: 0}
 }
 
-// An Iter walks an Arena's values in the order of their slots.
-struct Iter<T> {
-	a    ref Arena<T>
-	slot int
+// Len returns how many values the Arena holds, not counting free
+// slots, in O(1).
+func (a ref Arena<T>) Len() int {
+	return a.count
 }
 
-// Next returns the next value with its Index, or None once the walk is
-// over.
-func (it mut Iter<T>) Next() (Index<T>, ref T)? {
-	for it.slot < len(it.a.slots) {
-		i := it.slot
-		it.slot++
-		s := ref it.a.slots[i]
+// String returns the values the Arena holds, in the order of their
+// slots, written as fmt writes each, between arena[ and ], separated by
+// a space: arena[a b c]. It is how fmt prints an Arena, its free slots
+// and generations left out. It allocates the string it returns.
+func (a ref Arena<T>) String() string {
+	out := stringOpen
+	sep := ""
+	for _, s := range a.slots {
 		if v := ref s.value {
-			return Some((Index<T>{slot: i, gen: s.gen}, v))
+			out = out + sep + fmt.Sprint(v)
+			sep = stringSeparator
+		}
+	}
+
+	return out + stringClose
+}
+
+// Next returns the next value, lent for reading for as long as the
+// Arena is, with the Index that names it, or None once the walk is
+// over. It passes over free slots.
+func (it mut Iter<T>) Next() (Index<T>, ref T)? {
+	for it.next < len(it.arena.slots) {
+		i := it.next
+		it.next++
+		s := ref it.arena.slots[i]
+		if v := ref s.value {
+			return Some((Index<T>{slot: i, generation: s.generation}, v))
 		}
 	}
 
 	return None
 }
 
-// Len returns how many values the Arena holds, not counting free
-// slots.
-func (a ref Arena<T>) Len() int {
-	return a.count
-}
-
-// String returns the values the Arena holds, in the order of their
-// slots, written as a slice of them is printed: arena[a b c]. It is how
-// fmt prints an Arena, its free slots and generations left out.
-func (a ref Arena<T>) String() string {
-	out := "arena["
-	sep := ""
-	for _, s := range a.slots {
-		if v := ref s.value {
-			out = out + sep + fmt.Sprint(v)
-			sep = " "
-		}
-	}
-
-	return out + "]"
-}
-
-// live reports whether i names a value in the Arena: a slot that
+// isLive reports whether i names a value in the Arena: a slot that
 // exists, on the generation i was issued with.
-func (a ref Arena<T>) live(i Index<T>) bool {
-	return i.slot >= 0 && i.slot < len(a.slots) && a.slots[i.slot].gen == i.gen
+func (a ref Arena<T>) isLive(i Index<T>) bool {
+	return i.slot >= 0 && i.slot < len(a.slots) && a.slots[i.slot].generation == i.generation
 }

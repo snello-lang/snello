@@ -1,0 +1,31 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An enum is Eq and Hash from its variants without listing them, so a
+// generic function bounded by Eq or Hash takes one, and calls its Eq
+// and Hash, which compare and hash its parts: a variant without fields,
+// and one holding an int or a string.
+
+package main
+
+import ("fmt"; "strings")
+
+enum Light { Red; Green }
+
+enum Shape { Round(int); Named(string) }
+
+func same<T: Eq>(a ref T, b ref T) bool {
+	return a.Eq(b)
+}
+
+func sameHash<T: Hash>(a ref T, b ref T) bool {
+	return a.Hash() == b.Hash()
+}
+
+func main() {
+	fmt.Println(same(ref Red, ref Red), same(ref Red, ref Green))
+	fmt.Println(same(ref Round(1), ref Round(1)), same(ref Round(1), ref Round(2)), same(ref Round(1), ref Named("a".Clone())))
+	fmt.Println(same(ref Named("x".Clone()), ref Named(strings.ToLower("X"))), same(ref Named("x".Clone()), ref Named("y".Clone())))
+	fmt.Println(sameHash(ref Green, ref Green), sameHash(ref Named("k".Clone()), ref Named(strings.ToLower("K"))))
+}

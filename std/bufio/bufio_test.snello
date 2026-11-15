@@ -4,8 +4,36 @@
 
 package bufio_test
 
-import ("bufio"; "expect"; "io"; "os"; "strings"; "testing")
+import ("bufio"; "expect"; "io"; "os"; "strings"; "testing"; "unicode/utf8")
 
+// The bytes the tests end their lines and records with.
+const newline byte = '\n'
+const comma byte = ','
+
+// eAcuteSecondByte is the second byte of é in UTF-8, C3 A9.
+const eAcuteSecondByte byte = 0xa9
+
+// bufferSize is the size of a Reader's buffer, and pastBuffer a read
+// longer than it, which goes straight into the caller's slice.
+const bufferSize = 4096
+const pastBuffer = 5000
+
+// digits is ten bytes the tests repeat into a long input.
+const digits = "0123456789"
+
+// The lengths of the long inputs: a line longer than a Reader's buffer,
+// a word past a Scanner's limit, a run of white space far longer than
+// its buffer, and the lines a benchmark scans.
+const longLine = 10000
+const pastTokenLimit = 70000
+const manySpaces = 200000
+const benchLines = 1000
+
+// moreThanLeft is a Peek of more bytes than the input has left.
+const moreThanLeft = 100
+
+// TestWriter writes through a small buffer, flushes it, and writes to
+// the file under it through Get.
 func TestWriter() {
 	dir := testing.TempDir()
 	path := dir.Join("out.txt")
@@ -14,8 +42,8 @@ func TestWriter() {
 	expect.Equal(ref w.Available(), ref 8)
 	expect.Equal(ref expect.IsOk(w.WriteString("abc")), ref 3)
 	expect.Equal(ref w.Buffered(), ref 3)
-	expect.IsOk(w.WriteByte(byte(100)))
-	expect.Equal(ref expect.IsOk(w.Write(ref []byte{101, 102, 103, 104, 105, 106})), ref 6)
+	expect.IsOk(w.WriteByte(byte('d')))
+	expect.Equal(ref expect.IsOk(w.Write(ref []byte("efghij"))), ref 6)
 	expect.IsOk(w.Flush())
 	expect.Equal(ref w.Buffered(), ref 0)
 	expect.IsOk(w.Get().WriteString("!"))
@@ -24,19 +52,21 @@ func TestWriter() {
 	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "abcdefghij!")
 }
 
+// TestReader reads a file by bytes, lines and a slice, to its end, and
+// reaches the file under it through Get.
 func TestReader() {
 	dir := testing.TempDir()
 	path := dir.Join("in.txt")
 	expect.IsOk(os.WriteString(ref path, "one\ntwo\nthree"))
 	f := expect.IsOk(os.Open(ref path))
 	r := bufio.NewReader(mut f)
-	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadByte())), ref byte(111))
-	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "ne\n")
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadByte())), ref byte('o'))
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(newline))), "ne\n")
 	buf := make([]byte, 3)
 	expect.Equal(ref expect.IsOk(r.Read(mut buf)), ref 3)
-	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "\n")
-	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(byte(10)))), "three")
-	expect.IsNone(expect.IsOk(r.ReadString(byte(10))))
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(newline))), "\n")
+	expect.Equal(ref expect.IsSome(expect.IsOk(r.ReadString(newline))), "three")
+	expect.IsNone(expect.IsOk(r.ReadString(newline)))
 	expect.IsNone(expect.IsOk(r.ReadByte()))
 	expect.Equal(r.Get().Name(), ref path)
 }
@@ -48,6 +78,7 @@ struct Trickle impl io.Reader {
 	at   int
 }
 
+// Read hands out the next byte into buf, and 0 at the end of the data.
 func (t mut Trickle) Read(buf mut []byte) Result<int, io.Error> {
 	if t.at == len(t.data) || len(buf) == 0 {
 		return Ok(0)
@@ -58,10 +89,12 @@ func (t mut Trickle) Read(buf mut []byte) Result<int, io.Error> {
 	return Ok(1)
 }
 
+// TestReadRune reads runes of every width, each split across reads,
+// and a byte that starts no rune as U+FFFD.
 func TestReadRune() {
 	var t = Trickle{data: []byte("aé世\xff😀"), at: 0}
 	rd := bufio.NewReader(mut t)
-	runes := []rune{'a', 'é', '世', '\uFFFD', 0x1F600} // a byte that starts no sequence is U+FFFD
+	runes := []rune{'a', 'é', '世', utf8.RuneError, '😀'} // a byte that starts no sequence is U+FFFD
 	widths := []int{1, 2, 3, 1, 4}
 	for i, want := range ref runes {
 		r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
@@ -72,13 +105,13 @@ func TestReadRune() {
 	expect.IsNone(expect.IsOk(rd.ReadRune()))
 }
 
-// A sequence that is already no rune's start returns at once, and
-// UnreadRune puts back the rune just read.
+// TestUnreadRune reads a sequence that is already no rune's start at
+// once, and puts back the rune just read with UnreadRune.
 func TestUnreadRune() {
 	var t = Trickle{data: []byte("\xe2Aé"), at: 0}
 	rd := bufio.NewReader(mut t)
 	r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
-	expect.Equal(ref r, ref '\uFFFD') // E2 then A: invalid without a third byte
+	expect.Equal(ref r, ref utf8.RuneError) // E2 then A: invalid without a third byte
 	expect.Equal(ref n, ref 1)
 	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
 	expect.Equal(ref r, ref 'A')
@@ -94,20 +127,22 @@ func TestUnreadRune() {
 	expect.False(rd.UnreadRune()) // after another read
 }
 
-// A rune cut short by the end of the input reads as U+FFFD a byte at a
-// time.
+// TestReadRuneCut reads a rune cut short by the end of the input as
+// U+FFFD, a byte at a time.
 func TestReadRuneCut() {
 	var t = Trickle{data: []byte("\xe4\xb8"), at: 0}
 	rd := bufio.NewReader(mut t)
 	r, n := expect.IsSome(expect.IsOk(rd.ReadRune()))
-	expect.Equal(ref r, ref '\uFFFD')
+	expect.Equal(ref r, ref utf8.RuneError)
 	expect.Equal(ref n, ref 1)
 	r, n = expect.IsSome(expect.IsOk(rd.ReadRune()))
-	expect.Equal(ref r, ref '\uFFFD')
+	expect.Equal(ref r, ref utf8.RuneError)
 	expect.Equal(ref n, ref 1)
 	expect.IsNone(expect.IsOk(rd.ReadRune()))
 }
 
+// TestScanner reads a file line by line, an empty line and a last line
+// without a newline included.
 func TestScanner() {
 	dir := testing.TempDir()
 	path := dir.Join("lines.txt")
@@ -119,6 +154,7 @@ func TestScanner() {
 	for s.Scan() {
 		lines.Push(s.Text())
 	}
+
 	expect.EqualSlice(ref lines, ref []string{"alpha".Clone(), "beta".Clone(), "".Clone(), "gamma".Clone()})
 	expect.True(s.Err().IsNone())
 	expect.Equal(ref len(s.Bytes()), ref 0)
@@ -133,42 +169,48 @@ func peeked(r Result<ref []byte, io.Error>) string {
 	}
 }
 
+// TestPeek lends bytes without reading past them, fewer at the end of
+// the input, and refuses a negative count and one past the buffer.
 func TestPeek() {
 	var t = Trickle{data: []byte("hello\nworld"), at: 0}
 	rd := bufio.NewReader(mut t)
 	expect.Equal(ref peeked(rd.Peek(3)), "hel") // read a byte at a time until three are there
 	expect.Equal(ref peeked(rd.Peek(0)), "")
 	expect.Equal(ref peeked(rd.Peek(-1)), "error: bufio: negative count")
-	expect.Equal(ref peeked(rd.Peek(4097)), "error: bufio: buffer full")
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadString(byte(10)))), "hello\n") // a peek reads nothing
-	expect.Equal(ref peeked(rd.Peek(100)), "world")                               // fewer at the end of the input
-	expect.IsOk(rd.ReadString(byte(10)))
+	expect.Equal(ref peeked(rd.Peek(bufferSize + 1)), "error: bufio: buffer full")
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadString(newline))), "hello\n") // a peek reads nothing
+	expect.Equal(ref peeked(rd.Peek(moreThanLeft)), "world")                        // fewer at the end of the input
+	expect.IsOk(rd.ReadString(newline))
 	expect.Equal(ref peeked(rd.Peek(3)), "")
 	expect.False(rd.UnreadByte()) // a peek is no read
 }
 
+// TestReadBytes reads records up to a delimiter, and a line longer than
+// the buffer whole.
 func TestReadBytes() {
 	var t = Trickle{data: []byte("ab,cd,"), at: 0}
 	rd := bufio.NewReader(mut t)
-	expect.True(expect.IsSome(expect.IsOk(rd.ReadBytes(byte(44)))).Equal(ref []byte("ab,")))
-	expect.True(expect.IsSome(expect.IsOk(rd.ReadBytes(byte(44)))).Equal(ref []byte("cd,")))
-	expect.IsNone(expect.IsOk(rd.ReadBytes(byte(44))))
-	long := strings.Repeat("x", 10000) ?? "" // longer than the buffer, set aside in pieces
+	expect.True(expect.IsSome(expect.IsOk(rd.ReadBytes(comma))).Equal(ref []byte("ab,")))
+	expect.True(expect.IsSome(expect.IsOk(rd.ReadBytes(comma))).Equal(ref []byte("cd,")))
+	expect.IsNone(expect.IsOk(rd.ReadBytes(comma)))
+	long := strings.Repeat("x", longLine) ?? "" // longer than the buffer, set aside in pieces
 	in := strings.NewReader(long + "\ntail")
 	lr := bufio.NewReader(mut in)
-	expect.Equal(ref len(expect.IsSome(expect.IsOk(lr.ReadBytes(byte(10))))), ref 10001)
-	expect.True(expect.IsSome(expect.IsOk(lr.ReadBytes(byte(10)))).Equal(ref []byte("tail")))
-	expect.IsNone(expect.IsOk(lr.ReadBytes(byte(10))))
+	expect.Equal(ref len(expect.IsSome(expect.IsOk(lr.ReadBytes(newline)))), ref (longLine + 1))
+	expect.True(expect.IsSome(expect.IsOk(lr.ReadBytes(newline))).Equal(ref []byte("tail")))
+	expect.IsNone(expect.IsOk(lr.ReadBytes(newline)))
 }
 
+// TestUnreadByte puts back the last byte after every kind of read, at
+// the end of the input too, and refuses after a Peek or twice in a row.
 func TestUnreadByte() {
 	in := strings.NewReader("abc\ndef".Clone())
 	rd := bufio.NewReader(mut in)
 	expect.False(rd.UnreadByte()) // nothing read yet
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(97))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('a'))
 	expect.True(rd.UnreadByte())
 	expect.False(rd.UnreadByte()) // once a read
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadString(byte(10)))), "abc\n")
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadString(newline))), "abc\n")
 	expect.True(rd.UnreadByte()) // the newline, the last byte the line read
 	buf := make([]byte, 2)
 	expect.Equal(ref expect.IsOk(rd.Read(mut buf)), ref 2)
@@ -179,23 +221,23 @@ func TestUnreadByte() {
 	expect.Equal(ref n, ref 1)
 	expect.True(rd.UnreadByte())
 	expect.False(rd.UnreadRune()) // an UnreadByte is no ReadRune
-	big := make([]byte, 5000)
+	big := make([]byte, pastBuffer)
 	expect.Equal(ref expect.IsOk(rd.Read(mut big)), ref 3) // read straight into the caller's buffer
 	expect.True(rd.UnreadByte())
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(102))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('f'))
 	expect.IsNone(expect.IsOk(rd.ReadByte()))
 	expect.Equal(ref expect.IsOk(rd.Read(mut buf)), ref 0)
-	expect.IsNone(expect.IsOk(rd.ReadBytes(byte(10))))
+	expect.IsNone(expect.IsOk(rd.ReadBytes(newline)))
 	expect.IsNone(expect.IsOk(rd.ReadRune()))
-	expect.True(rd.UnreadByte()) // reads that gave nothing at the end leave the f the last byte read
+	expect.True(rd.UnreadByte()) // reads that gave nothing at the end leave f the last byte read
 	expect.Equal(ref peeked(rd.Peek(-1)), "error: bufio: negative count")
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(102)) // a refused Peek changed nothing
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('f')) // a refused Peek changed nothing
 	expect.Equal(ref peeked(rd.Peek(0)), "")
 	expect.False(rd.UnreadByte()) // a Peek ends it
 }
 
-// UnreadRune puts a rune back only straight after the ReadRune that
-// read it: any call between them ends that, even one that read
+// TestUnreadRuneAfter puts a rune back only straight after the ReadRune
+// that read it: any call between them ends that, even one that read
 // nothing, while the rune's last byte is still UnreadByte's.
 func TestUnreadRuneAfter() {
 	in := strings.NewReader("éab".Clone())
@@ -204,7 +246,7 @@ func TestUnreadRuneAfter() {
 	expect.Equal(ref peeked(rd.Peek(-1)), "error: bufio: negative count")
 	expect.False(rd.UnreadRune())
 	expect.True(rd.UnreadByte()) // a refused Peek left the last byte read
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(169))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref eAcuteSecondByte)
 	rd.UnreadByte()
 	rd.UnreadByte()
 	expect.IsSome(expect.IsOk(rd.ReadRune()))
@@ -214,30 +256,34 @@ func TestUnreadRuneAfter() {
 	one := make([]byte, 1)
 	expect.Equal(ref expect.IsOk(rd.Read(mut one)), ref 1)
 	expect.False(rd.UnreadRune())
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(98))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('b'))
 	expect.IsNone(expect.IsOk(rd.ReadByte()))
 	expect.False(rd.UnreadRune())
 	lines := strings.NewReader("éa\nb".Clone())
 	rl := bufio.NewReader(mut lines)
 	expect.IsSome(expect.IsOk(rl.ReadRune()))
-	expect.Equal(ref expect.IsSome(expect.IsOk(rl.ReadString(byte(10)))), "a\n")
+	expect.Equal(ref expect.IsSome(expect.IsOk(rl.ReadString(newline))), "a\n")
 	expect.False(rl.UnreadRune()) // a line read is a call
-	expect.Equal(ref expect.IsSome(expect.IsOk(rl.ReadByte())), ref byte(98))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rl.ReadByte())), ref byte('b'))
 }
 
-// A read at least as large as the buffer goes straight into the
-// caller's slice, and UnreadByte puts back its last byte all the same.
+// TestUnreadByteDirect reads at least as much as the buffer holds,
+// straight into the caller's slice, and puts back its last byte with
+// UnreadByte all the same.
 func TestUnreadByteDirect() {
-	long := strings.Repeat("0123456789", 500) ?? "" // 5000 bytes, past the buffer's 4096
+	long := strings.Repeat(digits, pastBuffer / len(digits)) ?? "" // 5000 bytes, past the buffer's 4096
 	in := strings.NewReader(long + "!")
 	rd := bufio.NewReader(mut in)
-	big := make([]byte, 5000)
-	expect.Equal(ref expect.IsOk(rd.Read(mut big)), ref 5000)
+	big := make([]byte, pastBuffer)
+	expect.Equal(ref expect.IsOk(rd.Read(mut big)), ref pastBuffer)
 	expect.True(rd.UnreadByte())
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(57)) // the 9 that ended the read
-	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte(33))
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('9')) // the 9 that ended the read
+	expect.Equal(ref expect.IsSome(expect.IsOk(rd.ReadByte())), ref byte('!'))
 }
 
+// TestWords splits text into words at white space of every kind, a
+// last word without space after it included, and ends the scan at a
+// word past the limit.
 func TestWords() {
 	var t = Trickle{data: []byte("  one two\tthree\u3000four\n\n five\xffsix  "), at: 0} // a rune cut across reads, and a byte that starts none
 	s := bufio.Words(mut t)
@@ -245,6 +291,7 @@ func TestWords() {
 	for s.Scan() {
 		words.Push(s.Text())
 	}
+
 	expect.EqualSlice(ref words, ref []string{"one".Clone(), "two".Clone(), "three".Clone(), "four".Clone(), "five\xffsix".Clone()})
 	expect.True(s.Err().IsNone())
 	in := strings.NewReader("tail".Clone())
@@ -256,21 +303,23 @@ func TestWords() {
 	blank := strings.NewReader("   \n\t ".Clone())
 	none := bufio.Words(mut blank)
 	expect.False(none.Scan())
-	long := strings.NewReader(strings.Repeat("y", 70000) ?? "")
+	long := strings.NewReader(strings.Repeat("y", pastTokenLimit) ?? "")
 	big := bufio.Words(mut long)
 	expect.False(big.Scan()) // a word past the limit ends the scan
 	match big.Err() {
 		Some(e) => expect.Equal(ref e.Error(), "bufio.Scanner: token too long"),
 		None => expect.Fail("the scan ended with no error"),
 	}
-	spaces := strings.NewReader((strings.Repeat(" ", 200000) ?? "") + "end")
+
+	spaces := strings.NewReader((strings.Repeat(" ", manySpaces) ?? "") + "end")
 	far := bufio.Words(mut spaces)
 	expect.True(far.Scan()) // white space never fills the buffer
 	expect.Equal(ref far.Text(), "end")
 }
 
+// BenchmarkWords measures splitting a thousand short lines into words.
 func BenchmarkWords() {
-	text := strings.Repeat("some words to split\n", 1000) ?? ""
+	text := strings.Repeat("some words to split\n", benchLines) ?? ""
 	testing.ResetTimer()
 	for testing.Loop() {
 		in := strings.NewReader(text.Clone())
@@ -279,6 +328,8 @@ func BenchmarkWords() {
 	}
 }
 
+// BenchmarkWriteString measures a short WriteString into a file's
+// buffer.
 func BenchmarkWriteString() {
 	dir := testing.TempDir()
 	f := expect.IsOk(os.Create(ref dir.Join("bench.txt")))

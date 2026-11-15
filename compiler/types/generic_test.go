@@ -102,6 +102,11 @@ func TestTypeCycles(t *testing.T) {
 		{"struct S<T> { s *S<S<T>>? }", []string{"S<T> refers to itself as S<S<T>>, whose arguments grow with each instance"}},
 		{"struct S<T> { v T; s (S<S<T>>)? }", []string{"S<T> refers to itself as S<S<T>>"}},
 		{"struct A<T> { b *B<T>? }\nstruct B<T> { a *A<B<T>>? }", []string{"B<T> refers to itself as A<B<T>>"}},
+		// A refused type has no instances: a literal, a variant or an instance written of it is the invalid type, reported once, where the type is declared.
+		{"struct G<T> { v T; next *G<[]T>? }\nfunc f() { g := G{v: 1, next: None}; print(g.v) }", []string{"G<T> refers to itself as G<[]T>, whose arguments grow with each instance"}},
+		{"enum N<T> { Flat(T); Deep(*N<[]T>) }\nfunc f() { x := Flat(1); print(1) }", []string{"N<T> refers to itself as N<[]T>, whose arguments grow with each instance"}},
+		{"struct G<T> { v T; next *G<[]T>? }\nfunc Id<T>(x T) T { return x }\nfunc use(g G<int>) int { return g.v }\nfunc f() { a := G<int>{v: 1, next: None}; b := Id(G{v: 1, next: None}); m := G<int>{(None): 1} }", []string{"G<T> refers to itself as G<[]T>"}},
+		{"enum N<T> { Flat(T); Deep(*N<[]T>) }\nfunc f(x N<int>) { match x { Flat(v) => print(v), Deep(_) => {} } }", []string{"N<T> refers to itself as N<[]T>"}},
 		{"struct R { v int; r R? }", []string{"invalid recursive type R: it contains itself; hold it through a pointer, *R"}},
 		{"struct S<T> { v T; s (S<T>)? }", []string{"invalid recursive type S: it contains itself"}},
 		{"struct Box<T> { v T }\nstruct W { b Box<W> }", []string{"invalid recursive type W: it contains itself"}},

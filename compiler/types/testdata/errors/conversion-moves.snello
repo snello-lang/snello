@@ -1,0 +1,34 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a conversion between a declared type and its underlying type
+// gives the value itself under the other name, so it moves a value
+// that is not Copy, as passing it by value does, and cannot take a
+// borrowed one, which would leave two owners to free it. Fix: use the
+// converted value, convert a clone, Name(s.Clone()), or take the
+// parameter by value.
+
+package p
+
+type Name string
+
+struct P { x int; s string }
+
+type P2 P
+
+func used(n Name) string {
+	s := string(n)
+	print(n)                           // ERROR "use of moved value n"
+	return s
+}
+
+func whole(p P) P2 {
+	q := P2(p)
+	print(p.s)                         // ERROR "use of moved value p"
+	return q
+}
+
+func borrowed(n ref Name) string {
+	return string(n)                   // ERROR "cannot convert ref Name to string: the conversion takes the value, and a borrow lends it"
+}

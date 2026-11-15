@@ -1,0 +1,51 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value whose type implements Drop keeps its fields until it
+// goes, since its Drop reads them then: no field moves out of it, by a
+// move, a return, or a pattern that binds a variant's part by value,
+// whether the value is the variable itself or a field of another. Fix:
+// clone the field, take it with replace(mut s.name, v), which leaves v
+// in its place, or bind through a borrow, match ref e.
+
+package p
+
+struct S impl Drop { name string; opt string? }
+
+func (s mut S) Drop() { print(s.name) }
+
+struct Outer { inner S }
+
+struct Deep { mid Outer }
+
+enum E impl Drop { A(name string); B }
+
+func (e mut E) Drop() {}
+
+func field(s S) string {
+	return s.name                      // ERROR "cannot move s.name out of s: S implements Drop"
+}
+
+func nested(o Outer) string {
+	return o.inner.name                // ERROR "cannot move o.inner.name out of o.inner: S implements Drop"
+}
+
+func deeper(d Deep) string {
+	return d.mid.inner.name            // ERROR "cannot move d.mid.inner.name out of d.mid.inner: S implements Drop"
+}
+
+func bound(s S) string? {
+	if x := s.opt {                    // ERROR "cannot move s.opt out of s: S implements Drop"
+		return Some(x)
+	}
+
+	return None
+}
+
+func variant(e E) string {
+	return match e {
+		A(n) => n,                     // ERROR "cannot bind n by value out of a value of E, which implements Drop"
+		B => "",
+	}
+}

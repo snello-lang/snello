@@ -39,21 +39,20 @@ func FormatText(info *Info, e ast.Expr) (string, bool) {
 // formatText reads the format e, a string literal or the constant obj
 // that e names.
 func formatText(e ast.Expr, obj Object) (string, bool) {
-	text := ""
 	if lit, ok := unparen(e).(*ast.BasicLit); ok {
 		if lit.Kind != token.STRING {
 			return "", false
 		}
 
-		text = lit.Value
-	} else if k, ok := obj.(*Const); ok && k.typ != nil && isString(k.typ) {
-		text = k.value
-	} else {
-		return "", false
+		s, err := strconv.Unquote(lit.Value)
+		return s, err == nil
 	}
 
-	s, err := strconv.Unquote(text)
-	return s, err == nil
+	if k, ok := obj.(*Const); ok && k.val.kind == ConstString {
+		return k.val.s, true
+	}
+
+	return "", false
 }
 
 // A FormatPiece is a run of text a format prints as it is, or a verb that

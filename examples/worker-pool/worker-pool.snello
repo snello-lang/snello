@@ -13,8 +13,14 @@ package pool
 
 import ("fmt"; "sync"; "time")
 
-struct Task { id int; payload []byte }
-struct Done { id int; size int }
+struct Task {
+	id      int
+	payload []byte
+}
+struct Done {
+	id   int
+	size int
+}
 
 // A cancellation token is a channel that gets closed. Closing it twice
 // panics, so a Once guards the close. sync types synchronize

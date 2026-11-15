@@ -5,6 +5,7 @@
 package c
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -223,8 +224,8 @@ func (e *Emitter) traitCall(x *ast.CallExpr, sel *ast.SelectorExpr, recvType typ
 	e.line(e.cType(recvType, x.Pos()) + " " + v + " = " + recv + ";")
 	v = deref(v, recvType)
 	call := v + ".tab->" + lower.Ident(sel.Sel.Name) + "(" + v + ".data"
-	if len(x.Args) > 0 {
-		call += ", " + e.args(nil, x.Args, sig)
+	if args := e.args(nil, x.Args, x.Ellipsis.IsValid(), sig); args != "" { // a variadic parameter takes a value even when no argument is written
+		call += ", " + args
 	}
 
 	return call + ")"
@@ -237,6 +238,14 @@ func (e *Emitter) traitCall(x *ast.CallExpr, sel *ast.SelectorExpr, recvType typ
 func field(v string, base types.Type, f *types.Var) string {
 	if _, ok := lower.ValueType(base).(*types.Trait); ok {
 		return "(*" + v + ".tab->" + fieldAccessor(f) + "(" + v + ".data))"
+	}
+
+	if en, ok := lower.ValueType(base).Underlying().(*types.Enum); ok { // a variant's field, v.[f] in the arm written for the variant
+		for i := range en.NumVariants() {
+			if j := slices.Index(en.Variant(i).Fields(), f); j >= 0 {
+				return v + "." + variantMember(en.Variant(i)) + "." + fieldName(f, j)
+			}
+		}
 	}
 
 	return v + "." + lower.Ident(f.Name())

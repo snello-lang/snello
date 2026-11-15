@@ -1,0 +1,82 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Constants the checker folds, which both backends write as values:
+// constants declared after the ones that use them; shifts, a mask of
+// an unsigned type, division and remainder of a negative number, &^,
+// an arithmetic shift right; floats rounded to f64 and to f32, and a
+// negative zero; a declared number type; conversions between number
+// types, from another package's constant; a character and a bool; a
+// string built with + and used as a format; a struct constant whose
+// fields are expressions; blank constants; local constants, a bool
+// among them, one only an array length uses and one a closure names,
+// and one in a generic function; array lengths that are constants. The
+// same arithmetic on variables at run time agrees.
+
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+type Celsius f64
+
+struct Limits { low int; high int; name string }
+
+const MB = KB * KB // KB is declared after it
+const KB = 1 << 10
+
+const Name = "snello"
+const Greeting = "hello, " + Name
+const Format = "%s: %d bytes\n"
+
+const Mask u8 = ^u8(0x0f)
+const Big u64 = 1 << 63
+const Neg = -7
+const Quot = Neg / 2
+const Rem = Neg % 2
+const Cleared = 0xff &^ 0x0f
+const Shifted = Neg >> 1
+
+const Ratio = 1.0 / 3.0
+const Third f32 = 1.0 / 3.0
+const NegZero = -0.0
+const Boiling Celsius = 100
+const Twice = f64(KB) * 2.5
+const Small = u8(Cleared)
+const Wide = i16(math.MaxInt8) + 1
+const Letter = 'a' + 1
+const Tall = KB > 1000 && Name != ""
+
+const Size = 3
+const Bounds = Limits{low: -Size, high: Size * 2, name: "range of " + Name}
+const _ = Size * 2 // checked, and written nowhere
+
+func scale<T>(x T) int {
+	const factor = 2
+	return factor * Size
+}
+
+func main() {
+	const local = KB + Size
+	const short = local < KB
+	const rows = 2
+	const _ = rows + 1
+	var cells [Size]int
+	var wide [2 * Size + 1]byte
+	var grid [rows * Size]int
+	grid[5] = 1
+	twice := func() int { return rows * 2 }
+	fmt.Println(KB, MB, local, len(cells), len(wide), short, grid[5], twice(), scale(1), scale("x"))
+	fmt.Println(Greeting)
+	fmt.Printf(Format, Name, MB)
+	fmt.Println(Mask, Big, Neg, Quot, Rem, Cleared, Shifted)
+	fmt.Println(Ratio, Third, NegZero, f64(Boiling), Twice, Small, Wide, Letter, Tall)
+	fmt.Println(Bounds.low, Bounds.high, Bounds.name)
+
+	k, n, two, one, three := 1, -7, 2, 1.0, 3.0
+	fmt.Println(k << 10 == KB, n / two == Quot, n % two == Rem, n >> 1 == Shifted)
+	fmt.Println(one / three == Ratio, f32(one) / f32(three) == Third, math.Signbit(NegZero))
+}

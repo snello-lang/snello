@@ -1166,6 +1166,13 @@ sn_string sn_strings_ownString(sn_slice_u8 b) {
     return (sn_string){b.ptr, b.len, b.cap};
 }
 
+// sn_encoding__json_textOf lends the bytes of b as a string, with no copy: a
+// view, of cap 0 as a literal is, which owns nothing.
+sn_string sn_encoding__json_textOf(sn_slice_u8 b) {
+    sn_check_slice((sn_slice *)&b);
+    return SN_STR(b.ptr, b.len);
+}
+
 // sn_strings_reserve makes room in b for n more bytes, growing it once
 // as a Push grows: the strings package's Builder.Grow. A room no int
 // can measure is a hint that cannot be taken, and changes nothing.

@@ -6,9 +6,11 @@ package path_test
 
 import ("expect"; "path"; "testing")
 
-// The cases are those of Go's own tests of its path package, so that
-// each function answers as Go's does.
+// The cases hold each function to its rules at their edges: the empty
+// path, the root, slashes in a row and at the end, and elements of one
+// and two dots.
 
+// Clean applies each of its rules, alone and together.
 func TestClean() {
 	expect.Equal(ref path.Clean(""), ".")
 	expect.Equal(ref path.Clean("abc"), "abc")
@@ -88,20 +90,25 @@ func TestCleanOfClean() {
 	expect.Equal(ref path.Clean("../../def"), "../../def")
 }
 
-func split(p ref string, dir ref string, file ref string) {
+// expectSplit checks that Split cuts p into dir and file.
+func expectSplit(p ref string, dir ref string, file ref string) {
 	d, f := path.Split(p)
 	expect.Equal(d, dir)
 	expect.Equal(f, file)
 }
 
+// Split cuts after the last slash, with an empty part where there is
+// nothing on its side.
 func TestSplit() {
-	split("a/b", "a/", "b")
-	split("a/b/", "a/b/", "")
-	split("a/", "a/", "")
-	split("a", "", "a")
-	split("/", "/", "")
+	expectSplit("a/b", "a/", "b")
+	expectSplit("a/b/", "a/b/", "")
+	expectSplit("a/", "a/", "")
+	expectSplit("a", "", "a")
+	expectSplit("/", "/", "")
 }
 
+// Join joins with one slash, leaves an empty path out, and cleans what
+// it joined.
 func TestJoin() {
 	expect.Equal(ref path.Join("a", "b"), "a/b")
 	expect.Equal(ref path.Join("a", ""), "a")
@@ -115,6 +122,8 @@ func TestJoin() {
 	expect.Equal(ref path.Join(ref path.Join("a", "b"), "c"), "a/b/c") // three, two at a time
 }
 
+// Ext gives what follows the last dot of the last element, and nothing
+// for a dot in a directory.
 func TestExt() {
 	expect.Equal(path.Ext("path.go"), ".go")
 	expect.Equal(path.Ext("path.pb.go"), ".go")
@@ -123,6 +132,7 @@ func TestExt() {
 	expect.Equal(path.Ext("a.dir/"), "")
 }
 
+// Base gives the last element, without the slashes that end the path.
 func TestBase() {
 	expect.Equal(path.Base(""), ".")
 	expect.Equal(path.Base("."), ".")
@@ -137,6 +147,7 @@ func TestBase() {
 	expect.Equal(path.Base("a/b/c.x"), "c.x")
 }
 
+// Dir gives all but the last element, cleaned.
 func TestDir() {
 	expect.Equal(ref path.Dir(""), ".")
 	expect.Equal(ref path.Dir("."), ".")
@@ -153,6 +164,7 @@ func TestDir() {
 	expect.Equal(ref path.Dir("a/b/c.x"), "a/b")
 }
 
+// IsAbs is true for a path that starts with a slash, and only for one.
 func TestIsAbs() {
 	expect.Equal(ref path.IsAbs(""), ref false)
 	expect.Equal(ref path.IsAbs("/"), ref true)
@@ -164,6 +176,8 @@ func TestIsAbs() {
 	expect.Equal(ref path.IsAbs("lala"), ref false)
 }
 
+// How long Clean takes for a path that is clean already, which it
+// copies.
 func BenchmarkClean() {
 	p := "/usr/local/lib/snello/std/path.snello"
 	n := 0
@@ -172,6 +186,7 @@ func BenchmarkClean() {
 	}
 }
 
+// How long Clean takes for a path each of its rules rewrites.
 func BenchmarkCleanRewritten() {
 	p := "/usr/local//lib/./snello/../snello/std/path.snello/"
 	n := 0
@@ -180,6 +195,7 @@ func BenchmarkCleanRewritten() {
 	}
 }
 
+// How long Join takes for two clean paths.
 func BenchmarkJoin() {
 	n := 0
 	for testing.Loop() {

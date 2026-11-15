@@ -1,0 +1,26 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: ... after the last argument passes a slice as a variadic
+// parameter, so it needs one: a function whose last parameter is
+// variadic, and the slice as the only argument after the fixed ones,
+// of the parameter's slice type, a []T for ...T, moved, or for ...ref
+// T, lent; an argument without it is one element. Fix: write the
+// elements out, or pass the slice alone, sum(xs...).
+
+package p
+
+func sum(xs ...int) int { return len(xs) }
+
+func one(x int) {}
+
+func f(xs []int, names []string, zs []int) {
+    one(xs...)                              // ERROR "cannot use ... in a call of one: it has no variadic parameter"
+    print(xs...)                            // ERROR "cannot use ... in a call of print: the built-in print takes its arguments one by one"
+    _ = Some(zs...)                         // ERROR "cannot use ... in a call of Some: Some is a variant, whose fields take one value each"
+    _ = []byte("a"...)                      // ERROR "cannot use ... in a call of []byte: a conversion takes one value"
+    _ = sum(1, xs...)                       // ERROR "wrong number of arguments: have 2 with ..., want 1: the slice alone"
+    _ = sum(names...)                       // ERROR "cannot use names ([]string) as []int in argument"
+    _ = sum(xs)                             // ERROR "cannot use xs ([]int) as int in argument"
+}

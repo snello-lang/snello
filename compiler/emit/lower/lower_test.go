@@ -5,6 +5,7 @@
 package lower
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -186,6 +187,167 @@ func main() {
 
 		if got := HasSymbol(fn); got != tests[i].symbol {
 			t.Errorf("HasSymbol(%s) = %t, want %t", fn.Name(), got, tests[i].symbol)
+		}
+	}
+}
+
+// checkSource checks a program for the tests of what the backends
+// read from a checked program.
+func checkSource(t *testing.T, src string) (*ast.File, *types.Info) {
+	t.Helper()
+	f, file, err := parser.ParseFile("t.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &types.Info{}
+	if _, err := (&types.Config{Importer: importer.NewImporter(info)}).Check("", file, f, info); err != nil {
+		t.Fatal(err)
+	}
+
+	return f, info
+}
+
+// TestFramedVariadic keeps a ...T slice in its caller's frame when the
+// function reads it, ranges over it, changes it or lends it, and not
+// when it moves it whole or a closure captures it.
+func TestFramedVariadic(t *testing.T) {
+	f, info := checkSource(t, `package main
+func reads(xs ...int) int { n := len(xs); for _, x := range xs { n += x }; return n }
+func pushes(xs ...int) { xs.Push(1); xs[0] = 2 }
+func lends(xs ...string) int { return count(ref xs) }
+func count(xs ref []string) int { return len(xs) }
+func returns(xs ...int) []int { return xs }
+func stores(xs ...int) { ys := xs; print(ys) }
+func passes(xs ...int) int { return reads(xs...) }
+func captures(xs ...int) int { f := func() int { return len(xs) }; return f() }
+func fixed(xs []int) int { return len(xs) }
+func main() {}`)
+	want := map[string]bool{"reads": true, "pushes": true, "lends": true, "returns": false, "stores": false, "passes": false, "captures": false}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name == "main" || fd.Name.Name == "count" {
+			continue
+		}
+
+		sig := info.Defs[fd.Name].Type().(*types.Signature)
+		xs, stays := FramedVariadic(info, sig, fd.Body)
+		if fd.Name.Name == "fixed" {
+			if xs != nil {
+				t.Errorf("fixed: a slice parameter is no variadic one")
+			}
+
+			continue
+		}
+
+		if xs == nil || stays != want[fd.Name.Name] {
+			t.Errorf("%s: framed %v, stays %v; want stays %v", fd.Name.Name, xs != nil, stays, want[fd.Name.Name])
+		}
+	}
+}
+
+// TestDeferredLent finds the local variables a deferred call lends to a
+// ref parameter, with ref or without, a variadic ...ref one's included,
+// and none it takes by value or lends mut, which is an address already.
+func TestDeferredLent(t *testing.T) {
+	f, info := checkSource(t, `package main
+func one(a ref string, b string, c mut int) {}
+func many(xs ...ref string) {}
+func main() {
+	s, t := "s".Clone(), "t".Clone()
+	u := "u".Clone()
+	n := 1
+	defer one(s, t, mut n)
+	defer many(u, ref u)
+}`)
+	var calls []*ast.CallExpr
+	for _, st := range f.Decls[len(f.Decls)-1].(*ast.FuncDecl).Body.List {
+		if d, ok := st.(*ast.DeferStmt); ok {
+			calls = append(calls, d.Call.(*ast.CallExpr))
+		}
+	}
+
+	for i, want := range [][]string{{"s", "", ""}, {"u", "u"}} {
+		lent := DeferredLent(info, calls[i])
+		for j, name := range want {
+			got := ""
+			if j < len(lent) && lent[j] != nil {
+				got = lent[j].Name()
+			}
+
+			if got != name {
+				t.Errorf("call %d, argument %d: lent from %q, want %q", i, j, got, name)
+			}
+		}
+	}
+}
+
+// TestMayLeave finds a ?, a ?? and the branching expressions that may
+// leave a statement, outside a closure's body.
+func TestMayLeave(t *testing.T) {
+	for _, tt := range []struct {
+		src  string
+		want bool
+	}{
+		{"f(1, 2)", false},
+		{"f(1, g()?)", true},
+		{"[]int{1, g() ?? 0}", true},
+		{"T{a: if c { 1 } else { 2 }}", true},
+		{"f(func() int { return g()? })", false},
+		{"a.b[c + d]", false},
+	} {
+		f, _, err := parser.ParseFile("t.snello", []byte("package p\nfunc h() { _ = "+tt.src+" }"))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+
+		x := f.Decls[0].(*ast.FuncDecl).Body.List[0].(*ast.AssignStmt).Rhs[0]
+		if got := MayLeave(x); got != tt.want {
+			t.Errorf("%s: MayLeave %v, want %v", tt.src, got, tt.want)
+		}
+	}
+}
+
+// TestLeftOut finds the fields with defaults that a struct literal
+// leaves out, in the struct's order, a positional literal's included,
+// and none of a struct that declares no default.
+func TestLeftOut(t *testing.T) {
+	f, info := checkSource(t, `package main
+struct Size { w int; h int = 1; d int = 2 }
+struct Plain { a int; b int }
+func main() {
+	print(Size{}, Size{d: 5}, Size{3}, Size{3, 4, 5}, Size{w: 1, d: 2, h: 3}, Plain{})
+}`)
+	main := f.Decls[len(f.Decls)-1].(*ast.FuncDecl)
+	args := main.Body.List[0].(*ast.ExprStmt).X.(*ast.CallExpr).Args
+	for i, want := range []string{"h d", "h", "h d", "", "", ""} {
+		lit := args[i].(*ast.CompositeLit)
+		var got []string
+		st := info.Types[lit].Underlying().(*types.Struct)
+		for _, i := range LeftOut(st, lit) {
+			got = append(got, st.Field(i).Name())
+		}
+
+		if strings.Join(got, " ") != want {
+			t.Errorf("%s: left out %q, want %q", ast.Source(lit), got, want)
+		}
+	}
+}
+
+// TestTaken makes a conversion take an operand that is not Copy, as an
+// argument by value is taken, and only read a Copy one.
+func TestTaken(t *testing.T) {
+	for _, tt := range []struct {
+		t    types.Type
+		want bool
+	}{
+		{types.Typ[types.String], true},
+		{types.NewSlice(types.Typ[types.Int]), true},
+		{types.Typ[types.Int], false},
+		{types.Typ[types.Float64], false},
+	} {
+		if got := Taken(tt.t); (got != nil) != tt.want || got != nil && got[0] != tt.t {
+			t.Errorf("Taken(%s) = %v, want taken %v", tt.t, got, tt.want)
 		}
 	}
 }

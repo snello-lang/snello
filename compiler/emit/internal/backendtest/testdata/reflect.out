@@ -1,0 +1,12 @@
+holds a slice, is other holds an int, is other
+other point 8 true 3 some 4
+map of 1 pointer to int box of 5 ints slice 2.5
+{from:{x:1;name:a;};to:{x:2;name:b;};tags:[t,u];}
+[Dot(),Circle(2 ),Rect(3 4 )] Arr([Num(1 ),Str(x ),Null()] )
+read {from:{x:3;name:a;};to:{x:4;name:b;};tags:[t];}
+read Rect(5 6 )
+read Dot()
+error no variant Oval
+error out of input
+localhost 9000 app some n
+error missing name

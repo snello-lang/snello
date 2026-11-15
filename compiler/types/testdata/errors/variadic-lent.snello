@@ -1,0 +1,27 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the arguments of a variadic ...ref T parameter are lent for the
+// call alone, laid out by the caller for it, so the function returns
+// no borrow of them, from its body or from a closure inside it, and a
+// function that returns one borrow may take a ...ref parameter beside
+// it; and none is lent mut, since a slice cannot hold several mut
+// borrows apart. Fix: return a copy, xs[0].Clone(), or
+// take one ref parameter for the value returned; pass a mut slice for
+// values to change, xs mut []T.
+
+package p
+
+func first(xs ...ref string) ref string {
+    return xs[0]                            // ERROR "cannot return a borrow of xs: the arguments of a variadic ...ref parameter are lent for the call alone"
+}
+
+func viaClosure(xs ...ref string) ref string {
+    k := func() ref string { return xs[0] } // ERROR "cannot return a borrow of xs: the arguments of a variadic ...ref parameter are lent for the call alone"
+    return k()
+}
+
+func pick(d ref string, xs ...ref string) ref string { return d }
+
+func grow(xs ...mut int) {}                 // ERROR "a variadic parameter is ...T or ...ref T, not ...mut T"

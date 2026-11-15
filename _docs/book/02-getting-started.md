@@ -52,7 +52,11 @@ package shapes
 
 import ("expect"; "testing")
 
-struct Case { name string; kind Kind; want string }
+struct Case {
+	name string
+	kind Kind
+	want string
+}
 
 func TestDescribe() {
     cases := []Case{

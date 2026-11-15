@@ -221,7 +221,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			free, done := e.block("free"), e.block("done")
 			e.branch(owned.s, free, done)
 			e.label(free)
-			e.check(ir, "%v", t)
+			e.check(ir, "%v")
 			e.declare("sn_free", "declare void @sn_free(ptr)")
 			e.inst("call void @sn_free(ptr " + e.load("ptr", e.gep(ir, "%v", 0)).s + ")")
 			e.jump(done)
@@ -310,7 +310,19 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			}
 
 			e.declare("sn_slice_free", "declare void @sn_slice_free(ptr)")
+			if e.cfg.Debug { // the runtime's checks on every drop
+				e.inst("call void @sn_slice_free(ptr %v)")
+				break
+			}
+
+			buf := e.op("icmp ne ptr "+e.load("ptr", e.gep("%sn_slice", "%v", 0)).s+", null", "i1")
+			own := e.op("icmp ne i64 "+e.load("i64", e.gep("%sn_slice", "%v", 2)).s+", "+snCaller, "i1")
+			free, done := e.block("free"), e.block("done")
+			e.branch(e.op("and i1 "+buf.s+", "+own.s, "i1").s, free, done) // an emptied slice and one laid out in a caller's frame have no buffer to free
+			e.label(free)
 			e.inst("call void @sn_slice_free(ptr %v)")
+			e.jump(done)
+			e.label(done)
 		case *types.Array:
 			for i := int64(0); i < u.Len(); i++ {
 				e.dropOf(e.gep(ir, "%v", int(i)), u.Elem(), pos)
@@ -387,7 +399,7 @@ func (e *Emitter) poison(p string, t types.Type) {
 // check writes a debug build's check of the string at the address p
 // before its bytes are released or read: a poisoned length or
 // capacity is negative, and an owned string's block must be live.
-func (e *Emitter) check(ir, p string, t types.Type) {
+func (e *Emitter) check(ir, p string) {
 	if !e.cfg.Debug {
 		return
 	}
@@ -633,14 +645,14 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 			copy, done := e.block("copy"), e.block("done")
 			e.branch(isNull.s, done, copy)
 			e.label(copy)
-			cell := e.alloc(u.Elem(), pos)
+			cell := e.alloc(u.Elem())
 			e.store(e.cloneAt(e.deref(p).s, u.Elem(), pos), cell)
 			e.store(value{"ptr", cell}, out)
 			e.jump(done)
 			e.label(done)
 		case *types.Slice:
 			n := e.load("i64", e.gep(ir, "%v", 1))
-			e.sliceMake(out, n, n, u.Elem(), pos)
+			e.sliceMake(out, n, n, u.Elem())
 			dst := e.load("ptr", e.gep(ir, out, 0))
 			et := e.irType(u.Elem(), pos)
 			e.eachElementIndexed("%v", u.Elem(), pos, func(p, i string) {
@@ -700,12 +712,19 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 	outer := e.fn
 	e.fn = &function{vars: make(map[*types.Var]string), pre: make(map[ast.Expr]string)}
 	f()
-	var b strings.Builder
-	b.WriteString("define internal " + result + " @" + name + "(" + strings.Join(params, ", ") + ")" + funcAttrs + " {\nentry:\n")
-	b.Write(e.fn.allocas.Bytes())
-	b.Write(e.fn.body.Bytes())
-	b.WriteString("}\n\n")
-	e.helpers.WriteString(b.String())
+	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
+	for i, p := range params {
+		if i > 0 {
+			e.helpers.WriteString(", ")
+		}
+
+		e.helpers.WriteString(p)
+	}
+
+	put(&e.helpers, ")", funcAttrs, " {\nentry:\n")
+	e.helpers.Write(e.fn.allocas.Bytes())
+	e.helpers.Write(e.fn.body.Bytes())
+	e.helpers.WriteString("}\n\n")
 	e.fn = outer
 }
 

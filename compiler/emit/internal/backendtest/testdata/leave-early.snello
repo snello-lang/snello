@@ -1,0 +1,74 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A value made before an operand that leaves the function early, by ?,
+// is dropped when it leaves, once, wherever it stands: an argument, a
+// receiver, a struct, tuple, slice or map literal's element, an
+// argument of a variadic function; and taken whole when nothing leaves.
+// A debug build reports a value left unreleased or released twice.
+
+package main
+
+import "fmt"
+
+struct Tag impl Drop { name string }
+
+func (t mut Tag) Drop() { fmt.Println("drop", t.name) }
+
+func (t Tag) With(o Tag) int { return 1 }
+
+struct Pair { a Tag; b Tag }
+
+func mk(s string) Tag { return Tag{name: s.Clone()} }
+
+func get(fail bool, s string) Result<Tag, string> {
+	if fail {
+		return Err("failed".Clone())
+	}
+
+	return Ok(mk(s))
+}
+
+func two(a Tag, b Tag) int { return 2 }
+
+func many(ts ...Tag) int { return len(ts) }
+
+func arg(fail bool) Result<int, string> { return Ok(two(mk("arg"), get(fail, "arg2")?)) }
+
+func recv(fail bool) Result<int, string> { return Ok(mk("recv").With(get(fail, "recv2")?)) }
+
+func pair(fail bool) Result<int, string> {
+	p := Pair{a: mk("pair"), b: get(fail, "pair2")?}
+	return Ok(p.a.name.Len())
+}
+
+func tuple(fail bool) Result<int, string> {
+	a, b := (mk("tuple"), get(fail, "tuple2")?)
+	return Ok(a.name.Len() + b.name.Len())
+}
+
+func slice(fail bool) Result<int, string> {
+	s := []Tag{mk("slice"), get(fail, "slice2")?}
+	return Ok(len(s))
+}
+
+func table(fail bool) Result<int, string> {
+	m := map[string]Tag{"k".Clone(): mk("map"), "j".Clone(): get(fail, "map2")?}
+	return Ok(len(m))
+}
+
+func variadic(fail bool) Result<int, string> { return Ok(many(mk("many"), get(fail, "many2")?)) }
+
+func main() {
+	for _, fail := range []bool{true, false} {
+		fmt.Println("fail", fail)
+		fmt.Println(arg(fail))
+		fmt.Println(recv(fail))
+		fmt.Println(pair(fail))
+		fmt.Println(tuple(fail))
+		fmt.Println(slice(fail))
+		fmt.Println(table(fail))
+		fmt.Println(variadic(fail))
+	}
+}

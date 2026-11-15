@@ -7,6 +7,8 @@ package types
 import (
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/parser"
 )
 
 // TestZeroRefusals checks every way of making a zero value, refused for
@@ -31,10 +33,17 @@ func mk() Owner { return Owner{n: 1} }
 		{"func f() { var c chan int; print(c) }", []string{"cannot declare c without a value: chan int has no zero value; give it one, or declare it (chan int)?"}},
 		{"func f() { var g func(); print(g) }", []string{"cannot declare g without a value: func() has no zero value; give it one, or declare it (func())?"}},
 		{"func f() { var xs []*int; var o Owner?; print(xs, o) }", nil},
+		// A struct that declares a default: T{} is the value to write, when it builds one.
+		{"struct Def { n int = 1; s string }\nfunc f() { var d Def; print(d) }", []string{"cannot declare d without a value: Def declares defaults, which a zero value would skip; write d := Def{}"}},
+		{"struct Def { n int = 1 }\nstruct Holds { d Def }\nfunc f() { var h Holds; print(h) }", []string{"cannot declare h without a value: Holds has no zero value; give it one, or declare it Holds?"}}, // Holds{} is refused too
+		{"struct PtrDef { n int = 1; p *int }\nfunc f() { var d PtrDef; print(d) }", []string{"cannot declare d without a value: PtrDef has no zero value; give it one, or declare it PtrDef?"}},
+		{"struct Def { n int = 1 }\nfunc f() { var d Def?; xs := []Def{}; print(d, xs) }", nil},
 		{"func f() { n := 1; var p *int = &n; print(p) }", nil}, // a value given
 		// A struct literal.
 		{"func f() { b := Box{n: 1}; print(b) }", []string{"missing field p in a Box literal: *int has no zero value; name it"}},
 		{"func f() { n := 1; b := Box{p: &n}; print(b) }", nil}, // n has a zero value, left out
+		{"struct Need { p *int; n int = 1 }\nfunc f() { b := Need{n: 2}; print(b) }", []string{"missing field p in a Need literal: *int has no zero value; name it, or give it a default in Need"}},
+		{"struct Def { n int = 1 }\nstruct Holds { d Def }\nfunc f() { h := Holds{}; print(h) }", []string{"missing field d in a Holds literal: Def has no zero value; name it, or give it a default in Holds"}},
 		// An array literal.
 		{"func f() { n := 1; a := [2]*int{&n}; print(a) }", []string{"too few elements for [2]*int: 1 of 2, and *int has no zero value for the rest"}},
 		{"func f() { a := [3]int{1}; print(a) }", nil},
@@ -96,13 +105,16 @@ func TestZeroAcrossPackages(t *testing.T) {
 		{"func f() { var w rc.Weak<int>?; print(w) }", nil}, // an optional handle starts as None
 		{"func f() { m := sync.NewMutex(1); print(m) }", nil},
 		{"func f() { var b strings.Builder; b.WriteString(\"a\"); print(b.String()) }", nil}, // a zero value of its own
+		// Another package's struct with defaults: its exported fields are named, the rest take the defaults.
+		{"func f() { var o os.OpenOptions; print(o.Read) }", []string{"cannot declare o without a value: os.OpenOptions declares defaults, which a zero value would skip; write o := os.OpenOptions{}"}},
+		{"func f() { o := os.OpenOptions{Write: true}; print(o.Read, o.Write) }", nil},
 		// A type declared over another package's struct opens none of its fields, and does not convert to it.
-		{"type MyC sync.Counter\nfunc f(m MyC) int { return m.h }", []string{"h of MyC is not exported"}},
-		{"type MyC sync.Counter\nfunc f() MyC { return MyC{h: 5} }", []string{"h of MyC is not exported"}},
+		{"type MyC sync.Counter\nfunc f(m MyC) int { return m.handle }", []string{"handle of MyC is not exported"}},
+		{"type MyC sync.Counter\nfunc f() MyC { return MyC{handle: 5} }", []string{"handle of MyC is not exported"}},
 		{"type MyC sync.Counter\nfunc f(m MyC) sync.Counter { return sync.Counter(m) }", []string{"cannot convert MyC to sync.Counter: sync.Counter has no zero value"}},
 	}
 	for _, tt := range tests {
-		got := checkErrors(t, "package p\nimport (\"rc\"; \"strings\"; \"sync\")\n"+tt.src)
+		got := checkErrors(t, "package p\nimport (\"os\"; \"rc\"; \"strings\"; \"sync\")\n"+tt.src)
 		if len(got) != len(tt.want) {
 			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
 			continue
@@ -112,6 +124,41 @@ func TestZeroAcrossPackages(t *testing.T) {
 			if !strings.Contains(got[i], tt.want[i]) {
 				t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got[i], tt.want[i])
 			}
+		}
+	}
+}
+
+// TestDefaultsAcrossPackages checks a literal of another package's
+// struct that declares defaults: a field it leaves out takes its
+// default, hidden or not, and a hidden field without one is left out
+// only when the struct would have a zero value but for its defaults.
+func TestDefaultsAcrossPackages(t *testing.T) {
+	lib := "package cfg\nconst port = 80\nstruct Opts { Port int = port; hidden int; Name string }\nstruct Secret { P *int; hidden int = 3 }\nstruct Hold { Port int = 80; P *int; hidden int }\n"
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{"func f() int { o := cfg.Opts{Name: \"a\"}; return o.Port }", ""}, // hidden is 0, Port 80
+		{"func f() { n := 1; s := cfg.Secret{P: &n}; print(s.P) }", ""},    // hidden takes its default
+		{"func f() { n := 1; h := cfg.Hold{P: &n}; print(h.P) }", "cannot build a cfg.Hold with a literal: it has no zero value, and its field hidden is not exported"},
+		{"func f() { var o cfg.Opts; print(o.Port) }", "cfg.Opts declares defaults, which a zero value would skip; write o := cfg.Opts{}"},
+	}
+	for _, tt := range tests {
+		imp := &sourceImporter{srcs: map[string]string{"cfg": lib}, loaded: map[string]*Package{}}
+		imp.conf.Importer = imp
+		f, file, err := parser.ParseFile("test.snello", []byte("package main\nimport \"cfg\"\n"+tt.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = imp.conf.Check("", file, f, nil)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+
+		if tt.want == "" && got != "" || tt.want != "" && !strings.Contains(got, tt.want) {
+			t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got, tt.want)
 		}
 	}
 }

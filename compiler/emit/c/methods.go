@@ -45,7 +45,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		}
 
 		if t.Info()&types.IsInteger != 0 {
-			if call := e.integerMethod(x, sel, recv, t); call != "" {
+			if call := e.integerMethod(x, sel, recv); call != "" {
 				return call
 			}
 		}
@@ -489,14 +489,24 @@ func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
 }
 
 // mapLit writes map[K]V{k: v}: an empty map, then one insertion per
-// entry.
+// entry, the map held while it is built when an entry may leave the
+// statement, so that leaving drops what it holds so far.
 func (e *Emitter) mapLit(x *ast.CompositeLit, t types.Type, mt *types.Map) string {
 	out := e.temp()
 	e.line(e.cType(t, x.Pos()) + " " + out + " = {0};")
+	leaves := lower.MayLeave(x)
+	if leaves {
+		e.hold(out, t) // an entry may leave the statement: the map so far, and what it holds, is dropped then
+	}
+
 	for _, elt := range x.Elts {
 		kv := elt.(*ast.KeyValueExpr)
 		parts := e.operands([]ast.Expr{kv.Key, kv.Value}, []types.Type{mt.Key(), mt.Value()})
 		e.mapStore(out, mt, parts[0], parts[1], x.Pos())
+	}
+
+	if leaves {
+		return e.taken(out, t, out, t, x.Pos())
 	}
 
 	return out
@@ -567,7 +577,7 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 // for any other method. The checked operations are the C compiler's
 // overflow builtins, one instruction and a test of its flag; Abs and
 // Clamp are selects, with no branch the compiler must keep.
-func (e *Emitter) integerMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type, b *types.Basic) string {
+func (e *Emitter) integerMethod(x *ast.CallExpr, sel *ast.SelectorExpr, recv types.Type) string {
 	name := sel.Sel.Name
 	var op string
 	switch name {
@@ -865,9 +875,16 @@ func (e *Emitter) saved(x ast.Expr, t types.Type) string {
 }
 
 // index writes x[i] on a slice or a string, with the index checked, or
-// on a map; write says whether the element is about to be assigned.
+// on a map; write says whether the element is about to be assigned, and
+// then its collection is a place being changed too, m[k][i] = v making
+// the entry m[k] when k is new.
 func (e *Emitter) index(x *ast.IndexExpr, write bool) string {
-	place, t := e.scrutinee(x.X)
+	scrutinee := e.scrutinee
+	if write {
+		scrutinee = e.changed
+	}
+
+	place, t := scrutinee(x.X)
 	if m, ok := t.Underlying().(*types.Map); ok {
 		return e.mapIndex(x, place, m, write)
 	}
@@ -986,7 +1003,7 @@ func (e *Emitter) sliceLit(x *ast.CompositeLit, t types.Type, st *types.Slice) s
 // behind.
 func (e *Emitter) takeCall(x *ast.CallExpr) string {
 	target := x.Args[0].(*ast.UnaryExpr).X
-	place := deref(e.lvalue(target), e.typeOf(target))
+	place := derefTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 	t := e.typeOf(x)
 	if e.hasEffects(target) { // the place is named twice below: a call in it runs once
 		at := e.temp()
@@ -1005,7 +1022,7 @@ func (e *Emitter) takeCall(x *ast.CallExpr) string {
 // may be a call that runs before the place is read.
 func (e *Emitter) replaceCall(x *ast.CallExpr) string {
 	target := x.Args[0].(*ast.UnaryExpr).X
-	place := deref(e.lvalue(target), e.typeOf(target))
+	place := derefTo(e.lvalue(target), e.typeOf(target), e.typeOf(x)) // the place of the value taken, an owned pointer as any other
 	t := e.typeOf(x)
 	ct := e.cType(t, x.Pos())
 	at := e.temp()
@@ -1017,7 +1034,8 @@ func (e *Emitter) replaceCall(x *ast.CallExpr) string {
 	return out
 }
 
-// lenCall writes len(x) and cap(x) on a slice, a string or a map.
+// lenCall writes len(x) and cap(x) on a slice, a string, an array, a
+// map or a channel.
 func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 	place, t := e.scrutinee(x.Args[0])
 	if _, ok := t.Underlying().(*types.Map); ok && b.ID() == types.BuiltinLen {
@@ -1032,8 +1050,8 @@ func (e *Emitter) lenCall(x *ast.CallExpr, b *types.Builtin) string {
 		return place + "." + b.Name()
 	}
 
-	if a, ok := t.Underlying().(*types.Array); ok {
-		return strconv.FormatInt(a.Len(), 10) // len and cap alike
+	if a, ok := t.Underlying().(*types.Array); ok { // len and cap alike, beside the array, so that C sees the variable used
+		return "((void)" + place + ", " + strconv.FormatInt(a.Len(), 10) + "LL)"
 	}
 
 	if _, ok := t.Underlying().(*types.Chan); ok {

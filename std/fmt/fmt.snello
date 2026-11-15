@@ -8,28 +8,31 @@
 // printing itself, choosing by the type of each argument: an integer
 // prints as its digits; a float in the shortest form that reads back as
 // it, with an exponent from a million up, 1e+06, and as +Inf, -Inf or
-// NaN, as Go prints them; a string as its text, a bool as true or
-// false, a struct as its fields, an enum value as its variant, an
-// option as Some(x) or None, a Result as Ok(x) or Err(e), a value whose
-// type implements Error as its message, and one whose type implements
-// Stringer as what its String returns. The format of Printf is a
-// string literal or a constant declared as one: it is read when the
-// program is compiled and checked against the arguments then,
-// so a verb that does not fit its argument is a compile error and
-// nothing is formatted at run time. The functions are declared here
-// without bodies; the compiler provides them.
+// NaN; a string as its text, a bool as true or false, a struct as its
+// fields, an enum value as its variant, an option as Some(x) or None, a
+// Result as Ok(x) or Err(e), a value whose type implements Error as its
+// message, and one whose type implements Stringer as what its String
+// returns. The format of Printf is a string literal or a constant
+// declared as one: it is read when the program is compiled and checked
+// against the arguments then, so a verb that does not fit its argument
+// is a compile error and nothing is formatted at run time. The
+// functions are declared here without bodies; the compiler provides
+// them.
 //
 // A format is text with verbs, each taking the next argument: %v prints
 // any value as Println does; %d an integer, and %x, %X, %o and %b the
 // same in base sixteen, with small letters or capitals, eight and two,
 // a negative number as a minus sign and its digits, -ff; %x and %X
 // also print the bytes of a string or a []u8, two digits each; %c
-// prints an integer as the character it is; %s a string, or a value
-// whose type implements Error or Stringer; %q the same in double
-// quotes, escaped as Go's strconv.Quote escapes it, or an integer as
-// the rune it is, in single quotes; %f a float with six decimals, %.2f
-// with two; %e a float with an exponent, 1.234568e+03; %g a float in
-// the shortest form, as %v prints one; %t a bool; %% is a percent sign.
+// prints an integer as the character it is, and a number that is no
+// Unicode scalar value as U+FFFD; %s a string, or a value whose type
+// implements Error or Stringer; %q the same in double quotes, with a
+// quote, a backslash and a character that does not print escaped,
+// "a\"b\n", or an integer as the rune it is, in single quotes; %f a
+// float with six decimals, %.2f with two; %e a float with an exponent,
+// 1.234568e+03; %g a float in the shortest form, as %v prints one; %t
+// a bool; %% is a percent sign.
+//
 // A precision is the digits of a float after the point with %f and %e
 // and in all with %g and %v, %.3v, the characters of a string with %s,
 // %q and %v, %.2s, and the least digits of an integer with %d, %x, %X,
@@ -40,54 +43,88 @@
 // so does a precision on an integer. A width and a precision are
 // 1000000 at most. The verbs a string takes, %v, %s, %q, %x and %X,
 // print a value whose type implements Error or Stringer as what the
-// method returns, whatever the type is declared over, as Go's do;
-// every other verb prints the value itself, so %g of such a float is
-// the float and %d of such an integer the integer. The format is a
-// string literal and reads as many arguments as it has verbs; fmt
-// takes no other verb or flag.
+// method returns, whatever the type is declared over; every other verb
+// prints the value itself, so %g of such a float is the float and %d
+// of such an integer the integer. The format reads as many arguments
+// as it has verbs; fmt takes no other verb or flag.
+//
+//	fmt.Printf("%-8s %6.2f\n", name, price) // "apple      1.50"
 //
 // Every argument is lent for the call: printing a value leaves it with
-// its owner.
+// its owner, and nothing of it is kept. A function that returns text
+// allocates the string it returns, which the caller owns; one that
+// prints builds its text whole and writes it with one call, so that the
+// lines of two tasks printing at once never mix.
 package fmt
 
 import "io"
 
 // A Stringer is a type that prints as its own text: Println, Sprint and
 // the verbs %v, %s and %q print a value of a type that lists Stringer
-// after impl as what its String returns, as Go's fmt prints a
-// fmt.Stringer.
+// after impl as what its String returns, which takes the value lent and
+// returns a string of its own.
+//
+//	struct Point impl fmt.Stringer {
+//		x int
+//		y int
+//	}
+//
+//	func (p ref Point) String() string { return fmt.Sprintf("(%d, %d)", p.x, p.y) }
 trait Stringer {
 	func (s ref Self) String() string
 }
 
-// Println prints its arguments to the standard output separated by
-// spaces, then a newline.
+// Println prints its arguments to the standard output, separated by
+// spaces and ended by a newline, each printed as %v prints it. The
+// arguments are lent; the line is built whole and written at once, so
+// two tasks' lines never interleave. A failure to write is not
+// reported.
+//
+//	fmt.Println("total:", n, ok) // total: 3 true
 func Println(args ...ref any)
 
 // Printf prints its arguments to the standard output as the format
-// says. It adds no newline; the format writes its own, "\n".
+// says, written at once, as Println writes its line. The format is a
+// string literal or a constant, checked against the arguments when the
+// program is compiled; the arguments are lent. It adds no newline; the
+// format writes its own, "\n". A failure to write is not reported.
+//
+//	fmt.Printf("%s has %d items\n", name, len(items))
 func Printf(format ref string, args ...ref any)
 
-// Sprint returns its arguments as text, with a space between two
-// operands when neither is a string, as Println separates them.
+// Sprint returns its arguments as text, each printed as %v prints it,
+// with a space between two operands when neither is a string, so
+// Sprint("a", 1, true) is "a1 true" and Sprint(1, 2) is "1 2". The
+// arguments are lent; the result is a new string the caller owns.
 func Sprint(args ...ref any) string
 
-// Sprintf returns its arguments formatted as the format says.
+// Sprintf returns its arguments formatted as the format says, in a new
+// string the caller owns. The format is a string literal or a
+// constant, checked against the arguments when the program is
+// compiled, so a verb that does not fit its argument is a compile
+// error; the arguments are lent.
+//
+//	key := fmt.Sprintf("%s:%04d", prefix, id) // "user:0042"
 func Sprintf(format ref string, args ...ref any) string
 
 // Fprint writes its arguments to w, with a space between two operands
 // when neither is a string, as Sprint joins them, with one call of its
-// Write; w is any io.Writer, lent mut. A failure to write is not
-// reported.
+// Write; w is any io.Writer, lent mut, and the arguments are lent. A
+// failure to write is not reported.
 func Fprint<W: io.Writer>(w mut W, args ...ref any)
 
 // Fprintln writes its arguments to w, separated by spaces and ended by
-// a newline, with one call of its Write; w is any io.Writer, lent mut:
-// fmt.Fprintln(mut os.Stderr(), "error:", e). A failure to write is not
-// reported.
+// a newline, as Println prints them, with one call of its Write; w is
+// any io.Writer, lent mut, and the arguments are lent. A failure to
+// write is not reported.
+//
+//	fmt.Fprintln(mut os.Stderr(), "error:", e)
 func Fprintln<W: io.Writer>(w mut W, args ...ref any)
 
 // Fprintf writes its arguments to w as the format says, with one call
-// of its Write; w is any io.Writer, lent mut. A failure to write is not
-// reported.
+// of its Write; w is any io.Writer, lent mut, and the arguments are
+// lent. The format is checked when the program is compiled, as
+// Sprintf's is. A failure to write is not reported.
+//
+//	fmt.Fprintf(mut os.Stderr(), "%s: %v\n", path, e)
 func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)

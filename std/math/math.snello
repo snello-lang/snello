@@ -5,40 +5,56 @@
 // Package math has the constants and functions of floating-point
 // arithmetic, over f64, and the limits of the number types.
 //
-// Every function takes and returns an f64. A program working in
-// another float type converts at the call, f64(x), and a literal
-// written as an argument takes the type on its own, so math.Min(2, 7)
-// needs no 2.0.
+// Every function takes and returns an f64, by value, and allocates
+// nothing. A program working in another float type converts at the
+// call, f64(x), and a literal written as an argument takes the type on
+// its own, so math.Min(2, 7) needs no 2.0.
 //
 // The functions without a body here are the system's math library's,
-// as Rust's and Swift's are. Sqrt, Floor, Ceil, Trunc, Round, Mod, Abs
-// and Copysign are exact, the same on every system; the others are
-// within a few units in the last place of the true result, so their
-// last digits may differ from one system to another. The special cases, an
-// infinity, a NaN or a zero as an argument, are those of IEEE 754 as
-// the C standard lists them, which Go's math follows too.
+// called by their names. Sqrt, Floor, Ceil, Trunc, Round, Mod, Abs and
+// Copysign are exact, the same on every system; the others are within
+// a few units in the last place of the true result, so their last
+// digits may differ from one system to another. The special cases, an
+// infinity, a NaN or a zero as an argument, are those IEEE 754 sets
+// and the C standard lists for each function. No function panics: a
+// result that has no number is NaN, and one too large for an f64 is
+// an infinity.
 //
 // A limit has the type it is the limit of: MaxInt8 is an i8, and
 // MaxUint64 a u64.
 package math
 
-// Pi is the ratio of a circle's circumference to its diameter, E the
-// base of the natural logarithm and Ln2 the natural logarithm of 2,
-// each to the precision an f64 holds.
+// Pi is the ratio of a circle's circumference to its diameter, to the
+// precision an f64 holds.
 const Pi f64 = 3.14159265358979323846264338327950288
+
+// E is the base of the natural logarithm, Euler's number, to the
+// precision an f64 holds.
 const E f64 = 2.71828182845904523536028747135266249775724709369995957496696763
+
+// Ln2 is the natural logarithm of 2, to the precision an f64 holds.
 const Ln2 f64 = 0.693147180559945309417232121458176568075500134360255254120680009
 
-// MaxFloat64 is the largest finite f64 and SmallestNonzeroFloat64 the
-// smallest above zero; MaxFloat32 and SmallestNonzeroFloat32 are those
-// of an f32.
+// MaxFloat64 is the largest finite f64, (2 - 2^-52) * 2^1023; a result
+// above it is +Inf.
 const MaxFloat64 f64 = 1.79769313486231570814527423731704356798070e+308
+
+// SmallestNonzeroFloat64 is the smallest f64 above zero, 2^-1074, a
+// subnormal number.
 const SmallestNonzeroFloat64 f64 = 4.9406564584124654417656879286822137236505980e-324
+
+// MaxFloat32 is the largest finite f32, (2 - 2^-23) * 2^127.
 const MaxFloat32 f32 = 3.40282346638528859811704183484516925440e+38
+
+// SmallestNonzeroFloat32 is the smallest f32 above zero, 2^-149, a
+// subnormal number.
 const SmallestNonzeroFloat32 f32 = 1.401298464324817070923729583289916131280e-45
 
-// The largest and the smallest value of each integer type. An unsigned
-// type's smallest is zero.
+// The largest and the smallest value of each integer type, each of the
+// type it is the limit of: MaxInt and MinInt for int, MaxInt8 and
+// MinInt8 for i8, and so on. An unsigned type's smallest is zero, so
+// only its largest is named. A value past a limit wraps, as the
+// arithmetic does.
 const MaxInt int = 9223372036854775807
 const MinInt int = -9223372036854775808
 const MaxInt8 i8 = 127
@@ -55,90 +71,159 @@ const MaxUint16 u16 = 65535
 const MaxUint32 u32 = 4294967295
 const MaxUint64 u64 = 18446744073709551615
 
-// Sqrt returns the square root of x, and Cbrt its cube root. Sqrt of a
-// negative x is NaN.
+// Sqrt returns the square root of x, exact: the f64 nearest the true
+// root. It is NaN for a negative x, +Inf for +Inf, and x itself for a
+// zero, -0 included.
+//
+//	math.Sqrt(2) // 1.4142135623730951
 func Sqrt(x f64) f64
+
+// Cbrt returns the cube root of x, which, unlike the square root, has
+// the sign of x: Cbrt(-8) is -2. An infinity, a NaN and a zero are
+// returned as they are.
 func Cbrt(x f64) f64
 
-// Floor returns the greatest whole number not above x, Ceil the least
-// not below it, Trunc x without its fraction, and Round the nearest
-// whole number, a half going away from zero. An infinity, a NaN and a
-// zero are returned as they are.
+// Floor returns the greatest whole number not above x, exact:
+// Floor(1.5) is 1 and Floor(-1.5) is -2. An infinity, a NaN and a zero
+// are returned as they are.
 func Floor(x f64) f64
+
+// Ceil returns the least whole number not below x, exact: Ceil(1.5) is
+// 2 and Ceil(-1.5) is -1. An infinity, a NaN and a zero are returned as
+// they are.
 func Ceil(x f64) f64
+
+// Trunc returns x without its fraction, the whole number toward zero,
+// exact: Trunc(1.5) is 1 and Trunc(-1.5) is -1. An infinity, a NaN and
+// a zero are returned as they are.
 func Trunc(x f64) f64
+
+// Round returns the whole number nearest x, a half going away from
+// zero, exact: Round(2.5) is 3 and Round(-2.5) is -3. An infinity, a
+// NaN and a zero are returned as they are.
 func Round(x f64) f64
 
-// Mod returns the remainder of x divided by y, with the sign of x and
-// smaller than y in magnitude. It is NaN when x is an infinity or y is
-// zero.
+// Mod returns the remainder of x divided by y, x - n*y for the whole n
+// that x/y truncates to, exact: it has the sign of x and is smaller
+// than y in magnitude. Mod(7, 3) is 1 and Mod(-7, 3) is -1. It is NaN
+// when x is an infinity, y is zero or either is NaN, and x when y is
+// an infinity.
 func Mod(x, y f64) f64
 
-// Pow returns x to the power y. Pow(x, 0) is 1 for every x, and a
-// negative x to a y that is not whole is NaN.
+// Pow returns x to the power y. Pow(x, 0) is 1 for every x, NaN
+// included, and Pow(1, y) is 1 for every y; a negative x to a y that
+// is not whole is NaN, and a result too large for an f64 is an
+// infinity.
+//
+//	math.Pow(2, 10) // 1024
 func Pow(x, y f64) f64
 
-// Exp returns e to the power x.
+// Exp returns e, the constant E, to the power x: +Inf when the result
+// is too large for an f64, which is from about 709.8 up, and 0 when it
+// is too small, from about -745.1 down.
 func Exp(x f64) f64
 
-// Log returns the natural logarithm of x, Log2 its logarithm to base 2
-// and Log10 to base 10. Each is -Inf for zero and NaN for a negative x.
+// Log returns the natural logarithm of x, the power E is raised to to
+// make x. It is -Inf for a zero, NaN for a negative x, and +Inf for
+// +Inf.
 func Log(x f64) f64
+
+// Log2 returns the logarithm of x to base 2: Log2(8) is 3, within the
+// precision the system's library gives. It is -Inf for a zero and NaN
+// for a negative x.
 func Log2(x f64) f64
+
+// Log10 returns the logarithm of x to base 10: Log10(1000) is 3, within
+// the precision the system's library gives. It is -Inf for a zero and
+// NaN for a negative x.
 func Log10(x f64) f64
 
-// Sin, Cos and Tan return the sine, cosine and tangent of x, an angle
-// in radians.
+// Sin returns the sine of x, an angle in radians. It is NaN for an
+// infinity, and a zero keeps its sign.
 func Sin(x f64) f64
+
+// Cos returns the cosine of x, an angle in radians. It is NaN for an
+// infinity.
 func Cos(x f64) f64
+
+// Tan returns the tangent of x, an angle in radians. It is NaN for an
+// infinity, and a zero keeps its sign.
 func Tan(x f64) f64
 
-// Asin, Acos and Atan return the angle, in radians, whose sine, cosine
-// and tangent is x. Asin and Acos are NaN for an x outside -1 to 1.
+// Asin returns the angle, in radians from -Pi/2 to Pi/2, whose sine is
+// x. It is NaN for an x outside -1 to 1.
 func Asin(x f64) f64
+
+// Acos returns the angle, in radians from 0 to Pi, whose cosine is x.
+// It is NaN for an x outside -1 to 1.
 func Acos(x f64) f64
+
+// Atan returns the angle, in radians from -Pi/2 to Pi/2, whose tangent
+// is x; an infinity gives Pi/2 with its sign.
 func Atan(x f64) f64
 
-// Atan2 returns the angle of the point (x, y) from the x axis, in
-// radians from -Pi to Pi: the arc tangent of y/x in the quadrant the
-// signs of the two say.
+// Atan2 returns the angle of the point (x, y) from the positive x axis,
+// in radians from -Pi to Pi: the arc tangent of y/x in the quadrant the
+// signs of the two say, defined where y/x is not, for an x of zero.
+// Note the order: y first.
+//
+//	math.Atan2(1, -1) // 3*Pi/4
 func Atan2(y, x f64) f64
 
-// Sinh, Cosh and Tanh return the hyperbolic sine, cosine and tangent of
-// x.
+// Sinh returns the hyperbolic sine of x, (e^x - e^-x) / 2, an infinity
+// with the sign of x when it is too large for an f64.
 func Sinh(x f64) f64
+
+// Cosh returns the hyperbolic cosine of x, (e^x + e^-x) / 2, never
+// below 1, and +Inf when it is too large for an f64.
 func Cosh(x f64) f64
+
+// Tanh returns the hyperbolic tangent of x, Sinh(x) / Cosh(x), from -1
+// to 1: an infinity gives 1 with its sign.
 func Tanh(x f64) f64
 
-// Hypot returns the square root of p*p + q*q, without the overflow or
-// the underflow the squares would have on the way.
+// Hypot returns the square root of p*p + q*q, the length of the
+// hypotenuse of a right triangle with legs p and q, without the
+// overflow or the underflow the squares would have on the way. It is
+// +Inf when either is an infinity, a NaN among them included.
 func Hypot(p, q f64) f64
 
 // Inf returns the positive infinity when sign is zero or more, and the
 // negative one when it is below zero.
+//
+//	math.Inf(-1) < -math.MaxFloat64 // true
 func Inf(sign int) f64
 
-// NaN returns a value that is not a number.
+// NaN returns a value that is not a number, the result IEEE 754 gives
+// an operation that has no number, such as 0/0. Test for one with
+// IsNaN, since a NaN equals nothing.
 func NaN() f64
 
 // IsNaN reports whether x is not a number. A NaN equals nothing, itself
 // included, so x == math.NaN() is always false and this is the test.
 func IsNaN(x f64) bool
 
-// IsInf reports whether x is an infinity: the positive one when sign is
-// above zero, the negative one when it is below, and either when it is
-// zero.
+// IsInf reports whether x is an infinity of the sign asked for: the
+// positive one when sign is above zero, the negative one when it is
+// below, and either when it is zero.
+//
+//	math.IsInf(math.Inf(-1), 0) // true
 func IsInf(x f64, sign int) bool
 
-// Signbit reports whether x is negative or negative zero.
+// Signbit reports whether the sign bit of x is set: true for a negative
+// x, -0 and -Inf included, false for a positive one and +0. It reads
+// the bit, so it tells -0 from +0, which compare equal.
 func Signbit(x f64) bool
 
 // Copysign returns a value with the magnitude of x and the sign of
-// sign.
+// sign, exact: Copysign(3, -1) is -3. It reads the sign bit of sign, so
+// a -0 or a NaN with its sign bit set counts as negative.
 func Copysign(x, sign f64) f64
 
-// Abs returns the absolute value of x: +0 for -0, +Inf for -Inf, and
-// NaN for NaN, as Go's math.Abs.
+// Abs returns the absolute value of x, exact: x without its sign, so
+// +0 for -0, +Inf for -Inf, and NaN for NaN.
+//
+//	math.Abs(-2.5) // 2.5
 func Abs(x f64) f64 {
 	if x < 0 || x == 0 && 1/x < 0 {
 		return -x
@@ -147,8 +232,12 @@ func Abs(x f64) f64 {
 	return x
 }
 
-// Min returns the smaller of x and y, as Go's math.Min: -Inf when
-// either is, else NaN when either is, and -0 as the smaller zero.
+// Min returns the smaller of x and y, with the special cases settled
+// so that the result does not depend on the order of the two: -Inf
+// when either is -Inf, else NaN when either is NaN, and of two zeros
+// -0 is the smaller.
+//
+//	math.Min(2, math.NaN()) // NaN
 func Min(x, y f64) f64 {
 	if x < -MaxFloat64 {
 		return x
@@ -181,8 +270,12 @@ func Min(x, y f64) f64 {
 	return y
 }
 
-// Max returns the larger of x and y, as Go's math.Max: +Inf when
-// either is, else NaN when either is, and +0 as the larger zero.
+// Max returns the larger of x and y, with the special cases settled
+// so that the result does not depend on the order of the two: +Inf
+// when either is +Inf, else NaN when either is NaN, and of two zeros
+// +0 is the larger.
+//
+//	math.Max(math.Inf(1), math.NaN()) // +Inf
 func Max(x, y f64) f64 {
 	if x > MaxFloat64 {
 		return x

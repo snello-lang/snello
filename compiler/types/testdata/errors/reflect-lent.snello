@@ -1,0 +1,24 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a field a loop over a type's parts reaches, v.[f], is lent: it
+// is read through a ref and changed through a mut, and never moved out
+// of v, since the function is compiled for types it does not know,
+// whose Drop, if one implements Drop, reads every field. Fix: lend it,
+// ref v.[f], or build a copy of the value from its fields.
+
+package p
+
+func keep<U>(u U) {}
+
+func spend<T>(v T) {
+	match T {
+		struct => {
+			for f := range fields(T) {
+				keep(v.[f])            // ERROR "cannot move v.[f] out of v: a field a loop over a type's parts reaches is lent"
+			}
+		}
+		_ => {},
+	}
+}

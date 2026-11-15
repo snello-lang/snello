@@ -1,0 +1,50 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a type that implements Drop is a struct or an enum, or a type
+// declared over one: a value with a Drop is known to be live, built and
+// not moved away, by a flag kept beside its fields, so that its Drop
+// runs once, and a number, a string or a slice has no fields to keep
+// it beside.
+// Fix: hold the value in a field of a struct, struct Handle { fd int },
+// and write the Drop on the struct.
+
+package p
+
+import "fmt"
+
+type Handle int impl Drop                 // ERROR "Handle cannot implement Drop: it is declared over int, and only a struct or an enum has a Drop; hold the int in a field, struct Handle { v int }"
+
+func (h mut Handle) Drop() { fmt.Println(int(*h)) }
+
+type Name string impl Drop                // ERROR "Name cannot implement Drop: it is declared over string"
+
+func (n mut Name) Drop() {}
+
+type Buf []byte impl Drop                 // ERROR "Buf cannot implement Drop: it is declared over []byte"
+
+func (b mut Buf) Drop() {}
+
+trait Counted: Drop { func (c ref Self) N() int }
+
+type Count int impl Counted               // ERROR "Count cannot implement Drop, which Counted requires: it is declared over int"
+
+func (c ref Count) N() int { return 1 }
+
+func (c mut Count) Drop() {}
+
+type Bare int impl Drop                   // ERROR "Bare cannot implement Drop: it is declared over int"
+
+struct File impl Drop { fd int }
+
+func (f mut File) Drop() {}
+
+type Socket File impl Drop
+
+func (s mut Socket) Drop() {}
+
+func main() {
+    h := Handle(7)
+    fmt.Println(int(h))
+}

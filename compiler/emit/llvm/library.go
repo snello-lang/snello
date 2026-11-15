@@ -128,7 +128,7 @@ func (e *Emitter) parts(x *ast.CallExpr, name string) value {
 			pieces = append(pieces, piece{lit: ", "})
 		}
 
-		pieces = append(pieces, piece{lit: ast.Source(operand) + " is "}, piece{text: e.textOf(e.expr(operand), e.typeOf(operand), operand.Pos(), false)})
+		pieces = append(pieces, piece{lit: ast.Source(operand) + " is "}, piece{text: e.textOf(e.expr(operand), e.typeOf(operand), operand.Pos())})
 	}
 
 	return e.concat(pieces, x.Pos())
@@ -173,7 +173,7 @@ func (e *Emitter) sprint(args []ast.Expr, pos token.Pos) value {
 			pieces = append(pieces, piece{lit: " "})
 		}
 
-		pieces = append(pieces, piece{text: e.textOf(parts[i], e.typeOf(a), a.Pos(), false)})
+		pieces = append(pieces, piece{text: e.textOf(parts[i], e.typeOf(a), a.Pos())})
 	}
 
 	return e.concat(pieces, pos)
@@ -189,7 +189,7 @@ func (e *Emitter) sprintln(args []ast.Expr, pos token.Pos) value {
 			pieces = append(pieces, piece{lit: " "})
 		}
 
-		pieces = append(pieces, piece{text: e.textOf(parts[i], e.typeOf(a), a.Pos(), false)})
+		pieces = append(pieces, piece{text: e.textOf(parts[i], e.typeOf(a), a.Pos())})
 	}
 
 	return e.concat(append(pieces, piece{lit: "\n"}), pos)
@@ -329,7 +329,7 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 
 		return text{e.rt("sn_f64_to_string", "%sn_string", f), true}
 	case p.Verb == 'x' || p.Verb == 'X': // the bytes of a string, or of what a type's String or Error returns, as Go's %x prints one
-		s := e.textOf(v, t, a.Pos(), false)
+		s := e.textOf(v, t, a.Pos())
 		return text{e.rt("sn_hex", "%sn_string", s.v, upper, value{"i1", strconv.FormatBool(s.owned)}), true}
 	case p.Verb == 'o':
 		return inBase(8)
@@ -340,7 +340,7 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	case p.Verb == 'q' && isInteger(vt):
 		return text{e.rt("sn_quote_rune", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q':
-		s := truncated(e.textOf(v, t, a.Pos(), false))
+		s := truncated(e.textOf(v, t, a.Pos()))
 		if s.owned {
 			return text{e.rt("sn_quote_owned", "%sn_string", s.v), true}
 		}
@@ -355,7 +355,7 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 		return integer(e.rt(toString, "%sn_string", e.widen(e.derefTo(v, t, vt), signed)))
 	}
 
-	return truncated(e.textOf(v, t, a.Pos(), false))
+	return truncated(e.textOf(v, t, a.Pos()))
 }
 
 // bitOp writes a function of math/bits on a value of the width as

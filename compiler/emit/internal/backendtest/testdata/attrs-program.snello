@@ -1,0 +1,76 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A program's own attributes beside a library's: help text, bounds and a
+// secret read by two reflecting functions of the program, json.Name and
+// json.Skip by encoding/json; a field read as the type its match on
+// f.type took, and a value an arm binds that the arm a field takes does
+// not read.
+
+package main
+
+import ("encoding/json"; "fmt"; "strings")
+
+// The program's own attributes: a line of help, the bounds of a
+// number, and a value never printed.
+type Usage string impl Attribute
+
+struct Range impl Attribute { min int; max int }
+
+struct Secret impl Attribute {}
+
+struct Options {
+	Port    int = 8080   @Usage("the port to listen on") @Range{min: 1, max: 65535} @json.Name("port")
+	Verbose bool         @Usage("print each request")
+	Token   string       @Secret @json.Skip
+}
+
+// usage writes a line for each field with a Usage, and marks a secret.
+func usage<T>() string {
+	var b strings.Builder
+	match T {
+		struct => {
+			for f := range fields(T) {
+				match attr(f, Usage) {
+					Some(u) => b.WriteString("  -" + f.name + "  " + string(u) + "\n"),
+					None => b.WriteString("  -" + f.name + if attr(f, Secret).IsSome() { "  (secret)\n" } else { "\n" }),
+				}
+			}
+		}
+		_ => {},
+	}
+
+	return b.String()
+}
+
+// check returns the first field whose value is out of its Range.
+func check<T>(v ref T) string? {
+	match T {
+		struct => {
+			for f := range fields(T) {
+				match attr(f, Range) {
+					Some(r) => match f.type {
+						int => {
+							if v.[f] < r.min || v.[f] > r.max {
+								return Some(f.name)
+							}
+						}
+						_ => {},
+					},
+					None => {},
+				}
+			}
+		}
+		_ => {},
+	}
+
+	return None
+}
+
+func main() {
+	fmt.Println(usage<Options>())
+	o := Options{Port: 70000, Verbose: true, Token: "t".Clone()}
+	fmt.Println(check(ref o))
+	fmt.Println(json.Marshal(ref o))
+}

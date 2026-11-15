@@ -175,8 +175,8 @@ func (e *Emitter) built(t text) value {
 // textOf writes the conversion of v, a value of the Snello type t, to a
 // string: the value is read through its borrows and pointers and
 // turned into text at its address.
-func (e *Emitter) textOf(v value, t types.Type, pos token.Pos, quoted bool) text {
-	return e.textAt(e.addressOf(v, t), lower.ValueType(t), pos, quoted)
+func (e *Emitter) textOf(v value, t types.Type, pos token.Pos) text {
+	return e.textAt(e.addressOf(v, t), lower.ValueType(t), pos, false)
 }
 
 // addressOf returns the address of the value under the borrows and

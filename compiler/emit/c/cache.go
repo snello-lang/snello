@@ -475,7 +475,8 @@ func headerManifest(dir string) ([]byte, error) {
 
 	sort.Strings(paths)
 	var b bytes.Buffer
-	b.WriteString(cacheVersion + "\n")
+	b.WriteString(cacheVersion)
+	b.WriteString("\n")
 	for _, p := range paths {
 		fi, err := os.Stat(p)
 		if err != nil {

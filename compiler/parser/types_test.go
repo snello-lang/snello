@@ -37,6 +37,9 @@ func TestTypes(t *testing.T) {
 		{"*Node<K, V>?", "(*Node<K, V>)?"},
 		{"(ref string, ref string)?", "((ref string, ref string))?"},
 		{"[16]f64", "[16]f64"},
+		{"[N]byte", "[N]byte"}, // a length is an expression, which the checker requires to be constant
+		{"[2 * N + 1]int", "[2 * N + 1]int"},
+		{"[pkg.Size]u8", "[pkg.Size]u8"},
 
 		// Channels.
 		{"chan Job", "chan Job"},
@@ -81,7 +84,8 @@ func TestTypeErrors(t *testing.T) {
 		{"123", "expected type, found '123'"},
 		{"List<T", "expected '>', found 'newline'"}, // the scanner ends the line for us
 		{"map[K", "expected ']', found 'newline'"},
-		{"[x]int", "expected array length, found 'x'"},
+		{"[x int", "expected ']', found 'int'"},
+		{"[]]int", "expected type, found ']'"},
 		{"<-chan<- T", "expected 'chan', found 'T'"},
 		{"func(", "expected ')', found 'EOF'"},
 		{"struct{}", "a struct is declared with a name"}, // a struct exists only by declaration
@@ -143,7 +147,7 @@ func typeString(typ ast.Type) string {
 	case *ast.SliceType:
 		return "[]" + typeString(t.Elem)
 	case *ast.ArrayType:
-		return "[" + t.Len.(*ast.BasicLit).Value + "]" + typeString(t.Elem)
+		return "[" + ast.Source(t.Len) + "]" + typeString(t.Elem)
 	case *ast.MapType:
 		return "map[" + typeString(t.Key) + "]" + typeString(t.Value)
 	case *ast.ChanType:
@@ -193,6 +197,15 @@ func fieldString(f *ast.Field) string {
 	s := typeString(f.Type)
 	if len(names) > 0 {
 		s = strings.Join(names, ", ") + " " + s
+	}
+
+	if f.Defaults != nil {
+		var values []string
+		for _, v := range f.Defaults.Values {
+			values = append(values, exprString(v))
+		}
+
+		s += " = " + strings.Join(values, ", ")
 	}
 
 	return s

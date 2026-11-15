@@ -242,7 +242,7 @@ func TestOwnPackages(t *testing.T) {
 		{"import \"cross4\"\nfunc f() {}", []string{"cannot cross to C: *cross4.Box, in parameter b"}}, // a handle is an int the package wraps, never a pointer
 		{"import \"cross5\"\nfunc f() {}", []string{"cannot bind a method to C"}},
 		{"import \"cross6\"\nfunc f() {}", []string{"cannot bind a generic function to C"}},
-		{"import \"variadic\"\nfunc f() {}", []string{"a variadic parameter is not supported yet"}},
+		{"import \"variadic\"\nfunc f() {}", []string{"...ref any is the library's printing functions' alone"}},
 		{"import \"local\"\nfunc f() {}", []string{"local is a field of the standard library's types that stay in their task; a program does not write it"}},
 		{"import \"foreign\"\nfunc f() {}", []string{"cannot define new methods on non-local type io.Error"}},
 		{"import \"shapes\"\nfunc (c ref shapes.Circle) Twice() f64 { return c.Radius * 2 }", []string{"cannot define new methods on non-local type shapes.Circle"}},

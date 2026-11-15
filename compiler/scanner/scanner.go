@@ -220,6 +220,8 @@ scanAgain:
 				tok = token.QUESTION
 				insertSemi = true
 			}
+		case '@':
+			tok = token.AT
 		default:
 			s.errorf(pos, "illegal character %#U", ch)
 			insertSemi = s.insertSemi // keep the pending state

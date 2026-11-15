@@ -39,14 +39,18 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values for the types whose zer
 | `a, b := f()` for two results | Same; several results are a tuple, `return (n, right)` |
 | An `if` is a statement | An `if` with an `else` is also an expression |
 | A newline after `>` continues the line | A newline after `>` ends the line |
+| The order of a variable's read against a call is left open: `ys[i] = f()` may read `i` after `f` | Everything is left to right: the indexes and keys of an assignment's places, then its values, then the stores |
 
 ## Chapter 4: Structs, enums and match
 
-Unchanged: struct fields, keyed literals, dot access, methods with receivers, `type Name T`.
+Unchanged: struct fields, keyed literals, dot access, methods with receivers.
 
 | In Go | In Snello |
 |---|---|
-| `type Node struct { ... }` | `struct Node { ... }` |
+| `type Node struct { ... }` | `struct Node { ... }`; Go's spelling is refused with Snello's |
+| `type Shape interface { ... }` | `trait Shape { ... }` (chapter 11) |
+| `type Celsius float64`, a new type over another | the same, `type Celsius f64`, and the only thing `type` declares: no assignment from `f64` without `Celsius(x)`, none of `f64`'s methods, its own and the traits it lists, `type Celsius f64 impl fmt.Stringer` |
+| `type Name = Other`, an alias | None: `expected type, found '='`; a name is one type. `byte` and `rune` are the predeclared aliases of `u8` and `i32` |
 | Value and pointer receivers, `(t Tree)` and `(t *Tree)` | Three receivers: `(t ref Tree)` reads, `(t mut Tree)` changes, `(t Tree)` takes |
 | A `const` block with `iota`, or an interface with one struct per case | `enum`, with fields per variant |
 | A type switch | `match`, exhaustive, usable as an expression |
@@ -150,6 +154,8 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `next *Node` is `nil` at the end of a list | `next *Node?` is `None` at the end; there is no `nil` |
 | `p == q` compares addresses | `p == q` compares what they hold |
 | A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
+| A pointer for every job: a method that changes a struct, a large argument, a shared value, `nil`, a recursive type | A tool for each: a `mut` receiver, a `ref` or `mut` parameter, `rc.Rc` or `sync.Arc`, `T?`, and `*T` for the recursive type alone; chapter 7, When to use a pointer |
+| `return &local`, which the GC keeps alive | Return the value; `&` moves a value to the heap and takes no address, and a borrow of a local cannot leave its function |
 
 ## Chapter 10: Concurrency
 
@@ -277,3 +283,57 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | A `*Rand` is shared by copying the pointer | A `Rand` is a value: lend it by `mut` to share one sequence; a copy replays from the same point, as a copied `PCG` does |
 | `rand.Uint64`, `Uint32`, `N`, `NormFloat64`, `ExpFloat64` | not in the package |
 
+## Chapter 21: Constants
+
+| In Go | In Snello |
+|---|---|
+| `const KB = 1 << 10`, untyped, exact to any size, folded wherever a constant expression is written | Typed by its context, folded in its own type with an overflow refused, in a `const` and an array length; elsewhere `x := KB * KB` is run-time arithmetic and wraps |
+| `iota` in a `const` block | an `enum`, whose cases are named |
+| `-0.0` is a zero | `-0.0` is a negative zero, as at run time |
+| `len("abc")` is a constant | `len` is not constant; write the number, or make it a `var` |
+| a constant is a basic type | a struct of constant fields may be a constant too, read by its fields |
+
+## Chapter 22: Variadic functions
+
+| In Go | In Snello |
+|---|---|
+| `func Sum(xs ...int)` receives a slice, `Sum(s...)` shares the caller's array | `...T` receives an owned slice the arguments are moved into; `Sum(s...)` moves `s` in, so the function owns it |
+| one form | `...ref T` lends each argument for the call, laid out on the caller's stack, with no allocation; the function returns no borrow of them |
+| `f(xs...)` with `xs []T` | the same; for `...ref T`, `xs` is lent, and a variadic function passes its own `xs...` on for free |
+| `func(...int)` is a type of its own | the same, written `func(...int)` or `func(...ref string)` |
+
+## Chapter 23: Default field values
+
+| In Go | In Snello |
+|---|---|
+| A settings struct whose zero fields mean "the default", read with `if o.Port == 0 { port = 8080 }` | `port int = 8080` in the struct; a literal that leaves the field out takes it, and `0` stays a value of its own |
+| Functional options, `NewServer(WithPort(9000), WithVerbose())` | a struct literal, `Server{port: 9000}`, every setting named, any of them skipped |
+| `os.OpenFile(path, os.O_WRONLY\|os.O_APPEND\|os.O_CREATE, 0o644)` | the same, or `os.OpenOptions{Append: true, Create: true}.Open(path)` |
+| Every struct has a zero value, `var o Options` | a struct with a default has none: `var o Options` is refused, `o := Options{}` takes every default |
+
+## Chapter 24: Reflection at compile time
+
+| In Go | In Snello |
+|---|---|
+| `reflect.TypeOf(v).Kind()` when the program runs | `match T { int => ..., struct => ... }`, decided when the program is compiled, one arm kept per type |
+| `for i := 0; i < t.NumField(); i++ { f := t.Field(i) }` | `for f := range fields(T) { ... v.[f] ... }`, written out once per field, `f.name` a constant |
+| `encoding/json` skips unexported fields in silence | a field the function cannot reach is a compile error, unless the type lists `Reflect` |
+| `func ParsePoint(s string) Point`, a package function per type | `func Point.Parse(s ref string) Point?`, a function of the type, which a trait may require and a generic function call, `T.Parse(s)` (chapter 26) |
+| `json.Marshaler` and `json.Unmarshaler`, the latter a method on a zero value | the same traits, `UnmarshalJSON` a function of the type that returns the value: `func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error>` |
+| `json:"name,omitempty"` tags rename a field and leave it out | typed attributes the compiler checks: `Host string @json.Name("host") @json.OmitEmpty`, and `@json.Skip` for `json:"-"` (chapter 25) |
+| `json.Marshal` of a channel field fails when it runs | refused when the program is compiled, naming the type no arm takes |
+| A `MarshalJSON` and an `UnmarshalJSON` written by hand to give a choice of shapes a `"type"` field | `@json.Tag("type")` on the enum, or `@json.Tag("t") @json.Content("c")`, or `@json.Untagged`; a layout json cannot write is refused when the program is compiled |
+| A generic function that cannot handle a type panics when it runs | `refuse("...")` in the arm that type takes refuses the program when it is compiled, with the chain of calls and the message |
+| a `map[int]V` written with its keys sorted by their text, `"10"` before `"2"`, and read from a key `"01"` or `"+1"` | sorted by their values, `"2"` before `"10"`; a key is read only as JSON writes an integer, so `"01"` and `"+1"` are errors with their offset |
+| `json.MarshalIndent(v, "", "  ")` and `json.Indent(&buf, src, "", "  ")` | the same layout: `json.MarshalIndent(ref v, "", "  ")` and `json.Indent(ref text, "", "  ")`, each returning the text; space after the value is dropped, where Go's `Indent` copies it, and `Indent` refuses text that is not UTF-8, which Go's passes through |
+| `json.NewDecoder(r)`, `dec.Decode(&v)` until `io.EOF`, and `dec.Token()` and `dec.More()` for an array read an element at a time | `json.NewDecoder(mut r)`, `dec.Decode<T>()` until `None`; for an array or object `dec.BeginArray()`, `dec.Key()`, `dec.More()`, `dec.EndArray()` and `dec.Peek()`, each saying what it reads, in place of one `Token` of any kind; a reader's failure is `dec.IoError()` |
+| `json.NewEncoder(w)`, `enc.Encode(v)` | `json.NewEncoder(mut w)`, `enc.Encode(ref v)`, a line break after each value as Go writes it; after a write fails, every later `Encode` returns the failure |
+
+## Chapter 27: Writing Snello
+
+| In Go | In Snello |
+|---|---|
+| gofmt's layout and Effective Go's names | the same layout and the same naming, plus the file order of chapter 27: constants, types, exported API, then helpers |
+| `switch c { case beginObject: }`, a constant in a case | `match { c == beginObject => ... }`: a constant is no pattern |
+| `panic` in a library on a bad argument | an option or a `Result` with an error that says where; the standard library does not panic |
+| a pointer parameter says nothing of who keeps the value | `ref T` read, `mut T` changed, `T` kept: the signature says it |
