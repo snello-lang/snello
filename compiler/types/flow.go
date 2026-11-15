@@ -81,10 +81,12 @@ type flowAccess struct {
 type dropWhy uint8
 
 const (
-	dropBlock dropWhy = iota // at the end of the block that declares it
-	dropPass                 // at the end of a pass of the loop that declares it
-	dropLeave                // where a break or continue leaves its block
-	dropExit                 // at the end of the function's body, after the deferred calls that borrow the variable run
+	dropBlock     dropWhy = iota // at the end of the block that declares it
+	dropPass                     // at the end of a pass of the loop that declares it
+	dropLeave                    // where a break or continue leaves its block
+	dropExit                     // at the end of the function's body, after the deferred calls that borrow the variable run
+	dropStatement                // a temporary a match or if-binding borrows from, where its statement ends
+	dropCondition                // a temporary an if\'s or a for\'s condition borrows from, once the condition is decided
 )
 
 // A flowDrop is a variable dying where its block ends.
@@ -131,26 +133,28 @@ type flowError struct {
 
 // A flow is the graph of one function's or closure's body.
 type flow struct {
-	blocks   []flowBlock
-	cur      int
-	loans    []borrow
-	accesses []flowAccess
-	drops    []flowDrop
-	copies   []flowCopy
-	rets     []flowReturn
-	errs     []flowError
-	deferred []*Var        // the holders of what deferred calls borrow, live until the function returns
-	fnScope  *Scope        // the scope of the body's parameters, the outermost a return drops
-	outside  map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
-	parent   *flow         // for a closure's body, the graph of the body it is written in
-	ends     []int         // the ends of the branches of the open forks
-	breaks   []int         // the breaks of the open loops
-	aside    []flowEvent   // the events of an assignment's target, which take effect after its value
-	asiding  int
-	outer    token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
-	seq      int
-	back     bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
-	vars     map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
+	blocks    []flowBlock
+	cur       int
+	loans     []borrow
+	accesses  []flowAccess
+	drops     []flowDrop
+	copies    []flowCopy
+	rets      []flowReturn
+	errs      []flowError
+	deferred  []*Var        // the holders of what deferred calls borrow, live until the function returns
+	fnScope   *Scope        // the scope of the body's parameters, the outermost a return drops
+	outside   map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
+	temps     []*Var        // the holders standing for the temporaries the statements being checked bind borrows of, dropped where each statement ends
+	temporary map[*Var]bool // every such holder, for a message
+	parent    *flow         // for a closure's body, the graph of the body it is written in
+	ends      []int         // the ends of the branches of the open forks
+	breaks    []int         // the breaks of the open loops
+	aside     []flowEvent   // the events of an assignment's target, which take effect after its value
+	asiding   int
+	outer     token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
+	seq       int
+	back      bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
+	vars      map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
 
 	// The loans each variable holds, as a chain through the loans: the
 	// first and last loan of each variable, by its number, and the loan
@@ -184,6 +188,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.ends, f.breaks, f.aside, f.asiding, f.seq = f.ends[:0], f.breaks[:0], f.aside[:0], 0, 0
 	f.deferred, f.parent, f.fnScope, f.outside, f.back = f.deferred[:0], nil, nil, nil, false
+	f.temps, f.temporary = f.temps[:0], nil
 	flows.Put(f)
 }
 
@@ -313,6 +318,78 @@ func (c *Checker) flowDeferred(pos token.Pos) *Var {
 	v := NewVar(pos, "", Typ[Invalid])
 	f.deferred = append(f.deferred, v)
 	return v
+}
+
+// flowTemporary makes a holder standing for the temporary tmp, which a
+// match or an if-binding binds borrows of: each binding holds it, and it
+// is dropped where the statement ends, so that no borrow of it leaves
+// the statement, returned or kept: match ref mk() { A(xs) => return xs }
+// would outlive mk().
+func (c *Checker) flowTemporary(tmp ast.Expr) *Var {
+	f := c.flow
+	if f == nil || c.dead {
+		return nil
+	}
+
+	v := NewVar(tmp.Pos(), exprText(unparen(tmp)), Typ[Invalid])
+	c.flowAssign(v, "")
+	f.temps = append(f.temps, v)
+	if f.temporary == nil {
+		f.temporary = make(map[*Var]bool)
+	}
+
+	f.temporary[v] = true
+	return v
+}
+
+// lendTemporary gives each variable of the scope s that holds a borrow,
+// a binding of a match's arm, a loan of the temporary's holder.
+func (c *Checker) lendTemporary(s *Scope, holder *Var, pos token.Pos) {
+	if holder == nil {
+		return
+	}
+
+	for _, obj := range s.elems {
+		if v, ok := obj.(*Var); ok && holdsBorrow(v.typ) {
+			c.flowLoan(borrow{holder: v, place: place{holder, ""}, pos: pos})
+		}
+	}
+}
+
+// tempMark is where the holders of the statement about to be checked
+// begin, for dropTemporaries.
+func (c *Checker) tempMark() int {
+	if c.flow == nil {
+		return 0
+	}
+
+	return len(c.flow.temps)
+}
+
+// dropTemporaries drops the holders made since mark where their
+// statement ends, at end.
+func (c *Checker) dropTemporaries(mark int, end token.Pos) {
+	c.dropTemporariesFor(mark, end, dropStatement)
+}
+
+// dropTemporariesFor drops the holders made since mark at end, for the
+// reason why.
+func (c *Checker) dropTemporariesFor(mark int, end token.Pos, why dropWhy) {
+	f := c.flow
+	if f == nil || len(f.temps) <= mark {
+		return
+	}
+
+	if !c.dead {
+		for _, v := range f.temps[mark:] {
+			i := len(f.drops)
+			f.seq++
+			f.drops = append(f.drops, flowDrop{v: v, pos: end, why: why, seq: f.seq})
+			c.flowAdd(flowEvent{kind: evDrop, v: v, i: i})
+		}
+	}
+
+	f.temps = f.temps[:mark]
 }
 
 // flowAccess records an access to the place p, made by e at pos.
@@ -1178,6 +1255,10 @@ func dropWhere(why dropWhy) string {
 		return " at the end of the loop's pass at "
 	case dropLeave:
 		return " where its block is left at "
+	case dropStatement:
+		return " at the end of the statement that begins at "
+	case dropCondition:
+		return " after the condition that begins at "
 	}
 
 	return " at the end of its block at "

@@ -142,10 +142,21 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 
 		op := c.expr(elt, hint)
 		elems[i] = valueType(op)
+		if isBorrow(op.typ) && (isBorrow(hint) || lends(elt)) {
+			elems[i] = op.typ // (mut j, 1) holds the borrow, as a name given mut j does, and so does a part a borrow is wanted for
+		}
+
 		c.maybeMove(op, elems[i]) // the part moves into the tuple
 	}
 
 	return operand{value, NewTuple(elems...), nil, nil}
+}
+
+// lends reports whether e is a ref or a mut of a place, which makes a
+// borrow, against a borrow read out of a variable.
+func lends(e ast.Expr) bool {
+	u, ok := unparen(e).(*ast.UnaryExpr)
+	return ok && (u.Op == token.REF || u.Op == token.MUT)
 }
 
 // compositeLit checks T{...}. A struct literal names its fields; a

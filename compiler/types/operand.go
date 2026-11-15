@@ -63,7 +63,9 @@ func deref(x operand) (Type, mode) {
 
 // condition checks the condition of an if or a for.
 func (c *Checker) condition(e ast.Expr) {
+	temps := c.tempMark()
 	c.assign(c.expr(e, Typ[Bool]), Typ[Bool], e.Pos(), "condition")
+	c.dropTemporariesFor(temps, e.Pos(), dropCondition) // a condition's temporaries are dropped once it is decided, before the body runs
 }
 
 // assign reports an error when op cannot be used where a value of type

@@ -212,6 +212,36 @@ func TestIsCopy(t *testing.T) {
 	}
 }
 
+// TestHoldsMutBorrow checks which types carry a mut borrow in a part,
+// and that a ref, or a type holding none, does not.
+func TestHoldsMutBorrow(t *testing.T) {
+	lent := NewNamed(NewTypeName(token.NoPos, "Lent", nil), nil, nil)
+	lent.SetUnderlying(NewStruct([]*Var{NewField(token.NoPos, "n", integer), NewField(token.NoPos, "p", NewRef(integer, true))}))
+	list := NewNamed(NewTypeName(token.NoPos, "List", nil), nil, nil) // struct List { n int; next *List }
+	list.SetUnderlying(NewStruct([]*Var{NewField(token.NoPos, "n", integer), NewField(token.NoPos, "next", NewPointer(list))}))
+	tests := []struct {
+		typ  Type
+		want bool
+	}{
+		{NewRef(integer, true), true},
+		{NewRef(integer, false), false},
+		{lent, true}, // its second field is a mut
+		{NewOption(NewRef(integer, true)), true},
+		{NewTuple(integer, NewRef(str, true)), true},
+		{NewTuple(NewRef(str, false), integer), false},
+		{NewResult(integer, lent), true},
+		{NewArray(lent, 2), true},
+		{node, false},
+		{list, false}, // reaches itself through a pointer, and holds no borrow
+		{Typ[Int], false},
+	}
+	for _, tt := range tests {
+		if got := HoldsMutBorrow(tt.typ); got != tt.want {
+			t.Errorf("HoldsMutBorrow(%s) = %v, want %v", tt.typ, got, tt.want)
+		}
+	}
+}
+
 func TestUniverse(t *testing.T) {
 	tests := []struct {
 		name string

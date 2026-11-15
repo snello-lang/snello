@@ -50,6 +50,11 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 
 	consumed := false
 	outer := c.scope
+	var holder *Var // what the arms' bindings that hold a borrow borrow, when the scrutinee lends a temporary: match ref mk() or match mk().First()
+	if tmp := c.borrowOfTemporary(e.X); tmp != nil {
+		holder = c.flowTemporary(tmp)
+	}
+
 	for _, arm := range e.Arms {
 		armScope := c.openScope()
 		c.bindsOwned = false
@@ -57,6 +62,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		p := c.pattern(arm.Pat, scrutinee, b)
 		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
 			c.bindThrough(arm.Pat, e.X, b)
+			c.lendTemporary(armScope, holder, arm.Pat.Pos())
 			if c.bindsOwned && !consumed && c.fromPlace(e.X, x.mode) {
 				c.flowIn(f.from, func() { c.moveBefore(e.X, variable, &f) }) // a part bound by value leaves the place, on every arm, before any; a temporary's part may not leave it
 				consumed = true

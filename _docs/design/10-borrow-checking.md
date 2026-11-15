@@ -52,7 +52,9 @@ A function's body is cut into blocks, straight runs of events, joined by the edg
 | `break`, `continue` | to the point after the loop, or to its post statement or head |
 | `return`, a `?` that returns, a call that never returns, `panic` | nowhere, after dropping what every open block declares: nothing after them is used |
 
-A match that binds a part of its value by value moves the value before any arm runs, so the move is recorded where the arms begin. A closure's body is a function of its own, with a graph of its own, which points to the graph of the body it is written in.
+A match that binds a part of its value by value moves the value before any arm runs, so the move is recorded where the arms begin; an if-binding moves it before its binding holds it, the same way, so `if p := o` with `o` an option of a `mut` borrow binds what `o` held instead of colliding with its own binding.
+
+A value is made before it is stored, and its loans are taken with it. When a value reads a variable the statement gives a value to or declares, `a = id(a)`, `a, b = b, a`, `h.src = h.src`, `r := r` in an inner block, a holder takes the value's loans before any of the statement's assignments or declarations, and each place copies them from the holder after its own assignment (`carry` in `stmt.go`). Without it the assignment to `a` ended what `a` held before the copy out of `a` ran, so `a` held nothing and a borrow of a dropped local was accepted; and `r := r` read the new `r`, declared by then, instead of the one it shadows. A value that reads no such variable carries its loans directly, as before, and no holder is made. A closure's body is a function of its own, with a graph of its own, which points to the graph of the body it is written in.
 
 The events, each in its block, in the order the program does them:
 

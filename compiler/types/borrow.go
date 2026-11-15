@@ -320,14 +320,13 @@ func (c *Checker) static(e ast.Expr) bool {
 // of a literal or tuple, or nil when every borrow in e comes from a
 // place.
 func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
-	if vs, ok := branches(e); ok {
-		for _, v := range vs { // a branch that lends a temporary
-			if tmp := c.borrowOfTemporary(v); tmp != nil {
-				return tmp
-			}
+	var tmp ast.Expr
+	if eachBranch(e, func(v ast.Expr) { // a branch that lends a temporary
+		if tmp == nil {
+			tmp = c.borrowOfTemporary(v)
 		}
-
-		return nil
+	}) {
+		return tmp
 	}
 
 	switch x := e.(type) {
@@ -502,11 +501,7 @@ func (c *Checker) sources(e ast.Expr, f func(src ast.Expr, read, deref bool)) {
 }
 
 func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, bool, bool)) {
-	if vs, ok := branches(e); ok {
-		for _, v := range vs {
-			c.sourcesLent(v, lent, deref, f)
-		}
-
+	if eachBranch(e, func(v ast.Expr) { c.sourcesLent(v, lent, deref, f) }) {
 		return
 	}
 
@@ -536,6 +531,10 @@ func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, boo
 		if src := c.callSource(e); src != nil {
 			c.sourcesLent(src, true, deref, f) // a call's result borrows its source: lent, whatever the source is
 		}
+	case *ast.TupleExpr:
+		for _, elt := range e.Elts { // (ref w, 1) carries w
+			c.sourcesLent(elt, lent, deref, f)
+		}
 	case *ast.CompositeLit:
 		for _, elt := range e.Elts { // Holder{src: ref t} carries t
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
@@ -549,51 +548,55 @@ func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, boo
 	}
 }
 
-// branches returns the expressions the value of e is chosen from at run
-// time, and whether e is such a choice: both sides of x ?? y, and the
-// value of each branch of an if or match expression, the expression a
-// branch's block ends with. A side that leaves, ?? return, gives none.
-func branches(e ast.Expr) ([]ast.Expr, bool) {
-	var vs []ast.Expr
+// eachBranch calls f with each expression the value of e is chosen
+// from at run time, and reports whether e is such a choice: both sides
+// of x ?? y, and the value of each branch of an if or match expression,
+// the expression a branch's block ends with. A side that leaves, ??
+// return, gives none. It allocates nothing.
+func eachBranch(e ast.Expr, f func(ast.Expr)) bool {
+	yield := func(n ast.Node) {
+		if v := valueOf(n); v != nil {
+			f(v)
+		}
+	}
+
 	switch x := unparen(e).(type) {
 	case *ast.CoalesceExpr:
-		vs = append(append(vs, x.X), valueOf(x.Else)...)
+		f(x.X)
+		yield(x.Else)
 	case *ast.IfExpr:
 		for x != nil {
-			vs = append(vs, valueOf(x.Then)...)
-			switch els := x.Else.(type) {
-			case *ast.IfExpr:
-				x = els
-				continue
-			default:
-				vs = append(vs, valueOf(els)...)
+			yield(x.Then)
+			els, chained := x.Else.(*ast.IfExpr)
+			if !chained {
+				yield(x.Else)
 			}
 
-			x = nil
+			x = els
 		}
 	case *ast.MatchExpr:
 		for _, arm := range x.Arms {
-			vs = append(vs, valueOf(arm.Body)...)
+			yield(arm.Body)
 		}
 	default:
-		return nil, false
+		return false
 	}
 
-	return vs, true
+	return true
 }
 
 // valueOf returns the expression a branch yields: the branch itself
-// when it is one, or the expression its block ends with.
-func valueOf(n ast.Node) []ast.Expr {
+// when it is one, or the expression its block ends with; nil for none.
+func valueOf(n ast.Node) ast.Expr {
 	switch n := n.(type) {
 	case *ast.BlockStmt:
 		if len(n.List) > 0 {
 			if s, ok := n.List[len(n.List)-1].(*ast.ExprStmt); ok {
-				return []ast.Expr{s.X}
+				return s.X
 			}
 		}
 	case ast.Expr:
-		return []ast.Expr{n}
+		return n
 	}
 
 	return nil

@@ -37,6 +37,15 @@ func TestEscapes(t *testing.T) {
 		{"enum E { A([]int); B(int) }\nfunc f(e ref E) (ref int)? { return match e { A(items) => Some(ref items[0]), _ => None } }", nil}, // a binding of a borrowed value
 		{"func f(xs ref []int) ref []int { ys := xs; return ref ys }", []string{"cannot return a borrow of local ys"}},                    // the local itself
 		{"func f() ref int { xs := []int{1}; ys := ref xs; return ref ys[0] }", []string{"cannot return a borrow of local xs"}},           // what it borrows is local
+		// What a match or an if-binding binds of a temporary is a borrow of the temporary, which its statement drops.
+		{"enum E { A([]int); B(int) }\nfunc mk() E { return A([]int{1}) }\nfunc f(z ref int) ref int { match ref mk() { A(items) => return ref items[0], _ => {} }; return z }", []string{"cannot return a borrow of a temporary: mk() is dropped when its statement ends"}},
+		{"enum E { A([]int); B(int) }\nfunc mk() E { return A([]int{1}) }\nfunc f() (ref []int)? { return match ref mk() { A(items) => Some(items), _ => None } }", []string{"cannot return a borrow of a temporary: mk() is dropped when its statement ends"}},
+		{"struct Box { xs []int }\nfunc (b ref Box) First() (ref int)? { return None }\nfunc mkb() Box { return Box{xs: []int{1}} }\nfunc f() (ref int)? { if first := mkb().First() { return Some(first) }; return None }", []string{"cannot return a borrow of a temporary: mkb() is dropped when its statement ends"}},
+		{"enum E { A([]int); B(int) }\nfunc mk() E { return A([]int{1}) }\nfunc f() int { return match ref mk() { A(items) => items[0], B(n) => *n } }", nil}, // used inside its statement
+		// A closure's returned borrow is tied to its parameters, never to what it captures.
+		{"func f() ref int { xs := []int{1}; ys := ref xs; g := func() ref int { return ref ys[0] }; return g() }", []string{"cannot return a borrow of ys from a closure: ys is captured, and a closure's returned borrow is tied to its parameters"}},
+		{"func f(s ref string) { g := func() ref string { return s }; print(g()) }", []string{"cannot return a borrow of s from a closure: s is captured"}},
+		{"func f(xs ref []int) ref int { pick := func(ys ref []int) ref int { return ref ys[0] }; return pick(xs) }", nil}, // its own parameter
 		{"struct Box { v int }\nfunc (b ref Box) Get() ref int { return ref b.v }\nfunc f() ref int { b := Box{v: 1}; return b.Get() }", []string{"cannot return a borrow of local b"}},
 		{"func first(xs ref []int) ref int { return ref xs[0] }\nfunc f() ref int { xs := []int{1}; return first(xs) }", []string{"cannot return a borrow of local xs"}},
 		{"func f() ref int { xs := []int{1}; return xs[0] }", []string{"cannot return a borrow of local xs"}},
