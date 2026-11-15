@@ -77,7 +77,7 @@ The compiler is written in Go, with nothing but Go's standard library, after the
 
 ## Try it
 
-With Go 1.27.2 or later, and `clang` on the path, install the compiler:
+On Linux, or on macOS 14.4 or later, with Go 1.27.2 or later and `clang` on the path, install the compiler:
 
 ```
 go install github.com/snello-lang/snello/cmd/snello@latest

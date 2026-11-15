@@ -91,18 +91,14 @@ static void park_while(sn_lock *l) {
     sn_enqueue(&l->lockq, &me);
     sn_qlock_give(&l->mu);
     sn_await_wait(&ws);
-    sn_qlock_take(&l->mu);
-    sn_qlock_give(&l->mu);
 }
 
 static void wake_one(sn_lock *l) {
     sn_qlock_take(&l->mu);
     sn_waiter *w = sn_dequeue(&l->lockq);
-    if (w != NULL) {
-        sn_finish_wait(w, true);
-    }
-
+    sn_task *woken = w != NULL ? sn_finish_wait(w, true) : NULL;
     sn_qlock_give(&l->mu);
+    sn_queue_claimed(woken); // with the lock let go: queuing may wake a thread
 }
 
 // sync_spin waits a little for a lock held by a running task, and returns
@@ -191,11 +187,9 @@ static void sema_release(sn_lock *l, semaphore *s) {
 
     sn_qlock_take(&l->mu);
     sn_waiter *w = sn_dequeue(&s->q);
-    if (w != NULL) {
-        sn_finish_wait(w, true);
-    }
-
+    sn_task *woken = w != NULL ? sn_finish_wait(w, true) : NULL;
     sn_qlock_give(&l->mu);
+    sn_queue_claimed(woken);
 }
 
 void sn_sync_lock(int64_t h) {
@@ -254,8 +248,8 @@ bool sn_sync_count(int64_t h, int64_t n) {
 
     l->count = count;
     if (l->count == 0) {
-        for (sn_waiter *w; (w = sn_dequeue(&l->groupq)) != NULL;) {
-            sn_finish_wait(w, true);
+        for (sn_waiter *w; (w = sn_dequeue(&l->groupq)) != NULL;) { // under the lock: the count reaches zero once
+            sn_queue_claimed(sn_finish_wait(w, true));
         }
     }
 
@@ -276,8 +270,6 @@ void sn_sync_wait(int64_t h) {
     sn_enqueue(&l->groupq, &me);
     sn_qlock_give(&l->mu);
     sn_await_wait(&ws);
-    sn_qlock_take(&l->mu);
-    sn_qlock_give(&l->mu);
 }
 
 // sn_sync_atomicAdd adds d to *n as one step no other task's add can

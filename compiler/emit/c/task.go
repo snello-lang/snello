@@ -153,11 +153,13 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, h *handle, pos
 }
 
 // spawnCall writes the block of a task's values, named after the
-// task, the trampoline that calls the function with them and frees
-// the block, and the spawn. A result the function returns is dropped
-// by the trampoline, as the statement discards it; with a handle the
-// block also holds the task's channel handle and the result, which the
-// trampoline sends after the call, or the panic that ended it.
+// task and built in the spawning function's frame, which the runtime
+// copies into the task's record; the trampoline that calls the
+// function with the copy; and the spawn. A result the function
+// returns is dropped by the trampoline, as the statement discards it;
+// with a handle the block also holds the task's channel handle and the
+// result, which the trampoline sends after the call, or the panic that
+// ended it.
 func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []string, results types.Type, h *handle, pos token.Pos) {
 	st := "struct " + lower.SpawnTask(k)
 	var fields strings.Builder
@@ -187,22 +189,22 @@ func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []str
 	}
 
 	block := e.temp()
-	e.line(st + " *" + block + " = sn_alloc(sizeof *" + block + ");")
+	e.line(st + " " + block + " = {0};") // whole, so that a block with no value is defined where it is copied from
 	for i, v := range values {
-		e.line(block + "->a" + strconv.Itoa(i) + " = " + v + ";")
+		e.line(block + ".a" + strconv.Itoa(i) + " = " + v + ";")
 	}
 
 	if h != nil {
 		h.done = e.temp()
-		e.line("sn_chan *" + h.done + " = sn_chan_make(sizeof(" + e.cType(h.elem, pos) + "), 1, " + e.elemDropper(h.elem, pos) + ", " + e.madeAt(pos) + ");")
-		e.line(block + "->sn_done = sn_chan_clone(" + h.done + ", " + strconv.Itoa(lower.HandleBoth) + ");")
+		e.line("sn_chan *" + h.done + " = sn_chan_make(" + e.elemSize(h.elem, pos) + ", 1, " + e.elemDropper(h.elem, pos) + ", " + e.madeAt(pos) + ");")
+		e.line(block + ".sn_done = sn_chan_clone(" + h.done + ", " + strconv.Itoa(lower.HandleBoth) + ");")
 	}
 
-	e.line("sn_spawn(" + lower.SpawnEntry(k) + ", " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]);")
+	e.line("sn_spawn(" + lower.SpawnEntry(k) + ", &" + block + ", sizeof " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]);")
 }
 
 // spawnEntry writes the trampoline of a spawn statement's task: the
-// call, its result dropped, and the block freed.
+// call on the record's copy of the block, its result dropped.
 func (e *Emitter) spawnEntry(k int, st, call string, unpack bool, results types.Type, pos token.Pos) {
 	body := "\t" + call + ";\n"
 	if results != types.Unit {
@@ -219,7 +221,11 @@ func (e *Emitter) spawnEntry(k int, st, call string, unpack bool, results types.
 		a = "\t" + st + " *a = p;\n"
 	}
 
-	put(&e.helpers, "static void ", lower.SpawnEntry(k), "(void *p) {\n", a, body, "\tsn_free(p);\n}\n\n")
+	if !unpack {
+		a = "\t(void)p;\n"
+	}
+
+	put(&e.helpers, "static void ", lower.SpawnEntry(k), "(void *p) {\n", a, body, "}\n\n")
 }
 
 // caughtEntry writes the trampoline of a task with a handle: the call
@@ -260,8 +266,7 @@ func (e *Emitter) caughtEntry(k int, st, call string, unpack bool, results, elem
 		"\tif (!sn_chan_offer(a->sn_done, &r)) {\n",
 		"\t\t", e.dropOf("r", elem, pos), "\n",
 		"\t}\n",
-		"\tsn_chan_drop(&a->sn_done, "+strconv.Itoa(lower.HandleBoth)+");\n",
-		"\tsn_free(p);\n}\n\n")
+		"\tsn_chan_drop(&a->sn_done, "+strconv.Itoa(lower.HandleBoth)+");\n}\n\n")
 }
 
 // spawnee names the C function a spawned call of fun runs, with its

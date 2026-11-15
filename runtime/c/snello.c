@@ -13,6 +13,7 @@
 // sync.c.
 
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE     // glibc's syscall, for the futex the queue lock sleeps on
 #define _DARWIN_C_SOURCE
 
 #include "internal.h"
@@ -20,10 +21,32 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/resource.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <os/os_sync_wait_on_address.h>
+#if !defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || __MAC_OS_X_VERSION_MIN_REQUIRED < 140400
+#error "the queue lock sleeps through os_sync_wait_on_address, which needs macOS 14.4 or later"
+#endif
+#else
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
+
+// A contender for a queue lock spins lock_spins rounds of
+// lock_spin_pauses pauses, then yields its processor lock_yields times,
+// trying the lock after each, before it sleeps. The rounds are a few
+// microseconds, the time a holder takes when its critical section
+// reaches into another core's cache, a waiter's frame or a task's
+// record: measured with eight tasks sending to one channel, rounds of
+// thirty pauses had every contender yield or sleep and the program run
+// in 470 ms, and rounds of four thousand had them spin through and it
+// run in 310 ms.
+enum { lock_spins = 4, lock_spin_pauses = 4000, lock_yields = 1 };
 
 sn_slice sn_os_Args = { 0 };
 
@@ -317,23 +340,96 @@ sn_waiter *sn_dequeue(sn_waitq *q) {
     return NULL;
 }
 
-// sn_finish_wait ends a wait sn_dequeue took and wakes its task. The
-// caller holds the lock of the queue the waiter was on.
-void sn_finish_wait(sn_waiter *w, bool success) {
+// sn_finish_wait ends a wait sn_dequeue took and claims its task's
+// wake, under the lock of the queue the waiter was on: it returns the
+// task for the caller to queue with sn_wake_queue once it has let the
+// lock go, or NULL when the task is still running and consumes the wake
+// at its park. Queuing a task takes its worker's slot and may wake a
+// thread, which is too much to hold a lock other threads are after
+// across; the task claimed runs nowhere until queued, so the lock is
+// not needed for it. The claim goes through the wait's handoff, since
+// the woken task takes no lock on its way out: it leaves its wait only
+// once the handoff says woken, after the claim has read its state, so
+// it cannot end and be freed under the claim.
+sn_task *sn_finish_wait(sn_waiter *w, bool success) {
     w->success = success;
     w->ws->fired = w->index;
-    sn_task *t = w->t;
-    atomic_store_explicit(&w->ws->done, 1, memory_order_release);
-    sn_wake(t);
+    sn_task *t = w->t; // read before the claim, after which nothing of the waiter is read
+    return sn_handoff_claim(&w->ws->done, t) ? t : NULL;
 }
 
-// sn_await_wait parks until an operation has finished the wait; a wake
-// kept from an earlier wait costs one more park.
-void sn_await_wait(sn_wait_state *ws) {
-    while (!atomic_load_explicit(&ws->done, memory_order_acquire)) {
-        sn_park();
+// sn_await_wait parks until an operation has finished the wait: parked
+// while the handoff is open, spinning the few instructions of the claim
+// while it says waking; a wake kept from an earlier wait costs one more
+// park.
+void sn_await_wait(sn_wait_state *ws) { sn_handoff_wait(&ws->done); }
+
+// sn_word_wait sleeps while the word holds v, and sn_word_wake wakes
+// one thread asleep on it: the system's wait on an address, Linux's
+// futex and Darwin's os_sync_wait_on_address, which the kernel keys by
+// the address, so a lock or a worker needs no handle of the system's.
+#ifdef __APPLE__
+void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+    (void)os_sync_wait_on_address(w, v, sizeof *w, OS_SYNC_WAIT_ON_ADDRESS_NONE); // a return before a wake reads again
+}
+
+void sn_word_wake(_Atomic uint32_t *w) {
+    (void)os_sync_wake_by_address_any(w, sizeof *w, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+}
+#else
+void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+    (void)syscall(SYS_futex, w, FUTEX_WAIT_PRIVATE, v, NULL, NULL, 0);
+}
+
+void sn_word_wake(_Atomic uint32_t *w) { (void)syscall(SYS_futex, w, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0); }
+#endif
+
+// sn_qlock_contended takes a queue lock found held. It spins for the
+// lock, sleepers or none, since the holder is a few instructions from
+// giving it back and a sleep costs a wake, and then marks the lock
+// slept on and sleeps until a give wakes it; a contender that has slept
+// takes the lock as slept on, so that the next give wakes the sleepers
+// it may have left behind. A contender that stopped spinning as soon as
+// another slept was measured: with eight tasks sending on one channel
+// every newcomer slept at once and every give woke one. A program on
+// one processor has no holder running to spin for, and yields once.
+void sn_qlock_contended(sn_qlock *l) {
+    int spins = sn_sched_workers() > 1 ? lock_spins : 0; // one worker: no holder runs to spin for
+    uint32_t taken = SN_LOCK_HELD;                       // what the lock reads once taken: slept on, after a sleep
+    for (;;) {
+        uint32_t v = SN_LOCK_HELD;
+        for (int round = 0; round < spins + lock_yields; round++) {
+            v = atomic_load_explicit(&l->state, memory_order_relaxed);
+            while (v == SN_LOCK_FREE) {
+                if (atomic_compare_exchange_weak_explicit(&l->state, &v, taken, memory_order_acquire,
+                                                          memory_order_relaxed)) {
+                    return;
+                }
+            }
+
+            if (round < spins) {
+                for (int i = 0; i < lock_spin_pauses; i++) {
+                    sn_spin_hint();
+                }
+            } else {
+                sched_yield();
+            }
+        }
+
+        v = atomic_load_explicit(&l->state, memory_order_relaxed); // as it is now, not as the last round read it
+        if (v != SN_LOCK_SLEPT_ON && // already marked: the write would change nothing on a line others are after
+            atomic_exchange_explicit(&l->state, SN_LOCK_SLEPT_ON, memory_order_acquire) == SN_LOCK_FREE) {
+            return; // free at the last moment: taken, as slept on, since the sleepers are not known to be gone
+        }
+
+        taken = SN_LOCK_SLEPT_ON;
+        sn_word_wait(&l->state, SN_LOCK_SLEPT_ON);
     }
 }
+
+// sn_qlock_wake wakes one contender asleep on the lock's word, for a
+// give that found the lock slept on.
+void sn_qlock_wake(sn_qlock *l) { sn_word_wake(&l->state); }
 
 // A random number per worker thread: a select's random order of its
 // cases, so that a busy channel does not starve the others, and the
