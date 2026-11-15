@@ -1026,7 +1026,7 @@ func (e *Emitter) inside(p string, elem, want types.Type, held string, heldType 
 }
 
 // try writes x?: the value inside, after a return of the absent or
-// failed case as the function's own result.
+// failed case as the function's own result, marked unlikely.
 func (e *Emitter) try(x *ast.TryExpr) value {
 	p, t, held := e.consumed(x.X)
 	fail, ok := e.block("try.fail"), e.block("try")
@@ -1037,7 +1037,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		var has value
 		elem = u.Elem()
 		has, val = e.optionParts(e.irType(t, x.Pos()), p, u)
-		e.branch(has.s, ok, fail)
+		e.branchLikely(has.s, ok, fail)
 		e.label(fail)
 		e.leaveFunction(x.Pos())
 		e.inst("ret " + e.variantValue(e.fn.sig.Results(), types.NoneVariant, nil, x.Pos()).typed())
@@ -1046,7 +1046,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		elem = u.Val()
 		okFlag := e.load("i1", e.gep(ir, p, 0))
 		val = e.gep(ir, p, 1)
-		e.branch(okFlag.s, ok, fail)
+		e.branchLikely(okFlag.s, ok, fail)
 		e.label(fail)
 		err := e.passed(x, e.taken(val, u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())

@@ -10,10 +10,12 @@ import (
 )
 
 // try hands the error to passed: wrapped in the variant the checker
-// chose, boxed as a trait value, or as it is.
+// chose, boxed as a trait value, or as it is; its failure is marked
+// unlikely, so the path that goes on is laid straight.
 func TestTryPasses(t *testing.T) {
 	out := emitError(t)
 	tests := []struct{ head, want, what string }{
+		{"static SN_UNUSED sn_res_int_AppError sn__parse(sn_string text)", "if (SN_UNLIKELY(!", "? marks its failure unlikely"},
 		{"static SN_UNUSED sn_res_int_AppError sn__parse(sn_string text)", ".err = (AppError){.tag = 0, .Parse = {.cause = ", "? wraps a strconv.Error in Parse, the one variant holding it"},
 		{"static SN_UNUSED sn_res_int_Error sn__parseAny(sn_string text)", ".err = sn_sn_strconv_Error_as_Error(", "? boxes a strconv.Error into the Error value the function returns"},
 	}

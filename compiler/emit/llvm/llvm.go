@@ -649,6 +649,15 @@ func (e *Emitter) branch(c, then, els string) {
 	e.fn.terminated = true
 }
 
+// branchLikely writes a branch on c that goes to then nearly always:
+// the optimizer lays that path straight and keeps the calls on it
+// inline, as for x?, whose failure is seldom taken.
+func (e *Emitter) branchLikely(c, then, els string) {
+	e.declare("llvm.expect.i1", "declare i1 @llvm.expect.i1(i1, i1)")
+	expected := e.op("call i1 @llvm.expect.i1(i1 "+c+", i1 true)", "i1")
+	e.branch(expected.s, then, els)
+}
+
 // temp returns a fresh register name.
 func (e *Emitter) temp() string {
 	e.fn.tmp++

@@ -43,6 +43,11 @@ typedef struct {
 // Snello; every emitted function carries this.
 #define SN_UNUSED __attribute__((unused))
 
+// A failure the program passes on with ?, which it seldom takes: the
+// compiler lays the path that goes on straight and keeps the calls on
+// it inline, as it does for a path that panics.
+#define SN_UNLIKELY(c) __builtin_expect(!!(c), 0)
+
 // A slice of T is emitted as a struct of a T pointer, a length and a
 // capacity, in this order, so every one has the shape of sn_slice and
 // the operations below work on any of them given the element size.

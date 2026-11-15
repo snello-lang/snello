@@ -336,16 +336,16 @@ func (e *Emitter) isPlace(x ast.Expr) bool {
 }
 
 // try writes x?: the value inside, after a return of the absent or
-// failed case as the function's own result.
+// failed case as the function's own result, marked unlikely.
 func (e *Emitter) try(x *ast.TryExpr) string {
 	place, t, held := e.consumed(x.X)
 	switch u := t.Underlying().(type) {
 	case *types.Option:
-		e.line("if (!" + place + ".has) {")
+		e.line("if (SN_UNLIKELY(!" + place + ".has)) {")
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.NoneVariant, nil, x.Pos()) + ";")
 	case *types.Result:
-		e.line("if (!" + place + ".ok) {")
+		e.line("if (SN_UNLIKELY(!" + place + ".ok)) {")
 		err := e.passed(x, e.taken(place+".err", u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
 		e.line("return " + e.variantValue(e.result, types.ErrVariant, []string{err}, x.Pos()) + ";")
