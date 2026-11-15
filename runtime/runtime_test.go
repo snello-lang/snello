@@ -988,6 +988,209 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestRingUnderContention has eight tasks send fifty thousand values
+// each into a ring of seven places, a capacity that is no power of two,
+// read by four tasks that sum what they take, and the same with values
+// of no size, counted: every value sent arrives once, the ring's length
+// never reads above its capacity, and the receivers end once the last
+// sender has gone and the ring is drained.
+func TestRingUnderContention(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { senders = 8, receivers = 4, each = 50000, places = 7 };
+static _Atomic int64_t sum, count, over;
+static void send_ints(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    for (int64_t i = 1; i <= each; i++) {
+        sn_chan_send(c, &i);
+        if (sn_chan_len(c) > places) {
+            atomic_fetch_add(&over, 1);
+        }
+    }
+
+    sn_chan_drop(&c, SN_CHAN_SEND);
+}
+static void recv_ints(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    int64_t v, mine = 0;
+    while (sn_chan_recv(c, &v)) {
+        mine += v;
+    }
+
+    atomic_fetch_add(&sum, mine);
+    sn_chan_drop(&c, SN_CHAN_RECV);
+}
+static void send_units(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    for (int64_t i = 0; i < each; i++) {
+        sn_chan_send(c, &i); // a value of no size: the place is real, nothing is copied
+    }
+
+    sn_chan_drop(&c, SN_CHAN_SEND);
+}
+static void recv_units(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    int64_t mine = 0, none;
+    while (sn_chan_recv(c, &none)) {
+        mine++;
+    }
+
+    atomic_fetch_add(&count, mine);
+    sn_chan_drop(&c, SN_CHAN_RECV);
+}
+static void run(sn_chan *c, void (*send)(void *), void (*recv)(void *)) {
+    for (int i = 0; i < senders; i++) {
+        sn_chan *h = sn_chan_clone(c, SN_CHAN_SEND);
+        sn_spawn(send, &h, sizeof h, SN_UNBOUNDED);
+    }
+
+    for (int i = 0; i < receivers; i++) {
+        sn_chan *h = sn_chan_clone(c, SN_CHAN_RECV);
+        sn_spawn(recv, &h, sizeof h, SN_UNBOUNDED);
+    }
+
+    sn_chan_drop(&c, SN_CHAN_BOTH); // the tasks' handles alone remain: the last sender ends it
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    run(sn_chan_make(sizeof(int64_t), places, NULL, "probe"), send_ints, recv_ints);
+    run(sn_chan_make(0, places, NULL, "probe"), send_units, recv_units);
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    printf("sum %lld count %lld over %lld\n", (long long)atomic_load(&sum), (long long)atomic_load(&count),
+           (long long)atomic_load(&over));
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	want := fmt.Sprintf("sum %d count %d over 0\n", 8*50000*50001/2, 8*50000)
+	if err != nil || string(out) != want {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestRingEndsAndFrees has a ring hold three values when its last sender
+// goes: a receiver takes the three and then nothing; and senders parked
+// on a full ring wake when the last receiver goes, each dropping its
+// value with the element's drop, which counts them along with the
+// values the ring still held when the channel was freed.
+func TestRingEndsAndFrees(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { places = 4, parked = 3 };
+static _Atomic int64_t dropped, woke;
+static void drop(void *v) {
+    (void)v;
+    atomic_fetch_add(&dropped, 1);
+}
+static void send_one(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    int64_t v = 7;
+    sn_chan_send(c, &v); // parks: the ring is full
+    atomic_fetch_add(&woke, 1);
+    sn_chan_drop(&c, SN_CHAN_SEND);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    sn_chan *c = sn_chan_make(sizeof(int64_t), places, NULL, "probe");
+    sn_chan *r = sn_chan_narrow(sn_chan_clone(c, SN_CHAN_BOTH), SN_CHAN_RECV);
+    for (int64_t i = 1; i <= 3; i++) {
+        sn_chan_send(c, &i);
+    }
+
+    sn_chan_drop(&c, SN_CHAN_BOTH); // the last sender: ended, with three values left
+    int64_t v, got = 0;
+    while (sn_chan_recv(r, &v)) {
+        got += v;
+    }
+
+    bool again = sn_chan_recv(r, &v);
+    sn_chan_drop(&r, SN_CHAN_RECV);
+    sn_chan *d = sn_chan_make(sizeof(int64_t), places, drop, "probe");
+    for (int64_t i = 0; i < places; i++) {
+        sn_chan_send(d, &i); // full
+    }
+
+    for (int i = 0; i < parked; i++) {
+        sn_chan *h = sn_chan_clone(d, SN_CHAN_SEND);
+        sn_spawn(send_one, &h, sizeof h, SN_UNBOUNDED);
+    }
+
+    sn_sleep(20000000); // the senders park
+    sn_chan_drop(&d, SN_CHAN_BOTH); // the last receiver: the parked senders wake and drop, the ring's values go
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    printf("got %lld again %d woke %lld dropped %lld\n", (long long)got, again, (long long)atomic_load(&woke),
+           (long long)atomic_load(&dropped));
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || string(out) != "got 6 again 0 woke 3 dropped 7\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestRingSelectRaces has a task select over two rings, each fed by a
+// sender that pushes the moment the selector is about to register,
+// twenty thousand rounds: every round completes, so the select's
+// registration and its second try leave no push unseen, and each round
+// takes exactly one value.
+func TestRingSelectRaces(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 20000 };
+static sn_chan *a, *b;
+static _Atomic int64_t taken;
+static void feed(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    for (int64_t i = 0; i < rounds / 2; i++) {
+        sn_chan_send(c, &i);
+    }
+
+    sn_chan_drop(&c, SN_CHAN_SEND);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    a = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+    b = sn_chan_make(sizeof(int64_t), 2, NULL, "probe");
+    sn_chan *fa = sn_chan_clone(a, SN_CHAN_SEND), *fb = sn_chan_clone(b, SN_CHAN_SEND);
+    sn_spawn(feed, &fa, sizeof fa, SN_UNBOUNDED);
+    sn_spawn(feed, &fb, sizeof fb, SN_UNBOUNDED);
+    for (int r = 0; r < rounds; r++) {
+        int64_t va, vb;
+        sn_case cases[2] = { { a, &va, false, false }, { b, &vb, false, false } };
+        int i = sn_select(cases, 2, false);
+        if (i >= 0 && cases[i].ok) {
+            atomic_fetch_add(&taken, 1);
+        }
+    }
+
+    sn_chan_drop(&a, SN_CHAN_BOTH);
+    sn_chan_drop(&b, SN_CHAN_BOTH);
+    printf("taken %lld\n", (long long)atomic_load(&taken));
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || string(out) != "taken 20000\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestChannelEndsAtOnce drops the last sending handle and the last
 // receiving handle of a channel in two tasks at the same moment, many
 // times over, in a debug build: each last handle has work to do in the

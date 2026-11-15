@@ -18,7 +18,7 @@ The LLVM backend walks the checked syntax tree as the C emitter does, reading th
 | `f32`, `f64` | `float`, `double` | `float`, `double` | every operation is rounded on its own, as IEEE 754 has it: a product and a sum stay two operations, never joined into one multiply-add that rounds once, so `a*b + c` gives the same digits through both backends and on every processor. The IR joins nothing unless told to; the C compiler is told not to with `-ffp-contract=off`. A literal beside an `f32` is written as a C `float`, `0.1f`, since a C `double` beside one would have C work the expression out in doubles and round once at the end |
 | `bool` | `bool` | `i1` in registers, `i8` in memory | |
 | `string` | `sn_string {ptr, len, cap}` | `{ptr, i64, i64}` | `cap` is 0 for a literal, which owns nothing, and the size of the block for an owned string |
-| `()` | `sn_unit {char}` | `{}` | a value of no bits; a field or a channel of it takes none |
+| `()` | `sn_unit {char}` | `{}` | a value of no bits; a channel of it is made with an element size of zero in both backends, so its ring holds the places' stamps alone |
 | `local` | `uint8_t` | `i8` | holds nothing; it exists for the `Send` rule |
 | struct | a C struct of the fields, in order | a named struct type of the fields, in order | a type with a `Drop` method carries one more field, `sn_live` |
 | enum | `int tag` and a union of one struct per variant with fields | `{i32, [n x i8]}`, `n` the size of the largest variant's struct, each variant read and written through its own struct type at the payload's address | LLVM has no union; the byte array with the variants' alignment is the same layout |
