@@ -20,8 +20,7 @@ import (
 // stored, sent, spawned or returned. A returned borrow is tied to one
 // source, the receiver or the only borrowed parameter, so a signature
 // with two borrowed parameters and a borrowed result is refused, and
-// a return of a borrow of anything else is. See
-// _docs/book/06-borrows.md, rules 2, 3 and 6.
+// a return of a borrow of anything else is.
 
 // A closure being checked: where it begins, and the locals of the
 // enclosing functions it refers to, which it captures by borrow.

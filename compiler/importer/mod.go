@@ -17,9 +17,9 @@ import (
 const ModFile = "snello.mod"
 
 // A Module is a directory tree of packages, marked by a file snello.mod
-// at its root (_docs/design/08-packages.md): the directory holding the
-// file, and its require lines, each naming a dependency and the
-// directory on disk that holds it. The counterpart of Go's
+// at its root: the directory holding the file, and its require lines,
+// each naming a dependency and the directory on disk that holds it.
+// The counterpart of Go's
 // modfile.File with the module path and the versions left out: a
 // module has no name, since an import names a directory under the
 // root, and a dependency is known by the name its require line gives.

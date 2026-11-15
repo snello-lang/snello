@@ -7,7 +7,7 @@
 // Tests select over channels, a cancellation token shared through Arc,
 // a WaitGroup that waits for the workers to stop, and results flowing
 // back as moves. Receiving from a channel yields T?, None once the
-// channel is closed and drained.
+// channel has ended and is drained.
 
 package pool
 
@@ -22,16 +22,23 @@ struct Done {
 	size int
 }
 
-// A cancellation token is a channel that gets closed. Closing it twice
-// panics, so a Once guards the close. sync types synchronize
-// internally and are used through ref, which is how an Arc lends them.
+// A cancellation token is a channel whose one sending handle is kept
+// under a lock: cancelling drops it, which ends the channel for every
+// task selecting on it, and a second cancel finds nothing to drop. sync
+// types synchronize internally and are used through ref, which is how
+// an Arc lends them.
 struct Cancel {
-    ch   chan ()
-    once sync.Once
+    stop sync.Mutex<(chan<- ())?>
+    ch   <-chan ()
 }
 
-func NewCancel() sync.Arc<Cancel>          { return sync.NewArc(Cancel{ch: make(chan ()), once: sync.NewOnce()}) }
-func (c ref Cancel) Cancel()               { c.once.Do(func() { close(c.ch) }) }
+func NewCancel() sync.Arc<Cancel> {
+    ch := make(chan ())
+    var stop chan<- () = ch.Clone()        // the sending end, kept until the cancel
+    return sync.NewArc(Cancel{stop: sync.NewMutex(Some(stop)), ch: ch})
+}
+
+func (c ref Cancel) Cancel()               { _ = take(mut *c.stop.Lock().Get()) }
 func (c ref Cancel) Done() ref <-chan ()   { return ref c.ch }
 
 // A worker runs until the tasks run out or the pool is cancelled, and
@@ -41,7 +48,7 @@ func worker(tasks <-chan Task, out chan<- Done, cancel sync.Arc<Cancel>, stopped
     for {
         select {
         case got := <-tasks:                        // got is Task?; the task is moved out of the channel
-            t := got ?? break                       // None: channel closed, no more work
+            t := got ?? break                       // None: the channel has ended, no more work
             time.Sleep(10 * time.Millisecond)       // pretend work
             out <- Done{id: t.id, size: len(t.payload)}
         case <-cancel.Get().Done():
@@ -64,9 +71,8 @@ func Run(workers int, inputs []Task, deadline time.Duration) []Done {
         spawn worker(tasks.Clone(), out.Clone(), cancel.Clone(), stopped.Clone())    // each worker gets its own handles
     }
 
-    spawn func() {                                     // inputs moved into this task
+    spawn func() {                                     // inputs and tasks moved into this task; tasks ends when it does
         for _, t := range inputs { tasks <- t }     // each Task moved into the channel
-        close(tasks)
     }()
 
     results := []Done{}

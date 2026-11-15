@@ -8,13 +8,13 @@ import "github.com/snello-lang/snello/compiler/ast"
 
 // checkBinding checks a function a package of the program's own
 // declares without a body: a binding to C under the function's derived
-// symbol, as _docs/design/08-packages.md section 6 has it. It has no
-// receiver and no type parameter, since C has neither, and each
-// parameter and result is of a type the runtime's ABI passes already:
-// a number or a bool by value, a ref string or a ref []byte as a view,
-// a mut []byte as a buffer to fill, and a mut number or bool as an
-// out-parameter. A C library's handle crosses as an int the package
-// wraps in a struct of its own with a Drop method, since a struct with
+// symbol. It has no receiver and no type parameter, since C has
+// neither, and each parameter and result is of a type the runtime's
+// ABI passes already: a number or a bool by value, a ref string or a
+// ref []byte as a view, a mut []byte as a buffer to fill, and a mut
+// number or bool as an out-parameter. A C library's handle crosses as
+// an int the package wraps in a struct of its own with a Drop method,
+// since a struct with
 // Drop carries a flag the compiler sets and C could not. Anything else
 // is refused with its type named.
 func (c *Checker) checkBinding(d *ast.FuncDecl, sig *Signature) {

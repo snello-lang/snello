@@ -34,17 +34,25 @@ func (e *Emitter) hasEffects(x ast.Expr) bool {
 // operand whose writing wrote statements of its own, a map read saving
 // its key, has them run where it stands: an earlier operand still to
 // be evaluated whose order against it is visible is saved before them.
-// An owned value so saved, which the operation takes, is held until
-// every operand is evaluated when one after it may leave the statement,
-// by ? or a return in its else, and only then moved out of its
-// temporary, so that leaving drops it and taking it drops nothing
-// twice.
+// An owned value the operation takes is held until every operand is
+// evaluated when one after it may end the statement, by ? or a return
+// in its else, or by a panic in a call, an index or a division, and
+// only then moved out of its temporary, so that leaving or a panic
+// drops it and taking it drops nothing twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
-	leaves := -1
+	leaves, last := -1, -1 // the last operand that may leave the statement, and the last that may end it, by leaving or by a panic
 	for i, x := range xs {
 		if lower.MayLeave(x) {
 			leaves = i
 		}
+
+		if lower.MayEnd(x) {
+			last = i
+		}
+	}
+
+	held := func(i int, want types.Type) bool { // an owned operand wanted as want that an operand after it may leave or lose: leaving drops anything, a panic only what is guarded
+		return want != nil && !isBorrowType(want) && (i < leaves && needsDrop(want) || i < last && e.guarded(want))
 	}
 
 	parts := make([]string, len(xs))
@@ -56,7 +64,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 		saved = make([]bool, len(xs))
 	}
 
-	var kept []int // the owned values held until the last operand that may leave
+	var kept []int // the owned values held until the last operand that may end the statement
 	save := func(k int) {
 		x := xs[k]
 		var want types.Type
@@ -75,7 +83,7 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 		switch {
 		case e.lent(x, want):
 			e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
-		case k < leaves && want != nil && !isBorrowType(want) && needsDrop(t):
+		case held(k, want):
 			e.hold(tmp, t)
 			kept = append(kept, k)
 		}
@@ -99,7 +107,11 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 			})
 		}
 
-		if !saved[i] && (lower.OrderedBefore(e.info, x, xs[i+1:]) || e.lent(x, want) || e.readsMoved(x, xs[i+1:])) {
+		if !saved[i] && (lower.OrderedBefore(e.info, x, xs[i+1:]) || e.lent(x, want) || e.readsMoved(x, xs[i+1:]) || held(i, want)) {
+			save(i)
+		}
+
+		if !saved[i] && len(kept) > 0 && i <= last && lower.MayEnd(x) { // evaluated here, in order, while the values kept before it are still held: in the operation's own expression it would run after they were moved out
 			save(i)
 		}
 	}

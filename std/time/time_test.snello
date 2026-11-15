@@ -465,12 +465,13 @@ func TestTicker() {
 	case <-time.After(40 * time.Millisecond):
 	}
 
-	watching := time.NewTicker(time.Millisecond).C.Clone() // the Ticker is dropped at the end of this statement
+	watching := time.NewTicker(time.Millisecond).C.Clone() // the Ticker is dropped at the end of this statement: its channel ends, since the Ticker held its last sending handle
 	time.Sleep(20 * time.Millisecond)
 	select {
-	case <-watching:
-		expect.Fail("a dropped Ticker ticked")
+	case got := <-watching:
+		expect.True(got.IsNone()) // the end, never a tick
 	case <-time.After(20 * time.Millisecond):
+		expect.Fail("a dropped Ticker's channel did not end")
 	}
 
 	never := time.NewTicker(-time.Second)

@@ -128,7 +128,7 @@ func TestBoundOptions(t *testing.T) {
 		fn("drop", 40, call{kind: pointer}),
 		fn("elem", 500),
 		fn("panic", 30, to("onstack")),
-		&function{name: "onstack", frame: 16, setsSP: true, calls: []call{{kind: pointer}}, unknown: "a jump through a register in onstack"}, // what it runs is on another stack
+		&function{name: "onstack", frame: 16, setsSP: true, calls: []call{{kind: pointer}}, unknown: "a frame that depends on a value in onstack"}, // what it runs is on another stack
 		&function{name: "switch", frame: 160, setsSP: true},
 	)
 	opts := Options{Targets: map[string][]string{"drop": {"elem"}}, Switches: []string{"switch", "onstack"}}

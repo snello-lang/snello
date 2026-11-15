@@ -16,7 +16,7 @@
 // The absolute epoch a moment's days are counted from, in years before
 // year 0, and what the seconds since 1970 are shifted by to count from
 // it.
-#define ABSOLUTE_YEARS INT64_C(292277022400)
+#define ABSOLUTE_YEARS   INT64_C(292277022400)
 #define UNIX_TO_ABSOLUTE UINT64_C(9223372028741760000)
 
 // sn_time_now reads the system's clock: nanoseconds since the start of
@@ -63,46 +63,45 @@ sn_time sn_time_read(void) {
 
 // sn_time_Sleep parks the task for d nanoseconds; the worker runs
 // others meanwhile.
-void sn_time_Sleep(int64_t d) {
-    sn_sleep(d);
-}
+void sn_time_Sleep(int64_t d) { sn_sleep(d); }
 
 // two_digits says which of a moment's two-digit numbers a directive's
 // letter writes, counted from one, or 0 for a letter that writes none.
-static const uint8_t two_digits[256] = {['m'] = 1, ['d'] = 2, ['H'] = 3, ['M'] = 4, ['S'] = 5, ['y'] = 6};
+static const uint8_t two_digits[256] = { ['m'] = 1, ['d'] = 2, ['H'] = 3, ['M'] = 4, ['S'] = 5, ['y'] = 6 };
 
 // Where a reading keeps each of its two-digit numbers, which directive
 // reads each, counted from one, and the range each must be in.
 enum { MONTH, DAY, HOUR, MINUTE, SECOND };
-static const uint8_t two_fields[256] = {['m'] = 1, ['d'] = 2, ['H'] = 3, ['M'] = 4, ['S'] = 5};
-static const int8_t least[5] = {1, 1, 0, 0, 0}, most[5] = {12, 31, 23, 59, 59};
+static const uint8_t two_fields[256] = { ['m'] = 1, ['d'] = 2, ['H'] = 3, ['M'] = 4, ['S'] = 5 };
+static const int8_t least[5] = { 1, 1, 0, 0, 0 }, most[5] = { 12, 31, 23, 59, 59 };
 
 // The ways a text is not what a layout says, which the library words.
 enum {
     PARSE_OK,
-    PARSE_LITERAL,   // the text at at is not the layout's byte at li
-    PARSE_FIELD,     // the text at at is not what the directive at li reads
-    PARSE_MONTH,     // the rest are a field out of its range
+    PARSE_LITERAL, // the text at at is not the layout's byte at li
+    PARSE_FIELD,   // the text at at is not what the directive at li reads
+    PARSE_MONTH,   // the rest are a field out of its range
     PARSE_DAY,
     PARSE_HOUR,
     PARSE_MINUTE,
     PARSE_SECOND,
     PARSE_YEARDAY,
     PARSE_OFFSET,
-    PARSE_UNREAD,    // the directive at li says no day or time
-    PARSE_EXTRA,     // text is left at at
-    PARSE_HALF,      // %I without %p
-    PARSE_MISMATCH,  // the day of the year is not the date's
+    PARSE_UNREAD,   // the directive at li says no day or time
+    PARSE_EXTRA,    // text is left at at
+    PARSE_HALF,     // %I without %p
+    PARSE_MISMATCH, // the day of the year is not the date's
 };
 
 // The names a layout writes and reads, the days from Monday as
 // ISO 8601 orders them.
-static const char *const month_names[12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
-static const char *const day_names[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+static const char *const month_names[12] = { "January", "February", "March",     "April",   "May",      "June",
+                                             "July",    "August",   "September", "October", "November", "December" };
+static const char *const day_names[7] = {
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+};
 
-static bool leap_year(int64_t year) {
-    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-}
+static bool leap_year(int64_t year) { return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0); }
 
 static int days_in(int month, int64_t year) {
     return month == 2 ? (leap_year(year) ? 29 : 28) : 30 + ((month + (month >> 3)) & 1);
@@ -271,7 +270,8 @@ static void format_into(sn_slice *out, sn_string layout, const moment *m) {
             if (i + 1 < n && l[i + 1] != 'f') {
                 digits = l[i + 1] - '0';
                 if (digits != 3 && digits != 6 && digits != 9) {
-                    digits = 0; // the checker lets no other through; a layout that got past it writes no more than %.9f does
+                    digits =
+                        0; // the checker lets no other through; a layout that got past it writes no more than %.9f does
                 }
                 i++;
             }
@@ -395,7 +395,9 @@ static void format_into(sn_slice *out, sn_string layout, const moment *m) {
             }
 
             uint8_t d = l[i - 1];
-            p = d == 'V' ? put_number(p, (thursday - 1) / 7 + 1, 2, flag) : d == 'G' ? put_number(p, year, 4, flag) : put_number(p, ((year % 100) + 100) % 100, 2, flag);
+            p = d == 'V'   ? put_number(p, (thursday - 1) / 7 + 1, 2, flag)
+                : d == 'G' ? put_number(p, year, 4, flag)
+                           : put_number(p, ((year % 100) + 100) % 100, 2, flag);
             break;
         }
         case 's':
@@ -416,7 +418,12 @@ static void format_into(sn_slice *out, sn_string layout, const moment *m) {
         case 'r':
         case 'c': { // several at once: the layout each stands for
             uint8_t d = l[i - 1];
-            sn_string part = d == 'F' ? SN_STR("%Y-%m-%d", 8) : d == 'R' ? SN_STR("%H:%M", 5) : (d == 'D' || d == 'x') ? SN_STR("%m/%d/%y", 8) : d == 'r' ? SN_STR("%I:%M:%S %p", 11) : d == 'c' ? SN_STR("%a %b %e %H:%M:%S %Y", 20) : SN_STR("%H:%M:%S", 8);
+            sn_string part = d == 'F'                 ? SN_STR("%Y-%m-%d", 8)
+                             : d == 'R'               ? SN_STR("%H:%M", 5)
+                             : (d == 'D' || d == 'x') ? SN_STR("%m/%d/%y", 8)
+                             : d == 'r'               ? SN_STR("%I:%M:%S %p", 11)
+                             : d == 'c'               ? SN_STR("%a %b %e %H:%M:%S %Y", 20)
+                                                      : SN_STR("%H:%M:%S", 8);
             out->len = p - (uint8_t *)out->ptr;
             format_into(out, part, m);
             p = (uint8_t *)out->ptr + out->len;
@@ -454,10 +461,10 @@ sn_string sn_time_format(sn_string layout, int64_t sec, int64_t nsec) {
         p[16] = ':';
         memcpy(p + 17, sn_digit_pairs + 2 * m.two[4], 2);
         memcpy(p + 19, "+00:00", 6);
-        return (sn_string){p, 25, 25};
+        return (sn_string){ p, 25, 25 };
     }
 
-    sn_slice out = {0};
+    sn_slice out = { 0 };
     sn_slice_grow(&out, layout.len + 48, 1);
     format_into(&out, layout, &m);
     if (out.len == 0) { // a string of no bytes owns none
@@ -465,7 +472,7 @@ sn_string sn_time_format(sn_string layout, int64_t sec, int64_t nsec) {
         return SN_STR("", 0);
     }
 
-    return (sn_string){out.ptr, out.len, out.cap};
+    return (sn_string){ out.ptr, out.len, out.cap };
 }
 
 // What a layout read so far: the fields a directive gave, and the rest
@@ -478,7 +485,6 @@ typedef struct {
     bool twelve;       // the hour is of a half day
     int64_t nsec, offset;
 } reading;
-
 
 // digits_at reads up to most digits of v from at into *out and returns
 // how many there were.
@@ -574,7 +580,8 @@ static int parse_into(sn_string layout, sn_string v, int64_t *at, int64_t *li, r
             if (a < v.len && v.ptr[a] == '.') {
                 int64_t x;
                 int count = digits_at(v, a + 1, 9, &x);
-                if (count == 0 || (digits != 0 && count != digits) || (a + 1 + count < v.len && sn_is_digit(v.ptr[a + 1 + count]))) {
+                if (count == 0 || (digits != 0 && count != digits) ||
+                    (a + 1 + count < v.len && sn_is_digit(v.ptr[a + 1 + count]))) {
                     return PARSE_FIELD;
                 }
 
@@ -741,7 +748,8 @@ static int parse_into(sn_string layout, sn_string v, int64_t *at, int64_t *li, r
 
             int w = colon ? 6 : 5;
             int64_t hours, minutes;
-            if (a + w > v.len || (v.ptr[a] != '+' && v.ptr[a] != '-') || (colon && v.ptr[a + 3] != ':') || digits_at(v, a + 1, 2, &hours) != 2 || digits_at(v, a + w - 2, 2, &minutes) != 2) {
+            if (a + w > v.len || (v.ptr[a] != '+' && v.ptr[a] != '-') || (colon && v.ptr[a + 3] != ':') ||
+                digits_at(v, a + 1, 2, &hours) != 2 || digits_at(v, a + w - 2, 2, &minutes) != 2) {
                 return PARSE_FIELD;
             }
 
@@ -826,11 +834,17 @@ static int parse_into(sn_string layout, sn_string v, int64_t *at, int64_t *li, r
         case 'x':
         case 'r':
         case 'c': {
-            sn_string part = d == 'F' ? SN_STR("%Y-%m-%d", 8) : d == 'R' ? SN_STR("%H:%M", 5) : (d == 'D' || d == 'x') ? SN_STR("%m/%d/%y", 8) : d == 'r' ? SN_STR("%I:%M:%S %p", 11) : d == 'c' ? SN_STR("%a %b %e %H:%M:%S %Y", 20) : SN_STR("%H:%M:%S", 8);
+            sn_string part = d == 'F'                 ? SN_STR("%Y-%m-%d", 8)
+                             : d == 'R'               ? SN_STR("%H:%M", 5)
+                             : (d == 'D' || d == 'x') ? SN_STR("%m/%d/%y", 8)
+                             : d == 'r'               ? SN_STR("%I:%M:%S %p", 11)
+                             : d == 'c'               ? SN_STR("%a %b %e %H:%M:%S %Y", 20)
+                                                      : SN_STR("%H:%M:%S", 8);
             int64_t inner = 0;
             *at = a;
             int bad = parse_into(part, v, at, &inner, r);
-            if (bad == PARSE_LITERAL || bad == PARSE_FIELD) { // the layout's own directive is what it could not read, from where it began
+            if (bad == PARSE_LITERAL ||
+                bad == PARSE_FIELD) { // the layout's own directive is what it could not read, from where it began
                 *at = a;
                 return PARSE_FIELD;
             }
@@ -856,10 +870,11 @@ static int parse_into(sn_string layout, sn_string v, int64_t *at, int64_t *li, r
 // nanoseconds, the seconds its offset is east of UTC, and its weekday
 // when it names one, -1 when it does not. It returns 0, or what is
 // wrong, with at where in value and li where in layout.
-int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock, int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li) {
+int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock,
+                      int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li) {
     sn_check_string(layout);
     sn_check_string(value);
-    reading r = {.year = 1970, .weekday = -1};
+    reading r = { .year = 1970, .weekday = -1 };
     *at = 0;
     *li = 0;
     int bad = parse_into(layout, value, at, li, &r);

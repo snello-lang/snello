@@ -128,9 +128,9 @@ func objName(obj types.Object) string {
 // program's own at an import path: snm_, the path with / as __, and _.
 // a/b is snm_a__b_, apart from a package a_b. A path may carry a dot or
 // a dash no C identifier may, my-lib, and each is written as _;
-// CheckPrefixes refuses two paths that would share a prefix this way
-// (_docs/design/08-packages.md). StdPrefix is the standard library's
-// form, sn_fmt_ and sn_net__http_, the names the runtime defines.
+// CheckPrefixes refuses two paths that would share a prefix this way.
+// StdPrefix is the standard library's form, sn_fmt_ and sn_net__http_,
+// the names the runtime defines.
 func PathPrefix(path string) string {
 	return qualified("snm_", path, "")
 }
@@ -275,8 +275,16 @@ func mangle(b *strings.Builder, t types.Type) {
 	case *types.Pointer:
 		b.WriteString("ptr_")
 		mangle(b, t.Elem())
-	case *types.Chan:
-		b.WriteString("chan_")
+	case *types.Chan: // the direction is part of the name, since a handle's drop gives up the ends it holds
+		switch t.Dir() {
+		case types.SendOnly:
+			b.WriteString("sendchan_")
+		case types.RecvOnly:
+			b.WriteString("recvchan_")
+		default:
+			b.WriteString("chan_")
+		}
+
 		mangle(b, t.Elem())
 	case *types.Option:
 		b.WriteString("opt_")

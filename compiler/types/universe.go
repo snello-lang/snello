@@ -7,9 +7,8 @@ package types
 import "github.com/snello-lang/snello/compiler/token"
 
 // Universe is the outermost scope: the names every Snello file sees
-// without an import. Its contents are section 1 of
-// _docs/design/05-standard-library.md, and nothing else: there is no
-// prelude.
+// without an import: the predeclared types, traits, built-in functions
+// and constants, and nothing else: there is no prelude.
 var Universe *Scope
 
 // The variants of the built-in enums, so the checker can compare by
@@ -32,11 +31,10 @@ var (
 )
 
 // The standard traits, predeclared so that impl lists and bounds can
-// name them: the markers and the operator traits of section 1 of
-// _docs/design/05-standard-library.md. Each marker asks for one method
-// over Self, given in init, but Error, which asks for its message and
-// its cause; Copy asks for none, being a property of a type's
-// structure. The predeclared types implement them by structure
+// name them: the markers and the operator traits. Each marker asks for
+// one method over Self, given in init, but Error, which asks for its
+// message and its cause; Copy asks for none, being a property of a
+// type's structure. The predeclared types implement them by structure
 // (stdtraits.go), and a declared type by listing them, writing the
 // method or deriving it from its fields. The operator traits get their
 // methods with the operators. Send asks for no method either: a type

@@ -44,8 +44,7 @@ enum {
 // The classes are the multiples of 16 up to 128, then four to each
 // doubling, so that rounding up loses less than a fifth of a block.
 static const uint16_t class_size[nclass] = {
-    16, 32, 48, 64, 80, 96, 112, 128,
-    160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024,
+    16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024,
 };
 
 // class_of is the class of a size, indexed by the size in sixteens,
@@ -53,22 +52,21 @@ static const uint16_t class_size[nclass] = {
 // are constants, so that an allocation is right before anything has
 // run, a constructor of the runtime's own included.
 static const uint8_t class_of[largest / 16 + 1] = {
-    0, 0, 1, 2, 3, 4, 5, 6, 7,                      // 0 to 128
-    8, 8, 9, 9, 10, 10, 11, 11,                     // to 256
-    12, 12, 12, 12, 13, 13, 13, 13,                 // to 384
-    14, 14, 14, 14, 15, 15, 15, 15,                 // to 512
-    16, 16, 16, 16, 16, 16, 16, 16,                 // to 640
-    17, 17, 17, 17, 17, 17, 17, 17,                 // to 768
-    18, 18, 18, 18, 18, 18, 18, 18,                 // to 896
-    19, 19, 19, 19, 19, 19, 19, 19,                 // to 1024
+    0,  0,  1,  2,  3,  4,  5,  6,  7, // 0 to 128
+    8,  8,  9,  9,  10, 10, 11, 11,    // to 256
+    12, 12, 12, 12, 13, 13, 13, 13,    // to 384
+    14, 14, 14, 14, 15, 15, 15, 15,    // to 512
+    16, 16, 16, 16, 16, 16, 16, 16,    // to 640
+    17, 17, 17, 17, 17, 17, 17, 17,    // to 768
+    18, 18, 18, 18, 18, 18, 18, 18,    // to 896
+    19, 19, 19, 19, 19, 19, 19, 19,    // to 1024
 };
 
 // batch is how many blocks of each class a thread takes from or gives
 // to the central list at once: 8 KB's worth, and never fewer than
 // eight. A thread's list gives a batch back once it holds two.
 static const int32_t batch[nclass] = {
-    512, 256, 170, 128, 102, 85, 73, 64,
-    51, 42, 36, 32, 25, 21, 18, 16, 12, 10, 9, 8,
+    512, 256, 170, 128, 102, 85, 73, 64, 51, 42, 36, 32, 25, 21, 18, 16, 12, 10, 9, 8,
 };
 
 static uint8_t *base;       // the reservation
@@ -244,7 +242,7 @@ static void give_back(cache *k, int c) {
 // with two ENTRY callers was kept a function of its own, and every
 // allocation paid a call and a second read of the thread's cache, which
 // made a program that allocates on every core a tenth slower on Darwin.
-#define ENTRY __attribute__((noinline))
+#define ENTRY  __attribute__((noinline))
 #define HELPER static inline __attribute__((always_inline))
 
 HELPER void *heap_alloc(size_t n) {
@@ -280,13 +278,9 @@ HELPER void heap_free(void *p) {
     }
 }
 
-ENTRY void *sn_heap_alloc(size_t n) {
-    return heap_alloc(n);
-}
+ENTRY void *sn_heap_alloc(size_t n) { return heap_alloc(n); }
 
-ENTRY void sn_heap_free(void *p) {
-    heap_free(p);
-}
+ENTRY void sn_heap_free(void *p) { heap_free(p); }
 
 // enlist gives the thread its counts, a line of memory of their own
 // from the system, 128 bytes since the widest line of a processor
@@ -323,12 +317,11 @@ HELPER void note(size_t n) {
     }
 
     atomic_store_explicit(&c->blocks, atomic_load_explicit(&c->blocks, memory_order_relaxed) + 1, memory_order_relaxed);
-    atomic_store_explicit(&c->bytes, atomic_load_explicit(&c->bytes, memory_order_relaxed) + (int64_t)n, memory_order_relaxed);
+    atomic_store_explicit(&c->bytes, atomic_load_explicit(&c->bytes, memory_order_relaxed) + (int64_t)n,
+                          memory_order_relaxed);
 }
 
-ENTRY void sn_alloc_note(size_t n) {
-    note(n);
-}
+ENTRY void sn_alloc_note(size_t n) { note(n); }
 
 // sn_alloc_counts adds up the blocks and the bytes every thread has
 // been given.
@@ -354,7 +347,5 @@ ENTRY void *sn_alloc(size_t n) {
     return p;
 }
 
-ENTRY void sn_free(void *p) {
-    heap_free(p);
-}
+ENTRY void sn_free(void *p) { heap_free(p); }
 #endif

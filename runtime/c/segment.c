@@ -80,7 +80,7 @@ static int64_t grapheme(cursor *c) {
     int32_t r = c->r[0];
     int prev = sn_uc_gcb(r);
     int ri = prev == SN_GCB_RI ? 1 : 0;
-    int emoji = sn_uc_extpict(r) ? 1 : 0; // 1 after ExtPict Extend*, 2 after its ZWJ
+    int emoji = sn_uc_extpict(r) ? 1 : 0;          // 1 after ExtPict Extend*, 2 after its ZWJ
     bool linked = sn_uc_incb(r) == SN_INCB_Linker; // after a linker and its extenders
     for (int64_t k = 1; get(c, k); k++) {
         r = c->r[k];
@@ -220,7 +220,9 @@ static int64_t word(cursor *c) {
                 join = true; // WB12
             } else if (prev == SN_WB_Katakana && b == SN_WB_Katakana) {
                 join = true; // WB13
-            } else if ((ahletter(prev) || prev == SN_WB_Numeric || prev == SN_WB_Katakana || prev == SN_WB_ExtendNumLet) && b == SN_WB_ExtendNumLet) {
+            } else if ((ahletter(prev) || prev == SN_WB_Numeric || prev == SN_WB_Katakana ||
+                        prev == SN_WB_ExtendNumLet) &&
+                       b == SN_WB_ExtendNumLet) {
                 join = true; // WB13a
             } else if (prev == SN_WB_ExtendNumLet && (ahletter(b) || b == SN_WB_Numeric || b == SN_WB_Katakana)) {
                 join = true; // WB13b
@@ -349,7 +351,7 @@ int64_t sn_unicode__segment_next(sn_string s, int64_t at, int64_t kind) {
         return 0;
     }
 
-    cursor c = {s.ptr + at, s.len - at, 0, NULL, NULL, 0, 32, {0}, {0}};
+    cursor c = { s.ptr + at, s.len - at, 0, NULL, NULL, 0, 32, { 0 }, { 0 } };
     c.r = c.small_r;
     c.off = c.small_off;
     int64_t n;

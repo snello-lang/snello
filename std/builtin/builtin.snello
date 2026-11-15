@@ -314,16 +314,6 @@ func cap(x any) int
 //	done := make(chan bool, 1)
 func make<T>(n int) T
 
-// close closes the channel ch: a receive on it yields None once the
-// values already sent are taken, and a range over it ends. Nothing is
-// sent on a closed channel; closing one twice, or a receive-only
-// channel, is refused. It borrows the handle, as every operation on a
-// channel does, so the sender closes it and every receiver, on a handle
-// of its own, sees the end.
-//
-//	close(ref results)
-func close<T>(ch ref chan<- T)
-
 // take moves the value out of place, a variable, field or element lent
 // mut, and leaves the type's zero value there: None for an Option, ""
 // for a string, 0 for a number, an empty slice or map. It returns the
@@ -581,10 +571,14 @@ func (m ref map[K]V) Entry(i int) (int, ref K, ref V)?
 // Clone returns another handle on the same channel, of the same
 // direction, to hand to another task: a channel handle is owned,
 // moved by assignment, a call, a capture or a send, and the channel is
-// freed with its last handle. Sending, receiving, close, len, cap, a
-// range and a select case borrow the handle, and a ref chan T converts
-// to a ref chan<- T or a ref <-chan T. It allocates nothing: the
-// handles share one channel and its count of handles.
+// freed with its last handle. A chan T handle sends and receives; one
+// moved where a <-chan T or a chan<- T is wanted keeps that end and
+// gives the other up. The channel ends when its last sending handle
+// is gone: a receive then yields None once the values sent are taken,
+// and a range over it ends. Sending, receiving, len, cap, a range and
+// a select case borrow the handle, and a ref chan T converts to a ref
+// chan<- T or a ref <-chan T. It allocates nothing: the handles share
+// one channel and its counts of handles.
 //
 //	spawn worker(jobs.Clone())
 func (ch ref chan T) Clone() chan T
@@ -596,6 +590,19 @@ func (ch ref <-chan T) Clone() <-chan T
 // Clone returns another handle on the same send-only channel, to hand
 // to another sender, as Clone on a chan T does.
 func (ch ref chan<- T) Clone() chan<- T
+
+// Open reports whether a receiving handle on the channel remains: a
+// send on a channel with none drops its value and goes on, and a
+// sender that wants to stop then asks. A chan T handle receives
+// itself, so Open on one is true; it is for a chan<- T.
+//
+//	for w.Open() {
+//		w <- next()
+//	}
+func (ch ref chan<- T) Open() bool
+
+// Open on a chan T is true, since the handle itself receives.
+func (ch ref chan T) Open() bool
 
 // Len returns the length of the string in bytes, as len does, in
 // constant time.

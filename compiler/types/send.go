@@ -9,13 +9,12 @@ import "github.com/snello-lang/snello/compiler/ast"
 // A value crosses a task boundary when a spawn captures it, a send puts
 // it on a channel, or a receive takes it off one. It may cross when its
 // type is Send: no other task can reach the memory it owns, so the task
-// that receives it owns it alone and frees it alone
-// (_docs/design/03-ownership-across-tasks.md). Send is computed from
-// structure and never declared: numbers, bool, strings and channel
-// handles are Send; a struct, enum, tuple, option or result is Send
-// when every part is; a slice, array, map or owned pointer when its
-// element is; a borrow never, as it points into a frame of the task
-// that made it; a trait used as a type only when the trait refines
+// that receives it owns it alone and frees it alone. Send is computed
+// from structure and never declared: numbers, bool, strings and
+// channel handles are Send; a struct, enum, tuple, option or result is
+// Send when every part is; a slice, array, map or owned pointer when
+// its element is; a borrow never, as it points into a frame of the
+// task that made it; a trait used as a type only when the trait refines
 // Send, since the type behind it is not known; a type parameter only
 // when bounded by Send. The standard library's local, a field that
 // holds nothing, is the one predeclared type that is not Send: a type

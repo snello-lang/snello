@@ -28,7 +28,7 @@ typedef struct {
     int64_t cap;
 } sn_string;
 
-#define SN_STR(s, n) ((sn_string){(const uint8_t *)(s), (n), 0})
+#define SN_STR(s, n)   ((sn_string){ (const uint8_t *)(s), (n), 0 })
 #define SN_OWNED(s, n) sn_owned((s), (n))
 
 // The unit value (), which C has no type for: a Result<(), E> or a
@@ -37,7 +37,7 @@ typedef struct {
     char sn_pad;
 } sn_unit;
 
-#define SN_UNIT ((sn_unit){0})
+#define SN_UNIT ((sn_unit){ 0 })
 
 // A function the program never calls is not an error, as it is not in
 // Snello; every emitted function carries this.
@@ -82,7 +82,7 @@ static inline sn_string sn_owned(void *p, int64_t n) {
         return SN_STR("", 0);
     }
 
-    return (sn_string){(const uint8_t *)p, n, n};
+    return (sn_string){ (const uint8_t *)p, n, n };
 }
 
 // sn_heap_alloc and sn_heap_free are alloc.c's heap, under sn_alloc and
@@ -91,7 +91,9 @@ static inline sn_string sn_owned(void *p, int64_t n) {
 void *sn_heap_alloc(size_t n);
 void sn_heap_free(void *p);
 _Noreturn void sn_panic(sn_string msg);
-bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report); // runs fn under a mark: true with the message when a panic ended it, printed first when report (a task with a handle; testing.Catch asks no print)
+bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg,
+              bool report); // runs fn under a mark: true with the message when a panic ended it, printed first when
+                            // report (a task with a handle; testing.Catch asks no print)
 
 // The guards: the owned values whose drop runs a Drop method, which
 // the emitted code registers where each is declared and removes where
@@ -108,16 +110,13 @@ void sn_unguard(void *p);
 // state with one acquire load and calls sn_lazy_make when it is not 2,
 // which makes the variable or waits for the task making it; a
 // variable read by its own initializer is a panic naming it, and an
-// initializer that panics under a mark leaves the variable unmade
-// (_docs/design/03-ownership-across-tasks.md, package variables).
+// initializer that panics under a mark leaves the variable unmade.
 typedef struct sn_lazy {
     int state;
     struct sn_task *maker;
 } sn_lazy;
 
-static inline bool sn_lazy_ready(sn_lazy *o) {
-    return __atomic_load_n(&o->state, __ATOMIC_ACQUIRE) == 2;
-}
+static inline bool sn_lazy_ready(sn_lazy *o) { return __atomic_load_n(&o->state, __ATOMIC_ACQUIRE) == 2; }
 
 void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name);
 _Noreturn void sn_exit(int code);
@@ -138,14 +137,14 @@ struct sn_slice_u8 {
 // the equality of its keys. A map declared without a value is all
 // zeros and works as an empty map.
 typedef struct {
-    void *keys;        // the entries' block: keys, then values, then hashes
+    void *keys; // the entries' block: keys, then values, then hashes
     void *vals;
-    uint64_t *hashes;  // one per entry: its key's hash, zero after Remove
-    uint8_t *ctrl;     // the index's block: a control byte a slot, then the slots' entry numbers
-    int64_t len;       // entries, emptied ones included
-    int64_t count;     // live entries
-    int64_t cap;       // room for entries
-    int64_t slots;     // slots of the index, a power of two, eight or more
+    uint64_t *hashes; // one per entry: its key's hash, zero after Remove
+    uint8_t *ctrl;    // the index's block: a control byte a slot, then the slots' entry numbers
+    int64_t len;      // entries, emptied ones included
+    int64_t count;    // live entries
+    int64_t cap;      // room for entries
+    int64_t slots;    // slots of the index, a power of two, eight or more
 } sn_map;
 
 // The functions of math/bits, which the C backend calls in place of the
@@ -185,15 +184,17 @@ SN_ALWAYS_INLINE uint64_t sn_bits_Reverse64(uint64_t x) {
 #endif
 }
 
-#define SN_BITS(W, T)                                                                                                              \
-    SN_ALWAYS_INLINE int64_t sn_bits_LeadingZeros##W(T x) { return __builtin_clzll((uint64_t)x << (64 - W) | (uint64_t)1 << (63 - W)); } \
-    SN_ALWAYS_INLINE int64_t sn_bits_TrailingZeros##W(T x) { return __builtin_ctzll((uint64_t)x | (uint64_t)1 << W); }               \
-    SN_ALWAYS_INLINE int64_t sn_bits_OnesCount##W(T x) { return __builtin_popcountll(x); }                                           \
-    SN_ALWAYS_INLINE int64_t sn_bits_Len##W(T x) { return W - sn_bits_LeadingZeros##W(x); }                                          \
-    SN_ALWAYS_INLINE T sn_bits_Reverse##W(T x) { return (T)(sn_bits_Reverse64(x) >> (64 - W)); }                                     \
-    SN_ALWAYS_INLINE T sn_bits_RotateLeft##W(T x, int64_t k) {                                                                       \
-        unsigned s = (unsigned)k & (W - 1);                                                                                          \
-        return (T)((T)(x << s) | x >> ((W - s) & (W - 1)));                                                                          \
+#define SN_BITS(W, T)                                                                                                  \
+    SN_ALWAYS_INLINE int64_t sn_bits_LeadingZeros##W(T x) {                                                            \
+        return __builtin_clzll((uint64_t)x << (64 - W) | (uint64_t)1 << (63 - W));                                     \
+    }                                                                                                                  \
+    SN_ALWAYS_INLINE int64_t sn_bits_TrailingZeros##W(T x) { return __builtin_ctzll((uint64_t)x | (uint64_t)1 << W); } \
+    SN_ALWAYS_INLINE int64_t sn_bits_OnesCount##W(T x) { return __builtin_popcountll(x); }                             \
+    SN_ALWAYS_INLINE int64_t sn_bits_Len##W(T x) { return W - sn_bits_LeadingZeros##W(x); }                            \
+    SN_ALWAYS_INLINE T sn_bits_Reverse##W(T x) { return (T)(sn_bits_Reverse64(x) >> (64 - W)); }                       \
+    SN_ALWAYS_INLINE T sn_bits_RotateLeft##W(T x, int64_t k) {                                                         \
+        unsigned s = (unsigned)k & (W - 1);                                                                            \
+        return (T)((T)(x << s) | x >> ((W - s) & (W - 1)));                                                            \
     }
 
 SN_BITS(8, uint8_t)
@@ -203,12 +204,12 @@ SN_BITS(32, uint32_t)
 
 // The same functions under the library's names, for a program that
 // keeps one as a value and calls it through the value.
-#define SN_BITS_NAMED(S, W, T)                  \
-    int64_t sn_math__bits_LeadingZeros##S(T x);  \
-    int64_t sn_math__bits_TrailingZeros##S(T x); \
-    int64_t sn_math__bits_OnesCount##S(T x);     \
-    int64_t sn_math__bits_Len##S(T x);           \
-    T sn_math__bits_Reverse##S(T x);             \
+#define SN_BITS_NAMED(S, W, T)                                                                                         \
+    int64_t sn_math__bits_LeadingZeros##S(T x);                                                                        \
+    int64_t sn_math__bits_TrailingZeros##S(T x);                                                                       \
+    int64_t sn_math__bits_OnesCount##S(T x);                                                                           \
+    int64_t sn_math__bits_Len##S(T x);                                                                                 \
+    T sn_math__bits_Reverse##S(T x);                                                                                   \
     T sn_math__bits_RotateLeft##S(T x, int64_t k);
 
 SN_BITS_NAMED(, 64, uint64_t)
@@ -231,14 +232,16 @@ SN_BITS_NAMED(64, 64, uint64_t)
 // reaches it stops the program. A release build does none of this.
 // The character classes of a byte, ASCII only, as a byte is one.
 static inline bool sn_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
-static inline bool sn_is_space(uint8_t c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+static inline bool sn_is_space(uint8_t c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
 static inline bool sn_is_upper(uint8_t c) { return c >= 'A' && c <= 'Z'; }
 static inline bool sn_is_lower(uint8_t c) { return c >= 'a' && c <= 'z'; }
 static inline bool sn_is_letter(uint8_t c) { return sn_is_upper(c) || sn_is_lower(c); }
 
 #ifdef SN_DEBUG
 #define SN_POISON(place) memset(&(place), 0xDD, sizeof(place))
-#define SN_DEREF(p) (*(__typeof__(p))sn_deref(p))
+#define SN_DEREF(p)      (*(__typeof__(p))sn_deref(p))
 _Noreturn void sn_released(const char *what);
 void *sn_deref(void *p);
 void sn_check_block(const void *p, const char *what);
@@ -281,12 +284,12 @@ static inline void sn_check_map(const sn_map *m) {
 }
 
 #else
-#define SN_POISON(place) ((void)0)
-#define SN_DEREF(p) (*(p))
+#define SN_POISON(place)   ((void)0)
+#define SN_DEREF(p)        (*(p))
 #define sn_check_string(s) ((void)0)
-#define sn_check_slice(s) ((void)0)
-#define sn_check_len(len) ((void)0)
-#define sn_check_map(m) ((void)0)
+#define sn_check_slice(s)  ((void)0)
+#define sn_check_len(len)  ((void)0)
+#define sn_check_map(m)    ((void)0)
 #endif
 
 // sn_index checks an index against a length and returns it, so every
@@ -320,9 +323,7 @@ static inline void sn_string_drop(sn_string *s) {
 
 // sn_string_free is the drop of a string the runtime was given to
 // consume, which has no place to poison.
-static inline void sn_string_free(sn_string s) {
-    sn_string_drop(&s);
-}
+static inline void sn_string_free(sn_string s) { sn_string_drop(&s); }
 
 // sn_slice_own panics, naming what, when s is a view; every operation
 // that changes a slice's length or replaces its buffer asks it first,
@@ -437,11 +438,11 @@ void sn_slice_free(sn_slice *s);
 #ifdef SN_DEBUG
 #define SN_SLICE_FREE(s) sn_slice_free((sn_slice *)(s))
 #else
-#define SN_SLICE_FREE(s) \
-    do { \
-        if ((s)->ptr != NULL && (s)->cap != SN_CALLER) { \
-            sn_slice_free((sn_slice *)(s)); \
-        } \
+#define SN_SLICE_FREE(s)                                                                                               \
+    do {                                                                                                               \
+        if ((s)->ptr != NULL && (s)->cap != SN_CALLER) {                                                               \
+            sn_slice_free((sn_slice *)(s));                                                                            \
+        }                                                                                                              \
     } while (0)
 #endif
 void sn_release(void **p); // frees the block an owned pointer holds and empties the pointer
@@ -457,10 +458,10 @@ void *sn_alloc_elems(int64_t n, size_t size);
 // runtime, for its checks.
 #ifdef SN_DEBUG
 #define SN_PUSH_FAST(s) 0
-#define SN_POP_FAST(s) 0
+#define SN_POP_FAST(s)  0
 #else
 #define SN_PUSH_FAST(s) ((s).len < (s).cap)
-#define SN_POP_FAST(s) ((s).len > 0 && (s).cap >= 0)
+#define SN_POP_FAST(s)  ((s).len > 0 && (s).cap >= 0)
 #endif
 void sn_slice_push(sn_slice *s, const void *v, size_t size);
 bool sn_slice_pop(sn_slice *s, void *out, size_t size);
@@ -530,7 +531,8 @@ void sn_split(sn_string s, sn_string sep, sn_slice *out);
 bool sn_split_once(sn_string s, sn_string sep, sn_string *before, sn_string *after);
 
 sn_string sn_concat(sn_string a, sn_string b);
-sn_string sn_join(sn_string a, sn_string b, int owned); // concatenates, then drops the inputs owned says it may: 1 for a, 2 for b
+sn_string sn_join(sn_string a, sn_string b,
+                  int owned); // concatenates, then drops the inputs owned says it may: 1 for a, 2 for b
 bool sn_string_eq(sn_string a, sn_string b);
 int sn_string_cmp(sn_string a, sn_string b);
 sn_string sn_int_to_string(int64_t v);
@@ -555,21 +557,20 @@ sn_string sn_int_digits(sn_string s, int64_t prec);
 sn_string sn_truncate(sn_string s, int64_t prec, bool owned);
 double sn_f64_min(double a, double b);
 double sn_f64_max(double a, double b);
-bool sn_isprint(int32_t r); // a letter, mark, number, punctuation or symbol, or the ASCII space: printable as strconv.IsPrint defines it
+bool sn_isprint(int32_t r); // a letter, mark, number, punctuation or symbol, or the ASCII space: printable as
+                            // strconv.IsPrint defines it
 
 // A string and a []byte have one layout, so a conversion copies the
 // bytes into a new owned value of the other kind.
-static inline sn_string sn_bytes_to_string(sn_slice_u8 b) {
-    return sn_string_clone((sn_string){b.ptr, b.len, 0});
-}
+static inline sn_string sn_bytes_to_string(sn_slice_u8 b) { return sn_string_clone((sn_string){ b.ptr, b.len, 0 }); }
 
 static inline sn_slice_u8 sn_string_to_bytes(sn_string s) {
     sn_string c = sn_string_clone(s);
     if (c.cap == 0) {
-        return (sn_slice_u8){0}; // no bytes: an empty slice, not a view of static data
+        return (sn_slice_u8){ 0 }; // no bytes: an empty slice, not a view of static data
     }
 
-    return (sn_slice_u8){(uint8_t *)c.ptr, c.len, c.cap};
+    return (sn_slice_u8){ (uint8_t *)c.ptr, c.len, c.cap };
 }
 
 // Printing: fmt.Println(a, b) builds the line, a, separator, b and
@@ -627,7 +628,7 @@ int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_str
 int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
 int64_t sn_os_Cores(void);
-int64_t sn_testing_task(void); // the running task's identity, for the test runner's state per test
+int64_t sn_testing_task(void);         // the running task's identity, for the test runner's state per test
 void sn_testing_benchStart(int64_t n); // the benchmark's state, one at a time; see testing.c
 bool sn_testing_benchLoop(void);
 void sn_testing_benchReset(void);
@@ -636,9 +637,11 @@ int64_t sn_testing_benchNanos(void);
 int64_t sn_testing_benchAllocs(void);
 int64_t sn_testing_benchBytes(void);
 bool sn_testing_benchReported(void);
-void sn_testing_line(sn_string where);                  // the compiler writes these before a call of testing.Log, Logf, Skip, and of an exported function of expect
-void sn_testing_call(sn_string where, sn_string parts); // the place of the call, with the parts the compiler found, owned
-sn_string sn_testing_where(void);                        // testing.where, expect.where and expect.parts read them back
+void sn_testing_line(sn_string where); // the compiler writes these before a call of testing.Log, Logf, Skip, and of an
+                                       // exported function of expect
+void sn_testing_call(sn_string where,
+                     sn_string parts); // the place of the call, with the parts the compiler found, owned
+sn_string sn_testing_where(void);      // testing.where, expect.where and expect.parts read them back
 sn_string sn_expect_where(void);
 sn_string sn_expect_parts(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
@@ -648,7 +651,8 @@ int64_t sn_os_syncFile(int64_t fd);
 int64_t sn_os_closeFile(int64_t fd);
 int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
 int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead);
-int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev, uint64_t *ino);
+int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
+                   uint64_t *dev, uint64_t *ino);
 int64_t sn_os_mkdir(sn_string path, uint32_t perm);
 int64_t sn_os_rename(sn_string from, sn_string to);
 int64_t sn_os_chdir(sn_string path);
@@ -662,7 +666,7 @@ int64_t sn_os_setenv(sn_string key, sn_string value);
 void sn_os_Unsetenv(sn_string key);
 sn_string sn_os_TempDir(void);
 void sn_os_environ(void *out); // a []string that holds nothing
-void sn_os_env_free(void); // the copy of the environment, released at the end of a debug build
+void sn_os_env_free(void);     // the copy of the environment, released at the end of a debug build
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
@@ -685,9 +689,10 @@ typedef struct {
 sn_time sn_time_read(void);
 void sn_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono); // package time's clock
 sn_string sn_time_format(sn_string layout, int64_t sec, int64_t nsec);
-int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock, int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li);
-int64_t sn_time_mono(void); // the monotonic clock, in nanoseconds, never 0
-void sn_outside(int64_t n); // wakes promised by a thread that is not a worker; see sched.c
+int64_t sn_time_parse(sn_string layout, sn_string value, int64_t *year, int64_t *month, int64_t *day, int64_t *clock,
+                      int64_t *nsec, int64_t *offset, int64_t *weekday, int64_t *at, int64_t *li);
+int64_t sn_time_mono(void);    // the monotonic clock, in nanoseconds, never 0
+void sn_outside(int64_t n);    // wakes promised by a thread that is not a worker; see sched.c
 int64_t sn_sync_newLock(void); // a sync lock's handle is its address; see the lock section of snello.c
 int64_t sn_sync_newRwLock(void);
 void sn_sync_freeLock(int64_t h);
@@ -705,7 +710,8 @@ int64_t sn_sync_cellAdd(int64_t h, int64_t d);
 bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v);
 int64_t sn_sync_cellExchange(int64_t h, int64_t v);
 void sn_sync_cellFree(int64_t h);
-int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call); // the net package's, in net.c
+int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got,
+                      sn_string *call); // the net package's, in net.c
 int64_t sn_net_accept(int64_t fd, int64_t *out);
 int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call);
 int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set);
@@ -715,26 +721,35 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_net_closeConn(int64_t fd);
 int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason); // in lookup.c
 
-// Tasks and channels, as _docs/design/06-tasks-and-channels.md lays
-// them out: this is the whole interface the emitted code uses, and the
-// scheduler of a later stage implements the same one. A task is a
+// Tasks and channels: this is the whole interface the emitted code
+// uses. A task is a
 // thread here; a channel is a locked ring buffer, or a hand-off slot
 // when unbuffered, with a list of the tasks waiting on it and a count
-// of its handles: sn_chan_clone gives another, sn_chan_drop takes one
-// away and empties its place, and the last frees the channel, with the
-// values still in it dropped by the drop sn_chan_make was given, NULL
-// for an element that owns nothing. A value is copied into the channel
-// by its bytes and out again: the sender's place was emptied by the
-// move, and the receiver owns what it took. sn_chan_recv returns false
-// once the channel is closed and empty, which the emitted code turns
-// into None.
+// of its handles of each direction: sn_chan_clone gives another of a
+// handle's direction, sn_chan_drop takes one away and empties its
+// place, sn_chan_narrow gives up one end of a handle that had both,
+// and the last of either kind frees the channel, with the values still
+// in it dropped by the drop sn_chan_make was given, NULL for an
+// element that owns nothing. The channel ends when its last sending
+// handle is gone: sn_chan_recv returns false once it has ended and is
+// empty, which the emitted code turns into None. A send on a channel
+// whose last receiving handle is gone drops the value, and
+// sn_chan_open says whether one remains. A value is copied into the
+// channel by its bytes and out again: the sender's place was emptied
+// by the move, and the receiver owns what it took.
 typedef struct sn_chan sn_chan;
+
+// The direction of a channel handle, the bits of the ends it holds:
+// what a chan<- T, a <-chan T and a chan T hold.
+enum { SN_CHAN_SEND = 1, SN_CHAN_RECV = 2, SN_CHAN_BOTH = 3 };
 
 // A case of a select: the channel, the value to send or the place to
 // receive into, and for a receive whether a value came, false once the
-// channel is closed and empty. sn_select waits for a case that can
+// channel has ended and is empty. sn_select waits for a case that can
 // proceed, performs it and returns its index, choosing at random among
-// several; with a default it returns -1 at once when none can.
+// several; with a default it returns -1 at once when none can. A send
+// case on a channel whose receivers are gone proceeds by dropping its
+// value.
 typedef struct {
     sn_chan *chan;
     void *value;
@@ -750,12 +765,12 @@ typedef struct {
 void sn_spawn(void (*run)(void *), void *arg, uint32_t bound);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
-int64_t sn_panics_contained(void); // how many panics a task's handle has contained, whose frames' memory stays allocated
+int64_t
+sn_panics_contained(void); // how many panics a task's handle has contained, whose frames' memory stays allocated
 void sn_timers_stop(void);
-bool sn_timer_abandon(sn_chan *c);
+bool sn_timer_abandon(sn_chan *c, int dir);
 int64_t sn_chan_timer(sn_chan *c);
-bool sn_chan_alone(sn_chan *c);
-bool sn_chan_release(sn_chan *c);
+bool sn_chan_release(sn_chan *c, int dir, int64_t *before);
 void sn_chan_placeTimer(sn_chan *c, int64_t at);
 
 // The scheduler's own interface (sched.c), which the channels, the
@@ -767,9 +782,12 @@ sn_task *sn_self(void);
 void sn_park(void);
 void sn_wake(sn_task *t);
 void sn_sleep(int64_t d);
-sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *));
-sn_chan *sn_chan_clone(sn_chan *c);
-void sn_chan_drop(sn_chan **c);
+sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *),
+                      const char *made); // made is where the program made it, for the deadlock report
+sn_chan *sn_chan_clone(sn_chan *c, int dir);
+void sn_chan_drop(sn_chan **c, int dir);
+sn_chan *sn_chan_narrow(sn_chan *c, int kept); // a handle of both ends keeps the end kept and gives the other up
+bool sn_chan_open(sn_chan *c);                 // whether a receiving handle remains
 void sn_chan_send(sn_chan *c, const void *v);
 bool sn_chan_offer(sn_chan *c, const void *v);
 void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
@@ -777,7 +795,6 @@ bool sn_time_stopTimer(sn_chan *ch);
 bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every);
 bool sn_chan_poll(sn_chan *c, void *out);
 bool sn_chan_recv(sn_chan *c, void *out);
-void sn_chan_close(sn_chan *c);
 int64_t sn_chan_len(sn_chan *c);
 int64_t sn_chan_cap(sn_chan *c);
 

@@ -850,6 +850,11 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 		}
 
 		if ch, ok := readType(x).Underlying().(*Chan); ok { // every operation on a channel reads the handle through a borrow
+			if ch.dir == SendOnly {
+				c.errorf(e.OpPos, "cannot receive from a send-only channel")
+				return invalidOperand
+			}
+
 			return operand{value, NewOption(ch.elem), nil, nil}
 		}
 

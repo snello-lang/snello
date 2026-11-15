@@ -79,7 +79,8 @@ func name(g ref Guard) string { return g.name.Clone() }
 `
 
 const tasks = "package main\nimport (\"fmt\"; \"rc\"; \"sync\"; \"time\")\n" +
-	"func closer(ch chan int) { time.Sleep(10 * time.Millisecond); close(ch) }\n" +
+	"func ender(ch chan<- int) { time.Sleep(10 * time.Millisecond) }\n" + // the handle it took drops when it returns: the channel ends when it was the last sender
+
 	"func boom() { panic(\"in a task\") }\n"
 
 // Programs returns the programs both backends run. short asks for the
@@ -209,14 +210,8 @@ func main() {
 		fmt.Println("deadline")
 	}
 
-	select {
-	case <-time.Tick(0):
-		fmt.Println("Tick(0) ticked")
-	case <-time.Tick(-time.Second):
-		fmt.Println("a negative Tick ticked")
-	case <-time.After(20 * time.Millisecond):
-		fmt.Println("no tick")
-	}
+	ended := (<-time.Tick(0)).IsNone() && (<-time.Tick(-time.Second)).IsNone() // a Tick of no period has no sender: its channel has ended
+	fmt.Println("no period:", if ended { "ended" } else { "ticked" })
 
 	pending := []<-chan time.Time{}
 	for i := 0; i < 50000; i++ {
@@ -226,7 +221,7 @@ func main() {
 	fmt.Println(len(pending))
 }
 `,
-			Out: "deadline\nno tick\n50000\n",
+			Out: "deadline\nno period: ended\n50000\n",
 		},
 		{
 			Name: "net-stale-wakes", // a wake left over from a select must not end a socket's wait early, nor reach a task that has gone
@@ -350,7 +345,7 @@ func main() {
 			Name: "sleep-under-load", // a sleep ends on time while every worker has two tasks trading messages through its run-next slot: the slot's task yields to the queue
 			Src: `package main
 import ("fmt"; "os"; "time")
-func echo(in chan int, out chan int) {
+func echo(in <-chan int, out chan<- int) {
 	for v := range in {
 		out <- v
 	}
@@ -363,7 +358,6 @@ func pinger(n int, done chan ()) {
 		in <- i
 		<-out
 	}
-	close(in)
 	done <- ()
 }
 func main() {
@@ -1260,7 +1254,7 @@ func main() {
 			Src: `package main
 import "fmt"
 struct Worker impl Drop {
-	in   chan int
+	in   <-chan int // the receiving end alone, so that the feeder's handle is the last sender and the range ends
 	done chan int
 	name string
 }
@@ -1276,13 +1270,14 @@ func run(w Worker) {
 	fmt.Println("total", total)
 }
 func main() {
-	w := Worker{in: make(chan int), done: make(chan int, 2), name: "w".Clone()}
-	feed := w.in.Clone()
+	in := make(chan int)
+	feed := in.Clone()
+	w := Worker{in: in, done: make(chan int, 2), name: "w".Clone()}
 	done := w.done.Clone()
 	spawn run(w)
 	feed <- 1
 	feed <- 2
-	close(feed)
+	_ = feed
 	<-done
 	fmt.Println("joined", len(done))
 	oc := Some(make(chan int, 1))
@@ -1307,7 +1302,7 @@ func step(out ref chan<- string, in ref <-chan string, v string) string {
 	case out <- v:
 		return "sent".Clone()
 	case got := <-in:
-		return got ?? "closed".Clone()
+		return got ?? "ended".Clone()
 	}
 }
 func main() {
@@ -1316,12 +1311,12 @@ func main() {
 	fmt.Println(step(ref a, ref b, "one".Clone()))
 	b <- "seven".Clone()
 	fmt.Println(step(ref a, ref b, "two".Clone()))
-	close(b)
-	fmt.Println(step(ref a, ref b, "three".Clone()))
+	var e <-chan string = b
+	fmt.Println(step(ref a, ref e, "three".Clone()))
 	fmt.Println(<-a ?? "".Clone(), len(a))
 }
 `,
-			Out: "sent\nseven\nclosed\none 0\n",
+			Out: "sent\nseven\nended\none 0\n",
 		},
 		{
 			Name: "integer-literals", // a literal has its type's width: a product of two is not a C int, the largest u64 is not refused, and one formatted with %d is not leaked
@@ -2989,14 +2984,82 @@ func main() {
 			Src:  tasks + "func main() {\n\th := spawn boom()\n\tmatch h.Join() {\n\t\tOk(_) => fmt.Println(\"returned\"),\n\t\tErr(p) => fmt.Println(\"contained:\", p.Message()),\n\t}\n\tfmt.Println(\"still serving\")\n}\n",
 			Out:  "contained: in a task\nstill serving\n", Stderr: "panic: in a task\n",
 		},
+		{
+			Name: "handle-releases-channel", // a channel handle a failed task held is released as its Drop values are, so the channel ends with the last handle, which a debug build's leak report holds it to
+			Src:  tasks + "func holds(ch chan int, u chan ()) { panic(\"holding\") }\nfunc main() {\n\tch := make(chan int, 1)\n\tu := make(chan ())\n\t_ = (spawn holds(ch.Clone(), u.Clone())).Join()\n\tch <- 1\n\tfmt.Println(len(ch))\n}\n",
+			Out:  "1\n", Stderr: "panic: holding\n",
+		},
+		{
+			Name: "argument-released-on-panic", // an owned argument evaluated before an argument that panics is released with the task's guarded values: the clone of a channel and of an Arc, which a debug build's leak report and the Arc's count hold it to
+			Src:  tasks + "func explode() int { panic(\"boom\") }\nfunc two(ch chan int, n int) {}\nfunc twoArc(x sync.Arc<int>, n int) {}\nfunc f(ch chan int, x sync.Arc<int>) { two(ch.Clone(), explode()); twoArc(x.Clone(), explode()) }\nfunc g(ch chan int, x sync.Arc<int>) { twoArc(x.Clone(), explode()) }\nfunc main() {\n\tch := make(chan int, 1)\n\tx := sync.NewArc(1)\n\t_ = (spawn f(ch.Clone(), x.Clone())).Join()\n\t_ = (spawn g(ch.Clone(), x.Clone())).Join()\n\tch <- 1\n\tfmt.Println(len(ch), x.Count())\n}\n",
+			Out:  "1 1\n", Stderr: "panic: boom\n",
+		},
+		{
+			Name: "channel-ends", // a channel ends when its last sending handle is dropped: a receive, a range and a select case give None once the buffer is drained; a producer keeping a chan T keeps it open, which Open and a select with a default show
+			Src: `package main
+import "fmt"
+func produce(out chan<- int, n int) {
+	for i := 1; i <= n; i++ {
+		out <- i
+	}
+}
+func main() {
+	ch := make(chan int, 4)
+	spawn produce(ch.Clone(), 3)
+	var in <-chan int = ch
+	sum := 0
+	for v := range in {
+		sum += v
+	}
+	fmt.Println("summed", sum, (<-in).IsNone())
+	kept := make(chan int, 1)
+	keeper := kept.Clone()
+	spawn produce(kept.Clone(), 1)
+	fmt.Println("got", <-keeper ?? 0)
+	select {
+	case got := <-keeper:
+		fmt.Println("ended early", got.IsNone())
+	default:
+		fmt.Println("still open", keeper.Open())
+	}
+	var r <-chan int = keeper
+	_ = kept
+	fmt.Println("ended", (<-r).IsNone())
+}
+`,
+			Out: "summed 6 true\ngot 1\nstill open true\nended true\n",
+		},
+		{
+			Name: "send-without-receiver", // a send with no receiving handle left drops its value and goes on, which a debug build holds to its leak report, and Open says so; a send waiting when the last receiver goes drops its value too
+			Src: `package main
+import ("fmt"; "time")
+struct Note impl Drop { n int }
+func (x mut Note) Drop() { fmt.Println("dropped", x.n) }
+func main() {
+	ch := make(chan Note, 1)
+	var w chan<- Note = ch
+	fmt.Println("open", w.Open())
+	w <- Note{n: 1}
+	fmt.Println("sent, open", w.Open())
+	full := make(chan Note)
+	var fw chan<- Note = full.Clone()
+	spawn func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = full
+	}()
+	fw <- Note{n: 2}
+	fmt.Println("released, open", fw.Open())
+}
+`,
+			Out: "open false\ndropped 1\nsent, open false\ndropped 2\nreleased, open false\n",
+		},
 	}
 
 	for _, misuse := range []struct{ name, body, err string }{
-		{"close-twice", "ch := make(chan int); close(ch); close(ch)", "panic: close of a closed channel"},
-		{"send-closed", "ch := make(chan int, 1); close(ch); ch <- 1", "panic: send on a closed channel"},
-		{"close-while-sending", "ch := make(chan int); spawn closer(ch.Clone()); ch <- 1", "panic: channel closed while a send waited on it"},
 		{"task-panics", "ch := make(chan int); spawn boom(); <-ch", "panic: in a task"},
-		{"deadlock-receive", "ch := make(chan int); fmt.Println(\"waiting\"); <-ch", "fatal error: all tasks are asleep - deadlock!"},
+		{"deadlock-receive", "ch := make(chan int); fmt.Println(\"waiting\"); <-ch", "fatal error: all tasks are asleep - deadlock!\n  the main task waits to receive on the channel made at deadlock-receive.snello:"},
+		{"deadlock-send", "ch := make(chan int); ch <- 1", "the main task waits to send on the channel made at deadlock-send.snello:"},
+		{"deadlock-select", "a := make(chan int); b := make(chan int); select { case a <- 1: fmt.Println(\"a\"); case <-b: fmt.Println(\"b\") }", "the main task waits in a select whose first case is on the channel made at deadlock-select.snello:"},
 		{"deadlock-waitgroup", "wg := sync.NewWaitGroup(); wg.Add(1); wg.Wait()", "fatal error: all tasks are asleep - deadlock!"},
 		{"deadlock-tasks", "a := make(chan int); b := make(chan int); b2 := b.Clone(); spawn func() { <-a; b2 <- 1 }(); <-b", "fatal error: all tasks are asleep - deadlock!"},
 		{"swap-out-of-range", "xs := []int{1}; xs.Swap(0, 1)", "panic: index out of range [1] with length 1"},
@@ -3032,9 +3095,9 @@ func manyTasks(short bool) Program {
 	return Program{
 		Name: "many-tasks",
 		Src: "package main\nimport \"fmt\"\n" +
-			"func wait(gate chan (), done chan ()) { <-gate; done <- () }\n" +
+			"func wait(gate <-chan (), done chan ()) { <-gate; done <- () }\n" +
 			"func main() {\n\tgate := make(chan ())\n\tdone := make(chan (), " + count + ")\n" +
-			"\tfor i := 0; i < " + count + "; i++ { spawn wait(gate.Clone(), done.Clone()) }\n\tclose(gate)\n" +
+			"\tfor i := 0; i < " + count + "; i++ { spawn wait(gate.Clone(), done.Clone()) }\n\t_ = gate\n" +
 			"\tfor i := 0; i < " + count + "; i++ { <-done }\n\tfmt.Println(\"released\")\n}\n",
 		Out: "released\n", ReleaseOnly: true,
 	}

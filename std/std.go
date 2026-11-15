@@ -8,7 +8,7 @@
 // named after it, math/math.snello, or unicode/utf8/utf8.snello for a
 // package two levels down, written in Snello; a function it
 // declares without a body is the runtime's, under the C name the
-// backend gives the function (_docs/design/05-standard-library.md).
+// backend gives the function.
 package std
 
 import "embed"

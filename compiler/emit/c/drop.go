@@ -68,12 +68,16 @@ func needsDrop(t types.Type) bool {
 }
 
 // guarded reports whether dropping a value of type t runs a Drop
-// method, its own or one of a part, which a panic must still run: such
-// a value is registered with the runtime while it is owned. The answer
-// for a declared type is kept, as a type may hold a pointer to itself.
+// method, its own or one of a part, or gives up a channel handle, which
+// a panic must still do: such a value is registered with the runtime
+// while it is owned. The answer for a declared type is kept, as a type
+// may hold a pointer to itself.
 func (e *Emitter) guarded(t types.Type) bool {
-	if _, ok := t.(*types.Trait); ok {
+	switch t.(type) {
+	case *types.Trait:
 		return true // whatever the value holds may have a Drop method: an over-approximation, since the implementing types are known, kept until a trait value without one is worth a guard less
+	case *types.Chan:
+		return true // a handle a panic abandoned would keep the channel open for every other handle, where plain memory only stays allocated
 	}
 
 	n, ok := t.(*types.Named)
@@ -234,7 +238,7 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 	case *types.Map:
 		put(&b, "\tsn_map_free((sn_map *)v, ", e.mapType(u, pos), ");\n")
 	case *types.Chan:
-		b.WriteString("\tsn_chan_drop(v);\n")
+		put(&b, "\tsn_chan_drop(v, ", strconv.Itoa(lower.HandleDir(u)), ");\n")
 	case *types.Trait:
 		traitDrop(&b)
 	default:
@@ -521,7 +525,7 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 	case isString(t):
 		return "sn_string_clone(" + v + ")"
 	case isChan(t):
-		return "sn_chan_clone(" + v + ")" // another handle on the same channel
+		return "sn_chan_clone(" + v + ", " + strconv.Itoa(lower.HandleDir(t)) + ")" // another handle on the same channel, of the same direction
 	}
 
 	return e.cloner(t, pos) + "(" + v + ")"

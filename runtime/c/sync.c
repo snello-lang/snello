@@ -7,9 +7,9 @@
 
 #include "internal.h"
 
-// Locks, as _docs/design/06-tasks-and-channels.md lays them out: one
-// object serves the sync package's Mutex, RwLock and WaitGroup. The
-// library holds a lock as an int, as it holds a file descriptor: the
+// Locks: one object serves the sync package's Mutex, RwLock and
+// WaitGroup. The library holds a lock as an int, as it holds a file
+// descriptor: the
 // handle is the lock's address, never 0, since a handle comes only
 // from the function that makes its lock.
 //
@@ -43,12 +43,12 @@ typedef struct {
     bool rw;                   // an RwLock's, which counts readers
     _Atomic int64_t readers;   // Go's readerCount
     _Atomic int64_t departing; // Go's readerWait: readers a writer waits for
-    sn_qlock mu;              // over the queues and the count
-    sn_waitq lockq;               // tasks waiting for the word to leave 2
+    sn_qlock mu;               // over the queues and the count
+    sn_waitq lockq;            // tasks waiting for the word to leave 2
     semaphore reading;         // readers waiting for a writer
     semaphore writing;         // the writer waiting for the readers before it
     int64_t count;             // the wait group's
-    sn_waitq groupq;              // tasks waiting for the count to reach zero
+    sn_waitq groupq;           // tasks waiting for the count to reach zero
 } sn_lock;
 
 static const int64_t max_readers = (int64_t)1 << 30;
@@ -63,13 +63,9 @@ static sn_lock *new_lock(bool rw) {
 
 // The lock's memory is sn_alloc's, so a debug build reports a lock
 // that nothing freed.
-int64_t sn_sync_newLock(void) {
-    return (int64_t)(intptr_t)new_lock(false);
-}
+int64_t sn_sync_newLock(void) { return (int64_t)(intptr_t)new_lock(false); }
 
-int64_t sn_sync_newRwLock(void) {
-    return (int64_t)(intptr_t)new_lock(true);
-}
+int64_t sn_sync_newRwLock(void) { return (int64_t)(intptr_t)new_lock(true); }
 
 // sn_sync_freeLock frees the lock. The Mutex, RwLock or WaitGroup
 // counter that frees its lock owns it, the last handle in a WaitGroup's
@@ -90,8 +86,8 @@ static void park_while(sn_lock *l) {
         return;
     }
 
-    sn_wait_state ws = {0};
-    sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+    sn_wait_state ws = { 0 };
+    sn_waiter me = { sn_self(), NULL, &ws, 0, false, false, NULL, NULL };
     sn_enqueue(&l->lockq, &me);
     sn_qlock_give(&l->mu);
     sn_await_wait(&ws);
@@ -128,7 +124,8 @@ static void mutex_lock(sn_lock *l) {
     }
 
     s = sync_spin(l);
-    if (s == 0 && atomic_compare_exchange_strong_explicit(&l->state, &s, 1, memory_order_acquire, memory_order_relaxed)) {
+    if (s == 0 &&
+        atomic_compare_exchange_strong_explicit(&l->state, &s, 1, memory_order_acquire, memory_order_relaxed)) {
         return;
     }
 
@@ -174,8 +171,8 @@ static void sema_acquire(sn_lock *l, semaphore *s) {
     sn_qlock_take(&l->mu);
     atomic_fetch_add(&s->nwait, 1);
     while (!sema_try(s)) {
-        sn_wait_state ws = {0};
-        sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+        sn_wait_state ws = { 0 };
+        sn_waiter me = { sn_self(), NULL, &ws, 0, false, false, NULL, NULL };
         sn_enqueue(&s->q, &me);
         sn_qlock_give(&l->mu);
         sn_await_wait(&ws);
@@ -274,8 +271,8 @@ void sn_sync_wait(int64_t h) {
         return;
     }
 
-    sn_wait_state ws = {0};
-    sn_waiter me = {sn_self(), NULL, &ws, 0, false, false, NULL, NULL};
+    sn_wait_state ws = { 0 };
+    sn_waiter me = { sn_self(), NULL, &ws, 0, false, false, NULL, NULL };
     sn_enqueue(&l->groupq, &me);
     sn_qlock_give(&l->mu);
     sn_await_wait(&ws);
@@ -286,9 +283,7 @@ void sn_sync_wait(int64_t h) {
 // sn_sync_atomicAdd adds d to *n as one step no other task's add can
 // interleave with, and returns the new value; the Arc's count is kept
 // with it, and the handle that brings it to zero drops the value.
-int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) {
-    return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST);
-}
+int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) { return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST); }
 
 // The words of sync.Counter: one each on the
 // heap, named by its address as a lock is, so that a handle is a plain
@@ -302,13 +297,9 @@ int64_t sn_sync_cellNew(int64_t v) {
     return (int64_t)(intptr_t)p;
 }
 
-int64_t sn_sync_cellLoad(int64_t h) {
-    return __atomic_load_n((int64_t *)(intptr_t)h, __ATOMIC_SEQ_CST);
-}
+int64_t sn_sync_cellLoad(int64_t h) { return __atomic_load_n((int64_t *)(intptr_t)h, __ATOMIC_SEQ_CST); }
 
-void sn_sync_cellStore(int64_t h, int64_t v) {
-    __atomic_store_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST);
-}
+void sn_sync_cellStore(int64_t h, int64_t v) { __atomic_store_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST); }
 
 int64_t sn_sync_cellAdd(int64_t h, int64_t d) {
     return __atomic_add_fetch((int64_t *)(intptr_t)h, d, __ATOMIC_SEQ_CST);
@@ -322,6 +313,4 @@ int64_t sn_sync_cellExchange(int64_t h, int64_t v) {
     return __atomic_exchange_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST);
 }
 
-void sn_sync_cellFree(int64_t h) {
-    sn_free((void *)(intptr_t)h);
-}
+void sn_sync_cellFree(int64_t h) { sn_free((void *)(intptr_t)h); }

@@ -593,6 +593,12 @@ func (c *Checker) send(s *ast.SendStmt) {
 		return
 	}
 
+	if t.dir == RecvOnly {
+		c.errorf(s.Arrow, "cannot send on a receive-only channel")
+		c.expr(s.Value, nil)
+		return
+	}
+
 	v := c.expr(s.Value, t.elem)
 	c.assign(v, t.elem, s.Value.Pos(), "send")
 	c.kept(v, "sent", s.Value.Pos())

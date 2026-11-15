@@ -25,7 +25,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-sn_slice sn_os_Args = {0};
+sn_slice sn_os_Args = { 0 };
 
 // The allocator is alloc.c's; a release build has nothing to check at
 // the end, and debug.c has the report of a debug build.
@@ -87,7 +87,9 @@ void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
 // digits a step from a table, from the end of a buffer on the stack,
 // then copied once into a block of exactly their length. 0 to 99 are
 // Go's small numbers, views of the table that own nothing.
-const char sn_digit_pairs[201] = "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+const char sn_digit_pairs[201] =
+    "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556"
+    "57585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
 
 char *sn_format_uint(uint64_t u, char *end) {
     while (u >= 100) {
@@ -340,7 +342,8 @@ void sn_await_wait(sn_wait_state *ws) {
 // resumed on another thread reads that thread's (sched.c says why).
 static _Thread_local uint64_t rng;
 
-__attribute__((noinline)) uint64_t sn_next_random(void) { // never inlined into sn_select, whose task may move threads at its park
+__attribute__((noinline)) uint64_t
+sn_next_random(void) { // never inlined into sn_select, whose task may move threads at its park
     if (rng == 0) {
         rng = ((uint64_t)(uintptr_t)&rng ^ (uint64_t)sn_time_now()) | 1;
     }

@@ -29,9 +29,7 @@ sn_int snm_tally_open(sn_int start) {
     return (sn_int)(intptr_t)c;
 }
 
-sn_int snm_tally_Live(void) {
-    return live;
-}
+sn_int snm_tally_Live(void) { return live; }
 
 sn_int snm_tally_add(sn_int handle, sn_int n) {
     struct counter *c = (struct counter *)(intptr_t)handle;

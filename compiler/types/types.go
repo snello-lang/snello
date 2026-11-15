@@ -596,7 +596,7 @@ func optionParens(t Type) string {
 // optionString writes elem? with the parentheses the grammar needs: ?
 // binds outside a pointer or borrow and inside a container, so a
 // container, map, channel or function inside an option is written
-// ([]T)? (see _docs/design/00-syntax-conventions.md).
+// ([]T)?.
 func optionString(o *Option) string {
 	switch o.elem.(type) {
 	case *Slice, *Array, *Map, *Chan, *Signature:

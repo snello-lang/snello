@@ -27,13 +27,27 @@ static int64_t escape_rune(char *p, int32_t r, char quote) {
 
     const char *short_escape = NULL;
     switch (r) {
-    case '\a': short_escape = "\\a"; break;
-    case '\b': short_escape = "\\b"; break;
-    case '\f': short_escape = "\\f"; break;
-    case '\n': short_escape = "\\n"; break;
-    case '\r': short_escape = "\\r"; break;
-    case '\t': short_escape = "\\t"; break;
-    case '\v': short_escape = "\\v"; break;
+    case '\a':
+        short_escape = "\\a";
+        break;
+    case '\b':
+        short_escape = "\\b";
+        break;
+    case '\f':
+        short_escape = "\\f";
+        break;
+    case '\n':
+        short_escape = "\\n";
+        break;
+    case '\r':
+        short_escape = "\\r";
+        break;
+    case '\t':
+        short_escape = "\\t";
+        break;
+    case '\v':
+        short_escape = "\\v";
+        break;
     }
 
     if (short_escape != NULL) {
@@ -139,14 +153,30 @@ static int64_t unquote_char(const uint8_t *p, int64_t n, uint8_t quote, uint8_t 
 
     c = p[1];
     switch (c) {
-    case 'a': out[0] = '\a'; return 2;
-    case 'b': out[0] = '\b'; return 2;
-    case 'f': out[0] = '\f'; return 2;
-    case 'n': out[0] = '\n'; return 2;
-    case 'r': out[0] = '\r'; return 2;
-    case 't': out[0] = '\t'; return 2;
-    case 'v': out[0] = '\v'; return 2;
-    case '\\': out[0] = '\\'; return 2;
+    case 'a':
+        out[0] = '\a';
+        return 2;
+    case 'b':
+        out[0] = '\b';
+        return 2;
+    case 'f':
+        out[0] = '\f';
+        return 2;
+    case 'n':
+        out[0] = '\n';
+        return 2;
+    case 'r':
+        out[0] = '\r';
+        return 2;
+    case 't':
+        out[0] = '\t';
+        return 2;
+    case 'v':
+        out[0] = '\v';
+        return 2;
+    case '\\':
+        out[0] = '\\';
+        return 2;
     case '\'':
     case '"':
         if (c != quote) {
@@ -183,7 +213,14 @@ static int64_t unquote_char(const uint8_t *p, int64_t n, uint8_t quote, uint8_t 
 
         return 2 + digits;
     }
-    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': {
+    case '0':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7': {
         if (n - 2 < 2) {
             return 0;
         }

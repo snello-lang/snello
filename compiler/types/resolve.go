@@ -154,8 +154,7 @@ func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
 
 // globalType refuses a package variable whose type cannot be shared
 // by every task, as a spawn refuses to carry it: a package variable is
-// reached from any task (_docs/design/03-ownership-across-tasks.md,
-// package variables).
+// reached from any task.
 func (c *Checker) globalType(name *ast.Ident, t Type) {
 	if t == nil || t == Typ[Invalid] {
 		return // reported already

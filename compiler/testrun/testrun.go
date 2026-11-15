@@ -4,9 +4,9 @@
 
 // Package testrun builds a package's tests into a program and runs it,
 // which is what snello test does and what the standard library's own
-// tests go through (_docs/design/09-testing.md, section 5): the tests
-// are the functions named Test in the package's _test.snello files,
-// found by name, and the program is the package with those files and
+// tests go through: the tests are the functions named Test in the
+// package's _test.snello files, found by name, and the program is the
+// package with those files and
 // a generated main that lists the tests and calls testing.Main. A
 // library package is imported by the generated main under its path;
 // a main package has the generated file join it, with the program's

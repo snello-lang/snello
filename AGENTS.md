@@ -65,6 +65,7 @@ go build ./...        # must be clean
 go vet ./...          # must be clean
 gofmt -l .            # must print nothing
 go test ./...         # must pass
+make fmt              # gofmt over the Go files and clang-format over the C, before every commit; Snello files follow gofmt's layout by hand
 go run ./cmd/snello lex FILE     # print the token stream of a Snello file
 go run ./cmd/snello parse FILE   # print the syntax tree
 go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct

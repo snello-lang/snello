@@ -34,8 +34,8 @@ type Importer interface {
 // An ImporterFrom is an Importer that resolves a path from the
 // directory of the file importing it, as go/types.ImporterFrom does,
 // so that a package of the program's own is found through the module
-// the file is in (_docs/design/08-packages.md). The checker calls
-// ImportFrom when the Config's Importer has it.
+// the file is in. The checker calls ImportFrom when the Config's
+// Importer has it.
 type ImporterFrom interface {
 	Importer
 	ImportFrom(path, dir string) (*Package, error)

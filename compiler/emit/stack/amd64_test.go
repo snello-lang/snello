@@ -61,7 +61,7 @@ func TestAmd64Unknown(t *testing.T) {
 		setsSP           bool
 	}{
 		{"dynamic frame", "  401126:\tsub    %rax,%rsp\n", "depends on a value", false},
-		{"jump table", "  401126:\tnotrack jmp *%rax\n", "jump through a register", false},
+		{"tail call", "  401126:\tnotrack jmp *%rax\n", "", false}, // a call through a pointer that ends the function, counted as a call
 		{"sets sp", "  401126:\tmov    %rdi,%rsp\n", "", true},
 		{"probe loop", "  401120:\tnop\n  401126:\tsub    $0x1000,%rsp\n  40112d:\torq    $0x0,(%rsp)\n  401132:\tcmp    %r11,%rsp\n  401135:\tjne    401126 <run+0x6>\n", "in a loop", false},
 	} {

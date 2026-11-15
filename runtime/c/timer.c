@@ -59,10 +59,10 @@ typedef struct timer timer;
 struct timer {
     timer *prev, *next; // in its slot, or among the wheel's soon
     int64_t when;
-    sn_task *t;     // a sleeping task
-    sn_handoff *fired; // and the handoff its firing wakes it through
-    sn_chan *ch;    // or the channel the time goes to
-    int64_t every;  // and, for a Tick, its period
+    sn_task *t;           // a sleeping task
+    sn_handoff *fired;    // and the handoff its firing wakes it through
+    sn_chan *ch;          // or the channel the time goes to
+    int64_t every;        // and, for a Tick, its period
     void (*fire)(void *); // or the function to call, with arg
     void *arg;
     sn_deadline *at; // where the function's timer is kept
@@ -77,7 +77,7 @@ typedef struct {
     _Atomic int64_t next; // when it is to be looked at again: no timer of its own is due before
     _Atomic int locked;
     _Atomic int64_t pending; // its timers that have yet to wake what they wake: wakes promised
-    uint64_t elapsed; // the tick the wheel has reached: every timer in a slot is after it
+    uint64_t elapsed;        // the tick the wheel has reached: every timer in a slot is after it
     uint64_t occupied[wheel_levels];
     timer *slots[wheel_levels][level_slots];
     timer *soon;    // timers of the tick the wheel is at, or before it, that are not due yet: looked at one by one
@@ -129,9 +129,7 @@ int64_t sn_timers_next(void) {
     return first;
 }
 
-int64_t sn_timers_next_of(int64_t worker) {
-    return atomic_load(&wheels_of.at[worker].next);
-}
+int64_t sn_timers_next_of(int64_t worker) { return atomic_load(&wheels_of.at[worker].next); }
 
 // sn_timers_pending is how many timers have yet to wake what they wake.
 // Each wheel counts its own, so that tasks starting and stopping timers
@@ -197,9 +195,7 @@ static bool wheel_trylock(wheel *w) {
     return atomic_compare_exchange_strong_explicit(&w->locked, &open, 1, memory_order_acquire, memory_order_relaxed);
 }
 
-static void wheel_unlock(wheel *w) {
-    atomic_store_explicit(&w->locked, 0, memory_order_release);
-}
+static void wheel_unlock(wheel *w) { atomic_store_explicit(&w->locked, 0, memory_order_release); }
 
 // wheel_link puts x at the head of a list of the wheel's.
 static void wheel_link(timer **head, timer *x, int level, int slot) {
@@ -337,7 +333,8 @@ static void wheel_renew(wheel *w) {
 
     int level, slot;
     uint64_t at;
-    if (wheel_next(w, &level, &slot, &at) && at <= (uint64_t)INT64_MAX >> tick_shift && (int64_t)(at << tick_shift) < next) {
+    if (wheel_next(w, &level, &slot, &at) && at <= (uint64_t)INT64_MAX >> tick_shift &&
+        (int64_t)(at << tick_shift) < next) {
         next = (int64_t)(at << tick_shift);
     }
 
@@ -433,9 +430,9 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
         bool again = heard && x->every > 0 && !atomic_load(&stopping);
         if (again) {
             x->when = next;
-            tell = timer_arm(w, x); // counted again before this firing stops counting, so the count never passes through zero
+            tell = timer_arm(w, x); // counted again before this firing stops counting: the count never passes zero
             sn_chan_placeTimer(x->ch, (int64_t)(intptr_t)x);
-            if (sn_chan_alone(x->ch)) {
+            if (!sn_chan_open(x->ch)) {
                 // The program's last handle went after the offer and
                 // before the timer was back in the wheel, so its drop
                 // found no timer to take out: this does it. The drop
@@ -444,7 +441,9 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
                 // handles, so one of the two always sees the other.
                 wheel_remove(w, x);
                 sn_chan_placeTimer(x->ch, -1);
-                atomic_fetch_sub(&w->pending, 1); // the count it took a moment ago; the firing's own goes below, with the lock let go
+                atomic_fetch_sub(
+                    &w->pending,
+                    1); // the count it took a moment ago; the firing's own goes below, with the lock let go
                 again = false;
             }
         }
@@ -455,7 +454,7 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
         }
 
         if (!again) { // an After's handle, or a Tick's no one can receive from
-            sn_chan_drop(&x->ch);
+            sn_chan_drop(&x->ch, SN_CHAN_SEND);
             sn_free(x);
         }
 
@@ -520,7 +519,7 @@ static timer *timer_new(timer from) {
 // disarmed.
 void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
     sn_sched_start();
-    timer *x = timer_new((timer){.when = deadline(d), .fire = fire, .arg = arg, .at = at});
+    timer *x = timer_new((timer){ .when = deadline(d), .fire = fire, .arg = arg, .at = at });
     wheel *w = home(&at->home);
     wheel_lock(w);
     timer *old = at->timer;
@@ -570,7 +569,7 @@ void sn_deadline_disarm(sn_deadline *at) {
 // every period, when every is above zero.
 void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
     sn_sched_start();
-    timer *x = timer_new((timer){.when = deadline(d), .ch = ch, .every = every});
+    timer *x = timer_new((timer){ .when = deadline(d), .ch = ch, .every = every });
     wheel *w = home(sn_chan_home(ch));
     wheel_lock(w);
     bool tell = timer_arm(w, x);
@@ -606,7 +605,7 @@ static bool timer_stop(sn_chan *c) {
         sn_chan_placeTimer(c, -1);
         wheel_unlock(w);
         timers_done(w, 1);
-        sn_chan_drop(&x->ch);
+        sn_chan_drop(&x->ch, SN_CHAN_SEND);
         sn_free(x);
         sn_time unread;
         sn_chan_poll(c, &unread); // a tick sent before, which no one received
@@ -622,7 +621,7 @@ static bool timer_stop(sn_chan *c) {
 // ch and drops ch, the handle it was given to name the channel by.
 bool sn_time_stopTimer(sn_chan *ch) {
     bool stopped = timer_stop(ch);
-    sn_chan_drop(&ch);
+    sn_chan_drop(&ch, SN_CHAN_RECV); // the receiving handle the program named the channel by
     return stopped;
 }
 
@@ -650,7 +649,7 @@ bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
 // at its deadline. A timer that fired meanwhile, or the end of the
 // program, which drops the timers' handles in sn_timers_stop, leaves
 // the handle to the caller, who drops it as any other.
-bool sn_timer_abandon(sn_chan *c) {
+bool sn_timer_abandon(sn_chan *c, int dir) {
     wheel *w = home(sn_chan_home(c));
     wheel_lock(w);
     timer *x = (timer *)(intptr_t)sn_chan_timer(c);
@@ -659,8 +658,11 @@ bool sn_timer_abandon(sn_chan *c) {
         return false;
     }
 
-    if (!sn_chan_release(c)) { // another handle of the program's remains
+    int64_t before;
+    bool last = sn_chan_release(c, dir, &before);
+    if (!last) { // another handle of the program's remains
         wheel_unlock(w);
+        sn_chan_given(c, dir, before); // the end, if this was the last of its kind, now that the wheel is let go
         return true;
     }
 
@@ -669,7 +671,8 @@ bool sn_timer_abandon(sn_chan *c) {
     sn_chan_placeTimer(c, -1);
     wheel_unlock(w);
     timers_done(w, 1);
-    sn_chan_drop_untimed(x->ch); // the timer is out of its wheel: no drop of a timer's handle comes back here
+    sn_chan_given(c, dir, before);             // the program's handle, the last of its kind
+    sn_chan_drop_untimed(x->ch, SN_CHAN_SEND); // out of its wheel: no drop of a timer's handle comes back here
     sn_free(x);
     return true;
 }
@@ -715,7 +718,7 @@ void sn_timers_stop(void) {
             x->level = -2;
             if (x->ch != NULL) {
                 sn_chan_placeTimer(x->ch, -1);
-                sn_chan_drop(&x->ch);
+                sn_chan_drop(&x->ch, SN_CHAN_SEND);
                 sn_free(x);
             } else if (x->fire != NULL) {
                 x->at->timer = NULL;
@@ -742,7 +745,7 @@ void sn_sleep(int64_t d) {
     sn_sched_start();
     sn_task *t = sn_self();
     sn_handoff fired = SN_HANDOFF_OPEN;
-    timer x = {.when = deadline(d), .t = t, .fired = &fired, .level = -2};
+    timer x = { .when = deadline(d), .t = t, .fired = &fired, .level = -2 };
     wheel *w = &wheels_of.at[sn_worker_index()];
     wheel_lock(w);
     bool tell = timer_arm(w, &x);

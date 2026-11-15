@@ -29,9 +29,9 @@
 // HashMap, so that keys chosen to collide cannot be computed ahead of
 // time: without the seed a server's map could be filled with keys that
 // all fall in one slot, and every lookup would walk them (HashDoS).
-static uint64_t hash_seed[2] = {0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u};
+static uint64_t hash_seed[2] = { 0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u };
 
-static const uint64_t wyp[4] = {0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u, 0x4b33a62ed433d4a3u, 0x4d5a2da51de1aa47u};
+static const uint64_t wyp[4] = { 0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u, 0x4b33a62ed433d4a3u, 0x4d5a2da51de1aa47u };
 
 static inline uint64_t wymix(uint64_t a, uint64_t b) {
     __uint128_t r = (__uint128_t)a * b;
@@ -114,9 +114,7 @@ uint64_t sn_hash_bytes(const void *key, size_t len) {
 // sn_hash_mix folds the hash v of a part of a key into h, the hash of
 // the parts before it, keyed by the seed: a struct, a tuple or an
 // option hashes its parts in turn, and a number is sn_hash_mix(0, n).
-uint64_t sn_hash_mix(uint64_t h, uint64_t v) {
-    return wymix(h ^ hash_seed[1] ^ wyp[2], v ^ wyp[3]);
-}
+uint64_t sn_hash_mix(uint64_t h, uint64_t v) { return wymix(h ^ hash_seed[1] ^ wyp[2], v ^ wyp[3]); }
 
 // A map keeps its entries in the order they were inserted, which is the
 // order a range visits them, in one block: the keys, the values, and the
@@ -229,7 +227,7 @@ static void rebuild(sn_map *m, const sn_map_type *t, int64_t need) {
 
     size_t koff = 0, voff = round16((size_t)cap * t->ksize), hoff = voff + round16((size_t)cap * t->vsize);
     char *block = sn_alloc(hoff + (size_t)cap * sizeof(uint64_t));
-    sn_map n = {0};
+    sn_map n = { 0 };
     n.keys = block + koff;
     n.vals = block + voff;
     n.hashes = (uint64_t *)(block + hoff);
@@ -372,7 +370,7 @@ void sn_map_free(sn_map *m, const sn_map_type *t) {
 // keys and values own.
 void sn_map_clone(const sn_map *m, const sn_map_type *t, sn_map *out) {
     sn_check_map(m);
-    sn_map n = {0};
+    sn_map n = { 0 };
     if (m->count > 0) {
         rebuild(&n, t, m->count);
         uint32_t *entries = slot_entries(&n);

@@ -19,8 +19,7 @@ import (
 // list of places moved on the path being checked, forks the list at a
 // branch and joins the branches' lists after, and keeps a loop's list to
 // report a value moved on one pass and reached again on the next. A
-// Copy value is never moved. See _docs/book/05-ownership.md for the
-// rules as the reader sees them.
+// Copy value is never moved.
 
 // A place is a variable, or a field path inside one: n, n.value.
 type place struct {

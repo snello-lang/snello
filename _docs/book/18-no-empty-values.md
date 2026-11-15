@@ -143,7 +143,7 @@ fmt.Println(wg.Done(), wg.Add(1), wg.Done())
 // false true true
 ```
 
-What still panics is what the language itself traps, a program's bug rather than a caller's choice: an index out of range, a division by zero, `Unwrap` on `None`, a send on a closed channel, and running out of memory. Inside `rc` and `sync` no branch is left for a broken invariant: a handle holds its cell by address, with no empty state to check, so `Get`, `GetMut`, `Lock`, `Read` and `Write` have no case for a handle without its value, and since a program cannot call a `Drop` by hand, no handle outlives its cell. The library's other panics are how a test fails or skips, which the runner catches: `expect`, `testing.Skip`, and `testing.TempDir` when the system makes no directory.
+What still panics is what the language itself traps, a program's bug rather than a caller's choice: an index out of range, a division by zero, `Unwrap` on `None`, and running out of memory. Inside `rc` and `sync` no branch is left for a broken invariant: a handle holds its cell by address, with no empty state to check, so `Get`, `GetMut`, `Lock`, `Read` and `Write` have no case for a handle without its value, and since a program cannot call a `Drop` by hand, no handle outlives its cell. The library's other panics are how a test fails or skips, which the runner catches: `expect`, `testing.Skip`, and `testing.TempDir` when the system makes no directory.
 
 ## How this stays memory safe without a collector
 

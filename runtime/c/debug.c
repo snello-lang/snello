@@ -154,7 +154,7 @@ void *sn_deref(void *p) {
 
 int sn_finish(void) {
     sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
-    for (int64_t i = 0; i < sn_os_Args.len; i++) { // the program may have stored strings of its own in it
+    for (int64_t i = 0; i < sn_os_Args.len; i++) {     // the program may have stored strings of its own in it
         sn_string_drop(&((sn_string *)sn_os_Args.ptr)[i]);
     }
 
@@ -185,7 +185,9 @@ int sn_finish(void) {
         // A contained panic drops the values with a Drop method and runs
         // the deferred calls of the frames it abandons; the plain memory
         // those frames held stays allocated, and is among the blocks.
-        fprintf(stderr, "  %lld %s contained by a task's handle; the memory of the frames a panic abandons is not released\n", (long long)panics, panics == 1 ? "panic was" : "panics were");
+        fprintf(stderr,
+                "  %lld %s contained by a task's handle; the memory of the frames a panic abandons is not released\n",
+                (long long)panics, panics == 1 ? "panic was" : "panics were");
     }
 
     for (block *b = first; b != NULL; b = b->next) {

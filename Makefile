@@ -5,7 +5,9 @@
 # written in Go; make test, snello test over the library's and the
 # examples' packages through both backends, which make test-std and
 # make test-examples run apart; make check, snello check over the
-# examples; make shell, the container with the repository mounted.
+# examples; make fmt, gofmt over the Go files and clang-format over
+# the C, run before every commit; make shell, the container with the
+# repository mounted.
 # The Go suite and the benchmarks are go test's, run by CI through
 # build/run.sh.
 
@@ -19,7 +21,7 @@ else
 NEEDS := image
 endif
 
-.PHONY: image build test test-std test-examples check shell clean
+.PHONY: image build test test-std test-examples check fmt shell clean
 
 image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(IMAGE) build
@@ -37,6 +39,9 @@ test-examples: build
 
 check: build
 	$(RUN) sh build/check.sh
+
+fmt: $(NEEDS)
+	$(RUN) sh build/fmt.sh
 
 shell: image
 	docker run --rm -it --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src -e HOME=/tmp -e CC=clang -e CLANG=clang $(IMAGE) bash

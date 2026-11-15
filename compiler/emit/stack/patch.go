@@ -39,7 +39,7 @@ const (
 	// channel holds, through a pointer to one of the functions named
 	// with lower.ElemDropPrefix; lazyMaker calls a package variable's
 	// initializer, one of those named with lower.LazyInitPrefix.
-	chanDropCaller = "chan_drop_elements"
+	chanDropCaller = "chan_drop_value"
 	lazyMaker      = "sn_lazy_make"
 
 	// catcher is the runtime's function that runs a function under a

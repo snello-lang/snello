@@ -9,6 +9,4 @@
 
 #include <math.h>
 
-double snm_mathx_Cbrt(double x) {
-    return cbrt(x);
-}
+double snm_mathx_Cbrt(double x) { return cbrt(x); }

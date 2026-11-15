@@ -88,7 +88,7 @@ static void sortRun(int32_t *r, int64_t n) {
         return;
     }
 
-    int64_t count[257] = {0};
+    int64_t count[257] = { 0 };
     for (int64_t i = 0; i < n; i++) {
         count[sn_uc_ccc(r[i]) + 1]++;
     }
@@ -152,8 +152,9 @@ static void compose(runes *b) {
     }
 
     int64_t starter = 0, out = 1;
-    bool started = sn_uc_ccc(b->r[0]) == 0; // a string that starts with a mark has no starter to compose with until one comes
-    int last = 0;                            // the combining class of the last rune kept since the starter
+    bool started =
+        sn_uc_ccc(b->r[0]) == 0; // a string that starts with a mark has no starter to compose with until one comes
+    int last = 0;                // the combining class of the last rune kept since the starter
     for (int64_t i = 1; i < b->n; i++) {
         int32_t c = b->r[i];
         int cc = sn_uc_ccc(c);
@@ -180,7 +181,7 @@ static void compose(runes *b) {
 // normalize returns s in form f, a new string.
 static sn_string normalize(sn_string s, int64_t f) {
     sn_check_string(s);
-    runes b = {NULL, 0, 0};
+    runes b = { NULL, 0, 0 };
     bool compat = f == NFKC || f == NFKD;
     for (int64_t i = 0; i < s.len;) {
         int32_t r;

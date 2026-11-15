@@ -1,0 +1,30 @@
+# The style of the C runtime, as make fmt applies it: four spaces of
+# indentation, braces on the line of what they open, a pointer's star
+# beside its name, short functions on one line, trailing comments
+# aligned, lines of up to 120 columns, the elements of a table packed
+# as a call's arguments are, and the includes sorted within each block
+# of them, a blank line keeping two blocks apart: the runtime's own
+# header first, the system's after it. The options are the ones
+# clang-format 19, the build image's, reads.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+PointerAlignment: Right
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+AlignConsecutiveMacros: Consecutive
+IndentCaseLabels: false
+SpaceAfterCStyleCast: false
+KeepEmptyLines:
+  AtEndOfFile: false
+  AtStartOfBlock: false
+  AtStartOfFile: false
+MaxEmptyLinesToKeep: 1
+Cpp11BracedListStyle: false
+BinPackArguments: true

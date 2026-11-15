@@ -36,6 +36,7 @@ Simplicity is a goal with the same weight as the others, and it is kept by subtr
 | Inheritance | Fragile base classes | Traits with defaults, and Go embedding |
 | Impl blocks, `dyn`, `Box` | Rust vocabulary with Go equivalents | `impl` on the type line, a trait as a type, `*T` |
 | async/await | Function coloring | Tasks that block, as goroutines do |
+| `close`, and a channel panic | A call anyone may make at any time: five ways for a Go program to go wrong, and no way for its runtime to tell a channel no one will send on from one whose sender is busy | A channel ends when its last sending handle is dropped, a send with no receiver drops its value, and `Open` asks ("A channel ends by ownership" in `00-syntax-conventions.md`) |
 | Structural interfaces | Ambiguous once traits have defaults and fields | Nominal traits declared with `impl` |
 | Self-types, implicits, macros | Where Scala's and Rust's complexity lives | Nothing |
 | Runtime reflection | It reads and writes a value behind the checker's back, and keeps type metadata alive at run time | A standard trait the compiler derives at compile time, that hands each field to a visitor by name as a `ref` and builds a value field by field, returning a `Result` (planned) |

@@ -16,7 +16,14 @@
 // task through it and no task finds another by it. There is no address,
 // no mailbox, no link and no kill. The compiler writes the spawn; this
 // package is what the program holds afterwards.
+//
+// A Group is several tasks started for handles, waited for together:
+// Wait returns once every one has ended, with the first panic among
+// them, and Done is a channel that ends when one has failed, so
+// that the others can stop.
 package task
+
+import "sync"
 
 // A Handle is a task started for one: an owned value that Join takes,
 // so a task is joined once, by whoever holds the handle, in any task.
@@ -46,7 +53,7 @@ struct Panic {
 // deadlock report says so when nothing else can run.
 func (h Handle<T>) Join() Result<T, Panic> {
 	for {
-		if r := <-h.done { // never closed: a receive waits for the task's one value
+		if r := <-h.done { // the task holds a sending handle until it has sent: a receive waits for its one value
 			return r
 		}
 	}
@@ -54,3 +61,91 @@ func (h Handle<T>) Join() Result<T, Panic> {
 
 // Message lends the message the panic was raised with.
 func (p ref Panic) Message() ref string { return ref p.message }
+
+// A Group is several tasks started for handles of no result, waited
+// for together and told of the first that failed. Add puts a task in
+// the group, Done gives a channel that ends once the first
+// member fails, which a member that should stop then selects on, and
+// Wait returns once every member has ended: Ok when each returned, or
+// the first panic among them. A group is a value the function owns,
+// made by NewGroup and taken by Wait; it has no zero value.
+//
+//	g := task.NewGroup()
+//	g.Add(spawn serve(listener, g.Done()))
+//	g.Add(spawn flush(queue.Clone(), g.Done()))
+//	match g.Wait() {
+//		Ok(_)  => {},
+//		Err(p) => fmt.Println("a task failed:", p.Message()),
+//	}
+struct Group {
+	shared  sync.Arc<sync.Mutex<failure>> // the first panic, and the sending end of done until it is dropped
+	done    <-chan ()                      // the channel that ends when a member fails; Done gives handles on it
+	waiting sync.WaitGroup                 // counts the watchers, one per member, each out once its member has ended
+}
+
+// A failure is what a group's watchers share: the first panic among
+// the members, kept by the watcher that saw it, and the one sending
+// handle of the group's done channel, which that watcher drops, so
+// that the channel ends for every member selecting on it.
+struct failure {
+	first Panic?
+	stop  (chan<- ())?
+}
+
+// NewGroup returns a group with no member.
+func NewGroup() Group {
+	done := make(chan ())
+	var stop chan<- () = done.Clone() // the sending end, kept for the first failure
+	return Group{
+		shared:  sync.NewArc(sync.NewMutex(failure{first: None, stop: Some(stop)})),
+		done:    done,
+		waiting: sync.NewWaitGroup(),
+	}
+}
+
+// Add puts the task behind h in the group, which Wait then waits for.
+// The handle is taken: the group joins the task.
+func (g mut Group) Add(h Handle<()>) {
+	g.waiting.Add(1)
+	spawn watch(h, g.shared.Clone(), g.waiting.Clone())
+}
+
+// Done returns a handle on the channel that ends when one of the
+// group's members fails, and never otherwise: a member that should
+// stop when another has failed selects on it, and one that does not
+// is waited for. Each call gives a handle to move into a member.
+func (g ref Group) Done() <-chan () {
+	return g.done.Clone()
+}
+
+// Wait returns once every member has ended: Ok when each returned, or
+// the first panic among them, on which Done ended. It takes the group,
+// so a group is waited for once; a group dropped without a Wait leaves
+// its members running, as a handle dropped leaves its task.
+func (g Group) Wait() Result<(), Panic> {
+	g.waiting.Wait()
+	guard := g.shared.Get().Lock()
+	return match take(mut guard.Get().first) {
+		Some(p) => Err(p),
+		None => Ok(()),
+	}
+}
+
+// watch joins a member for its group: a panic that is the first among
+// the members is kept, and the done channel's sending handle dropped,
+// which ends it, under the shared lock so that two members failing at
+// once end it once; then the watcher counts itself out.
+func watch(h Handle<()>, shared sync.Arc<sync.Mutex<failure>>, waiting sync.WaitGroup) {
+	match h.Join() {
+		Ok(_) => {},
+		Err(p) => {
+			guard := shared.Get().Lock()
+			if guard.Get().first.IsNone() {
+				guard.Get().first = Some(p)
+				_ = take(mut guard.Get().stop) // the last sending handle: done ends
+			}
+		},
+	}
+
+	waiting.Done()
+}

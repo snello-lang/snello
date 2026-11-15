@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Sockets and the poller, as _docs/design/06-tasks-and-channels.md
-// promises: a program reads and writes a connection as blocking code
-// and runs as event-driven code. Every socket is non-blocking and is
+// Sockets and the poller: a program reads and writes a connection as
+// blocking code and runs as event-driven code. Every socket is
+// non-blocking and is
 // registered with the system's poller, kqueue or epoll, once, when it
 // is made; an operation that would block parks the task until the
 // poller says the socket changed, and the worker that hears of the
@@ -271,9 +271,7 @@ static void take(sn_task *t, bool claimed, sn_task **woke, int *n, int *taken) {
     }
 }
 
-int64_t sn_net_waiting(void) {
-    return atomic_load(&waiting);
-}
+int64_t sn_net_waiting(void) { return atomic_load(&waiting); }
 
 void sn_net_kept(int64_t taken) {
     if (taken > 0) {
@@ -286,7 +284,7 @@ int sn_net_poll(sn_task **woke, int *taken) {
     *taken = 0;
 #if defined(__APPLE__)
     struct kevent events[SN_POLL_EVENTS];
-    struct timespec now = {0, 0};
+    struct timespec now = { 0, 0 };
     int got = kevent(poller, NULL, 0, events, SN_POLL_EVENTS, &now);
     for (int i = 0; i < got; i++) {
         poll_desc *pd = events[i].udata;
@@ -355,13 +353,9 @@ static void expire(poll_desc *pd, bool write) {
     }
 }
 
-static void expire_read(void *pd) {
-    expire(pd, false);
-}
+static void expire_read(void *pd) { expire(pd, false); }
 
-static void expire_write(void *pd) {
-    expire(pd, true);
-}
+static void expire_write(void *pd) { expire(pd, true); }
 
 // passed reports whether fd's deadline for the direction has passed.
 static bool passed(int fd, bool write) {
@@ -387,7 +381,8 @@ static const char *watch(int fd) {
     atomic_store(&pd->w, pd_none);
     atomic_store(&pd->rd, 0);
     atomic_store(&pd->wd, 0);
-    atomic_store(&pd->rt.home, 0); // the wheel of the first deadline this socket arms, not the last socket's with its number
+    atomic_store(&pd->rt.home,
+                 0); // the wheel of the first deadline this socket arms, not the last socket's with its number
     atomic_store(&pd->wt.home, 0);
 #if defined(__APPLE__)
     struct kevent ev[2];
@@ -395,7 +390,7 @@ static const char *watch(int fd) {
     EV_SET(&ev[1], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, pd);
     return kevent(poller, ev, 2, NULL, 0, NULL) == 0 ? NULL : "kevent";
 #else
-    struct epoll_event ev = {.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, .data.ptr = pd};
+    struct epoll_event ev = { .events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, .data.ptr = pd };
     return epoll_ctl(poller, EPOLL_CTL_ADD, fd, &ev) == 0 ? NULL : "epoll_ctl";
 #endif
 }
@@ -490,8 +485,8 @@ static void unwatch(int fd) {
     sn_deadline_disarm(&pd->wt);
     atomic_store(&pd->rd, 0);
     atomic_store(&pd->wd, 0);
-    _Atomic uintptr_t *words[2] = {&pd->r, &pd->w};
-    sn_handoff *woken[2] = {&pd->rh, &pd->wh};
+    _Atomic uintptr_t *words[2] = { &pd->r, &pd->w };
+    sn_handoff *woken[2] = { &pd->rh, &pd->wh };
     for (int i = 0; i < 2; i++) {
         uintptr_t old = atomic_exchange(words[i], pd_none);
         if (old > pd_ready) {
@@ -517,7 +512,8 @@ static int64_t fail(int s, const char *name, sn_string *call) {
 
 // port_of returns the port of a socket address of either family.
 static int64_t port_of(const struct sockaddr_storage *a) {
-    return ntohs(a->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)a)->sin6_port : ((const struct sockaddr_in *)a)->sin_port);
+    return ntohs(a->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)a)->sin6_port
+                                          : ((const struct sockaddr_in *)a)->sin_port);
 }
 
 // listen_on opens a socket listening on addr and stores its descriptor;
@@ -732,7 +728,8 @@ int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
 
     *local = sn_net_format((struct sockaddr *)&a, true);
     len = sizeof a;
-    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? sn_net_format((struct sockaddr *)&a, true) : SN_STR("", 0);
+    *remote = getpeername((int)fd, (struct sockaddr *)&a, &len) == 0 ? sn_net_format((struct sockaddr *)&a, true)
+                                                                     : SN_STR("", 0);
     return 0;
 }
 

@@ -20,10 +20,10 @@ const (
 	bindNow     = "-Wl,-z,now" // binds every import as the program starts
 )
 
-// Header writes the header the compiler gives a package that binds C
-// (_docs/design/08-packages.md, section 6): the runtime's header, and
-// the prototype of every bound function under its derived symbol, from
-// the Snello signature. The package's C includes it, so the C compiler
+// Header writes the header the compiler gives a package that binds C:
+// the runtime's header, and the prototype of every bound function under
+// its derived symbol, from the Snello signature. The package's C
+// includes it, so the C compiler
 // checks each definition against its declaration, as cgo's export
 // header lets it.
 func Header(b lower.Binding) []byte {

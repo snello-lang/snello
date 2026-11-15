@@ -750,8 +750,8 @@ func (e *Emitter) rangeString(s *ast.RangeStmt, place, i string) {
 	e.line("}")
 }
 
-// rangeChan writes a loop receiving from a channel until it is closed
-// and empty. Each value received is owned by the loop variable, or
+// rangeChan writes a loop receiving from a channel until it has ended
+// and is empty. Each value received is owned by the loop variable, or
 // dropped at once when the loop binds none.
 func (e *Emitter) rangeChan(s *ast.RangeStmt, ch string, elem types.Type) {
 	got := e.temp()

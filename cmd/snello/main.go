@@ -9,13 +9,12 @@
 // and `snello build DIR` a program of every .snello file in a
 // directory, named after the directory as go build names it; the
 // packages of the program's own are found through the nearest
-// snello.mod above it (_docs/design/08-packages.md). `snello build
-// -debug FILE` builds it with the runtime's checks, which stop the
-// program on a value used after its release and report values never
-// released; `snello build -backend c FILE` builds it through the C
-// backend, the reference implementation, and the system's C compiler.
-// `snello test DIR` builds the tests of a package, its _test.snello
-// files, with a generated main and runs them (_docs/design/09-testing.md).
+// snello.mod above it. `snello build -debug FILE` builds it with the
+// runtime's checks, which stop the program on a value used after its
+// release and report values never released; `snello build -backend c
+// FILE` builds it through the C backend, the reference implementation,
+// and the system's C compiler. `snello test DIR` builds the tests of a
+// package, its _test.snello files, with a generated main and runs them.
 // Four more subcommands inspect the compiler by hand: `snello lex FILE`
 // prints the token stream, `snello parse FILE` the syntax tree, `snello
 // check FILE|DIR` what the checker finds, and `snello emit [-backend c]
@@ -90,9 +89,9 @@ func usage() {
 // test builds the tests of the package in a directory into a program
 // and runs it: -backend chooses the backend, and the rest of the
 // flags, -v and -run NAME, go to the program, whose exit code is the
-// command's (_docs/design/09-testing.md, section 5). In a checkout of
-// the compiler, std/NAME is a standard package, run from its sources
-// as edited with the library's privileges.
+// command's. In a checkout of the compiler, std/NAME is a standard
+// package, run from its sources as edited with the library's
+// privileges.
 func test(args []string) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)

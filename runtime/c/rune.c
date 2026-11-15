@@ -75,7 +75,9 @@ sn_string sn_unicode_ScriptCode(int32_t r) {
 }
 
 // same reports whether the C string s is the string t.
-static bool same(const char *s, sn_string t) { return (int64_t)strlen(s) == t.len && memcmp(s, t.ptr, (size_t)t.len) == 0; }
+static bool same(const char *s, sn_string t) {
+    return (int64_t)strlen(s) == t.len && memcmp(s, t.ptr, (size_t)t.len) == 0;
+}
 
 // sn_unicode_InScript reports whether r's script is the one named, by
 // its long name, Latin, or its four-letter code, Latn.

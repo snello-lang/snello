@@ -65,8 +65,7 @@ func Identical(x, y Type) bool {
 // place of type t without a conversion:
 //
 //   - the types are identical;
-//   - a mut borrow goes where a ref borrow is wanted (rule 5 of
-//     _docs/design/04-borrows-ref-and-mut.md);
+//   - a mut borrow goes where a ref borrow is wanted;
 //   - a bidirectional channel goes where a directional one is wanted;
 //   - the underlying types are identical and at most one side is
 //     named, so a []int literal can be assigned to `type IDs []int`.
@@ -110,10 +109,10 @@ func isChan(t Type) bool {
 
 // IsCopy reports whether assigning a value of type t copies it rather
 // than moving it. The property is computed from structure, never
-// declared (_docs/design/01-language-design.md): numbers, bool and
-// ref borrows are Copy; strings, error, owned pointers, slices, maps,
-// channel handles and mut borrows are not; a struct, enum,
-// array, tuple, option or result is Copy when every part is.
+// declared: numbers, bool and ref borrows are Copy; strings, error,
+// owned pointers, slices, maps, channel handles and mut borrows are
+// not; a struct, enum, array, tuple, option or result is Copy when
+// every part is.
 //
 // A function value is Copy. A closure that captured an owned value is
 // the one exception, which the move checker tracks by the closure's

@@ -431,11 +431,11 @@ static void run(void *arg) {
 int main(int argc, char **argv) {
     sn_init(argc, argv);
     path = SN_STR(argv[1], (int64_t)strlen(argv[1]));
-    done = sn_chan_make(sizeof(int64_t), 1, NULL); // buffered: the sender is done with it once its value is in
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe"); // buffered: the sender is done with it once its value is in
     sn_spawn(run, NULL, SN_UNBOUNDED);
     int64_t code;
     sn_chan_recv(done, &code);
-    sn_chan_drop(&done); // the task's work is over: the last handle frees the channel
+    sn_chan_drop(&done, SN_CHAN_BOTH); // the task's work is over: the last handle frees the channel
     return sn_finish();
 }
 `
@@ -562,12 +562,12 @@ static void too_deep(void *arg) {
 int main(int argc, char **argv) {
     sn_init(argc, argv);
     int n = (int)(sizeof bounds / sizeof bounds[0]);
-    done = sn_chan_make(sizeof(int64_t), rounds * tasks + 1, NULL); // buffered: no task parks to send
+    done = sn_chan_make(sizeof(int64_t), rounds * tasks + 1, NULL, "probe"); // buffered: no task parks to send
     if (argc > 1) {
         sn_spawn(too_deep, NULL, 100);
         int64_t v;
         sn_chan_recv(done, &v);
-        sn_chan_drop(&done);
+        sn_chan_drop(&done, SN_CHAN_BOTH);
         return sn_finish();
     }
     sn_spawn(catcher, NULL, 4000);
@@ -583,7 +583,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("%lld\n", (long long)sum);
-    sn_chan_drop(&done);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
 }
 `
@@ -629,11 +629,11 @@ static void catcher(void *arg) {
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     sn_spawn(catcher, NULL, SN_UNBOUNDED);
     int64_t v;
     sn_chan_recv(done, &v);
-    sn_chan_drop(&done);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
 }
 `
@@ -686,7 +686,7 @@ static void run(void *arg) {
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     pthread_t id;
     pthread_create(&id, NULL, waker, NULL);
     sn_spawn(run, NULL, SN_UNBOUNDED);
@@ -694,7 +694,7 @@ int main(int argc, char **argv) {
     sn_chan_recv(done, &got);
     pthread_join(id, NULL);
     printf("ended before the wake: %d\n", ended_at_wake);
-    sn_chan_drop(&done);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
 }
 `
@@ -706,6 +706,81 @@ int main(int argc, char **argv) {
 
 	if string(out) != "ended before the wake: 0\n" {
 		t.Fatalf("got %q: the task went on before its waker was done with it", out)
+	}
+}
+
+// TestChannelEndsAtOnce drops the last sending handle and the last
+// receiving handle of a channel in two tasks at the same moment, many
+// times over, in a debug build: each last handle has work to do in the
+// channel as it goes, and the channel must be freed once, after both,
+// never under the other, which the debug allocator's poisoning and its
+// leak report hold it to. A handle given up for an end it does not hold
+// stops the program, which the second probe shows.
+func TestChannelEndsAtOnce(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 20000 };
+static _Atomic int round_on;
+static sn_chan *done;
+typedef struct {
+    sn_chan *h;
+    int dir;
+    int round;
+} handle;
+static void dropper(void *arg) {
+    handle *h = arg;
+    while (atomic_load(&round_on) != h->round) { // both drop as the round opens
+        sn_spin_hint();
+    }
+
+    sn_chan_drop(&h->h, h->dir);
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    done = sn_chan_make(sizeof(int64_t), 2, NULL, "probe");
+    for (int r = 1; r <= rounds; r++) {
+        sn_chan *c = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+        int64_t v = r;
+        sn_chan_send(c, &v); // a value left in the ring goes with the channel
+        handle sender = { sn_chan_clone(c, SN_CHAN_SEND), SN_CHAN_SEND, r };
+        handle receiver = { sn_chan_narrow(c, SN_CHAN_RECV), SN_CHAN_RECV, r };
+        sn_spawn(dropper, &sender, SN_UNBOUNDED);
+        sn_spawn(dropper, &receiver, SN_UNBOUNDED);
+        atomic_store(&round_on, r);
+        int64_t got;
+        sn_chan_recv(done, &got);
+        sn_chan_recv(done, &got);
+    }
+
+    printf("rounds %d\n", rounds);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	dir := t.TempDir()
+	bin := buildProbe(t, filepath.Join(dir, "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil || string(out) != "rounds 20000\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	twice := `#include "internal.h"
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    sn_chan *c = sn_chan_narrow(sn_chan_make(sizeof(int64_t), 1, NULL, "probe"), SN_CHAN_SEND);
+    sn_chan *s = sn_chan_clone(c, SN_CHAN_SEND);
+    sn_chan_drop(&s, SN_CHAN_RECV); // a sending handle given up as a receiving one, of which none is left
+    sn_chan_drop(&c, SN_CHAN_SEND);
+    return sn_finish();
+}
+`
+	bin = buildProbe(t, filepath.Join(dir, "twice"), twice)
+	out, err = exec.Command(bin).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "a channel handle was given up twice") {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 
@@ -770,7 +845,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     sn_spawn(serve, NULL, SN_UNBOUNDED);
     int64_t n = 4 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
     for (int64_t i = 0; i < n; i++) {
@@ -783,7 +858,7 @@ int main(int argc, char **argv) {
     sn_chan_recv(done, &code);
     pthread_join(id, NULL);
     printf("accepted: %lld\n", (long long)code);
-    sn_chan_drop(&done);
+    sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
 }
 `
@@ -856,8 +931,8 @@ int main(int argc, char **argv) {
     sn_init(argc, argv);
     alarm(30);
     int64_t n = 2 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
-    results = sn_chan_make(sizeof(int64_t), n + 1, NULL);
-    computed = sn_chan_make(sizeof(int64_t), 1, NULL);
+    results = sn_chan_make(sizeof(int64_t), n + 1, NULL, "probe");
+    computed = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     for (int64_t i = 0; i < n; i++) {
         sn_spawn(look, NULL, SN_UNBOUNDED);
     }
@@ -881,8 +956,8 @@ int main(int argc, char **argv) {
     }
 
     printf("no such host: %s\n", none == n ? "all" : "not all");
-    sn_chan_drop(&results);
-    sn_chan_drop(&computed);
+    sn_chan_drop(&results, SN_CHAN_BOTH);
+    sn_chan_drop(&computed, SN_CHAN_BOTH);
     return sn_finish();
 }
 `

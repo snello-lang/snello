@@ -198,7 +198,7 @@ No `i128`, no complex numbers, no `uintptr`. Integer arithmetic wraps as in Go; 
 - `if x := opt { ... }` binds `x` when `opt` is `Some`; tuples destructure: `if (k, v) := line.SplitOnce("=") { ... }`.
 - `.Expect("why")` unwraps or panics with the message.
 - `if` and `match` are expressions when every branch yields a value: `pat := if ci { "(?i)" + p } else { p.Clone() }`, `return match e { ... }`.
-- Receiving from a channel yields `T?`: `None` once the channel is closed and drained. `for x := range ch` yields `T` and ends on close.
+- Receiving from a channel yields `T?`: `None` once the channel has ended, its last sending handle dropped and its buffer drained ("A channel ends by ownership" below). `for x := range ch` yields `T` and ends then.
 
 ## Traits
 
@@ -323,7 +323,7 @@ match h.Join() {
 - **The call is spawned as a statement's is.** Every argument, every variable a closure captures and a receiver taken by value is `Send` and moves into the task, and a borrow cannot be spawned, with the statement's messages. The call's result is `Send` too, since the handle carries it to the task that joins: `cannot spawn for a handle: rc.Rc<int> stays in its task`. A call that returns nothing gives a `task.Handle<()>`.
 - **A handle is an owned value that `Join` takes.** It is moved, never cloned, so a task is joined once, by whoever holds the handle, in any task, since a handle is `Send`; it has no zero value, as a channel handle has none. A handle dropped without a `Join` leaves its task running, and the task's result is dropped when the task ends. A `Join` on a task that never ends waits forever, as a receive on a channel no one sends on does, and the deadlock report says so when nothing else can run.
 - **A handle is a value, not a name for the task.** Nothing is sent to a task through it and no task finds another by it: there is no address, no mailbox, no link and no kill. A group of tasks is a library type written over handles.
-- **A contained panic ends its task as an uncontained one ends the program.** The message is printed on the standard error stream when the panic happens, `panic: index out of range [7] with length 3`, so that a failure the program only counts still shows; the values with a `Drop` method the task made since it started are dropped, innermost first, and its deferred calls run, once each; then the task hands `Err` to its handle and ends. A lock the task held is released by its guard's drop and nothing more: the value under it may be half changed, so a task whose panic is contained should own its state. The plain memory of the frames the panic abandoned, a slice of numbers or a message a `Sprintf` built, stays allocated until the process ends, as it does for a failed test ("Catching a panic" in the book's testing chapter): a guard per owned value would cost every function of every program a registration per value, and a panic is a bug the program fixes.
+- **A contained panic ends its task as an uncontained one ends the program.** The message is printed on the standard error stream when the panic happens, `panic: index out of range [7] with length 3`, so that a failure the program only counts still shows; the values with a `Drop` method the task made since it started are dropped, innermost first, and so are the channel handles it held, since a handle lost would keep its channel open for every other handle; its deferred calls run, once each; then the task hands `Err` to its handle and ends. A lock the task held is released by its guard's drop and nothing more: the value under it may be half changed, so a task whose panic is contained should own its state. The plain memory of the frames the panic abandoned, a slice of numbers or a message a `Sprintf` built, stays allocated until the process ends, as it does for a failed test ("Catching a panic" in the book's testing chapter): a guard per owned value would cost every function of every program a registration per value, and a panic is a bug the program fixes.
 - **`spawn` as a statement keeps its meaning.** Its panic ends the program. A program that wants a task's failure contained writes the handle, where a Go program recovers in every goroutine it starts; the choice is at the spawn, once, and nothing in the called function says which way it was started.
 
 **Considered and not taken.** A library function taking a closure, `task.Spawn(func() { ... })`, as Rust's `thread::spawn`: a closure handed to a function is a borrow of the frame that wrote it and cannot outlive the call, so a spawned closure needs the keyword, which moves its captures. A `Detach` method: dropping the handle is the detach. A handle in a `select`, a `TryJoin` or an `IsDone`: a group written over `Join` covers the programs that were asked for, and the handle stays one method until a program shows the need. A panic that is not printed when a handle catches it, as Go's `recover` prints nothing: a server that joins a thousand tasks and counts the failures would then hide the bug's message, and the program that wants silence redirects its standard error.
@@ -333,6 +333,66 @@ match h.Join() {
 **What it costs.** A `spawn` with a handle makes a channel of one slot, one allocation, clones its handle into the task, and runs the call under a mark, one `sigsetjmp`; the result crosses as a channel value does. A `spawn` as a statement costs what it did.
 
 **Memory safe, no collector.** A handle is a channel handle, and the task holds the other: the result or the panic goes through the channel by the rules every value crossing a task obeys, the last handle frees the channel, and a result no one joined is dropped by the task. The unwinding is the one a failed test uses.
+
+### A group of tasks
+
+A function that starts several tasks and needs all of them waits for them together and hears of the first that failed. **`task.Group` is written in the library over handles**: `g.Add(h)` puts a task started for a handle in the group, `g.Done()` gives a channel that ends when one of its tasks fails, and `g.Wait()` returns once every task has ended, `Ok` when each returned and `Err` with the first panic among them. It is Go's `errgroup.Group` and the task group of Swift, Java and Kotlin, with a panic where those have an error, since a panic is the one failure a task has that its caller does not already hold as a value.
+
+```go
+g := task.NewGroup()
+g.Add(spawn serve(listener, g.Done()))
+g.Add(spawn flush(queue.Clone(), g.Done()))
+match g.Wait() {
+	Ok(_)  => {},
+	Err(p) => fmt.Println("a task failed:", p.Message()),
+}
+```
+
+- **A member is a task started for a handle of no result**, `task.Handle<()>`. A task with a value to give back sends it on a channel or is joined by its own handle; the group is for the tasks a function runs for their effect, as a server's are. A `Result` a member computes is a value it already holds and reports as it likes: the group hears of panics, which a member cannot report itself.
+- **`Done` is a stop asked for, never forced.** The channel ends when the first member fails, by the drop of its one sending handle, which the group keeps until then ("A channel ends by ownership" below), and otherwise with the group itself; a member that should stop when another has failed selects on it, as the worker pool's workers select on their cancel, and one that does not is waited for. There is no kill, as the handle has none, so a member that ignores `Done` and never ends is waited for forever, and the deadlock report says so when nothing else can run.
+- **`Wait` takes the group**, so a group is waited for once, by the function that owns it; a group dropped without a `Wait` leaves its members running, as a handle dropped leaves its task. A group is a value the function owns, and its members are that function's: there is no tree of groups and no group that outlives its function.
+- **The library has no type that restarts tasks.** A program that wants a task run again writes the loop over `Join`, with its limit in plain sight, and the book shows it. There is no supervisor, no restart strategy and no kind of child: each of those is a policy, and a policy belongs to the program that has the facts.
+
+**Considered and not taken.** A `Go(f, a)` that spawns for the group, as `errgroup` does: the group would then be the one place a task is started without the keyword, and the keyword is what moves the task's values in; `Add(spawn f(a))` says the same with the spawn in sight. A member with a result, `Group<T>` with `Wait` returning `[]T`: the programs asked for run their tasks for their effect, and a group over handles of a result is one line more when one shows the need. A `Cancel` method that ends `Done` from outside: a program that wants that has the worker pool's cancel beside the group.
+
+**What it costs.** A group is a shared cell for the first panic and `Done`'s one sending handle, the channel itself and a `WaitGroup`. `Add` counts one in and starts a watcher, a task of its own that joins the member and, if the member failed, keeps the first panic and drops the sending handle, which ends `Done`, then counts itself out: a small bounded task per member, since nothing in the runtime observes a handle but a receive on it, and `Wait` is the `WaitGroup`'s wait. The group itself asks nothing new of the compiler or the runtime; what its programs found, a channel handle lost to a contained panic, in a frame and as an argument evaluated before one that panicked, is fixed beside it, in the backends' guards.
+
+**Memory safe, no collector.** The members' handles are moved into their watchers and joined there; the cell, the channel and the counter are handles freed by the last holder, which is the last watcher to end or `Wait`; a panic's message crosses from the watcher to `Wait` through the cell as any value crosses a lock, and `Done`'s sending handle is taken out of the cell once, by the watcher that keeps the panic.
+
+### A channel ends by ownership
+
+Every channel panic Snello had was about closing, and every channel deadlock but one was a task waiting on a channel whose other side was gone. Both came from one gap Go has and Snello need not: nothing owned the end of a channel, so closing was a call anyone could make at any time, and the runtime could not tell a channel no one would ever send on from one whose sender was busy. Snello's handles are owned, cloned per task and dropped by the last holder, and the checker tells a sending handle, `chan<- T`, from a receiving one, `<-chan T`. **A channel ends when its last sending handle is dropped.** A receive then yields `None` once the buffer is empty, `for range ch` ends, and a `select` receive case on it is ready with `None`. A `chan T` handle sends and receives, so it counts on both sides: a producer that keeps a `chan T` keeps its channel open, and hands the receiving end away as a `<-chan T`, as `produce` does, or keeps a `chan<- T` of its own.
+
+```go
+func produce(n int) <-chan Job {
+	out := make(chan Job)
+	w := out.Clone()
+	spawn func() {
+		for i := 0; i < n; i++ {
+			w <- Job{id: i}
+		}
+	}()                              // w goes with the task: the channel ends when the task does
+	return out                       // moved where a <-chan Job is wanted: a receiving handle from here on
+}
+
+for j := range produce(3) {          // ends when the sender is gone and the buffer is empty
+	fmt.Println(j.id)
+}
+```
+
+- **`close` leaves the language.** Nothing is left for it to do: the end is the drop of the last sender, which a program writes with a scope, a `take` or `_ = w`. `close(ch)` is refused with `close is gone: a channel ends when its last sending handle is dropped`. The three panics, `send on a closed channel`, `close of a closed channel` and `channel closed while a send waited on it`, have no way to happen and leave the runtime.
+- **A send on a channel whose last receiving handle is gone drops the value and goes on**, where a Go goroutine blocks forever: no one can ever take the value, so dropping it, in the sending task, is the one thing to do. A producer that wants to stop asks `ch.Open()`, which reports whether a receiving handle remains; a stop is asked for and never forced, as a task group's `Done` is. A send that was waiting when the last receiver went drops its value the same way.
+- **A handle's direction is its type's.** `ch.Clone()` clones in the handle's direction; a `chan T` moved where a `<-chan T` or a `chan<- T` is wanted, into a parameter, a field, a result or a send, gives the other half up there, as a drop of that half would, which may end the channel or free its senders. A borrow gives nothing up: a `ref chan T` reads as a `ref <-chan T` or a `ref chan<- T` as before.
+- **No new kind of channel, no priority in `select`, no unbounded buffer, no broadcast.** Each is a new concept; a library type may bring one later when a program shows the need.
+- **The deadlock report names the channel.** What remains of deadlock is a genuine cycle, tasks each waiting for another, and a receive from a channel no task will send on while a sender's handle sits unused. A channel knows where it was made, and the report says what the main task waits for and how many tasks wait on that channel: `fatal error: all tasks are asleep - deadlock!` followed by `the main task waits to receive on the channel made at pipeline.snello:39, which 2 sending and 1 receiving handles remain on, with 0 tasks waiting to send and 1 to receive`.
+
+**Considered and not taken.** A channel that ends when its last handle of either kind goes: a task waiting to receive holds a handle, so the channel it waits on would never end, and a receiver could never learn that the senders are gone. A `v, ok := <-ch` or a `Close` method: the `T?` says it, and a method is the call anyone could make. A `nil` channel to park a `select` case on: a case a program wants out of is written out of the `select`. Dropping the value of a refused send silently where a program would rather know: `Open` asks, and a value a program cannot afford to lose is not sent to a channel whose receiver may be gone.
+
+**The precedents.** Rust's `mpsc`: a `recv` returns an error once every `Sender` is dropped, and a `send` returns the value once the `Receiver` is gone, which is the rule here with the ends tied to Snello's typed handles. Go closes by a call, with its five ways to go wrong; Kotlin's channels close by a call too, and Swift's `AsyncStream` finishes when its continuation is dropped, the ownership half of this rule.
+
+**What it costs.** The count of a channel's handles becomes two, senders and receivers, in one word, on the line where the one count was: a clone or a drop of a `chan T` is one atomic add of both halves, as it was one add, and of a one-direction handle one add of its half. A send reads a flag beside the lock, set when the last receiver went, where it read the closed flag, and a receive the flag the last sender set: neither reads the counts, whose line every clone and drop writes, and which cost a spawn a tenth more when a send read it. A conversion of a `chan T` to one direction is one atomic subtract, written by the compiler only where a `chan T` value changes type, which a program does once per handle it hands away. The channel's position is one pointer. The `tasks` row of `bench/`, the pipeline example and a program of sends and receives pay nothing new.
+
+**Memory safe, no collector.** A channel is freed when both counts are zero, by the last handle of either kind, with the values still in its buffer dropped as today; the value a sender drops because no receiver remains is dropped by the sender, in its task, once, through the channel's element drop; a handle given up at a conversion is given up once, since the value's type changes once.
 
 ## Closures
 
