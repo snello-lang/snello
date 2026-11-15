@@ -92,6 +92,9 @@ func TestImports(t *testing.T) {
 		{"import (\"bufio\"; \"os\")\nfunc f(ws mut []bufio.Writer<os.File>) {}", []string{"3:15: a slice cannot hold Writer: it holds a borrow"}},
 		{"import (\"bufio\"; \"os\")\nfunc f(src mut os.File) int { sc := bufio.NewScanner(mut src); sc.Scan(); line := sc.Bytes(); sc.Scan(); return len(line) }", []string{"cannot borrow sc as mut: sc is borrowed as ref"}},
 		{"func f(x any) {}", []string{"2:10: any is only the type of a variadic parameter, ...ref any; a value of any type is a trait value"}},
+		{"import \"encoding/json\"\nfunc f() bool { return json.Marshal(ref map[int]bool{1: true}).IsOk() && json.Unmarshal<map[u8]string>(\"{}\").IsOk() }", nil},                                                        // a map of integer keys is an object
+		{"import \"encoding/json\"\nfunc f() bool { return json.Marshal(ref map[bool]int{true: 1}).IsOk() }", []string{"json.Marshal<map[bool]int>, json.writeValue<map[bool]int>: no arm of the match on K takes bool"}}, // one error, at the map, not one for each helper
+		{"import \"encoding/json\"\nfunc f() bool { return json.Unmarshal<map[f64]int>(\"{}\").IsOk() }", []string{"json.Unmarshal<map[f64]int>, json.readValue<map[f64]int>: no arm of the match on K takes f64"}},
 		{"import \"os\"\nfunc f(r Result<int, string>) int { return match r { Ok(n) => n, Err(_) => os.Exit(2) } }", nil}, // Exit never returns, so the arm needs no value
 		{"import \"io\"\nfunc f(k io.Kind) int { return match k { NotExist => 1, io.Exists => 3, _ => 0 } }", nil},        // variants of another package's enum, bare and qualified
 		{"import \"io\"\nfunc f(k io.Kind) bool { return k == io.NotExist }", nil},

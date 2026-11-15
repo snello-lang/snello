@@ -317,6 +317,7 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `json.Marshaler` and `json.Unmarshaler`, the latter a method on a zero value | the same traits, `UnmarshalJSON` a function of the type that returns the value: `func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error>` |
 | `json:"name,omitempty"` tags rename a field and leave it out | typed attributes the compiler checks: `Host string @json.Name("host") @json.OmitEmpty`, and `@json.Skip` for `json:"-"` (chapter 25) |
 | `json.Marshal` of a channel field fails when it runs | refused when the program is compiled, naming the type no arm takes |
+| a `map[int]V` written with its keys sorted by their text, `"10"` before `"2"`, and read from a key `"01"` or `"+1"` | sorted by their values, `"2"` before `"10"`; a key is read only as JSON writes an integer, so `"01"` and `"+1"` are errors with their offset |
 | `json.MarshalIndent(v, "", "  ")` and `json.Indent(&buf, src, "", "  ")` | the same layout: `json.MarshalIndent(ref v, "", "  ")` and `json.Indent(ref text, "", "  ")`, each returning the text; space after the value is dropped, where Go's `Indent` copies it, and `Indent` refuses text that is not UTF-8, which Go's passes through |
 
 ## Chapter 27: Writing Snello

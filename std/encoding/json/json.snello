@@ -11,8 +11,10 @@
 //
 // A bool, a number and a string are themselves; an option is null or
 // its value; an owned pointer the value it points at; a slice is an
-// array; a map with string keys is an object, its keys sorted; a struct
-// is an object of its fields, under the names they are declared with;
+// array; a map with string or integer keys is an object, its keys
+// sorted, an integer key written as its decimal in quotes, {"2":true},
+// and the keys in the order of their values; a struct is an object of
+// its fields, under the names they are declared with;
 // an enum's variant without fields is its name, "Dot", and one with
 // fields an object of one key, {"Rect":{"w":1,"h":2}}.
 // A struct of another package is reached through the fields it exports,
@@ -818,21 +820,21 @@ func writeValue<T>(v ref T, w mut writer) {
 
 			w.out.WriteByte(endArray)
 		}
-		map[K]V => match K {
-			string => {
-				keys := make([]string, 0, len(v))
+		map[K]V => match K { // a key is written and read as a string, so it is one or an integer
+			string | i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => {
+				keys := make([]K, 0, len(v))
 				for k, _ := range v {
-					keys.Push(k.Clone())
+					keys.Push(ownedKey(k))
 				}
 
-				keys.Sort()
+				sortKeys(mut keys)
 				w.out.WriteByte(beginObject)
 				for i, k := range ref keys {
 					if i > 0 {
 						w.out.WriteByte(valueSeparator)
 					}
 
-					writeQuoted(k, mut w.out)
+					writeKey(k, mut w)
 					w.out.WriteByte(nameSeparator)
 					if x := v.Get(k) {
 						writeValue(x, mut w)
@@ -1050,6 +1052,47 @@ func writeCompact(text ref string, out mut strings.Builder) {
 
 	if start < len(text) {
 		out.WriteString(text[start:len(text)])
+	}
+}
+
+// ownedKey returns a map's key k as a value the list of keys owns: a
+// string's copy, an integer itself.
+func ownedKey<K>(k ref K) K {
+	return match K {
+		string => k.Clone(),
+		i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => *k,
+	}
+}
+
+// sortKeys sorts a map's keys in the order they are written: strings by
+// their bytes, integers by their value, 2 before 10.
+func sortKeys<K>(keys mut []K) {
+	match K {
+		string => keys.Sort(),
+		i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => keys.Sort(),
+	}
+}
+
+// keyText returns a map's key k as an error names it: a string as it
+// is, an integer as its decimal.
+func keyText<K>(k ref K) string {
+	return match K {
+		string => k.Clone(),
+		i8 | i16 | i32 | i64 | int => strconv.Itoa(int(*k)),
+		u8 | u16 | u32 | u64 | uint => strconv.FormatUint(uint(*k), 10) ?? "",
+	}
+}
+
+// writeKey writes a map's key k as an object's key: a string quoted,
+// an integer as its decimal in quotes, "-3".
+func writeKey<K>(k ref K, w mut writer) {
+	match K {
+		string => writeQuoted(k, mut w.out),
+		i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => {
+			w.out.WriteByte(quotationMark)
+			writeValue(k, mut w)
+			w.out.WriteByte(quotationMark)
+		}
 	}
 }
 
@@ -1352,18 +1395,18 @@ func readValue<T>(r mut reader) Result<T, Error> {
 			r.depth -= 1
 			Ok(xs)
 		}
-		map[K]V => match K {
-			string => {
+		map[K]V => match K { // a key is written and read as a string, so it is one or an integer
+			string | i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => {
 				r.expectByte(beginObject)?
 				r.enterNested()?
-				m := map[string]V{}
+				m := map[K]V{}
 				if !r.skipClose(endObject)? {
 					for {
 						r.skipSpace()
 						at := r.at
-						k := r.readString()?
+						k := r.readKey<K>()?
 						if m.Contains(ref k) {
-							return Err(Error{at: at, msg: "key " + k + " given twice"})
+							return Err(Error{at: at, msg: "key " + keyText(ref k) + " given twice"})
 						}
 
 						r.skipSpace()
@@ -1971,6 +2014,61 @@ func (r mut reader) readKeySpan() Result<objectKey, Error> {
 
 	r.at += 1
 	return Ok(objectKey{from: from, to: r.at - 1, escaped: escaped, at: 0})
+}
+
+// readKey reads an object's key as a map's key of type K: a string, or
+// an integer as JSON writes one, -?(0|[1-9][0-9]*), that K holds,
+// written in quotes, "-3". An integer key's text is read in place when
+// it holds no escape, and decoded as a string first when it does.
+func (r mut reader) readKey<K>() Result<K, Error> {
+	return match K {
+		string => r.readString(),
+		i8 | i16 | i32 | i64 | int | u8 | u16 | u32 | u64 | uint => {
+			at := r.at
+			k := r.readKeySpan()?
+			if k.escaped { // read again as a string, so that a broken escape is reported as in any string
+				r.at = at
+				key := r.readString()?
+				return integerKey<K>(ref key, at)
+			}
+
+			integerKey<K>(r.text[k.from:k.to], at)
+		}
+	}
+}
+
+// integerKey returns key, an object's key met at at, as an integer of
+// K, or the error that says it is no integer or one out of K's range,
+// a negative one for an unsigned K among them.
+func integerKey<K>(key ref string, at int) Result<K, Error> {
+	if !isIntegerText(key) {
+		return Err(Error{at: at, msg: "key \"" + key + "\" is not an integer"})
+	}
+
+	sub := reader{text: key, at: 0, first: false}
+	return match readValue<K>(mut sub) {
+		Ok(n) => Ok(n),
+		Err(_) => Err(Error{at: at, msg: "key \"" + key + "\" is out of range for its map's key type"}),
+	}
+}
+
+// isIntegerText reports whether text is an integer as JSON writes one:
+// a minus sign or none, then 0, or digits that do not begin with 0.
+func isIntegerText(text ref string) bool {
+	start := 0
+	if len(text) > 0 && text[0] == '-' {
+		start = 1
+	}
+
+	if start == len(text) {
+		return false
+	}
+
+	if text[start] == '0' {
+		return len(text) == start + 1
+	}
+
+	return digitsEnd(text, start) == len(text)
 }
 
 // decodeKey returns the key k as a string, its escapes decoded.

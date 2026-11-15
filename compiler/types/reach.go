@@ -521,10 +521,21 @@ func (w *reachWalk) where() string {
 }
 
 // step writes one call of a chain, its package named when it is not
-// the walk's: json.writeValue<int>.
+// the walk's, and a method's receiver type before its name:
+// json.writeValue<int>, Box.Kind<bool>, refl.Kit.Pick<bool>.
 func (w *reachWalk) step(b *strings.Builder, s reachStep) {
-	if s.fn.pkg != nil && s.fn.pkg != w.pkg && s.fn.pkg.name != "" {
-		b.WriteString(s.fn.pkg.name)
+	pkg, recv := s.fn.pkg, receiverNamed(s.fn)
+	if recv != nil {
+		pkg = recv.obj.pkg // a method is declared in its type's package, and has none of its own
+	}
+
+	if pkg != nil && pkg != w.pkg && pkg.name != "" {
+		b.WriteString(pkg.name)
+		b.WriteString(".")
+	}
+
+	if recv != nil {
+		b.WriteString(recv.obj.name)
 		b.WriteString(".")
 	}
 
@@ -532,6 +543,22 @@ func (w *reachWalk) step(b *strings.Builder, s reachStep) {
 	b.WriteString("<")
 	b.WriteString(typesKey(s.targs))
 	b.WriteString(">")
+}
+
+// receiverNamed returns the named type a method is declared on, or nil
+// for a function.
+func receiverNamed(fn *Func) *Named {
+	sig, ok := fn.typ.(*Signature)
+	if !ok || sig.recv == nil {
+		return nil
+	}
+
+	n, ok := stripRef(sig.recv.typ).(*Named)
+	if !ok || n.obj == nil {
+		return nil
+	}
+
+	return n
 }
 
 // typesKey writes types for a key and a message: int, []string.

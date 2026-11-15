@@ -112,6 +112,12 @@ struct Envelope {
 	Body json.Text
 }
 
+// Ledger holds maps of integer keys, one inside another.
+struct Ledger {
+	Rows   map[i32]string
+	Nested map[u8]map[int]bool
+}
+
 // A skipped field of a type with no empty value and no default, a
 // renamed field the text must hold, and a variant whose named fields
 // are skipped, left out when empty and renamed.
@@ -539,4 +545,41 @@ func TestIndent() {
 	expect.Contains(ref expect.IsErr(json.Indent(ref deep, "", "  ")).Error(), "exceeded max depth")
 	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref map[string]int{}, "", "  ")), "{}")
 	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref []int{}, "", "  ")), "[]")
+}
+
+// A map with integer keys is an object whose keys are the integers'
+// decimals, written in the order of their values, and read back from
+// keys written as JSON writes an integer that the key type holds, each
+// once.
+func TestIntegerKeys() {
+	m := map[int]string{10: "ten", 2: "two", -3: "minus", 0: "zero"}
+	text := expect.IsOk(json.Marshal(ref m))
+	expect.Equal(ref text, `{"-3":"minus","0":"zero","2":"two","10":"ten"}`)
+	roundTrip<map[int]string>(ref text)
+	roundTrip<map[u8]bool>(`{"0":false,"255":true}`)
+	roundTrip<map[i8]int>(`{"-128":1,"127":2}`)
+	roundTrip<map[i64]int>(`{"-9223372036854775808":1,"9223372036854775807":2}`)
+	roundTrip<map[u64]int>(`{"18446744073709551615":1}`)
+	roundTrip<map[string]map[u16]int>(`{"a":{"3":1,"65535":2},"b":{}}`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<map[int]int>(` { "2" : 1 , "\u0031\u0030" : 2 } `)))), `{"2":1,"10":2}`)
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref map[int]int{2: 1, 10: 2}, "", " ")), "{\n \"2\": 1,\n \"10\": 2\n}")
+	for _, bad := range []string{`{"01":1}`, `{"+1":1}`, `{" 1":1}`, `{"1 ":1}`, `{"1.0":1}`, `{"1e2":1}`, `{"":1}`, `{"-":1}`, `{"a":1}`} {
+		expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(ref bad)).Error(), "is not an integer at offset 1")
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u8]int>(`{"256":1}`)).Error(), "key \"256\" is out of range for its map's key type at offset 1")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u8]int>(`{"-1":1}`)).Error(), "key \"-1\" is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"99999999999999999999":1}`)).Error(), "is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[i16]int>(`{"-32769":1}`)).Error(), "is out of range")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[u32]int>(`{"4294967296":1}`)).Error(), "is out of range")
+	roundTrip<map[i16]int>(`{"-32768":1,"32767":2}`)
+	roundTrip<map[i32]int>(`{"-2147483648":1,"2147483647":2}`)
+	roundTrip<map[u32]int>(`{"4294967295":1}`)
+	roundTrip<map[uint]int>(`{"18446744073709551615":1}`)
+	roundTrip<Ledger>(`{"Rows":{"-1":"a","7":"b"},"Nested":{"2":{"3":true}}}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"1":1,"1":2}`)).Error(), "key 1 given twice at offset 7")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>(`{"0":1,"-0":2}`)).Error(), "key 0 given twice")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"1\":1,\"\\u0031\":2}")).Error(), "key 1 given twice at offset 7") // the key decoded, as it is read
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[string]int>("{\"a\":1,\"\\u0061\":2}")).Error(), "key a given twice at offset 7")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"\\x31\":1}")).Error(), "invalid escape") // a broken escape, as in any string
 }

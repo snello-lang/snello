@@ -33,6 +33,8 @@ func Grow<T>(n int) {
 }
 struct Own { hidden int }
 func Mine() int { return Show(ref Own{hidden: 1}) }
+struct Kit { N int }
+func (k ref Kit) Pick<T>() int { return k.N + match T { int => 1 } }
 `
 
 // TestReach asks the questions a type answers where a reflecting
@@ -57,7 +59,8 @@ func TestReach(t *testing.T) {
 		{"func f() { refl.Grow<[]int>(1) }", "refl.Grow<[]int>, refl.Grow<[][]int>: Grow<[][][]int> holds Grow<[][]int>, which holds Grow<[]int>; the types grow without end"}, // a shape's name, no edge the call graph sees
 		{"func f() int { return refl.Mine() }", ""},
 		// The paths to a reflecting function: a generic type's method, a trait's default, and a method calling one.
-		{"struct Box<T> { item T }\nfunc (b ref Box<T>) Kind() int { return match T { int => 1, string => 2 } }\nfunc f() int { return Box<bool>{item: true}.Kind() }", "Kind<bool>: no arm of the match on T takes bool"},
+		{"struct Box<T> { item T }\nfunc (b ref Box<T>) Kind() int { return match T { int => 1, string => 2 } }\nfunc f() int { return Box<bool>{item: true}.Kind() }", ": Box.Kind<bool>: no arm of the match on T takes bool"},
+		{"func f() int { return refl.Kit{N: 1}.Pick<bool>() }", ": refl.Kit.Pick<bool>: no arm of the match on T takes bool"}, // a method of another package, named with its package and type
 		{"trait Tg { func (s ref Self) Tag<U>(u ref U) int { return match U { int => 1 } } }\nstruct W impl Tg {}\nfunc f() int { return W{}.Tag(ref 2.5) }", "no arm of the match on U takes f64"},
 		{"struct Box<T> { item T }\nfunc (b ref Box<T>) Show() int { return refl.Show(ref b.item) }\nfunc f() int { return Box<bool>{item: true}.Show() }", "Show<bool>, refl.Show<bool>: no arm of the match on T takes bool"},
 		// A type declared over another package's struct opens none of its fields, Reflect listed or not.
