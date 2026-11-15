@@ -109,6 +109,8 @@ A signature says what a function does with what it is given:
 
 An owned value is moved, not copied: `.Clone()` is written only where two owners are wanted.
 
+A struct is held and passed by value, lent with `ref` or `mut`, and optional as `T?`; `*T` is written where a type holds itself, `*Node?`, or where a large struct that moves often is measured to move faster through one. A value with several owners is an `rc.Rc<T>`, a `sync.Arc<T>` across tasks, or an arena's `Index<T>` when its links can form a cycle. Chapter 7, When to use a pointer, has the table.
+
 ## Layout
 
 The layout is Go's: tabs, braces on the line of the statement they open, one statement per line. A struct, an enum or a trait of two or more members is written one member per line, a struct's field types in one column, so that each member can be read, and commented, on its own; one of a single member may stay on one line:

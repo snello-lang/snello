@@ -151,6 +151,8 @@ The restriction on borrows is real, and it is what makes the absence of annotati
 | `next *Node` is `nil` at the end of a list | `next *Node?` is `None` at the end; there is no `nil` |
 | `p == q` compares addresses | `p == q` compares what they hold |
 | A cycle of pointers is collected eventually | A cycle cannot be built from owned pointers; use an arena (chapter 13) |
+| A pointer for every job: a method that changes a struct, a large argument, a shared value, `nil`, a recursive type | A tool for each: a `mut` receiver, a `ref` or `mut` parameter, `rc.Rc` or `sync.Arc`, `T?`, and `*T` for the recursive type alone; chapter 7, When to use a pointer |
+| `return &local`, which the GC keeps alive | Return the value; `&` moves a value to the heap and takes no address, and a borrow of a local cannot leave its function |
 
 ## Chapter 10: Concurrency
 
