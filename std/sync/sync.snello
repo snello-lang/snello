@@ -151,7 +151,7 @@ struct Once {
 // out in one call.
 //
 //	wg := sync.NewWaitGroup()
-//	wg.Go(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
+//	wg.Spawn(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
 //	wg.Wait()
 struct WaitGroup impl Clone {
 	counter Arc<waitCounter>
@@ -477,18 +477,18 @@ func (w ref WaitGroup) Wait() {
 	wait(w.lockHandle())
 }
 
-// Go runs f(a) in a task of its own, counted in the group: one is
-// added before the task starts and counted out when f returns, so a
-// Wait waits for it. The task's value a is moved into the task, as the
-// argument of a spawned call is, so it must be Send; what the task
-// needs goes there, a handle or a tuple of them, since a closure stored
-// in a func value captures copies alone, and f itself captures nothing
-// but copies. It returns at once, without waiting for the task, and
-// allocates the task and a handle on the group for it.
+// Spawn runs f(a) in a task of its own, as spawn f(a) does, counted in
+// the group: one is added before the task starts and counted out when f
+// returns, so a Wait waits for it. The task's value a is moved into the
+// task, as the argument of a spawned call is, so it must be Send; what
+// the task needs goes there, a handle or a tuple of them, since a
+// closure stored in a func value captures copies alone, and f itself
+// captures nothing but copies. It returns at once, without waiting for
+// the task, and allocates the task and a handle on the group for it.
 //
-//	wg.Go(func(h sync.Arc<Counter>) { h.Get().Add(1) }, hits.Clone())
+//	wg.Spawn(func(h sync.Arc<Counter>) { h.Get().Add(1) }, hits.Clone())
 //	wg.Wait()
-func (w ref WaitGroup) Go<A: Send>(f func(A), a A) {
+func (w ref WaitGroup) Spawn<A: Send>(f func(A), a A) {
 	w.Add(1)
 	spawn runCounted(w.Clone(), f, a)
 }

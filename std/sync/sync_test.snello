@@ -170,10 +170,10 @@ func TestWaitGroupGo() {
 	hits := sync.NewArc(sync.NewCounter(0))
 	wg := sync.NewWaitGroup()
 	for i := 0; i < 8; i++ {
-		wg.Go(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
+		wg.Spawn(func(h sync.Arc<sync.Counter>) { h.Get().Add(1) }, hits.Clone())
 	}
 
-	wg.Go(func(p (sync.Arc<sync.Counter>, int)) {
+	wg.Spawn(func(p (sync.Arc<sync.Counter>, int)) {
 		if (h, n) := Some(p) {
 			h.Get().Add(n)
 		}
