@@ -52,6 +52,12 @@ const (
 	// name of the function its task runs, sn_task_0_run.
 	spawnPrefix = "sn_task_"
 	spawnSuffix = "_run"
+
+	// CaughtPrefix starts the name of every function the runtime runs
+	// under a mark, through the pointer sn_catch is given, and no
+	// other's: the call of a task started for a handle, and the adapter
+	// through which testing.Catch calls its function.
+	CaughtPrefix = "sn_caught_"
 )
 
 // ElemDrop returns the name of the function that drops an element of
@@ -89,6 +95,19 @@ func SpawnTask(k int) string {
 // StackBounds in the binary by it.
 func SpawnEntry(k int) string {
 	return SpawnTask(k) + spawnSuffix
+}
+
+// SpawnBody returns the name of the function that makes the call of
+// the task of a program's spawn k under a mark, when the spawn gives a
+// handle: the one the task's entry hands sn_catch.
+func SpawnBody(k int) string {
+	return CaughtPrefix + strconv.Itoa(k)
+}
+
+// CatchAdapter returns the name of the function through which
+// testing.Catch calls a function value of signature sig under a mark.
+func CatchAdapter(sig types.Type) string {
+	return CaughtPrefix + "fn_" + Mangle(sig)
 }
 
 // SpawnIndex reads a spawn's index back from the name of its task's

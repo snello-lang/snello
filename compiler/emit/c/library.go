@@ -77,7 +77,7 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		f := e.saved(x.Args[0], e.typeOf(x.Args[0]))
 		out := e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {.has = false};")
-		e.line(out + ".has = sn_catch(" + e.catchAdapter(lower.ValueType(e.typeOf(x.Args[0])), x.Pos()) + ", &" + f + ", &" + out + ".val);")
+		e.line(out + ".has = sn_catch(" + e.catchAdapter(lower.ValueType(e.typeOf(x.Args[0])), x.Pos()) + ", &" + f + ", &" + out + ".val, false);")
 		return out
 	}
 
@@ -136,7 +136,7 @@ func (e *Emitter) parts(x *ast.CallExpr, name string) string {
 // catchAdapter returns the name of the function that lets sn_catch
 // call a Snello function value held in the context, written once.
 func (e *Emitter) catchAdapter(sig types.Type, pos token.Pos) string {
-	name := "sn_catchfn_" + lower.Mangle(sig)
+	name := lower.CatchAdapter(sig)
 	if e.state[name] == undeclared {
 		e.state[name] = defined
 		put(&e.helpers, "static void ", name, "(void *ctx) {\n\t", e.cType(sig, pos), " *f = ctx;\n\tf->fn(f->box);\n}\n\n")

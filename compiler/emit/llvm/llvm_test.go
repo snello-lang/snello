@@ -6,6 +6,7 @@ package llvm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -518,16 +519,18 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures []st
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
 	stdout, err := cmd.Output()
 	if exit, ok := err.(*exec.ExitError); ok {
-		return string(stdout), string(exit.Stderr), exit.ExitCode()
+		return string(stdout), stderr.String(), exit.ExitCode()
 	}
 
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)
 	}
 
-	return string(stdout), "", 0
+	return string(stdout), stderr.String(), 0
 }
 
 func TestMain(m *testing.M) {

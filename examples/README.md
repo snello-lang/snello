@@ -39,6 +39,7 @@ The binary is written to the current directory, named after the file, or after t
 | iterators/ | Closure capture modes, a lazy iterator trait |
 | cli-grep/ | Arguments, standard input and files, a borrow per line, exit codes; waits for `regexp`, so it has no `.out` yet |
 | bst/ | A `mut` borrow walked down a chain of boxes, delete in place |
+| handles/ | `spawn` as an expression: a handle on a task, `Join` giving the result or the panic that ended the task, handles joined by another task |
 | packaged/ | A program of two files with a package of its own beside it, and the package's tests: `snello test examples/packaged/shapes` |
 | bound/ | A program with two packages beside it that bind C: `snello build examples/bound` |
 

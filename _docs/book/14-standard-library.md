@@ -56,7 +56,7 @@ A few library functions are not written in Snello: the runtime provides them in 
 | `unicode/norm` | `Form`, `NFC`, `NFD`, `NFKC` and `NFKD`, `String` and `IsNormalString` (chapter 19) |
 | `unicode/segment` | `Graphemes`, `Words` and `Sentences`, by annex 29's rules; `Kind`, `Count` and `Next`, for counting and walking without a slice; `IsWord` (chapter 19) |
 
-Every package the library's design names is written now but `regexp`; `sync` is chapter 10's, since it is about tasks. A range over an arena or a scanner's lines waits for the iterator trait.
+Every package the library's design names is written now but `regexp`; `sync` is chapter 10's and `task` chapter 28's, since they are about tasks. A range over an arena or a scanner's lines waits for the iterator trait.
 
 ## io and os
 

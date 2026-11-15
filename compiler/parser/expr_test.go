@@ -29,6 +29,9 @@ func TestExprs(t *testing.T) {
 		{"a ?? b == c", "(a ?? (b == c))"},
 		{"a ?? b ?? c", "(a ?? (b ?? c))"},
 		{"x ?? y + 1", "(x ?? (y + 1))"},
+		{"spawn f(x)", "(spawn f(x))"},
+		{"spawn func() { x }()", "(spawn func() {...}())"},
+		{"g.Add(spawn f(x))", "g.Add((spawn f(x)))"},
 
 		// Unary and postfix.
 		{"-x?", "(-(x?))"},
@@ -223,6 +226,8 @@ func exprString(x ast.Expr) string {
 		return "(" + exprString(x.X) + " " + x.Op.String() + " " + exprString(x.Y) + ")"
 	case *ast.CoalesceExpr:
 		return "(" + exprString(x.X) + " ?? " + nodeString(x.Else) + ")"
+	case *ast.SpawnExpr:
+		return "(spawn " + exprString(x.Call) + ")"
 	case *ast.TryExpr:
 		return "(" + exprString(x.X) + "?)"
 	case *ast.CompositeLit:

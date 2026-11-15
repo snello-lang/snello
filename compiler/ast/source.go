@@ -105,6 +105,9 @@ func writeExpr(b *strings.Builder, e Expr) {
 		b.WriteString(x.Op.String())
 		b.WriteString(" ")
 		writeExpr(b, x.Y)
+	case *SpawnExpr:
+		b.WriteString("spawn ")
+		writeExpr(b, x.Call)
 	case *CoalesceExpr:
 		writeExpr(b, x.X)
 		b.WriteString(" ?? ")

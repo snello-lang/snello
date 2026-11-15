@@ -1,0 +1,104 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Tasks that fail: a spawn written as an expression gives a handle on
+// the task, and Join returns what the task returned or the panic that
+// ended it, so a bug in one batch's task is reported where the batch
+// was started and the other batches go on. A handle is moved like any
+// value, so the tasks of a batch are joined by a task of their own.
+// A batch is three readings, an array, since the frames a panic
+// abandons keep the plain memory they held: a program whose failing
+// task owns a slice or a string keeps that memory until it exits.
+
+package main
+
+import ("fmt"; "task")
+
+// A Report is what a task computes for one batch of readings.
+struct Report {
+	batch int
+	total int
+}
+
+// An Audit says, when it is dropped, how far its task got: a task that
+// fails drops what it made on its way out, as one that returns does.
+struct Audit impl Drop {
+	step int
+}
+
+func (a mut Audit) Drop() { fmt.Println("audit: reached step", a.step) }
+
+// check adds up the first want readings under an audit; a batch that
+// asks for a reading it does not have is the bug a handle contains.
+func check(readings [3]int, want int) int {
+	audit := Audit{step: 0}
+	total := 0
+	for i := 0; i < want; i++ {
+		total += readings[i]
+		audit.step = i + 1
+	}
+
+	return total
+}
+
+// summarize is check for a numbered batch, run many at once.
+func summarize(batch int, readings [3]int, want int) Report {
+	total := 0
+	for i := 0; i < want; i++ {
+		total += readings[i]
+	}
+
+	return Report{batch: batch, total: total}
+}
+
+// collect joins the handles it was given, in order, and counts the
+// batches that failed. It runs as a task of its own: the handles
+// crossed into it.
+func collect(batches []task.Handle<Report>) int {
+	failed := 0
+	for _, h := range batches {
+		match h.Join() {
+			Ok(r) => fmt.Println("batch", r.batch, "total", r.total),
+			Err(p) => {
+				failed += 1
+				fmt.Println("a batch failed:", p.Message())
+			},
+		}
+	}
+
+	return failed
+}
+
+func log(line string) { fmt.Println("log:", line) }
+
+func main() {
+	// One task at a time: the handle is joined where it was made.
+	fine := spawn check([3]int{3, 4, 5}, 3)
+	match fine.Join() {
+		Ok(total) => fmt.Println("checked", total),
+		Err(p) => fmt.Println("check failed:", p.Message()),
+	}
+
+	broken := spawn check([3]int{1, 2, 3}, 4) // asks for a fourth reading of three
+	match broken.Join() {
+		Ok(total) => fmt.Println("checked", total),
+		Err(p) => fmt.Println("check failed:", p.Message()),
+	}
+
+	// Many at once, joined by another task.
+	batches := []task.Handle<Report>{
+		spawn summarize(1, [3]int{3, 4, 5}, 3),
+		spawn summarize(2, [3]int{1, 2, 3}, 4),
+		spawn summarize(3, [3]int{7, 0, 0}, 1),
+	}
+	collector := spawn collect(batches)
+	match collector.Join() {
+		Ok(n) => fmt.Println(n, "batch failed, and the program went on"),
+		Err(p) => fmt.Println("the collector failed:", p.Message()),
+	}
+
+	// A call with no result gives a Handle<()>: Join still waits for it.
+	logged := spawn log("every batch was handled".Clone())
+	_ = logged.Join()
+}

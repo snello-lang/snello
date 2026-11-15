@@ -165,6 +165,7 @@ Unchanged: `make(chan T)`, buffered channels, `ch <- v`, `<-ch`, `close`, `for r
 |---|---|
 | `go f(x)` | `spawn f(x)` |
 | `done := make(chan struct{})`; `done <- struct{}{}` | `done := make(chan ())`; `done <- ()` |
+| A panic in any goroutine ends the process, unless that goroutine `recover`s; `go` returns nothing | `spawn f(x)` as a statement is the same; `h := spawn f(x)` gives a `task.Handle<T>`, and `h.Join()` returns the result or the panic that ended the task (chapter 28) |
 | `for { select { case <-timer: break } }` loops forever: the `break` ends the `select` | The `break` ends the `for` |
 | A goroutine may reach any value the spawning function can; sharing a map between two goroutines compiles and races | `spawn` moves what the task takes in; a second task cannot take the same value, and a borrow cannot cross at all |
 | Sending copies the value; the sender keeps using it | Sending moves the value; the sender has given it up |

@@ -14,7 +14,7 @@ Without a garbage collector the problem is sharper. If two tasks can both reach 
 
 A task boundary is any of:
 
-- a `spawn` statement, for the values it captures,
+- a `spawn`, as a statement or as an expression giving a handle, for the values it captures and, through the handle, for the result it returns,
 - a channel send, for the value sent,
 - a channel receive, for the value received.
 

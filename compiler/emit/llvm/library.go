@@ -77,7 +77,7 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 		str := e.irType(types.Typ[types.String], x.Pos())
 		msg := e.slot(str)
 		e.store(value{str, "zeroinitializer"}, msg) // the payload of a None, as the C side's {.has = false} leaves it
-		has := e.rt("sn_catch", "i1", value{"ptr", "@" + e.catchAdapter(sig, x.Pos())}, value{"ptr", f}, value{"ptr", msg})
+		has := e.rt("sn_catch", "i1", value{"ptr", "@" + e.catchAdapter(sig, x.Pos())}, value{"ptr", f}, value{"ptr", msg}, value{"i1", "false"})
 		out := e.insert(value{e.irType(e.typeOf(x), x.Pos()), "zeroinitializer"}, has, 0)
 		return e.insert(out, e.load(str, msg), 1)
 	}
@@ -137,7 +137,7 @@ func (e *Emitter) parts(x *ast.CallExpr, name string) value {
 // catchAdapter returns the name of the function that lets sn_catch
 // call a Snello function value held in the context, written once.
 func (e *Emitter) catchAdapter(sig types.Type, pos token.Pos) string {
-	name := "sn_catchfn_" + lower.Mangle(sig)
+	name := lower.CatchAdapter(sig)
 	if e.state[name] {
 		return name
 	}

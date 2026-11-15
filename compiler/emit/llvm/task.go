@@ -16,15 +16,25 @@ import (
 )
 
 // A spawn statement becomes a call of sn_spawn with a trampoline and a
-// block of arguments (_docs/design/06-tasks-and-channels.md): the
-// receiver and the arguments are evaluated here, moved into a block
-// the task owns, and the trampoline, one per spawn statement, calls
-// the function with them and frees the block. The callee drops its
-// parameters as it does for any call, so nothing is dropped here. A
-// closure as the callee is lifted to a function whose first parameters
-// are the variables it captures: the checker made every capture a move
-// or a copy, so each is a value the task owns, passed like an argument
-// and dropped by the lifted function when it ends.
+// block of arguments: the receiver and the arguments are evaluated
+// here, moved into a block the task owns, and the trampoline, one per
+// spawn statement, calls the function with them and frees the block.
+// The callee drops its parameters as it does for any call, so nothing
+// is dropped here. A closure as the callee is lifted to a function
+// whose first parameters are the variables it captures: the checker
+// made every capture a move or a copy, so each is a value the task
+// owns, passed like an argument and dropped by the lifted function
+// when it ends.
+
+// A handle is what a spawn written as an expression gives: the channel
+// of one slot the task's result or panic goes through, made once the
+// operands are evaluated, since an operand may leave the statement,
+// whose second handle the task takes; and the type of what goes
+// through it, a Result of the call's result and task.Panic.
+type handle struct {
+	done value
+	elem types.Type
+}
 
 // chanOperand writes the channel an operation is on, which the
 // operation borrows: a handle a call made, which no place holds, is a
@@ -94,11 +104,35 @@ func (e *Emitter) rangeChan(s *ast.RangeStmt, ch value, elem types.Type) {
 
 // spawnStmt writes spawn f(x), spawn v.M(x) or spawn func() { ... }().
 func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
-	x, ok := s.Call.(*ast.CallExpr)
+	if x, ok := s.Call.(*ast.CallExpr); ok {
+		e.spawn(x, nil, s.Pos())
+	}
+}
+
+// spawnExpr writes h := spawn f(x): the channel the handle and the
+// task share, the spawn with the task's handle in its block, and the
+// value, a task.Handle holding the other.
+func (e *Emitter) spawnExpr(x *ast.SpawnExpr) value {
+	call, ok := x.Call.(*ast.CallExpr)
 	if !ok {
-		return // reported by the checker
+		return unit // reported by the parser
 	}
 
+	t := e.typeOf(x).(*types.Named)
+	st := t.Underlying().(*types.Struct)
+	field := st.Field(0)
+	h := &handle{elem: field.Type().Underlying().(*types.Chan).Elem()}
+	e.spawn(call, h, x.Pos())
+	if h.done.s == "" {
+		return unit // the spawn was not written
+	}
+
+	return e.insert(value{e.irType(t, x.Pos()), "zeroinitializer"}, h.done, fieldIndex(st, field.Name()))
+}
+
+// spawn writes the spawn of the call x, with a handle when the spawn
+// is an expression.
+func (e *Emitter) spawn(x *ast.CallExpr, h *handle, pos token.Pos) {
 	fun := x.Fun
 	for {
 		p, ok := fun.(*ast.ParenExpr)
@@ -110,11 +144,11 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 	}
 
 	if lit, ok := fun.(*ast.FuncLit); ok {
-		e.spawnClosure(x, lit, s.Pos())
+		e.spawnClosure(x, lit, h, pos)
 		return
 	}
 
-	name, sig, recv := e.spawnee(fun, s.Pos())
+	name, sig, recv := e.spawnee(fun, pos)
 	if name == "" {
 		return
 	}
@@ -122,7 +156,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 	wants, values := e.callOperands(recv, x.Args, x.Ellipsis.IsValid(), sig)
 	e.unframeLast(sig, x.Ellipsis.IsValid(), values) // the task outlives this frame
 	e.tasks++
-	e.spawnCall(e.tasks-1, name, sig, wants, values, s.Pos())
+	e.spawnCall(e.tasks-1, name, sig, wants, values, h, pos)
 }
 
 // spawnClosure lifts a spawned closure to a function of its captures
@@ -131,7 +165,7 @@ func (e *Emitter) spawnStmt(s *ast.SpawnStmt) {
 // captured values and the arguments. A capture the closure moved, or
 // would have borrowed, leaves its variable empty here; a Copy value it
 // only reads is copied.
-func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos) {
+func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, h *handle, pos token.Pos) {
 	sig := e.typeOf(lit).(*types.Signature)
 	captured := e.captures(lit)
 	params := make([]*types.Var, 0, len(captured)+len(sig.Params()))
@@ -159,43 +193,123 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, pos token.Pos)
 	e.tasks++
 	name := lower.SpawnTask(k) + "_fn"
 	e.writeBody(name, lifted, params, nil, nil, lit.Body, pos)
-	e.spawnCall(k, name, lifted, wants, values, pos)
+	e.spawnCall(k, name, lifted, wants, values, h, pos)
 }
 
 // spawnCall writes the block of a task's values, the trampoline that
 // calls the function with them and frees the block, and the spawn. A
 // result the function returns is dropped by the trampoline, as the
-// statement discards it.
-func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []types.Type, values []value, pos token.Pos) {
-	parts := make([]string, len(values))
+// statement discards it; with a handle the block also holds the task's
+// channel handle and the result, which the trampoline sends after the
+// call, or the panic that ended it.
+func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []types.Type, values []value, h *handle, pos token.Pos) {
+	parts := make([]string, len(values), len(values)+2)
 	for i, v := range values {
 		parts[i] = v.typ
 	}
 
+	results, fields := sig.Results(), wants
+	if h != nil {
+		parts, fields = append(parts, "ptr"), append(append([]types.Type(nil), wants...), types.NewChan(types.SendRecv, h.elem))
+		if results != types.Unit {
+			parts, fields = append(parts, e.irType(results, pos)), append(fields, results)
+		}
+	}
+
 	st := "{ " + strings.Join(parts, ", ") + " }"
-	e.helper(lower.SpawnEntry(k), "void", []string{"ptr %p"}, func() {
+	call := func() value {
 		args := make([]value, len(values))
 		for i, v := range values {
 			args[i] = e.load(v.typ, e.gep(st, "%p", i))
 		}
 
-		r := e.callValues(name, sig, wants, args, pos)
-		e.discard(r, sig.Results(), pos)
-		e.declare("sn_free", "declare void @sn_free(ptr)")
-		e.inst("call void @sn_free(ptr %p)")
-		e.inst("ret void")
-		e.fn.terminated = true
-	})
+		return e.callValues(name, sig, wants, args, pos)
+	}
+
+	if h == nil {
+		e.helper(lower.SpawnEntry(k), "void", []string{"ptr %p"}, func() {
+			e.discard(call(), results, pos)
+			e.freeBlock()
+		})
+	} else {
+		e.caughtEntry(k, st, call, results, h.elem, len(values), pos)
+	}
 
 	e.declare("sn_alloc", "declare ptr @sn_alloc(i64)")
-	block := e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.structSize(wants), 1), 10)+")", "ptr")
+	block := e.op("call ptr @sn_alloc(i64 "+strconv.FormatInt(max(e.structSize(fields), 1), 10)+")", "ptr")
 	for i, v := range values {
 		e.store(v, e.gep(st, block.s, i))
+	}
+
+	if h != nil {
+		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(h.elem, pos)})
+		e.store(e.rt("sn_chan_clone", "ptr", h.done), e.gep(st, block.s, len(values)))
 	}
 
 	bound := e.op("load volatile i32, ptr getelementptr inbounds (i32, ptr @"+lower.StackBounds+", i64 "+strconv.Itoa(k)+")", "i32")
 	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i32)")
 	e.inst("call void @sn_spawn(ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", " + bound.typed() + ")")
+}
+
+// caughtEntry writes the trampoline of a task with a handle: the call
+// in a function of its own, run under the runtime's mark, which puts
+// its result in the block at index n+1, after the channel at n; and
+// the entry, which offers the handle Ok with the result or Err with
+// the panic, drops the value when the handle was dropped before, gives
+// the task's channel handle up and frees the block.
+func (e *Emitter) caughtEntry(k int, st string, call func() value, results, elem types.Type, n int, pos token.Pos) {
+	e.helper(lower.SpawnBody(k), "void", []string{"ptr %p"}, func() {
+		r := call()
+		if results != types.Unit {
+			e.store(r, e.gep(st, "%p", n+1))
+		}
+
+		e.inst("ret void")
+		e.fn.terminated = true
+	})
+
+	e.helper(lower.SpawnEntry(k), "void", []string{"ptr %p"}, func() {
+		str := e.irType(types.Typ[types.String], pos)
+		msg := e.slot(str)
+		e.store(value{str, "zeroinitializer"}, msg)
+		caught := e.rt("sn_catch", "i1", value{"ptr", "@" + lower.SpawnBody(k)}, value{"ptr", "%p"}, value{"ptr", msg}, value{"i1", "true"})
+		r := e.slot(e.irType(elem, pos))
+		failed, returned, send := e.block("task.failed"), e.block("task.returned"), e.block("task.send")
+		e.branch(caught.s, failed, returned)
+		e.label(failed)
+		panicType := elem.(*types.Result).Err()
+		panicked := e.insert(value{e.irType(panicType, pos), "zeroinitializer"}, e.load(str, msg), 0) // the message is the Panic's one field
+		e.store(e.variantValue(elem, types.ErrVariant, []value{panicked}, pos), r)
+		e.jump(send)
+		e.label(returned)
+		got := unit
+		if results != types.Unit {
+			got = e.load(e.irType(results, pos), e.gep(st, "%p", n+1))
+		}
+
+		e.store(e.variantValue(elem, types.OkVariant, []value{got}, pos), r)
+		e.jump(send)
+		e.label(send)
+		done := e.gep(st, "%p", n)
+		offered := e.rt("sn_chan_offer", "i1", e.load("ptr", done), value{"ptr", r})
+		drop, end := e.block("task.drop"), e.block("task.end")
+		e.branch(offered.s, end, drop)
+		e.label(drop)
+		e.dropOf(r, elem, pos)
+		e.jump(end)
+		e.label(end)
+		e.rt("sn_chan_drop", "void", value{"ptr", done})
+		e.freeBlock()
+	})
+}
+
+// freeBlock ends a task's trampoline: the block of the task's values
+// is freed and the function returns.
+func (e *Emitter) freeBlock() {
+	e.declare("sn_free", "declare void @sn_free(ptr)")
+	e.inst("call void @sn_free(ptr %p)")
+	e.inst("ret void")
+	e.fn.terminated = true
 }
 
 // spawnee names the function a spawned call of fun runs, with its

@@ -44,6 +44,6 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 - The last parameter may be variadic, `xs ...T` or `xs ...ref T`, and `...` after a call's last argument passes a slice as it, `f(a, xs...)`.
 - A `const` takes a constant expression: literals, constants, the operators and conversions between number types, folded by the compiler.
 - A match arm is `pattern [if guard] => body`, ended by a comma or a newline. A `match` with no value, `match {`, has arms `condition => body`, and its last arm is `_ => body`. A `return` in an arm takes one expression; several values are returned as a tuple.
-- `spawn` and `defer` take a call. `for range ch {` ranges with no variable.
+- `spawn` and `defer` take a call. `spawn` at the start of a statement starts a task and gives nothing; written where a value is wanted, `h := spawn f(x)`, it gives a `task.Handle<T>` (chapter 28). `for range ch {` ranges with no variable.
 - One name on the left of `:=` or `=` takes one expression on the right; a list takes a list, `a, b := b, a`.
 - An `if` used as an expression has an `else`.

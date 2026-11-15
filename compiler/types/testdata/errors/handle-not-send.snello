@@ -1,0 +1,18 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a handle carries the task's result to the task that joins, so
+// the result is Send as the arguments are. Fix: return the value itself,
+// or a sync.Arc of it.
+
+package p
+
+import "rc"
+
+func shared() rc.Rc<int> { return rc.New(1) }
+
+func main() {
+    h := spawn shared()                   // ERROR "cannot spawn for a handle: rc.Rc<int> stays in its task"
+    print(h)
+}

@@ -2984,6 +2984,11 @@ func main() {
 `,
 			Out: "Some(\"s0\")\nSome(\"s1\")\nSome(\"s2\")\nSome(\"s3\")\nkept Some(\"s0\")\nkept Some(\"s2\")\nkept Some(\"s3\")\nj 0\nj 1\n",
 		},
+		{
+			Name: "handle-panics", // a panic in a task started for a handle is printed as any panic is, joined as the Err, and ends nothing else
+			Src:  tasks + "func main() {\n\th := spawn boom()\n\tmatch h.Join() {\n\t\tOk(_) => fmt.Println(\"returned\"),\n\t\tErr(p) => fmt.Println(\"contained:\", p.Message()),\n\t}\n\tfmt.Println(\"still serving\")\n}\n",
+			Out:  "contained: in a task\nstill serving\n", Stderr: "panic: in a task\n",
+		},
 	}
 
 	for _, misuse := range []struct{ name, body, err string }{

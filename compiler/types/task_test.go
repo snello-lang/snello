@@ -7,7 +7,65 @@ package types
 import (
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/parser"
 )
+
+// TestSpawnHandle checks spawn written as an expression: its value is a
+// task.Handle of the call's result, with no import of task written, the
+// result is Send as the arguments are, and a check with no importer to
+// load task from says so.
+func TestSpawnHandle(t *testing.T) {
+	const prelude = "package main\nimport \"rc\"\n" +
+		"func n() int { return 1 }\nfunc nothing() {}\nfunc two() (int, string) { return 1, \"a\".Clone() }\n" +
+		"func shared() rc.Rc<int> { return rc.New(1) }\nfunc lent(s ref string) ref string { return s }\n"
+	for _, tt := range []struct {
+		src  string
+		typ  string
+		want []string
+	}{
+		{"func f() { h := spawn n(); _ = h }", "task.Handle<int>", nil},
+		{"func f() { h := spawn nothing(); _ = h }", "task.Handle<()>", nil},
+		{"func f() { h := spawn two(); _ = h }", "task.Handle<(int, string)>", nil},
+		{"func f() { k := 2; h := spawn func() int { return k }(); _ = h }", "task.Handle<int>", nil},
+		{"func f() { h := spawn shared(); _ = h }", "", []string{"cannot spawn for a handle: rc.Rc<int> stays in its task"}},
+		{"func f() { s := \"a\".Clone(); h := spawn lent(ref s); _ = h }", "", []string{"a spawned task cannot hold a borrow"}},
+	} {
+		if tt.want != nil {
+			got := checkErrors(t, prelude+tt.src)
+			if len(got) != 1 || !strings.Contains(got[0], tt.want[0]) {
+				t.Errorf("%q: got errors %q, want one containing %q", tt.src, got, tt.want[0])
+			}
+
+			continue
+		}
+
+		f, file, err := parser.ParseFile("test.snello", []byte(prelude+tt.src))
+		if err != nil {
+			t.Fatalf("%q: parse error: %v", tt.src, err)
+		}
+
+		info := &Info{}
+		if _, err := libraryConfig().Check("", file, f, info); err != nil {
+			t.Errorf("%q: %v", tt.src, err)
+			continue
+		}
+
+		if got := lastDefineType(f, info); got != tt.typ {
+			t.Errorf("%q: the handle's type is %s, want %s", tt.src, got, tt.typ)
+		}
+	}
+
+	f, file, err := parser.ParseFile("test.snello", []byte("package main\nfunc n() int { return 1 }\nfunc f() { h := spawn n(); _ = h }"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = "spawn as an expression needs the task package, which nothing loads here"
+	if _, err := Check(file, f, nil); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("a check with no importer: %v, want %q", err, want)
+	}
+}
 
 // TestTaskBoundaries checks what crosses into a spawned task and onto
 // a channel: a spawned closure moves what it captures, every capture,

@@ -545,7 +545,7 @@ static void catcher(void *arg) {
     for (int i = 0; i < 2; i++) {
         sn_string msg = SN_STR("", 0);
         int value;
-        bool caught = sn_catch(boom, &value, &msg);
+        bool caught = sn_catch(boom, &value, &msg, false);
         printf("caught %d %.*s dropped %d\n", caught, (int)msg.len, (const char *)msg.ptr, dropped);
         sn_string_drop(&msg);
     }
@@ -602,6 +602,46 @@ int main(int argc, char **argv) {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "past the bound of 100 bytes") {
 		t.Fatalf("a task past its bound in a debug build: %v\n%s", err, out)
+	}
+}
+
+// TestCatchReport catches a panic under a mark that reports it: the
+// panic's line is printed once per panic, before what the program
+// prints next, and the count of contained panics grows by one each.
+func TestCatchReport(t *testing.T) {
+	probe := `#include "snello.h"
+#include <stdio.h>
+static sn_chan *done;
+static void boom(void *ctx) {
+    (void)ctx;
+    sn_panic(SN_STR("boom", 4));
+}
+static void catcher(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 2; i++) {
+        sn_string msg = SN_STR("", 0);
+        bool caught = sn_catch(boom, NULL, &msg, true);
+        printf("caught %d %.*s contained %lld\n", caught, (int)msg.len, (const char *)msg.ptr, (long long)sn_panics_contained());
+        sn_string_drop(&msg);
+    }
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL);
+    sn_spawn(catcher, NULL, SN_UNBOUNDED);
+    int64_t v;
+    sn_chan_recv(done, &v);
+    sn_chan_drop(&done);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	want := "panic: boom\ncaught 1 boom contained 1\npanic: boom\ncaught 1 boom contained 2\n"
+	if err != nil || string(out) != want {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 

@@ -296,6 +296,8 @@ func MayLeave(x ast.Expr) bool {
 		return MayLeave(x.X) || x.Low != nil && MayLeave(x.Low) || x.High != nil && MayLeave(x.High)
 	case *ast.CallExpr:
 		return MayLeave(x.Fun) || anyLeaves(x.Args)
+	case *ast.SpawnExpr:
+		return MayLeave(x.Call)
 	case *ast.UnaryExpr:
 		return MayLeave(x.X)
 	case *ast.BinaryExpr:

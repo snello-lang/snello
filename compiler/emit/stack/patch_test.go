@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/types"
 )
 
 // patchSource is a program laid out as a Snello program is for Patch:
@@ -145,7 +146,8 @@ func TestPatchErrors(t *testing.T) {
 
 func TestRuntimeOptions(t *testing.T) {
 	drop, hash, init := lower.ElemDropPrefix+"a", lower.KeyHashPrefix+"k", lower.LazyInitPrefix+"v"
-	img := image(arm64, fn(drop, 8), fn(lower.ElemDropPrefix+"b.isra.0", 8), fn(hash, 8), fn(init, 8), fn(mapPrefix+"find", 8), fn("other", 8))
+	caught := lower.SpawnBody(0) + " " + lower.CatchAdapter(types.Typ[types.Int])
+	img := image(arm64, fn(drop, 8), fn(lower.ElemDropPrefix+"b.isra.0", 8), fn(hash, 8), fn(init, 8), fn(mapPrefix+"find", 8), fn("other", 8), fn(lower.SpawnBody(0), 8), fn(lower.CatchAdapter(types.Typ[types.Int]), 8))
 	opts := img.runtimeOptions()
 	if got := strings.Join(opts.Targets[chanDropCaller], " "); got != drop {
 		t.Errorf("the channel's drops %q, want the one not a copy", got)
@@ -153,6 +155,10 @@ func TestRuntimeOptions(t *testing.T) {
 
 	if got := strings.Join(opts.Targets[lazyMaker], " "); got != init {
 		t.Errorf("the initializers %q", got)
+	}
+
+	if got := strings.Join(opts.Targets[catcher], " "); got != caught {
+		t.Errorf("the functions run under a mark %q, want %q", got, caught)
 	}
 
 	for _, f := range []string{mapPrefix + "find", "find_slot"} {
