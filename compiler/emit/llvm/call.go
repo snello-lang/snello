@@ -380,6 +380,12 @@ func (e *Emitter) boundCall(x *ast.CallExpr, sel *ast.SelectorExpr, paramRecv ty
 		return e.methodCall(x, sel) // a predeclared type's own method, Cmp on an int or Clone on a string, which a type declared over one has as its own
 	}
 
+	if named.Method(sel.Sel.Name) == nil { // a standard trait the type has from its parts without listing it, Eq on an enum
+		if call, ok := e.standardMethod(x, sel, named); ok {
+			return call
+		}
+	}
+
 	name, sig := e.methodNameOf(sel.Sel, named, sel.Sel.Name, x.Pos())
 	if sig == nil {
 		return unit
