@@ -1,0 +1,81 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package task_test
+
+import ("expect"; "task")
+
+// The sum the adding task returns, and the message the failing task
+// panics with.
+const sum = 5
+const bug = "the task's bug"
+
+// A Note says it was dropped on its channel, so a test waits for a drop
+// another task makes, or that a panic makes on its way out.
+struct Note impl Drop {
+	out chan ()
+}
+
+func (n mut Note) Drop() { n.out <- () }
+
+func add(a int, b int) int { return a + b }
+
+func fail(note Note) int { panic(bug) }
+
+func nothing() {}
+
+// TestJoinReturnsTheResult joins a task that returned.
+func TestJoinReturnsTheResult() {
+	match (spawn add(2, 3)).Join() {
+		Ok(n) => expect.Equal(ref n, ref sum),
+		Err(p) => expect.Fail(p.Message()),
+	}
+}
+
+// TestJoinReportsThePanic joins a task that panicked: Join gives the
+// message, and what the task owned was dropped before it did.
+func TestJoinReportsThePanic() {
+	done := make(chan (), 1)
+	match (spawn fail(Note{out: done.Clone()})).Join() {
+		Ok(_) => expect.Fail("the task returned"),
+		Err(p) => expect.Equal(p.Message(), bug),
+	}
+
+	expect.IsSome(<-done)
+}
+
+// TestHandleOfNoResult joins a task whose call returns nothing.
+func TestHandleOfNoResult() {
+	match (spawn nothing()).Join() {
+		Ok(_) => {},
+		Err(p) => expect.Fail(p.Message()),
+	}
+}
+
+// TestOwnedResult joins a task whose result owns memory.
+func TestOwnedResult() {
+	match (spawn func() string { return "owned".Clone() }()).Join() {
+		Ok(s) => expect.Equal(ref s, ref "owned"),
+		Err(p) => expect.Fail(p.Message()),
+	}
+}
+
+// TestDroppedHandle drops a handle without joining: the task's result
+// is dropped once the task has ended, and nothing waits for anything.
+func TestDroppedHandle() {
+	done := make(chan (), 1)
+	out := done.Clone()
+	_ = spawn func() Note { return Note{out: out} }()
+	expect.IsSome(<-done)
+}
+
+// TestJoinedElsewhere moves a handle into another task, which joins
+// it there.
+func TestJoinedElsewhere() {
+	h := spawn add(1, 1)
+	match (spawn func() int { return h.Join().Ok() ?? -1 }()).Join() {
+		Ok(n) => expect.Equal(ref n, ref 2),
+		Err(p) => expect.Fail(p.Message()),
+	}
+}

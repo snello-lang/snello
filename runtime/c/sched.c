@@ -233,6 +233,7 @@ typedef struct sn_mark {
     sigjmp_buf jump;
     int64_t nguards;
     sn_string *out; // where the panic's message goes, the caller's
+    bool report;    // print the panic as an uncaught one is printed, before the unwinding
     struct sn_mark *prev;
 } sn_mark;
 
@@ -2094,7 +2095,9 @@ void sn_unguard(void *p) {
 // during that ends the program with its own message at once.
 // sn_catch runs fn on the current task under a mark and returns
 // whether a panic ended it, with the panic's message in *msg, owned by
-// the caller, when one did. Marks nest, a subtest's inside its test's.
+// the caller, when one did; with report the panic is printed as an
+// uncaught one is, which a task started for a handle asks and a test
+// does not. Marks nest, a subtest's inside its test's.
 // The jump saves no signal mask, and the task may resume on another
 // thread between the mark and the panic: the jump restores the
 // registers and the stack pointer of the mark's frame, which are the
@@ -2102,11 +2105,12 @@ void sn_unguard(void *p) {
 // the task is read after the jump: sn_panic wrote the message to the
 // caller's slot before it jumped, and a local of this frame changed
 // since the mark would be indeterminate to read.
-bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg) {
+bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
     task *t = sn_self();
     sn_mark m;
     m.nguards = t->nguards;
     m.out = msg;
+    m.report = report;
     m.prev = t->marks;
     t->marks = &m;
     if (sigsetjmp(m.jump, 0) == 0) {
@@ -2178,6 +2182,28 @@ __attribute__((noinline)) void sn_lazy_make(sn_lazy *o, void (*init)(void), cons
     pthread_mutex_unlock(&lazy_mu);
 }
 
+// contained counts the panics a task's handle contained: the memory
+// of the frames each abandoned is never released, which the debug
+// build's report of what was not released says.
+static _Atomic int64_t contained;
+
+int64_t sn_panics_contained(void) {
+    return atomic_load(&contained);
+}
+
+// print_panic writes the panic's line on the standard error stream,
+// after what the program printed so far, in one piece: tasks on
+// several workers may fail at once, and each call of stdio is locked
+// alone, so the line is written under the stream's lock.
+static void print_panic(sn_string msg) {
+    fflush(stdout);
+    flockfile(stderr);
+    fputs("panic: ", stderr);
+    fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
+    fputc('\n', stderr);
+    funlockfile(stderr);
+}
+
 // panic_args is what sn_panic hands the panic on the stack it runs on.
 typedef struct {
     task *t;
@@ -2216,6 +2242,11 @@ static void *panic_unwind(void *arg) {
     if (t != NULL && t->marks != NULL && !t->unwinding) {
         sn_mark *m = t->marks;
         t->marks = m->prev;
+        if (m->report) {
+            print_panic(msg);
+            atomic_fetch_add(&contained, 1);
+        }
+
         *m->out = sn_string_clone(msg); // before the unwinding drops what the message may be part of
         t->unwound = *m->out;
         t->unwinding = true;
@@ -2233,10 +2264,7 @@ static void *panic_unwind(void *arg) {
         t = sn_self();
     }
 
-    fflush(stdout);
-    fputs("panic: ", stderr);
-    fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
-    fputc('\n', stderr);
+    print_panic(msg);
     if (t->unwound.len > 0) {
         fputs("\twhile unwinding from panic: ", stderr);
         fwrite(t->unwound.ptr, 1, (size_t)t->unwound.len, stderr);

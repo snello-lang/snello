@@ -61,6 +61,8 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 		return c.binary(e, expected)
 	case *ast.CoalesceExpr:
 		return c.coalesce(e)
+	case *ast.SpawnExpr:
+		return c.spawnExpr(e)
 	case *ast.TypeExpr:
 		return operand{typeOperand, c.typ(e.Type), nil, nil}
 	case *ast.TryExpr:

@@ -392,16 +392,18 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings .
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
 	stdout, err := cmd.Output()
 	if exit, ok := err.(*exec.ExitError); ok {
-		return string(stdout), string(exit.Stderr), exit.ExitCode()
+		return string(stdout), stderr.String(), exit.ExitCode()
 	}
 
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)
 	}
 
-	return string(stdout), "", 0
+	return string(stdout), stderr.String(), 0
 }
 
 // libraries returns the packages an importer loaded, as Emit takes

@@ -42,6 +42,12 @@ const (
 	chanDropCaller = "chan_drop_elements"
 	lazyMaker      = "sn_lazy_make"
 
+	// catcher is the runtime's function that runs a function under a
+	// mark, through a pointer to one of those named with
+	// lower.CaughtPrefix: the call of a task started for a handle, or
+	// the adapter of a testing.Catch.
+	catcher = "sn_catch"
+
 	// mapPrefix starts the name of every function of the runtime's maps:
 	// every call through a pointer they make, as mapHelpers' do, is of
 	// a map type's key hash, key equality or element drop.
@@ -194,7 +200,7 @@ func (img *Image) runtimeOptions() Options {
 		return out
 	}
 
-	targets := map[string][]string{chanDropCaller: named(lower.ElemDropPrefix), lazyMaker: named(lower.LazyInitPrefix)}
+	targets := map[string][]string{chanDropCaller: named(lower.ElemDropPrefix), lazyMaker: named(lower.LazyInitPrefix), catcher: named(lower.CaughtPrefix)}
 	keys := named(lower.KeyHashPrefix, lower.KeyEqPrefix, lower.ElemDropPrefix)
 	for _, name := range append(named(mapPrefix), mapHelpers...) {
 		targets[img.origin(name)] = keys

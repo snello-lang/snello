@@ -277,6 +277,10 @@ func (p *Parser) parseOperand() ast.Expr {
 		return p.parseIfExpr()
 	case token.MATCH:
 		return p.parseMatchExpr()
+	case token.SPAWN: // a spawn where a value is wanted: a handle on the task
+		pos := p.pos
+		p.next()
+		return &ast.SpawnExpr{Spawn: pos, Call: p.parseCallExpr("spawn")}
 	case token.SWITCH:
 		bad := p.refuseSwitch()
 		return &ast.BadExpr{From: bad.From, To: bad.To}

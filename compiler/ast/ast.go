@@ -472,6 +472,14 @@ type BinaryExpr struct {
 	Y     Expr
 }
 
+// A SpawnExpr starts a task and gives a handle on it: h := spawn f(x).
+// Call is the call, as a SpawnStmt's is; the statement form keeps a
+// panic in the task ending the program, where the handle contains it.
+type SpawnExpr struct {
+	Spawn token.Pos
+	Call  Expr
+}
+
 // A CoalesceExpr is x ?? else. Else is an Expr, or a diverging
 // *ReturnStmt, *BranchStmt or *BlockStmt.
 type CoalesceExpr struct {
@@ -675,6 +683,7 @@ func (x *SliceExpr) Pos() token.Pos    { return x.X.Pos() }
 func (x *CallExpr) Pos() token.Pos     { return x.Fun.Pos() }
 func (x *UnaryExpr) Pos() token.Pos    { return x.OpPos }
 func (x *BinaryExpr) Pos() token.Pos   { return x.X.Pos() }
+func (x *SpawnExpr) Pos() token.Pos    { return x.Spawn }
 func (x *CoalesceExpr) Pos() token.Pos { return x.X.Pos() }
 func (x *TypeExpr) Pos() token.Pos     { return x.Type.Pos() }
 func (x *TryExpr) Pos() token.Pos      { return x.X.Pos() }
@@ -733,6 +742,7 @@ func (*SliceExpr) exprNode()    {}
 func (*CallExpr) exprNode()     {}
 func (*UnaryExpr) exprNode()    {}
 func (*BinaryExpr) exprNode()   {}
+func (*SpawnExpr) exprNode()    {}
 func (*CoalesceExpr) exprNode() {}
 func (*TypeExpr) exprNode()     {}
 func (*TryExpr) exprNode()      {}

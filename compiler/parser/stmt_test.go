@@ -30,6 +30,8 @@ func TestStmts(t *testing.T) {
 		{"var x, y = 1, 2", "var x, y = 1, 2"},
 		{"spawn worker(id, tasks)", "spawn worker(id, tasks)"},
 		{"spawn func() { x }()", "spawn func() {...}()"},
+		{"h := spawn worker(id)", "h := (spawn worker(id))"},
+		{"return spawn worker(id)", "return (spawn worker(id))"},
 		{"defer f.Close()", "defer f.Close()"},
 		{"return", "return"},
 		{"return a, b", "return a, b"},
@@ -92,6 +94,7 @@ func TestStmtErrors(t *testing.T) {
 		n    int    // total errors expected
 	}{
 		{"spawn x", "expression in spawn must be a function call", 1},
+		{"h := spawn x", "expression in spawn must be a function call", 1},
 		{"defer 1 + 2", "expression in defer must be a function call", 1},
 		{"a, b", "expected ':=' or '=', found 'newline'", 1},
 		{"if { a }", "expected condition, found '{'", 1},

@@ -90,6 +90,8 @@ func (e *Emitter) expr(x ast.Expr) value {
 		return e.funcLit(x)
 	case *ast.CoalesceExpr:
 		return e.coalesce(x)
+	case *ast.SpawnExpr:
+		return e.spawnExpr(x)
 	case *ast.TryExpr:
 		return e.try(x)
 	case *ast.IfExpr:

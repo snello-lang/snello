@@ -169,6 +169,8 @@ func (e *Emitter) movesRead(y, x ast.Expr) bool {
 		return e.movesRead(y.X, x) || e.movesRead(y.Y, x)
 	case *ast.CallExpr:
 		return e.anyMovesRead(y.Args, x)
+	case *ast.SpawnExpr:
+		return e.movesRead(y.Call, x)
 	case *ast.TupleExpr:
 		return e.anyMovesRead(y.Elts, x)
 	case *ast.CompositeLit:

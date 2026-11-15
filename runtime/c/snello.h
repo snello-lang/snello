@@ -91,7 +91,7 @@ static inline sn_string sn_owned(void *p, int64_t n) {
 void *sn_heap_alloc(size_t n);
 void sn_heap_free(void *p);
 _Noreturn void sn_panic(sn_string msg);
-bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg); // runs fn under a mark: true with the message when a panic ended it (testing.Catch)
+bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report); // runs fn under a mark: true with the message when a panic ended it, printed first when report (a task with a handle; testing.Catch asks no print)
 
 // The guards: the owned values whose drop runs a Drop method, which
 // the emitted code registers where each is declared and removes where
@@ -749,6 +749,7 @@ typedef struct {
 void sn_spawn(void (*run)(void *), void *arg, uint32_t bound);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
+int64_t sn_panics_contained(void); // how many panics a task's handle has contained, whose frames' memory stays allocated
 void sn_timers_stop(void);
 bool sn_timer_abandon(sn_chan *c);
 int64_t sn_chan_timer(sn_chan *c);

@@ -654,6 +654,8 @@ func exprText(e ast.Expr) string {
 		return e.Value
 	case *ast.ParenExpr:
 		return "(" + exprText(e.X) + ")"
+	case *ast.SpawnExpr:
+		return "spawn " + exprText(e.Call)
 	case *ast.SelectorExpr:
 		return exprText(e.X) + "." + e.Sel.Name
 	case *ast.PartExpr:

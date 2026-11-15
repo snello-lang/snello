@@ -1,0 +1,103 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Handles on tasks: a spawn written as an expression gives a
+// task.Handle, and Join returns what the task returned or the panic
+// that ended it. A failed task runs its deferred calls and drops the
+// values with a Drop method it made, and the program goes on; a result
+// that owns memory crosses to the joiner; a task's result is dropped by
+// the task when its handle went before the task ended; a handle is
+// moved into another task and joined there; a method, a closure and a
+// call with no result give handles too, and a generic function takes
+// one. Every task ends before main returns, so a debug build checks the
+// drops; the frames a panic abandons hold no plain memory here, since
+// a contained panic does not release that.
+
+package main
+
+import ("fmt"; "sync"; "task")
+
+struct Ticket impl Drop {
+	n int
+}
+
+func (t mut Ticket) Drop() { fmt.Println("ticket", t.n, "dropped") }
+
+// A Note counts its drop off a WaitGroup, so main can wait for the drop
+// of a result no one joined. It holds no channel: a channel carrying a
+// value that holds a channel is a drop the stack analysis cannot bound.
+struct Note impl Drop {
+	n    int
+	done sync.WaitGroup
+}
+
+func (n mut Note) Drop() {
+	fmt.Println("note", n.n, "dropped")
+	n.done.Done()
+}
+
+struct Counter {
+	n int
+}
+
+func (c Counter) Twice() int { return c.n * 2 }
+
+func fails(n int) int {
+	t := Ticket{n: n}
+	defer fmt.Println("deferred in task", n)
+	xs := [3]int{1, 2, 3}
+	return xs[n] + t.n // out of range for n past 2
+}
+
+func word(s string) string { return s + "!" }
+
+func say() { fmt.Println("said") }
+
+func join<T: Send>(h task.Handle<T>) Result<T, task.Panic> { return h.Join() }
+
+func report(r Result<int, task.Panic>, what string) {
+	match r {
+		Ok(n) => fmt.Println(what, n),
+		Err(p) => fmt.Println(what, "failed:", p.Message()),
+	}
+}
+
+func main() {
+	report((spawn fails(7)).Join(), "fails(7)")
+	h := spawn fails(1)
+	report(h.Join(), "fails(1)")
+
+	w := spawn word("hi".Clone())
+	match w.Join() {
+		Ok(s) => fmt.Println(s),
+		Err(p) => fmt.Println("word failed:", p.Message()),
+	}
+
+	c := Counter{n: 21}
+	report((spawn c.Twice()).Join(), "twice")
+	k := 5
+	report((spawn func() int { return k + 1 }()).Join(), "closure")
+
+	wg := sync.NewWaitGroup()
+	wg.Add(1)
+	first := wg.Clone()
+	_ = (spawn func() Note { return Note{n: 9, done: first} }()).Join() // the note comes here and is dropped at once
+	wg.Wait()
+	wg.Add(1)
+	second := wg.Clone()
+	_ = spawn func() Note { return Note{n: 10, done: second} }() // the handle goes at once: the note is dropped once, by the task or with the handle
+	wg.Wait()
+
+	elsewhere := spawn join(spawn fails(2))
+	match elsewhere.Join() {
+		Ok(r) => report(r, "joined elsewhere"),
+		Err(p) => fmt.Println("the joiner failed:", p.Message()),
+	}
+
+	u := spawn say()
+	match u.Join() {
+		Ok(_) => fmt.Println("said and returned"),
+		Err(p) => fmt.Println("say failed:", p.Message()),
+	}
+}

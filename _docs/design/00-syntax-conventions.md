@@ -308,6 +308,32 @@ Full reasoning in `03-ownership-across-tasks.md`.
 - `Mutex<T>` and `RwLock<T>` own their data; `Lock()` returns a guard that is a `mut T` and unlocks on drop.
 - `sync` types synchronize internally and are used through `ref`.
 
+### A handle on a task
+
+A panic in any task ends the program, with its message and status 2, as a panic in `main` does, and `spawn f(x)` written as a statement keeps that meaning. **`spawn` written as an expression starts the task under a mark and gives a handle on it**: `h := spawn crunch(data)` is a `task.Handle<int>` when `crunch` returns an `int`, and `h.Join()` waits until the task has ended and returns `Result<int, task.Panic>`, `Ok` with what the call returned or `Err` with the panic that ended it, whose `Message()` lends the message. A panic is still a bug and `Result` is still how a failure is handled; the handle is containment, as a thread's join handle is in Rust, Java and Swift: it limits what a bug takes down to the task it is in.
+
+```go
+h := spawn crunch(data)                             // task.Handle<int>
+match h.Join() {
+	Ok(n)  => fmt.Println("result", n),
+	Err(p) => fmt.Println("the task failed:", p.Message()),
+}
+```
+
+- **The call is spawned as a statement's is.** Every argument, every variable a closure captures and a receiver taken by value is `Send` and moves into the task, and a borrow cannot be spawned, with the statement's messages. The call's result is `Send` too, since the handle carries it to the task that joins: `cannot spawn for a handle: rc.Rc<int> stays in its task`. A call that returns nothing gives a `task.Handle<()>`.
+- **A handle is an owned value that `Join` takes.** It is moved, never cloned, so a task is joined once, by whoever holds the handle, in any task, since a handle is `Send`; it has no zero value, as a channel handle has none. A handle dropped without a `Join` leaves its task running, and the task's result is dropped when the task ends. A `Join` on a task that never ends waits forever, as a receive on a channel no one sends on does, and the deadlock report says so when nothing else can run.
+- **A handle is a value, not a name for the task.** Nothing is sent to a task through it and no task finds another by it: there is no address, no mailbox, no link and no kill. A group of tasks is a library type written over handles.
+- **A contained panic ends its task as an uncontained one ends the program.** The message is printed on the standard error stream when the panic happens, `panic: index out of range [7] with length 3`, so that a failure the program only counts still shows; the values with a `Drop` method the task made since it started are dropped, innermost first, and its deferred calls run, once each; then the task hands `Err` to its handle and ends. A lock the task held is released by its guard's drop and nothing more: the value under it may be half changed, so a task whose panic is contained should own its state. The plain memory of the frames the panic abandoned, a slice of numbers or a message a `Sprintf` built, stays allocated until the process ends, as it does for a failed test ("Catching a panic" in the book's testing chapter): a guard per owned value would cost every function of every program a registration per value, and a panic is a bug the program fixes.
+- **`spawn` as a statement keeps its meaning.** Its panic ends the program. A program that wants a task's failure contained writes the handle, where a Go program recovers in every goroutine it starts; the choice is at the spawn, once, and nothing in the called function says which way it was started.
+
+**Considered and not taken.** A library function taking a closure, `task.Spawn(func() { ... })`, as Rust's `thread::spawn`: a closure handed to a function is a borrow of the frame that wrote it and cannot outlive the call, so a spawned closure needs the keyword, which moves its captures. A `Detach` method: dropping the handle is the detach. A handle in a `select`, a `TryJoin` or an `IsDone`: a group written over `Join` covers the programs that were asked for, and the handle stays one method until a program shows the need. A panic that is not printed when a handle catches it, as Go's `recover` prints nothing: a server that joins a thousand tasks and counts the failures would then hide the bug's message, and the program that wants silence redirects its standard error.
+
+**The precedents.** Rust's `thread::spawn` returns a `JoinHandle<T>` whose `join` gives `Result<T, Box<dyn Any>>`, Java's `Thread.start` and Swift's `Task` return the handle from the call that starts the task, and Kotlin's `async` returns a `Deferred<T>`; none gives a goroutine's silence to a bug. Go has `go` alone, and a panic in any goroutine ends the process unless that goroutine recovers.
+
+**What it costs.** A `spawn` with a handle makes a channel of one slot, one allocation, clones its handle into the task, and runs the call under a mark, one `sigsetjmp`; the result crosses as a channel value does. A `spawn` as a statement costs what it did.
+
+**Memory safe, no collector.** A handle is a channel handle, and the task holds the other: the result or the panic goes through the channel by the rules every value crossing a task obeys, the last handle frees the channel, and a result no one joined is dropped by the task. The unwinding is the one a failed test uses.
+
 ## Closures
 
 A closure captures each variable in the weakest mode its body needs: by copy if the variable is `Copy`, holds no borrow and is only read, in which case the closure holds the value as it was when the closure was made (the iterators example's `adder(10)` returns `func(x int) int { return x + offset }`); `ref` if it only reads a value that is not `Copy`; `mut` if it assigns to it; by move if it consumes it or the closure is passed to `spawn`. A closure that captures by borrow is a borrow (see above). A closure that captures only copies may be stored and returned, and is a value with nothing to drop: the compiler keeps the copies in the function value itself, a few words beside the function pointer.

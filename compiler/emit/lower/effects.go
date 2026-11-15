@@ -27,7 +27,7 @@ func HasEffects(info *types.Info, x ast.Expr) bool {
 		}
 
 		return true
-	case *ast.MatchExpr, *ast.IfExpr, *ast.TryExpr, *ast.CoalesceExpr:
+	case *ast.MatchExpr, *ast.IfExpr, *ast.TryExpr, *ast.CoalesceExpr, *ast.SpawnExpr:
 		return true
 	case *ast.ParenExpr:
 		return HasEffects(info, x.X)
@@ -203,6 +203,8 @@ func Mentions(info *types.Info, x ast.Expr, v types.Object) bool {
 		return false
 	case *ast.CompositeLit:
 		return AnyElement(x, func(y ast.Expr) bool { return Mentions(info, y, v) })
+	case *ast.SpawnExpr:
+		return Mentions(info, x.Call, v)
 	case *ast.CallExpr:
 		if callsValue(info, x) || Mentions(info, x.Fun, v) {
 			return true
@@ -255,6 +257,8 @@ func changedRoots(info *types.Info, x ast.Expr, f func(types.Object) bool) bool 
 		return true
 	case *ast.MatchExpr, *ast.IfExpr, *ast.TryExpr, *ast.CoalesceExpr:
 		return f(nil)
+	case *ast.SpawnExpr:
+		return changedRoots(info, x.Call, f)
 	case *ast.ParenExpr:
 		return changedRoots(info, x.X, f)
 	case *ast.SelectorExpr:

@@ -9,17 +9,24 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// The standard package a spawn written as an expression gives its
+// value from, and the type of that value in it.
+const (
+	taskPackage = "task"
+	handleType  = "Handle"
+)
+
 // The task boundary is crossed in three places: a spawn, for what the
 // task takes in, a send, for the value put on the channel, and a
 // receive, for the value taken off it. What crosses is moved, and its
 // type is Send (send.go); a borrow never crosses, since it points into
-// a frame of the task that made it (_docs/design/03-ownership-across-
-// tasks.md). A send moves the value as an assignment does, and a
-// receive yields an owned T?, so the two need nothing beyond the type
-// rule, which is checked once where the channel type is written: a
-// channel of a type that is not Send cannot be made. The spawn is where
-// the work is: its arguments and the variables its closure mentions
-// are moved into the task, and each must be Send.
+// a frame of the task that made it. A send moves the value as an
+// assignment does, and a receive yields an owned T?, so the two need
+// nothing beyond the type rule, which is checked once where the
+// channel type is written: a channel of a type that is not Send cannot
+// be made. The spawn is where the work is: its arguments and the
+// variables its closure mentions are moved into the task, and each
+// must be Send.
 
 // spawned checks the call a spawn statement starts. A closure written
 // in the statement takes what it captures with it: every capture
@@ -52,6 +59,60 @@ func (c *Checker) spawned(e *ast.CallExpr, f operand, sig *Signature) {
 			return
 		}
 	}
+}
+
+// spawnExpr checks spawn f(x) written as an expression, for a handle
+// on the task: the call is spawned as a statement's is, and the value
+// is a task.Handle of the call's result, which the handle carries to
+// the task that joins, so the result is Send as the arguments are.
+func (c *Checker) spawnExpr(e *ast.SpawnExpr) operand {
+	call, ok := e.Call.(*ast.CallExpr)
+	if !ok {
+		c.expr(e.Call, nil)
+		return invalidOperand // reported by the parser
+	}
+
+	reported := len(c.errors)
+	c.spawning = call
+	r := c.expr(call, nil)
+	c.spawning = nil
+	handle := c.taskHandle(e.Pos())
+	if r.mode == invalid || handle == nil || len(c.errors) > reported {
+		return invalidOperand // a call refused as spawned is reported once
+	}
+
+	if why := NotSend(r.typ); why != "" {
+		c.errorf(e.Pos(), "cannot spawn for a handle: "+why)
+		return invalidOperand
+	}
+
+	return operand{value, Instantiate(handle, []Type{r.typ}), nil, nil}
+}
+
+// taskHandle returns the declaration of task.Handle, loaded through the
+// importer whether or not the program imports the package: a spawn
+// written as an expression needs no import to be written, and only a
+// program that names the handle's type imports task.
+func (c *Checker) taskHandle(pos token.Pos) *Named {
+	if c.conf.Importer == nil {
+		c.errorf(pos, "spawn as an expression needs the task package, which nothing loads here")
+		return nil
+	}
+
+	pkg, err := c.conf.Importer.Import(taskPackage)
+	if err != nil {
+		c.errorf(pos, err.Error())
+		return nil
+	}
+
+	obj, ok := pkg.scope.Lookup(handleType).(*TypeName)
+	if !ok {
+		c.errorf(pos, "package "+taskPackage+" declares no type "+handleType)
+		return nil
+	}
+
+	named, _ := obj.typ.(*Named)
+	return named
 }
 
 // spawnCaptures moves the variables a spawned closure captures into

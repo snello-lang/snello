@@ -1,0 +1,56 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package task keeps a task's failure in the task it happened in. A
+// spawn written as an expression, h := spawn f(x), starts the task
+// under a mark and gives a Handle on it; Join waits until the task has
+// ended and returns what it returned, or the Panic that ended it, whose
+// message the program reads. A spawn written as a statement keeps its
+// meaning: its panic ends the program. A panic is still a bug and
+// Result is still how a failure is handled; the handle limits what a
+// bug takes down to the task it is in, so that a server whose task for
+// one request fails goes on serving the others.
+//
+// A handle is a value, not a name for the task: nothing is sent to a
+// task through it and no task finds another by it. There is no address,
+// no mailbox, no link and no kill. The compiler writes the spawn; this
+// package is what the program holds afterwards.
+package task
+
+// A Handle is a task started for one: an owned value that Join takes,
+// so a task is joined once, by whoever holds the handle, in any task.
+// It has no zero value; one comes only from a spawn. A handle dropped
+// without a Join leaves its task running, and the task's result is
+// dropped when the task ends.
+//
+//	h := spawn crunch(data) // task.Handle<int>
+//	match h.Join() {
+//		Ok(n)  => fmt.Println("result", n),
+//		Err(p) => fmt.Println("the task failed:", p.Message()),
+//	}
+struct Handle<T: Send> {
+	done chan Result<T, Panic> // one slot, which the task fills as it ends; the task holds the other handle
+}
+
+// A Panic is the failure of a task whose handle contained it: the
+// message the panic was raised with, index out of range [7] with length
+// 3 for a bug the runtime found, or the text a panic call was given.
+struct Panic {
+	message string
+}
+
+// Join waits until the task has ended and returns what it returned, or
+// the Panic that ended it. A task that never ends is never joined: Join
+// waits as a receive on a channel no one sends on does, and the
+// deadlock report says so when nothing else can run.
+func (h Handle<T>) Join() Result<T, Panic> {
+	for {
+		if r := <-h.done { // never closed: a receive waits for the task's one value
+			return r
+		}
+	}
+}
+
+// Message lends the message the panic was raised with.
+func (p ref Panic) Message() ref string { return ref p.message }

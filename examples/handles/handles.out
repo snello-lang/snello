@@ -1,0 +1,9 @@
+audit: reached step 3
+checked 12
+audit: reached step 3
+check failed: index out of range [3] with length 3
+batch 1 total 12
+a batch failed: index out of range [3] with length 3
+batch 3 total 7
+1 batch failed, and the program went on
+log: every batch was handled

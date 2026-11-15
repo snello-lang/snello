@@ -265,6 +265,9 @@ var handledErrors = map[string]bool{
 	// A Drop runs once, by the language, on a struct or an enum.
 	"drop-by-hand.snello":       true,
 	"drop-not-composite.snello": true,
+	// A handle carries a task's result to the task that joins, so the
+	// result is Send.
+	"handle-not-send.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

@@ -180,6 +180,14 @@ int sn_finish(void) {
 
     fflush(stdout);
     fprintf(stderr, "snello: %lld blocks (%lld bytes) not released\n", (long long)live_blocks, (long long)live_bytes);
+    int64_t panics = sn_panics_contained();
+    if (panics > 0) {
+        // A contained panic drops the values with a Drop method and runs
+        // the deferred calls of the frames it abandons; the plain memory
+        // those frames held stays allocated, and is among the blocks.
+        fprintf(stderr, "  %lld %s contained by a task's handle; the memory of the frames a panic abandons is not released\n", (long long)panics, panics == 1 ? "panic was" : "panics were");
+    }
+
     for (block *b = first; b != NULL; b = b->next) {
         // Each block's bytes, as text as far as they are printable,
         // which names a leaked string outright.
