@@ -119,6 +119,9 @@ type Checker struct {
 	// kinds holds the kind an arm matched a type parameter as, struct,
 	// enum or tuple, which lets the arm reach its parts.
 	kinds map[*TypeParam]string
+	// refuses says a refuse was checked, which the walk of reach.go
+	// reports where it is reached.
+	refuses bool
 	// sawParts says the body being checked reaches a field with v.[f],
 	// which selectParts makes a selector once the body is checked.
 	sawParts bool

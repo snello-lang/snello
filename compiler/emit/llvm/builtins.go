@@ -173,7 +173,7 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) value {
 		old := e.load(e.irType(t, x.Pos()), p)
 		e.store(v, p)
 		return old
-	case types.BuiltinPanic: // the text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
+	case types.BuiltinPanic, types.BuiltinRefuse: // a refuse the compiler let pass is on a path no instance takes, and panics as one would. The text as it is, lent or owned, as the C backend passes it: the runtime clones what it keeps, and a clone here was never freed, which a panic caught under a mark turned into a leak
 		v := e.operands(x.Args, nil)[0]
 		msg := e.textOf(v, e.typeOf(x.Args[0]), x.Pos()).v
 		if msg.typ == "" {

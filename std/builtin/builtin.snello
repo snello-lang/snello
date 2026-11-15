@@ -393,6 +393,23 @@ func variants(t any) any
 //	if attr(f, json.Skip).IsNone() { write(ref v.[f]) }
 func attr(x any, a any) any
 
+// refuse refuses the program when it is compiled, with msg, where the
+// compiler reaches it: in a generic function, for each type whose
+// instance takes the path that holds it, the chain of calls that led
+// there named before msg; in any other function, where it is written.
+// The compiler decides a match on a type, on attr(x, A), Some when A is
+// written on x, and on a part's name, c.name or f.name, against string
+// literals, so a refuse in an arm one type takes and another does not
+// refuses the one alone. msg is text the compiler knows: string
+// constants and parts' names, joined with +. It is no value and never
+// runs, so it may stand where any value is wanted.
+//
+//	match attr(T, json.Tag) {
+//		Some(_) => match f.name { "" => refuse("json.Tag needs named fields: " + c.name + " has an unnamed one"), _ => ... },
+//		None => ...,
+//	}
+func refuse(msg ref string) Never
+
 // min returns the least of two or more numbers of one type, a, b and
 // the rest, which is the result's type; a literal among them takes the
 // type of the others. On floats a NaN among them makes the result NaN,

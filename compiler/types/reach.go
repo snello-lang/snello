@@ -61,16 +61,44 @@ func (w *reachWalk) report(msg string) {
 	w.errs = append(w.errs, reachErr{w.root, msg})
 }
 
+// refused notes a refuse the walk reached in an instance of a generic
+// function, with its message, at the call the walk began from; one in
+// any other function the checker reported where it is written.
+func (w *reachWalk) refused(x *ast.CallExpr) {
+	if len(w.chain) == 0 || len(x.Args) != 1 {
+		return
+	}
+
+	w.report(w.where() + w.message(x.Args[0]))
+}
+
 // A reachPart is the part a loop around the walk's place stands for in
-// the copy being walked: a variant, whose fields a loop inside reaches.
+// the copy being walked: a variant, whose fields a loop inside reaches,
+// or a field, the index'th of its struct or of the variant it is in.
 type reachPart struct {
 	variant *Variant
+	field   *Var
+	index   int
+}
+
+// name returns the part's name: the variant's, or the field's, "" for
+// an unnamed field of a variant.
+func (p reachPart) name() string {
+	if p.field != nil {
+		return p.field.name
+	}
+
+	if p.variant != nil {
+		return p.variant.name
+	}
+
+	return ""
 }
 
 // reach walks from each call of the package's own code whose type
 // arguments are all known.
 func (c *Checker) reach(fs []*ast.File) {
-	if c.info == nil || c.info.Arms == nil || len(c.errors) > 0 { // the questions are asked of a program that checked and reflects: every reflecting function matches on a type, and the tables are the build's
+	if c.info == nil || c.info.Arms == nil && !c.refuses || len(c.errors) > 0 { // the questions are asked of a program that checked and reflects, or refuses: every reflecting function matches on a type, and the tables are the build's
 		return
 	}
 
@@ -278,6 +306,11 @@ func (w *reachWalk) body(n ast.Node, sub map[*TypeParam]Type, pkg *Package) {
 				return false
 			}
 
+			if i := w.decided(x, sub); i >= 0 {
+				w.body(x.Arms[i].Body, sub, pkg)
+				return false
+			}
+
 			if len(x.Arms) == 1 {
 				if p, ok := x.Arms[0].Pat.(*ast.PartsPat); ok {
 					w.walkParts(p.Var, sub, pkg, func(sub map[*TypeParam]Type) { w.body(x.Arms[0].Body, sub, pkg) })
@@ -301,6 +334,13 @@ func (w *reachWalk) body(n ast.Node, sub map[*TypeParam]Type, pkg *Package) {
 		case *ast.Ident:
 			if fn, ok := w.info.Uses[x].(*Func); ok {
 				w.call(x, fn, nil, sub)
+			}
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				if b, ok := w.info.Uses[id].(*Builtin); ok && b.id == BuiltinRefuse {
+					w.refused(x)
+					return false
+				}
 			}
 		}
 
@@ -358,6 +398,174 @@ func (w *reachWalk) typeArm(x *ast.MatchExpr, sub map[*TypeParam]Type, pkg *Pack
 	w.body(x.Arms[i].Body, sub, pkg)
 }
 
+// decided returns the arm of a match the compiler decides for the copy
+// and instance being walked, or -1 when it is left to run time: a match
+// on attr(x, A), whose arm Some is taken when A is written on x and
+// None when it is not, and a match on a part's name, c.name or f.name,
+// against string literals. A guard leaves the match to run time.
+func (w *reachWalk) decided(x *ast.MatchExpr, sub map[*TypeParam]Type) int {
+	var fits func(ast.Pattern) (bool, bool)
+	switch s := unparen(x.X).(type) {
+	case *ast.CallExpr:
+		id, ok := s.Fun.(*ast.Ident)
+		if !ok {
+			return -1
+		}
+
+		if b, ok := w.info.Uses[id].(*Builtin); !ok || b.id != BuiltinAttr {
+			return -1
+		}
+
+		_, written := w.attrOf(s, sub)
+		fits = func(p ast.Pattern) (bool, bool) { return w.optionFits(p, written) }
+	case *ast.SelectorExpr:
+		name, ok := w.partName(s)
+		if !ok {
+			return -1
+		}
+
+		fits = func(p ast.Pattern) (bool, bool) { return nameFits(p, name) }
+	default:
+		return -1
+	}
+
+	for i, arm := range x.Arms {
+		ok, known := fits(arm.Pat)
+		if arm.Guard != nil || !known {
+			return -1
+		}
+
+		if ok {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// optionFits reports whether the pattern p takes an option that is Some
+// when written, and whether that is known: Some(...) with names or _
+// inside, None, a name or _.
+func (w *reachWalk) optionFits(p ast.Pattern, written bool) (bool, bool) {
+	switch p := p.(type) {
+	case *ast.WildcardPat:
+		return true, true
+	case *ast.IdentPat:
+		if v, ok := w.info.Uses[p.Name].(*Variant); ok {
+			return v.name == NoneVariant.name && !written, true
+		}
+
+		return true, true // a name, which takes any value
+	case *ast.VariantPat:
+		for _, a := range p.Args {
+			switch a.(type) {
+			case *ast.WildcardPat, *ast.IdentPat:
+			default:
+				return false, false // what is written decides it, when the program runs
+			}
+		}
+
+		return written, true
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			ok, known := w.optionFits(alt, written)
+			if !known || ok {
+				return ok, known
+			}
+		}
+
+		return false, true
+	}
+
+	return false, false
+}
+
+// nameFits reports whether the pattern p takes the name of a part, and
+// whether that is known: a string literal, a name or _.
+func nameFits(p ast.Pattern, name string) (bool, bool) {
+	switch p := p.(type) {
+	case *ast.WildcardPat, *ast.IdentPat:
+		return true, true
+	case *ast.LitPat:
+		v, ok := literalValue(p.Lit)
+		if !ok || v.Kind() != ConstString {
+			return false, false
+		}
+
+		return v.Str() == name, true
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			ok, known := nameFits(alt, name)
+			if !known || ok {
+				return ok, known
+			}
+		}
+
+		return false, true
+	}
+
+	return false, false
+}
+
+// attrOf returns the attribute attr(x, A) gives in the copy and instance
+// being walked, and whether one is written: on the part x stands for,
+// or on the type a type parameter x stands for.
+func (w *reachWalk) attrOf(call *ast.CallExpr, sub map[*TypeParam]Type) (Attribute, bool) {
+	opt, ok := w.info.Types[call].(*Option)
+	if !ok || len(call.Args) != 2 {
+		return Attribute{}, false
+	}
+
+	t := opt.elem
+	id, ok := call.Args[0].(*ast.Ident)
+	if !ok {
+		return Attribute{}, false
+	}
+
+	switch obj := w.info.Uses[id].(type) {
+	case *Part:
+		bound, ok := w.bound[obj]
+		switch {
+		case !ok:
+		case bound.field != nil && bound.variant != nil: // fields(c): a variant's field
+			return w.info.VariantFieldAttr(bound.variant, bound.index, t)
+		case bound.field != nil: // fields(T): the struct T stands for in this instance
+			if n, ok := Subst(obj.of, sub).(*Named); ok {
+				return w.info.FieldAttr(n, bound.index, t)
+			}
+		default:
+			return w.info.VariantAttr(bound.variant, t)
+		}
+	case *TypeName:
+		if n, ok := Subst(obj.typ, sub).(*Named); ok {
+			return w.info.TypeAttr(n, t) // an instance has its declaration's
+		}
+	}
+
+	return Attribute{}, false
+}
+
+// partName returns the name x, c.name or f.name, gives in the copy
+// being walked, and whether x is one.
+func (w *reachWalk) partName(x *ast.SelectorExpr) (string, bool) {
+	id, ok := x.X.(*ast.Ident)
+	if !ok || x.Sel.Name != "name" {
+		return "", false
+	}
+
+	p, ok := w.info.Uses[id].(*Part)
+	if !ok {
+		return "", false
+	}
+
+	bound, ok := w.bound[p]
+	if !ok {
+		return "", false
+	}
+
+	return bound.name(), true
+}
+
 // matched returns the type parameter a match on a type is on: the one
 // its name stands for, or the type of a field, f.type.
 func (w *reachWalk) matched(x *ast.MatchExpr) *TypeParam {
@@ -413,7 +621,7 @@ func (w *reachWalk) walkParts(key *ast.Ident, sub map[*TypeParam]Type, pkg *Pack
 				return true
 			}
 
-			w.bind(part, v, func() { each(sub) })
+			w.bind(part, reachPart{variant: v}, func() { each(sub) })
 		}
 	case part.in != nil:
 		v := w.bound[part.in].variant
@@ -421,12 +629,12 @@ func (w *reachWalk) walkParts(key *ast.Ident, sub map[*TypeParam]Type, pkg *Pack
 			return true
 		}
 
-		for _, f := range v.fields { // reached as the variant is, by position, as a pattern of another package binds them
+		for i, f := range v.fields { // reached as the variant is, by position, as a pattern of another package binds them
 			if !w.reachable(f, of, pkg, f.pkg) {
 				return true
 			}
 
-			each(withPart(sub, part, f.typ))
+			w.bind(part, reachPart{variant: v, field: f, index: i}, func() { each(withPart(sub, part, f.typ)) })
 		}
 	default:
 		st, ok := of.Underlying().(*Struct)
@@ -434,12 +642,12 @@ func (w *reachWalk) walkParts(key *ast.Ident, sub map[*TypeParam]Type, pkg *Pack
 			return true
 		}
 
-		for _, f := range st.fields {
+		for i, f := range st.fields {
 			if !w.reachable(f, of, pkg, opener) {
 				return true
 			}
 
-			each(withPart(sub, part, f.typ))
+			w.bind(part, reachPart{field: f, index: i}, func() { each(withPart(sub, part, f.typ)) })
 		}
 	}
 
@@ -471,14 +679,14 @@ func (w *reachWalk) reachable(f *Var, t Type, pkg, opener *Package) bool {
 	return true
 }
 
-// bind walks with the variant v standing for the part p.
-func (w *reachWalk) bind(p *Part, v *Variant, walk func()) {
+// bind walks with part, a variant or a field, standing for the part p.
+func (w *reachWalk) bind(p *Part, part reachPart, walk func()) {
 	if w.bound == nil {
 		w.bound = make(map[*Part]reachPart)
 	}
 
 	old, had := w.bound[p]
-	w.bound[p] = reachPart{v}
+	w.bound[p] = part
 	walk()
 	if had {
 		w.bound[p] = old

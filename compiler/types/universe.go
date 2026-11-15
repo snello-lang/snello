@@ -94,6 +94,7 @@ var predeclaredBuiltins = [...]struct {
 	{"fields", BuiltinFields},
 	{"variants", BuiltinVariants},
 	{"attr", BuiltinAttr},
+	{"refuse", BuiltinRefuse},
 }
 
 func init() {

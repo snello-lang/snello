@@ -154,6 +154,6 @@ A compound assignment reads its place first, as the left operand of the operator
 
 ## Built-in functions
 
-`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `min` and `max` give the least and the greatest of two or more numbers of one type; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5.
+`len` gives the length of a slice, map or string and `cap` the capacity of a slice; `make` builds a slice, map or channel of a given size; `panic` stops the program with a message; `min` and `max` give the least and the greatest of two or more numbers of one type; `print` is a debugging aid, and `fmt.Println` is the one to use for output. `take(mut place)` moves a value out of a field or element and leaves the zero value behind; it belongs to chapter 5. `fields`, `variants`, `attr` and `refuse` belong to reflection, chapter 24: `refuse` refuses a program where it is compiled, with a message.
 
 Slices and maps have methods rather than functions: `xs.Push(v)`, `m.Remove(k)` (chapter 9). `&expr` allocates a value on the heap (chapter 7). There is no `nil`: a value that may be absent has type `T?` (chapter 8).

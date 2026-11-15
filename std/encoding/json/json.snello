@@ -16,7 +16,8 @@
 // and the keys in the order of their values; a struct is an object of
 // its fields, under the names they are declared with;
 // an enum's variant without fields is its name, "Dot", and one with
-// fields an object of one key, {"Rect":{"w":1,"h":2}}.
+// fields an object of one key, {"Rect":{"w":1,"h":2}}, or with Tag,
+// Content or Untagged on the enum, the layout they choose, below.
 // A struct of another package is reached through the fields it exports,
 // or through all of them when it lists Reflect. Attributes change the
 // keys and leave fields out: Name, OmitEmpty and Skip, below; a type
@@ -89,6 +90,14 @@ const tab byte = '\t'
 const newline byte = '\n'
 const carriageReturn byte = '\r'
 
+// untriedBudget is how many times its length a text's untagged values
+// may be read by tries of their variants that failed: a variant that
+// holds the enum, A(*U, int) beside B(*U, string), reads what it holds
+// whole before it fails, and the next reads it again, so that each
+// level of nesting would double the time. Bounded, the waste is linear
+// in the text, and a value tried past it is refused.
+const untriedBudget = 1024
+
 // indentedGrowth is how many times the compact text's length the block
 // laid out text is made in starts at.
 const indentedGrowth = 2
@@ -112,6 +121,33 @@ struct OmitEmpty impl FieldAttribute {}
 // OmitEmpty apply to its named fields; an unnamed field keeps its
 // place.
 struct Skip impl FieldAttribute {}
+
+// Tag lays an enum out as an object holding its variant's name under
+// the key Tag names, with the variant's fields beside it, as most APIs
+// write a choice of shapes: Tag("type") writes Circle(r f64) as
+// {"type":"Circle","r":1.5} and Dot as {"type":"Dot"}. Every field of
+// every variant is named, or the program is refused where it is
+// compiled; with Content, the variant's value goes under a key of its
+// own instead. No field is named as the tag.
+type Tag string impl TypeAttribute
+
+// Content, beside Tag, puts a variant's value under the key Content
+// names, beside its name under the tag's: Tag("type") Content("data")
+// writes Circle(r f64) as {"type":"Circle","data":{"r":1.5}}, Pair(int,
+// int) as {"type":"Pair","data":[1,2]}, and Dot as {"type":"Dot"}.
+// Without Tag, the program is refused where it is compiled.
+type Content string impl TypeAttribute
+
+// Untagged lays an enum out as its variant's value alone, with no name:
+// Circle(r f64) as {"r":1.5}, Bool(bool) as true, Pair(int, int) as
+// [1,2], and Dot as null. Reading takes the first variant, in the order
+// they are declared, whose value the text is, so a variant that takes
+// what an earlier one would is never read back, and two without fields
+// read back as the first. Tries that fail may read the text at most
+// 1024 times its length, so that variants holding the enum, nested
+// deep, are refused rather than doubling the time with each level.
+// With Tag or Content, the program is refused where it is compiled.
+struct Untagged impl TypeAttribute {}
 
 // Marshaler is a type that writes its own JSON: MarshalJSON returns the
 // text of one JSON value, which Marshal writes as it is in place of the
@@ -224,8 +260,9 @@ struct reader {
 	text  ref string
 	at    int
 	first bool
-	depth int
-	ends  map[int]int // where each array or object skipped ends, by where it begins, so that one is skipped once however deep the scans that skip it
+	depth  int
+	ends   map[int]int // where each array or object skipped ends, by where it begins, so that one is skipped once however deep the scans that skip it
+	wasted int         // the bytes read by tries of an untagged enum's variants that failed, which untriedBudget bounds
 }
 
 // An objectKey is one key of an object being read: the bytes of its
@@ -845,6 +882,7 @@ func writeValue<T>(v ref T, w mut writer) {
 			}
 		},
 		struct => {
+			noLayout<T>()
 			w.out.WriteByte(beginObject)
 			first := true
 			for f := range fields(T) {
@@ -863,57 +901,185 @@ func writeValue<T>(v ref T, w mut writer) {
 
 			w.out.WriteByte(endObject)
 		}
-		enum => match v {
-			for c := range variants(T) => {
-				n, named := 0, false
-				for f := range fields(c) {
-					n += 1
-					named = f.name != ""
-				}
+		enum => {
+			checkLayout<T>()
+			untagged, tagged, withContent := attr(T, Untagged).IsSome(), attr(T, Tag).IsSome(), attr(T, Content).IsSome() // constants, so that the default layout's code is all that is left of the choice
+			match v {
+				for c := range variants(T) => {
+					n, named := 0, false
+					for f := range fields(c) {
+						n += 1
+						named = f.name != ""
+					}
 
-				if n == 0 {
-					writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
+					if untagged { // what comes before the variant's value
+						if n == 0 {
+							w.out.WriteString(literalNull)
+							return
+						}
+					} else if tagged {
+						w.out.WriteByte(beginObject)
+						writeQuoted(ref tagOf<T>(), mut w.out)
+						w.out.WriteByte(nameSeparator)
+						writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
 
-					return
-				}
+						if !withContent { // the fields beside the name, each named
+							for f := range fields(c) {
+								if fieldKey(attr(f, Name), f.name) == tagOf<T>() { // constants, folded where they differ
+									if w.bad.IsNone() {
+										w.bad = Some(tagClashMessage(ref tagOf<T>(), c.name))
+									}
+								} else if attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && isEmpty(ref v.[f])) {
+									w.out.WriteByte(valueSeparator)
+									writeQuoted(ref fieldKey(attr(f, Name), f.name), mut w.out)
 
-				w.out.WriteByte(beginObject)
-				writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
+									w.out.WriteByte(nameSeparator)
+									writeValue(ref v.[f], mut w)
+								}
+							}
 
-				w.out.WriteByte(nameSeparator)
-				if named {
-					w.out.WriteByte(beginObject)
-				} else if n > 1 {
-					w.out.WriteByte(beginArray)
-				}
-
-				first := true
-				for f := range fields(c) {
-					if !named || attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && isEmpty(ref v.[f])) { // a named field is left out as a struct's is; an unnamed one keeps its place
-						if !first {
-							w.out.WriteByte(valueSeparator)
+							w.out.WriteByte(endObject)
+							return
 						}
 
-						first = false
-						if named {
-							writeQuoted(ref fieldKey(attr(f, Name), f.name), mut w.out)
-
-							w.out.WriteByte(nameSeparator)
+						if n == 0 {
+							w.out.WriteByte(endObject)
+							return
 						}
 
-						writeValue(ref v.[f], mut w)
+						w.out.WriteByte(valueSeparator)
+						writeQuoted(ref contentOf<T>(), mut w.out)
+						w.out.WriteByte(nameSeparator)
+					} else {
+						if n == 0 {
+							writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
+
+							return
+						}
+
+						w.out.WriteByte(beginObject)
+						writeQuoted(ref fieldKey(attr(c, Name), c.name), mut w.out)
+
+						w.out.WriteByte(nameSeparator)
+					}
+
+					if named {
+						w.out.WriteByte(beginObject)
+					} else if n > 1 {
+						w.out.WriteByte(beginArray)
+					}
+
+					first := true
+					for f := range fields(c) {
+						if !named || attr(f, Skip).IsNone() && !(attr(f, OmitEmpty).IsSome() && isEmpty(ref v.[f])) { // a named field is left out as a struct's is; an unnamed one keeps its place
+							if !first {
+								w.out.WriteByte(valueSeparator)
+							}
+
+							first = false
+							if named {
+								writeQuoted(ref fieldKey(attr(f, Name), f.name), mut w.out)
+
+								w.out.WriteByte(nameSeparator)
+							}
+
+							writeValue(ref v.[f], mut w)
+						}
+					}
+
+					if named {
+						w.out.WriteByte(endObject)
+					} else if n > 1 {
+						w.out.WriteByte(endArray)
+					}
+
+					if !untagged {
+						w.out.WriteByte(endObject) // the object the name or the tag is in
 					}
 				}
-
-				if named {
-					w.out.WriteByte(endObject)
-				} else if n > 1 {
-					w.out.WriteByte(endArray)
-				}
-
-				w.out.WriteByte(endObject)
 			}
+		}
+	}
+}
+
+// checkLayout refuses, when the program is compiled, the layouts of
+// the enum T json cannot write: Content without Tag, Untagged with
+// either, and Tag alone on an enum with a variant whose field is
+// unnamed.
+func checkLayout<T>() {
+	match T {
+		enum => match attr(T, Untagged) {
+			Some(_) => match attr(T, Tag) {
+				Some(_) => refuse("json.Untagged writes no variant's name, so it takes no json.Tag"),
+				None => match attr(T, Content) {
+					Some(_) => refuse("json.Untagged writes no variant's name, so it takes no json.Content"),
+					None => {},
+				},
+			},
+			None => match attr(T, Tag) {
+				Some(_) => match attr(T, Content) {
+					Some(_) => {},
+					None => {
+						for c := range variants(T) {
+							for f := range fields(c) {
+								match f.name {
+									"" => refuse("json.Tag writes a variant's fields beside its name, and " + c.name + " has an unnamed one: name it, or add json.Content"),
+									_ => {},
+								}
+							}
+						}
+					}
+				},
+				None => match attr(T, Content) {
+					Some(_) => refuse("json.Content needs json.Tag, the key a variant's name is written under"),
+					None => {},
+				},
+			},
 		},
+	}
+}
+
+// tagOf returns the key json.Tag gives the enum T, "" when it has none.
+func tagOf<T>() string {
+	return match T {
+		enum => match attr(T, Tag) {
+			Some(tag) => string(tag),
+			None => "",
+		},
+	}
+}
+
+// contentOf returns the key json.Content gives the enum T, "" when it
+// has none.
+func contentOf<T>() string {
+	return match T {
+		enum => match attr(T, Content) {
+			Some(content) => string(content),
+			None => "",
+		},
+	}
+}
+
+// noLayout refuses, when the program is compiled, an enum's layout
+// written on a struct, whose fields are an object whatever is written.
+func noLayout<T>() {
+	match T {
+		struct => {
+			match attr(T, Tag) {
+				Some(_) => refuse("json.Tag lays out an enum's variants, and a struct has none"),
+				None => {},
+			}
+
+			match attr(T, Content) {
+				Some(_) => refuse("json.Content lays out an enum's variants, and a struct has none"),
+				None => {},
+			}
+
+			match attr(T, Untagged) {
+				Some(_) => refuse("json.Untagged lays out an enum's variants, and a struct has none"),
+				None => {},
+			}
+		}
 	}
 }
 
@@ -1423,6 +1589,7 @@ func readValue<T>(r mut reader) Result<T, Error> {
 			}
 		},
 		struct => {
+			noLayout<T>()
 			start := r.at
 			r.expectByte(beginObject)?
 			r.enterNested()?
@@ -1443,30 +1610,114 @@ func readValue<T>(r mut reader) Result<T, Error> {
 			Ok(v)
 		}
 		enum => {
-			start := r.at
-			if r.peek() == quotationMark {
-				name := r.readString()?
-				for c := range variants(T) {
-					n := 0
-					for f := range fields(c) {
-						n += 1
-					}
+			checkLayout<T>()
+			match attr(T, Untagged) { // decided when the program is compiled
+				Some(_) => readUntagged<T>(mut r),
+				None => match attr(T, Tag) {
+					Some(_) => readTagged<T>(mut r, attr(T, Content).IsSome()),
+					None => { // written out here, not through readVariantValue, as the call cost the default layout its time
+						start := r.at
+						if r.peek() == quotationMark {
+							name := r.readString()?
+							for c := range variants(T) {
+								n := 0
+								for f := range fields(c) {
+									n += 1
+								}
 
-					if n == 0 && name == fieldKey(attr(c, Name), c.name) {
-						return Ok(c(for f := range fields(c) { readValue<f.type>(mut r)? }))
+								if n == 0 && name == fieldKey(attr(c, Name), c.name) {
+									return Ok(c(for f := range fields(c) { readValue<f.type>(mut r)? }))
+								}
+							}
+
+							return Err(Error{at: start, msg: "no variant " + name + " without fields"})
+						}
+
+						r.expectByte(beginObject)?
+						r.enterNested()?
+						r.skipSpace()
+						name := r.readString()?
+						r.skipSpace()
+						r.expectByte(nameSeparator)?
+						r.skipSpace()
+						for c := range variants(T) {
+							if name == fieldKey(attr(c, Name), c.name) {
+								n, named := 0, false
+								for f := range fields(c) {
+									n += 1
+									named = f.name != ""
+								}
+
+								v := if named {
+									start := r.at
+									r.expectByte(beginObject)?
+									o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
+									v := c(for f := range fields(c) {
+										if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
+											readValue<f.type>(mut r)?
+										} else {
+											match f.type {
+												E? => None,
+												_ => omittedValue<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absentFieldError(start, ref fieldKey(attr(f, Name), f.name), attr(f, Skip).IsSome())),
+											}
+										}
+									})
+
+									r.finishObject(mut o)?
+									v
+								} else if n == 1 {
+									c(for f := range fields(c) { readValue<f.type>(mut r)? })
+								} else {
+									r.expectByte(beginArray)?
+									r.first = true
+									v := c(for f := range fields(c) { readVariantElement<f.type>(mut r)? })
+									r.skipSpace()
+									r.expectByte(endArray)?
+									v
+								}
+
+								r.skipSpace()
+								r.expectByte(endObject)?
+								r.depth -= 1
+								return Ok(v)
+							}
+						}
+
+						Err(Error{at: start, msg: "no variant " + name})
 					}
+				},
+			}
+		}
+	}
+}
+
+// readUnit returns the variant without fields named name, met at at.
+func readUnit<T>(r mut reader, name ref string, at int) Result<T, Error> {
+	return match T {
+		enum => {
+			for c := range variants(T) {
+				n := 0
+				for f := range fields(c) {
+					n += 1
 				}
 
-				return Err(Error{at: start, msg: "no variant " + name + " without fields"})
+				if n == 0 && name == fieldKey(attr(c, Name), c.name) {
+					return Ok(c(for f := range fields(c) { readValue<f.type>(mut r)? }))
+				}
 			}
 
-			r.expectByte(beginObject)?
-			r.enterNested()?
-			r.skipSpace()
-			name := r.readString()?
-			r.skipSpace()
-			r.expectByte(nameSeparator)?
-			r.skipSpace()
+			Err(Error{at: at, msg: "no variant " + name + " without fields"})
+		}
+	}
+}
+
+// readVariantValue reads the value of the variant named name, whose
+// key or tag was met at at: an object of its named fields, found by
+// key wherever they stand, its one unnamed field's value, or an array
+// of several.
+func readVariantValue<T>(r mut reader, name ref string, at int) Result<T, Error> {
+	return match T {
+		enum => {
 			for c := range variants(T) {
 				if name == fieldKey(attr(c, Name), c.name) {
 					n, named := 0, false
@@ -1475,42 +1726,179 @@ func readValue<T>(r mut reader) Result<T, Error> {
 						named = f.name != ""
 					}
 
-					v := if named {
+					if named {
 						start := r.at
 						r.expectByte(beginObject)?
 						o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
-						v := c(for f := range fields(c) {
-							if attr(f, Skip).IsNone() && r.seekField(mut o, ref fieldKey(attr(f, Name), f.name))? {
-								readValue<f.type>(mut r)?
-							} else {
-								match f.type {
-									E? => None,
-									_ => omittedValue<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absentFieldError(start, ref fieldKey(attr(f, Name), f.name), attr(f, Skip).IsSome())),
-								}
-							}
-						})
-
+						v := readVariantFields<T>(mut r, mut o, name, start)?
 						r.finishObject(mut o)?
-						v
-					} else if n == 1 {
-						c(for f := range fields(c) { readValue<f.type>(mut r)? })
-					} else {
-						r.expectByte(beginArray)?
-						r.first = true
-						v := c(for f := range fields(c) { readVariantElement<f.type>(mut r)? })
-						r.skipSpace()
-						r.expectByte(endArray)?
-						v
+						return Ok(v)
 					}
 
+					if n == 1 {
+						return Ok(c(for f := range fields(c) { readValue<f.type>(mut r)? }))
+					}
+
+					r.expectByte(beginArray)?
+					r.first = true
+					v := c(for f := range fields(c) { readVariantElement<f.type>(mut r)? })
 					r.skipSpace()
-					r.expectByte(endObject)?
-					r.depth -= 1
+					r.expectByte(endArray)?
 					return Ok(v)
 				}
 			}
 
+			Err(Error{at: at, msg: "no variant " + name})
+		}
+	}
+}
+
+// readVariantFields reads the named fields of the variant named name
+// from the members of the object o, found by key wherever they stand:
+// a field the text leaves out takes its default, None, or the empty
+// value it was left out for, as a struct's does.
+func readVariantFields<T>(r mut reader, o mut objectState, name ref string, start int) Result<T, Error> {
+	return match T {
+		enum => {
+			for c := range variants(T) {
+				if name == fieldKey(attr(c, Name), c.name) {
+					return Ok(c(for f := range fields(c) {
+						if attr(f, Skip).IsNone() && r.seekField(o, ref fieldKey(attr(f, Name), f.name))? {
+							readValue<f.type>(mut r)?
+						} else {
+							match f.type {
+								E? => None,
+								_ => omittedValue<f.type>(attr(f, OmitEmpty).IsSome() || attr(f, Skip).IsSome()) ?? return Err(absentFieldError(start, ref fieldKey(attr(f, Name), f.name), attr(f, Skip).IsSome())),
+							}
+						}
+					}))
+				}
+			}
+
 			Err(Error{at: start, msg: "no variant " + name})
+		}
+	}
+}
+
+// readTagged reads a variant laid out with a tag: an object whose
+// member under the tag's key names the variant, wherever it stands,
+// and whose other members are its fields, or, withContent, whose member
+// under the content's key is its value, left out or null for a variant
+// without fields.
+func readTagged<T>(r mut reader, withContent bool) Result<T, Error> {
+	start := r.at
+	tag, content := tagOf<T>(), contentOf<T>()
+	r.expectByte(beginObject)?
+	r.enterNested()?
+	o := objectState{start: start, keys: []objectKey{}, scanned: false, read: 0, end: 0}
+	if !r.seekField(mut o, ref tag)? {
+		return Err(missingFieldError(start, ref tag))
+	}
+
+	name := r.readString()?
+	if !withContent && hasTagField<T>(ref name, ref tag) {
+		return Err(Error{at: start, msg: tagClashMessage(ref tag, name.Clone())})
+	}
+
+	v := if !withContent {
+		readVariantFields<T>(mut r, mut o, ref name, start)?
+	} else if !r.seekField(mut o, ref content)? {
+		if hasFields<T>(ref name) {
+			return Err(missingFieldError(start, ref content))
+		}
+
+		readUnit<T>(mut r, ref name, start)?
+	} else if r.skipLiteral(literalNull) { // a variant without fields may give its content as null
+		readUnit<T>(mut r, ref name, start)?
+	} else {
+		readVariantValue<T>(mut r, ref name, start)?
+	}
+
+	r.finishObject(mut o)?
+	r.depth -= 1
+	return Ok(v)
+}
+
+// hasTagField reports whether the variant of T named name has a field
+// whose key is tag, which json.Tag writes the name under.
+func hasTagField<T>(name ref string, tag ref string) bool {
+	return match T {
+		enum => {
+			for c := range variants(T) {
+				if name == fieldKey(attr(c, Name), c.name) {
+					for f := range fields(c) {
+						if fieldKey(attr(f, Name), f.name) == tag {
+							return true
+						}
+					}
+				}
+			}
+
+			false
+		}
+	}
+}
+
+// tagClashMessage says that the variant has a field keyed as the tag.
+func tagClashMessage(tag ref string, variant string) string {
+	return "json.Tag writes " + variant + "'s name under the key " + tag + ", which one of its fields has too: rename the field, or add json.Content"
+}
+
+// hasFields reports whether T has a variant named name with fields.
+func hasFields<T>(name ref string) bool {
+	return match T {
+		enum => {
+			for c := range variants(T) {
+				if name == fieldKey(attr(c, Name), c.name) {
+					n := 0
+					for f := range fields(c) {
+						n += 1
+					}
+
+					return n > 0
+				}
+			}
+
+			false
+		}
+	}
+}
+
+// readUntagged reads a variant written as its value alone: the first
+// variant, in the order they are declared, whose value the text is,
+// null for one without fields.
+func readUntagged<T>(r mut reader) Result<T, Error> {
+	return match T {
+		enum => {
+			start, depth := r.at, r.depth
+			for c := range variants(T) {
+				n := 0
+				for f := range fields(c) {
+					n += 1
+				}
+
+				name := fieldKey(attr(c, Name), c.name)
+				if n == 0 {
+					if r.skipLiteral(literalNull) {
+						return readUnit<T>(mut r, ref name, start)
+					}
+				} else {
+					match readVariantValue<T>(mut r, ref name, start) {
+						Ok(v) => return Ok(v),
+						Err(_) => {
+							r.wasted += r.at - start
+							if r.wasted > untriedBudget * len(r.text) {
+								return Err(Error{at: start, msg: "untagged values nest too deep to try each variant: the text would take too long to read"})
+							}
+
+							r.at = start
+							r.depth = depth
+						}
+					}
+				}
+			}
+
+			Err(Error{at: start, msg: "no variant fits the text"})
 		}
 	}
 }

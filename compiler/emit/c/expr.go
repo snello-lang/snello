@@ -1256,7 +1256,7 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 		}
 
 		return e.variantValue(t, types.SomeVariant, []string{e.valueTo(lower.Folded(e.info, a.Value), a.Type)}, x.Pos())
-	case types.BuiltinPanic:
+	case types.BuiltinPanic, types.BuiltinRefuse: // a refuse the compiler let pass is on a path no instance takes
 		return "sn_panic(" + e.toString(x.Args[0]) + ")"
 	case types.BuiltinMin, types.BuiltinMax:
 		return e.minCall(x, b)

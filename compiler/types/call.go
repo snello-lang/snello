@@ -599,6 +599,8 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.replaceCall(e)
 	case BuiltinAttr:
 		return c.attrCall(e)
+	case BuiltinRefuse:
+		return c.refuseCall(e)
 	case BuiltinFields, BuiltinVariants:
 		c.errorf(e.Pos(), b.name+" gives a type's parts to a loop, for f := range "+b.name+"(T), which the compiler writes out once per part; it is no value")
 		return invalidOperand

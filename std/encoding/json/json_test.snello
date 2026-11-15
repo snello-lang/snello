@@ -112,6 +112,45 @@ struct Envelope {
 	Body json.Text
 }
 
+// Three layouts of an enum: a tag beside the variant's fields, a tag
+// and a content key, and the value alone.
+enum Figure @json.Tag("type") {
+	Blank
+	Disc(r f64)
+	Frame(w f64, h f64 @json.Name("height")) @json.Name("frame")
+	Caption(text string? @json.OmitEmpty)
+}
+
+enum Message @json.Tag("t") @json.Content("c") {
+	Ping
+	Speak(msg string)
+	Step(int, int)
+	Pin(Point)
+	Toggle(bool)
+}
+
+enum Bare @json.Untagged {
+	Nothing
+	Count(int)
+	Words([]string)
+	Spot(Point)
+	Called(name string)
+	Couple(bool, string)
+}
+
+// Clash has a field keyed as its tag, which json refuses both ways.
+enum Clash @json.Tag("kind") {
+	Ring(kind string, r f64)
+}
+
+// Nest is an untagged enum whose variants hold it, each read whole
+// before the last field tells them apart.
+enum Nest @json.Untagged {
+	Left(*Nest, int)
+	Right(*Nest, string)
+	Leaf(int)
+}
+
 // Ledger holds maps of integer keys, one inside another.
 struct Ledger {
 	Rows   map[i32]string
@@ -582,4 +621,38 @@ func TestIntegerKeys() {
 	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"1\":1,\"\\u0031\":2}")).Error(), "key 1 given twice at offset 7") // the key decoded, as it is read
 	expect.Contains(ref expect.IsErr(json.Unmarshal<map[string]int>("{\"a\":1,\"\\u0061\":2}")).Error(), "key a given twice at offset 7")
 	expect.Contains(ref expect.IsErr(json.Unmarshal<map[int]int>("{\"\\x31\":1}")).Error(), "invalid escape") // a broken escape, as in any string
+}
+
+// An enum laid out with json.Tag, json.Tag and json.Content, or
+// json.Untagged is written and read back in that layout, its tag found
+// wherever it stands, and a text that fits no variant refused with its
+// offset.
+func TestEnumLayouts() {
+	figures := expect.IsOk(json.Marshal(ref []Figure{Blank, Disc(1.5), Frame(2, 3), Caption(None), Caption(Some("x".Clone()))}))
+	expect.Equal(ref figures, `[{"type":"Blank"},{"type":"Disc","r":1.5},{"type":"frame","w":2,"height":3},{"type":"Caption"},{"type":"Caption","text":"x"}]`)
+	roundTrip<[]Figure>(ref figures)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Figure>(`{"r": 4, "type": "Disc", "extra": [1]}`)))), `{"type":"Disc","r":4}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"r":4}`)).Error(), "missing field type at offset 0")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"type":"Hex"}`)).Error(), "no variant Hex at offset 0")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Figure>(`{"type":"Disc"}`)).Error(), "missing field r")
+	messages := expect.IsOk(json.Marshal(ref []Message{Ping, Speak("hi".Clone()), Step(1, 2), Pin(Point{X: 3, Y: 4}), Toggle(true)}))
+	expect.Equal(ref messages, `[{"t":"Ping"},{"t":"Speak","c":{"msg":"hi"}},{"t":"Step","c":[1,2]},{"t":"Pin","c":{"X":3,"Y":4}},{"t":"Toggle","c":true}]`)
+	roundTrip<[]Message>(ref messages)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Message>(`{"c":[5,6],"t":"Step"}`)))), `{"t":"Step","c":[5,6]}`)
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsOk(json.Unmarshal<Message>(`{"t":"Ping","c":null}`)))), `{"t":"Ping"}`)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Message>(`{"t":"Speak"}`)).Error(), "missing field c at offset 0")
+	loose := expect.IsOk(json.Marshal(ref []Bare{Nothing, Count(3), Words([]string{"a".Clone()}), Spot(Point{X: 1, Y: 2}), Called("n".Clone()), Couple(true, "d".Clone())}))
+	expect.Equal(ref loose, `[null,3,["a"],{"X":1,"Y":2},{"name":"n"},[true,"d"]]`)
+	roundTrip<[]Bare>(ref loose)
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Bare>("true")).Error(), "no variant fits the text at offset 0")
+	expect.Contains(ref expect.IsErr(json.Marshal(ref Ring("x".Clone(), 1.0))).Error(), "json.Tag writes Ring's name under the key kind, which one of its fields has too")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Clash>(`{"kind":"Ring","kind":"x","r":1}`)).Error(), "which one of its fields has too")
+	roundTrip<Nest>(`[[[1,"s"],2],"s"]`)
+	deep := "1"
+	for i := 0; i < 40; i++ {
+		deep = "[" + deep + ",\"s\"]"
+	}
+
+	expect.Contains(ref expect.IsErr(json.Unmarshal<Nest>(ref deep)).Error(), "untagged values nest too deep to try each variant") // refused at once, where each level would double the time
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref Disc(1.5), "", " ")), "{\n \"type\": \"Disc\",\n \"r\": 1.5\n}")
 }
