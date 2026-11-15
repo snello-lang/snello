@@ -13,14 +13,13 @@
 void sn_slice_own(const sn_slice *s, const char *what) {
     if (s->cap == SN_VIEW) {
         char buf[160];
-        int n = snprintf(buf, sizeof buf, "%s on a sub-slice: it lends the elements of its slice and cannot change its length", what);
+        int n = snprintf(buf, sizeof buf,
+                         "%s on a sub-slice: it lends the elements of its slice and cannot change its length", what);
         sn_panic(SN_STR(buf, n));
     }
 }
 
-int64_t sn_slice_cap(const sn_slice *s) {
-    return s->cap == SN_VIEW || s->cap == SN_CALLER ? s->len : s->cap;
-}
+int64_t sn_slice_cap(const sn_slice *s) { return s->cap == SN_VIEW || s->cap == SN_CALLER ? s->len : s->cap; }
 
 // sn_slice_unframe gives a slice laid out in a caller's frame a buffer
 // of its own, for a function that keeps the slice past its call: its
@@ -76,7 +75,11 @@ void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size) {
         sn_panic(SN_STR("makeslice: len out of range", 27));
     }
 
-    if (cap < len || (size != 0 && (uint64_t)cap > (uint64_t)PTRDIFF_MAX / size)) { // a capacity whose bytes no address reaches: the product would wrap to a small block
+    if (cap < len ||
+        (size != 0 &&
+         (uint64_t)cap >
+             (uint64_t)PTRDIFF_MAX /
+                 size)) { // a capacity whose bytes no address reaches: the product would wrap to a small block
         sn_panic(SN_STR("makeslice: cap out of range", 27));
     }
 

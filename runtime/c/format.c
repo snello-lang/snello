@@ -20,9 +20,7 @@ sn_string sn_int_to_string(int64_t v) {
     return v < 0 ? sn_format_int(0 - (uint64_t)v, true) : sn_format_int((uint64_t)v, false);
 }
 
-sn_string sn_uint_to_string(uint64_t v) {
-    return sn_format_int(v, false);
-}
+sn_string sn_uint_to_string(uint64_t v) { return sn_format_int(v, false); }
 
 // in_base writes u in a base from 2 to 36, after a minus sign when neg
 // says so, as Go's strconv writes one: a power of two by shifts, any
@@ -68,16 +66,12 @@ sn_string sn_int_base(int64_t v, int64_t base, bool upper) {
     return v < 0 ? in_base(0 - (uint64_t)v, base, true, upper) : in_base((uint64_t)v, base, false, upper);
 }
 
-sn_string sn_uint_base(uint64_t v, int64_t base, bool upper) {
-    return in_base(v, base, false, upper);
-}
+sn_string sn_uint_base(uint64_t v, int64_t base, bool upper) { return in_base(v, base, false, upper); }
 
 // sn_strconv_formatBits is strconv's FormatInt and FormatUint, which
 // have checked the base: u in it, in small letters, negated when neg
 // says so.
-sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg) {
-    return in_base(u, base, neg, false);
-}
+sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg) { return in_base(u, base, neg, false); }
 
 // sn_char prints r as %c does: the character it is, and U+FFFD for a
 // value that is no character, past U+10FFFF or a surrogate.
@@ -113,9 +107,7 @@ sn_string sn_hex(sn_string s, bool upper, bool owned) {
 }
 
 // sn_hex_bytes is sn_hex for a []u8, which it leaves to its owner.
-sn_string sn_hex_bytes(sn_slice b, bool upper) {
-    return sn_hex((sn_string){b.ptr, b.len, 0}, upper, false);
-}
+sn_string sn_hex_bytes(sn_slice b, bool upper) { return sn_hex((sn_string){ b.ptr, b.len, 0 }, upper, false); }
 
 // The most digits a verb asks of a float, after its point or in all:
 // the largest precision a format takes, which the checker holds every
@@ -125,18 +117,16 @@ enum { MOST_DIGITS = 1000000 };
 
 // precision holds a precision to what is written: none below zero and
 // MOST_DIGITS at most.
-static int precision(int64_t prec) {
-    return prec < 0 ? 0 : prec > MOST_DIGITS ? MOST_DIGITS : (int)prec;
-}
+static int precision(int64_t prec) { return prec < 0 ? 0 : prec > MOST_DIGITS ? MOST_DIGITS : (int)prec; }
 
 // Floats print as Go's strconv prints them. A decimal is the digits of
 // a positive finite number, without trailing zeros, and where the point
 // goes among them: 0.25 is "25" with the point at 0, 120 is "12" with
 // the point at 3. The layout around the digits is Go's.
 typedef struct {
-    char *d;  // the digits, from sn_alloc
-    int nd;   // how many
-    int dp;   // the point's place
+    char *d; // the digits, from sn_alloc
+    int nd;  // how many
+    int dp;  // the point's place
 } decimal;
 
 // Shortest digits are Ryū's (Ulf Adams, 2018), as Go's strconv writes
@@ -161,7 +151,8 @@ static int mul_log10_log2(int x) { return (x * 108853) >> 15; } // floor(x * log
 // ryu_digits32 writes the digits of a number below 1e9 from the bounds
 // of its interval, central rounded up when cup says so, ending at
 // endindex.
-static void ryu_digits32(ryu_dec *d, uint32_t lower, uint32_t central, uint32_t upper, bool c0, bool cup, int endindex) {
+static void ryu_digits32(ryu_dec *d, uint32_t lower, uint32_t central, uint32_t upper, bool c0, bool cup,
+                         int endindex) {
     if (upper == 0) {
         d->dp = endindex + 1;
         return;
@@ -575,7 +566,8 @@ static sn_string format_g(double v, int prec, bool f32) {
     }
 
     bool shortest = prec < 0;
-    out_text o = {sn_alloc((size_t)(prec > 0 ? prec : 0) + 340), 0}; // a double's point is never 310 digits from its first
+    out_text o = { sn_alloc((size_t)(prec > 0 ? prec : 0) + 340),
+                   0 }; // a double's point is never 310 digits from its first
     if (signbit(v)) {
         out_byte(&o, '-');
         v = -v;
@@ -618,21 +610,15 @@ static sn_string format_g(double v, int prec, bool f32) {
 // sn_f64_to_string prints v as Go's %v and strconv.FormatFloat(v, 'g',
 // -1, 64) do: the shortest text that reads back as v, 15 for 15.0,
 // 1e+06 for a million, +Inf and NaN.
-sn_string sn_f64_to_string(double v) {
-    return format_g(v, -1, false);
-}
+sn_string sn_f64_to_string(double v) { return format_g(v, -1, false); }
 
 // sn_f32_to_string is sn_f64_to_string for an f32: the fewest digits
 // that read back as the same f32, so 0.1 prints as 0.1.
-sn_string sn_f32_to_string(float v) {
-    return format_g((double)v, -1, true);
-}
+sn_string sn_f32_to_string(float v) { return format_g((double)v, -1, true); }
 
 // sn_f64_g prints v with prec significant digits, as Go's %.3v and
 // %.3g do on a float.
-sn_string sn_f64_g(double v, int64_t prec) {
-    return format_g(v, precision(prec), false);
-}
+sn_string sn_f64_g(double v, int64_t prec) { return format_g(v, precision(prec), false); }
 
 // sn_f64_e prints v as Go's %e does, one digit before the point and
 // prec after it, rounded to them, then the exponent in two digits at
@@ -644,14 +630,14 @@ sn_string sn_f64_e(double v, int64_t digits) {
     }
 
     int prec = precision(digits);
-    out_text o = {sn_alloc((size_t)prec + 16), 0}; // a sign, a digit, the point, the e and its sign, three digits
+    out_text o = { sn_alloc((size_t)prec + 16), 0 }; // a sign, a digit, the point, the e and its sign, three digits
     if (signbit(v)) {
         out_byte(&o, '-');
         v = -v;
     }
 
     char zero = '0';
-    decimal d = {&zero, 1, 1}; // zero's digits: no power of ten scales it
+    decimal d = { &zero, 1, 1 }; // zero's digits: no power of ten scales it
     if (v != 0) {
         decimal_of(v, prec + 1, false, &d);
     }
@@ -664,9 +650,7 @@ sn_string sn_f64_e(double v, int64_t digits) {
     return SN_OWNED(o.p, o.n);
 }
 
-sn_string sn_bool_to_string(bool v) {
-    return v ? SN_STR("true", 4) : SN_STR("false", 5);
-}
+sn_string sn_bool_to_string(bool v) { return v ? SN_STR("true", 4) : SN_STR("false", 5); }
 
 // Fixed-precision digits are Ryū's too, Go's ryuFtoaFixed64: the number
 // scaled by a power of ten to an integer of the digits asked for, with
@@ -676,9 +660,25 @@ sn_string sn_bool_to_string(bool v) {
 // number's exact magnitude, read from seventeen digits, which tell any
 // two doubles apart, plus the digits after the point.
 static const uint64_t pow10_u64[19] = {
-    1u, 10u, 100u, 1000u, 10000u, 100000u, 1000000u, 10000000u, 100000000u, 1000000000u,
-    10000000000u, 100000000000u, 1000000000000u, 10000000000000u, 100000000000000u,
-    1000000000000000u, 10000000000000000u, 100000000000000000u, 1000000000000000000u,
+    1u,
+    10u,
+    100u,
+    1000u,
+    10000u,
+    100000u,
+    1000000u,
+    10000000u,
+    100000000u,
+    1000000000u,
+    10000000000u,
+    100000000000u,
+    1000000000000u,
+    10000000000000u,
+    100000000000000u,
+    1000000000000000u,
+    10000000000000000u,
+    100000000000000000u,
+    1000000000000000000u,
 };
 
 // mult128_top is m times 10^q in the top 64 bits of the 192-bit
@@ -786,7 +786,8 @@ static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec) {
     uint64_t mask = ((uint64_t)1 << extra) - 1, half = (uint64_t)1 << (extra - 1);
     uint64_t frac = di & mask;
     di >>= extra;
-    bool round_up = exact ? (frac > half || (frac == half && !d0) || (frac == half && d0 && (di & 1) == 1)) : (frac >> (extra - 1)) == 1;
+    bool round_up = exact ? (frac > half || (frac == half && !d0) || (frac == half && d0 && (di & 1) == 1))
+                          : (frac >> (extra - 1)) == 1;
     if (frac != 0) {
         d0 = false;
     }
@@ -862,7 +863,7 @@ sn_string sn_f64_fixed(double v, int64_t digits) {
     }
 
     bool neg = signbit(v);
-    sn_decimal a = {.nd = 0, .dp = 0}; // zero has no digits
+    sn_decimal a = { .nd = 0, .dp = 0 }; // zero has no digits
     if (v != 0) {
         exact_digits(&a, neg ? -v : v);
         sn_decimal_round(&a, a.dp + prec);
@@ -958,7 +959,7 @@ sn_string sn_truncate(sn_string s, int64_t prec, bool owned) {
     }
 
     if (!owned) {
-        return (sn_string){s.ptr, i, 0};
+        return (sn_string){ s.ptr, i, 0 };
     }
 
     char *p = sn_alloc((size_t)(i > 0 ? i : 1));

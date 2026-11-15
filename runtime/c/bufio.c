@@ -67,7 +67,7 @@ void sn_bufio_appendBytes(sn_slice_u8 *buf, sn_slice_u8 p) {
 // the program only reads.
 sn_slice_u8 sn_bufio_bytesOf(sn_string s) {
     sn_check_string(s);
-    return (sn_slice_u8){(uint8_t *)s.ptr, s.len, SN_VIEW};
+    return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, SN_VIEW };
 }
 
 // sn_bufio_slide moves the bytes of b from lo up to hi to its start,
@@ -84,22 +84,12 @@ void sn_bufio_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) {
 }
 
 // The bytes package's Buffer moves its bytes as bufio does.
-int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src) {
-    return sn_bufio_copyBytes(dst, src);
-}
+int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src) { return sn_bufio_copyBytes(dst, src); }
 
-int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c) {
-    return sn_bufio_indexByte(p, c);
-}
+int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c) { return sn_bufio_indexByte(p, c); }
 
-void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) {
-    sn_bufio_slide(buf, lo, hi);
-}
+void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) { sn_bufio_slide(buf, lo, hi); }
 
-void sn_bytes_appendString(sn_slice_u8 *buf, sn_string s) {
-    sn_strings_appendString(buf, s);
-}
+void sn_bytes_appendString(sn_slice_u8 *buf, sn_string s) { sn_strings_appendString(buf, s); }
 
-void sn_bytes_reserve(sn_slice_u8 *buf, int64_t n) {
-    sn_strings_reserve(buf, n);
-}
+void sn_bytes_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf, n); }

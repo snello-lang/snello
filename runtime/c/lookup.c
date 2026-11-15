@@ -178,7 +178,7 @@ static struct {
     int queued;
     int idle;
     int threads;
-} pool = {.mu = PTHREAD_MUTEX_INITIALIZER, .ready = PTHREAD_COND_INITIALIZER};
+} pool = { .mu = PTHREAD_MUTEX_INITIALIZER, .ready = PTHREAD_COND_INITIALIZER };
 
 // release lets go of one reference to l, and frees it with the last.
 static void release(lookup *l) {
@@ -206,15 +206,13 @@ static void take_out(lookup *l) {
 // lookup_expire is the timer's: the timeout has passed, and the task is
 // woken unless the lookup woke it first. The task tells the two apart
 // by done, and takes the answer when it has one.
-static void lookup_expire(void *arg) {
-    take_out(arg);
-}
+static void lookup_expire(void *arg) { take_out(arg); }
 
 // resolve looks l's name up, for a stream socket, any family, the
 // addresses in the order the system sorts them, by RFC 6724 where it
 // does, as Go's resolver returns them through the system's.
 static void resolve(lookup *l) {
-    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
     l->code = getaddrinfo(l->name, NULL, &hints, &l->found);
     l->err = l->code == EAI_SYSTEM ? errno : 0;
     atomic_store(&l->done, true);
@@ -310,7 +308,8 @@ static int64_t answer(lookup *l, void *out, sn_string *reason) {
 #endif
         return SN_NET_NO_SUCH_HOST;
     case EAI_SYSTEM:
-        return l->err != 0 ? l->err : EMFILE; // as Go's: glibc has been seen to fail so with no error number, out of descriptors
+        return l->err != 0 ? l->err
+                           : EMFILE; // as Go's: glibc has been seen to fail so with no error number, out of descriptors
     default: {
         const char *why = gai_strerror(l->code);
         *reason = sn_string_clone(SN_STR(why, (int)strlen(why)));

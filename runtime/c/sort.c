@@ -47,12 +47,10 @@ typedef struct {
     bool sorted;
 } sort_run;
 
-#define AT(i) (p + (size_t)(i) * size)
+#define AT(i)  (p + (size_t)(i) * size)
 #define INLINE static inline __attribute__((always_inline))
 
-static inline int ilog2(int64_t n) {
-    return 63 - __builtin_clzll((uint64_t)n | 1);
-}
+static inline int ilog2(int64_t n) { return 63 - __builtin_clzll((uint64_t)n | 1); }
 
 // insert_tail moves p[i] left past the greater elements of p[0:i],
 // which are in order, and stops after an equal one, so the sort is
@@ -230,7 +228,7 @@ INLINE void merge_sort(char *base, int64_t n, size_t size, less_fn less, void *c
             runs[top - 1].power = pw;
         }
 
-        runs[top++] = (sort_run){i, k, 0, true};
+        runs[top++] = (sort_run){ i, k, 0, true };
         i += k;
     }
 
@@ -308,7 +306,8 @@ INLINE void small_sort(char *p, int64_t n, size_t size, less_fn less, void *ctx,
         sort4(AT(4), t + 4 * size, size, less, ctx);
         sort4(AT(half), t + 8 * size, size, less, ctx);
         sort4(AT(half + 4), t + 12 * size, size, less, ctx);
-        if (!merge_halves(t, 8, s, size, less, ctx) || !merge_halves(t + 8 * size, 8, s + (size_t)half * size, size, less, ctx)) {
+        if (!merge_halves(t, 8, s, size, less, ctx) ||
+            !merge_halves(t + 8 * size, 8, s + (size_t)half * size, size, less, ctx)) {
             insertion(p, 1, n, size, less, ctx, one);
             return;
         }
@@ -352,7 +351,8 @@ INLINE const char *median3(const char *a, const char *b, const char *c, less_fn 
 // median3_rec is the median of the medians of three of each of the
 // three regions of n elements at a, b and c, recursively: Tukey's
 // ninther, deepened, so that a pivot of a long slice is near its median.
-static const char *median3_rec(const char *a, const char *b, const char *c, int64_t n, size_t size, less_fn less, void *ctx) {
+static const char *median3_rec(const char *a, const char *b, const char *c, int64_t n, size_t size, less_fn less,
+                               void *ctx) {
     if (n * 8 >= 64) {
         int64_t n8 = n / 8;
         a = median3_rec(a, a + (size_t)(n8 * 4) * size, a + (size_t)(n8 * 7) * size, n8, size, less, ctx);
@@ -376,7 +376,8 @@ INLINE int64_t choose_pivot(const char *p, int64_t n, size_t size, less_fn less,
 // left are written from the front of scratch and the others from its
 // back, the place chosen by a select, and both copied back in order; the
 // pivot itself is not compared with itself.
-INLINE int64_t partition(char *p, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, int64_t at, const char *pivot, bool le) {
+INLINE int64_t partition(char *p, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, int64_t at,
+                         const char *pivot, bool le) {
     char *back = scratch + (size_t)n * size;
     int64_t left = 0;
     const char *e = p;
@@ -419,7 +420,8 @@ typedef struct {
 // and its left side waits on a stack, with the pivot its ancestor: the
 // right side's elements are none less than it, so a pivot there not
 // greater than it equals it.
-INLINE void quicksort(char *base, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, char *pivots, char *one) {
+INLINE void quicksort(char *base, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, char *pivots,
+                      char *one) {
     sort_part waiting[128];
     int top = 0, limit = 2 * ilog2(n), ancestor = -1;
     int64_t at = 0, len = n;
@@ -449,7 +451,7 @@ INLINE void quicksort(char *base, int64_t n, size_t size, less_fn less, void *ct
                 continue;
             }
 
-            waiting[top++] = (sort_part){at, left, limit, ancestor};
+            waiting[top++] = (sort_part){ at, left, limit, ancestor };
             at += left;
             len -= left;
             ancestor = top - 1;
@@ -479,12 +481,13 @@ static inline int64_t sqrt_approx(int64_t n) {
 // elements, fewer than n; two unsorted runs that fit in it together are
 // joined, and the rest merged, each unsorted one sorted first. Since
 // room is less than n, the last merge sorts.
-INLINE void drift(char *base, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, int64_t room, char *pivots, char *one) {
+INLINE void drift(char *base, int64_t n, size_t size, less_fn less, void *ctx, char *scratch, int64_t room,
+                  char *pivots, char *one) {
     int64_t good = n <= 64 * 64 ? (n - n / 2 < 32 ? n - n / 2 : 32) : sqrt_approx(n);
     sort_run runs[max_runs];
     int top = 0;
     for (int64_t i = 0;;) {
-        sort_run next = {i, 0, 0, false};
+        sort_run next = { i, 0, 0, false };
         int pw = 0; // past the end, every run left is merged
         if (i < n) {
             char *p = base + (size_t)i * size;
@@ -511,12 +514,13 @@ INLINE void drift(char *base, int64_t n, size_t size, less_fn less, void *ctx, c
         }
 
         while (top > 1 && runs[top - 2].power > pw) {
-            sort_run *a = &runs[top - 2], *b = &runs[top - 1], *both[2] = {a, b};
+            sort_run *a = &runs[top - 2], *b = &runs[top - 1], *both[2] = { a, b };
             char *p = base + (size_t)a->base * size;
             if (a->sorted || b->sorted || a->len + b->len > room) {
                 for (int k = 0; k < 2; k++) {
                     if (!both[k]->sorted) {
-                        quicksort(base + (size_t)both[k]->base * size, both[k]->len, size, less, ctx, scratch, pivots, one);
+                        quicksort(base + (size_t)both[k]->base * size, both[k]->len, size, less, ctx, scratch, pivots,
+                                  one);
                     }
                 }
 
@@ -574,7 +578,8 @@ INLINE void sort_core(char *base, int64_t n, size_t size, less_fn less, void *ct
 // one for each element type and order, when the program is optimized
 // with the runtime: there the element's size and less are constants, so
 // the switch keeps one case and clang inlines the comparison into it.
-__attribute__((always_inline)) inline void sn_slice_sort(sn_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
+__attribute__((always_inline)) inline void
+sn_slice_sort(sn_slice *s, size_t size, bool (*less)(void *ctx, const void *a, const void *b), void *ctx) {
     sn_check_slice(s);
     if (s->len < 2 || size == 0) {
         return;

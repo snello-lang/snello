@@ -32,8 +32,8 @@ typedef struct {
     int bias;
 } float_info;
 
-static const float_info info32 = {23, 8, -127};
-static const float_info info64 = {52, 11, -1023};
+static const float_info info32 = { 23, 8, -127 };
+static const float_info info64 = { 52, 11, -1023 };
 
 static double f64_of(uint64_t bits) {
     double f;
@@ -257,8 +257,8 @@ static bool read_float(sn_string s, number *x) {
 // exact64 gives mant * 10^exp when a double computes it exactly, or
 // correctly rounded by one operation: the integer itself, the integer
 // times a power of ten a double holds, or divided by one.
-static const double pow10_f64[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
-                                   1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+static const double pow10_f64[] = { 1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+                                    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
 
 static bool exact64(uint64_t mant, int exp, bool neg, double *out) {
     if (mant >> 52 != 0) {
@@ -297,7 +297,7 @@ static bool exact64(uint64_t mant, int exp, bool neg, double *out) {
     return false;
 }
 
-static const float pow10_f32[] = {1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f, 1e6f, 1e7f, 1e8f, 1e9f, 1e10f};
+static const float pow10_f32[] = { 1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f, 1e6f, 1e7f, 1e8f, 1e9f, 1e10f };
 
 static bool exact32(uint64_t mant, int exp, bool neg, float *out) {
     if (mant >> 23 != 0) {
@@ -340,7 +340,7 @@ static bool exact32(uint64_t mant, int exp, bool neg, float *out) {
 // anything below it was cut off: enough to round the value any way, as
 // if from the exact one.
 static uint64_t rounded(uint64_t u) { return (u + 1 + ((u >> 2) & 1)) >> 2; } // to nearest, a tie to even
-static uint64_t unmin(uint64_t x) { return (x << 2) - 2; }                    // the least unrounded number that rounds to x
+static uint64_t unmin(uint64_t x) { return (x << 2) - 2; } // the least unrounded number that rounds to x
 
 static int log2_pow10(int x) { return (x * 108853) >> 15; } // floor(x * log2(10))
 
@@ -531,7 +531,7 @@ int64_t sn_strconv_parseFloat(sn_string s, double *out) {
         return 0;
     }
 
-    number x = {0};
+    number x = { 0 };
     if (!read_float(s, &x)) {
         return 1;
     }
@@ -576,7 +576,7 @@ int64_t sn_strconv_parseFloat32(sn_string s, float *out) {
         return 0;
     }
 
-    number x = {0};
+    number x = { 0 };
     if (!read_float(s, &x)) {
         return 1;
     }
@@ -704,7 +704,7 @@ static uint64_t rounded_integer(const sn_decimal *a) {
 // of the type flt lays out, rounded from every digit of it; range is
 // set when the result is an infinity.
 static uint64_t exact_bits(sn_string s, const float_info *flt, bool *range) {
-    static const int powtab[] = {1, 3, 6, 9, 13, 16, 19, 23, 26}; // the power of two a power of ten is at least
+    static const int powtab[] = { 1, 3, 6, 9, 13, 16, 19, 23, 26 }; // the power of two a power of ten is at least
     sn_decimal d;
     decimal_set(&d, s);
     uint64_t mant = 0;
@@ -728,7 +728,7 @@ static uint64_t exact_bits(sn_string s, const float_info *flt, bool *range) {
             exp -= n;
         }
 
-        exp--; // the digits lie in [0.5, 1), a float's mantissa in [1, 2)
+        exp--;                     // the digits lie in [0.5, 1), a float's mantissa in [1, 2)
         if (exp < flt->bias + 1) { // below the least exponent: a subnormal
             int n = flt->bias + 1 - exp;
             sn_decimal_shift(&d, -n);

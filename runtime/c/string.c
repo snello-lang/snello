@@ -47,7 +47,7 @@ void sn_string_append(sn_string *s, const sn_string *x) {
         sn_free((void *)s->ptr);
     }
 
-    *s = (sn_string){p, n, cap};
+    *s = (sn_string){ p, n, cap };
 }
 
 sn_string sn_concat(sn_string a, sn_string b) {
@@ -170,7 +170,9 @@ static sn_string asciiCase(sn_string s, bool upper) {
 static int caseOf(int kind, const int32_t *rs, int64_t n, int64_t k, int32_t to[3]) {
     int m = sn_uc_special(kind, rs[k], to);
     if (m == 0) {
-        to[0] = kind == SN_UC_UPPER ? sn_rune_upper(rs[k]) : kind == SN_UC_LOWER ? sn_rune_lower(rs[k]) : sn_rune_title(rs[k]);
+        to[0] = kind == SN_UC_UPPER   ? sn_rune_upper(rs[k])
+                : kind == SN_UC_LOWER ? sn_rune_lower(rs[k])
+                                      : sn_rune_title(rs[k]);
         m = 1;
     }
 
@@ -409,7 +411,7 @@ static bool folded(folder *f, int32_t *r) {
 // case folding, statuses C and F of CaseFolding.txt: Unicode's default
 // caseless match.
 bool sn_strings_equalIgnoreCase(sn_string s, sn_string t) {
-    folder a = {s, 0, {0}, 0, 0}, b = {t, 0, {0}, 0, 0};
+    folder a = { s, 0, { 0 }, 0, 0 }, b = { t, 0, { 0 }, 0, 0 };
     for (;;) {
         int32_t x, y;
         bool more = folded(&a, &x), other = folded(&b, &y);
@@ -428,7 +430,7 @@ bool sn_strings_equalIgnoreCase(sn_string s, sn_string t) {
 }
 
 // ascii_space is Go's asciiSpace: the white space below 0x80, by byte.
-static const uint8_t ascii_space[256] = {['\t'] = 1, ['\n'] = 1, ['\v'] = 1, ['\f'] = 1, ['\r'] = 1, [' '] = 1};
+static const uint8_t ascii_space[256] = { ['\t'] = 1, ['\n'] = 1, ['\v'] = 1, ['\f'] = 1, ['\r'] = 1, [' '] = 1 };
 
 // space_at reports whether the rune at p, at most n bytes long, is
 // white space, and its width in w: an ASCII byte by the table, any other
@@ -523,91 +525,91 @@ static int64_t mismatch(const uint8_t *a, const uint8_t *b, int64_t m) {
 // repeats remembers how much of it matched already. X(i) and Y(i) read
 // byte i of the pattern x and of the text y, so that one template
 // searches forwards, and backwards over the reversed bytes.
-#define TWO_WAY(name, X, Y)                                                          \
-    static int64_t name(const uint8_t *y, int64_t n, const uint8_t *x, int64_t m) { \
-        int64_t ell, per;                                                            \
-        {                                                                            \
-            int64_t ms[2], ps[2];                                                    \
-            for (int order = 0; order < 2; order++) {                                \
-                int64_t a = -1, j = 0, k = 1, p = 1;                                 \
-                while (j + k < m) {                                                  \
-                    uint8_t u = X(j + k), v = X(a + k);                              \
-                    if (order == 0 ? u < v : u > v) {                                \
-                        j += k;                                                      \
-                        k = 1;                                                       \
-                        p = j - a;                                                   \
-                    } else if (u == v) {                                             \
-                        if (k != p) {                                                \
-                            k++;                                                     \
-                        } else {                                                     \
-                            j += p;                                                  \
-                            k = 1;                                                   \
-                        }                                                            \
-                    } else {                                                         \
-                        a = j;                                                       \
-                        j = a + 1;                                                   \
-                        k = p = 1;                                                   \
-                    }                                                                \
-                }                                                                    \
-                ms[order] = a;                                                       \
-                ps[order] = p;                                                       \
-            }                                                                        \
-            int which = ms[0] > ms[1] ? 0 : 1;                                       \
-            ell = ms[which];                                                         \
-            per = ps[which];                                                         \
-        }                                                                            \
-        bool periodic = per + ell + 1 <= m;                                          \
-        for (int64_t i = 0; periodic && i <= ell; i++) {                             \
-            periodic = X(i) == X(i + per);                                           \
-        }                                                                            \
-        if (periodic) {                                                              \
-            int64_t memory = -1;                                                     \
-            for (int64_t j = 0; j <= n - m;) {                                       \
-                int64_t i = (ell > memory ? ell : memory) + 1;                       \
-                while (i < m && X(i) == Y(i + j)) {                                  \
-                    i++;                                                             \
-                }                                                                    \
-                if (i >= m) {                                                        \
-                    i = ell;                                                         \
-                    while (i > memory && X(i) == Y(i + j)) {                         \
-                        i--;                                                         \
-                    }                                                                \
-                    if (i <= memory) {                                               \
-                        return j;                                                    \
-                    }                                                                \
-                    j += per;                                                        \
-                    memory = m - per - 1;                                            \
-                } else {                                                             \
-                    j += i - ell;                                                    \
-                    memory = -1;                                                     \
-                }                                                                    \
-            }                                                                        \
-        } else {                                                                     \
-            per = (ell + 1 > m - ell - 1 ? ell + 1 : m - ell - 1) + 1;               \
-            for (int64_t j = 0; j <= n - m;) {                                       \
-                int64_t i = ell + 1;                                                 \
-                while (i < m && X(i) == Y(i + j)) {                                  \
-                    i++;                                                             \
-                }                                                                    \
-                if (i >= m) {                                                        \
-                    i = ell;                                                         \
-                    while (i >= 0 && X(i) == Y(i + j)) {                             \
-                        i--;                                                         \
-                    }                                                                \
-                    if (i < 0) {                                                     \
-                        return j;                                                    \
-                    }                                                                \
-                    j += per;                                                        \
-                } else {                                                             \
-                    j += i - ell;                                                    \
-                }                                                                    \
-            }                                                                        \
-        }                                                                            \
-        return -1;                                                                   \
+#define TWO_WAY(name, X, Y)                                                                                            \
+    static int64_t name(const uint8_t *y, int64_t n, const uint8_t *x, int64_t m) {                                    \
+        int64_t ell, per;                                                                                              \
+        {                                                                                                              \
+            int64_t ms[2], ps[2];                                                                                      \
+            for (int order = 0; order < 2; order++) {                                                                  \
+                int64_t a = -1, j = 0, k = 1, p = 1;                                                                   \
+                while (j + k < m) {                                                                                    \
+                    uint8_t u = X(j + k), v = X(a + k);                                                                \
+                    if (order == 0 ? u < v : u > v) {                                                                  \
+                        j += k;                                                                                        \
+                        k = 1;                                                                                         \
+                        p = j - a;                                                                                     \
+                    } else if (u == v) {                                                                               \
+                        if (k != p) {                                                                                  \
+                            k++;                                                                                       \
+                        } else {                                                                                       \
+                            j += p;                                                                                    \
+                            k = 1;                                                                                     \
+                        }                                                                                              \
+                    } else {                                                                                           \
+                        a = j;                                                                                         \
+                        j = a + 1;                                                                                     \
+                        k = p = 1;                                                                                     \
+                    }                                                                                                  \
+                }                                                                                                      \
+                ms[order] = a;                                                                                         \
+                ps[order] = p;                                                                                         \
+            }                                                                                                          \
+            int which = ms[0] > ms[1] ? 0 : 1;                                                                         \
+            ell = ms[which];                                                                                           \
+            per = ps[which];                                                                                           \
+        }                                                                                                              \
+        bool periodic = per + ell + 1 <= m;                                                                            \
+        for (int64_t i = 0; periodic && i <= ell; i++) {                                                               \
+            periodic = X(i) == X(i + per);                                                                             \
+        }                                                                                                              \
+        if (periodic) {                                                                                                \
+            int64_t memory = -1;                                                                                       \
+            for (int64_t j = 0; j <= n - m;) {                                                                         \
+                int64_t i = (ell > memory ? ell : memory) + 1;                                                         \
+                while (i < m && X(i) == Y(i + j)) {                                                                    \
+                    i++;                                                                                               \
+                }                                                                                                      \
+                if (i >= m) {                                                                                          \
+                    i = ell;                                                                                           \
+                    while (i > memory && X(i) == Y(i + j)) {                                                           \
+                        i--;                                                                                           \
+                    }                                                                                                  \
+                    if (i <= memory) {                                                                                 \
+                        return j;                                                                                      \
+                    }                                                                                                  \
+                    j += per;                                                                                          \
+                    memory = m - per - 1;                                                                              \
+                } else {                                                                                               \
+                    j += i - ell;                                                                                      \
+                    memory = -1;                                                                                       \
+                }                                                                                                      \
+            }                                                                                                          \
+        } else {                                                                                                       \
+            per = (ell + 1 > m - ell - 1 ? ell + 1 : m - ell - 1) + 1;                                                 \
+            for (int64_t j = 0; j <= n - m;) {                                                                         \
+                int64_t i = ell + 1;                                                                                   \
+                while (i < m && X(i) == Y(i + j)) {                                                                    \
+                    i++;                                                                                               \
+                }                                                                                                      \
+                if (i >= m) {                                                                                          \
+                    i = ell;                                                                                           \
+                    while (i >= 0 && X(i) == Y(i + j)) {                                                               \
+                        i--;                                                                                           \
+                    }                                                                                                  \
+                    if (i < 0) {                                                                                       \
+                        return j;                                                                                      \
+                    }                                                                                                  \
+                    j += per;                                                                                          \
+                } else {                                                                                               \
+                    j += i - ell;                                                                                      \
+                }                                                                                                      \
+            }                                                                                                          \
+        }                                                                                                              \
+        return -1;                                                                                                     \
     }
 
-#define FORWARD_X(i) x[i]
-#define FORWARD_Y(i) y[i]
+#define FORWARD_X(i)  x[i]
+#define FORWARD_Y(i)  y[i]
 #define BACKWARD_X(i) x[m - 1 - (i)]
 #define BACKWARD_Y(i) y[n - 1 - (i)]
 
@@ -754,7 +756,8 @@ int64_t sn_string_last_index(sn_string s, sn_string t) {
     uint64_t first = lo * q[0], second = lo * q[1];
     int64_t last = n - m; // the last offset t fits at
     int64_t i = last - 7, work = 0;
-    for (; i >= 0; i -= 8) { // the offsets i to i+7, the word one byte on ending at p[i+8], within s as m is two or more
+    for (; i >= 0;
+         i -= 8) { // the offsets i to i+7, the word one byte on ending at p[i+8], within s as m is two or more
         uint64_t w0, w1;
         memcpy(&w0, p + i, 8);
         memcpy(&w1, p + i + 1, 8);
@@ -909,9 +912,7 @@ sn_string sn_trim_prefix(sn_string s, sn_string p) {
     return sn_has_prefix(s, p) ? SN_STR(s.ptr + p.len, s.len - p.len) : s;
 }
 
-sn_string sn_trim_suffix(sn_string s, sn_string p) {
-    return sn_has_suffix(s, p) ? SN_STR(s.ptr, s.len - p.len) : s;
-}
+sn_string sn_trim_suffix(sn_string s, sn_string p) { return sn_has_suffix(s, p) ? SN_STR(s.ptr, s.len - p.len) : s; }
 
 // sn_split_n splits s at sep into at most n views of s, the last
 // holding the rest, as sn_split splits it; n of zero or less gives
@@ -971,9 +972,7 @@ bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
 
 // sn_bytes_find returns the offset of the first run of a's bytes equal
 // to b, or -1, by the search a string's Index makes.
-int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) {
-    return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len));
-}
+int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) { return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len)); }
 
 // sn_fields splits s around runs of white space, the runes Go's
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
@@ -1163,7 +1162,7 @@ sn_string sn_strings_ownString(sn_slice_u8 b) {
         return SN_STR("", 0);
     }
 
-    return (sn_string){b.ptr, b.len, b.cap};
+    return (sn_string){ b.ptr, b.len, b.cap };
 }
 
 // sn_encoding__json_textOf lends the bytes of b as a string, with no copy: a

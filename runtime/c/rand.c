@@ -35,10 +35,10 @@
 #include <unistd.h>
 
 enum {
-    counter_step = 4,  // a refill is four blocks, each its own counter
-    counter_max = 16,  // the generator is keyed again when the counter reaches it
-    chunk = 32,        // a refill gives 32 numbers
-    rekey = 4,         // the last four numbers of the last refill are the next key
+    counter_step = 4, // a refill is four blocks, each its own counter
+    counter_max = 16, // the generator is keyed again when the counter reaches it
+    chunk = 32,       // a refill gives 32 numbers
+    rekey = 4,        // the last four numbers of the last refill are the next key
 };
 
 typedef struct {
@@ -53,10 +53,10 @@ typedef struct {
 // assembly does by hand, and as plain words where there are none.
 typedef uint32_t lanes __attribute__((vector_size(16)));
 
-#define QR(a, b, c, d)                     \
-    a += b, d ^= a, d = d << 16 | d >> 16; \
-    c += d, b ^= c, b = b << 12 | b >> 20; \
-    a += b, d ^= a, d = d << 8 | d >> 24;  \
+#define QR(a, b, c, d)                                                                                                 \
+    a += b, d ^= a, d = d << 16 | d >> 16;                                                                             \
+    c += d, b ^= c, b = b << 12 | b >> 20;                                                                             \
+    a += b, d ^= a, d = d << 8 | d >> 24;                                                                              \
     c += d, b ^= c, b = b << 7 | b >> 25;
 
 // block fills buf from the key and the counter: four ChaCha8 blocks,
@@ -69,20 +69,20 @@ static void block(const uint64_t seed[4], uint64_t buf[chunk], uint32_t counter)
     lanes key[8], x[16];
     for (int r = 0; r < 4; r++) {
         uint32_t lo = (uint32_t)seed[r], hi = (uint32_t)(seed[r] >> 32);
-        key[2 * r] = (lanes){lo, lo, lo, lo};
-        key[2 * r + 1] = (lanes){hi, hi, hi, hi};
+        key[2 * r] = (lanes){ lo, lo, lo, lo };
+        key[2 * r + 1] = (lanes){ hi, hi, hi, hi };
     }
 
-    x[0] = (lanes){0x61707865, 0x61707865, 0x61707865, 0x61707865};
-    x[1] = (lanes){0x3320646e, 0x3320646e, 0x3320646e, 0x3320646e};
-    x[2] = (lanes){0x79622d32, 0x79622d32, 0x79622d32, 0x79622d32};
-    x[3] = (lanes){0x6b206574, 0x6b206574, 0x6b206574, 0x6b206574};
+    x[0] = (lanes){ 0x61707865, 0x61707865, 0x61707865, 0x61707865 };
+    x[1] = (lanes){ 0x3320646e, 0x3320646e, 0x3320646e, 0x3320646e };
+    x[2] = (lanes){ 0x79622d32, 0x79622d32, 0x79622d32, 0x79622d32 };
+    x[3] = (lanes){ 0x6b206574, 0x6b206574, 0x6b206574, 0x6b206574 };
     for (int r = 0; r < 8; r++) {
         x[4 + r] = key[r];
     }
 
-    x[12] = (lanes){counter, counter + 1, counter + 2, counter + 3};
-    x[13] = x[14] = x[15] = (lanes){0, 0, 0, 0};
+    x[12] = (lanes){ counter, counter + 1, counter + 2, counter + 3 };
+    x[13] = x[14] = x[15] = (lanes){ 0, 0, 0, 0 };
     for (int round = 0; round < 4; round++) {
         QR(x[0], x[4], x[8], x[12])
         QR(x[1], x[5], x[9], x[13])
@@ -166,7 +166,7 @@ static bool system_key(uint64_t seed[4]) {
 // word: a program still runs, on numbers that one who knows when it
 // started could work out.
 static void clock_key(uint64_t seed[4]) {
-    struct timespec ts = {0};
+    struct timespec ts = { 0 };
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t v = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
     for (int i = 0; i < 4; i++) {

@@ -76,12 +76,12 @@ double sn_math_Copysign(double x, double sign) { return copysign(x, sign); }
 // The functions of math/bits under the library's names, each the
 // header's: a call the program writes is the instruction, written in
 // its place, and these are what a value of one of them calls.
-#define SN_BITS_NAMED(S, W, T)                                                              \
-    int64_t sn_math__bits_LeadingZeros##S(T x) { return sn_bits_LeadingZeros##W(x); }        \
-    int64_t sn_math__bits_TrailingZeros##S(T x) { return sn_bits_TrailingZeros##W(x); }      \
-    int64_t sn_math__bits_OnesCount##S(T x) { return sn_bits_OnesCount##W(x); }              \
-    int64_t sn_math__bits_Len##S(T x) { return sn_bits_Len##W(x); }                          \
-    T sn_math__bits_Reverse##S(T x) { return sn_bits_Reverse##W(x); }                        \
+#define SN_BITS_NAMED(S, W, T)                                                                                         \
+    int64_t sn_math__bits_LeadingZeros##S(T x) { return sn_bits_LeadingZeros##W(x); }                                  \
+    int64_t sn_math__bits_TrailingZeros##S(T x) { return sn_bits_TrailingZeros##W(x); }                                \
+    int64_t sn_math__bits_OnesCount##S(T x) { return sn_bits_OnesCount##W(x); }                                        \
+    int64_t sn_math__bits_Len##S(T x) { return sn_bits_Len##W(x); }                                                    \
+    T sn_math__bits_Reverse##S(T x) { return sn_bits_Reverse##W(x); }                                                  \
     T sn_math__bits_RotateLeft##S(T x, int64_t k) { return sn_bits_RotateLeft##W(x, k); }
 
 SN_BITS_NAMED(, 64, uint64_t)
