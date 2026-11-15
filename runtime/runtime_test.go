@@ -1672,6 +1672,42 @@ int main(void) {
 	}
 }
 
+// TestPieces holds the appends, which copy a short piece without
+// memcpy, to a byte-by-byte reference: pieces of every length to forty
+// appended to a builder and to a string.
+func TestPieces(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+static uint64_t seed = 88172645463325252ull;
+static uint64_t next(void) { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; }
+int main(void) {
+    static uint8_t piece[41], want[4000];
+    int bad = 0;
+    sn_slice_u8 built = {NULL, 0, 0};
+    sn_string joined = {(const uint8_t *)"", 0, 0};
+    int64_t total = 0;
+    for (int64_t n = 0; n <= 40 && bad < 10; n++) {
+        for (int64_t i = 0; i < n; i++) piece[i] = (uint8_t)next();
+        sn_string p = {piece, n, 0};
+        sn_strings_appendString(&built, p);
+        sn_string_append(&joined, &p);
+        memcpy(want + total, piece, (size_t)n);
+        total += n;
+        if (built.len != total || memcmp(built.ptr, want, (size_t)total) != 0) { printf("builder after %lld\n", (long long)n); bad++; }
+        if (joined.len != total || memcmp(joined.ptr, want, (size_t)total) != 0) { printf("string after %lld\n", (long long)n); bad++; }
+    }
+    sn_slice_free((sn_slice *)&built);
+    sn_string_drop(&joined);
+    return bad;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "pieces"), probe)
+	if out, err := exec.Command(bin).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestSearchLinear times the searches on a text and a pattern that
 // repeat with a period of sixteen, the pattern failing only at its far
 // end: a search that compared the whole pattern at every candidate would

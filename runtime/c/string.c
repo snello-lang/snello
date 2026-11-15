@@ -26,7 +26,7 @@ void sn_string_append(sn_string *s, const sn_string *x) {
 
     int64_t n = s->len + x->len;
     if (s->cap >= n) {
-        memcpy((uint8_t *)s->ptr + s->len, x->ptr, (size_t)x->len);
+        sn_copy_piece((uint8_t *)s->ptr + s->len, (const uint8_t *)x->ptr, (size_t)x->len);
         s->len = n;
         return;
     }
@@ -1212,7 +1212,7 @@ void sn_strings_appendString(sn_slice_u8 *buf, sn_string s) {
 
     sn_slice_own(b, "WriteString");
     sn_slice_grow(b, b->len + s.len, 1);
-    memcpy((uint8_t *)b->ptr + b->len, s.ptr, (size_t)s.len);
+    sn_copy_piece((uint8_t *)b->ptr + b->len, (const uint8_t *)s.ptr, (size_t)s.len);
     b->len += s.len;
 }
 
