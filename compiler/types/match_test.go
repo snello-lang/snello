@@ -57,3 +57,34 @@ func TestMatchConditions(t *testing.T) {
 		}
 	}
 }
+
+// TestMissing checks the exhaustiveness check's witnesses: a variant no
+// arm names, written with _ for its fields, inside a tuple and an
+// option; and that the check ends for a type that holds itself by
+// value, which it opens only as deep as the patterns go.
+func TestMissing(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{"func f(s State, b bool) int { return match (s, b) { (Closed, _) => 0, (_, true) => 1 } }", []string{"match is not exhaustive: missing (Open(_), false)"}},
+		{"func f(o State?) int { return match o { Some(Closed) => 0, None => 1 } }", []string{"match is not exhaustive: missing Some(Open(_))"}},
+		{"func f(o State?) int { return match o { Some(_) => 0, None => 1 } }", nil},
+		{"func f(o State?, b bool) int { return match (o, b) { (_, true) => 0, (None, false) => 1 } }", []string{"match is not exhaustive: missing (Some(_), false)"}},
+		{"enum U { A(U, int); Z(int) }\nfunc get() U? { return None }\nfunc f() int { return match get() { Some(_) => 0, None => 1 } }", []string{"invalid recursive type U: it contains itself"}}, // ended once U was refused
+		{"enum U { A(U, int); Z(int) }\nfunc f(u U) int { return match u { A(A(_, _), _) => 0, Z(_) => 1 } }", []string{"invalid recursive type U: it contains itself", "match is not exhaustive: missing A(Z(_), _)"}},
+	}
+	for _, tt := range tests {
+		got := checkErrors(t, prelude+tt.src)
+		if len(got) != len(tt.want) {
+			t.Errorf("%s:\n  got %d errors %q\n  want %d %q", tt.src, len(got), got, len(tt.want), tt.want)
+			continue
+		}
+
+		for i := range got {
+			if !strings.Contains(got[i], tt.want[i]) {
+				t.Errorf("%s:\n  got  %q\n  want %q", tt.src, got[i], tt.want[i])
+			}
+		}
+	}
+}

@@ -380,9 +380,12 @@ func appendRows(rows [][]pat, p pat) [][]pat {
 // missing reports a value the rows do not match, as a witness pattern
 // per column, or nil when the rows are exhaustive. It is the usefulness
 // check of Maranget's "Warnings for pattern matching": a wildcard row is
-// useful exactly when the match is not exhaustive. Each step splits the
-// first column by its constructors; a column whose type has too many
-// values to list keeps only the rows that accept anything there.
+// useful exactly when the match is not exhaustive. A step splits the
+// first column by its constructors when its rows name every one of
+// them; otherwise it keeps the rows that accept anything there, and a
+// value they miss is one with a constructor no row names. So it opens a
+// type only as deep as the patterns go, and ends for a type that holds
+// itself, as one refused for holding itself by value does.
 func missing(types []Type, rows [][]pat) []string {
 	if len(types) == 0 {
 		if len(rows) == 0 {
@@ -394,7 +397,7 @@ func missing(types []Type, rows [][]pat) []string {
 
 	t := types[0]
 	n := numCtors(t)
-	if n < 0 {
+	if absent := absentCtor(rows, n); n < 0 || absent >= 0 {
 		var rest [][]pat
 		for _, row := range rows {
 			if row[0].ctor == wildcard {
@@ -402,11 +405,15 @@ func missing(types []Type, rows [][]pat) []string {
 			}
 		}
 
-		if w := missing(types[1:], rest); w != nil {
+		w := missing(types[1:], rest)
+		switch {
+		case w == nil:
+			return nil
+		case n < 0:
 			return append([]string{"_"}, w...)
 		}
 
-		return nil
+		return append([]string{ctorString(t, absent, wildStrings(len(ctorArgs(t, absent))))}, w...)
 	}
 
 	for ctor := 0; ctor < n; ctor++ {
@@ -418,6 +425,48 @@ func missing(types []Type, rows [][]pat) []string {
 	}
 
 	return nil
+}
+
+// absentCtor returns the first of a type's n constructors no row names
+// in its first column, or -1 when the rows name them all or the type's
+// values are too many to list.
+func absentCtor(rows [][]pat, n int) int {
+	if n <= 0 {
+		return -1
+	}
+
+	var namedSmall [8]bool // most types have few constructors: no list is made for them
+	var named []bool
+	if n <= len(namedSmall) {
+		named = namedSmall[:n]
+	} else {
+		named = make([]bool, n)
+	}
+
+	for _, row := range rows {
+		if c := row[0].ctor; c >= 0 && c < n {
+			named[c] = true
+		}
+	}
+
+	for c, ok := range named {
+		if !ok {
+			return c
+		}
+	}
+
+	return -1
+}
+
+// wildStrings returns k wildcards, the arguments a witness gives a
+// constructor no row names.
+func wildStrings(k int) []string {
+	w := make([]string, k)
+	for i := range w {
+		w[i] = "_"
+	}
+
+	return w
 }
 
 // specialize keeps the rows that can match the constructor in the first
