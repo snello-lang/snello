@@ -101,6 +101,11 @@ struct Room {
 	Seen Celsius?
 }
 
+// Latin writes a byte that is no UTF-8.
+struct Latin impl json.Marshaler { n int }
+
+func (l ref Latin) MarshalJSON() Result<string, json.Error> { return Ok("\"caf\xe9\"") }
+
 // An Envelope reads the part it knows and passes the rest through.
 struct Envelope {
 	Kind string
@@ -396,15 +401,15 @@ func TestValueRoundTrip() {
 // takes one out, and neither touches a value that is no object.
 func TestValueChange() {
 	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a": 1, "b": 2}`))
-	expect.True(v.Set("a".Clone(), json.String("one".Clone())))
+	expect.True(v.Set("a".Clone(), json.String("one")))
 	expect.True(v.Set("c".Clone(), json.Null))
 	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","b":2,"c":null}`)
 	expect.True(expect.IsSome(v.Remove("b")).Kind() == json.NumberKind)
 	expect.IsNone(v.Remove("b"))
 	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"a":"one","c":null}`)
-	var n json.Value = json.Number("12".Clone())
+	var n json.Value = json.Number("12")
 	expect.False(n.Set("a".Clone(), json.Null))
-	expect.Equal(ref expect.IsErr(json.Marshal(ref json.Number("1x".Clone()))).Error(), "json: a json.Number holds \"1x\", which is no JSON number")
+	expect.Equal(ref expect.IsErr(json.Marshal(ref json.Number("1x"))).Error(), "json: a json.Number holds \"1x\", which is no JSON number")
 }
 
 // A Doc's node made into a Value is the Value Unmarshal reads.
@@ -423,4 +428,62 @@ func TestText() {
 	expect.Equal(ref expect.IsOk(json.Marshal(ref e)), `{"Kind":"point","Body":{"x":1,"y":[2,3]}}`)
 	expect.Equal(ref expect.IsOk(json.Text.Of(" [1, 2] ")).JSON(), "[1, 2]")
 	expect.Contains(ref expect.IsErr(json.Text.Of("[1, 2")).Error(), "expected ]")
+}
+
+// A Value holds no key twice: Unmarshal refuses one, as it does for a
+// struct, and a Doc's node keeps the first, as Get finds it.
+func TestValueKeys() {
+	expect.Equal(ref expect.IsErr(json.Unmarshal<json.Value>(`{"role": "user", "role": "admin"}`)).Error(), "json: key role given twice at offset 17")
+	many := `{"k0":0,"k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10,"k11":11,"k12":12,"k13":13,"k14":14,"k15":15,"k16":16,"k3":3}`
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(many)).Error(), "key k3 given twice") // past the members it scans, found in the set
+	doc := json.Parse(`{"role": "user", "role": "admin"}`).Expect("parse")
+	v := doc.Value(doc.Root())
+	expect.Equal(ref expect.IsOk(json.Marshal(ref v)), `{"role":"user"}`)
+}
+
+// The edges of reading a Value: an array's kind and length, an index out
+// of range either way, pointers with escapes, a bad escape and no
+// leading /, the depth limit, and text that is no JSON value.
+func TestValueEdges() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a/b": {"m~n": [1, 2]}, "arr": [10, 20, 30]}`))
+	arr := v.Get("arr").Expect("arr")
+	expect.True(arr.Kind() == json.ArrayKind)
+	expect.Equal(ref arr.Len(), ref 3)
+	expect.True(arr.Index(-1).IsNone())
+	expect.True(arr.Index(3).IsNone())
+	expect.Equal(ref expect.IsSome(v.At("/a~1b/m~0n/1").Expect("pointer").Int()), ref 2)
+	expect.True(v.At("/a~2b").IsNone())
+	expect.True(v.At("/arr~").IsNone())
+	expect.True(v.At("arr").IsNone())
+	deep := (strings.Repeat("[", 129) ?? "") + (strings.Repeat("]", 129) ?? "")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(ref deep)).Error(), "exceeded max depth")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`{"a" 1}`)).Error(), "expected :")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`{1: 2}`)).Error(), "expected a key")
+	expect.Contains(ref expect.IsErr(json.Unmarshal<json.Value>(`[1, -]`)).Error(), "expected")
+	doc := json.Parse(`{"a/b": 1}`).Expect("parse")
+	expect.True(doc.At(doc.Root(), "/a~2b").IsNone())
+}
+
+// Int takes an integer as JSON writes one and Float any number; neither
+// takes a Number whose text is no JSON number, which Marshal refuses.
+func TestValueNumbers() {
+	v := expect.IsOk(json.Unmarshal<json.Value>(`[1.0, 1e2, 1e400, -7]`))
+	expect.True(v.Index(0).Expect("1.0").Int().IsNone())
+	expect.True(v.Index(1).Expect("1e2").Int().IsNone())
+	expect.Equal(ref expect.IsSome(v.Index(1).Expect("1e2").Float()), ref 100.0)
+	expect.True(v.Index(2).Expect("1e400").Float().IsNone())
+	expect.Equal(ref expect.IsSome(v.Index(3).Expect("-7").Int()), ref -7)
+	for _, text := range []string{"007", "+5", "NaN", ""} {
+		n := json.Number(text.Clone())
+		expect.True(n.Int().IsNone())
+		expect.True(n.Float().IsNone())
+		expect.Contains(ref expect.IsErr(json.Marshal(ref n)).Error(), "which is no JSON number")
+	}
+}
+
+// Text written back as it is must be UTF-8, as JSON text is: a Text or
+// a MarshalJSON result holding other bytes is refused.
+func TestTextUTF8() {
+	expect.Contains(ref expect.IsErr(json.Text.Of("\"a\xffb\"")).Error(), "invalid UTF-8")
+	expect.Equal(ref expect.IsErr(json.Marshal(ref Latin{n: 1})).Error(), "json: MarshalJSON gave text that is not one JSON value")
 }

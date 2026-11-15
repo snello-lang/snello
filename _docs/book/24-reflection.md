@@ -144,7 +144,12 @@ Types that grow without end are refused too: a function that, through its arms, 
 ## `encoding/json`
 
 ```go
-struct Server { Host string = "localhost"; Port int = 8080; Tags []string; At Point? }
+struct Server {
+	Host string = "localhost"
+	Port int = 8080
+	Tags []string
+	At   Point?
+}
 
 text := json.Marshal(ref server)?             // {"Host":"h","Port":1,"Tags":["a"],"At":null}
 back := json.Unmarshal<Server>(ref text)?
@@ -156,7 +161,7 @@ Reading holds the text to JSON's grammar: `01`, `+1`, `.5`, a member without its
 
 A field is written under its declared name unless an attribute says otherwise: `@json.Name("host")` renames a field, a variant or a variant's field, `@json.OmitEmpty` leaves a field out when it is `None`, `""`, `[]` or `{}` and reads it back as empty, and `@json.Skip` keeps a field out of the text both ways (chapter 25). A type that lists `json.Marshaler` writes its own JSON, `func (c ref Celsius) MarshalJSON() Result<string, json.Error>`, which `Marshal` checks is one JSON value, and one that lists `json.Unmarshaler` reads its own, `func Celsius.UnmarshalJSON(text ref string) Result<Celsius, json.Error>`, given the raw text of its value; an offset in its error, made with `json.Error.At`, counts from where that value began.
 
-JSON without a type has two readers. `json.Parse(ref text)` checks the text once and indexes it into a `json.Doc`, which reads in place: `doc.Get(n, "servers")`, `doc.At(n, "/servers/0/port")`, `doc.Int(n)`, `doc.StringInPlace(n)` with nothing copied, and `doc.Decode<Server>(n)` for one part as a type. `json.Unmarshal<json.Value>(text)` reads an owned tree instead, which outlives the text: a number keeps its text, `json.Number("9007199254740993")`, an object its members in order, and `Marshal` writes it back as it was. A field of type `json.Text` passes its part of the input through unread.
+JSON without a type has two readers. `json.Parse(ref text)` checks the text once and indexes it into a `json.Doc`, which reads in place: `doc.Get(n, "servers")`, `doc.At(n, "/servers/0/port")`, `doc.Int(n)`, `doc.StringInPlace(n)` with nothing copied, and `doc.Decode<Server>(n)` for one part as a type. `json.Unmarshal<json.Value>(text)` reads an owned tree instead, which outlives the text: a number keeps its text, `json.Number("9007199254740993")`, an object its members in order, each key once, and `Marshal` writes it back compacted, its numbers and its members' order kept. A field of type `json.Text` passes its part of the input through unread.
 
 ## Memory safe, no collector
 

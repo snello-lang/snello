@@ -67,6 +67,11 @@ const escapedTilde = "~0"
 // and each level of nesting the reader goes into takes a frame of it.
 const maxDepth = 128
 
+// scannedKeys is how many members of an object a Value's reader finds
+// a repeated key among by looking at each; past it, the keys are kept
+// in a set, so that an object of many members is read in linear time.
+const scannedKeys = 16
+
 // controlEnd is where the control characters end, U+0000 to U+001F,
 // which RFC 8259 has a string escape and never hold as they are.
 const controlEnd byte = 0x20
@@ -160,8 +165,9 @@ struct Members {
 // A Value is JSON read without a type, owned, so that it outlives the
 // text it was read from. A number keeps its text, so that a 64-bit
 // integer or a long decimal is written back as it was read; an object
-// keeps its members in the order the text has them, a key given twice
-// kept twice, Get finding the first. It is read and written as any type
+// keeps its members in the order the text has them, and never a key
+// twice: Unmarshal refuses one given twice, as it does for a struct,
+// and doc.Value keeps the first, as Doc.Get finds it. It is read and written as any type
 // is, Unmarshal<json.Value>(text) and Marshal(ref v), or made from a
 // node of a Doc, doc.Value(n). Null is JSON's null, a value the text
 // holds, {"a": null}; a member the text leaves out is no value at all,
@@ -449,7 +455,7 @@ func (d ref Doc) At(n Node, pointer ref string) Node? {
 
 		token := pointer[start:i]
 		if token.Contains(tilde) { // an escape: the token is decoded into a string of its own
-			decoded := unescapePointer(token)
+			decoded := unescapePointer(token) ?? return None
 			cur = d.childByToken(cur, ref decoded) ?? return None
 		} else { // read in place, with nothing copied
 			cur = d.childByToken(cur, token) ?? return None
@@ -492,8 +498,12 @@ func (d ref Doc) Value(n Node) Value {
 		},
 		ObjectKind => {
 			fields := make([]Field, 0, d.Len(n))
+			var seen map[string]bool
 			for m := range d.Members(n) {
-				fields.Push(Field{Key: d.String(m.Name) ?? "", Value: d.Value(m.Value)})
+				key := d.String(m.Name) ?? ""
+				if !hasKey(ref fields, mut seen, ref key) { // a key given twice keeps its first member, as Get finds it
+					fields.Push(Field{Key: key, Value: d.Value(m.Value)})
+				}
 			}
 
 			Object(fields)
@@ -618,7 +628,7 @@ func (v ref Value) At(pointer ref string) (ref Value)? {
 	token := pointer[1:end]
 	var child (ref Value)?
 	if token.Contains(tilde) { // an escape: the token is decoded into a string of its own
-		decoded := unescapePointer(token)
+		decoded := unescapePointer(token) ?? return None
 		child = v.childByToken(ref decoded)
 	} else {
 		child = v.childByToken(token)
@@ -628,20 +638,27 @@ func (v ref Value) At(pointer ref string) (ref Value)? {
 	return found.At(pointer[end:len(pointer)])
 }
 
-// Int returns a number whose text is a whole number an int holds, or
-// None.
+// Int returns a number written as an integer, digits with no fraction
+// and no exponent, 42 or -7, as an int: None for 1.0 and 1e2, which
+// JSON writes as other numbers, for an integer past what an int holds,
+// for a Number whose text is no JSON number, and for a value that is no
+// number.
+//
+//	n := v.Get("count").Expect("count").Int() ?? 0
 func (v ref Value) Int() int? {
 	return match v {
-		Number(text) => strconv.ParseInt(text, 10).Ok(),
+		Number(text) => if isNumberText(text) { strconv.ParseInt(text, 10).Ok() } else { None },
 		_ => None,
 	}
 }
 
-// Float returns a number as the f64 nearest it, or None for a value
-// that is no number.
+// Float returns a number as the f64 nearest it, any number JSON writes,
+// 2.5, -1e-3 or 42: None for a number past what an f64 holds, 1e400,
+// for a Number whose text is no JSON number, and for a value that is
+// no number.
 func (v ref Value) Float() f64? {
 	return match v {
-		Number(text) => strconv.ParseFloat(text).Ok(),
+		Number(text) => if isNumberText(text) { strconv.ParseFloat(text).Ok() } else { None },
 		_ => None,
 	}
 }
@@ -840,6 +857,10 @@ func writeValue<T>(v ref T, w mut writer) {
 // isOneValue reports whether text is one JSON value, with space around
 // it.
 func isOneValue(text ref string) bool {
+	if !utf8.ValidString(text) { // RFC 8259 text is UTF-8: written as it is, it must be
+		return false
+	}
+
 	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
 	if r.skipValue().IsErr() {
 		return false
@@ -1111,9 +1132,8 @@ func writeUntyped(v ref Value, w mut writer) {
 // isNumberText reports whether text is one JSON number and nothing
 // else.
 func isNumberText(text ref string) bool {
-	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
-	number := r.readNumberText().Ok() ?? return false
-	return len(number) > 0 && r.at == len(text)
+	end, whole := scanNumber(text, 0)
+	return whole && end > 0 && end == len(text)
 }
 
 // readValue reads one value of T at the reader's offset, after space,
@@ -1127,7 +1147,12 @@ func readValue<T>(r mut reader) Result<T, Error> {
 		Text => {
 			start := r.at
 			r.skipValue()?
-			Ok(Text{text: r.text[start:r.at].Clone()})
+			text := r.text[start:r.at]
+			if !utf8.ValidString(text) { // kept as it is and written back so, it must be the UTF-8 JSON text is
+				return Err(Error{at: start, msg: "invalid UTF-8 in a json.Text"})
+			}
+
+			Ok(Text{text: text.Clone()})
 		}
 		Unmarshaler => {
 			start := r.at
@@ -1432,33 +1457,14 @@ func (r mut reader) enterNested() Result<(), Error> {
 // number begins there.
 func (r mut reader) readNumberText() Result<ref string, Error> {
 	start := r.at
-	if r.peek() == '-' {
-		r.at += 1
+	end, whole := scanNumber(r.text, start)
+	r.at = end
+	if !whole {
+		return Err(Error{at: start, msg: "invalid number " + r.text[start:end]})
 	}
 
-	if r.peek() == '0' {
-		r.at += 1
-	} else if !r.skipDigits() {
-		r.at = start
+	if end == start {
 		return Ok(r.text[start:start])
-	}
-
-	if r.peek() == '.' {
-		r.at += 1
-		if !r.skipDigits() {
-			return Err(Error{at: start, msg: "invalid number " + r.text[start:r.at]})
-		}
-	}
-
-	if r.peek() == 'e' || r.peek() == 'E' {
-		r.at += 1
-		if r.peek() == '+' || r.peek() == '-' {
-			r.at += 1
-		}
-
-		if !r.skipDigits() {
-			return Err(Error{at: start, msg: "invalid number " + r.text[start:r.at]})
-		}
 	}
 
 	if c := r.peek(); c >= '0' && c <= '9' || c == '.' || c == '+' || c == '-' {
@@ -1468,15 +1474,64 @@ func (r mut reader) readNumberText() Result<ref string, Error> {
 	return Ok(r.text[start:r.at])
 }
 
-// skipDigits moves past the digits at the offset, and reports whether
-// there was one.
-func (r mut reader) skipDigits() bool {
-	start := r.at
-	for r.at < len(r.text) && r.text[r.at] >= '0' && r.text[r.at] <= '9' {
-		r.at += 1
+// scanNumber reads past the number JSON writes that begins at at in
+// text: a minus, digits with no leading zero, a fraction and an
+// exponent, each with a digit. It returns where the number ends and
+// whether it is whole; at itself, and whole, when no number begins
+// there; and where a digit was wanted, not whole, when a fraction or an
+// exponent has none, 1. or 1e.
+func scanNumber(text ref string, at int) (int, bool) {
+	i := at
+	if i < len(text) && text[i] == '-' {
+		i += 1
 	}
 
-	return r.at > start
+	if i < len(text) && text[i] == '0' {
+		i += 1
+	} else {
+		end := digitsEnd(text, i)
+		if end == i {
+			return (at, true)
+		}
+
+		i = end
+	}
+
+	if i < len(text) && text[i] == '.' {
+		end := digitsEnd(text, i + 1)
+		if end == i + 1 {
+			return (end, false)
+		}
+
+		i = end
+	}
+
+	if i < len(text) && (text[i] == 'e' || text[i] == 'E') {
+		i += 1
+		if i < len(text) && (text[i] == '+' || text[i] == '-') {
+			i += 1
+		}
+
+		end := digitsEnd(text, i)
+		if end == i {
+			return (end, false)
+		}
+
+		i = end
+	}
+
+	return (i, true)
+}
+
+// digitsEnd returns where the run of digits that begins at at in text
+// ends: at itself when none begins there.
+func digitsEnd(text ref string, at int) int {
+	i := at
+	for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+		i += 1
+	}
+
+	return i
 }
 
 // readInt reads a whole number from lo to hi.
@@ -1897,10 +1952,20 @@ func (r mut reader) readUntyped() Result<Value, Error> {
 			r.at += 1
 			r.enterNested()?
 			var fields []Field
+			var seen map[string]bool
 			if !r.skipClose(endObject)? {
-				fields.Push(r.readField()?)
-				for r.hasNextElement(endObject)? {
-					fields.Push(r.readField()?)
+				for {
+					r.skipSpace()
+					at := r.at
+					f := r.readField()?
+					if hasKey(ref fields, mut seen, ref f.Key) {
+						return Err(Error{at: at, msg: "key " + f.Key + " given twice"})
+					}
+
+					fields.Push(f)
+					if !r.hasNextElement(endObject)? {
+						break
+					}
 				}
 			}
 
@@ -1924,6 +1989,35 @@ func (r mut reader) readUntyped() Result<Value, Error> {
 			return Ok(Number(number.Clone()))
 		}
 	}
+}
+
+// hasKey reports whether one of fields has the key key. Up to
+// scannedKeys members it looks at each; past them it keeps every key
+// in seen, which it fills the first time it is needed, and adds key to
+// it, so that the caller pushes the field it found new.
+func hasKey(fields ref []Field, seen mut map[string]bool, key ref string) bool {
+	if len(fields) < scannedKeys {
+		for _, f := range fields {
+			if len(f.Key) == len(key) && f.Key == key { // the lengths first: most keys differ in theirs, and comparing two costs a call
+				return true
+			}
+		}
+
+		return false
+	}
+
+	if len(*seen) == 0 {
+		for _, f := range fields {
+			(*seen)[f.Key.Clone()] = true
+		}
+	}
+
+	if seen.Contains(key) {
+		return true
+	}
+
+	(*seen)[key.Clone()] = true
+	return false
 }
 
 // readField reads one member of an object into a Field: its key, a
@@ -2046,9 +2140,17 @@ func arrayIndex(token ref string) int? {
 }
 
 // unescapePointer decodes a pointer token that holds an escape: ~1 is
-// the solidus and ~0 the tilde, ~1 first, so that ~01 is ~1.
-func unescapePointer(token ref string) string {
-	return token.ReplaceAll(escapedSolidus, solidusText).ReplaceAll(escapedTilde, tilde)
+// the solidus and ~0 the tilde, ~1 first, so that ~01 is ~1. A tilde
+// followed by anything else, ~2 or a trailing ~, is no escape RFC 6901
+// writes, and gives None.
+func unescapePointer(token ref string) string? {
+	for i := 0; i < len(token); i++ {
+		if token[i] == tilde[0] && (i + 1 == len(token) || token[i + 1] != escapedSolidus[1] && token[i + 1] != escapedTilde[1]) {
+			return None
+		}
+	}
+
+	return Some(token.ReplaceAll(escapedSolidus, solidusText).ReplaceAll(escapedTilde, tilde))
 }
 
 // childByToken returns the value one pointer token names in v: an
