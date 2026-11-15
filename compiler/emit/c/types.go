@@ -82,7 +82,7 @@ func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 
 		return e.declare(t)
 	case *types.Trait:
-		name := lower.Ident(t.Obj().Name())
+		name := lower.TraitName(t)
 		if e.state[name] == undeclared {
 			e.state[name] = declared
 			tab := tableType(t)

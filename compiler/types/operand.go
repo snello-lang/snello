@@ -120,12 +120,16 @@ func traitReason(v, t Type) string {
 	case *Pointer:
 		return ": a pointer does not become a trait value; the value it holds does"
 	case *Trait:
+		if v.orig != nil && v.orig == tr.orig {
+			return ": " + v.String() + " and " + tr.String() + " are two instances of " + tr.obj.name + ", each its own type"
+		}
+
 		return ": a trait value cannot be used as another trait yet"
 	case *TypeParam:
 		return ": a type parameter cannot become a trait value yet"
 	case *Named:
 		if !v.Implements(tr) {
-			return ": " + v.obj.name + " does not implement " + tr.obj.name
+			return ": " + v.obj.name + " does not implement " + tr.String()
 		}
 
 		return ": " + v.obj.name + " holds a borrow and cannot become a trait value"

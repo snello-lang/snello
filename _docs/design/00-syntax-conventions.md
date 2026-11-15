@@ -246,8 +246,48 @@ func (c ref Circle) Area() f64 { return math.Pi * c.r * c.r }
 - **A `return` after `??` takes one result**, `x ?? return Err(e)`, as a `return` in a match arm does: a comma after it ends the arm or the element it stands in, and several results are written as a tuple.
 - **Reflection is at compile time.** A generic function asks which type its type parameter is with `match T { int => ..., []E => ..., struct => ..., _ => ... }`, goes through a struct's fields with `for f := range fields(T)`, each with the constants `f.name` and `f.default` and the type `f.type`, reaches one with `v.[f]`, lent, and builds a value from its fields, `T{ for f := range fields(T) { [f]: ... } }`; an enum's variants are an arm each, `match v { for c := range variants(T) => ... }`. An arm naming a type takes that type alone, so `type Celsius f64` takes its own arm, its kind's or `_`, never `f64`'s; the arm written once per variant holds `v`, which is not assigned, moved or lent `mut` in it. The compiler checks the function once and, compiling it for a type, keeps the arm the type matches and writes each loop out once per part. It reaches the fields the function's package can name, or every field of a type that lists the marker trait `Reflect`; a type no arm matches, a field not reached, types that grow without end, a chain of generic calls deeper than 256 and a `refuse(msg)` an instance reaches, through the arms of the matches on a type, on `attr` and on a part's name the compiler decides, are refused where the function is used, by the checker. Nothing describes a type when the program runs (`11-reflection-at-compile-time.md`).
 - **Attributes are typed constants read at compile time.** `@` and a constant of a type that lists the predeclared marker trait `Attribute` is written after a field's type and default, `Host string @json.Name("host")`, after a variant, `Dot @json.Name("dot")`, or on a type before its body, `struct Options @Usage("the server's options") { ... }`, with `type Usage string impl Attribute` the program's own; a struct with no fields is written by its name, `@json.OmitEmpty`, and one type is given once per declaration. A type listing `FieldAttribute`, `VariantAttribute` or `TypeAttribute`, which refine `Attribute`, is written on those places alone, `struct Skip impl FieldAttribute {}`, and refused elsewhere. A reflecting function reads one with `attr(f, json.Name)`, `attr(c, ...)` or `attr(T, ...)`, an option that is a constant in each copy written out; nothing of it is kept when the program runs. Go's struct tags are strings the compiler does not check; these are values it does (`11-reflection-at-compile-time.md`, section 8).
-- **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types; each element owns its value. One allocation and one indirect call per value, the same cost as Go. Such a value is `Send` only if the trait requires it: `trait Shape: Send { ... }`. A trait value satisfies its own trait as a bound only when no method or field of the bound's traits is written with `Self`, since the body may reach them through the parameter and a trait value cannot.
+- **A trait used as a type is a Go interface value.** `[]Shape` holds any mix of implementing types; each element owns its value. One allocation and one indirect call per value, the same cost as Go. Such a value is `Send` only if the trait requires it: `trait Shape: Send { ... }`. A trait value satisfies its own trait as a bound only when every method and field of the bound's traits can be reached through a table: none written with `Self`, none with type parameters of its own, and no function of the type, since the body may reach any of them through the parameter and a trait value cannot.
 - Not in version one: self-types, implicits.
+
+### An instance of a generic trait as a type
+
+A generic trait takes type parameters, and an instance of it gives each one an argument. **An instance with every argument given is a type, as a trait's name is**, and a value of it is a trait value, with all a trait value does and nothing more. The example is a trait a program declares for the events it raises, with a default method:
+
+```go
+trait Listener<E> {
+	func (l mut Self) On(e ref E)
+	func (l mut Self) OnAll(es ref []E) { ... }   // a default
+}
+
+struct Audit impl Listener<Order> { seen int }
+struct Revenue impl Listener<Order> { sum int }
+struct Logged<E> impl Listener<E> { prefix string }
+
+listeners := []Listener<Order>{Audit{seen: 0}, Revenue{sum: 0}, Logged<Order>{prefix: "order seen"}}
+
+func notify<E>(ls mut []Listener<E>, e ref E) {   // any listeners of any event
+	for i := 0; i < len(ls); i++ {
+		ls[i].On(e)
+	}
+}
+```
+
+`[]Listener<Order>` holds listeners of different types, each element owning its value, which a bound cannot do: `L: Listener<Order>` stands for one type in each instance of the code. An iterator needs no such trait: `range` takes any type with `Next` by its shape (above).
+
+- **What it holds.** A value of a type that implements that instance: `Audit`, which lists `Listener<Order>`, or `Logged<Order>`, whose generic type implements the trait over its own parameter. Each instance is its own type: a `Listener<Order>` is no `Listener<Refund>`, as a `[]int` is no `[]i64`. A type argument cannot hold a borrow, as one of a generic type cannot: `Listener<ref string>` is refused, since the value would hide the borrow.
+- **In generic code** an argument may name a type parameter, `notify<E>(ls mut []Listener<E>, e ref E)`, and a generic type's field may hold one, `struct Bus<E> { listeners []Listener<E> }`.
+- **What it does is what a trait value does.** Its methods are the instance's, `On(e ref Order)` and the default `OnAll`, called through its table. It has no zero value, is not `Eq`, prints only when its trait is `Error` or `fmt.Stringer`, and is `Send` only when the trait requires it. A value of one trait is not one of another, as for any trait value.
+- **What it cannot call.** A method a table cannot hold: one whose parameters or results are written with `Self`, and one with type parameters of its own, which would need a function for every type argument. The compiler names the method and the reason. For the same reason such a value meets its own instance as a bound only when its trait has no such method.
+- **One instance per type.** A type implements a generic trait at one argument, counting the traits it implements through refinement: with `trait Refunds: Listener<Refund>`, `struct Audit impl Listener<Order>, Refunds` is refused where `Audit` is declared, `Audit implements Listener<Order> and through Refunds, Listener<Refund>: a type implements a generic trait at one argument`. So which `Listener` a type implements always has one answer.
+- **Inference reads that answer.** `send<E, L: Listener<E>>(l mut L, e E)` called `send(mut counter, 5)`, with `struct Counter impl Listener<i64>`, reads `E` as `i64` off `Counter`'s instance before the literal takes a type, so the 5 is an `i64`; `notify(mut listeners, ref order)` reads `E` off `[]Listener<Order>`. A type that implements no instance is named: `cannot infer the type parameter E of count: Blob implements no Listener`.
+
+**Considered and not taken: the trait value implementing its own trait.** Rust's `Box<dyn Trait>` may implement `Trait`, so a method a table cannot hold is compiled once more for the boxed value. It would let such a method be called through the value, at the price of a second rule for which body runs, since a default a refining trait replaces would run the replaced body through the box. One rule, a trait value calls what its table holds, is kept.
+
+**The precedents.** Go's instantiated generic interface, `Listener[Order]`, is a type; Rust's `dyn Listener<Order>` is a trait object, which leaves out a generic method as Snello does; Swift's `any Listener<Order>` is an existential. Rust reads an argument off a trait's one associated type, as Snello reads it off a type's one instance; Go infers no type argument from a method set.
+
+**What it costs** is what a trait value costs: one allocation when the value is made and one indirect call per method call. Each pair of a type and an instance has its own table, built once when the program is compiled and named for the instance's arguments and the trait's package, as a generic type's instance is named.
+
+**Memory safe, no collector.** The value is a trait value: one owner, a box holding the value and a pointer to a table, freed by its `Drop`, which drops the value it holds. Nothing is added when the program runs.
 
 ### Functions of a type
 

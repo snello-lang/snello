@@ -116,7 +116,109 @@ func (in *inference) unify(param, arg Type) {
 				in.unify(pargs[i], aargs[i])
 			}
 		}
+	case *Trait:
+		if p.orig == nil || p.targs == nil {
+			return
+		}
+
+		if inst := implementedInstance(arg, p.orig); inst != nil { // an Iterator<int>, or a Range that implements it
+			for i := range p.targs {
+				in.unify(p.targs[i], inst.targs[i])
+			}
+		}
 	}
+}
+
+// fromBounds binds what the bounds of a parameter say of the type bound
+// to it: with I bound to Range and the bound I: Iterator<T>, T is bound
+// to int, read off the one instance of Iterator that Range implements.
+// It goes round until nothing new is bound, since what one bound gives
+// may be what another's parameter needed.
+func (in *inference) fromBounds() {
+	for grew := true; grew; {
+		grew = false
+		for _, p := range in.tparams {
+			t, ok := in.m[p]
+			if !ok {
+				continue
+			}
+
+			for _, b := range p.bounds {
+				if b == nil || b.targs == nil {
+					continue
+				}
+
+				if inst := implementedInstance(t, b.orig); inst != nil {
+					before := len(in.m)
+					for i := range b.targs {
+						in.unify(b.targs[i], inst.targs[i])
+					}
+
+					grew = grew || len(in.m) > before
+				}
+			}
+		}
+	}
+}
+
+// unmet returns why p could not be read off a bound: a parameter bound
+// to a type that implements no instance of a bound mentioning p, "Blob
+// implements no Iterator"; "" otherwise.
+func (in *inference) unmet(p *TypeParam) string {
+	for _, q := range in.tparams {
+		t, ok := in.m[q]
+		if !ok {
+			continue
+		}
+
+		for _, b := range q.bounds {
+			if b != nil && b.targs != nil && mentions(b, p) && implementedInstance(t, b.orig) == nil {
+				return t.String() + " implements no " + b.obj.name
+			}
+		}
+	}
+
+	return ""
+}
+
+// implementedInstance returns the instance of the generic trait orig
+// that t implements, or nil: through the traits a declared type lists,
+// with a generic type's arguments in place, the bounds of a type
+// parameter, or a trait value's own trait, each with the traits they
+// refine. A type implements a generic trait at one argument, so the
+// first found is the one.
+func implementedInstance(t Type, orig *Trait) *Trait {
+	var listed []*Trait
+	var m map[*TypeParam]Type
+	switch t := t.(type) {
+	case *Named:
+		listed = t.Origin().impls
+		if t.orig != nil {
+			m = t.substitution()
+		}
+	case *TypeParam:
+		listed = t.bounds
+	case *Trait:
+		listed = []*Trait{t}
+	}
+
+	for _, l := range listed {
+		if l == nil {
+			continue
+		}
+
+		for r := range l.lineage() {
+			if r != nil && r.orig == orig && r.targs != nil {
+				if m != nil {
+					return substInstance(r, m) // MapIter<Range, int, string> lists Iterator<U>: Iterator<string>
+				}
+
+				return r
+			}
+		}
+	}
+
+	return nil
 }
 
 // typeArgs returns the arguments a named type stands for: an
@@ -228,6 +330,8 @@ func (c *Checker) evaluate(in *inference, values []ast.Expr, slots []Type, effec
 			in.unify(slots[i], ops[i].typ)
 			effect(i, ops[i])
 		}
+
+		in.fromBounds() // before a literal takes a type: Sum(mut r, 0) with r an Iterator<i64> makes the 0 an i64
 	}
 
 	return ops
@@ -239,8 +343,14 @@ func (c *Checker) evaluate(in *inference, values []ast.Expr, slots []Type, effec
 // the rules a written one does: it cannot hold a borrow, which the
 // instance would store, and it implements the bounds of its parameter.
 func (c *Checker) complete(in *inference, name string, pos ast.Node, sig *Signature) ([]Type, bool) {
+	in.fromBounds()
 	if p := in.missing(); p != nil {
 		if in.invalid { // what would have bound p was reported already
+			return nil, false
+		}
+
+		if why := in.unmet(p); why != "" {
+			c.errorf(pos.Pos(), "cannot infer the type parameter "+p.obj.name+" of "+name+": "+why)
 			return nil, false
 		}
 

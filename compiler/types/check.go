@@ -348,6 +348,21 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 		c.resolveTraitLists(f)
 	}
 
+	for i, f := range fs { // every file's refinements known, then checked for cycles, then given to the instances, then ordered
+		enter(i)
+		c.checkRefinementCycles(f)
+	}
+
+	for i, f := range fs {
+		enter(i)
+		c.fillTraitRefines(f)
+	}
+
+	for i, f := range fs {
+		enter(i)
+		c.orderTraitLists(f)
+	}
+
 	types := 0
 	for _, f := range fs {
 		for _, d := range f.Decls {
@@ -373,7 +388,6 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 		c.resolveSignatures(f)
 	}
 
-	c.fillTraitInstances()
 	for i, f := range fs {
 		enter(i)
 		c.checkRefinements(f)

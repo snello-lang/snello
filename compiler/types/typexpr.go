@@ -133,8 +133,7 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 	}
 
 	if tr, ok := tn.typ.(*Trait); ok && tr.tparams != nil {
-		c.errorf(e.Pos(), tr.obj.name+" is a generic trait and is not a type yet: bound a type parameter by it, I: "+tr.obj.name+"<...>")
-		return Typ[Invalid]
+		return c.traitValueType(tr, e)
 	}
 
 	named, _ := tn.typ.(*Named)
@@ -148,6 +147,29 @@ func (c *Checker) namedType(e *ast.NamedType) Type {
 	}
 
 	return c.instance(e, named)
+}
+
+// traitValueType resolves an instance of a generic trait written as a
+// type, Iterator<int>: the type of a trait value of that instance. Its
+// arguments cannot hold a borrow, which the value would hide.
+func (c *Checker) traitValueType(tr *Trait, e *ast.NamedType) Type {
+	if len(e.Args) == 0 {
+		c.errorf(e.Pos(), tr.obj.name+" is a generic trait: as a type it takes its arguments, "+tr.obj.name+"<...>")
+		return Typ[Invalid]
+	}
+
+	inst := c.traitArgs(tr, e)
+	if inst == nil {
+		return Typ[Invalid]
+	}
+
+	for i, a := range inst.targs {
+		if !c.storable(a, "a type argument", e.Args[i].Pos()) {
+			return Typ[Invalid]
+		}
+	}
+
+	return inst
 }
 
 // instance resolves the arguments of a generic type's name, List<int>,

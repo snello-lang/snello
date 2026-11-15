@@ -967,6 +967,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 	case *types.TypeParam:
 		return e.boundCall(x, sel, sig.Recv().Type())
 	case *types.Trait:
+		sig = e.sub(sig).(*types.Signature) // Iterator<T> in generic code is this instance's Iterator<int>
 		return e.traitCall(x, sel, sig.Recv().Type(), sig)
 	}
 

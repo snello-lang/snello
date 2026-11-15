@@ -5,6 +5,7 @@
 package types
 
 import (
+	"iter"
 	"slices"
 	"strings"
 
@@ -49,9 +50,10 @@ type Trait struct {
 	// filled once the declaration's methods are resolved (traitInstance,
 	// fillTraitInstances). Instances are kept per check, as the
 	// operators' are, so identity is a pointer comparison.
-	tparams  []*TypeParam
-	targs    []Type
-	resolved bool // the methods are attached: an instance made now is filled at once
+	tparams   []*TypeParam
+	targs     []Type
+	resolved  bool     // the methods are attached: an instance made now is filled at once
+	instances []*Trait // a generic declaration's instances, one per argument list (instantiateTrait)
 
 	// A trait used as a type: the methods and fields a value of it has,
 	// with the trait itself for Self, made on first use.
@@ -244,11 +246,12 @@ func (c *Checker) collectTrait(d *ast.TraitDecl) *TypeName {
 
 // resolveTraitLists resolves the names every declaration lists before
 // its body: the traits a type implements, the traits a trait refines,
-// the bounds of a type's parameters, and the fields of each trait, and
-// gives each type its resolution order. They are needed before any
-// type is resolved, since a field of type Copied<string> asks whether
-// string satisfies Copied's bound, a type's Copy-ness asks whether it
-// implements Drop, and a struct's fields include its traits'.
+// the bounds of a type's parameters, and the fields of each trait;
+// orderTraitLists then gives each type its resolution order. They are
+// needed before any type is resolved, since a field of type
+// Copied<string> asks whether string satisfies Copied's bound, a
+// type's Copy-ness asks whether it implements Drop, and a struct's
+// fields include its traits'.
 func (c *Checker) resolveTraitLists(f *ast.File) {
 	for i, d := range f.Decls {
 		switch d := d.(type) {
@@ -278,8 +281,14 @@ func (c *Checker) resolveTraitLists(f *ast.File) {
 		}
 	}
 
-	c.checkRefinementCycles(f)
-	c.fillTraitRefines() // before a type's order is drawn from the instances it lists
+}
+
+// orderTraitLists draws the resolution order of each type and trait f
+// declares from the traits it lists, once every file's lists are
+// resolved and every instance has its refinements, so that a trait
+// another file declares, refined or refining, is in the order whatever
+// the order of the files.
+func (c *Checker) orderTraitLists(f *ast.File) {
 	for i, d := range f.Decls {
 		switch d := d.(type) {
 		case *ast.TypeDecl:
@@ -424,10 +433,13 @@ func (c *Checker) traitList(ts []ast.Type, where string) []*Trait {
 		}
 
 		if listsOrigin(traits[:i], tr) {
-			if tr.targs != nil {
-				c.errorf(t.Pos(), tr.String()+" listed with another instance of "+n.Name.Name+": a type implements a generic trait at one argument")
-			} else {
+			switch {
+			case tr.targs == nil: // an operator trait: a type has one Mul, whatever its argument
 				c.errorf(t.Pos(), n.Name.Name+" listed twice")
+			case slices.Contains(traits[:i], tr):
+				c.errorf(t.Pos(), tr.String()+" listed twice")
+			default:
+				c.errorf(t.Pos(), tr.String()+" listed with another instance of "+n.Name.Name+": a type implements a generic trait at one argument")
 			}
 
 			continue
@@ -494,33 +506,102 @@ func (c *Checker) traitArgs(tr *Trait, n *ast.NamedType) *Trait {
 	return c.operatorInstance(tr, rhs)
 }
 
-// traitInstance returns the generic trait tr with the given arguments,
-// one instance per argument list in this check: its members are the
-// declaration's with the arguments in place, filled now when the
-// declaration's methods are resolved and by fillTraitInstances
-// otherwise, since an impl list or a bound may name an instance before
-// the trait's methods are known. Self is shared with the declaration,
-// as the operator instances share theirs.
+// traitInstance returns the generic trait tr with the given arguments
+// (instantiateTrait), its refinements substituted through the check's
+// own operator instances.
 func (c *Checker) traitInstance(tr *Trait, targs []Type) *Trait {
-	for _, inst := range c.instances {
-		if inst.orig == tr && inst.rhs == nil && identicalTypes(inst.targs, targs) {
+	return instantiateTrait(tr, targs, c.substTrait)
+}
+
+// A traitSubst puts a substitution's arguments in place in a trait: the
+// checker's keeps the operator instances it makes, and substInstance,
+// with no check at hand, makes its own.
+type traitSubst func(t *Trait, m map[*TypeParam]Type) *Trait
+
+// instantiateTrait returns the generic trait orig with the arguments
+// targs, one instance per argument list, kept on the declaration as a
+// generic type's instances are, so that two are the same instance when
+// they are the same pointer, wherever each was made: by the checker, or
+// by a substitution in generic code. Its members are the declaration's
+// with the arguments in place, filled now when the declaration's
+// methods are resolved, and when they are otherwise (resolveTrait),
+// since an impl list or a bound may name an instance before the trait's
+// methods are known. Self is shared with the declaration, as the
+// operator instances share theirs.
+func instantiateTrait(orig *Trait, targs []Type, sub traitSubst) *Trait {
+	for _, inst := range orig.instances {
+		if identicalTypes(inst.targs, targs) {
 			return inst
 		}
 	}
 
-	inst := &Trait{obj: tr.obj, self: tr.self, standard: tr.standard, orig: tr, targs: targs}
-	c.instances = append(c.instances, inst)
-	if tr.resolved {
-		c.fillTraitInstance(inst)
+	inst := &Trait{obj: orig.obj, self: orig.self, standard: orig.standard, orig: orig, targs: targs}
+	orig.instances = append(orig.instances, inst)
+	if orig.resolved {
+		inst.fill(sub)
+	} else {
+		inst.fillRefines(sub) // nothing yet while the declaration's refinements are being resolved: fillTraitRefines gives them
 	}
 
 	return inst
 }
 
-// fillTraitInstance gives an instance the members of its declaration
-// with the arguments in place; its refinements, when fillTraitRefines
-// has not given them already.
-func (c *Checker) fillTraitInstance(inst *Trait) {
+// twoInstances finds two instances of one generic trait, with different
+// arguments, among the traits listed and those they refine: what a
+// type or a type parameter would implement at two arguments, which it
+// may not, since a type implements a generic trait at one argument.
+// Each comes with the trait listed it was reached through, itself when
+// listed.
+func twoInstances(listed []*Trait) (a, viaA, b, viaB *Trait) {
+	var seen map[*Trait][2]*Trait // a declaration's first instance, and what it was reached through, made at the first instance: most lists have none
+	for _, l := range listed {
+		if l == nil {
+			continue
+		}
+
+		for t := range l.lineage() {
+			if t == nil || t.orig == nil || t.targs == nil {
+				continue
+			}
+
+			first, ok := seen[t.orig]
+			if !ok {
+				if seen == nil {
+					seen = make(map[*Trait][2]*Trait)
+				}
+
+				seen[t.orig] = [2]*Trait{t, l}
+				continue
+			}
+
+			if first[0] != t {
+				return first[0], first[1], t, l
+			}
+		}
+	}
+
+	return nil, nil, nil, nil
+}
+
+// twoInstancesMessage says that who implements a and b, two instances
+// of one generic trait, naming the trait listed each came through; a
+// trait refines them, which verb says.
+func twoInstancesMessage(who, verb string, a, viaA, b, viaB *Trait) string {
+	reached := func(t, via *Trait) string {
+		if t == via {
+			return t.String()
+		}
+
+		return "through " + via.String() + ", " + t.String()
+	}
+
+	return who + " " + verb + " " + reached(a, viaA) + " and " + reached(b, viaB) + ": a type implements a generic trait at one argument"
+}
+
+// fill gives an instance the members of its declaration with the
+// arguments in place, and its refinements, when fillTraitRefines has
+// not given them already.
+func (inst *Trait) fill(sub traitSubst) {
 	tr := inst.orig
 	m := inst.substitution()
 	for _, fn := range tr.required {
@@ -535,32 +616,39 @@ func (c *Checker) fillTraitInstance(inst *Trait) {
 		inst.fields = append(inst.fields, substVar(f, m))
 	}
 
-	c.fillRefines(inst)
+	inst.fillRefines(sub)
 	inst.resolved = true
 }
 
 // fillRefines gives an instance the refinements of its declaration with
 // the arguments in place, once.
-func (c *Checker) fillRefines(inst *Trait) {
+func (inst *Trait) fillRefines(sub traitSubst) {
 	if inst.order != nil || len(inst.orig.refines) == 0 {
 		return
 	}
 
 	m := inst.substitution()
 	for _, r := range inst.orig.refines {
-		inst.refines = append(inst.refines, c.substTrait(r, m))
+		inst.refines = append(inst.refines, sub(r, m))
 	}
 
 	inst.order = linearize(inst.refines)
 }
 
-// fillTraitRefines gives every instance made so far its refinements,
-// once every declaration's are resolved and before a type's resolution
-// order is drawn from the instances it lists.
-func (c *Checker) fillTraitRefines() {
-	for _, inst := range c.instances {
-		if inst.rhs == nil && !inst.resolved {
-			c.fillRefines(inst)
+// fillTraitRefines gives the instances made so far of the generic
+// traits f declares their refinements, once the declarations' are
+// resolved and before a type's resolution order is drawn from the
+// instances it lists.
+func (c *Checker) fillTraitRefines(f *ast.File) {
+	for i, d := range f.Decls {
+		if _, ok := d.(*ast.TraitDecl); !ok {
+			continue
+		}
+
+		if tr, ok := c.objs[i].(*TypeName).typ.(*Trait); ok {
+			for _, inst := range tr.instances {
+				inst.fillRefines(c.substTrait)
+			}
 		}
 	}
 }
@@ -576,12 +664,13 @@ func (inst *Trait) substitution() map[*TypeParam]Type {
 	return m
 }
 
-// fillTraitInstances fills every instance made before its declaration's
-// methods were resolved.
-func (c *Checker) fillTraitInstances() {
-	for _, inst := range c.instances {
-		if inst.rhs == nil && !inst.resolved {
-			c.fillTraitInstance(inst)
+// attached marks a declaration's methods resolved, and fills the
+// instances made before they were.
+func (c *Checker) attached(tr *Trait) {
+	tr.resolved = true
+	for _, inst := range tr.instances {
+		if !inst.resolved {
+			inst.fill(c.substTrait)
 		}
 	}
 }
@@ -600,6 +689,35 @@ func (c *Checker) substTrait(t *Trait, m map[*TypeParam]Type) *Trait {
 	case t.targs != nil:
 		if targs := substList(t.targs, m); !identicalTypes(targs, t.targs) {
 			return c.traitInstance(t.orig, targs)
+		}
+	}
+
+	return t
+}
+
+// substInstance returns the trait t with the substitution m applied to
+// its arguments, as the checker's substTrait does, with no check at
+// hand: in a generic function's instance, or in a predicate. An
+// operator instance made here is the checker's list's equal, not its
+// pointer, which Refines and listsOrigin compare by what they hold.
+func substInstance(t *Trait, m map[*TypeParam]Type) *Trait {
+	switch {
+	case t == nil:
+		return nil
+	case t.rhs != nil:
+		if rhs := subst(t.rhs, m); rhs != t.rhs {
+			return newOperatorInstance(t.origin(), rhs)
+		}
+	case t.targs != nil:
+		for i, a := range t.targs {
+			if subst(a, m) != a { // the list is made only when an argument changes, as most instances in a generic body do not
+				targs := substList(t.targs, m)
+				if !identicalTypes(targs[i:], t.targs[i:]) { // those before i are unchanged, as the loop found
+					return instantiateTrait(t.orig, targs, substInstance)
+				}
+
+				break
+			}
 		}
 	}
 
@@ -694,7 +812,7 @@ func (t *Trait) valueField(name string) (v *Var, mentionsSelf bool) {
 // which a trait value cannot call; for the backend's table of them.
 func (t *Trait) ValueMethods() []*Func {
 	var fns []*Func
-	for _, tr := range t.lineage() {
+	for tr := range t.lineage() {
 		for _, m := range tr.required {
 			fns = t.addValueMethod(fns, m.name)
 		}
@@ -721,7 +839,7 @@ func (t *Trait) addValueMethod(fns []*Func, name string) []*Func {
 // same order as ValueMethods and without the fields written with Self.
 func (t *Trait) ValueFields() []*Var {
 	var fields []*Var
-	for _, tr := range t.lineage() {
+	for tr := range t.lineage() {
 		for _, f := range tr.fields {
 			if v, _ := t.valueField(f.name); v != nil && fieldNamed(fields, v.name) == nil {
 				fields = append(fields, v)
@@ -732,9 +850,20 @@ func (t *Trait) ValueFields() []*Var {
 	return fields
 }
 
-// lineage returns t followed by the traits it refines, in their order.
-func (t *Trait) lineage() []*Trait {
-	return append([]*Trait{t}, t.order...)
+// lineage yields t followed by the traits it refines, in their order,
+// with no list made for it.
+func (t *Trait) lineage() iter.Seq[*Trait] {
+	return func(yield func(*Trait) bool) {
+		if !yield(t) {
+			return
+		}
+
+		for _, r := range t.order {
+			if !yield(r) {
+				return
+			}
+		}
+	}
 }
 
 // traitOf returns the trait obj names, or nil for any other object.
@@ -754,7 +883,12 @@ func traitOf(obj Object) *Trait {
 func (c *Checker) resolveBounds(ps []*ast.TypeParam, tparams []*TypeParam) *Scope {
 	scope := c.openTypeParams(paramNames(ps), tparams)
 	for i, p := range ps {
-		tparams[i].setBounds(c.traitList(p.Bounds, "as a bound"))
+		bounds := c.traitList(p.Bounds, "as a bound")
+		if a, viaA, b, viaB := twoInstances(bounds); a != nil {
+			c.errorf(p.Name.Pos(), twoInstancesMessage(p.Name.Name, "implements", a, viaA, b, viaB))
+		}
+
+		tparams[i].setBounds(bounds)
 	}
 
 	return scope
@@ -783,7 +917,7 @@ func (c *Checker) resolveTrait(d *ast.TraitDecl, tr *Trait) {
 		defer c.closeScope()
 	}
 
-	defer func() { tr.resolved = true }()
+	defer c.attached(tr)
 	c.self = tr.self
 	defer func() { c.self = nil }()
 	seen := NewScope(nil)
@@ -945,6 +1079,11 @@ func (c *Checker) checkRefinements(f *ast.File) {
 		}
 
 		tr := c.objs[i].(*TypeName).typ.(*Trait)
+		if a, viaA, b, viaB := twoInstances(tr.refines); a != nil {
+			c.errorf(d.Name.Pos(), twoInstancesMessage(tr.obj.name, "refines", a, viaA, b, viaB)) // no type could implement it
+			continue
+		}
+
 		for _, fn := range tr.required {
 			c.checkRedeclared(tr, fn)
 		}
@@ -1096,6 +1235,11 @@ func (c *Checker) checkImpls(f *ast.File) {
 		}
 
 		n := c.objs[i].(*TypeName).typ.(*Named)
+		if a, viaA, b, viaB := twoInstances(n.impls); a != nil {
+			c.errorf(d.Name.Pos(), twoInstancesMessage(n.obj.name, "implements", a, viaA, b, viaB))
+			continue // one mistake, one message: the methods of both are not asked for
+		}
+
 		c.inherit(n, d.Name.Pos())
 		seen := make(map[*Trait]bool)
 		for j, t := range d.Impls {
@@ -1324,7 +1468,7 @@ func (c *Checker) satisfies(tparams []*TypeParam, targs []Type, pos token.Pos, n
 // may reach any of them through the parameter, and a trait value
 // cannot.
 func (t *Trait) unreachable() (what, why string) {
-	for _, tr := range t.lineage() {
+	for tr := range t.lineage() {
 		for _, ms := range [][]*Func{tr.required, tr.defaults} {
 			for _, m := range ms {
 				switch {

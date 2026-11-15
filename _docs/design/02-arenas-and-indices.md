@@ -1,6 +1,6 @@
 # Arenas and indices
 
-Status: decided; `std/arena/arena.snello` implements the library section, with `New<T>()` taking its type argument where nothing infers it and the range over an arena waiting for the iterator trait. This note explains how Snello handles data structures whose nodes refer to each other, such as trees with parent links, graphs, and caches. It is the direct consequence of the memory model in `01-language-design.md`.
+Status: decided; `std/arena/arena.snello` implements the library section, with `New<T>()` taking its type argument where nothing infers it, and a range over an arena through `a.Iter()`, an iterator `range` takes by its shape (`05-standard-library.md`, decision 14). This note explains how Snello handles data structures whose nodes refer to each other, such as trees with parent links, graphs, and caches. It is the direct consequence of the memory model in `01-language-design.md`.
 
 ## The problem
 

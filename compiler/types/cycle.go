@@ -175,6 +175,10 @@ func walkTypes(t Type, f func(Type)) {
 		for _, a := range typeArgs(t) {
 			walkTypes(a, f)
 		}
+	case *Trait:
+		for _, a := range t.targs { // Iterator<T> as a type
+			walkTypes(a, f)
+		}
 	case *Pointer:
 		walkTypes(t.elem, f)
 	case *Ref:

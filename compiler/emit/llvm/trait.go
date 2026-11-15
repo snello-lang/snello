@@ -32,7 +32,7 @@ import (
 // into a value of the trait type to, with the table written once per
 // pair.
 func (e *Emitter) box(v value, from *types.Named, to *types.Trait, pos token.Pos) value {
-	name := "sn_" + lower.NamedName(from) + "_as_" + lower.Ident(to.Obj().Name())
+	name := "sn_" + lower.NamedName(from) + "_as_" + lower.TraitName(to)
 	if !e.state[name] {
 		e.state[name] = true
 		e.table(name, from, to, pos)
