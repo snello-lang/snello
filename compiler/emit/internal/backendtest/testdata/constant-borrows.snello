@@ -1,0 +1,49 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A borrow of a constant outlives the function that took it, so a
+// function may return one: a literal of each kind, true, a struct
+// constant, a constant of this package and of another, each read after
+// the stack the function ran on has been written over.
+
+package main
+
+import ("fmt"; "math"; "time")
+
+struct P { x int; y int }
+
+const origin = P{x: 3, y: 4}
+
+const pi = 3.25
+
+const name = "snello"
+
+func lit() ref int { return ref 7 }
+
+func flt() ref f64 { return ref 2.5 }
+
+func str() ref string { return ref "abc" }
+
+func yes() ref bool { return ref true }
+
+func p() ref P { return ref origin }
+
+func pk() ref f64 { return ref pi }
+
+func nm() ref string { return ref name }
+
+func other() ref string { return ref time.RFC3339 }
+
+func big() ref i64 { return ref math.MaxInt64 }
+
+func clobber(n int) int {
+	a := [32]int{n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n}
+	return a[n % 32]
+}
+
+func main() {
+	a, b, c, d, e, f, g, h, i := lit(), flt(), str(), yes(), p(), pk(), nm(), other(), big()
+	fmt.Println(clobber(99))
+	fmt.Println(a, b, c, d, e.x, e.y, f, g, h, i)
+}

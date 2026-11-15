@@ -665,28 +665,36 @@ func (e *Emitter) operatorCall(t types.Type, op token.Kind, unary bool, recv ast
 
 // binary writes x op y. Strings have no operators in C: + is a
 // concatenation and the comparisons go through the runtime. A right
-// side of && or || that needs statements, or calls anything, is
-// written under the test of the left side, so the operators still stop
-// short, and the temporaries it built are dropped there, on the one
-// path that built them.
+// side of && or || whose writing wrote statements has them run under
+// the test of the left side, so the operators still stop short, and
+// the temporaries it built are dropped there, on the one path that
+// built them.
 func (e *Emitter) binary(x *ast.BinaryExpr) string {
 	t := lower.ValueType(e.typeOf(x.X))
 	if call := e.operatorCall(t, x.Op, false, x.X, []ast.Expr{x.Y}, x.Pos()); call != "" {
 		return call
 	}
 
-	if (x.Op == token.LAND || x.Op == token.LOR) && (e.needsHoist(x.Y) || e.hasEffects(x.Y)) {
-		r := e.temp()
-		e.line("bool " + r + " = " + e.valueTo(x.X, t) + ";")
-		if x.Op == token.LAND {
-			e.line("if (" + r + ") {")
-		} else {
-			e.line("if (!" + r + ") {")
+	if x.Op == token.LAND || x.Op == token.LOR {
+		left := e.valueTo(x.X, t)
+		mark, tmark := e.body.Len(), len(e.temps)
+		right := e.valueTo(x.Y, t)
+		if e.body.Len() == mark && len(e.temps) == tmark { // C's && and || stop short of a call themselves
+			return "(" + left + " " + x.Op.String() + " " + right + ")"
 		}
 
-		mark := len(e.temps)
-		e.line(r + " = " + e.valueTo(x.Y, t) + ";")
-		e.dropTemps(mark, x.Pos())
+		r := e.temp()
+		e.saveBefore(mark, func() { // the right side's statements run only when the left side does not decide
+			e.line("bool " + r + " = " + left + ";")
+			if x.Op == token.LAND {
+				e.line("if (" + r + ") {")
+			} else {
+				e.line("if (!" + r + ") {")
+			}
+		})
+
+		e.line(r + " = " + right + ";")
+		e.dropTemps(tmark, x.Pos())
 		e.line("}")
 		return r
 	}

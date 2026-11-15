@@ -622,6 +622,12 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) value {
 	}
 
 	if depth(have) < depth(want) {
+		if r, ok := want.(*types.Ref); ok && !r.Mut() { // a constant lent is its global, which outlives the function: ref math.MaxInt64 may be returned
+			if addr, ok := e.constAddr(x); ok {
+				return value{"ptr", addr}
+			}
+		}
+
 		if !e.isPlace(x) { // a value built here and lent lives in a temporary for the statement
 			slot := e.spill(e.expr(x))
 			if r, ok := want.(*types.Ref); ok && r.Mut() {
@@ -635,6 +641,59 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) value {
 	}
 
 	return e.derefTo(e.expr(x), have, want)
+}
+
+// constAddr returns the address of the constant x denotes, which lives
+// as long as the program: a named constant's global, this package's or
+// another's, or one written here for a literal; false for anything
+// else, which a borrow lends from a temporary.
+func (e *Emitter) constAddr(x ast.Expr) (string, bool) {
+	var obj types.Object
+	switch x := x.(type) {
+	case *ast.ParenExpr:
+		return e.constAddr(x.X)
+	case *ast.BasicLit:
+		return e.constGlobal(e.expr(x)), true
+	case *ast.Ident:
+		obj = e.info.Uses[x]
+	case *ast.SelectorExpr:
+		obj = e.info.Uses[x.Sel]
+	}
+
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return "", false
+	}
+
+	if c.Pos() == token.NoPos { // true and false, which have no global of their own
+		return e.constGlobal(value{"i1", c.Name()}), true
+	}
+
+	sym, local := e.localConst[c]
+	if !local {
+		sym = lower.ObjName(c)
+	}
+
+	return "@" + sym, true
+}
+
+// constGlobal returns the address of a private constant of the module
+// holding the constant value v, written the first time v is lent: a
+// literal lent twice is one constant.
+func (e *Emitter) constGlobal(v value) string {
+	if c, ok := e.constants[v.s]; ok && c.typ == v.typ {
+		return c.s
+	}
+
+	name := "@.const." + strconv.Itoa(e.strs)
+	e.strs++
+	put(&e.consts, name, " = private unnamed_addr constant ", v.typ, " ", v.s, "\n")
+	if e.constants == nil {
+		e.constants = make(map[string]value)
+	}
+
+	e.constants[v.s] = value{v.typ, name}
+	return name
 }
 
 // builtPointer reports whether x, of type have, is an owned pointer

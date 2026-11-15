@@ -39,6 +39,7 @@ Unchanged: `package`, `import`, `:=`, `var`, zero values for the types whose zer
 | `a, b := f()` for two results | Same; several results are a tuple, `return (n, right)` |
 | An `if` is a statement | An `if` with an `else` is also an expression |
 | A newline after `>` continues the line | A newline after `>` ends the line |
+| The order of a variable's read against a call is left open: `ys[i] = f()` may read `i` after `f` | Everything is left to right: the indexes and keys of an assignment's places, then its values, then the stores |
 
 ## Chapter 4: Structs, enums and match
 

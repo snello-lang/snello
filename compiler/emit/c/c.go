@@ -43,6 +43,7 @@ type Emitter struct {
 	protos   bytes.Buffer // function prototypes
 	helpers  bytes.Buffer // generated functions, such as the printers of composite types
 	body     bytes.Buffer // function definitions
+	scratch  []byte       // the statements saveBefore holds aside, reused so that holding them allocates nothing
 	boxWords int          // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	tmp      int
 	used     map[types.Object]bool

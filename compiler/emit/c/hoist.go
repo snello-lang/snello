@@ -19,206 +19,88 @@ import (
 // calls: Snello evaluates operands left to right, as Go does, and C
 // leaves the order of arguments and initializers open.
 
-// needsHoist reports whether writing x produces statements, as the
-// writers of each expression do: a map literal with entries is made
-// empty and then filled; a map read saves its key; an index with
-// effects is saved; a slice of a slice is made in a temporary; and an
-// element, a slice or a field of a value that is no place, or that
-// moves, is read from the temporary the value is saved in.
-func (e *Emitter) needsHoist(x ast.Expr) bool {
-	switch x := x.(type) {
-	case *ast.MatchExpr, *ast.TryExpr, *ast.CoalesceExpr, *ast.IfExpr:
-		return true
-	case *ast.ParenExpr:
-		return e.needsHoist(x.X)
-	case *ast.TupleExpr:
-		return e.anyHoist(x.Elts)
-	case *ast.SelectorExpr:
-		return e.fieldSaves(x) || e.needsHoist(x.X)
-	case *ast.IndexExpr:
-		return e.indexSaves(x) || e.needsHoist(x.X) || e.needsHoist(x.Index)
-	case *ast.SliceExpr:
-		return e.sliceSaves(x) || e.needsHoist(x.X) || x.Low != nil && e.needsHoist(x.Low) || x.High != nil && e.needsHoist(x.High)
-	case *ast.CallExpr:
-		return e.needsHoist(x.Fun) || e.anyHoist(x.Args)
-	case *ast.UnaryExpr:
-		return x.Op == token.AND || e.needsHoist(x.X)
-	case *ast.BinaryExpr:
-		return e.needsHoist(x.X) || e.needsHoist(x.Y)
-	case *ast.CompositeLit:
-		return e.mapLiteralFills(x) || anyElement(x, e.needsHoist)
-	}
-
-	return false
-}
-
-// mapLiteralFills reports whether x is a map literal with entries, which
-// is made empty and then filled, a statement for each entry.
-func (e *Emitter) mapLiteralFills(x *ast.CompositeLit) bool {
-	_, isMap := e.typeOf(x).Underlying().(*types.Map)
-	return isMap && len(x.Elts) > 0
-}
-
-// fieldSaves reports whether reading the field x writes a statement of
-// its own: the value it is read from is no place, and is saved first.
-func (e *Emitter) fieldSaves(x *ast.SelectorExpr) bool {
-	v, ok := e.info.Uses[x.Sel].(*types.Var)
-	return ok && v.IsField() && !e.isPlace(x.X)
-}
-
-// indexSaves reports whether reading the element x writes a statement of
-// its own: a map's key is saved, an index with effects is, and so is a
-// collection that is no place or that moves.
-func (e *Emitter) indexSaves(x *ast.IndexExpr) bool {
-	_, isMap := e.typeOf(x.X).Underlying().(*types.Map)
-	return isMap || e.savesBase(x.X) || e.hasEffects(x.Index)
-}
-
-// sliceSaves reports whether the slice x writes a statement of its own:
-// a slice of a slice is made in a temporary, and a collection that is
-// no place or that moves is saved first.
-func (e *Emitter) sliceSaves(x *ast.SliceExpr) bool {
-	_, isSlice := lower.ValueType(e.typeOf(x.X)).Underlying().(*types.Slice)
-	return isSlice || e.savesBase(x.X)
-}
-
-// savesBase reports whether the collection x an element or a slice is
-// read from is saved in a temporary first: a value that is no place, or
-// one that moves into the operation.
-func (e *Emitter) savesBase(x ast.Expr) bool {
-	return !e.isPlace(x) || e.info.Moves[x]
-}
-
-// anyElement reports whether f holds for an expression a composite
-// literal's elements are written from: a map's keys and values, and the
-// values of the fields a struct names, whose names are no expressions
-// to evaluate and which f finds nothing in.
-func anyElement(x *ast.CompositeLit, f func(ast.Expr) bool) bool {
-	for _, elt := range x.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if f(kv.Key) || f(kv.Value) {
-				return true
-			}
-
-			continue
-		}
-
-		if f(elt) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// hasEffects reports whether evaluating x may call a function or
-// needs statements, so that its order among its neighbors is visible.
-// len and cap only read, so they count as what their argument is.
+// hasEffects reports whether evaluating x has effects whose order is
+// visible, as lower.HasEffects decides.
 func (e *Emitter) hasEffects(x ast.Expr) bool {
-	switch x := x.(type) {
-	case *ast.CallExpr:
-		if id, ok := x.Fun.(*ast.Ident); ok {
-			if b, ok := e.info.Uses[id].(*types.Builtin); ok && (b.ID() == types.BuiltinLen || b.ID() == types.BuiltinCap) {
-				return e.anyEffects(x.Args)
-			}
-		}
-
-		return true
-	case *ast.ParenExpr:
-		return e.hasEffects(x.X)
-	case *ast.TupleExpr:
-		return e.anyEffects(x.Elts)
-	case *ast.SelectorExpr:
-		return e.hasEffects(x.X)
-	case *ast.IndexExpr:
-		return e.hasEffects(x.X) || e.hasEffects(x.Index)
-	case *ast.SliceExpr:
-		return e.hasEffects(x.X) || x.Low != nil && e.hasEffects(x.Low) || x.High != nil && e.hasEffects(x.High)
-	case *ast.UnaryExpr:
-		return e.hasEffects(x.X)
-	case *ast.BinaryExpr:
-		return e.hasEffects(x.X) || e.hasEffects(x.Y)
-	case *ast.CompositeLit:
-		return anyElement(x, e.hasEffects)
-	}
-
-	return e.needsHoist(x)
-}
-
-func (e *Emitter) anyEffects(xs []ast.Expr) bool {
-	for _, x := range xs {
-		if e.hasEffects(x) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (e *Emitter) anyHoist(xs []ast.Expr) bool {
-	for _, x := range xs {
-		if e.needsHoist(x) {
-			return true
-		}
-	}
-
-	return false
+	return lower.HasEffects(e.info, x)
 }
 
 // operands writes a list of operands evaluated left to right, each
-// converted to the wanted type when wants gives one. An operand is saved
-// in a temporary, so that it is evaluated before the ones after it, when
-// one after it has effects, a call or a match, which could change what
-// it reads; when it has effects itself and one after it writes
-// statements, a map read saving its key, which would otherwise run
-// first and read what it had not changed yet; and when it reads a
-// variable an operand after it moves away, (v.Clone(), v), since the
-// move empties the variable before the expression is evaluated. An owned value so
-// saved, which the operation takes, is held until every operand is
-// evaluated when one after it may leave the statement, by ? or a
-// return in its else, and only then moved out of its temporary, so
-// that leaving drops it and taking it drops nothing twice.
+// converted to the wanted type when wants gives one. C leaves the order
+// of a call's arguments and of an initializer's elements open, so an
+// operand is saved in a temporary, evaluated before the ones after it,
+// when its order against a later one is visible (ordered); and when a
+// later operand moves a variable it reads out of, (v.Clone(), v). An
+// operand whose writing wrote statements of its own, a map read saving
+// its key, has them run where it stands: an earlier operand still to
+// be evaluated whose order against it is visible is saved before them.
+// An owned value so saved, which the operation takes, is held until
+// every operand is evaluated when one after it may leave the statement,
+// by ? or a return in its else, and only then moved out of its
+// temporary, so that leaving drops it and taking it drops nothing
+// twice.
 func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
-	last, writes, leaves := -1, -1, -1
+	leaves := -1
 	for i, x := range xs {
-		if e.hasEffects(x) {
-			last = i
-		}
-
-		if e.needsHoist(x) {
-			writes = i
-		}
-
 		if lower.MayLeave(x) {
 			leaves = i
 		}
 	}
 
 	parts := make([]string, len(xs))
+	var savedSmall [8]bool
+	saved := savedSmall[:0]
+	if len(xs) <= len(savedSmall) {
+		saved = savedSmall[:len(xs)]
+	} else {
+		saved = make([]bool, len(xs))
+	}
+
 	var kept []int // the owned values held until the last operand that may leave
+	save := func(k int) {
+		x := xs[k]
+		var want types.Type
+		if wants != nil {
+			want = wants[k]
+		}
+
+		t := want
+		if t == nil {
+			t = e.typeOf(x)
+		}
+
+		tmp := e.temp()
+		e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[k] + ";")
+		parts[k], saved[k] = tmp, true
+		switch {
+		case e.lent(x, want):
+			e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
+		case k < leaves && want != nil && !isBorrowType(want) && needsDrop(t):
+			e.hold(tmp, t)
+			kept = append(kept, k)
+		}
+	}
+
 	for i, x := range xs {
 		var want types.Type
 		if wants != nil {
 			want = wants[i]
 		}
 
+		mark := e.body.Len()
 		parts[i] = e.valueTo(x, want)
-		t := want
-		if t == nil {
-			t = e.typeOf(x)
+		if e.body.Len() > mark { // x wrote statements: an earlier operand ordered against it goes before them
+			e.saveBefore(mark, func() {
+				for k := range i {
+					if !saved[k] && !lower.IsConstant(e.info, xs[k]) && lower.Ordered(e.info, xs[k], x) {
+						save(k)
+					}
+				}
+			})
 		}
 
-		if i < last || i < writes && e.hasEffects(x) || e.lent(x, want) || e.readsMoved(x, xs[i+1:]) {
-			tmp := e.temp()
-			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + parts[i] + ";")
-			parts[i] = tmp
-			switch {
-			case e.lent(x, want):
-				e.hold(tmp, e.typeOf(borrowed(x))) // built here and only lent: dropped when the statement ends
-			case i < leaves && want != nil && !isBorrowType(want) && needsDrop(t):
-				e.hold(tmp, t)
-				kept = append(kept, i)
-			}
+		if !saved[i] && (lower.OrderedBefore(e.info, x, xs[i+1:]) || e.lent(x, want) || e.readsMoved(x, xs[i+1:])) {
+			save(i)
 		}
 	}
 
@@ -227,6 +109,17 @@ func (e *Emitter) operands(xs []ast.Expr, wants []types.Type) []string {
 	}
 
 	return parts
+}
+
+// saveBefore writes, with write, statements that must run before the
+// ones written since the body's length was mark: those are taken out,
+// write writes, and they are put back after.
+func (e *Emitter) saveBefore(mark int, write func()) {
+	tail := append(e.scratch[:0], e.body.Bytes()[mark:]...)
+	e.body.Truncate(mark)
+	write()
+	e.body.Write(tail)
+	e.scratch = tail[:0]
 }
 
 // readsMoved reports whether x reads a variable one of the operands
@@ -252,7 +145,7 @@ func (e *Emitter) movesRead(y, x ast.Expr) bool {
 	}
 
 	if e.info.Moves[y] {
-		if v := placeRoot(e.info, y); v != nil && mentions(e.info, x, v) {
+		if v := lower.PlaceRoot(e.info, y); v != nil && lower.Mentions(e.info, x, v) {
 			return true
 		}
 	}
@@ -279,7 +172,7 @@ func (e *Emitter) movesRead(y, x ast.Expr) bool {
 	case *ast.TupleExpr:
 		return e.anyMovesRead(y.Elts, x)
 	case *ast.CompositeLit:
-		return anyElement(y, func(z ast.Expr) bool { return e.movesRead(z, x) })
+		return lower.AnyElement(y, func(z ast.Expr) bool { return e.movesRead(z, x) })
 	}
 
 	return true
@@ -294,74 +187,6 @@ func (e *Emitter) anyMovesRead(ys []ast.Expr, x ast.Expr) bool {
 	}
 
 	return false
-}
-
-// placeRoot returns the variable at the root of the place x, v of v,
-// v.f and v[i], or nil.
-func placeRoot(info *types.Info, x ast.Expr) types.Object {
-	for {
-		switch y := x.(type) {
-		case *ast.Ident:
-			return info.Uses[y]
-		case *ast.ParenExpr:
-			x = y.X
-		case *ast.SelectorExpr:
-			x = y.X
-		case *ast.IndexExpr:
-			x = y.X
-		case *ast.UnaryExpr:
-			x = y.X
-		default:
-			return nil
-		}
-	}
-}
-
-// mentions reports whether x may read the variable v: it names v, or is
-// an expression whose parts it does not look into, which may.
-func mentions(info *types.Info, x ast.Expr, v types.Object) bool {
-	switch x := x.(type) {
-	case nil: // a slice's bound left out
-		return false
-	case *ast.Ident:
-		return info.Uses[x] == v
-	case *ast.BasicLit, *ast.TypeExpr:
-		return false
-	case *ast.ParenExpr:
-		return mentions(info, x.X, v)
-	case *ast.TryExpr:
-		return mentions(info, x.X, v)
-	case *ast.SliceExpr:
-		return mentions(info, x.X, v) || mentions(info, x.Low, v) || mentions(info, x.High, v)
-	case *ast.SelectorExpr:
-		return mentions(info, x.X, v)
-	case *ast.IndexExpr:
-		return mentions(info, x.X, v) || mentions(info, x.Index, v)
-	case *ast.UnaryExpr:
-		return mentions(info, x.X, v)
-	case *ast.BinaryExpr:
-		return mentions(info, x.X, v) || mentions(info, x.Y, v)
-	case *ast.CallExpr:
-		if id, ok := x.Fun.(*ast.Ident); ok {
-			if _, value := info.Uses[id].(*types.Var); value {
-				return true // a function value, a closure among them, may read any variable it captured
-			}
-		}
-
-		if mentions(info, x.Fun, v) {
-			return true
-		}
-
-		for _, a := range x.Args {
-			if mentions(info, a, v) {
-				return true
-			}
-		}
-
-		return false
-	}
-
-	return true
 }
 
 // isBorrowType reports whether t is a borrow, which an operation

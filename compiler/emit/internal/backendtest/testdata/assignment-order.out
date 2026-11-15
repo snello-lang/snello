@@ -1,0 +1,8 @@
+map key then value map[1:2]
+slice index then value [0 2 0 0]
+len before the entry map[a:0]
+index read before the value [9 6 7]
+compound index first [0 2 0]
+index before the swap [5 0 0 0 0] 2
+left operands then right [0 3 4 0 0 0]
+index read before a value that changes it [0 7 0] 2

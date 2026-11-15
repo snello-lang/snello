@@ -9,7 +9,10 @@ package wordfreq
 
 import ("fmt"; "os")
 
-struct Count { word string; n int }
+struct Count {
+	word string
+	n    int
+}
 
 func main() {
     text := os.ReadToString("input.txt").Expect("read input")
@@ -134,6 +137,20 @@ pat := if ci { "(?i)" + p } else { p.Clone() }
 `if x := opt {`, a short declaration followed directly by `{`, is a binding, not an init statement. It binds `x` when the optional `opt` holds a value and skips the block when it does not; the `;` tells the two forms apart. Chapter 8 covers optionals, and chapter 4 covers `match`, which handles enums and replaces most uses of `switch`.
 
 `defer` runs a call when the enclosing function ends, by a return, after the return value is computed, or by a panic. The arguments are evaluated where the `defer` stands, but for a variable lent to a `ref` parameter, which the call reads as it is when the call runs, chapter 6 says why; several deferred calls run last first, as in Go; chapter 5 says how they run beside the drops of values. `spawn f(x)` starts a task running the call; chapter 10 covers it. Both take a call and nothing else.
+
+## Order of evaluation
+
+Everything is evaluated left to right: a call's arguments, a literal's elements, the two sides of an operator. An assignment evaluates, left to right, the indexes and keys of the places it writes, then the values it writes, and only then stores them:
+
+```go
+xs[i], i = 5, 2          // writes xs at the old i, then sets i
+m[next()] = next()       // the first call gives the key, the second the value
+n["a"] = len(n)          // len counts no entry for "a": the entry is made by the store
+```
+
+A compound assignment reads its place first, as the left operand of the operator it stands for, then evaluates its value, and only then reaches the place again to store. `c += tick(mut c)` adds to `c` as it was before `tick` ran; `s += f(mut s)` appends to the old text, and `m["a"] += f(mut m)` adds to the entry as it was, the zero value when there was none, the entry made by the store. A value that grows the slice the place is in, `xs[0] += grow(mut xs)`, has the sum written into the slice as it is after the growth.
+
+`&&` and `||` evaluate their right side only when the left one leaves the answer open, as in Go.
 
 ## Built-in functions
 

@@ -1,0 +1,52 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An assignment evaluates, left to right, the index and key operands of
+// the places it writes, then the values it writes, and only then stores:
+// a key a call gives before the value another gives, an index read
+// before a value that changes it, an entry a store makes counted by no
+// value, and several places and values in one assignment.
+
+package main
+
+import "fmt"
+
+func tick(c mut int) int {
+	*c += 1
+	return *c
+}
+
+func main() {
+	c := 0
+	m := map[int]int{}
+	m[tick(mut c)] = tick(mut c)
+	fmt.Println("map key then value", m)
+	xs := []int{0, 0, 0, 0}
+	c = 0
+	xs[tick(mut c)] = tick(mut c)
+	fmt.Println("slice index then value", xs)
+	n := map[string]int{}
+	n["a"] = len(n)
+	fmt.Println("len before the entry", n)
+	i := 0
+	ys := []int{5, 6, 7}
+	ys[i] = func() int { i = 2; return 9 }()
+	fmt.Println("index read before the value", ys)
+	k := 1
+	zs := []int{0, 0, 0}
+	zs[k] += tick(mut k)
+	fmt.Println("compound index first", zs)
+	as := []int{0, 0, 0, 0, 0}
+	i = 0
+	as[i], i = 5, 2
+	fmt.Println("index before the swap", as, i)
+	c = 0
+	bs := []int{0, 0, 0, 0, 0, 0}
+	bs[tick(mut c)], bs[tick(mut c)] = tick(mut c), tick(mut c)
+	fmt.Println("left operands then right", bs)
+	q := 1
+	qs := []int{0, 0, 0}
+	qs[q], q = func() int { q = 0; return 7 }(), 2
+	fmt.Println("index read before a value that changes it", qs, q)
+}

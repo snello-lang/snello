@@ -67,6 +67,7 @@ type Emitter struct {
 	localConst map[*types.Const]string         // the constants declared in a function, each a global of its own
 	fn         *function                       // the function being written
 	strs       int                             // string constants written so far
+	constants  map[string]value                // the constant written for each constant value lent, by its text: its type and its global
 	closures   int                             // closures written so far, numbering their functions
 	seq        int                             // values and deferred calls registered so far, ordering what a return releases
 	tasks      int                             // spawn statements written so far, numbering their trampolines

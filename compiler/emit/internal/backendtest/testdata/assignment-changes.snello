@@ -1,0 +1,364 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An assignment's order when its value changes what its place reads: a
+// compound assignment reading its place before a value that changes it,
+// into a variable, an element and a map's entry made by the store,
+// which the value does not see; several places stored in turn, each
+// operand evaluated before any store; and values that change what a
+// place reads through a mut borrow passed on, a mut receiver, a closure
+// handed to a call, or another borrow of the map; and through a mut
+// borrow a value passed on holds: a struct made in the call or held in
+// a variable, an option, a tuple, a by-value receiver and a mut borrow
+// of such a struct. A compound assignment whose value changes its place reads the
+// old value first and reaches the place again to store, for a string,
+// a map's entry, present or not, an element of a slice the value grows
+// and a type with an Add.
+
+package main
+
+import "fmt"
+
+func tick(c mut int) int {
+	*c += 1
+	return *c
+}
+
+func grow(m mut map[string]int) int {
+	m["z"] = 1
+	return len(*m)
+}
+
+func compoundAndMulti() {
+	c := 0
+	c += tick(mut c)
+	fmt.Println("compound self", c)
+	c = 0
+	xs := []int{0, 0, 0}
+	xs[c] += tick(mut c) * 10
+	fmt.Println("compound index", xs)
+	m := map[string]int{}
+	m["a"] += len(m) + 1
+	fmt.Println("compound map", m)
+	n := map[string]int{"q": 1}
+	n["a"] = grow(mut n)
+	fmt.Println("map value grows", n)
+	mm := map[string]map[string]int{}
+	mm["x"]["y"] = len(mm)
+	fmt.Println("nested map", mm)
+	c = 0
+	a, b := tick(mut c), c
+	fmt.Println("define pair", a, b)
+	c = 0
+	ys := []int{0, 0, 0}
+	ys[c], c = tick(mut c), 0
+	fmt.Println("multi", ys, c)
+	c = 0
+	o := map[int]int{}
+	o[c], o[tick(mut c)] = c, c
+	fmt.Println("multi map", o)
+	s := []string{"a".Clone(), "b".Clone()}
+	c = 0
+	s[tick(mut c)] = s[c] + "!"
+	fmt.Println("string elems", s)
+	var opt int? = Some(3)
+	c = 0
+	zs := []int{0, 0, 0, 0, 0}
+	zs[opt ?? 0] = tick(mut c)
+	zs[c] = opt ?? tick(mut c)
+	fmt.Println("coalesce", zs)
+}
+
+struct S { n int }
+
+func compoundIntoMaps() {
+	sm := map[string]S{}
+	sm["a"].n += len(sm) + 1
+	fmt.Println("field", sm)
+	mm := map[string]map[string]int{}
+	mm["x"]["y"] += len(mm) + 1
+	fmt.Println("nested", mm)
+	m := map[string]int{}
+	m["a"] += len(m) + 1
+	fmt.Println("plain", m)
+	ms := map[string][]int{}
+	ms["a"] = []int{len(ms)}
+	fmt.Println("slice value", ms)
+	c := 0
+	c *= 0 + tick(mut c)
+	fmt.Println("mul self", c)
+	c = 5
+	c -= tick(mut c)
+	fmt.Println("sub self", c)
+	xs := []int{1, 2}
+	i := 0
+	xs[i] -= tick(mut xs[i])
+	fmt.Println("elem self", xs)
+}
+
+func storesInTurn() {
+	i := 0
+	xs := []int{0, 0, 0}
+	i, xs[i] = 2, 5
+	fmt.Println(i, xs)
+	m := map[int]int{}
+	k := 1
+	k, m[k] = 7, 8
+	fmt.Println(k, m)
+	ys := []int{0, 0, 0}
+	zs := []int{0, 0, 0}
+	j := 0
+	ys[j], j, zs[j] = 1, 2, 3
+	fmt.Println(ys, j, zs)
+}
+
+func bump(c mut int) int {
+	*c = 2
+	return 9
+}
+
+struct Ctr { n int }
+
+func (k mut Ctr) Next() int {
+	k.n = 2
+	return 7
+}
+
+func viaParam(i mut int) []int {
+	ys := []int{5, 6, 7}
+	ys[*i] = bump(i)
+	return ys
+}
+
+func viaRecv(k mut Ctr) []int {
+	zs := []int{1, 2, 3}
+	zs[k.n] = k.Next()
+	return zs
+}
+
+func viaMap(i mut int) map[int]int {
+	m := map[int]int{}
+	m[*i] = bump(i)
+	return m
+}
+
+func changedThroughBorrows() {
+	j := 0
+	fmt.Println("param", viaParam(mut j))
+	k := Ctr{n: 0}
+	fmt.Println("receiver", viaRecv(mut k))
+	j = 0
+	fmt.Println("map", viaMap(mut j))
+}
+
+struct Lent {
+	p mut int
+}
+
+func (l Lent) Bump() int {
+	*l.p = 2
+	return 9
+}
+
+func bumpLent(l Lent) int {
+	*l.p = 2
+	return 9
+}
+
+func bumpThrough(l mut Lent) int {
+	*l.p = 2
+	return 9
+}
+
+func bumpSome(o (mut int)?) int {
+	if p := o {
+		*p = 2
+	}
+
+	return 9
+}
+
+func bumpPair(t (mut int, int)) int {
+	p, _ := t
+	*p = 2
+	return 9
+}
+
+func viaTuple(r mut int) []int {
+	ys := []int{5, 6, 7}
+	ys[*r] = bumpPair((r, 1))
+	return ys
+}
+
+func viaLiteral(r mut int) []int {
+	ys := []int{5, 6, 7}
+	ys[*r] = bumpLent(Lent{p: r})
+	return ys
+}
+
+func viaLiteralCompound(r mut int) []int {
+	ys := []int{1, 1, 1}
+	ys[*r] += bumpLent(Lent{p: r})
+	return ys
+}
+
+func viaHeld(r mut int) []int {
+	ys := []int{5, 6, 7}
+	l := Lent{p: r}
+	ys[*l.p] = bumpLent(l)
+	return ys
+}
+
+func viaOption(r mut int) []int {
+	ys := []int{5, 6, 7}
+	ys[*r] = bumpSome(Some(r))
+	return ys
+}
+
+func viaValueReceiver(r mut int) []int {
+	ys := []int{5, 6, 7}
+	l := Lent{p: r}
+	ys[*l.p] = l.Bump()
+	return ys
+}
+
+func viaBorrowOfHolder(r mut int) []int {
+	ys := []int{5, 6, 7}
+	l := Lent{p: r}
+	ys[*l.p] = bumpThrough(mut l)
+	return ys
+}
+
+func changedThroughHeldBorrows() {
+	j := 0
+	fmt.Println("literal", viaLiteral(mut j))
+	j = 0
+	fmt.Println("literal compound", viaLiteralCompound(mut j))
+	j = 0
+	fmt.Println("held", viaHeld(mut j))
+	j = 0
+	fmt.Println("option", viaOption(mut j))
+	j = 0
+	fmt.Println("tuple", viaTuple(mut j))
+	k := 0
+	fmt.Println("tuple made here", bumpPair((mut k, 1)), k)
+	j = 0
+	fmt.Println("value receiver", viaValueReceiver(mut j))
+	j = 0
+	fmt.Println("borrow of holder", viaBorrowOfHolder(mut j))
+}
+
+func setInt(c mut int, v int) int {
+	*c = v
+	return 3
+}
+
+func setEntry(m mut map[string]int, v int) int {
+	m["a"] = v
+	return 3
+}
+
+func setText(s mut string) string {
+	*s = "Q".Clone()
+	return "r".Clone()
+}
+
+func setTextEntry(m mut map[string]string) string {
+	m["a"] = "M".Clone()
+	return "t".Clone()
+}
+
+func growInts(xs mut []int) int {
+	for i := 0; i < 1000; i += 1 {
+		xs.Push(i)
+	}
+
+	return 5
+}
+
+func growTexts(xs mut []string) string {
+	for i := 0; i < 1000; i += 1 {
+		xs.Push("z".Clone())
+	}
+
+	return "!".Clone()
+}
+
+struct Coins impl Add {
+	n int
+}
+
+func (a Coins) Add(b Coins) Coins {
+	return Coins{n: a.n + b.n}
+}
+
+func growCoins(xs mut []Coins) Coins {
+	for i := 0; i < 1000; i += 1 {
+		xs.Push(Coins{n: i})
+	}
+
+	return Coins{n: 5}
+}
+
+func compoundChangingItsPlace() {
+	c := 12
+	c /= setInt(mut c, 100)
+	fmt.Println("self divide", c)
+	m := map[string]int{"a": 12}
+	m["a"] += setEntry(mut m, 100)
+	fmt.Println("entry", m)
+	n := map[string]int{}
+	n["a"] += setEntry(mut n, 100)
+	fmt.Println("missing entry", n)
+	s := "a".Clone()
+	s += setText(mut s)
+	fmt.Println("string", s)
+	ts := []string{"a".Clone(), "b".Clone()}
+	ts[0] += setText(mut ts[0])
+	fmt.Println("string element", ts)
+	tm := map[string]string{"a": "a".Clone()}
+	tm["a"] += setTextEntry(mut tm)
+	fmt.Println("string entry", tm)
+	tn := map[string]string{}
+	tn["a"] += setTextEntry(mut tn)
+	fmt.Println("missing string entry", tn)
+	xs := []int{1}
+	xs[0] += growInts(mut xs)
+	fmt.Println("grown", xs[0], len(xs))
+	gs := []string{"a".Clone()}
+	gs[0] += growTexts(mut gs)
+	fmt.Println("grown string", gs[0], len(gs))
+	cs := []Coins{Coins{n: 1}}
+	cs[0] += growCoins(mut cs)
+	fmt.Println("grown add", cs[0].n, len(cs))
+}
+
+func call(g func() int) int { return g() }
+
+func count(m ref map[string]int) int { return len(*m) }
+
+func viaRef(m ref map[string]int, out mut map[string]int) {
+	(*out)["a"] = count(m)
+}
+
+func mapSeenByValues() {
+	n := map[string]int{}
+	g := func() int { return len(n) }
+	n["a"] = call(g)
+	fmt.Println("closure", n)
+	k := map[string]int{}
+	r := ref k
+	k["a"] = count(r)
+	fmt.Println("borrow var", k)
+}
+
+func main() {
+	compoundAndMulti()
+	compoundIntoMaps()
+	storesInTurn()
+	changedThroughBorrows()
+	changedThroughHeldBorrows()
+	compoundChangingItsPlace()
+	mapSeenByValues()
+}
