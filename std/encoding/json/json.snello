@@ -19,6 +19,8 @@
 // or through all of them when it lists Reflect. Attributes change the
 // keys and leave fields out: Name, OmitEmpty and Skip, below; a type
 // that lists Marshaler or Unmarshaler writes or reads its own JSON.
+// MarshalIndent writes the same text laid out to be read, and Indent
+// lays out text already written.
 //
 // Reading finds each field of a struct by its key, wherever the text
 // puts it, and passes over a key the struct has no field for. A field
@@ -75,6 +77,19 @@ const scannedKeys = 16
 // controlEnd is where the control characters end, U+0000 to U+001F,
 // which RFC 8259 has a string escape and never hold as they are.
 const controlEnd byte = 0x20
+
+// The white space RFC 8259 allows around the parts of JSON text, of
+// which MarshalIndent and Indent add two: a line break before each
+// element of an array or member of an object, and a space after a
+// member's name separator.
+const space byte = ' '
+const tab byte = '\t'
+const newline byte = '\n'
+const carriageReturn byte = '\r'
+
+// indentedGrowth is how many times the compact text's length the block
+// laid out text is made in starts at.
+const indentedGrowth = 2
 
 // Name is the key a field or a variant is written and read under, in
 // place of the name it is declared with: Host string
@@ -276,6 +291,52 @@ func Marshal<T>(v ref T) Result<string, Error> {
 	}
 
 	return Ok(w.out.String())
+}
+
+// MarshalIndent returns v as JSON text, as Marshal does, laid out to
+// be read: each element of an array and each member of an object on a
+// line of its own, the line begun with prefix and then indent once for
+// each array or object it is inside, and a space after each member's
+// colon. An empty array or object stays [] or {}. The first line has
+// no prefix, so the text can be put after one already written, and no
+// line break ends the text.
+//
+// It fails where Marshal fails. It costs a pass over the compact text
+// more than Marshal does, and borrows v, prefix and indent for the
+// call. prefix and indent are written as they are: space, "  " or
+// "\t", keeps the text JSON, and anything else, "// ", makes a layout
+// that is no longer JSON.
+//
+//	text := json.MarshalIndent(ref p, "", "  ")?
+//	// {
+//	//   "X": 1,
+//	//   "Y": 2
+//	// }
+func MarshalIndent<T>(v ref T, prefix ref string, indent ref string) Result<string, Error> {
+	text := Marshal(v)?
+	return Ok(indented(ref text, prefix, indent))
+}
+
+// Indent returns text, one JSON value with space around it, laid out
+// as MarshalIndent lays out what it writes: each element and member on
+// a line of its own, begun with prefix and indent once for each level.
+// The space text had around and between its parts is dropped, and its
+// strings are kept as they are, escapes and all.
+//
+// It returns an error when text is not UTF-8, and one with its offset
+// when text is not one JSON value. It costs a pass to check text and
+// one to write it, and borrows text, prefix and indent for the call.
+//
+//	text := json.Indent(`{"a":[1,2]}`, "", "  ")?
+//	// {
+//	//   "a": [
+//	//     1,
+//	//     2
+//	//   ]
+//	// }
+func Indent(text ref string, prefix ref string, indent ref string) Result<string, Error> {
+	checkOneValue(text)?
+	return Ok(indented(text, prefix, indent))
 }
 
 // Unmarshal reads a value of T from JSON text, which holds that value
@@ -855,19 +916,106 @@ func writeValue<T>(v ref T, w mut writer) {
 }
 
 // isOneValue reports whether text is one JSON value, with space around
-// it.
+// it, in UTF-8.
 func isOneValue(text ref string) bool {
-	if !utf8.ValidString(text) { // RFC 8259 text is UTF-8: written as it is, it must be
-		return false
+	return checkOneValue(text).IsOk()
+}
+
+// checkOneValue returns an error, with its offset, unless text is one
+// JSON value with space around it, in UTF-8: RFC 8259 text is UTF-8,
+// and text written as it is must be too.
+func checkOneValue(text ref string) Result<(), Error> {
+	if !utf8.ValidString(text) {
+		return Err(Error{at: -1, msg: "invalid UTF-8 in the text"})
 	}
 
 	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}}
-	if r.skipValue().IsErr() {
-		return false
+	r.skipValue()?
+	r.skipSpace()
+
+	if r.at < len(text) {
+		return Err(r.errorHere("text after the value"))
 	}
 
-	r.skipSpace()
-	return r.at == len(text)
+	return Ok(())
+}
+
+// indented returns text, one JSON value, as Indent lays it out: a line
+// break, prefix and indent once for each level before each element and
+// member and before the bracket that closes them, and a space after a
+// colon. Space between the parts is dropped; a string's bytes are kept
+// as they are. The text is made in one block, twice text's length to
+// start, which a layout of two spaces seldom outgrows.
+func indented(text ref string, prefix ref string, indent ref string) string {
+	out := strings.Builder{}
+	out.Grow(len(text) * indentedGrowth)
+	depth := 0
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			out.WriteByte(c)
+			match {
+				escaped => escaped = false,
+				c == escape => escaped = true,
+				c == quotationMark => inString = false,
+				_ => {},
+			}
+
+			continue
+		}
+
+		match {
+			isSpace(c) => {},
+			c == quotationMark => {
+				inString = true
+				out.WriteByte(c)
+			}
+			c == beginArray || c == beginObject => {
+				out.WriteByte(c)
+				next := i + 1
+
+				for next < len(text) && isSpace(text[next]) {
+					next++
+				}
+
+				if next < len(text) && (text[next] == endArray || text[next] == endObject) {
+					out.WriteByte(text[next]) // [] and {} stay on their line
+					i = next
+				} else {
+					depth++
+					writeLineStart(prefix, indent, depth, mut out)
+				}
+			}
+			c == endArray || c == endObject => {
+				depth--
+				writeLineStart(prefix, indent, depth, mut out)
+				out.WriteByte(c)
+			}
+			c == valueSeparator => {
+				out.WriteByte(c)
+				writeLineStart(prefix, indent, depth, mut out)
+			}
+			c == nameSeparator => {
+				out.WriteByte(c)
+				out.WriteByte(space)
+			}
+			_ => out.WriteByte(c),
+		}
+	}
+
+	return out.String()
+}
+
+// writeLineStart begins a line of indented text: a line break, prefix,
+// and indent depth times.
+func writeLineStart(prefix ref string, indent ref string, depth int, out mut strings.Builder) {
+	out.WriteByte(newline)
+	out.WriteString(prefix)
+
+	for level := 0; level < depth; level++ {
+		out.WriteString(indent)
+	}
 }
 
 // writeCompact writes text, one JSON value, without the space between
@@ -1346,7 +1494,7 @@ func (r mut reader) skipSpace() {
 // isSpace reports whether c is white space between the parts of JSON
 // text: a space, a tab or a line end.
 func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+	return c == space || c == tab || c == newline || c == carriageReturn
 }
 
 // peek returns the byte at the offset, or 0 at the end.

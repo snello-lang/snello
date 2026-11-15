@@ -155,6 +155,20 @@ text := json.Marshal(ref server)?             // {"Host":"h","Port":1,"Tags":["a
 back := json.Unmarshal<Server>(ref text)?
 ```
 
+`Marshal` writes one line with no space between the parts, for a program to read. `json.MarshalIndent(ref server, "", "  ")` writes the same JSON laid out for a person: each element and member on a line of its own, begun with the prefix, `""` here, and the indent once for each level, a space after each colon, an empty array or object kept as `[]` or `{}`. `json.Indent(ref text, "", "\t")` lays out JSON text already written the same way, and refuses text that is not one value, with its offset.
+
+```go
+pretty := json.MarshalIndent(ref server, "", "  ")?
+// {
+//   "Host": "h",
+//   "Port": 1,
+//   "Tags": [
+//     "a"
+//   ],
+//   "At": null
+// }
+```
+
 A struct is an object of its fields, under the names they are declared with; an option `null` or its value; a slice an array; a map with string keys an object with its keys sorted; an enum's variant its name, `"Dot"`, or an object of one key, `{"Circle":{"r":1.5}}`, `{"Bool":true}` for one unnamed field and `{"Pair":[1,2]}` for several. Reading finds each field by its key, wherever the text puts it, passes over a key the type has no field for, takes a missing field's default or `None`, and refuses any other missing field, a number its field cannot hold and a key given twice, each with its offset: `json: missing field Tags at offset 0`. `Marshal` refuses only a float JSON has no text for, a NaN or an infinity. An owned pointer is the value it points at, so `struct Node { V int; Up *Node? }` round-trips.
 
 Reading holds the text to JSON's grammar: `01`, `+1`, `.5`, a member without its comma, a raw control character in a string and text after the value are errors with their offset. Arrays and objects nest at most 128 deep, in a value read or one passed over, since a task's stack does not grow: ten thousand `[` are an error, `exceeded max depth`, not a crash. A float is written by its shortest text, in plain decimals from `1e-6` up to `1e21` and with an exponent outside, an `f32` by its own, `0.1`; a string with its quotes, backslashes and control characters escaped and invalid UTF-8 as `\ufffd`, and nothing escaped for HTML.

@@ -83,9 +83,17 @@ func main() {
 	}
 
 	tree := time.Since(start)
+	start = time.Now()
+	laid := 0
+	for r := 0; r < rounds; r++ { // laid out for a person to read
+		b, _ := json.MarshalIndent(records, "", "  ")
+		laid += len(b)
+	}
+
+	indented := time.Since(start)
 	first := text[0:strings.Index(text, "},")]
 	fmt.Println(len(text), n/rounds, m/rounds, first)
-	fmt.Println(sum/rounds, items/rounds, written > 0)
+	fmt.Println(sum/rounds, items/rounds, written > 0, laid/rounds)
 	per := int64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per, "tree", tree.Nanoseconds()/per)
+	fmt.Println("encode", encode.Nanoseconds()/per, "decode", decode.Nanoseconds()/per, "untyped", untyped.Nanoseconds()/per, "tree", tree.Nanoseconds()/per, "indent", indented.Nanoseconds()/per)
 }

@@ -487,3 +487,56 @@ func TestTextUTF8() {
 	expect.Contains(ref expect.IsErr(json.Text.Of("\"a\xffb\"")).Error(), "invalid UTF-8")
 	expect.Equal(ref expect.IsErr(json.Marshal(ref Latin{n: 1})).Error(), "json: MarshalJSON gave text that is not one JSON value")
 }
+
+// MarshalIndent lays out what Marshal writes, as Go's MarshalIndent
+// does: a line for each element and member, prefix and indent per
+// level, a space after a colon, [] and {} kept, and a string's
+// brackets, commas, colons and escapes untouched.
+func TestMarshalIndent() {
+	s := Server{Host: "a{b}[c],:".Clone(), Port: 1, Tags: []string{}, Peers: map[string]Point{"p": Point{X: 1, Y: 2}}, At: None, Ratio: 0.5, Small: 2, Debug: true}
+	want := `{
+  "Host": "a{b}[c],:",
+  "Port": 1,
+  "Tags": [],
+  "Peers": {
+    "p": {
+      "X": 1,
+      "Y": 2
+    }
+  },
+  "At": null,
+  "Ratio": 0.5,
+  "Small": 2,
+  "Debug": true
+}`
+	text := expect.IsOk(json.MarshalIndent(ref s, "", "  "))
+	expect.Equal(ref text, want)
+	back := expect.IsOk(json.Unmarshal<Server>(ref text)) // read back, it is the same value
+	expect.Equal(ref expect.IsOk(json.Marshal(ref back)), ref expect.IsOk(json.Marshal(ref s)))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref []int{1, 2}, ">", "\t")), "[\n>\t1,\n>\t2\n>]")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref 7, "> ", "  ")), "7")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref "q\"u,o:te\\".Clone(), "", "  ")), `"q\"u,o:te\\"`)
+	expect.IsErr(json.MarshalIndent(ref Bad{}, "", "  "))
+	v := expect.IsOk(json.Unmarshal<json.Value>(`{"a":[1,{}],"b":null}`))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref v, "", " ")), "{\n \"a\": [\n  1,\n  {}\n ],\n \"b\": null\n}")
+	e := expect.IsOk(json.Unmarshal<Envelope>(`{"Kind": "p", "Body": { "x" : [ 1 ] }}`))
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref e, "", " ")), "{\n \"Kind\": \"p\",\n \"Body\": {\n  \"x\": [\n   1\n  ]\n }\n}") // a Text's own space is laid out anew
+}
+
+// Indent lays out any JSON text, dropping the space it had, and refuses
+// text that is not one value.
+func TestIndent() {
+	expect.Equal(ref expect.IsOk(json.Indent(" { \"a\" : [ 1 , { } , [ ] ] , \"b\" : \"s p\" } ", "", "  ")), "{\n  \"a\": [\n    1,\n    {},\n    []\n  ],\n  \"b\": \"s p\"\n}")
+	expect.Equal(ref expect.IsOk(json.Indent("[ ]", "", "  ")), "[]")
+	expect.Contains(ref expect.IsErr(json.Indent("[1, 2", "", "  ")).Error(), "expected ]")
+	expect.Contains(ref expect.IsErr(json.Indent("[1] x", "", "  ")).Error(), "text after the value at offset 4")
+	expect.Contains(ref expect.IsErr(json.Indent(string([]byte{0x22, 0xff, 0x22}), "", "  ")).Error(), "invalid UTF-8")
+	expect.Equal(ref expect.IsOk(json.Indent(`["a\\",{"k\\":1}]`, "", "  ")), "[\n  \"a\\\\\",\n  {\n    \"k\\\\\": 1\n  }\n]") // an escaped backslash does not escape the quote after it
+	expect.Equal(ref expect.IsOk(json.Indent("[1]", "//", "\t")), "[\n//\t1\n//]")
+	expect.Equal(ref expect.IsOk(json.Indent("  42  ", "", "  ")), "42")
+	expect.IsErr(json.Indent("", "", "  "))
+	deep := (strings.Repeat("[", 200) ?? "") + (strings.Repeat("]", 200) ?? "")
+	expect.Contains(ref expect.IsErr(json.Indent(ref deep, "", "  ")).Error(), "exceeded max depth")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref map[string]int{}, "", "  ")), "{}")
+	expect.Equal(ref expect.IsOk(json.MarshalIndent(ref []int{}, "", "  ")), "[]")
+}

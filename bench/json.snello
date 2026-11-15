@@ -6,7 +6,8 @@
 // strings, a slice, a nested struct and an option, encoded with
 // encoding/json two hundred times and the text decoded back two hundred
 // times; it prints the text's length and first record, then the cost of
-// encoding and of decoding a record, in nanoseconds.
+// encoding and of decoding a record, in nanoseconds, untyped, through a
+// json.Value and laid out with MarshalIndent.
 
 package main
 
@@ -79,9 +80,16 @@ func main() {
 	}
 
 	tree := time.Since(start)
+	start = time.Now()
+	laid := 0
+	for r := 0; r < rounds; r++ { // laid out for a person to read
+		laid += len(json.MarshalIndent(ref records, "", "  ") ?? "")
+	}
+
+	indented := time.Since(start)
 	first := text[0:text.Index("},") ?? 0]
 	fmt.Println(len(text), n / rounds, m / rounds, first)
-	fmt.Println(sum / rounds, items / rounds, written > 0)
+	fmt.Println(sum / rounds, items / rounds, written > 0, laid / rounds)
 	per := i64(rounds * 1000)
-	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per, "tree", tree.Nanoseconds() / per)
+	fmt.Println("encode", encode.Nanoseconds() / per, "decode", decode.Nanoseconds() / per, "untyped", untyped.Nanoseconds() / per, "tree", tree.Nanoseconds() / per, "indent", indented.Nanoseconds() / per)
 }
