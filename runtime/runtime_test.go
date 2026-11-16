@@ -643,7 +643,7 @@ int main(int argc, char **argv) {
     bool deep_first = of_deep.address < of_main.address;
     sn_trace_anchor anchors[2] = { deep_first ? of_deep : of_main, deep_first ? of_main : of_deep };
     sn_trace_row rows[2] = { { 0, 0 }, { 0, 1 } };
-    sn_trace_frame frames[2] = { { 0, 0, 10, -1 }, { 1, 0, 20, -1 } };
+    sn_trace_frame frames[2] = { { 0, 0, 10, SN_TRACE_NONE }, { 1, 0, 20, SN_TRACE_NONE } };
     int32_t symbols[2] = { 0, 5 }, files[1] = { 10 };
     memcpy(sn_trace_parts + anchors_at, anchors, sizeof anchors);
     memcpy(sn_trace_parts + rows_at, rows, sizeof rows);

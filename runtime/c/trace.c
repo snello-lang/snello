@@ -17,7 +17,7 @@
 // shown to that depth; a frame is at least frame_least bytes, the
 // saved frame pointer and the return address, and aligned to
 // frame_align, which both processors hold a frame to.
-enum { frame_least = 16, frame_align = 16 };
+enum { frame_least = 16, frame_align = 16, no_region = -1 };
 
 static _Thread_local uintptr_t frames[SN_TRACE_FRAMES]; // the return addresses, innermost first
 static _Thread_local int nframes;
@@ -70,7 +70,7 @@ static bool covered(uintptr_t address, const sn_trace_anchor **anchor, int64_t *
     return true;
 }
 
-// within reports which of the n regions holds a frame at f, or -1.
+// within reports which of the n regions holds a frame at f, or none.
 static int within(uintptr_t f, const sn_stack_region *regions, int n) {
     for (int i = 0; i < n; i++) {
         if (f >= (uintptr_t)regions[i].low && f + frame_least <= (uintptr_t)regions[i].high) {
@@ -78,7 +78,7 @@ static int within(uintptr_t f, const sn_stack_region *regions, int n) {
         }
     }
 
-    return -1;
+    return no_region;
 }
 
 // sn_trace_fill walks from fp: a frame is followed only when it is
@@ -93,7 +93,7 @@ static int within(uintptr_t f, const sn_stack_region *regions, int n) {
 int sn_trace_fill(void *fp, const sn_stack_region *regions, int n) {
     nframes = 0;
     uintptr_t last = 0;
-    int region = -1;
+    int region = no_region;
     for (uintptr_t f = (uintptr_t)fp; f != 0 && nframes < SN_TRACE_FRAMES; f = ((uintptr_t *)f)[0]) {
         if (f % frame_align != 0) {
             break;
@@ -185,7 +185,7 @@ void sn_trace_each(const uintptr_t *walked, int n,
         }
 
         const sn_trace_row *r = row_at(a, offset);
-        for (int32_t k = r != NULL ? r->frame : -1; k >= 0; k = frames_of()[k].caller) {
+        for (int32_t k = r != NULL ? r->frame : SN_TRACE_NONE; k != SN_TRACE_NONE; k = frames_of()[k].caller) {
             const sn_trace_frame *f = &frames_of()[k];
             const char *name = name_of(named(sn_trace.symbols, f->function));
             if (name != NULL) {

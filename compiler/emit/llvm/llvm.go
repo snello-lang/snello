@@ -37,6 +37,24 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+const (
+	// maxPasses bounds the writes of a module: the box size grows to the
+	// largest closure of copies, which takes one more pass per generic
+	// instance nesting another, and a few suffice.
+	maxPasses = 8
+
+	// generated is the file name a function of the backend's own is given
+	// in the line tables, at no line: the trace of a panic shows no frame
+	// of it. entry is the symbol of the module's entry, which calls main,
+	// and generatedLine the line its own instructions are at in the
+	// generated file: a line, as the C backend's directive gives them
+	// one, where line zero is the optimizer's mark of code merged from
+	// two lines.
+	generated     = "<generated>"
+	entry         = "main"
+	generatedLine = 1
+)
+
 // A Config says how the program is built: with the runtime's checks,
 // as snello build -debug asks, and for which processor, since a call
 // into the C runtime follows the processor's calling convention
@@ -192,25 +210,6 @@ func EmitFiles(cfg Config, files []*token.File, fs []*ast.File, info *types.Info
 		words = need
 	}
 }
-
-// maxPasses bounds the writes of a module: the box size grows to the
-// largest closure of copies, which takes one more pass per generic
-// instance nesting another, and a few suffice.
-const maxPasses = 8
-
-// generated is the file name a function of the backend's own is given
-// in the line tables, at no line: the trace of a panic shows no frame
-// of it.
-const generated = "<generated>"
-
-// entry is the symbol of the module's entry, which calls main, and
-// generatedLine the line its own instructions are at in the generated
-// file: a line, as the C backend's directive gives them one, where line
-// zero is the optimizer's mark of code merged from two lines.
-const (
-	entry         = "main"
-	generatedLine = 1
-)
 
 // emitPass writes the module once with boxes of at least words words, and
 // returns it with the larger size a closure needed, or zero when every
