@@ -921,6 +921,160 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestWorkerAddedWhenHeld spawns a task that computes without a wait on
+// every core and has the main task sleep a hundred milliseconds: with
+// every worker held, the monitor starts one more, which runs the main
+// task when its sleep ends, within a few milliseconds of the hundred
+// on a quiet machine and well within a second on a loaded one. Without
+// it the main task never ran again.
+func TestWorkerAddedWhenHeld(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+static void spin(void *arg) {
+    (void)arg;
+    volatile int64_t x = 0;
+    for (;;) {
+        x++;
+    }
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    for (int64_t i = 0; i < sn_cores(); i++) {
+        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
+    }
+
+    int64_t start = sn_time_mono();
+    sn_sleep(100000000);
+    printf("ran again after %lld ms\n", (long long)((sn_time_mono() - start) / 1000000));
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	var ms int
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if _, err := fmt.Sscanf(string(out), "ran again after %d ms", &ms); err != nil || ms < 100 || ms > 1000 {
+		t.Fatalf("the main task ran again after %d ms, wanted a hundred and a few, a hundred and fifteen on a quiet machine: %s", ms, out)
+	}
+}
+
+// TestWorkersBlockedInRead has a task on every core block in a read of
+// a pipe that nothing writes to, as a bound function that blocks holds
+// its worker: the main task's wake from its sleep is what the monitor
+// adds a worker for, and the task it then spawns follows it on that
+// worker, before the main task writes to the pipe and lets the readers
+// go.
+func TestWorkersBlockedInRead(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <unistd.h>
+static int fds[2];
+static _Atomic int64_t ran_at;
+static void reader(void *arg) {
+    (void)arg;
+    char b;
+    (void)read(fds[0], &b, 1); // blocks in the system, holding its worker
+}
+static void flag(void *arg) {
+    (void)arg;
+    atomic_store(&ran_at, sn_time_mono());
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    if (pipe(fds) != 0) {
+        return 1;
+    }
+
+    int64_t n = sn_cores();
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(reader, NULL, 0, SN_UNBOUNDED);
+    }
+
+    sn_sleep(30000000); // every reader is in its read by now
+    int64_t start = sn_time_mono();
+    sn_spawn(flag, NULL, 0, SN_UNBOUNDED);
+    while (atomic_load(&ran_at) == 0 && sn_time_mono() - start < 5000000000) {
+        sn_sleep(1000000);
+    }
+
+    int64_t at = atomic_load(&ran_at);
+    for (int64_t i = 0; i < n; i++) {
+        (void)write(fds[1], "x", 1); // the readers go
+    }
+
+    printf("ran after %lld ms\n", at == 0 ? -1LL : (long long)((at - start) / 1000000));
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	var ms int
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if _, err := fmt.Sscanf(string(out), "ran after %d ms", &ms); err != nil || ms < 0 || ms > 60 {
+		t.Fatalf("the task ran after %d ms with every worker blocked in a read, wanted within a few tens: %s", ms, out)
+	}
+}
+
+// TestDeadlockWithAddedWorkers has a task on every core compute for a
+// while and then wait on a channel no one sends on, with the main task
+// sleeping meanwhile, so that the monitor adds a worker for its wake,
+// and then waiting on the same channel: every task asleep is still
+// reported as the deadlock it is, the added workers idle among the
+// others.
+func TestDeadlockWithAddedWorkers(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+static sn_chan *never;
+static void spin_then_wait(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    int64_t until = sn_time_mono() + 60000000;
+    while (sn_time_mono() < until) {
+    }
+
+    int64_t v;
+    sn_chan_recv(c, &v);
+    sn_chan_drop(&c, SN_CHAN_RECV);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    never = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    for (int64_t i = 0; i < sn_cores(); i++) {
+        sn_chan *h = sn_chan_clone(never, SN_CHAN_RECV);
+        sn_spawn(spin_then_wait, &h, sizeof h, SN_UNBOUNDED);
+    }
+
+    sn_sleep(20000000); // wakes on a worker the monitor adds: every other is held
+    printf("main ran again\n");
+    fflush(stdout);
+    int64_t v;
+    sn_chan_recv(never, &v); // the sending handle is this task's own: no one sends
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	var code int
+	if exit, ok := err.(*exec.ExitError); ok {
+		code = exit.ExitCode()
+	}
+
+	if code != 2 || !strings.HasPrefix(string(out), "main ran again\nfatal error: all tasks are asleep - deadlock!") {
+		t.Fatalf("exit %d, wanted 2 with the deadlock reported after the main task ran again:\n%s", code, out)
+	}
+}
+
 // TestMonitorMovesStaleSlot has the main task wake a task into its
 // worker's slot and then compute for fifty milliseconds without
 // parking, while chains of tasks, each spawning the next before it

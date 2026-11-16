@@ -110,7 +110,11 @@ func (d *decoder) within(addr uint64) bool {
 
 // branch records a branch at in to t, the instruction's target: a
 // local branch, a tail call to another function or to a library's, or
-// a branch to a place the analysis cannot name.
+// a branch to a place the analysis cannot name. A branch to the
+// function's own entry is local too: a loop that is the whole function,
+// which a compiler writes for a task that computes without end, or a
+// tail call to itself; one that runs the prologue again is a decrement
+// on a cycle, which looped reports.
 func (d *decoder) branch(in inst, t target) {
 	switch {
 	case !t.known:
@@ -118,14 +122,14 @@ func (d *decoder) branch(in inst, t target) {
 	case t.library:
 		d.f.calls = append(d.f.calls, call{kind: library, target: t.name})
 	case t.name != "":
-		if t.name == d.f.name && t.offset > 0 {
+		if t.name == d.f.name {
 			d.local(in, d.insts[0].addr+t.offset)
 			return
 		}
 
 		d.f.calls = append(d.f.calls, call{kind: direct, target: t.name}) // into its middle too: see call
 	default:
-		if d.within(t.addr) && t.addr != d.insts[0].addr {
+		if d.within(t.addr) {
 			d.local(in, t.addr)
 			return
 		}

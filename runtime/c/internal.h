@@ -255,7 +255,8 @@ void sn_deadline_disarm(sn_deadline *at);
 // and one wheel's, firing what is due at now, on the calling thread, at
 // every wheel or at one worker's, and how many timers have yet to wake
 // what they wake.
-void sn_timers_start(int64_t nworkers);
+void sn_timers_start(int64_t nworkers, int64_t most);
+void sn_timers_add(void);
 int64_t sn_timers_next(void);
 int64_t sn_timers_next_of(int64_t worker);
 bool sn_timers_fire(int64_t now);
