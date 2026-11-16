@@ -441,6 +441,10 @@ int main(int argc, char **argv) {
     int64_t code;
     sn_chan_recv(done, &code);
     sn_chan_drop(&done, SN_CHAN_BOTH); // the task's work is over: the last handle frees the channel
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -573,6 +577,10 @@ int main(int argc, char **argv) {
         int64_t v;
         sn_chan_recv(done, &v);
         sn_chan_drop(&done, SN_CHAN_BOTH);
+        while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+            sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+        }
+
         return sn_finish();
     }
     sn_spawn(catcher, NULL, 0, 4000);
@@ -693,6 +701,10 @@ int main(int argc, char **argv) {
     int64_t v;
     sn_chan_recv(done, &v);
     sn_chan_drop(&done, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -754,6 +766,10 @@ int main(int argc, char **argv) {
     pthread_join(id, NULL);
     printf("ended before the wake: %d\n", ended_at_wake);
     sn_chan_drop(&done, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -885,6 +901,10 @@ int main(int argc, char **argv) {
     printf("rounds %d\n", rounds);
     sn_chan_drop(&ch, SN_CHAN_BOTH);
     sn_chan_drop(&done, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -1186,6 +1206,10 @@ int main(int argc, char **argv) {
     printf("ran after %lld ms\n", at == 0 ? -1LL : (long long)((at - woke) / 1000000));
     sn_sleep(5000000); // the chains end
     sn_chan_drop(&go, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -1394,6 +1418,10 @@ int main(int argc, char **argv) {
     sn_chan_drop(&a, SN_CHAN_BOTH);
     sn_chan_drop(&b, SN_CHAN_BOTH);
     printf("taken %lld\n", (long long)atomic_load(&taken));
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -1560,6 +1588,10 @@ int main(int argc, char **argv) {
     pthread_join(id, NULL);
     printf("accepted: %lld\n", (long long)code);
     sn_chan_drop(&done, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -1661,6 +1693,10 @@ int main(int argc, char **argv) {
     printf("no such host: %s\n", none == n ? "all" : "not all");
     sn_chan_drop(&results, SN_CHAN_BOTH);
     sn_chan_drop(&computed, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
