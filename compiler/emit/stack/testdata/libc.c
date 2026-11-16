@@ -215,6 +215,7 @@ CASE(memcpy, memcpy(text, path, sizeof path))
 CASE(__memcpy_chk, __builtin___memcpy_chk(text, path, count, sizeof text))
 CASE(memmove, memmove(text + 1, text, 200))
 CASE(memset, memset(text, 1, sizeof text))
+CASE(__memset_chk, __builtin___memset_chk(text, 1, count, sizeof text))
 CASE(memcmp, sink = memcmp(text, text + 1, 200))
 CASE(memchr, sink = memchr(text, 2, sizeof text) != NULL)
 CASE(strlen, sink = (long)strlen("hello"))
@@ -382,7 +383,7 @@ int main(void) {
         // First, before any case starts a thread a child of fork would lack.
         MEASURE_ENDING(exit), MEASURE_ENDING(abort), MEASURE_ENDING(__stack_chk_fail),
         MEASURE(malloc), MEASURE(calloc), MEASURE_AFTER(realloc), MEASURE_AFTER(free), MEASURE(aligned_alloc), MEASURE(posix_memalign),
-        MEASURE(memcpy), MEASURE(__memcpy_chk), MEASURE(memmove), MEASURE(memset), MEASURE(memcmp), MEASURE(memchr), MEASURE(strlen), MEASURE(strchr),
+        MEASURE(memcpy), MEASURE(__memcpy_chk), MEASURE(memmove), MEASURE(memset), MEASURE(__memset_chk), MEASURE(memcmp), MEASURE(memchr), MEASURE(strlen), MEASURE(strchr),
         MEASURE(strtoul), MEASURE(strerror), MEASURE(gai_strerror), MEASURE(snprintf),
         MEASURE(pthread_mutex_init), MEASURE(pthread_mutex_lock), MEASURE(pthread_mutex_unlock), MEASURE(pthread_cond_init),
         MEASURE(pthread_cond_signal), MEASURE(pthread_cond_broadcast), MEASURE(pthread_cond_timedwait), MEASURE_AFTER(pthread_cond_wait),

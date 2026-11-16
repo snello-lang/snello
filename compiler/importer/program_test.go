@@ -54,6 +54,10 @@ func TestLoadProgram(t *testing.T) {
 			if p.Path == "shapes" && (len(p.Links) != 1 || p.Links[0] != "m") {
 				t.Errorf("%s: the module's link line did not reach package shapes: %v", dir, p.Links)
 			}
+
+			if p.Std != (p.Path != "shapes") { // fmt and what it imports are the standard library's; shapes is the module's
+				t.Errorf("%s: package %s marked as the standard library's: %v", dir, p.Path, p.Std)
+			}
 		}
 	}
 

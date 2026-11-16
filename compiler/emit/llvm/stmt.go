@@ -38,12 +38,13 @@ func (e *Emitter) blockStmt(b *ast.BlockStmt) {
 // stmt writes one statement, at its location, and then drops the
 // temporaries it made.
 func (e *Emitter) stmt(s ast.Stmt) {
-	outer := e.fn.loc
+	outer, outerLine := e.fn.loc, e.fn.line
 	if e.fn.subprogram != 0 && s.Pos().IsValid() {
-		e.fn.loc = e.location(s.Pos())
+		e.fn.line = e.lineOf(s.Pos())
+		e.fn.loc = e.locationAt(e.fn.line)
 	}
 
-	defer func() { e.fn.loc = outer }()
+	defer func() { e.fn.loc, e.fn.line = outer, outerLine }()
 	mark := len(e.fn.temps)
 	e.stmtInner(s)
 	if e.fn.terminated {

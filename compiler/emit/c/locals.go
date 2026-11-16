@@ -11,15 +11,17 @@ import (
 )
 
 // A local or a parameter is written under its own name, unless a local
-// of the same name was declared before it in the same C function, or
-// the program declares a type or trait of the name. C puts a variable in
-// scope inside its own initializer, so x := x in an inner block would
-// read the new x, a loop's step written after the body would reach a
-// variable the body declares under the loop variable's name, and a
-// local or parameter named as a struct of the program would hide the
-// struct's C type from the rest of the function. Such a variable is
-// given a name of its own, a temporary's number before it, which no
-// name of the program reaches. A library's names are in the runtime's
+// of the same name is in scope where it is declared, or the program
+// declares a type or trait of the name. C puts a variable in scope
+// inside its own initializer, so x := x in an inner block would read the
+// new x, a loop's step written after the body would reach a variable
+// the body declares under the loop variable's name, and a local or
+// parameter named as a struct of the program would hide the struct's C
+// type from the rest of the function. Such a variable is given a name
+// of its own, a temporary's number before it, which no name of the
+// program reaches. A name a block declared is free again when the block
+// ends, since every frame of the emitter is a C block of its own: two
+// loops' i are each i, which a debugger prints under the name. A library's names are in the runtime's
 // sn_ space and the program's functions, variables and constants in
 // sn__, which no local reaches either.
 
@@ -32,19 +34,23 @@ func (e *Emitter) declareLocal(name *ast.Ident) string {
 	}
 
 	local := e.localName(v)
-	if _, renamed := e.names.renamed[v]; !renamed && (e.names.declared[local] || e.names.toplevel[local]) {
+	if _, renamed := e.names.renamed[v]; !renamed && (e.names.declared[local] > 0 || e.names.toplevel[local]) {
 		local = e.temp() + "_" + local
 		e.names.renamed[v] = local // an instance of a generic function written later takes the same name
 	}
 
-	e.names.declared[local] = true
+	e.names.declared[local]++
+	if n := len(e.frames); n > 0 {
+		e.frames[n-1].names = append(e.frames[n-1].names, local)
+	}
+
 	return local
 }
 
 // naming is how the C emitter names locals and parameters.
 type naming struct {
 	renamed  map[*types.Var]string // the C name of each variable given one of its own
-	declared map[string]bool       // the C names taken in the function being written
+	declared map[string]int        // the C names in scope in the function being written, each with its declarations open
 	toplevel map[string]bool       // the C names the program's types and traits take at file scope
 	globals  map[*types.Var]bool   // the top-level variables of the program and its libraries (varDecl), named by lower.ObjName
 }

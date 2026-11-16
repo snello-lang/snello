@@ -93,7 +93,7 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 }
 
 func (e *Emitter) enumStringer(b *strings.Builder, en *types.Enum, v string, pos token.Pos) {
-	put(b, "\tswitch (", v, ".tag) {\n")
+	put(b, "\tswitch ((int)", v, ".tag) {\n") // an int: the cases of no fields have no case here
 	for i := 0; i < en.NumVariants(); i++ {
 		variant := en.Variant(i)
 		put(b, "\tcase ", strconv.Itoa(i), ":\n")
@@ -104,7 +104,7 @@ func (e *Emitter) enumStringer(b *strings.Builder, en *types.Enum, v string, pos
 
 		parts := make([]text, len(variant.Fields()))
 		for j, f := range variant.Fields() {
-			parts[j] = e.textOf(v+"."+variantMember(variant)+"."+fieldName(f, j), f.Type(), pos, true)
+			parts[j] = e.textOf(v+"."+lower.VariantMember(variant)+"."+lower.VariantField(f, j), f.Type(), pos, true)
 		}
 
 		put(b, "\t\treturn ", joined(variant.Name()+"(", ")", ", ", parts).s, ";\n")
@@ -273,7 +273,7 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 
 		put(&b, "\treturn ", allOf(parts), ";\n")
 	case *types.Enum:
-		b.WriteString("\tif (a.tag != b.tag) {\n\t\treturn false;\n\t}\n\n\tswitch (a.tag) {\n")
+		b.WriteString("\tif (a.tag != b.tag) {\n\t\treturn false;\n\t}\n\n\tswitch ((int)a.tag) {\n")
 		for i := 0; i < u.NumVariants(); i++ {
 			v := u.Variant(i)
 			if len(v.Fields()) == 0 {
@@ -282,7 +282,7 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 
 			var parts []string
 			for j, f := range v.Fields() {
-				field := "." + variantMember(v) + "." + fieldName(f, j)
+				field := "." + lower.VariantMember(v) + "." + lower.VariantField(f, j)
 				parts = append(parts, e.equal("a"+field, "b"+field, f.Type(), pos))
 			}
 
@@ -336,7 +336,7 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 		put(&e.helpers, "static bool ", eq, "(const void *a, const void *b) {\n\treturn ", e.equal("(*(const "+key+" *)a)", "(*(const "+key+" *)b)", t.Key(), pos), ";\n}\n\n")
 	}
 
-	put(&e.helpers, "static const sn_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.elemDropper(t.Key(), pos), ", ", e.elemDropper(t.Value(), pos), "};\n\n")
+	put(&e.helpers, "static const sn_map_type ", name, " = {sizeof(", key, "), sizeof(", e.cType(t.Value(), pos), "), ", hash, ", ", eq, ", ", e.elemDropper(lower.ElemDrop(t.Key()), t.Key(), pos), ", ", e.elemDropper(lower.ElemDrop(t.Value()), t.Value(), pos), "};\n\n")
 	return "&" + name
 }
 
@@ -470,7 +470,7 @@ func (e *Emitter) orderer(t types.Type, pos token.Pos) string {
 			decide("\t", "a."+f, "b."+f, u.Field(i).Type())
 		}
 	case *types.Enum:
-		put(&b, "\tif (a.tag != b.tag) {\n\t\treturn ", e.order(), "(a.tag - b.tag);\n\t}\n\n")
+		put(&b, "\tif (a.tag != b.tag) {\n\t\treturn ", e.order(), "((int)a.tag - (int)b.tag);\n\t}\n\n")
 		payloads(&b, u, "a.tag", func(field string, t types.Type) { decide("\t\t", "a"+field, "b"+field, t) })
 	default:
 		e.unsupported(pos, "ordering values of type "+t.String())
@@ -514,7 +514,7 @@ func (e *Emitter) hasher(t types.Type, pos token.Pos) string {
 // value, ".Open.e0", and its type; a function written part by part
 // handles the payload of whichever variant the value holds.
 func payloads(b *strings.Builder, u *types.Enum, tag string, f func(field string, t types.Type)) {
-	put(b, "\tswitch (", tag, ") {\n")
+	put(b, "\tswitch ((int)", tag, ") {\n")
 	for i := 0; i < u.NumVariants(); i++ {
 		v := u.Variant(i)
 		if len(v.Fields()) == 0 {
@@ -523,7 +523,7 @@ func payloads(b *strings.Builder, u *types.Enum, tag string, f func(field string
 
 		put(b, "\tcase ", strconv.Itoa(i), ":\n")
 		for j, fld := range v.Fields() {
-			f("."+variantMember(v)+"."+fieldName(fld, j), fld.Type())
+			f("."+lower.VariantMember(v)+"."+lower.VariantField(fld, j), fld.Type())
 		}
 
 		b.WriteString("\t\tbreak;\n")

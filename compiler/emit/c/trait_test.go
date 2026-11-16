@@ -16,9 +16,9 @@ func TestDerivedErrorMethods(t *testing.T) {
 	out := emitError(t)
 	tests := []struct{ head, want string }{
 		{"static sn_string sn_AppError_as_Error_Error(void *sn_p)", "return sn_str_AppError(*p);"},
-		{"static sn_opt_Error sn_AppError_as_Error_Source(void *sn_p)", "return sn_src_AppError(*p);"},
+		{"static sn_opt_5Error sn_AppError_as_Error_Source(void *sn_p)", "return sn_src_AppError(*p);"},
 		{"static sn_string sn_Wrapped_as_Error_Error(void *sn_p)", "return sn_Wrapped_Error(*p);"}, // a written method, as before
-		{"static sn_opt_Error sn_Wrapped_as_Error_Source(void *sn_p)", "return sn_Wrapped_Source(*p);"},
+		{"static sn_opt_5Error sn_Wrapped_as_Error_Source(void *sn_p)", "return sn_Wrapped_Source(*p);"},
 	}
 	for _, tt := range tests {
 		if body := cFunction(t, out, tt.head); !strings.Contains(body, tt.want) {

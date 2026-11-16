@@ -18,6 +18,40 @@ import (
 	"github.com/snello-lang/snello/runtime"
 )
 
+const (
+	// lineTables writes line tables and nothing more, which gcc and
+	// clang both read, so that the trace of a panic has each frame's file
+	// and line from the object the program is linked from: a release
+	// build's program is compiled with it, and so links the build, which
+	// writes the tables of what it optimizes; the runtime's files are
+	// not, since the trace shows no line of the runtime's, and the
+	// optimizing link is the shorter for writing none. The tables are
+	// data beside the code and shape no instruction.
+	lineTables = "-g1"
+
+	// lto asks for link-time optimization; stripDebug asks the final link
+	// of a release build on Linux to leave the debugging sections out of
+	// the binary, whose trace table has replaced them.
+	lto        = "-flto"
+	stripDebug = "-Wl,--strip-debug"
+
+	// leafFramePointer frees the frame pointer in a function that calls
+	// none, which a debug build's program keeps instead: gdb finds where a
+	// function gcc compiled for x86-64 starts after its prologue by the
+	// frame pointer's setup, and stops a leaf with none before its
+	// parameters are in their slots.
+	leafFramePointer = "-momit-leaf-frame-pointer"
+
+	// dsymutil gathers the debugging information a macOS link leaves in
+	// its objects into a bundle, named for the binary with bundleSuffix,
+	// where the platform's debuggers and profilers look for it.
+	dsymutil     = "dsymutil"
+	bundleSuffix = ".dSYM"
+
+	// outputFlag names the file a compiler, a linker or dsymutil writes.
+	outputFlag = "-o"
+)
+
 // Flags are the options the C compiler is given. Every warning is an
 // error: the emitted C must be as clean as the Go of the compiler.
 // -fwrapv makes signed overflow wrap, as Snello's integers do; without
@@ -50,56 +84,39 @@ import (
 // frame pointer in every function that calls another, which the trace
 // of a panic walks, and frees it in a leaf, which is never below
 // another frame.
-var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-fno-stack-protector", "-fno-jump-tables", "-pthread", "-fno-omit-frame-pointer", "-momit-leaf-frame-pointer"}
-
-// lineTables writes line tables and nothing more, which gcc and clang
-// both read, so that the trace of a panic has each frame's file and
-// line from the object the program is linked from: the program's own
-// C is compiled with it, and so links the build, which writes the
-// tables of what it optimizes; the runtime's files are not, since the
-// trace shows no line of the runtime's, and the optimizing link is the
-// shorter for writing none. The tables are data beside the code and
-// shape no instruction.
-const lineTables = "-g1"
+var Flags = []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-Wno-unused-but-set-variable", "-Wno-missing-braces", "-Wno-overflow", "-Wno-integer-overflow", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-fno-stack-protector", "-fno-jump-tables", "-pthread", "-fno-omit-frame-pointer", leafFramePointer}
 
 // Release are the options of a release build: the standard
 // optimizations, and link-time optimization over the program and the
 // runtime together, so that a runtime function a program calls in a
 // loop, a push or a hash, is inlined into it as a function of the
 // program would be. Debug are a debug build's, which compiles the
-// runtime's checks in and is built for speed of building.
+// runtime's checks in and the runtime for speed of building; the
+// program adds debugInfo.
 var (
 	Release = []string{"-O2", lto}
 	Debug   = []string{"-O1", "-DSN_DEBUG"}
 )
 
+// debugInfo are the options a debug build compiles the program's C and
+// a package's with: no optimization and the full debugging information,
+// so that a debugger stops at every line, steps from one to the next,
+// and finds every variable in its slot for its whole scope. They come
+// after the build's own, since the last optimization level and the
+// last -g given win. The whole of the C is unoptimized, the standard
+// library's functions with the program's: clang marks a function it is
+// told to leave alone, optnone, and then joins a multiply and an add
+// into one instruction whatever -ffp-contract says, which the language
+// forbids. The runtime is compiled with the build's alone, optimized
+// and with none, so that a step goes over a call of it as over a call
+// of the C library.
+var debugInfo = []string{"-O0", "-g"}
+
 // GCCFlags are gcc's own, beside Flags: every function in one text
 // section, which gcc otherwise splits into one for main and one for
 // cold code, so that the trace of a panic reads the program's code as
-// one section. A debug build keeps every call and every line its own,
-// GCCDebug for gcc and ClangDebug for clang: the merging of the tails
-// and of the common code of two paths, which would fold two panics
-// into one call of no line, is off; so is clang's outlining of code
-// shared by several places into a function of its own, which a trace
-// could show at one of them only, and the analysis that finds a
-// function's cold code, a panic's path first of all, to split it off
-// into a function of its own, which a trace would show as the function
-// twice: a clang that splits does so on that analysis alone when no
-// profile says what is cold. A call a function ends in is a call and
-// not a jump, so that the function keeps its frame in the trace.
-var (
-	GCCFlags   = []string{"-fno-reorder-functions", "-fno-reorder-blocks-and-partition"}
-	GCCDebug   = []string{"-fno-crossjumping", "-fno-tree-tail-merge", "-fno-optimize-sibling-calls"}
-	ClangDebug = []string{"-mllvm", "-enable-tail-merge=false", "-mllvm", "-simplifycfg-sink-common=false", "-mllvm", "-simplifycfg-hoist-common=false", "-mno-outline", "-mllvm", "-hot-cold-static-analysis=false", "-fno-optimize-sibling-calls"}
-)
-
-// lto asks for link-time optimization; stripDebug asks the final link
-// of a release build on Linux to leave the debugging sections out of
-// the binary, whose trace table has replaced them.
-const (
-	lto        = "-flto"
-	stripDebug = "-Wl,--strip-debug"
-)
+// one section.
+var GCCFlags = []string{"-fno-reorder-functions", "-fno-reorder-blocks-and-partition"}
 
 // Compiler returns the C compiler to run: the CC environment variable
 // when it is set, as every build tool reads it, else cc.
@@ -145,7 +162,7 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 		close(done)
 	}()
 
-	args := append(append([]string{}, rtArgs...), lineTables, "-I", dir) // the program's own: its line tables, and snello.h for its C and a package's
+	args := append(ProgramFlags(Compiler(), debug), "-I", dir) // the program's own, and snello.h for its C and a package's
 	objs, output, err := Objects(Compiler(), args, append([]string{prog}, bound...))
 	<-done
 	output = append(output, rtOutput...)
@@ -162,26 +179,42 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 	return bin, append(output, linked...), err
 }
 
-// BuildFlags are the options the compiler cc is given to compile a
-// file of a build: the build's link options and a debug build's own
-// for the compiler, which are the compiler's and not the linker's.
-func BuildFlags(cc string, debug bool) []string {
-	args := linkFlags(cc, debug)
-	switch {
-	case !debug:
-	case IsGCC(cc):
-		args = append(args, GCCDebug...)
-	default:
-		args = append(args, ClangDebug...)
+// Bundle gathers the debugging information of the debug build bin into
+// the bundle beside out, the binary the build was copied to, on macOS,
+// where the linker leaves it in the objects of the build's directory,
+// which the build removes: the bundle is made before, as clang's
+// driver makes one when a run compiles and links, and replaces one an
+// earlier build left. On Linux the information is in the binary and
+// nothing is done. The tool's output comes back with any error.
+func Bundle(bin, out string) ([]byte, error) {
+	if goruntime.GOOS != darwin {
+		return nil, nil
 	}
 
-	return args
+	bundle := out + bundleSuffix
+	if err := os.RemoveAll(bundle); err != nil {
+		return nil, err
+	}
+
+	return exec.Command(dsymutil, bin, outputFlag, bundle).CombinedOutput()
 }
 
-// linkFlags are the options the compiler cc is given to link a build:
-// Flags, the build's Release or Debug, and gcc's own, which link-time
-// optimization reads at the link.
-func linkFlags(cc string, debug bool) []string {
+// ProgramFlags are the options the compiler cc is given to compile the
+// program's own C and a package's: the build's, with the line tables
+// of a release build or the debugging information of a debug one.
+func ProgramFlags(cc string, debug bool) []string {
+	if debug {
+		return append(without(BuildFlags(cc, debug), leafFramePointer), debugInfo...)
+	}
+
+	return append(BuildFlags(cc, debug), lineTables)
+}
+
+// BuildFlags are the options the compiler cc is given to compile the
+// runtime's files of a build and to link it: Flags, the build's
+// Release or Debug, and gcc's own, which link-time optimization reads
+// at the link.
+func BuildFlags(cc string, debug bool) []string {
 	args := append([]string{}, Flags...)
 	if debug {
 		args = append(args, Debug...)
@@ -216,8 +249,8 @@ func linkFlags(cc string, debug bool) []string {
 func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lower.Binding) ([]byte, error) {
 	kept := filepath.Join(dir, "linked.o")
 	first := filepath.Join(dir, "linked")
-	args := append(linkFlags(cc, debug), lineTables) // the link writes the line tables of what it optimizes
-	plain := withoutLTO(args)                        // for the final link
+	args := append(BuildFlags(cc, debug), lineTables) // the link writes the line tables of what it optimizes
+	plain := without(args, lto)                       // for the final link
 	var output []byte
 	var cmd []string
 	var out []byte
@@ -227,15 +260,15 @@ func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lowe
 	switch {
 	case debug:
 	case !whole:
-		cmd = append(append(append([]string{}, args...), "-r", "-o", kept, "-flinker-output=nolto-rel"), objs...)
+		cmd = append(append(append([]string{}, args...), "-r", outputFlag, kept, "-flinker-output=nolto-rel"), objs...)
 		native = []string{kept}
 	case goruntime.GOOS == darwin:
-		cmd = append(append(append([]string{}, args...), "-o", first), objs...)
+		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
 		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags()...)
 		cmd = append(cmd, "-Wl,-object_path_lto,"+kept)
 		native = []string{kept}
 	default:
-		cmd = append(append(append([]string{}, args...), "-o", first), objs...)
+		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
 		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags()...)
 		cmd = append(cmd, "-Wl,-plugin-opt=obj-path="+kept, "-Wl,-plugin-opt=-function-sections=0", "-Wl,-plugin-opt=-data-sections=0")
 		native = []string{kept}
@@ -264,7 +297,7 @@ func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lowe
 		return output, err
 	}
 
-	cmd = append(append(append([]string{}, plain...), "-o", bin), native...)
+	cmd = append(append(append([]string{}, plain...), outputFlag, bin), native...)
 	if whole {
 		cmd = append(cmd, nativeRuntime(objs)...) // which the optimizer's object does not hold
 	}
@@ -303,11 +336,11 @@ func nativeRuntime(objs []string) []string {
 	return out
 }
 
-// withoutLTO is args with no link-time optimization asked for.
-func withoutLTO(args []string) []string {
+// without is args with flag left out.
+func without(args []string, flag string) []string {
 	out := make([]string, 0, len(args))
 	for _, a := range args {
-		if a != lto {
+		if a != flag {
 			out = append(out, a)
 		}
 	}
@@ -338,10 +371,10 @@ func Objects(cc string, args, srcs []string) (objs []string, output []byte, err 
 			defer func() { <-slots }()
 			own := args
 			if runtime.Native[filepath.Base(src)] {
-				own = withoutLTO(args)
+				own = without(args, lto)
 			}
 
-			outs[i], errs[i] = exec.Command(cc, append(append([]string{}, own...), "-c", "-o", objs[i], src)...).CombinedOutput()
+			outs[i], errs[i] = exec.Command(cc, append(append([]string{}, own...), "-c", outputFlag, objs[i], src)...).CombinedOutput()
 		}(i, src)
 	}
 

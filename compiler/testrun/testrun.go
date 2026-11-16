@@ -419,7 +419,7 @@ func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
 
 	var libs []lower.Library
 	for _, lib := range imp.Packages() {
-		libs = append(libs, lower.Library{Path: lib.Path, File: lib.File, Syntax: lib.Syntax, CFiles: lib.CFiles, Links: lib.Links})
+		libs = append(libs, lower.Library{Path: lib.Path, File: lib.File, Syntax: lib.Syntax, CFiles: lib.CFiles, Links: lib.Links, Std: lib.Std})
 	}
 
 	bindings := lower.Bindings(info, libs)

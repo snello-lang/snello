@@ -340,3 +340,14 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `switch c { case beginObject: }`, a constant in a case | `match { c == beginObject => ... }`: a constant is no pattern |
 | `panic` in a library on a bad argument | an option or a `Result` with an error that says where; the standard library does not panic |
 | a pointer parameter says nothing of who keeps the value | `ref T` read, `mut T` changed, `T` kept: the signature says it |
+
+## Chapter 30: Debugging and profiling
+
+| In Go | In Snello |
+|---|---|
+| `dlv debug` | `snello debug`, which starts lldb on macOS or gdb on Linux with Snello's formatters and `tasks` loaded |
+| `go build -gcflags=all="-N -l"` for a build a debugger can follow | `snello build -debug`: your code unoptimized, the standard library optimized |
+| `goroutines` and `goroutine N bt` in Delve, `info goroutines` in gdb | `tasks`, every task with its state and a waiting task's stack |
+| `b main.sum` | `breakpoint set -n sum` in lldb, `break sum` in gdb, or a breakpoint at the line, `main.snello:19`; with the C backend, the function's symbol, `sn__sum` |
+| the DWARF in every binary, which `-ldflags=-w` strips | the debugging information in a debug build alone, in `prog.dSYM` on macOS; a release build keeps symbols for a profiler and no lines |
+| `pprof` | the system's profilers, `perf` and Instruments, on a release build, which keeps its frame pointers |

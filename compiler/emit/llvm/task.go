@@ -242,7 +242,7 @@ func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []ty
 	}
 
 	if h != nil {
-		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(h.elem, pos)}, value{"ptr", e.constBytes(e.madeAt(pos))})
+		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos)}, value{"ptr", e.constBytes(e.madeAt(pos))})
 		e.store(e.rt("sn_chan_clone", "ptr", h.done, value{"i32", strconv.Itoa(lower.HandleBoth)}), e.gep(st, block.s, len(values)))
 	}
 

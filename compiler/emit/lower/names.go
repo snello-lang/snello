@@ -6,8 +6,10 @@ package lower
 
 import (
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -19,13 +21,67 @@ import (
 // qualified by its import path in the runtime's sn_ space, and Snello's
 // main is sn_main, which the runtime's main calls (ObjName).
 
-// symbolRoom is the room a builder of a symbol takes first, which holds
-// nearly every symbol, so that one is built in one allocation and not
-// in one per piece as the builder doubles.
-const symbolRoom = 64
+const (
+	// symbolRoom is the room a builder of a symbol takes first, which
+	// holds nearly every symbol, so that one is built in one allocation
+	// and not in one per piece as the builder doubles.
+	symbolRoom = 64
 
-// MainName is the symbol of the program's main.
-const MainName = "sn_main"
+	// MainName is the symbol of the program's main.
+	MainName = "sn_main"
+
+	// positionalField names a variant's field declared without a name,
+	// before its position; tagMember is the name of an enum's tag, which
+	// a variant of that name is written beside with clashSuffix after it.
+	positionalField = "f"
+	tagMember       = "tag"
+	clashSuffix     = "_"
+
+	// instancePrefix starts the symbol of an instance of a generic type
+	// or trait (withArgs).
+	instancePrefix = "sn_g"
+
+	// tagPrefix names the enumeration an enum's tag is of, and
+	// casePrefix each of its enumerators, before the length of the enum's
+	// name, the name and the case's, each after caseSeparator: the names
+	// a debugger shows a tag by, which no other name of the program or the
+	// runtime begins with, and which the length keeps two enums' cases
+	// from sharing, since C's enumerators are names of the whole file.
+	tagPrefix     = "sn_tag_"
+	casePrefix    = "sn_case_"
+	caseSeparator = "_"
+
+	// StdSources is the directory a file of the standard library is named
+	// under in the debugging information: the library is the compiler's
+	// own, embedded in it with no copy on disk, and an absolute name no
+	// file of the user's has keeps a debugger from showing one of the
+	// user's for it.
+	StdSources = "/snello/std/"
+)
+
+// basicNames are the C names of the basic types: the types the C
+// backend writes values as, and the names both backends describe them
+// to a debugger by. An error is its message for now; a local holds
+// nothing, but C has no empty type.
+var basicNames = map[types.BasicKind]string{
+	types.Bool:    "bool",
+	types.String:  "sn_string",
+	types.Error:   "sn_string",
+	types.Int8:    "int8_t",
+	types.Int16:   "int16_t",
+	types.Int32:   "int32_t",
+	types.Int64:   "int64_t",
+	types.Int:     "sn_int",
+	types.Uint8:   "uint8_t",
+	types.Uint16:  "uint16_t",
+	types.Uint32:  "uint32_t",
+	types.Uint64:  "uint64_t",
+	types.Uint:    "sn_uint",
+	types.Float32: "float",
+	types.Float64: "double",
+	types.Never:   "void",
+	types.Local:   "uint8_t",
+}
 
 // reserved holds the identifiers an emitted program must not reuse:
 // C's keywords and the libc names the C output refers to. The IR
@@ -185,6 +241,60 @@ func MethodName(recv types.Type, name string) string {
 	return "sn_" + Mangle(ValueType(recv)) + "_" + name
 }
 
+// BasicName is the C name of a value of the basic type t: the type the
+// C backend writes it as, and the name both backends describe it to a
+// debugger by, so that a variable prints the same through either.
+func BasicName(t *types.Basic) string {
+	if name, ok := basicNames[t.Kind()]; ok {
+		return name
+	}
+
+	return basicNames[types.Never]
+}
+
+// VariantField is the C name of a variant's field: its own name, or its
+// position when the variant declares it without one.
+func VariantField(f *types.Var, i int) string {
+	if f.Name() == "" {
+		return positionalField + strconv.Itoa(i)
+	}
+
+	return Ident(f.Name())
+}
+
+// VariantMember is the name of a variant's payload inside the union,
+// which must not collide with the tag beside it.
+func VariantMember(v *types.Variant) string {
+	if v.Name() == tagMember {
+		return tagMember + clashSuffix
+	}
+
+	return Ident(v.Name())
+}
+
+// SourceName is the name a file is given in the line tables and the
+// debugging information: the path the compiler read it from, relative
+// to the directory the build ran in, which the compile unit records,
+// or under StdSources for a file of the standard library.
+func SourceName(name string, std bool) string {
+	if std {
+		return StdSources + strings.TrimPrefix(filepath.ToSlash(name), "/")
+	}
+
+	return name
+}
+
+// TagName is the name of the enumeration the tag of the enum t is of,
+// and CaseName that of its enumerator for the variant v, sn_case_5_Shape_Rect:
+// the names a debugger shows the tag by in both backends, the case's
+// own name last, which the debuggers' script reads back.
+func TagName(t *types.Named) string { return tagPrefix + NamedName(t) }
+
+func CaseName(t *types.Named, v *types.Variant) string {
+	name := NamedName(t)
+	return casePrefix + strconv.Itoa(utf8.RuneCountInString(name)) + caseSeparator + name + caseSeparator + v.Name() // the length in letters, as a debugger's script reads the name
+}
+
 // NamedName writes the symbol of a declared type: its own, or for an
 // instance its name followed by its arguments. The symbol is kept on
 // the type, since a backend writes it at every value of the type.
@@ -211,9 +321,13 @@ func TraitName(t *types.Trait) string {
 	return withArgs(ObjName(t.Obj()), t.TypeArgs())
 }
 
-// withArgs writes name and each of args after it, mangled, separated
-// by _: name itself, with nothing allocated, for a type that is not an
-// instance of a generic one, and one builder for an instance.
+// withArgs writes the symbol of an instance of the generic type or
+// trait name: instancePrefix, the generic's name after its length, and
+// each argument after it, mangled, separated by underscores; a name
+// with no arguments is written as it is. The prefix is in the runtime's
+// space, which no name the program declares reaches, since Ident ends
+// such a name with an underscore: Pair<int> is never the program's own
+// struct Pair_int.
 func withArgs(name string, args []types.Type) string {
 	if len(args) == 0 {
 		return name
@@ -221,6 +335,8 @@ func withArgs(name string, args []types.Type) string {
 
 	var b strings.Builder
 	b.Grow(symbolRoom)
+	b.WriteString(instancePrefix)
+	b.WriteString(strconv.Itoa(len(name)))
 	b.WriteString(name)
 	for _, a := range args {
 		b.WriteByte('_')
@@ -239,6 +355,8 @@ func Mangle(t types.Type) string {
 		return types.Typ[t.Kind()].Name()
 	case *types.Named:
 		return NamedName(t)
+	case *types.Trait:
+		return TraitName(t)
 	}
 
 	var b strings.Builder
@@ -253,6 +371,34 @@ func Symbol(prefix string, t types.Type) string {
 	var b strings.Builder
 	b.Grow(symbolRoom)
 	b.WriteString(prefix)
+	switch t.(type) {
+	case *types.Basic, *types.Named, *types.Trait: // its name alone, as Mangle writes one by itself
+		b.WriteString(Mangle(t))
+	default:
+		mangle(&b, t)
+	}
+
+	return b.String()
+}
+
+// mangleName writes a name inside a mangled type after its length, as
+// the Itanium C++ ABI's mangling writes a name: a name may hold the
+// underscore that joins the parts, (A_x, B) and (A, x_B) being otherwise
+// one, tup2_A_x_B, and may be one of the words that name a kind, a
+// struct unit otherwise the unit type; a part that starts with a digit
+// is a name's length, since no name and no kind's word does.
+func mangleName(b *strings.Builder, name string) {
+	b.WriteString(strconv.Itoa(len(name)))
+	b.WriteString(name)
+}
+
+// TypeKey writes t as Mangle does, but for a declared type, a trait or
+// a type parameter too after its length: one key a type, which a type of
+// the program's named as a kind's word, unit, does not share with the
+// kind.
+func TypeKey(t types.Type) string {
+	var b strings.Builder
+	b.Grow(symbolRoom)
 	mangle(&b, t)
 	return b.String()
 }
@@ -263,11 +409,11 @@ func mangle(b *strings.Builder, t types.Type) {
 	case *types.Basic:
 		b.WriteString(types.Typ[t.Kind()].Name())
 	case *types.Named:
-		b.WriteString(NamedName(t))
+		mangleName(b, NamedName(t))
 	case *types.TypeParam:
-		b.WriteString(Ident(t.Obj().Name())) // never written: every type is substituted first
+		mangleName(b, Ident(t.Obj().Name())) // never written: every type is substituted first
 	case *types.Trait:
-		b.WriteString(TraitName(t))
+		mangleName(b, TraitName(t))
 	case *types.Ref:
 		if t.Mut() {
 			b.WriteString("mut_")

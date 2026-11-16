@@ -227,10 +227,10 @@ func (e *Emitter) variantValue(t types.Type, v *types.Variant, args []string, po
 
 		fields := make([]string, len(args))
 		for i, f := range u.Variant(v.Index()).Fields() {
-			fields[i] = "." + fieldName(f, i) + " = " + args[i]
+			fields[i] = "." + lower.VariantField(f, i) + " = " + args[i]
 		}
 
-		return "(" + ct + "){" + tag + ", ." + variantMember(v) + " = {" + strings.Join(fields, ", ") + "}}"
+		return "(" + ct + "){" + tag + ", ." + lower.VariantMember(v) + " = {" + strings.Join(fields, ", ") + "}}"
 	}
 
 	e.unsupported(pos, "values of type "+t.String())

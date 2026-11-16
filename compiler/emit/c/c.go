@@ -22,7 +22,6 @@ package c
 
 import (
 	"bytes"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,16 +32,16 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
-// generated is the file name the lines of no Snello position are
-// given, after a function's body: the helpers and the trampolines the
-// backend writes, which the trace of a panic does not show.
-const generated = "<generated>"
-
-// entry is the symbol of the program's entry, which calls main, and
-// generatedLine the line the generated file's lines are at: a line, as
-// the program's own lines have one, where line zero is the optimizer's
-// mark of code merged from two lines.
 const (
+	// generated is the file name the lines of no Snello position are
+	// given, after a function's body: the helpers and the trampolines the
+	// backend writes, which the trace of a panic does not show.
+	generated = "<generated>"
+
+	// entry is the symbol of the program's entry, which calls main, and
+	// generatedLine the line the generated file's lines are at: a line,
+	// as the program's own lines have one, where line zero is the
+	// optimizer's mark of code merged from two lines.
 	entry         = "main"
 	generatedLine = 1
 )
@@ -54,18 +53,21 @@ const (
 type Emitter struct {
 	info     *types.Info
 	file     *token.File
-	at       token.Pos         // the Snello position the lines being written are at, for the directive each line carries
-	within   string            // the name the program gives the function being written, for its closures' names
-	nclosure int               // closures of the function being written, counted for their names
-	traced   []lower.TraceName // every function written, its symbol and the name the program gives it
-	mainAt   token.Position    // where the program declares main, which the entry is written at
-	decls    bytes.Buffer      // forward declarations of struct types
-	types    bytes.Buffer      // type definitions, each after the ones it holds by value
-	protos   bytes.Buffer      // function prototypes
-	helpers  bytes.Buffer      // generated functions, such as the printers of composite types
-	body     bytes.Buffer      // function definitions
-	scratch  []byte            // the statements saveBefore holds aside, reused so that holding them allocates nothing
-	boxWords int               // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
+	stdFiles map[*token.File]bool   // the standard library's files, which the line tables name under lower.SourceName's directory
+	quoted   map[*token.File]string // each file's name as the directives write it, quoted once a file
+	at       token.Pos              // the Snello position the lines being written are at, for the directive each line carries
+	within   string                 // the name the program gives the function being written, for its closures' names
+	nclosure int                    // closures of the function being written, counted for their names
+	traced   []lower.TraceName      // every function written, its symbol and the name the program gives it
+	mainAt   token.Position         // where the program declares main, which the entry is written at
+	mainFile *token.File            // and the file it is in
+	decls    bytes.Buffer           // forward declarations of struct types
+	types    bytes.Buffer           // type definitions, each after the ones it holds by value
+	protos   bytes.Buffer           // function prototypes
+	helpers  bytes.Buffer           // generated functions, such as the printers of composite types
+	body     bytes.Buffer           // function definitions
+	scratch  []byte                 // the statements saveBefore holds aside, reused so that holding them allocates nothing
+	boxWords int                    // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	tmp      int
 	used     map[types.Object]bool
 	state    map[string]int                  // of each C type and helper name: undeclared, declared, defining, defined
@@ -127,6 +129,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	}
 
 	e := newEmitter(info, files[0], fs)
+	e.stdFiles, e.quoted = lower.StdFiles(libraries), make(map[*token.File]string)
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -210,7 +213,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	out.Write(e.body.Bytes())
 	e.traceNames(&out)
 	// The entry is main's, at main's position and under its name: the optimizer writes main into it, and a trace names the entry's code main.
-	put(&out, "#line ", strconv.Itoa(e.mainAt.Line), " ", cString(filepath.Base(e.mainAt.Filename)), "\nint main(int argc, char **argv) {\n#line ", strconv.Itoa(generatedLine), " ", cString(generated), "\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
+	put(&out, "#line ", strconv.Itoa(e.mainAt.Line), " ", e.directiveName(e.mainFile), "\nint main(int argc, char **argv) {\n#line ", strconv.Itoa(generatedLine), " ", cString(generated), "\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -471,7 +474,7 @@ func (e *Emitter) writeFunction(name, display string, sig *types.Signature, body
 	put(&e.protos, head, ";\n")
 	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
 	if name == lower.MainName {
-		e.mainAt = e.file.Position(pos) // of this file, which the entry is written after
+		e.mainAt, e.mainFile = e.file.Position(pos), e.file // of this file, which the entry is written after
 		e.traced = append(e.traced, lower.TraceName{Symbol: entry, Name: display})
 	}
 	outerWithin, outerClosures := e.within, e.nclosure
@@ -481,6 +484,24 @@ func (e *Emitter) writeFunction(name, display string, sig *types.Signature, body
 	e.endPositions()
 	e.line("")
 	e.within, e.nclosure = outerWithin, outerClosures
+}
+
+// directiveName is the name the file f is given in the directives,
+// quoted as C writes a string, the standard library's under its
+// directory (lower.SourceName): made once a file, since every line of
+// it names it.
+func (e *Emitter) directiveName(f *token.File) string {
+	if f == nil { // a program of no main, which only a test emits
+		return cString(generated)
+	}
+
+	q, ok := e.quoted[f]
+	if !ok {
+		q = cString(lower.SourceName(f.Name(), e.stdFiles[f]))
+		e.quoted[f] = q
+	}
+
+	return q
 }
 
 // function writes the body of a function or closure whose head was
@@ -494,11 +515,11 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 	outerResult, outerLoops, outerPrologue, outerDefers := e.result, e.loops, e.prologue, e.defers
 	outerFrames, outerTemps, outerDeclared := e.frames, e.temps, e.names.declared
 	e.result, e.loops, e.prologue, e.defers, e.frames, e.temps = sig.Results(), nil, nil, nil, nil, nil
-	e.names.declared = make(map[string]bool)
+	e.names.declared = make(map[string]int)
 	e.push(false)
 	start := e.body.Len()
 	if recv := sig.Recv(); recv != nil {
-		e.names.declared[e.localName(recv)] = true
+		e.names.declared[e.localName(recv)]++
 		if !e.used[recv] {
 			e.line("(void)" + e.localName(recv) + ";")
 		}
@@ -512,7 +533,7 @@ func (e *Emitter) function(sig *types.Signature, body *ast.BlockStmt) {
 			continue
 		}
 
-		e.names.declared[e.localName(p)] = true
+		e.names.declared[e.localName(p)]++
 		if !e.used[p] {
 			e.line("(void)" + e.localName(p) + ";")
 		}
@@ -568,45 +589,6 @@ func (e *Emitter) resultType(sig *types.Signature, pos token.Pos) string {
 	return e.cType(sig.Results(), pos)
 }
 
-func basicType(t *types.Basic) string {
-	switch t.Kind() {
-	case types.Bool:
-		return "bool"
-	case types.String, types.Error:
-		return "sn_string" // an error is its message for now
-	case types.Int8:
-		return "int8_t"
-	case types.Int16:
-		return "int16_t"
-	case types.Int32:
-		return "int32_t"
-	case types.Int64:
-		return "int64_t"
-	case types.Int:
-		return "sn_int"
-	case types.Uint8:
-		return "uint8_t"
-	case types.Uint16:
-		return "uint16_t"
-	case types.Uint32:
-		return "uint32_t"
-	case types.Uint64:
-		return "uint64_t"
-	case types.Uint:
-		return "sn_uint"
-	case types.Float32:
-		return "float"
-	case types.Float64:
-		return "double"
-	case types.Never:
-		return "void"
-	case types.Local:
-		return "uint8_t" // holds nothing, but C has no empty type
-	}
-
-	return "void"
-}
-
 // A writer is a section or a builder generated C goes into.
 type writer interface {
 	WriteString(s string) (int, error)
@@ -630,7 +612,7 @@ func put(w writer, parts ...string) {
 func (e *Emitter) line(s string) {
 	if e.at.IsValid() {
 		p := e.file.Position(e.at)
-		put(&e.body, "#line ", strconv.Itoa(p.Line), " ", cString(filepath.Base(p.Filename)), "\n")
+		put(&e.body, "#line ", strconv.Itoa(p.Line), " ", e.directiveName(e.file), "\n")
 	}
 
 	e.body.WriteString(s)

@@ -469,6 +469,7 @@ func (e *Emitter) blockValue(b *ast.BlockStmt, result string, want types.Type) {
 		return
 	}
 
+	e.line("{") // a C block of its own, as every frame is, so that the names it declares end with it
 	e.push(false)
 	last := len(b.List) - 1
 	e.stmts(b.List[:last])
@@ -479,6 +480,7 @@ func (e *Emitter) blockValue(b *ast.BlockStmt, result string, want types.Type) {
 	}
 
 	e.pop(b.Rbrace)
+	e.line("}")
 }
 
 // assignOrRun writes x as the value of result, or as a statement when

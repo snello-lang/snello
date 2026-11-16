@@ -35,9 +35,10 @@ import (
 // break or continue leaves; and how many statement temporaries were
 // pending when it opened.
 type frame struct {
-	vars []owned
-	loop bool
-	mark int
+	vars  []owned
+	loop  bool
+	mark  int
+	block int // the lexical block of the debugging information the frame's code is in, 0 for none (debug.go)
 }
 
 // An owned value the emitter will drop: the address of its slot, its
@@ -168,13 +169,12 @@ func (e *Emitter) dropIfNeeded(p string, t types.Type, pos token.Pos) {
 	}
 }
 
-// elemDropper returns the name of the function the runtime is given to
-// drop an element of a channel, or a key or a value of a map, of type
-// elem with, writing it on first use: dropper's under the name of
-// lower.ElemDrop, which the analysis of the linked program takes for
+// elemDropper returns name, the function the runtime is given to drop
+// an element of type elem of a channel, or a key or a value of a map,
+// writing it on first use: dropper's under the name of lower.ChanDrop
+// or lower.ElemDrop, which the analysis of the linked program takes for
 // the targets of the runtime's calls of such drops.
-func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
-	name := lower.ElemDrop(elem)
+func (e *Emitter) elemDropper(name string, elem types.Type, pos token.Pos) string {
 	if e.state[name] {
 		return name
 	}
@@ -441,13 +441,19 @@ func (e *Emitter) zero(p string, t types.Type, pos token.Pos) {
 // push opens a frame for a scope; loop says a break or continue leaves
 // it.
 func (e *Emitter) push(loop bool) {
-	e.fn.frames = append(e.fn.frames, frame{loop: loop, mark: len(e.fn.temps)})
+	e.fn.frames = append(e.fn.frames, frame{loop: loop, mark: len(e.fn.temps), block: e.lexicalBlock()})
 }
 
 // pop closes the innermost frame, writing the drops of its variables.
 func (e *Emitter) pop(pos token.Pos) {
 	n := len(e.fn.frames) - 1
+	outer := e.fn.loc
+	if e.debugging() && pos.IsValid() {
+		e.fn.loc = e.location(pos) // the drops at the block's closing brace, as clang places a destructor's call
+	}
+
 	e.dropVars(e.fn.frames[n].vars, pos)
+	e.fn.loc = outer
 	e.fn.frames = e.fn.frames[:n]
 }
 
@@ -713,7 +719,8 @@ func written(n *types.Named, name string) bool {
 // function of its own.
 func (e *Emitter) helper(name, result string, params []string, f func()) {
 	outer := e.begin(nil)
-	e.subprogram(name, token.NoPos)
+	e.subprogram(name, "", token.NoPos, "")
+	e.fn.artificial = true // the backend's own code, all at line zero in a debug build
 	f()
 	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
 	for i, p := range params {

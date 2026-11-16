@@ -20,8 +20,23 @@ import (
 // compiled by clang to IR and optimized together when linked, so the
 // runtime's hot functions are inlined into the program. A debug build
 // links the module with the runtime compiled by the C compiler under
-// the C backend's flags.
-var Flags = []string{"-O2"}
+// the C backend's flags; the program's own functions in it are marked
+// to be left unoptimized (optnone).
+//
+// DebugFlags keep a debug build's trace of a panic exact through the
+// standard library's code, which is optimized around the program's:
+// the merging of the tails and of the common code of two paths, which
+// would fold two panics into one call of no line, is off; so is the
+// outlining of code shared by several places into a function of its
+// own, which a trace could show at one of them only, and the analysis
+// that finds a function's cold code, a panic's path first of all, to
+// split it off into a function of its own, which a trace would show as
+// the function twice; and a call a function ends in stays a call and
+// not a jump, so that the function keeps its frame in the trace.
+var (
+	Flags      = []string{"-O2"}
+	DebugFlags = []string{"-mllvm", "-enable-tail-merge=false", "-mllvm", "-simplifycfg-sink-common=false", "-mllvm", "-simplifycfg-hoist-common=false", "-mno-outline", "-mllvm", "-hot-cold-static-analysis=false", "-fno-optimize-sibling-calls"}
+)
 
 // Compiler returns the compiler that turns the module into an object:
 // clang, the one compiler that reads IR, named through CLANG when it
@@ -62,12 +77,13 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 
 	obj := filepath.Join(dir, name+".ll.o") // never the object of a runtime file, whatever the program is called
 	args := append([]string{}, Flags...)
+
 	if t := moduleTriple(module); t != "" {
 		args = append(args, "-target", t) // the module's, so that clang does not override it with the host's
 	}
 
 	if debug {
-		args = append(args, c.ClangDebug...) // the module's compiler is clang: a debug build keeps its lines exact as the C backend's
+		args = append(args, DebugFlags...)
 	} else {
 		args = append(args, "-flto")
 	}
@@ -89,11 +105,15 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}()
 
 	rt, output, err := c.RuntimeObjects(dir, cc, rtargs)
-	rtargs = append(rtargs, "-I", dir) // snello.h, for a package's C
 	var objs []string
 	if err == nil {
 		var boundOutput []byte
-		objs, boundOutput, err = c.Objects(cc, rtargs, bound)
+		pkgArgs := rtargs // a release build's package C as the runtime is compiled, with no line tables
+		if debug {
+			pkgArgs = c.ProgramFlags(cc, debug) // a debug build's as the program's, for the debugger
+		}
+
+		objs, boundOutput, err = c.Objects(cc, append(append([]string{}, pkgArgs...), "-I", dir), bound) // with snello.h
 		output = append(output, boundOutput...)
 	}
 

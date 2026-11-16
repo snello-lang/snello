@@ -790,6 +790,57 @@ func main() {
 			Out: "4969059760275911952 2147869220224756844 0.5085473976760264 Some(7) Some(234276272) Some(547831175868) Some(2147104640)\n[e d a b c] [0 5 3 1 4 2] [] [] None None\n3558 true 5 true true true None\n",
 		},
 		{
+			Name: "mangled-names", // types whose names would read alike are two, each with its own C struct and its own drop: the tuple of A_x and B and the tuple of A and x_B, a struct named unit and the unit type, and a struct named Box_int and the instance Box<int>
+			Src: `package main
+import "fmt"
+struct A_x { v int }
+struct B { w string }
+struct A { name string }
+struct x_B { n int }
+struct unit { b bool; n int }
+struct Box<T> { v T }
+struct Box_int { s string }
+func main() {
+	p := (A_x{v: 1}, B{w: "b"})
+	q := (A{name: "a"}, x_B{n: 2})
+	pa, pb := p
+	qa, qb := q
+	fmt.Println(pa.v, pb.w, qa.name, qb.n)
+	var o unit? = Some(unit{b: true, n: 3})
+	var e ()? = Some(())
+	match o { Some(u) => fmt.Println(u.b, u.n), None => fmt.Println("none") }
+	match e { Some(_) => fmt.Println("unit"), None => fmt.Println("none") }
+	x := Box<int>{v: 4}
+	y := Box_int{s: "box"}
+	fmt.Println(x.v, y.s)
+}
+`,
+			Out: "1 b a 2\ntrue 3\nunit\n4 box\n",
+		},
+		{
+			Name: "enum-case-names", // the C backend's names of two enums' cases, which C keeps in one space for the whole file, never meet: Tok_Kind's Eof and Tok's Kind_Eof, each joined with its enum's name, are two
+			Src: `package main
+import "fmt"
+enum Tok_Kind { Eof
+    Num }
+enum Tok { Kind_Eof
+    Word(string) }
+func main() {
+	k := Num
+	t := Word("w")
+	match k { Eof => fmt.Println("eof"), Num => fmt.Println("num") }
+	match t { Kind_Eof => fmt.Println("end"), Word(s) => fmt.Println("word", s) }
+	e := Kind_Eof
+	match e { Kind_Eof => fmt.Println("end"), Word(s) => fmt.Println(s) }
+	fmt.Println(größe(Klein(3)), größe(Groß))
+}
+enum Größe { Klein(int)
+    Groß }
+func größe(g Größe) int { match g { Klein(n) => return n, Groß => return 0 } }
+`,
+			Out: "num\nword w\nend\n3 0\n",
+		},
+		{
 			Name: "multiply-then-add", // a product and a sum are two operations, each rounded: a compiler that joined them into one instruction would round once and print other last digits, and the two backends would differ; the values come from the arguments' count, so nothing is worked out when the program is compiled; and a literal beside an f32 is an f32, so the sum is rounded as an f32 at each step and not worked out wider
 			Src: `package main
 import ("fmt"; "math"; "os")

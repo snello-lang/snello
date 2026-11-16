@@ -104,6 +104,7 @@ func (e *Emitter) funcLit(x *ast.FuncLit) value {
 			reach[cap.Var] = at
 		}
 
+		e.declareCaptures(captured, inline, x.Pos())
 		return reach
 	}, x.Body, x.Pos())
 

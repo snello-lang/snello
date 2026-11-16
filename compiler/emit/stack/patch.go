@@ -15,6 +15,7 @@ import (
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
 )
@@ -38,7 +39,7 @@ const (
 
 	// chanDropCaller is the runtime's function that calls the drop a
 	// channel holds, through a pointer to one of the functions named
-	// with lower.ElemDropPrefix; lazyMaker calls a package variable's
+	// with lower.ChanDropPrefix; lazyMaker calls a package variable's
 	// initializer, one of those named with lower.LazyInitPrefix.
 	chanDropCaller = "chan_drop_value"
 	lazyMaker      = "sn_lazy_make"
@@ -218,7 +219,7 @@ func (img *Image) runtimeOptions() Options {
 		return out
 	}
 
-	targets := map[string][]string{chanDropCaller: named(lower.ElemDropPrefix), lazyMaker: named(lower.LazyInitPrefix), catcher: named(lower.CaughtPrefix)}
+	targets := map[string][]string{chanDropCaller: named(lower.ChanDropPrefix), lazyMaker: named(lower.LazyInitPrefix), catcher: named(lower.CaughtPrefix)}
 	keys := named(lower.KeyHashPrefix, lower.KeyEqPrefix, lower.ElemDropPrefix)
 	for _, name := range append(named(mapPrefix), mapHelpers...) {
 		targets[img.origin(name)] = keys
@@ -349,7 +350,10 @@ func replace(path string, data []byte, os_ system) error {
 	}
 
 	tmp := path + patched
-	if err := os.WriteFile(tmp, data, info.Mode().Perm()); err != nil {
+	syscall.ForkLock.Lock() // no fork while the binary is open for writing: a child would hold it open until it execs, and an exec of the binary meanwhile fails, text file busy
+	err = os.WriteFile(tmp, data, info.Mode().Perm())
+	syscall.ForkLock.Unlock()
+	if err != nil {
 		return err
 	}
 
