@@ -1082,6 +1082,11 @@ func main() {
 			Out:  "tick\ntick\ntick\n",
 		},
 		{
+			Name: "held", // a task that never waits on every core holds its worker: the monitor adds one for the main task's wake
+			Src:  "package main\nimport (\"fmt\"; \"os\"; \"time\")\nfunc spin() { x := 0; for { x += 1 } }\nfunc main() { for i := 0; i < os.Cores(); i++ { spawn spin() }; time.Sleep(100 * time.Millisecond); fmt.Println(\"main ran again after 100 ms\") }\n",
+			Out:  "main ran again after 100 ms\n",
+		},
+		{
 			Name: "parallel", // a spawned task runs on another core when one is free: neither task waits, and the scheduler does not preempt, so on one worker the first would compute alone until its deadline
 			Src: `package main
 import ("fmt"; "sync"; "time")

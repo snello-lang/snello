@@ -183,6 +183,15 @@ static const int64_t keeper_near = 20000; // 20 µs
 // after each look that finds nothing, up to pause_most.
 static const int64_t pause_most = 10000000; // 10 ms
 
+// A worker whose running task has not let go for held_limit is held:
+// computing without a wait, or blocked in a read or a bound function.
+// With every worker held and a task queued, the monitor starts another
+// worker, up to workers_per_core of them a core, and the system shares
+// the processors between the threads.
+static const int64_t held_limit = 10000000; // 10 ms
+
+enum { workers_per_core = 16 };
+
 // The keeper's own events, among which the poller's descriptor is one
 // more on Linux.
 #if defined(__APPLE__)
@@ -419,8 +428,11 @@ typedef struct worker {
 #endif
 } worker;
 
-static worker *workers;
-static int nworkers;
+static worker *workers;      // room for workers_most of them, so that no worker's address moves
+static int workers_most;     // what the monitor may grow the workers to
+static _Atomic int nworkers; // the workers started, the main thread's among them: only grows
+
+static int workers_now(void) { return atomic_load_explicit(&nworkers, memory_order_relaxed); }
 static pthread_mutex_t start_mu = PTHREAD_MUTEX_INITIALIZER;
 static bool started;
 
@@ -500,16 +512,17 @@ static _Atomic bool keeping;
 static void keeper_wake(void);
 static worker *idle_take(int k);
 static void idle_wake(worker *taken);
+static void add_worker(void);
 
 // sn_sched_recheck has the waiting workers look again at whether any
 // task can still be woken, when every worker waits.
 void sn_sched_recheck(void) {
-    if (atomic_load(&hot.idle) != nworkers) {
+    if (atomic_load(&hot.idle) != workers_now()) {
         return;
     }
 
     sn_qlock_take(&idle_mu);
-    worker *taken = idle_take(nworkers); // every waiting worker
+    worker *taken = idle_take(workers_now()); // every waiting worker
     if (keeping) {
         keeper_wake();
     }
@@ -536,7 +549,7 @@ void sn_outside(int64_t n) {
 // kept, since every worker would write it on every push and every pop.
 static int64_t queued_now(void) {
     int64_t n = atomic_load(&hot.injected);
-    for (int i = 0; i < nworkers; i++) {
+    for (int i = 0; i < workers_now(); i++) {
         n += (int64_t)(atomic_load(&workers[i].qtail) - atomic_load(&workers[i].qhead));
     }
 
@@ -564,7 +577,7 @@ static bool deadlocked(void) {
     // the queue is read. A slot holds a task only while its worker runs
     // one, so every worker idle means every slot empty, but for a task
     // the monitor is moving.
-    return atomic_load(&hot.idle) == nworkers && atomic_load(&hot.outside) == 0 && sn_timers_pending() == 0 &&
+    return atomic_load(&hot.idle) == workers_now() && atomic_load(&hot.outside) == 0 && sn_timers_pending() == 0 &&
            atomic_load(&hot.moving) == 0 && queued_now() == 0;
 }
 
@@ -1045,7 +1058,7 @@ static task *take_injected(worker *w, bool batch) {
 
     int64_t most = 1;
     if (batch) {
-        most = queued / nworkers + 1;
+        most = queued / workers_now() + 1;
         most = most < ring_size / 2 ? most : ring_size / 2;
     }
 
@@ -1259,7 +1272,7 @@ static task *next_task(worker *w) {
         return t;
     }
 
-    for (int i = 0; i < nworkers; i++) {
+    for (int i = 0; i < workers_now(); i++) {
         worker *other = &workers[i];
         if (other != w && (t = steal(w, other)) != NULL) {
             return t;
@@ -1375,7 +1388,7 @@ static void run_task(worker *w, task *t) {
 // every worker busy the monitor moves.
 static task *steal_next(worker *w) {
     int64_t until = 0; // the end of the wait, from the first slot found held: every slot after it is given the rest
-    for (int i = 0; i < nworkers; i++) {
+    for (int i = 0; i < workers_now(); i++) {
         worker *other = &workers[i];
         if (other == w || atomic_load(&other->runnext) == NULL) {
             continue;
@@ -1655,6 +1668,16 @@ static void keeper_wake(void) {
 // sockets' poller, and none waits in it: the monitor looks at it when
 // no one has since its last look, and queues what it finds, so that a
 // socket's task waits no longer than a stale slot's.
+//
+// The monitor also watches for every worker held: a task that never
+// lets go on each, computing or blocked in a read or a bound function,
+// with a task queued that none of them will come back for. It keeps,
+// for each worker, the time of its look that last found the worker
+// switched to a task, and when every worker has been on one task for
+// held_limit while a task is queued, it starts another worker, up to
+// workers_per_core a core, which takes the queued task; the system
+// then shares the processors between the threads. An added worker is
+// not ended: it waits when idle as the others do.
 static pthread_mutex_t monitor_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t monitor_cond = PTHREAD_COND_INITIALIZER;
 
@@ -1714,13 +1737,16 @@ static void *monitor_main(void *arg) {
     (void)arg;
     int64_t pause = next_stale;
     uint64_t seen = 0;
-    uint64_t *switches = calloc((size_t)nworkers, sizeof *switches); // each worker's count at the monitor's last look
-    if (switches == NULL) {
+    // Each worker's count of switches at the monitor's last look, and
+    // when a look last found each switched to a task.
+    uint64_t *switches = calloc((size_t)workers_most, sizeof *switches);
+    int64_t *moved_at = calloc((size_t)workers_most, sizeof *moved_at);
+    if (switches == NULL || moved_at == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
     for (;;) {
         pthread_mutex_lock(&monitor_mu);
-        while (atomic_load(&hot.idle) == nworkers) {
+        while (atomic_load(&hot.idle) == workers_now()) {
             pthread_cond_wait(&monitor_cond, &monitor_mu);
             pause = next_stale;
         }
@@ -1728,13 +1754,27 @@ static void *monitor_main(void *arg) {
         pthread_mutex_unlock(&monitor_mu);
         struct timespec until = { 0, (long)pause };
         nanosleep(&until, NULL);
-        bool moved = sn_timers_fire(sn_time_mono()); // what came due with every worker busy
+        int64_t now = sn_time_mono();
+        bool moved = sn_timers_fire(now); // what came due with every worker busy
         if (moved) {
             sn_sched_timer_set(sn_timers_next()); // a worker may wait by now, and for no deadline
         }
 
-        for (int i = 0; i < nworkers; i++) {
+        int n = workers_now();
+        bool held = atomic_load(&hot.idle) == 0 && n < workers_most; // every worker busy, and room for one more
+        for (int i = 0; i < n; i++) {
+            uint64_t before = switches[i];
             moved = move_next(&workers[i], &switches[i]) || moved;
+            if (switches[i] != before || moved_at[i] == 0) {
+                moved_at[i] = now;
+            }
+
+            held = held && now - moved_at[i] >= held_limit;
+        }
+
+        if (held && queued_now() > 0) {
+            add_worker();
+            moved = true; // the next look comes soon: the new worker takes the queued task and slots may be stale
         }
 
         moved = monitor_poll(seen) || moved;
@@ -1906,7 +1946,7 @@ static void sched_loop(worker *w) {
             }
         }
 
-        bool first = atomic_fetch_sub(&hot.idle, 1) == nworkers;
+        bool first = atomic_fetch_sub(&hot.idle, 1) == workers_now();
         sn_qlock_give(&idle_mu);
         woken = true;
         w->owes_at =
@@ -1966,29 +2006,35 @@ int64_t sn_cores(void) {
 }
 
 // start makes the workers, the main thread the first and one thread
-// per further core, the timers' wheels and the monitor.
+// per further core, the timers' wheels and the monitor. The workers
+// are allocated for the most the monitor may grow them to, so that no
+// worker's address moves when one is added, and only the started ones
+// are written, so that the pages of the others stay untouched until
+// one is added.
 static void start(void) {
     pthread_mutex_lock(&start_mu);
     if (!started) {
-        nworkers = (int)sn_cores();
-        workers = calloc((size_t)nworkers, sizeof *workers);
+        int n = (int)sn_cores();
+        workers_most = n * workers_per_core;
+        workers = calloc((size_t)workers_most, sizeof *workers);
         if (workers == NULL) {
             sn_panic(SN_STR("out of memory", 13));
         }
 
         keeper_start();
-        sn_timers_start(nworkers);
+        sn_timers_start(n, workers_most);
 
         if (my_worker() == NULL) {
             self_worker = &workers[0]; // the main thread
         }
 
-        for (int i = 0; i < nworkers; i++) {
+        for (int i = 0; i < n; i++) {
             workers[i].owes_at = INT64_MAX;
         }
 
+        atomic_store(&nworkers, n);
         started = true;
-        for (int i = 1; i < nworkers; i++) {
+        for (int i = 1; i < n; i++) {
             start_thread(worker_main, &workers[i]);
         }
 
@@ -1996,6 +2042,20 @@ static void start(void) {
     }
 
     pthread_mutex_unlock(&start_mu);
+}
+
+// add_worker starts one more worker, for the monitor: the worker and
+// its wheel are made before the count of workers grows, and the thread
+// starts last. The count grows before the thread, so that the worker's
+// first idle is counted against a count that holds it; a thread that
+// cannot start ends the program, as it does at start, so no counted
+// worker is ever missing.
+static void add_worker(void) {
+    int i = workers_now();
+    workers[i].owes_at = INT64_MAX;
+    sn_timers_add();
+    atomic_store(&nworkers, i + 1);
+    start_thread(worker_main, &workers[i]);
 }
 
 // sched_prepare starts the workers the first time, and gives the main
@@ -2038,7 +2098,7 @@ void sn_sched_start(void) { sched_ready(); }
 
 int64_t sn_worker_index(void) { return my_worker() - workers; }
 
-int64_t sn_sched_workers(void) { return nworkers; }
+int64_t sn_sched_workers(void) { return workers_now(); }
 
 // sn_sched_timer_set has a worker keep time for a timer started at
 // when, if the keeper sleeps past it or there is none: the keeper reads
@@ -2158,7 +2218,7 @@ void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound
 
 int64_t sn_tasks_running(void) {
     int64_t n = 0;
-    for (int i = 0; i < nworkers; i++) {
+    for (int i = 0; i < workers_now(); i++) {
         n += atomic_load_explicit(&workers[i].running, memory_order_relaxed);
     }
 

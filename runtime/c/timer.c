@@ -91,23 +91,39 @@ typedef struct {
 // the files are linked in.
 static struct {
     wheel *at;
-    int n;
+    _Atomic int n; // the wheels in use, one a worker started: only grows, as the workers do
 } __attribute__((aligned(SN_CACHE_LINE))) wheels_of;
+
+static int wheels_now(void) { return atomic_load_explicit(&wheels_of.n, memory_order_relaxed); }
 static _Atomic bool stopping; // the program is ending: no timer fires again
 
+// wheel_init makes the wheel i empty, before it is counted in use.
+static void wheel_init(int i) {
+    memset(&wheels_of.at[i], 0, sizeof *wheels_of.at);
+    atomic_store(&wheels_of.at[i].next, INT64_MAX);
+}
+
 // sn_timers_start makes a wheel per worker, before any thread but the
-// first runs.
-void sn_timers_start(int64_t nworkers) {
-    wheels_of.n = (int)nworkers;
-    wheels_of.at = aligned_alloc(SN_CACHE_LINE, (size_t)wheels_of.n * sizeof *wheels_of.at);
+// first runs, with room for most of them, so that no wheel's address
+// moves when a worker is added, and only the workers' own written, so
+// that the others' pages stay untouched; sn_timers_add makes one more
+// and counts it in use, for a worker added.
+void sn_timers_start(int64_t nworkers, int64_t most) {
+    wheels_of.at = aligned_alloc(SN_CACHE_LINE, (size_t)most * sizeof *wheels_of.at);
     if (wheels_of.at == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
 
-    memset(wheels_of.at, 0, (size_t)wheels_of.n * sizeof *wheels_of.at);
-    for (int i = 0; i < wheels_of.n; i++) {
-        atomic_store(&wheels_of.at[i].next, INT64_MAX);
+    for (int i = 0; i < nworkers; i++) {
+        wheel_init(i);
     }
+
+    atomic_store(&wheels_of.n, (int)nworkers);
+}
+
+void sn_timers_add(void) {
+    wheel_init(wheels_now());
+    atomic_fetch_add(&wheels_of.n, 1);
 }
 
 // sn_timers_next is the earliest deadline any wheel holds, the greatest
@@ -119,7 +135,7 @@ int64_t sn_timers_next(void) {
     }
 
     int64_t first = INT64_MAX;
-    for (int i = 0; i < wheels_of.n; i++) {
+    for (int i = 0; i < wheels_now(); i++) {
         int64_t next = atomic_load(&wheels_of.at[i].next);
         if (next < first) {
             first = next;
@@ -137,7 +153,7 @@ int64_t sn_timers_next_of(int64_t worker) { return atomic_load(&wheels_of.at[wor
 // added up only here, for a worker that finds every worker idle.
 int64_t sn_timers_pending(void) {
     int64_t n = 0;
-    for (int i = 0; i < wheels_of.n; i++) {
+    for (int i = 0; i < wheels_now(); i++) {
         n += atomic_load(&wheels_of.at[i].pending);
     }
 
@@ -475,7 +491,7 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
 // once, each at the wheels the others are not at.
 bool sn_timers_fire(int64_t now) {
     bool fired = false;
-    for (int i = 0; i < wheels_of.n; i++) {
+    for (int i = 0; i < wheels_now(); i++) {
         wheel *w = &wheels_of.at[i];
         if (atomic_load(&w->next) <= now) {
             fired = wheel_fire(w, now, false) || fired;
@@ -683,7 +699,7 @@ bool sn_timer_abandon(sn_chan *c, int dir) {
 // channels of a pending After or a running Tick freed.
 void sn_timers_stop(void) {
     atomic_store(&stopping, true);
-    for (int i = 0; i < wheels_of.n; i++) {
+    for (int i = 0; i < wheels_now(); i++) {
         wheel *w = &wheels_of.at[i];
         wheel_lock(w);
         while (w->firing > 0) {

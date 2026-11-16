@@ -122,6 +122,9 @@ func TestDecodeLoops(t *testing.T) {
   401005:	nop
   401006:	jmp    401001 <f+0x1>
 `, 0, "a stack decrement in a loop in f"},
+		{"the whole function loops", `0000000000401000 <f>:
+  401000:	jmp    401000 <f>
+`, 0, ""},
 		{"into an instruction", `0000000000401000 <f>:
   401000:	push   %rbx
   401001:	nop

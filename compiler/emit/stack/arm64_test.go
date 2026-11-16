@@ -77,6 +77,18 @@ _tail:
 	}
 }
 
+// TestArm64WholeLoop decodes a function that is one branch to its own
+// entry, a task computing without end: a loop, with a frame of 0, not a
+// recursion.
+func TestArm64WholeLoop(t *testing.T) {
+	img := decodeArm64(t, `_spin:
+0000000100000010	b	_spin
+`)
+	if f := img.functions["_spin"]; f.frame != 0 || f.unknown != "" || kinds(f) != "" {
+		t.Fatalf("got %+v", f)
+	}
+}
+
 func TestArm64Linux(t *testing.T) {
 	img := &Image{arch: arm64, os: linux, functions: map[string]*function{}, cLibrary: map[string]bool{}}
 	img.read([]byte(`0000000000400600 <run>:
@@ -92,8 +104,8 @@ func TestArm64Linux(t *testing.T) {
   400700:	ret
 `), [2]uint64{})
 	f := img.functions["run"]
-	if f.frame != 48 || kinds(f) != "lib:malloc leaf leaf run" {
-		t.Fatalf("got frame %d, calls %q", f.frame, kinds(f))
+	if f.frame != 48 || kinds(f) != "lib:malloc leaf leaf" || f.unknown != "a stack decrement in a loop in run" {
+		t.Fatalf("got frame %d, calls %q, %q: a branch back to the entry runs the prologue again, a loop with a decrement", f.frame, kinds(f), f.unknown)
 	}
 }
 
