@@ -1451,6 +1451,10 @@ int main(int argc, char **argv) {
         sn_chan_recv(done, &got);
     }
 
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the exit check of a
+        sn_sleep(1000000);           // debug build reports a task still running, which is no leak of the channel's
+    }
+
     printf("rounds %d\n", rounds);
     sn_chan_drop(&done, SN_CHAN_BOTH);
     return sn_finish();
