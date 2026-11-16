@@ -12,7 +12,6 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
-	"github.com/snello-lang/snello/compiler/emit/stack"
 )
 
 // Flags are the options clang is given for the module: the standard
@@ -67,19 +66,19 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 		args = append(args, "-target", t) // the module's, so that clang does not override it with the host's
 	}
 
-	if !debug {
+	if debug {
+		args = append(args, c.ClangDebug...) // the module's compiler is clang: a debug build keeps its lines exact as the C backend's
+	} else {
 		args = append(args, "-flto")
 	}
 
 	args = append(args, "-c", "-o", obj, filepath.Join(dir, name+".ll"))
 	cc := c.Compiler()
-	rtargs := append([]string{}, c.Flags...)
-	if debug {
-		rtargs = append(rtargs, c.Debug...)
-	} else {
+	if !debug {
 		cc = Compiler() // the module is clang's IR: clang compiles the runtime to IR beside it and links the two
-		rtargs = append(rtargs, c.Release...)
 	}
+
+	rtargs := c.BuildFlags(cc, debug)
 
 	var compiled []byte
 	var moduleErr error
@@ -109,11 +108,7 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := exec.Command(cc, append(append(append(append(append(rtargs, "-o", bin, obj), rt...), objs...), c.LinkFlags(bindings)...), c.SystemLinkFlags()...)...).CombinedOutput()
-	if err == nil {
-		stack.Patch(bin) // a program it cannot bound keeps its tasks on guarded stacks, which is always safe
-	}
-
+	linked, err := c.Link(cc, debug, dir, bin, append(append([]string{obj}, rt...), objs...), bindings)
 	return bin, append(output, linked...), err
 }
 

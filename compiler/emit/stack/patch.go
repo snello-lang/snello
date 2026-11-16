@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	goruntime "runtime"
 	"sort"
 	"strings"
 
@@ -98,19 +99,37 @@ type table struct {
 // path and writes every bound it proves into the program's table of
 // bounds, lower.StackBounds, so that the runtime gives the task a small
 // stack. It returns the bound of each spawn, by its index, for a
-// report. The binary is written anew beside itself, signed again on
-// macOS, and renamed over itself; on any error it is left as linked,
-// with every task unbounded, which is always safe. A program with no
-// spawn is not read past its symbols.
-func Patch(path string) ([]Bound, error) {
-	tab, data, err := read(path)
-	if err != nil || tab.spawns == 0 {
-		return nil, err
+// report. The binary's bytes are given when the caller patched them
+// already, the trace's table, and read otherwise; the binary is
+// written anew beside itself, signed again on macOS, and renamed over
+// itself, once for both patches; on an error of the analysis it is
+// left with every task unbounded, which is always safe. A program with
+// no spawn is not read past its symbols.
+func Patch(path string, data []byte) ([]Bound, error) {
+	given := data != nil
+	bounds, data, wrote, err := bound(path, data)
+	if wrote || given {
+		if werr := Replace(path, data); werr != nil {
+			return bounds, werr
+		}
 	}
 
+	return bounds, err
+}
+
+// bound writes the bounds into data, the binary's bytes, read from
+// path when none are given, and reports the bounds, the bytes, and
+// whether any bound was written; on an error the bytes are as given.
+func bound(path string, data []byte) ([]Bound, []byte, bool, error) {
+	tab, read, err := read(path, data)
+	if err != nil || tab.spawns == 0 {
+		return nil, data, false, err
+	}
+
+	data = read
 	img, err := Load(path)
 	if err != nil {
-		return nil, err
+		return nil, data, false, err
 	}
 
 	bounds := make([]Bound, tab.spawns)
@@ -133,11 +152,7 @@ func Patch(path string) ([]Bound, error) {
 		}
 	}
 
-	if !wrote {
-		return bounds, nil
-	}
-
-	return bounds, replace(path, data, img.os)
+	return bounds, data, wrote, nil
 }
 
 // Table returns the bound of the stack of each spawn's task of the
@@ -145,7 +160,7 @@ func Patch(path string) ([]Bound, error) {
 // table of bounds as Patch left it: lower.Unbounded for a task with no
 // bound. It reads no more than the binary's symbols and the table.
 func Table(path string) ([]uint32, error) {
-	tab, data, err := read(path)
+	tab, data, err := read(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -159,16 +174,19 @@ func Table(path string) ([]uint32, error) {
 }
 
 // read locates the program's table of bounds and reads the binary,
-// whose bytes hold the table for each spawn the symbols name.
-func read(path string) (table, []byte, error) {
+// whose bytes hold the table for each spawn the symbols name, unless
+// they are given.
+func read(path string, data []byte) (table, []byte, error) {
 	tab, err := locate(path)
 	if err != nil {
 		return table{}, nil, err
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return table{}, nil, err
+	if data == nil {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return table{}, nil, err
+		}
 	}
 
 	if tab.spawns > tab.entries || tab.offset+uint64(tab.spawns*boundBytes) > uint64(len(data)) {
@@ -307,6 +325,18 @@ func machoTable(m *macho.File) (table, error) {
 	}
 
 	return table{offset: uint64(sec.Offset) + tab.Value - sec.Addr, entries: int((end - tab.Value) / boundBytes), spawns: spawns}, nil
+}
+
+// Replace writes data over the binary at path as replace does, for the
+// trace's table, which the panic's trace package writes before the
+// bounds: signed on macOS, so that the program runs.
+func Replace(path string, data []byte) error {
+	os_ := linux
+	if goruntime.GOOS == "darwin" {
+		os_ = darwin
+	}
+
+	return replace(path, data, os_)
 }
 
 // replace writes data beside path, signs it on macOS, and renames it

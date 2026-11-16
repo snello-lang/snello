@@ -713,6 +713,7 @@ func written(n *types.Named, name string) bool {
 // function of its own.
 func (e *Emitter) helper(name, result string, params []string, f func()) {
 	outer := e.begin(nil)
+	e.subprogram(name, token.NoPos)
 	f()
 	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
 	for i, p := range params {
@@ -723,7 +724,7 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 		e.helpers.WriteString(p)
 	}
 
-	put(&e.helpers, ")", funcAttrs, " {\nentry:\n")
+	put(&e.helpers, ")", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.helpers, outer)
 	e.helpers.WriteString("}\n\n")
 }

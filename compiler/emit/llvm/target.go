@@ -49,6 +49,11 @@ const (
 	funcAttrs    = " #0"
 	emptyGroup   = "attributes #0 = { \"snello-target\"=\"unset\" }\n"
 	noJumpTables = "\"no-jump-tables\"=\"true\""
+
+	// framePointers keeps the frame pointer in every function that calls
+	// another, so that a panic's trace walks the frames: a leaf is never
+	// below another frame.
+	framePointers = "\"frame-pointer\"=\"non-leaf\""
 )
 
 // targetKeys are the attributes of a function that say what processor
@@ -83,7 +88,7 @@ func Targeted(module []byte) ([]byte, error) {
 
 	out := make([]byte, 0, len(module)+len(attrs)+1)
 	out = append(out, module[:len(module)-len(emptyGroup)]...)
-	return append(out, "attributes #0 = { "+attrs+" "+noJumpTables+" }\n"...), nil
+	return append(out, "attributes #0 = { "+attrs+" "+noJumpTables+" "+framePointers+" }\n"...), nil
 }
 
 // target returns the attributes clang gives every function it compiles

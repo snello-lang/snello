@@ -16,6 +16,7 @@ import (
 
 const (
 	linux       = "linux"      // the system whose links bindNow is for
+	darwin      = "darwin"     // the system whose linker keeps the optimized object through -object_path_lto
 	mathLibrary = "-lm"        // the C library's mathematics, a library of its own on Linux
 	bindNow     = "-Wl,-z,now" // binds every import as the program starts
 )

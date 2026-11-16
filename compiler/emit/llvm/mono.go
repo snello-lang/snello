@@ -158,7 +158,7 @@ func (e *Emitter) writeInstance(inst instance) {
 		params = append([]*types.Var{recv}, params...)
 	}
 
-	e.writeBody(inst.name, e.sub(sig).(*types.Signature), params, nil, nil, inst.decl.Body, inst.decl.Pos())
+	e.writeBody(inst.name, lower.DisplayName(inst.fn, lower.RecvType(sig), inst.targs), e.sub(sig).(*types.Signature), params, nil, nil, inst.decl.Body, inst.decl.Pos())
 	e.subst, e.file = outer, outerFile
 }
 

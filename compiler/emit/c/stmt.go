@@ -27,11 +27,18 @@ func (e *Emitter) block(b *ast.BlockStmt) {
 	e.line("}")
 }
 
-// stmt writes one statement and then drops the temporaries it made.
+// stmt writes one statement, at its position, and then drops the
+// temporaries it made.
 func (e *Emitter) stmt(s ast.Stmt) {
+	outer := e.at
+	if s.Pos().IsValid() {
+		e.at = s.Pos()
+	}
+
 	mark := len(e.temps)
 	e.stmtInner(s)
 	e.dropTemps(mark, s.Pos())
+	e.at = outer
 }
 
 func (e *Emitter) stmtInner(s ast.Stmt) {

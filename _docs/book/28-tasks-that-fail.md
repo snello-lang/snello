@@ -32,7 +32,7 @@ A panic is still a bug and `Result` is still how a failure is handled, as chapte
 
 A contained panic ends its task as an uncontained one ends the program, and in the same order:
 
-- **The message is printed** on the standard error stream when the panic happens, `panic: index out of range [3] with length 3`, so that a failure the program only counts still shows. A program that wants silence redirects its standard error.
+- **The message is printed** on the standard error stream when the panic happens, `panic: index out of range [3] with length 3`, with the task's trace under it as chapter 17 shows, so that a failure the program only counts still shows. A program that wants silence redirects its standard error.
 - **The values with a `Drop` method** the task made since it started are dropped, innermost first, **and so are the channel handles it held**, since a handle lost would keep its channel open for every other handle; **its deferred calls run**, once each. The audit below prints how far the task got, whether the task returned or failed:
 
 ```go

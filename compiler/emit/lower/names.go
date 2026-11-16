@@ -5,6 +5,7 @@
 package lower
 
 import (
+	"path"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,9 @@ import (
 // nearly every symbol, so that one is built in one allocation and not
 // in one per piece as the builder doubles.
 const symbolRoom = 64
+
+// MainName is the symbol of the program's main.
+const MainName = "sn_main"
 
 // reserved holds the identifiers an emitted program must not reuse:
 // C's keywords and the libc names the C output refers to. The IR
@@ -168,7 +172,7 @@ func qualified(space, path, name string) string {
 // called main; it has no package of its own.
 func FuncName(fn *types.Func) string {
 	if p := fn.Pkg(); fn.Name() == "main" && p != nil && p.Path() == "" {
-		return "sn_main"
+		return MainName
 	}
 
 	return ObjName(fn)
@@ -355,4 +359,43 @@ func ValueType(t types.Type) types.Type {
 func IsLocal(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.Local
+}
+
+// RecvType is the receiver's type of a method's signature, or nil for
+// a function's.
+func RecvType(sig *types.Signature) types.Type {
+	if recv := sig.Recv(); recv != nil {
+		return recv.Type()
+	}
+
+	return nil
+}
+
+// DisplayName is the name the program gives a function or method: the
+// method's receiver type and name, a library function's package and
+// name, and a generic instance's type arguments in brackets.
+func DisplayName(fn *types.Func, recv types.Type, targs []types.Type) string {
+	name := fn.Name()
+	if recv != nil {
+		name = ValueType(recv).String() + "." + name
+	} else if p := fn.Pkg(); p != nil && p.Path() != "" {
+		name = path.Base(p.Path()) + "." + name
+	}
+
+	if len(targs) > 0 && recv == nil {
+		args := make([]string, len(targs))
+		for i, t := range targs {
+			args[i] = t.String()
+		}
+
+		name += "[" + strings.Join(args, ", ") + "]"
+	}
+
+	return name
+}
+
+// A TraceName pairs a function's symbol with the name the program
+// gives it, for the table the runtime prints a panic's trace from.
+type TraceName struct {
+	Symbol, Name string
 }

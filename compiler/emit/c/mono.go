@@ -159,7 +159,7 @@ func (e *Emitter) writeInstance(inst instance) {
 
 	outerFile := e.file
 	e.file = e.files[inst.decl]
-	e.writeFunction(inst.name, e.sub(sig).(*types.Signature), inst.decl.Body, inst.decl.Pos())
+	e.writeFunction(inst.name, lower.DisplayName(inst.fn, lower.RecvType(sig), inst.targs), e.sub(sig).(*types.Signature), inst.decl.Body, inst.decl.Pos())
 	e.subst, e.file = outer, outerFile
 }
 

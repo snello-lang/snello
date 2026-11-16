@@ -610,6 +610,60 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestPanicTrace walks the frames of a panic through the table a
+// program carries: a function three calls deep in itself under main,
+// each frame a line of the trace after the panic's own, innermost
+// first, and no frame of the runtime or of what called main. The
+// probe's table is written by hand over its own functions, in order of
+// address as the compiler writes it, with the slide of zero a program
+// not moved by the loader has, so that the runtime's walk and lookup
+// are what the test holds, not the compiler's table.
+func TestPanicTrace(t *testing.T) {
+	probe := `#include "snello.h"
+#include <string.h>
+// The parts: two anchors, two rows, two frames, two symbols, one file, and the strings.
+enum { anchors_at = 0, rows_at = 48, frames_at = 64, symbols_at = 96, files_at = 104, strings_at = 108, parts_room = 160 };
+enum { function_room = 512 };
+const sn_trace_table sn_trace = { (uintptr_t)&sn_trace, anchors_at, 2, rows_at, 2, frames_at, 2, symbols_at, 2, files_at, 1, strings_at };
+uint8_t sn_trace_parts[parts_room] = { 0 }; // defined, not tentative, so that it replaces the runtime's own
+const sn_trace_name sn_trace_names[] = { { "deep", "deep" }, { "main", "main" } };
+const int64_t sn_trace_names_count = 2;
+__attribute__((noinline)) static int deep(int n) {
+    if (n > 0) {
+        int r = deep(n - 1);
+        __asm__ volatile("" ::: "memory");
+        return r + 1;
+    }
+
+    sn_panic(SN_STR("boom", 4));
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    sn_trace_anchor of_deep = { (uintptr_t)deep, function_room, 0, 1 }, of_main = { (uintptr_t)main, function_room, 1, 1 };
+    bool deep_first = of_deep.address < of_main.address;
+    sn_trace_anchor anchors[2] = { deep_first ? of_deep : of_main, deep_first ? of_main : of_deep };
+    sn_trace_row rows[2] = { { 0, 0 }, { 0, 1 } };
+    sn_trace_frame frames[2] = { { 0, 0, 10, -1 }, { 1, 0, 20, -1 } };
+    int32_t symbols[2] = { 0, 5 }, files[1] = { 10 };
+    memcpy(sn_trace_parts + anchors_at, anchors, sizeof anchors);
+    memcpy(sn_trace_parts + rows_at, rows, sizeof rows);
+    memcpy(sn_trace_parts + frames_at, frames, sizeof frames);
+    memcpy(sn_trace_parts + symbols_at, symbols, sizeof symbols);
+    memcpy(sn_trace_parts + files_at, files, sizeof files);
+    memcpy(sn_trace_parts + strings_at, "deep\0main\0probe.snello", 23);
+    deep(3); // not returned, which would make the call a jump and leave main no frame
+    return 0;
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer")
+	out, err := exec.Command(bin).CombinedOutput()
+	want := "panic: boom\n" + strings.Repeat("\tdeep at probe.snello:10\n", 4) + "\tmain at probe.snello:20\n"
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || string(out) != want {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestCatchReport catches a panic under a mark that reports it: the
 // panic's line is printed once per panic, before what the program
 // prints next, and the count of contained panics grows by one each.

@@ -87,7 +87,8 @@ func (e *Emitter) funcLit(x *ast.FuncLit) value {
 		e.boxNeed = max(e.boxNeed, int((e.structSize(fields)+7)/8)) // the copies as this instance has them, which the next pass makes room for
 	}
 
-	e.writeBody(name, sig, params, []string{"ptr %env"}, func() map[*types.Var]string {
+	e.nclosure++
+	e.writeBody(name, e.within+".func"+strconv.Itoa(e.nclosure), sig, params, []string{"ptr %env"}, func() map[*types.Var]string {
 		base := "%env"
 		if !inline {
 			base = e.load("ptr", "%env").s // the box's first word holds the environment's address

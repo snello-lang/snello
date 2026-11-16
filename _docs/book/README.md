@@ -24,7 +24,7 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | [14. The standard library](14-standard-library.md) | the packages under `std/`, `fmt` and its checked formats, and what stays out of the library |
 | [15. Binding C](15-binding-c.md) | a function without a body defined in C beside the package, what crosses, a handle wrapped with `Drop`, and `link` in the module file |
 | [16. Testing](16-testing.md) | test files, tests as plain functions, `expect` and `testing`, `snello test` and its flags, subtests, parallel tests, benchmarks and golden files, and the library's own tests |
-| [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, derived messages, `?` across error types, `%+v` printing the chain |
+| [17. Errors](17-errors.md) | the `Error` trait with `Error()` and `Source()`, derived messages, `?` across error types, `%+v` printing the chain, what a panic prints |
 | [18. No empty values](18-no-empty-values.md) | why no value is ever null or empty, which types have a zero value, what the compiler refuses and what to write instead, `replace`, and how the rule stays memory safe |
 | [19. Text: strings, runes and Unicode](19-text.md) | runes and Unicode whole: `unicode`, `unicode/utf8`, `unicode/utf16`, case mapping, `unicode/norm` and `unicode/segment` |
 | [20. Numbers: `math`, `math/bits` and `math/rand`](20-numbers.md) | the math functions and their special cases, the limits of the number types, the bit operations the compiler writes as instructions, a generator with a seed that gives Go's numbers, and the package functions that draw from the system |

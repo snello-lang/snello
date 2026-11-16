@@ -107,7 +107,7 @@ func TestPrograms(t *testing.T) {
 
 			for _, debug := range p.Builds() {
 				out, stderr, code := run(t, p.Name, p.Src, debug)
-				if bad := p.Check(out, stderr, code); bad != "" {
+				if bad := p.Check(out, stderr, code, debug); bad != "" {
 					t.Errorf("debug=%v: %s", debug, bad)
 				}
 			}
@@ -137,7 +137,7 @@ func TestGCC(t *testing.T) {
 	t.Setenv("CC", "gcc")
 	chosen := map[string]bool{
 		"heap": true, "heap-edges": true, "bit-functions": true, "math-functions": true, "random-numbers": true,
-		"narrow-integers": true, "narrow-integers-assigned": true, "multiply-then-add": true, "integer-methods": true,
+		"narrow-integers": true, "narrow-integers-assigned": true, "multiply-then-add": true, "integer-methods": true, "trace": true,
 	}
 	programs := []backendtest.Program{{
 		Name: "array-zero",
@@ -159,7 +159,7 @@ func TestGCC(t *testing.T) {
 		t.Run(p.Name, func(t *testing.T) {
 			for _, debug := range p.Builds() {
 				out, stderr, code := run(t, p.Name, p.Src, debug)
-				if bad := p.Check(out, stderr, code); bad != "" {
+				if bad := p.Check(out, stderr, code, debug); bad != "" {
 					t.Errorf("debug=%v: %s", debug, bad)
 				}
 			}

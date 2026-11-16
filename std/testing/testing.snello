@@ -41,6 +41,11 @@ const logIndent = "    "
 // one of them.
 const testPrefix = "Test"
 const benchmarkPrefix = "Benchmark"
+
+// A panic raised by package expect is an expectation's failure, whose
+// message names its line; the trace of the panic is shown for a panic
+// raised anywhere else, which the test did not intend.
+const expectationPrefix = "expect."
 const matchAll = "."
 
 // The flags Main reads from the program's arguments.
@@ -501,9 +506,14 @@ func runAndReport(f func()) bool {
 				return true
 			}
 
+			lines := trace(logIndent + logIndent)
 			reportLine(ref (failPrefix + name + " " + took))
 			reportLogged(ref logged)
 			reportLine(ref (logIndent + m))
+			if lines != "" && !lines.HasPrefix(logIndent + logIndent + expectationPrefix) {
+				reportLine(ref lines)
+			}
+
 			return false
 		},
 	}
@@ -688,6 +698,12 @@ func parseCount(s ref string, flag ref string) int {
 // compiler hands the runtime before every call of Log, Logf and Skip
 // and the runtime keeps for the running task. The runtime provides it.
 func where() string
+
+// trace returns the trace of the panic the last Catch caught, a line a
+// frame of the program's functions, innermost first, each after indent
+// and the last without its newline, or "" when the runtime kept none.
+// The runtime provides it.
+func trace(indent string) string
 
 // task returns the identity of the running task, which keys its test's
 // State. The runtime provides it.

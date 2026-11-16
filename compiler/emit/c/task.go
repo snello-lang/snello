@@ -144,8 +144,15 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, h *handle, pos
 	put(&e.protos, head, ";\n")
 	outer, outerCaptured := e.body, e.captured
 	e.body, e.captured = bytes.Buffer{}, nil // the captures are the function's own locals
+	e.nclosure++
+	display := e.within + ".func" + strconv.Itoa(e.nclosure)
+	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
+	outerAt, outerWithin, outerClosures := e.at, e.within, e.nclosure
+	e.at, e.within, e.nclosure = pos, display, 0
 	e.line(head + " {")
 	e.function(lifted, lit.Body)
+	e.endPositions()
+	e.at, e.within, e.nclosure = outerAt, outerWithin, outerClosures
 	e.line("")
 	e.helpers.Write(e.body.Bytes())
 	e.body, e.captured = outer, outerCaptured

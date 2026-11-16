@@ -280,6 +280,13 @@ func runtimeSum() []byte {
 
 var compilerIDs sync.Map // the version of each compiler, by its path, size and time
 
+// IsGCC reports whether the compiler cc is gcc, by what it says its
+// version is: gcc's flags are gcc's alone.
+func IsGCC(cc string) bool {
+	id, err := CompilerID(cc)
+	return err == nil && !strings.Contains(strings.ToLower(id), "clang")
+}
+
 // CompilerID identifies the compiler cc: the path it resolves to, the
 // file's size and time, which a compiler rebuilt in place changes, and
 // what it says its version is, asked once per binary.

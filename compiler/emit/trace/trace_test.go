@@ -1,0 +1,171 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package trace
+
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/snello-lang/snello/runtime"
+)
+
+// program is C as the C backend writes it, each line of a Snello
+// function's body under a line directive naming the program's file and
+// the generated lines under the generated name: at is a function of its
+// own that render calls, and main is generated.
+const program = `#include <stdlib.h>
+#line 10 "grid.snello"
+__attribute__((noinline)) static int at(const int *xs, int n, int i) { if (i >= n) abort(); return xs[i]; }
+#line 1 "<generated>"
+#line 20 "grid.snello"
+int render(const int *xs, int n) { return at(xs, n, 5); }
+#line 1 "<generated>"
+int main(void) { int xs[3] = { 0 }; return render(xs, 3); }
+`
+
+// TestTableAndPatch reads the table of a compiled object and writes its
+// anchors into the linked binary: the table has an anchor for each
+// function, a frame of at at its line and of render at its own, and
+// none of the generated main; once patched, the anchors hold the
+// functions' addresses in the binary, in order of address, and the
+// reference word holds its own address.
+func TestTableAndPatch(t *testing.T) {
+	cc := os.Getenv("CC")
+	if cc == "" {
+		cc = "cc"
+	}
+
+	if _, err := exec.LookPath(cc); err != nil {
+		t.Skip("no C compiler")
+	}
+
+	dir := t.TempDir()
+	for name, data := range runtime.Files() {
+		if strings.HasSuffix(name, ".h") {
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	compile := func(name, src string, flags ...string) string {
+		file := filepath.Join(dir, name+".c")
+		if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		obj := filepath.Join(dir, name+".o")
+		args := append(append([]string{"-std=c11", "-O1", "-g1", "-fno-omit-frame-pointer", "-I", dir}, flags...), "-c", "-o", obj, file)
+		if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+
+		return obj
+	}
+
+	obj := compile("program", program)
+	table, layout, err := Table(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(table[headerBytes:]) // the parts: the names are among them
+
+	for _, name := range []string{"at", "render", "main"} {
+		found := false
+		for _, a := range layout.Anchors {
+			found = found || a == name
+		}
+
+		if !found {
+			t.Errorf("no anchor of %s among %v", name, layout.Anchors)
+		}
+	}
+
+	for _, want := range []string{"grid.snello\x00", "\x00at\x00", "\x00render\x00"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the table lacks %q:\n%q", want, text)
+		}
+	}
+
+	var h header
+	if err := binary.Read(bytes.NewReader(table), binary.LittleEndian, &h); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := map[uint32]bool{}
+	for i := int64(0); i < h.NFrames; i++ {
+		lines[binary.LittleEndian.Uint32(table[headerBytes+uint64(h.Frames)+uint64(i)*frameBytes+2*offsetBytes:])] = true
+	}
+
+	for _, line := range []uint32{10, 20} {
+		if !lines[line] {
+			t.Errorf("no frame at line %d among %v", line, lines)
+		}
+	}
+
+	if strings.Contains(text, "\x00main\x00") {
+		t.Errorf("the generated main has a frame:\n%q", text)
+	}
+
+	object, err := Object(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tableObject := filepath.Join(dir, "table.o")
+	if err := os.WriteFile(tableObject, object, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(dir, "program")
+	if out, err := exec.Command(cc, "-o", bin, obj, tableObject).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	data, err := Patch(bin, layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addresses, place, err := symbols(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	header, ok := place(tableSymbol)
+	parts, found := place(partsSymbol)
+	if !ok || !found {
+		t.Fatal("no table in the binary")
+	}
+
+	at := parts + binary.LittleEndian.Uint64(data[header+anchorsField:])
+
+	held := map[uint64]bool{}
+	last := uint64(0)
+	for i := range layout.Anchors {
+		got := binary.LittleEndian.Uint64(data[at+uint64(i)*anchorBytes:])
+		if got < last {
+			t.Errorf("anchor %d holds %#x, below the one before it, %#x", i, got, last)
+		}
+
+		held[got], last = true, got
+	}
+
+	for _, name := range layout.Anchors {
+		if !held[addresses[name]] {
+			t.Errorf("no anchor holds the address of %s, %#x", name, addresses[name])
+		}
+	}
+
+	if got := binary.LittleEndian.Uint64(data[header:]); got != addresses[tableSymbol] {
+		t.Errorf("the reference holds %#x, the table's address is %#x", got, addresses[tableSymbol])
+	}
+}

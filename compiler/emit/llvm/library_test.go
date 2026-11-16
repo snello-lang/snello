@@ -106,6 +106,7 @@ func TestVerbs(t *testing.T) {
 	} {
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
+			line, _, _ = strings.Cut(line, ", !dbg") // the location after the call
 			if i := strings.LastIndex(line, ", i64 "); i >= 0 && strings.Contains(line, "call void "+call) {
 				got = append(got, line[i:])
 			}

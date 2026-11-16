@@ -192,7 +192,8 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, h *handle, pos
 	k := e.tasks
 	e.tasks++
 	name := lower.SpawnTask(k) + "_fn"
-	e.writeBody(name, lifted, params, nil, nil, lit.Body, pos)
+	e.nclosure++
+	e.writeBody(name, e.within+".func"+strconv.Itoa(e.nclosure), lifted, params, nil, nil, lit.Body, pos)
 	e.spawnCall(k, name, lifted, wants, values, h, pos)
 }
 

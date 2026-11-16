@@ -22,6 +22,8 @@ package c
 
 import (
 	"bytes"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,6 +33,20 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// generated is the file name the lines of no Snello position are
+// given, after a function's body: the helpers and the trampolines the
+// backend writes, which the trace of a panic does not show.
+const generated = "<generated>"
+
+// entry is the symbol of the program's entry, which calls main, and
+// generatedLine the line the generated file's lines are at: a line, as
+// the program's own lines have one, where line zero is the optimizer's
+// mark of code merged from two lines.
+const (
+	entry         = "main"
+	generatedLine = 1
+)
+
 // An Emitter writes one program. C needs a type complete before a
 // value of it is declared and a function declared before a call, so
 // declarations, type definitions, prototypes and helper functions go
@@ -38,13 +54,18 @@ import (
 type Emitter struct {
 	info     *types.Info
 	file     *token.File
-	decls    bytes.Buffer // forward declarations of struct types
-	types    bytes.Buffer // type definitions, each after the ones it holds by value
-	protos   bytes.Buffer // function prototypes
-	helpers  bytes.Buffer // generated functions, such as the printers of composite types
-	body     bytes.Buffer // function definitions
-	scratch  []byte       // the statements saveBefore holds aside, reused so that holding them allocates nothing
-	boxWords int          // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
+	at       token.Pos         // the Snello position the lines being written are at, for the directive each line carries
+	within   string            // the name the program gives the function being written, for its closures' names
+	nclosure int               // closures of the function being written, counted for their names
+	traced   []lower.TraceName // every function written, its symbol and the name the program gives it
+	mainAt   token.Position    // where the program declares main, which the entry is written at
+	decls    bytes.Buffer      // forward declarations of struct types
+	types    bytes.Buffer      // type definitions, each after the ones it holds by value
+	protos   bytes.Buffer      // function prototypes
+	helpers  bytes.Buffer      // generated functions, such as the printers of composite types
+	body     bytes.Buffer      // function definitions
+	scratch  []byte            // the statements saveBefore holds aside, reused so that holding them allocates nothing
+	boxWords int               // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
 	tmp      int
 	used     map[types.Object]bool
 	state    map[string]int                  // of each C type and helper name: undeclared, declared, defining, defined
@@ -187,7 +208,9 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	out.WriteString("\n")
 	out.Write(e.helpers.Bytes())
 	out.Write(e.body.Bytes())
-	put(&out, "int main(int argc, char **argv) {\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
+	e.traceNames(&out)
+	// The entry is main's, at main's position and under its name: the optimizer writes main into it, and a trace names the entry's code main.
+	put(&out, "#line ", strconv.Itoa(e.mainAt.Line), " ", cString(filepath.Base(e.mainAt.Filename)), "\nint main(int argc, char **argv) {\n#line ", strconv.Itoa(generatedLine), " ", cString(generated), "\n\tsn_init(argc, argv);\n", finish, "\treturn sn_finish();\n}\n")
 	return out.Bytes(), nil
 }
 
@@ -296,7 +319,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr) {
 	e.info.Types[cell] = v.Type()
 	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
 	e.making = v
-	e.writeFunction(lower.LazyInit(cname), types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.writeFunction(lower.LazyInit(cname), name.Name+".init", types.NewSignature(nil, nil, nil), body, name.Pos())
 	e.making = nil
 	put(&e.protos, "static SN_UNUSED ", ct, " ", cname, ";\nstatic sn_lazy ", cname, "_lazy;\n")
 	put(&e.protos, "static inline SN_UNUSED ", ct, " *", cname, "_get(void) {\n\tif (!sn_lazy_ready(&", cname, "_lazy)) {\n\t\tsn_lazy_make(&", cname, "_lazy, ", lower.LazyInit(cname), ", ", cString(name.Name), ");\n\t}\n\n\treturn &", cname, ";\n}\n\n")
@@ -397,7 +420,7 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 		name = lower.MethodName(owner, d.Name.Name)
 	}
 
-	e.writeFunction(name, sig, d.Body, d.Pos())
+	e.writeFunction(name, lower.DisplayName(fn, lower.RecvType(sig), nil), sig, d.Body, d.Pos())
 }
 
 // newEmitter makes an emitter for a program whose main package is the
@@ -434,10 +457,11 @@ func (e *Emitter) prototype(fn *types.Func, pos token.Pos) {
 	put(&e.protos, e.resultType(sig, pos), " ", lower.FuncName(fn), "(", e.params(sig.Params(), pos), ");\n")
 }
 
-// writeFunction writes a function or method under the given C name:
-// its prototype, its head with the receiver as the first parameter,
-// and its body.
-func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.BlockStmt, pos token.Pos) {
+// writeFunction writes a function or method under the given C name,
+// and the name the program gives it: its prototype, its head with the
+// receiver as the first parameter, and its body, at their Snello
+// positions.
+func (e *Emitter) writeFunction(name, display string, sig *types.Signature, body *ast.BlockStmt, pos token.Pos) {
 	params := sig.Params()
 	if recv := sig.Recv(); recv != nil {
 		params = append([]*types.Var{recv}, params...)
@@ -445,9 +469,18 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 
 	head := "static SN_UNUSED " + e.resultType(sig, pos) + " " + name + "(" + e.params(params, pos) + ")"
 	put(&e.protos, head, ";\n")
+	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
+	if name == lower.MainName {
+		e.mainAt = e.file.Position(pos) // of this file, which the entry is written after
+		e.traced = append(e.traced, lower.TraceName{Symbol: entry, Name: display})
+	}
+	outerWithin, outerClosures := e.within, e.nclosure
+	e.within, e.nclosure, e.at = display, 0, pos
 	e.line(head + " {")
 	e.function(sig, body)
+	e.endPositions()
 	e.line("")
+	e.within, e.nclosure = outerWithin, outerClosures
 }
 
 // function writes the body of a function or closure whose head was
@@ -587,12 +620,44 @@ func put(w writer, parts ...string) {
 	}
 }
 
-// line writes one line of the current section. Indentation is not
-// tracked; the output is for the C compiler, and a reader has the Snello
-// source.
+// line writes one line of the current section, under a directive that
+// gives the C compiler the Snello file and line it is at, when it is
+// at one, so that the line tables it writes name the Snello source and
+// its messages do too. Each line takes a directive of its own, since
+// the compiler counts lines on from a directive, and a statement's C
+// is several lines at one Snello line. Indentation is not tracked; the
+// output is for the C compiler, and a reader has the Snello source.
 func (e *Emitter) line(s string) {
+	if e.at.IsValid() {
+		p := e.file.Position(e.at)
+		put(&e.body, "#line ", strconv.Itoa(p.Line), " ", cString(filepath.Base(p.Filename)), "\n")
+	}
+
 	e.body.WriteString(s)
 	e.body.WriteByte('\n')
+}
+
+// endPositions ends the lines at a Snello position: the lines after a
+// function's body are the backend's own.
+func (e *Emitter) endPositions() {
+	e.at = token.NoPos
+	e.line("#line " + strconv.Itoa(generatedLine) + " " + cString(generated))
+}
+
+// traceNames writes the table of names: every function written, in
+// order of symbol, and the count, as snello.h declares them.
+func (e *Emitter) traceNames(out *bytes.Buffer) {
+	sort.Slice(e.traced, func(i, j int) bool { return e.traced[i].Symbol < e.traced[j].Symbol })
+	out.WriteString("const sn_trace_name sn_trace_names[] = {\n")
+	for _, n := range e.traced {
+		put(out, "\t{", cString(n.Symbol), ", ", cString(n.Name), "},\n")
+	}
+
+	if len(e.traced) == 0 {
+		out.WriteString("\t{\"\", \"\"},\n") // an array has at least one element
+	}
+
+	put(out, "};\nconst int64_t sn_trace_names_count = ", strconv.Itoa(len(e.traced)), ";\n")
 }
 
 // temp returns a fresh temporary name.

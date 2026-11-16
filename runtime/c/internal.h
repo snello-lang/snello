@@ -313,6 +313,32 @@ int sn_net_poll(sn_task **woke, int *taken);
 void sn_net_kept(int64_t taken);
 void sn_handoff_wait(sn_handoff *h);
 
+// A panic's trace, trace.c's. SN_TRACE_FRAMES is the most frames a
+// walk keeps, and SN_TRACE_LINE_ROOM the most a line of a trace takes,
+// a name, " at ", a file, a colon, a line number and a newline, a
+// longer one cut. A region of stack is [low, high). sn_trace_fill
+// walks the frame pointers from fp, within the regions when any are
+// given, into the thread's own buffer and reports how many frames it
+// kept; sn_trace_write writes them to the standard error stream, a
+// line a frame, under the lock the caller holds, and empties the
+// buffer; sn_trace_copy copies the buffer's frames into into, which
+// holds SN_TRACE_FRAMES, and reports how many, for a task that keeps
+// its panic's trace for a test's runner; sn_trace_each gives the chain
+// of each of n walked frames to line; sn_trace_line writes one line.
+enum { SN_TRACE_FRAMES = 128, SN_TRACE_LINE_ROOM = 512 };
+
+typedef struct {
+    const void *low, *high;
+} sn_stack_region;
+
+int sn_trace_fill(void *fp, const sn_stack_region *regions, int n);
+void sn_trace_write(void);
+int sn_trace_copy(uintptr_t *into);
+void sn_trace_each(const uintptr_t *walked, int n,
+                   void (*line)(void *ctx, const char *name, const char *file, int32_t at), void *ctx);
+int sn_trace_line(char *line, size_t room, const char *name, const char *file, int32_t at);
+const uintptr_t *sn_task_trace(int *n); // sched.c: the running task's kept frames
+
 // sn_chan_drop_untimed, chan.c's for timer.c, takes one handle of a
 // channel with no timer in a wheel away, and frees the channel with the
 // last: the handle a timer held, once the timer is out of its wheel.
