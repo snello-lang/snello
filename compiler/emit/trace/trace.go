@@ -59,6 +59,14 @@ const (
 	// textSection names the one text section of a Mach-O object; an ELF
 	// object's is any section of instructions.
 	textSection = "__text"
+
+	// noFrame is a row's frame, or a frame's caller, when there is none,
+	// as the runtime reads it; unscoped marks, while a section's rows are
+	// read, a row whose frame is its function's, from the symbol: a
+	// compiler writing line tables alone writes no scope for a function
+	// nothing is written into.
+	noFrame  = -1
+	unscoped = -2
 )
 
 // A header is the table as snello.h's sn_trace_table lays it out: the
@@ -181,7 +189,7 @@ func functionRows(rows []row, start, end uint64, own func(row) int32) []row {
 		}
 
 		if r.frame == unscoped {
-			r.frame = -1
+			r.frame = noFrame
 			if r.offset >= start { // a row of another function reaching into this one is no frame of either
 				r.frame = own(r)
 			}
@@ -224,10 +232,10 @@ func functionRows(rows []row, start, end uint64, own func(row) int32) []row {
 func (b *builder) own(name string) func(row) int32 {
 	return func(r row) int32 {
 		if !strings.HasSuffix(r.file, snelloSuffix) {
-			return -1
+			return noFrame
 		}
 
-		return b.frame(frameKey{b.symbol(name), b.file(baseName(r.file)), r.line, -1})
+		return b.frame(frameKey{b.symbol(name), b.file(baseName(r.file)), r.line, noFrame})
 	}
 }
 
@@ -336,11 +344,6 @@ type row struct {
 	file   string
 	line   int32
 }
-
-// unscoped marks a row whose frame is its function's, from the symbol:
-// a compiler writing line tables alone writes no scope for a function
-// nothing is written into.
-const unscoped = -2
 
 type anchorRows struct {
 	size uint64 // of the function
@@ -498,7 +501,7 @@ func (b *builder) rows(d *dwarf.Data, s section) ([]row, error) {
 			continue
 		}
 
-		frame := int32(-1)
+		frame := int32(noFrame)
 		if !l.end && !(i+1 < len(lines) && lines[i+1].address == l.address && !lines[i+1].end) { // of rows at one address, the last
 			frame = b.chain(l, scopes)
 		}
@@ -656,10 +659,10 @@ func (b *builder) chain(l lineRow, scopes []*scope) int32 {
 	}
 
 	if len(entries) == 0 {
-		return -1
+		return noFrame
 	}
 
-	caller := int32(-1)
+	caller := int32(noFrame)
 	for i := len(entries) - 1; i >= 0; i-- {
 		en := entries[i]
 		if !strings.HasSuffix(en.file, snelloSuffix) || en.name == "" {

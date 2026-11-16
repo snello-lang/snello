@@ -786,12 +786,12 @@ typedef struct {
     int32_t function; // its symbol, by its index in the table's symbols
     int32_t file;     // by its index in the table's files
     int32_t line;
-    int32_t caller; // the next frame of the chain, the caller at the line of its call, or -1 for the last
+    int32_t caller; // the next frame of the chain, the caller at the line of its call, or SN_TRACE_NONE for the last
 } sn_trace_frame;
 
 typedef struct {
     int32_t offset; // from the function's start, of the first instruction the row covers, up to the next row's
-    int32_t frame;  // the innermost frame of the chain at the row, or -1 for none
+    int32_t frame;  // the innermost frame of the chain at the row, or SN_TRACE_NONE
 } sn_trace_row;
 
 typedef struct {
@@ -824,7 +824,10 @@ extern const sn_trace_name sn_trace_names[];
 extern const int64_t sn_trace_names_count;
 // SN_TRACE_UNWRITTEN is what sn_trace.reference holds in a program the
 // compiler wrote no table for: a value the loader never slides to.
+// SN_TRACE_NONE is a row's frame, or a frame's caller, when there is
+// none.
 #define SN_TRACE_UNWRITTEN 1
+#define SN_TRACE_NONE      (-1)
 
 // sn_spawn starts a task that runs run on a copy of the size bytes at
 // args, which the task's record holds, so that a spawn allocates
