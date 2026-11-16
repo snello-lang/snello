@@ -78,7 +78,7 @@ func buildPatch(t *testing.T, src string) string {
 
 func TestPatch(t *testing.T) {
 	bin := buildPatch(t, patchSource)
-	bounds, err := Patch(bin)
+	bounds, err := Patch(bin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestPatchNoSpawn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if bounds, err := Patch(bin); err != nil || bounds != nil {
+	if bounds, err := Patch(bin, nil); err != nil || bounds != nil {
 		t.Fatalf("got %v, %v", bounds, err)
 	}
 
@@ -125,7 +125,7 @@ func TestPatchErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Patch(path); err == nil {
+	if _, err := Patch(path, nil); err == nil {
 		t.Error("Patch of no binary: no error")
 	}
 

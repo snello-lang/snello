@@ -65,9 +65,11 @@ func main() {
 }
 
 // wholeFunction returns the function written as head, through the
-// blocks inside it, up to the blank line after its closing brace.
+// blocks inside it, up to the blank line after its closing brace,
+// without the line directives among its lines.
 func wholeFunction(t *testing.T, out, head string) string {
 	t.Helper()
+	out = withoutDirectives(out)
 	i := strings.Index(out, head+" {\n")
 	if i < 0 {
 		t.Fatalf("no function written as %q", head)
@@ -75,4 +77,17 @@ func wholeFunction(t *testing.T, out, head string) string {
 
 	body := out[i:]
 	return body[:strings.Index(body, "\n}\n\n")]
+}
+
+// withoutDirectives is the C without its line directives, which name
+// the Snello line each line is from.
+func withoutDirectives(out string) string {
+	var kept []string
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "#line ") {
+			kept = append(kept, line)
+		}
+	}
+
+	return strings.Join(kept, "\n")
 }

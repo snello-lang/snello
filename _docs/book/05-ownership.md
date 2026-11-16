@@ -152,7 +152,7 @@ func main() {
 
 A type with a `Drop` is a struct or an enum, or a type declared over one, whether it lists `Drop` itself or a trait that requires it. Whether a value of it is live, built and not yet moved away, is kept in a flag beside its fields, so that its `Drop` runs once; a type declared over a number, a string or a slice has no fields to keep it beside, so `type Handle int impl Drop` is refused: `Handle cannot implement Drop: it is declared over int, and only a struct or an enum has a Drop; hold the int in a field, struct Handle { v int }`. A handle is a struct of one field, `struct Handle impl Drop { fd int }`, and costs nothing more than the `int` and its flag.
 
-`Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, then the deferred calls that ran and every value still owned are run and dropped, last first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose in one order on every exit, a return or a panic: whatever was registered last runs first, a deferred call where its `defer` ran, a value where it was made. A deferred call therefore runs before the drop of every value declared before it, which is everything it may be looking at, and after the drop of a value declared after it, which it cannot name:
+`Drop` runs at the end of the scope, on an early `return`, and when a panic ends the program: the message is printed, with the trace of the functions the panic was in under it (chapter 17), then the deferred calls that ran and every value still owned are run and dropped, last first, so the temporary directory above is removed even when something between its creation and the end of `main` panics. `defer` is still there for cleanup that belongs to no value, and the two compose in one order on every exit, a return or a panic: whatever was registered last runs first, a deferred call where its `defer` ran, a value where it was made. A deferred call therefore runs before the drop of every value declared before it, which is everything it may be looking at, and after the drop of a value declared after it, which it cannot name:
 
 ```go
 struct Res impl Drop { name string }
@@ -166,13 +166,17 @@ func work() {
     panic("stop")
 }
 
+func main() { work() }
+
 // panic: stop
+//	work at res.snello:9
+//	main at res.snello:12
 // drop b
 // deferred
 // drop a
 ```
 
-A return from `work` in place of the panic prints the same three lines. A `defer` the function never reached, inside an `if` not taken, does not run. A deferred call that panics on a return runs once: its panic runs the deferred calls and drops still pending, as Go runs the rest of a function's deferred calls. One that panics while a panic is unwinding ends the program with both messages, as a `Drop` that panics does; Snello has no `recover`, so nothing could stop either panic.
+A return from `work` in place of the panic prints the same three lines without the panic's. A `defer` the function never reached, inside an `if` not taken, does not run. A deferred call that panics on a return runs once: its panic runs the deferred calls and drops still pending, as Go runs the rest of a function's deferred calls. One that panics while a panic is unwinding ends the program with both messages, as a `Drop` that panics does; Snello has no `recover`, so nothing could stop either panic.
 
 For maintainers: each `defer` statement saves what its call needs into a record in the function's frame and registers the record on the runtime's guard stack, where a value with a `Drop` registers itself, beside a function of its own that makes the call. A panic runs the guard stack; a return takes the guard off and makes the call, at the place the order gives (`compiler/emit/c/defer.go`, `deferStmt` and `leaveFunction` in `compiler/emit/llvm/stmt.go`, and `_docs/design/07-lowering.md`). The programs `panic-defers`, `defer-order`, `defer-instances`, `defer-ref-receiver`, `defer-panics`, `defer-panics-unwinding` and `catch-defers` in `compiler/emit/internal/backendtest` hold both backends to it.
 

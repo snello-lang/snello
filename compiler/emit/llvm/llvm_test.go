@@ -306,7 +306,7 @@ func TestPrograms(t *testing.T) {
 
 			for _, debug := range p.Builds() {
 				out, stderr, code := run(t, p.Name, p.Src, debug)
-				if bad := p.Check(out, stderr, code); bad != "" {
+				if bad := p.Check(out, stderr, code, debug); bad != "" {
 					t.Errorf("debug=%v: %s", debug, bad)
 				}
 			}

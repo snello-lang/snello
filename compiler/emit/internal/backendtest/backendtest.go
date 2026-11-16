@@ -13,6 +13,7 @@ package backendtest
 
 import (
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,35 +21,90 @@ import (
 
 // A Program is a Snello program and what running it must give: its
 // standard output exactly, unless AnyOut says the output varies; text
-// its standard error contains; its exit code. It runs as a release
-// build and as a debug build, unless ReleaseOnly says the debug build
-// would only slow it, and only on a machine with at least MinCPUs
-// cores.
+// its standard error contains; the panics' messages and traces its
+// standard error contains, Trace, with each frame's line as a debug
+// build prints it, a release build allowed to print a frame with no
+// line where its compiler merged two paths and to leave out a frame
+// the optimizer wrote into another, never a frame of its own; its exit
+// code. It runs as a release build and as a debug build, unless
+// ReleaseOnly says the debug build would only slow it, and only on a
+// machine with at least MinCPUs cores; DebugOnly says the release
+// build's optimizer would shape what the program shows, a frame of a
+// call a function ends in.
 type Program struct {
 	Name        string
 	Src         string
 	Out         string
 	AnyOut      bool
 	Stderr      string
+	Trace       string
 	Code        int
 	ReleaseOnly bool
+	DebugOnly   bool
 	MinCPUs     int
 }
 
-// Builds returns the builds the program runs in: release, and debug
-// unless ReleaseOnly.
+// lineless is a frame's line at the end of a trace's line, which a
+// release build may leave out.
+var lineless = regexp.MustCompile(`:\d+$`)
+
+// traced reports whether a release build's stderr shows the trace: the
+// messages of Trace, each with the frames under it in order, a frame
+// allowed to be missing or to have no line, and no frame Trace does
+// not have.
+func traced(stderr, trace string) bool {
+	want := strings.Split(strings.TrimSuffix(trace, "\n"), "\n")
+	got := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
+	g := 0
+	for len(want) > 0 {
+		for g < len(got) && got[g] != want[0] { // the first message
+			g++
+		}
+
+		if g == len(got) {
+			return false
+		}
+
+		want, g = want[1:], g+1
+		for len(want) > 0 && strings.HasPrefix(want[0], "\t") { // its frames, in order
+			if g < len(got) && strings.HasPrefix(got[g], "\t") {
+				if lineless.ReplaceAllString(got[g], "") != lineless.ReplaceAllString(want[0], "") {
+					want = want[1:] // a frame the release build left out
+					continue
+				}
+
+				g++
+			}
+
+			want = want[1:]
+		}
+
+		if g < len(got) && strings.HasPrefix(got[g], "\t") {
+			return false // a frame of its own
+		}
+	}
+
+	return true
+}
+
+// Builds returns the builds the program runs in: release and debug,
+// one of them alone under ReleaseOnly or DebugOnly.
 func (p Program) Builds() []bool {
-	if p.ReleaseOnly {
+	switch {
+	case p.ReleaseOnly:
 		return []bool{false}
+	case p.DebugOnly:
+		return []bool{true}
 	}
 
 	return []bool{false, true}
 }
 
-// Check returns what is wrong with a run that printed out and stderr
-// and exited with code, or "" when the run is what the program must
-// give.
-func (p Program) Check(out, stderr string, code int) string {
+// Check returns what is wrong with a run of the build, debug or not,
+// that printed out and stderr and exited with code, or "" when the run
+// is what the program must give.
+func (p Program) Check(out, stderr string, code int, debug bool) string {
+	shown := p.Trace == "" || (debug && strings.Contains(stderr, p.Trace)) || (!debug && traced(stderr, p.Trace))
 	switch {
 	case code != p.Code:
 		return "exit code " + strconv.Itoa(code) + ", want " + strconv.Itoa(p.Code) + "; stderr: " + strconv.Quote(stderr)
@@ -56,6 +112,8 @@ func (p Program) Check(out, stderr string, code int) string {
 		return "output " + strconv.Quote(out) + ", want " + strconv.Quote(p.Out) + "; stderr: " + strconv.Quote(stderr)
 	case !strings.Contains(stderr, p.Stderr):
 		return "stderr " + strconv.Quote(stderr) + ", want it to contain " + strconv.Quote(p.Stderr)
+	case !shown:
+		return "stderr " + strconv.Quote(stderr) + ", want its trace to show " + strconv.Quote(p.Trace)
 	}
 
 	return ""
@@ -917,7 +975,79 @@ func main() {
 	fmt.Println(a.name, c.name)
 }
 `,
-			Out: "drop c\n", Stderr: "panic: first\npanic: in drop\n", Code: 2,
+			Out: "drop c\n", Trace: "panic: first\n\tmain at panicking-drop.snello:14\npanic: in drop\n\tBad.Drop at panicking-drop.snello:8\n\tmain at panicking-drop.snello:14\n", Code: 2,
+		},
+		{
+			Name: "trace", // a panic prints the trace of the program's functions under its message, innermost first with each one's file and line, through a method, a function and main, whatever the compiler inlined; a release build may lose a line where it merged two paths, never a frame
+			Src: `package main
+import "fmt"
+struct Grid { cells []int }
+func (g ref Grid) At(i int) int {
+	return g.cells[i]
+}
+func render(g ref Grid, i int) int {
+	return g.At(i) * 2
+}
+func main() {
+	g := Grid{cells: []int{1, 2, 3}}
+	fmt.Println(render(ref g, 1))
+	fmt.Println(render(ref g, 5))
+}
+`,
+			Out: "4\n", Trace: "panic: index out of range [5] with length 3\n\tGrid.At at trace.snello:5\n\trender at trace.snello:8\n\tmain at trace.snello:13\n", Code: 2,
+		},
+		{
+			Name: "trace-tail", // a debug build keeps the frame of a function whose last act is the call that panics, which a release build's optimizer makes a jump
+			Src: `package main
+import "fmt"
+func at(xs ref []int, i int) int {
+	return xs[i]
+}
+func pick(xs ref []int, i int) int {
+	return at(xs, i)
+}
+func main() {
+	xs := []int{1, 2, 3}
+	fmt.Println(pick(ref xs, 1))
+	fmt.Println(pick(ref xs, 5))
+}
+`,
+			Out: "2\n", Trace: "panic: index out of range [5] with length 3\n\tat at trace-tail.snello:4\n\tpick at trace-tail.snello:7\n\tmain at trace-tail.snello:12\n", Code: 2, DebugOnly: true,
+		},
+		{
+			Name: "trace-closures", // a closure is named after the function it is written in, and a closure's closure after the closure
+			Src: `package main
+func main() {
+	outer := func() {
+		inner := func() {
+			panic("deep")
+		}
+		inner()
+		inner()
+	}
+	outer()
+}
+`,
+			Trace: "panic: deep\n\tmain.func1.func1 at trace-closures.snello:5\n\tmain.func1 at trace-closures.snello:7\n\tmain at trace-closures.snello:10\n", Code: 2,
+		},
+		{
+			Name: "trace-task-drop", // a task on a small stack whose Drop panics while its panic unwinds: the drop's trace reaches the frames the first panic was unwinding, on the task's own stack
+			Src: tasks + `struct Bad impl Drop { name string }
+func (b mut Bad) Drop() { panic("in drop") }
+func work(done chan<- int) {
+	b := Bad{name: "b"}
+	if b.name == "b" {
+		panic("first")
+	}
+	done <- 1
+}
+func main() {
+	done := make(chan int)
+	spawn work(done.Clone())
+	<-done
+}
+`,
+			Trace: "panic: first\n\twork at trace-task-drop.snello:10\npanic: in drop\n\tBad.Drop at trace-task-drop.snello:6\n\twork at trace-task-drop.snello:10\n", Code: 2,
 		},
 		{
 			Name: "panic-defers", // the deferred calls that ran run as a panic unwinds, last registered first among them and the values: after the drop of a value declared after the defer, before the drop of one declared before it; a receiver lent mutably is read when the call runs; a defer not reached does not run
@@ -1055,7 +1185,7 @@ func work() {
 }
 func main() { work() }
 `,
-			Stderr: "panic: first\npanic: in defer\n", Code: 2,
+			Trace: "panic: first\n\twork at defer-panics-unwinding.snello:12\n\tmain at defer-panics-unwinding.snello:15\npanic: in defer\n\tboom at defer-panics-unwinding.snello:7\n\twork at defer-panics-unwinding.snello:12\n\tmain at defer-panics-unwinding.snello:15\n", Code: 2,
 		},
 		{
 			Name: "generic-box", // a closure in a generic function copying more than the default box holds

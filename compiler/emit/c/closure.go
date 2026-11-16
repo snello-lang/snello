@@ -89,6 +89,11 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 		}
 	}
 
+	e.nclosure++
+	display := e.within + ".func" + strconv.Itoa(e.nclosure)
+	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
+	outerAt, outerWithin, outerClosures := e.at, e.within, e.nclosure
+	e.at, e.within, e.nclosure = x.Pos(), display, 0
 	e.line(head + " {")
 	if inline {
 		e.line("struct " + env + " *sn_env = sn_envp;")
@@ -98,6 +103,8 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 
 	e.line("(void)sn_env;")
 	e.function(sig, x.Body)
+	e.endPositions()
+	e.at, e.within, e.nclosure = outerAt, outerWithin, outerClosures
 	e.line("")
 	e.helpers.Write(e.body.Bytes())
 	e.body = outer

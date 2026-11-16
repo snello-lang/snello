@@ -51,7 +51,7 @@ func Bounded(t *testing.T, name, bin string) {
 		return
 	}
 
-	bounds, err := stack.Patch(bin) // the analysis again, for its reasons
+	bounds, err := stack.Patch(bin, nil) // the analysis again, for its reasons
 	if err != nil || len(bounds) != len(table) {
 		t.Errorf("spawns %v of %s have no bound: %v", lost, bin, err)
 		return

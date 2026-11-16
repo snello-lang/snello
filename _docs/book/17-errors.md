@@ -149,6 +149,36 @@ match load("app.conf") {
 
 A test asserts on an error with `expect.IsErr`, which gives the error back for a closer look, chapter 16.
 
+## What a panic prints
+
+A panic is a bug, chapter 8, and a bug wants finding. A panic prints its message and, under it, the stack of the task it happened on: one line per function, the innermost first, each the function as the program names it and the file and line it was at. The index check in `At` fails on the third call of `render`:
+
+```go
+struct Grid { cells []int }
+
+func (g ref Grid) At(i int) int { return g.cells[i] }
+
+func render(g ref Grid, i int) int { return g.At(i) * 2 }
+
+func main() {
+	g := Grid{cells: []int{1, 2, 3}}
+	fmt.Println(render(ref g, 5))
+}
+```
+
+```
+panic: index out of range [5] with length 3
+	Grid.At at grid.snello:3
+	render at grid.snello:5
+	main at grid.snello:9
+```
+
+A function of a package is named with its package, `json.Parse`; a method with its type, `Grid.At`; a generic instance with its arguments, `Map[int, string].Get`. The runtime's own functions are not shown, since the program wrote none of them. The trace is read before the drops and the deferred calls run, so the frames are those of the panic, and then the unwinding runs as chapter 5 says. A panic a task's handle contains prints its trace with its message, chapter 28; a panic in a test is shown by the runner under the test's failure line, chapter 16, the runner's own frames among them. A `Drop` or a deferred call that panics while a panic unwinds prints its own trace, its frames under those the first panic was unwinding.
+
+A debug build, `snello build -debug`, prints every frame at its exact line. A release build prints every function's own frame, but its optimizer may have merged the ends of two paths of a function, two panics first of all, and a frame at merged code is printed with its file alone, `main at grid.snello`: the function is right, the line is unknown; a function the optimizer wrote into its caller may be missing from such merged code, and a function whose last act is a call may be missing above it, since the optimizer makes that call a jump. When a trace is what you are reading, build with `-debug`.
+
+A function the optimizer inlined into its caller is otherwise still a frame of its own: `At` above is inlined into `render` in a release build and is shown at its own line. A stripped binary prints the same trace; the trace needs no debugging information beside the program.
+
 ## For maintainers
 
 - **The trait.** `Error` is predeclared in `compiler/types/universe.go`, its two methods given by `requires` and `also`; `std/builtin/builtin.snello` documents it beside the other standard traits. The trait's table, for a value of type `Error`, has the drop, then `Error`, then `Source`, in both backends.
@@ -157,6 +187,7 @@ A test asserts on an error with `expect.IsErr`, which gives the error back for a
 - **The chain.** `ParseFormat` in `compiler/types/format.go` reads the `+` flag into `FormatPiece.Plus` and refuses it on any verb but `v`; `verbFits` in `printf.go` refuses it on a type that is not an error. Each backend's `verb` writes `%+v` as a call of `chainer`, one function per type, which asks `Error` and then `Source` of the value and of each source through its table, dropping each source once asked.
 - **Printing a trait value.** `toText` in the C backend and `textAt` in the LLVM backend print a trait value whose trait refines `Error` or `fmt.Stringer` through its table, `traitText` and `traitMessage`; the stringer refuses any other trait value as before.
 - **The tests.** Each file above has its test beside it: `universe_test.go` for the trait's two methods, `stdtraits_test.go` for what a derived message can print, `expr_test.go` for the `?` rule and what `Info.Wraps` records, `format_test.go` and `printf_test.go` for the flag; in each backend `error_test.go` reads the C or the IR written for a derived `Source`, the chain and a trait value's message, and `trait_test.go` or `call_test.go`, `hoist_test.go` or `expr_test.go`, `library_test.go` and `helpers_test.go` read what the derived methods, `?`, `%+v` and a trait value's printing compile to. `error-derived`, `error-chain` and `error-pass` in `compiler/emit/internal/backendtest` run through both backends in release and debug builds; the refusals are the programs below; `compiler/emit/internal/backendtest/testdata/errors.snello` and `examples/errors/errors.snello` run in the suite.
+- **The trace.** Both backends write the Snello position of what they emit, the C backend as a `#line` directive before each line and each function's head (`line` and `endPositions` in `compiler/emit/c/c.go`), the LLVM backend as a location on each instruction and a subprogram on each function (`compiler/emit/llvm/llvm.go`), and both a table of names, each symbol with the name the program gives it. `compiler/emit/trace` reads the line tables and the inlined scopes of the native object the program is linked from, with Go's reader of the debugging format, and writes the table the runtime reads, one block of bytes with no pointer in it: files, symbols, frames with their callers, rows of offset and frame per function, and an anchor per function whose address `Patch` writes into the linked binary, with the reference the runtime takes the loader's slide from; `Object` writes the block as a native object, Mach-O or ELF, which no C compiler runs for. `Link` in `compiler/emit/c/build.go` keeps the native object of a release build's optimizing link, reads the table, and links its object in a plain final link, for either backend, then writes the binary once with the anchors and the bounds of the tasks' stacks; a debug build keeps every line exact with the compiler's merging and outlining off (`GCCDebug`, `ClangDebug`). The runtime walks the frame pointers from the panic (`runtime/c/trace.c`, from `sn_panic` through `panic_unwind` in `sched.c`), checked against the stack's bounds, keeps 128 frames in a buffer of the thread's, prints them under the message, and copies them for a task under a test's catch, which the runner reads through `sn_testing_trace` and prints for a panic that is not an expectation's failure. The design is in `_docs/design/07-lowering.md`, "A panic's trace"; the tests are the shared programs `trace`, `panicking-drop` and `defer-panics-unwinding`, the runtime's `TestPanicTrace`, `TestTableAndPatch` in the trace package and the runner's `TestBoom`.
 
 ## What the compiler reports
 

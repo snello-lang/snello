@@ -230,10 +230,20 @@ static inline uintptr_t stack_pointer(void) {
     return sp;
 }
 
+// SN_SYM is a symbol's name as the assembler spells it, and SN_TYPE
+// marks one a function, which the ELF symbol table records and the
+// Mach-O one does not: the trace of a panic reads the functions by
+// their type, since an aarch64 ELF object marks its code and data with
+// symbols of no type too.
 #if defined(__APPLE__)
-#define SN_SYM(name) "_" #name
+#define SN_SYM(name)  "_" #name
+#define SN_TYPE(name) ""
+#elif defined(__aarch64__)
+#define SN_SYM(name)  #name
+#define SN_TYPE(name) ".type " #name ", %function\n"
 #else
-#define SN_SYM(name) #name
+#define SN_SYM(name)  #name
+#define SN_TYPE(name) ".type " #name ", @function\n"
 #endif
 
 // clang-format off
@@ -241,7 +251,7 @@ static inline uintptr_t stack_pointer(void) {
 #define SN_FRAME 160
 __asm__(
     ".text\n"
-    ".globl " SN_SYM(sn_switch) "\n"
+    ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
     ".p2align 2\n" SN_SYM(sn_switch) ":\n"
     "  sub sp, sp, #160\n"
     "  stp x19, x20, [sp, #0]\n"
@@ -269,7 +279,7 @@ __asm__(
     "  ldp d14, d15, [sp, #144]\n"
     "  add sp, sp, #160\n"
     "  ret\n"
-    ".globl " SN_SYM(sn_on_stack) "\n"
+    ".globl " SN_SYM(sn_on_stack) "\n" SN_TYPE(sn_on_stack)
     ".p2align 2\n" SN_SYM(sn_on_stack) ":\n"
     "  stp x29, x30, [sp, #-16]!\n"
     "  mov x29, sp\n"
@@ -283,7 +293,7 @@ __asm__(
 #define SN_FRAME 64
 __asm__(
     ".text\n"
-    ".globl " SN_SYM(sn_switch) "\n" SN_SYM(sn_switch) ":\n"
+    ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
     "  pushq %rbp\n"
     "  pushq %rbx\n"
     "  pushq %r12\n"
@@ -299,7 +309,7 @@ __asm__(
     "  popq %rbx\n"
     "  popq %rbp\n"
     "  ret\n"
-    ".globl " SN_SYM(sn_on_stack) "\n" SN_SYM(sn_on_stack) ":\n"
+    ".globl " SN_SYM(sn_on_stack) "\n" SN_TYPE(sn_on_stack) SN_SYM(sn_on_stack) ":\n"
     "  pushq %rbp\n"
     "  movq %rsp, %rbp\n"
     "  movq %rdi, %rsp\n"
@@ -359,6 +369,8 @@ struct sn_task {
     int waits_dir;         // and whether to send or to receive on it, or both for a select
     sn_string places[3];   // the place of the test call being made, testing.c's: the task's own, so that parallel tests
                            // do not share it
+    uintptr_t *trace; // the frames of its last panic, kept for a test's runner under a catch that keeps them, or NULL
+    int ntrace;
 };
 
 // A mark is where a panic on the task stops: the jump back, the guard
@@ -1327,6 +1339,11 @@ static void settle(worker *w) {
 #endif
         if (t->large != NULL) {
             stack_free(w, t->large, guarded);
+        }
+
+        if (t->trace != NULL) {
+            free(t->trace);
+            t->trace = NULL;
         }
 
         if (t->guards != t->few) {
@@ -2415,6 +2432,11 @@ void sn_unguard(void *p) {
 // since the mark would be indeterminate to read.
 bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
     task *t = sn_self();
+    if (!report && t->trace == NULL) { // a catch that reports not is a test's runner's, which prints the trace itself
+        t->trace = malloc(SN_TRACE_FRAMES * sizeof *t->trace);
+    }
+
+    t->ntrace = 0;
     sn_mark m;
     m.nguards = t->nguards;
     m.out = msg;
@@ -2502,20 +2524,63 @@ int64_t sn_panics_contained(void) { return atomic_load(&contained); }
 // after what the program printed so far, in one piece: tasks on
 // several workers may fail at once, and each call of stdio is locked
 // alone, so the line is written under the stream's lock.
-static void print_panic(sn_string msg) {
+// print_panic prints the message, the message of the panic being
+// unwound when a drop of that unwinding panicked, and the trace of the
+// panicking task's frames, under the stream's lock, so that two tasks
+// failing at once do not interleave.
+static void print_panic(task *t, sn_string msg) {
     fflush(stdout);
     flockfile(stderr);
     fputs("panic: ", stderr);
     fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
+    if (t != NULL && t->unwound.len > 0) {
+        fputs("\twhile unwinding from panic: ", stderr);
+        fwrite(t->unwound.ptr, 1, (size_t)t->unwound.len, stderr);
+        fputc('\n', stderr);
+    }
+
+    sn_trace_write();
     funlockfile(stderr);
 }
 
-// panic_args is what sn_panic hands the panic on the stack it runs on.
+// panic_args is what sn_panic hands the panic on the stack it runs on:
+// the task, the message, and the frame pointer of sn_panic's own frame,
+// on the task's stack, where the walk of the trace starts.
 typedef struct {
     task *t;
     sn_string msg;
+    void *fp;
 } panic_args;
+
+// trace_fill walks the panicking task's frames from fp into the
+// thread's buffer, within the task's stack when it has one of its own
+// and the guarded stack a panic moved it to, and keeps a copy for the
+// task when it keeps one.
+static void trace_fill(task *t, void *fp) {
+    sn_stack_region regions[2] = { 0 }; // at most two: the task's stack and the guarded one
+    int n = 0;
+    if (t != NULL && t->stack != NULL) {
+        regions[n++] = (sn_stack_region){ t->stack, (uint8_t *)t->stack + class_size(t->stack_class) };
+        if (t->large != NULL) {
+            regions[n++] = (sn_stack_region){ t->large, (uint8_t *)t->large + stack_size };
+        }
+    }
+
+    sn_trace_fill(fp, regions, n);
+    if (t != NULL && t->trace != NULL) {
+        t->ntrace = sn_trace_copy(t->trace);
+    }
+}
+
+// sn_task_trace gives the frames of the running task's last panic,
+// kept under a catch that keeps them, and how many, for the test's
+// runner; none when the task keeps none.
+const uintptr_t *sn_task_trace(int *n) {
+    task *t = sn_self();
+    *n = t->ntrace;
+    return t->trace;
+}
 
 // panic_stack takes the guarded stack a panic on a task's small stack
 // runs on, called on the scheduler's stack, below the frames of the
@@ -2546,11 +2611,12 @@ static void *panic_unwind(void *arg) {
     panic_args *a = arg;
     task *t = a->t;
     sn_string msg = a->msg;
+    trace_fill(t, a->fp); // before the drops, which the frames are whole until; kept for a test's runner
     if (t != NULL && t->marks != NULL && !t->unwinding) {
         sn_mark *m = t->marks;
         t->marks = m->prev;
         if (m->report) {
-            print_panic(msg);
+            print_panic(t, msg);
             atomic_fetch_add(&contained, 1);
         }
 
@@ -2571,13 +2637,7 @@ static void *panic_unwind(void *arg) {
         t = sn_self();
     }
 
-    print_panic(msg);
-    if (t->unwound.len > 0) {
-        fputs("\twhile unwinding from panic: ", stderr);
-        fwrite(t->unwound.ptr, 1, (size_t)t->unwound.len, stderr);
-        fputc('\n', stderr);
-    }
-
+    print_panic(t, msg);
     if (!t->unwinding) {
         t->unwinding = true;
         while (t->nguards > 0) {
@@ -2611,7 +2671,7 @@ static void *panic_unwind(void *arg) {
 _Noreturn __attribute__((noinline)) void sn_panic(sn_string msg) {
     // A thread of the runtime's own, the timers' or the poller's, has no
     // task and never jumps into the main task's mark.
-    panic_args a = { my_task(), msg };
+    panic_args a = { my_task(), msg, __builtin_frame_address(0) };
     uintptr_t sp = stack_pointer();
     void *top = (void *)((sp - below_frame) & ~(uintptr_t)(stack_align - 1));
     task *t = a.t;

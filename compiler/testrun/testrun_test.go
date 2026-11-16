@@ -236,6 +236,13 @@ func TestFromTask() {
 
 func TestFromTaskThen() {}
 
+func boom(xs ref []int) int { return xs[3] }
+
+func TestBoom() {
+	xs := []int{}
+	expect.Equal(ref boom(ref xs), ref 0)
+}
+
 func BenchmarkFails() {
 	for testing.Loop() {
 		expect.True(2 > 3)
@@ -378,6 +385,7 @@ func TestMore(t *testing.T) {
 		"--- FAIL: TestOk (0.00s)\n    more_test.snello:" + lineOf("v := expect.IsOk(Parse(\"x\"))") + ": expect.IsOk(Parse(\"x\")): is Err, Ok was wanted\n        error: parse x: not a number\n",
 		"--- FAIL: TestTextDiff (0.00s)\n    more_test.snello:" + lineOf("line 2\\nline three") + ": expect.EqualText(ref Report(), \"line one\\nline 2\\nline three\\n\")\n        line 2: got \"line two\" where \"line 2\" was wanted\n",
 		"--- FAIL: TestParallelB (0.00s)\n    more_test.snello:" + lineOf("b done") + ": b done\n    more_test.snello:" + lineOf("expect.True(1 > 2)") + ": expect.True(1 > 2) is false\n",
+		"--- FAIL: TestBoom (0.00s)\n    index out of range [3] with length 0\n        more.boom at more_test.snello:" + lineOf("return xs[3]") + "\n        more.TestBoom at more_test.snello:" + lineOf("expect.Equal(ref boom(ref xs), ref 0)") + "\n        testing.runAndReport at testing.snello:",
 		"--- PASS: TestParallelA (0.00s)\n    more_test.snello:" + lineOf("a done") + ": a done\n",
 		"--- PASS: TestParallelTwice (0.00s)\n",
 		"--- PASS: TestParallelSub/inner",

@@ -112,3 +112,41 @@ func TestPathPrefix(t *testing.T) {
 		t.Errorf("shared prefix: got %v, want %q", err, want)
 	}
 }
+
+// TestDisplayName holds the name a trace gives a function: a method
+// with its type, a function of a package with the package, main's
+// functions bare, and a generic instance with its arguments.
+func TestDisplayName(t *testing.T) {
+	f, file, err := parser.ParseFile("t.snello", []byte(`package main
+struct Grid { n int }
+func (g ref Grid) At(i int) int { return g.n + i }
+func render() {}
+func keep<T>(v T) T { return v }
+func main() {}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := (&types.Config{}).Check("", file, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grid := pkg.Scope().Lookup("Grid").(*types.TypeName)
+	at := grid.Type().(*types.Named).Method("At")
+	if got := DisplayName(at, RecvType(at.Type().(*types.Signature)), nil); got != "Grid.At" {
+		t.Errorf("a method is named %q, want Grid.At", got)
+	}
+
+	if got := DisplayName(pkg.Scope().Lookup("render").(*types.Func), nil, nil); got != "render" {
+		t.Errorf("a function of main is named %q, want render", got)
+	}
+
+	if got := DisplayName(pkg.Scope().Lookup("keep").(*types.Func), nil, []types.Type{types.Typ[types.Int]}); got != "keep[int]" {
+		t.Errorf("an instance is named %q, want keep[int]", got)
+	}
+
+	if got := RecvType(pkg.Scope().Lookup("render").(*types.Func).Type().(*types.Signature)); got != nil {
+		t.Errorf("a function has a receiver type %v", got)
+	}
+}

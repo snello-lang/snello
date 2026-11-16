@@ -147,7 +147,7 @@ func TestTargeted(t *testing.T) {
 	for line := range bytes.Lines(module) {
 		if bytes.HasPrefix(line, []byte("define ")) {
 			defines++
-			if !bytes.HasSuffix(line, []byte(") #0 {\n")) {
+			if !bytes.Contains(line, []byte(" #0 ")) {
 				t.Errorf("a function names no attributes: %s", line)
 			}
 		}

@@ -640,8 +640,10 @@ bool sn_testing_benchReported(void);
 void sn_testing_line(sn_string where); // the compiler writes these before a call of testing.Log, Logf, Skip, and of an
                                        // exported function of expect
 void sn_testing_call(sn_string where,
-                     sn_string parts); // the place of the call, with the parts the compiler found, owned
-sn_string sn_testing_where(void);      // testing.where, expect.where and expect.parts read them back
+                     sn_string parts);        // the place of the call, with the parts the compiler found, owned
+sn_string sn_testing_where(void);             // testing.where, expect.where and expect.parts read them back
+sn_string sn_testing_trace(sn_string indent); // the trace of the panic a test's Catch caught, a line a frame, each
+                                              // after indent, for the runner to print under the failure
 sn_string sn_expect_where(void);
 sn_string sn_expect_parts(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
@@ -761,6 +763,68 @@ typedef struct {
 // the analysis of the linked program could not bound, the entry of the
 // program's table of bounds until the analysis writes one.
 #define SN_UNBOUNDED UINT32_MAX
+
+// A panic's trace. The compiler writes a program's table of lines,
+// sn_trace, from the line tables the compilers behind the backends
+// wrote: for each text section of the object the program was linked
+// from, an anchor, whose address the compiler writes into the binary
+// once it is linked, and the rows of the section in order of their
+// offset from it, each the chain of frames at that offset, the
+// innermost first, a function the optimizer wrote into its caller
+// above the caller at the line of the call; a row of no frame covers
+// code that is no Snello function's, the runtime's own. Both backends
+// write the table of names, sn_trace_names, each function's symbol
+// and the name the program gives it, in order of symbol. At a panic
+// the runtime walks the panicking task's frame pointers, finds each
+// return address's row and prints a line a frame, allocating nothing.
+typedef struct {
+    const char *symbol;
+    const char *name;
+} sn_trace_name;
+
+typedef struct {
+    int32_t function; // its symbol, by its index in the table's symbols
+    int32_t file;     // by its index in the table's files
+    int32_t line;
+    int32_t caller; // the next frame of the chain, the caller at the line of its call, or -1 for the last
+} sn_trace_frame;
+
+typedef struct {
+    int32_t offset; // from the function's start, of the first instruction the row covers, up to the next row's
+    int32_t frame;  // the innermost frame of the chain at the row, or -1 for none
+} sn_trace_row;
+
+typedef struct {
+    uintptr_t address;    // of the function, written once the binary is linked, or 0 for a function the binary has no
+                          // symbol of its own for
+    int32_t size;         // of the function
+    int32_t first, count; // its rows
+} sn_trace_anchor;
+
+// The table's parts are bytes after sn_trace_parts, which the compiler
+// writes as one object with no pointer in it, each part at an offset
+// the table gives: the anchors in order of address, the rows, the
+// frames, the symbols and the files, each an int32_t offset of its
+// name in the strings, and the strings, each ending in a zero byte.
+typedef struct {
+    uintptr_t reference; // the address the binary was linked with for this table, written with the anchors: its
+                         // distance from the table's address at run time is the slide the loader gave the
+                         // program, which the anchors' addresses are moved by
+    int64_t anchors, nanchors;
+    int64_t rows, nrows;
+    int64_t frames, nframes;
+    int64_t symbols, nsymbols;
+    int64_t files, nfiles;
+    int64_t strings;
+} sn_trace_table;
+
+extern const sn_trace_table sn_trace;
+extern uint8_t sn_trace_parts[];
+extern const sn_trace_name sn_trace_names[];
+extern const int64_t sn_trace_names_count;
+// SN_TRACE_UNWRITTEN is what sn_trace.reference holds in a program the
+// compiler wrote no table for: a value the loader never slides to.
+#define SN_TRACE_UNWRITTEN 1
 
 // sn_spawn starts a task that runs run on a copy of the size bytes at
 // args, which the task's record holds, so that a spawn allocates

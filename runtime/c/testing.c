@@ -14,6 +14,7 @@
 #include "internal.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 
 // sn_testing_task is testing.task: the running task, as a number.
 int64_t sn_testing_task(void) { return (int64_t)(uintptr_t)sn_self(); }
@@ -89,6 +90,39 @@ void sn_testing_call(sn_string where, sn_string parts) {
 // testing.where, expect.where and expect.parts: a copy of the place,
 // the caller's to drop.
 sn_string sn_testing_where(void) { return sn_string_clone(sn_task_places()[SN_PLACE_LINE]); }
+
+// trace_line appends one line of a trace to the string being built for
+// the test's runner: the indent, the name, " at ", the file, a colon,
+// the line and a newline.
+typedef struct {
+    sn_string out;
+    sn_string indent;
+} trace_lines;
+
+static void trace_line(void *ctx, const char *name, const char *file, int32_t at) {
+    trace_lines *l = ctx;
+    char line[SN_TRACE_LINE_ROOM];
+    int n = sn_trace_line(line, sizeof line, name, file, at);
+    sn_string_append(&l->out, &l->indent);
+    sn_string piece = { (const uint8_t *)line, n, 0 };
+    sn_string_append(&l->out, &piece);
+}
+
+// sn_testing_trace is package testing's trace: the frames of the panic
+// the test's Catch caught, which the task kept at the panic, as lines
+// each after indent, without the last newline; empty when no trace was
+// kept.
+sn_string sn_testing_trace(sn_string indent) {
+    trace_lines l = { { 0 }, indent };
+    int n;
+    const uintptr_t *walked = sn_task_trace(&n);
+    sn_trace_each(walked, n, trace_line, &l);
+    if (l.out.len > 0) {
+        l.out.len--; // the last newline: the runner ends its line
+    }
+
+    return l.out;
+}
 
 sn_string sn_expect_where(void) { return sn_string_clone(sn_task_places()[SN_PLACE_CALL]); }
 

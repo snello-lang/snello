@@ -17,7 +17,7 @@
 // package, its _test.snello files, with a generated main and runs them.
 // Four more subcommands inspect the compiler by hand: `snello lex FILE`
 // prints the token stream, `snello parse FILE` the syntax tree, `snello
-// check FILE|DIR` what the checker finds, and `snello emit [-backend c]
+// check FILE|DIR` what the checker finds, and `snello emit [-debug] [-backend c]
 // FILE|DIR` the IR module, or the C source, that build would compile.
 package main
 
@@ -70,8 +70,8 @@ func main() {
 		path, backend, debug := buildArgs(os.Args[2:], true)
 		os.Exit(build(path, backend, debug))
 	case "emit":
-		path, backend, _ := buildArgs(os.Args[2:], false)
-		os.Exit(emit(path, backend))
+		path, backend, debug := buildArgs(os.Args[2:], true)
+		os.Exit(emit(path, backend, debug))
 	case "test":
 		os.Exit(test(os.Args[2:]))
 	default:
@@ -80,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-backend llvm|c] | check) FILE|DIR")
+	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-debug] [-backend llvm|c] | check) FILE|DIR")
 	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
 	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
 	os.Exit(2)
@@ -250,8 +250,8 @@ func isMain(name string) bool {
 
 // emit prints what build would compile: the C source, or the IR
 // module, for reading.
-func emit(path, backend string) int {
-	src, _, ok := emitSource(path, backend, false)
+func emit(path, backend string, debug bool) int {
+	src, _, ok := emitSource(path, backend, debug)
 	if !ok {
 		return 1
 	}

@@ -101,7 +101,7 @@ The message is built to be read once. Five rules give it its form, and the compi
 2. **Where they differ, in words**, before any dump: the element or the line that differs and by how much the lengths differ.
 3. **The parts of a condition.** For `expect.True(n > limit)` the message is `expect.True(n > limit) is false` and under it `n is 2, limit is 3`. The parts are shown when the condition is a comparison whose operands are names, fields, elements, literals or `len` of those, which can be read twice without anyone noticing; a call in a condition is evaluated once, so its result is not shown.
 4. **The row of a table-driven test** is the subtest's name, `TestDescribe/square`, which is why a table's rows are run through `testing.Run` with the row's name.
-5. **One failure, whole.** The first failed assertion ends the test, so a report is one message and not a list; a panic the test did not intend is reported with the runtime's message, `index out of range [5] with length 3`, at the test's name.
+5. **One failure, whole.** The first failed assertion ends the test, so a report is one message and not a list; a panic the test did not intend is reported with the runtime's message, `index out of range [5] with length 3`, at the test's name, with the trace of the functions it was in under it, chapter 17.
 
 The forms, as the compiler's suite pins them:
 

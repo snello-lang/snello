@@ -35,8 +35,15 @@ func (e *Emitter) blockStmt(b *ast.BlockStmt) {
 	e.pop(b.Rbrace)
 }
 
-// stmt writes one statement and then drops the temporaries it made.
+// stmt writes one statement, at its location, and then drops the
+// temporaries it made.
 func (e *Emitter) stmt(s ast.Stmt) {
+	outer := e.fn.loc
+	if e.fn.subprogram != 0 && s.Pos().IsValid() {
+		e.fn.loc = e.location(s.Pos())
+	}
+
+	defer func() { e.fn.loc = outer }()
 	mark := len(e.fn.temps)
 	e.stmtInner(s)
 	if e.fn.terminated {

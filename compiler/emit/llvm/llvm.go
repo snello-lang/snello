@@ -26,6 +26,7 @@ package llvm
 
 import (
 	"bytes"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,6 +67,15 @@ type Emitter struct {
 	localConst map[*types.Const]string         // the constants declared in a function, each a global of its own
 	fn         *function                       // the function being written
 	strs       int                             // string constants written so far
+	meta       bytes.Buffer                    // the metadata nodes of the line tables: the unit, the files, each function and each location
+	nmeta      int                             // metadata nodes written so far
+	unit       int                             // the compile unit's node
+	dfiles     map[string]int                  // each source file's node
+	mainAt     token.Position                  // where the program declares main, which the entry is written at
+	dlocs      map[dloc]int                    // each location's node
+	within     string                          // the name the program gives the function being written, for its closures' names
+	nclosure   int                             // closures of the function being written, counted for their names
+	traced     []lower.TraceName               // every function written, its symbol and the name the program gives it
 	constants  map[string]value                // the constant written for each constant value lent, by its text: its type and its global
 	closures   int                             // closures written so far, numbering their functions
 	seq        int                             // values and deferred calls registered so far, ordering what a return releases
@@ -106,6 +116,9 @@ type Emitter struct {
 type function struct {
 	body       bytes.Buffer
 	allocas    bytes.Buffer
+	subprogram int    // the metadata node of its subprogram, 0 for a function of the backend's own
+	scope      int    // the node its locations are in when not the subprogram: the entry's, in the generated file
+	loc        string // the metadata node of the location its instructions are at, "!n"
 	vars       map[*types.Var]string
 	loops      []loop
 	frames     []frame
@@ -185,6 +198,20 @@ func EmitFiles(cfg Config, files []*token.File, fs []*ast.File, info *types.Info
 // instance nesting another, and a few suffice.
 const maxPasses = 8
 
+// generated is the file name a function of the backend's own is given
+// in the line tables, at no line: the trace of a panic shows no frame
+// of it.
+const generated = "<generated>"
+
+// entry is the symbol of the module's entry, which calls main, and
+// generatedLine the line its own instructions are at in the generated
+// file: a line, as the C backend's directive gives them one, where line
+// zero is the optimizer's mark of code merged from two lines.
+const (
+	entry         = "main"
+	generatedLine = 1
+)
+
 // emitPass writes the module once with boxes of at least words words, and
 // returns it with the larger size a closure needed, or zero when every
 // closure fit.
@@ -194,6 +221,8 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 		abi:        target,
 		info:       info,
 		file:       files[0],
+		dfiles:     make(map[string]int),
+		dlocs:      make(map[dloc]int),
 		decls:      make(map[string]string),
 		state:      make(map[string]bool),
 		seen:       make(map[string]bool),
@@ -209,6 +238,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 		localConst: make(map[*types.Const]string),
 		boxWords:   words,
 	}
+	e.unit = e.metaNode("distinct !DICompileUnit(language: DW_LANG_C99, file: !" + strconv.Itoa(e.dfile(filepath.Base(files[0].Name()))) + ", producer: \"snello\", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)")
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -272,9 +302,12 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	put(&out, "source_filename = ", strconv.Quote(files[0].Name()), "\n")
 	put(&out, "target triple = ", strconv.Quote(triple(cfg.Arch, cfg.OS)), "\n\n")
 	put(&out, "%sn_string = type { ptr, i64, i64 }\n%sn_slice = type { ptr, i64, i64 }\n%sn_map = type { ptr, ptr, ptr, ptr, i64, i64, i64, i64 }\n%sn_trait = type { ptr, ptr }\n%sn_map_type = type { i64, i64, ptr, ptr, ptr, ptr }\n%sn_case = type { ptr, ptr, i8, i8 }\n")
+	var traced bytes.Buffer
+	e.traceNames(&traced) // before the constants are written: the names are constants of the module
 	out.Write(e.types.Bytes())
 	out.WriteString("\n")
 	out.Write(e.consts.Bytes())
+	out.Write(traced.Bytes())
 	names := make([]string, 0, len(e.decls))
 	for name := range e.decls {
 		names = append(names, name)
@@ -290,7 +323,8 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	out.Write(e.globalDefs.Bytes())
 	out.Write(e.helpers.Bytes())
 	out.Write(e.funcs.Bytes())
-	out.WriteString(emptyGroup) // every function's attributes, which Targeted fills with the target's (target.go)
+	e.lineTables(&out)
+	out.WriteString(emptyGroup) // every function's attributes, which Targeted fills with the target's (target.go): last, as it looks for it
 	return out.Bytes(), 0, nil
 }
 
@@ -300,7 +334,11 @@ func (e *Emitter) mainFunc() {
 	e.declare("sn_init", "declare void @sn_init(i32, ptr)")
 	e.declare("sn_finish", "declare i32 @sn_finish()")
 	outer := e.begin(nil)
+	e.fn.subprogram = e.subprogramNode(entry, e.mainAt) // the entry is main's, at main's position and under its name, its first instruction at main's line: the optimizer writes main into it, and a trace names the entry's code main
+	e.fn.loc = e.locationAt(e.mainAt.Line)
 	e.inst("call void @sn_init(i32 %argc, ptr %argv)")
+	e.fn.scope = e.metaNode("!DILexicalBlockFile(scope: !" + strconv.Itoa(e.fn.subprogram) + ", file: !" + strconv.Itoa(e.dfile(generated)) + ", discriminator: 0)") // the rest is the generated file's
+	e.fn.loc = "!" + strconv.Itoa(e.metaNode("!DILocation(line: "+strconv.Itoa(generatedLine)+", column: 0, scope: !"+strconv.Itoa(e.fn.scope)+")"))
 	e.inst("call void @sn_main()")
 	for i := len(e.statics) - 1; i >= 0; i-- {
 		e.dropOf(e.statics[i].slot, e.statics[i].typ, token.NoPos)
@@ -319,7 +357,7 @@ func (e *Emitter) mainFunc() {
 
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
-	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " {\nentry:\n")
+	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n")
 }
@@ -354,7 +392,7 @@ func (e *Emitter) end(section *bytes.Buffer, outer *function) {
 	clear(f.vars)
 	clear(f.pre)
 	f.loops, f.frames, f.temps, f.defers = f.loops[:0], f.frames[:0], f.temps[:0], f.defers[:0]
-	f.captured, f.sig, f.tmp, f.terminated = nil, nil, 0, false
+	f.captured, f.sig, f.tmp, f.terminated, f.subprogram, f.loc = nil, nil, 0, false, 0, ""
 	e.spare = append(e.spare, f)
 	e.fn = outer
 }
@@ -452,11 +490,14 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	e.info.Types[cell] = v.Type()
 	body := &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{cell}, TokPos: name.NamePos, Tok: token.ASSIGN, Rhs: []ast.Expr{value}}}}
 	e.making = v
-	e.writeFunction(lower.LazyInit(lower.ObjName(v)), types.NewSignature(nil, nil, nil), body, name.Pos())
+	e.writeFunction(lower.LazyInit(lower.ObjName(v)), name.Name+".init", types.NewSignature(nil, nil, nil), body, name.Pos())
 	e.making = nil
 	e.declare("sn_lazy_make", "declare void @sn_lazy_make(ptr, ptr, ptr)")
 	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
-	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4\n  %unmade = icmp ne i32 %state, 2\n  br i1 %unmade, label %make, label %done\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")\n  br label %done\ndone:\n  ret ptr ", g, "\n}\n\n")
+	sp := e.subprogramNode(g+"_get", token.Position{Filename: generated})
+	loc := e.metaNode("!DILocation(line: 0, column: 0, scope: !" + strconv.Itoa(sp) + ")")
+	at := ", !dbg !" + strconv.Itoa(loc)
+	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}
@@ -549,18 +590,124 @@ func (e *Emitter) funcDecl(d *ast.FuncDecl) {
 		name = lower.MethodName(owner, d.Name.Name)
 	}
 
-	e.writeFunction(name, sig, d.Body, d.Pos())
+	e.writeFunction(name, lower.DisplayName(fn, lower.RecvType(sig), nil), sig, d.Body, d.Pos())
 }
 
-// writeFunction writes a function or method under the given name: its
-// definition with the receiver as the first parameter, and its body.
-func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.BlockStmt, pos token.Pos) {
+// writeFunction writes a function or method under the given name, and
+// the name the program gives it: its definition with the receiver as
+// the first parameter, and its body.
+func (e *Emitter) writeFunction(name, display string, sig *types.Signature, body *ast.BlockStmt, pos token.Pos) {
 	params := sig.Params()
 	if recv := sig.Recv(); recv != nil {
 		params = append([]*types.Var{recv}, params...)
 	}
 
-	e.writeBody(name, sig, params, nil, nil, body, pos)
+	e.writeBody(name, display, sig, params, nil, nil, body, pos)
+}
+
+// A dloc identifies a location: a line in a scope.
+type dloc struct {
+	scope int
+	line  int
+}
+
+// metaNode writes one metadata node and returns its number.
+func (e *Emitter) metaNode(text string) int {
+	e.nmeta++
+	put(&e.meta, "!", strconv.Itoa(e.nmeta), " = ", text, "\n")
+	return e.nmeta
+}
+
+// dfile is the node of a source file, written once.
+func (e *Emitter) dfile(name string) int {
+	if n, ok := e.dfiles[name]; ok {
+		return n
+	}
+
+	n := e.metaNode("!DIFile(filename: " + strconv.Quote(name) + ", directory: \"\")")
+	e.dfiles[name] = n
+	return n
+}
+
+// location is the node of the location at pos in the function being
+// written, "!n", written once a line.
+func (e *Emitter) location(pos token.Pos) string {
+	line := 0
+	if pos.IsValid() {
+		line = e.file.Position(pos).Line
+	}
+
+	return e.locationAt(line)
+}
+
+// locationAt is the node of the location at line in the function being
+// written.
+func (e *Emitter) locationAt(line int) string {
+	scope := e.fn.subprogram
+	if e.fn.scope != 0 {
+		scope = e.fn.scope
+	}
+
+	k := dloc{scope, line}
+	n, ok := e.dlocs[k]
+	if !ok {
+		n = e.metaNode("!DILocation(line: " + strconv.Itoa(line) + ", column: 0, scope: !" + strconv.Itoa(scope) + ")")
+		e.dlocs[k] = n
+	}
+
+	return "!" + strconv.Itoa(n)
+}
+
+// subprogram writes the node of the function being written, named by
+// its symbol as the C backend's functions are, at the file and line of
+// pos, or at no line of the generated file for a function of the
+// backend's own, and gives the function its first location. Every
+// function of the module has one, since the optimizer drops the
+// locations of a function it writes into one that has none, and the
+// program's functions are written into the module's main and into the
+// helpers.
+func (e *Emitter) subprogram(name string, pos token.Pos) {
+	p := token.Position{Filename: generated}
+	if pos.IsValid() {
+		p = e.file.Position(pos)
+	}
+
+	e.fn.subprogram = e.subprogramNode(name, p)
+	e.fn.loc = e.locationAt(p.Line)
+}
+
+// subprogramNode writes the node of a function named name at p, a
+// position of the program's or of the generated file.
+func (e *Emitter) subprogramNode(name string, p token.Position) int {
+	file := e.dfile(filepath.Base(p.Filename))
+	return e.metaNode("distinct !DISubprogram(name: " + strconv.Quote(name) + ", scope: !" + strconv.Itoa(file) + ", file: !" + strconv.Itoa(file) + ", line: " + strconv.Itoa(p.Line) + ", type: !DISubroutineType(types: !{null}), scopeLine: " + strconv.Itoa(p.Line) + ", spFlags: DISPFlagDefinition, unit: !" + strconv.Itoa(e.unit) + ")")
+}
+
+// lineTables writes what the module's line tables need beside the
+// nodes: the unit, which every function names, and the module's flags.
+func (e *Emitter) lineTables(out *bytes.Buffer) {
+	version := e.metaNode("!{i32 7, !\"Dwarf Version\", i32 4}")
+	info := e.metaNode("!{i32 2, !\"Debug Info Version\", i32 3}")
+	put(out, "!llvm.dbg.cu = !{!", strconv.Itoa(e.unit), "}\n!llvm.module.flags = !{!", strconv.Itoa(version), ", !", strconv.Itoa(info), "}\n")
+	out.Write(e.meta.Bytes())
+}
+
+// traceNames writes the table of names: every function written, in
+// order of symbol, and the count, as snello.h declares them.
+func (e *Emitter) traceNames(out *bytes.Buffer) {
+	sort.Slice(e.traced, func(i, j int) bool { return e.traced[i].Symbol < e.traced[j].Symbol })
+	n := len(e.traced)
+	var entries []string
+	for _, t := range e.traced {
+		entries = append(entries, "{ ptr, ptr } { ptr "+e.constBytes(t.Symbol)+", ptr "+e.constBytes(t.Name)+" }")
+	}
+
+	if n == 0 {
+		entries = append(entries, "{ ptr, ptr } { ptr null, ptr null }")
+	}
+
+	put(out, "@sn_trace_names = constant [", strconv.Itoa(max(n, 1)), " x { ptr, ptr }] [", strings.Join(entries, ", "), "]\n")
+	put(out, "@sn_trace_names_count = constant i64 ", strconv.Itoa(n), "\n\n")
 }
 
 // writeBody writes a function under name whose Snello parameters are
@@ -569,8 +716,16 @@ func (e *Emitter) writeFunction(name string, sig *types.Signature, body *ast.Blo
 // before the parameters are stored and returns how the body reaches
 // each captured variable. A function is written whole into its own
 // text, so one can be written while another is being written.
-func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.Var, leading []string, prologue func() map[*types.Var]string, body *ast.BlockStmt, pos token.Pos) {
+func (e *Emitter) writeBody(name, display string, sig *types.Signature, params []*types.Var, leading []string, prologue func() map[*types.Var]string, body *ast.BlockStmt, pos token.Pos) {
+	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
+	if name == lower.MainName {
+		e.mainAt = e.file.Position(pos) // of this file, which the entry is written after
+		e.traced = append(e.traced, lower.TraceName{Symbol: entry, Name: display})
+	}
+	outerWithin, outerClosures := e.within, e.nclosure
+	e.within, e.nclosure = display, 0
 	outer := e.begin(sig)
+	e.subprogram(name, pos)
 	list := append([]string(nil), leading...)
 	for i, p := range params {
 		list = append(list, e.irType(p.Type(), pos)+" %a"+strconv.Itoa(i))
@@ -582,9 +737,10 @@ func (e *Emitter) writeBody(name string, sig *types.Signature, params []*types.V
 	}
 
 	e.function(sig, params, env, body)
-	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", funcAttrs, " {\nentry:\n")
+	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n\n")
+	e.within, e.nclosure = outerWithin, outerClosures
 }
 
 // function writes the body of a function or closure into the function
@@ -653,7 +809,17 @@ func (e *Emitter) inst(pieces ...string) {
 	e.open()
 	e.fn.body.WriteString("  ")
 	put(&e.fn.body, pieces...)
+	e.located()
 	e.fn.body.WriteByte('\n')
+}
+
+// located ends an instruction of a function with a subprogram with its
+// location, so that the line tables place it and every call carries
+// one, which the optimizer asks of a call it may write into its caller.
+func (e *Emitter) located() {
+	if e.fn.subprogram != 0 {
+		put(&e.fn.body, ", !dbg ", e.fn.loc)
+	}
 }
 
 // open makes sure an instruction can be written: after a terminator,
@@ -732,6 +898,7 @@ func (e *Emitter) compute(t string, pieces ...string) value {
 	e.open()
 	put(&e.fn.body, "  ", r, " = ")
 	put(&e.fn.body, pieces...)
+	e.located()
 	e.fn.body.WriteByte('\n')
 	return value{t, r}
 }
