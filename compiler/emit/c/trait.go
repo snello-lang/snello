@@ -243,7 +243,7 @@ func field(v string, base types.Type, f *types.Var) string {
 	if en, ok := lower.ValueType(base).Underlying().(*types.Enum); ok { // a variant's field, v.[f] in the arm written for the variant
 		for i := range en.NumVariants() {
 			if j := slices.Index(en.Variant(i).Fields(), f); j >= 0 {
-				return v + "." + variantMember(en.Variant(i)) + "." + fieldName(f, j)
+				return v + "." + lower.VariantMember(en.Variant(i)) + "." + lower.VariantField(f, j)
 			}
 		}
 	}

@@ -9,9 +9,14 @@
 // and `snello build DIR` a program of every .snello file in a
 // directory, named after the directory as go build names it; the
 // packages of the program's own are found through the nearest
-// snello.mod above it. `snello build -debug FILE` builds it with the
-// runtime's checks, which stop the program on a value used after its
-// release and report values never released; `snello build -backend c
+// snello.mod above it. `snello build -debug FILE` builds it for a
+// debugger, the program's own code unoptimized and described in full,
+// with the runtime's checks, which stop the program on a value used
+// after its release and report values never released; on macOS the
+// debugging information is gathered into FILE.dSYM beside the binary.
+// `snello debug FILE [ARGS]` builds it so and runs lldb, or gdb on
+// Linux, on it, with Snello's formatters and tasks command loaded.
+// `snello build -backend c
 // FILE` builds it through the C backend, the reference implementation,
 // and the system's C compiler. `snello test DIR` builds the tests of a
 // package, its _test.snello files, with a generated main and runs them.
@@ -74,6 +79,8 @@ func main() {
 		os.Exit(emit(path, backend, debug))
 	case "test":
 		os.Exit(test(os.Args[2:]))
+	case "debug":
+		os.Exit(debug(os.Args[2:]))
 	default:
 		usage()
 	}
@@ -81,6 +88,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-debug] [-backend llvm|c] | check) FILE|DIR")
+	fmt.Fprintln(os.Stderr, "       snello debug [-backend llvm|c] FILE|DIR [ARGS...]")
 	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
 	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
 	os.Exit(2)
@@ -150,7 +158,7 @@ func buildArgs(args []string, withDebug bool) (path, backend string, debug bool)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&backend, "backend", "llvm", "the backend: llvm, or c for the reference backend")
 	if withDebug {
-		fs.BoolVar(&debug, "debug", false, "build with the runtime's checks")
+		fs.BoolVar(&debug, "debug", false, "build for a debugger, unoptimized, with the runtime's checks")
 	}
 
 	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || backend != "c" && backend != "llvm" {
@@ -300,8 +308,12 @@ func build(path, backend string, debug bool) int {
 		err = os.WriteFile(name, built, 0o755)
 	}
 
+	if err == nil && debug {
+		out, err = c.Bundle(bin, name) // before the build's directory, which holds the objects the bundle is gathered from, is removed
+	}
+
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "%v\n%s", err, out)
 		return 1
 	}
 
@@ -406,7 +418,7 @@ func libraries(imp *importer.Importer) []lower.Library {
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links, Std: p.Std}
 	}
 
 	return libs

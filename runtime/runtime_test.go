@@ -597,6 +597,10 @@ int main(int argc, char **argv) {
     }
     printf("%lld\n", (long long)sum);
     sn_chan_drop(&done, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
+        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    }
+
     return sn_finish();
 }
 `
@@ -913,6 +917,77 @@ int main(int argc, char **argv) {
 	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
 	cancel()
 	if err != nil || string(out) != "rounds 20000\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestDebuggerTable holds the table a debug build publishes for a
+// debugger's script to the runtime it describes: a task parked on a
+// channel is on the list, parked, and the frame pointer and return
+// address its saved context holds at the published offsets lead, frame
+// by frame, by the walk the script makes, to the task's own function.
+func TestDebuggerTable(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+enum { far = 256, deepest = 16, frame_align = 16 };
+static sn_chan *ch;
+static __attribute__((noinline)) void receiver(void *arg) {
+    (void)arg;
+    int64_t v;
+    sn_chan_recv(ch, &v);
+}
+static uintptr_t word(uintptr_t at) { uintptr_t w; memcpy(&w, (const void *)at, sizeof w); return w; }
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    ch = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    sn_spawn(receiver, NULL, 0, SN_UNBOUNDED);
+    const sn_debugger_table *d = &sn_debugger;
+    uintptr_t found = 0;
+    for (int tries = 0; found == 0 && tries < 1000; tries++) {
+        sn_sleep(1000000);
+        for (uintptr_t task = word((uintptr_t)d->tasks); task != 0; task = word(task + (uintptr_t)d->next)) {
+            int state;
+            memcpy(&state, (const void *)(task + (uintptr_t)d->state), sizeof state);
+            if (word(task + (uintptr_t)d->run) == (uintptr_t)receiver && (state & ~d->woken) == d->parked) {
+                found = task;
+            }
+        }
+    }
+
+    if (found == 0) {
+        printf("the receiver is not on the list, parked\n");
+        return 1;
+    }
+
+    uintptr_t sp = word(found + (uintptr_t)d->sp), fp = word(sp + (uintptr_t)d->saved_fp), last = sp;
+    bool reached = false;
+    for (int i = 0; i < deepest && fp != 0 && fp % frame_align == 0 && fp > last && fp - sp < (uintptr_t)d->stack_room; i++) {
+        uintptr_t ret = word(fp + sizeof(uintptr_t));
+        if (ret > (uintptr_t)receiver && ret - (uintptr_t)receiver < far) {
+            reached = true;
+        }
+
+        last = fp;
+        fp = word(fp);
+    }
+
+    printf(reached ? "reached\n" : "not reached\n");
+    int64_t one = 1;
+    sn_chan_send(ch, &one);
+    sn_chan_drop(&ch, SN_CHAN_BOTH);
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    return sn_finish();
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer") // as every build compiles the runtime, which x86-64's compilers otherwise drop the frame pointer from
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || string(out) != "reached\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }

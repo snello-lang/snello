@@ -49,11 +49,11 @@ func emitError(t *testing.T) string {
 func TestSourcer(t *testing.T) {
 	out := emitError(t)
 	for _, head := range []string{
-		"static sn_opt_Error sn_src_AppError(AppError v)",
-		"static sn_opt_Error sn_src_Code(Code v)",
-		"static sn_opt_Error sn_src_sn_strconv_Error(sn_strconv_Error v)", // the library's type, derived as any
+		"static sn_opt_5Error sn_src_AppError(AppError v)",
+		"static sn_opt_5Error sn_src_Code(Code v)",
+		"static sn_opt_5Error sn_src_sn_strconv_Error(sn_strconv_Error v)", // the library's type, derived as any
 	} {
-		if body := cFunction(t, out, head); !strings.Contains(body, "return (sn_opt_Error){.has = false};") {
+		if body := cFunction(t, out, head); !strings.Contains(body, "return (sn_opt_5Error){.has = false};") {
 			t.Errorf("%q does not give None:\n%s", head, body)
 		}
 	}
@@ -63,15 +63,15 @@ func TestChainer(t *testing.T) {
 	out := emitError(t)
 	tests := []struct{ head, want, what string }{
 		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_string out = sn_Wrapped_Error(v);", "the chain starts with the type's own message"},
-		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_opt_Error s = sn_Wrapped_Source(v);", "and asks the type for its source"},
+		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_opt_5Error s = sn_Wrapped_Source(v);", "and asks the type for its source"},
 		{"static sn_string sn_chain_Wrapped(Wrapped v)", "while (s.has) {", "walking down the sources"},
 		{"static sn_string sn_chain_Wrapped(Wrapped v)", "s.val.tab->Error(s.val.data), 3);", "each source's message, joined after a colon and a space"},
-		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_opt_Error next = s.val.tab->Source(s.val.data);", "each source asked for its own through its table"},
+		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_opt_5Error next = s.val.tab->Source(s.val.data);", "each source asked for its own through its table"},
 		{"static sn_string sn_chain_Wrapped(Wrapped v)", "sn_drop_Error(&s.val);", "and dropped once asked"},
 		{"static sn_string sn_chain_Code(Code v)", "sn_string out = sn_str_Code(v);", "%+v on a derived message starts with the printed form"},
-		{"static sn_string sn_chain_Code(Code v)", "sn_opt_Error s = sn_src_Code(v);", "and with the derived source"},
+		{"static sn_string sn_chain_Code(Code v)", "sn_opt_5Error s = sn_src_Code(v);", "and with the derived source"},
 		{"static sn_string sn_chain_Error(Error v)", "sn_string out = v.tab->Error(v.data);", "%+v on a trait value starts through its table"},
-		{"static sn_string sn_chain_Error(Error v)", "sn_opt_Error s = v.tab->Source(v.data);", "and asks it for its source the same way"},
+		{"static sn_string sn_chain_Error(Error v)", "sn_opt_5Error s = v.tab->Source(v.data);", "and asks it for its source the same way"},
 	}
 	for _, tt := range tests {
 		if body := cFunction(t, out, tt.head); !strings.Contains(body, tt.want) {

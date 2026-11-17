@@ -78,7 +78,7 @@ func LoadDirectory(dir string) (*importer.Program, *types.Info, []lower.Library,
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links, Std: p.Std}
 	}
 
 	return prog, info, libs, nil

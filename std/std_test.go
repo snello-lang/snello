@@ -487,7 +487,7 @@ func buildAnswerer(t *testing.T, dir string) {
 	pkgs := imp.Packages()
 	libs := make([]lower.Library, len(pkgs))
 	for i, p := range pkgs {
-		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links}
+		libs[i] = lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links, Std: p.Std}
 	}
 
 	src, err := c.Emit(file, f, info, libs...)

@@ -42,6 +42,22 @@ type Library struct {
 	Syntax *ast.File
 	CFiles []string
 	Links  []string // the system libraries the package's module links
+	Std    bool     // a package of the standard library, whose files are the compiler's own (SourceName)
+}
+
+// StdFiles are the files of the standard library's packages among
+// libraries, which the line tables name under SourceName's directory:
+// files and not names, since a program's own file may have the name of
+// one of the library's.
+func StdFiles(libraries []Library) map[*token.File]bool {
+	out := make(map[*token.File]bool)
+	for _, l := range libraries {
+		if l.Std {
+			out[l.File] = true
+		}
+	}
+
+	return out
 }
 
 // A Binding is a package's C side, which the backends compile with the

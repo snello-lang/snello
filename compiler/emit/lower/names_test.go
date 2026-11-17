@@ -35,6 +35,9 @@ func main() {}`))
 	pair := pkg.Scope().Lookup("Pair").(*types.TypeName)
 	fn := pkg.Scope().Lookup("f").(*types.Func)
 	intT := types.Typ[types.Int]
+	named := func(name string) types.Type {
+		return types.NewNamed(types.NewTypeName(token.NoPos, name, nil), types.NewStruct(nil), nil)
+	}
 	param := func(typ types.Type) *types.Var { return types.NewVar(token.NoPos, "p", typ) }
 	tests := []struct {
 		t    types.Type
@@ -52,7 +55,10 @@ func main() {}`))
 		{types.NewChan(types.RecvOnly, intT), "recvchan_int"},
 		{types.NewResult(intT, types.Typ[types.Error]), "res_int_error"},
 		{types.Ordering, "Ordering"},
-		{types.Instantiate(pair.Type().(*types.Named), []types.Type{intT}), "Pair_int"},
+		{types.Instantiate(pair.Type().(*types.Named), []types.Type{intT}), "sn_g4Pair_int"},
+		{types.NewSlice(types.Ordering), "slice_8Ordering"},        // a name inside after its length
+		{types.NewTuple(named("A_x"), named("B")), "tup2_3A_x_1B"}, // one with an underscore after its length, so that
+		{types.NewTuple(named("A"), named("x_B")), "tup2_1A_3x_B"}, // these two are two
 	}
 	for _, tt := range tests {
 		if got := Mangle(tt.t); got != tt.want {
@@ -65,12 +71,12 @@ func main() {}`))
 	}
 
 	inst := types.Instantiate(pair.Type().(*types.Named), []types.Type{intT})
-	if inst.Symbol() != "Pair_int" {
+	if inst.Symbol() != "sn_g4Pair_int" {
 		t.Errorf("the instance's symbol is %q after NamedName, want it kept", inst.Symbol())
 	}
 
-	if got := NamedName(inst); got != "Pair_int" {
-		t.Errorf("NamedName again = %q, want Pair_int", got)
+	if got := NamedName(inst); got != "sn_g4Pair_int" {
+		t.Errorf("NamedName again = %q, want sn_g4Pair_int", got)
 	}
 
 	if got := FuncName(fn); got != "sn__f" || fn.Symbol() != "sn__f" {
@@ -148,5 +154,42 @@ func main() {}`))
 
 	if got := RecvType(pkg.Scope().Lookup("render").(*types.Func).Type().(*types.Signature)); got != nil {
 		t.Errorf("a function has a receiver type %v", got)
+	}
+}
+
+// TestSourceName holds a file's name in the line tables to the path the
+// compiler read it from, and a file of the standard library's to its
+// name under StdSources, which no file of the user's has.
+func TestSourceName(t *testing.T) {
+	if got := SourceName("src/prog/main.snello", false); got != "src/prog/main.snello" {
+		t.Errorf("a program's file is named %q", got)
+	}
+
+	if got := SourceName("json/json.snello", true); got != StdSources+"json/json.snello" {
+		t.Errorf("a file of the standard library's is named %q", got)
+	}
+
+	fmtFile, ownFmt := token.NewFileSet().AddFile("fmt/fmt.snello", 1), token.NewFileSet().AddFile("fmt/fmt.snello", 1)
+	if std := StdFiles([]Library{{File: fmtFile, Std: true}, {File: ownFmt}}); !std[fmtFile] || std[ownFmt] {
+		t.Errorf("the standard library's files are %v; a program's own file of the same name is not one", std)
+	}
+}
+
+// TestBasicAndCaseNames holds the C names both backends describe a value
+// by: a basic type's, and an enum's tag and cases'.
+func TestBasicAndCaseNames(t *testing.T) {
+	for kind, want := range map[types.BasicKind]string{types.Int: "sn_int", types.Bool: "bool", types.String: "sn_string", types.Uint8: "uint8_t", types.Float64: "double"} {
+		if got := BasicName(types.Typ[kind]); got != want {
+			t.Errorf("BasicName(%v) = %q, want %q", kind, got, want)
+		}
+	}
+
+	shape := types.NewNamed(types.NewTypeName(token.NoPos, "Shape", nil), nil, nil)
+	if got := TagName(shape); got != "sn_tag_Shape" {
+		t.Errorf("TagName = %q", got)
+	}
+
+	if got := CaseName(shape, types.NewVariant(token.NoPos, "Rect", shape, 1, nil)); got != "sn_case_5_Shape_Rect" {
+		t.Errorf("CaseName = %q", got)
 	}
 }

@@ -26,6 +26,10 @@ import (
 )
 
 const (
+	// cloneMark starts what a C compiler adds to the name of a copy it
+	// makes of a function, foo.isra.0, whose frame is the function's.
+	cloneMark = "."
+
 	// tableSymbol names the table in the program, snello.h's
 	// sn_trace_table, headerBytes long, whose first word, the reference,
 	// takes its own linked address, from which the runtime learns how far
@@ -472,6 +476,23 @@ func (b *builder) rows(d *dwarf.Data, s section) ([]row, error) {
 		scopes = append(scopes, cuScopes...)
 	}
 
+	starts := make(map[uint64]string, len(s.symbols))
+	named := make(map[string]bool, len(s.symbols))
+	for _, sym := range s.symbols {
+		starts[s.address+sym.offset] = sym.name
+		named[sym.name] = true
+	}
+
+	for _, sc := range scopes { // a function the debugging information names as the program does, by no symbol of the object: its symbol is the object's at its start
+		if named[sc.name] || len(sc.ranges) == 0 {
+			continue
+		}
+
+		if name, ok := starts[sc.ranges[0][0]]; ok {
+			sc.name, _, _ = strings.Cut(name, cloneMark) // a compiler's copy of a function, foo.isra.0, is the function's frame
+		}
+	}
+
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].address < lines[j].address })
 	for _, l := range lines { // a function's own file: that of its first line of its own, outside any call written into it
 		if l.end || !strings.HasSuffix(l.file, snelloSuffix) {
@@ -587,11 +608,16 @@ func readScopes(d *dwarf.Data, r *dwarf.Reader, files []string) ([]*scope, error
 	return out, nil
 }
 
-// nameOf is a subprogram's or an inlined call's function name, through
-// its abstract origin or its specification when it has one.
+// nameOf is a subprogram's or an inlined call's function symbol: its
+// linkage name, which a function named as the program names it carries
+// beside that name, or else its name, which is the symbol of a
+// function named by it; through its abstract origin or its
+// specification when it has one.
 func nameOf(d *dwarf.Data, e *dwarf.Entry) string {
-	if name, ok := e.Val(dwarf.AttrName).(string); ok {
-		return name
+	for _, attr := range []dwarf.Attr{dwarf.AttrLinkageName, dwarf.AttrName} { // the symbol, which a function named as the program names it carries as its linkage name
+		if name, ok := e.Val(attr).(string); ok {
+			return name
+		}
 	}
 
 	for _, attr := range []dwarf.Attr{dwarf.AttrAbstractOrigin, dwarf.AttrSpecification} {

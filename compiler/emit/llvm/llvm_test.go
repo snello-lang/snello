@@ -446,7 +446,7 @@ func emit(t *testing.T, name, src string, cfg Config) ([]byte, error) {
 func libraries(imp *importer.Importer) []lower.Library {
 	var libs []lower.Library
 	for _, p := range imp.Packages() {
-		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links})
+		libs = append(libs, lower.Library{Path: p.Path, File: p.File, Syntax: p.Syntax, CFiles: p.CFiles, Links: p.Links, Std: p.Std})
 	}
 
 	return libs
@@ -590,4 +590,19 @@ func irFunction(t *testing.T, out, name string) string {
 
 	t.Fatalf("no function written as @%s", name)
 	return ""
+}
+
+// TestQuoteNames holds the module's names past ASCII to the IR's quoted
+// form, and leaves the ASCII names, a string and a comment as they are.
+func TestQuoteNames(t *testing.T) {
+	module := "; from größe.snello\n%Größe = type { i32 }\ndefine i64 @sn__größe(%Größe %a0) {\n  %t1 = load i64, ptr @sn_x\n}\n!1 = !DIFile(filename: \"größe @ä.snello\")\n"
+	want := "; from größe.snello\n%\"Größe\" = type { i32 }\ndefine i64 @\"sn__größe\"(%\"Größe\" %a0) {\n  %t1 = load i64, ptr @sn_x\n}\n!1 = !DIFile(filename: \"größe @ä.snello\")\n"
+	if got := string(quoteNames([]byte(module))); got != want {
+		t.Errorf("quoteNames =\n%s\nwant\n%s", got, want)
+	}
+
+	ascii := []byte("define void @sn_main() {\n}\n")
+	if got := quoteNames(ascii); &got[0] != &ascii[0] {
+		t.Error("a module of ASCII alone was copied")
+	}
 }

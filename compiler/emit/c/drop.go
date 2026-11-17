@@ -33,9 +33,10 @@ import (
 // break or continue leaves; and how many statement temporaries were
 // pending when it opened.
 type frame struct {
-	vars []owned
-	loop bool
-	mark int
+	vars  []owned
+	loop  bool
+	mark  int
+	names []string // the C names of the locals declared in it, free again when it ends (locals.go)
 }
 
 // An owned value the emitter will drop: its C text, its Snello type,
@@ -200,13 +201,13 @@ func (e *Emitter) dropper(t types.Type, pos token.Pos) string {
 			}
 		}
 	case *types.Enum:
-		b.WriteString("\tswitch (v->tag) {\n")
+		b.WriteString("\tswitch ((int)v->tag) {\n")
 		for i := 0; i < u.NumVariants(); i++ {
 			variant := u.Variant(i)
 			put(&b, "\tcase ", strconv.Itoa(i), ":\n")
 			for j, f := range variant.Fields() {
 				if needsDrop(f.Type()) {
-					put(&b, "\t\t", e.dropOf("v->"+variantMember(variant)+"."+fieldName(f, j), f.Type(), pos), "\n")
+					put(&b, "\t\t", e.dropOf("v->"+lower.VariantMember(variant)+"."+lower.VariantField(f, j), f.Type(), pos), "\n")
 				}
 			}
 
@@ -275,6 +276,10 @@ func (e *Emitter) push(loop bool) {
 func (e *Emitter) pop(pos token.Pos) {
 	n := len(e.frames) - 1
 	e.dropVars(e.frames[n].vars, pos)
+	for _, name := range e.frames[n].names {
+		e.names.declared[name]--
+	}
+
 	e.frames = e.frames[:n]
 }
 
@@ -534,16 +539,15 @@ func (e *Emitter) cloneOf(v string, t types.Type, pos token.Pos) string {
 // elemDropper returns what drops one element of a channel, or a key or
 // a value of a map, of type elem, for the runtime to drop what the
 // container still holds: an adapter over the element's dropper that
-// takes the runtime's untyped pointer, named by lower.ElemDrop, which
-// the analysis of the linked program takes for the targets of the
-// runtime's calls of such drops; or NULL for an element that owns
-// nothing.
-func (e *Emitter) elemDropper(elem types.Type, pos token.Pos) string {
+// takes the runtime's untyped pointer, under name, lower.ChanDrop's or
+// lower.ElemDrop's, which the analysis of the linked program takes for
+// the targets of the runtime's calls of such drops; or NULL for an
+// element that owns nothing.
+func (e *Emitter) elemDropper(name string, elem types.Type, pos token.Pos) string {
 	if !needsDrop(elem) {
 		return "NULL"
 	}
 
-	name := lower.ElemDrop(elem)
 	if e.state[name] != undeclared {
 		return name
 	}

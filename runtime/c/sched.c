@@ -37,6 +37,7 @@
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,7 +97,8 @@ enum { ring_size = 256, stack_cache = 32 }; // a cache of 64 was measured no bet
 // pool's lock, and an empty one takes dead_batch from it.
 enum { dead_cache = 64, dead_batch = 32 };
 
-static const size_t stack_size = 256 << 10; // a guarded stack, as step one's thread stack was
+enum { guarded_bytes = 256 << 10 };             // a guarded stack, as step one's thread stack was
+static const size_t stack_size = guarded_bytes; // in the type its sizes are worked out in
 
 // A task's stack is of one of stack_classes classes. A task whose stack
 // the analysis of the linked program bounds gets the smallest small
@@ -249,6 +251,8 @@ static inline uintptr_t stack_pointer(void) {
 // clang-format off
 #if defined(__aarch64__)
 #define SN_FRAME 160
+#define SN_SAVED_FP 80 // x29 in the frame below, and x30, the return address, after it
+#define SN_SAVED_PC 88
 __asm__(
     ".text\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
@@ -291,6 +295,8 @@ __asm__(
     "  ret\n");
 #elif defined(__x86_64__)
 #define SN_FRAME 64
+#define SN_SAVED_FP 40 // rbp, pushed first, and the return address the call left above it
+#define SN_SAVED_PC 48
 __asm__(
     ".text\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
@@ -332,11 +338,7 @@ __asm__(
 static void *make_context(void *top, void (*entry)(void)) {
     uint8_t *sp = (uint8_t *)top - SN_FRAME;
     memset(sp, 0, SN_FRAME);
-#if defined(__aarch64__)
-    ((void **)sp)[11] = (void *)entry; // x30, the return address
-#else
-    ((void **)sp)[6] = (void *)entry; // above the six pushed registers
-#endif
+    ((void **)sp)[SN_SAVED_PC / sizeof(void *)] = (void *)entry; // where the switch returns to
     return sp;
 }
 
@@ -371,6 +373,9 @@ struct sn_task {
                            // do not share it
     uintptr_t *trace; // the frames of its last panic, kept for a test's runner under a catch that keeps them, or NULL
     int ntrace;
+#ifdef SN_DEBUG
+    struct sn_task *debug_next; // the task spawned before it, on the list a debugger's script walks
+#endif
 };
 
 // A mark is where a panic on the task stops: the jump back, the guard
@@ -470,6 +475,40 @@ static __attribute__((noinline)) task *my_task(void) {
 }
 
 static task main_task; // the main thread's own stack and context
+
+#ifdef SN_DEBUG
+// debug_tasks is every task of a debug build, newest first, for a
+// debugger's script: each is pushed once, as it is made, and never
+// popped, since a debug build never frees a task's record.
+static task *_Atomic debug_tasks;
+
+static void debug_list(task *t) {
+    task *head = atomic_load_explicit(&debug_tasks, memory_order_relaxed);
+    do {
+        t->debug_next = head;
+    } while (
+        !atomic_compare_exchange_weak_explicit(&debug_tasks, &head, t, memory_order_release, memory_order_relaxed));
+}
+
+// The table of sn_debugger_table, kept by the linker though nothing of
+// the program reads it.
+__attribute__((used)) const sn_debugger_table sn_debugger = {
+    .tasks = &debug_tasks,
+    .next = offsetof(task, debug_next),
+    .sp = offsetof(task, sp),
+    .state = offsetof(task, state),
+    .run = offsetof(task, run),
+    .saved_fp = SN_SAVED_FP,
+    .saved_pc = SN_SAVED_PC,
+    .stack_room = guarded_bytes,
+    .running = RUNNING,
+    .runnable = RUNNABLE,
+    .parking = PARKING,
+    .parked = PARKED,
+    .done = DONE,
+    .woken = WOKEN,
+};
+#endif
 
 // The counts the workers write as tasks move, each on a cache line of
 // its own, so that a worker writing one does not take from the others
@@ -835,6 +874,12 @@ sn_task *sn_self(void) {
     if (t == NULL) {
         atomic_store(&main_task.state, RUNNING);
         current = t = &main_task;
+#ifdef SN_DEBUG
+        static atomic_bool listed; // made on each thread that asks before it runs a task, listed once
+        if (!atomic_exchange(&listed, true)) {
+            debug_list(t);
+        }
+#endif
     }
 
     return t;
@@ -2216,6 +2261,7 @@ void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound
     }
 
 #ifdef SN_DEBUG
+    debug_list(t);
     t->bound = bound;
     if (t->stack_class != guarded) {
         memset(t->stack, stack_paint, class_size(t->stack_class));

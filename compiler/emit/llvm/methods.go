@@ -779,11 +779,11 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 
 	kdrop, vdrop := "null", "null"
 	if needsDrop(t.Key()) {
-		kdrop = "@" + e.elemDropper(t.Key(), pos)
+		kdrop = "@" + e.elemDropper(lower.ElemDrop(t.Key()), t.Key(), pos)
 	}
 
 	if needsDrop(t.Value()) {
-		vdrop = "@" + e.elemDropper(t.Value(), pos)
+		vdrop = "@" + e.elemDropper(lower.ElemDrop(t.Value()), t.Value(), pos)
 	}
 
 	put(&e.consts, "@", name, " = internal constant %sn_map_type { i64 ", e.sizeOf(t.Key()).s, ", i64 ", e.sizeOf(t.Value()).s, ", ptr @", hash, ", ptr @", eq, ", ptr ", kdrop, ", ptr ", vdrop, " }\n")

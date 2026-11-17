@@ -339,6 +339,26 @@ void sn_trace_each(const uintptr_t *walked, int n,
 int sn_trace_line(char *line, size_t room, const char *name, const char *file, int32_t at);
 const uintptr_t *sn_task_trace(int *n); // sched.c: the running task's kept frames
 
+// sn_debugger_table is what a debug build publishes, as sn_debugger,
+// for a debugger's script to list the program's tasks with (snello.py's
+// tasks command), so that the script holds no layout of the runtime's:
+// the address of the list of every task, newest first, which the
+// runtime pushes each task onto once and never pops, since a debug
+// build never frees a task's record; where a task's record holds its
+// link on that list, its saved context, its state and the function it
+// runs; where a saved context holds the frame pointer and the return
+// address, from which its frames are walked; the most a task's frames
+// span; and the values of the states. The order is the script's.
+typedef struct {
+    const void *tasks;
+    int32_t next, sp, state, run, saved_fp, saved_pc, stack_room;
+    int32_t running, runnable, parking, parked, done, woken;
+} sn_debugger_table;
+
+#ifdef SN_DEBUG
+extern const sn_debugger_table sn_debugger;
+#endif
+
 // sn_chan_drop_untimed, chan.c's for timer.c, takes one handle of a
 // channel with no timer in a wheel away, and frees the channel with the
 // last: the handle a timer held, once the timer is out of its wheel.

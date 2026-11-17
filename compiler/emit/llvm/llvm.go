@@ -26,10 +26,12 @@ package llvm
 
 import (
 	"bytes"
-	"path/filepath"
+	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/lower"
@@ -53,6 +55,16 @@ const (
 	generated     = "<generated>"
 	entry         = "main"
 	generatedLine = 1
+
+	// releaseUnit and debugUnit say what a compile unit describes: a
+	// release build's line tables alone, of optimized code, and a debug
+	// build's full information, of the program's own code, unoptimized.
+	releaseUnit = "isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly"
+
+	// plainNameChars are the characters beside letters and digits the
+	// IR's names hold unquoted.
+	plainNameChars = "$._-"
+	debugUnit      = "isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug"
 )
 
 // A Config says how the program is built: with the runtime's checks,
@@ -88,9 +100,15 @@ type Emitter struct {
 	meta       bytes.Buffer                    // the metadata nodes of the line tables: the unit, the files, each function and each location
 	nmeta      int                             // metadata nodes written so far
 	unit       int                             // the compile unit's node
-	dfiles     map[string]int                  // each source file's node
+	dfiles     map[*token.File]int             // each source file's node, the generated file's under nil
 	mainAt     token.Position                  // where the program declares main, which the entry is written at
+	mainFile   *token.File                     // and the file it is in
 	dlocs      map[dloc]int                    // each location's node
+	ownFiles   map[*token.File]bool            // the program's own files, whose functions a debug build leaves unoptimized
+	stdFiles   map[*token.File]bool            // the standard library's files, named under lower.SourceName's directory
+	dir        string                          // the directory a debug build runs in, which the line tables' relative names are from
+	dtypes     map[string]int                  // each type's node in a debug build, by the type (debug.go)
+	cnodes     map[string]int                  // each C type's node, by its C name (debug.go)
 	within     string                          // the name the program gives the function being written, for its closures' names
 	nclosure   int                             // closures of the function being written, counted for their names
 	traced     []lower.TraceName               // every function written, its symbol and the name the program gives it
@@ -147,6 +165,9 @@ type function struct {
 	sig        *types.Signature
 	tmp        int
 	terminated bool
+	file       int  // the node of its subprogram's file, which its variables and blocks are in
+	line       int  // the line of the statement being written
+	artificial bool // a function of the backend's own, all at line zero in a debug build, which a debugger steps through
 }
 
 // A loop open at this point: the label continue jumps to, the one
@@ -220,7 +241,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 		abi:        target,
 		info:       info,
 		file:       files[0],
-		dfiles:     make(map[string]int),
+		dfiles:     make(map[*token.File]int),
 		dlocs:      make(map[dloc]int),
 		decls:      make(map[string]string),
 		state:      make(map[string]bool),
@@ -237,7 +258,27 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 		localConst: make(map[*types.Const]string),
 		boxWords:   words,
 	}
-	e.unit = e.metaNode("distinct !DICompileUnit(language: DW_LANG_C99, file: !" + strconv.Itoa(e.dfile(filepath.Base(files[0].Name()))) + ", producer: \"snello\", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)")
+	if cfg.Debug { // what a debug build alone describes and marks (debug.go)
+		e.dir, _ = os.Getwd() // the compile directory, as a C compiler records its own, none when it cannot be read: a release build records none, so that the linker writes no map of the objects into its binary
+		e.dtypes, e.cnodes = make(map[string]int), make(map[string]int)
+		e.ownFiles = make(map[*token.File]bool, len(files)+len(libraries))
+		for _, f := range files {
+			e.ownFiles[f] = true
+		}
+
+		for _, l := range libraries {
+			e.ownFiles[l.File] = !l.Std // a package of the program's own is its own code too
+		}
+	}
+
+	e.stdFiles = lower.StdFiles(libraries)
+
+	kind := releaseUnit
+	if cfg.Debug {
+		kind = debugUnit
+	}
+
+	e.unit = e.metaNode("distinct !DICompileUnit(language: DW_LANG_C99, file: !" + strconv.Itoa(e.dfile(files[0], files[0].Name())) + ", producer: \"snello\", " + kind + ")")
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -324,7 +365,72 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	out.Write(e.funcs.Bytes())
 	e.lineTables(&out)
 	out.WriteString(emptyGroup) // every function's attributes, which Targeted fills with the target's (target.go): last, as it looks for it
-	return out.Bytes(), 0, nil
+	return quoteNames(out.Bytes()), 0, nil
+}
+
+// quoteNames quotes each name of the module, a global's after @ or a
+// type's after %, that holds a byte past ASCII, a Snello name of another
+// script's letters: the IR's plain names hold letters, digits and
+// plainNameChars alone, and LLVM's own printer quotes any other name as
+// it writes it. A string and a comment are left as they are. A module
+// all of ASCII, nearly every one, comes back as it is.
+func quoteNames(module []byte) []byte {
+	if !slices.ContainsFunc(module, func(c byte) bool { return c >= utf8.RuneSelf }) {
+		return module
+	}
+
+	out := make([]byte, 0, len(module)+len(module)/64)
+	for i := 0; i < len(module); i++ {
+		c := module[i]
+		switch {
+		case c == '"': // a string or a quoted name, to its end, past each escaped byte
+			j := i + 1
+			for j < len(module) && module[j] != '"' {
+				if module[j] == '\\' {
+					j++
+				}
+
+				j++
+			}
+
+			end := min(j+1, len(module))
+			out = append(out, module[i:end]...)
+			i = end - 1
+		case c == ';': // a comment, to the line's end
+			j := i
+			for j < len(module) && module[j] != '\n' {
+				j++
+			}
+
+			out = append(out, module[i:j]...)
+			i = j - 1
+		case c == '@' || c == '%':
+			j, wide := i+1, false
+			for j < len(module) && nameByte(module[j]) {
+				wide = wide || module[j] >= utf8.RuneSelf
+				j++
+			}
+
+			out = append(out, c)
+			if wide {
+				out = append(append(append(out, '"'), module[i+1:j]...), '"')
+			} else {
+				out = append(out, module[i+1:j]...)
+			}
+
+			i = j - 1
+		default:
+			out = append(out, c)
+		}
+	}
+
+	return out
+}
+
+// nameByte reports whether c may be in a name: a letter, a digit, one
+// of plainNameChars, or a byte of a letter past ASCII.
+func nameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c >= utf8.RuneSelf || strings.IndexByte(plainNameChars, c) >= 0
 }
 
 // mainFunc writes the module's main: the runtime set up, the program's
@@ -333,10 +439,15 @@ func (e *Emitter) mainFunc() {
 	e.declare("sn_init", "declare void @sn_init(i32, ptr)")
 	e.declare("sn_finish", "declare i32 @sn_finish()")
 	outer := e.begin(nil)
-	e.fn.subprogram = e.subprogramNode(entry, e.mainAt) // the entry is main's, at main's position and under its name, its first instruction at main's line: the optimizer writes main into it, and a trace names the entry's code main
+	at := e.mainAt
+	if e.mainFile == nil { // a program of no main, which only a test emits: the entry is the generated file's
+		at = token.Position{Filename: generated}
+	}
+
+	e.fn.subprogram = e.subprogramNode(entry, "", e.mainFile, at, "") // the entry is main's, at main's position and under its name, its first instruction at main's line: the optimizer writes main into it, and a trace names the entry's code main
 	e.fn.loc = e.locationAt(e.mainAt.Line)
 	e.inst("call void @sn_init(i32 %argc, ptr %argv)")
-	e.fn.scope = e.metaNode("!DILexicalBlockFile(scope: !" + strconv.Itoa(e.fn.subprogram) + ", file: !" + strconv.Itoa(e.dfile(generated)) + ", discriminator: 0)") // the rest is the generated file's
+	e.fn.scope = e.metaNode("!DILexicalBlockFile(scope: !" + strconv.Itoa(e.fn.subprogram) + ", file: !" + strconv.Itoa(e.dfile(nil, generated)) + ", discriminator: 0)") // the rest is the generated file's
 	e.fn.loc = "!" + strconv.Itoa(e.metaNode("!DILocation(line: "+strconv.Itoa(generatedLine)+", column: 0, scope: !"+strconv.Itoa(e.fn.scope)+")"))
 	e.inst("call void @sn_main()")
 	for i := len(e.statics) - 1; i >= 0; i-- {
@@ -392,6 +503,7 @@ func (e *Emitter) end(section *bytes.Buffer, outer *function) {
 	clear(f.pre)
 	f.loops, f.frames, f.temps, f.defers = f.loops[:0], f.frames[:0], f.temps[:0], f.defers[:0]
 	f.captured, f.sig, f.tmp, f.terminated, f.subprogram, f.loc = nil, nil, 0, false, 0, ""
+	f.scope, f.file, f.line, f.artificial = 0, 0, 0, false
 	e.spare = append(e.spare, f)
 	e.fn = outer
 }
@@ -493,7 +605,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	e.making = nil
 	e.declare("sn_lazy_make", "declare void @sn_lazy_make(ptr, ptr, ptr)")
 	put(&e.globalDefs, g, " = internal global ", t, " zeroinitializer\n", g, "_lazy = internal global { i32, ptr } zeroinitializer\n")
-	sp := e.subprogramNode(g+"_get", token.Position{Filename: generated})
+	sp := e.subprogramNode(g+"_get", "", nil, token.Position{Filename: generated}, "")
 	loc := e.metaNode("!DILocation(line: 0, column: 0, scope: !" + strconv.Itoa(sp) + ")")
 	at := ", !dbg !" + strconv.Itoa(loc)
 	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
@@ -617,34 +729,32 @@ func (e *Emitter) metaNode(text string) int {
 	return e.nmeta
 }
 
-// dfile is the node of a source file, written once.
-func (e *Emitter) dfile(name string) int {
-	if n, ok := e.dfiles[name]; ok {
+// dfile is the node of the source file f, read as name, or of the
+// generated file for nil, written once, named from the directory the
+// build runs in, as a C compiler names one, the standard library's
+// under its directory (lower.SourceName).
+func (e *Emitter) dfile(f *token.File, name string) int {
+	if n, ok := e.dfiles[f]; ok {
 		return n
 	}
 
-	n := e.metaNode("!DIFile(filename: " + strconv.Quote(name) + ", directory: \"\")")
-	e.dfiles[name] = n
+	n := e.metaNode("!DIFile(filename: " + strconv.Quote(lower.SourceName(name, e.stdFiles[f])) + ", directory: " + strconv.Quote(e.dir) + ")")
+	e.dfiles[f] = n
 	return n
 }
 
 // location is the node of the location at pos in the function being
 // written, "!n", written once a line.
 func (e *Emitter) location(pos token.Pos) string {
-	line := 0
-	if pos.IsValid() {
-		line = e.file.Position(pos).Line
-	}
-
-	return e.locationAt(line)
+	return e.locationAt(e.lineOf(pos))
 }
 
 // locationAt is the node of the location at line in the function being
 // written.
 func (e *Emitter) locationAt(line int) string {
-	scope := e.fn.subprogram
-	if e.fn.scope != 0 {
-		scope = e.fn.scope
+	scope := e.scopeNow()
+	if e.cfg.Debug && e.fn.artificial {
+		line = 0 // the backend's own code, which a debugger steps through
 	}
 
 	k := dloc{scope, line}
@@ -657,29 +767,53 @@ func (e *Emitter) locationAt(line int) string {
 	return "!" + strconv.Itoa(n)
 }
 
-// subprogram writes the node of the function being written, named by
-// its symbol as the C backend's functions are, at the file and line of
+// subprogram writes the node of the function being written, of the
+// symbol name and the program's name display, at the file and line of
 // pos, or at no line of the generated file for a function of the
 // backend's own, and gives the function its first location. Every
 // function of the module has one, since the optimizer drops the
 // locations of a function it writes into one that has none, and the
 // program's functions are written into the module's main and into the
 // helpers.
-func (e *Emitter) subprogram(name string, pos token.Pos) {
-	p := token.Position{Filename: generated}
+func (e *Emitter) subprogram(name, display string, pos token.Pos, typ string) {
+	p, f := token.Position{Filename: generated}, (*token.File)(nil)
 	if pos.IsValid() {
-		p = e.file.Position(pos)
+		p, f = e.file.Position(pos), e.file
 	}
 
-	e.fn.subprogram = e.subprogramNode(name, p)
+	e.fn.subprogram = e.subprogramNode(name, display, f, p, typ)
+	e.fn.file, e.fn.line = e.dfile(f, p.Filename), p.Line
 	e.fn.loc = e.locationAt(p.Line)
 }
 
-// subprogramNode writes the node of a function named name at p, a
-// position of the program's or of the generated file.
-func (e *Emitter) subprogramNode(name string, p token.Position) int {
-	file := e.dfile(filepath.Base(p.Filename))
-	return e.metaNode("distinct !DISubprogram(name: " + strconv.Quote(name) + ", scope: !" + strconv.Itoa(file) + ", file: !" + strconv.Itoa(file) + ", line: " + strconv.Itoa(p.Line) + ", type: !DISubroutineType(types: !{null}), scopeLine: " + strconv.Itoa(p.Line) + ", spFlags: DISPFlagDefinition, unit: !" + strconv.Itoa(e.unit) + ")")
+// subprogramNode writes the node of the function of the symbol name at
+// p, a position of the program's file f or of the generated file for
+// nil, of the type typ, a function of no type given for none. In a
+// debug build a function of the program's own is named as the program
+// names it, display, so that a debugger shows and stops at the
+// program's names: the symbol is the binary's, at the function's
+// address, which a debugger and the trace's table read it from; a
+// function of the standard library, which the optimizer may write into
+// another, where it has no address of its own, keeps its symbol for a
+// name. A function of the generated file is marked as the compiler's,
+// which a debugger steps through.
+func (e *Emitter) subprogramNode(name, display string, f *token.File, p token.Position, typ string) int {
+	file := e.dfile(f, p.Filename)
+	if typ == "" {
+		typ = "!DISubroutineType(types: !{null})"
+	}
+
+	flags := ""
+	if e.cfg.Debug && p.Filename == generated {
+		flags = "flags: DIFlagArtificial, "
+	}
+
+	shown := name
+	if e.cfg.Debug && display != "" && e.ownFiles[f] { // the program's own, never written into another in a debug build: named as the program names it, which a debugger shows and stops at
+		shown = display
+	}
+
+	return e.metaNode("distinct !DISubprogram(name: " + strconv.Quote(shown) + ", scope: !" + strconv.Itoa(file) + ", file: !" + strconv.Itoa(file) + ", line: " + strconv.Itoa(p.Line) + ", type: " + typ + ", scopeLine: " + strconv.Itoa(p.Line) + ", " + flags + "spFlags: DISPFlagDefinition, unit: !" + strconv.Itoa(e.unit) + ")")
 }
 
 // lineTables writes what the module's line tables need beside the
@@ -718,13 +852,18 @@ func (e *Emitter) traceNames(out *bytes.Buffer) {
 func (e *Emitter) writeBody(name, display string, sig *types.Signature, params []*types.Var, leading []string, prologue func() map[*types.Var]string, body *ast.BlockStmt, pos token.Pos) {
 	e.traced = append(e.traced, lower.TraceName{Symbol: name, Name: display})
 	if name == lower.MainName {
-		e.mainAt = e.file.Position(pos) // of this file, which the entry is written after
+		e.mainAt, e.mainFile = e.file.Position(pos), e.file // of this file, which the entry is written after
 		e.traced = append(e.traced, lower.TraceName{Symbol: entry, Name: display})
 	}
 	outerWithin, outerClosures := e.within, e.nclosure
 	e.within, e.nclosure = display, 0
 	outer := e.begin(sig)
-	e.subprogram(name, pos)
+	typ := ""
+	if e.cfg.Debug {
+		typ = e.routineType(sig.Results(), params)
+	}
+
+	e.subprogram(name, display, pos, typ)
 	list := append([]string(nil), leading...)
 	for i, p := range params {
 		list = append(list, e.irType(p.Type(), pos)+" %a"+strconv.Itoa(i))
@@ -736,7 +875,7 @@ func (e *Emitter) writeBody(name, display string, sig *types.Signature, params [
 	}
 
 	e.function(sig, params, env, body)
-	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", e.ownAttrs(), funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n\n")
 	e.within, e.nclosure = outerWithin, outerClosures
@@ -757,8 +896,14 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 			continue
 		}
 
-		slot := e.local(p)
-		e.inst("store " + e.irType(p.Type(), p.Pos()) + " %a" + strconv.Itoa(i) + ", ptr " + slot + ", align 8")
+		slot := e.parameter(p, i+1)
+		store := "store " + e.irType(p.Type(), p.Pos()) + " %a" + strconv.Itoa(i) + ", ptr " + slot + ", align 8"
+		if e.debugging() {
+			put(&e.fn.body, "  ", store, "\n") // of the prologue, at no line, as clang writes it, so that a breakpoint on the function stops after it, with the parameter in its slot
+		} else {
+			e.inst(store)
+		}
+
 		if p == framed && !stays { // the body may keep the slice past the call: a buffer of its own, before anything else
 			e.unframe(slot, e.sub(p.Type()).(*types.Slice).Elem())
 		}
@@ -793,10 +938,17 @@ func (e *Emitter) resultType(t types.Type, pos token.Pos) string {
 	return e.irType(t, pos)
 }
 
-// local gives the variable v a stack slot and returns its address.
+// local gives the variable v a stack slot and returns its address;
+// parameter gives the arg-th parameter of the function one, which a
+// debugger is told is a parameter.
 func (e *Emitter) local(v *types.Var) string {
+	return e.parameter(v, 0)
+}
+
+func (e *Emitter) parameter(v *types.Var, arg int) string {
 	slot := e.slot(e.irType(v.Type(), v.Pos()))
 	e.fn.vars[v] = slot
+	e.declareVar(v, slot, arg)
 	return slot
 }
 

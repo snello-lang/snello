@@ -33,9 +33,15 @@ const (
 	Unbounded = 0xFFFFFFFF
 
 	// ElemDropPrefix starts the name of the function a backend gives
-	// the runtime to drop an element of a channel, or a key or a value
-	// of a map, with, and no other function's.
+	// the runtime to drop a key or a value of a map with, and
+	// ChanDropPrefix the name of the one it gives to drop an element of a
+	// channel with, and no other function's: two names, so that the
+	// analysis of the linked program takes a call of the channels' drops
+	// for a call of the channels' element types' alone, and not of every
+	// type a map holds, which a type holding a channel would otherwise
+	// make a recursion of.
 	ElemDropPrefix = "sn_elemdrop_"
+	ChanDropPrefix = "sn_chandrop_"
 
 	// KeyHashPrefix and KeyEqPrefix start the names of the hash and the
 	// equality of a map's key type a backend gives the runtime, in the
@@ -60,10 +66,15 @@ const (
 	CaughtPrefix = "sn_caught_"
 )
 
-// ElemDrop returns the name of the function that drops an element of
-// type elem of a channel or a map, which the runtime is given.
+// ElemDrop returns the name of the function that drops a key or a
+// value of type elem of a map, and ChanDrop that of the one that drops
+// an element of type elem of a channel, which the runtime is given.
 func ElemDrop(elem types.Type) string {
 	return ElemDropPrefix + Mangle(elem)
+}
+
+func ChanDrop(elem types.Type) string {
+	return ChanDropPrefix + Mangle(elem)
 }
 
 // KeyHash and KeyEq return the names of the hash and the equality of a

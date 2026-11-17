@@ -43,6 +43,16 @@ typedef struct {
 // Snello; every emitted function carries this.
 #define SN_UNUSED __attribute__((unused))
 
+// SN_NODEBUG keeps the inline functions below out of the debugging
+// information where the compiler is clang, so that a debugger steps over
+// them as over the runtime's own, which are compiled with none; gcc has
+// no such mark, and the debugger's script has gdb skip this header.
+#if defined(__clang__)
+#define SN_NODEBUG __attribute__((nodebug))
+#else
+#define SN_NODEBUG
+#endif
+
 // A failure the program passes on with ?, which it seldom takes: the
 // compiler lays the path that goes on straight and keeps the calls on
 // it inline, as it does for a path that panics.
@@ -76,7 +86,7 @@ void sn_free(void *p);
 // sn_alloc. A string of no bytes owns none, since a capacity of zero
 // says a string owns nothing: the block is freed, and the empty
 // literal returned.
-static inline sn_string sn_owned(void *p, int64_t n) {
+static inline SN_NODEBUG sn_string sn_owned(void *p, int64_t n) {
     if (n == 0) {
         sn_free(p);
         return SN_STR("", 0);
@@ -116,7 +126,7 @@ typedef struct sn_lazy {
     struct sn_task *maker;
 } sn_lazy;
 
-static inline bool sn_lazy_ready(sn_lazy *o) { return __atomic_load_n(&o->state, __ATOMIC_ACQUIRE) == 2; }
+static inline SN_NODEBUG bool sn_lazy_ready(sn_lazy *o) { return __atomic_load_n(&o->state, __ATOMIC_ACQUIRE) == 2; }
 
 void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name);
 _Noreturn void sn_exit(int code);
@@ -231,13 +241,13 @@ SN_BITS_NAMED(64, 64, uint64_t)
 // task that ends is kept unfreed for a while, so that a wake that
 // reaches it stops the program. A release build does none of this.
 // The character classes of a byte, ASCII only, as a byte is one.
-static inline bool sn_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
-static inline bool sn_is_space(uint8_t c) {
+static inline SN_NODEBUG bool sn_is_digit(uint8_t c) { return c >= '0' && c <= '9'; }
+static inline SN_NODEBUG bool sn_is_space(uint8_t c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
-static inline bool sn_is_upper(uint8_t c) { return c >= 'A' && c <= 'Z'; }
-static inline bool sn_is_lower(uint8_t c) { return c >= 'a' && c <= 'z'; }
-static inline bool sn_is_letter(uint8_t c) { return sn_is_upper(c) || sn_is_lower(c); }
+static inline SN_NODEBUG bool sn_is_upper(uint8_t c) { return c >= 'A' && c <= 'Z'; }
+static inline SN_NODEBUG bool sn_is_lower(uint8_t c) { return c >= 'a' && c <= 'z'; }
+static inline SN_NODEBUG bool sn_is_letter(uint8_t c) { return sn_is_upper(c) || sn_is_lower(c); }
 
 #ifdef SN_DEBUG
 #define SN_POISON(place) memset(&(place), 0xDD, sizeof(place))
@@ -251,7 +261,7 @@ void sn_check_block(const void *p, const char *what);
 // The block is what catches a borrow of a local that outlived it: the
 // C compiler may drop the poisoning of a variable whose scope just
 // ended, but never the poisoning of the heap.
-static inline void sn_check_string(sn_string s) {
+static inline SN_NODEBUG void sn_check_string(sn_string s) {
     if (s.len < 0 || s.cap < 0) {
         sn_released("string");
     }
@@ -261,19 +271,19 @@ static inline void sn_check_string(sn_string s) {
     }
 }
 
-static inline void sn_check_slice(const sn_slice *s) {
+static inline SN_NODEBUG void sn_check_slice(const sn_slice *s) {
     if (s->len < 0 || (s->cap < 0 && s->cap != SN_VIEW && s->cap != SN_CALLER)) {
         sn_released("slice");
     }
 }
 
-static inline void sn_check_len(int64_t len) {
+static inline SN_NODEBUG void sn_check_len(int64_t len) {
     if (len < 0) {
         sn_released("slice");
     }
 }
 
-static inline void sn_check_map(const sn_map *m) {
+static inline SN_NODEBUG void sn_check_map(const sn_map *m) {
     if (m->len < 0 || m->cap < 0) {
         sn_released("map");
     }
@@ -294,7 +304,7 @@ static inline void sn_check_map(const sn_map *m) {
 
 // sn_index checks an index against a length and returns it, so every
 // element access is checked, as in Snello.
-static inline int64_t sn_index(int64_t i, int64_t len) {
+static inline SN_NODEBUG int64_t sn_index(int64_t i, int64_t len) {
     sn_check_len(len);
     if ((uint64_t)i >= (uint64_t)len) {
         sn_bounds(i, len);
@@ -312,7 +322,7 @@ int sn_finish(void);
 // value, which is what a moved-from place holds, and leaves the place
 // poisoned in a debug build. A file closes its descriptor, never one
 // of the three standard streams.
-static inline void sn_string_drop(sn_string *s) {
+static inline SN_NODEBUG void sn_string_drop(sn_string *s) {
     sn_check_string(*s);
     if (s->cap > 0) {
         sn_free((void *)s->ptr);
@@ -323,7 +333,7 @@ static inline void sn_string_drop(sn_string *s) {
 
 // sn_string_free is the drop of a string the runtime was given to
 // consume, which has no place to poison.
-static inline void sn_string_free(sn_string s) { sn_string_drop(&s); }
+static inline SN_NODEBUG void sn_string_free(sn_string s) { sn_string_drop(&s); }
 
 // sn_slice_own panics, naming what, when s is a view; every operation
 // that changes a slice's length or replaces its buffer asks it first,
@@ -502,7 +512,7 @@ uint64_t sn_hash_mix(uint64_t h, uint64_t v);
 
 // sn_hash_string hashes a map key, checked first in a debug build, as
 // a poisoned length would be read as an enormous one.
-static inline uint64_t sn_hash_string(sn_string s) {
+static inline SN_NODEBUG uint64_t sn_hash_string(sn_string s) {
     sn_check_string(s);
     return sn_hash_bytes(s.ptr, (size_t)s.len);
 }
@@ -562,9 +572,11 @@ bool sn_isprint(int32_t r); // a letter, mark, number, punctuation or symbol, or
 
 // A string and a []byte have one layout, so a conversion copies the
 // bytes into a new owned value of the other kind.
-static inline sn_string sn_bytes_to_string(sn_slice_u8 b) { return sn_string_clone((sn_string){ b.ptr, b.len, 0 }); }
+static inline SN_NODEBUG sn_string sn_bytes_to_string(sn_slice_u8 b) {
+    return sn_string_clone((sn_string){ b.ptr, b.len, 0 });
+}
 
-static inline sn_slice_u8 sn_string_to_bytes(sn_string s) {
+static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
     sn_string c = sn_string_clone(s);
     if (c.cap == 0) {
         return (sn_slice_u8){ 0 }; // no bytes: an empty slice, not a view of static data

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +69,25 @@ func TestTableAndPatch(t *testing.T) {
 		}
 
 		return obj
+	}
+
+	// A debug build's object: unoptimized, with every variable, type and
+	// block described, and its file named by its path, which the table
+	// holds by its base name.
+	debugObj := compile("debug", strings.ReplaceAll(program, `"grid.snello"`, `"src/grid.snello"`), "-O0", "-g")
+	debugTable, debugLayout, err := Table(debugObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"\x00grid.snello\x00", "\x00at\x00", "\x00render\x00"} {
+		if !strings.Contains(string(debugTable[headerBytes:]), want) {
+			t.Errorf("the debug object's table lacks %q", want)
+		}
+	}
+
+	if !slices.Contains(debugLayout.Anchors, "at") || !slices.Contains(debugLayout.Anchors, "render") {
+		t.Errorf("the debug object's anchors %v lack at or render", debugLayout.Anchors)
 	}
 
 	obj := compile("program", program)

@@ -203,7 +203,7 @@ func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []str
 
 	if h != nil {
 		h.done = e.temp()
-		e.line("sn_chan *" + h.done + " = sn_chan_make(" + e.elemSize(h.elem, pos) + ", 1, " + e.elemDropper(h.elem, pos) + ", " + e.madeAt(pos) + ");")
+		e.line("sn_chan *" + h.done + " = sn_chan_make(" + e.elemSize(h.elem, pos) + ", 1, " + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos) + ", " + e.madeAt(pos) + ");")
 		e.line(block + ".sn_done = sn_chan_clone(" + h.done + ", " + strconv.Itoa(lower.HandleBoth) + ");")
 	}
 

@@ -331,7 +331,7 @@ func (e *Emitter) payload(place string, t types.Type, v *types.Variant, i int) (
 	}
 
 	f := v.Fields()[i]
-	return place + "." + variantMember(v) + "." + fieldName(f, i), f.Type()
+	return place + "." + lower.VariantMember(v) + "." + lower.VariantField(f, i), f.Type()
 }
 
 func tupleElem(place string, t types.Type, i int) (string, types.Type) {

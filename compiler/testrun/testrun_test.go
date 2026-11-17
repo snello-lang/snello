@@ -576,7 +576,7 @@ func TestRun(t *testing.T) {
 
 	var libs []lower.Library
 	for _, lib := range imp.Packages() {
-		libs = append(libs, lower.Library{Path: lib.Path, File: lib.File, Syntax: lib.Syntax})
+		libs = append(libs, lower.Library{Path: lib.Path, File: lib.File, Syntax: lib.Syntax, Std: lib.Std})
 	}
 
 	for _, backend := range []string{"llvm", "c"} {

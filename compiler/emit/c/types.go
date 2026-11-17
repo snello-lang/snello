@@ -43,7 +43,7 @@ func (e *Emitter) cType(t types.Type, pos token.Pos) string {
 func (e *Emitter) typeName(t types.Type, pos token.Pos) string {
 	switch t := t.(type) {
 	case *types.Basic:
-		return basicType(t)
+		return lower.BasicName(t)
 	case *types.Named:
 		name := lower.NamedName(t)
 		if (t.TypeArgs() != nil || t.Obj().Pos() == token.NoPos) && e.state[name] == undeclared { // an instance, or the predeclared Ordering: no declaration of the program writes it
@@ -175,7 +175,7 @@ func (e *Emitter) defineNamed(t *types.Named, pos token.Pos) {
 	case *types.Struct:
 		e.defineStruct(t, pos, func() string { return e.structFields(u, pos) + liveFlag(t) })
 	case *types.Enum:
-		e.defineStruct(t, pos, func() string { return e.enumFields(u, pos) + liveFlag(t) })
+		e.defineStruct(t, pos, func() string { return e.enumFields(t, u, pos) + liveFlag(t) })
 	default:
 		if e.state[name] != undeclared {
 			return
@@ -231,9 +231,23 @@ func liveFlag(t types.Type) string {
 
 // enumFields writes a tagged union: the tag is the variant's index and
 // the payload of each variant with fields is a struct named after it.
-func (e *Emitter) enumFields(en *types.Enum, pos token.Pos) string {
+// The tag is an enumeration of the cases, of the size of the int it
+// would be, so that a debugger names the case it holds, as a C
+// programmer's tagged union is described; an enum of no case keeps an
+// int, since C has no empty enumeration.
+func (e *Emitter) enumFields(t *types.Named, en *types.Enum, pos token.Pos) string {
 	var b strings.Builder
-	b.WriteString("\tint tag;\n")
+	if en.NumVariants() == 0 {
+		b.WriteString("\tint tag;\n")
+	} else {
+		cases := make([]string, en.NumVariants())
+		for i := range cases {
+			cases[i] = lower.CaseName(t, en.Variant(i))
+		}
+
+		put(&b, "\tenum ", lower.TagName(t), " { ", strings.Join(cases, ", "), " } tag;\n")
+	}
+
 	var payloads strings.Builder
 	for i := 0; i < en.NumVariants(); i++ {
 		v := en.Variant(i)
@@ -243,10 +257,10 @@ func (e *Emitter) enumFields(en *types.Enum, pos token.Pos) string {
 
 		payloads.WriteString("\t\tstruct {\n")
 		for j, f := range v.Fields() {
-			put(&payloads, "\t\t\t", e.cType(f.Type(), pos), " ", fieldName(f, j), ";\n")
+			put(&payloads, "\t\t\t", e.cType(f.Type(), pos), " ", lower.VariantField(f, j), ";\n")
 		}
 
-		put(&payloads, "\t\t} ", variantMember(v), ";\n")
+		put(&payloads, "\t\t} ", lower.VariantMember(v), ";\n")
 	}
 
 	if payloads.Len() > 0 {
@@ -254,26 +268,6 @@ func (e *Emitter) enumFields(en *types.Enum, pos token.Pos) string {
 	}
 
 	return b.String()
-}
-
-// fieldName is the C name of a variant's field: its own name, or its
-// position when the variant declares it without one.
-func fieldName(f *types.Var, i int) string {
-	if f.Name() == "" {
-		return "f" + strconv.Itoa(i)
-	}
-
-	return lower.Ident(f.Name())
-}
-
-// variantMember is the name of a variant's payload inside the union,
-// which must not collide with the tag beside it.
-func variantMember(v *types.Variant) string {
-	if v.Name() == "tag" {
-		return "tag_"
-	}
-
-	return lower.Ident(v.Name())
 }
 
 // depth is the number of C pointers in front of the value of a Snello

@@ -96,6 +96,7 @@ var cLibraryStacks = map[string]int64{
 	"__errno_location":            24,
 	"__error":                     16,
 	"__memcpy_chk":                24,
+	"__memset_chk":                24,
 	"__sched_cpucount":            152,
 	"__stack_chk_fail":            2760,
 	"abort":                       312,

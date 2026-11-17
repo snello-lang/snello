@@ -35,6 +35,7 @@ type Package struct {
 	Pkg    *types.Package
 	CFiles []string // the .c and .h files of the package's directory, its C side; none for a standard package, whose C side is the runtime
 	Links  []string // the system libraries the package's module links, from its link lines
+	Std    bool     // a package of the standard library, whose files are the compiler's own
 }
 
 // An Importer loads the packages a program imports, each once,
@@ -431,7 +432,7 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 
 	entries := make([]*Package, len(syntax))
 	for i, f := range syntax {
-		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links}
+		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links, conf.Standard}
 	}
 
 	return pkg, entries, nil

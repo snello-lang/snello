@@ -145,12 +145,12 @@ func TestPatchErrors(t *testing.T) {
 }
 
 func TestRuntimeOptions(t *testing.T) {
-	drop, hash, init := lower.ElemDropPrefix+"a", lower.KeyHashPrefix+"k", lower.LazyInitPrefix+"v"
+	drop, chanDrop, hash, init := lower.ElemDropPrefix+"a", lower.ChanDropPrefix+"c", lower.KeyHashPrefix+"k", lower.LazyInitPrefix+"v"
 	caught := lower.SpawnBody(0) + " " + lower.CatchAdapter(types.Typ[types.Int])
-	img := image(arm64, fn(drop, 8), fn(lower.ElemDropPrefix+"b.isra.0", 8), fn(hash, 8), fn(init, 8), fn(mapPrefix+"find", 8), fn("other", 8), fn(lower.SpawnBody(0), 8), fn(lower.CatchAdapter(types.Typ[types.Int]), 8))
+	img := image(arm64, fn(drop, 8), fn(chanDrop, 8), fn(lower.ChanDropPrefix+"b.isra.0", 8), fn(hash, 8), fn(init, 8), fn(mapPrefix+"find", 8), fn("other", 8), fn(lower.SpawnBody(0), 8), fn(lower.CatchAdapter(types.Typ[types.Int]), 8))
 	opts := img.runtimeOptions()
-	if got := strings.Join(opts.Targets[chanDropCaller], " "); got != drop {
-		t.Errorf("the channel's drops %q, want the one not a copy", got)
+	if got := strings.Join(opts.Targets[chanDropCaller], " "); got != chanDrop {
+		t.Errorf("the channel's drops %q, want the channels' one not a copy, and no map's", got)
 	}
 
 	if got := strings.Join(opts.Targets[lazyMaker], " "); got != init {
@@ -163,7 +163,7 @@ func TestRuntimeOptions(t *testing.T) {
 
 	for _, f := range []string{mapPrefix + "find", "find_slot"} {
 		if got := strings.Join(opts.Targets[f], " "); got != drop+" "+hash {
-			t.Errorf("%s's targets %q, want the drop and the key hash", f, got)
+			t.Errorf("%s's targets %q, want the map's drop and the key hash, and no channel's", f, got)
 		}
 	}
 

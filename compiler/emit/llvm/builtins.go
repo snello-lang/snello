@@ -302,7 +302,7 @@ func (e *Emitter) makeCall(x *ast.CallExpr) value {
 
 		drop := value{"ptr", "null"} // what the last handle drops each value still in the channel with
 		if needsDrop(u.Elem()) {
-			drop.s = "@" + e.elemDropper(u.Elem(), x.Pos())
+			drop.s = "@" + e.elemDropper(lower.ChanDrop(u.Elem()), u.Elem(), x.Pos())
 		}
 
 		return e.rt("sn_chan_make", "ptr", e.sizeOf(u.Elem()), n, drop, value{"ptr", e.constBytes(e.madeAt(x.Pos()))})
