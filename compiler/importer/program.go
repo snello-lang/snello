@@ -186,7 +186,7 @@ func LoadPackage(dir string, info *types.Info) error {
 // it holds no package. A test file, NAME_test.snello, is not among
 // them: it is part of the package only when the package is tested.
 func SourceFiles(dir string) ([]string, error) {
-	return filesOf(dir, func(name string) bool { return strings.HasSuffix(name, ".snello") && !IsTestFile(name) })
+	return filesOf(dir, func(name string) bool { return strings.HasSuffix(name, SourceExt) && !IsTestFile(name) })
 }
 
 // TestFiles returns the test files of dir, NAME_test.snello, sorted by

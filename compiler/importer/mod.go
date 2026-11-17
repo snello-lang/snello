@@ -17,6 +17,9 @@ import (
 )
 
 const (
+	// SourceExt ends the name of every Snello source file.
+	SourceExt = ".snello"
+
 	// ModFile is the name of the module file, and modFileMode the
 	// permissions WriteModFile gives one: read by all, written by its
 	// owner.

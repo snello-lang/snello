@@ -150,7 +150,7 @@ func PlanStd(importPath string) (*Plan, error) {
 
 			p.Tests = append(p.Tests, name)
 			srcs = append(srcs, src)
-		case strings.HasSuffix(e.Name(), ".snello"):
+		case strings.HasSuffix(e.Name(), importer.SourceExt):
 			p.Files = append(p.Files, name)
 		}
 	}
@@ -196,7 +196,7 @@ func PlanStdDir(dir string) (*Plan, error) {
 		return nil, errors.New(dir + ": no _test.snello files")
 	}
 
-	p := &Plan{Path: importPath, Files: []string{filepath.Join(abs, path.Base(importPath)+".snello")}, Tests: tests, StdDir: stdDir}
+	p := &Plan{Path: importPath, Files: []string{filepath.Join(abs, path.Base(importPath)+importer.SourceExt)}, Tests: tests, StdDir: stdDir}
 	var pkg string
 	if p.Names, pkg, err = testNames(tests, nil); err != nil {
 		return nil, err
@@ -245,12 +245,12 @@ func stdPackage(dir string) (stdDir, importPath string, ok bool) {
 	}
 
 	importPath = filepath.ToSlash(rel)
-	if _, err := std.Sources.ReadFile(importPath + "/" + path.Base(importPath) + ".snello"); err != nil {
+	if _, err := std.Sources.ReadFile(importPath + "/" + path.Base(importPath) + importer.SourceExt); err != nil {
 		return "", "", false
 	}
 
 	for _, p := range importer.Paths() { // the whole library, as the embedded copy lists it
-		if _, err := os.Stat(filepath.Join(stdDir, filepath.FromSlash(p), path.Base(p)+".snello")); err != nil {
+		if _, err := os.Stat(filepath.Join(stdDir, filepath.FromSlash(p), path.Base(p)+importer.SourceExt)); err != nil {
 			return "", "", false
 		}
 	}
@@ -424,7 +424,7 @@ func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
 
 	bindings := lower.Bindings(info, libs)
 	var out []byte
-	if backend == "llvm" {
+	if backend == lower.LLVMBackend {
 		out, err = llvm.EmitFiles(llvm.Config{}, prog.Files, prog.Syntax, info, libs...)
 	} else {
 		out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libs...)
@@ -444,7 +444,7 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	name := "snello-test"
 	var bin string
 	var log []byte
-	if backend == "llvm" {
+	if backend == lower.LLVMBackend {
 		bin, log, err = llvm.Build(outDir, name, src, false, bindings...)
 	} else {
 		bin, log, err = c.Build(outDir, name, src, false, bindings...)

@@ -51,44 +51,106 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
-// currentDir is the directory a command works in when it is given none.
-const currentDir = "."
+const (
+	// The commands, the first argument of every command line.
+	lexCommand   = "lex"
+	parseCommand = "parse"
+	checkCommand = "check"
+	buildCommand = "build"
+	emitCommand  = "emit"
+	testCommand  = "test"
+	debugCommand = "debug"
+	initCommand  = "init"
+
+	// commandArg is where the command stands among the arguments, and
+	// pathArgs how many arguments a command line has that names one
+	// path after its command: snello check FILE.
+	commandArg = 1
+	pathArgs   = 3
+
+	// The exit codes: a command that did its work, one that failed,
+	// and one given wrongly, as the flag package exits.
+	exitSuccess = 0
+	exitFailure = 1
+	exitUsage   = 2
+
+	// The flags: the backend, a build for a debugger, and those test
+	// passes on to the program it builds, each written after flagStart;
+	// a test program runs each test once unless -count says otherwise.
+	backendFlag  = "backend"
+	debugFlag    = "debug"
+	verboseFlag  = "v"
+	failfastFlag = "failfast"
+	shuffleFlag  = "shuffle"
+	shortFlag    = "short"
+	updateFlag   = "update"
+	runFlag      = "run"
+	benchFlag    = "bench"
+	countFlag    = "count"
+	timeoutFlag  = "timeout"
+	flagStart    = "-"
+	defaultCount = 1
+
+	// currentDir is the directory a command works in when it is given
+	// none, and mainPackage the package clause of a program.
+	currentDir  = "."
+	mainPackage = "main"
+
+	// buildDirPattern names the directory a build works in, removed
+	// when it ends, and binaryMode the permissions of the binary it
+	// writes: run and read by all, written by its owner.
+	buildDirPattern = "snello-build"
+	binaryMode      = 0o755
+
+	// newline is the token the lexer gives for the end of a line, which
+	// lex prints quoted so that the listing keeps one token a line.
+	newline = "\n"
+)
+
+// testBoolFlags and testStringFlags are the flags test passes on to the
+// program it builds as they were given.
+var (
+	testBoolFlags   = []string{verboseFlag, failfastFlag, shuffleFlag, shortFlag, updateFlag}
+	testStringFlags = []string{runFlag, benchFlag}
+)
 
 func main() {
-	if len(os.Args) < 2 {
+	if len(os.Args) <= commandArg {
 		usage()
 	}
 
-	switch os.Args[1] {
-	case "lex":
-		if len(os.Args) != 3 {
-			usage()
-		}
-		os.Exit(lex(os.Args[2]))
-	case "parse":
-		if len(os.Args) != 3 {
+	args := os.Args[commandArg+1:]
+	switch os.Args[commandArg] {
+	case lexCommand:
+		if len(os.Args) != pathArgs {
 			usage()
 		}
 
-		os.Exit(parse(os.Args[2]))
-	case "check":
-		if len(os.Args) != 3 {
+		os.Exit(lex(args[0]))
+	case parseCommand:
+		if len(os.Args) != pathArgs {
 			usage()
 		}
 
-		os.Exit(check(os.Args[2]))
-	case "build":
-		path, backend, debug := buildArgs(os.Args[2:], true)
+		os.Exit(parse(args[0]))
+	case checkCommand:
+		if len(os.Args) != pathArgs {
+			usage()
+		}
+
+		os.Exit(check(args[0]))
+	case buildCommand:
+		path, backend, debug := buildArgs(args, true)
 		os.Exit(build(path, backend, debug))
-	case "emit":
-		path, backend, debug := buildArgs(os.Args[2:], true)
+	case emitCommand:
+		path, backend, debug := buildArgs(args, true)
 		os.Exit(emit(path, backend, debug))
-	case "test":
-		os.Exit(test(os.Args[2:]))
-	case "debug":
-		os.Exit(debug(os.Args[2:]))
-	case "init":
-		os.Exit(initModule(os.Args[2:], os.Stderr))
+	case testCommand:
+		os.Exit(test(args))
+	case debugCommand:
+		os.Exit(debug(args))
+	case initCommand:
+		os.Exit(initModule(args, os.Stderr))
 	default:
 		usage()
 	}
@@ -100,7 +162,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
 	fmt.Fprintln(os.Stderr, "       snello init [DIR]")
 	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
-	os.Exit(2)
+	os.Exit(exitUsage)
 }
 
 // test builds the tests of the package in a directory into a program
@@ -110,51 +172,51 @@ func usage() {
 // package, run from its sources as edited with the library's
 // privileges.
 func test(args []string) int {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs := flag.NewFlagSet(testCommand, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	backend := fs.String("backend", "llvm", "the backend: llvm, or c for the reference backend")
+	backend := fs.String(backendFlag, lower.LLVMBackend, "the backend: llvm, or c for the reference backend")
 	bools := map[string]*bool{}
-	for _, name := range []string{"v", "failfast", "shuffle", "short", "update"} {
+	for _, name := range testBoolFlags {
 		bools[name] = fs.Bool(name, false, "")
 	}
 
 	strs := map[string]*string{}
-	for _, name := range []string{"run", "bench"} {
+	for _, name := range testStringFlags {
 		strs[name] = fs.String(name, "", "")
 	}
 
-	count := fs.Int("count", 1, "")
-	timeout := fs.Duration("timeout", 0, "")
+	count := fs.Int(countFlag, defaultCount, "")
+	timeout := fs.Duration(timeoutFlag, 0, "")
 
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || *backend != "c" && *backend != "llvm" {
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || !isBackend(*backend) {
 		usage()
 	}
 
 	var pass []string
-	for _, name := range []string{"v", "failfast", "shuffle", "short", "update"} {
+	for _, name := range testBoolFlags {
 		if *bools[name] {
-			pass = append(pass, "-"+name)
+			pass = append(pass, flagStart+name)
 		}
 	}
 
-	for _, name := range []string{"run", "bench"} {
+	for _, name := range testStringFlags {
 		if *strs[name] != "" {
-			pass = append(pass, "-"+name, *strs[name])
+			pass = append(pass, flagStart+name, *strs[name])
 		}
 	}
 
-	if *count != 1 {
-		pass = append(pass, "-count", strconv.Itoa(*count))
+	if *count != defaultCount {
+		pass = append(pass, flagStart+countFlag, strconv.Itoa(*count))
 	}
 
 	if *timeout > 0 { // the program counts in whole seconds
-		pass = append(pass, "-timeout", strconv.Itoa(int((*timeout+time.Second-1)/time.Second)))
+		pass = append(pass, flagStart+timeoutFlag, strconv.Itoa(int((*timeout+time.Second-1)/time.Second)))
 	}
 
 	code, err := testrun.Run(fs.Arg(0), *backend, pass, os.Stdout, os.Stderr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return exitFailure
 	}
 
 	return code
@@ -163,14 +225,14 @@ func test(args []string) int {
 // buildArgs reads the flags of build and emit: the backend, and for a
 // build whether the runtime's checks are wanted.
 func buildArgs(args []string, withDebug bool) (path, backend string, debug bool) {
-	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	fs := flag.NewFlagSet(buildCommand, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.StringVar(&backend, "backend", "llvm", "the backend: llvm, or c for the reference backend")
+	fs.StringVar(&backend, backendFlag, lower.LLVMBackend, "the backend: llvm, or c for the reference backend")
 	if withDebug {
-		fs.BoolVar(&debug, "debug", false, "build for a debugger, unoptimized, with the runtime's checks")
+		fs.BoolVar(&debug, debugFlag, false, "build for a debugger, unoptimized, with the runtime's checks")
 	}
 
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || backend != "c" && backend != "llvm" {
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || !isBackend(backend) {
 		usage()
 	}
 
@@ -180,7 +242,7 @@ func buildArgs(args []string, withDebug bool) (path, backend string, debug bool)
 func lex(path string) int {
 	src, ok := readSource(path)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	file := token.NewFile(path, len(src))
@@ -195,34 +257,34 @@ func lex(path string) int {
 			break
 		}
 
-		if lit == "\n" {
-			lit = `"\n"`
+		if lit == newline {
+			lit = strconv.Quote(newline)
 		}
 
 		fmt.Printf("%s\t%s\t%s\n", file.Position(pos), tok, lit)
 	}
 
 	if s.ErrorCount > 0 {
-		return 1
+		return exitFailure
 	}
 
-	return 0
+	return exitSuccess
 }
 
 func parse(path string) int {
 	src, ok := readSource(path)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	f, file, err := parser.ParseFile(path, src)
 	ast.Fprint(os.Stdout, f, file)
 	if err != nil {
 		printErrors(err)
-		return 1
+		return exitFailure
 	}
 
-	return 0
+	return exitSuccess
 }
 
 // check parses and checks a program, a file or a directory, and prints
@@ -234,7 +296,7 @@ func parse(path string) int {
 func check(path string) int {
 	names, dir, ok := programFiles(path)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	warnModule(os.Stderr, names)
@@ -248,10 +310,10 @@ func check(path string) int {
 
 	if err != nil {
 		printErrors(err)
-		return 1
+		return exitFailure
 	}
 
-	return 0
+	return exitSuccess
 }
 
 // initModule writes a module file into the directory args name, the
@@ -260,7 +322,7 @@ func check(path string) int {
 // there is refused, and the command exits 1. A flag or more than one
 // directory is a usage error. It creates and writes one file.
 func initModule(args []string, w io.Writer) int {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs := flag.NewFlagSet(initCommand, flag.ContinueOnError)
 	fs.SetOutput(w)
 	if err := fs.Parse(args); err != nil || fs.NArg() > 1 {
 		usage()
@@ -273,12 +335,12 @@ func initModule(args []string, w io.Writer) int {
 
 	name, err := importer.WriteModFile(dir)
 	if err != nil {
-		fmt.Fprintln(w, "snello init: "+err.Error())
-		return 1
+		fmt.Fprintln(w, "snello "+initCommand+": "+err.Error())
+		return exitFailure
 	}
 
-	fmt.Fprintln(w, "snello init: wrote "+name)
-	return 0
+	fmt.Fprintln(w, "snello "+initCommand+": wrote "+name)
+	return exitSuccess
 }
 
 // warnModule prints to w, standard error, before the program is
@@ -301,7 +363,7 @@ func isMain(name string) bool {
 	}
 
 	f, _, _ := parser.ParseFile(name, src)
-	return f == nil || f.Name == nil || f.Name.Name == "main"
+	return f == nil || f.Name == nil || f.Name.Name == mainPackage
 }
 
 // emit prints what build would compile: the C source, or the IR
@@ -309,11 +371,11 @@ func isMain(name string) bool {
 func emit(path, backend string, debug bool) int {
 	src, _, ok := emitSource(path, backend, debug)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	os.Stdout.Write(src)
-	return 0
+	return exitSuccess
 }
 
 // build compiles a program, a file or a directory, to a native binary
@@ -322,25 +384,25 @@ func emit(path, backend string, debug bool) int {
 func build(path, backend string, debug bool) int {
 	_, isDir, ok := programFiles(path)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	src, bindings, ok := emitSource(path, backend, debug)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
-	dir, err := os.MkdirTemp("", "snello-build")
+	dir, err := os.MkdirTemp("", buildDirPattern)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return exitFailure
 	}
 
 	defer os.RemoveAll(dir)
 	name := programName(path, isDir)
 	var bin string
 	var out []byte
-	if backend == "llvm" {
+	if backend == lower.LLVMBackend {
 		bin, out, err = llvm.Build(dir, name, src, debug, bindings...)
 	} else {
 		bin, out, err = c.Build(dir, name, src, debug, bindings...)
@@ -348,12 +410,12 @@ func build(path, backend string, debug bool) int {
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n%s", backend, err, out)
-		return 1
+		return exitFailure
 	}
 
 	built, err := os.ReadFile(bin)
 	if err == nil {
-		err = os.WriteFile(name, built, 0o755)
+		err = os.WriteFile(name, built, binaryMode)
 	}
 
 	if err == nil && debug {
@@ -362,10 +424,10 @@ func build(path, backend string, debug bool) int {
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n%s", err, out)
-		return 1
+		return exitFailure
 	}
 
-	return 0
+	return exitSuccess
 }
 
 // emitSource loads a program, a file or a directory, and emits it
@@ -394,7 +456,7 @@ func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool
 	if err == nil {
 		libs := libraries(imp)
 		bindings = lower.Bindings(info, libs)
-		if backend == "llvm" {
+		if backend == lower.LLVMBackend {
 			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
 			if err == nil {
 				out, _ = llvm.Targeted(out) // as build compiles it, so that emit prints the same module; without clang, the module as emitted
@@ -439,7 +501,7 @@ func programFiles(path string) (names []string, dir, ok bool) {
 	}
 
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "%s: no .snello files in the directory\n", path)
+		fmt.Fprintf(os.Stderr, "%s: no %s files in the directory\n", path, importer.SourceExt)
 		return nil, true, false
 	}
 
@@ -458,7 +520,7 @@ func programName(path string, dir bool) string {
 		}
 	}
 
-	return strings.TrimSuffix(filepath.Base(path), ".snello")
+	return strings.TrimSuffix(filepath.Base(path), importer.SourceExt)
 }
 
 // libraries returns the packages the importer loaded, as the backends
@@ -471,6 +533,11 @@ func libraries(imp *importer.Importer) []lower.Library {
 	}
 
 	return libs
+}
+
+// isBackend reports whether name is a backend's: llvm, or c.
+func isBackend(name string) bool {
+	return name == lower.LLVMBackend || name == lower.CBackend
 }
 
 // printErrors writes each error of a list on its own line.
@@ -507,8 +574,8 @@ func readSource(path string) ([]byte, bool) {
 // isSource reports whether path names a Snello source file, and says
 // so to stderr when it does not.
 func isSource(path string) bool {
-	if !strings.HasSuffix(path, ".snello") {
-		fmt.Fprintf(os.Stderr, "%s: Snello source files end in .snello\n", path)
+	if !strings.HasSuffix(path, importer.SourceExt) {
+		fmt.Fprintf(os.Stderr, "%s: Snello source files end in %s\n", path, importer.SourceExt)
 		return false
 	}
 
