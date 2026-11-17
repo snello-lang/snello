@@ -206,6 +206,7 @@ func TestMissingError(t *testing.T) {
 		t.Errorf("set: %q", got)
 	}
 
+	t.Setenv(CCEnv, "")
 	if got := (&MissingError{Name: "cc", Env: CCEnv, Reason: "cannot run (exit status 1)"}).what(); got != "cc cannot run (exit status 1)" {
 		t.Errorf("a reason: %q", got)
 	}
