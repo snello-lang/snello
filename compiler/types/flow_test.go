@@ -125,6 +125,17 @@ func TestFlowModel(t *testing.T) {
 		src  string
 		want []string
 	}{
+		// A value borrows none of its own data, which changes or goes with it, however the borrow reaches it.
+		{"struct V { r ref string; own string }\nfunc f(a ref string) { v := V{r: a, own: \"b\".Clone()}; v.r = ref v.own; print(v.r) }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct V { r ref string; own string }\nfunc f(a ref string) { v := V{r: a, own: \"b\".Clone()}; x := ref v.own; v.r = x; print(v.r) }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct V { r ref string?; own string }\nfunc f() { v := V{r: None, own: \"b\".Clone()}; v.r = Some(ref v.own); print(v.r) }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct In { r ref string }\nstruct V { in In; own string }\nfunc f(a ref string) { v := V{in: In{r: a}, own: \"b\".Clone()}; v.in.r = ref v.own; print(v.in.r) }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct V { r ref string; own string }\nfunc f(a ref string) { v := V{r: a, own: \"b\".Clone()}; v = V{r: ref v.own, own: \"c\".Clone()}; print(v.r) }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct V { r ref string; own string }\nfunc f(v V) V { v.r = ref v.own; return v }", []string{"cannot store a borrow of v.own in v: a value cannot borrow its own data"}},
+		{"struct V { r ref string; own string }\nfunc (v mut V) point() { v.r = ref v.own }", []string{"cannot store a borrow of v.own in v: v is the caller's, which may change or free v.own while the borrow is kept"}},
+		{"struct V { r ref string; own string }\nfunc f(v mut V) { v.r = v.r }", nil},                                               // what it held already
+		{"struct N { v int; next *N? }\nfunc f(head mut N) { cur := mut head; for { n := cur.next ?? break; cur = mut *n } }", nil}, // a chain walked through a borrow
+
 		// A copy of a ref borrow holds what it held: the source may be given another without freeing it.
 		{"func g(p ref string) ref string { z := \"z\".Clone(); r := ref z; q := r; r = p; print(r); return q }", []string{"cannot return a borrow of local z"}},
 		{"func f() { s := \"a\".Clone(); z := \"z\".Clone(); r := ref s; q := r; r = ref z; keep(s); print(q, r) }", []string{"cannot move s: s is borrowed by q"}},

@@ -10,7 +10,7 @@
 // per operation, and hashes with the map's seed.
 package set
 
-import "fmt"
+import ("fmt"; "iter")
 
 // A Set is a collection of values of type T, each held once. It owns
 // its values and lends them for reading. It is moved, or lent with ref
@@ -29,8 +29,9 @@ struct Set<T: Eq + Hash> impl fmt.Stringer {
 
 // An Iter walks a set's values in the order they were inserted, lending
 // each; it lends the set for as long as it lives, so the set cannot
-// change during the walk. Set.Iter makes one.
-struct Iter<T: Eq + Hash> {
+// change during the walk. Set.Iter makes one, and the adapters of
+// iter.Iterator wrap it.
+struct Iter<T: Eq + Hash> impl iter.Iterator<ref T> {
 	s  ref Set<T>
 	at int
 }
@@ -117,7 +118,11 @@ func (s ref Set<T>) String() string {
 	return out + "]"
 }
 
-// Next lends the next value of the walk, or None once the walk is over.
+// Next lends the next value of the walk, in the order the values were
+// inserted, or None once every value has been given. The value is lent
+// from the set, not from the Iter, so it stays good while the walk goes
+// on and for as long as the set is lent; nothing is copied. A call
+// steps past the slots of values removed from the set.
 func (it mut Iter<T>) Next() ref T? {
 	if (i, v, _) := it.s.m.Entry(it.at) {
 		it.at = i + 1

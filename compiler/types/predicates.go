@@ -353,9 +353,11 @@ func allCopyVars(vs []*Var) bool {
 
 // dropReads reports whether dropping a value of type t may run a Drop
 // method that reads what the value borrows: t implements Drop, or holds
-// by value a part that does. Such a drop is a use of what the value
-// borrows. What a slice, map or pointer holds cannot hold a borrow, so
-// a Drop behind one reads none, and only the parts held by value count.
+// by value a part that does, or holds elements that do in a slice.
+// Such a drop is a use of what the value borrows. What a map or pointer
+// holds cannot hold a borrow, so a Drop behind one reads none; a slice
+// can, the one Collect gives over borrowed items, and its drop drops
+// each element.
 func dropReads(t Type) bool {
 	return dropReadsIn(t, map[*Named]bool{})
 }
@@ -378,6 +380,8 @@ func dropReadsIn(t Type, inside map[*Named]bool) bool {
 	case *Tuple:
 		return slices.ContainsFunc(t.elems, func(e Type) bool { return dropReadsIn(e, inside) })
 	case *Array:
+		return dropReadsIn(t.elem, inside)
+	case *Slice:
 		return dropReadsIn(t.elem, inside)
 	case *Option:
 		return dropReadsIn(t.elem, inside)

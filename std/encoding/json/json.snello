@@ -35,7 +35,7 @@
 // not JSON, and arrays and objects nested more than 128 deep.
 package json
 
-import ("io"; "math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
+import ("io"; "iter"; "math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
 
 // hex are the digits of a \u escape, by their value.
 const hex = "0123456789abcdef"
@@ -175,7 +175,15 @@ struct Error impl Error {
 	msg string
 }
 
-// Kind is the kind of a JSON value.
+// A Kind is the kind of a JSON value, one of JSON's six: null, a
+// boolean, a number, a string, an array or an object. Doc.Kind and
+// Value.Kind return one, to choose what to read a value as:
+//
+//	match doc.Kind(n) {
+//		json.NumberKind => fmt.Println(doc.Int(n) ?? 0),
+//		json.StringKind => fmt.Println(doc.String(n)),
+//		_ => {},
+//	}
 enum Kind {
 	NullKind
 	BoolKind
@@ -208,16 +216,17 @@ struct Member {
 	Value Node
 }
 
-// Elements is a loop over an array's elements, in order.
-struct Elements {
+// Elements is a loop over an array's elements, in order, and an
+// iter.Iterator of them.
+struct Elements impl iter.Iterator<Node> {
 	doc ref Doc
 	at  int
 	end int
 }
 
 // Members is a loop over an object's members, in the order the text
-// has them.
-struct Members {
+// has them, and an iter.Iterator of them.
+struct Members impl iter.Iterator<Member> {
 	doc ref Doc
 	at  int
 	end int
@@ -242,7 +251,9 @@ enum Value {
 	Object([]Field)
 }
 
-// A Field is one member of an object Value: its key and its value.
+// A Field is one member of an object Value: its key, decoded and owned,
+// and its value. An Object holds its fields in the order the text gave
+// them, a key given twice refused when the text is read.
 struct Field {
 	Key   string
 	Value Value
@@ -391,7 +402,13 @@ func (e ref Error) Error() string {
 	return "json: " + e.msg + " at offset " + strconv.Itoa(e.at)
 }
 
-// Offset returns where in the text the error was met, or -1.
+// Offset returns where in the text the error was met, counted in bytes
+// from its start, the byte the reader stopped at; or -1 for an error
+// met with no text read, as Marshal's for a float JSON cannot write.
+//
+//	if err := json.Unmarshal<Config>(ref text).Err() {
+//		fmt.Println("bad config at byte", err.Offset())
+//	}
 func (e ref Error) Offset() int {
 	return e.at
 }
@@ -402,7 +419,15 @@ func Error.At(at int, msg string) Error {
 	return Error{at: at, msg: msg}
 }
 
-// Marshal returns v as JSON text: one line, no space between its parts.
+// Marshal returns v as JSON text of its own: one line, no space between
+// its parts, a struct as an object of its fields in the order they are
+// declared, and the rest as the package comment says of each type. It
+// only reads v, which it borrows for the call. The one value it refuses
+// is a float JSON has no text for, a NaN or an infinity, with an Error
+// whose Offset is -1. It allocates the string, built once in a buffer
+// that grows by doubling.
+//
+//	text := json.Marshal(ref point)? // {"X":1,"Y":2}
 func Marshal<T>(v ref T) Result<string, Error> {
 	w := writer{out: strings.Builder{}, bad: None}
 	writeValue(v, mut w)
@@ -486,7 +511,12 @@ func Parse(text ref string) Result<Doc, Error> {
 	return Ok(d)
 }
 
-// Root returns the node of the document's value.
+// Root returns the node of the document's value, the whole text's, from
+// which every other node is reached with Get, Index, At, Elements and
+// Members. It costs nothing: the root is the index's first entry.
+//
+//	doc := json.Parse(ref text)?
+//	name := doc.Get(doc.Root(), "name") ?? return
 func (d ref Doc) Root() Node {
 	return Node{i: 0}
 }
@@ -511,7 +541,9 @@ func (d ref Doc) Text(n Node) ref string {
 	return d.text[d.nodes[n.i].start:d.nodes[n.i].end]
 }
 
-// Bool returns the node's bool, or None for a node of another kind.
+// Bool returns the value of the boolean n, true or false, or None when
+// n is a node of another kind, null among them, or of another Doc. It
+// reads one byte of the text.
 func (d ref Doc) Bool(n Node) bool? {
 	if d.Kind(n) != BoolKind {
 		return None
@@ -530,7 +562,11 @@ func (d ref Doc) Int(n Node) int? {
 	return strconv.ParseInt(d.Text(n), 10).Ok()
 }
 
-// Float returns the node's number, or None for a node of another kind.
+// Float returns the number n as the f64 nearest it, the way
+// strconv.ParseFloat reads the text, an integer as well as one with a
+// fraction or an exponent; or None when n is a node of another kind or
+// of another Doc, or a number past the largest f64, which no float
+// holds. It reads the number's text in place and allocates nothing.
 func (d ref Doc) Float(n Node) f64? {
 	if d.Kind(n) != NumberKind {
 		return None
@@ -589,7 +625,11 @@ func (d ref Doc) Len(n Node) int {
 	return count
 }
 
-// Index returns the i'th element of an array, or None.
+// Index returns the element of the array n at the index i, counted from
+// 0, or None when i is below 0 or past the last element, or n is not
+// an array of this Doc. It walks the elements before i, each one step
+// in the index, so it takes time in i; a loop over every element is
+// Elements, which takes each in one step.
 func (d ref Doc) Index(n Node, i int) Node? {
 	k := 0
 	for e := range d.Elements(n) {
@@ -712,7 +752,8 @@ func (d ref Doc) Members(n Node) Members {
 	return Members{doc: d, at: n.i + 1, end: d.nodes[n.i].next}
 }
 
-// Next returns the next element, or None after the last.
+// Next returns the next element of the array, in the text's order, or
+// None after the last; one step in the index, nothing allocated.
 func (e mut Elements) Next() Node? {
 	if e.at >= e.end {
 		return None
@@ -723,7 +764,10 @@ func (e mut Elements) Next() Node? {
 	return Some(n)
 }
 
-// Next returns the next member, or None after the last.
+// Next returns the next member of the object, in the text's order, or
+// None after the last: its key lent from the Doc's text as the text has
+// it between the quotes, with any escape not decoded, and the nodes of
+// its key and its value. One step in the index, nothing allocated.
 func (m mut Members) Next() Member? {
 	if m.at >= m.end {
 		return None
@@ -735,7 +779,10 @@ func (m mut Members) Next() Member? {
 	return Some(Member{Key: m.doc.text[m.doc.nodes[name].start + 1:m.doc.nodes[name].end - 1], Name: Node{i: name}, Value: Node{i: value}})
 }
 
-// Kind returns the kind of the value.
+// Kind returns the kind of the value, the Kind its variant stands for:
+// NullKind for Null, ObjectKind for Object, and so on. A program that
+// reads the value matches on it instead; Kind is for a test or a
+// message.
 func (v ref Value) Kind() Kind {
 	return match v {
 		Null => NullKind,
@@ -888,7 +935,9 @@ func Text.Of(text ref string) Result<Text, Error> {
 	return Unmarshal<Text>(text)
 }
 
-// JSON returns the text the Text holds.
+// JSON returns the text the Text holds, lent for as long as the Text
+// is: the one JSON value as the input had it, with the space around it
+// left out, which Marshal writes back compacted.
 func (t ref Text) JSON() ref string {
 	return t.text
 }

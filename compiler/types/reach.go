@@ -361,6 +361,11 @@ func (w *reachWalk) typeArm(x *ast.MatchExpr, sub map[*TypeParam]Type, pkg *Pack
 		return
 	}
 
+	if holdsBorrow(t) { // an arm reads the parameter as the type it matched, and could make a borrow of it the caller does not follow
+		w.report(w.where() + "a match on " + tp.obj.name + " takes no type that holds a borrow: " + t.String() + " does")
+		return
+	}
+
 	arms := make([]TypeArm, len(x.Arms))
 	for i, arm := range x.Arms {
 		arms[i] = w.info.Arms[arm]

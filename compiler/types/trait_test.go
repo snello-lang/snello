@@ -372,7 +372,7 @@ func TestTraits(t *testing.T) {
 		{gen + "func first<T>(it mut It<T>) T? { return it.Next() }\nfunc f(it mut It<int>) int? { return first(mut it) }", nil}, // T read off the instance
 		{gen + "struct Wrap<T> { it It<T> }\nfunc f(w mut Wrap<int>) int? { return w.it.Next() }", nil},
 		{gen + "func f(it It) {}", []string{"It is a generic trait: as a type it takes its arguments, It<...>"}},
-		{gen + "func f(it It<ref string>) {}", []string{"a type argument cannot hold a borrow"}},
+		{gen + "func f(it It<ref string>) {}", []string{"a trait value cannot hold a borrow: It<ref string> would hide what ref string borrows, which a bound may take instead"}},
 		{gen + "func f(it It<int>) int? { return it.Map(func(x int) int { return x }) }", []string{"cannot call Map through It<int>: it has type parameters"}},
 		{gen + "func g<I: It<int>>(it mut I) {}\nfunc f(it mut It<int>) { g(mut it) }", []string{"cannot use It<int> as the type parameter I of g: the method Map of It has type parameters"}}, // a value meets its bound only when the table holds every method
 		{gen + "func f(it It<int>) It<i64> { return it }", []string{"cannot use it (It<int>) as It<i64> in return: It<int> and It<i64> are two instances of It, each its own type"}},

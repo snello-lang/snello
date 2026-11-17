@@ -110,6 +110,8 @@ type flowCopy struct {
 	path, toPath string
 	through      bool
 	flat         bool // the loans copied all go in the part toPath: a borrow of what a borrow variable points to reaches whatever it holds, in parts its own type does not name
+	lent         bool // a place behind the borrow variable from was lent, which is why to takes what from holds (borrow.lent)
+	selfStored   bool // reported storing a borrow of a borrowed parameter's own place behind it (copyPair)
 	pos          token.Pos
 	pairs        [][3]int
 }
@@ -117,9 +119,10 @@ type flowCopy struct {
 // A flowReturn is a borrow returned out of v, to be followed through
 // the loans in effect at the return to the function's source.
 type flowReturn struct {
-	v   *Var
-	pos token.Pos
-	seq int
+	v    *Var
+	pos  token.Pos
+	seq  int
+	part returnedPart // the part of v the borrow is of, which a body keeping a trait's word judges by (word.go)
 }
 
 // A flowError is an error found at the function's end, reported in the
@@ -130,6 +133,9 @@ type flowError struct {
 	msg    string
 	access bool
 }
+
+// A bitset is a set of small integers.
+type bitset []uint64
 
 // A flow is the graph of one function's or closure's body.
 type flow struct {
@@ -144,6 +150,7 @@ type flow struct {
 	deferred  []*Var        // the holders of what deferred calls borrow, live until the function returns
 	fnScope   *Scope        // the scope of the body's parameters, the outermost a return drops
 	outside   map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
+	held      map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
 	temps     []*Var        // the holders standing for the temporaries the statements being checked bind borrows of, dropped where each statement ends
 	temporary map[*Var]bool // every such holder, for a message
 	parent    *flow         // for a closure's body, the graph of the body it is written in
@@ -187,7 +194,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.blocks = f.blocks[:0]
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.ends, f.breaks, f.aside, f.asiding, f.seq = f.ends[:0], f.breaks[:0], f.aside[:0], 0, 0
-	f.deferred, f.parent, f.fnScope, f.outside, f.back = f.deferred[:0], nil, nil, nil, false
+	f.deferred, f.parent, f.fnScope, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, nil, false
 	f.temps, f.temporary = f.temps[:0], nil
 	flows.Put(f)
 }
@@ -269,7 +276,7 @@ func (c *Checker) flowLoan(b borrow) {
 	c.flowAdd(flowEvent{kind: evLoan, i: len(f.loans) - 1})
 	switch {
 	case isBorrow(b.v.typ):
-		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, toPath: b.hpath, flat: true, pos: b.pos})
+		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, toPath: b.hpath, flat: true, lent: true, pos: b.pos})
 	case holdsBorrow(placeType(b.place)) && isBorrow(placeType(place{b.holder, b.hpath})):
 		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, path: b.place.path, toPath: joinPath(b.hpath, "*"), pos: b.pos}) // m := mut h reaches what h holds through m: m.src = ... lets go of it
 	case holdsBorrow(placeType(b.place)):
@@ -411,15 +418,15 @@ func (c *Checker) flowAccess(e ast.Expr, p place, what access, pos token.Pos) {
 	c.flowAdd(flowEvent{kind: evAccess, i: len(f.accesses) - 1})
 }
 
-// flowReturn records a borrow returned out of v.
-func (c *Checker) flowReturn(v *Var, pos token.Pos) {
+// flowReturn records a borrow returned out of v, of its part part.
+func (c *Checker) flowReturn(v *Var, pos token.Pos, part returnedPart) {
 	f := c.flow
 	if f == nil || c.dead {
 		return
 	}
 
 	f.seq++
-	f.rets = append(f.rets, flowReturn{v, pos, f.seq})
+	f.rets = append(f.rets, flowReturn{v, pos, f.seq, part})
 	c.flowAdd(flowEvent{kind: evReturn, i: len(f.rets) - 1})
 }
 
@@ -658,9 +665,6 @@ func (c *Checker) flowBranch(r *region, tok token.Kind, pos token.Pos) {
 	f.cur = f.newBlock()
 }
 
-// A bitset is a set of small integers.
-type bitset []uint64
-
 func (s bitset) has(i int) bool { return s[i/64]&(1<<(i%64)) != 0 }
 func (s bitset) set(i int)      { s[i/64] |= 1 << (i % 64) }
 func (s bitset) del(i int)      { s[i/64] &^= 1 << (i % 64) }
@@ -850,7 +854,7 @@ func (c *Checker) copyLoans() {
 						}
 
 						rest := strings.TrimPrefix(lb.hpath[star+1:], ".")
-						grew = c.copyPair(cp, a, b, borrow{holder: la.v, place: lb.place, mut: lb.mut, pos: lb.pos, hpath: joinPath(la.path, rest)}) || grew
+						grew = c.copyPair(cp, a, b, borrow{holder: la.v, place: lb.place, mut: lb.mut, pos: lb.pos, hpath: joinPath(la.path, rest), lent: lb.lent, read: lb.read}) || grew
 					}
 
 					continue
@@ -870,7 +874,7 @@ func (c *Checker) copyLoans() {
 					continue
 				}
 
-				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable}) || grew
+				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable, lent: cp.lent || la.lent, read: la.read}) || grew
 			}
 		}
 	}
@@ -881,7 +885,12 @@ func (c *Checker) copyLoans() {
 // the pair is new.
 func (c *Checker) copyPair(cp *flowCopy, a, b int, nb borrow) bool {
 	f := c.flow
-	if nb.holder == nb.v || slices.ContainsFunc(cp.pairs, func(p [3]int) bool { return p[0] == a && p[1] == b }) {
+	if slices.ContainsFunc(cp.pairs, func(p [3]int) bool { return p[0] == a && p[1] == b }) {
+		return false
+	}
+
+	if nb.holder == nb.v {
+		c.refuseSelfBorrow(cp, nb)
 		return false // a variable reached through itself, cur = mut m.next where m borrowed cur, holds nothing of itself
 	}
 
@@ -1107,7 +1116,7 @@ func (c *Checker) checkFlow(reported bitset) {
 				}
 			case evReturn:
 				r := f.rets[ev.i]
-				c.followReturn(r.v, r.pos, r.seq, in, nil)
+				c.followReturn(r.v, r.part, r.pos, r.seq, in, nil)
 			}
 
 			c.forwardStep(in, dropped, ev)
@@ -1191,6 +1200,37 @@ func (c *Checker) checkEscape(li int, reported bitset) {
 	}
 }
 
+// refuseSelfBorrow reports the copy cp storing nb, a borrow of a place
+// of its own holder, in that holder, v.r = ref v.own: a value would
+// borrow its own data, which changes or goes with the value while the
+// borrow is kept. A holder that is a borrow reaches its places through
+// it, behind what it points at: cur = mut cur.next walks a chain, and
+// stores nothing of cur's own, unless cur is a borrowed parameter,
+// whose places are the caller's value. A borrow read out of the place,
+// v.r = v.r, is what the value held already. Each copy is reported
+// once.
+func (c *Checker) refuseSelfBorrow(cp *flowCopy, nb borrow) {
+	if cp.selfStored || nb.read {
+		return
+	}
+
+	at := joinPath(nb.holder.name, nb.place.path)
+	switch {
+	case !isBorrow(nb.holder.typ):
+		cp.selfStored = true
+		c.flow.errs = append(c.flow.errs, flowError{seq: c.flow.seq, pos: cp.pos, msg: "cannot store a borrow of " + at + " in " + nb.holder.name + ": a value cannot borrow its own data, which changes or goes with it"})
+	case strings.Contains(nb.hpath, "*") && c.isBorrowedParam(nb.holder):
+		cp.selfStored = true
+		c.flow.errs = append(c.flow.errs, flowError{seq: c.flow.seq, pos: cp.pos, msg: "cannot store a borrow of " + at + " in " + nb.holder.name + ": " + nb.holder.name + " is the caller's, which may change or free " + at + " while the borrow is kept"})
+	}
+}
+
+// isBorrowedParam reports whether v is a parameter of the function being
+// checked that is a borrow, whose places are the caller's.
+func (c *Checker) isBorrowedParam(v *Var) bool {
+	return isBorrow(v.typ) && c.isParam(v)
+}
+
 // flowParams gives each parameter that carries a borrow a borrow of what
 // the caller owns behind it, a variable of its own standing for it, so
 // that a store reaching the caller's places is seen however it gets
@@ -1220,6 +1260,10 @@ func (c *Checker) flowParams(sig *Signature) {
 			f.outside[o] = p
 			c.flowLoan(borrow{holder: p, place: place{o, ""}, mut: mut, pos: p.pos, hpath: path}) // in the field that carries it: w.h = mut local lets go of the caller's
 		})
+
+		if c.keepsWord() {
+			c.flowHeld(p)
+		}
 	}
 }
 

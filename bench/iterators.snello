@@ -1,0 +1,97 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Iterator adapters: the sum of the squares of the even numbers among
+// a million, twenty times over, through iter's Filter, Map and Fold
+// over a deque's iterator and over an iterator that counts, and through
+// the loops written by hand that do the same; it prints the sums, then
+// the cost of an item of each, in tenths of a nanosecond.
+
+package main
+
+import (
+	"deque"
+	"fmt"
+	"iter"
+	"time"
+)
+
+const items = 1000000
+const rounds = 20
+
+// The timings are printed in tenths of a nanosecond an item.
+const tenthsPerNanosecond i64 = 10
+
+// A Count gives the numbers from next up to end.
+struct Count impl iter.Iterator<int> {
+	next int
+	end  int
+}
+
+func (c mut Count) Next() int? {
+	if c.next >= c.end {
+		return None
+	}
+
+	c.next++
+	return Some(c.next - 1)
+}
+
+func lentEven(x ref ref int) bool { return **x % 2 == 0 }
+
+func lentSquare(x ref int) int { return *x * *x }
+
+func even(x ref int) bool { return *x % 2 == 0 }
+
+func square(x int) int { return x * x }
+
+func add(total int, x int) int { return total + x }
+
+func main() {
+	d := deque.New<int>()
+	for i := 0; i < items; i++ {
+		d.PushBack(i)
+	}
+
+	chain := 0
+	start := time.Now()
+	for r := 0; r < rounds; r++ {
+		chain += d.Iter().Filter(lentEven).Map(lentSquare).Fold(0, add)
+	}
+
+	chainTime := time.Since(start)
+	loop := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		for x := range d.Iter() {
+			if *x % 2 == 0 {
+				loop += *x * *x
+			}
+		}
+	}
+
+	loopTime := time.Since(start)
+	counted := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		counted += Count{next: 0, end: d.Len()}.Filter(even).Map(square).Fold(0, add)
+	}
+
+	countedTime := time.Since(start)
+	plain := 0
+	end := d.Len() // known when the program runs, as the iterators' end is, so that the loop is not worked out when it is compiled
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		for i := 0; i < end; i++ {
+			if i % 2 == 0 {
+				plain += i * i
+			}
+		}
+	}
+
+	plainTime := time.Since(start)
+	n := i64(items * rounds)
+	fmt.Println(chain, loop, counted, plain)
+	fmt.Println("deque chain", chainTime.Nanoseconds() * tenthsPerNanosecond / n, "deque loop", loopTime.Nanoseconds() * tenthsPerNanosecond / n, "count chain", countedTime.Nanoseconds() * tenthsPerNanosecond / n, "count loop", plainTime.Nanoseconds() * tenthsPerNanosecond / n)
+}

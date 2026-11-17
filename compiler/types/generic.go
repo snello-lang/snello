@@ -28,6 +28,7 @@ type TypeParam struct {
 	bounds  []*Trait // the traits after the colon; a nil entry stands for one that failed to resolve
 	methods []*Func  // the bounds' methods as this parameter sees them, made on first use
 	fields  []*Var   // the bounds' fields as this parameter sees them, made on first use
+	hidden  *hiding  // where a body puts a value of it in a trait value or a closure, which would hide a borrow it holds (hide.go)
 }
 
 // NewTypeParam returns the index'th type parameter of a declaration,

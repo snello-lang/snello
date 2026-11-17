@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a collection does not change while an iterator over it, or an
+// adapter over that, is alive: the iterator holds a ref borrow of it.
+// Fix: change the collection after the iterator's last use, or collect
+// what it gives first.
+
+package p
+
+import ("deque"; "fmt")
+
+func even(x ref ref int) bool { return **x % 2 == 0 }
+
+func main() {
+    d := deque.New<int>()
+    d.PushBack(1)
+    evens := d.Iter().Filter(even)
+    d.PushBack(2)                           // ERROR "cannot borrow d as mut: d is borrowed as ref by evens"
+    fmt.Println(evens.Count())
+}

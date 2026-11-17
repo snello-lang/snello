@@ -1,0 +1,143 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package iter_test
+
+import ("deque"; "expect"; "fmt"; "iter"; "testing")
+
+// A Count gives 0, 1, ... up to end, owning what it gives.
+struct Count impl iter.Iterator<int> {
+	next int
+	end  int
+}
+
+func (c mut Count) Next() int? {
+	if c.next >= c.end {
+		return None
+	}
+
+	c.next++
+	return Some(c.next - 1)
+}
+
+func upTo(end int) Count { return Count{next: 0, end: end} }
+
+func isEven(x ref int) bool { return *x % 2 == 0 }
+
+func lentEven(x ref ref int) bool { return **x % 2 == 0 }
+
+func square(x int) int { return x * x }
+
+func lentSquare(x ref int) int { return *x * *x }
+
+func add(total int, x int) int { return total + x }
+
+func addLent(total int, x ref int) int { return total + *x }
+
+func numbers() deque.Deque<int> {
+	d := deque.New<int>()
+	for i := 0; i < 10; i++ {
+		d.PushBack(i)
+	}
+
+	return d
+}
+
+// Map and Filter over an iterator that owns what it gives and over one
+// that lends a deque's elements give the same values.
+func TestMapFilter() {
+	expect.Equal(ref fmt.Sprint(upTo(10).Filter(isEven).Map(square).Collect()), "[0 4 16 36 64]")
+	d := numbers()
+	expect.Equal(ref fmt.Sprint(d.Iter().Filter(lentEven).Map(lentSquare).Collect()), "[0 4 16 36 64]")
+	got := []int{}
+	for x := range d.Iter().Filter(lentEven).Map(lentSquare) {
+		got.Push(x)
+	}
+
+	expect.Equal(ref fmt.Sprint(got), "[0 4 16 36 64]")
+}
+
+// Take and Skip cut the items at either end, and a count past the end
+// or below 0 gives what is there.
+func TestTakeSkip() {
+	expect.Equal(ref fmt.Sprint(upTo(10).Skip(3).Take(4).Collect()), "[3 4 5 6]")
+	expect.Equal(ref fmt.Sprint(upTo(3).Take(10).Collect()), "[0 1 2]")
+	expect.Equal(ref upTo(3).Take(0).Count(), ref 0)
+	expect.Equal(ref upTo(3).Take(-1).Count(), ref 0)
+	expect.Equal(ref upTo(3).Skip(10).Count(), ref 0)
+	d := numbers()
+	expect.Equal(ref fmt.Sprint(d.Iter().Skip(8).Collect()), "[8 9]")
+}
+
+// Enumerate counts from 0, Zip ends with the shorter, and Chain gives
+// one iterator's items after the other's.
+func TestEnumerateZipChain() {
+	expect.Equal(ref fmt.Sprint(upTo(3).Enumerate().Collect()), "[(0, 0) (1, 1) (2, 2)]")
+	expect.Equal(ref fmt.Sprint(upTo(3).Zip(upTo(10).Skip(5)).Collect()), "[(0, 5) (1, 6) (2, 7)]")
+	expect.Equal(ref fmt.Sprint(upTo(2).Chain(upTo(3)).Collect()), "[0 1 0 1 2]")
+	d := numbers()
+	e := numbers()
+	n := 0
+	for x, y := range d.Iter().Zip(e.Iter().Skip(1)) {
+		expect.Equal(ref (*x + 1), y)
+		n++
+	}
+
+	expect.Equal(ref n, ref 9)
+	expect.Equal(ref d.Iter().Chain(e.Iter()).Count(), ref 20)
+}
+
+// The consumers pull what they need: Find and Any stop at the first
+// match, All at the first miss, and over no items each gives its
+// answer for none.
+func TestConsumers() {
+	expect.Equal(ref upTo(5).Fold(0, add), ref 10)
+	expect.Equal(ref upTo(0).Fold(7, add), ref 7)
+	expect.True(upTo(5).Any(func(x ref int) bool { return *x == 3 }))
+	expect.True(!upTo(0).Any(isEven))
+	expect.True(upTo(0).All(isEven))
+	expect.True(!upTo(5).All(isEven))
+	expect.Equal(ref expect.IsSome(upTo(10).Find(func(x ref int) bool { return *x > 6 })), ref 7)
+	expect.IsNone(upTo(3).Find(func(x ref int) bool { return *x > 6 }))
+	it := upTo(10)
+	expect.IsSome(it.Find(func(x ref int) bool { return *x == 4 }))
+	expect.Equal(ref it.Count(), ref 5) // Find left the iterator after what it found
+	d := numbers()
+	expect.Equal(ref d.Iter().Fold(0, addLent), ref 45)
+	if x := d.Iter().Find(func(x ref ref int) bool { return **x == 6 }) {
+		expect.Equal(x, ref 6)
+	} else {
+		expect.Fail("no 6")
+	}
+}
+
+// A generic function takes an iterator of borrowed items by its bound.
+func sum<I: iter.Iterator<ref int>>(it mut I) int {
+	total := 0
+	for {
+		x := it.Next() ?? break
+		total += *x
+	}
+
+	return total
+}
+
+func TestGenericOverBorrowed() {
+	d := numbers()
+	it := d.Iter()
+	expect.Equal(ref sum(mut it), ref 45)
+	evens := d.Iter().Filter(lentEven)
+	expect.Equal(ref sum(mut evens), ref 20)
+}
+
+// Collect over borrowed items gives the borrows, which hold the deque
+// while they live, and the deque is free again after them.
+func TestCollectBorrowed() {
+	d := numbers()
+	xs := d.Iter().Skip(7).Collect()
+	expect.Equal(ref fmt.Sprint(xs), "[7 8 9]")
+	expect.Equal(xs[0], ref 7)
+	d.PushBack(10)
+	expect.Equal(ref d.Len(), ref 11)
+}

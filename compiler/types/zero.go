@@ -155,16 +155,3 @@ func (c *Checker) zeroWrite(e *ast.IndexExpr, m *Map) {
 		c.errorf(e.Pos(), "cannot write through "+exprText(e)+": "+m.value.String()+" has no zero value for a key the map does not hold; use "+exprText(e.X)+".GetMut("+exprText(e.Index)+")")
 	}
 }
-
-// optionOf writes T?, the type of a value of T that may be missing,
-// with the parentheses a container or a function type needs, since a ?
-// after one applies to its element or its result; after a pointer it
-// applies to the pointer.
-func optionOf(t Type) string {
-	switch t.(type) {
-	case *Slice, *Map, *Chan, *Signature:
-		return "(" + t.String() + ")?"
-	}
-
-	return t.String() + "?"
-}

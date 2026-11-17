@@ -18,7 +18,7 @@
 // makes a use after free, an arena makes an Option.
 package arena
 
-import "fmt"
+import ("fmt"; "iter")
 
 // firstGeneration is the generation of a slot's first value; each time
 // the slot is emptied its generation goes up by one, so that no Index
@@ -67,9 +67,10 @@ struct Arena<T> impl fmt.Stringer {
 }
 
 // An Iter walks an Arena's values in the order of their slots, from
-// Arena.Iter. It holds a ref borrow of the Arena, so the Arena is not
-// changed while the walk lives.
-struct Iter<T> {
+// Arena.Iter, giving each with its index. It holds a ref borrow of the
+// Arena, so the Arena is not changed while the walk lives; the adapters
+// of iter.Iterator wrap it.
+struct Iter<T> impl iter.Iterator<(Index<T>, ref T)> {
 	arena ref Arena<T>
 	next  int
 }

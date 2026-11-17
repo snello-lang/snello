@@ -36,7 +36,7 @@ import (
 )
 
 // programs are the benchmarks, by the stem of their files.
-var programs = []string{"fib", "tree", "words", "churn", "tasks", "memory", "variadic", "json"}
+var programs = []string{"fib", "tree", "words", "churn", "tasks", "memory", "variadic", "json", "iterators"}
 
 // runs is how many times a binary is timed, after a first run that is
 // discarded, since the first run of a new binary pays for the system's
@@ -46,7 +46,7 @@ const runs = 10
 
 // timed are the programs that time themselves and print the timings on
 // their last line, which varies from run to run and is not compared.
-var timed = map[string]bool{"tasks": true, "memory": true, "variadic": true, "json": true}
+var timed = map[string]bool{"tasks": true, "memory": true, "variadic": true, "json": true, "iterators": true}
 
 // TestBenchmarks builds every program here through both Snello backends
 // and in Go, checks that they print the same, and when SNELLO_BENCH is

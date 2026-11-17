@@ -18,6 +18,16 @@ func TestEscapes(t *testing.T) {
 		src  string
 		want []string
 	}{
+		// A borrow returned through a *, first(*r), is followed to what r borrows.
+		{"func first(xs ref []int) ref int? { return None }\nfunc f() ref int? { xs := []int{1}; r := ref xs; return first(*r) }", []string{"cannot return a borrow of local xs"}},
+		{"func f() ref int? { xs := []int{1}; r := ref xs; return (*r).First() }", []string{"cannot return a borrow of local xs"}},
+		{"func first(xs ref []int) ref int? { return None }\nfunc f() ref int? { xs := []int{1}; r := ref xs; return if len(xs) > 0 { first(*r) } else { None } }", []string{"cannot return a borrow of local xs"}},
+		{"func first(xs ref []int) ref int? { return None }\nfunc f() ref int? { xs := []int{1}; r := ref xs; return Some(first(*r)?) }", []string{"cannot return a borrow of local xs"}},
+		{"func first(xs ref []int) ref int? { return None }\nfunc f() ref int? { xs := []int{1}; r := ref xs; rr := ref r; return first(*rr) }", []string{"cannot return a borrow of local xs"}},
+		{"func f() ref string { b := Buf{xs: []int{1}}; s := \"a\".Clone(); q := ref s; return trim(1, *q) }", []string{"cannot return a borrow of local s"}},
+		{"func first(xs ref []int) ref int? { return None }\nfunc f(xs ref []int) ref int? { r := ref xs; return first(*r) }", nil}, // what r borrows is the parameter's
+		{"func f(xs ref []int) ref int? { r := ref xs; return (*r).First() }", nil},
+
 		// Owned data cannot hold a borrow, whatever carries it.
 		{"func f() { xs := []ref string{} }", []string{"a slice cannot hold a borrow"}},
 		{"func f() { xs := []Lexer{} }", []string{"a slice cannot hold Lexer: it holds a borrow"}},

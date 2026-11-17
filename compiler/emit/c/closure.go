@@ -250,15 +250,17 @@ func (e *Emitter) funcValue(sig *types.Signature, symbol string, pos token.Pos) 
 }
 
 // callValue writes a call of a function value: its function with its
-// environment first.
+// environment first, through a copy of the value in a local, as the
+// LLVM backend calls one. The function receives its box's address, and
+// a box inside the place holding the value, an adapter's field or a
+// parameter once the call is written into its caller, would let that
+// place escape into a function the C compiler cannot see, so that it
+// reloaded the function from the place on every call and never made
+// the call direct. A closure never writes its box, which holds copies
+// it only reads and the address of what it borrows, so the copy's is
+// the same.
 func (e *Emitter) callValue(x *ast.CallExpr, sig *types.Signature) string {
-	var f string
-	if e.hasEffects(x.Fun) {
-		f = e.saved(x.Fun, sig)
-	} else {
-		f = e.valueTo(x.Fun, sig)
-	}
-
+	f := e.saved(x.Fun, sig)
 	args := e.args(nil, x.Args, x.Ellipsis.IsValid(), sig)
 	if args != "" {
 		args = ", " + args

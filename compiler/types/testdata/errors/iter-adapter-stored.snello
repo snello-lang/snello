@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an adapter over a borrowing iterator holds the borrow, so owned
+// data cannot hold it, as it cannot hold any borrow. Fix: pull from the
+// adapter where it is made, or collect its items.
+
+package p
+
+import ("deque"; "iter")
+
+func main() {
+    d := deque.New<int>()
+    its := []iter.Take<deque.Iter<int>, ref int>{}  // ERROR "a slice cannot hold iter.Take<deque.Iter<int>, ref int>: it holds a borrow"
+    its.Push(d.Iter().Take(1))
+}
