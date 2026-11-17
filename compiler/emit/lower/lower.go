@@ -22,6 +22,13 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// The backends, by the names a command and a test choose one by: the
+// LLVM backend, and the C backend, the reference.
+const (
+	LLVMBackend = "llvm"
+	CBackend    = "c"
+)
+
 // The directions of a channel handle as the runtime numbers them: the
 // bits of the ends the handle holds.
 const (

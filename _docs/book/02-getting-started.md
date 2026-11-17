@@ -10,9 +10,67 @@ cd snello
 go build -o snello ./cmd/snello
 ```
 
+`snello version` says which compiler it is: the version, the commit it was built from, the channel a release is published on or `devel` for a build from source, and the system it runs on.
+
+```
+$ snello version
+snello 0.1.0 (8477985) devel darwin/arm64
+```
+
+`snello help` lists every command with a line saying what it does, and `snello help build` the flags and arguments of one, as `go help build` does; `-h` after a command prints the same.
+
+`snello doctor` checks what a build needs from your system, by trying each thing as a build uses it: clang, which compiles what Snello writes and must be version 15 or later; a link with link-time optimization, which a release build links with; a C compiler, which the C backend and a debug build compile with; and, apart from the build, whether `snello`'s directory is on your path. A check that fails prints the command that fixes it on your system, and the command exits 1 when a build would fail:
+
+```
+$ snello doctor
+ok    clang: Debian clang version 19.1.7 (3+b1)
+ok    link-time optimization: clang links with -flto
+ok    C compiler: Debian clang version 19.1.7 (3+b1)
+ok    snello on the path: /usr/local/bin
+```
+
+Installing clang is all a build needs: `xcode-select --install` on macOS, `sudo apt install clang` on Debian and Ubuntu, `sudo dnf install clang` on Fedora, `sudo pacman -S clang` on Arch; each brings a C compiler and a linker that takes link-time optimization with it. A build that cannot start clang says the same, `clang not found: install it with sudo apt install clang, or set CLANG`; `CLANG` and `CC` name the compilers to use instead. Chapter 32 has every command in full.
+
+## A first module
+
+`snello new` starts a program in a directory of its own: the module file, a program that prints a greeting, and its test.
+
+```
+$ snello new hello
+snello new: wrote hello, a module with a program and its test:
+	cd hello
+	snello build .
+	snello run .
+	snello test .
+$ cd hello
+$ snello run .
+Hello, Snello!
+$ snello test .
+ok  	hello	0.001s
+```
+
+The directory holds three files: `snello.mod`, the line `snello 0.1.0`, which the section on packages comes to; `main.snello`, the program; and `main_test.snello`, its test, which chapter 16 teaches.
+
+```go
+package main
+
+import "fmt"
+
+// greeting returns the line main prints for name.
+func greeting(name ref string) string {
+    return "Hello, " + name + "!"
+}
+
+func main() {
+    fmt.Println(greeting("Snello"))
+}
+```
+
+`snello run` builds the program into a directory of its own, runs it, and removes it, leaving no file behind: the arguments after the program's path are the program's, `snello run . -n 3`, and its exit code is the command's, 3 for a program that exits with 3. An interrupt from the terminal is the program's to answer; a program the interrupt ends ends `snello run` the same way, so a script that runs it stops too. `snello build` writes the binary instead, named after the directory, `./hello`. `snello new` refuses a directory that exists, and makes the directory alone, in one that must exist; `snello init`, below, makes a directory that exists a module.
+
 ## Hello
 
-A Snello program is a file in a package `main` with a `func main()`:
+A program need not be a module: a single file in a package `main` with a `func main()` builds and runs on its own.
 
 ```go
 package main
@@ -95,7 +153,7 @@ A file `snello.mod` at the root of the tree marks the module, and an import name
 
 ```
 app/
-    snello.mod          may be empty: it marks the root
+    snello.mod          snello 0.1.0: it marks the root and names the version
     main.snello         package main; import "shapes"
     shapes/
         shape.snello    package shapes
@@ -116,7 +174,24 @@ func main() {
 }
 ```
 
-An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. There are no versions and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one: a dependency is the directory it is, so two dependencies that each require a third share one copy of it, and a value of the third's types passes between them. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
+`snello init` makes the current directory the root of a module, `snello init DIR` another directory: it writes `snello.mod` with one line, the version of Snello the module is written for, the version of the compiler that ran it, and refuses a directory that has a module file already. The line is a Semantic Versioning version, the oldest release that compiles the module; it may stand anywhere in the file, and `init` writes it first, where a reader looks:
+
+```
+$ snello init
+snello init: wrote /home/me/app/snello.mod
+$ cat snello.mod
+snello 0.1.0
+```
+
+A compiler older than the version refuses the module and says so, `/home/me/app/snello.mod:1: this module needs snello 0.3.0; this is snello 0.1.0: upgrade the compiler`, rather than failing on what it does not know; a module the program requires is checked the same way, by its own file. A module file without the line is read as written for the first release, 0.1.0, so a new release never changes what it means, and every command that builds, checks or tests the module says so on standard error, with the line to add:
+
+```
+warning: /home/me/app/snello.mod has no snello line: it is read as snello 0.1.0, the first release; add the line "snello 0.1.0"
+```
+
+A program with no module file above it, one file built on its own, is read as the version of the compiler building it.
+
+An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. A dependency has no version and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one: a dependency is the directory it is, so two dependencies that each require a third share one copy of it, and a value of the third's types passes between them. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
 
 ## A second program
 

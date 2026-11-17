@@ -120,6 +120,12 @@ bin/snello build examples/hello/hello.snello
 | `snello build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
 | `snello check FILE` | Checks a program and prints its errors |
 | `snello test DIR` | Runs the tests in a directory's `_test.snello` files |
+| `snello doctor` | Checks what a build needs, clang, a link with link-time optimization and a C compiler, and prints the command that installs what is missing |
+| `snello help` | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
+| `snello version` | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |
+| `snello new DIR` | Starts a module in a new directory: its `snello.mod`, a `main.snello` that prints a greeting, and a `main_test.snello` |
+| `snello run FILE` | Builds a program, runs it with the arguments after its path, passes its exit code on, and leaves no file behind; `DIR` runs a directory's program |
+| `snello init` | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
 | `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
 
 `clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program; `SNELLO_CACHE` names another directory, and `SNELLO_CACHE=off` compiles the runtime with every build.

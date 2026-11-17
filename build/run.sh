@@ -9,7 +9,8 @@
 # build tool reads them; with NATIVE=1 set, runs the command on the
 # host instead; Go is told not to stamp binaries with the repository's
 # version control state, which git refuses to read from a mount whose
-# owner it does not trust and which no build here needs. The
+# owner it does not trust, so a binary built here carries no commit
+# and snello version leaves the commit out. The
 # Makefile's targets go through it, and so do CI's Linux jobs for the
 # Go suite and the benchmarks, which are not the Makefile's business:
 # it runs Snello.

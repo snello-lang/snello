@@ -22,7 +22,7 @@ import (
 // variable.
 func TestLoadProgram(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"snello.mod":           "// the root of the module\nlink m\n",
+		"snello.mod":           "// the root of the module\nsnello 0.1.0\nlink m\n",
 		"shapes/shape.snello":  shapesSrc,
 		"shapes/area.snello":   areaSrc,
 		"nomain/a.snello":      "package main\nfunc f() {}\n",
@@ -214,5 +214,27 @@ func TestTestFiles(t *testing.T) {
 
 	if err := prog.CheckMain(); err != nil {
 		t.Errorf("app under test has no main: %v", err)
+	}
+}
+
+// TestLoadStandalone loads a program in no module, as a standard
+// package's tests are, though its files are named under a directory
+// whose module file does not read: Standalone leaves the module unread,
+// and without it the file is what the load reports.
+func TestLoadStandalone(t *testing.T) {
+	root := writeTree(t, map[string]string{"snello.mod": "exclude x\n"})
+	name := filepath.Join(root, "main.snello")
+	src := []byte("package main\n\nimport \"strings\"\n\nfunc main() { _ = strings.ToUpper(\"x\") }\n")
+	imp, _, err := LoadProgramFrom(Load{Names: []string{name}, Srcs: [][]byte{src}, Standalone: true}, &types.Info{})
+	if err != nil {
+		t.Fatalf("a standalone load: %v", err)
+	}
+
+	if imp.Module != nil {
+		t.Errorf("a standalone load read the module %+v", imp.Module)
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{name}, Srcs: [][]byte{src}}, &types.Info{}); err == nil || !strings.Contains(err.Error(), `unknown directive "exclude"`) {
+		t.Errorf("a load in the module: got %v, want its file's error", err)
 	}
 }

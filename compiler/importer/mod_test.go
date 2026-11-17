@@ -13,6 +13,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/compiler/version"
 )
 
 // TestModFile reads module files: what a require line gives, an empty
@@ -25,7 +26,7 @@ func TestModFile(t *testing.T) {
 	}{
 		{"", nil, ""},
 		{"// the app\n\nrequire dep ../dep // a library beside it\nrequire other /abs/other\n", []Require{{"dep", filepath.Join("/m", "..", "dep")}, {"other", "/abs/other"}}, ""},
-		{"module example.com/app\n", nil, "snello.mod:1: a module has no name: the file marks the root, and an import names a directory under it"},
+		{"module example.com/app\n", nil, `snello.mod:1: unknown directive "module"`},
 		{"require dep\n", nil, "snello.mod:1: require needs a name and a directory"},
 		{"require strings ../s\n", nil, "snello.mod:1: strings is a standard package"},
 		{"require net/http ../h\n", nil, `snello.mod:1: a required name is one element, and "net/http" has a /: the rest of a path names a directory under the dependency`},
@@ -97,7 +98,7 @@ func TestFindModule(t *testing.T) {
 	}
 
 	bad := writeTree(t, map[string]string{"snello.mod": "module app\n", "pkg/x.snello": "package pkg\n"})
-	if m, err := FindModule(filepath.Join(bad, "pkg")); m != nil || err == nil || !strings.Contains(err.Error(), "a module has no name") {
+	if m, err := FindModule(filepath.Join(bad, "pkg")); m != nil || err == nil || !strings.Contains(err.Error(), `unknown directive "module"`) {
 		t.Errorf("a module file that does not read: got %+v, %v, want its error", m, err)
 	}
 
@@ -352,4 +353,143 @@ func writeTree(t *testing.T, files map[string]string) string {
 	}
 
 	return root
+}
+
+// TestModFileVersion reads the snello line: the version a module names,
+// a SemVer version up to this compiler's, kept as written; and the
+// message for each spelling SemVer does not have, a line of no version
+// or two, a second line, a later version than this compiler's, which is
+// refused before a line this compiler does not know but not before a
+// first snello line no release reads, and a go line, which is no
+// directive of the file.
+func TestModFileVersion(t *testing.T) {
+	tests := []struct {
+		src     string
+		version string
+		err     string
+	}{
+		{"snello 0.1.0\n", "0.1.0", ""},
+		{"// the app\nsnello 0.1.0 // the first release\nrequire dep ../dep\n", "0.1.0", ""},
+		{"require dep ../dep\nsnello 0.1.0\n", "0.1.0", ""},
+		{"snello 0.1.0-rc.1\n", "0.1.0-rc.1", ""},
+		{"snello 0.1.0+build.5\n", "0.1.0+build.5", ""},
+		{"snello 0.1.0+01\n", "0.1.0+01", ""},
+		{"toolchain x\nsnello 9.0.0\n", "", "snello.mod:2: this module needs snello 9.0.0; this is snello 0.1.0: upgrade the compiler"},
+		{"require dep ../dep v1\nsnello 9.0.0 // a line this compiler does not know comes first\n", "", "snello.mod:2: this module needs snello 9.0.0"},
+		{"snello 0.0.9\n", "0.0.9", ""},
+		{"", "", ""},
+		{"snello 0.1\n", "", `snello.mod:1: malformed version "0.1": a version is MAJOR.MINOR.PATCH, snello 0.1.0`},
+		{"snello v0.1.0\n", "", `snello.mod:1: malformed version "v0.1.0": a version is MAJOR.MINOR.PATCH, snello 0.1.0`},
+		{"snello 01.2.0\n", "", `snello.mod:1: malformed version "01.2.0"`},
+		{"snello 0.1.0.0\n", "", `snello.mod:1: malformed version "0.1.0.0"`},
+		{"snello\n", "", "snello.mod:1: snello needs one version, snello 0.1.0"},
+		{"snello 0.1.0 extra\n", "", "snello.mod:1: snello needs one version, snello 0.1.0"},
+		{"snello 0.1.0\nsnello 0.1.0\n", "", "snello.mod:2: a second snello line"},
+		{"snello 0.1.0\nsnello 9.0.0\n", "", "snello.mod:2: a second snello line"},
+		{"snello\nsnello 9.0.0\n", "", "snello.mod:1: snello needs one version"},
+		{"snello 0.1.0 x\nsnello 9.0.0\n", "", "snello.mod:1: snello needs one version"},
+		{"snello 0.3.0\n", "", "snello.mod:1: this module needs snello 0.3.0; this is snello 0.1.0: upgrade the compiler"},
+		{"snello 0.1.1-rc.1\n", "", "snello.mod:1: this module needs snello 0.1.1-rc.1; this is snello 0.1.0: upgrade the compiler"},
+		{"snello 99999999999999999999999.0.0\n", "", "snello.mod:1: this module needs snello 99999999999999999999999.0.0"},
+		{"go 1.22\n", "", `snello.mod:1: unknown directive "go"`},
+	}
+	for _, tt := range tests {
+		m, err := ParseModFile(filepath.Join("/m", ModFile), []byte(tt.src))
+		if tt.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.err) {
+				t.Errorf("%q: got %v, want an error with %q", tt.src, err, tt.err)
+			}
+
+			continue
+		}
+
+		if err != nil || m.Version != tt.version {
+			t.Errorf("%q: got %+v, %v, want version %q", tt.src, m, err, tt.version)
+		}
+	}
+}
+
+// TestModuleWarning holds the warning for a module file with no snello
+// line to the file's path, the version it is read as and the line to
+// add; and to nothing for a file with the line, a program in no module,
+// and a file that does not read, which the load reports.
+func TestModuleWarning(t *testing.T) {
+	bare := writeTree(t, map[string]string{"snello.mod": "// no version\n", "app/main.snello": "package main\n"})
+	want := "warning: " + filepath.Join(bare, ModFile) + ` has no snello line: it is read as snello 0.1.0, the first release; add the line "snello 0.1.0"`
+	if got := ModuleWarning(filepath.Join(bare, "app")); got != want {
+		t.Errorf("a module with no line warns %q, want %q", got, want)
+	}
+
+	for name, files := range map[string]map[string]string{
+		"a module with the line": {"snello.mod": "snello 0.1.0\n"},
+		"a broken module file":   {"snello.mod": "exclude x\n"},
+		"a later version":        {"snello.mod": "snello 9.0.0\n"},
+		"no module":              {"main.snello": "package main\n"},
+	} {
+		if got := ModuleWarning(writeTree(t, files)); got != "" {
+			t.Errorf("%s warns %q", name, got)
+		}
+	}
+}
+
+// TestWriteModFile starts a module: the file holds the snello line of
+// this compiler's version, which reads back as the module's version
+// with no warning; a second start in the directory is refused and
+// leaves the file as it was, and a directory that does not exist is an
+// error.
+func TestWriteModFile(t *testing.T) {
+	dir := t.TempDir()
+	name, err := WriteModFile(dir)
+	if err != nil || name != filepath.Join(dir, ModFile) {
+		t.Fatalf("WriteModFile: %q, %v", name, err)
+	}
+
+	src, err := os.ReadFile(name)
+	if err != nil || string(src) != "snello "+version.Current+"\n" {
+		t.Errorf("the file holds %q, %v", src, err)
+	}
+
+	m, err := ParseModFile(name, src)
+	if err != nil || m.Version != version.Current {
+		t.Errorf("the file reads back as %+v, %v", m, err)
+	}
+
+	if w := ModuleWarning(dir); w != "" {
+		t.Errorf("a module started by WriteModFile warns %q", w)
+	}
+
+	if err := os.WriteFile(name, []byte("snello 0.1.0\nrequire dep ../dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteModFile(dir); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("a second start: %v", err)
+	}
+
+	if src, _ := os.ReadFile(name); string(src) != "snello 0.1.0\nrequire dep ../dep\n" {
+		t.Errorf("a refused start changed the file to %q", src)
+	}
+
+	if _, err := WriteModFile(filepath.Join(dir, "nosuch")); err == nil {
+		t.Error("a directory that does not exist was given a module file")
+	}
+
+	if _, err := WriteModFile(name); err == nil {
+		t.Error("a file given as the directory was given a module file")
+	}
+
+	inTheWay := t.TempDir()
+	if err := os.Mkdir(filepath.Join(inTheWay, ModFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteModFile(inTheWay); err == nil || !strings.Contains(err.Error(), "is in the way") {
+		t.Errorf("a directory named as the module file: %v", err)
+	}
+
+	relative := t.TempDir()
+	t.Chdir(relative)
+	if name, err := WriteModFile("."); err != nil || name != filepath.Join(relative, ModFile) {
+		t.Errorf("WriteModFile(\".\") = %q, %v, want the absolute path", name, err)
+	}
 }

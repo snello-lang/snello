@@ -9,7 +9,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -57,6 +56,19 @@ const (
 	gdbCommand        = "-ex"
 	gdbProgram        = "--args"
 	gdbSubstitutePath = "set substitute-path "
+
+	// argSeparator parts the words of a debugger command, stdPathEnd
+	// ends the standard library's path prefix in the debugging
+	// information, tempSeparator parts a support directory's name from
+	// the suffix of its temporary copy, and supportMode and
+	// supportFileMode are the permissions of the support's directories
+	// and files: read, and a directory entered, by all, written by
+	// their owner.
+	argSeparator    = " "
+	stdPathEnd      = "/"
+	tempSeparator   = "."
+	supportMode     = 0o755
+	supportFileMode = 0o644
 )
 
 // debuggerScript is Snello's support for lldb and gdb: the formatters
@@ -65,42 +77,36 @@ const (
 //go:embed snello.py
 var debuggerScript []byte
 
-// debug builds a program as build -debug does and runs the platform's
-// debugger on the binary, with the arguments after the program's path
-// for the program, Snello's script loaded and the standard library's
+// debug builds the program at path, a file or a directory, as build
+// -debug does through backend, and runs the platform's debugger on the
+// binary, with args, the arguments after the program's path, for the
+// program, Snello's script loaded and the standard library's
 // sources where the debugger looks for them: the command loads the
 // script, since neither debugger loads one a binary names unless the
 // user has trusted its place. It returns the debugger's exit code.
-func debug(args []string) int {
-	flags := flag.NewFlagSet("debug", flag.ContinueOnError)
-	backend := flags.String("backend", "llvm", "the backend: llvm, or c for the reference backend")
-	if err := flags.Parse(args); err != nil || flags.NArg() < 1 || *backend != "c" && *backend != "llvm" {
-		usage()
-	}
-
-	path := flags.Arg(0)
-	_, isDir, ok := programFiles(path)
+func debug(path, backend string, args []string) int {
+	_, isDir, ok := programFiles(path, os.Stderr)
 	if !ok {
-		return 1
+		return exitFailure
 	}
 
 	if name := platformDebugger(); !onPath(name) { // before a build there is no debugger to run
-		fmt.Fprintf(os.Stderr, "snello debug: %s is not on the path\n", name)
-		return 1
+		fmt.Fprintf(os.Stderr, "%s %s: %s is not on the path\n", program, debugCommand, name)
+		return exitFailure
 	}
 
-	if code := build(path, *backend, true); code != 0 {
+	if code := build(path, backend, true); code != 0 {
 		return code
 	}
 
 	support, done, err := debugSupport()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return exitFailure
 	}
 
 	defer done()
-	name, cmdArgs := debuggerCommand(support, "."+string(filepath.Separator)+programName(path, isDir), flags.Args()[1:])
+	name, cmdArgs := debuggerCommand(support, currentDir+string(filepath.Separator)+programName(path, isDir), args)
 
 	cmd := exec.Command(name, cmdArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -111,10 +117,10 @@ func debug(args []string) int {
 		}
 
 		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return exitFailure
 	}
 
-	return 0
+	return exitSuccess
 }
 
 // platformDebugger is the debugger of the system the compiler runs on:
@@ -139,13 +145,13 @@ func onPath(name string) bool {
 // lower.StdSources, read from support's copy.
 func debuggerCommand(support, bin string, args []string) (string, []string) {
 	script := filepath.Join(support, scriptName)
-	prefix := strings.TrimSuffix(lower.StdSources, "/")
+	prefix := strings.TrimSuffix(lower.StdSources, stdPathEnd)
 	sources := filepath.Join(support, stdDir)
 	if platformDebugger() == lldb {
-		return lldb, append([]string{lldbCommand, lldbImport + strconv.Quote(script), lldbCommand, lldbSourceMap + prefix + " " + strconv.Quote(sources), lldbProgram, bin}, args...)
+		return lldb, append([]string{lldbCommand, lldbImport + strconv.Quote(script), lldbCommand, lldbSourceMap + prefix + argSeparator + strconv.Quote(sources), lldbProgram, bin}, args...)
 	}
 
-	return gdb, append([]string{gdbScript, script, gdbCommand, gdbSubstitutePath + prefix + " " + strconv.Quote(sources), gdbProgram, bin}, args...)
+	return gdb, append([]string{gdbScript, script, gdbCommand, gdbSubstitutePath + prefix + argSeparator + strconv.Quote(sources), gdbProgram, bin}, args...)
 }
 
 // debugSupport returns the directory holding the script and the
@@ -176,7 +182,7 @@ func debugSupport() (dir string, done func(), err error) {
 
 	sum := sha256.New()
 	sum.Write(debuggerScript)
-	err = fs.WalkDir(std.Sources, ".", func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(std.Sources, currentDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -197,11 +203,11 @@ func debugSupport() (dir string, done func(), err error) {
 		return dir, keep, nil
 	}
 
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	if err := os.MkdirAll(parent, supportMode); err != nil {
 		return "", nil, err
 	}
 
-	tmp, err := os.MkdirTemp(parent, filepath.Base(dir)+".")
+	tmp, err := os.MkdirTemp(parent, filepath.Base(dir)+tempSeparator)
 	if err != nil {
 		return "", nil, err
 	}
@@ -223,18 +229,18 @@ func debugSupport() (dir string, done func(), err error) {
 // writeSupport writes the script and the standard library's sources
 // into dir.
 func writeSupport(dir string) error {
-	if err := os.WriteFile(filepath.Join(dir, scriptName), debuggerScript, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, scriptName), debuggerScript, supportFileMode); err != nil {
 		return err
 	}
 
-	return fs.WalkDir(std.Sources, ".", func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(std.Sources, currentDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		to := filepath.Join(dir, stdDir, filepath.FromSlash(path))
 		if d.IsDir() {
-			return os.MkdirAll(to, 0o755)
+			return os.MkdirAll(to, supportMode)
 		}
 
 		src, err := std.Sources.ReadFile(path)
@@ -242,6 +248,6 @@ func writeSupport(dir string) error {
 			return err
 		}
 
-		return os.WriteFile(to, src, 0o644)
+		return os.WriteFile(to, src, supportFileMode)
 	})
 }

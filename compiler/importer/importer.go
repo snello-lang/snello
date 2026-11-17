@@ -128,11 +128,11 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		return nil, err
 	}
 
-	if base, ok := strings.CutSuffix(importPath, "_test"); ok && base != "" && !strings.HasSuffix(base, "/") {
+	if base, ok := strings.CutSuffix(importPath, TestSuffix); ok && base != "" && !strings.HasSuffix(base, "/") {
 		return imp.importTests(base, importPath, dir)
 	}
 
-	name := importPath + "/" + path.Base(importPath) + ".snello"
+	name := importPath + "/" + path.Base(importPath) + SourceExt
 	if src, err := imp.stdFile(name); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
 			names, srcs := []string{name}, [][]byte{src}
@@ -214,7 +214,7 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 // loaded with the library's privileges, from the embedded copy or from
 // StdDir.
 func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, error) {
-	if _, err := imp.stdFile(base + "/" + path.Base(base) + ".snello"); err == nil {
+	if _, err := imp.stdFile(base + "/" + path.Base(base) + SourceExt); err == nil {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
 			entries, err := imp.stdDir(base)
 			if err != nil {
@@ -247,7 +247,7 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 		return nil, errors.New("package " + importPath + " names the tests of " + base + ", and " + err.Error())
 	}
 
-	return imp.loadOnce(canonical+"_test", false, func() (*types.Package, []*Package, error) {
+	return imp.loadOnce(canonical+TestSuffix, false, func() (*types.Package, []*Package, error) {
 		tests, err := TestFiles(pkgDir)
 		if err != nil {
 			return nil, nil, err
@@ -264,7 +264,7 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 			}
 		}
 
-		return imp.load(canonical+"_test", tests, srcs, nil, owner.module.Links, &imp.own)
+		return imp.load(canonical+TestSuffix, tests, srcs, nil, owner.module.Links, &imp.own)
 	})
 }
 
@@ -401,7 +401,7 @@ func (imp *Importer) stdDir(importPath string) ([]fs.DirEntry, error) {
 func Paths() []string {
 	var paths []string
 	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(name, ".snello") {
+		if err == nil && !d.IsDir() && strings.HasSuffix(name, SourceExt) {
 			paths = append(paths, path.Dir(name))
 		}
 

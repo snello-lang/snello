@@ -166,7 +166,7 @@ func TestDebugger(t *testing.T) {
 
 			dir := t.TempDir()
 			src := filepath.Join("src", "prog") // the binary, prog, is written beside src
-			for path, text := range map[string]string{filepath.Join(src, "main.snello"): debuggee, filepath.Join("geo", "geo.snello"): geo, "snello.mod": "// the debuggee's module\n"} {
+			for path, text := range map[string]string{filepath.Join(src, "main.snello"): debuggee, filepath.Join("geo", "geo.snello"): geo, "snello.mod": "// the debuggee's module\nsnello 0.1.0\n"} {
 				if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(path)), 0o755); err != nil {
 					t.Fatal(err)
 				}

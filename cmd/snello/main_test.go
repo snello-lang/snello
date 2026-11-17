@@ -5,10 +5,15 @@
 package main
 
 import (
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/toolchain"
+	"github.com/snello-lang/snello/compiler/version"
 )
 
 // TestProgramName checks the name a build gives its binary: the last
@@ -72,7 +77,7 @@ func TestProgramFiles(t *testing.T) {
 		{"empty", nil, true, false},
 		{"nosuch", nil, false, false},
 	} {
-		names, dir, ok := programFiles(filepath.Join(root, c.path))
+		names, dir, ok := programFiles(filepath.Join(root, c.path), io.Discard)
 		if dir != c.dir || ok != c.ok || len(names) != len(c.names) {
 			t.Errorf("programFiles(%q) = %v, %v, %v, want %v, %v, %v", c.path, names, dir, ok, c.names, c.dir, c.ok)
 			continue
@@ -101,8 +106,184 @@ func TestEmitExamples(t *testing.T) {
 			continue // pending: the examples suite names it
 		}
 
-		if _, _, ok := emitSource(path, "llvm", false); !ok {
+		if _, _, ok := emitSource(path, "llvm", false, os.Stderr); !ok {
 			t.Errorf("%s: the driver refused it", path)
 		}
+	}
+}
+
+// TestWarnModule holds the warning a command prints before it loads a
+// program: for a module whose file has no snello line, the file and the
+// line to add; for one with the line, and a program in no module,
+// nothing.
+func TestWarnModule(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return path
+	}
+
+	loose := write("loose/main.snello", "package main\n\nfunc main() {}\n")
+	bare := write("bare/main.snello", "package main\n\nfunc main() {}\n")
+	write("bare/snello.mod", "// no version\n")
+	versioned := write("versioned/main.snello", "package main\n\nfunc main() {}\n")
+	write("versioned/snello.mod", "snello 0.1.0\n")
+	for _, tt := range []struct {
+		name, want string
+	}{
+		{loose, ""},
+		{bare, "warning: " + filepath.Join(dir, "bare", "snello.mod") + ` has no snello line: it is read as snello 0.1.0, the first release; add the line "snello 0.1.0"` + "\n"},
+		{versioned, ""},
+	} {
+		var b strings.Builder
+		warnModule(&b, []string{tt.name})
+		if b.String() != tt.want {
+			t.Errorf("%s: printed %q, want %q", tt.name, b.String(), tt.want)
+		}
+	}
+}
+
+// TestInitModule starts a module in a directory, and says which file it
+// wrote; a second init there is refused with the command's exit code,
+// and two directories are a usage error.
+func TestInitModule(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	if code := run([]string{initCommand, dir}, io.Discard, &b); code != exitSuccess || b.String() != "snello init: wrote "+filepath.Join(dir, "snello.mod")+"\n" {
+		t.Errorf("init exited %d and said %q", code, b.String())
+	}
+
+	src, err := os.ReadFile(filepath.Join(dir, "snello.mod"))
+	if err != nil || string(src) != "snello "+version.Current+"\n" {
+		t.Errorf("the module file holds %q, %v", src, err)
+	}
+
+	b.Reset()
+	if code := run([]string{initCommand, dir}, io.Discard, &b); code != exitFailure || !strings.Contains(b.String(), "already exists") {
+		t.Errorf("a second init exited %d and said %q", code, b.String())
+	}
+
+	here := t.TempDir()
+	t.Chdir(here)
+	b.Reset()
+	if code := run([]string{initCommand}, io.Discard, &b); code != exitSuccess || b.String() != "snello init: wrote "+filepath.Join(here, "snello.mod")+"\n" {
+		t.Errorf("init in the current directory exited %d and said %q", code, b.String())
+	}
+
+	b.Reset()
+	if code := run([]string{initCommand, "a", "b"}, io.Discard, &b); code != exitUsage || !strings.HasPrefix(b.String(), "usage: snello init [DIR]") {
+		t.Errorf("init with two directories exited %d and said %q", code, b.String())
+	}
+}
+
+// TestCommandsWarn runs check and the emit that build and debug share
+// on a program whose module file has no snello line: each says so on
+// standard error before anything else, a program that does not compile
+// included.
+func TestCommandsWarn(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"snello.mod":         "// no version\n",
+		"good/main.snello":   "package main\n\nfunc main() {}\n",
+		"broken/main.snello": "package main\n\nfunc main() { x }\n",
+	}
+	for name, text := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := "warning: " + filepath.Join(dir, "snello.mod") + " has no snello line"
+	for program, compiles := range map[string]bool{"good": true, "broken": false} {
+		path := filepath.Join(dir, program)
+		code := -1
+		if got := stderrOf(t, func() { code = check(path) }); !strings.HasPrefix(got, want) || (code == 0) != compiles {
+			t.Errorf("check %s exited %d and said %q, want it to begin %q", program, code, got, want)
+		}
+
+		ok := !compiles
+		if got := stderrOf(t, func() { _, _, ok = emitSource(path, "llvm", false, os.Stderr) }); !strings.HasPrefix(got, want) || ok != compiles {
+			t.Errorf("emit %s gave %v and said %q, want it to begin %q", program, ok, got, want)
+		}
+	}
+}
+
+// stderrOf returns what run writes to standard error, gathered in a
+// file, which takes output of any length, and with standard error put
+// back however run ends.
+func stderrOf(t *testing.T, run func()) string {
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer f.Close()
+	saved := os.Stderr
+	os.Stderr = f
+	func() {
+		defer func() { os.Stderr = saved }()
+		run()
+	}()
+
+	out, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(out)
+}
+
+// TestBuildWithoutCompiler builds, runs and tests with no compiler on
+// the path, through both backends, and builds for a debugger with clang
+// there and the C compiler a debug build needs missing: each says what
+// to install, as doctor does, in place of the system's error, with no
+// backend's name before it.
+func TestBuildWithoutCompiler(t *testing.T) {
+	root := writePrograms(t, map[string]string{
+		"a/main.snello":      "package main\n\nfunc main() {}\n",
+		"a/main_test.snello": "package main\n\nfunc TestA() {}\n",
+	})
+	t.Setenv(toolchain.ClangEnv, "")
+	t.Setenv(toolchain.CCEnv, "")
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", "")
+	t.Chdir(t.TempDir())
+	for backend, want := range map[string]string{"llvm": "clang not found", "c": "cc not found"} {
+		line := want + ": install it with " + toolchain.Install() + ", or set "
+		for _, command := range []string{buildCommand, runCommand, testCommand} {
+			code := -1
+			said := stderrOf(t, func() {
+				code = run([]string{command, "-backend", backend, filepath.Join(root, "a")}, os.Stdout, os.Stderr)
+			})
+			if code != exitFailure || !strings.HasPrefix(said, line) {
+				t.Errorf("%s -backend %s exited %d and said %q, want %q", command, backend, code, said, line)
+			}
+		}
+	}
+
+	t.Setenv("PATH", path)
+	if _, err := exec.LookPath(toolchain.Clang()); err != nil {
+		t.Skip("no clang here for a debug build without cc")
+	}
+
+	missing := filepath.Join(t.TempDir(), "cc")
+	t.Setenv(toolchain.CCEnv, missing)
+	code := -1
+	said := stderrOf(t, func() { code = run([]string{buildCommand, "-debug", filepath.Join(root, "a")}, os.Stdout, os.Stderr) })
+	if want := "CC names " + missing + ", not found: "; code != exitFailure || !strings.HasPrefix(said, want) {
+		t.Errorf("a debug build without cc exited %d and said %q, want %q", code, said, want)
 	}
 }
