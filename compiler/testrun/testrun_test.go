@@ -321,7 +321,7 @@ func BenchmarkRound() {
 // away, as on Linux.
 func TestAllocsAcrossTasks(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"snello.mod":              "",
+		"snello.mod":              "snello 0.1.0\n",
 		"tasks/tasks.snello":      tasksSrc,
 		"tasks/tasks_test.snello": tasksTest,
 	})
@@ -344,7 +344,7 @@ func TestAllocsAcrossTasks(t *testing.T) {
 // forms of the failures pinned.
 func TestMore(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"snello.mod":            "",
+		"snello.mod":            "snello 0.1.0\n",
 		"more/more.snello":      moreSrc,
 		"more/more_test.snello": moreTest,
 		"more/testdata/.keep":   "",
@@ -498,7 +498,7 @@ func TestStdDir(t *testing.T) {
 	// A project's own std/strings is not the library's: the whole
 	// library is not beside it.
 	foreign := writeTree(t, map[string]string{
-		"snello.mod":                 "",
+		"snello.mod":                 "snello 0.1.0\n",
 		"std/strings/strings.snello": "package strings\n\nfunc N() int { return 1 }\n",
 		"std/strings/s_test.snello":  "package strings_test\n\nimport (\"expect\"; \"strings\")\n\nfunc TestN() { expect.Equal(ref strings.N(), ref 1) }\n",
 	})
@@ -518,7 +518,7 @@ func TestStdDir(t *testing.T) {
 // file.
 func TestRun(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"snello.mod":                "",
+		"snello.mod":                "snello 0.1.0\n",
 		"shapes/shapes.snello":      shapesSrc,
 		"shapes/shapes_test.snello": shapesTest,
 		"app/main.snello":           "package main\n\nimport \"fmt\"\n\nfunc greet(name ref string) string { return \"hello \" + name }\n\nfunc main() { fmt.Println(greet(\"world\")) }\n",
@@ -665,4 +665,35 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(m.Run())
+}
+
+// TestRunVersion runs the tests of a package whose module file has no
+// snello line, which says so on standard error before anything else,
+// and the tests of a standard package from inside a module whose file
+// does not read, which they are not part of, wherever they run from.
+func TestRunVersion(t *testing.T) {
+	bare := writeTree(t, map[string]string{
+		"snello.mod":           "// no version\n",
+		"app/main.snello":      "package main\n\nfunc main() {}\n",
+		"app/main_test.snello": "package main\n\nimport \"expect\"\n\nfunc TestA() { expect.True(true) }\n",
+	})
+	var stdout, stderr bytes.Buffer
+	code, err := Run(filepath.Join(bare, "app"), "c", nil, &stdout, &stderr)
+	want := "warning: " + filepath.Join(bare, importer.ModFile) + " has no snello line"
+	if err != nil || code != 0 || !strings.HasPrefix(stderr.String(), want) || !strings.HasPrefix(stdout.String(), "ok  \tapp\t") {
+		t.Errorf("a module with no line: exit %d, %v, stdout %q, stderr %q", code, err, stdout.String(), stderr.String())
+	}
+
+	sort, err := filepath.Abs(filepath.Join("..", "..", "std", "sort"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(writeTree(t, map[string]string{"snello.mod": "exclude x\n"}))
+	stdout.Reset()
+	stderr.Reset()
+	code, err = Run(sort, "c", nil, &stdout, &stderr)
+	if err != nil || code != 0 || stderr.Len() != 0 || !strings.HasPrefix(stdout.String(), "ok  \tsort\t") {
+		t.Errorf("a standard package from inside another module: exit %d, %v, stdout %q, stderr %q", code, err, stdout.String(), stderr.String())
+	}
 }

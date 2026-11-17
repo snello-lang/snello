@@ -5,6 +5,7 @@
 package importer
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -150,5 +151,47 @@ func TestImports(t *testing.T) {
 				t.Errorf("%q: error %d = %q, want it to contain %q", tt.src, i, got[i], w)
 			}
 		}
+	}
+}
+
+// TestRequiredVersion checks the snello line of a module a require line
+// leads to, read when an import first reaches it: one written for a
+// later version than this compiler's is refused by its own file, and
+// one without the line, or with no module file at all, is read as
+// written for the first release, without a word; a require line no
+// import reaches leads to a file never read.
+func TestRequiredVersion(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"snello.mod":                 "snello 0.1.0\nrequire later ../later\nrequire bare ../bare\nrequire none ../none\n",
+		"uselater/main.snello":       "package main\n\nimport \"later/pkg\"\n\nfunc main() { pkg.F() }\n",
+		"usebare/main.snello":        "package main\n\nimport (\"bare/pkg\"; \"none/other\")\n\nfunc main() { pkg.F(); other.G() }\n",
+		"useneither/main.snello":     "package main\n\nfunc main() {}\n",
+		"../later/snello.mod":        "snello 9.0.0\n",
+		"../later/pkg/pkg.snello":    "package pkg\n\nfunc F() {}\n",
+		"../bare/snello.mod":         "// no version\n",
+		"../bare/pkg/pkg.snello":     "package pkg\n\nfunc F() {}\n",
+		"../none/other/other.snello": "package other\n\nfunc G() {}\n",
+	})
+	load := func(dir string) error {
+		names, err := SourceFiles(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, _, err = LoadProgram(names, &types.Info{})
+		return err
+	}
+
+	want := filepath.Join(root, "..", "later", ModFile) + ":1: this module needs snello 9.0.0; this is snello 0.1.0: upgrade the compiler" // after the position of the import that reached it
+	if err := load("uselater"); err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("a required module of a later version: got %v, want %q", err, want)
+	}
+
+	if err := load("usebare"); err != nil {
+		t.Errorf("required modules with no line and with no file: %v", err)
+	}
+
+	if err := load("useneither"); err != nil {
+		t.Errorf("a program importing no required module read one: %v", err)
 	}
 }

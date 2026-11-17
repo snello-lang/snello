@@ -30,12 +30,11 @@ type Program struct {
 	Pkg    *types.Package
 }
 
-// CheckMain reports why the program cannot be built, in go build's
-// words: main is not declared in its package, or is declared as
-// something other than a function. The package may have any name,
-// since a program is the package that declares main, and the examples
-// name theirs after what they show, where Go asks for main. snello
-// check takes a package without main, as go vet does, and does not
+// CheckMain reports why the program cannot be built: main is not
+// declared in its package, or is declared as something other than a
+// function. The package may have any name, since a program is the
+// package that declares main, and the examples name theirs after what
+// they show. snello check takes a package without main, and does not
 // ask.
 func (p *Program) CheckMain() error {
 	switch p.Pkg.Scope().Lookup("main").(type) {
@@ -83,14 +82,16 @@ func LoadProgram(names []string, info *types.Info) (*Importer, *Program, error) 
 // path of the package whose test files are loaded with it, or "";
 // DropMain leaves the program's own main out, for a main package
 // tested with a generated one, which is the file named by Main and
-// keeps its.
+// keeps its; Standalone loads the program in no module, wherever its
+// files are named, as a standard package's tests are.
 type Load struct {
-	Names    []string
-	Srcs     [][]byte
-	Tests    string
-	DropMain bool
-	Main     string
-	StdDir   string // the standard library's sources read from a directory, as Importer.StdDir
+	Names      []string
+	Srcs       [][]byte
+	Tests      string
+	DropMain   bool
+	Main       string
+	StdDir     string // the standard library's sources read from a directory, as Importer.StdDir
+	Standalone bool
 }
 
 // LoadProgramFrom loads a program from its sources, as LoadProgram
@@ -103,9 +104,11 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 	imp := NewImporter(info)
 	imp.Tests = l.Tests
 	imp.StdDir = l.StdDir
-	var err error
-	if imp.Module, err = FindModule(filepath.Dir(l.Names[0])); err != nil {
-		return nil, nil, err
+	if !l.Standalone {
+		var err error
+		if imp.Module, err = FindModule(filepath.Dir(l.Names[0])); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	fset, syntax, err := parseFiles(l.Names, l.Srcs)

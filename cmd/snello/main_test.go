@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/version"
 )
 
 // TestProgramName checks the name a build gives its binary: the last
@@ -105,4 +107,132 @@ func TestEmitExamples(t *testing.T) {
 			t.Errorf("%s: the driver refused it", path)
 		}
 	}
+}
+
+// TestWarnModule holds the warning a command prints before it loads a
+// program: for a module whose file has no snello line, the file and the
+// line to add; for one with the line, and a program in no module,
+// nothing.
+func TestWarnModule(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return path
+	}
+
+	loose := write("loose/main.snello", "package main\n\nfunc main() {}\n")
+	bare := write("bare/main.snello", "package main\n\nfunc main() {}\n")
+	write("bare/snello.mod", "// no version\n")
+	versioned := write("versioned/main.snello", "package main\n\nfunc main() {}\n")
+	write("versioned/snello.mod", "snello 0.1.0\n")
+	for _, tt := range []struct {
+		name, want string
+	}{
+		{loose, ""},
+		{bare, "warning: " + filepath.Join(dir, "bare", "snello.mod") + ` has no snello line: it is read as snello 0.1.0, the first release; add the line "snello 0.1.0"` + "\n"},
+		{versioned, ""},
+	} {
+		var b strings.Builder
+		warnModule(&b, []string{tt.name})
+		if b.String() != tt.want {
+			t.Errorf("%s: printed %q, want %q", tt.name, b.String(), tt.want)
+		}
+	}
+}
+
+// TestInitModule starts a module in a directory, and says which file it
+// wrote; a second init there is refused with the command's exit code.
+func TestInitModule(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	if code := initModule([]string{dir}, &b); code != 0 || b.String() != "snello init: wrote "+filepath.Join(dir, "snello.mod")+"\n" {
+		t.Errorf("init exited %d and said %q", code, b.String())
+	}
+
+	src, err := os.ReadFile(filepath.Join(dir, "snello.mod"))
+	if err != nil || string(src) != "snello "+version.Current+"\n" {
+		t.Errorf("the module file holds %q, %v", src, err)
+	}
+
+	b.Reset()
+	if code := initModule([]string{dir}, &b); code != 1 || !strings.Contains(b.String(), "already exists") {
+		t.Errorf("a second init exited %d and said %q", code, b.String())
+	}
+
+	here := t.TempDir()
+	t.Chdir(here)
+	b.Reset()
+	if code := initModule(nil, &b); code != 0 || b.String() != "snello init: wrote "+filepath.Join(here, "snello.mod")+"\n" {
+		t.Errorf("init in the current directory exited %d and said %q", code, b.String())
+	}
+}
+
+// TestCommandsWarn runs check and the emit that build and debug share
+// on a program whose module file has no snello line: each says so on
+// standard error before anything else, a program that does not compile
+// included.
+func TestCommandsWarn(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"snello.mod":         "// no version\n",
+		"good/main.snello":   "package main\n\nfunc main() {}\n",
+		"broken/main.snello": "package main\n\nfunc main() { x }\n",
+	}
+	for name, text := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := "warning: " + filepath.Join(dir, "snello.mod") + " has no snello line"
+	for program, compiles := range map[string]bool{"good": true, "broken": false} {
+		path := filepath.Join(dir, program)
+		code := -1
+		if got := stderrOf(t, func() { code = check(path) }); !strings.HasPrefix(got, want) || (code == 0) != compiles {
+			t.Errorf("check %s exited %d and said %q, want it to begin %q", program, code, got, want)
+		}
+
+		ok := !compiles
+		if got := stderrOf(t, func() { _, _, ok = emitSource(path, "llvm", false) }); !strings.HasPrefix(got, want) || ok != compiles {
+			t.Errorf("emit %s gave %v and said %q, want it to begin %q", program, ok, got, want)
+		}
+	}
+}
+
+// stderrOf returns what run writes to standard error, gathered in a
+// file, which takes output of any length, and with standard error put
+// back however run ends.
+func stderrOf(t *testing.T, run func()) string {
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer f.Close()
+	saved := os.Stderr
+	os.Stderr = f
+	func() {
+		defer func() { os.Stderr = saved }()
+		run()
+	}()
+
+	out, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(out)
 }

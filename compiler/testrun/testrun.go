@@ -371,7 +371,7 @@ func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
 	}
 
 	info := &types.Info{}
-	load := importer.Load{Tests: p.Path, StdDir: p.StdDir}
+	load := importer.Load{Tests: p.Path, StdDir: p.StdDir, Standalone: p.Dir == ""} // a standard package's tests are in no module, wherever they are run from
 	if p.Main {
 		load.Names = append(append(append([]string{}, p.Files...), p.Tests...), filepath.Join(dir, Runner))
 		load.DropMain = true
@@ -466,6 +466,10 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	if IsStdDir(dir) {
 		p, err = PlanStdDir(dir)
 	} else {
+		if w := importer.ModuleWarning(dir); w != "" {
+			fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
+		}
+
 		p, err = PlanDir(dir)
 	}
 
@@ -485,7 +489,7 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	}
 
 	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir // as go test runs a package's tests in its directory, so that testdata/ is beside them
+	cmd.Dir = dir // a package's tests run in its directory, so that testdata/ is beside them
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {

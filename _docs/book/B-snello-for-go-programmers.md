@@ -7,7 +7,9 @@ The chapters describe Snello on its own terms and name no other language. This a
 | Go | Snello |
 |---|---|
 | A directory is a package; its files share one package clause | The same |
-| `go.mod` with `module`, `go`, `require path version`, `replace path => dir` | `snello.mod` with `require name dir`, and nothing else: no module name, and a requirement names a directory, as Go's `replace` does |
+| `go.mod` with `module`, `go`, `require path version`, `replace path => dir` | `snello.mod` with `snello 0.1.0`, `require name dir` and `link name`, and nothing else: no module name, and a requirement names a directory, as Go's `replace` does |
+| `go mod init example.com/app` writes `go.mod` in the current directory | `snello init` writes `snello.mod` in the current directory, or `snello init DIR` in another, holding the compiler's version line, `snello 0.1.0`, and no module name, since a module has none; a directory with a module file already is refused, as Go refuses one |
+| `go 1.27.4` names the oldest Go that builds the module; a `go.mod` without the line is read as `go 1.16`, silently | `snello 0.1.0` names the oldest Snello that builds the module, a Semantic Versioning version, `0.2.0-rc.1` included; a file without the line is read as `0.1.0`, the first release, with a warning on every command that builds, checks or tests the module; a later version than the compiler's is refused, as Go refuses one with `GOTOOLCHAIN=local`, since nothing is fetched |
 | An import path is found in the standard library, then in the module, then through `replace` and the module cache | The standard library, then the module, then the `require` lines; there is no cache and nothing is fetched |
 | `import "example.com/app/shapes"`, the module path in every import | `import "shapes"`: a directory under the root, or a required name; a module has no path |
 | `go build` in a directory, or `go run file.go` for one file | `snello build DIR`, or `snello build FILE` for one file |

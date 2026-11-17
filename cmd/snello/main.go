@@ -7,7 +7,7 @@
 // `snello build FILE` compiles a Snello program of one file to a native
 // binary in the current directory, through the LLVM backend and clang,
 // and `snello build DIR` a program of every .snello file in a
-// directory, named after the directory as go build names it; the
+// directory, named after the directory's last element; the
 // packages of the program's own are found through the nearest
 // snello.mod above it. `snello build -debug FILE` builds it for a
 // debugger, the program's own code unoptimized and described in full,
@@ -20,6 +20,8 @@
 // FILE` builds it through the C backend, the reference implementation,
 // and the system's C compiler. `snello test DIR` builds the tests of a
 // package, its _test.snello files, with a generated main and runs them.
+// `snello init [DIR]` makes the current directory, or DIR, the root of
+// a module, writing its snello.mod with the version of this compiler.
 // Four more subcommands inspect the compiler by hand: `snello lex FILE`
 // prints the token stream, `snello parse FILE` the syntax tree, `snello
 // check FILE|DIR` what the checker finds, and `snello emit [-debug] [-backend c]
@@ -30,6 +32,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,6 +50,9 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
+
+// currentDir is the directory a command works in when it is given none.
+const currentDir = "."
 
 func main() {
 	if len(os.Args) < 2 {
@@ -81,6 +87,8 @@ func main() {
 		os.Exit(test(os.Args[2:]))
 	case "debug":
 		os.Exit(debug(os.Args[2:]))
+	case "init":
+		os.Exit(initModule(os.Args[2:], os.Stderr))
 	default:
 		usage()
 	}
@@ -90,6 +98,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-debug] [-backend llvm|c] | check) FILE|DIR")
 	fmt.Fprintln(os.Stderr, "       snello debug [-backend llvm|c] FILE|DIR [ARGS...]")
 	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
+	fmt.Fprintln(os.Stderr, "       snello init [DIR]")
 	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
 	os.Exit(2)
 }
@@ -217,16 +226,18 @@ func parse(path string) int {
 }
 
 // check parses and checks a program, a file or a directory, and prints
-// the errors; it prints nothing and exits 0 when the program is correct.
+// the errors; it prints nothing on standard output and exits 0 when the
+// program is correct, and warns on standard error of a module file with
+// no snello line.
 // A directory whose package is not main is checked as the library it
-// is, as go vet takes one, so that its binding to C is not refused as a
-// program's would be.
+// is, so that its binding to C is not refused as a program's would be.
 func check(path string) int {
 	names, dir, ok := programFiles(path)
 	if !ok {
 		return 1
 	}
 
+	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	var err error
 	if dir && !isMain(names[0]) {
@@ -241,6 +252,43 @@ func check(path string) int {
 	}
 
 	return 0
+}
+
+// initModule writes a module file into the directory args name, the
+// current one when they name none, through importer.WriteModFile, and
+// says on w, standard error, which file it wrote; a module file already
+// there is refused, and the command exits 1. A flag or more than one
+// directory is a usage error. It creates and writes one file.
+func initModule(args []string, w io.Writer) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(w)
+	if err := fs.Parse(args); err != nil || fs.NArg() > 1 {
+		usage()
+	}
+
+	dir := currentDir
+	if fs.NArg() == 1 {
+		dir = fs.Arg(0)
+	}
+
+	name, err := importer.WriteModFile(dir)
+	if err != nil {
+		fmt.Fprintln(w, "snello init: "+err.Error())
+		return 1
+	}
+
+	fmt.Fprintln(w, "snello init: wrote "+name)
+	return 0
+}
+
+// warnModule prints to w, standard error, before the program is
+// loaded, the warning for the module of the program whose files are
+// names when its file has no snello line, so that a build that fails
+// still says it.
+func warnModule(w io.Writer, names []string) {
+	if msg := importer.ModuleWarning(filepath.Dir(names[0])); msg != "" {
+		fmt.Fprintln(w, msg)
+	}
 }
 
 // isMain reports whether the source file's package clause says main;
@@ -332,6 +380,7 @@ func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool
 		return nil, nil, false
 	}
 
+	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	imp, prog, err := importer.LoadProgram(names, info)
 	if err == nil {
@@ -398,7 +447,7 @@ func programFiles(path string) (names []string, dir, ok bool) {
 }
 
 // programName names the binary of a build: the last element of path,
-// as go build names it, which for a directory given as . or .. comes
+// which for a directory given as . or .. comes
 // from its absolute path, without the .snello extension of a file, or
 // of a directory so named, so that the binary is never taken for a
 // source file by the next build.
