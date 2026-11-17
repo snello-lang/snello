@@ -33,7 +33,9 @@ func runProgram(path, backend string, debug bool, args []string, stdin io.Reader
 	defer work.remove()
 	cmd := exec.Command(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	work.start()
 	if err := cmd.Start(); err != nil {
+		work.hand(nil)
 		fmt.Fprintln(stderr, err)
 		return exitFailure, nil
 	}

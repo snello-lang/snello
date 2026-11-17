@@ -17,13 +17,17 @@ import (
 	"time"
 )
 
-// helperEnv names what the test binary, run again as a helper process,
-// is to do: hold a work directory until a signal ends it, or raise a
-// signal on itself.
-const helperEnv = "SNELLO_SIGNALS_HELPER"
-
-// helperDirEnv names the program a helper process runs as run does.
-const helperDirEnv = "SNELLO_SIGNALS_PROGRAM"
+const (
+	// helperEnv names what the test binary, run again as a helper
+	// process, is to do: hold a work directory until a signal ends it,
+	// raise a signal on itself, or another of TestHelperProcess's cases;
+	// helperDirEnv names the program a helper runs as run does; and
+	// startWindowRounds is how many times the start window is
+	// signalled into.
+	helperEnv         = "SNELLO_SIGNALS_HELPER"
+	helperDirEnv      = "SNELLO_SIGNALS_PROGRAM"
+	startWindowRounds = 20
+)
 
 // TestWorkDir holds a work directory to its removal: there until it,
 // gone after, and removed twice without harm.
@@ -155,6 +159,42 @@ func TestRunForward(t *testing.T) {
 	}
 }
 
+// TestStartWindow signals a process between telling its work
+// directory's guard that a program is starting and handing it the
+// program, round after round: the guard holds the termination and
+// passes it on to the program once it runs, and the process lives on;
+// and a start that fails ends the process by the signal it held, with
+// the directory removed.
+func TestStartWindow(t *testing.T) {
+	if err := helper(t, "window").Run(); err != nil {
+		t.Errorf("a signal in the start window: %v", err)
+	}
+
+	cmd := helper(t, "failedstart")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, err := bufio.NewReader(out).ReadString('\n')
+	if err != nil {
+		t.Fatalf("the helper said no directory: %v", err)
+	}
+
+	err = cmd.Wait()
+	if sig, ok := signalOf(err); !ok || sig != syscall.SIGTERM {
+		t.Errorf("a failed start with a signal held ended with %v, want the termination", err)
+	}
+
+	if _, serr := os.Stat(strings.TrimSpace(dir)); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("the work directory is left: %v", serr)
+	}
+}
+
 // TestRaise ends a process by an interrupt it raises on itself, as a
 // shell must see it end.
 func TestRaise(t *testing.T) {
@@ -175,6 +215,7 @@ func TestHelperProcess(t *testing.T) {
 		}
 
 		program := exec.Command("sleep", "60")
+		w.start()
 		if err := program.Start(); err != nil {
 			os.Exit(exitFailure)
 		}
@@ -187,6 +228,42 @@ func TestHelperProcess(t *testing.T) {
 	case "run":
 		code, _ := runProgram(os.Getenv(helperDirEnv), "llvm", false, nil, nil, os.Stdout, os.Stderr)
 		os.Exit(code)
+	case "window":
+		for range startWindowRounds {
+			w, err := newWorkDir(buildDirPattern)
+			if err != nil {
+				os.Exit(exitFailure)
+			}
+
+			w.start()
+			syscall.Kill(os.Getpid(), syscall.SIGTERM) // before the program exists: held, then passed on
+			program := exec.Command("sleep", "60")
+			if err := program.Start(); err != nil {
+				os.Exit(exitFailure)
+			}
+
+			w.hand(program.Process)
+			if sig, ok := signalOf(program.Wait()); !ok || sig != syscall.SIGTERM {
+				os.Exit(exitFailure)
+			}
+
+			w.remove()
+		}
+
+		os.Exit(exitSuccess)
+	case "failedstart":
+		w, err := newWorkDir(buildDirPattern)
+		if err != nil {
+			os.Exit(exitFailure)
+		}
+
+		os.Stdout.WriteString(w.path + "\n")
+		w.start()
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond) // the signal reaches the guard, which holds it
+		w.hand(nil)
+		time.Sleep(time.Minute)
+		os.Exit(exitFailure)
 	case "raise":
 		raise(syscall.SIGINT)
 	case "hold":

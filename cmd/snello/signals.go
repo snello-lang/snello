@@ -41,11 +41,12 @@ var endingSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGHUP, s
 // caught and not ignored, since an ignored signal stays ignored in the
 // program the command starts, and a caught one does not.
 type workDir struct {
-	path    string
-	signals chan os.Signal
-	program chan *os.Process
-	done    chan struct{}
-	once    sync.Once
+	path     string
+	signals  chan os.Signal
+	starting chan struct{}
+	program  chan *os.Process
+	done     chan struct{}
+	once     sync.Once
 }
 
 // newWorkDir makes a temporary directory named after pattern and starts
@@ -57,14 +58,28 @@ func newWorkDir(pattern string) (*workDir, error) {
 		return nil, err
 	}
 
-	w := &workDir{path: path, signals: make(chan os.Signal, 1), program: make(chan *os.Process, 1), done: make(chan struct{})}
+	w := &workDir{path: path, signals: make(chan os.Signal, 1), starting: make(chan struct{}), program: make(chan *os.Process), done: make(chan struct{})}
 	signal.Notify(w.signals, endingSignals...)
 	go w.guard()
 	return w, nil
 }
 
-// hand gives the directory's guard the program p the command has
-// started from it, which the signals then go to as workDir says.
+// start tells the directory's guard that the command is about to start
+// a program from it, and returns once the guard knows: from then on the
+// guard holds the signals that reach the command, until hand gives it
+// the program or says the start failed, so that a signal is never taken
+// for one that came while the command built, with a program already
+// running, nor lost between the start and the hand.
+func (w *workDir) start() {
+	w.starting <- struct{}{}
+}
+
+// hand gives the directory's guard the program p the command started
+// from it, or nil for a start that failed, and returns once the guard
+// has it: the signals held since start go to the program, every one,
+// since a program that did not exist yet when the terminal sent one did
+// not receive it; with no program, the first ends the command as it
+// would have while the command built.
 func (w *workDir) hand(p *os.Process) {
 	w.program <- p
 }
@@ -79,27 +94,52 @@ func (w *workDir) remove() {
 	})
 }
 
-// guard answers the signals that reach the command until remove: before
-// a program is handed to it by removing the directory and ending the
-// command, after by passing a termination or a hangup on to the program.
+// guard answers the signals that reach the command until remove: while
+// the command builds by removing the directory and ending the command,
+// while it starts a program by holding them, and once the program runs
+// by passing a termination or a hangup on to it, the rest being the
+// program's own from the terminal.
 func (w *workDir) guard() {
 	var p *os.Process
+	var held []os.Signal
+	starting := false
 	for {
 		select {
+		case <-w.starting:
+			starting = true
 		case p = <-w.program:
-		case s := <-w.signals:
-			if p == nil {
-				os.RemoveAll(w.path)
-				raise(s)
+			starting = false
+			if p == nil && len(held) > 0 {
+				w.end(held[0])
 			}
 
-			if s == syscall.SIGTERM || s == syscall.SIGHUP {
+			for _, s := range held {
 				p.Signal(s)
+			}
+
+			held = nil
+		case s := <-w.signals:
+			switch {
+			case p != nil:
+				if s == syscall.SIGTERM || s == syscall.SIGHUP {
+					p.Signal(s)
+				}
+			case starting:
+				held = append(held, s)
+			default:
+				w.end(s)
 			}
 		case <-w.done:
 			return
 		}
 	}
+}
+
+// end removes the directory and ends the command by s, for a signal that
+// came while no program ran from the directory.
+func (w *workDir) end(s os.Signal) {
+	os.RemoveAll(w.path)
+	raise(s)
 }
 
 // raise ends the command by s, as s's default action would, so that the
