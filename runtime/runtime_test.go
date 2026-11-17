@@ -2618,6 +2618,45 @@ int main(void) {
 	}
 }
 
+// TestJSONBlock holds a Decoder's block to its two operations: grow
+// lengthens it by zeros, keeping what it holds, in place while its
+// capacity allows and else to exactly the new length, so that a block
+// stopped at its limit holds no more than it was asked to; and slide
+// moves a range of it to its start.
+func TestJSONBlock(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+int main(void) {
+    int bad = 0;
+    sn_slice_u8 b = {sn_alloc(8), 8, 8};
+    memcpy((void *)b.ptr, "abcdefgh", 8);
+    sn_encoding__json_grow(&b, 5);
+    if (b.len != 13 || b.cap != 13) { printf("grown to len %lld cap %lld, want 13 13\n", (long long)b.len, (long long)b.cap); bad++; }
+    if (memcmp(b.ptr, "abcdefgh\0\0\0\0\0", 13) != 0) { printf("grown block holds the wrong bytes\n"); bad++; }
+    sn_slice_u8 roomy = {sn_alloc(100), 10, 100};
+    memset((void *)roomy.ptr, 'x', 100);
+    const uint8_t *before = roomy.ptr;
+    sn_encoding__json_grow(&roomy, 20);
+    if (roomy.ptr != before || roomy.len != 30 || roomy.cap != 100) { printf("grown in place: len %lld cap %lld moved %d\n", (long long)roomy.len, (long long)roomy.cap, roomy.ptr != before); bad++; }
+    for (int i = 10; i < 30; i++) if (roomy.ptr[i] != 0) { printf("byte %d not zeroed\n", i); bad++; break; }
+    sn_encoding__json_grow(&roomy, 0);
+    sn_encoding__json_grow(&roomy, -4);
+    if (roomy.len != 30) { printf("a growth by nothing changed the length to %lld\n", (long long)roomy.len); bad++; }
+    memcpy((void *)b.ptr, "0123456789abc", 13);
+    sn_encoding__json_slide(&b, 4, 9);
+    if (memcmp(b.ptr, "45678", 5) != 0) { printf("slide moved the wrong bytes\n"); bad++; }
+    sn_slice_free((sn_slice *)&b);
+    sn_slice_free((sn_slice *)&roomy);
+    return bad;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "block"), probe)
+	if out, err := exec.Command(bin).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestSearchLinear times the searches on a text and a pattern that
 // repeat with a period of sixteen, the pattern failing only at its far
 // end: a search that compared the whole pattern at every candidate would

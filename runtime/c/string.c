@@ -1165,6 +1165,43 @@ sn_string sn_strings_ownString(sn_slice_u8 b) {
     return (sn_string){ b.ptr, b.len, b.cap };
 }
 
+// sn_encoding__json_slide moves the bytes of a Decoder's block from lo
+// up to hi to its start, by memmove, as bufio's buffers move theirs.
+void sn_encoding__json_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) { sn_bufio_slide(buf, lo, hi); }
+
+// sn_encoding__json_grow lengthens a Decoder's block by n bytes, zero,
+// in place when its capacity allows and else in one allocation of
+// exactly the new length, since the Decoder decides how its block
+// grows, doubling it and stopping at its limit. A length past what an
+// int holds is never asked for, since no block is that long, and
+// leaves the block as it was, which its reader then fills with nothing.
+void sn_encoding__json_grow(sn_slice_u8 *buf, int64_t n) {
+    sn_slice *b = (sn_slice *)buf; // the same three words
+    sn_check_slice(b);
+    sn_slice_own(b, "grow");
+    int64_t need;
+    if (n <= 0 || __builtin_add_overflow(b->len, n, &need)) {
+        return;
+    }
+
+    if (need > sn_slice_cap(b)) {
+        uint8_t *p = sn_alloc((size_t)need);
+        if (b->len > 0) {
+            memcpy(p, b->ptr, (size_t)b->len);
+        }
+
+        if (b->cap != SN_CALLER) { // a caller's frame holds it
+            sn_free(b->ptr);
+        }
+
+        b->ptr = p;
+        b->cap = need;
+    }
+
+    memset((uint8_t *)b->ptr + b->len, 0, (size_t)n);
+    b->len = need;
+}
+
 // sn_encoding__json_textOf lends the bytes of b as a string, with no copy: a
 // view, of cap 0 as a literal is, which owns nothing.
 sn_string sn_encoding__json_textOf(sn_slice_u8 b) {
