@@ -164,7 +164,8 @@ func (c *Checker) traitValueType(tr *Trait, e *ast.NamedType) Type {
 	}
 
 	for i, a := range inst.targs {
-		if !c.storable(a, "a type argument", e.Args[i].Pos()) {
+		if holdsBorrow(a) {
+			c.errorf(e.Args[i].Pos(), "a trait value cannot hold a borrow: "+inst.String()+" would hide what "+a.String()+" borrows, which a bound may take instead")
 			return Typ[Invalid]
 		}
 	}
@@ -173,9 +174,10 @@ func (c *Checker) traitValueType(tr *Trait, e *ast.NamedType) Type {
 }
 
 // instance resolves the arguments of a generic type's name, List<int>,
-// one per parameter, and returns the instance. An argument cannot hold
-// a borrow, which the instance's fields would then store, and must
-// implement the bounds of its parameter.
+// one per parameter, and returns the instance. An argument must
+// implement the bounds of its parameter, and one that holds a borrow
+// makes an instance that holds it, which keeps it in no owned data the
+// checker does not follow (ownedParts).
 func (c *Checker) instance(e *ast.NamedType, named *Named) Type {
 	if len(e.Args) != len(named.tparams) {
 		c.errorf(e.Pos(), e.Name.Name+" takes "+plural(len(named.tparams), "type argument")+": "+named.String())
@@ -189,7 +191,7 @@ func (c *Checker) instance(e *ast.NamedType, named *Named) Type {
 	targs := make([]Type, len(e.Args))
 	for i, arg := range e.Args {
 		targs[i] = c.typ(arg)
-		if targs[i] == Typ[Invalid] || !c.storable(targs[i], "a type argument", arg.Pos()) {
+		if targs[i] == Typ[Invalid] {
 			return Typ[Invalid]
 		}
 	}
@@ -198,7 +200,9 @@ func (c *Checker) instance(e *ast.NamedType, named *Named) Type {
 		return Typ[Invalid]
 	}
 
-	return Instantiate(named, targs)
+	inst := Instantiate(named, targs)
+	c.ownedParts(inst, e.Pos())
+	return inst
 }
 
 // plural writes a count of things: 1 type argument, 2 type arguments.

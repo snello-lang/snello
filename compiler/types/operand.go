@@ -103,6 +103,10 @@ func (c *Checker) fits(op operand, t Type, pos token.Pos, what string) bool {
 		return false
 	}
 
+	if _, ok := t.(*Trait); ok {
+		c.hide(op.typ, pos, "a trait value") // a generic body's value of a type parameter, inside a trait value
+	}
+
 	return true
 }
 

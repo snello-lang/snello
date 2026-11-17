@@ -5,9 +5,6 @@
 package types
 
 import (
-	"path/filepath"
-	"strconv"
-
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -202,12 +199,7 @@ func (c *Checker) markKept(v *Var, how string, pos token.Pos) {
 // keptWhere formats where a parameter is kept, line:col in the file
 // being checked, with the file's name from another file or package.
 func (c *Checker) keptWhere(v *Var) string {
-	at := strconv.Itoa(v.keptBy.at.Line) + ":" + strconv.Itoa(v.keptBy.at.Column)
-	if v.keptBy.at.Filename != c.file.Name() {
-		return filepath.Base(v.keptBy.at.Filename) + ":" + at
-	}
-
-	return at
+	return c.positionText(v.keptBy.at)
 }
 
 // declared returns the parameter a call's i-th argument is passed to as

@@ -59,7 +59,11 @@ func (h Handle<T>) Join() Result<T, Panic> {
 	}
 }
 
-// Message lends the message the panic was raised with.
+// Message lends the message the failed task's panic was raised with,
+// the text panic was given or the runtime's own, "index out of range"
+// and the like, for as long as the Panic is lent; nothing is copied.
+//
+//	if p := h.Join().Err() { fmt.Println("worker failed:", p.Message()) }
 func (p ref Panic) Message() ref string { return ref p.message }
 
 // A Group is several tasks started for handles of no result, waited
@@ -92,7 +96,13 @@ struct failure {
 	stop  (chan<- ())?
 }
 
-// NewGroup returns a group with no member.
+// NewGroup returns a group with no member, ready for Add. It allocates
+// the state the members share, a lock and the channel Done gives, once
+// for the group's life.
+//
+//	g := task.NewGroup()
+//	g.Add(spawn work(1))
+//	g.Wait()?
 func NewGroup() Group {
 	done := make(chan ())
 	var stop chan<- () = done.Clone() // the sending end, kept for the first failure

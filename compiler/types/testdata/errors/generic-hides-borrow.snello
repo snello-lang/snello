@@ -1,0 +1,36 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a generic function that puts a value of its type parameter in a
+// trait value or a closure takes no type argument that holds a borrow,
+// since the value made would hide it from the checker; so does one that
+// passes the parameter to such a function. Fix: give it an owned value.
+
+package p
+
+import "fmt"
+
+trait Show {
+    func (s ref Self) Text() string
+}
+
+struct View impl Show {
+    s ref string
+}
+
+func (v ref View) Text() string { return (*v.s).Clone() }
+
+struct Wrap<T: Show> impl Show {
+    x T
+}
+
+func (w ref Wrap<T>) Text() string { return w.x.Text() }
+
+func hide<T: Show + Copy>(x ref T) Show { return Wrap<T>{x: *x} }
+
+func main() {
+    s := "a".Clone()
+    v := View{s: ref s}
+    fmt.Println(hide(ref v).Text())         // ERROR "hide's T cannot hold View: it holds a borrow, which hide hides in a trait value"
+}

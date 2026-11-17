@@ -5,55 +5,23 @@
 // Closures and iterators.
 //
 // Tests closure capture (by borrow, by mutable borrow, by move), a lazy
-// iterator trait with default adapters, and that a closure holding a
-// borrow is itself a borrow: it cannot be stored, returned, or sent.
+// iterator over the standard trait iter.Iterator with its default
+// adapters, and that a closure holding a borrow is itself a borrow: it
+// cannot be stored, returned, or sent.
 
-package iter
+package main
 
-import "fmt"
+import ("fmt"; "iter")
 
-trait Iterator<T> {
-    func (it mut Self) Next() T?
-
-    // Default adapters. They consume the iterator they wrap.
-    func (it Self) Map<U>(f func(T) U) MapIter<Self, T, U> {
-        return MapIter{inner: it, f: f}
-    }
-    func (it Self) Filter(keep func(ref T) bool) FilterIter<Self, T> {
-        return FilterIter{inner: it, keep: keep}
-    }
-    func (it mut Self) Collect() []T {
-        out := []T{}
-        for { out.Push(it.Next() ?? break) }
-        return out
-    }
-}
-
-struct Range impl Iterator<int> { cur, end int }
+// A Range gives the numbers from cur up to end. Listing iter.Iterator
+// gives it the adapters, Map, Filter, Collect and the rest, each a
+// default method of the trait; Next is all it writes.
+struct Range impl iter.Iterator<int> { cur, end int }
 
 func (r mut Range) Next() int? {
     if r.cur >= r.end { return None }
     r.cur += 1
     return Some(r.cur - 1)
-}
-
-struct MapIter<I: Iterator<T>, T, U> impl Iterator<U> {
-    inner I
-    f     func(T) U
-}
-
-func (m mut MapIter<I, T, U>) Next() U? { return m.inner.Next().Map(m.f) }
-
-struct FilterIter<I: Iterator<T>, T> impl Iterator<T> {
-    inner I
-    keep  func(ref T) bool
-}
-
-func (f mut FilterIter<I, T>) Next() T? {
-    for {
-        v := f.inner.Next() ?? return None
-        if f.keep(ref v) { return Some(v) }
-    }
 }
 
 // A closure captures each variable in the weakest mode that its body

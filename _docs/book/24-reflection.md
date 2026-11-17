@@ -247,6 +247,13 @@ for dec.More()? {
 dec.EndArray()?
 ```
 
+A value's text may take at most 64 MiB, so a stream that never ends a string, or sends one endless array, cannot make the Decoder hold more than that and one block of 4 KiB: past the limit the value is refused, `value longer than 67108864 bytes, the Decoder's limit`, with its offset, and every later call returns the same error. `dec.SetLimit(n)` sets another bound, and zero or less removes it. A key read with `Key` is held to the limit, and so is each element of an array read a piece at a time, so a long array of small records streams under a small limit. Arrays and objects opened a piece at a time nest at most 128 deep, as `Unmarshal` reads them, so a stream of opening brackets is refused too.
+
+```go
+dec := json.NewDecoder(mut conn)
+dec.SetLimit(1 << 20) // one MiB a message
+```
+
 A value is read by `Unmarshal`'s rules, and an error's offset counts from the start of the input. A value its type refuses is passed, so the next `Decode` reads the one after it; text cut off by the end of the input is `unexpected end of input`, again at each call. When the reader fails, every later call returns its failure, which `dec.IoError()` gives, so the program can see an `io.TimedOut` from an `io.Reset`; an Encoder whose writer failed does the same, since the writer may hold part of a value. `dec.Offset()` is where the next byte lies in the input, and `dec.Buffered()` lends the bytes read past the JSON, for an input that goes on in another form.
 
 ## Memory safe, no collector

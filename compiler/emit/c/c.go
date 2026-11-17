@@ -610,12 +610,18 @@ func put(w writer, parts ...string) {
 // is several lines at one Snello line. Indentation is not tracked; the
 // output is for the C compiler, and a reader has the Snello source.
 func (e *Emitter) line(s string) {
+	e.lineParts(s)
+}
+
+// lineParts is line for a line written in parts, which it writes one
+// after another with nothing joined first.
+func (e *Emitter) lineParts(parts ...string) {
 	if e.at.IsValid() {
 		p := e.file.Position(e.at)
 		put(&e.body, "#line ", strconv.Itoa(p.Line), " ", e.directiveName(e.file), "\n")
 	}
 
-	e.body.WriteString(s)
+	put(&e.body, parts...)
 	e.body.WriteByte('\n')
 }
 

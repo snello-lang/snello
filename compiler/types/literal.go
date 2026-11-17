@@ -274,12 +274,13 @@ func (c *Checker) genericLit(e *ast.CompositeLit, g *Named, expected Type) opera
 	}
 
 	ops := c.evaluate(in, values, slots, func(i int, op operand) { c.maybeMove(op, slots[i]) })
-	targs, ok := c.complete(in, g.obj.name, e.Type, nil)
+	targs, ok := c.complete(in, g.obj.name, e.Type)
 	if !ok {
 		return invalidOperand
 	}
 
 	t := Instantiate(g, targs)
+	c.ownedParts(t, e.Type.Pos())
 	done := make(map[ast.Expr]operand, len(values))
 	for i, v := range values {
 		done[v] = ops[i]

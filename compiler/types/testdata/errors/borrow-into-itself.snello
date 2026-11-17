@@ -1,0 +1,19 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a method stores in its caller's value no borrow of that value's
+// own data: the caller may change or free that data while the borrow
+// is kept, and a value cannot hold a borrow of itself. Fix: keep an
+// index, or keep the borrow in a value of its own beside the owner.
+
+package p
+
+struct V {
+    r   ref []int
+    own []int
+}
+
+func (v mut V) pointAtOwn() {
+    v.r = ref v.own                 // ERROR "cannot store a borrow of v.own in v: v is the caller's, which may change or free v.own while the borrow is kept"
+}

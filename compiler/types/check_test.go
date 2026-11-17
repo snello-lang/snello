@@ -269,7 +269,16 @@ var handledErrors = map[string]bool{
 	// result is Send.
 	"handle-not-send.snello": true,
 	// A channel ends when its last sending handle is dropped: close is gone.
-	"close-gone.snello": true,
+	"close-gone.snello":               true,
+	"iter-outlives-source.snello":     true,
+	"iter-source-changed.snello":      true,
+	"iter-adapter-stored.snello":      true,
+	"iter-next-borrows-itself.snello": true,
+	"generic-hides-borrow.snello":     true,
+	"generic-owned-borrow.snello":     true,
+	"generic-mut-takes-borrow.snello": true,
+	"borrow-into-itself.snello":       true,
+	"borrow-of-itself.snello":         true,
 }
 
 func TestNegativePrograms(t *testing.T) {

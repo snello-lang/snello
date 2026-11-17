@@ -1,0 +1,382 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package iter is the iterator trait, its adapters and its consumers.
+//
+// An iterator is a value a loop pulls items from with Next, one at a
+// time, until Next gives None. A collection makes one over its items,
+// d.Iter() of a deque, s.Iter() of a set, a.Iter() of an arena; a type
+// of the program makes one by writing Next and listing Iterator. An
+// adapter wraps an iterator in another that changes what it gives, and
+// a consumer pulls every item and returns one answer:
+//
+//	evens := d.Iter().Filter(isEven).Map(square).Collect()
+//	for i, x := range d.Iter().Enumerate() { ... }
+//	total := d.Iter().Fold(0, add)
+//
+// The adapters are Map, Filter, Take, Skip, Enumerate, Zip and Chain;
+// the consumers Count, Fold, Any, All, Find and Collect. Each is a
+// default method of Iterator, so every iterator has them all.
+//
+// What an iterator borrows. An iterator over a collection's items lends
+// them, an Iterator<ref T>, and holds a ref borrow of the collection
+// for as long as it lives, so the collection cannot change, move or be
+// dropped while it does; an adapter over it holds the same borrow, and
+// so does a slice Collect gives of the items. The checker follows the
+// borrow through every adapter and consumer, with nothing written and
+// nothing checked when the program runs, and lets the collection go
+// after the chain's last use.
+//
+// What it costs. An adapter is a struct of the iterator it wraps and
+// its function, made on the stack; nothing is allocated but the slice
+// Collect returns. An adapter does no work until it is pulled from, so
+// a chain runs as one loop, an item at a time, when a range or a
+// consumer pulls from it, and stops as soon as the consumer has its
+// answer. Each instance is compiled for its own types, and the calls
+// of a chain are written into the loop.
+//
+// The functions given to the adapters and consumers. A closure given
+// to an adapter is kept by it, so it borrows nothing: it captures
+// copies of the numbers it reads, or nothing at all. A test that needs
+// a string a closure would borrow is written in a loop's body instead.
+// Filter, Any, All and Find lend each item to their test, func(ref T)
+// bool, so over borrowed items the test takes a ref ref T.
+//
+// range takes any value with a Next method, whether its type lists
+// Iterator or not. Listing it gives the type the adapters and lets a
+// generic function take it by a bound:
+//
+//	func sum<I: iter.Iterator<ref int>>(it mut I) int { ... }
+package iter
+
+// An Iterator gives items of type T, one per call of Next, until Next
+// gives None; after that Next keeps giving None. An iterator that lends
+// its items, an Iterator<ref T>, lends what it borrows and never a
+// part of itself, so an item stays good while the iterator moves on and
+// a consumer may hold every item at once: Next returns only borrows
+// reached through the ref borrows the iterator holds, which the checker
+// holds an implementation to.
+//
+//	struct Count impl iter.Iterator<int> {
+//		next int
+//		end  int
+//	}
+//
+//	func (c mut Count) Next() int? {
+//		if c.next >= c.end { return None }
+//		c.next++
+//		return Some(c.next - 1)
+//	}
+trait Iterator<T> {
+	// Next returns the next item and moves the iterator past it, or
+	// returns None once there are no more. It changes the iterator, which
+	// it borrows mut for the call alone.
+	func (it mut Self) Next() T?
+
+	// Map returns an iterator that gives f of each item of it, in order:
+	// f is called once per item, when the item is pulled, and gets the
+	// item by value, a borrow of it when it is a ref T. Map takes it and
+	// keeps it with f, so the result holds what it borrows; f captures
+	// nothing it borrows. Nothing is pulled until the result is.
+	//
+	//	lengths := words.Iter().Map(func(w ref string) int { return w.Len() })
+	func (it Self) Map<U>(f func(T) U) Map<Self, T, U> {
+		return Map{inner: it, f: f}
+	}
+
+	// Filter returns an iterator that gives the items of it that keep is
+	// true of, in order, and passes over the rest: keep is lent each item
+	// once, and the items it keeps are given as they are. Filter takes it
+	// and keeps it with keep, so the result holds what it borrows.
+	// Pulling one item may pull many from it, until keep is true of one
+	// or it ends.
+	//
+	//	evens := Count{0, 10}.Filter(func(x ref int) bool { return *x % 2 == 0 })
+	func (it Self) Filter(keep func(ref T) bool) Filter<Self, T> {
+		return Filter{inner: it, keep: keep}
+	}
+
+	// Take returns an iterator that gives the first n items of it, or all
+	// of them when it has fewer, and then ends without pulling more; it
+	// gives none when n is 0 or less. Take takes it, so the result holds
+	// what it borrows.
+	//
+	//	first := d.Iter().Take(3).Collect()
+	func (it Self) Take(n int) Take<Self, T> {
+		return Take{inner: it, left: n}
+	}
+
+	// Skip returns an iterator that passes over the first n items of it,
+	// pulling and dropping them on its first pull, and then gives the
+	// rest; it gives every item when n is 0 or less, and none when it has
+	// n or fewer. Skip takes it, so the result holds what it borrows.
+	//
+	//	rest := d.Iter().Skip(1).Collect()
+	func (it Self) Skip(n int) Skip<Self, T> {
+		return Skip{inner: it, left: n}
+	}
+
+	// Enumerate returns an iterator that gives each item of it with its
+	// index, counted from 0: (0, first), (1, second), and so on.
+	// Enumerate takes it, so the result holds what it borrows.
+	//
+	//	for i, w := range words.Iter().Enumerate() { fmt.Println(i, w) }
+	func (it Self) Enumerate() Enumerate<Self, T> {
+		return Enumerate{inner: it, next: 0}
+	}
+
+	// Zip returns an iterator that gives the items of it and other in
+	// pairs, (it's first, other's first), then the second of each, and
+	// so on, and ends as soon as either ends: an item it has pulled from
+	// it when other has none left is dropped. Zip takes both, so the
+	// result holds what each borrows.
+	//
+	//	for name, score := range names.Iter().Zip(scores.Iter()) { ... }
+	func (it Self) Zip<J: Iterator<V>, V>(other J) Zip<Self, T, J, V> {
+		return Zip{a: it, b: other}
+	}
+
+	// Chain returns an iterator that gives every item of it and then
+	// every item of other, which gives items of the same type, and ends
+	// when other ends. Chain takes both, so the result holds what each
+	// borrows.
+	//
+	//	all := first.Iter().Chain(second.Iter()).Collect()
+	func (it Self) Chain<J: Iterator<T>>(other J) Chain<Self, J, T> {
+		return Chain{a: it, b: other, onB: false}
+	}
+
+	// Count pulls every item of it and returns how many there were,
+	// dropping each as it goes; 0 for none. It borrows it mut and leaves
+	// it ended. It takes time in the number of items and allocates
+	// nothing.
+	//
+	//	n := d.Iter().Filter(isEven).Count()
+	func (it mut Self) Count() int {
+		n := 0
+		for it.Next().IsSome() {
+			n++
+		}
+
+		return n
+	}
+
+	// Fold pulls every item of it and returns init combined with each in
+	// turn: f(f(f(init, first), second), third) and so on, or init when
+	// there are none. f gets the running value and the item by value,
+	// and returns the next running value. It borrows it mut and leaves it
+	// ended.
+	//
+	//	total := d.Iter().Fold(0, func(sum int, x ref int) int { return sum + *x })
+	func (it mut Self) Fold<A>(init A, f func(A, T) A) A {
+		acc := init
+		for {
+			item := it.Next() ?? break
+			acc = f(acc, item)
+		}
+
+		return acc
+	}
+
+	// Any reports whether test is true of an item of it. It pulls items
+	// until test is true of one, and returns true then without pulling
+	// more, or false when it ends first, false for none. test is lent each
+	// item. It borrows it mut and leaves it after the item found.
+	//
+	//	hasEmpty := words.Iter().Any(func(w ref ref string) bool { return w.Len() == 0 })
+	func (it mut Self) Any(test func(ref T) bool) bool {
+		for {
+			item := it.Next() ?? break
+			if test(ref item) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// All reports whether test is true of every item of it. It pulls
+	// items until test is false of one, and returns false then without
+	// pulling more, or true when it ends first, true for none. test is
+	// lent each item. It borrows it mut and leaves it after the item that
+	// failed.
+	//
+	//	allPositive := d.Iter().All(func(x ref ref int) bool { return **x > 0 })
+	func (it mut Self) All(test func(ref T) bool) bool {
+		for {
+			item := it.Next() ?? break
+			if !test(ref item) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	// Find returns the first item of it that test is true of, pulling
+	// items until it finds one, or None when it ends first. test is lent
+	// each item; the item found is returned as it was given, a borrow of
+	// the collection's element for an Iterator<ref T>. It borrows it mut
+	// and leaves it after the item found, so a second call finds the
+	// next.
+	//
+	//	if w := words.Iter().Find(func(w ref ref string) bool { return w.HasPrefix("go") }) { ... }
+	func (it mut Self) Find(test func(ref T) bool) T? {
+		for {
+			item := it.Next() ?? break
+			if test(ref item) {
+				return Some(item)
+			}
+		}
+
+		return None
+	}
+
+	// Collect pulls every item of it and returns them in a new slice, in
+	// the order given; an empty slice for none. Over borrowed items the
+	// slice holds the borrows, []ref T, and holds the collection as the
+	// iterator did, so it is used while the collection lives and cannot
+	// be stored in owned data; a Map that clones turns them into owned
+	// ones. It borrows it mut and leaves it ended. It allocates the
+	// slice, which grows as a slice does, doubling.
+	//
+	//	names := people.Iter().Map(func(p ref Person) string { return p.Name.Clone() }).Collect()
+	func (it mut Self) Collect() []T {
+		out := []T{}
+		for {
+			out.Push(it.Next() ?? break)
+		}
+
+		return out
+	}
+}
+
+// A Map is the iterator Iterator.Map returns: it gives f of each item
+// of the iterator it wraps. It holds that iterator and f, and so what
+// the iterator borrows.
+struct Map<I: Iterator<T>, T, U> impl Iterator<U> {
+	inner I
+	f     func(T) U
+}
+
+// Next pulls the next item of the wrapped iterator and returns f of it,
+// or None once that iterator has no more.
+func (m mut Map<I, T, U>) Next() U? {
+	item := m.inner.Next() ?? return None
+	return Some(m.f(item))
+}
+
+// A Filter is the iterator Iterator.Filter returns: it gives the items
+// of the iterator it wraps that keep is true of. It holds that
+// iterator and keep, and so what the iterator borrows.
+struct Filter<I: Iterator<T>, T> impl Iterator<T> {
+	inner I
+	keep  func(ref T) bool
+}
+
+// Next pulls items of the wrapped iterator until keep is true of one,
+// and returns it, or None once that iterator has no more.
+func (f mut Filter<I, T>) Next() T? {
+	for {
+		item := f.inner.Next() ?? return None
+		if f.keep(ref item) {
+			return Some(item)
+		}
+	}
+}
+
+// A Take is the iterator Iterator.Take returns: it gives at most left
+// more items of the iterator it wraps, whose borrow it holds.
+struct Take<I: Iterator<T>, T> impl Iterator<T> {
+	inner I
+	left  int
+}
+
+// Next returns the next item of the wrapped iterator while any of the
+// count is left, or None once the count is spent or that iterator has
+// no more; a spent Take pulls nothing.
+func (t mut Take<I, T>) Next() T? {
+	if t.left <= 0 {
+		return None
+	}
+
+	t.left--
+	return t.inner.Next()
+}
+
+// A Skip is the iterator Iterator.Skip returns: it passes over left
+// items of the iterator it wraps, whose borrow it holds, before it gives
+// any.
+struct Skip<I: Iterator<T>, T> impl Iterator<T> {
+	inner I
+	left  int
+}
+
+// Next pulls and drops the items still to pass over, on the first call,
+// and then returns the next item of the wrapped iterator, or None once
+// that iterator has no more.
+func (s mut Skip<I, T>) Next() T? {
+	for s.left > 0 {
+		s.left--
+		if s.inner.Next().IsNone() {
+			return None
+		}
+	}
+
+	return s.inner.Next()
+}
+
+// An Enumerate is the iterator Iterator.Enumerate returns: it gives each
+// item of the iterator it wraps, whose borrow it holds, with its index.
+struct Enumerate<I: Iterator<T>, T> impl Iterator<(int, T)> {
+	inner I
+	next  int // the index of the item the next call gives
+}
+
+// Next returns the next item of the wrapped iterator with its index,
+// counted from 0, or None once that iterator has no more.
+func (e mut Enumerate<I, T>) Next() (int, T)? {
+	item := e.inner.Next() ?? return None
+	e.next++
+	return Some((e.next - 1, item))
+}
+
+// A Zip is the iterator Iterator.Zip returns: it gives the items of two
+// iterators in pairs, and holds both and what each borrows.
+struct Zip<I: Iterator<T>, T, J: Iterator<V>, V> impl Iterator<(T, V)> {
+	a I
+	b J
+}
+
+// Next returns the next item of each iterator as a pair, or None once
+// either has no more; an item of a pulled when b has none left is
+// dropped.
+func (z mut Zip<I, T, J, V>) Next() (T, V)? {
+	x := z.a.Next() ?? return None
+	y := z.b.Next() ?? return None
+	return Some((x, y))
+}
+
+// A Chain is the iterator Iterator.Chain returns: it gives the items of
+// a and then those of b, and holds both and what each borrows.
+struct Chain<I: Iterator<T>, J: Iterator<T>, T> impl Iterator<T> {
+	a   I
+	b   J
+	onB bool // a has given its last item
+}
+
+// Next returns the next item of a while a has one, and then the next
+// of b, or None once b has no more; once a has ended it is not pulled
+// again.
+func (c mut Chain<I, J, T>) Next() T? {
+	if !c.onB {
+		if item := c.a.Next() {
+			return Some(item)
+		}
+
+		c.onB = true
+	}
+
+	return c.b.Next()
+}

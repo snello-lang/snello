@@ -55,7 +55,7 @@ func TestReach(t *testing.T) {
 		{"enum K impl Reflect { On; off }\nfunc f() int { return refl.Show(ref On) }", ""},
 		{"enum V { Leaf(int); Node([]V) }\nfunc f() int { return refl.Show(ref Node([]V{Leaf(1)})) }", ""},
 		{"struct C { Ch chan int }\nfunc f(c ref C) int { return refl.Show(c) }", "refl.Show<C>, refl.Show<chan int>: no arm of the match on T takes chan int"},
-		{"struct L { S ref string }\nfunc f(l ref L) int { return refl.Show(l) }", "field S of L holds a borrow, ref string"},
+		{"struct L { S ref string }\nfunc f(l ref L) int { return refl.Show(l) }", "refl.Show<L>: a match on T takes no type that holds a borrow: L does"},
 		{"func f() { refl.Grow<[]int>(1) }", "refl.Grow<[]int>, refl.Grow<[][]int>: Grow<[][][]int> holds Grow<[][]int>, which holds Grow<[]int>; the types grow without end"}, // a shape's name, no edge the call graph sees
 		{"func f() int { return refl.Mine() }", ""},
 		// The paths to a reflecting function: a generic type's method, a trait's default, and a method calling one.

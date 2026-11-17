@@ -135,9 +135,9 @@ struct Lexer { src ref string }
 		}
 	}
 
-	for _, typ := range []Type{&Option{elem: pkg.Scope().Lookup("Owner").Type()}, &Tuple{elems: []Type{Typ[Int], pkg.Scope().Lookup("Peek").Type()}}} {
+	for _, typ := range []Type{&Option{elem: pkg.Scope().Lookup("Owner").Type()}, &Tuple{elems: []Type{Typ[Int], pkg.Scope().Lookup("Peek").Type()}}, &Slice{elem: pkg.Scope().Lookup("Peek").Type()}} {
 		if !dropReads(typ) {
-			t.Errorf("dropReads(%s) = false, want true: a part held by value runs one", typ)
+			t.Errorf("dropReads(%s) = false, want true: a part held by value, or an element of a slice, runs one", typ)
 		}
 	}
 }

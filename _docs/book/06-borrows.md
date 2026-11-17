@@ -148,7 +148,19 @@ func rename(l mut Label, name ref string) {
 }
 ```
 
-The compiler follows the store however it is written: through a copy of the parameter, `m := l; m.text = name`, inside a literal, `l.inner = Inner{src: name}`, or through a `mut` borrow held in a field of a parameter taken by value. Storing what the parameter held already, `l.text = l.title`, is fine. Take the value by value and own it, or return the new value. Rust refuses the same function unless a lifetime ties the two parameters together; Snello writes no lifetimes, so the function is refused.
+The compiler follows the store however it is written: through a copy of the parameter, `m := l; m.text = name`, inside a literal, `l.inner = Inner{src: name}`, or through a `mut` borrow held in a field of a parameter taken by value. Storing what the parameter held already, `l.text = l.title`, is fine. Take the value by value and own it, or return the new value. Nothing in a signature could say that one parameter now borrows another, so the function is refused.
+
+Nor may a value hold a borrow of its own data, which changes or goes with the value while the borrow is kept: not a local, not a parameter taken by value, and not the caller's value through a method.
+
+```go
+v.r = ref v.own                       // ERROR "cannot store a borrow of v.own in v: a value cannot borrow its own data, which changes or goes with it"
+
+func (v mut V) pointAtOwn() {
+    v.r = ref v.own                   // ERROR "cannot store a borrow of v.own in v: v is the caller's, which may change or free v.own while the borrow is kept"
+}
+```
+
+Keep an index instead, or keep the borrow in a value of its own beside the owner.
 
 ### Deferred calls
 
@@ -252,7 +264,7 @@ func Parse(src ref string) Result<Expr, ParseError> {
 }
 ```
 
-It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`, reported where the slice type is written, as `a channel cannot carry a borrow` is; nor be the type argument of a generic type, or of a generic function that takes or returns a value of that type, `a type argument cannot hold Lexer: it holds a borrow`. A generic function that only borrows it, `fmt.Fprintln(mut w, ...)` with a `bufio.Writer`, is fine (chapter 12). A closure that reads a local that is not `Copy`, or assigns a local, captures it by borrow and is a borrow in the same way: it may be passed to a call, bound to a variable and called, but not stored in a field, slice or map, sent, spawned or returned. A `Copy` value the closure only reads is copied in when the closure is made, so the closure holds no borrow and may go anywhere; a function value is never copied in, since what it borrows is known by the variable holding it, not by its type, so a closure calling another closure borrows it: `adder(10)` returns `func(x int) int { return x + offset }`, and `snap := func() int { return n }` keeps the `n` of that moment, whatever is assigned to `n` after. One that captures nothing may go anywhere too; one that moves what it captures owns it, and will be allowed everywhere once the compiler copies moved values into the closure. A `counter()` that returns a closure incrementing a local is rejected, because the closure assigns the local, which dies when `counter` returns; the state goes into a struct with a method instead. A variable bound to a closure holds its borrows, so `g := func() { xs.Push(1) }` keeps `xs` lent `mut` until the last use of `g`.
+It is returned only as a borrow is, tied to the receiver or to the only borrowed parameter, so `NewLexer(src ref string) Lexer` is fine and `text.Fields()` can return an iterator that borrows `text`. It cannot be stored in owned data or sent: `a slice cannot hold Lexer: it holds a borrow`, reported where the slice type is written, as `a channel cannot carry a borrow` is. It may be a type argument, and the instance holds its borrow under the same rules: an iterator over a deque is one, and so is every adapter over it (chapter 31). A closure that reads a local that is not `Copy`, or assigns a local, captures it by borrow and is a borrow in the same way: it may be passed to a call, bound to a variable and called, but not stored in a field, slice or map, sent, spawned or returned. A `Copy` value the closure only reads is copied in when the closure is made, so the closure holds no borrow and may go anywhere; a function value is never copied in, since what it borrows is known by the variable holding it, not by its type, so a closure calling another closure borrows it: `adder(10)` returns `func(x int) int { return x + offset }`, and `snap := func() int { return n }` keeps the `n` of that moment, whatever is assigned to `n` after. One that captures nothing may go anywhere too; one that moves what it captures owns it, and will be allowed everywhere once the compiler copies moved values into the closure. A `counter()` that returns a closure incrementing a local is rejected, because the closure assigns the local, which dies when `counter` returns; the state goes into a struct with a method instead. A variable bound to a closure holds its borrows, so `g := func() { xs.Push(1) }` keeps `xs` lent `mut` until the last use of `g`.
 
 ### Passing a closure to a function
 
@@ -315,6 +327,8 @@ Every message about a live borrow ends with where it began and the use that keep
 | `cannot keep a borrow of t in r: t is dropped at the end of its block at 21:5, used at 22:18`; `... at the end of the loop's pass ...`, `... where its block is left ...`, `... used in the next pass of the loop ...` | `borrow-outlives-block`, `borrow-field-outlives-block`, `borrow-next-pass`, `TestFlowPaths` in `compiler/types/flow_test.go` |
 | `cannot keep a borrow of t: t is dropped at the end of its block` | `borrow-out-of-block` |
 | `cannot store a borrow of name in l: l is the caller's, and a signature cannot say that it borrows name` | `borrow-into-caller` |
+| `cannot store a borrow of v.own in v: v is the caller's, which may change or free v.own while the borrow is kept` | `borrow-into-itself` |
+| `cannot store a borrow of v.own in v: a value cannot borrow its own data, which changes or goes with it` | `borrow-of-itself` |
 | `cannot store a borrow in r from inside a closure: r is declared outside it, ...`; `... and r outlives the closure` | `closure-stores-borrow` |
 | `cannot keep a borrow of t in the deferred call: ..., and the deferred call runs when the function returns` | `defer-outlives-block` |
 | `a deferred call borrows only a whole variable, one that is a borrow or holds none: ref xs[0] is not one`, `a deferred call cannot call g: it is a closure that borrows` | `defer-borrows-whole`, `TestFlowModel` |

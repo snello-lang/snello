@@ -1,0 +1,29 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an argument a generic call lends mut takes what the other
+// arguments of the same type parameter hold, since the body may store
+// one in it: the borrow must outlive it. Fix: keep what is borrowed
+// alive while the bag is used.
+
+package p
+
+import "fmt"
+
+struct Bag<T> {
+    items []T
+}
+
+func newBag<T>() Bag<T> { return Bag<T>{items: []T{}} }
+
+func (b mut Bag<T>) Add(x T) { b.items.Push(x) }
+
+func main() {
+    b := newBag<ref string>()
+    {
+        t := "b".Clone()
+        b.Add(ref t)                        // ERROR "cannot keep a borrow of t in b: t is dropped at the end of its block"
+    }
+    fmt.Println(len(b.items))
+}

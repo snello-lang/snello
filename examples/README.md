@@ -36,7 +36,7 @@ The binary is written to the current directory, named after the file, or after t
 | lru/ | A map into a linked list kept in an arena; two `mut` paths into one slice refused |
 | matrix/ | `Copy` types, operator traits, no hidden allocation |
 | state-machine/ | Enum states, consuming transitions, a connection closed where its state is dropped |
-| iterators/ | Closure capture modes, a lazy iterator trait |
+| iterators/ | Closure capture modes, an iterator over `iter.Iterator` and its adapters |
 | cli-grep/ | Arguments, standard input and files, a borrow per line, exit codes; waits for `regexp`, so it has no `.out` yet |
 | bst/ | A `mut` borrow walked down a chain of boxes, delete in place |
 | handles/ | `spawn` as an expression: a handle on a task, `Join` giving the result or the panic that ended the task, handles joined by another task |

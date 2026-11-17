@@ -1141,6 +1141,7 @@ func (c *Checker) passError(e *ast.TryExpr, from, to Type) {
 			c.errorf(e.Question, head+traitReason(from, tr))
 		}
 
+		c.hide(from, e.Question, "a trait value")
 		return
 	}
 
@@ -1231,6 +1232,12 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 		}
 
 		c.captured[e] = caps // the closure is a borrow of what it captures
+		for _, cap := range caps {
+			if cap.mode == byCopy || cap.mode == byMove {
+				c.hide(cap.v.typ, e.Pos(), "a closure") // the closure holds the value, and its type says nothing of it
+			}
+		}
+
 		if c.info != nil {
 			vars := make([]Capture, len(caps))
 			for i, cap := range caps {

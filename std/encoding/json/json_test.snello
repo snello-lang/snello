@@ -4,7 +4,26 @@
 
 package json_test
 
-import ("bytes"; "encoding/json"; "expect"; "io"; "strconv"; "strings"; "testing")
+import ("bytes"; "encoding/json"; "expect"; "io"; "math"; "strconv"; "strings"; "testing"; "time")
+
+// cutText is a stream of values of every kind, a number at its end with
+// no space after it, which a Decoder reads cut at every byte.
+const cutText = `{"X":1,"Y":-23} 12345 "a\"bé" [1.5,true,null] {"Y":2,"X":1} -0.5e3 [] "tail" 98765`
+
+// smallLimit is the limit TestDecoderLimitEndless sets, and
+// defaultLimit the one a Decoder starts with, 64 MiB; block is the
+// Decoder's first block, which it may hold past either.
+const smallLimit = 100000
+const defaultLimit = 64 << 20
+const block = 4096
+
+// pausedSize is the size of the array TestDecoderManyPauses reads in
+// pieces of pausedPiece bytes with a pause after each, and pausedBound
+// the time it may take: milliseconds when each piece is looked through
+// once, seconds when the value is read again from its start at each.
+const pausedSize = 1 << 20
+const pausedPiece = 512
+const pausedBound = 2 * time.Second
 
 const docText = ` {"name": "lab", "n": 3, "pi": 2.5, "ok": true, "none": null,
  "tags": ["a", "b\n", "c"], "a/b": {"m~n": 7}, "escA": "x\ty", "srv": {"X": 1, "Y": 2}} `
@@ -231,6 +250,45 @@ func (f mut Full) Write(buf ref []byte) Result<int, io.Error> {
 }
 
 // trickle returns a Trickle over text, step bytes a read.
+// Pausing gives its text pausedPiece bytes at a time, with a read that
+// brings nothing after each.
+struct Pausing impl io.Reader {
+	text   string
+	at     int
+	paused bool
+}
+
+func (p mut Pausing) Read(buf mut []byte) Result<int, io.Error> {
+	p.paused = !p.paused
+	if !p.paused {
+		return Ok(0)
+	}
+
+	n := 0
+	for n < pausedPiece && n < len(buf) && p.at < len(p.text) {
+		buf[n] = p.text[p.at]
+		n += 1
+		p.at += 1
+	}
+
+	return Ok(n)
+}
+
+// An Endless is a reader that sends the start of a string and never
+// ends it.
+struct Endless impl io.Reader {
+	sent int
+}
+
+func (e mut Endless) Read(buf mut []byte) Result<int, io.Error> {
+	for i := 0; i < len(buf); i++ {
+		buf[i] = if e.sent == 0 && i == 0 { '"' } else { 'a' }
+	}
+
+	e.sent += len(buf)
+	return Ok(len(buf))
+}
+
 func trickle(text ref string, step int) Trickle {
 	return Trickle{text: text.Clone(), at: 0, step: step, pause: -1, fail: false}
 }
@@ -1039,4 +1097,231 @@ func walk<R: io.Reader>(dec mut json.Decoder<R>) json.Error? {
 		}
 		Ok(Some(_)) => return dec.Decode<json.Value>().Err(),
 	}
+}
+
+// Every value of a stream reads the same however its bytes come: the
+// reader gives one byte at a time, then two, and so on, so that each
+// value is cut by the end of what was read at every byte, a number at
+// the end of the input among them, and a struct whose keys come out of
+// order is read when its text has come whole.
+func TestDecoderCutEverywhere() {
+	want := []string{}
+	{
+		r := trickle(cutText, len(cutText))
+		dec := json.NewDecoder(mut r)
+		for {
+			v := expect.IsOk(dec.Decode<json.Value>()) ?? break
+			want.Push(remarshal(ref v))
+		}
+	}
+
+	expect.Equal(ref len(want), ref 9)
+	for step := 1; step <= len(cutText); step++ {
+		r := trickle(cutText, step)
+		dec := json.NewDecoder(mut r)
+		got := []string{}
+		for {
+			v := expect.IsOk(dec.Decode<json.Value>()) ?? break
+			got.Push(remarshal(ref v))
+		}
+
+		expect.EqualSlice(ref got, ref want)
+		r2 := trickle(`{"Y":2,"X":1}`, step)
+		dec2 := json.NewDecoder(mut r2)
+		p := expect.IsSome(expect.IsOk(dec2.Decode<Point>()))
+		expect.Equal(ref p.X, ref 1)
+		expect.Equal(ref p.Y, ref 2)
+	}
+}
+
+// A value at the limit is read and one byte over it is refused, with
+// its offset, whole in one read or cut in many; the refusal is returned
+// by every call after it.
+func TestDecoderLimit() {
+	for _, step := range []int{1, 3, 64} {
+		r := trickle(`[1,2,3,40] [1,2,3,400]`, step)
+		dec := json.NewDecoder(mut r)
+		dec.SetLimit(10)
+		v := expect.IsSome(expect.IsOk(dec.Decode<[]int>()))
+		expect.Equal(ref len(v), ref 4)
+		e := expect.IsErr(dec.Decode<[]int>())
+		expect.Equal(ref e.Error(), "json: value longer than 10 bytes, the Decoder's limit at offset 11")
+		again := expect.IsErr(dec.Decode<[]int>())
+		expect.Equal(ref again.Error(), ref e.Error())
+		expect.IsErr(dec.More())
+	}
+}
+
+// A key read with Key is held to the limit, and the elements of an
+// array opened with BeginArray each are, so that a long array of short
+// elements streams under a small limit.
+func TestDecoderLimitPieces() {
+	r := trickle(`{"a key longer than the limit": 1}`, 7)
+	dec := json.NewDecoder(mut r)
+	dec.SetLimit(8)
+	expect.IsOk(dec.BeginObject())
+	expect.Contains(ref expect.IsErr(dec.Key()).Error(), "value longer than 8 bytes")
+
+	b := strings.Builder{}
+	b.WriteByte('[')
+	for i := 0; i < 1000; i++ {
+		if i > 0 { b.WriteByte(',') }
+		b.WriteString(strconv.Itoa(i))
+	}
+
+	b.WriteByte(']')
+	long := trickle(ref b.String(), 100)
+	dec2 := json.NewDecoder(mut long)
+	dec2.SetLimit(8)
+	expect.IsOk(dec2.BeginArray())
+	total := 0
+	for expect.IsOk(dec2.More()) {
+		total += expect.IsSome(expect.IsOk(dec2.Decode<int>()))
+	}
+
+	expect.IsOk(dec2.EndArray())
+	expect.Equal(ref total, ref 499500)
+}
+
+// A stream that never ends a string is refused once the string passes
+// the limit, the one set or the one a Decoder starts with, and the
+// Decoder holds no more than the limit and one block of it.
+func TestDecoderLimitEndless() {
+	r := Endless{sent: 0}
+	dec := json.NewDecoder(mut r)
+	dec.SetLimit(smallLimit)
+	expect.Contains(ref expect.IsErr(dec.Decode<string>()).Error(), "value longer than " + strconv.Itoa(smallLimit) + " bytes")
+	expect.True(len(dec.Buffered()) <= smallLimit + block)
+	byDefault := Endless{sent: 0} // the limit a Decoder starts with, 64 MiB
+	dec2 := json.NewDecoder(mut byDefault)
+	expect.Contains(ref expect.IsErr(dec2.Decode<string>()).Error(), "value longer than " + strconv.Itoa(defaultLimit) + " bytes")
+	expect.True(len(dec2.Buffered()) <= defaultLimit + block)
+}
+
+// A limit as large as an int holds lets a value outgrow the first
+// block, and so does no limit at all: the block doubles as it would
+// with none.
+func TestDecoderLimitLargest() {
+	text := `"` + expect.IsSome(strings.Repeat("x", 10000)) + `"`
+	for _, limit := range []int{math.MaxInt, 0, -1} {
+		r := trickle(ref text, 3000)
+		dec := json.NewDecoder(mut r)
+		dec.SetLimit(limit)
+		expect.Equal(ref len(expect.IsSome(expect.IsOk(dec.Decode<string>()))), ref 10000)
+	}
+}
+
+// A number or a literal ends at space or a structural character, so one
+// that more letters or digits follow is refused, with the error
+// Unmarshal gives the same text, whether the block holds what follows
+// it or a later read brings it; and in an array read a piece at a time.
+func TestDecoderScalarRunsOn() {
+	for _, text := range []string{"12abc ", "truefalse ", "1.5.3 ", "nullx "} {
+		want := expect.IsErr(json.Unmarshal<json.Value>(ref text)).Error()
+		for _, step := range []int{1, 2, 3, 100} {
+			r := trickle(ref text, step)
+			dec := json.NewDecoder(mut r)
+			expect.Equal(ref expect.IsErr(dec.Decode<json.Value>()).Error(), ref want)
+		}
+	}
+
+	r := trickle("[12abc]", 100)
+	dec := json.NewDecoder(mut r)
+	expect.IsOk(dec.BeginArray())
+	expect.Contains(ref expect.IsErr(dec.Decode<int>()).Error(), "text after the value")
+}
+
+// An untagged value's failed tries are bounded by the value's length,
+// as Unmarshal bounds them, and not by what the Decoder holds after
+// it: a value nested too deep to try each variant is refused by both,
+// with space after it in the block or none, and one Unmarshal reads the
+// Decoder reads.
+func TestDecoderUntaggedBudget() {
+	for _, levels := range []int{6, 14, 40} {
+		deep := "1"
+		for i := 0; i < levels; i++ {
+			deep = "[" + deep + ",\"s\"]"
+		}
+
+		want := json.Unmarshal<Nest>(ref deep).IsOk()
+		for _, padding := range []int{0, 3500} {
+			text := deep + expect.IsSome(strings.Repeat(" ", padding)) + "1"
+			r := trickle(ref text, len(text))
+			dec := json.NewDecoder(mut r)
+			got := dec.Decode<Nest>()
+			expect.Equal(ref got.IsOk(), ref want)
+			if !want {
+				expect.Contains(ref expect.IsErr(got).Error(), "untagged values nest too deep to try each variant")
+			}
+		}
+	}
+}
+
+// The input ending inside an element, a key or a nested array leaves
+// the Decoder where it was, and the same call made again when the
+// reader has more reads what it would have.
+func TestDecoderPausedPieces() {
+	element := Trickle{text: `[1,"abcd",2]`.Clone(), at: 0, step: 100, pause: 5, fail: false}
+	dec := json.NewDecoder(mut element)
+	expect.IsOk(dec.BeginArray())
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 1)
+	expect.Equal(ref expect.IsErr(dec.Decode<string>()).Error(), "json: unexpected end of input at offset 5")
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<string>())), "abcd")
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec.Decode<int>())), ref 2)
+	expect.IsOk(dec.EndArray())
+
+	key := Trickle{text: `{"key":1}`.Clone(), at: 0, step: 100, pause: 3, fail: false}
+	dec2 := json.NewDecoder(mut key)
+	expect.IsOk(dec2.BeginObject())
+	expect.IsErr(dec2.Key())
+	expect.Equal(ref expect.IsOk(dec2.Key()), "key")
+	expect.Equal(ref expect.IsSome(expect.IsOk(dec2.Decode<int>())), ref 1)
+	expect.IsOk(dec2.EndObject())
+
+	nested := Trickle{text: "[[1,2],[3,4]]".Clone(), at: 0, step: 100, pause: 3, fail: false}
+	dec3 := json.NewDecoder(mut nested)
+	expect.IsOk(dec3.BeginArray())
+	expect.IsErr(dec3.Decode<[]int>())
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsSome(expect.IsOk(dec3.Decode<[]int>())))), "[1,2]")
+	expect.Equal(ref expect.IsOk(json.Marshal(ref expect.IsSome(expect.IsOk(dec3.Decode<[]int>())))), "[3,4]")
+	expect.IsOk(dec3.EndArray())
+}
+
+// Arrays and objects opened a piece at a time nest no deeper than
+// Unmarshal reads, so that a stream of opening brackets cannot grow
+// what the Decoder keeps of them without end.
+func TestDecoderPiecesDepth() {
+	r := trickle(ref expect.IsSome(strings.Repeat("[", 200)), 64)
+	dec := json.NewDecoder(mut r)
+	opened := 0
+	for dec.BeginArray().IsOk() {
+		opened += 1
+	}
+
+	expect.Equal(ref opened, ref 128)
+	expect.Contains(ref expect.IsErr(dec.BeginArray()).Error(), "exceeded max depth")
+}
+
+// A value that comes in many reads, each after a read that brought
+// nothing, is looked through once: each Decode the reader's pauses end
+// takes only the bytes that came since the last.
+func TestDecoderManyPauses() {
+	b := strings.Builder{}
+	b.WriteByte('[')
+	for b.Len() < pausedSize {
+		b.WriteString("1,")
+	}
+
+	b.WriteString("1]")
+	r := Pausing{text: b.String(), at: 0, paused: false}
+	dec := json.NewDecoder(mut r)
+	start := time.Now()
+	for {
+		if v := dec.Decode<[]int>().Ok() {
+			expect.Equal(ref len(expect.IsSome(v)), ref pausedSize / 2 + 1)
+			break
+		}
+	}
+
+	expect.True(time.Since(start) < pausedBound)
 }

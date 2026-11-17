@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an iterator's items borrow what the iterator borrows, never the
+// iterator itself: Next() T? declares a result that borrows nothing of
+// its receiver, and generic code holds an item past the next call. An
+// item reached through a mut borrow is refused for the same reason.
+// Fix: make the items the collection's, the iterator holding a ref
+// borrow of the collection.
+
+package p
+
+import "iter"
+
+struct Own impl iter.Iterator<ref int> {
+    n int
+}
+
+func (o mut Own) Next() ref int? {
+    return Some(ref o.n)                    // ERROR "cannot return a borrow of o.n: o owns it, and Iterator<ref int>.Next returns only what o borrows"
+}

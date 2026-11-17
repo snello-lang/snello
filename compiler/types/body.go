@@ -34,7 +34,9 @@ func (c *Checker) funcBodies(f *ast.File) {
 			}
 
 			fn := c.objs[i].(*Func)
+			c.word = c.words[fn]
 			c.checkBody(fn.typ.(*Signature), d.Recv, d.Params, d.Body)
+			c.word = nil
 			c.scope = outer
 			if d.Body != nil && (genericDecl(fn) || d.Of != nil && len(d.Of.Args) > 0) { // a function of a generic type is generic over the type's parameters
 				fn.decl = d
@@ -89,7 +91,7 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 		}
 	}
 
-	if c.hasMutParam(sig) || c.flow != nil && c.flow.outer != token.NoPos {
+	if c.hasMutParam(sig) || c.flow != nil && c.flow.outer != token.NoPos || c.keepsWord() {
 		c.flowParams(sig) // what reaches the caller's places is followed; a closure's parameters are its caller's too
 	}
 

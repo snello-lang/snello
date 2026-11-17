@@ -51,7 +51,7 @@ struct Copied<T: Copy> { v T }
 
 Any trait is a bound, `T: Shape`, and gives a value of `T` the trait's methods; several are joined with `+`. Chapter 11 describes bounds and what a call must satisfy.
 
-An instance is `Copy` when its fields are, as any struct is: a `Pair<int, bool>` copies, a `List<string>` moves. A type argument cannot be a borrow, `List<ref string>`, nor a struct that holds one, since the list would then store it (chapter 6). A generic function that only borrows values of a type parameter, `Fprintln<W: io.Writer>(w mut W, ...)`, is the exception: its instance keeps nothing of `W`, so a `bufio.Writer`, which borrows the file under it, may be passed to it. A `mut` parameter of the type must be the only parameter of that type, since through it a value of another could be kept: `Into<T>(dst mut T, v ref T)` does not qualify.
+An instance is `Copy` when its fields are, as any struct is: a `Pair<int, bool>` copies, a `List<string>` moves. A type argument may be a borrow, `List<ref string>`, or a struct that holds one, and the instance then holds the borrow as a struct with a `ref` field does (chapter 6): `fmt.Fprintln(mut w, ...)` takes a `bufio.Writer`, which borrows the file under it, and `iter.Map<deque.Iter<int>, ref int, int>` borrows a deque. What a generic call returns holds what its arguments hold, an argument it lends `mut` takes what the others hold, and an instance that would keep a borrow where the checker cannot follow it, in a map, a channel or a pointer, is refused; chapter 31 has the rules.
 
 ## Generic enums
 

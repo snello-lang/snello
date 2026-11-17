@@ -34,6 +34,14 @@ type capture struct {
 	mode captureMode
 }
 
+// A pendingStore is a storable question asked while the declarations
+// were being resolved.
+type pendingStore struct {
+	elem Type
+	kind string
+	pos  token.Pos
+}
+
 // A captureMode says what a closure does with a variable it captures;
 // the strongest use seen wins.
 type captureMode int8
@@ -183,7 +191,12 @@ func (c *Checker) storable(elem Type, kind string, pos token.Pos) bool {
 	}
 
 	if n, ok := elem.(*Named); ok {
-		c.errorf(pos, kind+verb+n.obj.name+": it holds a borrow")
+		name := n.obj.name
+		if n.targs != nil {
+			name = n.String() // an instance is told by its arguments: iter.Take<deque.Iter<int>, ref int>
+		}
+
+		c.errorf(pos, kind+verb+name+": it holds a borrow")
 	} else {
 		c.errorf(pos, kind+verb+"a borrow")
 	}
@@ -211,12 +224,47 @@ func (c *Checker) storableParts(t Type, pos token.Pos) {
 	})
 }
 
-// A pendingStore is a storable question asked while the declarations
-// were being resolved.
-type pendingStore struct {
-	elem Type
-	kind string
-	pos  token.Pos
+// ownedParts refuses an instance that would put a borrow where the
+// checker does not follow it: a type argument that holds a borrow may
+// make an instance, which then holds the borrow, but not one that keeps
+// the argument in a map, a channel or a pointer, written in t or in the
+// fields of an instance inside t whose arguments hold a borrow. A
+// slice of one is followed, as the slice Split gives is. Each instance
+// is looked into once, which also ends the walk of a type that refers
+// to itself. Before the declarations are resolved the question waits,
+// as storable's does, since an instance's fields are not known yet.
+func (c *Checker) ownedParts(t Type, pos token.Pos) {
+	if !c.declared {
+		c.pendingOwned = append(c.pendingOwned, pendingStore{t, "", pos})
+		return
+	}
+
+	walkTypes(t, func(t Type) {
+		switch t := t.(type) {
+		case *Pointer:
+			c.ownedElem(t.elem, "a pointer", pos)
+		case *Map:
+			c.ownedElem(t.key, "a map", pos)
+			c.ownedElem(t.value, "a map", pos)
+		case *Chan:
+			c.ownedElem(t.elem, "a channel", pos)
+		case *Named:
+			if t.orig != nil && !t.partsSeen && slices.ContainsFunc(t.targs, holdsBorrow) {
+				t.partsSeen = true
+				c.ownedParts(t.Underlying(), pos)
+				c.instanceHides(t, pos)
+			}
+		}
+	})
+}
+
+// ownedElem refuses elem in owned data of the given kind when it holds
+// a borrow, as storable does; one that holds none was asked about where
+// its type was written.
+func (c *Checker) ownedElem(elem Type, kind string, pos token.Pos) {
+	if holdsBorrow(elem) {
+		c.storable(elem, kind, pos)
+	}
 }
 
 // resolvePending answers the storable questions asked before the
@@ -228,6 +276,11 @@ func (c *Checker) resolvePending() {
 	}
 
 	c.pending = nil
+	for _, p := range c.pendingOwned {
+		c.ownedParts(p.elem, p.pos)
+	}
+
+	c.pendingOwned = nil
 	for _, k := range c.pendingKeys {
 		c.keyable(k.key, k.pos)
 	}
@@ -400,8 +453,11 @@ func (c *Checker) source(e ast.Expr, pos token.Pos) {
 	case *ast.ParenExpr:
 		c.source(e.X, pos)
 	case *ast.UnaryExpr:
-		if e.Op == token.REF || e.Op == token.MUT {
+		switch e.Op {
+		case token.REF, token.MUT:
 			c.sourceVar(e.X, pos, true)
+		case token.MUL:
+			c.source(e.X, pos) // *r lent on, first(*r): what r points at, so the borrow r holds
 		}
 	case *ast.TryExpr:
 		c.source(e.X, pos)
@@ -432,8 +488,12 @@ func (c *Checker) source(e ast.Expr, pos token.Pos) {
 			for _, arg := range e.Args { // Some(ref n.val)
 				c.source(arg, pos)
 			}
-		} else if src := c.callSource(e); src != nil {
+		} else if src := c.callSource(e); src != nil && !c.passed[e].only {
 			c.source(src, pos)
+		}
+
+		for _, x := range c.passed[e].args {
+			c.source(x, pos) // a generic call's result holds what its arguments hold
 		}
 	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr:
 		c.sourceVar(e, pos, false)
@@ -522,6 +582,10 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return
 	}
 
+	if c.keepsWord() && c.isParam(v) && c.wordSource(v, p.path, lent, kind == placeIndexed, pos, c.errorf) {
+		return // an implementation keeping its trait's word returns only what is stored behind its parameters (word.go)
+	}
+
 	throughBorrow := kind == placeBorrowed || kind == placeIndexed && isBorrow(v.typ) // ref ys[0], ys a borrow: what ys borrows, not ys
 	if lent && !throughBorrow && !c.isParam(v) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name)
@@ -529,7 +593,7 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 	}
 
 	if !c.isParam(v) {
-		c.flowReturn(v, pos) // followed to its source through the loans in effect at the return, at the function's end
+		c.flowReturn(v, pos, returnedPart{path: p.path, lent: lent, indexed: kind == placeIndexed}) // followed to its source through the loans in effect at the return, at the function's end
 		return
 	}
 
@@ -539,9 +603,18 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 // followReturn follows a borrow returned out of v through the loans v
 // may hold at the return, each to the variable it borrows, until it
 // reaches the function's receiver or parameters.
-func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen []*Var) {
+func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int, in bitset, seen []*Var) {
 	f := c.flow
 	report := func(pos token.Pos, msg string) { f.errs = append(f.errs, flowError{seq: seq, pos: pos, msg: msg}) }
+	if c.keepsWord() {
+		report = c.word.once(seq, report) // one return breaks the word once, however many ways it reaches the parameter
+	}
+
+	if param := f.outside[v]; param != nil && c.keepsWord() {
+		c.wordHeld(v, param, pos, report)
+		return
+	}
+
 	if param := f.outside[v]; param != nil {
 		v = param // what the caller owns behind a parameter is reached through the parameter
 	}
@@ -561,8 +634,12 @@ func (c *Checker) followReturn(v *Var, pos token.Pos, seq int, in bitset, seen [
 	in.each(func(li int) bool {
 		if b := &f.loans[li]; b.holder == v {
 			found = true
+			if c.keepsWord() && c.wordLoan(b, part, pos, report) {
+				return true
+			}
+
 			if !slices.Contains(seen, b.v) {
-				c.followReturn(b.v, pos, seq, in, seen)
+				c.followReturn(b.v, part.through(b), pos, seq, in, seen)
 			}
 		}
 

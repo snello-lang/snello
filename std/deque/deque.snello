@@ -21,7 +21,7 @@
 // and a slot costs the element alone.
 package deque
 
-import "fmt"
+import ("fmt"; "iter")
 
 // The capacities of a Deque's buffer, in elements: the first buffer it
 // allocates, and the largest power of two an int holds, past which no
@@ -52,8 +52,9 @@ struct Deque<T> impl Drop, fmt.Stringer {
 
 // An Iter walks a deque from front to back, lending each element; it
 // lends the deque for as long as it lives, so the deque cannot change
-// during the walk. Deque.Iter makes one.
-struct Iter<T> {
+// during the walk. Deque.Iter makes one, and the adapters of
+// iter.Iterator wrap it: d.Iter().Filter(keep).Map(f).
+struct Iter<T> impl iter.Iterator<ref T> {
 	d ref Deque<T>
 	i int
 }
@@ -230,8 +231,11 @@ func (d ref Deque<T>) String() string {
 	return out + "]"
 }
 
-// Next lends the next element of the walk, or None once the walk is
-// over.
+// Next lends the next element of the walk, from front to back, or None
+// once every element has been given. The element is lent from the
+// deque, not from the Iter, so it stays good while the walk goes on and
+// for as long as the deque is lent; nothing is copied, and each call is
+// one index into the ring.
 func (it mut Iter<T>) Next() ref T? {
 	if it.i >= it.d.len {
 		return None

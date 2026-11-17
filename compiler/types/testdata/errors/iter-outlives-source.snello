@@ -1,0 +1,24 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an iterator over a collection's items, and every adapter over
+// it, holds the collection's borrow, and the collection outlives it.
+// Fix: keep the collection for as long as the iterator is pulled from.
+
+package p
+
+import ("deque"; "fmt")
+
+func double(x ref int) int { return *x * 2 }
+
+func main() {
+    a := deque.New<int>()
+    it := a.Iter().Map(double)
+    {
+        d := deque.New<int>()
+        d.PushBack(1)
+        it = d.Iter().Map(double)           // ERROR "cannot keep a borrow of d in it: d is dropped at the end of its block"
+    }
+    fmt.Println(it.Count())
+}

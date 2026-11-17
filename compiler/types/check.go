@@ -189,17 +189,29 @@ type Checker struct {
 	keepValues []keepValue
 	keepImpls  []keepImpl
 
+	// The implementations that keep a trait's word, and the one whose
+	// body is being checked (word.go).
+	words map[*Func]*word
+	word  *word
+
+	// The generic calls a generic body makes, which pass on what the
+	// callee hides, and the type arguments holding a borrow to check
+	// against it once every body is checked (hide.go).
+	hideEdges    []hideEdge
+	pendingHides []pendingHide
+
 	// The escape pass (escape.go): whether the declarations are resolved
 	// and the questions asked before they were, the closures being
 	// checked and what each closure literal captured, and the call a
 	// spawn statement is starting.
-	declared bool
-	pending  []pendingStore
-	closures []closure
-	captured map[*ast.FuncLit][]capture
-	spawning *ast.CallExpr
-	variadic []operand     // the variadic arguments of the call just checked, which a format is checked against
-	negated  *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
+	declared     bool
+	pending      []pendingStore
+	pendingOwned []pendingStore // the instances ownedParts was asked about then, elem the type
+	closures     []closure
+	captured     map[*ast.FuncLit][]capture
+	spawning     *ast.CallExpr
+	variadic     []operand     // the variadic arguments of the call just checked, which a format is checked against
+	negated      *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
 
 	// The constants (constant.go): the top-level constants of the
 	// package by what checks each, the constants being checked, outermost
@@ -224,6 +236,11 @@ type Checker struct {
 	// holds, which the statement drops at its end, so that a borrow of
 	// it cannot be kept past the statement or returned.
 	temporary map[ast.Expr]ast.Expr
+
+	// passed maps a call of a generic function whose type arguments
+	// hold a borrow to the arguments whose borrows its result holds
+	// (passing.go).
+	passed map[*ast.CallExpr]passedTo
 }
 
 // Check resolves every name in f, a file of one package, and returns
@@ -408,6 +425,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 
 	c.checkDefaultBodies()
 	c.resolveKeeps() // what each function keeps is known once every body is checked
+	c.resolveHides() // and which type parameters a body hides
 	c.checkCallCycles()
 	c.reach(fs)
 }
@@ -480,7 +498,12 @@ func (c *Checker) position(pos token.Pos) token.Position {
 // at a second place; a place in another file of the package is named
 // with that file.
 func (c *Checker) lineCol(pos token.Pos) string {
-	p := c.position(pos)
+	return c.positionText(c.position(pos))
+}
+
+// positionText writes p as line:column, with its file's name in front
+// when that is not the file being checked.
+func (c *Checker) positionText(p token.Position) string {
 	at := strconv.Itoa(p.Line) + ":" + strconv.Itoa(p.Column)
 	if p.Filename != c.file.Name() {
 		return filepath.Base(p.Filename) + ":" + at

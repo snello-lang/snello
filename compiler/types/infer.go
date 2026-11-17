@@ -29,7 +29,8 @@ import (
 type inference struct {
 	tparams []*TypeParam
 	m       map[*TypeParam]Type
-	invalid bool // a value it would learn from was invalid, and reported
+	outer   []binding // for a method made from a trait's default or a generic type's method, what the parameters of those stand for, which its own may name in their bounds
+	invalid bool      // a value it would learn from was invalid, and reported
 }
 
 func newInference(tparams []*TypeParam) *inference {
@@ -38,12 +39,20 @@ func newInference(tparams []*TypeParam) *inference {
 
 // unify matches the slot type param against the value type arg and
 // binds the parameters of the inference that param mentions. A value
-// passed to a bare parameter binds what it borrows, not the borrow, so
-// that T is never a borrow, which a type argument cannot be; the
+// passed to a bare parameter binds what it borrows, not the borrow, as
+// a borrow passed to a value parameter is read as the value; the
 // assignment check then says whether the borrow may be read as the
-// value. A missing or invalid arg, as an expected type may be, binds
-// nothing.
+// value. Inside a type a parameter binds what stands in its place, a
+// borrow too: []T against a []ref string binds T to ref string, and
+// Iterator<V> against an Iterator<ref int> V to ref int. A missing or
+// invalid arg, as an expected type may be, binds nothing.
 func (in *inference) unify(param, arg Type) {
+	in.match(param, arg, false)
+}
+
+// match is unify, exact once inside a type: a bare parameter there
+// binds the borrow it meets.
+func (in *inference) match(param, arg Type, exact bool) {
 	if arg == nil || arg == Typ[Invalid] {
 		return
 	}
@@ -54,7 +63,7 @@ func (in *inference) unify(param, arg Type) {
 			return
 		}
 
-		if r, ok := arg.(*Ref); ok {
+		if r, ok := arg.(*Ref); ok && !exact {
 			arg = r.elem
 		}
 
@@ -64,56 +73,56 @@ func (in *inference) unify(param, arg Type) {
 			arg = a.elem
 		}
 
-		in.unify(p.elem, arg) // an owned value is lent to a ref parameter
+		in.match(p.elem, arg, true) // an owned value is lent to a ref parameter
 	case *Pointer:
 		if a, ok := arg.(*Pointer); ok {
-			in.unify(p.elem, a.elem)
+			in.match(p.elem, a.elem, true)
 		}
 	case *Option:
 		if a, ok := arg.(*Option); ok {
-			in.unify(p.elem, a.elem)
+			in.match(p.elem, a.elem, true)
 		}
 	case *Result:
 		if a, ok := arg.(*Result); ok {
-			in.unify(p.val, a.val)
-			in.unify(p.err, a.err)
+			in.match(p.val, a.val, true)
+			in.match(p.err, a.err, true)
 		}
 	case *Slice:
 		if a, ok := arg.(*Slice); ok {
-			in.unify(p.elem, a.elem)
+			in.match(p.elem, a.elem, true)
 		}
 	case *Array:
 		if a, ok := arg.(*Array); ok {
-			in.unify(p.elem, a.elem)
+			in.match(p.elem, a.elem, true)
 		}
 	case *Map:
 		if a, ok := arg.(*Map); ok {
-			in.unify(p.key, a.key)
-			in.unify(p.value, a.value)
+			in.match(p.key, a.key, true)
+			in.match(p.value, a.value, true)
 		}
 	case *Chan:
 		if a, ok := arg.(*Chan); ok {
-			in.unify(p.elem, a.elem)
+			in.match(p.elem, a.elem, true)
 		}
 	case *Tuple:
 		if a, ok := arg.(*Tuple); ok && len(a.elems) == len(p.elems) {
 			for i := range p.elems {
-				in.unify(p.elems[i], a.elems[i])
+				in.match(p.elems[i], a.elems[i], true)
 			}
 		}
 	case *Signature:
 		if a, ok := arg.(*Signature); ok && len(a.params) == len(p.params) {
 			for i := range p.params {
-				in.unify(p.params[i].typ, a.params[i].typ)
+				in.match(p.params[i].typ, a.params[i].typ, true)
 			}
 
-			in.unify(p.results, a.results)
+			in.match(p.results, a.results, true)
 		}
 	case *Named:
 		if a, ok := arg.(*Named); ok && a.Origin() == p.Origin() {
 			pargs, aargs := typeArgs(p), typeArgs(a)
 			for i := range pargs {
-				in.unify(pargs[i], aargs[i])
+				in.match(pargs[i], aargs[i], true)
 			}
 		}
 	case *Trait:
@@ -123,7 +132,7 @@ func (in *inference) unify(param, arg Type) {
 
 		if inst := implementedInstance(arg, p.orig); inst != nil { // an Iterator<int>, or a Range that implements it
 			for i := range p.targs {
-				in.unify(p.targs[i], inst.targs[i])
+				in.match(p.targs[i], inst.targs[i], true)
 			}
 		}
 	}
@@ -151,7 +160,7 @@ func (in *inference) fromBounds() {
 				if inst := implementedInstance(t, b.orig); inst != nil {
 					before := len(in.m)
 					for i := range b.targs {
-						in.unify(b.targs[i], inst.targs[i])
+						in.match(b.targs[i], inst.targs[i], true)
 					}
 
 					grew = grew || len(in.m) > before
@@ -281,7 +290,7 @@ func (in *inference) args() []Type {
 // explicit binds the type arguments written at a generic use, in
 // order, F<int>(x); fewer than the parameters is allowed, and the rest
 // are inferred. It reports false after an error.
-func (c *Checker) explicit(in *inference, args []ast.Type, name string, pos ast.Node, sig *Signature) bool {
+func (c *Checker) explicit(in *inference, args []ast.Type, name string, pos ast.Node) bool {
 	if len(args) > len(in.tparams) {
 		c.errorf(pos.Pos(), name+" takes "+plural(len(in.tparams), "type argument"))
 		return false
@@ -290,10 +299,6 @@ func (c *Checker) explicit(in *inference, args []ast.Type, name string, pos ast.
 	for i, a := range args {
 		t := c.typ(a)
 		if t == Typ[Invalid] {
-			return false
-		}
-
-		if !(sig != nil && lentOnly(sig, in.tparams[i])) && !c.storable(t, "a type argument", a.Pos()) {
 			return false
 		}
 
@@ -340,9 +345,9 @@ func (c *Checker) evaluate(in *inference, values []ast.Expr, slots []Type, effec
 // complete returns the type arguments the values bound, in the
 // parameters' order, for the use called name; or reports the first
 // parameter left unbound and returns false. An inferred argument obeys
-// the rules a written one does: it cannot hold a borrow, which the
-// instance would store, and it implements the bounds of its parameter.
-func (c *Checker) complete(in *inference, name string, pos ast.Node, sig *Signature) ([]Type, bool) {
+// the rules a written one does: it implements the bounds of its
+// parameter.
+func (c *Checker) complete(in *inference, name string, pos ast.Node) ([]Type, bool) {
 	in.fromBounds()
 	if p := in.missing(); p != nil {
 		if in.invalid { // what would have bound p was reported already
@@ -359,53 +364,11 @@ func (c *Checker) complete(in *inference, name string, pos ast.Node, sig *Signat
 	}
 
 	targs := in.args()
-	for i, t := range targs {
-		if sig != nil && lentOnly(sig, in.tparams[i]) {
-			continue // the function borrows every value of this type and keeps none, so an argument holding a borrow is safe
-		}
-
-		if !c.storable(t, "a type argument", pos.Pos()) {
-			return nil, false
-		}
-	}
-
-	if !c.satisfies(in.tparams, targs, pos.Pos(), name) {
+	if !c.satisfiesIn(in.tparams, targs, in.outer, pos.Pos(), name) {
 		return nil, false
 	}
 
 	return targs, true
-}
-
-// lentOnly reports whether the generic function sig only borrows values
-// of its type parameter p and keeps none: every parameter whose type
-// mentions p is a borrow, the result does not mention p, and a mut
-// parameter mentioning p is the only parameter that does, since through
-// a mut borrow the body could store a value of p taken from another
-// parameter into the caller's data. An instance then keeps nothing of
-// p, so a type argument that holds a borrow, which a generic type's
-// instance would store, is safe in it: fmt.Fprintln and io.Copy take a
-// buffered writer that borrows the file underneath.
-func lentOnly(sig *Signature, p *TypeParam) bool {
-	mentioned, mut := 0, false
-	for _, v := range sig.params {
-		if !mentions(v.typ, p) {
-			continue
-		}
-
-		r, ok := v.typ.(*Ref)
-		if !ok {
-			return false
-		}
-
-		mentioned++
-		mut = mut || r.mut
-	}
-
-	if mut && mentioned > 1 {
-		return false
-	}
-
-	return sig.results == nil || !mentions(sig.results, p)
 }
 
 // contextTyped reports whether e takes its type from the context it is

@@ -35,7 +35,7 @@
 // not JSON, and arrays and objects nested more than 128 deep.
 package json
 
-import ("io"; "math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
+import ("io"; "iter"; "math"; "strconv"; "strings"; "unicode/utf16"; "unicode/utf8")
 
 // hex are the digits of a \u escape, by their value.
 const hex = "0123456789abcdef"
@@ -108,6 +108,12 @@ const indentedGrowth = 2
 // to start; it doubles whenever a value outgrows it.
 const streamBlock = 4096
 
+// defaultLimit is the most bytes one value's text may take in a
+// Decoder until SetLimit says otherwise, 64 MiB: enough for any record
+// a program streams, and a bound on what a stream that never ends a
+// value can make it hold.
+const defaultLimit = 64 << 20
+
 // Name is the key a field or a variant is written and read under, in
 // place of the name it is declared with: Host string
 // @json.Name("host").
@@ -175,7 +181,15 @@ struct Error impl Error {
 	msg string
 }
 
-// Kind is the kind of a JSON value.
+// A Kind is the kind of a JSON value, one of JSON's six: null, a
+// boolean, a number, a string, an array or an object. Doc.Kind and
+// Value.Kind return one, to choose what to read a value as:
+//
+//	match doc.Kind(n) {
+//		json.NumberKind => fmt.Println(doc.Int(n) ?? 0),
+//		json.StringKind => fmt.Println(doc.String(n)),
+//		_ => {},
+//	}
 enum Kind {
 	NullKind
 	BoolKind
@@ -208,16 +222,17 @@ struct Member {
 	Value Node
 }
 
-// Elements is a loop over an array's elements, in order.
-struct Elements {
+// Elements is a loop over an array's elements, in order, and an
+// iter.Iterator of them.
+struct Elements impl iter.Iterator<Node> {
 	doc ref Doc
 	at  int
 	end int
 }
 
 // Members is a loop over an object's members, in the order the text
-// has them.
-struct Members {
+// has them, and an iter.Iterator of them.
+struct Members impl iter.Iterator<Member> {
 	doc ref Doc
 	at  int
 	end int
@@ -242,7 +257,9 @@ enum Value {
 	Object([]Field)
 }
 
-// A Field is one member of an object Value: its key and its value.
+// A Field is one member of an object Value: its key, decoded and owned,
+// and its value. An Object holds its fields in the order the text gave
+// them, a key given twice refused when the text is read.
 struct Field {
 	Key   string
 	Value Value
@@ -278,8 +295,9 @@ struct Encoder<W: io.Writer> {
 // one by one, so that a large one is never held whole. It is made with
 // NewDecoder, and holds a mut borrow of the reader for as long as it
 // lives. It reads the input in blocks and keeps what it has read and
-// not decoded; a value is read once its text has come whole, by
-// Unmarshal's rules.
+// not decoded; a value is read where it lies in the block, by
+// Unmarshal's rules, in one pass when the block holds it whole. A
+// value's text may take at most 64 MiB, or the bound SetLimit sets.
 //
 //	dec := json.NewDecoder(mut f)
 //	for {
@@ -296,6 +314,8 @@ struct Decoder<R: io.Reader> {
 	err    io.Error?     // the reader's first error, which every later read returns
 	state  streamState   // what may come next
 	outer  []streamState // the states of the arrays and objects the one being read is in, innermost last
+	limit  int           // the most bytes one value's text may take, or 0 or less for no limit
+	over   Error?        // the value that passed the limit, which every later call returns
 }
 
 // A writer is the text written so far, and the first thing it could not
@@ -315,6 +335,8 @@ struct reader {
 	depth  int
 	ends   map[int]int // where each array or object skipped ends, by where it begins, so that one is skipped once however deep the scans that skip it
 	wasted int         // the bytes read by tries of an untagged enum's variants that failed, which untriedBudget bounds
+	prefix bool        // whether the text runs on past the value read, so that its length is no measure of the value's
+	reach  int         // in a prefix read, the furthest a failed try reached, no further than the value's end
 }
 
 // An objectKey is one key of an object being read: the bytes of its
@@ -391,7 +413,13 @@ func (e ref Error) Error() string {
 	return "json: " + e.msg + " at offset " + strconv.Itoa(e.at)
 }
 
-// Offset returns where in the text the error was met, or -1.
+// Offset returns where in the text the error was met, counted in bytes
+// from its start, the byte the reader stopped at; or -1 for an error
+// met with no text read, as Marshal's for a float JSON cannot write.
+//
+//	if err := json.Unmarshal<Config>(ref text).Err() {
+//		fmt.Println("bad config at byte", err.Offset())
+//	}
 func (e ref Error) Offset() int {
 	return e.at
 }
@@ -402,7 +430,22 @@ func Error.At(at int, msg string) Error {
 	return Error{at: at, msg: msg}
 }
 
-// Marshal returns v as JSON text: one line, no space between its parts.
+// copied returns a copy of the error, which a Decoder hands out again
+// for every call after a value passed its limit. It allocates the
+// message's copy.
+func (e ref Error) copied() Error {
+	return Error{at: e.at, msg: e.msg.Clone()}
+}
+
+// Marshal returns v as JSON text of its own: one line, no space between
+// its parts, a struct as an object of its fields in the order they are
+// declared, and the rest as the package comment says of each type. It
+// only reads v, which it borrows for the call. The one value it refuses
+// is a float JSON has no text for, a NaN or an infinity, with an Error
+// whose Offset is -1. It allocates the string, built once in a buffer
+// that grows by doubling.
+//
+//	text := json.Marshal(ref point)? // {"X":1,"Y":2}
 func Marshal<T>(v ref T) Result<string, Error> {
 	w := writer{out: strings.Builder{}, bad: None}
 	writeValue(v, mut w)
@@ -459,6 +502,19 @@ func Indent(text ref string, prefix ref string, indent ref string) Result<string
 	return Ok(indented(text, prefix, indent))
 }
 
+// readPrefix reads a value of T from the start of text, after any
+// space, and returns it with the offset after it; what follows it is
+// left unread. It reads as Unmarshal reads the value's text alone, in
+// one pass, but that the failed tries of untagged variants it may make
+// are bounded by how far they reached, since the text's length is not
+// the value's: at most Unmarshal's bound, so that a value it refuses
+// on that bound Unmarshal may still read.
+func readPrefix<T>(text ref string) Result<(T, int), Error> {
+	r := reader{text: text, at: 0, first: false, depth: 0, ends: map[int]int{}, prefix: true, reach: 0}
+	v := readValue<T>(mut r)?
+	return Ok((v, r.at))
+}
+
 // Unmarshal reads a value of T from JSON text, which holds that value
 // alone, with space around it.
 func Unmarshal<T>(text ref string) Result<T, Error> {
@@ -486,7 +542,12 @@ func Parse(text ref string) Result<Doc, Error> {
 	return Ok(d)
 }
 
-// Root returns the node of the document's value.
+// Root returns the node of the document's value, the whole text's, from
+// which every other node is reached with Get, Index, At, Elements and
+// Members. It costs nothing: the root is the index's first entry.
+//
+//	doc := json.Parse(ref text)?
+//	name := doc.Get(doc.Root(), "name") ?? return
 func (d ref Doc) Root() Node {
 	return Node{i: 0}
 }
@@ -511,7 +572,9 @@ func (d ref Doc) Text(n Node) ref string {
 	return d.text[d.nodes[n.i].start:d.nodes[n.i].end]
 }
 
-// Bool returns the node's bool, or None for a node of another kind.
+// Bool returns the value of the boolean n, true or false, or None when
+// n is a node of another kind, null among them, or of another Doc. It
+// reads one byte of the text.
 func (d ref Doc) Bool(n Node) bool? {
 	if d.Kind(n) != BoolKind {
 		return None
@@ -530,7 +593,11 @@ func (d ref Doc) Int(n Node) int? {
 	return strconv.ParseInt(d.Text(n), 10).Ok()
 }
 
-// Float returns the node's number, or None for a node of another kind.
+// Float returns the number n as the f64 nearest it, the way
+// strconv.ParseFloat reads the text, an integer as well as one with a
+// fraction or an exponent; or None when n is a node of another kind or
+// of another Doc, or a number past the largest f64, which no float
+// holds. It reads the number's text in place and allocates nothing.
 func (d ref Doc) Float(n Node) f64? {
 	if d.Kind(n) != NumberKind {
 		return None
@@ -589,7 +656,11 @@ func (d ref Doc) Len(n Node) int {
 	return count
 }
 
-// Index returns the i'th element of an array, or None.
+// Index returns the element of the array n at the index i, counted from
+// 0, or None when i is below 0 or past the last element, or n is not
+// an array of this Doc. It walks the elements before i, each one step
+// in the index, so it takes time in i; a loop over every element is
+// Elements, which takes each in one step.
 func (d ref Doc) Index(n Node, i int) Node? {
 	k := 0
 	for e := range d.Elements(n) {
@@ -712,7 +783,8 @@ func (d ref Doc) Members(n Node) Members {
 	return Members{doc: d, at: n.i + 1, end: d.nodes[n.i].next}
 }
 
-// Next returns the next element, or None after the last.
+// Next returns the next element of the array, in the text's order, or
+// None after the last; one step in the index, nothing allocated.
 func (e mut Elements) Next() Node? {
 	if e.at >= e.end {
 		return None
@@ -723,7 +795,10 @@ func (e mut Elements) Next() Node? {
 	return Some(n)
 }
 
-// Next returns the next member, or None after the last.
+// Next returns the next member of the object, in the text's order, or
+// None after the last: its key lent from the Doc's text as the text has
+// it between the quotes, with any escape not decoded, and the nodes of
+// its key and its value. One step in the index, nothing allocated.
 func (m mut Members) Next() Member? {
 	if m.at >= m.end {
 		return None
@@ -735,7 +810,10 @@ func (m mut Members) Next() Member? {
 	return Some(Member{Key: m.doc.text[m.doc.nodes[name].start + 1:m.doc.nodes[name].end - 1], Name: Node{i: name}, Value: Node{i: value}})
 }
 
-// Kind returns the kind of the value.
+// Kind returns the kind of the value, the Kind its variant stands for:
+// NullKind for Null, ObjectKind for Object, and so on. A program that
+// reads the value matches on it instead; Kind is for a test or a
+// message.
 func (v ref Value) Kind() Kind {
 	return match v {
 		Null => NullKind,
@@ -888,7 +966,9 @@ func Text.Of(text ref string) Result<Text, Error> {
 	return Unmarshal<Text>(text)
 }
 
-// JSON returns the text the Text holds.
+// JSON returns the text the Text holds, lent for as long as the Text
+// is: the one JSON value as the input had it, with the space around it
+// left out, which Marshal writes back compacted.
 func (t ref Text) JSON() ref string {
 	return t.text
 }
@@ -958,11 +1038,12 @@ func (e ref Encoder<W>) IoError() (ref io.Error)? {
 
 // NewDecoder returns a Decoder that reads from r, borrowed mut for as
 // long as the Decoder lives. Its block of 4096 bytes is allocated
-// here, and doubles whenever a value outgrows it.
+// here, and doubles whenever a value outgrows it, up to the limit on a
+// value's size, 64 MiB until SetLimit changes it.
 //
 //	dec := json.NewDecoder(mut conn)
 func NewDecoder<R: io.Reader>(r mut R) Decoder<R> {
-	return Decoder<R>{reader: r, buf: make([]byte, streamBlock), start: 0, end: 0, base: 0, scan: valueScan{at: -1, passed: 0, depth: 0, inString: false, escaped: false}, err: None, state: atTop, outer: []streamState{}}
+	return Decoder<R>{reader: r, buf: make([]byte, streamBlock), start: 0, end: 0, base: 0, scan: valueScan{at: -1, passed: 0, depth: 0, inString: false, escaped: false}, err: None, state: atTop, outer: []streamState{}, limit: defaultLimit, over: None}
 }
 
 // Decode reads the next value as a T, by Unmarshal's rules, and
@@ -972,8 +1053,11 @@ func NewDecoder<R: io.Reader>(r mut R) Decoder<R> {
 // whose text is wrong for T is passed, and the next Decode reads what
 // comes after it; a closing bracket, a comma or a colon where a value
 // begins is refused and left to be read, by EndArray or EndObject; a
-// failure of the reader is returned again by every later call. An
-// error's offset counts from the start of the input.
+// failure of the reader, and a value longer than the limit SetLimit
+// sets, is returned again by every later call. The input ending before
+// the value does leaves it to be read again, by the next Decode, when
+// the reader has more. An error's offset counts from the start of the
+// input.
 //
 //	for {
 //		ev := dec.Decode<Event>()? ?? break
@@ -997,8 +1081,7 @@ func (d mut Decoder<R>) Decode<T>() Result<T?, Error> {
 		return Err(d.errorHere("expected a value")) // left to be read: a bracket EndArray or EndObject reads
 	}
 
-	end := d.valueEnd()?
-	v := d.read<T>(end)
+	v := d.readNext<T>()?
 	d.valueRead()
 	return Ok(Some(v?))
 }
@@ -1094,10 +1177,25 @@ func (d mut Decoder<R>) Key() Result<string, Error> {
 		return Err(d.errorHere("expected a key"))
 	}
 
-	end := d.valueEnd()?
-	key := d.read<string>(end)
+	key := d.readNext<string>()?
 	d.state = keyRead
 	return key
+}
+
+// SetLimit sets the most bytes one value's text may take, n, or
+// removes the limit when n is 0 or less; 64 MiB until it is called.
+// A longer value is refused, with its offset, before the Decoder holds
+// more than the limit and one block of it: value longer than n bytes,
+// the Decoder's limit; and every later call returns that error, since
+// the Decoder reads no further than that value. A key read with Key is held to it
+// too, and so is each element BeginArray and each member BeginObject
+// open, one at a time, so that an array of any length streams while
+// each element stays within the limit.
+//
+//	dec := json.NewDecoder(mut conn)
+//	dec.SetLimit(1 << 20) // one MiB a message
+func (d mut Decoder<R>) SetLimit(n int) {
+	d.limit = n
 }
 
 // IoError returns the reader's failure that ended the reading, which
@@ -2214,7 +2312,7 @@ func readUntagged<T>(r mut reader) Result<T, Error> {
 						Ok(v) => return Ok(v),
 						Err(_) => {
 							r.wasted += r.at - start
-							if r.wasted > untriedBudget * len(r.text) {
+							if r.overBudget() {
 								return Err(Error{at: start, msg: "untagged values nest too deep to try each variant: the text would take too long to read"})
 							}
 
@@ -2228,6 +2326,21 @@ func readUntagged<T>(r mut reader) Result<T, Error> {
 			Err(Error{at: start, msg: "no variant fits the text"})
 		}
 	}
+}
+
+// overBudget reports whether the failed tries of untagged variants
+// have read more than untriedBudget times the text's length; in a
+// prefix read, whose text runs on past the value, more than that many
+// times the furthest a try reached, which is no further than the
+// value's end, since a try reads only the value's own bytes. It is
+// called with the reader where the last try failed.
+func (r mut reader) overBudget() bool {
+	if !r.prefix {
+		return r.wasted > untriedBudget * len(r.text)
+	}
+
+	r.reach = max(r.reach, r.at)
+	return r.wasted > untriedBudget * r.reach
 }
 
 // readVariantElement reads the next element of an array of a variant's
@@ -3173,11 +3286,10 @@ func streamError(f ref io.Error, at int) Error {
 // next passes the space at start and returns the byte after it, which
 // stays to be read, reading more of the input as it needs to: None at
 // the end of the input. After the reader failed, it returns the
-// failure, though bytes read before it are held.
+// failure, though bytes read before it are held, and after a value
+// passed the limit, that value's error.
 func (d mut Decoder<R>) next() Result<byte?, Error> {
-	if f := ref d.err {
-		return Err(streamError(f, d.base + d.end))
-	}
+	d.failure()?
 
 	for {
 		for d.start < d.end && isSpace(d.buf[d.start]) {
@@ -3195,27 +3307,30 @@ func (d mut Decoder<R>) next() Result<byte?, Error> {
 }
 
 // fill moves what was read and not decoded to the start of the block,
-// doubles the block when that leaves it full, and reads into the room
-// after it. It reports whether it read anything: false at the end of
-// the input, which is asked about again the next time, since the reader
-// may have more by then.
+// in one block move, doubles the block when that leaves it full, up to
+// the limit and one block, and reads into the room after it. It
+// reports whether it read anything: false at the end of the input,
+// which is asked about again the next time, since the reader may have
+// more by then. A value at start already past the limit is refused
+// before anything more is read.
 func (d mut Decoder<R>) fill() Result<bool, Error> {
-	if f := ref d.err {
-		return Err(streamError(f, d.base + d.end))
-	}
+	d.failure()?
 
+	d.checkLimit(d.end - d.start)?
 	if d.start > 0 {
-		for i := d.start; i < d.end; i++ {
-			d.buf[i - d.start] = d.buf[i]
-		}
-
+		slide(mut d.buf, d.start, d.end)
 		d.base += d.start
 		d.end -= d.start
 		d.start = 0
 	}
 
 	if d.end == len(d.buf) {
-		d.buf.Extend(ref make([]byte, len(d.buf)))
+		room := len(d.buf)
+		if d.limit > 0 && d.limit - d.end < room - streamBlock { // written so that no sum passes the int range
+			room = d.limit - d.end + streamBlock // no bigger than the limit and one block
+		}
+
+		grow(mut d.buf, room)
 	}
 
 	match d.reader.Read(mut d.buf[d.end:]) {
@@ -3241,8 +3356,7 @@ func (d mut Decoder<R>) valueEnd() Result<int, Error> {
 		d.scan = valueScan{at: d.base + d.start, passed: 0, depth: 0, inString: false, escaped: false}
 	}
 
-	first := d.buf[d.start]
-	if first != quotationMark && first != beginArray && first != beginObject {
+	if !closesItself(d.buf[d.start]) {
 		return d.scalarEnd()
 	}
 
@@ -3328,6 +3442,89 @@ func endsScalar(c byte) bool {
 	return isSpace(c) || c == beginArray || c == endArray || c == beginObject || c == endObject || c == nameSeparator || c == valueSeparator || c == quotationMark
 }
 
+// readNext reads the value at start as a T. It returns an error of
+// its own, with the value left unread and nothing moved, when the
+// input ends before the value does, or the value passes the limit;
+// and else the read's result, having moved past the value whether or
+// not it read, so that a value whose text is wrong for T is passed.
+// The value is read in place, in one pass, when the block holds it
+// whole, and else found whole first, reading more of the input as it
+// takes, and read then, as a value read in many pieces is.
+func (d mut Decoder<R>) readNext<T>() Result<Result<T, Error>, Error> {
+	if v := d.readInPlace<T>()? {
+		return Ok(Ok(v))
+	}
+
+	end := d.valueEnd()?
+	d.checkLimit(end - d.start)?
+	return Ok(d.read<T>(end))
+}
+
+// readInPlace reads the value at start as a T where it lies in the
+// block, in one pass, and moves past it, when the block holds it
+// whole: a string, an array or an object read whole ends at its
+// closing quote or bracket, and a number or a literal when a byte read
+// after it is space or a structural character, since a byte read later
+// cannot change either. It returns None, having moved nothing, for a
+// value it cannot so read: a number or a literal at the end of what was
+// read, which may go on; a value whose read fails, which may be cut or
+// run on; and a value found cut before, whose scan for its end has
+// begun, so that a value that comes in many reads is read through
+// from its start once and not again at each. It reads the block's
+// bytes as far as the value goes, and once more when it returns None.
+func (d mut Decoder<R>) readInPlace<T>() Result<T?, Error> {
+	if d.scan.at == d.base + d.start {
+		return Ok(None)
+	}
+
+	if (v, n) := readPrefix<T>(textOf(d.buf[d.start:d.end])).Ok() {
+		after := d.start + n
+		if closesItself(d.buf[d.start]) || after < d.end && endsScalar(d.buf[after]) {
+			d.checkLimit(n)?
+			d.start = after
+			return Ok(Some(v))
+		}
+	}
+
+	return Ok(None)
+}
+
+// failure returns the error that ended the reading, which every call
+// after it returns: the value that passed the limit, or the reader's
+// failure, though bytes read before it are held. It allocates only the
+// error it returns.
+func (d ref Decoder<R>) failure() Result<(), Error> {
+	if e := ref d.over {
+		return Err(e.copied())
+	}
+
+	if f := ref d.err {
+		return Err(streamError(f, d.base + d.end))
+	}
+
+	return Ok(())
+}
+
+// checkLimit refuses the value at start when size, the bytes of its
+// text read so far, passes the limit, and keeps the error, which every
+// later call returns. It allocates only when it refuses.
+func (d mut Decoder<R>) checkLimit(size int) Result<(), Error> {
+	if d.limit > 0 && size > d.limit {
+		e := Error{at: d.base + d.start, msg: "value longer than " + strconv.Itoa(d.limit) + " bytes, the Decoder's limit"}
+		d.over = Some(e.copied())
+		return Err(e)
+	}
+
+	return Ok(())
+}
+
+// closesItself reports whether c begins a value that its own last byte
+// ends, a string, an array or an object, and not a number or a literal,
+// which the byte after it ends.
+func closesItself(c byte) bool {
+	return c == quotationMark || c == beginArray || c == beginObject
+}
+
 // read reads the value at start, whose text ends at end, as a T, and
 // moves past it whether or not it reads. The value is read where it
 // lies in the block, with no copy; an error's offset is moved to count
@@ -3385,6 +3582,10 @@ func (d mut Decoder<R>) open(bracket byte, inside streamState) Result<(), Error>
 	c := d.next()? ?? return Err(d.ended())
 	if c != bracket {
 		return Err(d.errorHere("expected " + string(rune(bracket))))
+	}
+
+	if len(d.outer) >= maxDepth {
+		return Err(d.errorHere("exceeded max depth"))
 	}
 
 	d.start += 1
@@ -3451,6 +3652,15 @@ func (d ref Decoder<R>) errorHere(msg string) Error {
 
 // textOf lends the bytes of b as a string, with no copy.
 func textOf(b ref []byte) ref string
+
+// slide moves the bytes b[lo:hi] to the start of b, by memmove. The
+// runtime provides it.
+func slide(b mut []byte, lo int, hi int)
+
+// grow lengthens b by n zero bytes, in place when its capacity allows
+// and else in one allocation of exactly the new length. The runtime
+// provides it.
+func grow(b mut []byte, n int)
 
 // scanString returns the offset of the first byte of s at or after at
 // that a JSON string cannot hold as it is, a quote, a backslash or a

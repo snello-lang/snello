@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value holds no borrow of its own data: a field that borrows
+// another field of the same value would point at data that changes or
+// goes with the value while the borrow is kept. Fix: keep an index, or
+// keep the borrow in a value of its own beside the owner.
+
+package p
+
+struct V {
+    r   ref []int
+    own []int
+}
+
+func main() {
+    a := []int{7}
+    v := V{r: ref a, own: []int{1}}
+    v.r = ref v.own                 // ERROR "cannot store a borrow of v.own in v: a value cannot borrow its own data, which changes or goes with it"
+}

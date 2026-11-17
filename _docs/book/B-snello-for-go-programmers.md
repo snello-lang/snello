@@ -330,6 +330,7 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | a `map[int]V` written with its keys sorted by their text, `"10"` before `"2"`, and read from a key `"01"` or `"+1"` | sorted by their values, `"2"` before `"10"`; a key is read only as JSON writes an integer, so `"01"` and `"+1"` are errors with their offset |
 | `json.MarshalIndent(v, "", "  ")` and `json.Indent(&buf, src, "", "  ")` | the same layout: `json.MarshalIndent(ref v, "", "  ")` and `json.Indent(ref text, "", "  ")`, each returning the text; space after the value is dropped, where Go's `Indent` copies it, and `Indent` refuses text that is not UTF-8, which Go's passes through |
 | `json.NewDecoder(r)`, `dec.Decode(&v)` until `io.EOF`, and `dec.Token()` and `dec.More()` for an array read an element at a time | `json.NewDecoder(mut r)`, `dec.Decode<T>()` until `None`; for an array or object `dec.BeginArray()`, `dec.Key()`, `dec.More()`, `dec.EndArray()` and `dec.Peek()`, each saying what it reads, in place of one `Token` of any kind; a reader's failure is `dec.IoError()` |
+| A Decoder buffers a value of any size; a bound on the input is `io.LimitReader` or `http.MaxBytesReader` around the reader | A value's text is bounded, 64 MiB by default, `dec.SetLimit(n)` another; past it the value is refused with its offset and every later call returns that error |
 | `json.NewEncoder(w)`, `enc.Encode(v)` | `json.NewEncoder(mut w)`, `enc.Encode(ref v)`, a line break after each value as Go writes it; after a write fails, every later `Encode` returns the failure |
 
 ## Chapter 27: Writing Snello
@@ -351,3 +352,14 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `b main.sum` | `breakpoint set -n sum` in lldb, `break sum` in gdb, or a breakpoint at the line, `main.snello:19`; with the C backend, the function's symbol, `sn__sum` |
 | the DWARF in every binary, which `-ldflags=-w` strips | the debugging information in a debug build alone, in `prog.dSYM` on macOS; a release build keeps symbols for a profiler and no lines |
 | `pprof` | the system's profilers, `perf` and Instruments, on a release build, which keeps its frame pointers |
+
+## Chapter 31: Iterators
+
+| In Go | In Snello |
+|---|---|
+| `iter.Seq[V]`, a function the loop calls back with each item | `iter.Iterator<T>`, a value the loop pulls items from with `Next`; `range` takes either shape of value with `Next` |
+| No adapters in the standard library: a filter or a map is a loop, or a helper of your own | `Map`, `Filter`, `Take`, `Skip`, `Enumerate`, `Zip` and `Chain`, and the consumers `Count`, `Fold`, `Any`, `All`, `Find` and `Collect`, as default methods of the trait |
+| `maps.All(m)`, `slices.Values(s)` | `d.Iter()`, `s.Iter()`, `a.Iter()` of a deque, a set and an arena |
+| An iterator over a collection that changes while it runs sees whatever the change leaves | The collection cannot change while an iterator over it, or an adapter over that, is alive: the checker refuses it |
+| A generic type argument may be anything, a pointer into a collection included, which the collector keeps alive | A type argument may hold a borrow, and the instance holds it: the checker keeps the collection alive and unchanged for as long as the instance lives |
+

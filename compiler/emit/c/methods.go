@@ -723,12 +723,7 @@ func (e *Emitter) mapped(x *ast.CallExpr, sel *ast.SelectorExpr, place string, t
 	}
 
 	fsig := e.sub(inst.Type.Params()[0].Type()).(*types.Signature)
-	var f string
-	if e.hasEffects(x.Args[0]) {
-		f = e.saved(x.Args[0], fsig)
-	} else {
-		f = e.valueTo(x.Args[0], fsig)
-	}
+	f := e.saved(x.Args[0], fsig) // called through a copy, as callValue calls
 
 	rt := e.typeOf(x)
 	out := e.temp()
@@ -875,7 +870,7 @@ func (e *Emitter) spill(v string, t types.Type, pos token.Pos) string {
 
 func (e *Emitter) saved(x ast.Expr, t types.Type) string {
 	v := e.temp()
-	e.line(e.cType(t, x.Pos()) + " " + v + " = " + e.valueTo(x, t) + ";")
+	e.lineParts(e.cType(t, x.Pos()), " ", v, " = ", e.valueTo(x, t), ";")
 	return v
 }
 

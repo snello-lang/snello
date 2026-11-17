@@ -90,7 +90,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	var tmp ast.Expr
 	switch {
 	case sig.tparams != nil:
-		if sig, tmp = c.genericCall(e, sig, expected); sig == nil {
+		if sig, tmp = c.genericCall(e, sig, f.obj, expected); sig == nil {
 			return invalidOperand
 		}
 	case len(e.TypeArgs) > 0:
@@ -103,6 +103,12 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 
 	if e == c.deferring {
 		c.deferSig = sig // what the deferred call borrows is held until the function returns (deferStmt)
+	}
+
+	passedOnly := false
+	if fn, ok := f.obj.(*Func); ok {
+		passedOnly = c.passBorrows(e, fn, sig) // a type argument that holds a borrow: what the call passes along
+		c.recordHideEdge(e, fn, sig)
 	}
 
 	if at, ok := formatted(f.obj); ok {
@@ -130,8 +136,8 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		}
 	}
 
-	if _, ok := borrowIn(sig.results); ok && tmp != nil {
-		c.markTemporary(e, tmp) // the result borrows what the receiver or argument did
+	if _, ok := borrowIn(sig.results); ok && tmp != nil && !passedOnly {
+		c.markTemporary(e, tmp) // the result borrows what the receiver or argument did; one whose borrow came through a type argument holds only what they hold
 	}
 
 	if diverges(f.obj) {
@@ -378,7 +384,7 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 	}
 
 	in := newInference(v.parent.tparams)
-	if !c.explicit(in, e.TypeArgs, v.name, e.Fun, nil) {
+	if !c.explicit(in, e.TypeArgs, v.name, e.Fun) {
 		c.exprs(e.Args)
 		return invalidOperand
 	}
@@ -389,12 +395,13 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 		c.kept(op, "stored", e.Args[i].Pos()) // a variant holds what it is given
 		c.maybeMove(op, slots[i])
 	})
-	targs, ok := c.complete(in, v.name, e.Fun, nil)
+	targs, ok := c.complete(in, v.name, e.Fun)
 	if !ok {
 		return invalidOperand
 	}
 
 	t := Instantiate(v.parent, targs)
+	c.ownedParts(t, e.Fun.Pos())
 	en, ok := t.Underlying().(*Enum)
 	if !ok { // a declaration refused for growing has no instances, and was reported where it is declared
 		return invalidOperand
@@ -452,10 +459,15 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, 
 // signature with them in place, which it returns, nil after an error,
 // with the temporary an argument lends. The instance is recorded for
 // the backend.
-func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*Signature, ast.Expr) {
+func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expected Type) (*Signature, ast.Expr) {
 	name := exprText(e.Fun)
 	in := newInference(sig.tparams)
-	if !c.explicit(in, e.TypeArgs, name, e.Fun, sig) {
+	if fn, ok := obj.(*Func); ok && fn.origin != nil {
+		if decl, ok := fn.Origin().typ.(*Signature); ok {
+			in.outer = bindings(decl, sig) // a bound may name the trait's or the type's parameters
+		}
+	}
+	if !c.explicit(in, e.TypeArgs, name, e.Fun) {
 		c.exprs(e.Args)
 		return nil, nil
 	}
@@ -492,7 +504,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, expected Type) (*
 
 	c.variadic = rest
 	in.unify(sig.results, expected)
-	targs, ok := c.complete(in, name, e.Fun, sig)
+	targs, ok := c.complete(in, name, e.Fun)
 	if !ok {
 		return nil, nil
 	}

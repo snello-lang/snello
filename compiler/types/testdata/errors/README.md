@@ -39,10 +39,14 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | Lock-protected data is reached only through a guard, a borrow | guard-across-spawn, guard-of-temporary |
 | The races a task can make: a value used after it was sent, an Arc's value changed, a borrowing closure spawned | use-after-send, mutate-through-arc, borrowing-closure-spawned |
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned |
+| An iterator over a collection, and every adapter over it, holds the collection's borrow: the collection outlives it and does not change while it lives, and owned data cannot hold it | iter-outlives-source, iter-source-changed, iter-adapter-stored |
+| An iterator's items borrow what the iterator borrows, through `ref` borrows, never the iterator itself | iter-next-borrows-itself |
+| A type argument that holds a borrow makes an instance that holds it: not in a map, a channel or a pointer, not hidden in a trait value or a closure by a generic body, and given to an argument lent `mut` by a generic call | generic-owned-borrow, generic-hides-borrow, generic-mut-takes-borrow |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned |
 | 6. A local dies at the end of its block, on every path: a borrow of it is not used after, through a variable, a field or a loop's next pass | borrow-outlives-block, borrow-field-outlives-block, borrow-next-pass |
 | 6. A block's value does not borrow the block's own local | borrow-out-of-block |
-| 6. A `mut` parameter is the caller's: nothing but itself is stored in it | borrow-into-caller |
+| 6. A `mut` parameter is the caller's: nothing but itself is stored in it, and no borrow of its own data | borrow-into-caller, borrow-into-itself |
+| 6. A value holds no borrow of its own data | borrow-of-itself |
 | 6. A closure stores no borrow in a variable outside it | closure-stores-borrow |
 | 6. A deferred call borrows only whole variables, one that holds no borrow or a borrow variable, and keeps them until the function returns | defer-borrows-whole, defer-outlives-block |
 | 6. A closure that borrows is used where it is made | closure-used-where-made |

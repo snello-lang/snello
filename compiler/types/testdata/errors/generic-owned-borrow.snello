@@ -1,0 +1,27 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a type argument may hold a borrow, and its instance holds it,
+// but not inside a map, a channel or a pointer, which the checker does
+// not follow; a slice of one it follows. Fix: keep the borrows in a
+// slice, or own the values.
+
+package p
+
+import "fmt"
+
+struct View {
+    s ref string
+}
+
+struct Keyed<T> {
+    m map[int]T
+}
+
+func keyed<T>(v T) Keyed<T> { return Keyed<T>{m: map[int]T{}} }
+
+func main() {
+    s := "a".Clone()
+    fmt.Println(keyed(View{s: ref s}))      // ERROR "a map cannot hold View: it holds a borrow"
+}

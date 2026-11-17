@@ -167,7 +167,12 @@ func TempDir() Dir {
 	return Dir{path: os.MkdirTemp("", tempDirPattern).Expect("TempDir")}
 }
 
-// Path returns the directory's path, lent for as long as the Dir is.
+// Path returns the directory's path, lent for as long as the Dir is
+// lent; nothing is copied. The directory is there until the Dir is
+// dropped.
+//
+//	os.WriteFile(dir.Join("in.txt"), []byte("data"), 0o644)?
+//	files := os.ReadDir(dir.Path())?
 func (d ref Dir) Path() ref string { return ref d.path }
 
 // Join returns the path of name inside the directory, d's path, a /

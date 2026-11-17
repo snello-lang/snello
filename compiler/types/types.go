@@ -252,6 +252,7 @@ type Named struct {
 	instances []*Named     // a generic declaration's instances, one per argument list
 	ready     bool         // a generic declaration is resolved, so its instances can expand
 	refused   bool         // a generic declaration refused for growing: it has no instances, and one written is the invalid type
+	partsSeen bool         // an instance whose arguments hold a borrow was looked into for owned data that would hide it (ownedParts)
 	orig      *Named       // an instance's declaration
 	targs     []Type       // an instance's arguments
 	symbol    string       // the name a backend writes for the type, kept once the lowering made it
@@ -593,17 +594,35 @@ func optionParens(t Type) string {
 	return t.String()
 }
 
-// optionString writes elem? with the parentheses the grammar needs: ?
-// binds outside a pointer or borrow and inside a container, so a
-// container, map, channel or function inside an option is written
-// ([]T)?.
-func optionString(o *Option) string {
-	switch o.elem.(type) {
-	case *Slice, *Array, *Map, *Chan, *Signature:
-		return "(" + o.elem.String() + ")?"
+// optionString writes the option o as its type is written, elem?.
+func optionString(o *Option) string { return optionOf(o.elem) }
+
+// optionOf writes t?, the type of a value of t that may be missing,
+// with the parentheses the grammar needs: ? binds outside a pointer or
+// borrow and inside a container, so a container, map, channel or
+// function inside an option is written ([]T)?, and so is a pointer or
+// borrow of one, (mut []T)?, since mut []T? lends a slice of options.
+func optionOf(t Type) string {
+	core := t
+	for {
+		switch p := core.(type) {
+		case *Ref:
+			core = p.elem
+			continue
+		case *Pointer:
+			core = p.elem
+			continue
+		}
+
+		break
 	}
 
-	return o.elem.String() + "?"
+	switch core.(type) {
+	case *Slice, *Array, *Map, *Chan, *Signature:
+		return "(" + t.String() + ")?"
+	}
+
+	return t.String() + "?"
 }
 
 func chanString(c *Chan) string {

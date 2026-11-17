@@ -361,6 +361,8 @@ sn_string sn_strings_repeat(sn_string s, int64_t n);
 void sn_string_append(sn_string *s, const sn_string *x);
 sn_string sn_strings_ownString(sn_slice_u8 b);
 sn_string sn_encoding__json_textOf(sn_slice_u8 b);
+void sn_encoding__json_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi);
+void sn_encoding__json_grow(sn_slice_u8 *buf, int64_t n);
 int64_t sn_encoding__json_scanString(sn_string s, int64_t at, bool high);
 int64_t sn_bufio_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
 int64_t sn_bufio_copyString(sn_slice_u8 *dst, sn_string s);

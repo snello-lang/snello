@@ -42,6 +42,15 @@ type borrow struct {
 	// every other use, so reading and changing it before then is fine,
 	// and only moving it away or dropping it is not.
 	atExit bool
+	// lent says the borrow was copied from a borrow variable a place
+	// behind which was lent, x := ref r.f taking what r holds: the loan
+	// of that place, made beside it and copied with it wherever it goes,
+	// says what x borrows of r's.
+	lent bool
+	// read says the borrow was read out of the place, a borrow stored
+	// there, x := h.src, rather than a borrow of the place itself, x :=
+	// ref h.own: the holder holds what the place pointed at.
+	read bool
 }
 
 // An access says what an expression does to a place, which decides the
@@ -206,6 +215,12 @@ func (c *Checker) holdIn(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 		}
 	}
 
+	c.holdValue(v, path, t, e, pos)
+}
+
+// holdValue is holdIn once e is known to lend no temporary that v
+// would keep: v takes what e holds.
+func (c *Checker) holdValue(v *Var, path string, t Type, e ast.Expr, pos token.Pos) {
 	if id, ok := unparen(e).(*ast.Ident); ok && isSignature(t) {
 		c.usedWhereMade(id, "copied to another variable", pos)
 		return
@@ -358,9 +373,26 @@ func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
 				}
 			}
 		}
+
+		for _, arg := range c.passed[x].args { // a generic call's result holds what its arguments hold
+			if tmp := c.heldTemporary(arg); tmp != nil {
+				return tmp
+			}
+		}
 	}
 
 	return c.temporaryOf(e)
+}
+
+// heldTemporary returns a temporary that what e holds borrows, or nil:
+// a borrow of a temporary inside e, but not e itself, which may be a
+// temporary lent to a call that keeps only what it holds.
+func (c *Checker) heldTemporary(e ast.Expr) ast.Expr {
+	if tmp := c.borrowOfTemporary(e); tmp != unparen(e) {
+		return tmp
+	}
+
+	return nil
 }
 
 // derive records that the part path of v, of type t, holds what e
@@ -389,7 +421,7 @@ func (c *Checker) derive(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 		}
 
 		if p, kind := through(p, kind); kind != notPlace {
-			c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path})
+			c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, read: read && isBorrow(placeType(p))})
 		}
 	})
 }
@@ -528,8 +560,13 @@ func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, boo
 			return
 		}
 
-		if src := c.callSource(e); src != nil {
+		passed := c.passed[e]
+		if src := c.callSource(e); src != nil && !passed.only {
 			c.sourcesLent(src, true, deref, f) // a call's result borrows its source: lent, whatever the source is
+		}
+
+		for _, x := range passed.args {
+			c.sourcesLent(x, false, deref, f) // a generic call's result holds what its arguments hold (passing.go)
 		}
 	case *ast.TupleExpr:
 		for _, elt := range e.Elts { // (ref w, 1) carries w

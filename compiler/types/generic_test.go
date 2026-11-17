@@ -72,7 +72,7 @@ func TestGenericTypes(t *testing.T) {
 		{"func (l ref List<int>) Sum() int { return 0 }", []string{"a method's receiver names the type's parameters: List<T>"}},
 		{"func (l ref List<T, U>) Both() {}", []string{"List takes 1 type argument: List<T>"}}, // one error, not one per name
 		{"struct D<T, T> { a T }", []string{"duplicate type parameter T"}},
-		{"func f(s ref string) { l := List<ref string>{}; print(l.Len()) }", []string{"a type argument cannot hold a borrow"}},
+		{"func f(s ref string) { l := List<ref string>{}; print(l.Len()) }", nil}, // the instance holds what its argument holds (passing_test.go)
 	}
 	for _, tt := range tests {
 		got := checkErrors(t, prelude+genericPrelude+tt.src)
@@ -180,17 +180,17 @@ func TestGenericFunctions(t *testing.T) {
 		{"func f() { l := List<int>{}; takeInts(Map(l, func(x int) string { return \"s\" })) }", []string{"List<string>"}},
 		{"func f() { l := List<int>{}; e := Filter(l, func(x ref int) bool { return x > 0 }); takeInts(e) }", nil},
 		{"func f() { xs := []f64{}; Fill(mut xs, 1) }", nil},
-		{"func f() { xs := []f64{}; Put(1, mut xs) }", nil},     // the literal waits for xs, though it comes first, and is an f64
-		{"func f(r ref int) { n := Id(r); print(n + 1) }", nil}, // T is what r borrows; a borrow of a Copy value reads as the value
-		{"func f() { l := List<int>{}; m := Map(l, func(x int) ref string { return \"s\" }); print(m.Len()) }", []string{"cannot use a value of type func(int) ref string as func(int) string in argument"}}, // U is never a borrow
-		{"func f(s ref string) { v := Id(View{s: s}); print(v) }", []string{"a type argument cannot hold View: it holds a borrow"}},
-		{"func Use<T>(v ref T) int { return 1 }\nfunc f(s ref string) int { return Use(View{s: s}) }", nil},                                                                         // borrowed and kept nowhere: safe
-		{"func Keep2<T>(a ref T, v T) {}\nfunc f(s ref string) { Keep2(View{s: s}, View{s: s}) }", []string{"a type argument cannot hold View: it holds a borrow"}},                 // taken by value
-		{"func Use2<T>(v ref T) int { return 1 }\nfunc f(s ref string) int { return Use2<View>(View{s: s}) }", nil},                                                                 // written, the same rule
-		{"func Into<T>(dst mut T, v ref T) {}\nfunc f(s ref string) { o := View{s: s}; Into(mut o, View{s: s}) }", []string{"a type argument cannot hold View: it holds a borrow"}}, // through dst, v could be kept
-		{"func Swap<T>(a mut T, b mut T) {}\nfunc f(s ref string) { o := View{s: s}; p := View{s: s}; Swap(mut o, mut p) }", []string{"a type argument cannot hold View: it holds a borrow"}},
-		{"func Touch<T>(a mut T) {}\nfunc f(s ref string) { o := View{s: s}; Touch(mut o) }", nil},                                                                                       // alone, mut keeps nothing new
-		{"func Back<T>(v ref T) T? { return None }\nfunc f(s ref string) { v := Back(View{s: s}); print(v.IsNone()) }", []string{"a type argument cannot hold View: it holds a borrow"}}, // the result could carry it out
+		{"func f() { xs := []f64{}; Put(1, mut xs) }", nil},                                                             // the literal waits for xs, though it comes first, and is an f64
+		{"func f(r ref int) { n := Id(r); print(n + 1) }", nil},                                                         // T is what r borrows; a borrow of a Copy value reads as the value
+		{"func f() { l := List<int>{}; m := Map(l, func(x int) ref string { return \"s\" }); print(m.Len()) }", nil},    // U is ref string: a type argument may hold a borrow, and the closure returns only what it may
+		{"func f(s ref string) { v := Id(View{s: s}); print(v) }", nil},                                                 // v holds what the argument holds, s (passing_test.go)
+		{"func Use<T>(v ref T) int { return 1 }\nfunc f(s ref string) int { return Use(View{s: s}) }", nil},             // borrowed and kept nowhere: safe
+		{"func Keep2<T>(a ref T, v T) {}\nfunc f(s ref string) { Keep2(View{s: s}, View{s: s}) }", nil},                 // taken by value, and kept nowhere
+		{"func Use2<T>(v ref T) int { return 1 }\nfunc f(s ref string) int { return Use2<View>(View{s: s}) }", nil},     // written, the same rule
+		{"func Into<T>(dst mut T, v ref T) {}\nfunc f(s ref string) { o := View{s: s}; Into(mut o, View{s: s}) }", nil}, // o takes what v holds, s
+		{"func Swap<T>(a mut T, b mut T) {}\nfunc f(s ref string) { o := View{s: s}; p := View{s: s}; Swap(mut o, mut p) }", nil},
+		{"func Touch<T>(a mut T) {}\nfunc f(s ref string) { o := View{s: s}; Touch(mut o) }", nil},                           // alone, mut keeps nothing new
+		{"func Back<T>(v ref T) T? { return None }\nfunc f(s ref string) { v := Back(View{s: s}); print(v.IsNone()) }", nil}, // the result holds what v holds
 		{"func f() { xs := []f64{}; Fill(mut xs, \"a\") }", []string{"cannot use a value of type string as f64 in argument"}},
 
 		// From the context, or written at the call.

@@ -1388,6 +1388,7 @@ func (c *Checker) checkSignature(n *Named, owner *Trait, want, have *Func, pos t
 
 	if sameMethod(hsig, wsig) {
 		c.keepImpls = append(c.keepImpls, keepImpl{have, want}) // it may keep no more than the trait's declaration
+		c.noteWord(have, owner, want)
 		return true
 	}
 
@@ -1426,6 +1427,15 @@ func sameMethod(have, want *Signature) bool {
 // not implement one; while the declarations are being resolved the
 // question waits, since whether a type is Copy is not known yet.
 func (c *Checker) satisfies(tparams []*TypeParam, targs []Type, pos token.Pos, name string) bool {
+	return c.satisfiesIn(tparams, targs, nil, pos, name)
+}
+
+// satisfiesIn is satisfies for a method's own type parameters, whose
+// bounds may name the parameters of what the method was made from, the
+// trait's or the generic type's: outer says what those stand for in the
+// call, so that J: Iterator<T> on a type that is an Iterator<int> asks
+// for Iterator<int>.
+func (c *Checker) satisfiesIn(tparams []*TypeParam, targs []Type, outer []binding, pos token.Pos, name string) bool {
 	if !anyBounds(tparams) {
 		return true
 	}
@@ -1441,7 +1451,7 @@ func (c *Checker) satisfies(tparams []*TypeParam, targs []Type, pos token.Pos, n
 				continue
 			}
 
-			b = c.boundFor(b, tparams, targs) // Mul<T> asks for Mul<int> of an int
+			b = c.boundFor(b, tparams, targs, outer) // Mul<T> asks for Mul<int> of an int
 			if !implements(targs[i], b) {
 				arg := targs[i].String()
 				c.errorf(pos, "cannot use "+arg+" as the type parameter "+p.obj.name+" of "+name+": "+arg+" does not implement "+b.String())
@@ -1493,15 +1503,20 @@ func (t *Trait) unreachable() (what, why string) {
 }
 
 // boundFor returns the bound b with the type arguments in place of the
-// parameters in its right operand: Own<T: Mul<T>> asks an int for
-// Mul<int>. Any other bound names no parameter and is returned as it
-// is.
-func (c *Checker) boundFor(b *Trait, tparams []*TypeParam, targs []Type) *Trait {
+// parameters in its right operand or its arguments: Own<T: Mul<T>> asks
+// an int for Mul<int>, with outer in place of the parameters of what a
+// method was made from. Any other bound names no parameter and is
+// returned as it is.
+func (c *Checker) boundFor(b *Trait, tparams []*TypeParam, targs []Type, outer []binding) *Trait {
 	if b.rhs == nil && b.targs == nil {
 		return b
 	}
 
-	m := make(map[*TypeParam]Type, len(tparams))
+	m := make(map[*TypeParam]Type, len(tparams)+len(outer))
+	for _, o := range outer {
+		m[o.p] = o.arg
+	}
+
 	for i, p := range tparams {
 		m[p] = targs[i]
 	}
@@ -1536,6 +1551,10 @@ func (c *Checker) resolvePendingBounds() {
 // standard traits their structure gives them (stdtraits.go), and a
 // declared type the traits it lists.
 func implements(t Type, trait *Trait) bool {
+	if p, ok := t.(*TypeParam); ok && p.HasBound(trait) {
+		return true // J: Iterator<T>, written inside trait Iterator<T>, is bounded by the instance, before it is read as the trait itself below
+	}
+
 	if ownArgs(trait) {
 		trait = trait.orig // Iterator<T> inside trait Iterator<T> is the trait itself, which Self implements
 	}
