@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,6 +28,10 @@ const (
 	helperEnv         = "SNELLO_SIGNALS_HELPER"
 	helperDirEnv      = "SNELLO_SIGNALS_PROGRAM"
 	startWindowRounds = 20
+
+	// ignoredWait is how long a process is given to be ended by a
+	// signal it was started ignoring, which it never is.
+	ignoredWait = 300 * time.Millisecond
 )
 
 // TestWorkDir holds a work directory to its removal: there until it,
@@ -55,6 +60,10 @@ func TestWorkDir(t *testing.T) {
 // would, and by a quit with its code, no goroutine dump.
 func TestWorkDirSignal(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT} {
+		if !slices.Contains(caughtSignals, os.Signal(sig)) {
+			continue // ignored by whatever started the tests, and so by the helper, which TestIgnoredSignal covers
+		}
+
 		cmd := helper(t, "hold")
 		out, err := cmd.StdoutPipe()
 		if err != nil {
@@ -192,6 +201,52 @@ func TestStartWindow(t *testing.T) {
 
 	if _, serr := os.Stat(strings.TrimSpace(dir)); !errors.Is(serr, os.ErrNotExist) {
 		t.Errorf("the work directory is left: %v", serr)
+	}
+}
+
+// TestIgnoredSignal starts a process holding a work directory with a
+// hangup ignored, as nohup starts a command: the hangup leaves it
+// running and its directory in place, since a command started ignoring
+// a signal goes on ignoring it, and a termination still ends it,
+// directory removed.
+func TestIgnoredSignal(t *testing.T) {
+	hold := helper(t, "hold")
+	cmd := exec.Command("sh", "-c", `trap "" HUP; exec "$0" "$@"`, hold.Path)
+	cmd.Args = append(cmd.Args, hold.Args[1:]...)
+	cmd.Env = hold.Env
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, err := bufio.NewReader(out).ReadString('\n')
+	if err != nil {
+		t.Fatalf("the helper said no directory: %v", err)
+	}
+
+	dir = strings.TrimSpace(dir)
+	cmd.Process.Signal(syscall.SIGHUP)
+	time.Sleep(ignoredWait)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Errorf("a hangup ended a command started ignoring it: %v", err)
+	}
+
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("a hangup removed the work directory of a command started ignoring it: %v", err)
+	}
+
+	cmd.Process.Signal(syscall.SIGTERM)
+	err = cmd.Wait()
+	if sig, ok := signalOf(err); !ok || sig != syscall.SIGTERM {
+		t.Errorf("a termination ended it with %v", err)
+	}
+
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the work directory is left: %v", err)
 	}
 }
 

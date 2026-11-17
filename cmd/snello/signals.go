@@ -25,8 +25,16 @@ const (
 
 // endingSignals are the signals that end a command unless it catches
 // them: an interrupt and a quit, which the terminal sends to every
-// process of the command line, a hangup and a termination.
-var endingSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGTERM}
+// process of the command line, a hangup and a termination; and
+// caughtSignals those of them the command answers, read once as it
+// starts: the ones it was not started ignoring. A command started with
+// one ignored is to go on ignoring it, and so is the program it runs,
+// which inherits the ignoring: a shell's background job its interrupt
+// and quit, a command under nohup its hangup.
+var (
+	endingSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGTERM}
+	caughtSignals = notIgnored(endingSignals)
+)
 
 // A workDir is the temporary directory a command builds in, guarded
 // against the signals that would end the command, by one goroutine,
@@ -59,7 +67,9 @@ func newWorkDir(pattern string) (*workDir, error) {
 	}
 
 	w := &workDir{path: path, signals: make(chan os.Signal, 1), starting: make(chan struct{}), program: make(chan *os.Process), done: make(chan struct{})}
-	signal.Notify(w.signals, endingSignals...)
+	if len(caughtSignals) > 0 { // with none, Notify would relay every signal
+		signal.Notify(w.signals, caughtSignals...)
+	}
 	go w.guard()
 	return w, nil
 }
@@ -140,6 +150,19 @@ func (w *workDir) guard() {
 func (w *workDir) end(s os.Signal) {
 	os.RemoveAll(w.path)
 	raise(s)
+}
+
+// notIgnored returns the signals of sigs the process was not started
+// ignoring, which it may catch.
+func notIgnored(sigs []os.Signal) []os.Signal {
+	var out []os.Signal
+	for _, s := range sigs {
+		if !signal.Ignored(s) {
+			out = append(out, s)
+		}
+	}
+
+	return out
 }
 
 // raise ends the command by s, as s's default action would, so that the
