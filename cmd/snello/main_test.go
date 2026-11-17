@@ -7,10 +7,12 @@ package main
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/version"
 )
 
@@ -242,4 +244,46 @@ func stderrOf(t *testing.T, run func()) string {
 	}
 
 	return string(out)
+}
+
+// TestBuildWithoutCompiler builds, runs and tests with no compiler on
+// the path, through both backends, and builds for a debugger with clang
+// there and the C compiler a debug build needs missing: each says what
+// to install, as doctor does, in place of the system's error, with no
+// backend's name before it.
+func TestBuildWithoutCompiler(t *testing.T) {
+	root := writePrograms(t, map[string]string{
+		"a/main.snello":      "package main\n\nfunc main() {}\n",
+		"a/main_test.snello": "package main\n\nfunc TestA() {}\n",
+	})
+	t.Setenv(toolchain.ClangEnv, "")
+	t.Setenv(toolchain.CCEnv, "")
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", "")
+	t.Chdir(t.TempDir())
+	for backend, want := range map[string]string{"llvm": "clang not found", "c": "cc not found"} {
+		line := want + ": install it with " + toolchain.Install() + ", or set "
+		for _, command := range []string{buildCommand, runCommand, testCommand} {
+			code := -1
+			said := stderrOf(t, func() {
+				code = run([]string{command, "-backend", backend, filepath.Join(root, "a")}, os.Stdout, os.Stderr)
+			})
+			if code != exitFailure || !strings.HasPrefix(said, line) {
+				t.Errorf("%s -backend %s exited %d and said %q, want %q", command, backend, code, said, line)
+			}
+		}
+	}
+
+	t.Setenv("PATH", path)
+	if _, err := exec.LookPath(toolchain.Clang()); err != nil {
+		t.Skip("no clang here for a debug build without cc")
+	}
+
+	missing := filepath.Join(t.TempDir(), "cc")
+	t.Setenv(toolchain.CCEnv, missing)
+	code := -1
+	said := stderrOf(t, func() { code = run([]string{buildCommand, "-debug", filepath.Join(root, "a")}, os.Stdout, os.Stderr) })
+	if want := "CC names " + missing + ", not found: "; code != exitFailure || !strings.HasPrefix(said, want) {
+		t.Errorf("a debug build without cc exited %d and said %q, want %q", code, said, want)
+	}
 }

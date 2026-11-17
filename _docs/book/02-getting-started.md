@@ -19,6 +19,18 @@ snello 0.1.0 (8477985) devel darwin/arm64
 
 `snello help` lists every command with a line saying what it does, and `snello help build` the flags and arguments of one, as `go help build` does; `-h` after a command prints the same.
 
+`snello doctor` checks what a build needs from your system, by trying each thing as a build uses it: clang, which compiles what Snello writes and must be version 15 or later; a link with link-time optimization, which a release build links with; a C compiler, which the C backend and a debug build compile with; and, apart from the build, whether `snello`'s directory is on your path. A check that fails prints the command that fixes it on your system, and the command exits 1 when a build would fail:
+
+```
+$ snello doctor
+ok    clang: Debian clang version 19.1.7 (3+b1)
+ok    link-time optimization: clang links with -flto
+ok    C compiler: Debian clang version 19.1.7 (3+b1)
+ok    snello on the path: /usr/local/bin
+```
+
+Installing clang is all a build needs: `xcode-select --install` on macOS, `sudo apt install clang` on Debian and Ubuntu, `sudo dnf install clang` on Fedora, `sudo pacman -S clang` on Arch; each brings a C compiler and a linker that takes link-time optimization with it. A build that cannot start clang says the same, `clang not found: install it with sudo apt install clang, or set CLANG`; `CLANG` and `CC` name the compilers to use instead. Chapter 32 has every command in full.
+
 ## A first module
 
 `snello new` starts a program in a directory of its own: the module file, a program that prints a greeting, and its test.

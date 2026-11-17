@@ -31,6 +31,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
 )
@@ -452,6 +453,10 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 		bin, log, err = llvm.Build(outDir, name, src, false, bindings...)
 	} else {
 		bin, log, err = c.Build(outDir, name, src, false, bindings...)
+	}
+
+	if missing := (*toolchain.MissingError)(nil); errors.As(err, &missing) {
+		return "", missing // what to do, which needs no backend's name before it
 	}
 
 	if err != nil {

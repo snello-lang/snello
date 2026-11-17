@@ -12,6 +12,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/toolchain"
 )
 
 // Flags are the options clang is given for the module: the standard
@@ -42,11 +43,7 @@ var (
 // clang, the one compiler that reads IR, named through CLANG when it
 // is set.
 func Compiler() string {
-	if clang := os.Getenv("CLANG"); clang != "" {
-		return clang
-	}
-
-	return "clang"
+	return toolchain.Clang()
 }
 
 // Build writes the module and the runtime into dir, with the C side of
@@ -57,6 +54,10 @@ func Compiler() string {
 // written into it. The compilers' output comes back with any error. A debug build
 // compiles the runtime's checks in, as the C backend's does.
 func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
+	if err := requireCompilers(debug); err != nil {
+		return "", nil, err
+	}
+
 	module, err = Targeted(module) // every function compiled for the runtime's processor, so that the two are optimized as one
 	if err != nil {
 		return "", nil, err
@@ -146,4 +147,21 @@ func moduleTriple(module []byte) string {
 	}
 
 	return ""
+}
+
+// requireCompilers returns the error a build reports for a compiler it
+// runs that cannot be found or does not run, which says how to install
+// one: clang, and for a debug build the C compiler, which compiles the
+// runtime. Each is asked its version once, which the build asks anyway.
+func requireCompilers(debug bool) error {
+	if _, err := c.CompilerID(Compiler()); err != nil {
+		return err
+	}
+
+	if debug {
+		_, err := c.CompilerID(c.Compiler())
+		return err
+	}
+
+	return nil
 }

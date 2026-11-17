@@ -23,6 +23,7 @@ const (
 	buildCommand   = "build"
 	checkCommand   = "check"
 	debugCommand   = "debug"
+	doctorCommand  = "doctor"
 	emitCommand    = "emit"
 	helpCommand    = "help"
 	initCommand    = "init"
@@ -194,6 +195,7 @@ func commands() []*command {
 		{name: buildCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "compile a program, a file or a directory, to a binary", declare: declareCompile(buildCommand, build)},
 		{name: checkCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "check a program, or a package, and print its errors", declare: declareCheck},
 		{name: debugCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
+		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
 		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, emit)},
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},
@@ -343,6 +345,11 @@ func declareDebug(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 
 		return debug(args[0], *backend, args[1:])
 	}
+}
+
+// declareDoctor declares doctor, which has no flags.
+func declareDoctor(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	return func(args []string) int { return doctor(self(), stdout) }
 }
 
 // declareHelp declares help, which prints the commands, or the help of

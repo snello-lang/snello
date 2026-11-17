@@ -5,6 +5,7 @@
 package c
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
+	"github.com/snello-lang/snello/compiler/toolchain"
 )
 
 // TestCacheReuse builds a program twice and checks that the second
@@ -516,5 +518,26 @@ func TestCacheFallback(t *testing.T) {
 		if name == "an unwritable directory" && filepath.Dir(objs[0]) != dir {
 			t.Errorf("%s: the objects are in %s, want beside the program in %s", name, filepath.Dir(objs[0]), dir)
 		}
+	}
+}
+
+// TestCompilerIDUnusable reports a compiler that is found and does not
+// run, as the launcher of one not installed, in its own words and with
+// how to install one, and one that is not found as not found.
+func TestCompilerIDUnusable(t *testing.T) {
+	launcher := filepath.Join(t.TempDir(), "cc")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'xcode-select: note: No developer tools were found' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var missing *toolchain.MissingError
+	_, err := CompilerID(launcher)
+	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "cannot run (xcode-select: note: No developer tools were found)") {
+		t.Errorf("a launcher: %v", err)
+	}
+
+	_, err = CompilerID(filepath.Join(t.TempDir(), "none"))
+	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("no compiler: %v", err)
 	}
 }

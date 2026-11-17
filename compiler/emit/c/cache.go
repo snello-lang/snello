@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/runtime"
 )
 
@@ -289,11 +290,13 @@ func IsGCC(cc string) bool {
 
 // CompilerID identifies the compiler cc: the path it resolves to, the
 // file's size and time, which a compiler rebuilt in place changes, and
-// what it says its version is, asked once per binary.
+// what it says its version is, asked once per binary. A compiler that
+// cannot be found or does not run is a *toolchain.MissingError, which
+// says why and how to install one.
 func CompilerID(cc string) (string, error) {
 	path, err := exec.LookPath(cc)
 	if err != nil {
-		return "", err
+		return "", toolchain.Require(cc, toolchain.EnvOf(cc))
 	}
 
 	if abs, err := filepath.Abs(path); err == nil {
@@ -312,7 +315,12 @@ func CompilerID(cc string) (string, error) {
 
 	version, err := exec.Command(path, "--version").Output()
 	if err != nil {
-		return "", err
+		var stderr []byte
+		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+			stderr = exit.Stderr
+		}
+
+		return "", toolchain.Unusable(cc, toolchain.EnvOf(cc), stderr, err) // a compiler that is there and does not run, as the launcher of one not installed
 	}
 
 	id := stamp + "\n" + string(version)

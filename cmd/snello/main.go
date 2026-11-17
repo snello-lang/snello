@@ -53,6 +53,7 @@ import (
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -281,7 +282,13 @@ func compile(path, backend string, debug bool, stderr io.Writer) (bin, name stri
 
 	if err != nil {
 		work.remove()
-		fmt.Fprintf(stderr, "%s: %v\n%s", backend, err, out)
+		var missing *toolchain.MissingError
+		if errors.As(err, &missing) {
+			fmt.Fprintln(stderr, missing) // what to do, which needs no backend's name before it
+		} else {
+			fmt.Fprintf(stderr, "%s: %v\n%s", backend, err, out)
+		}
+
 		return "", "", nil, false
 	}
 

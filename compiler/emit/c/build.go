@@ -15,6 +15,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/emit/stack"
 	"github.com/snello-lang/snello/compiler/emit/trace"
+	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/runtime"
 )
 
@@ -121,11 +122,7 @@ var GCCFlags = []string{"-fno-reorder-functions", "-fno-reorder-blocks-and-parti
 // Compiler returns the C compiler to run: the CC environment variable
 // when it is set, as every build tool reads it, else cc.
 func Compiler() string {
-	if cc := os.Getenv("CC"); cc != "" {
-		return cc
-	}
-
-	return "cc"
+	return toolchain.CC()
 }
 
 // Build writes the emitted program and the runtime's headers into dir,
@@ -138,6 +135,10 @@ func Compiler() string {
 // A debug build compiles the runtime's checks in: see
 // runtime/c/debug.c.
 func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
+	if _, err := CompilerID(Compiler()); err != nil { // a compiler that cannot be found or does not run, said as the doctor says it
+		return "", nil, err
+	}
+
 	prog := filepath.Join(dir, name+".snello.c") // never the name of a runtime file, whatever the program is called
 	if err := os.WriteFile(prog, src, 0o644); err != nil {
 		return "", nil, err

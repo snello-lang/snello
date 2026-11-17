@@ -7,7 +7,9 @@
 # make test-examples run apart; make check, snello check over the
 # examples; make fmt, gofmt over the Go files and clang-format over
 # the C, run before every commit; make shell, the container with the
-# repository mounted.
+# repository mounted; make distros, a developer's first five minutes
+# on each Linux distribution snello doctor names a fix for, in images
+# of its own, on the host's Docker.
 # The Go suite and the benchmarks are go test's, run by CI through
 # build/run.sh.
 
@@ -21,7 +23,7 @@ else
 NEEDS := image
 endif
 
-.PHONY: image build test test-std test-examples check fmt shell clean
+.PHONY: image build test test-std test-examples check fmt shell distros clean
 
 image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(IMAGE) build
@@ -45,6 +47,9 @@ fmt: $(NEEDS)
 
 shell: image
 	docker run --rm -it --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src -e HOME=/tmp -e CC=clang -e CLANG=clang $(IMAGE) bash
+
+distros:
+	sh build/distros.sh
 
 clean:
 	rm -rf bin
