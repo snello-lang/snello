@@ -390,13 +390,14 @@ if "lldb" in sys.modules:
     def option_summary(valobj, internal_dict):
         val = valobj.GetChildMemberWithName(VAL)
         has = valobj.GetChildMemberWithName(HAS)
-        # an option of a pointer, the pointer alone: None when null
+        # an option of a pointer, the pointer alone: None when null; one
+        # of a ref borrow is a reference, shown as the value it lends
         if not has.IsValid():
-            return (
-                NONE
-                if val.GetValueAsUnsigned() == NO_ADDRESS
-                else SOME % val.GetValue()
-            )
+            if val.GetValueAsUnsigned() == NO_ADDRESS:
+                return NONE
+            if val.GetType().IsReferenceType():
+                return SOME % shown(val.Dereference())
+            return SOME % val.GetValue()
         if has.GetValueAsUnsigned() == 0:
             return NONE
         return SOME % shown(val)
@@ -533,11 +534,14 @@ else:
 
         def to_string(self):
             if self.pointer:
-                return (
-                    NONE
-                    if int(self.val[VAL]) == NO_ADDRESS
-                    else SOME % shown(self.val[VAL])
-                )
+                val = self.val[VAL]
+                # an option of a ref borrow is a reference, shown as the
+                # value it lends; its address is null for None
+                if val.type.code == gdb.TYPE_CODE_REF:
+                    if int(val.address) == NO_ADDRESS:
+                        return NONE
+                    return SOME % shown(val.referenced_value())
+                return NONE if int(val) == NO_ADDRESS else SOME % shown(val)
             if not bool(self.val[HAS]):
                 return NONE
             return SOME % shown(self.val[VAL])

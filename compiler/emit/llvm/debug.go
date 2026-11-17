@@ -79,9 +79,14 @@ const (
 	pointerIR    = "ptr"
 	envParam     = "%env"
 
-	// The tags of the records described: a struct and a union.
+	// The tags of the records described, a struct and a union, and of
+	// the two kinds of address: a pointer, and a reference, which a
+	// debugger shows as the value it refers to, the kind an option of a
+	// ref borrow holds.
 	structureTag = "DW_TAG_structure_type"
 	unionTag     = "DW_TAG_union_type"
+	pointerTag   = "DW_TAG_pointer_type"
+	referenceTag = "DW_TAG_reference_type"
 
 	// An enum's tag is an enumeration of tagBytes over tagBase, as a C
 	// compiler lays out an enumeration of no negative value.
@@ -351,7 +356,12 @@ func (e *Emitter) describe(key string, t types.Type) int {
 		return e.pointerTo(e.declared(chanName))
 	case *types.Option:
 		if nullable(u) { // the pointer itself, as a record of it alone, of its layout, which a debugger's formatter reads as None when null
-			return e.record(key, structureTag, lower.Symbol(symbolPrefix, u), pointerBytes, []member{{valMember, e.debugType(u.Elem()), pointerBytes, 0}})
+			val := e.debugType(u.Elem())
+			if r, ok := u.Elem().(*types.Ref); ok && !r.Mut() {
+				val = e.referenceTo(e.debugType(r.Elem())) // shown as the value it lends, as the C backend's option holds it
+			}
+
+			return e.record(key, structureTag, lower.Symbol(symbolPrefix, u), pointerBytes, []member{{valMember, val, pointerBytes, 0}})
 		}
 
 		ts := []types.Type{types.Typ[types.Bool], u.Elem()}
@@ -611,12 +621,24 @@ func (e *Emitter) typedef(name string, to int) int {
 
 // pointerTo writes a pointer to the type node to, or to void for zero.
 func (e *Emitter) pointerTo(to int) int {
+	return e.address(pointerTag, to)
+}
+
+// referenceTo describes a reference to the type node to: the address
+// of a place a debugger shows as the value in it.
+func (e *Emitter) referenceTo(to int) int {
+	return e.address(referenceTag, to)
+}
+
+// address describes an address of the kind tag to the type node to,
+// or to nothing when to is 0.
+func (e *Emitter) address(tag string, to int) int {
 	base := "null"
 	if to != 0 {
 		base = "!" + strconv.Itoa(to)
 	}
 
-	return e.metaNode("!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + base + ", size: " + strconv.Itoa(pointerBytes*byteBits) + ")")
+	return e.metaNode("!DIDerivedType(tag: " + tag + ", baseType: " + base + ", size: " + strconv.Itoa(pointerBytes*byteBits) + ")")
 }
 
 // declared writes a record the runtime declares and the program never

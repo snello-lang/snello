@@ -75,6 +75,11 @@ func main() {
     var r Result<int, string> = Ok(4)
     var none *Node? = None
     var some *Node? = Some(&Node{v: 1})
+    first := xs.First()
+    ys := []int{}
+    empty := ys.First()
+    shapes := []Shape{Rect(2, 3)}
+    lent := shapes.First()
     ch := make(chan int)
     back := make(chan int)
     spawn wait(ch.Clone(), back.Clone())
@@ -93,7 +98,7 @@ func main() {
     s := sum(p.x + p.y)
     match none { Some(n) => fmt.Println(n.v), None => fmt.Println("none") }
     match some { Some(n) => fmt.Println(n.v), None => fmt.Println("none") }
-    fmt.Println(name, s, o, xs, sh, r, count, geo.Area(2, 3))
+    fmt.Println(name, s, o, xs, sh, r, count, geo.Area(2, 3), first.IsSome(), empty.IsNone(), lent.IsSome())
     ch <- 7
     fmt.Println(<-back)
 }
@@ -185,6 +190,7 @@ func TestDebugger(t *testing.T) {
 				"main.snello:" + strconv.Itoa(stopAt(t, debuggee, "second")),
 				`"snello"`, "Some(5)", "Rect(2, 3)", "Ok(4)", "len=3", // the caller's values as the program writes them
 				"none = None", "some = Some(", // options of a pointer
+				"first = Some(1)", "empty = None", "lent = Some(Rect(2, 3))", // options of a borrow, the address and null in the LLVM backend's build
 				"parked", "wait at main.snello:", // the task waiting on the channel, at its line
 				"w = 2", "geo.snello:" + strconv.Itoa(stopAt(t, geo, "own")), // a function of the program's own package
 				"main at main.snello:", // main, waiting on the task's reply, listed while the task stops

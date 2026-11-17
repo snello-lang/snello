@@ -15,9 +15,10 @@ import (
 
 // The shapes of the lowered values, the same under both backends. A
 // borrow, an owned pointer and a channel handle are a ptr; a string and
-// every slice are three words; an option of a pointer or of a mut
-// borrow is the pointer itself, null for None, and any other option is
-// a flag and the value; a result and an enum are a tag and a payload of
+// every slice are three words; an option of a pointer or of a borrow
+// that is an address, every borrow but a ref of a string or a slice, is
+// the pointer itself, null for None, and any other option is a flag and
+// the value; a result and an enum are a tag and a payload of
 // words large enough for their largest case, read and written through
 // a pointer as the case's own struct; a function value is a function
 // pointer and a box of words; a trait value is a table pointer and a
@@ -109,14 +110,17 @@ func viewed(t types.Type) bool {
 }
 
 // nullable reports whether an option is the pointer itself: an
-// option of an owned pointer or of a mut borrow, which are never
-// null, so null is free to mean None.
+// option of an owned pointer or of a borrow that is the address of its
+// place, which are never null, so null is free to mean None. A ref of a
+// string or a slice is the view, three words with no address, and its
+// option stays a pair. t is an instance's type with its arguments in
+// place, as every caller has it: ref T is a view once T is a string.
 func nullable(t *types.Option) bool {
 	switch u := t.Elem().(type) {
 	case *types.Pointer:
 		return true
 	case *types.Ref:
-		return u.Mut()
+		return !view(u)
 	}
 
 	return false

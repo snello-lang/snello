@@ -54,6 +54,7 @@ func main() {
     name := "snello"
     var o int? = Some(5)
     xs := []int{1, 2, 3}
+    head := xs.First()
     sh := Rect(2, 3)
     var r Result<int, string> = Ok(4)
     a := [2]int{1, 2}
@@ -65,7 +66,7 @@ func main() {
     lent := func(k int) { count += k }
     lent(copied())
     one, word := t
-    fmt.Println(p.x, name, o, xs, sh, r, a[0], len(m), one, word, sum(p.y), count)
+    fmt.Println(p.x, name, o, xs, sh, r, a[0], len(m), one, word, sum(p.y), count, head.IsSome())
 }
 `
 
@@ -96,6 +97,7 @@ func TestDebugInformation(t *testing.T) {
 		`name: "at",`, `!DISubrange(count: 2)`, `name: "sn_map"`, `name: "slots",`, `name: "e1",`,
 		`name: "fn",`, `name: "box",`,
 		`name: "sn_int"`, `name: "int64_t"`,
+		`name: "sn_opt_ref_int"`, "tag: DW_TAG_reference_type", // an option of a borrow, the address alone, shown as what it lends
 		"!DIExpression(DW_OP_deref, DW_OP_plus_uconst, 0)",                           // a copy in the box
 		"!DIExpression(DW_OP_deref, DW_OP_deref, DW_OP_plus_uconst, 0, DW_OP_deref)", // a variable lent, through the environment the box points to
 	} {

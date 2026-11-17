@@ -155,11 +155,11 @@ An adapter is a struct of the iterator it wraps and its function, and each insta
 
 | | LLVM backend | C backend |
 |---|---|---|
-| `d.Iter().Filter(isEven).Map(square).Fold(0, add)` over a deque | 1.3 | 0.6 |
-| the loop written by hand over the same deque | 1.4 | 0.4 |
-| a chain over an iterator that counts | 0.9 | 0.9 |
+| `d.Iter().Filter(isEven).Map(square).Fold(0, add)` over a deque | 0.6 | 0.6 |
+| the loop written by hand over the same deque | 0.4 | 0.4 |
+| a chain over an iterator that counts | 0.9 | 0.8 |
 
-Through the LLVM backend the chain costs what the loop does. Through the C backend the loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much; `../design/01-language-design.md` has the numbers beside other programs'.
+The loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much through either backend; `../design/01-language-design.md` has the numbers beside other programs'.
 
 ## For maintainers
 

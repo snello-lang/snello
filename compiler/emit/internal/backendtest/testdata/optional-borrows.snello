@@ -1,0 +1,146 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Optional borrows: an option of a ref borrow of an address, which the
+// LLVM backend writes as the pointer with null for None, beside one of
+// a view, a ref string or a ref []int, which stays a pair. Each is made
+// with Some and None, read with ??, ?, Expect, an if-binding and a
+// match, asked IsSome and IsNone, mapped, stored in a struct,
+// a tuple and a Result, nested, passed and returned, through a generic
+// function, and taken from the library: a deque's Get and Front, a
+// map's Get, a slice's First, an iterator's Next and Find. A debug
+// build stops at a read of a released block.
+
+package main
+
+import ("deque"; "fmt"; "iter")
+
+struct Point {
+	x int
+	y int
+}
+
+struct Holder {
+	n    (ref int)?
+	name (ref string)?
+}
+
+enum Shape {
+	Circle(r int)
+	Square(side int)
+}
+
+func find(xs ref []int, want int) ref int? {
+	for i := 0; i < len(xs); i++ {
+		if xs[i] == want {
+			return Some(ref xs[i])
+		}
+	}
+
+	return None
+}
+
+func findName(names ref []string, initial byte) ref string? {
+	for i := 0; i < len(names); i++ {
+		if names[i][0] == initial {
+			return Some(ref names[i])
+		}
+	}
+
+	return None
+}
+
+func twice(xs ref []int, want int) int? {
+	v := find(xs, want)?
+	return Some(*v * 2)
+}
+
+func either<T>(a T?, b T?) T? {
+	if a.IsSome() {
+		return a
+	}
+
+	return b
+}
+
+func describe(v ref int?) string {
+	return match v {
+		Some(n) => fmt.Sprint("some ", *n),
+		None => "none",
+	}
+}
+
+func checked(xs ref []int, want int) Result<ref int?, string> {
+	if want < 0 {
+		return Err("negative".Clone())
+	}
+
+	return Ok(find(xs, want))
+}
+
+func main() {
+	xs := []int{1, 2, 3, 4}
+	names := []string{"ada".Clone(), "bob".Clone()}
+	p := Point{x: 5, y: 6}
+	shapes := []Shape{Circle(2), Square(3)}
+
+	// Made, asked and read.
+	some := find(ref xs, 3)
+	none := find(ref xs, 9)
+	fmt.Println(some.IsSome(), some.IsNone(), none.IsSome(), none.IsNone())
+	fmt.Println(*(some ?? return), *(find(ref xs, 9) ?? ref xs[0]))
+	fmt.Println(*some.Expect("three is there"))
+	if v := some { fmt.Println("bound", *v) }
+	if v := none { fmt.Println("not reached", *v) } else { fmt.Println("none bound nothing") }
+	fmt.Println(describe(some), describe(none))
+	fmt.Println(twice(ref xs, 4), twice(ref xs, 7))
+
+	// Mapped, and what they borrow compared.
+	fmt.Println(some.Map(func(n ref int) int { return *n + 100 }), none.Map(func(n ref int) int { return *n }))
+	fmt.Println(*(some ?? return) == *(find(ref xs, 3) ?? return), some.IsSome() == none.IsSome())
+
+	// A view's option, a pair, beside an address's.
+	named := findName(ref names, 'b')
+	fmt.Println(*(named ?? return), findName(ref names, 'z').IsNone())
+
+	// Stored in a struct and a tuple, nested, and in a Result.
+	h := Holder{n: find(ref xs, 2), name: findName(ref names, 'a')}
+	fmt.Println(*(h.n ?? return), *(h.name ?? return))
+	h.n = None
+	fmt.Println(h.n.IsNone())
+	pair := (find(ref xs, 1), findName(ref names, 'x'))
+	one, missing := pair
+	fmt.Println(*(one ?? return), missing.IsNone())
+	nested := Some(find(ref xs, 4))
+	if inner := nested { fmt.Println(*(inner ?? return)) }
+	fmt.Println(checked(ref xs, 2), checked(ref xs, -1))
+
+	// Through a generic function, and of a struct, an enum and a borrow.
+	fmt.Println(*(either(none, some) ?? return), either(none, find(ref xs, 7)).IsNone())
+	pp := Some(ref p)
+	fmt.Println((pp ?? return).x, (pp ?? return).y)
+	first := Some(ref shapes[0])
+	match first {
+		Some(s) => match s { Circle(r) => fmt.Println("circle", r), Square(side) => fmt.Println("square", side) },
+		None => {},
+	}
+	r := ref xs
+	deeper := Some(ref r)
+	fmt.Println(len(*(deeper ?? return)))
+
+	// From the library.
+	d := deque.New<int>()
+	d.PushBack(10)
+	d.PushBack(20)
+	fmt.Println(*(d.Get(1) ?? return), d.Get(5).IsNone(), *(d.Front() ?? return))
+	m := map[string]int{"a": 1}
+	fmt.Println(*(m.Get("a") ?? return), m.Get("b").IsNone())
+	fmt.Println(*(xs.First() ?? return))
+	it := d.Iter()
+	fmt.Println(*(it.Next() ?? return), *(it.Next() ?? return), it.Next().IsNone())
+	fmt.Println(*(d.Iter().Find(func(v ref ref int) bool { return **v > 15 }) ?? return))
+	total := 0
+	for v := range d.Iter() { total += *v }
+	fmt.Println(total)
+}
