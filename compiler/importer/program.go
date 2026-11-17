@@ -197,7 +197,7 @@ func TestFiles(dir string) ([]string, error) {
 
 // IsTestFile reports whether a file's name is a test file's.
 func IsTestFile(name string) bool {
-	return strings.HasSuffix(name, "_test.snello")
+	return strings.HasSuffix(name, TestFileSuffix)
 }
 
 func filesOf(dir string, want func(string) bool) ([]string, error) {
@@ -234,7 +234,7 @@ func checkTestImports(names []string, syntax []*ast.File, standard bool) error {
 		}
 
 		for _, spec := range f.Imports {
-			if path, err := strconv.Unquote(spec.Path.Value); err == nil && (path == "testing" || path == "expect" || strings.HasSuffix(path, "_test")) {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && (path == testingPackage || path == expectPackage || strings.HasSuffix(path, TestSuffix)) {
 				return errors.New(names[i] + ": package " + path + " is imported by test files alone")
 			}
 		}

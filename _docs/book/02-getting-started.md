@@ -19,9 +19,46 @@ snello 0.1.0 (8477985) devel darwin/arm64
 
 `snello help` lists every command with a line saying what it does, and `snello help build` the flags and arguments of one, as `go help build` does; `-h` after a command prints the same.
 
+## A first module
+
+`snello new` starts a program in a directory of its own: the module file, a program that prints a greeting, and its test.
+
+```
+$ snello new hello
+snello new: wrote hello, a module with a program and its test:
+	cd hello
+	snello build .
+	snello run .
+	snello test .
+$ cd hello
+$ snello run .
+Hello, Snello!
+$ snello test .
+ok  	hello	0.001s
+```
+
+The directory holds three files: `snello.mod`, the line `snello 0.1.0`, which the section on packages comes to; `main.snello`, the program; and `main_test.snello`, its test, which chapter 16 teaches.
+
+```go
+package main
+
+import "fmt"
+
+// greeting returns the line main prints for name.
+func greeting(name ref string) string {
+    return "Hello, " + name + "!"
+}
+
+func main() {
+    fmt.Println(greeting("Snello"))
+}
+```
+
+`snello run` builds the program into a directory of its own, runs it, and removes it, leaving no file behind: the arguments after the program's path are the program's, `snello run . -n 3`, and its exit code is the command's, 3 for a program that exits with 3. An interrupt from the terminal is the program's to answer; a program the interrupt ends ends `snello run` the same way, so a script that runs it stops too. `snello build` writes the binary instead, named after the directory, `./hello`. `snello new` refuses a directory that exists, and makes the directory alone, in one that must exist; `snello init`, below, makes a directory that exists a module.
+
 ## Hello
 
-A Snello program is a file in a package `main` with a `func main()`:
+A program need not be a module: a single file in a package `main` with a `func main()` builds and runs on its own.
 
 ```go
 package main

@@ -29,7 +29,10 @@
 // `snello lex FILE` prints the token stream, `snello parse FILE` the
 // syntax tree, and `snello emit FILE|DIR` the IR module, or with
 // -backend c the C source, that build would compile; `snello check
-// FILE|DIR` prints what the checker finds.
+// FILE|DIR` prints what the checker finds. `snello new DIR` starts a
+// module in a new directory, with a program and its test, and `snello
+// run FILE|DIR [ARGS]` builds a program, runs it with ARGS, passes its
+// exit code on and leaves no file behind.
 package main
 
 import (
@@ -130,7 +133,7 @@ func parse(path string) int {
 	f, file, err := parser.ParseFile(path, src)
 	ast.Fprint(os.Stdout, f, file)
 	if err != nil {
-		printErrors(err)
+		printErrors(os.Stderr, err)
 		return exitFailure
 	}
 
@@ -144,7 +147,7 @@ func parse(path string) int {
 // A directory whose package is not main is checked as the library it
 // is, so that its binding to C is not refused as a program's would be.
 func check(path string) int {
-	names, dir, ok := programFiles(path)
+	names, dir, ok := programFiles(path, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -159,7 +162,7 @@ func check(path string) int {
 	}
 
 	if err != nil {
-		printErrors(err)
+		printErrors(os.Stderr, err)
 		return exitFailure
 	}
 
@@ -207,7 +210,7 @@ func isMain(name string) bool {
 // emit prints what build would compile: the C source, or the IR
 // module, for reading.
 func emit(path, backend string, debug bool) int {
-	src, _, ok := emitSource(path, backend, debug)
+	src, _, ok := emitSource(path, backend, debug, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -220,37 +223,13 @@ func emit(path, backend string, debug bool) int {
 // named after it, in the current directory, through the backend asked
 // for; debug asks for the runtime's checks.
 func build(path, backend string, debug bool) int {
-	_, isDir, ok := programFiles(path)
+	bin, name, work, ok := compile(path, backend, debug, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
 
-	src, bindings, ok := emitSource(path, backend, debug)
-	if !ok {
-		return exitFailure
-	}
-
-	dir, err := os.MkdirTemp("", buildDirPattern)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return exitFailure
-	}
-
-	defer os.RemoveAll(dir)
-	name := programName(path, isDir)
-	var bin string
+	defer work.remove()
 	var out []byte
-	if backend == lower.LLVMBackend {
-		bin, out, err = llvm.Build(dir, name, src, debug, bindings...)
-	} else {
-		bin, out, err = c.Build(dir, name, src, debug, bindings...)
-	}
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n%s", backend, err, out)
-		return exitFailure
-	}
-
 	built, err := os.ReadFile(bin)
 	if err == nil {
 		err = os.WriteFile(name, built, binaryMode)
@@ -268,19 +247,61 @@ func build(path, backend string, debug bool) int {
 	return exitSuccess
 }
 
+// compile builds the program at path, a file or a directory, through
+// the backend, and returns the binary's path, in the build's work
+// directory, which its remove removes, and the name a build gives it,
+// printing to stderr the errors of whichever step fails; debug asks for
+// the runtime's checks. The directory is made once the program has
+// loaded, and is guarded as workDir says, so that a build leaves
+// nothing behind however it ends.
+func compile(path, backend string, debug bool, stderr io.Writer) (bin, name string, work *workDir, ok bool) {
+	_, isDir, ok := programFiles(path, stderr)
+	if !ok {
+		return "", "", nil, false
+	}
+
+	src, bindings, ok := emitSource(path, backend, debug, stderr)
+	if !ok {
+		return "", "", nil, false
+	}
+
+	work, err := newWorkDir(buildDirPattern)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return "", "", nil, false
+	}
+
+	name = programName(path, isDir)
+	var out []byte
+	if backend == lower.LLVMBackend {
+		bin, out, err = llvm.Build(work.path, name, src, debug, bindings...)
+	} else {
+		bin, out, err = c.Build(work.path, name, src, debug, bindings...)
+	}
+
+	if err != nil {
+		work.remove()
+		fmt.Fprintf(stderr, "%s: %v\n%s", backend, err, out)
+		return "", "", nil, false
+	}
+
+	return bin, name, work, true
+}
+
 // emitSource loads a program, a file or a directory, and emits it
 // through the backend, printing the errors of whichever step fails,
 // with the C side of every package that binds C, for the build. A
 // package that is not a program is refused as CheckMain says, since
 // only check takes one. The LLVM backend emits a debug build's checks
 // itself, so it is told; the C backend's are a flag of the C compiler.
-func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool) {
-	names, _, ok := programFiles(path)
+// The errors and the module's warning go to stderr.
+func emitSource(path, backend string, debug bool, stderr io.Writer) ([]byte, []lower.Binding, bool) {
+	names, _, ok := programFiles(path, stderr)
 	if !ok {
 		return nil, nil, false
 	}
 
-	warnModule(os.Stderr, names)
+	warnModule(stderr, names)
 	info := &types.Info{}
 	imp, prog, err := importer.LoadProgram(names, info)
 	if err == nil {
@@ -305,7 +326,7 @@ func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool
 	}
 
 	if err != nil {
-		printErrors(err)
+		printErrors(stderr, err)
 		return nil, nil, false
 	}
 
@@ -317,15 +338,15 @@ func emitSource(path, backend string, debug bool) ([]byte, []lower.Binding, bool
 // end in .snello, or every .snello file of the directory, which must
 // hold one; and whether path is a directory. A failure is reported to
 // stderr.
-func programFiles(path string) (names []string, dir, ok bool) {
+func programFiles(path string, stderr io.Writer) (names []string, dir, ok bool) {
 	info, err := os.Stat(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(stderr, err)
 		return nil, false, false
 	}
 
 	if !info.IsDir() {
-		if !isSource(path) {
+		if !isSource(path, stderr) {
 			return nil, false, false
 		}
 
@@ -334,12 +355,12 @@ func programFiles(path string) (names []string, dir, ok bool) {
 
 	names, err = importer.SourceFiles(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(stderr, err)
 		return nil, true, false
 	}
 
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "%s: no %s files in the directory\n", path, importer.SourceExt)
+		fmt.Fprintf(stderr, "%s: no %s files in the directory\n", path, importer.SourceExt)
 		return nil, true, false
 	}
 
@@ -379,16 +400,16 @@ func isBackend(name string) bool {
 }
 
 // printErrors writes each error of a list on its own line.
-func printErrors(err error) {
+func printErrors(w io.Writer, err error) {
 	if list, ok := err.(scanner.ErrorList); ok {
 		for _, e := range list {
-			fmt.Fprintln(os.Stderr, e)
+			fmt.Fprintln(w, e)
 		}
 
 		return
 	}
 
-	fmt.Fprintln(os.Stderr, err)
+	fmt.Fprintln(w, err)
 }
 
 // readSource reads a Snello source file, reporting a failure to stderr.
@@ -396,7 +417,7 @@ func printErrors(err error) {
 // stray file from being compiled as Snello, and it keeps build from
 // writing the binary over a source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
-	if !isSource(path) {
+	if !isSource(path, os.Stderr) {
 		return nil, false
 	}
 
@@ -411,9 +432,9 @@ func readSource(path string) ([]byte, bool) {
 
 // isSource reports whether path names a Snello source file, and says
 // so to stderr when it does not.
-func isSource(path string) bool {
+func isSource(path string, stderr io.Writer) bool {
 	if !strings.HasSuffix(path, importer.SourceExt) {
-		fmt.Fprintf(os.Stderr, "%s: Snello source files end in %s\n", path, importer.SourceExt)
+		fmt.Fprintf(stderr, "%s: Snello source files end in %s\n", path, importer.SourceExt)
 		return false
 	}
 

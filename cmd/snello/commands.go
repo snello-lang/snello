@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -26,7 +27,9 @@ const (
 	helpCommand    = "help"
 	initCommand    = "init"
 	lexCommand     = "lex"
+	newCommand     = "new"
 	parseCommand   = "parse"
+	runCommand     = "run"
 	testCommand    = "test"
 	versionCommand = "version"
 
@@ -66,7 +69,7 @@ const (
 	fileArg     = "FILE"
 	dirArg      = "DIR"
 	optionalDir = "[DIR]"
-	debugArgs   = "FILE|DIR [ARGS...]"
+	debugArgs   = "FILE|DIR [ARGS...]" // what debug and run take: the program, then its arguments
 	commandArg  = "[COMMAND]"
 	flagsArg    = "[flags]"
 	anyArgs     = -1
@@ -195,7 +198,9 @@ func commands() []*command {
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},
 		{name: lexCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the tokens of a source file", declare: declareLex},
+		{name: newCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "start a module in a new directory, with a program and its test", declare: declareNew},
 		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file", declare: declareParse},
+		{name: runCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program, run it with ARGS, and leave no file", declare: declareRun},
 		{name: testCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "build and run the tests of a package", declare: declareTest},
 		{name: versionCommand, minArgs: 0, maxArgs: 0, short: "print the version, commit, channel and platform", declare: declareVersion},
 	}
@@ -375,6 +380,30 @@ func declareInit(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string)
 // declareLex declares lex, which has no flags.
 func declareLex(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	return func(args []string) int { return lex(args[0]) }
+}
+
+// declareNew declares new, which has no flags.
+func declareNew(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	return func(args []string) int { return newModule(args[0], stderr) }
+}
+
+// declareRun declares the flags of run, build's; the arguments after
+// the program's path are the program's.
+func declareRun(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	backend := declareBackend(fs)
+	debug := fs.Bool(debugFlag, false, debugUsage)
+	return func(args []string) int {
+		if !checkBackend(runCommand, *backend, stderr) {
+			return exitUsage
+		}
+
+		code, sig := runProgram(args[0], *backend, *debug, args[1:], os.Stdin, stdout, stderr)
+		if sig != nil {
+			raise(sig) // the command ends as the program did, which a shell running a script needs to stop it
+		}
+
+		return code
+	}
 }
 
 // declareParse declares parse, which has no flags.

@@ -39,7 +39,11 @@ import (
 // does so that it may import testing, in the package's directory so
 // that its imports are answered from the package's module; it is never
 // written there.
-const Runner = "snello_test.snello"
+const Runner = "snello" + importer.TestFileSuffix
+
+// mainPackage is the package clause of a program, whose tests are
+// inside it.
+const mainPackage = "main"
 
 // A Plan is a package's tests as found, before the program is built:
 // where the package is, whether it is a main package, its source and
@@ -94,8 +98,8 @@ func PlanDir(dir string) (*Plan, error) {
 		return nil, err
 	}
 
-	if f.Name.Name == "main" {
-		if pkg != "main" {
+	if f.Name.Name == mainPackage {
+		if pkg != mainPackage {
 			return nil, errors.New(dir + ": the tests of a main package are inside it, package main, since main cannot be imported; " + pkg + " cannot be")
 		}
 
@@ -124,7 +128,7 @@ func PlanDir(dir string) (*Plan, error) {
 
 	p.Path = filepath.ToSlash(rel)
 	if external(pkg, p.Path) {
-		p.Path += "_test"
+		p.Path += importer.TestSuffix
 	}
 	return p, nil
 }
@@ -142,7 +146,7 @@ func PlanStd(importPath string) (*Plan, error) {
 	for _, e := range entries {
 		name := importPath + "/" + e.Name()
 		switch {
-		case strings.HasSuffix(e.Name(), "_test.snello"):
+		case strings.HasSuffix(e.Name(), importer.TestFileSuffix):
 			src, err := std.Sources.ReadFile(name)
 			if err != nil {
 				return nil, err
@@ -165,7 +169,7 @@ func PlanStd(importPath string) (*Plan, error) {
 	}
 
 	if external(pkg, importPath) {
-		p.Path += "_test"
+		p.Path += importer.TestSuffix
 	}
 
 	return p, nil
@@ -203,7 +207,7 @@ func PlanStdDir(dir string) (*Plan, error) {
 	}
 
 	if external(pkg, importPath) {
-		p.Path += "_test"
+		p.Path += importer.TestSuffix
 	}
 
 	return p, nil
@@ -283,7 +287,7 @@ func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 		if pkg == "" {
 			pkg = f.Name.Name
 		} else if f.Name.Name != pkg {
-			return nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + "_test package")
+			return nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + importer.TestSuffix + " package")
 		}
 
 		for _, d := range f.Decls {
@@ -308,7 +312,7 @@ func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 // harness itself depends on, and for testing a package through its
 // exported names alone.
 func external(pkg, importPath string) bool {
-	return pkg == path.Base(importPath)+"_test"
+	return pkg == path.Base(importPath)+importer.TestSuffix
 }
 
 // isTest reports whether name is a test's, Test and then a capital, or
@@ -338,9 +342,9 @@ func (p *Plan) Source() []byte {
 		prefix = "pkg."
 	}
 
-	label := strings.TrimSuffix(p.Path, "_test") // the package tested, whichever form its tests take
+	label := strings.TrimSuffix(p.Path, importer.TestSuffix) // the package tested, whichever form its tests take
 	if p.Main {
-		label = path.Base(filepath.ToSlash(p.Dir))
+		label = mainLabel(p.Dir)
 	}
 
 	b.WriteString("\nfunc main() {\n\ttesting.Main(")
@@ -506,4 +510,15 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	}
 
 	return 0, nil
+}
+
+// mainLabel names the tests of the main package in dir on their ok or
+// FAIL line: the directory's own name, read from its absolute path so
+// that a directory given as . or .. is named too.
+func mainLabel(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+
+	return filepath.Base(dir)
 }

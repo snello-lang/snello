@@ -697,3 +697,26 @@ func TestRunVersion(t *testing.T) {
 		t.Errorf("a standard package from inside another module: exit %d, %v, stdout %q, stderr %q", code, err, stdout.String(), stderr.String())
 	}
 }
+
+// TestMainLabel names a main package's tests by their directory's own
+// name, for a directory given as . too, in the main generated for them.
+func TestMainLabel(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hello")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mainLabel(dir); got != "hello" {
+		t.Errorf("mainLabel(%q) = %q, want hello", dir, got)
+	}
+
+	t.Chdir(dir)
+	if got := mainLabel("."); got != "hello" {
+		t.Errorf("mainLabel(\".\") = %q, want hello", got)
+	}
+
+	p := &Plan{Dir: ".", Main: true}
+	if src := string(p.Source()); !strings.Contains(src, `testing.Main("hello",`) {
+		t.Errorf("the generated main of the tests of . names them otherwise:\n%s", src)
+	}
+}

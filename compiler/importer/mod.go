@@ -17,8 +17,17 @@ import (
 )
 
 const (
-	// SourceExt ends the name of every Snello source file.
-	SourceExt = ".snello"
+	// SourceExt ends the name of every Snello source file, TestSuffix
+	// the name of a package of tests outside the package it tests, and
+	// TestFileSuffix the name of a test file.
+	SourceExt      = ".snello"
+	TestSuffix     = "_test"
+	TestFileSuffix = TestSuffix + SourceExt
+
+	// testingPackage and expectPackage are the packages only test
+	// files import.
+	testingPackage = "testing"
+	expectPackage  = "expect"
 
 	// ModFile is the name of the module file, and modFileMode the
 	// permissions WriteModFile gives one: read by all, written by its

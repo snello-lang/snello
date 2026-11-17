@@ -85,7 +85,7 @@ var debuggerScript []byte
 // script, since neither debugger loads one a binary names unless the
 // user has trusted its place. It returns the debugger's exit code.
 func debug(path, backend string, args []string) int {
-	_, isDir, ok := programFiles(path)
+	_, isDir, ok := programFiles(path, os.Stderr)
 	if !ok {
 		return exitFailure
 	}

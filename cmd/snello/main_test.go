@@ -75,7 +75,7 @@ func TestProgramFiles(t *testing.T) {
 		{"empty", nil, true, false},
 		{"nosuch", nil, false, false},
 	} {
-		names, dir, ok := programFiles(filepath.Join(root, c.path))
+		names, dir, ok := programFiles(filepath.Join(root, c.path), io.Discard)
 		if dir != c.dir || ok != c.ok || len(names) != len(c.names) {
 			t.Errorf("programFiles(%q) = %v, %v, %v, want %v, %v, %v", c.path, names, dir, ok, c.names, c.dir, c.ok)
 			continue
@@ -104,7 +104,7 @@ func TestEmitExamples(t *testing.T) {
 			continue // pending: the examples suite names it
 		}
 
-		if _, _, ok := emitSource(path, "llvm", false); !ok {
+		if _, _, ok := emitSource(path, "llvm", false, os.Stderr); !ok {
 			t.Errorf("%s: the driver refused it", path)
 		}
 	}
@@ -213,7 +213,7 @@ func TestCommandsWarn(t *testing.T) {
 		}
 
 		ok := !compiles
-		if got := stderrOf(t, func() { _, _, ok = emitSource(path, "llvm", false) }); !strings.HasPrefix(got, want) || ok != compiles {
+		if got := stderrOf(t, func() { _, _, ok = emitSource(path, "llvm", false, os.Stderr) }); !strings.HasPrefix(got, want) || ok != compiles {
 			t.Errorf("emit %s gave %v and said %q, want it to begin %q", program, ok, got, want)
 		}
 	}
