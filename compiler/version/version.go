@@ -5,10 +5,17 @@
 // Package version holds the version of Snello this compiler is, and
 // reads and orders versions as Semantic Versioning 2.0 writes them:
 // MAJOR.MINOR.PATCH, a pre-release after a hyphen, build metadata
-// after a plus.
+// after a plus. A release build stamps the channel it is published on
+// into the binary with the linker:
+//
+//	go build -ldflags "-X github.com/snello-lang/snello/compiler/version.channel=stable" ./cmd/snello
 package version
 
-import "strings"
+import (
+	"runtime"
+	"runtime/debug"
+	"strings"
+)
 
 const (
 	// Current is the version of the release this compiler is built
@@ -35,7 +42,35 @@ const (
 	digits          = "0123456789"
 	zero            = "0"
 	identifierChars = digits + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-"
+
+	// devel is the channel of a build from source, which no release
+	// stamped; revisionSetting and modifiedSetting are the settings of
+	// the build information that hold the commit it was built from and
+	// whether the tree had changes, which modifiedSuffix marks, as git
+	// describe --dirty does; shortCommit is how many hex digits of the
+	// commit are shown, git's short form.
+	devel           = "devel"
+	revisionSetting = "vcs.revision"
+	modifiedSetting = "vcs.modified"
+	modifiedTrue    = "true"
+	modifiedSuffix  = "-dirty"
+	shortCommit     = 7
+
+	// commandName opens the line Describe writes, wordSeparator parts its
+	// words, commitOpen and commitClose hold the commit, and
+	// platformSeparator parts the system from the processor,
+	// darwin/arm64.
+	commandName       = "snello"
+	wordSeparator     = " "
+	commitOpen        = "("
+	commitClose       = ")"
+	platformSeparator = "/"
 )
+
+// channel is the channel a release build is published on, stable or
+// nightly, stamped in by the linker's -X flag; empty in a build from
+// source, which Describe names devel.
+var channel string
 
 // A Version is a version as SemVer writes it, read by Parse: its
 // three numbers and its pre-release identifiers, each kept as the
@@ -84,6 +119,31 @@ func Parse(s string) (Version, bool) {
 	return v, true
 }
 
+// Describe returns the line snello version prints: the compiler's
+// version, the commit it was built from, the channel a release stamped
+// or devel, and the system and processor it runs on, snello 0.1.0
+// (8477985) stable darwin/arm64. The commit is read from the build
+// information Go records, marked -dirty when the tree had changes, and
+// left out when there is none, in a binary built outside a checkout. It
+// reads the build information once a call.
+//
+//	fmt.Println(version.Describe())
+func Describe() string {
+	revision, modified := "", false
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			switch s.Key {
+			case revisionSetting:
+				revision = s.Value
+			case modifiedSetting:
+				modified = s.Value == modifiedTrue
+			}
+		}
+	}
+
+	return describe(channel, revision, modified, runtime.GOOS, runtime.GOARCH)
+}
+
 // Compare orders v and w by SemVer's precedence, -1, 0 or 1: by the
 // major, minor and patch numbers, then a pre-release before the release
 // it precedes, and two pre-releases identifier by identifier, numbers
@@ -114,6 +174,27 @@ func (v Version) Compare(w Version) int {
 	}
 
 	return compareInts(len(v.pre), len(w.pre))
+}
+
+// describe writes Describe's line from its parts: the channel, empty
+// for a build from source; the commit's full hash, empty when unknown,
+// and whether the tree had changes; and the system and processor.
+func describe(channel, revision string, modified bool, goos, goarch string) string {
+	if channel == "" {
+		channel = devel
+	}
+
+	line := commandName + wordSeparator + Current + wordSeparator
+	if revision != "" {
+		commit := revision[:min(len(revision), shortCommit)]
+		if modified {
+			commit += modifiedSuffix
+		}
+
+		line += commitOpen + commit + commitClose + wordSeparator
+	}
+
+	return line + channel + wordSeparator + goos + platformSeparator + goarch
 }
 
 // identifiers reports whether s is a list of identifiers joined by

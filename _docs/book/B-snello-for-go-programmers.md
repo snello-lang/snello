@@ -349,6 +349,7 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | In Go | In Snello |
 |---|---|
 | `dlv debug` | `snello debug`, which starts lldb on macOS or gdb on Linux with Snello's formatters and `tasks` loaded |
+| `go version` prints `go version go1.27.4 darwin/arm64`, and `devel go1.28-…` for a build from source; `go help` and `go help build` | `snello version` prints `snello 0.1.0 (8477985) stable darwin/arm64`, the commit when the build recorded one, and `devel` in the channel's place for a build from source; `snello help` and `snello help build`, read from the table the command line is parsed with |
 | `go build -gcflags=all="-N -l"` for a build a debugger can follow | `snello build -debug`: your code unoptimized, the standard library optimized |
 | `goroutines` and `goroutine N bt` in Delve, `info goroutines` in gdb | `tasks`, every task with its state and a waiting task's stack |
 | `b main.sum` | `breakpoint set -n sum` in lldb, `break sum` in gdb, or a breakpoint at the line, `main.snello:19`; with the C backend, the function's symbol, `sn__sum` |

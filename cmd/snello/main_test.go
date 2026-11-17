@@ -5,6 +5,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,11 +150,12 @@ func TestWarnModule(t *testing.T) {
 }
 
 // TestInitModule starts a module in a directory, and says which file it
-// wrote; a second init there is refused with the command's exit code.
+// wrote; a second init there is refused with the command's exit code,
+// and two directories are a usage error.
 func TestInitModule(t *testing.T) {
 	dir := t.TempDir()
 	var b strings.Builder
-	if code := initModule([]string{dir}, &b); code != 0 || b.String() != "snello init: wrote "+filepath.Join(dir, "snello.mod")+"\n" {
+	if code := run([]string{initCommand, dir}, io.Discard, &b); code != exitSuccess || b.String() != "snello init: wrote "+filepath.Join(dir, "snello.mod")+"\n" {
 		t.Errorf("init exited %d and said %q", code, b.String())
 	}
 
@@ -163,15 +165,20 @@ func TestInitModule(t *testing.T) {
 	}
 
 	b.Reset()
-	if code := initModule([]string{dir}, &b); code != 1 || !strings.Contains(b.String(), "already exists") {
+	if code := run([]string{initCommand, dir}, io.Discard, &b); code != exitFailure || !strings.Contains(b.String(), "already exists") {
 		t.Errorf("a second init exited %d and said %q", code, b.String())
 	}
 
 	here := t.TempDir()
 	t.Chdir(here)
 	b.Reset()
-	if code := initModule(nil, &b); code != 0 || b.String() != "snello init: wrote "+filepath.Join(here, "snello.mod")+"\n" {
+	if code := run([]string{initCommand}, io.Discard, &b); code != exitSuccess || b.String() != "snello init: wrote "+filepath.Join(here, "snello.mod")+"\n" {
 		t.Errorf("init in the current directory exited %d and said %q", code, b.String())
+	}
+
+	b.Reset()
+	if code := run([]string{initCommand, "a", "b"}, io.Discard, &b); code != exitUsage || !strings.HasPrefix(b.String(), "usage: snello init [DIR]") {
+		t.Errorf("init with two directories exited %d and said %q", code, b.String())
 	}
 }
 

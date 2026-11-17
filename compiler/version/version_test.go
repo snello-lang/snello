@@ -4,7 +4,11 @@
 
 package version
 
-import "testing"
+import (
+	"runtime"
+	"strings"
+	"testing"
+)
 
 // TestParse holds Parse to SemVer's grammar: three numbers with no
 // leading zero, a pre-release of identifiers whose numbers have none
@@ -52,5 +56,32 @@ func TestCompare(t *testing.T) {
 	b, _ := Parse("1.0.0+two")
 	if a.Compare(b) != 0 {
 		t.Errorf("build metadata ordered two versions")
+	}
+}
+
+// TestDescribe holds the line snello version prints to its parts: a
+// release's channel or devel, the commit's short hash, marked when the
+// tree had changes and left out when unknown, and the platform; and
+// Describe to that line for the binary running.
+func TestDescribe(t *testing.T) {
+	tests := []struct {
+		channel, revision string
+		modified          bool
+		want              string
+	}{
+		{"stable", "8477985c0ffee1234567890abcdef0123456789a", false, "snello " + Current + " (8477985) stable darwin/arm64"},
+		{"nightly", "8477985c0ffee", true, "snello " + Current + " (8477985-dirty) nightly darwin/arm64"},
+		{"", "8477985c0ffee", false, "snello " + Current + " (8477985) devel darwin/arm64"},
+		{"", "", false, "snello " + Current + " devel darwin/arm64"},
+		{"stable", "abc", false, "snello " + Current + " (abc) stable darwin/arm64"},
+	}
+	for _, tt := range tests {
+		if got := describe(tt.channel, tt.revision, tt.modified, "darwin", "arm64"); got != tt.want {
+			t.Errorf("describe(%q, %q, %v) = %q, want %q", tt.channel, tt.revision, tt.modified, got, tt.want)
+		}
+	}
+
+	if got, want := Describe(), "snello "+Current+" "; !strings.HasPrefix(got, want) || !strings.HasSuffix(got, " "+runtime.GOOS+"/"+runtime.GOARCH) {
+		t.Errorf("Describe() = %q, want %q... %s/%s", got, want, runtime.GOOS, runtime.GOARCH)
 	}
 }

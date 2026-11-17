@@ -120,6 +120,8 @@ bin/snello build examples/hello/hello.snello
 | `snello build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
 | `snello check FILE` | Checks a program and prints its errors |
 | `snello test DIR` | Runs the tests in a directory's `_test.snello` files |
+| `snello help` | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
+| `snello version` | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |
 | `snello init` | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
 | `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
 

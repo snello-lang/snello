@@ -10,6 +10,15 @@ cd snello
 go build -o snello ./cmd/snello
 ```
 
+`snello version` says which compiler it is: the version, the commit it was built from, the channel a release is published on or `devel` for a build from source, and the system it runs on.
+
+```
+$ snello version
+snello 0.1.0 (8477985) devel darwin/arm64
+```
+
+`snello help` lists every command with a line saying what it does, and `snello help build` the flags and arguments of one, as `go help build` does; `-h` after a command prints the same.
+
 ## Hello
 
 A Snello program is a file in a package `main` with a `func main()`:

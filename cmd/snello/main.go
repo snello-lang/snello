@@ -2,42 +2,44 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Command snello is the Snello compiler driver.
+// Command snello is the Snello compiler driver. `snello help` lists its
+// commands, each with a line, and `snello help COMMAND` a command's
+// flags and arguments, read from the table in commands.go the command
+// line is parsed with.
 //
 // `snello build FILE` compiles a Snello program of one file to a native
 // binary in the current directory, through the LLVM backend and clang,
 // and `snello build DIR` a program of every .snello file in a
-// directory, named after the directory's last element; the
-// packages of the program's own are found through the nearest
-// snello.mod above it. `snello build -debug FILE` builds it for a
-// debugger, the program's own code unoptimized and described in full,
-// with the runtime's checks, which stop the program on a value used
-// after its release and report values never released; on macOS the
-// debugging information is gathered into FILE.dSYM beside the binary.
-// `snello debug FILE [ARGS]` builds it so and runs lldb, or gdb on
-// Linux, on it, with Snello's formatters and tasks command loaded.
-// `snello build -backend c
-// FILE` builds it through the C backend, the reference implementation,
-// and the system's C compiler. `snello test DIR` builds the tests of a
-// package, its _test.snello files, with a generated main and runs them.
-// `snello init [DIR]` makes the current directory, or DIR, the root of
-// a module, writing its snello.mod with the version of this compiler.
-// Four more subcommands inspect the compiler by hand: `snello lex FILE`
-// prints the token stream, `snello parse FILE` the syntax tree, `snello
-// check FILE|DIR` what the checker finds, and `snello emit [-debug] [-backend c]
-// FILE|DIR` the IR module, or the C source, that build would compile.
+// directory, named after the directory's last element; the packages of
+// the program's own are found through the nearest snello.mod above it.
+// `snello build -debug FILE` builds it for a debugger, the program's own
+// code unoptimized and described in full, with the runtime's checks,
+// which stop the program on a value used after its release and report
+// values never released; on macOS the debugging information is gathered
+// into FILE.dSYM beside the binary. `snello debug FILE [ARGS]` builds it
+// so and runs lldb, or gdb on Linux, on it, with Snello's formatters and
+// tasks command loaded. `snello build -backend c FILE` builds it through
+// the C backend, the reference implementation, and the system's C
+// compiler. `snello test DIR` builds the tests of a package, its
+// _test.snello files, with a generated main and runs them. `snello init
+// [DIR]` makes the current directory, or DIR, the root of a module,
+// writing its snello.mod with the version of this compiler, and
+// `snello version` prints that version, the commit, the channel and
+// the platform. Three more commands inspect the compiler by hand:
+// `snello lex FILE` prints the token stream, `snello parse FILE` the
+// syntax tree, and `snello emit FILE|DIR` the IR module, or with
+// -backend c the C source, that build would compile; `snello check
+// FILE|DIR` prints what the checker finds.
 package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/c"
@@ -52,45 +54,6 @@ import (
 )
 
 const (
-	// The commands, the first argument of every command line.
-	lexCommand   = "lex"
-	parseCommand = "parse"
-	checkCommand = "check"
-	buildCommand = "build"
-	emitCommand  = "emit"
-	testCommand  = "test"
-	debugCommand = "debug"
-	initCommand  = "init"
-
-	// commandArg is where the command stands among the arguments, and
-	// pathArgs how many arguments a command line has that names one
-	// path after its command: snello check FILE.
-	commandArg = 1
-	pathArgs   = 3
-
-	// The exit codes: a command that did its work, one that failed,
-	// and one given wrongly, as the flag package exits.
-	exitSuccess = 0
-	exitFailure = 1
-	exitUsage   = 2
-
-	// The flags: the backend, a build for a debugger, and those test
-	// passes on to the program it builds, each written after flagStart;
-	// a test program runs each test once unless -count says otherwise.
-	backendFlag  = "backend"
-	debugFlag    = "debug"
-	verboseFlag  = "v"
-	failfastFlag = "failfast"
-	shuffleFlag  = "shuffle"
-	shortFlag    = "short"
-	updateFlag   = "update"
-	runFlag      = "run"
-	benchFlag    = "bench"
-	countFlag    = "count"
-	timeoutFlag  = "timeout"
-	flagStart    = "-"
-	defaultCount = 1
-
 	// currentDir is the directory a command works in when it is given
 	// none, and mainPackage the package clause of a program.
 	currentDir  = "."
@@ -107,136 +70,23 @@ const (
 	newline = "\n"
 )
 
-// testBoolFlags and testStringFlags are the flags test passes on to the
-// program it builds as they were given.
-var (
-	testBoolFlags   = []string{verboseFlag, failfastFlag, shuffleFlag, shortFlag, updateFlag}
-	testStringFlags = []string{runFlag, benchFlag}
-)
-
 func main() {
-	if len(os.Args) <= commandArg {
-		usage()
-	}
-
-	args := os.Args[commandArg+1:]
-	switch os.Args[commandArg] {
-	case lexCommand:
-		if len(os.Args) != pathArgs {
-			usage()
-		}
-
-		os.Exit(lex(args[0]))
-	case parseCommand:
-		if len(os.Args) != pathArgs {
-			usage()
-		}
-
-		os.Exit(parse(args[0]))
-	case checkCommand:
-		if len(os.Args) != pathArgs {
-			usage()
-		}
-
-		os.Exit(check(args[0]))
-	case buildCommand:
-		path, backend, debug := buildArgs(args, true)
-		os.Exit(build(path, backend, debug))
-	case emitCommand:
-		path, backend, debug := buildArgs(args, true)
-		os.Exit(emit(path, backend, debug))
-	case testCommand:
-		os.Exit(test(args))
-	case debugCommand:
-		os.Exit(debug(args))
-	case initCommand:
-		os.Exit(initModule(args, os.Stderr))
-	default:
-		usage()
-	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: snello (build [-debug] [-backend llvm|c] | emit [-debug] [-backend llvm|c] | check) FILE|DIR")
-	fmt.Fprintln(os.Stderr, "       snello debug [-backend llvm|c] FILE|DIR [ARGS...]")
-	fmt.Fprintln(os.Stderr, "       snello test [-backend llvm|c] [-v] [-run NAME] [-bench NAME] [-count N] [-failfast] [-timeout DURATION] [-shuffle] [-short] [-update] DIR")
-	fmt.Fprintln(os.Stderr, "       snello init [DIR]")
-	fmt.Fprintln(os.Stderr, "       snello (lex | parse) FILE")
-	os.Exit(exitUsage)
-}
-
-// test builds the tests of the package in a directory into a program
-// and runs it: -backend chooses the backend, and the rest of the
-// flags, -v and -run NAME, go to the program, whose exit code is the
-// command's. In a checkout of the compiler, std/NAME is a standard
-// package, run from its sources as edited with the library's
-// privileges.
-func test(args []string) int {
-	fs := flag.NewFlagSet(testCommand, flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	backend := fs.String(backendFlag, lower.LLVMBackend, "the backend: llvm, or c for the reference backend")
-	bools := map[string]*bool{}
-	for _, name := range testBoolFlags {
-		bools[name] = fs.Bool(name, false, "")
-	}
-
-	strs := map[string]*string{}
-	for _, name := range testStringFlags {
-		strs[name] = fs.String(name, "", "")
-	}
-
-	count := fs.Int(countFlag, defaultCount, "")
-	timeout := fs.Duration(timeoutFlag, 0, "")
-
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || !isBackend(*backend) {
-		usage()
-	}
-
-	var pass []string
-	for _, name := range testBoolFlags {
-		if *bools[name] {
-			pass = append(pass, flagStart+name)
-		}
-	}
-
-	for _, name := range testStringFlags {
-		if *strs[name] != "" {
-			pass = append(pass, flagStart+name, *strs[name])
-		}
-	}
-
-	if *count != defaultCount {
-		pass = append(pass, flagStart+countFlag, strconv.Itoa(*count))
-	}
-
-	if *timeout > 0 { // the program counts in whole seconds
-		pass = append(pass, flagStart+timeoutFlag, strconv.Itoa(int((*timeout+time.Second-1)/time.Second)))
-	}
-
-	code, err := testrun.Run(fs.Arg(0), *backend, pass, os.Stdout, os.Stderr)
+// runTests builds the tests of the package in dir into a program and
+// runs it through the backend, passing pass, the flags meant for the
+// program, whose exit code is the command's. In a checkout of the
+// compiler, std/NAME is a standard package, run from its sources as
+// edited with the library's privileges.
+func runTests(dir, backend string, pass []string, stdout, stderr io.Writer) int {
+	code, err := testrun.Run(dir, backend, pass, stdout, stderr)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(stderr, err)
 		return exitFailure
 	}
 
 	return code
-}
-
-// buildArgs reads the flags of build and emit: the backend, and for a
-// build whether the runtime's checks are wanted.
-func buildArgs(args []string, withDebug bool) (path, backend string, debug bool) {
-	fs := flag.NewFlagSet(buildCommand, flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	fs.StringVar(&backend, backendFlag, lower.LLVMBackend, "the backend: llvm, or c for the reference backend")
-	if withDebug {
-		fs.BoolVar(&debug, debugFlag, false, "build for a debugger, unoptimized, with the runtime's checks")
-	}
-
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 || !isBackend(backend) {
-		usage()
-	}
-
-	return fs.Arg(0), backend, debug
 }
 
 func lex(path string) int {
@@ -316,30 +166,18 @@ func check(path string) int {
 	return exitSuccess
 }
 
-// initModule writes a module file into the directory args name, the
-// current one when they name none, through importer.WriteModFile, and
-// says on w, standard error, which file it wrote; a module file already
-// there is refused, and the command exits 1. A flag or more than one
-// directory is a usage error. It creates and writes one file.
-func initModule(args []string, w io.Writer) int {
-	fs := flag.NewFlagSet(initCommand, flag.ContinueOnError)
-	fs.SetOutput(w)
-	if err := fs.Parse(args); err != nil || fs.NArg() > 1 {
-		usage()
-	}
-
-	dir := currentDir
-	if fs.NArg() == 1 {
-		dir = fs.Arg(0)
-	}
-
+// initModule writes a module file into dir through
+// importer.WriteModFile, and says on w, standard error, which file it
+// wrote; a module file already there is refused, and the command exits
+// 1. It creates and writes one file.
+func initModule(dir string, w io.Writer) int {
 	name, err := importer.WriteModFile(dir)
 	if err != nil {
-		fmt.Fprintln(w, "snello "+initCommand+": "+err.Error())
+		fmt.Fprintln(w, program+" "+initCommand+": "+err.Error())
 		return exitFailure
 	}
 
-	fmt.Fprintln(w, "snello "+initCommand+": wrote "+name)
+	fmt.Fprintln(w, program+" "+initCommand+": wrote "+name)
 	return exitSuccess
 }
 

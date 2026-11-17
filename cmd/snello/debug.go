@@ -9,7 +9,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -78,31 +77,25 @@ const (
 //go:embed snello.py
 var debuggerScript []byte
 
-// debug builds a program as build -debug does and runs the platform's
-// debugger on the binary, with the arguments after the program's path
-// for the program, Snello's script loaded and the standard library's
+// debug builds the program at path, a file or a directory, as build
+// -debug does through backend, and runs the platform's debugger on the
+// binary, with args, the arguments after the program's path, for the
+// program, Snello's script loaded and the standard library's
 // sources where the debugger looks for them: the command loads the
 // script, since neither debugger loads one a binary names unless the
 // user has trusted its place. It returns the debugger's exit code.
-func debug(args []string) int {
-	flags := flag.NewFlagSet(debugCommand, flag.ContinueOnError)
-	backend := flags.String(backendFlag, lower.LLVMBackend, "the backend: llvm, or c for the reference backend")
-	if err := flags.Parse(args); err != nil || flags.NArg() < 1 || !isBackend(*backend) {
-		usage()
-	}
-
-	path := flags.Arg(0)
+func debug(path, backend string, args []string) int {
 	_, isDir, ok := programFiles(path)
 	if !ok {
 		return exitFailure
 	}
 
 	if name := platformDebugger(); !onPath(name) { // before a build there is no debugger to run
-		fmt.Fprintf(os.Stderr, "snello debug: %s is not on the path\n", name)
+		fmt.Fprintf(os.Stderr, "%s %s: %s is not on the path\n", program, debugCommand, name)
 		return exitFailure
 	}
 
-	if code := build(path, *backend, true); code != 0 {
+	if code := build(path, backend, true); code != 0 {
 		return code
 	}
 
@@ -113,7 +106,7 @@ func debug(args []string) int {
 	}
 
 	defer done()
-	name, cmdArgs := debuggerCommand(support, currentDir+string(filepath.Separator)+programName(path, isDir), flags.Args()[1:])
+	name, cmdArgs := debuggerCommand(support, currentDir+string(filepath.Separator)+programName(path, isDir), args)
 
 	cmd := exec.Command(name, cmdArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
