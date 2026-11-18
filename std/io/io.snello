@@ -105,6 +105,12 @@ enum Kind impl Copy, Clone, Eq {
 	// UnexpectedEOF: the input ended partway through what had to be
 	// read whole, as ReadFull reports it.
 	UnexpectedEOF
+
+	// Cancelled: the work of the task that waited was cancelled, by a
+	// group's Cancel or a failure in its group, while the call waited
+	// or before it began to; a deadline of the task's that passed is
+	// TimedOut.
+	Cancelled
 }
 
 // A Reader is a source of bytes: a file, a connection, a string read

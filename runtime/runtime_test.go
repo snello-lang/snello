@@ -927,6 +927,185 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestCancelRaces holds the scopes of scope.c to their races: a cancel
+// of a group against a sender for the one wait of a member receiving,
+// with both the member and the sender in the group, so that whichever
+// loses the wait is woken by the cancel instead, and a group's Add
+// against a member that ends at once, which the handle channel's word
+// settles with one compare-and-swap; twenty thousand rounds of each,
+// which must neither hang, crash nor leak.
+func TestCancelRaces(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 20000 };
+static sn_chan *quiet;
+static int64_t taken, cut;
+static void member(void *p) {
+    sn_chan *h = *(sn_chan **)p;
+    int64_t v;
+    int64_t r = sn_chan_recv(quiet, &v) ? 2 : 1; // the value, or the cancel
+    sn_chan_offer(h, &r);
+    sn_chan_drop(&h, SN_CHAN_BOTH);
+}
+static void sender(void *p) {
+    sn_chan *h = *(sn_chan **)p;
+    int64_t v = 7;
+    sn_chan_send(quiet, &v); // taken by the member, or dropped once the cancel reaches it
+    int64_t r = 0;
+    sn_chan_offer(h, &r);
+    sn_chan_drop(&h, SN_CHAN_BOTH);
+}
+static void quick(void *p) {
+    sn_chan *h = *(sn_chan **)p;
+    int64_t r = 3;
+    sn_chan_offer(h, &r);
+    sn_chan_drop(&h, SN_CHAN_BOTH);
+}
+static int64_t join(sn_chan *h) {
+    int64_t r;
+    sn_chan_recv(h, &r);
+    sn_chan_drop(&h, SN_CHAN_BOTH);
+    return r;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    quiet = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
+    for (int r = 0; r < rounds; r++) {
+        int64_t g = sn_task_newScope();
+        sn_chan *m = sn_chan_handle(sizeof(int64_t), NULL, "probe");
+        sn_chan *s = sn_chan_handle(sizeof(int64_t), NULL, "probe");
+        sn_spawn_handle(member, &m, sizeof m, SN_UNBOUNDED, m);
+        sn_task_adopt(g, m);
+        sn_spawn_handle(sender, &s, sizeof s, SN_UNBOUNDED, s);
+        sn_task_adopt(g, s);
+        sn_task_cancelScope(g);
+        if (join(m) == 2) {
+            taken++;
+        } else {
+            cut++;
+        }
+
+        join(s);
+        sn_task_dropScope(g);
+    }
+
+    for (int r = 0; r < rounds; r++) {
+        int64_t g = sn_task_newScope();
+        sn_chan *q = sn_chan_handle(sizeof(int64_t), NULL, "probe");
+        sn_spawn_handle(quick, &q, sizeof q, SN_UNBOUNDED, q);
+        sn_task_adopt(g, q);
+        sn_task_cancelScope(g);
+        if (join(q) != 3) {
+            printf("a quick member lost its result\n");
+        }
+
+        sn_task_dropScope(g);
+    }
+
+    printf("rounds %d, %s\n", rounds, taken > 0 && cut > 0 ? "both ways" : "one way");
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    sn_chan_drop(&quiet, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+	cancel()
+	if err != nil || !strings.HasPrefix(string(out), "rounds 20000, ") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	t.Log(strings.TrimSpace(string(out)))
+}
+
+// TestScopeDeadlineRaces holds the deadlines of scope.c to their races
+// with the scopes' releases: a Within whose body returns as its deadline
+// fires, so that the leave and the firing let the scope's holds go at
+// once; an inner Within left while the outer's deadline cancels it; and
+// a group cancelled from another task while its member enters and
+// leaves Withins; thousands of rounds, which must neither hang nor
+// crash, and leave no task running; in a debug build, which counts the
+// scopes among the program's blocks, nor leave a scope unfreed.
+func TestScopeDeadlineRaces(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+enum { rounds = 2000 };
+static const int64_t hour = 3600000000000LL;
+static sn_chan *done;
+static void withins(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 4; i++) {
+        sn_task_enter(20000 + 7000 * i); // the body sleeps for about the deadline: either may come first
+        sn_sleep(20000);
+        sn_task_leave();
+    }
+
+    sn_task_enter(30000);
+    sn_task_enter(hour); // the inner, left as the outer's deadline cancels both
+    sn_sleep(30000);
+    sn_task_leave();
+    sn_task_leave();
+    int64_t one = 1;
+    sn_chan_send(done, &one);
+}
+static void member(void *p) {
+    sn_chan *h = *(sn_chan **)p;
+    for (int i = 0; i < 20; i++) {
+        sn_task_enter(hour);
+        sn_sleep(2000);
+        sn_task_leave();
+    }
+
+    int64_t r = 0;
+    sn_chan_offer(h, &r);
+    sn_chan_drop(&h, SN_CHAN_BOTH);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+    for (int r = 0; r < rounds; r++) {
+        sn_spawn(withins, NULL, 0, SN_UNBOUNDED);
+        int64_t got;
+        sn_chan_recv(done, &got);
+    }
+
+    for (int r = 0; r < rounds; r++) {
+        int64_t g = sn_task_newScope();
+        sn_chan *m = sn_chan_handle(sizeof(int64_t), NULL, "probe");
+        sn_spawn_handle(member, &m, sizeof m, SN_UNBOUNDED, m);
+        sn_task_adopt(g, m);
+        sn_sleep(1000 * (r % 40));
+        sn_task_cancelScope(g);
+        int64_t got;
+        sn_chan_recv(m, &got);
+        sn_chan_drop(&m, SN_CHAN_BOTH);
+        sn_task_dropScope(g);
+    }
+
+    printf("rounds %d\n", rounds);
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    sn_chan_drop(&done, SN_CHAN_BOTH);
+    return sn_finish();
+}
+`
+	for _, mode := range [][]string{nil, {"-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer"}} {
+		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, mode...)
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		out, err := exec.CommandContext(ctx, bin).CombinedOutput()
+		cancel()
+		if err != nil || string(out) != "rounds 2000\n" {
+			t.Fatalf("%v: %v\n%s", mode, err, out)
+		}
+	}
+}
+
 // TestDebuggerTable holds the table a debug build publishes for a
 // debugger's script to the runtime it describes: a task parked on a
 // channel is on the list, parked, and the frame pointer and return

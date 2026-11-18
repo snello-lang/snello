@@ -95,6 +95,8 @@ case <-cancel.Done():
 
 A send case goes only when the send would not wait: when the channel has room, or, for an unbuffered channel, when a receiver is already waiting on it. The values of send cases are evaluated on entry, and the value of a case that was not chosen is dropped.
 
+A task's waits can also be ended from outside, by a deadline on the function's work or a cancel of the group it runs in, with no case written for it in any `select`: chapter 33.
+
 ## How it runs
 
 A task is not a thread. The runtime keeps one worker thread per core and runs the tasks on them: `spawn` gives the task a small stack of its own and puts it on a worker's queue, and a task runs until it waits, on a channel, a lock, a timer or a socket, when the worker switches to the next task and whoever the first was waiting for puts it back. Starting a task costs about a third of a microsecond and switching between two about a tenth, so a program may have a hundred thousand of them waiting at once. A task that computes without ever waiting keeps its worker; the others run on the rest. A value sent on a channel is copied into the channel and the sender's variable is empty from then on; a value received is copied out into memory the receiving task owns, so each value is owned by exactly one task at any moment, which is what the rules above promise. An unbuffered channel hands a value over directly, and the sender continues only once a receiver has taken it; a buffered one holds up to its capacity. Three things to know:

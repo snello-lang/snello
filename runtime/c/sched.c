@@ -358,21 +358,24 @@ struct sn_task {
 #endif
     void (*run)(void *);
     void *arg; // the arguments run is given: a copy of the spawn's, in args or on the heap
-    _Alignas(max_align_t) uint8_t args[few_args]; // room for them, aligned for any program value
     _Atomic int state;
+    bool unwinding;       // beside state, in the room its alignment leaves, as each small field below is
     struct sn_task *next; // on a queue
+    sn_scope_link scope;  // the scope it is in, scope.c's: beside next, early in the record, which every park and
+                          // resume touches, so that a wait reads it with little more brought in
     guard *guards;        // the values a panic drops, innermost last: few, then a block of the system's
     int64_t nguards, guardcap;
     guard few[few_guards];
-    bool unwinding;
     sn_string unwound; // the message of the panic being unwound to a mark, for a drop that panics meanwhile to report
     struct sn_mark *marks; // the marks a panic unwinds to, innermost first; none for a program's task
     sn_chan *waits_on;     // the channel the task waits on, while it does, for the deadlock report
     int waits_dir;         // and whether to send or to receive on it, or both for a select
+    int ntrace;            // how many frames trace holds
     sn_string places[3];   // the place of the test call being made, testing.c's: the task's own, so that parallel tests
                            // do not share it
     uintptr_t *trace; // the frames of its last panic, kept for a test's runner under a catch that keeps them, or NULL
-    int ntrace;
+    _Alignas(max_align_t) uint8_t args[few_args]; // room for the arguments, aligned for any program value: read once,
+                                                  // as the task starts, so last
 #ifdef SN_DEBUG
     struct sn_task *debug_next; // the task spawned before it, on the list a debugger's script walks
 #endif
@@ -897,6 +900,91 @@ void sn_task_waits(sn_task *t, sn_chan *c, int dir) {
 // sn_task_places returns the running task's slots for the place of a
 // test's call, which testing.c fills and reads.
 sn_string *sn_task_places(void) { return sn_self()->places; }
+
+sn_scope_link *sn_task_scope(sn_task *t) { return &t->scope; }
+
+// The loads are relaxed, and need no more: a cancel marks the scope and
+// then wakes the task, and the park that takes that wake does so with a
+// compare-and-swap of the task's state, which orders the mark before the
+// task's next look; a look that comes before the wake and misses the
+// mark is followed by that wake. An acquire load would wait, on arm64,
+// for the stores the wait has just made to be seen, on every wait: it
+// made a pipeline of buffered channels a quarter slower.
+int sn_cancel_state(sn_task *t) {
+    sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_relaxed);
+    return s == NULL ? SN_SCOPE_LIVE : atomic_load_explicit(&s->state, memory_order_relaxed);
+}
+
+int sn_cancel_wait_state(sn_task *t) {
+    sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_acquire); // an Add's write of it, and of enlisted
+    if (s == NULL) {
+        return SN_SCOPE_LIVE;
+    }
+
+    if (!t->scope.enlisted) {
+        sn_scope_enlist_self(t, s); // the lock taken and let go, so that the mark of a cancel that walked the list
+                                    // without the task is read below
+    }
+
+    return atomic_load_explicit(&s->state, memory_order_relaxed);
+}
+
+// take_back claims a wait for its task, cancelled, unless an operation
+// claimed it first. It is out of line and cold, as every cancelled path
+// of the waits is, so that the code around a wait is what it was before
+// a cancel could end one.
+static __attribute__((noinline, cold)) bool take_back(sn_wait_state *ws) {
+    int open = 0;
+    return atomic_compare_exchange_strong(&ws->claimed, &open, 1);
+}
+
+// sn_handoff_cancellable is sn_handoff_wait for a wait a cancel may end:
+// it reports true once the waker is done with the task, and false, at
+// once, when the task's scope is cancelled while the handoff is still
+// open, so that the caller takes its wait back; it is here, beside the
+// task's record, so that a task in no scope looks at one word of its
+// own before each park and calls nothing more. sn_await_cancellable is
+// it for a channel's wait, which a cancel takes back by the claim an
+// operation makes, and which then waits for the operation that claimed
+// it first, if one did, and is kept out of line: inlined by the
+// link-time optimizer into a channel's receive, the wait made every
+// receive save more registers and build a larger frame, the ones that
+// find a value too, and a pipeline of buffered channels ran a quarter
+// slower. A sleep, which always waits, gains by the inlining, as it
+// does of sn_handoff_wait: kept out of line, it made a wave of sleeps a
+// tenth slower.
+bool sn_handoff_cancellable(sn_handoff *h, sn_task *t) {
+    for (;;) {
+        int at = atomic_load_explicit(h, memory_order_acquire);
+        if (at == SN_HANDOFF_WOKEN) {
+            return true;
+        }
+
+        if (at != SN_HANDOFF_OPEN) {
+            sn_spin_hint(); // the claim is at the task: its few instructions
+            continue;
+        }
+
+        if (sn_cancel_wait_state(t) != SN_SCOPE_LIVE) {
+            return false;
+        }
+
+        sn_park(); // a cancel's wake, the waker's, or one kept from an earlier wait
+    }
+}
+
+__attribute__((noinline)) bool sn_await_cancellable(sn_task *t, sn_wait_state *ws) {
+    if (sn_handoff_cancellable(&ws->done, t)) {
+        return true;
+    }
+
+    if (take_back(ws)) {
+        return false; // no operation can take the wait now
+    }
+
+    sn_handoff_wait(&ws->done); // an operation took it first
+    return true;
+}
 
 static int handed; // spins given to woken workers not yet back from the wait, under idle_mu
 
@@ -2205,18 +2293,24 @@ void sn_sched_owe(int64_t when) {
 static void task_entry(void) {
     task *t = my_task();
     t->run(t->arg);
+    if (atomic_load_explicit(&t->scope.scope, memory_order_relaxed) != NULL) { // the task's own word, which an Add
+                                                                               // wrote under a lock it took since
+        sn_scope_end(t); // before DONE: a cancel that finds it in its scope wakes a task that has not ended
+    }
     atomic_store(&t->state, DONE);
     sn_switch(&t->sp, my_worker()->sched_sp);
     abort(); // a done task is never resumed
 }
 
-// sn_spawn starts a task that runs run on a copy of its arguments, on a
+// spawn starts a task that runs run on a copy of its arguments, on a
 // stack of bound bytes, what the analysis of the linked program proved
-// the task can use, or on a guarded stack for SN_UNBOUNDED.
-void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound) {
+// the task can use, or on a guarded stack for SN_UNBOUNDED; the task is
+// in its spawner's scope, or, for a handle whose channel is done, in a
+// scope of its own under it, made when it is needed.
+static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
     sched_ready();
 
-    sn_self();
+    task *self = sn_self();
     worker *w = my_worker(); // read once: the thread-local costs a call on Darwin
     // Its own block: a record at the top of the task's stack was measured
     // and made a spawn two thirds slower. A release build takes it from
@@ -2268,6 +2362,12 @@ void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound
     }
 #endif
     t->sp = make_context((uint8_t *)t->stack + class_size(t->stack_class), task_entry);
+    if (done != NULL) {
+        sn_scope_own(done, t, self);
+    } else if (atomic_load_explicit(&self->scope.scope, memory_order_relaxed) != NULL || self->scope.handle != NULL) {
+        sn_scope_inherit(t, self); // in a scope, or spawned for a handle and so to have one of its own now
+    }
+
     atomic_store(&t->state, RUNNABLE);
     if (w != NULL) {
         atomic_fetch_add_explicit(&w->running, 1, memory_order_relaxed); // its own line: no other worker writes it
@@ -2277,6 +2377,17 @@ void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound
                                                                                  // none is today, counts on the first
         inject(t);
     }
+}
+
+void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound) {
+    spawn(run, args, size, bound, NULL);
+}
+
+// sn_spawn_handle starts a task for a handle, whose channel is done: the
+// task has a scope of its own, made when it is needed, which a group
+// that takes the handle takes in.
+void sn_spawn_handle(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
+    spawn(run, args, size, bound, done);
 }
 
 int64_t sn_tasks_running(void) {

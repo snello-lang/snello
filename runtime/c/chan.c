@@ -110,9 +110,13 @@ typedef struct {
 struct sn_chan {
     _Atomic int64_t handles;
     _Atomic bool half_gone; // the last handle of one kind has gone and done its work: the other kind's last frees
-    _Atomic int64_t timer;  // the channel's After or Tick while it is in a timing wheel, -1 when it has none there
-    _Atomic int32_t home;   // the wheel its timers go in, as timer.c records it
-    char apart[SN_CACHE_LINE];
+    bool handle;           // a task's handle: its receive is not cancelled, and word says where the task's own scope is
+    _Atomic bool failed;   // for a task's handle, the task failed: scope.c's
+    _Atomic int64_t timer; // the channel's After or Tick while it is in a timing wheel, -1 when it has none there
+    _Atomic int32_t home;  // the wheel its timers go in, as timer.c records it
+    _Atomic uintptr_t word;                                          // for a task's handle, scope.c's
+    char apart[SN_CACHE_LINE - sizeof(uintptr_t) - sizeof(int32_t)]; // the line's spacer, less the word and its
+                                                                     // alignment: the fields after it keep their places
     sn_qlock mu;                 // over the queues, and over an unbuffered channel's meetings
     void (*drop)(void *);        // drops one element
     size_t size;                 // of one element
@@ -240,6 +244,8 @@ static bool ring_pop(sn_chan *c, void *out) {
     }
 }
 
+static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(void *), const char *made);
+
 // sn_chan_make makes a channel with its first handle. Its memory is
 // sn_alloc's, so a debug build reports a channel no handle freed.
 sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char *made) {
@@ -248,7 +254,23 @@ sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char
         sn_panic(SN_STR("makechan: size out of range", 27));
     }
 
-    sn_chan *c = sn_alloc(sizeof *c);
+    return chan_init(sn_alloc(sizeof(sn_chan)), size, cap, drop, made);
+}
+
+// sn_chan_handle makes the channel of one slot a spawn for a handle
+// gives the task and the handle: with two handles, the handle's and the
+// task's, counted at once, since no one else has it yet, so that the
+// spawn makes no clone.
+sn_chan *sn_chan_handle(size_t size, void (*drop)(void *), const char *made) {
+    sn_chan *c = chan_init(sn_alloc(sizeof(sn_chan)), size, 1, drop, made);
+    atomic_store_explicit(&c->handles, 2 * weight(SN_CHAN_BOTH), memory_order_relaxed);
+    c->handle = true;
+    return c;
+}
+
+// chan_init makes the block c a channel of cap places of size bytes.
+static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(void *), const char *made) {
+    size_t stride = stamp_bytes + ((size + stamp_bytes - 1) & ~(stamp_bytes - 1));
     memset(c, 0, sizeof *c);
     c->cap = cap;
     if (cap > 0) {
@@ -327,6 +349,10 @@ static void chan_free(sn_chan *c) {
         sn_free(c->ring);
     }
 
+    if (c->handle) {
+        sn_scope_dropped(c);
+    }
+
     sn_free(c);
 }
 
@@ -401,6 +427,10 @@ int64_t sn_chan_timer(sn_chan *c) { return atomic_load(&c->timer); }
 
 _Atomic int32_t *sn_chan_home(sn_chan *c) { return &c->home; }
 
+_Atomic uintptr_t *sn_chan_word(sn_chan *c) { return &c->word; }
+
+_Atomic bool *sn_chan_failed(sn_chan *c) { return &c->failed; }
+
 void sn_chan_placeTimer(sn_chan *c, int64_t at) { atomic_store(&c->timer, at); }
 
 // sn_chan_open reports whether a receiving handle remains: whether a
@@ -458,11 +488,24 @@ void sn_chan_drop_untimed(sn_chan *c, int dir) { sn_chan_given(c, dir, give_up(c
 
 // wait_on parks the task t on c in direction dir until the operation
 // that takes its waiter wakes it, recording what it waits on for the
-// deadlock report while it does.
-static void wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
+// deadlock report while it does, and reports true; or until the task's
+// scope is cancelled, when the task takes the wait back and it reports
+// false, and the caller takes its waiters off their queues and does
+// what the channel's end would have it do. A select names its first
+// case's channel, whose kind decides for all its cases: a handle is
+// never among them, since a handle's channel is the task package's own
+// and no program writes a select over one.
+static bool wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
     sn_task_waits(t, c, dir);
-    sn_await_wait(ws);
+    bool done = true;
+    if (c->handle) {
+        sn_await_wait(ws); // a task's handle: Join waits for a task cancelled with it, and must not lose its result
+    } else {
+        done = sn_await_cancellable(t, ws);
+    }
+
     sn_task_waits(t, NULL, 0);
+    return done;
 }
 
 // notify wakes one task waiting on q, for a move of the ring that gave
@@ -531,6 +574,24 @@ static void leave(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
     }
 }
 
+// withdraw takes the waiter w of a wait the task took back off q, and
+// reports false, the receive's result: as from a channel that has
+// ended. unsent does the same for a send, and drops the value, as a
+// send no receiver will take. Both are out of line and cold, as
+// take_back in sched.c is, so that a channel's operations compile as
+// they did before a cancel could end their waits.
+static __attribute__((noinline, cold)) bool withdraw(sn_chan *c, sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+    sn_qlock_take(&c->mu);
+    leave(q, waits, w);
+    sn_qlock_give(&c->mu);
+    return false;
+}
+
+static __attribute__((noinline, cold)) void unsent(sn_chan *c, sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+    withdraw(c, q, waits, w);
+    drop_value(c, w->elem);
+}
+
 // meet_receiver hands v to a receiver waiting on an unbuffered channel,
 // the caller holding the lock, and reports whether one was there: the
 // receiver's task goes in *woken for the caller to queue once it has
@@ -582,7 +643,11 @@ static void send_unbuffered(sn_chan *c, const void *v) {
     sn_waiter me = { sn_self(), (void *)v, &ws, 0, false, false, NULL, NULL };
     sn_enqueue(&c->sendq, &me);
     sn_qlock_give(&c->mu);
-    wait_on(me.t, c, SN_CHAN_SEND, &ws);
+    if (!wait_on(me.t, c, SN_CHAN_SEND, &ws)) {
+        unsent(c, &c->sendq, NULL, &me);
+        return;
+    }
+
     if (!me.success) {
         drop_value(c, (void *)v); // the last receiver went while the send waited
     }
@@ -625,7 +690,11 @@ static void send_buffered(sn_chan *c, const void *v) {
         }
 
         sn_qlock_give(&c->mu);
-        wait_on(me.t, c, SN_CHAN_SEND, &ws);
+        if (!wait_on(me.t, c, SN_CHAN_SEND, &ws)) {
+            unsent(c, &c->sendq, &c->senders_wait, &me);
+            return;
+        }
+
         if (me.success) {
             return; // the value went into the ring with the wake
         }
@@ -665,7 +734,10 @@ static bool recv_unbuffered(sn_chan *c, void *out) {
     sn_waiter me = { sn_self(), out, &ws, 0, false, false, NULL, NULL };
     sn_enqueue(&c->recvq, &me);
     sn_qlock_give(&c->mu);
-    wait_on(me.t, c, SN_CHAN_RECV, &ws);
+    if (!wait_on(me.t, c, SN_CHAN_RECV, &ws)) {
+        return withdraw(c, &c->recvq, NULL, &me);
+    }
+
     return me.success;
 }
 
@@ -717,7 +789,10 @@ static bool recv_buffered(sn_chan *c, void *out) {
         }
 
         sn_qlock_give(&c->mu);
-        wait_on(me.t, c, SN_CHAN_RECV, &ws);
+        if (!wait_on(me.t, c, SN_CHAN_RECV, &ws)) {
+            return withdraw(c, &c->recvq, &c->receivers_wait, &me);
+        }
+
         if (me.success) {
             return true; // the value came with the wake
         }
@@ -743,6 +818,10 @@ bool sn_chan_offer(sn_chan *c, const void *v) {
         fflush(stdout);
         fputs("fatal error: offer on an unbuffered channel\n", stderr);
         exit(2);
+    }
+
+    if (c->handle) {
+        sn_scope_ends(c); // the task offers its result as it ends
     }
 
     if (!sn_chan_open(c)) {
@@ -972,6 +1051,20 @@ static int settled(sn_case *cases, int i, sn_task *woken, sn_waitq *notified, _A
     return i;
 }
 
+// cancelled_case settles a select its task's scope cancelled: every
+// channel is as if ended, so every case is ready, and the case i, the
+// first of the random order, is taken. Out of line and cold, as
+// withdraw is.
+static __attribute__((noinline, cold)) int cancelled_case(sn_case *cases, int i) {
+    if (cases[i].send) {
+        drop_value(cases[i].chan, cases[i].value);
+    } else {
+        cases[i].ok = false;
+    }
+
+    return i;
+}
+
 // select_in is sn_select over working arrays of n places each. The
 // cases are tried under every channel's lock; with none ready the
 // select registers a waiter on each case's queue and tries the ring
@@ -1027,13 +1120,17 @@ static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, i
         }
 
         unlock_all(chans, m);
-        wait_on(self, cases[0].chan, SN_CHAN_BOTH, &ws); // a select: the first case's channel names it
+        bool done = wait_on(self, cases[0].chan, SN_CHAN_BOTH, &ws); // a select: the first case's channel names it
         lock_all(chans, m);
         for (int i = 0; i < n; i++) {
             leave(queue_of(&cases[i]), waits_of(&cases[i]), &waiters[i]);
         }
 
         unlock_all(chans, m);
+        if (!done) {
+            return cancelled_case(cases, order[0]);
+        }
+
         int i = ws.fired;
         if (cases[i].chan->cap > 0 && !waiters[i].success) {
             continue; // the ring moved: the select tries again

@@ -66,6 +66,7 @@ struct timer {
     void (*fire)(void *); // or the function to call, with arg
     void *arg;
     sn_deadline *at; // where the function's timer is kept
+    bool counted;    // the function runs with the wheel let go: its arg is kept alive by a count of the callee's own
     int8_t level;    // the level it is at, -1 among the soon, -2 in no wheel
     uint8_t slot;
 };
@@ -399,13 +400,17 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
 
     for (timer *x = wheel_poll(w, now), *after; x != NULL; x = after) {
         after = x->next;
-        if (x->fire != NULL) { // under the lock, so that a disarm either takes it out first or waits for it to finish
-            x->at->timer = NULL;
+        if (x->fire != NULL && !x->counted) { // under the lock, so that a disarm either takes it out first or waits
+            x->at->timer = NULL;              // for it to finish
             x->fire(x->arg);
             sn_free(x);
             woken++;
-        } else if (x->ch == NULL) { // woken once the lock is let go, so that it is held for no queue's
-            x->next = NULL;
+        } else if (x->ch == NULL) { // a sleeper, or a counted function: once the lock is let go, so that it is held for
+            x->next = NULL;         // no queue's and no lock of the callee's
+            if (x->fire != NULL) {
+                x->at->timer = NULL;
+            }
+
             *last = x;
             last = &x->next;
             woken++;
@@ -427,7 +432,12 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
     // handoff (internal.h), and reads nothing of the timer after.
     for (timer *x = sleepers, *after; x != NULL; x = after) {
         after = x->next;
-        sn_handoff_wake(x->fired, x->t);
+        if (x->fire != NULL) {
+            x->fire(x->arg); // counted: the callee lets its count go, and may be freed by it
+            sn_free(x);
+        } else {
+            sn_handoff_wake(x->fired, x->t);
+        }
     }
 
     if (woken > 0) {
@@ -517,6 +527,8 @@ static int64_t deadline(int64_t d) {
 
 // timer_new is a timer in a block of its own, which whoever takes it
 // out of its wheel for the last time frees.
+static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, bool counted);
+
 static timer *timer_new(timer from) {
     timer *x = sn_alloc(sizeof *x);
     *x = from;
@@ -532,10 +544,23 @@ static timer *timer_new(timer from) {
 // is short, since the wheel's lock is held for it. The timer is kept in
 // *at, which holds none while it is in no wheel; arming it again moves
 // it. Like every timer it is a wake promised until it fires or is
-// disarmed.
-void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
+// disarmed. sn_deadline_arm_counted calls fire with the wheel let go,
+// for a function that takes locks of its own or is long, a cancel's
+// walk over scopes: its arg is kept alive by a count of the callee's
+// own, which the function lets go when it is done, and a disarm that
+// finds the timer gone reports so, the function having run or running,
+// and the disarmer leaves the count to it. A counted timer is armed
+// once: arming it again would take the old one out without its
+// function, and the count it held with it.
+void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) { arm(at, d, fire, arg, false); }
+
+void sn_deadline_arm_counted(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
+    arm(at, d, fire, arg, true);
+}
+
+static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, bool counted) {
     sn_sched_start();
-    timer *x = timer_new((timer){ .when = deadline(d), .fire = fire, .arg = arg, .at = at });
+    timer *x = timer_new((timer){ .when = deadline(d), .fire = fire, .arg = arg, .at = at, .counted = counted });
     wheel *w = home(&at->home);
     wheel_lock(w);
     timer *old = at->timer;
@@ -558,11 +583,12 @@ void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg
 }
 
 // sn_deadline_disarm takes the timer kept in *at out of its wheel, if
-// it is in one. Once it returns, the timer's function is not running
-// and will not run.
-void sn_deadline_disarm(sn_deadline *at) {
+// it is in one, and reports whether it did. Once it returns, the
+// function of a timer sn_deadline_arm armed is not running and will not
+// run; a counted timer it did not find runs its function, or has.
+bool sn_deadline_disarm(sn_deadline *at) {
     if (atomic_load(&at->home) == 0) {
-        return; // never armed
+        return false; // never armed
     }
 
     wheel *w = home(&at->home);
@@ -579,6 +605,8 @@ void sn_deadline_disarm(sn_deadline *at) {
         sn_free(old);
         timers_done(w, 1);
     }
+
+    return old != NULL;
 }
 
 // sn_time_startTimer puts the time in ch once, d from now, and then
@@ -696,7 +724,10 @@ bool sn_timer_abandon(sn_chan *c, int dir) {
 // sn_timers_stop stops the timers as the program ends and drops the
 // handles the channel timers hold, after any timer firing now is done
 // with its own, so that a debug build's count of blocks finds the
-// channels of a pending After or a running Tick freed.
+// channels of a pending After or a running Tick freed. A counted timer
+// is taken out without its function: none is in a wheel then, since
+// a debug build stops the timers only once no task runs, and a scope's
+// timer goes with the Within that armed it.
 void sn_timers_stop(void) {
     atomic_store(&stopping, true);
     for (int i = 0; i < wheels_now(); i++) {
@@ -744,7 +775,29 @@ void sn_timers_stop(void) {
     }
 }
 
-// sn_sleep parks the task until its timer fires. A park can return for
+// sleep_cut takes the timer x of a sleep its task's scope cancelled out
+// of its wheel w, and reports whether it did: not when the firing took
+// it out first, which then wakes the task. Out of line and cold, as the
+// cancelled paths of the channels' waits are.
+static __attribute__((noinline, cold)) bool sleep_cut(wheel *w, timer *x) {
+    wheel_lock(w);
+    bool armed = x->level != -2; // not yet taken out for its firing, which then never comes
+    if (armed) {
+        wheel_remove(w, x);
+        wheel_renew(w);
+    }
+
+    wheel_unlock(w);
+    if (armed) {
+        timers_done(w, 1);
+    }
+
+    return armed;
+}
+
+// sn_sleep parks the task until its timer fires, or until its scope is
+// cancelled, when it takes its timer out of the wheel unless the firing
+// took it first, and returns. A park can return for
 // a wake meant for an earlier wait, one a select's second channel sent
 // before the select unlinked from it, so the task waits on its handoff
 // until the firing is done with it; returning sooner would cut the
@@ -770,5 +823,7 @@ void sn_sleep(int64_t d) {
         sn_sched_owe(x.when);
     }
 
-    sn_handoff_wait(&fired);
+    if (!sn_handoff_cancellable(&fired, t) && !sleep_cut(w, &x)) {
+        sn_handoff_wait(&fired); // the firing took the timer first, and wakes the task
+    }
 }

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // A group of tasks: several tasks started for handles, waited for
-// together, and told of the first that failed. A group of batches is
+// together, and cancelled together when the first fails. A group of batches is
 // waited for and reports every one; a group of a server and a checker
 // stops the server when the audit's bug fails it, and Wait says what
 // the bug was; and a task that failed is started again by a loop over
@@ -26,22 +26,19 @@ func summarize(batch int, readings [3]int, want int, totals chan<- (int, int)) {
 	totals <- (batch, total)
 }
 
-// serve answers requests until the group says stop, counting each on
-// served: a task that would run forever, and selects on Done so that
-// a failure elsewhere ends it.
-func serve(requests <-chan string, stop <-chan (), served chan<- int) {
+// serve answers requests until the group is cancelled, counting each
+// on served: a task that would run forever, whose receive the cancel a
+// failure elsewhere makes ends, so that it stops.
+func serve(requests <-chan string, served chan<- int) {
 	n := 0
-	for {
-		select {
-		case got := <-requests:
-			r := got ?? break
-			fmt.Println("served", r)
-			n += 1
-			served <- n
-		case <-stop:
-			fmt.Println("server stopping: another task failed")
-			return
-		}
+	for r := range requests { // ends when cancelled: the program keeps the sending end
+		fmt.Println("served", r)
+		n += 1
+		served <- n
+	}
+
+	if task.Cancelled() {
+		fmt.Println("server stopping: another task failed")
 	}
 }
 
@@ -88,14 +85,14 @@ func main() {
 		Err(p) => fmt.Println("a batch failed:", p.Message()),
 	}
 
-	// A server and an audit: the audit's bug ends Done, the server
-	// stops, and Wait reports the bug once both have ended.
+	// A server and an audit: the audit's bug cancels the group, the
+	// server stops, and Wait reports the bug once both have ended.
 	requests := make(chan string, 2)
 	requests <- "ping".Clone()
 	requests <- "status".Clone()
 	served := make(chan int, 2)
 	g := task.NewGroup()
-	g.Add(spawn serve(requests.Clone(), g.Done(), served.Clone()))
+	g.Add(spawn serve(requests.Clone(), served.Clone()))
 	g.Add(spawn audit([3]int{1, 2, 3}, 4, served.Clone(), 2)) // asks for a fourth reading of three
 	match g.Wait() {
 		Ok(_) => fmt.Println("every task returned"),
