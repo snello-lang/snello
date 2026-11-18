@@ -191,6 +191,18 @@ warning: /home/me/app/snello.mod has no snello line: it is read as snello 0.1.0,
 
 A program with no module file above it, one file built on its own, is read as the version of the compiler building it.
 
+A package that does something differently on each system writes a file for each and names it for its platform, as Go does: `poll_linux.snello` is built only for Linux, `poll_arm64.snello` only for an arm64 processor, and `poll_darwin_arm64.snello` only for macOS on arm64, while `poll.snello` beside them is built everywhere. The platform is the last part of the name, after an underscore, and before `_test` in a test file's, `poll_linux_test.snello`; nothing inside a file chooses, so a listing of the directory shows which file is for which platform:
+
+```
+poll/
+    poll.snello              every platform: what the others share
+    poll_linux.snello        Linux
+    poll_darwin.snello       macOS
+    poll_linux_test.snello   tests that run on Linux
+```
+
+Snello builds for `linux` and `darwin`, on `amd64` and `arm64`, and the files chosen are the ones for the machine the program is built on. A file named for another system or processor, `poll_windows.snello` or `cpu_riscv64.c`, is left out, so a package can carry the files of every system. The words a name may end in are the systems `aix`, `android`, `darwin`, `dragonfly`, `freebsd`, `hurd`, `illumos`, `ios`, `js`, `linux`, `nacl`, `netbsd`, `openbsd`, `plan9`, `solaris`, `wasip1`, `windows` and `zos`, and the processors `386`, `amd64`, `amd64p32`, `arm`, `armbe`, `arm64`, `arm64be`, `loong64`, `mips`, `mipsle`, `mips64`, `mips64le`, `mips64p32`, `mips64p32le`, `ppc`, `ppc64`, `ppc64le`, `riscv`, `riscv64`, `s390`, `s390x`, `sparc`, `sparc64` and `wasm`, Go's list: a name ending in one of them, `decode_js.snello`, is for that platform and no other. A last word that is not among them is part of the name, `string_builder.snello`, and so is a misspelt one, `poll_linx.snello`, which is built everywhere: check the spelling. A file whose name begins with a dot or an underscore, an editor's lock or a file set aside, is no file of the package. A directory whose every file is for another platform is no package on this one, `every .snello file in poll is for another platform than darwin/arm64`. A file named on the command line, `snello build tool_linux.snello`, is built as named. The same names choose a package's C files, chapter 15.
+
 An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. A dependency has no version and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one: a dependency is the directory it is, so two dependencies that each require a third share one copy of it, and a value of the third's types passes between them. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
 
 ## A second program

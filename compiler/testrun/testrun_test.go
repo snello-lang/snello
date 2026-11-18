@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +18,9 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/llvm"
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/std"
 )
 
 // writeTree writes a module under a temporary directory and returns
@@ -511,6 +514,43 @@ func TestStdDir(t *testing.T) {
 	}
 }
 
+// TestStdDirPlatform plans a standard package's tests from a copy of
+// the library, as a checkout holds it, with a test file for the host's
+// system and one for another: the plan names the host's test and not
+// the other's, and its sources are the package's for the host.
+func TestStdDirPlatform(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "std")
+	if err := os.CopyFS(root, std.Sources); err != nil {
+		t.Fatal(err)
+	}
+
+	other := platform.Linux
+	if platform.Host().OS == platform.Linux {
+		other = platform.Darwin
+	}
+
+	dir := filepath.Join(root, "strings")
+	for system, test := range map[string]string{platform.Host().OS: "TestOnHost", other: "TestElsewhere"} {
+		src := "package strings_test\n\nfunc " + test + "() {}\n"
+		if err := os.WriteFile(filepath.Join(dir, "zz_"+system+"_test.snello"), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p, err := PlanStdDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Contains(p.Names, "TestOnHost") || slices.Contains(p.Names, "TestElsewhere") {
+		t.Errorf("planned the tests %v, want TestOnHost and not TestElsewhere", p.Names)
+	}
+
+	if len(p.Files) != 1 || filepath.Base(p.Files[0]) != "strings.snello" {
+		t.Errorf("planned the sources %v, want strings.snello", p.Files)
+	}
+}
+
 // TestRun runs the tests of a library package and of a main package
 // through both backends, as snello test does, and checks what they
 // print and how they exit; then the refusals: a test with the wrong
@@ -563,13 +603,13 @@ func TestRun(t *testing.T) {
 
 	// The program built beside its tests carries nothing of them: no
 	// test file, and no symbol of testing or expect.
-	names, err := importer.SourceFiles(filepath.Join(root, "app"))
+	names, err := importer.SourceFiles(filepath.Join(root, "app"), platform.Host())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	info := &types.Info{}
-	imp, prog, err := importer.LoadProgram(names, info)
+	imp, prog, err := importer.LoadProgram(names, platform.Host(), info)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -47,7 +48,7 @@ func Directories(dir string) ([]string, error) {
 			continue
 		}
 
-		files, err := importer.SourceFiles(filepath.Join(dir, e.Name()))
+		files, err := importer.SourceFiles(filepath.Join(dir, e.Name()), platform.Host())
 		if err != nil {
 			return nil, err
 		}
@@ -64,13 +65,13 @@ func Directories(dir string) ([]string, error) {
 // returns it with the Info the checker filled and the packages it
 // imports as the backends take them.
 func LoadDirectory(dir string) (*importer.Program, *types.Info, []lower.Library, error) {
-	names, err := importer.SourceFiles(dir)
+	names, err := importer.SourceFiles(dir, platform.Host())
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	info := &types.Info{}
-	imp, prog, err := importer.LoadProgram(names, info)
+	imp, prog, err := importer.LoadProgram(names, platform.Host(), info)
 	if err != nil {
 		return nil, nil, nil, err
 	}

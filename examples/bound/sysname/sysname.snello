@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package sysname asks the kernel its name, a different way on each
+// system: its files are chosen by their names for the platform the
+// program is built for, sysname_linux.c reading /proc and
+// sysname_darwin.c asking sysctl, and the name each system's kernel
+// gives itself is in sysname_linux.snello and sysname_darwin.snello.
+package sysname
+
+// Matches reports whether the kernel the program runs on is the one
+// its files were chosen for.
+func Matches() bool { return isKernel(kernel) }
+
+// isKernel reports whether the kernel calls itself name.
+func isKernel(name ref string) bool

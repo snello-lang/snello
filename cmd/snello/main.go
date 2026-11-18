@@ -50,6 +50,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/token"
@@ -157,9 +158,9 @@ func check(path string) int {
 	info := &types.Info{}
 	var err error
 	if dir && !isMain(names[0]) {
-		err = importer.LoadPackage(path, info)
+		err = importer.LoadPackage(path, platform.Host(), info)
 	} else {
-		_, _, err = importer.LoadProgram(names, info)
+		_, _, err = importer.LoadProgram(names, platform.Host(), info)
 	}
 
 	if err != nil {
@@ -310,7 +311,7 @@ func emitSource(path, backend string, debug bool, stderr io.Writer) ([]byte, []l
 
 	warnModule(stderr, names)
 	info := &types.Info{}
-	imp, prog, err := importer.LoadProgram(names, info)
+	imp, prog, err := importer.LoadProgram(names, platform.Host(), info)
 	if err == nil {
 		if err = prog.CheckMain(); err != nil {
 			err = errors.New(path + ": " + err.Error())
@@ -360,7 +361,7 @@ func programFiles(path string, stderr io.Writer) (names []string, dir, ok bool) 
 		return []string{path}, false, true
 	}
 
-	names, err = importer.SourceFiles(path)
+	names, err = importer.SourceFiles(path, platform.Host())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return nil, true, false

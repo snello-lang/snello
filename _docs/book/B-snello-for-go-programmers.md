@@ -16,6 +16,7 @@ The chapters describe Snello on its own terms and name no other language. This a
 | `import "example.com/app/shapes"`, the module path in every import | `import "shapes"`: a directory under the root, or a required name; a module has no path |
 | `go build` in a directory, or `go run file.go` for one file | `snello build DIR`, or `snello build FILE` for one file |
 | A method is declared in the package of its receiver's type | The same |
+| `poll_linux.go`, `poll_arm64.go`, `poll_darwin_arm64.go` are built for their platform alone; `//go:build linux` chooses inside a file; a file named for a system Go knows and the build is not for is left out | The same file names, for `.snello`, `_test.snello`, `.c` and `.h` files, and the same list of words; no build line; a file for a platform Snello does not build for is left out, as Go leaves one out, and a name beginning with `.` or `_` is no file of the package (chapter 2) |
 | Functions implemented in assembly are declared without a body; cgo binds C through `import "C"` and `#cgo LDFLAGS: -lm` comments | A package declares a function without a body and defines it in C beside the package, under the symbol the compiler derives and the header it writes (chapter 15); the main package may not; a system library is `link m` in `snello.mod` |
 
 ## Chapter 3: Basics
