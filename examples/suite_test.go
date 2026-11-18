@@ -24,6 +24,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -97,10 +98,10 @@ func compile(path, backend string) ([]byte, []lower.Binding, error) {
 // the binary.
 func build(dir, name, backend string, src []byte, debug bool, bindings []lower.Binding) (string, []byte, error) {
 	if backend == "llvm" {
-		return llvm.Build(dir, name, src, debug, bindings...)
+		return llvm.Build(dir, name, src, platform.Host(), debug, bindings...)
 	}
 
-	return c.Build(dir, name, src, debug, bindings...)
+	return c.Build(dir, name, src, platform.Host(), debug, bindings...)
 }
 
 // pendingExamples are the programs without an expected output yet, and

@@ -12,7 +12,11 @@
 package platform
 
 import (
+	"errors"
+	"os"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -23,6 +27,20 @@ const (
 	Linux  = "linux"
 	AMD64  = "amd64"
 	ARM64  = "arm64"
+
+	// MacOSMajor and MacOSMinor are the oldest macOS a program built for
+	// darwin runs on, 14.4, the first with the waits on an address the
+	// runtime's scheduler and locks are built on: every macOS build
+	// names it, as its deployment target, so that a binary built with a
+	// later SDK still runs on it.
+	MacOSMajor = 14
+	MacOSMinor = 4
+
+	// sysrootVariable begins the name of the environment variable that
+	// names the system files of a target other than the host, followed
+	// by the target's system and processor, SNELLO_SYSROOT_linux_amd64,
+	// so that one environment names every target's.
+	sysrootVariable = "SNELLO_SYSROOT_"
 
 	// separator parts the elements of a file's name, extension starts
 	// its extension, testSuffix is the last element of a test file's
@@ -35,6 +53,12 @@ const (
 )
 
 var (
+	// systems are the systems Snello builds for and architectures the
+	// processors, each in order, for Targets and the messages that list
+	// them.
+	systems       = []string{Darwin, Linux}
+	architectures = []string{AMD64, ARM64}
+
 	// knownSystems and knownArchitectures are the names a file's name
 	// may end in to say what it is for: every system and processor of
 	// the list the package is modeled on, so that a file for one Snello
@@ -58,6 +82,41 @@ type Target struct {
 	Arch string
 }
 
+// Targets returns every platform Snello builds for, each system's
+// processors in turn: darwin/amd64, darwin/arm64, linux/amd64 and
+// linux/arm64.
+func Targets() []Target {
+	var all []Target
+	for _, system := range systems {
+		for _, arch := range architectures {
+			all = append(all, Target{OS: system, Arch: arch})
+		}
+	}
+
+	return all
+}
+
+// Parse reads a target written as system/processor, linux/arm64, and
+// refuses one Snello does not build for, naming the targets it does.
+func Parse(s string) (Target, error) {
+	system, arch, ok := strings.Cut(s, targetSeparator)
+	t := Target{OS: system, Arch: arch}
+	if !ok || system == "" || arch == "" || strings.Contains(arch, targetSeparator) {
+		return Target{}, errors.New("malformed target " + strconv.Quote(s) + ": a target is SYSTEM/PROCESSOR, linux/arm64")
+	}
+
+	if !slices.Contains(Targets(), t) {
+		names := make([]string, 0, len(Targets()))
+		for _, t := range Targets() {
+			names = append(names, t.String())
+		}
+
+		return Target{}, errors.New("unknown target " + s + ": the targets are " + strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1])
+	}
+
+	return t, nil
+}
+
 // Host returns the platform the compiler runs on.
 func Host() Target {
 	return Target{OS: runtime.GOOS, Arch: runtime.GOARCH}
@@ -66,6 +125,43 @@ func Host() Target {
 // String writes the target as system/processor, linux/arm64.
 func (t Target) String() string {
 	return t.OS + targetSeparator + t.Arch
+}
+
+// Triple returns the target triple clang and LLVM name the platform
+// by, the processor, the vendor and the system, with the oldest macOS
+// a darwin program runs on: arm64-apple-macosx14.4 for darwin/arm64,
+// x86_64-unknown-linux-gnu for linux/amd64.
+func (t Target) Triple() string {
+	cpu := "x86_64"
+	if t.Arch == ARM64 {
+		cpu = "aarch64"
+	}
+
+	if t.OS == Darwin {
+		if t.Arch == ARM64 {
+			cpu = "arm64"
+		}
+
+		return cpu + "-apple-macosx" + strconv.Itoa(MacOSMajor) + "." + strconv.Itoa(MacOSMinor)
+	}
+
+	return cpu + "-unknown-linux-gnu"
+}
+
+// Sysroot returns the directory holding the target's system files, its
+// C library's headers and libraries, which a build for a target other
+// than the host links against: the directory the environment variable
+// SNELLO_SYSROOT_<system>_<processor> names, or "" when it is not set,
+// for the C compiler's own, which a system's packages for building
+// for another processor fill.
+func (t Target) Sysroot() string {
+	return os.Getenv(t.SysrootVariable())
+}
+
+// SysrootVariable returns the name of the environment variable that
+// names the target's system files, SNELLO_SYSROOT_linux_amd64.
+func (t Target) SysrootVariable() string {
+	return sysrootVariable + t.OS + separator + t.Arch
 }
 
 // Builds reports whether the file named name, a base name, is built

@@ -101,6 +101,26 @@ func TestBoundLibrary(t *testing.T) {
 	}
 }
 
+// TestBoundUnmeasured leaves a task unbounded that calls into the C
+// library of a system and processor its stacks were never measured on,
+// macOS on x86-64, a thread-local's accessor among the calls, and
+// bounds the same calls on macOS on arm64, where they were.
+func TestBoundUnmeasured(t *testing.T) {
+	for _, c := range []call{{kind: library, target: "malloc"}, {kind: threadLocal}} {
+		img := image(amd64, base(0), fn("run", 10, c))
+		img.os = darwin
+		if b := img.Bound("run", "base", 0, Options{}); b.Known() || !strings.Contains(b.Reason, "not measured on darwin/amd64") {
+			t.Errorf("%+v on darwin/amd64: got %+v", c, b)
+		}
+
+		img = image(arm64, base(0), fn("run", 10, c))
+		img.os = darwin
+		if b := img.Bound("run", "base", 0, Options{}); !b.Known() {
+			t.Errorf("%+v on darwin/arm64: got %+v", c, b)
+		}
+	}
+}
+
 func TestBoundUnbounded(t *testing.T) {
 	for _, c := range []struct {
 		name string

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/runtime"
 )
 
@@ -31,6 +32,17 @@ int render(const int *xs, int n) { return at(xs, n, 5); }
 int main(void) { int xs[3] = { 0 }; return render(xs, 3); }
 `
 
+// between is C with a function of no debugging information, as the
+// runtime's are in a release build, between two functions of the
+// program in one section, whose line table runs on across it.
+const between = `#line 10 "grid.snello"
+__attribute__((noinline)) int first(int x) { return x + 1; }
+#line 1 "<generated>"
+__attribute__((nodebug, noinline)) int helper(int x) { return x * 3; }
+#line 30 "grid.snello"
+__attribute__((noinline)) int last(int x) { return helper(x) + first(x); }
+`
+
 // TestTableAndPatch reads the table of a compiled object and writes its
 // anchors into the linked binary: the table has an anchor for each
 // function, a frame of at at its line and of render at its own, and
@@ -38,37 +50,9 @@ int main(void) { int xs[3] = { 0 }; return render(xs, 3); }
 // functions' addresses in the binary, in order of address, and the
 // reference word holds its own address.
 func TestTableAndPatch(t *testing.T) {
-	cc := os.Getenv("CC")
-	if cc == "" {
-		cc = "cc"
-	}
-
-	if _, err := exec.LookPath(cc); err != nil {
-		t.Skip("no C compiler")
-	}
-
-	dir := t.TempDir()
-	for name, data := range runtime.Files() {
-		if strings.HasSuffix(name, ".h") {
-			if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
+	cc, dir := compilerAndHeaders(t)
 	compile := func(name, src string, flags ...string) string {
-		file := filepath.Join(dir, name+".c")
-		if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		obj := filepath.Join(dir, name+".o")
-		args := append(append([]string{"-std=c11", "-O1", "-g1", "-fno-omit-frame-pointer", "-I", dir}, flags...), "-c", "-o", obj, file)
-		if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
-
-		return obj
+		return compileC(t, cc, dir, name, src, flags...)
 	}
 
 	// A debug build's object: unoptimized, with every variable, type and
@@ -135,7 +119,7 @@ func TestTableAndPatch(t *testing.T) {
 		t.Errorf("the generated main has a frame:\n%q", text)
 	}
 
-	object, err := Object(table)
+	object, err := Object(table, platform.Host())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,4 +172,98 @@ func TestTableAndPatch(t *testing.T) {
 	if got := binary.LittleEndian.Uint64(data[header:]); got != addresses[tableSymbol] {
 		t.Errorf("the reference holds %#x, the table's address is %#x", got, addresses[tableSymbol])
 	}
+}
+
+// TestFunctionWithoutLines holds a function the debugging information
+// says nothing of to no frame, beside two functions of the program, in
+// one text section, where the line rows of the function before it reach
+// over its code, and in a section of each function's own, every one at
+// address zero in the object, as LLVM's linker leaves the link-time
+// optimizer's object: its anchor has no rows, so that a walk passing
+// through a frame of it shows nothing for it, while the functions on
+// either side keep theirs.
+func TestFunctionWithoutLines(t *testing.T) {
+	cc, dir := compilerAndHeaders(t)
+	var elf []string // an ELF object, which a Mac's clang writes for Linux
+	if platform.Host().OS == platform.Darwin {
+		elf = []string{"--target=" + platform.Target{OS: platform.Linux, Arch: platform.Host().Arch}.Triple()}
+	}
+
+	for _, sections := range []string{"-fno-function-sections", "-ffunction-sections"} {
+		obj := compileC(t, cc, dir, "between", between, append([]string{"-O0", "-g", sections}, elf...)...)
+		checkWithoutLines(t, sections, obj)
+	}
+}
+
+// checkWithoutLines checks the table of obj, the between program
+// compiled with the flag named: helper has no rows, first and last some.
+func checkWithoutLines(t *testing.T, flag, obj string) {
+	t.Helper()
+	table, layout, err := Table(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var h header
+	if err := binary.Read(bytes.NewReader(table), binary.LittleEndian, &h); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := map[string]uint32{}
+	for i, name := range layout.Anchors {
+		record := table[headerBytes+uint64(h.Anchors)+uint64(i)*anchorBytes:]
+		rows[name] = binary.LittleEndian.Uint32(record[anchorsField+2*offsetBytes:])
+	}
+
+	if rows["helper"] != 0 {
+		t.Errorf("%s: helper, with no debugging information, has %d rows: another function's reached over it", flag, rows["helper"])
+	}
+
+	if rows["first"] == 0 || rows["last"] == 0 {
+		t.Errorf("%s: first and last have %d and %d rows, want some each", flag, rows["first"], rows["last"])
+	}
+}
+
+// compilerAndHeaders returns the C compiler, CC or cc, and a directory
+// holding the runtime's headers, or skips the test without a compiler.
+func compilerAndHeaders(t *testing.T) (string, string) {
+	t.Helper()
+	cc := os.Getenv("CC")
+	if cc == "" {
+		cc = "cc"
+	}
+
+	if _, err := exec.LookPath(cc); err != nil {
+		t.Skip("no C compiler")
+	}
+
+	dir := t.TempDir()
+	for name, data := range runtime.Files() {
+		if strings.HasSuffix(name, ".h") {
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	return cc, dir
+}
+
+// compileC compiles the C src, as name.c in dir, to an object with cc,
+// optimized a little and with line tables unless flags say otherwise,
+// and returns the object's path.
+func compileC(t *testing.T, cc, dir, name, src string, flags ...string) string {
+	t.Helper()
+	file := filepath.Join(dir, name+".c")
+	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	obj := filepath.Join(dir, name+".o")
+	args := append(append([]string{"-std=c11", "-O1", "-g1", "-fno-omit-frame-pointer", "-I", dir}, flags...), "-c", "-o", obj, file)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	return obj
 }

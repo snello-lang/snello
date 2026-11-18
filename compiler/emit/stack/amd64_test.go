@@ -37,6 +37,62 @@ func TestAmd64Frame(t *testing.T) {
 	}
 }
 
+// TestAmd64LLVM reads the frame of TestAmd64Frame and calls as LLVM's
+// objdump, a Mac's, prints them: a size suffix on every operation, a
+// space after each comma, a signed mask and 0x before an address, to
+// the same reading GNU objdump's text gives.
+func TestAmd64LLVM(t *testing.T) {
+	img := decodeAmd64(t, `0000000000401126 <run>:
+  401126:      	pushq	%rbp
+  401127:      	movq	%rsp, %rbp
+  40112a:      	pushq	%rbx
+  40112b:      	subq	$0x28, %rsp
+  40112f:      	andq	$-0x10, %rsp
+  401133:      	leaq	-0x18(%rsp), %rsp
+  401138:      	callq	0x401030 <malloc@plt>
+  40113d:      	callq	0x401200 <leaf>
+  401142:      	callq	*%rax
+  401144:      	addq	$0x28, %rsp
+  401148:      	leaq	-0x8(%rbp), %rsp
+  40114c:      	popq	%rbx
+  40114d:      	movq	%rbp, %rsp
+  401150:      	leave
+  401151:      	retq
+
+0000000000401200 <leaf>:
+  401200:      	retq
+`)
+	f := img.functions["run"]
+	if f.frame != 8+8+0x28+15+0x18 || f.unknown != "" || f.setsSP {
+		t.Fatalf("got %+v", f)
+	}
+
+	if got := kinds(f); got != "lib:malloc leaf *" {
+		t.Fatalf("calls %q", got)
+	}
+}
+
+// TestAmd64Otool reads otool's x86-64 listing: a call of a library's
+// function through its stub, whose note follows "##", and the call that
+// reaches a thread-local variable through the descriptor lea loads,
+// which is the system's accessor, not a call through a pointer.
+func TestAmd64Otool(t *testing.T) {
+	img := &Image{arch: amd64, os: darwin, functions: map[string]*function{}, cLibrary: map[string]bool{"_abort": true}, tlvNames: map[string]bool{"_current": true}}
+	img.read([]byte(`_run:
+0000000100005550	pushq	%rax
+0000000100005551	leaq	_current(%rip), %rdi
+0000000100005558	callq	*(%rdi)
+000000010000555a	leaq	_other(%rip), %rdi
+0000000100005561	callq	*(%rdi)
+0000000100005563	callq	0x10000b92c                     ## symbol stub for: _abort
+0000000100005568	popq	%rcx
+0000000100005569	retq
+`), [2]uint64{})
+	if got := kinds(img.functions["_run"]); got != "tlv * lib:_abort" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestAmd64Calls(t *testing.T) {
 	img := decodeAmd64(t, `0000000000401126 <run>:
   401126:	callq  401030 <malloc@plt>
@@ -79,6 +135,7 @@ func TestAmd64Plain(t *testing.T) {
 		{"bnd jmp 401000 <x>", "jmp", "401000 <x>"},
 		{"callq 401000 <x>", "call", "401000 <x>"},
 		{"pushq %rbp", "push", "%rbp"},
+		{"subq $0x38, %rsp", "sub", "$0x38,%rsp"},
 	} {
 		parts := strings.SplitN(c.in, " ", 2)
 		got := amd64Plain(inst{op: parts[0], args: parts[1]})

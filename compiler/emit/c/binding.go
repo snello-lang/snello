@@ -8,15 +8,13 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 )
 
 const (
-	linux       = "linux"      // the system whose links bindNow is for
-	darwin      = "darwin"     // the system whose linker keeps the optimized object through -object_path_lto
 	mathLibrary = "-lm"        // the C library's mathematics, a library of its own on Linux
 	bindNow     = "-Wl,-z,now" // binds every import as the program starts
 )
@@ -87,9 +85,9 @@ func BindingSources(dir string, bindings []lower.Binding) ([]string, error) {
 // the program imports as it starts, not at its first call, so that no
 // call runs the dynamic linker's resolver on a task's stack, which the
 // bound of the stack a task can use does not count. macOS binds every
-// import as the program starts already.
-func SystemLinkFlags() []string {
-	if goruntime.GOOS == linux {
+// import as the program starts already. t is the target linked for.
+func SystemLinkFlags(t platform.Target) []string {
+	if t.OS == platform.Linux {
 		return []string{mathLibrary, bindNow}
 	}
 

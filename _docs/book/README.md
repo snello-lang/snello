@@ -9,7 +9,7 @@ The book is written as the language is built: a chapter exists as soon as its fe
 | Chapter | What it covers |
 |---|---|
 | [1. Introduction](01-introduction.md) | what Snello is, and core Snello as `snello build` compiles it |
-| [2. Getting started](02-getting-started.md) | `snello build`, `-debug` and the two backends; packages of the program's own through `snello.mod`, and a file for one platform, `poll_linux.snello`; tests with `snello test` |
+| [2. Getting started](02-getting-started.md) | `snello build`, `-debug` and the two backends; building for another platform with `-target`; packages of the program's own through `snello.mod`, and a file for one platform, `poll_linux.snello`; tests with `snello test` |
 | [3. Basics](03-basics.md) | variables, constants, the number types, functions, control flow, `match` on conditions |
 | [4. Structs, enums and match](04-structs-enums-match.md) | structs and the positional literal; enums, their methods, traits, derived order, printing and type parameters; patterns |
 | [5. Ownership: moves, `Copy`, `take`, `Drop`](05-ownership.md) | moves, `Copy` checked against the fields, a moved variable given back by assignment, drops at scope exit, return and panic, and what no collector buys, measured by `bench/memory.snello` |

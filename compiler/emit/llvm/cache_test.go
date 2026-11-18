@@ -14,6 +14,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -35,7 +36,7 @@ func TestRuntimeCache(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		bin, out, err := Build(t.TempDir(), "cached", module, false)
+		bin, out, err := Build(t.TempDir(), "cached", module, platform.Host(), false)
 		if err != nil {
 			t.Fatalf("release build %d: %v\n%s", i, err, out)
 		}
@@ -69,11 +70,11 @@ func TestRuntimeCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, out, err := c.Build(t.TempDir(), "cached", csrc, true); err != nil {
+	if _, out, err := c.Build(t.TempDir(), "cached", csrc, platform.Host(), true); err != nil {
 		t.Fatalf("the C backend's debug build: %v\n%s", err, out)
 	}
 
-	if _, out, err := Build(t.TempDir(), "cached", module, true); err != nil {
+	if _, out, err := Build(t.TempDir(), "cached", module, platform.Host(), true); err != nil {
 		t.Fatalf("debug build: %v\n%s", err, out)
 	}
 

@@ -19,6 +19,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -381,7 +382,7 @@ func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
 // runtime and the C side of the packages that bind C, and runs it there.
 func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings ...lower.Binding) (string, string, int) {
 	t.Helper()
-	bin, out, err := Build(dir, name, csrc, debug, bindings...)
+	bin, out, err := Build(dir, name, csrc, platform.Host(), debug, bindings...)
 	if err != nil {
 		t.Fatalf("%v\n%s\n--- emitted C ---\n%s", err, out, csrc)
 	}

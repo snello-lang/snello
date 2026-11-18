@@ -54,7 +54,7 @@ func TestBuilds(t *testing.T) {
 // processor Snello does not build for, for every target, and its C.
 func TestBuildsAnotherPlatform(t *testing.T) {
 	for _, name := range []string{"poll_windows.snello", "poll_386.snello", "poll_freebsd_amd64.snello", "poll_linux_riscv64.snello", "poll_ios_test.snello", "shim_windows.c", "cpu_ppc64le.c"} {
-		for _, target := range []Target{{OS: Darwin, Arch: AMD64}, {OS: Darwin, Arch: ARM64}, {OS: Linux, Arch: AMD64}, {OS: Linux, Arch: ARM64}} {
+		for _, target := range Targets() {
 			if target.Builds(name) {
 				t.Errorf("%s built for %s", name, target)
 			}
@@ -70,5 +70,62 @@ func TestHost(t *testing.T) {
 
 	if got, want := (Target{OS: Linux, Arch: ARM64}).String(), "linux/arm64"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestParse(t *testing.T) {
+	for _, target := range Targets() {
+		if got, err := Parse(target.String()); err != nil || got != target {
+			t.Errorf("Parse(%q) = %v, %v", target, got, err)
+		}
+	}
+
+	for _, c := range []struct{ in, want string }{
+		{"linux", `malformed target "linux": a target is SYSTEM/PROCESSOR, linux/arm64`},
+		{"linux/", `malformed target "linux/": a target is SYSTEM/PROCESSOR, linux/arm64`},
+		{"/arm64", `malformed target "/arm64": a target is SYSTEM/PROCESSOR, linux/arm64`},
+		{"linux/arm64/v8", `malformed target "linux/arm64/v8": a target is SYSTEM/PROCESSOR, linux/arm64`},
+		{"windows/amd64", "unknown target windows/amd64: the targets are darwin/amd64, darwin/arm64, linux/amd64 and linux/arm64"},
+		{"linux/386", "unknown target linux/386: the targets are darwin/amd64, darwin/arm64, linux/amd64 and linux/arm64"},
+	} {
+		if _, err := Parse(c.in); err == nil || err.Error() != c.want {
+			t.Errorf("Parse(%q): got %v, want %q", c.in, err, c.want)
+		}
+	}
+}
+
+func TestTriple(t *testing.T) {
+	want := map[Target]string{
+		{OS: Darwin, Arch: AMD64}: "x86_64-apple-macosx14.4",
+		{OS: Darwin, Arch: ARM64}: "arm64-apple-macosx14.4",
+		{OS: Linux, Arch: AMD64}:  "x86_64-unknown-linux-gnu",
+		{OS: Linux, Arch: ARM64}:  "aarch64-unknown-linux-gnu",
+	}
+
+	if len(Targets()) != len(want) {
+		t.Fatalf("Targets() = %v, want the four of %v", Targets(), want)
+	}
+
+	for _, target := range Targets() {
+		if got := target.Triple(); got != want[target] {
+			t.Errorf("%s: Triple() = %q, want %q", target, got, want[target])
+		}
+	}
+}
+
+func TestSysroot(t *testing.T) {
+	target := Target{OS: Linux, Arch: AMD64}
+	if got, want := target.SysrootVariable(), "SNELLO_SYSROOT_linux_amd64"; got != want {
+		t.Errorf("SysrootVariable() = %q, want %q", got, want)
+	}
+
+	t.Setenv("SNELLO_SYSROOT_linux_amd64", "/opt/sysroot/amd64")
+	t.Setenv("SNELLO_SYSROOT_linux_arm64", "")
+	if got := target.Sysroot(); got != "/opt/sysroot/amd64" {
+		t.Errorf("Sysroot() = %q, want the variable's", got)
+	}
+
+	if got := (Target{OS: Linux, Arch: ARM64}).Sysroot(); got != "" {
+		t.Errorf("an unset variable's Sysroot() = %q, want none", got)
 	}
 }

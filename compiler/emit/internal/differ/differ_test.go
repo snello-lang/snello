@@ -29,6 +29,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -217,9 +218,9 @@ func run(t *testing.T, name, src, backend string, debug bool) (string, int) {
 	var bin string
 	var out []byte
 	if backend == "llvm" {
-		bin, out, err = llvm.Build(dir, name, emitted, debug)
+		bin, out, err = llvm.Build(dir, name, emitted, platform.Host(), debug)
 	} else {
-		bin, out, err = c.Build(dir, name, emitted, debug)
+		bin, out, err = c.Build(dir, name, emitted, platform.Host(), debug)
 	}
 
 	if err != nil {

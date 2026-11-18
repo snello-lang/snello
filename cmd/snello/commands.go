@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/version"
 )
 
@@ -51,6 +52,7 @@ const (
 	// a test program runs each test once unless -count says otherwise.
 	backendFlag  = "backend"
 	debugFlag    = "debug"
+	targetFlag   = "target"
 	verboseFlag  = "v"
 	failfastFlag = "failfast"
 	shuffleFlag  = "shuffle"
@@ -93,6 +95,7 @@ const (
 	// word in backquotes is the value's name in the help.
 	backendUsage = "the backend, `llvm|c`; c is the reference backend"
 	debugUsage   = "build for a debugger, unoptimized, with the runtime's checks"
+	targetUsage  = "the platform to build for, `SYSTEM/PROCESSOR`, linux/arm64; the host's when not given"
 )
 
 // A testFlag is a flag test passes on to the program it builds, as it
@@ -307,20 +310,49 @@ func checkBackend(name, backend string, stderr io.Writer) bool {
 }
 
 // declareCompile declares the flags of build, or of emit, both named
-// by name, the backend and a build for a debugger, and the work that
-// hands them to work, build's or emit's.
-func declareCompile(name string, work func(path, backend string, debug bool) int) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+// by name, the backend, a build for a debugger and the target, and the
+// work that hands them to work, build's or emit's.
+func declareCompile(name string, work func(path, backend string, target platform.Target, debug bool) int) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	return func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 		backend := declareBackend(fs)
 		debug := fs.Bool(debugFlag, false, debugUsage)
+		target := declareTarget(fs)
 		return func(args []string) int {
 			if !checkBackend(name, *backend, stderr) {
 				return exitUsage
 			}
 
-			return work(args[0], *backend, *debug)
+			t, ok := checkTarget(name, *target, stderr)
+			if !ok {
+				return exitUsage
+			}
+
+			return work(args[0], *backend, t, *debug)
 		}
 	}
+}
+
+// declareTarget declares the target flag on fs, which build, emit and
+// check take, and returns where it is parsed to: empty for the host.
+func declareTarget(fs *flag.FlagSet) *string {
+	return fs.String(targetFlag, "", targetUsage)
+}
+
+// checkTarget reads the target named, the host's when it is empty,
+// and says on stderr what the command named does when it names none
+// Snello builds for.
+func checkTarget(name, target string, stderr io.Writer) (platform.Target, bool) {
+	if target == "" {
+		return platform.Host(), true
+	}
+
+	t, err := platform.Parse(target)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s %s: %v\n", program, name, err)
+		return platform.Target{}, false
+	}
+
+	return t, true
 }
 
 // declareBackend declares the backend flag on fs, which build, emit,
@@ -329,9 +361,18 @@ func declareBackend(fs *flag.FlagSet) *string {
 	return fs.String(backendFlag, lower.LLVMBackend, backendUsage)
 }
 
-// declareCheck declares check, which has no flags.
+// declareCheck declares the flag of check, the target, whose files it
+// checks.
 func declareCheck(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
-	return func(args []string) int { return check(args[0]) }
+	target := declareTarget(fs)
+	return func(args []string) int {
+		t, ok := checkTarget(checkCommand, *target, stderr)
+		if !ok {
+			return exitUsage
+		}
+
+		return check(args[0], t)
+	}
 }
 
 // declareDebug declares the flag of debug, the backend; the arguments

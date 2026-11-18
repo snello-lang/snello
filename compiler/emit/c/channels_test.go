@@ -11,6 +11,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -37,7 +38,7 @@ func TestChannelsFlat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bin, out, err := Build(t.TempDir(), "churn", csrc, false)
+	bin, out, err := Build(t.TempDir(), "churn", csrc, platform.Host(), false)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

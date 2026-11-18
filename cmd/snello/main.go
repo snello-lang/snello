@@ -148,8 +148,8 @@ func parse(path string) int {
 // no snello line.
 // A directory whose package is not main is checked as the library it
 // is, so that its binding to C is not refused as a program's would be.
-func check(path string) int {
-	names, dir, ok := programFiles(path, os.Stderr)
+func check(path string, target platform.Target) int {
+	names, dir, ok := programFiles(path, target, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -158,9 +158,9 @@ func check(path string) int {
 	info := &types.Info{}
 	var err error
 	if dir && !isMain(names[0]) {
-		err = importer.LoadPackage(path, platform.Host(), info)
+		err = importer.LoadPackage(path, target, info)
 	} else {
-		_, _, err = importer.LoadProgram(names, platform.Host(), info)
+		_, _, err = importer.LoadProgram(names, target, info)
 	}
 
 	if err != nil {
@@ -211,8 +211,8 @@ func isMain(name string) bool {
 
 // emit prints what build would compile: the C source, or the IR
 // module, for reading.
-func emit(path, backend string, debug bool) int {
-	src, _, ok := emitSource(path, backend, debug, os.Stderr)
+func emit(path, backend string, target platform.Target, debug bool) int {
+	src, _, ok := emitSource(path, backend, target, debug, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -224,8 +224,8 @@ func emit(path, backend string, debug bool) int {
 // build compiles a program, a file or a directory, to a native binary
 // named after it, in the current directory, through the backend asked
 // for; debug asks for the runtime's checks.
-func build(path, backend string, debug bool) int {
-	bin, name, work, ok := compile(path, backend, debug, os.Stderr)
+func build(path, backend string, target platform.Target, debug bool) int {
+	bin, name, work, ok := compile(path, backend, target, debug, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -238,7 +238,7 @@ func build(path, backend string, debug bool) int {
 	}
 
 	if err == nil && debug {
-		out, err = c.Bundle(bin, name) // before the build's directory, which holds the objects the bundle is gathered from, is removed
+		out, err = c.Bundle(bin, name, target) // before the build's directory, which holds the objects the bundle is gathered from, is removed
 	}
 
 	if err != nil {
@@ -256,13 +256,13 @@ func build(path, backend string, debug bool) int {
 // the runtime's checks. The directory is made once the program has
 // loaded, and is guarded as workDir says, so that a build leaves
 // nothing behind however it ends.
-func compile(path, backend string, debug bool, stderr io.Writer) (bin, name string, work *workDir, ok bool) {
-	_, isDir, ok := programFiles(path, stderr)
+func compile(path, backend string, target platform.Target, debug bool, stderr io.Writer) (bin, name string, work *workDir, ok bool) {
+	_, isDir, ok := programFiles(path, target, stderr)
 	if !ok {
 		return "", "", nil, false
 	}
 
-	src, bindings, ok := emitSource(path, backend, debug, stderr)
+	src, bindings, ok := emitSource(path, backend, target, debug, stderr)
 	if !ok {
 		return "", "", nil, false
 	}
@@ -276,9 +276,9 @@ func compile(path, backend string, debug bool, stderr io.Writer) (bin, name stri
 	name = programName(path, isDir)
 	var out []byte
 	if backend == lower.LLVMBackend {
-		bin, out, err = llvm.Build(work.path, name, src, debug, bindings...)
+		bin, out, err = llvm.Build(work.path, name, src, target, debug, bindings...)
 	} else {
-		bin, out, err = c.Build(work.path, name, src, debug, bindings...)
+		bin, out, err = c.Build(work.path, name, src, target, debug, bindings...)
 	}
 
 	if err != nil {
@@ -303,15 +303,15 @@ func compile(path, backend string, debug bool, stderr io.Writer) (bin, name stri
 // only check takes one. The LLVM backend emits a debug build's checks
 // itself, so it is told; the C backend's are a flag of the C compiler.
 // The errors and the module's warning go to stderr.
-func emitSource(path, backend string, debug bool, stderr io.Writer) ([]byte, []lower.Binding, bool) {
-	names, _, ok := programFiles(path, stderr)
+func emitSource(path, backend string, target platform.Target, debug bool, stderr io.Writer) ([]byte, []lower.Binding, bool) {
+	names, _, ok := programFiles(path, target, stderr)
 	if !ok {
 		return nil, nil, false
 	}
 
 	warnModule(stderr, names)
 	info := &types.Info{}
-	imp, prog, err := importer.LoadProgram(names, platform.Host(), info)
+	imp, prog, err := importer.LoadProgram(names, target, info)
 	if err == nil {
 		if err = prog.CheckMain(); err != nil {
 			err = errors.New(path + ": " + err.Error())
@@ -324,7 +324,7 @@ func emitSource(path, backend string, debug bool, stderr io.Writer) ([]byte, []l
 		libs := libraries(imp)
 		bindings = lower.Bindings(info, libs)
 		if backend == lower.LLVMBackend {
-			out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
+			out, err = llvm.EmitFiles(llvm.Config{Debug: debug, Arch: target.Arch, OS: target.OS}, prog.Files, prog.Syntax, info, libs...)
 			if err == nil {
 				out, _ = llvm.Targeted(out) // as build compiles it, so that emit prints the same module; without clang, the module as emitted
 			}
@@ -346,7 +346,7 @@ func emitSource(path, backend string, debug bool, stderr io.Writer) ([]byte, []l
 // end in .snello, or every .snello file of the directory, which must
 // hold one; and whether path is a directory. A failure is reported to
 // stderr.
-func programFiles(path string, stderr io.Writer) (names []string, dir, ok bool) {
+func programFiles(path string, target platform.Target, stderr io.Writer) (names []string, dir, ok bool) {
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -361,7 +361,7 @@ func programFiles(path string, stderr io.Writer) (names []string, dir, ok bool) 
 		return []string{path}, false, true
 	}
 
-	names, err = importer.SourceFiles(path, platform.Host())
+	names, err = importer.SourceFiles(path, target)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return nil, true, false

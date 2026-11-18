@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	goruntime "runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -330,10 +329,11 @@ func machoTable(m *macho.File) (table, error) {
 
 // Replace writes data over the binary at path as replace does, for the
 // trace's table, which the panic's trace package writes before the
-// bounds: signed on macOS, so that the program runs.
+// bounds: signed when it is a macOS binary, a Mach-O file, so that the
+// program runs, whatever system it was built on.
 func Replace(path string, data []byte) error {
 	os_ := linux
-	if goruntime.GOOS == "darwin" {
+	if len(data) >= 4 && binary.LittleEndian.Uint32(data) == macho.Magic64 {
 		os_ = darwin
 	}
 

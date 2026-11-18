@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // runProgram builds the program at path, a file or a directory, through
@@ -25,7 +27,7 @@ import (
 // the program never runs on without the command. debug asks for the
 // runtime's checks.
 func runProgram(path, backend string, debug bool, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, os.Signal) {
-	bin, _, work, ok := compile(path, backend, debug, stderr)
+	bin, _, work, ok := compile(path, backend, platform.Host(), debug, stderr)
 	if !ok {
 		return exitFailure, nil
 	}

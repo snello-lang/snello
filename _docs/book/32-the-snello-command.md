@@ -43,13 +43,13 @@ Both write the line `snello 0.1.0`, the version of the compiler that ran them: t
 
 ## Building and running
 
-`snello build FILE` compiles a program of one file into a binary named after it, in the current directory; `snello build DIR` compiles the program of every `.snello` file in a directory, named after the directory. `-backend c` builds through the C backend, and `-debug` builds for a debugger, unoptimized and with the runtime's checks, which chapter 30 covers.
+`snello build FILE` compiles a program of one file into a binary named after it, in the current directory; `snello build DIR` compiles the program of every `.snello` file in a directory, named after the directory. `-backend c` builds through the C backend, `-debug` builds for a debugger, unoptimized and with the runtime's checks, which chapter 30 covers, and `-target linux/arm64` builds for another platform, which chapter 2 covers.
 
-`snello run FILE|DIR [ARGS]` builds the program into a directory of its own, runs it, and removes the directory, leaving no file behind. It takes build's flags before the program's path; every word after the path is the program's, flags included, `snello run . -n 3`. The program reads the command's input and writes to its output, and its exit code is the command's: 3 for a program that exits with 3, 2 for one that panics, after the panic's trace. A program that does not build exits 1.
+`snello run FILE|DIR [ARGS]` builds the program into a directory of its own, runs it, and removes the directory, leaving no file behind. It takes build's `-backend` and `-debug` before the program's path, and builds for the machine it runs on; every word after the path is the program's, flags included, `snello run . -n 3`. The program reads the command's input and writes to its output, and its exit code is the command's: 3 for a program that exits with 3, 2 for one that panics, after the panic's trace. A program that does not build exits 1.
 
 While the program runs, an interrupt or a quit from the terminal, `Ctrl-C` or `Ctrl-\`, reaches the program, which answers it; `snello run` waits for it to end. A program that an interrupt ends ends `snello run` by the same interrupt, so that a shell running a script of `snello run` lines stops at it rather than go on to the next. A termination or a hangup sent to `snello run` alone is passed on to the program, which is never left running without it.
 
-`snello test DIR` builds the tests of the package in `DIR` and runs them; chapter 16 teaches it. `snello check FILE|DIR` prints what the checker finds, or nothing for a program that is correct, and `snello emit` the IR, or the C, a build compiles.
+`snello test DIR` builds the tests of the package in `DIR` and runs them; chapter 16 teaches it. `snello check FILE|DIR` prints what the checker finds, or nothing for a program that is correct, and `snello emit` the IR, or the C, a build compiles; both take `-target`, for the files and the module a build for that platform compiles.
 
 ## Checking your system
 
@@ -79,7 +79,7 @@ A build, a run or a test that cannot use a compiler says the same line in place 
 
 ## Environment
 
-`CLANG` names the clang to use, and `CC` the C compiler; a message about either says which variable named it. `SNELLO_CACHE` names the directory the compiled runtime is kept in, `off` for none, and `TMPDIR` the directory builds work in.
+`CLANG` names the clang to use, and `CC` the C compiler; a message about either says which variable named it. `SNELLO_CACHE` names the directory the compiled runtime is kept in, `off` for none, and `TMPDIR` the directory builds work in. `SNELLO_SYSROOT_linux_amd64` and `SNELLO_SYSROOT_linux_arm64` name the system files of each Linux target, a sysroot, which a build for it on another system reads (chapter 2).
 
 ## Version
 

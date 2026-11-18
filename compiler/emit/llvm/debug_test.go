@@ -19,6 +19,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -167,11 +168,11 @@ func TestDebugTypesMatchC(t *testing.T) {
 	}
 
 	irDir, cDir := t.TempDir(), t.TempDir()
-	if _, out, err := Build(irDir, "described", module, true); err != nil {
+	if _, out, err := Build(irDir, "described", module, platform.Host(), true); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 
-	if _, out, err := c.Build(cDir, "described", source, true); err != nil {
+	if _, out, err := c.Build(cDir, "described", source, platform.Host(), true); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 

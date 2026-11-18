@@ -461,9 +461,9 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	var bin string
 	var log []byte
 	if backend == lower.LLVMBackend {
-		bin, log, err = llvm.Build(outDir, name, src, false, bindings...)
+		bin, log, err = llvm.Build(outDir, name, src, platform.Host(), false, bindings...)
 	} else {
-		bin, log, err = c.Build(outDir, name, src, false, bindings...)
+		bin, log, err = c.Build(outDir, name, src, platform.Host(), false, bindings...)
 	}
 
 	if missing := (*toolchain.MissingError)(nil); errors.As(err, &missing) {

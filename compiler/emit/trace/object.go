@@ -8,22 +8,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"runtime"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // The object the table is linked from holds one section of data, the
 // table and its parts, and two symbols, the table's and the parts',
 // and no relocation, since the parts hold offsets and no pointer: the
-// compiler writes it itself, in the native format of the system, since
-// a C compiler's run costs a build a fair part of its time for a file
-// of data alone. The constants are the formats' own; the systems and
-// processors are named as Go names them.
+// compiler writes it itself, in the native format of the target's
+// system, since a C compiler's run costs a build a fair part of its
+// time for a file of data alone. The constants are the formats' own.
 const (
-	darwin = "darwin"
-	linux  = "linux"
-	arm64  = "arm64"
-	amd64  = "amd64"
-
 	// A name in a string table ends in a zero byte, and the table begins
 	// with one, the empty name.
 	nameEnd = "\x00"
@@ -53,7 +48,7 @@ const (
 	machoBuildVersion = 0x32
 	machoBuildBytes   = 24
 	machoPlatformMac  = 1
-	machoMinOS        = 0x000e0400 // 14.4, the floor of the runtime's waits on an address
+	machoMinOS        = platform.MacOSMajor<<16 | platform.MacOSMinor<<8 // the oldest macOS a program runs on, as the build names it
 	machoProtAll      = 7
 	machoAlign        = 3 // as a power of two
 	machoAlignBytes   = 8
@@ -101,31 +96,31 @@ const (
 // the version, the system's interface and the padding.
 var elfIdent = []byte{0x7f, 'E', 'L', 'F', elfClass64, elfLittle, elfVersion, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
-// Object writes the native object holding table, the Mach-O of macOS
-// or the ELF of Linux for the processor the compiler runs on, which
-// the program is built for.
-func Object(table []byte) ([]byte, error) {
-	switch runtime.GOOS {
-	case darwin:
-		return machoFile(table)
-	case linux:
-		return elfFile(table)
+// Object writes the native object holding table for the target t, the
+// program's: the Mach-O of macOS or the ELF of Linux, for its
+// processor.
+func Object(table []byte, t platform.Target) ([]byte, error) {
+	switch t.OS {
+	case platform.Darwin:
+		return machoFile(table, t.Arch)
+	case platform.Linux:
+		return elfFile(table, t.Arch)
 	}
 
-	return nil, fmt.Errorf("the table of a panic's trace is not written for %s", runtime.GOOS)
+	return nil, fmt.Errorf("the table of a panic's trace is not written for %s", t.OS)
 }
 
 // machoFile is the Mach-O object: the header, a segment of one data
 // section, the build version, the symbol table, then the section's
-// bytes, the two symbols and their names.
-func machoFile(table []byte) ([]byte, error) {
+// bytes, the two symbols and their names, for the processor arch.
+func machoFile(table []byte, arch string) ([]byte, error) {
 	cpu, sub := uint32(machoArm64), uint32(machoNoSubtype)
-	switch runtime.GOARCH {
-	case arm64:
-	case amd64:
+	switch arch {
+	case platform.ARM64:
+	case platform.AMD64:
 		cpu, sub = machoX86_64, machoX86_64All
 	default:
-		return nil, fmt.Errorf("the table of a panic's trace is not written for %s", runtime.GOARCH)
+		return nil, fmt.Errorf("the table of a panic's trace is not written for %s", arch)
 	}
 
 	commands := machoSegmentBytes + machoSectionBytes + machoBuildBytes + machoSymtabBytes
@@ -154,15 +149,16 @@ func machoFile(table []byte) ([]byte, error) {
 }
 
 // elfFile is the ELF object: the header, the data, the symbol table,
-// the two string tables, then the section headers.
-func elfFile(table []byte) ([]byte, error) {
+// the two string tables, then the section headers, for the processor
+// arch.
+func elfFile(table []byte, arch string) ([]byte, error) {
 	machine := uint16(elfX86_64)
-	switch runtime.GOARCH {
-	case amd64:
-	case arm64:
+	switch arch {
+	case platform.AMD64:
+	case platform.ARM64:
 		machine = elfAarch64
 	default:
-		return nil, fmt.Errorf("the table of a panic's trace is not written for %s", runtime.GOARCH)
+		return nil, fmt.Errorf("the table of a panic's trace is not written for %s", arch)
 	}
 
 	names, tableName, partsName := names(tableSymbol, partsSymbol)

@@ -197,3 +197,35 @@ func TestLoadNotABinary(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// TestDisassembler picks the objdump that reads a processor's ELF code:
+// the system's own for the host's processor on Linux, else GNU's built
+// for the processor, else LLVM's, else the one on the path.
+func TestDisassembler(t *testing.T) {
+	if runtime.GOOS == string(linux) {
+		if got := disassembler(arch(runtime.GOARCH)); got != objdump {
+			t.Errorf("the host's processor: %s, want %s", got, objdump)
+		}
+	}
+
+	other := amd64
+	if runtime.GOARCH == string(amd64) {
+		other = arm64
+	}
+
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if got := disassembler(other); got != objdump {
+		t.Errorf("no objdump for %s: %s, want the path's %s", other, got, objdump)
+	}
+
+	for _, name := range []string{llvmObjdump, elfMachines[other] + objdumpFor} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := disassembler(other); got != name {
+			t.Errorf("with %s on the path: %s", name, got)
+		}
+	}
+}

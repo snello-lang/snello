@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/toolchain"
 )
 
@@ -33,7 +34,7 @@ func TestCacheReuse(t *testing.T) {
 		compiles int
 	}{{false, 1}, {false, 1}, {true, 2}, {true, 2}} {
 		dir := t.TempDir()
-		bin, out, err := Build(dir, "cached", src, want.debug)
+		bin, out, err := Build(dir, "cached", src, platform.Host(), want.debug)
 		if err != nil {
 			t.Fatalf("build %d: %v\n%s", i, err, out)
 		}

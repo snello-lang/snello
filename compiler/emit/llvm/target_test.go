@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // targetAttributes keeps, of the attributes clang wrote for a
@@ -207,7 +209,7 @@ func TestRuntimeInlined(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		bin, out, err := Build(t.TempDir(), "inlined", module, debug)
+		bin, out, err := Build(t.TempDir(), "inlined", module, platform.Host(), debug)
 		if err != nil {
 			if _, missing := exec.LookPath(Compiler()); missing != nil {
 				t.Skip("no clang")

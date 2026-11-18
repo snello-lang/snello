@@ -18,6 +18,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // debuggerTimeout bounds a debugger's batch session, which a debugger
@@ -177,7 +178,7 @@ func TestDebugger(t *testing.T) {
 			}
 
 			t.Chdir(dir)
-			if code := build(src, b.backend, true); code != 0 {
+			if code := build(src, b.backend, platform.Host(), true); code != 0 {
 				t.Fatalf("snello build -debug exited %d", code)
 			}
 

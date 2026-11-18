@@ -7,6 +7,8 @@ package llvm
 import (
 	"errors"
 	"runtime"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // A call into the C runtime passes a value of three words, a string or
@@ -50,23 +52,15 @@ func hostArch(arch string) string {
 
 // triple writes the target triple of the module, which names the
 // processor and the system the module is compiled for, so that clang
-// lays the module out for them whatever machine it runs on. The data
-// layout is left to clang, which supplies the target's own.
+// lays the module out for them whatever machine it runs on: the host's
+// for an empty name. The data layout is left to clang, which supplies
+// the target's own.
 func triple(arch, os string) string {
 	if os == "" {
 		os = runtime.GOOS
 	}
 
-	cpu := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[hostArch(arch)]
-	if os == "darwin" {
-		if cpu == "aarch64" {
-			cpu = "arm64"
-		}
-
-		return cpu + "-apple-macosx"
-	}
-
-	return cpu + "-unknown-linux-gnu"
+	return platform.Target{OS: os, Arch: hostArch(arch)}.Triple()
 }
 
 // result writes the parameter through which a three-word struct of the

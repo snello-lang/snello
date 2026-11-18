@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 )
@@ -24,10 +25,15 @@ const (
 
 	// objdump is the disassembler on Linux, and objdumpText and
 	// objdumpNoBytes the options that have it print the code without
-	// each instruction's bytes.
+	// each instruction's bytes; llvmObjdump is LLVM's, which reads every
+	// processor's code, and objdumpFor ends the name of GNU's for one
+	// processor, x86_64-linux-gnu-objdump, which a system's cross
+	// binutils install.
 	objdump        = "objdump"
 	objdumpText    = "-d"
 	objdumpNoBytes = "--no-show-raw-insn"
+	llvmObjdump    = "llvm-objdump"
+	objdumpFor     = "-linux-gnu-objdump"
 
 	// threadVars is the section of a Mach-O binary that holds the
 	// descriptors of its thread-local variables.
@@ -72,10 +78,15 @@ const (
 // call into any other shared library makes a task unbounded.
 var cLibraries = []string{"/usr/lib/libSystem", "libc.so", "libm.so", "libpthread.so", "libdl.so", "librt.so", "ld-linux"}
 
+// elfMachines are the processors as GNU's tools name them, which begins
+// the name of the objdump built for one.
+var elfMachines = map[arch]string{amd64: "x86_64", arm64: "aarch64"}
+
 // noteSeparators are what the disassemblers put between an
-// instruction's operands and their note: otool's ";", objdump's "//"
-// on arm64 and "#" on x86-64, after a space or a tab.
-var noteSeparators = []string{" ; ", "\t; ", " // ", "\t// ", " # ", "\t# "}
+// instruction's operands and their note: otool's ";" on arm64 and "##"
+// on x86-64, objdump's "//" on arm64 and "#" on x86-64, after a space
+// or a tab; "##" before "#", which begins it.
+var noteSeparators = []string{" ; ", "\t; ", " // ", "\t// ", " ## ", "\t## ", " # ", "\t# "}
 
 // headings are the first words of the lines of a listing that are not
 // instructions: otool's section line, objdump's file and section lines.
@@ -133,6 +144,7 @@ func Load(path string) (*Image, error) {
 
 		if s := m.Section(threadVars); s != nil {
 			tlv = [2]uint64{s.Addr, s.Addr + s.Size}
+			img.tlvNames = descriptors(m, tlv)
 		}
 
 		if s := m.Section(lazyPointers); s != nil && s.Size > 0 {
@@ -166,13 +178,32 @@ func Load(path string) (*Image, error) {
 		return nil, fmt.Errorf("%s: neither Mach-O nor ELF", path)
 	}
 
-	out, err := disassemble(img.os, path)
+	out, err := disassemble(img.os, img.arch, path)
 	if err != nil {
 		return nil, err
 	}
 
 	img.read(out, tlv)
 	return img, nil
+}
+
+// descriptors returns the names of the symbols of m inside tlv, the
+// section of thread-local descriptors, as otool writes them: a load of
+// one's address is how x86-64 code on macOS reaches a thread-local
+// variable, through the function the descriptor's first word holds.
+func descriptors(m *macho.File, tlv [2]uint64) map[string]bool {
+	names := map[string]bool{}
+	if m.Symtab == nil {
+		return names
+	}
+
+	for _, s := range m.Symtab.Syms {
+		if s.Value >= tlv[0] && s.Value < tlv[1] {
+			names[s.Name] = true
+		}
+	}
+
+	return names
 }
 
 // elfBindsNow reports whether the binary has the dynamic linker bind
@@ -229,13 +260,15 @@ func isCLibrary(lib string) bool {
 	return false
 }
 
-// disassemble runs the system's disassembler over the binary's code.
-func disassemble(os system, path string) ([]byte, error) {
+// disassemble runs the system's disassembler over the binary's code:
+// otool for macOS's, and for Linux's the objdump that reads the
+// binary's processor, as disassembler picks it.
+func disassemble(os system, a arch, path string) ([]byte, error) {
 	var cmd *exec.Cmd
 	if os == darwin {
 		cmd = exec.Command(otool, otoolText, path)
 	} else {
-		cmd = exec.Command(objdump, objdumpText, objdumpNoBytes, path)
+		cmd = exec.Command(disassembler(a), objdumpText, objdumpNoBytes, path)
 	}
 
 	var stderr bytes.Buffer
@@ -246,6 +279,25 @@ func disassemble(os system, path string) ([]byte, error) {
 	}
 
 	return out, nil
+}
+
+// disassembler returns the objdump that reads ELF code of the processor
+// a: the system's own on a Linux of that processor; elsewhere GNU's
+// built for a, which a system's cross binutils install, LLVM's, which
+// reads every processor's, or else the one on the path, which on macOS
+// is LLVM's.
+func disassembler(a arch) string {
+	if goruntime.GOOS == string(linux) && goruntime.GOARCH == string(a) {
+		return objdump
+	}
+
+	for _, name := range []string{elfMachines[a] + objdumpFor, llvmObjdump} {
+		if _, err := exec.LookPath(name); err == nil {
+			return name
+		}
+	}
+
+	return objdump
 }
 
 // read splits the disassembler's text into functions and decodes each

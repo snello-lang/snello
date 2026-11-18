@@ -5,13 +5,13 @@
 package c
 
 import (
-	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // TestHeader writes the header of the bound example's package and
@@ -58,14 +58,16 @@ func TestHeader(t *testing.T) {
 
 // TestSystemLinkFlags checks every link ends with the mathematics, and
 // binds every import as the program starts where the system would wait
-// for its first call.
+// for its first call, for every target.
 func TestSystemLinkFlags(t *testing.T) {
-	flags := SystemLinkFlags()
-	if !slices.Contains(flags, mathLibrary) {
-		t.Errorf("flags %v, want %s", flags, mathLibrary)
-	}
+	for _, target := range platform.Targets() {
+		flags := SystemLinkFlags(target)
+		if !slices.Contains(flags, mathLibrary) {
+			t.Errorf("%s: flags %v, want %s", target, flags, mathLibrary)
+		}
 
-	if now := slices.Contains(flags, bindNow); now != (goruntime.GOOS == linux) {
-		t.Errorf("flags %v on %s: %s is for Linux alone", flags, goruntime.GOOS, bindNow)
+		if now := slices.Contains(flags, bindNow); now != (target.OS == platform.Linux) {
+			t.Errorf("%s: flags %v: %s is for Linux alone", target, flags, bindNow)
+		}
 	}
 }
