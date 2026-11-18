@@ -22,6 +22,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -135,7 +136,7 @@ func TestNoReservation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		bin, out, err := Build(t.TempDir(), "alloc", module, debug)
+		bin, out, err := Build(t.TempDir(), "alloc", module, platform.Host(), debug)
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
@@ -174,7 +175,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	bin, out, err := Build(t.TempDir(), "server", module, false)
+	bin, out, err := Build(t.TempDir(), "server", module, platform.Host(), false)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -251,7 +252,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	bin, out, err := Build(t.TempDir(), "server", module, false)
+	bin, out, err := Build(t.TempDir(), "server", module, platform.Host(), false)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -344,8 +345,8 @@ func TestABI(t *testing.T) {
 	}
 
 	for _, tt := range []struct{ arch, os, want string }{
-		{"arm64", "darwin", "arm64-apple-macosx"},
-		{"amd64", "darwin", "x86_64-apple-macosx"},
+		{"arm64", "darwin", "arm64-apple-macosx14.4"}, // the oldest macOS a program runs on
+		{"amd64", "darwin", "x86_64-apple-macosx14.4"},
 		{"arm64", "linux", "aarch64-unknown-linux-gnu"},
 		{"amd64", "linux", "x86_64-unknown-linux-gnu"},
 	} {
@@ -508,7 +509,7 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures []st
 		}
 	}
 
-	bin, out, err := Build(dir, name, module, debug, bindings...)
+	bin, out, err := Build(dir, name, module, platform.Host(), debug, bindings...)
 	if err != nil {
 		t.Fatalf("%v\n%s\n--- emitted IR ---\n%s", err, out, module)
 	}

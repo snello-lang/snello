@@ -243,19 +243,32 @@ func (b *builder) own(name string) func(row) int32 {
 	}
 }
 
-// read opens the object as Mach-O or ELF and reads what the table needs.
+// read opens the object as Mach-O or ELF and reads what the table
+// needs, an ELF object laid out first, as layOut says.
 func read(path string) (*object, error) {
 	if m, err := macho.Open(path); err == nil {
 		defer m.Close()
 		return readMacho(m)
 	}
 
-	e, err := elf.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
+		return nil, err
+	}
+
+	if _, err := elf.NewFile(bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("%s: neither Mach-O nor ELF", path)
 	}
 
-	defer e.Close()
+	if data, err = layOut(data); err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	e, err := elf.NewFile(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
 	return readELF(e)
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/emit/stack"
 	"github.com/snello-lang/snello/compiler/emit/trace"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/runtime"
 )
@@ -51,6 +52,16 @@ const (
 
 	// outputFlag names the file a compiler, a linker or dsymutil writes.
 	outputFlag = "-o"
+
+	// keptObject, firstLink and tableObject name the files a link writes
+	// into the build's directory: the object the link-time optimizer
+	// wrote, the first link's binary and the trace's table, each with a
+	// dot in its stem, which the name of no runtime file's object has,
+	// since the runtime's objects share the directory when the cache is
+	// off, and its trace.c is trace.o.
+	keptObject  = "linked.lto.o"
+	firstLink   = "linked.first"
+	tableObject = "trace.table.o"
 )
 
 // Flags are the options the C compiler is given. Every warning is an
@@ -127,15 +138,19 @@ func Compiler() string {
 
 // Build writes the emitted program and the runtime's headers into dir,
 // with the C side of every package that binds C, compiles them with
-// the C compiler, links them with the runtime's objects, which the
-// cache holds once they are compiled, and returns the path of the
-// binary named name, with the bound of each task's stack the analysis
-// of the linked binary proves written into it. The compiler's output
-// comes back with any error.
+// the C compiler for the target t, links them with the runtime's
+// objects, which the cache holds once they are compiled, and returns
+// the path of the binary named name, with the bound of each task's
+// stack the analysis of the linked binary proves written into it. The
+// compiler's output comes back with any error.
 // A debug build compiles the runtime's checks in: see
 // runtime/c/debug.c.
-func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
+func Build(dir, name string, src []byte, t platform.Target, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
 	if _, err := CompilerID(Compiler()); err != nil { // a compiler that cannot be found or does not run, said as the doctor says it
+		return "", nil, err
+	}
+
+	if err := CheckTarget(Compiler(), t); err != nil {
 		return "", nil, err
 	}
 
@@ -153,7 +168,7 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 		return "", nil, err
 	}
 
-	rtArgs := BuildFlags(Compiler(), debug)
+	rtArgs := BuildFlags(Compiler(), t, debug)
 	var rt []string
 	var rtOutput []byte
 	var rtErr error
@@ -163,7 +178,7 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 		close(done)
 	}()
 
-	args := append(ProgramFlags(Compiler(), debug), "-I", dir) // the program's own, and snello.h for its C and a package's
+	args := append(ProgramFlags(Compiler(), t, debug), "-I", dir) // the program's own, and snello.h for its C and a package's
 	objs, output, err := Objects(Compiler(), args, append([]string{prog}, bound...))
 	<-done
 	output = append(output, rtOutput...)
@@ -176,19 +191,20 @@ func Build(dir, name string, src []byte, debug bool, bindings ...lower.Binding) 
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := Link(Compiler(), debug, dir, bin, append(append([]string{objs[0]}, rt...), objs[1:]...), bindings) // the program, then the runtime, then the packages' C
+	linked, err := Link(Compiler(), t, debug, dir, bin, append(append([]string{objs[0]}, rt...), objs[1:]...), bindings) // the program, then the runtime, then the packages' C
 	return bin, append(output, linked...), err
 }
 
-// Bundle gathers the debugging information of the debug build bin into
-// the bundle beside out, the binary the build was copied to, on macOS,
+// Bundle gathers the debugging information of the debug build bin, for
+// the target t, into the bundle beside out, the binary the build was
+// copied to, for macOS,
 // where the linker leaves it in the objects of the build's directory,
 // which the build removes: the bundle is made before, as clang's
 // driver makes one when a run compiles and links, and replaces one an
 // earlier build left. On Linux the information is in the binary and
 // nothing is done. The tool's output comes back with any error.
-func Bundle(bin, out string) ([]byte, error) {
-	if goruntime.GOOS != darwin {
+func Bundle(bin, out string, t platform.Target) ([]byte, error) {
+	if t.OS != platform.Darwin {
 		return nil, nil
 	}
 
@@ -201,21 +217,22 @@ func Bundle(bin, out string) ([]byte, error) {
 }
 
 // ProgramFlags are the options the compiler cc is given to compile the
-// program's own C and a package's: the build's, with the line tables
-// of a release build or the debugging information of a debug one.
-func ProgramFlags(cc string, debug bool) []string {
+// program's own C and a package's for the target t: the build's, with
+// the line tables of a release build or the debugging information of a
+// debug one.
+func ProgramFlags(cc string, t platform.Target, debug bool) []string {
 	if debug {
-		return append(without(BuildFlags(cc, debug), leafFramePointer), debugInfo...)
+		return append(without(BuildFlags(cc, t, debug), leafFramePointer), debugInfo...)
 	}
 
-	return append(BuildFlags(cc, debug), lineTables)
+	return append(BuildFlags(cc, t, debug), lineTables)
 }
 
 // BuildFlags are the options the compiler cc is given to compile the
-// runtime's files of a build and to link it: Flags, the build's
-// Release or Debug, and gcc's own, which link-time optimization reads
-// at the link.
-func BuildFlags(cc string, debug bool) []string {
+// runtime's files of a build for the target t and to link it: Flags,
+// the build's Release or Debug, gcc's own, which link-time
+// optimization reads at the link, and the target's, TargetFlags.
+func BuildFlags(cc string, t platform.Target, debug bool) []string {
 	args := append([]string{}, Flags...)
 	if debug {
 		args = append(args, Debug...)
@@ -227,7 +244,7 @@ func BuildFlags(cc string, debug bool) []string {
 		args = append(args, GCCFlags...)
 	}
 
-	return args
+	return append(args, TargetFlags(cc, t)...)
 }
 
 // Link links the objects into the binary bin, in dir, with the trace
@@ -246,12 +263,13 @@ func BuildFlags(cc string, debug bool) []string {
 // strips the debugging sections a release build has no more use for;
 // then each anchor's address is written into the binary, and the
 // bounds of the tasks' stacks with it, in one write. The compilers'
-// output comes back with any error.
-func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lower.Binding) ([]byte, error) {
-	kept := filepath.Join(dir, "linked.o")
-	first := filepath.Join(dir, "linked")
-	args := append(BuildFlags(cc, debug), lineTables) // the link writes the line tables of what it optimizes
-	plain := without(args, lto)                       // for the final link
+// output comes back with any error. The link is for the target t, with
+// LLVM's linker for a Linux other than the host.
+func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []string, bindings []lower.Binding) ([]byte, error) {
+	kept := filepath.Join(dir, keptObject)
+	first := filepath.Join(dir, firstLink)
+	args := append(append(BuildFlags(cc, t, debug), lineTables), linkerFlags(cc, t)...) // the link writes the line tables of what it optimizes
+	plain := without(args, lto)                                                         // for the final link
 	var output []byte
 	var cmd []string
 	var out []byte
@@ -263,14 +281,14 @@ func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lowe
 	case !whole:
 		cmd = append(append(append([]string{}, args...), "-r", outputFlag, kept, "-flinker-output=nolto-rel"), objs...)
 		native = []string{kept}
-	case goruntime.GOOS == darwin:
+	case t.OS == platform.Darwin:
 		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
-		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags()...)
+		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags(t)...)
 		cmd = append(cmd, "-Wl,-object_path_lto,"+kept)
 		native = []string{kept}
 	default:
 		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
-		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags()...)
+		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags(t)...)
 		cmd = append(cmd, "-Wl,-plugin-opt=obj-path="+kept, "-Wl,-plugin-opt=-function-sections=0", "-Wl,-plugin-opt=-data-sections=0")
 		native = []string{kept}
 	}
@@ -288,13 +306,13 @@ func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lowe
 		return output, err
 	}
 
-	object, err := trace.Object(table)
+	object, err := trace.Object(table, t)
 	if err != nil {
 		return output, err
 	}
 
-	tableObject := filepath.Join(dir, "trace.o")
-	if err := os.WriteFile(tableObject, object, 0o644); err != nil {
+	tablePath := filepath.Join(dir, tableObject)
+	if err := os.WriteFile(tablePath, object, 0o644); err != nil {
 		return output, err
 	}
 
@@ -303,8 +321,8 @@ func Link(cc string, debug bool, dir, bin string, objs []string, bindings []lowe
 		cmd = append(cmd, nativeRuntime(objs)...) // which the optimizer's object does not hold
 	}
 
-	cmd = append(append(append(cmd, tableObject), LinkFlags(bindings)...), SystemLinkFlags()...)
-	if !debug && goruntime.GOOS == linux {
+	cmd = append(append(append(cmd, tablePath), LinkFlags(bindings)...), SystemLinkFlags(t)...)
+	if !debug && t.OS == platform.Linux {
 		cmd = append(cmd, stripDebug)
 	}
 

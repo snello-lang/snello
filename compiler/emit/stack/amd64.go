@@ -34,6 +34,7 @@ const (
 	amd64Restore  = "%rbp,%rsp" // the stack pointer set from the frame pointer, as an epilogue restores it
 	amd64Indirect = "*"         // the start of the operand of a call or a jump through a register or memory
 	amd64RIP      = "(%rip)"    // an address relative to the instruction, as the table of imports is reached
+	amd64TLVCall  = "*(%rdi)"   // the call through the descriptor whose address lea loaded, as macOS reaches a thread-local variable
 	amd64PushSize = 8           // the bytes a push or the frame pointer enter saves take
 
 	amd64RegSP = "rsp" // the stack pointer and the frame pointer as lea's base register names them
@@ -53,12 +54,16 @@ var amd64Prefixes = map[string]bool{"notrack": true, "bnd": true, "rep": true, "
 var amd64Sized = map[string]bool{"callq": true, "jmpq": true, "pushq": true, "popq": true, "subq": true, "addq": true, "andq": true, "leaq": true, "movq": true, "retq": true, "leaveq": true, "enterq": true}
 
 // The x86-64 operand forms: an immediate subtracted from or masked into
-// the stack pointer, "$0x28,%rsp", an address relative to a register
+// the stack pointer, "$0x28,%rsp", a mask GNU objdump writes unsigned,
+// "$0xfffffffffffffff0,%rsp", and LLVM's signed, "$-0x10,%rsp", an
+// address relative to a register
 // loaded into it, "-0x18(%rsp),%rsp", and the symbol a call through
 // the table of imported functions names in its note,
 // "<malloc@GLIBC_2.2.5>".
 var (
 	amd64ImmToSP  = regexp.MustCompile(`^\$(0x[0-9a-f]+|\d+),%rsp$`)
+	amd64MaskToSP = regexp.MustCompile(`^\$(-)?(0x[0-9a-f]+|\d+),%rsp$`)
+	amd64LeaTLV   = regexp.MustCompile(`^([\w.$]+)\(%rip\),%rdi$`)
 	amd64LeaToSP  = regexp.MustCompile(`^(-?)(0x[0-9a-f]+|\d+)?\(%(\w+)\),%rsp$`)
 	amd64Imported = regexp.MustCompile(`<([^@>+]+)@[^>]*>`)
 )
@@ -66,8 +71,11 @@ var (
 // amd64 reads the function: its frame, its calls and tail calls, and
 // what it does to the stack pointer that is not a frame.
 func (d *decoder) amd64() {
+	descriptor := false // the instruction before loaded a thread-local descriptor's address
 	for _, in := range d.insts {
 		in = amd64Plain(in)
+		loaded := descriptor
+		descriptor = in.op == amd64OpLea && d.isDescriptor(in.args)
 		switch {
 		case in.op == amd64OpPush:
 			d.grow(in, amd64PushSize)
@@ -76,7 +84,9 @@ func (d *decoder) amd64() {
 			d.grow(in, n+amd64PushSize)
 		case in.op == amd64OpCall:
 			if strings.HasPrefix(in.args, amd64Indirect) {
-				if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
+				if loaded && in.args == amd64TLVCall {
+					d.f.calls = append(d.f.calls, call{kind: threadLocal}) // the system's accessor, which the descriptor's first word holds
+				} else if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
 					d.f.calls = append(d.f.calls, call{kind: library, target: m[1]}) // through the table of imports, as -fno-plt calls
 				} else {
 					d.f.calls = append(d.f.calls, call{kind: pointer})
@@ -105,6 +115,14 @@ func (d *decoder) amd64() {
 	}
 }
 
+// isDescriptor reports whether lea's operands load the address of one
+// of macOS's thread-local descriptors into the register a call through
+// it takes, "_current(%rip),%rdi".
+func (d *decoder) isDescriptor(args string) bool {
+	m := amd64LeaTLV.FindStringSubmatch(args)
+	return m != nil && d.img.tlvNames[m[1]]
+}
+
 // amd64Stack reads what an instruction that is no call nor branch does
 // to the stack pointer.
 func (d *decoder) amd64Stack(in inst) {
@@ -123,13 +141,17 @@ func (d *decoder) amd64Stack(in inst) {
 		n, _ := strconv.ParseInt(m[1], 0, 64)
 		d.grow(in, n)
 	case amd64OpAnd: // aligns it down, by less than the alignment
-		m := amd64ImmToSP.FindStringSubmatch(in.args)
+		m := amd64MaskToSP.FindStringSubmatch(in.args)
 		if m == nil {
 			d.f.setsSP = true
 			return
 		}
 
-		mask, _ := strconv.ParseUint(m[1], 0, 64)
+		mask, _ := strconv.ParseUint(m[2], 0, 64)
+		if m[1] == amd64Minus {
+			mask = -mask
+		}
+
 		d.grow(in, int64(^mask))
 	case amd64OpLea:
 		m := amd64LeaToSP.FindStringSubmatch(in.args)
@@ -157,7 +179,10 @@ func (d *decoder) amd64Stack(in inst) {
 
 // amd64Plain drops the prefixes objdump prints before an operation and
 // the size suffix of the operations the analysis reads, so that
-// "notrack jmp *%rax" is jmp and "callq" is call.
+// "notrack jmp *%rax" is jmp and "callq" is call, and writes the
+// operands with nothing after the comma between two, as GNU objdump
+// does and LLVM's, the one a Mac has, does not: "$0x38, %rsp" is
+// "$0x38,%rsp".
 func amd64Plain(in inst) inst {
 	for amd64Prefixes[in.op] {
 		parts := strings.SplitN(in.args, amd64Prefixed, 2)
@@ -172,5 +197,6 @@ func amd64Plain(in inst) inst {
 		in.op = in.op[:len(in.op)-1]
 	}
 
+	in.args = strings.ReplaceAll(in.args, amd64Operands+" ", amd64Operands)
 	return in
 }

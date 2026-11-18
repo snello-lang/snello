@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
@@ -56,6 +57,11 @@ type Importer struct {
 	// embedded copy is read.
 	StdDir string
 
+	// Target is the platform the program is built for, which chooses
+	// the files of every package loaded, a standard package's
+	// included, by their names: the host's, from NewImporter.
+	Target platform.Target
+
 	std     types.Config // the standard library is checked with its privileges
 	own     types.Config // a package of the program's own without them
 	info    *types.Info
@@ -90,7 +96,7 @@ type root struct {
 // NewImporter returns an importer that checks the packages it loads
 // into info.
 func NewImporter(info *types.Info) *Importer {
-	imp := &Importer{info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
+	imp := &Importer{Target: platform.Host(), info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
 	imp.std = types.Config{Importer: imp, Standard: true}
 	imp.own = types.Config{Importer: imp}
 	return imp
@@ -132,22 +138,20 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		return imp.importTests(base, importPath, dir)
 	}
 
-	name := importPath + "/" + path.Base(importPath) + SourceExt
-	if src, err := imp.stdFile(name); err == nil {
-		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
-			names, srcs := []string{name}, [][]byte{src}
-			if imp.Tests == importPath { // the package under test: its test files join it
-				entries, _ := imp.stdDir(importPath)
-				for _, e := range entries {
-					if IsTestFile(e.Name()) {
-						test, err := imp.stdFile(importPath + "/" + e.Name())
-						if err != nil {
-							return nil, nil, err
-						}
+	if p := imp.loaded[importPath]; p != nil && p.Std { // loaded already: the library's, which answers first
+		return p.Pkg, nil
+	}
 
-						names, srcs = append(names, importPath+"/"+e.Name()), append(srcs, test)
-					}
-				}
+	if imp.isStd(importPath) {
+		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
+			want := isSource
+			if imp.Tests == importPath { // the package under test: its test files join it
+				want = func(name string) bool { return strings.HasSuffix(name, SourceExt) }
+			}
+
+			names, srcs, err := imp.stdFiles(importPath, want)
+			if err != nil {
+				return nil, nil, err
 			}
 
 			return imp.load(importPath, names, srcs, nil, nil, &imp.std)
@@ -214,24 +218,11 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 // loaded with the library's privileges, from the embedded copy or from
 // StdDir.
 func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, error) {
-	if _, err := imp.stdFile(base + "/" + path.Base(base) + SourceExt); err == nil {
+	if imp.isStd(base) {
 		return imp.loadOnce(importPath, true, func() (*types.Package, []*Package, error) {
-			entries, err := imp.stdDir(base)
+			names, srcs, err := imp.stdFiles(base, IsTestFile)
 			if err != nil {
 				return nil, nil, err
-			}
-
-			var names []string
-			var srcs [][]byte
-			for _, e := range entries {
-				if IsTestFile(e.Name()) {
-					src, err := imp.stdFile(base + "/" + e.Name())
-					if err != nil {
-						return nil, nil, err
-					}
-
-					names, srcs = append(names, base+"/"+e.Name()), append(srcs, src)
-				}
 			}
 
 			if len(names) == 0 {
@@ -248,7 +239,7 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 	}
 
 	return imp.loadOnce(canonical+TestSuffix, false, func() (*types.Package, []*Package, error) {
-		tests, err := TestFiles(pkgDir)
+		tests, err := TestFiles(pkgDir, imp.Target)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -307,13 +298,17 @@ func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package
 // a program, of a bound package with no .c file to define what it
 // declares, and of a file named as the header the compiler writes.
 func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []string) (*types.Package, []*Package, error) {
-	files, err := SourceFiles(pkgDir)
-	if err != nil || len(files) == 0 {
+	files, err := SourceFiles(pkgDir, imp.Target)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, err
+	}
+
+	if len(files) == 0 {
 		return nil, nil, errors.New("no package at " + pkgDir + " for import " + importPath)
 	}
 
 	if canonical == imp.Tests { // the package under test: its test files join it
-		tests, err := TestFiles(pkgDir)
+		tests, err := TestFiles(pkgDir, imp.Target)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -328,7 +323,7 @@ func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []strin
 		}
 	}
 
-	cfiles, err := cFiles(pkgDir)
+	cfiles, err := cFiles(pkgDir, imp.Target)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -378,6 +373,22 @@ func bound(entries []*Package) string {
 // imports, for the backend to compile with the program.
 func (imp *Importer) Packages() []*Package { return imp.order }
 
+// Paths returns the import path of every package in the library,
+// once each: every directory holding the file named after it, as
+// isStd reads a package.
+func Paths() []string {
+	var paths []string
+	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && path.Base(name) == path.Base(path.Dir(name))+SourceExt {
+			paths = append(paths, path.Dir(name))
+		}
+
+		return nil
+	})
+
+	return paths
+}
+
 // stdFile reads a file of the standard library by its path under std/,
 // from StdDir when one is set and from the embedded copy otherwise.
 func (imp *Importer) stdFile(name string) ([]byte, error) {
@@ -397,18 +408,41 @@ func (imp *Importer) stdDir(importPath string) ([]fs.DirEntry, error) {
 	return fs.ReadDir(std.Sources, importPath)
 }
 
-// Paths returns the import path of every package in the library.
-func Paths() []string {
-	var paths []string
-	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(name, SourceExt) {
-			paths = append(paths, path.Dir(name))
+// isStd reports whether the standard library has a package at
+// importPath: a directory holding the file named after it, NAME.snello,
+// which every standard package has, so that a directory of the library
+// that only holds packages, encoding, is not taken for one.
+func (imp *Importer) isStd(importPath string) bool {
+	name := importPath + "/" + path.Base(importPath) + SourceExt
+	var err error
+	if imp.StdDir != "" {
+		_, err = os.Stat(filepath.Join(imp.StdDir, filepath.FromSlash(name)))
+	} else {
+		_, err = fs.Stat(std.Sources, name)
+	}
+
+	return err == nil
+}
+
+// stdFiles reads the files of the standard package at importPath that
+// want takes and that are built for the importer's target, as a
+// package of the program's own is read, with their names under std/.
+func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]string, [][]byte, error) {
+	entries, err := imp.stdDir(importPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	names, _ := choose(entries, want, imp.Target)
+	srcs := make([][]byte, len(names))
+	for i, name := range names {
+		names[i] = importPath + "/" + name
+		if srcs[i], err = imp.stdFile(names[i]); err != nil {
+			return nil, nil, err
 		}
+	}
 
-		return nil
-	})
-
-	return paths
+	return names, srcs, nil
 }
 
 // load parses and checks the files of one package under conf, as the
@@ -442,8 +476,7 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 // its packages are named under: the program's module for a directory
 // under its root, or the required module a directory is under, which
 // enter recorded when the require was followed. A module file deeper
-// in either tree is not looked for (section 7 of the design note). A
-// program with no module has none.
+// in either tree is not looked for. A program with no module has none.
 func (imp *Importer) rootFor(dir string) *root {
 	if imp.Module == nil {
 		return nil

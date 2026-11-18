@@ -1,0 +1,8 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package sysname
+
+// kernel is the name macOS's kernel gives itself.
+const kernel = "Darwin"

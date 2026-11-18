@@ -32,6 +32,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -349,14 +350,14 @@ func buildSnelloSource(t *testing.T, dir, name string, src []byte, backend strin
 			t.Fatal(emitErr)
 		}
 
-		bin, log, err = llvm.Build(out, name, module, false)
+		bin, log, err = llvm.Build(out, name, module, platform.Host(), false)
 	} else {
 		csrc, emitErr := c.Emit(file, f, info, libs...)
 		if emitErr != nil {
 			t.Fatal(emitErr)
 		}
 
-		bin, log, err = c.Build(out, name, csrc, false)
+		bin, log, err = c.Build(out, name, csrc, platform.Host(), false)
 	}
 
 	if err != nil {

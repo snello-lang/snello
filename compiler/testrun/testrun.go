@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -31,6 +32,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
@@ -64,12 +66,12 @@ type Plan struct {
 // A library package under no module is refused, since the generated
 // main could not import it; a directory with no test file is refused.
 func PlanDir(dir string) (*Plan, error) {
-	files, err := importer.SourceFiles(dir)
+	files, err := importer.SourceFiles(dir, platform.Host())
 	if err != nil {
 		return nil, err
 	}
 
-	tests, err := importer.TestFiles(dir)
+	tests, err := importer.TestFiles(dir, platform.Host())
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +147,10 @@ func PlanStd(importPath string) (*Plan, error) {
 	p := &Plan{Path: importPath}
 	var srcs [][]byte
 	for _, e := range entries {
+		if e.IsDir() || !importer.Chosen(e.Name(), platform.Host()) {
+			continue
+		}
+
 		name := importPath + "/" + e.Name()
 		switch {
 		case strings.HasSuffix(e.Name(), importer.TestFileSuffix):
@@ -192,7 +198,7 @@ func PlanStdDir(dir string) (*Plan, error) {
 		return nil, err
 	}
 
-	tests, err := importer.TestFiles(abs)
+	tests, err := importer.TestFiles(abs, platform.Host())
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +207,12 @@ func PlanStdDir(dir string) (*Plan, error) {
 		return nil, errors.New(dir + ": no _test.snello files")
 	}
 
-	p := &Plan{Path: importPath, Files: []string{filepath.Join(abs, path.Base(importPath)+importer.SourceExt)}, Tests: tests, StdDir: stdDir}
+	files, err := importer.SourceFiles(abs, platform.Host())
+	if err != nil {
+		return nil, err
+	}
+
+	p := &Plan{Path: importPath, Files: files, Tests: tests, StdDir: stdDir}
 	var pkg string
 	if p.Names, pkg, err = testNames(tests, nil); err != nil {
 		return nil, err
@@ -250,7 +261,7 @@ func stdPackage(dir string) (stdDir, importPath string, ok bool) {
 	}
 
 	importPath = filepath.ToSlash(rel)
-	if _, err := std.Sources.ReadFile(importPath + "/" + path.Base(importPath) + importer.SourceExt); err != nil {
+	if _, err := fs.Stat(std.Sources, importPath+"/"+path.Base(importPath)+importer.SourceExt); err != nil {
 		return "", "", false
 	}
 
@@ -450,9 +461,9 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	var bin string
 	var log []byte
 	if backend == lower.LLVMBackend {
-		bin, log, err = llvm.Build(outDir, name, src, false, bindings...)
+		bin, log, err = llvm.Build(outDir, name, src, platform.Host(), false, bindings...)
 	} else {
-		bin, log, err = c.Build(outDir, name, src, false, bindings...)
+		bin, log, err = c.Build(outDir, name, src, platform.Host(), false, bindings...)
 	}
 
 	if missing := (*toolchain.MissingError)(nil); errors.As(err, &missing) {

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // The standard streams as a program's caller sees them: in order, with
@@ -28,7 +30,7 @@ func release(t *testing.T, name, src string) string {
 		t.Fatal(err)
 	}
 
-	bin, out, err := Build(t.TempDir(), name, module, false)
+	bin, out, err := Build(t.TempDir(), name, module, platform.Host(), false)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

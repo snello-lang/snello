@@ -106,6 +106,18 @@ func TestFindModule(t *testing.T) {
 	if m, err := FindModule(shadow); m != nil || err == nil || !strings.Contains(err.Error(), "the directory strings shadows the standard package strings; rename it") {
 		t.Errorf("a directory shadowing a standard package: got %+v, %v, want its error", m, err)
 	}
+
+	for name, files := range map[string]map[string]string{ // a package on one platform shadows on all; a file no package holds does not
+		"for one platform": {"snello.mod": "", "strings/s_linux.snello": "package strings\n"},
+		"ignored":          {"snello.mod": "", "strings/.#s.snello": "", "strings/_s.snello": ""},
+	} {
+		dir := writeTree(t, files)
+		m, err := FindModule(dir)
+		shadows := err != nil && strings.Contains(err.Error(), "shadows the standard package strings")
+		if want := name == "for one platform"; shadows != want || (m == nil) != want {
+			t.Errorf("a strings directory of a file %s: got %+v, %v", name, m, err)
+		}
+	}
 }
 
 // TestLookup resolves an import path to a directory under the module's

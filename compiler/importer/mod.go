@@ -20,9 +20,16 @@ const (
 	// SourceExt ends the name of every Snello source file, TestSuffix
 	// the name of a package of tests outside the package it tests, and
 	// TestFileSuffix the name of a test file.
-	SourceExt      = ".snello"
+	SourceExt = ".snello"
+
 	TestSuffix     = "_test"
 	TestFileSuffix = TestSuffix + SourceExt
+
+	// hiddenPrefix and ignoredPrefix begin the name of a file that is no
+	// file of a package, an editor's lock or a tool's own, which every
+	// listing of a package's directory passes over.
+	hiddenPrefix  = "."
+	ignoredPrefix = "_"
 
 	// testingPackage and expectPackage are the packages only test
 	// files import.
@@ -351,12 +358,30 @@ func (m *Module) checkShadows() error {
 			continue
 		}
 
-		if files, err := SourceFiles(filepath.Join(m.Dir, e.Name())); err == nil && len(files) > 0 {
+		if holdsSource(filepath.Join(m.Dir, e.Name())) {
 			return errors.New(filepath.Join(m.Dir, ModFile) + ": the directory " + e.Name() + " shadows the standard package " + e.Name() + "; rename it")
 		}
 	}
 
 	return nil
+}
+
+// holdsSource reports whether dir holds a source file of a package,
+// for any platform: a directory that would be a package on one is in
+// the way of the standard package on all.
+func holdsSource(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() && isSource(e.Name()) && !ignored(e.Name()) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // directive returns the words of a line of a module file, its comment

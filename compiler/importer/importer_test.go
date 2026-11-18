@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -173,12 +174,12 @@ func TestRequiredVersion(t *testing.T) {
 		"../none/other/other.snello": "package other\n\nfunc G() {}\n",
 	})
 	load := func(dir string) error {
-		names, err := SourceFiles(filepath.Join(root, dir))
+		names, err := SourceFiles(filepath.Join(root, dir), platform.Host())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		_, _, err = LoadProgram(names, &types.Info{})
+		_, _, err = LoadProgram(names, platform.Host(), &types.Info{})
 		return err
 	}
 

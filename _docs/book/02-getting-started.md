@@ -95,6 +95,24 @@ snello build hello.snello
 
 The first build compiles Snello's runtime, the C every program links, and keeps it in the cache directory of your system, `~/Library/Caches/snello` on macOS and `~/.cache/snello` on Linux; every later build with the same compiler and mode compiles only the program, which takes a fraction of a second. `SNELLO_CACHE=DIR` keeps it in `DIR` instead, and `SNELLO_CACHE=off` compiles the runtime with every build. Removing the directory clears it.
 
+## Building for another platform
+
+`snello build -target linux/arm64 FILE` builds the program for Linux on an arm64 processor, whatever machine runs the compiler. The targets are `darwin/amd64`, `darwin/arm64`, `linux/amd64` and `linux/arm64`, a system and a processor as Go names them, and without the flag the target is the machine you are on. The binary is the target's: copy it there and run it. `snello check -target linux/amd64 DIR` checks the files a build for that target would compile, so a mistake in a file for another system, a `poll_linux.snello` of the section on packages below checked on a Mac, is found where you are.
+
+A build for another platform needs three things the compiler does not carry: a C compiler that builds for the target, the target's system files, its C library above all, and a linker that writes the target's binaries.
+
+- **On Linux, for the other processor**, Debian and Ubuntu package all three: clang and lld, and the other processor's C library and the compiler's support library, `sudo apt install clang lld libc6-dev-amd64-cross libgcc-14-dev-amd64-cross` on Debian 13 for amd64 from an arm64 machine (`arm64` in the names for the other way, and the release's gcc version in `libgcc-N-dev`). Clang finds the files where the packages put them, and nothing more is set. `qemu-user` runs the other processor's programs, `qemu-x86_64 -L /usr/x86_64-linux-gnu ./hello`, for a try before the program is copied. The C backend may build with gcc instead, a gcc built for the target named by `CC`, `CC=x86_64-linux-gnu-gcc` from Debian's `gcc-x86-64-linux-gnu`, which links with its own linker.
+- **On macOS, for Linux**, LLVM's linker, `brew install lld`, and the Linux system's files in a directory of their own, a sysroot, named for the target by `SNELLO_SYSROOT_linux_amd64` or `SNELLO_SYSROOT_linux_arm64`. A sysroot is a Linux system's `/usr/include` and its libraries; `build/sysroot.sh linux/amd64 DIR` in the compiler's repository writes one from Debian's image with Docker, and the program then runs on Debian, or on any Linux with that C library or a later one.
+- **On macOS, for the other processor**, nothing more: the SDK the compiler already has builds for both. An Apple Mac runs an Intel program under Rosetta. A program built for macOS, for either processor and on any macOS, runs on macOS 14.4 and every later version.
+- **macOS from Linux** is refused: Apple's SDK and linker run on macOS alone.
+
+What is missing is named before anything is compiled, with what to do:
+
+```
+$ snello build -target linux/amd64 hello.snello
+llvm: building for linux/amd64 on darwin/arm64 takes a Linux system's headers and libraries: set SNELLO_SYSROOT_linux_amd64 to a directory holding them, a sysroot
+```
+
 ## The other commands
 
 `snello check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `snello build` runs first, and it is useful on its own while writing. `snello emit FILE` prints the IR that `snello build` compiles, for reading what the compiler made of a program; `snello emit -backend c FILE` prints the C source.
@@ -190,6 +208,18 @@ warning: /home/me/app/snello.mod has no snello line: it is read as snello 0.1.0,
 ```
 
 A program with no module file above it, one file built on its own, is read as the version of the compiler building it.
+
+A package that does something differently on each system writes a file for each and names it for its platform, as Go does: `poll_linux.snello` is built only for Linux, `poll_arm64.snello` only for an arm64 processor, and `poll_darwin_arm64.snello` only for macOS on arm64, while `poll.snello` beside them is built everywhere. The platform is the last part of the name, after an underscore, and before `_test` in a test file's, `poll_linux_test.snello`; nothing inside a file chooses, so a listing of the directory shows which file is for which platform:
+
+```
+poll/
+    poll.snello              every platform: what the others share
+    poll_linux.snello        Linux
+    poll_darwin.snello       macOS
+    poll_linux_test.snello   tests that run on Linux
+```
+
+Snello builds for `linux` and `darwin`, on `amd64` and `arm64`, and the files chosen are the ones for the platform the program is built for, the machine you are on unless `-target` says otherwise. A file named for another system or processor, `poll_windows.snello` or `cpu_riscv64.c`, is left out, so a package can carry the files of every system. The words a name may end in are the systems `aix`, `android`, `darwin`, `dragonfly`, `freebsd`, `hurd`, `illumos`, `ios`, `js`, `linux`, `nacl`, `netbsd`, `openbsd`, `plan9`, `solaris`, `wasip1`, `windows` and `zos`, and the processors `386`, `amd64`, `amd64p32`, `arm`, `armbe`, `arm64`, `arm64be`, `loong64`, `mips`, `mipsle`, `mips64`, `mips64le`, `mips64p32`, `mips64p32le`, `ppc`, `ppc64`, `ppc64le`, `riscv`, `riscv64`, `s390`, `s390x`, `sparc`, `sparc64` and `wasm`, Go's list: a name ending in one of them, `decode_js.snello`, is for that platform and no other. A last word that is not among them is part of the name, `string_builder.snello`, and so is a misspelt one, `poll_linx.snello`, which is built everywhere: check the spelling. A file whose name begins with a dot or an underscore, an editor's lock or a file set aside, is no file of the package. A directory whose every file is for another platform is no package on this one, `every .snello file in poll is for another platform than darwin/arm64`. A file named on the command line, `snello build tool_linux.snello`, is built as named. The same names choose a package's C files, chapter 15.
 
 An import is answered by the standard library first, then by the module's directories, then by a `require` line in `snello.mod`, which names a dependency and the directory on disk that holds it, `require regexp ../regexp`, after which the program imports `"regexp"` and `"regexp/syntax"`. A dependency has no version and nothing is fetched: a dependency is a directory, as Go's `replace` makes one, and the module has no name, since nothing needs one: a dependency is the directory it is, so two dependencies that each require a third share one copy of it, and a value of the third's types passes between them. A directory or a dependency named as a standard package is refused, so `strings` is always the standard `strings`. Appendix B maps the file onto `go.mod`, and `../design/08-packages.md` has the rules in full.
 

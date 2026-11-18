@@ -111,6 +111,38 @@ double snm_mathx_Cbrt(double x) {
 }
 ```
 
+## C that differs between systems
+
+A system's own interface is not the same on Linux and macOS, and a package binding it writes a C file for each, named for its platform as chapter 2's Snello files are: `shim_linux.c` is compiled only into a program built for Linux, `shim_darwin.c` only into one for macOS, and `shim.c` into both. A header is chosen the same way, and so are the package's `.snello` files, so a constant or a function that differs between systems sits in a file of its own beside its C. `sysname` in the example asks the kernel its name, from `/proc` on Linux and from `sysctl` on macOS:
+
+```
+sysname/
+    sysname.snello           func Matches() bool { return isKernel(kernel) }; func isKernel(name ref string) bool
+    sysname_linux.snello     const kernel = "Linux"
+    sysname_darwin.snello    const kernel = "Darwin"
+    sysname_linux.c          reads /proc/sys/kernel/ostype
+    sysname_darwin.c         asks sysctlbyname("kern.ostype")
+```
+
+```c
+#include "sysname.snello.h"
+
+#include <string.h>
+#include <sys/sysctl.h>
+
+bool snm_sysname_isKernel(sn_string name) {
+    char buf[64];
+    size_t len = sizeof buf;
+    if (sysctlbyname("kern.ostype", buf, &len, NULL, 0) != 0) {
+        return false;
+    }
+
+    return strlen(buf) == (size_t)name.len && memcmp(buf, name.ptr, (size_t)name.len) == 0;
+}
+```
+
+Each platform's build sees one definition of `isKernel` and one `kernel`, and the program prints `true` on both. A C file named for a system or processor Snello does not build for, `shim_windows.c` or `cpu_ppc64le.c`, is left out, so a C library copied into a package whole, with a file for every processor, needs no file renamed.
+
 ## What the C side keeps to
 
 The compiler checks the types, and the author keeps three promises the compiler cannot check. The C side keeps no view past the call, since the bytes belong to the caller and may move or be freed when it returns. It calls nothing of the program back, since no Snello function has a symbol a library may rely on. And a call holds the worker thread it runs on until it returns, as a file read does, so a C function that waits on a device holds one of the program's workers while it waits. Memory the C side takes for itself is its own to free; the debug build's tracker counts only what the program allocates.
@@ -119,4 +151,4 @@ The compiler checks the types, and the author keeps three promises the compiler 
 
 `snello check tally` checks the package as the library it is, bindings included; `snello build` of the program compiles the package's C beside the runtime and links it. A package that declares a function without a body and has no `.c` file beside it is refused when it is imported, naming the function, and so is a package shipping a file under the name of the header the compiler writes.
 
-The whole of this chapter is `examples/bound/` in the repository: `tally` and `mathx` beside a program that uses both, with the output it prints beside the directory.
+The whole of this chapter is `examples/bound/` in the repository: `tally`, `mathx` and `sysname` beside a program that uses the three, with the output it prints beside the directory.

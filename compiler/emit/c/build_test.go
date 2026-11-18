@@ -10,7 +10,11 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/runtime"
 )
 
 // TestProgramFlags holds the program's C to the line tables in a release
@@ -19,12 +23,12 @@ import (
 // frame pointer in every function; and the runtime's to neither, so
 // that a step goes over a call of it.
 func TestProgramFlags(t *testing.T) {
-	release := ProgramFlags("cc", false)
+	release := ProgramFlags("cc", platform.Host(), false)
 	if release[len(release)-1] != lineTables || slices.Contains(release, "-O0") {
 		t.Errorf("a release build's program is compiled with %v", release)
 	}
 
-	debug := ProgramFlags("cc", true)
+	debug := ProgramFlags("cc", platform.Host(), true)
 	if !slices.Equal(debug[len(debug)-len(debugInfo):], debugInfo) {
 		t.Errorf("a debug build's program is compiled with %v, want %v last", debug, debugInfo)
 	}
@@ -34,7 +38,7 @@ func TestProgramFlags(t *testing.T) {
 	}
 
 	for _, debugging := range []bool{false, true} {
-		if rt := BuildFlags("cc", debugging); slices.Contains(rt, lineTables) || slices.ContainsFunc(rt, func(f string) bool { return slices.Contains(debugInfo, f) }) {
+		if rt := BuildFlags("cc", platform.Host(), debugging); slices.Contains(rt, lineTables) || slices.ContainsFunc(rt, func(f string) bool { return slices.Contains(debugInfo, f) }) {
 			t.Errorf("the runtime is compiled with %v", rt)
 		}
 	}
@@ -47,8 +51,8 @@ func TestProgramFlags(t *testing.T) {
 func TestBundle(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "prog")
-	if goruntime.GOOS != darwin {
-		if output, err := Bundle(out, out); err != nil || output != nil {
+	if goruntime.GOOS != platform.Darwin {
+		if output, err := Bundle(out, out, platform.Host()); err != nil || output != nil {
 			t.Errorf("Bundle on %s: %v, %s", goruntime.GOOS, err, output)
 		}
 
@@ -80,7 +84,7 @@ func TestBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if output, err := Bundle(out, out); err != nil {
+	if output, err := Bundle(out, out, platform.Host()); err != nil {
 		t.Fatalf("%v\n%s", err, output)
 	}
 
@@ -90,5 +94,20 @@ func TestBundle(t *testing.T) {
 
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Error("the bundle an earlier build left was not replaced")
+	}
+}
+
+// TestLinkFileNames holds the files a link writes into the build's
+// directory apart from the runtime's objects, which share it when the
+// cache is off: a table written over trace.c's object linked the
+// program without the runtime's trace.
+func TestLinkFileNames(t *testing.T) {
+	for name := range runtime.Files() {
+		object := strings.TrimSuffix(name, filepath.Ext(name)) + ".o"
+		for _, written := range []string{keptObject, firstLink, tableObject} {
+			if object == written {
+				t.Errorf("the link writes %s, the object of the runtime's %s", written, name)
+			}
+		}
 	}
 }

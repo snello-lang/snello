@@ -27,6 +27,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
@@ -495,7 +496,7 @@ func buildAnswerer(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 
-	if _, out, err := c.Build(dir, "answerer", src, true, lower.Bindings(info, libs)...); err != nil {
+	if _, out, err := c.Build(dir, "answerer", src, platform.Host(), true, lower.Bindings(info, libs)...); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }

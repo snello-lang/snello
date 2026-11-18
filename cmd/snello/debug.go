@@ -20,6 +20,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/std"
 )
 
@@ -85,7 +86,7 @@ var debuggerScript []byte
 // script, since neither debugger loads one a binary names unless the
 // user has trusted its place. It returns the debugger's exit code.
 func debug(path, backend string, args []string) int {
-	_, isDir, ok := programFiles(path, os.Stderr)
+	_, isDir, ok := programFiles(path, platform.Host(), os.Stderr)
 	if !ok {
 		return exitFailure
 	}
@@ -95,7 +96,7 @@ func debug(path, backend string, args []string) int {
 		return exitFailure
 	}
 
-	if code := build(path, backend, true); code != 0 {
+	if code := build(path, backend, platform.Host(), true); code != 0 {
 		return code
 	}
 

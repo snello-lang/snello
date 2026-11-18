@@ -43,7 +43,7 @@ The binary is written to the current directory, named after the file, or after t
 | group/ | `task.Group`: batches waited for together, a server stopped by the cancel another task's bug makes and `Wait` reporting the bug, and a task started again by a loop over `Join` with its limit |
 | channels/ | Channels that end by ownership: a producer that returns ends its channel and the consumer's range with it, a stop that is the drop of the one sending handle, and a sender whose receiver is gone dropping its value and asking `Open` |
 | packaged/ | A program of two files with a package of its own beside it, and the package's tests: `snello test examples/packaged/shapes` |
-| bound/ | A program with two packages beside it that bind C: `snello build examples/bound` |
+| bound/ | A program with three packages beside it that bind C, one with a C file and a Snello file per system: `snello build examples/bound` |
 
 A program that reads files has them in `name.files/` beside it, copied beside the binary before it runs. The cache server serves rather than prints, so `cache-server.script` beside it holds what the suite sends and expects back, a section per connection.
 

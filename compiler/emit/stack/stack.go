@@ -25,6 +25,7 @@ package stack
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -83,6 +84,13 @@ const (
 	pointer                     // through a register or memory
 	threadLocal                 // the system's accessor of thread-local variables, which macOS calls through a pointer
 )
+
+// measured are the systems and processors cLibraryStacks was measured
+// on, which TestCLibraryStack measures again on every run of CI: a call
+// into the C library of another, macOS on x86-64, makes a task
+// unbounded, since its library's functions may take more stack, and a
+// bound too small is a task writing over its neighbour's.
+var measured = map[system][]arch{darwin: {arm64}, linux: {amd64, arm64}}
 
 // cLibraryStacks is the stack each function of the system's C library
 // that the runtime calls was measured to use, in bytes below its
@@ -303,6 +311,7 @@ type Image struct {
 	functions map[string]*function
 	cLibrary  map[string]bool // imported functions that are the system's C library's
 	lazy      bool            // imports are bound at their first calls, by the dynamic linker's resolver on the caller's stack
+	tlvNames  map[string]bool // macOS's thread-local descriptors, by the name the disassembler gives them, for x86-64's calls through one
 }
 
 // Bound returns the bound of the stack of a task that runs entry, the
@@ -405,7 +414,17 @@ func (w *walker) calls(f *function) result {
 		switch c.kind {
 		case direct:
 			r = w.depth(c.target)
-		case library:
+		case library, threadLocal:
+			if !slices.Contains(measured[w.img.os], w.img.arch) {
+				return result{reason: "a call into the C library, whose stacks are not measured on " + string(w.img.os) + "/" + string(w.img.arch)}
+			}
+
+			if c.kind == threadLocal {
+				n, _ := cLibraryStack(threadLocalKey)
+				r = result{bytes: n, path: []string{threadLocalKey}}
+				break
+			}
+
 			if !w.img.cLibrary[c.target] {
 				return result{reason: "a call of " + w.img.plain(c.target) + ", from a shared library other than the C library"}
 			}
@@ -420,9 +439,6 @@ func (w *walker) calls(f *function) result {
 			}
 
 			r = result{bytes: n, path: []string{w.img.plain(c.target)}}
-		case threadLocal:
-			n, _ := cLibraryStack(threadLocalKey)
-			r = result{bytes: n, path: []string{threadLocalKey}}
 		case pointer:
 			targets, ok := w.opts.Targets[w.img.origin(f.name)]
 			if !ok {

@@ -6,12 +6,14 @@ package llvm
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/toolchain"
 )
 
@@ -51,11 +53,17 @@ func Compiler() string {
 // clang, links it with the runtime and that C compiled by the C
 // compiler, and returns the path of the binary named name, with the
 // bound of each task's stack the analysis of the linked binary proves
-// written into it. The compilers' output comes back with any error. A debug build
-// compiles the runtime's checks in, as the C backend's does.
-func Build(dir, name string, module []byte, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
+// written into it. The compilers' output comes back with any error. A
+// debug build compiles the runtime's checks in, as the C backend's
+// does. The module is emitted for the target t, which the runtime and
+// the link are then built for.
+func Build(dir, name string, module []byte, t platform.Target, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
 	if err := requireCompilers(debug); err != nil {
 		return "", nil, err
+	}
+
+	if triple := moduleTriple(module); triple != "" && triple != t.Triple() {
+		return "", nil, errors.New("the module is emitted for " + triple + ", and the build is for " + t.String() + ", " + t.Triple())
 	}
 
 	module, err = Targeted(module) // every function compiled for the runtime's processor, so that the two are optimized as one
@@ -79,8 +87,8 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	obj := filepath.Join(dir, name+".ll.o") // never the object of a runtime file, whatever the program is called
 	args := append([]string{}, Flags...)
 
-	if t := moduleTriple(module); t != "" {
-		args = append(args, "-target", t) // the module's, so that clang does not override it with the host's
+	if triple := moduleTriple(module); triple != "" {
+		args = append(args, "-target", triple) // the module's, so that clang does not override it with the host's
 	}
 
 	if debug {
@@ -95,7 +103,11 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 		cc = Compiler() // the module is clang's IR: clang compiles the runtime to IR beside it and links the two
 	}
 
-	rtargs := c.BuildFlags(cc, debug)
+	if err := c.CheckTarget(cc, t); err != nil {
+		return "", nil, err
+	}
+
+	rtargs := c.BuildFlags(cc, t, debug)
 
 	var compiled []byte
 	var moduleErr error
@@ -111,7 +123,7 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 		var boundOutput []byte
 		pkgArgs := rtargs // a release build's package C as the runtime is compiled, with no line tables
 		if debug {
-			pkgArgs = c.ProgramFlags(cc, debug) // a debug build's as the program's, for the debugger
+			pkgArgs = c.ProgramFlags(cc, t, debug) // a debug build's as the program's, for the debugger
 		}
 
 		objs, boundOutput, err = c.Objects(cc, append(append([]string{}, pkgArgs...), "-I", dir), bound) // with snello.h
@@ -129,7 +141,7 @@ func Build(dir, name string, module []byte, debug bool, bindings ...lower.Bindin
 	}
 
 	bin = filepath.Join(dir, name)
-	linked, err := c.Link(cc, debug, dir, bin, append(append([]string{obj}, rt...), objs...), bindings)
+	linked, err := c.Link(cc, t, debug, dir, bin, append(append([]string{obj}, rt...), objs...), bindings)
 	return bin, append(output, linked...), err
 }
 
