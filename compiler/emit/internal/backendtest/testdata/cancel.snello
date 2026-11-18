@@ -1,0 +1,128 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Cancellation and deadlines: a body that ends in its time gives its
+// value; a deadline cuts a sleep and drops the value the body returns
+// after; the earlier of two deadlines holds; a task the body starts
+// inherits the deadline, and the join of it, which is not cut, gives
+// the result; a deadline already passed cuts at once; a group's Cancel
+// wakes a receive, a send, a select and a sleep, and reaches a task a
+// member started; a member added to a cancelled group starts
+// cancelled; and the main task, in no scope, is never cancelled. Every
+// task here keeps a small stack, which the backends' tests hold it to.
+
+package main
+
+import ("fmt"; "task"; "time")
+
+// A wait only a cancel ends, and a deadline that passes while a body
+// waits; a cut wait ends well within the bound.
+const forever time.Duration = time.Hour
+const soon time.Duration = 5 * time.Millisecond
+const bound time.Duration = 10 * time.Second
+
+// stopWhenCancelled waits to receive on a channel of its own, which
+// nothing sends on, and sends 1 once a cancel has ended the wait.
+func stopWhenCancelled(out chan int) {
+	quiet := make(chan ())
+	if (<-quiet).IsNone() && task.Cancelled() {
+		out <- 1
+	}
+}
+
+// sendUntilCancelled waits to send on a channel of its own no one
+// receives from, which only a cancel ends, dropping the value, and
+// sends 1 once it has. The value sent has no Drop that sends: a drop
+// that sends, dropped by a send, is a recursion to the analysis of the
+// task's stack, which would then leave the task unbounded.
+func sendUntilCancelled(out chan int) {
+	quiet := make(chan int)
+	quiet <- 7
+	if task.Cancelled() {
+		out <- 1
+	}
+}
+
+// selectUntilCancelled waits in a select on two channels of its own,
+// and sends 1 once a cancel has taken a case with None.
+func selectUntilCancelled(out chan int) {
+	a := make(chan int)
+	b := make(chan int)
+	select {
+	case v := <-a:
+		if v.IsNone() && task.Cancelled() {
+			out <- 1
+		}
+	case v := <-b:
+		if v.IsNone() && task.Cancelled() {
+			out <- 1
+		}
+	}
+}
+
+// sleepUntilCancelled sleeps for an hour, and sends 1 once a cancel has
+// ended the sleep.
+func sleepUntilCancelled(out chan int) {
+	time.Sleep(forever)
+	if task.Cancelled() {
+		out <- 1
+	}
+}
+
+// startsAWaiter starts a task that waits until cancelled, and returns.
+func startsAWaiter(out chan int) {
+	spawn stopWhenCancelled(out)
+}
+
+// sleeps sleeps for an hour and returns n.
+func sleeps(n int) int {
+	time.Sleep(forever)
+	return n
+}
+
+func main() {
+	fmt.Println("in time:", task.Within(forever, func() int { return 5 }).UnwrapOr(0))
+
+	start := time.Now()
+	cut := task.Within(soon, func() int {
+		time.Sleep(forever)
+		return 5
+	})
+	fmt.Println("sleep cut:", cut.IsNone(), "cancelled after:", task.Cancelled(), "within the bound:", time.Since(start) < bound)
+
+	narrowed := task.Within(soon, func() int? {
+		return task.Within(forever, func() int { return sleeps(5) })
+	})
+	fmt.Println("narrowed:", narrowed.IsNone())
+
+	inherited := task.Within(soon, func() Result<int, task.Panic> {
+		return (spawn sleeps(5)).Join()
+	})
+	fmt.Println("inherited:", inherited.IsNone())
+	fmt.Println("no time:", task.Within(0, func() int { return 5 }).IsNone())
+
+	woken := make(chan int, 4)
+	g := task.NewGroup()
+	g.Add(spawn stopWhenCancelled(woken.Clone()))
+	g.Add(spawn sendUntilCancelled(woken.Clone()))
+	g.Add(spawn selectUntilCancelled(woken.Clone()))
+	g.Add(spawn sleepUntilCancelled(woken.Clone()))
+	g.Cancel()
+	fmt.Println("cancelled:", g.Wait().IsOk(), "woken", len(woken))
+
+	late := make(chan int, 1)
+	g = task.NewGroup()
+	g.Cancel()
+	g.Add(spawn stopWhenCancelled(late.Clone()))
+	_ = g.Wait()
+	fmt.Println("added after the cancel:", len(late))
+
+	reached := make(chan int, 1)
+	g = task.NewGroup()
+	g.Add(spawn startsAWaiter(reached.Clone()))
+	g.Cancel()
+	_ = g.Wait() // the member has ended; the task it started is no member, and is waited for by the receive
+	fmt.Println("reached what a member started:", (<-reached).IsSome())
+	fmt.Println("main cancelled:", task.Cancelled())
+}

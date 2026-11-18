@@ -1,7 +1,6 @@
 three returned, sent 3
 failed: a member's bug stopped 1 dropped 1
-three failed, one kept: true Done ended
-Done open
-Done ended with the group: true
+three failed, one kept: true
+a return cancels no one: true
 a thousand returned, sent 1000
 none returned

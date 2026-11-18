@@ -345,7 +345,8 @@ static int64_t answer(lookup *l, void *out, sn_string *reason) {
 // nanoseconds when that is above zero. It returns 0, SN_NET_NO_SUCH_HOST
 // for a name with no address, SN_NET_TIMED_OUT once the timeout passes,
 // SN_NET_RESOLVER_FAILED for a failure of the resolver's own with its
-// reason in reason, or the system's error number, EINVAL for a name
+// reason in reason, what sn_net_cancelled says once the task's scope is
+// cancelled, or the system's error number, EINVAL for a name
 // holding a zero byte, which no name can, as Go reports it.
 int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason) {
     struct sockaddr_storage addr;
@@ -393,6 +394,20 @@ int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *rea
     // keeps, so the task parks again until a waker has taken it out, and
     // then waits for that waker to be done with it.
     while (atomic_load(&l->waiter) == self) {
+        int cut = sn_net_cancelled();
+        uintptr_t mine = self;
+        if (cut != 0 && atomic_compare_exchange_strong(&l->waiter, &mine, 0)) {
+            // Cancelled, and taken out by the task itself: no waker will
+            // wake it, and the resolver's thread drops the answer.
+            sn_outside(-1);
+            if (timeout > 0) {
+                sn_deadline_disarm(&l->timer);
+            }
+
+            release(l);
+            return cut;
+        }
+
         sn_park();
     }
 

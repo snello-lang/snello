@@ -203,11 +203,17 @@ func (e *Emitter) spawnCall(k int, name string, wants []types.Type, values []str
 
 	if h != nil {
 		h.done = e.temp()
-		e.line("sn_chan *" + h.done + " = sn_chan_make(" + e.elemSize(h.elem, pos) + ", 1, " + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos) + ", " + e.madeAt(pos) + ");")
-		e.line(block + ".sn_done = sn_chan_clone(" + h.done + ", " + strconv.Itoa(lower.HandleBoth) + ");")
+		e.line("sn_chan *" + h.done + " = sn_chan_handle(" + e.elemSize(h.elem, pos) + ", " + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos) + ", " + e.madeAt(pos) + ");") // one slot, with the task's handle counted
+		e.line(block + ".sn_done = " + h.done + ";")                                                                                                                            // the task's handle, which sn_chan_handle counted
 	}
 
-	e.line("sn_spawn(" + lower.SpawnEntry(k) + ", &" + block + ", sizeof " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]);")
+	entry := lower.SpawnEntry(k) + ", &" + block + ", sizeof " + block + ", " + lower.StackBounds + "[" + strconv.Itoa(k) + "]"
+	if h == nil {
+		e.line("sn_spawn(" + entry + ");")
+		return
+	}
+
+	e.line("sn_spawn_handle(" + entry + ", " + h.done + ");") // the channel says where the task's own scope is
 }
 
 // spawnEntry writes the trampoline of a spawn statement's task: the
@@ -266,6 +272,7 @@ func (e *Emitter) caughtEntry(k int, st, call string, unpack bool, results, elem
 		"\tsn_string sn_msg = {0};\n",
 		"\t", e.cType(elem, pos), " r;\n",
 		"\tif (sn_catch(", lower.SpawnBody(k), ", a, &sn_msg, true)) {\n",
+		"\t\tsn_handle_failed(a->sn_done); // cancels the task's group, if one took it\n",
 		"\t\tr = ", e.variantValue(elem, types.ErrVariant, []string{panicked}, pos), ";\n",
 		"\t} else {\n",
 		"\t\tr = ", e.variantValue(elem, types.OkVariant, []string{returned}, pos), ";\n",

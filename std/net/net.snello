@@ -58,13 +58,14 @@ import (
 
 // What the runtime's calls return besides the system's error numbers:
 // listen and dial are given a host that is not an IP address but a
-// name to look up, a deadline or a timeout passed, and lookup finds a
-// name with no address, or the resolver fails for a reason of its own,
-// which it stores.
+// name to look up, a deadline or a timeout passed, lookup finds a name
+// with no address, or the resolver fails for a reason of its own,
+// which it stores, and the task's work was cancelled while it waited.
 const notAddress = -1
 const timedOut = -2
 const noSuchHost = -3
 const resolverFailed = -4
+const cancelled = -5
 
 // The error numbers the package reports of its own accord, where the
 // system was not asked: each is the same number on every system Snello
@@ -206,8 +207,8 @@ func (l ref Listener) Addr() ref string {
 func (l mut Listener) Accept() Result<Conn, io.Error> {
 	fd := 0
 	code := accept(l.fd, mut fd)
-	if code == timedOut {
-		return Err(timeoutError("accept", "tcp " + l.addr))
+	if stopped(code) {
+		return Err(stopError("accept", "tcp " + l.addr, code))
 	}
 
 	if code != 0 {
@@ -307,6 +308,10 @@ func DialTimeout(host ref string, port int, timeout time.Duration) Result<Conn, 
 			return Ok(newConn(fd))
 		}
 
+		if code == cancelled {
+			return Err(dialError(ref a, port, code, ref call)) // the next address would be cancelled too
+		}
+
 		if !failed {
 			first = dialError(ref a, port, code, ref call)
 			failed = true
@@ -346,8 +351,8 @@ func LookupHost(host ref string) Result<[]string, io.Error> {
 func (c mut Conn) Read(buf mut []byte) Result<int, io.Error> {
 	n := 0
 	code := read(c.fd, buf, mut n)
-	if code == timedOut {
-		return Err(timeoutError("read", c.errorPath()))
+	if stopped(code) {
+		return Err(stopError("read", c.errorPath(), code))
 	}
 
 	if code != 0 {
@@ -367,8 +372,8 @@ func (c mut Conn) Read(buf mut []byte) Result<int, io.Error> {
 func (c mut Conn) Write(buf ref []byte) Result<int, io.Error> {
 	n := 0
 	code := write(c.fd, buf, mut n)
-	if code == timedOut {
-		return Err(timeoutError("write", c.errorPath()).WithWritten(n))
+	if stopped(code) {
+		return Err(stopError("write", c.errorPath(), code).WithWritten(n))
 	}
 
 	if code != 0 {
@@ -472,8 +477,8 @@ func (c ref Conn) errorPath() string {
 // whose call to the runtime failed with code, having called call.
 func dialError(addr ref string, port int, code int, call ref string) io.Error {
 	path := "tcp " + joinHostPort(addr, port)
-	if code == timedOut {
-		return timeoutError("dial", path)
+	if stopped(code) {
+		return stopError("dial", path, code)
 	}
 
 	return opError("dial", ref path, call, code)
@@ -491,8 +496,8 @@ func lookupWithin(host ref string, timeout time.Duration) Result<[]string, io.Er
 		return Err(e)
 	}
 
-	if code == timedOut {
-		return Err(io.NewError("lookup", host.Clone(), "i/o timeout", io.TimedOut))
+	if stopped(code) {
+		return Err(stopError("lookup", host.Clone(), code))
 	}
 
 	if code == resolverFailed {
@@ -545,6 +550,22 @@ func setSocketDeadline(fd int, direction int, t time.Time) Result<(), io.Error> 
 // "read tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout".
 func timeoutError(op string, path string) io.Error {
 	return io.NewError(op, path, "i/o timeout", io.TimedOut)
+}
+
+// stopped reports whether a call's code says it stopped waiting before
+// it was done: its deadline passed, or the task's work was cancelled.
+func stopped(code int) bool { return code == timedOut || code == cancelled }
+
+// stopError is the Error of an operation stopped as code says: "read
+// tcp 127.0.0.1:50338->127.0.0.1:8080: i/o timeout" for a deadline,
+// the socket's or the task's, and "... operation cancelled" for a
+// cancel.
+func stopError(op string, path string, code int) io.Error {
+	if code == cancelled {
+		return io.NewError(op, path, "operation cancelled", io.Cancelled)
+	}
+
+	return timeoutError(op, path)
 }
 
 // opError is the Error of a socket call that failed with the system's

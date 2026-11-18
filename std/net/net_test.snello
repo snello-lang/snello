@@ -4,12 +4,15 @@
 
 package net_test
 
-import ("bufio"; "expect"; "io"; "net"; "strconv"; "testing"; "time")
+import ("bufio"; "expect"; "io"; "net"; "strconv"; "task"; "testing"; "time")
 
 // The tasks TestLookupTimeouts races dials with, and the dials each
 // makes.
 const racers = 8
 const dialsPerRacer = 100
+
+// The deadline of a read cut short, a few milliseconds.
+const soon time.Duration = 5 * time.Millisecond
 
 func TestEcho() {
 	l := expect.IsOk(net.Listen("127.0.0.1", 0))
@@ -187,4 +190,72 @@ func race(port int, n int, done chan<- bool) {
 	}
 
 	done <- ok
+}
+
+// TestReadWithin reads from a connection whose peer never sends, under
+// a deadline of the task's: the read fails with io.TimedOut, and the
+// connection is still usable after.
+func TestReadWithin() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	port := l.Port()
+	peers := make(chan net.Conn, 1)
+	spawn acceptOne(l, peers.Clone())
+	c := expect.IsOk(net.Dial("127.0.0.1", port))
+	peer := expect.IsSome(<-peers)
+	buf := make([]byte, 1)
+	var kind io.Kind = io.Other
+	expect.IsNone(task.Within(soon, func() int {
+		kind = expect.IsErr(c.Read(mut buf)).Kind()
+		return 0
+	}))
+	expect.True(kind == io.TimedOut)
+	expect.Equal(ref expect.IsOk(peer.Write(ref []byte{1})), ref 1)
+	expect.Equal(ref expect.IsOk(c.Read(mut buf)), ref 1)
+}
+
+// TestReadCancelled cancels a group whose member reads from a
+// connection whose peer never sends: the read fails with io.Cancelled.
+func TestReadCancelled() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	port := l.Port()
+	peers := make(chan net.Conn, 1)
+	spawn acceptOne(l, peers.Clone())
+	c := expect.IsOk(net.Dial("127.0.0.1", port))
+	peer := expect.IsSome(<-peers)
+	kinds := make(chan io.Kind, 1)
+	g := task.NewGroup()
+	g.Add(spawn readOnce(c, kinds.Clone()))
+	g.Cancel()
+	expect.True(g.Wait().IsOk())
+	expect.True(expect.IsSome(<-kinds) == io.Cancelled)
+	_ = peer
+}
+
+// TestAcceptCancelled cancels a group whose member waits for a
+// connection no one makes: the Accept fails with io.Cancelled.
+func TestAcceptCancelled() {
+	l := expect.IsOk(net.Listen("127.0.0.1", 0))
+	kinds := make(chan io.Kind, 1)
+	g := task.NewGroup()
+	g.Add(spawn acceptCancelled(l, kinds.Clone()))
+	g.Cancel()
+	expect.True(g.Wait().IsOk())
+	expect.True(expect.IsSome(<-kinds) == io.Cancelled)
+}
+
+// acceptOne takes one connection and sends it on out.
+func acceptOne(l net.Listener, out chan<- net.Conn) {
+	out <- expect.IsOk(l.Accept())
+}
+
+// readOnce reads from c once and sends the Kind of its failure.
+func readOnce(c net.Conn, out chan<- io.Kind) {
+	buf := make([]byte, 1)
+	out <- expect.IsErr(c.Read(mut buf)).Kind()
+}
+
+// acceptCancelled waits for a connection and sends the Kind of its
+// failure.
+func acceptCancelled(l net.Listener, out chan<- io.Kind) {
+	out <- expect.IsErr(l.Accept()).Kind()
 }

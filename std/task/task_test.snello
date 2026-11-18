@@ -4,13 +4,19 @@
 
 package task_test
 
-import ("expect"; "task")
+import ("expect"; "task"; "time")
 
 // The sum the adding task returns, the message the failing task panics
 // with, and the size of the large group.
 const sum = 5
 const bug = "the task's bug"
 const many = 1000
+
+// A wait only a cancel ends, an hour, and a deadline that passes while
+// it waits, a few milliseconds; a cut wait ends well within the bound.
+const forever time.Duration = time.Hour
+const soon time.Duration = 5 * time.Millisecond
+const bound time.Duration = 10 * time.Second
 
 // A Note says it was dropped on its channel, so a test waits for a drop
 // another task makes, or that a panic makes on its way out.
@@ -36,12 +42,83 @@ func crash(note Note) { panic(bug) }
 // once.
 func fails(message string) { panic(message) }
 
-// stopWhenTold waits until the group's done channel has ended, which
-// nothing sends on, then sends once: a member that stops when another
-// has failed.
-func stopWhenTold(done <-chan (), out chan int) {
-	_ = <-done
-	out <- 1
+// stopWhenCancelled waits to receive on a channel of its own, which
+// no one sends on and which never ends, so that only a cancel wakes it,
+// and sends 1 once it is told it was cancelled: a member that stops
+// when another has failed.
+func stopWhenCancelled(out chan int) {
+	quiet := make(chan ())
+	expect.IsNone(<-quiet)
+	if task.Cancelled() {
+		out <- 1
+	}
+}
+
+// sendUntilCancelled sends a Note on a channel of its own no one
+// receives from, which only a cancel ends; the Note is dropped then.
+func sendUntilCancelled(note Note) {
+	quiet := make(chan Note)
+	quiet <- note
+}
+
+// selectUntilCancelled waits in a select on two channels of its own no
+// one sends on, and sends 1 once a cancel has taken a case with None.
+func selectUntilCancelled(out chan int) {
+	a := make(chan int)
+	b := make(chan int)
+	select {
+	case v := <-a:
+		expect.IsNone(v)
+	case v := <-b:
+		expect.IsNone(v)
+	}
+
+	if task.Cancelled() {
+		out <- 1
+	}
+}
+
+// sleepUntilCancelled sleeps for an hour, and sends 1 once a cancel has
+// ended the sleep.
+func sleepUntilCancelled(out chan int) {
+	time.Sleep(forever)
+	if task.Cancelled() {
+		out <- 1
+	}
+}
+
+// startsAWaiter starts a task that waits until cancelled, and returns:
+// the task it started is in its scope, wherever it goes.
+func startsAWaiter(out chan int) {
+	spawn stopWhenCancelled(out)
+}
+
+// sends sends 1 when cancelled is true and 0 otherwise.
+func sends(cancelled bool, out chan int) {
+	out <- if cancelled { 1 } else { 0 }
+}
+
+// panicsWithin panics inside a Within: the scope is left as the panic
+// unwinds, before the task hands its result over.
+func panicsWithin() int {
+	return task.Within(forever, func() int { panic(bug) }).UnwrapOr(0)
+}
+
+// leavesWithins enters and leaves a hundred scopes, each with a short
+// sleep in it: a member a cancel may reach between any two.
+func leavesWithins() {
+	for i := 0; i < 100; i++ {
+		_ = task.Within(forever, func() int {
+			time.Sleep(time.Microsecond)
+			return 0
+		})
+	}
+}
+
+// sleeps sleeps for an hour and returns n.
+func sleeps(n int) int {
+	time.Sleep(forever)
+	return n
 }
 
 // returned fails the test when a group's Wait reports a panic.
@@ -122,14 +199,14 @@ func TestGroupWaitsForEveryMember() {
 }
 
 // TestGroupReportsTheFirstPanic waits for a member that fails beside
-// one that stops when told: Wait is the panic, Done ended for the
-// other member, which ended before Wait returned, and what the failed
-// member owned was dropped.
+// one that waits until it is cancelled: Wait is the panic, the panic
+// cancelled the other member, which ended before Wait returned, and
+// what the failed member owned was dropped.
 func TestGroupReportsTheFirstPanic() {
 	dropped := make(chan (), 1)
 	out := make(chan int, 1)
 	g := task.NewGroup()
-	g.Add(spawn stopWhenTold(g.Done(), out.Clone()))
+	g.Add(spawn stopWhenCancelled(out.Clone()))
 	g.Add(spawn crash(Note{out: dropped.Clone()}))
 	match g.Wait() {
 		Ok(_) => expect.Fail("every member returned"),
@@ -140,24 +217,16 @@ func TestGroupReportsTheFirstPanic() {
 	expect.IsSome(<-dropped)
 }
 
-// TestGroupDoneStaysOpen waits for members that all return: Done does
-// not end while the group lives and no member has failed, and ends
-// with the group, whose sending handle goes with it, once Wait has
-// taken it.
-func TestGroupDoneStaysOpen() {
-	out := make(chan int, 1)
+// TestGroupNotCancelledByReturns waits for members that all return: a
+// member that returns cancels no one.
+func TestGroupNotCancelledByReturns() {
+	out := make(chan int, 2)
 	g := task.NewGroup()
-	done := g.Done()
 	g.Add(spawn tick(out.Clone(), 1))
 	expect.IsSome(<-out)
-	select {
-	case <-done:
-		expect.Fail("Done ended with no member failed")
-	default:
-	}
-
+	g.Add(spawn sends(task.Cancelled(), out.Clone()))
 	returned(g.Wait())
-	expect.True((<-done).IsNone()) // the group is gone: its channel has ended
+	expect.Equal(ref <-out, ref Some(0))
 }
 
 // TestGroupOfAThousand waits for a thousand members at once.
@@ -173,11 +242,9 @@ func TestGroupOfAThousand() {
 }
 
 // TestGroupFirstOfMany waits for three members that fail at once: one
-// of their panics is kept, and Done ends once, by the watcher
-// that kept it.
+// of their panics is kept.
 func TestGroupFirstOfMany() {
 	g := task.NewGroup()
-	done := g.Done()
 	g.Add(spawn fails("first".Clone()))
 	g.Add(spawn fails("second".Clone()))
 	g.Add(spawn fails("third".Clone()))
@@ -188,15 +255,171 @@ func TestGroupFirstOfMany() {
 			expect.True(m == "first" || m == "second" || m == "third")
 		},
 	}
-
-	select {
-	case <-done:
-	default:
-		expect.Fail("Done open after three members failed")
-	}
 }
 
 // TestGroupOfNoMember waits for nothing.
 func TestGroupOfNoMember() {
 	returned(task.NewGroup().Wait())
+}
+
+// TestCancelWakesAReceive cancels a group whose member waits to
+// receive: the receive gives None and the member is told it was
+// cancelled.
+func TestCancelWakesAReceive() {
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	h := spawn stopWhenCancelled(out.Clone())
+	time.Sleep(soon) // the member parks before the group takes it and cancels
+	g.Add(h)
+	g.Cancel()
+	returned(g.Wait())
+	expect.Equal(ref <-out, ref Some(1))
+}
+
+// TestCancelWakesASend cancels a group whose member waits to send: the
+// send drops its value.
+func TestCancelWakesASend() {
+	dropped := make(chan (), 1)
+	g := task.NewGroup()
+	g.Add(spawn sendUntilCancelled(Note{out: dropped.Clone()}))
+	g.Cancel()
+	returned(g.Wait())
+	expect.IsSome(<-dropped)
+}
+
+// TestCancelWakesASelect cancels a group whose member waits in a
+// select: a case is taken with None.
+func TestCancelWakesASelect() {
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	g.Add(spawn selectUntilCancelled(out.Clone()))
+	g.Cancel()
+	returned(g.Wait())
+	expect.Equal(ref <-out, ref Some(1))
+}
+
+// TestCancelWakesASleep cancels a group whose member sleeps for an
+// hour: the sleep ends.
+func TestCancelWakesASleep() {
+	out := make(chan int, 1)
+	start := time.Now()
+	g := task.NewGroup()
+	g.Add(spawn sleepUntilCancelled(out.Clone()))
+	g.Cancel()
+	returned(g.Wait())
+	expect.Equal(ref <-out, ref Some(1))
+	expect.True(time.Since(start) < bound)
+}
+
+// TestCancelBeforeAdd adds a member to a group already cancelled: the
+// member, parked in a wait, is woken by the Add.
+func TestCancelBeforeAdd() {
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	g.Cancel()
+	h := spawn stopWhenCancelled(out.Clone())
+	time.Sleep(soon) // the member parks in its receive, in no scope, before the group takes it
+	g.Add(h)
+	returned(g.Wait())
+	expect.Equal(ref <-out, ref Some(1))
+}
+
+// TestCancelReachesWhatAMemberStarted cancels a group whose member
+// started a task and returned: the task it started is in the group's
+// scope, whenever it was started.
+func TestCancelReachesWhatAMemberStarted() {
+	out := make(chan int, 1)
+	g := task.NewGroup()
+	g.Add(spawn startsAWaiter(out.Clone()))
+	g.Cancel()
+	returned(g.Wait())
+	expect.Equal(ref <-out, ref Some(1))
+}
+
+// TestNotCancelled asks outside any scope: nothing cancels the main
+// task's work.
+func TestNotCancelled() {
+	expect.False(task.Cancelled())
+}
+
+// TestWithinReturnsTheValue runs a body that ends in its time.
+func TestWithinReturnsTheValue() {
+	expect.Equal(ref task.Within(forever, func() int { return sum }), ref Some(sum))
+	expect.False(task.Cancelled())
+}
+
+// TestWithinCutsASleep runs a body that sleeps past its deadline: the
+// sleep ends, the body's value is dropped, and the task is no longer
+// cancelled once Within has returned.
+func TestWithinCutsASleep() {
+	start := time.Now()
+	got := task.Within(soon, func() int {
+		time.Sleep(forever)
+		return sum
+	})
+	expect.IsNone(got)
+	expect.True(time.Since(start) < bound)
+	expect.False(task.Cancelled())
+}
+
+// TestWithinOnlyNarrows runs a body with an hour inside one with a few
+// milliseconds: the earlier deadline holds.
+func TestWithinOnlyNarrows() {
+	start := time.Now()
+	outer := task.Within(soon, func() int? {
+		return task.Within(forever, func() int { return sleeps(sum) })
+	})
+	expect.IsNone(outer)
+	expect.True(time.Since(start) < bound)
+}
+
+// TestWithinReachesATask starts a task inside a deadline and joins it:
+// the task inherits the deadline, its sleep ends, and the join, which
+// is not cut, returns what it returned.
+func TestWithinReachesATask() {
+	start := time.Now()
+	got := task.Within(soon, func() Result<int, task.Panic> {
+		return (spawn sleeps(sum)).Join()
+	})
+	expect.IsNone(got)
+	expect.True(time.Since(start) < bound)
+}
+
+// TestWithinOfNoTime runs a body whose deadline has passed: it runs,
+// and its value is dropped.
+func TestWithinOfNoTime() {
+	expect.IsNone(task.Within(0, func() int { return sum }))
+}
+
+// TestWithinLeavesAsDeadlineFires runs bodies that return as their
+// deadline passes, many times over, so that the leave and the firing
+// meet in every order: none hangs, and the task is not cancelled after.
+func TestWithinLeavesAsDeadlineFires() {
+	for i := 0; i < 200; i++ {
+		_ = task.Within(soon, func() int {
+			time.Sleep(soon)
+			return sum
+		})
+	}
+
+	expect.False(task.Cancelled())
+}
+
+// TestPanicWithin joins a task that panics inside a Within: the panic
+// is reported, and the scope left on the way out.
+func TestPanicWithin() {
+	match (spawn panicsWithin()).Join() {
+		Ok(_) => expect.Fail("the task returned"),
+		Err(p) => expect.Equal(p.Message(), bug),
+	}
+}
+
+// TestCancelWhileLeavingWithins cancels a group whose member is
+// entering and leaving scopes: Wait returns.
+func TestCancelWhileLeavingWithins() {
+	g := task.NewGroup()
+	g.Add(spawn leavesWithins())
+	time.Sleep(soon)
+	g.Cancel()
+	returned(g.Wait())
 }

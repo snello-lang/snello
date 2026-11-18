@@ -19,11 +19,23 @@
 //
 // A Group is several tasks started for handles, waited for together:
 // Wait returns once every one has ended, with the first panic among
-// them, and Done is a channel that ends when one has failed, so
-// that the others can stop.
+// them, and the first panic cancels the others, so that they stop.
+//
+// Cancellation and deadlines belong to the task, not to a value the
+// program passes along. A task is in a scope, and every task it starts
+// is in it too: Within gives the calls of a function and the tasks they
+// start a deadline, and a Group is a scope its Cancel ends. A call that
+// waits stops waiting once its task's scope is cancelled or its
+// deadline has passed, and says so in the form it already has: a call
+// that returns a Result fails with an io.Error of Kind io.Cancelled, or
+// io.TimedOut for a deadline; a receive gives None and a send drops its
+// value, as at a channel's end; time.Sleep returns. Cancelled tells a
+// task whose receive gave None that it was cancelled. Join and a
+// group's Wait are not cancelled: they wait for tasks that are
+// cancelled with the waiter, and end.
 package task
 
-import "sync"
+import "time"
 
 // A Handle is a task started for one: an owned value that Join takes,
 // so a task is joined once, by whoever holds the handle, in any task.
@@ -52,7 +64,7 @@ struct Panic {
 // waits as a receive on a channel no one sends on does, and the
 // deadlock report says so when nothing else can run.
 func (h Handle<T>) Join() Result<T, Panic> {
-	for {
+	for { // a receive on a task's handle is not cancelled: the task is cancelled with the joiner, and ends
 		if r := <-h.done { // the task holds a sending handle until it has sent: a receive waits for its one value
 			return r
 		}
@@ -67,95 +79,159 @@ func (h Handle<T>) Join() Result<T, Panic> {
 func (p ref Panic) Message() ref string { return ref p.message }
 
 // A Group is several tasks started for handles of no result, waited
-// for together and told of the first that failed. Add puts a task in
-// the group, Done gives a channel that ends once the first
-// member fails, which a member that should stop then selects on, and
+// for together, and a scope they are cancelled in together. Add puts a
+// task in the group, with every task it starts; Cancel cancels them,
+// and so does the first member to panic, so that the others stop; and
 // Wait returns once every member has ended: Ok when each returned, or
 // the first panic among them. A group is a value the function owns,
 // made by NewGroup and taken by Wait; it has no zero value.
 //
 //	g := task.NewGroup()
-//	g.Add(spawn serve(listener, g.Done()))
-//	g.Add(spawn flush(queue.Clone(), g.Done()))
+//	g.Add(spawn serve(listener))
+//	g.Add(spawn flush(queue.Clone()))
 //	match g.Wait() {
 //		Ok(_)  => {},
 //		Err(p) => fmt.Println("a task failed:", p.Message()),
 //	}
 struct Group {
-	shared  sync.Arc<sync.Mutex<failure>> // the first panic, and the sending end of done until it is dropped
-	done    <-chan ()                      // the channel that ends when a member fails; Done gives handles on it
-	waiting sync.WaitGroup                 // counts the watchers, one per member, each out once its member has ended
+	scope   scope          // the runtime's record of the group's scope, which the members are in
+	members []Handle<()> // the members' handles, joined by Wait in turn
 }
 
-// A failure is what a group's watchers share: the first panic among
-// the members, kept by the watcher that saw it, and the one sending
-// handle of the group's done channel, which that watcher drops, so
-// that the channel ends for every member selecting on it.
-struct failure {
-	first Panic?
-	stop  (chan<- ())?
+// A scope is the runtime's record of a group's scope, held while the
+// group lives; a member holds it too while it is in it.
+struct scope impl Drop {
+	handle int
 }
 
-// NewGroup returns a group with no member, ready for Add. It allocates
-// the state the members share, a lock and the channel Done gives, once
+func (s mut scope) Drop() { dropScope(s.handle) }
+
+// NewGroup returns a group with no member, ready for Add, whose scope
+// is under the one the calling task is in: a cancel or a deadline
+// there reaches the group's members too. It allocates the scope once
 // for the group's life.
 //
 //	g := task.NewGroup()
 //	g.Add(spawn work(1))
 //	g.Wait()?
 func NewGroup() Group {
-	done := make(chan ())
-	var stop chan<- () = done.Clone() // the sending end, kept for the first failure
-	return Group{
-		shared:  sync.NewArc(sync.NewMutex(failure{first: None, stop: Some(stop)})),
-		done:    done,
-		waiting: sync.NewWaitGroup(),
-	}
+	return Group{scope: scope{handle: newScope()}, members: []Handle<()>{}}
 }
 
-// Add puts the task behind h in the group, which Wait then waits for.
-// The handle is taken: the group joins the task.
+// Add puts the task behind h in the group, which Wait then waits for
+// and Cancel cancels, with every task it has started, whenever it
+// started them. The handle is taken: the group joins the task. A
+// member that panics cancels the others, as it fails: the runtime that
+// catches the panic does it, so that no task stands by each member.
 func (g mut Group) Add(h Handle<()>) {
-	g.waiting.Add(1)
-	spawn watch(h, g.shared.Clone(), g.waiting.Clone())
+	adopt(g.scope.handle, ref h.done)
+	g.members.Push(h)
 }
 
-// Done returns a handle on the channel that ends when one of the
-// group's members fails, and never otherwise: a member that should
-// stop when another has failed selects on it, and one that does not
-// is waited for. Each call gives a handle to move into a member.
-func (g ref Group) Done() <-chan () {
-	return g.done.Clone()
+// Cancel cancels the group's members and every task they started: each
+// call they make that waits stops waiting, as the package says, and
+// each call they make later that would wait stops at once. A member
+// that never waits and never asks Cancelled runs on, and Wait waits
+// for it. A second Cancel does nothing.
+//
+//	g.Cancel() // the server is shutting down
+func (g ref Group) Cancel() {
+	cancelScope(g.scope.handle)
 }
 
 // Wait returns once every member has ended: Ok when each returned, or
-// the first panic among them, on which Done ended. It takes the group,
-// so a group is waited for once; a group dropped without a Wait leaves
-// its members running, as a handle dropped leaves its task.
+// the panic of the first to fail. It takes the group, so a group is
+// waited for once; a group dropped without a Wait leaves its members
+// running, as a handle dropped leaves its task.
 func (g Group) Wait() Result<(), Panic> {
-	g.waiting.Wait()
-	guard := g.shared.Get().Lock()
-	return match take(mut guard.Get().first) {
+	var failed Panic? = None
+	for _, h := range g.members {
+		r, first := settle(h, g.scope.handle)
+		match r {
+			Ok(_) => {},
+			Err(p) => {
+				// The first to fail is the member the runtime saw fail
+				// first among those the group had taken; one that failed
+				// before the group took it is first only by its place.
+				if first || failed.IsNone() {
+					failed = Some(p)
+				}
+			},
+		}
+	}
+
+	return match failed {
 		Some(p) => Err(p),
 		None => Ok(()),
 	}
 }
 
-// watch joins a member for its group: a panic that is the first among
-// the members is kept, and the done channel's sending handle dropped,
-// which ends it, under the shared lock so that two members failing at
-// once end it once; then the watcher counts itself out.
-func watch(h Handle<()>, shared sync.Arc<sync.Mutex<failure>>, waiting sync.WaitGroup) {
-	match h.Join() {
-		Ok(_) => {},
-		Err(p) => {
-			guard := shared.Get().Lock()
-			if guard.Get().first.IsNone() {
-				guard.Get().first = Some(p)
-				_ = take(mut guard.Get().stop) // the last sending handle: done ends
-			}
-		},
+// Within runs body with a deadline d from now, which every call body
+// makes and every task it starts inherits, and returns Some with what
+// body returned, or None when body was cut short: its deadline passed,
+// or the scope around it was cancelled, while it ran. A value body
+// returns after it was cut short is dropped, so that a sum a cancelled
+// receive ended early is never taken for the whole one. A deadline only
+// narrows: inside a scope with less time left, the earlier one holds.
+// A d of zero or less has passed already.
+//
+//	page := task.Within(2 * time.Second, func() Result<Page, io.Error> {
+//		c := net.Dial(host, 443)? // the dial, the write and the read share the two seconds
+//		c.WriteString(request)?
+//		return readPage(mut c)
+//	})
+func Within<T>(d time.Duration, body func() T) T? {
+	enter(i64(d))
+	defer leave()
+	v := body()
+	if Cancelled() {
+		return None
 	}
 
-	waiting.Done()
+	return Some(v)
 }
+
+// Cancelled reports whether the running task's work is cancelled: its
+// group cancelled, or a member of it failed, or a deadline of Within
+// passed. A task whose receive gave None asks it to tell a cancel from
+// a channel's end, and a task that computes without waiting asks it
+// between rounds, since a cancel lands only where a task waits.
+//
+//	for !task.Cancelled() {
+//		step()
+//	}
+func Cancelled() bool
+
+// settle joins a member of the group whose scope is group, as Join
+// does, and reports too whether the member was the first of the
+// group's to fail, which the runtime records as the member fails,
+// before it hands its result over.
+func settle(h Handle<()>, group int) (Result<(), Panic>, bool) {
+	for {
+		if r := <-h.done { // a receive on a task's handle is not cancelled
+			return (r, firstFailed(group, ref h.done))
+		}
+	}
+}
+
+// enter has the running task enter a scope with a deadline d
+// nanoseconds from now, under the one it is in, and leave has it go
+// back. The runtime provides them.
+func enter(d i64)
+
+func leave()
+
+// newScope makes a group's scope under the running task's, and returns
+// its handle; dropScope lets the handle go, cancelScope cancels the
+// scope, adopt puts in it the task whose handle channel done is, and
+// firstFailed reports whether that task was the first of the group's
+// to fail. The runtime provides them.
+func newScope() int
+
+func dropScope(h int)
+
+func cancelScope(h int)
+
+func adopt(h int, done ref chan Result<(), Panic>)
+
+func firstFailed(h int, done ref chan Result<(), Panic>) bool

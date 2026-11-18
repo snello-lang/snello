@@ -242,13 +242,20 @@ func (e *Emitter) spawnCall(k int, name string, sig *types.Signature, wants []ty
 	}
 
 	if h != nil {
-		h.done = e.rt("sn_chan_make", "ptr", e.sizeOf(h.elem), value{"i64", "1"}, value{"ptr", "@" + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos)}, value{"ptr", e.constBytes(e.madeAt(pos))})
-		e.store(e.rt("sn_chan_clone", "ptr", h.done, value{"i32", strconv.Itoa(lower.HandleBoth)}), e.gep(st, block.s, len(values)))
+		h.done = e.rt("sn_chan_handle", "ptr", e.sizeOf(h.elem), value{"ptr", "@" + e.elemDropper(lower.ChanDrop(h.elem), h.elem, pos)}, value{"ptr", e.constBytes(e.madeAt(pos))}) // one slot, with the task's handle counted
+		e.store(h.done, e.gep(st, block.s, len(values)))                                                                                                                            // the task's handle, which sn_chan_handle counted
 	}
 
 	bound := e.op("load volatile i32, ptr getelementptr inbounds (i32, ptr @"+lower.StackBounds+", i64 "+strconv.Itoa(k)+")", "i32")
-	e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i64, i32)")
-	e.inst("call void @sn_spawn(ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", i64 " + strconv.FormatInt(e.structSize(fields), 10) + ", " + bound.typed() + ")")
+	args := "ptr @" + lower.SpawnEntry(k) + ", " + block.typed() + ", i64 " + strconv.FormatInt(e.structSize(fields), 10) + ", " + bound.typed()
+	if h == nil {
+		e.declare("sn_spawn", "declare void @sn_spawn(ptr, ptr, i64, i32)")
+		e.inst("call void @sn_spawn(" + args + ")")
+		return
+	}
+
+	e.declare("sn_spawn_handle", "declare void @sn_spawn_handle(ptr, ptr, i64, i32, ptr)") // the channel says where the task's own scope is
+	e.inst("call void @sn_spawn_handle(" + args + ", " + h.done.typed() + ")")
 }
 
 // caughtEntry writes the trampoline of a task with a handle: the call
@@ -277,6 +284,7 @@ func (e *Emitter) caughtEntry(k int, st string, call func() value, results, elem
 		failed, returned, send := e.block("task.failed"), e.block("task.returned"), e.block("task.send")
 		e.branch(caught.s, failed, returned)
 		e.label(failed)
+		e.rt("sn_handle_failed", "void", e.load("ptr", e.gep(st, "%p", n))) // cancels the task's group, if one took it
 		panicType := elem.(*types.Result).Err()
 		panicked := e.insert(value{e.irType(panicType, pos), "zeroinitializer"}, e.load(str, msg), 0) // the message is the Panic's one field
 		e.store(e.variantValue(elem, types.ErrVariant, []value{panicked}, pos), r)

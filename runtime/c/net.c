@@ -398,7 +398,9 @@ static const char *watch(int fd) {
 // wait_fd waits until fd may be ready to read, or to write: at once
 // when an event came since the caller's call failed, and otherwise by
 // parking until the poller wakes the task, or the direction's deadline
-// does, when it returns SN_NET_TIMED_OUT. The park may also end for an
+// does, when it returns SN_NET_TIMED_OUT, or a cancel of the task's
+// scope does, when it returns what sn_net_cancelled says, before it
+// parks too. The park may also end for an
 // earlier wait's wake, which the scheduler keeps, so every caller tries
 // its call again and waits again while the socket is not ready; the
 // task takes itself out of the word before it returns, unless the
@@ -419,6 +421,11 @@ static int wait_fd(int fd, bool write) {
     for (;;) {
         if (atomic_load(dl) < 0) {
             return SN_NET_TIMED_OUT;
+        }
+
+        int cut = sn_net_cancelled();
+        if (cut != 0) {
+            return cut;
         }
 
         uintptr_t old = pd_ready;
@@ -449,7 +456,20 @@ static int wait_fd(int fd, bool write) {
         sn_handoff_wait(woken);
     }
 
-    return atomic_load(dl) < 0 ? SN_NET_TIMED_OUT : 0;
+    return atomic_load(dl) < 0 ? SN_NET_TIMED_OUT : sn_net_cancelled();
+}
+
+// sn_net_cancelled is a wait's code for the state of the running task's
+// scope.
+int sn_net_cancelled(void) {
+    switch (sn_cancel_wait_state(sn_self())) {
+    case SN_SCOPE_TIMED_OUT:
+        return SN_NET_TIMED_OUT;
+    case SN_SCOPE_CANCELLED:
+        return SN_NET_CANCELLED;
+    default:
+        return 0;
+    }
 }
 
 // sn_net_setDeadline sets when fd's reads, or its writes, stop waiting:
@@ -633,8 +653,9 @@ int64_t sn_net_accept(int64_t fd, int64_t *out) {
             return code;
         }
 
-        if (wait_fd((int)fd, false) == SN_NET_TIMED_OUT) {
-            return SN_NET_TIMED_OUT;
+        int waited = wait_fd((int)fd, false);
+        if (waited != 0) {
+            return waited;
         }
     }
 }
@@ -679,10 +700,11 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
         }
 
         for (;;) {
-            if (wait_fd(s, true) == SN_NET_TIMED_OUT) {
+            int waited = wait_fd(s, true);
+            if (waited != 0) {
                 unwatch(s);
                 close(s);
-                return SN_NET_TIMED_OUT;
+                return waited;
             }
 
             int err = 0;
@@ -762,8 +784,9 @@ int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
             return last_error();
         }
 
-        if (wait_fd((int)fd, false) == SN_NET_TIMED_OUT) {
-            return SN_NET_TIMED_OUT;
+        int waited = wait_fd((int)fd, false);
+        if (waited != 0) {
+            return waited;
         }
     }
 }
@@ -796,9 +819,10 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
             return last_error();
         }
 
-        if (wait_fd((int)fd, true) == SN_NET_TIMED_OUT) {
+        int waited = wait_fd((int)fd, true);
+        if (waited != 0) {
             *n = done;
-            return SN_NET_TIMED_OUT;
+            return waited;
         }
     }
 

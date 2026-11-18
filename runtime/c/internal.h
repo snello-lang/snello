@@ -248,7 +248,8 @@ typedef struct {
 } sn_deadline;
 
 void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg);
-void sn_deadline_disarm(sn_deadline *at);
+void sn_deadline_arm_counted(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg);
+bool sn_deadline_disarm(sn_deadline *at);
 
 // What the scheduler asks of the timers: a wheel per worker made before
 // any thread but the first runs, the earliest deadline any wheel holds
@@ -398,6 +399,99 @@ void sn_remove_waiter(sn_waitq *q, sn_waiter *w);
 sn_waiter *sn_dequeue(sn_waitq *q);
 sn_task *sn_finish_wait(sn_waiter *w, bool success);
 void sn_await_wait(sn_wait_state *ws);
+
+// sn_await_cancellable is sn_await_wait for a wait a cancel may end,
+// sched.c's: it reports true once an operation has finished the wait,
+// and false when the task's scope was cancelled first and the task took
+// the wait back with the claim an operation would make, so that no
+// operation can take it after; the caller then takes its waiters off
+// their queues.
+bool sn_await_cancellable(sn_task *t, sn_wait_state *ws);
+
+// sn_handoff_cancellable is sn_handoff_wait for the task t, the running
+// one, until its scope is cancelled: false then, while the handoff is
+// still open, for the caller to take its wait back; sched.c's.
+bool sn_handoff_cancellable(sn_handoff *h, sn_task *t);
+
+// A scope is a region of a program's work cancelled together, with a
+// deadline or none: scope.c's. A task is in one scope, or in none,
+// which nothing cancels; a scope is under the one it was made in, and a
+// task's own scope, made with its handle's channel when it is spawned
+// for one, may be under a group's too. A cancel marks a scope and every
+// scope under it and wakes their tasks; each wait that a cancel may end
+// looks at the state of the task's scope when it wakes before its
+// waker came, and takes the wait back. sn_task_scope is where a task
+// keeps its scope, sched.c's: the scope and the task's neighbours among
+// the scope's tasks.
+enum { SN_SCOPE_LIVE = 0, SN_SCOPE_CANCELLED = 1, SN_SCOPE_TIMED_OUT = 2 };
+
+// One side of a scope's place in the lists of the scopes above it:
+// among the scopes under the one it was made in, and among the tasks'
+// own scopes a group took in.
+enum { SN_SCOPE_UNDER_PARENT = 0, SN_SCOPE_UNDER_GROUP = 1, SN_SCOPE_SIDES = 2 };
+
+typedef struct sn_scope sn_scope;
+
+struct sn_scope {
+    _Atomic int64_t refs;
+    _Atomic int state;                                     // SN_SCOPE_LIVE until a cancel or the deadline
+    sn_qlock mu;                                           // over the lists of tasks and of the scopes under it
+    sn_scope *_Atomic above[SN_SCOPE_SIDES];               // the group's is set by Add while other adds read it
+    sn_scope *prev[SN_SCOPE_SIDES], *next[SN_SCOPE_SIDES]; // its neighbours in the lists of the scopes above
+    sn_scope *below[SN_SCOPE_SIDES];                       // the scopes under it, made in it or taken in as a group
+    sn_task *tasks;
+    sn_scope *pending;      // the next scope a cancel that marked this one has still to walk into
+    sn_chan *_Atomic first; // a group's: the handle channel of the first of its tasks to fail
+    sn_deadline deadline;
+    bool timed;
+};
+
+typedef struct {
+    sn_scope *_Atomic scope; // written by an Add too, for a task spawned for a handle with no scope of its own yet
+    sn_task *prev, *next;    // its place among the scope's tasks, while enlisted
+    sn_chan *handle;         // a task spawned for a handle with no scope of its own yet: its handle's channel
+    bool enlisted; // it is in the scope's list of tasks, which a cancel wakes: put there at its first wait that
+                   // a cancel may end, or by the Add that took it, since a task that never waits needs no wake
+} sn_scope_link;
+
+sn_scope_link *sn_task_scope(sn_task *t);
+
+// sn_cancel_state is the state of the scope of the task t, the running
+// one, or SN_SCOPE_LIVE in no scope; sn_cancel_wait_state is what a wait
+// a cancel may end reads before it parks: it enlists the task in its
+// scope first, if it is not yet, under the scope's lock, so that a
+// cancel either finds the task in the list and wakes it or marked the
+// scope before the task reads it here. Both are sched.c's, which reads
+// the task's scope in its own record; sn_scope_enlist_self, scope.c's,
+// is the enlisting.
+int sn_cancel_state(sn_task *t);
+int sn_cancel_wait_state(sn_task *t);
+void sn_scope_enlist_self(sn_task *t, sn_scope *s);
+
+// What the scheduler and the channels ask of the scopes. sn_scope_current
+// is the scope the task t, the running one, starts tasks and scopes in:
+// its own scope, made now for a task spawned for a handle that has none
+// yet. sn_scope_inherit puts a task spawned as a statement in its
+// spawner's scope, which the scheduler asks only of a spawner in one or
+// spawned for a handle; sn_scope_own gives a task spawned for a handle,
+// whose channel is done, its own scope, or the word that makes one when
+// it is needed; sn_scope_ends is that task offering its result, ending;
+// sn_scope_dropped is its handle channel freed; sn_scope_end takes a task
+// that has ended out of its scope; sn_scope_release lets a hold of a
+// scope go.
+sn_scope *sn_scope_current(sn_task *t);
+void sn_scope_inherit(sn_task *child, sn_task *parent);
+void sn_scope_own(sn_chan *done, sn_task *child, sn_task *parent);
+void sn_scope_ends(sn_chan *done);
+void sn_scope_dropped(sn_chan *done);
+void sn_scope_end(sn_task *t);
+void sn_scope_release(sn_scope *s);
+
+// sn_chan_word is the word of a task's handle channel that says where
+// the task's own scope is, and sn_chan_failed its flag that the task
+// failed, scope.c's to read and write; chan.c's.
+_Atomic uintptr_t *sn_chan_word(sn_chan *c);
+_Atomic bool *sn_chan_failed(sn_chan *c);
 
 // Unicode's properties, as mkunicode.go numbers them in unicode.c: the
 // general categories, the grapheme, word and sentence break properties
@@ -551,9 +645,21 @@ int sn_uc_incb(int32_t r);
 
 // What the net package's runtime calls return beside the system's error
 // numbers, net.snello's codes: a host that is not an IP address but a
-// name, a deadline or a timeout passed, a name with no address, and a
-// failure of the resolver's own, whose reason it stores.
-enum { SN_NET_NOT_ADDRESS = -1, SN_NET_TIMED_OUT = -2, SN_NET_NO_SUCH_HOST = -3, SN_NET_RESOLVER_FAILED = -4 };
+// name, a deadline or a timeout passed, a name with no address, a
+// failure of the resolver's own, whose reason it stores, and a wait the
+// task's scope cancelled.
+enum {
+    SN_NET_NOT_ADDRESS = -1,
+    SN_NET_TIMED_OUT = -2,
+    SN_NET_NO_SUCH_HOST = -3,
+    SN_NET_RESOLVER_FAILED = -4,
+    SN_NET_CANCELLED = -5
+};
+
+// sn_net_cancelled is the code of a wait the running task's scope ended:
+// SN_NET_TIMED_OUT for a deadline that passed, SN_NET_CANCELLED for a
+// cancel, and 0 while it has not; net.c's for lookup.c.
+int sn_net_cancelled(void);
 
 // Addresses as text, lookup.c's, for the sockets of net.c: an IP
 // address read into a socket address with its port, returning the

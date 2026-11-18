@@ -14,7 +14,8 @@
 // locks. alloc.c is the allocator, unicode.c the tables of case, white
 // space and printable runes that mkunicode.go writes, pow10.c the
 // powers of ten floats are formatted with, which mkpow10.go writes,
-// sched.c the scheduler that runs the tasks, net.c the sockets over its
+// sched.c the scheduler that runs the tasks, scope.c the scopes their
+// cancellation and deadlines belong to, net.c the sockets over its
 // poller and lookup.c the addresses and the names they look up, and
 // trace.c the trace a panic prints. Both
 // backends write these files next to the program they emit and compile
@@ -29,14 +30,14 @@ import (
 	"path/filepath"
 )
 
-//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/decimal.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/timer.c c/net.c c/lookup.c c/debug.c c/testing.c c/trace.c c/tracetable.c
+//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/decimal.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/scope.c c/timer.c c/net.c c/lookup.c c/debug.c c/testing.c c/trace.c c/tracetable.c
 var files embed.FS
 
 // sources are the runtime's files a build compiles.
 var sources = []string{
 	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "decimal.c", "map.c", "bufio.c",
 	"os.c", "print.c", "math.c", "rand.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "rune.c", "norm.c", "segment.c", "pow10.c",
-	"sched.c", "timer.c", "net.c", "lookup.c", "debug.c", "testing.c", "trace.c", "tracetable.c",
+	"sched.c", "scope.c", "timer.c", "net.c", "lookup.c", "debug.c", "testing.c", "trace.c", "tracetable.c",
 }
 
 // Native names the runtime's files a build compiles to native code

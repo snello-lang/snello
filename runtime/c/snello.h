@@ -847,6 +847,26 @@ extern const int64_t sn_trace_names_count;
 // args, which the task's record holds, so that a spawn allocates
 // nothing for them; the copy lives until the task ends.
 void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound);
+// sn_spawn_handle is sn_spawn for a spawn written as an expression,
+// whose handle's channel is done: the task has a scope of its own, made
+// when it is needed, which a group the handle is added to takes in.
+void sn_spawn_handle(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done);
+
+// Package task's runtime calls, scope.c's: a scope with a deadline d
+// from now entered and left by the running task, whether its work is
+// cut short, and a group's scope made, dropped, cancelled, given a
+// task's own scope and asked which of its tasks failed first.
+void sn_task_enter(int64_t d);
+void sn_task_leave(void);
+bool sn_task_Cancelled(void);
+int64_t sn_task_newScope(void);
+void sn_task_dropScope(int64_t h);
+void sn_task_cancelScope(int64_t h);
+void sn_task_adopt(int64_t h, sn_chan *done);
+bool sn_task_firstFailed(int64_t h, sn_chan *done);
+// sn_handle_failed is what a task spawned for a handle, whose channel
+// is done, calls when it fails: its group, if one took it, is cancelled.
+void sn_handle_failed(sn_chan *done);
 int sn_select(sn_case *cases, int n, bool has_default);
 int64_t sn_tasks_running(void);
 int64_t
@@ -866,8 +886,12 @@ sn_task *sn_self(void);
 void sn_park(void);
 void sn_wake(sn_task *t);
 void sn_sleep(int64_t d);
-sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *),
-                      const char *made); // made is where the program made it, for the deadlock report
+sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char *made);
+// sn_chan_handle is sn_chan_make for the channel of one slot a spawn
+// for a handle gives the task and the handle, with both handles
+// counted.
+sn_chan *sn_chan_handle(size_t size, void (*drop)(void *),
+                        const char *made); // made is where the program made it, for the deadlock report
 sn_chan *sn_chan_clone(sn_chan *c, int dir);
 void sn_chan_drop(sn_chan **c, int dir);
 sn_chan *sn_chan_narrow(sn_chan *c, int kept); // a handle of both ends keeps the end kept and gives the other up
