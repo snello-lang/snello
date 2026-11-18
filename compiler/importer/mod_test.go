@@ -19,13 +19,19 @@ import (
 // TestModFile reads module files: what a require line gives, an empty
 // file marking the root, and the message for each kind of bad line.
 func TestModFile(t *testing.T) {
+	dir := filepath.FromSlash("/m")
+	abs, err := filepath.Abs(filepath.FromSlash("/abs/other")) // with the volume an absolute path has on Windows
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		src      string
 		requires []Require
 		err      string
 	}{
 		{"", nil, ""},
-		{"// the app\n\nrequire dep ../dep // a library beside it\nrequire other /abs/other\n", []Require{{"dep", filepath.Join("/m", "..", "dep")}, {"other", "/abs/other"}}, ""},
+		{"// the app\n\nrequire dep ../dep // a library beside it\nrequire other " + abs + "\n", []Require{{"dep", filepath.Join(dir, "..", "dep")}, {"other", abs}}, ""},
 		{"module example.com/app\n", nil, `snello.mod:1: unknown directive "module"`},
 		{"require dep\n", nil, "snello.mod:1: require needs a name and a directory"},
 		{"require strings ../s\n", nil, "snello.mod:1: strings is a standard package"},
@@ -39,7 +45,7 @@ func TestModFile(t *testing.T) {
 		{"link /usr/lib/libm.a\n", nil, "snello.mod:1: link names a library the system's linker finds, as -l does, not a flag or a path"},
 	}
 	for _, tt := range tests {
-		m, err := ParseModFile(filepath.Join("/m", ModFile), []byte(tt.src))
+		m, err := ParseModFile(filepath.Join(dir, ModFile), []byte(tt.src))
 		if tt.err != "" {
 			if err == nil || !strings.HasSuffix(err.Error(), tt.err) {
 				t.Errorf("%q: got %v, want an error ending in %q", tt.src, err, tt.err)
@@ -53,8 +59,8 @@ func TestModFile(t *testing.T) {
 			continue
 		}
 
-		if m.Dir != "/m" || len(m.Requires) != len(tt.requires) {
-			t.Errorf("%q: got %+v, want dir /m and %d requires", tt.src, m, len(tt.requires))
+		if m.Dir != dir || len(m.Requires) != len(tt.requires) {
+			t.Errorf("%q: got %+v, want dir %s and %d requires", tt.src, m, dir, len(tt.requires))
 			continue
 		}
 
@@ -134,8 +140,8 @@ func TestLookup(t *testing.T) {
 		{"shapes", filepath.Join(root, "shapes"), false, ""},
 		{"a/b", filepath.Join(root, "a", "b"), false, ""},
 		{"a", filepath.Join(root, "a"), false, ""},
-		{"dep", "/d", true, ""},
-		{"dep/greet", "/d/greet", true, ""},
+		{"dep", filepath.FromSlash("/d"), true, ""},
+		{"dep/greet", filepath.FromSlash("/d/greet"), true, ""},
 		{"deposit", "", false, ""},
 		{"nosuch", "", false, ""},
 		{"note.txt", "", false, ""},

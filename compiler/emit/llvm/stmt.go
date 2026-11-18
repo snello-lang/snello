@@ -28,7 +28,7 @@ func (e *Emitter) blockStmt(b *ast.BlockStmt) {
 	e.push(false)
 	e.stmts(b.List)
 	if e.fn.terminated {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 		return
 	}
 
@@ -505,7 +505,7 @@ func (e *Emitter) forStmt(s *ast.ForStmt) {
 		e.pop(s.Body.Rbrace)
 		e.jump(post)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
@@ -537,7 +537,7 @@ func (e *Emitter) partsLoop(s *ast.RangeStmt, part *types.Part, copies []lower.P
 		if !e.fn.terminated {
 			e.pop(s.Body.Rbrace)
 		} else {
-			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+			e.popLeft()
 			e.label(e.block("parts.next"))
 		}
 	}
@@ -622,7 +622,7 @@ func (e *Emitter) rangeNext(s *ast.RangeStmt, p string, t *types.Named, fn *type
 		e.pop(s.Body.Rbrace)
 		e.jump(cond)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
@@ -672,7 +672,7 @@ func (e *Emitter) rangeString(s *ast.RangeStmt, p string) {
 		e.pop(s.Body.Rbrace)
 		e.jump(post)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
@@ -730,7 +730,7 @@ func (e *Emitter) rangeIndexed(s *ast.RangeStmt, p string, t types.Type, consume
 		e.pop(s.Body.Rbrace)
 		e.jump(post)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
@@ -764,7 +764,7 @@ func (e *Emitter) rangeMap(s *ast.RangeStmt, p string, m *types.Map, consume boo
 		e.pop(s.Body.Rbrace)
 		e.jump(post)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]

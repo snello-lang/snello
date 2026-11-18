@@ -14,8 +14,9 @@ Snello supports two debuggers, **lldb** and **gdb**, the debuggers of the C tool
 | macOS | amd64 (Intel) | lldb, as on arm64 | not tested: the CI's macOS machines are arm64 |
 | Linux | arm64 | gdb, with its Python support: Debian's and Ubuntu's `gdb` package, not `gdb-minimal` | every session in this chapter, through both backends, and with the C backend compiled by gcc as well as clang |
 | Linux | amd64 | gdb, as on arm64 | as on arm64 |
+| Windows | amd64, arm64 | cdb, which Windows' SDK installs with the Build Tools; WinDbg, its window, reads the same | every session in this chapter, through both backends, on CI's Windows machines |
 
-Each debugger reads the debugging information on its own, so breakpoints, stepping, the backtrace and printing variables work in any version that reads DWARF. Snello's support, the formatted values and `tasks`, is a Python script that both debuggers load, and it needs a debugger built with Python, as Apple's lldb and Debian's gdb are. lldb on Linux reads the same information and loads the same script, but `snello debug` starts gdb there and the tests do not run lldb on Linux. Other debuggers, Delve or WinDbg, are not supported: Delve reads only Go programs, and Snello builds for macOS and Linux alone. An editor's debugger that drives lldb or gdb, such as VS Code's CodeLLDB or its C/C++ extension, shows what the debugger shows, but loads Snello's script only when told to, as below.
+Each debugger reads the debugging information on its own, so breakpoints, stepping, the backtrace and printing variables work in any version that reads DWARF. Snello's support, the formatted values and `tasks`, is a Python script that both debuggers load, and it needs a debugger built with Python, as Apple's lldb and Debian's gdb are. lldb on Linux reads the same information and loads the same script, but `snello debug` starts gdb there and the tests do not run lldb on Linux. Delve is not supported, since it reads only Go programs. Windows' own debuggers, `cdb`, WinDbg and Visual Studio's, read CodeView from a PDB instead of DWARF, and show Snello's values by visualizers, a natvis file, which a Windows debug build writes from the program's own types and the linker puts in the PDB, so that every one of them shows the values with nothing loaded; the `tasks` command is a script of theirs, `snello.js`, which `snello debug` loads into `cdb` as `!tasks`; on Windows it lists each task's state and not yet a waiting task's frames, and the SDK's `cdb` for arm64 ships without the provider of scripts, so `!tasks` is not available there. An editor's debugger that drives lldb or gdb, such as VS Code's CodeLLDB or its C/C++ extension, shows what the debugger shows, but loads Snello's script only when told to, as below.
 
 ## A build for the debugger
 
@@ -25,17 +26,17 @@ Each debugger reads the debugging information on its own, so breakpoints, steppi
 $ snello build -debug prog
 ```
 
-On Linux the debugging information is in the binary. On macOS the linker leaves it in the objects it links, which the build removes, so the build gathers it first into `prog.dSYM` beside the binary, as `clang -g` does; lldb finds the bundle there and takes it when it matches the binary.
+On Linux the debugging information is in the binary. On Windows it is in `prog.pdb` beside `prog.exe`, the visualizers of the program's values in it. On macOS the linker leaves it in the objects it links, which the build removes, so the build gathers it first into `prog.dSYM` beside the binary, as `clang -g` does; lldb finds the bundle there and takes it when it matches the binary.
 
 ## One command: `snello debug`
 
-`snello debug` builds the program the same way and starts the debugger on it: lldb on macOS, gdb on Linux. Anything after the program's path is passed to the program:
+`snello debug` builds the program the same way and starts the debugger on it: lldb on macOS, gdb on Linux, `cdb` on Windows, from the path or from where Windows' SDK installs it. Anything after the program's path is passed to the program:
 
 ```
 $ snello debug prog --verbose input.txt
 ```
 
-It also loads Snello's support into the debugger, which shows values as the program writes them and adds the command `tasks`. A debugger loads no such script from a binary on its own, which is why the command does it, as Rust's `rust-lldb` and Go's Delve do. With `snello build -debug` and a debugger started by hand, everything below works but the formatted values and `tasks`, which the script adds once it is loaded: `command script import PATH/snello.py` in lldb, `source PATH/snello.py` in gdb. `snello debug` writes the script, the first time it runs, into a directory named by its version under `debug/` in Snello's cache directory, `~/Library/Caches/snello` on macOS and `~/.cache/snello` on Linux, or the directory `SNELLO_CACHE` names; it is also `cmd/snello/snello.py` in a checkout of the repository.
+It also loads Snello's support into the debugger, which shows values as the program writes them and adds the command `tasks`. A debugger loads no such script from a binary on its own, which is why the command does it, as Rust's `rust-lldb` and Go's Delve do. With `snello build -debug` and a debugger started by hand, everything below works but the formatted values and `tasks`, which the script adds once it is loaded: `command script import PATH/snello.py` in lldb, `source PATH/snello.py` in gdb. `snello debug` writes the script, the first time it runs, into a directory named by its version under `debug/` in Snello's cache directory, which chapter 32 names for each system, or the directory `SNELLO_CACHE` names; it is also `cmd/snello/snello.py` in a checkout of the repository.
 
 ## Stopping, stepping and printing
 
@@ -114,7 +115,7 @@ $ perf record --call-graph fp ./prog
 $ perf report
 ```
 
-On macOS, Instruments' Time Profiler does the same, from Xcode or from the command line with `xcrun xctrace record --template 'Time Profiler' --launch -- ./prog`, which needs Xcode itself and not only its command-line tools.
+On macOS, Instruments' Time Profiler does the same, from Xcode or from the command line with `xcrun xctrace record --template 'Time Profiler' --launch -- ./prog`, which needs Xcode itself and not only its command-line tools. No profiler is described for Windows yet.
 
 A release build's profile names functions by their symbols, as the debugger does, and shows no lines: a release build keeps no line information for a profiler, as Rust's release builds keep none unless asked. Its optimizer writes small functions into their callers, so their time is their caller's. A profile of a debug build shows every function and line, but of unoptimized code, whose time is not the release build's.
 

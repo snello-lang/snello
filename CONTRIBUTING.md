@@ -16,7 +16,7 @@ Comment on an issue before starting it, so two people do not build the same thin
 
 ## Setting up
 
-You need Go 1.27.2 or later, `clang` for the LLVM backend, and a C compiler, `cc`, for the C backend. The compiler has no dependencies beyond Go's standard library.
+You need Go 1.27.2 or later, `clang` for the LLVM backend, and a C compiler, `cc`, for the C backend; on Windows clang is both, with Visual Studio's Build Tools beside it, and the binaries are named with `.exe`. The compiler has no dependencies beyond Go's standard library.
 
 ```
 git clone https://github.com/snello-lang/snello
@@ -26,7 +26,7 @@ bin/snello build examples/hello/hello.snello
 ./hello
 ```
 
-`clang` and `cc` are found on the path, or `CLANG` and `CC` name them.
+`clang` and `cc` are found on the path, or `CLANG` and `CC` name them; [chapter 32](_docs/book/32-the-snello-command.md#environment) of the book lists every variable `snello` reads.
 
 Before changing anything, read the design that governs it: [the language design](_docs/design/01-language-design.md) for every decision and why, [the syntax conventions](_docs/design/00-syntax-conventions.md), and the note on the part you are changing in [`_docs/design/`](_docs/design/). The design wins over the code: when they disagree, say so in the issue rather than change either side.
 
@@ -41,7 +41,7 @@ go test ./...
 
 `gofmt -l .` must print nothing. `go test ./...` builds and runs every example through both backends, as a release build and as a debug build, so it needs `clang` and `cc` and takes a few minutes; `go test ./compiler/...` is the quick loop while you work.
 
-The Makefile runs Snello's own tests through `snello test`: `make test` runs the library's and the examples' tests, `make test-std` and `make test-examples` each half, and `make check` runs `snello check` over the examples. Each runs inside the Linux image CI uses, built from `build/Dockerfile`, so it needs Docker; `NATIVE=1` runs it on your machine instead. `build/run.sh go test ./...` runs the Go tests inside the same image. CI runs the tests on x86-64 Linux, arm64 Linux and arm64 macOS.
+The Makefile runs Snello's own tests through `snello test`: `make test` runs the library's and the examples' tests, `make test-std` and `make test-examples` each half, and `make check` runs `snello check` over the examples. Each runs inside the Linux image CI uses, built from `build/Dockerfile`, so it needs Docker; `NATIVE=1` runs it on your machine instead. `build/run.sh go test ./...` runs the Go tests inside the same image. CI runs the tests on x86-64 Linux, arm64 Linux, arm64 macOS and x86-64 Windows, and on arm64 Windows without blocking a change; on Windows `make` runs under Git's Bash with `NATIVE=1`.
 
 ## A pull request
 

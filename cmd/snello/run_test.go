@@ -95,6 +95,12 @@ func TestExitCode(t *testing.T) {
 		t.Errorf("exit 7 gave %d", got)
 	}
 
+	var said strings.Builder
+	if got := exitCode(exec.Command(filepath.Join(t.TempDir(), "none")).Run(), &said); got != exitFailure || said.Len() == 0 {
+		t.Errorf("a program that does not exist gave %d and said %q", got, said.String())
+	}
+
+	needSignals(t)
 	err := exec.Command("sh", "-c", "kill -TERM $$").Run()
 	if got := exitCode(err, io.Discard); got != signalExitBase+int(syscall.SIGTERM) {
 		t.Errorf("a termination gave %d", got)
@@ -102,11 +108,6 @@ func TestExitCode(t *testing.T) {
 
 	if sig, ok := signalOf(err); !ok || sig != syscall.SIGTERM {
 		t.Errorf("signalOf gave %v, %v, want SIGTERM", sig, ok)
-	}
-
-	var said strings.Builder
-	if got := exitCode(exec.Command(filepath.Join(t.TempDir(), "none")).Run(), &said); got != exitFailure || said.Len() == 0 {
-		t.Errorf("a program that does not exist gave %d and said %q", got, said.String())
 	}
 }
 

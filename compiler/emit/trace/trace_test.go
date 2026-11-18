@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -225,9 +226,15 @@ func checkWithoutLines(t *testing.T, flag, obj string) {
 }
 
 // compilerAndHeaders returns the C compiler, CC or cc, and a directory
-// holding the runtime's headers, or skips the test without a compiler.
+// holding the runtime's headers, or skips the test without a compiler,
+// and on Windows, whose objects are COFF and whose table is read from
+// a first link's image by ImageTable, which TestImageTable covers.
 func compilerAndHeaders(t *testing.T) (string, string) {
 	t.Helper()
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("the test reads Mach-O and ELF objects, and Windows reads its table from an image")
+	}
+
 	cc := os.Getenv("CC")
 	if cc == "" {
 		cc = "cc"

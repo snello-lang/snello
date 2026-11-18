@@ -136,11 +136,72 @@ func TestAmd64Plain(t *testing.T) {
 		{"callq 401000 <x>", "call", "401000 <x>"},
 		{"pushq %rbp", "push", "%rbp"},
 		{"subq $0x38, %rsp", "sub", "$0x38,%rsp"},
+		{"rex.W jmp *%rax", "jmp", "*%rax"},
+		{"rex64 jmpq *%rax", "jmp", "*%rax"},
+		{"rep \tstosq\t%rax, %es:(%rdi)", "stosq", "%rax,%es:(%rdi)"},
+		{"lock ", "lock", ""},
 	} {
 		parts := strings.SplitN(c.in, " ", 2)
 		got := amd64Plain(inst{op: parts[0], args: parts[1]})
 		if got.op != c.op || got.args != c.args {
 			t.Errorf("%q: got %q %q", c.in, got.op, got.args)
 		}
+	}
+}
+
+// TestAmd64Windows reads what a Windows x86-64 binary adds, as LLVM's
+// objdump prints it: a frame larger than a page, its size in eax for the
+// stack probe's call and taken from the stack pointer after it; a call
+// through a slot of the table of imports, and a thunk's jump through
+// one; and the frames it cannot count: a size two paths put in eax
+// before they meet at the probe's call, and a size not put in eax just
+// before the call.
+func TestAmd64Windows(t *testing.T) {
+	img := &Image{arch: amd64, os: windows, functions: map[string]*function{}, cLibrary: map[string]bool{"GetProcAddress": true}}
+	img.read([]byte(`0000000140001000 <probed>:
+140001000:     	movl	$0x4e40, %eax           # imm = 0x4E40
+140001005:     	callq	0x140001060 <__chkstk>
+14000100a:     	subq	%rax, %rsp
+14000100d:     	callq	*0x666a3(%rip)          # 0x1400679a0 <__imp_GetProcAddress>
+140001013:     	addq	$0x4e40, %rsp
+14000101a:     	retq
+
+0000000140001020 <merged>:
+140001020:     	testl	%ecx, %ecx
+140001022:     	je	0x14000102b <merged+0xb>
+140001024:     	movl	$0x9c40, %eax
+140001029:     	jmp	0x140001030 <merged+0x10>
+14000102b:     	movl	$0x4e20, %eax
+140001030:     	callq	0x140001060 <__chkstk>
+140001035:     	subq	%rax, %rsp
+140001038:     	retq
+
+0000000140001040 <apart>:
+140001040:     	movl	$0x4e20, %eax
+140001045:     	nop
+140001046:     	callq	0x140001060 <__chkstk>
+14000104b:     	subq	%rax, %rsp
+14000104e:     	retq
+
+0000000140001060 <__chkstk>:
+140001060:     	retq
+
+0000000140001070 <GetCurrentProcessId>:
+140001070:     	jmpq	*0xf2a(%rip)            # 0x140002060 <__imp_GetCurrentProcessId>
+`), [2]uint64{})
+	if f := img.functions["probed"]; f.frame != 0x4e40 || f.unknown != "" || kinds(f) != "__chkstk lib:GetProcAddress" {
+		t.Errorf("probed: %+v, calls %q", f, kinds(f))
+	}
+
+	if f := img.functions["merged"]; !strings.Contains(f.unknown, "stack probe") {
+		t.Errorf("merged: %+v, want unknown for the branch to the probe", f)
+	}
+
+	if f := img.functions["apart"]; !strings.Contains(f.unknown, "depends on a value") {
+		t.Errorf("apart: %+v, want unknown for a size not put just before the probe", f)
+	}
+
+	if f := img.functions["GetCurrentProcessId"]; kinds(f) != "lib:GetCurrentProcessId" || f.unknown != "" {
+		t.Errorf("the thunk: %+v, calls %q", f, kinds(f))
 	}
 }

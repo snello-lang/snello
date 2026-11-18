@@ -4,12 +4,6 @@
 
 package backendtest
 
-import (
-	"os"
-	"runtime"
-	"syscall"
-)
-
 // Churn makes a million channels and drops each, waits a million times
 // in a select whose other case is ready before its After fires, and
 // drops a thousand Ticks unread. Every channel is freed by its last
@@ -65,14 +59,3 @@ const ChurnOut = "499999500000 1000000 100\n"
 
 // ChurnLimit is the most memory Churn may hold at its peak.
 const ChurnLimit = 64 << 20
-
-// Peak returns the most memory the process that ended in state held,
-// in bytes.
-func Peak(state *os.ProcessState) int64 {
-	peak := state.SysUsage().(*syscall.Rusage).Maxrss // bytes on macOS, kilobytes on Linux
-	if runtime.GOOS != "darwin" {
-		peak *= 1024
-	}
-
-	return peak
-}

@@ -59,7 +59,7 @@ func List(dir ref string) Result<(), io.Error> {
         }
 
         fi := os.Stat(ref filepath.Join(dir, e.Name()))?
-        fmt.Printf("  %s, %d bytes%s\n", e.Name(), fi.Size(), if fi.Mode().Perm() == 0o600 { ", the owner's alone" } else { "" })
+        fmt.Printf("  %s, %d bytes\n", e.Name(), fi.Size())
     }
 
     return Ok(())

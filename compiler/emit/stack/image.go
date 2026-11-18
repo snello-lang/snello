@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -122,7 +123,7 @@ type target struct {
 // Load reads the linked binary at path: its format, its architecture
 // and the libraries its imported functions come from, then every
 // function's frame and calls from the system's disassembler, otool on
-// macOS and objdump on Linux.
+// macOS, objdump on Linux and LLVM's on Windows.
 func Load(path string) (*Image, error) {
 	img := &Image{functions: map[string]*function{}, cLibrary: map[string]bool{}}
 	var tlv [2]uint64 // macOS's section of thread-local descriptors
@@ -174,8 +175,13 @@ func Load(path string) (*Image, error) {
 		}
 
 		img.lazy = len(syms) > 0 && !elfBindsNow(e)
+	} else if p, err := pe.Open(path); err == nil {
+		defer p.Close()
+		if err := loadPE(path, p, img); err != nil {
+			return nil, err
+		}
 	} else {
-		return nil, fmt.Errorf("%s: neither Mach-O nor ELF", path)
+		return nil, fmt.Errorf("%s: neither Mach-O, ELF nor PE", path)
 	}
 
 	out, err := disassemble(img.os, img.arch, path)
@@ -261,13 +267,17 @@ func isCLibrary(lib string) bool {
 }
 
 // disassemble runs the system's disassembler over the binary's code:
-// otool for macOS's, and for Linux's the objdump that reads the
-// binary's processor, as disassembler picks it.
+// otool for macOS's, for Linux's the objdump that reads the binary's
+// processor, as disassembler picks it, and for Windows' LLVM's, which
+// reads PE, or else the one on the path, which on macOS is LLVM's.
 func disassemble(os system, a arch, path string) ([]byte, error) {
 	var cmd *exec.Cmd
-	if os == darwin {
+	switch os {
+	case darwin:
 		cmd = exec.Command(otool, otoolText, path)
-	} else {
+	case windows:
+		cmd = exec.Command(peDisassembler(), objdumpText, objdumpNoBytes, path)
+	default:
 		cmd = exec.Command(disassembler(a), objdumpText, objdumpNoBytes, path)
 	}
 
@@ -300,14 +310,19 @@ func disassembler(a arch) string {
 	return objdump
 }
 
+// peDisassembler returns the objdump that reads a PE binary: LLVM's, by
+// its name, or the one on the path.
+func peDisassembler() string {
+	if _, err := exec.LookPath(llvmObjdump); err == nil {
+		return llvmObjdump
+	}
+
+	return objdump
+}
+
 // read splits the disassembler's text into functions and decodes each
 // one's instructions with the architecture's rules.
 func (img *Image) read(text []byte, tlv [2]uint64) {
-	type body struct {
-		name  string
-		insts []inst
-	}
-
 	var bodies []*body
 	var cur *body
 	sc := bufio.NewScanner(bytes.NewReader(text))
@@ -321,7 +336,8 @@ func (img *Image) read(text []byte, tlv [2]uint64) {
 		}
 
 		if m := objdumpLabel.FindStringSubmatch(line); m != nil {
-			cur = &body{name: m[2]}
+			addr, _ := strconv.ParseUint(m[1], 16, 64)
+			cur = &body{name: m[2], addr: addr}
 			bodies = append(bodies, cur)
 			continue
 		}
@@ -333,6 +349,10 @@ func (img *Image) read(text []byte, tlv [2]uint64) {
 		if in, ok := parseInst(line); ok {
 			cur.insts = append(cur.insts, in)
 		}
+	}
+
+	if img.os == windows {
+		bodies = img.splitPieces(bodies)
 	}
 
 	starts := map[uint64]string{} // a function's first address, for a branch the disassembler printed as an address alone

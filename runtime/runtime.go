@@ -30,13 +30,13 @@ import (
 	"path/filepath"
 )
 
-//go:embed c/snello.h c/internal.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/decimal.c c/map.c c/bufio.c c/os.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/scope.c c/timer.c c/net.c c/lookup.c c/debug.c c/testing.c c/trace.c c/tracetable.c
+//go:embed c/snello.h c/internal.h c/system.h c/snello.c c/slice.c c/sort.c c/string.c c/format.c c/quote.c c/parse.c c/decimal.c c/map.c c/bufio.c c/os.c c/os_windows.c c/print.c c/math.c c/rand.c c/time.c c/chan.c c/sync.c c/alloc.c c/unicode.c c/rune.c c/norm.c c/segment.c c/pow10.c c/sched.c c/scope.c c/timer.c c/net.c c/lookup.c c/debug.c c/testing.c c/trace.c c/tracetable.c
 var files embed.FS
 
 // sources are the runtime's files a build compiles.
 var sources = []string{
 	"snello.c", "slice.c", "sort.c", "string.c", "format.c", "quote.c", "parse.c", "decimal.c", "map.c", "bufio.c",
-	"os.c", "print.c", "math.c", "rand.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "rune.c", "norm.c", "segment.c", "pow10.c",
+	"os.c", "os_windows.c", "print.c", "math.c", "rand.c", "time.c", "chan.c", "sync.c", "alloc.c", "unicode.c", "rune.c", "norm.c", "segment.c", "pow10.c",
 	"sched.c", "scope.c", "timer.c", "net.c", "lookup.c", "debug.c", "testing.c", "trace.c", "tracetable.c",
 }
 
@@ -48,7 +48,7 @@ var Native = map[string]bool{"tracetable.c": true}
 
 // headers are the runtime's headers: snello.h, which the program's C
 // includes too, and internal.h, which only the runtime's files do.
-var headers = []string{"snello.h", "internal.h"}
+var headers = []string{"snello.h", "internal.h", "system.h"}
 
 // Files returns the runtime's files by name.
 func Files() map[string][]byte {

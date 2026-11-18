@@ -93,7 +93,7 @@ C that calls a library installed on the machine needs that library at the link. 
 link m
 ```
 
-That is the math library, and it becomes `-lm` when every program that imports a package of the module is linked; `link sqlite3` or `link z` name the SQLite or zlib libraries the same way. A flag or a path is refused: the line names a library, and the system's linker finds it. Binding one of its functions is then the one-line definition:
+That is the math library, and it becomes `-lm` when every program that imports a package of the module is linked; `link sqlite3` or `link z` name the SQLite or zlib libraries the same way. On Windows the C runtime holds the C library and its mathematics in one, which every program links, so `link m` and `link c` link nothing more there, and a module that names them builds on every system. A flag or a path is refused: the line names a library, and the system's linker finds it. Binding one of its functions is then the one-line definition:
 
 ```go
 package mathx
@@ -113,15 +113,17 @@ double snm_mathx_Cbrt(double x) {
 
 ## C that differs between systems
 
-A system's own interface is not the same on Linux and macOS, and a package binding it writes a C file for each, named for its platform as chapter 2's Snello files are: `shim_linux.c` is compiled only into a program built for Linux, `shim_darwin.c` only into one for macOS, and `shim.c` into both. A header is chosen the same way, and so are the package's `.snello` files, so a constant or a function that differs between systems sits in a file of its own beside its C. `sysname` in the example asks the kernel its name, from `/proc` on Linux and from `sysctl` on macOS:
+A system's own interface differs from one system to the next, and a package binding it writes a C file for each, named for its platform as chapter 2's Snello files are: `shim_linux.c` is compiled only into a program built for Linux, `shim_darwin.c` only into one for macOS, `shim_windows.c` only into one for Windows, `shim_unix.c` into one for either Unix, Linux or macOS, and `shim.c` into every one. A header is chosen the same way, and so are the package's `.snello` files, so a constant or a function that differs between systems sits in a file of its own beside its C. `sysname` in the example asks the kernel its name, from `/proc` on Linux, from `sysctl` on macOS and from ntdll's `RtlGetVersion` on Windows:
 
 ```
 sysname/
     sysname.snello           func Matches() bool { return isKernel(kernel) }; func isKernel(name ref string) bool
     sysname_linux.snello     const kernel = "Linux"
     sysname_darwin.snello    const kernel = "Darwin"
+    sysname_windows.snello   const kernel = "Windows_NT"
     sysname_linux.c          reads /proc/sys/kernel/ostype
     sysname_darwin.c         asks sysctlbyname("kern.ostype")
+    sysname_windows.c        asks RtlGetVersion for the platform, Windows NT
 ```
 
 ```c
@@ -141,7 +143,7 @@ bool snm_sysname_isKernel(sn_string name) {
 }
 ```
 
-Each platform's build sees one definition of `isKernel` and one `kernel`, and the program prints `true` on both. A C file named for a system or processor Snello does not build for, `shim_windows.c` or `cpu_ppc64le.c`, is left out, so a C library copied into a package whole, with a file for every processor, needs no file renamed.
+Each platform's build sees one definition of `isKernel` and one `kernel`, and the program prints `true` on Linux, on macOS and on Windows, where the backends' tests run it as on the others. A C file named for a system or processor Snello does not build for, `shim_freebsd.c` or `cpu_ppc64le.c`, is left out, so a C library copied into a package whole, with a file for every processor, needs no file renamed.
 
 ## What the C side keeps to
 

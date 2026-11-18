@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,10 @@ func TestPrograms(t *testing.T) {
 // vector type and the 128-bit product of the random source, and the
 // narrow arithmetic and the shifts.
 func TestGCC(t *testing.T) {
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("Windows builds with clang alone, and its gcc builds for MinGW")
+	}
+
 	version, err := exec.Command("gcc", "--version").Output()
 	if err != nil {
 		t.Skip("no gcc")
@@ -272,6 +277,10 @@ func TestDebugChecks(t *testing.T) {
 // connection and an accepted one print their number, then whether each
 // flag is set.
 func TestDescriptorFlags(t *testing.T) {
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("the probe reads the flags with fcntl, which Windows does not have")
+	}
+
 	body := `int64_t fds[6] = {0}, port = 0, bad = 0; sn_string call;
 	bad += sn_os_create(SN_STR("flags.txt", 9), &fds[0]);
 	bad += sn_os_open(SN_STR("flags.txt", 9), &fds[1]);

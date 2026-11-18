@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,9 +85,10 @@ func TestCacheOff(t *testing.T) {
 // TestCacheRoot checks where the cache lives: under SNELLO_CACHE when it
 // names a directory, else under the user's cache directory.
 func TestCacheRoot(t *testing.T) {
-	t.Setenv("SNELLO_CACHE", "/some/where")
-	if root, ok := cacheRoot(); !ok || root != filepath.Join("/some/where", "runtime") {
-		t.Errorf("SNELLO_CACHE=/some/where gave %q, %v", root, ok)
+	where := filepath.Join(t.TempDir(), "some", "where")
+	t.Setenv("SNELLO_CACHE", where)
+	if root, ok := cacheRoot(); !ok || root != filepath.Join(where, "runtime") {
+		t.Errorf("SNELLO_CACHE=%s gave %q, %v", where, root, ok)
 	}
 
 	t.Setenv("SNELLO_CACHE", "")
@@ -126,6 +128,10 @@ func TestKey(t *testing.T) {
 // TestCompilerID checks that a compiler is told apart by its path, by a
 // rebuild in place, which changes its size or time, and by its version.
 func TestCompilerID(t *testing.T) {
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("the fake compilers are shell scripts, which Windows does not run")
+	}
+
 	dir := t.TempDir()
 	write := func(name, version string) string {
 		path := filepath.Join(dir, name)
@@ -526,19 +532,23 @@ func TestCacheFallback(t *testing.T) {
 // run, as the launcher of one not installed, in its own words and with
 // how to install one, and one that is not found as not found.
 func TestCompilerIDUnusable(t *testing.T) {
+	var missing *toolchain.MissingError
+	_, err := CompilerID(filepath.Join(t.TempDir(), "none"))
+	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("no compiler: %v", err)
+	}
+
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("the launcher is a shell script, which Windows does not run")
+	}
+
 	launcher := filepath.Join(t.TempDir(), "cc")
 	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho 'xcode-select: note: No developer tools were found' >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	var missing *toolchain.MissingError
-	_, err := CompilerID(launcher)
+	_, err = CompilerID(launcher)
 	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "cannot run (xcode-select: note: No developer tools were found)") {
 		t.Errorf("a launcher: %v", err)
-	}
-
-	_, err = CompilerID(filepath.Join(t.TempDir(), "none"))
-	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "not found") {
-		t.Errorf("no compiler: %v", err)
 	}
 }

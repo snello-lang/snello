@@ -5,6 +5,9 @@
 package backendtest
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +19,9 @@ import (
 // functionValue begins the analysis's reason for a task that calls a
 // function value, through a pointer whose targets it does not know.
 const functionValue = "a call through a pointer"
+
+// windows names Windows, as runtime.GOOS does.
+const windows = "windows"
 
 // FunctionValues are the programs a spawn of which calls a function
 // value, by name, with the call: such a task keeps a guarded stack,
@@ -31,9 +37,15 @@ var FunctionValues = map[string]string{
 // stack, which costs a spawn two system calls and nothing a program
 // prints shows, so a change that loses a bound fails here instead. A
 // spawn the linker removed has no task to bound, and one of the
-// FunctionValues programs may call a function value.
+// FunctionValues programs may call a function value. A binary of a
+// platform whose C library's stacks are not measured is not checked:
+// every task of its programs runs on a guarded stack.
 func Bounded(t *testing.T, name, bin string) {
 	t.Helper()
+	if !stack.Measured(runtime.GOOS, runtime.GOARCH) {
+		return
+	}
+
 	table, err := stack.Table(bin)
 	if err != nil {
 		t.Errorf("the bounds of %s: %v", bin, err)
@@ -51,7 +63,7 @@ func Bounded(t *testing.T, name, bin string) {
 		return
 	}
 
-	bounds, err := stack.Patch(bin, nil) // the analysis again, for its reasons
+	bounds, err := stack.Patch(bin, nil, linkMapOf(bin)) // the analysis again, for its reasons, as the build ran it
 	if err != nil || len(bounds) != len(table) {
 		t.Errorf("spawns %v of %s have no bound: %v", lost, bin, err)
 		return
@@ -65,6 +77,17 @@ func Bounded(t *testing.T, name, bin string) {
 	if why := unexpected(name, lost, reasons); len(why) > 0 {
 		t.Errorf("%s has spawns with no bound of their stacks:\n%s", bin, strings.Join(why, "\n"))
 	}
+}
+
+// linkMapOf returns the linker's map the build of bin wrote beside it,
+// on Windows, or "" where there is none.
+func linkMapOf(bin string) string {
+	path := filepath.Join(filepath.Dir(bin), stack.LinkMapFile)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+
+	return path
 }
 
 // unexpected returns, of the spawns lost of program name with the

@@ -7,6 +7,7 @@ package main
 import (
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"fmt"
 	"io"
 	"os"
@@ -269,7 +270,7 @@ func TestBuildWithoutCompiler(t *testing.T) {
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", "")
 	t.Chdir(t.TempDir())
-	for backend, want := range map[string]string{"llvm": "clang not found", "c": "cc not found"} {
+	for backend, want := range map[string]string{"llvm": toolchain.Clang() + " not found", "c": toolchain.CC() + " not found"} {
 		line := want + ": install it with " + toolchain.Install() + ", or set "
 		for _, command := range []string{buildCommand, runCommand, testCommand} {
 			code := -1
@@ -302,11 +303,12 @@ func TestBuildWithoutCompiler(t *testing.T) {
 func TestCheckTarget(t *testing.T) {
 	dir := t.TempDir()
 	for name, src := range map[string]string{
-		"main.snello":        "package main\n\nfunc main() { _ = name() }\n",
-		"name_linux.snello":  "package main\n\nfunc name() string { return \"linux\" }\n",
-		"name_darwin.snello": "package main\n\nfunc name() string { return 1 }\n",
-		"width_arm64.snello": "package main\n\nconst width = 64\n",
-		"width_amd64.snello": "package main\n\nconst width = 64\n",
+		"main.snello":         "package main\n\nfunc main() { _ = name() }\n",
+		"name_linux.snello":   "package main\n\nfunc name() string { return \"linux\" }\n",
+		"name_darwin.snello":  "package main\n\nfunc name() string { return 1 }\n",
+		"name_windows.snello": "package main\n\nfunc name() string { return \"windows\" }\n",
+		"width_arm64.snello":  "package main\n\nconst width = 64\n",
+		"width_amd64.snello":  "package main\n\nconst width = 64\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
 			t.Fatal(err)
@@ -319,6 +321,8 @@ func TestCheckTarget(t *testing.T) {
 	}{
 		{"linux/amd64", exitSuccess},
 		{"linux/arm64", exitSuccess},
+		{"windows/amd64", exitSuccess},
+		{"windows/arm64", exitSuccess},
 		{"darwin/arm64", exitFailure}, // name_darwin.snello returns an int as a string
 	} {
 		var out, errs strings.Builder
@@ -335,11 +339,12 @@ func TestCheckTarget(t *testing.T) {
 // whose packages bind C and choose files by platform, and pipeline,
 // whose tasks the stacks' analysis bounds, which it must for every
 // target whose C library's stacks are measured, read by the objdump
-// for the target's processor. It runs each where the machine can run
-// the target's programs: under Rosetta for macOS on the other
-// processor, under qemu for the other Linux. A target this machine
-// cannot build for is named in the log and passed over; one it builds
-// for but cannot run is checked for its format.
+// for the target's processor; a Windows binary, which the analysis does
+// not read yet, is checked for its format alone. It runs each where the
+// machine can run the target's programs: under Rosetta for macOS on the
+// other processor, under qemu for the other Linux. A target this
+// machine cannot build for is named in the log and passed over; one it
+// builds for but cannot run is checked for its format.
 func TestCrossBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a program for each target")
@@ -380,6 +385,7 @@ func TestCrossBuild(t *testing.T) {
 func crossBuild(t *testing.T, dir, name string, target platform.Target, backend string) {
 	t.Helper()
 	what := name + " for " + target.String() + " through " + backend
+	bin := target.Executable(name)
 	var code int
 	msgs := stderrOf(t, func() { code = build(dir, backend, target, false) })
 	if code != exitSuccess {
@@ -387,20 +393,26 @@ func crossBuild(t *testing.T, dir, name string, target platform.Target, backend 
 		return
 	}
 
-	if err := checkFormat(name, target); err != nil {
+	if err := checkFormat(bin, target); err != nil {
 		t.Errorf("%s: %v", what, err)
 		return
 	}
 
-	if name == "pipeline" && target != (platform.Target{OS: platform.Darwin, Arch: platform.AMD64}) { // macOS on Intel: its C library's stacks are not measured
-		bounds, err := stack.Patch(name, nil)
-		if err != nil || len(bounds) == 0 {
-			t.Errorf("%s: the stacks' analysis read %d tasks, %v", what, len(bounds), err)
+	if name == "pipeline" && stacksMeasured(target) {
+		table, err := stack.Table(bin) // the bounds the build wrote, from the link's map on Windows
+		if err != nil || len(table) == 0 {
+			t.Errorf("%s: the build bounded %d tasks, %v", what, len(table), err)
 		}
 
-		for i, b := range bounds {
-			if !b.Known() {
-				t.Errorf("%s: task %d unbounded: %s", what, i, b.Reason)
+		for i, b := range table {
+			if b == lower.Unbounded {
+				bounds, _ := stack.Patch(bin, nil, filepath.Join(filepath.Dir(bin), stack.LinkMapFile)) // the analysis again, for its reason, with the build's map where it wrote one
+				reason := "no reason read"
+				if i < len(bounds) {
+					reason = bounds[i].Reason
+				}
+
+				t.Errorf("%s: task %d unbounded: %s", what, i, reason)
 			}
 		}
 	}
@@ -416,7 +428,7 @@ func crossBuild(t *testing.T, dir, name string, target platform.Target, backend 
 		t.Fatal(err)
 	}
 
-	got, err := exec.Command(runner[0], append(runner[1:], "./"+name)...).Output()
+	got, err := exec.Command(runner[0], append(runner[1:], "./"+bin)...).Output()
 	if err != nil || string(got) != string(want) {
 		t.Errorf("%s: ran %v and printed\n%s\nwant\n%s", what, err, got, want)
 		return
@@ -425,9 +437,30 @@ func crossBuild(t *testing.T, dir, name string, target platform.Target, backend 
 	t.Logf("%s: built and ran under %s", what, filepath.Base(runner[0]))
 }
 
+// stacksMeasured reports whether the stacks' analysis bounds the tasks
+// of a program for target: where its C library's stacks are measured.
+func stacksMeasured(target platform.Target) bool {
+	return stack.Measured(target.OS, target.Arch)
+}
+
 // checkFormat says whether the binary at path is an executable for the
-// target: Mach-O for macOS, ELF for Linux, of its processor.
+// target: Mach-O for macOS, ELF for Linux, PE for Windows, of its
+// processor.
 func checkFormat(path string, target platform.Target) error {
+	if target.OS == platform.Windows {
+		f, err := pe.Open(path)
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+		if want := map[string]uint16{platform.AMD64: pe.IMAGE_FILE_MACHINE_AMD64, platform.ARM64: pe.IMAGE_FILE_MACHINE_ARM64}[target.Arch]; f.Machine != want {
+			return fmt.Errorf("a PE binary for %#x, want %#x", f.Machine, want)
+		}
+
+		return nil
+	}
+
 	if target.OS == platform.Darwin {
 		f, err := macho.Open(path)
 		if err != nil {

@@ -54,6 +54,13 @@ const (
 	// another, so that a panic's trace walks the frames: a leaf is never
 	// below another frame.
 	framePointers = "\"frame-pointer\"=\"non-leaf\""
+
+	// unwindTables has every function written with the unwind data the
+	// system's unwinder reads, which a panic's trace walks the frames by
+	// on Windows, where frame pointers make no chain; windowsTriple is
+	// what a target triple for Windows holds.
+	unwindTables  = "uwtable"
+	windowsTriple = "-windows-"
 )
 
 // targetKeys are the attributes of a function that say what processor
@@ -86,9 +93,14 @@ func Targeted(module []byte) ([]byte, error) {
 		return module, fmt.Errorf("asking %s what processor %s is: %w", Compiler(), triple, err)
 	}
 
-	out := make([]byte, 0, len(module)+len(attrs)+1)
+	group := attrs + " " + noJumpTables + " " + framePointers
+	if strings.Contains(triple, windowsTriple) {
+		group += " " + unwindTables
+	}
+
+	out := make([]byte, 0, len(module)+len(group)+len("attributes #0 = {  }\n"))
 	out = append(out, module[:len(module)-len(emptyGroup)]...)
-	return append(out, "attributes #0 = { "+attrs+" "+noJumpTables+" "+framePointers+" }\n"...), nil
+	return append(out, "attributes #0 = { "+group+" }\n"...), nil
 }
 
 // target returns the attributes clang gives every function it compiles

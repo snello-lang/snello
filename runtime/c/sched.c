@@ -34,23 +34,23 @@
 #include "internal.h"
 
 #include <errno.h>
-#include <pthread.h>
-#include <setjmp.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <time.h>
+
+#if !defined(_WIN32)
+#include <sched.h>
+#include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 #if defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/event.h>
 #endif
-
-#include <sched.h>
 
 #ifdef __linux__
 #include <sys/epoll.h>
@@ -195,9 +195,10 @@ static const int64_t held_limit = 10000000; // 10 ms
 enum { workers_per_core = 16 };
 
 // The keeper's own events, among which the poller's descriptor is one
-// more on Linux.
+// more on Linux; on Windows they are the keys of the port's packets.
 #if defined(__APPLE__)
 enum { keeper_timer = 1, keeper_user = 2 };
+#elif defined(_WIN32)
 #else
 enum { keeper_user = 1, keeper_timer = 2, keeper_poller = 3 };
 #endif
@@ -208,16 +209,18 @@ enum { keeper_user = 1, keeper_timer = 2, keeper_poller = 3 };
 // for a context that has not run yet. The frame it saves is 160 bytes
 // on arm64: x19 to x28, x29 and x30, then d8 to d15; and 64 bytes on
 // x86-64: rbp, rbx and r12 to r15, pushed, with the return address the
-// caller left above them. The symbol carries a leading underscore on
-// Darwin, as every C symbol does there.
+// caller left above them. On Windows it holds more, the stack's bounds
+// and on x86-64 the registers that convention keeps besides, as the
+// comment above the Windows switch says. The symbol carries a leading
+// underscore on Darwin, as every C symbol does there.
 void sn_switch(void **save, void *to);
 
 // sn_on_stack calls fn(arg) on the stack whose top is top, aligned to
 // sixteen bytes, and returns what fn returns, back on the stack it was
 // called on, whose frame pointer keeps the way back: a panic takes a
 // stack and runs its drops with it, where a task's small stack, bound
-// to what its own code uses, has no room for either.
-void *sn_on_stack(void *top, void *(*fn)(void *), void *arg);
+// to what its own code uses, has no room for either. ON_STACK, below,
+// calls it with the bounds of the stack, which Windows keeps.
 
 // stack_pointer returns the stack pointer of the function it is written
 // in, inlined; a call made of it returns one below that frame, which
@@ -240,6 +243,9 @@ static inline uintptr_t stack_pointer(void) {
 #if defined(__APPLE__)
 #define SN_SYM(name)  "_" #name
 #define SN_TYPE(name) ""
+#elif defined(_WIN32)
+#define SN_SYM(name)  #name
+#define SN_TYPE(name) ".def " #name "\n.scl 2\n.type 32\n.endef\n" // an external function, in COFF's words
 #elif defined(__aarch64__)
 #define SN_SYM(name)  #name
 #define SN_TYPE(name) ".type " #name ", %function\n"
@@ -248,11 +254,314 @@ static inline uintptr_t stack_pointer(void) {
 #define SN_TYPE(name) ".type " #name ", @function\n"
 #endif
 
+// On Windows the switch also saves and restores the bounds of the stack
+// the thread is on, which the system keeps in the thread's information
+// block and reads when it probes a large frame (__chkstk), dispatches an
+// exception or unwinds: a task runs on a stack the thread did not start
+// with, so each switch writes the bounds of the stack it resumes into
+// the block of the thread it resumes on, StackBase, StackLimit and
+// DeallocationStack. On x86-64 the Windows convention has the callee
+// keep more than System V's: rdi, rsi and xmm6 to xmm15 besides, with
+// the vector unit's control words. The frame is 264 bytes: xmm6 to
+// xmm15, saved unaligned so that a task's first frame may start as a
+// called function's does, MXCSR and the x87 control word, the three
+// bounds, a word of padding, then r15 to rbp, pushed, below the return
+// address. sn_on_stack takes the bounds of the stack it calls on, or
+// NULL to keep the thread's, and puts them back after.
+typedef struct {
+    void *base;        // the top of the stack, StackBase
+    void *limit;       // the lowest address it may use, StackLimit
+    void *reservation; // where its memory begins, DeallocationStack
+} sn_stack_bounds;
+
+#if defined(_WIN32)
+void *sn_on_stack_bounded(void *top, void *(*fn)(void *), void *arg, const sn_stack_bounds *bounds);
+#define ON_STACK(top, bounds, fn, arg) sn_on_stack_bounded(top, fn, arg, bounds)
+#else
+void *sn_on_stack(void *top, void *(*fn)(void *), void *arg);
+#define ON_STACK(top, bounds, fn, arg) ((void)(bounds), sn_on_stack(top, fn, arg)) // a stack's bounds are no one's
+#endif
+
 // clang-format off
-#if defined(__aarch64__)
+#if defined(_WIN32) && defined(__x86_64__)
+#define SN_FRAME 312 // the frame, the return address and a fresh frame's room above it: a slot and 32 bytes of home space
+#define SN_SAVED_FP 256 // rbp, pushed first, and the return address the call left above it
+#define SN_SAVED_PC 264
+#define SN_RESUMED_SP 272 // where the switch's caller resumes, past the return address ret pops
+#define SN_SAVED_CSR 160 // MXCSR, and the x87 control word after it
+// The control words a thread starts with on Windows: MXCSR with every
+// exception masked and rounding to nearest, and the x87's with every
+// exception masked, rounding to nearest and a double's precision.
+#define SN_MXCSR_START 0x1F80
+#define SN_X87_START   0x027F
+#define SN_SAVED_BOUNDS 168 // the stack's reservation, its limit and its base
+__asm__(
+    ".text\n"
+    ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
+    "  pushq %rbp\n"
+    "  pushq %rbx\n"
+    "  pushq %rdi\n"
+    "  pushq %rsi\n"
+    "  pushq %r12\n"
+    "  pushq %r13\n"
+    "  pushq %r14\n"
+    "  pushq %r15\n"
+    "  subq $200, %rsp\n"
+    "  movups %xmm6, 0(%rsp)\n"
+    "  movups %xmm7, 16(%rsp)\n"
+    "  movups %xmm8, 32(%rsp)\n"
+    "  movups %xmm9, 48(%rsp)\n"
+    "  movups %xmm10, 64(%rsp)\n"
+    "  movups %xmm11, 80(%rsp)\n"
+    "  movups %xmm12, 96(%rsp)\n"
+    "  movups %xmm13, 112(%rsp)\n"
+    "  movups %xmm14, 128(%rsp)\n"
+    "  movups %xmm15, 144(%rsp)\n"
+    "  stmxcsr 160(%rsp)\n"
+    "  fnstcw 164(%rsp)\n"
+    "  movq %gs:0x30, %r10\n"
+    "  movq 0x1478(%r10), %rax\n"
+    "  movq %rax, 168(%rsp)\n"
+    "  movq 0x10(%r10), %rax\n"
+    "  movq %rax, 176(%rsp)\n"
+    "  movq 0x08(%r10), %rax\n"
+    "  movq %rax, 184(%rsp)\n"
+    "  movq %rsp, (%rcx)\n"
+    "  movq %rdx, %rsp\n"
+    "  movups 0(%rsp), %xmm6\n"
+    "  movups 16(%rsp), %xmm7\n"
+    "  movups 32(%rsp), %xmm8\n"
+    "  movups 48(%rsp), %xmm9\n"
+    "  movups 64(%rsp), %xmm10\n"
+    "  movups 80(%rsp), %xmm11\n"
+    "  movups 96(%rsp), %xmm12\n"
+    "  movups 112(%rsp), %xmm13\n"
+    "  movups 128(%rsp), %xmm14\n"
+    "  movups 144(%rsp), %xmm15\n"
+    "  ldmxcsr 160(%rsp)\n"
+    "  fldcw 164(%rsp)\n"
+    "  movq %gs:0x30, %r10\n"
+    "  movq 168(%rsp), %rax\n"
+    "  movq %rax, 0x1478(%r10)\n"
+    "  movq 176(%rsp), %rax\n"
+    "  movq %rax, 0x10(%r10)\n"
+    "  movq 184(%rsp), %rax\n"
+    "  movq %rax, 0x08(%r10)\n"
+    "  addq $200, %rsp\n"
+    "  popq %r15\n"
+    "  popq %r14\n"
+    "  popq %r13\n"
+    "  popq %r12\n"
+    "  popq %rsi\n"
+    "  popq %rdi\n"
+    "  popq %rbx\n"
+    "  popq %rbp\n"
+    "  ret\n"
+    // Its unwind data says rbp is its frame's register, so that the
+    // system's unwinder, from a function it called on another stack,
+    // finds the stack it was called on through rbp.
+    ".globl " SN_SYM(sn_on_stack_bounded) "\n" SN_TYPE(sn_on_stack_bounded) SN_SYM(sn_on_stack_bounded) ":\n"
+    ".seh_proc " SN_SYM(sn_on_stack_bounded) "\n"
+    "  pushq %rbp\n"
+    ".seh_pushreg %rbp\n"
+    "  movq %rsp, %rbp\n"
+    ".seh_setframe %rbp, 0\n"
+    ".seh_endprologue\n"
+    "  movq %gs:0x30, %r10\n"
+    "  pushq 0x08(%r10)\n"
+    "  pushq 0x10(%r10)\n"
+    "  pushq 0x1478(%r10)\n"
+    "  testq %r9, %r9\n"
+    "  jz 1f\n"
+    "  movq 0(%r9), %rax\n"
+    "  movq %rax, 0x08(%r10)\n"
+    "  movq 8(%r9), %rax\n"
+    "  movq %rax, 0x10(%r10)\n"
+    "  movq 16(%r9), %rax\n"
+    "  movq %rax, 0x1478(%r10)\n"
+    "1:\n"
+    "  movq %rcx, %rsp\n"
+    "  subq $32, %rsp\n"
+    "  movq %r8, %rcx\n"
+    "  callq *%rdx\n"
+    "  movq %gs:0x30, %r10\n"
+    "  movq -8(%rbp), %rcx\n"
+    "  movq %rcx, 0x08(%r10)\n"
+    "  movq -16(%rbp), %rcx\n"
+    "  movq %rcx, 0x10(%r10)\n"
+    "  movq -24(%rbp), %rcx\n"
+    "  movq %rcx, 0x1478(%r10)\n"
+    "  movq %rbp, %rsp\n"
+    "  popq %rbp\n"
+    "  ret\n"
+    ".seh_endproc\n"
+    // sn_setjmp_regs saves the registers Windows' x64 convention has a
+    // callee keep into the buffer at rcx: rbx, rbp, rdi, rsi, r12 to
+    // r15, the stack pointer as the caller has it after the return, the
+    // return address, MXCSR and the x87 control word, and xmm6 to xmm15;
+    // sn_longjmp_regs puts them back and returns 1 to that address.
+    ".globl " SN_SYM(sn_setjmp_regs) "\n" SN_TYPE(sn_setjmp_regs) SN_SYM(sn_setjmp_regs) ":\n"
+    "  movq %rbx, 0(%rcx)\n"
+    "  movq %rbp, 8(%rcx)\n"
+    "  movq %rdi, 16(%rcx)\n"
+    "  movq %rsi, 24(%rcx)\n"
+    "  movq %r12, 32(%rcx)\n"
+    "  movq %r13, 40(%rcx)\n"
+    "  movq %r14, 48(%rcx)\n"
+    "  movq %r15, 56(%rcx)\n"
+    "  leaq 8(%rsp), %rdx\n"
+    "  movq %rdx, 64(%rcx)\n"
+    "  movq (%rsp), %rdx\n"
+    "  movq %rdx, 72(%rcx)\n"
+    "  stmxcsr 80(%rcx)\n"
+    "  fnstcw 84(%rcx)\n"
+    "  movdqu %xmm6, 96(%rcx)\n"
+    "  movdqu %xmm7, 112(%rcx)\n"
+    "  movdqu %xmm8, 128(%rcx)\n"
+    "  movdqu %xmm9, 144(%rcx)\n"
+    "  movdqu %xmm10, 160(%rcx)\n"
+    "  movdqu %xmm11, 176(%rcx)\n"
+    "  movdqu %xmm12, 192(%rcx)\n"
+    "  movdqu %xmm13, 208(%rcx)\n"
+    "  movdqu %xmm14, 224(%rcx)\n"
+    "  movdqu %xmm15, 240(%rcx)\n"
+    "  xorl %eax, %eax\n"
+    "  ret\n"
+    ".globl " SN_SYM(sn_longjmp_regs) "\n" SN_TYPE(sn_longjmp_regs) SN_SYM(sn_longjmp_regs) ":\n"
+    "  movq 0(%rcx), %rbx\n"
+    "  movq 8(%rcx), %rbp\n"
+    "  movq 16(%rcx), %rdi\n"
+    "  movq 24(%rcx), %rsi\n"
+    "  movq 32(%rcx), %r12\n"
+    "  movq 40(%rcx), %r13\n"
+    "  movq 48(%rcx), %r14\n"
+    "  movq 56(%rcx), %r15\n"
+    "  ldmxcsr 80(%rcx)\n"
+    "  fldcw 84(%rcx)\n"
+    "  movdqu 96(%rcx), %xmm6\n"
+    "  movdqu 112(%rcx), %xmm7\n"
+    "  movdqu 128(%rcx), %xmm8\n"
+    "  movdqu 144(%rcx), %xmm9\n"
+    "  movdqu 160(%rcx), %xmm10\n"
+    "  movdqu 176(%rcx), %xmm11\n"
+    "  movdqu 192(%rcx), %xmm12\n"
+    "  movdqu 208(%rcx), %xmm13\n"
+    "  movdqu 224(%rcx), %xmm14\n"
+    "  movdqu 240(%rcx), %xmm15\n"
+    "  movq 64(%rcx), %rsp\n"
+    "  movl $1, %eax\n"
+    "  jmpq *72(%rcx)\n");
+#elif defined(_WIN32) && defined(__aarch64__)
+#define SN_FRAME 192 // the frame and the three bounds, with a word of padding
+#define SN_SAVED_FP 80 // x29 in the frame below, and x30, the return address, after it
+#define SN_SAVED_PC 88
+#define SN_RESUMED_SP SN_FRAME // where the switch's caller resumes, past the frame the switch drops
+#define SN_SAVED_BOUNDS 160 // the stack's reservation, its limit and its base
+__asm__(
+    ".text\n"
+    ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
+    ".p2align 2\n" SN_SYM(sn_switch) ":\n"
+    "  sub sp, sp, #192\n"
+    "  stp x19, x20, [sp, #0]\n"
+    "  stp x21, x22, [sp, #16]\n"
+    "  stp x23, x24, [sp, #32]\n"
+    "  stp x25, x26, [sp, #48]\n"
+    "  stp x27, x28, [sp, #64]\n"
+    "  stp x29, x30, [sp, #80]\n"
+    "  stp d8, d9, [sp, #96]\n"
+    "  stp d10, d11, [sp, #112]\n"
+    "  stp d12, d13, [sp, #128]\n"
+    "  stp d14, d15, [sp, #144]\n"
+    "  ldr x10, [x18, #0x1478]\n"
+    "  ldr x11, [x18, #0x10]\n"
+    "  stp x10, x11, [sp, #160]\n"
+    "  ldr x10, [x18, #0x08]\n"
+    "  str x10, [sp, #176]\n"
+    "  mov x9, sp\n"
+    "  str x9, [x0]\n"
+    "  mov sp, x1\n"
+    "  ldp x19, x20, [sp, #0]\n"
+    "  ldp x21, x22, [sp, #16]\n"
+    "  ldp x23, x24, [sp, #32]\n"
+    "  ldp x25, x26, [sp, #48]\n"
+    "  ldp x27, x28, [sp, #64]\n"
+    "  ldp x29, x30, [sp, #80]\n"
+    "  ldp d8, d9, [sp, #96]\n"
+    "  ldp d10, d11, [sp, #112]\n"
+    "  ldp d12, d13, [sp, #128]\n"
+    "  ldp d14, d15, [sp, #144]\n"
+    "  ldp x10, x11, [sp, #160]\n"
+    "  str x10, [x18, #0x1478]\n"
+    "  str x11, [x18, #0x10]\n"
+    "  ldr x10, [sp, #176]\n"
+    "  str x10, [x18, #0x08]\n"
+    "  add sp, sp, #192\n"
+    "  ret\n"
+    ".globl " SN_SYM(sn_on_stack_bounded) "\n" SN_TYPE(sn_on_stack_bounded)
+    ".p2align 2\n" SN_SYM(sn_on_stack_bounded) ":\n"
+    "  stp x29, x30, [sp, #-48]!\n"
+    "  mov x29, sp\n"
+    "  ldr x10, [x18, #0x08]\n"
+    "  ldr x11, [x18, #0x10]\n"
+    "  stp x10, x11, [sp, #16]\n"
+    "  ldr x10, [x18, #0x1478]\n"
+    "  str x10, [sp, #32]\n"
+    "  cbz x3, 1f\n"
+    "  ldr x10, [x3, #0]\n"
+    "  str x10, [x18, #0x08]\n"
+    "  ldr x10, [x3, #8]\n"
+    "  str x10, [x18, #0x10]\n"
+    "  ldr x10, [x3, #16]\n"
+    "  str x10, [x18, #0x1478]\n"
+    "1:\n"
+    "  mov sp, x0\n"
+    "  mov x0, x2\n"
+    "  blr x1\n"
+    "  mov sp, x29\n"
+    "  ldp x10, x11, [sp, #16]\n"
+    "  str x10, [x18, #0x08]\n"
+    "  str x11, [x18, #0x10]\n"
+    "  ldr x10, [sp, #32]\n"
+    "  str x10, [x18, #0x1478]\n"
+    "  ldp x29, x30, [sp], #48\n"
+    "  ret\n"
+    ".globl " SN_SYM(sn_setjmp_regs) "\n" SN_TYPE(sn_setjmp_regs)
+    ".p2align 2\n" SN_SYM(sn_setjmp_regs) ":\n"
+    "  stp x19, x20, [x0, #0]\n"
+    "  stp x21, x22, [x0, #16]\n"
+    "  stp x23, x24, [x0, #32]\n"
+    "  stp x25, x26, [x0, #48]\n"
+    "  stp x27, x28, [x0, #64]\n"
+    "  stp x29, x30, [x0, #80]\n"
+    "  mov x9, sp\n"
+    "  str x9, [x0, #96]\n"
+    "  stp d8, d9, [x0, #104]\n"
+    "  stp d10, d11, [x0, #120]\n"
+    "  stp d12, d13, [x0, #136]\n"
+    "  stp d14, d15, [x0, #152]\n"
+    "  mov x0, #0\n"
+    "  ret\n"
+    ".globl " SN_SYM(sn_longjmp_regs) "\n" SN_TYPE(sn_longjmp_regs)
+    ".p2align 2\n" SN_SYM(sn_longjmp_regs) ":\n"
+    "  ldp x19, x20, [x0, #0]\n"
+    "  ldp x21, x22, [x0, #16]\n"
+    "  ldp x23, x24, [x0, #32]\n"
+    "  ldp x25, x26, [x0, #48]\n"
+    "  ldp x27, x28, [x0, #64]\n"
+    "  ldp x29, x30, [x0, #80]\n"
+    "  ldr x9, [x0, #96]\n"
+    "  mov sp, x9\n"
+    "  ldp d8, d9, [x0, #104]\n"
+    "  ldp d10, d11, [x0, #120]\n"
+    "  ldp d12, d13, [x0, #136]\n"
+    "  ldp d14, d15, [x0, #152]\n"
+    "  mov x0, #1\n"
+    "  ret\n");
+#elif defined(__aarch64__)
 #define SN_FRAME 160
 #define SN_SAVED_FP 80 // x29 in the frame below, and x30, the return address, after it
 #define SN_SAVED_PC 88
+#define SN_RESUMED_SP SN_FRAME // where the switch's caller resumes, past the frame the switch drops
 __asm__(
     ".text\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
@@ -297,6 +606,7 @@ __asm__(
 #define SN_FRAME 64
 #define SN_SAVED_FP 40 // rbp, pushed first, and the return address the call left above it
 #define SN_SAVED_PC 48
+#define SN_RESUMED_SP 56 // where the switch's caller resumes, past the return address ret pops
 __asm__(
     ".text\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
@@ -334,13 +644,38 @@ __asm__(
 // an aligned stack and every saved register zero. On x86-64 the
 // return address sits one word below the top, so that entry begins as
 // a called function does, with the stack pointer eight past a
-// sixteen-byte boundary.
+// sixteen-byte boundary; on Windows the vector unit's control words
+// start at the values a thread starts with, and set_bounds writes the
+// stack's bounds into the frame.
 static void *make_context(void *top, void (*entry)(void)) {
     uint8_t *sp = (uint8_t *)top - SN_FRAME;
     memset(sp, 0, SN_FRAME);
     ((void **)sp)[SN_SAVED_PC / sizeof(void *)] = (void *)entry; // where the switch returns to
+#if defined(_WIN32) && defined(__x86_64__)
+    *(uint32_t *)(sp + SN_SAVED_CSR) = SN_MXCSR_START;
+    *(uint16_t *)(sp + SN_SAVED_CSR + 4) = SN_X87_START;
+#endif
     return sp;
 }
+
+#if defined(_WIN32)
+// set_bounds writes into a fresh frame the bounds of the stack it is on:
+// its top, the lowest address its task may use and where its memory
+// begins, which the switch puts in the thread's information block.
+static void set_bounds(void *sp, void *top, void *limit, void *reservation) {
+    void **b = (void **)((uint8_t *)sp + SN_SAVED_BOUNDS);
+    b[0] = reservation;
+    b[1] = limit;
+    b[2] = top;
+}
+
+// frame_bounds reads the bounds of the stack of a context switched
+// away from, from its frame.
+static sn_stack_bounds frame_bounds(void *sp) {
+    void **b = (void **)((uint8_t *)sp + SN_SAVED_BOUNDS);
+    return (sn_stack_bounds){ b[2], b[1], b[0] };
+}
+#endif
 
 typedef struct {
     void *p;
@@ -374,8 +709,8 @@ struct sn_task {
     sn_string places[3];   // the place of the test call being made, testing.c's: the task's own, so that parallel tests
                            // do not share it
     uintptr_t *trace; // the frames of its last panic, kept for a test's runner under a catch that keeps them, or NULL
-    _Alignas(max_align_t) uint8_t args[few_args]; // room for the arguments, aligned for any program value: read once,
-                                                  // as the task starts, so last
+    _Alignas(SN_MAX_ALIGN) uint8_t args[few_args]; // room for the arguments, aligned for any program value: read once,
+                                                   // as the task starts, so last
 #ifdef SN_DEBUG
     struct sn_task *debug_next; // the task spawned before it, on the list a debugger's script walks
 #endif
@@ -387,7 +722,7 @@ struct sn_task {
 // It lives in sn_catch's frame on the task's stack, below the frames
 // the panic abandons.
 typedef struct sn_mark {
-    sigjmp_buf jump;
+    sn_jmp_buf jump;
     int64_t nguards;
     sn_string *out; // where the panic's message goes, the caller's
     bool report;    // print the panic as an uncaught one is printed, before the unwinding
@@ -442,6 +777,8 @@ typedef struct worker {
                      // time itself in its wait; the greatest time for none
     bool owes_watch; // it left the keeper's wait while tasks wait on sockets: before its next task it wakes a worker to
                      // watch them, if none does
+    bool owes_poll;  // it left the keeper's wait on the poller's events: its next look at the poller takes them
+                     // whether or not a task waits on a socket, as they would end the next keeper's wait at once
 #ifdef SN_DEBUG
     task *ended[ended_kept]; // its tasks that ended, kept unfreed, the oldest freed first
     int64_t nended;
@@ -453,7 +790,7 @@ static int workers_most;     // what the monitor may grow the workers to
 static _Atomic int nworkers; // the workers started, the main thread's among them: only grows
 
 static int workers_now(void) { return atomic_load_explicit(&nworkers, memory_order_relaxed); }
-static pthread_mutex_t start_mu = PTHREAD_MUTEX_INITIALIZER;
+static sn_mutex start_mu = SN_MUTEX_INIT;
 static bool started;
 
 static _Thread_local worker *self_worker;
@@ -503,6 +840,7 @@ __attribute__((used)) const sn_debugger_table sn_debugger = {
     .run = offsetof(task, run),
     .saved_fp = SN_SAVED_FP,
     .saved_pc = SN_SAVED_PC,
+    .resumed_sp = SN_RESUMED_SP,
     .stack_room = guarded_bytes,
     .running = RUNNING,
     .runnable = RUNNABLE,
@@ -694,6 +1032,18 @@ static void *pool_pop(int c) {
 // pool_keeps reports whether the pool of class c has room for a stack.
 static bool pool_keeps(int c) { return c != guarded || pooled[c] < guarded_pooled; }
 
+// unmap_guarded gives a guarded stack back to the system. Windows frees
+// only a reservation whole, and a guarded stack is a part of a block's,
+// so there its pages are decommitted and its addresses stay reserved,
+// for the block they belong to.
+static void unmap_guarded(void *s) {
+#if defined(_WIN32)
+    (void)VirtualFree((uint8_t *)s + sn_page_size(), stack_size - sn_page_size(), MEM_DECOMMIT);
+#else
+    munmap(s, stack_size);
+#endif
+}
+
 #ifndef SN_DEBUG // a debug build keeps ended records unfreed and reuses none
 // dead_keeps reports whether the pool of class c has room for a record
 // with its stack: the guarded ones are bounded as their stacks are.
@@ -751,7 +1101,7 @@ static void dead_keep(worker *w, task *t) {
             task *x = w->dead[c];
             w->dead[c] = x->next;
             w->ndead[c]--;
-            munmap(x->stack, stack_size);
+            unmap_guarded(x->stack);
             sn_heap_free(x);
         }
     }
@@ -791,13 +1141,22 @@ static void *stack_new(worker *w, int c, const char **failure) {
 
     size_t size = class_size(c);
     if (block_left[c] == 0) { // a new block: under the lock, so that no two threads make one at once
+        size_t n = c == guarded ? block_stacks * stack_size : small_block;
+#if defined(_WIN32)
+        // A small class's block is committed whole, as the other systems
+        // make it writable; a guarded class's is reserved, each stack
+        // committed but for its guard page as it is taken.
+        void *b = VirtualAlloc(NULL, n, c == guarded ? MEM_RESERVE : MEM_RESERVE | MEM_COMMIT,
+                               c == guarded ? PAGE_NOACCESS : PAGE_READWRITE);
+        if (b == NULL) {
+#else
         int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
         flags |= MAP_NORESERVE; // made writable without the system setting memory aside for it
 #endif
-        size_t n = c == guarded ? block_stacks * stack_size : small_block;
         void *b = mmap(NULL, n, c == guarded ? PROT_NONE : PROT_READ | PROT_WRITE, flags, -1, 0);
         if (b == MAP_FAILED) {
+#endif
             pool_give();
             *failure = "cannot reserve a task's stack";
             return NULL;
@@ -815,12 +1174,20 @@ static void *stack_new(worker *w, int c, const char **failure) {
         return s;
     }
 
-    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    size_t page = sn_page_size();
+#if defined(_WIN32)
+    if (VirtualAlloc(s + page, size - page, MEM_COMMIT, PAGE_READWRITE) ==
+        NULL) { // the guard page stays reserved, never committed
+        *failure = "cannot reserve a task's stack: the system's commit limit is reached";
+        return NULL;
+    }
+#else
     if (mprotect(s + page, size - page, PROT_READ | PROT_WRITE) !=
         0) { // the stack and its guard become mappings of their own, and the system's count of them is finite
         *failure = "cannot reserve a task's stack: the system's limit of memory mappings is reached";
         return NULL;
     }
+#endif
 
     return s;
 }
@@ -851,7 +1218,7 @@ static void stack_free(worker *w, void *s, int c) {
 
             pool_give();
             while (w->nstacks[c] > stack_cache / 2) { // guarded stacks alone: a small class's pool keeps every one
-                munmap(w->stacks[c][--w->nstacks[c]], stack_size);
+                unmap_guarded(w->stacks[c][--w->nstacks[c]]);
             }
         }
 
@@ -867,7 +1234,7 @@ static void stack_free(worker *w, void *s, int c) {
     }
 
     pool_give();
-    munmap(s, stack_size);
+    unmap_guarded(s);
 }
 
 // sn_self returns the running task; on the main thread before any
@@ -1356,14 +1723,19 @@ static task *take_next(worker *w) {
 // of it had to wake a worker, and echoes over sockets cost two threads
 // woken an event. No one looks while no task waits on a socket, nor
 // while the keeper waits in the poller, which hears of the events
-// itself. polls counts the looks, for the monitor to tell whether any
-// was made since its last.
+// itself, except the worker that left the keeper's wait because the
+// poller held events: it takes them whatever waits, since an event no
+// task waits for only marks its socket ready, and one left in the
+// poller would end every keeper's wait at once. polls counts the looks,
+// for the monitor to tell whether any was made since its last.
 static _Atomic uint64_t polls;
 
 static task *poll_now(worker *w) {
-    if (sn_net_waiting() == 0 || atomic_load(&keeping)) {
+    if (!w->owes_poll && (sn_net_waiting() == 0 || atomic_load(&keeping))) {
         return NULL;
     }
+
+    w->owes_poll = false;
 
     sn_task *woke[2 * SN_POLL_EVENTS];
     int taken;
@@ -1654,13 +2026,94 @@ static bool spin(worker *w, bool holding) {
 // The keeper also watches the sockets: its wait ends when the sockets'
 // poller holds events, which it waits for as one descriptor among its
 // own, the poller being readable while it holds any, and it then leaves
-// the wait to look at the poller as a worker. The deadline and the wake
-// are in a set of the keeper's alone, so that a worker looking at the
-// poller never takes them. A keeper with no deadline, keeping only for
-// the sockets, waits with none.
+// the wait to look at the poller as a worker. On Linux and macOS the
+// deadline and the wake are in a set of the keeper's alone, so that a
+// worker looking at the poller never takes them; Windows has no such
+// set, as the block below says. A keeper with no deadline, keeping
+// only for the sockets, waits with none.
 static _Atomic bool keeper_woken;
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+// On Windows the keeper waits on the sockets' completion port, net.c's,
+// for the poll of a socket, its wake, posted to the port, and its
+// deadline, a high-resolution waitable timer the system posts to the
+// port through a wait completion packet, which ntdll's calls make,
+// looked up once, as no import library names them. A worker looking at the
+// port for the sockets may take the keeper's wake or deadline, and
+// gives it back while the keeper waits; the keeper may take a poll,
+// which it posts again for a worker and leaves the wait to take as one.
+typedef LONG(NTAPI *wait_packet_create)(HANDLE *, ACCESS_MASK, void *);
+typedef LONG(NTAPI *wait_packet_associate)(HANDLE, HANDLE, HANDLE, void *, void *, LONG, ULONG_PTR, BOOLEAN *);
+typedef LONG(NTAPI *wait_packet_cancel)(HANDLE, BOOLEAN);
+
+static HANDLE keeper_clock;  // the high-resolution timer of the deadline
+static HANDLE keeper_packet; // the wait completion packet that posts it to the port
+static wait_packet_associate associate;
+static wait_packet_cancel cancel;
+static _Atomic bool keeper_asleep; // the keeper waits on the port, for a packet of its own a worker took
+
+static void keeper_start(void) {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    wait_packet_create create = (wait_packet_create)(void *)GetProcAddress(ntdll, "NtCreateWaitCompletionPacket");
+    associate = (wait_packet_associate)(void *)GetProcAddress(ntdll, "NtAssociateWaitCompletionPacket");
+    cancel = (wait_packet_cancel)(void *)GetProcAddress(ntdll, "NtCancelWaitCompletionPacket");
+    keeper_clock = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (keeper_clock == NULL) { // a system older than the high-resolution timer: a deadline then comes on its tick
+        keeper_clock = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+    }
+
+    if (sn_net_poller() < 0 || create == NULL || associate == NULL || cancel == NULL || keeper_clock == NULL ||
+        create(&keeper_packet, GENERIC_ALL, NULL) < 0) {
+        sn_panic(SN_STR("cannot start the scheduler", 26));
+    }
+}
+
+static bool keeper_sleep(int64_t when, int64_t now) {
+    HANDLE port = sn_net_port();
+    DWORD wait = INFINITE; // a deadline the timer cannot keep is kept by the wait's own, to the millisecond
+    if (when != INT64_MAX) {
+        LARGE_INTEGER due = { .QuadPart = -((when - now) + 99) / 100 }; // relative, in ticks of 100 ns
+        if (!SetWaitableTimer(keeper_clock, &due, 0, NULL, NULL, FALSE) ||
+            associate(keeper_packet, port, keeper_clock, (void *)(uintptr_t)SN_KEY_DEADLINE, NULL, 0, 0, NULL) < 0) {
+            wait = (DWORD)((when - now + sn_ns_per_ms - 1) / sn_ns_per_ms);
+        }
+    }
+
+    atomic_store(&keeper_asleep, true);
+    sn_qlock_give(&idle_mu);
+    OVERLAPPED_ENTRY got[8];
+    ULONG n = 0;
+    if (!GetQueuedCompletionStatusEx(port, got, 8, &n, wait, FALSE)) {
+        n = 0;
+    }
+
+    atomic_store(&keeper_asleep, false);
+    sn_qlock_take(&idle_mu);
+    if (when != INT64_MAX) {
+        CancelWaitableTimer(keeper_clock);
+        cancel(keeper_packet, TRUE); // and its packet, posted and not yet taken
+    }
+
+    bool sockets = false;
+    for (ULONG i = 0; i < n; i++) {
+        if (got[i].lpCompletionKey == SN_KEY_POLL) {
+            PostQueuedCompletionStatus(port, got[i].dwNumberOfBytesTransferred, got[i].lpCompletionKey,
+                                       got[i].lpOverlapped);
+            sockets = true;
+        }
+    }
+
+    return sockets;
+}
+
+static void keeper_rouse(void) { PostQueuedCompletionStatus(sn_net_port(), 0, SN_KEY_WAKE, NULL); }
+
+void sn_keeper_packet(uintptr_t key) {
+    if (atomic_load(&keeper_asleep)) {
+        PostQueuedCompletionStatus(sn_net_port(), 0, key, NULL);
+    }
+}
+#elif defined(__APPLE__)
 static int keeper_queue = -1;
 
 static void keeper_start(void) {
@@ -1828,8 +2281,8 @@ static void keeper_wake(void) {
 // workers_per_core a core, which takes the queued task; the system
 // then shares the processors between the threads. An added worker is
 // not ended: it waits when idle as the others do.
-static pthread_mutex_t monitor_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t monitor_cond = PTHREAD_COND_INITIALIZER;
+static sn_mutex monitor_mu = SN_MUTEX_INIT;
+static sn_cond monitor_cond = SN_COND_INIT;
 
 // move_next moves a task left stale in w's slot to the inject queue,
 // and reports whether there was one: stale when w has switched to no
@@ -1856,9 +2309,9 @@ static bool move_next(worker *w, uint64_t *seen) {
 }
 
 static void monitor_wake(void) {
-    pthread_mutex_lock(&monitor_mu);
-    pthread_cond_signal(&monitor_cond);
-    pthread_mutex_unlock(&monitor_mu);
+    sn_mutex_lock(&monitor_mu);
+    sn_cond_signal(&monitor_cond);
+    sn_mutex_unlock(&monitor_mu);
 }
 
 // monitor_poll looks at the sockets' poller for the monitor when no
@@ -1895,15 +2348,14 @@ static void *monitor_main(void *arg) {
         sn_panic(SN_STR("out of memory", 13));
     }
     for (;;) {
-        pthread_mutex_lock(&monitor_mu);
+        sn_mutex_lock(&monitor_mu);
         while (atomic_load(&hot.idle) == workers_now()) {
-            pthread_cond_wait(&monitor_cond, &monitor_mu);
+            sn_cond_wait(&monitor_cond, &monitor_mu);
             pause = next_stale;
         }
 
-        pthread_mutex_unlock(&monitor_mu);
-        struct timespec until = { 0, (long)pause };
-        nanosleep(&until, NULL);
+        sn_mutex_unlock(&monitor_mu);
+        sn_sleep_ns(pause);
         int64_t now = sn_time_mono();
         bool moved = sn_timers_fire(now); // what came due with every worker busy
         if (moved) {
@@ -2027,7 +2479,8 @@ static void sched_loop(worker *w) {
 
         holding = false;
 
-        bool kept = false; // it was the keeper in this wait
+        bool kept = false;   // it was the keeper in this wait
+        bool events = false; // and left it because the poller held events
         sn_qlock_take(&idle_mu);
         atomic_fetch_add(&hot.idle, 1);
         for (;;) {
@@ -2092,6 +2545,7 @@ static void sched_loop(worker *w) {
             }
 
             if (sockets) {
+                events = true;
                 break; // the poller holds events: it looks at it as a worker, keeping no longer
             }
         }
@@ -2102,6 +2556,7 @@ static void sched_loop(worker *w) {
         w->owes_at =
             sn_timers_next(); // it may have been the keeper, or woken to be: before it runs a task, another keeps
         w->owes_watch = kept; // and another watches the sockets
+        w->owes_poll = events;
         if (first) {
             monitor_wake(); // the first worker busy again: the monitor's lock is never taken under idle_mu
         }
@@ -2124,24 +2579,32 @@ static void sched_entry(void) {
 
 // start_thread starts a detached thread of the runtime's own.
 static void start_thread(void *(*main)(void *), void *arg) {
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_t id;
-    if (pthread_create(&id, &attr, main, arg) != 0) {
+    if (!sn_thread_start(main, arg)) {
         sn_panic(SN_STR("cannot start a thread", 21));
     }
-
-    pthread_attr_destroy(&attr);
 }
 
 // sn_cores is the number of processors the program may run on, at
 // least one: the processors in the thread's affinity mask on Linux,
 // as Go's runtime.NumCPU counts them, so that a program held to a
 // few processors by taskset or a container starts a worker for each
-// of those; the processors online elsewhere.
+// of those; the processors in the process's affinity mask on Windows;
+// the processors online on macOS.
 int64_t sn_cores(void) {
     long n = 0;
+#if defined(_WIN32)
+    // The processors in the process's affinity mask, in the group the
+    // process runs in, so that a program held to a few by a job object
+    // or start /affinity starts a worker for each of those.
+    DWORD_PTR mask = 0, system = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &mask, &system)) {
+        n = __builtin_popcountll((unsigned long long)mask);
+    }
+
+    if (n <= 0) {
+        n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    }
+#else
 #ifdef __linux__
     cpu_set_t set;
     if (sched_getaffinity(0, sizeof set, &set) == 0) {
@@ -2151,6 +2614,7 @@ int64_t sn_cores(void) {
     if (n <= 0) {
         n = sysconf(_SC_NPROCESSORS_ONLN);
     }
+#endif
 
     return n > 1 ? (int64_t)n : 1;
 }
@@ -2162,7 +2626,7 @@ int64_t sn_cores(void) {
 // are written, so that the pages of the others stay untouched until
 // one is added.
 static void start(void) {
-    pthread_mutex_lock(&start_mu);
+    sn_mutex_lock(&start_mu);
     if (!started) {
         int n = (int)sn_cores();
         workers_most = n * workers_per_core;
@@ -2191,7 +2655,7 @@ static void start(void) {
         start_thread(monitor_main, NULL);
     }
 
-    pthread_mutex_unlock(&start_mu);
+    sn_mutex_unlock(&start_mu);
 }
 
 // add_worker starts one more worker, for the monitor: the worker and
@@ -2227,6 +2691,10 @@ static void *sched_prepare(void *arg) {
     if (w->sched_sp == NULL) { // the main thread, before its first park
         w->sched_stack = stack_take(NULL, guarded);
         w->sched_sp = make_context((uint8_t *)w->sched_stack + stack_size, sched_entry);
+#if defined(_WIN32)
+        set_bounds(w->sched_sp, (uint8_t *)w->sched_stack + stack_size, (uint8_t *)w->sched_stack + sn_page_size(),
+                   w->sched_stack);
+#endif
     }
 
     return NULL;
@@ -2236,7 +2704,8 @@ static inline void sched_ready(void) {
     worker *w;
     if (!started || (w = my_worker()) == NULL || w->sched_sp == NULL) {
         uintptr_t sp = stack_pointer();
-        sn_on_stack((void *)((sp - below_frame) & ~(uintptr_t)(stack_align - 1)), sched_prepare, NULL);
+        ON_STACK((void *)((sp - below_frame) & ~(uintptr_t)(stack_align - 1)), NULL, sched_prepare,
+                 NULL); // the stack it is on
     }
 }
 
@@ -2362,6 +2831,10 @@ static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t b
     }
 #endif
     t->sp = make_context((uint8_t *)t->stack + class_size(t->stack_class), task_entry);
+#if defined(_WIN32)
+    set_bounds(t->sp, (uint8_t *)t->stack + class_size(t->stack_class),
+               (uint8_t *)t->stack + (t->stack_class == guarded ? sn_page_size() : 0), t->stack);
+#endif
     if (done != NULL) {
         sn_scope_own(done, t, self);
     } else if (atomic_load_explicit(&self->scope.scope, memory_order_relaxed) != NULL || self->scope.handle != NULL) {
@@ -2600,7 +3073,7 @@ bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
     m.report = report;
     m.prev = t->marks;
     t->marks = &m;
-    if (sigsetjmp(m.jump, 0) == 0) {
+    if (sn_setjmp(m.jump) == 0) {
         fn(ctx);
         sn_self()->marks =
             m.prev; // the task asked for again: no local of this frame set before the mark is read after it
@@ -2615,19 +3088,19 @@ bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
 // variable being made by another waits here, holding its worker,
 // which is what an initializer that waits for another task would
 // deadlock on; an initializer is plain code.
-static pthread_mutex_t lazy_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t lazy_cond = PTHREAD_COND_INITIALIZER;
+static sn_mutex lazy_mu = SN_MUTEX_INIT;
+static sn_cond lazy_cond = SN_COND_INIT;
 
 // lazy_abandon is the guard of an initializer that panics: the
 // variable is unmade again and whoever waits is woken, so that a later
 // use under a test makes it anew.
 static void lazy_abandon(void *p) {
     sn_lazy *o = p;
-    pthread_mutex_lock(&lazy_mu);
+    sn_mutex_lock(&lazy_mu);
     __atomic_store_n(&o->state, 0, __ATOMIC_RELEASE);
     o->maker = NULL;
-    pthread_cond_broadcast(&lazy_cond);
-    pthread_mutex_unlock(&lazy_mu);
+    sn_cond_broadcast(&lazy_cond);
+    sn_mutex_unlock(&lazy_mu);
 }
 
 // sn_lazy_make is never inlined, so that the analysis of a linked
@@ -2635,11 +3108,11 @@ static void lazy_abandon(void *p) {
 // initializers the backends write for its targets.
 __attribute__((noinline)) void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name) {
     task *self = sn_self();
-    pthread_mutex_lock(&lazy_mu);
+    sn_mutex_lock(&lazy_mu);
     for (;;) {
         int state = __atomic_load_n(&o->state, __ATOMIC_ACQUIRE);
         if (state == 2) {
-            pthread_mutex_unlock(&lazy_mu);
+            sn_mutex_unlock(&lazy_mu);
             return;
         }
 
@@ -2648,26 +3121,26 @@ __attribute__((noinline)) void sn_lazy_make(sn_lazy *o, void (*init)(void), cons
         }
 
         if (o->maker == self) {
-            pthread_mutex_unlock(&lazy_mu);
+            sn_mutex_unlock(&lazy_mu);
             char buf[192];
             snprintf(buf, sizeof buf, "package variable %s is read by its own initializer", name);
             sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
         }
 
-        pthread_cond_wait(&lazy_cond, &lazy_mu);
+        sn_cond_wait(&lazy_cond, &lazy_mu);
     }
 
     __atomic_store_n(&o->state, 1, __ATOMIC_RELAXED);
     o->maker = self;
-    pthread_mutex_unlock(&lazy_mu);
+    sn_mutex_unlock(&lazy_mu);
     sn_guard(o, lazy_abandon);
     init();
     sn_unguard(o);
-    pthread_mutex_lock(&lazy_mu);
+    sn_mutex_lock(&lazy_mu);
     o->maker = NULL;
     __atomic_store_n(&o->state, 2, __ATOMIC_RELEASE);
-    pthread_cond_broadcast(&lazy_cond);
-    pthread_mutex_unlock(&lazy_mu);
+    sn_cond_broadcast(&lazy_cond);
+    sn_mutex_unlock(&lazy_mu);
 }
 
 // contained counts the panics a task's handle contained: the memory
@@ -2687,7 +3160,7 @@ int64_t sn_panics_contained(void) { return atomic_load(&contained); }
 // failing at once do not interleave.
 static void print_panic(task *t, sn_string msg) {
     fflush(stdout);
-    flockfile(stderr);
+    sn_lock_file(stderr);
     fputs("panic: ", stderr);
     fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
     fputc('\n', stderr);
@@ -2698,23 +3171,33 @@ static void print_panic(task *t, sn_string msg) {
     }
 
     sn_trace_write();
-    funlockfile(stderr);
+    sn_unlock_file(stderr);
 }
 
 // panic_args is what sn_panic hands the panic on the stack it runs on:
 // the task, the message, and the frame pointer of sn_panic's own frame,
-// on the task's stack, where the walk of the trace starts.
+// on the task's stack, where the walk of the trace starts; on Windows'
+// x64, where frame pointers make no chain, the registers sn_panic
+// saved, which the system's unwinder starts from instead.
 typedef struct {
     task *t;
     sn_string msg;
     void *fp;
+#if defined(_WIN32) && defined(__x86_64__)
+    const uint64_t *regs;
+#endif
 } panic_args;
 
-// trace_fill walks the panicking task's frames from fp into the
-// thread's buffer, within the task's stack when it has one of its own
-// and the guarded stack a panic moved it to, and keeps a copy for the
-// task when it keeps one.
-static void trace_fill(task *t, void *fp) {
+// trace_fill walks the panicking task's frames from the panic's frame
+// pointer into the thread's buffer, within the task's stack when it has
+// one of its own and the guarded stack a panic moved it to, or on
+// Windows' x64 unwinds them from its registers, and keeps a copy for
+// the task when it keeps one.
+static void trace_fill(const panic_args *a) {
+    task *t = a->t;
+#if defined(_WIN32) && defined(__x86_64__)
+    sn_trace_unwind(a->regs); // from sn_panic's registers, through the image's unwind data, here on the panic's stack
+#else
     sn_stack_region regions[2] = { 0 }; // at most two: the task's stack and the guarded one
     int n = 0;
     if (t != NULL && t->stack != NULL) {
@@ -2724,7 +3207,8 @@ static void trace_fill(task *t, void *fp) {
         }
     }
 
-    sn_trace_fill(fp, regions, n);
+    sn_trace_fill(a->fp, regions, n);
+#endif
     if (t != NULL && t->trace != NULL) {
         t->ntrace = sn_trace_copy(t->trace);
     }
@@ -2768,7 +3252,7 @@ static void *panic_unwind(void *arg) {
     panic_args *a = arg;
     task *t = a->t;
     sn_string msg = a->msg;
-    trace_fill(t, a->fp); // before the drops, which the frames are whole until; kept for a test's runner
+    trace_fill(a); // before the drops, which the frames are whole until; kept for a test's runner
     if (t != NULL && t->marks != NULL && !t->unwinding) {
         sn_mark *m = t->marks;
         t->marks = m->prev;
@@ -2828,7 +3312,12 @@ static void *panic_unwind(void *arg) {
 _Noreturn __attribute__((noinline)) void sn_panic(sn_string msg) {
     // A thread of the runtime's own, the timers' or the poller's, has no
     // task and never jumps into the main task's mark.
-    panic_args a = { my_task(), msg, __builtin_frame_address(0) };
+    panic_args a = { .t = my_task(), .msg = msg, .fp = __builtin_frame_address(0) };
+#if defined(_WIN32) && defined(__x86_64__)
+    sn_jmp_buf regs; // the registers the trace unwinds from, a few words on the task's stack
+    sn_setjmp_regs(regs);
+    a.regs = regs;
+#endif
     uintptr_t sp = stack_pointer();
     void *top = (void *)((sp - below_frame) & ~(uintptr_t)(stack_align - 1));
     task *t = a.t;
@@ -2836,12 +3325,25 @@ _Noreturn __attribute__((noinline)) void sn_panic(sn_string msg) {
         if (t->large == NULL) {
             uintptr_t sched =
                 (uintptr_t)my_worker()->sched_sp; // the scheduler that switched to the task, whose frames are above
-            t->large = sn_on_stack((void *)((sched - below_frame) & ~(uintptr_t)(stack_align - 1)), panic_stack, NULL);
+            sn_stack_bounds on = { 0 };           // the scheduler's stack's, which Windows keeps
+#if defined(_WIN32)
+            on = frame_bounds((void *)sched);
+#endif
+            t->large =
+                ON_STACK((void *)((sched - below_frame) & ~(uintptr_t)(stack_align - 1)), &on, panic_stack, NULL);
         }
 
         top = (uint8_t *)t->large + stack_size;
     }
 
-    sn_mark *m = sn_on_stack(top, panic_unwind, &a);
-    siglongjmp(m->jump, 1);
+    const sn_stack_bounds *bounds = NULL; // the guarded stack's the panic moves to, or none to stay on the one it is on
+#if defined(_WIN32)
+    sn_stack_bounds large;
+    if (t != NULL && t->large != NULL && top == (uint8_t *)t->large + stack_size) {
+        large = (sn_stack_bounds){ top, (uint8_t *)t->large + sn_page_size(), t->large };
+        bounds = &large;
+    }
+#endif
+    sn_mark *m = ON_STACK(top, bounds, panic_unwind, &a);
+    sn_longjmp(m->jump);
 }

@@ -14,8 +14,10 @@
 # build/run.sh.
 
 IMAGE := snello-dev
+# A binary's suffix: .exe on Windows, where make runs under Git's Bash.
+EXE := $(if $(filter Windows_NT,$(OS)),.exe,)
 GO_VERSION := $(shell awk '/^go /{print $$2}' go.mod)
-RUN := build/run.sh
+RUN := sh build/run.sh
 
 ifdef NATIVE
 NEEDS :=
@@ -29,7 +31,7 @@ image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(IMAGE) build
 
 build: $(NEEDS)
-	$(RUN) go build -o bin/snello ./cmd/snello
+	$(RUN) go build -o bin/snello$(EXE) ./cmd/snello
 
 test: test-std test-examples
 

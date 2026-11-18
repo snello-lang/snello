@@ -13,7 +13,6 @@
 
 #include "internal.h"
 
-#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -170,7 +169,7 @@ static void ring_spin(unsigned *step) {
             sn_spin_hint();
         }
     } else {
-        sched_yield();
+        sn_yield();
     }
 
     (*step)++;

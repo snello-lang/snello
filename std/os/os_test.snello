@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "fmt"; "io"; "os"; "testing"; "time")
+import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "testing"; "time")
 
 // The variables TestEnvMany sets in each of its rounds, and the rounds.
 const manyVars = 500
@@ -181,20 +181,6 @@ func TestEnvTasks() {
 	os.Unsetenv("SNELLO_SHARED")
 }
 
-func TestTempDir() {
-	was := os.LookupEnv("TMPDIR")
-	expect.IsOk(os.Setenv("TMPDIR", "/somewhere/else"))
-	expect.Equal(ref os.TempDir(), "/somewhere/else")
-	expect.IsOk(os.Setenv("TMPDIR", ""))
-	expect.Equal(ref os.TempDir(), "/tmp") // empty is as unset
-	os.Unsetenv("TMPDIR")
-	expect.Equal(ref os.TempDir(), "/tmp")
-	match was {
-		Some(dir) => expect.IsOk(os.Setenv("TMPDIR", ref dir)),
-		None => {},
-	}
-}
-
 func TestFileMode() {
 	expect.Equal(ref fmt.Sprint(os.FileMode(0o644)), "-rw-r--r--")
 	expect.Equal(ref fmt.Sprint(os.ModeDir | 0o755), "drwxr-xr-x")
@@ -220,41 +206,18 @@ func TestStat() {
 	expect.Equal(fi.Name(), "notes.txt")
 	expect.Equal(ref fi.Size(), ref i64(5))
 	expect.False(fi.IsDir())
-	expect.Equal(ref fmt.Sprint(fi.Mode()), "-rw-------")
+	expect.True(fi.Mode().IsRegular() && fi.Mode().Perm()&0o600 == 0o600) // its owner reads and writes it; each system's own bits are its test's
 	age := time.Since(fi.ModTime())
 	expect.True(age > -time.Minute && age < time.Minute) // changed just now
 	di := expect.IsOk(os.Stat(ref (dir.Path() + "/")))
 	expect.True(di.IsDir())
 	expect.True(di.Mode().IsDir())
-	expect.Equal(ref fmt.Sprint(di.Mode()), "drwx------")
-	expect.Equal(ref expect.IsOk(os.Stat("/")).Name().Clone(), "/")
 	expect.Equal(ref expect.IsOk(os.Stat(".")).Name().Clone(), ".")
 	missing := expect.IsErr(os.Stat(ref dir.Join("gone")))
 	expect.True(missing.Kind() == io.NotExist)
 	expect.Equal(ref missing.Error(), ref ("stat " + dir.Join("gone") + ": no such file or directory"))
 	expect.Equal(ref expect.IsErr(os.Lstat(ref dir.Join("gone"))).Error(), ref ("lstat " + dir.Join("gone") + ": no such file or directory"))
 	expect.IsErr(os.Stat("a\x00b")) // a zero byte is no path
-}
-
-// TestLstat checks that Lstat is of a symbolic link itself, where Stat
-// is of what it leads to: every system has one among these.
-func TestLstat() {
-	found := false
-	for _, link := range ref []string{"/tmp".Clone(), "/dev/stdin".Clone(), "/dev/fd".Clone(), "/var/run".Clone(), "/etc/mtab".Clone()} {
-		match os.Lstat(link) {
-			Ok(li) => {
-				if li.Mode() & os.ModeSymlink != 0 {
-					found = true
-					expect.False(li.IsDir())
-					expect.False(li.Mode().IsRegular())
-					expect.True(expect.IsOk(os.Stat(link)).Mode() & os.ModeSymlink == 0)
-				}
-			},
-			Err(_) => {},
-		}
-	}
-
-	expect.True(found)
 }
 
 func TestReadDir() {
@@ -302,15 +265,12 @@ func TestMkdir() {
 	dir := testing.TempDir()
 	sub := dir.Join("sub")
 	expect.IsOk(os.Mkdir(ref sub, 0o700))
-	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sub)).Mode()), "drwx------")
+	expect.True(expect.IsOk(os.Stat(ref sub)).IsDir())
 	again := expect.IsErr(os.Mkdir(ref sub, 0o700))
 	expect.True(again.Kind() == io.Exists)
 	expect.Equal(ref again.Error(), ref ("mkdir " + sub + ": file exists"))
 	orphan := expect.IsErr(os.Mkdir(ref dir.Join("no/parent"), 0o700))
 	expect.True(orphan.Kind() == io.NotExist)
-	sticky := dir.Join("sticky")
-	expect.IsOk(os.Mkdir(ref sticky, os.ModeSticky | 0o700)) // a bit above the nine, which some systems drop from a new directory's mode
-	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sticky)).Mode()), "dtrwx------")
 }
 
 func TestMkdirAll() {
@@ -356,7 +316,7 @@ func TestRename() {
 func TestGetwdAndChdir() {
 	was := expect.IsOk(os.Getwd())
 	pwd := os.LookupEnv("PWD")
-	expect.True(was.HasPrefix("/"))
+	expect.True(filepath.IsAbs(ref was))
 	dir := testing.TempDir()
 	expect.IsOk(os.Chdir(dir.Path()))
 	expect.IsOk(os.WriteString("relative.txt", "here")) // a path with no slash is read from it
@@ -384,7 +344,7 @@ func TestOpenFile() {
 	f := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600))
 	expect.IsOk(f.WriteString("one\n"))
 	expect.IsOk(f.Close())
-	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-------")
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode().Perm()&0o600 == 0o600)
 	taken := expect.IsErr(os.OpenFile(ref path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600))
 	expect.True(taken.Kind() == io.Exists)
 	for _, line := range ref []string{"two\n".Clone(), "three\n".Clone()} {
@@ -424,7 +384,7 @@ func TestOpenOptions() {
 	f := expect.IsOk(os.OpenOptions{Read: false, Write: true, Exclusive: true, Perm: 0o600}.Open(ref path))
 	expect.IsOk(f.WriteString("one\n"))
 	expect.IsOk(f.Close())
-	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-------")
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode().Perm()&0o600 == 0o600)
 	expect.True(expect.IsErr(os.OpenOptions{Write: true, Exclusive: true}.Open(ref path)).Kind() == io.Exists)
 	a := expect.IsOk(os.OpenOptions{Append: true, Create: true}.Open(ref path)) // Append implies Write
 	expect.IsOk(a.Seek(io.Start(0))) // an append goes to the end wherever the position is

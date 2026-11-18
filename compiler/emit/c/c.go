@@ -625,6 +625,16 @@ func (e *Emitter) lineParts(parts ...string) {
 	e.body.WriteByte('\n')
 }
 
+// addFunction appends a function written apart, a closure's, a spawned
+// literal's or a deferred call's thunk, whose lines are at Snello
+// positions, to the helpers, and ends the positions after it, so that
+// what the helpers write next, a drop function, is the backend's own
+// and no Snello line's: a debugger would stop at that line in it too.
+func (e *Emitter) addFunction(fn []byte) {
+	e.helpers.Write(fn)
+	put(&e.helpers, "#line ", strconv.Itoa(generatedLine), " ", cString(generated), "\n\n")
+}
+
 // endPositions ends the lines at a Snello position: the lines after a
 // function's body are the backend's own.
 func (e *Emitter) endPositions() {

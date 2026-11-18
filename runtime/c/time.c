@@ -19,6 +19,54 @@
 #define ABSOLUTE_YEARS   INT64_C(292277022400)
 #define UNIX_TO_ABSOLUTE UINT64_C(9223372028741760000)
 
+#if defined(_WIN32)
+
+// Windows counts the wall clock in ticks of 100 nanoseconds since the
+// start of 1601, filetime_epoch ticks before the start of 1970.
+enum { filetime_tick_ns = 100, filetime_ticks_per_s = 10000000 };
+#define FILETIME_EPOCH UINT64_C(116444736000000000)
+
+// mono_frequency is the counter's ticks a second, read once.
+static _Atomic int64_t mono_frequency;
+
+// wall reads the wall clock into seconds and nanoseconds since 1970.
+static void wall(int64_t *sec, int64_t *nsec) {
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) - FILETIME_EPOCH;
+    *sec = (int64_t)(t / filetime_ticks_per_s);
+    *nsec = (int64_t)(t % filetime_ticks_per_s) * filetime_tick_ns;
+}
+
+int64_t sn_time_now(void) {
+    int64_t sec, nsec;
+    wall(&sec, &nsec);
+    return sec * sn_ns_per_s + nsec;
+}
+
+// sn_time_mono reads the processor's performance counter, which the
+// system never sets back, as nanoseconds plus one.
+int64_t sn_time_mono(void) {
+    int64_t f = atomic_load_explicit(&mono_frequency, memory_order_relaxed);
+    if (f == 0) {
+        LARGE_INTEGER q;
+        QueryPerformanceFrequency(&q);
+        f = q.QuadPart;
+        atomic_store_explicit(&mono_frequency, f, memory_order_relaxed);
+    }
+
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return c.QuadPart / f * sn_ns_per_s + c.QuadPart % f * sn_ns_per_s / f + 1;
+}
+
+void sn_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono) {
+    wall(sec, nsec);
+    *mono = sn_time_mono();
+}
+
+#else
+
 // sn_time_now reads the system's clock: nanoseconds since the start of
 // 1970 in UTC.
 int64_t sn_time_now(void) {
@@ -53,6 +101,8 @@ void sn_time_clock(int64_t *sec, int64_t *nsec, int64_t *mono) {
     *nsec = ts.tv_nsec;
     *mono = sn_time_mono();
 }
+
+#endif
 
 // sn_time_read is a Time of now, for the timer to put in a channel.
 sn_time sn_time_read(void) {

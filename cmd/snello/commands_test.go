@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/version"
 )
 
@@ -87,9 +88,9 @@ func TestCommandErrors(t *testing.T) {
 		{[]string{buildCommand, "-x", "a.snello"}, "flag provided but not defined: -x\nusage: snello build [flags] FILE|DIR\n"},
 		{[]string{buildCommand, "-backend", "z", "a.snello"}, "snello build: unknown backend \"z\": llvm or c\n"},
 		{[]string{testCommand, "-backend", "z", "dir"}, "snello test: unknown backend \"z\": llvm or c\n"},
-		{[]string{buildCommand, "-target", "windows/amd64", "a.snello"}, "snello build: unknown target windows/amd64: the targets are darwin/amd64, darwin/arm64, linux/amd64 and linux/arm64\n"},
+		{[]string{buildCommand, "-target", "freebsd/amd64", "a.snello"}, "snello build: unknown target freebsd/amd64: the targets are darwin/amd64, darwin/arm64, linux/amd64, linux/arm64, windows/amd64 and windows/arm64\n"},
 		{[]string{emitCommand, "-target", "linux", "a.snello"}, "snello emit: malformed target \"linux\": a target is SYSTEM/PROCESSOR, linux/arm64\n"},
-		{[]string{checkCommand, "-target", "linux/386", "a.snello"}, "snello check: unknown target linux/386: the targets are darwin/amd64, darwin/arm64, linux/amd64 and linux/arm64\n"},
+		{[]string{checkCommand, "-target", "linux/386", "a.snello"}, "snello check: unknown target linux/386: the targets are darwin/amd64, darwin/arm64, linux/amd64, linux/arm64, windows/amd64 and windows/arm64\n"},
 		{[]string{versionCommand, "x"}, "usage: snello version\n"},
 		{[]string{lexCommand}, "usage: snello lex FILE\n"},
 	}
@@ -125,7 +126,7 @@ func TestVersionStamp(t *testing.T) {
 
 	dir := t.TempDir()
 	for channel, want := range map[string]string{"stable": " stable ", "": " devel "} {
-		bin := filepath.Join(dir, "snello-"+cmp.Or(channel, "devel"))
+		bin := filepath.Join(dir, platform.Host().Executable("snello-"+cmp.Or(channel, "devel")))
 		args := []string{"build", "-o", bin}
 		if channel != "" {
 			args = append(args, "-ldflags", "-X github.com/snello-lang/snello/compiler/version.channel="+channel)

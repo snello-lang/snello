@@ -1,0 +1,100 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package filepath_test
+
+import ("expect"; "path/filepath")
+
+// TestWindowsClean checks Clean on Windows: both separators read, a
+// backslash written, and the volume, a drive's, a share's or a
+// device's, kept in front.
+func TestWindowsClean() {
+	cases := [][]string{
+		{"C:\\a\\..\\b", "C:\\b"},
+		{"c:/x//y/", "c:\\x\\y"},
+		{"C:", "C:."},
+		{"C:\\", "C:\\"},
+		{"\\", "\\"},
+		{"a/b/../c", "a\\c"},
+		{"..\\..\\a", "..\\..\\a"},
+		{"\\\\srv\\sh", "\\\\srv\\sh"},
+		{"\\\\srv\\sh\\..", "\\\\srv\\sh\\"},
+		{"//srv/sh/x", "\\\\srv\\sh\\x"},
+		{"\\\\?\\C:\\a\\.\\b", "\\\\?\\C:\\a\\b"},
+		{"\\\\?\\UNC\\srv\\sh\\x", "\\\\?\\UNC\\srv\\sh\\x"},
+		{"\\\\.\\pipe\\name", "\\\\.\\pipe\\name"},
+	}
+	for _, c := range cases {
+		expect.Equal(ref filepath.Clean(ref c[0]), ref c[1])
+	}
+}
+
+// TestWindowsVolume checks the volume a path starts with, and whether
+// it is absolute: a drive's root or a share's, not a path that starts
+// with a separator alone, which is on the current drive.
+func TestWindowsVolume() {
+	expect.Equal(filepath.VolumeName("C:\\x"), "C:")
+	expect.Equal(filepath.VolumeName("\\\\srv\\sh\\x"), "\\\\srv\\sh")
+	expect.Equal(filepath.VolumeName("\\\\?\\UNC\\srv\\sh\\x"), "\\\\?\\UNC\\srv\\sh")
+	expect.Equal(filepath.VolumeName("\\\\.\\pipe\\name"), "\\\\.\\pipe")
+	expect.Equal(filepath.VolumeName("\\x"), "")
+	expect.True(filepath.IsAbs("C:\\x"))
+	expect.True(filepath.IsAbs("C:/x"))
+	expect.True(filepath.IsAbs("\\\\srv\\sh\\x"))
+	expect.False(filepath.IsAbs("C:x"))
+	expect.False(filepath.IsAbs("\\x"))
+	expect.Equal(ref filepath.Separator, ref '\\')
+	expect.True(filepath.IsSeparator('\\'))
+}
+
+// TestWindowsParts checks Base, Dir, Ext, Split and Join on Windows:
+// the volume stays in front, and a drive alone takes a name as it is.
+func TestWindowsParts() {
+	expect.Equal(filepath.Base("C:\\a\\b.txt"), "b.txt")
+	expect.Equal(filepath.Base("C:\\"), "\\")
+	expect.Equal(filepath.Base("a/b/"), "b")
+	expect.Equal(ref filepath.Dir("C:\\a\\b.txt"), "C:\\a")
+	expect.Equal(ref filepath.Dir("C:"), "C:.")
+	expect.Equal(ref filepath.Dir("\\\\srv\\sh\\f"), "\\\\srv\\sh\\")
+	expect.Equal(filepath.Ext("C:\\a.b\\c"), "")
+	dir, file := filepath.Split("C:a")
+	expect.Equal(dir, "C:")
+	expect.Equal(file, "a")
+	dir2, file2 := filepath.Split("C:\\x\\y.txt")
+	expect.Equal(dir2, "C:\\x\\")
+	expect.Equal(file2, "y.txt")
+	expect.Equal(ref filepath.Join("C:", "a"), "C:a")
+	expect.Equal(ref filepath.Join("C:\\", "a"), "C:\\a")
+	expect.Equal(ref filepath.Join("a\\", "..\\c"), "c")
+	expect.Equal(ref filepath.Join("a", "b/c"), "a\\b\\c")
+}
+
+// TestWindowsGuards checks that cleaning and joining never make a path
+// absolute, or a share's, that its elements did not name: a colon a
+// ".." let through stays in the current directory, the system's own
+// prefix \??\ is kept from forming, and two separators do not become a
+// share's; and that a path under \??\ is absolute.
+func TestWindowsGuards() {
+	cleans := [][]string{
+		{"a/../c:/x", ".\\c:\\x"},
+		{"a/../c:", ".\\c:"},
+		{"a\\..\\c:\\x", ".\\c:\\x"},
+		{"\\a\\..\\??\\c:\\x", "\\.\\??\\c:\\x"},
+		{"c:x", "c:x"},
+		{"a:b", "a:b"},
+	}
+	for _, c := range cleans {
+		expect.Equal(ref filepath.Clean(ref c[0]), ref c[1])
+	}
+
+	expect.Equal(ref filepath.Join("uploads", "..\\d:\\x"), ".\\d:\\x")
+	expect.Equal(ref filepath.Join("\\", "\\host\\share"), "\\host\\share")
+	expect.Equal(ref filepath.Join("/", "/x"), "\\x")
+	expect.Equal(ref filepath.Join("\\", "??\\c:\\x"), "\\.\\??\\c:\\x")
+	expect.Equal(ref filepath.Join("\\", "??"), "\\.\\??")
+	expect.Equal(ref filepath.Join("C:", "\\f"), "C:\\f")
+	expect.True(filepath.IsAbs("\\??\\c:\\x"))
+	expect.Equal(filepath.VolumeName("\\??\\c:\\x"), "\\??\\c:")
+	expect.False(filepath.IsAbs(ref filepath.Clean("a/../c:/x")))
+}

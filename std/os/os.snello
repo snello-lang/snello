@@ -13,7 +13,7 @@
 // argument.
 package os
 
-import ("fmt"; "io"; "time")
+import ("fmt"; "io"; "path/filepath"; "time")
 
 // The error numbers the package reports of its own accord, where the
 // system was not asked: each is the same number on every system Snello
@@ -90,14 +90,10 @@ const seekSet = 0
 const seekCur = 1
 const seekEnd = 2
 
-// The pieces of a path the package reads: the separator between its
-// elements, as a byte and as a string, the root, and the element that
-// names the directory it is in, alone and at the end of a path.
-const pathSeparator byte = '/'
-const separatorText = "/"
-const rootPath = "/"
+// The element of a path that names the directory it is in, which
+// RemoveAll refuses as a path's last, and the byte it is.
 const currentDir = "."
-const currentDirSuffix = "/."
+const dotByte byte = '.'
 
 // packedModeSize is how many bytes of the runtime's readDir hold an
 // entry's FileMode, lowest first, before its name.
@@ -143,6 +139,12 @@ struct File impl Drop, io.Reader, io.Writer, io.Seeker {
 // with & or with its methods. It prints as ls prints a mode:
 //
 //	fmt.Println(os.ModeDir | 0o755) // drwxr-xr-x
+//
+// Windows keeps no such permissions and has no umask: a file made
+// without the owner's write bit is read-only, the rest of the bits
+// given are not kept, and a mode read back is made from the read-only
+// flag, 0444 for a read-only file, 0666 for any other, and 0777 for a
+// directory, 0555 for a read-only one.
 type FileMode u32 impl fmt.Stringer
 
 // A FileInfo is what the system says of a file at one moment: its
@@ -201,8 +203,10 @@ struct OpenOptions {
 func Exit(code int)
 
 // Cores returns the number of processors the program may run on: the
-// ones it is allowed by taskset or a container on Linux, and the ones
-// online elsewhere. It is the count the runtime starts a worker for,
+// ones it is allowed by taskset or a container on Linux, the ones in
+// the process's affinity mask on Windows, which a job object or start
+// /affinity limits, within the processor group the process runs in,
+// and the ones online on macOS. It is the count the runtime starts a worker for,
 // so a pool of that many tasks keeps every core busy. The runtime
 // provides it.
 func Cores() int
@@ -394,11 +398,12 @@ func WriteFile(path ref string, data ref []byte, perm FileMode) Result<(), io.Er
 //	build(ref dir)?
 //	os.RemoveAll(ref dir)?
 //
-// A pattern holding a / is refused, "mkdirtemp build/*: pattern
-// contains path separator", and a dir that does not exist is reported
-// by its stat: "stat /tmp/gone: no such file or directory".
+// A pattern holding a separator, a slash, or on Windows a backslash
+// too, is refused, "mkdirtemp build/*: pattern contains path
+// separator", and a dir that does not exist is reported by its stat:
+// "stat /tmp/gone: no such file or directory".
 func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
-	if pattern.Contains(separatorText) {
+	if hasSeparator(pattern) {
 		return Err(io.NewError("mkdirtemp", pattern.Clone(), "pattern contains path separator", io.Other))
 	}
 
@@ -433,14 +438,14 @@ func Remove(path ref string) Result<(), io.Error> {
 //
 //	os.RemoveAll(ref dir)?
 //
-// A path whose last element is ".", as "." or "dir/." are, is refused
-// before anything is removed, "RemoveAll .: invalid argument": the
-// directory it names cannot be removed from inside itself. A failure
-// part way leaves what was not yet removed, and names the entry it
-// failed on and the call that failed: "unlinkat /tmp/d/locked/f:
-// permission denied".
+// A path whose last element is ".", as "." or "dir/." are, and on
+// Windows "dir\\." too, is refused before anything is removed,
+// "RemoveAll .: invalid argument": the directory it names cannot be
+// removed from inside itself. A failure part way leaves what was not
+// yet removed, and names the entry it failed on and the call that
+// failed: "unlinkat /tmp/d/locked/f: permission denied".
 func RemoveAll(path ref string) Result<(), io.Error> {
-	if path == currentDir || path.HasSuffix(currentDirSuffix) {
+	if endsInCurrentDir(path) {
 		return Err(io.Errno("RemoveAll", path, einval))
 	}
 
@@ -545,9 +550,11 @@ func Mkdir(path ref string, perm FileMode) Result<(), io.Error> {
 
 // MkdirAll makes the directory path names and every parent of it that
 // does not exist, each with the permissions perm, before the umask;
-// path is only read. A path that is a directory already is no failure,
-// so a program calls it without asking first; one that is a file, or
-// that passes through one, is "mkdir PATH: not a directory". It stats
+// path is only read. On Windows a parent is found at either
+// separator, and a volume, C: or \\server\share, is never made. A path
+// that is a directory already is no failure, so a program calls it
+// without asking first; one that is a file, or that passes through
+// one, is "mkdir PATH: not a directory". It stats
 // the path once when it is there, and makes one call per missing
 // directory otherwise.
 //
@@ -565,15 +572,15 @@ func MkdirAll(path ref string, perm FileMode) Result<(), io.Error> {
 	// The parent first: the path without its last element and the
 	// separators around it.
 	i := path.Len() - 1
-	for i >= 0 && path[i] == pathSeparator {
+	for i >= 0 && filepath.IsSeparator(path[i]) {
 		i--
 	}
 
-	for i >= 0 && path[i] != pathSeparator {
+	for i >= 0 && !filepath.IsSeparator(path[i]) {
 		i--
 	}
 
-	if i > 0 {
+	if i > filepath.VolumeName(path).Len() { // a parent that is more than the root or the volume, which are there
 		MkdirAll(path[0:i], perm)?
 	}
 
@@ -624,9 +631,9 @@ func Rename(from ref string, to ref string) Result<(), io.Error> {
 }
 
 // Getwd returns the path of the current directory, a string of its
-// own: the PWD of the environment when it names the current directory,
-// which is the path the user came by, through a symbolic link or not,
-// and what the system says otherwise. It stats the two to compare
+// own: the PWD of the environment when it is an absolute path that
+// names the current directory, which is the path the user came by,
+// through a symbolic link or not, and what the system says otherwise. It stats the two to compare
 // them, and asks the system only when they differ.
 //
 //	wd := os.Getwd()?
@@ -635,7 +642,7 @@ func Rename(from ref string, to ref string) Result<(), io.Error> {
 // exists, "getwd: no such file or directory".
 func Getwd() Result<string, io.Error> {
 	dir := Getenv(envPWD)
-	if dir.HasPrefix(separatorText) {
+	if filepath.IsAbs(dir) {
 		var dot FileInfo
 		code := statInto(currentDir, true, mut dot)
 		if code != 0 {
@@ -688,18 +695,21 @@ func Hostname() Result<string, io.Error> {
 }
 
 // Getpid returns the number of the program's process, the one ps and
-// kill know it by. The runtime provides it.
+// kill know it by, and Task Manager on Windows. The runtime provides it.
 func Getpid() int
 
 // TempDir returns the directory for temporary files: the TMPDIR of the
-// environment, or /tmp when it is unset or empty. It is not checked to
+// environment, or /tmp when it is unset or empty, and on Windows the
+// system's, which GetTempPathW finds from TMP, TEMP or the user's
+// profile, without the separator it ends in. It is not checked to
 // exist, and nothing is made; MkdirTemp makes a directory of one's own
 // under it. The runtime provides it.
 func TempDir() string
 
 // Getenv returns the value of the environment variable key, and an
 // empty string when it is not set; LookupEnv tells an empty value from
-// none. key is only read.
+// none. key is only read, and on Windows matched with no regard to its
+// case, as the system matches it.
 //
 //	home := os.Getenv("HOME")
 //
@@ -949,7 +959,9 @@ func (m ref FileMode) String() string {
 }
 
 // Name returns the last element of the path the FileInfo was asked
-// for, "notes.txt" of "/tmp/notes.txt", or "/" for the root. It is a
+// for, as filepath.Base reads it: "notes.txt" of "/tmp/notes.txt",
+// and on Windows of "C:\tmp\notes.txt" too, or the root for the root.
+// It is a
 // borrow of the FileInfo's own string, with nothing copied.
 func (fi ref FileInfo) Name() ref string {
 	return ref fi.name
@@ -1049,7 +1061,7 @@ func statInto(path ref string, follow bool, fi mut FileInfo) int {
 	var ino u64 = 0
 	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
 	if code == 0 {
-		fi.name = basename(path)
+		fi.name = filepath.Base(path).Clone()
 		fi.size = size
 		fi.mode = FileMode(mode)
 		fi.modTime = time.Unix(sec, nsec)
@@ -1060,25 +1072,22 @@ func statInto(path ref string, follow bool, fi mut FileInfo) int {
 	return code
 }
 
-// basename is the last element of a path, as a FileInfo is named: the
-// separators at its end dropped, then what follows the last separator
-// left, or the root for a path of separators alone.
-func basename(path ref string) string {
-	end := path.Len()
-	for end > 1 && path[end-1] == pathSeparator {
-		end--
+// hasSeparator reports whether p holds a separator of the system's.
+func hasSeparator(p ref string) bool {
+	for i := 0; i < p.Len(); i++ {
+		if filepath.IsSeparator(p[i]) {
+			return true
+		}
 	}
 
-	start := end - 1
-	for start >= 0 && path[start] != pathSeparator {
-		start--
-	}
+	return false
+}
 
-	if end == 1 && path[0] == pathSeparator {
-		return rootPath
-	}
-
-	return path[start+1:end].Clone()
+// endsInCurrentDir reports whether the last element of p is ".", as in
+// "." and "dir/.", and on Windows after a backslash too.
+func endsInCurrentDir(p ref string) bool {
+	n := p.Len()
+	return n > 0 && p[n-1] == dotByte && (n == 1 || filepath.IsSeparator(p[n-2]))
 }
 
 // syscallError is the Error of a system call that was on no path,

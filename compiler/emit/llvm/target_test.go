@@ -182,8 +182,25 @@ func TestTargeted(t *testing.T) {
 		t.Errorf("the group does not keep switches out of jump tables: %s", group)
 	}
 
-	if !bytes.Equal(body, module[:len(module)-len("\n"+emptyGroup)]) || !bytes.HasPrefix(group, []byte(`"target-cpu"="`)) || !bytes.HasSuffix(group, []byte("\" }\n")) {
+	if !bytes.Equal(body, module[:len(module)-len("\n"+emptyGroup)]) || !bytes.HasPrefix(group, []byte(`"target-cpu"="`)) || !bytes.HasSuffix(group, []byte(" }\n")) {
 		t.Errorf("the filled module is not the module with its group naming a processor:\n%s", filled[max(0, len(filled)-300):])
+	}
+
+	for _, target := range []platform.Target{{OS: platform.Windows, Arch: platform.AMD64}, {OS: platform.Linux, Arch: platform.AMD64}} {
+		other, err := emit(t, "target", src, Config{OS: target.OS, Arch: target.Arch})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		filledOther, err := Targeted(other)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, otherGroup, _ := bytes.Cut(filledOther, []byte("\nattributes #0 = { "))
+		if got, want := bytes.Contains(otherGroup, []byte(unwindTables)), target.OS == platform.Windows; got != want {
+			t.Errorf("%s: unwind tables %v, want them on Windows alone: %s", target, got, otherGroup)
+		}
 	}
 
 	if again, err := Targeted(filled); err != nil || !bytes.Equal(again, filled) {

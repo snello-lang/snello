@@ -18,8 +18,11 @@
 #include "internal.h"
 
 #include <string.h>
+
+#if !defined(_WIN32)
 #include <sys/random.h>
 #include <unistd.h>
+#endif
 
 // Hashing is wyhash's (Wang Yi's, in the public domain), the function
 // Go's runtime falls back to where it has no AES instructions: eight
@@ -58,7 +61,7 @@ static inline uint64_t wyr3(const uint8_t *p, size_t k) {
 // leaves the fixed ones, which hash as well and are only predictable.
 void sn_hash_init(void) {
     uint64_t seed[2];
-    if (getentropy(seed, sizeof seed) == 0) {
+    if (sn_system_random(seed, sizeof seed)) {
         hash_seed[0] = seed[0] ^ wyp[0];
         hash_seed[1] = seed[1] ^ wyp[1];
     }

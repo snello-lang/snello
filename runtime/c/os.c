@@ -11,21 +11,24 @@
 
 #include "internal.h"
 
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 // sn_os_Cores is os.Cores: the processors the program may run on, the
 // count the scheduler starts a worker per.
 int64_t sn_os_Cores(void) { return sn_cores(); }
 
+#if !defined(_WIN32) // the paths, the opens and the reads of Linux and macOS; os_windows.c has Windows'
 // cpath copies a Snello string into a C string for the system calls. A
 // string holding a zero byte cannot be a path: the system would stop
 // reading at the zero and open another file than the one named, so it
@@ -71,12 +74,20 @@ static ssize_t sysread(int fd, void *p, size_t len) {
     } while (n < 0 && errno == EINTR);
     return n;
 }
+#endif
 
 // sn_io_reason is the system's text for an error number, with its
 // first letter in lower case, as Go words it; the library puts the
 // operation and the path in front.
 sn_string sn_io_reason(int64_t code) {
+#if defined(_WIN32)
+    const char *reason = sn_errno_text((int)code); // the C library's own wording differs from the other systems'
+    if (reason == NULL) {
+        reason = strerror((int)code);
+    }
+#else
     const char *reason = strerror((int)code);
+#endif
     sn_string r = SN_STR(reason, (int64_t)strlen(reason));
     uint8_t *p = sn_alloc((size_t)r.len);
     memcpy(p, r.ptr, (size_t)r.len);
@@ -113,6 +124,7 @@ int64_t sn_io_kindOf(int64_t code) {
     return 0;
 }
 
+#if !defined(_WIN32) // the files and the removals of Linux and macOS; os_windows.c has Windows'
 // read_whole reads the named file whole, into one block of the size the
 // file says it has, as Go's os.ReadFile does: one byte more, so that
 // the read finding the end needs no room, and 512 bytes for a file that
@@ -482,27 +494,14 @@ int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
     *at = (uint64_t)got;
     return 0;
 }
+#endif
 
 // sn_io_reserve makes room in b for n more bytes in one allocation:
 // io.ReadAll's slice of the exact length, before its blocks are copied
 // in.
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf, n); }
 
-// The bits of an os.FileMode, which are Go's: the permissions in the
-// low nine, and a bit for each kind of file that is not a regular one.
-#define SN_MODE_DIR       (UINT32_C(1) << 31)
-#define SN_MODE_SYMLINK   (UINT32_C(1) << 27)
-#define SN_MODE_DEVICE    (UINT32_C(1) << 26)
-#define SN_MODE_PIPE      (UINT32_C(1) << 25)
-#define SN_MODE_SOCKET    (UINT32_C(1) << 24)
-#define SN_MODE_SETUID    (UINT32_C(1) << 23)
-#define SN_MODE_SETGID    (UINT32_C(1) << 22)
-#define SN_MODE_CHAR      (UINT32_C(1) << 21)
-#define SN_MODE_STICKY    (UINT32_C(1) << 20)
-#define SN_MODE_IRREGULAR (UINT32_C(1) << 19)
-#define SN_MODE_TYPE                                                                                                   \
-    (SN_MODE_DIR | SN_MODE_SYMLINK | SN_MODE_DEVICE | SN_MODE_PIPE | SN_MODE_SOCKET | SN_MODE_CHAR | SN_MODE_IRREGULAR)
-
+#if !defined(_WIN32) // the modes, the directories and the host of Linux and macOS; os_windows.c has Windows'
 // mode_from_sys is the os.FileMode of a file the system reports the mode
 // of, as Go's fillFileStatFromSys makes it.
 static uint32_t mode_from_sys(mode_t m) {
@@ -699,17 +698,6 @@ int64_t sn_os_getcwd(sn_string *out) {
     }
 }
 
-// The flags of os.OpenFile, which are Snello's own numbers, the same on
-// every system: Go's differ from one system to the next, as the
-// system's do.
-#define SN_O_WRONLY 1
-#define SN_O_RDWR   2
-#define SN_O_APPEND 8
-#define SN_O_CREATE 64
-#define SN_O_EXCL   128
-#define SN_O_SYNC   256
-#define SN_O_TRUNC  512
-
 // sn_os_openFile is os.OpenFile. A flag the package does not name, or
 // both of O_WRONLY and O_RDWR, is an invalid argument.
 int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd) {
@@ -874,6 +862,7 @@ int64_t sn_os_hostname(sn_string *out) {
     *out = sn_string_clone(SN_STR(name, (int64_t)strlen(name)));
     return 0;
 }
+#endif
 
 // The program's environment is a copy the runtime makes of the one the
 // process was started with, the first time it is asked about, and keeps
@@ -893,17 +882,61 @@ int64_t sn_os_hostname(sn_string *out) {
 // later Setenv or Unsetenv frees, so a read copies it out.
 static struct {
     int64_t lock; // a sync.RwLock's handle
-    pthread_once_t once;
-    _Atomic bool ready; // the copy is made: what every call after the first reads, in place of asking once
+    sn_once once;
     uint8_t *block;     // the variables the process started with, one after another
     sn_string
         *entries; // KEY=VALUE each, lent from block or owning its bytes, and one of no bytes where a variable was unset
     int64_t len, cap;
     int32_t *slots; // the index: an entry's number and one, 0 for a free slot, -1 for one whose variable was unset
     int64_t nslots; // a power of two, at least twice cap: every slot that is not free was an entry's, so half are free
-} env = { .once = PTHREAD_ONCE_INIT };
+} env = { .once = SN_ONCE_INIT };
 
+#if defined(_WIN32)
+// sn_os_environ_utf8 returns the process's environment as UTF-8,
+// KEY=VALUE each, in an array ended by NULL, read by os_windows.c from
+// the system's wide block; the array and its strings are the caller's,
+// from the C library's malloc.
+char **sn_os_environ_utf8(void);
+#else
 extern char **environ;
+#endif
+
+#if defined(_WIN32)
+// On Windows a variable's name is matched with no regard to case, as the
+// system matches it, so the index hashes and compares names with their
+// ASCII letters folded to lower case; env_fold folds a name's byte.
+static inline uint8_t env_fold(uint8_t c) { return c >= 'A' && c <= 'Z' ? (uint8_t)(c + ('a' - 'A')) : c; }
+
+static uint64_t env_hash(const uint8_t *key, int64_t n) {
+    uint8_t few[64];
+    uint8_t *folded = n <= (int64_t)sizeof few ? few : sn_alloc((size_t)n);
+    for (int64_t i = 0; i < n; i++) {
+        folded[i] = env_fold(key[i]);
+    }
+
+    uint64_t h = sn_hash_bytes(folded, (size_t)n);
+    if (folded != few) {
+        sn_free(folded);
+    }
+
+    return h;
+}
+
+static bool env_same_key(const uint8_t *a, const uint8_t *b, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        if (env_fold(a[i]) != env_fold(b[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+#else
+// On Linux and macOS a variable's name is its bytes.
+static inline uint64_t env_hash(const uint8_t *key, int64_t n) { return sn_hash_bytes(key, (size_t)n); }
+
+static inline bool env_same_key(const uint8_t *a, const uint8_t *b, int64_t n) { return memcmp(a, b, (size_t)n) == 0; }
+#endif
 
 // env_key_len is the length of the key of KEY=VALUE, or -1 without an =.
 static int64_t env_key_len(sn_string kv) {
@@ -915,7 +948,7 @@ static int64_t env_key_len(sn_string kv) {
 // in when it is not there, with found saying which.
 static int64_t env_find(const uint8_t *key, int64_t n, bool *found) {
     int64_t mask = env.nslots - 1;
-    int64_t at = (int64_t)(sn_hash_bytes(key, (size_t)n) & (uint64_t)mask);
+    int64_t at = (int64_t)(env_hash(key, n) & (uint64_t)mask);
     int64_t spare = -1;
     for (;; at = (at + 1) & mask) {
         int32_t slot = env.slots[at];
@@ -933,7 +966,7 @@ static int64_t env_find(const uint8_t *key, int64_t n, bool *found) {
         }
 
         sn_string kv = env.entries[slot - 1];
-        if (kv.len > n && kv.ptr[n] == '=' && memcmp(kv.ptr, key, (size_t)n) == 0) {
+        if (kv.len > n && kv.ptr[n] == '=' && env_same_key(kv.ptr, key, n)) {
             *found = true;
             return at;
         }
@@ -986,9 +1019,14 @@ static void env_rebuild(void) {
 // into the block.
 static void env_copy(void) {
     env.lock = sn_sync_newRwLock();
+#if defined(_WIN32)
+    char **vars = sn_os_environ_utf8();
+#else
+    char **vars = environ;
+#endif
     int64_t n = 0, bytes = 0;
-    while (environ != NULL && environ[n] != NULL) {
-        bytes += (int64_t)strlen(environ[n]);
+    while (vars != NULL && vars[n] != NULL) {
+        bytes += (int64_t)strlen(vars[n]);
         n++;
     }
 
@@ -997,7 +1035,7 @@ static void env_copy(void) {
     env.block = bytes > 0 ? sn_alloc((size_t)bytes) : NULL;
     uint8_t *at = env.block;
     for (int64_t i = 0; i < n; i++) {
-        sn_string kv = SN_STR(environ[i], (int64_t)strlen(environ[i]));
+        sn_string kv = SN_STR(vars[i], (int64_t)strlen(vars[i]));
         if (env_key_len(kv) > 0) {
             memcpy(at, kv.ptr, (size_t)kv.len);
             env.entries[env.len++] = SN_STR(at, kv.len);
@@ -1005,17 +1043,19 @@ static void env_copy(void) {
         }
     }
 
+#if defined(_WIN32)
+    for (int64_t i = 0; i < n; i++) {
+        free(vars[i]);
+    }
+
+    free(vars);
+#endif
     env_rebuild();
-    atomic_store_explicit(&env.ready, true, memory_order_release);
 }
 
 // env_load makes the copy the first time the environment is asked
-// about, and reads a flag after.
-static inline void env_load(void) {
-    if (!atomic_load_explicit(&env.ready, memory_order_acquire)) {
-        pthread_once(&env.once, env_copy);
-    }
-}
+// about; after, it reads the once's word, done.
+static inline void env_load(void) { sn_once_call(&env.once, env_copy); }
 
 // sn_os_lookupEnv is os.LookupEnv: the value of key, copied out, and
 // whether the variable is set.
@@ -1071,6 +1111,9 @@ int64_t sn_os_setenv(sn_string key, sn_string value) {
     }
 
     sn_sync_unlock(env.lock);
+#if defined(_WIN32)
+    sn_os_env_system(key, &value);
+#endif
     return 0;
 }
 
@@ -1091,10 +1134,14 @@ void sn_os_Unsetenv(sn_string key) {
         *old = (sn_string){ 0 };
         env.slots[at] = -1;
     }
+#if defined(_WIN32)
+    sn_os_env_system(key, NULL);
+#endif
 
     sn_sync_unlock(env.lock);
 }
 
+#if !defined(_WIN32) // os_windows.c has Windows'
 // sn_os_TempDir is os.TempDir: the directory for temporary files, the
 // TMPDIR of the environment, or /tmp when it is unset or empty.
 sn_string sn_os_TempDir(void) {
@@ -1106,6 +1153,7 @@ sn_string sn_os_TempDir(void) {
 
     return dir;
 }
+#endif
 
 // sn_os_environ is os.Environ's: every variable as KEY=VALUE, lent from
 // the block or a copy the slice owns, in a slice made once for their
@@ -1177,6 +1225,7 @@ int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n) {
     return *n < s.len ? errno : 0;
 }
 
+#if !defined(_WIN32) // os_windows.c has Windows'
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     sn_check_slice((sn_slice *)buf);
     ssize_t got = sysread((int)fd, buf->ptr, (size_t)buf->len);
@@ -1187,3 +1236,4 @@ int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     *n = got;
     return 0;
 }
+#endif

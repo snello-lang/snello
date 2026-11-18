@@ -1,0 +1,63 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package os_test
+
+import ("expect"; "fmt"; "io"; "os"; "testing")
+
+// TestStatWindows checks what a stat says on Windows: a directory's
+// permissions are made from its read-only flag, as Windows keeps none,
+// and the root is named by its separator.
+func TestStatWindows() {
+	dir := testing.TempDir()
+	di := expect.IsOk(os.Stat(ref dir.Path()))
+	expect.Equal(ref fmt.Sprint(di.Mode()), "drwxrwxrwx")
+	expect.Equal(ref expect.IsOk(os.Stat("C:\\")).Name().Clone(), "\\")
+}
+
+// TestPathsWindows checks that the package reads a backslash as a
+// separator, as Windows does: MkdirAll makes the parents of a path
+// written with backslashes, a FileInfo is named by its last element,
+// RemoveAll refuses a path that ends in "\\.", and MkdirTemp a pattern
+// that holds a backslash.
+func TestPathsWindows() {
+	dir := testing.TempDir()
+	deep := dir.Path() + "\\a\\b\\c"
+	expect.IsOk(os.MkdirAll(ref deep, 0o755))
+	expect.True(expect.IsOk(os.Stat(ref deep)).IsDir())
+	expect.Equal(ref expect.IsOk(os.Stat(ref deep)).Name().Clone(), "c")
+	expect.Equal(ref expect.IsErr(os.RemoveAll(ref (deep + "\\."))).Error(), ref ("RemoveAll " + deep + "\\.: invalid argument"))
+	refused := expect.IsErr(os.MkdirTemp(ref dir.Path(), "a\\*"))
+	expect.True(refused.Kind() == io.Other)
+}
+
+// TestModesWindows checks the permission bits a file and a directory
+// are given back on Windows, which keeps none of its own: made from the
+// read-only flag, a file written with its owner's write bit is read and
+// written by all, one without it read-only, and a directory searched by
+// all besides.
+func TestModesWindows() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte{1}, 0o600))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-rw-rw-")
+	fixed := dir.Join("fixed.txt")
+	expect.IsOk(os.WriteFile(ref fixed, ref []byte{1}, 0o400))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref fixed)).Mode()), "-r--r--r--")
+	sub := dir.Join("sub")
+	expect.IsOk(os.Mkdir(ref sub, 0o700))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sub)).Mode()), "drwxrwxrwx")
+}
+
+// TestTempDir checks that the temporary directory is the one TMP names
+// on Windows, which the system reads first, without its last separator.
+func TestTempDir() {
+	was := os.LookupEnv("TMP")
+	expect.IsOk(os.Setenv("TMP", "C:\\somewhere\\else"))
+	expect.Equal(ref os.TempDir(), "C:\\somewhere\\else")
+	match was {
+		Some(dir) => expect.IsOk(os.Setenv("TMP", ref dir)),
+		None => os.Unsetenv("TMP"),
+	}
+}

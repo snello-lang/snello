@@ -97,14 +97,16 @@ const (
 var elfIdent = []byte{0x7f, 'E', 'L', 'F', elfClass64, elfLittle, elfVersion, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 // Object writes the native object holding table for the target t, the
-// program's: the Mach-O of macOS or the ELF of Linux, for its
-// processor.
+// program's: the Mach-O of macOS, the ELF of Linux or the COFF of
+// Windows, for its processor.
 func Object(table []byte, t platform.Target) ([]byte, error) {
 	switch t.OS {
 	case platform.Darwin:
 		return machoFile(table, t.Arch)
 	case platform.Linux:
 		return elfFile(table, t.Arch)
+	case platform.Windows:
+		return coffFile(table, t.Arch)
 	}
 
 	return nil, fmt.Errorf("the table of a panic's trace is not written for %s", t.OS)

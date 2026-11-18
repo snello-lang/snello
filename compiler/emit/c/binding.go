@@ -19,6 +19,12 @@ const (
 	bindNow     = "-Wl,-z,now" // binds every import as the program starts
 )
 
+// windowsCLibrary are the libraries a link line may name that are
+// parts of the C library on Windows, whose Universal CRT holds the C
+// library and its mathematics in one, which every program links: a
+// link of either asks for nothing more there.
+var windowsCLibrary = map[string]bool{"c": true, "m": true}
+
 // Header writes the header the compiler gives a package that binds C:
 // the runtime's header, and the prototype of every bound function under
 // its derived symbol, from the Snello signature. The package's C
@@ -84,9 +90,15 @@ func BindingSources(dir string, bindings []lower.Binding) ([]string, error) {
 // C library's mathematics, and on Linux the binding of every function
 // the program imports as it starts, not at its first call, so that no
 // call runs the dynamic linker's resolver on a task's stack, which the
-// bound of the stack a task can use does not count. macOS binds every
-// import as the program starts already. t is the target linked for.
+// bound of the stack a task can use does not count. macOS and Windows
+// bind every import as the program starts already, and Windows has the
+// mathematics in the C library itself, so a Windows link ends with
+// nothing. t is the target linked for.
 func SystemLinkFlags(t platform.Target) []string {
+	if t.OS == platform.Windows {
+		return nil // the C library's mathematics are in the Universal CRT, which every program links
+	}
+
 	if t.OS == platform.Linux {
 		return []string{mathLibrary, bindNow}
 	}
@@ -95,10 +107,16 @@ func SystemLinkFlags(t platform.Target) []string {
 }
 
 // LinkFlags returns the -l flags of the system libraries the bindings
-// name, for the link of the program.
-func LinkFlags(bindings []lower.Binding) []string {
+// name, for the link of the program for t: none for a part of the C
+// library on a system where it is no library of its own, so that a
+// module's link m links on every system.
+func LinkFlags(t platform.Target, bindings []lower.Binding) []string {
 	var flags []string
 	for _, l := range lower.Links(bindings) {
+		if t.OS == platform.Windows && windowsCLibrary[l] {
+			continue
+		}
+
 		flags = append(flags, "-l"+l)
 	}
 

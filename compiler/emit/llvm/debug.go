@@ -99,8 +99,10 @@ const (
 
 	// darwin is the system whose C library spells a 64-bit integer
 	// wideDarwin, where Linux's spells it wide; unsigned is the word
-	// before the unsigned one.
+	// before the unsigned one. windows is the system whose debuggers
+	// read CodeView.
 	darwin     = "darwin"
+	windows    = "windows"
 	wide       = "long"
 	wideDarwin = "long long"
 	unsigned   = "unsigned "

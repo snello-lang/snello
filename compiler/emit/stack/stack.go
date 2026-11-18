@@ -57,6 +57,12 @@ const (
 	// return address is in a register, saved in the callee's frame.
 	returnAddress = 8
 
+	// overrideDefault ends the name a Windows C runtime function's own
+	// code has where the runtime lets the function be overridden, the
+	// linker's function overriding: memset's is memset_$fo_default$,
+	// which a call of memset reaches, and is counted as memset.
+	overrideDefault = "_$fo_default$"
+
 	// symbolPrefix is what macOS puts before the name of every C
 	// symbol: the function sn_spawn is _sn_spawn in a Mach-O binary.
 	symbolPrefix = "_"
@@ -73,8 +79,9 @@ const (
 	arm64 arch = "arm64"
 	amd64 arch = "amd64"
 
-	darwin system = "darwin"
-	linux  system = "linux"
+	darwin  system = "darwin"
+	linux   system = "linux"
+	windows system = "windows"
 )
 
 // The kinds of call.
@@ -85,21 +92,25 @@ const (
 	threadLocal                 // the system's accessor of thread-local variables, which macOS calls through a pointer
 )
 
-// measured are the systems and processors cLibraryStacks was measured
-// on, which TestCLibraryStack measures again on every run of CI: a call
-// into the C library of another, macOS on x86-64, makes a task
+// measured are the systems and processors the tables of the libraries'
+// stacks were measured on, which TestCLibraryStack measures again on
+// every run of CI: a call into the library of another makes a task
 // unbounded, since its library's functions may take more stack, and a
-// bound too small is a task writing over its neighbour's.
-var measured = map[system][]arch{darwin: {arm64}, linux: {amd64, arm64}}
+// bound too small is a task writing over its neighbour's. macOS on
+// x86-64 is not among them, since otool's listing of its code loses its
+// place at the zero bytes the linker pads between functions, which can
+// take a function's instructions for others; nor Windows on arm64,
+// whose CI job does not block a change, so a figure that grew there
+// would fail no merge before a task was given a stack too small.
+var measured = map[system][]arch{darwin: {arm64}, linux: {amd64, arm64}, windows: {amd64}}
 
 // cLibraryStacks is the stack each function of the system's C library
-// that the runtime calls was measured to use, in bytes below its
-// caller's stack pointer: the most of macOS on arm64 and of Linux on
-// arm64 and x86-64, built with gcc and with clang, as testdata/libc.c
-// measures each on a stack filled with a pattern, down its heavier
-// paths. getaddrinfo is not here, since it runs on threads of its own
-// and loads other libraries, nor pthread_once, which calls a function
-// of its caller's.
+// that the runtime calls was measured to use on Linux and macOS, in
+// bytes below its caller's stack pointer: the most of macOS on arm64
+// and of Linux on arm64 and x86-64, built with gcc and with clang, as
+// testdata/libc.c measures each on a stack filled with a pattern, down
+// its heavier paths. getaddrinfo is not here, since it runs on threads
+// of its own and loads other libraries.
 var cLibraryStacks = map[string]int64{
 	"__errno_location":            24,
 	"__error":                     16,
@@ -240,6 +251,183 @@ var cLibraryStacks = map[string]int64{
 	"write":                       120,
 }
 
+// stackProbes are the names of the function that checks the pages of a
+// frame larger than one before the frame is taken, which a compiler
+// calls on Windows: two names of one function, either of which a
+// binary's symbols may give it.
+var stackProbes = map[string]bool{"__chkstk": true, "_alloca_probe": true}
+
+// windowsLibraryStacks is the stack each function of Windows' system
+// libraries and of its C runtime that the runtime calls was measured to
+// use, in bytes below its caller's stack pointer: the most of Windows on
+// x86-64 and on arm64, as testdata/libc_windows.c measures each. Its
+// figures are its own, never the most of it and cLibraryStacks, since
+// the two are different libraries: a socket's call takes a kilobyte or
+// more through Winsock's providers and a hundred bytes on Linux, and a
+// table of both would deepen every Linux task for Windows' sake.
+var windowsLibraryStacks = map[string]int64{
+	"AcquireSRWLockExclusive":            64,
+	"CancelIoEx":                         128,
+	"CancelWaitableTimer":                56,
+	"CloseHandle":                        840,
+	"CreateDirectoryW":                   4368,
+	"CreateFileW":                        2512,
+	"CreateIoCompletionPort":             152,
+	"CreateThread":                       1968,
+	"CreateWaitableTimerExW":             200,
+	"DeleteFileW":                        2256,
+	"FindClose":                          1104,
+	"FindFirstFileExW":                   3056,
+	"FindNextFileW":                      1704,
+	"FormatMessageW":                     6728,
+	"FreeAddrInfoW":                      320,
+	"FreeEnvironmentStringsW":            1032,
+	"GetActiveProcessorCount":            760,
+	"GetCommandLineW":                    56,
+	"GetComputerNameExW":                 2456,
+	"GetConsoleMode":                     448,
+	"GetCurrentDirectoryW":               320,
+	"GetCurrentProcess":                  56,
+	"GetCurrentProcessId":                56,
+	"GetEnvironmentStringsW":             1320,
+	"GetFileAttributesW":                 2176,
+	"GetFileInformationByHandle":         360,
+	"GetFileInformationByHandleEx":       184,
+	"GetFileSizeEx":                      168,
+	"GetFullPathNameW":                   1040,
+	"GetLastError":                       56,
+	"GetModuleHandleW":                   4016,
+	"GetProcAddress":                     4016,
+	"GetProcessAffinityMask":             456,
+	"GetProcessHeap":                     56,
+	"GetQueuedCompletionStatusEx":        408,
+	"GetSystemInfo":                      328,
+	"GetSystemTimePreciseAsFileTime":     160,
+	"GetTempPathW":                       1232,
+	"HeapAlloc":                          1368,
+	"HeapFree":                           864,
+	"InitializeSRWLock":                  56,
+	"LoadLibraryExW":                     6016,
+	"LocalFree":                          760,
+	"MoveFileExW":                        2608,
+	"MultiByteToWideChar":                4144,
+	"NtCreateFile":                       184,
+	"NtDeviceIoControlFile":              120,
+	"PostQueuedCompletionStatus":         72,
+	"QueryPerformanceCounter":            64,
+	"QueryPerformanceFrequency":          56,
+	"ReadConsoleW":                       824,
+	"ReadFile":                           216,
+	"ReleaseSRWLockExclusive":            64,
+	"RemoveDirectoryW":                   2288,
+	"RtlInitUnicodeString":               120,
+	"RtlLookupFunctionEntry":             272,
+	"RtlNtStatusToDosError":              64,
+	"RtlVirtualUnwind":                   1840,
+	"SetCurrentDirectoryW":               448,
+	"SetEnvironmentVariableW":            1728,
+	"SetFileAttributesW":                 2272,
+	"SetFileCompletionNotificationModes": 144,
+	"SetLastError":                       8,
+	"SetWaitableTimer":                   216,
+	"Sleep":                              224,
+	"SleepConditionVariableSRW":          296,
+	"SwitchToThread":                     112,
+	"VirtualAlloc":                       120,
+	"VirtualFree":                        56,
+	"WSAGetLastError":                    56,
+	"WSAIoctl":                           1704,
+	"WSASetLastError":                    8,
+	"WSASocketW":                         8720,
+	"WSAStartup":                         5536,
+	"WaitForSingleObject":                1968,
+	"WaitOnAddress":                      256,
+	"WakeAllConditionVariable":           32,
+	"WakeByAddressSingle":                48,
+	"WakeConditionVariable":              64,
+	"WideCharToMultiByte":                4128,
+	"WriteConsoleW":                      536,
+	"WriteFile":                          184,
+	"__acrt_iob_func":                    56,
+	"__stdio_common_vfprintf":            5024,
+	"__stdio_common_vsprintf":            4928,
+	"_aligned_malloc":                    1600,
+	"_close":                             1096,
+	"_commit":                            184,
+	"_dsign":                             56,
+	"_errno":                             1392,
+	"_get_osfhandle":                     56,
+	"_lock_file":                         80,
+	"_lseeki64":                          424,
+	"_open_osfhandle":                    240,
+	"_setmode":                           176,
+	"_unlock_file":                       80,
+	"abort":                              480,
+	"accept":                             2896,
+	"acos":                               96,
+	"asin":                               112,
+	"atan":                               80,
+	"atan2":                              144,
+	"bind":                               1288,
+	"calloc":                             1416,
+	"cbrt":                               144,
+	"ceil":                               56,
+	"closesocket":                        1032,
+	"connect":                            1392,
+	"cos":                                96,
+	"cosh":                               128,
+	"exit":                               10128,
+	"exp":                                64,
+	"fflush":                             6784,
+	"floor":                              56,
+	"fmod":                               160,
+	"fputc":                              240,
+	"fputs":                              1696,
+	"free":                               896,
+	"fwrite":                             472,
+	"getpeername":                        1160,
+	"getsockname":                        1208,
+	"getsockopt":                         2192,
+	"htons":                              56,
+	"hypot":                              64,
+	"if_indextoname":                     2360,
+	"if_nametoindex":                     8336,
+	"inet_ntop":                          3200,
+	"inet_pton":                          424,
+	"ioctlsocket":                        1640,
+	"listen":                             1096,
+	"log":                                112,
+	"log10":                              112,
+	"log2":                               96,
+	"malloc":                             1416,
+	"memchr":                             56,
+	"memcmp":                             56,
+	"memcpy":                             48,
+	"memmove":                            48,
+	"memset":                             48,
+	"ntohs":                              56,
+	"pow":                                192,
+	"realloc":                            2280,
+	"recv":                               1360,
+	"round":                              56,
+	"send":                               1360,
+	"setsockopt":                         1520,
+	"sin":                                96,
+	"sinh":                               128,
+	"snprintf":                           4976,
+	"sqrt":                               56,
+	"strchr":                             56,
+	"strcmp":                             56,
+	"strerror":                           1408,
+	"strlen":                             56,
+	"strtoul":                            288,
+	"tan":                                160,
+	"tanh":                               144,
+	"trunc":                              104,
+	"wcslen":                             56,
+	"wcsncmp":                            56,
+}
+
 // cLibraryAliases are the names a system's headers give a function of
 // cLibraryStacks, which a binary imports it by.
 var cLibraryAliases = map[string]string{
@@ -309,9 +497,22 @@ type Image struct {
 	arch      arch
 	os        system
 	functions map[string]*function
-	cLibrary  map[string]bool // imported functions that are the system's C library's
-	lazy      bool            // imports are bound at their first calls, by the dynamic linker's resolver on the caller's stack
-	tlvNames  map[string]bool // macOS's thread-local descriptors, by the name the disassembler gives them, for x86-64's calls through one
+	cLibrary  map[string]bool   // imported functions that are the system's C library's
+	lazy      bool              // imports are bound at their first calls, by the dynamic linker's resolver on the caller's stack
+	tlvNames  map[string]bool   // macOS's thread-local descriptors, by the name the disassembler gives them, for x86-64's calls through one
+	slots     map[uint64]string // a PE binary's slots of its table of imports, by their addresses: the function each holds
+	cRuntime  map[string]bool   // a PE binary's functions of Microsoft's C runtime, linked in, as the linker's map names them
+
+	pieces      []piece           // a PE binary's functions, its symbols' code split where no branch reaches, by their first addresses
+	symbolStart map[string]uint64 // the first address of each symbol of a PE binary named once
+}
+
+// Measured reports whether the stacks of the C library's functions are
+// measured on the system and processor goos and goarch, named as Go
+// names them: every task of a program built for a platform that is not
+// is unbounded, since its calls into the library have no allowance.
+func Measured(goos, goarch string) bool {
+	return slices.Contains(measured[system(goos)], arch(goarch))
 }
 
 // Bound returns the bound of the stack of a task that runs entry, the
@@ -413,6 +614,15 @@ func (w *walker) calls(f *function) result {
 		var r result
 		switch c.kind {
 		case direct:
+			if n, linked, ok := w.linkedCLibrary(c.target); linked {
+				if !ok {
+					return result{reason: "a call of " + c.target + ", a function of the C runtime whose stack is not measured"}
+				}
+
+				r = result{bytes: n, path: []string{c.target}}
+				break
+			}
+
 			r = w.depth(c.target)
 		case library, threadLocal:
 			if !slices.Contains(measured[w.img.os], w.img.arch) {
@@ -420,7 +630,7 @@ func (w *walker) calls(f *function) result {
 			}
 
 			if c.kind == threadLocal {
-				n, _ := cLibraryStack(threadLocalKey)
+				n, _ := libraryStack(w.img.os, threadLocalKey)
 				r = result{bytes: n, path: []string{threadLocalKey}}
 				break
 			}
@@ -433,7 +643,7 @@ func (w *walker) calls(f *function) result {
 				return result{reason: "a call of " + w.img.plain(c.target) + ", which the binary binds at its first call, on the task's stack"}
 			}
 
-			n, ok := cLibraryStack(w.img.plain(c.target))
+			n, ok := libraryStack(w.img.os, w.img.plain(c.target))
 			if !ok {
 				return result{reason: "a call of " + w.img.plain(c.target) + ", a function of the C library whose stack is not measured"}
 			}
@@ -473,15 +683,46 @@ func (w *walker) calls(f *function) result {
 	return deepest
 }
 
+// linkedCLibrary reports whether the binary's function name is the C
+// library's, linked into the program as it is on Windows, which the
+// linker's map says, where the system's figures are measured, and what
+// a call of it is counted at: the function's allowance, rather than a
+// walk of its code, which calls through the pointers the library keeps
+// of its own and is cut into pieces at its own labels; no figure, ok
+// false, for a function the table does not hold, which leaves the task
+// unbounded. A function of the program is not the library's, whatever
+// its name.
+func (w *walker) linkedCLibrary(name string) (n int64, linked, ok bool) {
+	symbol := baseSymbol(name) // a piece of a function of the library's is the function's code, which its figure covers
+	if w.img.os != windows || !w.img.cRuntime[symbol] || !slices.Contains(measured[w.img.os], w.img.arch) {
+		return 0, false, false
+	}
+
+	n, ok = libraryStack(windows, symbol)
+	return n, true, ok
+}
+
 // cLibraryStack returns what a call of the C library's function name,
-// its name in C, is counted at: its measured figure and the margin,
-// aligned.
+// its name in C, is counted at on Linux and macOS: libraryStack's.
 func cLibraryStack(name string) (int64, bool) {
-	if a, ok := cLibraryAliases[name]; ok {
+	return libraryStack(linux, name)
+}
+
+// libraryStack returns what a call of the library's function name, its
+// name in C, is counted at on the system os: its figure in the system's
+// table and the margin, aligned. A name of the function's own code under
+// the function overriding on Windows, or an alias a system's headers
+// give it elsewhere, is counted as the function.
+func libraryStack(os system, name string) (int64, bool) {
+	table := cLibraryStacks
+	if os == windows {
+		table = windowsLibraryStacks
+		name = strings.TrimSuffix(name, overrideDefault)
+	} else if a, ok := cLibraryAliases[name]; ok {
 		name = a
 	}
 
-	n, ok := cLibraryStacks[name]
+	n, ok := table[name]
 	if !ok {
 		return 0, false
 	}

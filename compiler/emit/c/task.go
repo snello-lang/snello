@@ -151,10 +151,8 @@ func (e *Emitter) spawnClosure(x *ast.CallExpr, lit *ast.FuncLit, h *handle, pos
 	e.at, e.within, e.nclosure = pos, display, 0
 	e.line(head + " {")
 	e.function(lifted, lit.Body)
-	e.endPositions()
 	e.at, e.within, e.nclosure = outerAt, outerWithin, outerClosures
-	e.line("")
-	e.helpers.Write(e.body.Bytes())
+	e.addFunction(e.body.Bytes())
 	e.body, e.captured = outer, outerCaptured
 	e.spawnCall(k, name, wants, values, sig.Results(), h, pos)
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -422,9 +423,10 @@ func parseFile(tb testing.TB, path string) (*ast.File, *token.File, []byte) {
 }
 
 // A fileImporter loads the library packages from the std directory
-// beside this package, as the compiler's embedded importer does, for
-// the programs that import them; this package cannot use that importer,
-// which is built on it.
+// beside this package, every source of a package built for the host,
+// as the compiler's embedded importer does, for the programs that
+// import them; this package cannot use that importer, which is built
+// on it.
 type fileImporter struct {
 	conf   Config // the program's
 	std    Config // the library's, with what only the standard library may write
@@ -443,18 +445,36 @@ func (imp *fileImporter) Import(path string) (*Package, error) {
 		return pkg, nil
 	}
 
-	name := filepath.Join("..", "..", "std", path, filepath.Base(path)+".snello")
-	src, err := os.ReadFile(name)
+	dir := filepath.Join("..", "..", "std", path)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, errors.New("package " + path + " is not in the standard library")
 	}
 
-	f, file, err := parser.ParseFile(name, src)
-	if err != nil {
-		return nil, err
+	fset := token.NewFileSet()
+	var files []*token.File
+	var syntax []*ast.File
+	for _, e := range entries { // a package's sources for the host, as the compiler's importer chooses them
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".snello") || strings.HasSuffix(name, "_test.snello") || !platform.Host().Builds(name) {
+			continue
+		}
+
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+
+		file := fset.AddFile(filepath.Join(dir, name), len(src))
+		f, err := parser.Parse(file, src)
+		if err != nil {
+			return nil, err
+		}
+
+		files, syntax = append(files, file), append(syntax, f)
 	}
 
-	pkg, err := imp.std.Check(path, file, f, nil)
+	pkg, err := imp.std.CheckFiles(path, files, syntax, nil)
 	if err != nil {
 		return nil, err
 	}

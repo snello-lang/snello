@@ -102,6 +102,8 @@ snello build hello.snello
 ./hello
 ```
 
+Windows is being ported. The compiler and its programs run on Windows itself, on x86-64 and arm64, with LLVM and Visual Studio's Build Tools, and CI runs the test suite there; from Linux or macOS, `snello build -target windows/amd64 hello.snello` builds `hello.exe` for Windows. Chapter 34 of the book says what each platform supports and what is not built yet on Windows.
+
 To work on the compiler, build it from a clone instead:
 
 ```
@@ -128,7 +130,7 @@ bin/snello build examples/hello/hello.snello
 | `snello init` | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
 | `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
 
-`clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program; `SNELLO_CACHE` names another directory, and `SNELLO_CACHE=off` compiles the runtime with every build.
+`clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program. [Chapter 32](_docs/book/32-the-snello-command.md#environment) of the book lists every variable `snello` reads and the cache directory of each system.
 
 ## Documentation
 

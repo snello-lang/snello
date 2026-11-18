@@ -38,7 +38,8 @@ type frame struct {
 	vars  []owned
 	loop  bool
 	mark  int
-	block int // the lexical block of the debugging information the frame's code is in, 0 for none (debug.go)
+	block int    // the lexical block of the debugging information the frame's code is in, 0 for none (debug.go)
+	outer string // the location of what was written before the frame opened, which its close goes back to
 }
 
 // An owned value the emitter will drop: the address of its slot, its
@@ -439,21 +440,36 @@ func (e *Emitter) zero(p string, t types.Type, pos token.Pos) {
 }
 
 // push opens a frame for a scope; loop says a break or continue leaves
-// it.
+// it. In a debug build what the statement writes at its own line from
+// here, a loop's condition and its jumps among them, is in the frame's
+// lexical block, where the statement's variables are, so that the block
+// is one range of code: a debugger that reads CodeView lifts a block of
+// several ranges into the one around it, where two loops' variables of
+// one name could no longer be told apart.
 func (e *Emitter) push(loop bool) {
-	e.fn.frames = append(e.fn.frames, frame{loop: loop, mark: len(e.fn.temps), block: e.lexicalBlock()})
+	f := frame{loop: loop, mark: len(e.fn.temps), block: e.lexicalBlock(), outer: e.fn.loc}
+	e.fn.frames = append(e.fn.frames, f)
+	if f.block != 0 {
+		e.fn.loc = e.locationAt(e.fn.line)
+	}
 }
 
 // pop closes the innermost frame, writing the drops of its variables.
 func (e *Emitter) pop(pos token.Pos) {
 	n := len(e.fn.frames) - 1
-	outer := e.fn.loc
 	if e.debugging() && pos.IsValid() {
 		e.fn.loc = e.location(pos) // the drops at the block's closing brace, as clang places a destructor's call
 	}
 
 	e.dropVars(e.fn.frames[n].vars, pos)
-	e.fn.loc = outer
+	e.popLeft() // back to where the frame opened
+}
+
+// popLeft closes the innermost frame, whose code has left it: the leave
+// wrote its drops.
+func (e *Emitter) popLeft() {
+	n := len(e.fn.frames) - 1
+	e.fn.loc = e.fn.frames[n].outer
 	e.fn.frames = e.fn.frames[:n]
 }
 

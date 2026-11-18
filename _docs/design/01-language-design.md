@@ -88,7 +88,7 @@ A mutex owns its data, as in Rust: `Mutex<T>` hands out a guard that is a `mut T
 
 Actors fall out naturally: a task that owns its state and receives messages needs no locks at all.
 
-The runtime: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, epoll, or io_uring, and no async/await coloring. Stacks start as fixed virtual reservations with lazy commit and a stack pool; copying stacks come later if task counts demand it, and are possible without a GC since the compiler knows every frame layout. `06-tasks-and-channels.md` has the design, and the thread-per-task runtime that came before it behind the same interface.
+The runtime: an M:N work-stealing scheduler, blocking-looking I/O over kqueue, epoll, io_uring, or a completion port on Windows, and no async/await coloring. Stacks start as fixed virtual reservations with lazy commit and a stack pool; copying stacks come later if task counts demand it, and are possible without a GC since the compiler knows every frame layout. `06-tasks-and-channels.md` has the design, and the thread-per-task runtime that came before it behind the same interface.
 
 ## Traits
 
@@ -133,9 +133,9 @@ Go's lack of sum types is mitigated with sealed interfaces (an unexported marker
 
 ### Backend: C first, LLVM later
 
-Snello produces a native executable from the first program. The first backend emits C source and build it with the system C compiler, `cc`, which every machine with a developer toolchain has. The runtime, strings, slices, maps, options, printing and panics, tasks and channels, is C under `compiler/emit/c/runtime/`, compiled into every program. Nothing of Go is involved in a Snello program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
+Snello produces a native executable from the first program. The first backend emits C source and builds it with the system C compiler, `cc`, which every Linux and macOS machine with a developer toolchain has, and clang on Windows. The runtime, strings, slices, maps, options, printing and panics, tasks and channels, is C under `runtime/c/`, compiled into every program. Nothing of Go is involved in a Snello program: no collector, no scheduler, no `go build`. The emitted C is the portable assembler that Nim, Haxe and Chicken Scheme started from, and the same optimizing backends that LLVM offers build it.
 
-Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond `cc`. The LLVM backend, now the default, came when control over optimization, debug information and the GPU targets demanded it; the runtime carried over unchanged, the backend is one package under `compiler/emit/`, and the C backend stays as the reference the LLVM backend is tested against.
+Why not LLVM IR from the start: C is a fraction of the code per construct, readable when something goes wrong, and needs no toolchain beyond a C compiler. The LLVM backend, now the default, came when control over optimization, debug information and the GPU targets demanded it; the runtime carried over unchanged, the backend is one package under `compiler/emit/`, and the C backend stays as the reference the LLVM backend is tested against.
 
 **No collector, ever.** The checker decides where every value is freed, and the emitted code frees it there. A debug build poisons freed memory and asserts that nothing is reachable after its release, and a leak checker runs over the suite, so a missing or misplaced free is a failing test, not a slow leak.
 

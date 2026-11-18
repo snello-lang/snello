@@ -7,6 +7,7 @@ package stack
 import (
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,11 +31,18 @@ const (
 	// function through a pointer.
 	taskBase = "task_entry"
 
-	// switchTask and onStack are the runtime's functions that move to
-	// another stack: the switch to another task, and the call of a
-	// function on a stack of its own, which a panic runs through.
-	switchTask = "sn_switch"
-	onStack    = "sn_on_stack"
+	// switchTask, onStack, onBoundedStack and longJump are the runtime's
+	// functions that move to another stack, or back up this one: the
+	// switch to another task; the call of a function on a stack of its
+	// own, which a panic runs through, and on Windows its form that sets
+	// the stack's bounds in the thread's information block; and the
+	// runtime's own long jump of Windows, which a contained panic takes
+	// to the mark of the innermost catch still running, an ancestor's
+	// frame on the same stack, so no deeper than a path already counted.
+	switchTask     = "sn_switch"
+	onStack        = "sn_on_stack"
+	onBoundedStack = "sn_on_stack_bounded"
+	longJump       = "sn_longjmp_regs"
 
 	// chanDropCaller is the runtime's function that calls the drop a
 	// channel holds, through a pointer to one of the functions named
@@ -64,6 +72,11 @@ const (
 	// low byte of the section's flags.
 	machoZerofill = 0x1
 	machoTypeBits = 0xff
+
+	// LinkMapFile is the name the build gives the linker's map of a
+	// Windows link, beside the binary in the build's directory, which
+	// Patch reads the C runtime's functions from.
+	LinkMapFile = "link.map"
 
 	// patched ends the name of the copy of the binary written beside it,
 	// which replaces it once complete and, on macOS, signed.
@@ -104,10 +117,14 @@ type table struct {
 // written anew beside itself, signed again on macOS, and renamed over
 // itself, once for both patches; on an error of the analysis it is
 // left with every task unbounded, which is always safe. A program with
-// no spawn is not read past its symbols.
-func Patch(path string, data []byte) ([]Bound, error) {
+// no spawn is not read past its symbols. linkMap is the linker's map of
+// a Windows link, which names the library each function of the binary
+// came from: a function of Microsoft's C runtime, linked into the
+// program, is counted at its measured stack, and with no map, "", every
+// function's code is walked, as it is on Linux and macOS.
+func Patch(path string, data []byte, linkMap string) ([]Bound, error) {
 	given := data != nil
-	bounds, data, wrote, err := bound(path, data)
+	bounds, data, wrote, err := bound(path, data, linkMap)
 	if wrote || given {
 		if werr := Replace(path, data); werr != nil {
 			return bounds, werr
@@ -118,9 +135,10 @@ func Patch(path string, data []byte) ([]Bound, error) {
 }
 
 // bound writes the bounds into data, the binary's bytes, read from
-// path when none are given, and reports the bounds, the bytes, and
-// whether any bound was written; on an error the bytes are as given.
-func bound(path string, data []byte) ([]Bound, []byte, bool, error) {
+// path when none are given, with Patch's linkMap, and reports the
+// bounds, the bytes, and whether any bound was written; on an error the
+// bytes are as given.
+func bound(path string, data []byte, linkMap string) ([]Bound, []byte, bool, error) {
 	tab, read, err := read(path, data)
 	if err != nil || tab.spawns == 0 {
 		return nil, data, false, err
@@ -130,6 +148,12 @@ func bound(path string, data []byte) ([]Bound, []byte, bool, error) {
 	img, err := Load(path)
 	if err != nil {
 		return nil, data, false, err
+	}
+
+	if linkMap != "" {
+		if err := img.readLinkMap(linkMap); err != nil {
+			return nil, data, false, err
+		}
 	}
 
 	bounds := make([]Bound, tab.spawns)
@@ -224,7 +248,7 @@ func (img *Image) runtimeOptions() Options {
 		targets[img.origin(name)] = keys
 	}
 
-	return Options{Targets: targets, Switches: []string{switchTask, onStack}}
+	return Options{Targets: targets, Switches: []string{switchTask, onStack, onBoundedStack, longJump}}
 }
 
 // locate finds the program's table of bounds in its file, and counts
@@ -235,9 +259,14 @@ func locate(path string) (table, error) {
 		return machoTable(m)
 	}
 
+	if p, err := pe.Open(path); err == nil {
+		defer p.Close()
+		return peTable(p)
+	}
+
 	e, err := elf.Open(path)
 	if err != nil {
-		return table{}, fmt.Errorf("%s: neither Mach-O nor ELF", path)
+		return table{}, fmt.Errorf("%s: neither Mach-O, ELF nor PE", path)
 	}
 
 	defer e.Close()

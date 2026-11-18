@@ -326,21 +326,83 @@ func TestUnsupported(t *testing.T) {
 	}
 }
 
+// TestABIMatchesClang holds the backend's convention for every target
+// to clang's for what the runtime passes: a C struct of three words,
+// its string and slice, whose argument is a pointer marked byval
+// exactly where clang marks it and whose result comes back through a
+// pointer the caller passes; and its narrow scalars, a bool and a
+// uint8, extended with zeros, as an argument and as a result, exactly
+// where clang extends them.
+func TestABIMatchesClang(t *testing.T) {
+	if _, err := exec.LookPath(Compiler()); err != nil {
+		t.Skip("no clang")
+	}
+
+	const src = "typedef struct { void *p; long long a, b; } s3;\n" +
+		"void f(s3 x);\ns3 g(void);\n" +
+		"_Bool b(void);\nunsigned char u(void);\nvoid n(_Bool x, unsigned char y);\n" +
+		"void use(void) { s3 v = { 0 }; f(v); (void)g(); n(b(), u()); }\n"
+	for _, target := range platform.Targets() {
+		cmd := exec.Command(Compiler(), "--target="+target.Triple(), "-S", "-emit-llvm", "-o", "-", "-x", "c", "-")
+		cmd.Stdin = strings.NewReader(src)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", target, err, out)
+		}
+
+		declared := map[string]string{} // each function's declaration, by name
+		for _, line := range strings.Split(string(out), "\n") {
+			for _, name := range []string{"f", "g", "b", "u", "n"} {
+				if strings.HasPrefix(line, "declare") && strings.Contains(line, "@"+name+"(") {
+					declared[name] = line
+				}
+			}
+		}
+
+		abi, err := targetABI(target.Arch, target.OS)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+
+		if got, want := strings.Contains(abi.words("%sn_string"), "byval"), strings.Contains(declared["f"], "byval"); got != want {
+			t.Errorf("%s: the backend marks byval %v, clang %v: %s", target, got, want, declared["f"])
+		}
+
+		if !strings.Contains(declared["g"], "sret") {
+			t.Errorf("%s: clang does not return the struct through sret: %s", target, declared["g"])
+		}
+
+		for _, c := range []struct{ typ, clang string }{
+			{"i1", "zeroext i1 @b("}, {"i8", "zeroext i8 @u("}, {"i1", "i1 noundef zeroext"}, {"i8", "i8 noundef zeroext"},
+		} {
+			line := declared["b"] + declared["u"] + declared["n"]
+			if got, want := abi.small(c.typ) != "", strings.Contains(line, c.clang); got != want {
+				t.Errorf("%s: the backend extends %s %v, clang %v (%s): %s", target, c.typ, got, want, c.clang, line)
+			}
+		}
+	}
+}
+
 // TestABI pins the calling convention of a three-word struct per
-// processor, which clang decides for C and the backend must match,
-// and the target triple written for each processor and system.
+// processor and system, which clang decides for C and the backend must
+// match, and the target triple written for each processor and system.
 func TestABI(t *testing.T) {
-	amd64, err := targetABI("amd64")
+	amd64, err := targetABI("amd64", "linux")
 	if err != nil || amd64.words("%sn_string") != "ptr byval(%sn_string) align 8" {
 		t.Errorf("amd64: %q, %v", amd64.words("%sn_string"), err)
 	}
 
-	arm64, err := targetABI("arm64")
+	arm64, err := targetABI("arm64", "linux")
 	if err != nil || arm64.words("%sn_string") != "ptr" {
 		t.Errorf("arm64: %q, %v", arm64.words("%sn_string"), err)
 	}
 
-	if _, err := targetABI("riscv64"); err == nil {
+	windows, err := targetABI("amd64", "windows")
+	if err != nil || windows.words("%sn_string") != "ptr" {
+		t.Errorf("windows/amd64: %q, %v", windows.words("%sn_string"), err)
+	}
+
+	if _, err := targetABI("riscv64", "linux"); err == nil {
 		t.Error("riscv64: want an error, the convention is not known")
 	}
 

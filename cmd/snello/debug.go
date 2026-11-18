@@ -33,15 +33,41 @@ const (
 	// writes its own copy into when the cache is off.
 	supportDir  = "debug"
 	scriptName  = "snello.py"
+	jsName      = "snello.js"
 	stdDir      = "std"
 	hashChars   = 16
 	supportTemp = "snello-debug-"
 
-	// lldb is the debugger macOS ships, and gdb the one Linux's
-	// distributions do; darwin names macOS.
-	lldb   = "lldb"
-	gdb    = "gdb"
-	darwin = "darwin"
+	// lldb is the debugger macOS ships, gdb the one Linux's
+	// distributions do, and cdb Windows' SDK does, which reads the PDB a
+	// Windows debug build writes; darwin names macOS and windows
+	// Windows.
+	lldb    = "lldb"
+	gdb     = "gdb"
+	cdb     = "cdb"
+	darwin  = "darwin"
+	windows = "windows"
+
+	// cdb's arguments: where sources are looked for, the support's
+	// directory, whose files the debugger finds by the end of a path the
+	// debugging information names, std/os/os.snello, and then the
+	// places sourcePathVar names, parted by cdbPathSeparator; and the
+	// commands run first, which load the script and read the source's
+	// lines, parted by cdbSeparator. A source path is an option and not
+	// a command, since the command takes the rest of the line as its
+	// places. cdbQuote encloses a path with spaces. programFilesX86 is
+	// the variable naming the directory the SDK installs its debuggers
+	// under, a directory a processor in windowsKitDebuggers.
+	cdbSourcePath    = "-srcpath"
+	sourcePathVar    = "_NT_SOURCE_PATH"
+	cdbPathSeparator = ";"
+	cdbCommand       = "-c"
+	cdbScriptLoad    = ".scriptload "
+	cdbLines         = ".lines -e"
+	cdbSeparator     = "; "
+	cdbQuote         = `"`
+	programFilesX86  = "ProgramFiles(x86)"
+	executable       = ".exe"
 
 	// lldb's arguments: a command run first, the end of its own
 	// options, and the commands that load the script and map the
@@ -78,6 +104,21 @@ const (
 //go:embed snello.py
 var debuggerScript []byte
 
+// windowsScript is Snello's support for cdb and WinDbg: the tasks
+// command; the values are shown by the visualizers the build embeds in
+// the PDB.
+//
+//go:embed snello.js
+var windowsScript []byte
+
+// windowsKitDebuggers is where Windows' SDK installs its debuggers,
+// under the program files' directory, in one directory a processor,
+// named by kitProcessors.
+var (
+	windowsKitDebuggers = []string{"Windows Kits", "10", "Debuggers"}
+	kitProcessors       = map[string]string{"amd64": "x64", "arm64": "arm64"}
+)
+
 // debug builds the program at path, a file or a directory, as build
 // -debug does through backend, and runs the platform's debugger on the
 // binary, with args, the arguments after the program's path, for the
@@ -91,8 +132,15 @@ func debug(path, backend string, args []string) int {
 		return exitFailure
 	}
 
-	if name := platformDebugger(); !onPath(name) { // before a build there is no debugger to run
-		fmt.Fprintf(os.Stderr, "%s %s: %s is not on the path\n", program, debugCommand, name)
+	name := platformDebugger()
+	debugger, found := debuggerPath(name)
+	if !found { // before a build there is no debugger to run
+		where := "on the path"
+		if name == cdb {
+			where += " or in Windows' SDK"
+		}
+
+		fmt.Fprintf(os.Stderr, "%s %s: %s is not %s\n", program, debugCommand, name, where)
 		return exitFailure
 	}
 
@@ -107,9 +155,8 @@ func debug(path, backend string, args []string) int {
 	}
 
 	defer done()
-	name, cmdArgs := debuggerCommand(support, currentDir+string(filepath.Separator)+programName(path, isDir), args)
-
-	cmd := exec.Command(name, cmdArgs...)
+	cmdArgs := debuggerCommand(name, support, currentDir+string(filepath.Separator)+programName(path, isDir), args)
+	cmd := exec.Command(debugger, cmdArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
@@ -125,34 +172,74 @@ func debug(path, backend string, args []string) int {
 }
 
 // platformDebugger is the debugger of the system the compiler runs on:
-// lldb on macOS, gdb on Linux.
+// lldb on macOS, gdb on Linux, and cdb on Windows.
 func platformDebugger() string {
-	if goruntime.GOOS == darwin {
+	switch goruntime.GOOS {
+	case darwin:
 		return lldb
+	case windows:
+		return cdb
 	}
 
 	return gdb
 }
 
-// onPath reports whether the command name can be run.
-func onPath(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+// debuggerPath returns the path of the debugger name, and whether it is
+// there: the one on the path, or for cdb the one Windows' SDK installs
+// for the processor the command runs on, outside the path.
+func debuggerPath(name string) (string, bool) {
+	if found, err := exec.LookPath(name); err == nil {
+		return found, true
+	}
+
+	programFiles := os.Getenv(programFilesX86)
+	processor, known := kitProcessors[goruntime.GOARCH]
+	if name != cdb || programFiles == "" || !known { // never a path relative to the working directory
+		return "", false
+	}
+
+	parts := append([]string{programFiles}, windowsKitDebuggers...)
+	kit := filepath.Join(append(parts, processor, cdb+executable)...)
+	if _, err := os.Stat(kit); err != nil {
+		return "", false
+	}
+
+	return kit, true
 }
 
-// debuggerCommand is the platform's debugger and its arguments: bin,
-// run with args, the script in support loaded, and the standard
-// library's files, which the debugging information names under
-// lower.StdSources, read from support's copy.
-func debuggerCommand(support, bin string, args []string) (string, []string) {
+// debuggerCommand is the arguments of the debugger name: bin, run with
+// args, the script in support loaded, and the standard library's
+// files, which the debugging information names under lower.StdSources,
+// read from support's copy: by that prefix mapped to it for lldb and
+// gdb, and for cdb, which maps no prefix, by the end of the path, found
+// under the support's directory.
+func debuggerCommand(name, support, bin string, args []string) []string {
+	if name == cdb {
+		return append(append(cdbArgs(support), bin), args...)
+	}
+
 	script := filepath.Join(support, scriptName)
 	prefix := strings.TrimSuffix(lower.StdSources, stdPathEnd)
 	sources := filepath.Join(support, stdDir)
-	if platformDebugger() == lldb {
-		return lldb, append([]string{lldbCommand, lldbImport + strconv.Quote(script), lldbCommand, lldbSourceMap + prefix + argSeparator + strconv.Quote(sources), lldbProgram, bin}, args...)
+	if name == lldb {
+		return append([]string{lldbCommand, lldbImport + strconv.Quote(script), lldbCommand, lldbSourceMap + prefix + argSeparator + strconv.Quote(sources), lldbProgram, bin}, args...)
 	}
 
-	return gdb, append([]string{gdbScript, script, gdbCommand, gdbSubstitutePath + prefix + argSeparator + strconv.Quote(sources), gdbProgram, bin}, args...)
+	return append([]string{gdbScript, script, gdbCommand, gdbSubstitutePath + prefix + argSeparator + strconv.Quote(sources), gdbProgram, bin}, args...)
+}
+
+// cdbArgs returns cdb's arguments before the program: the support's
+// directory first among the places sources are looked for, the user's
+// own after it, and the commands run first, which load the script and
+// read the source's lines, then more.
+func cdbArgs(support string, more ...string) []string {
+	places := support
+	if own := os.Getenv(sourcePathVar); own != "" {
+		places += cdbPathSeparator + own
+	}
+
+	commands := append([]string{cdbScriptLoad + cdbQuote + filepath.Join(support, jsName) + cdbQuote, cdbLines}, more...)
+	return []string{cdbSourcePath, places, cdbCommand, strings.Join(commands, cdbSeparator)}
 }
 
 // debugSupport returns the directory holding the script and the
@@ -183,6 +270,7 @@ func debugSupport() (dir string, done func(), err error) {
 
 	sum := sha256.New()
 	sum.Write(debuggerScript)
+	sum.Write(windowsScript)
 	err = fs.WalkDir(std.Sources, currentDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -230,8 +318,10 @@ func debugSupport() (dir string, done func(), err error) {
 // writeSupport writes the script and the standard library's sources
 // into dir.
 func writeSupport(dir string) error {
-	if err := os.WriteFile(filepath.Join(dir, scriptName), debuggerScript, supportFileMode); err != nil {
-		return err
+	for name, script := range map[string][]byte{scriptName: debuggerScript, jsName: windowsScript} {
+		if err := os.WriteFile(filepath.Join(dir, name), script, supportFileMode); err != nil {
+			return err
+		}
 	}
 
 	return fs.WalkDir(std.Sources, currentDir, func(path string, d fs.DirEntry, err error) error {

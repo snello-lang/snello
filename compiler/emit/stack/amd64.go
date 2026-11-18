@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The x86-64 mnemonics, registers and operand forms the analysis reads,
@@ -35,23 +36,24 @@ const (
 	amd64Indirect = "*"         // the start of the operand of a call or a jump through a register or memory
 	amd64RIP      = "(%rip)"    // an address relative to the instruction, as the table of imports is reached
 	amd64TLVCall  = "*(%rdi)"   // the call through the descriptor whose address lea loaded, as macOS reaches a thread-local variable
+	amd64Probed   = "%rax,%rsp" // the frame a stack probe checked, its size in rax, taken from the stack pointer
 	amd64PushSize = 8           // the bytes a push or the frame pointer enter saves take
 
 	amd64RegSP = "rsp" // the stack pointer and the frame pointer as lea's base register names them
 	amd64RegFP = "rbp"
 	amd64Minus = "-" // the sign of an offset below its base
 
-	amd64ImmSign  = "$" // the start of an immediate operand
-	amd64Operands = "," // what comes between two operands
-	amd64Prefixed = " " // what comes between a prefix and the operation it prefixes
+	amd64ImmSign  = "$"   // the start of an immediate operand
+	amd64Operands = ","   // what comes between two operands
+	amd64Rex      = "rex" // the start of every form GNU objdump prints a REX prefix in alone, rex64 or rex.W
 )
 
 // amd64Prefixes are the prefixes objdump prints before an operation.
 var amd64Prefixes = map[string]bool{"notrack": true, "bnd": true, "rep": true, "repz": true, "repe": true, "repnz": true, "repne": true, "lock": true, "data16": true, "cs": true, "ds": true, "es": true, "fs": true, "gs": true, "ss": true}
 
 // amd64Sized are the mnemonics the analysis reads that objdump may
-// print with the size suffix q, callq for call.
-var amd64Sized = map[string]bool{"callq": true, "jmpq": true, "pushq": true, "popq": true, "subq": true, "addq": true, "andq": true, "leaq": true, "movq": true, "retq": true, "leaveq": true, "enterq": true}
+// print with a size suffix, callq for call and movl for mov.
+var amd64Sized = map[string]bool{"callq": true, "jmpq": true, "pushq": true, "popq": true, "subq": true, "addq": true, "andq": true, "leaq": true, "movq": true, "movl": true, "retq": true, "leaveq": true, "enterq": true}
 
 // The x86-64 operand forms: an immediate subtracted from or masked into
 // the stack pointer, "$0x28,%rsp", a mask GNU objdump writes unsigned,
@@ -59,23 +61,43 @@ var amd64Sized = map[string]bool{"callq": true, "jmpq": true, "pushq": true, "po
 // address relative to a register
 // loaded into it, "-0x18(%rsp),%rsp", and the symbol a call through
 // the table of imported functions names in its note,
-// "<malloc@GLIBC_2.2.5>".
+// "<malloc@GLIBC_2.2.5>", or the slot of a PE binary's table of
+// imports, "<__imp_HeapAlloc>"; and the size of the frame a stack probe
+// is to check, put in eax before the probe's call, "$0x4e40,%eax".
 var (
 	amd64ImmToSP  = regexp.MustCompile(`^\$(0x[0-9a-f]+|\d+),%rsp$`)
 	amd64MaskToSP = regexp.MustCompile(`^\$(-)?(0x[0-9a-f]+|\d+),%rsp$`)
 	amd64LeaTLV   = regexp.MustCompile(`^([\w.$]+)\(%rip\),%rdi$`)
 	amd64LeaToSP  = regexp.MustCompile(`^(-?)(0x[0-9a-f]+|\d+)?\(%(\w+)\),%rsp$`)
 	amd64Imported = regexp.MustCompile(`<([^@>+]+)@[^>]*>`)
+	amd64Slot     = regexp.MustCompile(`<` + importSlotPrefix + `([^@>+]+)>`)
+	amd64ToProbe  = regexp.MustCompile(`^\$(0x[0-9a-f]+|\d+),%eax$`)
 )
 
 // amd64 reads the function: its frame, its calls and tail calls, and
 // what it does to the stack pointer that is not a frame.
+// A frame larger than a page is made by three instructions in a row, as
+// Windows has a compiler make one: its size put in eax, the call of the
+// stack probe, which touches each page of the frame in order so that
+// the system's guard page grows the stack, and the frame taken from the
+// stack pointer by that size, which no branch may reach but at the
+// first, decode checks.
 func (d *decoder) amd64() {
-	descriptor := false // the instruction before loaded a thread-local descriptor's address
-	for _, in := range d.insts {
-		in = amd64Plain(in)
+	descriptor := false  // the instruction before loaded a thread-local descriptor's address
+	toProbe := int64(-1) // the size the instruction before put in eax, or -1
+	probed := int64(-1)  // the size of the frame the instruction before, the stack probe's call, checked, or -1
+	var probeCall uint64 // the address of that call
+	plain := make([]inst, len(d.insts))
+	for i, in := range d.insts {
+		plain[i] = amd64Plain(in)
+	}
+
+	held := d.amd64Imports(plain) // the registers that hold an imported function, at each call through one
+	for i, in := range plain {
 		loaded := descriptor
 		descriptor = in.op == amd64OpLea && d.isDescriptor(in.args)
+		size, checked, checkedAt := toProbe, probed, probeCall
+		toProbe, probed = -1, -1
 		switch {
 		case in.op == amd64OpPush:
 			d.grow(in, amd64PushSize)
@@ -86,21 +108,30 @@ func (d *decoder) amd64() {
 			if strings.HasPrefix(in.args, amd64Indirect) {
 				if loaded && in.args == amd64TLVCall {
 					d.f.calls = append(d.f.calls, call{kind: threadLocal}) // the system's accessor, which the descriptor's first word holds
-				} else if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
-					d.f.calls = append(d.f.calls, call{kind: library, target: m[1]}) // through the table of imports, as -fno-plt calls
+				} else if name, ok := amd64Import(in); ok {
+					d.f.calls = append(d.f.calls, call{kind: library, target: name}) // through the table of imports, as -fno-plt and every PE binary call
+				} else if name, ok := amd64HeldImport(held, i, in); ok {
+					d.f.calls = append(d.f.calls, call{kind: library, target: name}) // through a register loaded from the slot
 				} else {
 					d.f.calls = append(d.f.calls, call{kind: pointer})
 				}
 			} else {
-				d.call(parseTarget(in.args, in.note))
+				t := parseTarget(in.args, in.note)
+				if stackProbes[t.name] && size >= 0 {
+					probed, probeCall = size, in.addr
+				}
+
+				d.call(t)
 			}
 		case in.op == amd64OpReturn:
 			d.stop(in)
 		case in.op == amd64OpJump:
 			d.stop(in)
 			if strings.HasPrefix(in.args, amd64Indirect) {
-				if m := amd64Imported.FindStringSubmatch(in.note); m != nil && strings.Contains(in.args, amd64RIP) {
-					d.f.calls = append(d.f.calls, call{kind: library, target: m[1]})
+				if name, ok := amd64Import(in); ok {
+					d.f.calls = append(d.f.calls, call{kind: library, target: name})
+				} else if name, ok := amd64HeldImport(held, i, in); ok {
+					d.f.calls = append(d.f.calls, call{kind: library, target: name})
 				} else {
 					d.f.calls = append(d.f.calls, call{kind: pointer}) // a tail call through a pointer, which the compiler writes for a call that ends a function, since both backends build with jump tables off, so the switches are tables of comparisons: a call, counted over this frame, then the end
 				}
@@ -109,10 +140,33 @@ func (d *decoder) amd64() {
 			}
 		case strings.HasPrefix(in.op, amd64OpCond) || strings.HasPrefix(in.op, amd64OpLoop):
 			d.branch(in, parseTarget(in.args, in.note))
+		case in.op == amd64OpSub && in.args == amd64Probed && checked >= 0:
+			d.probe(checkedAt, in, checked)
 		default:
+			if m := amd64ToProbe.FindStringSubmatch(in.args); m != nil && in.op == amd64OpMove {
+				toProbe, _ = strconv.ParseInt(m[1], 0, 64)
+			}
+
 			d.amd64Stack(in)
 		}
 	}
+}
+
+// amd64Import returns the imported function a call or a jump through
+// memory relative to the instruction goes to, by the slot of the table
+// of imports its note names, and whether it names one.
+func amd64Import(in inst) (string, bool) {
+	if !strings.Contains(in.args, amd64RIP) {
+		return "", false
+	}
+
+	for _, re := range []*regexp.Regexp{amd64Imported, amd64Slot} {
+		if m := re.FindStringSubmatch(in.note); m != nil {
+			return m[1], true
+		}
+	}
+
+	return "", false
 }
 
 // isDescriptor reports whether lea's operands load the address of one
@@ -177,20 +231,28 @@ func (d *decoder) amd64Stack(in inst) {
 	}
 }
 
-// amd64Plain drops the prefixes objdump prints before an operation and
-// the size suffix of the operations the analysis reads, so that
-// "notrack jmp *%rax" is jmp and "callq" is call, and writes the
+// amd64Prefix reports whether op is a prefix objdump prints before an
+// operation, or on a line of its own: a REX prefix among them.
+func amd64Prefix(op string) bool {
+	return amd64Prefixes[op] || strings.HasPrefix(op, amd64Rex)
+}
+
+// amd64Plain drops the prefixes objdump prints before an operation, a
+// REX prefix GNU's prints alone among them, and the size suffix of the
+// operations the analysis reads, so that "notrack jmp *%rax" and
+// "rex.W jmp *%rax" are jmp and "callq" is call, and writes the
 // operands with nothing after the comma between two, as GNU objdump
 // does and LLVM's, the one a Mac has, does not: "$0x38, %rsp" is
 // "$0x38,%rsp".
 func amd64Plain(in inst) inst {
-	for amd64Prefixes[in.op] {
-		parts := strings.SplitN(in.args, amd64Prefixed, 2)
-		in.op = parts[0]
-		in.args = ""
-		if len(parts) == 2 {
-			in.args = strings.TrimSpace(parts[1])
+	for amd64Prefix(in.op) && strings.TrimSpace(in.args) != "" { // a prefix alone, which LLVM's objdump prints on a line of its own, stays
+		rest := strings.TrimSpace(in.args)
+		op, args := rest, ""
+		if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 { // a tab after the prefix, as LLVM's objdump prints one, or a space
+			op, args = rest[:i], rest[i+1:]
 		}
+
+		in.op, in.args = op, strings.TrimSpace(args)
 	}
 
 	if amd64Sized[in.op] {

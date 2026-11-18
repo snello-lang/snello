@@ -141,8 +141,8 @@ func (e *Emitter) thunk(name, typ string, call *ast.CallExpr, saved []ast.Expr, 
 		put(&e.helpers, strings.Join(e.prologue, "\n"), "\n")
 	}
 
-	e.helpers.Write(e.body.Bytes())
-	e.helpers.WriteString("}\n\n")
+	e.body.WriteString("}\n")
+	e.addFunction(e.body.Bytes())
 	e.body, e.prologue, e.frames, e.temps, e.captured = outerBody, outerPrologue, outerFrames, outerTemps, outerCaptured
 }
 

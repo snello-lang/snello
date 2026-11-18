@@ -12,15 +12,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // libcTimeout bounds the measuring program's run, whose every case ends
-// in well under a second.
-const libcTimeout = 2 * time.Minute
+// in well under a second. The measuring programs are POSIX's and
+// Windows', each built with the system's compiler, clang on Windows,
+// which has no cc, and the options of its build, binding every import
+// as the program starts on Linux, and on Windows the C runtime's define
+// and LLVM's linker.
+const (
+	libcTimeout       = 2 * time.Minute
+	libcSource        = "libc.c"
+	libcWindowsSource = "libc_windows.c"
+	libcCC            = "cc"
+	libcWindowsCC     = "clang"
+	libcWindowsSuffix = ".exe"
+
+	// unmeasuredSystem is a system none of the tables was measured on.
+	unmeasuredSystem = system("freebsd")
+)
+
+var (
+	libcFlags        = []string{"-O1", "-fno-builtin", "-pthread"}
+	libcLibs         = []string{"-lm"}
+	libcLinuxFlags   = []string{"-Wl,-z,now"}
+	libcWindowsFlags = []string{"-O1", "-fno-builtin", "-D_CRT_SECURE_NO_WARNINGS", "-fuse-ld=lld"}
+)
 
 // image builds an Image from a table of functions, for the bound's own
 // rules apart from any disassembler.
@@ -102,15 +126,15 @@ func TestBoundLibrary(t *testing.T) {
 }
 
 // TestBoundUnmeasured leaves a task unbounded that calls into the C
-// library of a system and processor its stacks were never measured on,
-// macOS on x86-64, a thread-local's accessor among the calls, and
-// bounds the same calls on macOS on arm64, where they were.
+// library of a system its stacks were never measured on, FreeBSD, a
+// thread-local's accessor among the calls, and bounds the same calls on
+// macOS on arm64, where they were.
 func TestBoundUnmeasured(t *testing.T) {
 	for _, c := range []call{{kind: library, target: "malloc"}, {kind: threadLocal}} {
 		img := image(amd64, base(0), fn("run", 10, c))
-		img.os = darwin
-		if b := img.Bound("run", "base", 0, Options{}); b.Known() || !strings.Contains(b.Reason, "not measured on darwin/amd64") {
-			t.Errorf("%+v on darwin/amd64: got %+v", c, b)
+		img.os = unmeasuredSystem
+		if b := img.Bound("run", "base", 0, Options{}); b.Known() || !strings.Contains(b.Reason, "not measured on freebsd/amd64") {
+			t.Errorf("%+v on freebsd/amd64: got %+v", c, b)
 		}
 
 		img = image(arm64, base(0), fn("run", 10, c))
@@ -198,11 +222,30 @@ func TestImageString(t *testing.T) {
 	}
 }
 
+// TestMeasured reports the platforms the C library's stacks are measured
+// on, and no other.
+func TestMeasured(t *testing.T) {
+	for _, c := range []struct {
+		goos, goarch string
+		want         bool
+	}{{platform.Linux, platform.AMD64, true}, {platform.Linux, platform.ARM64, true}, {platform.Darwin, platform.ARM64, true}, {platform.Darwin, platform.AMD64, false}, {platform.Windows, platform.AMD64, true}, {platform.Windows, platform.ARM64, false}, {"plan9", platform.AMD64, false}} {
+		if got := Measured(c.goos, c.goarch); got != c.want {
+			t.Errorf("%s/%s: %v, want %v", c.goos, c.goarch, got, c.want)
+		}
+	}
+}
+
+// TestCLibraryStackAllowance counts each function of both tables at its
+// figure and the margin, aligned, an alias at its function's, a Windows
+// C runtime function's own code under the function overriding's name
+// at the function's, and getaddrinfo at none.
 func TestCLibraryStackAllowance(t *testing.T) {
-	for name, measured := range cLibraryStacks {
-		n, ok := cLibraryStack(name)
-		if !ok || n < measured+measured*cLibraryMargin/100 || n%stackAlign != 0 {
-			t.Errorf("%s: measured %d, counted at %d", name, measured, n)
+	for sys, table := range map[system]map[string]int64{linux: cLibraryStacks, windows: windowsLibraryStacks} {
+		for name, measured := range table {
+			n, ok := libraryStack(sys, name)
+			if !ok || n < measured+measured*cLibraryMargin/100 || n%stackAlign != 0 {
+				t.Errorf("%s on %s: measured %d, counted at %d", name, sys, measured, n)
+			}
 		}
 	}
 
@@ -217,18 +260,32 @@ func TestCLibraryStackAllowance(t *testing.T) {
 	if _, ok := cLibraryStack("getaddrinfo"); ok {
 		t.Error("getaddrinfo has an allowance")
 	}
+
+	n, _ := libraryStack(windows, "memset")
+	if o, ok := libraryStack(windows, "memset"+overrideDefault); !ok || o != n {
+		t.Errorf("memset's own code under the function overriding's name is counted at %d, %v, memset at %d", o, ok, n)
+	}
 }
 
-// TestCLibraryStack builds testdata/libc.c with the system's compiler,
+// TestCLibraryStack builds the measuring program of the system the
+// tests run on with its compiler, testdata/libc.c on Linux and macOS,
 // linked to bind every function as it starts as a Snello program is,
-// runs it, and holds what it measures each C library function to use
-// to the function's allowance: a system whose C library goes deeper
-// than the table allows fails here, before any task can be given a
-// stack too small for it.
+// and testdata/libc_windows.c on Windows, runs it, and holds what it
+// measures each function of the system's libraries and of the C
+// library to use to the function's allowance: a system whose libraries
+// go deeper than the table allows fails here, before any task can be
+// given a stack too small for it.
 func TestCLibraryStack(t *testing.T) {
+	if !Measured(runtime.GOOS, runtime.GOARCH) {
+		t.Skipf("no task is bounded by the libraries' stacks on %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
 	cc := os.Getenv("CC")
 	if cc == "" {
-		cc = "cc"
+		cc = libcCC
+		if runtime.GOOS == platform.Windows {
+			cc = libcWindowsCC
+		}
 	}
 
 	if _, err := exec.LookPath(cc); err != nil {
@@ -236,9 +293,15 @@ func TestCLibraryStack(t *testing.T) {
 	}
 
 	bin := filepath.Join(t.TempDir(), "libc")
-	args := []string{"-O1", "-fno-builtin", "-pthread", "-o", bin, filepath.Join("testdata", "libc.c"), "-lm"}
-	if system(runtime.GOOS) == linux {
-		args = append(args, "-Wl,-z,now")
+	var args []string
+	switch system(runtime.GOOS) {
+	case windows:
+		bin += libcWindowsSuffix
+		args = slices.Concat(libcWindowsFlags, []string{"-o", bin, filepath.Join("testdata", libcWindowsSource)})
+	case linux:
+		args = slices.Concat(libcFlags, []string{"-o", bin, filepath.Join("testdata", libcSource)}, libcLibs, libcLinuxFlags)
+	default:
+		args = slices.Concat(libcFlags, []string{"-o", bin, filepath.Join("testdata", libcSource)}, libcLibs)
 	}
 
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
@@ -254,6 +317,11 @@ func TestCLibraryStack(t *testing.T) {
 		t.Fatalf("%v\n%s", err, stdout.String())
 	}
 
+	table := "cLibraryStacks"
+	if system(runtime.GOOS) == windows {
+		table = "windowsLibraryStacks"
+	}
+
 	lines := 0
 	sc := bufio.NewScanner(&stdout)
 	for sc.Scan() {
@@ -264,12 +332,12 @@ func TestCLibraryStack(t *testing.T) {
 		}
 
 		lines++
-		allowed, known := cLibraryStack(name)
+		allowed, known := libraryStack(system(runtime.GOOS), name)
 		switch {
 		case !known:
-			t.Errorf("%s uses %d bytes and has no entry in cLibraryStacks", name, measured)
+			t.Errorf("%s uses %d bytes and has no entry in %s", name, measured, table)
 		case measured > allowed:
-			t.Errorf("%s uses %d bytes, more than its allowance of %d: raise its entry in cLibraryStacks", name, measured, allowed)
+			t.Errorf("%s uses %d bytes, more than its allowance of %d: raise its entry in %s", name, measured, allowed, table)
 		}
 	}
 
