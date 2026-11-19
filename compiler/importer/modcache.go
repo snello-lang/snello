@@ -77,8 +77,8 @@ const (
 	// the cache's root, whose path stays short whatever the module's
 	// is, since git on Windows writes no path past 260 characters and a
 	// module's escaped path may run to 200 on its own; the tree is
-	// renamed from there into place, and the record beside the module
-	// is written through a file of the same pattern beside it. A
+	// renamed from there into place, and the record is written through
+	// a file of the same pattern beside the module. A
 	// directory or a record a fetch left, stopped, is removed after
 	// leftoverAge.
 	gitName         = "git"

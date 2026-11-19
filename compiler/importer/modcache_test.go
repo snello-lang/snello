@@ -297,7 +297,8 @@ func TestUntar(t *testing.T) {
 
 // TestRemoveLeftovers removes what a stopped fetch left once an hour has
 // passed, a work directory at the root and a record beside the module,
-// and leaves what a fetch running now holds.
+// and leaves what a fetch running now holds and a module's directory
+// at the root however old.
 func TestRemoveLeftovers(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "example.com", "lib@0.1.0")
@@ -317,7 +318,7 @@ func TestRemoveLeftovers(t *testing.T) {
 	}
 
 	stale := time.Now().Add(-2 * leftoverAge)
-	for _, p := range []string{old, record} {
+	for _, p := range []string{old, record, filepath.Dir(dir)} {
 		if err := os.Chtimes(p, stale, stale); err != nil {
 			t.Fatal(err)
 		}
@@ -330,8 +331,10 @@ func TestRemoveLeftovers(t *testing.T) {
 		}
 	}
 
-	if _, err := os.Stat(recent); err != nil {
-		t.Error("a fetch running now lost its directory")
+	for _, p := range []string{recent, filepath.Dir(dir)} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the sweep took what is not a leftover: %s", p)
+		}
 	}
 }
 
