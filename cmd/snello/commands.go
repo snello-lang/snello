@@ -195,18 +195,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 // allocates the list.
 func commands() []*command {
 	return []*command{
+		{name: addCommand, args: addArgs, minArgs: 2, maxArgs: 3, short: "require a dependency by version, its latest release unless one is named", declare: declareAdd},
 		{name: buildCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "compile a program, a file or a directory, to a binary", declare: declareCompile(buildCommand, build)},
 		{name: checkCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "check a program, or a package, and print its errors", declare: declareCheck},
 		{name: debugCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
+		{name: depsCommand, minArgs: 0, maxArgs: 0, short: "print the dependencies by version, and who requires each", declare: declareDeps},
 		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
 		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, emit)},
+		{name: fetchCommand, minArgs: 0, maxArgs: 0, short: "fetch every dependency into the module cache, for a build with no network", declare: declareFetch},
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},
 		{name: lexCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the tokens of a source file", declare: declareLex},
 		{name: newCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "start a module in a new directory, with a program and its test", declare: declareNew},
 		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file", declare: declareParse},
+		{name: removeCommand, args: removeArgs, minArgs: 1, maxArgs: anyArgs, short: "take dependencies out of snello.mod, once nothing imports them", declare: declareRemove},
 		{name: runCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program, run it with ARGS, and leave no file", declare: declareRun},
 		{name: testCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "build and run the tests of a package", declare: declareTest},
+		{name: updateCommand, args: updateArgs, minArgs: 0, maxArgs: anyArgs, short: "raise dependencies to their latest compatible releases", declare: declareUpdate},
 		{name: versionCommand, minArgs: 0, maxArgs: 0, short: "print the version, commit, channel and platform", declare: declareVersion},
 	}
 }

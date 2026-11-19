@@ -7,6 +7,7 @@ package importer
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,9 +32,24 @@ func TestModFile(t *testing.T) {
 		err      string
 	}{
 		{"", nil, ""},
-		{"// the app\n\nrequire dep ../dep // a library beside it\nrequire other " + abs + "\n", []Require{{"dep", filepath.Join(dir, "..", "dep")}, {"other", abs}}, ""},
+		{"// the app\n\nrequire dep ../dep // a library beside it\nrequire other " + abs + "\n", []Require{{Name: "dep", Dir: filepath.Join(dir, "..", "dep")}, {Name: "other", Dir: abs}}, ""},
 		{"module example.com/app\n", nil, `snello.mod:1: unknown directive "module"`},
-		{"require dep\n", nil, "snello.mod:1: require needs a name and a directory"},
+		{"require dep\n", nil, "snello.mod:1: require needs a name and a directory, or a name, a repository's URL and a version"},
+		{"require re https://example.com/re 0.2.0 // a comment after a URL\n", []Require{{Name: "re", URL: "https://example.com/re", Version: "0.2.0"}}, ""},
+		{"require dep ../dep// no space before the comment, which is part of the word\n", nil, "snello.mod:1: require needs a name and a directory, or a name, a repository's URL and a version"},
+		{"require re example.com/re 0.2.0\n", nil, `snello.mod:1: a repository is named by its URL, https://host/path, and "example.com/re" has no scheme git fetches from: https, ssh or file`},
+		{"require re https:// 0.2.0\n", nil, `snello.mod:1: a repository is named by its URL, https://host/path, and "https://" names no host`},
+		{"require re https://example.com/re v0.2.0\n", nil, `snello.mod:1: malformed version "v0.2.0": a version is MAJOR.MINOR.PATCH, with no build metadata, and names the tag vMAJOR.MINOR.PATCH`},
+		{"require re https://example.com/re 0.2.0+build\n", nil, `snello.mod:1: malformed version "0.2.0+build": a version is MAJOR.MINOR.PATCH, with no build metadata, and names the tag vMAJOR.MINOR.PATCH`},
+		{"require re https://../../escaped/x 0.2.0\n", nil, `has an empty, . or .. element in its path`},
+		{"require re https://Example.com/re 0.2.0\n", nil, `has a host in upper case: write it in lower case`},
+		{"require re https://example.com/re/ 0.2.0\n", nil, `ends with /: write it without`},
+		{"require re https://user:secret@example.com/re 0.2.0\n", nil, `carries a password, which snello.lock would show: let git's credentials hold it`},
+		{"require re https://example.com/r\u00e9 0.2.0\n", nil, `holds a space, a control character or a character outside ASCII`},
+		{"require re file://host/srv/re 0.2.0\n", nil, `names no absolute path: file:///path`},
+		{"require re ssh://git@example.com/re 0.2.0\n", []Require{{Name: "re", URL: "ssh://git@example.com/re", Version: "0.2.0"}}, ""},
+		{"require re file:///srv/re 0.2.0\n", []Require{{Name: "re", URL: "file:///srv/re", Version: "0.2.0"}}, ""},
+		{"require re https://example.com/re 0.2.0 extra\n", nil, "snello.mod:1: require needs a name and a directory, or a name, a repository's URL and a version"},
 		{"require strings ../s\n", nil, "snello.mod:1: strings is a standard package"},
 		{"require net/http ../h\n", nil, `snello.mod:1: a required name is one element, and "net/http" has a /: the rest of a path names a directory under the dependency`},
 		{"require dep/ ../dep\n", nil, `snello.mod:1: malformed import path "dep/": empty path element`},
@@ -59,8 +75,8 @@ func TestModFile(t *testing.T) {
 			continue
 		}
 
-		if m.Dir != dir || len(m.Requires) != len(tt.requires) {
-			t.Errorf("%q: got %+v, want dir %s and %d requires", tt.src, m, dir, len(tt.requires))
+		if m.Dir != dir || !slices.Equal(m.Requires, tt.requires) {
+			t.Errorf("%q: got %+v, want dir %s and requires %+v", tt.src, m, dir, tt.requires)
 			continue
 		}
 
@@ -130,7 +146,7 @@ func TestFindModule(t *testing.T) {
 // root or under a require line, and refuses a path both answer.
 func TestLookup(t *testing.T) {
 	root := writeTree(t, map[string]string{"shapes/s.snello": "package shapes\n", "a/b/x.snello": "package b\n", "both/x.snello": "package both\n", "note.txt": ""})
-	m := &Module{Dir: root, Requires: []Require{{"dep", "/d"}, {"both", "/b"}}}
+	m := &Module{Dir: root, Requires: []Require{{Name: "dep", Dir: "/d"}, {Name: "both", Dir: "/b"}}}
 	tests := []struct {
 		path     string
 		dir      string
@@ -160,6 +176,32 @@ func TestLookup(t *testing.T) {
 
 		if err != nil || dir != tt.dir || (req != nil) != tt.required {
 			t.Errorf("%s: got %q, required %v, %v, want %q, required %v", tt.path, dir, req != nil, err, tt.dir, tt.required)
+		}
+	}
+}
+
+// TestCheckRequire refuses, before anything is fetched, a requirement a
+// command is given with a name required already by a directory or from
+// another repository, a name a directory of the module holds, a name or
+// a URL a module file refuses, and a malformed version, and passes one
+// required already from the URL and one with no version.
+func TestCheckRequire(t *testing.T) {
+	root := writeTree(t, map[string]string{"lib/own.snello": "package lib\n"})
+	const url = "https://example.com/re"
+	m := &Module{Dir: root, Requires: []Require{{Name: "re", URL: url, Version: "0.1.0"}, {Name: "ext", Dir: "/ext"}, {Name: "other", URL: "https://example.com/other", Version: "0.1.0"}}}
+	for _, c := range []struct{ name, url, version, err string }{
+		{"re", url, "0.2.0", ""},
+		{"ext", url, "", "ext is required already, from /ext: remove it first"},
+		{"other", url, "", "other is required already, from https://example.com/other: remove it first"},
+		{"fresh", url, "", ""},
+		{"lib", url, "", "lib is a directory of the module, " + filepath.Join(root, "lib") + ", which an import of lib names: require it under another name"},
+		{"fmt", url, "", "fmt is a standard package"},
+		{"fresh", "github.com/x/re", "", `a repository is named by its URL, https://host/path, and "github.com/x/re" has no scheme git fetches from: https, ssh or file`},
+		{"fresh", url, "v1.0.0", `malformed version "v1.0.0": a version is MAJOR.MINOR.PATCH, with no build metadata, and names the tag vMAJOR.MINOR.PATCH`},
+	} {
+		err := m.CheckRequire(c.name, c.url, c.version)
+		if c.err == "" && err != nil || c.err != "" && (err == nil || err.Error() != c.err) {
+			t.Errorf("CheckRequire(%s, %s, %q) = %v, want %q", c.name, c.url, c.version, err, c.err)
 		}
 	}
 }

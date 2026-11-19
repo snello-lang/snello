@@ -36,6 +36,13 @@ const (
 	separator       = "."
 	numbers         = 3
 
+	// initialMajor is the major number of a version before 1.0.0, the
+	// initial development, whose minor releases may break what an
+	// earlier one promised; initialMinor the minor number of one before
+	// 0.1.0, whose every patch release may.
+	initialMajor = "0"
+	initialMinor = "0"
+
 	// digits are the characters of a number, zero the one a number
 	// longer than one digit may not begin with, and identifierChars the
 	// characters of a pre-release or build identifier.
@@ -174,6 +181,30 @@ func (v Version) Compare(w Version) int {
 	}
 
 	return compareInts(len(v.pre), len(w.pre))
+}
+
+// Release reports whether v is a release, with no pre-release
+// identifier: 0.2.0 and not 0.2.0-rc.1.
+func (v Version) Release() bool {
+	return len(v.pre) == 0
+}
+
+// Compatible reports whether a program built against v builds against
+// w, by Semantic Versioning's promise, which its first number that is
+// not zero carries: the same major version from 1.0.0; before it, when
+// a minor release may break what an earlier one promised, the same
+// minor version; and before 0.1.0 the same patch version.
+func (v Version) Compatible(w Version) bool {
+	switch {
+	case v.major != w.major:
+		return false
+	case v.major != initialMajor:
+		return true
+	case v.minor != w.minor:
+		return false
+	default:
+		return v.minor != initialMinor || v.patch == w.patch
+	}
 }
 
 // describe writes Describe's line from its parts: the channel, empty

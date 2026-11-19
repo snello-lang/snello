@@ -535,6 +535,14 @@ func (imp *Importer) enter(req *Require) (*root, error) {
 		}
 	}
 
+	if sel := imp.Module.selection; sel != nil { // the versions the program selected, for the module's requires by version
+		for i := range m.Requires {
+			if m.Requires[i].URL != "" {
+				m.Requires[i].Dir = sel.dirs[m.Requires[i].URL]
+			}
+		}
+	}
+
 	id := req.Name
 	for n := 2; imp.taken(id); n++ {
 		id = req.Name + "~" + strconv.Itoa(n) // ~ is no character of an import path, so the id names no directory and no require

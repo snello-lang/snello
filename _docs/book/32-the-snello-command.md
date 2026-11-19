@@ -2,7 +2,7 @@
 
 The design of the module file and its `snello` line is decision 6 of `../design/08-packages.md`. The command is `cmd/snello/`, its checks of the system `compiler/toolchain/`, and its version `compiler/version/`.
 
-`snello` is one program that does everything: it starts a module, builds, runs and tests a program, checks your system, and says what it is. `snello help` lists the commands, each with a line, and `snello help COMMAND`, or `-h` after a command, prints one command's usage and flags:
+`snello` is one program that does everything: it starts a module, changes and shows its dependencies, builds, runs and tests a program, checks your system, and says what it is. `snello help` lists the commands, each with a line, and `snello help COMMAND`, or `-h` after a command, prints one command's usage and flags:
 
 ```
 $ snello help
@@ -14,18 +14,23 @@ Usage:
 
 The commands are:
 
+    add        require a dependency by version, its latest release unless one is named
     build      compile a program, a file or a directory, to a binary
     check      check a program, or a package, and print its errors
     debug      build a program for a debugger and run it under one
+    deps       print the dependencies by version, and who requires each
     doctor     check what a build needs, and say how to fix what is missing
     emit       print the IR, or the C, that build compiles
+    fetch      fetch every dependency into the module cache, for a build with no network
     help       print the commands, or a command's help
     init       start a module, writing its snello.mod
     lex        print the tokens of a source file
     new        start a module in a new directory, with a program and its test
     parse      print the syntax tree of a source file
+    remove     take dependencies out of snello.mod, once nothing imports them
     run        build a program, run it with ARGS, and leave no file
     test       build and run the tests of a package
+    update     raise dependencies to their latest compatible releases
     version    print the version, commit, channel and platform
 
 Run snello help COMMAND for a command's flags and arguments.
@@ -40,6 +45,10 @@ A command line given wrongly says how, and what to run for help, and exits 2: `s
 `snello init` makes the current directory a module, and `snello init DIR` another directory that exists: it writes `snello.mod` with the version line alone, and refuses a directory that has one, with the file's path.
 
 Both write the line `snello 0.1.0`, the version of the compiler that ran them: the oldest release that compiles the module. A compiler older than the line refuses the module and says to upgrade it, and a module file with no line is read as written for 0.1.0, the first release, with a warning on every command that builds, checks or tests it. Chapter 2 and the design say why.
+
+## Dependencies
+
+`snello add NAME URL [VERSION]` requires a module from a git repository, at its latest release or at the version named; `snello remove NAME...` takes requirements out, refusing one a file of the module still imports; `snello update [NAME...]` raises dependencies to their latest compatible releases, and with `-major` past their major versions; `snello deps` prints every dependency with who requires which version, and `snello deps -why NAME` the chain that brings one in; `snello fetch` fills the module cache so that a build needs no network. Each works on the module of the current directory and changes `snello.mod` only when its dependencies still fetch, select and lock after the change, leaving the file as it was otherwise. Chapter 35 is the guide.
 
 ## Building and running
 
@@ -63,6 +72,7 @@ fail  link-time optimization: not tried without clang
       install clang first
 fail  C compiler: cc not found
       install it with sudo apt install clang, or set CC
+ok    git: git version 2.47.3
 ok    snello on the path: /usr/local/bin
 ```
 
@@ -75,6 +85,8 @@ Installing clang is all a build needs on Linux and macOS; it brings a C compiler
 | Fedora | `sudo dnf install clang` |
 | Arch | `sudo pacman -S clang` |
 | Windows | `winget install LLVM.LLVM`, and Visual Studio's Build Tools with the C++ workload |
+
+The doctor checks `git` too, which a build needs only to fetch a module required by version (chapter 35), so a missing `git` does not fail the doctor; it names the command that installs it: `xcode-select --install` on macOS, which brings it with clang, `sudo apt install git` on Debian and Ubuntu, `sudo dnf install git` on Fedora, `sudo pacman -S git` on Arch, and `winget install Git.Git` on Windows.
 
 On Windows the C compiler is clang as well, and the doctor checks the Build Tools after clang: it builds a program of C that uses the C library, its header and a function of it, as a build compiles against the SDK's headers and links against the C runtime, and a failure prints what clang said, a header or a library not found, with the Build Tools as its fix. A machine whose builds read the SDK and the C runtime from a sysroot, `SNELLO_SYSROOT_windows_amd64` or `_arm64` (Environment, below), needs no Build Tools, and the check says so. The link-time optimization check links with LLVM's `lld-link`, the linker a Windows build uses.
 
@@ -89,6 +101,7 @@ These are the variables `snello` reads. None is needed on a machine with clang i
 | `CLANG` | The clang the LLVM backend compiles with | `clang` on the path |
 | `CC` | The C compiler the C backend and a debug build compile with | `cc` on the path; `clang` on Windows, which has no `cc` |
 | `SNELLO_CACHE` | The directory the compiled runtime is kept in, or `off` to keep none | the user's cache directory: `~/Library/Caches/snello` on macOS, `$XDG_CACHE_HOME/snello` or `~/.cache/snello` on Linux, `%LocalAppData%\snello` on Windows |
+| `SNELLO_MODCACHE` | The directory the modules required by version are fetched into (chapter 35) | `snello-modules` in the user's cache directory, apart from the runtime's cache |
 | `SNELLO_SYSROOT_<system>_<processor>` | A target's system files, a sysroot, for a build for it (chapter 2): `SNELLO_SYSROOT_linux_amd64`, `SNELLO_SYSROOT_linux_arm64`, `SNELLO_SYSROOT_windows_amd64` and `SNELLO_SYSROOT_windows_arm64`; read on any system where it is set | the files of the cross packages on Debian and Ubuntu for the other Linux, of Visual Studio's Build Tools on Windows for Windows; anywhere else a build for that target is refused, saying which variable to set |
 | `TMPDIR`; on Windows `TMP`, then `TEMP` | The directory builds work in | the system's temporary directory |
 
@@ -112,6 +125,8 @@ The commands are one table, `commands()` in `cmd/snello/commands.go`: each entry
 `compile` in `main.go` is the one build path: it loads and checks the program, makes the build's work directory, and has the backend build into it. The work directory is a `workDir`, `cmd/snello/signals.go`, guarded by one goroutine for the command's life: while the build runs, a signal that would end the command removes the directory and ends the command by that signal, through `raise`; once `run` hands it the program, it passes a termination or a hangup on and leaves an interrupt and a quit to the program, which the terminal sends them to as well. `signalSelf` sends the command its ending signal through its process's `Signal`, which Windows refuses, having no signals to send, so there the command ends by the exit code alone. `run` removes the binary's directory when the program ends, not as it starts, since macOS kills a program whose file goes while it is still loading; and it raises a program's ending signal on itself, the rule M. Cracauer's "Proper handling of SIGINT/SIGQUIT" sets for a program that runs another. Their tests run the test binary as a helper process and signal it.
 
 `compiler/toolchain` is what a build needs from the system: `Clang()` and `CC()` name the compilers through `CLANG` and `CC`, `Checks` runs the doctor's checks, each a probe, a module of opaque-pointer IR compiled with `-x ir`, a program linked with `-flto`, a program compiled with the C compiler, and `Install` names the fix from `runtime.GOOS`, `winget install LLVM.LLVM` on Windows, and, on Linux, the `ID` and `ID_LIKE` of os-release. A compiler that cannot be found or does not run is a `*MissingError`: `c.CompilerID`, which every build calls first and which caches by the compiler's file, returns one for both, so the gate costs a build nothing, and `compile` and `testrun` print it with no backend's name before it. The probes replace a version number because Apple numbers its clang its own way: Apple clang 14.0.3 is LLVM 15.
+
+`checkGit` runs `git --version`, and `GitInstall` names its install command the way `Install` names clang's, from `gitInstalls`; its check is not `Needed`, so a missing `git` fails no doctor run. The commands that change and show dependencies, `add`, `remove`, `update`, `deps` and `fetch`, are `cmd/snello/deps.go`; their work is the importer's, `SetRequire`, `DropRequire`, `Rewrite`, `ImportsOf`, `ReleaseVersions`, `Dependencies` and `Why`, which chapter 35 describes for maintainers.
 
 `build/distros/` holds an image of each distribution the fixes name, bare and with clang, and `check.sh`, which runs in each: with clang, doctor, then new, run, run for a debugger and test through both backends; bare, doctor failing with the distribution's command and build, run and test saying that line exactly. `make distros` builds and runs them on the host's Docker; Arch runs as amd64, emulated on an arm64 machine. Run it after changing a check, a fix or the commands it drives; CI runs it on both Linux runners on every change, Arch on the x86-64 one.
 

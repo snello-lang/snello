@@ -42,6 +42,12 @@ const (
 	pathEnv     = "PATH"
 	commandName = "snello"
 
+	// gitName is the git a build runs to fetch a module required by
+	// version, and gitNeed why the doctor checks it, which a build
+	// needs for nothing else.
+	gitName = "git"
+	gitNeed = "a build needs it only to fetch a module a require line names by version"
+
 	// MinClang is the oldest clang that reads the IR the LLVM backend
 	// writes, whose pointers are opaque, ptr; irProbe is a module of
 	// that IR, which the clang check compiles.
@@ -124,6 +130,17 @@ var installs = map[string]string{
 	ubuntu:  "sudo apt install clang",
 	fedora:  "sudo dnf install clang",
 	arch:    "sudo pacman -S clang",
+}
+
+// gitInstalls are the commands that install git, on each system the
+// fixes name; macOS's command-line tools bring it with clang.
+var gitInstalls = map[string]string{
+	darwin:  "xcode-select --install",
+	windows: "winget install Git.Git",
+	debian:  "sudo apt install git",
+	ubuntu:  "sudo apt install git",
+	fedora:  "sudo dnf install git",
+	arch:    "sudo pacman -S git",
 }
 
 // A Check is one thing a build needs: what is checked, whether it
@@ -212,9 +229,17 @@ func Install() string {
 	return installFor(system())
 }
 
+// GitInstall returns the command that installs git on the system the
+// compiler runs on, or what to do where it knows none. It reads
+// os-release on Linux.
+func GitInstall() string {
+	return gitInstallFor(system())
+}
+
 // Checks runs every check, in the order the doctor prints them: clang,
 // on Windows the SDK and the C runtime Visual Studio's Build Tools
-// install, a link with link-time optimization, the C compiler, and
+// install, a link with link-time optimization, the C compiler, git,
+// which a build needs only for a module required by version, and
 // whether running snello by name runs self, the command running, which
 // only that needs. It runs the compilers on small programs it writes
 // into a temporary directory, which it removes; a directory it cannot
@@ -232,7 +257,7 @@ func Checks(self string) []Check {
 		checks = append(checks, checkBuildTools(dir, clang.OK))
 	}
 
-	return append(checks, checkLTO(dir, clang.OK), checkCC(dir), checkPath(self))
+	return append(checks, checkLTO(dir, clang.OK), checkCC(dir), checkGit(), checkPath(self))
 }
 
 // what says which compiler e is about and why it cannot be used: the
@@ -385,6 +410,27 @@ func checkCC(dir string) Check {
 	return c
 }
 
+// checkGit finds git on the path, and asks its version, which a build
+// fetching a module by version runs it for: a git not found, or found
+// and failing to run, as the stub macOS puts on the path before its
+// tools are installed does, is named with the install command.
+func checkGit() Check {
+	c := Check{Name: gitName, Fix: "install it with " + GitInstall() + "; " + gitNeed}
+	if _, err := exec.LookPath(gitName); err != nil {
+		c.Detail = gitName + " " + notFound
+		return c
+	}
+
+	out, err := exec.Command(gitName, versionFlag).CombinedOutput()
+	if err != nil {
+		c.Detail = gitName + " " + failsToRun + " (" + said(out, err) + ")"
+		return c
+	}
+
+	c.OK, c.Detail, c.Fix = true, firstOf(string(out)), ""
+	return c
+}
+
 // checkPath reports whether running snello by name runs self, the
 // command running: the first snello on the path is the same file,
 // however links lead to it. Only running it by name needs that, and no
@@ -503,6 +549,16 @@ func installFor(system string) string {
 	}
 
 	return "your system's package manager, clang " + strconv.Itoa(MinClang) + " or later"
+}
+
+// gitInstallFor returns the command that installs git on system, as
+// gitInstalls names it, or the package manager for one it does not.
+func gitInstallFor(system string) string {
+	if cmd, ok := gitInstalls[system]; ok {
+		return cmd
+	}
+
+	return "your system's package manager"
 }
 
 // installFix returns the fix for a compiler a build cannot use: the
