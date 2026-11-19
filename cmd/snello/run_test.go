@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/importer"
 )
 
 // panicExit is the code a Snello program that panics exits with.
@@ -71,6 +73,68 @@ func TestRunProgram(t *testing.T) {
 			t.Errorf("run left %d entries in %s, %s first", len(entries), dir, entries[0].Name())
 		}
 	}
+}
+
+// TestRunByVersion runs a program that requires a library from a git
+// repository at a tag, through both backends: the library is fetched
+// into the module cache, the program builds against it and prints what
+// it returns, and snello.lock beside the module file records it. A
+// machine without git skips the test.
+func TestRunByVersion(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git here")
+	}
+
+	t.Setenv(importer.ModCacheEnv, t.TempDir())
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "--quiet", "--initial-branch", "main")
+	if err := os.WriteFile(filepath.Join(repo, "greet.snello"), []byte("package greet\n\nfunc Hello() string { return \"hello from a tag\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gitIn(t, repo, "add", "--all")
+	gitIn(t, repo, "commit", "--quiet", "--message", "the library")
+	gitIn(t, repo, "tag", "v0.1.0")
+	prog := writePrograms(t, map[string]string{
+		"app/" + importer.ModFile: "snello 0.1.0\n\nrequire greet " + fileURL(repo) + " 0.1.0\n",
+		"app/main.snello":         "package main\n\nimport (\"fmt\"; \"greet\")\n\nfunc main() { fmt.Println(greet.Hello()) }\n",
+	})
+	app := filepath.Join(prog, "app")
+	t.Chdir(t.TempDir())
+	for _, backend := range []string{"llvm", "c"} {
+		var out, errs strings.Builder
+		if code, _ := runProgram(app, backend, false, nil, nil, &out, &errs); code != exitSuccess || out.String() != "hello from a tag\n" {
+			t.Errorf("%s: exited %d, printed %q, said %q", backend, code, out.String(), errs.String())
+		}
+	}
+
+	if lock, err := os.ReadFile(filepath.Join(app, importer.LockFile)); err != nil || !strings.Contains(string(lock), " 0.1.0 ") || !strings.Contains(string(lock), " "+importer.HashPrefix) {
+		t.Errorf("snello.lock: %q, %v", lock, err)
+	}
+}
+
+// gitIn runs git in dir with an identity for its commits and no
+// configuration of the machine's or the user's.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=snello-test", "GIT_AUTHOR_EMAIL=test@snello.invalid",
+		"GIT_COMMITTER_NAME=snello-test", "GIT_COMMITTER_EMAIL=test@snello.invalid", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// fileURL returns the file URL of the directory dir, with the slash
+// before a Windows volume that RFC 8089 writes.
+func fileURL(dir string) string {
+	p := filepath.ToSlash(dir)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+
+	return "file://" + p
 }
 
 // TestRunCommand runs a program through the command line: the words

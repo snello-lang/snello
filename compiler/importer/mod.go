@@ -6,11 +6,13 @@ package importer
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/snello-lang/snello/compiler/version"
 )
@@ -48,10 +50,11 @@ const (
 	linkDirective    = "link"
 
 	// The words of each directive's line, its name among them: snello
-	// VERSION, require NAME DIR, link NAME.
-	versionFields = 2
-	requireFields = 3
-	linkFields    = 2
+	// VERSION, require NAME DIR or require NAME URL VERSION, link NAME.
+	versionFields        = 2
+	requireFields        = 3
+	requireVersionFields = 4
+	linkFields           = 2
 
 	// lineEnd ends a line of a module file, fieldSeparator parts the
 	// words of a line WriteModFile writes, and commentStart begins a
@@ -69,6 +72,15 @@ const (
 	// holds neither of.
 	flagStart     = "-"
 	filePathChars = "/\\"
+
+	// The schemes of a repository's URL; buildMetadataStart begins a
+	// version's build metadata, which a require line does not take,
+	// since it orders nothing and two versions differing by it would
+	// be selected by the order a build met them in.
+	httpsScheme        = "https"
+	sshScheme          = "ssh"
+	fileScheme         = "file"
+	buildMetadataStart = "+"
 
 	// currentDir and parentDir are the elements of a relative path,
 	// and importPathChars the characters an element of an import path
@@ -89,15 +101,27 @@ type Module struct {
 	Version  string // the version of Snello the module is written for, as its snello line writes it, or "" for a file with no line, read as written for version.First
 	Requires []Require
 	Links    []string // the system libraries its link lines name, -lNAME at the link of a program that imports a package of the module
+
+	selection *selection // the program's module's choice of a version of each repository it reaches, which Resolve makes
 }
 
 // A Require is one require line: the name a program imports the
 // dependency by, the first element of every import path into it, and
-// the directory holding it, made absolute.
+// the directory holding it, made absolute. A dependency by version has
+// its repository's URL and the version beside, and its directory is
+// the module cache's copy of the version the program selects, which
+// Resolve gives it.
 type Require struct {
-	Name string
-	Dir  string
+	Name    string
+	Dir     string
+	URL     string
+	Version string
 }
+
+// repositorySchemes are the schemes a require line by version names
+// its repository with, those git fetches from: a host's for https and
+// ssh, and fileScheme for a repository on the machine's own disk.
+var repositorySchemes = []string{httpsScheme, sshScheme, fileScheme}
 
 // standard holds the first element of every standard package's path,
 // which no require line and no directory of a module may take.
@@ -185,8 +209,8 @@ func ParseModFile(name string, src []byte) (*Module, error) {
 
 			m.Version = fields[1]
 		case requireDirective:
-			if len(fields) != requireFields {
-				return nil, errors.New(at + "require needs a name and a directory")
+			if len(fields) != requireFields && len(fields) != requireVersionFields {
+				return nil, errors.New(at + "require needs a name and a directory, or a name, a repository's URL and a version")
 			}
 
 			if err := checkRequireName(fields[1]); err != nil {
@@ -199,12 +223,25 @@ func ParseModFile(name string, src []byte) (*Module, error) {
 				}
 			}
 
+			if len(fields) == requireVersionFields {
+				if err := checkRepository(fields[2]); err != nil {
+					return nil, errors.New(at + err.Error())
+				}
+
+				if err := checkTagVersion(fields[3]); err != nil {
+					return nil, errors.New(at + err.Error())
+				}
+
+				m.Requires = append(m.Requires, Require{Name: fields[1], URL: fields[2], Version: fields[3]})
+				continue
+			}
+
 			dir := fields[2]
 			if !filepath.IsAbs(dir) {
 				dir = filepath.Join(m.Dir, dir)
 			}
 
-			m.Requires = append(m.Requires, Require{fields[1], dir})
+			m.Requires = append(m.Requires, Require{Name: fields[1], Dir: dir})
 		case linkDirective:
 			if len(fields) != linkFields {
 				return nil, errors.New(at + "link needs a library name")
@@ -309,10 +346,52 @@ func (m *Module) Lookup(path string) (dir string, req *Require, err error) {
 			return "", nil, errors.New("import " + strconv.Quote(path) + " is both a directory of the module and under the required " + first)
 		}
 
+		if m.Requires[i].Dir == "" { // a require by version Resolve has not given its directory
+			return "", nil, errors.New("import " + strconv.Quote(path) + ": " + first + " is required by version, and its version was not selected")
+		}
+
 		return filepath.Join(m.Requires[i].Dir, filepath.FromSlash(rest)), &m.Requires[i], nil
 	}
 
 	return own, nil, nil
+}
+
+// CheckRequire says what is wrong with a requirement by version a
+// command is about to write into m's file, before anything is fetched:
+// the name, which must not be required already by a directory or from
+// another repository, since what to do with that line is the user's to
+// say, nor be a directory of the module, since an import of it would
+// then name both; the repository's URL; and the version, when it is not
+// empty.
+func (m *Module) CheckRequire(name, rawURL, v string) error {
+	if err := checkRequireName(name); err != nil {
+		return err
+	}
+
+	for _, r := range m.Requires {
+		if r.Name == name && r.URL != rawURL {
+			from := r.URL
+			if from == "" {
+				from = r.Dir
+			}
+
+			return errors.New(name + " is required already, from " + from + ": remove it first")
+		}
+	}
+
+	if exists(m.Dir, name) {
+		return errors.New(name + " is a directory of the module, " + filepath.Join(m.Dir, name) + ", which an import of " + name + " names: require it under another name")
+	}
+
+	if err := checkRepository(rawURL); err != nil {
+		return err
+	}
+
+	if v == "" {
+		return nil
+	}
+
+	return checkTagVersion(v)
 }
 
 // exists reports whether the directory path names under root exists
@@ -387,14 +466,18 @@ func holdsSource(dir string) bool {
 }
 
 // directive returns the words of a line of a module file, its comment
-// left out: none for a blank line or a comment alone. It allocates the
-// list of words.
+// left out: none for a blank line or a comment alone. A comment begins
+// a word, so that the // of a repository's URL is no comment. It
+// allocates the list of words.
 func directive(line string) []string {
-	if j := strings.Index(line, commentStart); j >= 0 {
-		line = line[:j]
+	words := strings.Fields(line)
+	for i, w := range words {
+		if strings.HasPrefix(w, commentStart) {
+			return words[:i]
+		}
 	}
 
-	return strings.Fields(line)
+	return words
 }
 
 // checkLater refuses a module file, named for the message, whose
@@ -437,6 +520,66 @@ func lineAt(name string, i int) string {
 func checkVersion(s string) error {
 	if _, ok := version.Parse(s); !ok {
 		return errors.New("malformed version " + strconv.Quote(s) + ": a version is MAJOR.MINOR.PATCH, snello " + version.First)
+	}
+
+	return nil
+}
+
+// checkRepository says what is wrong with the repository a require
+// line by version names. The URL has a scheme git fetches from, a host
+// for https and ssh and an absolute path for file, and is written one
+// way, so that one repository is one module: ASCII, a host in lower
+// case, no trailing /, no . or .. or empty element in its path, no
+// query or fragment, and no password, which the lock file and every
+// message would show.
+func checkRepository(raw string) error {
+	bad := func(why string) error {
+		return errors.New("a repository is named by its URL, https://host/path, and " + strconv.Quote(raw) + " " + why)
+	}
+
+	for _, c := range raw {
+		if c > unicode.MaxASCII || unicode.IsControl(c) || unicode.IsSpace(c) {
+			return bad("holds a space, a control character or a character outside ASCII")
+		}
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || !slices.Contains(repositorySchemes, u.Scheme) {
+		return bad("has no scheme git fetches from: https, ssh or file")
+	}
+
+	switch {
+	case u.Scheme == fileScheme && (u.Host != "" || !strings.HasPrefix(u.Path, pathSeparator)):
+		return bad("names no absolute path: file:///path")
+	case u.Scheme != fileScheme && u.Host == "":
+		return bad("names no host")
+	case u.Host != strings.ToLower(u.Host):
+		return bad("has a host in upper case: write it in lower case")
+	case u.RawQuery != "" || u.Fragment != "" || u.Opaque != "":
+		return bad("has a query or a fragment")
+	case strings.HasSuffix(raw, pathSeparator):
+		return bad("ends with /: write it without")
+	}
+
+	if _, set := u.User.Password(); set {
+		return bad("carries a password, which snello.lock would show: let git's credentials hold it")
+	}
+
+	for _, elem := range strings.Split(strings.TrimPrefix(u.Path, pathSeparator), pathSeparator) {
+		if elem == "" || elem == currentDir || elem == parentDir {
+			return bad("has an empty, . or .. element in its path")
+		}
+	}
+
+	return nil
+}
+
+// checkTagVersion says what is wrong with the version a require line by
+// version names: a SemVer version with no build metadata, which names
+// the tag v and the version.
+func checkTagVersion(v string) error {
+	if _, ok := version.Parse(v); !ok || strings.Contains(v, buildMetadataStart) {
+		return errors.New("malformed version " + strconv.Quote(v) + ": a version is MAJOR.MINOR.PATCH, with no build metadata, and names the tag vMAJOR.MINOR.PATCH")
 	}
 
 	return nil

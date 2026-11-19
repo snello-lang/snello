@@ -116,6 +116,12 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 		if imp.Module, err = FindModule(filepath.Dir(l.Names[0])); err != nil {
 			return nil, nil, err
 		}
+
+		if imp.Module != nil {
+			if err := imp.Module.Resolve(); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 
 	fset, syntax, err := parseFiles(l.Names, l.Srcs)
@@ -180,6 +186,10 @@ func LoadPackage(dir string, t platform.Target, info *types.Info) error {
 
 	rel, err := filepath.Rel(m.Dir, abs)
 	if err != nil {
+		return err
+	}
+
+	if err := m.Resolve(); err != nil {
 		return err
 	}
 

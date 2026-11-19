@@ -59,6 +59,35 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+// TestCompatible holds two versions to one program's API by the major
+// version, by the minor below 1.0.0 and by the patch below 0.1.0,
+// pre-releases within each.
+func TestCompatible(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"1.2.0", "1.4.1", true}, {"1.2.0", "2.0.0", false}, {"1.0.0-rc.1", "1.3.0", true},
+		{"0.2.0", "0.2.5", true}, {"0.2.0", "0.3.0", false}, {"0.2.0-rc.1", "0.2.0", true},
+		{"0.0.3", "0.0.3-rc.1", true}, {"0.0.3", "0.0.4", false}, {"0.0.3", "0.1.0", false},
+	} {
+		a, _ := Parse(c.a)
+		b, _ := Parse(c.b)
+		if a.Compatible(b) != c.want || b.Compatible(a) != c.want {
+			t.Errorf("%s and %s compatible: %v, want %v", c.a, c.b, a.Compatible(b), c.want)
+		}
+	}
+}
+
+// TestRelease tells a release from a pre-release.
+func TestRelease(t *testing.T) {
+	for s, want := range map[string]bool{"0.2.0": true, "1.0.0+build": true, "0.2.0-rc.1": false} {
+		if v, _ := Parse(s); v.Release() != want {
+			t.Errorf("%s is a release: %v, want %v", s, v.Release(), want)
+		}
+	}
+}
+
 // TestDescribe holds the line snello version prints to its parts: a
 // release's channel or devel, the commit's short hash, marked when the
 // tree had changes and left out when unknown, and the platform; and

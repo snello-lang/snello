@@ -37,6 +37,24 @@ func TestDistribution(t *testing.T) {
 	}
 }
 
+// TestGitInstall names the command that installs git on each system
+// the fixes name, and the package manager elsewhere.
+func TestGitInstall(t *testing.T) {
+	for system, want := range map[string]string{
+		darwin:  "xcode-select --install",
+		windows: "winget install Git.Git",
+		debian:  "sudo apt install git",
+		ubuntu:  "sudo apt install git",
+		fedora:  "sudo dnf install git",
+		arch:    "sudo pacman -S git",
+		"":      "your system's package manager",
+	} {
+		if got := gitInstallFor(system); got != want {
+			t.Errorf("gitInstallFor(%q) = %q, want %q", system, got, want)
+		}
+	}
+}
+
 // TestInstallFor names the command that installs clang on each system a
 // fix is known for, and says what to do on any other.
 func TestInstallFor(t *testing.T) {
@@ -127,7 +145,7 @@ func TestChecksMissing(t *testing.T) {
 	}
 
 	checks := Checks(filepath.Join(t.TempDir(), "snello"))
-	if len(checks) != len(needed)+1 {
+	if len(checks) != len(needed)+2 {
 		t.Fatalf("%d checks", len(checks))
 	}
 
@@ -141,7 +159,11 @@ func TestChecksMissing(t *testing.T) {
 		t.Errorf("clang: %+v", c)
 	}
 
-	if c := checks[len(needed)]; c.OK || c.Needed {
+	if c := checks[len(needed)]; c.Name != gitName || c.OK || c.Needed || c.Fix != "install it with "+GitInstall()+"; "+gitNeed {
+		t.Errorf("git: %+v", c)
+	}
+
+	if c := checks[len(needed)+1]; c.OK || c.Needed {
 		t.Errorf("the path: %+v", c)
 	}
 }
