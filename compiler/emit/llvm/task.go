@@ -95,7 +95,7 @@ func (e *Emitter) rangeChan(s *ast.RangeStmt, ch value, elem types.Type) {
 		e.pop(s.Body.Rbrace)
 		e.jump(again)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.fn.loops = e.fn.loops[:len(e.fn.loops)-1]
@@ -496,7 +496,7 @@ func (e *Emitter) selectStmt(s *ast.SelectStmt) {
 			e.pop(cc.Case)
 			e.jump(end)
 		} else {
-			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+			e.popLeft()
 		}
 
 		e.label(next)

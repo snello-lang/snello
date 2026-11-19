@@ -21,13 +21,21 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#if defined(_WIN32)
+#include <io.h>
+#include <shellapi.h>
+#pragma comment(lib, "shell32")         // CommandLineToArgvW's
+#pragma comment(lib, "synchronization") // WaitOnAddress's
+#else
 #include <sys/resource.h>
 #include <unistd.h>
+#endif
 
-#ifdef __APPLE__
+#if defined(_WIN32)
+#elif defined(__APPLE__)
 #include <os/os_sync_wait_on_address.h>
 #if !defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || __MAC_OS_X_VERSION_MIN_REQUIRED < 140400
 #error "the queue lock sleeps through os_sync_wait_on_address, which needs macOS 14.4 or later"
@@ -37,16 +45,22 @@
 #include <sys/syscall.h>
 #endif
 
-// A contender for a queue lock spins lock_spins rounds of
-// lock_spin_pauses pauses, then yields its processor lock_yields times,
-// trying the lock after each, before it sleeps. The rounds are a few
-// microseconds, the time a holder takes when its critical section
-// reaches into another core's cache, a waiter's frame or a task's
-// record: measured with eight tasks sending to one channel, rounds of
-// thirty pauses had every contender yield or sleep and the program run
-// in 470 ms, and rounds of four thousand had them spin through and it
-// run in 310 ms.
-enum { lock_spins = 4, lock_spin_pauses = 4000, lock_yields = 1 };
+// A contender for a queue lock spins lock_spins rounds of lock_round_ns
+// each, then yields its processor lock_yields times, trying the lock
+// after each, before it sleeps. A round is a few microseconds, the time
+// a holder takes when its critical section reaches into another core's
+// cache, a waiter's frame or a task's record: measured with eight tasks
+// sending to one channel on an M1, whose spin hint takes under a
+// nanosecond, rounds of thirty hints had every contender yield or sleep
+// and the program run in 470 ms, and rounds of four thousand, about
+// three microseconds, had them spin through and it run in 310 ms. A
+// round is that time and not a count of hints, since a hint's cost
+// differs fifty times over between processors: Intel's pause takes up
+// to 140 cycles since Skylake, where four thousand made a round of 180
+// microseconds and a contended take a millisecond. A round reads the
+// clock once in lock_clock_hints hints, few enough that a round of the
+// costliest hints passes its time by under a microsecond.
+enum { lock_spins = 4, lock_round_ns = 3000, lock_yields = 1, lock_clock_hints = 16 };
 
 sn_slice sn_os_Args = { 0 };
 
@@ -232,6 +246,47 @@ int sn_utf8_encode(int32_t r, uint8_t *out) {
     return 4;
 }
 
+#if defined(_WIN32)
+DWORD WINAPI sn_thread_entry(void *p) {
+    sn_thread_start_args a = *(sn_thread_start_args *)p;
+    HeapFree(GetProcessHeap(), 0, p);
+    a.main(a.arg);
+    return 0;
+}
+#endif
+
+#if defined(_WIN32)
+// sn_init reads the program's arguments from the command line as the
+// system keeps it, in UTF-16, and converts each to UTF-8, since the C
+// library's argv is in the console's code page; it sets the standard
+// streams to binary, so that a newline is written as one byte. The
+// console's code page, which the program shares with the shell that
+// started it, is left as it is: a stream on a console is written as
+// its own text (os_windows.c).
+void sn_init(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    sn_hash_init(); // before any map hashes a key
+    for (int fd = 0; fd <= 2; fd++) {
+        (void)_setmode(fd, _O_BINARY);
+    }
+
+    int n = 0;
+    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &n);
+    for (int i = 0; wide != NULL && i < n; i++) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, NULL, 0, NULL, NULL); // with the zero after it
+        char *utf8 = size > 0 ? malloc((size_t)size) : NULL; // kept while the program runs, as the C library's argv is
+        if (utf8 == NULL || WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, utf8, size, NULL, NULL) != size) {
+            sn_panic(SN_STR("cannot read the program's arguments", 35));
+        }
+
+        sn_string arg = SN_STR(utf8, (int64_t)size - 1);
+        sn_slice_push(&sn_os_Args, &arg, sizeof arg);
+    }
+
+    LocalFree(wide);
+}
+#else
 void sn_init(int argc, char **argv) {
     sn_hash_init(); // before any map hashes a key
     // A program started with one of the standard streams closed has
@@ -266,15 +321,32 @@ void sn_init(int argc, char **argv) {
         sn_slice_push(&sn_os_Args, &arg, sizeof arg);
     }
 }
+#endif
 
 // sn_write_fd writes every byte of p, asking again after a short write or
 // an interrupted call, and returns how many it wrote: all of len, or
 // fewer with errno saying why.
 int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
+#if defined(_WIN32)
+    if (sn_console(fd)) {
+        return sn_console_write(fd, p, len);
+    }
+#endif
     int64_t done = 0;
     while (done < len) {
         size_t want = (size_t)(len - done);
+#if defined(_WIN32)
+        DWORD wrote = 0; // straight to the descriptor's handle, with no lock of the C library's
+        if (!WriteFile((HANDLE)_get_osfhandle(fd), p + done, (DWORD)(want < SN_IO_MAX ? want : SN_IO_MAX), &wrote,
+                       NULL)) {
+            errno = sn_errno_of(GetLastError());
+            return done;
+        }
+
+        int64_t n = (int64_t)wrote;
+#else
         ssize_t n = write(fd, p + done, want < SN_IO_MAX ? want : SN_IO_MAX);
+#endif
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -368,7 +440,13 @@ void sn_await_wait(sn_wait_state *ws) { sn_handoff_wait(&ws->done); }
 // one thread asleep on it: the system's wait on an address, Linux's
 // futex and Darwin's os_sync_wait_on_address, which the kernel keys by
 // the address, so a lock or a worker needs no handle of the system's.
-#ifdef __APPLE__
+#if defined(_WIN32)
+void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+    (void)WaitOnAddress((volatile void *)w, &v, sizeof *w, INFINITE); // a return before a wake reads again
+}
+
+void sn_word_wake(_Atomic uint32_t *w) { WakeByAddressSingle((void *)w); }
+#elif defined(__APPLE__)
 void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
     (void)os_sync_wait_on_address(w, v, sizeof *w, OS_SYNC_WAIT_ON_ADDRESS_NONE); // a return before a wake reads again
 }
@@ -408,11 +486,12 @@ void sn_qlock_contended(sn_qlock *l) {
             }
 
             if (round < spins) {
-                for (int i = 0; i < lock_spin_pauses; i++) {
+                int64_t until = sn_time_mono() + lock_round_ns;
+                for (unsigned i = 1; i % lock_clock_hints != 0 || sn_time_mono() < until; i++) {
                     sn_spin_hint();
                 }
             } else {
-                sched_yield();
+                sn_yield();
             }
         }
 
@@ -430,6 +509,42 @@ void sn_qlock_contended(sn_qlock *l) {
 // sn_qlock_wake wakes one contender asleep on the lock's word, for a
 // give that found the lock slept on.
 void sn_qlock_wake(sn_qlock *l) { sn_word_wake(&l->state); }
+
+// sn_once_begin reports true to the caller that claims the setup, which
+// runs it and calls sn_once_end; any other caller marks the word waited
+// on and sleeps until the setup is done, and reports false. A give of
+// the setup wakes one sleeper, and each sleeper woken wakes the next
+// before it returns, so every sleeper wakes through the one wake.
+bool sn_once_begin(sn_once *o) {
+    uint32_t v = SN_ONCE_NEW;
+    if (atomic_compare_exchange_strong_explicit(&o->state, &v, SN_ONCE_RUNNING, memory_order_acquire,
+                                                memory_order_acquire)) {
+        return true;
+    }
+
+    bool slept = false;
+    while (v != SN_ONCE_DONE) {
+        if (v == SN_ONCE_WAITED || atomic_compare_exchange_weak_explicit(&o->state, &v, SN_ONCE_WAITED,
+                                                                         memory_order_acquire, memory_order_acquire)) {
+            sn_word_wait(&o->state, SN_ONCE_WAITED); // a return before the setup is done reads again
+            slept = true;
+        }
+
+        v = atomic_load_explicit(&o->state, memory_order_acquire);
+    }
+
+    if (slept) {
+        sn_word_wake(&o->state); // the next sleeper, which the end's one wake did not reach
+    }
+
+    return false;
+}
+
+void sn_once_end(sn_once *o) {
+    if (atomic_exchange_explicit(&o->state, SN_ONCE_DONE, memory_order_release) == SN_ONCE_WAITED) {
+        sn_word_wake(&o->state);
+    }
+}
 
 // A random number per worker thread: a select's random order of its
 // cases, so that a busy channel does not starve the others, and the

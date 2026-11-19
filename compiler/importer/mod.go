@@ -6,7 +6,6 @@ package importer
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -261,15 +260,18 @@ func WriteModFile(dir string) (string, error) {
 
 	name := filepath.Join(dir, ModFile)
 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, modFileMode)
-	if errors.Is(err, fs.ErrExist) {
-		if info, serr := os.Stat(name); serr == nil && info.Mode().IsRegular() {
-			return "", errors.New(name + " already exists: the directory is a module's root")
+	if err != nil {
+		// What has the name, whatever the system said of the create: a
+		// directory in the way is "is a directory" on Windows, where it
+		// is "file exists" elsewhere.
+		if info, serr := os.Stat(name); serr == nil {
+			if info.Mode().IsRegular() {
+				return "", errors.New(name + " already exists: the directory is a module's root")
+			}
+
+			return "", errors.New(name + " is in the way: something that is not a module file has its name")
 		}
 
-		return "", errors.New(name + " is in the way: something that is not a module file has its name")
-	}
-
-	if err != nil {
 		return "", err
 	}
 

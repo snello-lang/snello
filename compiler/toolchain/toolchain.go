@@ -25,6 +25,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 const (
@@ -47,16 +49,20 @@ const (
 	irProbe  = "define ptr @snello_probe(ptr %p) {\n  ret ptr %p\n}\n"
 
 	// cProbe is a program of C, which the C compiler check compiles and
-	// the link check links with link-time optimization, and the probes'
-	// files, written into a directory of their own.
-	cProbe     = "int main(void) { return 0; }\n"
-	irFile     = "probe.ll"
-	cFile      = "probe.c"
-	irObject   = "probe-ir.o"
-	cObject    = "probe-c.o"
-	binaryFile = "probe"
-	probeDir   = "snello-doctor"
-	probeMode  = 0o644
+	// the link check links with link-time optimization; libraryProbe one
+	// that uses the C library, its header and a function of it, which
+	// the check of Windows' Build Tools builds; and the probes' files,
+	// written into a directory of their own.
+	cProbe       = "int main(void) { return 0; }\n"
+	libraryProbe = "#include <stdio.h>\nint main(void) { return puts(\"\") < 0; }\n"
+	irFile       = "probe.ll"
+	cFile        = "probe.c"
+	libraryFile  = "library.c"
+	irObject     = "probe-ir.o"
+	cObject      = "probe-c.o"
+	binaryFile   = "probe"
+	probeDir     = "snello-doctor"
+	probeMode    = 0o644
 
 	// The flags the probes run the compilers with, as a build runs them;
 	// irLanguage makes a compiler read the probe as IR, which one that
@@ -68,16 +74,24 @@ const (
 	ltoFlag      = "-flto"
 	languageFlag = "-x"
 	irLanguage   = "ir"
+	useLLD       = "-fuse-ld=lld" // LLVM's linker, which a link for Windows takes: Microsoft's reads no object of clang's link-time optimization
 
 	// The systems whose install command a fix names, by runtime.GOOS
 	// and by the ID and ID_LIKE of os-release, which a Linux system
 	// describes itself in.
-	darwin = "darwin"
-	linux  = "linux"
-	debian = "debian"
-	ubuntu = "ubuntu"
-	fedora = "fedora"
-	arch   = "arch"
+	darwin  = "darwin"
+	linux   = "linux"
+	windows = "windows"
+	debian  = "debian"
+	ubuntu  = "ubuntu"
+	fedora  = "fedora"
+	arch    = "arch"
+
+	// buildTools is what a build on Windows needs beside clang: the SDK
+	// and the C runtime Visual Studio's Build Tools install, which clang
+	// finds by itself; buildToolsCheck names its check.
+	buildTools      = "Visual Studio's Build Tools with the C++ workload"
+	buildToolsCheck = "Visual Studio's Build Tools"
 
 	// The keys of os-release a system is named by, and what may quote a
 	// value; lineEnd ends a line a compiler prints.
@@ -104,11 +118,12 @@ var osReleaseFiles = []string{"/etc/os-release", "/usr/lib/os-release"}
 // installs are the commands that install clang, which brings a C
 // compiler with it, on each system the fixes name.
 var installs = map[string]string{
-	darwin: "xcode-select --install",
-	debian: "sudo apt install clang",
-	ubuntu: "sudo apt install clang",
-	fedora: "sudo dnf install clang",
-	arch:   "sudo pacman -S clang",
+	darwin:  "xcode-select --install",
+	windows: "winget install LLVM.LLVM",
+	debian:  "sudo apt install clang",
+	ubuntu:  "sudo apt install clang",
+	fedora:  "sudo dnf install clang",
+	arch:    "sudo pacman -S clang",
 }
 
 // A Check is one thing a build needs: what is checked, whether it
@@ -144,8 +159,13 @@ func Clang() string {
 }
 
 // CC returns the C compiler a build runs: the one CC names, else cc on
-// the path.
+// the path, and clang on Windows, which has no cc and builds with clang
+// alone.
 func CC() string {
+	if runtime.GOOS == windows {
+		return compiler(CCEnv, clangName)
+	}
+
 	return compiler(CCEnv, ccName)
 }
 
@@ -193,11 +213,12 @@ func Install() string {
 }
 
 // Checks runs every check, in the order the doctor prints them: clang,
-// a link with link-time optimization, the C compiler, and whether
-// running snello by name runs self, the command running, which only
-// that needs. It runs the compilers on small programs it writes into a
-// temporary directory, which it removes; a directory it cannot make is
-// the one check it reports.
+// on Windows the SDK and the C runtime Visual Studio's Build Tools
+// install, a link with link-time optimization, the C compiler, and
+// whether running snello by name runs self, the command running, which
+// only that needs. It runs the compilers on small programs it writes
+// into a temporary directory, which it removes; a directory it cannot
+// make is the one check it reports.
 func Checks(self string) []Check {
 	dir, err := os.MkdirTemp("", probeDir)
 	if err != nil {
@@ -206,7 +227,12 @@ func Checks(self string) []Check {
 
 	defer os.RemoveAll(dir)
 	clang := checkClang(dir)
-	return []Check{clang, checkLTO(dir, clang.OK), checkCC(dir), checkPath(self)}
+	checks := []Check{clang}
+	if runtime.GOOS == windows {
+		checks = append(checks, checkBuildTools(dir, clang.OK))
+	}
+
+	return append(checks, checkLTO(dir, clang.OK), checkCC(dir), checkPath(self))
 }
 
 // what says which compiler e is about and why it cannot be used: the
@@ -263,6 +289,42 @@ func checkClang(dir string) Check {
 	return c
 }
 
+// checkBuildTools builds a program that uses the C library with clang,
+// in dir, as a build on Windows compiles against the SDK's headers and
+// links against the C runtime and the system's libraries, which
+// Visual Studio's Build Tools install and clang finds by itself: what
+// clang says when it cannot names the part that is missing, a header or
+// a library. A build that reads them from the sysroot the host's
+// variable names needs no Build Tools, and none are looked for.
+func checkBuildTools(dir string, haveClang bool) Check {
+	c := Check{Name: buildToolsCheck, Needed: true}
+	host := platform.Host()
+	if sysroot := host.Sysroot(); sysroot != "" {
+		c.OK, c.Detail = true, "a build reads the SDK and the C runtime from "+sysroot+", which "+host.SysrootVariable()+" names"
+		return c
+	}
+
+	if !haveClang {
+		c.Detail, c.Fix = "not tried without clang", "install clang first"
+		return c
+	}
+
+	src := filepath.Join(dir, libraryFile)
+	if err := os.WriteFile(src, []byte(libraryProbe), probeMode); err != nil {
+		c.Detail = err.Error()
+		return c
+	}
+
+	if out, err := exec.Command(Clang(), useLLD, outputFlag, filepath.Join(dir, binaryFile), src).CombinedOutput(); err != nil {
+		c.Detail = "clang cannot build a program of C against the SDK and the C runtime" + reasonStart + said(out, err)
+		c.Fix = "install " + buildTools + " and the Windows SDK it offers, which clang finds by itself"
+		return c
+	}
+
+	c.OK, c.Detail = true, "clang finds the SDK and the C runtime"
+	return c
+}
+
 // checkLTO links a program with link-time optimization, as a release
 // build links, in dir, when clang is there to link it.
 func checkLTO(dir string, haveClang bool) Check {
@@ -278,9 +340,16 @@ func checkLTO(dir string, haveClang bool) Check {
 		return c
 	}
 
-	if out, err := exec.Command(Clang(), optimizeFlag, ltoFlag, outputFlag, filepath.Join(dir, binaryFile), src).CombinedOutput(); err != nil {
+	args := []string{optimizeFlag, ltoFlag, outputFlag, filepath.Join(dir, binaryFile), src}
+	fix := "install the linker clang links with, which " + Install() + " brings"
+	if runtime.GOOS == windows {
+		args = append(args, useLLD)
+		fix = "install " + buildTools + ", whose libraries clang links against, and LLVM's lld-link, which " + Install() + " brings"
+	}
+
+	if out, err := exec.Command(Clang(), args...).CombinedOutput(); err != nil {
 		c.Detail = "clang cannot link with " + ltoFlag + reasonStart + said(out, err)
-		c.Fix = "install the linker clang links with, which " + Install() + " brings"
+		c.Fix = fix
 		return c
 	}
 
@@ -391,11 +460,11 @@ func sameFile(a, b string) bool {
 }
 
 // system names the system the compiler runs on as installs keys it:
-// darwin, or the Linux distribution os-release names, by its ID or by
-// one it is like; "" for any other.
+// darwin, windows, or the Linux distribution os-release names, by its
+// ID or by one it is like; "" for any other.
 func system() string {
-	if runtime.GOOS == darwin {
-		return darwin
+	if runtime.GOOS == darwin || runtime.GOOS == windows {
+		return runtime.GOOS
 	}
 
 	if runtime.GOOS != linux {

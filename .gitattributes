@@ -1,0 +1,5 @@
+# Every text file is checked out with LF line endings on every system,
+# Windows included, where git would otherwise write CRLF: the shell
+# scripts run under sh, the expected outputs are compared byte for
+# byte, and a raw string in a Snello file holds its line endings.
+* text=auto eol=lf

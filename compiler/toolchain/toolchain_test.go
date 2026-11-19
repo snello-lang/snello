@@ -9,8 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 // TestDistribution names a Linux system from its os-release: by its ID,
@@ -38,12 +41,13 @@ func TestDistribution(t *testing.T) {
 // fix is known for, and says what to do on any other.
 func TestInstallFor(t *testing.T) {
 	for system, want := range map[string]string{
-		darwin: "xcode-select --install",
-		debian: "sudo apt install clang",
-		ubuntu: "sudo apt install clang",
-		fedora: "sudo dnf install clang",
-		arch:   "sudo pacman -S clang",
-		"":     "your system's package manager, clang 15 or later",
+		darwin:  "xcode-select --install",
+		windows: "winget install LLVM.LLVM",
+		debian:  "sudo apt install clang",
+		ubuntu:  "sudo apt install clang",
+		fedora:  "sudo dnf install clang",
+		arch:    "sudo pacman -S clang",
+		"":      "your system's package manager, clang 15 or later",
 	} {
 		if got := installFor(system); got != want {
 			t.Errorf("installFor(%q) = %q, want %q", system, got, want)
@@ -66,11 +70,16 @@ func TestRequire(t *testing.T) {
 }
 
 // TestCompilers reads the compilers a build runs from CLANG and CC, and
-// takes clang and cc when they are not set.
+// takes clang and cc when they are not set, clang for both on Windows.
 func TestCompilers(t *testing.T) {
 	t.Setenv(ClangEnv, "")
 	t.Setenv(CCEnv, "")
-	if Clang() != "clang" || CC() != "cc" {
+	cc := ccName
+	if runtime.GOOS == windows {
+		cc = clangName
+	}
+
+	if Clang() != clangName || CC() != cc {
 		t.Errorf("unset: %q, %q", Clang(), CC())
 	}
 
@@ -86,6 +95,10 @@ func TestCompilers(t *testing.T) {
 // untried: a script that answers --version as clang 14 does and fails
 // to compile, as clang 14 fails on an opaque pointer.
 func TestChecksOldClang(t *testing.T) {
+	if runtime.GOOS == windows {
+		t.Skip("the fake compilers are shell scripts, which Windows does not run")
+	}
+
 	clang := fakeCompiler(t, "clang version 14.0.0", "error: expected type")
 	t.Setenv(ClangEnv, clang)
 	t.Setenv(CCEnv, "sh")
@@ -100,18 +113,25 @@ func TestChecksOldClang(t *testing.T) {
 }
 
 // TestChecksMissing fails clang and the C compiler where none can be
-// started, with the fix, and notes, without failing, a command whose
-// directory is not on the path.
+// started, with the fix, the Build Tools among them on Windows, and
+// notes, without failing, a command whose directory is not on the
+// path.
 func TestChecksMissing(t *testing.T) {
 	t.Setenv(ClangEnv, "")
 	t.Setenv(CCEnv, "")
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv(platform.Host().SysrootVariable(), "")
+	needed := []string{"clang", "link-time optimization", "C compiler"}
+	if runtime.GOOS == windows {
+		needed = []string{"clang", buildToolsCheck, "link-time optimization", "C compiler"}
+	}
+
 	checks := Checks(filepath.Join(t.TempDir(), "snello"))
-	if len(checks) != 4 {
+	if len(checks) != len(needed)+1 {
 		t.Fatalf("%d checks", len(checks))
 	}
 
-	for i, name := range []string{"clang", "link-time optimization", "C compiler"} {
+	for i, name := range needed {
 		if c := checks[i]; c.Name != name || c.OK || !c.Needed || c.Fix == "" {
 			t.Errorf("%s: %+v", name, c)
 		}
@@ -121,7 +141,7 @@ func TestChecksMissing(t *testing.T) {
 		t.Errorf("clang: %+v", c)
 	}
 
-	if c := checks[3]; c.OK || c.Needed {
+	if c := checks[len(needed)]; c.OK || c.Needed {
 		t.Errorf("the path: %+v", c)
 	}
 }
@@ -134,7 +154,7 @@ func TestChecksPresent(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	self := filepath.Join(dir, "snello")
+	self := filepath.Join(dir, platform.Host().Executable(commandName))
 	if err := os.WriteFile(self, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +173,10 @@ func TestChecksPresent(t *testing.T) {
 // does when it takes the IR for a file to link; and a clang that
 // cannot link with link-time optimization.
 func TestChecksUnusable(t *testing.T) {
+	if runtime.GOOS == windows {
+		t.Skip("the fake compilers are shell scripts, which Windows does not run")
+	}
+
 	t.Setenv(CCEnv, "sh")
 	broken := script(t, "echo 'xcode-select: note: No developer tools were found' >&2; exit 1")
 	t.Setenv(ClangEnv, broken)
@@ -183,10 +207,49 @@ func TestChecksUnusable(t *testing.T) {
 	}
 }
 
+// TestCheckBuildTools builds a program of the C library to find the
+// SDK and the C runtime: a clang that cannot is reported with what it
+// said and the Build Tools to install, one that can is found, the
+// check is not tried without clang, and a sysroot the host's variable
+// names stands for the Build Tools whatever clang finds.
+func TestCheckBuildTools(t *testing.T) {
+	sysrootVariable := platform.Host().SysrootVariable()
+	t.Setenv(sysrootVariable, "")
+	if c := checkBuildTools(t.TempDir(), false); c.OK || !c.Needed || c.Detail != "not tried without clang" {
+		t.Errorf("without clang: %+v", c)
+	}
+
+	sysroot := t.TempDir()
+	t.Setenv(sysrootVariable, sysroot)
+	if c := checkBuildTools(t.TempDir(), false); !c.OK || !strings.Contains(c.Detail, sysroot) || !strings.Contains(c.Detail, sysrootVariable) {
+		t.Errorf("with a sysroot: %+v", c)
+	}
+
+	t.Setenv(sysrootVariable, "")
+	if runtime.GOOS == windows {
+		t.Skip("the fake compilers are shell scripts, which Windows does not run")
+	}
+
+	t.Setenv(ClangEnv, fakeCompiler(t, "clang version 19.1.0", "fatal error: stdio.h file not found"))
+	if c := checkBuildTools(t.TempDir(), true); c.OK || !strings.Contains(c.Detail, "stdio.h file not found") || !strings.Contains(c.Fix, buildTools) {
+		t.Errorf("a clang that finds no SDK: %+v", c)
+	}
+
+	t.Setenv(ClangEnv, script(t, "exit 0"))
+	if c := checkBuildTools(t.TempDir(), true); !c.OK || c.Detail != "clang finds the SDK and the C runtime" {
+		t.Errorf("a clang that builds: %+v", c)
+	}
+}
+
 // TestChecksNoTempDir reports, as the one check, a temporary directory
-// the probes cannot be written in.
+// the probes cannot be written in, named by TMPDIR on Unix and by TMP
+// and TEMP on Windows.
 func TestChecksNoTempDir(t *testing.T) {
-	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "none"))
+	none := filepath.Join(t.TempDir(), "none")
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, none)
+	}
+
 	checks := Checks("snello")
 	if len(checks) != 1 || checks[0].OK || !checks[0].Needed || checks[0].Fix == "" {
 		t.Errorf("no temporary directory: %+v", checks)
@@ -233,6 +296,14 @@ func TestRelease(t *testing.T) {
 		t.Errorf("both: %q, want the first's", got)
 	}
 
+	if got := distribution(failingReader{}); got != "" {
+		t.Errorf("a reader that fails: %q", got)
+	}
+
+	if runtime.GOOS == windows {
+		t.Skip("Windows does not deny reading a file through its permission bits")
+	}
+
 	if err := os.Chmod(etc, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -240,18 +311,15 @@ func TestRelease(t *testing.T) {
 	if got := release([]string{etc, lib}); got != "" && os.Getuid() != 0 {
 		t.Errorf("a first that does not read: %q, want none", got)
 	}
-
-	if got := distribution(failingReader{}); got != "" {
-		t.Errorf("a reader that fails: %q", got)
-	}
 }
 
 // TestCheckPath takes a command reached on the path through a link as
 // on the path, and notes one whose directory is not.
 func TestCheckPath(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "opt", "snello")
-	link := filepath.Join(dir, "bin", "snello")
+	name := platform.Host().Executable(commandName)
+	target := filepath.Join(dir, "opt", name)
+	link := filepath.Join(dir, "bin", name)
 	for _, d := range []string{filepath.Dir(target), filepath.Dir(link)} {
 		if err := os.Mkdir(d, 0o755); err != nil {
 			t.Fatal(err)

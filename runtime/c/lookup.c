@@ -22,25 +22,49 @@
 
 #include "internal.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <net/if.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
+
+#if defined(_WIN32)
+// Each in a block of its own, as each needs the one before it.
+#include <winsock2.h>
+
+#include <ws2tcpip.h>
+
+#include <iphlpapi.h>
+#pragma comment(lib, "ws2_32")   // the sockets' and the lookups'
+#pragma comment(lib, "iphlpapi") // if_nametoindex's
+#else
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 enum {
     resolvers_most = 500, // threads looking names up at once, as many as Go lets its resolver have
     resolver_idle = 10,   // seconds a thread with no lookup waits for one before it ends
 
     address_text = INET6_ADDRSTRLEN + IF_NAMESIZE + 8, // the longest address printed: brackets, a zone and a port
+    reason_text = 256,                                 // the longest reason a failed lookup gives, cut there
 };
+
+// A lookup's answer, the system's list of addresses, and the call that
+// frees it: on Windows the wide-character call's, whose name is read as
+// UTF-16, converted from Snello's UTF-8, where the other one reads it in
+// the code page of the system's locale.
+#if defined(_WIN32)
+typedef ADDRINFOW address_info;
+#define free_address_info FreeAddrInfoW
+#else
+typedef struct addrinfo address_info;
+#define free_address_info freeaddrinfo
+#endif
 
 // sn_net_parse reads the IP address host into addr, with the port,
 // and returns the length of addr: IPv4 "127.0.0.1", or IPv6 "::1", with
@@ -155,7 +179,7 @@ sn_string sn_net_format(const struct sockaddr *addr, bool port) {
 typedef struct lookup {
     struct lookup *next; // in the queue, while no thread has taken it
     char *name;
-    struct addrinfo *found;
+    address_info *found;
     int code; // getaddrinfo's
     int err;  // errno, for a code of EAI_SYSTEM
     _Atomic bool done;
@@ -171,20 +195,20 @@ typedef struct lookup {
 // lookup has, and starts a thread otherwise, so that no lookup waits
 // behind another while the pool can grow.
 static struct {
-    pthread_mutex_t mu;
-    pthread_cond_t ready;
+    sn_mutex mu;
+    sn_cond ready;
     lookup *head;
     lookup *tail;
     int queued;
     int idle;
     int threads;
-} pool = { .mu = PTHREAD_MUTEX_INITIALIZER, .ready = PTHREAD_COND_INITIALIZER };
+} pool = { .mu = SN_MUTEX_INIT, .ready = SN_COND_INIT };
 
 // release lets go of one reference to l, and frees it with the last.
 static void release(lookup *l) {
     if (atomic_fetch_sub(&l->refs, 1) == 1) {
         if (l->found != NULL) {
-            freeaddrinfo(l->found);
+            free_address_info(l->found);
         }
 
         free(l->name);
@@ -212,9 +236,28 @@ static void lookup_expire(void *arg) { take_out(arg); }
 // addresses in the order the system sorts them, by RFC 6724 where it
 // does, as Go's resolver returns them through the system's.
 static void resolve(lookup *l) {
-    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
+    address_info hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
+#if defined(_WIN32)
+    int wide = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, l->name, -1, NULL, 0);
+    wchar_t *name = wide > 0 ? malloc((size_t)wide * sizeof *name) : NULL;
+    if (!sn_winsock_start()) {
+        l->code = WSANOTINITIALISED;
+    } else if (wide <= 0) {
+        l->code = EAI_NONAME; // a name that is not UTF-8 names no host
+    } else if (name == NULL) {
+        l->code = EAI_MEMORY;
+    } else {
+        (void)MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, l->name, -1, name, wide);
+        l->code = GetAddrInfoW(name, NULL, &hints, &l->found);
+    }
+
+    free(name);
+#else
     l->code = getaddrinfo(l->name, NULL, &hints, &l->found);
+#endif
+#if defined(EAI_SYSTEM)
     l->err = l->code == EAI_SYSTEM ? errno : 0;
+#endif
     atomic_store(&l->done, true);
     take_out(l);
     release(l);
@@ -225,22 +268,19 @@ static void resolve(lookup *l) {
 // seconds with none.
 static void *resolver_main(void *arg) {
     (void)arg;
-    pthread_mutex_lock(&pool.mu);
+    sn_mutex_lock(&pool.mu);
     for (;;) {
         if (pool.head == NULL) {
-            struct timespec until;
-            clock_gettime(CLOCK_REALTIME, &until); // the clock the condition's wait reads
-            until.tv_sec += resolver_idle;
+            int64_t until = sn_time_mono() + (int64_t)resolver_idle * sn_ns_per_s;
             pool.idle++;
-            int waited = 0;
-            while (pool.head == NULL && waited != ETIMEDOUT) {
-                waited = pthread_cond_timedwait(&pool.ready, &pool.mu, &until);
+            for (int64_t left = until - sn_time_mono(); pool.head == NULL && left > 0; left = until - sn_time_mono()) {
+                sn_cond_wait_ms(&pool.ready, &pool.mu, (left + sn_ns_per_ms - 1) / sn_ns_per_ms);
             }
 
             pool.idle--;
             if (pool.head == NULL) {
                 pool.threads--;
-                pthread_mutex_unlock(&pool.mu);
+                sn_mutex_unlock(&pool.mu);
                 return NULL;
             }
         }
@@ -252,9 +292,9 @@ static void *resolver_main(void *arg) {
         }
 
         pool.queued--;
-        pthread_mutex_unlock(&pool.mu);
+        sn_mutex_unlock(&pool.mu);
         resolve(l);
-        pthread_mutex_lock(&pool.mu);
+        sn_mutex_lock(&pool.mu);
     }
 }
 
@@ -264,7 +304,7 @@ static void *resolver_main(void *arg) {
 // it.
 static int submit(lookup *l) {
     int code = 0;
-    pthread_mutex_lock(&pool.mu);
+    sn_mutex_lock(&pool.mu);
     if (pool.tail == NULL) {
         pool.head = l;
     } else {
@@ -274,14 +314,9 @@ static int submit(lookup *l) {
     pool.tail = l;
     pool.queued++;
     if (pool.queued <= pool.idle) {
-        pthread_cond_signal(&pool.ready);
+        sn_cond_signal(&pool.ready);
     } else if (pool.threads < resolvers_most) {
-        pthread_t id;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        code = pthread_create(&id, &attr, resolver_main, NULL);
-        pthread_attr_destroy(&attr);
+        code = sn_thread_start(resolver_main, NULL) ? 0 : EAGAIN;
         if (code == 0) {
             pool.threads++;
         } else if (pool.threads > 0) {
@@ -292,8 +327,39 @@ static int submit(lookup *l) {
         }
     }
 
-    pthread_mutex_unlock(&pool.mu);
+    sn_mutex_unlock(&pool.mu);
     return code;
+}
+
+// resolver_reason writes the system's words for the resolver's failure
+// code into why, which holds reason_text bytes, and returns their
+// length: on Windows formatted for this call, in UTF-16 and converted to
+// UTF-8, since the C library's gai_strerror there writes into one
+// buffer every thread shares and in the system's code page, without
+// the line's end the system's message closes with, and the code's
+// number where the system has no words for it.
+static int resolver_reason(int code, char why[reason_text]) {
+#if defined(_WIN32)
+    wchar_t text[reason_text];
+    DWORD units = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)code, 0, text,
+                                 reason_text, NULL);
+    while (units > 0 && (text[units - 1] == L'\n' || text[units - 1] == L'\r' || text[units - 1] == L' ')) {
+        units--;
+    }
+
+    int n = units == 0 ? 0 : WideCharToMultiByte(CP_UTF8, 0, text, (int)units, why, reason_text, NULL, NULL);
+    if (n == 0) { // no words for the code, or none that fit: its number
+        n = snprintf(why, reason_text, "error %d", code);
+    }
+
+    return n;
+#else
+    const char *text = gai_strerror(code);
+    size_t n = strlen(text);
+    n = n < reason_text ? n : reason_text;
+    memcpy(why, text, n);
+    return (int)n;
+#endif
 }
 
 // answer stores the addresses l found, printed, in out, a []string that
@@ -307,18 +373,21 @@ static int64_t answer(lookup *l, void *out, sn_string *reason) {
     case EAI_NODATA:
 #endif
         return SN_NET_NO_SUCH_HOST;
+#if defined(EAI_SYSTEM)
     case EAI_SYSTEM:
         return l->err != 0 ? l->err
                            : EMFILE; // as Go's: glibc has been seen to fail so with no error number, out of descriptors
+#endif
     default: {
-        const char *why = gai_strerror(l->code);
-        *reason = sn_string_clone(SN_STR(why, (int)strlen(why)));
+        char why[reason_text];
+        int n = resolver_reason(l->code, why);
+        *reason = sn_string_clone(SN_STR(why, n));
         return SN_NET_RESOLVER_FAILED;
     }
     }
 
     int64_t n = 0;
-    for (struct addrinfo *a = l->found; a != NULL; a = a->ai_next) {
+    for (address_info *a = l->found; a != NULL; a = a->ai_next) {
         n += a->ai_family == AF_INET || a->ai_family == AF_INET6;
     }
 
@@ -329,7 +398,7 @@ static int64_t answer(lookup *l, void *out, sn_string *reason) {
     sn_slice *addrs = out;
     sn_slice_make(addrs, 0, n, sizeof(sn_string));
     sn_string *at = addrs->ptr;
-    for (struct addrinfo *a = l->found; a != NULL; a = a->ai_next) {
+    for (address_info *a = l->found; a != NULL; a = a->ai_next) {
         if (a->ai_family == AF_INET || a->ai_family == AF_INET6) {
             at[addrs->len++] = sn_net_format(a->ai_addr, false);
         }

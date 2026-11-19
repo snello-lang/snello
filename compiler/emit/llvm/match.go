@@ -88,7 +88,7 @@ func (e *Emitter) variantMatch(x *ast.MatchExpr) value {
 			e.pop(arm.Pos())
 			e.jump(end)
 		} else {
-			e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+			e.popLeft()
 		}
 
 		e.label(next)
@@ -133,7 +133,7 @@ func (e *Emitter) typeMatch(x *ast.MatchExpr) value {
 		e.pop(arm.Pos())
 		e.jump(end)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.label(end)
@@ -165,7 +165,7 @@ func (e *Emitter) arm(m *match, arm *ast.MatchArm) {
 		e.pop(arm.Pos())
 		e.jump(m.end)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.label(next)
@@ -204,7 +204,7 @@ func (e *Emitter) ifBind(s *ast.IfBindStmt) {
 		e.pop(s.Body.Rbrace)
 		e.jump(end)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 
 	e.label(els)

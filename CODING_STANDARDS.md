@@ -23,6 +23,7 @@ These apply to the Go code of the compiler and to the Snello code under `example
 - Go files under `examples/` carry `//go:build ignore` after the header; they are reference programs, not part of the build.
 - `gofmt` and `go vet` are clean at every commit.
 - Markdown is not hard-wrapped: one line per paragraph, so it fills the page width in any viewer. Tables and code blocks are the only exceptions.
+- The C runtime calls the system's threads, locks, conditions and one-time setup through `system.h`, whose wrappers are `SN_SYSTEM_CALL`, so that each compiles to the call it wraps and Linux's and macOS's code is what it would be without the layer. Code that differs by system is under `#if defined(_WIN32)` in the file that needs it, or whole in `os_windows.c`, since the runtime's build compiles one list of files for every target.
 
 ## File layout
 

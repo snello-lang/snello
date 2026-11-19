@@ -5,7 +5,7 @@
 package c
 
 import (
-	"os/exec"
+	"bytes"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
@@ -13,6 +13,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/measure"
 )
 
 // TestChannelsFlat runs backendtest.Churn and checks that its memory
@@ -43,18 +44,18 @@ func TestChannelsFlat(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 
-	cmd := exec.Command(bin)
-	got, err := cmd.CombinedOutput()
+	var printed bytes.Buffer
+	res, err := measure.New(t).Run(&printed, &printed, bin)
 	if err != nil {
-		t.Fatalf("%v\n%s", err, got)
+		t.Fatalf("%v\n%s", err, printed.Bytes())
 	}
 
-	if string(got) != backendtest.ChurnOut {
-		t.Fatalf("printed %q, want %q", got, backendtest.ChurnOut)
+	if printed.String() != backendtest.ChurnOut {
+		t.Fatalf("printed %q, want %q", printed.Bytes(), backendtest.ChurnOut)
 	}
 
-	if peak := backendtest.Peak(cmd.ProcessState); peak > backendtest.ChurnLimit {
-		t.Errorf("peak memory %d MB, want under %d MB: channels or timers are kept past their last handle", peak>>20, backendtest.ChurnLimit>>20)
+	if res.Peak > backendtest.ChurnLimit {
+		t.Errorf("peak memory %d MB, want under %d MB: channels or timers are kept past their last handle", res.Peak>>20, backendtest.ChurnLimit>>20)
 	}
 
 	if stdout, stderr, code := run(t, "churn", backendtest.Churn, true); code != 0 || stderr != "" {

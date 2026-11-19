@@ -26,8 +26,210 @@ import (
 )
 
 // probeTimeout bounds a probe whose failure is a hang, a lost wake,
-// which the deadline turns into a failure.
-const probeTimeout = 30 * time.Second
+// which the deadline turns into a failure; stacksTimeout bounds the
+// debugger that reads a hung probe's threads.
+const (
+	probeTimeout  = 30 * time.Second
+	stacksTimeout = time.Minute
+)
+
+// wakeRuns is how many processes TestWakeAfterWaitEnds runs its rounds
+// in, each starting its workers anew, so that a race of the wake whose
+// window a run seldom meets is met more often.
+const wakeRuns = 5
+
+// The debuggers a hung probe's threads are read with: cdb on Windows,
+// from Windows' SDK, which installs it under its kit's directory for
+// each processor, lldb on macOS and gdb elsewhere, each attached to
+// the probe, printing every thread's stack and detaching.
+const (
+	cdbName         = "cdb"
+	cdbStacks       = "~*k 40; qd"
+	lldbName        = "lldb"
+	lldbStacks      = "thread backtrace all"
+	gdbName         = "gdb"
+	gdbStacks       = "thread apply all bt 40"
+	programFilesX86 = "ProgramFiles(x86)"
+	darwinOS        = "darwin"
+)
+
+// windowsKitDebuggers is where Windows' SDK installs its debuggers,
+// under the program files' directory, in one directory a processor.
+var (
+	windowsKitDebuggers = []string{"Windows Kits", "10", "Debuggers"}
+	kitProcessors       = map[string]string{"amd64": "x64", "arm64": "arm64"}
+)
+
+// What a probe is built with where the system differs: the C compiler
+// when CC names none, cc, and clang on Windows, which has no cc; and
+// the name of its binary, with Windows' suffix there.
+const (
+	probeCC        = "cc"
+	probeWindowsCC = "clang"
+	probeBinary    = "probe"
+	windowsSuffix  = ".exe"
+	windowsOS      = "windows"
+)
+
+// windowsBinary is a source a probe is built with on Windows, where
+// the C library opens the standard streams in text mode and writes a
+// newline as two bytes: it makes them binary before main, as a Snello
+// program's are, so that a probe's output reads as it does elsewhere.
+const windowsBinary = `#include <fcntl.h>
+#include <io.h>
+#include <stdlib.h>
+__attribute__((constructor)) static void probe_binary(void) {
+    _set_fmode(_O_BINARY);
+    for (int fd = 0; fd <= 2; fd++) {
+        _setmode(fd, _O_BINARY);
+    }
+}
+`
+
+// probeHeader is probe.h, written beside every probe: what a probe
+// needs of the system beyond the runtime, in one form for every system,
+// POSIX's calls or Windows' under it: a thread it waits for, a pipe and
+// its reads and writes, the processor time the process has used and a
+// finer count of the processor's work, in units only a ratio of two
+// reads, the cycles Windows counts where its processor time moves in
+// ticks of 15.6 ms, an
+// alarm that ends the probe, and a client's connection to a port on the
+// loopback, its sends and its close. It follows internal.h, which
+// includes the system's headers first, so a probe that needs more of
+// them than POSIX's threads give, getaddrinfo's, defines the system's
+// feature macros, _GNU_SOURCE and _DARWIN_C_SOURCE, before both.
+const probeHeader = `#ifndef PROBE_H
+#define PROBE_H
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#pragma comment(lib, "ws2_32")
+typedef HANDLE probe_thread;
+typedef struct {
+    void *(*main)(void *);
+    void *arg;
+} probe_start_args;
+static DWORD WINAPI probe_entry(void *p) {
+    probe_start_args a = *(probe_start_args *)p;
+    free(p);
+    a.main(a.arg);
+    return 0;
+}
+static inline probe_thread probe_thread_start(void *(*main)(void *), void *arg) {
+    probe_start_args *a = malloc(sizeof *a);
+    HANDLE t = NULL;
+    if (a != NULL) {
+        a->main = main;
+        a->arg = arg;
+        t = CreateThread(NULL, 0, probe_entry, a, 0, NULL);
+    }
+
+    if (t == NULL) {
+        fputs("probe: cannot start a thread\n", stderr);
+        exit(1);
+    }
+
+    return t;
+}
+static inline void probe_thread_join(probe_thread t) {
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+}
+static inline int probe_pipe(int fds[2]) { return _pipe(fds, 4096, _O_BINARY); }
+static inline int probe_read(int fd, void *p, unsigned n) { return _read(fd, p, n); }
+static inline int probe_write(int fd, const void *p, unsigned n) { return _write(fd, p, n); }
+static inline int64_t probe_cpu_ns(void) {
+    FILETIME created, exited, kernel, user;
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    uint64_t k = (uint64_t)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime;
+    uint64_t u = (uint64_t)user.dwHighDateTime << 32 | user.dwLowDateTime;
+    return (int64_t)(k + u) * 100;
+}
+static inline int64_t probe_cpu_work(void) {
+    ULONG64 cycles = 0;
+    QueryProcessCycleTime(GetCurrentProcess(), &cycles);
+    return (int64_t)cycles;
+}
+static DWORD WINAPI probe_alarm_entry(void *p) {
+    Sleep((DWORD)(uintptr_t)p * 1000);
+    TerminateProcess(GetCurrentProcess(), 14);
+    return 0;
+}
+static inline void probe_alarm(unsigned seconds) { CloseHandle(CreateThread(NULL, 0, probe_alarm_entry, (void *)(uintptr_t)seconds, 0, NULL)); }
+typedef SOCKET probe_socket;
+#define PROBE_NO_SOCKET INVALID_SOCKET
+static inline int probe_close_socket(probe_socket s) { return closesocket(s); }
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+typedef pthread_t probe_thread;
+static inline probe_thread probe_thread_start(void *(*main)(void *), void *arg) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, main, arg) != 0) {
+        fputs("probe: cannot start a thread\n", stderr);
+        exit(1);
+    }
+
+    return t;
+}
+static inline void probe_thread_join(probe_thread t) { pthread_join(t, NULL); }
+static inline int probe_pipe(int fds[2]) { return pipe(fds); }
+static inline int probe_read(int fd, void *p, unsigned n) { return (int)read(fd, p, n); }
+static inline int probe_write(int fd, const void *p, unsigned n) { return (int)write(fd, p, n); }
+static inline int64_t probe_cpu_ns(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t);
+    return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+}
+static inline int64_t probe_cpu_work(void) { return probe_cpu_ns(); }
+static inline void probe_alarm(unsigned seconds) { alarm(seconds); }
+typedef int probe_socket;
+#define PROBE_NO_SOCKET (-1)
+static inline int probe_close_socket(probe_socket s) { return close(s); }
+#endif
+// probe_connect_loopback connects a client to port on the loopback and
+// returns its socket, or PROBE_NO_SOCKET.
+static inline probe_socket probe_connect_loopback(int64_t port) {
+    probe_socket s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == PROBE_NO_SOCKET) {
+        return s;
+    }
+
+    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(s, (struct sockaddr *)&to, sizeof to) != 0) {
+        probe_close_socket(s);
+        return PROBE_NO_SOCKET;
+    }
+
+    return s;
+}
+static inline int probe_send(probe_socket s, const char *p, int n) { return (int)send(s, p, n, 0); }
+#endif
+`
+
+// The options of a probe's compile and link: POSIX's threads and the
+// mathematics library, or on Windows the C runtime's define, LLVM's
+// linker and CodeView, the debugging information cdb reads a hung
+// probe's threads by.
+var (
+	posixProbeFlags   = []string{"-pthread"}
+	posixProbeLibs    = []string{"-lm"}
+	windowsProbeFlags = []string{"-D_CRT_SECURE_NO_WARNINGS", "-fuse-ld=lld", "-g", "-gcodeview"}
+)
 
 // ucd is the copy of the Unicode Character Database the tables are
 // written from, checked in so that the tests read it offline.
@@ -221,10 +423,7 @@ func readUCD(t *testing.T) map[rune]*runeFacts {
 // Uppercase, Lowercase, XID_Start, XID_Continue and Emoji. The meaning
 // of each is Unicode's.
 func TestUnicodeLookup(t *testing.T) {
-	cc := os.Getenv("CC")
-	if cc == "" {
-		cc = "cc"
-	}
+	cc := probeCompiler()
 
 	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("no C compiler")
@@ -264,8 +463,8 @@ int main(void) {
 		t.Fatal(err)
 	}
 
-	bin := filepath.Join(dir, "probe")
-	if b, err := exec.Command(cc, "-std=c11", "-o", bin, filepath.Join(dir, "probe.c"), filepath.Join(dir, "unicode.c")).CombinedOutput(); err != nil {
+	bin := probePath(dir)
+	if b, err := exec.Command(cc, append(append(append([]string{"-std=c11"}, systemProbeFlags()...), "-o", bin, filepath.Join(dir, "probe.c"), filepath.Join(dir, "unicode.c")), systemProbeSources(t, dir)...)...).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
 
@@ -725,12 +924,9 @@ int main(int argc, char **argv) {
 }
 
 func TestHandoff(t *testing.T) {
-	probe := `#define _GNU_SOURCE
-#define _DARWIN_C_SOURCE
-#include "internal.h"
-#include <pthread.h>
+	probe := `#include "internal.h"
+#include "probe.h"
 #include <stdio.h>
-#include <time.h>
 static _Atomic uintptr_t word;
 static sn_handoff woken;
 static _Atomic int ended;
@@ -743,8 +939,7 @@ static void *waker(void *arg) {
         sn_spin_hint();
     }
 
-    struct timespec pause = {0, 50000000};
-    nanosleep(&pause, NULL);
+    sn_sleep_ns(50000000);
     ended_at_wake = atomic_load(&ended);
     sn_handoff_wake(&woken, (sn_task *)task);
     sn_outside(-1);
@@ -766,12 +961,11 @@ static void run(void *arg) {
 int main(int argc, char **argv) {
     sn_init(argc, argv);
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
-    pthread_t id;
-    pthread_create(&id, NULL, waker, NULL);
+    probe_thread id = probe_thread_start(waker, NULL);
     sn_spawn(run, NULL, 0, SN_UNBOUNDED);
     int64_t got;
     sn_chan_recv(done, &got);
-    pthread_join(id, NULL);
+    probe_thread_join(id);
     printf("ended before the wake: %d\n", ended_at_wake);
     while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
         sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
@@ -793,6 +987,52 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestOnce has sixteen threads call one setup at once, a setup slow
+// enough that the others sleep on its word, and holds the setup to
+// running once and every caller to returning only after it ran; a
+// caller after the setup finds it done.
+func TestOnce(t *testing.T) {
+	probe := `#include "internal.h"
+#include "probe.h"
+#include <stdio.h>
+enum { threads = 16, setup_ns = 20000000 };
+static sn_once once = SN_ONCE_INIT;
+static _Atomic int runs, early;
+static void setup(void) {
+    sn_sleep_ns(setup_ns);
+    atomic_fetch_add(&runs, 1);
+}
+static void *call(void *arg) {
+    (void)arg;
+    sn_once_call(&once, setup);
+    if (atomic_load(&runs) != 1) {
+        atomic_fetch_add(&early, 1);
+    }
+    return NULL;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    probe_thread ids[threads];
+    for (int i = 0; i < threads; i++) {
+        ids[i] = probe_thread_start(call, NULL);
+    }
+
+    for (int i = 0; i < threads; i++) {
+        probe_thread_join(ids[i]);
+    }
+
+    sn_once_call(&once, setup);
+    printf("runs %d, early %d\n", atomic_load(&runs), atomic_load(&early));
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := runProbe(bin)
+	if err != nil || string(out) != "runs 1, early 0\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestQueueLockUnderContention has eight threads take and give one
 // queue lock two hundred thousand times each, the holder yielding its
 // processor now and then so that the contenders run out of spin and
@@ -802,14 +1042,10 @@ int main(int argc, char **argv) {
 // run has two threads and a holder that sleeps while holding, so that
 // every take goes through the sleep.
 func TestQueueLockUnderContention(t *testing.T) {
-	probe := `#define _GNU_SOURCE
-#define _DARWIN_C_SOURCE
-#include "internal.h"
-#include <pthread.h>
-#include <sched.h>
+	probe := `#include "internal.h"
+#include "probe.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 static sn_qlock lock;
 static int64_t count;
 static int threads, rounds, holds;
@@ -820,9 +1056,9 @@ static void *contend(void *arg) {
         count++;
         if (i % 64 == 0) {
             if (holds > 0) {
-                usleep(holds); // held long enough for every contender to sleep
+                sn_sleep_ns((int64_t)holds * 1000); // held long enough for every contender to sleep
             } else {
-                sched_yield();
+                sn_yield();
             }
         }
 
@@ -838,13 +1074,13 @@ int main(int argc, char **argv) {
     rounds = atoi(argv[2]);
     holds = atoi(argv[3]);
     sn_qlock_init(&lock);
-    pthread_t ids[64];
+    probe_thread ids[64];
     for (int i = 0; i < threads; i++) {
-        pthread_create(&ids[i], NULL, contend, NULL);
+        ids[i] = probe_thread_start(contend, NULL);
     }
 
     for (int i = 0; i < threads; i++) {
-        pthread_join(ids[i], NULL);
+        probe_thread_join(ids[i]);
     }
 
     printf("count %lld\n", (long long)count);
@@ -855,9 +1091,7 @@ int main(int argc, char **argv) {
 	for _, c := range []struct {
 		threads, rounds, holds int
 	}{{8, 200000, 0}, {2, 20000, 1}} {
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		out, err := exec.CommandContext(ctx, bin, strconv.Itoa(c.threads), strconv.Itoa(c.rounds), strconv.Itoa(c.holds)).CombinedOutput()
-		cancel()
+		out, err := runProbe(bin, strconv.Itoa(c.threads), strconv.Itoa(c.rounds), strconv.Itoa(c.holds))
 		want := fmt.Sprintf("count %d\n", c.threads*c.rounds)
 		if err != nil || string(out) != want {
 			t.Fatalf("%d threads: %v\n%s", c.threads, err, out)
@@ -871,7 +1105,7 @@ int main(int argc, char **argv) {
 // task that has ended: each receiver carries a kept wake into its wait,
 // so its park returns at once, into the few instructions of the waker's
 // claim, and the wait's handoff keeps it there until the claim is done,
-// so the stop never comes.
+// so the stop never comes. The rounds run in wakeRuns processes.
 func TestWakeAfterWaitEnds(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
@@ -919,11 +1153,11 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
-	if err != nil || string(out) != "rounds 20000\n" {
-		t.Fatalf("%v\n%s", err, out)
+	for run := range wakeRuns {
+		out, err := runProbe(bin)
+		if err != nil || string(out) != "rounds 20000\n" {
+			t.Fatalf("run %d: %v\n%s", run, err, out)
+		}
 	}
 }
 
@@ -1012,9 +1246,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	if err != nil || !strings.HasPrefix(string(out), "rounds 20000, ") {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1097,9 +1329,7 @@ int main(int argc, char **argv) {
 `
 	for _, mode := range [][]string{nil, {"-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer"}} {
 		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, mode...)
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-		cancel()
+		out, err := runProbe(bin)
 		if err != nil || string(out) != "rounds 2000\n" {
 			t.Fatalf("%v: %v\n%s", mode, err, out)
 		}
@@ -1108,14 +1338,20 @@ int main(int argc, char **argv) {
 
 // TestDebuggerTable holds the table a debug build publishes for a
 // debugger's script to the runtime it describes: a task parked on a
-// channel is on the list, parked, and the frame pointer and return
-// address its saved context holds at the published offsets lead, frame
-// by frame, by the walk the script makes, to the task's own function.
+// channel is on the list, parked; the switch's caller resumes past the
+// saved return address and below its own frame; and the frame pointer
+// and return address its saved context holds at the published offsets
+// lead, frame by frame, by the walk the script makes, to the task's
+// own function.
 func TestDebuggerTable(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("the walk is the one lldb's and gdb's script makes; on Windows cdb unwinds, since x86-64's frame pointers make no chain there")
+	}
+
 	probe := `#include "internal.h"
 #include <stdio.h>
 #include <string.h>
-enum { far = 256, deepest = 16, frame_align = 16 };
+enum { reach = 256, deepest = 16, frame_align = 16 };
 static sn_chan *ch;
 static __attribute__((noinline)) void receiver(void *arg) {
     (void)arg;
@@ -1146,10 +1382,15 @@ int main(int argc, char **argv) {
     }
 
     uintptr_t sp = word(found + (uintptr_t)d->sp), fp = word(sp + (uintptr_t)d->saved_fp), last = sp;
+    if (d->resumed_sp <= d->saved_pc || fp < sp + (uintptr_t)d->resumed_sp) {
+        printf("the switch's caller resumes at %d, not between the saved return address and its frame\n", (int)d->resumed_sp);
+        return 1;
+    }
+
     bool reached = false;
     for (int i = 0; i < deepest && fp != 0 && fp % frame_align == 0 && fp > last && fp - sp < (uintptr_t)d->stack_room; i++) {
         uintptr_t ret = word(fp + sizeof(uintptr_t));
-        if (ret > (uintptr_t)receiver && ret - (uintptr_t)receiver < far) {
+        if (ret > (uintptr_t)receiver && ret - (uintptr_t)receiver < reach) {
             reached = true;
         }
 
@@ -1170,9 +1411,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer") // as every build compiles the runtime, which x86-64's compilers otherwise drop the frame pointer from
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	if err != nil || string(out) != "reached\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1248,9 +1487,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	if err != nil || string(out) != "runs 20000\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1285,9 +1522,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	var ms int
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -1306,14 +1541,14 @@ int main(int argc, char **argv) {
 // go.
 func TestWorkersBlockedInRead(t *testing.T) {
 	probe := `#include "internal.h"
+#include "probe.h"
 #include <stdio.h>
-#include <unistd.h>
 static int fds[2];
 static _Atomic int64_t ran_at;
 static void reader(void *arg) {
     (void)arg;
     char b;
-    (void)read(fds[0], &b, 1); // blocks in the system, holding its worker
+    (void)probe_read(fds[0], &b, 1); // blocks in the system, holding its worker
 }
 static void flag(void *arg) {
     (void)arg;
@@ -1321,7 +1556,7 @@ static void flag(void *arg) {
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    if (pipe(fds) != 0) {
+    if (probe_pipe(fds) != 0) {
         return 1;
     }
 
@@ -1339,7 +1574,7 @@ int main(int argc, char **argv) {
 
     int64_t at = atomic_load(&ran_at);
     for (int64_t i = 0; i < n; i++) {
-        (void)write(fds[1], "x", 1); // the readers go
+        (void)probe_write(fds[1], "x", 1); // the readers go
     }
 
     printf("ran after %lld ms\n", at == 0 ? -1LL : (long long)((at - start) / 1000000));
@@ -1347,9 +1582,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	var ms int
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -1397,9 +1630,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	var code int
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -1411,20 +1642,21 @@ int main(int argc, char **argv) {
 }
 
 // TestMonitorMovesStaleSlot has the main task wake a task into its
-// worker's slot and then compute for fifty milliseconds without
-// parking, while chains of tasks, each spawning the next before it
-// ends, keep every other worker's own queue full, so that none runs out
-// of tasks and takes the slot as a thief: the task runs only once the
+// worker's slot and then compute without parking until the task has
+// run, while chains of tasks, each spawning the next before it ends,
+// keep every other worker's own queue full, so that none runs out of
+// tasks and takes the slot as a thief: the task runs only once the
 // monitor has moved it to the inject queue, at its first look at which
 // the worker has switched to no task since the look before, and a busy
-// worker takes it from there at one of its looks, within a few
-// milliseconds on a quiet machine and well within the fifty the main
-// task computes on a loaded one. Without the move it would wait for the
-// main task to park, fifty milliseconds on.
+// worker takes it from there at one of its looks. Without the move the
+// task would run only once the main task parked, which it never does
+// while the task has not run, until two seconds pass, so the move is
+// what a run within them shows; how soon is printed, a few
+// milliseconds on a quiet machine, and not held to a figure, since a
+// shared runner can stall a whole machine for longer than that.
 func TestMonitorMovesStaleSlot(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
-#include <unistd.h>
 static sn_chan *go;
 static _Atomic int64_t ran_at;
 static _Atomic bool stop;
@@ -1450,7 +1682,7 @@ int main(int argc, char **argv) {
     go = sn_chan_make(sizeof(int64_t), 0, NULL, "probe");
     sn_spawn(waiter, NULL, 0, SN_UNBOUNDED);
     sn_sleep(1000000); // the waiter parks on its receive
-    int64_t n = 2 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    int64_t n = 2 * sn_cores();
     for (int64_t i = 0; i < n; i++) {
         sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
     }
@@ -1459,11 +1691,11 @@ int main(int argc, char **argv) {
     int64_t one = 1;
     int64_t woke = sn_time_mono();
     sn_chan_send(go, &one); // the waiter wakes into this worker's slot
-    while (sn_time_mono() - woke < 50000000) { // computing, never parking
+    int64_t at;
+    while ((at = atomic_load(&ran_at)) == 0 && sn_time_mono() - woke < 2000000000) { // computing, never parking
     }
 
     atomic_store(&stop, true);
-    int64_t at = atomic_load(&ran_at);
     printf("ran after %lld ms\n", at == 0 ? -1LL : (long long)((at - woke) / 1000000));
     sn_sleep(5000000); // the chains end
     while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
@@ -1476,17 +1708,17 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	var ms int
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 
-	if _, err := fmt.Sscanf(string(out), "ran after %d ms", &ms); err != nil || ms < 0 || ms > 40 {
-		t.Fatalf("the slot's task ran after %d ms, wanted well within the 50 the sender computes: %s", ms, out)
+	if _, err := fmt.Sscanf(string(out), "ran after %d ms", &ms); err != nil || ms < 0 {
+		t.Fatalf("the slot's task did not run while the sender computed: %s", out)
 	}
+
+	t.Logf("the slot's task ran after %d ms", ms)
 }
 
 // TestRingUnderContention has eight tasks send fifty thousand values
@@ -1566,9 +1798,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	want := fmt.Sprintf("sum %d count %d over 0\n", 8*50000*50001/2, 8*50000)
 	if err != nil || string(out) != want {
 		t.Fatalf("%v\n%s", err, out)
@@ -1634,9 +1864,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	if err != nil || string(out) != "got 6 again 0 woke 3 dropped 7\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1688,9 +1916,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	out, err := exec.CommandContext(ctx, bin).CombinedOutput()
-	cancel()
+	out, err := runProbe(bin)
 	if err != nil || string(out) != "taken 20000\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1783,16 +2009,9 @@ int main(int argc, char **argv) {
 // monitor's look hears of the connection; without it the accepting task
 // would wait for ever, and the test's alarm would end it.
 func TestSocketsWithEveryWorkerBusy(t *testing.T) {
-	probe := `#define _GNU_SOURCE
-#define _DARWIN_C_SOURCE
-#include "internal.h"
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <pthread.h>
+	probe := `#include "internal.h"
+#include "probe.h"
 #include <stdio.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
 static _Atomic bool accepted;
 static int64_t listener, port;
 static sn_chan *done;
@@ -1816,20 +2035,16 @@ static void serve(void *arg) {
 }
 static void *client(void *arg) {
     (void)arg;
-    struct timespec pause = {0, 300000000};
-    nanosleep(&pause, NULL);
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
-    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (connect(s, (struct sockaddr *)&to, sizeof to) != 0) {
-        perror("connect");
+    sn_sleep_ns(300000000);
+    if (probe_connect_loopback(port) == PROBE_NO_SOCKET) {
+        puts("connect failed");
     }
 
     return NULL;
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    alarm(20);
+    probe_alarm(20);
     sn_string call = SN_STR("", 0);
     if (sn_net_listen(SN_STR("127.0.0.1", 9), 0, &listener, &port, &call) != 0) {
         puts("listen failed");
@@ -1838,16 +2053,15 @@ int main(int argc, char **argv) {
 
     done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     sn_spawn(serve, NULL, 0, SN_UNBOUNDED);
-    int64_t n = 4 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    int64_t n = 4 * sn_cores();
     for (int64_t i = 0; i < n; i++) {
         sn_spawn(chain, NULL, 0, SN_UNBOUNDED);
     }
 
-    pthread_t id;
-    pthread_create(&id, NULL, client, NULL);
+    probe_thread id = probe_thread_start(client, NULL);
     int64_t code;
     sn_chan_recv(done, &code);
-    pthread_join(id, NULL);
+    probe_thread_join(id);
     printf("accepted: %lld\n", (long long)code);
     while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
         sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
@@ -1869,6 +2083,73 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestKeeperRestsOnUnwaitedEvents holds the keeper to resting while
+// the sockets' poller holds events no task waits for: a connection
+// accepted and left unread, with data in it and room to send, while the
+// main task sleeps half a second. The keeper's wait ends on those
+// events, and a keeper that left them in the poller would wait again,
+// end at once and spin through the sleep, using a second of the
+// processor for each second of it.
+func TestKeeperRestsOnUnwaitedEvents(t *testing.T) {
+	probe := `#include "internal.h"
+#include "probe.h"
+#include <stdio.h>
+static int64_t listener, port;
+static sn_chan *done;
+static void serve(void *arg) {
+    (void)arg;
+    int64_t conn = -1;
+    int64_t code = sn_net_accept(listener, &conn);
+    sn_chan_send(done, &code);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    probe_alarm(20);
+    sn_string call = SN_STR("", 0);
+    if (sn_net_listen(SN_STR("127.0.0.1", 9), 0, &listener, &port, &call) != 0) {
+        puts("listen failed");
+        return 1;
+    }
+
+    done = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
+    sn_spawn(serve, NULL, 0, SN_UNBOUNDED);
+    probe_socket s = probe_connect_loopback(port);
+    if (s == PROBE_NO_SOCKET) {
+        puts("connect failed");
+        return 1;
+    }
+
+    int64_t code;
+    sn_chan_recv(done, &code);
+    if (probe_send(s, "abc", 3) != 3) {
+        puts("send failed");
+        return 1;
+    }
+
+    int64_t before = probe_cpu_ns() / 1000;
+    sn_sleep(500000000);
+    int64_t used = probe_cpu_ns() / 1000 - before;
+    printf("accepted: %lld\n", (long long)code);
+    if (used > 150000) {
+        printf("the sleep used %lld µs of the processor\n", (long long)used);
+    }
+
+    sn_chan_drop(&done, SN_CHAN_BOTH);
+    probe_close_socket(s);
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	if string(out) != "accepted: 0\n" {
+		t.Fatalf("got %q, want the connection accepted and the keeper at rest", out)
+	}
+}
+
 // TestLookupsOffTheWorkers holds lookups to running beside the workers:
 // a name server that does not answer, here a getaddrinfo of the test's
 // own that blocks until the test lets it go, which the linker takes
@@ -1881,29 +2162,48 @@ func TestLookupsOffTheWorkers(t *testing.T) {
 	probe := `#define _GNU_SOURCE
 #define _DARWIN_C_SOURCE
 #include "internal.h"
-#include <errno.h>
-#include <netdb.h>
-#include <pthread.h>
+#include "probe.h"
 #include <stdio.h>
-#include <time.h>
-#include <unistd.h>
-static pthread_mutex_t gate_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t gate_cv = PTHREAD_COND_INITIALIZER;
+#if !defined(_WIN32)
+#include <netdb.h>
+#endif
+static sn_mutex gate_mu = SN_MUTEX_INIT;
+static sn_cond gate_cv = SN_COND_INIT;
 static bool gate_open;
+static void wait_for_gate(void) {
+    sn_mutex_lock(&gate_mu);
+    while (!gate_open) {
+        sn_cond_wait(&gate_cv, &gate_mu);
+    }
+
+    sn_mutex_unlock(&gate_mu);
+}
+#if defined(_WIN32)
+// The runtime calls the system's resolver through its slot of the table
+// of imports, which this object defines, so that the linker takes it
+// over the system library's.
+static INT WSAAPI held_lookup(PCWSTR node, PCWSTR service, const ADDRINFOW *hints, PADDRINFOW *res) {
+    (void)node, (void)service, (void)hints;
+    *res = NULL;
+    wait_for_gate();
+    return EAI_NONAME;
+}
+static VOID WSAAPI held_free(PADDRINFOW ai) {
+    (void)ai;
+}
+void *__imp_GetAddrInfoW = (void *)held_lookup;
+void *__imp_FreeAddrInfoW = (void *)held_free;
+#else
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     (void)node, (void)service, (void)hints;
     *res = NULL;
-    pthread_mutex_lock(&gate_mu);
-    while (!gate_open) {
-        pthread_cond_wait(&gate_cv, &gate_mu);
-    }
-
-    pthread_mutex_unlock(&gate_mu);
+    wait_for_gate();
     return EAI_NONAME;
 }
 void freeaddrinfo(struct addrinfo *ai) {
     (void)ai;
 }
+#endif
 static sn_chan *results;
 static sn_chan *computed;
 static void look(void *arg) {
@@ -1925,8 +2225,8 @@ static void compute(void *arg) {
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    alarm(30);
-    int64_t n = 2 * (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+    probe_alarm(30);
+    int64_t n = 2 * sn_cores();
     results = sn_chan_make(sizeof(int64_t), n + 1, NULL, "probe");
     computed = sn_chan_make(sizeof(int64_t), 1, NULL, "probe");
     for (int64_t i = 0; i < n; i++) {
@@ -1943,10 +2243,10 @@ int main(int argc, char **argv) {
     int64_t code;
     sn_chan_recv(results, &code);
     printf("first back: %s\n", code == SN_NET_TIMED_OUT ? "timed out" : "something else");
-    pthread_mutex_lock(&gate_mu);
+    sn_mutex_lock(&gate_mu);
     gate_open = true;
-    pthread_cond_broadcast(&gate_cv);
-    pthread_mutex_unlock(&gate_mu);
+    sn_cond_broadcast(&gate_cv);
+    sn_mutex_unlock(&gate_mu);
     int64_t none = 0;
     for (int64_t i = 0; i < n; i++) {
         sn_chan_recv(results, &code);
@@ -1996,10 +2296,7 @@ func buildProbe(t *testing.T, dir, src string) string {
 // debug build's, or a release build's for a probe that measures.
 func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
 	t.Helper()
-	cc := os.Getenv("CC")
-	if cc == "" {
-		cc = "cc"
-	}
+	cc := probeCompiler()
 
 	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("no C compiler")
@@ -2015,21 +2312,135 @@ func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "probe.c"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
+	for name, text := range map[string]string{"probe.c": src, "probe.h": probeHeader} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	bin := filepath.Join(dir, "probe")
-	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off", "-pthread"}
-	args = append(args, mode...)
+	bin := probePath(dir)
+	args := []string{"-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-tautological-compare", "-fwrapv", "-fno-strict-aliasing", "-ffp-contract=off"}
+	args = append(append(args, systemProbeFlags()...), mode...)
 	args = append(args, "-o", bin, filepath.Join(dir, "probe.c"))
-	args = append(args, Paths(dir)...)
-	args = append(args, "-lm")
+	args = append(append(args, Paths(dir)...), systemProbeSources(t, dir)...)
+	if runtime.GOOS != windowsOS {
+		args = append(args, posixProbeLibs...)
+	}
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
 
 	return bin
+}
+
+// runProbe runs the probe bin with args and returns what it wrote, its
+// output and its errors together. A probe still running at probeTimeout
+// is a hang, a lost wake: it is reported with each of its threads'
+// stacks, as the system's debugger reads them, and then ended.
+func runProbe(bin string, args ...string) ([]byte, error) {
+	var out bytes.Buffer
+	cmd := exec.Command(bin, args...)
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return out.Bytes(), err
+	case <-time.After(probeTimeout):
+		stacks := threadStacks(cmd.Process.Pid)
+		cmd.Process.Kill()
+		<-done
+		return out.Bytes(), fmt.Errorf("still running after %v, its threads:\n%s", probeTimeout, stacks)
+	}
+}
+
+// threadStacks returns the stack of each thread of the process pid, as
+// the system's debugger prints them, or why it could not read them.
+func threadStacks(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), stacksTimeout)
+	defer cancel()
+	p := strconv.Itoa(pid)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case windowsOS:
+		cmd = exec.CommandContext(ctx, windowsDebugger(), "-p", p, "-c", cdbStacks)
+	case darwinOS:
+		cmd = exec.CommandContext(ctx, lldbName, "--batch", "-p", p, "-o", lldbStacks)
+	default:
+		cmd = exec.CommandContext(ctx, gdbName, "-batch", "-p", p, "-ex", gdbStacks)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("%s: %v\n%s", cmd.Path, err, out)
+	}
+
+	return string(out)
+}
+
+// windowsDebugger returns the cdb on the path, else the one Windows'
+// SDK installs for the processor the tests run on.
+func windowsDebugger() string {
+	if path, err := exec.LookPath(cdbName); err == nil {
+		return path
+	}
+
+	parts := append([]string{os.Getenv(programFilesX86)}, windowsKitDebuggers...)
+	return filepath.Join(append(parts, kitProcessors[runtime.GOARCH], cdbName+windowsSuffix)...)
+}
+
+// probeCompiler returns the C compiler a probe is built with: the one
+// CC names, else the system's.
+func probeCompiler() string {
+	if cc := os.Getenv("CC"); cc != "" {
+		return cc
+	}
+
+	if runtime.GOOS == windowsOS {
+		return probeWindowsCC
+	}
+
+	return probeCC
+}
+
+// probePath returns the path of a probe's binary in dir.
+func probePath(dir string) string {
+	if runtime.GOOS == windowsOS {
+		return filepath.Join(dir, probeBinary+windowsSuffix)
+	}
+
+	return filepath.Join(dir, probeBinary)
+}
+
+// systemProbeFlags returns the options a probe's compile and link take
+// on the system the tests run on.
+func systemProbeFlags() []string {
+	if runtime.GOOS == windowsOS {
+		return windowsProbeFlags
+	}
+
+	return posixProbeFlags
+}
+
+// systemProbeSources writes into dir the sources a probe is built with
+// on the system the tests run on, beside its own, and returns their
+// paths: windowsBinary's on Windows, none elsewhere.
+func systemProbeSources(t *testing.T, dir string) []string {
+	t.Helper()
+	if runtime.GOOS != windowsOS {
+		return nil
+	}
+
+	path := filepath.Join(dir, "windows_binary.c")
+	if err := os.WriteFile(path, []byte(windowsBinary), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return []string{path}
 }
 
 // probeLines runs a probe built against the whole runtime with input
@@ -2904,7 +3315,7 @@ func TestRandom(t *testing.T) {
 	// or take 256: a count more than 1,536 away, six times that, is a
 	// generator that is not even.
 	probe := `#include "internal.h"
-#include <pthread.h>
+#include "probe.h"
 #include <stdio.h>
 static uint64_t first[4];
 static int ones[4];
@@ -2924,9 +3335,9 @@ int main(int argc, char **argv) {
         uint64_t lo, hi = sn_math__rand_mul64(pairs[i][0], pairs[i][1], &lo);
         printf("%llx %llx\n", (unsigned long long)hi, (unsigned long long)lo);
     }
-    pthread_t th[4];
-    for (intptr_t k = 0; k < 4; k++) pthread_create(&th[k], NULL, draw, (void *)k);
-    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    probe_thread th[4];
+    for (intptr_t k = 0; k < 4; k++) th[k] = probe_thread_start(draw, (void *)k);
+    for (int k = 0; k < 4; k++) probe_thread_join(th[k]);
     int same = 0, off = 0;
     for (int a = 0; a < 4; a++) {
         for (int b = a + 1; b < 4; b++) same += first[a] == first[b];
@@ -2980,7 +3391,7 @@ int main(int argc, char **argv) {
 // block of no bytes is a block.
 func TestAllocCounts(t *testing.T) {
 	probe := `#include "internal.h"
-#include <pthread.h>
+#include "probe.h"
 #include <stdio.h>
 static void *work(void *arg) {
     (void)arg;
@@ -2990,9 +3401,9 @@ static void *work(void *arg) {
 int main(void) {
     int64_t b0, n0, b1, n1, b2, n2;
     sn_alloc_counts(&b0, &n0);
-    pthread_t th[4];
-    for (int k = 0; k < 4; k++) pthread_create(&th[k], NULL, work, NULL);
-    for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+    probe_thread th[4];
+    for (int k = 0; k < 4; k++) th[k] = probe_thread_start(work, NULL);
+    for (int k = 0; k < 4; k++) probe_thread_join(th[k]);
     sn_alloc_counts(&b1, &n1);
     sn_free(sn_alloc(0));
     sn_free(sn_alloc(1000));
@@ -3027,9 +3438,8 @@ func TestAllocScales(t *testing.T) {
 	}
 
 	probe := `#include "snello.h"
-#include <pthread.h>
+#include "probe.h"
 #include <stdio.h>
-#include <time.h>
 static void *work(void *arg) {
     (void)arg;
     void *keep[64] = {0};
@@ -3042,13 +3452,11 @@ static void *work(void *arg) {
     return NULL;
 }
 static double spent(int threads) {
-    struct timespec a, b;
-    pthread_t th[8];
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &a);
-    for (int k = 0; k < threads; k++) pthread_create(&th[k], NULL, work, NULL);
-    for (int k = 0; k < threads; k++) pthread_join(th[k], NULL);
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &b);
-    return (double)(b.tv_sec - a.tv_sec) + (double)(b.tv_nsec - a.tv_nsec) / 1e9;
+    probe_thread th[8];
+    int64_t a = probe_cpu_work();
+    for (int k = 0; k < threads; k++) th[k] = probe_thread_start(work, NULL);
+    for (int k = 0; k < threads; k++) probe_thread_join(th[k]);
+    return (double)(probe_cpu_work() - a);
 }
 int main(void) {
     spent(1);
@@ -3311,7 +3719,8 @@ int main(void) {
 
 	var in strings.Builder
 	for _, s := range texts {
-		in.WriteString(hex.EncodeToString([]byte(s)) + "\n")
+		in.WriteString(hex.EncodeToString([]byte(s)))
+		in.WriteByte('\n')
 	}
 
 	got := probeLines(t, "unquote", probe, in.String())

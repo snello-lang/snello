@@ -15,7 +15,6 @@
 
 #ifdef SN_DEBUG
 
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 
@@ -44,7 +43,7 @@ static size_t held_bytes;
 
 // One lock covers the list, the counts and the quarantine, which every
 // task shares.
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static sn_mutex lock = SN_MUTEX_INIT;
 
 // The header adds 32 bytes, so a block of 993 to 1024 bytes, the
 // heap's largest class in a release build, is the system's in this one.
@@ -55,7 +54,7 @@ void *sn_alloc(size_t n) {
     }
 
     sn_alloc_note(n);
-    pthread_mutex_lock(&lock);
+    sn_mutex_lock(&lock);
     b->size = n;
     b->magic = LIVE;
     b->prev = NULL;
@@ -67,7 +66,7 @@ void *sn_alloc(size_t n) {
     first = b;
     live_blocks++;
     live_bytes += (int64_t)n;
-    pthread_mutex_unlock(&lock);
+    sn_mutex_unlock(&lock);
     return b + 1;
 }
 
@@ -87,7 +86,7 @@ void sn_free(void *p) {
     }
 
     block *b = (block *)p - 1;
-    pthread_mutex_lock(&lock);
+    sn_mutex_lock(&lock);
     if (b->magic == DEAD) {
         sn_panic(SN_STR("a block was released twice", 26));
     }
@@ -118,7 +117,7 @@ void sn_free(void *p) {
         evict(i); // oldest first, until the quarantine is under its limit
     }
 
-    pthread_mutex_unlock(&lock);
+    sn_mutex_unlock(&lock);
 }
 
 _Noreturn void sn_released(const char *what) {

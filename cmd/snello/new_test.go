@@ -26,7 +26,7 @@ func TestNewModule(t *testing.T) {
 		t.Fatalf("new exited %d and said %q", code, said.String())
 	}
 
-	want := "snello new: wrote " + dir + ", a module with a program and its test:\n\tcd " + dir + "\n\tsnello build .\n\tsnello run .\n\tsnello test .\n"
+	want := "snello new: wrote " + dir + ", a module with a program and its test:\n\tcd " + shellPath(dir) + "\n\tsnello build .\n\tsnello run .\n\tsnello test .\n"
 	if said.String() != want {
 		t.Errorf("new said %q, want %q", said.String(), want)
 	}

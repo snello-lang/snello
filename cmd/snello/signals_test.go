@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -59,6 +61,7 @@ func TestWorkDir(t *testing.T) {
 // ends by an interrupt, a hangup or a termination as their default
 // would, and by a quit with its code, no goroutine dump.
 func TestWorkDirSignal(t *testing.T) {
+	needSignals(t)
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT} {
 		if !slices.Contains(caughtSignals, os.Signal(sig)) {
 			continue // ignored by whatever started the tests, and so by the helper, which TestIgnoredSignal covers
@@ -105,6 +108,7 @@ func TestWorkDirSignal(t *testing.T) {
 // program, the process outlives it and reports the program's end, and
 // the directory is removed.
 func TestWorkDirForward(t *testing.T) {
+	needSignals(t)
 	cmd := helper(t, "forward")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -135,6 +139,7 @@ func TestWorkDirForward(t *testing.T) {
 // program as run does: the program gets the termination, and the
 // command outlives it, reports its end and leaves no file behind.
 func TestRunForward(t *testing.T) {
+	needSignals(t)
 	if testing.Short() {
 		t.Skip("builds a program")
 	}
@@ -175,6 +180,7 @@ func TestRunForward(t *testing.T) {
 // and a start that fails ends the process by the signal it held, with
 // the directory removed.
 func TestStartWindow(t *testing.T) {
+	needSignals(t)
 	if err := helper(t, "window").Run(); err != nil {
 		t.Errorf("a signal in the start window: %v", err)
 	}
@@ -210,6 +216,7 @@ func TestStartWindow(t *testing.T) {
 // a signal goes on ignoring it, and a termination still ends it,
 // directory removed.
 func TestIgnoredSignal(t *testing.T) {
+	needSignals(t)
 	hold := helper(t, "hold")
 	cmd := exec.Command("sh", "-c", `trap "" HUP; exec "$0" "$@"`, hold.Path)
 	cmd.Args = append(cmd.Args, hold.Args[1:]...)
@@ -253,6 +260,7 @@ func TestIgnoredSignal(t *testing.T) {
 // TestRaise ends a process by an interrupt it raises on itself, as a
 // shell must see it end.
 func TestRaise(t *testing.T) {
+	needSignals(t)
 	err := helper(t, "raise").Run()
 	if sig, ok := signalOf(err); !ok || sig != syscall.SIGINT {
 		t.Errorf("the helper ended with %v, want an interrupt", err)
@@ -291,7 +299,7 @@ func TestHelperProcess(t *testing.T) {
 			}
 
 			w.start()
-			syscall.Kill(os.Getpid(), syscall.SIGTERM) // before the program exists: held, then passed on
+			signalSelf(syscall.SIGTERM) // before the program exists: held, then passed on
 			program := exec.Command("sleep", "60")
 			if err := program.Start(); err != nil {
 				os.Exit(exitFailure)
@@ -314,7 +322,7 @@ func TestHelperProcess(t *testing.T) {
 
 		os.Stdout.WriteString(w.path + "\n")
 		w.start()
-		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		signalSelf(syscall.SIGTERM)
 		time.Sleep(100 * time.Millisecond) // the signal reaches the guard, which holds it
 		w.hand(nil)
 		time.Sleep(time.Minute)
@@ -330,6 +338,40 @@ func TestHelperProcess(t *testing.T) {
 		os.Stdout.WriteString(w.path + "\n")
 		time.Sleep(time.Minute)
 		os.Exit(exitFailure)
+	}
+}
+
+// TestSignalSelf holds signalSelf to delivering a signal to the command
+// itself where the system has signals, and to sending none on Windows.
+func TestSignalSelf(t *testing.T) {
+	if goruntime.GOOS == windows {
+		if signalSelf(syscall.SIGINT) {
+			t.Error("signalSelf sent a signal on Windows, which has none")
+		}
+
+		return
+	}
+
+	got := make(chan os.Signal, 1)
+	signal.Notify(got, syscall.SIGHUP)
+	defer signal.Stop(got)
+	if !signalSelf(syscall.SIGHUP) {
+		t.Fatal("signalSelf could not send SIGHUP")
+	}
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Error("SIGHUP never came")
+	}
+}
+
+// needSignals skips a test of the signals a terminal and a shell send,
+// which Windows has none of.
+func needSignals(t *testing.T) {
+	t.Helper()
+	if goruntime.GOOS == windows {
+		t.Skip("Windows has no signals")
 	}
 }
 

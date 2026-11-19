@@ -2511,7 +2511,7 @@ func main() {
 			Out: "sizes 10 bad 0\n",
 		},
 		{
-			Name: "read-whole", // os.ReadToString into one block of the file's size: an empty file, one byte, either side of the 512 bytes a file without a size starts from, a page, and a megabyte and three, each read back as written; /dev/null, which has no size
+			Name: "read-whole", // os.ReadToString into one block of the file's size: an empty file, one byte, either side of the 512 bytes a file without a size starts from, a page, and a megabyte and three, each read back as written; the system's null device, which has no size
 			Src: `package main
 import ("fmt"; "os"; "strings")
 func main() {
@@ -2527,7 +2527,7 @@ func main() {
 		if got == want && len(got) == n { same += 1 }
 	}
 	fmt.Println("same", same, "of", len(sizes))
-	fmt.Println(len(os.ReadToString("/dev/null").Expect("read /dev/null")))
+	fmt.Println(len(os.ReadToString("` + os.DevNull + `").Expect("read the null device")))
 	os.RemoveAll(ref dir).Expect("remove")
 }
 `,
@@ -2597,9 +2597,20 @@ func main() {
 	big := make([]byte, 64 << 20) // made before the deadline is set, which then bounds the write alone: filling 64 MB can outlast 100 ms on a loaded machine
 	s := net.Dial("127.0.0.1", port).Expect("dial stuck")
 	s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)).Expect("write deadline")
-	match s.Write(ref big) {
-		Ok(n) => fmt.Println("wrote", n),
-		Err(e) => fmt.Println("write timed out", e.Kind() == io.TimedOut, e.Written() > 0, e.Written() < len(big)),
+	written := 0 // a system that takes a whole 64 MB into a peer's buffers holds a later write instead
+	held := false
+	for round := 0; round < 64 && !held; round++ {
+		match s.Write(ref big) {
+			Ok(n) => written += n,
+			Err(e) => {
+				fmt.Println("write timed out", e.Kind() == io.TimedOut, written+e.Written() > 0, e.Written() < len(big))
+				held = true
+			},
+		}
+	}
+
+	if !held {
+		fmt.Println("wrote", written)
 	}
 
 	d := net.DialTimeout("127.0.0.1", l2.Port(), time.Second)

@@ -42,7 +42,6 @@
 
 #include "internal.h"
 
-#include <sched.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +109,7 @@ static void wheel_init(int i) {
 // that the others' pages stay untouched; sn_timers_add makes one more
 // and counts it in use, for a worker added.
 void sn_timers_start(int64_t nworkers, int64_t most) {
-    wheels_of.at = aligned_alloc(SN_CACHE_LINE, (size_t)most * sizeof *wheels_of.at);
+    wheels_of.at = sn_aligned_alloc(SN_CACHE_LINE, (size_t)most * sizeof *wheels_of.at);
     if (wheels_of.at == NULL) {
         sn_panic(SN_STR("out of memory", 13));
     }
@@ -200,7 +199,7 @@ static void wheel_lock(wheel *w) {
         if (i < spin_tries) {
             sn_spin_hint();
         } else {
-            sched_yield();
+            sn_yield();
         }
     }
 }
@@ -638,7 +637,7 @@ static bool timer_stop(sn_chan *c) {
     wheel_lock(w);
     while (w->firing > 0) {
         wheel_unlock(w);
-        sched_yield();
+        sn_yield();
         wheel_lock(w);
     }
 
@@ -735,7 +734,7 @@ void sn_timers_stop(void) {
         wheel_lock(w);
         while (w->firing > 0) {
             wheel_unlock(w);
-            sched_yield();
+            sn_yield();
             wheel_lock(w);
         }
 

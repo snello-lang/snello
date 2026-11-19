@@ -23,41 +23,149 @@
 
 #include "internal.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+// winsock2.h in a block of its own, as the others need it first.
+#include <winsock2.h>
+
+#include <mswsock.h>
+#include <winternl.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32")
+#pragma comment(lib, "ntdll")
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #if defined(__APPLE__)
 #include <sys/event.h>
 #include <sys/sysctl.h>
-#else
+#elif !defined(_WIN32)
 #include <sys/epoll.h>
+#endif
+
+#if defined(_WIN32)
+// The AFD driver's poll, the ioctl that asks it when a socket is ready.
+#define IOCTL_AFD_POLL 0x00012024
+
+// The AFD driver's events: data or a connection to accept, the peer
+// gone or reset, the socket closed here, room to send, a connect that
+// failed.
+enum {
+    afd_poll_receive = 0x0001,
+    afd_poll_send = 0x0004,
+    afd_poll_disconnect = 0x0008,
+    afd_poll_abort = 0x0010,
+    afd_poll_local_close = 0x0020,
+    afd_poll_accept = 0x0080,
+    afd_poll_connect_fail = 0x0100,
+    afd_ended = afd_poll_abort | afd_poll_local_close | afd_poll_connect_fail,
+    afd_read = afd_poll_receive | afd_poll_accept | afd_poll_disconnect | afd_ended,
+    afd_write = afd_poll_send | afd_ended,
+};
 #endif
 
 // last_error reads errno through a call the compiler can neither
 // inline nor merge: glibc declares the function behind errno const, so
 // a loop that parks between two reads could otherwise read the errno of
 // the thread the task left (sched.c says why a task may move).
+#if defined(_WIN32)
+// On Windows a socket call reports its failure through WSAGetLastError,
+// as its own code, which is read as the error number the same failure
+// has on the other systems, so that io.Kind and the messages read it
+// alike.
+static int errno_of_wsa(int code) {
+    switch (code) {
+    case 0:
+        return 0;
+    case WSAEWOULDBLOCK:
+        return EWOULDBLOCK;
+    case WSAEINPROGRESS:
+        return EINPROGRESS;
+    case WSAEALREADY:
+        return EALREADY;
+    case WSAEISCONN:
+        return EISCONN;
+    case WSAENOTCONN:
+        return ENOTCONN;
+    case WSAECONNREFUSED:
+        return ECONNREFUSED;
+    case WSAECONNRESET:
+        return ECONNRESET;
+    case WSAECONNABORTED:
+        return ECONNABORTED;
+    case WSAESHUTDOWN:
+        return EPIPE;
+    case WSAETIMEDOUT:
+        return ETIMEDOUT;
+    case WSAEADDRINUSE:
+        return EADDRINUSE;
+    case WSAEADDRNOTAVAIL:
+        return EADDRNOTAVAIL;
+    case WSAEAFNOSUPPORT:
+        return EAFNOSUPPORT;
+    case WSAEPROTONOSUPPORT:
+        return EPROTONOSUPPORT;
+    case WSAENETUNREACH:
+        return ENETUNREACH;
+    case WSAEHOSTUNREACH:
+        return EHOSTUNREACH;
+    case WSAEINTR:
+        return EINTR;
+    case WSAEMFILE:
+        return EMFILE;
+    case WSAENOBUFS:
+        return ENOBUFS;
+    case WSAEACCES:
+        return EACCES;
+    case WSAEINVAL:
+        return EINVAL;
+    case WSAENOTSOCK:
+        return ENOTSOCK;
+    case WSAEMSGSIZE:
+        return EMSGSIZE;
+    case WSAENETRESET:
+        return ENETRESET;
+    case WSAENETDOWN:
+        return ENETDOWN;
+    case WSAEOPNOTSUPP:
+        return EOPNOTSUPP;
+    case WSAENOPROTOOPT:
+        return ENOPROTOOPT;
+    }
+
+    return EIO;
+}
+
+static __attribute__((noinline)) int last_error(void) {
+    __asm__ volatile("" ::: "memory");
+    return errno_of_wsa(WSAGetLastError());
+}
+#else
 static __attribute__((noinline)) int last_error(void) {
     __asm__ volatile("" ::: "memory");
     return errno;
 }
+#endif
 
 // SN_SOCK_FLAGS makes a socket non-blocking and closed on exec as it is
 // made, where the system can: Linux takes both as flags to socket and
 // accept4, as Go asks for them, so a socket is never open across an exec
 // for a moment and costs no further call. Darwin has neither flag, and
 // prepare sets both with fcntl, as Go does there.
-#if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
+#if defined(_WIN32)
+#define SN_SOCK_FLAGS 0 // made not inherited by NEW_SOCKET, and non-blocking by prepare
+#elif defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
 #define SN_SOCK_FLAGS (SOCK_NONBLOCK | SOCK_CLOEXEC)
 #else
 #define SN_SOCK_FLAGS 0
@@ -71,13 +179,17 @@ static __attribute__((noinline)) int last_error(void) {
 // the name of the call that failed, for the library's message, and NULL
 // otherwise.
 static const char *prepare(int fd) {
+#if defined(_WIN32)
+    u_long yes = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &yes) == 0 ? NULL : "ioctlsocket";
+#endif
 #if defined(__APPLE__)
     int yes = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof yes) != 0) {
         return "setsockopt";
     }
 #endif
-#if SN_SOCK_FLAGS == 0
+#if SN_SOCK_FLAGS == 0 && !defined(_WIN32)
     if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
         return "fcntl";
     }
@@ -104,12 +216,15 @@ static const char *connected(int fd) {
     }
 
     int yes = 1;
-    return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof yes) == 0 ? NULL : "setsockopt";
+    return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const void *)&yes, sizeof yes) == 0 ? NULL : "setsockopt";
 }
 
 // backlog is how many connections a listening socket keeps waiting for
 // Accept: the system's largest, as Go asks for, read once.
 static int backlog(void) {
+#if defined(_WIN32)
+    return SOMAXCONN; // Windows' own word for its largest
+#else
     static int n;
     if (n > 0) {
         return n;
@@ -135,6 +250,7 @@ static int backlog(void) {
 #endif
     n = got > 65535 ? 65535 : got; // the kernels keep it in sixteen bits
     return n;
+#endif
 }
 
 #if defined(MSG_NOSIGNAL)
@@ -143,8 +259,47 @@ static int backlog(void) {
 #define SN_NOSIGNAL 0
 #endif
 
-static pthread_mutex_t poller_mu = PTHREAD_MUTEX_INITIALIZER;
-static _Atomic int poller = -1; // made once under poller_mu, read by any thread without it
+// The socket calls that differ on Windows, where a socket is a handle a
+// Winsock call takes, made once Winsock is started, not inherited by any
+// program the process starts, and read with recv, a count that fits an
+// int at a time.
+#if defined(_WIN32)
+#define NEW_SOCKET(family)                                                                                             \
+    (sn_winsock_start() ? (int)WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, NULL, 0,                                   \
+                                          WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT)                            \
+                        : -1)
+#define CLOSE_SOCKET(s)       closesocket((SOCKET)(s))
+#define READ_SOCKET(s, p, n)  recv((SOCKET)(s), (char *)(p), (int)((n) < INT32_MAX ? (n) : INT32_MAX), 0)
+#define SEND_SOCKET(s, p, n)  send((SOCKET)(s), (const char *)(p), (int)((n) < INT32_MAX ? (n) : INT32_MAX), 0)
+#define ACCEPT_SOCKET(s)      ((int)accept((SOCKET)(s), NULL, NULL))
+#define SOCKET_ERROR_OF(code) errno_of_wsa(code)
+#else
+#define NEW_SOCKET(family)   socket(family, SOCK_STREAM | SN_SOCK_FLAGS, 0)
+#define CLOSE_SOCKET(s)      close(s)
+#define READ_SOCKET(s, p, n) read(s, p, n)
+#define SEND_SOCKET(s, p, n) send(s, p, n, SN_NOSIGNAL)
+#if SN_SOCK_FLAGS != 0
+#define ACCEPT_SOCKET(s) accept4(s, NULL, NULL, SN_SOCK_FLAGS)
+#else
+#define ACCEPT_SOCKET(s) accept(s, NULL, NULL)
+#endif
+#define SOCKET_ERROR_OF(code) (code)
+#endif
+
+#if defined(_WIN32)
+static sn_once winsock_once = SN_ONCE_INIT; // Winsock's start, before the first socket or lookup
+static bool winsock_up;
+static int winsock_code; // what Winsock's start returned, when it failed
+static bool make_port(void);
+#endif
+
+static sn_mutex poller_mu = SN_MUTEX_INIT;
+static _Atomic int poller =
+    -1; // made once under poller_mu, read by any thread without it; on Windows 0 once the port is
+#if defined(_WIN32)
+static HANDLE port; // the completion port every poll, the keeper's wake and its deadline come through, once poller is 0
+static HANDLE afd;  // the AFD driver's device the sockets are polled through, its completions on port
+#endif
 
 // waiting counts the tasks in a socket's word, which only a look at the
 // poller wakes: while it is zero no worker looks, and a program without
@@ -198,6 +353,11 @@ typedef struct {
     _Atomic int64_t wd;
     sn_deadline rt; // timer.c's, under its wheel's lock
     sn_deadline wt;
+#if defined(_WIN32)
+    HANDLE base;           // the socket the AFD driver polls: the base provider's, under any layered one
+    _Atomic(void *) rpoll; // the poll a read's wait armed and the poller has not yet taken, or NULL
+    _Atomic(void *) wpoll; // a write's
+#endif
 } poll_desc;
 
 // The descriptors are found by number in a table that never moves, so a
@@ -210,6 +370,9 @@ enum { pd_chunk = 4096, pd_chunks = 4096 };
 static _Atomic(poll_desc *) pds[pd_chunks];
 
 static poll_desc *pd_of(int fd) {
+#if defined(_WIN32)
+    fd >>= 2; // a socket's handle is a multiple of four
+#endif
     if (fd < 0 || fd >= pd_chunk * pd_chunks) {
         sn_panic(SN_STR("net: descriptor number out of range", 35));
     }
@@ -279,6 +442,145 @@ void sn_net_kept(int64_t taken) {
     }
 }
 
+#if defined(_WIN32)
+// On Windows a socket is not registered with the poller once, as on the
+// other systems, since the AFD driver's poll is one-shot: a wait that is
+// about to park arms a poll of its direction, unless one is armed, and
+// the completion port says when it completes; each poll is a block of
+// its own, so that a poll of a socket since closed, completing late,
+// names memory still there and is told from the poll of the next socket
+// with its number. This is the readiness the other systems' pollers
+// give, through the port, as the AFD driver gives it to Winsock's own
+// select.
+
+// The poll's question and its answer, as the driver reads and writes
+// them: a socket's handle, the events asked for and those that came, and
+// a status, under a timeout and a count of the sockets asked about.
+typedef struct {
+    HANDLE handle;
+    ULONG events;
+    NTSTATUS status;
+} afd_poll_handle_info;
+
+typedef struct {
+    LARGE_INTEGER timeout;
+    ULONG count;
+    ULONG exclusive;
+    afd_poll_handle_info handles[1];
+} afd_poll_info;
+
+// An afd_poll is one poll armed: the status the driver writes, the
+// question and its answer, and the socket's descriptor and direction.
+// It is the poller's own, as a registration with epoll is the kernel's,
+// so it comes from the C library and not the runtime's allocator, whose
+// count a debug build checks at exit: a poll cancelled as its socket
+// closed is freed when the port next gives it back, which may be after
+// the program's last task.
+typedef struct {
+    IO_STATUS_BLOCK iosb;
+    afd_poll_info info;
+    poll_desc *pd;
+    bool write;
+} afd_poll;
+
+// arm_poll makes sure a poll of the direction is armed on fd, and returns 0,
+// or the error number of a failure to arm one.
+static int arm_poll(int fd, bool write) {
+    poll_desc *pd = pd_of(fd);
+    _Atomic(void *) *slot = write ? &pd->wpoll : &pd->rpoll;
+    if (atomic_load(slot) != NULL) {
+        return 0;
+    }
+
+    afd_poll *p = calloc(1, sizeof *p);
+    if (p == NULL) {
+        sn_panic(SN_STR("out of memory", 13));
+    }
+
+    p->pd = pd;
+    p->write = write;
+    p->info.timeout.QuadPart = INT64_MAX;
+    p->info.count = 1;
+    p->info.handles[0].handle = pd->base;
+    p->info.handles[0].events = write ? afd_write : afd_read;
+    void *none = NULL;
+    if (!atomic_compare_exchange_strong(slot, &none, p)) { // another wait armed one meanwhile
+        free(p);
+        return 0;
+    }
+
+    NTSTATUS st = NtDeviceIoControlFile(afd, NULL, NULL, p, &p->iosb, IOCTL_AFD_POLL, &p->info, sizeof p->info,
+                                        &p->info, sizeof p->info);
+    if (st != STATUS_PENDING && !NT_SUCCESS(st)) { // a poll that completed at once completes through the port too
+        void *mine = p;
+        atomic_compare_exchange_strong(slot, &mine, NULL);
+        free(p);
+        return sn_errno_of(RtlNtStatusToDosError(st));
+    }
+
+    return 0;
+}
+
+// polled takes a poll the port completed and frees it. A poll still the
+// descriptor's armed one makes its direction ready, or takes its task
+// out to try its call again, which finds what came; one that is not
+// was cancelled as its socket closed, and wakes no one, since the
+// descriptor may be the next socket's with the number.
+static sn_task *polled(afd_poll *p, bool *claimed) {
+    poll_desc *pd = p->pd;
+    _Atomic(void *) *slot = p->write ? &pd->wpoll : &pd->rpoll;
+    void *mine = p;
+    sn_task *t = NULL;
+    if (atomic_compare_exchange_strong(slot, &mine, NULL)) {
+        t = p->write ? ready(&pd->w, &pd->wh, claimed) : ready(&pd->r, &pd->rh, claimed);
+    }
+
+    free(p);
+    return t;
+}
+
+// cancel_polls takes the polls armed on a socket about to close out of
+// its descriptor and cancels them; each still completes through the
+// port, where polled frees it. The cancel names a poll by its status
+// block, so one the port completed meanwhile, and polled freed, may name
+// a later poll that took its memory: that poll completes early, and its
+// task tries its call again and finds nothing, as after any spurious
+// wake.
+static void cancel_polls(poll_desc *pd) {
+    _Atomic(void *) *slots[2] = { &pd->rpoll, &pd->wpoll };
+    for (int i = 0; i < 2; i++) {
+        afd_poll *p = atomic_exchange(slots[i], NULL);
+        if (p != NULL) {
+            (void)CancelIoEx(afd, (OVERLAPPED *)&p->iosb);
+        }
+    }
+}
+
+void *sn_net_port(void) { return port; }
+
+int sn_net_poll(sn_task **woke, int *taken) {
+    int n = 0;
+    *taken = 0;
+    OVERLAPPED_ENTRY events[SN_POLL_EVENTS];
+    ULONG got = 0;
+    if (!GetQueuedCompletionStatusEx(port, events, SN_POLL_EVENTS, &got, 0, FALSE)) {
+        return 0;
+    }
+
+    for (ULONG i = 0; i < got; i++) {
+        if (events[i].lpCompletionKey != SN_KEY_POLL) { // the keeper's, which it gets back while it waits
+            sn_keeper_packet(events[i].lpCompletionKey);
+            continue;
+        }
+
+        bool claimed = false;
+        sn_task *t = polled((afd_poll *)events[i].lpOverlapped, &claimed);
+        take(t, claimed, woke, &n, taken);
+    }
+
+    return n;
+}
+#else
 int sn_net_poll(sn_task **woke, int *taken) {
     int n = 0;
     *taken = 0;
@@ -313,6 +615,7 @@ int sn_net_poll(sn_task **woke, int *taken) {
 #endif
     return n;
 }
+#endif
 
 int sn_net_poller(void) {
     int made = atomic_load(&poller);
@@ -320,10 +623,12 @@ int sn_net_poller(void) {
         return made;
     }
 
-    pthread_mutex_lock(&poller_mu);
+    sn_mutex_lock(&poller_mu);
     made = atomic_load(&poller);
     if (made < 0) {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+        made = sn_winsock_start() && make_port() ? 0 : -1;
+#elif defined(__APPLE__)
         made = kqueue();
         if (made >= 0 && fcntl(made, F_SETFD, FD_CLOEXEC) < 0) {
             close(made);
@@ -335,9 +640,51 @@ int sn_net_poller(void) {
         atomic_store(&poller, made);
     }
 
-    pthread_mutex_unlock(&poller_mu);
+    sn_mutex_unlock(&poller_mu);
     return made;
 }
+
+#if defined(_WIN32)
+// make_port makes the completion port and opens the AFD driver's device
+// on it, a name of the runtime's own under the driver's, as every
+// poller built on it opens one; a completion that a poll made at once
+// is still queued on the port, which the poller takes as it takes any.
+// The port lets any number of its threads run at once: with the
+// system's default, one a processor, a worker that ever looked at the
+// port counts against it while it runs tasks, and with every worker
+// busy the system would hold the keeper's deadline back.
+static bool make_port(void) {
+    port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, MAXDWORD);
+    if (port == NULL) {
+        return false;
+    }
+
+    UNICODE_STRING name;
+    RtlInitUnicodeString(&name, L"\\Device\\Afd\\Snello");
+    OBJECT_ATTRIBUTES attrs;
+    InitializeObjectAttributes(&attrs, &name, 0, NULL, NULL);
+    IO_STATUS_BLOCK iosb;
+    NTSTATUS st = NtCreateFile(&afd, SYNCHRONIZE, &attrs, &iosb, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+                               0, NULL, 0);
+    return NT_SUCCESS(st) && CreateIoCompletionPort(afd, port, SN_KEY_POLL, 0) != NULL &&
+           SetFileCompletionNotificationModes(afd, FILE_SKIP_SET_EVENT_ON_HANDLE);
+}
+
+static void winsock_start(void) {
+    WSADATA data;
+    winsock_code = WSAStartup(MAKEWORD(2, 2), &data);
+    winsock_up = winsock_code == 0;
+}
+
+bool sn_winsock_start(void) {
+    sn_once_call(&winsock_once, winsock_start);
+    if (!winsock_up) {
+        WSASetLastError(winsock_code); // why, for the caller's failure to read
+    }
+
+    return winsock_up;
+}
+#endif
 
 // expire marks a direction's deadline passed and takes out the task
 // waiting in its word, if one is, waking it to find the deadline passed.
@@ -369,7 +716,9 @@ static bool passed(int fd, bool write) {
 // call that failed, and NULL otherwise.
 static const char *watch(int fd) {
     if (sn_net_poller() < 0) { // made here when the main task makes a socket before the scheduler starts
-#if defined(__APPLE__)
+#if defined(_WIN32)
+        return "CreateIoCompletionPort";
+#elif defined(__APPLE__)
         return "kqueue";
 #else
         return "epoll_create1";
@@ -384,7 +733,22 @@ static const char *watch(int fd) {
     atomic_store(&pd->rt.home,
                  0); // the wheel of the first deadline this socket arms, not the last socket's with its number
     atomic_store(&pd->wt.home, 0);
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    // Nothing is registered: a wait arms a poll of the socket the driver
+    // knows, its base provider's, under any layered provider, as every
+    // poller over the driver asks for. A poll the last socket with the
+    // number left armed completes on its own and frees itself.
+    atomic_store(&pd->rpoll, NULL);
+    atomic_store(&pd->wpoll, NULL);
+    DWORD bytes = 0;
+    SOCKET base = INVALID_SOCKET;
+    if (WSAIoctl((SOCKET)fd, SIO_BASE_HANDLE, NULL, 0, &base, sizeof base, &bytes, NULL, NULL) != 0) {
+        return "WSAIoctl";
+    }
+
+    pd->base = (HANDLE)base;
+    return NULL;
+#elif defined(__APPLE__)
     struct kevent ev[2];
     EV_SET(&ev[0], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, pd);
     EV_SET(&ev[1], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, pd);
@@ -445,6 +809,19 @@ static int wait_fd(int fd, bool write) {
         }
     }
 
+#if defined(_WIN32)
+    int failed = arm_poll(fd, write); // a poll for the wake, which a completion of it brings
+    if (failed != 0) {
+        uintptr_t me = self;
+        if (atomic_compare_exchange_strong(word, &me, pd_none)) {
+            promise(-1);
+        } else {
+            sn_handoff_wait(woken);
+        }
+
+        return failed;
+    }
+#endif
     if (atomic_load(dl) >= 0) { // a deadline marked after the look above sees the task in the word and wakes it
         sn_park();
     }
@@ -501,6 +878,9 @@ int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
 // find it closed.
 static void unwatch(int fd) {
     poll_desc *pd = pd_of(fd);
+#if defined(_WIN32)
+    cancel_polls(pd);
+#endif
     sn_deadline_disarm(&pd->rt); // a timer of this socket's must not fire on the next one with its number
     sn_deadline_disarm(&pd->wt);
     atomic_store(&pd->rd, 0);
@@ -523,7 +903,7 @@ static int64_t fail(int s, const char *name, sn_string *call) {
     int code = last_error();
     if (s >= 0) {
         unwatch(s);
-        close(s);
+        CLOSE_SOCKET(s);
     }
 
     *call = SN_STR(name, (int64_t)strlen(name));
@@ -542,15 +922,17 @@ static int64_t port_of(const struct sockaddr_storage *a) {
 // wildcard address, which some systems do not by default. A failure
 // returns the error number and stores the call that failed.
 static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, bool dual, int64_t *fd, sn_string *call) {
-    int s = socket(addr->ss_family, SOCK_STREAM | SN_SOCK_FLAGS, 0);
+    int s = NEW_SOCKET(addr->ss_family);
     if (s < 0) {
         return fail(s, "socket", call);
     }
 
+#if !defined(_WIN32) // where a second socket may bind the address a first one holds, which is no listener's wish
     int yes = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+#endif
     int no = 0;
-    if (dual && setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no) != 0) {
+    if (dual && setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const void *)&no, sizeof no) != 0) {
         return fail(s, "setsockopt", call);
     }
 
@@ -623,20 +1005,16 @@ int64_t sn_net_accept(int64_t fd, int64_t *out) {
             return SN_NET_TIMED_OUT;
         }
 
-#if SN_SOCK_FLAGS != 0
-        int c = accept4((int)fd, NULL, NULL, SN_SOCK_FLAGS);
-#else
-        int c = accept((int)fd, NULL, NULL);
-#endif
+        int c = ACCEPT_SOCKET((int)fd);
         if (c >= 0) {
             if (connected(c) != NULL) {
-                close(c);
+                CLOSE_SOCKET(c);
                 continue;
             }
 
             if (watch(c) != NULL) {
                 int code = last_error();
-                close(c);
+                CLOSE_SOCKET(c);
                 return code;
             }
 
@@ -676,7 +1054,7 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
         return SN_NET_NOT_ADDRESS;
     }
 
-    int s = socket(addr.ss_family, SOCK_STREAM | SN_SOCK_FLAGS, 0);
+    int s = NEW_SOCKET(addr.ss_family);
     if (s < 0) {
         return fail(s, "socket", call);
     }
@@ -695,7 +1073,11 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
     }
 
     if (connect(s, (struct sockaddr *)&addr, addr_len) != 0) {
+#if defined(_WIN32)
+        if (last_error() != EWOULDBLOCK) { // Windows' word for a connection in progress
+#else
         if (last_error() != EINPROGRESS && last_error() != EINTR) {
+#endif
             return fail(s, "connect", call);
         }
 
@@ -703,22 +1085,29 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
             int waited = wait_fd(s, true);
             if (waited != 0) {
                 unwatch(s);
-                close(s);
+                CLOSE_SOCKET(s);
                 return waited;
             }
 
             int err = 0;
             socklen_t len = sizeof err;
-            if (getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &len) != 0) {
+            if (getsockopt(s, SOL_SOCKET, SO_ERROR, (void *)&err, &len) != 0) {
                 return fail(s, "getsockopt", call);
             }
+
+            int code = err; // the system's own, which fail reads again
+            err = SOCKET_ERROR_OF(err);
 
             if (err == EINPROGRESS || err == EALREADY || err == EINTR) {
                 continue;
             }
 
             if (err != 0 && err != EISCONN) {
-                errno = err;
+#if defined(_WIN32)
+                WSASetLastError(code);
+#else
+                errno = code;
+#endif
                 return fail(s, "connect", call);
             }
 
@@ -770,7 +1159,7 @@ int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
             return SN_NET_TIMED_OUT;
         }
 
-        ssize_t got = read((int)fd, buf->ptr, (size_t)buf->len);
+        int64_t got = READ_SOCKET((int)fd, buf->ptr, (size_t)buf->len);
         if (got >= 0) {
             *n = got;
             return 0;
@@ -804,7 +1193,7 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
             return SN_NET_TIMED_OUT;
         }
 
-        ssize_t put = send((int)fd, buf.ptr + done, (size_t)(buf.len - done), SN_NOSIGNAL);
+        int64_t put = SEND_SOCKET((int)fd, buf.ptr + done, (size_t)(buf.len - done));
         if (put >= 0) {
             done += put;
             continue;
@@ -834,5 +1223,5 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
 // forgets what the poller still promised for it.
 int64_t sn_net_closeConn(int64_t fd) {
     unwatch((int)fd);
-    return close((int)fd) == 0 ? 0 : last_error();
+    return CLOSE_SOCKET((int)fd) == 0 ? 0 : last_error();
 }

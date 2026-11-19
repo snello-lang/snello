@@ -13,8 +13,8 @@
 #define SN_INTERNAL_H
 
 #include "snello.h"
+#include "system.h"
 
-#include <pthread.h>
 #include <stdatomic.h>
 
 // SN_CACHE_LINE is the widest cache line of the processors the runtime
@@ -129,6 +129,37 @@ static inline void sn_qlock_give(sn_qlock *l) {
         sn_qlock_wake(l);
     }
 }
+
+// An sn_once is a setup run once, the first time sn_once_call is called
+// on it, the other callers sleeping on its word until it has run. It is
+// the runtime's own, on the wait on a word, rather than the system's
+// once, which calls the setup through a pointer: sn_once_call is a
+// macro, so that it calls f by name where it is written, whatever the
+// optimization, a call the stack analysis follows into f from a task's
+// code. Its word goes from new to running, to waited on once a caller
+// sleeps, and to done. A setup that panics leaves its once running and
+// its other callers asleep, as a system's once leaves them; the
+// runtime's setups panic only when the memory runs out.
+enum { SN_ONCE_NEW = 0, SN_ONCE_RUNNING = 1, SN_ONCE_WAITED = 2, SN_ONCE_DONE = 3 };
+
+typedef struct {
+    _Atomic uint32_t state;
+} sn_once;
+
+#define SN_ONCE_INIT {SN_ONCE_NEW}
+
+// sn_once_begin claims the setup for the caller, or sleeps until it has
+// run; sn_once_end marks it run, waking the sleepers; snello.c's.
+bool sn_once_begin(sn_once *o);
+void sn_once_end(sn_once *o);
+
+#define sn_once_call(o, f)                                                                                             \
+    do {                                                                                                               \
+        if (atomic_load_explicit(&(o)->state, memory_order_acquire) != SN_ONCE_DONE && sn_once_begin(o)) {             \
+            f();                                                                                                       \
+            sn_once_end(o);                                                                                            \
+        }                                                                                                              \
+    } while (0)
 
 // sn_spin_hint tells the core a loop is waiting on memory.
 static inline void sn_spin_hint(void) {
@@ -333,6 +364,18 @@ typedef struct {
 } sn_stack_region;
 
 int sn_trace_fill(void *fp, const sn_stack_region *regions, int n);
+
+#if defined(_WIN32) && defined(__x86_64__)
+// sn_trace_unwind fills the thread's buffer with the frames above the
+// function whose registers regs holds, as sn_setjmp_regs saved them in
+// sn_panic, through the system's unwinder, and reports how many it
+// kept: Windows' x64 convention puts a function's frame pointer
+// anywhere in its frame, so the chain of saved frame pointers
+// sn_trace_fill follows is not there, and the image's unwind data says
+// where each frame's return address is. It runs on the panic's stack,
+// which has room for the unwinder, where a task's small stack has not.
+int sn_trace_unwind(const uint64_t *regs);
+#endif
 void sn_trace_write(void);
 int sn_trace_copy(uintptr_t *into);
 void sn_trace_each(const uintptr_t *walked, int n,
@@ -342,17 +385,20 @@ const uintptr_t *sn_task_trace(int *n); // sched.c: the running task's kept fram
 
 // sn_debugger_table is what a debug build publishes, as sn_debugger,
 // for a debugger's script to list the program's tasks with (snello.py's
-// tasks command), so that the script holds no layout of the runtime's:
+// tasks command, and snello.js's), so that the script holds no layout
+// of the runtime's:
 // the address of the list of every task, newest first, which the
 // runtime pushes each task onto once and never pops, since a debug
 // build never frees a task's record; where a task's record holds its
 // link on that list, its saved context, its state and the function it
 // runs; where a saved context holds the frame pointer and the return
-// address, from which its frames are walked; the most a task's frames
+// address, from which its frames are walked, and how far above it the
+// switch's caller resumes, the stack pointer a debugger unwinds the
+// caller's frame from; the most a task's frames
 // span; and the values of the states. The order is the script's.
 typedef struct {
     const void *tasks;
-    int32_t next, sp, state, run, saved_fp, saved_pc, stack_room;
+    int32_t next, sp, state, run, saved_fp, saved_pc, resumed_sp, stack_room;
     int32_t running, runnable, parking, parked, done, woken;
 } sn_debugger_table;
 
@@ -669,5 +715,69 @@ struct sockaddr;
 struct sockaddr_storage;
 int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr);
 sn_string sn_net_format(const struct sockaddr *addr, bool port);
+
+#if defined(_WIN32)
+// On Windows the sockets' polls, the keeper's wake and its deadline all
+// come through one completion port, net.c's, each packet with its key:
+// sn_net_port is the port, made with the poller; sn_keeper_packet hands
+// back to the keeper a packet of its own a worker took from the port
+// while looking for the sockets' (sched.c); sn_winsock_start starts
+// Winsock once, before the first socket or lookup, and reports whether
+// it did.
+enum { SN_KEY_POLL = 1, SN_KEY_WAKE = 2, SN_KEY_DEADLINE = 3 };
+void *sn_net_port(void);
+void sn_keeper_packet(uintptr_t key);
+bool sn_winsock_start(void);
+
+// sn_errno_of is the error number of a failure Windows reports by its
+// own code, the one the same failure has on the other systems, which
+// io.Kind and the messages read; os_windows.c's.
+int sn_errno_of(unsigned long code);
+
+// sn_errno_text is the text of an error number the runtime gives on
+// Windows, worded as the other systems word it, or NULL for one it does
+// not give; os_windows.c's.
+const char *sn_errno_text(int code);
+
+// sn_os_env_system sets the variable key of the process's environment
+// to value, or unsets it for NULL, so that the system's own calls that
+// read it, the temporary directory's among them, see what Setenv and
+// Unsetenv did; os_windows.c's.
+void sn_os_env_system(sn_string key, const sn_string *value);
+
+// A standard stream on a console is read and written as the console's
+// own text, UTF-16, converted from and to Snello's UTF-8: sn_console
+// reports whether the descriptor is such a stream, and sn_console_write
+// writes len bytes to it, returning how many it took, all of them but
+// on a failure, with errno set; os_windows.c's.
+bool sn_console(int fd);
+int64_t sn_console_write(int fd, const uint8_t *p, int64_t len);
+#endif
+
+// The bits of an os.FileMode, which are Go's: the permissions in the
+// low nine, and a bit for each kind of file that is not a regular one.
+#define SN_MODE_DIR       (UINT32_C(1) << 31)
+#define SN_MODE_SYMLINK   (UINT32_C(1) << 27)
+#define SN_MODE_DEVICE    (UINT32_C(1) << 26)
+#define SN_MODE_PIPE      (UINT32_C(1) << 25)
+#define SN_MODE_SOCKET    (UINT32_C(1) << 24)
+#define SN_MODE_SETUID    (UINT32_C(1) << 23)
+#define SN_MODE_SETGID    (UINT32_C(1) << 22)
+#define SN_MODE_CHAR      (UINT32_C(1) << 21)
+#define SN_MODE_STICKY    (UINT32_C(1) << 20)
+#define SN_MODE_IRREGULAR (UINT32_C(1) << 19)
+#define SN_MODE_TYPE                                                                                                   \
+    (SN_MODE_DIR | SN_MODE_SYMLINK | SN_MODE_DEVICE | SN_MODE_PIPE | SN_MODE_SOCKET | SN_MODE_CHAR | SN_MODE_IRREGULAR)
+
+// The flags of os.OpenFile, which are Snello's own numbers, the same on
+// every system: Go's differ from one system to the next, as the
+// system's do.
+#define SN_O_WRONLY 1
+#define SN_O_RDWR   2
+#define SN_O_APPEND 8
+#define SN_O_CREATE 64
+#define SN_O_EXCL   128
+#define SN_O_SYNC   256
+#define SN_O_TRUNC  512
 
 #endif

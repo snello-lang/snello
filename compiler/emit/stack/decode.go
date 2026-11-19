@@ -16,6 +16,8 @@ type decoder struct {
 	tlv    [2]uint64         // macOS's thread-local descriptors
 
 	decrements []uint64            // the addresses of the instructions that move the stack pointer down
+	probed     []uint64            // the addresses of each stack probe's call and of the decrement after it
+	tracking   bool                // arm64: the registers are followed, for a call through one that names what it calls
 	backward   bool                // a local branch goes back, so the function may have a cycle
 	targets    map[uint64]bool     // the addresses local branches go to
 	edges      map[uint64][]uint64 // each local branch's targets, by its address
@@ -35,6 +37,12 @@ func (d *decoder) decode() {
 		d.arm64()
 	case amd64:
 		d.amd64()
+	}
+
+	for _, a := range d.probed {
+		if d.targets[a] {
+			d.unknown(fmt.Sprintf("a branch to %#x, inside the frame a stack probe checks in %s", a, d.img.plain(d.f.name)))
+		}
 	}
 
 	if d.backward && len(d.decrements) > 0 {
@@ -116,6 +124,7 @@ func (d *decoder) within(addr uint64) bool {
 // tail call to itself; one that runs the prologue again is a decrement
 // on a cycle, which looped reports.
 func (d *decoder) branch(in inst, t target) {
+	t = d.img.resolveTarget(t)
 	switch {
 	case !t.known:
 		d.unknown("a branch to a place not named in " + d.img.plain(d.f.name))
@@ -139,6 +148,11 @@ func (d *decoder) branch(in inst, t target) {
 			return
 		}
 
+		if name, ok := d.pieceInto(t.addr); ok {
+			d.f.calls = append(d.f.calls, call{kind: direct, target: name}) // into the middle of a piece: see call
+			return
+		}
+
 		d.unknown(fmt.Sprintf("a branch to %#x, the start of no function", t.addr))
 	}
 }
@@ -152,6 +166,7 @@ func (d *decoder) local(in inst, to uint64) {
 
 // call records a call at in to t, which is never local.
 func (d *decoder) call(t target) {
+	t = d.img.resolveTarget(t)
 	switch {
 	case !t.known:
 		d.unknown("a call of a function not named in " + d.img.plain(d.f.name))
@@ -173,8 +188,34 @@ func (d *decoder) call(t target) {
 			return
 		}
 
+		if name, ok := d.pieceInto(t.addr); ok {
+			d.f.calls = append(d.f.calls, call{kind: direct, target: name}) // into the middle of a piece, counted as a call of the whole piece
+			return
+		}
+
 		d.unknown(fmt.Sprintf("a call of %#x, the start of no function", t.addr))
 	}
+}
+
+// probe records a frame a stack probe checked: the probe's call at call
+// and the decrement after it at in, which takes size bytes. The size is
+// what the instruction before the call put in its register, so a branch
+// to the call or to the decrement, from a path that put another size
+// there, makes the function unknown once its branches are all read.
+func (d *decoder) probe(call uint64, in inst, size int64) {
+	d.grow(in, size)
+	d.probed = append(d.probed, call, in.addr)
+}
+
+// pieceInto returns the piece of a PE binary's code that holds addr, a
+// call or a branch into the middle of it, and false for a binary not
+// split into pieces.
+func (d *decoder) pieceInto(addr uint64) (string, bool) {
+	if d.img.pieces == nil {
+		return "", false
+	}
+
+	return d.img.pieceAt(addr)
 }
 
 // grow records an instruction that moves the stack pointer down by n.

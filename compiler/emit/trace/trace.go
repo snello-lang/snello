@@ -17,6 +17,7 @@ import (
 	"debug/dwarf"
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -115,8 +116,9 @@ type section struct {
 }
 
 type symbol struct {
-	name   string
-	offset uint64
+	name    string
+	offset  uint64
+	foreign bool // a function of the C library's linked into an image, which bounds the others and has no anchor
 }
 
 // Table reads the native objects at paths, the one the link-time
@@ -127,11 +129,7 @@ type symbol struct {
 // with no rows, which the walk passes over; a program with no table at
 // all links with the runtime's own empty one.
 func Table(paths ...string) ([]byte, *Layout, error) {
-	var b builder
-	b.frames = map[frameKey]int32{}
-	b.files = map[string]int32{}
-	b.symbols = map[string]int32{}
-	b.ownFiles = map[string]string{}
+	b := newBuilder()
 	layout := &Layout{}
 	var anchors []anchorRows
 	for _, path := range paths {
@@ -146,6 +144,58 @@ func Table(paths ...string) ([]byte, *Layout, error) {
 	}
 
 	return b.table(anchors), layout, nil
+}
+
+// ImageTable is Table for a linked Windows image, read from image as
+// linked: its functions that the native objects define, the one the
+// link-time optimizer wrote or a debug build's, have anchors and rows,
+// and the C library's functions the link added bound the others' code
+// and have neither, as they have no place in an object's table.
+func ImageTable(image string, objects ...string) ([]byte, *Layout, error) {
+	own := map[string]bool{}
+	for _, path := range objects {
+		f, err := pe.Open(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: not a COFF object: %v", path, err)
+		}
+
+		for _, s := range f.Symbols {
+			if s.SectionNumber > 0 && s.Type == coffFunctionType {
+				own[s.Name] = true
+			}
+		}
+
+		f.Close()
+	}
+
+	f, err := pe.Open(image)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: not a PE image: %v", image, err)
+	}
+
+	defer f.Close()
+	if f.OptionalHeader == nil { // an object's COFF, which an image's header follows
+		return nil, nil, fmt.Errorf("%s: a COFF object, not a linked image", image)
+	}
+
+	b := newBuilder()
+	layout := &Layout{}
+	var anchors []anchorRows
+	if err := b.object(readPE(f, own), layout, &anchors); err != nil {
+		return nil, nil, fmt.Errorf("%s: %v", image, err)
+	}
+
+	return b.table(anchors), layout, nil
+}
+
+// newBuilder returns a builder with nothing in it.
+func newBuilder() *builder {
+	return &builder{
+		frames:   map[frameKey]int32{},
+		files:    map[string]int32{},
+		symbols:  map[string]int32{},
+		ownFiles: map[string]string{},
+	}
 }
 
 // object adds one object's functions to the table: an anchor and the
@@ -168,7 +218,7 @@ func (b *builder) object(obj *object, layout *Layout, anchors *[]anchorRows) err
 				end = s.symbols[i+1].offset
 			}
 
-			if end <= sym.offset {
+			if end <= sym.offset || sym.foreign {
 				continue
 			}
 
@@ -283,7 +333,7 @@ func readMacho(m *macho.File) (*object, error) {
 		if m.Symtab != nil {
 			for _, sym := range m.Symtab.Syms {
 				if int(sym.Sect) == i+1 && sym.Type&0xe0 == 0 && sym.Value >= s.Addr && sym.Value < s.Addr+s.Size && !temporary(sym.Name) { // in the section, no debugging symbol
-					sec.symbols = append(sec.symbols, symbol{strings.TrimPrefix(sym.Name, "_"), sym.Value - s.Addr})
+					sec.symbols = append(sec.symbols, symbol{name: strings.TrimPrefix(sym.Name, "_"), offset: sym.Value - s.Addr})
 				}
 			}
 		}
@@ -313,7 +363,7 @@ func readELF(e *elf.File) (*object, error) {
 		sec := section{name: s.Name, address: s.Addr, size: s.Size}
 		for _, sym := range syms {
 			if int(sym.Section) == i && elf.ST_TYPE(sym.Info) == elf.STT_FUNC && sym.Name != "" { // the runtime's assembly marks its functions; a symbol of no type marks code or data
-				sec.symbols = append(sec.symbols, symbol{sym.Name, sym.Value - s.Addr})
+				sec.symbols = append(sec.symbols, symbol{name: sym.Name, offset: sym.Value - s.Addr})
 			}
 		}
 
@@ -903,9 +953,19 @@ func symbols(path string) (map[string]uint64, func(string) (uint64, bool), error
 		return addresses, place, nil
 	}
 
+	if f, err := pe.Open(path); err == nil {
+		defer f.Close()
+		peSymbols(f, add)
+		for name := range twice {
+			delete(addresses, name)
+		}
+
+		return addresses, pePlace(f, addresses), nil
+	}
+
 	e, err := elf.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: neither Mach-O nor ELF", path)
+		return nil, nil, fmt.Errorf("%s: neither Mach-O, ELF nor PE", path)
 	}
 
 	defer e.Close()

@@ -1,0 +1,286 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The rules of a path on Windows: a backslash separates its elements,
+// and a slash does too; it starts with its volume, a drive's letter
+// and colon, a share, \\server\share, or a device's path, \\?\C: or
+// \\.\pipe; and it is cleaned as package path cleans a path after its
+// volume, every separator then written as a backslash.
+package filepath
+
+import "path"
+
+// separatorRune is the separator of a Windows path, a backslash.
+const separatorRune rune = '\\'
+
+// The bytes of a Windows path: its separator, the slash it takes as
+// one, the colon after a drive's letter, and the marks after the two
+// separators of a device's path, \\?\ and \\.\.
+const backslash byte = '\\'
+const slash byte = '/'
+const driveColon byte = ':'
+const verbatimMark byte = '?'
+const deviceMark byte = '.'
+
+// The texts a rule writes or reads: the separator, the current
+// directory, the element of a device's path that names a share,
+// \\?\UNC\server\share, and what keeps a cleaned path from reading as a
+// volume it did not start with, .\ and \.
+const backslashText = "\\"
+const currentDirectory = "."
+const shareElement = "UNC"
+const relativeText = ".\\"
+const rootedDotText = "\\."
+
+// The length of a drive's volume, C:, and of the marks that start a
+// device's path, \\?\.
+const driveLength = 2
+const deviceLength = 4
+
+func isSeparator(c byte) bool { return c == backslash || c == slash }
+
+func volumeName(p ref string) ref string { return p[0:volumeLength(p)] }
+
+func clean(p ref string) string {
+	v := volumeLength(p)
+	if v == p.Len() {
+		if v > driveLength { // a share's or a device's volume alone, written with backslashes
+			return backslashes(p)
+		}
+
+		return p + currentDirectory // a drive alone, or nothing: the current directory
+	}
+
+	cleaned := backslashes(ref (p[0:v] + path.Clean(ref slashes(p[v:]))))
+	if v == 0 && cleaned != p { // what cleaning made must not become a volume the path did not start with
+		return guarded(cleaned)
+	}
+
+	return cleaned
+}
+
+// guarded keeps a cleaned path that started with no volume from reading
+// as one: a first element holding a colon, which a ".." before it let
+// through, a\..\c: cleaned to c:, gets .\ in front, so that it names a
+// file in the current directory and not a drive; and a path that
+// begins \??, the system's own prefix of an absolute path, gets \. in
+// front.
+func guarded(p string) string {
+	for i := 0; i < p.Len() && !isSeparator(p[i]); i++ {
+		if p[i] == driveColon {
+			return relativeText + p
+		}
+	}
+
+	if p.Len() >= 3 && isSeparator(p[0]) && p[1] == verbatimMark && p[2] == verbatimMark {
+		return rootedDotText + p
+	}
+
+	return p
+}
+
+func split(p ref string) (ref string, ref string) {
+	i := p.Len() - 1
+	for i >= volumeLength(p) && !isSeparator(p[i]) {
+		i--
+	}
+
+	return (p[0:i+1], p[i+1:])
+}
+
+func join(a ref string, b ref string) string {
+	if a.Len() == 0 && b.Len() == 0 {
+		return ""
+	}
+
+	if a.Len() == 0 {
+		return clean(b)
+	}
+
+	if b.Len() == 0 {
+		return clean(a)
+	}
+
+	if a[a.Len()-1] == driveColon { // a drive alone takes b as it is, C:b in the drive's current directory
+		return clean(ref (a + b))
+	}
+
+	if !isSeparator(a[a.Len()-1]) {
+		return clean(ref (a + backslashText + b))
+	}
+
+	// After a separator, b's own are dropped, so that two elements that
+	// name no share make none, \ and \host not \\host; and ?? after a
+	// root alone is kept from the system's prefix \??\.
+	start := 0
+	for start < b.Len() && isSeparator(b[start]) {
+		start++
+	}
+
+	rest := b[start:]
+	if a.Len() == 1 && rest.Len() >= 2 && rest[0] == verbatimMark && rest[1] == verbatimMark && (rest.Len() == 2 || isSeparator(rest[2])) {
+		return clean(ref (a + relativeText + rest))
+	}
+
+	return clean(ref (a + rest))
+}
+
+func ext(p ref string) ref string {
+	for i := p.Len() - 1; i >= 0 && !isSeparator(p[i]); i-- {
+		if p[i] == '.' {
+			return p[i:]
+		}
+	}
+
+	return ""
+}
+
+func base(p ref string) ref string {
+	if p.Len() == 0 {
+		return currentDirectory
+	}
+
+	end := p.Len()
+	for end > 0 && isSeparator(p[end-1]) {
+		end--
+	}
+
+	start := volumeLength(p[0:end])
+	if end <= start {
+		return backslashText // the root, or the volume alone
+	}
+
+	i := end - 1
+	for i >= start && !isSeparator(p[i]) {
+		i--
+	}
+
+	return p[i+1 : end]
+}
+
+func isAbs(p ref string) bool {
+	v := volumeLength(p)
+	if v > driveLength { // a share's or a device's path
+		return true
+	}
+
+	return v == driveLength && p.Len() > v && isSeparator(p[v])
+}
+
+func dir(p ref string) string {
+	v := volumeLength(p)
+	i := p.Len() - 1
+	for i >= v && !isSeparator(p[i]) {
+		i--
+	}
+
+	d := clean(p[v : i+1])
+	if d == currentDirectory && v > driveLength { // a path in a share's root
+		return backslashes(p[0:v])
+	}
+
+	return backslashes(p[0:v]) + d
+}
+
+// volumeLength returns the length of the volume p starts with: a
+// drive's letter and colon, C:; a share, \\server\share; a device's
+// path, \\?\C:, \??\C: or \\.\pipe, with its share after \\?\UNC\; and
+// 0 for none.
+func volumeLength(p ref string) int {
+	n := p.Len()
+	if n >= driveLength && p[1] == driveColon && isLetter(p[0]) {
+		return driveLength
+	}
+
+	if n >= 3 && isSeparator(p[0]) && p[1] == verbatimMark && p[2] == verbatimMark && (n == 3 || isSeparator(p[3])) {
+		return deviceVolume(p) // \??\C:, the system's own prefix of an absolute path
+	}
+
+	if n < 3 || !isSeparator(p[0]) || !isSeparator(p[1]) || isSeparator(p[2]) {
+		return 0
+	}
+
+	if (p[2] == verbatimMark || p[2] == deviceMark) && (n == 3 || isSeparator(p[3])) {
+		return deviceVolume(p)
+	}
+
+	return elementEnd(p, elementEnd(p, 2)+1) // \\server\share
+}
+
+// deviceVolume returns the length of the volume of a device's path,
+// which p starts with: its four marks and the element after them, with
+// the share after \\?\UNC\.
+func deviceVolume(p ref string) int {
+	end := elementEnd(p, deviceLength)
+	if isShareElement(p[deviceLength:end]) { // \\?\UNC\server\share
+		return elementEnd(p, elementEnd(p, end+1)+1)
+	}
+
+	return end
+}
+
+// elementEnd returns the index of the first separator of p at start or
+// after it, or p's length.
+func elementEnd(p ref string, start int) int {
+	i := start
+	for i < p.Len() && !isSeparator(p[i]) {
+		i++
+	}
+
+	if i > p.Len() {
+		return p.Len()
+	}
+
+	return i
+}
+
+// isShareElement reports whether e is UNC, in any case.
+func isShareElement(e ref string) bool {
+	if e.Len() != shareElement.Len() {
+		return false
+	}
+
+	for i := 0; i < e.Len(); i++ {
+		c := e[i]
+		if c >= 'a' && c <= 'z' {
+			c = c - 'a' + 'A'
+		}
+
+		if c != shareElement[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isLetter reports whether c is an ASCII letter, a drive's.
+func isLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// slashes returns p with every separator a slash, as package path
+// reads a path.
+func slashes(p ref string) string {
+	return replaced(p, backslash, slash)
+}
+
+// backslashes returns p with every separator a backslash, as Windows
+// writes a path.
+func backslashes(p ref string) string {
+	return replaced(p, slash, backslash)
+}
+
+// replaced returns a copy of p with every byte that is from made to.
+func replaced(p ref string, from byte, to byte) string {
+	buf := make([]byte, p.Len())
+	for i := 0; i < p.Len(); i++ {
+		buf[i] = p[i]
+		if buf[i] == from {
+			buf[i] = to
+		}
+	}
+
+	return string(buf)
+}

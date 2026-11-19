@@ -79,6 +79,7 @@ TABLE_FIELDS = (
     "run",
     "saved_fp",
     "saved_pc",
+    "resumed_sp",
     "stack_room",
     "running",
     "runnable",

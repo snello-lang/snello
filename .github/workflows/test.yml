@@ -13,16 +13,27 @@
 #   ubuntu-24.04-arm   arm64 Linux: glibc's thread-locals, which a task
 #                      that moves between threads must not cache
 #   macos-latest       arm64 Darwin: kqueue
+#   macos-15-intel     x86-64 Darwin: the x86-64 switch under Apple's
+#                      convention; not blocking until its tests pass
+#   windows-latest     x86-64 Windows: the Windows x64 switch and its
+#                      thread block's bounds, the completion port and
+#                      AFD, the Windows x64 convention
+#   windows-11-arm     arm64 Windows, tier 2: its job runs every time
+#                      and its failure does not fail the run
 #
-# x86-64 Darwin is the one pair no runner covers.
+# The distributions job runs a developer's first five minutes on each
+# Linux distribution snello doctor names a fix for, in images of their
+# own on both Linux runners, as make distros runs them.
 #
 # The Linux jobs run inside the image build/Dockerfile describes, the
 # one the Makefile's Snello targets run in on a developer's machine,
 # through the same build/run.sh, so that a green run there and a green
 # job here mean the same thing; the image is built from the Dockerfile
 # with its layers cached by GitHub, so a run after an unchanged
-# Dockerfile pays nothing for it. The macOS job runs natively, since
-# it covers kqueue.
+# Dockerfile pays nothing for it. The macOS jobs run natively, since
+# they cover kqueue, and so do the Windows jobs, with clang and
+# lld-link from LLVM, against the Build Tools' SDK and C runtime, which
+# clang finds by itself, and make under Git's Bash.
 name: Tests
 
 # A change to documentation alone, markdown anywhere or anything under
@@ -64,11 +75,15 @@ jobs:
   test:
     name: go test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 60 || 40 }} # Windows links twice per program and scans each new binary
+    continue-on-error: ${{ matrix.os == 'windows-11-arm' || matrix.os == 'macos-15-intel' }} # tier 2, or tier 1 not yet passing: run on every change, never blocking it
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
+    defaults:
+      run:
+        shell: bash # Git's Bash on Windows, which make and the build's scripts run under
     steps:
       - uses: actions/checkout@v7
       - name: Read the Go version
@@ -99,16 +114,63 @@ jobs:
         if: runner.os == 'Linux'
         run: make test NEEDS= && make check NEEDS=
       - uses: actions/setup-go@v7
-        if: runner.os == 'macOS'
+        if: runner.os != 'Linux'
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
+      - name: Install LLVM and make where the image lacks them # clang and lld-link from LLVM's own build, as a developer installs them
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v clang >/dev/null; then
+            choco install llvm --yes --no-progress
+            echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+          fi
+          if ! command -v make >/dev/null; then
+            choco install make --yes --no-progress
+          fi
+      - name: Show the toolchain
+        if: runner.os == 'Windows'
+        run: clang --version && lld-link --version && make --version
       - name: Test natively
-        if: runner.os == 'macOS'
+        if: runner.os != 'Linux'
         run: go test ./... -timeout 25m
         env:
           CC: clang # the C backend's compiler, named as every build tool reads it
           CLANG: clang # the LLVM backend's
+      - name: Snello tests and checks through the Makefile, natively
+        if: runner.os != 'Linux'
+        run: make test NATIVE=1 && make check NATIVE=1
+        env:
+          CC: clang
+          CLANG: clang
+
+  distros:
+    # A developer's first five minutes on Debian 13, Ubuntu 24.04,
+    # Fedora and Arch, each in an image of its own built from the
+    # distribution's base image, bare and with clang, as make distros
+    # runs them; Arch publishes no arm64 image, so the arm64 runner
+    # leaves it out.
+    name: distributions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            distros: debian ubuntu fedora arch
+          - os: ubuntu-24.04-arm
+            distros: debian ubuntu fedora
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+      - name: Check the first five minutes in each distribution's images
+        run: make distros
+        env:
+          DISTROS: ${{ matrix.distros }}
 
   bench:
     # The performance table, measured on both Linux processors inside

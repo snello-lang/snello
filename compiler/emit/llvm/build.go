@@ -51,8 +51,8 @@ func Compiler() string {
 // Build writes the module and the runtime into dir, with the C side of
 // every package that binds C, compiles the module to an object with
 // clang, links it with the runtime and that C compiled by the C
-// compiler, and returns the path of the binary named name, with the
-// bound of each task's stack the analysis of the linked binary proves
+// compiler, and returns the path of the binary named name, name.exe
+// for Windows, with the bound of each task's stack the analysis of the linked binary proves
 // written into it. The compilers' output comes back with any error. A
 // debug build compiles the runtime's checks in, as the C backend's
 // does. The module is emitted for the target t, which the runtime and
@@ -140,7 +140,7 @@ func Build(dir, name string, module []byte, t platform.Target, debug bool, bindi
 		return "", output, err
 	}
 
-	bin = filepath.Join(dir, name)
+	bin = filepath.Join(dir, t.Executable(name))
 	linked, err := c.Link(cc, t, debug, dir, bin, append(append([]string{obj}, rt...), objs...), bindings)
 	return bin, append(output, linked...), err
 }

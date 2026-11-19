@@ -35,8 +35,14 @@ func TestHeader(t *testing.T) {
 		t.Fatalf("bindings = %+v, want tally with its module's link m", bindings)
 	}
 
-	if flags := LinkFlags(bindings); len(flags) != 1 || flags[0] != "-lm" {
+	linux := platform.Target{OS: platform.Linux, Arch: platform.AMD64}
+	if flags := LinkFlags(linux, bindings); len(flags) != 1 || flags[0] != "-lm" {
 		t.Errorf("link flags %v, want -lm once for the two packages of one module", flags)
+	}
+
+	windows := platform.Target{OS: platform.Windows, Arch: platform.AMD64}
+	if flags := LinkFlags(windows, bindings); len(flags) != 0 {
+		t.Errorf("link flags for Windows %v, want none: its C library holds the mathematics", flags)
 	}
 
 	header := string(Header(*tally))
@@ -62,8 +68,8 @@ func TestHeader(t *testing.T) {
 func TestSystemLinkFlags(t *testing.T) {
 	for _, target := range platform.Targets() {
 		flags := SystemLinkFlags(target)
-		if !slices.Contains(flags, mathLibrary) {
-			t.Errorf("%s: flags %v, want %s", target, flags, mathLibrary)
+		if math := slices.Contains(flags, mathLibrary); math != (target.OS != platform.Windows) {
+			t.Errorf("%s: flags %v: %s is for every system but Windows", target, flags, mathLibrary)
 		}
 
 		if now := slices.Contains(flags, bindNow); now != (target.OS == platform.Linux) {

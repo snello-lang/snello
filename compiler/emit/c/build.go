@@ -5,6 +5,7 @@
 package c
 
 import (
+	"debug/pe"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/emit/natvis"
 	"github.com/snello-lang/snello/compiler/emit/stack"
 	"github.com/snello-lang/snello/compiler/emit/trace"
 	"github.com/snello-lang/snello/compiler/platform"
@@ -52,6 +54,39 @@ const (
 
 	// outputFlag names the file a compiler, a linker or dsymutil writes.
 	outputFlag = "-o"
+
+	// dwarfFormat asks clang for DWARF where its default is CodeView,
+	// on Windows, whose line tables the trace's table is read from;
+	// keepDwarf and keepSymbols have LLVM's COFF linker keep a linked
+	// image's DWARF and symbol table, or its symbol table alone, which
+	// the table and its patch read, and keepLTOObject keep the object
+	// its link-time optimizer wrote, as the image's name and ltoObject,
+	// the one stage of its saved ones that holds it.
+	dwarfFormat   = "-gdwarf"
+	keepDwarf     = "-Wl,/debug:dwarf"
+	noCRTDebug    = "-Wl,/ignore:4099" // the C library's own debugging information, which Microsoft does not ship and the table never reads
+	keepSymbols   = "-Wl,/debug:symtab"
+	keepLTOObject = "-Wl,/lldsavetemps:prelink"
+	ltoObject     = ".lto.obj"
+	linkerArg     = "-Xlinker" // passes the next argument to the linker whole, a path with a comma in it too
+	writeMap      = "/map:"    // the linker's map, which names the library each function came from, for the stacks' analysis
+
+	// codeView asks clang for CodeView beside DWARF, in a debug build
+	// for Windows, whose debuggers read the PDB the final link makes of
+	// it, writePDB, with the visualizers of the program's values in it,
+	// embedNatvis and natvisFile, and with no DWARF, dropDwarf, which
+	// only the first link's image, the trace's, needs.
+	codeView    = "-gcodeview"
+	writePDB    = "/debug:full"
+	dropDwarf   = "/debug:nodwarf"
+	embedNatvis = "/natvis:"
+	natvisFile  = "snello.natvis"
+
+	// pdbByName has the binary name its PDB by the file's name alone, not
+	// the build directory's path, so that a debugger finds it beside the
+	// binary wherever the binary is; pdbSuffix ends a PDB's name.
+	pdbByName = "/pdbaltpath:%_PDB%"
+	pdbSuffix = ".pdb"
 
 	// keptObject, firstLink and tableObject name the files a link writes
 	// into the build's directory: the object the link-time optimizer
@@ -140,9 +175,9 @@ func Compiler() string {
 // with the C side of every package that binds C, compiles them with
 // the C compiler for the target t, links them with the runtime's
 // objects, which the cache holds once they are compiled, and returns
-// the path of the binary named name, with the bound of each task's
-// stack the analysis of the linked binary proves written into it. The
-// compiler's output comes back with any error.
+// the path of the binary named name, name.exe for Windows, with the
+// bound of each task's stack the analysis of the linked binary proves
+// written into it. The compiler's output comes back with any error.
 // A debug build compiles the runtime's checks in: see
 // runtime/c/debug.c.
 func Build(dir, name string, src []byte, t platform.Target, debug bool, bindings ...lower.Binding) (bin string, output []byte, err error) {
@@ -190,20 +225,32 @@ func Build(dir, name string, src []byte, t platform.Target, debug bool, bindings
 		return "", output, rtErr
 	}
 
-	bin = filepath.Join(dir, name)
+	bin = filepath.Join(dir, t.Executable(name))
 	linked, err := Link(Compiler(), t, debug, dir, bin, append(append([]string{objs[0]}, rt...), objs[1:]...), bindings) // the program, then the runtime, then the packages' C
 	return bin, append(output, linked...), err
 }
 
 // Bundle gathers the debugging information of the debug build bin, for
-// the target t, into the bundle beside out, the binary the build was
-// copied to, for macOS,
-// where the linker leaves it in the objects of the build's directory,
-// which the build removes: the bundle is made before, as clang's
-// driver makes one when a run compiles and links, and replaces one an
-// earlier build left. On Linux the information is in the binary and
-// nothing is done. The tool's output comes back with any error.
+// the target t, beside out, the binary the build was copied to, from
+// the build's directory, which the build removes: for macOS into a
+// bundle, from the objects the linker leaves it in, as clang's driver
+// makes one when a run compiles and links, replacing one an earlier
+// build left; for Windows the PDB the link wrote, copied beside out
+// under the name the binary gives it, its file's name alone, which is
+// bin's, where a debugger looks for it. On Linux the information is in the
+// binary and nothing is done. The tool's output comes back with any
+// error.
 func Bundle(bin, out string, t platform.Target) ([]byte, error) {
+	if t.OS == platform.Windows {
+		pdb, err := os.ReadFile(strings.TrimSuffix(bin, filepath.Ext(bin)) + pdbSuffix)
+		if err != nil {
+			return nil, err
+		}
+
+		name := strings.TrimSuffix(filepath.Base(bin), filepath.Ext(bin)) + pdbSuffix
+		return nil, os.WriteFile(filepath.Join(filepath.Dir(out), name), pdb, 0o644)
+	}
+
 	if t.OS != platform.Darwin {
 		return nil, nil
 	}
@@ -222,10 +269,43 @@ func Bundle(bin, out string, t platform.Target) ([]byte, error) {
 // debug one.
 func ProgramFlags(cc string, t platform.Target, debug bool) []string {
 	if debug {
-		return append(without(BuildFlags(cc, t, debug), leafFramePointer), debugInfo...)
+		flags := append(without(BuildFlags(cc, t, debug), leafFramePointer), dwarfOf(t)...)
+		if t.OS == platform.Windows {
+			flags = append(flags, codeView)
+		}
+
+		return append(flags, debugInfo...) // last, so that they win over the build's own
 	}
 
-	return append(BuildFlags(cc, t, debug), lineTables)
+	return append(BuildFlags(cc, t, debug), lineTableFlags(t)...)
+}
+
+// lineTableFlags are the options that write line tables and nothing
+// more, lineTables, in DWARF on Windows too.
+func lineTableFlags(t platform.Target) []string {
+	return append(dwarfOf(t), lineTables)
+}
+
+// linkLineTables are the options that have a link for t write the line
+// tables of what it optimizes: lineTableFlags, but none on Windows,
+// where the objects carry them already and clang would turn them into
+// LLVM's COFF linker writing a PDB no one reads.
+func linkLineTables(t platform.Target) []string {
+	if t.OS == platform.Windows {
+		return nil
+	}
+
+	return lineTableFlags(t)
+}
+
+// dwarfOf is the option that makes debugging information DWARF on t,
+// where it is not already: Windows, whose own is CodeView.
+func dwarfOf(t platform.Target) []string {
+	if t.OS == platform.Windows {
+		return []string{dwarfFormat}
+	}
+
+	return nil
 }
 
 // BuildFlags are the options the compiler cc is given to compile the
@@ -233,7 +313,17 @@ func ProgramFlags(cc string, t platform.Target, debug bool) []string {
 // the build's Release or Debug, gcc's own, which link-time
 // optimization reads at the link, and the target's, TargetFlags.
 func BuildFlags(cc string, t platform.Target, debug bool) []string {
+	return append(linkBaseFlags(cc, t, debug), compileFlags(t)...)
+}
+
+// linkBaseFlags are the options a link starts from: BuildFlags without
+// the ones a compile alone takes, a Windows build's headers and define.
+func linkBaseFlags(cc string, t platform.Target, debug bool) []string {
 	args := append([]string{}, Flags...)
+	if t.OS == platform.Windows {
+		args = without(args, pthreadFlag)
+	}
+
 	if debug {
 		args = append(args, Debug...)
 	} else {
@@ -268,8 +358,9 @@ func BuildFlags(cc string, t platform.Target, debug bool) []string {
 func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []string, bindings []lower.Binding) ([]byte, error) {
 	kept := filepath.Join(dir, keptObject)
 	first := filepath.Join(dir, firstLink)
-	args := append(append(BuildFlags(cc, t, debug), lineTables), linkerFlags(cc, t)...) // the link writes the line tables of what it optimizes
-	plain := without(args, lto)                                                         // for the final link
+	args := append(linkBaseFlags(cc, t, debug), linkLineTables(t)...) // the link writes the line tables of what it optimizes
+	args = append(args, linkerFlags(cc, t)...)
+	plain := without(args, lto) // for the final link
 	var output []byte
 	var cmd []string
 	var out []byte
@@ -277,18 +368,30 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 	native := objs                // what the final link links, and the table is read from: the objects, or the one the optimizer wrote
 	whole := !debug && !IsGCC(cc) // the first link makes the binary, over the runtime's own empty tables
 	switch {
+	case t.OS == platform.Windows:
+		// The table is read from a first image, which keeps its DWARF
+		// and its symbols, with their final addresses: a COFF object's
+		// DWARF is relocated against its sections, which Go's debug/pe
+		// does not apply. The second link links what the first
+		// optimized, so every function's code is the first image's.
+		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
+		cmd = append(append(append(cmd, LinkFlags(t, bindings)...), SystemLinkFlags(t)...), keepDwarf, noCRTDebug)
+		if whole {
+			cmd = append(cmd, keepLTOObject)
+			native = []string{first + ltoObject}
+		}
 	case debug:
 	case !whole:
 		cmd = append(append(append([]string{}, args...), "-r", outputFlag, kept, "-flinker-output=nolto-rel"), objs...)
 		native = []string{kept}
 	case t.OS == platform.Darwin:
 		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
-		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags(t)...)
+		cmd = append(append(cmd, LinkFlags(t, bindings)...), SystemLinkFlags(t)...)
 		cmd = append(cmd, "-Wl,-object_path_lto,"+kept)
 		native = []string{kept}
 	default:
 		cmd = append(append(append([]string{}, args...), outputFlag, first), objs...)
-		cmd = append(append(cmd, LinkFlags(bindings)...), SystemLinkFlags(t)...)
+		cmd = append(append(cmd, LinkFlags(t, bindings)...), SystemLinkFlags(t)...)
 		cmd = append(cmd, "-Wl,-plugin-opt=obj-path="+kept, "-Wl,-plugin-opt=-function-sections=0", "-Wl,-plugin-opt=-data-sections=0")
 		native = []string{kept}
 	}
@@ -301,7 +404,14 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 		}
 	}
 
-	table, layout, err := trace.Table(native...)
+	var table []byte
+	var layout *trace.Layout
+	if t.OS == platform.Windows { // the first image's functions that native defines
+		table, layout, err = trace.ImageTable(first, native...)
+	} else {
+		table, layout, err = trace.Table(native...)
+	}
+
 	if err != nil {
 		return output, err
 	}
@@ -321,9 +431,23 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 		cmd = append(cmd, nativeRuntime(objs)...) // which the optimizer's object does not hold
 	}
 
-	cmd = append(append(append(cmd, tablePath), LinkFlags(bindings)...), SystemLinkFlags(t)...)
+	cmd = append(append(append(cmd, tablePath), LinkFlags(t, bindings)...), SystemLinkFlags(t)...)
 	if !debug && t.OS == platform.Linux {
 		cmd = append(cmd, stripDebug)
+	}
+
+	linkMap := ""
+	if t.OS == platform.Windows {
+		linkMap = filepath.Join(dir, stack.LinkMapFile)
+		cmd = append(cmd, keepSymbols, linkerArg, writeMap+linkMap) // the symbols the table's patch and the stacks' analysis find the functions by
+		if debug {
+			visualizers, err := writeNatvis(first, filepath.Join(dir, natvisFile))
+			if err != nil {
+				return output, err
+			}
+
+			cmd = append(cmd, linkerArg, writePDB, linkerArg, dropDwarf, linkerArg, embedNatvis+visualizers, linkerArg, pdbByName)
+		}
 	}
 
 	out, err = exec.Command(cc, cmd...).CombinedOutput()
@@ -337,8 +461,31 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 		return output, err
 	}
 
-	stack.Patch(bin, patched) // a program it cannot bound keeps its tasks on guarded stacks, which is always safe
+	stack.Patch(bin, patched, linkMap) // a program it cannot bound keeps its tasks on guarded stacks, which is always safe
 	return output, nil
+}
+
+// writeNatvis writes the visualizers of a Windows debug build's values
+// at path, from the debugging information of the first link's image at
+// image, and returns path.
+func writeNatvis(image, path string) (string, error) {
+	f, err := pe.Open(image)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	d, err := f.DWARF()
+	if err != nil {
+		return "", err
+	}
+
+	file, err := natvis.FromDWARF(d)
+	if err != nil {
+		return "", err
+	}
+
+	return path, os.WriteFile(path, file, 0o644)
 }
 
 // nativeRuntime is the runtime's objects among objs compiled to native

@@ -33,6 +33,10 @@ const (
 	arm64OpCompare   = "cmp"
 	arm64OpCompareN  = "cmn"
 
+	arm64ProbeReg  = "x15" // the register a frame's size is put in for the stack probe, in units of arm64ProbeUnit
+	arm64ProbeUnit = 16
+	arm64Probed    = "sp, sp, x15, lsl #4" // the frame the stack probe checked, taken from the stack pointer
+
 	arm64SP          = "sp"  // the stack pointer
 	arm64FP          = "x29" // the frame pointer
 	arm64LinkReg     = 30    // x30, the link register a call writes
@@ -58,22 +62,30 @@ var arm64PairLoads = []string{"ldp", "ldnp", "ldxp", "ldaxp"}
 // pointer down before it writes, "[sp, #-16]!", an immediate operand
 // with its optional shift, "#0x1, lsl #12", a load of a register from
 // the address another holds, with no offset, "[x0]", a register, and
-// the page otool's note gives an adrp, "0x10000c000".
+// a load of one with an offset, "[x8, #0x220]", and the page otool's
+// note gives an adrp, "0x10000c000".
 var (
 	arm64PreIndex = regexp.MustCompile(`\[sp, #-(0x[0-9a-f]+|\d+)\]!`)
 	arm64Imm      = regexp.MustCompile(`^#(0x[0-9a-f]+|\d+)(?:, lsl #(\d+))?$`)
 	arm64LoadBare = regexp.MustCompile(`^([xw]\d+), \[([xw]\d+)\]$`)
+	arm64LoadAt   = regexp.MustCompile(`^(x\d+), \[(x\d+), #(0x[0-9a-f]+|\d+)\]$`)
 	arm64Reg      = regexp.MustCompile(`^[xw](\d+)$`)
 	arm64Page     = regexp.MustCompile(`^(0x[0-9a-f]+)`)
 )
 
 // arm64 reads the function: its frame from every instruction that moves
 // the stack pointer down, its calls and tail calls, and what it does to
-// the stack pointer that is not a frame.
+// the stack pointer that is not a frame. A frame larger than a page is
+// made by three instructions in a row, as Windows has a compiler make
+// one: its size in sixteens put in x15, the call of the stack probe,
+// which touches each page of the frame in order so that the system's
+// guard page grows the stack, and the frame taken from the stack
+// pointer by x15 shifted back to bytes, which no branch may reach but at
+// the first, decode checks.
 func (d *decoder) arm64() {
 	for _, in := range d.insts { // the local branches first, which end and begin the blocks the thread-local reading needs
 		if arm64Branch(in.op) {
-			if t := parseTarget(arm64Last(in.args), in.note); t.known && !t.library {
+			if t := d.img.resolveTarget(parseTarget(arm64Last(in.args), in.note)); t.known && !t.library {
 				if (t.name == d.f.name && t.offset > 0) || (t.name == "" && d.within(t.addr) && t.addr != d.insts[0].addr) {
 					to := t.addr
 					if t.name != "" {
@@ -86,15 +98,19 @@ func (d *decoder) arm64() {
 		}
 	}
 
+	d.tracking = d.arm64Tracks()
 	starts, succ := d.arm64Blocks()
 	held := d.arm64Held(starts, succ)
-	state := map[int]uint64{} // registers known to hold an address
-	thunk := map[int]bool{}   // registers loaded from a thread-local descriptor
+	state := map[int]uint64{}  // registers known to hold an address
+	loaded := map[int]string{} // registers holding a function to call: the thread-local accessor, threadLocalKey, or an imported one
+	toProbe := int64(-1)       // the size the instruction before put in x15, or -1
+	probed := int64(-1)        // the size the instruction before, the stack probe's call, checked, or -1
+	var probeCall uint64       // the address of that call
 	block := 0
 	for i, in := range d.insts {
 		if block < len(starts) && starts[block] == i {
 			clear(state) // a block begins: only what every path into it holds is known
-			clear(thunk)
+			clear(loaded)
 			for r, a := range held[block] {
 				state[r] = a
 			}
@@ -102,21 +118,34 @@ func (d *decoder) arm64() {
 			block++
 		}
 
+		size, checked, checkedAt := toProbe, probed, probeCall
+		toProbe, probed = -1, -1
+		if in.op == arm64OpSub && in.args == arm64Probed && checked >= 0 {
+			d.probe(checkedAt, in, checked*arm64ProbeUnit)
+			continue
+		}
+
+		if in.op == arm64OpMove && arm64First(in.args) == arm64ProbeReg {
+			if n, ok := arm64Immediate(strings.TrimPrefix(in.args, arm64ProbeReg+arm64Operands)); ok {
+				toProbe = n
+			}
+		}
+
 		d.arm64Stack(in)
 		switch {
 		case in.op == arm64OpCall:
-			d.call(parseTarget(in.args, in.note))
-			arm64Clobber(state, thunk)
-		case strings.HasPrefix(in.op, arm64OpCallReg):
-			if r, ok := arm64RegNum(in.args); ok && thunk[r] {
-				d.f.calls = append(d.f.calls, call{kind: threadLocal})
-			} else {
-				d.f.calls = append(d.f.calls, call{kind: pointer})
+			t := parseTarget(in.args, in.note)
+			if stackProbes[t.name] && size >= 0 {
+				probed, probeCall = size, in.addr
 			}
 
-			arm64Clobber(state, thunk)
-		case arm64JumpReg(in.op): // a tail call through a pointer, which the compiler writes for a call that ends a function, since both backends build with jump tables off, so the switches are tables of comparisons: a call, counted over this frame, then the end
-			d.f.calls = append(d.f.calls, call{kind: pointer})
+			d.call(t)
+			arm64Clobber(state, loaded)
+		case strings.HasPrefix(in.op, arm64OpCallReg):
+			d.f.calls = append(d.f.calls, arm64CallThrough(in, loaded))
+			arm64Clobber(state, loaded)
+		case arm64JumpReg(in.op): // a tail call through a pointer, which the compiler writes for a call that ends a function, since both backends build with jump tables off, so the switches are tables of comparisons, or a PE binary's thunk of an import: a call, counted over this frame, then the end
+			d.f.calls = append(d.f.calls, arm64CallThrough(in, loaded))
 			d.stop(in)
 		case arm64Branch(in.op):
 			if in.op == arm64OpBranch {
@@ -127,8 +156,24 @@ func (d *decoder) arm64() {
 		case strings.HasPrefix(in.op, arm64OpReturn):
 			d.stop(in)
 		default:
-			d.arm64Track(in, state, thunk)
+			d.arm64Track(in, state, loaded)
 		}
+	}
+}
+
+// arm64CallThrough is the call a call or a jump through a register
+// makes: of the function the register was loaded with, the thread-local
+// accessor or an imported function, or through a pointer the analysis
+// does not know.
+func arm64CallThrough(in inst, loaded map[int]string) call {
+	r, ok := arm64RegNum(in.args)
+	switch name := loaded[r]; {
+	case !ok || name == "":
+		return call{kind: pointer}
+	case name == threadLocalKey:
+		return call{kind: threadLocal}
+	default:
+		return call{kind: library, target: name}
 	}
 }
 
@@ -180,7 +225,7 @@ func (d *decoder) arm64Blocks() (starts []int, succ [][]int) {
 // localTarget returns the address a branch goes to in the function, or
 // -1 for one that leaves it.
 func (d *decoder) localTarget(in inst) int64 {
-	t := parseTarget(arm64Last(in.args), in.note)
+	t := d.img.resolveTarget(parseTarget(arm64Last(in.args), in.note))
 	switch {
 	case !t.known || t.library:
 		return -1
@@ -203,7 +248,7 @@ func (d *decoder) arm64Held(starts []int, succ [][]int) []map[int]uint64 {
 	in := make([]map[int]uint64, n)
 	out := make([]map[int]uint64, n) // nil: no path reached yet
 	in[0] = map[int]uint64{}
-	if d.tlv[1] == 0 {
+	if !d.tracking {
 		for b := range in {
 			in[b] = map[int]uint64{}
 		}
@@ -248,7 +293,7 @@ func (d *decoder) arm64Held(starts []int, succ [][]int) []map[int]uint64 {
 
 			in[b] = entry
 			state := maps.Clone(entry)
-			thunk := map[int]bool{}
+			loaded := map[int]string{}
 			last := len(d.insts)
 			if b+1 < n {
 				last = starts[b+1]
@@ -256,11 +301,11 @@ func (d *decoder) arm64Held(starts []int, succ [][]int) []map[int]uint64 {
 
 			for _, x := range d.insts[starts[b]:last] {
 				if x.op == arm64OpCall || strings.HasPrefix(x.op, arm64OpCallReg) {
-					arm64Clobber(state, thunk)
+					arm64Clobber(state, loaded)
 					continue
 				}
 
-				d.arm64Track(x, state, thunk)
+				d.arm64Track(x, state, loaded)
 			}
 
 			if out[b] == nil || !maps.Equal(out[b], state) {
@@ -319,10 +364,30 @@ func (d *decoder) arm64Stack(in inst) {
 	}
 }
 
-// arm64Track follows the registers that hold the address of a
-// thread-local descriptor, or the function loaded from one.
-func (d *decoder) arm64Track(in inst, state map[int]uint64, thunk map[int]bool) {
-	if d.tlv[1] == 0 {
+// arm64Tracks reports whether the function's registers are to be
+// followed: the binary has what arm64Track follows, macOS's thread-local
+// descriptors or a PE binary's slots of imports, and the function calls
+// or jumps through a register, which is what the following names.
+func (d *decoder) arm64Tracks() bool {
+	if d.tlv[1] == 0 && len(d.img.slots) == 0 {
+		return false
+	}
+
+	for _, in := range d.insts {
+		if strings.HasPrefix(in.op, arm64OpCallReg) || arm64JumpReg(in.op) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// arm64Track follows the registers that hold an address the analysis
+// knows, and those that hold a function loaded from one: the accessor
+// a thread-local descriptor holds, or the function a slot of a PE
+// binary's table of imports holds.
+func (d *decoder) arm64Track(in inst, state map[int]uint64, loaded map[int]string) {
+	if !d.tracking {
 		return
 	}
 
@@ -332,10 +397,16 @@ func (d *decoder) arm64Track(in inst, state map[int]uint64, thunk map[int]bool) 
 	}
 
 	switch {
-	case in.op == arm64OpPage:
-		if m := arm64Page.FindStringSubmatch(in.note); m != nil {
+	case in.op == arm64OpPage: // the page in otool's note, or after the register in objdump's operands
+		m := arm64Page.FindStringSubmatch(in.note)
+		if m == nil {
+			m = arm64Page.FindStringSubmatch(arm64Second(in.args))
+		}
+
+		if m != nil {
 			page, _ := strconv.ParseUint(m[1], 0, 64)
-			state[dst], thunk[dst] = page, false
+			state[dst] = page
+			delete(loaded, dst)
 			return
 		}
 	case in.op == arm64OpAdd:
@@ -344,7 +415,8 @@ func (d *decoder) arm64Track(in inst, state map[int]uint64, thunk map[int]bool) 
 			if src, ok := arm64RegNum(parts[1]); ok {
 				if base, ok := state[src]; ok {
 					if n, ok := arm64Immediate(parts[2]); ok {
-						state[dst], thunk[dst] = base+uint64(n), false
+						state[dst] = base + uint64(n)
+						delete(loaded, dst)
 						return
 					}
 				}
@@ -355,23 +427,42 @@ func (d *decoder) arm64Track(in inst, state map[int]uint64, thunk map[int]bool) 
 		if len(parts) == 2 {
 			if src, ok := arm64RegNum(parts[1]); ok {
 				if a, ok := state[src]; ok {
-					state[dst], thunk[dst] = a, false
+					state[dst] = a
+					delete(loaded, dst)
 					return
 				}
 
-				if thunk[src] {
+				if name, ok := loaded[src]; ok {
 					delete(state, dst)
-					thunk[dst] = true
+					loaded[dst] = name
 					return
 				}
 			}
 		}
 	case in.op == arm64OpLoad:
+		var from uint64
+		known := false
 		if m := arm64LoadBare.FindStringSubmatch(in.args); m != nil {
 			src, _ := arm64RegNum(m[2])
-			if a, ok := state[src]; ok && a >= d.tlv[0] && a < d.tlv[1] {
+			from, known = state[src]
+		} else if m := arm64LoadAt.FindStringSubmatch(in.args); m != nil {
+			src, _ := arm64RegNum(m[2])
+			off, _ := strconv.ParseUint(m[3], 0, 64)
+			if base, ok := state[src]; ok {
+				from, known = base+off, true
+			}
+		}
+
+		if known {
+			if name, ok := d.img.slots[from]; ok {
 				delete(state, dst)
-				thunk[dst] = true
+				loaded[dst] = name
+				return
+			}
+
+			if from >= d.tlv[0] && from < d.tlv[1] {
+				delete(state, dst)
+				loaded[dst] = threadLocalKey
 				return
 			}
 		}
@@ -379,7 +470,7 @@ func (d *decoder) arm64Track(in inst, state map[int]uint64, thunk map[int]bool) 
 
 	for _, r := range arm64Written(in) {
 		delete(state, r)
-		delete(thunk, r)
+		delete(loaded, r)
 	}
 }
 
@@ -422,10 +513,10 @@ func arm64Written(in inst) []int {
 
 // arm64Clobber forgets the registers a call may change: x0 to x18 and
 // the link register, x30.
-func arm64Clobber(state map[int]uint64, thunk map[int]bool) {
+func arm64Clobber(state map[int]uint64, loaded map[int]string) {
 	for _, r := range arm64CallerSaved() {
 		delete(state, r)
-		delete(thunk, r)
+		delete(loaded, r)
 	}
 }
 
@@ -477,6 +568,16 @@ func arm64RegNum(s string) (int, bool) {
 
 func arm64First(args string) string {
 	return strings.SplitN(args, ",", 2)[0]
+}
+
+// arm64Second is the second of an instruction's operands, or "".
+func arm64Second(args string) string {
+	parts := strings.SplitN(args, arm64Operands, 3)
+	if len(parts) < 2 {
+		return ""
+	}
+
+	return parts[1]
 }
 
 // arm64Last is a branch's target among its operands: what follows the

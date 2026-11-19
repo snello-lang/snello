@@ -273,12 +273,11 @@ func compile(path, backend string, target platform.Target, debug bool, stderr io
 		return "", "", nil, false
 	}
 
-	name = programName(path, isDir)
 	var out []byte
 	if backend == lower.LLVMBackend {
-		bin, out, err = llvm.Build(work.path, name, src, target, debug, bindings...)
+		bin, out, err = llvm.Build(work.path, programName(path, isDir), src, target, debug, bindings...)
 	} else {
-		bin, out, err = c.Build(work.path, name, src, target, debug, bindings...)
+		bin, out, err = c.Build(work.path, programName(path, isDir), src, target, debug, bindings...)
 	}
 
 	if err != nil {
@@ -293,7 +292,7 @@ func compile(path, backend string, target platform.Target, debug bool, stderr io
 		return "", "", nil, false
 	}
 
-	return bin, name, work, true
+	return bin, filepath.Base(bin), work, true // the target's name for it, name.exe for Windows
 }
 
 // emitSource loads a program, a file or a directory, and emits it

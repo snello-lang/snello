@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -22,7 +23,12 @@ import (
 // the table of bounds, the runtime's task_entry, which calls a task's
 // function through a pointer, and the functions of two spawns' tasks,
 // one with a bound and one recursive. It prints its table as it runs.
-const patchSource = `#include <stdint.h>
+// windowsLineEnd and unixLineEnd are a line's end as Windows' C library
+// writes one to a stream in text mode and as every other system does.
+const (
+	windowsLineEnd = "\r\n"
+	unixLineEnd    = "\n"
+	patchSource    = `#include <stdint.h>
 #include <stdio.h>
 volatile uint32_t sn_stack_bounds[2] = {4294967295u, 4294967295u};
 volatile int ended;
@@ -36,19 +42,31 @@ int main(int argc, char **argv) {
 	return 0;
 }
 `
+)
+
+// patchWindowsFlags link a program on Windows as a Snello program is:
+// by LLVM's linker, keeping the symbol table.
+var patchWindowsFlags = []string{"-D_CRT_SECURE_NO_WARNINGS", "-fuse-ld=lld", "-Wl,/debug:symtab"}
 
 // buildPatch builds src with the system's compiler as a Snello program
-// is linked, and returns the binary.
+// is linked, and returns the binary: on Windows by clang through LLVM's
+// linker, keeping the symbols the analysis finds the functions by.
 func buildPatch(t *testing.T, src string) string {
 	t.Helper()
 	cc := os.Getenv("CC")
 	if cc == "" {
-		cc = "cc"
+		cc = libcCC
+		if runtime.GOOS == platform.Windows {
+			cc = libcWindowsCC
+		}
 	}
 
 	tool := objdump
-	if system(runtime.GOOS) == darwin {
+	switch system(runtime.GOOS) {
+	case darwin:
 		tool = otool
+	case windows:
+		tool = llvmObjdump
 	}
 
 	for _, need := range []string{cc, tool} {
@@ -64,9 +82,16 @@ func buildPatch(t *testing.T, src string) string {
 	}
 
 	bin := filepath.Join(dir, "p")
+	if system(runtime.GOOS) == windows {
+		bin += libcWindowsSuffix
+	}
+
 	args := []string{"-O1", "-fno-stack-protector", "-o", bin, c}
-	if system(runtime.GOOS) == linux {
-		args = append(args, "-Wl,-z,now")
+	switch system(runtime.GOOS) {
+	case linux:
+		args = append(args, libcLinuxFlags...)
+	case windows:
+		args = append(args, patchWindowsFlags...)
 	}
 
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
@@ -78,7 +103,7 @@ func buildPatch(t *testing.T, src string) string {
 
 func TestPatch(t *testing.T) {
 	bin := buildPatch(t, patchSource)
-	bounds, err := Patch(bin, nil)
+	bounds, err := Patch(bin, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +117,10 @@ func TestPatch(t *testing.T) {
 		t.Fatalf("table %v, %v, want %d and unbounded", table, err, bounds[0].Bytes)
 	}
 
-	out, err := exec.Command(bin).CombinedOutput() // on macOS, a binary whose signature no longer matched would be killed
-	if want := fmt.Sprintf("%d %d\n", table[0], table[1]); err != nil || string(out) != want {
-		t.Fatalf("the patched program: %v, %q, want %q", err, out, want)
+	out, err := exec.Command(bin).CombinedOutput()                      // on macOS, a binary whose signature no longer matched would be killed
+	got := strings.ReplaceAll(string(out), windowsLineEnd, unixLineEnd) // Windows' C library writes a line's end as two bytes to a stream in text mode
+	if want := fmt.Sprintf("%d %d\n", table[0], table[1]); err != nil || got != want {
+		t.Fatalf("the patched program: %v, %q, want %q", err, got, want)
 	}
 
 	if _, err := os.Stat(bin + patched); !os.IsNotExist(err) {
@@ -110,7 +136,7 @@ func TestPatchNoSpawn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if bounds, err := Patch(bin, nil); err != nil || bounds != nil {
+	if bounds, err := Patch(bin, nil, ""); err != nil || bounds != nil {
 		t.Fatalf("got %v, %v", bounds, err)
 	}
 
@@ -125,7 +151,7 @@ func TestPatchErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Patch(path, nil); err == nil {
+	if _, err := Patch(path, nil, ""); err == nil {
 		t.Error("Patch of no binary: no error")
 	}
 
@@ -171,7 +197,7 @@ func TestRuntimeOptions(t *testing.T) {
 		t.Error("a function of no map has targets")
 	}
 
-	if strings.Join(opts.Switches, " ") != switchTask+" "+onStack {
+	if strings.Join(opts.Switches, " ") != switchTask+" "+onStack+" "+onBoundedStack+" "+longJump {
 		t.Errorf("switches %v", opts.Switches)
 	}
 }

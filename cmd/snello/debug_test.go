@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"slices"
 	"strconv"
@@ -19,11 +20,34 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
+	snelloruntime "github.com/snello-lang/snello/runtime"
 )
 
 // debuggerTimeout bounds a debugger's batch session, which a debugger
 // asking for a permission it was not given would otherwise hold open.
-const debuggerTimeout = 2 * time.Minute
+// windowsProgram is the debuggee's binary on Windows and
+// windowsModule the name cdb gives its module, which a breakpoint on a
+// function names; cdbScriptLoaded is what cdb prints once the script
+// is in, where it has the provider of scripts, which the SDK's cdb for
+// the processor noProviderArch ships without; cdbLocals and
+// cdbParameters are the commands that show a frame's locals and its
+// parameters through the visualizers, and cdbTaskList shows what
+// !tasks read, each unwind and what it printed, for a reader of a
+// failure.
+const (
+	debuggerTimeout = 2 * time.Minute
+	windowsProgram  = "prog.exe"
+	windowsModule   = "prog!"
+	cdbScriptLoaded = "JavaScript script successfully loaded"
+	noProviderArch  = "arm64"
+	cdbLocals       = "dx -r1 @$curframe.LocalVariables"
+	cdbTaskList     = "dx -r4 Debugger.State.Scripts.snello.Contents.taskList()"
+	cdbParameters   = "dx -r1 @$curframe.Parameters"
+)
+
+// scriptError is how cdb shows an error a script's function raised: the
+// error, then the function and the place in the script.
+var scriptError = regexp.MustCompile(`\[at [^\]]* \(line \d+ col \d+\)\]`)
 
 // debuggee is the program the debugger tests stop in, in a module with
 // a package of its own: a function with a loop, a closure that
@@ -142,8 +166,14 @@ func stopAt(t *testing.T, src, mark string) int {
 // task.
 func TestDebugger(t *testing.T) {
 	debugger := platformDebugger()
-	if !onPath(debugger) {
-		t.Skip(debugger + " is not on the path")
+	bin, found := debuggerPath(debugger)
+	if !found {
+		where := " is not on the path"
+		if debugger == cdb {
+			where += " or in Windows' SDK"
+		}
+
+		t.Skip(debugger + where)
 	}
 
 	t.Setenv("SNELLO_CACHE", t.TempDir())
@@ -155,7 +185,7 @@ func TestDebugger(t *testing.T) {
 	defer done()
 	type variant struct{ backend, cc string }
 	variants := []variant{{"llvm", ""}, {"c", ""}}
-	if goruntime.GOOS != darwin && c.IsGCC("gcc") {
+	if goruntime.GOOS != darwin && goruntime.GOOS != windows && c.IsGCC("gcc") { // a gcc on Windows builds for MinGW alone, which the build refuses
 		variants = append(variants, variant{"c", "gcc"}) // the compiler most Linux systems build C with
 	}
 
@@ -182,7 +212,21 @@ func TestDebugger(t *testing.T) {
 				t.Fatalf("snello build -debug exited %d", code)
 			}
 
-			out := runDebugger(t, debugger, support, b.backend)
+			name := "sum" // as the program names it, through the LLVM backend
+			if b.backend == "c" {
+				name = "sn__sum" // by its symbol, the one name C gives a function
+			}
+
+			out := runDebugger(t, debugger, bin, support, b.backend)
+			if debugger == cdb {
+				checkCDB(t, out)
+				if out := runToFunction(t, debugger, bin, name); !strings.Contains(out, "n = 0n7") { // in base ten, which cdb marks
+					t.Errorf("a breakpoint on %s does not stop there with its parameter in its slot:\n%s", name, out)
+				}
+
+				return
+			}
+
 			want := []string{
 				"n = 7", "total = 0", "i = 0", // a parameter and the locals of the stop in sum
 				"total += i", // the source, found by its path from the directory built in
@@ -212,31 +256,29 @@ func TestDebugger(t *testing.T) {
 				t.Errorf("the script failed:\n%s", out)
 			}
 
-			name := "sum" // as the program names it, through the LLVM backend
-			if b.backend == "c" {
-				name = "sn__sum" // by its symbol, the one name C gives a function
-			}
-
-			if out := runToFunction(t, debugger, name); !strings.Contains(out, name+"(n=7)") && !strings.Contains(out, name+" (n=7)") {
+			if out := runToFunction(t, debugger, bin, name); !strings.Contains(out, name+"(n=7)") && !strings.Contains(out, name+" (n=7)") {
 				t.Errorf("a breakpoint on %s does not stop there with its parameter in its slot:\n%s", name, out)
 			}
 		})
 	}
 }
 
-// runToFunction runs the debugger over the program built in the current
-// directory to a breakpoint on the function name, and returns what it
-// printed of the stop.
-func runToFunction(t *testing.T, debugger, name string) string {
+// runToFunction runs the debugger, bin, over the program built in the
+// current directory to a breakpoint on the function name, and returns
+// what it printed of the stop.
+func runToFunction(t *testing.T, debugger, bin, name string) string {
 	t.Helper()
 	args := []string{"--batch", "-o", "breakpoint set -n " + name, "-o", "run", "-o", "kill", "./prog"}
-	if debugger == gdb {
+	switch debugger {
+	case gdb:
 		args = []string{"-batch", "-nx", "-ex", "set disable-randomization off", "-ex", "break " + name, "-ex", "run", "-ex", "kill", "--args", "./prog"}
+	case cdb:
+		args = []string{cdbCommand, strings.Join([]string{"n 10", "l+t", "bp " + windowsModule + name, "g", "p", "dv", "q"}, cdbSeparator), windowsProgram} // a step to the function's first line, past the prologue a breakpoint on cdb stops before, as lldb's and gdb's stop after it
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), debuggerTimeout)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, debugger, args...).CombinedOutput() // kill ends the session with a status of its own
+	out, _ := exec.CommandContext(ctx, bin, args...).CombinedOutput() // kill ends the session with a status of its own
 	if ctx.Err() != nil {
 		t.Fatalf("%s did not finish within %v:\n%s", debugger, debuggerTimeout, out)
 	}
@@ -244,10 +286,11 @@ func runToFunction(t *testing.T, debugger, name string) string {
 	return string(out)
 }
 
-// runDebugger runs the debugger over the program built in the current
-// directory, in batch mode, through the stops TestDebugger names, each
-// a breakpoint that stops once, and returns what it printed.
-func runDebugger(t *testing.T, debugger, support, backend string) string {
+// runDebugger runs the debugger, bin, over the program built in the
+// current directory, in batch mode, through the stops TestDebugger
+// names, each a breakpoint that stops once, and returns what it
+// printed.
+func runDebugger(t *testing.T, debugger, bin, support, backend string) string {
 	t.Helper()
 	script := filepath.Join(support, scriptName)
 	stops := []string{
@@ -259,7 +302,17 @@ func runDebugger(t *testing.T, debugger, support, backend string) string {
 	}
 
 	var args []string
-	if debugger == lldb {
+	switch debugger {
+	case cdb:
+		commands := []string{"l+t", "n 10"}
+		for _, stop := range stops {
+			commands = append(commands, "bp /1 `"+stop+"`")
+		}
+
+		commands = append(commands, "g", cdbLocals, "g", "dx j", "g", cdbLocals, cdbParameters, "p", "k", ".f+", cdbLocals, "!tasks", cdbTaskList,
+			"g", cdbParameters, "g", "!tasks", "q")
+		args = append(cdbArgs(support, commands...), windowsProgram)
+	case lldb:
 		args = []string{"--batch", "-o", "command script import " + strconv.Quote(script)}
 		for _, stop := range stops {
 			file, line, _ := strings.Cut(stop, ":")
@@ -272,7 +325,7 @@ func runDebugger(t *testing.T, debugger, support, backend string) string {
 		}
 
 		args = append(args, "./prog")
-	} else {
+	default:
 		args = []string{"-batch", "-nx", "-ex", "set disable-randomization off", "-ex", "set pagination off", "-x", script}
 		for _, stop := range stops {
 			args = append(args, "-ex", "tbreak "+stop)
@@ -289,7 +342,7 @@ func runDebugger(t *testing.T, debugger, support, backend string) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), debuggerTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, debugger, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("%s on the %s build did not finish within %v; it may be waiting for a permission to debug:\n%s", debugger, backend, debuggerTimeout, out)
 	}
@@ -301,26 +354,150 @@ func runDebugger(t *testing.T, debugger, support, backend string) string {
 	return string(out)
 }
 
-// TestDebuggerCommand holds the platform's debugger's arguments to the
-// script loaded, the standard library's directory mapped, and the
-// program with its arguments last.
+// checkCDB holds a cdb session over the debuggee's stops to what
+// TestDebugger holds lldb's and gdb's to, as cdb prints it: the
+// variables of each stop, the values shown by the visualizers the PDB
+// carries, the tasks' states listed by the script, and no error of the
+// script's. The whole session is logged, for a reader of a failure.
+func checkCDB(t *testing.T, out string) {
+	t.Helper()
+	t.Logf("the cdb session:\n%s", out)
+	for _, v := range [][2]string{
+		{"n", "7"}, {"total", "0"}, {"i", "0"}, // a parameter and the locals of the stop in sum
+		{"j", "0"}, // the second loop's variable, under its own name
+		{"w", "2"}, // a function of the program's own package
+	} {
+		if !regexp.MustCompile(`(?m)^\s*` + v[0] + `\s+: ` + v[1] + `\b`).MatchString(out) { // dx pads a name to a column
+			t.Errorf("the session does not show %s as %s", v[0], v[1])
+		}
+	}
+
+	for _, w := range []string{`"snello"`, "Some(5)", "Rect(2, 3)", "Ok(4)", "len=3"} { // the caller's values as the program writes them
+		if !strings.Contains(out, w) {
+			t.Errorf("the session does not show %q", w)
+		}
+	}
+
+	if scriptError.MatchString(out) {
+		t.Errorf("the script failed")
+	}
+
+	if !strings.Contains(out, cdbScriptLoaded) {
+		if goruntime.GOARCH == noProviderArch {
+			t.Log("this cdb has no provider of scripts: the tasks are not checked")
+			return
+		}
+
+		t.Error("the script did not load")
+	}
+
+	// The task waiting on the channel, and main while the task stops,
+	// are listed by their state alone: their frames, which the script
+	// has the debugger unwind from the saved context, are not shown yet,
+	// the debugger's k raising an exception on it, which the session's
+	// dump of taskList shows for whoever takes that up.
+	if !strings.Contains(out, "parked") {
+		t.Errorf("the session does not show a parked task")
+	}
+}
+
+// TestDebuggerCommand holds each debugger's arguments to the script
+// loaded, the standard library's sources found, and the program with
+// its arguments last: for cdb, the extension loaded by its path, and
+// the support's directory first among the places sources are looked
+// for, under which the library's are found by their path's end, with
+// the user's own places after it.
 func TestDebuggerCommand(t *testing.T) {
-	name, args := debuggerCommand("/support", "./prog", []string{"-v", "x"})
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, filepath.Join("/support", scriptName)) {
-		t.Errorf("%s %v does not load the script", name, args)
+	support := filepath.Join(string(filepath.Separator), "support")
+	t.Setenv(sourcePathVar, "own")
+	script, quotedSources := filepath.Join(support, scriptName), strconv.Quote(filepath.Join(support, stdDir))
+	for name, want := range map[string]string{lldb: strconv.Quote(script), gdb: script, cdb: cdbScriptLoad + cdbQuote + filepath.Join(support, jsName) + cdbQuote} {
+		args := debuggerCommand(name, support, "./prog", []string{"-v", "x"})
+		joined := strings.Join(args, " ")
+		sources := strings.Contains(joined, strings.TrimSuffix(lower.StdSources, stdPathEnd)+argSeparator+quotedSources)
+		if name == cdb {
+			sources = slices.Equal(args[:2], []string{cdbSourcePath, support + cdbPathSeparator + "own"})
+		}
+
+		if !strings.Contains(joined, want) {
+			t.Errorf("%s %v does not load the script", name, args)
+		}
+
+		if !sources {
+			t.Errorf("%s %v does not map the standard library's sources", name, args)
+		}
+
+		if !slices.Equal(args[len(args)-3:], []string{"./prog", "-v", "x"}) {
+			t.Errorf("%s %v does not end with the program and its arguments", name, args)
+		}
+	}
+}
+
+// TestTableFields holds both scripts to the runtime's table: each reads
+// sn_debugger_table's numbers by their order, so each lists the fields
+// internal.h declares, in its order.
+func TestTableFields(t *testing.T) {
+	header := string(snelloruntime.Files()["internal.h"])
+	end := strings.Index(header, "} sn_debugger_table;")
+	start := strings.LastIndex(header[:max(end, 0)], "typedef struct {")
+	if start < 0 || end < 0 {
+		t.Fatal("internal.h declares no sn_debugger_table")
 	}
 
-	if !strings.Contains(joined, strings.TrimSuffix(lower.StdSources, "/")) || !strings.Contains(joined, filepath.Join("/support", stdDir)) {
-		t.Errorf("%s %v does not map the standard library's sources", name, args)
+	var want []string
+	for _, line := range strings.Split(header[start:end], "\n")[1:] { // the scripts read the head, then 32-bit numbers
+		line = strings.TrimSpace(line)
+		fields, ok := strings.CutPrefix(line, "int32_t ")
+		switch {
+		case line == "" || line == "const void *tasks;":
+			continue
+		case !ok:
+			t.Fatalf("sn_debugger_table has a field the scripts cannot read: %s", line)
+		}
+
+		for _, f := range strings.Split(strings.TrimSuffix(fields, ";"), ",") {
+			want = append(want, strings.TrimSpace(f))
+		}
 	}
 
-	if !slices.Equal(args[len(args)-3:], []string{"./prog", "-v", "x"}) {
-		t.Errorf("%s %v does not end with the program and its arguments", name, args)
+	quoted := regexp.MustCompile(`"([a-z_]+)"`)
+	for name, script := range map[string][]byte{scriptName: debuggerScript, jsName: windowsScript} {
+		text := string(script)
+		at := strings.Index(text, "TABLE_FIELDS = ")
+		if at < 0 {
+			t.Errorf("%s lists no TABLE_FIELDS", name)
+			continue
+		}
+
+		list := text[at:]
+		last := strings.IndexAny(list, ")]")
+		if last < 0 {
+			t.Errorf("%s's TABLE_FIELDS does not end", name)
+			continue
+		}
+
+		list = list[:last]
+		var got []string
+		for _, m := range quoted.FindAllStringSubmatch(list, -1) {
+			got = append(got, m[1])
+		}
+
+		if !slices.Equal(got, want) {
+			t.Errorf("%s reads the table as %v, internal.h declares %v", name, got, want)
+		}
+	}
+}
+
+// TestPlatformDebugger names the debugger of each system the compiler
+// runs on.
+func TestPlatformDebugger(t *testing.T) {
+	want := map[string]string{darwin: lldb, windows: cdb}[goruntime.GOOS]
+	if want == "" {
+		want = gdb
 	}
 
-	if want := platformDebugger(); name != want {
-		t.Errorf("the debugger is %s, want %s", name, want)
+	if got := platformDebugger(); got != want {
+		t.Errorf("platformDebugger() = %s, want %s", got, want)
 	}
 }
 

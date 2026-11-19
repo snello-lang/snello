@@ -92,8 +92,14 @@ func main() {
 // precision, and Fprint writes its text with the writer's Write.
 func TestVerbs(t *testing.T) {
 	body := irFunction(t, emitSource(t, verbCalls), "sn_main")
+	host, err := targetABI("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flag := "i1" + host.small("i1") // the upper-case flag as the host's convention passes a bool
 	for _, want := range []string{
-		"sext i8 %", "zext i8 %", ", i64 16, i1 zeroext false)", ", i64 16, i1 zeroext true)", ", i64 8, i1 zeroext false)", ", i64 2, i1 zeroext false)",
+		"sext i8 %", "zext i8 %", ", i64 16, " + flag + " false)", ", i64 16, " + flag + " true)", ", i64 8, " + flag + " false)", ", i64 2, " + flag + " false)",
 		"@sn_hex_bytes(", "@sn_f32_to_string(", "@sn_sn_os_File_Write(",
 	} {
 		if !strings.Contains(body, want) {

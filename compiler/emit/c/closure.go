@@ -103,10 +103,8 @@ func (e *Emitter) funcLit(x *ast.FuncLit) string {
 
 	e.line("(void)sn_env;")
 	e.function(sig, x.Body)
-	e.endPositions()
 	e.at, e.within, e.nclosure = outerAt, outerWithin, outerClosures
-	e.line("")
-	e.helpers.Write(e.body.Bytes())
+	e.addFunction(e.body.Bytes())
 	e.body = outer
 	cell := e.temp() // the pair itself, or the environment in the frame
 	if inline {

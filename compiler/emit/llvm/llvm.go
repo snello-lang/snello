@@ -27,6 +27,7 @@ package llvm
 import (
 	"bytes"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -74,7 +75,7 @@ const (
 type Config struct {
 	Debug bool
 	Arch  string // amd64 or arm64; the host's when empty
-	OS    string // darwin or linux; the host's when empty
+	OS    string // darwin, linux or windows; the host's when empty
 }
 
 // An Emitter writes one program as one IR module. The named types,
@@ -208,7 +209,7 @@ func Emit(cfg Config, file *token.File, f *ast.File, info *types.Info, libraries
 // than the module was written with, the module is written again with
 // that size, which settles in a pass or two.
 func EmitFiles(cfg Config, files []*token.File, fs []*ast.File, info *types.Info, libraries ...lower.Library) ([]byte, error) {
-	target, err := targetABI(cfg.Arch)
+	target, err := targetABI(cfg.Arch, cfg.OS)
 	if err != nil {
 		return nil, err
 	}
@@ -817,11 +818,22 @@ func (e *Emitter) subprogramNode(name, display string, f *token.File, p token.Po
 }
 
 // lineTables writes what the module's line tables need beside the
-// nodes: the unit, which every function names, and the module's flags.
+// nodes: the unit, which every function names, and the module's flags:
+// DWARF, which the trace's table is read from on every system, and for
+// a debug build of Windows CodeView too, which the PDB Windows'
+// debuggers read is made of.
 func (e *Emitter) lineTables(out *bytes.Buffer) {
-	version := e.metaNode("!{i32 7, !\"Dwarf Version\", i32 4}")
-	info := e.metaNode("!{i32 2, !\"Debug Info Version\", i32 3}")
-	put(out, "!llvm.dbg.cu = !{!", strconv.Itoa(e.unit), "}\n!llvm.module.flags = !{!", strconv.Itoa(version), ", !", strconv.Itoa(info), "}\n")
+	flags := []int{e.metaNode("!{i32 7, !\"Dwarf Version\", i32 4}"), e.metaNode("!{i32 2, !\"Debug Info Version\", i32 3}")}
+	if e.cfg.Debug && (e.cfg.OS == windows || e.cfg.OS == "" && runtime.GOOS == windows) {
+		flags = append(flags, e.metaNode("!{i32 2, !\"CodeView\", i32 1}"))
+	}
+
+	var named []string
+	for _, f := range flags {
+		named = append(named, "!"+strconv.Itoa(f))
+	}
+
+	put(out, "!llvm.dbg.cu = !{!", strconv.Itoa(e.unit), "}\n!llvm.module.flags = !{", strings.Join(named, ", "), "}\n")
 	out.Write(e.meta.Bytes())
 }
 
@@ -913,13 +925,13 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 
 	e.stmts(body.List)
 	if e.fn.terminated {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1] // the body ended with a statement that left, which dropped everything
+		e.popLeft() // the body ended with a statement that left, which dropped everything
 		return
 	}
 
 	if sig.Results() == types.Unit {
 		e.leaveFunction(body.Rbrace)
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 		e.inst("ret void")
 	} else {
 		e.inst("unreachable")

@@ -16,6 +16,7 @@
 package bench
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -34,6 +34,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/measure"
 )
 
 // programs are the benchmarks, by the stem of their files.
@@ -58,6 +59,11 @@ var timed = map[string]bool{"tasks": true, "memory": true, "variadic": true, "js
 func TestBenchmarks(t *testing.T) {
 	timing := os.Getenv("SNELLO_BENCH") != ""
 	dir := t.TempDir()
+	var m *measure.Measurer
+	if timing {
+		m = measure.New(t)
+	}
+
 	var rows []string
 	for _, name := range programs {
 		bins := map[string]string{
@@ -91,7 +97,7 @@ func TestBenchmarks(t *testing.T) {
 
 		sort.Strings(tools)
 		for _, tool := range tools {
-			s := measure(t, bins[tool])
+			s := measureRuns(t, m, bins[tool])
 			rows = append(rows, "| "+name+" | "+tool+" | "+ms(s.median)+" | "+ms(s.least)+" | "+ms(s.most)+" | "+megabytes(s.peak)+" | "+s.reported+" |")
 		}
 	}
@@ -119,6 +125,8 @@ func TestBenchmarks(t *testing.T) {
 // a multiple of the live heap before a cycle fails this test; Go's,
 // at its default setting, peaks at about twice the live heap.
 func TestNoCollector(t *testing.T) {
+	m := measure.New(t)
+
 	src, err := os.ReadFile("memory.snello")
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +137,7 @@ func TestNoCollector(t *testing.T) {
 		for _, n := range []int{1, 2000, 10000} {
 			variant := strings.Replace(string(src), "const rounds = 2000", "const rounds = "+strconv.Itoa(n), 1)
 			bin := buildSnelloSource(t, t.TempDir(), "memory", []byte(variant), backend)
-			peaks[n] = run(t, bin).peak
+			peaks[n] = run(t, m, bin).peak
 		}
 
 		live := peaks[1]
@@ -162,14 +170,14 @@ type summary struct {
 	reported            string
 }
 
-// measure runs a binary once for nothing, then runs times, and
+// measureRuns runs a binary once for nothing, then runs times, and
 // summarizes the runs.
-func measure(t *testing.T, bin string) summary {
+func measureRuns(t *testing.T, m *measure.Measurer, bin string) summary {
 	t.Helper()
-	run(t, bin)
+	run(t, m, bin)
 	ms := make([]measurement, runs)
 	for i := range ms {
-		ms[i] = run(t, bin)
+		ms[i] = run(t, m, bin)
 	}
 
 	tooks := make([]int64, runs)
@@ -267,32 +275,21 @@ func ms(d time.Duration) string {
 }
 
 // run runs a binary once and measures it.
-func run(t *testing.T, bin string) measurement {
+func run(t *testing.T, m *measure.Measurer, bin string) measurement {
 	t.Helper()
-	cmd := exec.Command(bin)
-	start := time.Now()
-	out, err := cmd.Output()
-	took := time.Since(start)
-	if exit, ok := err.(*exec.ExitError); ok {
-		t.Fatalf("%s: %v\n%s", bin, err, exit.Stderr)
-	}
-
+	var stdout, stderr bytes.Buffer
+	res, err := m.Run(&stdout, &stderr, bin)
 	if err != nil {
-		t.Fatalf("%s: %v", bin, err)
+		t.Fatalf("%s: %v\n%s", bin, err, stderr.Bytes())
 	}
 
-	peak := cmd.ProcessState.SysUsage().(*syscall.Rusage).Maxrss
-	if runtime.GOOS != "darwin" {
-		peak *= 1024 // Linux counts the peak in kilobytes, Darwin in bytes
+	got := measurement{took: res.Took, peak: res.Peak}
+	if timed[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(bin), filepath.Ext(bin)), "-go")] {
+		lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+		got.reported = lines[len(lines)-1]
 	}
 
-	m := measurement{took: took, peak: peak}
-	if timed[strings.TrimSuffix(filepath.Base(bin), "-go")] {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		m.reported = lines[len(lines)-1]
-	}
-
-	return m
+	return got
 }
 
 // result returns what a timed program printed before its timings.
@@ -370,7 +367,7 @@ func buildSnelloSource(t *testing.T, dir, name string, src []byte, backend strin
 // buildGo builds name.go into dir.
 func buildGo(t *testing.T, dir, name string) string {
 	t.Helper()
-	bin := filepath.Join(dir, name+"-go")
+	bin := filepath.Join(dir, platform.Host().Executable(name+"-go"))
 	if out, err := exec.Command("go", "build", "-o", bin, name+".go").CombinedOutput(); err != nil {
 		t.Fatalf("go build %s: %v\n%s", name, err, out)
 	}

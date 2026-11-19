@@ -1,0 +1,66 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package os_test
+
+import ("expect"; "fmt"; "os"; "testing")
+
+// TestStatUnix checks what a stat says on Linux and macOS alone: a
+// temporary directory is its owner's alone, and the root is named "/".
+func TestStatUnix() {
+	dir := testing.TempDir()
+	di := expect.IsOk(os.Stat(ref dir.Path()))
+	expect.Equal(ref fmt.Sprint(di.Mode()), "drwx------")
+	expect.Equal(ref expect.IsOk(os.Stat("/")).Name().Clone(), "/")
+}
+
+func TestTempDir() {
+	was := os.LookupEnv("TMPDIR")
+	expect.IsOk(os.Setenv("TMPDIR", "/somewhere/else"))
+	expect.Equal(ref os.TempDir(), "/somewhere/else")
+	expect.IsOk(os.Setenv("TMPDIR", ""))
+	expect.Equal(ref os.TempDir(), "/tmp") // empty is as unset
+	os.Unsetenv("TMPDIR")
+	expect.Equal(ref os.TempDir(), "/tmp")
+	match was {
+		Some(dir) => expect.IsOk(os.Setenv("TMPDIR", ref dir)),
+		None => {},
+	}
+}
+
+// TestLstat checks that Lstat is of a symbolic link itself, where Stat
+// is of what it leads to: every system has one among these.
+func TestLstat() {
+	found := false
+	for _, link := range ref []string{"/tmp".Clone(), "/dev/stdin".Clone(), "/dev/fd".Clone(), "/var/run".Clone(), "/etc/mtab".Clone()} {
+		match os.Lstat(link) {
+			Ok(li) => {
+				if li.Mode() & os.ModeSymlink != 0 {
+					found = true
+					expect.False(li.IsDir())
+					expect.False(li.Mode().IsRegular())
+					expect.True(expect.IsOk(os.Stat(link)).Mode() & os.ModeSymlink == 0)
+				}
+			},
+			Err(_) => {},
+		}
+	}
+
+	expect.True(found)
+}
+
+// TestModesUnix checks the permission bits a file and a directory are
+// made with, as given, under a umask that leaves the owner's.
+func TestModesUnix() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte{1}, 0o600))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref path)).Mode()), "-rw-------")
+	sub := dir.Join("sub")
+	expect.IsOk(os.Mkdir(ref sub, 0o700))
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sub)).Mode()), "drwx------")
+	sticky := dir.Join("sticky")
+	expect.IsOk(os.Mkdir(ref sticky, os.ModeSticky | 0o700)) // a bit above the nine, which some systems drop from a new directory's mode
+	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sticky)).Mode()), "dtrwx------")
+}

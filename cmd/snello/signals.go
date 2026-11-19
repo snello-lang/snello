@@ -168,9 +168,10 @@ func notIgnored(sigs []os.Signal) []os.Signal {
 // raise ends the command by s, as s's default action would, so that the
 // shell that ran it sees a command a signal ended and, for an
 // interrupt, ends a script too rather than go on to its next line. An
-// interrupt, a hangup and a termination end it so; any other signal
-// ends it with signalExitBase and the signal's number, as does one that
-// has not ended it within raiseWait.
+// interrupt, a hangup and a termination end it so where the system has
+// signals; any other signal, every one on Windows, ends it with
+// signalExitBase and the signal's number, as does one that has not
+// ended it within raiseWait.
 func raise(s os.Signal) {
 	sig, ok := s.(syscall.Signal)
 	if !ok {
@@ -179,9 +180,19 @@ func raise(s os.Signal) {
 
 	if sig == syscall.SIGINT || sig == syscall.SIGHUP || sig == syscall.SIGTERM {
 		signal.Reset(sig)
-		syscall.Kill(os.Getpid(), sig)
-		time.Sleep(raiseWait)
+		if signalSelf(sig) {
+			time.Sleep(raiseWait)
+		}
 	}
 
 	os.Exit(signalExitBase + int(sig))
+}
+
+// signalSelf sends sig to the command itself and reports whether it
+// could: never on Windows, which has no signals to send, as its
+// process's Signal says, so that raise ends the command by its exit
+// code there at once.
+func signalSelf(sig syscall.Signal) bool {
+	self, err := os.FindProcess(os.Getpid())
+	return err == nil && self.Signal(sig) == nil
 }

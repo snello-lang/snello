@@ -13,8 +13,8 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 )
 
-// TestObjects writes a table into the format of every target, Mach-O
-// or ELF for its processor, and reads each back with the standard
+// TestObjects writes a table into the format of every target, Mach-O,
+// ELF or COFF for its processor, and reads each back with the standard
 // reader: one data section holding the table's bytes
 // at its alignment, and the two symbols, the table's at the start and
 // the parts' after the header, with the parts' size.
@@ -30,15 +30,18 @@ func TestObjects(t *testing.T) {
 			t.Fatalf("%s: %v", target, err)
 		}
 
-		if target.OS == platform.Darwin {
+		switch target.OS {
+		case platform.Darwin:
 			checkMacho(t, target, object, table)
-		} else {
+		case platform.Windows:
+			checkCOFF(t, target, object, table)
+		default:
 			checkELF(t, target, object, table)
 		}
 	}
 
-	if _, err := Object(table, platform.Target{OS: "windows", Arch: platform.AMD64}); err == nil {
-		t.Error("an object written for windows")
+	if _, err := Object(table, platform.Target{OS: "freebsd", Arch: platform.AMD64}); err == nil {
+		t.Error("an object written for freebsd")
 	}
 }
 

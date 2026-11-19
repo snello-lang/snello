@@ -128,6 +128,31 @@ func TestReleaseNotDescribed(t *testing.T) {
 	}
 }
 
+// TestCodeView describes a debug build for Windows in CodeView as well
+// as in DWARF, which the trace's table is read from, and no other
+// build: Windows' debuggers read CodeView, from the PDB the link makes.
+func TestCodeView(t *testing.T) {
+	const codeViewFlag = `!"CodeView", i32 1`
+	for _, c := range []struct {
+		cfg  Config
+		want bool
+	}{
+		{Config{Debug: true, OS: "windows", Arch: "amd64"}, true},
+		{Config{OS: "windows", Arch: "amd64"}, false},
+		{Config{Debug: true, OS: "linux", Arch: "amd64"}, false},
+	} {
+		out, err := emit(t, "described", described, c.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		module := string(out)
+		if got := strings.Contains(module, codeViewFlag); got != c.want || !strings.Contains(module, `!"Dwarf Version"`) {
+			t.Errorf("%+v: CodeView %v, want %v, and DWARF always", c.cfg, got, c.want)
+		}
+	}
+}
+
 // TestLayout holds the offsets of a record's members to the IR's
 // layout: each at its alignment after the last.
 func TestLayout(t *testing.T) {
@@ -142,6 +167,10 @@ func TestLayout(t *testing.T) {
 // debugging information with Go's reader: each is alike in name and
 // offset, so that a variable prints the same through either backend.
 func TestDebugTypesMatchC(t *testing.T) {
+	if goruntime.GOOS == platform.Windows {
+		t.Skip("the test reads Mach-O and ELF objects, and a Windows object is COFF")
+	}
+
 	if _, err := exec.LookPath(Compiler()); err != nil {
 		t.Skip("no clang")
 	}

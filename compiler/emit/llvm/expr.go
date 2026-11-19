@@ -1199,7 +1199,7 @@ func (e *Emitter) blockValue(b *ast.BlockStmt, result string, want types.Type) {
 	if !e.fn.terminated {
 		e.pop(b.Rbrace)
 	} else {
-		e.fn.frames = e.fn.frames[:len(e.fn.frames)-1]
+		e.popLeft()
 	}
 }
 

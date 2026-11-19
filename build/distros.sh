@@ -9,7 +9,9 @@
 # emulation on an arm64 machine. DISTROS names fewer, as
 # DISTROS="debian fedora". The images, snello-distro-*, are kept, so
 # that the next run builds only what changed; docker image rm removes
-# them. It needs Docker and Go on the host.
+# them. It needs Docker and Go on the host. Under CI, where a build
+# that fails or hangs is read from the log alone, each image's build
+# prints what it does.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
@@ -18,6 +20,16 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 host=$(go env GOARCH)
+# build_image builds an image: quietly on a developer's machine, and
+# under CI printing each step, so that a build that fails or hangs is
+# read from the job's log.
+build_image() {
+    if [ -n "${CI:-}" ]; then
+        docker build --progress=plain "$@"
+    else
+        docker build -q "$@" >/dev/null
+    fi
+}
 cp "$root/build/distros/check.sh" "$work/check.sh"
 for distro in ${DISTROS:-debian ubuntu fedora arch}; do
     goarch=$host
@@ -40,7 +52,7 @@ for distro in ${DISTROS:-debian ubuntu fedora arch}; do
     for target in bare clang; do
         image=snello-distro-$distro-$target
         echo "== $distro, $target"
-        docker build -q --platform "linux/$goarch" --target "$target" -f "$root/build/distros/$distro.Dockerfile" -t "$image" "$work" >/dev/null
+        build_image --platform "linux/$goarch" --target "$target" -f "$root/build/distros/$distro.Dockerfile" -t "$image" "$work"
         docker run --rm --platform "linux/$goarch" -e FIX="$fix" "$image" snello-check "$target"
     done
 done

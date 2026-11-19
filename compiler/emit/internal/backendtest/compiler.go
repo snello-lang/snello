@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -17,9 +18,15 @@ import (
 // logs each run's arguments, one line a run, and hands them on to the
 // real compiler named, cc or clang; it returns the compiler and the
 // log. The tests of the runtime cache count the compiler's runs
-// through it. The test is skipped when the real compiler is missing.
+// through it. The test is skipped when the real compiler is missing,
+// and on Windows, which does not run the shell script the counting
+// compiler is.
 func CountingCompiler(t *testing.T, real string) (cc, log string) {
 	t.Helper()
+	if runtime.GOOS == windows {
+		t.Skip("the counting compiler is a shell script, which Windows does not run")
+	}
+
 	path, err := exec.LookPath(real)
 	if err != nil {
 		t.Skipf("no %s on the PATH", real)

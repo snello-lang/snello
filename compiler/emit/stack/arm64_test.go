@@ -223,3 +223,76 @@ func TestArm64Immediate(t *testing.T) {
 		t.Error("a register read as an immediate")
 	}
 }
+
+// TestArm64Windows reads what a Windows arm64 binary adds, as LLVM's
+// objdump prints it: a frame larger than a page, its size in sixteens
+// in x15 for the stack probe's call and taken from the stack pointer
+// after it; a call through a slot of the table of imports, its page
+// read from adrp's operands and the slot loaded at an offset of it, and
+// a thunk's jump through one; and what it cannot count: a register
+// written between its load from a slot and the call through it, which
+// is a call through a pointer, a size built of two instructions, and a
+// branch to the probe's call.
+func TestArm64Windows(t *testing.T) {
+	img := &Image{arch: arm64, os: windows, functions: map[string]*function{}, cLibrary: map[string]bool{}, slots: map[uint64]string{0x140068220: "CreateWaitableTimerExW", 0x140002060: "GetCurrentProcessId"}}
+	img.read([]byte(`0000000140001000 <probed>:
+140001000:     	stp	x29, x30, [sp, #-0x10]!
+140001004:     	mov	x15, #0x4e2             // =1250
+140001008:     	bl	0x1400010c0 <__chkstk>
+14000100c:     	sub	sp, sp, x15, lsl #4
+140001010:     	adrp	x8, 0x140068000 <__imp_CreateWaitableTimerExW>
+140001014:     	ldr	x8, [x8, #0x220]
+140001018:     	blr	x8
+14000101c:     	ret
+
+0000000140001020 <clobbered>:
+140001020:     	adrp	x8, 0x140068000 <__imp_CreateWaitableTimerExW>
+140001024:     	ldr	x8, [x8, #0x220]
+140001028:     	mov	x8, x1
+14000102c:     	blr	x8
+140001030:     	ret
+
+0000000140001040 <built>:
+140001040:     	mov	x15, #0x4e2             // =1250
+140001044:     	movk	x15, #0x1, lsl #16
+140001048:     	bl	0x1400010c0 <__chkstk>
+14000104c:     	sub	sp, sp, x15, lsl #4
+140001050:     	ret
+
+0000000140001060 <merged>:
+140001060:     	cbz	x0, 0x14000106c <merged+0xc>
+140001064:     	mov	x15, #0x9c4             // =2500
+140001068:     	b	0x140001070 <merged+0x10>
+14000106c:     	mov	x15, #0x4e2             // =1250
+140001070:     	bl	0x1400010c0 <__chkstk>
+140001074:     	sub	sp, sp, x15, lsl #4
+140001078:     	ret
+
+00000001400010c0 <__chkstk>:
+1400010c0:     	ret
+
+00000001400010c4 <GetCurrentProcessId>:
+1400010c4:     	adrp	x16, 0x140002000
+1400010c8:     	ldr	x16, [x16, #0x60]
+1400010cc:     	br	x16
+`), [2]uint64{})
+	if f := img.functions["probed"]; f.frame != 16+0x4e2*16 || f.unknown != "" || kinds(f) != "__chkstk lib:CreateWaitableTimerExW" {
+		t.Errorf("probed: %+v, calls %q", f, kinds(f))
+	}
+
+	if f := img.functions["clobbered"]; kinds(f) != "*" {
+		t.Errorf("clobbered: calls %q, want a call through a pointer", kinds(f))
+	}
+
+	if f := img.functions["built"]; !strings.Contains(f.unknown, "depends on a value") {
+		t.Errorf("built: %+v, want unknown for a size of two instructions", f)
+	}
+
+	if f := img.functions["merged"]; !strings.Contains(f.unknown, "stack probe") {
+		t.Errorf("merged: %+v, want unknown for the branch to the probe", f)
+	}
+
+	if f := img.functions["GetCurrentProcessId"]; kinds(f) != "lib:GetCurrentProcessId" || f.unknown != "" {
+		t.Errorf("the thunk: %+v, calls %q", f, kinds(f))
+	}
+}

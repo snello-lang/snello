@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/platform"
 )
 
 func TestParseInst(t *testing.T) {
@@ -119,6 +121,14 @@ var lazyFlags = map[system][]string{linux: {"-Wl,-z,lazy"}, darwin: {"-Wl,-no_fi
 // the link options flags, and loads the binary.
 func loadC(t *testing.T, flags ...string) *Image {
 	t.Helper()
+	if runtime.GOOS == platform.Windows {
+		t.Skip("loadSource is POSIX C, its write and its lazy binding; TestLoadPE reads Windows' binaries")
+	}
+
+	if !Measured(runtime.GOOS, runtime.GOARCH) {
+		t.Skipf("the C library's stacks are not measured on %s/%s, so no call of it is bounded", runtime.GOOS, runtime.GOARCH)
+	}
+
 	cc := os.Getenv("CC")
 	if cc == "" {
 		cc = "cc"
@@ -193,7 +203,7 @@ func TestLoadNotABinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "neither Mach-O nor ELF") {
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "neither Mach-O, ELF nor PE") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -217,6 +227,10 @@ func TestDisassembler(t *testing.T) {
 	t.Setenv("PATH", dir)
 	if got := disassembler(other); got != objdump {
 		t.Errorf("no objdump for %s: %s, want the path's %s", other, got, objdump)
+	}
+
+	if runtime.GOOS == platform.Windows {
+		t.Skip("the fake disassemblers are shell scripts, which Windows does not find on the path")
 	}
 
 	for _, name := range []string{llvmObjdump, elfMachines[other] + objdumpFor} {

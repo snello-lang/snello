@@ -1,0 +1,26 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package filepath_test
+
+import ("expect"; "path/filepath")
+
+// TestUnix checks that every name answers as package path's does on
+// Linux and macOS, whose own tests hold the rules, with no volume and a
+// slash alone as the separator.
+func TestUnix() {
+	expect.Equal(ref filepath.Clean("/usr//lib/../bin/"), "/usr/bin")
+	expect.Equal(ref filepath.Join("/usr", "lib/snello"), "/usr/lib/snello")
+	expect.Equal(ref filepath.Dir("/usr/lib/snello"), "/usr/lib")
+	expect.Equal(filepath.Base("/usr/lib/snello"), "snello")
+	dir, file := filepath.Split("/tmp/notes.txt")
+	expect.Equal(dir, "/tmp/")
+	expect.Equal(file, "notes.txt")
+	expect.True(filepath.IsAbs("/tmp"))
+	expect.False(filepath.IsAbs("tmp"))
+	expect.Equal(ref filepath.Separator, ref '/')
+	expect.False(filepath.IsSeparator('\\'))
+	expect.Equal(filepath.VolumeName("C:/x"), "")
+	expect.Equal(ref filepath.Clean("a\\b"), "a\\b") // a backslash is a byte of a name
+}

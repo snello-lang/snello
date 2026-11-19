@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,10 @@ func main() {
 // does not take descriptor 0 and stdin reads nothing, where it would
 // otherwise read the file, and the file's drop closes it.
 func TestClosedStdin(t *testing.T) {
+	if runtime.GOOS == platform.Windows {
+		t.Skip("Windows has no shell that starts a program with its standard input closed")
+	}
+
 	bin := release(t, "closed", `package main
 import ("fmt"; "os")
 func main() {
@@ -157,6 +162,10 @@ func main() {
 // units, so the test asks only that a write fail and that the reports
 // agree with the file.
 func TestWriteLimit(t *testing.T) {
+	if runtime.GOOS == platform.Windows {
+		t.Skip("Windows has no limit on the size of a file a process writes")
+	}
+
 	bin := release(t, "limit", `package main
 import ("fmt"; "os")
 func main() {
@@ -199,6 +208,10 @@ func main() {
 // that may not be changed: the error names that file and the call that
 // failed, as Go's does, not the path asked for.
 func TestRemoveAllNamesEntry(t *testing.T) {
+	if runtime.GOOS == platform.Windows {
+		t.Skip("Windows does not lock a directory's entries through its permission bits")
+	}
+
 	if os.Geteuid() == 0 {
 		t.Skip("the system lets root remove what the test locks")
 	}

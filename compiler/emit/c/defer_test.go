@@ -91,3 +91,22 @@ func withoutDirectives(out string) string {
 
 	return strings.Join(kept, "\n")
 }
+
+// TestDeferLeavesNoPosition holds the C written after a deferred call's
+// thunk to no Snello position, as a closure's.
+func TestDeferLeavesNoPosition(t *testing.T) {
+	helpersGenerated(t, emitSource(t, `package main
+
+import "fmt"
+
+struct Node { v int }
+
+func show(s string) { fmt.Println(s) }
+
+func main() {
+    defer show("bye")
+    var some *Node? = Some(&Node{v: 1})
+    match some { Some(n) => fmt.Println(n.v), None => fmt.Println("none") }
+}
+`))
+}

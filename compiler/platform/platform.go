@@ -21,12 +21,21 @@ import (
 )
 
 const (
-	// Darwin and Linux are the systems Snello builds for, AMD64 and
-	// ARM64 the processors.
-	Darwin = "darwin"
-	Linux  = "linux"
-	AMD64  = "amd64"
-	ARM64  = "arm64"
+	// Darwin, Linux and Windows are the systems Snello builds for, AMD64
+	// and ARM64 the processors.
+	Darwin  = "darwin"
+	Linux   = "linux"
+	Windows = "windows"
+	AMD64   = "amd64"
+	ARM64   = "arm64"
+
+	// Unix is the word a file's name ends in to say it is for every Unix,
+	// every system of unixSystems, Linux and macOS among them.
+	Unix = "unix"
+
+	// executableSuffix ends the name of a program built for Windows,
+	// which runs a file by that ending alone.
+	executableSuffix = ".exe"
 
 	// MacOSMajor and MacOSMinor are the oldest macOS a program built for
 	// darwin runs on, 14.4, the first with the waits on an address the
@@ -56,7 +65,7 @@ var (
 	// systems are the systems Snello builds for and architectures the
 	// processors, each in order, for Targets and the messages that list
 	// them.
-	systems       = []string{Darwin, Linux}
+	systems       = []string{Darwin, Linux, Windows}
 	architectures = []string{AMD64, ARM64}
 
 	// knownSystems and knownArchitectures are the names a file's name
@@ -66,7 +75,14 @@ var (
 	// name that only ends in a word is not.
 	knownSystems = set(
 		"aix", "android", Darwin, "dragonfly", "freebsd", "hurd", "illumos", "ios", "js", Linux,
-		"nacl", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows", "zos",
+		"nacl", "netbsd", "openbsd", "plan9", "solaris", "wasip1", Windows, "zos",
+	)
+
+	// unixSystems are the systems of knownSystems that are a Unix, which
+	// a file for Unix is built for.
+	unixSystems = set(
+		"aix", "android", Darwin, "dragonfly", "freebsd", "hurd", "illumos", "ios", Linux,
+		"netbsd", "openbsd", "solaris",
 	)
 	knownArchitectures = set(
 		"386", AMD64, "amd64p32", "arm", "armbe", ARM64, "arm64be", "loong64", "mips", "mipsle",
@@ -83,8 +99,8 @@ type Target struct {
 }
 
 // Targets returns every platform Snello builds for, each system's
-// processors in turn: darwin/amd64, darwin/arm64, linux/amd64 and
-// linux/arm64.
+// processors in turn: darwin/amd64, darwin/arm64, linux/amd64,
+// linux/arm64, windows/amd64 and windows/arm64.
 func Targets() []Target {
 	var all []Target
 	for _, system := range systems {
@@ -130,7 +146,8 @@ func (t Target) String() string {
 // Triple returns the target triple clang and LLVM name the platform
 // by, the processor, the vendor and the system, with the oldest macOS
 // a darwin program runs on: arm64-apple-macosx14.4 for darwin/arm64,
-// x86_64-unknown-linux-gnu for linux/amd64.
+// x86_64-unknown-linux-gnu for linux/amd64, x86_64-pc-windows-msvc for
+// windows/amd64, whose programs link against Microsoft's C runtime.
 func (t Target) Triple() string {
 	cpu := "x86_64"
 	if t.Arch == ARM64 {
@@ -145,7 +162,21 @@ func (t Target) Triple() string {
 		return cpu + "-apple-macosx" + strconv.Itoa(MacOSMajor) + "." + strconv.Itoa(MacOSMinor)
 	}
 
+	if t.OS == Windows {
+		return cpu + "-pc-windows-msvc"
+	}
+
 	return cpu + "-unknown-linux-gnu"
+}
+
+// Executable returns the name a program named name has on the target:
+// name itself, or with .exe after it on Windows.
+func (t Target) Executable(name string) string {
+	if t.OS == Windows {
+		return name + executableSuffix
+	}
+
+	return name
 }
 
 // Sysroot returns the directory holding the target's system files, its
@@ -169,13 +200,15 @@ func (t Target) SysrootVariable() string {
 // _test with it, a name ending in a system and a processor,
 // _darwin_arm64, is built for that platform alone, one ending in a
 // system or a processor, _linux or _amd64, for every platform of it,
-// and any other name for every platform. A name with no _, or whose
-// platform word is its first element, linux.snello, is built for every
-// platform, so that a system named later does not change what an
-// existing file means. A name for a system or a processor Snello does
-// not build for, poll_windows.snello, is built for no target, so that
-// one package holds the files of every system, those of a system
-// Snello comes to build for later among them.
+// and any other name for every platform. _unix stands for every system
+// that is a Unix, Linux and macOS and not Windows, as a system word,
+// _unix or _unix_arm64. A name with no _, or whose platform word is its
+// first element, linux.snello, is built for every platform, so that a
+// system named later does not change what an existing file means. A
+// name for a system or a processor Snello does not build for,
+// poll_freebsd.snello, is built for no target, so that one package
+// holds the files of every system, those of a system Snello comes to
+// build for later among them.
 func (t Target) Builds(name string) bool {
 	base, _, _ := strings.Cut(name, extension)
 	_, rest, found := strings.Cut(base, separator)
@@ -197,15 +230,21 @@ func (t Target) Builds(name string) bool {
 
 	system, arch := "", ""
 	switch {
-	case before != "" && knownSystems[before] && knownArchitectures[last]:
+	case before != "" && isSystemWord(before) && knownArchitectures[last]:
 		system, arch = before, last
-	case knownSystems[last]:
+	case isSystemWord(last):
 		system = last
 	case knownArchitectures[last]:
 		arch = last
 	}
 
-	return (system == "" || system == t.OS) && (arch == "" || arch == t.Arch)
+	return (system == "" || system == t.OS || system == Unix && unixSystems[t.OS]) && (arch == "" || arch == t.Arch)
+}
+
+// isSystemWord reports whether word names a system, or Unix, the family
+// of them.
+func isSystemWord(word string) bool {
+	return knownSystems[word] || word == Unix
 }
 
 // set returns the words given as a set.

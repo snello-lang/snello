@@ -27,12 +27,13 @@
 
 #include "internal.h"
 
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <sys/mman.h>
 #include <sys/resource.h>
+#endif
 
 enum {
     span_shift = 16, // a span is 64 KB
@@ -102,7 +103,7 @@ typedef struct cache {
 static _Thread_local cache local;
 
 typedef struct central {
-    pthread_mutex_t mu;
+    sn_mutex mu;
     void *head;
 } central;
 
@@ -115,9 +116,34 @@ static central centrals[nclass];
 // it asks for no more than a quarter of the limit and leaves the rest
 // to the tasks' stacks and the system's allocator; under a limit below
 // 4 GB it makes none. Without a reservation every block is the system's.
+#if defined(_WIN32)
 __attribute__((constructor)) static void reserve(void) {
     for (int i = 0; i < nclass; i++) {
-        pthread_mutex_init(&centrals[i].mu, NULL);
+        sn_mutex_init(&centrals[i].mu);
+    }
+
+    for (size_t size = (size_t)1 << 36; size >= (size_t)1 << 30; size >>= 1) {
+        void *p = VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_NOACCESS); // committed span by span, as carve takes them
+        if (p == NULL) {
+            continue;
+        }
+
+        void *t = VirtualAlloc(NULL, size >> span_shift, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (t == NULL) {
+            VirtualFree(p, 0, MEM_RELEASE);
+            continue;
+        }
+
+        base = p;
+        span_class = t;
+        reserved = size;
+        return;
+    }
+}
+#else
+__attribute__((constructor)) static void reserve(void) {
+    for (int i = 0; i < nclass; i++) {
+        sn_mutex_init(&centrals[i].mu);
     }
 
     size_t most = (size_t)1 << 36;
@@ -150,6 +176,7 @@ __attribute__((constructor)) static void reserve(void) {
         return;
     }
 }
+#endif
 
 // carve takes a new span for class c and links its blocks into a list,
 // whose first block it returns with the list's length in n; nothing
@@ -161,6 +188,12 @@ static void *carve(int c, int32_t *n) {
     }
 
     uint8_t *s = base + at;
+#if defined(_WIN32)
+    if (VirtualAlloc(s, span_size, MEM_COMMIT, PAGE_READWRITE) ==
+        NULL) { // the reservation's pages are the system's to back only once committed
+        return NULL;
+    }
+#endif
     span_class[at >> span_shift] = (uint8_t)c;
     size_t size = class_size[c];
     int32_t m = (int32_t)(span_size / size);
@@ -184,7 +217,7 @@ static void *refill(cache *k, int c) {
     central *z = &centrals[c];
     int32_t want = batch[c];
     int32_t n = 0;
-    pthread_mutex_lock(&z->mu);
+    sn_mutex_lock(&z->mu);
     void *first = z->head;
     void *last = NULL;
     for (void *p = first; p != NULL && n < want; p = *(void **)p) {
@@ -197,7 +230,7 @@ static void *refill(cache *k, int c) {
         *(void **)last = NULL;
     }
 
-    pthread_mutex_unlock(&z->mu);
+    sn_mutex_unlock(&z->mu);
     if (n == 0) {
         first = carve(c, &n);
         if (first == NULL) {
@@ -223,10 +256,10 @@ static void give_back(cache *k, int c) {
     k->head[c] = *(void **)last;
     k->count[c] -= m;
     central *z = &centrals[c];
-    pthread_mutex_lock(&z->mu);
+    sn_mutex_lock(&z->mu);
     *(void **)last = z->head;
     z->head = first;
-    pthread_mutex_unlock(&z->mu);
+    sn_mutex_unlock(&z->mu);
 }
 
 // A task may resume on another thread after any switch, and a compiler
@@ -288,9 +321,16 @@ ENTRY void sn_heap_free(void *p) { heap_free(p); }
 // on.
 static __attribute__((noinline, cold)) counts *enlist(cache *k) {
     void *line = NULL;
+#if defined(_WIN32)
+    if ((line = sn_aligned_alloc(128, 128)) ==
+        NULL) { // the Universal CRT has no posix_memalign; the line is never freed
+        return k->counts = &shared;
+    }
+#else
     if (posix_memalign(&line, 128, 128) != 0) {
         return k->counts = &shared;
     }
+#endif
 
     counts *c = memset(line, 0, 128);
     c->next = atomic_load(&threads);

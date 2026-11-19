@@ -16,8 +16,30 @@
 // A walk keeps at most trace_frames frames, and a deeper stack is
 // shown to that depth; a frame is at least frame_least bytes, the
 // saved frame pointer and the return address, and aligned to
-// frame_align, which both processors hold a frame to.
+// frame_align: sixteen bytes where the convention keeps a frame's
+// record there, on Linux and macOS, and on Windows, whose arm64
+// convention saves other registers below the record, the eight of a
+// pointer.
+#if defined(_WIN32)
+enum { frame_least = 16, frame_align = 8, no_region = -1 };
+#else
 enum { frame_least = 16, frame_align = 16, no_region = -1 };
+#endif
+
+// Where sn_setjmp_regs keeps each register of Windows' x64 convention in
+// its buffer, by word, which the unwinder starts from.
+enum {
+    saved_rbx = 0,
+    saved_rbp = 1,
+    saved_rdi = 2,
+    saved_rsi = 3,
+    saved_r12 = 4,
+    saved_r13 = 5,
+    saved_r14 = 6,
+    saved_r15 = 7,
+    saved_rsp = 8,
+    saved_rip = 9,
+};
 
 static _Thread_local uintptr_t frames[SN_TRACE_FRAMES]; // the return addresses, innermost first
 static _Thread_local int nframes;
@@ -129,6 +151,44 @@ int sn_trace_fill(void *fp, const sn_stack_region *regions, int n) {
     return nframes;
 }
 
+#if defined(_WIN32) && defined(__x86_64__)
+int sn_trace_unwind(const uint64_t *regs) {
+    CONTEXT c = { .ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER };
+    c.Rbx = regs[saved_rbx];
+    c.Rbp = regs[saved_rbp];
+    c.Rdi = regs[saved_rdi];
+    c.Rsi = regs[saved_rsi];
+    c.R12 = regs[saved_r12];
+    c.R13 = regs[saved_r13];
+    c.R14 = regs[saved_r14];
+    c.R15 = regs[saved_r15];
+    c.Rsp = regs[saved_rsp];
+    c.Rip = regs[saved_rip]; // in sn_panic, whose own frame the first step leaves
+    nframes = 0;
+    while (nframes < SN_TRACE_FRAMES) {
+        DWORD64 base = 0;
+        RUNTIME_FUNCTION *fn = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+        if (fn == NULL) { // code with no unwind data, which no function of the program's is: the walk ends
+            break;
+        }
+
+        void *handler = NULL;
+        DWORD64 frame = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &handler, &frame, NULL);
+        uintptr_t ret = (uintptr_t)c.Rip;
+        const sn_trace_anchor *a;
+        int64_t offset;
+        if (ret == 0 || !covered(ret - 1, &a, &offset)) { // less one: inside the call, not after it
+            break;
+        }
+
+        frames[nframes++] = ret - 1;
+    }
+
+    return nframes;
+}
+#endif
+
 int sn_trace_copy(uintptr_t *into) {
     memcpy(into, frames, (size_t)nframes * sizeof frames[0]);
     return nframes;
@@ -204,7 +264,11 @@ static void write_line(void *ctx, const char *name, const char *file, int32_t at
     char line[SN_TRACE_LINE_ROOM];
     line[0] = '\t';
     int n = sn_trace_line(line + 1, sizeof line - 1, name, file, at);
+#if defined(_WIN32)
+    (void)sn_write_fd(2, (const uint8_t *)line, n + 1); // a console's own text, for a file's name that is not ASCII
+#else
     fwrite(line, 1, (size_t)n + 1, stderr);
+#endif
 }
 
 // sn_trace_line writes a line of a trace into room bytes at line: the

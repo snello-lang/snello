@@ -15,9 +15,9 @@ The chapters describe Snello on its own terms and name no other language. This a
 | An import path is found in the standard library, then in the module, then through `replace` and the module cache | The standard library, then the module, then the `require` lines; there is no cache and nothing is fetched |
 | `import "example.com/app/shapes"`, the module path in every import | `import "shapes"`: a directory under the root, or a required name; a module has no path |
 | `go build` in a directory, or `go run file.go` for one file | `snello build DIR`, or `snello build FILE` for one file |
-| `GOOS=linux GOARCH=arm64 go build`, with cgo a `CC` for the target and its sysroot | `snello build -target linux/arm64`, a flag; the runtime is C, so another Linux takes lld and the target's C library, from a distribution's cross packages or the sysroot `SNELLO_SYSROOT_linux_arm64` names; macOS is built for on macOS alone |
+| `GOOS=linux GOARCH=arm64 go build`, with cgo a `CC` for the target and its sysroot | `snello build -target linux/arm64`, a flag; the runtime is C, so another Linux takes lld and the target's C library, from a distribution's cross packages or a sysroot the target's variable names, `SNELLO_SYSROOT_linux_arm64`; Windows takes clang, `lld-link` and Microsoft's SDK and C runtime, from Visual Studio's Build Tools on Windows or a sysroot the target's variable names elsewhere, and writes `NAME.exe`, as Go does; macOS is built for on macOS alone |
 | A method is declared in the package of its receiver's type | The same |
-| `poll_linux.go`, `poll_arm64.go`, `poll_darwin_arm64.go` are built for their platform alone; `//go:build linux` chooses inside a file; a file named for a system Go knows and the build is not for is left out | The same file names, for `.snello`, `_test.snello`, `.c` and `.h` files, and the same list of words; no build line; a file for a platform Snello does not build for is left out, as Go leaves one out, and a name beginning with `.` or `_` is no file of the package (chapter 2) |
+| `poll_linux.go`, `poll_arm64.go`, `poll_darwin_arm64.go` are built for their platform alone; `//go:build linux` chooses inside a file; a file named for a system Go knows and the build is not for is left out | The same file names, for `.snello`, `_test.snello`, `.c` and `.h` files, and the same list of words, with `unix` among them: `poll_unix.snello` is built for Linux and macOS and not Windows, where Go builds a `poll_unix.go` everywhere and takes `unix` only in a build line; no build line; a file for a platform Snello does not build for is left out, as Go leaves one out, and a name beginning with `.` or `_` is no file of the package (chapter 2) |
 | Functions implemented in assembly are declared without a body; cgo binds C through `import "C"` and `#cgo LDFLAGS: -lm` comments | A package declares a function without a body and defines it in C beside the package, under the symbol the compiler derives and the header it writes (chapter 15); the main package may not; a system library is `link m` in `snello.mod` |
 
 ## Chapter 3: Basics
@@ -238,6 +238,7 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `os.O_RDONLY` and the other flags are the system's numbers | The same names, with numbers of Snello's own, the same on every system |
 | `os.FileInfo` and `os.DirEntry` are interfaces | Structs with the same methods: `Name`, `Size`, `Mode`, `ModTime`, `IsDir`; `Name`, `IsDir`, `Type` |
 | `path.Join(a, b, c)` takes any number | `path.Join(a, b)` takes two: `path.Join(ref path.Join(a, b), c)` |
+| `filepath.Separator` is `\` on Windows, which takes `/` too, and `filepath.VolumeName` gives `C:` or `\\server\share` | The same: `filepath` follows the system, with `VolumeName` and `IsSeparator`; `path` separates with `/` everywhere |
 | `path.Base`, `path.Ext` and `path.Split` return strings sharing the argument's memory | They lend parts of the argument: a `ref string`, nothing copied |
 | `runtime.NumCPU()` | `os.Cores()`; there is no `runtime` package, and no `GOMAXPROCS`: the runtime runs one worker per processor |
 | `os.Open` returns `(*File, error)`; `defer f.Close()` | `os.Open` returns `Result<File, io.Error>`; the file closes itself when it goes out of scope, and `Close()` consumes it to report the error |
@@ -355,12 +356,12 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 
 | In Go | In Snello |
 |---|---|
-| `dlv debug` | `snello debug`, which starts lldb on macOS or gdb on Linux with Snello's formatters and `tasks` loaded |
+| `dlv debug` | `snello debug`, which starts lldb on macOS or gdb on Linux with Snello's formatters and `tasks` loaded, and cdb on Windows with `!tasks` loaded and the values shown by the PDB's visualizers |
 | `go version` prints `go version go1.27.4 darwin/arm64`, and `devel go1.28-…` for a build from source; `go help` and `go help build` | `snello version` prints `snello 0.1.0 (8477985) stable darwin/arm64`, the commit when the build recorded one, and `devel` in the channel's place for a build from source; `snello help` and `snello help build`, read from the table the command line is parsed with |
 | `go build -gcflags=all="-N -l"` for a build a debugger can follow | `snello build -debug`: your code unoptimized, the standard library optimized |
 | `goroutines` and `goroutine N bt` in Delve, `info goroutines` in gdb | `tasks`, every task with its state and a waiting task's stack |
 | `b main.sum` | `breakpoint set -n sum` in lldb, `break sum` in gdb, or a breakpoint at the line, `main.snello:19`; with the C backend, the function's symbol, `sn__sum` |
-| the DWARF in every binary, which `-ldflags=-w` strips | the debugging information in a debug build alone, in `prog.dSYM` on macOS; a release build keeps symbols for a profiler and no lines |
+| the DWARF in every binary, which `-ldflags=-w` strips | the debugging information in a debug build alone, in `prog.dSYM` on macOS and `prog.pdb` on Windows; a release build keeps symbols for a profiler and no lines |
 | `pprof` | the system's profilers, `perf` and Instruments, on a release build, which keeps its frame pointers |
 
 ## Chapter 31: Iterators

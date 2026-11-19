@@ -4,9 +4,11 @@
 
 // Package sysname asks the kernel its name, a different way on each
 // system: its files are chosen by their names for the platform the
-// program is built for, sysname_linux.c reading /proc and
-// sysname_darwin.c asking sysctl, and the name each system's kernel
-// gives itself is in sysname_linux.snello and sysname_darwin.snello.
+// program is built for, sysname_linux.c reading /proc,
+// sysname_darwin.c asking sysctl and sysname_windows.c asking ntdll,
+// and the name each system's kernel gives itself is in
+// sysname_linux.snello, sysname_darwin.snello and
+// sysname_windows.snello.
 package sysname
 
 // Matches reports whether the kernel the program runs on is the one

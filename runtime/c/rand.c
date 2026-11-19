@@ -27,12 +27,14 @@
 
 #include "internal.h"
 
-#include <fcntl.h>
-#include <pthread.h>
 #include <string.h>
-#include <sys/random.h>
 #include <time.h>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/random.h>
 #include <unistd.h>
+#endif
 
 enum {
     counter_step = 4, // a refill is four blocks, each its own counter
@@ -149,7 +151,8 @@ static bool system_key(uint64_t seed[4]) {
     }
 #endif
 
-    bool got = getentropy(seed, 4 * sizeof seed[0]) == 0;
+    bool got = sn_system_random(seed, 4 * sizeof seed[0]);
+#if !defined(_WIN32)
     if (!got) {
         int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
@@ -157,6 +160,7 @@ static bool system_key(uint64_t seed[4]) {
             close(fd);
         }
     }
+#endif
 
     return got && (seed[0] | seed[1] | seed[2] | seed[3]) != 0;
 }
@@ -166,9 +170,13 @@ static bool system_key(uint64_t seed[4]) {
 // word: a program still runs, on numbers that one who knows when it
 // started could work out.
 static void clock_key(uint64_t seed[4]) {
+#if defined(_WIN32)
+    uint64_t v = (uint64_t)sn_time_mono();
+#else
     struct timespec ts = { 0 };
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t v = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+#endif
     for (int i = 0; i < 4; i++) {
         v ^= 0xa0761d6478bd642fu;
         v *= 0xe7037ed1a0b428dbu;
@@ -186,7 +194,7 @@ static void wipe(uint64_t seed[4]) {
     }
 }
 
-static pthread_mutex_t first_mu = PTHREAD_MUTEX_INITIALIZER;
+static sn_mutex first_mu = SN_MUTEX_INIT;
 static chacha8 first; // the program's generator, which keys the threads'
 
 // thread_key fills seed with a thread's key, four numbers of the
@@ -194,7 +202,7 @@ static chacha8 first; // the program's generator, which keys the threads'
 // again after each key it hands out.
 static void thread_key(uint64_t seed[4]) {
     uint64_t next[4];
-    pthread_mutex_lock(&first_mu);
+    sn_mutex_lock(&first_mu);
     if (!first.ready) {
         if (!system_key(next)) {
             clock_key(next);
@@ -213,7 +221,7 @@ static void thread_key(uint64_t seed[4]) {
 
     init(&first, next);
     wipe(next);
-    pthread_mutex_unlock(&first_mu);
+    sn_mutex_unlock(&first_mu);
 }
 
 static _Thread_local chacha8 source;
