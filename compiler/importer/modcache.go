@@ -73,9 +73,14 @@ const (
 	// gitName is the command that fetches a module. A fetch makes a bare
 	// repository in cloneDir, writes attributes into its info
 	// directory, fetches the one tag into it and unpacks the tag's tree
-	// into treeDir, both in a directory named by fetchingPattern, from
-	// which the tree is renamed into place; a directory or a record a
-	// fetch left, stopped, is removed after leftoverAge.
+	// into treeDir, both in a work directory named by fetchingPattern at
+	// the cache's root, whose path stays short whatever the module's
+	// is, since git on Windows writes no path past 260 characters and a
+	// module's escaped path may run to 200 on its own; the tree is
+	// renamed from there into place, and the record beside the module
+	// is written through a file of the same pattern beside it. A
+	// directory or a record a fetch left, stopped, is removed after
+	// leftoverAge.
 	gitName         = "git"
 	cloneDir        = "clone.git"
 	treeDir         = "tree"
@@ -316,9 +321,9 @@ func fetchModule(root, rawURL, version string) (dir string, rec record, fresh bo
 		return "", record{}, false, err
 	}
 
-	removeLeftovers(parent, filepath.Base(dir))
+	removeLeftovers(root, dir)
 	os.Remove(dir + hashSuffix) // a record whose module was removed: fetched again below
-	work, err := os.MkdirTemp(parent, filepath.Base(dir)+fetchingPattern)
+	work, err := os.MkdirTemp(root, fetchingPattern)
 	if err != nil {
 		return "", record{}, false, err
 	}
@@ -576,12 +581,13 @@ func discardModule(dir string) error {
 	return os.RemoveAll(dir)
 }
 
-// removeLeftovers removes what a fetch of the module named base in
-// parent left when it stopped, a work directory or a record not renamed
-// into place, once leftoverAge has passed, which no fetch running takes.
-func removeLeftovers(parent, base string) {
-	for _, pattern := range []string{base + fetchingPattern, base + hashSuffix + fetchingPattern} {
-		matches, _ := filepath.Glob(filepath.Join(parent, pattern))
+// removeLeftovers removes what a fetch left when it stopped, a work
+// directory at the cache's root or a record of the module at dir not
+// renamed into place, once leftoverAge has passed, which no fetch
+// running takes.
+func removeLeftovers(root, dir string) {
+	for _, pattern := range []string{filepath.Join(root, fetchingPattern), dir + hashSuffix + fetchingPattern} {
+		matches, _ := filepath.Glob(pattern)
 		for _, m := range matches {
 			if info, err := os.Lstat(m); err == nil && time.Since(info.ModTime()) > leftoverAge {
 				os.RemoveAll(m)

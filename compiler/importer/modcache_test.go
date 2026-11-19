@@ -296,24 +296,38 @@ func TestUntar(t *testing.T) {
 }
 
 // TestRemoveLeftovers removes what a stopped fetch left once an hour has
-// passed, and leaves what a fetch running now holds.
+// passed, a work directory at the root and a record beside the module,
+// and leaves what a fetch running now holds.
 func TestRemoveLeftovers(t *testing.T) {
-	parent := t.TempDir()
-	old, recent := filepath.Join(parent, "lib@0.1.0.fetching-1"), filepath.Join(parent, "lib@0.1.0.fetching-2")
-	for _, dir := range []string{old, recent} {
-		if err := os.Mkdir(dir, 0o755); err != nil {
+	root := t.TempDir()
+	dir := filepath.Join(root, "example.com", "lib@0.1.0")
+	old, recent, record := filepath.Join(root, ".fetching-1"), filepath.Join(root, ".fetching-2"), dir+hashSuffix+".fetching-3"
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{old, recent} {
+		if err := os.Mkdir(p, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	stale := time.Now().Add(-2 * leftoverAge)
-	if err := os.Chtimes(old, stale, stale); err != nil {
+	if err := os.WriteFile(record, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	removeLeftovers(parent, "lib@0.1.0")
-	if _, err := os.Stat(old); err == nil {
-		t.Error("a leftover older than an hour was kept")
+	stale := time.Now().Add(-2 * leftoverAge)
+	for _, p := range []string{old, record} {
+		if err := os.Chtimes(p, stale, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removeLeftovers(root, dir)
+	for _, p := range []string{old, record} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("a leftover older than an hour was kept: %s", p)
+		}
 	}
 
 	if _, err := os.Stat(recent); err != nil {
