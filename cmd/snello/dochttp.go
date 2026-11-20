@@ -31,9 +31,12 @@ const (
 	defaultDocAddr = "localhost:6060"
 	httpFlagSet    = "true" // what the flag package gives a flag written alone
 
-	// The names of the local machine a request may name, and the routes.
+	// The names of the local machine a request may name, and the routes:
+	// the index, what the search looks through, and a page as text.
 	localhostName = "localhost"
 	indexRoute    = "/"
+	searchRoute   = "/search.json"
+	textRoute     = "/text/"
 
 	// What the server says of a request it refuses.
 	notLocal   = "snello doc serves the local machine's browser alone\n"
@@ -50,6 +53,7 @@ const (
 	hostHeader      = "Host"
 	htmlType        = "text/html; charset=utf-8"
 	textType        = "text/plain; charset=utf-8"
+	jsonType        = "application/json"
 	requestMost     = 64 << 10
 	connDeadline    = 30 * time.Second
 	acceptPause     = 5 * time.Millisecond
@@ -189,8 +193,9 @@ func parseRequestLine(line string) (method, target string, ok bool) {
 }
 
 // respond makes the response to a request: the index, a package's
-// page, or a file the pages load, each made when it is asked for from its packages loaded then,
-// so that an edit shows on the next load. It answers only GET and HEAD,
+// page, a file the pages load, what the filter looks through, or a
+// package's page as text, each made when it is asked for from its
+// packages loaded then, so that an edit shows on the next load. It answers only GET and HEAD,
 // and only a request whose Host is the address it serves or a loopback
 // name on its port, so that a page of another site cannot read a
 // private module's source through a name rebound to this machine.
@@ -218,22 +223,30 @@ func (s docServer) respond(method, target, host string) reply {
 		return reply{http200, contentType, []byte(content)}
 	}
 
-	if path != indexRoute && !strings.HasPrefix(path, doc.PackageRoute) {
+	if path != indexRoute && path != searchRoute && !strings.HasPrefix(path, doc.PackageRoute) && !strings.HasPrefix(path, textRoute) {
 		return text(http404, notFound)
 	}
 
 	l := loaderFor(s.module, s.cwd, s.unexported)
 	var page bytes.Buffer
+	textPkg, isText := strings.CutPrefix(path, textRoute)
 	switch pkg, isPage := strings.CutPrefix(path, doc.PackageRoute); {
 	case path == indexRoute:
-		var entries []doc.IndexEntry
-		for _, path := range l.servedPaths() {
-			if p, err := l.packageAt(path); err == nil {
-				entries = append(entries, p.Index())
-			}
+		err = doc.WriteIndex(&page, l.nav(), l.entries())
+	case path == searchRoute:
+		if err := doc.WriteSearch(&page, l.entries()); err != nil {
+			return text(http500, err.Error())
 		}
 
-		err = doc.WriteIndex(&page, l.nav(), entries)
+		return reply{http200, jsonType, page.Bytes()}
+	case isText && slices.Contains(l.servedPaths(), textPkg): // the page as the terminal prints it, every name with its comment
+		p, perr := l.packageAt(textPkg)
+		if perr != nil {
+			return text(http500, perr.Error())
+		}
+
+		p.WritePackage(&page, true)
+		return reply{http200, textType, page.Bytes()}
 	case isPage && slices.Contains(l.servedPaths(), pkg):
 		p, perr := l.packageAt(pkg)
 		if perr != nil {
@@ -267,6 +280,19 @@ type reply struct {
 
 // text returns a reply of a line of text saying why there is no page.
 func text(status int, line string) reply { return reply{status, textType, []byte(line)} }
+
+// entries returns the index's entry of every package served, its names
+// for the search with it.
+func (l *docLoader) entries() []doc.IndexEntry {
+	var entries []doc.IndexEntry
+	for _, path := range l.servedPaths() {
+		if p, err := l.packageAt(path); err == nil {
+			entries = append(entries, p.Index())
+		}
+	}
+
+	return entries
+}
 
 // servedPaths returns what the server has a page for: every standard
 // package, builtin among them, and every package of the module.

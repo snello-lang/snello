@@ -37,9 +37,12 @@ func TestDocRespond(t *testing.T) {
 		status               int
 		has                  string
 	}{
-		{methodGet, "localhost:6060", "/", http200, `<a href="/pkg/strings">strings</a>`},
+		{methodGet, "localhost:6060", "/", http200, `<a class="topic" href="/pkg/strings">`},
 		{methodGet, "localhost:6060", "/pkg/strings?tab=1", http200, `id="Builder"`},
-		{methodGet, "127.0.0.1:6060", "/pkg/io", http200, `<a class="mono" href="/pkg/strings#Reader">strings.Reader</a>`},
+		{methodGet, "127.0.0.1:6060", "/pkg/io", http200, `<a href="/pkg/strings#Reader"><code>strings.Reader</code></a>`},
+		{methodGet, "localhost:6060", "/search.json", http200, `"t":"strings.Builder"`},
+		{methodGet, "localhost:6060", "/text/strings", http200, "func (b mut Builder) WriteString(s ref string)"},
+		{methodGet, "localhost:6060", "/text/nowhere", http404, "no such package"},
 		{methodGet, "[::1]:6060", "/pkg/builtin", http200, `id="len"`},
 		{methodGet, "localhost:6060", "/pkg/unicode%2Futf8", http200, `id="RuneLen"`},
 		{methodGet, "localhost:6060", "/pkg/geo", http200, `Package geo measures.`},

@@ -6,28 +6,57 @@ package doc
 
 import (
 	_ "embed"
+	"encoding/json"
 	"html/template"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/snello-lang/snello/compiler/ast"
 )
 
-// Where a page lives and how it links: the route of a package's page,
-// what begins an anchor, the end of a package's first sentence, the
-// name the pages are of, the titles of a page's sections, and how the
-// icon is carried to a browser's tab.
+// Where a page lives and how it links: the route of a package's page
+// and of the files it loads, what begins an anchor, the end of a
+// package's first sentence, the name the pages are of, the titles of a
+// page's sections and their anchors, which hold a hyphen so that no
+// name's anchor is one, and the kinds of a comment's blocks.
 const (
 	PackageRoute   = "/pkg/"
+	AssetRoute     = "/assets/"
 	anchorMark     = "#"
 	sentenceEnd    = ". "
 	siteName       = "Snello"
-	indexPageTitle = "Packages"
+	indexPageTitle = "Snello Documentation"
+	overviewTitle  = "Overview"
+	topicsTitle    = "Topics"
 	typesTitle     = "Types"
 	funcsTitle     = "Functions"
 	valuesTitle    = "Constants and variables"
-	AssetRoute     = "/assets/"
+	overviewAnchor = "section-overview"
+	topicsAnchor   = "section-topics"
+	typesAnchor    = "section-types"
+	funcsAnchor    = "section-functions"
+	valuesAnchor   = "section-values"
+	paragraphKind  = "p"
+	headingKind    = "h"
+	listKind       = "ul"
+	codeKind       = "pre"
+)
+
+// The kinds of a name, which the sidebar, the topics and the search
+// show it with, as the keyword that declares it: the style gives each
+// its badge.
+const (
+	kindPackage = "package"
+	kindStruct  = "struct"
+	kindEnum    = "enum"
+	kindTrait   = "trait"
+	kindType    = "type"
+	kindFunc    = "func"
+	kindMethod  = "method"
+	kindConst   = "const"
+	kindVar     = "var"
 )
 
 // The groups a sidebar and the index list the packages in, by where a
@@ -89,7 +118,15 @@ type IndexEntry struct {
 	Path     string
 	Synopsis string
 	Href     string
-	Names    []Link
+	Names    []Name
+}
+
+// A Name is a name of a package as the topics, the sidebar and the
+// search list it: its text, its anchor's link, its comment's first
+// sentence, and its kind, the keyword that declares it, "method" for a
+// method.
+type Name struct {
+	Text, Href, Synopsis, Kind string
 }
 
 // A Link is a text and where it points.
@@ -102,7 +139,13 @@ type Link struct {
 type (
 	navView struct {
 		Site, Version string
+		Group         string // the title of the group the page is in, "" for the index
 		Groups        []navGroupView
+	}
+
+	tocEntry struct {
+		Text, Href string
+		Sub        bool // a declaration under a section
 	}
 
 	navGroupView struct {
@@ -113,7 +156,7 @@ type (
 	navPackage struct {
 		Path, Href string
 		Current    bool
-		Names      []Link
+		Names      []Name
 	}
 
 	indexGroupView struct {
@@ -125,25 +168,23 @@ type (
 		Nav           navView
 		Title, Clause string
 		Path          string
+		Abstract      []Link // the first sentence, with its links
+		TOC           []tocEntry
 		Doc           []blockView
 		Examples      []exampleView
-		Summary       []summaryView
+		Topics        []topicsView
 		Sections      []sectionView
 		Index         []indexGroupView // the index's
 	}
 
-	summaryView struct {
+	topicsView struct {
 		Title string
-		Rows  []summaryRow
-	}
-
-	summaryRow struct {
-		Text, Href, Synopsis string
+		Rows  []Name
 	}
 
 	sectionView struct {
-		Title string
-		Decls []declView
+		Title, Anchor string
+		Decls         []declView
 	}
 
 	declView struct {
@@ -156,7 +197,7 @@ type (
 	}
 
 	blockView struct {
-		Kind  string // "p", "h", "ul" or "pre"
+		Kind  string // paragraphKind, headingKind, listKind or codeKind
 		Spans []Link
 		Items [][]Link
 		Code  string
@@ -203,12 +244,7 @@ func PageHref(path, anchor string) string {
 // Index returns the package's entry on the index: its path, its first
 // sentence and its shown names.
 func (p *Package) Index() IndexEntry {
-	e := IndexEntry{Path: p.Path, Synopsis: Synopsis(p.Doc), Href: PageHref(p.Path, "")}
-	for _, row := range p.shownNames() {
-		e.Names = append(e.Names, Link{row.Text, row.Href})
-	}
-
-	return e
+	return IndexEntry{Path: p.Path, Synopsis: Synopsis(p.Doc), Href: PageHref(p.Path, ""), Names: p.shownNames()}
 }
 
 // WriteIndex writes the index of the packages, each under nav's group,
@@ -237,20 +273,27 @@ func WriteIndex(w io.Writer, nav Nav, entries []IndexEntry) error {
 }
 
 // WriteHTML writes the package's page, with nav's sidebar, from the
-// model the terminal prints: a summary of its names with their first
-// sentences, then each declaration as written under a header bar, with
-// its comment and its links, its examples, and a type's functions and
+// model the terminal prints: its title and first sentence, its comment
+// and examples as its overview, its names by kind with their first
+// sentences as its topics, then each declaration as written, with its
+// comment and its links, its examples, and a type's functions and
 // methods and a trait's implementors under it.
 func (p *Package) WriteHTML(w io.Writer, nav Nav) error {
 	var clause strings.Builder
 	put(&clause, "package ", p.Name)
-	v := pageView{Nav: nav.view(p.Path, p.shownNames()), Title: p.Path, Clause: clause.String(), Path: p.Path, Doc: p.blocks(p.Doc), Examples: p.examples("")}
+	abstract := p.links([]string{firstSentence(p.Doc)})
+	v := pageView{Nav: nav.view(p.Path, p.shownNames()), Title: p.Path, Clause: clause.String(), Path: p.Path, Abstract: abstract,
+		Doc: withoutAbstract(p.blocks(p.Doc), abstract), Examples: p.examples("")}
 	if v.Title == "" {
 		v.Title = p.Name
 	}
 
+	if len(v.Doc) > 0 || len(v.Examples) > 0 {
+		v.TOC = append(v.TOC, tocEntry{Text: overviewTitle, Href: anchorMark + overviewAnchor})
+	}
+
 	var types, funcs, values sectionView
-	var typeRows, funcRows, valueRows []summaryRow
+	var typeRows, funcRows, valueRows []Name
 	for _, t := range p.Types {
 		var b strings.Builder
 		p.WriteTypeDecl(&b, t)
@@ -264,21 +307,21 @@ func (p *Package) WriteHTML(w io.Writer, nav Nav) error {
 		}
 
 		types.Decls = append(types.Decls, d)
-		typeRows = append(typeRows, summaryRow{t.Name, PageHref(p.Path, t.Name), Synopsis(t.Doc)})
+		typeRows = append(typeRows, Name{t.Name, PageHref(p.Path, t.Name), Synopsis(t.Doc), t.kind()})
 	}
 
 	for _, fn := range p.Funcs {
 		d := p.funcView(fn)
 		funcs.Decls = append(funcs.Decls, d)
-		funcRows = append(funcRows, summaryRow{d.Anchor, PageHref(p.Path, d.Anchor), Synopsis(fn.Doc)})
+		funcRows = append(funcRows, Name{d.Anchor, PageHref(p.Path, d.Anchor), Synopsis(fn.Doc), kindFunc})
 	}
 
-	for _, group := range append(append([]*Values{}, p.Consts...), p.Vars...) {
+	for _, group := range p.values() {
 		var names []string
 		for _, d := range group.Decls {
 			for _, n := range d.Names {
 				names = append(names, n.Name)
-				valueRows = append(valueRows, summaryRow{n.Name, PageHref(p.Path, n.Name), Synopsis(group.Doc)})
+				valueRows = append(valueRows, Name{n.Name, PageHref(p.Path, n.Name), Synopsis(group.Doc), p.valueKind(group)})
 			}
 		}
 
@@ -286,25 +329,37 @@ func (p *Package) WriteHTML(w io.Writer, nav Nav) error {
 	}
 
 	for _, s := range []struct {
-		title   string
-		rows    []summaryRow
-		section sectionView
-	}{{typesTitle, typeRows, types}, {funcsTitle, funcRows, funcs}, {valuesTitle, valueRows, values}} {
+		title, anchor string
+		rows          []Name
+		section       sectionView
+	}{{typesTitle, typesAnchor, typeRows, types}, {funcsTitle, funcsAnchor, funcRows, funcs}, {valuesTitle, valuesAnchor, valueRows, values}} {
 		if len(s.rows) == 0 {
 			continue
 		}
 
-		v.Summary = append(v.Summary, summaryView{s.title, s.rows})
-		s.section.Title = s.title
+		v.Topics = append(v.Topics, topicsView{s.title, s.rows})
+		s.section.Title, s.section.Anchor = s.title, s.anchor
 		v.Sections = append(v.Sections, s.section)
+	}
+
+	if len(v.Topics) > 0 {
+		v.TOC = append(v.TOC, tocEntry{Text: topicsTitle, Href: anchorMark + topicsAnchor})
+	}
+
+	for _, section := range v.Sections {
+		v.TOC = append(v.TOC, tocEntry{Text: section.Title, Href: anchorMark + section.Anchor})
+		for _, d := range section.Decls {
+			v.TOC = append(v.TOC, tocEntry{d.Anchor, anchorMark + d.Anchor, true})
+		}
 	}
 
 	return pages().ExecuteTemplate(w, "package", v)
 }
 
-// view returns the sidebar: every group that has packages, and in it
-// every package, the current one with its names under it.
-func (n Nav) view(current string, names []summaryRow) navView {
+// view returns the frame of a page: every group that has packages, as
+// the sidebar's tree, the current package open with its names under
+// it, and the title of the group it is in.
+func (n Nav) view(current string, names []Name) navView {
 	v := navView{Site: siteName, Version: n.Version}
 	for _, g := range n.Groups {
 		if len(g.Paths) == 0 {
@@ -315,9 +370,8 @@ func (n Nav) view(current string, names []summaryRow) navView {
 		for _, path := range g.Paths {
 			pkg := navPackage{Path: path, Href: PageHref(path, ""), Current: path == current}
 			if pkg.Current {
-				for _, row := range names {
-					pkg.Names = append(pkg.Names, Link{row.Text, row.Href})
-				}
+				pkg.Names = names
+				v.Group = g.Title
 			}
 
 			group.Packages = append(group.Packages, pkg)
@@ -329,34 +383,106 @@ func (n Nav) view(current string, names []summaryRow) navView {
 	return v
 }
 
-// shownNames returns the package's shown names as the sidebar and the index
-// list them: its types, each with its functions and methods, then its
-// functions, constants and variables.
-func (p *Package) shownNames() []summaryRow {
-	var out []summaryRow
-	add := func(name string) { out = append(out, summaryRow{Text: name, Href: PageHref(p.Path, name)}) }
+// shownNames returns the package's shown names as the sidebar and the
+// search list them: its types, each with its functions and methods,
+// then its functions, constants and variables.
+func (p *Package) shownNames() []Name {
+	var out []Name
+	add := func(name, doc, kind string) {
+		out = append(out, Name{name, PageHref(p.Path, name), Synopsis(doc), kind})
+	}
 	for _, t := range p.Types {
-		add(t.Name)
+		add(t.Name, t.Doc, t.kind())
 		for _, fn := range t.functions() {
-			add(funcAnchor(fn.Decl))
+			add(funcAnchor(fn.Decl), fn.Doc, funcKind(fn.Decl))
 		}
 	}
 
 	for _, fn := range p.Funcs {
-		add(funcAnchor(fn.Decl))
+		add(funcAnchor(fn.Decl), fn.Doc, kindFunc)
 	}
 
-	for _, group := range append(append([]*Values{}, p.Consts...), p.Vars...) {
+	for _, group := range p.values() {
 		for _, d := range group.Decls {
 			for _, n := range d.Names {
 				if p.Shown(n.Name) {
-					add(n.Name)
+					add(n.Name, group.Doc, p.valueKind(group))
 				}
 			}
 		}
 	}
 
 	return out
+}
+
+// values returns the package's groups of constants, then of variables.
+func (p *Package) values() []*Values {
+	return append(append([]*Values{}, p.Consts...), p.Vars...)
+}
+
+// valueKind returns the kind of a group of the package's, a constant's
+// or a variable's.
+func (p *Package) valueKind(group *Values) string {
+	if slices.Contains(p.Consts, group) {
+		return kindConst
+	}
+
+	return kindVar
+}
+
+// kind returns the keyword that declares the type: struct, enum, trait,
+// or type for any other.
+func (t *Type) kind() string {
+	switch d := t.Decl.(type) {
+	case *ast.TraitDecl:
+		return kindTrait
+	case *ast.TypeDecl:
+		switch d.Def.(type) {
+		case *ast.StructType:
+			return kindStruct
+		case *ast.EnumType:
+			return kindEnum
+		}
+	}
+
+	return kindType
+}
+
+// funcKind returns a function's kind: a method, or a function, one of
+// a type's among them.
+func funcKind(fn *ast.FuncDecl) string {
+	if fn.Recv != nil {
+		return kindMethod
+	}
+
+	return kindFunc
+}
+
+// A searchItem is one entry of the search: a package or a name, with
+// its page, its first sentence and its kind, in short keys, since the
+// search loads every one.
+type searchItem struct {
+	Text     string `json:"t"`
+	Href     string `json:"h"`
+	Synopsis string `json:"s,omitempty"`
+	Kind     string `json:"k"`
+}
+
+// WriteSearch writes what the filter looks through, as JSON: every
+// package and every shown name of each, with its page, its first
+// sentence and its kind.
+func WriteSearch(w io.Writer, entries []IndexEntry) error {
+	var items []searchItem
+	for _, e := range entries {
+		items = append(items, searchItem{e.Path, e.Href, e.Synopsis, kindPackage})
+		for _, n := range e.Names {
+			var text strings.Builder
+			put(&text, e.Path, string(memberSep), n.Text)
+			items = append(items, searchItem{text.String(), n.Href, n.Synopsis, n.Kind})
+		}
+	}
+
+	return json.NewEncoder(w).Encode(items)
 }
 
 // implementorLink returns a trait's implementor as a link to its page:
@@ -449,18 +575,18 @@ func (p *Package) blocks(text string) []blockView {
 	for _, block := range Parse(text) {
 		switch block := block.(type) {
 		case *Paragraph:
-			out = append(out, blockView{Kind: "p", Spans: p.links(block.Lines)})
+			out = append(out, blockView{Kind: paragraphKind, Spans: p.links(block.Lines)})
 		case *Heading:
-			out = append(out, blockView{Kind: "h", Spans: p.links([]string{block.Text})})
+			out = append(out, blockView{Kind: headingKind, Spans: p.links([]string{block.Text})})
 		case *List:
-			view := blockView{Kind: "ul"}
+			view := blockView{Kind: listKind}
 			for _, item := range block.Items {
 				view.Items = append(view.Items, p.links(item.Lines))
 			}
 
 			out = append(out, view)
 		case *Code:
-			out = append(out, blockView{Kind: "pre", Code: strings.Join(block.Lines, lineSep)})
+			out = append(out, blockView{Kind: codeKind, Code: strings.Join(block.Lines, lineSep)})
 		}
 	}
 
@@ -495,9 +621,51 @@ func (p *Package) links(lines []string) []Link {
 	return out
 }
 
-// Synopsis returns a comment's first sentence, up to its first period
-// and space, or its first paragraph when it has none.
+// withoutAbstract returns a comment's blocks without its first
+// sentence, which the page shows under its title: the first paragraph
+// when that sentence is all of it.
+func withoutAbstract(blocks []blockView, abstract []Link) []blockView {
+	if len(blocks) == 0 || blocks[0].Kind != paragraphKind || len(abstract) == 0 {
+		return blocks
+	}
+
+	if flowText(blocks[0].Spans) != flowText(abstract) {
+		return blocks
+	}
+
+	return blocks[1:]
+}
+
+// flowText returns a flow of text and links as its words read, one
+// space between each two.
+func flowText(flow []Link) string {
+	var text strings.Builder
+	for _, s := range flow {
+		text.WriteString(s.Text)
+	}
+
+	return strings.Join(strings.Fields(text.String()), wordSep)
+}
+
+// Synopsis returns a comment's first sentence as plain text, a link's
+// name without its brackets.
 func Synopsis(doc string) string {
+	var text strings.Builder
+	for _, s := range Spans(firstSentence(doc)) {
+		if s.Name != "" {
+			text.WriteString(s.Name)
+		} else {
+			text.WriteString(s.Text)
+		}
+	}
+
+	return text.String()
+}
+
+// firstSentence returns a comment's first sentence as written, up to
+// its first period and space, or its first paragraph when it has none,
+// on one line.
+func firstSentence(doc string) string {
 	first, _, _ := strings.Cut(doc, lineSep+lineSep)
 	first = strings.Join(strings.Fields(first), wordSep)
 	if i := strings.Index(first, sentenceEnd); i >= 0 {
