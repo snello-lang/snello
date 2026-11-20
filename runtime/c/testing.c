@@ -210,7 +210,7 @@ static bool point_stdout(int fd) {
 // meanwhile.
 int64_t sn_testing_captureStart(sn_string path) {
     fflush(stdout);
-    int64_t file;
+    int64_t file = -1; // no file until the create gives one: gcc's link-time view cannot see it set on every success
     if (sn_os_create(path, &file) != 0) {
         return -1;
     }
