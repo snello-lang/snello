@@ -61,17 +61,18 @@
 #include <sys/timerfd.h>
 #endif
 
-// A task's state is one atomic word, changed by compare-and-swap, as
-// Go's casgstatus changes a goroutine's: RUNNING on a worker; RUNNABLE
-// on a queue or in a slot; PARKING, switched away from but not yet
-// settled by its worker; PARKED, waiting for a wake; DONE. WOKEN is a
-// bit over the first three: a wake that came while the task was
-// running or parking, kept for its park, so that a wake is never lost
-// between a task deciding to wait and its worker taking it off the
-// stack, and cleared when the task resumes, since the wake that
-// resumed it is the one it waited for. Before, a mutex per task
-// guarded a state and a flag, made and destroyed per spawn and taken
-// twice per park and wake.
+// A task's state is one atomic word, changed by compare-and-swap:
+// RUNNING on a worker; RUNNABLE on a queue or in a slot; PARKING,
+// switched away from but not yet settled by its worker; PARKED,
+// waiting for a wake; DONE. WOKEN is a bit over the first three: a wake
+// that came while the task was running or parking, kept for its park,
+// so that a wake is never lost between a task deciding to wait and its
+// worker taking it off the stack, and cleared when the task resumes,
+// since the wake that resumed it is the one it waited for. From the
+// time a wake can reach the task until it ends, every change of the
+// word reads and writes it, a wake already kept written over with
+// itself, so that each is ordered with the others and the park that
+// takes a wake sees what its waker wrote before it.
 enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, WOKEN = 8 };
 
 // few_guards is the room a task's record holds for its first guards,
@@ -1921,7 +1922,9 @@ static void settle(worker *w) {
         int expected = PARKING;
         if (!atomic_compare_exchange_strong(&t->state, &expected,
                                             PARKED)) { // woken while it switched away: it runs next, here
-            atomic_store(&t->state, RUNNABLE);
+            // Read and written, not stored: a later wake's claim stays
+            // ordered with the task, which sees what its waker wrote.
+            atomic_exchange(&t->state, RUNNABLE);
             put_next(w, t);
         }
 
@@ -3012,17 +3015,19 @@ bool sn_wake_claim(sn_task *t) {
             exit(2);
         }
 #endif
-        // A wake already kept is written over with itself, not only read:
-        // the task may be consuming it at its park, and then reads what
-        // its waker wrote before the claim, a handoff's waking. A claim
-        // that wrote nothing would be in no order with that consume, and
-        // a processor may move the waker's earlier store past its read of
-        // the state, so the task would read the handoff still open, park,
-        // and never be queued. Written, the claim is ordered with the
-        // consume: after it, the claim keeps a wake of its own; before
-        // it, the consume reads the claim's write and with it the waking.
+        // A wake already kept is written over with itself: the task may
+        // be consuming it at its park, and then reads what its waker
+        // wrote before the wake, a handoff's waking or a cancel's mark.
+        // A claim that wrote nothing would be in no order with that
+        // consume, and a processor may move the waker's earlier store
+        // past its read of the state, so the task would read the old
+        // value, park, and never be queued. Written, the claim is ordered
+        // with the consume: before it, the consume reads the claim's
+        // write and with it what the waker wrote; after it, the
+        // compare-and-swap fails and the claim reads the state again,
+        // keeping a wake of its own or making the parked task runnable.
         if (s == DONE || atomic_compare_exchange_strong(&t->state, &s, s | WOKEN)) {
-            return false; // the wake is kept for the task's park
+            return false; // the wake is kept for the task's park, or the task has ended
         }
     }
 }
