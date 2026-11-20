@@ -7,7 +7,7 @@
 // tested, and testing and expect are imported here alone.
 package shapes
 
-import ("expect"; "testing")
+import ("expect"; "fmt"; "testing")
 
 struct Case {
 	name string
@@ -34,4 +34,14 @@ func TestLargest() {
 	c := Circle{Radius: 1}
 	r := Rect{W: 1, H: 2}
 	expect.Equal(ref Largest(ref c, ref r), ref c.Area())
+}
+
+// ExampleDescribe names each kind; snello test checks what it prints,
+// and snello doc shapes.Describe shows it.
+func ExampleDescribe() {
+	fmt.Println(Describe(Round))
+	fmt.Println(Describe(Square))
+	// Output:
+	// round
+	// square
 }

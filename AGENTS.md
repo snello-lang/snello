@@ -68,6 +68,8 @@ go vet ./...          # must be clean
 gofmt -l .            # must print nothing
 go test ./...         # must pass
 make fmt              # gofmt over the Go files, clang-format over the C and black over the Python, before every commit; Snello files follow gofmt's layout by hand
+make doc              # what snello doc prints, each form and flag once, from build/doc.sh
+make doc-serve        # snello doc -http, the pages at http://localhost:6060/ until stopped; in the image, published on the host's loopback address alone
 make distros          # a developer's first five minutes on Debian, Ubuntu, Fedora and Arch, in images of their own: snello doctor, then new, run and test with clang, and the install line without it; needs Docker and Go on the host
 go run ./cmd/snello lex FILE     # print the token stream of a Snello file
 go run ./cmd/snello parse FILE   # print the syntax tree
