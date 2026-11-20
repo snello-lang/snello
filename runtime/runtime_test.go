@@ -36,7 +36,7 @@ const (
 // wakeRuns is how many processes TestWakeAfterWaitEnds runs its rounds
 // in, each starting its workers anew, so that a race of the wake whose
 // window a run seldom meets is met more often.
-const wakeRuns = 5
+const wakeRuns = 100
 
 // The debuggers a hung probe's threads are read with: cdb on Windows,
 // from Windows' SDK, which installs it under its kit's directory for
@@ -1105,11 +1105,18 @@ int main(int argc, char **argv) {
 // task that has ended: each receiver carries a kept wake into its wait,
 // so its park returns at once, into the few instructions of the waker's
 // claim, and the wait's handoff keeps it there until the claim is done,
-// so the stop never comes. The rounds run in wakeRuns processes.
+// so the stop never comes. The rounds run in wakeRuns processes. A
+// receiver not ended ending_ns after the rounds lost its wake: the
+// probe writes each task not ended with its state, as the debug
+// build's list of its tasks holds them, read with the workers idle. A
+// sender that lost its wake never sends its word, and leaves main in
+// the rounds, which the probe's deadline ends with the threads' stacks.
 func TestWakeAfterWaitEnds(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
+#include <string.h>
 enum { rounds = 20000 };
+static const int64_t ending_ns = 10000000000; // after the rounds, a task not ended within it lost its wake
 static sn_chan *ch, *done;
 static void receiver(void *arg) {
     (void)arg;
@@ -1123,6 +1130,53 @@ static void sender(void *arg) {
     sn_chan_send(ch, &v);
     int64_t one = 1;
     sn_chan_send(done, &one);
+}
+static uintptr_t word(uintptr_t at) { uintptr_t w; memcpy(&w, (const void *)at, sizeof w); return w; }
+static const char *role(uintptr_t run) {
+    if (run == (uintptr_t)receiver) {
+        return "receiver";
+    }
+
+    if (run == (uintptr_t)sender) {
+        return "sender";
+    }
+
+    return "other";
+}
+static const char *state_name(const sn_debugger_table *d, int state) {
+    if (state == d->running) {
+        return "running";
+    }
+
+    if (state == d->runnable) {
+        return "runnable";
+    }
+
+    if (state == d->parking) {
+        return "parking";
+    }
+
+    if (state == d->parked) {
+        return "parked";
+    }
+
+    return "unknown";
+}
+// unended writes each task that has not ended with its state, from the debug build's list of its tasks, read
+// with the workers idle: whether the receiver that lost its wake waits for one or was queued
+static void unended(void) {
+    const sn_debugger_table *d = &sn_debugger;
+    for (uintptr_t task = word((uintptr_t)d->tasks); task != 0; task = word(task + (uintptr_t)d->next)) {
+        int state;
+        memcpy(&state, (const void *)(task + (uintptr_t)d->state), sizeof state);
+        int without_wake = state & ~d->woken;
+        if (without_wake == d->done || task == (uintptr_t)sn_self()) {
+            continue;
+        }
+
+        const char *kept = (state & d->woken) != 0 ? ", with a wake kept" : "";
+        printf("a task did not end: the %s, %s%s\n", role(word(task + (uintptr_t)d->run)), state_name(d, without_wake), kept);
+    }
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
@@ -1142,8 +1196,14 @@ int main(int argc, char **argv) {
     }
 
     printf("rounds %d\n", rounds);
-    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
-        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    int64_t ending_by = sn_time_mono() + ending_ns;
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending
+        if (sn_time_mono() > ending_by) {
+            unended();
+            return 1;
+        }
+
+        sn_sleep(1000000);
     }
 
     sn_chan_drop(&ch, SN_CHAN_BOTH);
@@ -1413,6 +1473,65 @@ int main(int argc, char **argv) {
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer") // as every build compiles the runtime, which x86-64's compilers otherwise drop the frame pointer from
 	out, err := runProbe(bin)
 	if err != nil || string(out) != "reached\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// TestDebuggerListHeld holds a debug build's list of tasks to the
+// records still held: once many more tasks have ended than the workers
+// keep unfreed, the list a debugger's script walks holds at most the
+// records the workers keep and the main task's, and each one listed is
+// a task of the probe's that ended, since a record is unlinked before
+// it is freed, and a debugger reads no freed record. The list is read
+// with every task ended and every worker idle, so nothing changes it.
+func TestDebuggerListHeld(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+enum { kept_most = 1024, spawned_per_kept = 4 }; // a worker keeps its last ended tasks unfreed: four times as many end
+static void ends(void *arg) { (void)arg; }
+static uintptr_t word(uintptr_t at) { uintptr_t w; memcpy(&w, (const void *)at, sizeof w); return w; }
+// record_held reports whether the record at task is one a task of the probe's left as it ended
+static bool record_held(const sn_debugger_table *d, uintptr_t task) {
+    int state;
+    memcpy(&state, (const void *)(task + (uintptr_t)d->state), sizeof state);
+    return word(task + (uintptr_t)d->run) == (uintptr_t)ends && (state & ~d->woken) == d->done;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    int64_t spawned = 0;
+    do { // the first spawn starts the workers, whose count is read as they may grow
+        sn_spawn(ends, NULL, 0, SN_UNBOUNDED);
+        spawned++;
+    } while (spawned < spawned_per_kept * kept_most * sn_sched_workers());
+
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    atomic_thread_fence(memory_order_acquire); // the counts read, the list's last changes are seen
+    const sn_debugger_table *d = &sn_debugger;
+    int64_t listed = 0, most = kept_most * sn_sched_workers() + 1; // and the main task's
+    for (uintptr_t task = word((uintptr_t)d->tasks); task != 0 && listed <= most; task = word(task + (uintptr_t)d->next)) {
+        listed++;
+        if (task != (uintptr_t)sn_self() && !record_held(d, task)) {
+            printf("record %lld is no ended task's\n", (long long)listed);
+            return 1;
+        }
+    }
+
+    if (listed <= most) {
+        printf("held\n");
+    } else {
+        printf("more than %lld listed\n", (long long)most);
+    }
+
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := runProbe(bin)
+	if err != nil || string(out) != "held\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
