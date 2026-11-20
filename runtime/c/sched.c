@@ -3012,8 +3012,17 @@ bool sn_wake_claim(sn_task *t) {
             exit(2);
         }
 #endif
-        if ((s & WOKEN) != 0 || s == DONE || atomic_compare_exchange_strong(&t->state, &s, s | WOKEN)) {
-            return false; // the wake is kept for the task's park, or was already
+        // A wake already kept is written over with itself, not only read:
+        // the task may be consuming it at its park, and then reads what
+        // its waker wrote before the claim, a handoff's waking. A claim
+        // that wrote nothing would be in no order with that consume, and
+        // a processor may move the waker's earlier store past its read of
+        // the state, so the task would read the handoff still open, park,
+        // and never be queued. Written, the claim is ordered with the
+        // consume: after it, the claim keeps a wake of its own; before
+        // it, the consume reads the claim's write and with it the waking.
+        if (s == DONE || atomic_compare_exchange_strong(&t->state, &s, s | WOKEN)) {
+            return false; // the wake is kept for the task's park
         }
     }
 }
