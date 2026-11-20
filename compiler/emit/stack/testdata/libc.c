@@ -33,6 +33,7 @@
 #include <sched.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -82,6 +83,11 @@ static DIR *listing;
 static sigjmp_buf jump;
 static struct addrinfo *found;
 static FILE *file;
+static posix_spawn_file_actions_t actions;
+static posix_spawnattr_t attributes;
+static pid_t child;
+static char *const true_argv[] = {"true", NULL};
+extern char **environ;
 
 static size_t deepest(uintptr_t entry);
 
@@ -323,6 +329,36 @@ CASE(siglongjmp, { if (sigsetjmp(jump, 1) == 0) siglongjmp(jump, 1); })
 CASE(thread_local, { local[0] = 1; sink = local[0]; })
 CASE(exit, exit(0))
 CASE(abort, abort())
+CASE(raise, raise(SIGPIPE))
+CASE(signal, signal(SIGPIPE, SIG_IGN))
+CASE(kill, kill(getpid(), 0))
+CASE(sigemptyset, { sigset_t set; sigemptyset(&set); })
+CASE(sigaddset, { sigset_t set; sigemptyset(&set); sigaddset(&set, SIGINT); })
+CASE(posix_spawn_file_actions_init, posix_spawn_file_actions_init(&actions))
+static void setup_actions(void) { posix_spawn_file_actions_init(&actions); }
+#define setup_posix_spawn_file_actions_adddup2 setup_actions
+#define setup_posix_spawn_file_actions_addopen setup_actions
+#define setup_posix_spawn_file_actions_addchdir_np setup_actions
+#define setup_posix_spawn_file_actions_destroy setup_actions
+CASE(posix_spawn_file_actions_adddup2, posix_spawn_file_actions_adddup2(&actions, 1, 2))
+CASE(posix_spawn_file_actions_addopen, posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0))
+CASE(posix_spawn_file_actions_addchdir_np, posix_spawn_file_actions_addchdir_np(&actions, "/"))
+CASE(posix_spawn_file_actions_destroy, posix_spawn_file_actions_destroy(&actions))
+CASE(posix_spawnattr_init, posix_spawnattr_init(&attributes))
+static void setup_attributes(void) { posix_spawnattr_init(&attributes); }
+#define setup_posix_spawnattr_setflags setup_attributes
+#define setup_posix_spawnattr_setsigmask setup_attributes
+#define setup_posix_spawnattr_setsigdefault setup_attributes
+#define setup_posix_spawnattr_destroy setup_attributes
+CASE(posix_spawnattr_setflags, posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+CASE(posix_spawnattr_setsigmask, { sigset_t set; sigemptyset(&set); posix_spawnattr_setsigmask(&attributes, &set); })
+CASE(posix_spawnattr_setsigdefault, { sigset_t set; sigemptyset(&set); sigaddset(&set, SIGINT); posix_spawnattr_setsigdefault(&attributes, &set); })
+CASE(posix_spawnattr_destroy, posix_spawnattr_destroy(&attributes))
+CASE(posix_spawn, { pid_t p = 0; if (posix_spawn(&p, "/usr/bin/true", NULL, NULL, true_argv, environ) == 0) waitpid(p, NULL, 0); })
+static void setup_child(void) { child = 0; posix_spawn(&child, "/usr/bin/true", NULL, NULL, true_argv, environ); }
+#define setup_waitpid setup_child
+#define setup_waitid setup_child
+CASE(waitpid, waitpid(child, NULL, 0))
 CASE(__stack_chk_fail, __stack_chk_fail())
 CASE(sin, sink = (long)(sin(0.5) * 100))
 CASE(cos, sink = (long)(cos(0.5) * 100))
@@ -344,6 +380,9 @@ CASE(hypot, sink = (long)(hypot(3, 4) * 100))
 CASE(cbrt, sink = (long)(cbrt(27) * 100))
 CASE(sqrt, sink = (long)(sqrt(2) * 100))
 #if defined(__APPLE__)
+CASE(pipe, { int p[2]; if (pipe(p) == 0) { close(p[0]); close(p[1]); } })
+CASE(posix_spawn_file_actions_addinherit_np, posix_spawn_file_actions_addinherit_np(&actions, 0))
+#define setup_posix_spawn_file_actions_addinherit_np setup_actions
 CASE(bzero, bzero(text, sizeof text))
 CASE(clock_gettime_nsec_np, sink = (long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
 CASE(sysctlbyname, { int v; size_t n = sizeof v; sysctlbyname("kern.ipc.somaxconn", &v, &n, NULL, 0); })
@@ -355,6 +394,8 @@ CASE(kqueue, queue = kqueue())
 CASE(kevent, { struct kevent ev; EV_SET(&ev, 0, EVFILT_READ, EV_ADD, 0, 0, NULL); struct timespec z = {0, 0}; kevent(queue, &ev, 1, NULL, 0, NULL); kevent(queue, NULL, 0, &ev, 1, &z); close(queue); })
 CASE(__error, sink = *__error())
 #else
+CASE(pipe2, { int p[2]; if (pipe2(p, O_CLOEXEC) == 0) { close(p[0]); close(p[1]); } })
+CASE(waitid, { siginfo_t info; waitid(P_PID, (id_t)child, &info, WEXITED); })
 CASE(pthread_mutex_destroy, { pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER; pthread_mutex_destroy(&m); })
 CASE(pthread_condattr_init, { pthread_condattr_t a; pthread_condattr_init(&a); })
 CASE(pthread_condattr_setclock, { pthread_condattr_t a; pthread_condattr_init(&a); pthread_condattr_setclock(&a, CLOCK_MONOTONIC); })
@@ -381,7 +422,13 @@ int main(void) {
         bool ends; // the call ends the process
     } cases[] = {
         // First, before any case starts a thread a child of fork would lack.
-        MEASURE_ENDING(exit), MEASURE_ENDING(abort), MEASURE_ENDING(__stack_chk_fail),
+        MEASURE_ENDING(exit), MEASURE_ENDING(abort), MEASURE_ENDING(__stack_chk_fail), MEASURE_ENDING(raise),
+        MEASURE(signal), MEASURE(kill), MEASURE(sigemptyset), MEASURE(sigaddset), MEASURE(posix_spawn_file_actions_init),
+        MEASURE_AFTER(posix_spawn_file_actions_adddup2), MEASURE_AFTER(posix_spawn_file_actions_addopen),
+        MEASURE_AFTER(posix_spawn_file_actions_addchdir_np), MEASURE_AFTER(posix_spawn_file_actions_destroy),
+        MEASURE(posix_spawnattr_init), MEASURE_AFTER(posix_spawnattr_setflags), MEASURE_AFTER(posix_spawnattr_setsigmask),
+        MEASURE_AFTER(posix_spawnattr_setsigdefault), MEASURE_AFTER(posix_spawnattr_destroy), MEASURE(posix_spawn),
+        MEASURE_AFTER(waitpid),
         MEASURE(malloc), MEASURE(calloc), MEASURE_AFTER(realloc), MEASURE_AFTER(free), MEASURE(aligned_alloc), MEASURE(posix_memalign),
         MEASURE(memcpy), MEASURE(__memcpy_chk), MEASURE(memmove), MEASURE(memset), MEASURE(__memset_chk), MEASURE(memcmp), MEASURE(memchr), MEASURE(strlen), MEASURE(strchr),
         MEASURE(strtoul), MEASURE(strerror), MEASURE(gai_strerror), MEASURE(snprintf),
@@ -403,11 +450,12 @@ int main(void) {
         MEASURE(cosh), MEASURE(tanh), MEASURE(exp), MEASURE(log), MEASURE(log10), MEASURE(log2), MEASURE(pow), MEASURE(fmod),
         MEASURE(hypot), MEASURE(cbrt), MEASURE(sqrt),
 #if defined(__APPLE__)
-        MEASURE(bzero), MEASURE(clock_gettime_nsec_np), MEASURE(sysctlbyname), MEASURE(os_unfair_lock_lock),
+        MEASURE(pipe), MEASURE_AFTER(posix_spawn_file_actions_addinherit_np), MEASURE(bzero), MEASURE(clock_gettime_nsec_np), MEASURE(sysctlbyname), MEASURE(os_unfair_lock_lock),
         MEASURE(os_unfair_lock_unlock), MEASURE(os_sync_wait_on_address), MEASURE(os_sync_wake_by_address_any), MEASURE(kqueue),
         MEASURE(kevent), MEASURE(__error),
 #else
-        MEASURE(pthread_mutex_destroy), MEASURE(pthread_condattr_init), MEASURE(pthread_condattr_setclock),
+        MEASURE(pipe2), MEASURE_AFTER(waitid), MEASURE(pthread_mutex_destroy), MEASURE(pthread_condattr_init),
+        MEASURE(pthread_condattr_setclock),
         MEASURE(pthread_condattr_destroy), MEASURE(sched_getaffinity), MEASURE(prctl), MEASURE(epoll_create1), MEASURE(epoll_ctl),
         MEASURE(epoll_wait), MEASURE(__errno_location), MEASURE(__sched_cpucount), MEASURE(syscall),
 #endif

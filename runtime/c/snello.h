@@ -899,6 +899,26 @@ bool sn_chan_open(sn_chan *c);                 // whether a receiving handle rem
 void sn_chan_send(sn_chan *c, const void *v);
 bool sn_chan_offer(sn_chan *c, const void *v);
 void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
+
+// Package signal's runtime call, process.c's: the runtime holds ch's
+// sending end and offers it each signal of mask, the bit of each
+// Signal's value, as it comes.
+void sn_os__signal_notify(sn_chan *ch, int64_t mask);
+
+// Package exec's runtime calls, process.c's: a child started, waited
+// for, signalled, let go and freed, and its pipes read, written and
+// closed. Each returns the system's error number, or a wait's code,
+// and stores its results through its last parameters.
+int64_t sn_os__exec_start(sn_string path, void *args, sn_string dir, void *env, bool has_env, int64_t in_mode,
+                          int64_t out_mode, int64_t err_mode, int64_t *pid, int64_t *handle, int64_t *in_fd,
+                          int64_t *out_fd, int64_t *err_fd); // args and env are []string, as sn_slice
+void sn_os__exec_closeChild(int64_t handle);
+int64_t sn_os__exec_wait(int64_t handle, bool *exited, int64_t *code, int64_t *sig);
+int64_t sn_os__exec_signal(int64_t handle, int64_t sig);
+void sn_os__exec_detach(int64_t handle);
+int64_t sn_os__exec_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
+int64_t sn_os__exec_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
+void sn_os__exec_closePipe(int64_t fd);
 bool sn_time_stopTimer(sn_chan *ch);
 bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every);
 bool sn_chan_poll(sn_chan *c, void *out);

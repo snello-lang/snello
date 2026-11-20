@@ -146,7 +146,7 @@ typedef struct {
     _Atomic uint32_t state;
 } sn_once;
 
-#define SN_ONCE_INIT {SN_ONCE_NEW}
+#define SN_ONCE_INIT { SN_ONCE_NEW }
 
 // sn_once_begin claims the setup for the caller, or sleeps until it has
 // run; sn_once_end marks it run, waking the sleepers; snello.c's.
@@ -340,6 +340,43 @@ bool sn_handoff_claim(sn_handoff *h, sn_task *t);
 // or running.
 enum { SN_POLL_EVENTS = 64 };
 int sn_net_poller(void);
+
+// The poller for a pipe's end and a child, process.c's: sn_net_watch
+// registers a descriptor for the directions in dirs, SN_WATCH_READ,
+// SN_WATCH_WRITE or both, and returns the system's error number;
+// sn_net_wait_fd parks the running task until the descriptor may be
+// ready for the direction, returning 0, or the code of a cancel or a
+// deadline as a socket's wait does; sn_net_unwatch forgets a descriptor
+// being closed. On macOS a child's exit is an event of the process
+// filter with a record of its own: sn_net_watch_proc registers it,
+// NULL when the child has ended already, sn_net_wait_proc waits on it,
+// and sn_net_unwatch_proc lets it go, kept for the next child, since
+// an event of this one may still be on its way to a worker.
+enum { SN_WATCH_READ = 1, SN_WATCH_WRITE = 2 };
+int sn_net_watch(int fd, int dirs);
+int sn_net_wait_fd(int fd, bool write);
+void sn_net_unwatch(int fd);
+#if defined(__APPLE__) || defined(_WIN32)
+void *sn_net_watch_proc(int64_t pid);
+int sn_net_wait_proc(void *pd);
+void sn_net_unwatch_proc(void *pd);
+#endif
+#if defined(_WIN32)
+// A pipe's end on Windows is bound to the port, sn_net_watch_handle,
+// and each read or write of it is one overlapped operation, an op
+// record whose completion the port posts under SN_KEY_PIPE:
+// sn_net_pipe_op makes one, sn_net_pipe_overlapped is its OVERLAPPED
+// for the system's call, sn_net_wait_op parks until the completion, or
+// returns a cancel's code, after which sn_net_wait_op_done parks until
+// the completion comes whatever the scope, since the system holds the
+// buffer until then; sn_net_pipe_op_free frees the record.
+int sn_net_watch_handle(void *h);
+void *sn_net_pipe_op(void);
+void *sn_net_pipe_overlapped(void *op);
+int sn_net_wait_op(void *op);
+void sn_net_wait_op_done(void *op);
+void sn_net_pipe_op_free(void *op);
+#endif
 int64_t sn_net_waiting(void);
 int sn_net_poll(sn_task **woke, int *taken);
 void sn_net_kept(int64_t taken);
@@ -497,7 +534,8 @@ typedef struct {
     sn_task *prev, *next;    // its place among the scope's tasks, while enlisted
     sn_chan *handle;         // a task spawned for a handle with no scope of its own yet: its handle's channel
     bool enlisted; // it is in the scope's list of tasks, which a cancel wakes: put there at its first wait that
-                   // a cancel may end, or by the Add that took it, since a task that never waits needs no wake
+    _Atomic bool enlisting; // set before the root's lock is taken to enlist, read by the group that takes the task
+                            // a cancel may end, or by the Add that took it, since a task that never waits needs no wake
 } sn_scope_link;
 
 sn_scope_link *sn_task_scope(sn_task *t);
@@ -513,6 +551,23 @@ sn_scope_link *sn_task_scope(sn_task *t);
 int sn_cancel_state(sn_task *t);
 int sn_cancel_wait_state(sn_task *t);
 void sn_scope_enlist_self(sn_task *t, sn_scope *s);
+
+// sn_root is the program's own scope, which every scope made in no
+// scope is under and every task in no scope is in from its first wait a
+// cancel may end; sn_scope_cancel_root cancels it, which an interrupt
+// the program did not ask for does. Both scope.c's.
+extern sn_scope sn_root;
+void sn_scope_cancel_root(void);
+
+// The signals, process.c's: sn_signals_start blocks the caught signals
+// and starts the thread that waits for them, as the runtime starts and
+// before any other thread, and sn_signals_finish ends a program a
+// signal cancelled by that signal, once main has returned.
+void sn_signals_start(void);
+void sn_signals_finish(void);
+// sn_signals_stop lets go of the runtime's end of every channel a Notify
+// gave the program, for the debug build's count of what was released.
+void sn_signals_stop(void);
 
 // What the scheduler and the channels ask of the scopes. sn_scope_current
 // is the scope the task t, the running one, starts tasks and scopes in:
@@ -724,7 +779,18 @@ sn_string sn_net_format(const struct sockaddr *addr, bool port);
 // while looking for the sockets' (sched.c); sn_winsock_start starts
 // Winsock once, before the first socket or lookup, and reports whether
 // it did.
-enum { SN_KEY_POLL = 1, SN_KEY_WAKE = 2, SN_KEY_DEADLINE = 3 };
+enum { SN_KEY_POLL = 1, SN_KEY_WAKE = 2, SN_KEY_DEADLINE = 3, SN_KEY_CHILD = 4, SN_KEY_PIPE = 5 };
+
+// The wait completion packets, sched.c's for process_windows.c: a
+// packet made and associated with the port for a target handle, posted
+// under key with context as its overlapped pointer when the target is
+// signalled; and one cancelled and freed.
+void *sn_wait_packet_make(void *target, uintptr_t key, void *context);
+void sn_wait_packet_free(void *packet);
+
+// sn_os_wide converts a string to UTF-16 in a block of the runtime's,
+// NULL for one the system cannot be given; os_windows.c's.
+wchar_t *sn_os_wide(sn_string s);
 void *sn_net_port(void);
 void sn_keeper_packet(uintptr_t key);
 bool sn_winsock_start(void);

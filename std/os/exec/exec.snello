@@ -1,0 +1,463 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package exec runs a program as a child of this one, with its
+// standard streams shared, piped to this program or closed, waits for
+// its end, and reads how it ended.
+//
+//	out := exec.Command("git", "rev-parse", "HEAD").Output()?
+//	fmt.Print(string(out.Stdout))
+//
+// A Cmd says what to run and how; Start runs it and gives a Child, the
+// handle on the running program, whose pipes are read and written as a
+// file is and whose Wait parks the task until the child ends. Waiting
+// takes no thread: the child's end comes through the runtime's poller
+// as a socket's bytes do. A Child owns the child: dropping it before
+// Wait kills the child and collects its end, and a child meant to
+// outlive its handle is let go with Detach, which the runtime still
+// collects when it ends, so no zombie is ever left. A cancel of the
+// task's scope ends a Wait or a pipe's read with an Error of Kind
+// io.Cancelled, the child running on until its handle is dropped, so
+// task.Within around a Wait bounds a child's run.
+package exec
+
+import ("fmt"; "io")
+
+// Where a child's standard stream goes, a Cmd's Stdin, Stdout or
+// Stderr: Inherit shares this program's stream, the default, so the
+// child writes to the same terminal or file; Piped connects the stream
+// to this program, as the Child's Stdin, Stdout or Stderr Pipe; Null
+// connects it to the null device, so the child reads an end at once, or
+// writes into nothing.
+const Inherit Stdio = 0
+const Piped Stdio = 1
+const Null Stdio = 2
+
+// The signals Kill and Terminate send, the numbers every system Snello
+// runs on gives them.
+const sigKill = 9
+const sigTerm = 15
+
+// The runtime's codes for a wait or a read the task's scope ended, as
+// net has them.
+const cancelled = -5
+const timedOut = -2
+
+// noFd is the descriptor of a stream not piped, and a Pipe's once it is
+// closed.
+const noFd = -1
+
+// detachedHandle is a Child's handle once Detach let the child go, so
+// that Drop does nothing.
+const detachedHandle = 0
+
+// A Stdio says where a child's standard stream goes: Inherit, Piped or
+// Null.
+type Stdio int
+
+// A Cmd is a program to run and how to run it. Command makes one from
+// the program's name and its arguments; the other fields are settings,
+// each with a default, set before Start.
+//
+//	cmd := exec.Command("make", "test")
+//	cmd.Dir = "/src/app".Clone()
+//	cmd.Stdout = exec.Piped
+struct Cmd {
+	// Path is the program: looked up on PATH when it holds no path
+	// separator, as a shell looks a command up, and taken as written
+	// when it does.
+	Path string
+
+	// Args are the arguments after the program's name, which the child
+	// sees as its first argument on its own.
+	Args []string
+
+	// Dir is the directory the child starts in, this program's when
+	// empty.
+	Dir string = ""
+
+	// Env is the child's whole environment, each entry KEY=value, or
+	// None for this program's own.
+	Env ([]string)?
+
+	// Stdin, Stdout and Stderr say where each standard stream of the
+	// child goes.
+	Stdin  Stdio = Inherit
+	Stdout Stdio = Inherit
+	Stderr Stdio = Inherit
+}
+
+// A Child is a program this one started, the handle that owns it. Its
+// Stdin, Stdout and Stderr hold this program's end of each stream the
+// Cmd piped, which the program takes out to read or write:
+//
+//	child := cmd.Start()?
+//	out := take(mut child.Stdout)?
+//	lines := bufio.NewScanner(mut out)
+//
+// Dropping a Child that has not been waited for kills the child and
+// collects its end; Wait first to let it finish, or Detach to let it
+// run on.
+struct Child impl Drop {
+	// Stdin is this program's end of the child's input when the Cmd
+	// piped it, a Writer; dropping it is the end of the child's input.
+	Stdin Pipe?
+
+	// Stdout and Stderr are this program's ends of the child's output
+	// streams when the Cmd piped them, Readers.
+	Stdout Pipe?
+	Stderr Pipe?
+
+	handle int
+	pid    int
+	status Status?
+}
+
+// A Pipe is this program's end of a stream shared with the child: an
+// io.Writer for the child's input, an io.Reader for its output. A read
+// with nothing to read parks the task until the child writes, and a
+// write that the child is slow to take parks it until there is room.
+// Dropping it closes it.
+struct Pipe impl io.Reader, io.Writer, Drop {
+	fd   int
+	name string
+}
+
+// A Status is how a child ended: by exiting with a code, or by a
+// signal.
+struct Status impl Copy, Clone, Eq, fmt.Stringer {
+	exited bool
+	code   int
+	signal int
+}
+
+// An Output is what a command printed and how it ended, as Output
+// collects them.
+struct Output {
+	Status Status
+	Stdout []byte
+	Stderr []byte
+}
+
+// Command makes a Cmd that runs the program name with args, every other
+// setting at its default: the three standard streams shared, this
+// program's directory and environment.
+//
+//	cmd := exec.Command("ls", "-l", "/tmp")
+func Command(name string, args ...string) Cmd {
+	return Cmd{Path: name, Args: args}
+}
+
+// Start runs the command as a child and returns at once with the
+// handle on it. It fails when the program is not found, "exec nosuch:
+// executable file not found in $PATH", an Error of Kind io.NotExist,
+// when it is one the system runs through another program, a batch
+// file on Windows, or when the system cannot start it.
+func (c ref Cmd) Start() Result<Child, io.Error> {
+	path := LookPath(ref c.Path)?
+	startable(ref path)?
+	args := c.Args.Clone()
+	env := match ref c.Env {
+		Some(e) => e.Clone(),
+		None => []string{},
+	}
+	pid := 0
+	handle := 0
+	in := noFd
+	out := noFd
+	err := noFd
+	code := start(ref path, mut args, ref c.Dir, mut env, c.Env.IsSome(), int(c.Stdin), int(c.Stdout), int(c.Stderr), mut pid, mut handle, mut in, mut out, mut err)
+	if code != 0 {
+		return Err(io.Errno("exec", ref c.Path, code))
+	}
+
+	return Ok(Child{
+		Stdin:  pipe(in, "stdin"),
+		Stdout: pipe(out, "stdout"),
+		Stderr: pipe(err, "stderr"),
+		handle: handle,
+		pid:    pid,
+	})
+}
+
+// Run starts the command and waits for it to end, and returns how it
+// ended; a child that exits with a code other than 0 is not a failure,
+// which Status says.
+//
+//	status := exec.Command("make").Run()?
+//	if !status.Success() { fmt.Println("make:", status) }
+func (c ref Cmd) Run() Result<Status, io.Error> {
+	child := c.Start()?
+	return child.Wait()
+}
+
+// Output runs the command with its output streams piped, whatever the
+// Cmd set them to, collects both and waits for the child to end: what
+// it printed on each, and how it ended. The error stream is read on a
+// task of its own, so that a child writing much to both cannot fill one
+// pipe while this program reads the other.
+//
+//	out := exec.Command("git", "status", "--short").Output()?
+//	fmt.Print(string(out.Stdout))
+func (c ref Cmd) Output() Result<Output, io.Error> {
+	var env ([]string)? = None
+	if e := ref c.Env {
+		env = Some(e.Clone())
+	}
+
+	cmd := Cmd{Path: c.Path.Clone(), Args: c.Args.Clone(), Dir: c.Dir.Clone(), Env: env, Stdin: c.Stdin, Stdout: Piped, Stderr: Piped}
+	child := cmd.Start()?
+	errPipe := take(mut child.Stderr).Expect("a piped stream has its Pipe")
+	errs := spawn readAll(errPipe)
+	outPipe := take(mut child.Stdout).Expect("a piped stream has its Pipe")
+	stdout := io.ReadAll(mut outPipe)
+	_ = outPipe
+	stderr := match errs.Join() {
+		Ok(r) => r,
+		Err(p) => return Err(io.NewError("exec".Clone(), c.Path.Clone(), p.Message().Clone(), io.Other)),
+	}
+	status := child.Wait()?
+	return Ok(Output{Status: status, Stdout: stdout?, Stderr: stderr?})
+}
+
+// Pid is the child's process number.
+func (c ref Child) Pid() int {
+	return c.pid
+}
+
+// Wait parks the task until the child has ended and returns how it
+// ended; asked again, it answers the same. The child's input, when the
+// Child still holds its Pipe, is closed first, so that a child reading
+// its input cannot wait for a program that waits for it. Wait reads
+// nothing: a stream the Cmd piped is read by the program, in a task if
+// the child writes much, and a child blocked on a full pipe no one
+// reads is waited for for ever. A cancel of the task's scope ends the
+// wait with an Error of Kind io.Cancelled, the child running on. A
+// child whose end something else in this program collected, a bound
+// library that waits for any child, fails the Wait with an Error of
+// Kind io.Other, since how it ended is lost.
+func (c mut Child) Wait() Result<Status, io.Error> {
+	if s := c.status {
+		return Ok(s)
+	}
+
+	c.Stdin = None
+	exited := false
+	code := 0
+	sig := 0
+	r := wait(c.handle, mut exited, mut code, mut sig)
+	if r == cancelled || r == timedOut {
+		return Err(stopError("wait", r))
+	}
+
+	if r != 0 {
+		return Err(io.Errno("wait", "", r))
+	}
+
+	s := Status{exited: exited, code: code, signal: sig}
+	c.status = Some(s)
+	return Ok(s)
+}
+
+// Kill ends the child at once, with SIGKILL, which no program can
+// catch, or TerminateProcess on Windows; nothing when the child has
+// ended. Wait then collects the end.
+func (c ref Child) Kill() Result<(), io.Error> {
+	return c.send(sigKill)
+}
+
+// Terminate asks the child to end, with SIGTERM, which a program may
+// catch and answer; on Windows, which has no signal to send, it is
+// Kill. Nothing when the child has ended.
+func (c ref Child) Terminate() Result<(), io.Error> {
+	return c.send(sigTerm)
+}
+
+// Detach lets the child run on without its handle: the pipes the Child
+// still holds are closed, and the runtime collects the child's end when
+// it comes, so that it is never left a zombie.
+func (c Child) Detach() {
+	c.Stdin = None
+	c.Stdout = None
+	c.Stderr = None
+	if c.status.IsNone() {
+		detach(c.handle)
+		c.handle = detachedHandle
+	}
+}
+
+// Drop kills a child that has not been waited for and collects its
+// end, and frees the handle. A drop in a cancelled scope, where no
+// wait can be made, leaves the killed child to the runtime to collect,
+// as Detach leaves one.
+func (c mut Child) Drop() {
+	if c.handle == detachedHandle {
+		return
+	}
+
+	if c.status.IsNone() {
+		_ = c.send(sigKill)
+		if c.Wait().IsErr() {
+			detach(c.handle)
+			return
+		}
+	}
+
+	closeChild(c.handle)
+}
+
+// Success reports whether the child exited with the code 0.
+func (s ref Status) Success() bool {
+	return s.exited && s.code == 0
+}
+
+// Code is the exit code of a child that exited, or None for one a
+// signal ended.
+func (s ref Status) Code() int? {
+	if s.exited {
+		return Some(s.code)
+	}
+
+	return None
+}
+
+// Signal is the number of the signal that ended the child, or None for
+// one that exited; always None on Windows.
+func (s ref Status) Signal() int? {
+	if s.exited {
+		return None
+	}
+
+	return Some(s.signal)
+}
+
+// String says how the child ended: "exit status 3", or "signal:
+// killed" for a signal, by its name.
+func (s ref Status) String() string {
+	if s.exited {
+		return fmt.Sprintf("exit status %d", s.code)
+	}
+
+	return "signal: ".Clone() + signalName(s.signal)
+}
+
+// Read reads what the child has written to the pipe into buf, as much
+// as one read gives, and returns how many bytes; 0 once the child has
+// closed its end. It parks while there is nothing to read.
+func (p mut Pipe) Read(buf mut []byte) Result<int, io.Error> {
+	n := 0
+	code := read(p.fd, buf, mut n)
+	if code == cancelled || code == timedOut {
+		return Err(stopError("read", code))
+	}
+
+	if code != 0 {
+		return Err(io.Errno("read", ref p.name, code))
+	}
+
+	return Ok(n)
+}
+
+// Write writes all of buf to the child's input and returns how many
+// bytes it wrote, the length of buf. It parks while the child is slow
+// to take them. A child that closed its input, or ended, fails the
+// write with an Error of Kind io.BrokenPipe, whose Written says how
+// much was taken.
+func (p mut Pipe) Write(buf ref []byte) Result<int, io.Error> {
+	n := 0
+	code := write(p.fd, buf, mut n)
+	if code == cancelled || code == timedOut {
+		return Err(stopError("write", code).WithWritten(n))
+	}
+
+	if code != 0 {
+		return Err(io.Errno("write", ref p.name, code).WithWritten(n))
+	}
+
+	return Ok(n)
+}
+
+// WriteString writes all of s to the child's input, as Write writes
+// bytes.
+func (p mut Pipe) WriteString(s ref string) Result<int, io.Error> {
+	return p.Write(ref []byte(s))
+}
+
+// Drop closes this program's end of the pipe: for the child's input,
+// the end of its input.
+func (p mut Pipe) Drop() {
+	if p.fd != noFd {
+		closePipe(p.fd)
+	}
+}
+
+// send sends the child the signal, nothing once it has ended.
+func (c ref Child) send(sig int) Result<(), io.Error> {
+	if c.status.IsSome() {
+		return Ok(())
+	}
+
+	code := signal(c.handle, sig)
+	if code != 0 {
+		return Err(io.Errno("signal", "", code))
+	}
+
+	return Ok(())
+}
+
+// readAll reads the pipe to its end, for Output's task.
+func readAll(p Pipe) Result<[]byte, io.Error> {
+	return io.ReadAll(mut p)
+}
+
+// pipe makes the Pipe of a stream's descriptor, None for a stream not
+// piped.
+func pipe(fd int, name string) Pipe? {
+	if fd == noFd {
+		return None
+	}
+
+	return Some(Pipe{fd: fd, name: name.Clone()})
+}
+
+// stopError is the Error of a call the task's scope ended, as net's is.
+func stopError(op string, code int) io.Error {
+	if code == cancelled {
+		return io.NewError(op, "".Clone(), "operation cancelled".Clone(), io.Cancelled)
+	}
+
+	return io.NewError(op, "".Clone(), "i/o timeout".Clone(), io.TimedOut)
+}
+
+// start starts the program path with args, in dir unless it is empty,
+// with the environment env when hasEnv says so, its streams as the
+// modes say, storing the child's number and handle and this program's
+// descriptor of each piped stream, noFd for one not piped. The runtime
+// provides it, as it does every function below; each that returns an
+// int returns the system's error number, zero on success, or the
+// runtime's code for a wait the task's scope ended.
+func start(path ref string, args mut []string, dir ref string, env mut []string, hasEnv bool, stdin int, stdout int, stderr int, pid mut int, handle mut int, in mut int, out mut int, err mut int) int
+
+// wait parks until the child has ended and stores how.
+func wait(handle int, exited mut bool, code mut int, sig mut int) int
+
+// signal sends the child the signal, nothing once it has ended.
+func signal(handle int, sig int) int
+
+// detach hands the child to the runtime, which collects its end.
+func detach(handle int)
+
+// closeChild frees the handle of a child that has ended.
+func closeChild(handle int)
+
+// read reads from the pipe into buf, parking until the child writes,
+// and stores how many bytes it read.
+func read(fd int, buf mut []byte, n mut int) int
+
+// write writes all of buf to the pipe, parking while the child is slow
+// to take it, and stores how many bytes it wrote.
+func write(fd int, buf ref []byte, n mut int) int
+
+// closePipe closes this program's end of a pipe.
+func closePipe(fd int)

@@ -44,7 +44,7 @@ A cancel lands where a task waits, and each call says it in the form it already 
 
 | The call | Cancelled while it waits, or called once cancelled |
 |---|---|
-| A library call returning `Result`: `Read`, `Write`, `Accept`, `Dial`, `LookupHost`, and what is built on them, `io.Copy`, `bufio` | `Err` of an `io.Error` of Kind `io.Cancelled`, or of Kind `io.TimedOut` when a deadline passed, the Kind a socket's own deadline gives; a `Write` reports the bytes it had written |
+| A library call returning `Result`: `Read`, `Write`, `Accept`, `Dial`, `LookupHost`, a child's `Wait` and its pipes' `Read` and `Write`, and what is built on them, `io.Copy`, `bufio` | `Err` of an `io.Error` of Kind `io.Cancelled`, or of Kind `io.TimedOut` when a deadline passed, the Kind a socket's own deadline gives; a `Write` reports the bytes it had written; a child runs on until its handle is dropped, which kills it, or `Detach` lets it go (chapter 36) |
 | A receive, `<-ch`, `for range ch` | `None`, as from a channel that has ended: the loop ends |
 | A send, `ch <- v` | drops the value and goes on, as a send with no receiver left does |
 | `select` | one case is taken as if its channel had ended: a receive case with `None`, a send case dropping its value; a `select` with `default` does not wait and is not affected |
@@ -66,6 +66,8 @@ if task.Cancelled() {
 ```
 
 There is no channel to select on for the cancel: every wait already wakes, so a `select` needs no case for it.
+
+**An interrupt is a cancel.** A program that asks for no signal is cancelled by the terminal's Ctrl-C or a `kill` exactly as this chapter says, every wait of every task returning and `main`'s drops running, and then ends by the signal; chapter 36 has it, with `signal.Notify` for a program that answers the signal itself.
 
 ## What is waited for, and what is never forced
 

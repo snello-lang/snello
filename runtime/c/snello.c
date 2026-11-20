@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -69,6 +70,7 @@ sn_slice sn_os_Args = { 0 };
 #ifndef SN_DEBUG
 int sn_finish(void) {
     sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
+    sn_signals_finish();                               // a program a signal cancelled ends by it, its drops run
     return 0;
 }
 #endif
@@ -285,6 +287,7 @@ void sn_init(int argc, char **argv) {
     }
 
     LocalFree(wide);
+    sn_signals_start();
 }
 #else
 void sn_init(int argc, char **argv) {
@@ -320,6 +323,8 @@ void sn_init(int argc, char **argv) {
         sn_string arg = SN_STR(argv[i], (int64_t)strlen(argv[i]));
         sn_slice_push(&sn_os_Args, &arg, sizeof arg);
     }
+
+    sn_signals_start(); // before any thread, which inherits the mask
 }
 #endif
 
@@ -346,6 +351,16 @@ int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
         int64_t n = (int64_t)wrote;
 #else
         ssize_t n = write(fd, p + done, want < SN_IO_MAX ? want : SN_IO_MAX);
+        if (n < 0 && errno == EPIPE && (fd == 1 || fd == 2)) {
+            // The reader of the standard output or error is gone: the
+            // program ends by SIGPIPE, as the system would end it were
+            // the signal not ignored, so that a program piped into one
+            // that stopped reading stops too; a write anywhere else
+            // fails with the error.
+            fflush(stdout);
+            signal(SIGPIPE, SIG_DFL);
+            raise(SIGPIPE);
+        }
 #endif
         if (n < 0) {
             if (errno == EINTR) {

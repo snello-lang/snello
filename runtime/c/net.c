@@ -369,6 +369,8 @@ enum { pd_chunk = 4096, pd_chunks = 4096 };
 
 static _Atomic(poll_desc *) pds[pd_chunks];
 
+static int wait_pd(poll_desc *pd, int fd, bool write);
+
 static poll_desc *pd_of(int fd) {
 #if defined(_WIN32)
     fd >>= 2; // a socket's handle is a multiple of four
@@ -483,6 +485,15 @@ typedef struct {
     bool write;
 } afd_poll;
 
+// A pipe_op is one overlapped read or write of a pipe's end, for
+// process_windows.c: the OVERLAPPED the system's call takes, first, so
+// that the completion the port posts names the record, and the
+// descriptor record whose read word the completion readies.
+typedef struct {
+    OVERLAPPED ov;
+    poll_desc pd;
+} pipe_op;
+
 // arm_poll makes sure a poll of the direction is armed on fd, and returns 0,
 // or the error number of a failure to arm one.
 static int arm_poll(int fd, bool write) {
@@ -568,13 +579,28 @@ int sn_net_poll(sn_task **woke, int *taken) {
     }
 
     for (ULONG i = 0; i < got; i++) {
-        if (events[i].lpCompletionKey != SN_KEY_POLL) { // the keeper's, which it gets back while it waits
+        bool claimed = false;
+        sn_task *t = NULL;
+        poll_desc *pd = NULL;
+        switch (events[i].lpCompletionKey) {
+        case SN_KEY_POLL:
+            t = polled((afd_poll *)events[i].lpOverlapped, &claimed);
+            break;
+        case SN_KEY_CHILD: // a child's exit: its record is the packet's context
+            pd = events[i].lpOverlapped == NULL ? NULL : (poll_desc *)events[i].lpOverlapped;
+            break;
+        case SN_KEY_PIPE: // a pipe operation's completion: its record begins with the OVERLAPPED
+            pd = &((pipe_op *)events[i].lpOverlapped)->pd;
+            break;
+        default: // the keeper's, which it gets back while it waits
             sn_keeper_packet(events[i].lpCompletionKey);
             continue;
         }
 
-        bool claimed = false;
-        sn_task *t = polled((afd_poll *)events[i].lpOverlapped, &claimed);
+        if (pd != NULL) {
+            t = ready(&pd->r, &pd->rh, &claimed);
+        }
+
         take(t, claimed, woke, &n, taken);
     }
 
@@ -710,11 +736,12 @@ static bool passed(int fd, bool write) {
     return atomic_load(write ? &pd->wd : &pd->rd) < 0;
 }
 
-// watch registers a socket just made with the poller, for both
-// directions, its words and deadlines cleared of what an earlier socket
-// with the same number left. On a failure it returns the name of the
-// call that failed, and NULL otherwise.
-static const char *watch(int fd) {
+// watch registers a descriptor just made with the poller, a socket for
+// both directions and a pipe's end or a child's pidfd for the one it
+// has, dirs, its words and deadlines cleared of what an earlier
+// descriptor with the same number left. On a failure it returns the
+// name of the call that failed, and NULL otherwise.
+static const char *watch(int fd, int dirs) {
     if (sn_net_poller() < 0) { // made here when the main task makes a socket before the scheduler starts
 #if defined(_WIN32)
         return "CreateIoCompletionPort";
@@ -738,6 +765,7 @@ static const char *watch(int fd) {
     // knows, its base provider's, under any layered provider, as every
     // poller over the driver asks for. A poll the last socket with the
     // number left armed completes on its own and frees itself.
+    (void)dirs; // a pipe's end is not a socket, and is bound to the port by sn_net_watch_handle
     atomic_store(&pd->rpoll, NULL);
     atomic_store(&pd->wpoll, NULL);
     DWORD bytes = 0;
@@ -750,14 +778,163 @@ static const char *watch(int fd) {
     return NULL;
 #elif defined(__APPLE__)
     struct kevent ev[2];
-    EV_SET(&ev[0], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, pd);
-    EV_SET(&ev[1], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, pd);
-    return kevent(poller, ev, 2, NULL, 0, NULL) == 0 ? NULL : "kevent";
+    int n = 0;
+    if ((dirs & SN_WATCH_READ) != 0) {
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, pd);
+    }
+
+    if ((dirs & SN_WATCH_WRITE) != 0) {
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, pd);
+    }
+
+    return kevent(poller, ev, n, NULL, 0, NULL) == 0 ? NULL : "kevent";
 #else
-    struct epoll_event ev = { .events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, .data.ptr = pd };
+    uint32_t events = EPOLLET;
+    if ((dirs & SN_WATCH_READ) != 0) {
+        events |= EPOLLIN | EPOLLRDHUP;
+    }
+
+    if ((dirs & SN_WATCH_WRITE) != 0) {
+        events |= EPOLLOUT;
+    }
+
+    struct epoll_event ev = { .events = events, .data.ptr = pd };
     return epoll_ctl(poller, EPOLL_CTL_ADD, fd, &ev) == 0 ? NULL : "epoll_ctl";
 #endif
 }
+
+static void unwatch(int fd);
+
+int sn_net_watch(int fd, int dirs) { return watch(fd, dirs) == NULL ? 0 : last_error(); }
+
+void sn_net_unwatch(int fd) { unwatch(fd); }
+
+#if defined(__APPLE__) || defined(_WIN32)
+// A child's exit record is never returned to the allocator, as a
+// socket's is not: its event may be in a worker's batch, read from the
+// kernel before the record was let go, or posted to the port again by
+// the keeper, and would name freed memory. A record let go is kept for
+// the next child; an event of the child before readies the record for
+// the next, whose wait finds its child running and waits again.
+typedef struct proc_desc {
+    poll_desc pd;
+    struct proc_desc *next;
+} proc_desc;
+
+static sn_mutex procs_mu = SN_MUTEX_INIT;
+static proc_desc *procs_free; // under procs_mu
+
+static proc_desc *proc_desc_take(void) {
+    sn_mutex_lock(&procs_mu);
+    proc_desc *d = procs_free;
+    if (d != NULL) {
+        procs_free = d->next;
+    }
+
+    sn_mutex_unlock(&procs_mu);
+    if (d == NULL) {
+        d = calloc(1, sizeof *d);
+        if (d == NULL) {
+            sn_panic(SN_STR("out of memory", 13));
+        }
+    }
+
+    atomic_store(&d->pd.r, pd_none); // an event of the child before, which no wait took
+    return d;
+}
+
+void *sn_net_watch_proc(int64_t pid) {
+    if (sn_net_poller() < 0) {
+        return NULL;
+    }
+
+    proc_desc *d = proc_desc_take();
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, &d->pd);
+    if (kevent(poller, &ev, 1, NULL, 0, NULL) != 0) {
+        sn_net_unwatch_proc(&d->pd);
+        return NULL;
+    }
+#else
+    (void)pid; // the packet that posts the exit is process_windows.c's, with this record as its context
+#endif
+    return &d->pd;
+}
+
+int sn_net_wait_proc(void *pd) { return wait_pd(pd, -1, false); }
+
+// sn_net_unwatch_proc lets a child's exit record go, to the next child:
+// an exit event still to come, one-shot, readies the record once and
+// is absorbed as the comment above says; it is not deleted by the
+// child's number, which the system may have given to another child by
+// then, whose own event the delete would take.
+void sn_net_unwatch_proc(void *pd) {
+    proc_desc *d = (proc_desc *)pd; // the record is the first field
+    sn_mutex_lock(&procs_mu);
+    d->next = procs_free;
+    procs_free = d;
+    sn_mutex_unlock(&procs_mu);
+}
+#endif
+
+#if defined(_WIN32)
+int sn_net_watch_handle(void *h) {
+    if (sn_net_poller() < 0) {
+        return sn_errno_of(ERROR_INVALID_HANDLE);
+    }
+
+    if (CreateIoCompletionPort(h, port, SN_KEY_PIPE, 0) == NULL ||
+        !SetFileCompletionNotificationModes(h, FILE_SKIP_SET_EVENT_ON_HANDLE)) {
+        return sn_errno_of(GetLastError());
+    }
+
+    return 0;
+}
+
+void *sn_net_pipe_op(void) {
+    pipe_op *op = calloc(1, sizeof *op);
+    if (op == NULL) {
+        sn_panic(SN_STR("out of memory", 13));
+    }
+
+    return op;
+}
+
+void *sn_net_pipe_overlapped(void *op) { return &((pipe_op *)op)->ov; }
+
+int sn_net_wait_op(void *op) { return wait_pd(&((pipe_op *)op)->pd, -1, false); }
+
+void sn_net_wait_op_done(void *op) {
+    poll_desc *pd = &((pipe_op *)op)->pd;
+    uintptr_t self = (uintptr_t)sn_self();
+    atomic_store_explicit(&pd->rh, SN_HANDOFF_OPEN, memory_order_relaxed);
+    for (;;) {
+        uintptr_t old = pd_ready;
+        if (atomic_compare_exchange_strong(&pd->r, &old, pd_none)) {
+            return; // the completion came
+        }
+
+        old = pd_none;
+        if (!atomic_compare_exchange_strong(&pd->r, &old, self)) {
+            continue;
+        }
+
+        promise(1);
+        sn_park();
+        uintptr_t mine = self;
+        if (atomic_compare_exchange_strong(&pd->r, &mine, pd_none)) {
+            promise(-1); // a wake for something else: the completion is still to come
+            continue;
+        }
+
+        sn_handoff_wait(&pd->rh);
+        return;
+    }
+}
+
+void sn_net_pipe_op_free(void *op) { free(op); }
+#endif
 
 // wait_fd waits until fd may be ready to read, or to write: at once
 // when an event came since the caller's call failed, and otherwise by
@@ -770,8 +947,17 @@ static const char *watch(int fd) {
 // task takes itself out of the word before it returns, unless the
 // poller or the deadline took it out first, and then waits for that
 // waker to be done with it.
-static int wait_fd(int fd, bool write) {
-    poll_desc *pd = pd_of(fd);
+static int wait_fd(int fd, bool write) { return wait_pd(pd_of(fd), fd, write); }
+
+int sn_net_wait_fd(int fd, bool write) { return wait_fd(fd, write); }
+
+// wait_pd is wait_fd on the descriptor's record, which a child's exit
+// event on macOS has without a descriptor number; fd is the number the
+// poll on Windows needs.
+static int wait_pd(poll_desc *pd, int fd, bool write) {
+#if !defined(_WIN32)
+    (void)fd;
+#endif
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
     sn_handoff *woken = write ? &pd->wh : &pd->rh;
@@ -810,7 +996,9 @@ static int wait_fd(int fd, bool write) {
     }
 
 #if defined(_WIN32)
-    int failed = arm_poll(fd, write); // a poll for the wake, which a completion of it brings
+    int failed =
+        fd >= 0 ? arm_poll(fd, write) : 0; // a poll for the wake, which a completion of it brings; a child's
+                                           // exit and a pipe's operation complete through the port on their own
     if (failed != 0) {
         uintptr_t me = self;
         if (atomic_compare_exchange_strong(word, &me, pd_none)) {
@@ -946,7 +1134,7 @@ static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, boo
 
     const char *failed = prepare(s);
     if (failed == NULL) {
-        failed = watch(s);
+        failed = watch(s, SN_WATCH_READ | SN_WATCH_WRITE);
     }
 
     if (failed != NULL) {
@@ -1012,7 +1200,7 @@ int64_t sn_net_accept(int64_t fd, int64_t *out) {
                 continue;
             }
 
-            if (watch(c) != NULL) {
+            if (watch(c, SN_WATCH_READ | SN_WATCH_WRITE) != NULL) {
                 int code = last_error();
                 CLOSE_SOCKET(c);
                 return code;
@@ -1061,7 +1249,7 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
 
     const char *failed = connected(s);
     if (failed == NULL) {
-        failed = watch(s);
+        failed = watch(s, SN_WATCH_READ | SN_WATCH_WRITE);
     }
 
     if (failed != NULL) {

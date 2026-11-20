@@ -1,0 +1,124 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package exec
+
+import ("fmt"; "io"; "os"; "path/filepath"; "strings")
+
+// The list separators of PATH and PATHEXT, and the extensions a program
+// may run under when PATHEXT is not set.
+const pathListSeparator = ";"
+const defaultPathExt = ".COM;.EXE;.BAT;.CMD"
+
+// LookPath finds the program a command names: a name with a path
+// separator or a volume is taken as written, and any other is looked
+// for in the directories of PATH, in order, as the shell looks a
+// command up, each under the extensions of PATHEXT when the name has
+// none of them. A program found in the current directory because PATH
+// named it as "." or an empty entry is refused, since what runs would
+// then depend on where the program is started; name it ".\tool" to run
+// it from there. It fails with an Error of Kind
+// io.NotExist, "exec nosuch: executable file not found in %PATH%",
+// when nothing runs by that name.
+func LookPath(name ref string) Result<string, io.Error> {
+	if name.Contains("\\") || name.Contains("/") || len(filepath.VolumeName(name)) > 0 {
+		return found(name.Clone(), name)
+	}
+
+	path := os.Getenv("PATH")
+	for dir := range path.Split(pathListSeparator) {
+		d := dir
+		if len(d) == 0 {
+			d = "."
+		}
+
+		match found(filepath.Join(d, name), name) {
+			Ok(candidate) => {
+				if !filepath.IsAbs(ref candidate) {
+					return Err(io.NewError("exec".Clone(), name.Clone(), "cannot run executable found relative to current directory".Clone(), io.Other))
+				}
+
+				return Ok(candidate)
+			},
+			Err(_) => {},
+		}
+	}
+
+	return Err(notFound(name))
+}
+
+// found returns the path of the program at candidate: as written when
+// its extension is one of PATHEXT's and it names a file, and else under
+// the first of those extensions that names one; or LookPath's failure.
+func found(candidate string, name ref string) Result<string, io.Error> {
+	exts := os.Getenv("PATHEXT")
+	if len(exts) == 0 {
+		exts = defaultPathExt.Clone()
+	}
+
+	if hasExt(ref candidate, ref exts) && runs(ref candidate) {
+		return Ok(candidate)
+	}
+
+	for e := range exts.Split(pathListSeparator) {
+		p := candidate.Clone() + e
+		if len(e) > 0 && runs(ref p) {
+			return Ok(p)
+		}
+	}
+
+	return Err(notFound(name))
+}
+
+// hasExt reports whether path ends in one of the extensions of exts,
+// PATHEXT's list, whatever the case.
+func hasExt(path ref string, exts ref string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if len(ext) == 0 {
+		return false
+	}
+
+	for e := range exts.Split(pathListSeparator) {
+		if strings.ToLower(e) == ext {
+			return true
+		}
+	}
+
+	return false
+}
+
+// startable is Start's check of the program LookPath found: a batch
+// file, .bat or .cmd, is refused with an Error of Kind io.Other, since
+// the system runs one through cmd.exe, which reads the arguments its
+// own way and runs what a crafted one tells it to; a program that
+// means to run one names cmd itself, "cmd /c tool.bat", and quotes
+// the arguments for it.
+func startable(path ref string) Result<(), io.Error> {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".bat" || ext == ".cmd" {
+		return Err(io.NewError("exec".Clone(), path.Clone(), "a batch file runs through cmd.exe: run it as cmd /c".Clone(), io.Other))
+	}
+
+	return Ok(())
+}
+
+// runs reports whether path names a regular file, which Windows runs by
+// its extension.
+func runs(path ref string) bool {
+	return match os.Stat(path) {
+		Ok(info) => info.Mode().IsRegular(),
+		Err(_) => false,
+	}
+}
+
+// notFound is LookPath's failure.
+func notFound(name ref string) io.Error {
+	return io.NewError("exec".Clone(), name.Clone(), "executable file not found in %PATH%".Clone(), io.NotExist)
+}
+
+// signalName names a signal as Status prints one, which no child on
+// Windows ends by: its number.
+func signalName(sig int) string {
+	return fmt.Sprintf("signal %d", sig)
+}

@@ -6,7 +6,6 @@ package llvm
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"net"
 	"os"
@@ -306,7 +305,7 @@ func TestPrograms(t *testing.T) {
 			}
 
 			for _, debug := range p.Builds() {
-				out, stderr, code := run(t, p.Name, p.Src, debug)
+				out, stderr, code := runInterrupted(t, p.Name, p.Src, debug, p.Interrupts)
 				if bad := p.Check(out, stderr, code, debug); bad != "" {
 					t.Errorf("debug=%v: %s", debug, bad)
 				}
@@ -521,12 +520,19 @@ func libraries(imp *importer.Importer) []lower.Library {
 // the binary first, for a program that reads them.
 func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string, string, int) {
 	t.Helper()
+	return runInterrupted(t, name, src, debug, 0, fixtures...)
+}
+
+// runInterrupted is run for a program sent interrupts once it has
+// printed its first line.
+func runInterrupted(t *testing.T, name, src string, debug bool, interrupts int, fixtures ...string) (string, string, int) {
+	t.Helper()
 	module, err := emit(t, name, src, Config{Debug: debug})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return execute(t, name, module, debug, fixtures)
+	return execute(t, name, module, debug, fixtures, interrupts)
 }
 
 // runDir builds the program in dir, a main package of one or several
@@ -544,13 +550,13 @@ func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
 		t.Fatal(err)
 	}
 
-	return execute(t, filepath.Base(dir), module, debug, nil, lower.Bindings(info, libs)...)
+	return execute(t, filepath.Base(dir), module, debug, nil, 0, lower.Bindings(info, libs)...)
 }
 
 // execute compiles the module as the program name, in a directory of
 // its own with the fixtures beside it and the C side of the packages
 // that bind C, and runs it there; fixtures may be nil.
-func execute(t *testing.T, name string, module []byte, debug bool, fixtures []string, bindings ...lower.Binding) (string, string, int) {
+func execute(t *testing.T, name string, module []byte, debug bool, fixtures []string, interrupts int, bindings ...lower.Binding) (string, string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, fixture := range fixtures {
@@ -577,23 +583,12 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures []st
 	}
 
 	backendtest.Bounded(t, name, bin)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a program that hangs fails rather than stalling the suite
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
-	stdout, err := cmd.Output()
-	if exit, ok := err.(*exec.ExitError); ok {
-		return string(stdout), stderr.String(), exit.ExitCode()
-	}
-
+	stdout, stderr, code, err := backendtest.Run(bin, dir, interrupts)
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)
 	}
 
-	return string(stdout), stderr.String(), 0
+	return stdout, stderr, code
 }
 
 func TestMain(m *testing.M) {

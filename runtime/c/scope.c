@@ -54,6 +54,19 @@
 // a task that never waits needs no wake, and reads the scope's state
 // before each wait anyway, so the tasks of a scope that compute and
 // end pay the scope's lock never, and the others once.
+//
+// The root is the scope of the program itself, which an interrupt the
+// program did not ask for cancels: every scope made in no scope is
+// under it, and a task in no scope, the main task and every task
+// spawned in none, is in its list from its first wait a cancel may
+// end, as a task of any scope is in its scope's. A task in no scope
+// keeps no scope in its record, so a spawn in none pays nothing for
+// the root and a spawn for a handle keeps its lazy word; the task is
+// known to be the root's by that very record, and the group that takes
+// a running task out of the root takes it out of the root's list under
+// the root's lock, which the task's own enlisting takes too, reading
+// the handle's word under it, so that the two cannot both put the task
+// in a list. The root is never freed: its first hold is nobody's.
 
 #include "internal.h"
 
@@ -90,6 +103,13 @@ enum { few_groups = 16 };
 static sn_qlock adopt_mu;
 
 static void scope_cancel(sn_scope *s, int why);
+static void scope_enlist(sn_task *t, sn_scope *s);
+static void unlist(sn_task *t, sn_scope *s);
+
+// sn_root is the program's own scope, whole before the program starts:
+// one hold that is let go never, so that it is freed never, its lock
+// free as zeroed.
+sn_scope sn_root = { .refs = 1, .state = SN_SCOPE_LIVE };
 static void leave_from(sn_task *t, sn_scope *s);
 static sn_scope *held_above(sn_scope *freed);
 
@@ -170,11 +190,61 @@ static sn_scope *scope_new(sn_scope *above) {
     atomic_init(&s->refs, 1);
     atomic_init(&s->state, SN_SCOPE_LIVE);
     sn_qlock_init(&s->mu);
-    if (above != NULL) {
-        link_under(s, above, under_parent);
+    link_under(s, above != NULL ? above : &sn_root, under_parent);
+    return s;
+}
+
+// sn_scope_cancel_root cancels the program's scope: every task in no
+// scope and every scope under none, which is every task and scope of
+// the program.
+void sn_scope_cancel_root(void) { scope_cancel(&sn_root, SN_SCOPE_CANCELLED); }
+
+// root_enlist puts the task t, in no scope, in the root's list, unless
+// a group has taken it meanwhile, which its handle's word says under
+// the root's lock, the lock the group takes to take it out; t's record
+// keeps no scope after, so that it stays a task in none, the root's
+// hold on it kept until it leaves the list. The word is read first:
+// a group that took the task writes its enlisted under the group's
+// lock, and the word says so before, so that enlisted is read only
+// while nothing else writes it.
+static void root_enlist(sn_task *t) {
+    sn_scope *r = &sn_root;
+    sn_scope_link *l = sn_task_scope(t);
+    atomic_store(&l->enlisting, true); // before the lock, so that a group that changed the word first reads it
+    sn_qlock_take(&r->mu);
+    if ((l->handle == NULL || (atomic_load(sn_chan_word(l->handle)) & running) != 0) && !l->enlisted) {
+        scope_enlist(t, r);
+        atomic_store_explicit(&l->scope, NULL, memory_order_relaxed);
     }
 
-    return s;
+    sn_qlock_give(&r->mu);
+}
+
+// root_unlink takes the task t out of the root's list, when it is in
+// it, for the group that takes t in, which holds the group's lock: the
+// root's lock is taken under a group's, never the other way. A task
+// that never began to enlist, which the flag says, is in no list, and
+// the lock is not taken for it: the flag is set before the task takes
+// the lock and reads the word, so a task the group's write of the word
+// did not reach has set it by the time the word was written, and one
+// it reached takes no list.
+static void root_unlink(sn_task *t) {
+    sn_scope_link *l = sn_task_scope(t);
+    if (!atomic_load(&l->enlisting)) {
+        return;
+    }
+
+    sn_scope *r = &sn_root;
+    sn_qlock_take(&r->mu);
+    bool was = l->enlisted;
+    if (was) {
+        unlist(t, r);
+    }
+
+    sn_qlock_give(&r->mu);
+    if (was) {
+        sn_scope_release(r);
+    }
 }
 
 // sn_scope_release lets a hold of s go, and the last frees it: its
@@ -307,33 +377,48 @@ static void join(sn_task *t, sn_scope *s) {
 }
 
 void sn_scope_enlist_self(sn_task *t, sn_scope *s) {
+    if (s == NULL) {
+        root_enlist(t);
+        return;
+    }
+
     sn_qlock_take(&s->mu);
     scope_enlist(t, s);
     sn_qlock_give(&s->mu);
 }
 
 static void scope_leave(sn_task *t) {
-    sn_scope *s = atomic_load_explicit(&sn_task_scope(t)->scope, memory_order_relaxed);
+    sn_scope_link *l = sn_task_scope(t);
+    sn_scope *s = atomic_load_explicit(&l->scope, memory_order_relaxed);
     if (s != NULL) {
         leave_from(t, s);
+    } else if (l->enlisted) {
+        leave_from(t, &sn_root); // in no scope, and in the root's list since a wait
     }
+}
+
+// unlist takes t out of s's list of tasks, under s's lock, which the
+// caller holds.
+static void unlist(sn_task *t, sn_scope *s) {
+    sn_scope_link *l = sn_task_scope(t);
+    if (l->prev != NULL) {
+        sn_task_scope(l->prev)->next = l->next;
+    } else {
+        s->tasks = l->next;
+    }
+
+    if (l->next != NULL) {
+        sn_task_scope(l->next)->prev = l->prev;
+    }
+
+    l->enlisted = false;
 }
 
 static void leave_from(sn_task *t, sn_scope *s) {
     sn_scope_link *l = sn_task_scope(t);
     if (l->enlisted) {
         sn_qlock_take(&s->mu);
-        if (l->prev != NULL) {
-            sn_task_scope(l->prev)->next = l->next;
-        } else {
-            s->tasks = l->next;
-        }
-
-        if (l->next != NULL) {
-            sn_task_scope(l->next)->prev = l->prev;
-        }
-
-        l->enlisted = false;
+        unlist(t, s);
         sn_qlock_give(&s->mu);
     }
 
@@ -350,8 +435,9 @@ static void leave_from(sn_task *t, sn_scope *s) {
 static sn_scope *own(sn_task *t, uintptr_t w, _Atomic uintptr_t *word) {
     sn_scope *s = scope_new(NULL);
     if (atomic_compare_exchange_strong(word, &w, (uintptr_t)s)) {
-        join(t, s); // after the word says so: an Add that lost the word writes nothing of the task's, and one that
-        return s;   // cancels s meanwhile finds no task in it, the task reading s's state at its next wait
+        scope_leave(t); // out of the root's list, which no group can take it from now
+        join(t, s);     // after the word says so: an Add that lost the word writes nothing of the task's, and one that
+        return s;       // cancels s meanwhile finds no task in it, the task reading s's state at its next wait
     }
 
     sn_scope_release(s);                       // the maker's
@@ -411,7 +497,9 @@ void sn_scope_ends(sn_chan *done) {
     _Atomic uintptr_t *word = sn_chan_word(done);
     uintptr_t w = atomic_load_explicit(word, memory_order_relaxed);
     if ((w & running) != 0 && atomic_compare_exchange_strong(word, &w, (uintptr_t)&ended)) {
-        return; // it ended with no scope of its own, and no group can take it now
+        scope_leave(
+            sn_self()); // it ended with no scope of its own, and no group can take it now: out of the root's list
+        return;
     }
 
     sn_scope *s = (sn_scope *)(w & ~tags);
@@ -465,8 +553,8 @@ void sn_task_leave(void) {
     }
 
     scope_leave(t);
-    if (above != NULL) {
-        join(t, above); // above is held by s until the release below
+    if (above != NULL && above != &sn_root) { // a task that was in no scope keeps none in its record, as before
+        join(t, above);                       // above is held by s until the release below
     }
 
     sn_scope_release(s);
@@ -600,6 +688,7 @@ static void adopt(sn_scope *g, sn_chan *done) {
         sn_qlock_take(&g->mu);
         if (atomic_compare_exchange_strong(word, &w, (uintptr_t)g | in_group)) {
             sn_task *t = (sn_task *)(w & ~running);
+            root_unlink(t); // the word says the root's list is no longer its: out of it, under the root's lock
             scope_enlist(t, g);
             if (atomic_load(&g->state) != SN_SCOPE_LIVE) {
                 sn_wake(t); // the group is cancelled already, and the task may be parked in a wait no cancel reached

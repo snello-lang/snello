@@ -67,6 +67,11 @@ static void *block;
 static char text[256];
 static wchar_t wide[MAX_PATH], dir[MAX_PATH], path[MAX_PATH], other[MAX_PATH];
 static HANDLE file = INVALID_HANDLE_VALUE, port, timer, found_handle = INVALID_HANDLE_VALUE, console_in, console_out;
+static HANDLE child = INVALID_HANDLE_VALUE, pipe_end = INVALID_HANDLE_VALUE, duplicate = INVALID_HANDLE_VALUE;
+static LPPROC_THREAD_ATTRIBUTE_LIST attributes;
+static wchar_t command[] = L"cmd.exe /c exit 0";
+static wchar_t wide_text[64];
+static OVERLAPPED overlapped;
 static WIN32_FIND_DATAW found_data;
 static SOCKET server = INVALID_SOCKET, client = INVALID_SOCKET, accepted = INVALID_SOCKET;
 static struct sockaddr_in addr;
@@ -340,6 +345,21 @@ static void setup_CreateFileW(void) {
 }
 CASE(CreateDirectoryW, CreateDirectoryW(dir, NULL))
 CASE(CreateFileW, file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL))
+static void setup_child(void) { STARTUPINFOW si = {sizeof si}; PROCESS_INFORMATION pi; if (CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); child = pi.hProcess; } }
+CASE(CreateProcessW, { STARTUPINFOW si = {sizeof si}; PROCESS_INFORMATION pi; if (CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); WaitForSingleObject(pi.hProcess, INFINITE); CloseHandle(pi.hProcess); } })
+#define setup_GetExitCodeProcess setup_child
+CASE(GetExitCodeProcess, { DWORD code; WaitForSingleObject(child, INFINITE); GetExitCodeProcess(child, &code); CloseHandle(child); })
+#define setup_TerminateProcess setup_child
+CASE(TerminateProcess, { TerminateProcess(child, 1); WaitForSingleObject(child, INFINITE); CloseHandle(child); })
+CASE(CreateNamedPipeW, { pipe_end = CreateNamedPipeW(L"\\\\.\\pipe\\snello-measure", PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, NULL); })
+static void setup_GetOverlappedResult(void) { DWORD n; SetFilePointer(file, 0, NULL, FILE_BEGIN); ReadFile(file, text, sizeof text, &n, &overlapped); }
+CASE(GetOverlappedResult, { DWORD n; GetOverlappedResult(file, &overlapped, &n, TRUE); })
+CASE(InitializeProcThreadAttributeList, { SIZE_T size = 0; InitializeProcThreadAttributeList(NULL, 1, 0, &size); attributes = malloc(size); InitializeProcThreadAttributeList(attributes, 1, 0, &size); })
+CASE(UpdateProcThreadAttribute, { HANDLE hs[1] = {file}; UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, hs, sizeof hs, NULL, NULL); })
+CASE(DeleteProcThreadAttributeList, { DeleteProcThreadAttributeList(attributes); free(attributes); })
+CASE(DuplicateHandle, { DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &duplicate, 0, TRUE, DUPLICATE_SAME_ACCESS); CloseHandle(duplicate); })
+CASE(GetStdHandle, sink = (long)(intptr_t)GetStdHandle(STD_OUTPUT_HANDLE))
+CASE(__stdio_common_vswprintf, swprintf(wide_text, 64, L"\\\\.\\pipe\\snello-%lu-%lu", (unsigned long)count, (unsigned long)count))
 CASE(WriteFile, { DWORD n; WriteFile(file, text, sizeof text, &n, NULL); })
 CASE(ReadFile, { DWORD n; SetFilePointer(file, 0, NULL, FILE_BEGIN); ReadFile(file, text, sizeof text, &n, NULL); })
 CASE(GetFileInformationByHandle, { BY_HANDLE_FILE_INFORMATION i; GetFileInformationByHandle(file, &i); })
@@ -550,6 +570,9 @@ int main(int argc, char **argv) {
         MEASURE(GetFullPathNameW), MEASURE(CreateIoCompletionPort), MEASURE(PostQueuedCompletionStatus), MEASURE(GetQueuedCompletionStatusEx),
         MEASURE(CreateWaitableTimerExW), MEASURE(SetWaitableTimer), MEASURE(CancelWaitableTimer), MEASURE(CloseHandle),
         {"CreateDirectoryW", setup_CreateFileW, case_CreateDirectoryW}, MEASURE(CreateFileW), MEASURE(WriteFile), MEASURE(ReadFile),
+        MEASURE(CreateProcessW), MEASURE_AFTER(GetExitCodeProcess), MEASURE_AFTER(TerminateProcess), MEASURE(CreateNamedPipeW),
+        MEASURE_AFTER(GetOverlappedResult), MEASURE(InitializeProcThreadAttributeList), MEASURE(UpdateProcThreadAttribute),
+        MEASURE(DeleteProcThreadAttributeList), MEASURE(DuplicateHandle), MEASURE(GetStdHandle), MEASURE(__stdio_common_vswprintf),
         MEASURE(GetFileInformationByHandle), MEASURE(GetFileInformationByHandleEx), MEASURE(GetFileSizeEx),
         MEASURE(SetFileCompletionNotificationModes), MEASURE(CancelIoEx), MEASURE_AFTER(_open_osfhandle), MEASURE(_get_osfhandle),
         MEASURE(_setmode), MEASURE(_lseeki64), MEASURE(_commit), MEASURE(_close), MEASURE(GetFileAttributesW), MEASURE(SetFileAttributesW),

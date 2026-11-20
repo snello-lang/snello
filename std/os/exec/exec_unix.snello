@@ -1,0 +1,94 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package exec
+
+import ("fmt"; "io"; "os"; "path/filepath")
+
+// The list separator of PATH, and the bits of a mode that let a file
+// run.
+const pathListSeparator = ":"
+const executableBits os.FileMode = 0o111
+
+// LookPath finds the program a command names: a name with a path
+// separator is taken as written, and any other is looked for in the
+// directories of PATH, in order, as a shell looks a command up. A
+// program found in the current directory because PATH named it as "."
+// or an empty entry is refused, since what runs would then depend on
+// where the program is started; name it "./tool" to run it from there.
+// It fails with an Error of Kind io.NotExist, "exec nosuch: executable
+// file not found in $PATH", when nothing runs by that name, and for a
+// name with a separator with what is wrong with the file it names: the
+// error of looking it up, or one of Kind io.Permission for a file that
+// may not run, or a directory.
+func LookPath(name ref string) Result<string, io.Error> {
+	if name.Contains("/") {
+		runs(name)?
+		return Ok(name.Clone())
+	}
+
+	path := os.Getenv("PATH")
+	for dir := range path.Split(pathListSeparator) {
+		d := dir
+		if len(d) == 0 {
+			d = "."
+		}
+
+		candidate := filepath.Join(d, name)
+		if runs(ref candidate).IsErr() {
+			continue
+		}
+
+		if !filepath.IsAbs(ref candidate) {
+			return Err(io.NewError("exec".Clone(), name.Clone(), "cannot run executable found relative to current directory".Clone(), io.Other))
+		}
+
+		return Ok(candidate)
+	}
+
+	return Err(notFound(name))
+}
+
+// runs checks that path names a regular file that may run: the error
+// of looking it up, or one of Kind io.Permission for a directory or a
+// file no one may run.
+func runs(path ref string) Result<(), io.Error> {
+	info := match os.Stat(path) {
+		Ok(i) => i,
+		Err(e) => return Err(io.NewError("exec".Clone(), path.Clone(), e.Msg.Clone(), e.Kind())),
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() & executableBits == 0 {
+		return Err(io.NewError("exec".Clone(), path.Clone(), "permission denied".Clone(), io.Permission))
+	}
+
+	return Ok(())
+}
+
+// startable is Start's check of the program LookPath found, which every
+// program runs as given here.
+func startable(path ref string) Result<(), io.Error> {
+	return Ok(())
+}
+
+// notFound is LookPath's failure.
+func notFound(name ref string) io.Error {
+	return io.NewError("exec".Clone(), name.Clone(), "executable file not found in $PATH".Clone(), io.NotExist)
+}
+
+// signalName names the signal as a shell reports it, "killed" for 9,
+// and "signal N" for one with no name here.
+func signalName(sig int) string {
+	return match {
+		sig == 1 => "hangup".Clone(),
+		sig == 2 => "interrupt".Clone(),
+		sig == 3 => "quit".Clone(),
+		sig == 6 => "aborted".Clone(),
+		sig == 9 => "killed".Clone(),
+		sig == 11 => "segmentation fault".Clone(),
+		sig == 13 => "broken pipe".Clone(),
+		sig == 14 => "alarm clock".Clone(),
+		sig == 15 => "terminated".Clone(),
+		_ => fmt.Sprintf("signal %d", sig),
+	}
+}

@@ -1,0 +1,53 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package signal_test
+
+import ("expect"; "os"; "os/exec"; "os/signal"; "strconv"; "task"; "time")
+
+// settle is the pause that lets a signal sent arrive.
+const settle time.Duration = 100 * time.Millisecond
+
+func TestNotify() {
+	stop := signal.Notify(signal.Interrupt, signal.Terminate)
+	send("INT")
+	s := expect.IsSome(<-stop)
+	expect.Equal(ref s, ref signal.Interrupt)
+	expect.EqualText(ref s.String(), "interrupt")
+	expect.False(task.Cancelled()) // the program asked for it, so nothing is cancelled
+	send("TERM")
+	expect.Equal(ref expect.IsSome(<-stop), ref signal.Terminate)
+	expect.EqualText(ref signal.Terminate.String(), "terminated")
+}
+
+func TestOneSlot() {
+	stop := signal.Notify(signal.Interrupt)
+	send("INT")
+	send("INT")
+	time.Sleep(settle)
+	expect.Equal(ref expect.IsSome(<-stop), ref signal.Interrupt)
+	select {
+	case <-stop:
+		expect.Fail("a second interrupt was kept, where the channel holds one")
+	default:
+	}
+}
+
+func TestOnlyAskedFor() {
+	stop := signal.Notify(signal.Terminate)
+	other := signal.Notify(signal.Interrupt) // so that the interrupt sent is asked for, and cancels nothing
+	send("INT")
+	expect.Equal(ref expect.IsSome(<-other), ref signal.Interrupt)
+	select {
+	case <-stop:
+		expect.Fail("an interrupt reached a channel that asked for the terminate")
+	default:
+	}
+}
+
+// send sends this program the signal, by name, through kill.
+func send(name ref string) {
+	expect.IsOk(exec.Command("kill", "-".Clone() + name, strconv.Itoa(os.Getpid())).Run())
+	time.Sleep(settle)
+}

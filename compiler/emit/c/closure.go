@@ -264,5 +264,10 @@ func (e *Emitter) callValue(x *ast.CallExpr, sig *types.Signature) string {
 		args = ", " + args
 	}
 
-	return f + ".fn(" + f + ".box" + args + ")"
+	call := f + ".fn(" + f + ".box" + args + ")"
+	if sig.Results() == types.Unit { // the function returns void: the call's value is the unit, for a caller that keeps it
+		return "(" + call + ", SN_UNIT)"
+	}
+
+	return call
 }

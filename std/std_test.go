@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,8 +41,8 @@ import (
 func TestPackages(t *testing.T) {
 	var paths []string
 	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(name, "_test.snello") {
-			paths = append(paths, path.Dir(name))
+		if err == nil && !d.IsDir() && strings.HasSuffix(name, "_test.snello") && !slices.Contains(paths, path.Dir(name)) {
+			paths = append(paths, path.Dir(name)) // once, however many test files the package has
 		}
 
 		return nil

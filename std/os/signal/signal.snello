@@ -1,0 +1,85 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package signal delivers the signals that ask a program to stop, the
+// terminal's interrupt and the system's terminate, as values on a
+// channel the program reads as it reads any channel.
+//
+// A program that asks for no signal is stopped by either the way a
+// deadline stops a function's work: every wait of every task returns,
+// a receive with None, a read with an Error of Kind io.Cancelled, and
+// task.Cancelled() answers true; main returns, its drops run, and the
+// program then ends by the signal, as the shell expects a program the
+// signal ended to. A second signal while the first is being honoured
+// ends the program at once. A program that asks for a signal with
+// Notify answers it itself: the signal goes to its channel and cancels
+// nothing.
+//
+//	stop := signal.Notify(signal.Interrupt, signal.Terminate)
+//	select {
+//	case s := <-stop:
+//		fmt.Println("stopping:", s)
+//	case r := <-requests:
+//		serve(r)
+//	}
+//
+// On Windows the interrupt is Ctrl-C or Ctrl-Break, and the terminate
+// the console's close, the logoff and the shutdown, after which the
+// system ends the program within the seconds it allows.
+package signal
+
+import "fmt"
+
+// A Signal is one of the signals a program is asked to stop by.
+enum Signal impl Copy, Clone, Eq, fmt.Stringer {
+	// Interrupt is the terminal's Ctrl-C, SIGINT.
+	Interrupt
+
+	// Terminate is a request to end, SIGTERM: what kill, a service
+	// manager and a container's stop send.
+	Terminate
+}
+
+// String names the signal as a shell reports it, "interrupt" or
+// "terminated".
+func (s ref Signal) String() string {
+	return match *s {
+		Interrupt => "interrupt".Clone(),
+		Terminate => "terminated".Clone(),
+	}
+}
+
+// Notify returns a channel that gets each of the signals named as it
+// arrives. The channel holds one signal: one that arrives while the
+// last is still unread is dropped, so a program that is slow to read
+// sees that a signal came and not how many. Dropping the channel stops
+// the delivery: the next of those signals is one the program did not
+// ask for, and stops the program as the package's comment says.
+//
+//	stop := signal.Notify(signal.Interrupt)
+//	<-stop
+//	fmt.Println("stopping")
+func Notify(first Signal, rest ...Signal) <-chan Signal {
+	mask := bit(first)
+	for _, s := range rest {
+		mask |= bit(s)
+	}
+
+	ch := make(chan Signal, 1)
+	notify(ch.Clone(), mask)
+	return ch
+}
+
+// bit is the signal's bit in the mask notify is given, 1 shifted by
+// the signal's value.
+func bit(s Signal) int {
+	return match s {
+		Interrupt => 1,
+		Terminate => 2,
+	}
+}
+
+// notify has the runtime hold ch's sending end and offer it each
+// signal of mask as it arrives. The runtime provides it.
+func notify(ch chan<- Signal, mask int)
