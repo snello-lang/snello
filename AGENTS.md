@@ -16,10 +16,11 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
 7. `_docs/design/08-packages.md`: a directory as a package, the module file, and how an import path is found.
 8. `_docs/design/12-platforms.md`: the platforms Snello supports, their tiers, the oldest version of each system, and the Windows port.
-9. `_docs/book/README.md`: the user-facing book and which chapters exist.
-10. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
-11. `CODING_STANDARDS.md`: how code is written here.
-12. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
+9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
+10. `_docs/book/README.md`: the user-facing book and which chapters exist.
+11. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
+12. `CODING_STANDARDS.md`: how code is written here.
+13. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 

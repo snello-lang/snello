@@ -1,0 +1,112 @@
+# Documentation
+
+Status: built. The parser's comments, `snello doc` in the terminal with its links and implementors, examples run by `snello test` and shown by `snello doc`, and the pages in a browser, `snello doc -http`.
+
+A Snello package has comments on its declarations, written as Go's are, and no way to read them but the source. This note gives Snello one command that reads them, `snello doc`, in the terminal and in a browser, from the checker's view of the package; examples that `snello test` runs and `snello doc` shows; and links between declarations that are checked. It is one command with no files generated, no configuration and no syntax a Go developer does not already know.
+
+## The precedents
+
+- **Go**: `go doc` prints a package's exported declarations and their comments in the terminal, `go doc strings.Builder`; pkg.go.dev renders them on the web, and `go doc -http` serves them locally. A doc comment is plain text with a few rules, headings, lists, code blocks and `[Name]` links (go.dev/doc/comment), which reads well in the source. An example is a function of a test file, `func ExampleBuilder()`, whose `// Output:` comment `go test` checks, so an example cannot go stale. Its weaknesses: a link that names nothing is left as text with no word said, and a type's page cannot say what interfaces it satisfies, since Go's are implicit.
+- **Rust**: rustdoc writes a directory of HTML pages, `cargo doc --open`, with search, each trait's implementors and each type's trait implementations; a code block in a comment is compiled and run as a test, and a link that names nothing is warned of. Its weaknesses: comments are Markdown with attributes of rustdoc's own to learn, a code block in a comment is code no editor helps with, and the pages are files to generate, which fall out of step with the code until generated again.
+- **Swift**: DocC renders symbol pages and long-form articles and tutorials, built inside Xcode or through a plugin; heavy to set up for a package of a few files.
+- **Zig and Python**: `zig std` and `pydoc -b` serve pages from the sources on the local machine, generating nothing.
+
+Taken: Go's command, its comment syntax and its examples; rustdoc's warning for a broken link and its list of implementors; pages served from the sources, never generated. Snello adds what its declarations say and Go's cannot: how a function takes each argument, `ref`, `mut` or by value, and the traits a type implements, written on the type. A name found in several packages is listed with each, where `go doc` picks one.
+
+## 1. A doc comment
+
+A doc comment is the comment group immediately above a declaration, with no blank line between, whose first comment begins its line: above `package` for the package, above a function, a method, a type, a trait, a constant or a variable at the top of a file, above a required or default method of a trait, above a field of a struct and above a variant of an enum. A comment group is comments on consecutive lines. A line comment is a comment after the last token on a field's, a variant's, a constant's or a variable's first line, `at int // the bytes before at have been read`, and is shown with that line. A comment anywhere else is not documentation.
+
+**Constants and variables are grouped as their lines are.** Snello writes one constant a line, with no `const ( ... )`, and the house style puts one comment over a run of them (chapter 27). So consecutive top-level `const` or `var` lines, with no blank line between, are one group: the comment above the first documents the group, each line keeps its line comment, and the group is printed together, as `go doc` prints a const block.
+
+**A package has one comment**, above `package` in one of its files, as `CODING_STANDARDS.md` asks; when several files carry one, they are joined in the order of the files' names, as Go joins them.
+
+The text follows Go's rules, so that the standard library's comments, written in Go's style, read as they are written:
+
+- **A paragraph** is lines of text; a blank comment line ends it.
+- **A heading** is a line `# Heading`, alone in its paragraph, with a blank line before and after.
+- **A list** is a span of lines indented past the paragraph's text whose first line begins with `-`, `*`, `+` or a number and `.` or `)`: each line with a marker begins an item, and an indented line without one continues the item before it, as Go reads a span. A marker on a line that is not indented is paragraph text, so a sentence ending in `2.` at the start of a line stays one.
+- **A code block** is a span of indented lines whose first line has no marker, shown as written, in a fixed font.
+- **A link to a declaration** is a name in brackets, where the `[` follows a space, punctuation other than `.` or the start of a line and the `]` precedes a space, punctuation or the end of a line, Go's rule with Snello's `.[`, a field named by a value, left out: `[Builder]` in the same package; `[Builder.WriteString]` for a method, a field or a variant of a type of the package; `[io.Reader]` and `[io.Reader.Read]` in an imported package, named as the file imports it; `[unicode/utf8.RuneLen]` by a full path; `[strings]` for a package. A dotted name is a type's member when the first part is a type of the package, and a package's name otherwise. Brackets around anything else, `v.[f]` or `[0, n)`, are text. A bare `https://` or `http://` URL is a link to it.
+
+## 2. The parser keeps comments when asked
+
+The scanner skips comments today, so the syntax tree has none. As go/scanner and go/parser do, the scanner takes a mode in which it keeps every comment it skips, its position and text and whether it begins its line, in a list behind one pointer of the scanner's state, which a copy the parser saves and restores around a speculative read shares, so that the list gives each comment once, in order, dropping what a read again repeated; and the parser a mode in which, once the file is parsed, one pass over the declarations attaches each doc comment and line comment by their lines. The file holds them behind one pointer, `File.Docs`, nil unless the mode is on: every comment group in order, and a table from a declaration, a field, a variant or a trait's method to its doc comment and line comment, beside the tree as `File.Attrs` keeps the attributes, so that a node written without a comment is no larger, and a file stays in its size class.
+
+The mode changes nothing but where a skipped comment goes: the scanner skips a comment in the code it skips it in now, with one test of the mode per comment and none per token, and returns the same tokens in both modes, which a test holds over the examples and the standard library. A build never asks for the mode, so it parses as it does today: the benchmarks of the scanner, the parser and the checker over the examples are compared with the base before the change lands, allocations to the byte.
+
+The importer keeps comments for the packages it is told to, by import path, as it is told the package under test (`Importer.Tests`): `snello doc` asks for the package it prints, the server for every package it serves.
+
+## 3. `snello doc`
+
+```
+snello doc                      the package in the current directory
+snello doc strings              a package: its comment, and a line for each exported name
+snello doc json                 a package by the last element of its path, encoding/json, when one package has it
+snello doc strings.Builder      a name: its declaration and comment, its methods, the functions that make one, its examples
+snello doc strings.Builder.Len  a method, a field, a variant, or a function of the type
+snello doc Builder              a name looked for in the current directory's package, then the standard library
+snello doc -all strings         every exported name with its comment, in the order of the package overview
+snello doc -u strings           the unexported names too
+snello doc -http                the pages in a browser, section 6; -http=HOST:PORT at another address
+```
+
+**Finding the package.** A package is named as an import names it, `strings`, `unicode/utf8`, a package of the program's module or a required module's name, or by a directory, `./geo`, found from the current directory's module as `snello build` finds a program's imports (`08-packages.md`, section 4). In `PKG.NAME`, the package is what comes before the first dot after the last slash. A name with no package is looked for in the current directory's package first, then in every standard package; found in several, it is an error that lists them, `snello doc: Reader is in bufio, io and strings`, where `go doc` prints the first it finds. The files are chosen for the host's platform, as a build for the host chooses them.
+
+**What is loaded.** The package is loaded and checked as a build loads it, through the importer, with its comments kept, so that what is printed is a package that compiles and the names are the ones the checker exports. A `main` package is printed as any other: its comment, which says what the program does, and its exported names, usually none. `builtin` is `std/builtin`, which documents the predeclared names and is never compiled: it is parsed alone, not checked, and its links resolve in the universe.
+
+**How a declaration prints.** A declaration is printed as it is written, from the syntax tree, by a writer of declarations in `compiler/ast` beside the writer of types and expressions it already has, whose parameter lists learn to write a variadic parameter's `...`, which they drop today: a function its signature, with its receiver or its type for a function of the type, its type parameters and bounds, its parameters' names, modes and `...`, and its results; a struct its exported fields with their defaults, attributes and comments, and `// Has unexported fields.` when it has others; an enum its variants; a trait its refinements, fields and methods; a type its definition; a constant its value as written; a variable its type and value. A body is never printed. The comment follows, indented four spaces, as written.
+
+**The pages.** The overview of a package is its package clause and import path, its comment, then the exported constants, variables, functions and types, each on one line, a group of constants together, a type's methods under it. A type's page lists, after its declaration and comment, the functions of the package that return it, as `T`, `*T`, `T?` or `Result<T, E>`, its functions of the type, `func Point.Parse`, its methods, and its examples. A trait's page lists the types that implement it, directly or through a trait that refines it, found from the `impl` written on each type among the standard library and the packages of the module the command runs in, each with its package, and for a standard trait the predeclared types the checker gives it, `int` and `string` for `Eq`. A type's page names its traits in its declaration and does not repeat their methods: a trait's default methods are on the trait's page. A name that is not found is an error, `snello doc: no Builderr in package strings`, and a package that is not found is the importer's error; the command exits 1 when it prints nothing.
+
+## 4. Examples
+
+**Naming.** An example is a function of a test file named `Example` for the package, `ExampleNAME` for a name of the package, `ExampleTYPE_MEMBER` for a method or a function of a type, with an optional suffix that begins with a lower-case letter after another underscore, `ExampleBuilder_grow`, taking nothing and returning nothing, Go's rule. The name is matched against the package's declared names before it is split at an underscore, so `ExampleO_RDONLY` documents `O_RDONLY`. In an external test package, `strings_test`, the name is the tested package's. An example's signature is checked on the parsed test files, as a test's is, `ExampleBuilder has the wrong signature: want func()`, and an example whose name names nothing is refused, `ExampleBuilderr names nothing in package strings`, so that no example is silently not shown.
+
+**What it must print.** The example's last comment group inside its body, when it begins `Output:` or `Unordered output:`, is what it must print: the text after the colon on that line and the lines after it, with the comment markers taken off, line ends read as `\n`. An example without one is compiled and not run, as in Go.
+
+**How it runs.** The runner finds the examples on the test files parsed with their comments, beside the tests (`09-testing.md`, section 5), and passes each to the generated `main` as a `testing.Example`, its name, its function, its expected text and whether its lines may come in any order; `testing.Main` takes the examples after the tests. Examples run after the tests of each round and before the benchmarks, in the order of their names, on the runner's own task under a mark as a benchmark runs, under `-run`, `-count` and `-failfast` as tests are, reported as tests are, `=== RUN ExampleBuilder`, `--- PASS` or `--- FAIL` with what it printed and what it was to print. What it printed is compared with the expected text, each trimmed of space at its ends, as Go compares; an unordered example compares its lines sorted.
+
+**The capture.** While an example runs, the runner points the process's standard output at a temporary file and reads the file back once the example returns or panics, as Go points `os.Stdout` at a pipe: the runtime gives `testing` two functions, `captureStart`, which flushes nothing, since the runtime buffers no standard output, makes the file, saves descriptor 1, kept from child processes, and puts the file in its place, and `captureEnd`, which puts descriptor 1 back; `testing` reads the file with `os.ReadToString`. Both run on the runner's own task, so that the system calls they make are on no spawned task's stack. On Linux and macOS that is `dup2`, which a child process inherits. On Windows it is `_dup2`, and `SetStdHandle` for the standard output handle a child inherits, with the runtime's cache of whether descriptor 1 is a console, and the partial character it holds for one, cleared under the stream's lock at the start and at the end, so that what is written after the end reaches the console as before. A program pays nothing: no write of a program's changes, and no task's stack grows. What a bound C library or a child process writes is captured too: the C library's own buffer of the standard output is written out at the start and at the end. A task the example spawned and did not join writes wherever descriptor 1 points when it writes; an example joins what it spawns, or its output is not its own.
+
+**On a name's page.** `snello doc` shows a name's examples after its methods, each's body as written, the source text between its braces, and its expected output.
+
+## 5. Checked links
+
+A link is resolved as the checker resolves a qualified name, in the package's scope and the imports of its files or by a package's path, and as a member of a type. `snello doc` writes a warning to standard error for each that names nothing, `strings.snello:42: [Bulder] names nothing`, and prints the page with it as text; the command still succeeds. The standard library is held to none: a test of the command resolves every link of every standard package.
+
+## 6. Pages in a browser
+
+`snello doc -http` serves, at `http://localhost:6060/` unless `-http=HOST:PORT` names another address, a page for each package of the standard library, `builtin` among them, and of the module the command runs in, the module's root aside, which no import path names, rendered from the same model the terminal prints. A page has a sidebar, the brand's mark and the version, a search box, and the packages in groups by where each comes from, the language's `builtin`, the standard library, the libraries that ship beside the compiler once there are any, and the module's own, the current package's names under it; and beside it the package's comment, a summary of its types, functions, constants and variables, each with its first sentence, and then each declaration as written under a header bar with an anchor of its own, its comment with headings, lists, code and links, its examples, a type's functions and methods under it and a trait's implementors. The index lists the packages in their groups, and its search box filters every exported name of every package as it is typed. A page is light or dark, by the system's choice or the reader's, in the brand's colors and faces (`_docs/brand/`). The templates, the style, the script and the icon are files, `compiler/doc/assets/`, which the compiler embeds and the server serves, so that they are edited as HTML, CSS and JavaScript.
+
+**Always current.** A page is made when it is asked for, from its package loaded then, so an edit shows on the next load and nothing is cached; the module's dependencies are resolved once, as the server starts, as any command resolves them, and never by a request; the whole standard library loads and checks in about 50 ms.
+
+**Safe on a shared machine.** The server listens on the loopback address unless an address is named, and warns when the address named is not a loopback one; it answers only `GET` and `HEAD`, and only requests whose `Host` names the port it serves on a loopback name, `localhost`, `127.0.0.1` or `[::1]`, or the address it was told to serve, refusing others with 403, so that a page on another site cannot read a private module's source through a rebound name; every comment, name and value is written through `html/template`, which escapes it; and a page is looked up in the packages loaded, never by a path on disk. The server is the compiler's own Go over the standard library's `net` and `net/textproto`, with no dependency: it reads one request, its line and its header, with a limit and a deadline, answers with the page's length, and closes the connection, which is all a browser needs of a local page; a page is HTML that loads its style, its script and the brand's icon from the server itself, under `/assets/`, so that it needs nothing from the network.
+
+## 7. Cost and memory
+
+- **A build is unchanged.** Comments are kept only in the mode `snello doc` and the examples' runner ask for, section 2; the file grows by no size class; measured against the base, allocations to the byte, before the change lands.
+- **A program is unchanged.** The capture of section 4 is the runner's, through descriptor 1, and adds nothing to the runtime's writes.
+- **Every command starts as it did.** `snello` links `net`, `net/textproto` and `html/template` for the pages, and parses its templates the first time a page is written; `snello version` starts within the noise of the base's, about 8 ms either way on macOS, measured, and the binary is about 4 MB larger. `net/http`, which the first build served with, made every command start about 3 ms later, from the size it added, and was set aside, decision 4.
+- **Memory safe, no collector.** `snello doc` is a tool of the compiler's, in Go; the capture is two runtime functions over descriptors, with nothing allocated by the program.
+
+## 8. Where it is written down
+
+The book gets a chapter of its own, on documenting a package and reading the documentation; the getting-started chapter, chapter 14 on the standard library, chapter 16 on testing, for examples, and chapter 32 on the command say so. `09-testing.md` keeps the tests and points here for examples.
+
+## 9. What is not here
+
+- **Long-form articles and tutorials**, as DocC writes: a package's comment holds what a package needs to say, and the book holds the rest.
+- **A hosted site for every module**, as pkg.go.dev and docs.rs are: a release-stage question, after there are modules to host.
+- **A code block in a comment run as a test**, as rustdoc runs one: an example is a function of a test file, which the checker sees as it is written.
+- **Documentation for another platform**: the host's files are documented; a `-target` flag can come when a package documents what differs.
+
+## Decisions
+
+**Decided 1: Go's comments and examples, rustdoc's checks.** A doc comment is Go's, so the standard library's comments read as they are written and a Go developer learns nothing; an example is Go's, a function the checker sees. From rustdoc come the warning for a broken link and a trait's implementors. Markdown was set aside: it is a second syntax in the comments, and its tables and emphasis add little to text read in a terminal.
+
+**Decided 2: one command, pages served and not generated.** The terminal and the browser read one model, so they cannot disagree, and the pages are served from the sources as `zig std` and `pydoc -b` serve theirs, loaded at each request, so no generated directory or cache falls out of step with the code.
+
+**Decided 3: an example's output is captured at the descriptor.** A capture inside the runtime's write would cost every program a test of it on every write and would deepen every printing task's stack; pointing descriptor 1 at a file for the example's run costs a program nothing and catches what C and child processes write too.
+
+**Decided 4: the pages are served over `net`, not `net/http`.** Linking `net/http`, with the `crypto/tls` it brings, grew `snello` by 8 MB and every command's start by about 3 ms, measured on `snello version`, which every build, check and test pays for a page served to a browser now and then. A server of one request a connection, GET and HEAD alone, over `net` and `net/textproto`, does what the local pages need and adds nothing measurable to a start.
