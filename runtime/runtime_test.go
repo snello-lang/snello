@@ -1105,11 +1105,18 @@ int main(int argc, char **argv) {
 // task that has ended: each receiver carries a kept wake into its wait,
 // so its park returns at once, into the few instructions of the waker's
 // claim, and the wait's handoff keeps it there until the claim is done,
-// so the stop never comes. The rounds run in wakeRuns processes.
+// so the stop never comes. The rounds run in wakeRuns processes. A
+// receiver not ended ending_ns after the rounds lost its wake: the
+// probe writes each task not ended with its state, as the debug
+// build's list of its tasks holds them, read with the workers idle. A
+// sender that lost its wake never sends its word, and leaves main in
+// the rounds, which the probe's deadline ends with the threads' stacks.
 func TestWakeAfterWaitEnds(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
+#include <string.h>
 enum { rounds = 20000 };
+static const int64_t ending_ns = 10000000000; // after the rounds, a task not ended within it lost its wake
 static sn_chan *ch, *done;
 static void receiver(void *arg) {
     (void)arg;
@@ -1123,6 +1130,53 @@ static void sender(void *arg) {
     sn_chan_send(ch, &v);
     int64_t one = 1;
     sn_chan_send(done, &one);
+}
+static uintptr_t word(uintptr_t at) { uintptr_t w; memcpy(&w, (const void *)at, sizeof w); return w; }
+static const char *role(uintptr_t run) {
+    if (run == (uintptr_t)receiver) {
+        return "receiver";
+    }
+
+    if (run == (uintptr_t)sender) {
+        return "sender";
+    }
+
+    return "other";
+}
+static const char *state_name(const sn_debugger_table *d, int state) {
+    if (state == d->running) {
+        return "running";
+    }
+
+    if (state == d->runnable) {
+        return "runnable";
+    }
+
+    if (state == d->parking) {
+        return "parking";
+    }
+
+    if (state == d->parked) {
+        return "parked";
+    }
+
+    return "unknown";
+}
+// unended writes each task that has not ended with its state, from the debug build's list of its tasks, read
+// with the workers idle: whether the receiver that lost its wake waits for one or was queued
+static void unended(void) {
+    const sn_debugger_table *d = &sn_debugger;
+    for (uintptr_t task = word((uintptr_t)d->tasks); task != 0; task = word(task + (uintptr_t)d->next)) {
+        int state;
+        memcpy(&state, (const void *)(task + (uintptr_t)d->state), sizeof state);
+        int without_wake = state & ~d->woken;
+        if (without_wake == d->done || task == (uintptr_t)sn_self()) {
+            continue;
+        }
+
+        const char *kept = (state & d->woken) != 0 ? ", with a wake kept" : "";
+        printf("a task did not end: the %s, %s%s\n", role(word(task + (uintptr_t)d->run)), state_name(d, without_wake), kept);
+    }
 }
 int main(int argc, char **argv) {
     sn_init(argc, argv);
@@ -1142,8 +1196,14 @@ int main(int argc, char **argv) {
     }
 
     printf("rounds %d\n", rounds);
-    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending: the probe's
-        sn_sleep(1000000);           // deadline, not the finish's grace, bounds a task that never ends
+    int64_t ending_by = sn_time_mono() + ending_ns;
+    while (sn_tasks_running() > 0) { // a task that has sent its last word may still be ending
+        if (sn_time_mono() > ending_by) {
+            unended();
+            return 1;
+        }
+
+        sn_sleep(1000000);
     }
 
     sn_chan_drop(&ch, SN_CHAN_BOTH);
