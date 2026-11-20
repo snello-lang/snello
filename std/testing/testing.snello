@@ -46,6 +46,14 @@ const benchmarkPrefix = "Benchmark"
 // message names its line; the trace of the panic is shown for a panic
 // raised anywhere else, which the test did not intend.
 const expectationPrefix = "expect."
+
+// What the runner names an example's captured output by, the lines it
+// heads what an example printed and what it was to print with, and what
+// it says when the output could not be captured.
+const exampleOutput = "example.out"
+const gotLabel = "got:"
+const wantLabel = "want:"
+const uncaptured = "the standard output could not be captured"
 const matchAll = "."
 
 // The flags Main reads from the program's arguments.
@@ -104,6 +112,16 @@ var config = sync.NewAtomic(Config{verbose: false, short: false, update: false, 
 struct Test {
 	Name string
 	F    func()
+}
+
+// An Example is a function of a test file that prints what its comment
+// says it must, as the generated main lists it: its name, its function,
+// the text it must print, and whether its lines may come in any order.
+struct Example {
+	Name      string
+	F         func()
+	Output    string
+	Unordered bool
 }
 
 // A Dir is a directory a test owns, made by TempDir and removed with
@@ -316,18 +334,21 @@ func ReportAllocs() {
 }
 
 // Main runs the tests of the package named pkg, lent, from the list
-// tests, which it takes, as the generated main calls it, and exits with
-// status 0 when every one passed and 1 otherwise, after a line that
-// says which, with the time the run took. It reads the program's
-// arguments: -v prints every test's lines, -run NAME runs the tests
-// whose name holds NAME, -bench NAME the benchmarks whose name holds
-// NAME, . for all, -count N runs the tests N times, -failfast stops at
-// the first failure, -timeout D ends the program after D seconds,
+// tests, and its examples, from the list examples, which it takes, as
+// the generated main calls it, and exits with status 0 when every one
+// passed and 1 otherwise, after a line that says which, with the time
+// the run took. The examples run after the tests, each on the runner's
+// own task with what it prints to the standard output captured and
+// compared with what its comment says it must print. It reads the
+// program's arguments: -v prints every test's lines, -run NAME runs the
+// tests and the examples whose name holds NAME, -bench NAME the
+// benchmarks whose name holds NAME, . for all, -count N runs the tests
+// and the examples N times, -failfast stops at the first failure, -timeout D ends the program after D seconds,
 // -shuffle runs the tests in a random order, which it prints the seed
 // of, -short is for the tests to ask, and -update is for expect.Golden
 // to write its files. A flag's value that is no count ends the program
 // with status 2.
-func Main(pkg ref string, tests []Test) {
+func Main(pkg ref string, tests []Test, examples []Example) {
 	only := ""
 	bench := ""
 	count := 1
@@ -393,6 +414,9 @@ func Main(pkg ref string, tests []Test) {
 		}
 
 		failures += runRound(ref tests, ref order, ref only)
+		if failures == 0 || !isFailFast() {
+			failures += runExamples(ref examples, ref only)
+		}
 	}
 
 	if bench != "" {
@@ -676,6 +700,124 @@ func runRound(tests ref []Test, order ref []int, only ref string) int {
 	return failures
 }
 
+// runExamples runs the examples whose name holds only, in their order,
+// each with the standard output pointed at a file of a directory made
+// for them when the first runs, and returns how many failed; with no
+// directory to be had, each fails, saying why, and none runs.
+func runExamples(examples ref []Example, only ref string) int {
+	dir := ""
+	failures := 0
+	for i := 0; i < len(examples); i++ {
+		e := ref examples[i]
+		if only.Len() > 0 && only != matchAll && !e.Name.Contains(only) {
+			continue
+		}
+
+		if failures > 0 && isFailFast() {
+			break
+		}
+
+		if dir == "" {
+			dir = os.MkdirTemp("", tempDirPattern).UnwrapOr("")
+		}
+
+		path := dir + "/" + exampleOutput
+		if dir == "" || !runExample(e, ref path) {
+			if dir == "" {
+				fmt.Println(failPrefix + e.Name)
+				fmt.Println(logIndent + uncaptured)
+			}
+
+			failures += 1
+		}
+	}
+
+	if dir != "" {
+		_ = Dir{path: dir} // dropped here: the directory and its file go
+	}
+
+	return failures
+}
+
+// runExample runs an example on the runner's own task, under a mark as
+// a test runs, with what it prints to the standard output written to
+// the file at path, and reports it as a test is reported: failed when
+// it panics or prints other than it must, with what it printed and what
+// it was to print.
+func runExample(e ref Example, path ref string) bool {
+	if isVerbose() {
+		fmt.Println(runPrefix + e.Name)
+	}
+
+	start := time.Now()
+	saved := captureStart(path)
+	if saved < 0 { // not run: what it printed could not be read back
+		fmt.Println(failPrefix + e.Name)
+		fmt.Println(logIndent + uncaptured)
+		return false
+	}
+
+	msg := Catch(e.F)
+	captureEnd(saved)
+	took := fmt.Sprintf("(%.2fs)", time.Since(start).Seconds())
+	got := os.ReadToString(path).UnwrapOr("")
+
+	if m := msg {
+		fmt.Println(failPrefix + e.Name + " " + took)
+		fmt.Println(logIndent + m)
+		return false
+	}
+
+	if !outputMatches(ref got, ref e.Output, e.Unordered) {
+		fmt.Println(failPrefix + e.Name + " " + took)
+		fmt.Println(gotLabel)
+		fmt.Println(got.TrimSpace())
+		fmt.Println(wantLabel)
+		fmt.Println(e.Output.TrimSpace())
+		return false
+	}
+
+	if isVerbose() {
+		fmt.Println(passPrefix + e.Name + " " + took)
+	}
+
+	return true
+}
+
+// outputMatches reports whether an example printed what it must: the
+// two texts the same once trimmed of space at their ends, or, for an
+// example whose lines may come in any order, the same lines sorted.
+func outputMatches(got ref string, want ref string, unordered bool) bool {
+	if !unordered {
+		return got.TrimSpace() == want.TrimSpace()
+	}
+
+	a := sortedLines(got.TrimSpace())
+	b := sortedLines(want.TrimSpace())
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// sortedLines returns the lines of s, sorted.
+func sortedLines(s ref string) []string {
+	lines := make([]string, 0, 0)
+	for line := range s.Lines() {
+		lines.Push(line.Clone())
+	}
+
+	lines.Sort()
+	return lines
+}
+
 // setFlags records the flags, before any test runs.
 func setFlags(flags Config) {
 	config.Store(flags)
@@ -742,3 +884,10 @@ func benchBytes() int
 
 // benchReported reports whether ReportAllocs was called in the run.
 func benchReported() bool
+
+// captureStart points the standard output at the file at path, made
+// empty, and returns a descriptor of where it pointed before, or -1
+// when it cannot; captureEnd points it back. The runtime's.
+func captureStart(path ref string) int
+
+func captureEnd(saved int)

@@ -24,6 +24,7 @@ const (
 	buildCommand   = "build"
 	checkCommand   = "check"
 	debugCommand   = "debug"
+	docCommand     = "doc"
 	doctorCommand  = "doctor"
 	emitCommand    = "emit"
 	helpCommand    = "help"
@@ -200,6 +201,7 @@ func commands() []*command {
 		{name: checkCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "check a program, or a package, and print its errors", declare: declareCheck},
 		{name: debugCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
 		{name: depsCommand, minArgs: 0, maxArgs: 0, short: "print the dependencies by version, and who requires each", declare: declareDeps},
+		{name: docCommand, args: docArgs, minArgs: 0, maxArgs: 1, short: "print a package's documentation, or a name's", declare: declareDoc},
 		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
 		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, emit)},
 		{name: fetchCommand, minArgs: 0, maxArgs: 0, short: "fetch every dependency into the module cache, for a build with no network", declare: declareFetch},

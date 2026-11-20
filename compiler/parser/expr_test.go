@@ -162,7 +162,7 @@ func TestParenIsNotTuple(t *testing.T) {
 // error messages.
 func parseExprString(src string) (ast.Expr, []string) {
 	var p Parser
-	p.init(token.NewFile("test.snello", len(src)), []byte(src))
+	p.init(token.NewFile("test.snello", len(src)), []byte(src), false)
 	x := p.parseExpr()
 	if p.tok != token.EOF && p.tok != token.SEMICOLON {
 		p.errorExpected(p.pos, "end of expression")

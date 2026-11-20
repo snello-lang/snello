@@ -63,6 +63,7 @@ type File struct {
 	Imports []*ImportSpec
 	Decls   []Decl
 	Attrs   map[Node][]*Attr // the attributes of the fields, variants and declarations written with any; nil when none is
+	Docs    *Docs            // the comments, when the file was parsed with them; nil otherwise, one word for a build
 }
 
 // An Attr is an attribute, @ and a constant expression, written after

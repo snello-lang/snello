@@ -121,18 +121,24 @@ func ParseFile(filename string, src []byte) (*ast.File, *token.File, error) {
 // errors, as ParseFile does.
 func Parse(file *token.File, src []byte) (*ast.File, error) {
 	var p Parser
-	p.init(file, src)
+	p.init(file, src, false)
 	f := p.parseFile()
 	p.errors.Sort()
 
 	return f, p.errors.Err()
 }
 
-func (p *Parser) init(file *token.File, src []byte) {
+// init readies the parser for src, its scanner keeping comments when
+// keep asks, from the first token on.
+func (p *Parser) init(file *token.File, src []byte, keep bool) {
 	p.file = file
 	p.scanner.Init(p.file, src, func(pos token.Position, msg string) {
 		p.addError(pos, msg)
 	})
+	if keep {
+		p.scanner.KeepComments()
+	}
+
 	p.next()
 }
 

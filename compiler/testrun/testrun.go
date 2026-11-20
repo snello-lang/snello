@@ -52,13 +52,14 @@ const mainPackage = "main"
 // where the package is, whether it is a main package, its source and
 // test files, and the names of its tests in the order they run.
 type Plan struct {
-	Dir    string   // the package's directory, or "" for a standard package
-	Path   string   // the import path the generated main imports it by; "" for a main package
-	Main   bool     // a main package: the generated file joins it
-	Files  []string // the package's sources, on disk or in the embedded library
-	Tests  []string // the test files
-	Names  []string // the tests, by name, sorted
-	StdDir string   // for a standard package read from a checkout, the directory holding the library's sources, std/
+	Dir      string    // the package's directory, or "" for a standard package
+	Path     string    // the import path the generated main imports it by; "" for a main package
+	Main     bool      // a main package: the generated file joins it
+	Files    []string  // the package's sources, on disk or in the embedded library
+	Tests    []string  // the test files
+	Names    []string  // the tests, by name, sorted
+	Examples []Example // the examples, by name, sorted; the generated main lists those that run
+	StdDir   string    // for a standard package read from a checkout, the directory holding the library's sources, std/
 }
 
 // PlanDir finds the tests of the package in dir: its test files, the
@@ -82,7 +83,7 @@ func PlanDir(dir string) (*Plan, error) {
 
 	p := &Plan{Dir: dir, Files: files, Tests: tests}
 	var pkg string
-	if p.Names, pkg, err = testNames(tests, nil); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(tests, nil); err != nil {
 		return nil, err
 	}
 
@@ -107,7 +108,7 @@ func PlanDir(dir string) (*Plan, error) {
 		}
 
 		p.Main = true
-		return p, nil
+		return p, p.checkExamples(os.ReadFile)
 	}
 
 	m, err := importer.FindModule(dir)
@@ -133,7 +134,8 @@ func PlanDir(dir string) (*Plan, error) {
 	if external(pkg, p.Path) {
 		p.Path += importer.TestSuffix
 	}
-	return p, nil
+
+	return p, p.checkExamples(os.ReadFile)
 }
 
 // PlanStd finds the tests of the standard package at importPath, in
@@ -171,7 +173,11 @@ func PlanStd(importPath string) (*Plan, error) {
 	}
 
 	var pkg string
-	if p.Names, pkg, err = testNames(p.Tests, srcs); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(p.Tests, srcs); err != nil {
+		return nil, err
+	}
+
+	if err := p.checkExamples(std.Sources.ReadFile); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +220,11 @@ func PlanStdDir(dir string) (*Plan, error) {
 
 	p := &Plan{Path: importPath, Files: files, Tests: tests, StdDir: stdDir}
 	var pkg string
-	if p.Names, pkg, err = testNames(tests, nil); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(tests, nil); err != nil {
+		return nil, err
+	}
+
+	if err := p.checkExamples(os.ReadFile); err != nil {
 		return nil, err
 	}
 
@@ -275,12 +285,14 @@ func stdPackage(dir string) (stdDir, importPath string, ok bool) {
 }
 
 // testNames parses the test files, read from disk when srcs is nil,
-// and returns the names of the functions named Test or Benchmark plus
-// a capital with no receiver, sorted, as the tests run. One with
-// parameters, results or type parameters is refused, so that a test is
-// never silently not run.
-func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
+// with their comments, and returns the names of the functions named
+// Test or Benchmark plus a capital with no receiver, sorted, as the
+// tests run, and the examples, sorted. One
+// with parameters, results or type parameters is refused, so that a
+// test or an example is never silently not run.
+func testNames(tests []string, srcs [][]byte) ([]string, []Example, string, error) {
 	var names []string
+	var examples []Example
 	pkg := ""
 	for i, name := range tests {
 		var src []byte
@@ -288,24 +300,30 @@ func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 		if srcs != nil {
 			src = srcs[i]
 		} else if src, err = os.ReadFile(name); err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 
-		f, _, err := parser.ParseFile(name, src)
+		f, err := parseWithComments(name, src)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 
+		found, err := examplesOf(f)
+		if err != nil {
+			return nil, nil, "", err
+		}
+
+		examples = append(examples, found...)
 		if pkg == "" {
 			pkg = f.Name.Name
 		} else if f.Name.Name != pkg {
-			return nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + importer.TestSuffix + " package")
+			return nil, nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + importer.TestSuffix + " package")
 		}
 
 		for _, d := range f.Decls {
 			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && isTest(fn.Name.Name) {
 				if len(fn.Params) != 0 || len(fn.Results) != 0 || len(fn.TypeParams) != 0 {
-					return nil, "", errors.New(fn.Name.Name + " has the wrong signature: want func()")
+					return nil, nil, "", errors.New(fn.Name.Name + wrongSignature)
 				}
 
 				names = append(names, fn.Name.Name)
@@ -314,7 +332,28 @@ func testNames(tests []string, srcs [][]byte) ([]string, string, error) {
 	}
 
 	sort.Strings(names)
-	return names, pkg, nil
+	sort.Slice(examples, func(i, j int) bool { return examples[i].Name < examples[j].Name })
+	return names, examples, pkg, nil
+}
+
+// checkExamples refuses an example whose name names nothing the package
+// declares, reading the package's files with read.
+func (p *Plan) checkExamples(read func(string) ([]byte, error)) error {
+	if len(p.Examples) == 0 {
+		return nil
+	}
+
+	files := map[string][]byte{}
+	for _, name := range p.Files {
+		src, err := read(name)
+		if err != nil {
+			return err
+		}
+
+		files[name] = src
+	}
+
+	return checkExampleNames(p.Examples, p.label(), files)
 }
 
 // external says whether the test files, of package pkg, are the
@@ -354,13 +393,8 @@ func (p *Plan) Source() []byte {
 		prefix = "pkg."
 	}
 
-	label := strings.TrimSuffix(p.Path, importer.TestSuffix) // the package tested, whichever form its tests take
-	if p.Main {
-		label = mainLabel(p.Dir)
-	}
-
 	b.WriteString("\nfunc main() {\n\ttesting.Main(")
-	b.WriteString(strconv.Quote(label))
+	b.WriteString(strconv.Quote(p.label()))
 	b.WriteString(", []testing.Test{")
 	for i, name := range p.Names {
 		if i > 0 {
@@ -375,8 +409,42 @@ func (p *Plan) Source() []byte {
 		b.WriteString("}")
 	}
 
+	b.WriteString("}, []testing.Example{")
+	listed := 0
+	for _, e := range p.Examples {
+		if !e.Runs {
+			continue
+		}
+
+		if listed > 0 {
+			b.WriteString(", ")
+		}
+
+		listed++
+		b.WriteString("testing.Example{Name: ")
+		b.WriteString(strconv.Quote(e.Name))
+		b.WriteString(", F: ")
+		b.WriteString(prefix)
+		b.WriteString(e.Name)
+		b.WriteString(", Output: ")
+		b.WriteString(strconv.Quote(e.Output))
+		b.WriteString(", Unordered: ")
+		b.WriteString(strconv.FormatBool(e.Unordered))
+		b.WriteString("}")
+	}
+
 	b.WriteString("})\n}\n")
 	return []byte(b.String())
+}
+
+// label is the name the run reports the package by: the package tested,
+// whichever form its tests take, or a main package's directory.
+func (p *Plan) label() string {
+	if p.Main {
+		return mainLabel(p.Dir)
+	}
+
+	return strings.TrimSuffix(p.Path, importer.TestSuffix)
 }
 
 // Emit loads the plan's program and emits it through the backend.

@@ -46,6 +46,26 @@ func TestPackages(t *testing.T) {
 	}
 }
 
+// TestComments holds the importer to keeping comments for the packages
+// Comments names and for no other: strings asked for, and io, which it
+// imports, not.
+func TestComments(t *testing.T) {
+	imp := NewImporter(&types.Info{})
+	imp.Comments = func(path string) bool { return path == "strings" }
+	if _, err := imp.Import("strings"); err != nil {
+		t.Fatal(err)
+	}
+
+	kept := map[string]bool{}
+	for _, p := range imp.Packages() {
+		kept[p.Path] = p.Syntax.Docs != nil
+	}
+
+	if !kept["strings"] || kept["io"] {
+		t.Errorf("comments kept by package %v, want strings alone", kept)
+	}
+}
+
 // TestImports checks a program against the library: what an import
 // gives it, and the messages for a package or a name it cannot have.
 func TestImports(t *testing.T) {

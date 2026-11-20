@@ -651,6 +651,9 @@ int64_t sn_testing_benchNanos(void);
 int64_t sn_testing_benchAllocs(void);
 int64_t sn_testing_benchBytes(void);
 bool sn_testing_benchReported(void);
+// testing.captureStart and captureEnd point an example's standard output at a file and back
+int64_t sn_testing_captureStart(sn_string path);
+void sn_testing_captureEnd(int64_t saved);
 void sn_testing_line(sn_string where); // the compiler writes these before a call of testing.Log, Logf, Skip, and of an
                                        // exported function of expect
 void sn_testing_call(sn_string where,

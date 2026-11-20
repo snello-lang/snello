@@ -119,6 +119,8 @@ llvm: building for linux/amd64 on darwin/arm64 takes a Linux system's headers an
 
 `snello check FILE` runs the parser and the checker and prints every error with its position, or nothing when the program is correct. It is what `snello build` runs first, and it is useful on its own while writing. `snello emit FILE` prints the IR that `snello build` compiles, for reading what the compiler made of a program; `snello emit -backend c FILE` prints the C source.
 
+`snello doc` prints a package's documentation, the comments on its declarations: `snello doc strings` the overview of a package, `snello doc strings.Builder` a name with its methods, and `snello doc` alone the package in the current directory (chapter 37).
+
 `snello parse FILE` prints the syntax tree and `snello lex FILE` the tokens. They exist for people working on the compiler.
 
 ## Tests

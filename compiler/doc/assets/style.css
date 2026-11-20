@@ -1,0 +1,138 @@
+/*
+ * Copyright 2026 The Snello Programming Language. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+/*
+ * The style of snello doc's pages: a sidebar of the packages beside the
+ * page, a summary of the names, and each declaration under a header bar,
+ * in the brand's colors (_docs/brand/README.md), light or dark by the
+ * system's choice or the reader's, and the brand's faces where they are
+ * installed. The server serves it beside the pages, so that a page needs
+ * nothing from the network.
+ */
+
+:root {
+    --bg: #F6F8FC;
+    --fg: #0F172A;
+    --muted: #475569;
+    --accent: #2563EB;
+    --side: #EDF1F8;
+    --code: #E6EBF4;
+    --head: #FFFFFF;
+    --border: #D5DCE8;
+}
+
+:root[data-theme=dark] {
+    --bg: #0A0F1C;
+    --fg: #E6EBF4;
+    --muted: #94A3B8;
+    --accent: #3B82F6;
+    --side: #0E1525;
+    --code: #141C2E;
+    --head: #111A2E;
+    --border: #1E293B;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme=light]) {
+        --bg: #0A0F1C;
+        --fg: #E6EBF4;
+        --muted: #94A3B8;
+        --accent: #3B82F6;
+        --side: #0E1525;
+        --code: #141C2E;
+        --head: #111A2E;
+        --border: #1E293B;
+    }
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--bg); color: var(--fg); }
+
+body { margin: 0; font: 16px/1.65 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+code, pre, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .88em; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* The sidebar: the brand, the version, the search, and the packages by group. */
+
+aside {
+    position: fixed; top: 0; bottom: 0; left: 0; width: 18rem; overflow-y: auto;
+    background: var(--side); border-right: 1px solid var(--border); padding: 1.25rem 1rem;
+}
+
+.brand { display: flex; align-items: center; gap: .6rem; color: var(--fg); font-weight: 650; font-size: 1.35rem; letter-spacing: -.02em; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 2rem; height: 2rem; }
+
+.version { color: var(--muted); font-size: .85rem; margin: .1rem 0 1rem 2.6rem; }
+
+.search {
+    width: 100%; padding: .5rem .7rem; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--fg); font: inherit; font-size: .9rem;
+}
+
+.side-title { text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; font-weight: 700; color: var(--muted); margin: 1.25rem 0 .4rem; }
+
+aside ul { list-style: none; margin: 0; padding: 0; }
+aside li a {
+    display: block; padding: .15rem .5rem; border-radius: 4px; color: var(--fg); font-size: .9rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+aside li a:hover { background: var(--code); text-decoration: none; }
+aside li.current > a { color: var(--accent); font-weight: 650; }
+aside li ul { margin: .15rem 0 .4rem .75rem; border-left: 1px solid var(--border); }
+aside li ul a { font-size: .84rem; color: var(--muted); }
+
+#theme {
+    position: fixed; top: 1rem; right: 1rem; border: 1px solid var(--border); background: var(--head); color: var(--fg);
+    border-radius: 6px; padding: .3rem .6rem; cursor: pointer; font: inherit; font-size: .85rem;
+}
+
+/* The page: its heading, its summary, and each declaration's details. */
+
+main { margin-left: 18rem; padding: 2.5rem 3.5rem 4rem; max-width: 62rem; }
+
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -.02em; margin: 0 0 .25rem; }
+h1 small { font-weight: 400; color: var(--muted); font-size: 1rem; margin-left: .75rem; }
+h2 { font-size: 1.45rem; margin: 2.5rem 0 1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; color: var(--muted); }
+
+pre { background: var(--code); padding: .85rem 1rem; border-radius: 6px; overflow-x: auto; line-height: 1.5; }
+
+.summary-row {
+    display: grid; grid-template-columns: minmax(12rem, max-content) 1fr; gap: 1.5rem;
+    padding: .35rem 0; border-bottom: 1px dashed var(--border);
+}
+.summary-row .synopsis { color: var(--muted); }
+
+.detail { margin: 1.75rem 0; }
+.detail-header {
+    position: relative; background: var(--head); border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0;
+    padding: .65rem 1rem; box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
+}
+.detail-header pre { background: none; padding: 0; margin: 0; font-weight: 600; white-space: pre-wrap; }
+.detail-header .anchor { position: absolute; left: -1.6rem; top: .6rem; visibility: hidden; color: var(--muted); }
+.detail:hover > .detail-header .anchor { visibility: visible; }
+
+.docstring { padding: .25rem 1.25rem 0; }
+.members { margin-left: 1.25rem; }
+
+details { margin: .75rem 0; border: 1px solid var(--border); border-radius: 6px; padding: .4rem .9rem; }
+summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+
+.implementors { color: var(--muted); }
+
+footer { margin-top: 4rem; color: var(--muted); font-size: .85rem; }
+
+/* A narrow screen: the sidebar above the page. */
+
+@media (max-width: 860px) {
+    aside { position: static; width: auto; max-height: 40vh; }
+    main { margin: 0; padding: 1.5rem; }
+}

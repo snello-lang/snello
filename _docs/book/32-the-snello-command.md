@@ -19,6 +19,7 @@ The commands are:
     check      check a program, or a package, and print its errors
     debug      build a program for a debugger and run it under one
     deps       print the dependencies by version, and who requires each
+    doc        print a package's documentation, or a name's
     doctor     check what a build needs, and say how to fix what is missing
     emit       print the IR, or the C, that build compiles
     fetch      fetch every dependency into the module cache, for a build with no network
@@ -59,6 +60,10 @@ Both write the line `snello 0.1.0`, the version of the compiler that ran them: t
 While the program runs, an interrupt or a quit from the terminal, `Ctrl-C` or `Ctrl-\`, reaches the program and ends it; `snello run` waits for it to end. A program that an interrupt ends ends `snello run` by the same interrupt, so that a shell running a script of `snello run` lines stops at it rather than go on to the next. A termination or a hangup sent to `snello run` alone is passed on to the program, which is never left running without it. This is Linux's and macOS's; Windows has no signals, and there `Ctrl-C` and `Ctrl-Break` end the program as Windows ends one, with the exit code `STATUS_CONTROL_C_EXIT`, `0xC000013A`, which `snello run` exits with too (chapter 34).
 
 `snello test DIR` builds the tests of the package in `DIR` and runs them; chapter 16 teaches it. `snello check FILE|DIR` prints what the checker finds, or nothing for a program that is correct, and `snello emit` the IR, or the C, a build compiles; both take `-target`, for the files and the module a build for that platform compiles.
+
+## Reading the documentation
+
+`snello doc` prints the documentation of a package, the comments on its declarations: `snello doc strings` the overview of a standard package, `snello doc strings.Builder` a name with its methods, `snello doc ./geo` or `snello doc` alone a package of the program's own; `-all` prints every name with its comment and `-u` the unexported names too; `snello doc -http` serves the pages to a browser at `http://localhost:6060/`. Chapter 37 has how to write the comments and every form of the command.
 
 ## Checking your system
 
