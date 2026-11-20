@@ -347,11 +347,13 @@ int sn_net_poller(void);
 // sn_net_wait_fd parks the running task until the descriptor may be
 // ready for the direction, returning 0, or the code of a cancel or a
 // deadline as a socket's wait does; sn_net_unwatch forgets a descriptor
-// being closed. On macOS a child's exit is an event of the process
-// filter with a record of its own: sn_net_watch_proc registers it,
-// NULL when the child has ended already, sn_net_wait_proc waits on it,
-// and sn_net_unwatch_proc lets it go, kept for the next child, since
-// an event of this one may still be on its way to a worker.
+// being closed. On macOS and Windows a child's exit readies a record of
+// its own, with no descriptor: sn_net_watch_proc makes it, NULL when
+// the poller cannot be made, sn_net_wait_proc waits on it, on macOS
+// sn_net_ready_proc readies it from the signal thread at a SIGCHLD, as
+// the poller readies a socket's, and sn_net_unwatch_proc lets it go,
+// kept for the next child, since on Windows an exit's completion may
+// still be on its way to a worker.
 enum { SN_WATCH_READ = 1, SN_WATCH_WRITE = 2 };
 int sn_net_watch(int fd, int dirs);
 int sn_net_wait_fd(int fd, bool write);
@@ -360,6 +362,7 @@ void sn_net_unwatch(int fd);
 void *sn_net_watch_proc(int64_t pid);
 int sn_net_wait_proc(void *pd);
 void sn_net_unwatch_proc(void *pd);
+void sn_net_ready_proc(void *pd);
 #endif
 #if defined(_WIN32)
 // A pipe's end on Windows is bound to the port, sn_net_watch_handle,
@@ -565,6 +568,15 @@ void sn_scope_cancel_root(void);
 // signal cancelled by that signal, once main has returned.
 void sn_signals_start(void);
 void sn_signals_finish(void);
+#if defined(_WIN32)
+// sn_signals_handled counts the console events handled, taken by a
+// console read before it reads, and sn_signals_wait_handler waits, for
+// a bounded moment, until the count has moved past seen: the handler
+// the system runs for an interrupt that cut the read short has then
+// done its work, and the read reads the program's state after it.
+uint32_t sn_signals_handled(void);
+void sn_signals_wait_handler(uint32_t seen);
+#endif
 // sn_signals_stop lets go of the runtime's end of every channel a Notify
 // gave the program, for the debug build's count of what was released.
 void sn_signals_stop(void);

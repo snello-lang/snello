@@ -62,7 +62,7 @@ func found(candidate string, name ref string) Result<string, io.Error> {
 	}
 
 	for e := range exts.Split(pathListSeparator) {
-		p := candidate.Clone() + e
+		p := candidate.Clone() + strings.ToLower(e) // PATHEXT names them in capitals; the file is found either way
 		if len(e) > 0 && runs(ref p) {
 			return Ok(p)
 		}

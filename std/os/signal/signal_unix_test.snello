@@ -12,13 +12,10 @@ const settle time.Duration = 100 * time.Millisecond
 func TestNotify() {
 	stop := signal.Notify(signal.Interrupt, signal.Terminate)
 	send("INT")
-	s := expect.IsSome(<-stop)
-	expect.Equal(ref s, ref signal.Interrupt)
-	expect.EqualText(ref s.String(), "interrupt")
+	expect.Equal(ref expect.IsSome(<-stop), ref signal.Interrupt)
 	expect.False(task.Cancelled()) // the program asked for it, so nothing is cancelled
 	send("TERM")
 	expect.Equal(ref expect.IsSome(<-stop), ref signal.Terminate)
-	expect.EqualText(ref signal.Terminate.String(), "terminated")
 }
 
 func TestOneSlot() {

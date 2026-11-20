@@ -505,6 +505,7 @@ static int console_read(int fd, void *p, size_t len) {
         }
 
         DWORD got = 0;
+        uint32_t handled = sn_signals_handled(); // before the read: an interrupt during it moves the count past this
         SetLastError(ERROR_SUCCESS);
         if (!ReadConsoleW((HANDLE)_get_osfhandle(fd), text + units, (DWORD)(console_chunk - units), &got, NULL)) {
             last_errno();
@@ -522,6 +523,7 @@ static int console_read(int fd, void *p, size_t len) {
                 c->high = text[0];
             }
 
+            sn_signals_wait_handler(handled); // the handler runs on a thread of its own, after the read returned
             if (sn_cancel_state(sn_self()) != SN_SCOPE_LIVE) {
                 errno = ECANCELED;
                 sn_mutex_unlock(&c->mu);

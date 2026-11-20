@@ -211,7 +211,7 @@ var cLibraryStacks = map[string]int64{
 	"posix_spawn_file_actions_init":          112,
 	"posix_spawnattr_destroy":                168,
 	"posix_spawnattr_init":                   160,
-	"posix_spawnattr_setflags":               0,
+	"posix_spawnattr_setflags":               8,
 	"posix_spawnattr_setsigdefault":          144,
 	"posix_spawnattr_setsigmask":             144,
 	"pow":                                    56,
@@ -268,7 +268,7 @@ var cLibraryStacks = map[string]int64{
 	"unlink":                                 32,
 	"unlinkat":                               24,
 	"waitid":                                 208,
-	"waitpid":                                64,
+	"waitpid":                                104,
 	"write":                                  120,
 }
 

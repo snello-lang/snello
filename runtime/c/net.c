@@ -811,11 +811,13 @@ void sn_net_unwatch(int fd) { unwatch(fd); }
 
 #if defined(__APPLE__) || defined(_WIN32)
 // A child's exit record is never returned to the allocator, as a
-// socket's is not: its event may be in a worker's batch, read from the
-// kernel before the record was let go, or posted to the port again by
-// the keeper, and would name freed memory. A record let go is kept for
-// the next child; an event of the child before readies the record for
-// the next, whose wait finds its child running and waits again.
+// socket's is not: on Windows its completion may be in a worker's
+// batch, read from the port before the record was let go, or posted to
+// the port again by the keeper, and would name freed memory. A record
+// let go is kept for the next child; a completion of the child before
+// readies the record for the next, whose wait finds its child running
+// and waits again. On macOS the record is readied by the signal thread
+// alone, for a child on its list, and needs no poller.
 typedef struct proc_desc {
     poll_desc pd;
     struct proc_desc *next;
@@ -843,32 +845,41 @@ static proc_desc *proc_desc_take(void) {
     return d;
 }
 
+// sn_net_watch_proc makes a child's record: on Windows the port must
+// be there for the wait packet that readies it, with the record as the
+// packet's context, and NULL says it cannot be; on macOS the signal
+// thread readies it, and the record is always made.
 void *sn_net_watch_proc(int64_t pid) {
+    (void)pid;
+#if defined(_WIN32)
     if (sn_net_poller() < 0) {
         return NULL;
     }
-
-    proc_desc *d = proc_desc_take();
-#if defined(__APPLE__)
-    struct kevent ev;
-    EV_SET(&ev, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, &d->pd);
-    if (kevent(poller, &ev, 1, NULL, 0, NULL) != 0) {
-        sn_net_unwatch_proc(&d->pd);
-        return NULL;
-    }
-#else
-    (void)pid; // the packet that posts the exit is process_windows.c's, with this record as its context
 #endif
-    return &d->pd;
+    return &proc_desc_take()->pd;
 }
 
 int sn_net_wait_proc(void *pd) { return wait_pd(pd, -1, false); }
 
-// sn_net_unwatch_proc lets a child's exit record go, to the next child:
-// an exit event still to come, one-shot, readies the record once and
-// is absorbed as the comment above says; it is not deleted by the
-// child's number, which the system may have given to another child by
-// then, whose own event the delete would take.
+// sn_net_ready_proc readies a child's record from the signal thread, as
+// the poller readies a socket's: the task waiting on it, if one is, is
+// taken out and woken, its promise kept by the waker, and else the
+// record stays ready for the next wait.
+void sn_net_ready_proc(void *pd) {
+    poll_desc *d = pd;
+    bool claimed = false;
+    sn_task *t = ready(&d->r, &d->rh, &claimed);
+    if (t != NULL) {
+        if (claimed) {
+            sn_wake_queue(t); // the second half of the wake, whose claim ready made
+        }
+
+        promise(-1);
+    }
+}
+
+// sn_net_unwatch_proc lets a child's exit record go, to the next child,
+// as the comment above says.
 void sn_net_unwatch_proc(void *pd) {
     proc_desc *d = (proc_desc *)pd; // the record is the first field
     sn_mutex_lock(&procs_mu);

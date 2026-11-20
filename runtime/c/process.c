@@ -64,6 +64,12 @@ enum { stdio_inherit = 0, stdio_piped = 1, stdio_null = 2 };
 // system's own handler's, which a program ends by once an interrupt
 // cancelled it.
 enum { control_c_exit = (int)0xC000013A };
+
+// How long a console read cut short by an interrupt waits for the
+// handler the system runs for it, in milliseconds: a bound, since the
+// handler runs within a moment, and the read goes on without it if it
+// does not.
+enum { handler_wait_ms = 1000 };
 #endif
 
 // A notifier is a channel the program asked for signals on: the
@@ -82,12 +88,13 @@ static int notified, notify_room;
 static _Atomic int interrupted;
 
 // A child is a program this one started: its process number; on Linux
-// its pidfd, readable once it has ended, and on macOS the record of its
-// exit event in the poller, NULL once the event can no longer come; how
-// it ended once it has, found by the reap that collected it, or lost
-// when something else in this program collected it first; and its
-// place in the list of the detached children, which the signal thread
-// reaps when they end.
+// its pidfd, readable once it has ended, and on macOS the poller's
+// record the signal thread readies at a SIGCHLD; how it ended once it
+// has, found by the reap that collected it, or lost
+// when something else in this program collected it first; whether its
+// handle let it go, so that the signal thread reaps it when it ends;
+// and its place in the list of the live children, which that thread
+// walks at each SIGCHLD.
 typedef struct child {
     int64_t pid;
     int fd;
@@ -95,23 +102,27 @@ typedef struct child {
     bool ended;
     bool lost;
     bool exited;
+    bool detached;
     int code;
     int sig;
     struct child *next;
 } child;
 
 #if !defined(_WIN32)
-static sn_mutex detached_mu = SN_MUTEX_INIT;
-static child *detached; // under detached_mu
+static sn_mutex children_mu = SN_MUTEX_INIT;
+static child *children; // the live children, under children_mu
 static const char *null_device = "/dev/null";
 extern char **environ;
-static void reap_detached(void *which);
+static void children_ended(void);
 static void child_free(child *c);
 #endif
 
 #if defined(__APPLE__)
 static int signal_queue = -1; // the kqueue the signal thread waits on, the signals ignored
-#elif !defined(_WIN32)
+#elif defined(_WIN32)
+static _Atomic uint32_t console_handled; // the console's events handled, counted once each one's work is done
+static HANDLE console_handled_event;     // set at each count, for a console read waiting on the handler
+#else
 static sigset_t caught; // the signals the runtime catches, blocked in every thread and waited for by one
 #endif
 
@@ -196,16 +207,25 @@ static void arrived(int64_t v) {
 // the console's close, the logoff and the shutdown the terminate, after
 // which the handler never returns, since the system ends the process
 // when it does, within the seconds it allows.
+// handled counts a console event handled, and wakes a console read
+// waiting for the handler.
+static void handled(void) {
+    atomic_fetch_add(&console_handled, 1);
+    SetEvent(console_handled_event);
+}
+
 static BOOL WINAPI console_handler(DWORD type) {
     switch (type) {
     case CTRL_C_EVENT:
     case CTRL_BREAK_EVENT:
         arrived(signal_interrupt);
+        handled(); // the console read the interrupt cut short reads the program's state after this
         return TRUE;
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
     case CTRL_SHUTDOWN_EVENT:
         arrived(signal_terminate);
+        handled();
         Sleep(INFINITE);
         return TRUE;
     default:
@@ -213,7 +233,35 @@ static BOOL WINAPI console_handler(DWORD type) {
     }
 }
 
-void sn_signals_start(void) { (void)SetConsoleCtrlHandler(console_handler, TRUE); }
+void sn_signals_start(void) {
+    console_handled_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (console_handled_event == NULL || !SetConsoleCtrlHandler(console_handler, TRUE)) {
+        sn_panic(SN_STR("cannot start the signal handler", 31));
+    }
+}
+
+// sn_signals_handled is the count of console events handled, which a
+// console read takes before it reads, and sn_signals_wait_handler is
+// the read's when an interrupt cut it short: the read returns at once
+// while the system runs the handler on a thread of its own, so the
+// read waits until the count has moved past the one it took, which
+// the handler of this interrupt does once its work is done, before it
+// reads the program's state; an event set by an earlier handler, with
+// no read waiting then, satisfies nothing. The wait is bounded, for as
+// long as a handler could take.
+uint32_t sn_signals_handled(void) { return atomic_load(&console_handled); }
+
+void sn_signals_wait_handler(uint32_t seen) {
+    ULONGLONG until = GetTickCount64() + handler_wait_ms;
+    while (atomic_load(&console_handled) == seen) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= until) {
+            return;
+        }
+
+        (void)WaitForSingleObject(console_handled_event, (DWORD)(until - now));
+    }
+}
 #elif defined(__APPLE__)
 // signal_main is the thread that waits for the caught signals, for the
 // program's life: the kqueue's signal filter records a signal sent to
@@ -226,9 +274,13 @@ static void *signal_main(void *arg) {
             continue;
         }
 
-        if (got.filter == EVFILT_PROC) {
-            reap_detached(got.udata); // a detached child ended
-        } else if (got.filter == EVFILT_SIGNAL) {
+        if (got.filter != EVFILT_SIGNAL) {
+            continue;
+        }
+
+        if (got.ident == SIGCHLD) {
+            children_ended(); // a child is waitable: the detached ones are reaped, the waited ones woken
+        } else {
             arrived(got.ident == SIGINT ? signal_interrupt : signal_terminate);
         }
     }
@@ -236,15 +288,22 @@ static void *signal_main(void *arg) {
     return NULL; // never reached: a thread's function has a result to give
 }
 
+// SIGCHLD keeps its default disposition, which discards it: ignoring
+// it outright would have the system reap every child itself, and a
+// Wait find none. The kqueue records it either way, and only once the
+// child is waitable, where the process filter's exit note comes before
+// the child is marked a zombie, so a reap on that note may find nothing
+// to collect and the one-shot note never comes again.
 void sn_signals_start(void) {
     signal(SIGINT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     signal_queue = kqueue();
-    struct kevent ev[2];
+    struct kevent ev[3];
     EV_SET(&ev[0], SIGINT, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
     EV_SET(&ev[1], SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
-    if (signal_queue < 0 || kevent(signal_queue, ev, 2, NULL, 0, NULL) < 0 || !sn_thread_start(signal_main, NULL)) {
+    EV_SET(&ev[2], SIGCHLD, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
+    if (signal_queue < 0 || kevent(signal_queue, ev, 3, NULL, 0, NULL) < 0 || !sn_thread_start(signal_main, NULL)) {
         sn_panic(SN_STR("cannot start the signal thread", 30));
     }
 }
@@ -261,7 +320,7 @@ static void *signal_main(void *arg) {
         }
 
         if (sig == SIGCHLD) {
-            reap_detached(NULL); // a child ended: the detached ones are looked at
+            children_ended(); // a child ended: the detached ones are reaped
         } else {
             arrived(sig == SIGINT ? signal_interrupt : signal_terminate);
         }
@@ -313,14 +372,19 @@ void sn_signals_stop(void) {
     notified = notify_room = 0;
     sn_mutex_unlock(&notify_mu);
 #if !defined(_WIN32)
-    sn_mutex_lock(&detached_mu); // a detached child that outlives the program is the runtime's, not a leak
-    while (detached != NULL) {
-        child *c = detached;
-        detached = c->next;
-        child_free(c);
+    sn_mutex_lock(&children_mu); // a detached child that outlives the program is the runtime's, not a leak
+    for (child **p = &children; *p != NULL;) {
+        child *c = *p;
+        if (c->detached) {
+            *p = c->next;
+            child_free(c);
+            continue;
+        }
+
+        p = &c->next;
     }
 
-    sn_mutex_unlock(&detached_mu);
+    sn_mutex_unlock(&children_mu);
 #endif
 }
 
@@ -384,30 +448,56 @@ static void child_free(child *c) {
     sn_net_unwatch(c->fd);
     close(c->fd);
 #else
-    if (c->pd != NULL) {
-        sn_net_unwatch_proc(c->pd);
-    }
+    sn_net_unwatch_proc(c->pd);
 #endif
     sn_free(c);
 }
 
-// reap_detached reaps the detached children that have ended: on macOS
-// the one whose exit event came, which; on Linux, where a SIGCHLD may
-// stand for several, every one on the list that has.
-static void reap_detached(void *which) {
-    sn_mutex_lock(&detached_mu);
-    for (child **p = &detached; *p != NULL;) {
+// list_child puts the child among the live children, and unlist_child
+// takes it out, for the handle that frees it.
+static void list_child(child *c) {
+    sn_mutex_lock(&children_mu);
+    c->next = children;
+    children = c;
+    sn_mutex_unlock(&children_mu);
+}
+
+static void unlist_child(child *c) {
+    sn_mutex_lock(&children_mu);
+    for (child **p = &children; *p != NULL; p = &(*p)->next) {
+        if (*p == c) {
+            *p = c->next;
+            break;
+        }
+    }
+
+    sn_mutex_unlock(&children_mu);
+}
+
+// children_ended is the signal thread's at each SIGCHLD, which may stand
+// for several children: every detached child that has ended is reaped
+// and freed, and on macOS every waited one is readied, so that the task
+// in its Wait reaps it now that it is waitable; on Linux the pidfd does
+// that.
+static void children_ended(void) {
+    sn_mutex_lock(&children_mu);
+    for (child **p = &children; *p != NULL;) {
         child *c = *p;
-        if ((which == NULL || which == c) && reap(c)) {
+        if (c->detached && reap(c)) {
             *p = c->next;
             child_free(c);
             continue;
         }
 
+#if defined(__APPLE__)
+        if (!c->detached) {
+            sn_net_ready_proc(c->pd);
+        }
+#endif
         p = &c->next;
     }
 
-    sn_mutex_unlock(&detached_mu);
+    sn_mutex_unlock(&children_mu);
 }
 
 // cstring copies s with a zero after it, for the system's calls.
@@ -571,11 +661,11 @@ static int spawn_child(sn_string path, sn_slice args, sn_string dir, char **envp
     return code;
 }
 
-// watch_child makes the record of the child with the number pid,
-// watched through the poller: on Linux by its pidfd, readable once the
-// child has ended; on macOS by the exit event its record is registered
-// for, NULL for a child that ended already, which the first reap
-// collects. It returns the system's error number.
+// watch_child makes the record of the child with the number pid and
+// lists it among the live children: on Linux watched through the poller
+// by its pidfd, readable once the child has ended; on macOS with a
+// record of the poller's the signal thread readies at a SIGCHLD. It
+// returns the system's error number.
 static int watch_child(pid_t pid, child **out) {
     child *c = sn_alloc(sizeof *c);
     memset(c, 0, sizeof *c);
@@ -598,6 +688,7 @@ static int watch_child(pid_t pid, child **out) {
 #else
     c->pd = sn_net_watch_proc(pid);
 #endif
+    list_child(c);
     *out = c;
     return 0;
 }
@@ -657,6 +748,7 @@ int64_t sn_os__exec_start(sn_string path, void *args_slice, sn_string dir, void 
         }
 
         if (c != NULL) {
+            unlist_child(c);
             child_free(c);
         }
 
@@ -693,10 +785,6 @@ int64_t sn_os__exec_wait(int64_t handle, bool *exited, int64_t *code, int64_t *s
 #if defined(__linux__)
         int cut = sn_net_wait_fd(c->fd, false);
 #else
-        if (c->pd == NULL) {
-            return ECHILD; // ended before its event was registered, and not this program's to collect
-        }
-
         int cut = sn_net_wait_proc(c->pd);
 #endif
         if (cut != 0) {
@@ -731,29 +819,24 @@ int64_t sn_os__exec_signal(int64_t handle, int64_t sig) {
 void sn_os__exec_detach(int64_t handle) {
     child *c = (child *)(intptr_t)handle;
     if (reap(c)) {
+        unlist_child(c);
         child_free(c);
         return;
     }
 
-#if defined(__APPLE__)
-    struct kevent ev;
-    EV_SET(&ev, (uintptr_t)c->pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, c);
-    if (kevent(signal_queue, &ev, 1, NULL, 0, NULL) != 0) { // ended since the reap above
-        reap(c);
-        child_free(c);
-        return;
-    }
-#endif
-    sn_mutex_lock(&detached_mu);
-    c->next = detached;
-    detached = c;
-    sn_mutex_unlock(&detached_mu);
-    reap_detached(c); // ended between the reap above and the listing: a SIGCHLD or an event may have come already
+    sn_mutex_lock(&children_mu);
+    c->detached = true;
+    sn_mutex_unlock(&children_mu);
+    children_ended(); // ended between the reap above and the mark: its SIGCHLD may have come already
 }
 
 // sn_os__exec_closeChild frees the record of a child that has been
 // waited for.
-void sn_os__exec_closeChild(int64_t handle) { child_free((child *)(intptr_t)handle); }
+void sn_os__exec_closeChild(int64_t handle) {
+    child *c = (child *)(intptr_t)handle;
+    unlist_child(c);
+    child_free(c);
+}
 
 // sn_os__exec_read reads what the pipe has into buf and stores how
 // much, 0 once the child has closed its end, parking while it has
