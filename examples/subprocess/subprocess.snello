@@ -1,0 +1,87 @@
+// A program that runs another: itself, as a worker that answers each
+// line of its input in upper case and exits with the number of lines
+// it answered. The parent collects a run's output whole, talks to a
+// worker over its pipes while a task of its own runs beside, reads how
+// the worker ended, drops a worker it no longer needs, and meets the
+// error of a program that does not exist.
+package main
+
+import ("bufio"; "fmt"; "io"; "os"; "os/exec"; "strings"; "sync"; "time")
+
+// The argument that makes the program the worker.
+const workerArg = "worker"
+
+// How long the counting task runs beside the worker.
+const beside = 50 * time.Millisecond
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == workerArg {
+		os.Exit(worker())
+	}
+
+	// A run collected whole: its output, its error stream and its end.
+	cmd := exec.Command(os.Args[0].Clone(), workerArg)
+	cmd.Stdin = exec.Null
+	out := cmd.Output().Expect("run the worker")
+	fmt.Printf("output %q, errors %q, %v\n", string(out.Stdout), string(out.Stderr), out.Status)
+
+	// A worker talked to over its pipes, while a task counts beside it.
+	cmd.Stdin = exec.Piped
+	cmd.Stdout = exec.Piped
+	child := cmd.Start().Expect("start the worker")
+	counter := sync.NewArc(sync.NewCounter(0))
+	ticks := counter.Clone()
+	spawn count(ticks)
+	input := take(mut child.Stdin).Expect("a piped input")
+	for _, word := range []string{"pear", "apple", "fig"} {
+		input.WriteString(word.Clone() + "\n").Expect("write to the worker")
+	}
+
+	_ = input // the end of the worker's input
+	output := take(mut child.Stdout).Expect("a piped output")
+	lines := bufio.NewScanner(mut output)
+	for lines.Scan() {
+		fmt.Println("worker says:", lines.Text())
+	}
+
+	status := child.Wait().Expect("wait for the worker")
+	fmt.Println("the worker ended:", status, "success:", status.Success(), "code:", status.Code())
+	time.Sleep(beside)
+	fmt.Println("the counting task ran beside it:", counter.Get().Load() > 0)
+
+	// A worker dropped before it is waited for is killed and collected.
+	cmd.Stdout = exec.Null
+	dropped := cmd.Start().Expect("start a worker to drop")
+	fmt.Println("started a worker to drop:", dropped.Pid() > 0)
+	_ = dropped
+	fmt.Println("dropped")
+
+	// A program that does not exist.
+	match exec.Command("snello-no-such-program").Run() {
+		Ok(s) => fmt.Println("ran?", s),
+		Err(e) => fmt.Println("not found:", e.Kind() == io.NotExist),
+	}
+}
+
+// worker answers each line of the input in upper case and returns how
+// many it answered, the program's exit code.
+func worker() int {
+	in := os.Stdin()
+	lines := bufio.NewScanner(mut in)
+	n := 0
+	for lines.Scan() {
+		fmt.Println(strings.ToUpper(lines.Text()))
+		n += 1
+	}
+
+	return n
+}
+
+// count counts for a while, to show that the program's tasks run while
+// another waits on the worker.
+func count(ticks sync.Arc<sync.Counter>) {
+	for i := 0; i < 5; i += 1 {
+		time.Sleep(beside / 5)
+		ticks.Get().Add(1)
+	}
+}

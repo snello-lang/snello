@@ -1,0 +1,132 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package exec_test
+
+import ("bufio"; "expect"; "io"; "os"; "os/exec"; "path/filepath"; "strconv"; "task"; "time")
+
+// settle is the pause before a test looks at what a child left.
+const settle time.Duration = 100 * time.Millisecond
+
+func TestOutput() {
+	out := expect.IsOk(exec.Command("cmd", "/c", "echo hello& echo oops 1>&2& exit 3").Output())
+	expect.EqualText(ref string(out.Stdout), "hello\r\n")
+	expect.EqualText(ref string(out.Stderr), "oops \r\n")
+	expect.False(out.Status.Success())
+	expect.Equal(ref expect.IsSome(out.Status.Code()), ref 3)
+	expect.IsNone(out.Status.Signal())
+	expect.EqualText(ref out.Status.String(), "exit status 3")
+}
+
+func TestRun() {
+	status := expect.IsOk(exec.Command("cmd", "/c", "exit 0").Run())
+	expect.True(status.Success())
+}
+
+func TestPipes() {
+	cmd := exec.Command("sort")
+	cmd.Stdin = exec.Piped
+	cmd.Stdout = exec.Piped
+	child := expect.IsOk(cmd.Start())
+	expect.True(child.Pid() > 0)
+	w := expect.IsSome(take(mut child.Stdin))
+	expect.Equal(ref expect.IsOk(w.WriteString("pear\r\napple\r\nfig\r\n")), ref 18)
+	_ = w // the end of the child's input
+	r := expect.IsSome(take(mut child.Stdout))
+	sc := bufio.NewScanner(mut r)
+	lines := []string{}
+	for sc.Scan() {
+		lines.Push(sc.Text())
+	}
+
+	expect.EqualSlice(ref lines, ref []string{"apple".Clone(), "fig".Clone(), "pear".Clone()})
+	expect.True(expect.IsOk(child.Wait()).Success())
+}
+
+func TestDirAndEnv() {
+	cmd := exec.Command("cmd", "/c", "cd& echo %SNELLO_TEST_VALUE%")
+	cmd.Dir = "C:\\".Clone()
+	cmd.Env = Some([]string{"SNELLO_TEST_VALUE=42".Clone(), "SystemRoot=C:\\Windows".Clone()})
+	out := expect.IsOk(cmd.Output())
+	expect.EqualText(ref string(out.Stdout), "C:\\\r\n42\r\n")
+}
+
+func TestNull() {
+	cmd := exec.Command("sort")
+	cmd.Stdin = exec.Null
+	cmd.Stdout = exec.Null
+	expect.True(expect.IsOk(cmd.Run()).Success())
+}
+
+func TestTerminate() {
+	child := expect.IsOk(exec.Command("ping", "-n", "30", "127.0.0.1").Start())
+	expect.IsOk(child.Terminate())
+	status := expect.IsOk(child.Wait())
+	expect.False(status.Success())
+	expect.Equal(ref expect.IsSome(status.Code()), ref 1)
+	expect.IsNone(status.Signal())
+	expect.IsOk(child.Kill()) // nothing once the child has ended
+}
+
+func TestKillOnDrop() {
+	pid := 0
+	{
+		child := expect.IsOk(exec.Command("ping", "-n", "30", "127.0.0.1").Start())
+		pid = child.Pid()
+	}
+
+	expect.False(alive(pid))
+}
+
+func TestCancelledWait() {
+	child := expect.IsOk(exec.Command("ping", "-n", "30", "127.0.0.1").Start())
+	kind := io.Other
+	expect.IsNone(task.Within(settle, func() {
+		match child.Wait() {
+			Ok(_) => expect.Fail("a wait under a passed deadline answered a status"),
+			Err(e) => kind = e.Kind(),
+		}
+	}))
+	expect.True(kind == io.TimedOut)
+	expect.True(alive(child.Pid())) // the child ran on
+	expect.IsOk(child.Kill())
+	expect.EqualText(ref expect.IsOk(child.Wait()).String(), "exit status 1")
+}
+
+func TestBrokenPipe() {
+	cmd := exec.Command("cmd", "/c", "exit 0")
+	cmd.Stdin = exec.Piped
+	child := expect.IsOk(cmd.Start())
+	w := expect.IsSome(take(mut child.Stdin))
+	expect.IsOk(child.Wait())
+	data := make([]byte, 1 << 16)
+	e := expect.IsErr(w.Write(ref data))
+	expect.True(e.Kind() == io.BrokenPipe)
+}
+
+func TestLookPath() {
+	e := expect.IsErr(exec.LookPath("snello-no-such-program"))
+	expect.True(e.Kind() == io.NotExist)
+	expect.Contains(ref e.Error(), "executable file not found in %PATH%")
+	expect.HasSuffix(ref expect.IsOk(exec.LookPath("cmd")), "\\cmd.exe")
+	expect.IsErr(exec.LookPath(".\\snello-no-such-program"))
+}
+
+func TestBatchFile() {
+	path := filepath.Join(ref os.TempDir(), "snello-exec-test.bat")
+	lines := []byte("@echo off\r\necho %1\r\n")
+	expect.IsOk(os.WriteFile(ref path, ref lines, 0o644))
+	e := expect.IsErr(exec.Command(path.Clone(), "x").Start()) // run through cmd.exe, which reads the arguments its own way
+	expect.True(e.Kind() == io.Other)
+	expect.Contains(ref e.Error(), "cmd /c")
+	expect.True(expect.IsOk(exec.Command("cmd", "/c", path.Clone(), "x").Run()).Success()) // named, it runs
+	expect.IsOk(os.Remove(ref path))
+}
+
+// alive reports whether a process with the number pid is running, as
+// the task list has it.
+func alive(pid int) bool {
+	out := expect.IsOk(exec.Command("tasklist", "/FI", "PID eq ".Clone() + strconv.Itoa(pid), "/NH").Output())
+	return string(out.Stdout).Contains(strconv.Itoa(pid))
+}

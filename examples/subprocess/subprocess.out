@@ -1,0 +1,9 @@
+output "", errors "", exit status 0
+worker says: PEAR
+worker says: APPLE
+worker says: FIG
+the worker ended: exit status 3 success: false code: Some(3)
+the counting task ran beside it: true
+started a worker to drop: true
+dropped
+not found: true

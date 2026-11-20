@@ -6,14 +6,12 @@ package c
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
@@ -108,7 +106,7 @@ func TestPrograms(t *testing.T) {
 			}
 
 			for _, debug := range p.Builds() {
-				out, stderr, code := run(t, p.Name, p.Src, debug)
+				out, stderr, code := runInterrupted(t, p.Name, p.Src, debug, p.Interrupts)
 				if bad := p.Check(out, stderr, code, debug); bad != "" {
 					t.Errorf("debug=%v: %s", debug, bad)
 				}
@@ -262,7 +260,7 @@ func TestDebugChecks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			csrc := "#include \"snello.h\"\nint main(int argc, char **argv) { sn_init(argc, argv); " + tt.body + " return sn_finish(); }\n"
-			_, stderr, code := execute(t, t.TempDir(), tt.name, []byte(csrc), true)
+			_, stderr, code := execute(t, t.TempDir(), tt.name, []byte(csrc), true, 0)
 			if !strings.Contains(stderr, tt.want) || code != tt.code {
 				t.Errorf("%s: exit %d with %q, want exit %d with %q", tt.name, code, stderr, tt.code, tt.want)
 			}
@@ -307,7 +305,7 @@ func TestDescriptorFlags(t *testing.T) {
 	sn_slice_free((sn_slice *)&names);
 	sn_print_int(bad);`
 	csrc := "#include \"snello.h\"\n#include <fcntl.h>\n#include <stdio.h>\nint main(int argc, char **argv) { sn_init(argc, argv); " + body + " return sn_finish(); }\n"
-	out, stderr, code := execute(t, t.TempDir(), "flags", []byte(csrc), false)
+	out, stderr, code := execute(t, t.TempDir(), "flags", []byte(csrc), false, 0)
 	if want := "0 1 0\n1 1 0\n2 1 1\n3 1 1\n4 1 1\n5 1 0\nflags kept\ndir closed\n0"; out != want || code != 0 {
 		t.Errorf("exit %d, printed %q%s, want %q", code, out, stderr, want)
 	}
@@ -330,6 +328,13 @@ func buildAndRun(t *testing.T, name, src string, debug bool, fixtures ...string)
 // run builds src, a Snello program, and runs it, returning its standard
 // output, its standard error and its exit code.
 func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string, string, int) {
+	t.Helper()
+	return runInterrupted(t, name, src, debug, 0, fixtures...)
+}
+
+// runInterrupted is run for a program sent interrupts once it has
+// printed its first line.
+func runInterrupted(t *testing.T, name, src string, debug bool, interrupts int, fixtures ...string) (string, string, int) {
 	t.Helper()
 	f, file, err := parser.ParseFile(name+".snello", []byte(src))
 	if err != nil {
@@ -366,7 +371,7 @@ func run(t *testing.T, name, src string, debug bool, fixtures ...string) (string
 		}
 	}
 
-	return execute(t, dir, name, csrc, debug)
+	return execute(t, dir, name, csrc, debug, interrupts)
 }
 
 // runDir builds the program in dir, a main package of one or several
@@ -384,12 +389,12 @@ func runDir(t *testing.T, dir string, debug bool) (string, string, int) {
 		t.Fatal(err)
 	}
 
-	return execute(t, t.TempDir(), filepath.Base(dir), csrc, debug, lower.Bindings(info, libs)...)
+	return execute(t, t.TempDir(), filepath.Base(dir), csrc, debug, 0, lower.Bindings(info, libs)...)
 }
 
 // execute compiles the C source as the program name in dir, with the
 // runtime and the C side of the packages that bind C, and runs it there.
-func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings ...lower.Binding) (string, string, int) {
+func execute(t *testing.T, dir, name string, csrc []byte, debug bool, interrupts int, bindings ...lower.Binding) (string, string, int) {
 	t.Helper()
 	bin, out, err := Build(dir, name, csrc, platform.Host(), debug, bindings...)
 	if err != nil {
@@ -397,23 +402,12 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool, bindings .
 	}
 
 	backendtest.Bounded(t, name, bin)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a program that hangs fails rather than stalling the suite
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
-	stdout, err := cmd.Output()
-	if exit, ok := err.(*exec.ExitError); ok {
-		return string(stdout), stderr.String(), exit.ExitCode()
-	}
-
+	stdout, stderr, code, err := backendtest.Run(bin, dir, interrupts)
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)
 	}
 
-	return string(stdout), stderr.String(), 0
+	return stdout, stderr, code
 }
 
 // libraries returns the packages an importer loaded, as Emit takes

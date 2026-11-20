@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package exec_test
+
+import ("expect"; "io"; "os/exec")
+
+func TestCommand() {
+	cmd := exec.Command("tool", "-v", "x")
+	expect.EqualText(ref cmd.Path, "tool")
+	expect.EqualSlice(ref cmd.Args, ref []string{"-v".Clone(), "x".Clone()})
+	expect.EqualText(ref cmd.Dir, "")
+	expect.True(cmd.Env.IsNone())
+	expect.True(cmd.Stdin == exec.Inherit && cmd.Stdout == exec.Inherit && cmd.Stderr == exec.Inherit)
+}
+
+func TestNotFound() {
+	e := expect.IsErr(exec.Command("snello-no-such-program").Run())
+	expect.True(e.Kind() == io.NotExist)
+	expect.Contains(ref e.Error(), "executable file not found in")
+}

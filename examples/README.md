@@ -38,6 +38,7 @@ The binary is written to the current directory, named after the file, or after t
 | state-machine/ | Enum states, consuming transitions, a connection closed where its state is dropped |
 | iterators/ | Closure capture modes, an iterator over `iter.Iterator` and its adapters |
 | cli-grep/ | Arguments, standard input and files, a borrow per line, exit codes; waits for `regexp`, so it has no `.out` yet |
+| subprocess/ | `os/exec`: a program that runs itself as a worker, collects a run's output whole, talks to a worker over its pipes while a task runs beside, reads its exit code, drops a worker it no longer needs, which kills it, and meets the error of a program that does not exist |
 | bst/ | A `mut` borrow walked down a chain of boxes, delete in place |
 | handles/ | `spawn` as an expression: a handle on a task, `Join` giving the result or the panic that ended the task, handles joined by another task |
 | group/ | `task.Group`: batches waited for together, a server stopped by the cancel another task's bug makes and `Wait` reporting the bug, and a task started again by a loop over `Join` with its limit |

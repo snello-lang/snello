@@ -100,8 +100,9 @@ sn_string sn_io_reason(int64_t code) {
 
 // sn_io_kindOf sorts an error number as io.Kind does: 1 for a missing
 // file, 2 for a permission refused, 3 for a file that exists, 4 for a
-// connection refused, 5 for one reset or broken, 6 for one timed out,
-// 0 for the rest.
+// connection refused, 5 for one reset, 6 for one timed out, 7 for a
+// pipe whose reader is gone, 8 for a call the task's cancel ended, 0
+// for the rest.
 int64_t sn_io_kindOf(int64_t code) {
     switch ((int)code) {
     case ENOENT:
@@ -115,10 +116,13 @@ int64_t sn_io_kindOf(int64_t code) {
         return 4;
     case ECONNRESET:
     case ECONNABORTED:
-    case EPIPE:
         return 5;
     case ETIMEDOUT:
         return 6;
+    case EPIPE:
+        return 7;
+    case ECANCELED:
+        return 8;
     }
 
     return 0;
@@ -883,7 +887,7 @@ int64_t sn_os_hostname(sn_string *out) {
 static struct {
     int64_t lock; // a sync.RwLock's handle
     sn_once once;
-    uint8_t *block;     // the variables the process started with, one after another
+    uint8_t *block; // the variables the process started with, one after another
     sn_string
         *entries; // KEY=VALUE each, lent from block or owning its bytes, and one of no bytes where a variable was unset
     int64_t len, cap;

@@ -12,11 +12,27 @@
 package backendtest
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
+)
+
+// How a program is run: the time one may take before it is taken to
+// hang, the pause between the interrupts sent to one, and what a
+// program a signal ended exits with, as a shell reports it, the base
+// and the signal's number.
+const (
+	runTimeout     = 20 * time.Second
+	interruptPause = 150 * time.Millisecond
+	signalExitBase = 128
 )
 
 // A Program is a Snello program and what running it must give: its
@@ -30,7 +46,10 @@ import (
 // ReleaseOnly says the debug build would only slow it, and only on a
 // machine with at least MinCPUs cores; DebugOnly says the release
 // build's optimizer would shape what the program shows, a frame of a
-// call a function ends in.
+// call a function ends in. Interrupts is how many interrupts the
+// program is sent once it has printed its first line, each after a
+// pause, with its standard input a pipe nothing writes; a program the
+// interrupt ends exits with 130 as a shell reports it.
 type Program struct {
 	Name        string
 	Src         string
@@ -42,6 +61,7 @@ type Program struct {
 	ReleaseOnly bool
 	DebugOnly   bool
 	MinCPUs     int
+	Interrupts  int
 }
 
 // lineless is a frame's line at the end of a trace's line, which a
@@ -125,7 +145,78 @@ func (p Program) Skip() string {
 		return "needs " + strconv.Itoa(p.MinCPUs) + " cores"
 	}
 
+	if p.Interrupts > 0 && runtime.GOOS == "windows" {
+		return "Windows has no interrupt to send a program"
+	}
+
 	return ""
+}
+
+// Run runs the binary bin in dir as a program's test runs it and
+// returns what it printed on each stream and its exit code, 128 and
+// the signal's number for a program a signal ended; an error is one
+// of running it at all. A program is sent interrupts after its first
+// line when any are asked, its standard input a pipe nothing writes.
+func Run(bin, dir string, interrupts int) (string, string, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout) // a program that hangs fails rather than stalling the suite
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
+	var err error
+	if interrupts == 0 {
+		cmd.Stdout = &stdout
+		err = cmd.Run()
+	} else {
+		err = runInterrupted(cmd, &stdout, interrupts)
+	}
+
+	if exit, ok := err.(*exec.ExitError); ok {
+		code := exit.ExitCode()
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			code = signalExitBase + int(status.Signal())
+		}
+
+		return stdout.String(), stderr.String(), code, nil
+	}
+
+	return stdout.String(), stderr.String(), 0, err
+}
+
+// runInterrupted runs cmd with its output read line by line, sends it
+// n interrupts once its first line is out, and waits for it.
+func runInterrupted(cmd *exec.Cmd, stdout *bytes.Buffer, n int) error {
+	in, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+
+	defer w.Close()
+	defer in.Close()
+	cmd.Stdin = in
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	r := bufio.NewReader(out)
+	line, err := r.ReadString('\n')
+	stdout.WriteString(line)
+	if err == nil {
+		for i := 0; i < n; i++ {
+			time.Sleep(interruptPause)
+			_ = cmd.Process.Signal(os.Interrupt)
+		}
+	}
+
+	rest, _ := bufio.NewReader(r).ReadString(0)
+	stdout.WriteString(rest)
+	return cmd.Wait()
 }
 
 const guard = `package main
@@ -146,9 +237,96 @@ const tasks = "package main\nimport (\"fmt\"; \"rc\"; \"sync\"; \"time\")\n" +
 func Programs(short bool) []Program {
 	programs := []Program{
 		{
+			// An interrupt the program did not ask for cancels it: the
+			// receive returns None, main returns, its drops run, and the
+			// program ends by the signal.
+			Name: "interrupted",
+			Src: "package main\nimport (\"fmt\"; \"task\"; \"time\")\nstruct Guard impl Drop { name string }\nfunc (g mut Guard) Drop() { fmt.Println(\"drop\", g.name) }\n" +
+				"func worker(out chan<- int) { for i := 0; i < 1000; i += 1 { time.Sleep(20 * time.Millisecond); out <- i } }\n" +
+				"func main() {\n\tg := Guard{name: \"main\".Clone()}\n\tch := make(chan int)\n\tspawn worker(ch.Clone())\n\tvar in <-chan int = ch\n\tfmt.Println(\"ready\")\n" +
+				"\tfor v := range in {\n\t\tif v > 1000 { fmt.Println(v) }\n\t}\n\tfmt.Println(\"stopping\", task.Cancelled())\n\t_ = g\n}\n",
+			Out:        "ready\nstopping true\ndrop main\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 1,
+		},
+		{
+			// Tasks in no scope that waited, and so were listed under the
+			// program's own scope, and have ended: the interrupt's cancel
+			// walks that list and must find none of them.
+			Name: "interrupted-ended",
+			Src: "package main\nimport (\"fmt\"; \"task\"; \"time\")\nfunc worker(in <-chan int, done chan<- ()) { <-in; done <- () }\n" +
+				"func main() {\n\tin := make(chan int)\n\tdone := make(chan ())\n\tfor i := 0; i < 64; i += 1 { spawn worker(in.Clone(), done.Clone()) }\n" +
+				"\tfor i := 0; i < 64; i += 1 { in <- i }\n\tfor i := 0; i < 64; i += 1 { <-done }\n\tfmt.Println(\"ready\")\n" +
+				"\ttime.Sleep(10 * time.Second)\n\tfmt.Println(\"stopping\", task.Cancelled())\n}\n",
+			Out:        "ready\nstopping true\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 1,
+		},
+		{
+			// A task in no scope that entered and left a deadline's scope
+			// is in none again: the handles it spawns after, joined and
+			// added to a group, and the drops of what it owns, find it so.
+			Name: "within-then-handles",
+			Src: "package main\nimport (\"fmt\"; \"task\"; \"time\")\nfunc one() int { return 1 }\nfunc member() {}\n" +
+				"func main() {\n\tfmt.Println(\"within\", task.Within(time.Second, func() int { return 1 }).IsSome())\n" +
+				"\tn := 0\n\tfor i := 0; i < 100; i += 1 { n += (spawn one()).Join().Expect(\"join\") }\n" +
+				"\tg := task.NewGroup()\n\tfor i := 0; i < 100; i += 1 { g.Add(spawn member()) }\n\tg.Wait().Expect(\"group\")\n" +
+				"\tfmt.Println(\"ready\", n)\n\tspawn func() { time.Sleep(10 * time.Second) }()\n\tch := make(chan int)\n" +
+				"\tv := <-ch\n\tfmt.Println(\"stopping\", task.Cancelled(), v.IsNone())\n}\n",
+			Out:        "within true\nready 100\nstopping true true\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 1,
+		},
+		{
+			// A main that computes is reached by no cancel: the second
+			// interrupt ends the program at once. The loop counts on an
+			// atomic, which no compiler may drop as it may a loop it can
+			// prove endless and without effect.
+			Name:       "interrupted-computing",
+			Src:        "package main\nimport (\"fmt\"; \"sync\")\nfunc main() {\n\tfmt.Println(\"ready\")\n\tc := sync.NewCounter(0)\n\tfor c.Load() >= 0 {\n\t\tc.Add(1)\n\t}\n\tfmt.Println(c.Load())\n}\n",
+			Out:        "ready\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 2,
+		},
+		{
+			// A read of the standard input blocks the worker and is reached
+			// by no cancel either: the second interrupt ends the program.
+			Name:       "interrupted-reading",
+			Src:        "package main\nimport (\"fmt\"; \"os\")\nfunc main() {\n\tfmt.Println(\"ready\")\n\tbuf := make([]byte, 16)\n\tn := os.Stdin().Read(mut buf).Expect(\"read\")\n\tfmt.Println(\"read\", n)\n}\n",
+			Out:        "ready\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 2,
+		},
+		{
+			// Tasks that compute, joined by main, which a cancel does not
+			// end: the second interrupt ends the program.
+			Name: "interrupted-joining",
+			Src: "package main\nimport (\"fmt\"; \"sync\"; \"task\")\nfunc spin() int { c := sync.NewCounter(0)\n\tfor c.Load() >= 0 { c.Add(1) }\n\treturn c.Load()\n}\n" +
+				"func main() {\n\ths := []task.Handle<int>{}\n\tfor i := 0; i < 8; i += 1 { hs.Push(spawn spin()) }\n\tfmt.Println(\"ready\")\n\tfor len(hs) > 0 { fmt.Println(hs.Pop().Expect(\"a handle\").Join()) }\n}\n",
+			Out:        "ready\n",
+			Code:       signalExitBase + int(syscall.SIGINT),
+			Interrupts: 2,
+		},
+		{
+			// A program that asked for the interrupt gets it on its channel
+			// and is cancelled by nothing.
+			Name:       "notified",
+			Src:        "package main\nimport (\"fmt\"; \"os/signal\"; \"task\")\nfunc main() {\n\tstop := signal.Notify(signal.Interrupt)\n\tfmt.Println(\"ready\")\n\ts := (<-stop).Expect(\"a signal\")\n\tfmt.Println(\"got\", s, task.Cancelled())\n}\n",
+			Out:        "ready\ngot interrupt false\n",
+			Interrupts: 1,
+		},
+		{
 			Name: "dead",
 			Src:  "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"before\")\n\treturn\n\tfmt.Println(\"after\")\n}\n",
 			Out:  "before\n",
+		},
+		{
+			// A function value that returns nothing, called where its
+			// result is kept: the unit, which a generic caller wraps.
+			Name: "unit-function-value",
+			Src: "package main\nimport \"fmt\"\nfunc apply<T>(f func() T) T? { return Some(f()) }\n" +
+				"func main() {\n\tn := 0\n\tapply(func() { n += 1; fmt.Println(\"ran\") })\n\tv := apply(func() int { return n + 1 })\n\tfmt.Println(v)\n}\n",
+			Out: "ran\nSome(2)\n",
 		},
 		{
 			Name: "exit", // os.Exit ends the program with its code after flushing what was printed

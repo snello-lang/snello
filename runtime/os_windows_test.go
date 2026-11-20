@@ -25,14 +25,14 @@ import (
 // sends it; and what the probe reports as it goes, to a file, since the
 // console is its standard streams.
 const (
-	consoleShown   = "héllo €"
-	consoleLine    = "typed ü ∑"
-	consoleTyped   = consoleLine + "\r" + "second\r" + "\x1a\r"
-	consoleCtrlC   = "\x03"
-	consoleWritten = "written\n"
-	consoleEnd     = "end\n"
-	consoleEnded   = "ended\n"
-	consoleRead    = consoleWritten + consoleLine + "\r\n" + "second\r\n" + consoleEnd
+	consoleShown     = "héllo €"
+	consoleLine      = "typed ü ∑"
+	consoleTyped     = consoleLine + "\r" + "second\r" + "\x1a\r"
+	consoleCtrlC     = "\x03"
+	consoleWritten   = "written\n"
+	consoleEnd       = "end\n"
+	consoleCancelled = "cancelled\n"
+	consoleRead      = consoleWritten + consoleLine + "\r\n" + "second\r\n" + consoleEnd
 
 	// consoleSettle is how long the probe is given to be in its read
 	// once it said it would be, and pollEvery how often its report is
@@ -66,6 +66,7 @@ const (
 // return first, as the end of the input, for the probe to run on and
 // say so.
 const consoleProbe = `#include "internal.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
@@ -117,9 +118,9 @@ int main(int argc, char **argv) {
     say("end\n");
     sn_slice_u8 s = { buf, sizeof buf, sizeof buf };
     int64_t n = 0;
-    (void)sn_os_read(0, &s, &n);
-    say("ended\n");
-    return 3;
+    int64_t code = sn_os_read(0, &s, &n);
+    say(code == ECANCELED ? "cancelled\n" : "ended\n");
+    return sn_finish(); // ends the program by the interrupt that cancelled it, as a program's end does
 }
 `
 
@@ -151,9 +152,10 @@ type pseudoConsole struct {
 // TestConsole runs a probe on a pseudo console, as a terminal runs a
 // program: what the probe writes shows on the console as its text,
 // accents and all; the lines typed reach it as UTF-8, to the line that
-// starts with Ctrl-Z; and Ctrl-C, typed as a terminal sends it, ends it
-// as Windows' default handler ends a program, the read it was in never
-// taken for the end of the input.
+// starts with Ctrl-Z; and Ctrl-C, typed as a terminal sends it, cancels
+// it: the read it was in fails as a cancelled call, never taken for the
+// end of the input, and the program ends by the interrupt with the code
+// Windows gives a program Ctrl-C ended.
 func TestConsole(t *testing.T) {
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "console"), consoleProbe)
 	report := filepath.Join(filepath.Dir(bin), "report")
@@ -204,8 +206,8 @@ func TestConsole(t *testing.T) {
 		t.Fatalf("Ctrl-C did not end the probe: %v", err)
 	}
 
-	if got, _ := os.ReadFile(report); strings.HasSuffix(string(got), consoleEnded) {
-		t.Error("the read Ctrl-C interrupted returned, as the end of the input")
+	if got, _ := os.ReadFile(report); !strings.HasSuffix(string(got), consoleCancelled) {
+		t.Errorf("the read Ctrl-C interrupted ended the report with %q, wanted the cancelled call", got)
 	}
 
 	var code uint32

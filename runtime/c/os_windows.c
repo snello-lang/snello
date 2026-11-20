@@ -258,7 +258,7 @@ static wchar_t *verbatim(const wchar_t *w) {
 // the runtime's. A string holding a zero byte, or bytes that are not
 // UTF-8, cannot be given to the system and is refused as an invalid
 // argument.
-static wchar_t *wide(sn_string s) {
+wchar_t *sn_os_wide(sn_string s) {
     sn_check_string(s);
     if (memchr(s.ptr, 0, (size_t)s.len) != NULL || s.len > INT32_MAX) {
         errno = EINVAL;
@@ -285,7 +285,7 @@ static wchar_t *wide(sn_string s) {
 // one in verbatim's form, so that a path longer than the system's calls
 // take on their own is taken as on the other systems.
 static wchar_t *wpath(sn_string s) {
-    wchar_t *w = wide(s);
+    wchar_t *w = sn_os_wide(s);
     if (w == NULL || wcslen(w) < long_path) {
         return w;
     }
@@ -505,6 +505,7 @@ static int console_read(int fd, void *p, size_t len) {
         }
 
         DWORD got = 0;
+        uint32_t handled = sn_signals_handled(); // before the read: an interrupt during it moves the count past this
         SetLastError(ERROR_SUCCESS);
         if (!ReadConsoleW((HANDLE)_get_osfhandle(fd), text + units, (DWORD)(console_chunk - units), &got, NULL)) {
             last_errno();
@@ -514,12 +515,19 @@ static int console_read(int fd, void *p, size_t len) {
 
         if (got == 0 && GetLastError() == ERROR_OPERATION_ABORTED) {
             // Ctrl-C or Ctrl-Break interrupted the read, which succeeds
-            // with nothing read: not the end of the input, so the read is
-            // made again. When the console's handler ends the program, on
-            // its own thread, nothing runs on as if the input had ended;
-            // when it does not, the read waits for input as before.
+            // with nothing read: not the end of the input. When the
+            // interrupt cancelled the program, the read fails as a
+            // cancelled call does; else it is made again, and waits for
+            // input as before.
             if (units > 0) { // the pair's first half the read was to complete waits again
                 c->high = text[0];
+            }
+
+            sn_signals_wait_handler(handled); // the handler runs on a thread of its own, after the read returned
+            if (sn_cancel_state(sn_self()) != SN_SCOPE_LIVE) {
+                errno = ECANCELED;
+                sn_mutex_unlock(&c->mu);
+                return -1;
             }
 
             continue;
@@ -1272,8 +1280,8 @@ sn_string sn_os_TempDir(void) {
 }
 
 void sn_os_env_system(sn_string key, const sn_string *value) {
-    wchar_t *k = wide(key);
-    wchar_t *v = value == NULL ? NULL : wide(*value);
+    wchar_t *k = sn_os_wide(key);
+    wchar_t *v = value == NULL ? NULL : sn_os_wide(*value);
     if (k != NULL && (value == NULL || v != NULL)) {
         (void)SetEnvironmentVariableW(k, v);
     }

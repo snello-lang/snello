@@ -38,6 +38,8 @@ const kindCodeExists = 3
 const kindCodeRefused = 4
 const kindCodeReset = 5
 const kindCodeTimedOut = 6
+const kindCodeBrokenPipe = 7
+const kindCodeCancelled = 8
 
 // An Error is what an operation on a file, a connection or another
 // source or sink of bytes reports when it fails: the operation, the
@@ -111,6 +113,10 @@ enum Kind impl Copy, Clone, Eq {
 	// or before it began to; a deadline of the task's that passed is
 	// TimedOut.
 	Cancelled
+
+	// BrokenPipe: the reader of the pipe or the connection written to
+	// is gone, a child that exited or a peer that closed its side.
+	BrokenPipe
 }
 
 // A Reader is a source of bytes: a file, a connection, a string read
@@ -271,6 +277,8 @@ func Errno(op string, path ref string, code int) Error {
 		k == kindCodeRefused => Refused,
 		k == kindCodeReset => Reset,
 		k == kindCodeTimedOut => TimedOut,
+		k == kindCodeBrokenPipe => BrokenPipe,
+		k == kindCodeCancelled => Cancelled,
 		_ => Other,
 	}
 
@@ -411,6 +419,6 @@ func reserve(b mut []byte, n int)
 func reason(code int) string
 
 // kindOf sorts an error number into one of the kind codes,
-// kindCodeNotExist to kindCodeTimedOut, or 0 for a number no Kind
+// kindCodeNotExist to kindCodeCancelled, or 0 for a number no Kind
 // names. The runtime provides it.
 func kindOf(code int) int

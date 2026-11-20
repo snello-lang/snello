@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package signal_test
+
+import ("expect"; "os/signal")
+
+func TestString() {
+	expect.EqualText(ref signal.Interrupt.String(), "interrupt")
+	expect.EqualText(ref signal.Terminate.String(), "terminated")
+	expect.True(signal.Interrupt == signal.Interrupt && signal.Interrupt != signal.Terminate)
+}
+
+func TestNotifyQuiet() {
+	stop := signal.Notify(signal.Interrupt, signal.Terminate)
+	select {
+	case s := <-stop:
+		expect.Fail("a signal arrived that nothing sent: ".Clone() + s.Expect("a signal").String())
+	default:
+	}
+}

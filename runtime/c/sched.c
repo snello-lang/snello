@@ -41,7 +41,9 @@
 #include <string.h>
 #include <time.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <winternl.h>
+#else
 #include <sched.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -738,6 +740,12 @@ typedef struct sn_task task;
 // queue, so that two tasks handing values back and forth stay on one
 // thread, one switch apart, where a wake through the queue would wake
 // another thread to run the task there.
+// SN_OWN_LINE puts what it marks on a cache line of its own: a worker's
+// record, so that the words its thread writes as tasks move share no
+// line with a neighbour's, whatever address the allocation lands on,
+// and the counts below.
+#define SN_OWN_LINE __attribute__((aligned(SN_CACHE_LINE)))
+
 typedef struct worker {
     void *sched_sp;
     void *sched_stack;
@@ -783,7 +791,7 @@ typedef struct worker {
     task *ended[ended_kept]; // its tasks that ended, kept unfreed, the oldest freed first
     int64_t nended;
 #endif
-} worker;
+} SN_OWN_LINE worker;
 
 static worker *workers;      // room for workers_most of them, so that no worker's address moves
 static int workers_most;     // what the monitor may grow the workers to
@@ -856,7 +864,6 @@ __attribute__((used)) const sn_debugger_table sn_debugger = {
 // the line of another, as Go's scheduler pads its own, and no variable
 // of another file's, read on every timer or every switch, lands beside
 // them by the order the files are linked in.
-#define SN_OWN_LINE __attribute__((aligned(SN_CACHE_LINE)))
 static struct {
     SN_OWN_LINE _Atomic int64_t moving; // tasks the monitor is moving out of a slot, until each is on the inject queue
     SN_OWN_LINE _Atomic int64_t
@@ -1279,18 +1286,23 @@ sn_scope_link *sn_task_scope(sn_task *t) { return &t->scope; }
 // made a pipeline of buffered channels a quarter slower.
 int sn_cancel_state(sn_task *t) {
     sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_relaxed);
-    return s == NULL ? SN_SCOPE_LIVE : atomic_load_explicit(&s->state, memory_order_relaxed);
+    if (s == NULL) {
+        s = &sn_root; // a task in no scope is the program's, which an interrupt cancels
+    }
+
+    return atomic_load_explicit(&s->state, memory_order_relaxed);
 }
 
 int sn_cancel_wait_state(sn_task *t) {
     sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_acquire); // an Add's write of it, and of enlisted
-    if (s == NULL) {
-        return SN_SCOPE_LIVE;
-    }
-
     if (!t->scope.enlisted) {
         sn_scope_enlist_self(t, s); // the lock taken and let go, so that the mark of a cancel that walked the list
-                                    // without the task is read below
+                                    // without the task is read below; the root's for a task in no scope
+        s = atomic_load_explicit(&t->scope.scope, memory_order_acquire); // a group may have taken it meanwhile
+    }
+
+    if (s == NULL) {
+        s = &sn_root;
     }
 
     return atomic_load_explicit(&s->state, memory_order_relaxed);
@@ -2096,14 +2108,48 @@ static bool keeper_sleep(int64_t when, int64_t now) {
 
     bool sockets = false;
     for (ULONG i = 0; i < n; i++) {
-        if (got[i].lpCompletionKey == SN_KEY_POLL) {
-            PostQueuedCompletionStatus(port, got[i].dwNumberOfBytesTransferred, got[i].lpCompletionKey,
-                                       got[i].lpOverlapped);
+        if (got[i].lpCompletionKey != SN_KEY_WAKE && got[i].lpCompletionKey != SN_KEY_DEADLINE) {       // a poll's, a
+            PostQueuedCompletionStatus(port, got[i].dwNumberOfBytesTransferred, got[i].lpCompletionKey, // child's or
+                                       got[i].lpOverlapped);                                            // a pipe's
             sockets = true;
         }
     }
 
     return sockets;
+}
+
+static inline void sched_ready(void);
+
+void *sn_wait_packet_make(void *target, uintptr_t key, void *context) {
+    sched_ready();
+    HANDLE packet = NULL;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    wait_packet_create create = (wait_packet_create)(void *)GetProcAddress(ntdll, "NtCreateWaitCompletionPacket");
+    if (create == NULL) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return NULL;
+    }
+
+    LONG st = create(&packet, GENERIC_ALL, NULL);
+    if (st >= 0) {
+        st = associate(packet, sn_net_port(), target, (void *)key, context, 0, 0, NULL);
+    }
+
+    if (st < 0) {
+        if (packet != NULL) {
+            CloseHandle(packet);
+        }
+
+        SetLastError(RtlNtStatusToDosError(st)); // the calls set no last error of their own: the caller reads one
+        return NULL;
+    }
+
+    return packet;
+}
+
+void sn_wait_packet_free(void *packet) {
+    cancel(packet, TRUE);
+    CloseHandle(packet);
 }
 
 static void keeper_rouse(void) { PostQueuedCompletionStatus(sn_net_port(), 0, SN_KEY_WAKE, NULL); }
@@ -2630,10 +2676,12 @@ static void start(void) {
     if (!started) {
         int n = (int)sn_cores();
         workers_most = n * workers_per_core;
-        workers = calloc((size_t)workers_most, sizeof *workers);
+        workers = sn_aligned_alloc(SN_CACHE_LINE, (size_t)workers_most * sizeof *workers); // each on lines of its own
         if (workers == NULL) {
             sn_panic(SN_STR("out of memory", 13));
         }
+
+        memset(workers, 0, (size_t)workers_most * sizeof *workers);
 
         keeper_start();
         sn_timers_start(n, workers_most);
@@ -2762,9 +2810,9 @@ void sn_sched_owe(int64_t when) {
 static void task_entry(void) {
     task *t = my_task();
     t->run(t->arg);
-    if (atomic_load_explicit(&t->scope.scope, memory_order_relaxed) != NULL) { // the task's own word, which an Add
-                                                                               // wrote under a lock it took since
-        sn_scope_end(t); // before DONE: a cancel that finds it in its scope wakes a task that has not ended
+    if (atomic_load_explicit(&t->scope.scope, memory_order_relaxed) != NULL || // the task's own word, which an Add
+        t->scope.enlisted) { // wrote under a lock it took since; or in the root's list since a wait, in no scope
+        sn_scope_end(t);     // before DONE: a cancel that finds it in its scope wakes a task that has not ended
     }
     atomic_store(&t->state, DONE);
     sn_switch(&t->sp, my_worker()->sched_sp);

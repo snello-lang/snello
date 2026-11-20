@@ -151,7 +151,10 @@ void *sn_deref(void *p) {
     return p;
 }
 
-int sn_finish(void) {
+// check_at_exit is the debug build's end of the program: what a task
+// still running leaves unchecked, and else the blocks not released,
+// reported; the program's exit code.
+static int check_at_exit(void) {
     sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
     for (int64_t i = 0; i < sn_os_Args.len; i++) {     // the program may have stored strings of its own in it
         sn_string_drop(&((sn_string *)sn_os_Args.ptr)[i]);
@@ -171,7 +174,8 @@ int sn_finish(void) {
         return 0; // what a running task owns is not a leak
     }
 
-    sn_timers_stop(); // a pending After's channel is the timer's, which ends here
+    sn_timers_stop();  // a pending After's channel is the timer's, which ends here
+    sn_signals_stop(); // and a Notify's the runtime's, which lets its end go here
 
     if (live_blocks == 0) {
         return 0;
@@ -202,6 +206,12 @@ int sn_finish(void) {
     }
 
     return 3;
+}
+
+int sn_finish(void) {
+    int code = check_at_exit();
+    sn_signals_finish(); // a program a signal cancelled ends by it, its drops run and its blocks checked
+    return code;
 }
 
 #endif
