@@ -12,6 +12,8 @@
 // exported function of expect and the packages read back, kept on the
 // running task so that two parallel tests never share it.
 
+#define _POSIX_C_SOURCE 200809L // glibc's F_DUPFD_CLOEXEC under -std=c11, for the example's saved output
+
 #include "internal.h"
 
 #include <stdatomic.h>
