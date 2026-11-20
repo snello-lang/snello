@@ -424,18 +424,18 @@ int sn_trace_line(char *line, size_t room, const char *name, const char *file, i
 const uintptr_t *sn_task_trace(int *n); // sched.c: the running task's kept frames
 
 // sn_debugger_table is what a debug build publishes, as sn_debugger,
-// for a debugger's script to list the program's tasks with (snello.py's
-// tasks command, and snello.js's), so that the script holds no layout
-// of the runtime's:
-// the address of the list of every task, newest first, which the
-// runtime pushes each task onto once and never pops, since a debug
-// build never frees a task's record; where a task's record holds its
-// link on that list, its saved context, its state and the function it
-// runs; where a saved context holds the frame pointer and the return
-// address, from which its frames are walked, and how far above it the
-// switch's caller resumes, the stack pointer a debugger unwinds the
-// caller's frame from; the most a task's frames
-// span; and the values of the states. The order is the script's.
+// for a debugger's script to list the program's tasks with
+// (snello.py's tasks command, and snello.js's), so that the script
+// holds no layout of the runtime's: the address of the list of every
+// task whose record is still held, newest first, which the runtime
+// links each task onto as it is made and unlinks it from as its
+// record is freed; where a task's record holds its link on that list,
+// its saved context, its state and the function it runs; where a
+// saved context holds the frame pointer and the return address, from
+// which its frames are walked, and how far above it the switch's
+// caller resumes, the stack pointer a debugger unwinds the caller's
+// frame from; the most a task's frames span; and the values of the
+// states. The order is the script's.
 typedef struct {
     const void *tasks;
     int32_t next, sp, state, run, saved_fp, saved_pc, resumed_sp, stack_room;

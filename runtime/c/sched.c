@@ -714,7 +714,8 @@ struct sn_task {
     _Alignas(SN_MAX_ALIGN) uint8_t args[few_args]; // room for the arguments, aligned for any program value: read once,
                                                    // as the task starts, so last
 #ifdef SN_DEBUG
-    struct sn_task *debug_next; // the task spawned before it, on the list a debugger's script walks
+    struct sn_task *debug_next; // the next older task held, on the list a debugger's script walks
+    struct sn_task *debug_prev; // the next newer task held, for the unlink as its record is freed
 #endif
 };
 
@@ -825,17 +826,42 @@ static __attribute__((noinline)) task *my_task(void) {
 static task main_task; // the main thread's own stack and context
 
 #ifdef SN_DEBUG
-// debug_tasks is every task of a debug build, newest first, for a
-// debugger's script: each is pushed once, as it is made, and never
-// popped, since a debug build never frees a task's record.
+// debug_tasks is every task of a debug build whose record is still
+// held, newest first, for a debugger's script: a task is linked once,
+// as it is made, and unlinked as its record is freed, so that the
+// script reads no freed memory, nor a record the allocator gave to a
+// later task, which would link it twice and close the list in a cycle.
+// debug_mu orders the links; the debugger reads the list while the
+// program is stopped.
 static task *_Atomic debug_tasks;
+static sn_qlock debug_mu; // free as zeroed
 
 static void debug_list(task *t) {
+    sn_qlock_take(&debug_mu);
     task *head = atomic_load_explicit(&debug_tasks, memory_order_relaxed);
-    do {
-        t->debug_next = head;
-    } while (
-        !atomic_compare_exchange_weak_explicit(&debug_tasks, &head, t, memory_order_release, memory_order_relaxed));
+    t->debug_next = head;
+    t->debug_prev = NULL;
+    if (head != NULL) {
+        head->debug_prev = t;
+    }
+
+    atomic_store_explicit(&debug_tasks, t, memory_order_release);
+    sn_qlock_give(&debug_mu);
+}
+
+static void debug_unlist(task *t) {
+    sn_qlock_take(&debug_mu);
+    if (t->debug_prev != NULL) {
+        t->debug_prev->debug_next = t->debug_next;
+    } else {
+        atomic_store_explicit(&debug_tasks, t->debug_next, memory_order_release);
+    }
+
+    if (t->debug_next != NULL) {
+        t->debug_next->debug_prev = t->debug_prev;
+    }
+
+    sn_qlock_give(&debug_mu);
 }
 
 // The table of sn_debugger_table, kept by the linker though nothing of
@@ -1051,7 +1077,7 @@ static void unmap_guarded(void *s) {
 #endif
 }
 
-#ifndef SN_DEBUG // a debug build keeps ended records unfreed and reuses none
+#ifndef SN_DEBUG // a debug build keeps a worker's last ended_kept ended records, then frees them, and reuses none
 // dead_keeps reports whether the pool of class c has room for a record
 // with its stack: the guarded ones are bounded as their stacks are.
 static bool dead_keeps(int c) { return c != guarded || dead_pooled[c] < guarded_pooled; }
@@ -1877,8 +1903,13 @@ static void settle(worker *w) {
             stack_free(w, t->stack, t->stack_class);
         }
 
-        free(w->ended[w->nended % ended_kept]); // the oldest kept, or none yet
-        w->ended[w->nended % ended_kept] = t;   // still marked done, for a wake that comes late
+        task *oldest = w->ended[w->nended % ended_kept]; // the oldest kept, or none yet
+        if (oldest != NULL) {
+            debug_unlist(oldest);
+            free(oldest);
+        }
+
+        w->ended[w->nended % ended_kept] = t; // still marked done, for a wake that comes late
         w->nended++;
 #else
         dead_keep(w, t); // the record and its stack, for a spawn to come
@@ -2834,7 +2865,8 @@ static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t b
     // the runtime's heap, uncounted, since the program did not ask for
     // it, whose caches suit a block freed by another thread than the one
     // that made it, as a task's record is: glibc's malloc made a spawn on
-    // Linux two fifths dearer. A debug build keeps ended records unfreed.
+    // Linux two fifths dearer. A debug build allocates each anew, and
+    // frees a record once it is older than its worker's last ended_kept.
     int c = stack_class(bound);
     void *heap = NULL;     // the arguments' room when the record's is too small: taken first, so that a panic for
     if (size > few_args) { // want of it leaves no record taken

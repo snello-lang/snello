@@ -1417,6 +1417,65 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestDebuggerListHeld holds a debug build's list of tasks to the
+// records still held: once many more tasks have ended than the workers
+// keep unfreed, the list a debugger's script walks holds at most the
+// records the workers keep and the main task's, and each one listed is
+// a task of the probe's that ended, since a record is unlinked before
+// it is freed, and a debugger reads no freed record. The list is read
+// with every task ended and every worker idle, so nothing changes it.
+func TestDebuggerListHeld(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+enum { kept_most = 1024, spawned_per_kept = 4 }; // a worker keeps its last ended tasks unfreed: four times as many end
+static void ends(void *arg) { (void)arg; }
+static uintptr_t word(uintptr_t at) { uintptr_t w; memcpy(&w, (const void *)at, sizeof w); return w; }
+// record_held reports whether the record at task is one a task of the probe's left as it ended
+static bool record_held(const sn_debugger_table *d, uintptr_t task) {
+    int state;
+    memcpy(&state, (const void *)(task + (uintptr_t)d->state), sizeof state);
+    return word(task + (uintptr_t)d->run) == (uintptr_t)ends && (state & ~d->woken) == d->done;
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    int64_t spawned = 0;
+    do { // the first spawn starts the workers, whose count is read as they may grow
+        sn_spawn(ends, NULL, 0, SN_UNBOUNDED);
+        spawned++;
+    } while (spawned < spawned_per_kept * kept_most * sn_sched_workers());
+
+    while (sn_tasks_running() > 0) {
+        sn_sleep(1000000);
+    }
+
+    atomic_thread_fence(memory_order_acquire); // the counts read, the list's last changes are seen
+    const sn_debugger_table *d = &sn_debugger;
+    int64_t listed = 0, most = kept_most * sn_sched_workers() + 1; // and the main task's
+    for (uintptr_t task = word((uintptr_t)d->tasks); task != 0 && listed <= most; task = word(task + (uintptr_t)d->next)) {
+        listed++;
+        if (task != (uintptr_t)sn_self() && !record_held(d, task)) {
+            printf("record %lld is no ended task's\n", (long long)listed);
+            return 1;
+        }
+    }
+
+    if (listed <= most) {
+        printf("held\n");
+    } else {
+        printf("more than %lld listed\n", (long long)most);
+    }
+
+    return sn_finish();
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := runProbe(bin)
+	if err != nil || string(out) != "held\n" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 // TestSlotTakenOnce has a task wake its partner into its worker's slot
 // many times over, sometimes parking at once, so that the worker takes
 // the slot itself, and sometimes computing a few microseconds first, so
