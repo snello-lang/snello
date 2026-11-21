@@ -22,7 +22,7 @@ const (
 	// for, raised in the pull request that prepares each release, and
 	// held equal to the release's tag by the release's build: the
 	// version a module's snello line is checked against.
-	Current = "0.1.0"
+	Current = "0.1.0-alpha.1"
 
 	// First is the first release, which a module file without a
 	// snello line is read as written for, so that a new release never
