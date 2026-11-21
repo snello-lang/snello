@@ -97,6 +97,7 @@ const (
 	// and the C runtime Visual Studio's Build Tools install, which clang
 	// finds by itself; buildToolsCheck names its check.
 	buildTools      = "Visual Studio's Build Tools with the C++ workload"
+	llvmPathNote    = `, then add C:\Program Files\LLVM\bin to your Path and open a new window`
 	buildToolsCheck = "Visual Studio's Build Tools"
 
 	// The keys of os-release a system is named by, and what may quote a
@@ -166,7 +167,7 @@ type MissingError struct {
 // example, clang not found: install it with xcode-select --install, or
 // set CLANG.
 func (e *MissingError) Error() string {
-	return e.what() + reasonStart + installFix(e.Env)
+	return e.what() + reasonStart + InstallFix(e.Env)
 }
 
 // Clang returns the clang a build runs: the one CLANG names, else clang
@@ -222,11 +223,30 @@ func Unusable(name, env string, output []byte, err error) error {
 	return &MissingError{Name: name, Env: env, Reason: failsToRun + " (" + said(output, err) + ")"}
 }
 
+// pathNote returns what installing clang leaves undone on Windows,
+// where LLVM's installer puts its directory on no Path, and nothing
+// elsewhere.
+func pathNote() string {
+	if runtime.GOOS == windows {
+		return llvmPathNote
+	}
+
+	return ""
+}
+
 // Install returns the command that installs clang on the system the
 // compiler runs on, or what to do where it knows none. It reads
 // os-release on Linux.
 func Install() string {
 	return installFor(system())
+}
+
+// InstallFix returns the fix for a compiler a build cannot use: the
+// command that installs clang here, which brings a C compiler, on
+// Windows with the directory to put on the Path, or env, which names
+// another compiler.
+func InstallFix(env string) string {
+	return "install it with " + Install() + pathNote() + ", or set " + env
 }
 
 // GitInstall returns the command that installs git on the system the
@@ -294,7 +314,7 @@ func checkClang(dir string) Check {
 	clang := Clang()
 	version, err := usable(clang, ClangEnv)
 	if err != nil {
-		c.Detail, c.Fix = failure(err), installFix(ClangEnv)
+		c.Detail, c.Fix = failure(err), InstallFix(ClangEnv)
 		return c
 	}
 
@@ -390,7 +410,7 @@ func checkCC(dir string) Check {
 	cc := CC()
 	version, err := usable(cc, CCEnv)
 	if err != nil {
-		c.Detail, c.Fix = failure(err), installFix(CCEnv)
+		c.Detail, c.Fix = failure(err), InstallFix(CCEnv)
 		return c
 	}
 
@@ -402,7 +422,7 @@ func checkCC(dir string) Check {
 
 	if out, err := exec.Command(cc, compileFlag, outputFlag, filepath.Join(dir, cObject), src).CombinedOutput(); err != nil {
 		c.Detail = version + " cannot compile C" + reasonStart + said(out, err)
-		c.Fix = installFix(CCEnv)
+		c.Fix = InstallFix(CCEnv)
 		return c
 	}
 
@@ -559,13 +579,6 @@ func gitInstallFor(system string) string {
 	}
 
 	return "your system's package manager"
-}
-
-// installFix returns the fix for a compiler a build cannot use: the
-// command that installs clang here, which brings a C compiler, or env,
-// which names another compiler.
-func installFix(env string) string {
-	return "install it with " + Install() + ", or set " + env
 }
 
 // distribution returns the distribution an os-release file, read from

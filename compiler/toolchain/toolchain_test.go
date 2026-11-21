@@ -78,7 +78,7 @@ func TestInstallFor(t *testing.T) {
 func TestRequire(t *testing.T) {
 	err := Require(filepath.Join(t.TempDir(), "nosuch"), ClangEnv)
 	var missing *MissingError
-	if !errors.As(err, &missing) || !strings.HasSuffix(err.Error(), " not found: install it with "+Install()+", or set CLANG") {
+	if !errors.As(err, &missing) || !strings.HasSuffix(err.Error(), " not found: "+InstallFix(ClangEnv)) {
 		t.Errorf("a compiler that does not exist: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestChecksMissing(t *testing.T) {
 		}
 	}
 
-	if c := checks[0]; c.Detail != "clang not found" || c.Fix != "install it with "+Install()+", or set CLANG" {
+	if c := checks[0]; c.Detail != "clang not found" || c.Fix != InstallFix(ClangEnv) {
 		t.Errorf("clang: %+v", c)
 	}
 
@@ -202,7 +202,7 @@ func TestChecksUnusable(t *testing.T) {
 	t.Setenv(CCEnv, "sh")
 	broken := script(t, "echo 'xcode-select: note: No developer tools were found' >&2; exit 1")
 	t.Setenv(ClangEnv, broken)
-	if c := Checks(broken)[0]; c.OK || !strings.Contains(c.Detail, "cannot run (xcode-select: note: No developer tools were found)") || c.Fix != "install it with "+Install()+", or set CLANG" {
+	if c := Checks(broken)[0]; c.OK || !strings.Contains(c.Detail, "cannot run (xcode-select: note: No developer tools were found)") || c.Fix != InstallFix(ClangEnv) {
 		t.Errorf("a clang that does not run: %+v", c)
 	}
 
@@ -282,7 +282,7 @@ func TestChecksNoTempDir(t *testing.T) {
 // its name, or by the variable that names it when one does.
 func TestMissingError(t *testing.T) {
 	t.Setenv(ClangEnv, "")
-	if got := (&MissingError{Name: "clang", Env: ClangEnv}).Error(); got != "clang not found: install it with "+Install()+", or set CLANG" {
+	if got := (&MissingError{Name: "clang", Env: ClangEnv}).Error(); got != "clang not found: "+InstallFix(ClangEnv) {
 		t.Errorf("unset: %q", got)
 	}
 

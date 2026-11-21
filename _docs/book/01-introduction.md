@@ -2,6 +2,53 @@
 
 Snello is a language for programs that must be fast, must not leak, and must be read by the next person without a glossary. It is a compiled language: `snello build` turns a program into a native executable with a small runtime inside it and nothing else. There is no garbage collector. The compiler decides where every value dies, frees it there, and refuses the programs in which that decision would be unsafe. It does this without asking you to write down how long anything lives.
 
+## A taste
+
+```go
+package main
+
+import "fmt"
+
+enum Shape {
+    Circle(radius f64)
+    Rect(w f64, h f64)
+}
+
+struct Canvas {
+    name   string
+    shapes []Shape
+}
+
+func (c mut Canvas) Add(s Shape) {
+    c.shapes.Push(s)
+}
+
+func area(s Shape) f64 {
+    return match s {
+        Circle(radius) => 3.14 * radius * radius,
+        Rect(w, h)     => w * h,
+    }
+}
+
+func main() {
+    canvas := Canvas{name: "sketch", shapes: []Shape{Circle(1.0)}}
+    canvas.Add(Rect(2.0, 3.0))
+    total := 0.0
+    for _, s := range canvas.shapes {    // the loop takes the shapes: they move out of the canvas
+        total += area(s)
+    }
+
+    fmt.Println(canvas.name, total)
+    fmt.Println(len(canvas.shapes))      // COMPILE ERROR "use of moved value canvas.shapes"
+}
+```
+
+An enum holds one of several variants, each with its own data, and `match` takes it apart and must cover every one. A struct holds fields, and `Add` changes its canvas in place, which its `mut` receiver says. The loop takes the shapes by value, so they move out of the canvas: its name is still there, but the last line, which reads the shapes afterwards, is refused at compile time, before anything runs:
+
+```
+shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
+```
+
 ## What a Snello program is made of
 
 A program is a package of functions, structs and enums. A struct holds fields; an enum holds one of several variants, each with its own data; `match` takes an enum apart and must handle every variant. A value has one owner at a time. Passing it to a function or storing it in a field moves it, and the old name is dead; copying is explicit, by `Clone`, except for the small values marked `Copy`, which copy silently. A function that only needs to look at a value takes it as `ref`; one that needs to change it in place takes it as `mut`; one that keeps it takes it by value. These three words, on the parameter and at the call site for `mut`, are the whole of what you write about ownership.

@@ -118,6 +118,15 @@ func TestFetchModule(t *testing.T) {
 		t.Error("the cached copy keeps a symbolic link")
 	}
 
+	module, err := moduleDir(root, url, "0.2.0")
+	if err != nil || dir != filepath.Join(module, treeDir) {
+		t.Errorf("the files are at %s, want %s under the module's directory, %v", dir, treeDir, err)
+	}
+
+	if got, err := readHashFile(module); err != nil || got != rec {
+		t.Errorf("the record in the module's directory: %+v, %v, want %+v", got, err, rec)
+	}
+
 	if want, err := HashDir(dir); err != nil || rec.hash != want {
 		t.Errorf("hash %s, the files' %s, %v", rec.hash, want, err)
 	}
@@ -295,14 +304,13 @@ func TestUntar(t *testing.T) {
 	}
 }
 
-// TestRemoveLeftovers removes what a stopped fetch left once an hour has
-// passed, a work directory at the root and a record beside the module,
-// and leaves what a fetch running now holds and a module's directory
-// at the root however old.
+// TestRemoveLeftovers removes the work directory a stopped fetch left
+// once an hour has passed, and leaves what a fetch running now holds
+// and a module's directory at the root however old.
 func TestRemoveLeftovers(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "example.com", "lib@0.1.0")
-	old, recent, record := filepath.Join(root, ".fetching-1"), filepath.Join(root, ".fetching-2"), dir+hashSuffix+".fetching-3"
+	old, recent := filepath.Join(root, ".fetching-1"), filepath.Join(root, ".fetching-2")
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -313,22 +321,16 @@ func TestRemoveLeftovers(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(record, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	stale := time.Now().Add(-2 * leftoverAge)
-	for _, p := range []string{old, record, filepath.Dir(dir)} {
+	for _, p := range []string{old, filepath.Dir(dir)} {
 		if err := os.Chtimes(p, stale, stale); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	removeLeftovers(root, dir)
-	for _, p := range []string{old, record} {
-		if _, err := os.Stat(p); err == nil {
-			t.Errorf("a leftover older than an hour was kept: %s", p)
-		}
+	removeLeftovers(root)
+	if _, err := os.Stat(old); err == nil {
+		t.Errorf("a leftover older than an hour was kept: %s", old)
 	}
 
 	for _, p := range []string{recent, filepath.Dir(dir)} {
@@ -353,8 +355,8 @@ func TestGitEnvironment(t *testing.T) {
 	}
 }
 
-// moduleDirOf returns the module cache's directory of url at version
-// under root, failing the test when it has none.
+// moduleDirOf returns the directory of the files of url at version in
+// the module cache under root, failing the test when it has none.
 func moduleDirOf(t *testing.T, root, url, v string) string {
 	t.Helper()
 	dir, err := moduleDir(root, url, v)
@@ -362,7 +364,7 @@ func moduleDirOf(t *testing.T, root, url, v string) string {
 		t.Fatal(err)
 	}
 
-	return dir
+	return filepath.Join(dir, treeDir)
 }
 
 // gitRepo makes a git repository of files in a directory of the test's
