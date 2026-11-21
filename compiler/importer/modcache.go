@@ -29,8 +29,8 @@ import (
 )
 
 // The module cache: where a module required by version is kept, one
-// directory for each repository at each version, with a record beside
-// it of the commit its tag named and the hash of its files.
+// directory for each repository at each version, holding its files and
+// a record of the commit its tag named and the hash of its files.
 const (
 	// ModCacheEnv names the module cache's directory; without it the
 	// cache is modulesDir in the user's cache directory, apart from
@@ -41,12 +41,14 @@ const (
 	// versionMark parts a module's directory from its version,
 	// tagPrefix begins the tag a version names, tagRefs the reference
 	// of a tag, which a fetch names whole so that a branch of the same
-	// name is never taken, and hashSuffix ends the record beside a
-	// module's directory, which is written last and marks it whole.
+	// name is never taken. A module's directory holds treeDir, its
+	// files, and recordFile, its commit and hash, which enter the cache
+	// by one rename of the directory and mark it whole.
 	versionMark = "@"
 	tagPrefix   = "v"
 	tagRefs     = "refs/tags/"
-	hashSuffix  = ".h1"
+	treeDir     = "tree"
+	recordFile  = "h1"
 
 	// refSeparator parts the commit from the reference on a line git
 	// ls-remote prints.
@@ -72,18 +74,19 @@ const (
 
 	// gitName is the command that fetches a module. A fetch makes a bare
 	// repository in cloneDir, writes attributes into its info
-	// directory, fetches the one tag into it and unpacks the tag's tree
-	// into treeDir, both in a work directory named by fetchingPattern at
-	// the cache's root, whose path stays short whatever the module's
-	// is, since git on Windows writes no path past 260 characters and a
-	// module's escaped path may run to 200 on its own; the tree is
-	// renamed from there into place, and the record is written through
-	// a file of the same pattern beside the module. A
-	// directory or a record a fetch left, stopped, is removed after
-	// leftoverAge.
+	// directory, fetches the one tag into it, unpacks the tag's tree
+	// and writes the record as the module's directory under stagedDir,
+	// all in a work directory named by fetchingPattern at the cache's
+	// root, whose path stays short whatever the module's is, since git
+	// on Windows writes no path past 260 characters and a module's
+	// escaped path may run to 200 on its own; the module's directory is
+	// renamed from there into place, and a directory in its way that is
+	// no whole module is renamed aside into staleDir there. A work
+	// directory a fetch left, stopped, is removed after leftoverAge.
 	gitName         = "git"
 	cloneDir        = "clone.git"
-	treeDir         = "tree"
+	stagedDir       = "module"
+	staleDir        = "stale"
 	infoDir         = "info"
 	attributesFile  = "attributes"
 	fetchingPattern = ".fetching-*"
@@ -289,25 +292,30 @@ func escapePath(p string) string {
 	return b.String()
 }
 
-// fetchModule returns the module cache's directory of the repository
-// at rawURL at version, and its record from when it entered the cache,
-// the commit its tag named and the hash of its files, fetching it the
-// first time, which fresh reports. A fetch makes a bare repository of
-// its own beside the module's directory, fetches into it the tag of
-// version alone, by its full reference, unpacks the tag's tree from git
-// archive with nothing converted, its regular files and directories
-// and no symbolic link, hashes the files, renames the tree into place
-// and records the commit and the hash beside it, which is what marks
-// the module whole, so that a build sees a module whole or not at all.
-// Of two builds that fetch it at once, the second to rename keeps the
-// first's, and refuses when the two found other files, a tag moved
-// between the two fetches.
+// fetchModule returns the directory of the files of the repository at
+// rawURL at version in the module cache, and its record from when it
+// entered the cache, the commit its tag named and the hash of its
+// files, fetching it the first time, which fresh reports. A fetch makes
+// a bare repository in a work directory at the cache's root, fetches
+// into it the tag of version alone, by its full reference, unpacks the
+// tag's tree from git archive with nothing converted, its regular files
+// and directories and no symbolic link, hashes the files, writes the
+// record beside the tree, and renames the two into place as the
+// module's directory, so that a build sees a module whole or not at
+// all. Of two builds that fetch it at once, the second to rename keeps
+// the first's, and refuses when the two found other files, a tag moved
+// between the two fetches. A directory in the way that is no whole
+// module, its tree or its record gone, is renamed aside and fetched
+// over; nothing a whole module holds is removed while a build may read
+// it.
 func fetchModule(root, rawURL, version string) (dir string, rec record, fresh bool, err error) {
-	if dir, err = moduleDir(root, rawURL, version); err != nil {
+	module, err := moduleDir(root, rawURL, version)
+	if err != nil {
 		return "", record{}, false, err
 	}
 
-	if rec, err := readHashFile(dir); err == nil {
+	dir = filepath.Join(module, treeDir)
+	if rec, err := readHashFile(module); err == nil {
 		return dir, rec, false, nil
 	}
 
@@ -316,20 +324,18 @@ func fetchModule(root, rawURL, version string) (dir string, rec record, fresh bo
 		return "", record{}, false, errors.New(what + " needs " + gitName + ", which is not found: install it with " + toolchain.GitInstall())
 	}
 
-	parent := filepath.Dir(dir)
-	if err := os.MkdirAll(parent, cacheDirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(module), cacheDirMode); err != nil {
 		return "", record{}, false, err
 	}
 
-	removeLeftovers(root, dir)
-	os.Remove(dir + hashSuffix) // a record whose module was removed: fetched again below
+	removeLeftovers(root)
 	work, err := os.MkdirTemp(root, fetchingPattern)
 	if err != nil {
 		return "", record{}, false, err
 	}
-	defer os.RemoveAll(work) // the clone, and the tree when it was not renamed into place
+	defer os.RemoveAll(work) // the clone, the module when it was not renamed into place, and a directory renamed aside
 
-	clone, tree := filepath.Join(work, cloneDir), filepath.Join(work, treeDir)
+	clone, staged := filepath.Join(work, cloneDir), filepath.Join(work, stagedDir)
 	ref := tagRefs + tagPrefix + version
 	if rec.commit, err = fetchTag(clone, rawURL, ref); err != nil {
 		return "", record{}, false, errors.New(what + ": " + err.Error())
@@ -340,6 +346,7 @@ func fetchModule(root, rawURL, version string) (dir string, rec record, fresh bo
 		return "", record{}, false, errors.New(what + ": " + err.Error())
 	}
 
+	tree := filepath.Join(staged, treeDir)
 	if err := untar(bytes.NewReader(archive), tree); err != nil {
 		return "", record{}, false, errors.New(what + ": " + err.Error())
 	}
@@ -348,23 +355,31 @@ func fetchModule(root, rawURL, version string) (dir string, rec record, fresh bo
 		return "", record{}, false, err
 	}
 
-	if err := os.Rename(tree, dir); err != nil {
-		if _, statErr := os.Stat(dir); statErr != nil {
-			return "", record{}, false, err
-		}
-
-		theirs, err := HashDir(dir) // another build renamed its copy first
-		if err != nil {
-			return "", record{}, false, err
-		}
-
-		if theirs != rec.hash {
-			return "", record{}, false, errors.New(what + ": another build fetched it at the same moment and found other files, " + theirs + " where this one found " + rec.hash + ": the tag moved between the two; build again")
-		}
+	if err := writeHashFile(staged, rec); err != nil {
+		return "", record{}, false, err
 	}
 
-	if err := writeHashFile(dir, rec); err != nil {
-		return "", record{}, false, err
+	if err := os.Rename(staged, module); err != nil {
+		theirs, readErr := readHashFile(module) // another build renamed its copy first
+		if readErr != nil {                     // or what is there is no whole module: renamed aside, by this build or another at the same moment, and fetched over
+			if err := os.Rename(module, filepath.Join(work, staleDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return "", record{}, false, err
+			}
+
+			if err = os.Rename(staged, module); err == nil {
+				return dir, rec, true, nil
+			}
+
+			if theirs, readErr = readHashFile(module); readErr != nil {
+				return "", record{}, false, err
+			}
+		}
+
+		if theirs.hash != rec.hash {
+			return "", record{}, false, errors.New(what + ": another build fetched it at the same moment and found other files, " + theirs.hash + " where this one found " + rec.hash + ": the tag moved between the two; build again")
+		}
+
+		rec = theirs
 	}
 
 	return dir, rec, true, nil
@@ -519,86 +534,59 @@ func writeEntry(p string, r io.Reader) error {
 	return err
 }
 
-// readHashFile returns the record kept beside a module's directory
-// since it entered the cache, its commit and its hash; an error when
-// there is none, or when the directory itself is gone, a module not
-// fetched yet, not whole, or removed.
-func readHashFile(dir string) (record, error) {
-	data, err := os.ReadFile(dir + hashSuffix)
+// readHashFile returns the record kept in a module's directory since
+// it entered the cache, its commit and its hash; an error when there
+// is none, or when the tree is gone, a module not fetched yet, not
+// whole, or removed.
+func readHashFile(module string) (record, error) {
+	data, err := os.ReadFile(filepath.Join(module, recordFile))
 	if err != nil {
 		return record{}, err
 	}
 
-	if _, err := os.Stat(dir); err != nil {
+	if _, err := os.Stat(filepath.Join(module, treeDir)); err != nil {
 		return record{}, err
 	}
 
 	fields := strings.Fields(string(data))
 	if len(fields) != 2 || !strings.HasPrefix(fields[1], HashPrefix) {
-		return record{}, errors.New(dir + hashSuffix + ": no commit and hash")
+		return record{}, errors.New(filepath.Join(module, recordFile) + ": no commit and hash")
 	}
 
 	return record{fields[0], fields[1]}, nil
 }
 
-// writeHashFile records rec beside a module's directory, through a
-// file renamed into place, so that a reader finds the record whole or
-// not at all. Two builds fetching the same module at once each write
-// the record; on a system that refuses to replace a file another has
-// open, the second rename fails, and the record the first wrote is
-// then read and taken when it is the same.
-func writeHashFile(dir string, rec record) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dir), filepath.Base(dir)+hashSuffix+fetchingPattern)
-	if err != nil {
-		return err
-	}
-
-	_, err = tmp.WriteString(rec.commit + " " + rec.hash + "\n")
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-
-	if err == nil {
-		err = os.Chmod(tmp.Name(), cacheMode)
-	}
-
-	if err == nil {
-		err = os.Rename(tmp.Name(), dir+hashSuffix)
-	}
-
-	if err != nil {
-		if theirs, readErr := readHashFile(dir); readErr == nil && theirs == rec {
-			err = nil
-		}
-
-		os.Remove(tmp.Name())
-	}
-
-	return err
+// writeHashFile records rec in a module's directory beside its tree,
+// before the directory is renamed into place, so that the record and
+// the files enter the cache as one.
+func writeHashFile(module string, rec record) error {
+	return os.WriteFile(filepath.Join(module, recordFile), []byte(rec.commit+" "+rec.hash+"\n"), cacheMode)
 }
 
-// discardModule removes a module's cached copy, its record first, so
-// that no build takes a copy half removed for a whole one, then its
-// directory.
+// discardModule removes a module's cached copy, given the directory of
+// its files, which fetchModule returned: its record first, so that no
+// build takes a copy half removed for a whole one, then its directory.
 func discardModule(dir string) error {
-	if err := os.Remove(dir + hashSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if filepath.Base(dir) != treeDir {
+		return errors.New(dir + " is not the directory of a cached module's files")
+	}
+
+	module := filepath.Dir(dir)
+	if err := os.Remove(filepath.Join(module, recordFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	return os.RemoveAll(dir)
+	return os.RemoveAll(module)
 }
 
-// removeLeftovers removes what a fetch left when it stopped, a work
-// directory at the cache's root or a record of the module at dir not
-// renamed into place, once leftoverAge has passed, which no fetch
-// running takes.
-func removeLeftovers(root, dir string) {
-	for _, pattern := range []string{filepath.Join(root, fetchingPattern), dir + hashSuffix + fetchingPattern} {
-		matches, _ := filepath.Glob(pattern)
-		for _, m := range matches {
-			if info, err := os.Lstat(m); err == nil && time.Since(info.ModTime()) > leftoverAge {
-				os.RemoveAll(m)
-			}
+// removeLeftovers removes the work directories at the cache's root that
+// a fetch left when it stopped, once leftoverAge has passed, which no
+// fetch running takes.
+func removeLeftovers(root string) {
+	matches, _ := filepath.Glob(filepath.Join(root, fetchingPattern))
+	for _, m := range matches {
+		if info, err := os.Lstat(m); err == nil && time.Since(info.ModTime()) > leftoverAge {
+			os.RemoveAll(m)
 		}
 	}
 }
