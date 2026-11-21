@@ -2,13 +2,14 @@
 
 ## The compiler
 
-The compiler is a single program, `snello`. Until there are released binaries it is built from its source, which needs the Go toolchain the compiler is written in; a Snello program needs clang on the path, and the C backend and a debug build a C compiler, `cc`, which every Linux and macOS machine with developer tools has, and which on Windows is clang too. On Windows the compiler is `snello.exe`, `go build -o snello.exe ./cmd/snello`.
+The compiler is a single program, `snello`, which carries the runtime and the standard library inside it. A release on the [Releases page](https://github.com/snello-lang/snello/releases) holds one archive per platform, Linux, macOS and Windows on x86-64 and arm64, with the binary, the license and the README; a pre-release, `0.1.0-alpha.1`, is marked as one on the page.
 
-```
-git clone https://github.com/snello-lang/snello
-cd snello
-go build -o snello ./cmd/snello
-```
+1. **Download** the archive named for your system and processor, `snello-0.1.0-linux-amd64.tar.gz`, `snello-0.1.0-darwin-arm64.tar.gz`, `snello-0.1.0-windows-amd64.zip`, and from the same release `SHA256SUMS` and `SHA256SUMS.sigstore.json`.
+2. **Check it**, in the directory the three files are in: `sha256sum -c --ignore-missing SHA256SUMS`, `shasum -a 256` on macOS, says the archive is the one the release lists; `cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/snello-lang/snello/\.github/workflows/release\.yml@refs/tags/v' SHA256SUMS`, with cosign 3 or later, that the list was signed by this repository's release workflow and nothing else; and `gh attestation verify snello-0.1.0-linux-amd64.tar.gz --repo snello-lang/snello`, with the GitHub CLI, that the workflow on that commit built the archive. The release's notes carry the same lines.
+3. **Unpack it and put `snello` on your path.** On Linux and macOS, `tar -xzf snello-0.1.0-linux-amd64.tar.gz` and `mv snello-0.1.0-linux-amd64/snello ~/.local/bin/`, or any directory on your path. On Windows, unzip the archive and add its folder to your `Path`, through Settings, or `setx Path "%Path%;C:\Users\me\snello-0.1.0-windows-amd64"` in a new terminal.
+4. **Install clang**, which compiles what Snello writes, and which the next paragraphs say how to get on each system; then run `snello doctor`, which checks everything a build needs and prints the line that installs what is missing.
+
+Upgrading is the same four steps with the next release's archive; uninstalling is removing the binary. With Go 1.27.2 or later on your machine, `go install github.com/snello-lang/snello/cmd/snello@latest` builds the same compiler from source, which is how the compiler is worked on; the [contribution guide](../../CONTRIBUTING.md) says how.
 
 `snello version` says which compiler it is: the version, the commit it was built from, the channel a release is published on or `devel` for a build from source, and the system it runs on.
 
