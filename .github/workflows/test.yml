@@ -1,6 +1,8 @@
 # Runs the checks and the test suite on every pull request, and on
-# every push to main: a push to a pull request's branch runs it once,
-# as the pull request, not twice.
+# nothing else: main takes changes through a pull request alone, from
+# a branch the rule holds up to date with main, so the pull request's
+# run tests the tree its merge puts on main, and a run on the push to
+# main would test it twice.
 #
 # The suite builds and runs Snello programs through both backends, and
 # the runtime under them has code per processor and per system: the
@@ -36,20 +38,17 @@
 # clang finds by itself, and make under Git's Bash.
 name: Tests
 
-# A change to documentation alone, markdown anywhere or anything under
-# _docs/, runs none of this: the lints of commit messages and pull
-# request titles still run, and main is not protected by these checks,
-# so a skipped run blocks nothing.
+# A change that touches no code, Markdown anywhere, the design and the
+# book under _docs/, the changelogs, the release's scripts and
+# workflow, and Renovate's configuration, runs none of the checks: the
+# first job lists what changed and answers whether code did, and every
+# other job runs only then. A job skipped that way reports itself
+# skipped, which the branch rule's required checks accept, where a
+# workflow that never starts leaves them expected and blocks the merge.
+# The lints of commit messages and pull request titles run on every
+# change, in seconds. release/archive is Go, and counts as code.
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '_docs/**'
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - '_docs/**'
 
 # Every job reads the repository and writes nothing to it.
 permissions:
@@ -61,8 +60,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: did code change
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # the files of a pull request, read from its API
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: some-with-excludes # a file counts when it matches a pattern and none of the negated ones; the default reads no negation
+          filters: |
+            code:
+              - '**'
+              - '!**.md'
+              - '!_docs/**'
+              - '!changelogs/**'
+              - '!release/*.sh'
+              - '!.github/workflows/release.yml'
+              - '!.github/renovate.json'
+
   checks:
     name: gofmt and go vet
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -78,6 +106,8 @@ jobs:
 
   test:
     name: go test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 60 || 40 }} # Windows links twice per program and scans each new binary
     continue-on-error: ${{ matrix.os == 'windows-11-arm' || matrix.os == 'macos-15-intel' }} # tier 2, or tier 1 not yet passing: run on every change, never blocking it
@@ -155,6 +185,8 @@ jobs:
     # runs them; Arch publishes no arm64 image, so the arm64 runner
     # leaves it out.
     name: distributions (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -183,6 +215,8 @@ jobs:
     # shared runner is too noisy for a time to be a test. The Mac's
     # numbers are measured natively by hand, bench/README.md.
     name: benchmark (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:

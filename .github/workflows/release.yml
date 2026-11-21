@@ -5,8 +5,8 @@
 # checks exactly as a tag does and publishes nothing; it is how the
 # workflow is tried on a fork or before a release. No version is typed
 # here: release/build.sh reads it from compiler/version/version.go and
-# refuses a tag that differs, and the notes refuse a changelog without
-# the version's section.
+# refuses a tag that differs, and the notes refuse a version with no
+# changelog file.
 #
 # The archives are built twice, on the two Linux runners, one of each
 # processor, since the compiler is pure Go and builds every platform
@@ -18,7 +18,7 @@
 # is recorded in the release notes. Only then are the archives
 # published, with SHA256SUMS signed by Sigstore under this workflow's
 # own identity, build provenance for each archive, and an SBOM for
-# each; the release's notes are the changelog's newest section, then
+# each; the release's notes are the version's changelog file, then
 # each archive's tier and checksum and how to verify them.
 name: Release
 
@@ -134,10 +134,10 @@ jobs:
 
   notes:
     # The release's notes, written on a dry run too, so that the first
-    # tag is not the first time this runs: the changelog's newest
-    # section, which must be the version's; then each archive's tier
-    # and checksum, the smoke test of windows/arm64 when it failed in
-    # this run, and how to verify what was downloaded.
+    # tag is not the first time this runs: the version's changelog
+    # file; then each archive's tier and checksum, the smoke test of
+    # windows/arm64 when it failed in this run, and how to verify what
+    # was downloaded.
     name: the notes
     needs: [compare, smoke]
     runs-on: ubuntu-latest
@@ -158,8 +158,8 @@ jobs:
         run: |
           version=$(sed -n 's/^\tCurrent = "\([^"]*\)".*/\1/p' compiler/version/version.go)
           notes=notes.md
-          awk '/^## /{n++} n==1' CHANGELOG.md > "$notes"
-          grep -q "^## \[$version\]" "$notes" || { echo "CHANGELOG.md's newest section is not $version's: release/prepare.sh writes it" >&2; exit 1; }
+          [ -f "changelogs/$version.md" ] || { echo "changelogs/$version.md does not exist: release/prepare.sh writes it" >&2; exit 1; }
+          cp "changelogs/$version.md" "$notes"
           {
             echo
             echo "## Archives"

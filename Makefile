@@ -13,9 +13,9 @@
 # the C, run before every commit; make doc, what snello doc prints,
 # each form and flag once, and make doc-serve, the pages in a browser
 # at http://localhost:6060/ until stopped; make release-prepare
-# VERSION=X.Y.Z, the version into compiler/version/version.go and its
-# section into CHANGELOG.md for the pull request that prepares a
-# release, and make release-dry-run, the six archives built into dist/
+# VERSION=X.Y.Z, the version into compiler/version/version.go, its
+# changelog into changelogs/ and its line into CHANGELOG.md, for the
+# pull request that prepares a release, and make release-dry-run, the six archives built into dist/
 # and this machine's smoke-tested, as the release workflow does on a
 # tag, publishing nothing: both run release/'s own scripts natively and
 # never in the image; make shell, the container
