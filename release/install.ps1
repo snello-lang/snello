@@ -119,16 +119,66 @@ try {
     Remove-Item "$binary.old" -Force -ErrorAction SilentlyContinue
     Say "installed snello $version into $dir"
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (($userPath -split ';') -notcontains $dir) {
-        [Environment]::SetEnvironmentVariable('Path', "$dir;$userPath", 'User')
-        Say "added $dir to your Path: open a new terminal to run snello by name"
+    # Add-ToPath puts a directory on the user's Path, for every window
+    # to come, and on this session's, for the rest of the script.
+    function Add-ToPath($directory) {
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if (($userPath -split ';') -notcontains $directory) {
+            [Environment]::SetEnvironmentVariable('Path', "$directory;$userPath", 'User')
+            Say "added $directory to your Path: a new terminal sees it"
+        }
+        if (($env:Path -split ';') -notcontains $directory) { $env:Path = "$directory;$env:Path" }
     }
-    $env:Path = "$dir;$env:Path"
+    Add-ToPath $dir
 
+    # What a build still needs, offered: snello doctor says what is
+    # missing, and the script asks and runs what installs it, so that
+    # one line ends with a machine that builds: LLVM, which brings clang
+    # and its linker but puts them on no Path, which the script does;
+    # then Visual Studio's Build Tools with the C++ workload, the SDK and
+    # the C runtime. With SNELLO_YES set the answer is yes, for a build
+    # machine. winget's own administrator prompt stays the developer's.
+    # The programs run under Continue, since PowerShell before 7.2 turns
+    # a line they write to standard error into a terminating error.
+    $ErrorActionPreference = 'Continue'
+    function Ask($question) {
+        if ($env:SNELLO_YES) { return $true }
+        try { $answer = Read-Host "install.ps1: $question [Y/n]" } catch { $answer = $null }
+        if ($null -eq $answer) { Say 'no one to ask: set SNELLO_YES=1 to answer yes, or run it yourself'; return $false }
+        return ($answer -notmatch '^[nN]')
+    }
+    function Doctor {
+        $snelloReport = & $binary doctor 2>&1 | Out-String
+        $status = $LASTEXITCODE
+        Write-Host $snelloReport.TrimEnd()
+        Set-Variable -Name snelloReport -Value $snelloReport -Scope 1
+        return $status
+    }
+    function Have-Clang { [bool](Get-Command (if ($env:CLANG) { $env:CLANG } else { 'clang' }) -ErrorAction SilentlyContinue) }
     & $binary version
-    & $binary doctor
-    if ($LASTEXITCODE -ne 0) { Fail 'snello is installed; snello doctor says what a build still needs, above' }
+    $llvm = 'C:\Program Files\LLVM\bin'
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    $status = Doctor
+    $snelloReport = ''
+    if ($status -ne 0 -and -not (Have-Clang)) {
+        if (Test-Path "$llvm\clang.exe") {
+            Say "LLVM is installed, and $llvm was not on your Path"
+            Add-ToPath $llvm
+            $status = Doctor
+        } elseif ($winget -and (Ask 'clang is not installed, and a build needs it: install LLVM now, winget install LLVM.LLVM?')) {
+            & winget install --id LLVM.LLVM --exact --accept-source-agreements --accept-package-agreements
+            if (-not (Test-Path "$llvm\clang.exe")) { Fail "LLVM did not install into $llvm: install it from https://github.com/llvm/llvm-project/releases, add its bin directory to your Path, then run snello doctor" }
+            Add-ToPath $llvm
+            $status = Doctor
+        } elseif (-not $winget) {
+            Say "winget is not here: install LLVM from https://github.com/llvm/llvm-project/releases, add $llvm to your Path, then run snello doctor"
+        }
+    }
+    if ($status -ne 0 -and (Have-Clang) -and $snelloReport -match "fail\s+Visual Studio's Build Tools" -and $winget -and (Ask "Visual Studio's Build Tools with the C++ workload are not installed, and a build needs their SDK and C runtime: install them now, about 2 GB?")) {
+        & winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --accept-source-agreements --accept-package-agreements --override '--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+        $status = Doctor
+    }
+    if ($status -ne 0) { Fail 'snello is installed; snello doctor says what a build still needs, above' }
 } finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     $ErrorActionPreference = $preferences.ErrorAction

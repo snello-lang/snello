@@ -17,7 +17,7 @@ The maintainers decide what is released and when. **Nothing is released by a pus
 | `prepare.sh` | `make release-prepare VERSION=X.Y.Z`: writes the version into `version.go`, its changelog into `changelogs/X.Y.Z.md` through `changelog.sh`, and its line into the index |
 | `changelog.sh` | writes a release's changelog from the Conventional Commits since the last release |
 | `dry-run.sh` | `make release-dry-run`: builds the six archives and smoke-tests this machine's, as the workflow does, publishing nothing |
-| `install.sh`, `install.ps1` | the one-line install, served from `main`: the latest release's archive for the machine, checked against `SHA256SUMS`, into `~/.local/bin` or `%LOCALAPPDATA%\Programs\snello`, then `snello doctor`; the workflow runs each against the release it just published |
+| `install.sh`, `install.ps1` | the one-line install, served from `main`: the latest release's archive for the machine, checked against `SHA256SUMS`, into `~/.local/bin` or `%LOCALAPPDATA%\Programs\snello`, then `snello doctor`, offering to install clang, and on Windows LLVM and the Build Tools, when a build still needs them; the workflow runs each against the release it just published, `install.sh` on a bare Debian too, where it installs clang itself |
 | `build.sh` | builds the six archives and `SHA256SUMS` into `dist/`, the same bytes wherever it runs, through `archive/`, the Go program that writes an archive |
 | `smoke.sh` | a developer's first five minutes from an archive on the path: `snello doctor`, `snello new`, run and test through both backends |
 | `.github/workflows/release.yml` | on a tag, builds, checks and publishes the release; started by hand, a dry run that publishes nothing |

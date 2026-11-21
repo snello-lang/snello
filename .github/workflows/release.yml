@@ -286,6 +286,7 @@ jobs:
       - name: Install with the script, and check the version it installed
         env:
           SNELLO_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          SNELLO_YES: 1 # yes to installing what a build still needs, with nobody at a terminal
           GH_TOKEN: ${{ github.token }} # signs gh in, so that the scripts' provenance check runs here
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
@@ -299,3 +300,34 @@ jobs:
           if [ -n "$SNELLO_VERSION" ]; then
             case $installed in "snello ${SNELLO_VERSION#v} "*) ;; *) echo "the script installed $installed, not $SNELLO_VERSION" >&2; exit 1 ;; esac
           fi
+
+  install-bare:
+    # install.sh on a bare Debian with nothing but curl: the script
+    # must install snello, find no clang, and install it itself, as a
+    # developer's first five minutes on a new machine go.
+    name: install.sh on a bare Debian
+    needs: [compare, smoke, publish]
+    if: always() && needs.compare.result == 'success' && needs.smoke.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Only curl, as a new machine has
+        run: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+      - name: Install with the script, clang included, and check the version
+        env:
+          SNELLO_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          SNELLO_YES: 1
+        run: |
+          sh release/install.sh
+          installed=$("$HOME/.local/bin/snello" version)
+          echo "$installed"
+          if [ -n "$SNELLO_VERSION" ]; then
+            case $installed in "snello ${SNELLO_VERSION#v} "*) ;; *) echo "the script installed $installed, not $SNELLO_VERSION" >&2; exit 1 ;; esac
+          fi
+          "$HOME/.local/bin/snello" doctor

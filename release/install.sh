@@ -101,4 +101,76 @@ case ":$PATH:" in
 esac
 
 "$dir/$name" version
-"$dir/$name" doctor # the last command, so that the script ends as doctor does and the trap removes the download
+
+# What a build still needs, offered: snello doctor says what is
+# missing, and when clang is, the script asks and runs the system's
+# own install, its package manager or Apple's Command Line Tools, so
+# that one line ends with a machine that builds. The question goes through the terminal, since
+# the standard input of a script piped into sh is the script; with
+# SNELLO_YES set the answer is yes, for a build machine; with no
+# terminal and no SNELLO_YES it is no. A sudo password, Apple's dialog
+# and a package manager's own questions stay the developer's.
+ask() {
+    [ -z "${SNELLO_YES:-}" ] || return 0
+    if ! (: </dev/tty) 2>/dev/null; then # the device exists with no terminal behind it where nobody sits
+        say "no terminal to ask on: set SNELLO_YES=1 to answer yes, or run it yourself"
+        return 1
+    fi
+    printf 'install.sh: %s [Y/n] ' "$1" >/dev/tty
+    read -r answer </dev/tty || return 1 # the end of input is a no
+    case $answer in
+        [nN]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# have_clang reports whether a build has its clang: the one CLANG
+# names or clang on the path, which on macOS is a stub before the
+# Command Line Tools are installed, so there the tools are what count.
+have_clang() {
+    if [ "$os" = darwin ] && [ -z "${CLANG:-}" ]; then
+        xcode-select -p >/dev/null 2>&1
+    else
+        command -v "${CLANG:-clang}" >/dev/null 2>&1
+    fi
+}
+
+# clang_install prints the line that installs clang here, the system's
+# package manager asked not to ask, without sudo for root, and nothing
+# on a system it does not know.
+clang_install() {
+    case $os in
+        darwin) echo "xcode-select --install" ;;
+        linux)
+            sudo=sudo
+            [ "$(id -u)" != 0 ] || sudo=""
+            case " $(. /etc/os-release 2>/dev/null && echo "${ID:-} ${ID_LIKE:-}") " in # Debian itself has no ID_LIKE
+                *debian* | *ubuntu*) echo "${sudo:+$sudo }apt-get update && ${sudo:+$sudo }apt-get install -y clang" ;;
+                *fedora* | *rhel*) echo "${sudo:+$sudo }dnf install -y clang" ;;
+                *arch*) echo "${sudo:+$sudo }pacman -S --noconfirm clang" ;;
+            esac
+            ;;
+    esac
+}
+
+if "$dir/$name" doctor; then
+    exit 0
+fi
+
+line=$(clang_install)
+if have_clang || [ -z "$line" ]; then
+    exit 1 # doctor said what is missing and how to install it
+fi
+ask "clang is not installed, and a build needs it: install it now with $line?" || exit 1
+say "running $line"
+sh -c "$line" || fail "$line failed: run it yourself, then snello doctor"
+if [ "$os" = darwin ]; then
+    say "waiting for the Command Line Tools to finish installing; Ctrl-C stops waiting, and snello doctor says when they are in"
+    waited=0
+    until xcode-select -p >/dev/null 2>&1; do
+        sleep 5
+        waited=$((waited + 5))
+        [ "$waited" -lt 1800 ] || fail "the Command Line Tools did not finish in thirty minutes: run snello doctor once they are in"
+    done
+fi
+"$dir/$name" doctor # the last command: the script ends as doctor does

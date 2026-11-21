@@ -97,6 +97,7 @@ const (
 	// and the C runtime Visual Studio's Build Tools install, which clang
 	// finds by itself; buildToolsCheck names its check.
 	buildTools      = "Visual Studio's Build Tools with the C++ workload"
+	llvmPathNote    = `, then add C:\Program Files\LLVM\bin to your Path and open a new window`
 	buildToolsCheck = "Visual Studio's Build Tools"
 
 	// The keys of os-release a system is named by, and what may quote a
@@ -220,6 +221,17 @@ func Require(name, env string) error {
 // behind the command that starts it, or the failure when it said none.
 func Unusable(name, env string, output []byte, err error) error {
 	return &MissingError{Name: name, Env: env, Reason: failsToRun + " (" + said(output, err) + ")"}
+}
+
+// pathNote returns what installing clang leaves undone on Windows,
+// where LLVM's installer puts its directory on no Path, and nothing
+// elsewhere.
+func pathNote() string {
+	if runtime.GOOS == windows {
+		return llvmPathNote
+	}
+
+	return ""
 }
 
 // Install returns the command that installs clang on the system the
@@ -565,7 +577,7 @@ func gitInstallFor(system string) string {
 // command that installs clang here, which brings a C compiler, or env,
 // which names another compiler.
 func installFix(env string) string {
-	return "install it with " + Install() + ", or set " + env
+	return "install it with " + Install() + pathNote() + ", or set " + env
 }
 
 // distribution returns the distribution an os-release file, read from

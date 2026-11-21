@@ -89,7 +89,7 @@ Installing clang is all a build needs on Linux and macOS; it brings a C compiler
 | Debian, Ubuntu | `sudo apt install clang` |
 | Fedora | `sudo dnf install clang` |
 | Arch | `sudo pacman -S clang` |
-| Windows | `winget install LLVM.LLVM`, and Visual Studio's Build Tools with the C++ workload |
+| Windows | `winget install LLVM.LLVM`, then `C:\Program Files\LLVM\bin` added to your `Path` and a new window, since the installer adds it to no Path; and Visual Studio's Build Tools with the C++ workload |
 
 The doctor checks `git` too, which a build needs only to fetch a module required by version (chapter 35), so a missing `git` does not fail the doctor; it names the command that installs it: `xcode-select --install` on macOS, which brings it with clang, `sudo apt install git` on Debian and Ubuntu, `sudo dnf install git` on Fedora, `sudo pacman -S git` on Arch, and `winget install Git.Git` on Windows.
 
