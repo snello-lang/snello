@@ -19,8 +19,9 @@ import (
 
 const (
 	// Current is the version of the release this compiler is built
-	// for, set at the start of each release's work: the version a
-	// module's snello line is checked against.
+	// for, raised in the pull request that prepares each release, and
+	// held equal to the release's tag by the release's build: the
+	// version a module's snello line is checked against.
 	Current = "0.1.0"
 
 	// First is the first release, which a module file without a
@@ -74,9 +75,9 @@ const (
 	platformSeparator = "/"
 )
 
-// channel is the channel a release build is published on, stable or
-// nightly, stamped in by the linker's -X flag; empty in a build from
-// source, which Describe names devel.
+// channel is the channel a release build is published on, stable,
+// stamped in by the linker's -X flag; empty in a build from source,
+// which Describe names devel.
 var channel string
 
 // A Version is a version as SemVer writes it, read by Parse: its

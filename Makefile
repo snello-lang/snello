@@ -1,3 +1,7 @@
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # The Snello commands, each run inside the image build/Dockerfile
 # describes unless NATIVE=1 is given, so that a green run on a laptop
 # and a green job in CI mean the same thing: make build, the compiler
@@ -8,7 +12,13 @@
 # examples; make fmt, gofmt over the Go files and clang-format over
 # the C, run before every commit; make doc, what snello doc prints,
 # each form and flag once, and make doc-serve, the pages in a browser
-# at http://localhost:6060/ until stopped; make shell, the container
+# at http://localhost:6060/ until stopped; make release-prepare
+# VERSION=X.Y.Z, the version into compiler/version/version.go and its
+# section into CHANGELOG.md for the pull request that prepares a
+# release, and make release-dry-run, the six archives built into dist/
+# and this machine's smoke-tested, as the release workflow does on a
+# tag, publishing nothing: both run release/'s own scripts natively and
+# never in the image; make shell, the container
 # with the repository mounted; make distros, a developer's first five minutes
 # on each Linux distribution snello doctor names a fix for, in images
 # of its own, on the host's Docker.
@@ -27,7 +37,7 @@ else
 NEEDS := image
 endif
 
-.PHONY: image build test test-std test-examples check doc doc-serve fmt shell distros clean
+.PHONY: image build test test-std test-examples check doc doc-serve fmt release-prepare release-dry-run shell distros clean
 
 image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(IMAGE) build
@@ -62,6 +72,12 @@ endif
 
 fmt: $(NEEDS)
 	$(RUN) sh build/fmt.sh
+
+release-prepare:
+	sh release/prepare.sh "$(VERSION)"
+
+release-dry-run:
+	sh release/dry-run.sh
 
 shell: image
 	docker run --rm -it --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src -e HOME=/tmp -e CC=clang -e CLANG=clang $(IMAGE) bash

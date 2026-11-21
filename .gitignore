@@ -3,6 +3,9 @@
 /snello
 /bin/
 
+# The release's archives, which release/build.sh writes.
+/dist/
+
 # Binaries snello build writes next to the example programs, or inside
 # a program directory built from within; at any depth, the sources,
 # a package's C side, the module files, the Go versions and the tests,

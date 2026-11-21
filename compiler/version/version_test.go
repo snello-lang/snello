@@ -99,7 +99,7 @@ func TestDescribe(t *testing.T) {
 		want              string
 	}{
 		{"stable", "8477985c0ffee1234567890abcdef0123456789a", false, "snello " + Current + " (8477985) stable darwin/arm64"},
-		{"nightly", "8477985c0ffee", true, "snello " + Current + " (8477985-dirty) nightly darwin/arm64"},
+		{"stable", "8477985c0ffee", true, "snello " + Current + " (8477985-dirty) stable darwin/arm64"},
 		{"", "8477985c0ffee", false, "snello " + Current + " (8477985) devel darwin/arm64"},
 		{"", "", false, "snello " + Current + " devel darwin/arm64"},
 		{"stable", "abc", false, "snello " + Current + " (abc) stable darwin/arm64"},
