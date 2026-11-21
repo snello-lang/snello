@@ -432,6 +432,20 @@ bool sn_console(int fd) {
     return kind == console_yes;
 }
 
+// sn_console_reset forgets whether descriptor fd is a console, and the
+// part of a character a write to it left, for a descriptor pointed
+// elsewhere: the next write asks again.
+void sn_console_reset(int fd) {
+    if (fd < 0 || fd > 2) {
+        return;
+    }
+
+    sn_mutex_lock(&consoles[fd].mu);
+    consoles[fd].tail_len = 0;
+    atomic_store_explicit(&consoles[fd].kind, console_unknown, memory_order_relaxed);
+    sn_mutex_unlock(&consoles[fd].mu);
+}
+
 // whole_len is how many of the n bytes at p end on a character's
 // boundary: all of them, or all but the first bytes of a character the
 // last ones begin and do not finish. Bytes that are not UTF-8 are

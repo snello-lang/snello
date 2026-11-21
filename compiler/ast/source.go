@@ -17,18 +17,72 @@ import (
 // its head, with { ... } for its body, as a line can hold.
 func Source(e Expr) string {
 	var b strings.Builder
-	writeExpr(&b, e)
+	WriteExpr(&b, e)
 	return b.String()
 }
 
 // SourceType writes a type as a program writes it.
 func SourceType(t Type) string {
 	var b strings.Builder
-	writeType(&b, t)
+	WriteType(&b, t)
 	return b.String()
 }
 
-func writeExpr(b *strings.Builder, e Expr) {
+// WriteSignature writes a function's declaration without its body to
+// b, as a program writes it: its receiver or the type it is a function
+// of, its name, its type parameters with their bounds, its parameters
+// with their names, modes and ..., and its results.
+func WriteSignature(b *strings.Builder, fd *FuncDecl) {
+	b.WriteString("func ")
+	switch {
+	case fd.Recv != nil:
+		b.WriteString("(")
+		WriteParams(b, []*Param{fd.Recv})
+		b.WriteString(") ")
+	case fd.Of != nil:
+		WriteType(b, fd.Of)
+		b.WriteString(".")
+	}
+
+	b.WriteString(fd.Name.Name)
+	WriteTypeParams(b, fd.TypeParams)
+	b.WriteString("(")
+	WriteParams(b, fd.Params)
+	b.WriteString(")")
+	writeResults(b, fd.Results)
+}
+
+// WriteTypeParams writes type parameters with their bounds to b as a
+// program writes them, <K: Hash + Eq, V>, or nothing when there are
+// none.
+func WriteTypeParams(b *strings.Builder, tps []*TypeParam) {
+	if len(tps) == 0 {
+		return
+	}
+
+	b.WriteString("<")
+	for i, tp := range tps {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+
+		b.WriteString(tp.Name.Name)
+		for j, bound := range tp.Bounds {
+			if j == 0 {
+				b.WriteString(": ")
+			} else {
+				b.WriteString(" + ")
+			}
+
+			WriteType(b, bound)
+		}
+	}
+
+	b.WriteString(">")
+}
+
+// WriteExpr writes an expression to b as Source returns it.
+func WriteExpr(b *strings.Builder, e Expr) {
 	switch x := e.(type) {
 	case nil:
 		b.WriteString("?")
@@ -38,36 +92,36 @@ func writeExpr(b *strings.Builder, e Expr) {
 		b.WriteString(x.Value)
 	case *ParenExpr:
 		b.WriteString("(")
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(")")
 	case *TupleExpr:
 		b.WriteString("(")
 		writeExprs(b, x.Elts)
 		b.WriteString(")")
 	case *SelectorExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(".")
 		b.WriteString(x.Sel.Name)
 	case *IndexExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString("[")
-		writeExpr(b, x.Index)
+		WriteExpr(b, x.Index)
 		b.WriteString("]")
 	case *SliceExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString("[")
 		if x.Low != nil {
-			writeExpr(b, x.Low)
+			WriteExpr(b, x.Low)
 		}
 
 		b.WriteString(":")
 		if x.High != nil {
-			writeExpr(b, x.High)
+			WriteExpr(b, x.High)
 		}
 
 		b.WriteString("]")
 	case *CallExpr:
-		writeExpr(b, x.Fun)
+		WriteExpr(b, x.Fun)
 		if len(x.TypeArgs) > 0 {
 			b.WriteString("<")
 			for i, t := range x.TypeArgs {
@@ -75,7 +129,7 @@ func writeExpr(b *strings.Builder, e Expr) {
 					b.WriteString(", ")
 				}
 
-				writeType(b, t)
+				WriteType(b, t)
 			}
 
 			b.WriteString(">")
@@ -97,22 +151,22 @@ func writeExpr(b *strings.Builder, e Expr) {
 			b.WriteString(x.Op.String())
 		}
 
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 	case *BinaryExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(" ")
 		b.WriteString(x.Op.String())
 		b.WriteString(" ")
-		writeExpr(b, x.Y)
+		WriteExpr(b, x.Y)
 	case *SpawnExpr:
 		b.WriteString("spawn ")
-		writeExpr(b, x.Call)
+		WriteExpr(b, x.Call)
 	case *CoalesceExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(" ?? ")
 		switch y := x.Else.(type) {
 		case Expr:
-			writeExpr(b, y)
+			WriteExpr(b, y)
 		case *ReturnStmt:
 			b.WriteString("return")
 			if len(y.Results) > 0 {
@@ -125,24 +179,24 @@ func writeExpr(b *strings.Builder, e Expr) {
 			b.WriteString("{ ... }")
 		}
 	case *TypeExpr:
-		writeType(b, x.Type)
+		WriteType(b, x.Type)
 	case *TryExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString("?")
 	case *CompositeLit:
 		if x.Type != nil {
-			writeType(b, x.Type)
+			WriteType(b, x.Type)
 		}
 
 		b.WriteString("{")
 		writeExprs(b, x.Elts)
 		b.WriteString("}")
 	case *KeyValueExpr:
-		writeExpr(b, x.Key)
+		WriteExpr(b, x.Key)
 		b.WriteString(": ")
-		writeExpr(b, x.Value)
+		WriteExpr(b, x.Value)
 	case *PartExpr:
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(".[")
 		b.WriteString(x.Part.Name)
 		b.WriteString("]")
@@ -150,7 +204,7 @@ func writeExpr(b *strings.Builder, e Expr) {
 		b.WriteString("for ")
 		b.WriteString(x.Var.Name)
 		b.WriteString(" := range ")
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(" { ")
 		if x.Key != nil {
 			b.WriteString("[")
@@ -158,21 +212,21 @@ func writeExpr(b *strings.Builder, e Expr) {
 			b.WriteString("]: ")
 		}
 
-		writeExpr(b, x.Value)
+		WriteExpr(b, x.Value)
 		b.WriteString(" }")
 	case *FuncLit:
 		b.WriteString("func(")
-		writeParams(b, x.Type.Params)
+		WriteParams(b, x.Type.Params)
 		b.WriteString(")")
 		writeResults(b, x.Type.Results)
 		b.WriteString(" { ... }")
 	case *IfExpr:
 		b.WriteString("if ")
-		writeExpr(b, x.Cond)
+		WriteExpr(b, x.Cond)
 		b.WriteString(" { ... }")
 	case *MatchExpr:
 		b.WriteString("match ")
-		writeExpr(b, x.X)
+		WriteExpr(b, x.X)
 		b.WriteString(" { ... }")
 	default:
 		b.WriteString("...")
@@ -185,11 +239,13 @@ func writeExprs(b *strings.Builder, es []Expr) {
 			b.WriteString(", ")
 		}
 
-		writeExpr(b, e)
+		WriteExpr(b, e)
 	}
 }
 
-func writeParams(b *strings.Builder, ps []*Param) {
+// WriteParams writes a parameter list to b without its parentheses, as
+// a program writes it: each name, mode, ... and type.
+func WriteParams(b *strings.Builder, ps []*Param) {
 	for i, p := range ps {
 		if i > 0 {
 			b.WriteString(", ")
@@ -200,7 +256,11 @@ func writeParams(b *strings.Builder, ps []*Param) {
 			b.WriteString(" ")
 		}
 
-		writeType(b, p.Type)
+		if p.Dots.IsValid() {
+			b.WriteString("...")
+		}
+
+		WriteType(b, p.Type)
 	}
 }
 
@@ -209,7 +269,7 @@ func writeResults(b *strings.Builder, rs []Type) {
 	case 0:
 	case 1:
 		b.WriteString(" ")
-		writeType(b, rs[0])
+		WriteType(b, rs[0])
 	default:
 		b.WriteString(" (")
 		for i, r := range rs {
@@ -217,14 +277,15 @@ func writeResults(b *strings.Builder, rs []Type) {
 				b.WriteString(", ")
 			}
 
-			writeType(b, r)
+			WriteType(b, r)
 		}
 
 		b.WriteString(")")
 	}
 }
 
-func writeType(b *strings.Builder, t Type) {
+// WriteType writes a type to b as SourceType returns it.
+func WriteType(b *strings.Builder, t Type) {
 	switch x := t.(type) {
 	case nil:
 		b.WriteString("?")
@@ -242,7 +303,7 @@ func writeType(b *strings.Builder, t Type) {
 					b.WriteString(", ")
 				}
 
-				writeType(b, a)
+				WriteType(b, a)
 			}
 
 			b.WriteString(">")
@@ -251,9 +312,9 @@ func writeType(b *strings.Builder, t Type) {
 		b.WriteString("Self")
 	case *PointerType:
 		b.WriteString("*")
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 	case *OptionType:
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 		b.WriteString("?")
 	case *RefType:
 		if x.Mut {
@@ -262,20 +323,20 @@ func writeType(b *strings.Builder, t Type) {
 			b.WriteString("ref ")
 		}
 
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 	case *SliceType:
 		b.WriteString("[]")
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 	case *ArrayType:
 		b.WriteString("[")
-		writeExpr(b, x.Len)
+		WriteExpr(b, x.Len)
 		b.WriteString("]")
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 	case *MapType:
 		b.WriteString("map[")
-		writeType(b, x.Key)
+		WriteType(b, x.Key)
 		b.WriteString("]")
-		writeType(b, x.Value)
+		WriteType(b, x.Value)
 	case *ChanType:
 		switch x.Dir {
 		case SendOnly:
@@ -286,10 +347,10 @@ func writeType(b *strings.Builder, t Type) {
 			b.WriteString("chan ")
 		}
 
-		writeType(b, x.Elem)
+		WriteType(b, x.Elem)
 	case *FuncType:
 		b.WriteString("func(")
-		writeParams(b, x.Params)
+		WriteParams(b, x.Params)
 		b.WriteString(")")
 		writeResults(b, x.Results)
 	case *TupleType:
@@ -299,7 +360,7 @@ func writeType(b *strings.Builder, t Type) {
 				b.WriteString(", ")
 			}
 
-			writeType(b, e)
+			WriteType(b, e)
 		}
 
 		b.WriteString(")")

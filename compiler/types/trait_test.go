@@ -411,3 +411,23 @@ func TestTraits(t *testing.T) {
 		}
 	}
 }
+
+// TestImplementsPredeclared holds Implements to the standard traits the
+// predeclared types have by their structure: a number every one of
+// them, a string all but Copy.
+func TestImplementsPredeclared(t *testing.T) {
+	for _, c := range []struct {
+		typ   Type
+		trait *Trait
+		want  bool
+	}{
+		{Typ[Int], EqTrait, true},
+		{Typ[Int], CopyTrait, true},
+		{Typ[String], HashTrait, true},
+		{Typ[String], CopyTrait, false},
+	} {
+		if got := Implements(c.typ, c.trait); got != c.want {
+			t.Errorf("Implements(%s, %s) = %v, want %v", c.typ, c.trait, got, c.want)
+		}
+	}
+}

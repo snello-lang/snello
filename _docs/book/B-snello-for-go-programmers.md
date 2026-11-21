@@ -383,3 +383,13 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | An iterator over a collection that changes while it runs sees whatever the change leaves | The collection cannot change while an iterator over it, or an adapter over that, is alive: the checker refuses it |
 | A generic type argument may be anything, a pointer into a collection included, which the collector keeps alive | A type argument may hold a borrow, and the instance holds it: the checker keeps the collection alive and unchanged for as long as the instance lives |
 
+## Chapter 37: Documenting a package
+
+| In Go | In Snello |
+|---|---|
+| A doc comment above a declaration, with headings, lists, code and `[Name]` links (go.dev/doc/comment) | The same comments, by the same rules |
+| A `const ( ... )` block shares the comment above it | Consecutive `const` lines, with no blank line between, share the comment above the first, as a block does |
+| A link that names nothing is left as text, silently | A link that names nothing is warned of, with its file and line |
+| `go doc strings.Builder` | `snello doc strings.Builder`, whose signatures show how each argument is passed, `ref`, `mut` or by value |
+| `go doc Reader` prints the first package it finds with the name | `snello doc Reader` names every package that has it, `bufio, io and strings`, and a package settles it |
+| A type's page cannot say which interfaces it satisfies | A type's declaration names the traits it implements, and a trait's page lists the types that implement it |

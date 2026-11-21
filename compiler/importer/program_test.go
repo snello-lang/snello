@@ -219,6 +219,22 @@ func TestTestFiles(t *testing.T) {
 	}
 }
 
+// TestLoadComments holds a Load that asks for comments to the program's
+// own files keeping theirs, and one that does not to keeping none.
+func TestLoadComments(t *testing.T) {
+	src := []byte("// Package main runs.\npackage main\n\nfunc main() {}\n")
+	for _, keep := range []bool{true, false} {
+		_, prog, err := LoadProgramFrom(Load{Names: []string{"main.snello"}, Srcs: [][]byte{src}, Standalone: true, Comments: keep}, &types.Info{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := prog.Syntax[0].Docs != nil; got != keep {
+			t.Errorf("Comments %v: comments kept %v", keep, got)
+		}
+	}
+}
+
 // TestLoadStandalone loads a program in no module, as a standard
 // package's tests are, though its files are named under a directory
 // whose module file does not read: Standalone leaves the module unread,

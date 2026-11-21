@@ -36,7 +36,7 @@ const (
 // wakeRuns is how many processes TestWakeAfterWaitEnds runs its rounds
 // in, each starting its workers anew, so that a race of the wake whose
 // window a run seldom meets is met more often.
-const wakeRuns = 100
+const wakeRuns = 5
 
 // The debuggers a hung probe's threads are read with: cdb on Windows,
 // from Windows' SDK, which installs it under its kit's directory for

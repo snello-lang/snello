@@ -117,23 +117,25 @@ bin/snello build examples/hello/hello.snello
 
 | Command | What it does |
 |---|---|
-| `snello build FILE` | Compiles a program to a native executable in the current directory, through the LLVM backend and clang; `DIR` builds the program of every `.snello` file in a directory |
-| `snello build -debug FILE` | The same, with the checking runtime, which panics on a value used after its release and reports anything never released |
-| `snello build -backend c FILE` | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
-| `snello check FILE` | Checks a program and prints its errors |
-| `snello test DIR` | Runs the tests in a directory's `_test.snello` files |
-| `snello doctor` | Checks what a build needs, clang, a link with link-time optimization, a C compiler and git, and prints the command that installs what is missing |
-| `snello help` | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
-| `snello version` | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |
-| `snello new DIR` | Starts a module in a new directory: its `snello.mod`, a `main.snello` that prints a greeting, and a `main_test.snello` |
-| `snello run FILE` | Builds a program, runs it with the arguments after its path, passes its exit code on, and leaves no file behind; `DIR` runs a directory's program |
-| `snello init` | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
-| `snello emit FILE` | Prints the IR the compiler generates; `-backend c` prints the C |
-| `snello add NAME URL` | Requires a git repository's latest release, its highest tag `vX.Y.Z`, or the version named after the URL, under the name the program imports it by; the build fetches it and locks it in `snello.lock` |
-| `snello update` | Raises each dependency to its latest compatible release; `-major` crosses major versions |
-| `snello remove NAME` | Drops a requirement, refused while a file still imports it |
-| `snello deps` | Lists the dependencies, the version selected and who requires which; `-why NAME` prints the chain that brings one in |
-| `snello fetch` | Fetches every dependency into the module cache, for a build with no network |
+| <code>snello&nbsp;build&nbsp;FILE</code> | Compiles a program to a native executable in the current directory, through the LLVM backend and clang; `DIR` builds the program of every `.snello` file in a directory |
+| <code>snello&nbsp;build&nbsp;-debug&nbsp;FILE</code> | The same, with the checking runtime, which panics on a value used after its release and reports anything never released |
+| <code>snello&nbsp;build&nbsp;-backend&nbsp;c&nbsp;FILE</code> | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
+| <code>snello&nbsp;check&nbsp;FILE</code> | Checks a program and prints its errors |
+| <code>snello&nbsp;test&nbsp;DIR</code> | Runs the tests in a directory's `_test.snello` files |
+| <code>snello&nbsp;doc&nbsp;PACKAGE</code> | Prints a package's documentation, or one name's with `NAME` or `PACKAGE.NAME`; `-all` prints every name with its comment, `-u` the unexported names too |
+| <code>snello&nbsp;doc&nbsp;-http</code> | Serves the documentation of the standard library and the module in a browser, at `http://localhost:6060/` unless `-http=HOST:PORT` names another address, with a filter over every package and name |
+| <code>snello&nbsp;doctor</code> | Checks what a build needs, clang, a link with link-time optimization, a C compiler and git, and prints the command that installs what is missing |
+| <code>snello&nbsp;help</code> | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
+| <code>snello&nbsp;version</code> | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |
+| <code>snello&nbsp;new&nbsp;DIR</code> | Starts a module in a new directory: its `snello.mod`, a `main.snello` that prints a greeting, and a `main_test.snello` |
+| <code>snello&nbsp;run&nbsp;FILE</code> | Builds a program, runs it with the arguments after its path, passes its exit code on, and leaves no file behind; `DIR` runs a directory's program |
+| <code>snello&nbsp;init</code> | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
+| <code>snello&nbsp;emit&nbsp;FILE</code> | Prints the IR the compiler generates; `-backend c` prints the C |
+| <code>snello&nbsp;add&nbsp;NAME&nbsp;URL</code> | Requires a git repository's latest release, its highest tag `vX.Y.Z`, or the version named after the URL, under the name the program imports it by; the build fetches it and locks it in `snello.lock` |
+| <code>snello&nbsp;update</code> | Raises each dependency to its latest compatible release; `-major` crosses major versions |
+| <code>snello&nbsp;remove&nbsp;NAME</code> | Drops a requirement, refused while a file still imports it |
+| <code>snello&nbsp;deps</code> | Lists the dependencies, the version selected and who requires which; `-why NAME` prints the chain that brings one in |
+| <code>snello&nbsp;fetch</code> | Fetches every dependency into the module cache, for a build with no network |
 
 `clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program. [Chapter 32](_docs/book/32-the-snello-command.md#environment) of the book lists every variable `snello` reads and the cache directory of each system.
 
@@ -141,6 +143,7 @@ bin/snello build examples/hello/hello.snello
 
 - [The book](_docs/book/): the language, one feature per chapter, starting from [the introduction](_docs/book/01-introduction.md). Readers coming from Go have [Appendix B](_docs/book/B-snello-for-go-programmers.md).
 - [The design](_docs/design/): every decision behind the language and the reasoning for it.
+- `snello doc -http`: the standard library's documentation, and your module's, in a browser; [chapter 37](_docs/book/37-documenting-a-package.md) says how to write it.
 - [Examples](examples/): programs that build and run with the output each prints, and programs that break each rule with the message the compiler gives.
 
 ## Contributing

@@ -96,6 +96,7 @@ type Load struct {
 	StdDir     string // the standard library's sources read from a directory, as Importer.StdDir
 	Standalone bool
 	Target     platform.Target // the platform the program is built for, which chooses its packages' files; the zero Target is the host
+	Comments   bool            // the program's own files parsed with their comments, for snello doc and the examples' runner
 }
 
 // LoadProgramFrom loads a program from its sources, as LoadProgram
@@ -124,7 +125,7 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 		}
 	}
 
-	fset, syntax, err := parseFiles(l.Names, l.Srcs)
+	fset, syntax, err := parseFiles(l.Names, l.Srcs, l.Comments)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -332,14 +333,19 @@ func isC(name string) bool {
 
 // parseFiles parses the sources named into one FileSet, so that a
 // position names its file, and returns the files, their syntax and the
-// errors of every file together.
-func parseFiles(names []string, srcs [][]byte) (*token.FileSet, []*ast.File, error) {
+// errors of every file together; comments asks for the files' comments.
+func parseFiles(names []string, srcs [][]byte, comments bool) (*token.FileSet, []*ast.File, error) {
+	parse := parser.Parse
+	if comments {
+		parse = parser.ParseComments
+	}
+
 	fset := token.NewFileSet()
 	syntax := make([]*ast.File, len(names))
 	var errs scanner.ErrorList
 	for i, name := range names {
 		var err error
-		if syntax[i], err = parser.Parse(fset.AddFile(name, len(srcs[i])), srcs[i]); err != nil {
+		if syntax[i], err = parse(fset.AddFile(name, len(srcs[i])), srcs[i]); err != nil {
 			errs = append(errs, err.(scanner.ErrorList)...)
 		}
 	}

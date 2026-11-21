@@ -50,6 +50,11 @@ type Importer struct {
 
 	Tests string // the path of the package under test, whose test files are loaded with it, or ""
 
+	// Comments reports, of a package's import path, whether its files
+	// are parsed with their comments, for snello doc and the examples'
+	// runner; nil, as for a build, keeps none.
+	Comments func(path string) bool
+
 	// StdDir is a directory holding the standard library's sources as
 	// std/ in the compiler's repository does, read in place of the copy
 	// embedded in the compiler: how snello test std/NAME in a checkout
@@ -450,7 +455,7 @@ func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]stri
 // caller to record. The files are parsed into one FileSet, so that an
 // error in any of them names its file.
 func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
-	fset, syntax, err := parseFiles(names, srcs)
+	fset, syntax, err := parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
 	if err == nil {
 		err = checkTestImports(names, syntax, conf.Standard)
 	}

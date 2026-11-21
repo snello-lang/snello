@@ -8,11 +8,13 @@
 // with a source buffer and returns one token per call to Scan, inserting
 // semicolons at line ends by Go's rule, extended to lines ending in a
 // postfix ? or in the > that closes a type argument list. Comments are
-// skipped.
+// skipped, and kept beside the tokens when KeepComments asks.
 package scanner
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"unicode"
 	"unicode/utf8"
 
@@ -49,8 +51,22 @@ type Scanner struct {
 	nextOffset int  // byte offset in src where the character after ch starts
 	insertSemi bool // set when a newline here should produce a semicolon
 
+	// kept holds the comments KeepComments asked for, nil until it asks:
+	// one word, so that a scanner that keeps none is no larger than one
+	// word more, which leaves a parser holding it in its size class.
+	kept *[]Comment
+
 	// ErrorCount is the number of errors reported so far.
 	ErrorCount int
+}
+
+// A Comment is a comment the scanner skipped, kept when KeepComments
+// asks: where it begins, its text as written, with its // or /* */,
+// and whether it begins its line, with nothing but space before it.
+type Comment struct {
+	Pos      token.Pos
+	Text     string
+	OwnsLine bool
 }
 
 // Init prepares the scanner to lex src. The scanner records each line
@@ -64,12 +80,33 @@ func (s *Scanner) Init(file *token.File, src []byte, err ErrorHandler) {
 	s.offset = 0
 	s.nextOffset = 0
 	s.insertSemi = false
+	s.kept = nil
 	s.ErrorCount = 0
 	s.next()
 
 	if s.ch == bom {
 		s.next()
 	}
+}
+
+// KeepComments makes the scanner keep every comment it skips from
+// here on, for Comments to give; the tokens are the same either way.
+func (s *Scanner) KeepComments() { s.kept = new([]Comment) }
+
+// Comments returns the comments kept, each once, in the order of the
+// source. A copy of the scanner shares the list, so a parser that read
+// ahead, restored a copy and read again kept some twice, and later
+// ones before earlier: they are put in order and the repeats dropped.
+func (s *Scanner) Comments() []Comment {
+	if s.kept == nil {
+		return nil
+	}
+
+	list := *s.kept
+	slices.SortStableFunc(list, func(a, b Comment) int { return cmp.Compare(a.Pos, b.Pos) })
+	list = slices.CompactFunc(list, func(a, b Comment) bool { return a.Pos == b.Pos })
+	*s.kept = list
+	return list
 }
 
 // Scan returns the next token. For identifiers, keywords and literals,
@@ -164,9 +201,18 @@ scanAgain:
 			switch s.ch {
 			case '/':
 				s.skipLineComment()
+				if s.kept != nil {
+					s.keepComment(pos)
+				}
+
 				goto scanAgain
 			case '*':
-				if s.skipBlockComment() && s.insertSemi {
+				hasNewline := s.skipBlockComment()
+				if s.kept != nil {
+					s.keepComment(pos)
+				}
+
+				if hasNewline && s.insertSemi {
 					s.insertSemi = false
 					return pos, token.SEMICOLON, "\n"
 				}
@@ -289,6 +335,18 @@ func (s *Scanner) skipWhitespace() {
 	for s.ch == ' ' || s.ch == '\t' || s.ch == '\r' || s.ch == '\n' && !s.insertSemi {
 		s.next()
 	}
+}
+
+// keepComment keeps the comment that began at pos and ends here: its
+// text is a piece of the source, so keeping it copies nothing.
+func (s *Scanner) keepComment(pos token.Pos) {
+	start := s.file.Offset(pos)
+	line := start
+	for line > 0 && (s.src[line-1] == ' ' || s.src[line-1] == '\t' || s.src[line-1] == '\r') {
+		line--
+	}
+
+	*s.kept = append(*s.kept, Comment{pos, s.src[start:s.offset], line == 0 || s.src[line-1] == '\n'})
 }
 
 // skipLineComment consumes a // comment up to, not including, the newline.

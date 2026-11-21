@@ -827,9 +827,11 @@ void sn_os_env_system(sn_string key, const sn_string *value);
 // own text, UTF-16, converted from and to Snello's UTF-8: sn_console
 // reports whether the descriptor is such a stream, and sn_console_write
 // writes len bytes to it, returning how many it took, all of them but
-// on a failure, with errno set; os_windows.c's.
+// on a failure, with errno set; sn_console_reset forgets what is known
+// of a descriptor pointed elsewhere; os_windows.c's.
 bool sn_console(int fd);
 int64_t sn_console_write(int fd, const uint8_t *p, int64_t len);
+void sn_console_reset(int fd);
 #endif
 
 // The bits of an os.FileMode, which are Go's: the permissions in the

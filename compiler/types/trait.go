@@ -1545,6 +1545,11 @@ func (c *Checker) resolvePendingBounds() {
 	c.pendingBounds = nil
 }
 
+// Implements reports whether a value of type t may stand where trait
+// is required, as the checker decides it: what snello doc lists of a
+// trait's implementors among the predeclared types.
+func Implements(t Type, trait *Trait) bool { return implements(t, trait) }
+
 // implements reports whether a value of type t may stand where trait
 // is required: a type parameter implements what its bounds do, a trait
 // value its trait and those it refines, the predeclared types the

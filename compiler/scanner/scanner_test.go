@@ -7,6 +7,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -155,6 +156,112 @@ func TestExamples(t *testing.T) {
 		if len(toks) == 0 {
 			t.Errorf("%s: no tokens", f.name)
 		}
+	}
+}
+
+// TestKeepComments holds the comments KeepComments keeps: each with its
+// text as written and whether it begins its line, and the tokens the
+// same as a scan that keeps none.
+func TestKeepComments(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []Comment
+	}{
+		{"// a\nx := 1 // b\n", []Comment{{1, "// a", true}, {13, "// b", false}}},
+		{"\t/* c */ x\n/* d\ne */\n", []Comment{{2, "/* c */", true}, {12, "/* d\ne */", true}}},
+		{"x /* f */ y", []Comment{{3, "/* f */", false}}},
+		{"x := 1", nil},
+	}
+
+	for _, tt := range tests {
+		var s Scanner
+		s.Init(token.NewFile("t.snello", len(tt.src)), []byte(tt.src), nil)
+		s.KeepComments()
+		var got []elt
+		for {
+			_, tok, lit := s.Scan()
+			if tok == token.EOF {
+				break
+			}
+
+			got = append(got, elt{tok, lit})
+		}
+
+		if comments := s.Comments(); !slices.Equal(comments, tt.want) {
+			t.Errorf("%q: comments %v, want %v", tt.src, comments, tt.want)
+		}
+
+		if plain, _ := scanAll(t, "t.snello", tt.src); !slices.Equal(got, plain) {
+			t.Errorf("%q: tokens %v, want %v", tt.src, got, plain)
+		}
+	}
+}
+
+// TestKeepCommentsTokens holds a scan that keeps comments to the tokens
+// of one that does not, over every example and every standard package.
+func TestKeepCommentsTokens(t *testing.T) {
+	files := exampleFiles(t)
+	err := filepath.WalkDir(filepath.Join("..", "..", "std"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".snello") {
+			return err
+		}
+
+		src, err := os.ReadFile(path)
+		files = append(files, exampleFile{path, src})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range files {
+		var s Scanner
+		s.Init(token.NewFile(f.name, len(f.src)), f.src, nil)
+		s.KeepComments()
+		var got []elt
+		for {
+			_, tok, lit := s.Scan()
+			if tok == token.EOF {
+				break
+			}
+
+			got = append(got, elt{tok, lit})
+		}
+
+		if plain, _ := scanAll(t, f.name, string(f.src)); !slices.Equal(got, plain) {
+			t.Errorf("%s: a scan keeping comments gave other tokens", f.name)
+		}
+	}
+}
+
+// TestCommentsOnce holds Comments to each comment once and in order
+// after a copy of the scanner was restored and read again, as a parser
+// reads ahead.
+func TestCommentsOnce(t *testing.T) {
+	src := "a // one\nb // two\nc // three\n"
+	var s Scanner
+	s.Init(token.NewFile("t.snello", len(src)), []byte(src), nil)
+	s.KeepComments()
+	s.Scan() // a
+	saved := s
+	for range 4 { // ; b ; c: past two comments
+		s.Scan()
+	}
+
+	s = saved
+	for {
+		if _, tok, _ := s.Scan(); tok == token.EOF {
+			break
+		}
+	}
+
+	var texts []string
+	for _, c := range s.Comments() {
+		texts = append(texts, c.Text)
+	}
+
+	if want := []string{"// one", "// two", "// three"}; !slices.Equal(texts, want) {
+		t.Errorf("comments %q, want %q", texts, want)
 	}
 }
 

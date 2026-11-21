@@ -150,7 +150,7 @@ func TestLarge() {
 
 ## Parallel tests
 
-A test that calls `testing.Parallel()` as its first line runs beside the other parallel tests of the package, after every sequential test has ended: the call waits until the sequential tests are done, and the runner goes on to the next test meanwhile. Each parallel test runs in a task of its own; its `=== RUN` line is printed when it starts, as every test's is, and its logs and its result are held until it ends and then printed together, so the output of two parallel tests never interleaves. `Parallel` returns `true`; a second call in one test, or one in a subtest of a test already parallel, or one on a task the test spawned, changes nothing and returns `false`, where Go's `t.Parallel` panics. A subtest runs on its parent's state, so `Parallel` in a subtest of a sequential test makes the whole test parallel from that point: the test waits there until the sequential tests are done, and its later lines are held, where Go pauses the subtest alone. The place of an assertion, the file, line and text the failure message prints, is the running task's own, so two parallel tests failing at once each report their own.
+A test that calls `testing.Parallel()` as its first line runs beside the other parallel tests of the package, after every sequential test has ended: the call waits until the sequential tests are done, and the runner goes on to the next test meanwhile. Each parallel test runs in a task of its own; its `=== RUN` line is printed when it starts, as every test's is, and its logs and its result are held until it ends and then printed together, so the output of two parallel tests never interleaves. `Parallel` returns `true`; a second call in one test, or one in a subtest of a test already parallel, or one on a task the test spawned, changes nothing and returns `false`. A subtest runs on its parent's state, so `Parallel` in a subtest of a sequential test makes the whole test parallel from that point: the test waits there until the sequential tests are done, and its later lines are held. The place of an assertion, the file, line and text the failure message prints, is the running task's own, so two parallel tests failing at once each report their own.
 
 ## Benchmarks
 
@@ -172,6 +172,33 @@ BenchmarkRepeat             3214567          341 ns/op       32 B/op        1 al
 ```
 
 The time per operation has decimals under a hundred nanoseconds. A benchmark that fails an expectation is reported as a test is, `--- FAIL: BenchmarkRepeat` with the message under it, and the run ends with `FAIL`. `testing.ReportAllocs()` adds bytes and allocations per operation, counted by the runtime's allocator for the loop alone; `testing.ResetTimer()` restarts the clock and the counts after a setup the loop should not measure.
+
+## Examples
+
+An example is a function of a test file named `Example` and the name it shows, taking nothing and returning nothing, whose last comment says what it prints:
+
+```go
+func ExampleRepeat() {
+    fmt.Println(Repeat("ab", 3) ?? "")
+    // Output: ababab
+}
+```
+
+`snello test` runs it after the tests, with what it writes to the standard output captured, and compares that with the lines after `Output:`, each side trimmed of space at its ends; an example whose lines may come in any order says `Unordered output:` instead. One that prints otherwise fails with both shown:
+
+```
+--- FAIL: ExampleRepeat (0.00s)
+got:
+abab
+want:
+ababab
+```
+
+An example that panics fails as a test does, and one with no output comment is compiled and not run. `-run`, `-count` and `-failfast` apply to examples as to tests, and `-v` reports each one.
+
+An example's name says what it documents: `Example` the package, `ExampleRepeat` the name `Repeat`, `ExampleBuilder_WriteString` the method `WriteString` of `Builder`, and any of them may end in an underscore and a suffix in lower case, `ExampleRepeat_empty`, for a second example of the same name. An example whose name names nothing the package declares is refused before anything runs, `ExampleRepeatt names nothing in package strings`, so that an example is never silently not shown. `snello doc` shows each on the page of the name it documents (chapter 37).
+
+An example joins what it spawns: what a task writes after the example returns is not its own.
 
 ## Golden files
 
