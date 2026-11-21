@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/snello-lang/snello/releases"><img alt="Release" src="https://img.shields.io/github/v/release/snello-lang/snello?include_prereleases&label=release"></a>
-  <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/snello-lang/snello/test.yml?branch=main&label=tests"></a>
+  <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/snello-lang/snello/test.yml?label=tests"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/snello-lang/snello?label=license"></a>
 </p>
 
