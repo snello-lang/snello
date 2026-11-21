@@ -1,3 +1,7 @@
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Arch Linux as a developer has it: bare, with nothing to build with,
 # and with clang, the one package a build needs, which brings gcc as cc
 # and links with link-time optimization as it comes. Arch publishes no

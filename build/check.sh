@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # snello check over every example program that has its expected
 # output beside it, which is the examples suite's own rule for a
 # program that is finished; one without is pending on a library it

@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Writes the system files a build for another Linux needs into DIR, a
 # sysroot that SNELLO_SYSROOT_linux_amd64 or SNELLO_SYSROOT_linux_arm64
 # then names: the C library's headers, start files and libraries, the

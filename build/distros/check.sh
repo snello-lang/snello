@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Runs inside an image build/distros.sh makes of a distribution, as
 # check.sh bare or check.sh clang. With clang, the one package a build
 # needs, a developer's first five minutes pass: snello doctor, then a
