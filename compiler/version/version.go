@@ -19,8 +19,9 @@ import (
 
 const (
 	// Current is the version of the release this compiler is built
-	// for, set at the start of each release's work: the version a
-	// module's snello line is checked against.
+	// for, raised in the pull request that prepares each release, and
+	// held equal to the release's tag by the release's build: the
+	// version a module's snello line is checked against.
 	Current = "0.1.0"
 
 	// First is the first release, which a module file without a
@@ -74,9 +75,9 @@ const (
 	platformSeparator = "/"
 )
 
-// channel is the channel a release build is published on, stable or
-// nightly, stamped in by the linker's -X flag; empty in a build from
-// source, which Describe names devel.
+// channel is the channel a release build is published on, stable,
+// stamped in by the linker's -X flag; empty in a build from source,
+// which Describe names devel.
 var channel string
 
 // A Version is a version as SemVer writes it, read by Parse: its
@@ -187,6 +188,12 @@ func (v Version) Compare(w Version) int {
 // identifier: 0.2.0 and not 0.2.0-rc.1.
 func (v Version) Release() bool {
 	return len(v.pre) == 0
+}
+
+// Core returns v without its pre-release: the release a pre-release
+// leads to, 0.2.0 for 0.2.0-rc.1, and v itself for a release.
+func (v Version) Core() Version {
+	return Version{major: v.major, minor: v.minor, patch: v.patch}
 }
 
 // Compatible reports whether a program built against v builds against

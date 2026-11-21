@@ -480,15 +480,24 @@ func directive(line string) []string {
 	return words
 }
 
-// checkLater refuses a module file, named for the message, whose
-// snello line, the first line that begins with snello, names a later
-// version than this compiler's, with that line, whatever the file's
-// other lines hold. Any other snello line, and a first one that is not
-// a version alone, are the strict reading's to report, since no release
-// would read the file then. It splits the lines up to the first snello
-// line into words.
+// checkLater refuses a module written for a later release than this
+// compiler, by its snello line, before anything else of the file is
+// read; a pre-release of a version compiles the modules written for
+// that version, since it is that release in the making, so the
+// comparison is against the compiler's version without its pre-release.
 func checkLater(name string, lines []string) error {
 	current, _ := version.Parse(version.Current) // Current is a SemVer version, which the version package's tests hold it to
+	return laterThan(name, lines, current.Core())
+}
+
+// laterThan refuses a module file, named for the message, whose
+// snello line, the first line that begins with snello, names a later
+// version than current, with that line, whatever the file's other
+// lines hold. Any other snello line, and a first one that is not a
+// version alone, are the strict reading's to report, since no release
+// would read the file then. It splits the lines up to the first snello
+// line into words.
+func laterThan(name string, lines []string, current version.Version) error {
 	for i, line := range lines {
 		fields := directive(line)
 		if len(fields) == 0 || fields[0] != versionDirective {

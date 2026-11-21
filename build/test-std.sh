@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Runs the standard library's own tests, snello test over every
 # package under std/ with a _test.snello file, those two levels down
 # such as std/unicode/utf8 included, through both backends, stopping at

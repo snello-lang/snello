@@ -28,6 +28,8 @@ bin/snello build examples/hello/hello.snello
 
 `clang` and `cc` are found on the path, or `CLANG` and `CC` name them; [chapter 32](_docs/book/32-the-snello-command.md#environment) of the book lists every variable `snello` reads.
 
+**Where to work.** The compiler is developed on Linux and macOS: the build's scripts under `build/` and the release's under `release/` are POSIX `sh`, run by the Makefile, and the development image is Linux. Windows is not excluded: with Git for Windows, whose Bash runs the same scripts, GNU make from `choco install make`, and LLVM with Visual Studio's Build Tools, `go test ./...`, `make test` and `make check` run as they do elsewhere, which is how CI runs them on both Windows runners on every change; what is not yet built on Windows is listed in [the platforms note](_docs/design/12-platforms.md). A release is cut from Linux or macOS.
+
 Before changing anything, read the design that governs it: [the language design](_docs/design/01-language-design.md) for every decision and why, [the syntax conventions](_docs/design/00-syntax-conventions.md), and the note on the part you are changing in [`_docs/design/`](_docs/design/). The design wins over the code: when they disagree, say so in the issue rather than change either side.
 
 ## Testing a change
@@ -48,9 +50,13 @@ The Makefile runs Snello's own tests through `snello test`: `make test` runs the
 - **One issue, one pull request.** Keep it to the issue's scope, and check off its acceptance criteria as you meet them.
 - **Tests with the change.** Every Go file has its `_test.go`. A checker change comes with the programs it must refuse, each with its expected message. Use only Go's `testing` package.
 - **Docs with the change.** A change to the language updates its design note and its chapter of [the book](_docs/book/) in the same pull request.
-- **The style.** [The coding standards](CODING_STANDARDS.md) say how code is written here; every `.go`, `.snello` and `.c` file starts with the license header they show. Markdown is not hard-wrapped, and Snello code in it is fenced as `go`, since GitHub does not highlight Snello.
+- **The style.** [The coding standards](CODING_STANDARDS.md) say how code is written here; every file of code or of the build, `.go`, `.snello`, `.c`, `.sh`, the Dockerfiles and the `Makefile` among them, starts with the license header they show. Markdown is not hard-wrapped, and Snello code in it is fenced as `go`, since GitHub does not highlight Snello.
 - **Conventional Commits.** Commit messages and the pull request's title are `type(scope)!: subject`: the type one of `feat`, `fix`, `docs`, `test`, `ci`, `chore`, `refactor`, `perf` or `revert`, the subject in lower case with no period, body lines at most 100 characters. CI checks both, and a squash merge makes the title the commit on `main`.
 - **You are the author.** You must be able to explain and defend every line in review. Contributors working with AI tools also follow [AGENTS.md](AGENTS.md), which forbids crediting a tool as an author.
+
+## Releasing
+
+The maintainers decide what is released and when; nothing is released by a push, a pull request or a schedule. A release is prepared in a pull request, the version and the changelog's section, and cut by a tag a maintainer pushes on its merge; a workflow builds, checks, signs and publishes it from the tag. The steps, with the reason for each, are in [release/README.md](release/README.md).
 
 ## Conduct
 

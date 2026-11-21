@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Checks the first five minutes of a developer on each distribution
 # whose install command snello doctor names: builds snello for Linux,
 # once for each processor, and for each distribution under

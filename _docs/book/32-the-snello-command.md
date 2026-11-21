@@ -110,6 +110,26 @@ These are the variables `snello` reads. None is needed on a machine with clang i
 | `SNELLO_SYSROOT_<system>_<processor>` | A target's system files, a sysroot, for a build for it (chapter 2): `SNELLO_SYSROOT_linux_amd64`, `SNELLO_SYSROOT_linux_arm64`, `SNELLO_SYSROOT_windows_amd64` and `SNELLO_SYSROOT_windows_arm64`; read on any system where it is set | the files of the cross packages on Debian and Ubuntu for the other Linux, of Visual Studio's Build Tools on Windows for Windows; anywhere else a build for that target is refused, saying which variable to set |
 | `TMPDIR`; on Windows `TMP`, then `TEMP` | The directory builds work in | the system's temporary directory |
 
+`snello env` prints what a build in the current directory reads, one setting a line with its value and where the value came from, so that the question behind most build problems, which clang did it pick, is it using my sysroot, is answered at a glance and can be pasted into a bug report:
+
+```
+$ snello env
+VERSION                       snello 0.1.0 (8477985) stable darwin/arm64  this binary
+TARGET                        darwin/arm64                                this machine; -target names another
+CLANG                         /usr/bin/clang                              on the path
+CC                            /usr/bin/cc                                 on the path
+SNELLO_CACHE                  /Users/ana/Library/Caches/snello            the system's cache directory
+SNELLO_MODCACHE               /Users/ana/Library/Caches/snello-modules    beside the runtime's cache
+SNELLO_SYSROOT_linux_amd64    not set                                     a build for linux/amd64 reads it when set
+SNELLO_SYSROOT_linux_arm64    not set                                     a build for linux/arm64 reads it when set
+SNELLO_SYSROOT_windows_amd64  /opt/xwin                                   SNELLO_SYSROOT_windows_amd64
+SNELLO_SYSROOT_windows_arm64  not set                                     a build for windows/arm64 reads it when set
+TMPDIR                        /var/folders/4m/T                           TMPDIR
+MODULE                        /Users/ana/app/snello.mod                   snello 0.1.0
+```
+
+A compiler is shown as the file that would run, found on the path or named by its variable, or noted as not found with `snello doctor` to run; a sysroot is listed for each target that takes one, which is why there is none for macOS; the module is the nearest `snello.mod` here or above, with its version line, or none. A module file that does not read is named with why in the source column, so that a build's failure is foreseen here. `snello env NAME` prints one value alone, for a script, `snello env CLANG`, and an empty line for a setting that is not set; `snello env -json` prints every setting as JSON, name to value, for an editor, and `-json NAME` the one named. There is no way to set a value through `snello`: the environment is the one source, so what `env` prints is what a build sees, and nothing is kept in a file to forget. `snello doctor` says whether the toolchain works; `snello env` says what is set.
+
 A message about a compiler says which variable named it, `CC names /opt/cc, not found`. A target's linker, `ld.lld` for Linux and `lld-link` for Windows, is found beside the clang a build runs or on the path, so LLVM's directory need be on the path only for clang itself, unless `CLANG` names it. The target in a sysroot's variable is spelled as `-target` spells it, the slash an underscore.
 
 ## Version

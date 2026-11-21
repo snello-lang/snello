@@ -11,7 +11,7 @@ These apply to the Go code of the compiler and to the Snello code under `example
 
 ## Files
 
-- Every `.go` and `.snello` file starts with the license header:
+- Every file of code or of the build starts with the license header, in its language's comment: every `.go`, `.snello`, `.c`, `.h`, `.sh`, `.py`, `.js`, `.css` and `.html` file, every `Dockerfile` and the `Makefile`. A shell script carries it after its `#!` line. Only a file that cannot hold a comment, JSON, and Markdown go without. In Go:
 
   ```go
   // Copyright 2026 The Snello Programming Language. All rights reserved.
@@ -20,6 +20,7 @@ These apply to the Go code of the compiler and to the Snello code under `example
   ```
 
 - Every package has a package comment in exactly one file, the one named after the package, describing what the package is for and what it is modeled on.
+- In a shell script, a Dockerfile or the Makefile, the same three lines after `#`; in Python and in Snello's HTML and CSS, their own comment forms.
 - Go files under `examples/` carry `//go:build ignore` after the header; they are reference programs, not part of the build.
 - `gofmt` and `go vet` are clean at every commit.
 - Markdown is not hard-wrapped: one line per paragraph, so it fills the page width in any viewer. Tables and code blocks are the only exceptions.

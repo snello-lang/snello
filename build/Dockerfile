@@ -1,3 +1,7 @@
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # The one image every make target runs in, and CI's Linux jobs with
 # them: Debian, since the runtime uses glibc's thread and scheduler
 # calls and the tests measure speed, which musl would change, pinned

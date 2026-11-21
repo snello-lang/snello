@@ -469,6 +469,19 @@ func TestModFileVersion(t *testing.T) {
 	}
 }
 
+// TestModFilePreRelease holds a pre-release of a version to the
+// modules written for that version: 0.1.0-alpha.1 compiles snello
+// 0.1.0, and any pre-release of 0.1.0, and refuses snello 0.1.1.
+func TestModFilePreRelease(t *testing.T) {
+	current, _ := version.Parse("0.1.0-alpha.1")
+	for line, refused := range map[string]bool{"snello 0.1.0": false, "snello 0.1.0-alpha.1": false, "snello 0.1.0-beta.1": false, "snello 0.0.9": false, "snello 0.1.1": true, "snello 0.2.0-rc.1": true} {
+		err := laterThan(filepath.Join("/m", ModFile), []string{line}, current.Core())
+		if (err != nil) != refused {
+			t.Errorf("a compiler 0.1.0-alpha.1 given %q: %v, want refused %v", line, err, refused)
+		}
+	}
+}
+
 // TestModuleWarning holds the warning for a module file with no snello
 // line to the file's path, the version it is read as and the line to
 // add; and to nothing for a file with the line, a program in no module,

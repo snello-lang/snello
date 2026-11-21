@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate keeps current what the repository pins: the actions every workflow pins by commit, the digest of the image's Debian base, the Go the compiler is built with and Go's modules, of which the compiler has none. One pull request a week for each, early on Monday, its commit a Conventional Commit of type ci, which commitlint accepts; the pull request's commits are rebased when main moves, so a merge needs no hand.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":rebaseStalePrs"
+  ],
+  "enabledManagers": ["github-actions", "dockerfile", "gomod"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "UTC",
+  "semanticCommits": "enabled",
+  "semanticCommitType": "ci",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "actions",
+      "semanticCommitScope": "actions"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "semanticCommitScope": "image"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "semanticCommitScope": "go"
+    }
+  ]
+}

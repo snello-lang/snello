@@ -88,6 +88,17 @@ func TestRelease(t *testing.T) {
 	}
 }
 
+// TestCore drops a pre-release and keeps a release as it is.
+func TestCore(t *testing.T) {
+	for s, want := range map[string]string{"0.2.0-rc.1": "0.2.0", "0.2.0": "0.2.0", "1.0.0-alpha.1+build.5": "1.0.0"} {
+		v, _ := Parse(s)
+		core, _ := Parse(want)
+		if v.Core().Compare(core) != 0 || !v.Core().Release() {
+			t.Errorf("Core of %s is %+v, want %s", s, v.Core(), want)
+		}
+	}
+}
+
 // TestDescribe holds the line snello version prints to its parts: a
 // release's channel or devel, the commit's short hash, marked when the
 // tree had changes and left out when unknown, and the platform; and
@@ -99,7 +110,7 @@ func TestDescribe(t *testing.T) {
 		want              string
 	}{
 		{"stable", "8477985c0ffee1234567890abcdef0123456789a", false, "snello " + Current + " (8477985) stable darwin/arm64"},
-		{"nightly", "8477985c0ffee", true, "snello " + Current + " (8477985-dirty) nightly darwin/arm64"},
+		{"stable", "8477985c0ffee", true, "snello " + Current + " (8477985-dirty) stable darwin/arm64"},
 		{"", "8477985c0ffee", false, "snello " + Current + " (8477985) devel darwin/arm64"},
 		{"", "", false, "snello " + Current + " devel darwin/arm64"},
 		{"stable", "abc", false, "snello " + Current + " (abc) stable darwin/arm64"},

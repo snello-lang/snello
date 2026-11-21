@@ -28,7 +28,7 @@ A program is built to run on these versions and every later one:
 
 | System | Oldest version | Why |
 |---|---|---|
-| Linux | kernel 3.17, with glibc 2.25 | the system's random source a program is keyed from, `getentropy` |
+| Linux | kernel 5.4, with glibc 2.29 | a child process's pidfd and the wait on it, and a child started in a directory of its own, `posix_spawn_file_actions_addchdir_np` |
 | macOS | 14.4 | the waits on an address the scheduler and the locks are built on |
 | Windows | Windows 10, Windows Server 2016 | the system's random source, `ProcessPrng`; a deadline is kept by the high-resolution timer from Windows 10 1803, and on an earlier version comes on the system's tick of about 16 ms |
 

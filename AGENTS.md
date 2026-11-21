@@ -17,10 +17,11 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 7. `_docs/design/08-packages.md`: a directory as a package, the module file, and how an import path is found.
 8. `_docs/design/12-platforms.md`: the platforms Snello supports, their tiers, the oldest version of each system, and the Windows port.
 9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
-10. `_docs/book/README.md`: the user-facing book and which chapters exist.
-11. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
-12. `CODING_STANDARDS.md`: how code is written here.
-13. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
+10. `_docs/design/14-distribution.md`: versions, the release cadence and channels, what a release holds and how it is trusted, and how Snello is installed.
+11. `_docs/book/README.md`: the user-facing book and which chapters exist.
+12. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
+13. `CODING_STANDARDS.md`: how code is written here.
+14. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 
@@ -45,7 +46,7 @@ The work is planned on GitHub, not in the repository. A [milestone](https://gith
 ### Definition of done, for every task
 
 - `gofmt -l .` prints nothing; `go vet ./...` and `go test ./...` are clean.
-- Every new `.go` and `.snello` file carries the license header.
+- Every new file of code or of the build carries the license header: `.go`, `.snello`, `.c`, `.h`, `.sh`, `.py`, `.js`, `.css`, `.html`, a `Dockerfile` and the `Makefile`.
 - A package that processes source has a benchmark over the examples, and the task's commit records the allocations-per-operation figure if it changed.
 - The design documents and the book are updated in the same change when the task changes what they describe.
 - The issue's own verification steps have been run.
@@ -56,7 +57,7 @@ The work is planned on GitHub, not in the repository. A [milestone](https://gith
 - **No garbage collector**, anywhere. Snello programs are native binaries: the C backend and its runtime own every allocation, and nothing may rely on a collector. Go is the language the compiler is written in, nothing more.
 - **Simplicity.** If Go has a way to say it, Snello says it that way. A new construct must be readable by a Go developer without a glossary. The list of things deliberately left out is in the design document under "What Snello leaves out"; do not add any of them back.
 - **The examples are the acceptance suite.** Every change keeps all twenty processing, and each one with an expected output running. Changing an example to make a change pass requires changing the design document in the same change.
-- **License header** on every `.go` and `.snello` file, in the form shown in `CODING_STANDARDS.md`.
+- **License header** on every file of code or of the build, scripts, Dockerfiles and the Makefile included, in the forms shown in `CODING_STANDARDS.md`.
 - **Markdown is not hard-wrapped.** One line per paragraph; never reflow prose to a column width.
 - **Snello code in Markdown is fenced as `go`.** GitHub does not know Snello, and Go's highlighting fits its syntax.
 
@@ -74,6 +75,7 @@ make distros          # a developer's first five minutes on Debian, Ubuntu, Fedo
 go run ./cmd/snello lex FILE     # print the token stream of a Snello file
 go run ./cmd/snello parse FILE   # print the syntax tree
 go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct
+go run ./cmd/snello env          # what a build reads here, each setting with its value and where it comes from
 go run ./cmd/snello build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
 go run ./cmd/snello build DIR    # the same for a program of every .snello file in a directory, named after it
 go run ./cmd/snello build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, clang on Windows, or CC set
@@ -106,11 +108,12 @@ go run ./cmd/snello build -target linux/arm64 FILE   # build for another platfor
 | `compiler/emit/llvm/` | The LLVM IR emitter, over the same runtime, built by clang |
 | `compiler/emit/internal/backendtest/` | The programs both backends' tests build and run, with what each must give, so the backends are held to one list; `testdata/` the programs of one file that exercise a feature each, with what each prints beside it |
 | `runtime/` | The C runtime every Snello program links against, under `c/`, one file a part: `snello.c` the core, a program's start and end, panics and what more than one file uses, which `internal.h` declares for the runtime alone; `slice.c`, `sort.c` (Rust's driftsort), `string.c`, `map.c`, `chan.c` and `sync.c` the values, channels and locks; `format.c`, `quote.c`, `parse.c` and `decimal.c` numbers and quotes as text; `bufio.c`, `os.c`, `print.c`, `math.c` and `time.c` the runtime's half of those packages; `alloc.c` the allocator, `unicode.c` the case, white-space and printable-rune tables `mkunicode.go` writes from Unicode's data files, `pow10.c` the powers of ten `mkpow10.go` writes, `sched.c` the scheduler, `scope.c` the scopes cancellation and deadlines belong to, `timer.c` the timers, `net.c` the poller and sockets, `lookup.c` the addresses and the names they look up, on threads of its own, `process.c` the signals and the programs a program runs, with the Windows child in `process_windows.c`, `debug.c` the checking build; `system.h` the system's threads, locks, conditions and one-time setup, inlined to the POSIX calls on Linux and macOS and to Windows' own primitives on Windows; `os_windows.c` the `os` package's calls on Windows, in place of `os.c`'s; embedded by the package for both backends, which compile the files in parallel |
+| `release/` | The release's own tooling, apart from the development image and the Makefile, with `README.md`, the procedure step by step and why each step: `build.sh` builds the six platforms' archives and their checksums into `dist/`, the same bytes wherever it runs; `smoke.sh` runs a developer's first five minutes from an archive on the path, which the release workflow runs on each platform before publishing; `prepare.sh` writes a version and its section of `CHANGELOG.md`, from the commits since the last tag through `changelog.sh`, for the pull request that prepares a release, `make release-prepare VERSION=X.Y.Z`; `dry-run.sh` builds the archives and smoke-tests this machine's, `make release-dry-run`; `archive/` is the Go program that writes an archive, the same bytes wherever it runs |
 | `build/sysroot.sh` | Writes a Linux target's system files, a sysroot, from Debian's image under Docker, for a build for Linux on another system |
 | `build/distros/` | An image of each Linux distribution `snello doctor` names a fix for, bare and with clang, and `check.sh`, which `build/distros.sh` and `make distros` run in each |
 | `internal/measure/` | Runs a program for a test and reports how long it ran and its own peak memory, through a small C measurer that forks and execs it on Linux and macOS, since Linux folds a Go parent's peak into a child it starts, and on Windows through a handle opened as the program starts, read for its peak working set; the churn tests and the benchmarks read peaks through it |
 | `bench/` | The benchmark programs in Snello and Go behind the design document's performance table, timed by `SNELLO_BENCH=1 go test ./bench -run TestBenchmarks -v` |
-| `.github/workflows/` | `commitlint.yml` and `pr-title-checker.yml` hold commit messages and pull request titles to Conventional Commits; `test.yml` checks gofmt and vet; runs `go test ./...`, `make test` and `make check` in the development image on the x86-64 and arm64 Linux runners, the three natively on the arm64 macOS runner and the x86-64 Windows runner, and, without blocking a change, on the Intel macOS runner and the arm64 Windows runner, with `make` under Git's Bash on Windows, and `make distros` on both Linux runners; and times the benchmarks on the two Linux runners into the job's summary, on every push and pull request; the README's badge is its status |
+| `.github/workflows/` | `commitlint.yml` and `pr-title-checker.yml` hold commit messages and pull request titles to Conventional Commits; `release.yml` builds the six archives twice on a tag a maintainer pushes, holds them equal, smoke-tests each on its platform, signs, attests and publishes them, and started by hand is a dry run that publishes nothing; `../renovate.json` tells Renovate how to keep the pinned actions, the image's base and Go current; `test.yml` checks gofmt and vet; runs `go test ./...`, `make test` and `make check` in the development image on the x86-64 and arm64 Linux runners, the three natively on the arm64 macOS runner and the x86-64 Windows runner, and, without blocking a change, on the Intel macOS runner and the arm64 Windows runner, with `make` under Git's Bash on Windows, and `make distros` on both Linux runners; and times the benchmarks on the two Linux runners into the job's summary, on every push and pull request; the README's badge is its status |
 | `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/snello/` | The command-line driver; `deps.go` is the dependency commands, `add`, `remove`, `update`, `deps` and `fetch` |
 | `_docs/brand/` | Logo and palette |

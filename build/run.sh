@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Runs a command inside the image build/Dockerfile describes, with the
 # repository mounted at /src, as the user running it so that what the
 # command writes under the repository, bin/snello, is the user's own

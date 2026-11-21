@@ -6,13 +6,16 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/snello-lang/snello/releases"><img alt="Release" src="https://img.shields.io/github/v/release/snello-lang/snello?include_prereleases&label=release"></a>
   <a href="https://github.com/snello-lang/snello/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/snello-lang/snello/test.yml?branch=main&label=tests"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/snello-lang/snello?label=license"></a>
 </p>
 
 ---
 
-Snello is a compiled language with Go's syntax and memory safety without a garbage collector. Every value has one owner and is freed where its owner dies; the compiler checks every use at compile time, and you never write a lifetime annotation. A Snello program builds to a native executable with a small runtime inside and nothing else.
+Snello is a compiled language with Go's syntax and memory safety without a garbage collector. Every value has one owner and is freed where its owner dies; the compiler checks every use at compile time, and you never write a lifetime annotation. A program builds to one native executable with a small runtime inside and nothing else.
+
+*Snello* is the Italian word for lean and nimble, and it is the whole claim: a program carries nothing it does not need, no garbage collector and no pause it did not ask for; and the language carries nothing a Go developer has to learn twice.
 
 ## A taste
 
@@ -51,39 +54,49 @@ func main() {
     }
 
     fmt.Println(canvas.name, total)
-    fmt.Println(len(canvas.shapes))      // ERROR "use of moved value canvas.shapes"
+    fmt.Println(len(canvas.shapes))      // COMPILE ERROR "use of moved value canvas.shapes"
 }
 ```
 
-An enum holds one of several variants, each with its own data, and `match` takes it apart and must cover every variant. A struct holds fields, and `Add` changes its canvas in place, which its `mut` receiver says. The loop takes the shapes by value, so they move out of the canvas: its name is still there, but the last line, which reads the shapes afterwards, is refused:
+An enum holds one of several variants, each with its own data, and `match` takes it apart and must cover every one. A struct holds fields, and `Add` changes its canvas in place, which its `mut` receiver says. The loop takes the shapes by value, so they move out of the canvas: its name is still there, but the last line, which reads the shapes afterwards, is refused at compile time, before anything runs:
 
 ```
 shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
 ```
 
-## Why Snello
+## Install
 
-- **Go's syntax.** `func`, `:=`, slices, maps, `defer`, `range`. A Go developer reads Snello on day one.
-- **No garbage collector, no leaks.** Values are freed at a point the compiler knows, and a type with a `Drop` method cleans up there, on every path out of a function, including a panic. A program's peak memory is what it keeps alive, and it never pauses to collect: `bench/memory.snello` peaks at 33 MB with every round even, where the same program in Go peaks at 78 MB with one round in twenty stalled (chapter 5 of the book has the table).
-- **No lifetime annotations.** Borrows are written `ref` and `mut` and live inside one function; a borrow is returned only from its one obvious source. The compiler infers every lifetime or refuses the program.
-- **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
-- **Mistakes that stop the program.** `snello build -debug` builds a binary that panics on any value used after its release and reports anything never released.
-
-Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. What comes next, in order, is in the pinned [Roadmap](https://github.com/snello-lang/snello/issues/122).
-
-## How Snello is built
-
-The compiler is written in Go, with nothing but Go's standard library, after the Go toolchain's own packages: a scanner, a parser, a type and ownership checker, and two backends. Go is only what the compiler is written in. A Snello program contains no Go: the compiler turns it into LLVM IR, or into C, and the system's `clang` or C compiler builds a native executable from it with Snello's runtime, a small library written in C. The standard library is written in Snello. A program you build needs neither Go nor a Go runtime to run.
-
-## Try it
-
-On Linux, or on macOS 14.4 or later, with Go 1.27.2 or later and `clang` on the path, install the compiler:
+Every release on the [Releases page](https://github.com/snello-lang/snello/releases) holds one archive per platform, Linux, macOS and Windows on x86-64 and arm64, each with the `snello` binary, which carries the compiler, the runtime and the standard library. Download yours, unpack it, and put `snello` on your path:
 
 ```
-go install github.com/snello-lang/snello/cmd/snello@latest
+tar -xzf snello-0.1.0-linux-amd64.tar.gz
+mv snello-0.1.0-linux-amd64/snello ~/.local/bin/
 ```
 
-The compiler carries the standard library and the runtime inside it, so it works from any directory. Write a program:
+On Windows, unzip `snello-0.1.0-windows-amd64.zip` and add its folder to your `Path`. Every archive is listed in the release's `SHA256SUMS`, signed, and the release's notes say how to verify what you downloaded.
+
+A build needs `clang`, version 15 or later, which compiles the code Snello writes, and a C compiler, which the C backend and a debug build compile with; on Windows, LLVM and Visual Studio's Build Tools. `snello doctor` checks each one and prints the line that installs what is missing:
+
+```
+$ snello doctor
+ok    clang: Apple clang version 21.0.0 (clang-2100.4.1.1)
+ok    link-time optimization: clang links with -flto
+ok    C compiler: Apple clang version 21.0.0 (clang-2100.4.1.1)
+ok    git: git version 2.56.1
+ok    snello on the path: /Users/ana/.local/bin
+```
+
+With Go 1.27.2 or later on your machine, `go install github.com/snello-lang/snello/cmd/snello@latest` builds the same compiler from source.
+
+## Hello, Snello
+
+```
+snello new hello
+cd hello
+snello run .
+```
+
+`new` writes a module with a program and its test, `run` builds the program and runs it, `snello test .` runs the test, and `snello build .` writes the executable into the current directory. A program is a `.snello` file:
 
 ```go
 package main
@@ -95,49 +108,48 @@ func main() {
 }
 ```
 
-Save it as `hello.snello`, then build it and run it:
+`snello build hello.snello` builds it to `./hello`, and `snello build -target linux/arm64 hello.snello` builds it for another platform: for the other Linux with the distribution's cross packages, for Windows on Windows with the Build Tools, and from Linux or macOS with LLVM's linker and Microsoft's SDK in a sysroot, which [chapter 2](_docs/book/02-getting-started.md) sets up.
 
-```
-snello build hello.snello
-./hello
-```
+## Why Snello
 
-Windows is being ported. The compiler and its programs run on Windows itself, on x86-64 and arm64, with LLVM and Visual Studio's Build Tools, and CI runs the test suite there; from Linux or macOS, `snello build -target windows/amd64 hello.snello` builds `hello.exe` for Windows. Chapter 34 of the book says what each platform supports and what is not built yet on Windows.
+- **Go's syntax.** `func`, `:=`, slices, maps, `defer`, `range`. A Go developer reads Snello on day one.
+- **No garbage collector, no leaks.** Values are freed at a point the compiler knows, and a type with a `Drop` method cleans up there, on every path out of a function, including a panic. A program's peak memory is what it keeps alive, and it never pauses to collect: `bench/memory.snello` peaks at 33 MB with every round even, where the same program in Go peaks at 78 MB with one round in twenty stalled (chapter 5 of the book has the table).
+- **No lifetime annotations.** Borrows are written `ref` and `mut` and live inside one function; a borrow is returned only from its one obvious source. The compiler infers every lifetime or refuses the program.
+- **No `nil`, no exceptions.** An absent value is `T?`, a failure is a `Result`, and `?` passes it up. `match` is exhaustive.
+- **Mistakes that stop the program.** `snello build -debug` builds a binary that panics on any value used after its release and reports anything never released.
 
-To work on the compiler, build it from a clone instead:
+Snello is young. The compiler builds the whole language today: functions, methods and closures, structs, enums and `match`, slices, maps and strings, options and results, owned pointers, `defer`, traits and generics, tasks and channels on a scheduler of the runtime's own, files and sockets, and a standard library written in Snello, through an LLVM backend and a C backend held to the same output. What comes next, in order, is in the pinned [Roadmap](https://github.com/snello-lang/snello/issues/122).
 
-```
-git clone https://github.com/snello-lang/snello
-cd snello
-go build -o bin/snello ./cmd/snello
-bin/snello build examples/hello/hello.snello
-```
+## Platforms
 
-`make build` does the same inside the Linux image CI uses, for a build that matches CI's; it needs Docker, and `NATIVE=1 make build` uses the Go on your machine instead.
+| Platform | Runs on |
+|---|---|
+| `linux/amd64`, `linux/arm64` | kernel 5.4 and glibc 2.29 or later |
+| `darwin/amd64`, `darwin/arm64` | macOS 14.4 or later |
+| `windows/amd64`, `windows/arm64` | Windows 10, Windows Server 2016 or later |
+
+Every platform is built and tested on every change; [chapter 34](_docs/book/34-platforms.md) of the book says what each one is promised, its tier, and what is not yet built on Windows.
+
+## The snello command
 
 | Command | What it does |
 |---|---|
-| <code>snello&nbsp;build&nbsp;FILE</code> | Compiles a program to a native executable in the current directory, through the LLVM backend and clang; `DIR` builds the program of every `.snello` file in a directory |
-| <code>snello&nbsp;build&nbsp;-debug&nbsp;FILE</code> | The same, with the checking runtime, which panics on a value used after its release and reports anything never released |
-| <code>snello&nbsp;build&nbsp;-backend&nbsp;c&nbsp;FILE</code> | The same through the C backend, the reference implementation, and the system's C compiler, `cc` or the one `CC` names |
+| <code>snello&nbsp;new&nbsp;DIR</code> | Starts a module in a new directory, with a program and its test |
+| <code>snello&nbsp;run&nbsp;FILE</code> | Builds a program and runs it with the arguments after its path, leaving no file; `DIR` runs a directory's program |
+| <code>snello&nbsp;build&nbsp;FILE</code> | Compiles a program to a native executable; `-debug` builds with the checking runtime, `-backend c` through the C backend, `-target OS/ARCH` for another platform |
+| <code>snello&nbsp;test&nbsp;DIR</code> | Runs the tests and the examples in a directory's `_test.snello` files |
 | <code>snello&nbsp;check&nbsp;FILE</code> | Checks a program and prints its errors |
-| <code>snello&nbsp;test&nbsp;DIR</code> | Runs the tests in a directory's `_test.snello` files |
-| <code>snello&nbsp;doc&nbsp;PACKAGE</code> | Prints a package's documentation, or one name's with `NAME` or `PACKAGE.NAME`; `-all` prints every name with its comment, `-u` the unexported names too |
-| <code>snello&nbsp;doc&nbsp;-http</code> | Serves the documentation of the standard library and the module in a browser, at `http://localhost:6060/` unless `-http=HOST:PORT` names another address, with a filter over every package and name |
-| <code>snello&nbsp;doctor</code> | Checks what a build needs, clang, a link with link-time optimization, a C compiler and git, and prints the command that installs what is missing |
-| <code>snello&nbsp;help</code> | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
-| <code>snello&nbsp;version</code> | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |
-| <code>snello&nbsp;new&nbsp;DIR</code> | Starts a module in a new directory: its `snello.mod`, a `main.snello` that prints a greeting, and a `main_test.snello` |
-| <code>snello&nbsp;run&nbsp;FILE</code> | Builds a program, runs it with the arguments after its path, passes its exit code on, and leaves no file behind; `DIR` runs a directory's program |
-| <code>snello&nbsp;init</code> | Makes the current directory the root of a module, writing its `snello.mod` with the compiler's version, `snello 0.1.0`; `DIR` makes another directory one |
-| <code>snello&nbsp;emit&nbsp;FILE</code> | Prints the IR the compiler generates; `-backend c` prints the C |
-| <code>snello&nbsp;add&nbsp;NAME&nbsp;URL</code> | Requires a git repository's latest release, its highest tag `vX.Y.Z`, or the version named after the URL, under the name the program imports it by; the build fetches it and locks it in `snello.lock` |
-| <code>snello&nbsp;update</code> | Raises each dependency to its latest compatible release; `-major` crosses major versions |
-| <code>snello&nbsp;remove&nbsp;NAME</code> | Drops a requirement, refused while a file still imports it |
-| <code>snello&nbsp;deps</code> | Lists the dependencies, the version selected and who requires which; `-why NAME` prints the chain that brings one in |
-| <code>snello&nbsp;fetch</code> | Fetches every dependency into the module cache, for a build with no network |
+| <code>snello&nbsp;doc&nbsp;PACKAGE</code> | Prints a package's documentation; `-http` serves the standard library's and your module's in a browser |
+| <code>snello&nbsp;add&nbsp;NAME&nbsp;URL</code> | Requires a dependency from a git repository by version; `update`, `remove`, `deps` and `fetch` manage them |
+| <code>snello&nbsp;env</code> | Prints what a build reads here, each setting with its value and where it came from |
+| <code>snello&nbsp;doctor</code> | Checks what a build needs and prints the line that installs what is missing |
+| <code>snello&nbsp;version</code> | Prints the version, the commit, the channel and the platform |
 
-`clang` is found on the path, or `CLANG` names it. The runtime every program links is compiled once for each compiler and mode and kept in the user's cache directory, so that a later build compiles only the program. [Chapter 32](_docs/book/32-the-snello-command.md#environment) of the book lists every variable `snello` reads and the cache directory of each system.
+`snello help COMMAND` prints a command's flags, and [chapter 32](_docs/book/32-the-snello-command.md) of the book has every command and every variable `snello` reads.
+
+## How Snello is built
+
+The compiler is written in Go, with nothing but Go's standard library, after the Go toolchain's own packages: a scanner, a parser, a type and ownership checker, and two backends. Go is only what the compiler is written in. A Snello program contains no Go: the compiler turns it into LLVM IR, or into C, and the system's `clang` or C compiler builds a native executable from it with Snello's runtime, a small library written in C. The standard library is written in Snello, and a program you build needs neither Go nor a Go runtime to run.
 
 ## Documentation
 
@@ -148,7 +160,14 @@ bin/snello build examples/hello/hello.snello
 
 ## Contributing
 
-Contributions are welcome. Working on the compiler takes Go, `clang` and a C compiler, nothing more.
+Contributions are welcome. Working on the compiler takes Go, `clang` and a C compiler, nothing more:
+
+```
+git clone https://github.com/snello-lang/snello
+cd snello
+go build -o bin/snello ./cmd/snello
+bin/snello build examples/hello/hello.snello
+```
 
 1. Pick an issue from the pinned [Roadmap](https://github.com/snello-lang/snello/issues/122), which lists the work in the order it is to be done. Each issue says what to build, how it is accepted and how to verify it, and its label says where it lives: `compiler/runtime` for the compiler, its backends, the runtime and the tools, `corelibs` for the standard library, `lib` for the libraries that ship outside the compiler.
 2. Read [CONTRIBUTING.md](CONTRIBUTING.md), [the coding standards](CODING_STANDARDS.md) and [the code of conduct](CODE_OF_CONDUCT.md).

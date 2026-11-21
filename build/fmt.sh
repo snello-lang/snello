@@ -1,4 +1,8 @@
 #!/bin/sh
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 # Formats the sources in place: the Go files with gofmt, the C runtime,
 # its headers and the C the examples bind with clang-format under the
 # repository's .clang-format, and the Python, the debuggers' script,
