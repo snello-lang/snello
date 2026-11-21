@@ -5,6 +5,7 @@
 package importer
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -23,6 +24,14 @@ import (
 type method struct {
 	recvName, mode, recv, name, params, result string
 }
+
+// holderFormat declares the struct holding a method's receiver type,
+// and methodFormat the method on it: the receiver as documented, the
+// parameters and the result as written, with a body that does nothing.
+const (
+	holderFormat = "struct R%s { r %s }\n"
+	methodFormat = "func (%s %s R%s) m%s(%s) %s { panic(\"doc\") }\n"
+)
 
 // methodLine matches a method declaration of the documentation:
 // func (xs mut []T) Push(v T), with an optional type parameter list
@@ -66,8 +75,8 @@ func TestBuiltin(t *testing.T) {
 	b.WriteString("package doc\nstruct T impl Eq, Hash {}\nstruct K impl Eq, Hash {}\nstruct V {}\nstruct E {}\nstruct U {}\n")
 	for i, m := range methods {
 		n := strconv.Itoa(i)
-		b.WriteString("struct R" + n + " { r " + m.recv + " }\n")
-		b.WriteString("func (" + m.recvName + " " + m.mode + " R" + n + ") m" + n + "(" + m.params + ") " + m.result + " { panic(\"doc\") }\n")
+		fmt.Fprintf(&b, holderFormat, n, m.recv)
+		fmt.Fprintf(&b, methodFormat, m.recvName, m.mode, n, n, m.params, m.result)
 	}
 
 	f, file, err := parser.ParseFile("doc.snello", []byte(b.String()))
