@@ -42,6 +42,13 @@ import (
 // is made, and its time is renewed at most once an hour when used, as
 // Go trims its cache.
 
+// CacheEnv names the cache's directory, and CacheOff is the value
+// that keeps none.
+const (
+	CacheEnv = "SNELLO_CACHE"
+	CacheOff = "off"
+)
+
 const (
 	cacheVersion = "snello runtime cache 1" // a change to what an entry holds or how its key is made
 	trimAfter    = 5 * 24 * time.Hour       // an entry unused this long is removed
@@ -55,9 +62,9 @@ const (
 // cache directory. SNELLO_CACHE=off, or no cache directory at all,
 // turns the cache off.
 func CacheDir() (string, bool) {
-	dir := os.Getenv("SNELLO_CACHE")
+	dir := os.Getenv(CacheEnv)
 	switch dir {
-	case "off":
+	case CacheOff:
 		return "", false
 	case "":
 		user, err := os.UserCacheDir()

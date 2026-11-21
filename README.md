@@ -124,6 +124,7 @@ bin/snello build examples/hello/hello.snello
 | <code>snello&nbsp;test&nbsp;DIR</code> | Runs the tests in a directory's `_test.snello` files |
 | <code>snello&nbsp;doc&nbsp;PACKAGE</code> | Prints a package's documentation, or one name's with `NAME` or `PACKAGE.NAME`; `-all` prints every name with its comment, `-u` the unexported names too |
 | <code>snello&nbsp;doc&nbsp;-http</code> | Serves the documentation of the standard library and the module in a browser, at `http://localhost:6060/` unless `-http=HOST:PORT` names another address, with a filter over every package and name |
+| <code>snello&nbsp;env</code> | Prints what a build reads here, the compilers, the caches, the sysroots, the temporary directory and the module, each with its value and where it came from; `NAME` prints one value, `-json` all as JSON |
 | <code>snello&nbsp;doctor</code> | Checks what a build needs, clang, a link with link-time optimization, a C compiler and git, and prints the command that installs what is missing |
 | <code>snello&nbsp;help</code> | Lists every command with what it does; `snello help COMMAND` prints one command's flags and arguments |
 | <code>snello&nbsp;version</code> | Prints the version, the commit, the channel and the platform, `snello 0.1.0 (8477985) devel darwin/arm64` |

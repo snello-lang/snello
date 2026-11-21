@@ -27,6 +27,7 @@ const (
 	docCommand     = "doc"
 	doctorCommand  = "doctor"
 	emitCommand    = "emit"
+	envCommand     = "env"
 	helpCommand    = "help"
 	initCommand    = "init"
 	lexCommand     = "lex"
@@ -204,6 +205,7 @@ func commands() []*command {
 		{name: docCommand, args: docArgs, minArgs: 0, maxArgs: 1, short: "print a package's documentation, or a name's", declare: declareDoc},
 		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
 		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, emit)},
+		{name: envCommand, args: envArgs, minArgs: 0, maxArgs: 1, short: "print what a build reads here, each with where it comes from", declare: declareEnv},
 		{name: fetchCommand, minArgs: 0, maxArgs: 0, short: "fetch every dependency into the module cache, for a build with no network", declare: declareFetch},
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},

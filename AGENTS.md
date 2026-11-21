@@ -75,6 +75,7 @@ make distros          # a developer's first five minutes on Debian, Ubuntu, Fedo
 go run ./cmd/snello lex FILE     # print the token stream of a Snello file
 go run ./cmd/snello parse FILE   # print the syntax tree
 go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct
+go run ./cmd/snello env          # what a build reads here, each setting with its value and where it comes from
 go run ./cmd/snello build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
 go run ./cmd/snello build DIR    # the same for a program of every .snello file in a directory, named after it
 go run ./cmd/snello build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, clang on Windows, or CC set
