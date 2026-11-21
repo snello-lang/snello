@@ -543,7 +543,10 @@ func readHashFile(dir string) (record, error) {
 
 // writeHashFile records rec beside a module's directory, through a
 // file renamed into place, so that a reader finds the record whole or
-// not at all.
+// not at all. Two builds fetching the same module at once each write
+// the record; on a system that refuses to replace a file another has
+// open, the second rename fails, and the record the first wrote is
+// then read and taken when it is the same.
 func writeHashFile(dir string, rec record) error {
 	tmp, err := os.CreateTemp(filepath.Dir(dir), filepath.Base(dir)+hashSuffix+fetchingPattern)
 	if err != nil {
@@ -564,6 +567,10 @@ func writeHashFile(dir string, rec record) error {
 	}
 
 	if err != nil {
+		if theirs, readErr := readHashFile(dir); readErr == nil && theirs == rec {
+			err = nil
+		}
+
 		os.Remove(tmp.Name())
 	}
 
