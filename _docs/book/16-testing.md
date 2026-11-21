@@ -234,7 +234,7 @@ A program tests its `main` package the same way: `main_test.snello` beside `main
 - **Memory of a failed test.** The values with `Drop` methods are dropped when a test fails; the plain memory of the frames the panic abandoned, a slice of numbers or a message a `Sprintf` built, is not freed until the process ends, since a guard per owned value would cost every program for the sake of a failed test. A test build is therefore a release build, and the debug build's report of leaks is for programs.
 - **A panic inside C** a package binds is not caught; C does not unwind.
 - **An assertion on a task the test spawned** is a plain panic, since the mark that turns a failure into a report is the test's own task's: it prints `panic:` with the message and ends the process. Send what a spawned task finds back over a channel and assert on the test's task.
-- **No caching of results**, no coverage, no examples run as tests: each is a task when a program asks for it (`../design/09-testing.md`, section 6).
+- **No caching of results**, no coverage: each is a task when a program asks for it (`../design/09-testing.md`, section 6).
 - **An assertion takes an option or a result by value**: `expect.IsSome(h.Peek())` on a `ref T?` is refused, since the value cannot move out of the borrow; bind it instead, `if v := h.Peek() { expect.Equal(v, ref 2) }`.
 - **No race detector**, because a data race is a compile error in Snello: a value reaches another task by a move, inside an `Arc`, or through a channel, and a `mut` of a shared value comes only through a lock that owns it (chapter 10). A package variable is under the same rule, read by every task and changed only through what it holds.
 

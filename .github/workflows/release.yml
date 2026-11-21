@@ -232,8 +232,9 @@ jobs:
         # is never public; a draft left by a run that failed after this
         # point is removed first, so that the run can be repeated. A
         # patch to an older minor is not marked the latest release
-        # while a newer version is released, since the install script
-        # reads the latest.
+        # while a newer version is released, since a script asking for
+        # the latest release reads it, and a pre-release, a version with
+        # a hyphen, is marked one and never the latest.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -242,7 +243,9 @@ jobs:
             gh release view "$tag" --json isDraft --jq .isDraft | grep -q true || { echo "$tag is released already" >&2; exit 1; }
             gh release delete "$tag" --yes
           fi
-          newest=$(git tag -l 'v*' | sort -V | tail -1)
+          newest=$(git tag -l 'v*' | grep -v -- - | sort -V | tail -1)
           latest=true; [ "$tag" = "$newest" ] || latest=false
-          gh release create "$tag" --draft --title "snello ${tag#v}" --notes-file notes.md dist/*.tar.gz dist/*.zip dist/*.spdx.json dist/SHA256SUMS dist/SHA256SUMS.sigstore.json
+          pre=""
+          case $tag in *-*) pre="--prerelease"; latest=false ;; esac
+          gh release create "$tag" --draft $pre --title "snello ${tag#v}" --notes-file notes.md dist/*.tar.gz dist/*.zip dist/*.spdx.json dist/SHA256SUMS dist/SHA256SUMS.sigstore.json
           gh release edit "$tag" --draft=false --latest="$latest"

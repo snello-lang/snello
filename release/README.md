@@ -23,14 +23,13 @@ The maintainers decide what is released and when. **Nothing is released by a pus
 
 ## Once, before the first release
 
-These are the owner's, since they need the repository's settings. The release workflow itself needs no secret: it signs and attests under its own identity.
+This is the owner's, since it needs the repository's settings; the release workflow itself needs no secret, since it signs and attests under its own identity, and `main` already takes changes through a pull request alone.
 
-1. **Protect `main`**: require a pull request and the status checks, for administrators too. *Why:* a release is a change like any other.
-2. **Install Mend's Renovate app** on the repository. *Why:* `.github/renovate.json` is read by the app; without it nothing keeps the pinned actions and the image's base current.
+1. **Install Mend's Renovate app** on the repository. *Why:* `.github/renovate.json` is read by the app; without it nothing keeps the pinned actions and the image's base current.
 
 ## Every release, step by step
 
-1. **Decide.** A maintainer decides that `main` is a release: a minor when it has something to ship, a patch when a fix cannot wait. *Why no calendar:* a cadence promised and missed costs more trust than none; a release that is a decision is one someone stands behind.
+1. **Decide.** A maintainer decides that `main` is a release: a minor when it has something to ship, a patch when a fix cannot wait, or a pre-release, `0.1.0-alpha.1`, to put a build in people's hands before the version it leads to. A pre-release is published marked as one and is never the latest release, so a script asking for the latest skips it. *Why no calendar:* a cadence promised and missed costs more trust than none; a release that is a decision is one someone stands behind.
 2. **Prepare it in a pull request.** On a branch from `main`: `make release-prepare VERSION=0.2.0`, which writes the version into `compiler/version/version.go` and the release's section, from the commits since the last tag, at the top of `CHANGELOG.md`; read the section and keep what reads well; open the pull request, `chore(release): prepare 0.2.0`, and merge it like any other. *Why a pull request:* the version and the changelog are reviewed under the branch rule, and the changelog is read before it is published. *Why a script writes the section:* the version is one of SemVer's numbers, which the commits since the last tag decide, `feat` a minor and `fix` a patch, and the changelog is their subjects grouped; what is read from the commits is not mistyped.
 3. **Push the tag.** On the merge commit: `git tag -a v0.2.0 -m 'snello 0.2.0' && git push origin v0.2.0`. This is the release. *Why a tag by hand:* it is the common practice, Go itself and most Go projects release this way, and it needs no token of a maintainer's in a workflow.
 4. **The tag starts `release.yml`, which builds twice.** `build.sh` runs on the x86-64 and the arm64 Linux runners, each building all six platforms, since the compiler is pure Go; it refuses a tag whose version is not `version.Current`, and a changelog without the version's section, so a tag pushed on the wrong commit builds nothing. The two sets of archives are compared byte for byte, and a difference stops everything. *Why twice:* a release whose bytes depend on the machine that built it cannot be checked by anyone; building twice proves the reproducibility rather than claiming it.

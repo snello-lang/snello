@@ -205,7 +205,7 @@ $ cat snello.mod
 snello 0.1.0
 ```
 
-A compiler older than the version refuses the module and says so, `/home/me/app/snello.mod:1: this module needs snello 0.3.0; this is snello 0.1.0: upgrade the compiler`, rather than failing on what it does not know; a module the program requires is checked the same way, by its own file. A module file without the line is read as written for the first release, 0.1.0, so a new release never changes what it means, and every command that builds, checks or tests the module says so on standard error, with the line to add:
+A compiler older than the version refuses the module and says so, `/home/me/app/snello.mod:1: this module needs snello 0.3.0; this is snello 0.1.0: upgrade the compiler`, rather than failing on what it does not know; a pre-release, `0.1.0-alpha.1`, compiles a module written `snello 0.1.0`, since it is that release in the making; a module the program requires is checked the same way, by its own file. A module file without the line is read as written for the first release, 0.1.0, so a new release never changes what it means, and every command that builds, checks or tests the module says so on standard error, with the line to add:
 
 ```
 warning: /home/me/app/snello.mod has no snello line: it is read as snello 0.1.0, the first release; add the line "snello 0.1.0"

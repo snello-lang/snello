@@ -190,6 +190,12 @@ func (v Version) Release() bool {
 	return len(v.pre) == 0
 }
 
+// Core returns v without its pre-release: the release a pre-release
+// leads to, 0.2.0 for 0.2.0-rc.1, and v itself for a release.
+func (v Version) Core() Version {
+	return Version{major: v.major, minor: v.minor, patch: v.patch}
+}
+
 // Compatible reports whether a program built against v builds against
 // w, by Semantic Versioning's promise, which its first number that is
 // not zero carries: the same major version from 1.0.0; before it, when

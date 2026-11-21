@@ -10,7 +10,8 @@
 # top under the preamble, from the commits since the last tag through
 # changelog.sh, under the version given and today's date, the day the
 # release was prepared. It refuses a version that is not Semantic
-# Versioning's MAJOR.MINOR.PATCH, one that is tagged already, here or
+# Versioning's MAJOR.MINOR.PATCH, with a pre-release after a hyphen
+# allowed, 0.1.0-alpha.1, one that is tagged already, here or
 # at origin, and one the changelog has a section for; it commits
 # nothing and pushes nothing, writes nothing when a step fails, and ends by
 # saying what the maintainer does next: read the section, open the
@@ -27,9 +28,9 @@ fail() {
     exit 1
 }
 
-[ $# -eq 1 ] && [ -n "$1" ] || fail "usage: sh release/prepare.sh MAJOR.MINOR.PATCH"
+[ $# -eq 1 ] && [ -n "$1" ] || fail "usage: sh release/prepare.sh MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH-PRERELEASE"
 version=$1
-echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || fail "$version is not MAJOR.MINOR.PATCH, each number in decimal with no leading zero"
+echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$' || fail "$version is not MAJOR.MINOR.PATCH, each number in decimal with no leading zero, with a pre-release after a hyphen at most, 0.1.0-alpha.1"
 git fetch --tags --quiet origin 2>/dev/null || echo "release/prepare.sh: could not fetch the tags of origin; the tags known here are checked" >&2
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
     fail "v$version is tagged already: a version is never reused"
