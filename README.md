@@ -66,9 +66,23 @@ shapes.snello:35:21: use of moved value canvas.shapes; moved at 30:23
 
 ## Install
 
-Every release on the [Releases page](https://github.com/snello-lang/snello/releases) holds one archive per platform, Linux, macOS and Windows on x86-64 and arm64, each with the `snello` binary, which carries the compiler, the runtime and the standard library. Download yours, unpack it, and put `snello` on your path:
+Linux and macOS:
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/snello-lang/snello/main/release/install.sh | sh
 ```
+
+Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/snello-lang/snello/main/release/install.ps1 | iex
+```
+
+Each downloads the latest release's archive for your system and processor, checks it against the release's checksums, and its provenance when the GitHub CLI is signed in, puts `snello` into `~/.local/bin`, or `%LOCALAPPDATA%\Programs\snello` on Windows, and ends with `snello doctor`, which says what a build still needs and how to install it. A version by name is `curl -fsSL … | SNELLO_VERSION=0.1.0 sh`, or `$env:SNELLO_VERSION = '0.1.0'` before the line on Windows, and `SNELLO_INSTALL` names another directory the same way; run again, the line upgrades. While no release is out yet, the scripts install the newest pre-release and say so.
+
+**By hand.** Every release on the [Releases page](https://github.com/snello-lang/snello/releases) holds one archive per platform, Linux, macOS and Windows on x86-64 and arm64, each with the `snello` binary, which carries the compiler, the runtime and the standard library. Download yours with `curl` or `gh` rather than a browser, which marks what it downloads as quarantined on macOS until the binaries are signed, unpack it, and put `snello` on your path:
+
+```sh
 tar -xzf snello-0.1.0-linux-amd64.tar.gz
 mv snello-0.1.0-linux-amd64/snello ~/.local/bin/
 ```
@@ -77,7 +91,7 @@ On Windows, unzip `snello-0.1.0-windows-amd64.zip` and add its folder to your `P
 
 To check what you downloaded, download `SHA256SUMS` and `SHA256SUMS.sigstore.json` from the same release into the same directory, then:
 
-```
+```sh
 sha256sum -c --ignore-missing SHA256SUMS              # shasum -a 256 on macOS: the archive is the one listed
 cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/snello-lang/snello/\.github/workflows/release\.yml@refs/tags/v' SHA256SUMS
@@ -88,7 +102,7 @@ The first line checks the archive against the list; the second, with [cosign](ht
 
 A build needs `clang`, version 15 or later, which compiles the code Snello writes, and a C compiler, which the C backend and a debug build compile with; on Windows, LLVM and Visual Studio's Build Tools. `snello doctor` checks each one and prints the line that installs what is missing:
 
-```
+```console
 $ snello doctor
 ok    clang: Apple clang version 21.0.0 (clang-2100.4.1.1)
 ok    link-time optimization: clang links with -flto
