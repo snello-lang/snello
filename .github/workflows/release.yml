@@ -249,3 +249,53 @@ jobs:
           case $tag in *-*) pre="--prerelease"; latest=false ;; esac
           gh release create "$tag" --draft $pre --title "snello ${tag#v}" --notes-file notes.md dist/*.tar.gz dist/*.zip dist/*.spdx.json dist/SHA256SUMS dist/SHA256SUMS.sigstore.json
           gh release edit "$tag" --draft=false --latest="$latest"
+
+  install:
+    # The install scripts on a runner of each system: against the
+    # release just published, pinned to this tag since GitHub's latest
+    # release can lag a publish by a moment, and each must install this
+    # version; on a dry run, against the latest release there is, which
+    # is what a developer gets today. snello doctor must pass with the
+    # runner's compilers, Windows' with LLVM installed as a developer
+    # installs it.
+    name: install.sh and install.ps1 on ${{ matrix.os }}
+    needs: [compare, smoke, publish]
+    if: always() && needs.compare.result == 'success' && needs.smoke.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install LLVM where the runner lacks it
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v clang >/dev/null; then
+            choco install llvm --yes --no-progress
+            echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+          fi
+      - name: Install with the script, and check the version it installed
+        env:
+          SNELLO_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          GH_TOKEN: ${{ github.token }} # signs gh in, so that the scripts' provenance check runs here
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -File release/install.ps1
+            installed=$("$LOCALAPPDATA/Programs/snello/snello.exe" version)
+          else
+            sh release/install.sh
+            installed=$("$HOME/.local/bin/snello" version)
+          fi
+          echo "$installed"
+          if [ -n "$SNELLO_VERSION" ]; then
+            case $installed in "snello ${SNELLO_VERSION#v} "*) ;; *) echo "the script installed $installed, not $SNELLO_VERSION" >&2; exit 1 ;; esac
+          fi
