@@ -13,6 +13,7 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/compiler/version"
 )
 
 // TestPackages loads every package of the library, so that a package
@@ -203,7 +204,7 @@ func TestRequiredVersion(t *testing.T) {
 		return err
 	}
 
-	want := filepath.Join(root, "..", "later", ModFile) + ":1: this module needs snello 9.0.0; this is snello 0.1.0: upgrade the compiler" // after the position of the import that reached it
+	want := filepath.Join(root, "..", "later", ModFile) + ":1: this module needs snello 9.0.0; this is snello " + version.Current + ": upgrade the compiler" // after the position of the import that reached it
 	if err := load("uselater"); err == nil || !strings.HasSuffix(err.Error(), want) {
 		t.Errorf("a required module of a later version: got %v, want %q", err, want)
 	}

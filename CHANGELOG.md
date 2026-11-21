@@ -1,3 +1,109 @@
 # Changelog
 
 Every release of Snello, newest first, in the form of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): what was added, fixed, changed and removed, and first what a program may need changing for. Versions are [Semantic Versioning 2.0](https://semver.org/spec/v2.0.0.html); until 1.0.0 a minor release may change anything, and the section says what. A release's section is written from the commits by `release/changelog.sh` and is the release's notes on GitHub.
+
+## [0.1.0-alpha.1] - 2026-11-21
+
+### Added
+
+- **release**: Releases, the tooling under release/, and snello env (#191)
+- Snello doc, examples and the pages in a browser (#190)
+- Running programs and catching signals (#188)
+- Dependencies by version, fetched from git tags and locked (#187)
+- Port the compiler and runtime to windows (#186)
+- A file for one platform and building for another with -target (#185)
+- **runtime**: Cancellation and deadlines attached to a task's scope (#184)
+- The snello command: module version, init, new, run, version, help and doctor (#182)
+- Iterators over borrowed items, nullable optional borrows, a bounded json Decoder (#181)
+- Debugger information and snello debug (#179)
+- A stack trace on a panic (#176)
+- **runtime**: A worker added when every worker is held (#175)
+- **runtime**: The runtime's own locks, cheaper sleeps and spawns, and a lock-free ring (#174)
+- **compiler**: Task groups, and channels that end by ownership (#173)
+- **compiler**: End a channel by ownership, with no close
+- **std**: A group of tasks waited for together
+- **compiler**: Give spawn as an expression a handle on its task (#171)
+- **compiler**: Make an instance of a generic trait a type (#169)
+- **compiler**: Add the language essentials and encoding/json over them (#166)
+- **std**: Stream JSON with an Encoder and a Decoder
+- **std**: Choose json's enum layout, refused at compile time if wrong
+- **std**: Write and read json maps with integer keys
+- **std**: Add json.MarshalIndent and json.Indent
+- **std**: Add json.Value and json.Text, JSON kept without a type
+- **compiler**: Add functions of a type, trait arms, json's codecs and Doc
+- **compiler**: Add typed attributes, read at compile time, and json's
+- **compiler**: Add reflection at compile time, and encoding/json over it
+- **compiler**: Add default field values, a constant each
+- **compiler**: Add variadic functions of a program's own, ...T and ...ref T
+- **compiler**: Fold constant expressions, and take one as an array length
+- **std**: Add deque, set and range over iterators, and names and IPv6 in net (#163)
+- **std**: Add io, bufio, bytes, os, path and time (#162)
+- **std**: Add fmt's verbs and strconv's readers, with floats read and written without libc (#160)
+- **std**: Add math, math/bits and math/rand, and fix the backend faults they found (#153)
+- **std**: Add the everyday methods of strings, slices, maps and options (#134)
+- No empty values, a replace builtin, and no reachable panics (#18)
+- Match on conditions in place of switch, guards move nothing (#17)
+- Runes and unicode whole, at unicode 18.0.0 (#15)
+- Implementation of the Error trait
+- Every library package tested, external test packages, snello test std/NAME and the Makefile (#12)
+- Package variables under the task rule, lazy initializers, sync.Counter and sync.Atomic (#11)
+- Testing and expect packages with snello test (#10)
+- LLVM backend and the full runtime (#5)
+- Ownership across tasks (#4)
+- **std**: Standard library in Teak and the examples suite (#3)
+- Core checker and C backend
+- Task 1.10: the core suite named and run by one script, book chapter 1 written, stage 1 checkpoint ready for the owner
+- Drops on panic: owned values with a Drop method are registered with the runtime, and a panic runs their drops innermost first before exiting; task 1.9 done
+- Debug build: teak build -debug counts allocations, poisons releases and panics on a released value; closure environments live on the stack; lent temporaries and duplicate map keys no longer leak; a borrow of a temporary cannot be kept or returned
+- Drops: every value freed where its owner dies, moves empty their place, Drop methods and file closes run; all core programs run
+- Escape checking: owned data holds no borrow, a returned borrow has one source, a capturing closure is a borrow; drop task numbers from code comments
+- Borrow checking: borrows held to their last use, one mut or any refs, the owner frozen while lent
+- Move checking: moved places forked at branches, joined after, kept across loop passes
+- C backend, third slice part three: closures, defer, files and errors; task 1.5 done
+- C backend, third slice part two: maps with insertion order, generated key hashing and equality
+- C backend, third slice part one: slices, string methods, option and result methods, take, equality of composite values
+- C backend, second slice: structs, enums, methods, match, options, results, tuples and owned pointers
+- C backend, first slice: native binaries for functions, numbers, strings and control flow
+- Expression and statement checking with match exhaustiveness and the stage 1 library
+- Name resolution with scopes, declarations and teak check
+- Types package with the universe, identity, assignability and Copy
+- Stage 1 negative programs; book chapters 5 and 6 on ownership and borrows
+- Stage 1 core example set
+- Lexer and parser implementation
+- Error recovery sweep; struct and enum declarations
+- Parse match arms and patterns
+- Parse statements; spawn replaces go
+- Parse expressions
+- Parse declarations
+- Parse type expressions
+- Syntax tree node types and printer
+- Token set and scanner with Go-style semicolon insertion
+
+### Fixed
+
+- **runtime**: Debug task list held, and the wake test names a lost wake's task (#189)
+- **importer**: Fetch into a work directory at the module cache's root
+- **compiler**: Release what a contained panic abandons in a task
+- **compiler**: Call an enum's Eq and Hash through a generic bound
+- **compiler**: Drop an if value's condition temporaries once decided
+- **compiler**: End the exhaustiveness check for a type that holds itself
+- **std**: Refuse a key given twice in json.Value, and check what is kept
+- **compiler**: Evaluate everything left to right, assignments too
+- **compiler**: Refuse every borrow of a temporary kept past it
+- **compiler**: Refuse mut of a constant or a byte of a string (#133)
+- **compiler**: Run deferred calls on a panic (#132)
+- **compiler**: Refuse a borrowing closure passed to a kept callback (#131)
+- **compiler**: Decide borrow liveness along a function's paths (#128)
+- Parser hangs on an unterminated import group
+
+### Changed
+
+- Cheaper json strings, text building and compiler emission (#172)
+- **compiler**: Keep a symbol once made and write a line in pieces
+- **std**: Scan json strings eight bytes at a time
+- **runtime**: Copy a short piece without memcpy
+- **compiler**: Mark the failure of ? unlikely in both backends
+- **compiler**: Write builder pieces without concatenating them
+- **runtime**: Bound each task's stack from the linked program, and poll sockets on the workers (#164)
+- **compiler**: Compile the runtime once and keep it (#130)
+- Integer positions with a line table, zero-copy tokens, allocation benchmark
