@@ -270,8 +270,8 @@ func TestBuildWithoutCompiler(t *testing.T) {
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", "")
 	t.Chdir(t.TempDir())
-	for backend, want := range map[string]string{"llvm": toolchain.Clang() + " not found", "c": toolchain.CC() + " not found"} {
-		line := want + ": install it with " + toolchain.Install() + ", or set "
+	for backend, compiler := range map[string]string{"llvm": toolchain.Clang(), "c": toolchain.CC()} {
+		line := compiler + " not found: " + toolchain.InstallFix(toolchain.EnvOf(compiler))
 		for _, command := range []string{buildCommand, runCommand, testCommand} {
 			code := -1
 			said := stderrOf(t, func() {

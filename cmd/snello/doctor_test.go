@@ -27,7 +27,7 @@ func TestDoctor(t *testing.T) {
 		t.Errorf("doctor with no compiler exited %d", code)
 	}
 
-	want := "fail  clang: clang not found\n      install it with " + toolchain.Install() + ", or set CLANG\n"
+	want := "fail  clang: clang not found\n      " + toolchain.InstallFix(toolchain.ClangEnv) + "\n"
 	if !strings.HasPrefix(out.String(), want) || !strings.Contains(out.String(), "note  snello on the path:") {
 		t.Errorf("doctor with no compiler printed\n%s\nwant it to begin\n%s", out.String(), want)
 	}
