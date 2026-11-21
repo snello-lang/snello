@@ -22,9 +22,9 @@
 # two modes, in one order, and the gzip header holds no name or time.
 # release/archive, a Go program of the repository's, writes the
 # archives, so that no tar, gzip or zip of the system, and no zlib,
-# has a say. Needs Go and git. With TAG set, the changelog must have
-# the version's section, so that a tag not prepared fails in the
-# first minute.
+# has a say. Needs Go and git. With TAG set, the version's changelog
+# file must exist, so that a tag not prepared fails in the first
+# minute.
 #
 #	sh release/build.sh
 set -eu
@@ -43,7 +43,7 @@ version=$(sed -n 's/^\tCurrent = "\([^"]*\)".*/\1/p' compiler/version/version.go
 [ -n "$version" ] || fail "no Current in compiler/version/version.go"
 if [ -n "${TAG:-}" ]; then
     [ "$TAG" = "v$version" ] || fail "the tag is $TAG and compiler/version/version.go says $version: the pull request preparing the release raises them together"
-    grep -q "^## \[$version\]" CHANGELOG.md || fail "CHANGELOG.md has no section for $version: release/prepare.sh writes it"
+    [ -f "changelogs/$version.md" ] || fail "changelogs/$version.md does not exist: release/prepare.sh writes it"
 fi
 
 sum="sha256sum"

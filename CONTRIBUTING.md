@@ -56,7 +56,7 @@ The Makefile runs Snello's own tests through `snello test`: `make test` runs the
 
 ## Releasing
 
-The maintainers decide what is released and when; nothing is released by a push, a pull request or a schedule. A release is prepared in a pull request, the version and the changelog's section, and cut by a tag a maintainer pushes on its merge; a workflow builds, checks, signs and publishes it from the tag. The steps, with the reason for each, are in [release/README.md](release/README.md).
+The maintainers decide what is released and when; nothing is released by a push, a pull request or a schedule. A release is prepared in a pull request, the version and the release's changelog file, and cut by a tag a maintainer pushes on its merge; a workflow builds, checks, signs and publishes it from the tag. The steps, with the reason for each, are in [release/README.md](release/README.md).
 
 ## Conduct
 

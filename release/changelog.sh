@@ -3,8 +3,8 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-# Writes a release's section of CHANGELOG.md, in the Keep a Changelog
-# form, from the Conventional Commits since the last release, or since
+# Writes a release's changelog, the file changelogs/VERSION.md, in the
+# Keep a Changelog form, from the Conventional Commits since the last release, or since
 # the last tag of any kind for a pre-release, or since the tag given,
 # as Rust's release notes are drafted from its merged pull requests
 # and Go's from its release-note fragments: the version from
@@ -16,19 +16,18 @@
 # type, its scope in bold before it, and its pull request's number
 # kept, which GitHub links in the notes. docs, test, ci, chore and
 # refactor are left out, since they change nothing a developer sees.
-# One git log and one awk: a few hundred commits take no time. The
-# maintainer preparing a release pastes the section at the top of
-# CHANGELOG.md under the preamble, reads it, and keeps what reads
-# well; the release workflow refuses a changelog without the version's
-# section.
+# One git log and one awk: a few hundred commits take no time.
+# prepare.sh writes it into the release's file and the maintainer
+# reads it and keeps what reads well; the release workflow refuses a
+# tag whose version has no file.
 #
-#	sh release/changelog.sh > section.md
+#	sh release/changelog.sh > changelogs/0.2.0.md
 #	sh release/changelog.sh v0.1.0 # the commits since v0.1.0
 set -eu
 
 version=${VERSION:-$(sed -n 's/^\tCurrent = "\([^"]*\)".*/\1/p' compiler/version/version.go)}
 [ -n "$version" ] || { echo "release/changelog.sh: no Current in compiler/version/version.go" >&2; exit 1; }
-# A release's section covers everything since the last release, the
+# A release's changelog covers everything since the last release, the
 # pre-releases between them included; a pre-release's covers what came
 # since the last tag of any kind.
 case $version in
@@ -36,7 +35,7 @@ case $version in
     *) last=$(git tag -l 'v*' | grep -v -- - | sort -V | tail -1) ;;
 esac
 since=${1:-$last}
-[ "$(git rev-list --count "${since:+$since..}HEAD")" != 0 ] || echo "release/changelog.sh: no commit since ${since:-the start}: the section is empty" >&2
+[ "$(git rev-list --count "${since:+$since..}HEAD")" != 0 ] || echo "release/changelog.sh: no commit since ${since:-the start}: the changelog is empty" >&2
 unit=$(printf '\037')   # parts a commit's hash, subject and body
 record=$(printf '\036') # ends a commit
 
