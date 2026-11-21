@@ -73,7 +73,18 @@ tar -xzf snello-0.1.0-linux-amd64.tar.gz
 mv snello-0.1.0-linux-amd64/snello ~/.local/bin/
 ```
 
-On Windows, unzip `snello-0.1.0-windows-amd64.zip` and add its folder to your `Path`. Every archive is listed in the release's `SHA256SUMS`, signed, and the release's notes say how to verify what you downloaded.
+On Windows, unzip `snello-0.1.0-windows-amd64.zip` and add its folder to your `Path`.
+
+To check what you downloaded, download `SHA256SUMS` and `SHA256SUMS.sigstore.json` from the same release into the same directory, then:
+
+```
+sha256sum -c --ignore-missing SHA256SUMS              # shasum -a 256 on macOS: the archive is the one listed
+cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/snello-lang/snello/\.github/workflows/release\.yml@refs/tags/v' SHA256SUMS
+gh attestation verify snello-0.1.0-linux-amd64.tar.gz --repo snello-lang/snello
+```
+
+The first line checks the archive against the list; the second, with [cosign](https://github.com/sigstore/cosign) 3 or later, that the list was signed by the release workflow of this repository and nothing else; the third, with the [GitHub CLI](https://cli.github.com/), that this workflow on this commit built the archive. Each prints that it verified. The release's notes carry the same lines and every archive's checksum.
 
 A build needs `clang`, version 15 or later, which compiles the code Snello writes, and a C compiler, which the C backend and a debug build compile with; on Windows, LLVM and Visual Studio's Build Tools. `snello doctor` checks each one and prints the line that installs what is missing:
 
