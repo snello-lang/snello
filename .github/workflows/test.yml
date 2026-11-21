@@ -42,11 +42,14 @@ name: Tests
 # book under _docs/, the changelogs, the release's scripts and
 # workflow, and Renovate's configuration, runs none of the checks: the
 # first job lists what changed and answers whether code did, and every
-# other job runs only then. A job skipped that way reports itself
-# skipped, which the branch rule's required checks accept, where a
-# workflow that never starts leaves them expected and blocks the merge.
-# The lints of commit messages and pull request titles run on every
-# change, in seconds. release/archive is Go, and counts as code.
+# other job runs only then. The last job, all checks, is the one the
+# branch rule requires: it waits for every other and fails when one
+# failed or was cancelled, and passes when they passed or were
+# skipped; the rule cannot name the matrix jobs, since a skipped matrix
+# job is recorded under its unexpanded name and the names the rule
+# would require never appear. The lints of commit messages and pull
+# request titles run on every change, in seconds. release/archive is
+# Go, and counts as code.
 on:
   pull_request:
 
@@ -249,3 +252,22 @@ jobs:
         run: |
           echo "## Benchmarks on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -r bin/bench.md ]; then cat bin/bench.md >> "$GITHUB_STEP_SUMMARY"; else echo "no table: the timing did not finish" >> "$GITHUB_STEP_SUMMARY"; fi
+
+  all:
+    # The one check the branch rule requires, standing for every job
+    # above: green when each passed or was skipped, red when one failed
+    # or was cancelled.
+    name: all checks
+    needs: [changes, checks, test, distros, bench]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"result": "(failure|cancelled)"'; then exit 1; fi
+          echo "all checks pass"
