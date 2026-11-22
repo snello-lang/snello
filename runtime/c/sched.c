@@ -1712,32 +1712,36 @@ SN_HELD_STATIC static void inject_all(task **ts, int n) {
 
 // push_slow moves half of w's full ring, with t after it, to the
 // inject queue, and reports whether it did; a stealer that took from
-// the ring meanwhile makes it fail, and push tries the ring again.
+// the ring meanwhile makes it fail, and push tries the ring again. The
+// half is taken first, by the head, and read from the ring after: a
+// stealer reads only from the new head on, and no thread but this one,
+// the ring's own, writes a slot, so the slots hold the half until this
+// thread pushes again. No copy of the half is kept on the stack, which
+// is the stack of the task that wakes another, and would be a
+// kilobyte of every such task's bound.
 SN_HELD_STATIC static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl) {
     uint32_t n = (tl - h) / 2;
-    task *batch[ring_size / 2 + 1];
-    for (uint32_t i = 0; i < n; i++) {
-        batch[i] = atomic_load_explicit(&w->ring[(h + i) % ring_size], memory_order_relaxed);
-    }
-
     if (!atomic_compare_exchange_strong_explicit(&w->qhead, &h, h + n, memory_order_acq_rel, memory_order_relaxed)) {
         return false;
     }
 
-    batch[n] = t;
-    for (uint32_t i = 0; i < n; i++) {
-        batch[i]->next = batch[i + 1];
+    task *first = atomic_load_explicit(&w->ring[h % ring_size], memory_order_relaxed), *last = first;
+    for (uint32_t i = 1; i < n; i++) {
+        task *next = atomic_load_explicit(&w->ring[(h + i) % ring_size], memory_order_relaxed);
+        last->next = next;
+        last = next;
     }
 
-    batch[n]->next = NULL;
+    last->next = t;
+    t->next = NULL;
     sn_qlock_take(&inject_mu);
     if (inject_tail != NULL) {
-        inject_tail->next = batch[0];
+        inject_tail->next = first;
     } else {
-        inject_head = batch[0];
+        inject_head = first;
     }
 
-    inject_tail = batch[n];
+    inject_tail = t;
     sn_qlock_give(&inject_mu);
     atomic_fetch_add(&hot.injected, (int64_t)n + 1);
     return true;

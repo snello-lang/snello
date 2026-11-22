@@ -9,11 +9,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/emit/stack"
 	"github.com/snello-lang/snello/compiler/platform"
 )
+
+// smallestStack is the runtime's smallest stack for a task, in bytes,
+// which a task whose bound fits it is given.
+const smallestStack = 2 << 10
 
 // targetAttributes keeps, of the attributes clang wrote for a
 // function, the ones that name its processor, whichever are there and
@@ -242,6 +248,45 @@ func TestRuntimeInlined(t *testing.T) {
 
 		if has := bytes.Contains(data, []byte("sn_math_Cbrt")); has != debug {
 			t.Errorf("debug=%t: the binary holds the runtime's sn_math_Cbrt: %t, want %t; a release build that holds it was linked with a module whose functions do not name the runtime's processor", debug, has, debug)
+		}
+	}
+}
+
+// TestSenderFitsSmallestStack holds the bound of a task that only sends
+// on a channel under the runtime's smallest stack on Linux and macOS.
+// Such a task's deepest path wakes the receiver and pushes it onto the
+// worker's ring, and a frame there is a frame of every task that sends
+// or wakes another: a kilobyte kept on it for a full ring's half gave
+// each such task a stack of twice the size. Windows' own calls take
+// more, and its bound is not held to this.
+func TestSenderFitsSmallestStack(t *testing.T) {
+	if goruntime.GOOS == platform.Windows || !stack.Measured(goruntime.GOOS, goruntime.GOARCH) {
+		t.Skip("the stacks of this system's tasks are not held to the smallest")
+	}
+
+	const src = "package main\nfunc send(done chan ()) {\n\tdone <- ()\n}\nfunc main() {\n\tdone := make(chan (), 1)\n\tspawn send(done.Clone())\n\t<-done\n}\n"
+	module, err := emit(t, "sender", src, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bin, out, err := Build(t.TempDir(), "sender", module, platform.Host(), false)
+	if err != nil {
+		if _, missing := exec.LookPath(Compiler()); missing != nil {
+			t.Skip("no clang")
+		}
+
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	table, err := stack.Table(bin)
+	if err != nil || len(table) == 0 {
+		t.Fatalf("the bounds of %s: %v, %v", bin, table, err)
+	}
+
+	for spawn, bound := range table {
+		if bound > smallestStack {
+			t.Errorf("spawn %d: a task that sends on a channel is bounded at %d bytes, past the smallest stack, %d", spawn, bound, smallestStack)
 		}
 	}
 }
