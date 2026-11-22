@@ -1838,7 +1838,10 @@ func symbolLine(line string) (name, section string) {
 // for the main task rather than starting a thread, so the main task
 // runs again within a few tens of milliseconds of each sleep's end,
 // within a second in all on a loaded machine, with the workers as many
-// as the cores.
+// as the cores; at most one more, where three signals in a row found
+// no point to leave at, as on a thread of another context form on
+// x86-64 macOS or a thread the system left unrun on a loaded runner,
+// and the monitor started a thread as before.
 func TestPreempted(t *testing.T) {
 	probe := `#include "internal.h"
 #include <stdio.h>
@@ -1878,8 +1881,8 @@ int main(int argc, char **argv) {
 		t.Fatalf("unexpected output: %s", out)
 	}
 
-	if preempted < 5 || workers != cores || late > 1000 {
-		t.Fatalf("with a spinner on every core: %s, want five or more preemptions, no worker added, and the main task's five wakes within a second of their time in all", out)
+	if preempted < 5 || workers > cores+1 || late > 1000 {
+		t.Fatalf("with a spinner on every core: %s, want five or more preemptions, at most one worker added, and the main task's five wakes within a second of their time in all", out)
 	}
 }
 
