@@ -2729,7 +2729,7 @@ SN_HELD_STATIC static void context_restore(const preempt_block *b, ucontext_t *u
 #if defined(__APPLE__)
     if (uc->uc_mcsize != b->size) { // a frame of another form, which the save holds off: never
         static const char message[] = "fatal error: a preempted task's registers cannot be put back\n";
-        (void)write(2, message, sizeof message - 1);
+        (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
         abort();
     }
 
@@ -2898,7 +2898,9 @@ SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
     b->restoring = true;
     raise(preempt_signal);
 #endif
-    abort(); // the registers were put back, and the task went on from where it was interrupted
+    static const char message[] = "fatal error: a preempted task's registers were not put back\n"; // the restore returned
+    (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
+    abort();
 }
 
 // preempt_land is where a preempted task's thread lands, on the task's
@@ -2934,7 +2936,8 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
 
     _Alignas(16) CONTEXT live;
     memset(&live, 0, sizeof live);
-    live.ContextFlags = CONTEXT_ALL;
+    live.ContextFlags = CONTEXT_FULL; // the control, integer and floating-point registers: what a restore puts back, and
+                                      // not the debug registers, which a thread may not set from user mode
     task *t = w->last;
     if (!GetThreadContext(thread, &live) || t == NULL || w->sched_sp == NULL ||
 #if defined(__x86_64__)
@@ -3540,7 +3543,9 @@ SN_HELD_STATIC static void task_entry(void) {
     }
     atomic_store(&t->state, DONE);
     sn_switch(&t->sp, my_worker()->sched_sp);
-    abort(); // a done task is never resumed
+    static const char message[] = "fatal error: a task that ended was resumed\n";
+    (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
+    abort();
 }
 
 // spawn starts a task that runs run on a copy of its arguments, on a
