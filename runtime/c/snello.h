@@ -43,6 +43,27 @@ typedef struct {
 // Snello; every emitted function carries this.
 #define SN_UNUSED __attribute__((unused))
 
+// SN_OPEN_CODE opens the functions after it in a file to preemption:
+// they go in a text section of their own, sn_code, and the scheduler,
+// which takes a task off its worker by interrupting its thread,
+// interrupts it only at an address inside that section (sched.c). The
+// program's own code is there, since both backends put it there, and
+// nothing else: the C library's, whether a program links it in or
+// loads it, a package's C side, and the runtime's own are never
+// interrupted. A compiler with no way to name a file's text section
+// leaves the code closed, and a task in it holds its worker as a call
+// into C does. The mark is the compiler's to write: C that a person
+// wrote keeps what it likes by its thread, and stays closed.
+#if defined(__clang__) && defined(__APPLE__)
+#define SN_OPEN_CODE _Pragma("clang section text=\"__TEXT,__sn_code,regular,pure_instructions\"")
+#elif defined(__clang__) && defined(_WIN32)
+#define SN_OPEN_CODE _Pragma("clang section text=\".text$sn_code_m\"")
+#elif defined(__clang__)
+#define SN_OPEN_CODE _Pragma("clang section text=\".sn_code\"")
+#else
+#define SN_OPEN_CODE
+#endif
+
 // SN_NODEBUG keeps the inline functions below out of the debugging
 // information where the compiler is clang, so that a debugger steps over
 // them as over the runtime's own, which are compiled with none; gcc has

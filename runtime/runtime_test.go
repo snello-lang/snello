@@ -60,6 +60,41 @@ var (
 	kitProcessors       = map[string]string{"amd64": "x64", "arm64": "arm64"}
 )
 
+// probeOpen opens a probe's code to preemption, as a backend opens a
+// program's, and spinners is a probe's program after its includes: a
+// task computing without a wait on every core, and the main task
+// sleeping 100 ms five times and printing how many tasks were
+// preempted, how many workers there are and how late its wakes were in
+// all.
+const (
+	probeOpen = "SN_OPEN_CODE\n"
+	spinners  = `static void spin(void *arg) {
+    (void)arg;
+    volatile int64_t x = 0;
+    for (;;) {
+        x++;
+    }
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    for (int64_t i = 0; i < sn_cores(); i++) {
+        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
+    }
+
+    int64_t late = 0;
+    for (int i = 0; i < 5; i++) {
+        int64_t start = sn_time_mono();
+        sn_sleep(100000000);
+        late += (sn_time_mono() - start) / 1000000 - 100;
+    }
+
+    printf("preempted %lld, workers %lld of %lld cores, %lld ms late\n", (long long)sn_sched_preempted(),
+           (long long)sn_sched_workers(), (long long)sn_cores(), (long long)late);
+    return 0;
+}
+`
+)
+
 // What a probe is built with where the system differs: the C compiler
 // when CC names none, cc, and clang on Windows, which has no cc; and
 // the name of its binary, with Windows' suffix there.
@@ -1721,17 +1756,21 @@ var heldFunction = regexp.MustCompile(`(?m)^SN_HELD(?:_STATIC)?\s+(?:static\s+)?
 // without link-time optimization, and reads its symbols: every
 // function the runtime marks held that the compiler kept as a function
 // of its own lies in the held section, and so does the switch, which
-// the assembly puts there. The preemption rests on that placement
-// (sched.c, preempt_safe), and a compiler that cloned or moved a
-// function out of its section would silently break it.
+// the assembly puts there, so that none is in the code section, the
+// only code a task is preempted in (sched.c, preempt_safe); and neither
+// is a function of the runtime that is not held, kept a function of its
+// own, nor the probe's own main, which opens nothing: the runtime as it
+// is compiled is closed, every function of it. A compiler that cloned
+// or moved one into the code section would silently break the
+// preemption.
 func TestHeldSection(t *testing.T) {
 	var nm []string
-	var held string
+	var held, open string
 	switch runtime.GOOS {
 	case darwinOS:
-		nm, held = []string{"nm", "-m"}, "(__TEXT,__sn_held)"
+		nm, held, open = []string{"nm", "-m"}, "(__TEXT,__sn_held)", "(__TEXT,__sn_code)"
 	case "linux":
-		nm, held = []string{"nm", "-S", "--format=sysv"}, "sn_held"
+		nm, held, open = []string{"nm", "-S", "--format=sysv"}, ".sn_held", ".sn_code"
 	default:
 		t.Skip("no symbol listing with sections here")
 	}
@@ -1756,9 +1795,13 @@ func TestHeldSection(t *testing.T) {
 	}
 
 	probe := `#include "internal.h"
+// A function of the runtime's that is not held, called through a
+// pointer so that it stays a function of its own under every
+// optimization.
+static int64_t (*volatile index_of)(sn_string, sn_string) = sn_string_index;
 int main(int argc, char **argv) {
     sn_init(argc, argv);
-    return 0;
+    return (int)index_of(SN_STR("ab", 2), SN_STR("b", 1)) - 1;
 }
 `
 	for _, mode := range [][]string{{"-O2"}, {"-O2", "-flto"}} {
@@ -1768,7 +1811,7 @@ int main(int argc, char **argv) {
 			t.Fatalf("%v: %v", nm, err)
 		}
 
-		found, outside := 0, []string{}
+		found, outside, plain := 0, []string{}, ""
 		for _, line := range strings.Split(string(out), "\n") {
 			name, section := symbolLine(line)
 			base := name
@@ -1778,6 +1821,13 @@ int main(int argc, char **argv) {
 
 			if i := strings.IndexByte(base, '.'); i > 0 { // a clone the compiler made, name.constprop.0, is the function's
 				base = base[:i]
+			}
+
+			switch {
+			case base == "sn_string_index":
+				plain = section
+			case base == "main" && section == open:
+				t.Errorf("%v: the probe's main, which opens nothing, is in the code section", mode)
 			}
 
 			if !marked[base] || !codeSection(section) {
@@ -1796,6 +1846,10 @@ int main(int argc, char **argv) {
 
 		if len(outside) > 0 {
 			t.Errorf("%v: %d held functions outside the held section:\n%s", mode, len(outside), strings.Join(outside, "\n"))
+		}
+
+		if plain == "" || plain == open { // the runtime is closed: a package's C may call it with a lock of its own held
+			t.Errorf("%v: sn_string_index is in %q, want a section that is not the code section, %s", mode, plain, open)
 		}
 	}
 }
@@ -1843,33 +1897,13 @@ func symbolLine(line string) (name, section string) {
 // x86-64 macOS or a thread the system left unrun on a loaded runner,
 // and the monitor started a thread as before.
 func TestPreempted(t *testing.T) {
+	if !opensCode() {
+		t.Skip("the probes' compiler cannot open code to preemption")
+	}
+
 	probe := `#include "internal.h"
 #include <stdio.h>
-static void spin(void *arg) {
-    (void)arg;
-    volatile int64_t x = 0;
-    for (;;) {
-        x++;
-    }
-}
-int main(int argc, char **argv) {
-    sn_init(argc, argv);
-    for (int64_t i = 0; i < sn_cores(); i++) {
-        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
-    }
-
-    int64_t late = 0;
-    for (int i = 0; i < 5; i++) {
-        int64_t start = sn_time_mono();
-        sn_sleep(100000000);
-        late += (sn_time_mono() - start) / 1000000 - 100;
-    }
-
-    printf("preempted %lld, workers %lld of %lld cores, %lld ms late\n", (long long)sn_sched_preempted(),
-           (long long)sn_sched_workers(), (long long)sn_cores(), (long long)late);
-    return 0;
-}
-`
+` + probeOpen + spinners
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
 	out, err := runProbe(bin)
 	if err != nil {
@@ -1886,6 +1920,31 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestPreemptedOnlyInOpenCode has a task on every core compute without
+// a wait in code that is not open to preemption, as the C side of a
+// package is, and the C library a program links in: none is ever
+// interrupted, whatever its thread holds, and the main task still runs
+// again, on a thread the monitor starts beside the held workers, as it
+// did before a task could be preempted.
+func TestPreemptedOnlyInOpenCode(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+` + spinners
+	out, err := runProbe(buildProbe(t, filepath.Join(t.TempDir(), "build"), probe))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var preempted, workers, cores, late int
+	if _, err := fmt.Sscanf(string(out), "preempted %d, workers %d of %d cores, %d ms late", &preempted, &workers, &cores, &late); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if preempted != 0 || workers <= cores || late > 1000 {
+		t.Fatalf("with a spinner in closed code on every core: %s, want no preemption, a worker added, and the main task's five wakes within a second of their time in all", out)
+	}
+}
+
 // TestPreemptedKeepsRegisters has a task on every core compute a
 // checksum through many live values, integer and floating-point, for
 // about a second while the main task wakes every 10 ms, so that each
@@ -1893,9 +1952,14 @@ int main(int argc, char **argv) {
 // its registers put back: every checksum equals the one the main task
 // computes alone afterwards, and the tasks were preempted many times.
 func TestPreemptedKeepsRegisters(t *testing.T) {
+	if !opensCode() {
+		t.Skip("the probes' compiler cannot open code to preemption")
+	}
+
 	probe := `#include "internal.h"
 #include <stdio.h>
 #include <stdatomic.h>
+SN_OPEN_CODE
 enum { steps = 200000000, most = 64 };
 static _Atomic int64_t done;
 static uint64_t sums[most];
@@ -1971,15 +2035,172 @@ int main(int argc, char **argv) {
 	}
 }
 
+// TestPreemptedKeepsVectorRegisters has a task on every core load
+// every vector register with a pattern of its own, at the widest form
+// the system keeps, spin without touching one, and store them, while
+// the main task wakes every 10 ms so that each is taken off its worker
+// in the spin and resumed on another: every register comes back whole.
+// A program built for a processor that has the wide registers, or a
+// function written with them, holds values there, and a preemption
+// that kept only their low halves would resume the task with a stale
+// half in each.
+func TestPreemptedKeepsVectorRegisters(t *testing.T) {
+	if !opensCode() {
+		t.Skip("the probes' compiler cannot open code to preemption")
+	}
+
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdatomic.h>
+SN_OPEN_CODE
+enum { holds = 20, spins = 100000000, most = 64, room = 32 * 64 + 16 };
+static _Atomic int64_t done, wrong;
+// hold loads every vector register from want, spins n times, and
+// stores them all to got.
+static void (*hold)(uint64_t n, const uint8_t *want, uint8_t *got);
+static size_t held;       // the bytes the registers hold in all
+static const char *width; // of the widest registers the system keeps
+#define ALL16(M) M(0) M(1) M(2) M(3) M(4) M(5) M(6) M(7) M(8) M(9) M(10) M(11) M(12) M(13) M(14) M(15)
+#define ALL32(M) ALL16(M) M(16) M(17) M(18) M(19) M(20) M(21) M(22) M(23) M(24) M(25) M(26) M(27) M(28) M(29) M(30) M(31)
+#if defined(__x86_64__)
+#define SPIN "1:\n subq $1, %[n]\n jnz 1b\n"
+#define LOW16 "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"
+#define HIGH16 "xmm16", "xmm17", "xmm18", "xmm19", "xmm20", "xmm21", "xmm22", "xmm23", "xmm24", "xmm25", "xmm26", "xmm27", "xmm28", "xmm29", "xmm30", "xmm31"
+#define XL(i) "movdqu " #i "*16(%[w]), %%xmm" #i "\n"
+#define XS(i) "movdqu %%xmm" #i ", " #i "*16(%[g])\n"
+#define YL(i) "vmovdqu " #i "*32(%[w]), %%ymm" #i "\n"
+#define YS(i) "vmovdqu %%ymm" #i ", " #i "*32(%[g])\n"
+#define ZL(i) "vmovdqu64 " #i "*64(%[w]), %%zmm" #i "\n"
+#define ZS(i) "vmovdqu64 %%zmm" #i ", " #i "*64(%[g])\n"
+#define KL(i) "kmovw 2046+" #i "*2(%[w]), %%k" #i "\n"
+#define KS(i) "kmovw %%k" #i ", 2046+" #i "*2(%[g])\n"
+#define MASKS(M) M(1) M(2) M(3) M(4) M(5) M(6) M(7)
+__attribute__((noinline)) static void hold_128(uint64_t n, const uint8_t *w, uint8_t *g) {
+    __asm__ volatile(ALL16(XL) SPIN ALL16(XS) : [n] "+r"(n) : [w] "r"(w), [g] "r"(g) : "cc", "memory", LOW16);
+}
+__attribute__((noinline, target("avx"))) static void hold_256(uint64_t n, const uint8_t *w, uint8_t *g) {
+    __asm__ volatile(ALL16(YL) SPIN ALL16(YS) "vzeroupper\n"
+                     : [n] "+r"(n) : [w] "r"(w), [g] "r"(g) : "cc", "memory", LOW16);
+}
+#if !defined(__APPLE__)
+// The 512-bit registers, all thirty-two, and the seven mask registers
+// an instruction may name, after them in the buffers.
+__attribute__((noinline, target("avx512f"))) static void hold_512(uint64_t n, const uint8_t *w, uint8_t *g) {
+    __asm__ volatile(ALL32(ZL) MASKS(KL) SPIN ALL32(ZS) MASKS(KS) "vzeroupper\n"
+                     : [n] "+r"(n) : [w] "r"(w), [g] "r"(g)
+                     : "cc", "memory", LOW16, HIGH16, "k1", "k2", "k3", "k4", "k5", "k6", "k7");
+}
+#endif
+static void cpuid(uint32_t leaf, uint32_t sub, uint32_t r[4]) {
+    __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(sub));
+}
+// kept is the vector state the system saves for a thread, the
+// processor's own word for it.
+static uint64_t kept(void) {
+    uint32_t low, high;
+    __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
+    return ((uint64_t)high << 32) | low;
+}
+// choose takes the widest registers the processor has and the system
+// keeps. macOS gives a thread the 512-bit registers at its first use
+// of one, with a context of another form, on which a task is not
+// preempted: the 256-bit ones are the widest held there.
+static void choose(void) {
+    uint32_t r[4];
+    hold = hold_128, held = 16 * 16, width = "128-bit";
+    cpuid(1, 0, r);
+    if ((r[2] >> 27 & 1) == 0 || (r[2] >> 28 & 1) == 0 || (kept() & 0x6) != 0x6) {
+        return;
+    }
+
+    hold = hold_256, held = 16 * 32, width = "256-bit";
+#if !defined(__APPLE__)
+    cpuid(7, 0, r);
+    if ((r[1] >> 16 & 1) != 0 && (kept() & 0xe6) == 0xe6) {
+        hold = hold_512, held = 32 * 64 + 7 * 2, width = "512-bit";
+    }
+#endif
+}
+#else
+#define VL(i) "ldr q" #i ", [%[w], #" #i "*16]\n"
+#define VS(i) "str q" #i ", [%[g], #" #i "*16]\n"
+__attribute__((noinline)) static void hold_128(uint64_t n, const uint8_t *w, uint8_t *g) {
+    __asm__ volatile(ALL32(VL) "1:\n subs %[n], %[n], #1\n b.ne 1b\n" ALL32(VS)
+                     : [n] "+r"(n) : [w] "r"(w), [g] "r"(g)
+                     : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11",
+                       "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24",
+                       "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+}
+static void choose(void) { hold = hold_128, held = 32 * 16, width = "128-bit"; }
+#endif
+static void keep(void *arg) {
+    int64_t id = *(int64_t *)arg;
+    uint8_t want[room], got[room];
+    for (size_t i = 0; i < sizeof want; i++) {
+        want[i] = (uint8_t)(i * 7 + (size_t)id + 1); // a pattern of its own for each register and each task
+    }
+
+    for (int h = 0; h < holds; h++) {
+        memset(got, 0, sizeof got);
+        hold(spins, want, got);
+        if (memcmp(want, got, held) != 0) {
+            atomic_fetch_add(&wrong, 1);
+        }
+    }
+
+    atomic_fetch_add(&done, 1);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    choose();
+    int64_t n = sn_cores() < most ? sn_cores() : most;
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(keep, &i, sizeof i, SN_UNBOUNDED);
+    }
+
+    while (atomic_load(&done) < n) {
+        sn_sleep(10000000); // every wake finds the workers held and has one of the tasks moved
+    }
+
+    printf("%lld wrong of %lld holds, preempted %lld, %s registers\n", (long long)atomic_load(&wrong),
+           (long long)(n * holds), (long long)sn_sched_preempted(), width);
+    return 0;
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O2")
+	out, err := runProbe(bin)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var wrong, holds, preempted int
+	var width string
+	if _, err := fmt.Sscanf(string(out), "%d wrong of %d holds, preempted %d, %s registers", &wrong, &holds, &preempted, &width); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if wrong != 0 || preempted < 10 {
+		t.Fatalf("vector registers across preemptions: %s, want every hold whole and many preemptions", out)
+	}
+
+	t.Logf("held the %s registers through %d preemptions", width, preempted)
+}
+
 // TestPreemptedChannels has tasks that compute for a while and then
 // send on a channel, beside a task computing without a wait on every
 // core, with the main task waking every 10 ms: a sender is taken off
 // its worker in its computing and resumed on another, and its sends,
 // through the ring and the channel's lock, arrive whole and in order.
 func TestPreemptedChannels(t *testing.T) {
+	if !opensCode() {
+		t.Skip("the probes' compiler cannot open code to preemption")
+	}
+
 	probe := `#include "internal.h"
 #include <stdio.h>
 #include <stdatomic.h>
+SN_OPEN_CODE
 enum { sends = 20, spin_ns = 15000000 };
 static _Atomic int64_t stop;
 static void spin(void *arg) {
@@ -2842,6 +3063,17 @@ func windowsDebugger() string {
 
 	parts := append([]string{os.Getenv(programFilesX86)}, windowsKitDebuggers...)
 	return filepath.Join(append(parts, kitProcessors[runtime.GOARCH], cdbName+windowsSuffix)...)
+}
+
+// opensCode reports whether the probes' compiler can open a unit's
+// code to preemption, which the mark needs clang for (snello.h,
+// SN_OPEN_CODE): a probe another compiler built has no open code, and
+// a test of its tasks' preemption has nothing to test.
+func opensCode() bool {
+	cmd := exec.Command(probeCompiler(), "-E", "-x", "c", "-")
+	cmd.Stdin = strings.NewReader("__clang__\n")
+	out, err := cmd.Output()
+	return err != nil || !strings.Contains(string(out), "__clang__") // a compiler that defines the name writes its value
 }
 
 // probeCompiler returns the C compiler a probe is built with: the one

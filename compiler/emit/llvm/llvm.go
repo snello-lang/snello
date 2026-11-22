@@ -86,6 +86,7 @@ type Config struct {
 type Emitter struct {
 	cfg        Config
 	abi        abi
+	section    string // after a function's attributes: the code section of the target's system, quoted
 	info       *types.Info
 	file       *token.File
 	types      bytes.Buffer                    // the named types of the module
@@ -242,6 +243,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	e := &Emitter{
 		cfg:        cfg,
 		abi:        target,
+		section:    sectionOf(cfg.OS),
 		info:       info,
 		file:       files[0],
 		dfiles:     make(map[*token.File]int),
@@ -470,7 +472,7 @@ func (e *Emitter) mainFunc() {
 
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
-	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, e.section, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n")
 }
@@ -611,7 +613,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	sp := e.subprogramNode(g+"_get", "", nil, token.Position{Filename: generated}, "")
 	loc := e.metaNode("!DILocation(line: 0, column: 0, scope: !" + strconv.Itoa(sp) + ")")
 	at := ", !dbg !" + strconv.Itoa(loc)
-	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
+	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, e.section, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}
@@ -889,7 +891,7 @@ func (e *Emitter) writeBody(name, display string, sig *types.Signature, params [
 	}
 
 	e.function(sig, params, env, body)
-	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", e.ownAttrs(), funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", e.ownAttrs(), funcAttrs, e.section, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n\n")
 	e.within, e.nclosure = outerWithin, outerClosures

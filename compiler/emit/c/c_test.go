@@ -402,6 +402,10 @@ func execute(t *testing.T, dir, name string, csrc []byte, debug bool, interrupts
 	}
 
 	backendtest.Bounded(t, name, bin)
+	if bytes.Contains(csrc, []byte("\nSN_OPEN_CODE ")) && !IsGCC(Compiler()) { // a unit the backend wrote, which opens its code, and not through gcc, which has no way to
+		backendtest.Open(t, name, bin)
+	}
+
 	stdout, stderr, code, err := backendtest.Run(bin, dir, interrupts)
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)
@@ -428,6 +432,23 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(m.Run())
+}
+
+// TestUnitOpensCode holds a unit to opening its code to preemption
+// once, after the header that gives the mark and before the first
+// thing the unit defines, so that every function of the program is in
+// the code section and nothing of the header's is.
+func TestUnitOpensCode(t *testing.T) {
+	out := emitSource(t, "package main\nimport \"fmt\"\nfunc twice(n int) int { return n * 2 }\nfunc main() {\n\tfmt.Println(twice(21))\n}\n")
+	const include, mark = "#include \"snello.h\"\n", "\nSN_OPEN_CODE "
+	at, opened := strings.Index(out, include), strings.Index(out, mark)
+	if at < 0 || opened < at || strings.Count(out, mark) != 1 {
+		t.Fatalf("the unit opens its code %d times, at %d, after its header at %d", strings.Count(out, mark), opened, at)
+	}
+
+	if between := out[at+len(include) : opened]; strings.TrimSpace(between) != "" {
+		t.Errorf("the unit defines something before it opens its code: %q", between)
+	}
 }
 
 // emitSource parses, checks and emits the program src with the

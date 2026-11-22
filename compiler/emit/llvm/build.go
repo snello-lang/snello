@@ -126,7 +126,7 @@ func Build(dir, name string, module []byte, t platform.Target, debug bool, bindi
 			pkgArgs = c.ProgramFlags(cc, t, debug) // a debug build's as the program's, for the debugger
 		}
 
-		objs, boundOutput, err = c.Objects(cc, append(append([]string{}, pkgArgs...), "-I", dir), bound) // with snello.h
+		objs, boundOutput, err = c.BoundObjects(cc, append(append([]string{}, pkgArgs...), "-I", dir), bound) // with snello.h
 		output = append(output, boundOutput...)
 	}
 

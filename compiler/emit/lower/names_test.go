@@ -5,12 +5,50 @@
 package lower
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/runtime"
 )
+
+// TestCodeSection holds the section a backend writes a program's code
+// into to the one the runtime looks for: the header's mark names it on
+// every system, the scheduler reads it by that name on Linux and from
+// the loader on macOS, and on Windows its two marks sort before and
+// after it. Were the names to part, a program's tasks would no longer
+// be preempted, and nothing else would say so.
+func TestCodeSection(t *testing.T) {
+	files := runtime.Files()
+	header, sched := string(files["snello.h"]), string(files["sched.c"])
+	for _, system := range []string{platform.Darwin, platform.Linux, platform.Windows} {
+		if name := CodeSection(system); !strings.Contains(header, `text=\"`+name+`\"`) {
+			t.Errorf("%s: the runtime's header opens no section named %s", system, name)
+		}
+	}
+
+	if name := CodeSection("freebsd"); name != CodeSection(platform.Linux) {
+		t.Errorf("another system's section is %s, want an ELF binary's, %s", name, CodeSection(platform.Linux))
+	}
+
+	if elf := CodeSection(platform.Linux); !strings.HasPrefix(elf, ".") || !strings.Contains(sched, `code_section[] = "`+elf+`"`) {
+		t.Errorf("the scheduler does not read %s by its name, or the name is one a C program could write, which a link keeps every function of", elf)
+	}
+
+	parts := strings.Split(CodeSection(platform.Darwin), ",")
+	if len(parts) < 2 || !strings.Contains(sched, `"`+parts[0]+`", "`+parts[1]+`"`) {
+		t.Errorf("the scheduler does not ask the loader for %v", parts)
+	}
+
+	pe := CodeSection(platform.Windows)
+	first, last := pe[:len(pe)-1]+"a", pe[:len(pe)-1]+"z"
+	if !(first < pe && pe < last) || !strings.Contains(sched, `"`+first+`"`) || !strings.Contains(sched, `"`+last+`"`) || !strings.Contains(sched, `"`+pe+`"`) {
+		t.Errorf("the scheduler's marks do not sort around %s as %s and %s", pe, first, last)
+	}
+}
 
 // TestMangle writes types as fragments of symbols: a signature with no
 // parameter and with several, a tuple, a type made of others, and a

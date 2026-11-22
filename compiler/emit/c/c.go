@@ -201,7 +201,7 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	}
 
 	var out bytes.Buffer
-	put(&out, "// Emitted by the Snello compiler from ", strings.Join(names, ", "), ". Do not edit.\n\n#include \"snello.h\"\n\n")
+	put(&out, "// Emitted by the Snello compiler from ", strings.Join(names, ", "), ". Do not edit.\n\n#include \"snello.h\"\n\nSN_OPEN_CODE // the program's own code, which a task may be preempted in\n\n")
 	put(&out, "#define SN_BOX_WORDS ", strconv.Itoa(max(e.boxWords, minBoxWords)), " // every function value carries this many words for a closure's copies\n\n")
 	e.stackBounds(&out)
 	out.Write(e.decls.Bytes())

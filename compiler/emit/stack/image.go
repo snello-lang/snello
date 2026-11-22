@@ -24,13 +24,17 @@ const (
 	otool     = "otool"
 	otoolText = "-tV"
 
-	// otoolSection has otool print a section it is named, and heldSegment
-	// and heldSection name the runtime's held section, the functions the
-	// scheduler never preempts a task inside (runtime/c/internal.h,
-	// SN_HELD), which -tV, the __text section alone, leaves out.
+	// otoolSection has otool print a section it is named, and ownSegment
+	// names the segment of the two the runtime's header names, which
+	// -tV, the __text section alone, leaves out: codeSection, the
+	// program's own code and what of the runtime only computes, where a
+	// task may be preempted (runtime/c/snello.h, SN_OPEN_CODE), and
+	// heldSection, the runtime's functions it never is inside
+	// (runtime/c/internal.h, SN_HELD).
 	otoolSection = "-s"
 	otoolVerbose = "-v"
-	heldSegment  = "__TEXT"
+	ownSegment   = "__TEXT"
+	codeSection  = "__sn_code"
 	heldSection  = "__sn_held"
 
 	// objdump is the disassembler on Linux, and objdumpText and
@@ -375,11 +379,11 @@ func disassemble(os system, a arch, path string) ([]byte, error) {
 }
 
 // disassembleMachO runs otool over a Mach-O binary's __text section and
-// over the runtime's held section, which is code too, and returns the
-// two listings as one.
+// over the code and the held sections, which are code too, and returns
+// the three listings as one.
 func disassembleMachO(path string) ([]byte, error) {
 	var out []byte
-	for _, args := range [][]string{{otoolText, path}, {otoolVerbose, otoolSection, heldSegment, heldSection, path}} {
+	for _, args := range [][]string{{otoolText, path}, {otoolVerbose, otoolSection, ownSegment, codeSection, path}, {otoolVerbose, otoolSection, ownSegment, heldSection, path}} {
 		cmd := exec.Command(otool, args...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr

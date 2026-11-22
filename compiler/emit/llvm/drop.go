@@ -738,7 +738,7 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 	e.subprogram(name, "", token.NoPos, "")
 	e.fn.artificial = true // the backend's own code, all at line zero in a debug build
 	f()
-	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the section, piece by piece
+	put(&e.helpers, "define internal ", result, " @", name, "(") // straight into the helpers' text, piece by piece
 	for i, p := range params {
 		if i > 0 {
 			e.helpers.WriteString(", ")
@@ -747,7 +747,7 @@ func (e *Emitter) helper(name, result string, params []string, f func()) {
 		e.helpers.WriteString(p)
 	}
 
-	put(&e.helpers, ")", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.helpers, ")", funcAttrs, e.section, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.helpers, outer)
 	e.helpers.WriteString("}\n\n")
 }

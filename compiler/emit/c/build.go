@@ -214,11 +214,26 @@ func Build(dir, name string, src []byte, t platform.Target, debug bool, bindings
 	}()
 
 	args := append(ProgramFlags(Compiler(), t, debug), "-I", dir) // the program's own, and snello.h for its C and a package's
-	objs, output, err := Objects(Compiler(), args, append([]string{prog}, bound...))
+	var boundObjs []string
+	var boundOutput []byte
+	var boundErr error
+	boundDone := make(chan struct{})
+	go func() { // the packages' C beside the program too
+		boundObjs, boundOutput, boundErr = BoundObjects(Compiler(), args, bound)
+		close(boundDone)
+	}()
+
+	objs, output, err := Objects(Compiler(), args, []string{prog})
+	<-boundDone
 	<-done
-	output = append(output, rtOutput...)
+	objs = append(objs, boundObjs...)
+	output = append(append(output, boundOutput...), rtOutput...)
 	if err != nil {
 		return "", output, err
+	}
+
+	if boundErr != nil {
+		return "", output, boundErr
 	}
 
 	if rtErr != nil {
@@ -404,12 +419,18 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 		}
 	}
 
+	var beside []string // what the optimizer's object does not hold: the objects compiled to native code whatever the build
+	if whole {
+		beside = nativeObjects(dir, objs, bindings)
+	}
+
+	traced := append(append([]string{}, native...), beside...) // a binding's C among them, so that a trace walks through its frames
 	var table []byte
 	var layout *trace.Layout
-	if t.OS == platform.Windows { // the first image's functions that native defines
-		table, layout, err = trace.ImageTable(first, native...)
+	if t.OS == platform.Windows { // the first image's functions that the objects define
+		table, layout, err = trace.ImageTable(first, traced...)
 	} else {
-		table, layout, err = trace.Table(native...)
+		table, layout, err = trace.Table(traced...)
 	}
 
 	if err != nil {
@@ -426,11 +447,7 @@ func Link(cc string, t platform.Target, debug bool, dir, bin string, objs []stri
 		return output, err
 	}
 
-	cmd = append(append(append([]string{}, plain...), outputFlag, bin), native...)
-	if whole {
-		cmd = append(cmd, nativeRuntime(objs)...) // which the optimizer's object does not hold
-	}
-
+	cmd = append(append(append(append([]string{}, plain...), outputFlag, bin), native...), beside...)
 	cmd = append(append(append(cmd, tablePath), LinkFlags(t, bindings)...), SystemLinkFlags(t)...)
 	if !debug && t.OS == platform.Linux {
 		cmd = append(cmd, stripDebug)
@@ -488,13 +505,20 @@ func writeNatvis(image, path string) (string, error) {
 	return path, os.WriteFile(path, file, 0o644)
 }
 
-// nativeRuntime is the runtime's objects among objs compiled to native
-// code whatever the build's optimization, which the optimizing link
-// leaves out of the object it writes.
-func nativeRuntime(objs []string) []string {
+// nativeObjects is the objects among objs compiled to native code
+// whatever the build's optimization, which the optimizing link leaves
+// out of the object it writes: the runtime's own that it names, and
+// the C side of every binding, each under dir in the directory
+// BindingSources gave it.
+func nativeObjects(dir string, objs []string, bindings []lower.Binding) []string {
+	bound := make(map[string]bool, len(bindings))
+	for _, b := range bindings {
+		bound[filepath.Join(dir, b.Prefix)] = true
+	}
+
 	var out []string
 	for _, o := range objs {
-		if runtime.Native[strings.TrimSuffix(filepath.Base(o), filepath.Ext(o))+".c"] {
+		if runtime.Native[strings.TrimSuffix(filepath.Base(o), filepath.Ext(o))+".c"] || bound[filepath.Dir(o)] {
 			out = append(out, o)
 		}
 	}
@@ -512,6 +536,15 @@ func without(args []string, flag string) []string {
 	}
 
 	return out
+}
+
+// BoundObjects compiles the C side of the packages a program binds,
+// srcs, as Objects does, to native code whatever the arguments say:
+// under -flto the optimizer would write a C function into the function
+// of the program that calls it, which is code a task may be preempted
+// in, and a package's C may keep what it likes by its thread.
+func BoundObjects(cc string, args, srcs []string) (objs []string, output []byte, err error) {
+	return Objects(cc, without(args, lto), srcs)
 }
 
 // Objects compiles each of the C files srcs to an object beside it with

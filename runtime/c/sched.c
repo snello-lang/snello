@@ -60,6 +60,7 @@
 #endif
 
 #ifdef __linux__
+#include <fcntl.h>
 #include <link.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -212,8 +213,8 @@ enum { workers_per_core = 16 };
 // the system saved them, with a landing stack of landing_bytes the
 // task switches to the scheduler from and has its registers put back
 // on; context_most bounds what the system saved, the vector unit's
-// state included. A task is preempted only outside the runtime's held
-// section (internal.h, SN_HELD). A worker still on one task after
+// state included. A task is preempted only in the code section
+// (snello.h, SN_OPEN_CODE). A worker still on one task after
 // preempt_tries attempts is blocked in a system call or a bound
 // function, which no signal frees, and gets a thread started beside it
 // as before.
@@ -223,8 +224,35 @@ enum { preempt_tries = 3, landing_bytes = 16 << 10, signal_stack_bytes = 64 << 1
 // The thread's information block, where the system keeps the stack's
 // bounds, which the switch above reads and writes, and the last error.
 enum { teb_stack_base = 0x08, teb_stack_limit = 0x10, teb_last_error = 0x68, teb_deallocation_stack = 0x1478 };
+
+// The wide vector state among the features a thread's context may
+// hold, by the processor's numbering of them, where the system's
+// headers are older than the feature: the 512-bit registers with their
+// masks, and the sixteen further general registers.
+#ifndef XSTATE_MASK_AVX512
+#define XSTATE_MASK_AVX512 ((1ULL << 5) | (1ULL << 6) | (1ULL << 7))
+#endif
+#ifndef XSTATE_MASK_APX
+#define XSTATE_MASK_APX (1ULL << 19)
+#endif
 #else
 enum { preempt_signal = SIGURG }; // unused by the system but for out-of-band data, and ignored by default
+#endif
+
+#if defined(__x86_64__)
+// The direction flag, which both calling conventions have clear as a
+// function is entered: a landing begins as one, wherever its task was.
+enum { flag_direction = 0x400 };
+#endif
+
+#if defined(__linux__)
+// Where a Linux program reads the place of its code section from: its
+// own file, as the system names it for any process, the section by its
+// name there (snello.h, SN_OPEN_CODE), and the most a file's table of
+// section names may take, which a program's is far below.
+static const char program_file[] = "/proc/self/exe";
+static const char code_section[] = ".sn_code";
+enum { section_names_most = 1 << 20 };
 #endif
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -292,9 +320,9 @@ static inline uintptr_t stack_pointer(void) {
 #elif defined(_WIN32)
 #define SN_HELD_SECTION ".section .text$sn_held_m,\"xr\""
 #elif defined(__aarch64__)
-#define SN_HELD_SECTION ".section sn_held,\"ax\",%progbits"
+#define SN_HELD_SECTION ".section .sn_held,\"ax\",%progbits"
 #else
-#define SN_HELD_SECTION ".section sn_held,\"ax\",@progbits"
+#define SN_HELD_SECTION ".section .sn_held,\"ax\",@progbits"
 #endif
 
 #if defined(__APPLE__)
@@ -816,7 +844,8 @@ typedef struct worker {
     _Atomic(struct preempt_block *) spare; // a block the monitor keeps ready, which the preemption takes
     int preempt_tries;                     // attempts since the worker last switched, the monitor's
 #if defined(_WIN32)
-    _Alignas(16) CONTEXT restoring; // a preempted task's registers as they are put back, off its block
+    uint8_t *restoring_room; // room for a context of the thread's own, which a preempted task's registers are put
+                             // back from, off its block
 #endif
     task *last;                // the task that switched to the scheduler, to settle
     _Atomic(task *) runnext;   // the task its running task woke last, which it runs next: put with an exchange, taken
@@ -872,7 +901,7 @@ typedef struct preempt_block {
 #if defined(_WIN32)
     sn_stack_bounds bounds;
     DWORD last_error;
-    _Alignas(16) CONTEXT context;
+    CONTEXT *context; // in the room after the block, of the size the system gives, laid out afresh for each capture
 #elif defined(__APPLE__)
     size_t size;                                // of the machine context, uc_mcsize
     _Alignas(16) uint8_t context[context_most]; // the machine context, whichever form the processor's is
@@ -1036,6 +1065,7 @@ static void add_worker(void);
 static void preempt_start(void);
 static void preempt_thread_start(worker *w);
 static void preempt_worker(worker *w);
+static void preempt_land(task *t);
 
 // sn_sched_recheck has the waiting workers look again at whether any
 // task can still be woken, when every worker waits.
@@ -2015,27 +2045,7 @@ SN_HELD_STATIC static void stack_check(task *t) {
             fprintf(stderr, " %02x", s[j]);
         }
 
-        fprintf(stderr, "; preempted %u times of %lld in all, %lld tasks running on %d workers, the stack at %p",
-                (unsigned)t->preemptions, (long long)atomic_load(&preempted), (long long)sn_tasks_running(),
-                atomic_load(&nworkers), (void *)(uintptr_t)s);
-#if defined(_WIN32)
-        // What lies below the stack's bottom: its own block, or another
-        // mapping, whose last bytes say what runs there.
-        MEMORY_BASIC_INFORMATION own, below;
-        if (VirtualQuery(s, &own, sizeof own) == sizeof own &&
-            VirtualQuery(s - 1, &below, sizeof below) == sizeof below) {
-            fprintf(stderr, " in a block from %p; below it %p to %p, state %lx type %lx protect %lx",
-                    own.AllocationBase, below.AllocationBase, (void *)((uint8_t *)below.BaseAddress + below.RegionSize),
-                    below.State, below.Type, below.Protect);
-            if (below.State == MEM_COMMIT && (below.Protect & (PAGE_READWRITE | PAGE_READONLY)) != 0) {
-                fprintf(stderr, ", ending");
-                for (const uint8_t *p = s - 32; p < s; p++) {
-                    fprintf(stderr, " %02x", *p);
-                }
-            }
-        }
-#endif
-        fputc('\n', stderr);
+        fprintf(stderr, "; the task was preempted %u times\n", (unsigned)t->preemptions);
         exit(2);
     }
 }
@@ -2523,8 +2533,8 @@ SN_HELD_STATIC static void keeper_wake(void) {
 }
 
 // Preemption. A task that has held its worker for held_limit while a
-// task waits is taken off it, at a point outside the runtime's held
-// section, its registers saved as the system itself saved them, and
+// task waits is taken off it, at a point in the code section, its
+// registers saved as the system itself saved them, and
 // put on the displaced queue; the worker runs the next task, and
 // whichever worker takes the preempted task has its registers put back
 // and runs it from where it was interrupted. Only a task that holds a
@@ -2547,48 +2557,115 @@ SN_HELD_STATIC static void keeper_wake(void) {
 // On Windows the monitor suspends the thread, reads its context, sets
 // one that runs preempt_land, and resumes it; the landing restores the
 // context itself, RtlRestoreContext, after the stack's bounds in the
-// thread's information block, which the switch keeps there too.
+// thread's information block, which the switch keeps there too. The
+// context is the system's extended one, with the wide vector state the
+// system has enabled, the upper halves of the 256-bit registers and
+// the 512-bit ones: the fixed context leaves them out, and a task
+// whose code holds a value there, a program built for a processor that
+// has them or a function written with them, would resume with a stale
+// half in every such register. Its size is the
+// system's to give, and it is laid out by InitializeContext in room of
+// the block's. A thread the system reports as inside a system call or
+// an exception is left as it is, since a context set there is not put
+// back whole.
 //
-// A point is safe when the program counter lies in the executable's
-// own text, so never in the C library, where a task interrupted inside
-// malloc would keep its lock on a thread that runs other tasks, and
-// outside the runtime's held section (internal.h, SN_HELD), where every
-// function that holds a lock, reads the thread's own state or switches
-// is, so that a task resumed on another thread holds nothing of the one
-// it left; the sections' addresses are read once, as the scheduler
-// starts. Go's runtime decides the same way, by its safe points, with
-// its own functions none. A point that is not safe is left as it is,
-// and the monitor tries again at its next look.
-static uintptr_t text_start, text_end; // the program's own code, where a task may be preempted
-static uintptr_t held_start, held_end; // the runtime's held section within it, where it may not
+// A point is safe when the program counter lies in the code section
+// (snello.h, SN_OPEN_CODE): the program's own code, which both backends
+// write there, and nothing else. No other code is interrupted, so that
+// a task resumed on another thread holds nothing of the one it left:
+// not the C library, where a task interrupted inside malloc would keep
+// its lock on a thread that runs other tasks, and which a program may
+// have linked into its own text; not a package's C side, which may
+// keep what it likes by its thread, nor the runtime's functions it
+// calls while it does; and not the runtime, whose functions as they
+// were compiled are outside the section. An optimizing link may write
+// a function of the runtime into the program's own that calls it, and
+// there it is the program's code; it never writes one that holds a
+// lock, reads the thread's own state or switches, since those are
+// marked to be written into no caller (internal.h, SN_HELD). The
+// section's addresses are read once, as the scheduler starts. A point
+// that is not safe is left as it is, and the monitor tries again at
+// its next look.
+static uintptr_t code_start, code_end; // the code section, where a task may be preempted
 #if defined(__APPLE__)
 static _Atomic size_t context_size; // the size of the machine context of the first thread preempted
 #endif
 
-SN_HELD_STATIC static bool preempt_safe(uintptr_t pc) {
-    return pc >= text_start && pc < text_end && (pc < held_start || pc >= held_end);
-}
+SN_HELD_STATIC static bool preempt_safe(uintptr_t pc) { return pc >= code_start && pc < code_end; }
 
 #if defined(_WIN32)
-// The held section's bounds on Windows: the linker lays the .text$
-// sections out in the order of their names, so a function first in
-// .text$sn_held_a and one in .text$sn_held_z bound the functions in
-// .text$sn_held_m between them.
-__attribute__((section(".text$sn_held_a"), used)) static void held_first(void) {}
-__attribute__((section(".text$sn_held_z"), used)) static void held_last(void) {}
+// The code section's bounds on Windows: the linker lays the .text$
+// sections out in the order of their names, so a function in
+// .text$sn_code_a and one in .text$sn_code_z bound the functions in
+// .text$sn_code_m between them; code_within is one of those, by which
+// the layout is checked as the scheduler starts.
+__attribute__((section(".text$sn_code_a"), used)) static void code_first(void) {}
+__attribute__((section(".text$sn_code_m"), used, noinline)) static void code_within(void) {}
+__attribute__((section(".text$sn_code_z"), used)) static void code_last(void) {}
+
+static DWORD context_flags; // what a preemption saves of a thread: the registers, and the wide state where it is
+static DWORD context_bytes; // the room a context with that state takes, which the system gives
+#if defined(__x86_64__)
+static DWORD64 context_features; // the wide vector state the system has enabled, saved with the registers
+#endif
 
 SN_HELD_STATIC static void preempt_start(void) {
-    uint8_t *image = (uint8_t *)GetModuleHandleW(NULL);
-    IMAGE_NT_HEADERS *headers = (IMAGE_NT_HEADERS *)(image + ((IMAGE_DOS_HEADER *)image)->e_lfanew);
-    text_start = (uintptr_t)image;
-    text_end = text_start + headers->OptionalHeader.SizeOfImage;
-    held_start = (uintptr_t)held_first;
-    held_end = (uintptr_t)held_last;
+    code_start = (uintptr_t)code_first;
+    code_end = (uintptr_t)code_last;
+
+    // The section's functions lie between the two, and no held one does,
+    // only where the linker laid the sections out by their names: where
+    // it did not, no point is safe, and a held worker gets a thread
+    // beside it as before.
+    uintptr_t within = (uintptr_t)code_within, land = (uintptr_t)preempt_land;
+    if (within < code_start || within >= code_end || (land >= code_start && land < code_end)) {
+        code_end = code_start;
+    }
+
+    context_flags = CONTEXT_FULL; // the control, integer and floating-point registers, and not the debug registers,
+                                  // which a thread may not set from user mode
+#if defined(__x86_64__)
+    context_features = GetEnabledXStateFeatures() & (XSTATE_MASK_AVX | XSTATE_MASK_AVX512 | XSTATE_MASK_APX);
+    if (context_features != 0) {
+        context_flags |= CONTEXT_XSTATE;
+    }
+#endif
+
+    DWORD bytes = 0;
+    (void)InitializeContext(NULL, context_flags, NULL, &bytes); // refused for want of a buffer, with the size one needs
+    if (bytes == 0) {
+        sn_panic(SN_STR("cannot size a thread's context", 30));
+    }
+
+    context_bytes = bytes;
+}
+
+// wide_asked asks for the wide vector state with a context's registers
+// where the system has any enabled, and reports whether it may be read.
+SN_HELD_STATIC static bool wide_asked(CONTEXT *c) {
+#if defined(__x86_64__)
+    return context_features == 0 || SetXStateFeaturesMask(c, context_features);
+#else
+    (void)c;
+    return true;
+#endif
+}
+
+// context_in lays a context out in room, context_bytes of it, with
+// every flag a preemption saves by; NULL where the system refuses.
+SN_HELD_STATIC static CONTEXT *context_in(void *room) {
+    CONTEXT *c = NULL;
+    DWORD bytes = context_bytes;
+    return InitializeContext(room, context_flags, &c, &bytes) ? c : NULL;
 }
 
 SN_HELD_STATIC static void preempt_thread_start(worker *w) {
     HANDLE thread;
-    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread, 0, FALSE,
+    size_t size = ((size_t)context_bytes + SN_CACHE_LINE - 1) & ~(size_t)(SN_CACHE_LINE - 1); // what the aligned
+                                                                                              // allocation asks
+    w->restoring_room = sn_aligned_alloc(SN_CACHE_LINE, size);
+    if (w->restoring_room == NULL || context_in(w->restoring_room) == NULL ||
+        !DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread, 0, FALSE,
                          DUPLICATE_SAME_ACCESS)) {
         sn_panic(SN_STR("cannot start a thread", 21));
     }
@@ -2616,43 +2693,112 @@ SN_HELD_STATIC static void teb_set_bounds(uint8_t *teb, sn_stack_bounds b) {
 #if defined(__APPLE__)
 SN_HELD_STATIC static void preempt_text_init(void) {
     unsigned long size = 0;
-    uint8_t *start = getsegmentdata(&_mh_execute_header, "__TEXT", &size);
-    text_start = (uintptr_t)start;
-    text_end = text_start + size;
-    start = getsectiondata(&_mh_execute_header, "__TEXT", "__sn_held", &size);
-    held_start = (uintptr_t)start;
-    held_end = held_start + size;
+    uint8_t *start = getsectiondata(&_mh_execute_header, "__TEXT", "__sn_code", &size); // none where nothing is in it
+    code_start = (uintptr_t)start;
+    code_end = code_start + size;
 }
 #else
-extern char __start_sn_held[], __stop_sn_held[]; // the linker's, around the section
+// On Linux nothing in a running program says where a section lies. The
+// linker's own marks around one, __start_ and __stop_, are given to a
+// section whose name a C program could write, and a link keeps every
+// function of such a section, the ones the optimizer wrote into their
+// callers too. So the section's place is read once from the
+// program's file, as its section headers give it, moved by as far as
+// the loader moved the program, and kept only where the file's segments
+// are the ones the loader mapped and the section lies within code among
+// them: a program whose file cannot be read so has no code a task is
+// preempted in.
+typedef struct {
+    uintptr_t moved;             // how far the loader moved the program from the addresses its file gives
+    const ElfW(Phdr) * segments; // what it mapped of it
+    int count;
+} program_image;
 
-// preempt_text_segment takes the program's own executable segments from
-// the first object dl_iterate_phdr reports, which is the program itself,
-// and stops the walk there.
-SN_HELD_STATIC static int preempt_text_segment(struct dl_phdr_info *info, size_t size, void *data) {
+// preempt_image takes the program's own image from the first object
+// dl_iterate_phdr reports, which is the program itself, and stops the
+// walk there.
+SN_HELD_STATIC static int preempt_image(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
-    (void)data;
-    for (int i = 0; i < info->dlpi_phnum; i++) {
-        const ElfW(Phdr) *h = &info->dlpi_phdr[i];
-        if (h->p_type == PT_LOAD && (h->p_flags & PF_X) != 0) {
-            uintptr_t lo = info->dlpi_addr + h->p_vaddr, hi = lo + h->p_memsz;
-            if (text_start == 0 || lo < text_start) {
-                text_start = lo;
-            }
+    program_image *image = data;
+    image->moved = info->dlpi_addr;
+    image->segments = info->dlpi_phdr;
+    image->count = info->dlpi_phnum;
+    return 1;
+}
 
-            if (hi > text_end) {
-                text_end = hi;
+// code_mapped reports whether start to end lies within one segment of
+// the program that the loader mapped as code.
+SN_HELD_STATIC static bool code_mapped(const program_image *image, uintptr_t start, uintptr_t end) {
+    for (int i = 0; i < image->count; i++) {
+        const ElfW(Phdr) *s = &image->segments[i];
+        uintptr_t low = image->moved + s->p_vaddr;
+        if (s->p_type == PT_LOAD && (s->p_flags & PF_X) != 0 && start < end && start >= low &&
+            end <= low + s->p_memsz) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// same_program reports whether the file open as fd, whose header is
+// header, is the program the loader mapped: its segments are the ones
+// the loader holds, one for one.
+SN_HELD_STATIC static bool same_program(int fd, const ElfW(Ehdr) * header, const program_image *image) {
+    if (header->e_phentsize != sizeof *image->segments || header->e_phnum != image->count || image->count <= 0) {
+        return false;
+    }
+
+    size_t bytes = (size_t)image->count * sizeof *image->segments;
+    ElfW(Phdr) *segments = malloc(bytes);
+    bool same = segments != NULL && pread(fd, segments, bytes, (off_t)header->e_phoff) == (ssize_t)bytes &&
+                memcmp(segments, image->segments, bytes) == 0;
+    free(segments);
+    return same;
+}
+
+SN_HELD_STATIC static void preempt_text_init(void) {
+    program_image image = { 0 };
+    dl_iterate_phdr(preempt_image, &image);
+    int fd = open(program_file, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return;
+    }
+
+    ElfW(Ehdr) header;
+    ElfW(Shdr) *sections = NULL;
+    char *names = NULL;
+    if (pread(fd, &header, sizeof header, 0) == (ssize_t)sizeof header &&
+        memcmp(header.e_ident, ELFMAG, SELFMAG) == 0 && header.e_shentsize == sizeof *sections &&
+        header.e_shstrndx < header.e_shnum && same_program(fd, &header, &image)) {
+        size_t bytes = (size_t)header.e_shnum * sizeof *sections; // 65535 headers at most, by the field's width
+        sections = malloc(bytes);
+        if (sections != NULL && pread(fd, sections, bytes, (off_t)header.e_shoff) == (ssize_t)bytes) {
+            const ElfW(Shdr) *table = &sections[header.e_shstrndx]; // the sections' names, each ended by a zero
+            size_t named = table->sh_size;
+            if (named > 0 && named <= section_names_most && (names = malloc(named)) != NULL &&
+                pread(fd, names, named, (off_t)table->sh_offset) == (ssize_t)named && names[named - 1] == 0) {
+                for (int i = 0; i < header.e_shnum; i++) {
+                    const ElfW(Shdr) *s = &sections[i];
+                    if (s->sh_name >= named || strcmp(names + s->sh_name, code_section) != 0) {
+                        continue;
+                    }
+
+                    uintptr_t start = image.moved + s->sh_addr, end = start + s->sh_size;
+                    if (code_mapped(&image, start, end)) {
+                        code_start = start;
+                        code_end = end;
+                    }
+
+                    break; // a program has one section of a name
+                }
             }
         }
     }
 
-    return 1;
-}
-
-SN_HELD_STATIC static void preempt_text_init(void) {
-    dl_iterate_phdr(preempt_text_segment, NULL);
-    held_start = (uintptr_t)__start_sn_held;
-    held_end = (uintptr_t)__stop_sn_held;
+    free(names);
+    free(sections);
+    close(fd);
 }
 #endif
 
@@ -2777,7 +2923,8 @@ SN_HELD_STATIC static void context_restore(const preempt_block *b, ucontext_t *u
 // context_land makes the live context return into fn(t) on the stack
 // whose top is top: the frame and link registers cleared, so that a
 // walk of the frames ends there, and on x86-64 a return address of
-// zero pushed, so that fn begins as a called function does.
+// zero pushed and the direction flag cleared, so that fn begins as a
+// called function does.
 SN_HELD_STATIC static void context_land(ucontext_t *uc, void (*fn)(task *), uint8_t *top, task *t) {
 #if defined(__APPLE__) && defined(__aarch64__)
     uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)fn;
@@ -2791,6 +2938,7 @@ SN_HELD_STATIC static void context_land(ucontext_t *uc, void (*fn)(task *), uint
     uc->uc_mcontext->__ss.__rsp = (uint64_t)(uintptr_t)(top - sizeof(void *));
     uc->uc_mcontext->__ss.__rdi = (uint64_t)(uintptr_t)t;
     uc->uc_mcontext->__ss.__rbp = 0;
+    uc->uc_mcontext->__ss.__rflags &= ~(uint64_t)flag_direction;
 #elif defined(__aarch64__)
     uc->uc_mcontext.pc = (uintptr_t)fn;
     uc->uc_mcontext.sp = (uintptr_t)top;
@@ -2803,10 +2951,10 @@ SN_HELD_STATIC static void context_land(ucontext_t *uc, void (*fn)(task *), uint
     uc->uc_mcontext.gregs[REG_RSP] = (greg_t)(uintptr_t)(top - sizeof(void *));
     uc->uc_mcontext.gregs[REG_RDI] = (greg_t)(uintptr_t)t;
     uc->uc_mcontext.gregs[REG_RBP] = 0;
+    uc->uc_mcontext.gregs[REG_EFL] &= ~(greg_t)flag_direction;
 #endif
 }
 
-static void preempt_land(task *t);
 static void preempt_release(worker *w, task *t, preempt_block *b);
 
 // preempt_handler is the signal's handler, on the worker's signal
@@ -2883,8 +3031,11 @@ SN_HELD_STATIC static bool preempt_spare(worker *w) {
         return true;
     }
 
-    size_t size = (sizeof(preempt_block) + SN_CACHE_LINE - 1) & ~(size_t)(SN_CACHE_LINE - 1); // what the aligned
-                                                                                              // allocation asks
+    size_t size = sizeof(preempt_block);
+#if defined(_WIN32)
+    size += context_bytes; // the context's room, after the block
+#endif
+    size = (size + SN_CACHE_LINE - 1) & ~(size_t)(SN_CACHE_LINE - 1); // what the aligned allocation asks
     preempt_block *b = sn_aligned_alloc(SN_CACHE_LINE, size);
     if (b == NULL) {
         return false;
@@ -2915,17 +3066,25 @@ SN_HELD_STATIC static void preempt_release(worker *w, task *t, preempt_block *b)
 // preempt_restore puts a preempted task's registers back: through the
 // signal's handler on Linux and macOS, through RtlRestoreContext on
 // Windows, with the stack's bounds and the last error put back first,
-// from a copy of the worker's own, so that the block may be released
-// before the landing stack in it is left.
+// from a copy of the worker's own, CopyContext, so that the block may
+// be released before the landing stack in it is left; where the system
+// refuses the copy, from the block itself, which the task then keeps.
 SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
     preempt_block *b = atomic_load_explicit(&t->preempt, memory_order_relaxed);
 #if defined(_WIN32)
-    worker *w = self_worker;
-    teb_set_bounds((uint8_t *)NtCurrentTeb(), b->bounds);
-    SetLastError(b->last_error);
-    w->restoring = b->context;
-    preempt_release(w, t, b); // the landing stack is left by the restore and never returned to
-    RtlRestoreContext(&w->restoring, NULL);
+    worker *w = my_worker(); // of the thread the task resumed on, which may not be the one it landed on
+    sn_stack_bounds bounds = b->bounds;
+    DWORD last_error = b->last_error;
+    CONTEXT *from = b->context, *own = context_in(w->restoring_room);
+    if (own != NULL && CopyContext(own, from->ContextFlags, from)) {
+        own->ContextFlags = from->ContextFlags; // what was saved, and no more
+        from = own;
+        preempt_release(w, t, b); // the landing stack is left by the restore and never returned to
+    }
+
+    teb_set_bounds((uint8_t *)NtCurrentTeb(), bounds); // after the copy, which ran on the landing stack by its bounds
+    SetLastError(last_error);
+    RtlRestoreContext(from, NULL);
 #else
     b->restoring = true;
     raise(preempt_signal);
@@ -2970,39 +3129,48 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
         return; // a worker added has its thread once the thread has started
     }
 
-    _Alignas(16) CONTEXT live;
-    memset(&live, 0, sizeof live);
-    live.ContextFlags = CONTEXT_FULL; // the control, integer and floating-point registers: what a restore puts back,
-                                      // and not the debug registers, which a thread may not set from user mode
+    // The context is read into the worker's spare block, which only this
+    // thread takes, and asked for whole: the wide vector state with the
+    // registers, and whether the thread is inside the system. The thread
+    // has stopped only once its context has been read, so its task is
+    // read after.
+    preempt_block *b = atomic_load(&w->spare);
+    CONTEXT *c = context_in(b + 1);
+    bool got = false;
+    if (c != NULL) {
+        c->ContextFlags |= CONTEXT_EXCEPTION_REQUEST;
+        got = wide_asked(c) && GetThreadContext(thread, c);
+    }
+
     task *t = w->last;
-    if (!GetThreadContext(thread, &live) || t == NULL || w->sched_sp == NULL ||
+    if (!got || t == NULL || w->sched_sp == NULL || (c->ContextFlags & CONTEXT_EXCEPTION_REPORTING) == 0 ||
+        (c->ContextFlags & (CONTEXT_EXCEPTION_ACTIVE | CONTEXT_SERVICE_ACTIVE)) != 0 ||
 #if defined(__x86_64__)
-        !preempt_safe((uintptr_t)live.Rip) ||
+        !preempt_safe((uintptr_t)c->Rip) ||
 #else
-        !preempt_safe((uintptr_t)live.Pc) ||
+        !preempt_safe((uintptr_t)c->Pc) ||
 #endif
         (atomic_load(&t->state) & ~WOKEN) != RUNNING) {
         ResumeThread(thread);
         return;
     }
 
-    preempt_block *b = atomic_load_explicit(&t->preempt, memory_order_relaxed);
-    if (b == NULL) {
-        b = atomic_exchange(&w->spare, NULL);
-        atomic_store_explicit(&t->preempt, b, memory_order_relaxed);
-    }
-
-    b->context = live;
+    c->ContextFlags &= ~(DWORD)(CONTEXT_EXCEPTION_REQUEST | CONTEXT_EXCEPTION_REPORTING | CONTEXT_EXCEPTION_ACTIVE |
+                                CONTEXT_SERVICE_ACTIVE); // what the system said of the thread, no part of its registers
+    b->context = c;
     b->bounds = teb_bounds(teb);
     memcpy(&b->last_error, teb + teb_last_error, sizeof b->last_error);
     uint8_t *top = b->landing + landing_bytes;
-    CONTEXT land = live;
+    CONTEXT land = *c; // the fixed part, of which the thread is set where it goes on and with what: the rest of its
+                       // state stays as it is
+    land.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
 #if defined(__x86_64__)
     memset(top - 5 * sizeof(void *), 0, sizeof(void *)); // a return address of zero above the home space
     land.Rip = (DWORD64)(uintptr_t)preempt_land;
     land.Rsp = (DWORD64)(uintptr_t)(top - 5 * sizeof(void *));
     land.Rcx = (DWORD64)(uintptr_t)t;
     land.Rbp = 0;
+    land.EFlags &= ~(DWORD)flag_direction;
 #else
     land.Pc = (DWORD64)(uintptr_t)preempt_land;
     land.Sp = (DWORD64)(uintptr_t)top;
@@ -3014,6 +3182,9 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
     if (!SetThreadContext(thread, &land)) { // the thread goes on as it was
         teb_set_bounds(teb, b->bounds);
     } else {
+        // The block is the task's now; the one it kept from an earlier
+        // preemption, if it kept one, is the worker's next.
+        atomic_store(&w->spare, atomic_exchange_explicit(&t->preempt, b, memory_order_relaxed));
         atomic_fetch_add_explicit(&preempted, 1, memory_order_relaxed);
     }
 

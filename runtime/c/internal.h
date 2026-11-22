@@ -16,25 +16,30 @@
 #include "system.h"
 
 // SN_HELD marks a function of the runtime that holds a lock, reads the
-// thread's own state, or switches: it is written into a text section
-// of its own, sn_held, and into no caller, so that the scheduler, which
-// preempts a task by interrupting its thread, finds every such function
-// by its addresses and leaves a task inside one alone, as Go's runtime
-// is no asynchronous safe point for its own functions (sched.c). A task
-// preempted elsewhere and resumed on another thread so holds nothing of
-// the thread it left. The rest of the runtime, a sort, a map, a string,
-// is the program's as far as a preemption is concerned, and may be
-// interrupted anywhere.
+// thread's own state, or switches: it is written into no caller and
+// into a text section of its own, sn_held, so that it is never part of
+// the code a task may be interrupted in, the program's own (snello.h,
+// SN_OPEN_CODE). The runtime as it is compiled is outside that code,
+// every function of it; an optimizing link writes the functions a
+// program calls into the program's own, where a task may be taken off
+// its worker in the middle of one and resumed on another thread, and a
+// function that is marked is never among them, so the task holds
+// nothing of the thread it left (sched.c).
 // SN_HELD_STATIC marks a static function of a file whose functions are
 // held: it goes in the section too when the compiler keeps it a
 // function of its own rather than writing it into its callers, so that
-// no path of a held function runs outside the section.
+// no path of a held function runs outside the section. An ELF section
+// of either kind is named with a dot before it: a linker's optimizer
+// keeps every function of a section whose name a C program could
+// write, since the linker gives such a section marks a program may
+// name, and a function written into its callers would stay in the
+// program beside them.
 #if defined(__APPLE__)
 #define SN_HELD_STATIC __attribute__((section("__TEXT,__sn_held,regular,pure_instructions")))
 #elif defined(_WIN32)
 #define SN_HELD_STATIC __attribute__((section(".text$sn_held_m")))
 #else
-#define SN_HELD_STATIC __attribute__((section("sn_held")))
+#define SN_HELD_STATIC __attribute__((section(".sn_held")))
 #endif
 #define SN_HELD __attribute__((noinline)) SN_HELD_STATIC
 

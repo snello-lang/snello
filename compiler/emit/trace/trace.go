@@ -61,12 +61,15 @@ const (
 	// a line of any other file, the runtime's C, is the runtime's own.
 	snelloSuffix = ".snello"
 
-	// textSection names the text section of a Mach-O object and
-	// heldSection the runtime's own beside it, the functions the
-	// scheduler never preempts a task inside (runtime/c/internal.h,
-	// SN_HELD), whose frames a trace walks through as any; an ELF
-	// object's are any section of instructions.
+	// textSection names the text section of a Mach-O object, and
+	// codeSection and heldSection the two beside it that the runtime's
+	// header names: the program's own code, where a task may be
+	// preempted (runtime/c/snello.h, SN_OPEN_CODE), and the runtime's
+	// functions it never is inside (runtime/c/internal.h, SN_HELD),
+	// whose frames a trace walks through as any; an ELF object's are
+	// any section of instructions.
 	textSection = "__text"
+	codeSection = "__sn_code"
 	heldSection = "__sn_held"
 
 	// noFrame is a row's frame, or a frame's caller, when there is none,
@@ -329,7 +332,7 @@ func read(path string) (*object, error) {
 func readMacho(m *macho.File) (*object, error) {
 	obj := &object{}
 	for i, s := range m.Sections {
-		if (s.Name != textSection && s.Name != heldSection) || s.Seg != "__TEXT" {
+		if (s.Name != textSection && s.Name != codeSection && s.Name != heldSection) || s.Seg != "__TEXT" {
 			continue
 		}
 
