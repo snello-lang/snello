@@ -748,6 +748,7 @@ struct sn_task {
 #ifdef SN_DEBUG
     uint32_t bound; // what the analysis of the linked program bounded its stack at, which a debug build checks it to as
                     // it ends
+    uint32_t preemptions; // how many times it was taken off its worker, for the check's report
 #endif
     void (*run)(void *);
     void *arg; // the arguments run is given: a copy of the spawn's, in args or on the heap
@@ -2000,10 +2001,22 @@ SN_HELD_STATIC static void stack_check(task *t) {
     }
 
     if (size - i > t->bound) {
+        size_t written = i; // the run written at the deepest point, and its first bytes: what wrote there
+        while (written < size && s[written] != stack_paint) {
+            written++;
+        }
+
         fflush(stdout);
         fprintf(stderr,
-                "fatal error: a task's stack went %zu bytes deep, past the bound of %u bytes its analysis gave it\n",
-                size - i, (unsigned)t->bound);
+                "fatal error: a task's stack went %zu bytes deep, past the bound of %u bytes its analysis gave it: "
+                "%zu bytes written from there, beginning",
+                size - i, (unsigned)t->bound, written - i);
+        for (size_t j = i; j < i + 16 && j < size; j++) {
+            fprintf(stderr, " %02x", s[j]);
+        }
+
+        fprintf(stderr, "; preempted %u times, %lld tasks running\n", (unsigned)t->preemptions,
+                (long long)sn_tasks_running());
         exit(2);
     }
 }
@@ -2898,7 +2911,8 @@ SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
     b->restoring = true;
     raise(preempt_signal);
 #endif
-    static const char message[] = "fatal error: a preempted task's registers were not put back\n"; // the restore returned
+    static const char message[] =
+        "fatal error: a preempted task's registers were not put back\n"; // the restore returned
     (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
     abort();
 }
@@ -2909,6 +2923,9 @@ SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
 // worker runs the task again its landing resumes here and has the
 // registers put back.
 SN_HELD_STATIC static void preempt_land(task *t) {
+#ifdef SN_DEBUG
+    t->preemptions++;
+#endif
     int s = atomic_load(&t->state);
     while (!atomic_compare_exchange_weak(&t->state, &s, PREEMPTED | (s & WOKEN))) { // a wake kept stays kept
     }
@@ -2936,8 +2953,8 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
 
     _Alignas(16) CONTEXT live;
     memset(&live, 0, sizeof live);
-    live.ContextFlags = CONTEXT_FULL; // the control, integer and floating-point registers: what a restore puts back, and
-                                      // not the debug registers, which a thread may not set from user mode
+    live.ContextFlags = CONTEXT_FULL; // the control, integer and floating-point registers: what a restore puts back,
+                                      // and not the debug registers, which a thread may not set from user mode
     task *t = w->last;
     if (!GetThreadContext(thread, &live) || t == NULL || w->sched_sp == NULL ||
 #if defined(__x86_64__)
