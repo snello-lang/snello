@@ -414,7 +414,7 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 			break
 		}
 
-		e.inst("ret " + v.typed())
+		e.returnValue(v)
 	default:
 		e.unsupported(s.Return, "returning several values")
 		return

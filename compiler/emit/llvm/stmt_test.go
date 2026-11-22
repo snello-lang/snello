@@ -78,3 +78,29 @@ func main() { work(false) }`)
 		t.Error("no thunk written")
 	}
 }
+
+// TestOneExitBlock holds a function's returns to one exit block: each
+// stores its value into one slot and branches there, so that the
+// optimizer takes a returned option apart into scalars, one phi each,
+// rather than merging the whole values of several rets into one phi it
+// cannot take apart.
+func TestOneExitBlock(t *testing.T) {
+	body := irFunction(t, emitSource(t, `package main
+import "fmt"
+func pick(on bool) int? {
+	if on {
+		return Some(1)
+	}
+
+	return None
+}
+
+func main() { fmt.Println(pick(true)) }`), "sn__pick")
+	if got := strings.Count(body, "\n  ret "); got != 1 {
+		t.Errorf("pick returns from %d places, want one exit block:\n%s", got, body)
+	}
+
+	if got := strings.Count(body, "br label %return."); got != 2 {
+		t.Errorf("pick has %d branches to its exit block, want 2:\n%s", got, body)
+	}
+}
