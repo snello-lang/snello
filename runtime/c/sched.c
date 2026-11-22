@@ -3543,9 +3543,7 @@ SN_HELD_STATIC static void task_entry(void) {
     }
     atomic_store(&t->state, DONE);
     sn_switch(&t->sp, my_worker()->sched_sp);
-    static const char message[] = "fatal error: a task that ended was resumed\n";
-    (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
-    abort();
+    abort(); // a done task is never resumed; and nothing more here, on every task's stack, whose bound is measured
 }
 
 // spawn starts a task that runs run on a copy of its arguments, on a
