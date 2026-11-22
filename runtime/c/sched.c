@@ -2015,8 +2015,27 @@ SN_HELD_STATIC static void stack_check(task *t) {
             fprintf(stderr, " %02x", s[j]);
         }
 
-        fprintf(stderr, "; preempted %u times, %lld tasks running\n", (unsigned)t->preemptions,
-                (long long)sn_tasks_running());
+        fprintf(stderr, "; preempted %u times of %lld in all, %lld tasks running on %d workers, the stack at %p",
+                (unsigned)t->preemptions, (long long)atomic_load(&preempted), (long long)sn_tasks_running(),
+                atomic_load(&nworkers), (void *)(uintptr_t)s);
+#if defined(_WIN32)
+        // What lies below the stack's bottom: its own block, or another
+        // mapping, whose last bytes say what runs there.
+        MEMORY_BASIC_INFORMATION own, below;
+        if (VirtualQuery(s, &own, sizeof own) == sizeof own &&
+            VirtualQuery(s - 1, &below, sizeof below) == sizeof below) {
+            fprintf(stderr, " in a block from %p; below it %p to %p, state %lx type %lx protect %lx",
+                    own.AllocationBase, below.AllocationBase, (void *)((uint8_t *)below.BaseAddress + below.RegionSize),
+                    below.State, below.Type, below.Protect);
+            if (below.State == MEM_COMMIT && (below.Protect & (PAGE_READWRITE | PAGE_READONLY)) != 0) {
+                fprintf(stderr, ", ending");
+                for (const uint8_t *p = s - 32; p < s; p++) {
+                    fprintf(stderr, " %02x", *p);
+                }
+            }
+        }
+#endif
+        fputc('\n', stderr);
         exit(2);
     }
 }
