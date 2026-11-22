@@ -94,11 +94,11 @@ static struct {
     _Atomic int n; // the wheels in use, one a worker started: only grows, as the workers do
 } __attribute__((aligned(SN_CACHE_LINE))) wheels_of;
 
-static int wheels_now(void) { return atomic_load_explicit(&wheels_of.n, memory_order_relaxed); }
+SN_HELD_STATIC static int wheels_now(void) { return atomic_load_explicit(&wheels_of.n, memory_order_relaxed); }
 static _Atomic bool stopping; // the program is ending: no timer fires again
 
 // wheel_init makes the wheel i empty, before it is counted in use.
-static void wheel_init(int i) {
+SN_HELD_STATIC static void wheel_init(int i) {
     memset(&wheels_of.at[i], 0, sizeof *wheels_of.at);
     atomic_store(&wheels_of.at[i].next, INT64_MAX);
 }
@@ -108,7 +108,7 @@ static void wheel_init(int i) {
 // moves when a worker is added, and only the workers' own written, so
 // that the others' pages stay untouched; sn_timers_add makes one more
 // and counts it in use, for a worker added.
-void sn_timers_start(int64_t nworkers, int64_t most) {
+SN_HELD void sn_timers_start(int64_t nworkers, int64_t most) {
     wheels_of.at = sn_aligned_alloc(SN_CACHE_LINE, (size_t)most * sizeof *wheels_of.at);
     if (wheels_of.at == NULL) {
         sn_panic(SN_STR("out of memory", 13));
@@ -121,7 +121,7 @@ void sn_timers_start(int64_t nworkers, int64_t most) {
     atomic_store(&wheels_of.n, (int)nworkers);
 }
 
-void sn_timers_add(void) {
+SN_HELD void sn_timers_add(void) {
     wheel_init(wheels_now());
     atomic_fetch_add(&wheels_of.n, 1);
 }
@@ -129,7 +129,7 @@ void sn_timers_add(void) {
 // sn_timers_next is the earliest deadline any wheel holds, the greatest
 // time when there is none or the program is ending; sn_timers_next_of
 // is one wheel's.
-int64_t sn_timers_next(void) {
+SN_HELD int64_t sn_timers_next(void) {
     if (atomic_load(&stopping)) {
         return INT64_MAX;
     }
@@ -145,13 +145,13 @@ int64_t sn_timers_next(void) {
     return first;
 }
 
-int64_t sn_timers_next_of(int64_t worker) { return atomic_load(&wheels_of.at[worker].next); }
+SN_HELD int64_t sn_timers_next_of(int64_t worker) { return atomic_load(&wheels_of.at[worker].next); }
 
 // sn_timers_pending is how many timers have yet to wake what they wake.
 // Each wheel counts its own, so that tasks starting and stopping timers
 // on different workers write no count they share, and the counts are
 // added up only here, for a worker that finds every worker idle.
-int64_t sn_timers_pending(void) {
+SN_HELD int64_t sn_timers_pending(void) {
     int64_t n = 0;
     for (int i = 0; i < wheels_now(); i++) {
         n += atomic_load(&wheels_of.at[i].pending);
@@ -163,7 +163,7 @@ int64_t sn_timers_pending(void) {
 // timers_done takes n timers of w off the count of those pending, each
 // woken or taken out, and when they were the wheel's last has the
 // workers look again at whether any task can still be woken.
-static void timers_done(wheel *w, int64_t n) {
+SN_HELD_STATIC static void timers_done(wheel *w, int64_t n) {
     if (atomic_fetch_sub(&w->pending, n) == n) {
         sn_sched_recheck();
     }
@@ -172,7 +172,7 @@ static void timers_done(wheel *w, int64_t n) {
 // home is the wheel a channel's or a deadline's timers go in: the one
 // recorded, or the current worker's, recorded now; a record is the
 // wheel's index and one, so that 0 is none yet.
-static wheel *home(_Atomic int32_t *record) {
+SN_HELD_STATIC static wheel *home(_Atomic int32_t *record) {
     int32_t h = atomic_load(record);
     if (h == 0) {
         int32_t none = 0;
@@ -189,7 +189,7 @@ static wheel *home(_Atomic int32_t *record) {
 // take one out, and for a deadline's function, which wakes a task, so a
 // thread that finds it held looks again rather than sleeps, and gives
 // its processor up if it keeps finding it so.
-static void wheel_lock(wheel *w) {
+SN_HELD_STATIC static void wheel_lock(wheel *w) {
     for (int i = 0;; i++) {
         int open = 0;
         if (atomic_compare_exchange_weak_explicit(&w->locked, &open, 1, memory_order_acquire, memory_order_relaxed)) {
@@ -206,15 +206,15 @@ static void wheel_lock(wheel *w) {
 
 // wheel_trylock takes the wheel's lock if no one holds it, and reports
 // whether it did.
-static bool wheel_trylock(wheel *w) {
+SN_HELD_STATIC static bool wheel_trylock(wheel *w) {
     int open = 0;
     return atomic_compare_exchange_strong_explicit(&w->locked, &open, 1, memory_order_acquire, memory_order_relaxed);
 }
 
-static void wheel_unlock(wheel *w) { atomic_store_explicit(&w->locked, 0, memory_order_release); }
+SN_HELD_STATIC static void wheel_unlock(wheel *w) { atomic_store_explicit(&w->locked, 0, memory_order_release); }
 
 // wheel_link puts x at the head of a list of the wheel's.
-static void wheel_link(timer **head, timer *x, int level, int slot) {
+SN_HELD_STATIC static void wheel_link(timer **head, timer *x, int level, int slot) {
     x->prev = NULL;
     x->next = *head;
     if (*head != NULL) {
@@ -229,7 +229,7 @@ static void wheel_link(timer **head, timer *x, int level, int slot) {
 // wheel_insert puts x in the slot its deadline falls in, or among the
 // soon when its tick is one the wheel has reached; the caller holds the
 // lock.
-static void wheel_insert(wheel *w, timer *x) {
+SN_HELD_STATIC static void wheel_insert(wheel *w, timer *x) {
     uint64_t tick = (uint64_t)x->when >> tick_shift;
     if (tick <= w->elapsed) {
         wheel_link(&w->soon, x, -1, 0);
@@ -243,7 +243,7 @@ static void wheel_insert(wheel *w, timer *x) {
 }
 
 // wheel_remove takes x out of the wheel; the caller holds the lock.
-static void wheel_remove(wheel *w, timer *x) {
+SN_HELD_STATIC static void wheel_remove(wheel *w, timer *x) {
     timer **head = x->level < 0 ? &w->soon : &w->slots[x->level][x->slot];
     if (x->prev != NULL) {
         x->prev->next = x->next;
@@ -266,7 +266,7 @@ static void wheel_remove(wheel *w, timer *x) {
 // due at, and reports whether any slot holds a timer. It is the first
 // such slot of the lowest level that has one: none of a higher level
 // comes before it.
-static bool wheel_next(const wheel *w, int *level, int *slot, uint64_t *due) {
+SN_HELD_STATIC static bool wheel_next(const wheel *w, int *level, int *slot, uint64_t *due) {
     for (int l = 0; l < wheel_levels; l++) {
         uint64_t held = w->occupied[l];
         if (held == 0) {
@@ -297,7 +297,7 @@ static bool wheel_next(const wheel *w, int *level, int *slot, uint64_t *due) {
 // through next in the order their slots came due, moves the timers of
 // the slots time has reached down to the levels their deadlines call
 // for, and brings the wheel to now; the caller holds the lock.
-static timer *wheel_poll(wheel *w, int64_t now) {
+SN_HELD_STATIC static timer *wheel_poll(wheel *w, int64_t now) {
     timer *due = NULL, **tail = &due;
     for (timer *x = w->soon, *after; x != NULL; x = after) {
         after = x->next;
@@ -339,7 +339,7 @@ static timer *wheel_poll(wheel *w, int64_t now) {
 // wheel_renew sets when the wheel is to be looked at again: at the
 // earliest of the soon, or when its next slot comes due, which is no
 // later than any timer in it; the caller holds the lock.
-static void wheel_renew(wheel *w) {
+SN_HELD_STATIC static void wheel_renew(wheel *w) {
     int64_t next = INT64_MAX;
     for (timer *x = w->soon; x != NULL; x = x->next) {
         if (x->when < next) {
@@ -360,7 +360,7 @@ static void wheel_renew(wheel *w) {
 // wheel_place puts x in the wheel and reports whether it is now the
 // wheel's earliest, so that whoever keeps time is to be told; the caller
 // holds the lock, and tells once it has let it go.
-static bool wheel_place(wheel *w, timer *x) {
+SN_HELD_STATIC static bool wheel_place(wheel *w, timer *x) {
     wheel_insert(w, x);
     if (x->when >= atomic_load(&w->next)) {
         return false;
@@ -372,7 +372,7 @@ static bool wheel_place(wheel *w, timer *x) {
 
 // timer_arm places x, counted among the wheel's pending until what it
 // wakes is woken.
-static bool timer_arm(wheel *w, timer *x) {
+SN_HELD_STATIC static bool timer_arm(wheel *w, timer *x) {
     atomic_fetch_add(&w->pending, 1);
     return wheel_place(w, x);
 }
@@ -382,7 +382,7 @@ static bool timer_arm(wheel *w, timer *x) {
 // finds held; another worker's it leaves for the next look when it is
 // held, by a thread firing it or for the few instructions a timer takes
 // to start or stop, rather than have the workers queue on one wheel.
-static bool wheel_fire(wheel *w, int64_t now, bool own) {
+SN_HELD_STATIC static bool wheel_fire(wheel *w, int64_t now, bool own) {
     int64_t woken = 0;
     timer *chans = NULL, **tail = &chans;
     timer *sleepers = NULL, **last = &sleepers;
@@ -498,7 +498,7 @@ static bool wheel_fire(wheel *w, int64_t now, bool own) {
 // runs its own P's timers at each schedule and looks at the others'
 // only when it has nothing to run. Any number of threads may fire at
 // once, each at the wheels the others are not at.
-bool sn_timers_fire(int64_t now) {
+SN_HELD bool sn_timers_fire(int64_t now) {
     bool fired = false;
     for (int i = 0; i < wheels_now(); i++) {
         wheel *w = &wheels_of.at[i];
@@ -510,7 +510,7 @@ bool sn_timers_fire(int64_t now) {
     return fired;
 }
 
-bool sn_timers_fire_own(int64_t worker, int64_t now) {
+SN_HELD bool sn_timers_fire_own(int64_t worker, int64_t now) {
     wheel *w = &wheels_of.at[worker];
     return atomic_load(&w->next) <= now && wheel_fire(w, now, true);
 }
@@ -519,7 +519,7 @@ bool sn_timers_fire_own(int64_t worker, int64_t now) {
 // time when that is past it, so that a Sleep or an After of the longest
 // Duration waits for as long as there is rather than wrapping round to
 // fire at once.
-static int64_t deadline(int64_t d) {
+SN_HELD_STATIC static int64_t deadline(int64_t d) {
     int64_t now = sn_time_mono();
     return d > INT64_MAX - now ? INT64_MAX : now + d;
 }
@@ -528,7 +528,7 @@ static int64_t deadline(int64_t d) {
 // out of its wheel for the last time frees.
 static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, bool counted);
 
-static timer *timer_new(timer from) {
+SN_HELD_STATIC static timer *timer_new(timer from) {
     timer *x = sn_alloc(sizeof *x);
     *x = from;
     x->level = -2;
@@ -551,13 +551,15 @@ static timer *timer_new(timer from) {
 // and the disarmer leaves the count to it. A counted timer is armed
 // once: arming it again would take the old one out without its
 // function, and the count it held with it.
-void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) { arm(at, d, fire, arg, false); }
+SN_HELD void sn_deadline_arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
+    arm(at, d, fire, arg, false);
+}
 
-void sn_deadline_arm_counted(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
+SN_HELD void sn_deadline_arm_counted(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg) {
     arm(at, d, fire, arg, true);
 }
 
-static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, bool counted) {
+SN_HELD_STATIC static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, bool counted) {
     sn_sched_start();
     timer *x = timer_new((timer){ .when = deadline(d), .fire = fire, .arg = arg, .at = at, .counted = counted });
     wheel *w = home(&at->home);
@@ -585,7 +587,7 @@ static void arm(sn_deadline *at, int64_t d, void (*fire)(void *), void *arg, boo
 // it is in one, and reports whether it did. Once it returns, the
 // function of a timer sn_deadline_arm armed is not running and will not
 // run; a counted timer it did not find runs its function, or has.
-bool sn_deadline_disarm(sn_deadline *at) {
+SN_HELD bool sn_deadline_disarm(sn_deadline *at) {
     if (atomic_load(&at->home) == 0) {
         return false; // never armed
     }
@@ -610,7 +612,7 @@ bool sn_deadline_disarm(sn_deadline *at) {
 
 // sn_time_startTimer puts the time in ch once, d from now, and then
 // every period, when every is above zero.
-void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
+SN_HELD void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
     sn_sched_start();
     timer *x = timer_new((timer){ .when = deadline(d), .ch = ch, .every = every });
     wheel *w = home(sn_chan_home(ch));
@@ -632,7 +634,7 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
 // Go's Stop promises since its timers' channels hold nothing back: a
 // Ticker is still in its wheel after it has sent, so a tick it sent
 // before is taken back too.
-static bool timer_stop(sn_chan *c) {
+SN_HELD_STATIC static bool timer_stop(sn_chan *c) {
     wheel *w = home(sn_chan_home(c));
     wheel_lock(w);
     while (w->firing > 0) {
@@ -662,7 +664,7 @@ static bool timer_stop(sn_chan *c) {
 
 // sn_time_stopTimer is package time's stopTimer: it stops the timer of
 // ch and drops ch, the handle it was given to name the channel by.
-bool sn_time_stopTimer(sn_chan *ch) {
+SN_HELD bool sn_time_stopTimer(sn_chan *ch) {
     bool stopped = timer_stop(ch);
     sn_chan_drop(&ch, SN_CHAN_RECV); // the receiving handle the program named the channel by
     return stopped;
@@ -676,7 +678,7 @@ bool sn_time_stopTimer(sn_chan *ch) {
 // its own handle: taking back the time sent before the timer is in its
 // wheel again keeps a new period that comes at once from being taken
 // back with it.
-bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
+SN_HELD bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
     bool stopped = timer_stop(ch);
     sn_time_startTimer(ch, d, every);
     return stopped;
@@ -692,7 +694,7 @@ bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
 // at its deadline. A timer that fired meanwhile, or the end of the
 // program, which drops the timers' handles in sn_timers_stop, leaves
 // the handle to the caller, who drops it as any other.
-bool sn_timer_abandon(sn_chan *c, int dir) {
+SN_HELD bool sn_timer_abandon(sn_chan *c, int dir) {
     wheel *w = home(sn_chan_home(c));
     wheel_lock(w);
     timer *x = (timer *)(intptr_t)sn_chan_timer(c);
@@ -727,7 +729,7 @@ bool sn_timer_abandon(sn_chan *c, int dir) {
 // is taken out without its function: none is in a wheel then, since
 // a debug build stops the timers only once no task runs, and a scope's
 // timer goes with the Within that armed it.
-void sn_timers_stop(void) {
+SN_HELD void sn_timers_stop(void) {
     atomic_store(&stopping, true);
     for (int i = 0; i < wheels_now(); i++) {
         wheel *w = &wheels_of.at[i];
@@ -778,7 +780,7 @@ void sn_timers_stop(void) {
 // of its wheel w, and reports whether it did: not when the firing took
 // it out first, which then wakes the task. Out of line and cold, as the
 // cancelled paths of the channels' waits are.
-static __attribute__((noinline, cold)) bool sleep_cut(wheel *w, timer *x) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) bool sleep_cut(wheel *w, timer *x) {
     wheel_lock(w);
     bool armed = x->level != -2; // not yet taken out for its firing, which then never comes
     if (armed) {
@@ -805,7 +807,7 @@ static __attribute__((noinline, cold)) bool sleep_cut(wheel *w, timer *x) {
 // the wheel of the worker the task is on. No one is woken to keep time
 // for it: the task parks now, and its worker, on its way to its next
 // task or to its wait, keeps time or has another keep it.
-void sn_sleep(int64_t d) {
+SN_HELD void sn_sleep(int64_t d) {
     if (d <= 0) {
         return;
     }

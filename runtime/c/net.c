@@ -84,7 +84,7 @@ enum {
 // as its own code, which is read as the error number the same failure
 // has on the other systems, so that io.Kind and the messages read it
 // alike.
-static int errno_of_wsa(int code) {
+SN_HELD_STATIC static int errno_of_wsa(int code) {
     switch (code) {
     case 0:
         return 0;
@@ -147,12 +147,12 @@ static int errno_of_wsa(int code) {
     return EIO;
 }
 
-static __attribute__((noinline)) int last_error(void) {
+SN_HELD_STATIC static __attribute__((noinline)) int last_error(void) {
     __asm__ volatile("" ::: "memory");
     return errno_of_wsa(WSAGetLastError());
 }
 #else
-static __attribute__((noinline)) int last_error(void) {
+SN_HELD_STATIC static __attribute__((noinline)) int last_error(void) {
     __asm__ volatile("" ::: "memory");
     return errno;
 }
@@ -178,7 +178,7 @@ static __attribute__((noinline)) int last_error(void) {
 // write, with MSG_NOSIGNAL; Darwin per socket. On a failure it returns
 // the name of the call that failed, for the library's message, and NULL
 // otherwise.
-static const char *prepare(int fd) {
+SN_HELD_STATIC static const char *prepare(int fd) {
 #if defined(_WIN32)
     u_long yes = 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &yes) == 0 ? NULL : "ioctlsocket";
@@ -209,7 +209,7 @@ static const char *prepare(int fd) {
 // with Nagle's delay off, as Go makes every TCP connection, so a small
 // write goes out at once rather than waiting for the last one's ack.
 // It names the call that failed, as prepare does.
-static const char *connected(int fd) {
+SN_HELD_STATIC static const char *connected(int fd) {
     const char *failed = prepare(fd);
     if (failed != NULL) {
         return failed;
@@ -221,7 +221,7 @@ static const char *connected(int fd) {
 
 // backlog is how many connections a listening socket keeps waiting for
 // Accept: the system's largest, as Go asks for, read once.
-static int backlog(void) {
+SN_HELD_STATIC static int backlog(void) {
 #if defined(_WIN32)
     return SOMAXCONN; // Windows' own word for its largest
 #else
@@ -308,7 +308,7 @@ static _Atomic int64_t waiting;
 
 // promise counts n more tasks waiting on a socket, or n fewer once
 // their wakes are kept, among the wakes the deadlock detector counts.
-static void promise(int64_t n) {
+SN_HELD_STATIC static void promise(int64_t n) {
     atomic_fetch_add(&waiting, n);
     sn_outside(n);
 }
@@ -371,7 +371,7 @@ static _Atomic(poll_desc *) pds[pd_chunks];
 
 static int wait_pd(poll_desc *pd, int fd, bool write);
 
-static poll_desc *pd_of(int fd) {
+SN_HELD_STATIC static poll_desc *pd_of(int fd) {
 #if defined(_WIN32)
     fd >>= 2; // a socket's handle is a multiple of four
 #endif
@@ -404,7 +404,7 @@ static poll_desc *pd_of(int fd) {
 // or running, so that an idle worker looking at that moment finds work
 // and not a program in which nothing can run. The woken task tries its
 // call again, which finds what the event was for.
-static sn_task *ready(_Atomic uintptr_t *word, sn_handoff *woken, bool *claimed) {
+SN_HELD_STATIC static sn_task *ready(_Atomic uintptr_t *word, sn_handoff *woken, bool *claimed) {
     uintptr_t old = atomic_load_explicit(word, memory_order_acquire);
     for (;;) {
         if (old == pd_ready) {
@@ -427,7 +427,7 @@ static sn_task *ready(_Atomic uintptr_t *word, sn_handoff *woken, bool *claimed)
 
 // take adds the task ready took out, if it did, to the tasks taken, and
 // to those woke holds when the claim made it runnable.
-static void take(sn_task *t, bool claimed, sn_task **woke, int *n, int *taken) {
+SN_HELD_STATIC static void take(sn_task *t, bool claimed, sn_task **woke, int *n, int *taken) {
     if (t != NULL) {
         (*taken)++;
         if (claimed) {
@@ -436,9 +436,9 @@ static void take(sn_task *t, bool claimed, sn_task **woke, int *n, int *taken) {
     }
 }
 
-int64_t sn_net_waiting(void) { return atomic_load(&waiting); }
+SN_HELD int64_t sn_net_waiting(void) { return atomic_load(&waiting); }
 
-void sn_net_kept(int64_t taken) {
+SN_HELD void sn_net_kept(int64_t taken) {
     if (taken > 0) {
         promise(-taken);
     }
@@ -496,7 +496,7 @@ typedef struct {
 
 // arm_poll makes sure a poll of the direction is armed on fd, and returns 0,
 // or the error number of a failure to arm one.
-static int arm_poll(int fd, bool write) {
+SN_HELD_STATIC static int arm_poll(int fd, bool write) {
     poll_desc *pd = pd_of(fd);
     _Atomic(void *) *slot = write ? &pd->wpoll : &pd->rpoll;
     if (atomic_load(slot) != NULL) {
@@ -537,7 +537,7 @@ static int arm_poll(int fd, bool write) {
 // out to try its call again, which finds what came; one that is not
 // was cancelled as its socket closed, and wakes no one, since the
 // descriptor may be the next socket's with the number.
-static sn_task *polled(afd_poll *p, bool *claimed) {
+SN_HELD_STATIC static sn_task *polled(afd_poll *p, bool *claimed) {
     poll_desc *pd = p->pd;
     _Atomic(void *) *slot = p->write ? &pd->wpoll : &pd->rpoll;
     void *mine = p;
@@ -557,7 +557,7 @@ static sn_task *polled(afd_poll *p, bool *claimed) {
 // a later poll that took its memory: that poll completes early, and its
 // task tries its call again and finds nothing, as after any spurious
 // wake.
-static void cancel_polls(poll_desc *pd) {
+SN_HELD_STATIC static void cancel_polls(poll_desc *pd) {
     _Atomic(void *) *slots[2] = { &pd->rpoll, &pd->wpoll };
     for (int i = 0; i < 2; i++) {
         afd_poll *p = atomic_exchange(slots[i], NULL);
@@ -567,9 +567,9 @@ static void cancel_polls(poll_desc *pd) {
     }
 }
 
-void *sn_net_port(void) { return port; }
+SN_HELD void *sn_net_port(void) { return port; }
 
-int sn_net_poll(sn_task **woke, int *taken) {
+SN_HELD int sn_net_poll(sn_task **woke, int *taken) {
     int n = 0;
     *taken = 0;
     OVERLAPPED_ENTRY events[SN_POLL_EVENTS];
@@ -607,7 +607,7 @@ int sn_net_poll(sn_task **woke, int *taken) {
     return n;
 }
 #else
-int sn_net_poll(sn_task **woke, int *taken) {
+SN_HELD int sn_net_poll(sn_task **woke, int *taken) {
     int n = 0;
     *taken = 0;
 #if defined(__APPLE__)
@@ -643,7 +643,7 @@ int sn_net_poll(sn_task **woke, int *taken) {
 }
 #endif
 
-int sn_net_poller(void) {
+SN_HELD int sn_net_poller(void) {
     int made = atomic_load(&poller);
     if (made >= 0) {
         return made;
@@ -679,7 +679,7 @@ int sn_net_poller(void) {
 // system's default, one a processor, a worker that ever looked at the
 // port counts against it while it runs tasks, and with every worker
 // busy the system would hold the keeper's deadline back.
-static bool make_port(void) {
+SN_HELD_STATIC static bool make_port(void) {
     port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, MAXDWORD);
     if (port == NULL) {
         return false;
@@ -696,13 +696,13 @@ static bool make_port(void) {
            SetFileCompletionNotificationModes(afd, FILE_SKIP_SET_EVENT_ON_HANDLE);
 }
 
-static void winsock_start(void) {
+SN_HELD_STATIC static void winsock_start(void) {
     WSADATA data;
     winsock_code = WSAStartup(MAKEWORD(2, 2), &data);
     winsock_up = winsock_code == 0;
 }
 
-bool sn_winsock_start(void) {
+SN_HELD bool sn_winsock_start(void) {
     sn_once_call(&winsock_once, winsock_start);
     if (!winsock_up) {
         WSASetLastError(winsock_code); // why, for the caller's failure to read
@@ -716,7 +716,7 @@ bool sn_winsock_start(void) {
 // waiting in its word, if one is, waking it to find the deadline passed.
 // It runs on the thread that fires the deadline's timer when the
 // deadline comes, and at once for a deadline set in the past.
-static void expire(poll_desc *pd, bool write) {
+SN_HELD_STATIC static void expire(poll_desc *pd, bool write) {
     atomic_store(write ? &pd->wd : &pd->rd, -1);
     _Atomic uintptr_t *word = write ? &pd->w : &pd->r;
     uintptr_t old = atomic_load(word);
@@ -726,12 +726,12 @@ static void expire(poll_desc *pd, bool write) {
     }
 }
 
-static void expire_read(void *pd) { expire(pd, false); }
+SN_HELD_STATIC static void expire_read(void *pd) { expire(pd, false); }
 
-static void expire_write(void *pd) { expire(pd, true); }
+SN_HELD_STATIC static void expire_write(void *pd) { expire(pd, true); }
 
 // passed reports whether fd's deadline for the direction has passed.
-static bool passed(int fd, bool write) {
+SN_HELD_STATIC static bool passed(int fd, bool write) {
     poll_desc *pd = pd_of(fd);
     return atomic_load(write ? &pd->wd : &pd->rd) < 0;
 }
@@ -741,7 +741,7 @@ static bool passed(int fd, bool write) {
 // has, dirs, its words and deadlines cleared of what an earlier
 // descriptor with the same number left. On a failure it returns the
 // name of the call that failed, and NULL otherwise.
-static const char *watch(int fd, int dirs) {
+SN_HELD_STATIC static const char *watch(int fd, int dirs) {
     if (sn_net_poller() < 0) { // made here when the main task makes a socket before the scheduler starts
 #if defined(_WIN32)
         return "CreateIoCompletionPort";
@@ -805,9 +805,9 @@ static const char *watch(int fd, int dirs) {
 
 static void unwatch(int fd);
 
-int sn_net_watch(int fd, int dirs) { return watch(fd, dirs) == NULL ? 0 : last_error(); }
+SN_HELD int sn_net_watch(int fd, int dirs) { return watch(fd, dirs) == NULL ? 0 : last_error(); }
 
-void sn_net_unwatch(int fd) { unwatch(fd); }
+SN_HELD void sn_net_unwatch(int fd) { unwatch(fd); }
 
 #if defined(__APPLE__) || defined(_WIN32)
 // A child's exit record is never returned to the allocator, as a
@@ -826,7 +826,7 @@ typedef struct proc_desc {
 static sn_mutex procs_mu = SN_MUTEX_INIT;
 static proc_desc *procs_free; // under procs_mu
 
-static proc_desc *proc_desc_take(void) {
+SN_HELD_STATIC static proc_desc *proc_desc_take(void) {
     sn_mutex_lock(&procs_mu);
     proc_desc *d = procs_free;
     if (d != NULL) {
@@ -849,7 +849,7 @@ static proc_desc *proc_desc_take(void) {
 // be there for the wait packet that readies it, with the record as the
 // packet's context, and NULL says it cannot be; on macOS the signal
 // thread readies it, and the record is always made.
-void *sn_net_watch_proc(int64_t pid) {
+SN_HELD void *sn_net_watch_proc(int64_t pid) {
     (void)pid;
 #if defined(_WIN32)
     if (sn_net_poller() < 0) {
@@ -859,13 +859,13 @@ void *sn_net_watch_proc(int64_t pid) {
     return &proc_desc_take()->pd;
 }
 
-int sn_net_wait_proc(void *pd) { return wait_pd(pd, -1, false); }
+SN_HELD int sn_net_wait_proc(void *pd) { return wait_pd(pd, -1, false); }
 
 // sn_net_ready_proc readies a child's record from the signal thread, as
 // the poller readies a socket's: the task waiting on it, if one is, is
 // taken out and woken, its promise kept by the waker, and else the
 // record stays ready for the next wait.
-void sn_net_ready_proc(void *pd) {
+SN_HELD void sn_net_ready_proc(void *pd) {
     poll_desc *d = pd;
     bool claimed = false;
     sn_task *t = ready(&d->r, &d->rh, &claimed);
@@ -880,7 +880,7 @@ void sn_net_ready_proc(void *pd) {
 
 // sn_net_unwatch_proc lets a child's exit record go, to the next child,
 // as the comment above says.
-void sn_net_unwatch_proc(void *pd) {
+SN_HELD void sn_net_unwatch_proc(void *pd) {
     proc_desc *d = (proc_desc *)pd; // the record is the first field
     sn_mutex_lock(&procs_mu);
     d->next = procs_free;
@@ -890,7 +890,7 @@ void sn_net_unwatch_proc(void *pd) {
 #endif
 
 #if defined(_WIN32)
-int sn_net_watch_handle(void *h) {
+SN_HELD int sn_net_watch_handle(void *h) {
     if (sn_net_poller() < 0) {
         return sn_errno_of(ERROR_INVALID_HANDLE);
     }
@@ -903,7 +903,7 @@ int sn_net_watch_handle(void *h) {
     return 0;
 }
 
-void *sn_net_pipe_op(void) {
+SN_HELD void *sn_net_pipe_op(void) {
     pipe_op *op = calloc(1, sizeof *op);
     if (op == NULL) {
         sn_panic(SN_STR("out of memory", 13));
@@ -912,11 +912,11 @@ void *sn_net_pipe_op(void) {
     return op;
 }
 
-void *sn_net_pipe_overlapped(void *op) { return &((pipe_op *)op)->ov; }
+SN_HELD void *sn_net_pipe_overlapped(void *op) { return &((pipe_op *)op)->ov; }
 
-int sn_net_wait_op(void *op) { return wait_pd(&((pipe_op *)op)->pd, -1, false); }
+SN_HELD int sn_net_wait_op(void *op) { return wait_pd(&((pipe_op *)op)->pd, -1, false); }
 
-void sn_net_wait_op_done(void *op) {
+SN_HELD void sn_net_wait_op_done(void *op) {
     poll_desc *pd = &((pipe_op *)op)->pd;
     uintptr_t self = (uintptr_t)sn_self();
     atomic_store_explicit(&pd->rh, SN_HANDOFF_OPEN, memory_order_relaxed);
@@ -944,7 +944,7 @@ void sn_net_wait_op_done(void *op) {
     }
 }
 
-void sn_net_pipe_op_free(void *op) { free(op); }
+SN_HELD void sn_net_pipe_op_free(void *op) { free(op); }
 #endif
 
 // wait_fd waits until fd may be ready to read, or to write: at once
@@ -958,14 +958,14 @@ void sn_net_pipe_op_free(void *op) { free(op); }
 // task takes itself out of the word before it returns, unless the
 // poller or the deadline took it out first, and then waits for that
 // waker to be done with it.
-static int wait_fd(int fd, bool write) { return wait_pd(pd_of(fd), fd, write); }
+SN_HELD_STATIC static int wait_fd(int fd, bool write) { return wait_pd(pd_of(fd), fd, write); }
 
-int sn_net_wait_fd(int fd, bool write) { return wait_fd(fd, write); }
+SN_HELD int sn_net_wait_fd(int fd, bool write) { return wait_fd(fd, write); }
 
 // wait_pd is wait_fd on the descriptor's record, which a child's exit
 // event on macOS has without a descriptor number; fd is the number the
 // poll on Windows needs.
-static int wait_pd(poll_desc *pd, int fd, bool write) {
+SN_HELD_STATIC static int wait_pd(poll_desc *pd, int fd, bool write) {
 #if !defined(_WIN32)
     (void)fd;
 #endif
@@ -1037,7 +1037,7 @@ static int wait_pd(poll_desc *pd, int fd, bool write) {
 
 // sn_net_cancelled is a wait's code for the state of the running task's
 // scope.
-int sn_net_cancelled(void) {
+SN_HELD int sn_net_cancelled(void) {
     switch (sn_cancel_wait_state(sn_self())) {
     case SN_SCOPE_TIMED_OUT:
         return SN_NET_TIMED_OUT;
@@ -1054,7 +1054,7 @@ int sn_net_cancelled(void) {
 // no longer holds once it is set again, as in Go. The old timer is taken
 // out before the new one is marked armed, so that it cannot fire after
 // and mark the new deadline passed.
-int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
+SN_HELD int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
     poll_desc *pd = pd_of((int)fd);
     _Atomic int64_t *dl = write ? &pd->wd : &pd->rd;
     sn_deadline *at = write ? &pd->wt : &pd->rt;
@@ -1075,7 +1075,7 @@ int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
 // system drops with the close. A task still waiting on it, which only a
 // program closing a socket another task uses could leave, is woken to
 // find it closed.
-static void unwatch(int fd) {
+SN_HELD_STATIC static void unwatch(int fd) {
     poll_desc *pd = pd_of(fd);
 #if defined(_WIN32)
     cancel_polls(pd);
@@ -1098,7 +1098,7 @@ static void unwatch(int fd) {
 // fail closes s, when there is one, and returns the error of the call
 // named, storing the name for the library's message, "bind: address
 // already in use".
-static int64_t fail(int s, const char *name, sn_string *call) {
+SN_HELD_STATIC static int64_t fail(int s, const char *name, sn_string *call) {
     int code = last_error();
     if (s >= 0) {
         unwatch(s);
@@ -1110,7 +1110,7 @@ static int64_t fail(int s, const char *name, sn_string *call) {
 }
 
 // port_of returns the port of a socket address of either family.
-static int64_t port_of(const struct sockaddr_storage *a) {
+SN_HELD_STATIC static int64_t port_of(const struct sockaddr_storage *a) {
     return ntohs(a->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)a)->sin6_port
                                           : ((const struct sockaddr_in *)a)->sin_port);
 }
@@ -1120,7 +1120,8 @@ static int64_t port_of(const struct sockaddr_storage *a) {
 // their addresses mapped into IPv6, as Go makes every listener on a
 // wildcard address, which some systems do not by default. A failure
 // returns the error number and stores the call that failed.
-static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, bool dual, int64_t *fd, sn_string *call) {
+SN_HELD_STATIC static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, bool dual, int64_t *fd,
+                                        sn_string *call) {
     int s = NEW_SOCKET(addr->ss_family);
     if (s < 0) {
         return fail(s, "socket", call);
@@ -1164,7 +1165,7 @@ static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, boo
 // the system has IPv6 and on IPv4's where it has not, as Go's empty
 // host. A host that is not an IP address is SN_NET_NOT_ADDRESS, a name
 // the library looks up; the port is in range.
-int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
+SN_HELD int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
     bool every = host.len == 0;
     struct sockaddr_storage addr;
     socklen_t len = (socklen_t)sn_net_parse(every ? SN_STR("::", 2) : host, port, &addr);
@@ -1198,7 +1199,7 @@ int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, s
 // Darwin it is accepted and then refuses its socket options, elsewhere
 // accept reports it aborted. Either is the client's failure, and a
 // server that stopped on it could be stopped by any client.
-int64_t sn_net_accept(int64_t fd, int64_t *out) {
+SN_HELD int64_t sn_net_accept(int64_t fd, int64_t *out) {
     for (;;) {
         if (passed((int)fd, false)) {
             return SN_NET_TIMED_OUT;
@@ -1246,7 +1247,7 @@ int64_t sn_net_accept(int64_t fd, int64_t *out) {
 // again after every wake, as Go checks it: a wake can come for another
 // wait, so a socket with no error yet is connected only once it has a
 // peer.
-int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call) {
+SN_HELD int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call) {
     struct sockaddr_storage addr;
     socklen_t addr_len = (socklen_t)sn_net_parse(host, port, &addr);
     if (addr_len == 0) {
@@ -1329,7 +1330,7 @@ int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, 
 // sn_net_addrs stores the local and the remote address of a socket,
 // as Go prints them, "127.0.0.1:8080" or "[::1]:8080", the remote one
 // empty when it has no peer, as a listening socket.
-int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
+SN_HELD int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
     struct sockaddr_storage a;
     socklen_t len = sizeof a;
     if (getsockname((int)fd, (struct sockaddr *)&a, &len) != 0) {
@@ -1346,7 +1347,7 @@ int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
 // sn_net_read reads what the connection has into buf and stores how
 // much, 0 once the other side has closed, or for a buf of no bytes. A
 // read a signal interrupts is asked again, as the file reads are.
-int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
+SN_HELD int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     sn_check_slice((sn_slice *)buf);
     if (buf->len == 0) {
         *n = 0;
@@ -1382,7 +1383,7 @@ int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
 // sn_net_write writes all of buf to the connection and stores how
 // much it wrote: the length of buf, or on a failure what went before
 // it, which the library's Error carries as Go's Write returns it.
-int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
+SN_HELD int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
     sn_check_slice((sn_slice *)&buf);
     int64_t done = 0;
     *n = 0;
@@ -1420,7 +1421,7 @@ int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
 
 // sn_net_closeConn closes a socket, a connection or a listener, and
 // forgets what the poller still promised for it.
-int64_t sn_net_closeConn(int64_t fd) {
+SN_HELD int64_t sn_net_closeConn(int64_t fd) {
     unwatch((int)fd);
     return CLOSE_SOCKET((int)fd) == 0 ? 0 : last_error();
 }

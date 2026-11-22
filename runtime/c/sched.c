@@ -13,12 +13,13 @@
 // to be told of work. A task that must wait, on a channel, a lock or
 // a timer, parks: it switches to its worker's scheduler, which runs
 // the next task, and whoever wakes it puts it back on a queue. A task
-// runs until it parks or ends: the scheduler does not preempt, so a
-// task that computes without ever waiting keeps its worker, and the
-// others keep running on the rest; a task it wakes meanwhile goes to
-// another worker through the monitor thread below, so that it holds
-// no task but its own. The timers are timer.c's; the workers fire them
-// between their tasks, as the section on them below says.
+// runs until it parks, ends or is preempted: one that computes without
+// waiting while a task is queued is taken off its worker by the
+// monitor thread below after held_limit, as the section on preemption
+// says, and a task it wakes meanwhile goes to another worker through
+// the monitor, so that it holds no task but its own. The timers are
+// timer.c's; the workers fire them between their tasks, as the section
+// on them below says.
 //
 // The main thread's own stack is the main task's. When the main task
 // first parks, the main thread takes a scheduler stack of its own and
@@ -45,16 +46,21 @@
 #include <winternl.h>
 #else
 #include <sched.h>
+#include <signal.h>
 #include <sys/mman.h>
+#include <sys/ucontext.h>
 #include <unistd.h>
 #endif
 
 #if defined(__APPLE__)
 #include <fcntl.h>
+#include <mach-o/getsect.h>
+#include <mach-o/ldsyms.h>
 #include <sys/event.h>
 #endif
 
 #ifdef __linux__
+#include <link.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/prctl.h>
@@ -73,7 +79,7 @@
 // word reads and writes it, a wake already kept written over with
 // itself, so that each is ordered with the others and the park that
 // takes a wake sees what its waker wrote before it.
-enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, WOKEN = 8 };
+enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, PREEMPTED, WOKEN = 8 };
 
 // few_guards is the room a task's record holds for its first guards,
 // so that a task holding a channel handle or a value with a Drop
@@ -197,6 +203,41 @@ static const int64_t held_limit = 10000000; // 10 ms
 
 enum { workers_per_core = 16 };
 
+// A task that has held its worker for held_limit while a task waits is
+// preempted, as Go's runtime has preempted a goroutine since Go 1.14:
+// on Linux and macOS its thread is sent preempt_signal, whose handler
+// runs on a signal stack of signal_stack_bytes the worker keeps, never
+// on a task's small stack; on Windows the thread is suspended and given
+// another context. The task's registers go in a block of its own, as
+// the system saved them, with a landing stack of landing_bytes the
+// task switches to the scheduler from and has its registers put back
+// on; context_most bounds what the system saved, the vector unit's
+// state included. A task is preempted only outside the runtime's held
+// section (internal.h, SN_HELD). A worker still on one task after
+// preempt_tries attempts is blocked in a system call or a bound
+// function, which no signal frees, and gets a thread started beside it
+// as before.
+enum { preempt_tries = 3, landing_bytes = 16 << 10, signal_stack_bytes = 64 << 10, context_most = 8 << 10 };
+
+#if defined(_WIN32)
+// The thread's information block, where the system keeps the stack's
+// bounds, which the switch above reads and writes, and the last error.
+enum { teb_stack_base = 0x08, teb_stack_limit = 0x10, teb_last_error = 0x68, teb_deallocation_stack = 0x1478 };
+#else
+enum { preempt_signal = SIGURG }; // unused by the system but for out-of-band data, and ignored by default
+#endif
+
+#if defined(__linux__) && defined(__x86_64__)
+// The floating-point image a signal frame holds: FXSAVE's 512 bytes,
+// and the extended state after them when the software-reserved words
+// at fp_sw_reserved carry fp_xstate_magic and the image's whole size.
+enum { fp_image_bytes = 512, fp_sw_reserved = 464, fp_xstate_magic = 0x46505853 };
+#elif defined(__linux__) && defined(__aarch64__)
+// The record the kernel leaves in a signal frame's reserved room when
+// it put part of the vector unit's state outside the frame.
+enum { context_extra_magic = 0x45585401 };
+#endif
+
 // The keeper's own events, among which the poller's descriptor is one
 // more on Linux; on Windows they are the keys of the port's packets.
 #if defined(__APPLE__)
@@ -243,6 +284,19 @@ static inline uintptr_t stack_pointer(void) {
 // Mach-O one does not: the trace of a panic reads the functions by
 // their type, since an aarch64 ELF object marks its code and data with
 // symbols of no type too.
+// SN_HELD_SECTION puts the routines below in the runtime's held section
+// (internal.h, SN_HELD), as the functions that call them are: a task is
+// never preempted inside a switch.
+#if defined(__APPLE__)
+#define SN_HELD_SECTION ".section __TEXT,__sn_held,regular,pure_instructions"
+#elif defined(_WIN32)
+#define SN_HELD_SECTION ".section .text$sn_held_m,\"xr\""
+#elif defined(__aarch64__)
+#define SN_HELD_SECTION ".section sn_held,\"ax\",%progbits"
+#else
+#define SN_HELD_SECTION ".section sn_held,\"ax\",@progbits"
+#endif
+
 #if defined(__APPLE__)
 #define SN_SYM(name)  "_" #name
 #define SN_TYPE(name) ""
@@ -299,7 +353,7 @@ void *sn_on_stack(void *top, void *(*fn)(void *), void *arg);
 #define SN_X87_START   0x027F
 #define SN_SAVED_BOUNDS 168 // the stack's reservation, its limit and its base
 __asm__(
-    ".text\n"
+    SN_HELD_SECTION "\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
     "  pushq %rbp\n"
     "  pushq %rbx\n"
@@ -461,7 +515,7 @@ __asm__(
 #define SN_RESUMED_SP SN_FRAME // where the switch's caller resumes, past the frame the switch drops
 #define SN_SAVED_BOUNDS 160 // the stack's reservation, its limit and its base
 __asm__(
-    ".text\n"
+    SN_HELD_SECTION "\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
     ".p2align 2\n" SN_SYM(sn_switch) ":\n"
     "  sub sp, sp, #192\n"
@@ -566,7 +620,7 @@ __asm__(
 #define SN_SAVED_PC 88
 #define SN_RESUMED_SP SN_FRAME // where the switch's caller resumes, past the frame the switch drops
 __asm__(
-    ".text\n"
+    SN_HELD_SECTION "\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch)
     ".p2align 2\n" SN_SYM(sn_switch) ":\n"
     "  sub sp, sp, #160\n"
@@ -611,7 +665,7 @@ __asm__(
 #define SN_SAVED_PC 48
 #define SN_RESUMED_SP 56 // where the switch's caller resumes, past the return address ret pops
 __asm__(
-    ".text\n"
+    SN_HELD_SECTION "\n"
     ".globl " SN_SYM(sn_switch) "\n" SN_TYPE(sn_switch) SN_SYM(sn_switch) ":\n"
     "  pushq %rbp\n"
     "  pushq %rbx\n"
@@ -650,7 +704,7 @@ __asm__(
 // sixteen-byte boundary; on Windows the vector unit's control words
 // start at the values a thread starts with, and set_bounds writes the
 // stack's bounds into the frame.
-static void *make_context(void *top, void (*entry)(void)) {
+SN_HELD_STATIC static void *make_context(void *top, void (*entry)(void)) {
     uint8_t *sp = (uint8_t *)top - SN_FRAME;
     memset(sp, 0, SN_FRAME);
     ((void **)sp)[SN_SAVED_PC / sizeof(void *)] = (void *)entry; // where the switch returns to
@@ -665,7 +719,7 @@ static void *make_context(void *top, void (*entry)(void)) {
 // set_bounds writes into a fresh frame the bounds of the stack it is on:
 // its top, the lowest address its task may use and where its memory
 // begins, which the switch puts in the thread's information block.
-static void set_bounds(void *sp, void *top, void *limit, void *reservation) {
+SN_HELD_STATIC static void set_bounds(void *sp, void *top, void *limit, void *reservation) {
     void **b = (void **)((uint8_t *)sp + SN_SAVED_BOUNDS);
     b[0] = reservation;
     b[1] = limit;
@@ -674,7 +728,7 @@ static void set_bounds(void *sp, void *top, void *limit, void *reservation) {
 
 // frame_bounds reads the bounds of the stack of a context switched
 // away from, from its frame.
-static sn_stack_bounds frame_bounds(void *sp) {
+SN_HELD_STATIC static sn_stack_bounds frame_bounds(void *sp) {
     void **b = (void **)((uint8_t *)sp + SN_SAVED_BOUNDS);
     return (sn_stack_bounds){ b[2], b[1], b[0] };
 }
@@ -690,6 +744,7 @@ struct sn_task {
     void *stack;     // the reservation, NULL for the main task
     int stack_class; // of the stack
     void *large;     // the guarded stack a panic on its small stack moved to, kept until it ends
+    _Atomic(struct preempt_block *) preempt; // its registers while preempted, and its landing stack, once it has one
 #ifdef SN_DEBUG
     uint32_t bound; // what the analysis of the linked program bounded its stack at, which a debug build checks it to as
                     // it ends
@@ -751,6 +806,17 @@ typedef struct sn_task task;
 typedef struct worker {
     void *sched_sp;
     void *sched_stack;
+#if defined(_WIN32)
+    _Atomic(HANDLE) thread; // for the monitor to suspend, written by the thread as it starts and read by the monitor
+    _Atomic(void *) teb;    // the thread's information block, whose stack bounds the monitor reads and writes
+#else
+    _Atomic(pthread_t) thread; // for the monitor to signal, written by the thread as it starts
+#endif
+    _Atomic(struct preempt_block *) spare; // a block the monitor keeps ready, which the preemption takes
+    int preempt_tries;                     // attempts since the worker last switched, the monitor's
+#if defined(_WIN32)
+    _Alignas(16) CONTEXT restoring; // a preempted task's registers as they are put back, off its block
+#endif
     task *last;                // the task that switched to the scheduler, to settle
     _Atomic(task *) runnext;   // the task its running task woke last, which it runs next: put with an exchange, taken
                                // with a compare-and-swap by the worker, a thief or the monitor
@@ -795,11 +861,37 @@ typedef struct worker {
 #endif
 } SN_OWN_LINE worker;
 
+// The block a preempted task keeps: its registers as the system saved
+// them when it was interrupted, put back when it resumes; errno, and
+// on Windows the last error and its stack's bounds; and the landing
+// stack, the task's while it is off its own.
+typedef struct preempt_block {
+    bool restoring; // the landing asks the handler to put the registers back
+    int saved_errno;
+#if defined(_WIN32)
+    sn_stack_bounds bounds;
+    DWORD last_error;
+    _Alignas(16) CONTEXT context;
+#elif defined(__APPLE__)
+    size_t size;                                // of the machine context, uc_mcsize
+    _Alignas(16) uint8_t context[context_most]; // the machine context, whichever form the processor's is
+#elif defined(__x86_64__)
+    gregset_t regs;
+    size_t fp_size;
+    _Alignas(64) uint8_t fp[context_most]; // the FXSAVE image and what XSAVE adds, as the kernel laid them out
+#else
+    mcontext_t context; // the registers and, in its reserved room, the vector unit's state
+#endif
+    _Alignas(16) uint8_t landing[landing_bytes];
+} preempt_block;
+
+static _Atomic int64_t preempted; // tasks taken off their workers, for a test
+
 static worker *workers;      // room for workers_most of them, so that no worker's address moves
 static int workers_most;     // what the monitor may grow the workers to
 static _Atomic int nworkers; // the workers started, the main thread's among them: only grows
 
-static int workers_now(void) { return atomic_load_explicit(&nworkers, memory_order_relaxed); }
+SN_HELD_STATIC static int workers_now(void) { return atomic_load_explicit(&nworkers, memory_order_relaxed); }
 static sn_mutex start_mu = SN_MUTEX_INIT;
 static bool started;
 
@@ -814,12 +906,12 @@ static _Thread_local task *current;
 // neither inline nor merge, since each one may write memory as far as
 // it knows. The scheduler's own contexts never move, and read the
 // variables directly.
-static __attribute__((noinline)) worker *my_worker(void) {
+SN_HELD_STATIC static __attribute__((noinline)) worker *my_worker(void) {
     __asm__ volatile("" ::: "memory");
     return self_worker;
 }
 
-static __attribute__((noinline)) task *my_task(void) {
+SN_HELD_STATIC static __attribute__((noinline)) task *my_task(void) {
     __asm__ volatile("" ::: "memory");
     return current;
 }
@@ -837,7 +929,7 @@ static task main_task; // the main thread's own stack and context
 static task *_Atomic debug_tasks;
 static sn_qlock debug_mu; // free as zeroed
 
-static void debug_list(task *t) {
+SN_HELD_STATIC static void debug_list(task *t) {
     sn_qlock_take(&debug_mu);
     task *head = atomic_load_explicit(&debug_tasks, memory_order_relaxed);
     t->debug_next = head;
@@ -850,7 +942,7 @@ static void debug_list(task *t) {
     sn_qlock_give(&debug_mu);
 }
 
-static void debug_unlist(task *t) {
+SN_HELD_STATIC static void debug_unlist(task *t) {
     sn_qlock_take(&debug_mu);
     if (t->debug_prev != NULL) {
         t->debug_prev->debug_next = t->debug_next;
@@ -895,9 +987,10 @@ static struct {
     SN_OWN_LINE _Atomic int64_t moving; // tasks the monitor is moving out of a slot, until each is on the inject queue
     SN_OWN_LINE _Atomic int64_t
         outside; // wakes promised by threads that are not workers: the poller's, the timers', a resolver's
-    SN_OWN_LINE _Atomic int64_t injected; // tasks on the inject queue
-    SN_OWN_LINE _Atomic int idle;         // workers waiting for work
-    SN_OWN_LINE _Atomic int spinning;     // workers looking for work before they wait, at most one
+    SN_OWN_LINE _Atomic int64_t injected;  // tasks on the inject queue
+    SN_OWN_LINE _Atomic int64_t displaced; // tasks on the displaced queue, taken off their workers
+    SN_OWN_LINE _Atomic int idle;          // workers waiting for work
+    SN_OWN_LINE _Atomic int spinning;      // workers looking for work before they wait, at most one
     SN_OWN_LINE _Atomic int
         waiting; // workers blocked in the idle wait for work alone, the keeper not among them, under idle_mu
 } hot;
@@ -939,10 +1032,13 @@ static void keeper_wake(void);
 static worker *idle_take(int k);
 static void idle_wake(worker *taken);
 static void add_worker(void);
+static void preempt_start(void);
+static void preempt_thread_start(worker *w);
+static void preempt_worker(worker *w);
 
 // sn_sched_recheck has the waiting workers look again at whether any
 // task can still be woken, when every worker waits.
-void sn_sched_recheck(void) {
+SN_HELD void sn_sched_recheck(void) {
     if (atomic_load(&hot.idle) != workers_now()) {
         return;
     }
@@ -964,7 +1060,7 @@ void sn_sched_recheck(void) {
 // tell: it counts itself idle before it reads this count, and this
 // reads the idle count after it changes its own, so one of the two
 // sees the other.
-void sn_outside(int64_t n) {
+SN_HELD void sn_outside(int64_t n) {
     if (atomic_fetch_add(&hot.outside, n) + n == 0) {
         sn_sched_recheck();
     }
@@ -973,8 +1069,8 @@ void sn_outside(int64_t n) {
 // queued_now is how many tasks wait on the workers' rings and the
 // inject queue, read from each ring's counts: no count of them all is
 // kept, since every worker would write it on every push and every pop.
-static int64_t queued_now(void) {
-    int64_t n = atomic_load(&hot.injected);
+SN_HELD_STATIC static int64_t queued_now(void) {
+    int64_t n = atomic_load(&hot.injected) + atomic_load(&hot.displaced);
     for (int i = 0; i < workers_now(); i++) {
         n += (int64_t)(atomic_load(&workers[i].qtail) - atomic_load(&workers[i].qhead));
     }
@@ -994,7 +1090,7 @@ static int64_t queued_now(void) {
 // main thread is a worker only once the main task has parked, so the
 // program cannot end. Go's runtime stops such a program with the same
 // message.
-static bool deadlocked(void) {
+SN_HELD_STATIC static bool deadlocked(void) {
     // Whoever keeps a promise queues the task first and takes the
     // promise off its count second, and the monitor queues a task it
     // moves out of a slot before it takes it off the count of moves, so
@@ -1029,16 +1125,16 @@ static int dead_pooled[stack_classes];
 static uint8_t *block_next[stack_classes]; // the next stack of the block each class takes from, under pool_mu
 static size_t block_left[stack_classes];   // and how many stacks it has left
 
-static void pool_take(void) { sn_qlock_take(&pool_mu); }
+SN_HELD_STATIC static void pool_take(void) { sn_qlock_take(&pool_mu); }
 
-static void pool_give(void) { sn_qlock_give(&pool_mu); }
+SN_HELD_STATIC static void pool_give(void) { sn_qlock_give(&pool_mu); }
 
-static size_t class_size(int c) { return c == guarded ? stack_size : (size_t)small_least << c; }
+SN_HELD_STATIC static size_t class_size(int c) { return c == guarded ? stack_size : (size_t)small_least << c; }
 
 // stack_class returns the class of a task whose stack sn_spawn was
 // given the bound of: the smallest small class that holds it, or the
 // guarded class for SN_UNBOUNDED or a bound past the small classes.
-static int stack_class(uint32_t bound) {
+SN_HELD_STATIC static int stack_class(uint32_t bound) {
     for (int c = 0; c < small_classes; c++) {
         if (bound <= class_size(c)) {
             return c;
@@ -1048,15 +1144,15 @@ static int stack_class(uint32_t bound) {
     return guarded;
 }
 
-static void **pool_link(void *s, int c) { return (void **)((uint8_t *)s + class_size(c)) - 1; }
+SN_HELD_STATIC static void **pool_link(void *s, int c) { return (void **)((uint8_t *)s + class_size(c)) - 1; }
 
-static void pool_push(void *s, int c) {
+SN_HELD_STATIC static void pool_push(void *s, int c) {
     *pool_link(s, c) = pool[c];
     pool[c] = s;
     pooled[c]++;
 }
 
-static void *pool_pop(int c) {
+SN_HELD_STATIC static void *pool_pop(int c) {
     void *s = pool[c];
     pool[c] = *pool_link(s, c);
     pooled[c]--;
@@ -1064,13 +1160,13 @@ static void *pool_pop(int c) {
 }
 
 // pool_keeps reports whether the pool of class c has room for a stack.
-static bool pool_keeps(int c) { return c != guarded || pooled[c] < guarded_pooled; }
+SN_HELD_STATIC static bool pool_keeps(int c) { return c != guarded || pooled[c] < guarded_pooled; }
 
 // unmap_guarded gives a guarded stack back to the system. Windows frees
 // only a reservation whole, and a guarded stack is a part of a block's,
 // so there its pages are decommitted and its addresses stay reserved,
 // for the block they belong to.
-static void unmap_guarded(void *s) {
+SN_HELD_STATIC static void unmap_guarded(void *s) {
 #if defined(_WIN32)
     (void)VirtualFree((uint8_t *)s + sn_page_size(), stack_size - sn_page_size(), MEM_DECOMMIT);
 #else
@@ -1081,12 +1177,12 @@ static void unmap_guarded(void *s) {
 #ifndef SN_DEBUG // a debug build keeps a worker's last ended_kept ended records, then frees them, and reuses none
 // dead_keeps reports whether the pool of class c has room for a record
 // with its stack: the guarded ones are bounded as their stacks are.
-static bool dead_keeps(int c) { return c != guarded || dead_pooled[c] < guarded_pooled; }
+SN_HELD_STATIC static bool dead_keeps(int c) { return c != guarded || dead_pooled[c] < guarded_pooled; }
 
 // dead_take gives the record of an ended task of stack class c, with
 // its stack, from w's cache, refilled with a batch from the pool when it
 // is empty; NULL when there is none, or for a thread that is no worker.
-static task *dead_take(worker *w, int c) {
+SN_HELD_STATIC static task *dead_take(worker *w, int c) {
     if (w == NULL) {
         return NULL;
     }
@@ -1117,7 +1213,7 @@ static task *dead_take(worker *w, int c) {
 // dead_keep keeps the record of the ended task t, with its stack, in
 // w's cache; a full cache sends a batch to the pool, and a guarded
 // record the pool has no room for is torn down.
-static void dead_keep(worker *w, task *t) {
+SN_HELD_STATIC static void dead_keep(worker *w, task *t) {
     int c = t->stack_class;
     if (w->ndead[c] == dead_cache) {
         pool_take();
@@ -1152,7 +1248,7 @@ static void dead_keep(worker *w, task *t) {
 // class's block when both are empty. It returns NULL with the reason in
 // *failure when the system has no memory to map, rather than panic,
 // since the panic itself takes a stack with it.
-static void *stack_new(worker *w, int c, const char **failure) {
+SN_HELD_STATIC static void *stack_new(worker *w, int c, const char **failure) {
     if (w != NULL && w->nstacks[c] > 0) {
         return w->stacks[c][--w->nstacks[c]];
     }
@@ -1228,7 +1324,7 @@ static void *stack_new(worker *w, int c, const char **failure) {
 
 // stack_take is stack_new for a spawn and a scheduler, which panic when
 // the system has no memory to map.
-static void *stack_take(worker *w, int c) {
+SN_HELD_STATIC static void *stack_take(worker *w, int c) {
     const char *failure = NULL;
     void *s = stack_new(w, c, &failure);
     if (s == NULL) {
@@ -1242,7 +1338,7 @@ static void *stack_take(worker *w, int c) {
 // half to the pool under one lock, and a guarded stack the pool has no
 // room for is unmapped. A thread that is no worker gives to the pool
 // alone.
-static void stack_free(worker *w, void *s, int c) {
+SN_HELD_STATIC static void stack_free(worker *w, void *s, int c) {
     if (w != NULL) {
         if (w->nstacks[c] == stack_cache) {
             pool_take();
@@ -1273,7 +1369,7 @@ static void stack_free(worker *w, void *s, int c) {
 
 // sn_self returns the running task; on the main thread before any
 // task exists, it makes the main task from the thread itself.
-sn_task *sn_self(void) {
+SN_HELD sn_task *sn_self(void) {
     task *t = my_task();
     if (t == NULL) {
         atomic_store(&main_task.state, RUNNING);
@@ -1293,16 +1389,16 @@ sn_task *sn_self(void) {
 // channel c, to send or to receive as dir says, or waits on none for
 // a NULL c: what the deadlock report says of the main task. The task
 // is the caller's, which read it for its waiter already.
-void sn_task_waits(sn_task *t, sn_chan *c, int dir) {
+SN_HELD void sn_task_waits(sn_task *t, sn_chan *c, int dir) {
     t->waits_on = c;
     t->waits_dir = dir;
 }
 
 // sn_task_places returns the running task's slots for the place of a
 // test's call, which testing.c fills and reads.
-sn_string *sn_task_places(void) { return sn_self()->places; }
+SN_HELD sn_string *sn_task_places(void) { return sn_self()->places; }
 
-sn_scope_link *sn_task_scope(sn_task *t) { return &t->scope; }
+SN_HELD sn_scope_link *sn_task_scope(sn_task *t) { return &t->scope; }
 
 // The loads are relaxed, and need no more: a cancel marks the scope and
 // then wakes the task, and the park that takes that wake does so with a
@@ -1311,7 +1407,7 @@ sn_scope_link *sn_task_scope(sn_task *t) { return &t->scope; }
 // mark is followed by that wake. An acquire load would wait, on arm64,
 // for the stores the wait has just made to be seen, on every wait: it
 // made a pipeline of buffered channels a quarter slower.
-int sn_cancel_state(sn_task *t) {
+SN_HELD int sn_cancel_state(sn_task *t) {
     sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_relaxed);
     if (s == NULL) {
         s = &sn_root; // a task in no scope is the program's, which an interrupt cancels
@@ -1320,7 +1416,7 @@ int sn_cancel_state(sn_task *t) {
     return atomic_load_explicit(&s->state, memory_order_relaxed);
 }
 
-int sn_cancel_wait_state(sn_task *t) {
+SN_HELD int sn_cancel_wait_state(sn_task *t) {
     sn_scope *s = atomic_load_explicit(&t->scope.scope, memory_order_acquire); // an Add's write of it, and of enlisted
     if (!t->scope.enlisted) {
         sn_scope_enlist_self(t, s); // the lock taken and let go, so that the mark of a cancel that walked the list
@@ -1339,7 +1435,7 @@ int sn_cancel_wait_state(sn_task *t) {
 // claimed it first. It is out of line and cold, as every cancelled path
 // of the waits is, so that the code around a wait is what it was before
 // a cancel could end one.
-static __attribute__((noinline, cold)) bool take_back(sn_wait_state *ws) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) bool take_back(sn_wait_state *ws) {
     int open = 0;
     return atomic_compare_exchange_strong(&ws->claimed, &open, 1);
 }
@@ -1359,7 +1455,7 @@ static __attribute__((noinline, cold)) bool take_back(sn_wait_state *ws) {
 // slower. A sleep, which always waits, gains by the inlining, as it
 // does of sn_handoff_wait: kept out of line, it made a wave of sleeps a
 // tenth slower.
-bool sn_handoff_cancellable(sn_handoff *h, sn_task *t) {
+SN_HELD bool sn_handoff_cancellable(sn_handoff *h, sn_task *t) {
     for (;;) {
         int at = atomic_load_explicit(h, memory_order_acquire);
         if (at == SN_HANDOFF_WOKEN) {
@@ -1379,7 +1475,7 @@ bool sn_handoff_cancellable(sn_handoff *h, sn_task *t) {
     }
 }
 
-__attribute__((noinline)) bool sn_await_cancellable(sn_task *t, sn_wait_state *ws) {
+SN_HELD bool sn_await_cancellable(sn_task *t, sn_wait_state *ws) {
     if (sn_handoff_cancellable(&ws->done, t)) {
         return true;
     }
@@ -1399,7 +1495,7 @@ static int handed; // spins given to woken workers not yet back from the wait, u
 // first; each is woken by its own word once the lock is given back, so
 // that no wake reaches a worker already on its way and no woken worker
 // waits for the lock the waker holds.
-static worker *idle_take(int k) {
+SN_HELD_STATIC static worker *idle_take(int k) {
     worker *taken = NULL;
     for (; k > 0 && idle_head != NULL; k--) {
         worker *w = idle_head;
@@ -1412,7 +1508,7 @@ static worker *idle_take(int k) {
     return taken;
 }
 
-static void idle_wake(worker *taken) {
+SN_HELD_STATIC static void idle_wake(worker *taken) {
     for (worker *w = taken; w != NULL;) {
         worker *next = w->idle_next; // read before the wake: woken, w may wait again and link elsewhere
         atomic_store_explicit(&w->park, 1, memory_order_release);
@@ -1423,7 +1519,7 @@ static void idle_wake(worker *taken) {
 
 // idle_give gives idle_mu back and wakes k of the workers blocked
 // waiting for work.
-static void idle_give(int k) {
+SN_HELD_STATIC static void idle_give(int k) {
     worker *taken = idle_take(k);
     sn_qlock_give(&idle_mu);
     idle_wake(taken);
@@ -1441,7 +1537,7 @@ static void idle_give(int k) {
 // blocked, under the lock it blocks with, so a spin is never handed to
 // no one. The keeper is woken only when no other worker waits, so that
 // the timers keep their keeper while there is another to run the work.
-static void wake_idle(void) {
+SN_HELD_STATIC static void wake_idle(void) {
     if (atomic_load(&hot.idle) == 0 || atomic_load(&hot.spinning) != 0) {
         return;
     }
@@ -1469,7 +1565,7 @@ static void wake_idle(void) {
 // through the spin, one at a time, a worker took several of them and
 // ran them in turn while the others slept. With none to signal it
 // wakes as wake_idle does, so that a spinner or the keeper still comes.
-static void wake_waiting(int n) {
+SN_HELD_STATIC static void wake_waiting(int n) {
     if (atomic_load(&hot.idle) == 0) {
         return;
     }
@@ -1492,7 +1588,7 @@ static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl);
 // its own ring steals half of another worker's. A full ring sends
 // half of itself with the task to the inject queue, as Go's runqput
 // does to its global queue.
-static void push(worker *w, task *t) {
+SN_HELD_STATIC static void push(worker *w, task *t) {
     for (;;) {
         uint32_t h = atomic_load_explicit(&w->qhead, memory_order_acquire);
         uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
@@ -1524,25 +1620,48 @@ static void push(worker *w, task *t) {
 static sn_qlock inject_mu; // free as zeroed
 static task *inject_head, *inject_tail;
 
-static void inject(task *t) {
-    sn_qlock_take(&inject_mu);
+// The displaced queue, under the same lock: the tasks taken off their
+// workers, which run after the inject queue's, since a task woken from
+// outside waits for no task that held a core, and before a worker's
+// own ring once in outside_turns, so that they are not starved by a
+// stream of wakes; Go's runtime puts a preempted goroutine on its
+// global queue, which its workers look at once in 61 turns too.
+static task *displaced_head, *displaced_tail;
+
+// queue_put puts t at the tail of the queue head and tail describe,
+// under inject_mu.
+SN_HELD_STATIC static void queue_put(task **head, task **tail, task *t) {
     t->next = NULL;
-    if (inject_tail != NULL) {
-        inject_tail->next = t;
+    if (*tail != NULL) {
+        (*tail)->next = t;
     } else {
-        inject_head = t;
+        *head = t;
     }
 
-    inject_tail = t;
+    *tail = t;
+}
+
+SN_HELD_STATIC static void inject(task *t) {
+    sn_qlock_take(&inject_mu);
+    queue_put(&inject_head, &inject_tail, t);
     sn_qlock_give(&inject_mu);
     atomic_fetch_add(&hot.injected, 1);
     wake_idle(); // a spinner stops spinning before it looks once more, and the count and the stop are sequentially
                  // consistent, so one of the two sees the other
 }
 
+// displace puts a task taken off its worker on the displaced queue.
+SN_HELD_STATIC static void displace(task *t) {
+    sn_qlock_take(&inject_mu);
+    queue_put(&displaced_head, &displaced_tail, t);
+    sn_qlock_give(&inject_mu);
+    atomic_fetch_add(&hot.displaced, 1);
+    wake_idle();
+}
+
 // inject_all puts the n tasks ts on the inject queue under one taking
 // of its lock, in their order, and wakes a worker for each.
-static void inject_all(task **ts, int n) {
+SN_HELD_STATIC static void inject_all(task **ts, int n) {
     for (int i = 0; i < n; i++) {
         ts[i]->next = i + 1 < n ? ts[i + 1] : NULL;
     }
@@ -1563,7 +1682,7 @@ static void inject_all(task **ts, int n) {
 // push_slow moves half of w's full ring, with t after it, to the
 // inject queue, and reports whether it did; a stealer that took from
 // the ring meanwhile makes it fail, and push tries the ring again.
-static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl) {
+SN_HELD_STATIC static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl) {
     uint32_t n = (tl - h) / 2;
     task *batch[ring_size / 2 + 1];
     for (uint32_t i = 0; i < n; i++) {
@@ -1593,16 +1712,17 @@ static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl) {
     return true;
 }
 
-// take_injected takes the task at the head of the inject queue for w to
-// run, and with it, when batch is set, a share of the rest onto w's own
-// ring, which is then empty: as many as an even share among the workers
-// and one more, at most half a ring. Taken
+// take_queue takes the task at the head of the queue head and tail
+// describe, counted by count, for w to run, and with it, when batch is
+// set, a share of the rest onto w's own ring, which is then empty: as
+// many as an even share among the workers and one more, at most half a
+// ring. Taken
 // one at a time, a burst of spawns that overflowed a ring into the
 // queue had every worker take its lock once a task, and the workers
 // queued on the lock rather than ran tasks. The look of a worker that
 // has tasks of its own, to keep the queue moving, takes one.
-static task *take_injected(worker *w, bool batch) {
-    int64_t queued = atomic_load(&hot.injected);
+SN_HELD_STATIC static task *take_queue(worker *w, bool batch, task **head, task **tail, _Atomic int64_t *count) {
+    int64_t queued = atomic_load(count);
     if (queued == 0) {
         return NULL;
     }
@@ -1614,21 +1734,21 @@ static task *take_injected(worker *w, bool batch) {
     }
 
     sn_qlock_take(&inject_mu);
-    task *t = inject_head, *last = t;
+    task *t = *head, *last = t;
     int64_t n = 0;
     while (last != NULL && ++n < most) {
         last = last->next;
     }
 
     if (last != NULL) {
-        inject_head = last->next;
+        *head = last->next;
         last->next = NULL;
     } else {
-        inject_head = NULL;
+        *head = NULL;
     }
 
-    if (inject_head == NULL) {
-        inject_tail = NULL;
+    if (*head == NULL) {
+        *tail = NULL;
     }
 
     sn_qlock_give(&inject_mu);
@@ -1636,7 +1756,7 @@ static task *take_injected(worker *w, bool batch) {
         return NULL;
     }
 
-    atomic_fetch_sub(&hot.injected, n);
+    atomic_fetch_sub(count, n);
     if (n > 1) {
         uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
         uint32_t i = 0;
@@ -1651,12 +1771,36 @@ static task *take_injected(worker *w, bool batch) {
     return t;
 }
 
+// take_injected takes from the inject queue, and from the displaced
+// queue when it is empty, one task at a time from that one, so that a
+// worker's ring never fills with tasks taken off their workers, behind
+// which a wake would wait a quantum each; displaced_first has it the
+// other way round, the look a worker takes once in outside_turns, so
+// that a stream of wakes never starves the tasks taken off their
+// workers, as Go's global queue has its turn once in 61.
+SN_HELD_STATIC static task *take_injected(worker *w, bool batch, bool displaced_first) {
+    task *t = NULL;
+    if (displaced_first) {
+        t = take_queue(w, false, &displaced_head, &displaced_tail, &hot.displaced);
+    }
+
+    if (t == NULL) {
+        t = take_queue(w, batch, &inject_head, &inject_tail, &hot.injected);
+    }
+
+    if (t == NULL && !displaced_first) {
+        t = take_queue(w, false, &displaced_head, &displaced_tail, &hot.displaced);
+    }
+
+    return t;
+}
+
 // ring_put puts the n tasks ts on w's ring, by w's thread, which found
 // it empty and is the one to push on it, so that they fit: a look at
 // the sockets' poller wakes at most 2 * SN_POLL_EVENTS, half a ring.
 _Static_assert(2 * SN_POLL_EVENTS <= ring_size / 2, "a look's tasks fit an empty ring");
 
-static void ring_put(worker *w, task **ts, int n) {
+SN_HELD_STATIC static void ring_put(worker *w, task **ts, int n) {
     uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
     for (int i = 0; i < n; i++) {
         atomic_store_explicit(&w->ring[(tl + (uint32_t)i) % ring_size], ts[i], memory_order_relaxed);
@@ -1671,7 +1815,7 @@ static void ring_put(worker *w, task **ts, int n) {
 
 // pop takes the task at the head of w's own ring, by the worker's
 // thread, racing only with stealers for the head.
-static task *pop(worker *w) {
+SN_HELD_STATIC static task *pop(worker *w) {
     for (;;) {
         uint32_t h = atomic_load_explicit(&w->qhead, memory_order_acquire);
         uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
@@ -1691,7 +1835,7 @@ static task *pop(worker *w) {
 // run and the rest go on to's ring, as Go's runqsteal does. A head that
 // moved under the read, a take by the owner or another stealer, makes
 // the swap fail and the read is made again.
-static task *steal(worker *to, worker *from) {
+SN_HELD_STATIC static task *steal(worker *to, worker *from) {
     task *batch[ring_size / 2];
     for (;;) {
         uint32_t h = atomic_load_explicit(&from->qhead, memory_order_acquire);
@@ -1729,7 +1873,7 @@ static task *steal(worker *to, worker *from) {
 // w's queue, where another worker may steal it. The slot is one word
 // the worker's own thread alone fills, and no count anywhere else, so
 // that a wake writes no line the other workers write.
-static void put_next(worker *w, task *t) {
+SN_HELD_STATIC static void put_next(worker *w, task *t) {
     task *old = atomic_exchange(&w->runnext, t);
     if (old != NULL) {
         push(w, old);
@@ -1739,7 +1883,7 @@ static void put_next(worker *w, task *t) {
 // take_next empties w's runnext slot and returns the task it held, or
 // NULL: a compare-and-swap, since the worker, a thief and the monitor
 // may reach for it at once.
-static task *take_next(worker *w) {
+SN_HELD_STATIC static task *take_next(worker *w) {
     task *t = atomic_load(&w->runnext);
     if (t == NULL || !atomic_compare_exchange_strong(&w->runnext, &t, NULL)) {
         return NULL;
@@ -1769,7 +1913,7 @@ static task *take_next(worker *w) {
 // for the monitor to tell whether any was made since its last.
 static _Atomic uint64_t polls;
 
-static task *poll_now(worker *w) {
+SN_HELD_STATIC static task *poll_now(worker *w) {
     if (!w->owes_poll && (sn_net_waiting() == 0 || atomic_load(&keeping))) {
         return NULL;
     }
@@ -1800,7 +1944,7 @@ static task *poll_now(worker *w) {
 // poller made runnable, and half of another worker's queue. Once the
 // slot's task has run first next_most times in a row, the queue's head
 // runs before it.
-static task *next_task(worker *w) {
+SN_HELD_STATIC static task *next_task(worker *w) {
     bool turn_over = w->streak >= next_most;
     task *t = turn_over ? NULL : take_next(w);
     if (t != NULL) {
@@ -1818,7 +1962,7 @@ static task *next_task(worker *w) {
         return t;
     }
 
-    t = take_injected(w, true); // its ring is empty: room for a batch
+    t = take_injected(w, true, false); // its ring is empty: room for a batch
     if (t != NULL) {
         return t;
     }
@@ -1844,7 +1988,7 @@ static task *next_task(worker *w) {
 // the analysis is wrong, and in a release build the task would have
 // written over another's stack. A debug build of every program tested
 // is so a test of the analysis.
-static void stack_check(task *t) {
+SN_HELD_STATIC static void stack_check(task *t) {
     if (t->stack == NULL || t->stack_class == guarded) {
         return;
     }
@@ -1869,7 +2013,7 @@ static void stack_check(task *t) {
 // left behind: a task done is freed; a task parking is parked, or put
 // back on the queue if a wake reached it first. It runs on the
 // scheduler's stack, so a done task's stack is no longer in use.
-static void settle(worker *w) {
+SN_HELD_STATIC static void settle(worker *w) {
     task *t = w->last;
     if (t == NULL) {
         return;
@@ -1899,6 +2043,14 @@ static void settle(worker *w) {
         }
 
         sn_string_drop(&t->places[SN_PLACE_PARTS]);
+        preempt_block *b = atomic_load_explicit(&t->preempt, memory_order_relaxed);
+        if (b != NULL) {
+            atomic_store_explicit(&t->preempt, NULL, memory_order_relaxed);
+            preempt_block *none = NULL;
+            if (!atomic_compare_exchange_strong(&w->spare, &none, b)) { // kept for the worker's next, or given back
+                sn_aligned_free(b);
+            }
+        }
 #ifdef SN_DEBUG
         if (t->stack != NULL) {
             stack_free(w, t->stack, t->stack_class);
@@ -1930,12 +2082,25 @@ static void settle(worker *w) {
 
         break;
     }
+    case PREEMPTED: {
+        int s = atomic_load(&t->state);
+        while (!atomic_compare_exchange_weak(&t->state, &s, RUNNABLE | (s & WOKEN))) { // a wake kept stays kept
+        }
+
+        displace(t); // behind the tasks that waited, as Go's runtime queues a preempted goroutine globally
+        task *woken = take_injected(w, false, false); // what the preemption was for, a task woken from outside,
+        if (woken != NULL) {                          // runs next here, as a task a worker wakes itself does
+            put_next(w, woken);
+        }
+
+        break;
+    }
     }
 }
 
 // run_task switches the worker to a task, and settles the task when it
 // switches back.
-static void run_task(worker *w, task *t) {
+SN_HELD_STATIC static void run_task(worker *w, task *t) {
     int s = atomic_load(&t->state);
     while (!atomic_compare_exchange_weak(&t->state, &s, RUNNING | (s & WOKEN))) { // a wake kept for its next park stays
     }
@@ -1954,7 +2119,7 @@ static void run_task(worker *w, task *t) {
 // a sweep, since the owner is likely to take the task itself within
 // that time, and takes it if it is still there; what sits longer with
 // every worker busy the monitor moves.
-static task *steal_next(worker *w) {
+SN_HELD_STATIC static task *steal_next(worker *w) {
     int64_t until = 0; // the end of the wait, from the first slot found held: every slot after it is given the rest
     for (int i = 0; i < workers_now(); i++) {
         worker *other = &workers[i];
@@ -2000,7 +2165,7 @@ static task *steal_next(worker *w) {
 // spinning.
 static _Atomic int worth = 1;
 
-static void spun(bool paid) {
+SN_HELD_STATIC static void spun(bool paid) {
     int w = atomic_load(&worth);
     int next = paid ? (w < worth_most ? w + 1 : w) : (w > 0 ? w - 1 : 0);
     if (next != w) {
@@ -2013,7 +2178,7 @@ static void spun(bool paid) {
 // task was queued or injected meanwhile, or one a look made runnable is
 // in w's runnext slot. A worker woken to
 // spin holds the spin already; another takes it if no one holds it.
-static bool spin(worker *w, bool holding) {
+SN_HELD_STATIC static bool spin(worker *w, bool holding) {
     int expected = 0;
     if (!holding && (atomic_load(&worth) <= 0 || !atomic_compare_exchange_strong(&hot.spinning, &expected, 1))) {
         return false;
@@ -2098,7 +2263,7 @@ static wait_packet_associate associate;
 static wait_packet_cancel cancel;
 static _Atomic bool keeper_asleep; // the keeper waits on the port, for a packet of its own a worker took
 
-static void keeper_start(void) {
+SN_HELD_STATIC static void keeper_start(void) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     wait_packet_create create = (wait_packet_create)(void *)GetProcAddress(ntdll, "NtCreateWaitCompletionPacket");
     associate = (wait_packet_associate)(void *)GetProcAddress(ntdll, "NtAssociateWaitCompletionPacket");
@@ -2114,7 +2279,7 @@ static void keeper_start(void) {
     }
 }
 
-static bool keeper_sleep(int64_t when, int64_t now) {
+SN_HELD_STATIC static bool keeper_sleep(int64_t when, int64_t now) {
     HANDLE port = sn_net_port();
     DWORD wait = INFINITE; // a deadline the timer cannot keep is kept by the wait's own, to the millisecond
     if (when != INT64_MAX) {
@@ -2154,7 +2319,7 @@ static bool keeper_sleep(int64_t when, int64_t now) {
 
 static inline void sched_ready(void);
 
-void *sn_wait_packet_make(void *target, uintptr_t key, void *context) {
+SN_HELD void *sn_wait_packet_make(void *target, uintptr_t key, void *context) {
     sched_ready();
     HANDLE packet = NULL;
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -2181,14 +2346,14 @@ void *sn_wait_packet_make(void *target, uintptr_t key, void *context) {
     return packet;
 }
 
-void sn_wait_packet_free(void *packet) {
+SN_HELD void sn_wait_packet_free(void *packet) {
     cancel(packet, TRUE);
     CloseHandle(packet);
 }
 
-static void keeper_rouse(void) { PostQueuedCompletionStatus(sn_net_port(), 0, SN_KEY_WAKE, NULL); }
+SN_HELD_STATIC static void keeper_rouse(void) { PostQueuedCompletionStatus(sn_net_port(), 0, SN_KEY_WAKE, NULL); }
 
-void sn_keeper_packet(uintptr_t key) {
+SN_HELD void sn_keeper_packet(uintptr_t key) {
     if (atomic_load(&keeper_asleep)) {
         PostQueuedCompletionStatus(sn_net_port(), 0, key, NULL);
     }
@@ -2196,7 +2361,7 @@ void sn_keeper_packet(uintptr_t key) {
 #elif defined(__APPLE__)
 static int keeper_queue = -1;
 
-static void keeper_start(void) {
+SN_HELD_STATIC static void keeper_start(void) {
     keeper_queue = kqueue();
     int poller = sn_net_poller();
     struct kevent ev[2];
@@ -2208,7 +2373,7 @@ static void keeper_start(void) {
     }
 }
 
-static bool keeper_sleep(int64_t when, int64_t now) {
+SN_HELD_STATIC static bool keeper_sleep(int64_t when, int64_t now) {
     sn_qlock_give(&idle_mu);
     struct kevent ev, got[3];
     EV_SET(&ev, keeper_timer, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS | NOTE_CRITICAL, when - now, NULL);
@@ -2223,7 +2388,7 @@ static bool keeper_sleep(int64_t when, int64_t now) {
     return sockets;
 }
 
-static void keeper_rouse(void) {
+SN_HELD_STATIC static void keeper_rouse(void) {
     struct kevent ev;
     EV_SET(&ev, keeper_user, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
     (void)kevent(keeper_queue, &ev, 1, NULL, 0, NULL);
@@ -2237,7 +2402,7 @@ static void keeper_rouse(void) {
 static int keeper_set = -1, keeper_event = -1, keeper_clock = -1;
 static int64_t keeper_armed = INT64_MAX; // the deadline keeper_clock is set to, under idle_mu
 
-static void keeper_start(void) {
+SN_HELD_STATIC static void keeper_start(void) {
     keeper_set = epoll_create1(EPOLL_CLOEXEC);
     keeper_event = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     keeper_clock = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
@@ -2253,7 +2418,7 @@ static void keeper_start(void) {
     }
 }
 
-static bool keeper_sleep(int64_t when, int64_t now) {
+SN_HELD_STATIC static bool keeper_sleep(int64_t when, int64_t now) {
     (void)now;
     if (when != keeper_armed) {
         int64_t at = when == INT64_MAX
@@ -2287,7 +2452,7 @@ static bool keeper_sleep(int64_t when, int64_t now) {
     return sockets;
 }
 
-static void keeper_rouse(void) {
+SN_HELD_STATIC static void keeper_rouse(void) {
     uint64_t one = 1;
     (void)write(keeper_event, &one, sizeof one);
 }
@@ -2296,7 +2461,7 @@ static void keeper_rouse(void) {
 // keeper_wait is the keeper's wait until when, the greatest time for
 // none; now is the clock's reading a moment ago. It reports whether the
 // sockets' poller holds events.
-static bool keeper_wait(int64_t when, int64_t now) {
+SN_HELD_STATIC static bool keeper_wait(int64_t when, int64_t now) {
     atomic_store(&keeper_woken, false);
     if (when - now > keeper_near) {
         return keeper_sleep(when, now);
@@ -2315,7 +2480,7 @@ static bool keeper_wait(int64_t when, int64_t now) {
 // found a keeper. wake_at is the least time from here until the keeper
 // has the lock again, so that no one who starts a timer meanwhile wakes
 // it twice: it is on its way to read the deadlines.
-static void keeper_wake(void) {
+SN_HELD_STATIC static void keeper_wake(void) {
     if (atomic_load(&keeper_woken)) {
         return;
     }
@@ -2325,8 +2490,510 @@ static void keeper_wake(void) {
     keeper_rouse();
 }
 
-// The monitor thread watches the workers for the one thing a scheduler
-// without preemption cannot leave to them. A task woken by a running
+// Preemption. A task that has held its worker for held_limit while a
+// task waits is taken off it, at a point outside the runtime's held
+// section, its registers saved as the system itself saved them, and
+// put on the displaced queue; the worker runs the next task, and
+// whichever worker takes the preempted task has its registers put back
+// and runs it from where it was interrupted. Only a task that holds a
+// core that long ever pays: nothing is added to the program's code or
+// to a switch, and a preemption costs a signal and two copies.
+//
+// On Linux and macOS the monitor sends the worker's thread
+// preempt_signal, whose handler runs on a signal stack of the worker's,
+// so that a task's small stack never holds a signal frame. The handler
+// copies the interrupted context, every register and the vector unit's
+// state as the kernel keeps them for its own return, into a block of
+// the task's own, and returns into preempt_land, on the block's landing
+// stack, which marks the task preempted and switches to the scheduler
+// as a park does. When a worker runs the task again, the landing
+// resumes, raises the signal at itself, and the handler puts the saved
+// context in the place of the live one, so that the kernel's return
+// restores the task where it was interrupted, on its own stack, with
+// its errno; the context is never read or written by the runtime's own
+// code, only moved whole, so whatever state the kernel saves is kept.
+// On Windows the monitor suspends the thread, reads its context, sets
+// one that runs preempt_land, and resumes it; the landing restores the
+// context itself, RtlRestoreContext, after the stack's bounds in the
+// thread's information block, which the switch keeps there too.
+//
+// A point is safe when the program counter lies in the executable's
+// own text, so never in the C library, where a task interrupted inside
+// malloc would keep its lock on a thread that runs other tasks, and
+// outside the runtime's held section (internal.h, SN_HELD), where every
+// function that holds a lock, reads the thread's own state or switches
+// is, so that a task resumed on another thread holds nothing of the one
+// it left; the sections' addresses are read once, as the scheduler
+// starts. Go's runtime decides the same way, by its safe points, with
+// its own functions none. A point that is not safe is left as it is,
+// and the monitor tries again at its next look.
+static uintptr_t text_start, text_end; // the program's own code, where a task may be preempted
+static uintptr_t held_start, held_end; // the runtime's held section within it, where it may not
+#if defined(__APPLE__)
+static _Atomic size_t context_size; // the size of the machine context of the first thread preempted
+#endif
+
+SN_HELD_STATIC static bool preempt_safe(uintptr_t pc) {
+    return pc >= text_start && pc < text_end && (pc < held_start || pc >= held_end);
+}
+
+#if defined(_WIN32)
+// The held section's bounds on Windows: the linker lays the .text$
+// sections out in the order of their names, so a function first in
+// .text$sn_held_a and one in .text$sn_held_z bound the functions in
+// .text$sn_held_m between them.
+__attribute__((section(".text$sn_held_a"), used)) static void held_first(void) {}
+__attribute__((section(".text$sn_held_z"), used)) static void held_last(void) {}
+
+SN_HELD_STATIC static void preempt_start(void) {
+    uint8_t *image = (uint8_t *)GetModuleHandleW(NULL);
+    IMAGE_NT_HEADERS *headers = (IMAGE_NT_HEADERS *)(image + ((IMAGE_DOS_HEADER *)image)->e_lfanew);
+    text_start = (uintptr_t)image;
+    text_end = text_start + headers->OptionalHeader.SizeOfImage;
+    held_start = (uintptr_t)held_first;
+    held_end = (uintptr_t)held_last;
+}
+
+SN_HELD_STATIC static void preempt_thread_start(worker *w) {
+    HANDLE thread;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+        sn_panic(SN_STR("cannot start a thread", 21));
+    }
+
+    atomic_store(&w->teb, NtCurrentTeb());
+    atomic_store(&w->thread, thread);
+}
+
+// teb_bounds reads the bounds of the stack a thread is on from its
+// information block, and teb_set_bounds writes them.
+SN_HELD_STATIC static sn_stack_bounds teb_bounds(uint8_t *teb) {
+    sn_stack_bounds b;
+    memcpy(&b.base, teb + teb_stack_base, sizeof b.base);
+    memcpy(&b.limit, teb + teb_stack_limit, sizeof b.limit);
+    memcpy(&b.reservation, teb + teb_deallocation_stack, sizeof b.reservation);
+    return b;
+}
+
+SN_HELD_STATIC static void teb_set_bounds(uint8_t *teb, sn_stack_bounds b) {
+    memcpy(teb + teb_stack_base, &b.base, sizeof b.base);
+    memcpy(teb + teb_stack_limit, &b.limit, sizeof b.limit);
+    memcpy(teb + teb_deallocation_stack, &b.reservation, sizeof b.reservation);
+}
+#else
+#if defined(__APPLE__)
+SN_HELD_STATIC static void preempt_text_init(void) {
+    unsigned long size = 0;
+    uint8_t *start = getsegmentdata(&_mh_execute_header, "__TEXT", &size);
+    text_start = (uintptr_t)start;
+    text_end = text_start + size;
+    start = getsectiondata(&_mh_execute_header, "__TEXT", "__sn_held", &size);
+    held_start = (uintptr_t)start;
+    held_end = held_start + size;
+}
+#else
+extern char __start_sn_held[], __stop_sn_held[]; // the linker's, around the section
+
+// preempt_text_segment takes the program's own executable segments from
+// the first object dl_iterate_phdr reports, which is the program itself,
+// and stops the walk there.
+SN_HELD_STATIC static int preempt_text_segment(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    (void)data;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *h = &info->dlpi_phdr[i];
+        if (h->p_type == PT_LOAD && (h->p_flags & PF_X) != 0) {
+            uintptr_t lo = info->dlpi_addr + h->p_vaddr, hi = lo + h->p_memsz;
+            if (text_start == 0 || lo < text_start) {
+                text_start = lo;
+            }
+
+            if (hi > text_end) {
+                text_end = hi;
+            }
+        }
+    }
+
+    return 1;
+}
+
+SN_HELD_STATIC static void preempt_text_init(void) {
+    dl_iterate_phdr(preempt_text_segment, NULL);
+    held_start = (uintptr_t)__start_sn_held;
+    held_end = (uintptr_t)__stop_sn_held;
+}
+#endif
+
+#if defined(__linux__) && defined(__x86_64__)
+// fp_image_size is the size of the floating-point image a signal frame
+// holds at fpregs: the whole extended image when the kernel marked one,
+// FXSAVE's 512 bytes otherwise.
+SN_HELD_STATIC static size_t fp_image_size(const void *fpregs) {
+    uint32_t magic, extended;
+    memcpy(&magic, (const uint8_t *)fpregs + fp_sw_reserved, sizeof magic);
+    memcpy(&extended, (const uint8_t *)fpregs + fp_sw_reserved + sizeof magic, sizeof extended);
+    return magic == fp_xstate_magic ? extended : fp_image_bytes;
+}
+#endif
+
+#if defined(__linux__) && defined(__aarch64__)
+// context_outside reports whether the kernel put part of the vector
+// unit's state outside the frame, which it does when the state is too
+// large for the frame's reserved room, as a very wide SVE or SME state
+// is, and marks with a record of context_extra_magic among the records
+// there: a copy of the frame would not carry it, so such a point is
+// left as it is.
+SN_HELD_STATIC static bool context_outside(const mcontext_t *mc) {
+    const uint8_t *p = mc->__reserved, *end = p + sizeof mc->__reserved;
+    while (p + 2 * sizeof(uint32_t) <= end) {
+        uint32_t magic, size;
+        memcpy(&magic, p, sizeof magic);
+        memcpy(&size, p + sizeof magic, sizeof size);
+        if (magic == 0 || size < 2 * sizeof(uint32_t)) {
+            return false;
+        }
+
+        if (magic == context_extra_magic) {
+            return true;
+        }
+
+        p += size;
+    }
+
+    return false;
+}
+#endif
+
+#if defined(__APPLE__) && defined(__arm64e__)
+#error "the Snello runtime restores a preempted task's registers as plain pointers, which arm64e signs"
+#endif
+
+// context_pc is the program counter of an interrupted context.
+SN_HELD_STATIC static uintptr_t context_pc(const ucontext_t *uc) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    return (uintptr_t)uc->uc_mcontext->__ss.__pc;
+#elif defined(__APPLE__)
+    return (uintptr_t)uc->uc_mcontext->__ss.__rip;
+#elif defined(__aarch64__)
+    return (uintptr_t)uc->uc_mcontext.pc;
+#else
+    return (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+#endif
+}
+
+// context_save copies the interrupted context into the block, whole,
+// and reports whether the block had room for what the kernel saved.
+SN_HELD_STATIC static bool context_save(preempt_block *b, const ucontext_t *uc) {
+#if defined(__APPLE__)
+    // The context's form is the thread's, and on x86-64 a thread that
+    // has used wide vector registers gets a larger one: a task is
+    // preempted only on a thread whose form is the first one seen, so
+    // that it is restored into a frame of the same size.
+    size_t expected = 0;
+    if (!atomic_compare_exchange_strong(&context_size, &expected, uc->uc_mcsize) && expected != uc->uc_mcsize) {
+        return false;
+    }
+
+    if (uc->uc_mcsize > sizeof b->context) {
+        return false;
+    }
+
+    b->size = uc->uc_mcsize;
+    memcpy(b->context, uc->uc_mcontext, uc->uc_mcsize);
+#elif defined(__aarch64__)
+    if (context_outside(&uc->uc_mcontext)) {
+        return false;
+    }
+
+    b->context = uc->uc_mcontext;
+#else
+    if (uc->uc_mcontext.fpregs == NULL) {
+        return false;
+    }
+
+    size_t size = fp_image_size(uc->uc_mcontext.fpregs);
+    if (size > sizeof b->fp) {
+        return false;
+    }
+
+    memcpy(b->regs, uc->uc_mcontext.gregs, sizeof b->regs);
+    b->fp_size = size;
+    memcpy(b->fp, uc->uc_mcontext.fpregs, size);
+#endif
+    return true;
+}
+
+// context_restore puts the block's context in the place of the live
+// one, which the kernel returns into.
+SN_HELD_STATIC static void context_restore(const preempt_block *b, ucontext_t *uc) {
+#if defined(__APPLE__)
+    if (uc->uc_mcsize != b->size) { // a frame of another form, which the save holds off: never
+        static const char message[] = "fatal error: a preempted task's registers cannot be put back\n";
+        (void)write(2, message, sizeof message - 1);
+        abort();
+    }
+
+    memcpy(uc->uc_mcontext, b->context, b->size);
+#elif defined(__aarch64__)
+    uc->uc_mcontext = b->context;
+#else
+    memcpy(uc->uc_mcontext.gregs, b->regs, sizeof b->regs);
+    memcpy(uc->uc_mcontext.fpregs, b->fp, b->fp_size);
+#endif
+}
+
+// context_land makes the live context return into fn(t) on the stack
+// whose top is top: the frame and link registers cleared, so that a
+// walk of the frames ends there, and on x86-64 a return address of
+// zero pushed, so that fn begins as a called function does.
+SN_HELD_STATIC static void context_land(ucontext_t *uc, void (*fn)(task *), uint8_t *top, task *t) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)fn;
+    uc->uc_mcontext->__ss.__sp = (uint64_t)(uintptr_t)top;
+    uc->uc_mcontext->__ss.__x[0] = (uint64_t)(uintptr_t)t;
+    uc->uc_mcontext->__ss.__fp = 0;
+    uc->uc_mcontext->__ss.__lr = 0;
+#elif defined(__APPLE__)
+    memset(top - sizeof(void *), 0, sizeof(void *));
+    uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)fn;
+    uc->uc_mcontext->__ss.__rsp = (uint64_t)(uintptr_t)(top - sizeof(void *));
+    uc->uc_mcontext->__ss.__rdi = (uint64_t)(uintptr_t)t;
+    uc->uc_mcontext->__ss.__rbp = 0;
+#elif defined(__aarch64__)
+    uc->uc_mcontext.pc = (uintptr_t)fn;
+    uc->uc_mcontext.sp = (uintptr_t)top;
+    uc->uc_mcontext.regs[0] = (uintptr_t)t;
+    uc->uc_mcontext.regs[29] = 0;
+    uc->uc_mcontext.regs[30] = 0;
+#else
+    memset(top - sizeof(void *), 0, sizeof(void *));
+    uc->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)fn;
+    uc->uc_mcontext.gregs[REG_RSP] = (greg_t)(uintptr_t)(top - sizeof(void *));
+    uc->uc_mcontext.gregs[REG_RDI] = (greg_t)(uintptr_t)t;
+    uc->uc_mcontext.gregs[REG_RBP] = 0;
+#endif
+}
+
+static void preempt_land(task *t);
+static void preempt_release(worker *w, task *t, preempt_block *b);
+
+// preempt_handler is the signal's handler, on the worker's signal
+// stack. Asked to restore, it puts the task's saved context in the
+// live one's place. Otherwise it leaves the task at a safe point, as
+// the comment above says, and at no other: the monitor looks again.
+// A worker whose scheduler context is not made yet, the main thread
+// before its first spawn or park, has nothing to switch to.
+SN_HELD_STATIC static void preempt_handler(int sig, siginfo_t *info, void *context) {
+    (void)sig;
+    (void)info;
+    int saved = errno;
+    ucontext_t *uc = context;
+    worker *w = self_worker;
+    task *t = current;
+    preempt_block *b = t != NULL ? atomic_load_explicit(&t->preempt, memory_order_relaxed) : NULL;
+    if (b != NULL && b->restoring) { // the landing's own signal: the task resumes where it was interrupted
+        b->restoring = false;
+        context_restore(b, uc);
+        errno = b->saved_errno;
+        preempt_release(w, t, b); // its landing stack is done with: the frames left there are never returned to
+        return;
+    }
+
+    if (w == NULL || t == NULL || w->sched_sp == NULL || !preempt_safe(context_pc(uc)) ||
+        (atomic_load(&t->state) & ~WOKEN) != RUNNING) {
+        errno = saved;
+        return;
+    }
+
+    if (b == NULL) {
+        b = atomic_exchange(&w->spare, NULL); // the monitor keeps one ready for the worker
+        if (b == NULL) {
+            errno = saved;
+            return;
+        }
+
+        atomic_store_explicit(&t->preempt, b, memory_order_relaxed); // the task's from here, and still its when the
+    } // save below fails: the monitor makes a new spare
+
+    if (!context_save(b, uc)) {
+        errno = saved;
+        return;
+    }
+
+    b->saved_errno = saved;
+    context_land(uc, preempt_land, b->landing + landing_bytes, t);
+    atomic_fetch_add_explicit(&preempted, 1, memory_order_relaxed);
+}
+
+SN_HELD_STATIC static void preempt_start(void) {
+    preempt_text_init();
+    struct sigaction action;
+    memset(&action, 0, sizeof action);
+    action.sa_sigaction = preempt_handler;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+    sigemptyset(&action.sa_mask);
+    sigaction(preempt_signal, &action, NULL);
+}
+
+SN_HELD_STATIC static void preempt_thread_start(worker *w) {
+    atomic_store(&w->thread, pthread_self());
+    stack_t ss = { .ss_sp = malloc(signal_stack_bytes), .ss_size = signal_stack_bytes, .ss_flags = 0 };
+    if (ss.ss_sp == NULL || sigaltstack(&ss, NULL) != 0) {
+        sn_panic(SN_STR("cannot start a thread", 21));
+    }
+}
+#endif
+
+// preempt_spare keeps a block ready for the worker, made by the monitor
+// so that the preemption, which may allocate nothing, has one to take.
+SN_HELD_STATIC static bool preempt_spare(worker *w) {
+    if (atomic_load(&w->spare) != NULL) {
+        return true;
+    }
+
+    size_t size = (sizeof(preempt_block) + SN_CACHE_LINE - 1) & ~(size_t)(SN_CACHE_LINE - 1); // what the aligned
+                                                                                              // allocation asks
+    preempt_block *b = sn_aligned_alloc(SN_CACHE_LINE, size);
+    if (b == NULL) {
+        return false;
+    }
+
+    memset(b, 0, offsetof(preempt_block, landing)); // the landing stack is written as it is used
+    preempt_block *none = NULL;
+    if (!atomic_compare_exchange_strong(&w->spare, &none, b)) {
+        sn_aligned_free(b);
+    }
+
+    return true;
+}
+
+// preempt_release takes the block off a task that has its registers
+// back: kept for the worker's next preemption when it has no block
+// ready, and otherwise left on the task, to be freed when the task
+// ends, since the handler, where the release runs on Linux and macOS,
+// may free nothing. A task is so left holding a block only while its
+// worker holds one too.
+SN_HELD_STATIC static void preempt_release(worker *w, task *t, preempt_block *b) {
+    preempt_block *none = NULL;
+    if (atomic_compare_exchange_strong(&w->spare, &none, b)) {
+        atomic_store_explicit(&t->preempt, NULL, memory_order_relaxed);
+    }
+}
+
+// preempt_restore puts a preempted task's registers back: through the
+// signal's handler on Linux and macOS, through RtlRestoreContext on
+// Windows, with the stack's bounds and the last error put back first,
+// from a copy of the worker's own, so that the block may be released
+// before the landing stack in it is left.
+SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
+    preempt_block *b = atomic_load_explicit(&t->preempt, memory_order_relaxed);
+#if defined(_WIN32)
+    worker *w = self_worker;
+    teb_set_bounds((uint8_t *)NtCurrentTeb(), b->bounds);
+    SetLastError(b->last_error);
+    w->restoring = b->context;
+    preempt_release(w, t, b); // the landing stack is left by the restore and never returned to
+    RtlRestoreContext(&w->restoring, NULL);
+#else
+    b->restoring = true;
+    raise(preempt_signal);
+#endif
+    abort(); // the registers were put back, and the task went on from where it was interrupted
+}
+
+// preempt_land is where a preempted task's thread lands, on the task's
+// landing stack with the registers saved: the task is marked preempted
+// and the thread switches to the scheduler, which queues it. When a
+// worker runs the task again its landing resumes here and has the
+// registers put back.
+SN_HELD_STATIC static void preempt_land(task *t) {
+    int s = atomic_load(&t->state);
+    while (!atomic_compare_exchange_weak(&t->state, &s, PREEMPTED | (s & WOKEN))) { // a wake kept stays kept
+    }
+
+    worker *w = my_worker();
+    w->last = t;
+    sn_switch(&t->sp, w->sched_sp);
+    preempt_restore(t);
+}
+
+#if defined(_WIN32)
+// preempt_worker suspends the worker's thread and, when its task is at
+// a safe point, saves the task's context and the stack's bounds, sets
+// a context that runs preempt_land on the landing stack, and resumes
+// the thread; otherwise the thread goes on as it was. The task is read
+// while the thread is suspended: its record is freed on that thread
+// alone, after it has switched away.
+SN_HELD_STATIC static void preempt_worker(worker *w) {
+    w->preempt_tries++; // an attempt, whether or not it can be made: a worker never asked would never get a thread
+    HANDLE thread = atomic_load(&w->thread);
+    uint8_t *teb = atomic_load(&w->teb);
+    if (thread == NULL || !preempt_spare(w) || SuspendThread(thread) == (DWORD)-1) {
+        return; // a worker added has its thread once the thread has started
+    }
+
+    _Alignas(16) CONTEXT live;
+    memset(&live, 0, sizeof live);
+    live.ContextFlags = CONTEXT_ALL;
+    task *t = w->last;
+    if (!GetThreadContext(thread, &live) || t == NULL || w->sched_sp == NULL ||
+#if defined(__x86_64__)
+        !preempt_safe((uintptr_t)live.Rip) ||
+#else
+        !preempt_safe((uintptr_t)live.Pc) ||
+#endif
+        (atomic_load(&t->state) & ~WOKEN) != RUNNING) {
+        ResumeThread(thread);
+        return;
+    }
+
+    preempt_block *b = atomic_load_explicit(&t->preempt, memory_order_relaxed);
+    if (b == NULL) {
+        b = atomic_exchange(&w->spare, NULL);
+        atomic_store_explicit(&t->preempt, b, memory_order_relaxed);
+    }
+
+    b->context = live;
+    b->bounds = teb_bounds(teb);
+    memcpy(&b->last_error, teb + teb_last_error, sizeof b->last_error);
+    uint8_t *top = b->landing + landing_bytes;
+    CONTEXT land = live;
+#if defined(__x86_64__)
+    memset(top - 5 * sizeof(void *), 0, sizeof(void *)); // a return address of zero above the home space
+    land.Rip = (DWORD64)(uintptr_t)preempt_land;
+    land.Rsp = (DWORD64)(uintptr_t)(top - 5 * sizeof(void *));
+    land.Rcx = (DWORD64)(uintptr_t)t;
+    land.Rbp = 0;
+#else
+    land.Pc = (DWORD64)(uintptr_t)preempt_land;
+    land.Sp = (DWORD64)(uintptr_t)top;
+    land.X0 = (DWORD64)(uintptr_t)t;
+    land.Fp = 0;
+    land.Lr = 0;
+#endif
+    teb_set_bounds(teb, (sn_stack_bounds){ top, b->landing, b->landing });
+    if (!SetThreadContext(thread, &land)) { // the thread goes on as it was
+        teb_set_bounds(teb, b->bounds);
+    } else {
+        atomic_fetch_add_explicit(&preempted, 1, memory_order_relaxed);
+    }
+
+    ResumeThread(thread);
+}
+#else
+// preempt_worker asks the worker's thread to leave its task: a block is
+// made ready for the handler, and the thread is signalled.
+SN_HELD_STATIC static void preempt_worker(worker *w) {
+    w->preempt_tries++; // an attempt, whether or not it can be made: a worker never asked would never get a thread
+    pthread_t thread = atomic_load(&w->thread);
+    if (thread != 0 && preempt_spare(w)) { // a worker added has its thread once the thread has started
+        pthread_kill(thread, preempt_signal);
+    }
+}
+#endif
+
+// The monitor thread watches the workers for what they cannot see to
+// themselves while each runs a task. A task woken by a running
 // task goes in that worker's runnext slot, to run there when the
 // running task lets go, and no worker is woken for it, since a thread
 // woken for every hand-off is what the slot saves; Go's runtime wakes
@@ -2352,15 +3019,22 @@ static void keeper_wake(void) {
 // no one has since its last look, and queues what it finds, so that a
 // socket's task waits no longer than a stale slot's.
 //
-// The monitor also watches for every worker held: a task that never
-// lets go on each, computing or blocked in a read or a bound function,
-// with a task queued that none of them will come back for. It keeps,
-// for each worker, the time of its look that last found the worker
-// switched to a task, and when every worker has been on one task for
-// held_limit while a task is queued, it starts another worker, up to
-// workers_per_core a core, which takes the queued task; the system
-// then shares the processors between the threads. An added worker is
-// not ended: it waits when idle as the others do.
+// The monitor also watches for a worker held: a task that never lets
+// go, computing or blocked in a read or a bound function, with a task
+// queued that it will not come back for. It keeps, for each worker,
+// the time of its look that last found the worker switched to a task,
+// and once a worker has been on one task for held_limit while a task
+// is queued, it has the task taken off the worker, preempt_worker
+// below: a signal to the thread on Linux and macOS, a suspension on
+// Windows, which leaves the task at a safe point, and the worker runs
+// the queued task. A task blocked in a system call or a bound function
+// is at no safe point and never will be; when every worker has been
+// asked preempt_tries times and stays, the monitor starts another
+// worker, up to workers_per_core a core, which takes the queued task,
+// and the system shares the processors between the threads, as Go's
+// runtime hands a thread off from a goroutine blocked in a system
+// call. An added worker is not ended: it waits when idle as the others
+// do.
 static sn_mutex monitor_mu = SN_MUTEX_INIT;
 static sn_cond monitor_cond = SN_COND_INIT;
 
@@ -2370,7 +3044,7 @@ static sn_cond monitor_cond = SN_COND_INIT;
 // task has not let go in all that time. The task counts as moving from
 // before it leaves the slot until it is on the queue, so that
 // deadlocked never finds it in neither.
-static bool move_next(worker *w, uint64_t *seen) {
+SN_HELD_STATIC static bool move_next(worker *w, uint64_t *seen) {
     uint64_t switches = atomic_load_explicit(&w->switches, memory_order_relaxed);
     bool stale = switches == *seen;
     *seen = switches;
@@ -2388,7 +3062,7 @@ static bool move_next(worker *w, uint64_t *seen) {
     return t != NULL;
 }
 
-static void monitor_wake(void) {
+SN_HELD_STATIC static void monitor_wake(void) {
     sn_mutex_lock(&monitor_mu);
     sn_cond_signal(&monitor_cond);
     sn_mutex_unlock(&monitor_mu);
@@ -2397,7 +3071,7 @@ static void monitor_wake(void) {
 // monitor_poll looks at the sockets' poller for the monitor when no
 // one has since seen, the count of looks it read last, and reports
 // whether the look made a task runnable.
-static bool monitor_poll(uint64_t seen) {
+SN_HELD_STATIC static bool monitor_poll(uint64_t seen) {
     if (atomic_load_explicit(&polls, memory_order_relaxed) != seen || sn_net_waiting() == 0 || atomic_load(&keeping)) {
         return false;
     }
@@ -2416,7 +3090,7 @@ static bool monitor_poll(uint64_t seen) {
     return n > 0;
 }
 
-static void *monitor_main(void *arg) {
+SN_HELD_STATIC static void *monitor_main(void *arg) {
     (void)arg;
     int64_t pause = next_stale;
     uint64_t seen = 0;
@@ -2443,18 +3117,29 @@ static void *monitor_main(void *arg) {
         }
 
         int n = workers_now();
+        int64_t queued = queued_now();
         bool held = atomic_load(&hot.idle) == 0 && n < workers_most; // every worker busy, and room for one more
+        bool tried = true; // and every one asked preempt_tries times to leave its task, to no avail: blocked, not
+                           // computing, which no signal frees
         for (int i = 0; i < n; i++) {
             uint64_t before = switches[i];
             moved = move_next(&workers[i], &switches[i]) || moved;
             if (switches[i] != before || moved_at[i] == 0) {
                 moved_at[i] = now;
+                workers[i].preempt_tries = 0;
             }
 
-            held = held && now - moved_at[i] >= held_limit;
+            bool on = now - moved_at[i] >= held_limit;
+            held = held && on;
+            if (on && queued > 0 && workers[i].preempt_tries < preempt_tries) {
+                preempt_worker(&workers[i]); // leaves its task at a safe point, or not: the next look sees which
+                moved = true;
+            }
+
+            tried = tried && workers[i].preempt_tries >= preempt_tries;
         }
 
-        if (held && queued_now() > 0) {
+        if (held && tried && queued > 0) {
             add_worker();
             moved = true; // the next look comes soon: the new worker takes the queued task and slots may be stale
         }
@@ -2470,7 +3155,7 @@ static void *monitor_main(void *arg) {
 
 // sched_loop runs the worker: the next task, or the timers that are
 // due, a spin and then a wait for one.
-static void sched_loop(worker *w) {
+SN_HELD_STATIC static void sched_loop(worker *w) {
 #ifdef __linux__
     prctl(
         PR_SET_TIMERSLACK, 1UL, 0UL, 0UL,
@@ -2501,7 +3186,7 @@ static void sched_loop(worker *w) {
 
         if (look) {
             w->turns = outside_turns;
-            t = take_injected(w, false);
+            t = take_injected(w, false, true); // the displaced queue's turn
         }
 
         if (t == NULL) {
@@ -2643,8 +3328,9 @@ static void sched_loop(worker *w) {
     }
 }
 
-static void *worker_main(void *arg) {
+SN_HELD_STATIC static void *worker_main(void *arg) {
     self_worker = arg;
+    preempt_thread_start(self_worker);
     sched_loop(self_worker);
     return NULL;
 }
@@ -2652,13 +3338,13 @@ static void *worker_main(void *arg) {
 // sched_entry is where the main thread's scheduler context begins,
 // on the stack the main thread took when the main task first parked:
 // that park is settled first.
-static void sched_entry(void) {
+SN_HELD_STATIC static void sched_entry(void) {
     settle(self_worker);
     sched_loop(self_worker);
 }
 
 // start_thread starts a detached thread of the runtime's own.
-static void start_thread(void *(*main)(void *), void *arg) {
+SN_HELD_STATIC static void start_thread(void *(*main)(void *), void *arg) {
     if (!sn_thread_start(main, arg)) {
         sn_panic(SN_STR("cannot start a thread", 21));
     }
@@ -2670,7 +3356,7 @@ static void start_thread(void *(*main)(void *), void *arg) {
 // few processors by taskset or a container starts a worker for each
 // of those; the processors in the process's affinity mask on Windows;
 // the processors online on macOS.
-int64_t sn_cores(void) {
+SN_HELD int64_t sn_cores(void) {
     long n = 0;
 #if defined(_WIN32)
     // The processors in the process's affinity mask, in the group the
@@ -2705,7 +3391,7 @@ int64_t sn_cores(void) {
 // worker's address moves when one is added, and only the started ones
 // are written, so that the pages of the others stay untouched until
 // one is added.
-static void start(void) {
+SN_HELD_STATIC static void start(void) {
     sn_mutex_lock(&start_mu);
     if (!started) {
         int n = (int)sn_cores();
@@ -2724,6 +3410,8 @@ static void start(void) {
             self_worker = &workers[0]; // the main thread
         }
 
+        preempt_start();
+        preempt_thread_start(&workers[0]);
         for (int i = 0; i < n; i++) {
             workers[i].owes_at = INT64_MAX;
         }
@@ -2746,7 +3434,7 @@ static void start(void) {
 // first idle is counted against a count that holds it; a thread that
 // cannot start ends the program, as it does at start, so no counted
 // worker is ever missing.
-static void add_worker(void) {
+SN_HELD_STATIC static void add_worker(void) {
     int i = workers_now();
     workers[i].owes_at = INT64_MAX;
     sn_timers_add();
@@ -2763,7 +3451,7 @@ static void add_worker(void) {
 // and what sched_prepare calls, the threads' start and a guarded
 // stack's mapping, so counts against the bound of no task's small
 // stack.
-static void *sched_prepare(void *arg) {
+SN_HELD_STATIC static void *sched_prepare(void *arg) {
     (void)arg;
     if (!started) {
         start();
@@ -2795,11 +3483,13 @@ static inline void sched_ready(void) {
 // started before any task was spawned; sn_worker_index is the index of
 // the current thread's worker, which every thread that starts a timer
 // has.
-void sn_sched_start(void) { sched_ready(); }
+SN_HELD void sn_sched_start(void) { sched_ready(); }
 
-int64_t sn_worker_index(void) { return my_worker() - workers; }
+SN_HELD int64_t sn_worker_index(void) { return my_worker() - workers; }
 
-int64_t sn_sched_workers(void) { return workers_now(); }
+SN_HELD int64_t sn_sched_preempted(void) { return atomic_load_explicit(&preempted, memory_order_relaxed); }
+
+SN_HELD int64_t sn_sched_workers(void) { return workers_now(); }
 
 // sn_sched_timer_set has a worker keep time for a timer started at
 // when, if the keeper sleeps past it or there is none: the keeper reads
@@ -2810,7 +3500,7 @@ int64_t sn_sched_workers(void) { return workers_now(); }
 // tell: the first to wait reads the deadlines itself. A keeper that
 // watches the sockets alone waits with no deadline, wake_at the
 // greatest time, and is woken as any keeper is, not taken for none.
-void sn_sched_timer_set(int64_t when) {
+SN_HELD void sn_sched_timer_set(int64_t when) {
     int64_t kept = atomic_load(&wake_at);
     if (when >= kept || atomic_load(&hot.idle) == 0) {
         return;
@@ -2831,7 +3521,7 @@ void sn_sched_timer_set(int64_t when) {
 
 // sn_sched_owe notes a deadline the worker sees to once the task that
 // started it has parked: on its way to its next task, or in its wait.
-void sn_sched_owe(int64_t when) {
+SN_HELD void sn_sched_owe(int64_t when) {
     worker *w = my_worker();
     if (when < w->owes_at) {
         w->owes_at = when;
@@ -2841,7 +3531,7 @@ void sn_sched_owe(int64_t when) {
 // task_entry is where a task's context begins: the function with its
 // argument block, and then the switch back that run_task frees it
 // after. It never returns, since nothing called it.
-static void task_entry(void) {
+SN_HELD_STATIC static void task_entry(void) {
     task *t = my_task();
     t->run(t->arg);
     if (atomic_load_explicit(&t->scope.scope, memory_order_relaxed) != NULL || // the task's own word, which an Add
@@ -2858,7 +3548,7 @@ static void task_entry(void) {
 // the task can use, or on a guarded stack for SN_UNBOUNDED; the task is
 // in its spawner's scope, or, for a handle whose channel is done, in a
 // scope of its own under it, made when it is needed.
-static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
+SN_HELD_STATIC static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
     sched_ready();
 
     task *self = sn_self();
@@ -2935,18 +3625,18 @@ static void spawn(void (*run)(void *), const void *args, size_t size, uint32_t b
     }
 }
 
-void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound) {
+SN_HELD void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound) {
     spawn(run, args, size, bound, NULL);
 }
 
 // sn_spawn_handle starts a task for a handle, whose channel is done: the
 // task has a scope of its own, made when it is needed, which a group
 // that takes the handle takes in.
-void sn_spawn_handle(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
+SN_HELD void sn_spawn_handle(void (*run)(void *), const void *args, size_t size, uint32_t bound, sn_chan *done) {
     spawn(run, args, size, bound, done);
 }
 
-int64_t sn_tasks_running(void) {
+SN_HELD int64_t sn_tasks_running(void) {
     int64_t n = 0;
     for (int i = 0; i < workers_now(); i++) {
         n += atomic_load_explicit(&workers[i].running, memory_order_relaxed);
@@ -2961,7 +3651,7 @@ int64_t sn_tasks_running(void) {
 // consumed at once. The main task sleeping before any spawn starts the
 // workers, and the main thread's scheduler context is made the first
 // time the main task parks, if no spawn made it.
-void sn_park(void) {
+SN_HELD void sn_park(void) {
     task *t = sn_self();
     sched_ready();
     worker *w = my_worker();
@@ -2995,7 +3685,7 @@ void sn_park(void) {
 // task claimed. Between the two the task is the caller's alone: no one else
 // can run it, so what is on its stack stands, and a caller that claimed
 // under a lock of its own may queue once it has let the lock go.
-bool sn_wake_claim(sn_task *t) {
+SN_HELD bool sn_wake_claim(sn_task *t) {
     for (;;) {
         int s = atomic_load(&t->state);
         if (s == PARKED) {
@@ -3032,7 +3722,7 @@ bool sn_wake_claim(sn_task *t) {
     }
 }
 
-void sn_wake_queue(sn_task *t) {
+SN_HELD void sn_wake_queue(sn_task *t) {
     worker *w = my_worker();
     if (w != NULL) {
         put_next(w, t); // woken on a worker: it runs next there
@@ -3044,7 +3734,7 @@ void sn_wake_queue(sn_task *t) {
 // sn_handoff_wake wakes t through h, as internal.h says: waking while
 // the claim reads the task, woken once it is done with it, and the task
 // queued last, when the claim made it runnable.
-void sn_handoff_wake(sn_handoff *h, sn_task *t) {
+SN_HELD void sn_handoff_wake(sn_handoff *h, sn_task *t) {
     if (sn_handoff_claim(h, t)) {
         sn_wake_queue(t);
     }
@@ -3053,7 +3743,7 @@ void sn_handoff_wake(sn_handoff *h, sn_task *t) {
 // sn_handoff_claim is sn_handoff_wake's first half: it claims t through
 // h, and reports whether the caller is to queue it, which it may do
 // after the handoff says woken, since a task claimed runs nowhere.
-bool sn_handoff_claim(sn_handoff *h, sn_task *t) {
+SN_HELD bool sn_handoff_claim(sn_handoff *h, sn_task *t) {
     atomic_store_explicit(h, SN_HANDOFF_WAKING, memory_order_release);
     bool claimed = sn_wake_claim(t);
     atomic_store_explicit(h, SN_HANDOFF_WOKEN, memory_order_release);
@@ -3064,7 +3754,7 @@ bool sn_handoff_claim(sn_handoff *h, sn_task *t) {
 // done with it: parked while the handoff is open, since the wake is to
 // come, and spinning while the claim is at the task. A park that ends
 // for a wake kept from an earlier wait parks again.
-void sn_handoff_wait(sn_handoff *h) {
+SN_HELD void sn_handoff_wait(sn_handoff *h) {
     for (;;) {
         int at = atomic_load_explicit(h, memory_order_acquire);
         if (at == SN_HANDOFF_WOKEN) {
@@ -3081,7 +3771,7 @@ void sn_handoff_wait(sn_handoff *h) {
 
 // sn_wake makes a parked task runnable, or keeps the wake for a task
 // still running or parking.
-void sn_wake(sn_task *t) {
+SN_HELD void sn_wake(sn_task *t) {
     if (sn_wake_claim(t)) {
         sn_wake_queue(t);
     }
@@ -3093,7 +3783,7 @@ void sn_wake(sn_task *t) {
 // count it among the program's blocks. A panic unwinds the task it
 // happens in and no other, since the others are on other workers or
 // parked in the middle of their work.
-void sn_guard(void *p, void (*drop)(void *)) {
+SN_HELD void sn_guard(void *p, void (*drop)(void *)) {
     task *t = sn_self();
     if (t->nguards == t->guardcap) {
         if (t->guards == NULL) {
@@ -3123,7 +3813,7 @@ void sn_guard(void *p, void (*drop)(void *)) {
 // usually dropped in the reverse order of its registration, but a
 // temporary of a statement may be dropped after a variable the
 // statement declared.
-void sn_unguard(void *p) {
+SN_HELD void sn_unguard(void *p) {
     task *t = sn_self();
     for (int64_t i = t->nguards - 1; i >= 0; i--) {
         if (t->guards[i].p == p) {
@@ -3154,7 +3844,7 @@ void sn_unguard(void *p) {
 // the task is read after the jump: sn_panic wrote the message to the
 // caller's slot before it jumped, and a local of this frame changed
 // since the mark would be indeterminate to read.
-bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
+SN_HELD bool sn_catch(void (*fn)(void *), void *ctx, sn_string *msg, bool report) {
     task *t = sn_self();
     if (!report && t->trace == NULL) { // a catch that reports not is a test's runner's, which prints the trace itself
         t->trace = malloc(SN_TRACE_FRAMES * sizeof *t->trace);
@@ -3188,7 +3878,7 @@ static sn_cond lazy_cond = SN_COND_INIT;
 // lazy_abandon is the guard of an initializer that panics: the
 // variable is unmade again and whoever waits is woken, so that a later
 // use under a test makes it anew.
-static void lazy_abandon(void *p) {
+SN_HELD_STATIC static void lazy_abandon(void *p) {
     sn_lazy *o = p;
     sn_mutex_lock(&lazy_mu);
     __atomic_store_n(&o->state, 0, __ATOMIC_RELEASE);
@@ -3200,7 +3890,7 @@ static void lazy_abandon(void *p) {
 // sn_lazy_make is never inlined, so that the analysis of a linked
 // program finds its call of the initializer by its name and takes the
 // initializers the backends write for its targets.
-__attribute__((noinline)) void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name) {
+SN_HELD void sn_lazy_make(sn_lazy *o, void (*init)(void), const char *name) {
     task *self = sn_self();
     sn_mutex_lock(&lazy_mu);
     for (;;) {
@@ -3242,7 +3932,7 @@ __attribute__((noinline)) void sn_lazy_make(sn_lazy *o, void (*init)(void), cons
 // build's report of what was not released says.
 static _Atomic int64_t contained;
 
-int64_t sn_panics_contained(void) { return atomic_load(&contained); }
+SN_HELD int64_t sn_panics_contained(void) { return atomic_load(&contained); }
 
 // print_panic writes the panic's line on the standard error stream,
 // after what the program printed so far, in one piece: tasks on
@@ -3252,7 +3942,7 @@ int64_t sn_panics_contained(void) { return atomic_load(&contained); }
 // unwound when a drop of that unwinding panicked, and the trace of the
 // panicking task's frames, under the stream's lock, so that two tasks
 // failing at once do not interleave.
-static void print_panic(task *t, sn_string msg) {
+SN_HELD_STATIC static void print_panic(task *t, sn_string msg) {
     fflush(stdout);
     sn_lock_file(stderr);
     fputs("panic: ", stderr);
@@ -3287,7 +3977,7 @@ typedef struct {
 // one of its own and the guarded stack a panic moved it to, or on
 // Windows' x64 unwinds them from its registers, and keeps a copy for
 // the task when it keeps one.
-static void trace_fill(const panic_args *a) {
+SN_HELD_STATIC static void trace_fill(const panic_args *a) {
     task *t = a->t;
 #if defined(_WIN32) && defined(__x86_64__)
     sn_trace_unwind(a->regs); // from sn_panic's registers, through the image's unwind data, here on the panic's stack
@@ -3311,7 +4001,7 @@ static void trace_fill(const panic_args *a) {
 // sn_task_trace gives the frames of the running task's last panic,
 // kept under a catch that keeps them, and how many, for the test's
 // runner; none when the task keeps none.
-const uintptr_t *sn_task_trace(int *n) {
+SN_HELD const uintptr_t *sn_task_trace(int *n) {
     task *t = sn_self();
     *n = t->ntrace;
     return t->trace;
@@ -3324,7 +4014,7 @@ const uintptr_t *sn_task_trace(int *n) {
 // frames then grow down over whatever was left there. With no memory to
 // map it ends the process: the panic cannot be run, nor reported
 // through a mark, without a stack.
-static void *panic_stack(void *arg) {
+SN_HELD_STATIC static void *panic_stack(void *arg) {
     (void)arg;
     const char *failure = NULL;
     void *s = stack_new(my_worker(), guarded, &failure);
@@ -3342,7 +4032,7 @@ static void *panic_stack(void *arg) {
 // panic_unwind is the panic, on the stack sn_panic moved it to: to a
 // mark it unwinds and returns the mark, for sn_panic to jump to from
 // the task's own stack; with none it ends the process.
-static void *panic_unwind(void *arg) {
+SN_HELD_STATIC static void *panic_unwind(void *arg) {
     panic_args *a = arg;
     task *t = a->t;
     sn_string msg = a->msg;
@@ -3403,7 +4093,7 @@ static void *panic_unwind(void *arg) {
 // never counts against the bound of a task's stack, and the jump to a
 // mark is made from the task's own stack, up to a frame above it, as a
 // checking build of the C library requires of a jump.
-_Noreturn __attribute__((noinline)) void sn_panic(sn_string msg) {
+SN_HELD _Noreturn void sn_panic(sn_string msg) {
     // A thread of the runtime's own, the timers' or the poller's, has no
     // task and never jumps into the main task's mark.
     panic_args a = { .t = my_task(), .msg = msg, .fp = __builtin_frame_address(0) };

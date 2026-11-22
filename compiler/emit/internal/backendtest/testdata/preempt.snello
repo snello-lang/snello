@@ -1,0 +1,29 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Preemption: a task computing without ever waiting on every core and
+// as many again, with the main task sleeping meanwhile. The scheduler
+// takes a task off its worker for the main task's wake, which comes
+// within a few tens of milliseconds, where a worker held for good would
+// never have run it again. The program ends with the tasks still
+// computing, as a program ends when main returns.
+
+package main
+
+import ("fmt"; "os"; "time")
+
+func spin(seed int) {
+	x := seed
+	for {
+		x = (x*31 + 7) % 1000003
+		if x == -1 { fmt.Println(x) } // never: the loop is kept for its print
+	}
+}
+
+func main() {
+	for i := 0; i < 2*os.Cores(); i++ { spawn spin(i) }
+	start := time.Now()
+	time.Sleep(50 * time.Millisecond)
+	fmt.Println("main ran again", time.Since(start) < time.Second)
+}

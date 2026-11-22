@@ -26,14 +26,14 @@
 
 // sn_os_Cores is os.Cores: the processors the program may run on, the
 // count the scheduler starts a worker per.
-int64_t sn_os_Cores(void) { return sn_cores(); }
+SN_HELD int64_t sn_os_Cores(void) { return sn_cores(); }
 
 #if !defined(_WIN32) // the paths, the opens and the reads of Linux and macOS; os_windows.c has Windows'
 // cpath copies a Snello string into a C string for the system calls. A
 // string holding a zero byte cannot be a path: the system would stop
 // reading at the zero and open another file than the one named, so it
 // is refused as an invalid argument.
-static char *cpath(sn_string s) {
+SN_HELD_STATIC static char *cpath(sn_string s) {
     sn_check_string(s);
     if (memchr(s.ptr, 0, (size_t)s.len) != NULL) {
         errno = EINVAL;
@@ -50,7 +50,7 @@ static char *cpath(sn_string s) {
 // closed on exec, as Go opens every file, so that no program the
 // process starts inherits it. An open a signal interrupts, as one of a
 // FIFO may be, is asked again.
-static int sysopen(sn_string path, int flags) {
+SN_HELD_STATIC static int sysopen(sn_string path, int flags) {
     char *p = cpath(path);
     if (p == NULL) {
         return -1;
@@ -67,7 +67,7 @@ static int sysopen(sn_string path, int flags) {
 // sysread reads at most len bytes, asking again when a signal
 // interrupts the call, and returns what read returns, with errno set
 // on a failure.
-static ssize_t sysread(int fd, void *p, size_t len) {
+SN_HELD_STATIC static ssize_t sysread(int fd, void *p, size_t len) {
     ssize_t n;
     do {
         n = read(fd, p, len < SN_IO_MAX ? len : SN_IO_MAX);
@@ -79,7 +79,7 @@ static ssize_t sysread(int fd, void *p, size_t len) {
 // sn_io_reason is the system's text for an error number, with its
 // first letter in lower case, as Go words it; the library puts the
 // operation and the path in front.
-sn_string sn_io_reason(int64_t code) {
+SN_HELD sn_string sn_io_reason(int64_t code) {
 #if defined(_WIN32)
     const char *reason = sn_errno_text((int)code); // the C library's own wording differs from the other systems'
     if (reason == NULL) {
@@ -103,7 +103,7 @@ sn_string sn_io_reason(int64_t code) {
 // connection refused, 5 for one reset, 6 for one timed out, 7 for a
 // pipe whose reader is gone, 8 for a call the task's cancel ended, 0
 // for the rest.
-int64_t sn_io_kindOf(int64_t code) {
+SN_HELD int64_t sn_io_kindOf(int64_t code) {
     switch ((int)code) {
     case ENOENT:
         return 1;
@@ -138,7 +138,7 @@ int64_t sn_io_kindOf(int64_t code) {
 //
 // sn_os_readToString is os.ReadToString: the string owns that block,
 // with no copy.
-static int64_t read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
+SN_HELD_STATIC static int64_t read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
     *inRead = 0;
     int fd = sysopen(path, O_RDONLY);
     if (fd < 0) {
@@ -177,7 +177,7 @@ static int64_t read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
     return 0;
 }
 
-int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
+SN_HELD int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
     sn_slice buf = { 0 };
     int64_t code = read_whole(path, &buf, inRead);
     if (code != 0) {
@@ -191,7 +191,7 @@ int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
 
 // sn_os_readFile is os.ReadFile: the same read, into bytes the slice
 // owns.
-int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
+SN_HELD int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
     sn_slice buf = { 0 };
     int64_t code = read_whole(path, &buf, inRead);
     if (code != 0) {
@@ -203,7 +203,7 @@ int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
     return 0;
 }
 
-int64_t sn_os_open(sn_string path, int64_t *fd) {
+SN_HELD int64_t sn_os_open(sn_string path, int64_t *fd) {
     int f = sysopen(path, O_RDONLY);
     if (f < 0) {
         return errno;
@@ -213,7 +213,7 @@ int64_t sn_os_open(sn_string path, int64_t *fd) {
     return 0;
 }
 
-int64_t sn_os_create(sn_string path, int64_t *fd) {
+SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
     int f = sysopen(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (f < 0) {
         return errno;
@@ -230,7 +230,7 @@ int64_t sn_os_create(sn_string path, int64_t *fd) {
 // taken. On a failure out holds the name the error is about and op
 // the call that failed: mkdirtemp, or stat when dir itself is
 // missing, which Go's MkdirTemp reports by stating dir.
-static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
+SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR("mkdirtemp", 9);
     int64_t star = pattern.len;
@@ -284,7 +284,7 @@ static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_s
     return code;
 }
 
-int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
+SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     if (dir.len > 0) {
         return mkdir_temp(dir, pattern, out, op);
     }
@@ -297,7 +297,7 @@ int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_str
 
 // failed_at records, for a removal that failed, the entry it failed on
 // and the call that failed, named as Go's error names it, keeping errno.
-static int failed_at(const char *path, const char *op, sn_string *failed, sn_string *what) {
+SN_HELD_STATIC static int failed_at(const char *path, const char *op, sn_string *failed, sn_string *what) {
     int code = errno;
     sn_string_drop(failed);
     *failed = sn_string_clone(SN_STR(path, (int64_t)strlen(path)));
@@ -326,8 +326,8 @@ typedef struct {
 // is. unlinkat is tried first, since most entries are files, and only
 // its refusal makes the directory question worth a stat; an entry that
 // is already gone was removed by someone else, which is what was asked.
-static int remove_entry(int fd, const char *name, const char *path, int64_t len, sn_slice *levels, sn_string *failed,
-                        sn_string *op) {
+SN_HELD_STATIC static int remove_entry(int fd, const char *name, const char *path, int64_t len, sn_slice *levels,
+                                       sn_string *failed, sn_string *op) {
     if (unlinkat(fd, name, 0) == 0 || errno == ENOENT) {
         return 0;
     }
@@ -372,7 +372,7 @@ static int remove_entry(int fd, const char *name, const char *path, int64_t len,
 // something is read again, since a directory read while its entries go
 // may skip some, as Go's RemoveAll notes; one that stays full after a
 // pass that found nothing is the failure it reports.
-static int remove_top(sn_slice *levels, char *path, sn_string *failed, sn_string *op) {
+SN_HELD_STATIC static int remove_top(sn_slice *levels, char *path, sn_string *failed, sn_string *op) {
     level *top = &((level *)levels->ptr)[levels->len - 1];
     level *below = levels->len > 1 ? top - 1 : NULL;
     path[top->len] = '\0';
@@ -399,7 +399,7 @@ static int remove_top(sn_slice *levels, char *path, sn_string *failed, sn_string
 // them, rather than the path asked for. The walk is depth first over
 // the levels above, with the full path of the entry in hand kept in
 // full, the path asked for and then a slash and a name per level.
-int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
+SN_HELD int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
     char *p = cpath(path);
     if (p == NULL) {
         int code = errno;
@@ -454,7 +454,7 @@ int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
 // sn_os_remove removes a file or an empty directory, as Go's Remove
 // does: unlink first, then rmdir, and when both fail the error of the
 // one that fits, which rmdir's ENOTDIR on a file says.
-int64_t sn_os_remove(sn_string path) {
+SN_HELD int64_t sn_os_remove(sn_string path) {
     char *p = cpath(path);
     if (p == NULL) {
         return errno;
@@ -472,9 +472,9 @@ int64_t sn_os_remove(sn_string path) {
     return code;
 }
 
-int64_t sn_os_closeFile(int64_t fd) { return close((int)fd) == 0 ? 0 : errno; }
+SN_HELD int64_t sn_os_closeFile(int64_t fd) { return close((int)fd) == 0 ? 0 : errno; }
 
-int64_t sn_os_syncFile(int64_t fd) { return fsync((int)fd) == 0 ? 0 : errno; }
+SN_HELD int64_t sn_os_syncFile(int64_t fd) { return fsync((int)fd) == 0 ? 0 : errno; }
 
 // sn_os_seek moves the file's position as lseek does, whence one of
 // SEEK_SET, SEEK_CUR and SEEK_END, which io.SeekFrom's variants are in
@@ -484,7 +484,7 @@ int64_t sn_os_syncFile(int64_t fd) { return fsync((int)fd) == 0 ? 0 : errno; }
 // offset goes to lseek whole, so off_t must hold every int64_t.
 _Static_assert(sizeof(off_t) == sizeof(int64_t), "off_t is not 64 bits");
 
-int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
+SN_HELD int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
     static const int whences[] = { SEEK_SET, SEEK_CUR, SEEK_END };
     if (whence < 0 || whence > 2) {
         return EINVAL;
@@ -503,12 +503,12 @@ int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
 // sn_io_reserve makes room in b for n more bytes in one allocation:
 // io.ReadAll's slice of the exact length, before its blocks are copied
 // in.
-void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf, n); }
+SN_HELD void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf, n); }
 
 #if !defined(_WIN32) // the modes, the directories and the host of Linux and macOS; os_windows.c has Windows'
 // mode_from_sys is the os.FileMode of a file the system reports the mode
 // of, as Go's fillFileStatFromSys makes it.
-static uint32_t mode_from_sys(mode_t m) {
+SN_HELD_STATIC static uint32_t mode_from_sys(mode_t m) {
     uint32_t mode = (uint32_t)(m & 0777);
     switch (m & S_IFMT) {
     case S_IFBLK:
@@ -552,7 +552,7 @@ static uint32_t mode_from_sys(mode_t m) {
 
 // mode_to_sys is the mode the system takes for an os.FileMode a file or a
 // directory is made with, as Go's syscallMode makes it.
-static mode_t mode_to_sys(uint32_t perm) {
+SN_HELD_STATIC static mode_t mode_to_sys(uint32_t perm) {
     mode_t m = (mode_t)(perm & 0777);
     if (perm & SN_MODE_SETUID) {
         m |= S_ISUID;
@@ -572,7 +572,7 @@ static mode_t mode_to_sys(uint32_t perm) {
 // set_sticky gives a new file or directory its sticky bit where the
 // system drops it from the mode a file is made with, Darwin and the
 // BSDs, as Go's setStickyBit does after the make.
-static int set_sticky(const char *p) {
+SN_HELD_STATIC static int set_sticky(const char *p) {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
     struct stat st;
     if (stat(p, &st) != 0 || chmod(p, (st.st_mode & 07777) | S_ISVTX) != 0) {
@@ -588,8 +588,8 @@ static int set_sticky(const char *p) {
 // the size, the os.FileMode, the time of the last change in seconds and
 // nanoseconds since 1970, and the device and file numbers that say
 // whether two paths name one file.
-int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
-                   uint64_t *dev, uint64_t *ino) {
+SN_HELD int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
+                           uint64_t *dev, uint64_t *ino) {
     char *p = cpath(path);
     if (p == NULL) {
         return errno;
@@ -621,7 +621,7 @@ int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, i
 }
 
 // sn_os_mkdir is os.Mkdir.
-int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
+SN_HELD int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
     char *p = cpath(path);
     if (p == NULL) {
         return errno;
@@ -645,7 +645,7 @@ int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
 
 // sn_os_rename is the system's rename, which os.Rename calls once it
 // has refused a rename onto a directory.
-int64_t sn_os_rename(sn_string from, sn_string to) {
+SN_HELD int64_t sn_os_rename(sn_string from, sn_string to) {
     char *f = cpath(from);
     if (f == NULL) {
         return errno;
@@ -668,7 +668,7 @@ int64_t sn_os_rename(sn_string from, sn_string to) {
 }
 
 // sn_os_chdir is os.Chdir.
-int64_t sn_os_chdir(sn_string path) {
+SN_HELD int64_t sn_os_chdir(sn_string path) {
     char *p = cpath(path);
     if (p == NULL) {
         return errno;
@@ -681,7 +681,7 @@ int64_t sn_os_chdir(sn_string path) {
 
 // sn_os_getcwd asks the system for the current directory, in a block
 // that doubles while the path does not fit.
-int64_t sn_os_getcwd(sn_string *out) {
+SN_HELD int64_t sn_os_getcwd(sn_string *out) {
     size_t cap = 1024;
     for (;;) {
         char *p = sn_alloc(cap);
@@ -704,7 +704,7 @@ int64_t sn_os_getcwd(sn_string *out) {
 
 // sn_os_openFile is os.OpenFile. A flag the package does not name, or
 // both of O_WRONLY and O_RDWR, is an invalid argument.
-int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd) {
+SN_HELD int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd) {
     const int64_t known = SN_O_WRONLY | SN_O_RDWR | SN_O_APPEND | SN_O_CREATE | SN_O_EXCL | SN_O_SYNC | SN_O_TRUNC;
     if ((flag & ~known) != 0 || (flag & 3) == 3) {
         return EINVAL;
@@ -752,7 +752,7 @@ int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd)
 // On a failure op names the call that failed as Go's error names it:
 // open, or the read of the directory, which Go calls readdirent on
 // Linux and readdir on Darwin.
-int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
+SN_HELD int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
 #if defined(__APPLE__)
     const sn_string read_op = SN_STR("readdir", 7);
 #else
@@ -852,10 +852,10 @@ int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
 }
 
 // sn_os_Getpid is os.Getpid.
-int64_t sn_os_Getpid(void) { return (int64_t)getpid(); }
+SN_HELD int64_t sn_os_Getpid(void) { return (int64_t)getpid(); }
 
 // sn_os_hostname is os.Hostname: the name the system gives the machine.
-int64_t sn_os_hostname(sn_string *out) {
+SN_HELD int64_t sn_os_hostname(sn_string *out) {
     char name[256];
     if (gethostname(name, sizeof name) != 0) {
         return errno;
@@ -911,7 +911,7 @@ extern char **environ;
 // ASCII letters folded to lower case; env_fold folds a name's byte.
 static inline uint8_t env_fold(uint8_t c) { return c >= 'A' && c <= 'Z' ? (uint8_t)(c + ('a' - 'A')) : c; }
 
-static uint64_t env_hash(const uint8_t *key, int64_t n) {
+SN_HELD_STATIC static uint64_t env_hash(const uint8_t *key, int64_t n) {
     uint8_t few[64];
     uint8_t *folded = n <= (int64_t)sizeof few ? few : sn_alloc((size_t)n);
     for (int64_t i = 0; i < n; i++) {
@@ -926,7 +926,7 @@ static uint64_t env_hash(const uint8_t *key, int64_t n) {
     return h;
 }
 
-static bool env_same_key(const uint8_t *a, const uint8_t *b, int64_t n) {
+SN_HELD_STATIC static bool env_same_key(const uint8_t *a, const uint8_t *b, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
         if (env_fold(a[i]) != env_fold(b[i])) {
             return false;
@@ -943,14 +943,14 @@ static inline bool env_same_key(const uint8_t *a, const uint8_t *b, int64_t n) {
 #endif
 
 // env_key_len is the length of the key of KEY=VALUE, or -1 without an =.
-static int64_t env_key_len(sn_string kv) {
+SN_HELD_STATIC static int64_t env_key_len(sn_string kv) {
     const uint8_t *eq = memchr(kv.ptr, '=', (size_t)kv.len);
     return eq == NULL ? -1 : (int64_t)(eq - kv.ptr);
 }
 
 // env_find returns the slot of key in the index, or the slot to put it
 // in when it is not there, with found saying which.
-static int64_t env_find(const uint8_t *key, int64_t n, bool *found) {
+SN_HELD_STATIC static int64_t env_find(const uint8_t *key, int64_t n, bool *found) {
     int64_t mask = env.nslots - 1;
     int64_t at = (int64_t)(env_hash(key, n) & (uint64_t)mask);
     int64_t spare = -1;
@@ -980,7 +980,7 @@ static int64_t env_find(const uint8_t *key, int64_t n, bool *found) {
 // env_rebuild builds the index anew over the entries that hold a
 // variable, moved together first, with room for as many again when
 // they fill more than half of it.
-static void env_rebuild(void) {
+SN_HELD_STATIC static void env_rebuild(void) {
     int64_t live = 0;
     for (int64_t i = 0; i < env.len; i++) {
         if (env.entries[i].len > 0) {
@@ -1021,7 +1021,7 @@ static void env_rebuild(void) {
 
 // env_copy takes the process's environment, the entries with a key,
 // into the block.
-static void env_copy(void) {
+SN_HELD static void env_copy(void) {
     env.lock = sn_sync_newRwLock();
 #if defined(_WIN32)
     char **vars = sn_os_environ_utf8();
@@ -1063,7 +1063,7 @@ static inline void env_load(void) { sn_once_call(&env.once, env_copy); }
 
 // sn_os_lookupEnv is os.LookupEnv: the value of key, copied out, and
 // whether the variable is set.
-bool sn_os_lookupEnv(sn_string key, sn_string *value) {
+SN_HELD bool sn_os_lookupEnv(sn_string key, sn_string *value) {
     sn_check_string(key);
     env_load();
     if (key.len == 0) {
@@ -1087,7 +1087,7 @@ bool sn_os_lookupEnv(sn_string key, sn_string *value) {
 // sn_os_setenv is os.Setenv: an empty key, one holding an = or a zero
 // byte, and a value holding a zero byte are invalid arguments, as Go's
 // are.
-int64_t sn_os_setenv(sn_string key, sn_string value) {
+SN_HELD int64_t sn_os_setenv(sn_string key, sn_string value) {
     sn_check_string(key);
     sn_check_string(value);
     env_load();
@@ -1122,7 +1122,7 @@ int64_t sn_os_setenv(sn_string key, sn_string value) {
 }
 
 // sn_os_Unsetenv is os.Unsetenv.
-void sn_os_Unsetenv(sn_string key) {
+SN_HELD void sn_os_Unsetenv(sn_string key) {
     sn_check_string(key);
     env_load();
     if (key.len == 0) {
@@ -1148,7 +1148,7 @@ void sn_os_Unsetenv(sn_string key) {
 #if !defined(_WIN32) // os_windows.c has Windows'
 // sn_os_TempDir is os.TempDir: the directory for temporary files, the
 // TMPDIR of the environment, or /tmp when it is unset or empty.
-sn_string sn_os_TempDir(void) {
+SN_HELD sn_string sn_os_TempDir(void) {
     sn_string dir = { 0 };
     if (!sn_os_lookupEnv(SN_STR("TMPDIR", 6), &dir) || dir.len == 0) {
         sn_string_drop(&dir);
@@ -1164,7 +1164,7 @@ sn_string sn_os_TempDir(void) {
 // count, read under the lock so that it is the environment of one
 // moment. out is a
 // []string that holds nothing, whose layout is every slice's.
-void sn_os_environ(void *out) {
+SN_HELD void sn_os_environ(void *out) {
     sn_slice *vars = out;
     env_load();
     sn_sync_lockShared(env.lock);
@@ -1188,7 +1188,7 @@ void sn_os_environ(void *out) {
 
 // sn_os_env_free releases the copy of the environment, at the end of a
 // debug build, which counts every block.
-void sn_os_env_free(void) {
+SN_HELD void sn_os_env_free(void) {
     for (int64_t i = 0; i < env.len; i++) {
         sn_string_drop(&env.entries[i]);
     }
@@ -1217,20 +1217,20 @@ void sn_os_env_free(void) {
 // sn_os_write writes all of buf to the file and stores how much it
 // wrote: all of it, or on a failure, a disk that filled, what went
 // before it, which the library's Error carries as Go's Write returns it.
-int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
+SN_HELD int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
     sn_check_slice((sn_slice *)&buf);
     *n = sn_write_fd((int)fd, buf.ptr, buf.len);
     return *n < buf.len ? errno : 0;
 }
 
-int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n) {
+SN_HELD int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n) {
     sn_check_string(s);
     *n = sn_write_fd((int)fd, s.ptr, s.len);
     return *n < s.len ? errno : 0;
 }
 
 #if !defined(_WIN32) // os_windows.c has Windows'
-int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
+SN_HELD int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     sn_check_slice((sn_slice *)buf);
     ssize_t got = sysread((int)fd, buf->ptr, (size_t)buf->len);
     if (got < 0) {

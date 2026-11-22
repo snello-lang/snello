@@ -53,7 +53,7 @@ typedef struct {
 
 static const int64_t max_readers = (int64_t)1 << 30;
 
-static sn_lock *new_lock(bool rw) {
+SN_HELD_STATIC static sn_lock *new_lock(bool rw) {
     sn_lock *l = sn_alloc(sizeof *l);
     memset(l, 0, sizeof *l);
     l->rw = rw;
@@ -63,14 +63,14 @@ static sn_lock *new_lock(bool rw) {
 
 // The lock's memory is sn_alloc's, so a debug build reports a lock
 // that nothing freed.
-int64_t sn_sync_newLock(void) { return (int64_t)(intptr_t)new_lock(false); }
+SN_HELD int64_t sn_sync_newLock(void) { return (int64_t)(intptr_t)new_lock(false); }
 
-int64_t sn_sync_newRwLock(void) { return (int64_t)(intptr_t)new_lock(true); }
+SN_HELD int64_t sn_sync_newRwLock(void) { return (int64_t)(intptr_t)new_lock(true); }
 
 // sn_sync_freeLock frees the lock. The Mutex, RwLock or WaitGroup
 // counter that frees its lock owns it, the last handle in a WaitGroup's
 // case, so no task holds or waits on it by then.
-void sn_sync_freeLock(int64_t h) {
+SN_HELD void sn_sync_freeLock(int64_t h) {
     sn_lock *l = (sn_lock *)(intptr_t)h;
     sn_qlock_free(&l->mu);
     sn_free(l);
@@ -79,7 +79,7 @@ void sn_sync_freeLock(int64_t h) {
 // park_while parks the task while the word is 2, as a futex wait does:
 // the word is read under the queue's lock, which a waker takes too, so
 // a wake cannot fall between the read and the park.
-static void park_while(sn_lock *l) {
+SN_HELD_STATIC static void park_while(sn_lock *l) {
     sn_qlock_take(&l->mu);
     if (atomic_load(&l->state) != 2) {
         sn_qlock_give(&l->mu);
@@ -93,7 +93,7 @@ static void park_while(sn_lock *l) {
     sn_await_wait(&ws);
 }
 
-static void wake_one(sn_lock *l) {
+SN_HELD_STATIC static void wake_one(sn_lock *l) {
     sn_qlock_take(&l->mu);
     sn_waiter *w = sn_dequeue(&l->lockq);
     sn_task *woken = w != NULL ? sn_finish_wait(w, true) : NULL;
@@ -103,7 +103,7 @@ static void wake_one(sn_lock *l) {
 
 // sync_spin waits a little for a lock held by a running task, and returns
 // the word as it last read it.
-static int32_t sync_spin(sn_lock *l) {
+SN_HELD_STATIC static int32_t sync_spin(sn_lock *l) {
     int32_t s = atomic_load_explicit(&l->state, memory_order_relaxed);
     for (int i = 0; i < 100 && s == 1; i++) {
         sn_spin_hint();
@@ -113,7 +113,7 @@ static int32_t sync_spin(sn_lock *l) {
     return s;
 }
 
-static void mutex_lock(sn_lock *l) {
+SN_HELD_STATIC static void mutex_lock(sn_lock *l) {
     int32_t s = 0;
     if (atomic_compare_exchange_strong_explicit(&l->state, &s, 1, memory_order_acquire, memory_order_relaxed)) {
         return;
@@ -136,7 +136,7 @@ static void mutex_lock(sn_lock *l) {
     }
 }
 
-static void mutex_unlock(sn_lock *l) {
+SN_HELD_STATIC static void mutex_unlock(sn_lock *l) {
     if (atomic_exchange_explicit(&l->state, 0, memory_order_release) == 2) {
         wake_one(l);
     }
@@ -148,7 +148,7 @@ static void mutex_unlock(sn_lock *l) {
 // the queue's lock: a waiter counts itself before it looks at the
 // units, and a release adds its unit before it looks at nwait, so one
 // of the two sees the other.
-static bool sema_try(semaphore *s) {
+SN_HELD_STATIC static bool sema_try(semaphore *s) {
     int64_t c = atomic_load(&s->count);
     while (c > 0) {
         if (atomic_compare_exchange_weak(&s->count, &c, c - 1)) {
@@ -159,7 +159,7 @@ static bool sema_try(semaphore *s) {
     return false;
 }
 
-static void sema_acquire(sn_lock *l, semaphore *s) {
+SN_HELD_STATIC static void sema_acquire(sn_lock *l, semaphore *s) {
     if (sema_try(s)) {
         return;
     }
@@ -179,7 +179,7 @@ static void sema_acquire(sn_lock *l, semaphore *s) {
     sn_qlock_give(&l->mu);
 }
 
-static void sema_release(sn_lock *l, semaphore *s) {
+SN_HELD_STATIC static void sema_release(sn_lock *l, semaphore *s) {
     atomic_fetch_add(&s->count, 1);
     if (atomic_load(&s->nwait) == 0) {
         return;
@@ -192,7 +192,7 @@ static void sema_release(sn_lock *l, semaphore *s) {
     sn_queue_claimed(woken);
 }
 
-void sn_sync_lock(int64_t h) {
+SN_HELD void sn_sync_lock(int64_t h) {
     sn_lock *l = (sn_lock *)(intptr_t)h;
     mutex_lock(l);
     if (l->rw) { // hold back new readers, and wait for those in to leave
@@ -203,7 +203,7 @@ void sn_sync_lock(int64_t h) {
     }
 }
 
-void sn_sync_unlock(int64_t h) {
+SN_HELD void sn_sync_unlock(int64_t h) {
     sn_lock *l = (sn_lock *)(intptr_t)h;
     if (l->rw) { // let in the readers that waited
         int64_t r = atomic_fetch_add(&l->readers, max_readers) + max_readers;
@@ -215,14 +215,14 @@ void sn_sync_unlock(int64_t h) {
     mutex_unlock(l);
 }
 
-void sn_sync_lockShared(int64_t h) {
+SN_HELD void sn_sync_lockShared(int64_t h) {
     sn_lock *l = (sn_lock *)(intptr_t)h;
     if (atomic_fetch_add(&l->readers, 1) + 1 < 0) { // a writer holds the lock or waits for it
         sema_acquire(l, &l->reading);
     }
 }
 
-void sn_sync_unlockShared(int64_t h) {
+SN_HELD void sn_sync_unlockShared(int64_t h) {
     sn_lock *l = (sn_lock *)(intptr_t)h;
     if (atomic_fetch_sub(&l->readers, 1) - 1 < 0 && atomic_fetch_sub(&l->departing, 1) - 1 == 0) {
         sema_release(l, &l->writing); // the last reader a writer waited for
@@ -231,13 +231,13 @@ void sn_sync_unlockShared(int64_t h) {
 
 // lock_of returns the lock h names, a WaitGroup's counter, which is
 // never 0: a WaitGroup comes only from NewWaitGroup.
-static sn_lock *lock_of(int64_t h) { return (sn_lock *)(intptr_t)h; }
+SN_HELD_STATIC static sn_lock *lock_of(int64_t h) { return (sn_lock *)(intptr_t)h; }
 
 // sn_sync_count adds n to the count and wakes the waiters when it
 // reaches zero, and reports whether it did: a count that would go below
 // zero, a Done without its Add, or past what an int holds, is left as
 // it was.
-bool sn_sync_count(int64_t h, int64_t n) {
+SN_HELD bool sn_sync_count(int64_t h, int64_t n) {
     sn_lock *l = lock_of(h);
     sn_qlock_take(&l->mu);
     int64_t count;
@@ -257,7 +257,7 @@ bool sn_sync_count(int64_t h, int64_t n) {
     return true;
 }
 
-void sn_sync_wait(int64_t h) {
+SN_HELD void sn_sync_wait(int64_t h) {
     sn_lock *l = lock_of(h);
     sn_qlock_take(&l->mu);
     if (l->count == 0) {
@@ -275,7 +275,7 @@ void sn_sync_wait(int64_t h) {
 // sn_sync_atomicAdd adds d to *n as one step no other task's add can
 // interleave with, and returns the new value; the Arc's count is kept
 // with it, and the handle that brings it to zero drops the value.
-int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) { return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST); }
+SN_HELD int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) { return __atomic_add_fetch(n, d, __ATOMIC_SEQ_CST); }
 
 // The words of sync.Counter: one each on the
 // heap, named by its address as a lock is, so that a handle is a plain
@@ -283,26 +283,26 @@ int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) { return __atomic_add_fetch(n, 
 // instruction on the word. Sequentially consistent, as Go's atomics
 // are: the cost is a fence on arm64, and a program that needs less
 // is a program that has measured.
-int64_t sn_sync_cellNew(int64_t v) {
+SN_HELD int64_t sn_sync_cellNew(int64_t v) {
     int64_t *p = sn_alloc(sizeof *p);
     __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
     return (int64_t)(intptr_t)p;
 }
 
-int64_t sn_sync_cellLoad(int64_t h) { return __atomic_load_n((int64_t *)(intptr_t)h, __ATOMIC_SEQ_CST); }
+SN_HELD int64_t sn_sync_cellLoad(int64_t h) { return __atomic_load_n((int64_t *)(intptr_t)h, __ATOMIC_SEQ_CST); }
 
-void sn_sync_cellStore(int64_t h, int64_t v) { __atomic_store_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST); }
+SN_HELD void sn_sync_cellStore(int64_t h, int64_t v) { __atomic_store_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST); }
 
-int64_t sn_sync_cellAdd(int64_t h, int64_t d) {
+SN_HELD int64_t sn_sync_cellAdd(int64_t h, int64_t d) {
     return __atomic_add_fetch((int64_t *)(intptr_t)h, d, __ATOMIC_SEQ_CST);
 }
 
-bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v) {
+SN_HELD bool sn_sync_cellSwap(int64_t h, int64_t old, int64_t v) {
     return __atomic_compare_exchange_n((int64_t *)(intptr_t)h, &old, v, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
 
-int64_t sn_sync_cellExchange(int64_t h, int64_t v) {
+SN_HELD int64_t sn_sync_cellExchange(int64_t h, int64_t v) {
     return __atomic_exchange_n((int64_t *)(intptr_t)h, v, __ATOMIC_SEQ_CST);
 }
 
-void sn_sync_cellFree(int64_t h) { sn_free((void *)(intptr_t)h); }
+SN_HELD void sn_sync_cellFree(int64_t h) { sn_free((void *)(intptr_t)h); }

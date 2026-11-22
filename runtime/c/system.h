@@ -90,10 +90,11 @@ SN_SYSTEM_CALL bool sn_system_random(void *buf, size_t n) {
 SN_SYSTEM_CALL void sn_yield(void) { SwitchToThread(); }
 
 // sn_aligned_alloc returns n bytes at a multiple of align from the C
-// library, for a block the runtime keeps until the program ends; the
-// Universal CRT has no aligned_alloc, and its own call takes the two
-// the other way round.
+// library, for a block the runtime keeps until the program ends or
+// gives back with sn_aligned_free; the Universal CRT has no
+// aligned_alloc, and its own call takes the two the other way round.
 SN_SYSTEM_CALL void *sn_aligned_alloc(size_t align, size_t n) { return _aligned_malloc(n, align); }
+SN_SYSTEM_CALL void sn_aligned_free(void *p) { _aligned_free(p); }
 
 // sn_lock_file and sn_unlock_file hold a stream for a run of writes, so
 // that another thread's do not come between them.
@@ -221,6 +222,7 @@ SN_SYSTEM_CALL bool sn_thread_start(void *(*main)(void *), void *arg) {
 // first, compiles it, as it compiled the call before.
 #define sn_system_random(buf, n)   (getentropy(buf, n) == 0)
 #define sn_aligned_alloc(align, n) aligned_alloc(align, n)
+#define sn_aligned_free(p)         free(p)
 #define sn_lock_file(f)            flockfile(f)
 #define sn_unlock_file(f)          funlockfile(f)
 #define sn_page_size()             ((size_t)sysconf(_SC_PAGESIZE))

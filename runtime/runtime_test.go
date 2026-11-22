@@ -238,7 +238,7 @@ var ucd = filepath.Join("testdata", "ucd", "18.0.0")
 // staticFunction matches the line that begins a static function's
 // definition or declaration in the runtime's C, attributes and all,
 // alloc.c's HELPER among them, and names the function.
-var staticFunction = regexp.MustCompile(`(?m)^(?:static\s+(?:inline\s+)?(?:__attribute__\(\([^)]*\)\)\s+)?(?:inline\s+)?(?:_Noreturn\s+)?|HELPER\s+)[A-Za-z_][\w \*]*?[ \*](\w+)\(`)
+var staticFunction = regexp.MustCompile(`(?m)^(?:SN_HELD_STATIC\s+)?(?:static\s+(?:inline\s+)?(?:__attribute__\(\([^)]*\)\)\s+)?(?:inline\s+)?(?:_Noreturn\s+)?|HELPER\s+)[A-Za-z_][\w \*]*?[ \*](\w+)\(`)
 
 // TestUnicodeTables checks that c/unicode.c is what mkunicode.go writes
 // from the database under testdata, so the tables cannot be edited by
@@ -1709,6 +1709,335 @@ int main(int argc, char **argv) {
 
 	if _, err := fmt.Sscanf(string(out), "ran after %d ms", &ms); err != nil || ms < 0 || ms > 60 {
 		t.Fatalf("the task ran after %d ms with every worker blocked in a read, wanted within a few tens: %s", ms, out)
+	}
+}
+
+// heldFunction matches a function of the runtime marked SN_HELD or
+// SN_HELD_STATIC, which the scheduler never preempts a task inside:
+// its name, for TestHeldSection to find in the binary.
+var heldFunction = regexp.MustCompile(`(?m)^SN_HELD(?:_STATIC)?\s+(?:static\s+)?(?:_Noreturn\s+)?[A-Za-z_][\w \*]*?[ \*](\w+)\(`)
+
+// TestHeldSection builds a probe as a release build is built, with and
+// without link-time optimization, and reads its symbols: every
+// function the runtime marks held that the compiler kept as a function
+// of its own lies in the held section, and so does the switch, which
+// the assembly puts there. The preemption rests on that placement
+// (sched.c, preempt_safe), and a compiler that cloned or moved a
+// function out of its section would silently break it.
+func TestHeldSection(t *testing.T) {
+	var nm []string
+	var held string
+	switch runtime.GOOS {
+	case darwinOS:
+		nm, held = []string{"nm", "-m"}, "(__TEXT,__sn_held)"
+	case "linux":
+		nm, held = []string{"nm", "-S", "--format=sysv"}, "sn_held"
+	default:
+		t.Skip("no symbol listing with sections here")
+	}
+
+	if _, err := exec.LookPath(nm[0]); err != nil {
+		t.Skip("no nm")
+	}
+
+	marked := map[string]bool{"sn_switch": true}
+	for name, data := range Files() {
+		if filepath.Ext(name) != ".c" {
+			continue
+		}
+
+		for _, m := range heldFunction.FindAllSubmatch(data, -1) {
+			marked[string(m[1])] = true
+		}
+	}
+
+	if len(marked) < 100 {
+		t.Fatalf("only %d functions marked held: the pattern no longer reads the runtime", len(marked))
+	}
+
+	probe := `#include "internal.h"
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    return 0;
+}
+`
+	for _, mode := range [][]string{{"-O2"}, {"-O2", "-flto"}} {
+		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, mode...)
+		out, err := exec.Command(nm[0], append(nm[1:], bin)...).Output()
+		if err != nil {
+			t.Fatalf("%v: %v", nm, err)
+		}
+
+		found, outside := 0, []string{}
+		for _, line := range strings.Split(string(out), "\n") {
+			name, section := symbolLine(line)
+			base := name
+			if runtime.GOOS == darwinOS {
+				base = strings.TrimPrefix(name, "_") // what macOS puts before every C symbol; Linux's _start and _init are their own
+			}
+
+			if i := strings.IndexByte(base, '.'); i > 0 { // a clone the compiler made, name.constprop.0, is the function's
+				base = base[:i]
+			}
+
+			if !marked[base] || !codeSection(section) {
+				continue
+			}
+
+			found++
+			if section != held {
+				outside = append(outside, name+" in "+section)
+			}
+		}
+
+		if found < 20 { // a release build keeps the functions the probe reaches, and no other
+			t.Fatalf("%v: only %d held functions found among the symbols: the listing changed shape\n%s", mode, found, out)
+		}
+
+		if len(outside) > 0 {
+			t.Errorf("%v: %d held functions outside the held section:\n%s", mode, len(outside), strings.Join(outside, "\n"))
+		}
+	}
+}
+
+// codeSection reports whether a section of nm's listing holds code:
+// macOS's sections of the __TEXT segment but its constants, and any
+// section on Linux, where symbolLine names only functions.
+func codeSection(section string) bool {
+	if strings.HasPrefix(section, "(__TEXT,") {
+		return section != "(__TEXT,__const)"
+	}
+
+	return section != "" && !strings.HasPrefix(section, "(")
+}
+
+// symbolLine reads a function's name and section from a line of nm's
+// listing: macOS's "addr (seg,sect) external _name", Linux's sysv
+// form "name |addr| T | FUNC|size| |section"; other lines give none.
+func symbolLine(line string) (name, section string) {
+	if strings.Contains(line, "|") {
+		fields := strings.Split(line, "|")
+		if len(fields) == 7 && strings.TrimSpace(fields[3]) == "FUNC" {
+			return strings.TrimSpace(fields[0]), strings.TrimSpace(fields[6])
+		}
+
+		return "", ""
+	}
+
+	fields := strings.Fields(line)
+	if len(fields) >= 4 && strings.HasPrefix(fields[1], "(") {
+		return fields[len(fields)-1], fields[1]
+	}
+
+	return "", ""
+}
+
+// TestPreempted spawns a task that computes without a wait on every
+// core and has the main task sleep 100 ms five times: each wake finds
+// every worker held, and the monitor takes a spinner off its worker
+// for the main task rather than starting a thread, so the main task
+// runs again within a few tens of milliseconds of each sleep's end,
+// within a second in all on a loaded machine, with the workers as many
+// as the cores.
+func TestPreempted(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+static void spin(void *arg) {
+    (void)arg;
+    volatile int64_t x = 0;
+    for (;;) {
+        x++;
+    }
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    for (int64_t i = 0; i < sn_cores(); i++) {
+        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
+    }
+
+    int64_t late = 0;
+    for (int i = 0; i < 5; i++) {
+        int64_t start = sn_time_mono();
+        sn_sleep(100000000);
+        late += (sn_time_mono() - start) / 1000000 - 100;
+    }
+
+    printf("preempted %lld, workers %lld of %lld cores, %lld ms late\n", (long long)sn_sched_preempted(),
+           (long long)sn_sched_workers(), (long long)sn_cores(), (long long)late);
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := runProbe(bin)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var preempted, workers, cores, late int
+	if _, err := fmt.Sscanf(string(out), "preempted %d, workers %d of %d cores, %d ms late", &preempted, &workers, &cores, &late); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if preempted < 5 || workers != cores || late > 1000 {
+		t.Fatalf("with a spinner on every core: %s, want five or more preemptions, no worker added, and the main task's five wakes within a second of their time in all", out)
+	}
+}
+
+// TestPreemptedKeepsRegisters has a task on every core compute a
+// checksum through many live values, integer and floating-point, for
+// about a second while the main task wakes every 10 ms, so that each
+// is taken off its worker again and again and resumed on another with
+// its registers put back: every checksum equals the one the main task
+// computes alone afterwards, and the tasks were preempted many times.
+func TestPreemptedKeepsRegisters(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <stdatomic.h>
+enum { steps = 200000000, most = 64 };
+static _Atomic int64_t done;
+static uint64_t sums[most];
+static double floats[most];
+// checksum keeps eight floating-point and four integer accumulators
+// live through every step, more than the callee-saved registers of
+// either processor, so that a preemption that lost any register, or
+// the vector unit's state, changes the result.
+__attribute__((noinline)) static void checksum(int64_t seed, uint64_t *sum, double *f) {
+    uint64_t a = (uint64_t)seed, b = a * 3 + 1, c = b * 5 + 7, d = c * 7 + 11;
+    double f0 = seed, f1 = 1.5, f2 = 2.25, f3 = 3.125, f4 = 0.5, f5 = 0.75, f6 = 1.0625, f7 = 1.03125;
+    for (int64_t i = 0; i < steps; i++) {
+        a = a * 6364136223846793005ULL + 1442695040888963407ULL;
+        b ^= a >> 17;
+        c += b | 1;
+        d = (d << 3) ^ c;
+        f0 = f0 * 1.0000001 + 0.5;
+        f1 = f1 + f0 * 1e-9;
+        f2 = f2 * 0.9999999 + f1 * 1e-9;
+        f3 = f3 + (f2 - f1) * 1e-12;
+        f4 = f4 * 1.0000002 - f3 * 1e-9;
+        f5 = f5 + f4 * 1e-10;
+        f6 = f6 * 0.9999998 + f5 * 1e-11;
+        f7 = f7 + f6 * 1e-12;
+    }
+
+    *sum = a ^ b ^ c ^ d;
+    *f = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7;
+}
+static void compute(void *arg) {
+    int64_t i = *(int64_t *)arg;
+    checksum(i, &sums[i], &floats[i]);
+    atomic_fetch_add(&done, 1);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    int64_t n = sn_cores() < most ? sn_cores() : most;
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(compute, &i, sizeof i, SN_UNBOUNDED);
+    }
+
+    while (atomic_load(&done) < n) {
+        sn_sleep(10000000); // every wake finds the workers held and has one of the tasks moved
+    }
+
+    int64_t wrong = 0;
+    for (int64_t i = 0; i < n; i++) {
+        uint64_t sum;
+        double f;
+        checksum(i, &sum, &f);
+        if (sum != sums[i] || f != floats[i]) {
+            wrong++;
+        }
+    }
+
+    printf("%lld wrong of %lld, preempted %lld\n", (long long)wrong, (long long)n, (long long)sn_sched_preempted());
+    return 0;
+}
+`
+	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O2")
+	out, err := runProbe(bin)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var wrong, n, preempted int
+	if _, err := fmt.Sscanf(string(out), "%d wrong of %d, preempted %d", &wrong, &n, &preempted); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if wrong != 0 || preempted < 10 {
+		t.Fatalf("checksums across preemptions: %s, want none wrong and many preemptions", out)
+	}
+}
+
+// TestPreemptedChannels has tasks that compute for a while and then
+// send on a channel, beside a task computing without a wait on every
+// core, with the main task waking every 10 ms: a sender is taken off
+// its worker in its computing and resumed on another, and its sends,
+// through the ring and the channel's lock, arrive whole and in order.
+func TestPreemptedChannels(t *testing.T) {
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <stdatomic.h>
+enum { sends = 20, spin_ns = 15000000 };
+static _Atomic int64_t stop;
+static void spin(void *arg) {
+    (void)arg;
+    while (!atomic_load(&stop)) {
+    }
+}
+static void sender(void *arg) {
+    sn_chan *c = *(sn_chan **)arg;
+    for (int64_t i = 1; i <= sends; i++) {
+        int64_t until = sn_time_mono() + spin_ns;
+        volatile int64_t x = 0;
+        while (sn_time_mono() < until) {
+            x++;
+        }
+
+        sn_chan_send(c, &i);
+    }
+
+    sn_chan_drop(&c, SN_CHAN_SEND);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    int64_t n = sn_cores();
+    for (int64_t i = 0; i < n; i++) {
+        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
+    }
+
+    sn_chan *c = sn_chan_make(sizeof(int64_t), 4, NULL, "probe");
+    for (int64_t i = 0; i < n; i++) {
+        sn_chan *mine = sn_chan_clone(c, SN_CHAN_SEND);
+        sn_spawn(sender, &mine, sizeof mine, SN_UNBOUNDED);
+    }
+
+    c = sn_chan_narrow(c, SN_CHAN_RECV); // the senders' handles end the channel
+    int64_t sum = 0, got = 0, v;
+    while (sn_chan_recv(c, &v)) {
+        sum += v;
+        got++;
+    }
+
+    atomic_store(&stop, 1);
+    sn_chan_drop(&c, SN_CHAN_RECV);
+    printf("%lld senders, got %lld values summing %lld, preempted %lld\n", (long long)n, (long long)got,
+           (long long)sum, (long long)sn_sched_preempted());
+    return 0;
+}
+`
+	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
+	out, err := runProbe(bin)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var senders, got, sum, preempted int
+	if _, err := fmt.Sscanf(string(out), "%d senders, got %d values summing %d, preempted %d", &senders, &got, &sum, &preempted); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if got != 20*senders || sum != senders*20*21/2 || preempted == 0 {
+		t.Fatalf("senders preempted between sends: %s, want %d values summing %d and some preemptions", out, 20*senders, senders*20*21/2)
 	}
 }
 

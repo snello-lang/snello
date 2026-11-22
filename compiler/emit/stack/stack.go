@@ -532,6 +532,7 @@ type Image struct {
 	cLibrary  map[string]bool   // imported functions that are the system's C library's
 	lazy      bool              // imports are bound at their first calls, by the dynamic linker's resolver on the caller's stack
 	tlvNames  map[string]bool   // macOS's thread-local descriptors, by the name the disassembler gives them, for x86-64's calls through one
+	stubs     map[uint64]string // a Mach-O binary's stubs, by address: the imported function each calls, for a call otool left unnamed
 	slots     map[uint64]string // a PE binary's slots of its table of imports, by their addresses: the function each holds
 	cRuntime  map[string]bool   // a PE binary's functions of Microsoft's C runtime, linked in, as the linker's map names them
 

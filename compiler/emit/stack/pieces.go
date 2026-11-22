@@ -229,6 +229,12 @@ func (img *Image) padding(in inst) bool {
 // symbol is named once, so that a branch or a call into a symbol's code
 // reaches the piece that holds it; any other target is as it was.
 func (img *Image) resolveTarget(t target) target {
+	if t.known && t.name == "" && !t.library {
+		if name, ok := img.stubs[t.addr]; ok { // a stub the disassembler did not name: a call of its function
+			return target{name: name, library: true, known: true}
+		}
+	}
+
 	if img.pieces == nil || t.name == "" || t.library {
 		return t
 	}

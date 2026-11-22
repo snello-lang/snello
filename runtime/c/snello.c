@@ -68,7 +68,7 @@ sn_slice sn_os_Args = { 0 };
 // The allocator is alloc.c's; a release build has nothing to check at
 // the end, and debug.c has the report of a debug build.
 #ifndef SN_DEBUG
-int sn_finish(void) {
+SN_HELD int sn_finish(void) {
     sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
     sn_signals_finish();                               // a program a signal cancelled ends by it, its drops run
     return 0;
@@ -331,7 +331,7 @@ void sn_init(int argc, char **argv) {
 // sn_write_fd writes every byte of p, asking again after a short write or
 // an interrupted call, and returns how many it wrote: all of len, or
 // fewer with errno saying why.
-int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
+SN_HELD int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
 #if defined(_WIN32)
     if (sn_console(fd)) {
         return sn_console_write(fd, p, len);
@@ -379,7 +379,7 @@ int64_t sn_write_fd(int fd, const uint8_t *p, int64_t len) {
 // The queues a task waits on for a channel or a lock, whose waiters
 // internal.h lays out. sn_enqueue adds w at the tail of q, and
 // sn_remove_waiter takes it out from wherever it is.
-void sn_enqueue(sn_waitq *q, sn_waiter *w) {
+SN_HELD void sn_enqueue(sn_waitq *q, sn_waiter *w) {
     w->next = NULL;
     w->prev = q->tail;
     if (q->tail != NULL) {
@@ -392,7 +392,7 @@ void sn_enqueue(sn_waitq *q, sn_waiter *w) {
     w->queued = true;
 }
 
-void sn_remove_waiter(sn_waitq *q, sn_waiter *w) {
+SN_HELD void sn_remove_waiter(sn_waitq *q, sn_waiter *w) {
     if (!w->queued) {
         return;
     }
@@ -415,7 +415,7 @@ void sn_remove_waiter(sn_waitq *q, sn_waiter *w) {
 // sn_dequeue takes the first waiter whose wait is still open off the
 // queue, and claims its wait; the waiters of selects other operations
 // took first are dropped on the way.
-sn_waiter *sn_dequeue(sn_waitq *q) {
+SN_HELD sn_waiter *sn_dequeue(sn_waitq *q) {
     for (sn_waiter *w = q->head; w != NULL; w = q->head) {
         sn_remove_waiter(q, w);
         int open = 0;
@@ -438,7 +438,7 @@ sn_waiter *sn_dequeue(sn_waitq *q) {
 // the woken task takes no lock on its way out: it leaves its wait only
 // once the handoff says woken, after the claim has read its state, so
 // it cannot end and be freed under the claim.
-sn_task *sn_finish_wait(sn_waiter *w, bool success) {
+SN_HELD sn_task *sn_finish_wait(sn_waiter *w, bool success) {
     w->success = success;
     w->ws->fired = w->index;
     sn_task *t = w->t; // read before the claim, after which nothing of the waiter is read
@@ -449,32 +449,32 @@ sn_task *sn_finish_wait(sn_waiter *w, bool success) {
 // while the handoff is open, spinning the few instructions of the claim
 // while it says waking; a wake kept from an earlier wait costs one more
 // park.
-void sn_await_wait(sn_wait_state *ws) { sn_handoff_wait(&ws->done); }
+SN_HELD void sn_await_wait(sn_wait_state *ws) { sn_handoff_wait(&ws->done); }
 
 // sn_word_wait sleeps while the word holds v, and sn_word_wake wakes
 // one thread asleep on it: the system's wait on an address, Linux's
 // futex and Darwin's os_sync_wait_on_address, which the kernel keys by
 // the address, so a lock or a worker needs no handle of the system's.
 #if defined(_WIN32)
-void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+SN_HELD void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
     (void)WaitOnAddress((volatile void *)w, &v, sizeof *w, INFINITE); // a return before a wake reads again
 }
 
-void sn_word_wake(_Atomic uint32_t *w) { WakeByAddressSingle((void *)w); }
+SN_HELD void sn_word_wake(_Atomic uint32_t *w) { WakeByAddressSingle((void *)w); }
 #elif defined(__APPLE__)
-void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+SN_HELD void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
     (void)os_sync_wait_on_address(w, v, sizeof *w, OS_SYNC_WAIT_ON_ADDRESS_NONE); // a return before a wake reads again
 }
 
-void sn_word_wake(_Atomic uint32_t *w) {
+SN_HELD void sn_word_wake(_Atomic uint32_t *w) {
     (void)os_sync_wake_by_address_any(w, sizeof *w, OS_SYNC_WAKE_BY_ADDRESS_NONE);
 }
 #else
-void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
+SN_HELD void sn_word_wait(_Atomic uint32_t *w, uint32_t v) {
     (void)syscall(SYS_futex, w, FUTEX_WAIT_PRIVATE, v, NULL, NULL, 0);
 }
 
-void sn_word_wake(_Atomic uint32_t *w) { (void)syscall(SYS_futex, w, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0); }
+SN_HELD void sn_word_wake(_Atomic uint32_t *w) { (void)syscall(SYS_futex, w, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0); }
 #endif
 
 // sn_qlock_contended takes a queue lock found held. It spins for the
@@ -486,7 +486,7 @@ void sn_word_wake(_Atomic uint32_t *w) { (void)syscall(SYS_futex, w, FUTEX_WAKE_
 // another slept was measured: with eight tasks sending on one channel
 // every newcomer slept at once and every give woke one. A program on
 // one processor has no holder running to spin for, and yields once.
-void sn_qlock_contended(sn_qlock *l) {
+SN_HELD void sn_qlock_contended(sn_qlock *l) {
     int spins = sn_sched_workers() > 1 ? lock_spins : 0; // one worker: no holder runs to spin for
     uint32_t taken = SN_LOCK_HELD;                       // what the lock reads once taken: slept on, after a sleep
     for (;;) {
@@ -523,14 +523,14 @@ void sn_qlock_contended(sn_qlock *l) {
 
 // sn_qlock_wake wakes one contender asleep on the lock's word, for a
 // give that found the lock slept on.
-void sn_qlock_wake(sn_qlock *l) { sn_word_wake(&l->state); }
+SN_HELD void sn_qlock_wake(sn_qlock *l) { sn_word_wake(&l->state); }
 
 // sn_once_begin reports true to the caller that claims the setup, which
 // runs it and calls sn_once_end; any other caller marks the word waited
 // on and sleeps until the setup is done, and reports false. A give of
 // the setup wakes one sleeper, and each sleeper woken wakes the next
 // before it returns, so every sleeper wakes through the one wake.
-bool sn_once_begin(sn_once *o) {
+SN_HELD bool sn_once_begin(sn_once *o) {
     uint32_t v = SN_ONCE_NEW;
     if (atomic_compare_exchange_strong_explicit(&o->state, &v, SN_ONCE_RUNNING, memory_order_acquire,
                                                 memory_order_acquire)) {
@@ -555,7 +555,7 @@ bool sn_once_begin(sn_once *o) {
     return false;
 }
 
-void sn_once_end(sn_once *o) {
+SN_HELD void sn_once_end(sn_once *o) {
     if (atomic_exchange_explicit(&o->state, SN_ONCE_DONE, memory_order_release) == SN_ONCE_WAITED) {
         sn_word_wake(&o->state);
     }
@@ -568,8 +568,8 @@ void sn_once_end(sn_once *o) {
 // resumed on another thread reads that thread's (sched.c says why).
 static _Thread_local uint64_t rng;
 
-__attribute__((noinline)) uint64_t
-sn_next_random(void) { // never inlined into sn_select, whose task may move threads at its park
+SN_HELD uint64_t sn_next_random(void) { // never inlined into sn_select, whose task may move threads at its park,
+                                        // nor interrupted between its reads of the thread's own
     if (rng == 0) {
         rng = ((uint64_t)(uintptr_t)&rng ^ (uint64_t)sn_time_now()) | 1;
     }

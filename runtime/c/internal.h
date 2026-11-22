@@ -15,6 +15,29 @@
 #include "snello.h"
 #include "system.h"
 
+// SN_HELD marks a function of the runtime that holds a lock, reads the
+// thread's own state, or switches: it is written into a text section
+// of its own, sn_held, and into no caller, so that the scheduler, which
+// preempts a task by interrupting its thread, finds every such function
+// by its addresses and leaves a task inside one alone, as Go's runtime
+// is no asynchronous safe point for its own functions (sched.c). A task
+// preempted elsewhere and resumed on another thread so holds nothing of
+// the thread it left. The rest of the runtime, a sort, a map, a string,
+// is the program's as far as a preemption is concerned, and may be
+// interrupted anywhere.
+// SN_HELD_STATIC marks a static function of a file whose functions are
+// held: it goes in the section too when the compiler keeps it a
+// function of its own rather than writing it into its callers, so that
+// no path of a held function runs outside the section.
+#if defined(__APPLE__)
+#define SN_HELD_STATIC __attribute__((section("__TEXT,__sn_held,regular,pure_instructions")))
+#elif defined(_WIN32)
+#define SN_HELD_STATIC __attribute__((section(".text$sn_held_m")))
+#else
+#define SN_HELD_STATIC __attribute__((section("sn_held")))
+#endif
+#define SN_HELD __attribute__((noinline)) SN_HELD_STATIC
+
 #include <stdatomic.h>
 
 // SN_CACHE_LINE is the widest cache line of the processors the runtime
@@ -304,7 +327,8 @@ int64_t sn_timers_pending(void);
 // timer, once its worker is on its way to its next task.
 void sn_sched_start(void);
 int64_t sn_worker_index(void);
-int64_t sn_sched_workers(void); // how many workers run tasks, settled before the first task runs
+int64_t sn_sched_workers(void);   // how many workers run tasks, settled before the first task runs
+int64_t sn_sched_preempted(void); // how many times a task was taken off its worker, for a test
 bool sn_wake_claim(sn_task *t);
 void sn_wake_queue(sn_task *t);
 

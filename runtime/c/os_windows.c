@@ -60,7 +60,7 @@ enum { tick_ns = 100, ticks_per_s = 10000000 };
 
 // sn_errno_of is the error number of a failure the system reports by
 // its own code, the one the same failure has on the other systems.
-int sn_errno_of(unsigned long code) {
+SN_HELD int sn_errno_of(unsigned long code) {
     switch (code) {
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
@@ -114,7 +114,7 @@ int sn_errno_of(unsigned long code) {
     return EIO;
 }
 
-const char *sn_errno_text(int code) {
+SN_HELD const char *sn_errno_text(int code) {
     switch (code) {
     case ENOENT:
         return "No such file or directory";
@@ -207,11 +207,11 @@ const char *sn_errno_text(int code) {
 
 // last_errno is the error number of the system's last failure on this
 // thread, set as errno too.
-static int last_errno(void) { return errno = sn_errno_of(GetLastError()); }
+SN_HELD_STATIC static int last_errno(void) { return errno = sn_errno_of(GetLastError()); }
 
 // copy_path is a copy of the zero-ended path w in a block of the
 // runtime's.
-static wchar_t *copy_path(const wchar_t *w) {
+SN_HELD_STATIC static wchar_t *copy_path(const wchar_t *w) {
     size_t n = wcslen(w) + 1;
     wchar_t *out = sn_alloc(n * sizeof *out);
     memcpy(out, w, n * sizeof *out);
@@ -226,7 +226,7 @@ static wchar_t *copy_path(const wchar_t *w) {
 // GetFullPathNameW, as the prefix turns it off. A path in a device's
 // form, or already in this one, is copied as it is, and so is one the
 // system cannot read, for the call it is made for to fail on.
-static wchar_t *verbatim(const wchar_t *w) {
+SN_HELD_STATIC static wchar_t *verbatim(const wchar_t *w) {
     if (w[0] == L'\\' && w[1] == L'\\' && (w[2] == L'?' || w[2] == L'.') && w[3] == L'\\') {
         return copy_path(w);
     }
@@ -258,7 +258,7 @@ static wchar_t *verbatim(const wchar_t *w) {
 // the runtime's. A string holding a zero byte, or bytes that are not
 // UTF-8, cannot be given to the system and is refused as an invalid
 // argument.
-wchar_t *sn_os_wide(sn_string s) {
+SN_HELD wchar_t *sn_os_wide(sn_string s) {
     sn_check_string(s);
     if (memchr(s.ptr, 0, (size_t)s.len) != NULL || s.len > INT32_MAX) {
         errno = EINVAL;
@@ -284,7 +284,7 @@ wchar_t *sn_os_wide(sn_string s) {
 // wpath converts a Snello string to a UTF-16 path as wide does, a long
 // one in verbatim's form, so that a path longer than the system's calls
 // take on their own is taken as on the other systems.
-static wchar_t *wpath(sn_string s) {
+SN_HELD_STATIC static wchar_t *wpath(sn_string s) {
     wchar_t *w = sn_os_wide(s);
     if (w == NULL || wcslen(w) < long_path) {
         return w;
@@ -297,7 +297,7 @@ static wchar_t *wpath(sn_string s) {
 
 // utf8 converts n UTF-16 units, all of a zero-ended string for n < 0,
 // to an owned Snello string.
-static sn_string utf8(const wchar_t *w, int n) {
+SN_HELD_STATIC static sn_string utf8(const wchar_t *w, int n) {
     int size = WideCharToMultiByte(CP_UTF8, 0, w, n, NULL, 0, NULL, NULL);
     if (n < 0 && size > 0) {
         size--; // the zero after it
@@ -314,7 +314,7 @@ static sn_string utf8(const wchar_t *w, int n) {
 
 // shown is the path w as a message shows it, without the prefix
 // verbatim gave it.
-static sn_string shown(const wchar_t *w) {
+SN_HELD_STATIC static sn_string shown(const wchar_t *w) {
     if (wcsncmp(w, VERBATIM_SHARE, verbatim_share_len) == 0) {
         return sn_join(SN_STR("\\\\", 2), utf8(w + verbatim_share_len, -1), 2);
     }
@@ -329,7 +329,7 @@ static sn_string shown(const wchar_t *w) {
 // a descriptor of the C library's, or -1 with errno set. perm is the
 // mode a file the call makes is made with: a file with no write bit is
 // read-only. O_SYNC, which the C library's flags lack, is sync.
-static int win_open(sn_string path, int flags, uint32_t perm, bool sync) {
+SN_HELD_STATIC static int win_open(sn_string path, int flags, uint32_t perm, bool sync) {
     wchar_t *p = wpath(path);
     if (p == NULL) {
         return -1;
@@ -417,7 +417,7 @@ typedef struct {
 
 static console_stream consoles[3] = { { .mu = SN_MUTEX_INIT }, { .mu = SN_MUTEX_INIT }, { .mu = SN_MUTEX_INIT } };
 
-bool sn_console(int fd) {
+SN_HELD bool sn_console(int fd) {
     if (fd < 0 || fd > 2) {
         return false;
     }
@@ -435,7 +435,7 @@ bool sn_console(int fd) {
 // sn_console_reset forgets whether descriptor fd is a console, and the
 // part of a character a write to it left, for a descriptor pointed
 // elsewhere: the next write asks again.
-void sn_console_reset(int fd) {
+SN_HELD void sn_console_reset(int fd) {
     if (fd < 0 || fd > 2) {
         return;
     }
@@ -450,7 +450,7 @@ void sn_console_reset(int fd) {
 // boundary: all of them, or all but the first bytes of a character the
 // last ones begin and do not finish. Bytes that are not UTF-8 are
 // written as the replacement character, which the conversion makes.
-static int whole_len(const uint8_t *p, int n) {
+SN_HELD_STATIC static int whole_len(const uint8_t *p, int n) {
     for (int back = 1; back < utf8_most && back <= n; back++) {
         uint8_t b = p[n - back];
         if ((b & 0xC0) == 0x80) { // a continuation byte: the character starts further back
@@ -464,7 +464,7 @@ static int whole_len(const uint8_t *p, int n) {
     return n;
 }
 
-int64_t sn_console_write(int fd, const uint8_t *p, int64_t len) {
+SN_HELD int64_t sn_console_write(int fd, const uint8_t *p, int64_t len) {
     console_stream *c = &consoles[fd];
     HANDLE h = (HANDLE)_get_osfhandle(fd);
     uint8_t bytes[utf8_most + console_chunk];
@@ -507,7 +507,7 @@ int64_t sn_console_write(int fd, const uint8_t *p, int64_t len) {
 // as a read of the console gives, converted to UTF-8. It returns the
 // count, 0 at the end, a line that starts with Ctrl-Z, or -1 with errno
 // set.
-static int console_read(int fd, void *p, size_t len) {
+SN_HELD_STATIC static int console_read(int fd, void *p, size_t len) {
     console_stream *c = &consoles[fd];
     sn_mutex_lock(&c->mu);
     while (c->left_at == c->left_len) {
@@ -572,7 +572,7 @@ static int console_read(int fd, void *p, size_t len) {
 
 // is_directory reports whether the handle is a directory's, which a
 // read of it is refused for.
-static bool is_directory(HANDLE h) {
+SN_HELD_STATIC static bool is_directory(HANDLE h) {
     BY_HANDLE_FILE_INFORMATION info;
     return GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 }
@@ -582,7 +582,7 @@ static bool is_directory(HANDLE h) {
 // its console's text, and returns
 // the count, 0 at the end, which a pipe whose writer closed it is, or -1
 // with errno set.
-static int win_read(int fd, void *p, size_t len) {
+SN_HELD_STATIC static int win_read(int fd, void *p, size_t len) {
     if (sn_console(fd)) {
         return console_read(fd, p, len);
     }
@@ -612,7 +612,7 @@ static int win_read(int fd, void *p, size_t len) {
 // size the file says it has and a byte more, or of 512 bytes doubling
 // for one that says none; inRead says which call failed, 0 for the open
 // and 1 for a read.
-static int64_t win_read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
+SN_HELD_STATIC static int64_t win_read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
     *inRead = 0;
     int fd = win_open(path, _O_RDONLY, 0, false);
     if (fd < 0) {
@@ -651,7 +651,7 @@ static int64_t win_read_whole(sn_string path, sn_slice *buf, int64_t *inRead) {
     return 0;
 }
 
-int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
+SN_HELD int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
     sn_slice buf = { 0 };
     int64_t code = win_read_whole(path, &buf, inRead);
     if (code != 0) {
@@ -663,7 +663,7 @@ int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead) {
     return 0;
 }
 
-int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
+SN_HELD int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
     sn_slice buf = { 0 };
     int64_t code = win_read_whole(path, &buf, inRead);
     if (code != 0) {
@@ -675,7 +675,7 @@ int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead) {
     return 0;
 }
 
-int64_t sn_os_open(sn_string path, int64_t *fd) {
+SN_HELD int64_t sn_os_open(sn_string path, int64_t *fd) {
     int f = win_open(path, _O_RDONLY, 0, false);
     if (f < 0) {
         return errno;
@@ -685,7 +685,7 @@ int64_t sn_os_open(sn_string path, int64_t *fd) {
     return 0;
 }
 
-int64_t sn_os_create(sn_string path, int64_t *fd) {
+SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
     int f = win_open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, mode_read_write, false);
     if (f < 0) {
         return errno;
@@ -695,7 +695,7 @@ int64_t sn_os_create(sn_string path, int64_t *fd) {
     return 0;
 }
 
-int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd) {
+SN_HELD int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd) {
     const int64_t known = SN_O_WRONLY | SN_O_RDWR | SN_O_APPEND | SN_O_CREATE | SN_O_EXCL | SN_O_SYNC | SN_O_TRUNC;
     if ((flag & ~known) != 0 || (flag & 3) == 3) {
         return EINVAL;
@@ -715,7 +715,7 @@ int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int64_t *fd)
     return 0;
 }
 
-int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
+SN_HELD int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     sn_check_slice((sn_slice *)buf);
     int got = win_read((int)fd, buf->ptr, (size_t)buf->len);
     if (got < 0) {
@@ -726,11 +726,11 @@ int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     return 0;
 }
 
-int64_t sn_os_closeFile(int64_t fd) { return _close((int)fd) == 0 ? 0 : errno; }
+SN_HELD int64_t sn_os_closeFile(int64_t fd) { return _close((int)fd) == 0 ? 0 : errno; }
 
-int64_t sn_os_syncFile(int64_t fd) { return _commit((int)fd) == 0 ? 0 : errno; }
+SN_HELD int64_t sn_os_syncFile(int64_t fd) { return _commit((int)fd) == 0 ? 0 : errno; }
 
-int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
+SN_HELD int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
     static const int whences[] = { SEEK_SET, SEEK_CUR, SEEK_END };
     if (whence < 0 || whence > 2) {
         return EINVAL;
@@ -746,10 +746,10 @@ int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at) {
 }
 
 // make_dir makes the directory at p, a converted path.
-static int make_dir(const wchar_t *p) { return CreateDirectoryW(p, NULL) ? 0 : last_errno(); }
+SN_HELD_STATIC static int make_dir(const wchar_t *p) { return CreateDirectoryW(p, NULL) ? 0 : last_errno(); }
 
 // sn_os_mkdir is os.Mkdir; Windows keeps no permissions to give it.
-int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
+SN_HELD int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
     (void)perm;
     wchar_t *p = wpath(path);
     if (p == NULL) {
@@ -765,7 +765,7 @@ int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
 // the pattern with its last * replaced by a random number, or followed
 // by one, another tried while the name is taken. out and op say what
 // failed, as os.c's does on the other systems.
-static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
+SN_HELD_STATIC static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR("mkdirtemp", 9);
     int64_t star = pattern.len;
@@ -814,7 +814,7 @@ static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, 
     return code;
 }
 
-int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
+SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     if (dir.len > 0) {
         return win_mkdir_temp(dir, pattern, out, op);
     }
@@ -831,7 +831,7 @@ int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_str
 // anything else by DeleteFileW. A read-only file is made writable first,
 // since the system refuses to delete one, which every other system
 // allows to the owner of its directory.
-static int remove_one(const wchar_t *p) {
+SN_HELD_STATIC static int remove_one(const wchar_t *p) {
     DWORD attrs = GetFileAttributesW(p);
     if (attrs == INVALID_FILE_ATTRIBUTES) {
         return last_errno();
@@ -849,7 +849,7 @@ static int remove_one(const wchar_t *p) {
 }
 
 // sn_os_remove removes a file or an empty directory, as os.Remove does.
-int64_t sn_os_remove(sn_string path) {
+SN_HELD int64_t sn_os_remove(sn_string path) {
     wchar_t *p = wpath(path);
     if (p == NULL) {
         return errno;
@@ -862,7 +862,8 @@ int64_t sn_os_remove(sn_string path) {
 
 // win_failed_at records, for a removal that failed, the entry it failed on
 // and the call that failed, and returns the error number.
-static int win_failed_at(const wchar_t *path, const char *op, int code, sn_string *failed, sn_string *what) {
+SN_HELD_STATIC static int win_failed_at(const wchar_t *path, const char *op, int code, sn_string *failed,
+                                        sn_string *what) {
     sn_string_drop(failed);
     *failed = shown(path);
     sn_string_drop(what);
@@ -882,7 +883,7 @@ typedef struct {
 } level;
 
 // push_level pushes the directory at path, length n, a copy of it.
-static void push_level(sn_slice *levels, const wchar_t *path, size_t n) {
+SN_HELD_STATIC static void push_level(sn_slice *levels, const wchar_t *path, size_t n) {
     wchar_t *copy = sn_alloc((n + 1) * sizeof *copy);
     memcpy(copy, path, n * sizeof *copy);
     copy[n] = L'\0';
@@ -891,7 +892,7 @@ static void push_level(sn_slice *levels, const wchar_t *path, size_t n) {
 }
 
 // join_name is dir, a separator and name, in a block of the runtime's.
-static wchar_t *join_name(const wchar_t *dir, const wchar_t *name) {
+SN_HELD_STATIC static wchar_t *join_name(const wchar_t *dir, const wchar_t *name) {
     size_t d = wcslen(dir), n = wcslen(name);
     wchar_t *p = sn_alloc((d + n + 2) * sizeof *p);
     memcpy(p, dir, d * sizeof *p);
@@ -901,14 +902,14 @@ static wchar_t *join_name(const wchar_t *dir, const wchar_t *name) {
 }
 
 // is_dot reports whether a directory's entry is itself or its parent.
-static bool is_dot(const wchar_t *name) {
+SN_HELD_STATIC static bool is_dot(const wchar_t *name) {
     return name[0] == L'.' && (name[1] == L'\0' || (name[1] == L'.' && name[2] == L'\0'));
 }
 
 // clear_level removes what the directory at the top of levels holds
 // but its subdirectories, and pushes them; it reports whether it pushed
 // any, or sets code on a failure.
-static bool clear_level(sn_slice *levels, int *code, sn_string *failed, sn_string *op) {
+SN_HELD_STATIC static bool clear_level(sn_slice *levels, int *code, sn_string *failed, sn_string *op) {
     int64_t at = levels->len - 1; // the directory's level, which a push may move
     const wchar_t *dir = ((level *)levels->ptr)[at].path;
     wchar_t *pattern = join_name(dir, L"*");
@@ -961,7 +962,7 @@ static bool clear_level(sn_slice *levels, int *code, sn_string *failed, sn_strin
 // sn_os_removeAll removes a tree; a path that is not there is nothing to
 // remove, as os.RemoveAll has it. On a failure, failed and op name the
 // entry it failed on and the call.
-int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
+SN_HELD int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
     wchar_t *p = wpath(path);
     if (p == NULL) {
         int code = errno;
@@ -1026,7 +1027,7 @@ int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
 // the mode it has besides: a socket of a Unix domain, the files of a
 // deduplicated volume, which the system turns into such points, as
 // regular, and any other as irregular.
-static uint32_t mode_of(DWORD attrs, DWORD tag) {
+SN_HELD_STATIC static uint32_t mode_of(DWORD attrs, DWORD tag) {
     uint32_t mode = (attrs & FILE_ATTRIBUTE_READONLY) ? mode_read_only : mode_read_write;
     bool reparse = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
     if ((!reparse || !IsReparseTagNameSurrogate(tag)) && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -1053,7 +1054,7 @@ static uint32_t mode_of(DWORD attrs, DWORD tag) {
 
 // unix_time splits a file's time into the seconds since 1970, below
 // zero for a time before it, and the nanoseconds past them.
-static void unix_time(FILETIME ft, int64_t *sec, int64_t *nsec) {
+SN_HELD_STATIC static void unix_time(FILETIME ft, int64_t *sec, int64_t *nsec) {
     int64_t t = (int64_t)((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) - (int64_t)FILETIME_EPOCH;
     int64_t past = t % ticks_per_s;
     if (past < 0) {
@@ -1070,8 +1071,8 @@ static void unix_time(FILETIME ft, int64_t *sec, int64_t *nsec) {
 // volume and number, which are 0. A reparse point is not read so, since
 // the listing's facts are the point's and not those of the file it
 // names; it reports the open's failure, a sharing violation.
-static int listed_stat(const wchar_t *p, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev,
-                       uint64_t *ino) {
+SN_HELD_STATIC static int listed_stat(const wchar_t *p, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
+                                      uint64_t *dev, uint64_t *ino) {
     WIN32_FIND_DATAW e;
     HANDLE find = FindFirstFileExW(p, FindExInfoBasic, &e, FindExSearchNameMatch, NULL, 0);
     if (find == INVALID_HANDLE_VALUE) {
@@ -1095,8 +1096,8 @@ static int listed_stat(const wchar_t *p, int64_t *size, uint32_t *mode, int64_t 
 // the size, the mode, the last change's time since 1970, and the volume
 // and the file's number on it, which say whether two paths name one
 // file.
-int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
-                   uint64_t *dev, uint64_t *ino) {
+SN_HELD int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
+                           uint64_t *dev, uint64_t *ino) {
     wchar_t *p = wpath(path);
     if (p == NULL) {
         return errno;
@@ -1136,7 +1137,7 @@ int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, i
 
 // sn_os_rename is the system's rename, which replaces a file at to, as
 // rename does on the other systems.
-int64_t sn_os_rename(sn_string from, sn_string to) {
+SN_HELD int64_t sn_os_rename(sn_string from, sn_string to) {
     wchar_t *f = wpath(from);
     if (f == NULL) {
         return errno;
@@ -1154,7 +1155,7 @@ int64_t sn_os_rename(sn_string from, sn_string to) {
     return code;
 }
 
-int64_t sn_os_chdir(sn_string path) {
+SN_HELD int64_t sn_os_chdir(sn_string path) {
     wchar_t *p = wpath(path);
     if (p == NULL) {
         return errno;
@@ -1165,7 +1166,7 @@ int64_t sn_os_chdir(sn_string path) {
     return code;
 }
 
-int64_t sn_os_getcwd(sn_string *out) {
+SN_HELD int64_t sn_os_getcwd(sn_string *out) {
     DWORD n = GetCurrentDirectoryW(0, NULL); // the length with the zero after it
     for (;;) {
         wchar_t *w = sn_alloc((size_t)n * sizeof *w);
@@ -1190,7 +1191,7 @@ int64_t sn_os_getcwd(sn_string *out) {
 // sn_os_readDir reads the names in a directory into out, each as the
 // four bytes of its os.FileMode's kind, lowest first, then its name and
 // a zero byte, as os.c packs them on the other systems.
-int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
+SN_HELD int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR(OP_OPEN, sizeof OP_OPEN - 1);
     if (path.len == 0) { // which would list the root of the drive
@@ -1246,10 +1247,10 @@ int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
     return code;
 }
 
-int64_t sn_os_Getpid(void) { return (int64_t)GetCurrentProcessId(); }
+SN_HELD int64_t sn_os_Getpid(void) { return (int64_t)GetCurrentProcessId(); }
 
 // sn_os_hostname is os.Hostname: the machine's name as its DNS host name.
-int64_t sn_os_hostname(sn_string *out) {
+SN_HELD int64_t sn_os_hostname(sn_string *out) {
     DWORD n = 0;
     GetComputerNameExW(ComputerNamePhysicalDnsHostname, NULL, &n); // the room it needs, with the zero after it
     wchar_t *w = sn_alloc(((size_t)n + 1) * sizeof *w);
@@ -1267,7 +1268,7 @@ int64_t sn_os_hostname(sn_string *out) {
 // sn_os_TempDir is os.TempDir: the system's directory for temporary
 // files, which it finds from TMP, TEMP and the user's profile, without
 // the separator it ends in, but for the root of a drive.
-sn_string sn_os_TempDir(void) {
+SN_HELD sn_string sn_os_TempDir(void) {
     DWORD room = MAX_PATH + 1;
     for (;;) {
         wchar_t *w = sn_alloc((size_t)room * sizeof *w);
@@ -1293,7 +1294,7 @@ sn_string sn_os_TempDir(void) {
     }
 }
 
-void sn_os_env_system(sn_string key, const sn_string *value) {
+SN_HELD void sn_os_env_system(sn_string key, const sn_string *value) {
     wchar_t *k = sn_os_wide(key);
     wchar_t *v = value == NULL ? NULL : sn_os_wide(*value);
     if (k != NULL && (value == NULL || v != NULL)) {
@@ -1304,7 +1305,7 @@ void sn_os_env_system(sn_string key, const sn_string *value) {
     sn_free(v);
 }
 
-char **sn_os_environ_utf8(void) {
+SN_HELD char **sn_os_environ_utf8(void) {
     wchar_t *block = GetEnvironmentStringsW();
     int64_t n = 0;
     for (const wchar_t *at = block; at != NULL && *at != L'\0'; at += wcslen(at) + 1) {

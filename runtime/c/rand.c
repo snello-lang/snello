@@ -67,7 +67,7 @@ typedef uint32_t lanes __attribute__((vector_size(16)));
 // and the last four of each block are left as the rounds made them,
 // without the addition of the input ChaCha ends on: the constants and
 // the counter are known, and adding them hides nothing.
-static void block(const uint64_t seed[4], uint64_t buf[chunk], uint32_t counter) {
+SN_HELD_STATIC static void block(const uint64_t seed[4], uint64_t buf[chunk], uint32_t counter) {
     lanes key[8], x[16];
     for (int r = 0; r < 4; r++) {
         uint32_t lo = (uint32_t)seed[r], hi = (uint32_t)(seed[r] >> 32);
@@ -106,7 +106,7 @@ static void block(const uint64_t seed[4], uint64_t buf[chunk], uint32_t counter)
     }
 }
 
-static void init(chacha8 *s, const uint64_t seed[4]) {
+SN_HELD_STATIC static void init(chacha8 *s, const uint64_t seed[4]) {
     memcpy(s->seed, seed, sizeof s->seed);
     block(s->seed, s->buf, 0);
     s->c = 0;
@@ -117,7 +117,7 @@ static void init(chacha8 *s, const uint64_t seed[4]) {
 
 // rand_refill draws the next 32 numbers. The refill before the counter
 // comes round gives four fewer: its last four are the key of the next.
-static void rand_refill(chacha8 *s) {
+SN_HELD_STATIC static void rand_refill(chacha8 *s) {
     s->c += counter_step;
     if (s->c == counter_max) {
         memcpy(s->seed, s->buf + chunk - rekey, sizeof s->seed);
@@ -129,7 +129,7 @@ static void rand_refill(chacha8 *s) {
     s->n = s->c == counter_max - counter_step ? chunk - rekey : chunk;
 }
 
-static uint64_t draw(chacha8 *s) {
+SN_HELD_STATIC static uint64_t draw(chacha8 *s) {
     if (s->i >= s->n) {
         rand_refill(s);
     }
@@ -144,7 +144,7 @@ bool sn_rand_no_system; // a test's: the system gives no random bytes
 // system_key fills seed with 32 bytes from the system: its call for
 // them, and where that fails the device a system without the call has.
 // It reports whether it had them all, and not all of them zero.
-static bool system_key(uint64_t seed[4]) {
+SN_HELD_STATIC static bool system_key(uint64_t seed[4]) {
 #ifdef SN_DEBUG
     if (sn_rand_no_system) {
         return false;
@@ -169,7 +169,7 @@ static bool system_key(uint64_t seed[4]) {
 // the clock as Go's runtime makes one, a multiply and a turn for each
 // word: a program still runs, on numbers that one who knows when it
 // started could work out.
-static void clock_key(uint64_t seed[4]) {
+SN_HELD_STATIC static void clock_key(uint64_t seed[4]) {
 #if defined(_WIN32)
     uint64_t v = (uint64_t)sn_time_mono();
 #else
@@ -187,7 +187,7 @@ static void clock_key(uint64_t seed[4]) {
 
 // wipe clears a key that has been used. The compiler may not drop the
 // writes as dead: they go through a volatile pointer.
-static void wipe(uint64_t seed[4]) {
+SN_HELD_STATIC static void wipe(uint64_t seed[4]) {
     volatile uint64_t *p = seed;
     for (int i = 0; i < 4; i++) {
         p[i] = 0;
@@ -200,7 +200,7 @@ static chacha8 first; // the program's generator, which keys the threads'
 // thread_key fills seed with a thread's key, four numbers of the
 // program's generator, which is keyed at its first use and keys itself
 // again after each key it hands out.
-static void thread_key(uint64_t seed[4]) {
+SN_HELD_STATIC static void thread_key(uint64_t seed[4]) {
     uint64_t next[4];
     sn_mutex_lock(&first_mu);
     if (!first.ready) {
@@ -228,7 +228,7 @@ static _Thread_local chacha8 source;
 
 // refresh gives the thread's generator numbers to draw: the next 32, or
 // its key at the thread's first draw.
-static __attribute__((noinline, cold)) void refresh(chacha8 *s) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) void refresh(chacha8 *s) {
     if (s->ready) {
         rand_refill(s);
         return;
@@ -246,7 +246,7 @@ static __attribute__((noinline, cold)) void refresh(chacha8 *s) {
 // thread after any switch, so the thread's generator is reached here,
 // in a function the compiler can neither inline nor merge (sched.c
 // says why), and never across a call that parks.
-__attribute__((noinline)) uint64_t sn_math__rand_random(void) {
+SN_HELD uint64_t sn_math__rand_random(void) {
     __asm__ volatile("" ::: "memory");
     chacha8 *s = &source;
     if (s->i >= s->n) {
@@ -258,7 +258,7 @@ __attribute__((noinline)) uint64_t sn_math__rand_random(void) {
 
 // sn_math__rand_mul64 is the 128-bit product of x and y: the high half
 // returned and the low half stored, one multiply instruction.
-uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo) {
+SN_HELD uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo) {
     unsigned __int128 p = (unsigned __int128)x * y;
     *lo = (uint64_t)p;
     return (uint64_t)(p >> 64);
@@ -268,7 +268,7 @@ uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo) {
 // sn_rand_key keys the calling thread's generator with seed, eight
 // bytes a word, the low byte first, for the test that holds what the
 // package functions draw against Go's numbers for the same key.
-void sn_rand_key(const uint8_t seed[32]) {
+SN_HELD void sn_rand_key(const uint8_t seed[32]) {
     uint64_t key[4];
     for (int i = 0; i < 4; i++) {
         key[i] = 0;

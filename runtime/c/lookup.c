@@ -71,7 +71,7 @@ typedef struct addrinfo address_info;
 // a zone after a '%' naming the interface by name or by number,
 // "fe80::1%en0". It reads the forms Go reads, and no other, such as
 // "127.1": anything else is a name, for which it returns 0.
-int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr) {
+SN_HELD int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr) {
     char text[address_text];
     if (host.len <= 0 || host.len >= (int64_t)sizeof text || memchr(host.ptr, '\0', (size_t)host.len) != NULL) {
         return 0;
@@ -122,7 +122,7 @@ int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr) {
 // one, which a socket listening on both families reports for an IPv4
 // peer; with the port when port is true, "127.0.0.1:8080", "[::1]:8080".
 // It returns an owned string, empty for a family that is not IP.
-sn_string sn_net_format(const struct sockaddr *addr, bool port) {
+SN_HELD sn_string sn_net_format(const struct sockaddr *addr, bool port) {
     char ip[address_text];
     int at = 0;
     if (addr->sa_family == AF_INET) {
@@ -205,7 +205,7 @@ static struct {
 } pool = { .mu = SN_MUTEX_INIT, .ready = SN_COND_INIT };
 
 // release lets go of one reference to l, and frees it with the last.
-static void release(lookup *l) {
+SN_HELD_STATIC static void release(lookup *l) {
     if (atomic_fetch_sub(&l->refs, 1) == 1) {
         if (l->found != NULL) {
             free_address_info(l->found);
@@ -219,7 +219,7 @@ static void release(lookup *l) {
 // take_out wakes the task waiting on l, unless the other waker took it
 // out first, and keeps its promise: the task is on a queue before the
 // count goes down.
-static void take_out(lookup *l) {
+SN_HELD_STATIC static void take_out(lookup *l) {
     uintptr_t task = atomic_exchange(&l->waiter, 0);
     if (task != 0) {
         sn_handoff_wake(&l->woken, (sn_task *)task);
@@ -230,12 +230,12 @@ static void take_out(lookup *l) {
 // lookup_expire is the timer's: the timeout has passed, and the task is
 // woken unless the lookup woke it first. The task tells the two apart
 // by done, and takes the answer when it has one.
-static void lookup_expire(void *arg) { take_out(arg); }
+SN_HELD_STATIC static void lookup_expire(void *arg) { take_out(arg); }
 
 // resolve looks l's name up, for a stream socket, any family, the
 // addresses in the order the system sorts them, by RFC 6724 where it
 // does, as Go's resolver returns them through the system's.
-static void resolve(lookup *l) {
+SN_HELD_STATIC static void resolve(lookup *l) {
     address_info hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
 #if defined(_WIN32)
     int wide = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, l->name, -1, NULL, 0);
@@ -266,7 +266,7 @@ static void resolve(lookup *l) {
 // resolver_main is a thread of the pool: it takes the lookups from the
 // queue one at a time, and ends once it has waited resolver_idle
 // seconds with none.
-static void *resolver_main(void *arg) {
+SN_HELD_STATIC static void *resolver_main(void *arg) {
     (void)arg;
     sn_mutex_lock(&pool.mu);
     for (;;) {
@@ -302,7 +302,7 @@ static void *resolver_main(void *arg) {
 // the error number of a thread that could not be started for a pool
 // with none, which then has no thread to look l up and has not queued
 // it.
-static int submit(lookup *l) {
+SN_HELD_STATIC static int submit(lookup *l) {
     int code = 0;
     sn_mutex_lock(&pool.mu);
     if (pool.tail == NULL) {
@@ -338,7 +338,7 @@ static int submit(lookup *l) {
 // buffer every thread shares and in the system's code page, without
 // the line's end the system's message closes with, and the code's
 // number where the system has no words for it.
-static int resolver_reason(int code, char why[reason_text]) {
+SN_HELD_STATIC static int resolver_reason(int code, char why[reason_text]) {
 #if defined(_WIN32)
     wchar_t text[reason_text];
     DWORD units = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)code, 0, text,
@@ -364,7 +364,7 @@ static int resolver_reason(int code, char why[reason_text]) {
 
 // answer stores the addresses l found, printed, in out, a []string that
 // holds nothing, and returns what sn_net_lookup returns.
-static int64_t answer(lookup *l, void *out, sn_string *reason) {
+SN_HELD_STATIC static int64_t answer(lookup *l, void *out, sn_string *reason) {
     switch (l->code) {
     case 0:
         break;
@@ -417,7 +417,7 @@ static int64_t answer(lookup *l, void *out, sn_string *reason) {
 // reason in reason, what sn_net_cancelled says once the task's scope is
 // cancelled, or the system's error number, EINVAL for a name
 // holding a zero byte, which no name can, as Go reports it.
-int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason) {
+SN_HELD int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason) {
     struct sockaddr_storage addr;
     if (sn_net_parse(host, 0, &addr) != 0) {
         sn_slice *addrs = out;

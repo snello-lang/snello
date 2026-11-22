@@ -47,7 +47,7 @@ static sn_mutex lock = SN_MUTEX_INIT;
 
 // The header adds 32 bytes, so a block of 993 to 1024 bytes, the
 // heap's largest class in a release build, is the system's in this one.
-void *sn_alloc(size_t n) {
+SN_HELD void *sn_alloc(size_t n) {
     block *b = sn_heap_alloc(sizeof *b + (n == 0 ? 1 : n));
     if (b == NULL) {
         sn_panic(SN_STR("out of memory", 13));
@@ -71,7 +71,7 @@ void *sn_alloc(size_t n) {
 }
 
 // evict gives the block in slot i, if any, back to the heap.
-static void evict(int i) {
+SN_HELD_STATIC static void evict(int i) {
     block *old = held[i];
     if (old != NULL) {
         held_bytes -= old->size;
@@ -80,7 +80,7 @@ static void evict(int i) {
     }
 }
 
-void sn_free(void *p) {
+SN_HELD void sn_free(void *p) {
     if (p == NULL) {
         return;
     }
@@ -120,7 +120,7 @@ void sn_free(void *p) {
     sn_mutex_unlock(&lock);
 }
 
-_Noreturn void sn_released(const char *what) {
+SN_HELD _Noreturn void sn_released(const char *what) {
     char buf[64];
     snprintf(buf, sizeof buf, "a released %s was used", what);
     sn_panic(SN_STR(buf, (int64_t)strlen(buf)));
@@ -128,7 +128,7 @@ _Noreturn void sn_released(const char *what) {
 
 // sn_check_block panics when p, the start of a block from sn_alloc,
 // was released.
-void sn_check_block(const void *p, const char *what) {
+SN_HELD void sn_check_block(const void *p, const char *what) {
     if ((uintptr_t)p == (uintptr_t)0xDDDDDDDDDDDDDDDDULL) {
         sn_released(what);
     }
@@ -142,7 +142,7 @@ void sn_check_block(const void *p, const char *what) {
 // sn_deref checks an owned pointer before the program reads through
 // it: a null is a pointer whose value moved away, a poisoned one was
 // released.
-void *sn_deref(void *p) {
+SN_HELD void *sn_deref(void *p) {
     if (p == NULL) {
         sn_panic(SN_STR("a moved pointer was used", 24));
     }
@@ -154,7 +154,7 @@ void *sn_deref(void *p) {
 // check_at_exit is the debug build's end of the program: what a task
 // still running leaves unchecked, and else the blocks not released,
 // reported; the program's exit code.
-static int check_at_exit(void) {
+SN_HELD_STATIC static int check_at_exit(void) {
     sn_string_drop(&sn_task_places()[SN_PLACE_PARTS]); // the main task's, which no scheduler teardown frees
     for (int64_t i = 0; i < sn_os_Args.len; i++) {     // the program may have stored strings of its own in it
         sn_string_drop(&((sn_string *)sn_os_Args.ptr)[i]);
@@ -208,7 +208,7 @@ static int check_at_exit(void) {
     return 3;
 }
 
-int sn_finish(void) {
+SN_HELD int sn_finish(void) {
     int code = check_at_exit();
     sn_signals_finish(); // a program a signal cancelled ends by it, its drops run and its blocks checked
     return code;

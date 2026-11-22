@@ -147,7 +147,7 @@ Each platform's build sees one definition of `isKernel` and one `kernel`, and th
 
 ## What the C side keeps to
 
-The compiler checks the types, and the author keeps three promises the compiler cannot check. The C side keeps no view past the call, since the bytes belong to the caller and may move or be freed when it returns. It calls nothing of the program back, since no Snello function has a symbol a library may rely on. And a call holds the worker thread it runs on until it returns, as a file read does, so a C function that waits on a device holds one of the program's workers while it waits. Memory the C side takes for itself is its own to free; the debug build's tracker counts only what the program allocates.
+The compiler checks the types, and the author keeps three promises the compiler cannot check. The C side keeps no view past the call, since the bytes belong to the caller and may move or be freed when it returns. It calls nothing of the program back, since no Snello function has a symbol a library may rely on. And a call holds the worker thread it runs on until it returns, as a file read does, so a C function that waits on a device holds one of the program's workers while it waits; the runtime starts another worker beside it. The runtime takes a task that computes too long off its thread with a signal, `SIGURG` on Linux and macOS, so a C call that waits may return `EINTR` where it did not before, as calls from Go have since Go 1.14; the system's own libraries and a library that loops on `EINTR` notice nothing, and Windows uses no signal. Memory the C side takes for itself is its own to free; the debug build's tracker counts only what the program allocates.
 
 ## Checking a package on its own
 
