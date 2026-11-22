@@ -258,4 +258,4 @@ In order of when each becomes useful.
 
 ## Name
 
-Snello: a hardwood known for durability and resistance to rot, which maps onto memory safety without a collector. Four letters, one syllable, no collision with an existing language. GitHub organization `snello-lang`, following the golang and rust-lang convention. Brand assets are in `../brand/`.
+*Snello* is the Italian word for lean and nimble, which is the claim of goals 1 and 2: a program carries nothing it does not need, no collector among it, and the language carries nothing a Go developer has to learn twice. Two syllables, *snel-lo*, and no collision with an existing language. GitHub organization `snello-lang`. Brand assets are in `../brand/`.
