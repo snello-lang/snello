@@ -163,34 +163,7 @@ Where Snello should land with the native backend. The table states expectations 
 | Dynamic dispatch | Same: a trait as a type is an interface value | Same |
 | Compile time | Much slower: monomorphization plus LLVM | Equal |
 
-Measured on an eight-core arm64 laptop by `bench/`: each binary run once for nothing and then ten times, the median reported, with the least and the most in the table `SNELLO_BENCH=1 go test ./bench -run TestBenchmarks -v` prints; the CI workflow measures the same on the x86-64 and arm64 Linux runners and writes each table to its job's summary. The comparison is with Go, the language Snello is written against; there are no Rust versions, so that the table has one comparison and no dependency. Earlier measurements, before and after the runtime's allocator, are in this file's history; what moved since is said below.
-
-| Program | Snello (LLVM) | Snello (C) | Go |
-|---|---|---|---|
-| `fib`, CPU-bound | 31 ms | 31 ms | 35 ms |
-| `tree`, allocation-heavy | 34 ms | 38 ms | 36 ms |
-| `words`, strings and a map | 67 ms | 65 ms | 148 ms |
-| `churn`, the allocator under contention | 30 ms | 29 ms | 172 ms |
-| `tasks`, a spawn | 367 ns | 577 ns | 175 ns |
-| `tasks`, a context switch | 115 ns | 116 ns | 124 ns |
-| `variadic`, a call of `...int`; of `...ref string`; given a slice | 0; 0; 0.6 ns | 0.9; 0; 0.6 ns | 2.2; 2.5; 2.2 ns |
-| `json`, encoding a record; decoding it | 202; 278 ns | 205; 275 ns | 433; 906 ns |
-| `iterators`, an item through `Filter`, `Map` and `Fold` over a deque; the loop by hand over it, Go's over a slice | 0.6; 0.4 ns | 0.6; 0.4 ns | none; 1.2 ns |
-| `memory`, peak memory | 33 MB | 66 MB | 78 MB |
-| `memory`, the mean round; rounds over twice it | 92 µs; none | 113 µs; none | 99 µs; 104 of 2,000, up to 0.8 ms |
-
-The same programs on the two Linux runners of the CI workflow, four processors each, from the `bench` job's summaries of run 42365775764, Snello through the LLVM backend against Go, the C backend's numbers in the summaries:
-
-| Program | x86-64 Linux, Snello | x86-64 Linux, Go | arm64 Linux, Snello | arm64 Linux, Go |
-|---|---|---|---|---|
-| `fib` | 22 ms | 47 ms | 22 ms | 29 ms |
-| `tree` | 34 ms | 49 ms | 38 ms | 66 ms |
-| `words` | 104 ms | 170 ms | 101 ms | 224 ms |
-| `churn` | 27 ms | 134 ms | 31 ms | 188 ms |
-| `tasks`, a spawn | 481 ns | 186 ns | 530 ns | 338 ns |
-| `tasks`, a context switch | 83 ns | 115 ns | 180 ns | 175 ns |
-| `memory`, peak memory | 34 MB | 73 MB | 34 MB | 80 MB |
-| `memory`, the mean round; rounds over twice it | 90 µs; none | 142 µs; 263 of 2,000 | 108 µs; none | 171 µs; 32 of 2,000 |
+Measured by `bench/` on the two Linux runners of the CI workflow, x86-64 and arm64 with four processors each, which run the same programs on every pull request and write the table to the `bench` job's summary: each binary run once for nothing and then ten times, the median reported with the least and the most, Snello through both backends against Go. The numbers are not copied here: a copy is right on the day it is made and wrong thereafter, and a laptop's table kept here once showed a win that was the other compiler's weakness on that processor rather than anything of Snello's. The latest run's summary is the record, under the Actions tab, and any machine prints its own table with `SNELLO_BENCH=1 go test ./bench -run TestBenchmarks -v`, whose numbers are that machine's. The programs are this repository's own, written the same way in both languages, and a row says what that program costs on that runner and nothing wider. The comparison is with Go, the language Snello is written against; there are no Rust versions, so that the table has one comparison and no dependency. The paragraphs below say what each row measures and what changed it, with the figures of the measurement that drove each change; those are this file's history, not the table of today.
 
 What the numbers say against the expectations: CPU-bound code is where the table expected it, a tenth ahead of Go. Allocation-heavy code is level with Go, where the first measurement had it behind by the margin the table foresaw, 63 ms against 38, the collector's batching against a free per node: the runtime's own allocator closed that, a small block coming from a list of free blocks of its size kept by each thread, so an allocation and a free are a few instructions and no lock, as in Go's runtime. `churn` is that allocator under contention, every core allocating at once and blocks freed on a thread other than the one that made them, and it is five to six times ahead of Go, whose collector must walk what eight goroutines make. It is also the row that shows a word shared by the threads at once: when every allocation added to one pair of counts for a benchmark's report, the row was ten times this, twice Go's, and each thread counting for itself gave it back. Strings and a map were behind Go, 194 ms against 150, with the cause put in the library; the map's Swiss table and keyed hash and the strings' single allocation per concatenation, written for the library review, put them at under half of Go's time without a change aimed at this row, through either backend now that the LLVM backend's functions name the runtime's processor and the map's and the strings' functions are written into the program (`07-lowering.md`), and `fmt.Sprint` still allocating every string is no longer what the row measures. A context switch is under Go's since the spinning worker and the inject queue took the thread wake out of a handoff and the task's state became one atomic word. A spawn is twice Go's through the LLVM backend on the Mac, 2.6 times on the x86-64 runner and 1.6 on the arm64 one, from six times before the scheduler's rework: a push wakes a worker only when none spins and hands the spin to the one it wakes, each worker's queue is a lock-free ring as Go's `runq` is, and each keeps a cache of stacks; what is left between it and Go's is the record's `calloc`, where Go draws from a per-P free list, and the stack itself, 256 KB reserved against Go's two, whose first page a burst of spawns touches per task before any runs: the peak memory of the row is that backlog, each task not yet run holding a page, and it is larger through the C backend, whose spawning loop is slower and whose backlog is longer, which is also why its spawn reads higher, the loop's own cost being in the number. The task row's numbers fall in two clusters a run apart, about 365 ns and about 450, which the least and the most in the printed table show. The task numbers move by a few percent from one run to the next and the other rows by less, which the least and the most in the printed table show.
 
