@@ -51,9 +51,8 @@
 // else.
 #define SN_CACHE_LINE 128
 
-// The most one read or write asks of the system, as Go's runtime caps
-// it: Darwin refuses a count past INT_MAX, so a larger buffer is read
-// or written in turns.
+// The most one read or write asks of the system: Darwin refuses a
+// count past INT_MAX, so a larger buffer is read or written in turns.
 #define SN_IO_MAX ((size_t)1 << 30)
 
 // A handoff is how a wake reaches a task from a thread that holds no
@@ -73,21 +72,21 @@ typedef _Atomic int sn_handoff;
 enum { SN_HANDOFF_OPEN = 0, SN_HANDOFF_WAKING = 1, SN_HANDOFF_WOKEN = 2 };
 
 // A task waiting on a channel is a waiter on the channel's queue of
-// senders or of receivers, as Go's sudog is: the task, and the value it
-// sends or the place it receives into. An operation that finds a
-// waiter does its half for it, copying the value straight from the
-// sender or into the receiver, and wakes that one task, which has
-// nothing left to do; a close wakes every waiter, each to learn it got
-// nothing. A select waits on all its channels at once, one waiter a
-// case, and the first operation to take one of them takes the select:
-// the waiters share a state the taking operation claims with one
-// compare-and-swap, and a waiter of a select already taken is dropped
-// when another operation meets it. Waiters live in the frame of the
-// wait; the operation that takes one writes everything it has to say
-// into it and then wakes its task through the wait's handoff, which
-// says woken only once the waker has claimed the task and reads nothing
-// of it any more, so the woken task's frame may end as soon as the
-// handoff says woken, and the waker never reaches a task that has ended.
+// senders or of receivers: the task, and the value it sends or the
+// place it receives into. An operation that finds a waiter does its
+// half for it, copying the value straight from the sender or into the
+// receiver, and wakes that one task, which has nothing left to do; a
+// close wakes every waiter, each to learn it got nothing. A select
+// waits on all its channels at once, one waiter a case, and the first
+// operation to take one of them takes the select: the waiters share a
+// state the taking operation claims with one compare-and-swap, and a
+// waiter of a select already taken is dropped when another operation
+// meets it. Waiters live in the frame of the wait; the operation that
+// takes one writes everything it has to say into it and then wakes its
+// task through the wait's handoff, which says woken only once the waker
+// has claimed the task and reads nothing of it any more, so the woken
+// task's frame may end as soon as the handoff says woken, and the waker
+// never reaches a task that has ended.
 typedef struct {
     _Atomic int claimed; // 0 until an operation takes the wait
     sn_handoff done;     // open until that operation is done with the waiter and its task
@@ -334,6 +333,7 @@ void sn_sched_start(void);
 int64_t sn_worker_index(void);
 int64_t sn_sched_workers(void);   // how many workers run tasks, settled before the first task runs
 int64_t sn_sched_preempted(void); // how many times a task was taken off its worker, for a test
+int64_t sn_sched_queued(void);    // how many tasks wait on the queues, for a test
 bool sn_wake_claim(sn_task *t);
 void sn_wake_queue(sn_task *t);
 
@@ -806,7 +806,7 @@ int sn_net_cancelled(void);
 // Addresses as text, lookup.c's, for the sockets of net.c: an IP
 // address read into a socket address with its port, returning the
 // address's length, 0 for a host that is not one, and a socket address
-// printed as Go prints it, with its port or without, as an owned string.
+// printed with its port or without, as an owned string.
 struct sockaddr;
 struct sockaddr_storage;
 int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr);
@@ -863,8 +863,8 @@ int64_t sn_console_write(int fd, const uint8_t *p, int64_t len);
 void sn_console_reset(int fd);
 #endif
 
-// The bits of an os.FileMode, which are Go's: the permissions in the
-// low nine, and a bit for each kind of file that is not a regular one.
+// The bits of an os.FileMode: the permissions in the low nine, and a
+// bit for each kind of file that is not a regular one.
 #define SN_MODE_DIR       (UINT32_C(1) << 31)
 #define SN_MODE_SYMLINK   (UINT32_C(1) << 27)
 #define SN_MODE_DEVICE    (UINT32_C(1) << 26)
@@ -879,8 +879,8 @@ void sn_console_reset(int fd);
     (SN_MODE_DIR | SN_MODE_SYMLINK | SN_MODE_DEVICE | SN_MODE_PIPE | SN_MODE_SOCKET | SN_MODE_CHAR | SN_MODE_IRREGULAR)
 
 // The flags of os.OpenFile, which are Snello's own numbers, the same on
-// every system: Go's differ from one system to the next, as the
-// system's do.
+// every system, where the system's own differ from one system to the
+// next.
 #define SN_O_WRONLY 1
 #define SN_O_RDWR   2
 #define SN_O_APPEND 8

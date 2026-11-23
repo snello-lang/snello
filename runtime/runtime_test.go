@@ -1920,6 +1920,76 @@ func TestPreempted(t *testing.T) {
 	}
 }
 
+// TestSpawnBacklogBounded has the main task spawn tasks far faster than
+// the other workers can take them, since each is held by a task
+// computing without a wait: a spawn that overflows its ring into an
+// inject queue already holding a full ring per worker has the spawning
+// task step aside, so the tasks queued at any moment stay within two
+// full rings per worker, the overflow that passed the mark and the
+// tasks displaced, and so does the memory their records and stacks
+// hold, whatever the machine's load. Every spawned task still runs. It
+// spawns four times the most the bound can reach, the workers grown to
+// the sixteen a core the monitor may start, so that a spawner left to
+// overflow as it likes passes the bound on any machine.
+func TestSpawnBacklogBounded(t *testing.T) {
+	if !opensCode() {
+		t.Skip("the probes' compiler cannot open code to preemption")
+	}
+
+	probe := `#include "internal.h"
+#include <stdio.h>
+#include <stdatomic.h>
+` + probeOpen + `enum { ring = 256, workers_per_core = 16 };
+static _Atomic int64_t ran, stop;
+static void spin(void *arg) {
+    (void)arg;
+    while (!atomic_load(&stop)) {
+    }
+}
+static void count(void *arg) {
+    (void)arg;
+    atomic_fetch_add(&ran, 1);
+}
+int main(int argc, char **argv) {
+    sn_init(argc, argv);
+    for (int64_t i = 1; i < sn_cores(); i++) {
+        sn_spawn(spin, NULL, 0, SN_UNBOUNDED);
+    }
+
+    int64_t spawns = 4 * (2 * workers_per_core * sn_cores() * ring + ring + 2 * workers_per_core * sn_cores() + 1);
+    int64_t most = 0;
+    for (int64_t i = 0; i < spawns; i++) {
+        sn_spawn(count, NULL, 0, SN_UNBOUNDED);
+        int64_t queued = sn_sched_queued();
+        most = queued > most ? queued : most;
+    }
+
+    while (atomic_load(&ran) < spawns) {
+        sn_sleep(1000000);
+    }
+
+    atomic_store(&stop, 1);
+    int64_t workers = sn_sched_workers();
+    printf("queued at most %lld, bound %lld, ran %lld of %lld\n", (long long)most,
+           (long long)(2 * workers * ring + ring + 2 * workers + 1), (long long)atomic_load(&ran), (long long)spawns);
+    return 0;
+}
+`
+	out, err := runProbe(buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O2"))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	var most, bound, ran, spawns int
+	if _, err := fmt.Sscanf(string(out), "queued at most %d, bound %d, ran %d of %d", &most, &bound, &ran, &spawns); err != nil {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	if most > bound || ran != spawns {
+		t.Fatalf("spawning past busy workers: %s, want the queued tasks within two full rings per worker, an overflow, the workers' displaced tasks and the spawner, and every task run", out)
+	}
+}
+
 // TestPreemptedOnlyInOpenCode has a task on every core compute without
 // a wait in code that is not open to preemption, as the C side of a
 // package is, and the C library a program links in: none is ever
@@ -4583,7 +4653,7 @@ int main(void) {
 }
 
 // zeroPadded is the text of an integer made up to width with zeros
-// after its sign, as Go's %0*d writes one in base ten.
+// after its sign, in base ten.
 func zeroPadded(s string, width int) string {
 	sign := ""
 	if strings.HasPrefix(s, "-") {

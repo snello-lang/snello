@@ -186,7 +186,7 @@ typedef struct {
 // the width with no test. A rotation turns by the count modulo the
 // width, a negative count to the right. A compiler with no builtin to
 // reverse bits swaps the neighbours, the pairs and the nibbles and
-// then the bytes, as Go's math/bits does.
+// then the bytes.
 #define SN_ALWAYS_INLINE static inline __attribute__((always_inline))
 
 SN_ALWAYS_INLINE int64_t sn_bits_LeadingZeros64(uint64_t x) { return x == 0 ? 64 : __builtin_clzll(x); }
@@ -371,9 +371,8 @@ int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r);
 int sn_utf8_encode(int32_t r, uint8_t *out);
 
 // sn_rune_upper and sn_rune_lower map a rune to its upper or lower
-// case and sn_rune_space says whether it is white space, as Go's
-// unicode.ToUpper, ToLower and IsSpace do, from the tables unicode.c
-// holds.
+// case and sn_rune_space says whether it is white space, from the
+// tables unicode.c holds.
 _Noreturn void sn_slice_bounds(int64_t lo, int64_t hi, int64_t n);
 void sn_strings_appendString(sn_slice_u8 *buf, sn_string s);
 void sn_strings_reserve(sn_slice_u8 *buf, int64_t n);
@@ -591,7 +590,7 @@ sn_string sn_truncate(sn_string s, int64_t prec, bool owned);
 double sn_f64_min(double a, double b);
 double sn_f64_max(double a, double b);
 bool sn_isprint(int32_t r); // a letter, mark, number, punctuation or symbol, or the ASCII space: printable as
-                            // strconv.IsPrint defines it
+                            // unicode.IsPrint defines it
 
 // A string and a []byte have one layout, so a conversion copies the
 // bytes into a new owned value of the other kind.
@@ -609,7 +608,7 @@ static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
 }
 
 // Printing: fmt.Println(a, b) builds the line, a, separator, b and
-// newline, and writes it to standard output at once, as Go's does.
+// newline, and writes it to standard output at once.
 void sn_print_string(sn_string s);
 void sn_print_owned(sn_string s); // prints, then drops s
 void sn_print_int(int64_t v);
@@ -869,7 +868,10 @@ extern const int64_t sn_trace_names_count;
 
 // sn_spawn starts a task that runs run on a copy of the size bytes at
 // args, which the task's record holds, so that a spawn allocates
-// nothing for them; the copy lives until the task ends.
+// nothing for them; the copy lives until the task ends. A spawn whose
+// tasks have outrun the workers has its caller step aside until they
+// catch up, so the caller may resume on another thread, as after a
+// wait.
 void sn_spawn(void (*run)(void *), const void *args, size_t size, uint32_t bound);
 // sn_spawn_handle is sn_spawn for a spawn written as an expression,
 // whose handle's channel is done: the task has a scope of its own, made
