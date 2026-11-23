@@ -38,6 +38,13 @@ const (
 // window a run seldom meets is met more often.
 const wakeRuns = 5
 
+// allocScalesLimit is how many times more four threads allocating may
+// grow a processor's time than four threads copying grow theirs. Each
+// thread's own allocations grow it about as much as copying, near one
+// times; one word every allocation writes, shared by the threads, grows
+// it ten to twenty times more. Three stands about as far from either.
+const allocScalesLimit = 3.0
+
 // The debuggers a hung probe's threads are read with: cdb on Windows,
 // from Windows' SDK, which installs it under its kit's directory for
 // each processor, lldb on macOS and gdb elsewhere, each attached to
@@ -4177,14 +4184,21 @@ int main(void) {
 	}
 }
 
-// TestAllocScales holds what allocating costs a processor when every
-// processor allocates at once to what it costs one alone. Each thread
-// keeps what it allocates and frees to itself, so four threads spend
-// four times one thread's processor time and little more; a word every
-// allocation writes, shared by the threads, has each processor wait
-// for the line of memory it is on, and four threads then spend many
-// times that. Processor time is measured, not the clock's, so that a
-// machine busy with other tests does not look like a shared word.
+// TestAllocScales holds what allocating costs a processor when four
+// threads allocate at once to what it costs one alone, against the same
+// ratio for copying: as many rounds of writes of the same sizes into a
+// thread's own memory, with no allocation. Each thread keeps what it
+// allocates and frees to itself, so four threads allocating spend four
+// times one thread's processor time and little more, as four threads
+// copying do; a word every allocation writes, shared by the threads,
+// has each processor wait for the line of memory it is on, and four
+// threads allocating then spend many times what four copying do. What
+// the machine adds when four threads run, two of them on one core as
+// its hardware threads or a lower clock, it adds to the copying as
+// well, so the comparison holds on a machine of shared cores. Processor
+// time is measured, not the clock's, so that a machine busy with other
+// tests does not look like a shared word; the least of three
+// comparisons is kept.
 func TestAllocScales(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("fewer than four processors")
@@ -4193,50 +4207,67 @@ func TestAllocScales(t *testing.T) {
 	probe := `#include "snello.h"
 #include "probe.h"
 #include <stdio.h>
-static void *work(void *arg) {
+#include <string.h>
+enum { rounds = 4000000, kept = 64, largest = 128 };
+static void *allocating(void *arg) {
     (void)arg;
-    void *keep[64] = {0};
-    for (int i = 0; i < 4000000; i++) {
-        int k = i & 63;
+    void *keep[kept] = {0};
+    for (int i = 0; i < rounds; i++) {
+        int k = i & (kept - 1);
         sn_free(keep[k]);
         keep[k] = sn_alloc(16 + (size_t)(i & 7) * 16);
     }
-    for (int k = 0; k < 64; k++) sn_free(keep[k]);
+    for (int k = 0; k < kept; k++) sn_free(keep[k]);
     return NULL;
 }
-static double spent(int threads) {
+static void *copying(void *arg) {
+    (void)arg;
+    unsigned char keep[kept][largest];
+    for (int i = 0; i < rounds; i++) {
+        int k = i & (kept - 1);
+        memset(keep[k], i, 16 + (size_t)(i & 7) * 16);
+        __asm__ volatile("" : : "r"(keep[k]) : "memory"); // the writes are made, as an allocation's are
+    }
+    return NULL;
+}
+static double spent(void *(*work)(void *), int threads) {
     probe_thread th[8];
     int64_t a = probe_cpu_work();
     for (int k = 0; k < threads; k++) th[k] = probe_thread_start(work, NULL);
     for (int k = 0; k < threads; k++) probe_thread_join(th[k]);
     return (double)(probe_cpu_work() - a);
 }
+static double scaling(void *(*work)(void *)) {
+    double one = spent(work, 1);
+    return spent(work, 4) / (4 * one);
+}
 int main(void) {
-    spent(1);
-    double one = spent(1), four = spent(4);
-    printf("%.2f\n", four / (4 * one));
+    spent(allocating, 1);
+    double alloc = scaling(allocating), copy = scaling(copying);
+    printf("%.2f %.2f\n", alloc, copy);
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
-	best := 0.0
+	best, alloc, copy := 0.0, 0.0, 0.0
 	for range 3 { // the least of three: a machine's other work only ever adds
 		out, err := exec.Command(bin).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		ratio, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-		if err != nil {
+		var a, c float64
+		if _, err := fmt.Sscanf(string(out), "%f %f", &a, &c); err != nil || c <= 0 {
 			t.Fatalf("%q: %v", out, err)
 		}
 
-		if best == 0 || ratio < best {
-			best = ratio
+		if best == 0 || a/c < best {
+			best, alloc, copy = a/c, a, c
 		}
 	}
 
-	if best > 2.5 {
-		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, want about 1 and under 2.5", best)
+	t.Logf("four threads against one: allocating %.2f times, copying %.2f times", alloc, copy)
+	if best > allocScalesLimit {
+		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, %.2f times what copying's grows, want under %.1f", alloc, best, allocScalesLimit)
 	}
 }
 
