@@ -141,7 +141,8 @@ func TestBuiltinAt(t *testing.T) {
 }
 
 // TestIsBuiltinFile knows builtinFile in a checkout of the compiler and
-// in the cache's copy for this version, and no other file.
+// in the cache's copies, of this version and of another, and no other
+// file.
 func TestIsBuiltinFile(t *testing.T) {
 	checkout, err := filepath.Abs(filepath.Join(stdCheckoutDir, filepath.FromSlash(builtinFile)))
 	if err != nil {
@@ -151,9 +152,11 @@ func TestIsBuiltinFile(t *testing.T) {
 	cache := t.TempDir()
 	t.Setenv("SNELLO_CACHE", cache)
 	copied := stdPathOf(builtinFile)
+	other := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(copied))), "0.0.1", filepath.FromSlash(builtinFile))
 	for path, want := range map[string]bool{
 		checkout: true,
 		copied:   true,
+		other:    true,
 		filepath.Join(filepath.Dir(checkout), "builtin_test.snello"): false,
 		filepath.Join(t.TempDir(), "builtin", "builtin.snello"):      false,
 	} {

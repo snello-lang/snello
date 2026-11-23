@@ -24,8 +24,9 @@ import (
 // the language's types a documented method of it is on, as builtinKind
 // and typeKind name them; integerKind, the integer type whose comment
 // documents the methods every integer type has; keyDot, which joins a
-// receiver's kind to a method's name in a key of the index; and
-// optionName, the enum T? is written for.
+// receiver's kind to a method's name in a key of the index; optionName,
+// the enum T? is written for; and negTrait, the trait a minus before a
+// value is behind.
 const (
 	builtinFile = "builtin/builtin.snello"
 	sliceKind   = "[]T"
@@ -40,6 +41,21 @@ const (
 	integerKind = "int"
 	keyDot      = "."
 	optionName  = "Option"
+	negTrait    = "Neg"
+)
+
+// builtinOperators are the forms the operators the declarations of
+// builtinFile write stand for: a receive-only channel's arrow, a
+// variadic's dots and an owned pointer's star; and operatorTraits the
+// standard traits an operator between two values, or before one, or of
+// a compound assignment, is behind, whose comments say so.
+var (
+	builtinOperators = map[string]string{"<-": doc.FormChan, "...": doc.FormVariadic, "*": doc.FormPointer}
+	operatorTraits   = map[token.Kind]string{
+		token.ADD: "Add", token.SUB: "Sub", token.MUL: "Mul", token.QUO: "Div", token.REM: "Rem",
+		token.ADD_ASSIGN: "Add", token.SUB_ASSIGN: "Sub", token.MUL_ASSIGN: "Mul", token.QUO_ASSIGN: "Div", token.REM_ASSIGN: "Rem",
+		token.EQL: "Eq", token.NEQ: "Eq", token.LSS: "Ord", token.LEQ: "Ord", token.GTR: "Ord", token.GEQ: "Ord",
+	}
 )
 
 // builtins is the index of the compiler's copy of builtinFile, read
@@ -142,8 +158,12 @@ func builtinMethodOf(recv types.Type, name string) (builtinDecl, bool) {
 
 // builtinFormOf returns the documentation of the form the syntax node n
 // writes, from builtinFile: a type the language writes with its own
-// syntax, map[K]V or []T, T? by Option's, and a borrow, ref T or mut T,
-// in a type or at a call; false for any other node.
+// syntax, map[K]V or []T, T? by Option's; a borrow, ref T or mut T, in
+// a type or at a call; and an operator's, x?, x ?? y, a send, a
+// receive, &x and *p by the owned pointer's, a match arm's => by
+// match's, and a variadic's ...; an arithmetic operator's or a
+// comparison's, by its standard trait's, + by Add's and < by Ord's,
+// and a compound assignment's, += by Add's; false for any other node.
 func builtinFormOf(n ast.Node) (builtinDecl, bool) {
 	index := builtins()
 	name := ""
@@ -169,6 +189,35 @@ func builtinFormOf(n ast.Node) (builtinDecl, bool) {
 			name = doc.FormRef
 		case token.MUT:
 			name = doc.FormMut
+		case token.ARROW:
+			name = doc.FormReceive
+		case token.AND, token.MUL:
+			name = doc.FormPointer
+		case token.SUB:
+			d, ok := index.names[negTrait]
+			return d, ok
+		}
+	case *ast.BinaryExpr:
+		d, ok := index.names[operatorTraits[n.Op]]
+		return d, ok
+	case *ast.AssignStmt:
+		d, ok := index.names[operatorTraits[n.Tok]]
+		return d, ok
+	case *ast.TryExpr:
+		name = doc.FormTry
+	case *ast.CoalesceExpr:
+		name = doc.FormCoalesce
+	case *ast.SendStmt:
+		name = doc.FormSend
+	case *ast.MatchArm:
+		name = doc.FormMatch
+	case *ast.Param:
+		if n.Dots.IsValid() {
+			name = doc.FormVariadic
+		}
+	case *ast.CallExpr:
+		if n.Ellipsis.IsValid() {
+			name = doc.FormVariadic
 		}
 	case *ast.OptionType:
 		d, ok := index.names[optionName]
@@ -196,13 +245,27 @@ func builtinAt(src []byte, offset int) (builtinDecl, bool) {
 		return builtinDecl{}, false
 	}
 
-	d, ok := index.names[string(src[start:end])]
+	word := string(src[start:end])
+	if d, ok := index.names[word]; ok {
+		return d, true
+	}
+
+	if name, ok := builtinOperators[word]; ok { // an operator of a declaration of the file, T? or <-chan T
+		word = name
+	}
+
+	if word == optionKind[len(optionKind)-1:] {
+		d, ok := index.names[optionName]
+		return d, ok
+	}
+
+	d, ok := index.forms[word] // a keyword in a declaration of the file, map of a receiver's map[K]V
 	return d, ok
 }
 
 // isBuiltinFile reports whether path is builtinFile: the one in a
-// checkout of the compiler, std/builtin/builtin.snello, or its copy in
-// the cache for this version of the compiler. Neither is checked, since
+// checkout of the compiler, std/builtin/builtin.snello, or a copy of it
+// in the cache, for any version of the compiler. Neither is checked, since
 // nothing compiles it, so its places are answered from its text.
 func isBuiltinFile(path string) bool {
 	if filepath.Base(path) != filepath.Base(builtinFile) {
@@ -210,8 +273,8 @@ func isBuiltinFile(path string) bool {
 	}
 
 	dir := filepath.Dir(path)
-	if p, ok := stdCopyOf(dir); ok {
-		return p == builtinPackage
+	if _, ok := stdCopyOf(dir); ok {
+		return filepath.Base(dir) == builtinPackage // any version's copy, answered from its own text
 	}
 
 	_, p, ok := importer.StdPackage(dir)

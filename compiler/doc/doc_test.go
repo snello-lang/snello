@@ -112,7 +112,7 @@ func TestStandardLinks(t *testing.T) {
 // place its form is written; a comment that begins with one but is a
 // declaration's, or a word that is no form, documents none.
 func TestForms(t *testing.T) {
-	src := "package builtin\n\n// map[K]V is a map.\n\n// ref T is a borrow.\n\n// map[K]V is this function's own.\nfunc f() {}\n\n// mapping is no form.\n"
+	src := "package builtin\n\n// map[K]V is a map.\n\n// ref T is a borrow.\n\n// map[K]V is this function's own.\nfunc f() {}\n\n// mapping is no form.\n\n//chan T has no space after its marks.\n"
 	file := token.NewFile("builtin.snello", len(src))
 	f, err := parser.ParseComments(file, []byte(src))
 	if err != nil {
@@ -120,12 +120,14 @@ func TestForms(t *testing.T) {
 	}
 
 	forms := Forms(f)
-	if len(forms) != 2 || forms[0].Name != FormMap || forms[0].Written != "map[K]V" || forms[0].Doc != "map[K]V is a map.\n" || forms[1].Name != FormRef {
-		t.Fatalf("forms: %+v, want the map's and the borrow's, in order", forms)
+	if len(forms) != 3 || forms[0].Name != FormMap || forms[0].Written != "map[K]V" || forms[0].Doc != "map[K]V is a map.\n" || forms[1].Name != FormRef || forms[2].Name != FormChan {
+		t.Fatalf("forms: %+v, want the map's, the borrow's and the channel's, in order", forms)
 	}
 
-	if at := file.Offset(forms[0].Pos); src[at:at+len(forms[0].Written)] != forms[0].Written {
-		t.Errorf("the map's form is at %d, %q", at, src[at:])
+	for _, form := range forms {
+		if at := file.Offset(form.Pos); src[at:at+len(form.Written)] != form.Written {
+			t.Errorf("%s's form is at %d, %q", form.Name, at, src[at:])
+		}
 	}
 
 	p, err := Builtin()
@@ -138,7 +140,33 @@ func TestForms(t *testing.T) {
 		names = append(names, form.Name)
 	}
 
-	if want := []string{FormSlice, FormArray, FormMap, FormChan, FormPointer, FormRef, FormMut}; !slices.Equal(names, want) {
-		t.Errorf("the builtin package documents the forms %v, want %v", names, want)
+	var want []string
+	for _, form := range builtinForms {
+		want = append(want, form.name)
+	}
+
+	if !slices.Equal(names, want) {
+		t.Errorf("the builtin package documents the forms %v, want every form, %v", names, want)
+	}
+}
+
+// TestBegins holds a form to begin a comment as a word: followed by a
+// space, a comma or a dot, and not by more of a word or by nothing.
+func TestBegins(t *testing.T) {
+	for _, tt := range []struct {
+		text, written string
+		want          bool
+	}{
+		{"for loops", "for", true},
+		{"impl, after", "impl", true},
+		{"super.M(args)", "super", true},
+		{"map[K]V is a map", "map[K]V", true},
+		{"format the output", "for", false},
+		{"for_each", "for", false},
+		{"for", "for", false},
+	} {
+		if got := begins(tt.text, tt.written); got != tt.want {
+			t.Errorf("begins(%q, %q) = %v, want %v", tt.text, tt.written, got, tt.want)
+		}
 	}
 }

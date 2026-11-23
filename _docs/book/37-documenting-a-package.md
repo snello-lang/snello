@@ -67,7 +67,7 @@ snello doc strings.Builder      a name: its declaration and comment, its methods
 snello doc strings.Builder.Len  a method, a field, a variant, or a function of the type
 snello doc Builder              a name looked for in the current package, then in the standard library
 snello doc builtin.Option       a predeclared name
-snello doc builtin.map          a form the language writes with its own syntax: map, slice, array, chan, pointer, ref, mut
+snello doc builtin.map          a form the language writes with its own syntax, or a keyword: map, slice, ref, try, spawn, match
 snello doc -all strings         every exported name with its comment
 snello doc -u strings           the unexported names too
 ```

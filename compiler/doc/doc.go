@@ -15,6 +15,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -22,37 +24,77 @@ import (
 )
 
 // resultType is the name of the predeclared Result, whose first
-// argument a function that makes a type returns.
-const resultType = "Result"
-
-// The names of the forms the language writes with its own syntax, which
-// the builtin package documents: snello doc builtin map asks for one,
-// and a page links to it by it.
+// argument a function that makes a type returns; and the names of the
+// forms the language writes with its own syntax that a syntax node
+// says, which the builtin package documents: snello doc builtin.map
+// asks for one, and a page links to it by it. A keyword's form is named
+// by the keyword itself.
 const (
-	FormSlice   = "slice"
-	FormArray   = "array"
-	FormMap     = "map"
-	FormChan    = "chan"
-	FormPointer = "pointer"
-	FormRef     = "ref"
-	FormMut     = "mut"
+	resultType    = "Result"
+	FormSlice     = "slice"
+	FormArray     = "array"
+	FormMap       = "map"
+	FormChan      = "chan"
+	FormPointer   = "pointer"
+	FormRef       = "ref"
+	FormMut       = "mut"
+	FormMatch     = "match"
+	FormTry       = "try"
+	FormCoalesce  = "coalesce"
+	FormSend      = "send"
+	FormReceive   = "receive"
+	FormVariadic  = "variadic"
+	FormAttribute = "attribute"
+	FormBlank     = "_"
+	FormPattern   = "pattern"
 )
 
 // builtinForms are the forms the builtin package documents, each by its
-// name and the text its comment begins with, and formMark the text a
-// comment's line begins with, before what the comment says.
-var (
-	builtinForms = []struct{ name, written string }{
-		{FormSlice, "[]T"},
-		{FormArray, "[N]T"},
-		{FormMap, "map[K]V"},
-		{FormChan, "chan T"},
-		{FormPointer, "*T"},
-		{FormRef, "ref T"},
-		{FormMut, "mut T"},
-	}
-	formMark = len("// ")
-)
+// name and the text its comment begins with: the types, the operators,
+// and every keyword, by itself.
+var builtinForms = []struct{ name, written string }{
+	{FormSlice, "[]T"},
+	{FormArray, "[N]T"},
+	{FormMap, "map[K]V"},
+	{FormChan, "chan T"},
+	{FormPointer, "*T"},
+	{FormRef, "ref T"},
+	{FormMut, "mut T"},
+	{FormTry, "x?"},
+	{FormCoalesce, "x ?? y"},
+	{FormSend, "ch <- v"},
+	{FormReceive, "<-ch"},
+	{FormVariadic, "xs ...T"},
+	{FormAttribute, "@A"},
+	{"package", "package"},
+	{"import", "import"},
+	{"const", "const"},
+	{"var", "var"},
+	{"type", "type"},
+	{"struct", "struct"},
+	{"enum", "enum"},
+	{"trait", "trait"},
+	{"impl", "impl"},
+	{"Self", "Self"},
+	{"super", "super"},
+	{"func", "func"},
+	{"return", "return"},
+	{"if", "if"},
+	{"else", "else"},
+	{FormMatch, "match"},
+	{"for", "for"},
+	{"range", "range"},
+	{"break", "break"},
+	{"continue", "continue"},
+	{"spawn", "spawn"},
+	{"defer", "defer"},
+	{"select", "select"},
+	{"case", "case"},
+	{"default", "default"},
+	{"switch", "switch"},
+	{FormBlank, "_"},
+	{FormPattern, "pattern"},
+}
 
 // A Source is a package as loaded for its documentation.
 type Source struct {
@@ -301,8 +343,8 @@ func New(src Source) *Package {
 
 // Forms returns the forms the file f documents: each of its comments
 // attached to no declaration that begins with a form the language
-// writes with its own syntax and a space, map[K]V is a map, in the
-// order they are written.
+// writes with its own syntax, as a word, map[K]V is a map or impl,
+// after, in the order they are written.
 func Forms(f *ast.File) []*Form {
 	if f.Docs == nil {
 		return nil
@@ -323,8 +365,9 @@ func Forms(f *ast.File) []*Form {
 
 		text := g.Text()
 		for _, form := range builtinForms {
-			if strings.HasPrefix(text, form.written+" ") {
-				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: g.Pos() + token.Pos(formMark)})
+			if begins(text, form.written) {
+				at := strings.Index(g.List[0].Text, form.written) // where the comment's text begins, after its marks
+				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: g.List[0].Slash + token.Pos(at)})
 			}
 		}
 	}
@@ -483,4 +526,16 @@ func made(r ast.Type) string {
 	}
 
 	return ""
+}
+
+// begins reports whether text begins with the form written, as a word:
+// what follows it is no letter, digit or underscore, so that for begins
+// "for loops" and not "format".
+func begins(text, written string) bool {
+	if !strings.HasPrefix(text, written) || len(text) == len(written) {
+		return false
+	}
+
+	next, _ := utf8.DecodeRuneInString(text[len(written):])
+	return next != '_' && !unicode.IsLetter(next) && !unicode.IsDigit(next)
 }

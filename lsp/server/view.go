@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/doc"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/scanner"
@@ -22,14 +23,29 @@ import (
 
 // posType is the type of a position, which a node's fields that hold
 // where its own tokens are have; formTokens are the tokens a form the
-// language writes with its own syntax is written with, map[K]V, ref T,
-// T? by its last and a channel's direction, <-chan T and chan<- T, the
-// only ones a place's node is looked for at before its name; and
-// chanTokens those of a channel's type, which begins with either.
+// language writes with its own syntax is written with, a type, map[K]V,
+// ref T, T? by its last and a channel's direction, <-chan T and
+// chan<- T, and an operator, x?, x ?? y, <-ch, &x, a match arm's =>, a
+// variadic's ... and an attribute's @, a pattern's | and ..=, and an
+// arithmetic operator, a comparison and a compound assignment, which a
+// standard trait is behind, whose node a place on them is looked for
+// at; chanTokens those of a
+// channel's type, which begins with either; attrToken the one an
+// attribute begins with, whose node is kept beside the syntax tree;
+// patternTokens those that join a pattern's parts, which no node holds;
+// superWord the keyword a trait's method calls the next definition with,
+// which is parsed as a name; and fieldsFunc and variantsFunc the
+// functions that give a type's parts, whose members their comments
+// document.
 var (
-	posType    = reflect.TypeOf(token.NoPos)
-	formTokens = []string{"map", "chan", "<-", "ref", "mut", "[", "*", "?"}
-	chanTokens = []string{"chan", "<-"}
+	posType       = reflect.TypeOf(token.NoPos)
+	formTokens    = []string{"map", "chan", "<-", "ref", "mut", "[", "*", "?", "??", "&", "=>", "...", "@", "|", "..=", "+", "-", "/", "%", "==", "!=", "<", "<=", ">", ">=", "+=", "-=", "*=", "/=", "%="}
+	chanTokens    = []string{"chan", "<-"}
+	attrToken     = "@"
+	patternTokens = []string{"|", "..="}
+	superWord     = "super"
+	fieldsFunc    = "fields"
+	variantsFunc  = "variants"
 )
 
 // A view is what one check leaves for the requests on its package's
@@ -65,6 +81,16 @@ type target struct {
 	pkg        *types.Package
 	builtin    *builtinDecl
 	start, end int
+}
+
+// A packageFile is a source file of a package: its name, its text, the
+// offset of the name its package clause gives, and the comment above
+// the clause.
+type packageFile struct {
+	name   string
+	src    []byte
+	clause int
+	doc    string
 }
 
 // newView returns the view of a check that reads its sources into
@@ -216,23 +242,25 @@ func (v *view) at(file *token.File, src []byte, offset int) *target {
 		return nil
 	}
 
-	if start, end, ok := tokenAt(file.Name(), src, offset); ok && slices.Contains(formTokens, string(src[start:end])) { // a form's own token, ? of int?, before the name it may follow
-		n := owner(syntax, file.Pos(start))
-		if slices.Contains(chanTokens, string(src[start:end])) {
-			if ch := chanTypeAt(syntax, file.Pos(start)); ch != nil {
-				n = ch
+	id := identAt(syntax, file, offset)
+	if id == nil || offset == file.Offset(id.NamePos)+len(id.Name) { // on no name's letters: a form's, a keyword's or an operator's token, ? of int?, before the name it may follow
+		if start, end, ok := tokenAt(file.Name(), src, offset); ok {
+			if d, ok := v.tokenForm(syntax, file, string(src[start:end]), file.Pos(start)); ok {
+				return &target{builtin: &d, start: start, end: end}
 			}
-		}
-
-		if d, ok := v.formAt(n); ok {
-			return &target{builtin: &d, start: start, end: end}
 		}
 	}
 
-	if id := identAt(syntax, file, offset); id != nil {
+	if id != nil {
 		start := file.Offset(id.NamePos)
 		if id == syntax.Name {
 			return &target{pkg: v.ownPackage(file, syntax), start: start, end: start + len(id.Name)}
+		}
+
+		if id.Name == superWord && selectorOf(syntax, id) == nil {
+			if d, ok := builtins().forms[superWord]; ok { // super.M(args): the checker records the receiver's use
+				return &target{builtin: &d, start: start, end: start + len(id.Name)}
+			}
 		}
 
 		obj := v.info.Defs[id]
@@ -240,10 +268,24 @@ func (v *view) at(file *token.File, src []byte, offset int) *target {
 			obj = v.info.Uses[id]
 		}
 
+		if obj == nil {
+			obj = v.paramOf(syntax, id)
+		}
+
 		t := &target{obj: obj, typ: v.info.Types[id], start: start, end: start + len(id.Name)}
 		if obj == nil {
 			if sel := selectorOf(syntax, id); sel != nil {
 				if d, ok := builtinMethodOf(v.info.Types[sel.X], id.Name); ok {
+					t.builtin = &d
+				} else if d, ok := v.partMember(sel); ok {
+					t.builtin = &d
+				}
+			} else if isLanguageType(syntax, id) {
+				if d, ok := builtins().names[id.Name]; ok { // Result<T, E>, which is in no scope
+					t.builtin = &d
+				}
+			} else if id.Name == doc.FormBlank || token.Lookup(id.Name).IsKeyword() {
+				if d, ok := builtins().forms[id.Name]; ok { // the blank name, and super, which is parsed as a name
 					t.builtin = &d
 				}
 			}
@@ -324,16 +366,6 @@ func (v *view) packageDoc(pkg *types.Package) string {
 	return strings.Join(docs, "\n")
 }
 
-// A packageFile is a source file of a package: its name, its text, the
-// offset of the name its package clause gives, and the comment above
-// the clause.
-type packageFile struct {
-	name   string
-	src    []byte
-	clause int
-	doc    string
-}
-
 // packageFiles returns the source files of pkg, a package the check
 // loaded, in the order of their names, a test file left out: the files
 // of the check in the directory of its declarations whose clause names
@@ -378,9 +410,48 @@ func (v *view) packageFiles(pkg *types.Package) []packageFile {
 	return files
 }
 
+// tokenForm returns the documentation of the form the token text at
+// pos is part of: an attribute's, from its @; the node of a form's or
+// an operator's token, a channel's type from either of its tokens, with
+// the form as the place writes it; or else a keyword's, by the keyword;
+// false for any other token.
+func (v *view) tokenForm(syntax *ast.File, file *token.File, text string, pos token.Pos) (builtinDecl, bool) {
+	if text == attrToken && isAttr(syntax, pos) {
+		d, ok := builtins().forms[doc.FormAttribute]
+		return d, ok
+	}
+
+	if slices.Contains(formTokens, text) {
+		n := owner(syntax, pos)
+		switch {
+		case slices.Contains(chanTokens, text):
+			if ch := chanTypeAt(syntax, pos); ch != nil {
+				n = ch
+			}
+		case slices.Contains(patternTokens, text):
+			if patternAt(syntax, pos) {
+				d, ok := builtins().forms[doc.FormPattern]
+				return d, ok
+			}
+		}
+
+		if d, ok := v.formAt(n); ok {
+			return d, true
+		}
+	}
+
+	if !token.Lookup(text).IsKeyword() && text != doc.FormBlank {
+		return builtinDecl{}, false
+	}
+
+	d, ok := builtins().forms[text] // a keyword's, or the blank name's, a pattern's _ among them
+	return d, ok
+}
+
 // formAt returns the documentation of the form the syntax node n
-// writes, builtinFormOf's, with the form as the place writes it, its
-// type for a borrow at a call, ref T, in place of the file's.
+// writes, builtinFormOf's, with the form as the place writes it: a
+// type's text, and the type of an expression an operator gives, &x or
+// x?, in place of the file's.
 func (v *view) formAt(n ast.Node) (builtinDecl, bool) {
 	d, ok := builtinFormOf(n)
 	if !ok {
@@ -390,13 +461,131 @@ func (v *view) formAt(n ast.Node) (builtinDecl, bool) {
 	switch n := n.(type) {
 	case ast.Type:
 		d.decl = ast.SourceType(n)
-	case ast.Expr:
-		if t := v.info.Types[n]; t != nil {
+	case *ast.UnaryExpr, *ast.TryExpr, *ast.CoalesceExpr, *ast.BinaryExpr:
+		if t := v.info.Types[n.(ast.Expr)]; t != nil {
 			d.decl = t.String()
 		}
 	}
 
 	return d, true
+}
+
+// isAttr reports whether an attribute's @ is at pos, among the
+// attributes the syntax keeps beside its tree.
+func isAttr(syntax *ast.File, pos token.Pos) bool {
+	for _, attrs := range syntax.Attrs {
+		for _, a := range attrs {
+			if a.At == pos {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// paramOf returns the parameter, or the receiver, id names in the
+// declaration of a function without a body, one the runtime or C
+// provides, or a trait's required method, whose parameters the checker
+// declares no object for: the one its signature holds; nil for any
+// other name.
+func (v *view) paramOf(syntax *ast.File, id *ast.Ident) types.Object {
+	var found types.Object
+	ast.Inspect(syntax, func(n ast.Node) bool {
+		fd, ok := n.(*ast.FuncDecl)
+		if !ok || found != nil {
+			return found == nil
+		}
+
+		if fd.Body != nil {
+			return true
+		}
+
+		fn, _ := v.info.Defs[fd.Name].(*types.Func)
+		if fn == nil {
+			return true
+		}
+
+		sig, _ := fn.Type().(*types.Signature)
+		if sig == nil {
+			return true
+		}
+
+		if fd.Recv != nil && fd.Recv.Name == id && sig.Recv() != nil {
+			found = sig.Recv()
+		}
+
+		for i, p := range fd.Params {
+			if p.Name == id && i < len(sig.Params()) {
+				found = sig.Params()[i]
+			}
+		}
+
+		return found == nil
+	})
+
+	return found
+}
+
+// partMember returns the documentation of a member of a part of a type,
+// f.name, f.type or f.default of a field fields(T) gives, or of a
+// variant variants(T) gives: the comment of the function that gives
+// the part, which says what each member is.
+func (v *view) partMember(sel *ast.SelectorExpr) (builtinDecl, bool) {
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return builtinDecl{}, false
+	}
+
+	part, ok := v.info.Uses[x].(*types.Part)
+	if !ok {
+		return builtinDecl{}, false
+	}
+
+	giver := fieldsFunc
+	if part.IsVariant() {
+		giver = variantsFunc
+	}
+
+	d, ok := builtins().names[giver]
+	return d, ok
+}
+
+// patternAt reports whether pos is between the parts of a pattern of
+// alternatives, where a | joins two, or of a range, where ..= joins its
+// ends.
+func patternAt(syntax *ast.File, pos token.Pos) bool {
+	found := false
+	ast.Inspect(syntax, func(n ast.Node) bool {
+		switch p := n.(type) {
+		case *ast.OrPat:
+			for i := 1; i < len(p.Alts); i++ {
+				found = found || p.Alts[i-1].Pos() < pos && pos < p.Alts[i].Pos()
+			}
+		case *ast.RangePat:
+			found = found || p.Lo.Pos() < pos && pos < p.Hi.Pos()
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// isLanguageType reports whether id names a type in a type, written
+// with no package: Result<T, E>, a type the language declares in no
+// scope.
+func isLanguageType(syntax *ast.File, id *ast.Ident) bool {
+	found := false
+	ast.Inspect(syntax, func(n ast.Node) bool {
+		if nt, ok := n.(*ast.NamedType); ok && nt.Name == id && nt.Pkg == nil {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
 }
 
 // chanTypeAt returns the channel type whose arrow or keyword is at pos,
@@ -484,7 +673,7 @@ func (v *view) typeOf(obj types.Object) *types.TypeName {
 // name stands; nil for none.
 func identAt(syntax *ast.File, file *token.File, offset int) *ast.Ident {
 	var within, ending *ast.Ident
-	ast.Inspect(syntax, func(n ast.Node) bool {
+	visit := func(n ast.Node) bool {
 		if within != nil {
 			return false
 		}
@@ -499,7 +688,14 @@ func identAt(syntax *ast.File, file *token.File, offset int) *ast.Ident {
 		}
 
 		return true
-	})
+	}
+
+	ast.Inspect(syntax, visit)
+	for _, attrs := range syntax.Attrs { // the attributes, kept beside the tree, which Inspect does not walk
+		for _, a := range attrs {
+			ast.Inspect(a.X, visit)
+		}
+	}
 
 	if within != nil {
 		return within

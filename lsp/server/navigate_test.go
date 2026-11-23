@@ -23,6 +23,67 @@ import (
 	"github.com/snello-lang/snello/std"
 )
 
+// keywordProgram is the program TestKeywordNavigation hovers over: a
+// use of every keyword and operator it asks about.
+const keywordProgram = `package main
+
+import ("encoding/json"; "fmt")
+
+trait Shape {
+	func (s ref Self) Area(scale int) f64
+	func (s ref Self) Describe() string { return "a shape" }
+}
+
+trait Loud: Shape {
+	func (s ref Self) Describe() string { return "loud " + super.Describe() }
+}
+
+struct Port impl Loud {
+	n int @json.Name("port")
+}
+
+func (p ref Port) Area(scale int) f64 { return 1.0 }
+
+func total(xs ...int) int {
+	sum := 0
+	for _, x := range xs {
+		sum += x
+	}
+	return sum
+}
+
+func half(n int) Result<int, string> {
+	if n % 2 == 1 {
+		return Err("odd")
+	}
+	return Ok(n / 2)
+}
+
+func quarter(n int) Result<int, string> {
+	h := half(n)?
+	return half(h)
+}
+
+func main() {
+	ch := make(chan int, 1)
+	ch <- 1
+	got := <-ch
+	v := got ?? 0
+	p := &Port{n: v}
+	defer fmt.Println("done")
+	spawn fmt.Println("task")
+	x := 5
+	y := x * 2 & 7 | 1
+	label := match x {
+		1 | 2 => "small",
+		3..=9 => "mid",
+		_ => "big",
+	}
+	_ = total(3)
+	fmt.Println(total(1, 2), quarter(8), label, y, p.n, (*p).n, p.Describe())
+}
+`
+
 // A place is a name or a token of a file of examples/packaged, as a
 // test points at it: the file, under the example, the text that leads
 // to it, and the text it begins, which may be the lead's own end.
@@ -129,8 +190,9 @@ func TestDefinition(t *testing.T) {
 // trait, an enum, a variant, a variable, a constant and a field as the
 // checker types it, in a Snello block of Markdown, each with its doc
 // comment below it; a package's comment on its name, its import's path
-// and its clause; the type of an expression at its operator or its
-// literal; and nothing where there is neither. A hover sent after a
+// and its clause; the type of an expression at its operator, with the
+// comment of the standard trait behind the operator, or at its literal;
+// and nothing where there is neither. A hover sent after a
 // change is answered on the changed text. In plain text the declaration
 // is not fenced.
 func TestHover(t *testing.T) {
@@ -153,7 +215,7 @@ func TestHover(t *testing.T) {
 		{"a package variable", place{"main.snello", "shapes.Area(r), ", "reports.Load()"}, "reports", "var reports sync.Counter", "reports counts the reports made: a package variable declared in the\nsecond file of the main package and read by the first, a counter\nsince a package variable is changed only through what it holds.\n"},
 		{"a constant", place{"shapes/shape.snello", "math.", "Pi"}, "Pi", "const Pi f64 = 3.141592653589793", "Pi is the ratio of a circle's circumference to its diameter, to the\nprecision an f64 holds.\n"},
 		{"a field", place{"shapes/shape.snello", "math.Pi * c.", "Radius"}, "Radius", "field Radius f64", ""},
-		{"an operator", place{"main.snello", "kindOf(ref r) ", "=="}, "==", "bool", ""},
+		{"an operator", place{"main.snello", "kindOf(ref r) ", "=="}, "==", "bool", "Eq compares two values for equality, behind == and !=, lending both.\nA struct or enum that lists Eq has it derived from its fields; a\ntype that writes Eq and lists Hash writes Hash too, since equal\nvalues must hash alike.\n"},
 		{"a literal", place{"main.snello", "Medal{points: ", "7"}, "7", "int", ""},
 		{"a test file's type", place{"shapes/shapes_test.snello", "cases := []", "Case"}, "Case", "struct Case {\n\tname string\n\tkind shapes.Kind\n\twant string\n}", ""},
 		{"a package's name", place{"main.snello", "c := ", "shapes.Circle"}, "shapes", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
@@ -380,7 +442,8 @@ func TestPackageDocTests(t *testing.T) {
 // builtinFile itself, the checkout's, which nothing checks: a name it
 // declares has its own comment, a name a signature uses has the
 // comment of its declaration and its definition in the same document,
-// and a form's comment documents its form.
+// a form's comment documents its form, and a declaration's keywords
+// and operators, map, ? and ..., have their forms' comments.
 func TestBuiltinFile(t *testing.T) {
 	checkout, err := filepath.Abs(stdCheckoutDir)
 	if err != nil {
@@ -395,6 +458,9 @@ func TestBuiltinFile(t *testing.T) {
 		{place{builtinFile, "trait ", "Eq {"}, "Eq compares two values for equality"},
 		{place{builtinFile, "Eq(o ref Self) ", "bool }"}, "bool is the type of a condition"},
 		{place{builtinFile, "// ", "map[K]V is a map"}, "map[K]V is a map"},
+		{place{builtinFile, "func (m ref ", "map[K]V) Get"}, "map[K]V is a map"},
+		{place{builtinFile, "func (o T", "?) Unwrap"}, "An Option<T>, written T?"},
+		{place{builtinFile, "func print(args ", "...ref any)"}, "xs ...T"},
 	} {
 		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
 			t.Errorf("hover on %s: %+v, want %q", tt.at.at, h, tt.doc)
@@ -456,6 +522,95 @@ func TestFormNavigation(t *testing.T) {
 
 	if h := n.hover(place{"main.snello", "{ out ", "<- 1 }"}); h != nil && strings.Contains(h.Contents.Value, "chan T is a channel") {
 		t.Errorf("the arrow of a send: %+v, want no channel type's comment", h)
+	}
+
+	n.shutdown()
+}
+
+// TestPartNavigation hovers on a member of a field a loop over
+// fields(T) gives, f.default in encoding/json: the comment of fields,
+// which says what each member is.
+func TestPartNavigation(t *testing.T) {
+	checkout, err := filepath.Abs(stdCheckoutDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := navigateIn(t, protocol.ClientCapabilities{}, checkout, "encoding/json/json.snello")
+	if h := n.hover(place{"encoding/json/json.snello", "_ => f.", "default ??"}); h == nil || !strings.Contains(h.Contents.Value, "f.default its default") {
+		t.Errorf("hover on f.default: %+v, want the comment of fields", h)
+	}
+
+	n.shutdown()
+}
+
+// TestKeywordNavigation hovers on the keywords and operators the
+// language writes with its own syntax, each with the comment
+// builtinFile writes for it: a keyword where it stands, super, which is
+// parsed as a name, the blank name and a wildcard, the parts of a
+// pattern, ?, ??, a send and a receive, & and a dereference, a match
+// arm's =>, a variadic's ..., an attribute's @; and the names with no
+// object of their own: Result in a type, a required method's parameter
+// and a name in an attribute; an arithmetic operator, a comparison and
+// a compound assignment, with the comment of the standard trait behind
+// it. An operator that is no form, *, & and | between numbers, has no
+// form's comment.
+func TestKeywordNavigation(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.snello": keywordProgram})
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello")
+	for _, tt := range []struct {
+		at  place
+		doc string
+	}{
+		{place{"main.snello", "", "package main"}, "package begins every file"},
+		{place{"main.snello", "", "import ("}, "import names the packages"},
+		{place{"main.snello", "", "trait Shape"}, "trait Name { members }"},
+		{place{"main.snello", "Area(scale int) f64\n\tfunc (s ref ", "Self) Describe"}, "Self, inside a trait"},
+		{place{"main.snello", "\"loud \" + ", "super.Describe"}, "super.M(args)"},
+		{place{"main.snello", "", "struct Port"}, "struct Name { fields }"},
+		{place{"main.snello", "struct Port ", "impl Loud"}, "impl, after a type's name"},
+		{place{"main.snello", "", "func total"}, "func declares a function"},
+		{place{"main.snello", "\t", "for _, x"}, "for loops"},
+		{place{"main.snello", "x := ", "range xs"}, "range, in a for"},
+		{place{"main.snello", "\t", "return sum"}, "return ends the function"},
+		{place{"main.snello", "\t", "if n %"}, "if runs its block"},
+		{place{"main.snello", "\t", "defer fmt"}, "defer f(x) runs the call"},
+		{place{"main.snello", "\t", "spawn fmt"}, "spawn f(x) starts a task"},
+		{place{"main.snello", "label := ", "match x"}, "match x { arms }"},
+		{place{"main.snello", "\t", "_ = total"}, "_ is the blank name"},
+		{place{"main.snello", "\t\t", "_ => \"big\""}, "_ is the blank name"},
+		{place{"main.snello", "\t\t1 ", "| 2"}, "pattern, in a match arm"},
+		{place{"main.snello", "\t\t3", "..=9"}, "pattern, in a match arm"},
+		{place{"main.snello", "1 | 2 ", "=> \"small\""}, "match x { arms }"},
+		{place{"main.snello", "h := half(n)", "?"}, "x? yields the value"},
+		{place{"main.snello", "got ", "?? 0"}, "x ?? y yields"},
+		{place{"main.snello", "\tch ", "<- 1"}, "ch <- v sends v"},
+		{place{"main.snello", "got := ", "<-ch"}, "<-ch receives"},
+		{place{"main.snello", "p := ", "&Port"}, "*T is an owned pointer"},
+		{place{"main.snello", "(", "*p).n"}, "*T is an owned pointer"},
+		{place{"main.snello", "total(xs ", "...int)"}, "xs ...T"},
+		{place{"main.snello", "n int ", "@json"}, "@A, after what it is about"},
+		{place{"main.snello", "func half(n int) ", "Result<int"}, "A Result<T, E>"},
+		{place{"main.snello", "Area(", "scale int) f64\n\tfunc"}, "scale int"},
+		{place{"main.snello", "@json.", "Name(\"port\")"}, "Name"},
+		{place{"main.snello", "y := x ", "* 2"}, "Mul"},
+		{place{"main.snello", "if n ", "% 2"}, "Rem"},
+		{place{"main.snello", "sum ", "+= x"}, "Add"},
+		{place{"main.snello", "% 2 ", "== 1"}, "Eq compares two values"},
+	} {
+		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
+			t.Errorf("hover on %q: %+v, want %q", tt.at.at, h, tt.doc)
+		}
+	}
+
+	for _, at := range []place{
+		{"main.snello", "y := x ", "* 2"},
+		{"main.snello", "* 2 ", "& 7"},
+		{"main.snello", "& 7 ", "| 1"},
+	} {
+		if h := n.hover(at); h != nil && (strings.Contains(h.Contents.Value, "owned pointer") || strings.Contains(h.Contents.Value, "pattern")) {
+			t.Errorf("hover on %q, an operator between numbers: %+v, want no form's comment", at.at, h)
+		}
 	}
 
 	n.shutdown()

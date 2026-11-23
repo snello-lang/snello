@@ -250,8 +250,8 @@ func (t *Type) functions() []*Func {
 	return append(out, t.Methods...)
 }
 
-// writeFunc writes a function's signature; with its comment, after a
-// blank line, when withDoc asks.
+// writeForm writes a form as written; with its comment, after a blank
+// line, when withDoc asks.
 func (p *Package) writeForm(b *strings.Builder, form *Form, withDoc bool) {
 	if withDoc {
 		b.WriteString(lineSep)
@@ -275,6 +275,8 @@ func (p *Package) form(name string) *Form {
 	return nil
 }
 
+// writeFunc writes a function's signature; with its comment, after a
+// blank line, when withDoc asks.
 func (p *Package) writeFunc(b *strings.Builder, fn *Func, withDoc bool) {
 	if withDoc {
 		b.WriteString(lineSep)
