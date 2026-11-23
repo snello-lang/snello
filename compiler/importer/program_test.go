@@ -640,35 +640,99 @@ func TestRecoveredNoPanic(t *testing.T) {
 	}
 }
 
-// TestUnexportedMembers refuses a program the unexported members of a
-// trait of another package, by whatever way it reaches them: a field
-// the trait gives its own type, a default its own type inherits, from
-// the trait or from one it refines, and a member through a value of the
-// trait and through a type parameter bound by it; and a generic type's
-// unexported field on an instance; and lets it reach the exported ones.
+// TestUnexportedMembers checks that a trait's unexported members are
+// its package's alone. A program may not name them, by any road: a
+// field or default its own type gets from the trait or one it refines,
+// a value of the trait, a type parameter it bounds, a generic type's
+// instance, or super. It may not stand in for them: its type may not
+// override an unexported default or answer an unexported requirement,
+// a generic trait's and a function of the type among them, nor may a
+// trait of its own or a default of another package; an unexported
+// default may not answer the program's requirement either, nor a trait
+// of the program redeclare an unexported field, and two defaults where
+// one is unexported are refused, with no way out to offer. Each
+// mistake gives one message: a trait refused for an unexported
+// requirement is not asked for its exported ones, and is refused once
+// however many listed traits reach it; a requirement no answer may
+// meet is the one mistake, whatever the type declares or inherits for
+// it; and a mistake told where it was made leaves the trait's other
+// requirements asked for. The program may inherit the default, take
+// the trait's package's own default as the answer, and use, override
+// and answer the exported members.
 func TestUnexportedMembers(t *testing.T) {
-	const lib = "package lib\n\ntrait Tagged {\n\tvar tag int\n\tfunc (t ref Self) hidden() int { return 1 }\n\tfunc (t ref Self) Shown() int { return 2 }\n}\n\ntrait Labeled: Tagged {}\n\nstruct Box<T> { v T }\n\nfunc Box<T>.Of(v T) Box<T> { return Box<T>{v: v} }\n"
+	const lib = "package lib\n\ntrait Tagged {\n\tvar tag int\n\tfunc (t ref Self) hidden() int { return 1 }\n\tfunc (t ref Self) Shown() int { return 2 }\n}\n\ntrait Labeled: Tagged {}\n\nstruct Box<T> { v T }\n\nfunc Box<T>.Of(v T) Box<T> { return Box<T>{v: v} }\n\ntrait Sealed {\n\tfunc (s ref Self) secret() int { return 1 }\n\tfunc (s ref Self) Peek() int { return s.secret() }\n}\n\ntrait Want {\n\tfunc (s ref Self) want() int\n}\n\nstruct Inner impl Sealed, Want { n int }\n\nfunc (i ref Inner) secret() int { return 2 }\n\nfunc (i ref Inner) want() int { return i.n }\n\ntrait A {\n\tfunc (s ref Self) f() int\n\tfunc (s ref Self) Get() int { return s.f() }\n}\n\ntrait B: A {\n\tfunc (s ref Self) f() int { return 7 }\n}\n\ntrait Other {\n\tfunc (s ref Self) secret() int { return 3 }\n}\n\ntrait It<T> {\n\tfunc (s ref Self) step() T\n}\n\ntrait Maker {\n\tfunc make() Self\n}\n\ntrait Three {\n\tfunc (s ref Self) a() int\n\tfunc (s ref Self) b() int\n\tfunc (s ref Self) c() int\n}\n\ntrait Sized {\n\tfunc (s ref Self) Size() int\n}\n\ntrait Mixed {\n\tfunc (s ref Self) Size() int\n\tfunc (s ref Self) want() int\n}\n\ntrait Named {\n\tfunc (s ref Self) Name() string\n}\n\ntrait Sealed2: Named {\n\tfunc (s ref Self) want() int\n}\n\ntrait GiveW {\n\tfunc (s ref Self) want() int { return 7 }\n}\n\ntrait TaggedTwice: Tagged {\n\tvar tag int\n}\n"
+	const lib2 = "package lib2\n\ntrait Give {\n\tfunc (s ref Self) want() int { return 7 }\n}\n\ntrait Hide {\n\tfunc (s ref Self) secret() int { return 4 }\n}\n\ntrait Need2 {\n\tfunc (s ref Self) want() int\n\tfunc (s ref Self) Use2() int { return s.want() }\n}\n"
 	tests := []struct {
-		name, body, want string
+		name, body, want string // want holds the messages expected, one a line, in the order of their positions
 	}{
-		{"a field the trait gives", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{tag: 1, n: 2}; _ = m.tag }\n", "tag of Mine is not exported"},
+		{"a field the trait gives", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.tag }\n", "tag of Mine is not exported"},
+		{"a field the trait gives, in a literal", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{tag: 1, n: 2}; _ = m.n }\n", "tag of Mine is not exported"},
 		{"an inherited default", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
 		{"through a trait value", "func use(x ref lib.Tagged) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of Tagged is not exported"},
 		{"a field through a trait value", "func use(x ref lib.Tagged) int { return x.tag }\n\nfunc main() {}\n", "tag of Tagged is not exported"},
 		{"through a bound", "func use<T: lib.Tagged>(x ref T) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of T is not exported"},
 		{"a refined trait's default", "struct Mine impl lib.Labeled { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
 		{"a generic instance's field", "func main() { b := lib.Box<int>.Of(1); _ = b.v }\n", "v of lib.Box<int> is not exported"},
+		{"an override of an unexported default", "struct Mine impl lib.Sealed { n int }\n\nfunc (m ref Mine) secret() int { return 99 }\n\nfunc main() { m := Mine{n: 1}; _ = m.Peek() }\n", "Mine.secret would override Sealed.secret, which is not exported, so only lib's types override it"},
+		{"an unexported method required", "struct Mine impl lib.Want { n int }\n\nfunc (m ref Mine) want() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"an unexported requirement beside an exported one", "struct Mine impl lib.Mixed { n int }\n\nfunc main() {}\n", "Mine cannot implement Mixed: Mixed requires want, which is not exported"},
+		{"an unexported requirement over a refined trait's exported one", "struct Mine impl lib.Sealed2 { n int }\n\nfunc main() {}\n", "Mine cannot implement Sealed2: Sealed2 requires want, which is not exported"},
+		{"a type of the program taking a trait's stand-in", "trait W2: lib.Want {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nstruct Mine impl W2 { n int }\n\nfunc main() {}\n", "W2.want would stand for Want.want, which is not exported"},
+		{"a trait standing in for an unexported field", "trait P: lib.Tagged {\n\tvar tag int\n}\n\nstruct Mine impl P { n int }\n\nfunc main() {}\n", "P.tag would stand for Tagged.tag, which is not exported, so only lib's traits and types declare it"},
+		{"a field named twice within the library", "struct Mine impl lib.TaggedTwice { n int }\n\nfunc main() {}\n", "Mine gets a field tag from both TaggedTwice and Tagged"},
+		{"a sealed trait reached through two listed traits", "trait W3: lib.Want {}\n\nstruct Mine impl lib.Want, W3 { n int }\n\nfunc (m ref Mine) want() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"the package's default in an ambiguity", "trait Give {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nstruct Mine impl lib.Want, lib.GiveW, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement both Give and GiveW: each gives it a default want, and lib's is not exported, so Mine cannot declare its own to choose"},
+		{"a refused override beside a missing method", "struct Mine impl lib.Mixed, lib.GiveW { n int }\n\nfunc (m ref Mine) want() int { return 1 }\n\nfunc main() {}\n", "Mine does not implement Mixed: missing method Size() int\nMine.want would override GiveW.want, which is not exported"},
+		{"two defaults of the program's under a sealed requirement", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\ntrait Y {\n\tfunc (s ref Self) want() int { return 2 }\n}\n\nstruct Mine impl lib.Want, X, Y { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"a method of the type's beside a default of the program's, under a sealed requirement", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\nstruct Mine impl lib.Want, X { n int }\n\nfunc (m ref Mine) want() string { return \"\" }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"a field of the type's own beside a stand-in's", "trait P: lib.Tagged {\n\tvar tag int\n}\n\nstruct Mine impl P { tag int }\n\nfunc main() {}\n", "P.tag would stand for Tagged.tag, which is not exported\nfield tag is also a field of P"},
+		{"a default answering the program's requirement under a sealed one", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\ntrait Need {\n\tfunc (s ref Self) want() int\n}\n\nstruct Mine impl lib.Want, X, Need { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"a third package's own default answering its requirement under a sealed one", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib2.Need2, lib2.Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"the package's default answering it while another package's requirement is sealed", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib.GiveW, lib2.Need2 { n int }\n\nfunc main() {}\n", "Mine cannot implement Need2: Need2 requires want, which is not exported, so only lib2's traits and types answer it"},
+		{"a requirement of three unexported methods", "struct Mine impl lib.Three { n int }\n\nfunc main() {}\n", "Mine cannot implement Three: Three requires a, which is not exported"},
+		{"another package's default answering", "trait Give {\n\tfunc (s ref Self) want() int { return 42 }\n}\n\nstruct Mine impl lib.Want, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"a third package's default answering", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib2.Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"another package's default, through a trait refining both", "trait Give {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\ntrait Both: lib.Want, Give {}\n\nstruct Mine impl Both { n int }\n\nfunc main() {}\n", "Mine cannot implement Both: Want requires want, which is not exported"},
+		{"another package's default answering a generic trait", "trait Give {\n\tfunc (s ref Self) step() int { return 11 }\n}\n\nstruct Mine impl lib.It<int>, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement It<int>: It<int> requires step, which is not exported"},
+		{"an unexported default answering the program's requirement", "trait Need {\n\tfunc (s ref Self) secret() int\n}\n\nstruct Mine impl lib.Sealed, Need { n int }\n\nfunc main() {}\n", "Mine cannot implement Need: Need requires secret, and the one Mine inherits is Sealed's, which is not exported, so it answers only lib's traits"},
+		{"super from the type's own method", "struct Mine impl lib.Sealed { n int }\n\nfunc (m ref Mine) Call() int { return super.secret() }\n\nfunc main() {}\n", "secret of Sealed is not exported"},
+		{"super from a trait of the program", "trait T: lib.Sealed {\n\tfunc (s ref Self) Call() int { return super.secret() }\n}\n\nfunc main() {}\n", "secret of Sealed is not exported"},
+		{"an override of the package's default answering its requirement", "struct Mine impl lib.B { n int }\n\nfunc (m ref Mine) f() int { return 1 }\n\nfunc main() {}\n", "Mine.f would override B.f, which is not exported, so only lib's types override it"},
+		{"a trait standing in for an unexported default", "trait Mine2: lib.Sealed {\n\tfunc (s ref Self) secret() int { return 99 }\n}\n\nfunc main() {}\n", "Mine2.secret would stand for Sealed.secret, which is not exported, so only lib's traits and types declare it"},
+		{"a trait standing in for an unexported required method", "trait W2: lib.Want {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nfunc main() {}\n", "W2.want would stand for Want.want, which is not exported, so only lib's traits and types declare it"},
+		{"the package's own default answering", "struct Mine impl lib.B { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Get() }\n", ""},
+		{"the package's own default, through a trait of the program", "trait C: lib.B {}\n\nstruct Mine impl C { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Get() }\n", ""},
+		{"two defaults, one sealed", "struct Mine impl lib.Sealed, lib.Other { n int }\n\nfunc main() {}\n", "Mine cannot implement both Other and Sealed: each gives it a default secret, and lib's are not exported, so Mine cannot declare its own to choose"},
+		{"two defaults, sealed by two packages", "import \"lib2\"\n\nstruct Mine impl lib.Sealed, lib2.Hide { n int }\n\nfunc main() {}\n", "Mine cannot implement both Hide and Sealed: each gives it a default secret, and lib2's and lib's are not exported"},
+		{"a generic trait's instance", "struct Mine impl lib.It<int> { n int }\n\nfunc (m ref Mine) step() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement It<int>: It<int> requires step, which is not exported"},
+		{"an unexported function of the type", "struct Mine impl lib.Maker { n int }\n\nfunc Mine.make() Mine { return Mine{n: 0} }\n\nfunc main() {}\n", "Mine cannot implement Maker: Maker requires make, which is not exported"},
+		{"an unexported default inherited", "struct Mine impl lib.Sealed { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Peek() }\n", ""},
 		{"the exported ones", "struct Mine impl lib.Tagged { n int }\n\nfunc use<T: lib.Tagged>(x ref T) int { return x.Shown() }\n\nfunc main() { m := Mine{n: 2}; _ = m.Shown() + use(ref m) }\n", ""},
+		{"the exported ones overridden and answered", "struct Mine impl lib.Tagged, lib.Sized { n int }\n\nfunc (m ref Mine) Shown() int { return 5 }\n\nfunc (m ref Mine) Size() int { return m.n }\n\nfunc main() {}\n", ""},
 	}
 
 	for _, tt := range tests {
-		root := writeTree(t, map[string]string{ModFile: "snello 0.1.0\n", "lib/lib.snello": lib, "main.snello": "package main\n\nimport \"lib\"\n\n" + tt.body})
+		root := writeTree(t, map[string]string{ModFile: "snello 0.1.0\n", "lib/lib.snello": lib, "lib2/lib2.snello": lib2, "main.snello": "package main\n\nimport \"lib\"\n\n" + tt.body})
 		_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}}, &types.Info{})
-		switch {
-		case tt.want == "" && err != nil:
-			t.Errorf("%s: %v, want none", tt.name, err)
-		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
-			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
+		if tt.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v, want none", tt.name, err)
+			}
+
+			continue
+		}
+
+		var list scanner.ErrorList
+		wants := strings.Split(tt.want, "\n")
+		if !errors.As(err, &list) || len(list) != len(wants) { // one mistake, one message
+			t.Errorf("%s: %v, want only %q", tt.name, err, wants)
+			continue
+		}
+
+		for i, want := range wants {
+			if !strings.Contains(list[i].Msg, want) {
+				t.Errorf("%s: %s, want %q", tt.name, list[i].Msg, want)
+			}
 		}
 	}
 }

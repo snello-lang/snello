@@ -54,7 +54,7 @@ A trait's name is looked up as a trait. A package may declare a type with the sa
 
 ## Default methods
 
-A trait method may have a body. It is then a default: a type implementing the trait gets the method without declaring it, and may declare its own instead.
+A trait method may have a body. It is then a default: a type implementing the trait gets the method without declaring it, and may declare its own instead, unless the default's name is not exported and the trait is another package's (see [A trait's members across packages](#a-traits-members-across-packages)).
 
 ```go
 trait Shape {
@@ -79,16 +79,20 @@ A `Circle impl Shape` with no `Describe` of its own gets the trait's, so `circle
 
 ## A trait's members across packages
 
-A member a trait declares with a name that is not exported, a field, a required method or a default, belongs to the trait's package. Another package cannot read the field or call the method, by any road: not on a type of its own that implements the trait and holds the field or inherits the default, not through a value of the trait, and not through a type parameter the trait bounds. `x.tag` and `m.hidden()` are refused with `tag of Mine is not exported`, as a struct's unexported field is; the trait's own package names them through any of these. A type of another package may still declare a method of the same name, which the trait's own code then calls as the trait's.
+A member a trait declares with a name that is not exported, a field, a required method or a default, belongs to the trait's package. Another package cannot read the field or call the method, by any road: not on a type of its own that implements the trait and holds the field or inherits the default, not through a value of the trait, not through a type parameter the trait bounds, and not through `super`. `x.tag` and `m.hidden()` are refused with `tag of Mine is not exported`, as a struct's unexported field is; the trait's own package names them through any of these.
+
+Nor can another package stand in for such a member. A type of another package cannot implement a trait that requires a method not exported, since its package could not name the method: `Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it`. A default of the program's own, or of a third package, does not answer it either. A trait like that is sealed, its package alone implementing it, unless the package itself gives a default of that name, in a trait refining it or in any other trait of its own; a type listing both then has its answer from the package. And a type of another package that inherits a default not exported cannot override it with a method of the same name, `Mine.secret would override Sealed.secret, which is not exported, so only lib's types override it`, so that the trait's own code, which calls the default, always runs the trait's. A trait of another package that refines it cannot stand in either, with a method for a method or a field for a field: `trait Mine2: lib.Sealed` declaring `secret` is refused with `Mine2.secret would stand for Sealed.secret, which is not exported, so only lib's traits and types declare it`. What the trait's package provides is enough, though: a required method that is not exported, answered by a default of the same package, leaves the trait open to every package. The rule holds the other way too: an unexported default does not answer a requirement of another package that happens to share its name, `Mine cannot implement Need: Need requires secret, and the one Mine inherits is Sealed's, which is not exported, so it answers only lib's traits`.
+
+One case follows from this. A type that inherits a default another package keeps unexported and, from another trait, a default of the same name has no way to choose between them, since the way out, a method of its own, is closed: `Mine cannot implement both Other and Sealed: each gives it a default secret, and lib's are not exported, so Mine cannot declare its own to choose`. For the same reason, a package that adds a default not exported to a trait it exports breaks a type of another package that has a method of that name.
 
 ## Which default a type gets
 
 A type may implement several traits, and more than one of them may provide a default for the same method. The compiler settles it when the program is compiled, in an order the declaration fixes:
 
-1. The type's own methods come first. A declared method overrides every default.
+1. The type's own methods come first. A declared method overrides every default, but for one another package keeps unexported, which it may not override.
 2. Then the traits of the `impl` list, from right to left, each trait followed by the traits it refines. A trait reached more than once is consulted where it was reached last, so a trait always comes before the traits it refines, wherever the list names them.
 
-A refining trait may override a default of the trait it refines:
+A refining trait may override a default of the trait it refines, one of another package only when its name is exported:
 
 ```go
 trait Loud: Shape {
