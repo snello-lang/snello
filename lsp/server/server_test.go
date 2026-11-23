@@ -66,13 +66,17 @@ func TestSession(t *testing.T) {
 	dir := writeModule(t, map[string]string{"main.snello": mainValid, "other.snello": otherSrc, "lib/lib.snello": libValid})
 	mainPath, otherPath, libPath := filepath.Join(dir, "main.snello"), filepath.Join(dir, "other.snello"), filepath.Join(dir, "lib", "lib.snello")
 	c := startSession(t)
-	result := c.initialize(nil)
+	result := c.initialize(protocol.ClientCapabilities{})
 	if result.Capabilities.PositionEncoding != protocol.PositionEncodingUTF16 || result.ServerInfo == nil || result.ServerInfo.Name != name {
 		t.Errorf("the handshake's answer: %+v", result)
 	}
 
 	if sync := result.Capabilities.TextDocumentSync; sync == nil || !sync.OpenClose || sync.Change != protocol.TextDocumentSyncKindIncremental {
 		t.Errorf("the document sync offered: %+v", sync)
+	}
+
+	if !result.Capabilities.HoverProvider || !result.Capabilities.DefinitionProvider {
+		t.Errorf("hover and definition not offered: %+v", result.Capabilities)
 	}
 
 	mainURI := uriOf(mainPath)
@@ -153,7 +157,7 @@ func TestSession(t *testing.T) {
 func TestSessionUTF8(t *testing.T) {
 	dir := writeModule(t, map[string]string{"main.snello": mainValid, "other.snello": otherSrc, "lib/lib.snello": libValid})
 	c := startSession(t)
-	result := c.initialize(&protocol.GeneralClientCapabilities{PositionEncodings: []string{protocol.PositionEncodingUTF8, protocol.PositionEncodingUTF16}})
+	result := c.initialize(protocol.ClientCapabilities{General: &protocol.GeneralClientCapabilities{PositionEncodings: []string{protocol.PositionEncodingUTF8, protocol.PositionEncodingUTF16}}})
 	if result.Capabilities.PositionEncoding != protocol.PositionEncodingUTF8 {
 		t.Errorf("offered UTF-8: %q", result.Capabilities.PositionEncoding)
 	}
@@ -179,14 +183,14 @@ func TestSessionErrors(t *testing.T) {
 		t.Errorf("a request before the handshake: %+v", m.Error)
 	}
 
-	c.initialize(nil)
+	c.initialize(protocol.ClientCapabilities{})
 	if m := c.call(protocol.MethodInitialize, protocol.InitializeParams{}); m.Error == nil || m.Error.Code != jsonrpc.InvalidRequest {
 		t.Errorf("a second handshake: %+v", m.Error)
 	}
 
 	c.notify("$/cancelRequest", map[string]int{"id": 1})
 	c.notify("workspace/didChangeConfiguration", map[string]any{})
-	if m := c.call("textDocument/hover", map[string]any{}); m.Error == nil || m.Error.Code != jsonrpc.MethodNotFound {
+	if m := c.call("textDocument/codeLens", map[string]any{}); m.Error == nil || m.Error.Code != jsonrpc.MethodNotFound {
 		t.Errorf("a method the server does not have: %+v", m.Error)
 	}
 
@@ -216,14 +220,14 @@ func TestSessionErrors(t *testing.T) {
 	}
 
 	abrupt := startSession(t)
-	abrupt.initialize(nil)
+	abrupt.initialize(protocol.ClientCapabilities{})
 	abrupt.notify(protocol.MethodExit, nil)
 	if code := abrupt.wait(); code != exitAbruptly {
 		t.Errorf("exit with no shutdown: %d, want %d", code, exitAbruptly)
 	}
 
 	closed := startSession(t)
-	closed.initialize(nil)
+	closed.initialize(protocol.ClientCapabilities{})
 	closed.in.Close()
 	if code := closed.wait(); code != exitAbruptly {
 		t.Errorf("the end of the stream: %d, want %d", code, exitAbruptly)
@@ -258,11 +262,11 @@ func startSession(t *testing.T) *session {
 	return c
 }
 
-// initialize performs the handshake, offering the position encodings
-// general gives, and returns the server's answer.
-func (c *session) initialize(general *protocol.GeneralClientCapabilities) protocol.InitializeResult {
+// initialize performs the handshake, offering the capabilities caps
+// gives, and returns the server's answer.
+func (c *session) initialize(caps protocol.ClientCapabilities) protocol.InitializeResult {
 	c.t.Helper()
-	m := c.call(protocol.MethodInitialize, protocol.InitializeParams{Capabilities: protocol.ClientCapabilities{General: general}})
+	m := c.call(protocol.MethodInitialize, protocol.InitializeParams{Capabilities: caps})
 	if m.Error != nil {
 		c.t.Fatalf("the handshake: %v", m.Error)
 	}

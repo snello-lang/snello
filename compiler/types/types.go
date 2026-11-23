@@ -651,7 +651,7 @@ func signatureString(s *Signature) string {
 			case VariadicOwned:
 				b.WriteString(elem.String())
 				continue
-			case VariadicLent:
+			case VariadicLent, VariadicAny:
 				b.WriteString("ref ")
 				b.WriteString(elem.String())
 				continue

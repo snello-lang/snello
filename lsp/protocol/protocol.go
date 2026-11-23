@@ -4,7 +4,7 @@
 
 // Package protocol holds the types of the Language Server Protocol the
 // server uses, and only those: the handshake, the document
-// notifications and the diagnostics. Each type and field is named as
+// notifications, the diagnostics, hover and definition. Each type and field is named as
 // the specification names it and encoded as its JSON spells it, so that
 // a reader can hold the two side by side. It is modeled on the Language
 // Server Protocol specification, 3.17.
@@ -21,12 +21,19 @@ const (
 	MethodDidSave            = "textDocument/didSave"
 	MethodDidClose           = "textDocument/didClose"
 	MethodPublishDiagnostics = "textDocument/publishDiagnostics"
+	MethodHover              = "textDocument/hover"
+	MethodDefinition         = "textDocument/definition"
 
 	// The units a position's character counts in, which the client
 	// offers and the server picks: UTF-16 code units, the protocol's
 	// default, or UTF-8 bytes.
 	PositionEncodingUTF16 = "utf-16"
 	PositionEncodingUTF8  = "utf-8"
+
+	// The forms a hover's text is written in, which the client says it
+	// renders: Markdown, or plain text, which every client renders.
+	MarkupKindMarkdown  = "markdown"
+	MarkupKindPlainText = "plaintext"
 )
 
 // A DocumentURI names a document, file:///home/me/a.snello for a file.
@@ -53,9 +60,22 @@ type InitializeParams struct {
 }
 
 // ClientCapabilities is what the client can do; the server reads the
-// position encodings it offers alone.
+// position encodings it offers and the forms its hover renders.
 type ClientCapabilities struct {
-	General *GeneralClientCapabilities `json:"general,omitempty"`
+	General      *GeneralClientCapabilities      `json:"general,omitempty"`
+	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
+}
+
+// TextDocumentClientCapabilities is what the client can do with a
+// document; the server reads its hover's alone.
+type TextDocumentClientCapabilities struct {
+	Hover *HoverClientCapabilities `json:"hover,omitempty"`
+}
+
+// HoverClientCapabilities holds the forms the client renders a hover's
+// text in, in its order of preference.
+type HoverClientCapabilities struct {
+	ContentFormat []string `json:"contentFormat,omitempty"`
 }
 
 // GeneralClientCapabilities holds the position encodings the client
@@ -72,8 +92,10 @@ type InitializeResult struct {
 
 // ServerCapabilities is what the server does, and nothing it does not.
 type ServerCapabilities struct {
-	PositionEncoding string                   `json:"positionEncoding,omitempty"`
-	TextDocumentSync *TextDocumentSyncOptions `json:"textDocumentSync,omitempty"`
+	PositionEncoding   string                   `json:"positionEncoding,omitempty"`
+	TextDocumentSync   *TextDocumentSyncOptions `json:"textDocumentSync,omitempty"`
+	HoverProvider      bool                     `json:"hoverProvider,omitempty"`
+	DefinitionProvider bool                     `json:"definitionProvider,omitempty"`
 }
 
 // TextDocumentSyncOptions says which document notifications the server
@@ -179,3 +201,29 @@ const (
 	SeverityInformation
 	SeverityHint
 )
+
+// TextDocumentPositionParams is a place in a document a request asks
+// about: what hover and definition are asked with.
+type TextDocumentPositionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// Hover is the answer to a hover: its text, and the stretch of the
+// document it is about.
+type Hover struct {
+	Contents MarkupContent `json:"contents"`
+	Range    *Range        `json:"range,omitempty"`
+}
+
+// MarkupContent is text in one of the forms of MarkupKind.
+type MarkupContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// A Location is a stretch of a document: where a definition is.
+type Location struct {
+	URI   DocumentURI `json:"uri"`
+	Range Range       `json:"range"`
+}

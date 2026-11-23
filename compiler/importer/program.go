@@ -41,11 +41,13 @@ type Program struct {
 // reads every source, the package's and its imports', in place of the
 // disk, which nil reads. Cached resolves the module's requirements from
 // the module cache and the lock file alone, as Module.ResolveCached
-// says: nothing fetched, nothing written.
+// says: nothing fetched, nothing written. Parsed is called with each
+// file the check parses, as Importer.Parsed says.
 type Options struct {
 	Target platform.Target
 	Read   func(name string) ([]byte, error)
 	Cached bool
+	Parsed func(file *token.File, syntax *ast.File)
 }
 
 // CheckMain reports why the program cannot be built: main is not
@@ -93,7 +95,8 @@ func LoadProgram(names []string, t platform.Target, info *types.Info) (*Importer
 // files are named, as a standard package's tests are. With no Srcs, the
 // sources are read through Read, the program's and every package's it
 // imports, or from the disk when Read is nil; Cached resolves the
-// module as Options.Cached says.
+// module as Options.Cached says, and Parsed is called with each file
+// parsed, as Importer.Parsed says.
 type Load struct {
 	Names      []string
 	Srcs       [][]byte
@@ -106,6 +109,7 @@ type Load struct {
 	Comments   bool            // the program's own files parsed with their comments, for snello doc and the examples' runner
 	Read       func(name string) ([]byte, error)
 	Cached     bool
+	Parsed     func(file *token.File, syntax *ast.File)
 }
 
 // LoadProgramFrom loads a program from its sources, as LoadProgram
@@ -119,6 +123,7 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 	imp.Tests = l.Tests
 	imp.StdDir = l.StdDir
 	imp.Read = l.Read
+	imp.Parsed = l.Parsed
 	if l.Srcs == nil {
 		l.Srcs = make([][]byte, len(l.Names))
 		for i, name := range l.Names {
@@ -145,7 +150,7 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 		}
 	}
 
-	fset, syntax, err := parseFiles(l.Names, l.Srcs, l.Comments)
+	files, syntax, err := imp.parseFiles(l.Names, l.Srcs, l.Comments)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,12 +173,12 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 	}
 
 	conf := types.Config{Importer: imp}
-	pkg, err := conf.CheckFiles("", fset.Files(), syntax, info)
+	pkg, err := conf.CheckFiles("", files, syntax, info)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return imp, &Program{fset.Files(), syntax, pkg}, nil
+	return imp, &Program{files, syntax, pkg}, nil
 }
 
 // CheckDir checks the package in dir as snello check DIR does: as a
@@ -225,7 +230,7 @@ func CheckTests(dir, path string, info *types.Info, o Options) error {
 // Load returns the load of the program of the files named, read as o
 // says.
 func (o Options) Load(names []string) Load {
-	return Load{Names: names, Target: o.Target, Read: o.Read, Cached: o.Cached}
+	return Load{Names: names, Target: o.Target, Read: o.Read, Cached: o.Cached, Parsed: o.Parsed}
 }
 
 // SourceFiles returns the .snello files of dir built for t, sorted by
@@ -312,7 +317,7 @@ func importIn(m *Module, path, tests string, info *types.Info, o Options) error 
 	}
 
 	imp := NewImporter(info)
-	imp.Module, imp.Target, imp.Read, imp.Tests = m, o.Target, o.Read, tests
+	imp.Module, imp.Target, imp.Read, imp.Parsed, imp.Tests = m, o.Target, o.Read, o.Parsed, tests
 	_, err := imp.ImportFrom(path, m.Dir)
 	return err
 }
@@ -440,24 +445,30 @@ func isC(name string) bool {
 	return strings.HasSuffix(name, ".c") || strings.HasSuffix(name, ".h")
 }
 
-// parseFiles parses the sources named into one FileSet, so that a
-// position names its file, and returns the files, their syntax and the
-// errors of every file together; comments asks for the files' comments.
-func parseFiles(names []string, srcs [][]byte, comments bool) (*token.FileSet, []*ast.File, error) {
+// parseFiles parses the sources named into the importer's FileSet, so
+// that a position names one file of the program, and returns the files,
+// their syntax and the errors of every file together, each file given
+// to Parsed as it is parsed; comments asks for the files' comments.
+func (imp *Importer) parseFiles(names []string, srcs [][]byte, comments bool) ([]*token.File, []*ast.File, error) {
 	parse := parser.Parse
 	if comments {
 		parse = parser.ParseComments
 	}
 
-	fset := token.NewFileSet()
+	files := make([]*token.File, len(names))
 	syntax := make([]*ast.File, len(names))
 	var errs scanner.ErrorList
 	for i, name := range names {
+		files[i] = imp.fset.AddFile(name, len(srcs[i]))
 		var err error
-		if syntax[i], err = parse(fset.AddFile(name, len(srcs[i])), srcs[i]); err != nil {
+		if syntax[i], err = parse(files[i], srcs[i]); err != nil {
 			errs = append(errs, err.(scanner.ErrorList)...)
+		}
+
+		if imp.Parsed != nil {
+			imp.Parsed(files[i], syntax[i])
 		}
 	}
 
-	return fset, syntax, errs.Err()
+	return files, syntax, errs.Err()
 }

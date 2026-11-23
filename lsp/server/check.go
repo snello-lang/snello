@@ -5,6 +5,7 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -18,7 +19,7 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/testrun"
-	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/lsp/protocol"
 )
 
@@ -35,11 +36,15 @@ const (
 type report map[string][]protocol.Diagnostic
 
 // checkAll checks every package with an open document and keeps its
-// reports in place of the last; a package with no open document left
-// loses its reports. A package is checked as snello check DIR checks
-// it, and its tests as snello test loads them; a directory in which
-// more than one file declares main holds programs of one file each, as
-// snello build FILE builds them, and each file is checked alone.
+// reports in place of the last, and the views of its files; a package
+// with no open document left loses its reports. A package is checked
+// as snello check DIR checks it, and its tests as snello test loads
+// them; a directory in which more than one file declares main holds
+// programs of one file each, as snello build FILE builds them, and each
+// file is checked alone. A copy of the standard library's, which a
+// definition opened, is the library's package and reports nothing: it
+// is answered from a check of the package in the compiler, and a copy
+// of another version's from none.
 func (s *Server) checkAll() {
 	dirs := s.openPackages()
 	for dir := range s.reports {
@@ -48,20 +53,65 @@ func (s *Server) checkAll() {
 		}
 	}
 
+	last := s.views
+	s.views = make(map[string]*view)
 	for _, dir := range dirs {
-		if programs := s.programsIn(dir); len(programs) > 1 {
+		if path, ok := stdCopyOf(dir); ok {
 			s.reports[dir] = nil
-			for _, name := range programs {
-				s.reports[dir] = append(s.reports[dir], s.checkProgram(name))
+			if path != "" {
+				s.keep(dir, s.checkStd(path), last)
 			}
 
 			continue
 		}
 
-		s.reports[dir] = []report{s.checkSources(dir)}
-		if tests, err := importer.TestFiles(dir, platform.Host()); err == nil && len(tests) > 0 {
-			s.reports[dir] = append(s.reports[dir], s.checkTests(dir))
+		if programs := s.programsIn(dir); len(programs) > 1 {
+			s.reports[dir] = nil
+			for _, name := range programs {
+				r, v := s.checkProgram(name)
+				s.reports[dir] = append(s.reports[dir], r)
+				s.keep(dir, v, last)
+			}
+
+			continue
 		}
+
+		r, v := s.checkSources(dir)
+		s.reports[dir] = []report{r}
+		s.keep(dir, v, last)
+		if tests, err := importer.TestFiles(dir, platform.Host()); err == nil && len(tests) > 0 {
+			r, v := s.checkTests(dir)
+			s.reports[dir] = append(s.reports[dir], r)
+			s.keep(dir, v, last)
+		}
+	}
+}
+
+// keep trims v to the files of dir its check parsed that no check
+// before it parsed, and makes it their view: a package's files are
+// answered from the check of its sources, and its test files from the
+// check of its tests. A file the check did not type, since it or a file
+// beside it does not parse, keeps its view of the last checks while its
+// text is the one that view read, so that a syntax error darkens the
+// file it is in alone.
+func (s *Server) keep(dir string, v *view, last map[string]*view) {
+	own := make(map[string]*token.File)
+	for _, f := range v.files {
+		if path := stdPathOf(f.Name()); filepath.Dir(path) == dir && s.views[path] == nil {
+			own[path] = f
+		}
+	}
+
+	v.trim(own)
+	for path, f := range own {
+		old := last[path]
+		delete(last, path) // the last view of the file is let go as soon as it is replaced, so that a round of checks holds one round's views
+		if old != nil && !v.typed(f) && sameText(old, v, path) {
+			s.views[path] = old
+			continue
+		}
+
+		s.views[path] = v
 	}
 }
 
@@ -88,11 +138,10 @@ func (s *Server) programsIn(dir string) []string {
 		return nil
 	}
 
-	read, _ := s.reader()
 	var programs []string
 	err = s.guard(func() error {
 		for _, name := range names {
-			src, err := read(name)
+			src, err := s.read(name)
 			if err != nil {
 				continue
 			}
@@ -113,23 +162,23 @@ func (s *Server) programsIn(dir string) []string {
 }
 
 // checkProgram checks the file name alone, as snello check FILE does.
-func (s *Server) checkProgram(name string) report {
-	read, srcs := s.reader()
+func (s *Server) checkProgram(name string) (report, *view) {
+	v, o := s.begin()
 	err := s.guard(func() error {
-		_, _, err := importer.LoadProgramFrom(options(read).Load([]string{name}), &types.Info{})
+		_, _, err := importer.LoadProgramFrom(o.Load([]string{name}), v.info)
 		return err
 	})
 
-	return s.reportOf(err, srcs, []string{name})
+	return s.reportOf(err, v.srcs, []string{name}), v
 }
 
 // checkSources checks the package in dir as snello check DIR does and
 // reports its errors; an error that names no file is reported on the
 // package's open documents.
-func (s *Server) checkSources(dir string) report {
-	read, srcs := s.reader()
-	err := s.guard(func() error { return importer.CheckDir(dir, &types.Info{}, options(read)) })
-	return s.reportOf(err, srcs, s.openIn(dir, false))
+func (s *Server) checkSources(dir string) (report, *view) {
+	v, o := s.begin()
+	err := s.guard(func() error { return importer.CheckDir(dir, v.info, o) })
+	return s.reportOf(err, v.srcs, s.openIn(dir, false)), v
 }
 
 // checkTests checks the package in dir with its tests, as snello test
@@ -137,46 +186,84 @@ func (s *Server) checkSources(dir string) report {
 // import path its tests are reached at, its own or its external test
 // package's. An error that names no file is reported on the package's
 // open test files.
-func (s *Server) checkTests(dir string) report {
-	read, srcs := s.reader()
+func (s *Server) checkTests(dir string) (report, *view) {
+	v, o := s.begin()
 	err := s.guard(func() error {
-		plan, err := testrun.PlanDirFrom(dir, read)
+		plan, err := testrun.PlanDirFrom(dir, o.Read)
 		if err != nil {
 			return err
 		}
 
 		if plan.Main {
-			_, _, err = importer.LoadProgramFrom(options(read).Load(append(slices.Clone(plan.Files), plan.Tests...)), &types.Info{})
+			_, _, err = importer.LoadProgramFrom(o.Load(append(slices.Clone(plan.Files), plan.Tests...)), v.info)
 			return err
 		}
 
-		return importer.CheckTests(dir, plan.Path, &types.Info{}, options(read))
+		return importer.CheckTests(dir, plan.Path, v.info, o)
 	})
 
-	return s.reportOf(err, srcs, s.openIn(dir, true))
+	return s.reportOf(err, v.srcs, s.openIn(dir, true)), v
 }
 
-// reader returns the function a check reads its sources through, the
-// open documents' text where a file is open and the disk elsewhere,
-// and the map it records each source in, by its path, which the
-// check's positions are converted against.
-func (s *Server) reader() (func(name string) ([]byte, error), map[string][]byte) {
-	srcs := make(map[string][]byte)
+// begin starts a check: its view, and the loader's options it checks
+// with, the same for every check of the server: the host's files, the
+// sources read as read reads them and recorded in the view, every file
+// parsed kept in the view, and the module resolved from the module
+// cache alone, so that a check as the developer types never fetches a
+// module or writes the lock file.
+func (s *Server) begin() (*view, importer.Options) {
+	v := newView(make(map[string][]byte))
 	read := func(name string) ([]byte, error) {
-		if d := s.byPath[filepath.Clean(name)]; d != nil {
-			srcs[name] = d.text
-			return d.text, nil
-		}
-
-		src, err := os.ReadFile(name)
+		src, err := s.read(name)
 		if err == nil {
-			srcs[name] = src
+			v.srcs[name] = src
 		}
 
 		return src, err
 	}
 
-	return read, srcs
+	return v, importer.Options{Target: platform.Host(), Read: read, Cached: true, Parsed: v.parsed}
+}
+
+// checkStd checks the standard package at path, the package in the
+// compiler a copy of its files stands for, and returns its view.
+func (s *Server) checkStd(path string) *view {
+	v, o := s.begin()
+	s.guard(func() error {
+		imp := importer.NewImporter(v.info)
+		imp.Target, imp.Parsed = o.Target, o.Parsed
+		_, err := imp.Import(path)
+		return err
+	})
+
+	return v
+}
+
+// sameText reports whether the views a and b read the same text for
+// the file at path.
+func sameText(a, b *view, path string) bool {
+	f := a.byPath[path]
+	if f == nil {
+		return false
+	}
+
+	old, err := a.source(f.Name())
+	if err != nil {
+		return false
+	}
+
+	now, err := b.source(f.Name())
+	return err == nil && bytes.Equal(old, now)
+}
+
+// read reads a source as every check of the server does: the open
+// document's text where the file is open, and the disk elsewhere.
+func (s *Server) read(name string) ([]byte, error) {
+	if d := s.byPath[filepath.Clean(name)]; d != nil {
+		return d.text, nil
+	}
+
+	return os.ReadFile(name)
 }
 
 // guard runs a check, and turns a panic in it into an error, so that a
@@ -259,14 +346,6 @@ func (r report) add(path string, d protocol.Diagnostic) {
 	if !slices.Contains(r[path], d) {
 		r[path] = append(r[path], d)
 	}
-}
-
-// options are the loader's options for every check of the server: the
-// host's files, the sources through read, and the module resolved from
-// the module cache alone, so that a check as the developer types never
-// fetches a module or writes the lock file.
-func options(read func(name string) ([]byte, error)) importer.Options {
-	return importer.Options{Target: platform.Host(), Read: read, Cached: true}
 }
 
 // isMain reports whether a declaration is a program's main: a function

@@ -18,7 +18,7 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 8. `_docs/design/12-platforms.md`: the platforms Snello supports, their tiers, the oldest version of each system, and the Windows port.
 9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
 10. `_docs/design/14-distribution.md`: versions, the release cadence and channels, what a release holds and how it is trusted, and how Snello is installed.
-11. `_docs/design/15-language-server.md`: `snellols`, the protocol it speaks, how it keeps documents and checks their packages, and its diagnostics.
+11. `_docs/design/15-language-server.md`: `snellols`, the protocol it speaks, how it keeps documents and checks their packages, its diagnostics, hover and definition.
 12. `_docs/book/README.md`: the user-facing book and which chapters exist.
 13. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
 14. `CODING_STANDARDS.md`: how code is written here.
@@ -74,7 +74,7 @@ make doc              # what snello doc prints, each form and flag once, from bu
 make doc-serve        # snello doc -http, the pages at http://localhost:6060/ until stopped; in the image, published on the host's loopback address alone
 make distros          # a developer's first five minutes on Debian, Ubuntu, Fedora and Arch, in images of their own: snello doctor, then new, run and test with clang, and the install line without it; needs Docker and Go on the host
 go run ./cmd/snello lex FILE     # print the token stream of a Snello file
-go run ./cmd/snello parse FILE   # print the syntax tree
+go run ./cmd/snello parse FILE   # print the syntax tree, with its comments
 go run ./cmd/snello check FILE   # report what the checker finds; silent when the file is correct
 go run ./cmd/snello env          # what a build reads here, each setting with its value and where it comes from
 go run ./cmd/snello build FILE   # build a native binary in the current directory through the LLVM backend; needs clang on the PATH, or CLANG set
@@ -93,7 +93,7 @@ go run ./cmd/snello build -target linux/arm64 FILE   # build for another platfor
 | `_docs/book/` | The language book, written chapter by chapter as features land |
 | `examples/` | The programs a reader starts from, one folder each: `hello/`, the twenty design programs, with Go versions beside the first two in `tree/` and `pipeline/`, and two programs of several packages, `packaged/` with a package's tests and `bound/` binding C; each with what it prints beside it, `name.out`, and the files it reads in `name.files/`; `suite_test.go` builds and runs every one that has an `.out` and names the rest as pending |
 | `compiler/` | The compiler, written in Go, one package per pass; nothing under it ships inside a Snello program, which carries only `runtime/` and `std/` |
-| `compiler/token/` | Token kinds and positions, modeled on `go/token`; a `FileSet` gives the files of a package distinct positions |
+| `compiler/token/` | Token kinds and positions, modeled on `go/token`; a `FileSet` gives every file of a load, the program's and its imports', distinct positions |
 | `compiler/scanner/` | The lexer, modeled on `go/scanner` |
 | `compiler/ast/` | The syntax tree, modeled on `go/ast` |
 | `compiler/parser/` | The parser, modeled on `go/parser` |
@@ -119,7 +119,7 @@ go run ./cmd/snello build -target linux/arm64 FILE   # build for another platfor
 | `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/snello/` | The command-line driver; `deps.go` is the dependency commands, `add`, `remove`, `update`, `deps` and `fetch` |
 | `cmd/snellols/` | The language server's command: one session of the Language Server Protocol over standard input and output, its logs on standard error |
-| `lsp/` | The language server: `jsonrpc/` the framing of the protocol's messages, `protocol/` the protocol's types the server uses, `server/` the documents, the checks through the compiler's own loader and checker, and the diagnostics |
+| `lsp/` | The language server: `jsonrpc/` the framing of the protocol's messages, `protocol/` the protocol's types the server uses, `server/` the documents, the checks through the compiler's own loader and checker, the diagnostics, hover and definition |
 | `_docs/brand/` | Logo and palette |
 
 ## When the design and the code disagree

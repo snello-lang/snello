@@ -12,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -449,6 +451,53 @@ func TestRead(t *testing.T) {
 	delete(buffers, libPath)
 	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Read: read}, &types.Info{}); err == nil || !strings.Contains(err.Error(), "undefined") {
 		t.Errorf("the program's own buffer: %v", err)
+	}
+}
+
+// TestParsed gives Parsed every file a load parses, the program's, a
+// package of its module's and the standard library's by its path under
+// std/, a file with a syntax error too, and gives no two files of one
+// load a position in common, so that a position names its file.
+func TestParsed(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport (\"lib\"; \"strings\")\n\nfunc main() {\n\tlib.F(strings.ToUpper(\"a\"))\n}\n",
+		"lib/lib.snello": "package lib\n\nfunc F(s string) {}\n",
+	})
+	mainPath, libPath := filepath.Join(root, "main.snello"), filepath.Join(root, "lib", "lib.snello")
+	var files []*token.File
+	parsed := func(file *token.File, syntax *ast.File) {
+		if syntax == nil {
+			t.Errorf("%s parsed to no tree", file.Name())
+		}
+
+		files = append(files, file)
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Parsed: parsed}, &types.Info{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	for i, f := range files {
+		names = append(names, f.Name())
+		for _, g := range files[:i] {
+			if f.Holds(g.Pos(0)) || g.Holds(f.Pos(0)) {
+				t.Errorf("%s and %s share positions", f.Name(), g.Name())
+			}
+		}
+	}
+
+	for _, want := range []string{mainPath, libPath, "strings/strings.snello"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("parsed %q, want %s among them", names, want)
+		}
+	}
+
+	files = nil
+	broken := writeTree(t, map[string]string{"main.snello": "package main\n\nfunc main( {\n"})
+	if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(broken, "main.snello")}, Parsed: parsed}, &types.Info{}); err == nil || len(files) != 1 {
+		t.Errorf("a file with a syntax error: %v, parsed %d files, want an error and the file", err, len(files))
 	}
 }
 

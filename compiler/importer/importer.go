@@ -82,8 +82,16 @@ type Importer struct {
 	// as the editor holds it.
 	Read func(name string) ([]byte, error)
 
-	std     types.Config // the standard library is checked with its privileges
-	own     types.Config // a package of the program's own without them
+	// Parsed, when set, is called with each source file the importer
+	// parses, the program's and every package's it imports, as it is
+	// parsed and before it is checked, a file with errors too: how the
+	// language server keeps the syntax of a check. A file of the
+	// standard library is named by its path under std/.
+	Parsed func(file *token.File, syntax *ast.File)
+
+	fset    *token.FileSet // every file the importer parses, so that a position names one file of the program
+	std     types.Config   // the standard library is checked with its privileges
+	own     types.Config   // a package of the program's own without them
 	info    *types.Info
 	loaded  map[string]*Package
 	loading []loading        // the packages being loaded, outermost first, for naming a cycle
@@ -116,7 +124,7 @@ type root struct {
 // NewImporter returns an importer that checks the packages it loads
 // into info.
 func NewImporter(info *types.Info) *Importer {
-	imp := &Importer{Target: platform.Host(), info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
+	imp := &Importer{Target: platform.Host(), fset: token.NewFileSet(), info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
 	imp.std = types.Config{Importer: imp, Standard: true}
 	imp.own = types.Config{Importer: imp}
 	return imp
@@ -481,17 +489,16 @@ func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]stri
 
 // load parses and checks the files of one package under conf, as the
 // package named path, and returns it with one entry per file, for the
-// caller to record. The files are parsed into one FileSet, so that an
-// error in any of them names its file.
+// caller to record.
 func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
-	fset, syntax, err := parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
+	files, syntax, err := imp.parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
 	if err == nil {
 		err = checkTestImports(names, syntax, conf.Standard)
 	}
 
 	var pkg *types.Package
 	if err == nil {
-		pkg, err = conf.CheckFiles(path, fset.Files(), syntax, imp.info)
+		pkg, err = conf.CheckFiles(path, files, syntax, imp.info)
 	}
 
 	if err != nil {
@@ -500,7 +507,7 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 
 	entries := make([]*Package, len(syntax))
 	for i, f := range syntax {
-		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links, conf.Standard}
+		entries[i] = &Package{path, files[i], f, pkg, cfiles, links, conf.Standard}
 	}
 
 	return pkg, entries, nil

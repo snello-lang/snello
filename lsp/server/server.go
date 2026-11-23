@@ -5,7 +5,8 @@
 // Package server is Snello's language server: it answers an editor's
 // messages over a stream, keeps the documents the editor has open, and
 // checks their packages through the compiler's own loader and checker,
-// publishing every error as a diagnostic on the file it names. One
+// publishing every error as a diagnostic on the file it names, and
+// answers hover and definition from what the last check left. One
 // goroutine reads the stream; another owns the documents and the
 // results and does all the rest, so that nothing the server keeps is
 // shared. It is modeled on the Language Server Protocol specification,
@@ -39,13 +40,16 @@ const (
 
 // A Server is the state of one editor's session: the documents it has
 // open, by URI and by path, the reports of the last checks, by the
-// package's directory, and the diagnostics it last published, by path.
+// package's directory, the views they left, by the path of each file
+// they checked, the diagnostics it last published, by path, and the
+// requests about the documents waiting for the check of what changed.
 type Server struct {
 	in   *jsonrpc.Reader
 	out  *jsonrpc.Writer
 	logs io.Writer
 
 	encoding    string
+	markup      string
 	initialized bool
 	shutdown    bool
 	changed     bool
@@ -53,7 +57,9 @@ type Server struct {
 	docs      map[protocol.DocumentURI]*document
 	byPath    map[string]*document
 	reports   map[string][]report
+	views     map[string]*view
 	published map[string][]protocol.Diagnostic
+	queries   []*jsonrpc.Message
 }
 
 // An incoming is a message the reading goroutine read, or the error
@@ -72,9 +78,11 @@ func New(in io.Reader, out io.Writer, logs io.Writer) *Server {
 		out:       jsonrpc.NewWriter(out),
 		logs:      logs,
 		encoding:  protocol.PositionEncodingUTF16,
+		markup:    protocol.MarkupKindPlainText,
 		docs:      make(map[protocol.DocumentURI]*document),
 		byPath:    make(map[string]*document),
 		reports:   make(map[string][]report),
+		views:     make(map[string]*view),
 		published: make(map[string][]protocol.Diagnostic),
 	}
 }
@@ -84,8 +92,9 @@ func New(in io.Reader, out io.Writer, logs io.Writer) *Server {
 // shutdown, 1 without one. Messages that arrive while a check runs are
 // handled together after it, and every package with an open document is
 // checked once after them, so that a burst of typing costs one check at
-// its end. The reading goroutine stops once the session is over, at its
-// next message.
+// its end; a request about a document is answered after that check, on
+// the latest text, never on a check of text that came before it. The
+// reading goroutine stops once the session is over, at its next message.
 func (s *Server) Run() int {
 	messages := make(chan incoming, incomingPending)
 	over := make(chan struct{})
@@ -127,6 +136,8 @@ func (s *Server) Run() int {
 			s.checkAll()
 			s.publishAll()
 		}
+
+		s.answer()
 	}
 }
 
@@ -164,9 +175,10 @@ func (s *Server) handle(m *jsonrpc.Message) bool {
 	return false
 }
 
-// request answers a request: the handshake, the shutdown, or the
-// protocol's error for a request before the handshake, after the
-// shutdown, or of a method the server does not have.
+// request answers a request: the handshake, the shutdown, a request
+// about a document, which waits for the check of what changed before
+// it, or the protocol's error for a request before the handshake, after
+// the shutdown, or of a method the server does not have.
 func (s *Server) request(m *jsonrpc.Message) {
 	switch {
 	case m.Method == protocol.MethodInitialize && s.initialized:
@@ -180,6 +192,8 @@ func (s *Server) request(m *jsonrpc.Message) {
 	case m.Method == protocol.MethodShutdown:
 		s.shutdown = true
 		s.reply(m.ID, nil)
+	case m.Method == protocol.MethodHover, m.Method == protocol.MethodDefinition:
+		s.queries = append(s.queries, m)
 	default:
 		s.fail(m.ID, jsonrpc.MethodNotFound, "no method "+m.Method)
 	}
@@ -228,7 +242,9 @@ func (s *Server) notification(m *jsonrpc.Message) bool {
 
 // initialize answers the handshake with the capabilities of what the
 // server does, the position encoding it picked among those the editor
-// offers, and its name and version.
+// offers, and its name and version; it writes a hover in the first form
+// the editor renders that it writes, plain text when the editor names
+// none.
 func (s *Server) initialize(m *jsonrpc.Message) {
 	var p protocol.InitializeParams
 	if len(m.Params) > 0 {
@@ -242,11 +258,19 @@ func (s *Server) initialize(m *jsonrpc.Message) {
 		s.encoding = protocol.PositionEncodingUTF8
 	}
 
+	if d := p.Capabilities.TextDocument; d != nil && d.Hover != nil {
+		if i := slices.IndexFunc(d.Hover.ContentFormat, isMarkup); i >= 0 {
+			s.markup = d.Hover.ContentFormat[i]
+		}
+	}
+
 	s.initialized = true
 	s.reply(m.ID, protocol.InitializeResult{
 		Capabilities: protocol.ServerCapabilities{
-			PositionEncoding: s.encoding,
-			TextDocumentSync: &protocol.TextDocumentSyncOptions{OpenClose: true, Change: protocol.TextDocumentSyncKindIncremental, Save: &protocol.SaveOptions{}},
+			PositionEncoding:   s.encoding,
+			TextDocumentSync:   &protocol.TextDocumentSyncOptions{OpenClose: true, Change: protocol.TextDocumentSyncKindIncremental, Save: &protocol.SaveOptions{}},
+			HoverProvider:      true,
+			DefinitionProvider: true,
 		},
 		ServerInfo: &protocol.ServerInfo{Name: name, Version: version.Current},
 	})

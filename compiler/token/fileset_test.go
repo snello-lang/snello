@@ -39,4 +39,10 @@ func TestFileSet(t *testing.T) {
 	if lone.Pos(0) != 1 || lone.Offset(lone.Pos(2)) != 2 || !lone.Holds(lone.Pos(3)) || lone.Holds(lone.Pos(4)) {
 		t.Errorf("a file on its own starts at 1 and holds its size: %d", lone.Pos(0))
 	}
+
+	for _, p := range []Pos{a.Pos(0), b.Pos(5) + 1} {
+		if got := b.Position(p); got.IsValid() || got.Filename != "b.snello" {
+			t.Errorf("b.Position(%d), a position b does not hold, = %+v, want b's name and no line", p, got)
+		}
+	}
 }

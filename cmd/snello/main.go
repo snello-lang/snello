@@ -27,7 +27,7 @@
 // `snello version` prints that version, the commit, the channel and
 // the platform. Three more commands inspect the compiler by hand:
 // `snello lex FILE` prints the token stream, `snello parse FILE` the
-// syntax tree, and `snello emit FILE|DIR` the IR module, or with
+// syntax tree with its comments, and `snello emit FILE|DIR` the IR module, or with
 // -backend c the C source, that build would compile; `snello check
 // FILE|DIR` prints what the checker finds. `snello new DIR` starts a
 // module in a new directory, with a program and its test, and `snello
@@ -125,14 +125,17 @@ func lex(path string) int {
 	return exitSuccess
 }
 
-func parse(path string) int {
+// parse writes the syntax tree of the file at path to out, each node
+// with its doc comment and its line comment, and prints the errors.
+func parse(path string, out io.Writer) int {
 	src, ok := readSource(path)
 	if !ok {
 		return exitFailure
 	}
 
-	f, file, err := parser.ParseFile(path, src)
-	ast.Fprint(os.Stdout, f, file)
+	file := token.NewFile(path, len(src))
+	f, err := parser.ParseComments(file, src)
+	ast.Fprint(out, f, file)
 	if err != nil {
 		printErrors(os.Stderr, err)
 		return exitFailure

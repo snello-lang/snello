@@ -10,8 +10,9 @@ import (
 )
 
 // TestEncode writes the types as the specification spells them: the
-// server's capabilities, a diagnostic, and diagnostics that clear a
-// document, which are an empty list and not null.
+// server's capabilities, a diagnostic, diagnostics that clear a
+// document, which are an empty list and not null, a hover and a
+// location.
 func TestEncode(t *testing.T) {
 	version := int32(3)
 	tests := []struct {
@@ -38,6 +39,12 @@ func TestEncode(t *testing.T) {
 			`{"uri":"file:///a.snello","version":3,"diagnostics":[{"range":{"start":{"line":1,"character":4},"end":{"line":1,"character":7}},"severity":1,"source":"snello","message":"undefined: x"}]}`,
 		},
 		{PublishDiagnosticsParams{URI: "file:///a.snello", Diagnostics: []Diagnostic{}}, `{"uri":"file:///a.snello","diagnostics":[]}`},
+		{ServerCapabilities{HoverProvider: true, DefinitionProvider: true}, `{"hoverProvider":true,"definitionProvider":true}`},
+		{
+			Hover{Contents: MarkupContent{Kind: MarkupKindMarkdown, Value: "```snello\nvar n int\n```"}, Range: &Range{End: Position{Character: 1}}},
+			`{"contents":{"kind":"markdown","value":"` + "```snello\\nvar n int\\n```" + `"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}`,
+		},
+		{Location{URI: "file:///a.snello", Range: Range{Start: Position{Line: 2}}}, `{"uri":"file:///a.snello","range":{"start":{"line":2,"character":0},"end":{"line":0,"character":0}}}`},
 	}
 
 	for _, tt := range tests {
@@ -53,7 +60,8 @@ func TestEncode(t *testing.T) {
 }
 
 // TestDecode reads what a client sends: the handshake with the position
-// encodings it offers, and a change with a range and one without.
+// encodings it offers and the forms its hover renders, a change with a
+// range and one without, and a place a request asks about.
 func TestDecode(t *testing.T) {
 	var init InitializeParams
 	if err := json.Unmarshal([]byte(`{"processId":12,"rootUri":null,"capabilities":{"general":{"positionEncodings":["utf-8","utf-16"]},"textDocument":{}}}`), &init); err != nil {
@@ -62,6 +70,24 @@ func TestDecode(t *testing.T) {
 
 	if init.Capabilities.General == nil || len(init.Capabilities.General.PositionEncodings) != 2 || init.Capabilities.General.PositionEncodings[0] != PositionEncodingUTF8 {
 		t.Errorf("the encodings offered: %+v", init.Capabilities.General)
+	}
+
+	init = InitializeParams{}
+	if err := json.Unmarshal([]byte(`{"capabilities":{"textDocument":{"hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]}}}}`), &init); err != nil {
+		t.Fatal(err)
+	}
+
+	if d := init.Capabilities.TextDocument; d == nil || d.Hover == nil || len(d.Hover.ContentFormat) != 2 || d.Hover.ContentFormat[0] != MarkupKindMarkdown {
+		t.Errorf("the hover's forms: %+v", init.Capabilities.TextDocument)
+	}
+
+	var at TextDocumentPositionParams
+	if err := json.Unmarshal([]byte(`{"textDocument":{"uri":"file:///a.snello"},"position":{"line":3,"character":7}}`), &at); err != nil {
+		t.Fatal(err)
+	}
+
+	if at.TextDocument.URI != "file:///a.snello" || at.Position != (Position{Line: 3, Character: 7}) {
+		t.Errorf("the place: %+v", at)
 	}
 
 	var change DidChangeTextDocumentParams

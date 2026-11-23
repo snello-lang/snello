@@ -211,7 +211,7 @@ func commands() []*command {
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},
 		{name: lexCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the tokens of a source file", declare: declareLex},
 		{name: newCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "start a module in a new directory, with a program and its test", declare: declareNew},
-		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file", declare: declareParse},
+		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file, with its comments", declare: declareParse},
 		{name: removeCommand, args: removeArgs, minArgs: 1, maxArgs: anyArgs, short: "take dependencies out of snello.mod, once nothing imports them", declare: declareRemove},
 		{name: runCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program, run it with ARGS, and leave no file", declare: declareRun},
 		{name: testCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "build and run the tests of a package", declare: declareTest},
@@ -465,7 +465,7 @@ func declareRun(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) 
 
 // declareParse declares parse, which has no flags.
 func declareParse(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
-	return func(args []string) int { return parse(args[0]) }
+	return func(args []string) int { return parse(args[0], stdout) }
 }
 
 // declareTest declares the flags of test: the backend, and those it

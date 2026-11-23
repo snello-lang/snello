@@ -422,9 +422,10 @@ func (f *File) AddLine(offset int) {
 }
 
 // Position resolves p to a line and column by binary search over the
-// recorded line starts.
+// recorded line starts; a position the file does not hold, another
+// file's of the set, resolves to the file's name alone, with no line.
 func (f *File) Position(p Pos) Position {
-	if !p.IsValid() {
+	if !p.IsValid() || !f.Holds(p) {
 		return Position{Filename: f.name}
 	}
 
