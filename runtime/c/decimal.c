@@ -3,8 +3,8 @@
 // license that can be found in the LICENSE file.
 
 // A number as decimal digits, as many as eight hundred, with a point
-// among them: Go's strconv decimal, which multiplies and divides by
-// powers of two a digit at a time and rounds to a number of digits.
+// among them: a decimal that multiplies and divides by powers of two
+// a digit at a time and rounds to a number of digits.
 // It is exact where a double's arithmetic is not, and slow, so it reads
 // the floats whose rounding nineteen digits do not settle, parse.c, and
 // writes the ones asked for with more digits than seventeen, format.c.
@@ -91,7 +91,7 @@ static void right_shift(sn_decimal *a, unsigned k) {
 }
 
 // Multiplying by 2^k adds delta digits, or one fewer when the digits
-// are below 5^k's, the cutoff: Go's table, which saves counting them.
+// are below 5^k's, the cutoff: a table, which saves counting them.
 static const struct {
     int delta;
     const char *cutoff;

@@ -7,7 +7,7 @@
 // the compiler and a C compiler. snello.c is its core, the start and the
 // end of a program, panics, and what more than one file uses, which
 // internal.h declares; each part of the language and the library has a
-// file of its own: slice.c and sort.c, Rust's driftsort, for slices,
+// file of its own: slice.c and sort.c, driftsort, for slices,
 // string.c for strings, format.c, quote.c, parse.c and decimal.c for
 // numbers and quotes as text, map.c for maps, bufio.c, os.c, print.c, math.c and
 // time.c for their packages, and chan.c and sync.c for channels and

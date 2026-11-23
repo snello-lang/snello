@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Numbers as text: integers by two digits a step in base ten and a
-// digit a step in any other, floats in Go's shortest form by Ryū and
+// digit a step in any other, floats in their shortest form by Ryū and
 // to a precision by Ryū's fixed form, or from every digit of the float
 // past seventeen, laid out as %e, %f and %g lay them out, bytes in
 // hexadecimal, and the width and precision fmt pads and cuts to, with
@@ -23,9 +23,9 @@ sn_string sn_int_to_string(int64_t v) {
 sn_string sn_uint_to_string(uint64_t v) { return sn_format_int(v, false); }
 
 // in_base writes u in a base from 2 to 36, after a minus sign when neg
-// says so, as Go's strconv writes one: a power of two by shifts, any
-// other base by dividing, and ten by two digits a step. The digits past
-// nine are letters, capitals when upper says so.
+// says so: a power of two by shifts, any other base by dividing, and
+// ten by two digits a step. The digits past nine are letters, capitals
+// when upper says so.
 static sn_string in_base(uint64_t u, int64_t base, bool neg, bool upper) {
     if (base == 10) {
         return sn_format_int(u, neg);
@@ -61,7 +61,7 @@ static sn_string in_base(uint64_t u, int64_t base, bool neg, bool upper) {
 
 // sn_int_base and sn_uint_base print an integer as %x, %X, %o and %b
 // do, in base 16, 8 or 2: a negative number as a minus sign and its
-// magnitude, -ff, as Go prints one.
+// magnitude, -ff.
 sn_string sn_int_base(int64_t v, int64_t base, bool upper) {
     return v < 0 ? in_base(0 - (uint64_t)v, base, true, upper) : in_base((uint64_t)v, base, false, upper);
 }
@@ -119,23 +119,22 @@ enum { MOST_DIGITS = 1000000 };
 // MOST_DIGITS at most.
 static int precision(int64_t prec) { return prec < 0 ? 0 : prec > MOST_DIGITS ? MOST_DIGITS : (int)prec; }
 
-// Floats print as Go's strconv prints them. A decimal is the digits of
-// a positive finite number, without trailing zeros, and where the point
-// goes among them: 0.25 is "25" with the point at 0, 120 is "12" with
-// the point at 3. The layout around the digits is Go's.
+// A decimal is the digits of a positive finite number, without
+// trailing zeros, and where the point goes among them: 0.25 is "25"
+// with the point at 0, 120 is "12" with the point at 3. A float prints
+// from one, laid out around its digits as %e, %f and %g lay them out.
 typedef struct {
     char *d; // the digits, from sn_alloc
     int nd;  // how many
     int dp;  // the point's place
 } decimal;
 
-// Shortest digits are Ryū's (Ulf Adams, 2018), as Go's strconv writes
-// them, ported from ftoaryu.go: the number's interval of values that
-// read back as it, scaled by a power of ten to an integer, and the
-// fewest digits inside it, with the correctly rounded one when several
-// are. One 128-bit multiply per bound and no division by anything but
-// constants, where reading candidates back with strtod costs a dozen
-// library calls a number. sn_pow10 is mkpow10.go's table.
+// Shortest digits are Ryū's (Ulf Adams, 2018): the number's interval of
+// values that read back as it, scaled by a power of ten to an integer,
+// and the fewest digits inside it, with the correctly rounded one when
+// several are. One 128-bit multiply per bound and no division by
+// anything but constants, where reading candidates back with strtod
+// costs a dozen library calls a number. sn_pow10 is mkpow10.go's table.
 extern const uint64_t sn_pow10[696][2];
 
 typedef struct {
@@ -398,9 +397,9 @@ static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec);
 
 // exact_digits fills a with every digit of v, positive and finite: its
 // mantissa times the power of two of its exponent, worked out in
-// decimal, as Go's strconv writes a float when a multiplication does
-// not give the digits asked for. Nothing here is the C library's,
-// whose printf writes the point the program's locale names.
+// decimal, the way a float is written when a multiplication does not
+// give the digits asked for. Nothing here is the C library's, whose
+// printf writes the point the program's locale names.
 static void exact_digits(sn_decimal *a, double v) {
     uint64_t bits;
     memcpy(&bits, &v, 8);
@@ -458,7 +457,7 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
         return;
     }
 
-    if (prec <= 17) { // Ryū's fixed digits, as Go's %e and %g with a precision
+    if (prec <= 17) { // Ryū's fixed digits, as %e and %g with a precision take them
         uint64_t bits;
         memcpy(&bits, &v, 8);
         int exp = (int)(bits >> 52) & 0x7FF;
@@ -539,7 +538,7 @@ static void put_f(out_text *o, const decimal *d, int prec) {
 }
 
 // special writes the text of a float with no digits, an infinity or
-// NaN, as Go spells them, or reports that v has digits.
+// NaN, spelled +Inf, -Inf and NaN, or reports that v has digits.
 static bool special(double v, sn_string *s) {
     if (v != v) {
         *s = SN_STR("NaN", 3);
@@ -554,11 +553,11 @@ static bool special(double v, sn_string *s) {
     return true;
 }
 
-// format_g writes v as Go's %g does: shortest, the fewest digits that
+// format_g writes v as %g does: shortest, the fewest digits that
 // read back as v, as a float32 when f32 says so, or with prec
 // significant digits; an exponent when the number's own is below -4 or
-// at least the precision, which is 6 for the shortest form, so 1e+06
-// and 123456 print as Go prints them.
+// at least the precision, which is 6 for the shortest form, so a
+// million prints as 1e+06 and 123456 as 123456.
 static sn_string format_g(double v, int prec, bool f32) {
     sn_string s;
     if (special(v, &s)) {
@@ -607,20 +606,19 @@ static sn_string format_g(double v, int prec, bool f32) {
     return SN_OWNED(o.p, o.n);
 }
 
-// sn_f64_to_string prints v as Go's %v and strconv.FormatFloat(v, 'g',
-// -1, 64) do: the shortest text that reads back as v, 15 for 15.0,
-// 1e+06 for a million, +Inf and NaN.
+// sn_f64_to_string prints v as %v does: the shortest text that reads
+// back as v, 15 for 15.0, 1e+06 for a million, +Inf and NaN.
 sn_string sn_f64_to_string(double v) { return format_g(v, -1, false); }
 
 // sn_f32_to_string is sn_f64_to_string for an f32: the fewest digits
 // that read back as the same f32, so 0.1 prints as 0.1.
 sn_string sn_f32_to_string(float v) { return format_g((double)v, -1, true); }
 
-// sn_f64_g prints v with prec significant digits, as Go's %.3v and
-// %.3g do on a float.
+// sn_f64_g prints v with prec significant digits, as %.3v and %.3g do
+// on a float.
 sn_string sn_f64_g(double v, int64_t prec) { return format_g(v, precision(prec), false); }
 
-// sn_f64_e prints v as Go's %e does, one digit before the point and
+// sn_f64_e prints v as %e does, one digit before the point and
 // prec after it, rounded to them, then the exponent in two digits at
 // least: 1.234568e+03.
 sn_string sn_f64_e(double v, int64_t digits) {
@@ -652,13 +650,13 @@ sn_string sn_f64_e(double v, int64_t digits) {
 
 sn_string sn_bool_to_string(bool v) { return v ? SN_STR("true", 4) : SN_STR("false", 5); }
 
-// Fixed-precision digits are Ryū's too, Go's ryuFtoaFixed64: the number
-// scaled by a power of ten to an integer of the digits asked for, with
-// one 128-bit multiply, and rounded half to even on the exact value,
-// with what was cut off known to be zero or not. Go reaches it for %e
-// and %g; %f takes the same path here, the number of digits being the
-// number's exact magnitude, read from seventeen digits, which tell any
-// two doubles apart, plus the digits after the point.
+// Fixed-precision digits are Ryū's too: the number scaled by a power of
+// ten to an integer of the digits asked for, with one 128-bit multiply,
+// and rounded half to even on the exact value, with what was cut off
+// known to be zero or not. %e and %g reach it, and %f takes the same
+// path, the number of digits being the number's exact magnitude, read
+// from seventeen digits, which tell any two doubles apart, plus the
+// digits after the point.
 static const uint64_t pow10_u64[19] = {
     1u,
     10u,
@@ -705,8 +703,8 @@ static uint64_t mult128_top(uint64_t m, int *e2, int q, bool *exact) {
     return h1;
 }
 
-// format_decimal writes prec digits of m, rounding what is cut off: Go's
-// formatDecimal. trunc says m is already short of the number.
+// format_decimal writes prec digits of m, rounding what is cut off.
+// trunc says m is already short of the number.
 static void format_decimal(ryu_dec *d, uint64_t m, bool trunc, bool round_up, int prec) {
     uint64_t most = pow10_u64[prec];
     int trimmed = 0;
@@ -849,8 +847,8 @@ static bool fixed_digits(double v, int prec, sn_string *out) {
 }
 
 // sn_f64_fixed prints v with prec digits after the point, as %.2f
-// does, however many that takes, and an infinity or NaN as Go spells
-// it.
+// does, however many that takes, and an infinity or NaN as special
+// spells it.
 sn_string sn_f64_fixed(double v, int64_t digits) {
     sn_string s;
     if (special(v, &s)) {
@@ -892,13 +890,13 @@ sn_string sn_f64_fixed(double v, int64_t digits) {
 }
 
 // sn_strconv_formatFixed is strconv's FormatFloat with a precision:
-// prec digits after the point, prec not negative, however many that
-// is, as Go's writes them. A double is a whole number times a power of
-// two no smaller than 2^-1074, and 2^-k has exactly k digits after its
-// point, so no double has a digit that is not zero past the 1074th:
-// the digits are worked out to there, every one exact, and zeros make
-// up the rest without any arithmetic. A text longer than memory holds
-// is the failure of any allocation.
+// prec digits after the point, prec not negative, however many that is.
+// A double is a whole number times a power of two no smaller than
+// 2^-1074, and 2^-k has exactly k digits after its point, so no double
+// has a digit that is not zero past the 1074th: the digits are worked
+// out to there, every one exact, and zeros make up the rest without any
+// arithmetic. A text longer than memory holds is the failure of any
+// allocation.
 sn_string sn_strconv_formatFixed(double v, int64_t prec) {
     enum { LAST_DIGIT = 1074 };
     if (prec <= LAST_DIGIT) {
@@ -924,7 +922,7 @@ sn_string sn_strconv_formatFixed(double v, int64_t prec) {
 
 // sn_int_digits gives the decimal text of an integer, which it takes,
 // at least prec digits long, zeros after the sign making up the rest,
-// as Go's %.3d does; a precision of zero prints zero as nothing.
+// as %.3d does; a precision of zero prints zero as nothing.
 sn_string sn_int_digits(sn_string s, int64_t prec) {
     sn_check_string(s);
     int64_t sign = s.len > 0 && s.ptr[0] == '-' ? 1 : 0;
@@ -948,7 +946,7 @@ sn_string sn_int_digits(sn_string s, int64_t prec) {
 }
 
 // sn_truncate gives the first prec characters of s, a character being
-// a UTF-8 sequence, as Go's %.2s does; s is dropped when the caller
+// a UTF-8 sequence, as %.2s does; s is dropped when the caller
 // owned it, and the result is owned then too.
 sn_string sn_truncate(sn_string s, int64_t prec, bool owned) {
     sn_check_string(s);
@@ -977,7 +975,7 @@ sn_string sn_truncate(sn_string s, int64_t prec, bool owned) {
 // field whose bytes the caller keeps.
 sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned) {
     sn_check_string(s);
-    int64_t chars = 0; // runes as Go counts them: an invalid byte is one
+    int64_t chars = 0; // runes: an invalid byte is one
     for (int64_t i = 0; i < s.len; chars++) {
         int32_t r;
         i += sn_utf8_decode(s.ptr + i, s.len - i, &r);
@@ -1001,9 +999,9 @@ sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned) {
 
 // sn_pad_zero widens the text of a number to width with zeros after
 // its sign, as the 0 flag does: 00042, -0042, 0003.142. An infinity or
-// NaN has no digits to follow them and is widened with spaces, as Go
-// widens one. s is dropped when the caller owned it, and the result is
-// owned, as sn_pad's is.
+// NaN has no digits to follow them and is widened with spaces. s is
+// dropped when the caller owned it, and the result is owned, as
+// sn_pad's is.
 sn_string sn_pad_zero(sn_string s, int64_t width, bool owned) {
     sn_check_string(s);
     int64_t sign = s.len > 0 && (s.ptr[0] == '-' || s.ptr[0] == '+') ? 1 : 0;

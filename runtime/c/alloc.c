@@ -2,23 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The allocator under sn_alloc and sn_free, after the Go runtime's
-// (malloc.go). A small block is rounded up to one of a few size classes
-// and carved from a span, 64 KB of blocks of one class. Each thread
-// keeps a list of free blocks per class, as each P in Go keeps its
-// mcache, so that an allocation and a free on one thread take no lock;
-// the threads' lists meet in a central list per class, Go's mcentral,
-// which a thread refills from and gives back to in batches. The spans
-// are cut from one reservation of address space made before main, so a
-// pointer inside it is a small block whose class is one table read
-// away, and a free needs neither a size nor a header. A block larger
-// than the largest class, or asked for once the reservation is used
-// up, is the system's, and goes back to the system.
+// The allocator under sn_alloc and sn_free. A small block is rounded
+// up to one of a few size classes and carved from a span, 64 KB of
+// blocks of one class. Each thread keeps a list of free blocks per
+// class, so that an allocation and a free on one thread take no lock;
+// the threads' lists meet in a central list per class, which a thread
+// refills from and gives back to in batches. The spans are cut from
+// one reservation of address space made before main, so a pointer
+// inside it is a small block whose class is one table read away, and a
+// free needs neither a size nor a header. A block larger than the
+// largest class, or asked for once the reservation is used up, is the
+// system's, and goes back to the system.
 //
 // A task may move to another thread when it parks, and nothing here
 // parks, so each call reads its thread's lists once and is done with
 // them before the task can move. A block freed on a thread other than
-// the one that made it joins the freeing thread's list, as in tcmalloc.
+// the one that made it joins the freeing thread's list.
 // Spans are never given back to the system: a program's footprint is
 // the most it ever held of each class.
 
@@ -77,10 +76,9 @@ static uint8_t *span_class; // the class of each span, by its number
 
 // The blocks and the bytes sn_alloc has given out are counted for a
 // benchmark's allocations per operation, by each thread in counts of
-// its own, as Go keeps its allocation statistics by processor, and
-// added up when they are asked for. One pair of counts for every thread
-// would be one line of memory every processor writes at each
-// allocation, and passes to the next: tasks allocating on eight
+// its own, and added up when they are asked for. One pair of counts for
+// every thread would be one line of memory every processor writes at
+// each allocation, and passes to the next: tasks allocating on eight
 // processors then ran seventeen times slower than on counts of their
 // own. A thread's counts are a line to themselves, written by that
 // thread alone and read by any, and outlive the thread, whose

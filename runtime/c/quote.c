@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Quoting as Go's strconv.Quote quotes, %q of a string or a rune, and
-// reading a literal back as Go's strconv.Unquote reads one.
+// Quoting for strconv.Quote and %q of a string or a rune, and reading
+// a literal back for strconv.Unquote.
 
 #include "internal.h"
 
 #include <stdio.h>
 #include <string.h>
 
-// escape_rune writes r into p as Go's strconv writes it between quote
+// escape_rune writes r into p as strconv writes it between quote
 // marks: the quote and a backslash escaped, a printable rune as itself,
 // the seven short escapes, a control byte as \xNN, and any other rune
 // as \u or \U with its hex digits. It returns the bytes written.
@@ -66,7 +66,7 @@ static int64_t escape_rune(char *p, int32_t r, char quote) {
     return snprintf(p, 11, "\\U%08x", (unsigned)r);
 }
 
-// sn_quote writes s as Go's strconv.Quote and %q write a string: in
+// sn_quote writes s as strconv.Quote and %q write a string: in
 // double quotes, a byte that starts no UTF-8 sequence as \xNN, and every
 // rune as escape_rune writes it.
 sn_string sn_quote(sn_string s) {
@@ -90,9 +90,9 @@ sn_string sn_quote(sn_string s) {
     return SN_OWNED(p, n);
 }
 
-// sn_quote_rune writes r as Go's strconv.QuoteRune and %q write a rune:
-// in single quotes, with a value that is no rune, past U+10FFFF or a
-// surrogate, written as U+FFFD.
+// sn_quote_rune writes r as %q writes a rune: in single quotes, with
+// a value that is no rune, past U+10FFFF or a surrogate, written as
+// U+FFFD.
 sn_string sn_quote_rune(int64_t r) {
     if (r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) {
         r = 0xFFFD;
@@ -126,7 +126,7 @@ static int32_t unhex(uint8_t c) {
 // empty, inside the quote marks given, and writes what it stands for at
 // out: a rune as its UTF-8, a byte that starts none as U+FFFD, and a
 // \x or octal escape as its one byte. It returns the bytes read, or 0
-// for a bare quote mark, an escape Go's syntax has none of, or one cut
+// for a bare quote mark, an escape a literal has none of, or one cut
 // short; *wrote is the bytes written.
 static int64_t unquote_char(const uint8_t *p, int64_t n, uint8_t quote, uint8_t *out, int64_t *wrote) {
     uint8_t c = p[0];
@@ -247,12 +247,12 @@ static int64_t unquote_char(const uint8_t *p, int64_t n, uint8_t quote, uint8_t 
     return 0;
 }
 
-// sn_strconv_unquote reads s as Go's strconv.Unquote reads a literal
-// and gives the text it stands for: a string in double quotes, with
-// Go's escapes and no bare newline; one in back quotes, taken as it is
-// without its carriage returns; or one character in single quotes,
-// given as a string. *ok says whether s is one of the three, the whole
-// of it; the result is empty when it is not.
+// sn_strconv_unquote reads s as strconv.Unquote reads a literal and
+// gives the text it stands for: a string in double quotes, with a
+// string literal's escapes and no bare newline; one in back quotes,
+// taken as it is without its carriage returns; or one character in
+// single quotes, given as a string. *ok says whether s is one of the
+// three, the whole of it; the result is empty when it is not.
 sn_string sn_strconv_unquote(sn_string s, bool *ok) {
     sn_check_string(s);
     *ok = false;

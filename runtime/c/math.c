@@ -10,9 +10,8 @@
 #include <float.h>
 #include <math.h>
 
-// sn_f64_min and sn_f64_max are the predeclared min and max on floats,
-// as Go's specification has them: NaN when either is NaN, and -0 below
-// +0.
+// sn_f64_min and sn_f64_max are the predeclared min and max on floats:
+// NaN when either is NaN, and -0 below +0.
 double sn_f64_min(double a, double b) {
     if (a != a || b != b) {
         return a != a ? a : b;

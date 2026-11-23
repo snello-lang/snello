@@ -6,9 +6,8 @@
 
 // Mkpow10 writes c/pow10.c, the powers of ten the runtime formats floats
 // with: 10^q for q from -348 to 347, each as the 128 bits of its
-// mantissa below the leading one's place, rounded down, the table Go's
-// strconv calls detailedPowersOfTen and computes the same way. Ryū's
-// shortest formatting multiplies by them, as Go's does.
+// mantissa below the leading one's place, rounded down. Ryū's shortest
+// formatting multiplies by them.
 //
 //	go run mkpow10.go
 //	go run mkpow10.go -o /tmp/pow10.c
@@ -41,7 +40,7 @@ func main() {
 #include <stdint.h>
 
 // sn_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
-// rounded down, its top bit set: Go's detailedPowersOfTen.
+// rounded down, its top bit set.
 const uint64_t sn_pow10[696][2] = {
 `)
 	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))

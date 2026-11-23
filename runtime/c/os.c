@@ -47,7 +47,7 @@ SN_HELD_STATIC static char *cpath(sn_string s) {
 }
 
 // sysopen opens a path with flags, or fails with errno set. The file is
-// closed on exec, as Go opens every file, so that no program the
+// closed on exec, as every file is opened, so that no program the
 // process starts inherits it. An open a signal interrupts, as one of a
 // FIFO may be, is asked again.
 SN_HELD_STATIC static int sysopen(sn_string path, int flags) {
@@ -77,7 +77,7 @@ SN_HELD_STATIC static ssize_t sysread(int fd, void *p, size_t len) {
 #endif
 
 // sn_io_reason is the system's text for an error number, with its
-// first letter in lower case, as Go words it; the library puts the
+// first letter in lower case; the library puts the
 // operation and the path in front.
 SN_HELD sn_string sn_io_reason(int64_t code) {
 #if defined(_WIN32)
@@ -130,11 +130,11 @@ SN_HELD int64_t sn_io_kindOf(int64_t code) {
 
 #if !defined(_WIN32) // the files and the removals of Linux and macOS; os_windows.c has Windows'
 // read_whole reads the named file whole, into one block of the size the
-// file says it has, as Go's os.ReadFile does: one byte more, so that
-// the read finding the end needs no room, and 512 bytes for a file that
-// says nothing, a pipe or a file of /proc, which grows by doubling. On
-// a failure, inRead says which call failed, 0 for the open and 1 for a
-// read, so that the error names it as Go's does.
+// file says it has and one byte more, so that the read finding the end
+// needs no room, and 512 bytes for a file that says nothing, a pipe or
+// a file of /proc, which grows by doubling. On a failure, inRead says
+// which call failed, 0 for the open and 1 for a read, so that the error
+// names it.
 //
 // sn_os_readToString is os.ReadToString: the string owns that block,
 // with no copy.
@@ -224,12 +224,12 @@ SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
 }
 
 // sn_os_mkdirTemp makes a new directory under dir, or the system's
-// temporary directory when dir is empty, named as Go names it: the
+// temporary directory when dir is empty, named by its pattern: the
 // pattern with its last * replaced by a random number, or followed by
 // one when it has none, trying another number while the name is
 // taken. On a failure out holds the name the error is about and op
 // the call that failed: mkdirtemp, or stat when dir itself is
-// missing, which Go's MkdirTemp reports by stating dir.
+// missing, which it finds by stating dir.
 SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR("mkdirtemp", 9);
@@ -263,8 +263,8 @@ SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_st
     }
 
     if (code == ENOENT) {
-        // The parent may be what is missing: Go stats it and reports
-        // that when it is.
+        // The parent may be what is missing: it is stated, and that
+        // reported when it is.
         struct stat st;
         char *p = cpath(dir);
         int missing = p != NULL && stat(p, &st) != 0 && errno == ENOENT;
@@ -280,7 +280,7 @@ SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_st
 
     sn_string_drop(out);
     *out = sn_join(sn_join(prefix, SN_STR("*", 1), 1), suffix,
-                   1); // the pattern of the names tried, as Go's error gives it
+                   1); // the pattern of the names tried
     return code;
 }
 
@@ -296,7 +296,7 @@ SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out
 }
 
 // failed_at records, for a removal that failed, the entry it failed on
-// and the call that failed, named as Go's error names it, keeping errno.
+// and the call that failed, keeping errno.
 SN_HELD_STATIC static int failed_at(const char *path, const char *op, sn_string *failed, sn_string *what) {
     int code = errno;
     sn_string_drop(failed);
@@ -307,7 +307,7 @@ SN_HELD_STATIC static int failed_at(const char *path, const char *op, sn_string 
     return -1;
 }
 
-// A removal walks the tree as Go's removeAllFrom does: every call is
+// A removal walks the tree by open directories: every call is
 // relative to an open directory, so a path longer than the system
 // allows is no obstacle, and the walk keeps a level per directory it
 // is inside of, a few words each, on a slice of its own rather than
@@ -370,7 +370,7 @@ SN_HELD_STATIC static int remove_entry(int fd, const char *name, const char *pat
 // for the tree's root; path names it in full, and name is its name in
 // that directory. A directory still not empty after a pass that removed
 // something is read again, since a directory read while its entries go
-// may skip some, as Go's RemoveAll notes; one that stays full after a
+// may skip some; one that stays full after a
 // pass that found nothing is the failure it reports.
 SN_HELD_STATIC static int remove_top(sn_slice *levels, char *path, sn_string *failed, sn_string *op) {
     level *top = &((level *)levels->ptr)[levels->len - 1];
@@ -394,11 +394,11 @@ SN_HELD_STATIC static int remove_top(sn_slice *levels, char *path, sn_string *fa
 }
 
 // sn_os_removeAll removes a tree; a path that is not there is nothing to
-// remove, not a failure, as Go's RemoveAll has it. On a failure, failed
-// and op name the entry it failed on and the call, as Go's error names
-// them, rather than the path asked for. The walk is depth first over
-// the levels above, with the full path of the entry in hand kept in
-// full, the path asked for and then a slash and a name per level.
+// remove, not a failure. On a failure, failed and op name the entry it
+// failed on and the call, rather than the path asked for. The walk is
+// depth first over the levels above, with the full path of the entry
+// in hand kept in full, the path asked for and then a slash and a name
+// per level.
 SN_HELD int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op) {
     char *p = cpath(path);
     if (p == NULL) {
@@ -451,9 +451,9 @@ SN_HELD int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op
     return rc == 0 ? 0 : code;
 }
 
-// sn_os_remove removes a file or an empty directory, as Go's Remove
-// does: unlink first, then rmdir, and when both fail the error of the
-// one that fits, which rmdir's ENOTDIR on a file says.
+// sn_os_remove removes a file or an empty directory: unlink first,
+// then rmdir, and when both fail the error of the one that fits, which
+// rmdir's ENOTDIR on a file says.
 SN_HELD int64_t sn_os_remove(sn_string path) {
     char *p = cpath(path);
     if (p == NULL) {
@@ -507,7 +507,7 @@ SN_HELD void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf
 
 #if !defined(_WIN32) // the modes, the directories and the host of Linux and macOS; os_windows.c has Windows'
 // mode_from_sys is the os.FileMode of a file the system reports the mode
-// of, as Go's fillFileStatFromSys makes it.
+// of.
 SN_HELD_STATIC static uint32_t mode_from_sys(mode_t m) {
     uint32_t mode = (uint32_t)(m & 0777);
     switch (m & S_IFMT) {
@@ -551,7 +551,7 @@ SN_HELD_STATIC static uint32_t mode_from_sys(mode_t m) {
 }
 
 // mode_to_sys is the mode the system takes for an os.FileMode a file or a
-// directory is made with, as Go's syscallMode makes it.
+// directory is made with.
 SN_HELD_STATIC static mode_t mode_to_sys(uint32_t perm) {
     mode_t m = (mode_t)(perm & 0777);
     if (perm & SN_MODE_SETUID) {
@@ -571,7 +571,7 @@ SN_HELD_STATIC static mode_t mode_to_sys(uint32_t perm) {
 
 // set_sticky gives a new file or directory its sticky bit where the
 // system drops it from the mode a file is made with, Darwin and the
-// BSDs, as Go's setStickyBit does after the make.
+// BSDs, after the make.
 SN_HELD_STATIC static int set_sticky(const char *p) {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
     struct stat st;
@@ -722,7 +722,7 @@ SN_HELD int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int6
     }
 
     // The sticky bit of a file this call makes is set after it, where
-    // the system drops it, as Go's openFileNolog does.
+    // the system drops it.
     struct stat st;
     bool sticky = (flag & SN_O_CREATE) != 0 && (perm & SN_MODE_STICKY) != 0 && stat(p, &st) != 0 && errno == ENOENT;
     int f;
@@ -747,11 +747,10 @@ SN_HELD int64_t sn_os_openFile(sn_string path, int64_t flag, uint32_t perm, int6
 // four bytes of its os.FileMode, the bits of its kind alone, lowest
 // first, then its name and a zero byte, which no name holds. The kind
 // is the one the directory gives, and the file's own, by lstat, where
-// the directory gives none, as Go's ReadDir finds it; a name removed
-// between the two is left out.
-// On a failure op names the call that failed as Go's error names it:
-// open, or the read of the directory, which Go calls readdirent on
-// Linux and readdir on Darwin.
+// the directory gives none; a name removed between the two is left
+// out.
+// On a failure op names the call that failed: open, or the read of the
+// directory, readdirent on Linux and readdir on Darwin.
 SN_HELD int64_t sn_os_readDir(sn_string path, sn_slice_u8 *out, sn_string *op) {
 #if defined(__APPLE__)
     const sn_string read_op = SN_STR("readdir", 7);
@@ -870,13 +869,12 @@ SN_HELD int64_t sn_os_hostname(sn_string *out) {
 
 // The program's environment is a copy the runtime makes of the one the
 // process was started with, the first time it is asked about, and keeps
-// under a lock, as Go's syscall package keeps its own: a read finds a
-// variable through a hash index and copies its value out, and a write
-// changes the copy alone. The lock is the one sync.RwLock is, Go's
-// RWMutex, which a reader takes with one atomic add. The C library's
-// environment is never written, since its setenv moves memory that
-// another thread's getenv may be reading, which no lock of the
-// runtime's can stop a C library doing.
+// under a lock: a read finds a variable through a hash index and
+// copies its value out, and a write changes the copy alone. The lock
+// is the one sync.RwLock is, which a reader takes with one atomic add.
+// The C library's environment is never written, since its setenv
+// moves memory that another thread's getenv may be reading, which no
+// lock of the runtime's can stop a C library doing.
 //
 // The variables the process started with are copied into one block that
 // lives as long as the program, and each is lent from it, as a literal
@@ -1009,7 +1007,7 @@ SN_HELD_STATIC static void env_rebuild(void) {
     for (int64_t i = 0; i < env.len; i++) {
         bool found;
         int64_t at = env_find(env.entries[i].ptr, env_key_len(env.entries[i]), &found);
-        if (found) { // a second mention of a key: the first stands, as Go keeps it
+        if (found) { // a second mention of a key: the first stands
             sn_string_drop(&env.entries[i]);
             env.entries[i] = (sn_string){ 0 };
             continue;
@@ -1085,8 +1083,7 @@ SN_HELD bool sn_os_lookupEnv(sn_string key, sn_string *value) {
 }
 
 // sn_os_setenv is os.Setenv: an empty key, one holding an = or a zero
-// byte, and a value holding a zero byte are invalid arguments, as Go's
-// are.
+// byte, and a value holding a zero byte are invalid arguments.
 SN_HELD int64_t sn_os_setenv(sn_string key, sn_string value) {
     sn_check_string(key);
     sn_check_string(value);
@@ -1208,15 +1205,15 @@ SN_HELD void sn_os_env_free(void) {
 }
 
 // The standard streams are written as any file is, straight to the
-// descriptor with nothing held back, as Go's os.Stdout is: what fmt
-// prints, what is written to os.Stdout and os.Stderr, and a panic's
-// message come out in the order the program made them, a prompt
-// without a newline shows at once, and a write that fails reports the
+// descriptor with nothing held back: what fmt prints, what is written
+// to os.Stdout and os.Stderr, and a panic's message come out in the
+// order the program made them, a prompt without a newline shows at
+// once, and a write that fails reports the
 // failure. fmt builds each call's text whole and writes it at once, so
 // two tasks' lines do not interleave.
 // sn_os_write writes all of buf to the file and stores how much it
 // wrote: all of it, or on a failure, a disk that filled, what went
-// before it, which the library's Error carries as Go's Write returns it.
+// before it, which the library's Error carries.
 SN_HELD int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
     sn_check_slice((sn_slice *)&buf);
     *n = sn_write_fd((int)fd, buf.ptr, buf.len);

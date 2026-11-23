@@ -160,9 +160,9 @@ SN_HELD_STATIC static __attribute__((noinline)) int last_error(void) {
 
 // SN_SOCK_FLAGS makes a socket non-blocking and closed on exec as it is
 // made, where the system can: Linux takes both as flags to socket and
-// accept4, as Go asks for them, so a socket is never open across an exec
-// for a moment and costs no further call. Darwin has neither flag, and
-// prepare sets both with fcntl, as Go does there.
+// accept4, so a socket is never open across an exec for a moment and
+// costs no further call. Darwin has neither flag, and prepare sets both
+// with fcntl there.
 #if defined(_WIN32)
 #define SN_SOCK_FLAGS 0 // made not inherited by NEW_SOCKET, and non-blocking by prepare
 #elif defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
@@ -206,8 +206,8 @@ SN_HELD_STATIC static const char *prepare(int fd) {
 }
 
 // connected readies a connection, accepted or dialed: prepared, and
-// with Nagle's delay off, as Go makes every TCP connection, so a small
-// write goes out at once rather than waiting for the last one's ack.
+// with Nagle's delay off on every TCP connection, so a small write
+// goes out at once rather than waiting for the last one's ack.
 // It names the call that failed, as prepare does.
 SN_HELD_STATIC static const char *connected(int fd) {
     const char *failed = prepare(fd);
@@ -220,7 +220,7 @@ SN_HELD_STATIC static const char *connected(int fd) {
 }
 
 // backlog is how many connections a listening socket keeps waiting for
-// Accept: the system's largest, as Go asks for, read once.
+// Accept: the system's largest, read once.
 SN_HELD_STATIC static int backlog(void) {
 #if defined(_WIN32)
     return SOMAXCONN; // Windows' own word for its largest
@@ -313,9 +313,9 @@ SN_HELD_STATIC static void promise(int64_t n) {
     sn_outside(n);
 }
 
-// A socket's poll_desc is Go's pollDesc: what the poller knows of it,
-// one word for reading and one for writing, each holding nothing,
-// ready, an event that came while no task waited, or the task waiting.
+// A socket's poll_desc is what the poller knows of it, one word for
+// reading and one for writing, each holding nothing, ready, an event
+// that came while no task waited, or the task waiting.
 // A socket is registered once, when it is made, for both directions and
 // edge-triggered, EV_CLEAR on kqueue and EPOLLET on epoll: the poller
 // hears of each change, and marks the word ready or wakes its task. A
@@ -334,9 +334,9 @@ SN_HELD_STATIC static void promise(int64_t n) {
 // past a deadline or out of a park a kept wake ended, and could
 // otherwise end and be freed before its waker reads it.
 //
-// Each direction also has its deadline, as Go's pollDesc has rd and wd:
-// 0 for none, -1 once it has passed, and above zero while its timer is
-// in a timing wheel, kept at rt or wt. When the timer fires, on a
+// Each direction also has its deadline: 0 for none, -1 once it has
+// passed, and above zero while its timer is in a timing wheel, kept at
+// rt or wt. When the timer fires, on a
 // worker between two tasks, it marks the deadline passed and takes out
 // the task waiting, if one is, which finds it passed. A task puts itself in its word and
 // then looks at the deadline, and the timer marks the deadline and then
@@ -1051,7 +1051,7 @@ SN_HELD int sn_net_cancelled(void) {
 // sn_net_setDeadline sets when fd's reads, or its writes, stop waiting:
 // d nanoseconds from now, at once for a d of zero or less, and never
 // when set is 0. Setting it again moves it, and a deadline that passed
-// no longer holds once it is set again, as in Go. The old timer is taken
+// no longer holds once it is set again. The old timer is taken
 // out before the new one is marked armed, so that it cannot fire after
 // and mark the new deadline passed.
 SN_HELD int64_t sn_net_setDeadline(int64_t fd, int64_t write, int64_t d, int64_t set) {
@@ -1117,9 +1117,9 @@ SN_HELD_STATIC static int64_t port_of(const struct sockaddr_storage *a) {
 
 // listen_on opens a socket listening on addr and stores its descriptor;
 // dual makes a socket on the IPv6 address :: take IPv4 connections too,
-// their addresses mapped into IPv6, as Go makes every listener on a
-// wildcard address, which some systems do not by default. A failure
-// returns the error number and stores the call that failed.
+// their addresses mapped into IPv6: the runtime makes every listener on
+// a wildcard address take both, which some systems do not by default. A
+// failure returns the error number and stores the call that failed.
 SN_HELD_STATIC static int64_t listen_on(const struct sockaddr_storage *addr, socklen_t len, bool dual, int64_t *fd,
                                         sn_string *call) {
     int s = NEW_SOCKET(addr->ss_family);
@@ -1162,9 +1162,9 @@ SN_HELD_STATIC static int64_t listen_on(const struct sockaddr_storage *addr, soc
 // the port it listens on; a failure stores the call that failed. A
 // wildcard address listens on every address of the machine: "0.0.0.0"
 // on IPv4's, "::" on both families', and an empty host on both where
-// the system has IPv6 and on IPv4's where it has not, as Go's empty
-// host. A host that is not an IP address is SN_NET_NOT_ADDRESS, a name
-// the library looks up; the port is in range.
+// the system has IPv6 and on IPv4's where it has not. A host that is
+// not an IP address is SN_NET_NOT_ADDRESS, a name the library looks
+// up; the port is in range.
 SN_HELD int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t *got, sn_string *call) {
     bool every = host.len == 0;
     struct sockaddr_storage addr;
@@ -1195,9 +1195,9 @@ SN_HELD int64_t sn_net_listen(sn_string host, int64_t port, int64_t *fd, int64_t
 
 // sn_net_accept waits for a connection on the listening socket and
 // stores its descriptor. A connection its client reset before it was
-// accepted is skipped, as Go's runtime skips it, for the next one: on
-// Darwin it is accepted and then refuses its socket options, elsewhere
-// accept reports it aborted. Either is the client's failure, and a
+// accepted is skipped for the next one: on Darwin it is accepted and
+// then refuses its socket options, elsewhere accept reports it
+// aborted. Either is the client's failure, and a
 // server that stopped on it could be stopped by any client.
 SN_HELD int64_t sn_net_accept(int64_t fd, int64_t *out) {
     for (;;) {
@@ -1244,9 +1244,8 @@ SN_HELD int64_t sn_net_accept(int64_t fd, int64_t *out) {
 // library looks up; a connection not made within timeout nanoseconds,
 // when it is above zero, is SN_NET_TIMED_OUT, the deadline held on the
 // socket's writes while it connects and cleared once it has. A connection in progress is checked
-// again after every wake, as Go checks it: a wake can come for another
-// wait, so a socket with no error yet is connected only once it has a
-// peer.
+// again after every wake: a wake can come for another wait, so a
+// socket with no error yet is connected only once it has a peer.
 SN_HELD int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64_t *fd, sn_string *call) {
     struct sockaddr_storage addr;
     socklen_t addr_len = (socklen_t)sn_net_parse(host, port, &addr);
@@ -1328,7 +1327,7 @@ SN_HELD int64_t sn_net_dial(sn_string host, int64_t port, int64_t timeout, int64
 }
 
 // sn_net_addrs stores the local and the remote address of a socket,
-// as Go prints them, "127.0.0.1:8080" or "[::1]:8080", the remote one
+// printed as "127.0.0.1:8080", or "[::1]:8080" for IPv6, the remote one
 // empty when it has no peer, as a listening socket.
 SN_HELD int64_t sn_net_addrs(int64_t fd, sn_string *local, sn_string *remote) {
     struct sockaddr_storage a;
@@ -1355,7 +1354,7 @@ SN_HELD int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     }
 
     for (;;) {
-        if (passed((int)fd, false)) { // as Go's: a passed deadline fails the read even with bytes waiting
+        if (passed((int)fd, false)) { // a passed deadline fails the read even with bytes waiting
             return SN_NET_TIMED_OUT;
         }
 
@@ -1382,7 +1381,7 @@ SN_HELD int64_t sn_net_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
 
 // sn_net_write writes all of buf to the connection and stores how
 // much it wrote: the length of buf, or on a failure what went before
-// it, which the library's Error carries as Go's Write returns it.
+// it, which the library's Error carries.
 SN_HELD int64_t sn_net_write(int64_t fd, sn_slice_u8 buf, int64_t *n) {
     sn_check_slice((sn_slice *)&buf);
     int64_t done = 0;

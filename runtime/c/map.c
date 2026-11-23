@@ -24,14 +24,13 @@
 #include <unistd.h>
 #endif
 
-// Hashing is wyhash's (Wang Yi's, in the public domain), the function
-// Go's runtime falls back to where it has no AES instructions: eight
-// bytes a step, folded by a 64-by-64-bit multiply whose two halves are
+// Hashing is wyhash's (Wang Yi's, in the public domain): eight bytes
+// a step, folded by a 64-by-64-bit multiply whose two halves are
 // xored. Every hash is keyed by a seed drawn from the system's random
-// source when the program starts, as Go seeds every map and Rust every
-// HashMap, so that keys chosen to collide cannot be computed ahead of
-// time: without the seed a server's map could be filled with keys that
-// all fall in one slot, and every lookup would walk them (HashDoS).
+// source when the program starts, so that keys chosen to collide
+// cannot be computed ahead of time: without the seed a server's map
+// could be filled with keys that all fall in one slot, and every lookup
+// would walk them (HashDoS).
 static uint64_t hash_seed[2] = { 0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u };
 
 static const uint64_t wyp[4] = { 0x2d358dccaa6c78a5u, 0x8bb84b93962eacc9u, 0x4b33a62ed433d4a3u, 0x4d5a2da51de1aa47u };
@@ -122,18 +121,16 @@ uint64_t sn_hash_mix(uint64_t h, uint64_t v) { return wymix(h ^ hash_seed[1] ^ w
 // A map keeps its entries in the order they were inserted, which is the
 // order a range visits them, in one block: the keys, the values, and the
 // hash of each key, zero for an entry Remove emptied. An index finds
-// them: a Swiss table, the design of Go's maps since 1.24 and of Rust's
-// HashMap (hashbrown), over slots holding entry numbers, one control
+// them: a Swiss table over slots holding entry numbers, one control
 // byte a slot. A full slot's byte is the top seven bits of its key's
 // hash, an empty one's 0xFF and one whose entry was removed 0x80. A
 // lookup reads the bytes of eight slots at once as one word and compares
 // keys only where the seven bits match, one key in 128 by chance; the
-// entries array and an index of entry numbers is Rust's indexmap,
-// which keeps insertion order as this map must. The slots are a power
-// of two, eight to a group; a probe visits groups in triangular order,
-// which reaches every group, and stops at the first group with an
-// empty slot. The index is at most seven eighths full, so one is
-// always there.
+// entries array with an index of entry numbers over it keeps insertion
+// order, as this map must. The slots are a power of two, eight to a
+// group; a probe visits groups in triangular order, which reaches every
+// group, and stops at the first group with an empty slot. The index is
+// at most seven eighths full, so one is always there.
 enum { ctrl_empty = 0xFF, ctrl_deleted = 0x80 };
 
 static const uint64_t lo_bits = 0x0101010101010101u, hi_bits = 0x8080808080808080u;

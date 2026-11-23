@@ -13,29 +13,28 @@
 // fires.
 //
 // A wheel is the hierarchical timing wheel of Varghese and Lauck
-// ("Hashed and hierarchical timing wheels", 1987), in the form Tokio
-// gives it: ten levels of sixty-four slots, a slot of the first level
-// one tick of 256 ns wide and a slot of each level after it as wide as
-// the whole level before, so that the ten reach past the longest wait a
-// clock counts. A timer goes in the slot its deadline falls in, at the
-// lowest level whose span from now holds it, found from the highest bit
-// in which the deadline's tick and the wheel's differ; a bit a slot says
-// which slots of a level hold any. Putting a timer in and taking one out
-// are so a few instructions whatever else the wheel holds, where a heap
-// moves an entry up or down a path as long as the logarithm of their
-// count. When time reaches a slot of a higher level, its timers move
-// down to the levels their deadlines now call for, each at most once a
-// level.
+// ("Hashed and hierarchical timing wheels", 1987), here of ten levels
+// of sixty-four slots, a slot of the first level one tick of 256 ns
+// wide and a slot of each level after it as wide as the whole level
+// before, so that the ten reach past the longest wait a clock counts. A
+// timer goes in the slot its deadline falls in, at the lowest level
+// whose span from now holds it, found from the highest bit in which the
+// deadline's tick and the wheel's differ; a bit a slot says which slots
+// of a level hold any. Putting a timer in and taking one out are so a
+// few instructions whatever else the wheel holds, where a heap moves an
+// entry up or down a path as long as the logarithm of their count. When
+// time reaches a slot of a higher level, its timers move down to the
+// levels their deadlines now call for, each at most once a level.
 //
-// A timer goes in the wheel of the worker that starts it, as Go's
-// timers go on the P that starts them, so that the workers running
-// tasks that sleep write no line they share: a task's sleep is in its
-// worker's wheel, and the timer of a channel or of a socket's deadline
-// in the wheel chosen the first time one was started on it, which the
-// channel or the deadline remembers, so that whoever stops it finds its
-// wheel without reading the timer. A worker fires its own wheel's
-// timers as they come due and looks at the other wheels now and then,
-// and a worker with nothing to run keeps time for them all.
+// A timer goes in the wheel of the worker that starts it, so that the
+// workers running tasks that sleep write no line they share: a task's
+// sleep is in its worker's wheel, and the timer of a channel or of a
+// socket's deadline in the wheel chosen the first time one was started
+// on it, which the channel or the deadline remembers, so that whoever
+// stops it finds its wheel without reading the timer. A worker fires
+// its own wheel's timers as they come due and looks at the other wheels
+// now and then, and a worker with nothing to run keeps time for them
+// all.
 
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE
@@ -494,10 +493,8 @@ SN_HELD_STATIC static bool wheel_fire(wheel *w, int64_t now, bool own) {
 
 // sn_timers_fire fires every timer due at now, on the thread that calls
 // it, and reports whether it fired any; sn_timers_fire_own fires one
-// worker's wheel, as a worker does between its tasks, as Go's worker
-// runs its own P's timers at each schedule and looks at the others'
-// only when it has nothing to run. Any number of threads may fire at
-// once, each at the wheels the others are not at.
+// worker's wheel, as a worker does between its tasks. Any number of
+// threads may fire at once, each at the wheels the others are not at.
 SN_HELD bool sn_timers_fire(int64_t now) {
     bool fired = false;
     for (int i = 0; i < wheels_now(); i++) {
@@ -630,8 +627,7 @@ SN_HELD void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every) {
 // which is taken out and its handle dropped, or a time the timer sent
 // that no one received yet, which is taken back. It waits for a timer
 // of the wheel firing now to be done first, so that once it returns
-// nothing more is sent and nothing sent before is left to receive, as
-// Go's Stop promises since its timers' channels hold nothing back: a
+// nothing more is sent and nothing sent before is left to receive: a
 // Ticker is still in its wheel after it has sent, so a tick it sent
 // before is taken back too.
 SN_HELD_STATIC static bool timer_stop(sn_chan *c) {
@@ -673,11 +669,10 @@ SN_HELD bool sn_time_stopTimer(sn_chan *ch) {
 // sn_time_resetTimer is package time's resetTimer: it makes the timer
 // of ch send d from now and then every period when every is above zero,
 // and reports what a stop would have. It is a stop, which takes back a
-// time sent before and no one received, as Go's Reset does since its
-// timers' channels hold nothing back, and then a new timer with ch as
-// its own handle: taking back the time sent before the timer is in its
-// wheel again keeps a new period that comes at once from being taken
-// back with it.
+// time sent before and no one received, and then a new timer with ch
+// as its own handle: taking back the time sent before the timer is in
+// its wheel again keeps a new period that comes at once from being
+// taken back with it.
 SN_HELD bool sn_time_resetTimer(sn_chan *ch, int64_t d, int64_t every) {
     bool stopped = timer_stop(ch);
     sn_time_startTimer(ch, d, every);
