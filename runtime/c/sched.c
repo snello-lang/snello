@@ -1099,10 +1099,20 @@ SN_HELD void sn_outside(int64_t n) {
 // queued_now is how many tasks wait on the workers' rings and the
 // inject queue, read from each ring's counts: no count of them all is
 // kept, since every worker would write it on every push and every pop.
+// A ring's head is read before its tail, as every reader of the two
+// reads them: the head never passes the tail and both only grow, so
+// the tail read second is at least the head read first and the
+// difference, unsigned, cannot wrap. Read the other way, a pop between
+// the two reads puts the head past the tail read, and the difference
+// wraps to near 2^32. Pops between the reads can still make it more
+// than the ring held at any one time, never more than the ring holds.
 SN_HELD_STATIC static int64_t queued_now(void) {
     int64_t n = atomic_load(&hot.injected) + atomic_load(&hot.displaced);
     for (int i = 0; i < workers_now(); i++) {
-        n += (int64_t)(atomic_load(&workers[i].qtail) - atomic_load(&workers[i].qhead));
+        uint32_t h = atomic_load(&workers[i].qhead);
+        uint32_t tl = atomic_load(&workers[i].qtail);
+        uint32_t held = tl - h;
+        n += held < ring_size ? held : ring_size;
     }
 
     return n;
