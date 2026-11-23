@@ -108,17 +108,17 @@ func TestDefinition(t *testing.T) {
 	}
 
 	t.Setenv(c.CacheEnv, c.CacheOff)
-	if m := n.call(protocol.MethodDefinition, n.params(place{"main.snello", "fmt.", "Println(c.Name()"})); m.Error == nil || !strings.Contains(m.Error.Message, c.CacheEnv) {
-		t.Errorf("a standard package's with the cache off: %+v, want an error naming %s", m.Error, c.CacheEnv)
+	for name, at := range map[string]place{
+		"a standard package's":         {"main.snello", "fmt.", "Println(c.Name()"},
+		"a name the language declares": {"main.snello", "func (t ref Triangle) Corners() ", "int"},
+	} {
+		if m := n.call(protocol.MethodDefinition, n.params(at)); m.Error == nil || !strings.Contains(m.Error.Message, c.CacheEnv) {
+			t.Errorf("%s with the cache off: %+v, want an error naming %s", name, m.Error, c.CacheEnv)
+		}
 	}
 
-	for name, at := range map[string]place{
-		"a name the language declares": {"main.snello", "func (t ref Triangle) Corners() ", "int"},
-		"a place with no name":         {"main.snello", "Corners() int ", "{"},
-	} {
-		if got := n.definition(at); got != nil {
-			t.Errorf("%s: %+v, want none", name, *got)
-		}
+	if got := n.definition(place{"main.snello", "Corners() int ", "{"}); got != nil {
+		t.Errorf("a place with no name: %+v, want none", *got)
 	}
 
 	n.shutdown()
@@ -154,6 +154,9 @@ func TestHover(t *testing.T) {
 		{"an operator", place{"main.snello", "kindOf(ref r) ", "=="}, "==", "bool", ""},
 		{"a literal", place{"main.snello", "Medal{points: ", "7"}, "7", "int", ""},
 		{"a test file's type", place{"shapes/shapes_test.snello", "cases := []", "Case"}, "Case", "struct Case {\n\tname string\n\tkind shapes.Kind\n\twant string\n}", ""},
+		{"a package's name", place{"main.snello", "c := ", "shapes.Circle"}, "shapes", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
+		{"an import's path", place{"main.snello", "import (\"fmt\"; ", "\"shapes\""}, "\"shapes\"", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
+		{"the package clause", place{"shapes/shape.snello", "package ", "shapes"}, "shapes", "package shapes", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
 	}
 
 	for _, tt := range tests {
@@ -336,6 +339,71 @@ func TestStdPaths(t *testing.T) {
 	if got := stdPathOf("fmt/fmt.snello"); got != "" {
 		t.Errorf("with the cache off: %q", got)
 	}
+}
+
+// TestPackageDocTests hovers on the package clause of a test file,
+// whose check loads the test files with the package: the package's
+// comment is its source files', as snello doc gives it, and a test
+// file's comment above its clause is none of it.
+func TestPackageDocTests(t *testing.T) {
+	dir := writeModule(t, map[string]string{
+		"lib/lib.snello":      "// Package lib does one thing.\npackage lib\n\n// F is one.\nfunc F() int { return 1 }\n",
+		"lib/lib_test.snello": "// The tests of lib.\npackage lib\n\nimport \"expect\"\n\nfunc TestF() { expect.Equal(ref F(), ref 1) }\n",
+	})
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "lib/lib.snello", "lib/lib_test.snello")
+	if h := n.hover(place{"lib/lib_test.snello", "package ", "lib"}); h == nil || h.Contents.Value != "package lib\n\nPackage lib does one thing.\n" {
+		t.Errorf("the package clause of a test file: %+v, want the package's comment alone", h)
+	}
+
+	n.shutdown()
+}
+
+// TestBuiltinNavigation hovers on and goes to the definition of names
+// the language declares, which no file of the program declares: a trait
+// in a bound and in an impl list, its method, a method of a slice, a
+// string and an option, a built-in function, a type and a constant.
+// Each hover has the comment builtinFile writes for it, and each
+// definition is the name in the file's copy in the cache.
+func TestBuiltinNavigation(t *testing.T) {
+	t.Setenv(c.CacheEnv, t.TempDir())
+	dir := writeModule(t, map[string]string{"main.snello": "package main\n\nimport \"fmt\"\n\nstruct P impl Eq { n int }\n\nfunc same<T: Eq>(a ref T, b ref T) bool { return a.Eq(b) }\n\nfunc main() {\n\txs := []int{1}\n\txs.Push(2)\n\ts := \"ab\"\n\to := xs.Pop()\n\tfmt.Println(len(xs), s.Contains(\"a\"), o.IsSome(), same(ref 1, ref 2), true)\n}\n"})
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello")
+	for _, tt := range []struct {
+		at        place
+		name, doc string
+	}{
+		{place{"main.snello", "func same<T: ", "Eq>"}, "Eq", "Eq compares two values for equality"},
+		{place{"main.snello", "struct P impl ", "Eq {"}, "Eq", "Eq compares two values for equality"},
+		{place{"main.snello", "return a.", "Eq(b)"}, "Eq", "Eq compares two values for equality"},
+		{place{"main.snello", "xs.", "Push(2)"}, "Push", "Push adds v at the end of the slice"},
+		{place{"main.snello", "s.", "Contains"}, "Contains", "Contains reports whether the string holds t"},
+		{place{"main.snello", "o.", "IsSome"}, "IsSome", "IsSome reports whether there is a value"},
+		{place{"main.snello", "fmt.Println(", "len("}, "len", "len returns the length of x"},
+		{place{"main.snello", "xs := []", "int{1}"}, "int", "int is the signed integer of 64 bits"},
+		{place{"main.snello", "same(ref 1, ref 2), ", "true"}, "true", "true and false are the two values of bool"},
+	} {
+		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
+			t.Errorf("hover on %s: %+v, want its comment, %q", tt.at.at, h, tt.doc)
+		}
+
+		loc := n.definition(tt.at)
+		if loc == nil || !strings.HasSuffix(filepath.ToSlash(pathOf(loc.URI)), builtinFile) {
+			t.Errorf("definition of %s: %+v, want the name in the copy of %s", tt.at.at, loc, builtinFile)
+			continue
+		}
+
+		text, err := os.ReadFile(pathOf(loc.URI))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		start, end := offsetOf(text, loc.Range.Start, protocol.PositionEncodingUTF16), offsetOf(text, loc.Range.End, protocol.PositionEncodingUTF16)
+		if got := string(text[start:end]); got != tt.name {
+			t.Errorf("definition of %s: at %q, want %q", tt.at.at, got, tt.name)
+		}
+	}
+
+	n.shutdown()
 }
 
 // packagedFiles are the files of examples/packaged.

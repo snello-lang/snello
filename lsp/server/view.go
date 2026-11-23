@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/token"
@@ -42,11 +45,15 @@ type view struct {
 
 // A target is what a place in a document holds: the name there, with
 // the object it declares or uses, or the expression whose token is
-// there, with its type; and the stretch of the document it covers, as
-// offsets.
+// there, with its type, or the package an import's path or the package
+// clause names, or a method the language declares of one of its types,
+// which no object stands for, as builtinFile documents it; and the
+// stretch of the document it covers, as offsets.
 type target struct {
 	obj        types.Object
 	typ        types.Type
+	pkg        *types.Package
+	builtin    *builtinDecl
 	start, end int
 }
 
@@ -183,17 +190,39 @@ func (v *view) at(file *token.File, src []byte, offset int) *target {
 
 	if id := identAt(syntax, file, offset); id != nil {
 		start := file.Offset(id.NamePos)
+		if id == syntax.Name {
+			return &target{pkg: v.ownPackage(syntax), start: start, end: start + len(id.Name)}
+		}
+
 		obj := v.info.Defs[id]
 		if obj == nil {
 			obj = v.info.Uses[id]
 		}
 
-		return &target{obj: obj, typ: v.info.Types[id], start: start, end: start + len(id.Name)}
+		t := &target{obj: obj, typ: v.info.Types[id], start: start, end: start + len(id.Name)}
+		if sel := selectorOf(syntax, id); obj == nil && sel != nil {
+			if d, ok := builtinMethodOf(v.info.Types[sel.X], id.Name); ok {
+				t.builtin = &d
+			}
+		}
+
+		return t
 	}
 
 	start, end, ok := tokenAt(file.Name(), src, offset)
 	if !ok {
 		return nil
+	}
+
+	for _, spec := range syntax.Imports {
+		if file.Offset(spec.Path.Pos()) == start {
+			pn := v.importOf(spec)
+			if pn == nil {
+				return nil
+			}
+
+			return &target{obj: pn, pkg: pn.Imported(), start: start, end: end}
+		}
 	}
 
 	if x, ok := owner(syntax, file.Pos(start)).(ast.Expr); ok && v.info.Types[x] != nil {
@@ -211,7 +240,8 @@ func (v *view) declaration(obj types.Object) (decl, doc string) {
 	decl = types.ObjectString(obj, v.typeOf(obj))
 	file := v.fileOf(obj.Pos())
 	if file == nil {
-		return decl, ""
+		d, _ := builtinOf(obj) // a name the language declares, documented in builtinFile
+		return decl, d.doc
 	}
 
 	src, err := v.source(file.Name())
@@ -235,6 +265,92 @@ func (v *view) declaration(obj types.Object) (decl, doc string) {
 	}
 
 	return decl, ""
+}
+
+// packageDoc returns the doc comment of pkg, a package the check
+// loaded, as snello doc gives it: the comment above the package clause
+// of each of its source files, in the order of their names, joined, a
+// test file's left out. Its files are the files of the check in the
+// directory of its declarations.
+func (v *view) packageDoc(pkg *types.Package) string {
+	dirs := make(map[string]bool)
+	for _, name := range pkg.Scope().Names() {
+		if f := v.fileOf(pkg.Scope().Lookup(name).Pos()); f != nil {
+			dirs[filepath.Dir(f.Name())] = true
+		}
+	}
+
+	var names []string
+	for _, f := range v.files {
+		if dirs[filepath.Dir(f.Name())] && !importer.IsTestFile(f.Name()) {
+			names = append(names, f.Name())
+		}
+	}
+
+	slices.Sort(names)
+	var docs []string
+	for _, name := range slices.Compact(names) {
+		src, err := v.source(name)
+		if err != nil {
+			continue
+		}
+
+		f, _ := parser.ParseComments(token.NewFile(name, len(src)), src)
+		if f == nil || f.Name == nil || f.Name.Name != pkg.Name() || f.Docs == nil {
+			continue
+		}
+
+		if g := f.Docs.Lead[f]; g != nil {
+			docs = append(docs, g.Text())
+		}
+	}
+
+	return strings.Join(docs, "\n")
+}
+
+// selectorOf returns the selector expression whose selected name is id,
+// x.id, or nil for a name selected from nothing.
+func selectorOf(syntax *ast.File, id *ast.Ident) *ast.SelectorExpr {
+	var found *ast.SelectorExpr
+	ast.Inspect(syntax, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel == id {
+			found = sel
+		}
+
+		return found == nil
+	})
+
+	return found
+}
+
+// ownPackage returns the package of the file syntax, as one of its
+// top-level names says, or nil for a file that declares none.
+func (v *view) ownPackage(syntax *ast.File) *types.Package {
+	var pkg *types.Package
+	ast.Inspect(syntax, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && pkg == nil {
+			if obj := v.info.Defs[id]; obj != nil {
+				pkg = obj.Pkg()
+			}
+		}
+
+		return pkg == nil
+	})
+
+	return pkg
+}
+
+// importOf returns the package name the import spec declares, as the
+// file's uses of it record it, or nil for an import the file never
+// uses, whose error the check reports.
+func (v *view) importOf(spec *ast.ImportSpec) *types.PkgName {
+	for _, obj := range v.info.Uses {
+		if pn, ok := obj.(*types.PkgName); ok && pn.Pos() == spec.Pos() && pn.Imported() != nil {
+			return pn
+		}
+	}
+
+	return nil
 }
 
 // typeOf returns the type a function of a type belongs to, Point of

@@ -21,6 +21,7 @@ import (
 	"github.com/snello-lang/snello/compiler/version"
 	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
+	"github.com/snello-lang/snello/std"
 )
 
 // stdCopies is the directory of the cache the standard library's
@@ -41,6 +42,7 @@ const (
 	markdownMarks = "\\`*_{}[]<>()#+-.!|~"
 	markdownCode  = "\t"
 	escape        = '\\'
+	packageClause = "package "
 )
 
 // answer answers the requests about the documents that waited for the
@@ -97,23 +99,32 @@ func isQuery(method string) bool {
 }
 
 // hover answers a hover: the declaration of the name under the cursor,
-// as the checker types it, with its doc comment below it; or the type of
-// the expression one of whose tokens is under it; or nothing.
+// as the checker types it, with its doc comment below it, a package's
+// with the package's own, as snello doc gives it, on its name, its
+// import's path or the package clause; or the type of the expression
+// one of whose tokens is under it; or nothing.
 func (s *Server) hover(m *jsonrpc.Message) {
 	v, src, t, ok := s.targetOf(m)
 	if !ok {
 		return
 	}
 
-	if t == nil || t.obj == nil && t.typ == nil {
+	if t == nil || t.obj == nil && t.typ == nil && t.pkg == nil && t.builtin == nil {
 		s.reply(m.ID, nil)
 		return
 	}
 
 	var text, doc string
-	if t.obj != nil {
+	switch pn, _ := t.obj.(*types.PkgName); {
+	case t.builtin != nil:
+		text, doc = t.builtin.decl, t.builtin.doc
+	case pn != nil && pn.Imported() != nil:
+		text, doc = types.ObjectString(pn, nil), v.packageDoc(pn.Imported())
+	case t.obj != nil:
 		text, doc = v.declaration(t.obj)
-	} else {
+	case t.pkg != nil:
+		text, doc = packageClause+t.pkg.Name(), v.packageDoc(t.pkg)
+	default:
 		text = t.typ.String()
 	}
 
@@ -136,20 +147,33 @@ func (s *Server) hover(m *jsonrpc.Message) {
 
 // definition answers a definition: where the name under the cursor is
 // declared, in its package's file or, for the standard library's, in
-// its copy in the cache; or nothing, for a name the language declares
-// or no name.
+// its copy in the cache, and for a name the language declares, where
+// builtinFile documents it, in its copy; or nothing, for no name.
 func (s *Server) definition(m *jsonrpc.Message) {
 	v, _, t, ok := s.targetOf(m)
 	if !ok {
 		return
 	}
 
-	if t == nil || t.obj == nil {
+	if t == nil || t.obj == nil && t.builtin == nil {
 		s.reply(m.ID, nil)
 		return
 	}
 
-	loc, found, err := s.declarationOf(v, t.obj)
+	d := t.builtin
+	if b, ok := builtinOf(t.obj); ok {
+		d = &b
+	}
+
+	var loc protocol.Location
+	found := true
+	var err error
+	if d != nil {
+		loc, err = s.builtinLocation(*d)
+	} else {
+		loc, found, err = s.declarationOf(v, t.obj)
+	}
+
 	switch {
 	case err != nil:
 		s.fail(m.ID, jsonrpc.InternalError, err.Error())
@@ -158,6 +182,25 @@ func (s *Server) definition(m *jsonrpc.Message) {
 	default:
 		s.reply(m.ID, loc)
 	}
+}
+
+// builtinLocation returns where builtinFile documents d: its name, in
+// the file's copy in the cache.
+func (s *Server) builtinLocation(d builtinDecl) (protocol.Location, error) {
+	src, err := std.Sources.ReadFile(builtinFile)
+	if err != nil {
+		return protocol.Location{}, err
+	}
+
+	path, err := pathOfFile(token.NewFile(builtinFile, len(src)), src)
+	if err != nil {
+		return protocol.Location{}, err
+	}
+
+	return protocol.Location{URI: s.uriOfPath(path), Range: protocol.Range{
+		Start: positionOf(src, d.start, s.encoding),
+		End:   positionOf(src, d.end, s.encoding),
+	}}, nil
 }
 
 // declarationOf returns where obj, an object of v, is declared: the
