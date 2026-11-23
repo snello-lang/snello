@@ -48,6 +48,8 @@ snello run .
 
 The script installs the latest release, checks what it downloaded, and offers to install clang when a build still needs it. [Chapter 38](_docs/book/38-installing.md) has every way to install, by hand from a release, from source, and what a build needs on each system; [chapter 2](_docs/book/02-getting-started.md) takes it from there, and [chapter 32](_docs/book/32-the-snello-command.md) has every command. Snello runs on Linux, macOS and Windows, on x86-64 and arm64 ([chapter 34](_docs/book/34-platforms.md)).
 
+In an editor, `snello lsp` is Snello's language server, errors as you type, hover, go to definition, references, rename and completion, from the compiler's own checker: the [VS Code extension](https://github.com/snello-lang/vscode-extension) starts it, and [chapter 40](_docs/book/40-the-language-server.md) shows Neovim and Helix.
+
 ## Documentation
 
 - [The book](_docs/book/): the language, one feature per chapter, from [the introduction](_docs/book/01-introduction.md); readers coming from Go have [Appendix B](_docs/book/B-snello-for-go-programmers.md).
