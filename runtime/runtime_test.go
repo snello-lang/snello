@@ -39,10 +39,10 @@ const (
 const wakeRuns = 5
 
 // allocScalesLimit is how many times more four threads allocating may
-// grow a processor's time than four threads copying grow theirs. Each
-// thread's own allocations grow it about as much as copying, near one
-// times; one word every allocation writes, shared by the threads, grows
-// it ten to twenty times more. Three stands about as far from either.
+// grow a processor's time than four threads listing grow theirs. Each
+// thread's own allocations grow it as listing does, about once; one
+// word every allocation writes, shared by the threads, ten times and
+// more. Three lies between the two on a ratio's scale.
 const allocScalesLimit = 3.0
 
 // The debuggers a hung probe's threads are read with: cdb on Windows,
@@ -4186,19 +4186,21 @@ int main(void) {
 
 // TestAllocScales holds what allocating costs a processor when four
 // threads allocate at once to what it costs one alone, against the same
-// ratio for copying: as many rounds of writes of the same sizes into a
-// thread's own memory, with no allocation. Each thread keeps what it
-// allocates and frees to itself, so four threads allocating spend four
-// times one thread's processor time and little more, as four threads
-// copying do; a word every allocation writes, shared by the threads,
-// has each processor wait for the line of memory it is on, and four
-// threads allocating then spend many times what four copying do. What
-// the machine adds when four threads run, two of them on one core as
-// its hardware threads or a lower clock, it adds to the copying as
-// well, so the comparison holds on a machine of shared cores. Processor
-// time is measured, not the clock's, so that a machine busy with other
-// tests does not look like a shared word; the least of three
-// comparisons is kept.
+// ratio for listing: the allocator's own work done on lists of the
+// thread's own, the same rounds taking and giving blocks of the same
+// sizes, one call each, with counts of the thread's own written as an
+// allocation's are. Each thread keeps what it allocates and frees to
+// itself, so four threads allocating spend four times one thread's
+// processor time and little more, as four threads listing do; a word
+// every allocation writes, shared by the threads, has each processor
+// wait for the line of memory it is on, and four threads allocating
+// then spend many times what four listing do. What the machine adds
+// when four threads run, two threads sharing one core or a clock
+// lowered for all four, it adds to the same work listed, so the
+// comparison holds on a machine of shared cores. Processor time is
+// measured, not the clock's, so that a machine busy with other tests
+// does not look like a shared word, and of three runs the least of
+// each time is kept, since other work only ever adds to a time.
 func TestAllocScales(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("fewer than four processors")
@@ -4206,28 +4208,62 @@ func TestAllocScales(t *testing.T) {
 
 	probe := `#include "snello.h"
 #include "probe.h"
+#include <stdatomic.h>
 #include <stdio.h>
-#include <string.h>
-enum { rounds = 4000000, kept = 64, largest = 128 };
+#include <stdlib.h>
+enum { rounds = 4000000, kept = 64, classes = 8, step = 16, spare = 16 };
 static void *allocating(void *arg) {
     (void)arg;
     void *keep[kept] = {0};
     for (int i = 0; i < rounds; i++) {
         int k = i & (kept - 1);
         sn_free(keep[k]);
-        keep[k] = sn_alloc(16 + (size_t)(i & 7) * 16);
+        keep[k] = sn_alloc(step + (size_t)(i & (classes - 1)) * step);
     }
     for (int k = 0; k < kept; k++) sn_free(keep[k]);
     return NULL;
 }
-static void *copying(void *arg) {
+typedef struct {
+    void *head[classes];
+    int64_t count[classes];
+    _Atomic int64_t blocks, bytes;
+} lists;
+static _Thread_local lists mine;
+static __attribute__((noinline)) void give(void *p, size_t n) {
+    if (p == NULL) {
+        return;
+    }
+    int c = (int)((n - 1) / step);
+    *(void **)p = mine.head[c];
+    mine.head[c] = p;
+    if (++mine.count[c] > rounds) {
+        abort();
+    }
+}
+static __attribute__((noinline)) void *take(size_t n) {
+    int c = (int)((n - 1) / step);
+    void *p = mine.head[c];
+    mine.head[c] = *(void **)p;
+    mine.count[c]--;
+    atomic_store_explicit(&mine.blocks, atomic_load_explicit(&mine.blocks, memory_order_relaxed) + 1, memory_order_relaxed);
+    atomic_store_explicit(&mine.bytes, atomic_load_explicit(&mine.bytes, memory_order_relaxed) + (int64_t)n, memory_order_relaxed);
+    return p;
+}
+static void *listing(void *arg) {
     (void)arg;
-    unsigned char keep[kept][largest];
+    size_t largest = (size_t)classes * step;
+    unsigned char *own = malloc((size_t)classes * spare * largest);
+    for (int c = 0; c < classes; c++) {
+        for (int j = 0; j < spare; j++) give(own + ((size_t)c * spare + (size_t)j) * largest, (size_t)(c + 1) * step);
+    }
+    void *keep[kept] = {0};
     for (int i = 0; i < rounds; i++) {
         int k = i & (kept - 1);
-        memset(keep[k], i, 16 + (size_t)(i & 7) * 16);
-        __asm__ volatile("" : : "r"(keep[k]) : "memory"); // the writes are made, as an allocation's are
+        size_t n = step + (size_t)(i & (classes - 1)) * step;
+        give(keep[k], n);
+        keep[k] = take(n);
     }
+    free(own);
     return NULL;
 }
 static double spent(void *(*work)(void *), int threads) {
@@ -4237,37 +4273,40 @@ static double spent(void *(*work)(void *), int threads) {
     for (int k = 0; k < threads; k++) probe_thread_join(th[k]);
     return (double)(probe_cpu_work() - a);
 }
-static double scaling(void *(*work)(void *)) {
-    double one = spent(work, 1);
-    return spent(work, 4) / (4 * one);
-}
 int main(void) {
     spent(allocating, 1);
-    double alloc = scaling(allocating), copy = scaling(copying);
-    printf("%.2f %.2f\n", alloc, copy);
+    spent(listing, 1);
+    double alloc1 = spent(allocating, 1), alloc4 = spent(allocating, 4);
+    double list1 = spent(listing, 1), list4 = spent(listing, 4);
+    printf("%.0f %.0f %.0f %.0f\n", alloc1, alloc4, list1, list4);
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
-	best, alloc, copy := 0.0, 0.0, 0.0
-	for range 3 { // the least of three: a machine's other work only ever adds
+	least := [4]float64{math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)} // allocating on one thread and four, listing on one and four
+	for range 3 {
 		out, err := exec.Command(bin).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		var a, c float64
-		if _, err := fmt.Sscanf(string(out), "%f %f", &a, &c); err != nil || c <= 0 {
+		var times [4]float64
+		if _, err := fmt.Sscanf(string(out), "%f %f %f %f", &times[0], &times[1], &times[2], &times[3]); err != nil {
 			t.Fatalf("%q: %v", out, err)
 		}
 
-		if best == 0 || a/c < best {
-			best, alloc, copy = a/c, a, c
+		for i, v := range times {
+			if !(v > 0) || math.IsInf(v, 0) {
+				t.Fatalf("%q: a processor time that is not a positive number", out)
+			}
+
+			least[i] = min(least[i], v)
 		}
 	}
 
-	t.Logf("four threads against one: allocating %.2f times, copying %.2f times", alloc, copy)
-	if best > allocScalesLimit {
-		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, %.2f times what copying's grows, want under %.1f", alloc, best, allocScalesLimit)
+	allocating, listing := least[1]/(4*least[0]), least[3]/(4*least[2])
+	t.Logf("four threads against one: allocating %.2f times, listing %.2f times", allocating, listing)
+	if allocating/listing > allocScalesLimit {
+		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, %.2f times what listing's grows, want under %.1f", allocating, allocating/listing, allocScalesLimit)
 	}
 }
 
