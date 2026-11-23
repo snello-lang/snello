@@ -255,3 +255,42 @@ func TestCompileError(t *testing.T) {
 		t.Errorf("the message: %q, want %q", err.Error(), want)
 	}
 }
+
+// TestStdPackage finds a standard package's directory in the checkout,
+// one level down and two, with the std/ above it named as the
+// directory is, relative or absolute; and refuses an example's package
+// and a project's own std/strings, which has the whole library beside
+// it nowhere.
+func TestStdPackage(t *testing.T) {
+	checkout := filepath.Join("..", "..", "std")
+	for _, tc := range []struct{ dir, path string }{
+		{filepath.Join(checkout, "strings"), "strings"},
+		{filepath.Join(checkout, "unicode", "utf8"), "unicode/utf8"},
+	} {
+		stdDir, path, ok := StdPackage(tc.dir)
+		if !ok || path != tc.path || stdDir != checkout {
+			t.Errorf("%s: got %q, %q, %v, want %q, %q", tc.dir, stdDir, path, ok, checkout, tc.path)
+		}
+
+		abs, err := filepath.Abs(tc.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if stdDir, _, ok := StdPackage(abs); !ok || !filepath.IsAbs(stdDir) || filepath.Base(stdDir) != stdCheckout {
+			t.Errorf("%s: got %q, %v, want the absolute std/", abs, stdDir, ok)
+		}
+	}
+
+	if _, _, ok := StdPackage(filepath.Join("..", "..", "examples", "packaged", "shapes")); ok {
+		t.Error("an example package is seen as a standard one")
+	}
+
+	foreign := writeTree(t, map[string]string{
+		ModFile:                      "snello 0.1.0\n",
+		"std/strings/strings.snello": "package strings\n\nfunc N() int { return 1 }\n",
+	})
+	if _, _, ok := StdPackage(filepath.Join(foreign, "std", "strings")); ok {
+		t.Error("a project's own std/strings is seen as the library's")
+	}
+}

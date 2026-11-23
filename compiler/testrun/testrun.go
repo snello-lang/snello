@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -212,7 +211,7 @@ func PlanStd(importPath string) (*Plan, error) {
 // whole library is read from the checkout then, every package under
 // std/. A directory that is not a standard package's is refused.
 func PlanStdDir(dir string) (*Plan, error) {
-	stdDir, importPath, ok := stdPackage(dir)
+	stdDir, importPath, ok := importer.StdPackage(dir)
 	if !ok {
 		return nil, errors.New(dir + " is not a standard package of the library: snello test std/NAME runs one in a checkout of the compiler, whose std/ holds every package, with the compiler built from that checkout")
 	}
@@ -251,55 +250,6 @@ func PlanStdDir(dir string) (*Plan, error) {
 	}
 
 	return p, nil
-}
-
-// IsStdDir reports whether dir is a standard package's directory in a
-// checkout of the compiler: std/NAME or std/NAME/SUB, holding the file
-// named after its last element, for a path the embedded library has,
-// under a std/ that holds every package of the embedded library, so
-// that a program's own directory named std is never mistaken for the
-// checkout and planned with the library's privileges.
-func IsStdDir(dir string) bool {
-	_, _, ok := stdPackage(dir)
-	return ok
-}
-
-// stdPackage returns the std/ directory above dir and the import path
-// of the standard package dir is, unicode/utf8 for std/unicode/utf8,
-// when IsStdDir holds for it.
-func stdPackage(dir string) (stdDir, importPath string, ok bool) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", "", false
-	}
-
-	stdDir = filepath.Dir(abs)
-	for filepath.Base(stdDir) != "std" {
-		up := filepath.Dir(stdDir)
-		if up == stdDir {
-			return "", "", false
-		}
-
-		stdDir = up
-	}
-
-	rel, err := filepath.Rel(stdDir, abs)
-	if err != nil {
-		return "", "", false
-	}
-
-	importPath = filepath.ToSlash(rel)
-	if _, err := fs.Stat(std.Sources, importPath+"/"+path.Base(importPath)+importer.SourceExt); err != nil {
-		return "", "", false
-	}
-
-	for _, p := range importer.Paths() { // the whole library, as the embedded copy lists it
-		if _, err := os.Stat(filepath.Join(stdDir, filepath.FromSlash(p), path.Base(p)+importer.SourceExt)); err != nil {
-			return "", "", false
-		}
-	}
-
-	return stdDir, importPath, true
 }
 
 // testNames parses the test files, read from disk when srcs is nil,
@@ -569,7 +519,7 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, error) {
 	var p *Plan
 	var err error
-	if IsStdDir(dir) {
+	if _, _, std := importer.StdPackage(dir); std {
 		p, err = PlanStdDir(dir)
 	} else {
 		if w := importer.ModuleWarning(dir); w != "" {

@@ -22,11 +22,13 @@ import (
 )
 
 // examplesDir is where the example programs are, from this package's
-// directory, and pendingExample the one that waits for a library and
-// so does not compile.
+// directory, pendingExample the one that waits for a library and so
+// does not compile, and stdCheckoutDir the standard library's sources
+// in the checkout.
 const (
 	examplesDir    = "../../examples"
 	pendingExample = "cli-grep"
+	stdCheckoutDir = "../../std"
 )
 
 // TestExamples opens every source file of every package under
@@ -69,6 +71,53 @@ func TestExamples(t *testing.T) {
 		if len(want) == 0 || !slices.Equal(got, want) {
 			t.Errorf("%s: diagnostics %q, want the compiler's %q", dir, got, want)
 		}
+	}
+}
+
+// TestStdCheckout opens every source file of every standard package of
+// the checkout, as a maintainer of the library does, and checks each
+// package as the library's, with its tests: none has a diagnostic, and
+// an error typed into a file is reported on that file and line.
+func TestStdCheckout(t *testing.T) {
+	for _, path := range importer.Paths() {
+		dir := filepath.Join(stdCheckoutDir, filepath.FromSlash(path))
+		if _, _, ok := importer.StdPackage(dir); !ok {
+			t.Fatalf("%s is not seen as a standard package", dir)
+		}
+
+		s := New(strings.NewReader(""), io.Discard, io.Discard)
+		for _, name := range sourceNames(t, dir) {
+			src, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			s.open(protocol.TextDocumentItem{URI: uriOf(name), Text: string(src)})
+		}
+
+		s.checkAll()
+		if got := messagesOf(s.reports); len(got) > 0 {
+			t.Errorf("%s: %d diagnostics, want none:\n%s", dir, len(got), strings.Join(got, "\n"))
+		}
+	}
+
+	name, err := filepath.Abs(filepath.Join(stdCheckoutDir, "rc", "rc.snello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(strings.NewReader(""), io.Discard, io.Discard)
+	s.open(protocol.TextDocumentItem{URI: uriOf(name), Text: string(src) + "\nfunc broken() int { return \"x\" }\n"})
+	s.checkAll()
+	diags := union(s.reports)[name]
+	line := uint32(strings.Count(string(src), "\n") + 1) // zero-based: the line after the blank one appended
+	if len(diags) != 1 || diags[0].Range.Start.Line != line || diags[0].Message != "cannot use a value of type string as int in return" {
+		t.Errorf("an error typed into %s: %+v, want one at line %d", name, diags, line+1)
 	}
 }
 

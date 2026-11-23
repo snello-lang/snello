@@ -292,6 +292,20 @@ func TestCommandsWarn(t *testing.T) {
 	}
 }
 
+// TestCheckStdCheckout checks a file and a directory of a standard
+// package in the checkout as the library's: neither reports anything,
+// where checked as a program's the file's functions the runtime
+// provides would be refused.
+func TestCheckStdCheckout(t *testing.T) {
+	dir := filepath.Join("..", "..", "std", "rc")
+	for _, path := range []string{dir, filepath.Join(dir, "rc.snello")} {
+		code := -1
+		if got := stderrOf(t, func() { code = check(path, platform.Host()) }); code != 0 || got != "" {
+			t.Errorf("check %s exited %d and said %q, want it silent", path, code, got)
+		}
+	}
+}
+
 // stderrOf returns what run writes to standard error, gathered in a
 // file, which takes output of any length, and with standard error put
 // back however run ends.

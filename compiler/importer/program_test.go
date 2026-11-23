@@ -810,3 +810,48 @@ func TestCheckTests(t *testing.T) {
 		t.Errorf("a package under no module: %v", err)
 	}
 }
+
+// TestCheckStdCheckout checks a standard package of the checkout as
+// snello check and the language server check it: as the library's,
+// whose functions the runtime provides and whose fields only it
+// writes, with nothing reported; a file's text read through the
+// options, its error on its line in the file named where it is, the
+// package's own error and not the import's; the package's tests; and
+// builtin, documentation nothing compiles, with nothing to check but
+// its tests.
+func TestCheckStdCheckout(t *testing.T) {
+	dir := filepath.Join("..", "..", "std", "rc")
+	if err := CheckDir(dir, &types.Info{}, Options{}); err != nil {
+		t.Errorf("%s: %v", dir, err)
+	}
+
+	edited := filepath.Join(dir, "rc.snello")
+	read := func(name string) ([]byte, error) {
+		src, err := os.ReadFile(name)
+		if name == edited {
+			src = append(src, "\nfunc broken() int { return \"x\" }\n"...)
+		}
+
+		return src, err
+	}
+
+	var list scanner.ErrorList
+	err := CheckDir(dir, &types.Info{}, Options{Read: read})
+	lines := strings.Count(readFile(t, edited), "\n")
+	if !errors.As(err, &list) || len(list) != 1 || list[0].Pos.Filename != edited || list[0].Pos.Line != lines+2 || strings.HasPrefix(err.Error(), "package ") {
+		t.Errorf("an edited file of the checkout: %v, want its error at line %d of %s alone", err, lines+2, edited)
+	}
+
+	if err := CheckTests(dir, "rc_test", &types.Info{}, Options{}); err != nil {
+		t.Errorf("%s's tests: %v", dir, err)
+	}
+
+	builtin := filepath.Join("..", "..", "std", builtinPath)
+	if err := CheckDir(builtin, &types.Info{}, Options{}); err != nil {
+		t.Errorf("builtin, which nothing compiles: %v, want nothing checked", err)
+	}
+
+	if err := CheckTests(builtin, builtinPath+TestSuffix, &types.Info{}, Options{}); err != nil {
+		t.Errorf("builtin's tests: %v", err)
+	}
+}

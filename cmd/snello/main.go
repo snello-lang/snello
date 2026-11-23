@@ -149,7 +149,9 @@ func parse(path string, out io.Writer) int {
 // program is correct, and warns on standard error of a module file with
 // no snello line.
 // A directory whose package is not main is checked as the library it
-// is, so that its binding to C is not refused as a program's would be.
+// is, so that its binding to C is not refused as a program's would be;
+// a file of a standard package in a checkout of the compiler is checked
+// with its package, the library's, which no file of it is alone.
 func check(path string, target platform.Target) int {
 	names, dir, ok := programFiles(path, target, os.Stderr)
 	if !ok {
@@ -159,7 +161,9 @@ func check(path string, target platform.Target) int {
 	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	var err error
-	if dir {
+	if _, _, std := importer.StdPackage(filepath.Dir(path)); !dir && std {
+		err = importer.CheckDir(filepath.Dir(path), info, importer.Options{Target: target})
+	} else if dir {
 		err = importer.CheckDir(path, info, importer.Options{Target: target})
 	} else {
 		_, _, err = importer.LoadProgram(names, target, info)

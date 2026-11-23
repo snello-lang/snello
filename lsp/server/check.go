@@ -265,12 +265,20 @@ func (s *Server) checkSources(dir string, over map[string][]byte, t platform.Tar
 // checkTests checks the package in dir with its tests, as snello test
 // loads them: a main package with its test files, and a library by the
 // import path its tests are reached at, its own or its external test
-// package's. An error that names no file is reported on the package's
+// package's; a standard package of a checkout of the compiler as the
+// library's. An error that names no file is reported on the package's
 // open test files.
 func (s *Server) checkTests(dir string, over map[string][]byte, t platform.Target, at importer.Place) (report, *view) {
 	v, o := s.begin(over, t, at)
 	err := s.guard(func() error {
-		plan, err := testrun.PlanDirFrom(dir, o.Read)
+		var plan *testrun.Plan
+		var err error
+		if _, _, std := importer.StdPackage(dir); std {
+			plan, err = testrun.PlanStdDir(dir)
+		} else {
+			plan, err = testrun.PlanDirFrom(dir, o.Read)
+		}
+
 		if err != nil {
 			return err
 		}
