@@ -335,7 +335,7 @@ func testNames(tests []string, srcs [][]byte) ([]string, []Example, string, erro
 		if pkg == "" {
 			pkg = f.Name.Name
 		} else if f.Name.Name != pkg {
-			return nil, nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + importer.TestSuffix + " package")
+			return nil, nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + externalOf(pkg, f.Name.Name) + " package")
 		}
 
 		for _, d := range f.Decls {
@@ -623,4 +623,18 @@ func mainLabel(dir string) string {
 	}
 
 	return filepath.Base(dir)
+}
+
+// externalOf names, for a hint, the external test package of the
+// package whose test files were found in the packages a and b: the
+// first of the two that is not itself external, made external.
+func externalOf(a, b string) string {
+	switch {
+	case !strings.HasSuffix(a, importer.TestSuffix):
+		return a + importer.TestSuffix
+	case !strings.HasSuffix(b, importer.TestSuffix):
+		return b + importer.TestSuffix
+	}
+
+	return a
 }

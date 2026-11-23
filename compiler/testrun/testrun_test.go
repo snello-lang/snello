@@ -571,6 +571,12 @@ func TestRun(t *testing.T) {
 		"mixed/m.snello":            "package mixed\n",
 		"mixed/a_test.snello":       "package mixed\n\nfunc TestA() {}\n",
 		"mixed/b_test.snello":       "package mixed_test\n\nfunc TestB() {}\n",
+		"mixedext/m.snello":         "package mixedext\n",
+		"mixedext/a_test.snello":    "package mixedext_test\n\nfunc TestA() {}\n",
+		"mixedext/b_test.snello":    "package mixedext\n\nfunc TestB() {}\n",
+		"mixedtypo/m.snello":        "package mixedtypo\n",
+		"mixedtypo/a_test.snello":   "package mixedtpo_test\n\nfunc TestA() {}\n",
+		"mixedtypo/b_test.snello":   "package mixedtypo\n\nfunc TestB() {}\n",
 		"extmain/main.snello":       "package main\n\nfunc main() {}\n",
 		"extmain/main_test.snello":  "package main_test\n\nfunc TestM() {}\n",
 		"../loose/l.snello":         "package loose\n",
@@ -659,7 +665,9 @@ func TestRun(t *testing.T) {
 	for _, c := range []struct{ dir, want string }{
 		{"badsig", "TestWrong has the wrong signature: want func()"},
 		{"notests", "no _test.snello files"},
-		{"mixed", "the test files are of two packages, mixed and mixed_test (b_test.snello)"},
+		{"mixed", "the test files are of two packages, mixed and mixed_test (b_test.snello): a package's tests are all inside it or all in its mixed_test package"},
+		{"mixedext", "the test files are of two packages, mixedext_test and mixedext (b_test.snello): a package's tests are all inside it or all in its mixedext_test package"},
+		{"mixedtypo", "the test files are of two packages, mixedtpo_test and mixedtypo (b_test.snello): a package's tests are all inside it or all in its mixedtypo_test package"},
 		{"extmain", "the tests of a main package are inside it, package main, since main cannot be imported; main_test cannot be"},
 		{"../loose", "no snello.mod above the package; snello test needs the module to name it"},
 	} {
