@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Reading a float as Go's strconv.ParseFloat reads one, in Go's grammar
-// and by Go's steps: the digits read into an integer of at most
+// Reading a float for strconv.ParseFloat, a float literal's grammar with
+// a sign and the words for infinity and NaN, by these steps: the digits read into an integer of at most
 // nineteen and a power of ten; a number both of whose parts a float
 // holds exactly, by one multiplication or division; any other by
 // unrounded scaling (Russ Cox, "Floating-Point Printing and Parsing
@@ -81,7 +81,7 @@ static bool parse_special(sn_string s, double *out) {
     return false;
 }
 
-// underscores_ok is Go's rule for the underscores in a number: each
+// underscores_ok is the rule for the underscores in a number: each
 // stands between two digits, a base prefix counting as a digit.
 static bool underscores_ok(const uint8_t *p, int64_t n) {
     char saw = '^'; // the start, a 0 for a digit, an _, or ! for anything else
@@ -133,8 +133,8 @@ typedef struct {
 
 // read_float reads s, the whole of it, into x: a sign or none, decimal
 // digits with a point or not and an exponent or not, or 0x and
-// hexadecimal digits with the p exponent Go asks of them. It reports
-// whether s is that.
+// hexadecimal digits with the p exponent a literal asks of them. It
+// reports whether s is that.
 static bool read_float(sn_string s, number *x) {
     const uint8_t *p = s.ptr;
     int64_t i = 0;
@@ -520,11 +520,11 @@ static uint64_t hex_bits(const float_info *flt, uint64_t mant, int64_t exp, bool
 
 static uint64_t exact_bits(sn_string s, const float_info *flt, bool *range);
 
-// sn_strconv_parseFloat reads a floating-point number as Go's
-// strconv.ParseFloat does, the whole text being the number, rounded to
-// the nearest double, a tie to even. 1 is a text that is not a number,
-// 2 a number past the largest double; one too small to hold rounds to
-// zero, as a literal does.
+// sn_strconv_parseFloat reads a floating-point number for
+// strconv.ParseFloat, the whole text being the number, rounded to the
+// nearest double, a tie to even. 1 is a text that is not a number, 2 a
+// number past the largest double; one too small to hold rounds to zero,
+// as a literal does.
 int64_t sn_strconv_parseFloat(sn_string s, double *out) {
     sn_check_string(s);
     if (parse_special(s, out)) {
@@ -610,11 +610,11 @@ int64_t sn_strconv_parseFloat32(sn_string s, float *out) {
     return 0;
 }
 
-// The exact reading, Go's: the number as decimal digits, as many as
-// eight hundred, with a point among them, multiplied or divided by
-// powers of two a digit at a time until it lies in [0.5, 1), which
-// gives the exponent, then scaled to the mantissa's bits and rounded,
-// what was cut off the digits known to be zero or not.
+// The exact reading: the number as decimal digits, as many as eight
+// hundred, with a point among them, multiplied or divided by powers of
+// two a digit at a time until it lies in [0.5, 1), which gives the
+// exponent, then scaled to the mantissa's bits and rounded, what was
+// cut off the digits known to be zero or not.
 
 // decimal_set reads the text read_float accepted into b.
 static void decimal_set(sn_decimal *b, sn_string s) {

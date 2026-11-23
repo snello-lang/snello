@@ -6,14 +6,13 @@
 
 #include <string.h>
 
-// The bufio package's moves of bytes, which its buffers make in blocks
-// as Go's bufio does with copy and bytes.IndexByte: memmove and memchr,
-// which the C library writes with vector instructions. The bytes
+// The bufio package's moves of bytes, which its buffers make in
+// blocks: memmove and memchr, which the C library writes with vector
+// instructions. The bytes
 // package's Buffer makes the same moves, through the same functions.
 
 // sn_bufio_copyBytes copies the bytes of src that fit to the start of
-// dst, as Go's copy does, the two possibly overlapping, and returns how
-// many.
+// dst, the two possibly overlapping, and returns how many.
 int64_t sn_bufio_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src) {
     sn_check_slice((sn_slice *)dst);
     sn_check_slice((sn_slice *)&src);

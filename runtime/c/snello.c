@@ -122,10 +122,10 @@ void sn_slice_grow(sn_slice *s, int64_t need, size_t size) {
     s->cap = cap;
 }
 
-// Integers are written as Go's strconv.formatBits writes them: two
-// digits a step from a table, from the end of a buffer on the stack,
-// then copied once into a block of exactly their length. 0 to 99 are
-// Go's small numbers, views of the table that own nothing.
+// Integers are written two digits a step from a table, from the end
+// of a buffer on the stack, then copied once into a block of exactly
+// their length. 0 to 99 are small numbers, views of the table that
+// own nothing.
 const char sn_digit_pairs[201] =
     "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556"
     "57585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
@@ -165,10 +165,9 @@ sn_string sn_format_int(uint64_t u, bool neg) {
     return SN_OWNED(q, (int64_t)n);
 }
 
-// sn_utf8_decode reads the rune at p, at most n bytes long, as Go's
-// utf8.DecodeRune does: a sequence that is not valid UTF-8, cut short,
-// overlong or a surrogate, reads as the replacement rune U+FFFD, one
-// byte wide.
+// sn_utf8_decode reads the rune at p, at most n bytes long: a
+// sequence that is not valid UTF-8, cut short, overlong or a
+// surrogate, reads as the replacement rune U+FFFD, one byte wide.
 int sn_utf8_decode(const uint8_t *p, int64_t n, int32_t *r) {
     uint8_t c = p[0];
     if (c < 0x80) {
@@ -294,9 +293,9 @@ void sn_init(int argc, char **argv) {
     sn_hash_init(); // before any map hashes a key
     // A program started with one of the standard streams closed has
     // its descriptor free, and the first file the program opened would
-    // take it: read as stdin, or written by every print. As Go's
-    // runtime does, a closed one is opened on /dev/null first; open
-    // takes the lowest free descriptor, which is the closed one.
+    // take it: read as stdin, or written by every print. So a closed
+    // one is opened on /dev/null first; open takes the lowest free
+    // descriptor, which is the closed one.
     for (int fd = 0; fd <= 2; fd++) {
         if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
             (void)open("/dev/null", fd == 0 ? O_RDONLY : O_WRONLY);
@@ -304,10 +303,10 @@ void sn_init(int argc, char **argv) {
     }
 
     // The descriptors a process may hold open are raised to the most
-    // the system allows, as Go's runtime raises them at start: the
-    // soft limit is a default from the days of select, and a removal
-    // holds a directory open per level of the tree it walks. Darwin
-    // refuses a limit above its OPEN_MAX.
+    // the system allows, at start: the soft limit is a default from
+    // the days of select, and a removal holds a directory open per
+    // level of the tree it walks. Darwin refuses a limit above its
+    // OPEN_MAX.
     struct rlimit lim;
     if (getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != lim.rlim_max) {
         lim.rlim_cur = lim.rlim_max;

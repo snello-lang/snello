@@ -13,10 +13,9 @@
 // sn_string_append is s += x: in place when s owns room past its end,
 // which only a string built by the program can, and else into a block
 // twice as large, so that a string built by += in a loop costs
-// amortized time a byte, as Rust's String does, and not a copy of the
-// whole on every pass. The borrow rules keep anything from viewing s
-// while it changes; x may be a part of s, which is read before the old
-// block is freed.
+// amortized time a byte, and not a copy of the whole on every pass. The
+// borrow rules keep anything from viewing s while it changes; x may be
+// a part of s, which is read before the old block is freed.
 void sn_string_append(sn_string *s, const sn_string *x) {
     sn_check_string(*s);
     sn_check_string(*x);
@@ -114,7 +113,7 @@ sn_string sn_substr(sn_string s, int64_t lo, int64_t hi) {
     return SN_STR(s.ptr + lo, hi - lo);
 }
 
-// decode_last reads the rune that ends the n bytes at p, as Go's
+// decode_last reads the rune that ends the n bytes at p, as
 // utf8.DecodeLastRune does.
 static int decode_last(const uint8_t *p, int64_t n, int32_t *r) {
     if (p[n - 1] < 0x80) {
@@ -277,10 +276,10 @@ static bool starts(int32_t r) {
 }
 
 // sn_strings_toTitle title-cases s as Unicode's toTitlecase does, its
-// start adjusted as ICU's is by default: in each word, by the word
-// boundaries of annex 29, the first rune that starts it to its full
-// title case mapping and every other rune to lower case, so "straße
-// ﬁx" is "Straße Fix", "'tis" is "'Tis" and "3RD" is "3rd".
+// start adjusted as starts says: in each word, by the word boundaries
+// of annex 29, the first rune that starts it to its full title case
+// mapping and every other rune to lower case, so "straße ﬁx" is "Straße
+// Fix", "'tis" is "'Tis" and "3RD" is "3rd".
 sn_string sn_strings_toTitle(sn_string s) {
     sn_check_string(s);
     int64_t n;
@@ -429,7 +428,7 @@ bool sn_strings_equalIgnoreCase(sn_string s, sn_string t) {
     }
 }
 
-// ascii_space is Go's asciiSpace: the white space below 0x80, by byte.
+// ascii_space is the white space below 0x80, by byte.
 static const uint8_t ascii_space[256] = { ['\t'] = 1, ['\n'] = 1, ['\v'] = 1, ['\f'] = 1, ['\r'] = 1, [' '] = 1 };
 
 // space_at reports whether the rune at p, at most n bytes long, is
@@ -447,7 +446,7 @@ static inline bool space_at(const uint8_t *p, int64_t n, int *w) {
 }
 
 // sn_trim lends s without the white space at either end, the runes
-// Go's unicode.IsSpace reports, as strings.TrimSpace does.
+// unicode.IsSpace reports.
 sn_string sn_trim(sn_string s) {
     sn_check_string(s);
     int64_t lo = 0, hi = s.len;
@@ -516,7 +515,7 @@ static int64_t mismatch(const uint8_t *a, const uint8_t *b, int64_t m) {
 }
 
 // TWO_WAY writes the Two-Way search of Crochemore and Perrin, the one
-// glibc's memmem, musl and Rust's str::find make: linear in the lengths
+// glibc's memmem and musl make: linear in the lengths
 // whatever the text and the pattern, with no table and no allocation.
 // The pattern is cut where its two maximal suffixes, under the order of
 // bytes and its reverse, say: the right part is matched first, left to
@@ -974,7 +973,7 @@ bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
 // to b, or -1, by the search a string's Index makes.
 int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) { return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len)); }
 
-// sn_fields splits s around runs of white space, the runes Go's
+// sn_fields splits s around runs of white space, the runes
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
 void sn_fields(sn_string s, sn_slice *out) {
     sn_check_string(s);
@@ -982,8 +981,8 @@ void sn_fields(sn_string s, sn_slice *out) {
     out->len = 0;
     out->cap = 0;
 
-    // ASCII text, as Go's Fields does it: the fields counted first, so
-    // that the result is made once at its length.
+    // ASCII text: the fields counted first, so that the result is made
+    // once at its length.
     int64_t n = 0;
     bool was_space = true, ascii = true;
     for (int64_t j = 0; j < s.len; j++) {
@@ -1092,9 +1091,8 @@ void sn_lines(sn_string s, sn_slice *out) {
 }
 
 // sn_split splits s at every sep into views of s. An empty separator
-// splits after every UTF-8 sequence, a byte that is not one counting
-// as one, and gives no pieces of an empty string, as Go's strings.Split
-// does.
+// splits after every UTF-8 sequence, a byte that is not one counting as
+// one, and gives no pieces of an empty string.
 void sn_split(sn_string s, sn_string sep, sn_slice *out) {
     sn_check_string(s);
     sn_check_string(sep);
@@ -1129,8 +1127,8 @@ void sn_split(sn_string s, sn_string sep, sn_slice *out) {
 }
 
 // sn_strings_repeat writes s n times into one allocation: s once, then
-// what is written so far again, doubling, as Go's strings.Repeat does,
-// in about log2(n) copies. The library checked n and the length.
+// what is written so far again, doubling, in about log2(n) copies. The
+// library checked n and the length.
 sn_string sn_strings_repeat(sn_string s, int64_t n) {
     sn_check_string(s);
     int64_t total = s.len * n;

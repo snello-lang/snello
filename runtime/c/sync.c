@@ -13,25 +13,24 @@
 // handle is the lock's address, never 0, since a handle comes only
 // from the function that makes its lock.
 //
-// The lock held alone is Rust's std::sync::Mutex, its futex mutex: one
-// word, 0 when free, 1 when held, 2 when held and a task may be waiting.
-// Taking a free lock is one compare-and-swap and giving it back one
-// exchange, with no other memory touched; a task finding it held spins
-// a little, since a lock is usually held briefly, and then parks until
-// the word is no longer 2, and giving back a lock at 2 wakes one of
-// those that wait. It is not fair, as neither Rust's nor Go's normal
-// mode is: a task arriving as the lock is given back may take it ahead
-// of one that waited, which keeps the lock busy instead of idle while
-// a woken task is switched in.
+// The lock held alone is a futex mutex: one word, 0 when free, 1 when
+// held, 2 when held and a task may be waiting. Taking a free lock is
+// one compare-and-swap and giving it back one exchange, with no other
+// memory touched; a task finding it held spins a little, since a lock
+// is usually held briefly, and then parks until the word is no longer
+// 2, and giving back a lock at 2 wakes one of those that wait. It is
+// not fair: a task arriving as the lock is given back may take it
+// ahead of one that waited, which keeps the lock busy instead of idle
+// while a woken task is switched in.
 //
-// An RwLock adds Go's RWMutex over that: readers count themselves in
+// An RwLock adds a reader count over that: readers count themselves in
 // with one atomic add, and a writer, once it holds the word, subtracts
 // max_readers from the count, so that readers after it wait, and waits
 // for the readers already in to leave, which the last of them signals.
-// A writer waiting so holds back the readers that come after it, as
-// Go's does, so that a stream of readers cannot keep a writer out for
-// ever; a reader therefore must not take the lock again while it holds
-// it. The waits are semaphores over the lock's queues.
+// A writer waiting so holds back the readers that come after it, so
+// that a stream of readers cannot keep a writer out for ever; a reader
+// therefore must not take the lock again while it holds it. The waits
+// are semaphores over the lock's queues.
 typedef struct {
     _Atomic int64_t count; // units free
     _Atomic int64_t nwait; // tasks in, or on their way into, the queue
@@ -41,8 +40,8 @@ typedef struct {
 typedef struct {
     _Atomic int32_t state;     // the futex mutex's word
     bool rw;                   // an RwLock's, which counts readers
-    _Atomic int64_t readers;   // Go's readerCount
-    _Atomic int64_t departing; // Go's readerWait: readers a writer waits for
+    _Atomic int64_t readers;   // readers in, less max_readers while a writer holds the word
+    _Atomic int64_t departing; // readers a writer waits for
     sn_qlock mu;               // over the queues and the count
     sn_waitq lockq;            // tasks waiting for the word to leave 2
     semaphore reading;         // readers waiting for a writer
@@ -142,7 +141,7 @@ SN_HELD_STATIC static void mutex_unlock(sn_lock *l) {
     }
 }
 
-// A semaphore is Go's runtime semaphore: a release adds a unit and
+// A semaphore counts free units: a release adds a unit and
 // wakes a waiter, which takes the unit if no other task did first, and
 // waits again if one did. nwait lets a release with no one waiting skip
 // the queue's lock: a waiter counts itself before it looks at the
@@ -280,9 +279,9 @@ SN_HELD int64_t sn_sync_atomicAdd(int64_t *n, int64_t d) { return __atomic_add_f
 // The words of sync.Counter: one each on the
 // heap, named by its address as a lock is, so that a handle is a plain
 // int the package's value holds and every operation is one atomic
-// instruction on the word. Sequentially consistent, as Go's atomics
-// are: the cost is a fence on arm64, and a program that needs less
-// is a program that has measured.
+// instruction on the word. Sequentially consistent: the cost is a
+// fence on arm64, and a program that needs less is a program that
+// has measured.
 SN_HELD int64_t sn_sync_cellNew(int64_t v) {
     int64_t *p = sn_alloc(sizeof *p);
     __atomic_store_n(p, v, __ATOMIC_SEQ_CST);

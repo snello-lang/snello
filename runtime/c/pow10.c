@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 // sn_pow10[q+348] is 10^q's mantissa in 128 bits, the low word first,
-// rounded down, its top bit set: Go's detailedPowersOfTen.
+// rounded down, its top bit set.
 const uint64_t sn_pow10[696][2] = {
     {0x1732C869CD60E453, 0xFA8FD5A0081C0288}, // 1e-348
     {0x0E7FBD42205C8EB4, 0x9C99E58405118195}, // 1e-347

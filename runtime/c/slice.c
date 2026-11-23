@@ -44,7 +44,7 @@ void sn_slice_free(sn_slice *s) {
 }
 
 // sn_slice_bounds stops the program for the slice expression [lo:hi]
-// on n elements, in the words of Go's runtime: the high bound first.
+// on n elements, the high bound first.
 _Noreturn void sn_slice_bounds(int64_t lo, int64_t hi, int64_t n) {
     char buf[128];
     if (hi < 0 || hi > n) {
@@ -112,7 +112,7 @@ void sn_slice_insert(sn_slice *s, int64_t i, const void *v, size_t size) {
     sn_check_slice(s);
     sn_slice_own(s, "Insert");
     if ((uint64_t)i > (uint64_t)s->len) {
-        sn_slice_bounds(i, s->len, s->len); // Go's slices.Insert: [7:3]
+        sn_slice_bounds(i, s->len, s->len); // reported as the slice [i:len]: [7:3]
     }
 
     sn_slice_grow(s, s->len + 1, size);

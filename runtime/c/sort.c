@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Sort is Rust's driftsort, the stable sort of its standard library
-// since 1.81 (Orson Peters and Lukas Bergdoll, MIT or Apache-2.0):
+// Sort is driftsort (Orson Peters and Lukas Bergdoll, MIT or Apache-2.0):
 // stable, adaptive to order already in the input, and a quicksort where
 // there is none. The input is cut into runs: a stretch already in order,
 // or strictly descending and reversed, of at least about √n elements is
@@ -24,14 +23,14 @@
 // A merge first finds, by binary search, the elements of either run
 // already where they belong and does nothing when the two are in order,
 // and picks each next element with a select. The buffer is half the
-// slice, where Rust's is the whole slice up to 8 MB: a sort costs half
-// its input in memory, for one more pass of merging. Sorted, reversed
-// and nearly sorted input costs n comparisons. A comparison that is not
-// a consistent order, a float NaN or a function that contradicts itself,
-// leaves the elements in an unspecified order but every one in the
-// slice exactly once. The element's size is known at the call: the core
-// is inlined into a copy for each common size, so that moving an
-// element is a load and a store and not a call of memcpy.
+// slice, not the whole slice: a sort costs half its input in memory,
+// for one more pass of merging. Sorted, reversed and nearly sorted
+// input costs n comparisons. A comparison that is not a consistent
+// order, a float NaN or a function that contradicts itself, leaves the
+// elements in an unspecified order but every one in the slice exactly
+// once. The element's size is known at the call: the core is inlined
+// into a copy for each common size, so that moving an element is a load
+// and a store and not a call of memcpy.
 #include "snello.h"
 
 #include <string.h>

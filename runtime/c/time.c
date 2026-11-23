@@ -83,7 +83,7 @@ int64_t sn_time_mono(void) {
     // Darwin's CLOCK_MONOTONIC is built from the boot time and the time
     // of day, at several times the cost; this one is the processor's
     // counter, which stands still while the machine sleeps, as Linux's
-    // CLOCK_MONOTONIC does, and is the clock Go reads on Darwin.
+    // CLOCK_MONOTONIC does.
     return (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 1;
 #else
     struct timespec ts;

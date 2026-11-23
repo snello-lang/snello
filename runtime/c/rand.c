@@ -6,21 +6,20 @@
 // double-width multiply its generator and its bounded numbers are
 // written on.
 //
-// The source is Go's: ChaCha8, the ChaCha stream cipher at eight
-// rounds, one generator a thread as Go's runtime keeps one a thread.
-// What it gives cannot be told from what it gave before, which a small
-// generator's can, and a program that draws a token from rand.Int is
-// not caught out by it. A block is four ChaCha blocks side by side, 32
-// numbers at a draw, so a number costs a load and an add between
-// refills; and after 16 blocks the generator keys itself again from
-// its own last four numbers, so that a key read out of memory does not
-// give back what came before.
+// The source is ChaCha8rand: ChaCha8, the ChaCha stream cipher at eight
+// rounds, one generator a thread. What it gives cannot be told from
+// what it gave before, which a small generator's can, and a program
+// that draws a token from rand.Int is not caught out by it. A block is
+// four ChaCha blocks side by side, 32 numbers at a draw, so a number
+// costs a load and an add between refills; and after 16 blocks the
+// generator keys itself again from its own last four numbers, so that a
+// key read out of memory does not give back what came before.
 //
-// The keys are Go's too. One generator for the whole program is keyed
-// from the system, 32 bytes, when the first thread draws; each thread's
-// generator takes its key from that one, under a lock, and that one
-// then keys itself again, so no two threads share a key and the key a
-// thread was handed is in no memory but its own.
+// One generator for the whole program is keyed from the system, 32
+// bytes, when the first thread draws; each thread's generator takes its
+// key from that one, under a lock, and that one then keys itself again,
+// so no two threads share a key and the key a thread was handed is in
+// no memory but its own.
 
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
@@ -51,8 +50,8 @@ typedef struct {
 } chacha8;
 
 // A word of the four blocks, one lane a block: the compiler writes the
-// arithmetic on it as the processor's vector instructions, as Go's
-// assembly does by hand, and as plain words where there are none.
+// arithmetic on it as the processor's vector instructions, and as
+// plain words where there are none.
 typedef uint32_t lanes __attribute__((vector_size(16)));
 
 #define QR(a, b, c, d)                                                                                                 \
@@ -62,11 +61,12 @@ typedef uint32_t lanes __attribute__((vector_size(16)));
     c += d, b ^= c, b = b << 7 | b >> 25;
 
 // block fills buf from the key and the counter: four ChaCha8 blocks,
-// the words of each interleaved with the others', as Go lays them out,
-// so that the numbers are Go's for the same key. The first four words
-// and the last four of each block are left as the rounds made them,
-// without the addition of the input ChaCha ends on: the constants and
-// the counter are known, and adding them hides nothing.
+// the words of each interleaved with the others', as ChaCha8rand lays
+// them out, so that the numbers are ChaCha8rand's for the same key. The
+// first four words and the last four of each block are left as the
+// rounds made them, without the addition of the input ChaCha ends on:
+// the constants and the counter are known, and adding them hides
+// nothing.
 SN_HELD_STATIC static void block(const uint64_t seed[4], uint64_t buf[chunk], uint32_t counter) {
     lanes key[8], x[16];
     for (int r = 0; r < 4; r++) {
@@ -166,9 +166,8 @@ SN_HELD_STATIC static bool system_key(uint64_t seed[4]) {
 }
 
 // clock_key is the key of a system that gives no random bytes, made of
-// the clock as Go's runtime makes one, a multiply and a turn for each
-// word: a program still runs, on numbers that one who knows when it
-// started could work out.
+// the clock, a multiply and a turn for each word: a program still runs,
+// on numbers that one who knows when it started could work out.
 SN_HELD_STATIC static void clock_key(uint64_t seed[4]) {
 #if defined(_WIN32)
     uint64_t v = (uint64_t)sn_time_mono();
@@ -267,7 +266,8 @@ SN_HELD uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo) {
 #ifdef SN_DEBUG
 // sn_rand_key keys the calling thread's generator with seed, eight
 // bytes a word, the low byte first, for the test that holds what the
-// package functions draw against Go's numbers for the same key.
+// package functions draw against ChaCha8rand's numbers for the same
+// key.
 SN_HELD void sn_rand_key(const uint8_t seed[32]) {
     uint64_t key[4];
     for (int i = 0; i < 4; i++) {

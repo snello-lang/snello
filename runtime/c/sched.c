@@ -71,8 +71,11 @@
 // A task's state is one atomic word, changed by compare-and-swap:
 // RUNNING on a worker; RUNNABLE on a queue or in a slot; PARKING,
 // switched away from but not yet settled by its worker; PARKED,
-// waiting for a wake; DONE. WOKEN is a bit over the first three: a wake
-// that came while the task was running or parking, kept for its park,
+// waiting for a wake; DONE; PREEMPTED, taken off its worker by the
+// monitor, and YIELDED, a spawner that stepped aside for the queued
+// tasks it outran, each switched away from and queued again as its worker
+// settles it. WOKEN is a bit over the states of a task not parked: a
+// wake that came while the task was running or parking, kept for its park,
 // so that a wake is never lost between a task deciding to wait and its
 // worker taking it off the stack, and cleared when the task resumes,
 // since the wake that resumed it is the one it waited for. From the
@@ -80,7 +83,7 @@
 // word reads and writes it, a wake already kept written over with
 // itself, so that each is ordered with the others and the park that
 // takes a wake sees what its waker wrote before it.
-enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, PREEMPTED, WOKEN = 8 };
+enum { RUNNING, RUNNABLE, PARKING, PARKED, DONE, PREEMPTED, YIELDED, WOKEN = 8 };
 
 // few_guards is the room a task's record holds for its first guards,
 // so that a task holding a channel handle or a value with a Drop
@@ -155,16 +158,14 @@ enum { ended_kept = 1024 };
 // A worker with tasks to run looks past them once in outside_turns: it
 // fires the other wheels' timers that are due and takes a task from the
 // inject queue before its own, so that what the poller woke waits for
-// no queue to empty. It is the interval at which Go's worker looks at
-// its global queue and Tokio's looks past its tasks at its timers and
-// sockets: a prime, so that it falls in step with no period a program
-// has.
+// no queue to empty. The interval is a prime, so that it falls in step
+// with no period a program has.
 //
 // Two tasks handing a value back and forth wake each other into the
 // runnext slot, which runs before the queue, and would keep the worker
 // between them for as long as they trade while the tasks queued behind
-// them wait. The slot's task runs first next_most times in a row, as
-// Tokio's does, and then the queue's head does.
+// them wait. The slot's task runs first next_most times in a row, and
+// then the queue's head does.
 enum { outside_turns = 61, next_most = 3 };
 
 // The monitor looks at the workers' runnext slots every next_stale
@@ -205,12 +206,11 @@ static const int64_t held_limit = 10000000; // 10 ms
 enum { workers_per_core = 16 };
 
 // A task that has held its worker for held_limit while a task waits is
-// preempted, as Go's runtime has preempted a goroutine since Go 1.14:
-// on Linux and macOS its thread is sent preempt_signal, whose handler
-// runs on a signal stack of signal_stack_bytes the worker keeps, never
-// on a task's small stack; on Windows the thread is suspended and given
-// another context. The task's registers go in a block of its own, as
-// the system saved them, with a landing stack of landing_bytes the
+// preempted: on Linux and macOS its thread is sent preempt_signal, whose
+// handler runs on a signal stack of signal_stack_bytes the worker keeps,
+// never on a task's small stack; on Windows the thread is suspended and
+// given another context. The task's registers go in a block of its own,
+// as the system saved them, with a landing stack of landing_bytes the
 // task switches to the scheduler from and has its registers put back
 // on; context_most bounds what the system saved, the vector unit's
 // state included. A task is preempted only in the code section
@@ -821,7 +821,7 @@ typedef struct sn_task task;
 
 // A worker: its scheduler context, the queue of runnable tasks it
 // owns, and for the main thread the scheduler stack it takes when the
-// main task first parks. runnext is Go's: the task this worker's
+// main task first parks. runnext is the task this worker's
 // running task last woke, which the worker runs next, before its
 // queue, so that two tasks handing values back and forth stay on one
 // thread, one switch apart, where a wake through the queue would wake
@@ -854,7 +854,7 @@ typedef struct worker {
                                // switched to no task since the monitor's last look is stale
     _Atomic int64_t running;   // the tasks spawned on it less those that ended on it, by its own thread: the sum
                                // over the workers is the tasks running
-    // The queue is Go's runq: a ring the worker's own thread alone
+    // The queue is a ring the worker's own thread alone
     // writes at the tail and takes from at the head, and other workers
     // take half of from the head, each take a compare-and-swap of the
     // head and no lock; a ring that is full sends half to the inject
@@ -863,10 +863,9 @@ typedef struct worker {
     _Atomic uint32_t qhead, qtail;
     _Atomic(task *) ring[ring_size]; // read by a stealer while the owner writes a neighbour: relaxed atomics make that
                                      // formally clean at no cost
-    // The stacks of its tasks that ended, kept for its next spawns, as
-    // Go's stack cache sits per P over the heap: taken and given back
-    // by the worker's thread alone, with the pool behind it under its
-    // lock, half the cache at a time.
+    // The stacks of its tasks that ended, kept for its next spawns: taken
+    // and given back by the worker's thread alone, with the pool behind
+    // it under its lock, half the cache at a time.
     void *stacks[stack_classes][stack_cache];
     int nstacks[stack_classes];
     // The records of its ended tasks, each with its stack, linked through
@@ -1010,7 +1009,7 @@ __attribute__((used)) const sn_debugger_table sn_debugger = {
 
 // The counts the workers write as tasks move, each on a cache line of
 // its own, so that a worker writing one does not take from the others
-// the line of another, as Go's scheduler pads its own, and no variable
+// the line of another, and no variable
 // of another file's, read on every timer or every switch, lands beside
 // them by the order the files are linked in.
 static struct {
@@ -1119,8 +1118,7 @@ SN_HELD_STATIC static int64_t queued_now(void) {
 // the task leaves the slot until it is on the queue, and the counts are
 // read here in the order it changes them. The main task is among the parked, since the
 // main thread is a worker only once the main task has parked, so the
-// program cannot end. Go's runtime stops such a program with the same
-// message.
+// program cannot end.
 SN_HELD_STATIC static bool deadlocked(void) {
     // Whoever keeps a promise queues the task first and takes the
     // promise off its count second, and the monitor queues a task it
@@ -1617,9 +1615,11 @@ static bool push_slow(worker *w, task *t, uint32_t h, uint32_t tl);
 // The queues. push puts a task on the ring of w, the worker whose
 // thread runs it, and tells an idle worker; a worker with nothing in
 // its own ring steals half of another worker's. A full ring sends
-// half of itself with the task to the inject queue, as Go's runqput
-// does to its global queue.
-SN_HELD_STATIC static void push(worker *w, task *t) {
+// half of itself with the task to the inject queue, and push reports
+// that it did, for a spawner to see how far the queue has grown
+// (spawn).
+SN_HELD_STATIC static bool push(worker *w, task *t) {
+    bool overflowed = false;
     for (;;) {
         uint32_t h = atomic_load_explicit(&w->qhead, memory_order_acquire);
         uint32_t tl = atomic_load_explicit(&w->qtail, memory_order_relaxed);
@@ -1633,17 +1633,18 @@ SN_HELD_STATIC static void push(worker *w, task *t) {
         }
 
         if (push_slow(w, t, h, tl)) {
+            overflowed = true;
             break;
         }
     }
 
     wake_idle(); // a spinner looks at the rings, and one that stops looks once more after it stops
+    return overflowed;
 }
 
 // The inject queue holds the tasks woken by a thread that is not a
-// worker, the poller's or the timers', as Go's global run queue holds
-// what its netpoller and timers make ready, and the tasks the monitor
-// moves out of a runnext slot. Every worker looks at it
+// worker, the poller's or the timers', and the tasks the monitor moves
+// out of a runnext slot. Every worker looks at it
 // after its own queue, and a spinning worker looks at it alone: a task
 // woken from outside is what a spin is for, since only it would
 // otherwise cost a thread woken to run it, and work the workers make
@@ -1655,8 +1656,7 @@ static task *inject_head, *inject_tail;
 // workers, which run after the inject queue's, since a task woken from
 // outside waits for no task that held a core, and before a worker's
 // own ring once in outside_turns, so that they are not starved by a
-// stream of wakes; Go's runtime puts a preempted goroutine on its
-// global queue, which its workers look at once in 61 turns too.
+// stream of wakes.
 static task *displaced_head, *displaced_tail;
 
 // queue_put puts t at the tail of the queue head and tail describe,
@@ -1812,7 +1812,7 @@ SN_HELD_STATIC static task *take_queue(worker *w, bool batch, task **head, task 
 // which a wake would wait a quantum each; displaced_first has it the
 // other way round, the look a worker takes once in outside_turns, so
 // that a stream of wakes never starves the tasks taken off their
-// workers, as Go's global queue has its turn once in 61.
+// workers.
 SN_HELD_STATIC static task *take_injected(worker *w, bool batch, bool displaced_first) {
     task *t = NULL;
     if (displaced_first) {
@@ -1867,9 +1867,9 @@ SN_HELD_STATIC static task *pop(worker *w) {
 
 // steal takes half of the ring of from, rounded up so that a lone task
 // is taken, for to, whose own ring is empty: the first is returned to
-// run and the rest go on to's ring, as Go's runqsteal does. A head that
-// moved under the read, a take by the owner or another stealer, makes
-// the swap fail and the read is made again.
+// run and the rest go on to's ring. A head that moved under the read, a
+// take by the owner or another stealer, makes the swap fail and the
+// read is made again.
 SN_HELD_STATIC static task *steal(worker *to, worker *from) {
     task *batch[ring_size / 2];
     for (;;) {
@@ -2128,12 +2128,20 @@ SN_HELD_STATIC static void settle(worker *w) {
 
         break;
     }
+    case YIELDED: { // behind the tasks that wait, so that the workers run them before the spawner again
+        int s = atomic_load(&t->state);
+        while (!atomic_compare_exchange_weak(&t->state, &s, RUNNABLE | (s & WOKEN))) { // a wake kept stays kept
+        }
+
+        displace(t);
+        break;
+    }
     case PREEMPTED: {
         int s = atomic_load(&t->state);
         while (!atomic_compare_exchange_weak(&t->state, &s, RUNNABLE | (s & WOKEN))) { // a wake kept stays kept
         }
 
-        displace(t); // behind the tasks that waited, as Go's runtime queues a preempted goroutine globally
+        displace(t);                                  // behind the tasks that waited
         task *woken = take_injected(w, false, false); // what the preemption was for, a task woken from outside,
         if (woken != NULL) {                          // runs next here, as a task a worker wakes itself does
             put_next(w, woken);
@@ -2194,21 +2202,20 @@ SN_HELD_STATIC static task *steal_next(worker *w) {
     return NULL;
 }
 
-// A worker that runs out of tasks spins before it sleeps, as Go's
-// runtime keeps an M spinning: it looks at the queues for up to
-// spin_for and takes a task the poller or the timers woke meanwhile,
-// or one a running task pushed, with no thread woken to run it, which
-// is what such a task costs otherwise. One worker spins at a time, and
-// a push or an inject while one does wakes no other; the spinner, once
-// it has found work, wakes a worker for what is left: before, every
-// push woke a worker while any was idle, a system call per spawn. The
-// spinning adapts, as an adaptive mutex's
-// does: worth tells whether it has paid lately, raised when a spin finds
-// a task or a worker's sleep ends within spin_for, lowered when a spin
-// finds none, and a worker spins only while it is above zero. A program
-// trading messages keeps it up; one that ticks every millisecond, or
-// waits on a socket that is quiet, brings it to zero and wastes no time
-// spinning.
+// A worker that runs out of tasks spins before it sleeps: it looks at
+// the queues for up to spin_for and takes a task the poller or the
+// timers woke meanwhile, or one a running task pushed, with no thread
+// woken to run it, which is what such a task costs otherwise. One
+// worker spins at a time, and a push or an inject while one does wakes
+// no other; the spinner, once it has found work, wakes a worker for
+// what is left: before, every push woke a worker while any was idle, a
+// system call per spawn. The spinning adapts, as an adaptive mutex's
+// does: worth tells whether it has paid lately, raised when a spin
+// finds a task or a worker's sleep ends within spin_for, lowered when a
+// spin finds none, and a worker spins only while it is above zero. A
+// program trading messages keeps it up; one that ticks every
+// millisecond, or waits on a socket that is quiet, brings it to zero
+// and wastes no time spinning.
 static _Atomic int worth = 1;
 
 SN_HELD_STATIC static void spun(bool paid) {
@@ -3099,6 +3106,25 @@ SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
     abort();
 }
 
+// leave_worker marks the running task t as state, PREEMPTED or
+// YIELDED, a wake kept staying kept, and switches its thread to the
+// scheduler, which queues it as it settles it; it returns when a worker
+// runs the task again, on whichever thread that worker's is.
+SN_HELD_STATIC static void leave_worker(task *t, int state) {
+    int s = atomic_load(&t->state);
+    while (!atomic_compare_exchange_weak(&t->state, &s, state | (s & WOKEN))) {
+    }
+
+    worker *w = my_worker();
+    w->last = t;
+    sn_switch(&t->sp, w->sched_sp);
+}
+
+// step_aside has the spawner t leave its worker, whose spawns have
+// outrun the workers, until a worker runs it again: out of the spawn's
+// own code, which the common spawn runs straight through.
+SN_HELD_STATIC static __attribute__((noinline, cold)) void step_aside(task *t) { leave_worker(t, YIELDED); }
+
 // preempt_land is where a preempted task's thread lands, on the task's
 // landing stack with the registers saved: the task is marked preempted
 // and the thread switches to the scheduler, which queues it. When a
@@ -3108,13 +3134,7 @@ SN_HELD_STATIC static void preempt_land(task *t) {
 #ifdef SN_DEBUG
     t->preemptions++;
 #endif
-    int s = atomic_load(&t->state);
-    while (!atomic_compare_exchange_weak(&t->state, &s, PREEMPTED | (s & WOKEN))) { // a wake kept stays kept
-    }
-
-    worker *w = my_worker();
-    w->last = t;
-    sn_switch(&t->sp, w->sched_sp);
+    leave_worker(t, PREEMPTED);
     preempt_restore(t);
 }
 
@@ -3210,20 +3230,18 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
 // themselves while each runs a task. A task woken by a running
 // task goes in that worker's runnext slot, to run there when the
 // running task lets go, and no worker is woken for it, since a thread
-// woken for every hand-off is what the slot saves; Go's runtime wakes
-// one, and lets it take the slot after a few microseconds. A task that
-// does not let go, computing without a wait, would keep the slot's
-// task, with every idle worker asleep by then and nothing to wake one.
-// The monitor looks, while any worker is busy, for a task left in the
-// slot of a worker that has switched to no task since its look before,
-// next_stale or more ago, and moves it to the inject queue, which
-// wakes an idle worker to run it. It sleeps while every worker is idle,
-// as Go's sysmon does, since only a running task fills a slot, and the
-// first worker to leave idle wakes it: it reads the count under its
-// lock before it waits, and the worker signals under the same lock
-// after the count changes, so no wake is lost. It pauses next_stale
-// between looks after a move, and twice as long after each look that
-// finds nothing, up to pause_most, as sysmon backs off, so that a
+// woken for every hand-off is what the slot saves. A task that does not
+// let go, computing without a wait, would keep the slot's task, with
+// every idle worker asleep by then and nothing to wake one. The monitor
+// looks, while any worker is busy, for a task left in the slot of a
+// worker that has switched to no task since its look before, next_stale
+// or more ago, and moves it to the inject queue, which wakes an idle
+// worker to run it. It sleeps while every worker is idle, since only a
+// running task fills a slot, and the first worker to leave idle wakes
+// it: it reads the count under its lock before it waits, and the worker
+// signals under the same lock after the count changes, so no wake is
+// lost. It pauses next_stale between looks after a move, and twice as
+// long after each look that finds nothing, up to pause_most, so that a
 // program computing or blocked in a read costs a wake every ten
 // milliseconds rather than every one: a task is moved within two
 // milliseconds while hand-offs are being left and within about ten
@@ -3245,10 +3263,8 @@ SN_HELD_STATIC static void preempt_worker(worker *w) {
 // is at no safe point and never will be; when every worker has been
 // asked preempt_tries times and stays, the monitor starts another
 // worker, up to workers_per_core a core, which takes the queued task,
-// and the system shares the processors between the threads, as Go's
-// runtime hands a thread off from a goroutine blocked in a system
-// call. An added worker is not ended: it waits when idle as the others
-// do.
+// and the system shares the processors between the threads. An added
+// worker is not ended: it waits when idle as the others do.
 static sn_mutex monitor_mu = SN_MUTEX_INIT;
 static sn_cond monitor_cond = SN_COND_INIT;
 
@@ -3433,7 +3449,7 @@ SN_HELD_STATIC static void sched_loop(worker *w) {
             if (woken) {
                 woken = false;
                 if (queued_now() > 0) {
-                    wake_idle(); // as Go's spinning M, once it finds work, starts another for the rest
+                    wake_idle(); // the spinner, once it finds work, wakes another for the rest
                 }
             }
 
@@ -3566,10 +3582,9 @@ SN_HELD_STATIC static void start_thread(void *(*main)(void *), void *arg) {
 
 // sn_cores is the number of processors the program may run on, at
 // least one: the processors in the thread's affinity mask on Linux,
-// as Go's runtime.NumCPU counts them, so that a program held to a
-// few processors by taskset or a container starts a worker for each
-// of those; the processors in the process's affinity mask on Windows;
-// the processors online on macOS.
+// so that a program held to a few processors by taskset or a container
+// starts a worker for each of those; the processors in the process's
+// affinity mask on Windows; the processors online on macOS.
 SN_HELD int64_t sn_cores(void) {
     long n = 0;
 #if defined(_WIN32)
@@ -3599,23 +3614,43 @@ SN_HELD int64_t sn_cores(void) {
     return n > 1 ? (int64_t)n : 1;
 }
 
+// zeroed_pages returns size bytes of the system's zero pages, aligned
+// to a page, resident only once written; NULL when the system has none.
+// On Linux the pages are kept from huge pages, which a kernel set to
+// give them to every mapping would make resident two megabytes at a
+// time at the first write.
+SN_HELD_STATIC static void *zeroed_pages(size_t size) {
+#if defined(_WIN32)
+    return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return NULL;
+    }
+
+#if defined(__linux__)
+    (void)madvise(p, size, MADV_NOHUGEPAGE); // advice: a kernel without huge pages refuses it, and nothing changes
+#endif
+    return p;
+#endif
+}
+
 // start makes the workers, the main thread the first and one thread
 // per further core, the timers' wheels and the monitor. The workers
 // are allocated for the most the monitor may grow them to, so that no
-// worker's address moves when one is added, and only the started ones
-// are written, so that the pages of the others stay untouched until
-// one is added.
+// worker's address moves when one is added, from the system's zero
+// pages, which become resident only as each worker started writes its
+// own: the table of a program on many cores costs the memory of the
+// workers it runs, not of the most it may.
 SN_HELD_STATIC static void start(void) {
     sn_mutex_lock(&start_mu);
     if (!started) {
         int n = (int)sn_cores();
         workers_most = n * workers_per_core;
-        workers = sn_aligned_alloc(SN_CACHE_LINE, (size_t)workers_most * sizeof *workers); // each on lines of its own
+        workers = zeroed_pages((size_t)workers_most * sizeof *workers); // each on lines of its own, a page's alignment
         if (workers == NULL) {
             sn_panic(SN_STR("out of memory", 13));
         }
-
-        memset(workers, 0, (size_t)workers_most * sizeof *workers);
 
         keeper_start();
         sn_timers_start(n, workers_most);
@@ -3702,6 +3737,8 @@ SN_HELD void sn_sched_start(void) { sched_ready(); }
 SN_HELD int64_t sn_worker_index(void) { return my_worker() - workers; }
 
 SN_HELD int64_t sn_sched_preempted(void) { return atomic_load_explicit(&preempted, memory_order_relaxed); }
+
+SN_HELD int64_t sn_sched_queued(void) { return queued_now(); }
 
 SN_HELD int64_t sn_sched_workers(void) { return workers_now(); }
 
@@ -3831,7 +3868,23 @@ SN_HELD_STATIC static void spawn(void (*run)(void *), const void *args, size_t s
     atomic_store(&t->state, RUNNABLE);
     if (w != NULL) {
         atomic_fetch_add_explicit(&w->running, 1, memory_order_relaxed); // its own line: no other worker writes it
-        push(w, t); // the spawning thread's own ring, which its thread alone writes
+        // A spawn that overflows its worker's ring into an inject queue
+        // already holding a full ring per worker has the spawner step
+        // aside, behind the tasks waiting, until the workers have run the
+        // queue back under that mark: the tasks queued stay within two
+        // full rings per worker and an overflow's half ring for each
+        // spawner past the mark, and so do the records and stacks they
+        // hold, however far a spawning loop outruns busy workers. A worker
+        // runs the tasks that stepped aside early, once in a while, so the
+        // spawner looks again each time it runs. While the workers keep up,
+        // the inject queue drains as it fills and a spawn runs straight
+        // through; the count is read only on an overflow, once in half a
+        // ring's spawns.
+        if (SN_UNLIKELY(push(w, t))) { // the spawning thread's own ring, which its thread alone writes
+            while (atomic_load_explicit(&hot.injected, memory_order_relaxed) > (int64_t)ring_size * workers_now()) {
+                step_aside(self);
+            }
+        }
     } else {
         atomic_fetch_add_explicit(&workers[0].running, 1, memory_order_relaxed); // a thread that is no worker, which
                                                                                  // none is today, counts on the first

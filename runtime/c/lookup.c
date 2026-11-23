@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Names and addresses, for the net package. An address is read from
-// text and printed as Go prints it, IPv4 "127.0.0.1:8080" and IPv6
+// text and printed as IPv4 "127.0.0.1:8080" and IPv6
 // "[::1]:8080". A host name is looked up through the system's resolver,
 // getaddrinfo, which reads the hosts file and asks the name servers and
 // blocks for as long as they take to answer, or to fail to: a name
@@ -47,7 +47,7 @@
 #endif
 
 enum {
-    resolvers_most = 500, // threads looking names up at once, as many as Go lets its resolver have
+    resolvers_most = 500, // threads looking names up at once
     resolver_idle = 10,   // seconds a thread with no lookup waits for one before it ends
 
     address_text = INET6_ADDRSTRLEN + IF_NAMESIZE + 8, // the longest address printed: brackets, a zone and a port
@@ -69,8 +69,8 @@ typedef struct addrinfo address_info;
 // sn_net_parse reads the IP address host into addr, with the port,
 // and returns the length of addr: IPv4 "127.0.0.1", or IPv6 "::1", with
 // a zone after a '%' naming the interface by name or by number,
-// "fe80::1%en0". It reads the forms Go reads, and no other, such as
-// "127.1": anything else is a name, for which it returns 0.
+// "fe80::1%en0". It reads these forms alone; any other, such as
+// "127.1", is a name, for which it returns 0.
 SN_HELD int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *addr) {
     char text[address_text];
     if (host.len <= 0 || host.len >= (int64_t)sizeof text || memchr(host.ptr, '\0', (size_t)host.len) != NULL) {
@@ -117,7 +117,7 @@ SN_HELD int sn_net_parse(sn_string host, int64_t port, struct sockaddr_storage *
     return sizeof *a6;
 }
 
-// sn_net_format prints the address in addr as Go prints it, "127.0.0.1",
+// sn_net_format prints the address in addr, "127.0.0.1",
 // "::1", "fe80::1%en0", an IPv4 address mapped into IPv6 as the IPv4
 // one, which a socket listening on both families reports for an IPv4
 // peer; with the port when port is true, "127.0.0.1:8080", "[::1]:8080".
@@ -234,7 +234,7 @@ SN_HELD_STATIC static void lookup_expire(void *arg) { take_out(arg); }
 
 // resolve looks l's name up, for a stream socket, any family, the
 // addresses in the order the system sorts them, by RFC 6724 where it
-// does, as Go's resolver returns them through the system's.
+// does.
 SN_HELD_STATIC static void resolve(lookup *l) {
     address_info hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM };
 #if defined(_WIN32)
@@ -375,8 +375,7 @@ SN_HELD_STATIC static int64_t answer(lookup *l, void *out, sn_string *reason) {
         return SN_NET_NO_SUCH_HOST;
 #if defined(EAI_SYSTEM)
     case EAI_SYSTEM:
-        return l->err != 0 ? l->err
-                           : EMFILE; // as Go's: glibc has been seen to fail so with no error number, out of descriptors
+        return l->err != 0 ? l->err : EMFILE; // glibc has been seen to fail so with no error number, out of descriptors
 #endif
     default: {
         char why[reason_text];
@@ -416,7 +415,7 @@ SN_HELD_STATIC static int64_t answer(lookup *l, void *out, sn_string *reason) {
 // SN_NET_RESOLVER_FAILED for a failure of the resolver's own with its
 // reason in reason, what sn_net_cancelled says once the task's scope is
 // cancelled, or the system's error number, EINVAL for a name
-// holding a zero byte, which no name can, as Go reports it.
+// holding a zero byte, which no name can.
 SN_HELD int64_t sn_net_lookup(sn_string host, int64_t timeout, void *out, sn_string *reason) {
     struct sockaddr_storage addr;
     if (sn_net_parse(host, 0, &addr) != 0) {
