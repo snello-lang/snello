@@ -39,6 +39,15 @@ type Package struct {
 	Std    bool     // a package of the standard library, whose files are the compiler's own
 }
 
+// A compileError is why a package the program imports does not compile:
+// the parser's or the checker's errors, kept whole, so that a caller
+// that reads each error's position, the language server's, finds them
+// through errors.As, while its message is the one a terminal shows.
+type compileError struct {
+	path string
+	err  error
+}
+
 // An Importer loads the packages a program imports, each once,
 // checking them into the Info the program is checked with, so that one
 // Info describes the whole program. It is the types.Importer of the
@@ -66,6 +75,12 @@ type Importer struct {
 	// the files of every package loaded, a standard package's
 	// included, by their names: the host's, from NewImporter.
 	Target platform.Target
+
+	// Read reads a source file of a package by its name, in place of the
+	// disk, which nil reads: the language server's answers from the
+	// editor's buffers where a file is open, so that a package is checked
+	// as the editor holds it.
+	Read func(name string) ([]byte, error)
 
 	std     types.Config // the standard library is checked with its privileges
 	own     types.Config // a package of the program's own without them
@@ -173,6 +188,14 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 	})
 }
 
+// Error returns the package's path and its errors as one message.
+func (e *compileError) Error() string {
+	return "package " + e.path + " does not compile:\n" + e.err.Error()
+}
+
+// Unwrap returns the errors the package was refused for.
+func (e *compileError) Unwrap() error { return e.err }
+
 // resolveOwn finds the package of the program's own that importPath
 // names from dir: its canonical name, its directory, and the module it
 // is a directory of, whose links it carries.
@@ -255,13 +278,19 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 
 		srcs := make([][]byte, len(tests))
 		for i, name := range tests {
-			if srcs[i], err = os.ReadFile(name); err != nil {
+			if srcs[i], err = imp.readFile(name); err != nil {
 				return nil, nil, err
 			}
 		}
 
 		return imp.load(canonical+TestSuffix, tests, srcs, nil, owner.module.Links, &imp.own)
 	})
+}
+
+// readFile reads a package's source file name through Read, or from the
+// disk when there is none.
+func (imp *Importer) readFile(name string) ([]byte, error) {
+	return readSource(name, imp.Read)
 }
 
 // loadOnce answers an import from the packages loaded, refuses a cycle
@@ -323,7 +352,7 @@ func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []strin
 
 	srcs := make([][]byte, len(files))
 	for i, name := range files {
-		if srcs[i], err = os.ReadFile(name); err != nil {
+		if srcs[i], err = imp.readFile(name); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -466,7 +495,7 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 	}
 
 	if err != nil {
-		return nil, nil, errors.New("package " + path + " does not compile:\n" + err.Error())
+		return nil, nil, &compileError{path, err}
 	}
 
 	entries := make([]*Package, len(syntax))

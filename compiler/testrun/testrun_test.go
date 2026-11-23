@@ -760,3 +760,41 @@ func TestMainLabel(t *testing.T) {
 		t.Errorf("the generated main of the tests of . names them otherwise:\n%s", src)
 	}
 }
+
+// TestPlanDirFrom plans a package's tests from sources read through a
+// function, as the language server reads the editor's buffers: a test
+// added to the buffer of a test file is in the plan, and the plan of the
+// same package read from the disk has only the test the file there has.
+func TestPlanDirFrom(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"snello.mod":          "snello 0.1.0\n",
+		"lib/lib.snello":      "package lib\n\n// F is one.\nfunc F() int {\n\treturn 1\n}\n",
+		"lib/lib_test.snello": "package lib\n\nfunc TestA() {}\n",
+	})
+	dir := filepath.Join(root, "lib")
+	test := filepath.Join(dir, "lib_test.snello")
+	read := func(name string) ([]byte, error) {
+		if name == test {
+			return []byte("package lib\n\nfunc TestA() {}\n\nfunc TestB() {}\n"), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	for _, tt := range []struct {
+		read func(string) ([]byte, error)
+		want []string
+	}{
+		{nil, []string{"TestA"}},
+		{read, []string{"TestA", "TestB"}},
+	} {
+		p, err := PlanDirFrom(dir, tt.read)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !slices.Equal(p.Names, tt.want) || p.Path != "lib" || p.Main {
+			t.Errorf("the plan: tests %v, path %q, main %t; want %v of lib", p.Names, p.Path, p.Main, tt.want)
+		}
+	}
+}

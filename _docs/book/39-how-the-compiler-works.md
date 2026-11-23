@@ -115,5 +115,9 @@ The packages, each with its counterpart in Go's toolchain where it has one:
 | `std` | the standard library, in Snello, embedded | |
 | `cmd/snello` | the command | |
 | `internal/measure` | runs a program for a test and reports its time and peak memory | |
+| `lsp/jsonrpc` | the framing of the language server's messages | |
+| `lsp/protocol` | the Language Server Protocol's types the server uses | |
+| `lsp/server` | the language server: documents, checks through the importer and the checker, diagnostics (chapter 40) | |
+| `cmd/snellols` | the language server's command | |
 
 Three tests hold the whole to one behaviour. The programs under `compiler/emit/internal/backendtest/testdata/`, and the list beside them in Go, are built and run through both backends, in release and debug, and each must print what the list or its `.out` file says, the same for both, so that a rule written into one backend and not the other fails before it is merged; the programs under `examples/`, each with its expected output beside it, are the acceptance suite, every change keeping all of them running; and every package of the standard library is compiled by the importer's tests, so that a change to the checker that refuses a library's program fails there. A change to what a backend decides is written into `07-lowering.md` in the same change, since that note is the record both backends are written against.

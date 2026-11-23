@@ -18,10 +18,11 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 8. `_docs/design/12-platforms.md`: the platforms Snello supports, their tiers, the oldest version of each system, and the Windows port.
 9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
 10. `_docs/design/14-distribution.md`: versions, the release cadence and channels, what a release holds and how it is trusted, and how Snello is installed.
-11. `_docs/book/README.md`: the user-facing book and which chapters exist.
-12. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
-13. `CODING_STANDARDS.md`: how code is written here.
-14. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
+11. `_docs/design/15-language-server.md`: `snellols`, the protocol it speaks, how it keeps documents and checks their packages, and its diagnostics.
+12. `_docs/book/README.md`: the user-facing book and which chapters exist.
+13. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
+14. `CODING_STANDARDS.md`: how code is written here.
+15. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 
@@ -80,6 +81,7 @@ go run ./cmd/snello build FILE   # build a native binary in the current director
 go run ./cmd/snello build DIR    # the same for a program of every .snello file in a directory, named after it
 go run ./cmd/snello build -backend c FILE   # the same through the C backend, the reference; needs cc on the PATH, clang on Windows, or CC set
 go run ./cmd/snello emit FILE    # print the IR module that build compiles; -backend c prints the C source
+go install ./cmd/snellols        # the language server, which an editor starts and talks to over standard input and output
 go run ./cmd/snello build -target linux/arm64 FILE   # build for another platform: lld and the target's system files, a sysroot SNELLO_SYSROOT_<system>_<processor> names, Linux's off Linux (build/sysroot.sh writes one) and Windows' off Windows (xwin splat writes one); _docs/book/32-the-snello-command.md lists the variables
 ```
 
@@ -116,6 +118,8 @@ go run ./cmd/snello build -target linux/arm64 FILE   # build for another platfor
 | `.github/workflows/` | `commitlint.yml` and `pr-title-checker.yml` hold commit messages and pull request titles to Conventional Commits; `release.yml` builds the six archives twice on a tag a maintainer pushes, holds them equal, smoke-tests each on its platform, signs, attests and publishes them, and started by hand is a dry run that publishes nothing; `../renovate.json` tells Renovate how to keep the pinned actions, the image's base and Go current; `test.yml`, when code changed, which its first job decides from the files a change touched, checks gofmt and vet; runs `go test ./...`, `make test` and `make check` in the development image on the x86-64 and arm64 Linux runners, the three natively on the arm64 macOS runner and the x86-64 Windows runner, and, without blocking a change, on the Intel macOS runner and the arm64 Windows runner, with `make` under Git's Bash on Windows, and `make distros` on both Linux runners; and times the benchmarks on the two Linux runners into the job's summary, on every pull request and never on a push to main, which takes changes through a pull request held up to date with it; the README's badge is its status |
 | `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/snello/` | The command-line driver; `deps.go` is the dependency commands, `add`, `remove`, `update`, `deps` and `fetch` |
+| `cmd/snellols/` | The language server's command: one session of the Language Server Protocol over standard input and output, its logs on standard error |
+| `lsp/` | The language server: `jsonrpc/` the framing of the protocol's messages, `protocol/` the protocol's types the server uses, `server/` the documents, the checks through the compiler's own loader and checker, and the diagnostics |
 | `_docs/brand/` | Logo and palette |
 
 ## When the design and the code disagree

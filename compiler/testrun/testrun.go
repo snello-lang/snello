@@ -67,6 +67,17 @@ type Plan struct {
 // A library package under no module is refused, since the generated
 // main could not import it; a directory with no test file is refused.
 func PlanDir(dir string) (*Plan, error) {
+	return PlanDirFrom(dir, nil)
+}
+
+// PlanDirFrom is PlanDir with every file read through read, or from the
+// disk when read is nil: how the language server plans the tests of a
+// package as the editor holds its files.
+func PlanDirFrom(dir string, read func(name string) ([]byte, error)) (*Plan, error) {
+	if read == nil {
+		read = os.ReadFile
+	}
+
 	files, err := importer.SourceFiles(dir, platform.Host())
 	if err != nil {
 		return nil, err
@@ -82,8 +93,15 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	p := &Plan{Dir: dir, Files: files, Tests: tests}
+	srcs := make([][]byte, len(tests))
+	for i, name := range tests {
+		if srcs[i], err = read(name); err != nil {
+			return nil, err
+		}
+	}
+
 	var pkg string
-	if p.Names, p.Examples, pkg, err = testNames(tests, nil); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(tests, srcs); err != nil {
 		return nil, err
 	}
 
@@ -92,7 +110,7 @@ func PlanDir(dir string) (*Plan, error) {
 		first = files[0]
 	}
 
-	src, err := os.ReadFile(first)
+	src, err := read(first)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +126,7 @@ func PlanDir(dir string) (*Plan, error) {
 		}
 
 		p.Main = true
-		return p, p.checkExamples(os.ReadFile)
+		return p, p.checkExamples(read)
 	}
 
 	m, err := importer.FindModule(dir)
@@ -135,7 +153,7 @@ func PlanDir(dir string) (*Plan, error) {
 		p.Path += importer.TestSuffix
 	}
 
-	return p, p.checkExamples(os.ReadFile)
+	return p, p.checkExamples(read)
 }
 
 // PlanStd finds the tests of the standard package at importPath, in

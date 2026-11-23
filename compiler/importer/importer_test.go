@@ -5,6 +5,8 @@
 package importer
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,5 +217,41 @@ func TestRequiredVersion(t *testing.T) {
 
 	if err := load("useneither"); err != nil {
 		t.Errorf("a program importing no required module read one: %v", err)
+	}
+}
+
+// TestCompileError reads the errors of a package that does not compile
+// through the importer's read function, the editor's buffer in place of
+// the disk: they keep their file and line for errors.As, while the
+// message is the one a terminal shows.
+func TestCompileError(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"lib/lib.snello": "package lib\n\n// F does nothing.\nfunc F() {}\n",
+	})
+	libPath := filepath.Join(root, "lib", "lib.snello")
+	m, err := FindModule(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imp := NewImporter(&types.Info{})
+	imp.Module = m
+	imp.Read = func(name string) ([]byte, error) {
+		if name == libPath {
+			return []byte("package lib\n\n// F does nothing.\nfunc F() int {}\n"), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	_, err = imp.ImportFrom("lib", root)
+	var list scanner.ErrorList
+	if !errors.As(err, &list) || len(list) != 1 || list[0].Pos.Filename != libPath || list[0].Pos.Line != 4 {
+		t.Fatalf("the buffer's error: %v, want it at line 4 of %s", err, libPath)
+	}
+
+	if want := "package lib does not compile:\n" + list.Error(); err.Error() != want {
+		t.Errorf("the message: %q, want %q", err.Error(), want)
 	}
 }

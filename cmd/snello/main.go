@@ -60,9 +60,8 @@ import (
 
 const (
 	// currentDir is the directory a command works in when it is given
-	// none, and mainPackage the package clause of a program.
-	currentDir  = "."
-	mainPackage = "main"
+	// none.
+	currentDir = "."
 
 	// buildDirPattern names the directory a build works in, removed
 	// when it ends, and binaryMode the permissions of the binary it
@@ -157,8 +156,8 @@ func check(path string, target platform.Target) int {
 	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	var err error
-	if dir && !isMain(names[0]) {
-		err = importer.LoadPackage(path, target, info)
+	if dir {
+		err = importer.CheckDir(path, info, importer.Options{Target: target})
 	} else {
 		_, _, err = importer.LoadProgram(names, target, info)
 	}
@@ -194,19 +193,6 @@ func warnModule(w io.Writer, names []string) {
 	if msg := importer.ModuleWarning(filepath.Dir(names[0])); msg != "" {
 		fmt.Fprintln(w, msg)
 	}
-}
-
-// isMain reports whether the source file's package clause says main;
-// a file that does not read or parse counts as main, so that the
-// program's loader reports it.
-func isMain(name string) bool {
-	src, err := os.ReadFile(name)
-	if err != nil {
-		return true
-	}
-
-	f, _, _ := parser.ParseFile(name, src)
-	return f == nil || f.Name == nil || f.Name.Name == mainPackage
 }
 
 // emit prints what build would compile: the C source, or the IR

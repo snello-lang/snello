@@ -5,6 +5,7 @@
 package importer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -413,4 +415,113 @@ func bases(paths []string) []string {
 	}
 
 	return names
+}
+
+// TestRead loads a program whose sources come from a function, as the
+// language server gives the editor's buffers: the program's own file and
+// a file of a package it imports are read through it in place of the
+// disk, whose copies compile while the buffers do not.
+func TestRead(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport \"lib\"\n\nfunc main() {\n\tlib.F()\n}\n",
+		"lib/lib.snello": "package lib\n\n// F does nothing.\nfunc F() {}\n",
+	})
+	mainPath, libPath := filepath.Join(root, "main.snello"), filepath.Join(root, "lib", "lib.snello")
+	buffers := map[string]string{libPath: "package lib\n\n// F does nothing.\nfunc F() int {}\n"}
+	read := func(name string) ([]byte, error) {
+		if src, ok := buffers[name]; ok {
+			return []byte(src), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	if _, _, err := LoadProgram([]string{mainPath}, platform.Host(), &types.Info{}); err != nil {
+		t.Fatalf("the program on the disk: %v", err)
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Read: read}, &types.Info{}); err == nil || !strings.Contains(err.Error(), "package lib does not compile") {
+		t.Errorf("the library's buffer, through an import: %v", err)
+	}
+
+	buffers[mainPath] = "package main\n\nfunc main() {\n\tundefined()\n}\n"
+	delete(buffers, libPath)
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Read: read}, &types.Info{}); err == nil || !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("the program's own buffer: %v", err)
+	}
+}
+
+// TestCheckDir checks a directory as snello check DIR does: a main
+// package as a program, whose errors are the checker's own list; a
+// library under its module's rules, as an import, whose errors come as
+// its package's that does not compile, each with its position; a
+// library's buffer read through the options; and a directory of no
+// source file refused.
+func TestCheckDir(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:            "snello 0.1.0\n",
+		"main.snello":      "package main\n\nimport \"lib\"\n\nfunc main() {\n\tlib.F()\n}\n",
+		"lib/lib.snello":   "package lib\n\n// F does nothing.\nfunc F() {}\n",
+		"bad/bad.snello":   "package main\n\nfunc main() {\n\tmissing()\n}\n",
+		"empty/README.txt": "no package here\n",
+	})
+	libDir := filepath.Join(root, "lib")
+	for _, dir := range []string{root, libDir} {
+		if err := CheckDir(dir, &types.Info{}, Options{}); err != nil {
+			t.Errorf("%s: %v", dir, err)
+		}
+	}
+
+	var list scanner.ErrorList
+	err := CheckDir(filepath.Join(root, "bad"), &types.Info{}, Options{})
+	if !errors.As(err, &list) || strings.HasPrefix(err.Error(), "package ") {
+		t.Errorf("a main package's error: %v, want the checker's list itself", err)
+	}
+
+	libPath := filepath.Join(libDir, "lib.snello")
+	read := func(name string) ([]byte, error) {
+		if name == libPath {
+			return []byte("package lib\n\n// F does nothing.\nfunc F() int {}\n"), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	err = CheckDir(libDir, &types.Info{}, Options{Read: read, Cached: true})
+	if !errors.As(err, &list) || len(list) != 1 || list[0].Pos.Filename != libPath || list[0].Pos.Line != 4 || !strings.HasPrefix(err.Error(), "package lib does not compile:\n") {
+		t.Errorf("a library's buffer: %v, want its package's error with the line in its file", err)
+	}
+
+	if err := CheckDir(filepath.Join(root, "empty"), &types.Info{}, Options{}); err == nil || !strings.Contains(err.Error(), "no .snello files") {
+		t.Errorf("a directory of no source file: %v", err)
+	}
+}
+
+// TestCheckTests checks a library's tests by the import path they are
+// reached at: its own, whose test files join it, and its external test
+// package's; an error keeps its test file and its line; a package under
+// no module is refused, since its tests could not name it.
+func TestCheckTests(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:               "snello 0.1.0\n",
+		"lib/lib.snello":      "package lib\n\n// F is one.\nfunc F() int {\n\treturn 1\n}\n",
+		"lib/lib_test.snello": "package lib\n\nimport \"expect\"\n\nfunc TestF() {\n\texpect.Equal(ref F(), ref 1)\n}\n",
+		"ext/ext.snello":      "package ext\n\n// G is two.\nfunc G() int {\n\treturn 2\n}\n",
+		"ext/ext_test.snello": "package ext_test\n\nimport (\"expect\"; \"ext\")\n\nfunc TestG() {\n\texpect.Equal(ref ext.G(), ref missing)\n}\n",
+	})
+
+	if err := CheckTests(filepath.Join(root, "lib"), "lib", &types.Info{}, Options{}); err != nil {
+		t.Errorf("a library's own tests: %v", err)
+	}
+
+	err := CheckTests(filepath.Join(root, "ext"), "ext"+TestSuffix, &types.Info{}, Options{Cached: true})
+	var list scanner.ErrorList
+	if !errors.As(err, &list) || len(list) != 1 || filepath.Base(list[0].Pos.Filename) != "ext_test.snello" || list[0].Pos.Line != 6 || list[0].Msg != "undefined: missing" {
+		t.Errorf("an external test package's error: %v, want undefined: missing at line 6 of its file", err)
+	}
+
+	if err := CheckTests(t.TempDir(), "lib", &types.Info{}, Options{}); err == nil || !strings.Contains(err.Error(), "no "+ModFile) {
+		t.Errorf("a package under no module: %v", err)
+	}
 }
