@@ -4,10 +4,10 @@
 
 // Package token defines the lexical tokens of Snello.
 //
-// The set is Go's, minus what Snello leaves out (interface, goto,
-// fallthrough), plus the handful Snello adds: the keywords trait, impl,
-// enum, match, ref, mut, Self and super, and the operators ?, ??, => and
-// ..=.
+// The set holds the keywords and operators of Snello's syntax, among
+// them trait, impl, enum, match, ref, mut, Self and super, and the
+// operators ?, ??, => and ..=; there is no interface, goto or
+// fallthrough.
 package token
 
 import (
@@ -137,9 +137,10 @@ const (
 	NumKinds = int(keywordEnd) + 1
 )
 
-// Operator precedences, as in Go, with one addition: `??` binds loosest
-// of all binary operators, so `a ?? b` takes the whole expression on its
-// right. Unary operators bind tighter than any binary operator.
+// Operator precedences: `??` binds loosest of all binary operators, so
+// `a ?? b` takes the whole expression on its right; then ||, &&, the
+// comparisons, + - | ^, and * / % << >> & &^, tightest. Unary
+// operators bind tighter than any binary operator.
 const (
 	LowestPrec  = 0
 	UnaryPrec   = 7
@@ -258,7 +259,7 @@ var keywords map[string]Kind
 // compiled, plus one so that the zero value means "no position". Nodes
 // store a Pos, not a line and column, so that a node is eight bytes
 // smaller and carries no string; File.Position resolves the line and
-// column when an error is printed. This mirrors go/token.
+// column when an error is printed.
 type Pos int
 
 // NoPos is the zero Pos, meaning no position.
@@ -283,9 +284,9 @@ type File struct {
 	lines []int // byte offset of the start of each line; lines[0] is 0
 }
 
-// A FileSet holds the files of one package, each at a base no other
-// file's positions reach, so that a Pos anywhere in the package names
-// its file as well as its offset. Mirrors go/token.FileSet.
+// A FileSet holds the files of one load, each at a base no other
+// file's positions reach, so that a Pos anywhere in the program names
+// its file as well as its offset.
 type FileSet struct {
 	files []*File
 	base  int // the base of the next file added
@@ -318,6 +319,11 @@ func (k Kind) IsOperator() bool { return operatorBeg < k && k < operatorEnd }
 
 // IsKeyword reports whether the kind is a keyword.
 func (k Kind) IsKeyword() bool { return keywordBeg < k && k < keywordEnd }
+
+// IsRefused reports whether the kind is a keyword no construct begins
+// with, reserved so that a program that writes it is refused with what
+// to write instead: switch, whose place match takes.
+func (k Kind) IsRefused() bool { return k == SWITCH }
 
 // Binary returns the operator a compound assignment applies, ADD for
 // ADD_ASSIGN; any other kind is returned as it is.
@@ -422,9 +428,10 @@ func (f *File) AddLine(offset int) {
 }
 
 // Position resolves p to a line and column by binary search over the
-// recorded line starts.
+// recorded line starts; a position the file does not hold, another
+// file's of the set, resolves to the file's name alone, with no line.
 func (f *File) Position(p Pos) Position {
-	if !p.IsValid() {
+	if !p.IsValid() || !f.Holds(p) {
 		return Position{Filename: f.name}
 	}
 

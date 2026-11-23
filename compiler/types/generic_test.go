@@ -270,3 +270,23 @@ func TestInstances(t *testing.T) {
 		t.Errorf("instances:\n  got  %q\n  want %q", got, want)
 	}
 }
+
+// TestBoundMembers lists the methods and the fields a type parameter's
+// bound gives it, of the trait and of the one it refines, a method
+// written with Self among them, the parameter in Self's place.
+func TestBoundMembers(t *testing.T) {
+	use := checkMembers(t).Scope().Lookup("Use").Type().(*Signature)
+	tp := use.TypeParams()[0]
+	var methods []string
+	for _, m := range tp.Methods() {
+		methods = append(methods, m.Name()+" "+m.Type().String())
+	}
+
+	if got := strings.Join(methods, ", "); got != "Less func(ref T) bool, Area func() f64, Twice func() f64" {
+		t.Errorf("T's methods: %s", got)
+	}
+
+	if fields := tp.Fields(); len(fields) != 1 || fields[0].Name() != "label" || fields[0].Type().String() != "string" {
+		t.Errorf("T's fields: %v", fields)
+	}
+}

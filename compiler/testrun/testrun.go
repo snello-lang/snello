@@ -67,6 +67,17 @@ type Plan struct {
 // A library package under no module is refused, since the generated
 // main could not import it; a directory with no test file is refused.
 func PlanDir(dir string) (*Plan, error) {
+	return PlanDirFrom(dir, nil)
+}
+
+// PlanDirFrom is PlanDir with every file read through read, or from the
+// disk when read is nil: how the language server plans the tests of a
+// package as the editor holds its files.
+func PlanDirFrom(dir string, read func(name string) ([]byte, error)) (*Plan, error) {
+	if read == nil {
+		read = os.ReadFile
+	}
+
 	files, err := importer.SourceFiles(dir, platform.Host())
 	if err != nil {
 		return nil, err
@@ -82,8 +93,15 @@ func PlanDir(dir string) (*Plan, error) {
 	}
 
 	p := &Plan{Dir: dir, Files: files, Tests: tests}
+	srcs := make([][]byte, len(tests))
+	for i, name := range tests {
+		if srcs[i], err = read(name); err != nil {
+			return nil, err
+		}
+	}
+
 	var pkg string
-	if p.Names, p.Examples, pkg, err = testNames(tests, nil); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(tests, srcs); err != nil {
 		return nil, err
 	}
 
@@ -92,7 +110,7 @@ func PlanDir(dir string) (*Plan, error) {
 		first = files[0]
 	}
 
-	src, err := os.ReadFile(first)
+	src, err := read(first)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +126,7 @@ func PlanDir(dir string) (*Plan, error) {
 		}
 
 		p.Main = true
-		return p, p.checkExamples(os.ReadFile)
+		return p, p.checkExamples(read)
 	}
 
 	m, err := importer.FindModule(dir)
@@ -135,7 +153,7 @@ func PlanDir(dir string) (*Plan, error) {
 		p.Path += importer.TestSuffix
 	}
 
-	return p, p.checkExamples(os.ReadFile)
+	return p, p.checkExamples(read)
 }
 
 // PlanStd finds the tests of the standard package at importPath, in
@@ -317,7 +335,7 @@ func testNames(tests []string, srcs [][]byte) ([]string, []Example, string, erro
 		if pkg == "" {
 			pkg = f.Name.Name
 		} else if f.Name.Name != pkg {
-			return nil, nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + pkg + importer.TestSuffix + " package")
+			return nil, nil, "", errors.New("the test files are of two packages, " + pkg + " and " + f.Name.Name + " (" + filepath.Base(name) + "): a package's tests are all inside it or all in its " + externalOf(pkg, f.Name.Name) + " package")
 		}
 
 		for _, d := range f.Decls {
@@ -605,4 +623,18 @@ func mainLabel(dir string) string {
 	}
 
 	return filepath.Base(dir)
+}
+
+// externalOf names, for a hint, the external test package of the
+// package whose test files were found in the packages a and b: the
+// first of the two that is not itself external, made external.
+func externalOf(a, b string) string {
+	switch {
+	case !strings.HasSuffix(a, importer.TestSuffix):
+		return a + importer.TestSuffix
+	case !strings.HasSuffix(b, importer.TestSuffix):
+		return b + importer.TestSuffix
+	}
+
+	return a
 }

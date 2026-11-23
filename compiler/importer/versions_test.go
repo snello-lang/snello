@@ -350,6 +350,69 @@ func TestResolveNoCache(t *testing.T) {
 	}
 }
 
+// TestResolveCached resolves as the language server does, from the
+// module cache and the lock file alone: a lock file a program with no
+// requirement by version has is left where Resolve removes it; a module
+// the cache does not hold is an error naming snello fetch, with nothing
+// fetched and no lock file written; and a module the cache holds is found
+// with no git on the path, the lock file left as it was.
+func TestResolveCached(t *testing.T) {
+	modCache(t)
+	plain := writeTree(t, map[string]string{ModFile: "snello 0.1.0\n", "main.snello": "package main\n\nfunc main() {}\n", LockFile: "stale\n"})
+	m, err := FindModule(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ResolveCached(); err != nil || readFile(t, filepath.Join(plain, LockFile)) != "stale\n" {
+		t.Errorf("a lock file of a program with no requirement: %v, want it left", err)
+	}
+
+	_, url := gitRepo(t, map[string]string{"lib.snello": greetLib}, "0.1.0")
+	prog := writeTree(t, map[string]string{
+		ModFile:       "snello 0.1.0\n\nrequire greet " + url + " 0.1.0\n",
+		"main.snello": greetUser,
+	})
+	if m, err = FindModule(prog); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(prog, LockFile)
+	err = m.ResolveCached()
+	if err == nil || !strings.Contains(err.Error(), "snello fetch") {
+		t.Errorf("a module the cache does not hold: %v, want an error naming snello fetch", err)
+	}
+
+	if _, statErr := os.Stat(lockPath); statErr == nil {
+		t.Error("a cached resolution wrote the lock file")
+	}
+
+	if err := loadDir(prog); err != nil { // a build fetches it and writes the lock file
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", t.TempDir()) // no git
+	if m, err = FindModule(prog); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ResolveCached(); err != nil || m.Requires[0].Dir == "" {
+		t.Errorf("a module the cache holds: %v, its directory %q", err, m.Requires[0].Dir)
+	}
+
+	if _, statErr := os.Stat(lockPath); statErr == nil {
+		t.Error("a cached resolution wrote the lock file")
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(prog, "main.snello")}, Cached: true}, &types.Info{}); err != nil {
+		t.Errorf("a program loaded from the cache alone: %v", err)
+	}
+}
+
 // TestDependencies lists the modules a program builds against by
 // version with who requires which version of each, and the shortest
 // chain of requirements from the program to each.

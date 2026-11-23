@@ -26,8 +26,9 @@ The commands are:
     help       print the commands, or a command's help
     init       start a module, writing its snello.mod
     lex        print the tokens of a source file
+    lsp        serve an editor the Language Server Protocol on standard input and output
     new        start a module in a new directory, with a program and its test
-    parse      print the syntax tree of a source file
+    parse      print the syntax tree of a source file, with its comments
     remove     take dependencies out of snello.mod, once nothing imports them
     run        build a program, run it with ARGS, and leave no file
     test       build and run the tests of a package

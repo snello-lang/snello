@@ -27,12 +27,12 @@
 // `snello version` prints that version, the commit, the channel and
 // the platform. Three more commands inspect the compiler by hand:
 // `snello lex FILE` prints the token stream, `snello parse FILE` the
-// syntax tree, and `snello emit FILE|DIR` the IR module, or with
-// -backend c the C source, that build would compile; `snello check
-// FILE|DIR` prints what the checker finds. `snello new DIR` starts a
-// module in a new directory, with a program and its test, and `snello
-// run FILE|DIR [ARGS]` builds a program, runs it with ARGS, passes its
-// exit code on and leaves no file behind.
+// syntax tree with its comments, and `snello emit FILE|DIR` the IR
+// module, or with -backend c the C source, that build would compile;
+// `snello check FILE|DIR` prints what the checker finds. `snello new
+// DIR` starts a module in a new directory, with a program and its test,
+// and `snello run FILE|DIR [ARGS]` builds a program, runs it with ARGS,
+// passes its exit code on and leaves no file behind.
 package main
 
 import (
@@ -60,9 +60,8 @@ import (
 
 const (
 	// currentDir is the directory a command works in when it is given
-	// none, and mainPackage the package clause of a program.
-	currentDir  = "."
-	mainPackage = "main"
+	// none.
+	currentDir = "."
 
 	// buildDirPattern names the directory a build works in, removed
 	// when it ends, and binaryMode the permissions of the binary it
@@ -126,14 +125,17 @@ func lex(path string) int {
 	return exitSuccess
 }
 
-func parse(path string) int {
+// parse writes the syntax tree of the file at path to out, each node
+// with its doc comment and its line comment, and prints the errors.
+func parse(path string, out io.Writer) int {
 	src, ok := readSource(path)
 	if !ok {
 		return exitFailure
 	}
 
-	f, file, err := parser.ParseFile(path, src)
-	ast.Fprint(os.Stdout, f, file)
+	file := token.NewFile(path, len(src))
+	f, err := parser.ParseComments(file, src)
+	ast.Fprint(out, f, file)
 	if err != nil {
 		printErrors(os.Stderr, err)
 		return exitFailure
@@ -157,8 +159,8 @@ func check(path string, target platform.Target) int {
 	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	var err error
-	if dir && !isMain(names[0]) {
-		err = importer.LoadPackage(path, target, info)
+	if dir {
+		err = importer.CheckDir(path, info, importer.Options{Target: target})
 	} else {
 		_, _, err = importer.LoadProgram(names, target, info)
 	}
@@ -194,19 +196,6 @@ func warnModule(w io.Writer, names []string) {
 	if msg := importer.ModuleWarning(filepath.Dir(names[0])); msg != "" {
 		fmt.Fprintln(w, msg)
 	}
-}
-
-// isMain reports whether the source file's package clause says main;
-// a file that does not read or parse counts as main, so that the
-// program's loader reports it.
-func isMain(name string) bool {
-	src, err := os.ReadFile(name)
-	if err != nil {
-		return true
-	}
-
-	f, _, _ := parser.ParseFile(name, src)
-	return f == nil || f.Name == nil || f.Name.Name == mainPackage
 }
 
 // emit prints what build would compile: the C source, or the IR
@@ -420,9 +409,9 @@ func printErrors(w io.Writer, err error) {
 }
 
 // readSource reads a Snello source file, reporting a failure to stderr.
-// The name must end in .snello, as the Go tool insists on .go: it keeps a
-// stray file from being compiled as Snello, and it keeps build from
-// writing the binary over a source file with no extension to strip.
+// The name must end in .snello: it keeps a stray file from being
+// compiled as Snello, and it keeps build from writing the binary over a
+// source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
 	if !isSource(path, os.Stderr) {
 		return nil, false

@@ -10,17 +10,23 @@ import (
 	"debug/pe"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/llvm"
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/emit/stack"
+	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/version"
 )
@@ -118,6 +124,62 @@ func TestEmitExamples(t *testing.T) {
 		if _, _, ok := emitSource(path, "llvm", platform.Host(), false, os.Stderr); !ok {
 			t.Errorf("%s: the driver refused it", path)
 		}
+	}
+}
+
+// TestParseExamples prints the tree of every example's file, and finds
+// each comment group the parser gives a node in it, a doc comment as
+// the node's Doc and a line comment as its Comment, and no table of
+// them printed whole.
+func TestParseExamples(t *testing.T) {
+	var paths []string
+	err := filepath.WalkDir(filepath.Join("..", "..", "examples"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, importer.SourceExt) {
+			paths = append(paths, path)
+		}
+
+		return err
+	})
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no examples: %v", err)
+	}
+
+	groups := 0
+	for _, path := range paths {
+		var out strings.Builder
+		if code := parse(path, &out); code != exitSuccess {
+			t.Errorf("%s: parse exited %d", path, code)
+			continue
+		}
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		f, _ := parser.ParseComments(token.NewFile(path, len(src)), src)
+		printed := out.String()
+		for field, table := range map[string]map[ast.Node]*ast.CommentGroup{"Doc": f.Docs.Lead, "Comment": f.Docs.Line} {
+			for _, g := range table {
+				if want := field + ": " + strconv.Quote(g.Text()); !strings.Contains(printed, want) {
+					t.Errorf("%s: no %s in the tree", path, want)
+				}
+			}
+
+			if got := strings.Count(printed, field+": "); got != len(table) {
+				t.Errorf("%s: %d of %s in the tree, want one for each of the %d groups", path, got, field, len(table))
+			}
+
+			groups += len(table)
+		}
+
+		if strings.Contains(printed, "Docs:") || strings.Contains(printed, "Attrs: map") {
+			t.Errorf("%s: the tree prints a table of the file's whole", path)
+		}
+	}
+
+	if groups == 0 {
+		t.Error("no comment group in any example")
 	}
 }
 

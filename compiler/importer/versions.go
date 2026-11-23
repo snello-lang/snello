@@ -100,6 +100,22 @@ type reached struct {
 // repository's selected version, and the importer gives the lines of
 // the modules it reaches the same.
 func (m *Module) Resolve() error {
+	return m.resolve(false)
+}
+
+// ResolveCached is Resolve for a caller that only reads the program, the
+// language server as the developer types: every required module is
+// taken from the module cache and held to the lock file, and a module
+// the cache does not hold is an error that names snello fetch. Nothing
+// is fetched, discarded, hashed or written, the lock file included, so
+// that an editor's checks never touch the network or the files of the
+// program, and cost no more than reading what the cache holds.
+func (m *Module) ResolveCached() error {
+	return m.resolve(true)
+}
+
+// resolve is Resolve, or ResolveCached when cached is set.
+func (m *Module) resolve(cached bool) error {
 	var program []want
 	walked := map[string]bool{canonDir(m.Dir): true}
 	if err := walkLocal(m, programRequirer, walked, &program); err != nil {
@@ -107,6 +123,10 @@ func (m *Module) Resolve() error {
 	}
 
 	if len(program) == 0 {
+		if cached {
+			return nil
+		}
+
 		return removeLock(m.Dir)
 	}
 
@@ -132,7 +152,7 @@ func (m *Module) Resolve() error {
 			continue
 		}
 
-		r, err := reach(root, w, locked[key])
+		r, err := reach(root, w, locked[key], cached)
 		if err != nil {
 			return err
 		}
@@ -159,8 +179,10 @@ func (m *Module) Resolve() error {
 		return err
 	}
 
-	if err := writeLockIfChanged(lockName, locked, byKey); err != nil {
-		return err
+	if !cached {
+		if err := writeLockIfChanged(lockName, locked, byKey); err != nil {
+			return err
+		}
 	}
 
 	sel := &selection{dirs: map[string]string{}, first: first}
@@ -256,35 +278,21 @@ func walkLocal(mod *Module, by string, walked map[string]bool, wants *[]want) er
 // reach fetches the module w names, or finds it in the module cache,
 // checks it against its record and the lock file's, was, discarding a
 // cached copy either finds changed and fetching it again, and reads
-// what it requires.
-func reach(root string, w want, was record) (*reached, error) {
+// what it requires; cached takes it from the cache alone, as
+// ResolveCached says.
+func reach(root string, w want, was record, cached bool) (*reached, error) {
 	key := w.url + fieldSeparator + w.version
-	dir, rec, fresh, err := fetchModule(root, w.url, w.version)
+	var dir string
+	var rec record
+	var err error
+	if cached {
+		dir, rec, err = inCache(root, w, key)
+	} else {
+		dir, rec, err = fetchChecked(root, w, was, key)
+	}
+
 	if err != nil {
 		return nil, err
-	}
-
-	now, err := HashDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	if !fresh && (now != rec.hash || (was != record{} && was != rec)) { // the lock file, not the cache, is what the program holds to
-		if err := discardModule(dir); err != nil {
-			return nil, err
-		}
-
-		if dir, rec, _, err = fetchModule(root, w.url, w.version); err != nil {
-			return nil, err
-		}
-
-		if now, err = HashDir(dir); err != nil {
-			return nil, err
-		}
-	}
-
-	if now != rec.hash {
-		return nil, errors.New("the module cache's copy of " + key + " changed as it was fetched; build again")
 	}
 
 	if was != (record{}) && was != rec {
@@ -307,6 +315,60 @@ func reach(root string, w want, was record) (*reached, error) {
 	}
 
 	return r, nil
+}
+
+// fetchChecked fetches the module w names, or finds it in the module
+// cache, and returns its directory and record once its files hash to the
+// record: a cached copy whose files changed, or whose record the lock
+// file's, was, disagrees with, is discarded and fetched again, since the
+// lock file, not the cache, is what the program holds to.
+func fetchChecked(root string, w want, was record, key string) (string, record, error) {
+	dir, rec, fresh, err := fetchModule(root, w.url, w.version)
+	if err != nil {
+		return "", record{}, err
+	}
+
+	now, err := HashDir(dir)
+	if err != nil {
+		return "", record{}, err
+	}
+
+	if !fresh && (now != rec.hash || (was != record{} && was != rec)) {
+		if err := discardModule(dir); err != nil {
+			return "", record{}, err
+		}
+
+		if dir, rec, _, err = fetchModule(root, w.url, w.version); err != nil {
+			return "", record{}, err
+		}
+
+		if now, err = HashDir(dir); err != nil {
+			return "", record{}, err
+		}
+	}
+
+	if now != rec.hash {
+		return "", record{}, errors.New("the module cache's copy of " + key + " changed as it was fetched; build again")
+	}
+
+	return dir, rec, nil
+}
+
+// inCache returns the directory and the record of the module w names as
+// the module cache holds it, or an error naming snello fetch for one it
+// does not hold.
+func inCache(root string, w want, key string) (string, record, error) {
+	module, err := moduleDir(root, w.url, w.version)
+	if err != nil {
+		return "", record{}, err
+	}
+
+	rec, err := readHashFile(module)
+	if err != nil {
+		return "", record{}, errors.New(key + " is not in the module cache: snello fetch fetches it")
+	}
+
+	return filepath.Join(module, treeDir), rec, nil
 }
 
 // checkFetchedRequire refuses a require line of the module key, fetched

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package importer loads the packages a program imports, as
-// go/importer serves go/types: a standard package from the copy std
+// Package importer loads the packages a program imports, for the
+// checker to import from: a standard package from the copy std
 // embeds in the compiler, and a package of the program's own from the
 // directory its import path names under the program's module, each
 // parsed and checked once.
@@ -39,6 +39,15 @@ type Package struct {
 	Std    bool     // a package of the standard library, whose files are the compiler's own
 }
 
+// A compileError is why a package the program imports does not compile:
+// the parser's or the checker's errors, kept whole, so that a caller
+// that reads each error's position, the language server's, finds them
+// through errors.As, while its message is the one a terminal shows.
+type compileError struct {
+	path string
+	err  error
+}
+
 // An Importer loads the packages a program imports, each once,
 // checking them into the Info the program is checked with, so that one
 // Info describes the whole program. It is the types.Importer of the
@@ -67,10 +76,37 @@ type Importer struct {
 	// included, by their names: the host's, from NewImporter.
 	Target platform.Target
 
-	std     types.Config // the standard library is checked with its privileges
-	own     types.Config // a package of the program's own without them
+	// Read reads a source file of a package by its name, in place of the
+	// disk, which nil reads: the language server's answers from the
+	// editor's buffers where a file is open, so that a package is checked
+	// as the editor holds it.
+	Read func(name string) ([]byte, error)
+
+	// Parsed, when set, is called with each source file the importer
+	// parses, the program's and every package's it imports, as it is
+	// parsed and before it is checked, a file with errors too: how the
+	// language server keeps the syntax of a check. A file of the
+	// standard library is named by its path under std/.
+	Parsed func(file *token.File, syntax *ast.File)
+
+	// At, when it names a file, is the place a completion asks about:
+	// the check that reaches it records the names visible there, as
+	// types.Config.At says.
+	At Place
+
+	// Recovered checks a package with a file that does not parse, as
+	// the parser recovered it, and reports the parse's errors with the
+	// check's, for a completion on a line typed half way, which a build
+	// never asks: what the check records of the names is all it reads.
+	Recovered bool
+
+	at      token.Pos      // At as a position, once its file is parsed
+	fset    *token.FileSet // every file the importer parses, so that a position names one file of the program
+	std     types.Config   // the standard library is checked with its privileges
+	own     types.Config   // a package of the program's own without them
 	info    *types.Info
 	loaded  map[string]*Package
+	failed  map[string]error // the packages that did not load, with why: loaded once, however many files import them
 	loading []loading        // the packages being loaded, outermost first, for naming a cycle
 	roots   map[string]*root // the modules reached so far, by directory
 	order   []*Package       // as the loads finished: a package after the ones it imports
@@ -101,7 +137,7 @@ type root struct {
 // NewImporter returns an importer that checks the packages it loads
 // into info.
 func NewImporter(info *types.Info) *Importer {
-	imp := &Importer{Target: platform.Host(), info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
+	imp := &Importer{Target: platform.Host(), fset: token.NewFileSet(), info: info, loaded: make(map[string]*Package), failed: make(map[string]error), roots: make(map[string]*root)}
 	imp.std = types.Config{Importer: imp, Standard: true}
 	imp.own = types.Config{Importer: imp}
 	return imp
@@ -129,7 +165,8 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 // require line reaches its module. A path none of the three has is
 // refused naming the three. A path ending in _test names the external
 // test package of the package before it, importTests, which only a
-// test file may import; the suffix is reserved, as Go reserves it.
+// test file may import; the suffix is reserved for it, so that no
+// package of a program is ever named as a test package is.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
 	if importPath == "builtin" {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
@@ -172,6 +209,14 @@ func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) 
 		return imp.loadDir(canonical, importPath, pkgDir, owner.module.Links)
 	})
 }
+
+// Error returns the package's path and its errors as one message.
+func (e *compileError) Error() string {
+	return "package " + e.path + " does not compile:\n" + e.err.Error()
+}
+
+// Unwrap returns the errors the package was refused for.
+func (e *compileError) Unwrap() error { return e.err }
 
 // resolveOwn finds the package of the program's own that importPath
 // names from dir: its canonical name, its directory, and the module it
@@ -255,7 +300,7 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 
 		srcs := make([][]byte, len(tests))
 		for i, name := range tests {
-			if srcs[i], err = os.ReadFile(name); err != nil {
+			if srcs[i], err = imp.readFile(name); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -264,14 +309,27 @@ func (imp *Importer) importTests(base, importPath, dir string) (*types.Package, 
 	})
 }
 
+// readFile reads a package's source file name through Read, or from the
+// disk when there is none.
+func (imp *Importer) readFile(name string) ([]byte, error) {
+	return readSource(name, imp.Read)
+}
+
 // loadOnce answers an import from the packages loaded, refuses a cycle
 // with the cycle written out, and otherwise loads the package named
 // path with load and records it once it compiled and passed the
-// checks load makes, so that a package refused is never answered from
-// the cache.
+// checks load makes, so that a package refused is never answered as
+// loaded. A package that did not load is answered with why, as it was
+// the first time: loaded again for every file that imports it, a
+// package deep in a chain of failing packages would be loaded as many
+// times as the files above it multiply.
 func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package, []*Package, error)) (*types.Package, error) {
 	if p := imp.loaded[path]; p != nil {
 		return p.Pkg, nil
+	}
+
+	if err := imp.failed[path]; err != nil {
+		return nil, err
 	}
 
 	for i, l := range imp.loading {
@@ -289,6 +347,7 @@ func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package
 	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
 	pkg, entries, err := load()
 	if err != nil {
+		imp.failed[path] = err
 		return nil, err
 	}
 
@@ -323,7 +382,7 @@ func (imp *Importer) loadDir(canonical, importPath, pkgDir string, links []strin
 
 	srcs := make([][]byte, len(files))
 	for i, name := range files {
-		if srcs[i], err = os.ReadFile(name); err != nil {
+		if srcs[i], err = imp.readFile(name); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -452,26 +511,34 @@ func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]stri
 
 // load parses and checks the files of one package under conf, as the
 // package named path, and returns it with one entry per file, for the
-// caller to record. The files are parsed into one FileSet, so that an
-// error in any of them names its file.
+// caller to record.
 func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
-	fset, syntax, err := parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
+	files, syntax, parseErr := imp.parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
+	var err error
+	if parseErr != nil && !imp.Recovered {
+		err = parseErr
+	}
+
 	if err == nil {
 		err = checkTestImports(names, syntax, conf.Standard)
 	}
 
 	var pkg *types.Package
 	if err == nil {
-		pkg, err = conf.CheckFiles(path, fset.Files(), syntax, imp.info)
+		pkg, err = conf.CheckFiles(path, files, syntax, imp.info)
+	}
+
+	if parseErr != nil {
+		err = parseErr // a file that does not parse reports its syntax errors alone
 	}
 
 	if err != nil {
-		return nil, nil, errors.New("package " + path + " does not compile:\n" + err.Error())
+		return nil, nil, &compileError{path, err}
 	}
 
 	entries := make([]*Package, len(syntax))
 	for i, f := range syntax {
-		entries[i] = &Package{path, fset.Files()[i], f, pkg, cfiles, links, conf.Standard}
+		entries[i] = &Package{path, files[i], f, pkg, cfiles, links, conf.Standard}
 	}
 
 	return pkg, entries, nil

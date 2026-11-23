@@ -3,17 +3,18 @@
 // license that can be found in the LICENSE file.
 
 // Package types declares the data types of Snello and the checker that
-// assigns one to every expression. It is modeled on go/types: a Type
-// interface with one struct per kind of type, objects for the named
-// entities of a program, and scopes that map names to objects.
+// assigns one to every expression: a Type interface with one struct
+// per kind of type, objects for the named entities of a program, and
+// scopes that map names to objects.
 //
-// This file holds the types. Compared with go/types, Snello adds the
-// owned pointer *T, the borrows ref T and mut T, the optional T?, the
-// built-in Result<T, E>, tuples, and enums, and drops interfaces, whose
-// place traits take (trait.go).
+// This file holds the types: the basic ones, the owned pointer *T, the
+// borrows ref T and mut T, the optional T?, the built-in Result<T, E>,
+// slices, arrays, maps, channels, tuples, functions, structs, enums and
+// named types; traits are in trait.go.
 package types
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -142,7 +143,8 @@ var Unit = &Tuple{}
 // A Type is a Snello type.
 type Type interface {
 	// Underlying returns the underlying type of a type: the type itself
-	// for every kind but Named, as in go/types.
+	// for every kind but Named, whose underlying type is the one it is
+	// declared as.
 	Underlying() Type
 
 	// String returns the type as it is written in a Snello program.
@@ -474,6 +476,24 @@ func (n *Named) AddMethod(f *Func) *Func {
 	return nil
 }
 
+// Methods returns the type's methods, its own and those it inherits from
+// its traits' defaults, in order; an instance's with its arguments in
+// place, as Method makes each.
+func (n *Named) Methods() []*Func {
+	if n.orig == nil {
+		return slices.Clone(n.methods)
+	}
+
+	fns := make([]*Func, 0, len(n.orig.methods))
+	for _, m := range n.orig.methods {
+		if fn := n.Method(m.name); fn != nil {
+			fns = append(fns, fn)
+		}
+	}
+
+	return fns
+}
+
 // Method returns the method with the given name, or nil. An instance's
 // method has the declaration's signature with the arguments in place
 // of the parameters.
@@ -489,6 +509,19 @@ func (n *Named) Method(name string) *Func {
 	}
 
 	return nil
+}
+
+// ImplementsDecl reports whether the declaration listed after impl the
+// trait decl, an instance of it, or a trait refining one: whether a
+// method decl declares is one the type answers, whatever the arguments.
+func (n *Named) ImplementsDecl(decl *Trait) bool {
+	for _, t := range n.Origin().impls {
+		if t != nil && t.RefinesDecl(decl) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Implements reports whether the declaration listed trait after impl,
@@ -651,7 +684,7 @@ func signatureString(s *Signature) string {
 			case VariadicOwned:
 				b.WriteString(elem.String())
 				continue
-			case VariadicLent:
+			case VariadicLent, VariadicAny:
 				b.WriteString("ref ")
 				b.WriteString(elem.String())
 				continue

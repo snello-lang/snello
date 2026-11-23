@@ -4,7 +4,9 @@
 
 package types
 
-// Generic types, after go/types. A declaration with type parameters,
+import "slices"
+
+// Generic types. A declaration with type parameters,
 // struct List<T> { items []T }, is a Named holding its parameters; its
 // fields and methods are written in terms of them. A use with type
 // arguments, List<int>, is an instance: another Named that points back
@@ -62,6 +64,58 @@ func (t *TypeParam) HasBound(trait *Trait) bool {
 
 func (t *TypeParam) Underlying() Type { return t }
 func (t *TypeParam) String() string   { return t.obj.name }
+
+// Methods returns the methods the parameter's bounds give it, with the
+// parameter in place of each trait's Self, each name once, in the
+// order of the bounds and of each one's lineage: what the parameter
+// has, its functions, which the parameter's name calls, among them.
+// Each is made on first use and kept, as a lookup of it by name keeps
+// it, so that the same method is the same object every time.
+func (t *TypeParam) Methods() []*Func {
+	var fns []*Func
+	for _, name := range t.boundNames(func(tr *Trait) []string { return funcNames(tr.required, tr.defaults) }) {
+		if m := t.boundMethod(name); m != nil {
+			fns = append(fns, m)
+		}
+	}
+
+	return fns
+}
+
+// Fields returns the fields the parameter's bounds give it, with the
+// parameter in place of each trait's Self, each name once, in order,
+// each made on first use and kept, as Methods' are.
+func (t *TypeParam) Fields() []*Var {
+	var vars []*Var
+	for _, name := range t.boundNames(func(tr *Trait) []string { return varNames(tr.fields) }) {
+		if f := t.boundField(name); f != nil {
+			vars = append(vars, f)
+		}
+	}
+
+	return vars
+}
+
+// boundNames returns the names each trait of the bounds' lineages has,
+// as names reads them, each once, in order.
+func (t *TypeParam) boundNames(names func(*Trait) []string) []string {
+	var all []string
+	for _, b := range t.bounds {
+		if b == nil {
+			continue
+		}
+
+		for tr := range b.lineage() {
+			for _, name := range names(tr) {
+				if !slices.Contains(all, name) {
+					all = append(all, name)
+				}
+			}
+		}
+	}
+
+	return all
+}
 
 // setBounds gives the parameter the traits after its colon.
 func (t *TypeParam) setBounds(bounds []*Trait) { t.bounds = bounds }
@@ -344,4 +398,26 @@ func substVar(v *Var, m map[*TypeParam]Type) *Var {
 // declaration's, or a type parameter's from its bound's.
 func substFunc(fn *Func, m map[*TypeParam]Type) *Func {
 	return &Func{object: object{name: fn.name, typ: subst(fn.typ, m), pos: fn.pos, pkg: fn.pkg}, origin: fn, derived: fn.derived, static: fn.static, trait: fn.trait}
+}
+
+// funcNames returns the names of the functions of each list, in order.
+func funcNames(lists ...[]*Func) []string {
+	var names []string
+	for _, fns := range lists {
+		for _, f := range fns {
+			names = append(names, f.name)
+		}
+	}
+
+	return names
+}
+
+// varNames returns the names of vars, in order.
+func varNames(vars []*Var) []string {
+	names := make([]string, len(vars))
+	for i, v := range vars {
+		names[i] = v.name
+	}
+
+	return names
 }

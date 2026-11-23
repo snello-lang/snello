@@ -192,6 +192,67 @@ func TestPrint(t *testing.T) {
 	}
 }
 
+// TestPrintBeside prints what a File keeps beside its tree on the node
+// it belongs to: the doc comment first, the line comment and the
+// attributes last, and neither table as a field of the File.
+func TestPrintBeside(t *testing.T) {
+	field := &Field{Names: []*Ident{{NamePos: token.Pos(30), Name: "w"}}, Type: &NamedType{Name: &Ident{NamePos: token.Pos(32), Name: "f64"}}}
+	decl := &TypeDecl{TokPos: token.Pos(20), Name: &Ident{NamePos: token.Pos(27), Name: "Rect"}, Def: &StructType{Fields: []*Field{field}}}
+	attr := &Attr{At: token.Pos(36), X: &BasicLit{ValuePos: token.Pos(37), Kind: token.INT, Value: "1"}}
+	group := func(text string) *CommentGroup { return &CommentGroup{List: []*Comment{{Text: "// " + text}}} }
+	f := &File{
+		Decls: []Decl{decl},
+		Attrs: map[Node][]*Attr{field: {attr}},
+		Docs:  &Docs{Lead: map[Node]*CommentGroup{decl: group("A Rect is four sides.")}, Line: map[Node]*CommentGroup{field: group("the width")}},
+	}
+
+	const want = `File {
+  Decls: [
+    TypeDecl {
+      Doc: "A Rect is four sides.\n"
+      TokPos: 20
+      Name: Ident {
+        NamePos: 27
+        Name: "Rect"
+      }
+      Def: StructType {
+        Fields: [
+          Field {
+            Names: [
+              Ident {
+                NamePos: 30
+                Name: "w"
+              }
+            ]
+            Type: NamedType {
+              Name: Ident {
+                NamePos: 32
+                Name: "f64"
+              }
+            }
+            Comment: "the width\n"
+            Attrs: [
+              Attr {
+                At: 36
+                X: BasicLit {
+                  ValuePos: 37
+                  Kind: INT
+                  Value: "1"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
+`
+	if got := Sprint(f, nil); got != want {
+		t.Errorf("printed file differs:\n got:\n%s\n want:\n%s", got, want)
+	}
+}
+
 // TestPos checks the nodes whose position is taken from a child, since
 // those are the ones that can point at the wrong token: a qualified type
 // starts at its package, a named field at its first name.

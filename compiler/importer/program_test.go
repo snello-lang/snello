@@ -5,13 +5,19 @@
 package importer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/scanner"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -413,4 +419,394 @@ func bases(paths []string) []string {
 	}
 
 	return names
+}
+
+// TestRead loads a program whose sources come from a function, as the
+// language server gives the editor's buffers: the program's own file and
+// a file of a package it imports are read through it in place of the
+// disk, whose copies compile while the buffers do not.
+func TestRead(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport \"lib\"\n\nfunc main() {\n\tlib.F()\n}\n",
+		"lib/lib.snello": "package lib\n\n// F does nothing.\nfunc F() {}\n",
+	})
+	mainPath, libPath := filepath.Join(root, "main.snello"), filepath.Join(root, "lib", "lib.snello")
+	buffers := map[string]string{libPath: "package lib\n\n// F does nothing.\nfunc F() int {}\n"}
+	read := func(name string) ([]byte, error) {
+		if src, ok := buffers[name]; ok {
+			return []byte(src), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	if _, _, err := LoadProgram([]string{mainPath}, platform.Host(), &types.Info{}); err != nil {
+		t.Fatalf("the program on the disk: %v", err)
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Read: read}, &types.Info{}); err == nil || !strings.Contains(err.Error(), "package lib does not compile") {
+		t.Errorf("the library's buffer, through an import: %v", err)
+	}
+
+	buffers[mainPath] = "package main\n\nfunc main() {\n\tundefined()\n}\n"
+	delete(buffers, libPath)
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Read: read}, &types.Info{}); err == nil || !strings.Contains(err.Error(), "undefined") {
+		t.Errorf("the program's own buffer: %v", err)
+	}
+}
+
+// TestParsed gives Parsed every file a load parses, the program's, a
+// package of its module's and the standard library's by its path under
+// std/, a file with a syntax error too, and gives no two files of one
+// load a position in common, so that a position names its file.
+func TestParsed(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport (\"lib\"; \"strings\")\n\nfunc main() {\n\tlib.F(strings.ToUpper(\"a\"))\n}\n",
+		"lib/lib.snello": "package lib\n\nfunc F(s string) {}\n",
+	})
+	mainPath, libPath := filepath.Join(root, "main.snello"), filepath.Join(root, "lib", "lib.snello")
+	var files []*token.File
+	parsed := func(file *token.File, syntax *ast.File) {
+		if syntax == nil {
+			t.Errorf("%s parsed to no tree", file.Name())
+		}
+
+		files = append(files, file)
+	}
+
+	if _, _, err := LoadProgramFrom(Load{Names: []string{mainPath}, Parsed: parsed}, &types.Info{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	for i, f := range files {
+		names = append(names, f.Name())
+		for _, g := range files[:i] {
+			if f.Holds(g.Pos(0)) || g.Holds(f.Pos(0)) {
+				t.Errorf("%s and %s share positions", f.Name(), g.Name())
+			}
+		}
+	}
+
+	for _, want := range []string{mainPath, libPath, "strings/strings.snello"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("parsed %q, want %s among them", names, want)
+		}
+	}
+
+	files = nil
+	broken := writeTree(t, map[string]string{"main.snello": "package main\n\nfunc main( {\n"})
+	if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(broken, "main.snello")}, Parsed: parsed}, &types.Info{}); err == nil || len(files) != 1 {
+		t.Errorf("a file with a syntax error: %v, parsed %d files, want an error and the file", err, len(files))
+	}
+}
+
+// TestFailedOnce loads a package that does not compile once, however
+// many files import it: in a chain of packages of three files each, all
+// importing the one below, whose bottom does not compile, every file is
+// parsed once, and the error reaches the program.
+func TestFailedOnce(t *testing.T) {
+	const depth, width = 6, 3
+	files := map[string]string{ModFile: "snello 0.1.0\n", "main.snello": "package main\n\nimport \"p5\"\n\nfunc main() { p5.F0() }\n"}
+	for p := range depth {
+		for f := range width {
+			src := "package p" + strconv.Itoa(p) + "\n\n"
+			body := "{}"
+			if p > 0 {
+				src += "import \"p" + strconv.Itoa(p-1) + "\"\n\n"
+				body = "{ p" + strconv.Itoa(p-1) + ".F0() }"
+			} else if f == 0 {
+				body = "{ return 1 }" // the error at the bottom
+			}
+
+			files["p"+strconv.Itoa(p)+"/f"+strconv.Itoa(f)+".snello"] = src + "func F" + strconv.Itoa(f) + "() " + body + "\n"
+		}
+	}
+
+	parsed := map[string]int{}
+	root := writeTree(t, files)
+	_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, Parsed: func(file *token.File, _ *ast.File) { parsed[file.Name()]++ }}, &types.Info{})
+	if err == nil || !strings.Contains(err.Error(), "package p0 does not compile") {
+		t.Errorf("the chain: %v, want p0's error", err)
+	}
+
+	if len(parsed) != depth*width+1 {
+		t.Errorf("parsed %d files, want every one of the %d", len(parsed), depth*width+1)
+	}
+
+	for name, n := range parsed {
+		if n != 1 {
+			t.Errorf("%s parsed %d times, want once", name, n)
+		}
+	}
+}
+
+// TestAt records the names visible at the place At names, a name of
+// the program's own file and one of a package of the module it imports,
+// which is parsed and checked after the program's file; the name there
+// resolves, and the record is made as it does.
+func TestAt(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport \"lib\"\n\nfunc main() {\n\tmine := 1\n\t_ = mine + lib.F()\n}\n",
+		"lib/lib.snello": "package lib\n\nfunc F() int {\n\tlibs := 2\n\treturn libs\n}\n",
+	})
+
+	for file, at := range map[string]string{"main.snello": "mine + ", "lib/lib.snello": "libs\n}"} {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		info := &types.Info{}
+		if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, At: Place{File: path, Offset: strings.Index(string(src), at)}}, info); err != nil {
+			t.Fatal(err)
+		}
+
+		want := strings.Fields(at)[0]
+		if !slices.ContainsFunc(info.Visible, func(o types.Object) bool { return o.Name() == want }) {
+			t.Errorf("at %s in %s: %d names visible, want %s among them", want, file, len(info.Visible), want)
+		}
+	}
+}
+
+// TestRecovered checks a file that does not parse, a line typed half
+// way, as the parser recovered it when a load asks, recording the names
+// visible at the place and reporting the parse's error; a load that
+// does not ask stops at the parse, and records nothing.
+func TestRecovered(t *testing.T) {
+	const src = "package main\n\nfunc main() {\n\tmine := 1\n\tif min\n}\n"
+	root := writeTree(t, map[string]string{"main.snello": src})
+	path := filepath.Join(root, "main.snello")
+	for _, recovered := range []bool{false, true} {
+		info := &types.Info{}
+		_, _, err := LoadProgramFrom(Load{Names: []string{path}, At: Place{File: path, Offset: strings.Index(src, "min\n")}, Recovered: recovered}, info)
+		if err == nil || !strings.Contains(err.Error(), "expected") {
+			t.Errorf("recovered %v: %v, want the parse's error", recovered, err)
+		}
+
+		if got := slices.ContainsFunc(info.Visible, func(o types.Object) bool { return o.Name() == "mine" }); got != recovered {
+			t.Errorf("recovered %v: mine visible %v, want %v", recovered, got, recovered)
+		}
+	}
+}
+
+// TestRecoveredNoPanic checks, as a load that asks checks a file that
+// does not parse, every example's file and every feature program the
+// backends are tested on, each cut in the two ways a file being
+// typed is: ended part way, and with a stretch taken out, at places
+// spread over the file, a completion's place at the cut; the check
+// reports the parse's errors and never panics, whatever the parser left.
+func TestRecoveredNoPanic(t *testing.T) {
+	const cuts, stretch = 16, 5
+	examples, err := filepath.Glob(filepath.Join("..", "..", "examples", "*", "*.snello"))
+	if err != nil || len(examples) == 0 {
+		t.Fatalf("no examples: %v", err)
+	}
+
+	features, err := filepath.Glob(filepath.Join("..", "emit", "internal", "backendtest", "testdata", "*.snello"))
+	if err != nil || len(features) == 0 {
+		t.Fatalf("no feature programs: %v", err)
+	}
+
+	paths := append(examples, features...)
+
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for i := 1; i <= cuts; i++ {
+			at := len(src) * i / (cuts + 1)
+			for form, text := range map[string][]byte{
+				"ended":   src[:at],
+				"cut out": slices.Concat(src[:at], src[min(at+stretch, len(src)):]),
+			} {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							t.Errorf("%s %s at %d: the check panicked: %v\n%s", filepath.Base(path), form, at, r, debug.Stack())
+						}
+					}()
+
+					LoadProgramFrom(Load{Names: []string{path}, Srcs: [][]byte{text}, Standalone: true, Recovered: true, At: Place{File: path, Offset: at}}, &types.Info{})
+				}()
+			}
+		}
+	}
+}
+
+// TestUnexportedMembers checks that a trait's unexported members are
+// its package's alone. A program may not name them, by any road: a
+// field or default its own type gets from the trait or one it refines,
+// a value of the trait, a type parameter it bounds, a generic type's
+// instance, or super. It may not stand in for them: its type may not
+// override an unexported default or answer an unexported requirement,
+// a generic trait's and a function of the type among them, nor may a
+// trait of its own or a default of another package; an unexported
+// default may not answer the program's requirement either, nor a trait
+// of the program redeclare an unexported field, and two defaults where
+// one is unexported are refused, with no way out to offer. Each
+// mistake gives one message: a trait refused for an unexported
+// requirement is not asked for its exported ones, and is refused once
+// however many listed traits reach it; a requirement no answer may
+// meet is the one mistake, whatever the type declares or inherits for
+// it; and a mistake told where it was made leaves the trait's other
+// requirements asked for. The program may inherit the default, take
+// the trait's package's own default as the answer, and use, override
+// and answer the exported members.
+func TestUnexportedMembers(t *testing.T) {
+	const lib = "package lib\n\ntrait Tagged {\n\tvar tag int\n\tfunc (t ref Self) hidden() int { return 1 }\n\tfunc (t ref Self) Shown() int { return 2 }\n}\n\ntrait Labeled: Tagged {}\n\nstruct Box<T> { v T }\n\nfunc Box<T>.Of(v T) Box<T> { return Box<T>{v: v} }\n\ntrait Sealed {\n\tfunc (s ref Self) secret() int { return 1 }\n\tfunc (s ref Self) Peek() int { return s.secret() }\n}\n\ntrait Want {\n\tfunc (s ref Self) want() int\n}\n\nstruct Inner impl Sealed, Want { n int }\n\nfunc (i ref Inner) secret() int { return 2 }\n\nfunc (i ref Inner) want() int { return i.n }\n\ntrait A {\n\tfunc (s ref Self) f() int\n\tfunc (s ref Self) Get() int { return s.f() }\n}\n\ntrait B: A {\n\tfunc (s ref Self) f() int { return 7 }\n}\n\ntrait Other {\n\tfunc (s ref Self) secret() int { return 3 }\n}\n\ntrait It<T> {\n\tfunc (s ref Self) step() T\n}\n\ntrait Maker {\n\tfunc make() Self\n}\n\ntrait Three {\n\tfunc (s ref Self) a() int\n\tfunc (s ref Self) b() int\n\tfunc (s ref Self) c() int\n}\n\ntrait Sized {\n\tfunc (s ref Self) Size() int\n}\n\ntrait Mixed {\n\tfunc (s ref Self) Size() int\n\tfunc (s ref Self) want() int\n}\n\ntrait Named {\n\tfunc (s ref Self) Name() string\n}\n\ntrait Sealed2: Named {\n\tfunc (s ref Self) want() int\n}\n\ntrait GiveW {\n\tfunc (s ref Self) want() int { return 7 }\n}\n\ntrait TaggedTwice: Tagged {\n\tvar tag int\n}\n"
+	const lib2 = "package lib2\n\ntrait Give {\n\tfunc (s ref Self) want() int { return 7 }\n}\n\ntrait Hide {\n\tfunc (s ref Self) secret() int { return 4 }\n}\n\ntrait Need2 {\n\tfunc (s ref Self) want() int\n\tfunc (s ref Self) Use2() int { return s.want() }\n}\n"
+	tests := []struct {
+		name, body, want string // want holds the messages expected, one a line, in the order of their positions
+	}{
+		{"a field the trait gives", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.tag }\n", "tag of Mine is not exported"},
+		{"a field the trait gives, in a literal", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{tag: 1, n: 2}; _ = m.n }\n", "tag of Mine is not exported"},
+		{"an inherited default", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
+		{"through a trait value", "func use(x ref lib.Tagged) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of Tagged is not exported"},
+		{"a field through a trait value", "func use(x ref lib.Tagged) int { return x.tag }\n\nfunc main() {}\n", "tag of Tagged is not exported"},
+		{"through a bound", "func use<T: lib.Tagged>(x ref T) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of T is not exported"},
+		{"a refined trait's default", "struct Mine impl lib.Labeled { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
+		{"a generic instance's field", "func main() { b := lib.Box<int>.Of(1); _ = b.v }\n", "v of lib.Box<int> is not exported"},
+		{"an override of an unexported default", "struct Mine impl lib.Sealed { n int }\n\nfunc (m ref Mine) secret() int { return 99 }\n\nfunc main() { m := Mine{n: 1}; _ = m.Peek() }\n", "Mine.secret would override Sealed.secret, which is not exported, so only lib's types override it"},
+		{"an unexported method required", "struct Mine impl lib.Want { n int }\n\nfunc (m ref Mine) want() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"an unexported requirement beside an exported one", "struct Mine impl lib.Mixed { n int }\n\nfunc main() {}\n", "Mine cannot implement Mixed: Mixed requires want, which is not exported"},
+		{"an unexported requirement over a refined trait's exported one", "struct Mine impl lib.Sealed2 { n int }\n\nfunc main() {}\n", "Mine cannot implement Sealed2: Sealed2 requires want, which is not exported"},
+		{"a type of the program taking a trait's stand-in", "trait W2: lib.Want {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nstruct Mine impl W2 { n int }\n\nfunc main() {}\n", "W2.want would stand for Want.want, which is not exported"},
+		{"a trait standing in for an unexported field", "trait P: lib.Tagged {\n\tvar tag int\n}\n\nstruct Mine impl P { n int }\n\nfunc main() {}\n", "P.tag would stand for Tagged.tag, which is not exported, so only lib's traits and types declare it"},
+		{"a field named twice within the library", "struct Mine impl lib.TaggedTwice { n int }\n\nfunc main() {}\n", "Mine gets a field tag from both TaggedTwice and Tagged"},
+		{"a sealed trait reached through two listed traits", "trait W3: lib.Want {}\n\nstruct Mine impl lib.Want, W3 { n int }\n\nfunc (m ref Mine) want() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"the package's default in an ambiguity", "trait Give {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nstruct Mine impl lib.Want, lib.GiveW, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement both Give and GiveW: each gives it a default want, and lib's is not exported, so Mine cannot declare its own to choose"},
+		{"a refused override beside a missing method", "struct Mine impl lib.Mixed, lib.GiveW { n int }\n\nfunc (m ref Mine) want() int { return 1 }\n\nfunc main() {}\n", "Mine does not implement Mixed: missing method Size() int\nMine.want would override GiveW.want, which is not exported"},
+		{"two defaults of the program's under a sealed requirement", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\ntrait Y {\n\tfunc (s ref Self) want() int { return 2 }\n}\n\nstruct Mine impl lib.Want, X, Y { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"a method of the type's beside a default of the program's, under a sealed requirement", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\nstruct Mine impl lib.Want, X { n int }\n\nfunc (m ref Mine) want() string { return \"\" }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"a field of the type's own beside a stand-in's", "trait P: lib.Tagged {\n\tvar tag int\n}\n\nstruct Mine impl P { tag int }\n\nfunc main() {}\n", "P.tag would stand for Tagged.tag, which is not exported\nfield tag is also a field of P"},
+		{"a default answering the program's requirement under a sealed one", "trait X {\n\tfunc (s ref Self) want() int { return 1 }\n}\n\ntrait Need {\n\tfunc (s ref Self) want() int\n}\n\nstruct Mine impl lib.Want, X, Need { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"a third package's own default answering its requirement under a sealed one", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib2.Need2, lib2.Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"the package's default answering it while another package's requirement is sealed", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib.GiveW, lib2.Need2 { n int }\n\nfunc main() {}\n", "Mine cannot implement Need2: Need2 requires want, which is not exported, so only lib2's traits and types answer it"},
+		{"a requirement of three unexported methods", "struct Mine impl lib.Three { n int }\n\nfunc main() {}\n", "Mine cannot implement Three: Three requires a, which is not exported"},
+		{"another package's default answering", "trait Give {\n\tfunc (s ref Self) want() int { return 42 }\n}\n\nstruct Mine impl lib.Want, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported, so only lib's traits and types answer it"},
+		{"a third package's default answering", "import \"lib2\"\n\nstruct Mine impl lib.Want, lib2.Give { n int }\n\nfunc main() {}\n", "Mine cannot implement Want: Want requires want, which is not exported"},
+		{"another package's default, through a trait refining both", "trait Give {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\ntrait Both: lib.Want, Give {}\n\nstruct Mine impl Both { n int }\n\nfunc main() {}\n", "Mine cannot implement Both: Want requires want, which is not exported"},
+		{"another package's default answering a generic trait", "trait Give {\n\tfunc (s ref Self) step() int { return 11 }\n}\n\nstruct Mine impl lib.It<int>, Give { n int }\n\nfunc main() {}\n", "Mine cannot implement It<int>: It<int> requires step, which is not exported"},
+		{"an unexported default answering the program's requirement", "trait Need {\n\tfunc (s ref Self) secret() int\n}\n\nstruct Mine impl lib.Sealed, Need { n int }\n\nfunc main() {}\n", "Mine cannot implement Need: Need requires secret, and the one Mine inherits is Sealed's, which is not exported, so it answers only lib's traits"},
+		{"super from the type's own method", "struct Mine impl lib.Sealed { n int }\n\nfunc (m ref Mine) Call() int { return super.secret() }\n\nfunc main() {}\n", "secret of Sealed is not exported"},
+		{"super from a trait of the program", "trait T: lib.Sealed {\n\tfunc (s ref Self) Call() int { return super.secret() }\n}\n\nfunc main() {}\n", "secret of Sealed is not exported"},
+		{"an override of the package's default answering its requirement", "struct Mine impl lib.B { n int }\n\nfunc (m ref Mine) f() int { return 1 }\n\nfunc main() {}\n", "Mine.f would override B.f, which is not exported, so only lib's types override it"},
+		{"a trait standing in for an unexported default", "trait Mine2: lib.Sealed {\n\tfunc (s ref Self) secret() int { return 99 }\n}\n\nfunc main() {}\n", "Mine2.secret would stand for Sealed.secret, which is not exported, so only lib's traits and types declare it"},
+		{"a trait standing in for an unexported required method", "trait W2: lib.Want {\n\tfunc (s ref Self) want() int { return 5 }\n}\n\nfunc main() {}\n", "W2.want would stand for Want.want, which is not exported, so only lib's traits and types declare it"},
+		{"the package's own default answering", "struct Mine impl lib.B { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Get() }\n", ""},
+		{"the package's own default, through a trait of the program", "trait C: lib.B {}\n\nstruct Mine impl C { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Get() }\n", ""},
+		{"two defaults, one sealed", "struct Mine impl lib.Sealed, lib.Other { n int }\n\nfunc main() {}\n", "Mine cannot implement both Other and Sealed: each gives it a default secret, and lib's are not exported, so Mine cannot declare its own to choose"},
+		{"two defaults, sealed by two packages", "import \"lib2\"\n\nstruct Mine impl lib.Sealed, lib2.Hide { n int }\n\nfunc main() {}\n", "Mine cannot implement both Hide and Sealed: each gives it a default secret, and lib2's and lib's are not exported"},
+		{"a generic trait's instance", "struct Mine impl lib.It<int> { n int }\n\nfunc (m ref Mine) step() int { return m.n }\n\nfunc main() {}\n", "Mine cannot implement It<int>: It<int> requires step, which is not exported"},
+		{"an unexported function of the type", "struct Mine impl lib.Maker { n int }\n\nfunc Mine.make() Mine { return Mine{n: 0} }\n\nfunc main() {}\n", "Mine cannot implement Maker: Maker requires make, which is not exported"},
+		{"an unexported default inherited", "struct Mine impl lib.Sealed { n int }\n\nfunc main() { m := Mine{n: 1}; _ = m.Peek() }\n", ""},
+		{"the exported ones", "struct Mine impl lib.Tagged { n int }\n\nfunc use<T: lib.Tagged>(x ref T) int { return x.Shown() }\n\nfunc main() { m := Mine{n: 2}; _ = m.Shown() + use(ref m) }\n", ""},
+		{"the exported ones overridden and answered", "struct Mine impl lib.Tagged, lib.Sized { n int }\n\nfunc (m ref Mine) Shown() int { return 5 }\n\nfunc (m ref Mine) Size() int { return m.n }\n\nfunc main() {}\n", ""},
+	}
+
+	for _, tt := range tests {
+		root := writeTree(t, map[string]string{ModFile: "snello 0.1.0\n", "lib/lib.snello": lib, "lib2/lib2.snello": lib2, "main.snello": "package main\n\nimport \"lib\"\n\n" + tt.body})
+		_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}}, &types.Info{})
+		if tt.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v, want none", tt.name, err)
+			}
+
+			continue
+		}
+
+		var list scanner.ErrorList
+		wants := strings.Split(tt.want, "\n")
+		if !errors.As(err, &list) || len(list) != len(wants) { // one mistake, one message
+			t.Errorf("%s: %v, want only %q", tt.name, err, wants)
+			continue
+		}
+
+		for i, want := range wants {
+			if !strings.Contains(list[i].Msg, want) {
+				t.Errorf("%s: %s, want %q", tt.name, list[i].Msg, want)
+			}
+		}
+	}
+}
+
+// TestCheckDir checks a directory as snello check DIR does: a main
+// package as a program, whose errors are the checker's own list; a
+// library under its module's rules, as an import, whose errors come as
+// its package's that does not compile, each with its position; a
+// library's buffer read through the options; and a directory of no
+// source file refused.
+func TestCheckDir(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:            "snello 0.1.0\n",
+		"main.snello":      "package main\n\nimport \"lib\"\n\nfunc main() {\n\tlib.F()\n}\n",
+		"lib/lib.snello":   "package lib\n\n// F does nothing.\nfunc F() {}\n",
+		"bad/bad.snello":   "package main\n\nfunc main() {\n\tmissing()\n}\n",
+		"empty/README.txt": "no package here\n",
+	})
+	libDir := filepath.Join(root, "lib")
+	for _, dir := range []string{root, libDir} {
+		if err := CheckDir(dir, &types.Info{}, Options{}); err != nil {
+			t.Errorf("%s: %v", dir, err)
+		}
+	}
+
+	var list scanner.ErrorList
+	err := CheckDir(filepath.Join(root, "bad"), &types.Info{}, Options{})
+	if !errors.As(err, &list) || strings.HasPrefix(err.Error(), "package ") {
+		t.Errorf("a main package's error: %v, want the checker's list itself", err)
+	}
+
+	libPath := filepath.Join(libDir, "lib.snello")
+	read := func(name string) ([]byte, error) {
+		if name == libPath {
+			return []byte("package lib\n\n// F does nothing.\nfunc F() int {}\n"), nil
+		}
+
+		return os.ReadFile(name)
+	}
+
+	err = CheckDir(libDir, &types.Info{}, Options{Read: read, Cached: true})
+	if !errors.As(err, &list) || len(list) != 1 || list[0].Pos.Filename != libPath || list[0].Pos.Line != 4 || !strings.HasPrefix(err.Error(), "package lib does not compile:\n") {
+		t.Errorf("a library's buffer: %v, want its package's error with the line in its file", err)
+	}
+
+	if err := CheckDir(filepath.Join(root, "empty"), &types.Info{}, Options{}); err == nil || !strings.Contains(err.Error(), "no .snello files") {
+		t.Errorf("a directory of no source file: %v", err)
+	}
+}
+
+// TestCheckTests checks a library's tests by the import path they are
+// reached at: its own, whose test files join it, and its external test
+// package's; an error keeps its test file and its line; a package under
+// no module is refused, since its tests could not name it.
+func TestCheckTests(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:               "snello 0.1.0\n",
+		"lib/lib.snello":      "package lib\n\n// F is one.\nfunc F() int {\n\treturn 1\n}\n",
+		"lib/lib_test.snello": "package lib\n\nimport \"expect\"\n\nfunc TestF() {\n\texpect.Equal(ref F(), ref 1)\n}\n",
+		"ext/ext.snello":      "package ext\n\n// G is two.\nfunc G() int {\n\treturn 2\n}\n",
+		"ext/ext_test.snello": "package ext_test\n\nimport (\"expect\"; \"ext\")\n\nfunc TestG() {\n\texpect.Equal(ref ext.G(), ref missing)\n}\n",
+	})
+
+	if err := CheckTests(filepath.Join(root, "lib"), "lib", &types.Info{}, Options{}); err != nil {
+		t.Errorf("a library's own tests: %v", err)
+	}
+
+	err := CheckTests(filepath.Join(root, "ext"), "ext"+TestSuffix, &types.Info{}, Options{Cached: true})
+	var list scanner.ErrorList
+	if !errors.As(err, &list) || len(list) != 1 || filepath.Base(list[0].Pos.Filename) != "ext_test.snello" || list[0].Pos.Line != 6 || list[0].Msg != "undefined: missing" {
+		t.Errorf("an external test package's error: %v, want undefined: missing at line 6 of its file", err)
+	}
+
+	if err := CheckTests(t.TempDir(), "lib", &types.Info{}, Options{}); err == nil || !strings.Contains(err.Error(), "no "+ModFile) {
+		t.Errorf("a package under no module: %v", err)
+	}
 }

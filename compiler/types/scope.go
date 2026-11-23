@@ -4,8 +4,13 @@
 
 package types
 
-// A Scope maps names to objects and has a parent scope, as in go/types:
-// the universe, then the package, then each file, function and block.
+import (
+	"maps"
+	"slices"
+)
+
+// A Scope maps names to objects and has a parent scope: the universe,
+// then the package, then each file, function and block.
 type Scope struct {
 	parent *Scope
 	elems  map[string]Object
@@ -55,3 +60,24 @@ func (s *Scope) Insert(obj Object) Object {
 
 // Len returns the number of objects declared in this scope.
 func (s *Scope) Len() int { return len(s.elems) }
+
+// Names returns the names this scope declares, sorted.
+func (s *Scope) Names() []string { return slices.Sorted(maps.Keys(s.elems)) }
+
+// Visible returns the objects visible in this scope: its own and those
+// of each enclosing scope, the innermost first, each scope's by name,
+// and a name an inner scope declares hides an outer one's.
+func (s *Scope) Visible() []Object {
+	var objs []Object
+	seen := make(map[string]bool)
+	for ; s != nil; s = s.parent {
+		for _, name := range slices.Sorted(maps.Keys(s.elems)) {
+			if !seen[name] {
+				seen[name] = true
+				objs = append(objs, s.elems[name])
+			}
+		}
+	}
+
+	return objs
+}

@@ -122,7 +122,7 @@ llvm: building for linux/amd64 on darwin/arm64 takes a Linux system's headers an
 
 `snello doc` prints a package's documentation, the comments on its declarations: `snello doc strings` the overview of a package, `snello doc strings.Builder` a name with its methods, and `snello doc` alone the package in the current directory (chapter 37).
 
-`snello parse FILE` prints the syntax tree and `snello lex FILE` the tokens. They exist for people working on the compiler.
+`snello parse FILE` prints the syntax tree, each declaration with its doc comment, and `snello lex FILE` the tokens. They exist for people working on the compiler.
 
 ## Tests
 

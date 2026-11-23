@@ -24,16 +24,16 @@ type Package struct {
 	defaults []ast.Expr // the defaults its structs' fields declare, which each field names by index (Var.def)
 }
 
-// An Importer loads the package an import path names, as
-// go/types.Importer does: it parses and checks the package's source,
-// once per path, and returns it, or an error saying why it could not.
+// An Importer loads the package an import path names: it parses and
+// checks the package's source, once per path, and returns it, or an
+// error saying why it could not.
 type Importer interface {
 	Import(path string) (*Package, error)
 }
 
 // An ImporterFrom is an Importer that resolves a path from the
-// directory of the file importing it, as go/types.ImporterFrom does,
-// so that a package of the program's own is found through the module
+// directory of the file importing it, so that a package of the
+// program's own is found through the module
 // the file is in. The checker calls ImportFrom when the Config's
 // Importer has it.
 type ImporterFrom interface {
@@ -46,18 +46,19 @@ type ImporterFrom interface {
 // library's, which may declare what a program may not: a function
 // without a body, a variadic ...ref any, a local field and a slice of
 // borrows. Without an Importer, only the core library table answers an
-// import. Modeled on go/types.Config; Standard is what Go's compiler
-// learns from its -std flag.
+// import. At, when valid, is the position of a name a completion asks
+// about: the checker records in Info.Visible the names visible there,
+// as it resolves the name; a check with no position records nothing.
 type Config struct {
 	Importer Importer
 	Standard bool
+	At       token.Pos
 }
 
-// Info records what the checker learned about the syntax tree, as
-// go/types.Info does. Defs maps each identifier that declares something
-// to the object it declares; Uses maps each identifier that refers to
-// something to the object it refers to. An identifier appears in at
-// most one of the two.
+// Info records what the checker learned about the syntax tree. Defs
+// maps each identifier that declares something to the object it
+// declares; Uses maps each identifier that refers to something to the
+// object it refers to. An identifier appears in at most one of the two.
 type Info struct {
 	Defs      map[*ast.Ident]Object
 	Uses      map[*ast.Ident]Object
@@ -70,6 +71,7 @@ type Info struct {
 	Arms      map[*ast.MatchArm]TypeArm     // what each arm of a match on a type parameter matches
 	Parts     map[*Part][]*ast.SelectorExpr // the selectors each v.[f] of a part f became, whose field a backend names in each copy of the loop
 	Attrs     map[Object][]Attribute        // the attributes written on each field, variant and type name, by the declaration
+	Visible   []Object                      // the names visible at Config.At, the innermost scope's first, each scope's by name, a name an inner one hides left out
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -265,8 +267,9 @@ func (conf *Config) Check(path string, file *token.File, f *ast.File, info *Info
 // CheckFiles checks a package of several files, as Check checks one:
 // the files of one directory, parsed into one FileSet so that their
 // positions are distinct, each with its syntax. The files see each
-// other's declarations and each its own imports, as Go's do; files
-// that disagree on the package clause are refused with Go's message.
+// other's declarations and each its own imports; files that disagree
+// on the package clause are refused, naming both packages and a file of
+// each.
 func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File, info *Info) (*Package, error) {
 	if len(files) != len(fs) || len(fs) == 0 {
 		panic("types: CheckFiles needs one token.File per ast.File")
@@ -541,8 +544,14 @@ func (c *Checker) declare(scope *Scope, ident *ast.Ident, obj Object) {
 }
 
 // lookup resolves ident through the open scopes and records the use.
-// An undefined name is reported once, here.
+// An undefined name is reported once, here. A name at Config.At has the
+// names visible there recorded first, whatever it resolves to: they are
+// the scopes open now, and a local declared further on is not yet.
 func (c *Checker) lookup(ident *ast.Ident) Object {
+	if c.conf.At.IsValid() && ident.NamePos == c.conf.At && c.info != nil {
+		c.info.Visible = c.scope.Visible()
+	}
+
 	_, obj := c.scope.LookupParent(ident.Name)
 	if obj == nil {
 		if ident.Name == "nil" {

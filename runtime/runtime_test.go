@@ -38,6 +38,13 @@ const (
 // window a run seldom meets is met more often.
 const wakeRuns = 5
 
+// allocScalesLimit is how many times more four threads allocating may
+// grow a processor's time than four threads listing grow theirs. Each
+// thread's own allocations grow it as listing does, about once; one
+// word every allocation writes, shared by the threads, ten times and
+// more. Three lies between the two on a ratio's scale.
+const allocScalesLimit = 3.0
+
 // The debuggers a hung probe's threads are read with: cdb on Windows,
 // from Windows' SDK, which installs it under its kit's directory for
 // each processor, lldb on macOS and gdb elsewhere, each attached to
@@ -1893,9 +1900,8 @@ func symbolLine(line string) (name, section string) {
 // runs again within a few tens of milliseconds of each sleep's end,
 // within a second in all on a loaded machine, with the workers as many
 // as the cores; at most one more, where three signals in a row found
-// no point to leave at, as on a thread of another context form on
-// x86-64 macOS or a thread the system left unrun on a loaded runner,
-// and the monitor started a thread as before.
+// no point to leave at, as on a thread the system left unrun on a
+// loaded runner, and the monitor started a thread as before.
 func TestPreempted(t *testing.T) {
 	if !opensCode() {
 		t.Skip("the probes' compiler cannot open code to preemption")
@@ -2110,10 +2116,13 @@ int main(int argc, char **argv) {
 // the system keeps, spin without touching one, and store them, while
 // the main task wakes every 10 ms so that each is taken off its worker
 // in the spin and resumed on another: every register comes back whole.
-// A program built for a processor that has the wide registers, or a
-// function written with them, holds values there, and a preemption
-// that kept only their low halves would resume the task with a stale
-// half in each.
+// Where the widest are the 512-bit registers, every other task holds
+// the 256-bit ones, so that on macOS, which gives a thread the 512-bit
+// state at its first use of it, a task is saved and resumed on threads
+// of both forms. A program built for a processor that has the wide
+// registers, or a function written with them, holds values there, and
+// a preemption that kept only their low halves would resume the task
+// with a stale half in each.
 func TestPreemptedKeepsVectorRegisters(t *testing.T) {
 	if !opensCode() {
 		t.Skip("the probes' compiler cannot open code to preemption")
@@ -2123,6 +2132,9 @@ func TestPreemptedKeepsVectorRegisters(t *testing.T) {
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 SN_OPEN_CODE
 enum { holds = 20, spins = 100000000, most = 64, room = 32 * 64 + 16 };
 static _Atomic int64_t done, wrong;
@@ -2131,6 +2143,12 @@ static _Atomic int64_t done, wrong;
 static void (*hold)(uint64_t n, const uint8_t *want, uint8_t *got);
 static size_t held;       // the bytes the registers hold in all
 static const char *width; // of the widest registers the system keeps
+// beside, what every other task holds: the registers one size down where
+// the widest are the 512-bit ones, the widest elsewhere. On macOS a
+// thread that has run only such tasks keeps the AVX form, so tasks move
+// between threads of both forms.
+static void (*hold_beside)(uint64_t n, const uint8_t *want, uint8_t *got);
+static size_t held_beside;
 #define ALL16(M) M(0) M(1) M(2) M(3) M(4) M(5) M(6) M(7) M(8) M(9) M(10) M(11) M(12) M(13) M(14) M(15)
 #define ALL32(M) ALL16(M) M(16) M(17) M(18) M(19) M(20) M(21) M(22) M(23) M(24) M(25) M(26) M(27) M(28) M(29) M(30) M(31)
 #if defined(__x86_64__)
@@ -2153,7 +2171,6 @@ __attribute__((noinline, target("avx"))) static void hold_256(uint64_t n, const 
     __asm__ volatile(ALL16(YL) SPIN ALL16(YS) "vzeroupper\n"
                      : [n] "+r"(n) : [w] "r"(w), [g] "r"(g) : "cc", "memory", LOW16);
 }
-#if !defined(__APPLE__)
 // The 512-bit registers, all thirty-two, and the seven mask registers
 // an instruction may name, after them in the buffers.
 __attribute__((noinline, target("avx512f"))) static void hold_512(uint64_t n, const uint8_t *w, uint8_t *g) {
@@ -2161,7 +2178,6 @@ __attribute__((noinline, target("avx512f"))) static void hold_512(uint64_t n, co
                      : [n] "+r"(n) : [w] "r"(w), [g] "r"(g)
                      : "cc", "memory", LOW16, HIGH16, "k1", "k2", "k3", "k4", "k5", "k6", "k7");
 }
-#endif
 static void cpuid(uint32_t leaf, uint32_t sub, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(sub));
 }
@@ -2172,25 +2188,35 @@ static uint64_t kept(void) {
     __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
     return ((uint64_t)high << 32) | low;
 }
+// wide512 reports whether the processor has the 512-bit registers and
+// the system keeps them. macOS gives a thread their state at its first
+// use of one, so a thread's own word shows it only after: the system
+// says it, hw.optional.avx512f.
+static bool wide512(void) {
+#if defined(__APPLE__)
+    int has = 0;
+    size_t size = sizeof has;
+    return sysctlbyname("hw.optional.avx512f", &has, &size, NULL, 0) == 0 && has != 0;
+#else
+    uint32_t r[4];
+    cpuid(7, 0, r);
+    return (r[1] >> 16 & 1) != 0 && (kept() & 0xe6) == 0xe6;
+#endif
+}
 // choose takes the widest registers the processor has and the system
-// keeps. macOS gives a thread the 512-bit registers at its first use
-// of one, with a context of another form, on which a task is not
-// preempted: the 256-bit ones are the widest held there.
+// keeps.
 static void choose(void) {
     uint32_t r[4];
-    hold = hold_128, held = 16 * 16, width = "128-bit";
+    hold = hold_beside = hold_128, held = held_beside = 16 * 16, width = "128-bit";
     cpuid(1, 0, r);
     if ((r[2] >> 27 & 1) == 0 || (r[2] >> 28 & 1) == 0 || (kept() & 0x6) != 0x6) {
         return;
     }
 
-    hold = hold_256, held = 16 * 32, width = "256-bit";
-#if !defined(__APPLE__)
-    cpuid(7, 0, r);
-    if ((r[1] >> 16 & 1) != 0 && (kept() & 0xe6) == 0xe6) {
+    hold = hold_beside = hold_256, held = held_beside = 16 * 32, width = "256-bit";
+    if (wide512()) {
         hold = hold_512, held = 32 * 64 + 7 * 2, width = "512-bit";
     }
-#endif
 }
 #else
 #define VL(i) "ldr q" #i ", [%[w], #" #i "*16]\n"
@@ -2202,7 +2228,7 @@ __attribute__((noinline)) static void hold_128(uint64_t n, const uint8_t *w, uin
                        "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24",
                        "v25", "v26", "v27", "v28", "v29", "v30", "v31");
 }
-static void choose(void) { hold = hold_128, held = 32 * 16, width = "128-bit"; }
+static void choose(void) { hold = hold_beside = hold_128, held = held_beside = 32 * 16, width = "128-bit"; }
 #endif
 static void keep(void *arg) {
     int64_t id = *(int64_t *)arg;
@@ -2211,10 +2237,12 @@ static void keep(void *arg) {
         want[i] = (uint8_t)(i * 7 + (size_t)id + 1); // a pattern of its own for each register and each task
     }
 
+    void (*mine)(uint64_t, const uint8_t *, uint8_t *) = id % 2 == 0 ? hold : hold_beside;
+    size_t bytes = id % 2 == 0 ? held : held_beside;
     for (int h = 0; h < holds; h++) {
         memset(got, 0, sizeof got);
-        hold(spins, want, got);
-        if (memcmp(want, got, held) != 0) {
+        mine(spins, want, got);
+        if (memcmp(want, got, bytes) != 0) {
             atomic_fetch_add(&wrong, 1);
         }
     }
@@ -4177,14 +4205,23 @@ int main(void) {
 	}
 }
 
-// TestAllocScales holds what allocating costs a processor when every
-// processor allocates at once to what it costs one alone. Each thread
-// keeps what it allocates and frees to itself, so four threads spend
-// four times one thread's processor time and little more; a word every
-// allocation writes, shared by the threads, has each processor wait
-// for the line of memory it is on, and four threads then spend many
-// times that. Processor time is measured, not the clock's, so that a
-// machine busy with other tests does not look like a shared word.
+// TestAllocScales holds what allocating costs a processor when four
+// threads allocate at once to what it costs one alone, against the same
+// ratio for listing: the allocator's own work done on lists of the
+// thread's own, the same rounds taking and giving blocks of the same
+// sizes, one call each, with counts of the thread's own written as an
+// allocation's are. Each thread keeps what it allocates and frees to
+// itself, so four threads allocating spend four times one thread's
+// processor time and little more, as four threads listing do; a word
+// every allocation writes, shared by the threads, has each processor
+// wait for the line of memory it is on, and four threads allocating
+// then spend many times what four listing do. What the machine adds
+// when four threads run, two threads sharing one core or a clock
+// lowered for all four, it adds to the same work listed, so the
+// comparison holds on a machine of shared cores. Processor time is
+// measured, not the clock's, so that a machine busy with other tests
+// does not look like a shared word, and of three runs the least of
+// each time is kept, since other work only ever adds to a time.
 func TestAllocScales(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("fewer than four processors")
@@ -4192,19 +4229,65 @@ func TestAllocScales(t *testing.T) {
 
 	probe := `#include "snello.h"
 #include "probe.h"
+#include <stdatomic.h>
 #include <stdio.h>
-static void *work(void *arg) {
+#include <stdlib.h>
+enum { rounds = 4000000, kept = 64, classes = 8, step = 16, spare = 16 };
+static void *allocating(void *arg) {
     (void)arg;
-    void *keep[64] = {0};
-    for (int i = 0; i < 4000000; i++) {
-        int k = i & 63;
+    void *keep[kept] = {0};
+    for (int i = 0; i < rounds; i++) {
+        int k = i & (kept - 1);
         sn_free(keep[k]);
-        keep[k] = sn_alloc(16 + (size_t)(i & 7) * 16);
+        keep[k] = sn_alloc(step + (size_t)(i & (classes - 1)) * step);
     }
-    for (int k = 0; k < 64; k++) sn_free(keep[k]);
+    for (int k = 0; k < kept; k++) sn_free(keep[k]);
     return NULL;
 }
-static double spent(int threads) {
+typedef struct {
+    void *head[classes];
+    int64_t count[classes];
+    _Atomic int64_t blocks, bytes;
+} lists;
+static _Thread_local lists mine;
+static __attribute__((noinline)) void give(void *p, size_t n) {
+    if (p == NULL) {
+        return;
+    }
+    int c = (int)((n - 1) / step);
+    *(void **)p = mine.head[c];
+    mine.head[c] = p;
+    if (++mine.count[c] > rounds) {
+        abort();
+    }
+}
+static __attribute__((noinline)) void *take(size_t n) {
+    int c = (int)((n - 1) / step);
+    void *p = mine.head[c];
+    mine.head[c] = *(void **)p;
+    mine.count[c]--;
+    atomic_store_explicit(&mine.blocks, atomic_load_explicit(&mine.blocks, memory_order_relaxed) + 1, memory_order_relaxed);
+    atomic_store_explicit(&mine.bytes, atomic_load_explicit(&mine.bytes, memory_order_relaxed) + (int64_t)n, memory_order_relaxed);
+    return p;
+}
+static void *listing(void *arg) {
+    (void)arg;
+    size_t largest = (size_t)classes * step;
+    unsigned char *own = malloc((size_t)classes * spare * largest);
+    for (int c = 0; c < classes; c++) {
+        for (int j = 0; j < spare; j++) give(own + ((size_t)c * spare + (size_t)j) * largest, (size_t)(c + 1) * step);
+    }
+    void *keep[kept] = {0};
+    for (int i = 0; i < rounds; i++) {
+        int k = i & (kept - 1);
+        size_t n = step + (size_t)(i & (classes - 1)) * step;
+        give(keep[k], n);
+        keep[k] = take(n);
+    }
+    free(own);
+    return NULL;
+}
+static double spent(void *(*work)(void *), int threads) {
     probe_thread th[8];
     int64_t a = probe_cpu_work();
     for (int k = 0; k < threads; k++) th[k] = probe_thread_start(work, NULL);
@@ -4212,31 +4295,39 @@ static double spent(int threads) {
     return (double)(probe_cpu_work() - a);
 }
 int main(void) {
-    spent(1);
-    double one = spent(1), four = spent(4);
-    printf("%.2f\n", four / (4 * one));
+    spent(allocating, 1);
+    spent(listing, 1);
+    double alloc1 = spent(allocating, 1), alloc4 = spent(allocating, 4);
+    double list1 = spent(listing, 1), list4 = spent(listing, 4);
+    printf("%.0f %.0f %.0f %.0f\n", alloc1, alloc4, list1, list4);
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
-	best := 0.0
-	for range 3 { // the least of three: a machine's other work only ever adds
+	least := [4]float64{math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)} // allocating on one thread and four, listing on one and four
+	for range 3 {
 		out, err := exec.Command(bin).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		ratio, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-		if err != nil {
+		var times [4]float64
+		if _, err := fmt.Sscanf(string(out), "%f %f %f %f", &times[0], &times[1], &times[2], &times[3]); err != nil {
 			t.Fatalf("%q: %v", out, err)
 		}
 
-		if best == 0 || ratio < best {
-			best = ratio
+		for i, v := range times {
+			if !(v > 0) || math.IsInf(v, 0) {
+				t.Fatalf("%q: a processor time that is not a positive number", out)
+			}
+
+			least[i] = min(least[i], v)
 		}
 	}
 
-	if best > 2.5 {
-		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, want about 1 and under 2.5", best)
+	allocating, listing := least[1]/(4*least[0]), least[3]/(4*least[2])
+	t.Logf("four threads against one: allocating %.2f times, listing %.2f times", allocating, listing)
+	if allocating/listing > allocScalesLimit {
+		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, %.2f times what listing's grows, want under %.1f", allocating, allocating/listing, allocScalesLimit)
 	}
 }
 

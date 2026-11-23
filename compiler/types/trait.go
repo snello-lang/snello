@@ -13,14 +13,14 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
-// Traits take the place go/types gives interfaces, with one difference
-// at the root: a type implements a trait because its declaration says
-// so, struct Circle impl Shape, not because its methods happen to
-// match. A trait's methods are declared with Self as the receiver's
-// type, and Self is a type parameter of the trait, so that asking
-// whether Circle implements Shape is the same substitution an instance
-// of a generic type goes through: put Circle in for Self and compare
-// each required method with the one Circle declares. A type parameter
+// Traits are how a type says what it can do: a type implements a trait
+// because its declaration says so, struct Circle impl Shape, never
+// because its methods happen to match. A trait's methods are declared
+// with Self as the receiver's type, and Self is a type parameter of the
+// trait, so that asking whether Circle implements Shape is the same
+// substitution an instance of a generic type goes through: put Circle
+// in for Self and compare each required method with the one Circle
+// declares. A type parameter
 // bounded by a trait, T: Shape, sees the trait's methods with itself in
 // for Self, which is how x.Area() checks on an x of type T; the backend
 // writes the call against the type argument's own method, one copy per
@@ -78,6 +78,7 @@ type traitDefault struct {
 	tdecl *ast.TraitDecl
 	decl  *ast.FuncDecl
 	fn    *Func
+	file  int // the index of the file the trait is declared in, whose imports the body sees
 }
 
 // NewTrait returns a trait named by obj with no methods yet, and sets
@@ -98,6 +99,24 @@ func (t *Trait) Obj() *TypeName { return t.obj }
 func (t *Trait) Method(name string) *Func {
 	fn, _ := t.lookup(name)
 	return fn
+}
+
+// RefinesDecl reports whether t is the trait decl, an instance of it,
+// or refines one, directly or through the traits in between: whether
+// a method decl declares is one t answers, whatever the arguments, as
+// a search for the methods that share a dispatch asks.
+func (t *Trait) RefinesDecl(decl *Trait) bool {
+	if t.origin() == decl.origin() {
+		return true
+	}
+
+	for _, r := range t.refines {
+		if r != nil && r.RefinesDecl(decl) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Refines reports whether t is other or refines it, directly or
@@ -316,16 +335,25 @@ func (c *Checker) orderTraitLists(f *ast.File) {
 func (c *Checker) traitFields(n *Named, own []*Var, pos token.Pos) []*Var {
 	var fields []*Var
 	var from map[string]*Trait // the trait each field came from
+	var clashed []*Var         // the fields of n's own reported for a trait's, each once
 	for _, t := range n.order {
 		m := map[*TypeParam]Type{t.self: n}
 		for _, f := range t.fields {
 			if dup := fieldNamed(own, f.name); dup != nil {
-				c.errorf(dup.pos, "field "+f.name+" is also a field of "+t.obj.name)
+				if !slices.Contains(clashed, dup) {
+					c.errorf(dup.pos, "field "+f.name+" is also a field of "+t.obj.name)
+					clashed = append(clashed, dup)
+				}
+
 				continue
 			}
 
 			if first := from[f.name]; first != nil {
-				c.errorf(pos, n.obj.name+" gets a field "+f.name+" from both "+first.obj.name+" and "+t.obj.name)
+				refusedAtTrait := first.Refines(t) && first.origin().obj.pkg == c.pkg && c.sealed(t, f.name) != nil // checkFieldRedeclared
+				if !refusedAtTrait {
+					c.errorf(pos, n.obj.name+" gets a field "+f.name+" from both "+first.obj.name+" and "+t.obj.name)
+				}
+
 				continue
 			}
 
@@ -934,7 +962,7 @@ func (c *Checker) resolveTrait(d *ast.TraitDecl, tr *Trait) {
 
 		if m.Body != nil {
 			tr.defaults = append(tr.defaults, fn)
-			c.defaults = append(c.defaults, traitDefault{tr, d, m, fn})
+			c.defaults = append(c.defaults, traitDefault{tr, d, m, fn, c.fileIndex})
 			continue
 		}
 
@@ -945,9 +973,13 @@ func (c *Checker) resolveTrait(d *ast.TraitDecl, tr *Trait) {
 // checkDefaultBodies checks the body of every default method, once,
 // as a function whose receiver is of type Self: inside it a value of
 // Self has the trait's methods and nothing else, and moves unless the
-// trait refines Copy.
+// trait refines Copy. Each body is checked in the file its trait is
+// declared in, with that file's imports and no other's.
 func (c *Checker) checkDefaultBodies() {
+	was := c.here()
+	defer c.restore(was)
 	for _, d := range c.defaults {
+		c.enter(d.file)
 		sig := d.fn.typ.(*Signature)
 		if d.trait.tparams != nil {
 			c.openTypeParams(paramNames(d.tdecl.TypeParams), d.trait.tparams)
@@ -1011,6 +1043,11 @@ func (c *Checker) superCall(e *ast.SelectorExpr) operand {
 	def, owner := nextDefault(order, nil, e.Sel.Name)
 	if def == nil {
 		c.errorf(e.Sel.Pos(), none+" defines "+e.Sel.Name+" with a body")
+		return invalidOperand
+	}
+
+	if c.sealed(owner, e.Sel.Name) != nil { // the default is its package's alone, by super as by any call
+		c.errorf(e.Sel.Pos(), e.Sel.Name+" of "+owner.String()+" is not exported")
 		return invalidOperand
 	}
 
@@ -1084,6 +1121,10 @@ func (c *Checker) checkRefinements(f *ast.File) {
 			continue
 		}
 
+		for _, field := range tr.fields {
+			c.checkFieldRedeclared(tr, field)
+		}
+
 		for _, fn := range tr.required {
 			c.checkRedeclared(tr, fn)
 		}
@@ -1110,9 +1151,30 @@ func (c *Checker) checkRedeclared(tr *Trait, fn *Func) {
 			continue
 		}
 
+		if pkg := c.sealed(owner, fn.name); pkg != nil {
+			c.errorf(fn.pos, tr.obj.name+"."+fn.name+" would stand for "+owner.String()+"."+fn.name+", which is not exported, so only "+pkg.name+"'s traits and types declare it")
+			return
+		}
+
 		wsig := subst(want.typ, map[*TypeParam]Type{owner.self: tr.self}).(*Signature)
 		if !sameMethod(hsig, wsig) {
 			c.errorf(fn.pos, "method "+tr.obj.name+"."+fn.name+" has the wrong signature for "+owner.obj.name+": have "+receiverText(hsig)+methodText(fn.name, hsig)+", want "+receiverText(wsig)+methodText(fn.name, wsig))
+			return
+		}
+	}
+}
+
+// checkFieldRedeclared reports the trait tr's field f when a trait tr
+// refines, of another package, has a field of the name and keeps it
+// unexported: f would name that package's field for tr's values.
+func (c *Checker) checkFieldRedeclared(tr *Trait, f *Var) {
+	for _, owner := range tr.order {
+		if fieldNamed(owner.fields, f.name) == nil {
+			continue
+		}
+
+		if pkg := c.sealed(owner, f.name); pkg != nil {
+			c.errorf(f.pos, tr.obj.name+"."+f.name+" would stand for "+owner.String()+"."+f.name+", which is not exported, so only "+pkg.name+"'s traits and types declare it")
 			return
 		}
 	}
@@ -1240,8 +1302,9 @@ func (c *Checker) checkImpls(f *ast.File) {
 			continue // one mistake, one message: the methods of both are not asked for
 		}
 
-		c.inherit(n, d.Name.Pos())
+		reported := c.inherit(n, d.Name.Pos(), c.closedNames(n))
 		seen := make(map[*Trait]bool)
+		var sealedOwners []*Trait // the traits n was refused an unexported requirement of, each reported once
 		for j, t := range d.Impls {
 			listed := n.impls[j]
 			if listed == nil {
@@ -1264,6 +1327,15 @@ func (c *Checker) checkImpls(f *ast.File) {
 			}
 
 			c.deriveListed(n, listed, t.Pos()) // before the methods are required, since a derived one answers
+			if owner, why := c.refuseSealed(n, listed, reported); owner != nil {
+				if !slices.ContainsFunc(sealedOwners, func(o *Trait) bool { return o == owner || sameInstance(o, owner) }) {
+					c.errorf(t.Pos(), n.obj.name+" cannot implement "+listed.String()+": "+why)
+					sealedOwners = append(sealedOwners, owner)
+				}
+
+				continue // one mistake, one message: no method n declares makes n implement it
+			}
+
 			listed.eachRequired(func(owner *Trait, want *Func) {
 				c.checkRequired(n, listed, owner, want, t.Pos())
 			}, seen)
@@ -1277,23 +1349,45 @@ func (c *Checker) checkImpls(f *ast.File) {
 // every default. A second default for the same name from a trait the
 // winner does not refine is an ambiguity the type must settle by
 // declaring the method, and a default the type does not take must
-// still agree with the method it has. Each name is reported once.
-func (c *Checker) inherit(n *Named, pos token.Pos) {
+// still agree with the method it has, and a default a trait of another
+// package keeps unexported may not be overridden at all. Each name is
+// reported once, and the names reported are returned. A closed name is
+// resolved as any other but without a word: whatever n declares or
+// inherits for it, the one mistake is the requirement no answer of n's
+// may meet (refuseSealed), while a default it inherits still answers
+// the traits it may.
+func (c *Checker) inherit(n *Named, pos token.Pos, closed []string) (reported []string) {
 	from := make(map[string]*Trait) // the trait each inherited method came from, or nil for a name reported
 	for _, t := range n.order {
 		for _, def := range t.defaults {
+			quiet := slices.Contains(closed, def.name)
 			winner, seen := from[def.name]
 			switch {
 			case seen && winner == nil:
 				continue
-			case seen && !winner.Refines(t):
-				c.errorf(pos, n.obj.name+" inherits "+def.name+" from both "+winner.obj.name+" and "+t.obj.name+": declare "+n.obj.name+"."+def.name+" to choose")
+			case seen && !winner.Refines(t) && quiet:
 				from[def.name] = nil
+			case seen && !winner.Refines(t):
+				if sealed := c.sealedOf(winner, t, def.name); sealed != "" { // the way out, a method of the type's own, is closed
+					c.errorf(pos, n.obj.name+" cannot implement both "+winner.String()+" and "+t.String()+": each gives it a default "+def.name+", and "+sealed+" not exported, so "+n.obj.name+" cannot declare its own to choose")
+				} else {
+					c.errorf(pos, n.obj.name+" inherits "+def.name+" from both "+winner.obj.name+" and "+t.obj.name+": declare "+n.obj.name+"."+def.name+" to choose")
+				}
+
+				from[def.name], reported = nil, append(reported, def.name)
 			case seen:
 				// a default behind the winner's, in a trait it refines, with the same signature (checkRefinements)
+			case n.Method(def.name) != nil && quiet:
+				// n's own method, which the sealed refusal speaks for
 			case n.Method(def.name) != nil:
+				if pkg := c.sealed(t, def.name); pkg != nil {
+					c.errorf(n.Method(def.name).pos, n.obj.name+"."+def.name+" would override "+t.String()+"."+def.name+", which is not exported, so only "+pkg.name+"'s types override it")
+					from[def.name], reported = nil, append(reported, def.name)
+					continue
+				}
+
 				if !c.checkSignature(n, t, def, n.Method(def.name), pos) {
-					from[def.name] = nil
+					from[def.name], reported = nil, append(reported, def.name)
 				}
 			default:
 				m := substFunc(def, map[*TypeParam]Type{t.self: n})
@@ -1303,6 +1397,130 @@ func (c *Checker) inherit(n *Named, pos token.Pos) {
 			}
 		}
 	}
+
+	return reported
+}
+
+// sealed returns the package of the trait t, when the method name t
+// declares is not exported and the package is another than the one
+// being checked: a trait's unexported method is its package's alone,
+// which no type of another package implements or overrides, since
+// that package could not name it; nil otherwise.
+func (c *Checker) sealed(t *Trait, name string) *Package {
+	pkg := t.origin().obj.pkg
+	if ast.IsExported(name) || pkg == nil || pkg == c.pkg {
+		return nil
+	}
+
+	return pkg
+}
+
+// sealedOf names, for the message, the packages of a and b that keep
+// the default name unexported, "lib's is", "lib's are" or "lib's and
+// io's are", or returns "" when neither does.
+func (c *Checker) sealedOf(a, b *Trait, name string) string {
+	pa, pb := c.sealed(a, name), c.sealed(b, name)
+	switch {
+	case pa != nil && pa == pb:
+		return pa.name + "'s are"
+	case pa != nil && pb != nil:
+		return pa.name + "'s and " + pb.name + "'s are"
+	case pa != nil:
+		return pa.name + "'s is"
+	case pb != nil:
+		return pb.name + "'s is"
+	}
+
+	return ""
+}
+
+// refuseSealed returns the trait, listed or one it refines, a
+// requirement of which is a name not exported that n answers from
+// another package than the requirement's, and why: a type of this
+// package or a default of another package cannot stand for a method
+// another package keeps unexported, and a default another package
+// keeps unexported answers only that package's traits. A name inherit
+// reported is passed over, its mistake told where it was made.
+func (c *Checker) refuseSealed(n *Named, listed *Trait, reported []string) (*Trait, string) {
+	for i := -1; i < len(listed.order); i++ {
+		owner := listed
+		if i >= 0 {
+			owner = listed.order[i]
+		}
+
+		for _, want := range owner.required {
+			if slices.Contains(reported, want.name) {
+				continue
+			}
+
+			if why := c.sealedAnswer(n, owner, want); why != "" {
+				return owner, why
+			}
+		}
+	}
+
+	return nil, ""
+}
+
+// sealedAnswer says why n's answer to owner's requirement want, a name
+// not exported, may not stand, coming from another package than the
+// requirement's; "" when it may. A default of a trait refining owner
+// that stands for it was refused at that trait (checkRedeclared).
+func (c *Checker) sealedAnswer(n *Named, owner *Trait, want *Func) string {
+	have := n.Method(want.name)
+	if pkg := c.sealed(owner, want.name); pkg != nil && (have == nil || answerPackage(n, have) != pkg) {
+		if have != nil && have.trait != nil && have.trait.Refines(owner) {
+			return ""
+		}
+
+		return owner.String() + " requires " + want.name + ", which is not exported, so only " + pkg.name + "'s traits and types answer it"
+	}
+
+	if have != nil && have.trait != nil {
+		if pkg := c.sealed(have.trait, want.name); pkg != nil && pkg != owner.origin().obj.pkg {
+			return owner.String() + " requires " + want.name + ", and the one " + n.obj.name + " inherits is " + have.trait.String() + "'s, which is not exported, so it answers only " + pkg.name + "'s traits"
+		}
+	}
+
+	return ""
+}
+
+// closedNames returns the names of the requirements n can answer from
+// nowhere: those a trait t of n's, of another package, requires and
+// keeps unexported, where n gets no default of the name from that
+// package, nor from a trait refining t, a stand-in refused at that
+// trait (checkRedeclared). Neither a method of n's nor a default of
+// another package may answer such a requirement, though a default of
+// the name may answer another trait's.
+func (c *Checker) closedNames(n *Named) []string {
+	var closed []string
+	for _, t := range n.order {
+		for _, want := range t.required {
+			pkg := c.sealed(t, want.name)
+			if pkg == nil || slices.Contains(closed, want.name) {
+				continue
+			}
+
+			answered := slices.ContainsFunc(n.order, func(u *Trait) bool {
+				return (u.origin().obj.pkg == pkg || u.Refines(t)) && slices.ContainsFunc(u.defaults, func(def *Func) bool { return def.name == want.name })
+			})
+			if !answered {
+				closed = append(closed, want.name)
+			}
+		}
+	}
+
+	return closed
+}
+
+// answerPackage returns the package whose code have, a method of n,
+// is: its trait's for an inherited default, n's for n's own method.
+func answerPackage(n *Named, have *Func) *Package {
+	if have.trait != nil {
+		return have.trait.origin().obj.pkg
+	}
+
+	return n.obj.pkg
 }
 
 // linearize returns the order in which a type's traits are consulted
