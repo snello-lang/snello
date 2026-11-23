@@ -14,10 +14,12 @@ package lower
 import (
 	"errors"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
@@ -53,14 +55,18 @@ type Library struct {
 }
 
 // StdFiles are the files of the standard library's packages among
-// libraries, which the line tables name under SourceName's directory:
-// files and not names, since a program's own file may have the name of
-// one of the library's.
-func StdFiles(libraries []Library) map[*token.File]bool {
-	out := make(map[*token.File]bool)
+// libraries, each with the name the line tables give it under
+// SourceName's directory: its package's import path, an external test
+// package's without its suffix, whose files are its package's, and its
+// own base name, the same whether the library was read from the
+// compiler's copy or from a checkout's std/. Keyed by file and not by
+// name, since a program's own file may have the name of one of the
+// library's.
+func StdFiles(libraries []Library) map[*token.File]string {
+	out := make(map[*token.File]string)
 	for _, l := range libraries {
 		if l.Std {
-			out[l.File] = true
+			out[l.File] = strings.TrimSuffix(l.Path, importer.TestSuffix) + "/" + path.Base(filepath.ToSlash(l.File.Name()))
 		}
 	}
 

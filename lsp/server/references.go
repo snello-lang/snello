@@ -225,13 +225,18 @@ func (s *Server) unrenamable(v *view, t *target) string {
 // editor's to change, or "": the language declares it, the standard
 // library, which the compiler holds, a module required by version,
 // which the module cache holds, or a module the editor has no file or
-// folder of.
+// folder of. A name a standard package of a checkout of the compiler
+// exports is not either: the programs that use it outside the checkout
+// name it through the compiler's own copy, which no edit of the
+// checkout reaches.
 func (s *Server) uneditable(key objectKey, name string) string {
 	switch {
 	case strings.HasPrefix(key.file, languageFile):
 		return name + " is declared by the language"
 	case !filepath.IsAbs(key.file):
 		return name + " is declared by the standard library, which the compiler holds"
+	case ast.IsExported(name) && checkoutStd(key.file) != "":
+		return name + " is exported by the standard library, whose users outside this checkout name it through the compiler's own copy"
 	}
 
 	if cache, err := importer.ModCacheDir(); err == nil && within(cache, key.file) {
@@ -348,12 +353,14 @@ func (found *search) collect() {
 
 // searched returns the packages that can name the object of key, named
 // name, sorted: its own alone for a name no other package can name, one
-// not exported; else its own, when it is a package of the editor's, and
-// every package of the workspace's modules that imports it, directly or
-// through another, each import resolved as the importer resolves it;
-// and for a name declared outside them, every package of the
-// workspace's modules. The package of the document asked from is among
-// them, unless the document is a copy of the standard library's.
+// not exported; every package of the library for one a standard package
+// of a checkout of the compiler exports, since the library's packages
+// import each other; else its own, when it is a package of the
+// editor's, and every package of the workspace's modules that imports
+// it, directly or through another, each import resolved as the importer
+// resolves it; and for a name declared outside them, every package of
+// the workspace's modules. The package of the document asked from is
+// among them, unless the document is a copy of the standard library's.
 func (s *Server) searched(key objectKey, name, from string) []string {
 	own := ""
 	if filepath.IsAbs(key.file) {
@@ -366,7 +373,11 @@ func (s *Server) searched(key objectKey, name, from string) []string {
 
 	packages, importedBy := s.importGraph()
 	var dirs []string
-	if own != "" && (slices.Contains(packages, own) || importedBy[own] != nil) {
+	if stdDir := checkoutStd(key.file); stdDir != "" {
+		for _, path := range importer.Paths() {
+			dirs = append(dirs, filepath.Join(stdDir, filepath.FromSlash(path)))
+		}
+	} else if own != "" && (slices.Contains(packages, own) || importedBy[own] != nil) {
 		dirs = []string{own}
 		for i := 0; i < len(dirs); i++ {
 			for _, by := range importedBy[dirs[i]] {

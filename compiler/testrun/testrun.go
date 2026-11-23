@@ -71,8 +71,13 @@ func PlanDir(dir string) (*Plan, error) {
 
 // PlanDirFrom is PlanDir with every file read through read, or from the
 // disk when read is nil: how the language server plans the tests of a
-// package as the editor holds its files.
+// package as the editor holds its files. A standard package's directory
+// in a checkout of the compiler is planned as PlanStdDirFrom plans it.
 func PlanDirFrom(dir string, read func(name string) ([]byte, error)) (*Plan, error) {
+	if _, _, std := importer.StdPackage(dir); std {
+		return PlanStdDirFrom(dir, read)
+	}
+
 	if read == nil {
 		read = os.ReadFile
 	}
@@ -211,6 +216,16 @@ func PlanStd(importPath string) (*Plan, error) {
 // whole library is read from the checkout then, every package under
 // std/. A directory that is not a standard package's is refused.
 func PlanStdDir(dir string) (*Plan, error) {
+	return PlanStdDirFrom(dir, nil)
+}
+
+// PlanStdDirFrom is PlanStdDir with every file read through read, or
+// from the disk when read is nil, as PlanDirFrom reads them.
+func PlanStdDirFrom(dir string, read func(name string) ([]byte, error)) (*Plan, error) {
+	if read == nil {
+		read = os.ReadFile
+	}
+
 	stdDir, importPath, ok := importer.StdPackage(dir)
 	if !ok {
 		return nil, errors.New(dir + " is not a standard package of the library: snello test std/NAME runs one in a checkout of the compiler, whose std/ holds every package, with the compiler built from that checkout")
@@ -236,12 +251,19 @@ func PlanStdDir(dir string) (*Plan, error) {
 	}
 
 	p := &Plan{Path: importPath, Files: files, Tests: tests, StdDir: stdDir}
+	srcs := make([][]byte, len(tests))
+	for i, name := range tests {
+		if srcs[i], err = read(name); err != nil {
+			return nil, err
+		}
+	}
+
 	var pkg string
-	if p.Names, p.Examples, pkg, err = testNames(tests, nil); err != nil {
+	if p.Names, p.Examples, pkg, err = testNames(tests, srcs); err != nil {
 		return nil, err
 	}
 
-	if err := p.checkExamples(os.ReadFile); err != nil {
+	if err := p.checkExamples(read); err != nil {
 		return nil, err
 	}
 
@@ -517,17 +539,11 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 // runs the program with args, its output passed through, and returns
 // the program's exit code: 0 when every test passed.
 func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, error) {
-	var p *Plan
-	var err error
-	if _, _, std := importer.StdPackage(dir); std {
-		p, err = PlanStdDir(dir)
-	} else {
-		if w := importer.ModuleWarning(dir); w != "" {
-			fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
-		}
-
-		p, err = PlanDir(dir)
+	if w := importer.ModuleWarning(dir); w != "" {
+		fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
 	}
+
+	p, err := PlanDir(dir)
 
 	if err != nil {
 		return 1, err

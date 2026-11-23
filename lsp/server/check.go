@@ -271,14 +271,7 @@ func (s *Server) checkSources(dir string, over map[string][]byte, t platform.Tar
 func (s *Server) checkTests(dir string, over map[string][]byte, t platform.Target, at importer.Place) (report, *view) {
 	v, o := s.begin(over, t, at)
 	err := s.guard(func() error {
-		var plan *testrun.Plan
-		var err error
-		if _, _, std := importer.StdPackage(dir); std {
-			plan, err = testrun.PlanStdDir(dir)
-		} else {
-			plan, err = testrun.PlanDirFrom(dir, o.Read)
-		}
-
+		plan, err := testrun.PlanDirFrom(dir, o.Read)
 		if err != nil {
 			return err
 		}

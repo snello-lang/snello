@@ -295,13 +295,43 @@ func TestCommandsWarn(t *testing.T) {
 // TestCheckStdCheckout checks a file and a directory of a standard
 // package in the checkout as the library's: neither reports anything,
 // where checked as a program's the file's functions the runtime
-// provides would be refused.
+// provides would be refused. In a copy of the checkout, an error in a
+// test file and in a file for another platform is reported, each file
+// checked with its package, its tests or its platform's build.
 func TestCheckStdCheckout(t *testing.T) {
 	dir := filepath.Join("..", "..", "std", "rc")
 	for _, path := range []string{dir, filepath.Join(dir, "rc.snello")} {
 		code := -1
 		if got := stderrOf(t, func() { code = check(path, platform.Host()) }); code != 0 || got != "" {
 			t.Errorf("check %s exited %d and said %q, want it silent", path, code, got)
+		}
+	}
+
+	checkout := filepath.Join(t.TempDir(), "std")
+	if err := os.CopyFS(checkout, os.DirFS(filepath.Join("..", "..", "std"))); err != nil {
+		t.Fatal(err)
+	}
+
+	broken := "\nfunc brokenHere() int { return \"x\" }\n"
+	for _, name := range []string{filepath.Join("rc", "rc_test.snello"), filepath.Join("os", "exec", "exec_windows.snello"), filepath.Join("os", "exec", "exec_unix.snello")} {
+		path := filepath.Join(checkout, name)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = f.WriteString(broken)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		code := -1
+		if got := stderrOf(t, func() { code = check(path, platform.Host()) }); code == 0 || !strings.Contains(got, filepath.Base(name)) || !strings.Contains(got, "cannot use a value of type string as int in return") {
+			t.Errorf("check %s exited %d and said %q, want the error in it", name, code, got)
 		}
 	}
 }

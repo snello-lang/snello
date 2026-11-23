@@ -6,7 +6,6 @@ package lower
 
 import (
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -304,10 +303,11 @@ func VariantMember(v *types.Variant) string {
 // SourceName is the name a file is given in the line tables and the
 // debugging information: the path the compiler read it from, relative
 // to the directory the build ran in, which the compile unit records,
-// or under StdSources for a file of the standard library.
-func SourceName(name string, std bool) string {
-	if std {
-		return StdSources + strings.TrimPrefix(filepath.ToSlash(name), "/")
+// or for a file of the standard library, whose name under the library
+// StdFiles gives as stdName, that name under StdSources.
+func SourceName(name, stdName string) string {
+	if stdName != "" {
+		return StdSources + stdName
 	}
 
 	return name

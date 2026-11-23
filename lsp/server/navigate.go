@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/compiler/version"
@@ -264,6 +265,21 @@ func stdPathOf(name string) string {
 	}
 
 	return filepath.Join(cache, stdCopies, version.Current, filepath.FromSlash(name))
+}
+
+// checkoutStd returns the std/ directory of a checkout of the compiler
+// when file is a file of one of its standard packages, or "".
+func checkoutStd(file string) string {
+	if !filepath.IsAbs(file) {
+		return ""
+	}
+
+	stdDir, _, ok := importer.StdPackage(filepath.Dir(file))
+	if !ok {
+		return ""
+	}
+
+	return stdDir
 }
 
 // stdCopyOf reports whether dir is a directory of the standard

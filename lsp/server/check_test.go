@@ -76,8 +76,9 @@ func TestExamples(t *testing.T) {
 
 // TestStdCheckout opens every source file of every standard package of
 // the checkout, as a maintainer of the library does, and checks each
-// package as the library's, with its tests: none has a diagnostic, and
-// an error typed into a file is reported on that file and line.
+// package as the library's, with its tests: none has a diagnostic, an
+// error typed into a file is reported on that file and line, and a test
+// typed into a test file is planned from the editor's text.
 func TestStdCheckout(t *testing.T) {
 	for _, path := range importer.Paths() {
 		dir := filepath.Join(stdCheckoutDir, filepath.FromSlash(path))
@@ -118,6 +119,18 @@ func TestStdCheckout(t *testing.T) {
 	line := uint32(strings.Count(string(src), "\n") + 1) // zero-based: the line after the blank one appended
 	if len(diags) != 1 || diags[0].Range.Start.Line != line || diags[0].Message != "cannot use a value of type string as int in return" {
 		t.Errorf("an error typed into %s: %+v, want one at line %d", name, diags, line+1)
+	}
+
+	test := filepath.Join(filepath.Dir(name), "rc_test.snello")
+	if src, err = os.ReadFile(test); err != nil {
+		t.Fatal(err)
+	}
+
+	s = New(strings.NewReader(""), io.Discard, io.Discard)
+	s.open(protocol.TextDocumentItem{URI: uriOf(test), Text: string(src) + "\nfunc TestBad(n int) {}\n"})
+	s.checkAll()
+	if got := union(s.reports)[test]; len(got) != 1 || !strings.Contains(got[0].Message, "TestBad") {
+		t.Errorf("a test typed into %s with the wrong signature: %+v, want it reported from the editor's text", test, got)
 	}
 }
 

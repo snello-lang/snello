@@ -15,8 +15,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/platform"
@@ -32,6 +34,20 @@ const (
 	stdCheckout = "std"
 	builtinPath = "builtin"
 )
+
+// stdPaths reads the embedded library's import paths once, for Paths.
+var stdPaths = sync.OnceValue(func() []string {
+	var paths []string
+	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && path.Base(name) == path.Base(path.Dir(name))+SourceExt {
+			paths = append(paths, path.Dir(name))
+		}
+
+		return nil
+	})
+
+	return paths
+})
 
 // A Package is one source file of a library package as loaded: its
 // import path, the file and its syntax, and the package the checker
@@ -94,7 +110,8 @@ type Importer struct {
 	// parses, the program's and every package's it imports, as it is
 	// parsed and before it is checked, a file with errors too: how the
 	// language server keeps the syntax of a check. A file of the
-	// standard library is named by its path under std/.
+	// standard library is named by its path under std/, or by its path
+	// on the disk when the library is read from StdDir.
 	Parsed func(file *token.File, syntax *ast.File)
 
 	// At, when it names a file, is the place a completion asks about:
@@ -447,18 +464,10 @@ func (imp *Importer) Packages() []*Package { return imp.order }
 
 // Paths returns the import path of every package in the library,
 // once each: every directory holding the file named after it, as
-// isStd reads a package.
+// isStd reads a package. The list is the embedded library's, which
+// never changes while the compiler runs, so it is read once.
 func Paths() []string {
-	var paths []string
-	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && path.Base(name) == path.Base(path.Dir(name))+SourceExt {
-			paths = append(paths, path.Dir(name))
-		}
-
-		return nil
-	})
-
-	return paths
+	return slices.Clone(stdPaths())
 }
 
 // StdPackage reports whether dir is a standard package's directory in

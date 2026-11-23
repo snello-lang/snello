@@ -239,11 +239,11 @@ func CheckDir(dir string, info *types.Info, o Options) error {
 // CheckTests checks the tests of the library package in dir as snello
 // test loads them, by path, the import path they are reached by: the
 // package's own, whose test files join it, or its external test
-// package's, NAME_test, which imports it; a standard package's in a
-// checkout of the compiler with the library read from the checkout. o
-// says how the program is read. An error keeps the file and position
-// it names, so that the language server reports it on the test file it
-// is in.
+// package's, NAME_test, which imports it. The tests of a standard
+// package in a checkout of the compiler are checked with the library
+// read from the checkout. o says how the program is read. An error
+// keeps the file and position it names, so that the language server
+// reports it on the test file it is in.
 func CheckTests(dir, path string, info *types.Info, o Options) error {
 	if stdDir, _, ok := StdPackage(dir); ok {
 		return checkStd(stdDir, path, path, info, o.withTarget())
