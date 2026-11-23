@@ -18,6 +18,10 @@ import (
 // member is undefined.
 func (c *Checker) collectImports(f *ast.File, scope *Scope) {
 	for _, imp := range f.Imports {
+		if len(imp.Path.Value) < len(`""`) { // a quote alone, in a file that does not parse, which the parser reported
+			continue
+		}
+
 		path := imp.Path.Value[1 : len(imp.Path.Value)-1] // strip the quotes
 		name := path[strings.LastIndexByte(path, '/')+1:]
 		pkg := NewPkgName(imp.Pos(), name, path)

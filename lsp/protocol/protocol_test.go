@@ -14,7 +14,8 @@ import (
 // document, which are an empty list and not null, a hover and a
 // location; the capabilities of symbols, references and rename, the
 // last as true or as its options; an outline as a tree and as a list;
-// a rename's edits and the answer that it may.
+// a rename's edits and the answer that it may; completion's capability
+// and its list, an empty one as an empty list.
 func TestEncode(t *testing.T) {
 	version := int32(3)
 	tests := []struct {
@@ -56,6 +57,9 @@ func TestEncode(t *testing.T) {
 		{SymbolInformation{Name: "Round", Kind: SymbolKindEnumMember, Location: Location{URI: "file:///a.snello"}, ContainerName: "Kind"}, `{"name":"Round","kind":22,"location":{"uri":"file:///a.snello","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}},"containerName":"Kind"}`},
 		{WorkspaceEdit{Changes: map[DocumentURI][]TextEdit{"file:///a.snello": {{NewText: "Biggest"}}}}, `{"changes":{"file:///a.snello":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"Biggest"}]}}`},
 		{PrepareRenameResult{Placeholder: "Largest"}, `{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"placeholder":"Largest"}`},
+		{ServerCapabilities{CompletionProvider: &CompletionOptions{TriggerCharacters: []string{".", "\""}}}, `{"completionProvider":{"triggerCharacters":[".","\""]}}`},
+		{CompletionList{Items: []CompletionItem{{Label: "Area", Kind: CompletionItemKindMethod, Detail: "func (r ref Rect) Area() f64", SortText: "00000"}}}, `{"isIncomplete":false,"items":[{"label":"Area","kind":2,"detail":"func (r ref Rect) Area() f64","sortText":"00000"}]}`},
+		{CompletionList{Items: []CompletionItem{}}, `{"isIncomplete":false,"items":[]}`},
 	}
 
 	for _, tt := range tests {

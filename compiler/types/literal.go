@@ -52,6 +52,10 @@ func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 			t = aliases[1] // rune
 		}
 
+		if len(lit.Value) < len("''") { // a quote alone, in a file that does not parse
+			return t
+		}
+
 		if r, _, _, err := strconv.UnquoteChar(lit.Value[1:len(lit.Value)-1], '\''); err == nil {
 			c.holds(lit, uint64(r), false, t)
 		}
@@ -329,7 +333,7 @@ func (c *Checker) structLit(e *ast.CompositeLit, t Type, st *Struct, done map[as
 			continue
 		}
 
-		if !c.visible(t, key, f) {
+		if !c.visible(t, key) {
 			c.expr(kv.Value, nil)
 			continue
 		}

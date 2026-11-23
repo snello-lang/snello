@@ -13,14 +13,14 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
-// Traits take the place go/types gives interfaces, with one difference
-// at the root: a type implements a trait because its declaration says
-// so, struct Circle impl Shape, not because its methods happen to
-// match. A trait's methods are declared with Self as the receiver's
-// type, and Self is a type parameter of the trait, so that asking
-// whether Circle implements Shape is the same substitution an instance
-// of a generic type goes through: put Circle in for Self and compare
-// each required method with the one Circle declares. A type parameter
+// Traits are how a type says what it can do: a type implements a trait
+// because its declaration says so, struct Circle impl Shape, never
+// because its methods happen to match. A trait's methods are declared
+// with Self as the receiver's type, and Self is a type parameter of the
+// trait, so that asking whether Circle implements Shape is the same
+// substitution an instance of a generic type goes through: put Circle
+// in for Self and compare each required method with the one Circle
+// declares. A type parameter
 // bounded by a trait, T: Shape, sees the trait's methods with itself in
 // for Self, which is how x.Area() checks on an x of type T; the backend
 // writes the call against the type argument's own method, one copy per
@@ -78,6 +78,7 @@ type traitDefault struct {
 	tdecl *ast.TraitDecl
 	decl  *ast.FuncDecl
 	fn    *Func
+	file  int // the index of the file the trait is declared in, whose imports the body sees
 }
 
 // NewTrait returns a trait named by obj with no methods yet, and sets
@@ -952,7 +953,7 @@ func (c *Checker) resolveTrait(d *ast.TraitDecl, tr *Trait) {
 
 		if m.Body != nil {
 			tr.defaults = append(tr.defaults, fn)
-			c.defaults = append(c.defaults, traitDefault{tr, d, m, fn})
+			c.defaults = append(c.defaults, traitDefault{tr, d, m, fn, c.fileIndex})
 			continue
 		}
 
@@ -963,9 +964,13 @@ func (c *Checker) resolveTrait(d *ast.TraitDecl, tr *Trait) {
 // checkDefaultBodies checks the body of every default method, once,
 // as a function whose receiver is of type Self: inside it a value of
 // Self has the trait's methods and nothing else, and moves unless the
-// trait refines Copy.
+// trait refines Copy. Each body is checked in the file its trait is
+// declared in, with that file's imports and no other's.
 func (c *Checker) checkDefaultBodies() {
+	was := c.here()
+	defer c.restore(was)
 	for _, d := range c.defaults {
+		c.enter(d.file)
 		sig := d.fn.typ.(*Signature)
 		if d.trait.tparams != nil {
 			c.openTypeParams(paramNames(d.tdecl.TypeParams), d.trait.tparams)

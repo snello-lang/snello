@@ -586,9 +586,17 @@ func isBool(t Type) bool {
 }
 
 // nodeEnd is where a match arm's body ends, for a message: the closing
-// brace of a block, or where an expression begins.
+// brace of a block, or where an expression begins; no position for an
+// arm the parser left without a body, in a file that does not parse.
 func nodeEnd(n ast.Node) token.Pos {
-	if b, ok := n.(*ast.BlockStmt); ok {
+	switch b := n.(type) {
+	case nil:
+		return token.NoPos
+	case *ast.BlockStmt:
+		if b == nil {
+			return token.NoPos
+		}
+
 		return b.Rbrace
 	}
 

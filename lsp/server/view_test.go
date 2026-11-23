@@ -182,7 +182,7 @@ func TestDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v, o := New(nil, io.Discard, io.Discard).begin(nil, platform.Host())
+	v, o := New(nil, io.Discard, io.Discard).begin(nil, platform.Host(), importer.Place{})
 	if _, _, err := importer.LoadProgramFrom(o.Load([]string{path}), v.info); err == nil || !strings.Contains(err.Error(), "mismatched") {
 		t.Fatalf("the check: %v, want the one error of the comparison", err)
 	}

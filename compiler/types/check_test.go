@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -608,5 +609,73 @@ func TestCheckFiles(t *testing.T) {
 				t.Errorf("%q: error %d = %q, want it to contain %q", tt.files, i, got[i], w)
 			}
 		}
+	}
+}
+
+// TestAt records the names visible at Config.At as the checker resolves
+// the name there: the locals of the blocks around it and the function's
+// parameters, the package's names, the imports and the universe's, the
+// innermost first; no local declared further on or in another block;
+// and nothing for a check with no position.
+func TestAt(t *testing.T) {
+	const src = `package p
+
+import "strings"
+
+var top int
+
+func f(param int) int {
+	early := 1
+	if early > 0 {
+		inner := 2
+		_ = inner
+	}
+
+	for i := 0; i < 2; i++ {
+		inLoop := i
+		_ = inLoop + early + param + placeholder
+	}
+
+	late := 3
+	return late + len(strings.ToUpper("a"))
+}
+`
+	f, file, err := parser.ParseFile("p.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conf := libraryConfig()
+	conf.At = file.Pos(strings.Index(src, "placeholder"))
+	info := &Info{}
+	conf.Check("", file, f, info) // placeholder is undefined, and the check goes on
+
+	var names []string
+	for _, obj := range info.Visible {
+		names = append(names, obj.Name())
+	}
+
+	first := func(name string) int { return slices.Index(names, name) }
+	for _, name := range []string{"inLoop", "i", "early", "param", "top", "f", "strings", "len", "int"} {
+		if first(name) < 0 {
+			t.Errorf("%s is not visible: %q", name, names)
+		}
+	}
+
+	for _, name := range []string{"inner", "late"} {
+		if first(name) >= 0 {
+			t.Errorf("%s is visible, though it is declared in another block or further on", name)
+		}
+	}
+
+	if !(first("inLoop") < first("early") && first("early") < first("param") && first("param") < first("top") && first("top") < first("int")) {
+		t.Errorf("not the innermost first: %q", names)
+	}
+
+	conf.At = token.NoPos
+	again := &Info{}
+	conf.Check("", file, f, again)
+	if again.Visible != nil {
+		t.Errorf("a check with no position recorded %d names", len(again.Visible))
 	}
 }

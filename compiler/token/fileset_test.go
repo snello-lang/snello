@@ -46,3 +46,14 @@ func TestFileSet(t *testing.T) {
 		}
 	}
 }
+
+// TestIsRefused tells the keyword the parser refuses, switch, from the
+// keywords a construct begins with.
+func TestIsRefused(t *testing.T) {
+	for k := range NumKinds {
+		kind := Kind(k)
+		if want := kind == SWITCH; kind.IsRefused() != want {
+			t.Errorf("%s.IsRefused() = %v, want %v", kind, kind.IsRefused(), want)
+		}
+	}
+}

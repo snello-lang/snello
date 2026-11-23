@@ -13,6 +13,32 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// membersSrc is a package of traits, a type that implements one, a
+// generic type and a function bound by a trait, whose members the
+// tests of Named.Methods and TypeParam.Methods list.
+const membersSrc = `package p
+
+trait Shape {
+	var label string
+	func (s ref Self) Area() f64
+	func (s ref Self) Twice() f64 { return 2.0 * s.Area() }
+}
+
+trait Ordered: Shape {
+	func (s ref Self) Less(o ref Self) bool
+}
+
+struct Rect impl Shape { w f64 }
+
+func (r ref Rect) Area() f64 { return r.w }
+
+struct Box<T> { v T }
+
+func (b ref Box<T>) Get() ref T { return ref b.v }
+
+func Use<T: Ordered>(x ref T) bool { return x.Less(x) }
+`
+
 // The declared types the tests share: struct Node { value string; next *Node? },
 // struct Point { x, y f64 }, enum Token { Num(f64); Plus }, enum State
 // { Closed; Open(Node) }, type NodeID int.
@@ -394,4 +420,44 @@ func TestStructDefault(t *testing.T) {
 	if n := len(pkg.defaults); n != 3 {
 		t.Errorf("the package holds %d defaults, want 3: Size.h, Box.n, which its instance shares, and Tag.n", n)
 	}
+}
+
+// TestMethods lists a type's methods, its own and the defaults its
+// traits give it, and an instance's, its arguments in place.
+func TestMethods(t *testing.T) {
+	pkg := checkMembers(t)
+	names := func(fns []*Func) string {
+		var out []string
+		for _, f := range fns {
+			out = append(out, f.Name()+" "+f.Type().String())
+		}
+
+		return fmt.Sprint(out)
+	}
+
+	if got := names(pkg.Scope().Lookup("Rect").Type().(*Named).Methods()); got != "[Area func() f64 Twice func() f64]" {
+		t.Errorf("Rect's methods: %s", got)
+	}
+
+	box := pkg.Scope().Lookup("Box").Type().(*Named)
+	if got := names(Instantiate(box, []Type{Typ[Int]}).Methods()); got != "[Get func() ref int]" {
+		t.Errorf("Box<int>'s methods: %s", got)
+	}
+}
+
+// checkMembers checks membersSrc, a package of traits, a type that
+// implements one, a generic type and a function bound by a trait.
+func checkMembers(t *testing.T) *Package {
+	t.Helper()
+	f, file, err := parser.ParseFile("p.snello", []byte(membersSrc))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := libraryConfig().Check("", file, f, &Info{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return pkg
 }

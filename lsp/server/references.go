@@ -313,7 +313,7 @@ func (s *Server) checkDirs(found *search, dirs []string) {
 		}
 
 		for _, t := range targetsOf(dir) {
-			reports, views := s.checks(dir, nil, t)
+			reports, views := s.checks(dir, nil, t, importer.Place{})
 			for i, cv := range views {
 				cv.trim(ownFiles(dir, cv))
 				found.checks = append(found.checks, checked{dir, t, reports[i], cv})
@@ -621,7 +621,7 @@ func (s *Server) renamed(found *search, name string) map[string][]byte {
 func (s *Server) refused(found *search, over map[string][]byte, name string) string {
 	var again []checked
 	for _, c := range found.checks {
-		reports, views := s.checks(c.dir, over, c.target)
+		reports, views := s.checks(c.dir, over, c.target, importer.Place{})
 		for i, cv := range views {
 			cv.trim(ownFiles(c.dir, cv))
 			again = append(again, checked{c.dir, c.target, reports[i], cv})

@@ -50,6 +50,10 @@ func (c *Checker) endScope(end token.Pos) {
 // past it: a return, a call that never returns, or a compound statement
 // all of whose paths leave.
 func (c *Checker) stmt(s ast.Stmt) bool {
+	if unfinished(s) { // the parser reported it, and a load that checks what it recovered gives it here
+		return false
+	}
+
 	lent, temps := len(c.temps), c.tempMark()
 	defer func() {
 		c.temps = c.temps[:lent]          // what the statement lent is given back
@@ -1334,6 +1338,26 @@ func matchHasBreak(m *ast.MatchExpr) bool {
 				return true
 			}
 		}
+	}
+
+	return false
+}
+
+// unfinished reports whether s is a statement the parser left without
+// the body its form has, an if, a for or a loop over a range written
+// without its block, which only a file that does not parse holds: the
+// parser reported it, and a check of the file as the parser recovered
+// it passes it over.
+func unfinished(s ast.Stmt) bool {
+	switch s := s.(type) {
+	case *ast.IfStmt:
+		return s.Body == nil
+	case *ast.IfBindStmt:
+		return s.Body == nil
+	case *ast.ForStmt:
+		return s.Body == nil
+	case *ast.RangeStmt:
+		return s.Body == nil
 	}
 
 	return false

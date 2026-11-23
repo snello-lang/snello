@@ -27,12 +27,12 @@
 // `snello version` prints that version, the commit, the channel and
 // the platform. Three more commands inspect the compiler by hand:
 // `snello lex FILE` prints the token stream, `snello parse FILE` the
-// syntax tree with its comments, and `snello emit FILE|DIR` the IR module, or with
-// -backend c the C source, that build would compile; `snello check
-// FILE|DIR` prints what the checker finds. `snello new DIR` starts a
-// module in a new directory, with a program and its test, and `snello
-// run FILE|DIR [ARGS]` builds a program, runs it with ARGS, passes its
-// exit code on and leaves no file behind.
+// syntax tree with its comments, and `snello emit FILE|DIR` the IR
+// module, or with -backend c the C source, that build would compile;
+// `snello check FILE|DIR` prints what the checker finds. `snello new
+// DIR` starts a module in a new directory, with a program and its test,
+// and `snello run FILE|DIR [ARGS]` builds a program, runs it with ARGS,
+// passes its exit code on and leaves no file behind.
 package main
 
 import (
@@ -409,9 +409,9 @@ func printErrors(w io.Writer, err error) {
 }
 
 // readSource reads a Snello source file, reporting a failure to stderr.
-// The name must end in .snello, as the Go tool insists on .go: it keeps a
-// stray file from being compiled as Snello, and it keeps build from
-// writing the binary over a source file with no extension to strip.
+// The name must end in .snello: it keeps a stray file from being
+// compiled as Snello, and it keeps build from writing the binary over a
+// source file with no extension to strip.
 func readSource(path string) ([]byte, bool) {
 	if !isSource(path, os.Stderr) {
 		return nil, false

@@ -67,7 +67,7 @@ trait Shape {
 }
 ```
 
-Inside the body, `s` is a value of `Self`, and `Self` has exactly the trait's methods: `s.Name()` and `s.Area()` are fine, and whatever type implements `Shape` supplies them. Nothing else about `Self` is known, so a value of `Self` moves when passed or assigned, as a value of a type parameter does, unless the trait refines `Copy`. The body is checked once, when the trait is declared, not once per implementing type.
+Inside the body, `s` is a value of `Self`, and `Self` has exactly the trait's methods: `s.Name()` and `s.Area()` are fine, and whatever type implements `Shape` supplies them. Nothing else about `Self` is known, so a value of `Self` moves when passed or assigned, as a value of a type parameter does, unless the trait refines `Copy`. The body is checked once, when the trait is declared, not once per implementing type, and in the file the trait is declared in: it sees that file's imports and no other's, as every function of the file does.
 
 A type that declares the method overrides the default:
 
@@ -76,6 +76,10 @@ func (r ref Rect) Describe() string { return "a rectangle" }
 ```
 
 A `Circle impl Shape` with no `Describe` of its own gets the trait's, so `circles[0].Describe()` prints `circle with area 3`, and `rects[0].Describe()` prints `a rectangle`. An override must have the signature the trait gives the method, as a required method must. A default may also satisfy another trait's requirement: a type implementing both a trait that requires `Name` and one that provides a default `Name` has it.
+
+## A trait's members across packages
+
+A member a trait declares with a name that is not exported, a field, a required method or a default, belongs to the trait's package. Another package cannot read the field or call the method, by any road: not on a type of its own that implements the trait and holds the field or inherits the default, not through a value of the trait, and not through a type parameter the trait bounds. `x.tag` and `m.hidden()` are refused with `tag of Mine is not exported`, as a struct's unexported field is; the trait's own package names them through any of these. A type of another package may still declare a method of the same name, which the trait's own code then calls as the trait's.
 
 ## Which default a type gets
 

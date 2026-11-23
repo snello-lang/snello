@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package importer loads the packages a program imports, as
-// go/importer serves go/types: a standard package from the copy std
+// Package importer loads the packages a program imports, for the
+// checker to import from: a standard package from the copy std
 // embeds in the compiler, and a package of the program's own from the
 // directory its import path names under the program's module, each
 // parsed and checked once.
@@ -89,6 +89,18 @@ type Importer struct {
 	// standard library is named by its path under std/.
 	Parsed func(file *token.File, syntax *ast.File)
 
+	// At, when it names a file, is the place a completion asks about:
+	// the check that reaches it records the names visible there, as
+	// types.Config.At says.
+	At Place
+
+	// Recovered checks a package with a file that does not parse, as
+	// the parser recovered it, and reports the parse's errors with the
+	// check's, for a completion on a line typed half way, which a build
+	// never asks: what the check records of the names is all it reads.
+	Recovered bool
+
+	at      token.Pos      // At as a position, once its file is parsed
 	fset    *token.FileSet // every file the importer parses, so that a position names one file of the program
 	std     types.Config   // the standard library is checked with its privileges
 	own     types.Config   // a package of the program's own without them
@@ -501,7 +513,12 @@ func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]stri
 // package named path, and returns it with one entry per file, for the
 // caller to record.
 func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, links []string, conf *types.Config) (*types.Package, []*Package, error) {
-	files, syntax, err := imp.parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
+	files, syntax, parseErr := imp.parseFiles(names, srcs, imp.Comments != nil && imp.Comments(path))
+	var err error
+	if parseErr != nil && !imp.Recovered {
+		err = parseErr
+	}
+
 	if err == nil {
 		err = checkTestImports(names, syntax, conf.Standard)
 	}
@@ -509,6 +526,10 @@ func (imp *Importer) load(path string, names []string, srcs [][]byte, cfiles, li
 	var pkg *types.Package
 	if err == nil {
 		pkg, err = conf.CheckFiles(path, files, syntax, imp.info)
+	}
+
+	if parseErr != nil {
+		err = parseErr // a file that does not parse reports its syntax errors alone
 	}
 
 	if err != nil {

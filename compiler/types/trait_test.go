@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // traitPrelude declares the traits and types the cases use: a trait
@@ -476,5 +478,42 @@ struct Plain { n int }
 
 	if !labelled.RefinesDecl(box) || box.RefinesDecl(labelled) || !box.RefinesDecl(box) {
 		t.Error("RefinesDecl does not follow a generic trait's refinements")
+	}
+}
+
+// TestDefaultImports checks a trait's default method in the file the
+// trait is declared in: with that file's imports, and not with those of
+// another file of the package, which another file's last turn checked
+// it with.
+func TestDefaultImports(t *testing.T) {
+	const imports = "package p\n\nimport \"sync\"\n\nfunc counter() int { return sync.NewCounter(0).Load() }\n"
+	tests := []struct {
+		name, traitFile, want string
+	}{
+		{"a file without the import", "package p\n\ntrait Shape {\n\tfunc (s ref Self) Sides() int { return sync.NewCounter(3).Load() }\n}\n", "undefined: sync"},
+		{"the file with the import", "package p\n\nimport \"sync\"\n\ntrait Shape {\n\tfunc (s ref Self) Sides() int { return sync.NewCounter(3).Load() }\n}\n", ""},
+	}
+
+	for _, tt := range tests {
+		fset := token.NewFileSet()
+		var files []*token.File
+		var syntax []*ast.File
+		for i, src := range []string{tt.traitFile, imports} {
+			file := fset.AddFile([]string{"shape.snello", "zz_counter.snello"}[i], len(src))
+			f, err := parser.Parse(file, []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			files, syntax = append(files, file), append(syntax, f)
+		}
+
+		_, err := libraryConfig().CheckFiles("", files, syntax, &Info{})
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s: %v, want none", tt.name, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
+		}
 	}
 }

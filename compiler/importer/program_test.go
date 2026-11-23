@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -538,6 +539,136 @@ func TestFailedOnce(t *testing.T) {
 	for name, n := range parsed {
 		if n != 1 {
 			t.Errorf("%s parsed %d times, want once", name, n)
+		}
+	}
+}
+
+// TestAt records the names visible at the place At names, a name of
+// the program's own file and one of a package of the module it imports,
+// which is parsed and checked after the program's file; the name there
+// resolves, and the record is made as it does.
+func TestAt(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		ModFile:          "snello 0.1.0\n",
+		"main.snello":    "package main\n\nimport \"lib\"\n\nfunc main() {\n\tmine := 1\n\t_ = mine + lib.F()\n}\n",
+		"lib/lib.snello": "package lib\n\nfunc F() int {\n\tlibs := 2\n\treturn libs\n}\n",
+	})
+
+	for file, at := range map[string]string{"main.snello": "mine + ", "lib/lib.snello": "libs\n}"} {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		info := &types.Info{}
+		if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, At: Place{File: path, Offset: strings.Index(string(src), at)}}, info); err != nil {
+			t.Fatal(err)
+		}
+
+		want := strings.Fields(at)[0]
+		if !slices.ContainsFunc(info.Visible, func(o types.Object) bool { return o.Name() == want }) {
+			t.Errorf("at %s in %s: %d names visible, want %s among them", want, file, len(info.Visible), want)
+		}
+	}
+}
+
+// TestRecovered checks a file that does not parse, a line typed half
+// way, as the parser recovered it when a load asks, recording the names
+// visible at the place and reporting the parse's error; a load that
+// does not ask stops at the parse, and records nothing.
+func TestRecovered(t *testing.T) {
+	const src = "package main\n\nfunc main() {\n\tmine := 1\n\tif min\n}\n"
+	root := writeTree(t, map[string]string{"main.snello": src})
+	path := filepath.Join(root, "main.snello")
+	for _, recovered := range []bool{false, true} {
+		info := &types.Info{}
+		_, _, err := LoadProgramFrom(Load{Names: []string{path}, At: Place{File: path, Offset: strings.Index(src, "min\n")}, Recovered: recovered}, info)
+		if err == nil || !strings.Contains(err.Error(), "expected") {
+			t.Errorf("recovered %v: %v, want the parse's error", recovered, err)
+		}
+
+		if got := slices.ContainsFunc(info.Visible, func(o types.Object) bool { return o.Name() == "mine" }); got != recovered {
+			t.Errorf("recovered %v: mine visible %v, want %v", recovered, got, recovered)
+		}
+	}
+}
+
+// TestRecoveredNoPanic checks, as a load that asks checks a file that
+// does not parse, every example's file and every feature program the
+// backends are tested on, each cut in the two ways a file being
+// typed is: ended part way, and with a stretch taken out, at places
+// spread over the file, a completion's place at the cut; the check
+// reports the parse's errors and never panics, whatever the parser left.
+func TestRecoveredNoPanic(t *testing.T) {
+	const cuts, stretch = 16, 5
+	examples, err := filepath.Glob(filepath.Join("..", "..", "examples", "*", "*.snello"))
+	if err != nil || len(examples) == 0 {
+		t.Fatalf("no examples: %v", err)
+	}
+
+	features, err := filepath.Glob(filepath.Join("..", "emit", "internal", "backendtest", "testdata", "*.snello"))
+	if err != nil || len(features) == 0 {
+		t.Fatalf("no feature programs: %v", err)
+	}
+
+	paths := append(examples, features...)
+
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for i := 1; i <= cuts; i++ {
+			at := len(src) * i / (cuts + 1)
+			for form, text := range map[string][]byte{
+				"ended":   src[:at],
+				"cut out": slices.Concat(src[:at], src[min(at+stretch, len(src)):]),
+			} {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							t.Errorf("%s %s at %d: the check panicked: %v\n%s", filepath.Base(path), form, at, r, debug.Stack())
+						}
+					}()
+
+					LoadProgramFrom(Load{Names: []string{path}, Srcs: [][]byte{text}, Standalone: true, Recovered: true, At: Place{File: path, Offset: at}}, &types.Info{})
+				}()
+			}
+		}
+	}
+}
+
+// TestUnexportedMembers refuses a program the unexported members of a
+// trait of another package, by whatever way it reaches them: a field
+// the trait gives its own type, a default its own type inherits, from
+// the trait or from one it refines, and a member through a value of the
+// trait and through a type parameter bound by it; and a generic type's
+// unexported field on an instance; and lets it reach the exported ones.
+func TestUnexportedMembers(t *testing.T) {
+	const lib = "package lib\n\ntrait Tagged {\n\tvar tag int\n\tfunc (t ref Self) hidden() int { return 1 }\n\tfunc (t ref Self) Shown() int { return 2 }\n}\n\ntrait Labeled: Tagged {}\n\nstruct Box<T> { v T }\n\nfunc Box<T>.Of(v T) Box<T> { return Box<T>{v: v} }\n"
+	tests := []struct {
+		name, body, want string
+	}{
+		{"a field the trait gives", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{tag: 1, n: 2}; _ = m.tag }\n", "tag of Mine is not exported"},
+		{"an inherited default", "struct Mine impl lib.Tagged { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
+		{"through a trait value", "func use(x ref lib.Tagged) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of Tagged is not exported"},
+		{"a field through a trait value", "func use(x ref lib.Tagged) int { return x.tag }\n\nfunc main() {}\n", "tag of Tagged is not exported"},
+		{"through a bound", "func use<T: lib.Tagged>(x ref T) int { return x.hidden() }\n\nfunc main() {}\n", "hidden of T is not exported"},
+		{"a refined trait's default", "struct Mine impl lib.Labeled { n int }\n\nfunc main() { m := Mine{n: 2}; _ = m.hidden() }\n", "hidden of Mine is not exported"},
+		{"a generic instance's field", "func main() { b := lib.Box<int>.Of(1); _ = b.v }\n", "v of lib.Box<int> is not exported"},
+		{"the exported ones", "struct Mine impl lib.Tagged { n int }\n\nfunc use<T: lib.Tagged>(x ref T) int { return x.Shown() }\n\nfunc main() { m := Mine{n: 2}; _ = m.Shown() + use(ref m) }\n", ""},
+	}
+
+	for _, tt := range tests {
+		root := writeTree(t, map[string]string{ModFile: "snello 0.1.0\n", "lib/lib.snello": lib, "main.snello": "package main\n\nimport \"lib\"\n\n" + tt.body})
+		_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}}, &types.Info{})
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s: %v, want none", tt.name, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
 		}
 	}
 }

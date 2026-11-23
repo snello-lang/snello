@@ -5,7 +5,7 @@
 // Package protocol holds the types of the Language Server Protocol the
 // server uses, and only those: the handshake, the document
 // notifications, the diagnostics, hover and definition, symbols,
-// references and rename. Each type and field is named as
+// references, rename and completion. Each type and field is named as
 // the specification names it and encoded as its JSON spells it, so that
 // a reader can hold the two side by side. It is modeled on the Language
 // Server Protocol specification, 3.17.
@@ -29,6 +29,7 @@ const (
 	MethodReferences         = "textDocument/references"
 	MethodPrepareRename      = "textDocument/prepareRename"
 	MethodRename             = "textDocument/rename"
+	MethodCompletion         = "textDocument/completion"
 
 	// The units a position's character counts in, which the client
 	// offers and the server picks: UTF-16 code units, the protocol's
@@ -40,6 +41,46 @@ const (
 	// renders: Markdown, or plain text, which every client renders.
 	MarkupKindMarkdown  = "markdown"
 	MarkupKindPlainText = "plaintext"
+
+	// How a change is sent, by the protocol's numbers: not at all, as
+	// the whole text, or as the ranges that changed.
+	TextDocumentSyncKindNone        TextDocumentSyncKind = 0
+	TextDocumentSyncKindFull        TextDocumentSyncKind = 1
+	TextDocumentSyncKindIncremental TextDocumentSyncKind = 2
+
+	// How serious a diagnostic is, by the protocol's numbers.
+	SeverityError       DiagnosticSeverity = 1
+	SeverityWarning     DiagnosticSeverity = 2
+	SeverityInformation DiagnosticSeverity = 3
+	SeverityHint        DiagnosticSeverity = 4
+
+	// The kinds of symbol the server gives, by the protocol's numbers.
+	SymbolKindClass      SymbolKind = 5
+	SymbolKindMethod     SymbolKind = 6
+	SymbolKindField      SymbolKind = 8
+	SymbolKindEnum       SymbolKind = 10
+	SymbolKindInterface  SymbolKind = 11
+	SymbolKindFunction   SymbolKind = 12
+	SymbolKindVariable   SymbolKind = 13
+	SymbolKindConstant   SymbolKind = 14
+	SymbolKindEnumMember SymbolKind = 22
+	SymbolKindStruct     SymbolKind = 23
+
+	// The kinds of completion item the server gives, by the protocol's
+	// numbers.
+	CompletionItemKindMethod        CompletionItemKind = 2
+	CompletionItemKindFunction      CompletionItemKind = 3
+	CompletionItemKindField         CompletionItemKind = 5
+	CompletionItemKindVariable      CompletionItemKind = 6
+	CompletionItemKindClass         CompletionItemKind = 7
+	CompletionItemKindInterface     CompletionItemKind = 8
+	CompletionItemKindModule        CompletionItemKind = 9
+	CompletionItemKindEnum          CompletionItemKind = 13
+	CompletionItemKindKeyword       CompletionItemKind = 14
+	CompletionItemKindEnumMember    CompletionItemKind = 20
+	CompletionItemKindConstant      CompletionItemKind = 21
+	CompletionItemKindStruct        CompletionItemKind = 22
+	CompletionItemKindTypeParameter CompletionItemKind = 25
 )
 
 // A DocumentURI names a document, file:///home/me/a.snello for a file.
@@ -150,6 +191,14 @@ type ServerCapabilities struct {
 	// RenameProvider is true, or RenameOptions for a client that asks
 	// before it renames.
 	RenameProvider any `json:"renameProvider,omitempty"`
+
+	CompletionProvider *CompletionOptions `json:"completionProvider,omitempty"`
+}
+
+// CompletionOptions names the characters that ask for a completion as
+// they are typed, besides the letters of a name.
+type CompletionOptions struct {
+	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
 }
 
 // RenameOptions says the server answers prepareRename.
@@ -168,12 +217,6 @@ type TextDocumentSyncOptions struct {
 // TextDocumentSyncKind is how a change is sent: not at all, as the
 // whole text, or as the ranges that changed.
 type TextDocumentSyncKind int
-
-const (
-	TextDocumentSyncKindNone TextDocumentSyncKind = iota
-	TextDocumentSyncKindFull
-	TextDocumentSyncKindIncremental
-)
 
 // SaveOptions says whether a save sends the document's text.
 type SaveOptions struct {
@@ -254,13 +297,6 @@ type Diagnostic struct {
 // DiagnosticSeverity is how serious a diagnostic is.
 type DiagnosticSeverity int
 
-const (
-	SeverityError DiagnosticSeverity = iota + 1
-	SeverityWarning
-	SeverityInformation
-	SeverityHint
-)
-
 // TextDocumentPositionParams is a place in a document a request asks
 // about: what hover and definition are asked with.
 type TextDocumentPositionParams struct {
@@ -294,20 +330,6 @@ type DocumentSymbolParams struct {
 
 // A SymbolKind is what a symbol is, as an editor marks it.
 type SymbolKind int
-
-// The kinds of symbol the server gives, by the protocol's numbers.
-const (
-	SymbolKindClass      SymbolKind = 5
-	SymbolKindMethod     SymbolKind = 6
-	SymbolKindField      SymbolKind = 8
-	SymbolKindEnum       SymbolKind = 10
-	SymbolKindInterface  SymbolKind = 11
-	SymbolKindFunction   SymbolKind = 12
-	SymbolKindVariable   SymbolKind = 13
-	SymbolKindConstant   SymbolKind = 14
-	SymbolKindEnumMember SymbolKind = 22
-	SymbolKindStruct     SymbolKind = 23
-)
 
 // A DocumentSymbol is a declaration of a document's outline: its name,
 // kind, the stretch of its whole declaration and that of its name, and
@@ -387,4 +409,30 @@ type OptionalVersionedTextDocumentIdentifier struct {
 type TextEdit struct {
 	Range   Range  `json:"range"`
 	NewText string `json:"newText"`
+}
+
+// CompletionParams is a place a completion is asked for.
+type CompletionParams struct {
+	TextDocumentPositionParams
+}
+
+// A CompletionItemKind is what a completion's item is, as an editor
+// marks it.
+type CompletionItemKind int
+
+// A CompletionList is the items of a completion, every one there is.
+type CompletionList struct {
+	IsIncomplete bool             `json:"isIncomplete"`
+	Items        []CompletionItem `json:"items"`
+}
+
+// A CompletionItem is a name a completion offers: what is written, its
+// kind, its declaration, the text an editor sorts it by, and the edit
+// that writes it, for one that is not a name.
+type CompletionItem struct {
+	Label    string             `json:"label"`
+	Kind     CompletionItemKind `json:"kind,omitempty"`
+	Detail   string             `json:"detail,omitempty"`
+	SortText string             `json:"sortText,omitempty"`
+	TextEdit *TextEdit          `json:"textEdit,omitempty"`
 }

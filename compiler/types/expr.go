@@ -256,7 +256,7 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 	if named, ok := base.(*Named); ok {
 		if st, ok := named.Underlying().(*Struct); ok {
 			if f := fieldNamed(st.fields, e.Sel.Name); f != nil {
-				if !c.visible(named, e.Sel, f) {
+				if !c.visible(named, e.Sel) {
 					return invalidOperand
 				}
 
@@ -268,7 +268,7 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 
 		if fn := named.Method(e.Sel.Name); fn != nil {
-			if !c.visible(named, e.Sel, nil) {
+			if !c.visible(named, e.Sel) {
 				return invalidOperand
 			}
 
@@ -347,6 +347,10 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		param = t
 	}
 
+	if (f != nil || fn != nil) && !c.visible(base, e.Sel) {
+		return invalidOperand
+	}
+
 	if f != nil {
 		c.recordUse(e.Sel, f)
 		c.checkUse(e)
@@ -411,11 +415,14 @@ func (c *Checker) typeFunc(e *ast.SelectorExpr, t Type) operand {
 		}
 
 		fn = t.Method(e.Sel.Name)
-		if fn != nil && !c.visible(t, e.Sel, nil) {
+		if fn != nil && !c.visible(t, e.Sel) {
 			return invalidOperand
 		}
 	case *TypeParam:
 		fn = t.boundMethod(e.Sel.Name)
+		if fn != nil && !c.visible(t, e.Sel) {
+			return invalidOperand
+		}
 	}
 
 	switch {
@@ -481,28 +488,78 @@ func (c *Checker) packageMember(e *ast.SelectorExpr, pkg *PkgName) operand {
 }
 
 // visible reports whether the field or method sel of a value of type t
-// may be named here: always inside the package that declares it, and
-// elsewhere only when the name is exported, as in Go. A field is the
-// package's that declared its struct, so a type declared over another
-// package's struct does not open its fields. A name that is not
-// visible is reported.
-func (c *Checker) visible(t Type, sel *ast.Ident, field *Var) bool {
-	n, ok := t.(*Named)
-	if !ok || ast.IsExported(sel.Name) {
+// may be named here: always inside the package that declares it,
+// Declarer's, and elsewhere only when the name is exported. A name that
+// is not visible is reported.
+func (c *Checker) visible(t Type, sel *ast.Ident) bool {
+	if ast.IsExported(sel.Name) {
 		return true
 	}
 
-	owner := n.obj.pkg
-	if field != nil && field.pkg != nil {
-		owner = field.pkg
-	}
-
-	if owner == nil || owner == c.pkg {
+	if owner := Declarer(t, sel.Name); owner == nil || owner == c.pkg {
 		return true
 	}
 
-	c.errorf(sel.Pos(), sel.Name+" of "+n.String()+" is not exported")
+	c.errorf(sel.Pos(), sel.Name+" of "+t.String()+" is not exported")
 	return false
+}
+
+// Declarer returns the package that declares the member name of a value
+// of type t, the one package whose code may name it when it is not
+// exported; nil for a member the language declares, or none. A struct's
+// field is the package's that declared the struct, so that a type
+// declared over another package's struct does not open its fields, or
+// that declared the trait that gives it; a method is the type's
+// package's, or, inherited from a trait's default, the trait's; a
+// member a trait value or a type parameter's bound has is the
+// package's of the trait that declares it.
+func Declarer(t Type, name string) *Package {
+	switch t := t.(type) {
+	case *Named:
+		if st, ok := t.Underlying().(*Struct); ok {
+			if f := fieldNamed(st.fields, name); f != nil {
+				if f.pkg != nil {
+					return f.pkg
+				}
+
+				return t.obj.pkg
+			}
+		}
+
+		if fn := t.Method(name); fn != nil {
+			if fn.trait != nil {
+				return fn.trait.origin().obj.pkg
+			}
+
+			return t.obj.pkg
+		}
+	case *Trait:
+		return traitDeclarer([]*Trait{t}, name)
+	case *TypeParam:
+		return traitDeclarer(t.bounds, name)
+	}
+
+	return nil
+}
+
+// traitDeclarer returns the package of the trait, among traits and the
+// traits they refine, that declares the member name, or nil.
+func traitDeclarer(traits []*Trait, name string) *Package {
+	for _, tr := range traits {
+		if tr == nil {
+			continue
+		}
+
+		if f, owner := tr.field(name); f != nil {
+			return owner.origin().obj.pkg
+		}
+
+		if fn, owner := tr.lookup(name); fn != nil {
+			return owner.origin().obj.pkg
+		}
+	}
+
+	return nil
 }
 
 // qualified resolves pkg.Name written as a type, a trait or a pattern,

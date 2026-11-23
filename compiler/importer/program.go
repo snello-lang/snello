@@ -35,6 +35,13 @@ type Program struct {
 	Pkg    *types.Package
 }
 
+// A Place is a place in a source file: the file's name, as the loader
+// is given it, and a byte offset in its text.
+type Place struct {
+	File   string
+	Offset int
+}
+
 // Options say how a check reads a program for a caller that only reads
 // it, the language server as the developer types. Target chooses every
 // package's files by their names, the zero Target the host's. Read
@@ -42,12 +49,17 @@ type Program struct {
 // disk, which nil reads. Cached resolves the module's requirements from
 // the module cache and the lock file alone, as Module.ResolveCached
 // says: nothing fetched, nothing written. Parsed is called with each
-// file the check parses, as Importer.Parsed says.
+// file the check parses, as Importer.Parsed says; At is the place a
+// completion asks about, as Importer.At says; and Recovered checks a
+// file that does not parse as the parser recovered it, as
+// Importer.Recovered says.
 type Options struct {
-	Target platform.Target
-	Read   func(name string) ([]byte, error)
-	Cached bool
-	Parsed func(file *token.File, syntax *ast.File)
+	Target    platform.Target
+	Read      func(name string) ([]byte, error)
+	Cached    bool
+	Parsed    func(file *token.File, syntax *ast.File)
+	At        Place
+	Recovered bool
 }
 
 // CheckMain reports why the program cannot be built: main is not
@@ -95,8 +107,10 @@ func LoadProgram(names []string, t platform.Target, info *types.Info) (*Importer
 // files are named, as a standard package's tests are. With no Srcs, the
 // sources are read through Read, the program's and every package's it
 // imports, or from the disk when Read is nil; Cached resolves the
-// module as Options.Cached says, and Parsed is called with each file
-// parsed, as Importer.Parsed says.
+// module as Options.Cached says, Parsed is called with each file
+// parsed, as Importer.Parsed says, At is the place a completion asks
+// about, as Importer.At says, and Recovered checks a file that does not
+// parse as the parser recovered it, as Importer.Recovered says.
 type Load struct {
 	Names      []string
 	Srcs       [][]byte
@@ -110,6 +124,8 @@ type Load struct {
 	Read       func(name string) ([]byte, error)
 	Cached     bool
 	Parsed     func(file *token.File, syntax *ast.File)
+	At         Place
+	Recovered  bool
 }
 
 // LoadProgramFrom loads a program from its sources, as LoadProgram
@@ -124,6 +140,8 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 	imp.StdDir = l.StdDir
 	imp.Read = l.Read
 	imp.Parsed = l.Parsed
+	imp.At = l.At
+	imp.Recovered = l.Recovered
 	if l.Srcs == nil {
 		l.Srcs = make([][]byte, len(l.Names))
 		for i, name := range l.Names {
@@ -150,9 +168,9 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 		}
 	}
 
-	files, syntax, err := imp.parseFiles(l.Names, l.Srcs, l.Comments)
-	if err != nil {
-		return nil, nil, err
+	files, syntax, parseErr := imp.parseFiles(l.Names, l.Srcs, l.Comments)
+	if parseErr != nil && !l.Recovered {
+		return nil, nil, parseErr
 	}
 
 	if err := checkTestImports(l.Names, syntax, false); err != nil {
@@ -172,8 +190,12 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 		}
 	}
 
-	conf := types.Config{Importer: imp}
+	conf := types.Config{Importer: imp, At: imp.at}
 	pkg, err := conf.CheckFiles("", files, syntax, info)
+	if parseErr != nil {
+		err = parseErr // a file that does not parse reports its syntax errors alone
+	}
+
 	if err != nil {
 		return nil, nil, err
 	}
@@ -230,15 +252,16 @@ func CheckTests(dir, path string, info *types.Info, o Options) error {
 // Load returns the load of the program of the files named, read as o
 // says.
 func (o Options) Load(names []string) Load {
-	return Load{Names: names, Target: o.Target, Read: o.Read, Cached: o.Cached, Parsed: o.Parsed}
+	return Load{Names: names, Target: o.Target, Read: o.Read, Cached: o.Cached, Parsed: o.Parsed, At: o.At, Recovered: o.Recovered}
 }
 
 // SourceFiles returns the .snello files of dir built for t, sorted by
 // name, each with its directory: the package the directory holds, and
 // none when it holds no package. A file named for another platform,
 // poll_linux.snello on macOS, is left out, as platform.Builds reads the
-// names, and so is one whose name begins with a dot or an underscore; a directory whose every
-// file is left out for another platform is refused, since it holds no
+// names, and so is one whose name begins with a dot or an underscore; a
+// directory whose every file is left out for another platform is
+// refused, since it holds no
 // package for t. A test file, NAME_test.snello, is not among them: it
 // is part of the package only when the package is tested.
 func SourceFiles(dir string, t platform.Target) ([]string, error) {
@@ -317,7 +340,7 @@ func importIn(m *Module, path, tests string, info *types.Info, o Options) error 
 	}
 
 	imp := NewImporter(info)
-	imp.Module, imp.Target, imp.Read, imp.Parsed, imp.Tests = m, o.Target, o.Read, o.Parsed, tests
+	imp.Module, imp.Target, imp.Read, imp.Parsed, imp.At, imp.Recovered, imp.Tests = m, o.Target, o.Read, o.Parsed, o.At, o.Recovered, tests
 	_, err := imp.ImportFrom(path, m.Dir)
 	return err
 }
@@ -448,7 +471,8 @@ func isC(name string) bool {
 // parseFiles parses the sources named into the importer's FileSet, so
 // that a position names one file of the program, and returns the files,
 // their syntax and the errors of every file together, each file given
-// to Parsed as it is parsed; comments asks for the files' comments.
+// to Parsed as it is parsed, and the file At names given its position
+// for every check after; comments asks for the files' comments.
 func (imp *Importer) parseFiles(names []string, srcs [][]byte, comments bool) ([]*token.File, []*ast.File, error) {
 	parse := parser.Parse
 	if comments {
@@ -467,6 +491,11 @@ func (imp *Importer) parseFiles(names []string, srcs [][]byte, comments bool) ([
 
 		if imp.Parsed != nil {
 			imp.Parsed(files[i], syntax[i])
+		}
+
+		if name == imp.At.File && imp.At.File != "" {
+			imp.at = files[i].Pos(imp.At.Offset)
+			imp.own.At, imp.std.At = imp.at, imp.at
 		}
 	}
 

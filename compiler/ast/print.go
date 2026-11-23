@@ -21,8 +21,8 @@ import (
 // belongs to: its doc comment as Doc, first, its line comment as
 // Comment and its attributes as Attrs, last.
 //
-// It walks the node with reflection, as go/ast.Fprint does, so that
-// adding a node type needs no change here.
+// It walks the node with reflection, so that adding a node type needs
+// no change here.
 func Fprint(w io.Writer, node Node, file *token.File) {
 	p := printer{w: w, file: file}
 	if f, ok := node.(*File); ok {

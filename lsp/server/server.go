@@ -304,6 +304,7 @@ func (s *Server) initialize(m *jsonrpc.Message) {
 			DocumentSymbolProvider:  true,
 			WorkspaceSymbolProvider: true,
 			RenameProvider:          rename,
+			CompletionProvider:      &protocol.CompletionOptions{TriggerCharacters: []string{dotTrigger, quoteTrigger}},
 		},
 		ServerInfo: &protocol.ServerInfo{Name: name, Version: version.Current},
 	})
