@@ -25,6 +25,35 @@ import (
 // argument a function that makes a type returns.
 const resultType = "Result"
 
+// The names of the forms the language writes with its own syntax, which
+// the builtin package documents: snello doc builtin map asks for one,
+// and a page links to it by it.
+const (
+	FormSlice   = "slice"
+	FormArray   = "array"
+	FormMap     = "map"
+	FormChan    = "chan"
+	FormPointer = "pointer"
+	FormRef     = "ref"
+	FormMut     = "mut"
+)
+
+// builtinForms are the forms the builtin package documents, each by its
+// name and the text its comment begins with, and formMark the text a
+// comment's line begins with, before what the comment says.
+var (
+	builtinForms = []struct{ name, written string }{
+		{FormSlice, "[]T"},
+		{FormArray, "[N]T"},
+		{FormMap, "map[K]V"},
+		{FormChan, "chan T"},
+		{FormPointer, "*T"},
+		{FormRef, "ref T"},
+		{FormMut, "mut T"},
+	}
+	formMark = len("// ")
+)
+
 // A Source is a package as loaded for its documentation.
 type Source struct {
 	Path       string                           // its import path; "builtin" for the predeclared names, "" for a program's main
@@ -54,6 +83,7 @@ type Package struct {
 	Name     string
 	Path     string
 	Doc      string
+	Forms    []*Form // the forms the builtin package documents
 	Consts   []*Values
 	Vars     []*Values
 	Funcs    []*Func
@@ -68,6 +98,16 @@ type Package struct {
 	names   map[string]string          // the package names its files import, to their paths
 	decls   map[string]ast.Decl        // every top-level name, shown or not
 	members map[string]map[string]bool // every member of each type: its fields, variants, methods and functions of the type
+}
+
+// A Form is a type or a borrow the language writes with its own
+// syntax, map[K]V or ref T, which no declaration can name, as the
+// builtin package documents it: by its name, the form as its comment
+// begins with it, the comment, and where the form is written in the
+// comment.
+type Form struct {
+	Name, Written, Doc string
+	Pos                token.Pos
 }
 
 // Values is a group of constants or variables, written on consecutive
@@ -131,6 +171,11 @@ func New(src Source) *Package {
 	}
 
 	p.Doc = strings.Join(docs, lineSep)
+	if src.Path == BuiltinPath {
+		for _, f := range src.Files {
+			p.Forms = append(p.Forms, Forms(f.Syntax)...)
+		}
+	}
 	byName := map[string]*Type{}
 	var funcs []*Func
 	for _, f := range src.Files {
@@ -252,6 +297,39 @@ func New(src Source) *Package {
 	p.addExamples(src.Tests)
 	p.checkLinks()
 	return p
+}
+
+// Forms returns the forms the file f documents: each of its comments
+// attached to no declaration that begins with a form the language
+// writes with its own syntax and a space, map[K]V is a map, in the
+// order they are written.
+func Forms(f *ast.File) []*Form {
+	if f.Docs == nil {
+		return nil
+	}
+
+	attached := make(map[*ast.CommentGroup]bool)
+	for _, comments := range []map[ast.Node]*ast.CommentGroup{f.Docs.Lead, f.Docs.Line} {
+		for _, g := range comments {
+			attached[g] = true
+		}
+	}
+
+	var forms []*Form
+	for _, g := range f.Docs.Groups {
+		if attached[g] {
+			continue
+		}
+
+		text := g.Text()
+		for _, form := range builtinForms {
+			if strings.HasPrefix(text, form.written+" ") {
+				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: g.Pos() + token.Pos(formMark)})
+			}
+		}
+	}
+
+	return forms
 }
 
 // member records that the type named owner has a member named name.

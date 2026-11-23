@@ -39,8 +39,9 @@ const (
 )
 
 // WritePackage writes the overview of the package: its clause, its
-// comment, and a line for each name, a type's functions and methods
-// under it; with all, every name with its comment instead.
+// comment, the forms the builtin package documents, and a line for each
+// name, a type's functions and methods under it; with all, every form
+// and name with its comment instead.
 func (p *Package) WritePackage(w io.Writer, all bool) {
 	var b strings.Builder
 	put(&b, "package ", p.Name)
@@ -56,6 +57,14 @@ func (p *Package) WritePackage(w io.Writer, all bool) {
 
 	if all {
 		p.writeExamples(&b, "")
+	}
+
+	if len(p.Forms) > 0 && !all {
+		b.WriteString(lineSep)
+	}
+
+	for _, form := range p.Forms {
+		p.writeForm(&b, form, all)
 	}
 
 	for _, group := range p.Consts {
@@ -119,6 +128,11 @@ func (p *Package) writeName(b *strings.Builder, name string) bool {
 func (p *Package) writeDecl(b *strings.Builder, name string) bool {
 	if owner, member, ok := strings.Cut(name, string(memberSep)); ok {
 		return p.writeMember(b, owner, member)
+	}
+
+	if form := p.form(name); form != nil {
+		p.writeForm(b, form, true)
+		return true
 	}
 
 	if t := p.Type(name); t != nil {
@@ -238,6 +252,29 @@ func (t *Type) functions() []*Func {
 
 // writeFunc writes a function's signature; with its comment, after a
 // blank line, when withDoc asks.
+func (p *Package) writeForm(b *strings.Builder, form *Form, withDoc bool) {
+	if withDoc {
+		b.WriteString(lineSep)
+	}
+
+	put(b, form.Written, lineSep)
+	if withDoc {
+		p.writeComment(b, form.Doc, indent)
+	}
+}
+
+// form returns the form of the builtin package named name, by its
+// name, map, or as its comment writes it, map[K]V; nil for none.
+func (p *Package) form(name string) *Form {
+	for _, form := range p.Forms {
+		if name == form.Name || name == form.Written {
+			return form
+		}
+	}
+
+	return nil
+}
+
 func (p *Package) writeFunc(b *strings.Builder, fn *Func, withDoc bool) {
 	if withDoc {
 		b.WriteString(lineSep)

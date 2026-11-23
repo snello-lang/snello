@@ -313,3 +313,24 @@ func TestWithoutAbstract(t *testing.T) {
 		t.Errorf("a first paragraph that says more dropped: %v", got)
 	}
 }
+
+// TestWriteHTMLForms writes the builtin package's page with a section
+// of its forms, each with its id and its comment, which the page's
+// contents link to.
+func TestWriteHTMLForms(t *testing.T) {
+	p, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var page strings.Builder
+	if err := p.WriteHTML(&page, testNav); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{`id="` + formsAnchor + `"`, `id="` + FormMap + `"`, `href="#` + formsAnchor + `"`, "map[K]V is a map"} {
+		if !strings.Contains(page.String(), want) {
+			t.Errorf("the builtin page has no %s", want)
+		}
+	}
+}

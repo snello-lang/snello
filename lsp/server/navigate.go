@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
@@ -124,6 +125,9 @@ func (s *Server) hover(m *jsonrpc.Message) {
 		text, doc = v.declaration(t.obj)
 	case t.pkg != nil:
 		text, doc = packageClause+t.pkg.Name(), v.packageDoc(t.pkg)
+		if t.pkg.Path() != "" {
+			text += " (" + strconv.Quote(t.pkg.Path()) + ")"
+		}
 	default:
 		text = t.typ.String()
 	}
@@ -155,7 +159,7 @@ func (s *Server) definition(m *jsonrpc.Message) {
 		return
 	}
 
-	if t == nil || t.obj == nil && t.builtin == nil {
+	if t == nil || t.obj == nil && t.builtin == nil && t.pkg == nil {
 		s.reply(m.ID, nil)
 		return
 	}
@@ -168,9 +172,12 @@ func (s *Server) definition(m *jsonrpc.Message) {
 	var loc protocol.Location
 	found := true
 	var err error
-	if d != nil {
+	switch {
+	case d != nil:
 		loc, err = s.builtinLocation(*d)
-	} else {
+	case t.pkg != nil:
+		loc, found, err = s.packageLocation(v, t.pkg)
+	default:
 		loc, found, err = s.declarationOf(v, t.obj)
 	}
 
@@ -184,15 +191,48 @@ func (s *Server) definition(m *jsonrpc.Message) {
 	}
 }
 
-// builtinLocation returns where builtinFile documents d: its name, in
-// the file's copy in the cache.
-func (s *Server) builtinLocation(d builtinDecl) (protocol.Location, error) {
-	src, err := std.Sources.ReadFile(builtinFile)
-	if err != nil {
-		return protocol.Location{}, err
+// packageLocation returns where pkg, a package the check loaded, is
+// declared for a reader: the package clause of its file that carries
+// its comment, or else of its first, in the order of their names, as a
+// definition into the standard library opens its copy; false for a
+// package with no source file in the check.
+func (s *Server) packageLocation(v *view, pkg *types.Package) (protocol.Location, bool, error) {
+	files := v.packageFiles(pkg)
+	if len(files) == 0 {
+		return protocol.Location{}, false, nil
 	}
 
-	path, err := pathOfFile(token.NewFile(builtinFile, len(src)), src)
+	f := files[0]
+	for _, g := range files {
+		if g.doc != "" {
+			f = g
+			break
+		}
+	}
+
+	path, err := pathOfFile(token.NewFile(f.name, len(f.src)), f.src)
+	if err != nil {
+		return protocol.Location{}, false, err
+	}
+
+	return protocol.Location{URI: s.uriOfPath(path), Range: protocol.Range{
+		Start: positionOf(f.src, f.clause, s.encoding),
+		End:   positionOf(f.src, f.clause+len(pkg.Name()), s.encoding),
+	}}, true, nil
+}
+
+// builtinLocation returns where builtinFile documents d: its name, in
+// the document it was found in, or in the file's copy in the cache.
+func (s *Server) builtinLocation(d builtinDecl) (protocol.Location, error) {
+	path := d.path
+	var src []byte
+	var err error
+	if path != "" {
+		src, err = s.read(path)
+	} else if src, err = std.Sources.ReadFile(builtinFile); err == nil {
+		path, err = pathOfFile(token.NewFile(builtinFile, len(src)), src)
+	}
+
 	if err != nil {
 		return protocol.Location{}, err
 	}
@@ -255,9 +295,27 @@ func (s *Server) targetOf(m *jsonrpc.Message) (v *view, src []byte, t *target, o
 
 // place returns the view of the last check of the document p names,
 // its text as the check read it, and what the place p names holds; a
-// nil target for nothing or a document no check has read.
+// nil target for nothing or a document no check has read. builtinFile,
+// which nothing checks, is answered from its text as the editor holds
+// it, with no view: a name it declares or uses, whose definition is in
+// the document itself.
 func (s *Server) place(p protocol.TextDocumentPositionParams) (*view, []byte, *target) {
 	path := pathOf(p.TextDocument.URI)
+	if isBuiltinFile(path) {
+		src, err := s.read(path)
+		if err != nil {
+			return nil, nil, nil
+		}
+
+		d, ok := builtinAt(src, offsetOf(src, p.Position, s.encoding))
+		if !ok {
+			return nil, src, nil
+		}
+
+		d.path = path
+		return nil, src, &target{builtin: &d, start: d.start, end: d.end}
+	}
+
 	v := s.views[path]
 	if v == nil || v.byPath[path] == nil {
 		return nil, nil, nil

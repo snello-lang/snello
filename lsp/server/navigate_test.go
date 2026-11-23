@@ -35,8 +35,9 @@ type place struct {
 // own, from a test file, of a method through a trait bound, which is the
 // trait's method, and in a standard package, whose file is copied into
 // the cache read-only and copied again when it differs, and which says
-// why it cannot with the cache off; a name the language declares, and a
-// place that holds none, go nowhere.
+// why it cannot with the cache off, as a name the language declares
+// does, whose definition is in builtinFile's copy; a place that holds
+// no name goes nowhere.
 func TestDefinition(t *testing.T) {
 	n := navigate(t, protocol.ClientCapabilities{})
 	tests := []struct {
@@ -127,7 +128,8 @@ func TestDefinition(t *testing.T) {
 // TestHover shows the declaration of a function, a method, a struct, a
 // trait, an enum, a variant, a variable, a constant and a field as the
 // checker types it, in a Snello block of Markdown, each with its doc
-// comment below it; the type of an expression at its operator or its
+// comment below it; a package's comment on its name, its import's path
+// and its clause; the type of an expression at its operator or its
 // literal; and nothing where there is neither. A hover sent after a
 // change is answered on the changed text. In plain text the declaration
 // is not fenced.
@@ -156,7 +158,7 @@ func TestHover(t *testing.T) {
 		{"a test file's type", place{"shapes/shapes_test.snello", "cases := []", "Case"}, "Case", "struct Case {\n\tname string\n\tkind shapes.Kind\n\twant string\n}", ""},
 		{"a package's name", place{"main.snello", "c := ", "shapes.Circle"}, "shapes", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
 		{"an import's path", place{"main.snello", "import (\"fmt\"; ", "\"shapes\""}, "\"shapes\"", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
-		{"the package clause", place{"shapes/shape.snello", "package ", "shapes"}, "shapes", "package shapes", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
+		{"the package clause", place{"shapes/shape.snello", "package ", "shapes"}, "shapes", "package shapes (\"shapes\")", "Package shapes is a package of the program's own, found through the\nmodule file above it: the trait and the structs are in this file,\nthe enum and the generic functions in area.snello.\n"},
 	}
 
 	for _, tt := range tests {
@@ -341,18 +343,119 @@ func TestStdPaths(t *testing.T) {
 	}
 }
 
-// TestPackageDocTests hovers on the package clause of a test file,
-// whose check loads the test files with the package: the package's
-// comment is its source files', as snello doc gives it, and a test
-// file's comment above its clause is none of it.
+// TestPackageDocTests hovers on package clauses and import paths: a
+// test file's clause, whose check loads the test files with the
+// package, has the package's comment, a test file's own left out; a
+// file that holds only the package's comment, and declares nothing,
+// has its package's; and the path of an import its file never uses has
+// the package's too. A definition on a clause or a path opens the
+// package's file that carries its comment, at its clause.
 func TestPackageDocTests(t *testing.T) {
 	dir := writeModule(t, map[string]string{
-		"lib/lib.snello":      "// Package lib does one thing.\npackage lib\n\n// F is one.\nfunc F() int { return 1 }\n",
+		"lib/doc.snello":      "// Package lib does one thing.\npackage lib\n",
+		"lib/lib.snello":      "package lib\n\n// F is one.\nfunc F() int { return 1 }\n",
 		"lib/lib_test.snello": "// The tests of lib.\npackage lib\n\nimport \"expect\"\n\nfunc TestF() { expect.Equal(ref F(), ref 1) }\n",
+		"main.snello":         "package main\n\nimport (\"fmt\"; \"lib\")\n\nfunc main() { fmt.Println(1) }\n",
 	})
-	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "lib/lib.snello", "lib/lib_test.snello")
-	if h := n.hover(place{"lib/lib_test.snello", "package ", "lib"}); h == nil || h.Contents.Value != "package lib\n\nPackage lib does one thing.\n" {
-		t.Errorf("the package clause of a test file: %+v, want the package's comment alone", h)
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "lib/doc.snello", "lib/lib.snello", "lib/lib_test.snello", "main.snello")
+	want := "package lib (\"lib\")\n\nPackage lib does one thing.\n"
+	for name, at := range map[string]place{
+		"the clause of a test file":                  {"lib/lib_test.snello", "package ", "lib"},
+		"the clause of a file that declares nothing": {"lib/doc.snello", "package ", "lib"},
+		"the path of an import never used":           {"main.snello", "\"fmt\"; ", "\"lib\""},
+	} {
+		if h := n.hover(at); h == nil || h.Contents.Value != want {
+			t.Errorf("%s: %+v, want the package's comment alone", name, h)
+		}
+
+		if loc := n.definition(at); loc == nil || pathOf(loc.URI) != n.path("lib/doc.snello") || loc.Range.Start.Line != 1 {
+			t.Errorf("definition of %s: %+v, want the clause of lib/doc.snello", name, loc)
+		}
+	}
+
+	n.shutdown()
+}
+
+// TestBuiltinFile hovers on and goes to the definitions of names in
+// builtinFile itself, the checkout's, which nothing checks: a name it
+// declares has its own comment, a name a signature uses has the
+// comment of its declaration and its definition in the same document,
+// and a form's comment documents its form.
+func TestBuiltinFile(t *testing.T) {
+	checkout, err := filepath.Abs(stdCheckoutDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := navigateIn(t, protocol.ClientCapabilities{}, checkout, builtinFile)
+	for _, tt := range []struct {
+		at  place
+		doc string
+	}{
+		{place{builtinFile, "trait ", "Eq {"}, "Eq compares two values for equality"},
+		{place{builtinFile, "Eq(o ref Self) ", "bool }"}, "bool is the type of a condition"},
+		{place{builtinFile, "// ", "map[K]V is a map"}, "map[K]V is a map"},
+	} {
+		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
+			t.Errorf("hover on %s: %+v, want %q", tt.at.at, h, tt.doc)
+		}
+	}
+
+	loc := n.definition(place{builtinFile, "Eq(o ref Self) ", "bool }"})
+	if loc == nil || pathOf(loc.URI) != n.path(builtinFile) {
+		t.Fatalf("definition of bool in its own file: %+v", loc)
+	}
+
+	text := n.texts[builtinFile]
+	start := offsetOf(text, loc.Range.Start, protocol.PositionEncodingUTF16)
+	if !strings.HasPrefix(string(text[start-len("type "):]), "type bool") {
+		t.Errorf("definition of bool: at %q, want bool's declaration", lineOf(text, start))
+	}
+
+	n.shutdown()
+}
+
+// TestFormNavigation hovers on and goes to the definitions of the forms
+// the language writes with its own syntax: each type of the forms, in a
+// declaration and in a literal, a channel's of either direction, on its
+// arrow and its keyword, an option, and a borrow in a parameter and at
+// a call; and not the arrow of a send, which is no type. Each hover gives the form as the place writes it and
+// the comment builtinFile writes for the form.
+func TestFormNavigation(t *testing.T) {
+	t.Setenv(c.CacheEnv, t.TempDir())
+	dir := writeModule(t, map[string]string{"main.snello": "package main\n\nimport \"fmt\"\n\nstruct S { m map[string]int; xs []int }\n\nfunc f(x ref S, y mut S) { fmt.Println(len(x.xs), len(y.m)) }\n\nfunc g(a [3]int, p *S, c chan int, o int?) {}\n\nfunc h(in <-chan int, out chan<- int) { out <- 1 }\n\nfunc main() {\n\ts := S{m: map[string]int{}, xs: []int{}}\n\tu := S{m: map[string]int{}, xs: []int{}}\n\tf(ref s, mut u)\n}\n"})
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello")
+	for _, tt := range []struct {
+		at        place
+		decl, doc string
+	}{
+		{place{"main.snello", "struct S { m ", "map[string]int;"}, "map[string]int", "map[K]V is a map"},
+		{place{"main.snello", "s := S{m: ", "map[string]int{}"}, "map[string]int", "map[K]V is a map"},
+		{place{"main.snello", "; xs ", "[]int }"}, "[]int", "[]T is a slice"},
+		{place{"main.snello", "func g(a ", "[3]int"}, "[3]int", "[N]T is an array"},
+		{place{"main.snello", "p ", "*S,"}, "*S", "*T is an owned pointer"},
+		{place{"main.snello", "c ", "chan int"}, "chan int", "chan T is a channel"},
+		{place{"main.snello", "in ", "<-chan int"}, "<-chan int", "chan T is a channel"},
+		{place{"main.snello", "in <-", "chan int"}, "<-chan int", "chan T is a channel"},
+		{place{"main.snello", "out chan", "<- int)"}, "chan<- int", "chan T is a channel"},
+		{place{"main.snello", "o int", "?)"}, "int?", "An Option<T>, written T?"},
+		{place{"main.snello", "func f(x ", "ref S"}, "ref S", "ref T is a shared borrow"},
+		{place{"main.snello", "y ", "mut S)"}, "mut S", "mut T is an exclusive borrow"},
+		{place{"main.snello", "\tf(", "ref s"}, "ref S", "ref T is a shared borrow"},
+		{place{"main.snello", "ref s, ", "mut u"}, "mut S", "mut T is an exclusive borrow"},
+	} {
+		h := n.hover(tt.at)
+		if h == nil || !strings.HasPrefix(h.Contents.Value, tt.decl+"\n\n") || !strings.Contains(h.Contents.Value, tt.doc) {
+			t.Errorf("hover on %s: %+v, want %q and %q", tt.at.at, h, tt.decl, tt.doc)
+		}
+
+		if loc := n.definition(tt.at); loc == nil || !strings.HasSuffix(filepath.ToSlash(pathOf(loc.URI)), builtinFile) {
+			t.Errorf("definition of %s: %+v, want its comment in the copy of %s", tt.at.at, loc, builtinFile)
+		}
+	}
+
+	if h := n.hover(place{"main.snello", "{ out ", "<- 1 }"}); h != nil && strings.Contains(h.Contents.Value, "chan T is a channel") {
+		t.Errorf("the arrow of a send: %+v, want no channel type's comment", h)
 	}
 
 	n.shutdown()
@@ -361,12 +464,43 @@ func TestPackageDocTests(t *testing.T) {
 // TestBuiltinNavigation hovers on and goes to the definition of names
 // the language declares, which no file of the program declares: a trait
 // in a bound and in an impl list, its method, a method of a slice, a
-// string and an option, a built-in function, a type and a constant.
-// Each hover has the comment builtinFile writes for it, and each
+// string and an option, a built-in function, a type, the constants of a
+// group, a variant; a string's method on a type declared over string,
+// an integer's on an i32, a standard trait's on an int, a slice's
+// through an owned pointer, and a trait's method with a comment of its
+// own. Each hover has the comment builtinFile writes for it, and each
 // definition is the name in the file's copy in the cache.
 func TestBuiltinNavigation(t *testing.T) {
 	t.Setenv(c.CacheEnv, t.TempDir())
-	dir := writeModule(t, map[string]string{"main.snello": "package main\n\nimport \"fmt\"\n\nstruct P impl Eq { n int }\n\nfunc same<T: Eq>(a ref T, b ref T) bool { return a.Eq(b) }\n\nfunc main() {\n\txs := []int{1}\n\txs.Push(2)\n\ts := \"ab\"\n\to := xs.Pop()\n\tfmt.Println(len(xs), s.Contains(\"a\"), o.IsSome(), same(ref 1, ref 2), true)\n}\n"})
+	dir := writeModule(t, map[string]string{"main.snello": `package main
+
+import "fmt"
+
+struct P impl Eq { n int }
+
+type Path string
+
+struct Failure impl Error { n int }
+
+func (f ref Failure) Error() string { return "failed" }
+
+func same<T: Eq>(a ref T, b ref T) bool { return a.Eq(b) }
+
+func main() {
+	xs := []int{1}
+	xs.Push(2)
+	s := "ab"
+	o := xs.Pop()
+	p := Path("ab")
+	var n i32 = 5
+	m := 5
+	bp := &[]int{1}
+	bp.Push(2)
+	f := Failure{n: 1}
+	fmt.Println(len(xs), s.Contains("a"), o.IsSome(), same(ref 1, ref 2), true, false, Some(1))
+	fmt.Println(p.Contains("b"), n.Abs(), n.CheckedAdd(1), m.Eq(6), f.Source().IsNone())
+}
+`})
 	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello")
 	for _, tt := range []struct {
 		at        place
@@ -376,11 +510,19 @@ func TestBuiltinNavigation(t *testing.T) {
 		{place{"main.snello", "struct P impl ", "Eq {"}, "Eq", "Eq compares two values for equality"},
 		{place{"main.snello", "return a.", "Eq(b)"}, "Eq", "Eq compares two values for equality"},
 		{place{"main.snello", "xs.", "Push(2)"}, "Push", "Push adds v at the end of the slice"},
-		{place{"main.snello", "s.", "Contains"}, "Contains", "Contains reports whether the string holds t"},
+		{place{"main.snello", "s.", "Contains(\"a\")"}, "Contains", "Contains reports whether the string holds t"},
 		{place{"main.snello", "o.", "IsSome"}, "IsSome", "IsSome reports whether there is a value"},
 		{place{"main.snello", "fmt.Println(", "len("}, "len", "len returns the length of x"},
 		{place{"main.snello", "xs := []", "int{1}"}, "int", "int is the signed integer of 64 bits"},
 		{place{"main.snello", "same(ref 1, ref 2), ", "true"}, "true", "true and false are the two values of bool"},
+		{place{"main.snello", "true, ", "false"}, "false", "true and false are the two values of bool"},
+		{place{"main.snello", "false, ", "Some(1)"}, "Some", "An Option<T>, written T?, is a value of T or nothing"},
+		{place{"main.snello", "p.", "Contains(\"b\")"}, "Contains", "Contains reports whether the string holds t"},
+		{place{"main.snello", "n.", "Abs()"}, "Abs", "Abs returns the magnitude of a signed integer"},
+		{place{"main.snello", "n.", "CheckedAdd"}, "CheckedAdd", "and CheckedMul."},
+		{place{"main.snello", "m.", "Eq(6)"}, "Eq", "Eq compares two values for equality"},
+		{place{"main.snello", "bp.", "Push(2)"}, "Push", "Push adds v at the end of the slice"},
+		{place{"main.snello", "f.", "Source()"}, "Source", "Source gives the error this one wraps"},
 	} {
 		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
 			t.Errorf("hover on %s: %+v, want its comment, %q", tt.at.at, h, tt.doc)

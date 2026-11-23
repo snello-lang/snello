@@ -155,3 +155,26 @@ const Foot = 3 // a foot
 		}
 	}
 }
+
+// TestWriteForms writes the builtin package's forms: a line each in the
+// overview, after the package's comment, and a form's page asked for by
+// its name or as written, with its comment.
+func TestWriteForms(t *testing.T) {
+	p, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var overview strings.Builder
+	p.WritePackage(&overview, false)
+	if !strings.Contains(overview.String(), "\n[]T\n[N]T\nmap[K]V\nchan T\n*T\nref T\nmut T\n") {
+		t.Errorf("the overview has no line for each form:\n%s", overview.String())
+	}
+
+	for _, name := range []string{FormMap, "map[K]V"} {
+		var page strings.Builder
+		if !p.WriteName(&page, name) || !strings.HasPrefix(page.String(), "map[K]V\n"+indent+"map[K]V is a map") {
+			t.Errorf("%s: %q, want the map's form and its comment", name, page.String())
+		}
+	}
+}

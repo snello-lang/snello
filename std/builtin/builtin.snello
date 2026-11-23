@@ -155,6 +155,64 @@ enum Ordering {
 	Greater
 }
 
+// The forms below are types and borrows the language writes with its
+// own syntax, which no declaration can name. Each comment documents the
+// form it begins with, as a declaration's comment does its name.
+
+// []T is a slice: values of T it owns, in order, which grows at its
+// end. A literal lists the elements, []int{3, 1, 2}, and make([]T, n)
+// builds n zero values, or make([]T, 0, n) reserves the room for n for
+// an element with no zero value. len is the number of elements and cap
+// the room before the next growth. xs[i] reads or writes an element,
+// and an index outside the slice stops the program. xs[lo:hi] lends
+// the elements from lo up to hi, a ref []T, or a mut []T reached
+// through a mut, whose number stays the slice's to change. Two slices
+// do not compare with ==. The methods of a slice follow below.
+
+// [N]T is an array: N values of T, its length a constant. var gives N
+// zero values, a literal lists them in order, [3]int{1, 2}, leaving the
+// rest zero, and a[i] reads or writes one, with a slice's bounds check.
+// An array is copied whole on assignment, so a struct of arrays is
+// Copy when its elements are, and len and cap are its length. It is not
+// a slice: it is not sliced, pushed to or ranged over.
+
+// map[K]V is a map: one value of V for each key of K, which is Eq and
+// Hash. It owns its keys and values. A literal lists its entries, or
+// none, map[string]int{}, and make(map[K]V) is the empty one. m[k] = v
+// stores a value, making the entry when the key is new, and m[k] reads
+// one: a key that is not there gives the value type's zero value and
+// leaves the map unchanged. A value type with no zero value is read and
+// changed through Get and GetMut. len is the number of entries, and
+// range walks them in the order they were inserted, the order a map
+// prints in. Two maps do not compare with ==. The methods of a map
+// follow below.
+
+// chan T is a channel of T, the one value tasks share: c <- v sends v,
+// moving it, and <-c receives one, owned. A chan<- T only sends and a
+// <-chan T only receives; make(chan T) makes a channel, and
+// make(chan T, n) one that buffers n values. A channel ends when its
+// last sending handle is dropped: a receiver then sees None once the
+// values already sent are taken. The methods of a channel follow below.
+
+// *T is an owned pointer: the one owner of a T on the heap, made by
+// &expr, which moves the value there. It is how a type holds a value of
+// itself, a list's next node or a tree's children, and it is lent as
+// what it holds: a *Node fits a ref Node parameter.
+
+// ref T is a shared borrow of a T: lent to read for as long as the
+// borrow is used, while its owner keeps it. It is written at the
+// declaration, func f(v ref T), and may be at the call, f(ref x). Any
+// number of ref borrows of a value may live at once, and nothing may
+// change the value while one does. A borrow lives inside one function
+// and is never stored or sent.
+
+// mut T is an exclusive borrow of a T: lent to change for as long as
+// the borrow is used, while its owner keeps it. It is written at the
+// declaration, func f(v mut T), and at the call, f(mut x), since a
+// change is worth a word. While a value is borrowed mut, nothing else
+// may look at it, its owner included. A borrow lives inside one
+// function and is never stored or sent.
+
 // Copy marks a type whose values are copied on assignment and when
 // passed, rather than moved: the numbers, bool, a struct or enum that
 // lists Copy and whose every field is Copy. A Copy type cannot have a
