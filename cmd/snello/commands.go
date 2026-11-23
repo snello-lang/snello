@@ -31,6 +31,7 @@ const (
 	helpCommand    = "help"
 	initCommand    = "init"
 	lexCommand     = "lex"
+	lspCommand     = "lsp"
 	newCommand     = "new"
 	parseCommand   = "parse"
 	runCommand     = "run"
@@ -64,6 +65,8 @@ const (
 	benchFlag    = "bench"
 	countFlag    = "count"
 	timeoutFlag  = "timeout"
+	stdioFlag    = "stdio"
+	clientFlag   = "clientProcessId"
 	flagStart    = "-"
 	defaultCount = 1
 
@@ -210,6 +213,7 @@ func commands() []*command {
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
 		{name: initCommand, args: optionalDir, minArgs: 0, maxArgs: 1, short: "start a module, writing its snello.mod", declare: declareInit},
 		{name: lexCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the tokens of a source file", declare: declareLex},
+		{name: lspCommand, minArgs: 0, maxArgs: 0, short: "serve an editor the Language Server Protocol on standard input and output", declare: declareLSP},
 		{name: newCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "start a module in a new directory, with a program and its test", declare: declareNew},
 		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file, with its comments", declare: declareParse},
 		{name: removeCommand, args: removeArgs, minArgs: 1, maxArgs: anyArgs, short: "take dependencies out of snello.mod, once nothing imports them", declare: declareRemove},

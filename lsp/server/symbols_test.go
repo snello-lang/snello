@@ -5,13 +5,17 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
 )
 
@@ -257,4 +261,50 @@ func treeOf(symbols []protocol.DocumentSymbol) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// BenchmarkWorkspaceSymbol searches a module of thirty packages of
+// eight files of forty functions each, 9,600 symbols, for a query of
+// one letter, which every symbol matches, the first search reading
+// every file and the rest reading none: what an answer of every match
+// costs where a search matches the most.
+func BenchmarkWorkspaceSymbol(b *testing.B) {
+	files := map[string]string{}
+	for p := range 30 {
+		for f := range 8 {
+			var src strings.Builder
+			src.WriteString("package p" + strconv.Itoa(p) + "\n\n")
+			for g := range 40 {
+				src.WriteString("func F" + strconv.Itoa(f) + "_" + strconv.Itoa(g) + "() {}\n\n")
+			}
+
+			files["p"+strconv.Itoa(p)+"/f"+strconv.Itoa(f)+".snello"] = src.String()
+		}
+	}
+
+	dir := writeModule(b, files)
+	s := New(nil, io.Discard, io.Discard)
+	s.folders = []string{dir}
+	params, err := json.Marshal(protocol.WorkspaceSymbolParams{Query: "f"})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var out countingWriter
+	s.out = jsonrpc.NewWriter(&out)
+	for b.Loop() {
+		out.n = 0
+		s.workspaceSymbol(&jsonrpc.Message{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: protocol.MethodWorkspaceSymbol, Params: params})
+	}
+
+	b.ReportMetric(float64(out.n), "bytes/answer")
+}
+
+// A countingWriter counts what is written to it.
+type countingWriter struct{ n int }
+
+// Write counts p.
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += len(p)
+	return len(p), nil
 }

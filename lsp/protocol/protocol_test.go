@@ -27,9 +27,9 @@ func TestEncode(t *testing.T) {
 					PositionEncoding: PositionEncodingUTF16,
 					TextDocumentSync: &TextDocumentSyncOptions{OpenClose: true, Change: TextDocumentSyncKindIncremental, Save: &SaveOptions{}},
 				},
-				ServerInfo: &ServerInfo{Name: "snellols", Version: "0.1.0"},
+				ServerInfo: &ServerInfo{Name: "snello", Version: "0.1.0"},
 			},
-			`{"capabilities":{"positionEncoding":"utf-16","textDocumentSync":{"openClose":true,"change":2,"save":{"includeText":false}}},"serverInfo":{"name":"snellols","version":"0.1.0"}}`,
+			`{"capabilities":{"positionEncoding":"utf-16","textDocumentSync":{"openClose":true,"change":2,"save":{"includeText":false}}},"serverInfo":{"name":"snello","version":"0.1.0"}}`,
 		},
 		{
 			PublishDiagnosticsParams{URI: "file:///a.snello", Version: &version, Diagnostics: []Diagnostic{{

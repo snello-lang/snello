@@ -173,13 +173,15 @@ func TestRename(t *testing.T) {
 	}
 }
 
-// TestRenameRefusals refuses a rename that would compile and change
-// what the program does, or that cannot know every use: a trait's
-// default method that types and traits override, and a type's method
-// that implements a trait's, which would part from the methods that
-// keep the name; a name renamed into the scope of another of the new
-// name, which would capture its uses; and a rename of a name a package
-// with a file that does not parse uses, whose uses are not known.
+// TestRenameRefusals renames a method with its whole dispatch, from any
+// method of it: a trait's default with the methods that override it, a
+// trait's method with the type's that implements it; and refuses a
+// rename that would compile and change what the program does, or that
+// cannot know every use: a method whose dispatch holds a trait's
+// method the language declares, a name renamed into the scope of
+// another of the new name, which would capture its uses, and a rename
+// of a name a package with a file that does not parse uses, whose uses
+// are not known.
 func TestRenameRefusals(t *testing.T) {
 	dir := writeModule(t, map[string]string{
 		"main.snello": `package main
@@ -205,6 +207,10 @@ struct Free { n int }
 
 func (f ref Free) Area() f64 { return 1.0 }
 
+struct P impl Clone { n int }
+
+func (p ref P) Clone() P { return P{n: p.n} }
+
 func main() {
 	y := 10
 	if y > 0 {
@@ -226,9 +232,8 @@ func main() {
 		at          place
 		new, refuse string
 	}{
-		"a default overridden":          {place{"main.snello", "func (s ref Self) ", "Describe() string { return \"a shape\""}, "Explain", "shares its dispatch with Logged.Describe, Rect.Describe"},
-		"an implementing method":        {place{"main.snello", "func (r ref Rect) ", "Area()"}, "Size", "shares its dispatch with Shape.Area"},
-		"a package that does not parse": {place{"lib/lib.snello", "func ", "Foo"}, "Baz", "app/broken.snello does not check as it stands"},
+		"a method of the language's trait": {place{"main.snello", "func (p ref P) ", "Clone()"}, "Duplicate", "it shares its dispatch with Clone.Clone, which is declared by the language"},
+		"a package that does not parse":    {place{"lib/lib.snello", "func ", "Foo"}, "Baz", "app/broken.snello does not check as it stands"},
 	} {
 		if m := n.call(protocol.MethodRename, protocol.RenameParams{TextDocumentPositionParams: n.params(tt.at), NewName: tt.new}); m.Error == nil || !strings.Contains(m.Error.Message, tt.refuse) {
 			t.Errorf("%s: %+v, want a refusal saying %q", name, m.Error, tt.refuse)
@@ -243,6 +248,20 @@ func main() {
 		t.Errorf("a method of a type that implements no trait: %+v, want its declaration and its call", edit.Changes)
 	}
 
+	for name, tt := range map[string]struct {
+		at    place
+		edits int
+	}{
+		"a default and its overrides, from the default":          {place{"main.snello", "func (s ref Self) ", "Describe() string { return \"a shape\""}, 5},
+		"a default and its overrides, from an override":          {place{"main.snello", "func (r ref Rect) ", "Describe()"}, 5},
+		"a trait's method and its implementation, from the type": {place{"main.snello", "func (r ref Rect) ", "Area()"}, 3},
+	} {
+		edit := n.rename(tt.at, "Renamed")
+		if got := len(edit.Changes[uriOf(n.path("main.snello"))]); got != tt.edits {
+			t.Errorf("%s: %d edits, want %d: every method of the dispatch, and every call", name, got, tt.edits)
+		}
+	}
+
 	n.shutdown()
 }
 
@@ -250,7 +269,8 @@ func main() {
 // dispatch it did not, and so override where it did not: a type's
 // method renamed to the name of its trait's default, and the default
 // renamed to the name of the type's method, in one package and across
-// two, where the package of the type never spells the old name.
+// two, where the package of the type never spells the old name; and
+// renames a type's method with its trait's of another package.
 func TestRenameOverride(t *testing.T) {
 	dir := writeModule(t, map[string]string{
 		"main.snello": `package main
@@ -269,13 +289,15 @@ struct Mine impl lib.Shaped { n int }
 
 func (m ref Mine) Explain() string { return "mine" }
 
+func (m ref Mine) Size() int { return m.n }
+
 func main() {
 	var s Shape = Circle{r: 1.0}
 	var o lib.Shaped = Mine{n: 1}
-	fmt.Println(s.Describe(), o.Describe())
+	fmt.Println(s.Describe(), o.Describe(), o.Size())
 }
 `,
-		"lib/lib.snello": "package lib\n\ntrait Shaped {\n\tfunc (s ref Self) Describe() string { return \"default\" }\n}\n",
+		"lib/lib.snello": "package lib\n\ntrait Shaped {\n\tfunc (s ref Self) Describe() string { return \"default\" }\n\tfunc (s ref Self) Size() int\n}\n",
 	})
 
 	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello", "lib/lib.snello")
@@ -288,9 +310,66 @@ func main() {
 		"a default onto a type's method":    {place{"main.snello", "func (s ref Self) ", "Describe"}, "Explain", "Circle.Explain"},
 		"a default of another package's":    {place{"lib/lib.snello", "func (s ref Self) ", "Describe"}, "Explain", "Mine.Explain"},
 	} {
-		if m := n.call(protocol.MethodRename, protocol.RenameParams{TextDocumentPositionParams: n.params(tt.at), NewName: tt.new}); m.Error == nil || !strings.Contains(m.Error.Message, "shares its dispatch with "+tt.partner) {
+		if m := n.call(protocol.MethodRename, protocol.RenameParams{TextDocumentPositionParams: n.params(tt.at), NewName: tt.new}); m.Error == nil || !strings.Contains(m.Error.Message, "share a dispatch with "+tt.partner) {
 			t.Errorf("%s: %+v, want a refusal naming %s", name, m.Error, tt.partner)
 		}
+	}
+
+	edit := n.rename(place{"main.snello", "func (m ref Mine) ", "Size()"}, "Count")
+	if got, lib := len(edit.Changes[uriOf(n.path("main.snello"))]), len(edit.Changes[uriOf(n.path("lib/lib.snello"))]); got != 2 || lib != 1 {
+		t.Errorf("a type's method with its trait's of another package: %d edits of main.snello and %d of lib.snello, want 2 and 1", got, lib)
+	}
+
+	n.shutdown()
+}
+
+// TestRenameGeneric renames a method of a generic trait with the
+// methods of the types that implement an instance of it, from either
+// side, and refuses one that implements an instance of a trait of the
+// standard library, naming its method.
+func TestRenameGeneric(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.snello": `package main
+
+import ("fmt"; "iter")
+
+trait Box<T> {
+	func (b ref Self) Get() T
+}
+
+struct IntBox impl Box<int> { n int }
+
+func (b ref IntBox) Get() int { return b.n }
+
+struct Count impl iter.Iterator<int> { n int }
+
+func (c mut Count) Next() int? {
+	if c.n == 0 {
+		return None
+	}
+
+	c.n -= 1
+	return Some(c.n)
+}
+
+func main() {
+	var b Box<int> = IntBox{n: 1}
+	fmt.Println(b.Get())
+}
+`})
+
+	n := navigateIn(t, protocol.ClientCapabilities{}, dir, "main.snello")
+	for name, at := range map[string]place{
+		"from the trait's method": {"main.snello", "func (b ref Self) ", "Get"},
+		"from the type's method":  {"main.snello", "func (b ref IntBox) ", "Get"},
+	} {
+		if got := len(n.rename(at, "Fetch").Changes[uriOf(n.path("main.snello"))]); got != 3 {
+			t.Errorf("%s: %d edits, want the trait's method, the type's and the call", name, got)
+		}
+	}
+
+	m := n.call(protocol.MethodRename, protocol.RenameParams{TextDocumentPositionParams: n.params(place{"main.snello", "func (c mut Count) ", "Next"}), NewName: "Advance"})
+	if m.Error == nil || !strings.Contains(m.Error.Message, "shares its dispatch with Iterator.Next, which is declared by the standard library") {
+		t.Errorf("a method of a standard trait's instance: %+v", m.Error)
 	}
 
 	n.shutdown()

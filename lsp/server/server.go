@@ -34,7 +34,7 @@ import (
 // incomingPending is how many messages the reading goroutine may read
 // ahead of the one handling them.
 const (
-	name              = "snellols"
+	name              = "snello"
 	exitAfterShutdown = 0
 	exitAbruptly      = 1
 	incomingPending   = 64

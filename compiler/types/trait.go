@@ -100,6 +100,24 @@ func (t *Trait) Method(name string) *Func {
 	return fn
 }
 
+// RefinesDecl reports whether t is the trait decl, an instance of it,
+// or refines one, directly or through the traits in between: whether
+// a method decl declares is one t answers, whatever the arguments, as
+// a search for the methods that share a dispatch asks.
+func (t *Trait) RefinesDecl(decl *Trait) bool {
+	if t.origin() == decl.origin() {
+		return true
+	}
+
+	for _, r := range t.refines {
+		if r != nil && r.RefinesDecl(decl) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Refines reports whether t is other or refines it, directly or
 // through the traits in between: a type implementing t implements
 // other as well. The walk needs no record of the traits seen, since a

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -105,6 +106,55 @@ func TestTests(t *testing.T) {
 		if len(diags[source]) > 0 {
 			t.Errorf("%s: its package's source has diagnostics: %+v", tt.file, diags[source])
 		}
+	}
+}
+
+// TestPlatforms checks an open file of another platform than the host's
+// for its own platform: an error of its build alone is reported with
+// the platform before its message, and one every build has, in a file
+// every build chooses, once and with none; a package with no open file
+// of another platform is checked for the host alone.
+func TestPlatforms(t *testing.T) {
+	other := "windows"
+	if runtime.GOOS == other {
+		other = "linux"
+	}
+
+	dir := writeModule(t, map[string]string{
+		"lib/lib.snello":                      "package lib\n\nfunc Shared() int { return \"every build\" }\n",
+		"lib/sys_" + other + ".snello":        "package lib\n\nfunc Own() int { return missing }\n",
+		"lib/sys_" + runtime.GOOS + ".snello": "package lib\n\nfunc Own() int { return 1 }\n",
+	})
+
+	s := New(nil, io.Discard, io.Discard)
+	own := filepath.Join(dir, "lib", "sys_"+other+".snello")
+	src, err := os.ReadFile(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.open(protocol.TextDocumentItem{URI: uriOf(own), Version: 1, Text: string(src)})
+	s.checkAll()
+	var first platform.Target
+	for _, tgt := range platform.Targets() {
+		if tgt.OS == other {
+			first = tgt
+			break
+		}
+	}
+
+	all := union(s.reports)
+	if got := all[own]; len(got) != 1 || got[0].Message != "on "+first.String()+": undefined: missing" {
+		t.Errorf("the file of another platform: %+v, want its error with %s before it", got, first)
+	}
+
+	if got := all[filepath.Join(dir, "lib", "lib.snello")]; len(got) != 1 || strings.HasPrefix(got[0].Message, "on ") {
+		t.Errorf("an error every build has: %+v, want it once, with no platform", got)
+	}
+
+	s.close(uriOf(own))
+	if targets := s.platformsOf(filepath.Join(dir, "lib")); len(targets) != 0 {
+		t.Errorf("with no file of another platform open: %v, want the host alone", targets)
 	}
 }
 

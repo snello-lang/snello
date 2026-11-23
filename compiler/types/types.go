@@ -491,6 +491,19 @@ func (n *Named) Method(name string) *Func {
 	return nil
 }
 
+// ImplementsDecl reports whether the declaration listed after impl the
+// trait decl, an instance of it, or a trait refining one: whether a
+// method decl declares is one the type answers, whatever the arguments.
+func (n *Named) ImplementsDecl(decl *Trait) bool {
+	for _, t := range n.Origin().impls {
+		if t != nil && t.RefinesDecl(decl) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Implements reports whether the declaration listed trait after impl,
 // or a trait refining it; an instance implements what its declaration
 // does.

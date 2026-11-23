@@ -24,11 +24,14 @@ import (
 )
 
 // diagnosticSource names the tool a diagnostic comes from, as an
-// editor shows it beside the message, and mainFunc the function a
-// program's file declares.
+// editor shows it beside the message; mainFunc is the function a
+// program's file declares; and platformLabel and labelEnd write the
+// platform before the message of an error of its build alone.
 const (
 	diagnosticSource = "snello"
 	mainFunc         = "main"
+	platformLabel    = "on "
+	labelEnd         = ": "
 )
 
 // A report is what one check found: the diagnostics of every file it
@@ -70,7 +73,66 @@ func (s *Server) checkAll() {
 		for _, v := range views {
 			s.keep(dir, v, last)
 		}
+
+		hosted := s.reports[dir]
+		for _, t := range s.platformsOf(dir) {
+			reports, views := s.checks(dir, nil, t)
+			for _, r := range reports {
+				s.reports[dir] = append(s.reports[dir], r.labelled(t, hosted))
+			}
+
+			for _, v := range views {
+				s.keep(dir, v, last)
+			}
+		}
 	}
+}
+
+// platformsOf returns the platforms other than the host's the package
+// in dir is checked for: for each open document of it the host's build
+// does not choose, the first platform, in the order snello lists them,
+// whose build does, each once.
+func (s *Server) platformsOf(dir string) []platform.Target {
+	var targets []platform.Target
+	for path := range s.byPath {
+		name := filepath.Base(path)
+		if filepath.Dir(path) != dir || !strings.HasSuffix(name, importer.SourceExt) || importer.Chosen(name, platform.Host()) {
+			continue
+		}
+
+		for _, t := range platform.Targets() {
+			if importer.Chosen(name, t) {
+				if !slices.Contains(targets, t) {
+					targets = append(targets, t)
+				}
+
+				break
+			}
+		}
+	}
+
+	slices.SortFunc(targets, func(a, b platform.Target) int { return strings.Compare(a.String(), b.String()) })
+	return targets
+}
+
+// labelled returns the report of a check for the platform t, each
+// diagnostic the checks for the host did not report on its file said
+// to be t's, "on windows/amd64: ", and one they did left out, since it
+// is reported already and breaks every build alike.
+func (r report) labelled(t platform.Target, hosted []report) report {
+	out := make(report)
+	for path, diags := range r {
+		for _, d := range diags {
+			if slices.ContainsFunc(hosted, func(h report) bool { return slices.Contains(h[path], d) }) {
+				continue
+			}
+
+			d.Message = platformLabel + t.String() + labelEnd + d.Message
+			out[path] = append(out[path], d)
+		}
+	}
+
+	return out
 }
 
 // checks checks the package in dir as checkAll does, for the platform

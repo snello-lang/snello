@@ -153,7 +153,8 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 // require line reaches its module. A path none of the three has is
 // refused naming the three. A path ending in _test names the external
 // test package of the package before it, importTests, which only a
-// test file may import; the suffix is reserved, as Go reserves it.
+// test file may import; the suffix is reserved for it, so that no
+// package of a program is ever named as a test package is.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
 	if importPath == "builtin" {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")

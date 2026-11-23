@@ -7,6 +7,8 @@ package types
 import (
 	"strings"
 	"testing"
+
+	"github.com/snello-lang/snello/compiler/parser"
 )
 
 // traitPrelude declares the traits and types the cases use: a trait
@@ -429,5 +431,50 @@ func TestImplementsPredeclared(t *testing.T) {
 		if got := Implements(c.typ, c.trait); got != c.want {
 			t.Errorf("Implements(%s, %s) = %v, want %v", c.typ, c.trait, got, c.want)
 		}
+	}
+}
+
+// TestImplementsDecl tells a type that lists an instance of a generic
+// trait, or a trait that refines one, from one that lists another, as
+// the declaration's methods go: whatever the arguments.
+func TestImplementsDecl(t *testing.T) {
+	const src = `package p
+
+trait Box<T> {
+	func (b ref Self) Get() T
+}
+
+trait Labelled<T>: Box<T> {}
+
+struct IntBox impl Box<int> { n int }
+
+func (b ref IntBox) Get() int { return b.n }
+
+struct Named impl Labelled<i64> { n i64 }
+
+func (b ref Named) Get() i64 { return b.n }
+
+struct Plain { n int }
+`
+	f, file, err := parser.ParseFile("p.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := libraryConfig().Check("", file, f, &Info{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	typeOf := func(name string) Type { return pkg.Scope().Lookup(name).Type() }
+	box, labelled := typeOf("Box").(*Trait), typeOf("Labelled").(*Trait)
+	for name, want := range map[string]bool{"IntBox": true, "Named": true, "Plain": false} {
+		if got := typeOf(name).(*Named).ImplementsDecl(box); got != want {
+			t.Errorf("%s.ImplementsDecl(Box) = %v, want %v", name, got, want)
+		}
+	}
+
+	if !labelled.RefinesDecl(box) || box.RefinesDecl(labelled) || !box.RefinesDecl(box) {
+		t.Error("RefinesDecl does not follow a generic trait's refinements")
 	}
 }

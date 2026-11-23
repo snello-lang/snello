@@ -25,6 +25,10 @@ import (
 	"github.com/snello-lang/snello/lsp/protocol"
 )
 
+// languageFile begins the key of a method of a trait the language
+// declares, which no file holds.
+const languageFile = "language "
+
 // places matches a line and a column in a message, 3:4.
 var places = regexp.MustCompile(`[0-9]+:[0-9]+`)
 
@@ -37,12 +41,19 @@ type objectKey struct {
 }
 
 // A use is a name of a checked file that declares or uses an object:
-// the file's path, the name's stretch as offsets, and whether it is the
-// declaration.
+// the file's path, the name's stretch as offsets, whether it is the
+// declaration, and the key of the object it names.
 type use struct {
 	path       string
 	start, end int
 	decl       bool
+	key        objectKey
+}
+
+// A spot is a place of a file: its path and an offset in it.
+type spot struct {
+	path   string
+	offset int
 }
 
 // A checked is one check of a search: the package's directory, the
@@ -56,22 +67,21 @@ type checked struct {
 }
 
 // A search is what references and rename found of an object, its name
-// and its key: every name that declares or uses it, each once, in
-// order, and the checks that found them, which a rename checks its
-// edits against.
+// and its key: the objects it looks for, by key, the object's alone or,
+// for a rename of a method, every method of its dispatch, each named
+// Holder.Method; every name that declares or uses one of them, each
+// once, in order; the packages it checked, from where it was asked and
+// for which new name; and the checks, which a rename checks its edits
+// against.
 type search struct {
-	name   string
-	key    objectKey
-	uses   []use
-	checks []checked
-}
-
-// A link is a method that shares a dispatch with another of its name: a
-// type's method that implements a trait's, or a trait's that overrides
-// one of a trait it refines; holder names the type or trait.
-type link struct {
-	key    objectKey
-	holder string
+	name    string
+	key     objectKey
+	keys    map[objectKey]string
+	uses    []use
+	dirs    map[string]bool
+	from    string
+	renamed string
+	checks  []checked
 }
 
 // references answers every name that uses the object under the cursor,
@@ -134,8 +144,9 @@ func (s *Server) prepareRename(m *jsonrpc.Message) {
 // each file's edits in one list, or why it may not. It refuses a name
 // the language, the standard library or a module outside the editor
 // declares, a package's, a new name that is no name, a package it would
-// rename in that does not parse, and a method that shares a dispatch
-// with another of its name; then it checks the packages again with
+// rename in that does not parse, and a method whose dispatch holds a
+// method the editor does not edit; a method is renamed with every
+// method it shares a dispatch with; then it checks the packages again with
 // the edits in place, and refuses edits after which the checker reports
 // an error it did not, with the checker's message, or after which a
 // name refers to another declaration than it did.
@@ -166,18 +177,17 @@ func (s *Server) rename(m *jsonrpc.Message) {
 	}
 
 	found := s.search(v, t.obj, pathOf(p.TextDocument.URI), p.NewName)
-	over := s.renamed(found, p.NewName)
-	why := found.untyped()
+	why := s.widen(found)
+	if why == "" {
+		why = found.untyped()
+	}
+
 	if why == "" {
 		why = found.unresolved()
 	}
 
 	if why == "" {
-		why = linksOf(found.checks, found.name, found.key)
-	}
-
-	if why == "" {
-		why = s.refused(found, over, p.NewName)
+		why = s.refused(found, s.renamed(found, p.NewName), p.NewName)
 	}
 
 	if why != "" {
@@ -206,6 +216,20 @@ func (s *Server) unrenamable(v *view, t *target) string {
 		return name + " is declared by the language"
 	case pkg:
 		return name + " names a package, whose name is its directory's"
+	}
+
+	return s.uneditable(key, name)
+}
+
+// uneditable returns why the object of key, named name, is not the
+// editor's to change, or "": the language declares it, the standard
+// library, which the compiler holds, a module required by version,
+// which the module cache holds, or a module the editor has no file or
+// folder of.
+func (s *Server) uneditable(key objectKey, name string) string {
+	switch {
+	case strings.HasPrefix(key.file, languageFile):
+		return name + " is declared by the language"
 	case !filepath.IsAbs(key.file):
 		return name + " is declared by the standard library, which the compiler holds"
 	}
@@ -228,15 +252,63 @@ func (s *Server) unrenamable(v *view, t *target) string {
 // for every platform its files differ for: a package that spells the
 // new name alone is one the rename may change the meaning of.
 func (s *Server) search(v *view, obj types.Object, from, renamed string) *search {
-	found := &search{name: obj.Name()}
+	found := &search{name: obj.Name(), from: from, renamed: renamed, dirs: make(map[string]bool)}
 	key, ok := v.keyOf(obj)
 	if !ok {
 		return found
 	}
 
 	found.key = key
-	for _, dir := range s.searched(key, obj, from) {
-		if !s.spells(dir, found.name) && (renamed == "" || !s.spells(dir, renamed)) {
+	found.keys = map[objectKey]string{key: obj.Name()}
+	s.checkDirs(found, s.searched(key, obj.Name(), from))
+	found.collect()
+	return found
+}
+
+// widen makes a search for a method a search for its whole dispatch:
+// every method that shares the dispatch, found from the checks, and the
+// packages that can name each checked too, until the dispatch grows no
+// more; it returns why the dispatch may not be renamed, a method of it
+// the editor does not edit, or "".
+func (s *Server) widen(found *search) string {
+	for {
+		members := dispatchOf(found.checks, found.name, found.keys)
+		keys := slices.SortedFunc(maps.Keys(members), func(a, b objectKey) int {
+			return cmp.Or(strings.Compare(a.file, b.file), cmp.Compare(a.offset, b.offset))
+		})
+
+		grown := false
+		for _, k := range keys { // in order, so that a refusal names the same method every time
+			label := members[k]
+			if why := s.uneditable(k, label); why != "" {
+				return "it shares its dispatch with " + label + ", which " + strings.TrimPrefix(why, label+" ")
+			}
+
+			if _, ok := found.keys[k]; !ok {
+				found.keys[k] = label
+				grown = true
+				s.checkDirs(found, s.searched(k, found.name, found.from))
+			}
+		}
+
+		if !grown {
+			found.collect()
+			return ""
+		}
+	}
+}
+
+// checkDirs checks each package of dirs a search has not, whose files
+// spell the name or the new one, for every platform its files differ
+// for, and keeps the checks, trimmed to the package's own files.
+func (s *Server) checkDirs(found *search, dirs []string) {
+	for _, dir := range dirs {
+		if found.dirs[dir] {
+			continue
+		}
+
+		found.dirs[dir] = true
+		if !s.spells(dir, found.name) && (found.renamed == "" || !s.spells(dir, found.renamed)) {
 			continue
 		}
 
@@ -248,41 +320,47 @@ func (s *Server) search(v *view, obj types.Object, from, renamed string) *search
 			}
 		}
 	}
+}
 
+// collect finds in the checks of a search every name that declares or
+// uses one of its objects, each once, in order.
+func (found *search) collect() {
 	seen := make(map[use]bool)
 	for _, c := range found.checks {
 		c.view.each(func(id *ast.Ident, o types.Object, decl bool) {
-			if k, ok := c.view.keyOf(o); ok && k == key {
-				file := c.view.fileOf(id.NamePos)
-				start := file.Offset(id.NamePos)
-				seen[use{path: stdPathOf(file.Name()), start: start, end: start + len(id.Name), decl: decl && k.offset == start}] = true
+			if k, ok := c.view.keyOf(o); ok {
+				if _, wanted := found.keys[k]; wanted {
+					file := c.view.fileOf(id.NamePos)
+					start := file.Offset(id.NamePos)
+					seen[use{path: stdPathOf(file.Name()), start: start, end: start + len(id.Name), decl: decl && k.offset == start && k.file == file.Name(), key: k}] = true
+				}
 			}
 		})
 	}
 
+	found.uses = found.uses[:0]
 	for u := range seen {
 		found.uses = append(found.uses, u)
 	}
 
 	slices.SortFunc(found.uses, func(a, b use) int { return cmp.Or(strings.Compare(a.path, b.path), cmp.Compare(a.start, b.start)) })
-	return found
 }
 
-// searched returns the packages that can name obj, whose key is key,
-// sorted: its own alone for a name no other package can name, one not
-// exported; else its own, when it is a package of the editor's, and
+// searched returns the packages that can name the object of key, named
+// name, sorted: its own alone for a name no other package can name, one
+// not exported; else its own, when it is a package of the editor's, and
 // every package of the workspace's modules that imports it, directly or
 // through another, each import resolved as the importer resolves it;
 // and for a name declared outside them, every package of the
 // workspace's modules. The package of the document asked from is among
 // them, unless the document is a copy of the standard library's.
-func (s *Server) searched(key objectKey, obj types.Object, from string) []string {
+func (s *Server) searched(key objectKey, name, from string) []string {
 	own := ""
 	if filepath.IsAbs(key.file) {
 		own = filepath.Dir(key.file)
 	}
 
-	if own != "" && !ast.IsExported(obj.Name()) {
+	if own != "" && !ast.IsExported(name) {
 		return []string{own}
 	}
 
@@ -396,15 +474,16 @@ func (found *search) untyped() string {
 	return ""
 }
 
-// linksOf returns why the method whose key is key, named name in the
-// checks, does not stand alone: a method that implements it, that it
-// implements, or that overrides it or is overridden by it, of the same
-// name; or "". Before a rename, such a method would keep the name and
-// no longer share the dispatch; after it, under the new name, it would
-// share one it did not. Two methods share a dispatch when a type
-// implements, or a trait refines, a trait whose method of that name
-// the type or trait answers with one of them.
-func linksOf(checks []checked, name string, key objectKey) string {
+// dispatchOf returns the methods named name in the checks that share a
+// dispatch with one of the methods of keys, by key, each named
+// Holder.Method, keys' own among them: a type's method that implements
+// a trait's, a trait's that overrides one of a trait it refines, and so
+// on, the dispatch closed over. Two methods share a dispatch when a
+// type implements, or a trait refines, a trait whose method of that
+// name the type or trait answers with one of them. A method of a trait
+// the language declares has no file, and is keyed by languageFile and
+// its trait's name.
+func dispatchOf(checks []checked, name string, keys map[objectKey]string) map[objectKey]string {
 	parent := make(map[objectKey]objectKey)
 	var find func(objectKey) objectKey
 	find = func(k objectKey) objectKey {
@@ -416,16 +495,17 @@ func linksOf(checks []checked, name string, key objectKey) string {
 		return k
 	}
 
-	holders := make(map[objectKey]string)
-	join := func(v *view, a, b *types.Func, holder string) {
-		ka, oka := v.keyOf(a)
-		kb, okb := v.keyOf(b)
-		if !oka || !okb || ka == kb {
-			return
+	labels := make(map[objectKey]string)
+	for k, label := range keys {
+		labels[k] = label
+	}
+
+	keyOf := func(v *view, m *types.Func, holder string) objectKey {
+		if k, ok := v.keyOf(m); ok {
+			return k
 		}
 
-		holders[ka] = holder
-		parent[find(ka)] = find(kb)
+		return objectKey{file: languageFile + holder}
 	}
 
 	for _, c := range checks {
@@ -446,39 +526,53 @@ func linksOf(checks []checked, name string, key objectKey) string {
 				continue
 			}
 
-			if k, ok := c.view.keyOf(m); ok && declaresMethod(tr, traits, m, c.view) {
-				holders[k] = tr.Obj().Name()
+			km := keyOf(c.view, m, tr.Obj().Name())
+			if declaresMethod(tr, traits, m, c.view) {
+				labels[km] = tr.Obj().Name() + "." + name
 			}
 
 			for _, tn := range named {
+				var own *types.Func
 				switch h := tn.Type().(type) {
 				case *types.Named:
-					if own := h.Method(name); own != nil && h.Implements(tr) {
-						join(c.view, own, m, tn.Name())
+					if h.ImplementsDecl(tr) {
+						own = h.Method(name)
 					}
 				case *types.Trait:
-					if own := h.Method(name); own != nil && h.Refines(tr) {
-						join(c.view, own, m, tn.Name())
+					if h != tr && h.RefinesDecl(tr) {
+						own = h.Method(name)
 					}
 				}
+
+				if own == nil {
+					continue
+				}
+
+				ko := keyOf(c.view, own, tn.Name())
+				if ko == km {
+					continue
+				}
+
+				if _, ok := labels[ko]; !ok {
+					labels[ko] = tn.Name() + "." + name
+				}
+
+				parent[find(ko)] = find(km)
 			}
 		}
 	}
 
-	var others []string
-	for k, holder := range holders {
-		if k != key && find(k) == find(key) {
-			others = append(others, holder+"."+name)
+	members := make(map[objectKey]string)
+	for k, label := range labels {
+		for start := range keys {
+			if find(k) == find(start) {
+				members[k] = label
+				break
+			}
 		}
 	}
 
-	if len(others) == 0 {
-		return ""
-	}
-
-	slices.Sort(others)
-	others = slices.Compact(others)
-	return "it shares its dispatch with " + strings.Join(others, ", ") + ", which would keep the name: rename them together"
+	return members
 }
 
 // declaresMethod reports whether the trait tr declares its method m,
@@ -521,9 +615,9 @@ func (s *Server) renamed(found *search, name string) map[string][]byte {
 // file, the line and column, and the checker's message, the first in
 // the order of the files; a name that refers after the rename to
 // another declaration than before it, which a name renamed into the
-// scope of another of the same name would; or a method that shares a
-// dispatch under the new name, which a method renamed onto a name its
-// trait's dispatch already uses would.
+// scope of another of the same name would; or a dispatch the renamed
+// methods would join under the new name, which a method renamed onto a
+// name its trait's dispatch already uses would.
 func (s *Server) refused(found *search, over map[string][]byte, name string) string {
 	var again []checked
 	for _, c := range found.checks {
@@ -543,7 +637,24 @@ func (s *Server) refused(found *search, over map[string][]byte, name string) str
 	}
 
 	shift := found.shifter(name)
-	return linksOf(again, name, objectKey{found.key.file, shift(stdPathOf(found.key.file), found.key.offset)})
+	moved := make(map[objectKey]string)
+	for k, label := range found.keys {
+		moved[objectKey{k.file, shift(stdPathOf(k.file), k.offset)}] = label
+	}
+
+	var joined []string
+	for k, label := range dispatchOf(again, name, moved) {
+		if _, ok := moved[k]; !ok {
+			joined = append(joined, label)
+		}
+	}
+
+	if len(joined) == 0 {
+		return ""
+	}
+
+	slices.Sort(joined)
+	return "it would share a dispatch with " + strings.Join(joined, ", ") + ", which it does not now"
 }
 
 // newErrors returns the first error the checks again report that the
@@ -676,10 +787,9 @@ func (found *search) shifter(name string) func(path string, offset int) int {
 // moved by the edits before it in its file.
 func (found *search) captured(again []checked, name string) string {
 	shift := found.shifter(name)
-	want := make(map[use]objectKey)
-	renamedKey := objectKey{found.key.file, shift(stdPathOf(found.key.file), found.key.offset)}
+	want := make(map[spot]objectKey)
 	for _, u := range found.uses {
-		want[use{path: u.path, start: shift(u.path, u.start)}] = renamedKey
+		want[spot{u.path, shift(u.path, u.start)}] = objectKey{u.key.file, shift(stdPathOf(u.key.file), u.key.offset)}
 	}
 
 	for _, c := range found.checks {
@@ -691,7 +801,7 @@ func (found *search) captured(again []checked, name string) string {
 			file := c.view.fileOf(id.NamePos)
 			path := stdPathOf(file.Name())
 			if k, ok := c.view.keyOf(o); ok {
-				want[use{path: path, start: shift(path, file.Offset(id.NamePos))}] = objectKey{k.file, shift(stdPathOf(k.file), k.offset)}
+				want[spot{path, shift(path, file.Offset(id.NamePos))}] = objectKey{k.file, shift(stdPathOf(k.file), k.offset)}
 			}
 		})
 	}
@@ -704,11 +814,11 @@ func (found *search) captured(again []checked, name string) string {
 			}
 
 			file := c.view.fileOf(id.NamePos)
-			at := use{path: stdPathOf(file.Name()), start: file.Offset(id.NamePos)}
+			at := spot{stdPathOf(file.Name()), file.Offset(id.NamePos)}
 			k, ok := c.view.keyOf(o)
 			if w, known := want[at]; known && (!ok || k != w) {
 				src, _ := c.view.source(file.Name())
-				p := positionOf(src, at.start, protocol.PositionEncodingUTF8)
+				p := positionOf(src, at.offset, protocol.PositionEncodingUTF8)
 				where = relative(at.path) + ":" + strconv.Itoa(int(p.Line)+1) + ":" + strconv.Itoa(int(p.Character)+1)
 			}
 		})

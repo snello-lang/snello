@@ -22,14 +22,9 @@ import (
 	"github.com/snello-lang/snello/lsp/protocol"
 )
 
-// symbolsMost is the most symbols a search of the workspace answers
-// with, the best first, since an editor shows a short list and asks
-// again as the developer types; and memberSeparator joins a member's
-// name to its type's where the type is not in the outline beside it.
-const (
-	symbolsMost     = 100
-	memberSeparator = "."
-)
+// memberSeparator joins a member's name to its type's where the type
+// is not in the outline beside it.
+const memberSeparator = "."
 
 // An outlined is the outline of a file a search of the workspace read,
 // as a list, each name in lower case beside it, and the stamp of the
@@ -95,7 +90,8 @@ func (s *Server) documentSymbol(m *jsonrpc.Message) {
 // workspaceSymbol answers the declarations of every file of the
 // workspace whose names hold the query's letters in order, whatever
 // their case, the best matches first: a name that is the query, then
-// one that begins with it, then one that holds it, then the shortest.
+// one that begins with it, then one that holds it, then the shortest;
+// every match is answered, and the editor shows what fits.
 // The workspace is every package of its modules, and the package of an
 // open document under no module. A file's outline is read again only
 // when its text changed since the search before.
@@ -139,8 +135,8 @@ func (s *Server) workspaceSymbol(m *jsonrpc.Message) {
 		)
 	})
 
-	symbols := []protocol.SymbolInformation{}
-	for _, f := range found[:min(len(found), symbolsMost)] {
+	symbols := make([]protocol.SymbolInformation, 0, len(found))
+	for _, f := range found {
 		symbols = append(symbols, f.sym)
 	}
 
