@@ -1900,9 +1900,8 @@ func symbolLine(line string) (name, section string) {
 // runs again within a few tens of milliseconds of each sleep's end,
 // within a second in all on a loaded machine, with the workers as many
 // as the cores; at most one more, where three signals in a row found
-// no point to leave at, as on a thread of another context form on
-// x86-64 macOS or a thread the system left unrun on a loaded runner,
-// and the monitor started a thread as before.
+// no point to leave at, as on a thread the system left unrun on a
+// loaded runner, and the monitor started a thread as before.
 func TestPreempted(t *testing.T) {
 	if !opensCode() {
 		t.Skip("the probes' compiler cannot open code to preemption")
@@ -2117,10 +2116,13 @@ int main(int argc, char **argv) {
 // the system keeps, spin without touching one, and store them, while
 // the main task wakes every 10 ms so that each is taken off its worker
 // in the spin and resumed on another: every register comes back whole.
-// A program built for a processor that has the wide registers, or a
-// function written with them, holds values there, and a preemption
-// that kept only their low halves would resume the task with a stale
-// half in each.
+// Where the widest are the 512-bit registers, every other task holds
+// the 256-bit ones, so that on macOS, which gives a thread the 512-bit
+// state at its first use of it, a task is saved and resumed on threads
+// of both forms. A program built for a processor that has the wide
+// registers, or a function written with them, holds values there, and
+// a preemption that kept only their low halves would resume the task
+// with a stale half in each.
 func TestPreemptedKeepsVectorRegisters(t *testing.T) {
 	if !opensCode() {
 		t.Skip("the probes' compiler cannot open code to preemption")
@@ -2130,6 +2132,9 @@ func TestPreemptedKeepsVectorRegisters(t *testing.T) {
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 SN_OPEN_CODE
 enum { holds = 20, spins = 100000000, most = 64, room = 32 * 64 + 16 };
 static _Atomic int64_t done, wrong;
@@ -2138,6 +2143,12 @@ static _Atomic int64_t done, wrong;
 static void (*hold)(uint64_t n, const uint8_t *want, uint8_t *got);
 static size_t held;       // the bytes the registers hold in all
 static const char *width; // of the widest registers the system keeps
+// beside, what every other task holds: the registers one size down where
+// the widest are the 512-bit ones, the widest elsewhere. On macOS a
+// thread that has run only such tasks keeps the AVX form, so tasks move
+// between threads of both forms.
+static void (*hold_beside)(uint64_t n, const uint8_t *want, uint8_t *got);
+static size_t held_beside;
 #define ALL16(M) M(0) M(1) M(2) M(3) M(4) M(5) M(6) M(7) M(8) M(9) M(10) M(11) M(12) M(13) M(14) M(15)
 #define ALL32(M) ALL16(M) M(16) M(17) M(18) M(19) M(20) M(21) M(22) M(23) M(24) M(25) M(26) M(27) M(28) M(29) M(30) M(31)
 #if defined(__x86_64__)
@@ -2160,7 +2171,6 @@ __attribute__((noinline, target("avx"))) static void hold_256(uint64_t n, const 
     __asm__ volatile(ALL16(YL) SPIN ALL16(YS) "vzeroupper\n"
                      : [n] "+r"(n) : [w] "r"(w), [g] "r"(g) : "cc", "memory", LOW16);
 }
-#if !defined(__APPLE__)
 // The 512-bit registers, all thirty-two, and the seven mask registers
 // an instruction may name, after them in the buffers.
 __attribute__((noinline, target("avx512f"))) static void hold_512(uint64_t n, const uint8_t *w, uint8_t *g) {
@@ -2168,7 +2178,6 @@ __attribute__((noinline, target("avx512f"))) static void hold_512(uint64_t n, co
                      : [n] "+r"(n) : [w] "r"(w), [g] "r"(g)
                      : "cc", "memory", LOW16, HIGH16, "k1", "k2", "k3", "k4", "k5", "k6", "k7");
 }
-#endif
 static void cpuid(uint32_t leaf, uint32_t sub, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(sub));
 }
@@ -2179,25 +2188,35 @@ static uint64_t kept(void) {
     __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
     return ((uint64_t)high << 32) | low;
 }
+// wide512 reports whether the processor has the 512-bit registers and
+// the system keeps them. macOS gives a thread their state at its first
+// use of one, so a thread's own word shows it only after: the system
+// says it, hw.optional.avx512f.
+static bool wide512(void) {
+#if defined(__APPLE__)
+    int has = 0;
+    size_t size = sizeof has;
+    return sysctlbyname("hw.optional.avx512f", &has, &size, NULL, 0) == 0 && has != 0;
+#else
+    uint32_t r[4];
+    cpuid(7, 0, r);
+    return (r[1] >> 16 & 1) != 0 && (kept() & 0xe6) == 0xe6;
+#endif
+}
 // choose takes the widest registers the processor has and the system
-// keeps. macOS gives a thread the 512-bit registers at its first use
-// of one, with a context of another form, on which a task is not
-// preempted: the 256-bit ones are the widest held there.
+// keeps.
 static void choose(void) {
     uint32_t r[4];
-    hold = hold_128, held = 16 * 16, width = "128-bit";
+    hold = hold_beside = hold_128, held = held_beside = 16 * 16, width = "128-bit";
     cpuid(1, 0, r);
     if ((r[2] >> 27 & 1) == 0 || (r[2] >> 28 & 1) == 0 || (kept() & 0x6) != 0x6) {
         return;
     }
 
-    hold = hold_256, held = 16 * 32, width = "256-bit";
-#if !defined(__APPLE__)
-    cpuid(7, 0, r);
-    if ((r[1] >> 16 & 1) != 0 && (kept() & 0xe6) == 0xe6) {
+    hold = hold_beside = hold_256, held = held_beside = 16 * 32, width = "256-bit";
+    if (wide512()) {
         hold = hold_512, held = 32 * 64 + 7 * 2, width = "512-bit";
     }
-#endif
 }
 #else
 #define VL(i) "ldr q" #i ", [%[w], #" #i "*16]\n"
@@ -2209,7 +2228,7 @@ __attribute__((noinline)) static void hold_128(uint64_t n, const uint8_t *w, uin
                        "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24",
                        "v25", "v26", "v27", "v28", "v29", "v30", "v31");
 }
-static void choose(void) { hold = hold_128, held = 32 * 16, width = "128-bit"; }
+static void choose(void) { hold = hold_beside = hold_128, held = held_beside = 32 * 16, width = "128-bit"; }
 #endif
 static void keep(void *arg) {
     int64_t id = *(int64_t *)arg;
@@ -2218,10 +2237,12 @@ static void keep(void *arg) {
         want[i] = (uint8_t)(i * 7 + (size_t)id + 1); // a pattern of its own for each register and each task
     }
 
+    void (*mine)(uint64_t, const uint8_t *, uint8_t *) = id % 2 == 0 ? hold : hold_beside;
+    size_t bytes = id % 2 == 0 ? held : held_beside;
     for (int h = 0; h < holds; h++) {
         memset(got, 0, sizeof got);
-        hold(spins, want, got);
-        if (memcmp(want, got, held) != 0) {
+        mine(spins, want, got);
+        if (memcmp(want, got, bytes) != 0) {
             atomic_fetch_add(&wrong, 1);
         }
     }

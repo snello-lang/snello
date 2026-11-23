@@ -239,6 +239,20 @@ enum { teb_stack_base = 0x08, teb_stack_limit = 0x10, teb_last_error = 0x68, teb
 enum { preempt_signal = SIGURG }; // unused by the system but for out-of-band data, and ignored by default
 #endif
 
+#if defined(__APPLE__) && defined(__x86_64__)
+// The forms of a machine context on x86-64 macOS: the AVX form, and
+// the AVX-512 form, which the system gives a thread at its first use of
+// a 512-bit register and every thread started after one has had it.
+// The second holds the first's fields at their places, the registers
+// through the upper halves of the sixteen 256-bit ones, avx_fields
+// bytes, and the 512-bit state after them.
+enum {
+    avx_form = sizeof(_STRUCT_MCONTEXT_AVX64),
+    avx512_form = sizeof(_STRUCT_MCONTEXT_AVX512_64),
+    avx_fields = offsetof(_STRUCT_MCONTEXT_AVX64, __fs.__fpu_ymmh15) + sizeof(_STRUCT_XMM_REG),
+};
+#endif
+
 #if defined(__x86_64__)
 // The direction flag, which both calling conventions have clear as a
 // function is entered: a landing begins as one, wherever its task was.
@@ -2608,7 +2622,7 @@ SN_HELD_STATIC static void keeper_wake(void) {
 // that is not safe is left as it is, and the monitor tries again at
 // its next look.
 static uintptr_t code_start, code_end; // the code section, where a task may be preempted
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(__x86_64__)
 static _Atomic size_t context_size; // the size of the machine context of the first thread preempted
 #endif
 
@@ -2880,25 +2894,58 @@ SN_HELD_STATIC static uintptr_t context_pc(const ucontext_t *uc) {
 #endif
 }
 
+#if defined(__APPLE__)
+// frame_copy and frame_clear copy into and clear a machine context in
+// the signal's handler without the C library, whose string functions
+// may use a 512-bit register: on x86-64 that gives the thread the
+// AVX-512 form while the kernel's frame is of the AVX one, and the
+// kernel's return reads the frame by the thread's form. A compiler
+// without the attribute opens no code to preemption, so its build never
+// copies a frame.
+#if __has_attribute(no_builtin)
+#define SN_FRAME_LOOP __attribute__((no_builtin))
+#else
+#define SN_FRAME_LOOP
+#endif
+
+SN_FRAME_LOOP SN_HELD_STATIC static void frame_copy(uint8_t *to, const uint8_t *from, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        to[i] = from[i];
+    }
+}
+#endif
+
+#if defined(__APPLE__) && defined(__x86_64__)
+SN_FRAME_LOOP SN_HELD_STATIC static void frame_clear(uint8_t *to, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        to[i] = 0;
+    }
+}
+#endif
+
 // context_save copies the interrupted context into the block, whole,
 // and reports whether the block had room for what the kernel saved.
 SN_HELD_STATIC static bool context_save(preempt_block *b, const ucontext_t *uc) {
 #if defined(__APPLE__)
-    // The context's form is the thread's, and on x86-64 a thread that
-    // has used wide vector registers gets a larger one: a task is
-    // preempted only on a thread whose form is the first one seen, so
-    // that it is restored into a frame of the same size.
+    // A context is saved only in a form the restore puts back: on
+    // x86-64 the AVX and AVX-512 forms, into a frame of either, and on
+    // arm64, which has one, the form of the first thread preempted.
+#if defined(__x86_64__)
+    if (uc->uc_mcsize != avx_form && uc->uc_mcsize != avx512_form) {
+        return false;
+    }
+#else
     size_t expected = 0;
     if (!atomic_compare_exchange_strong(&context_size, &expected, uc->uc_mcsize) && expected != uc->uc_mcsize) {
         return false;
     }
-
+#endif
     if (uc->uc_mcsize > sizeof b->context) {
         return false;
     }
 
     b->size = uc->uc_mcsize;
-    memcpy(b->context, uc->uc_mcontext, uc->uc_mcsize);
+    frame_copy(b->context, (const uint8_t *)uc->uc_mcontext, uc->uc_mcsize);
 #elif defined(__aarch64__)
     if (context_outside(&uc->uc_mcontext)) {
         return false;
@@ -2926,13 +2973,21 @@ SN_HELD_STATIC static bool context_save(preempt_block *b, const ucontext_t *uc) 
 // one, which the kernel returns into.
 SN_HELD_STATIC static void context_restore(const preempt_block *b, ucontext_t *uc) {
 #if defined(__APPLE__)
-    if (uc->uc_mcsize != b->size) { // a frame of another form, which the save holds off: never
+    uint8_t *live = (uint8_t *)uc->uc_mcontext;
+    if (uc->uc_mcsize == b->size) {
+        frame_copy(live, b->context, b->size);
+#if defined(__x86_64__)
+    } else if (b->size == avx_form && uc->uc_mcsize == avx512_form) {
+        // Saved on a thread of the AVX form: its 512-bit state is the
+        // initial one, zero, since that thread had never used it.
+        frame_copy(live, b->context, avx_fields);
+        frame_clear(live + avx_fields, avx512_form - avx_fields);
+#endif
+    } else { // a task saved in the AVX-512 form has its landing's thread given it first: never
         static const char message[] = "fatal error: a preempted task's registers cannot be put back\n";
         (void)sn_write_fd(2, (const uint8_t *)message, sizeof message - 1);
         abort();
     }
-
-    memcpy(uc->uc_mcontext, b->context, b->size);
 #elif defined(__aarch64__)
     uc->uc_mcontext = b->context;
 #else
@@ -2954,7 +3009,7 @@ SN_HELD_STATIC static void context_land(ucontext_t *uc, void (*fn)(task *), uint
     uc->uc_mcontext->__ss.__fp = 0;
     uc->uc_mcontext->__ss.__lr = 0;
 #elif defined(__APPLE__)
-    memset(top - sizeof(void *), 0, sizeof(void *));
+    frame_clear(top - sizeof(void *), sizeof(void *)); // a return address of zero
     uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)fn;
     uc->uc_mcontext->__ss.__rsp = (uint64_t)(uintptr_t)(top - sizeof(void *));
     uc->uc_mcontext->__ss.__rdi = (uint64_t)(uintptr_t)t;
@@ -3084,6 +3139,17 @@ SN_HELD_STATIC static void preempt_release(worker *w, task *t, preempt_block *b)
     }
 }
 
+#if defined(__APPLE__) && defined(__x86_64__)
+// avx512_thread gives the calling thread the AVX-512 form of context,
+// which macOS gives a thread at its first use of a 512-bit register, so
+// that a task saved in that form is put back whole on it. It is called
+// only where a thread has had the form, so the processor has the
+// registers.
+__attribute__((target("avx512f"))) SN_HELD_STATIC static void avx512_thread(void) {
+    __asm__ volatile("vpxord %%zmm16, %%zmm16, %%zmm16" ::: "xmm16");
+}
+#endif
+
 // preempt_restore puts a preempted task's registers back: through the
 // signal's handler on Linux and macOS, through RtlRestoreContext on
 // Windows, with the stack's bounds and the last error put back first,
@@ -3107,6 +3173,11 @@ SN_HELD_STATIC static _Noreturn void preempt_restore(task *t) {
     SetLastError(last_error);
     RtlRestoreContext(from, NULL);
 #else
+#if defined(__APPLE__) && defined(__x86_64__)
+    if (b->size == avx512_form) {
+        avx512_thread(); // the signal's frame then takes the form the task was saved in
+    }
+#endif
     b->restoring = true;
     raise(preempt_signal);
 #endif
