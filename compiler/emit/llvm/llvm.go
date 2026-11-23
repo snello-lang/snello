@@ -86,6 +86,7 @@ type Config struct {
 type Emitter struct {
 	cfg        Config
 	abi        abi
+	section    string // after a function's attributes: the code section of the target's system, quoted
 	info       *types.Info
 	file       *token.File
 	types      bytes.Buffer                    // the named types of the module
@@ -166,6 +167,8 @@ type function struct {
 	sig        *types.Signature
 	tmp        int
 	terminated bool
+	result     string // the slot its returns store the result in, once one has, and exit the block that returns it
+	exit       string
 	file       int  // the node of its subprogram's file, which its variables and blocks are in
 	line       int  // the line of the statement being written
 	artificial bool // a function of the backend's own, all at line zero in a debug build, which a debugger steps through
@@ -240,6 +243,7 @@ func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.
 	e := &Emitter{
 		cfg:        cfg,
 		abi:        target,
+		section:    sectionOf(cfg.OS),
 		info:       info,
 		file:       files[0],
 		dfiles:     make(map[*token.File]int),
@@ -468,7 +472,7 @@ func (e *Emitter) mainFunc() {
 
 	code := e.op("call i32 @sn_finish()", "i32")
 	e.inst("ret i32 " + code.s)
-	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.funcs, "define i32 @main(i32 %argc, ptr %argv)", funcAttrs, e.section, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n")
 }
@@ -504,7 +508,7 @@ func (e *Emitter) end(section *bytes.Buffer, outer *function) {
 	clear(f.pre)
 	f.loops, f.frames, f.temps, f.defers = f.loops[:0], f.frames[:0], f.temps[:0], f.defers[:0]
 	f.captured, f.sig, f.tmp, f.terminated, f.subprogram, f.loc = nil, nil, 0, false, 0, ""
-	f.scope, f.file, f.line, f.artificial = 0, 0, 0, false
+	f.scope, f.file, f.line, f.artificial, f.result, f.exit = 0, 0, 0, false, "", ""
 	e.spare = append(e.spare, f)
 	e.fn = outer
 }
@@ -609,7 +613,7 @@ func (e *Emitter) lazyVar(v *types.Var, name *ast.Ident, value ast.Expr, t strin
 	sp := e.subprogramNode(g+"_get", "", nil, token.Position{Filename: generated}, "")
 	loc := e.metaNode("!DILocation(line: 0, column: 0, scope: !" + strconv.Itoa(sp) + ")")
 	at := ", !dbg !" + strconv.Itoa(loc)
-	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
+	put(&e.funcs, "define internal ptr ", g, "_get()", funcAttrs, e.section, " !dbg !", strconv.Itoa(sp), " {\nentry:\n  %state = load atomic i32, ptr ", g, "_lazy acquire, align 4", at, "\n  %unmade = icmp ne i32 %state, 2", at, "\n  br i1 %unmade, label %make, label %done", at, "\nmake:\n  call void @sn_lazy_make(ptr ", g, "_lazy, ptr @", lower.LazyInit(lower.ObjName(v)), ", ptr ", e.constBytes(name.Name), ")", at, "\n  br label %done", at, "\ndone:\n  ret ptr ", g, at, "\n}\n\n")
 	if needsDrop(v.Type()) {
 		e.lazies = append(e.lazies, owned{slot: g, typ: v.Type()})
 	}
@@ -887,7 +891,7 @@ func (e *Emitter) writeBody(name, display string, sig *types.Signature, params [
 	}
 
 	e.function(sig, params, env, body)
-	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", e.ownAttrs(), funcAttrs, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
+	put(&e.funcs, "define internal ", e.resultType(sig.Results(), pos), " @", name, "(", strings.Join(list, ", "), ")", e.ownAttrs(), funcAttrs, e.section, " !dbg !", strconv.Itoa(e.fn.subprogram), " {\nentry:\n")
 	e.end(&e.funcs, outer)
 	e.funcs.WriteString("}\n\n")
 	e.within, e.nclosure = outerWithin, outerClosures
@@ -926,10 +930,7 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 	e.stmts(body.List)
 	if e.fn.terminated {
 		e.popLeft() // the body ended with a statement that left, which dropped everything
-		return
-	}
-
-	if sig.Results() == types.Unit {
+	} else if sig.Results() == types.Unit {
 		e.leaveFunction(body.Rbrace)
 		e.popLeft()
 		e.inst("ret void")
@@ -937,6 +938,45 @@ func (e *Emitter) function(sig *types.Signature, params []*types.Var, env map[*t
 		e.inst("unreachable")
 	}
 
+	e.fn.terminated = true
+	e.exitBlock(body.Rbrace)
+}
+
+// returnValue writes a return of v: a store into the function's result
+// slot and a branch to its one exit block, which exitBlock writes with
+// the load and the ret, as clang shapes a function. A result of several
+// members returned from several places, an option's flag and value,
+// then reaches the optimizer as a slot it takes apart into scalars, one
+// phi each, where a ret in each place had it merge them into one phi
+// of the whole, which it cannot take apart: the flag of an option stayed
+// a value read and tested on every item of a loop over an iterator's
+// Next, half again the cost of the loop by hand.
+func (e *Emitter) returnValue(v value) {
+	if e.fn.result == "" {
+		e.fn.result = e.slot(e.resultType(e.fn.sig.Results(), token.NoPos))
+		e.fn.exit = e.block("return")
+	}
+
+	e.store(v, e.fn.result)
+	e.jump(e.fn.exit)
+}
+
+// exitBlock writes the exit block of a function whose returns stored
+// their result, at the line of its closing brace, as clang places an
+// epilogue; a function that never returned a value has none.
+func (e *Emitter) exitBlock(rbrace token.Pos) {
+	if e.fn.exit == "" {
+		return
+	}
+
+	if e.fn.subprogram != 0 && rbrace.IsValid() {
+		e.fn.line = e.lineOf(rbrace)
+		e.fn.loc = e.locationAt(e.fn.line)
+	}
+
+	e.label(e.fn.exit)
+	t := e.resultType(e.fn.sig.Results(), rbrace)
+	e.inst("ret " + e.load(t, e.fn.result).typed())
 	e.fn.terminated = true
 }
 

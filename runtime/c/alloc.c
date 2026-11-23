@@ -181,7 +181,7 @@ __attribute__((constructor)) static void reserve(void) {
 // carve takes a new span for class c and links its blocks into a list,
 // whose first block it returns with the list's length in n; nothing
 // when the reservation is used up.
-static void *carve(int c, int32_t *n) {
+SN_HELD_STATIC static void *carve(int c, int32_t *n) {
     size_t at = atomic_fetch_add(&used, (size_t)span_size);
     if (at >= reserved) {
         return NULL;
@@ -213,7 +213,7 @@ static void *carve(int c, int32_t *n) {
 // The central list is walked under its lock, a batch's length of
 // pointers, which costs nothing on one thread; whether it costs under
 // contention is the contention benchmark's to say.
-static void *refill(cache *k, int c) {
+SN_HELD_STATIC static void *refill(cache *k, int c) {
     central *z = &centrals[c];
     int32_t want = batch[c];
     int32_t n = 0;
@@ -245,7 +245,7 @@ static void *refill(cache *k, int c) {
 
 // give_back moves a batch from the thread's list for class c, grown past
 // twice a batch, to the central list.
-static void give_back(cache *k, int c) {
+SN_HELD_STATIC static void give_back(cache *k, int c) {
     int32_t m = batch[c];
     void *first = k->head[c];
     void *last = first;
@@ -275,7 +275,10 @@ static void give_back(cache *k, int c) {
 // with two ENTRY callers was kept a function of its own, and every
 // allocation paid a call and a second read of the thread's cache, which
 // made a program that allocates on every core a tenth slower on Darwin.
-#define ENTRY  __attribute__((noinline))
+// An ENTRY is in the runtime's held section besides, so that a task is
+// never taken off its thread between its reading of the cache and its
+// writing (internal.h, SN_HELD).
+#define ENTRY  SN_HELD
 #define HELPER static inline __attribute__((always_inline))
 
 HELPER void *heap_alloc(size_t n) {
@@ -319,7 +322,7 @@ ENTRY void sn_heap_free(void *p) { heap_free(p); }
 // from the system, 128 bytes since the widest line of a processor
 // Snello runs on is that, and adds them to the list every thread's are
 // on.
-static __attribute__((noinline, cold)) counts *enlist(cache *k) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) counts *enlist(cache *k) {
     void *line = NULL;
 #if defined(_WIN32)
     if ((line = sn_aligned_alloc(128, 128)) ==

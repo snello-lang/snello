@@ -24,6 +24,19 @@ const (
 	otool     = "otool"
 	otoolText = "-tV"
 
+	// otoolSection has otool print a section it is named, and ownSegment
+	// names the segment of the two the runtime's header names, which
+	// -tV, the __text section alone, leaves out: codeSection, the
+	// program's own code and what of the runtime only computes, where a
+	// task may be preempted (runtime/c/snello.h, SN_OPEN_CODE), and
+	// heldSection, the runtime's functions it never is inside
+	// (runtime/c/internal.h, SN_HELD).
+	otoolSection = "-s"
+	otoolVerbose = "-v"
+	ownSegment   = "__TEXT"
+	codeSection  = "__sn_code"
+	heldSection  = "__sn_held"
+
 	// objdump is the disassembler on Linux, and objdumpText and
 	// objdumpNoBytes the options that have it print the code without
 	// each instruction's bytes; llvmObjdump is LLVM's, which reads every
@@ -45,6 +58,24 @@ const (
 	// built with chained fixups, binding every import as it starts,
 	// does not have.
 	lazyPointers = "__la_symbol_ptr"
+
+	// machoSegment64 is the size of a 64-bit segment command's own
+	// fields, machoSection64 of each section header after them, and
+	// machoStubsName, machoStubsType and machoStubsTypeMask the section of
+	// the stubs the code calls imported functions through and the type
+	// that marks it; machoIndirectSpecial marks an indirect symbol that
+	// names no symbol.
+	machoSegment64        = 72
+	machoSection64        = 80
+	machoStubsName        = "__stubs"
+	machoStubsType        = 0x8
+	machoStubsTypeMask    = 0xff
+	machoIndirectSpecial  = 0xc0000000
+	machoSectionAddr      = 32 // the offsets of a section header's fields, after its two names
+	machoSectionSize      = 40
+	machoSectionFlags     = 64
+	machoSectionReserved1 = 68
+	machoSectionReserved2 = 72
 
 	// machoTypeMask is the bits of a Mach-O symbol's type that say what
 	// kind it is; an imported function's are zero, N_UNDF. The library
@@ -151,6 +182,8 @@ func Load(path string) (*Image, error) {
 		if s := m.Section(lazyPointers); s != nil && s.Size > 0 {
 			img.lazy = true
 		}
+
+		img.stubs = machoStubs(m)
 	} else if e, err := elf.Open(path); err == nil {
 		defer e.Close()
 		img.os = linux
@@ -256,6 +289,60 @@ func machoLibraries(m *macho.File, into map[string]bool) error {
 	return nil
 }
 
+// machoStubs returns the imported function each stub of the binary
+// calls, by the stub's address: otool names the stub's function after a
+// call in the __text section and after no call in another, such as the
+// runtime's held section. The stubs are in the section header's order,
+// each of the size the header's second reserved word gives, and the
+// first reserved word is where their indirect symbols begin.
+func machoStubs(m *macho.File) map[uint64]string {
+	stubs := map[uint64]string{}
+	if m.Symtab == nil || m.Dysymtab == nil {
+		return stubs
+	}
+
+	for _, l := range m.Loads {
+		seg, ok := l.(*macho.Segment)
+		if !ok || seg.Cmd != macho.LoadCmdSegment64 {
+			continue
+		}
+
+		raw := seg.Raw()
+		for i := uint32(0); i < seg.Nsect; i++ {
+			h := raw[machoSegment64+int(i)*machoSection64:]
+			if len(h) < machoSection64 {
+				break
+			}
+
+			name := strings.TrimRight(string(h[:16]), "\x00")
+			flags := m.ByteOrder.Uint32(h[machoSectionFlags:])
+			if name != machoStubsName || flags&machoStubsTypeMask != machoStubsType {
+				continue
+			}
+
+			addr := m.ByteOrder.Uint64(h[machoSectionAddr:])
+			size := m.ByteOrder.Uint64(h[machoSectionSize:])
+			first := m.ByteOrder.Uint32(h[machoSectionReserved1:])
+			each := uint64(m.ByteOrder.Uint32(h[machoSectionReserved2:]))
+			for k := uint64(0); each > 0 && k < size/each; k++ {
+				idx := int(first) + int(k)
+				if idx >= len(m.Dysymtab.IndirectSyms) {
+					break
+				}
+
+				sym := m.Dysymtab.IndirectSyms[idx]
+				if sym&machoIndirectSpecial != 0 || int(sym) >= len(m.Symtab.Syms) {
+					continue
+				}
+
+				stubs[addr+k*each] = m.Symtab.Syms[sym].Name
+			}
+		}
+	}
+
+	return stubs
+}
+
 func isCLibrary(lib string) bool {
 	for _, p := range cLibraries {
 		if strings.HasPrefix(lib, p) {
@@ -274,7 +361,7 @@ func disassemble(os system, a arch, path string) ([]byte, error) {
 	var cmd *exec.Cmd
 	switch os {
 	case darwin:
-		cmd = exec.Command(otool, otoolText, path)
+		return disassembleMachO(path)
 	case windows:
 		cmd = exec.Command(peDisassembler(), objdumpText, objdumpNoBytes, path)
 	default:
@@ -286,6 +373,26 @@ func disassemble(os system, a arch, path string) ([]byte, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %v: %s", cmd.Path, err, strings.TrimSpace(stderr.String()))
+	}
+
+	return out, nil
+}
+
+// disassembleMachO runs otool over a Mach-O binary's __text section and
+// over the code and the held sections, which are code too, and returns
+// the three listings as one.
+func disassembleMachO(path string) ([]byte, error) {
+	var out []byte
+	for _, args := range [][]string{{otoolText, path}, {otoolVerbose, otoolSection, ownSegment, codeSection, path}, {otoolVerbose, otoolSection, ownSegment, heldSection, path}} {
+		cmd := exec.Command(otool, args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		listing, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v: %s", cmd.Path, err, strings.TrimSpace(stderr.String()))
+		}
+
+		out = append(out, listing...)
 	}
 
 	return out, nil

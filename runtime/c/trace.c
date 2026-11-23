@@ -48,20 +48,20 @@ static _Thread_local int nframes;
 static const sn_trace_anchor *anchors(void) { return (const sn_trace_anchor *)(sn_trace_parts + sn_trace.anchors); }
 static const sn_trace_row *rows(void) { return (const sn_trace_row *)(sn_trace_parts + sn_trace.rows); }
 static const sn_trace_frame *frames_of(void) { return (const sn_trace_frame *)(sn_trace_parts + sn_trace.frames); }
-static const char *named(int64_t offsets, int32_t i) {
+SN_HELD_STATIC static const char *named(int64_t offsets, int32_t i) {
     return (const char *)sn_trace_parts + sn_trace.strings + ((const int32_t *)(sn_trace_parts + offsets))[i];
 }
 
 // slide is what the loader moved the program by from the addresses it
 // was linked with, which the anchors hold: the distance of the table
 // from where it was linked, which its reference holds.
-static uintptr_t slide(void) { return (uintptr_t)&sn_trace - sn_trace.reference; }
+SN_HELD_STATIC static uintptr_t slide(void) { return (uintptr_t)&sn_trace - sn_trace.reference; }
 
 // covered reports whether a return address is inside a function of
 // the object the program was linked from, and which anchor's, in
 // *anchor and *offset; a return address outside every function is the C
 // library's or the loader's, where the program's frames end.
-static bool covered(uintptr_t address, const sn_trace_anchor **anchor, int64_t *offset) {
+SN_HELD_STATIC static bool covered(uintptr_t address, const sn_trace_anchor **anchor, int64_t *offset) {
     if (sn_trace.reference == SN_TRACE_UNWRITTEN) { // a program built with no table
         return false;
     }
@@ -93,7 +93,7 @@ static bool covered(uintptr_t address, const sn_trace_anchor **anchor, int64_t *
 }
 
 // within reports which of the n regions holds a frame at f, or none.
-static int within(uintptr_t f, const sn_stack_region *regions, int n) {
+SN_HELD_STATIC static int within(uintptr_t f, const sn_stack_region *regions, int n) {
     for (int i = 0; i < n; i++) {
         if (f >= (uintptr_t)regions[i].low && f + frame_least <= (uintptr_t)regions[i].high) {
             return i;
@@ -112,7 +112,7 @@ static int within(uintptr_t f, const sn_stack_region *regions, int n) {
 // the main thread's chain ends in one where the C library keeps frame
 // pointers. A task's regions are its own stack and the guarded one a
 // panic moved it to, whose frames link across.
-int sn_trace_fill(void *fp, const sn_stack_region *regions, int n) {
+SN_HELD int sn_trace_fill(void *fp, const sn_stack_region *regions, int n) {
     nframes = 0;
     uintptr_t last = 0;
     int region = no_region;
@@ -152,7 +152,7 @@ int sn_trace_fill(void *fp, const sn_stack_region *regions, int n) {
 }
 
 #if defined(_WIN32) && defined(__x86_64__)
-int sn_trace_unwind(const uint64_t *regs) {
+SN_HELD int sn_trace_unwind(const uint64_t *regs) {
     CONTEXT c = { .ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER };
     c.Rbx = regs[saved_rbx];
     c.Rbp = regs[saved_rbp];
@@ -189,14 +189,14 @@ int sn_trace_unwind(const uint64_t *regs) {
 }
 #endif
 
-int sn_trace_copy(uintptr_t *into) {
+SN_HELD int sn_trace_copy(uintptr_t *into) {
     memcpy(into, frames, (size_t)nframes * sizeof frames[0]);
     return nframes;
 }
 
 // row_at finds the row that covers offset among an anchor's rows, the
 // last whose offset is not past it, or NULL before the first.
-static const sn_trace_row *row_at(const sn_trace_anchor *a, int64_t offset) {
+SN_HELD_STATIC static const sn_trace_row *row_at(const sn_trace_anchor *a, int64_t offset) {
     int64_t lo = a->first, hi = a->first + a->count;
     while (lo < hi) { // the first row past offset is at hi when the loop ends
         int64_t mid = lo + (hi - lo) / 2;
@@ -213,7 +213,7 @@ static const sn_trace_row *row_at(const sn_trace_anchor *a, int64_t offset) {
 // name_of finds the name the program gives a function's symbol, among
 // the names in order of symbol, or NULL for a function of the
 // runtime's own, which the trace does not show.
-static const char *name_of(const char *symbol) {
+SN_HELD_STATIC static const char *name_of(const char *symbol) {
     int64_t lo = 0, hi = sn_trace_names_count;
     while (lo < hi) {
         int64_t mid = lo + (hi - lo) / 2;
@@ -235,8 +235,8 @@ static const char *name_of(const char *symbol) {
 // sn_trace_each gives each of the n frames of a walk to line, in turn,
 // innermost first: for each, the chain of its row, a frame of a Snello
 // function at a time, and nothing for a frame of the runtime's.
-void sn_trace_each(const uintptr_t *walked, int n,
-                   void (*line)(void *ctx, const char *name, const char *file, int32_t at), void *ctx) {
+SN_HELD void sn_trace_each(const uintptr_t *walked, int n,
+                           void (*line)(void *ctx, const char *name, const char *file, int32_t at), void *ctx) {
     for (int i = 0; i < n; i++) {
         const sn_trace_anchor *a;
         int64_t offset;
@@ -259,7 +259,7 @@ void sn_trace_each(const uintptr_t *walked, int n,
 // a tab, the name, " at ", the file, a colon and the line; the file
 // alone when the optimizer merged the code of two lines and kept no
 // line for it.
-static void write_line(void *ctx, const char *name, const char *file, int32_t at) {
+SN_HELD_STATIC static void write_line(void *ctx, const char *name, const char *file, int32_t at) {
     (void)ctx;
     char line[SN_TRACE_LINE_ROOM];
     line[0] = '\t';
@@ -276,7 +276,7 @@ static void write_line(void *ctx, const char *name, const char *file, int32_t at
 // when the optimizer merged the code of two lines and kept no line for
 // it, and a newline, which a line too long for the room is cut to keep.
 // It returns the length written.
-int sn_trace_line(char *line, size_t room, const char *name, const char *file, int32_t at) {
+SN_HELD int sn_trace_line(char *line, size_t room, const char *name, const char *file, int32_t at) {
     int n = at > 0 ? snprintf(line, room, "%s at %s:%d", name, file, (int)at)
                    : snprintf(line, room, "%s at %s", name, file);
     if (n < 0) {
@@ -291,7 +291,7 @@ int sn_trace_line(char *line, size_t room, const char *name, const char *file, i
     return n;
 }
 
-void sn_trace_write(void) {
+SN_HELD void sn_trace_write(void) {
     sn_trace_each(frames, nframes, write_line, NULL);
     nframes = 0;
 }

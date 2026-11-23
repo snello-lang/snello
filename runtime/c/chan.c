@@ -134,36 +134,38 @@ struct sn_chan {
 };
 
 // weight is what a handle of direction dir adds to the count word.
-static int64_t weight(int dir) {
+SN_HELD_STATIC static int64_t weight(int dir) {
     return ((dir & SN_CHAN_SEND) != 0 ? one_sender : 0) + ((dir & SN_CHAN_RECV) != 0 ? one_receiver : 0);
 }
 
-static int64_t senders(int64_t handles) { return handles & senders_mask; }
+SN_HELD_STATIC static int64_t senders(int64_t handles) { return handles & senders_mask; }
 
-static int64_t receivers(int64_t handles) { return handles >> receiver_shift; }
+SN_HELD_STATIC static int64_t receivers(int64_t handles) { return handles >> receiver_shift; }
 
 // The ring's positions: index_of is a position's place in the ring,
 // lap_of its lap, and next_position the position one on, into the next lap past
 // the last place. stamp_of is a place's stamp word and value_of its
 // element.
-static uint64_t index_of(const sn_chan *c, uint64_t pos) { return pos & (c->lap - 1); }
+SN_HELD_STATIC static uint64_t index_of(const sn_chan *c, uint64_t pos) { return pos & (c->lap - 1); }
 
-static uint64_t lap_of(const sn_chan *c, uint64_t pos) { return pos & ~(c->lap - 1); }
+SN_HELD_STATIC static uint64_t lap_of(const sn_chan *c, uint64_t pos) { return pos & ~(c->lap - 1); }
 
-static uint64_t next_position(const sn_chan *c, uint64_t pos) {
+SN_HELD_STATIC static uint64_t next_position(const sn_chan *c, uint64_t pos) {
     return index_of(c, pos) + 1 < (uint64_t)c->cap ? pos + 1 : lap_of(c, pos) + c->lap;
 }
 
-static _Atomic uint32_t *stamp_of(sn_chan *c, uint64_t index) {
+SN_HELD_STATIC static _Atomic uint32_t *stamp_of(sn_chan *c, uint64_t index) {
     return (_Atomic uint32_t *)(c->ring->places + index * c->stride);
 }
 
-static uint8_t *value_of(sn_chan *c, uint64_t index) { return c->ring->places + index * c->stride + stamp_bytes; }
+SN_HELD_STATIC static uint8_t *value_of(sn_chan *c, uint64_t index) {
+    return c->ring->places + index * c->stride + stamp_bytes;
+}
 
 // ring_spin pauses a thread that found another between its two steps in the
 // ring, longer each time, and yields its processor once it has waited
 // spin_yields times.
-static void ring_spin(unsigned *step) {
+SN_HELD_STATIC static void ring_spin(unsigned *step) {
     if (*step < spin_yields) {
         for (unsigned i = 0; i < 1u << (*step < spin_most ? *step : spin_most); i++) {
             sn_spin_hint();
@@ -177,7 +179,7 @@ static void ring_spin(unsigned *step) {
 
 // ring_push puts v in the ring without waiting, and reports whether it could:
 // false when the ring is full.
-static bool ring_push(sn_chan *c, const void *v) {
+SN_HELD_STATIC static bool ring_push(sn_chan *c, const void *v) {
     unsigned step = 0;
     sn_ring *r = c->ring;
     uint64_t tail = atomic_load_explicit(&r->tail, memory_order_relaxed);
@@ -211,7 +213,7 @@ static bool ring_push(sn_chan *c, const void *v) {
 
 // ring_pop takes the ring's oldest value into out without waiting, and
 // reports whether there was one.
-static bool ring_pop(sn_chan *c, void *out) {
+SN_HELD_STATIC static bool ring_pop(sn_chan *c, void *out) {
     unsigned step = 0;
     sn_ring *r = c->ring;
     uint64_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
@@ -247,7 +249,7 @@ static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(voi
 
 // sn_chan_make makes a channel with its first handle. Its memory is
 // sn_alloc's, so a debug build reports a channel no handle freed.
-sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char *made) {
+SN_HELD sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char *made) {
     size_t stride = stamp_bytes + ((size + stamp_bytes - 1) & ~(stamp_bytes - 1));
     if (cap < 0 || (uint64_t)cap > (SIZE_MAX - sizeof(sn_ring)) / stride) {
         sn_panic(SN_STR("makechan: size out of range", 27));
@@ -260,7 +262,7 @@ sn_chan *sn_chan_make(size_t size, int64_t cap, void (*drop)(void *), const char
 // gives the task and the handle: with two handles, the handle's and the
 // task's, counted at once, since no one else has it yet, so that the
 // spawn makes no clone.
-sn_chan *sn_chan_handle(size_t size, void (*drop)(void *), const char *made) {
+SN_HELD sn_chan *sn_chan_handle(size_t size, void (*drop)(void *), const char *made) {
     sn_chan *c = chan_init(sn_alloc(sizeof(sn_chan)), size, 1, drop, made);
     atomic_store_explicit(&c->handles, 2 * weight(SN_CHAN_BOTH), memory_order_relaxed);
     c->handle = true;
@@ -268,7 +270,7 @@ sn_chan *sn_chan_handle(size_t size, void (*drop)(void *), const char *made) {
 }
 
 // chan_init makes the block c a channel of cap places of size bytes.
-static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(void *), const char *made) {
+SN_HELD_STATIC static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(void *), const char *made) {
     size_t stride = stamp_bytes + ((size + stamp_bytes - 1) & ~(stamp_bytes - 1));
     memset(c, 0, sizeof *c);
     c->cap = cap;
@@ -299,11 +301,11 @@ static sn_chan *chan_init(sn_chan *c, size_t size, int64_t cap, void (*drop)(voi
 // chan_drop_value drops one value with the element's drop, out of line
 // so that the analysis of a task's stack sees a call through a function
 // pointer here and nowhere else in a channel's operations.
-static __attribute__((noinline)) void chan_drop_value(sn_chan *c, void *v) { c->drop(v); }
+SN_HELD_STATIC static __attribute__((noinline)) void chan_drop_value(sn_chan *c, void *v) { c->drop(v); }
 
 // drop_value drops a value a send could not deliver, with the element's
 // drop when the element owns something.
-static void drop_value(sn_chan *c, void *v) {
+SN_HELD_STATIC static void drop_value(sn_chan *c, void *v) {
     if (c->drop != NULL) {
         chan_drop_value(c, v);
     }
@@ -311,7 +313,7 @@ static void drop_value(sn_chan *c, void *v) {
 
 // gone stops a debug build's program that gives up a handle of an end
 // of which none is left: the count would borrow from the other end's.
-static void gone(int64_t before, int dir) {
+SN_HELD_STATIC static void gone(int64_t before, int dir) {
 #ifdef SN_DEBUG
     if (((dir & SN_CHAN_SEND) != 0 && senders(before) == 0) || ((dir & SN_CHAN_RECV) != 0 && receivers(before) == 0)) {
         fflush(stdout);
@@ -326,7 +328,7 @@ static void gone(int64_t before, int dir) {
 
 // give_up takes one handle of direction dir off the count and returns
 // the count before.
-static int64_t give_up(sn_chan *c, int dir) {
+SN_HELD_STATIC static int64_t give_up(sn_chan *c, int dir) {
     int64_t before = atomic_fetch_sub(&c->handles, weight(dir));
     gone(before, dir);
     return before;
@@ -334,7 +336,7 @@ static int64_t give_up(sn_chan *c, int dir) {
 
 // chan_free frees the channel and the values still in its ring, once
 // no handle is left and no task is in it.
-static void chan_free(sn_chan *c) {
+SN_HELD_STATIC static void chan_free(sn_chan *c) {
     if (c->drop != NULL && c->cap > 0) {
         uint64_t tail = atomic_load_explicit(&c->ring->tail, memory_order_relaxed);
         for (uint64_t pos = atomic_load_explicit(&c->ring->head, memory_order_relaxed); pos != tail;
@@ -357,7 +359,7 @@ static void chan_free(sn_chan *c) {
 
 // wake_all wakes every task on q with nothing, under the lock: the
 // channel ends for its kind once.
-static void wake_all(sn_waitq *q, _Atomic bool *waits) {
+SN_HELD_STATIC static void wake_all(sn_waitq *q, _Atomic bool *waits) {
     for (sn_waiter *w; (w = sn_dequeue(q)) != NULL;) {
         sn_queue_claimed(sn_finish_wait(w, false));
     }
@@ -380,7 +382,7 @@ static void wake_all(sn_waitq *q, _Atomic bool *waits) {
 // interleave. A handle of both ends that was the last of both frees
 // the channel at once, since no other was ever the last of either, so
 // no task is in it.
-void sn_chan_given(sn_chan *c, int dir, int64_t before) {
+SN_HELD void sn_chan_given(sn_chan *c, int dir, int64_t before) {
     int64_t after_count = before - weight(dir);
     bool last_sender = senders(before) != 0 && senders(after_count) == 0;
     bool last_receiver = receivers(before) != 0 && receivers(after_count) == 0;
@@ -414,7 +416,7 @@ void sn_chan_given(sn_chan *c, int dir, int64_t before) {
 // left is the timer's, a sending handle; the count before is the
 // caller's, which finishes the giving up with sn_chan_given once it
 // has let the timers' lock go.
-bool sn_chan_release(sn_chan *c, int dir, int64_t *before) {
+SN_HELD bool sn_chan_release(sn_chan *c, int dir, int64_t *before) {
     *before = give_up(c, dir);
     return *before - weight(dir) == one_sender;
 }
@@ -422,23 +424,23 @@ bool sn_chan_release(sn_chan *c, int dir, int64_t *before) {
 // sn_chan_timer and sn_chan_placeTimer read and set the channel's timer
 // while it is in a timing wheel, which timer.c keeps under the wheel's
 // lock; -1 is none.
-int64_t sn_chan_timer(sn_chan *c) { return atomic_load(&c->timer); }
+SN_HELD int64_t sn_chan_timer(sn_chan *c) { return atomic_load(&c->timer); }
 
-_Atomic int32_t *sn_chan_home(sn_chan *c) { return &c->home; }
+SN_HELD _Atomic int32_t *sn_chan_home(sn_chan *c) { return &c->home; }
 
-_Atomic uintptr_t *sn_chan_word(sn_chan *c) { return &c->word; }
+SN_HELD _Atomic uintptr_t *sn_chan_word(sn_chan *c) { return &c->word; }
 
-_Atomic bool *sn_chan_failed(sn_chan *c) { return &c->failed; }
+SN_HELD _Atomic bool *sn_chan_failed(sn_chan *c) { return &c->failed; }
 
-void sn_chan_placeTimer(sn_chan *c, int64_t at) { atomic_store(&c->timer, at); }
+SN_HELD void sn_chan_placeTimer(sn_chan *c, int64_t at) { atomic_store(&c->timer, at); }
 
 // sn_chan_open reports whether a receiving handle remains: whether a
 // send would deliver its value, or drop it.
-bool sn_chan_open(sn_chan *c) { return receivers(atomic_load(&c->handles)) > 0; }
+SN_HELD bool sn_chan_open(sn_chan *c) { return receivers(atomic_load(&c->handles)) > 0; }
 
 // sn_chan_clone gives another handle on c of direction dir, for another
 // task.
-sn_chan *sn_chan_clone(sn_chan *c, int dir) {
+SN_HELD sn_chan *sn_chan_clone(sn_chan *c, int dir) {
     atomic_fetch_add(&c->handles, weight(dir));
     return c;
 }
@@ -447,7 +449,7 @@ sn_chan *sn_chan_clone(sn_chan *c, int dir) {
 // the other up as a drop of a handle of that end would: a chan T moved
 // where a <-chan T or a chan<- T is wanted. The end kept holds the
 // channel, so the giving up never frees it.
-sn_chan *sn_chan_narrow(sn_chan *c, int kept) {
+SN_HELD sn_chan *sn_chan_narrow(sn_chan *c, int kept) {
     int given = SN_CHAN_BOTH & ~kept;
     sn_chan_given(c, given, give_up(c, given));
     return c;
@@ -464,7 +466,7 @@ sn_chan *sn_chan_narrow(sn_chan *c, int kept) {
 // other holder may drop the last and free it the moment the count comes
 // down, and a timer firing once read the timer of a channel freed and
 // reused.
-void sn_chan_drop(sn_chan **h, int dir) {
+SN_HELD void sn_chan_drop(sn_chan **h, int dir) {
     sn_chan *c = *h;
     *h = NULL;
     if (c == NULL) {
@@ -483,7 +485,7 @@ void sn_chan_drop(sn_chan **h, int dir) {
 // no timer in a wheel: the timer's own handle, which sn_timer_abandon
 // drops once it has taken the timer out, or a handle sn_chan_drop has
 // found no timer for.
-void sn_chan_drop_untimed(sn_chan *c, int dir) { sn_chan_given(c, dir, give_up(c, dir)); }
+SN_HELD void sn_chan_drop_untimed(sn_chan *c, int dir) { sn_chan_given(c, dir, give_up(c, dir)); }
 
 // wait_on parks the task t on c in direction dir until the operation
 // that takes its waiter wakes it, recording what it waits on for the
@@ -494,7 +496,7 @@ void sn_chan_drop_untimed(sn_chan *c, int dir) { sn_chan_given(c, dir, give_up(c
 // case's channel, whose kind decides for all its cases: a handle is
 // never among them, since a handle's channel is the task package's own
 // and no program writes a select over one.
-static bool wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
+SN_HELD_STATIC static bool wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
     sn_task_waits(t, c, dir);
     bool done = true;
     if (c->handle) {
@@ -524,7 +526,7 @@ static bool wait_on(sn_task *t, sn_chan *c, int dir, sn_wait_state *ws) {
 // no bound but the waiters: a task that does the work of several others
 // in turn is delayed by as much, while each of them wakes with its own
 // done.
-static void notify(sn_chan *c, sn_waitq *q, _Atomic bool *waits) {
+SN_HELD_STATIC static void notify(sn_chan *c, sn_waitq *q, _Atomic bool *waits) {
     for (;;) {
         if (!atomic_load_explicit(waits, memory_order_seq_cst)) {
             return;
@@ -559,14 +561,14 @@ static void notify(sn_chan *c, sn_waitq *q, _Atomic bool *waits) {
 // holds, and marks the queue waited on in its word, a ring's queues'
 // alone; leave takes it off again, when the task found what it waited
 // for before it parked.
-static void enroll(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+SN_HELD_STATIC static void enroll(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
     sn_enqueue(q, w);
     if (waits != NULL) {
         atomic_store_explicit(waits, true, memory_order_seq_cst);
     }
 }
 
-static void leave(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+SN_HELD_STATIC static void leave(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
     sn_remove_waiter(q, w);
     if (waits != NULL && q->head == NULL) {
         atomic_store_explicit(waits, false, memory_order_seq_cst);
@@ -579,14 +581,16 @@ static void leave(sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
 // send no receiver will take. Both are out of line and cold, as
 // take_back in sched.c is, so that a channel's operations compile as
 // they did before a cancel could end their waits.
-static __attribute__((noinline, cold)) bool withdraw(sn_chan *c, sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) bool withdraw(sn_chan *c, sn_waitq *q, _Atomic bool *waits,
+                                                                    sn_waiter *w) {
     sn_qlock_take(&c->mu);
     leave(q, waits, w);
     sn_qlock_give(&c->mu);
     return false;
 }
 
-static __attribute__((noinline, cold)) void unsent(sn_chan *c, sn_waitq *q, _Atomic bool *waits, sn_waiter *w) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) void unsent(sn_chan *c, sn_waitq *q, _Atomic bool *waits,
+                                                                  sn_waiter *w) {
     withdraw(c, q, waits, w);
     drop_value(c, w->elem);
 }
@@ -595,7 +599,7 @@ static __attribute__((noinline, cold)) void unsent(sn_chan *c, sn_waitq *q, _Ato
 // the caller holding the lock, and reports whether one was there: the
 // receiver's task goes in *woken for the caller to queue once it has
 // let the lock go. meet_sender takes a waiting sender's value into out.
-static bool meet_receiver(sn_chan *c, const void *v, sn_task **woken) {
+SN_HELD_STATIC static bool meet_receiver(sn_chan *c, const void *v, sn_task **woken) {
     *woken = NULL;
     sn_waiter *w = sn_dequeue(&c->recvq);
     if (w == NULL) {
@@ -607,7 +611,7 @@ static bool meet_receiver(sn_chan *c, const void *v, sn_task **woken) {
     return true;
 }
 
-static bool meet_sender(sn_chan *c, void *out, sn_task **woken) {
+SN_HELD_STATIC static bool meet_sender(sn_chan *c, void *out, sn_task **woken) {
     *woken = NULL;
     sn_waiter *w = sn_dequeue(&c->sendq);
     if (w == NULL) {
@@ -623,7 +627,7 @@ static bool meet_sender(sn_chan *c, void *out, sn_task **woken) {
 // waiting, or after a wait for one, which takes the value from the
 // waiter; a wait the last receiver ended leaves the value with the
 // sender, to drop.
-static void send_unbuffered(sn_chan *c, const void *v) {
+SN_HELD_STATIC static void send_unbuffered(sn_chan *c, const void *v) {
     sn_qlock_take(&c->mu);
     if (atomic_load_explicit(&c->receiverless, memory_order_relaxed)) {
         sn_qlock_give(&c->mu);
@@ -658,7 +662,7 @@ static void send_unbuffered(sn_chan *c, const void *v) {
 // a receiver's move it did not see finds it registered; it wakes with
 // the value in the ring, put there by the receiver that woke it, or to
 // try again when the ring moved meanwhile.
-static void send_buffered(sn_chan *c, const void *v) {
+SN_HELD_STATIC static void send_buffered(sn_chan *c, const void *v) {
     for (;;) {
         if (atomic_load_explicit(&c->receiverless, memory_order_seq_cst)) {
             drop_value(c, (void *)v);
@@ -704,7 +708,7 @@ static void send_buffered(sn_chan *c, const void *v) {
 // after a wait for either; when no receiving handle remains, now or by
 // the time the wait ends, the value is dropped here, in the sending
 // task, since no one can ever take it.
-void sn_chan_send(sn_chan *c, const void *v) {
+SN_HELD void sn_chan_send(sn_chan *c, const void *v) {
     if (c->cap == 0) {
         send_unbuffered(c, v);
     } else {
@@ -715,7 +719,7 @@ void sn_chan_send(sn_chan *c, const void *v) {
 // recv_unbuffered receives from a channel with no ring: a waiting
 // sender's value, or after a wait for one, which puts the value in out;
 // false once the channel has ended.
-static bool recv_unbuffered(sn_chan *c, void *out) {
+SN_HELD_STATIC static bool recv_unbuffered(sn_chan *c, void *out) {
     sn_qlock_take(&c->mu);
     sn_task *woken;
     if (meet_sender(c, out, &woken)) {
@@ -745,7 +749,7 @@ static bool recv_unbuffered(sn_chan *c, void *out) {
 // after the end is read, since a value sent before the last sender went
 // is in the ring once the end is seen, and may have come after the
 // receiver's look.
-static bool drained(sn_chan *c, void *out, bool *got) {
+SN_HELD_STATIC static bool drained(sn_chan *c, void *out, bool *got) {
     if (!atomic_load_explicit(&c->ended, memory_order_seq_cst)) {
         return false;
     }
@@ -758,7 +762,7 @@ static bool drained(sn_chan *c, void *out, bool *got) {
 // or after a wait for one, registering and trying once more as
 // send_buffered does, and waking with the value in out or to try again;
 // false once the channel has ended and the ring is empty.
-static bool recv_buffered(sn_chan *c, void *out) {
+SN_HELD_STATIC static bool recv_buffered(sn_chan *c, void *out) {
     bool got;
     for (;;) {
         if (ring_pop(c, out)) {
@@ -801,7 +805,9 @@ static bool recv_buffered(sn_chan *c, void *out) {
 // sn_chan_recv receives from c into out and reports whether a value
 // came: false once the channel has ended, its last sending handle gone,
 // and the ring is empty.
-bool sn_chan_recv(sn_chan *c, void *out) { return c->cap == 0 ? recv_unbuffered(c, out) : recv_buffered(c, out); }
+SN_HELD bool sn_chan_recv(sn_chan *c, void *out) {
+    return c->cap == 0 ? recv_unbuffered(c, out) : recv_buffered(c, out);
+}
 
 // sn_chan_offer puts v in a buffered channel that has room, and drops it
 // otherwise. It never waits, so a thread that is not a task may call
@@ -812,7 +818,7 @@ bool sn_chan_recv(sn_chan *c, void *out) { return c->cap == 0 ? recv_unbuffered(
 // scheduler's fatal errors do, since the thread offering may be no task.
 // It reports whether a receiving handle remains: when none does, no one
 // can ever receive, the value is not put, and the timer stops.
-bool sn_chan_offer(sn_chan *c, const void *v) {
+SN_HELD bool sn_chan_offer(sn_chan *c, const void *v) {
     if (c->cap == 0) {
         fflush(stdout);
         fputs("fatal error: offer on an unbuffered channel\n", stderr);
@@ -837,7 +843,7 @@ bool sn_chan_offer(sn_chan *c, const void *v) {
 // sn_chan_poll takes a value c holds into out, without waiting, and
 // reports whether there was one: a stopped Timer takes back so the time
 // it sent and no one received.
-bool sn_chan_poll(sn_chan *c, void *out) {
+SN_HELD bool sn_chan_poll(sn_chan *c, void *out) {
     if (c->cap == 0 || !ring_pop(c, out)) {
         return false;
     }
@@ -851,7 +857,7 @@ bool sn_chan_poll(sn_chan *c, void *out) {
 // the handles of each kind that remain, and the tasks waiting to send
 // and to receive on it. It is called with every task asleep, so the
 // counts are read as they are.
-void sn_chan_report(sn_chan *c, int dir) {
+SN_HELD void sn_chan_report(sn_chan *c, int dir) {
     int64_t handles = atomic_load(&c->handles);
     int64_t sending = 0, receiving = 0;
     for (sn_waiter *w = c->sendq.head; w != NULL; w = w->next) {
@@ -875,7 +881,7 @@ void sn_chan_report(sn_chan *c, int dir) {
 // sn_chan_len is the values in the ring: the positions are read until
 // the tail reads the same before and after the head, so that the two
 // belong together.
-int64_t sn_chan_len(sn_chan *c) {
+SN_HELD int64_t sn_chan_len(sn_chan *c) {
     if (c->cap == 0) {
         return 0;
     }
@@ -900,12 +906,12 @@ int64_t sn_chan_len(sn_chan *c) {
     }
 }
 
-int64_t sn_chan_cap(sn_chan *c) { return c->cap; }
+SN_HELD int64_t sn_chan_cap(sn_chan *c) { return c->cap; }
 
 // channels_of lists the distinct channels of the cases in increasing
 // address order, the order they are locked in, so that two selects
 // over the same channels cannot deadlock. Returns the count.
-static int channels_of(const sn_case *cases, int n, sn_chan **chans) {
+SN_HELD_STATIC static int channels_of(const sn_case *cases, int n, sn_chan **chans) {
     int m = 0;
     for (int i = 0; i < n; i++) {
         sn_chan *c = cases[i].chan;
@@ -926,13 +932,13 @@ static int channels_of(const sn_case *cases, int n, sn_chan **chans) {
     return m;
 }
 
-static void lock_all(sn_chan **chans, int m) {
+SN_HELD_STATIC static void lock_all(sn_chan **chans, int m) {
     for (int i = 0; i < m; i++) {
         sn_qlock_take(&chans[i]->mu);
     }
 }
 
-static void unlock_all(sn_chan **chans, int m) {
+SN_HELD_STATIC static void unlock_all(sn_chan **chans, int m) {
     for (int i = 0; i < m; i++) {
         sn_qlock_give(&chans[i]->mu);
     }
@@ -948,7 +954,8 @@ static void unlock_all(sn_chan **chans, int m) {
 // ever take, dropped only once the locks are let go, since the
 // element's drop is the program's code and may drop a handle of one of
 // the select's own channels.
-static bool try_case(sn_case *k, sn_task **woken, sn_waitq **notified, _Atomic bool **waits, bool *dropping) {
+SN_HELD_STATIC static bool try_case(sn_case *k, sn_task **woken, sn_waitq **notified, _Atomic bool **waits,
+                                    bool *dropping) {
     sn_chan *c = k->chan;
     *woken = NULL;
     *notified = NULL;
@@ -999,7 +1006,7 @@ static bool try_case(sn_case *k, sn_task **woken, sn_waitq **notified, _Atomic b
 // an operation takes one of its waiters.
 static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order, sn_waiter *waiters);
 
-int sn_select(sn_case *cases, int n, bool has_default) {
+SN_HELD int sn_select(sn_case *cases, int n, bool has_default) {
     if (n <= select_inline) {
         sn_chan *chans[select_inline];
         int order[select_inline];
@@ -1024,9 +1031,9 @@ int sn_select(sn_case *cases, int n, bool has_default) {
 // queue_of is the queue a case waits on, and waits_of its word, which
 // only a ring's queues have: an unbuffered channel's meetings find their
 // waiters under the lock.
-static sn_waitq *queue_of(const sn_case *k) { return k->send ? &k->chan->sendq : &k->chan->recvq; }
+SN_HELD_STATIC static sn_waitq *queue_of(const sn_case *k) { return k->send ? &k->chan->sendq : &k->chan->recvq; }
 
-static _Atomic bool *waits_of(const sn_case *k) {
+SN_HELD_STATIC static _Atomic bool *waits_of(const sn_case *k) {
     if (k->chan->cap == 0) {
         return NULL;
     }
@@ -1037,7 +1044,8 @@ static _Atomic bool *waits_of(const sn_case *k) {
 // settled finishes the case i a try settled, the locks let go: the task
 // it took is queued, the queue it moved the ring for notified, and the
 // value no one can ever take dropped. Returns i.
-static int settled(sn_case *cases, int i, sn_task *woken, sn_waitq *notified, _Atomic bool *waits, bool dropping) {
+SN_HELD_STATIC static int settled(sn_case *cases, int i, sn_task *woken, sn_waitq *notified, _Atomic bool *waits,
+                                  bool dropping) {
     sn_queue_claimed(woken);
     if (notified != NULL) {
         notify(cases[i].chan, notified, waits);
@@ -1054,7 +1062,7 @@ static int settled(sn_case *cases, int i, sn_task *woken, sn_waitq *notified, _A
 // channel is as if ended, so every case is ready, and the case i, the
 // first of the random order, is taken. Out of line and cold, as
 // withdraw is.
-static __attribute__((noinline, cold)) int cancelled_case(sn_case *cases, int i) {
+SN_HELD_STATIC static __attribute__((noinline, cold)) int cancelled_case(sn_case *cases, int i) {
     if (cases[i].send) {
         drop_value(cases[i].chan, cases[i].value);
     } else {
@@ -1072,7 +1080,8 @@ static __attribute__((noinline, cold)) int cancelled_case(sn_case *cases, int i)
 // case, or ended it; one that wakes a waiter of a ring case has done
 // it, or has only moved the ring, and then the select tries every case
 // again.
-static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order, sn_waiter *waiters) {
+SN_HELD_STATIC static int select_in(sn_case *cases, int n, bool has_default, sn_chan **chans, int *order,
+                                    sn_waiter *waiters) {
     int m = channels_of(cases, n, chans);
     for (int i = 0; i < n; i++) { // a uniform permutation, built from the front
         int j = (int)(sn_next_random() % (uint64_t)(i + 1));

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -29,6 +30,21 @@ const (
 
 	// MainName is the symbol of the program's main.
 	MainName = "sn_main"
+
+	// The text section a program's own code goes in on each system, as
+	// the runtime's header names it too (snello.h, SN_OPEN_CODE): the
+	// scheduler takes a task off its worker only at an address inside
+	// it, so that the runtime's held functions, the C library and a
+	// package's C side, which are not in it, are never interrupted. A
+	// Mach-O section is named with its segment and its kind; a PE
+	// linker lays the sections after a dollar sign out by their names,
+	// which the runtime's marks before and after this one rely on; and
+	// an ELF section's name begins with a dot, since a linker's
+	// optimizer keeps every function of a section whose name a C
+	// program could write.
+	machoCodeSection = "__TEXT,__sn_code,regular,pure_instructions"
+	peCodeSection    = ".text$sn_code_m"
+	elfCodeSection   = ".sn_code"
 
 	// positionalField names a variant's field declared without a name,
 	// before its position; tagMember is the name of an enum's tag, which
@@ -96,6 +112,19 @@ var reserved = map[string]bool{
 	"void": true, "volatile": true, "while": true, "bool": true, "true": true, "false": true,
 	"main": true, "printf": true, "malloc": true, "free": true, "exit": true, "memcpy": true,
 	"strlen": true, "NULL": true, "stdout": true, "stderr": true, "size_t": true,
+}
+
+// CodeSection returns the text section a function of the program is
+// written into for the system os, the only code a task is preempted in.
+func CodeSection(os string) string {
+	switch os {
+	case platform.Darwin:
+		return machoCodeSection
+	case platform.Windows:
+		return peCodeSection
+	}
+
+	return elfCodeSection
 }
 
 // Ident writes a Snello identifier as a symbol: a reserved one, one

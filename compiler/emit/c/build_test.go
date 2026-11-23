@@ -15,9 +15,61 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/runtime"
 )
+
+// TestNativeObjects picks, for the final link of a release build, the
+// objects the optimizing link's own object does not hold: the runtime's
+// file that is compiled to native code whatever the build, and the C
+// side of each binding, by the directory its sources were written to;
+// and BoundObjects compiles that C side with the optimizing flag left
+// out, so that none of it is written into a function of the program.
+func TestNativeObjects(t *testing.T) {
+	dir := t.TempDir()
+	bindings := []lower.Binding{{Prefix: "snm_tally"}, {Prefix: "snm_mathx"}}
+	objs := []string{
+		filepath.Join(dir, "main.o"),
+		filepath.Join(dir, "sched.o"),
+		filepath.Join(dir, "tracetable.o"),
+		filepath.Join(dir, "snm_tally", "tally.o"),
+		filepath.Join(dir, "snm_mathx", "cbrt.o"),
+		filepath.Join(dir, "other", "tally.o"),
+	}
+
+	want := []string{objs[2], objs[3], objs[4]}
+	if got := nativeObjects(dir, objs, bindings); !slices.Equal(got, want) {
+		t.Errorf("the native objects are %v, want %v", got, want)
+	}
+
+	if got := nativeObjects(dir, objs[:2], nil); len(got) != 0 {
+		t.Errorf("a program that binds nothing has native objects %v beside the runtime's, which is not among them", got)
+	}
+
+	if _, err := exec.LookPath(Compiler()); err != nil {
+		t.Skip("no C compiler")
+	}
+
+	src := filepath.Join(dir, "bound.c")
+	if err := os.WriteFile(src, []byte("int snm_bound_one(void) { return 1; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	built, out, err := BoundObjects(Compiler(), []string{"-O2", lto}, []string{src})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(built[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bytes.HasPrefix(data, []byte("BC")) || bytes.HasPrefix(data, []byte{0xde, 0xc0, 0x17, 0x0b}) {
+		t.Errorf("the C side of a binding was compiled to the optimizer's own form, which a link writes into its callers")
+	}
+}
 
 // TestProgramFlags holds the program's C to the line tables in a release
 // build and to no optimization and the full debugging information in a

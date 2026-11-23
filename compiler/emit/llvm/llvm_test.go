@@ -583,6 +583,7 @@ func execute(t *testing.T, name string, module []byte, debug bool, fixtures []st
 	}
 
 	backendtest.Bounded(t, name, bin)
+	backendtest.Open(t, name, bin)
 	stdout, stderr, code, err := backendtest.Run(bin, dir, interrupts)
 	if err != nil {
 		t.Fatalf("running %s: %v", name, err)

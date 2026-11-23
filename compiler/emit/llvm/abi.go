@@ -7,7 +7,9 @@ package llvm
 import (
 	"errors"
 	"runtime"
+	"strconv"
 
+	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
 )
 
@@ -16,6 +18,12 @@ import (
 var (
 	extendsNarrow = map[string]bool{"i1": true, "i8": true, "i16": true}
 	extendsBool   = map[string]bool{"i1": true}
+
+	// The code section of each system as a definition names it, after
+	// its attributes: written once, since every module names one.
+	darwinSection  = " section " + strconv.Quote(lower.CodeSection(platform.Darwin))
+	windowsSection = " section " + strconv.Quote(lower.CodeSection(platform.Windows))
+	otherSection   = " section " + strconv.Quote(lower.CodeSection(platform.Linux))
 )
 
 // A call into the C runtime passes a value of three words, a string or
@@ -80,17 +88,37 @@ func hostArch(arch string) string {
 	return arch
 }
 
+// hostOS returns os, or the host's system for an empty name.
+func hostOS(os string) string {
+	if os == "" {
+		return runtime.GOOS
+	}
+
+	return os
+}
+
+// sectionOf returns what a function's definition says after its
+// attributes for the system os, the host's for an empty name: the
+// section the program's code goes in, the only code a task is
+// preempted in.
+func sectionOf(os string) string {
+	switch hostOS(os) {
+	case platform.Darwin:
+		return darwinSection
+	case platform.Windows:
+		return windowsSection
+	}
+
+	return otherSection
+}
+
 // triple writes the target triple of the module, which names the
 // processor and the system the module is compiled for, so that clang
 // lays the module out for them whatever machine it runs on: the host's
 // for an empty name. The data layout is left to clang, which supplies
 // the target's own.
 func triple(arch, os string) string {
-	if os == "" {
-		os = runtime.GOOS
-	}
-
-	return platform.Target{OS: os, Arch: hostArch(arch)}.Triple()
+	return platform.Target{OS: hostOS(os), Arch: hostArch(arch)}.Triple()
 }
 
 // result writes the parameter through which a three-word struct of the

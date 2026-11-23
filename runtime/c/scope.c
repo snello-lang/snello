@@ -116,16 +116,16 @@ static sn_scope *held_above(sn_scope *freed);
 // scope_settled waits for the Add that is putting the running task in s,
 // under s's lock, to be done, so that the task is in s once it returns:
 // the lock taken and let go.
-static void scope_settled(sn_scope *s) {
+SN_HELD_STATIC static void scope_settled(sn_scope *s) {
     sn_qlock_take(&s->mu);
     sn_qlock_give(&s->mu);
 }
 
-static void retain(sn_scope *s) { atomic_fetch_add_explicit(&s->refs, 1, memory_order_relaxed); }
+SN_HELD_STATIC static void retain(sn_scope *s) { atomic_fetch_add_explicit(&s->refs, 1, memory_order_relaxed); }
 
 // retain_live holds s unless its count is zero, its last holder freeing
 // it, and reports whether it did.
-static bool retain_live(sn_scope *s) {
+SN_HELD_STATIC static bool retain_live(sn_scope *s) {
     int64_t n = atomic_load_explicit(&s->refs, memory_order_relaxed);
     while (n != 0) {
         if (atomic_compare_exchange_weak_explicit(&s->refs, &n, n + 1, memory_order_acquire, memory_order_relaxed)) {
@@ -140,7 +140,7 @@ static bool retain_live(sn_scope *s) {
 // and gives s the state of above when that is no longer live, under
 // above's lock, so that a cancel of above either finds s in its list or
 // has marked above before s read it.
-static void link_under(sn_scope *s, sn_scope *above, int side) {
+SN_HELD_STATIC static void link_under(sn_scope *s, sn_scope *above, int side) {
     retain(above);
     s->above[side] = above;
     sn_qlock_take(&above->mu);
@@ -161,7 +161,7 @@ static void link_under(sn_scope *s, sn_scope *above, int side) {
 // unlink_from takes s out from among the scopes under the one above it
 // on side, and returns that scope, whose hold the caller lets go; NULL
 // for none.
-static sn_scope *unlink_from(sn_scope *s, int side) {
+SN_HELD_STATIC static sn_scope *unlink_from(sn_scope *s, int side) {
     sn_scope *above = s->above[side];
     if (above == NULL) {
         return NULL;
@@ -184,7 +184,7 @@ static sn_scope *unlink_from(sn_scope *s, int side) {
 
 // scope_new makes a scope under above, or under none, held once by the
 // caller.
-static sn_scope *scope_new(sn_scope *above) {
+SN_HELD_STATIC static sn_scope *scope_new(sn_scope *above) {
     sn_scope *s = sn_alloc(sizeof *s); // counted with the program's blocks, so that a debug build reports one leaked
     memset(s, 0, sizeof *s);
     atomic_init(&s->refs, 1);
@@ -197,7 +197,7 @@ static sn_scope *scope_new(sn_scope *above) {
 // sn_scope_cancel_root cancels the program's scope: every task in no
 // scope and every scope under none, which is every task and scope of
 // the program.
-void sn_scope_cancel_root(void) { scope_cancel(&sn_root, SN_SCOPE_CANCELLED); }
+SN_HELD void sn_scope_cancel_root(void) { scope_cancel(&sn_root, SN_SCOPE_CANCELLED); }
 
 // root_enlist puts the task t, in no scope, in the root's list, unless
 // a group has taken it meanwhile, which its handle's word says under
@@ -207,7 +207,7 @@ void sn_scope_cancel_root(void) { scope_cancel(&sn_root, SN_SCOPE_CANCELLED); }
 // a group that took the task writes its enlisted under the group's
 // lock, and the word says so before, so that enlisted is read only
 // while nothing else writes it.
-static void root_enlist(sn_task *t) {
+SN_HELD_STATIC static void root_enlist(sn_task *t) {
     sn_scope *r = &sn_root;
     sn_scope_link *l = sn_task_scope(t);
     atomic_store(&l->enlisting, true); // before the lock, so that a group that changed the word first reads it
@@ -228,7 +228,7 @@ static void root_enlist(sn_task *t) {
 // the lock and reads the word, so a task the group's write of the word
 // did not reach has set it by the time the word was written, and one
 // it reached takes no list.
-static void root_unlink(sn_task *t) {
+SN_HELD_STATIC static void root_unlink(sn_task *t) {
     sn_scope_link *l = sn_task_scope(t);
     if (!atomic_load(&l->enlisting)) {
         return;
@@ -254,7 +254,7 @@ static void root_unlink(sn_task *t) {
 // let go is kept on a list through its next, with the scopes it held
 // in its above, until both are let go; the loop ends when the list is
 // empty.
-void sn_scope_release(sn_scope *s) {
+SN_HELD void sn_scope_release(sn_scope *s) {
     sn_scope *freed = NULL;
     for (;;) {
         if (atomic_fetch_sub_explicit(&s->refs, 1, memory_order_acq_rel) == 1) {
@@ -286,7 +286,7 @@ void sn_scope_release(sn_scope *s) {
 
 // held_above takes the next scope the freed scope held out of its
 // above, for its hold to be let go, or reports NULL once both are.
-static sn_scope *held_above(sn_scope *freed) {
+SN_HELD_STATIC static sn_scope *held_above(sn_scope *freed) {
     for (int side = 0; side < sides; side++) {
         sn_scope *s = freed->above[side];
         if (s != NULL) {
@@ -300,7 +300,7 @@ static sn_scope *held_above(sn_scope *freed) {
 
 // mark marks s cancelled for why, and reports whether it was live: one
 // cancel marks a scope, and walks into it.
-static bool mark(sn_scope *s, int why) {
+SN_HELD_STATIC static bool mark(sn_scope *s, int why) {
     int live = SN_SCOPE_LIVE;
     return atomic_compare_exchange_strong(&s->state, &live, why);
 }
@@ -310,7 +310,7 @@ static bool mark(sn_scope *s, int why) {
 // marks, each held for the walk and let go after, through pending. A
 // scope whose count is zero is marked and not walked into: nothing is
 // in it.
-static void scope_cancel(sn_scope *s, int why) {
+SN_HELD_STATIC static void scope_cancel(sn_scope *s, int why) {
     if (!mark(s, why) || !retain_live(s)) {
         return;
     }
@@ -340,7 +340,7 @@ static void scope_cancel(sn_scope *s, int why) {
 
 // scope_expire is the deadline's timer, with the wheel let go: the
 // scope's time has passed, and the timer's hold goes with the firing.
-static void scope_expire(void *arg) {
+SN_HELD_STATIC static void scope_expire(void *arg) {
     scope_cancel(arg, SN_SCOPE_TIMED_OUT);
     sn_scope_release(arg);
 }
@@ -349,7 +349,7 @@ static void scope_expire(void *arg) {
 // caller holds, which a cancel of s then wakes, and makes s its scope
 // when it was not yet: enlisted is written before the scope, so that a
 // task that reads its scope with acquire reads it enlisted.
-static void scope_enlist(sn_task *t, sn_scope *s) {
+SN_HELD_STATIC static void scope_enlist(sn_task *t, sn_scope *s) {
     sn_scope_link *l = sn_task_scope(t);
     l->enlisted = true;
     l->prev = NULL;
@@ -371,12 +371,12 @@ static void scope_enlist(sn_task *t, sn_scope *s) {
 // sn_scope_enlist_self, since a task that never waits needs no wake and
 // a wait reads the scope's state once it is in the list. scope_leave
 // takes t out of its scope, and leave_from out of s, which it is in.
-static void join(sn_task *t, sn_scope *s) {
+SN_HELD_STATIC static void join(sn_task *t, sn_scope *s) {
     retain(s);
     atomic_store_explicit(&sn_task_scope(t)->scope, s, memory_order_release);
 }
 
-void sn_scope_enlist_self(sn_task *t, sn_scope *s) {
+SN_HELD void sn_scope_enlist_self(sn_task *t, sn_scope *s) {
     if (s == NULL) {
         root_enlist(t);
         return;
@@ -387,7 +387,7 @@ void sn_scope_enlist_self(sn_task *t, sn_scope *s) {
     sn_qlock_give(&s->mu);
 }
 
-static void scope_leave(sn_task *t) {
+SN_HELD_STATIC static void scope_leave(sn_task *t) {
     sn_scope_link *l = sn_task_scope(t);
     sn_scope *s = atomic_load_explicit(&l->scope, memory_order_relaxed);
     if (s != NULL) {
@@ -399,7 +399,7 @@ static void scope_leave(sn_task *t) {
 
 // unlist takes t out of s's list of tasks, under s's lock, which the
 // caller holds.
-static void unlist(sn_task *t, sn_scope *s) {
+SN_HELD_STATIC static void unlist(sn_task *t, sn_scope *s) {
     sn_scope_link *l = sn_task_scope(t);
     if (l->prev != NULL) {
         sn_task_scope(l->prev)->next = l->next;
@@ -414,7 +414,7 @@ static void unlist(sn_task *t, sn_scope *s) {
     l->enlisted = false;
 }
 
-static void leave_from(sn_task *t, sn_scope *s) {
+SN_HELD_STATIC static void leave_from(sn_task *t, sn_scope *s) {
     sn_scope_link *l = sn_task_scope(t);
     if (l->enlisted) {
         sn_qlock_take(&s->mu);
@@ -432,7 +432,7 @@ static void leave_from(sn_task *t, sn_scope *s) {
 // holds after: the one made, or the group an Add put the task in first,
 // whose lock is taken and let go so that the task is in it once own
 // returns.
-static sn_scope *own(sn_task *t, uintptr_t w, _Atomic uintptr_t *word) {
+SN_HELD_STATIC static sn_scope *own(sn_task *t, uintptr_t w, _Atomic uintptr_t *word) {
     sn_scope *s = scope_new(NULL);
     if (atomic_compare_exchange_strong(word, &w, (uintptr_t)s)) {
         scope_leave(t); // out of the root's list, which no group can take it from now
@@ -446,7 +446,7 @@ static sn_scope *own(sn_task *t, uintptr_t w, _Atomic uintptr_t *word) {
     return first;
 }
 
-sn_scope *sn_scope_current(sn_task *t) {
+SN_HELD sn_scope *sn_scope_current(sn_task *t) {
     sn_scope_link *l = sn_task_scope(t);
     sn_scope *s = atomic_load_explicit(&l->scope, memory_order_acquire);
     if (s != NULL || l->handle == NULL) {
@@ -469,14 +469,14 @@ sn_scope *sn_scope_current(sn_task *t) {
     return own(t, w, word);
 }
 
-void sn_scope_inherit(sn_task *child, sn_task *parent) {
+SN_HELD void sn_scope_inherit(sn_task *child, sn_task *parent) {
     sn_scope *s = sn_scope_current(parent);
     if (s != NULL) {
         join(child, s);
     }
 }
 
-void sn_scope_own(sn_chan *done, sn_task *child, sn_task *parent) {
+SN_HELD void sn_scope_own(sn_chan *done, sn_task *child, sn_task *parent) {
     _Atomic uintptr_t *word = sn_chan_word(done);
     sn_scope *above = sn_scope_current(parent);
     if (above == NULL) {
@@ -493,7 +493,7 @@ void sn_scope_own(sn_chan *done, sn_task *child, sn_task *parent) {
 // sn_scope_ends is the task's, as it offers its result: its work is
 // done, and it leaves its scope, so that the drops of a result no one
 // joins and of its handle, which come after, run in none.
-void sn_scope_ends(sn_chan *done) {
+SN_HELD void sn_scope_ends(sn_chan *done) {
     _Atomic uintptr_t *word = sn_chan_word(done);
     uintptr_t w = atomic_load_explicit(word, memory_order_relaxed);
     if ((w & running) != 0 && atomic_compare_exchange_strong(word, &w, (uintptr_t)&ended)) {
@@ -513,19 +513,19 @@ void sn_scope_ends(sn_chan *done) {
     }
 }
 
-void sn_scope_dropped(sn_chan *done) {
+SN_HELD void sn_scope_dropped(sn_chan *done) {
     uintptr_t w = atomic_load_explicit(sn_chan_word(done), memory_order_acquire);
     if (w != (uintptr_t)&ended && (w & tags) == 0) {
         sn_scope_release((sn_scope *)w); // the channel's hold
     }
 }
 
-void sn_scope_end(sn_task *t) { scope_leave(t); }
+SN_HELD void sn_scope_end(sn_task *t) { scope_leave(t); }
 
 // sn_task_enter has the running task enter a scope with a deadline d
 // nanoseconds from now under the one it is in, for Within; a d of zero
 // or less has passed already.
-void sn_task_enter(int64_t d) {
+SN_HELD void sn_task_enter(int64_t d) {
     sn_task *t = sn_self();
     sn_scope *s = scope_new(sn_scope_current(t)); // which holds the scope it is under, the task's way back
     scope_leave(t);
@@ -543,7 +543,7 @@ void sn_task_enter(int64_t d) {
 
 // sn_task_leave has the running task leave the scope sn_task_enter
 // entered for the one it was in, which is freed once nothing holds it.
-void sn_task_leave(void) {
+SN_HELD void sn_task_leave(void) {
     sn_task *t = sn_self();
     sn_scope *s = atomic_load_explicit(&sn_task_scope(t)->scope, memory_order_relaxed);
     sn_scope *above = s->above[under_parent];
@@ -562,23 +562,23 @@ void sn_task_leave(void) {
 
 // sn_task_Cancelled reports whether the running task's work is cut
 // short: its scope cancelled, or its deadline passed.
-bool sn_task_Cancelled(void) { return sn_cancel_state(sn_self()) != SN_SCOPE_LIVE; }
+SN_HELD bool sn_task_Cancelled(void) { return sn_cancel_state(sn_self()) != SN_SCOPE_LIVE; }
 
 // sn_task_newScope makes a group's scope, under the running task's, and
 // returns it as the handle the group holds; sn_task_dropScope lets the
 // group's hold go.
-int64_t sn_task_newScope(void) { return (int64_t)(intptr_t)scope_new(sn_scope_current(sn_self())); }
+SN_HELD int64_t sn_task_newScope(void) { return (int64_t)(intptr_t)scope_new(sn_scope_current(sn_self())); }
 
-void sn_task_dropScope(int64_t h) { sn_scope_release((sn_scope *)(intptr_t)h); }
+SN_HELD void sn_task_dropScope(int64_t h) { sn_scope_release((sn_scope *)(intptr_t)h); }
 
-void sn_task_cancelScope(int64_t h) { scope_cancel((sn_scope *)(intptr_t)h, SN_SCOPE_CANCELLED); }
+SN_HELD void sn_task_cancelScope(int64_t h) { scope_cancel((sn_scope *)(intptr_t)h, SN_SCOPE_CANCELLED); }
 
 // reaches reports whether s is up or above it, by either side: a walk
 // up the scopes up was made under, and up the group of each on the way,
 // which a scope that holds up holds too. The groups still to walk up
 // from are kept in a list of the walk's own, a few in its frame and the
 // rest in a block of the system's, so that it is no recursion.
-static bool reaches(sn_scope *up, sn_scope *s) {
+SN_HELD_STATIC static bool reaches(sn_scope *up, sn_scope *s) {
     sn_scope *few[few_groups];
     sn_scope **groups = few;
     int n = 0, room = few_groups;
@@ -630,7 +630,7 @@ static bool reaches(sn_scope *up, sn_scope *s) {
 // group_of is the group that took the task whose handle channel's word
 // is w: the scope the task went into, or the group its own scope is
 // under; NULL for none.
-static sn_scope *group_of(uintptr_t w) {
+SN_HELD_STATIC static sn_scope *group_of(uintptr_t w) {
     if ((w & in_group) != 0) {
         return (sn_scope *)(w & ~tags);
     }
@@ -644,7 +644,7 @@ static sn_scope *group_of(uintptr_t w) {
 
 // group_fail cancels the group g for its task whose handle channel is done,
 // which failed, and records it as the first to fail unless another was.
-static void group_fail(sn_scope *g, sn_chan *done) {
+SN_HELD_STATIC static void group_fail(sn_scope *g, sn_chan *done) {
     sn_chan *none = NULL;
     atomic_compare_exchange_strong(&g->first, &none, done);
     scope_cancel(g, SN_SCOPE_CANCELLED);
@@ -654,7 +654,7 @@ static void group_fail(sn_scope *g, sn_chan *done) {
 // marks its handle channel, and cancels its group when one took it. A
 // group that takes it after reads the mark and does the same, so that
 // one of the two sees the other: each writes before it reads.
-void sn_handle_failed(sn_chan *done) {
+SN_HELD void sn_handle_failed(sn_chan *done) {
     atomic_store(sn_chan_failed(done), true);
     sn_scope *g = group_of(atomic_load(sn_chan_word(done)));
     if (g != NULL) {
@@ -664,7 +664,9 @@ void sn_handle_failed(sn_chan *done) {
 
 // sn_task_firstFailed reports whether the task whose handle channel is
 // done was the first of the group h's tasks to fail.
-bool sn_task_firstFailed(int64_t h, sn_chan *done) { return atomic_load(&((sn_scope *)(intptr_t)h)->first) == done; }
+SN_HELD bool sn_task_firstFailed(int64_t h, sn_chan *done) {
+    return atomic_load(&((sn_scope *)(intptr_t)h)->first) == done;
+}
 
 // adopt puts the task whose handle channel is done in the group g: in
 // g's scope itself when it has no scope of its own yet and still runs,
@@ -672,7 +674,7 @@ bool sn_task_firstFailed(int64_t h, sn_chan *done) { return atomic_load(&((sn_sc
 // started nothing a cancel could reach. A group made inside that very
 // task, which would then be under the scope it takes in, does not take
 // it: a cancel is never asked to walk in a circle.
-static void adopt(sn_scope *g, sn_chan *done) {
+SN_HELD_STATIC static void adopt(sn_scope *g, sn_chan *done) {
     _Atomic uintptr_t *word = sn_chan_word(done);
     uintptr_t w = atomic_load(word);
     sn_scope *s = (sn_scope *)w;
@@ -717,7 +719,7 @@ static void adopt(sn_scope *g, sn_chan *done) {
 
 // sn_task_adopt puts the task whose handle channel is done in the group
 // h, as adopt says, and fails the group when the task has failed.
-void sn_task_adopt(int64_t h, sn_chan *done) {
+SN_HELD void sn_task_adopt(int64_t h, sn_chan *done) {
     sn_scope *g = (sn_scope *)(intptr_t)h;
     adopt(g, done);
     if (atomic_load(sn_chan_failed(done))) {

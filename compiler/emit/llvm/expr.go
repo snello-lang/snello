@@ -1051,7 +1051,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		e.branchLikely(has.s, ok, fail)
 		e.label(fail)
 		e.leaveFunction(x.Pos())
-		e.inst("ret " + e.variantValue(e.fn.sig.Results(), types.NoneVariant, nil, x.Pos()).typed())
+		e.returnValue(e.variantValue(e.fn.sig.Results(), types.NoneVariant, nil, x.Pos()))
 	case *types.Result:
 		ir := e.irType(t, x.Pos())
 		elem = u.Val()
@@ -1061,7 +1061,7 @@ func (e *Emitter) try(x *ast.TryExpr) value {
 		e.label(fail)
 		err := e.passed(x, e.taken(val, u.Err(), held, e.typeOf(x.X), x.Pos()), u.Err())
 		e.leaveFunction(x.Pos())
-		e.inst("ret " + e.variantValue(e.fn.sig.Results(), types.ErrVariant, []value{err}, x.Pos()).typed())
+		e.returnValue(e.variantValue(e.fn.sig.Results(), types.ErrVariant, []value{err}, x.Pos()))
 	}
 
 	e.fn.terminated = true
