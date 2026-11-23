@@ -27,7 +27,9 @@ Formatting is not here yet; it comes as its own task, and the server tells the e
 
 The server is part of the `snello` command, so wherever `snello` is installed the server is too, at the same version, and there is nothing else to install or set: `snello lsp` speaks on its standard input and output and writes its own logs to standard error. It takes `--stdio` and `--clientProcessId`, which some editors pass, and needs neither, and it reads no settings: the module is found by its `snello.mod` and a file's platform by its name.
 
-The VS Code extension, which starts it for you and gives VS Code Snello's grammar, is its own task. Editors that take a server by its command need only the file type and the command:
+In VS Code, the [Snello extension](https://github.com/snello-lang/vscode-extension) starts it for you, the first time a Snello file opens in a window, and stops it when the window closes, and gives VS Code Snello's grammar. It runs the first `snello` on the `PATH`, or the command whose absolute path the setting `snello.serverPath` names, and starts it again when the setting changes; without one, it says so once and highlights as before. In Restricted Mode a folder's own settings cannot choose the command. Its README says how to build and install it.
+
+Editors that take a server by its command need only the file type and the command:
 
 In Neovim 0.11 and later, in `init.lua`:
 
