@@ -65,26 +65,40 @@ func (s *Server) checkAll() {
 			continue
 		}
 
-		if programs := s.programsIn(dir); len(programs) > 1 {
-			s.reports[dir] = nil
-			for _, name := range programs {
-				r, v := s.checkProgram(name)
-				s.reports[dir] = append(s.reports[dir], r)
-				s.keep(dir, v, last)
-			}
-
-			continue
-		}
-
-		r, v := s.checkSources(dir)
-		s.reports[dir] = []report{r}
-		s.keep(dir, v, last)
-		if tests, err := importer.TestFiles(dir, platform.Host()); err == nil && len(tests) > 0 {
-			r, v := s.checkTests(dir)
-			s.reports[dir] = append(s.reports[dir], r)
+		var views []*view
+		s.reports[dir], views = s.checks(dir, nil, platform.Host())
+		for _, v := range views {
 			s.keep(dir, v, last)
 		}
 	}
+}
+
+// checks checks the package in dir as checkAll does, for the platform
+// t, with the sources of over in place of the files they name, and
+// returns what each check reported and the view it left, untrimmed:
+// the package's sources and its tests, or each of the programs of one
+// file it holds.
+func (s *Server) checks(dir string, over map[string][]byte, t platform.Target) ([]report, []*view) {
+	var reports []report
+	var views []*view
+	add := func(r report, v *view) {
+		reports, views = append(reports, r), append(views, v)
+	}
+
+	if programs := s.programsIn(dir, over, t); len(programs) > 1 {
+		for _, name := range programs {
+			add(s.checkProgram(name, over, t))
+		}
+
+		return reports, views
+	}
+
+	add(s.checkSources(dir, over, t))
+	if tests, err := importer.TestFiles(dir, t); err == nil && len(tests) > 0 {
+		add(s.checkTests(dir, over, t))
+	}
+
+	return reports, views
 }
 
 // keep trims v to the files of dir its check parsed that no check
@@ -96,8 +110,8 @@ func (s *Server) checkAll() {
 // file it is in alone.
 func (s *Server) keep(dir string, v *view, last map[string]*view) {
 	own := make(map[string]*token.File)
-	for _, f := range v.files {
-		if path := stdPathOf(f.Name()); filepath.Dir(path) == dir && s.views[path] == nil {
+	for path, f := range ownFiles(dir, v) {
+		if s.views[path] == nil {
 			own[path] = f
 		}
 	}
@@ -129,11 +143,12 @@ func (s *Server) openPackages() []string {
 	return slices.Compact(dirs)
 }
 
-// programsIn returns the source files of dir that declare main, as the
-// editor holds them; none when a file's parse panics, so that the check
-// of the package reports why.
-func (s *Server) programsIn(dir string) []string {
-	names, err := importer.SourceFiles(dir, platform.Host())
+// programsIn returns the source files of dir for the platform t that
+// declare main, as the editor holds them or as over gives them; none
+// when a file's parse panics, so that the check of the package reports
+// why.
+func (s *Server) programsIn(dir string, over map[string][]byte, t platform.Target) []string {
+	names, err := importer.SourceFiles(dir, t)
 	if err != nil {
 		return nil
 	}
@@ -141,9 +156,12 @@ func (s *Server) programsIn(dir string) []string {
 	var programs []string
 	err = s.guard(func() error {
 		for _, name := range names {
-			src, err := s.read(name)
-			if err != nil {
-				continue
+			src, ok := over[name]
+			if !ok {
+				var err error
+				if src, err = s.read(name); err != nil {
+					continue
+				}
 			}
 
 			f, _, _ := parser.ParseFile(name, src)
@@ -162,8 +180,8 @@ func (s *Server) programsIn(dir string) []string {
 }
 
 // checkProgram checks the file name alone, as snello check FILE does.
-func (s *Server) checkProgram(name string) (report, *view) {
-	v, o := s.begin()
+func (s *Server) checkProgram(name string, over map[string][]byte, t platform.Target) (report, *view) {
+	v, o := s.begin(over, t)
 	err := s.guard(func() error {
 		_, _, err := importer.LoadProgramFrom(o.Load([]string{name}), v.info)
 		return err
@@ -175,8 +193,8 @@ func (s *Server) checkProgram(name string) (report, *view) {
 // checkSources checks the package in dir as snello check DIR does and
 // reports its errors; an error that names no file is reported on the
 // package's open documents.
-func (s *Server) checkSources(dir string) (report, *view) {
-	v, o := s.begin()
+func (s *Server) checkSources(dir string, over map[string][]byte, t platform.Target) (report, *view) {
+	v, o := s.begin(over, t)
 	err := s.guard(func() error { return importer.CheckDir(dir, v.info, o) })
 	return s.reportOf(err, v.srcs, s.openIn(dir, false)), v
 }
@@ -186,8 +204,8 @@ func (s *Server) checkSources(dir string) (report, *view) {
 // import path its tests are reached at, its own or its external test
 // package's. An error that names no file is reported on the package's
 // open test files.
-func (s *Server) checkTests(dir string) (report, *view) {
-	v, o := s.begin()
+func (s *Server) checkTests(dir string, over map[string][]byte, t platform.Target) (report, *view) {
+	v, o := s.begin(over, t)
 	err := s.guard(func() error {
 		plan, err := testrun.PlanDirFrom(dir, o.Read)
 		if err != nil {
@@ -206,15 +224,21 @@ func (s *Server) checkTests(dir string) (report, *view) {
 }
 
 // begin starts a check: its view, and the loader's options it checks
-// with, the same for every check of the server: the host's files, the
-// sources read as read reads them and recorded in the view, every file
-// parsed kept in the view, and the module resolved from the module
-// cache alone, so that a check as the developer types never fetches a
-// module or writes the lock file.
-func (s *Server) begin() (*view, importer.Options) {
+// with, the same for every check of the server: the files of t, the
+// sources read as read reads them, or from over, which a rename checks
+// its edits through, and recorded in the view, every file parsed kept
+// in the view, and the module resolved from the module cache alone, so
+// that a check as the developer types never fetches a module or writes
+// the lock file.
+func (s *Server) begin(over map[string][]byte, t platform.Target) (*view, importer.Options) {
 	v := newView(make(map[string][]byte))
 	read := func(name string) ([]byte, error) {
-		src, err := s.read(name)
+		src, ok := over[filepath.Clean(name)]
+		var err error
+		if !ok {
+			src, err = s.read(name)
+		}
+
 		if err == nil {
 			v.srcs[name] = src
 		}
@@ -222,13 +246,26 @@ func (s *Server) begin() (*view, importer.Options) {
 		return src, err
 	}
 
-	return v, importer.Options{Target: platform.Host(), Read: read, Cached: true, Parsed: v.parsed}
+	return v, importer.Options{Target: t, Read: read, Cached: true, Parsed: v.parsed}
+}
+
+// ownFiles returns the files of dir a check parsed, by path, as
+// stdPathOf names them.
+func ownFiles(dir string, v *view) map[string]*token.File {
+	own := make(map[string]*token.File)
+	for _, f := range v.files {
+		if path := stdPathOf(f.Name()); filepath.Dir(path) == dir {
+			own[path] = f
+		}
+	}
+
+	return own
 }
 
 // checkStd checks the standard package at path, the package in the
 // compiler a copy of its files stands for, and returns its view.
 func (s *Server) checkStd(path string) *view {
-	v, o := s.begin()
+	v, o := s.begin(nil, platform.Host())
 	s.guard(func() error {
 		imp := importer.NewImporter(v.info)
 		imp.Target, imp.Parsed = o.Target, o.Parsed

@@ -18,7 +18,7 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 8. `_docs/design/12-platforms.md`: the platforms Snello supports, their tiers, the oldest version of each system, and the Windows port.
 9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
 10. `_docs/design/14-distribution.md`: versions, the release cadence and channels, what a release holds and how it is trusted, and how Snello is installed.
-11. `_docs/design/15-language-server.md`: `snellols`, the protocol it speaks, how it keeps documents and checks their packages, its diagnostics, hover and definition.
+11. `_docs/design/15-language-server.md`: `snellols`, the protocol it speaks, how it keeps documents and checks their packages, its diagnostics, hover and definition, symbols, references and rename.
 12. `_docs/book/README.md`: the user-facing book and which chapters exist.
 13. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
 14. `CODING_STANDARDS.md`: how code is written here.
@@ -119,7 +119,7 @@ go run ./cmd/snello build -target linux/arm64 FILE   # build for another platfor
 | `std/` | The standard library, written in Snello, one directory per package, embedded in the compiler by `std.go`, the only Go in it; `builtin/` documents the predeclared names and is never imported |
 | `cmd/snello/` | The command-line driver; `deps.go` is the dependency commands, `add`, `remove`, `update`, `deps` and `fetch` |
 | `cmd/snellols/` | The language server's command: one session of the Language Server Protocol over standard input and output, its logs on standard error |
-| `lsp/` | The language server: `jsonrpc/` the framing of the protocol's messages, `protocol/` the protocol's types the server uses, `server/` the documents, the checks through the compiler's own loader and checker, the diagnostics, hover and definition |
+| `lsp/` | The language server: `jsonrpc/` the framing of the protocol's messages, `protocol/` the protocol's types the server uses, `server/` the documents, the checks through the compiler's own loader and checker, the diagnostics, hover and definition, symbols, references and rename |
 | `_docs/brand/` | Logo and palette |
 
 ## When the design and the code disagree

@@ -5,9 +5,11 @@
 // Command snellols is Snello's language server. An editor starts it and
 // talks to it over its standard input and output in the Language Server
 // Protocol: it reports the errors of the open files' packages as the
-// editor holds them, as snello check would, and answers hover and go to
-// definition; its logs go to standard error. It is modeled on the Language Server Protocol specification,
-// 3.17, and _docs/design/15-language-server.md has its design.
+// editor holds them, as snello check would, and answers hover, go to
+// definition, the outline, the workspace's symbols, references and
+// rename; its logs go to standard error. It is modeled on the Language
+// Server Protocol specification, 3.17, and
+// _docs/design/15-language-server.md has its design.
 package main
 
 import (

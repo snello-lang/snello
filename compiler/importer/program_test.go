@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -498,6 +499,46 @@ func TestParsed(t *testing.T) {
 	broken := writeTree(t, map[string]string{"main.snello": "package main\n\nfunc main( {\n"})
 	if _, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(broken, "main.snello")}, Parsed: parsed}, &types.Info{}); err == nil || len(files) != 1 {
 		t.Errorf("a file with a syntax error: %v, parsed %d files, want an error and the file", err, len(files))
+	}
+}
+
+// TestFailedOnce loads a package that does not compile once, however
+// many files import it: in a chain of packages of three files each, all
+// importing the one below, whose bottom does not compile, every file is
+// parsed once, and the error reaches the program.
+func TestFailedOnce(t *testing.T) {
+	const depth, width = 6, 3
+	files := map[string]string{ModFile: "snello 0.1.0\n", "main.snello": "package main\n\nimport \"p5\"\n\nfunc main() { p5.F0() }\n"}
+	for p := range depth {
+		for f := range width {
+			src := "package p" + strconv.Itoa(p) + "\n\n"
+			body := "{}"
+			if p > 0 {
+				src += "import \"p" + strconv.Itoa(p-1) + "\"\n\n"
+				body = "{ p" + strconv.Itoa(p-1) + ".F0() }"
+			} else if f == 0 {
+				body = "{ return 1 }" // the error at the bottom
+			}
+
+			files["p"+strconv.Itoa(p)+"/f"+strconv.Itoa(f)+".snello"] = src + "func F" + strconv.Itoa(f) + "() " + body + "\n"
+		}
+	}
+
+	parsed := map[string]int{}
+	root := writeTree(t, files)
+	_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, Parsed: func(file *token.File, _ *ast.File) { parsed[file.Name()]++ }}, &types.Info{})
+	if err == nil || !strings.Contains(err.Error(), "package p0 does not compile") {
+		t.Errorf("the chain: %v, want p0's error", err)
+	}
+
+	if len(parsed) != depth*width+1 {
+		t.Errorf("parsed %d files, want every one of the %d", len(parsed), depth*width+1)
+	}
+
+	for name, n := range parsed {
+		if n != 1 {
+			t.Errorf("%s parsed %d times, want once", name, n)
+		}
 	}
 }
 

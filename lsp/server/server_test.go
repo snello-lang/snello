@@ -75,8 +75,8 @@ func TestSession(t *testing.T) {
 		t.Errorf("the document sync offered: %+v", sync)
 	}
 
-	if !result.Capabilities.HoverProvider || !result.Capabilities.DefinitionProvider {
-		t.Errorf("hover and definition not offered: %+v", result.Capabilities)
+	if caps := result.Capabilities; !caps.HoverProvider || !caps.DefinitionProvider || !caps.ReferencesProvider || !caps.DocumentSymbolProvider || !caps.WorkspaceSymbolProvider || caps.RenameProvider != true {
+		t.Errorf("hover, definition, references, symbols or rename not offered: %+v", result.Capabilities)
 	}
 
 	mainURI := uriOf(mainPath)

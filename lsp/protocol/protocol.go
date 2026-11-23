@@ -4,7 +4,8 @@
 
 // Package protocol holds the types of the Language Server Protocol the
 // server uses, and only those: the handshake, the document
-// notifications, the diagnostics, hover and definition. Each type and field is named as
+// notifications, the diagnostics, hover and definition, symbols,
+// references and rename. Each type and field is named as
 // the specification names it and encoded as its JSON spells it, so that
 // a reader can hold the two side by side. It is modeled on the Language
 // Server Protocol specification, 3.17.
@@ -23,6 +24,11 @@ const (
 	MethodPublishDiagnostics = "textDocument/publishDiagnostics"
 	MethodHover              = "textDocument/hover"
 	MethodDefinition         = "textDocument/definition"
+	MethodDocumentSymbol     = "textDocument/documentSymbol"
+	MethodWorkspaceSymbol    = "workspace/symbol"
+	MethodReferences         = "textDocument/references"
+	MethodPrepareRename      = "textDocument/prepareRename"
+	MethodRename             = "textDocument/rename"
 
 	// The units a position's character counts in, which the client
 	// offers and the server picks: UTF-16 code units, the protocol's
@@ -53,23 +59,63 @@ type Range struct {
 	End   Position `json:"end"`
 }
 
-// InitializeParams is what the client says of itself at the handshake;
-// the server reads its capabilities alone.
+// InitializeParams is what the client says of itself at the handshake:
+// its capabilities, and the folders it has open, the workspace, as the
+// folders of 3.6 and on or the one root of before.
 type InitializeParams struct {
-	Capabilities ClientCapabilities `json:"capabilities"`
+	Capabilities     ClientCapabilities `json:"capabilities"`
+	RootURI          DocumentURI        `json:"rootUri,omitempty"`
+	WorkspaceFolders []WorkspaceFolder  `json:"workspaceFolders,omitempty"`
+}
+
+// A WorkspaceFolder is a folder the client has open.
+type WorkspaceFolder struct {
+	URI  DocumentURI `json:"uri"`
+	Name string      `json:"name"`
 }
 
 // ClientCapabilities is what the client can do; the server reads the
-// position encodings it offers and the forms its hover renders.
+// position encodings it offers, the forms its hover renders, and what
+// it can do with documents and the workspace.
 type ClientCapabilities struct {
 	General      *GeneralClientCapabilities      `json:"general,omitempty"`
 	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
+	Workspace    *WorkspaceClientCapabilities    `json:"workspace,omitempty"`
+}
+
+// WorkspaceClientCapabilities is what the client can do with the
+// workspace; the server reads the form of the edits it applies.
+type WorkspaceClientCapabilities struct {
+	WorkspaceEdit *WorkspaceEditClientCapabilities `json:"workspaceEdit,omitempty"`
+}
+
+// WorkspaceEditClientCapabilities says whether the client takes a
+// workspace's edits as documents' edits, each naming the version of the
+// document it was made for, which a client refuses to apply to another.
+type WorkspaceEditClientCapabilities struct {
+	DocumentChanges bool `json:"documentChanges,omitempty"`
 }
 
 // TextDocumentClientCapabilities is what the client can do with a
-// document; the server reads its hover's alone.
+// document; the server reads its hover's, its outline's and its
+// rename's.
 type TextDocumentClientCapabilities struct {
-	Hover *HoverClientCapabilities `json:"hover,omitempty"`
+	Hover          *HoverClientCapabilities          `json:"hover,omitempty"`
+	DocumentSymbol *DocumentSymbolClientCapabilities `json:"documentSymbol,omitempty"`
+	Rename         *RenameClientCapabilities         `json:"rename,omitempty"`
+}
+
+// DocumentSymbolClientCapabilities says whether the client shows an
+// outline as a tree, of DocumentSymbol, or as a list, of
+// SymbolInformation.
+type DocumentSymbolClientCapabilities struct {
+	HierarchicalDocumentSymbolSupport bool `json:"hierarchicalDocumentSymbolSupport,omitempty"`
+}
+
+// RenameClientCapabilities says whether the client asks whether a name
+// may be renamed before it asks for the new name.
+type RenameClientCapabilities struct {
+	PrepareSupport bool `json:"prepareSupport,omitempty"`
 }
 
 // HoverClientCapabilities holds the forms the client renders a hover's
@@ -96,6 +142,19 @@ type ServerCapabilities struct {
 	TextDocumentSync   *TextDocumentSyncOptions `json:"textDocumentSync,omitempty"`
 	HoverProvider      bool                     `json:"hoverProvider,omitempty"`
 	DefinitionProvider bool                     `json:"definitionProvider,omitempty"`
+	ReferencesProvider bool                     `json:"referencesProvider,omitempty"`
+
+	DocumentSymbolProvider  bool `json:"documentSymbolProvider,omitempty"`
+	WorkspaceSymbolProvider bool `json:"workspaceSymbolProvider,omitempty"`
+
+	// RenameProvider is true, or RenameOptions for a client that asks
+	// before it renames.
+	RenameProvider any `json:"renameProvider,omitempty"`
+}
+
+// RenameOptions says the server answers prepareRename.
+type RenameOptions struct {
+	PrepareProvider bool `json:"prepareProvider"`
 }
 
 // TextDocumentSyncOptions says which document notifications the server
@@ -226,4 +285,106 @@ type MarkupContent struct {
 type Location struct {
 	URI   DocumentURI `json:"uri"`
 	Range Range       `json:"range"`
+}
+
+// DocumentSymbolParams names the document whose outline is asked for.
+type DocumentSymbolParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// A SymbolKind is what a symbol is, as an editor marks it.
+type SymbolKind int
+
+// The kinds of symbol the server gives, by the protocol's numbers.
+const (
+	SymbolKindClass      SymbolKind = 5
+	SymbolKindMethod     SymbolKind = 6
+	SymbolKindField      SymbolKind = 8
+	SymbolKindEnum       SymbolKind = 10
+	SymbolKindInterface  SymbolKind = 11
+	SymbolKindFunction   SymbolKind = 12
+	SymbolKindVariable   SymbolKind = 13
+	SymbolKindConstant   SymbolKind = 14
+	SymbolKindEnumMember SymbolKind = 22
+	SymbolKindStruct     SymbolKind = 23
+)
+
+// A DocumentSymbol is a declaration of a document's outline: its name,
+// kind, the stretch of its whole declaration and that of its name, and
+// the declarations under it.
+type DocumentSymbol struct {
+	Name           string           `json:"name"`
+	Detail         string           `json:"detail,omitempty"`
+	Kind           SymbolKind       `json:"kind"`
+	Range          Range            `json:"range"`
+	SelectionRange Range            `json:"selectionRange"`
+	Children       []DocumentSymbol `json:"children,omitempty"`
+}
+
+// SymbolInformation is a declaration as a list of symbols gives it: its
+// name, kind and place, and the name of what it is declared in.
+type SymbolInformation struct {
+	Name          string     `json:"name"`
+	Kind          SymbolKind `json:"kind"`
+	Location      Location   `json:"location"`
+	ContainerName string     `json:"containerName,omitempty"`
+}
+
+// WorkspaceSymbolParams is the text the symbols of the workspace are
+// looked for by.
+type WorkspaceSymbolParams struct {
+	Query string `json:"query"`
+}
+
+// ReferenceParams is a place whose name's references are asked for,
+// and whether its declaration is among them.
+type ReferenceParams struct {
+	TextDocumentPositionParams
+	Context ReferenceContext `json:"context"`
+}
+
+// ReferenceContext says whether the declaration is a reference.
+type ReferenceContext struct {
+	IncludeDeclaration bool `json:"includeDeclaration"`
+}
+
+// RenameParams is a place whose name is renamed, and the new name.
+type RenameParams struct {
+	TextDocumentPositionParams
+	NewName string `json:"newName"`
+}
+
+// PrepareRenameResult is the stretch of the name a rename would change,
+// and the name the editor offers to change.
+type PrepareRenameResult struct {
+	Range       Range  `json:"range"`
+	Placeholder string `json:"placeholder"`
+}
+
+// A WorkspaceEdit is the edits of a rename, each document's applied at
+// once: by document, or as documents' edits with their versions.
+type WorkspaceEdit struct {
+	Changes         map[DocumentURI][]TextEdit `json:"changes,omitempty"`
+	DocumentChanges []TextDocumentEdit         `json:"documentChanges,omitempty"`
+}
+
+// A TextDocumentEdit is the edits of one document, made for the version
+// it names, or for the file on the disk when it names none.
+type TextDocumentEdit struct {
+	TextDocument OptionalVersionedTextDocumentIdentifier `json:"textDocument"`
+	Edits        []TextEdit                              `json:"edits"`
+}
+
+// OptionalVersionedTextDocumentIdentifier names a document and the
+// version an edit was made for, null for a document the editor does
+// not have open.
+type OptionalVersionedTextDocumentIdentifier struct {
+	URI     DocumentURI `json:"uri"`
+	Version *int32      `json:"version"`
+}
+
+// A TextEdit replaces a stretch of a document with text.
+type TextEdit struct {
+	Range   Range  `json:"range"`
+	NewText string `json:"newText"`
 }

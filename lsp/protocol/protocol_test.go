@@ -12,7 +12,9 @@ import (
 // TestEncode writes the types as the specification spells them: the
 // server's capabilities, a diagnostic, diagnostics that clear a
 // document, which are an empty list and not null, a hover and a
-// location.
+// location; the capabilities of symbols, references and rename, the
+// last as true or as its options; an outline as a tree and as a list;
+// a rename's edits and the answer that it may.
 func TestEncode(t *testing.T) {
 	version := int32(3)
 	tests := []struct {
@@ -45,6 +47,15 @@ func TestEncode(t *testing.T) {
 			`{"contents":{"kind":"markdown","value":"` + "```snello\\nvar n int\\n```" + `"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}`,
 		},
 		{Location{URI: "file:///a.snello", Range: Range{Start: Position{Line: 2}}}, `{"uri":"file:///a.snello","range":{"start":{"line":2,"character":0},"end":{"line":0,"character":0}}}`},
+		{ServerCapabilities{ReferencesProvider: true, DocumentSymbolProvider: true, WorkspaceSymbolProvider: true, RenameProvider: RenameOptions{PrepareProvider: true}}, `{"referencesProvider":true,"documentSymbolProvider":true,"workspaceSymbolProvider":true,"renameProvider":{"prepareProvider":true}}`},
+		{ServerCapabilities{RenameProvider: true}, `{"renameProvider":true}`},
+		{
+			DocumentSymbol{Name: "Kind", Kind: SymbolKindEnum, Children: []DocumentSymbol{{Name: "Round", Kind: SymbolKindEnumMember}}},
+			`{"name":"Kind","kind":10,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"children":[{"name":"Round","kind":22,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}`,
+		},
+		{SymbolInformation{Name: "Round", Kind: SymbolKindEnumMember, Location: Location{URI: "file:///a.snello"}, ContainerName: "Kind"}, `{"name":"Round","kind":22,"location":{"uri":"file:///a.snello","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}},"containerName":"Kind"}`},
+		{WorkspaceEdit{Changes: map[DocumentURI][]TextEdit{"file:///a.snello": {{NewText: "Biggest"}}}}, `{"changes":{"file:///a.snello":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"Biggest"}]}}`},
+		{PrepareRenameResult{Placeholder: "Largest"}, `{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"placeholder":"Largest"}`},
 	}
 
 	for _, tt := range tests {
@@ -61,7 +72,9 @@ func TestEncode(t *testing.T) {
 
 // TestDecode reads what a client sends: the handshake with the position
 // encodings it offers and the forms its hover renders, a change with a
-// range and one without, and a place a request asks about.
+// range and one without, a place a request asks about, the workspace's
+// folders and the outline's and rename's capabilities, and the
+// references and the rename asked for.
 func TestDecode(t *testing.T) {
 	var init InitializeParams
 	if err := json.Unmarshal([]byte(`{"processId":12,"rootUri":null,"capabilities":{"general":{"positionEncodings":["utf-8","utf-16"]},"textDocument":{}}}`), &init); err != nil {
@@ -79,6 +92,34 @@ func TestDecode(t *testing.T) {
 
 	if d := init.Capabilities.TextDocument; d == nil || d.Hover == nil || len(d.Hover.ContentFormat) != 2 || d.Hover.ContentFormat[0] != MarkupKindMarkdown {
 		t.Errorf("the hover's forms: %+v", init.Capabilities.TextDocument)
+	}
+
+	init = InitializeParams{}
+	if err := json.Unmarshal([]byte(`{"rootUri":"file:///old","workspaceFolders":[{"uri":"file:///w","name":"w"}],"capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"rename":{"prepareSupport":true}}}}`), &init); err != nil {
+		t.Fatal(err)
+	}
+
+	if d := init.Capabilities.TextDocument; init.RootURI != "file:///old" || len(init.WorkspaceFolders) != 1 || init.WorkspaceFolders[0].URI != "file:///w" ||
+		d == nil || d.DocumentSymbol == nil || !d.DocumentSymbol.HierarchicalDocumentSymbolSupport || d.Rename == nil || !d.Rename.PrepareSupport {
+		t.Errorf("the workspace and the outline's and rename's capabilities: %+v", init)
+	}
+
+	var refs ReferenceParams
+	if err := json.Unmarshal([]byte(`{"textDocument":{"uri":"file:///a.snello"},"position":{"line":1,"character":2},"context":{"includeDeclaration":true}}`), &refs); err != nil {
+		t.Fatal(err)
+	}
+
+	if refs.TextDocument.URI != "file:///a.snello" || refs.Position.Character != 2 || !refs.Context.IncludeDeclaration {
+		t.Errorf("the references asked for: %+v", refs)
+	}
+
+	var rename RenameParams
+	if err := json.Unmarshal([]byte(`{"textDocument":{"uri":"file:///a.snello"},"position":{"line":1,"character":2},"newName":"Biggest"}`), &rename); err != nil {
+		t.Fatal(err)
+	}
+
+	if rename.Position.Line != 1 || rename.NewName != "Biggest" {
+		t.Errorf("the rename asked for: %+v", rename)
 	}
 
 	var at TextDocumentPositionParams

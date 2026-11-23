@@ -338,6 +338,9 @@ func TestStdPaths(t *testing.T) {
 	}
 }
 
+// packagedFiles are the files of examples/packaged.
+var packagedFiles = []string{"main.snello", "report.snello", "shapes/shape.snello", "shapes/area.snello", "shapes/shapes_test.snello"}
+
 // A navigation is a session over examples/packaged with its files open.
 type navigation struct {
 	*session
@@ -354,9 +357,16 @@ func navigate(t *testing.T, caps protocol.ClientCapabilities) *navigation {
 		t.Fatal(err)
 	}
 
+	return navigateIn(t, caps, dir, packagedFiles...)
+}
+
+// navigateIn starts a session offering caps, and opens the files names
+// of the directory dir, by their paths under it.
+func navigateIn(t *testing.T, caps protocol.ClientCapabilities, dir string, names ...string) *navigation {
+	t.Helper()
 	n := &navigation{session: startSession(t), dir: dir, texts: map[string][]byte{}}
 	n.initialize(caps)
-	for _, name := range []string{"main.snello", "report.snello", "shapes/shape.snello", "shapes/area.snello", "shapes/shapes_test.snello"} {
+	for _, name := range names {
 		text, err := os.ReadFile(n.path(name))
 		if err != nil {
 			t.Fatal(err)

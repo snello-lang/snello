@@ -24,13 +24,15 @@ import (
 
 const (
 	// The error codes of JSON-RPC 2.0, and the two of the Language
-	// Server Protocol a server answers with.
+	// Server Protocol a server answers with: before the handshake, and a
+	// request it understood and cannot do, a rename it refuses.
 	ParseError           = -32700
 	InvalidRequest       = -32600
 	MethodNotFound       = -32601
 	InvalidParams        = -32602
 	InternalError        = -32603
 	ServerNotInitialized = -32002
+	RequestFailed        = -32803
 
 	// The header a message is framed by and the room its line takes
 	// beside the body's length; the version every message names; the id

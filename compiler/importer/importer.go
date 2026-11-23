@@ -94,6 +94,7 @@ type Importer struct {
 	own     types.Config   // a package of the program's own without them
 	info    *types.Info
 	loaded  map[string]*Package
+	failed  map[string]error // the packages that did not load, with why: loaded once, however many files import them
 	loading []loading        // the packages being loaded, outermost first, for naming a cycle
 	roots   map[string]*root // the modules reached so far, by directory
 	order   []*Package       // as the loads finished: a package after the ones it imports
@@ -124,7 +125,7 @@ type root struct {
 // NewImporter returns an importer that checks the packages it loads
 // into info.
 func NewImporter(info *types.Info) *Importer {
-	imp := &Importer{Target: platform.Host(), fset: token.NewFileSet(), info: info, loaded: make(map[string]*Package), roots: make(map[string]*root)}
+	imp := &Importer{Target: platform.Host(), fset: token.NewFileSet(), info: info, loaded: make(map[string]*Package), failed: make(map[string]error), roots: make(map[string]*root)}
 	imp.std = types.Config{Importer: imp, Standard: true}
 	imp.own = types.Config{Importer: imp}
 	return imp
@@ -304,11 +305,18 @@ func (imp *Importer) readFile(name string) ([]byte, error) {
 // loadOnce answers an import from the packages loaded, refuses a cycle
 // with the cycle written out, and otherwise loads the package named
 // path with load and records it once it compiled and passed the
-// checks load makes, so that a package refused is never answered from
-// the cache.
+// checks load makes, so that a package refused is never answered as
+// loaded. A package that did not load is answered with why, as it was
+// the first time: loaded again for every file that imports it, a
+// package deep in a chain of failing packages would be loaded as many
+// times as the files above it multiply.
 func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package, []*Package, error)) (*types.Package, error) {
 	if p := imp.loaded[path]; p != nil {
 		return p.Pkg, nil
+	}
+
+	if err := imp.failed[path]; err != nil {
+		return nil, err
 	}
 
 	for i, l := range imp.loading {
@@ -326,6 +334,7 @@ func (imp *Importer) loadOnce(path string, std bool, load func() (*types.Package
 	defer func() { imp.loading = imp.loading[:len(imp.loading)-1] }()
 	pkg, entries, err := load()
 	if err != nil {
+		imp.failed[path] = err
 		return nil, err
 	}
 

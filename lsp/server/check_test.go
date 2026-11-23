@@ -219,7 +219,7 @@ func compilerErrors(t *testing.T, dir string) scanner.ErrorList {
 
 // writeModule writes a module of files, by their slashed paths under
 // its root, into a new directory, and returns the directory.
-func writeModule(t *testing.T, files map[string]string) string {
+func writeModule(t testing.TB, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	files[importer.ModFile] = "snello 0.1.0\n"

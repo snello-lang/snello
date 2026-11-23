@@ -14,6 +14,7 @@ import (
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
@@ -181,7 +182,7 @@ func TestDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v, o := New(nil, io.Discard, io.Discard).begin()
+	v, o := New(nil, io.Discard, io.Discard).begin(nil, platform.Host())
 	if _, _, err := importer.LoadProgramFrom(o.Load([]string{path}), v.info); err == nil || !strings.Contains(err.Error(), "mismatched") {
 		t.Fatalf("the check: %v, want the one error of the comparison", err)
 	}

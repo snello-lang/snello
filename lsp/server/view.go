@@ -112,7 +112,7 @@ func (v *view) trim(own map[string]*token.File) {
 	for path, f := range own {
 		v.byPath[path] = f
 		syntax[f] = v.syntax[f]
-		ast.Inspect(v.syntax[f], func(n ast.Node) bool {
+		keep := func(n ast.Node) bool {
 			if id, ok := n.(*ast.Ident); ok {
 				if obj, ok := v.info.Defs[id]; ok {
 					kept.Defs[id] = obj
@@ -130,7 +130,16 @@ func (v *view) trim(own map[string]*token.File) {
 			}
 
 			return true
-		})
+		}
+
+		ast.Inspect(v.syntax[f], keep)
+		if v.syntax[f] != nil {
+			for _, attrs := range v.syntax[f].Attrs { // the attributes, kept beside the tree, which Inspect does not walk
+				for _, a := range attrs {
+					ast.Inspect(a.X, keep)
+				}
+			}
+		}
 	}
 
 	v.info, v.syntax = kept, syntax

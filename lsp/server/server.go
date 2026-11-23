@@ -5,8 +5,10 @@
 // Package server is Snello's language server: it answers an editor's
 // messages over a stream, keeps the documents the editor has open, and
 // checks their packages through the compiler's own loader and checker,
-// publishing every error as a diagnostic on the file it names, and
-// answers hover and definition from what the last check left. One
+// publishing every error as a diagnostic on the file it names; it
+// answers hover and definition from what the last check left, outlines
+// and the workspace's symbols from the syntax, and references and
+// rename from checks of the packages that can name the object. One
 // goroutine reads the stream; another owns the documents and the
 // results and does all the rest, so that nothing the server keeps is
 // shared. It is modeled on the Language Server Protocol specification,
@@ -48,11 +50,15 @@ type Server struct {
 	out  *jsonrpc.Writer
 	logs io.Writer
 
-	encoding    string
-	markup      string
-	initialized bool
-	shutdown    bool
-	changed     bool
+	encoding        string
+	markup          string
+	hierarchical    bool
+	prepares        bool
+	documentChanges bool
+	folders         []string
+	initialized     bool
+	shutdown        bool
+	changed         bool
 
 	docs      map[protocol.DocumentURI]*document
 	byPath    map[string]*document
@@ -60,6 +66,7 @@ type Server struct {
 	views     map[string]*view
 	published map[string][]protocol.Diagnostic
 	queries   []*jsonrpc.Message
+	outlines  map[string]*outlined
 }
 
 // An incoming is a message the reading goroutine read, or the error
@@ -192,7 +199,7 @@ func (s *Server) request(m *jsonrpc.Message) {
 	case m.Method == protocol.MethodShutdown:
 		s.shutdown = true
 		s.reply(m.ID, nil)
-	case m.Method == protocol.MethodHover, m.Method == protocol.MethodDefinition:
+	case isQuery(m.Method):
 		s.queries = append(s.queries, m)
 	default:
 		s.fail(m.ID, jsonrpc.MethodNotFound, "no method "+m.Method)
@@ -258,19 +265,45 @@ func (s *Server) initialize(m *jsonrpc.Message) {
 		s.encoding = protocol.PositionEncodingUTF8
 	}
 
-	if d := p.Capabilities.TextDocument; d != nil && d.Hover != nil {
-		if i := slices.IndexFunc(d.Hover.ContentFormat, isMarkup); i >= 0 {
-			s.markup = d.Hover.ContentFormat[i]
+	if d := p.Capabilities.TextDocument; d != nil {
+		if d.Hover != nil {
+			if i := slices.IndexFunc(d.Hover.ContentFormat, isMarkup); i >= 0 {
+				s.markup = d.Hover.ContentFormat[i]
+			}
 		}
+
+		s.hierarchical = d.DocumentSymbol != nil && d.DocumentSymbol.HierarchicalDocumentSymbolSupport
+		s.prepares = d.Rename != nil && d.Rename.PrepareSupport
+	}
+
+	if w := p.Capabilities.Workspace; w != nil && w.WorkspaceEdit != nil {
+		s.documentChanges = w.WorkspaceEdit.DocumentChanges
+	}
+
+	for _, f := range p.WorkspaceFolders {
+		s.folders = append(s.folders, pathOf(f.URI))
+	}
+
+	if len(p.WorkspaceFolders) == 0 && p.RootURI != "" {
+		s.folders = append(s.folders, pathOf(p.RootURI))
+	}
+
+	var rename any = true
+	if s.prepares {
+		rename = protocol.RenameOptions{PrepareProvider: true}
 	}
 
 	s.initialized = true
 	s.reply(m.ID, protocol.InitializeResult{
 		Capabilities: protocol.ServerCapabilities{
-			PositionEncoding:   s.encoding,
-			TextDocumentSync:   &protocol.TextDocumentSyncOptions{OpenClose: true, Change: protocol.TextDocumentSyncKindIncremental, Save: &protocol.SaveOptions{}},
-			HoverProvider:      true,
-			DefinitionProvider: true,
+			PositionEncoding:        s.encoding,
+			TextDocumentSync:        &protocol.TextDocumentSyncOptions{OpenClose: true, Change: protocol.TextDocumentSyncKindIncremental, Save: &protocol.SaveOptions{}},
+			HoverProvider:           true,
+			DefinitionProvider:      true,
+			ReferencesProvider:      true,
+			DocumentSymbolProvider:  true,
+			WorkspaceSymbolProvider: true,
+			RenameProvider:          rename,
 		},
 		ServerInfo: &protocol.ServerInfo{Name: name, Version: version.Current},
 	})

@@ -16,6 +16,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/compiler/version"
 	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
@@ -67,7 +68,29 @@ func (s *Server) query(m *jsonrpc.Message) {
 		s.hover(m)
 	case protocol.MethodDefinition:
 		s.definition(m)
+	case protocol.MethodDocumentSymbol:
+		s.documentSymbol(m)
+	case protocol.MethodWorkspaceSymbol:
+		s.workspaceSymbol(m)
+	case protocol.MethodReferences:
+		s.references(m)
+	case protocol.MethodPrepareRename:
+		s.prepareRename(m)
+	case protocol.MethodRename:
+		s.rename(m)
 	}
+}
+
+// isQuery reports whether method is a request the server answers from
+// its documents' checks, after the check of what changed before it.
+func isQuery(method string) bool {
+	switch method {
+	case protocol.MethodHover, protocol.MethodDefinition, protocol.MethodDocumentSymbol, protocol.MethodWorkspaceSymbol,
+		protocol.MethodReferences, protocol.MethodPrepareRename, protocol.MethodRename:
+		return true
+	}
+
+	return false
 }
 
 // hover answers a hover: the declaration of the name under the cursor,
@@ -118,51 +141,61 @@ func (s *Server) definition(m *jsonrpc.Message) {
 		return
 	}
 
-	if t == nil || t.obj == nil || !t.obj.Pos().IsValid() {
+	if t == nil || t.obj == nil {
 		s.reply(m.ID, nil)
 		return
 	}
 
-	file := v.fileOf(t.obj.Pos())
-	if file == nil {
+	loc, found, err := s.declarationOf(v, t.obj)
+	switch {
+	case err != nil:
+		s.fail(m.ID, jsonrpc.InternalError, err.Error())
+	case !found:
 		s.reply(m.ID, nil)
-		return
+	default:
+		s.reply(m.ID, loc)
+	}
+}
+
+// declarationOf returns where obj, an object of v, is declared: the
+// token of its name, in its file or in the cache's copy of the
+// standard library's; false for an object the language declares.
+func (s *Server) declarationOf(v *view, obj types.Object) (protocol.Location, bool, error) {
+	if !obj.Pos().IsValid() {
+		return protocol.Location{}, false, nil
+	}
+
+	file := v.fileOf(obj.Pos())
+	if file == nil {
+		return protocol.Location{}, false, nil
 	}
 
 	src, err := v.source(file.Name())
 	if err != nil {
-		s.fail(m.ID, jsonrpc.InternalError, err.Error())
-		return
+		return protocol.Location{}, false, err
 	}
 
 	path, err := pathOfFile(file, src)
 	if err != nil {
-		s.fail(m.ID, jsonrpc.InternalError, err.Error())
-		return
+		return protocol.Location{}, false, err
 	}
 
-	uri := uriOf(path)
-	if d := s.byPath[path]; d != nil {
-		uri = d.uri
-	}
-
-	start := file.Offset(t.obj.Pos())
+	start := file.Offset(obj.Pos())
 	_, end, ok := tokenAt(file.Name(), src, start)
 	if !ok {
 		end = start
 	}
 
-	s.reply(m.ID, protocol.Location{URI: uri, Range: protocol.Range{
+	return protocol.Location{URI: s.uriOfPath(path), Range: protocol.Range{
 		Start: positionOf(src, start, s.encoding),
 		End:   positionOf(src, end, s.encoding),
-	}})
+	}}, true, nil
 }
 
 // targetOf reads a request about a place in a document, and returns the
 // view of the document's last check, its text as the check read it and
-// what the place holds, nil for nothing or a document no check has
-// read; ok is false when the request is refused, as it is answered
-// already.
+// what the place holds, as place does; ok is false when the request is
+// refused, as it is answered already.
 func (s *Server) targetOf(m *jsonrpc.Message) (v *view, src []byte, t *target, ok bool) {
 	var p protocol.TextDocumentPositionParams
 	if err := json.Unmarshal(m.Params, &p); err != nil {
@@ -170,18 +203,27 @@ func (s *Server) targetOf(m *jsonrpc.Message) (v *view, src []byte, t *target, o
 		return nil, nil, nil, false
 	}
 
+	v, src, t = s.place(p)
+	return v, src, t, true
+}
+
+// place returns the view of the last check of the document p names,
+// its text as the check read it, and what the place p names holds; a
+// nil target for nothing or a document no check has read.
+func (s *Server) place(p protocol.TextDocumentPositionParams) (*view, []byte, *target) {
 	path := pathOf(p.TextDocument.URI)
-	if v = s.views[path]; v == nil || v.byPath[path] == nil {
-		return nil, nil, nil, true
+	v := s.views[path]
+	if v == nil || v.byPath[path] == nil {
+		return nil, nil, nil
 	}
 
 	file := v.byPath[path]
 	src, err := v.source(file.Name())
 	if err != nil {
-		return nil, nil, nil, true
+		return nil, nil, nil
 	}
 
-	return v, src, v.at(file, src, offsetOf(src, p.Position, s.encoding)), true
+	return v, src, v.at(file, src, offsetOf(src, p.Position, s.encoding))
 }
 
 // pathOfFile returns the path of a file a check read, src its text: its
