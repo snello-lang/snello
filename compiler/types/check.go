@@ -72,6 +72,7 @@ type Info struct {
 	Parts     map[*Part][]*ast.SelectorExpr // the selectors each v.[f] of a part f became, whose field a backend names in each copy of the loop
 	Attrs     map[Object][]Attribute        // the attributes written on each field, variant and type name, by the declaration
 	Visible   []Object                      // the names visible at Config.At, the innermost scope's first, each scope's by name, a name an inner one hides left out
+	Forms     map[*ast.BlockStmt]*Form      // each function's and closure's body as the program evaluates it, by its body, kept only when the caller makes the map (form.go)
 }
 
 // An Instance is a generic function as one call uses it: its type
@@ -175,15 +176,17 @@ type Checker struct {
 	// checked, which holds the borrows its variables hold and is solved
 	// at the body's end, with the graphs kept for reuse; and the borrows
 	// lent for the call or statement being checked.
-	flow        *flow
-	pinned      map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
-	deferring   *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
-	deferSig    *Signature
-	temps       []borrow
-	depth       int          // of expression nesting; a lent borrow ends with the full expression
-	movedValues []ast.Expr   // the values of a statement of several whose moves are recorded where each was checked (values)
-	typingPlace bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
-	heldAccess  []heldAccess // the accesses held, in their order (replay)
+	flow         *flow
+	pinned       map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
+	deferring    *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
+	deferSig     *Signature
+	temps        []borrow
+	depth        int          // of expression nesting; a lent borrow ends with the full expression
+	movedValues  []ast.Expr   // the values of a statement of several whose moves are recorded where each was checked (values)
+	lowering     *lowering    // the scratch of the lowering of a body, reused across bodies (lowering.go)
+	closureMoves []formError  // what the move pass over the form refuses in the closures of the body being checked, while both passes run (checkBody)
+	typingPlace  bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
+	heldAccess   []heldAccess // the accesses held, in their order (replay)
 
 	// The keeping pass (keep.go): the function a call's arguments are
 	// checked for, and what is decided at the package's end.
@@ -434,6 +437,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.resolveHides() // and which type parameters a body hides
 	c.checkCallCycles()
 	c.reach(fs)
+	c.freeLowerings()
 }
 
 // A fileState is a file's scope of its imports, under the package

@@ -114,16 +114,25 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 func (c *Checker) guard(g ast.Expr, arrow token.Pos, cond bool) {
 	mark := len(c.moved)
 	c.condition(g)
-	what := "a match guard"
-	if cond {
-		what = "the condition of a match arm"
-	}
-
 	for _, m := range c.moved[mark:] {
 		if own := m.v.Pos() >= g.Pos() && m.v.Pos() < arrow; !m.revived && !own {
-			c.errorf(m.pos, "cannot move "+m.text()+" in "+what+": it runs whether or not its arm is taken; lend it with ref")
+			c.errorf(m.pos, guardMovedMessage(m.text(), guardWhat(cond)))
 		}
 	}
+}
+
+// guardWhat names what a guard is in a message: a match guard, or the
+// condition of an arm of a match with no value.
+func guardWhat(cond bool) string {
+	if cond {
+		return "the condition of a match arm"
+	}
+
+	return "a match guard"
+}
+
+func guardMovedMessage(text, what string) string {
+	return "cannot move " + text + " in " + what + ": it runs whether or not its arm is taken; lend it with ref"
 }
 
 // lastArm checks the arms of a match with no value: the arm _, for when

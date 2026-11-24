@@ -188,6 +188,13 @@ func (c *Checker) storedElement(e *ast.CallExpr, sel *ast.SelectorExpr, sig *Sig
 	c.holdIn(p.v, p.path, placeType(p), x, x.Pos())
 }
 
+// conversionTakes reports whether the conversion of a value of type v
+// to t takes the value, the same value under another name: not between
+// numbers, which copy, and not between a string and its bytes or runes.
+func conversionTakes(v, t Type) bool {
+	return v != nil && t != nil && !(hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric)) && Identical(v.Underlying(), t.Underlying())
+}
+
 // paramType returns the type of the i-th parameter of sig, or nil.
 func paramType(sig *Signature, i int) Type {
 	if i < len(sig.params) {
@@ -592,7 +599,7 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
-	case Identical(v.Underlying(), t.Underlying()):
+	case conversionTakes(v, t):
 		if lent { // the value itself, which a borrow does not give: two owners would free it twice
 			c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String()+": the conversion takes the value, and a borrow lends it; convert a value of its own, a clone or one moved in")
 			break

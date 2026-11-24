@@ -55,7 +55,16 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.moved, c.floors, c.dead = c.moved[:0], c.floors[:0], false
 	c.flow = c.newFlow(token.NoPos)
 	c.enclosing = c.enclosing[:0]
+	first := len(c.errors)
 	c.funcBody(sig, recv, params, body)
+	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared
+		c.closureMoves = c.closureMoves[:0]
+		form := c.lowerBody(sig, body) // a closure's form, lowered inside its function's, is checked as it is made, into closureMoves
+		if compareForms {
+			c.compareMoves(append(c.formMoves(form), c.closureMoves...), first)
+		}
+	}
+
 	c.solveFlow()
 	c.freeFlow(c.flow)
 	c.flow, c.temps = nil, c.temps[:0]

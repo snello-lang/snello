@@ -104,9 +104,38 @@ func (p place) text() string {
 }
 
 // within reports whether p is q or lies inside q.
-func (p place) within(q place) bool {
-	return p.v == q.v && (q.path == "" || p.path == q.path || len(p.path) > len(q.path) && p.path[:len(q.path)] == q.path && p.path[len(q.path)] == '.')
+func (p place) within(q place) bool { return p.v == q.v && pathWithin(p.path, q.path) }
+
+// The messages of the move pass, which the pass over the tree and the
+// pass over the form both give, so that they say the same thing.
+
+func movedMessage(text, movedAt string) string {
+	return "use of moved value " + text + "; moved at " + movedAt
 }
+
+func partiallyMovedMessage(text, moved, movedAt string) string {
+	return "use of partially moved value " + text + "; " + moved + " moved at " + movedAt
+}
+
+func outOfBorrowMessage(text string) string { return "cannot move " + text + " out of a borrow" }
+
+func outOfTemporaryMessage(e ast.Expr) string {
+	return "cannot move " + exprText(e) + " out of a temporary: bind the temporary to a name first"
+}
+
+func outOfContainerMessage(e ast.Expr, container string) string {
+	return "cannot move " + exprText(e) + " out of the " + container
+}
+
+func partMovedMessage(e ast.Expr, part *ast.PartExpr) string {
+	return "cannot move " + exprText(e) + " out of " + exprText(part.X) + ": a field a loop over a type's parts reaches is lent, since the type may implement Drop, which reads its fields; lend it with ref, or clone it"
+}
+
+func dropHolderMessage(e ast.Expr, holder string, t Type) string {
+	return "cannot move " + exprText(e) + " out of " + holder + ": " + t.String() + " implements Drop, which reads its fields when " + holder + " goes; clone it, or take it with replace(mut " + exprText(e) + ", value), which leaves value in its place"
+}
+
+func loopMovedMessage(text string) string { return text + " moved in a previous iteration of the loop" }
 
 // resolve finds the object a name in an expression already checked
 // denotes: in the current scope, or, while the bindings of a match arm
@@ -289,10 +318,10 @@ func (c *Checker) checkUsePlace(e ast.Expr, p place, kind placeKind) {
 		case c.noUse && kind == placeOwned && m.place == p:
 			return // the moved field is given a new value
 		case p.within(m.place) || kind == placeIndexed && m.v == p.v:
-			c.errorf(e.Pos(), "use of moved value "+m.text()+"; moved at "+c.lineCol(m.pos))
+			c.errorf(e.Pos(), movedMessage(m.text(), c.lineCol(m.pos)))
 			return
 		case m.within(p) && !c.noUse && !revivedAfter(c.moved[i+1:], m.place):
-			c.errorf(e.Pos(), "use of partially moved value "+p.text()+"; "+m.text()+" moved at "+c.lineCol(m.pos))
+			c.errorf(e.Pos(), partiallyMovedMessage(p.text(), m.text(), c.lineCol(m.pos)))
 			return
 		}
 	}
@@ -496,7 +525,7 @@ func (c *Checker) move(e ast.Expr, m mode) {
 	}
 
 	if part, ok := unparen(e).(*ast.PartExpr); ok {
-		c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of "+exprText(part.X)+": a field a loop over a type's parts reaches is lent, since the type may implement Drop, which reads its fields; lend it with ref, or clone it")
+		c.errorf(e.Pos(), partMovedMessage(e, part))
 		return
 	}
 
@@ -504,13 +533,13 @@ func (c *Checker) move(e ast.Expr, m mode) {
 	switch kind {
 	case notPlace:
 		if m == borrowed || m == mutBorrowed {
-			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a borrow")
+			c.errorf(e.Pos(), outOfBorrowMessage(exprText(e)))
 		} else if m == variable && c.isPart(e) {
-			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of a temporary: bind the temporary to a name first")
+			c.errorf(e.Pos(), outOfTemporaryMessage(e))
 		}
 	case placeOwned:
 		if holder, t := dropHolder(p); holder != "" {
-			c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of "+holder+": "+t.String()+" implements Drop, which reads its fields when "+holder+" goes; clone it, or take it with replace(mut "+exprText(e)+", value), which leaves value in its place")
+			c.errorf(e.Pos(), dropHolderMessage(e, holder, t))
 			return
 		}
 
@@ -526,9 +555,9 @@ func (c *Checker) move(e ast.Expr, m mode) {
 			c.info.Moves[e] = true
 		}
 	case placeBorrowed:
-		c.errorf(e.Pos(), "cannot move "+p.text()+" out of a borrow")
+		c.errorf(e.Pos(), outOfBorrowMessage(p.text()))
 	case placeIndexed:
-		c.errorf(e.Pos(), "cannot move "+exprText(e)+" out of the "+c.containerName(e))
+		c.errorf(e.Pos(), outOfContainerMessage(e, c.containerName(e)))
 	}
 }
 
@@ -895,7 +924,7 @@ func (c *Checker) leaveRegion() {
 		for _, records := range r.ends {
 			for _, m := range records {
 				if !m.revived && m.v.pos < r.pos {
-					c.errorf(m.pos, m.text()+" moved in a previous iteration of the loop")
+					c.errorf(m.pos, loopMovedMessage(m.text()))
 				}
 			}
 		}

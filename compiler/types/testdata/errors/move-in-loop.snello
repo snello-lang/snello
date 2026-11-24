@@ -15,3 +15,21 @@ func main() {
         keep(s)                           // ERROR "s moved in a previous iteration of the loop"
     }
 }
+
+func ranged(xs []int) {
+    s := "hello"
+    for _, x := range xs {
+        keep(s)                           // ERROR "s moved in a previous iteration of the loop"
+        print(x)
+    }
+    print(len(s))                         // ERROR "use of moved value s"
+}
+
+func broken() {
+    s := "hello"
+    for {
+        keep(s)
+        break
+    }
+    print(len(s))                         // ERROR "use of moved value s"
+}

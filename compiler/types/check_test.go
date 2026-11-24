@@ -285,9 +285,13 @@ var handledErrors = map[string]bool{
 	"blank-package-var.snello": true,
 	// The blank name drops a guard as it is made.
 	"blank-guard.snello": true,
+	// A match guard runs whether or not its arm is taken: it may not move a value declared before it, and the value is moved after the match.
+	"move-in-guard.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {
+	compareForms = true
+	defer func() { compareForms = false }()
 	paths, err := filepath.Glob(filepath.Join("testdata", "errors", "*.snello"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no negative programs found: %v", err)
@@ -296,7 +300,7 @@ func TestNegativePrograms(t *testing.T) {
 	conf := libraryConfig()
 	for _, path := range paths {
 		f, file, src := parseFile(t, path)
-		_, cerr := conf.Check("", file, f, nil)
+		_, cerr := conf.Check("", file, f, &Info{}) // with an Info, so that the form is built and compared
 		if !handledErrors[filepath.Base(path)] {
 			if cerr != nil {
 				t.Errorf("%s: unexpected error: %v", path, cerr)
@@ -369,12 +373,14 @@ func BenchmarkCheck(b *testing.B) {
 
 func checkErrors(t *testing.T, src string) []string {
 	t.Helper()
+	compareForms = true
+	defer func() { compareForms = false }()
 	f, file, err := parser.ParseFile("test.snello", []byte(src))
 	if err != nil {
 		t.Fatalf("%q: parse error: %v", src, err)
 	}
 
-	_, err = libraryConfig().Check("", file, f, nil)
+	_, err = libraryConfig().Check("", file, f, &Info{}) // with an Info, so that the form is built and compared
 	if err == nil {
 		return nil
 	}
