@@ -15,6 +15,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -22,8 +24,57 @@ import (
 )
 
 // resultType is the name of the predeclared Result, whose first
-// argument a function that makes a type returns.
-const resultType = "Result"
+// argument a function that makes a type returns; and the names of the
+// forms the language writes with its own syntax that a syntax node
+// says, which the builtin package documents: snello doc builtin.map
+// asks for one, and a page links to it by it. A keyword's form is named
+// by the keyword itself.
+const (
+	resultType    = "Result"
+	FormSlice     = "slice"
+	FormArray     = "array"
+	FormMap       = "map"
+	FormChan      = "chan"
+	FormPointer   = "pointer"
+	FormRef       = "ref"
+	FormMut       = "mut"
+	FormMatch     = "match"
+	FormTry       = "try"
+	FormCoalesce  = "coalesce"
+	FormSend      = "send"
+	FormReceive   = "receive"
+	FormVariadic  = "variadic"
+	FormAttribute = "attribute"
+	FormBlank     = "_"
+	FormPattern   = "pattern"
+)
+
+// builtinForms are the forms the builtin package documents, each by its
+// name and the text its comment begins with: the types and the
+// operators, every keyword, by itself, as the scanner knows them, the
+// blank name and a match arm's pattern.
+var builtinForms = slices.Concat(typeForms, keywordForms(), []builtinForm{
+	{FormBlank, "_"},
+	{FormPattern, "pattern"},
+})
+
+// typeForms are the forms of the types and the operators, which a
+// keyword's own form, map or ref, does not repeat.
+var typeForms = []builtinForm{
+	{FormSlice, "[]T"},
+	{FormArray, "[N]T"},
+	{FormMap, "map[K]V"},
+	{FormChan, "chan T"},
+	{FormPointer, "*T"},
+	{FormRef, "ref T"},
+	{FormMut, "mut T"},
+	{FormTry, "x?"},
+	{FormCoalesce, "x ?? y"},
+	{FormSend, "ch <- v"},
+	{FormReceive, "<-ch"},
+	{FormVariadic, "xs ...T"},
+	{FormAttribute, "@A"},
+}
 
 // A Source is a package as loaded for its documentation.
 type Source struct {
@@ -54,6 +105,7 @@ type Package struct {
 	Name     string
 	Path     string
 	Doc      string
+	Forms    []*Form // the forms the builtin package documents
 	Consts   []*Values
 	Vars     []*Values
 	Funcs    []*Func
@@ -68,6 +120,20 @@ type Package struct {
 	names   map[string]string          // the package names its files import, to their paths
 	decls   map[string]ast.Decl        // every top-level name, shown or not
 	members map[string]map[string]bool // every member of each type: its fields, variants, methods and functions of the type
+}
+
+// A builtinForm is a form the builtin package documents: the name it is
+// asked for by, and the text its comment begins with.
+type builtinForm struct{ name, written string }
+
+// A Form is a type or a borrow the language writes with its own
+// syntax, map[K]V or ref T, which no declaration can name, as the
+// builtin package documents it: by its name, the form as its comment
+// begins with it, the comment, and where the form is written in the
+// comment.
+type Form struct {
+	Name, Written, Doc string
+	Pos                token.Pos
 }
 
 // Values is a group of constants or variables, written on consecutive
@@ -131,6 +197,11 @@ func New(src Source) *Package {
 	}
 
 	p.Doc = strings.Join(docs, lineSep)
+	if src.Path == BuiltinPath {
+		for _, f := range src.Files {
+			p.Forms = append(p.Forms, Forms(f.Syntax)...)
+		}
+	}
 	byName := map[string]*Type{}
 	var funcs []*Func
 	for _, f := range src.Files {
@@ -252,6 +323,39 @@ func New(src Source) *Package {
 	p.addExamples(src.Tests)
 	p.checkLinks()
 	return p
+}
+
+// Forms returns the forms the file f documents: each of its comments
+// attached to no declaration that begins with a form the language
+// writes with its own syntax, as a word, map[K]V is a map or impl,
+// after, in the order they are written.
+func Forms(f *ast.File) []*Form {
+	if f.Docs == nil {
+		return nil
+	}
+
+	attached := make(map[*ast.CommentGroup]bool)
+	for _, comments := range []map[ast.Node]*ast.CommentGroup{f.Docs.Lead, f.Docs.Line} {
+		for _, g := range comments {
+			attached[g] = true
+		}
+	}
+
+	var forms []*Form
+	for _, g := range f.Docs.Groups {
+		if attached[g] {
+			continue
+		}
+
+		text := g.Text()
+		for _, form := range builtinForms {
+			if begins(text, form.written) {
+				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: formPos(g, form.written)})
+			}
+		}
+	}
+
+	return forms
 }
 
 // member records that the type named owner has a member named name.
@@ -405,4 +509,43 @@ func made(r ast.Type) string {
 	}
 
 	return ""
+}
+
+// keywordForms returns a form for each keyword, named and written as
+// the keyword itself, in the order of the keywords' kinds, but for one
+// a type's form is named by already, map or ref.
+func keywordForms() []builtinForm {
+	var forms []builtinForm
+	for _, word := range token.Keywords() {
+		if !slices.ContainsFunc(typeForms, func(f builtinForm) bool { return f.name == word }) {
+			forms = append(forms, builtinForm{word, word})
+		}
+	}
+
+	return forms
+}
+
+// formPos returns where the comment group g writes the form its text
+// begins with: in the first of its comments that holds it, after its
+// marks and any blank comment line before it.
+func formPos(g *ast.CommentGroup, written string) token.Pos {
+	for _, c := range g.List {
+		if at := strings.Index(c.Text, written); at >= 0 {
+			return c.Slash + token.Pos(at)
+		}
+	}
+
+	return g.Pos()
+}
+
+// begins reports whether text begins with the form written, as a word:
+// what follows it is no letter, digit or underscore, so that for begins
+// "for loops" and not "format".
+func begins(text, written string) bool {
+	if !strings.HasPrefix(text, written) || len(text) == len(written) {
+		return false
+	}
+
+	next, _ := utf8.DecodeRuneInString(text[len(written):])
+	return next != '_' && !unicode.IsLetter(next) && !unicode.IsDigit(next)
 }

@@ -1,0 +1,14 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable is made on first use, and one never used is
+// never made, so a package variable named _, which nothing can use,
+// would never be computed. Fix: compute the value where it is wanted,
+// or name the variable and use it.
+
+package p
+
+func compute() int { return 5 }
+
+var _ = compute() // ERROR "a package variable cannot be named _"

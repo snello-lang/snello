@@ -5,6 +5,7 @@
 package lower
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -197,19 +198,28 @@ func main() {}`))
 
 // TestSourceName holds a file's name in the line tables to the path the
 // compiler read it from, and a file of the standard library's to its
-// name under StdSources, which no file of the user's has.
+// name under StdSources, which no file of the user's has: its package's
+// path and its base name, the same whether it was read from the
+// compiler's copy or from a checkout's std/, an external test package's
+// file named in its package's directory.
 func TestSourceName(t *testing.T) {
-	if got := SourceName("src/prog/main.snello", false); got != "src/prog/main.snello" {
+	if got := SourceName("src/prog/main.snello", ""); got != "src/prog/main.snello" {
 		t.Errorf("a program's file is named %q", got)
 	}
 
-	if got := SourceName("json/json.snello", true); got != StdSources+"json/json.snello" {
+	if got := SourceName("json/json.snello", "encoding/json/json.snello"); got != StdSources+"encoding/json/json.snello" {
 		t.Errorf("a file of the standard library's is named %q", got)
 	}
 
-	fmtFile, ownFmt := token.NewFileSet().AddFile("fmt/fmt.snello", 1), token.NewFileSet().AddFile("fmt/fmt.snello", 1)
-	if std := StdFiles([]Library{{File: fmtFile, Std: true}, {File: ownFmt}}); !std[fmtFile] || std[ownFmt] {
-		t.Errorf("the standard library's files are %v; a program's own file of the same name is not one", std)
+	files := token.NewFileSet()
+	fmtFile, ownFmt := files.AddFile("fmt/fmt.snello", 1), token.NewFileSet().AddFile("fmt/fmt.snello", 1)
+	checkout := files.AddFile(filepath.Join(string(filepath.Separator)+"src", "std", "rc", "rc.snello"), 1)
+	external := files.AddFile(filepath.Join("..", "std", "unicode", "utf8", "utf8_test.snello"), 1)
+	std := StdFiles([]Library{{Path: "fmt", File: fmtFile, Std: true}, {Path: "fmt", File: ownFmt}, {Path: "rc", File: checkout, Std: true}, {Path: "unicode/utf8_test", File: external, Std: true}})
+	for file, want := range map[*token.File]string{fmtFile: "fmt/fmt.snello", ownFmt: "", checkout: "rc/rc.snello", external: "unicode/utf8/utf8_test.snello"} {
+		if std[file] != want {
+			t.Errorf("%s is named %q under the library, want %q", file.Name(), std[file], want)
+		}
 	}
 }
 

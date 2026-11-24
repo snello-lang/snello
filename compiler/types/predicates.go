@@ -359,10 +359,24 @@ func allCopyVars(vs []*Var) bool {
 // can, the one Collect gives over borrowed items, and its drop drops
 // each element.
 func dropReads(t Type) bool {
-	return dropReadsIn(t, map[*Named]bool{})
+	return dropPartIn(t, map[*Named]bool{}, anyDrop)
 }
 
-func dropReadsIn(t Type, inside map[*Named]bool) bool {
+// guards reports whether a value of type t holds a part with a Drop
+// that itself holds a borrow, a lock's guard: dropping the value runs a
+// Drop that may end what that part borrows. A Drop beside a borrow, in
+// a struct or tuple that has none of its own, reads no borrow.
+func guards(t Type) bool {
+	return dropPartIn(t, map[*Named]bool{}, holdsBorrow)
+}
+
+// anyDrop counts every part with a Drop, for dropReads.
+func anyDrop(Type) bool { return true }
+
+// dropPartIn reports whether t holds, by value, a part of a type that
+// implements Drop for which which reports true, or elements of one in
+// a slice.
+func dropPartIn(t Type, inside map[*Named]bool, which func(Type) bool) bool {
 	switch t := t.(type) {
 	case *Named:
 		if inside[t] {
@@ -370,23 +384,27 @@ func dropReadsIn(t Type, inside map[*Named]bool) bool {
 		}
 
 		inside[t] = true
-		return implements(t, DropTrait) || t.Underlying() != nil && dropReadsIn(t.Underlying(), inside)
+		if implements(t, DropTrait) && which(t) {
+			return true
+		}
+
+		return t.Underlying() != nil && dropPartIn(t.Underlying(), inside, which)
 	case *Struct:
-		return slices.ContainsFunc(t.fields, func(f *Var) bool { return dropReadsIn(f.typ, inside) })
+		return slices.ContainsFunc(t.fields, func(f *Var) bool { return dropPartIn(f.typ, inside, which) })
 	case *Enum:
 		return slices.ContainsFunc(t.variants, func(v *Variant) bool {
-			return slices.ContainsFunc(v.fields, func(f *Var) bool { return dropReadsIn(f.typ, inside) })
+			return slices.ContainsFunc(v.fields, func(f *Var) bool { return dropPartIn(f.typ, inside, which) })
 		})
 	case *Tuple:
-		return slices.ContainsFunc(t.elems, func(e Type) bool { return dropReadsIn(e, inside) })
+		return slices.ContainsFunc(t.elems, func(e Type) bool { return dropPartIn(e, inside, which) })
 	case *Array:
-		return dropReadsIn(t.elem, inside)
+		return dropPartIn(t.elem, inside, which)
 	case *Slice:
-		return dropReadsIn(t.elem, inside)
+		return dropPartIn(t.elem, inside, which)
 	case *Option:
-		return dropReadsIn(t.elem, inside)
+		return dropPartIn(t.elem, inside, which)
 	case *Result:
-		return dropReadsIn(t.val, inside) || dropReadsIn(t.err, inside)
+		return dropPartIn(t.val, inside, which) || dropPartIn(t.err, inside, which)
 	}
 
 	return false

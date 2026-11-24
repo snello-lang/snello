@@ -1,0 +1,25 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A map keyed by owned pointers: a key compares and hashes by what it
+// points at, so a second pointer to an equal value finds the entry and
+// replaces its value, and the entries come out in the order they were
+// inserted.
+package main
+
+import "fmt"
+
+func main() {
+	m := map[*int]int{}
+	m[&1] = 10
+	m[&2] = 20
+	m[&1] = 11
+	fmt.Println(len(m))
+	var p *int = &3
+	m[p] = 30
+	fmt.Println(len(m))
+	for k, v := range m {
+		fmt.Println(*k, v)
+	}
+}

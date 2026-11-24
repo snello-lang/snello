@@ -90,6 +90,11 @@ func TestBorrows(t *testing.T) {
 		{"func f() { xs := []int{1}; r := ref xs; for i := 0; i < 2; i += 1 { print(r); xs.Push(1) } }", []string{"cannot borrow xs as mut: xs is borrowed as ref by r at 16:28, used in the next pass of the loop"}},
 		{"func f() { xs := []int{1}; for i := 0; i < 2; i += 1 { r := ref xs; print(r); xs.Push(1) } }", nil},
 		{"func f() { xs := []int{1}; r := ref xs; print(r); for i := 0; i < 2; i += 1 { xs.Push(1) } }", nil},
+		{"func f(c bool) { xs := []int{1}; r := ref xs; xs.Push(1); if c { print(r) } }", []string{"cannot borrow xs as mut: xs is borrowed as ref by r at 16:34, used at 16:72"}}, // a use reached straight on, in a later block, is in no loop's next pass
+		{"func f() { xs := []int{1}; r := ref xs; for i := 0; i < 2; i += 1 { if i > 0 { print(r) }; xs.Push(1) } }", []string{"used in the next pass of the loop"}},               // and one reached back round the loop is, though in a later block
+		{"func f() { xs := []int{1}; r := ref xs; j := 0; for j < 2 { xs.Push(1); j += 1 }; print(r) }", []string{"used at"}},
+		{"func f() { xs := []int{1}; r := ref xs; for i := 0; i < 2; i = len(r) { xs.Push(1) } }", []string{"used at"}},                                     // a for's post statement runs at the end of the pass                               // a use after the loop is reached straight on, though the path came round the loop to leave it
+		{"func f() { xs := []int{1}; r := ref xs; for i := 0; i < 2; i += 1 { for j := 0; j < 2; j += 1 { xs.Push(1) }; print(r) } }", []string{"used at"}}, // and so is one in the outer loop's pass, after the inner loop
 		{"func f(xs mut []int) { for _, x := range xs { xs.Push(*x) } }", []string{"cannot borrow xs as mut: xs is already borrowed as mut by the range loop"}},
 		{"func f() { xs := []int{1}; for _, x := range ref xs { xs.Push(x) } }", []string{"cannot borrow xs as mut: xs is borrowed as ref by the range loop"}},
 		{"func f() { s := \"a b\"; for w := range s.Fields() { s = \"x\"; read(w) } }", []string{"cannot assign to s: s is borrowed by the range loop"}},
@@ -125,7 +130,8 @@ func TestBorrows(t *testing.T) {
 		// A borrow returned by a method holds its receiver.
 		{"func f(m mut map[string]int) { v := m.Get(\"a\"); m.Insert(\"b\", 1); print(v) }", []string{"cannot borrow m as mut: m is borrowed as ref by v"}},
 		{"func f(m mut map[string]int) { v := m.Get(\"a\"); print(v); m.Insert(\"b\", 1) }", nil},
-		{"func f(m mut map[string]Node) { e := m.GetMut(\"a\").Expect(\"x\"); m.GetMut(\"b\").Expect(\"y\").n = e.n }", []string{"cannot borrow m as mut: m is already borrowed as mut by e"}},
+		{"func f(m mut map[string]Node) { e := m.GetMut(\"a\").Expect(\"x\"); m.GetMut(\"b\").Expect(\"y\").n = e.n; e.n = 0 }", []string{"cannot borrow m as mut: m is already borrowed as mut by e"}},
+		{"func f(m mut map[string]Node) { e := m.GetMut(\"a\").Expect(\"x\"); m.GetMut(\"b\").Expect(\"y\").n = e.n }", nil},         // the value is made before the place is reached, and e is done with
 		{"func f(m mut map[string]Node) { e := m.GetMut(\"a\").Expect(\"x\"); n := e.n; m.GetMut(\"b\").Expect(\"y\").n = n }", nil}, // copy out first
 		{"func f() { s := \" a \"; t := s.Trim(); s = \"b\"; read(t) }", []string{"cannot assign to s: s is borrowed by t"}},
 		// A borrow bound out of a call's option by if or match holds the call's receiver, as one bound by := does.

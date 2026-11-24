@@ -15,8 +15,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/platform"
@@ -24,6 +26,28 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/std"
 )
+
+// stdCheckout names the directory a checkout of the compiler keeps the
+// standard library's sources in, and builtinPath the package that
+// documents the predeclared names, which is never imported or compiled.
+const (
+	stdCheckout = "std"
+	builtinPath = "builtin"
+)
+
+// stdPaths reads the embedded library's import paths once, for Paths.
+var stdPaths = sync.OnceValue(func() []string {
+	var paths []string
+	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && path.Base(name) == path.Base(path.Dir(name))+SourceExt {
+			paths = append(paths, path.Dir(name))
+		}
+
+		return nil
+	})
+
+	return paths
+})
 
 // A Package is one source file of a library package as loaded: its
 // import path, the file and its syntax, and the package the checker
@@ -86,7 +110,8 @@ type Importer struct {
 	// parses, the program's and every package's it imports, as it is
 	// parsed and before it is checked, a file with errors too: how the
 	// language server keeps the syntax of a check. A file of the
-	// standard library is named by its path under std/.
+	// standard library is named by its path under std/, or by its path
+	// on the disk when the library is read from StdDir.
 	Parsed func(file *token.File, syntax *ast.File)
 
 	// At, when it names a file, is the place a completion asks about:
@@ -168,7 +193,7 @@ func (imp *Importer) Import(importPath string) (*types.Package, error) {
 // test file may import; the suffix is reserved for it, so that no
 // package of a program is ever named as a test package is.
 func (imp *Importer) ImportFrom(importPath, dir string) (*types.Package, error) {
-	if importPath == "builtin" {
+	if importPath == builtinPath {
 		return nil, errors.New("package builtin is not imported: its names are predeclared")
 	}
 
@@ -439,25 +464,69 @@ func (imp *Importer) Packages() []*Package { return imp.order }
 
 // Paths returns the import path of every package in the library,
 // once each: every directory holding the file named after it, as
-// isStd reads a package.
+// isStd reads a package. The list is the embedded library's, which
+// never changes while the compiler runs, so it is read once.
 func Paths() []string {
-	var paths []string
-	fs.WalkDir(std.Sources, ".", func(name string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && path.Base(name) == path.Base(path.Dir(name))+SourceExt {
-			paths = append(paths, path.Dir(name))
-		}
-
-		return nil
-	})
-
-	return paths
+	return slices.Clone(stdPaths())
 }
 
-// stdFile reads a file of the standard library by its path under std/,
-// from StdDir when one is set and from the embedded copy otherwise.
+// StdPackage reports whether dir is a standard package's directory in
+// a checkout of the compiler, std/NAME or std/NAME/SUB, and returns the
+// std/ directory above it and the package's import path, unicode/utf8
+// for std/unicode/utf8. The directory holds the file named after its
+// last element, for a path the embedded library has, under a std/ that
+// holds every package of the embedded library, so that a program's own
+// directory named std is never mistaken for the checkout and loaded
+// with the library's privileges. The std/ directory is named as dir
+// is, relative to the same directory when dir is relative, so that the
+// files read from it are named as the caller named the package.
+func StdPackage(dir string) (stdDir, importPath string, ok bool) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", false
+	}
+
+	stdDir = filepath.Dir(abs)
+	for filepath.Base(stdDir) != stdCheckout {
+		up := filepath.Dir(stdDir)
+		if up == stdDir {
+			return "", "", false
+		}
+
+		stdDir = up
+	}
+
+	rel, err := filepath.Rel(stdDir, abs)
+	if err != nil {
+		return "", "", false
+	}
+
+	importPath = filepath.ToSlash(rel)
+	if _, err := fs.Stat(std.Sources, importPath+"/"+path.Base(importPath)+SourceExt); err != nil {
+		return "", "", false
+	}
+
+	for _, p := range Paths() { // the whole library, as the embedded copy lists it
+		if _, err := os.Stat(filepath.Join(stdDir, filepath.FromSlash(p), path.Base(p)+SourceExt)); err != nil {
+			return "", "", false
+		}
+	}
+
+	if !filepath.IsAbs(dir) {
+		up := strings.Repeat(".."+string(filepath.Separator), strings.Count(importPath, "/")+1)
+		stdDir = filepath.Join(dir, up)
+	}
+
+	return stdDir, importPath, true
+}
+
+// stdFile reads a file of the standard library by the name stdFiles
+// gives it: from the disk, through Read, when StdDir is set, so that
+// an editor's text of a file of the checkout is the one checked, and
+// from the embedded copy otherwise.
 func (imp *Importer) stdFile(name string) ([]byte, error) {
 	if imp.StdDir != "" {
-		return os.ReadFile(filepath.Join(imp.StdDir, filepath.FromSlash(name)))
+		return imp.readFile(name)
 	}
 
 	return std.Sources.ReadFile(name)
@@ -490,7 +559,8 @@ func (imp *Importer) isStd(importPath string) bool {
 
 // stdFiles reads the files of the standard package at importPath that
 // want takes and that are built for the importer's target, as a
-// package of the program's own is read, with their names under std/.
+// package of the program's own is read, with their names under std/,
+// or, read from StdDir, their paths on the disk.
 func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]string, [][]byte, error) {
 	entries, err := imp.stdDir(importPath)
 	if err != nil {
@@ -501,6 +571,10 @@ func (imp *Importer) stdFiles(importPath string, want func(string) bool) ([]stri
 	srcs := make([][]byte, len(names))
 	for i, name := range names {
 		names[i] = importPath + "/" + name
+		if imp.StdDir != "" {
+			names[i] = filepath.Join(imp.StdDir, filepath.FromSlash(names[i])) // a file of the checkout, named where it is, as its errors and an editor name it
+		}
+
 		if srcs[i], err = imp.stdFile(names[i]); err != nil {
 			return nil, nil, err
 		}

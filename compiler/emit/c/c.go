@@ -53,7 +53,7 @@ const (
 type Emitter struct {
 	info     *types.Info
 	file     *token.File
-	stdFiles map[*token.File]bool   // the standard library's files, which the line tables name under lower.SourceName's directory
+	stdFiles map[*token.File]string // the standard library's files, which the line tables name under lower.SourceName's directory
 	quoted   map[*token.File]string // each file's name as the directives write it, quoted once a file
 	at       token.Pos              // the Snello position the lines being written are at, for the directive each line carries
 	within   string                 // the name the program gives the function being written, for its closures' names

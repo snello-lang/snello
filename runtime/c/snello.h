@@ -274,7 +274,7 @@ static inline SN_NODEBUG bool sn_is_letter(uint8_t c) { return sn_is_upper(c) ||
 #define SN_POISON(place) memset(&(place), 0xDD, sizeof(place))
 #define SN_DEREF(p)      (*(__typeof__(p))sn_deref(p))
 _Noreturn void sn_released(const char *what);
-void *sn_deref(void *p);
+void *sn_deref(const void *p);
 void sn_check_block(const void *p, const char *what);
 
 // A poisoned length or capacity is negative, which no live value has;

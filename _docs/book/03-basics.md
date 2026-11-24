@@ -148,6 +148,8 @@ m[next()] = next()       // the first call gives the key, the second the value
 n["a"] = len(n)          // len counts no entry for "a": the entry is made by the store
 ```
 
+The rest of a place, the borrow it is written through, `*r`, the struct a field is in, a call that gives it, is reached at the store, after every value is made, and the compiler checks the assignment in that order: `*r = drained(v)` is refused when `r` borrows from `v`, since `drained` takes `v` before the store writes through `r`.
+
 A compound assignment reads its place first, as the left operand of the operator it stands for, then evaluates its value, and only then reaches the place again to store. `c += tick(mut c)` adds to `c` as it was before `tick` ran; `s += f(mut s)` appends to the old text, and `m["a"] += f(mut m)` adds to the entry as it was, the zero value when there was none, the entry made by the store. A value that grows the slice the place is in, `xs[0] += grow(mut xs)`, has the sum written into the slice as it is after the growth.
 
 `&&` and `||` evaluate their right side only when the left one leaves the answer open, as in Go.

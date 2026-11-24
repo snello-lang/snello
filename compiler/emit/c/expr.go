@@ -150,6 +150,17 @@ func (e *Emitter) lvalue(x ast.Expr) string {
 
 			return field(deref(e.lvalue(x.X), base), base, f)
 		}
+	case *ast.UnaryExpr:
+		if x.Op == token.MUL && !e.isPlace(x.X) { // a pointer a call gives: read once, into a temporary, so that the drop of the old value and the store reach one place
+			t := e.typeOf(x.X)
+			tmp := e.temp()
+			e.line(e.cType(t, x.Pos()) + " " + tmp + " = " + e.expr(x.X) + ";")
+			if _, owned := t.(*types.Pointer); owned {
+				e.hold(tmp, t) // a pointer built here owns its block: freed when the statement ends
+			}
+
+			return deref(tmp, t)
+		}
 	}
 
 	return e.expr(x)

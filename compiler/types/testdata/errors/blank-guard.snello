@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the blank name drops what it is given once the statement's
+// values are made, so a value made there whose Drop ends what it
+// borrows, a lock's guard, would end as it begins. Fix: give it a name,
+// to keep it to the end of the scope; a guard is ended early by
+// dropping its variable, _ = g.
+
+package p
+
+import "sync"
+
+func count(m ref sync.Mutex<int>) {
+	var _ = m.Lock() // ERROR "the blank name would drop this sync.Guard<int> at once"
+	_ = m.Lock()     // ERROR "the blank name would drop this sync.Guard<int> at once"
+	g := m.Lock()
+	*g.Get() += 1
+	_ = g
+}

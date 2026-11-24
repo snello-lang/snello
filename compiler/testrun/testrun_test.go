@@ -462,12 +462,10 @@ func TestMore(t *testing.T) {
 // snello test std/NAME does, through both backends, and refuses a
 // directory that is not a standard package's: the plan reads the
 // library from the checkout, so the sources as edited are what run.
+// Which directories are standard packages is importer.StdPackage's,
+// tested there.
 func TestStdDir(t *testing.T) {
 	dir := filepath.Join("..", "..", "std", "strings")
-	if !IsStdDir(dir) {
-		t.Fatalf("%s is not seen as a standard package", dir)
-	}
-
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
 		code, err := Run(dir, backend, nil, &out, &out)
@@ -477,10 +475,6 @@ func TestStdDir(t *testing.T) {
 	}
 
 	nested := filepath.Join("..", "..", "std", "unicode", "utf8") // a package two levels down, unicode/utf8, tested as package utf8_test
-	if !IsStdDir(nested) {
-		t.Fatalf("%s is not seen as a standard package", nested)
-	}
-
 	if p, err := PlanStdDir(nested); err != nil || p.Path != "unicode/utf8_test" || filepath.Base(p.StdDir) != "std" {
 		t.Errorf("%s: planned as %+v, %v", nested, p, err)
 	}
@@ -494,10 +488,6 @@ func TestStdDir(t *testing.T) {
 		t.Errorf("a directory that is no standard package: got %v", err)
 	}
 
-	if IsStdDir(filepath.Join("..", "..", "examples", "packaged", "shapes")) {
-		t.Error("an example package is seen as a standard one")
-	}
-
 	// A project's own std/strings is not the library's: the whole
 	// library is not beside it.
 	foreign := writeTree(t, map[string]string{
@@ -505,10 +495,6 @@ func TestStdDir(t *testing.T) {
 		"std/strings/strings.snello": "package strings\n\nfunc N() int { return 1 }\n",
 		"std/strings/s_test.snello":  "package strings_test\n\nimport (\"expect\"; \"strings\")\n\nfunc TestN() { expect.Equal(ref strings.N(), ref 1) }\n",
 	})
-	if IsStdDir(filepath.Join(foreign, "std", "strings")) {
-		t.Error("a project's own std/strings is seen as the library's")
-	}
-
 	if _, err := PlanStdDir(filepath.Join(foreign, "std", "strings")); err == nil || !strings.Contains(err.Error(), "is not a standard package of the library") {
 		t.Errorf("a project's own std/strings: got %v", err)
 	}

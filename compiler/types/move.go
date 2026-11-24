@@ -81,6 +81,7 @@ type fork struct {
 	live     int      // the branches that do not leave
 	all      bool     // whether every branch so far leaves
 	branches int
+	held     int // where the entries held for the place of an assignment the fork is in begin for the branch being checked (flow.go)
 }
 
 // A floor is where the records of an open branch set, region or closure
@@ -249,13 +250,20 @@ func (c *Checker) checkUseVar(e *ast.Ident, v *Var) {
 
 // skipUse reports whether a use needs no check: nothing is moved or
 // lent, and no borrow is held yet; outside a loop, a borrow made later
-// cannot reach back to this access.
+// cannot reach back to this access. While the place an assignment
+// writes is typed before its value, nothing is skipped: the value may
+// move or lend what the place reads.
 func (c *Checker) skipUse() bool {
-	return c.inner || len(c.moved) == 0 && len(c.temps) == 0 && c.loops == 0 && (c.flow == nil || len(c.flow.loans) == 0)
+	return c.inner || !c.typingPlace && len(c.moved) == 0 && len(c.temps) == 0 && c.loops == 0 && (c.flow == nil || len(c.flow.loans) == 0)
 }
 
 func (c *Checker) checkUsePlace(e ast.Expr, p place, kind placeKind) {
 	if kind == notPlace {
+		return
+	}
+
+	if c.typingPlace {
+		c.heldAccess = append(c.heldAccess, heldAccess{held: useHeld, e: e, p: p, kind: kind, noUse: c.noUse})
 		return
 	}
 
@@ -323,12 +331,25 @@ func isPlaceChain(e ast.Expr) bool {
 }
 
 // operandOf evaluates an expression that is read for its value inside a
-// place, such as an index, with the flags of the place around it off.
+// place, such as the pointer *p reaches through, with the flags of the
+// place around it off.
 func (c *Checker) operandOf(e ast.Expr, hint Type) operand {
 	inner, noUse := c.inner, c.noUse
 	c.inner, c.noUse = false, false
 	op := c.expr(e, hint)
 	c.inner, c.noUse = inner, noUse
+	return op
+}
+
+// indexOperand is operandOf for the index or key of a place: an index
+// of the place an assignment writes is evaluated before the
+// assignment's value, so its reads are made at once, not held, where
+// the rest of the place is reached at the store.
+func (c *Checker) indexOperand(e ast.Expr, hint Type) operand {
+	typing := c.typingPlace
+	c.typingPlace = false
+	op := c.operandOf(e, hint)
+	c.typingPlace = typing
 	return op
 }
 
@@ -339,7 +360,7 @@ func (c *Checker) operandOf(e ast.Expr, hint Type) operand {
 // as does dropping it into the blank; passing it to a call
 // lends it again, which the caller handles.
 func (c *Checker) maybeMove(op operand, t Type) {
-	if op.expr == nil || !c.fromPlace(op.expr, op.mode) && op.mode != borrowed && op.mode != mutBorrowed {
+	if op.expr == nil || !c.fromPlace(op.expr, op.mode) && op.mode != borrowed && op.mode != mutBorrowed || slices.Contains(c.movedValues, op.expr) {
 		return
 	}
 
@@ -495,7 +516,12 @@ func (c *Checker) move(e ast.Expr, m mode) {
 
 		c.capture(p.v, byMove)
 		c.access(e, p, moveAccess, e.Pos())
-		c.moved = append(c.moved, move{p, e.Pos(), false})
+		if c.typingPlace { // a move the place an assignment writes makes, by a call in it, is made at the store
+			c.heldAccess = append(c.heldAccess, heldAccess{held: moveHeld, p: p, pos: e.Pos()})
+		} else {
+			c.moved = append(c.moved, move{p, e.Pos(), false})
+		}
+
 		if c.info != nil {
 			c.info.Moves[e] = true
 		}

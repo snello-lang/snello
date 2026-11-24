@@ -12,14 +12,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/snello-lang/snello/compiler/emit/c"
+	"github.com/snello-lang/snello/compiler/importer"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/compiler/version"
 	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
+	"github.com/snello-lang/snello/std"
 )
 
 // stdCopies is the directory of the cache the standard library's
@@ -40,6 +43,7 @@ const (
 	markdownMarks = "\\`*_{}[]<>()#+-.!|~"
 	markdownCode  = "\t"
 	escape        = '\\'
+	packageClause = "package "
 )
 
 // answer answers the requests about the documents that waited for the
@@ -96,23 +100,35 @@ func isQuery(method string) bool {
 }
 
 // hover answers a hover: the declaration of the name under the cursor,
-// as the checker types it, with its doc comment below it; or the type of
-// the expression one of whose tokens is under it; or nothing.
+// as the checker types it, with its doc comment below it, a package's
+// with the package's own, as snello doc gives it, on its name, its
+// import's path or the package clause; or the type of the expression
+// one of whose tokens is under it; or nothing.
 func (s *Server) hover(m *jsonrpc.Message) {
 	v, src, t, ok := s.targetOf(m)
 	if !ok {
 		return
 	}
 
-	if t == nil || t.obj == nil && t.typ == nil {
+	if t == nil || t.obj == nil && t.typ == nil && t.pkg == nil && t.builtin == nil {
 		s.reply(m.ID, nil)
 		return
 	}
 
 	var text, doc string
-	if t.obj != nil {
+	switch pn, _ := t.obj.(*types.PkgName); {
+	case t.builtin != nil:
+		text, doc = t.builtin.decl, t.builtin.doc
+	case pn != nil && pn.Imported() != nil:
+		text, doc = types.ObjectString(pn, nil), v.packageDoc(pn.Imported())
+	case t.obj != nil:
 		text, doc = v.declaration(t.obj)
-	} else {
+	case t.pkg != nil:
+		text, doc = packageClause+t.pkg.Name(), v.packageDoc(t.pkg)
+		if t.pkg.Path() != "" {
+			text += " (" + strconv.Quote(t.pkg.Path()) + ")"
+		}
+	default:
 		text = t.typ.String()
 	}
 
@@ -135,20 +151,36 @@ func (s *Server) hover(m *jsonrpc.Message) {
 
 // definition answers a definition: where the name under the cursor is
 // declared, in its package's file or, for the standard library's, in
-// its copy in the cache; or nothing, for a name the language declares
-// or no name.
+// its copy in the cache, and for a name the language declares, where
+// builtinFile documents it, in its copy; or nothing, for no name.
 func (s *Server) definition(m *jsonrpc.Message) {
 	v, _, t, ok := s.targetOf(m)
 	if !ok {
 		return
 	}
 
-	if t == nil || t.obj == nil {
+	if t == nil || t.obj == nil && t.builtin == nil && t.pkg == nil {
 		s.reply(m.ID, nil)
 		return
 	}
 
-	loc, found, err := s.declarationOf(v, t.obj)
+	d := t.builtin
+	if b, ok := builtinOf(t.obj); ok {
+		d = &b
+	}
+
+	var loc protocol.Location
+	found := true
+	var err error
+	switch {
+	case d != nil:
+		loc, err = s.builtinLocation(*d)
+	case t.pkg != nil:
+		loc, found, err = s.packageLocation(v, t.pkg)
+	default:
+		loc, found, err = s.declarationOf(v, t.obj)
+	}
+
 	switch {
 	case err != nil:
 		s.fail(m.ID, jsonrpc.InternalError, err.Error())
@@ -157,6 +189,58 @@ func (s *Server) definition(m *jsonrpc.Message) {
 	default:
 		s.reply(m.ID, loc)
 	}
+}
+
+// packageLocation returns where pkg, a package the check loaded, is
+// declared for a reader: the package clause of its file that carries
+// its comment, or else of its first, in the order of their names, as a
+// definition into the standard library opens its copy; false for a
+// package with no source file in the check.
+func (s *Server) packageLocation(v *view, pkg *types.Package) (protocol.Location, bool, error) {
+	files := v.packageFiles(pkg)
+	if len(files) == 0 {
+		return protocol.Location{}, false, nil
+	}
+
+	f := files[0]
+	for _, g := range files {
+		if g.doc != "" {
+			f = g
+			break
+		}
+	}
+
+	path, err := pathOfFile(token.NewFile(f.name, len(f.src)), f.src)
+	if err != nil {
+		return protocol.Location{}, false, err
+	}
+
+	return protocol.Location{URI: s.uriOfPath(path), Range: protocol.Range{
+		Start: positionOf(f.src, f.clause, s.encoding),
+		End:   positionOf(f.src, f.clause+len(pkg.Name()), s.encoding),
+	}}, true, nil
+}
+
+// builtinLocation returns where builtinFile documents d: its name, in
+// the document it was found in, or in the file's copy in the cache.
+func (s *Server) builtinLocation(d builtinDecl) (protocol.Location, error) {
+	path := d.path
+	var src []byte
+	var err error
+	if path != "" {
+		src, err = s.read(path)
+	} else if src, err = std.Sources.ReadFile(builtinFile); err == nil {
+		path, err = pathOfFile(token.NewFile(builtinFile, len(src)), src)
+	}
+
+	if err != nil {
+		return protocol.Location{}, err
+	}
+
+	return protocol.Location{URI: s.uriOfPath(path), Range: protocol.Range{
+		Start: positionOf(src, d.start, s.encoding),
+		End:   positionOf(src, d.end, s.encoding),
+	}}, nil
 }
 
 // declarationOf returns where obj, an object of v, is declared: the
@@ -211,9 +295,27 @@ func (s *Server) targetOf(m *jsonrpc.Message) (v *view, src []byte, t *target, o
 
 // place returns the view of the last check of the document p names,
 // its text as the check read it, and what the place p names holds; a
-// nil target for nothing or a document no check has read.
+// nil target for nothing or a document no check has read. builtinFile,
+// which nothing checks, is answered from its text as the editor holds
+// it, with no view: a name it declares or uses, whose definition is in
+// the document itself.
 func (s *Server) place(p protocol.TextDocumentPositionParams) (*view, []byte, *target) {
 	path := pathOf(p.TextDocument.URI)
+	if isBuiltinFile(path) {
+		src, err := s.read(path)
+		if err != nil {
+			return nil, nil, nil
+		}
+
+		d, ok := builtinAt(src, offsetOf(src, p.Position, s.encoding))
+		if !ok {
+			return nil, src, nil
+		}
+
+		d.path = path
+		return nil, src, &target{builtin: &d, start: d.start, end: d.end}
+	}
+
 	v := s.views[path]
 	if v == nil || v.byPath[path] == nil {
 		return nil, nil, nil
@@ -264,6 +366,21 @@ func stdPathOf(name string) string {
 	}
 
 	return filepath.Join(cache, stdCopies, version.Current, filepath.FromSlash(name))
+}
+
+// checkoutStd returns the std/ directory of a checkout of the compiler
+// when file is a file of one of its standard packages, or "".
+func checkoutStd(file string) string {
+	if !filepath.IsAbs(file) {
+		return ""
+	}
+
+	stdDir, _, ok := importer.StdPackage(filepath.Dir(file))
+	if !ok {
+		return ""
+	}
+
+	return stdDir
 }
 
 // stdCopyOf reports whether dir is a directory of the standard

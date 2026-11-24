@@ -57,3 +57,22 @@ func TestIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestKeywords lists every reserved word, each one Lookup gives a
+// keyword for, and no word that is not one.
+func TestKeywords(t *testing.T) {
+	words := Keywords()
+	if len(words) != int(keywordEnd-keywordBeg-1) {
+		t.Fatalf("%d keywords, want %d", len(words), keywordEnd-keywordBeg-1)
+	}
+
+	for _, w := range words {
+		if !Lookup(w).IsKeyword() {
+			t.Errorf("%q is listed and is no keyword", w)
+		}
+	}
+
+	if Lookup("main").IsKeyword() {
+		t.Error("main is a keyword")
+	}
+}

@@ -38,6 +38,18 @@ func TestTokens(t *testing.T) {
 			{token.IDENT, "s"}, {token.PERIOD, ""}, {token.IDENT, "head"}, {token.RPAREN, ""}, {token.COALESCE, ""},
 			{token.RETURN, "return"}, {token.IDENT, "None"}, {token.SEMICOLON, "\n"},
 		}},
+		{"d := f.default\nn := f.type\ndefault", []elt{ // a keyword selected as a name ends its line, and one standing alone does not
+			{token.IDENT, "d"}, {token.DEFINE, ""}, {token.IDENT, "f"}, {token.PERIOD, ""}, {token.DEFAULT, "default"}, {token.SEMICOLON, "\n"},
+			{token.IDENT, "n"}, {token.DEFINE, ""}, {token.IDENT, "f"}, {token.PERIOD, ""}, {token.TYPE, "type"}, {token.SEMICOLON, "\n"},
+			{token.DEFAULT, "default"},
+		}},
+		{"f. // the next line\ndefault\nx", []elt{ // a comment between the dot and the word keeps it selected
+			{token.IDENT, "f"}, {token.PERIOD, ""}, {token.DEFAULT, "default"}, {token.SEMICOLON, "\n"},
+			{token.IDENT, "x"}, {token.SEMICOLON, "\n"},
+		}},
+		{"a.\nb", []elt{
+			{token.IDENT, "a"}, {token.PERIOD, ""}, {token.IDENT, "b"}, {token.SEMICOLON, "\n"},
+		}},
 		{"p.cur = p.lex.Next()?\nx", []elt{
 			{token.IDENT, "p"}, {token.PERIOD, ""}, {token.IDENT, "cur"}, {token.ASSIGN, ""}, {token.IDENT, "p"},
 			{token.PERIOD, ""}, {token.IDENT, "lex"}, {token.PERIOD, ""}, {token.IDENT, "Next"}, {token.LPAREN, ""},

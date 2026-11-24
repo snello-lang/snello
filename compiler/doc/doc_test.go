@@ -11,6 +11,8 @@ import (
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/compiler/parser"
+	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 )
 
@@ -101,6 +103,78 @@ func TestStandardLinks(t *testing.T) {
 
 		for _, b := range load(t, path, true).Broken {
 			t.Errorf("%s: %s: [%s] names nothing", path, b.Pos, b.Name)
+		}
+	}
+}
+
+// TestForms finds the forms a file documents: a comment attached to no
+// declaration that begins with a form, in the order written, with the
+// place its form is written; a comment that begins with one but is a
+// declaration's, or a word that is no form, documents none.
+func TestForms(t *testing.T) {
+	src := "package builtin\n\n// map[K]V is a map.\n\n// ref T is a borrow.\n\n// map[K]V is this function's own.\nfunc f() {}\n\n// mapping is no form.\n\n//chan T has no space after its marks.\n"
+	file := token.NewFile("builtin.snello", len(src))
+	f, err := parser.ParseComments(file, []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forms := Forms(f)
+	if len(forms) != 3 || forms[0].Name != FormMap || forms[0].Written != "map[K]V" || forms[0].Doc != "map[K]V is a map.\n" || forms[1].Name != FormRef || forms[2].Name != FormChan {
+		t.Fatalf("forms: %+v, want the map's, the borrow's and the channel's, in order", forms)
+	}
+
+	for _, form := range forms {
+		if at := file.Offset(form.Pos); src[at:at+len(form.Written)] != form.Written {
+			t.Errorf("%s's form is at %d, %q", form.Name, at, src[at:])
+		}
+	}
+
+	p, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	for _, form := range p.Forms {
+		names = append(names, form.Name)
+	}
+
+	var want []string
+	for _, form := range builtinForms {
+		want = append(want, form.name)
+	}
+
+	slices.Sort(names)
+	slices.Sort(want)
+	if !slices.Equal(names, want) {
+		t.Errorf("the builtin package documents the forms %v, want every form, %v", names, want)
+	}
+
+	for _, word := range token.Keywords() { // a keyword the scanner gains is documented, or this fails
+		if p.form(word) == nil {
+			t.Errorf("the keyword %s is not documented", word)
+		}
+	}
+}
+
+// TestBegins holds a form to begin a comment as a word: followed by a
+// space, a comma or a dot, and not by more of a word or by nothing.
+func TestBegins(t *testing.T) {
+	for _, tt := range []struct {
+		text, written string
+		want          bool
+	}{
+		{"for loops", "for", true},
+		{"impl, after", "impl", true},
+		{"super.M(args)", "super", true},
+		{"map[K]V is a map", "map[K]V", true},
+		{"format the output", "for", false},
+		{"for_each", "for", false},
+		{"for", "for", false},
+	} {
+		if got := begins(tt.text, tt.written); got != tt.want {
+			t.Errorf("begins(%q, %q) = %v, want %v", tt.text, tt.written, got, tt.want)
 		}
 	}
 }

@@ -155,6 +155,270 @@ enum Ordering {
 	Greater
 }
 
+// The forms below are the types, borrows, operators and keywords the
+// language writes with its own syntax, which no declaration can name.
+// Each comment documents the form it begins with, as a declaration's
+// comment does its name.
+
+// []T is a slice: values of T it owns, in order, which grows at its
+// end. A literal lists the elements, []int{3, 1, 2}, and make([]T, n)
+// builds n zero values, or make([]T, 0, n) reserves the room for n for
+// an element with no zero value. len is the number of elements and cap
+// the room before the next growth. xs[i] reads or writes an element,
+// and an index outside the slice stops the program. xs[lo:hi] lends
+// the elements from lo up to hi, a ref []T, or a mut []T reached
+// through a mut, whose number stays the slice's to change. Two slices
+// do not compare with ==. The methods of a slice are documented in this
+// file.
+
+// [N]T is an array: N values of T, its length a constant. var gives N
+// zero values, a literal lists them in order, [3]int{1, 2}, leaving the
+// rest zero, and a[i] reads or writes one, with a slice's bounds check.
+// An array is copied whole on assignment, so a struct of arrays is
+// Copy when its elements are, and len and cap are its length. It is not
+// a slice: it is not sliced, pushed to or ranged over.
+
+// map[K]V is a map: one value of V for each key of K, which is Eq and
+// Hash. It owns its keys and values. A literal lists its entries, or
+// none, map[string]int{}, and make(map[K]V) is the empty one. m[k] = v
+// stores a value, making the entry when the key is new, and m[k] reads
+// one: a key that is not there gives the value type's zero value and
+// leaves the map unchanged. A value type with no zero value is read and
+// changed through Get and GetMut. len is the number of entries, and
+// range walks them in the order they were inserted, the order a map
+// prints in. Two maps do not compare with ==. The methods of a map are
+// documented in this file.
+
+// chan T is a channel of T, the way tasks hand values to each other:
+// c <- v sends v, moving it, and <-c receives one, owned. A chan<- T
+// only sends and a <-chan T only receives; make(chan T) makes a
+// channel, and make(chan T, n) one that buffers n values. Each task
+// holds a handle of its own, ch.Clone() another on the same channel. A
+// channel ends when its last sending handle is dropped: a receiver then
+// sees None once the values already sent are taken. The methods of a
+// channel are documented in this file.
+
+// *T is an owned pointer: the one owner of a T on the heap, made by
+// &expr, which moves the value there. It is how a type holds a value of
+// itself, a list's next node or a tree's children, and it is lent as
+// what it holds: a *Node fits a ref Node parameter.
+
+// ref T is a shared borrow of a T: lent to read for as long as the
+// borrow is used, while its owner keeps it. It is written at the
+// declaration, func f(v ref T), and may be at the call, f(ref x). Any
+// number of ref borrows of a value may live at once, and nothing may
+// change the value while one does. A borrow lives inside one function,
+// is never stored or sent, and is returned only from the receiver or
+// the only borrowed parameter.
+
+// mut T is an exclusive borrow of a T: lent to change for as long as
+// the borrow is used, while its owner keeps it. It is written at the
+// declaration, func f(v mut T), and at the call of an owned value,
+// f(mut x), since a change is worth a word; a borrow passed on and a
+// receiver take no keyword. While a value is borrowed mut, nothing else
+// may look at it, its owner included. A borrow lives inside one
+// function, is never stored or sent, and is returned only from the
+// receiver or the only borrowed parameter.
+
+// x? yields the value inside x and returns early with the absent or
+// failed case when there is none. The function's result type says
+// which: in one returning T?, x? takes an optional and returns None; in
+// one returning Result<T, E>, it takes a result and returns its Err,
+// whose error type is the function's, or has a place in it: the one
+// variant of the function's error enum whose only field has its type,
+// or a trait value when the function returns Result<T, Error>.
+
+// x ?? y yields the value inside x when it is Some or Ok, and otherwise
+// evaluates y: an expression of the inside's type, or a return, break
+// or continue, or a block ending in one. n := cur ?? break. It sits
+// below every other operator and groups to the right.
+
+// ch <- v sends v on the channel ch, moving it: after the send, v is
+// gone from the sender, and the receiver owns it.
+
+// <-ch receives a value from the channel ch, owned by the receiver: an
+// optional, None once the channel has ended and the values already sent
+// are taken. A bare <-ch discards what it receives.
+
+// xs ...T, a function's last parameter, takes any number of arguments,
+// which the function owns, as a slice; xs ...ref T borrows them for the
+// call. f(a, xs...) passes a slice on as the arguments.
+
+// @A, after what it is about, attaches the attribute A to it: a
+// constant of a type that lists Attribute, after a field's type and
+// default, Port int = 8080 @Usage("the port"), after a variant, or after
+// a struct's or an enum's name, its type parameters and what it lists,
+// before its body. A function that reflects on the type at compile time
+// reads it: encoding/json's @json.Name("port").
+
+// package begins every file, package name: the package the file is a
+// part of. A directory is one package, of its .snello files those a
+// build for the platform chooses by their names, its test files when it
+// is tested, and the package main is a program, whose func main runs.
+
+// import names the packages a file uses, by their paths: import "fmt",
+// or several, import ("fmt"; "os"). A path names a package of the
+// standard library, of the module's own directories, or of a module it
+// requires; its names are reached through the package's name,
+// fmt.Println.
+
+// const names a value the compiler computes from literals, other
+// constants, the operators and conversions between number types, at
+// the top level of a file or inside a function: const KB = 1 << 10.
+// The compiler refuses one its type cannot hold, and a package's
+// constants may be declared in any order.
+
+// var declares variables with a type written out, var x, y int = 1, 2.
+// One declared without a value starts at its type's zero value. A type
+// that must always hold something has none: a pointer, a borrow, a
+// function, a channel, a type with a Drop, and an array, a tuple or a
+// struct that holds one of these, where a slice or a map of them starts
+// empty; a variable of it is declared with its value, or as an option,
+// var p *int?. A struct with field defaults is made with them, T{},
+// and not declared without a value.
+// := declares one and infers its type from the value.
+
+// type Name T declares a new type whose values are made as T's are but
+// which is a type of its own: a value of one is not one of the other,
+// and a conversion, Name(x), makes one from the other. It is the only
+// thing type declares.
+
+// struct Name { fields } declares a struct: its fields, each a name and
+// a type, one a line or separated by ;, and the traits it implements,
+// listed after impl. A literal names its fields, Node{value: v}, or
+// gives every field in order, Vec3{1, 2, 3}, and a field may declare a
+// default, port int = 8080, which a literal that leaves it out takes.
+
+// enum Name { variants } declares an enum: a value is one of its
+// variants, each a name with fields or none, Connecting(attempt int)
+// and Closed. A match takes it apart and covers every variant. An enum
+// is not a number: it has no iota and no conversion to int.
+
+// trait Name { members } declares a trait: the methods a type that
+// implements it has, written with Self as the receiver's type, default
+// methods with their bodies, fields, and the traits it refines, trait
+// Loud: Shape. A trait used as a type is a value of any type that
+// implements it, and as a bound, T: Shape, it says what a type
+// parameter can do.
+
+// impl, in a type's declaration, lists the traits the type implements,
+// after its name and its type parameters, or after the type it is
+// declared over: struct Circle impl Shape { r f64 }, type Celsius f64
+// impl fmt.Stringer. A type implements exactly the traits it lists, and
+// the compiler checks that it has every method each requires, with the
+// signature the trait gives it.
+
+// Self, inside a trait, stands for whatever type implements it: func
+// (s ref Self) Area() f64.
+
+// super.M(args), inside a method, a trait's or a type's own, calls the
+// next definition of M in the resolution order with the method's own
+// receiver: an override that adds to the method it replaces rather than
+// starting over.
+
+// func declares a function: its parameters, each a name and a type, ref
+// or mut before the type for a borrow, and its results. A method has a
+// receiver before its name, func (c mut Canvas) Add(s Shape), and
+// func(...) { ... } is a function literal, a value.
+
+// return ends the function and gives its result, return x, several as a
+// tuple, return (min, rest). The deferred calls run after the result is
+// computed.
+
+// if runs its block when its condition holds, written with no
+// parentheses, and the else after it otherwise. if x := f(); x > 0 {
+// starts with a statement, and if x := opt { binds the value an
+// optional holds and skips the block when there is none. An if used as
+// an expression has an else.
+
+// else follows an if's block: the block or the if that runs when the
+// condition does not hold.
+
+// match x { arms } compares the value against each arm's pattern in
+// order and runs the first that fits, an arm written pattern => body, a
+// variant's pattern binding its fields to new names. A match is
+// exhaustive: one that misses a case, with no _ arm, does not compile.
+// Written with no value, match { cond => body }, it runs the first arm
+// whose condition holds. On a type parameter, match T { int => ...,
+// struct => ..., _ => ... }, it chooses an arm by the type, the first
+// that fits, when the function is compiled for one; its arms need not
+// cover every type, and a type no arm takes is refused where the
+// function is used with it. It is an expression when every arm yields a
+// value.
+
+// for loops: for { forever, for cond { while a condition holds, for i :=
+// 0; i < n; i += 1 { with a counter, and with range over a slice, a map,
+// a string, a channel or an iterator.
+
+// range, in a for, walks a value: for i, x := range xs a slice's
+// indexes and elements, for k, v := range m a map's keys and values in
+// the order they were inserted, for i, r := range s a string's runes,
+// for x := range ch the values received from a channel until it ends,
+// any value with a Next method, an iterator, and in a match on a type
+// parameter T, in its arm struct, for f := range fields(T) a struct's
+// fields, and in its arm enum, variants(T) an enum's variants, written
+// out once for each.
+
+// break ends the innermost loop, wherever it stands inside it: a match
+// or a select is not a loop and does not catch it.
+
+// continue goes to the next iteration of the innermost loop, wherever it
+// stands inside it: a match or a select is not a loop and does not catch
+// it.
+
+// spawn f(x) starts a task running the call, on the language's own
+// scheduler, and goes on. The arguments, and the variables a closure
+// given to it mentions, cross into the task as every value that crosses
+// between tasks does, moved, immutable or atomically shared, and never
+// a borrow. As a statement it gives nothing back; where a value is
+// wanted, it gives a task.Handle<T>, whose Join waits for the task and
+// returns its result, or the panic that ended it.
+
+// defer f(x) runs the call when the enclosing function ends, by a
+// return, after the result is computed, or by a panic. The arguments
+// are evaluated where the defer stands, but a variable lent to a ref
+// parameter is read as it is when the call runs. Several deferred calls
+// run last first.
+
+// select { cases } waits for the first of several channel operations
+// that can proceed and runs that case; with a default it does not wait.
+// When several are ready at once, one is chosen at random, so a busy
+// channel cannot starve the others.
+
+// case, in a select, is a channel operation that may be chosen: a
+// receive, got := <-ch, which binds the optional the receive yields, a
+// bare receive, or a send, ch <- v, with the statements that run when
+// it is.
+
+// default, in a select, runs when no case can proceed, so that the
+// select does not wait.
+
+// switch is reserved and means nothing: the language has no switch
+// statement. match does its work, on a value or, written with no value,
+// on conditions.
+
+// _ is the blank name: a value given to it is dropped there, _ = conn
+// drops conn, and so is a value declared as it, var _ = conn or
+// _, n := pair(), once the statement's values are made, since it binds
+// nothing, so a value that is to live to the end of its scope is given
+// a name; a value made there whose Drop ends what it borrows, a lock's
+// guard, var _ = m.Lock(), is refused, since it would end as it begins,
+// and a guard is ended early by dropping its variable, _ = g; a package
+// variable cannot be named it, since one is made on first use and
+// nothing can use it; and as a pattern it matches anything and binds
+// nothing, the arm a match that covers no other case ends with.
+
+// pattern, in a match arm, says which values the arm takes: a literal,
+// '+'; a range, both ends included, '0'..='9'; a variant, binding its
+// fields, Connecting(n), or with none, Closed; any other name, which
+// matches anything and binds it; _, which binds nothing; a tuple, each
+// element against its pattern; alternatives, Plus | Minus, any of
+// them; and a guard after any of these, Connecting(n) if n < 3, the
+// pattern and then a condition. In a match on a type, an arm is a type,
+// int or Point, a form of one, []E or E?, alternatives, i8 | i16, a
+// trait, any type that implements it, or a kind, struct or enum, and
+// takes no guard, since a type is matched by what it is.
+
 // Copy marks a type whose values are copied on assignment and when
 // passed, rather than moved: the numbers, bool, a struct or enum that
 // lists Copy and whose every field is Copy. A Copy type cannot have a

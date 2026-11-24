@@ -50,6 +50,7 @@ type Scanner struct {
 	offset     int  // byte offset in src where ch starts
 	nextOffset int  // byte offset in src where the character after ch starts
 	insertSemi bool // set when a newline here should produce a semicolon
+	afterDot   bool // set when the last token was a ., after which a word is a selected name
 
 	// kept holds the comments KeepComments asked for, nil until it asks:
 	// one word, so that a scanner that keeps none is no larger than one
@@ -80,6 +81,7 @@ func (s *Scanner) Init(file *token.File, src []byte, err ErrorHandler) {
 	s.offset = 0
 	s.nextOffset = 0
 	s.insertSemi = false
+	s.afterDot = false
 	s.kept = nil
 	s.ErrorCount = 0
 	s.next()
@@ -125,8 +127,10 @@ scanAgain:
 			lit = tok.String() // the table's string, so lit never pins src
 		}
 
-		switch tok {
-		case token.IDENT, token.BREAK, token.CONTINUE, token.RETURN, token.SELF, token.SUPER:
+		switch {
+		case tok == token.IDENT, tok == token.BREAK, tok == token.CONTINUE, tok == token.RETURN, tok == token.SELF, tok == token.SUPER:
+			insertSemi = true
+		case s.afterDot: // a keyword selected as a name, f.default, ends a line as a name does
 			insertSemi = true
 		}
 
@@ -277,6 +281,7 @@ scanAgain:
 	}
 
 	s.insertSemi = insertSemi
+	s.afterDot = tok == token.PERIOD
 	return pos, tok, lit
 }
 

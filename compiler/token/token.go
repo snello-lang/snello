@@ -311,6 +311,17 @@ func Lookup(ident string) Kind {
 	return IDENT
 }
 
+// Keywords returns the reserved words, in the order of their kinds:
+// every word Lookup gives a keyword for.
+func Keywords() []string {
+	words := make([]string, 0, keywordEnd-keywordBeg-1)
+	for k := keywordBeg + 1; k < keywordEnd; k++ {
+		words = append(words, tokens[k])
+	}
+
+	return words
+}
+
 // IsLiteral reports whether the kind is an identifier or a basic literal.
 func (k Kind) IsLiteral() bool { return literalBeg < k && k < literalEnd }
 

@@ -35,6 +35,7 @@ func mk() Owner { return Owner{n: 1} }
 		{"func f() { var xs []*int; var o Owner?; print(xs, o) }", nil},
 		// A struct that declares a default: T{} is the value to write, when it builds one.
 		{"struct Def { n int = 1; s string }\nfunc f() { var d Def; print(d) }", []string{"cannot declare d without a value: Def declares defaults, which a zero value would skip; write d := Def{}"}},
+		{"struct Def { n int = 1; s string }\nfunc f() { var _ Def }", []string{"cannot declare _ without a value: Def declares defaults, which a zero value would skip; write _ = Def{}"}},
 		{"struct Def { n int = 1 }\nstruct Holds { d Def }\nfunc f() { var h Holds; print(h) }", []string{"cannot declare h without a value: Holds has no zero value; give it one, or declare it Holds?"}}, // Holds{} is refused too
 		{"struct PtrDef { n int = 1; p *int }\nfunc f() { var d PtrDef; print(d) }", []string{"cannot declare d without a value: PtrDef has no zero value; give it one, or declare it PtrDef?"}},
 		{"struct Def { n int = 1 }\nfunc f() { var d Def?; xs := []Def{}; print(d, xs) }", nil},

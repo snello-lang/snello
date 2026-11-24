@@ -107,7 +107,7 @@ type Emitter struct {
 	mainFile   *token.File                     // and the file it is in
 	dlocs      map[dloc]int                    // each location's node
 	ownFiles   map[*token.File]bool            // the program's own files, whose functions a debug build leaves unoptimized
-	stdFiles   map[*token.File]bool            // the standard library's files, named under lower.SourceName's directory
+	stdFiles   map[*token.File]string          // the standard library's files, named under lower.SourceName's directory
 	dir        string                          // the directory a debug build runs in, which the line tables' relative names are from
 	dtypes     map[string]int                  // each type's node in a debug build, by the type (debug.go)
 	cnodes     map[string]int                  // each C type's node, by its C name (debug.go)

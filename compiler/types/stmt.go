@@ -17,6 +17,15 @@ import (
 // one has fewer.
 const assignedInPlace = 4
 
+// An assignPlace is a place of an assignment of several, typed before
+// the values: the place, the borrow variable it names, and where the
+// accesses held for its store begin (heldAccess).
+type assignPlace struct {
+	x      operand
+	holder *Var
+	held   int
+}
+
 // stmts checks a statement list and reports whether it ends in a
 // statement that leaves the function, so that a function with results
 // can be checked for a missing return as Go does.
@@ -54,10 +63,10 @@ func (c *Checker) stmt(s ast.Stmt) bool {
 		return false
 	}
 
-	lent, temps := len(c.temps), c.tempMark()
+	lent, moved, temps := len(c.temps), len(c.movedValues), c.tempMark()
 	defer func() {
-		c.temps = c.temps[:lent]          // what the statement lent is given back
-		c.dropTemporaries(temps, s.Pos()) // named by where the statement begins, the one position a statement has
+		c.temps, c.movedValues = c.temps[:lent], c.movedValues[:moved] // what the statement lent is given back, and its values are done
+		c.dropTemporaries(temps, s.Pos())                              // named by where the statement begins, the one position a statement has
 	}()
 	switch s := s.(type) {
 	case *ast.BlockStmt:
@@ -130,19 +139,29 @@ func (c *Checker) declStmt(d *ast.VarDecl) {
 		return
 	}
 
-	ops := c.values(len(d.Names), d.Values, t, d.Pos())
-	c.declareVars(c.scope, d, t)
+	ops := c.values(len(d.Names), d.Values, t, d.Pos(), nil)
+	objs := c.declareVars(c.scope, d, t)
+	spread := len(d.Values) == 1 && len(d.Names) > 1
 	for i, name := range d.Names {
 		c.assign(ops[i], t, d.Values[min(i, len(d.Values)-1)].Pos(), "declaration")
 		if t == nil {
-			c.setType(c.scope.Lookup(name.Name), inferred(ops[i]))
+			c.setType(objs[i], inferred(ops[i])) // the variable declared, the blank name's too, which no scope holds
 			c.maybeMove(ops[i], inferred(ops[i]))
 		}
 
-		if v, ok := c.scope.Lookup(name.Name).(*Var); ok {
-			c.keepParamIn(ops[i], "given to", name, name.Pos())
-			c.hold(v, ops[i].expr, name.Pos())
+		from := ops[i].expr
+		if spread {
+			from = d.Values[0] // a part of a tuple taken apart holds what the tuple lends, as with :=
 		}
+
+		v, ok := objs[i].(*Var)
+		if !ok || isBlank(name) { // the blank name holds nothing: its value is dropped once the statement's values are made
+			c.refuseBlankGuard(ops[i], from, name.Pos())
+			continue
+		}
+
+		c.keepParamIn(ops[i], "given to", name, name.Pos())
+		c.hold(v, from, name.Pos())
 	}
 }
 
@@ -164,13 +183,28 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			return
 		}
 
+		from, nested := len(c.heldAccess), c.typingPlace
+		c.typingPlace = true // the place is read, as the operator's left operand, and reached again by the store, after the value
 		x := c.expr(s.Lhs[0], nil)
+		c.typingPlace = nested
+		typed := len(c.heldAccess)
+		if !nested {
+			defer func() { c.heldAccess = c.heldAccess[:from] }()
+			c.replay(from, typed, false)
+		}
+
 		if x.mode == invalid {
 			return
 		}
 
+		again := func() { // the store reaches the place a second time: what the value moved or lent is seen then
+			if !nested {
+				c.replay(from, typed, true)
+			}
+		}
+
 		if fn := OperatorMethod(valueType(x), s.Tok.Binary(), false); fn != nil {
-			c.operatorAssign(s, x, fn)
+			c.operatorAssign(s, x, fn, again)
 			return
 		}
 
@@ -192,6 +226,7 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 			return
 		}
 
+		again()
 		if c.writable(s.Lhs[0], x) {
 			c.accessExpr(s.Lhs[0], writeAccess, accessPos(s.Lhs[0]))
 		}
@@ -207,13 +242,15 @@ func (c *Checker) assignStmt(s *ast.AssignStmt) {
 // parameter. The left operand's value goes into the method and the
 // result comes back to the place within the statement, so nothing is
 // moved as far as the rest of the function can see; the method returns
-// Self, so the result fits the place.
-func (c *Checker) operatorAssign(s *ast.AssignStmt, x operand, fn *Func) {
+// Self, so the result fits the place. again reaches the place a second
+// time, for the store, once the right operand is checked.
+func (c *Checker) operatorAssign(s *ast.AssignStmt, x operand, fn *Func, again func()) {
 	param := fn.typ.(*Signature).params[0].typ
 	if y := c.expr(s.Rhs[0], param); y.mode != invalid {
 		c.assign(y, param, s.Rhs[0].Pos(), "the right operand of "+s.Tok.String())
 	}
 
+	again()
 	if c.writable(s.Lhs[0], x) {
 		c.accessExpr(s.Lhs[0], writeAccess, accessPos(s.Lhs[0]))
 	}
@@ -235,7 +272,17 @@ func (c *Checker) define(s *ast.AssignStmt) {
 		one[0] = c.expr(s.Rhs[0], nil)
 		ops = one[:]
 	} else {
-		ops = c.values(len(s.Lhs), s.Rhs, nil, s.TokPos) // the right side cannot see the new names
+		c.depth++ // what the values lend is lent past the stores, to where the statement ends
+		defer func() { c.depth-- }()
+		ops = c.values(len(s.Lhs), s.Rhs, nil, s.TokPos, func(i int) Type { // the right side cannot see the new names
+			if id, ok := s.Lhs[i].(*ast.Ident); ok && !isBlank(id) {
+				if v, ok := c.scope.Lookup(id.Name).(*Var); ok {
+					return v.typ // a name := reuses is assigned
+				}
+			}
+
+			return nil
+		})
 	}
 
 	var small [assignedInPlace]carried
@@ -250,6 +297,7 @@ func (c *Checker) define(s *ast.AssignStmt) {
 
 		if isBlank(ident) {
 			c.maybeMove(ops[i], inferred(ops[i])) // _ declares nothing and drops the value, so an owned one moves
+			c.refuseBlankGuard(ops[i], sourceOf(s, ops[i]), ident.Pos())
 			continue
 		}
 
@@ -275,31 +323,104 @@ func (c *Checker) define(s *ast.AssignStmt) {
 // type is the value's hint, so x = None and s.head = Some(&Node{...})
 // type themselves from x.
 func (c *Checker) plainAssign(s *ast.AssignStmt) {
+	from, nested := len(c.heldAccess), c.typingPlace // nested in the place of another assignment, whose store makes what this one holds
+	if !nested {
+		defer func() { c.heldAccess = c.heldAccess[:from] }()
+	}
+
+	c.depth++ // what the values lend is lent past the stores, to where the statement ends
+	defer func() { c.depth-- }()
 	if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
 		if isBlank(s.Lhs[0]) {
 			x := c.expr(s.Rhs[0], nil) // _ = x drops x, so an owned x moves
 			c.maybeMove(x, inferred(x))
+			c.refuseBlankGuard(x, s.Rhs[0], s.Lhs[0].Pos())
 			return
 		}
 
-		x, holder, mark := c.target(s.Lhs[0], true) // the target is evaluated first, as in Go, and given its value after the value is made
+		x, holder := c.target(s.Lhs[0], true) // the place is typed first, for the value's hint, and reached after the value, where the store is made
+		typed := len(c.heldAccess)
 		op := c.expr(s.Rhs[0], hintOf(x))
-		from := c.carry(x.typ, op.expr, s.Lhs, s.Lhs[0].Pos())
-		c.putAside(mark)
-		c.stored(s.Lhs[0], x, holder, op, from)
+		c.keepLent(s.Rhs[0], op)
+		lent := c.carry(x.typ, op.expr, s.Lhs, s.Lhs[0].Pos())
+		c.settleHeld(from, typed, nested)
+		c.stored(s.Lhs[0], x, holder, op, lent)
 		return
 	}
 
-	ops := c.values(len(s.Lhs), s.Rhs, nil, s.TokPos)
+	var places [assignedInPlace]assignPlace
+	targets := places[:0]
+	for _, lhs := range s.Lhs { // each place is typed first, for its value's hint, and reached at its store, after every value
+		p := assignPlace{held: len(c.heldAccess)}
+		if !isBlank(lhs) {
+			p.x, p.holder = c.target(lhs, true)
+		}
+
+		targets = append(targets, p)
+	}
+
+	typed := len(c.heldAccess)
+	ops := c.values(len(s.Lhs), s.Rhs, nil, s.TokPos, func(i int) Type {
+		if isBlank(s.Lhs[i]) {
+			return nil
+		}
+
+		return hintOf(targets[i].x)
+	})
 	var small [assignedInPlace]carried
-	from := c.carryAll(s, ops, small[:0])
+	lent := c.carryAll(s, ops, small[:0])
+	if nested {
+		c.settleHeld(from, typed, true)
+	}
+
 	for i, lhs := range s.Lhs {
 		if isBlank(lhs) {
 			c.maybeMove(ops[i], inferred(ops[i]))
-		} else {
-			c.assignTo(lhs, ops[i], from[i])
+			c.refuseBlankGuard(ops[i], sourceOf(s, ops[i]), lhs.Pos())
+			continue
 		}
+
+		if !nested {
+			to := len(c.heldAccess)
+			if i+1 < len(targets) {
+				to = targets[i+1].held
+			}
+
+			c.replay(targets[i].held, to, false)
+		}
+
+		c.stored(lhs, targets[i].x, targets[i].holder, ops[i], lent[i])
 	}
+}
+
+// refuseBlankGuard refuses the blank name given a value made where it
+// stands, from, whose Drop may read what it borrows, a lock's guard,
+// m.Lock(): the blank drops it once the statement's values are made,
+// so what it guards would end as it begins. A variable dropped into the
+// blank, _ = g, is how one is ended early, and stays allowed.
+func (c *Checker) refuseBlankGuard(op operand, from ast.Expr, pos token.Pos) {
+	if op.mode == invalid || from == nil {
+		return
+	}
+
+	if _, kind := c.placeOf(from); kind != notPlace {
+		return
+	}
+
+	if t := valueType(op); guards(t) {
+		c.errorf(pos, "the blank name would drop this "+t.String()+" at once, and its Drop ends what it borrows: give it a name to keep it to the end of the scope")
+	}
+}
+
+// sourceOf returns the expression the value op of the assignment s
+// comes from: its own, or the tuple a part of one taken apart, a, b :=
+// t, comes from.
+func sourceOf(s *ast.AssignStmt, op operand) ast.Expr {
+	if len(s.Rhs) == 1 && len(s.Lhs) > 1 {
+		return s.Rhs[0]
+	}
+
+	return op.expr
 }
 
 // A carried is what a value given to a place lends: the loans its
@@ -398,7 +519,7 @@ func (c *Checker) holdCarried(v *Var, path string, t Type, from carried, pos tok
 // place: the value fits, the place is owned again, and a borrow
 // variable holds what the value lends.
 func (c *Checker) assignTo(lhs ast.Expr, op operand, from carried) {
-	x, holder, _ := c.target(lhs, false)
+	x, holder := c.target(lhs, false)
 	c.stored(lhs, x, holder, op, from)
 }
 
@@ -564,23 +685,24 @@ func (c *Checker) usedWhereMade(e ast.Expr, how string, pos token.Pos) bool {
 // the value there but an access to it, and returns the variable when
 // the place is a borrow variable: the assignment rebinds it.
 //
-// With after, the store itself is set aside, to be recorded once the
-// value is checked, and the mark to put it back at is returned.
-func (c *Checker) target(e ast.Expr, after bool) (operand, *Var, int) {
-	c.noUse = true
+// With later, the place is typed before the assignment's value, which
+// takes its type as a hint, but reached after it, where the store is
+// made: each access to it is held (heldAccess) and made at the store
+// (replay). Its indexes are evaluated before the value, and their reads
+// made at once (indexOperand). A move a call in the place makes is made
+// at the store too, after the value, which may still read what it moves.
+func (c *Checker) target(e ast.Expr, later bool) (operand, *Var) {
+	typing := c.typingPlace
+	c.noUse, c.typingPlace = true, later
 	x := c.expr(e, nil)
 	c.noUse = false
-	mark := -1
-	if after {
-		mark = c.setAside()
-		defer c.endAside()
+	var holder *Var
+	if x.mode != invalid && c.writable(e, x) {
+		holder = c.accessExpr(e, writeAccess, accessPos(e))
 	}
 
-	if x.mode == invalid || !c.writable(e, x) {
-		return x, nil, mark
-	}
-
-	return x, c.accessExpr(e, writeAccess, accessPos(e)), mark
+	c.typingPlace = typing
+	return x, holder
 }
 
 func (c *Checker) send(s *ast.SendStmt) {
@@ -1227,7 +1349,7 @@ func (c *Checker) rangePlace(e ast.Expr, t Type) {
 		return
 	}
 
-	x, _, _ := c.target(e, false)
+	x, _ := c.target(e, false)
 	if x.mode != invalid {
 		c.assign(operand{value, t, nil, nil}, x.typ, e.Pos(), "range assignment")
 		c.revive(e)

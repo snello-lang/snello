@@ -149,7 +149,10 @@ func parse(path string, out io.Writer) int {
 // program is correct, and warns on standard error of a module file with
 // no snello line.
 // A directory whose package is not main is checked as the library it
-// is, so that its binding to C is not refused as a program's would be.
+// is, so that its binding to C is not refused as a program's would be;
+// a file of a standard package in a checkout of the compiler is checked
+// with the rest of its package, checkStdFile, since a file of the
+// library is never a program of its own.
 func check(path string, target platform.Target) int {
 	names, dir, ok := programFiles(path, target, os.Stderr)
 	if !ok {
@@ -159,9 +162,12 @@ func check(path string, target platform.Target) int {
 	warnModule(os.Stderr, names)
 	info := &types.Info{}
 	var err error
-	if dir {
+	switch _, _, std := importer.StdPackage(filepath.Dir(path)); {
+	case dir:
 		err = importer.CheckDir(path, info, importer.Options{Target: target})
-	} else {
+	case std:
+		err = checkStdFile(path, target, info)
+	default:
 		_, _, err = importer.LoadProgram(names, target, info)
 	}
 
@@ -171,6 +177,36 @@ func check(path string, target platform.Target) int {
 	}
 
 	return exitSuccess
+}
+
+// checkStdFile checks name, a file of a standard package in a checkout
+// of the compiler, with the rest of its package: a test file with the
+// package's tests, as snello test builds them, and a file the build for
+// target leaves out for the first platform, in the order snello lists
+// them, whose build has it, so that the file named is always the one
+// checked.
+func checkStdFile(name string, target platform.Target, info *types.Info) error {
+	dir, base := filepath.Dir(name), filepath.Base(name)
+	if !importer.Chosen(base, target) {
+		for _, t := range platform.Targets() {
+			if importer.Chosen(base, t) {
+				target = t
+				break
+			}
+		}
+	}
+
+	o := importer.Options{Target: target}
+	if !importer.IsTestFile(base) {
+		return importer.CheckDir(dir, info, o)
+	}
+
+	plan, err := testrun.PlanDir(dir)
+	if err != nil {
+		return err
+	}
+
+	return importer.CheckTests(dir, plan.Path, info, o)
 }
 
 // initModule writes a module file into dir through

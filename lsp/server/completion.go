@@ -16,14 +16,12 @@ import (
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/importer"
-	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/scanner"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
-	"github.com/snello-lang/snello/std"
 )
 
 // What the text holds at a completion's place, a contextKind: code, a
@@ -34,10 +32,9 @@ import (
 // declares; sortWidth is the width of the number each item sorts by, so
 // that an editor keeps the server's order; the trigger characters ask
 // for a completion as they are typed, a dot for a member and a quote
-// for an import's path; builtinPackage documents the predeclared names
-// and is never imported, and builtinFile is its file under std/, which
-// declares the predeclared methods; lineComment begins a comment that
-// runs to its line's end; and funcWord begins a method's detail.
+// for an import's path; builtinPackage documents the predeclared names,
+// in builtinFile, and is never imported; lineComment begins a comment
+// that runs to its line's end; and funcWord begins a method's detail.
 const (
 	inCode contextKind = iota
 	inComment
@@ -49,7 +46,6 @@ const (
 	dotTrigger     = "."
 	quoteTrigger   = "\""
 	builtinPackage = "builtin"
-	builtinFile    = "builtin/builtin.snello"
 	lineComment    = "//"
 	funcWord       = "func"
 )
@@ -60,21 +56,13 @@ const (
 // the candidates of a value's predeclared members, each kept when the
 // checker gives it a signature for the value's type.
 var builtinNames = sync.OnceValue(func() []string {
-	src, err := std.Sources.ReadFile(builtinFile)
-	if err != nil {
-		return nil
-	}
-
-	f, _ := parser.Parse(token.NewFile(builtinFile, len(src)), src)
 	var names []string
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv != nil && !slices.Contains(names, fn.Name.Name) {
-			names = append(names, fn.Name.Name)
-		}
+	for key := range builtins().methods {
+		names = append(names, key[strings.LastIndex(key, keyDot)+len(keyDot):])
 	}
 
 	slices.Sort(names)
-	return names
+	return slices.Compact(names)
 })
 
 // A context is what the text holds at a place a completion asks about:

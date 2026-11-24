@@ -13,6 +13,15 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// A blankValue is the value a declaration gives the blank name, held
+// until every value of the declaration is made: the temporary that
+// holds it, its type and where the name stands.
+type blankValue struct {
+	place string
+	t     types.Type
+	pos   token.Pos
+}
+
 func (e *Emitter) stmts(list []ast.Stmt) {
 	for _, s := range list {
 		e.stmt(s)
@@ -90,7 +99,9 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 
 // declStmt writes var x T = v. A name that is never used gets a (void)
 // cast, as the C compiler is asked to treat an unused variable as an
-// error.
+// error. The blank name holds nothing: its value is made in its turn and
+// dropped once every value is made, as := drops its blank's, and with
+// no value there is nothing to drop.
 func (e *Emitter) declStmt(d *ast.VarDecl) {
 	if d.Const {
 		e.localConsts(d)
@@ -102,23 +113,42 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 		parts = e.spread(d.Values[0], len(d.Names))
 	}
 
+	var blanks []blankValue
 	for i, name := range d.Names {
-		v := e.info.Defs[name]
-		vt := e.sub(v.Type())
-		local := e.declareLocal(name)
-		decl := e.cType(vt, name.Pos()) + " " + local + " = "
+		vt := e.sub(e.info.Defs[name].Type())
+		blank := name.Name == "_"
+		var value string
 		switch {
 		case parts != nil:
-			decl += parts[i]
+			value = parts[i]
 		case i < len(d.Values):
-			decl += e.valueTo(d.Values[i], vt)
+			value = e.valueTo(d.Values[i], vt)
+		case blank:
+			continue
 		default:
-			decl += zeroValue
+			value = zeroValue
 		}
 
-		e.line(decl + ";")
+		if blank && !needsDrop(vt) {
+			e.line("(void)(" + value + ");")
+			continue
+		}
+
+		if blank {
+			tmp := e.temp()
+			e.line(e.cType(vt, name.Pos()) + " " + tmp + " = " + value + ";")
+			blanks = append(blanks, blankValue{tmp, vt, name.Pos()})
+			continue
+		}
+
+		local := e.declareLocal(name)
+		e.line(e.cType(vt, name.Pos()) + " " + local + " = " + value + ";")
 		e.discardUnused(name)
 		e.own(local, vt)
+	}
+
+	for _, b := range blanks {
+		e.line(e.dropOf(b.place, b.t, b.pos))
 	}
 }
 
@@ -150,10 +180,6 @@ func (e *Emitter) localConsts(d *ast.VarDecl) {
 
 // discardUnused writes (void)x for a declared name nothing refers to.
 func (e *Emitter) discardUnused(name *ast.Ident) {
-	if name.Name == "_" {
-		return
-	}
-
 	if v, ok := e.info.Defs[name].(*types.Var); ok && !e.used[v] {
 		e.line("(void)" + e.localName(v) + ";") // the name declareLocal gave it
 	}
@@ -393,12 +419,15 @@ func (e *Emitter) store(lhs ast.Expr, tok token.Kind, value string, t types.Type
 		}
 	}
 
-	place := e.lvalue(lhs)
-	if needsDrop(t) {
+	if needsDrop(t) || e.hasEffects(lhs) { // the value is made before the place is reached: a call the place is reached through runs at the store
 		tmp := e.temp()
 		e.line(e.cType(t, lhs.Pos()) + " " + tmp + " = " + value + ";")
-		e.line(e.dropOf(place, t, lhs.Pos()))
 		value = tmp
+	}
+
+	place := e.lvalue(lhs)
+	if needsDrop(t) {
+		e.line(e.dropOf(place, t, lhs.Pos()))
 	}
 
 	if value == place && !e.hasEffects(lhs) {

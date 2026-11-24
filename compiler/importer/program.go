@@ -208,11 +208,17 @@ func LoadProgramFrom(l Load, info *types.Info) (*Importer, *Program, error) {
 // is a module's root or under none; and otherwise under a library's
 // rules, named by its directory under the root, with the packages it
 // imports, since a library checked as a program would be refused its
-// binding to C. It is what the command and the language server both
-// check a directory with, so that the two agree on every package; o
-// says how the program is read.
+// binding to C. A standard package's directory in a checkout of the
+// compiler is checked as the library's package, with the library read
+// from the checkout. It is what the command and the language server
+// both check a directory with, so that the two agree on every package;
+// o says how the program is read.
 func CheckDir(dir string, info *types.Info, o Options) error {
 	o = o.withTarget()
+	if stdDir, path, ok := StdPackage(dir); ok {
+		return checkStd(stdDir, path, "", info, o)
+	}
+
 	names, err := SourceFiles(dir, o.Target)
 	if err != nil {
 		return err
@@ -233,10 +239,16 @@ func CheckDir(dir string, info *types.Info, o Options) error {
 // CheckTests checks the tests of the library package in dir as snello
 // test loads them, by path, the import path they are reached by: the
 // package's own, whose test files join it, or its external test
-// package's, NAME_test, which imports it; o says how the program is
-// read. An error keeps the file and position it names, so that the
-// language server reports it on the test file it is in.
+// package's, NAME_test, which imports it. The tests of a standard
+// package in a checkout of the compiler are checked with the library
+// read from the checkout. o says how the program is read. An error
+// keeps the file and position it names, so that the language server
+// reports it on the test file it is in.
 func CheckTests(dir, path string, info *types.Info, o Options) error {
+	if stdDir, _, ok := StdPackage(dir); ok {
+		return checkStd(stdDir, path, path, info, o.withTarget())
+	}
+
 	m, err := FindModule(dir)
 	if err != nil {
 		return err
@@ -342,6 +354,29 @@ func importIn(m *Module, path, tests string, info *types.Info, o Options) error 
 	imp := NewImporter(info)
 	imp.Module, imp.Target, imp.Read, imp.Parsed, imp.At, imp.Recovered, imp.Tests = m, o.Target, o.Read, o.Parsed, o.At, o.Recovered, tests
 	_, err := imp.ImportFrom(path, m.Dir)
+	return err
+}
+
+// checkStd checks the standard package at path with the library's
+// privileges, the whole library read from stdDir, the std/ directory of
+// a checkout of the compiler, as snello test std/NAME reads it; tests
+// is the path of the package whose test files join it, or "". The
+// package builtin is documentation the compiler's own tables answer
+// for, which nothing compiles and its tests hold to the checker, so it
+// has nothing to check; its test package is checked as any other.
+func checkStd(stdDir, path, tests string, info *types.Info, o Options) error {
+	if path == builtinPath {
+		return nil
+	}
+
+	imp := NewImporter(info)
+	imp.StdDir, imp.Tests = stdDir, tests
+	imp.Target, imp.Read, imp.Parsed, imp.At, imp.Recovered = o.Target, o.Read, o.Parsed, o.At, o.Recovered
+	_, err := imp.Import(path)
+	if ce, ok := errors.AsType[*compileError](err); ok && ce.path == path {
+		return ce.err // the package's own errors, as a check of its directory reports them
+	}
+
 	return err
 }
 

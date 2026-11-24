@@ -42,7 +42,12 @@ func (c *Checker) zeroDecl(d *ast.VarDecl, t Type) {
 	}
 
 	if filledByDefaults(t) {
-		c.errorf(d.Names[0].Pos(), "cannot declare "+d.Names[0].Name+" without a value: "+t.String()+" declares defaults, which a zero value would skip; write "+d.Names[0].Name+" := "+t.String()+"{}")
+		made := d.Names[0].Name + " := " + t.String() + "{}"
+		if isBlank(d.Names[0]) {
+			made = "_ = " + t.String() + "{}" // the blank declares nothing for := to make
+		}
+
+		c.errorf(d.Names[0].Pos(), "cannot declare "+d.Names[0].Name+" without a value: "+t.String()+" declares defaults, which a zero value would skip; write "+made)
 		return
 	}
 

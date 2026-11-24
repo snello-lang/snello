@@ -30,11 +30,13 @@ const (
 	indexPageTitle = "Snello Documentation"
 	overviewTitle  = "Overview"
 	topicsTitle    = "Topics"
+	formsTitle     = "Forms"
 	typesTitle     = "Types"
 	funcsTitle     = "Functions"
 	valuesTitle    = "Constants and variables"
 	overviewAnchor = "section-overview"
 	topicsAnchor   = "section-topics"
+	formsAnchor    = "section-forms"
 	typesAnchor    = "section-types"
 	funcsAnchor    = "section-functions"
 	valuesAnchor   = "section-values"
@@ -292,8 +294,13 @@ func (p *Package) WriteHTML(w io.Writer, nav Nav) error {
 		v.TOC = append(v.TOC, tocEntry{Text: overviewTitle, Href: anchorMark + overviewAnchor})
 	}
 
-	var types, funcs, values sectionView
-	var typeRows, funcRows, valueRows []Name
+	var forms, types, funcs, values sectionView
+	var formRows, typeRows, funcRows, valueRows []Name
+	for _, form := range p.Forms {
+		forms.Decls = append(forms.Decls, declView{Anchor: form.Name, Text: form.Written, Doc: p.blocks(form.Doc)})
+		formRows = append(formRows, Name{form.Written, PageHref(p.Path, form.Name), Synopsis(form.Doc), kindType})
+	}
+
 	for _, t := range p.Types {
 		var b strings.Builder
 		p.WriteTypeDecl(&b, t)
@@ -332,7 +339,7 @@ func (p *Package) WriteHTML(w io.Writer, nav Nav) error {
 		title, anchor string
 		rows          []Name
 		section       sectionView
-	}{{typesTitle, typesAnchor, typeRows, types}, {funcsTitle, funcsAnchor, funcRows, funcs}, {valuesTitle, valuesAnchor, valueRows, values}} {
+	}{{formsTitle, formsAnchor, formRows, forms}, {typesTitle, typesAnchor, typeRows, types}, {funcsTitle, funcsAnchor, funcRows, funcs}, {valuesTitle, valuesAnchor, valueRows, values}} {
 		if len(s.rows) == 0 {
 			continue
 		}

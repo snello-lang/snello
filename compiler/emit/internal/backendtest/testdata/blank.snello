@@ -1,0 +1,73 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The blank name in a function's var declarations holds nothing: its
+// value is made in its turn and dropped once every value of the
+// declaration is made, as _, x := f(), g() drops its blank's. A number,
+// typed and inferred; one a call computes; a string moved into it; one
+// of a pair, and one of a tuple taken apart; a value with a Drop. And a
+// value that borrows, whose borrow ends with the declaration: a ref of a
+// string moved after it, typed and inferred, a mut of a number changed
+// after it, a closure capturing a string moved after it, and a ref of a
+// temporary.
+package main
+
+import "fmt"
+
+struct Note impl Drop { name string }
+
+func (n mut Note) Drop() { fmt.Println("drop", n.name) }
+
+struct Lens { text ref string }
+
+struct Tally { count mut int }
+
+func count() int {
+	fmt.Println("counted")
+	return 3
+}
+
+func onHeap(s string) string { return fmt.Sprint(s, " made on the heap, long enough") }
+
+func note(name string) Note {
+	fmt.Println("make", name)
+	return Note{name: name}
+}
+
+func main() {
+	var _ = 5
+	var _ int = count()
+	s := "text"
+	var _ = s
+	var _, b = "x", true
+	var _ = Note{name: "blank"}
+	kept := Note{name: "kept"}
+
+	read := onHeap("read")
+	var _ = Lens{text: ref read}
+	moved := read
+	fmt.Println(moved)
+
+	typed := onHeap("typed")
+	var _ Lens = Lens{text: ref typed}
+	_ = typed
+
+	n := 1
+	var _ = Tally{count: mut n}
+	n += 10
+	fmt.Println("n", n)
+
+	captured := onHeap("captured")
+	var _ = func() { fmt.Println(captured) }
+	taken := captured
+	fmt.Println(taken)
+
+	var _ = Lens{text: ref onHeap("temporary")}
+	var _, two = Lens{text: ref moved}, 2
+	var _, pair = (Note{name: "tuple blank"}, Note{name: "tuple kept"})
+
+	var first, _, third = note("first"), note("second"), note("third")
+	_, defined := note("defined blank"), note("defined")
+	fmt.Println("end of main", b, kept.name, two, pair.name, first.name, third.name, defined.name)
+}

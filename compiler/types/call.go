@@ -331,7 +331,8 @@ func (s *Signature) variadicArg() (VariadicKind, Type) {
 // that call gave back what it lent, but its result still points into
 // the source, so two(a.Get(), clear(mut a)) would change a under the
 // borrow passed beside it. A variable holds its own borrow, and ref x
-// lends for the call already, in a tuple too: (mut j, 1) lends j once.
+// lends for the call already, in a tuple or a struct's literal too:
+// (mut j, 1) and Counter{count: mut j} lend j once.
 func (c *Checker) keepLent(arg ast.Expr, op operand) {
 	if op.mode == invalid {
 		return
@@ -348,6 +349,16 @@ func (c *Checker) keepLentIn(arg ast.Expr, mut bool) {
 		return
 	case *ast.TupleExpr:
 		for _, elt := range x.Elts {
+			c.keepLentIn(elt, mut)
+		}
+
+		return
+	case *ast.CompositeLit:
+		for _, elt := range x.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+
 			c.keepLentIn(elt, mut)
 		}
 

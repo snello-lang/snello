@@ -497,6 +497,39 @@ func TestReferencesFromStd(t *testing.T) {
 	n.shutdown()
 }
 
+// TestReferencesInStdCheckout asks, from a file of a standard package
+// of the checkout, for the references of a name another package of the
+// library exports: they reach its declaration and the packages of the
+// library that use it, and a rename of it is refused, since the
+// programs outside the checkout use it through the compiler's own copy.
+func TestReferencesInStdCheckout(t *testing.T) {
+	checkout, err := filepath.Abs(stdCheckoutDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := navigateIn(t, protocol.ClientCapabilities{}, checkout, "deque/deque.snello")
+	at := place{"deque/deque.snello", "fmt.", "Sprint(v)"}
+	var refs []protocol.Location
+	n.decode(n.call(protocol.MethodReferences, protocol.ReferenceParams{TextDocumentPositionParams: n.params(at), Context: protocol.ReferenceContext{IncludeDeclaration: true}}), &refs)
+	packages := map[string]bool{}
+	for _, r := range refs {
+		packages[filepath.Base(filepath.Dir(pathOf(r.URI)))] = true
+	}
+
+	for _, want := range []string{"fmt", "deque", "set"} {
+		if !packages[want] {
+			t.Errorf("Sprint's references reach no file of %s: %+v", want, refs)
+		}
+	}
+
+	if m := n.call(protocol.MethodRename, protocol.RenameParams{TextDocumentPositionParams: n.params(at), NewName: "Sprint2"}); m.Error == nil || !strings.Contains(m.Error.Message, "Sprint is exported by the standard library") {
+		t.Errorf("a rename of Sprint from the checkout: %+v, want a refusal", m.Error)
+	}
+
+	n.shutdown()
+}
+
 // TestNames reads a file's imports from its tokens, finds a name among
 // its tokens, renames a whole word of a message and no part of one,
 // tells a name from a keyword and from no name, and checks a package

@@ -489,6 +489,8 @@ func (e *Emitter) payloads(u *types.Enum, tag value, pos token.Pos, f func(i int
 // operator for numbers and booleans, the runtime for strings, and a
 // generated function for anything composite.
 func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) value {
+	a, _ = e.keyTarget(a, t, "Eq")
+	b, t = e.keyTarget(b, t, "Eq")
 	t = lower.ValueType(t)
 	if n, ok := t.(*types.Named); ok && written(n, "Eq") { // the type says how; a derived Eq is the comparison of the parts below
 		name, _ := e.methodNameOf(nil, n, "Eq", pos)
@@ -515,6 +517,27 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) value {
 	}
 
 	return e.op("call i1 @"+e.comparer(t, pos)+"(ptr "+a+", ptr "+b+")", "i1")
+}
+
+// keyTarget reads a value of a pointer type at the address p down to
+// what it points at, and returns its address and type: a pointer
+// compares and hashes as its target, which is what equal pointers
+// share, so its type is read through before it is stripped to the
+// value's. A declared type that wrote the method, named by method, says
+// how itself, and is returned as it is, as is any other value.
+func (e *Emitter) keyTarget(p string, t types.Type, method string) (string, types.Type) {
+	for {
+		if n, ok := t.(*types.Named); ok && written(n, method) {
+			return p, t
+		}
+
+		u, ok := t.Underlying().(*types.Pointer)
+		if !ok {
+			return p, t
+		}
+
+		p, t = e.deref(e.load("ptr", p)).s, u.Elem()
+	}
 }
 
 // comparer returns the name of the function comparing two values of a
@@ -582,8 +605,10 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 			for i := 0; i < u.Len(); i++ {
 				same(e.gep(ir, "%a", i), e.gep(ir, "%b", i), u.At(i))
 			}
-		case *types.Pointer:
-			same(e.deref(e.load("ptr", "%a")).s, e.deref(e.load("ptr", "%b")).s, u.Elem())
+		case *types.Pointer: // a declared type over a pointer, whose derived Eq compares the targets
+			a, _ := e.keyTarget("%a", t, "Eq")
+			b, target := e.keyTarget("%b", t, "Eq")
+			same(a, b, target)
 		case *types.Slice:
 			na, nb := e.load("i64", e.gep(ir, "%a", 1)), e.load("i64", e.gep(ir, "%b", 1))
 			lens := e.block("lens")
@@ -613,9 +638,11 @@ func (e *Emitter) comparer(t types.Type, pos token.Pos) string {
 
 // hash writes the hash of the value of key type t at the address p:
 // the Hash method of a type that wrote one, the bytes of a string, the
-// value of a number, and a mix of the parts for a tuple, struct,
-// option or enum, which is also what a derived Hash means.
+// value of a number, a mix of the parts for a tuple, struct, option or
+// enum, which is also what a derived Hash means, and for a pointer the
+// hash of what it points at, which is what equal pointers share.
 func (e *Emitter) hash(p string, t types.Type, pos token.Pos) value {
+	p, t = e.keyTarget(p, t, "Hash")
 	t = lower.ValueType(t)
 	if n, ok := t.(*types.Named); ok && written(n, "Hash") {
 		name, _ := e.methodNameOf(nil, n, "Hash", pos)
@@ -649,6 +676,9 @@ func (e *Emitter) hashParts(p string, t types.Type, pos token.Pos) value {
 		return e.mix(value{"i64", "0"}, e.widen(e.load(ir, p), false))
 	case *types.Chan: // the channel it is a handle on
 		return e.mix(value{"i64", "0"}, e.op("ptrtoint ptr "+e.load("ptr", p).s+" to i64", "i64"))
+	case *types.Pointer: // a declared type over a pointer, whose derived Hash is its target's
+		target, tt := e.keyTarget(p, u, "Hash")
+		return e.hash(target, tt, pos)
 	case *types.Option:
 		has, val := e.optionParts(ir, p, u)
 		some, done := e.block("some"), e.block("hashed")
