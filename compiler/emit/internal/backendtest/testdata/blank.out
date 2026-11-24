@@ -1,0 +1,19 @@
+counted
+drop blank
+read made on the heap, long enough
+n 11
+captured made on the heap, long enough
+drop tuple blank
+make first
+make second
+make third
+drop second
+make defined blank
+make defined
+drop defined blank
+end of main true kept 2 tuple kept first third defined
+drop defined
+drop third
+drop first
+drop tuple kept
+drop kept

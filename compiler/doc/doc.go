@@ -50,9 +50,17 @@ const (
 )
 
 // builtinForms are the forms the builtin package documents, each by its
-// name and the text its comment begins with: the types, the operators,
-// and every keyword, by itself.
-var builtinForms = []struct{ name, written string }{
+// name and the text its comment begins with: the types and the
+// operators, every keyword, by itself, as the scanner knows them, the
+// blank name and a match arm's pattern.
+var builtinForms = slices.Concat(typeForms, keywordForms(), []builtinForm{
+	{FormBlank, "_"},
+	{FormPattern, "pattern"},
+})
+
+// typeForms are the forms of the types and the operators, which a
+// keyword's own form, map or ref, does not repeat.
+var typeForms = []builtinForm{
 	{FormSlice, "[]T"},
 	{FormArray, "[N]T"},
 	{FormMap, "map[K]V"},
@@ -66,34 +74,6 @@ var builtinForms = []struct{ name, written string }{
 	{FormReceive, "<-ch"},
 	{FormVariadic, "xs ...T"},
 	{FormAttribute, "@A"},
-	{"package", "package"},
-	{"import", "import"},
-	{"const", "const"},
-	{"var", "var"},
-	{"type", "type"},
-	{"struct", "struct"},
-	{"enum", "enum"},
-	{"trait", "trait"},
-	{"impl", "impl"},
-	{"Self", "Self"},
-	{"super", "super"},
-	{"func", "func"},
-	{"return", "return"},
-	{"if", "if"},
-	{"else", "else"},
-	{FormMatch, "match"},
-	{"for", "for"},
-	{"range", "range"},
-	{"break", "break"},
-	{"continue", "continue"},
-	{"spawn", "spawn"},
-	{"defer", "defer"},
-	{"select", "select"},
-	{"case", "case"},
-	{"default", "default"},
-	{"switch", "switch"},
-	{FormBlank, "_"},
-	{FormPattern, "pattern"},
 }
 
 // A Source is a package as loaded for its documentation.
@@ -141,6 +121,10 @@ type Package struct {
 	decls   map[string]ast.Decl        // every top-level name, shown or not
 	members map[string]map[string]bool // every member of each type: its fields, variants, methods and functions of the type
 }
+
+// A builtinForm is a form the builtin package documents: the name it is
+// asked for by, and the text its comment begins with.
+type builtinForm struct{ name, written string }
 
 // A Form is a type or a borrow the language writes with its own
 // syntax, map[K]V or ref T, which no declaration can name, as the
@@ -366,8 +350,7 @@ func Forms(f *ast.File) []*Form {
 		text := g.Text()
 		for _, form := range builtinForms {
 			if begins(text, form.written) {
-				at := strings.Index(g.List[0].Text, form.written) // where the comment's text begins, after its marks
-				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: g.List[0].Slash + token.Pos(at)})
+				forms = append(forms, &Form{Name: form.name, Written: form.written, Doc: text, Pos: formPos(g, form.written)})
 			}
 		}
 	}
@@ -526,6 +509,33 @@ func made(r ast.Type) string {
 	}
 
 	return ""
+}
+
+// keywordForms returns a form for each keyword, named and written as
+// the keyword itself, in the order of the keywords' kinds, but for one
+// a type's form is named by already, map or ref.
+func keywordForms() []builtinForm {
+	var forms []builtinForm
+	for _, word := range token.Keywords() {
+		if !slices.ContainsFunc(typeForms, func(f builtinForm) bool { return f.name == word }) {
+			forms = append(forms, builtinForm{word, word})
+		}
+	}
+
+	return forms
+}
+
+// formPos returns where the comment group g writes the form its text
+// begins with: in the first of its comments that holds it, after its
+// marks and any blank comment line before it.
+func formPos(g *ast.CommentGroup, written string) token.Pos {
+	for _, c := range g.List {
+		if at := strings.Index(c.Text, written); at >= 0 {
+			return c.Slash + token.Pos(at)
+		}
+	}
+
+	return g.Pos()
 }
 
 // begins reports whether text begins with the form written, as a word:

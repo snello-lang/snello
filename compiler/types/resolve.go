@@ -74,6 +74,7 @@ func (c *Checker) collectDecls(f *ast.File) {
 		case *ast.TraitDecl:
 			c.objs[i] = c.collectTrait(d)
 		case *ast.VarDecl:
+			c.refuseBlankGlobal(d)
 			c.declareVars(c.pkg.scope, d, nil)
 		}
 	}
@@ -140,20 +141,39 @@ func (c *Checker) openTypeParams(names []*ast.Ident, tparams []*TypeParam) *Scop
 	return scope
 }
 
+// refuseBlankGlobal refuses a package variable named _, which nothing
+// can use: one whose value a call computes is made on first use, so the
+// call would never run, and one with a literal would be memory read by
+// none. A blank constant is a value checked and kept by none.
+func (c *Checker) refuseBlankGlobal(d *ast.VarDecl) {
+	for _, name := range d.Names {
+		if !d.Const && isBlank(name) {
+			c.errorf(name.Pos(), "a package variable cannot be named _: nothing could ever use it")
+		}
+	}
+}
+
 // declareVars declares the names of a var or const declaration with
 // type t, which is nil when the type is declared later (a top-level
-// declaration) or inferred (the expression checker's job). A constant
-// is given its value when its declaration is checked.
-func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) {
-	for _, name := range d.Names {
+// declaration) or inferred (the expression checker's job), and returns
+// the objects, one for each name, the blank name's among them, which
+// the scope does not hold. A constant is given its value when its
+// declaration is checked.
+func (c *Checker) declareVars(scope *Scope, d *ast.VarDecl, t Type) []Object {
+	objs := make([]Object, len(d.Names))
+	for i, name := range d.Names {
 		if d.Const {
-			c.declare(scope, name, NewConst(name.Pos(), name.Name, t, Constant{}))
+			objs[i] = NewConst(name.Pos(), name.Name, t, Constant{})
 		} else {
 			v := NewVar(name.Pos(), name.Name, t)
 			v.global = scope == c.pkg.scope // its type is checked for Send in initializersOf, once every type is complete
-			c.declare(scope, name, v)
+			objs[i] = v
 		}
+
+		c.declare(scope, name, objs[i])
 	}
+
+	return objs
 }
 
 // globalType refuses a package variable whose type cannot be shared

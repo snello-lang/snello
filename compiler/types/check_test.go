@@ -281,6 +281,10 @@ var handledErrors = map[string]bool{
 	"generic-mut-takes-borrow.snello": true,
 	"borrow-into-itself.snello":       true,
 	"borrow-of-itself.snello":         true,
+	// A package variable is made on first use, so one named _ is refused.
+	"blank-package-var.snello": true,
+	// The blank name drops a guard as it is made.
+	"blank-guard.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

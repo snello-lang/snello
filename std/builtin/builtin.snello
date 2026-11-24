@@ -247,12 +247,14 @@ enum Ordering {
 // @A, after what it is about, attaches the attribute A to it: a
 // constant of a type that lists Attribute, after a field's type and
 // default, Port int = 8080 @Usage("the port"), after a variant, or after
-// a struct's or enum's impl list. A function that reflects on the type
-// at compile time reads it: encoding/json's @json.Name("port").
+// a struct's or an enum's name, its type parameters and what it lists,
+// before its body. A function that reflects on the type at compile time
+// reads it: encoding/json's @json.Name("port").
 
 // package begins every file, package name: the package the file is a
-// part of. A directory is one package, its files every .snello file in
-// it, and the package main is a program, whose func main runs.
+// part of. A directory is one package, of its .snello files those a
+// build for the platform chooses by their names, its test files when it
+// is tested, and the package main is a program, whose func main runs.
 
 // import names the packages a file uses, by their paths: import "fmt",
 // or several, import ("fmt"; "os"). A path names a package of the
@@ -266,9 +268,15 @@ enum Ordering {
 // The compiler refuses one its type cannot hold, and a package's
 // constants may be declared in any order.
 
-// var declares variables with a type written out, var x, y int = 1, 2,
-// and one declared without a value starts at its type's zero value. :=
-// declares one and infers its type from the value.
+// var declares variables with a type written out, var x, y int = 1, 2.
+// One declared without a value starts at its type's zero value. A type
+// that must always hold something has none: a pointer, a borrow, a
+// function, a channel, a type with a Drop, and an array, a tuple or a
+// struct that holds one of these, where a slice or a map of them starts
+// empty; a variable of it is declared with its value, or as an option,
+// var p *int?. A struct with field defaults is made with them, T{},
+// and not declared without a value.
+// := declares one and infers its type from the value.
 
 // type Name T declares a new type whose values are made as T's are but
 // which is a type of its own: a value of one is not one of the other,
@@ -293,17 +301,20 @@ enum Ordering {
 // implements it, and as a bound, T: Shape, it says what a type
 // parameter can do.
 
-// impl, after a type's name in its declaration, lists the traits the
-// type implements: struct Circle impl Shape { r f64 }. A type implements
-// exactly the traits it lists, and the compiler checks that it has
-// every method each requires, with the signature the trait gives it.
+// impl, in a type's declaration, lists the traits the type implements,
+// after its name and its type parameters, or after the type it is
+// declared over: struct Circle impl Shape { r f64 }, type Celsius f64
+// impl fmt.Stringer. A type implements exactly the traits it lists, and
+// the compiler checks that it has every method each requires, with the
+// signature the trait gives it.
 
 // Self, inside a trait, stands for whatever type implements it: func
 // (s ref Self) Area() f64.
 
-// super.M(args), inside a trait's method, calls the next definition of
-// M in the resolution order with the method's own receiver: an override
-// that adds to the method it replaces rather than starting over.
+// super.M(args), inside a method, a trait's or a type's own, calls the
+// next definition of M in the resolution order with the method's own
+// receiver: an override that adds to the method it replaces rather than
+// starting over.
 
 // func declares a function: its parameters, each a name and a type, ref
 // or mut before the type for a borrow, and its results. A method has a
@@ -328,7 +339,11 @@ enum Ordering {
 // variant's pattern binding its fields to new names. A match is
 // exhaustive: one that misses a case, with no _ arm, does not compile.
 // Written with no value, match { cond => body }, it runs the first arm
-// whose condition holds. It is an expression when every arm yields a
+// whose condition holds. On a type parameter, match T { int => ...,
+// struct => ..., _ => ... }, it chooses an arm by the type, the first
+// that fits, when the function is compiled for one; its arms need not
+// cover every type, and a type no arm takes is refused where the
+// function is used with it. It is an expression when every arm yields a
 // value.
 
 // for loops: for { forever, for cond { while a condition holds, for i :=
@@ -339,7 +354,10 @@ enum Ordering {
 // indexes and elements, for k, v := range m a map's keys and values in
 // the order they were inserted, for i, r := range s a string's runes,
 // for x := range ch the values received from a channel until it ends,
-// and any value with a Next method, an iterator.
+// any value with a Next method, an iterator, and in a match on a type
+// parameter T, in its arm struct, for f := range fields(T) a struct's
+// fields, and in its arm enum, variants(T) an enum's variants, written
+// out once for each.
 
 // break ends the innermost loop, wherever it stands inside it: a match
 // or a select is not a loop and does not catch it.
@@ -379,17 +397,27 @@ enum Ordering {
 // statement. match does its work, on a value or, written with no value,
 // on conditions.
 
-// _ is the blank name: a value assigned to it is dropped there, _ = conn
-// drops conn; a name declared as it binds nothing; and as a pattern it
-// matches anything and binds nothing, the arm a match that covers no
-// other case ends with.
+// _ is the blank name: a value given to it is dropped there, _ = conn
+// drops conn, and so is a value declared as it, var _ = conn or
+// _, n := pair(), once the statement's values are made, since it binds
+// nothing, so a value that is to live to the end of its scope is given
+// a name; a value made there whose Drop ends what it borrows, a lock's
+// guard, var _ = m.Lock(), is refused, since it would end as it begins,
+// and a guard is ended early by dropping its variable, _ = g; a package
+// variable cannot be named it, since one is made on first use and
+// nothing can use it; and as a pattern it matches anything and binds
+// nothing, the arm a match that covers no other case ends with.
 
 // pattern, in a match arm, says which values the arm takes: a literal,
 // '+'; a range, both ends included, '0'..='9'; a variant, binding its
-// fields, Connecting(n); a name, which matches anything and binds it; _,
-// which binds nothing; a tuple, each element against its pattern;
-// alternatives, Plus | Minus, any of them; and a guard after any of
-// these, Connecting(n) if n < 3, the pattern and then a condition.
+// fields, Connecting(n), or with none, Closed; any other name, which
+// matches anything and binds it; _, which binds nothing; a tuple, each
+// element against its pattern; alternatives, Plus | Minus, any of
+// them; and a guard after any of these, Connecting(n) if n < 3, the
+// pattern and then a condition. In a match on a type, an arm is a type,
+// int or Point, a form of one, []E or E?, alternatives, i8 | i16, a
+// trait, any type that implements it, or a kind, struct or enum, and
+// takes no guard, since a type is matched by what it is.
 
 // Copy marks a type whose values are copied on assignment and when
 // passed, rather than moved: the numbers, bool, a struct or enum that

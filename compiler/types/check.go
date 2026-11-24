@@ -175,12 +175,15 @@ type Checker struct {
 	// checked, which holds the borrows its variables hold and is solved
 	// at the body's end, with the graphs kept for reuse; and the borrows
 	// lent for the call or statement being checked.
-	flow      *flow
-	pinned    map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
-	deferring *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
-	deferSig  *Signature
-	temps     []borrow
-	depth     int // of expression nesting; a lent borrow ends with the full expression
+	flow        *flow
+	pinned      map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
+	deferring   *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
+	deferSig    *Signature
+	temps       []borrow
+	depth       int          // of expression nesting; a lent borrow ends with the full expression
+	movedValues []ast.Expr   // the values of a statement of several whose moves are recorded where each was checked (values)
+	typingPlace bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
+	heldAccess  []heldAccess // the accesses held, in their order (replay)
 
 	// The keeping pass (keep.go): the function a call's arguments are
 	// checked for, and what is decided at the package's end.

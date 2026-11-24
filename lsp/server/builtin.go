@@ -25,8 +25,8 @@ import (
 // and typeKind name them; integerKind, the integer type whose comment
 // documents the methods every integer type has; keyDot, which joins a
 // receiver's kind to a method's name in a key of the index; optionName,
-// the enum T? is written for; and negTrait, the trait a minus before a
-// value is behind.
+// the enum T? is written for, and optionMark the mark it is written
+// with; and negTrait, the trait a minus before a value is behind.
 const (
 	builtinFile = "builtin/builtin.snello"
 	sliceKind   = "[]T"
@@ -42,6 +42,7 @@ const (
 	keyDot      = "."
 	optionName  = "Option"
 	negTrait    = "Neg"
+	optionMark  = "?"
 )
 
 // builtinOperators are the forms the operators the declarations of
@@ -254,7 +255,7 @@ func builtinAt(src []byte, offset int) (builtinDecl, bool) {
 		word = name
 	}
 
-	if word == optionKind[len(optionKind)-1:] {
+	if word == optionMark {
 		d, ok := index.names[optionName]
 		return d, ok
 	}
@@ -265,7 +266,7 @@ func builtinAt(src []byte, offset int) (builtinDecl, bool) {
 
 // isBuiltinFile reports whether path is builtinFile: the one in a
 // checkout of the compiler, std/builtin/builtin.snello, or a copy of it
-// in the cache, for any version of the compiler. Neither is checked, since
+// in the cache, for any version of the compiler. None is checked, since
 // nothing compiles it, so its places are answered from its text.
 func isBuiltinFile(path string) bool {
 	if filepath.Base(path) != filepath.Base(builtinFile) {

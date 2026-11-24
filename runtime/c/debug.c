@@ -142,13 +142,13 @@ SN_HELD void sn_check_block(const void *p, const char *what) {
 // sn_deref checks an owned pointer before the program reads through
 // it: a null is a pointer whose value moved away, a poisoned one was
 // released.
-SN_HELD void *sn_deref(void *p) {
+SN_HELD void *sn_deref(const void *p) {
     if (p == NULL) {
         sn_panic(SN_STR("a moved pointer was used", 24));
     }
 
     sn_check_block(p, "pointer");
-    return p;
+    return (void *)p;
 }
 
 // check_at_exit is the debug build's end of the program: what a task

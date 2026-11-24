@@ -230,11 +230,10 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 		}
 	}
 
-	wasInner, wantType := c.inner, c.wantType
-	c.inner = isPlaceChain(e.X) // the whole selector is the use, checked below
-	c.wantType = unparen(e.X)   // Point.Parse: a type before a function of it
-	x := c.expr(e.X, nil)
-	c.inner, c.wantType = wasInner, wantType
+	wantType := c.wantType
+	c.wantType = unparen(e.X) // Point.Parse: a type before a function of it
+	x := c.base(e.X)
+	c.wantType = wantType
 	if x.mode == invalid {
 		return invalidOperand
 	}
@@ -636,11 +635,25 @@ func (c *Checker) member(pkg *PkgName, sel *ast.Ident) Object {
 	return obj
 }
 
-func (c *Checker) index(e *ast.IndexExpr) operand {
+// base evaluates what a selector or an index reaches into: a chain of
+// places, whose whole is the use its reader checks, or a value made
+// there, a call, which is read for its value as the pointer under *p is,
+// whatever place the whole is part of.
+func (c *Checker) base(x ast.Expr) operand {
+	if !isPlaceChain(x) {
+		return c.operandOf(x, nil)
+	}
+
 	wasInner := c.inner
-	c.inner = isPlaceChain(e.X) // the whole index is the use, checked below
-	x := c.expr(e.X, nil)
+	c.inner = true
+	op := c.expr(x, nil)
 	c.inner = wasInner
+	return op
+}
+
+func (c *Checker) index(e *ast.IndexExpr) operand {
+	wasInner := c.inner // the index is itself reached into, m[k].f
+	x := c.base(e.X)
 	if x.mode == invalid {
 		return invalidOperand
 	}
@@ -658,13 +671,16 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 		c.markPart(e, e.X, x)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
-		if c.noUse { // m[k] = v: the map keeps the key
-			c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+		if c.noUse { // m[k] = v: the map keeps the key, taken as it is evaluated, before the value
+			typing := c.typingPlace
+			c.typingPlace = false
+			c.assign(c.indexOperand(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+			c.typingPlace = typing
 			if wasInner { // m[k].f = v writes part of an entry a missing key makes whole from the zero value
 				c.zeroWrite(e, t)
 			}
 		} else {
-			c.fits(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+			c.fits(c.indexOperand(e.Index, t.key), t.key, e.Index.Pos(), "map key")
 			c.zeroRead(e, t)
 		}
 
@@ -687,7 +703,7 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 // intIndex checks an index expression, which may be of any integer
 // type, including a declared one such as NodeID.
 func (c *Checker) intIndex(e ast.Expr) {
-	op := c.operandOf(e, Typ[Int])
+	op := c.indexOperand(e, Typ[Int])
 	if op.mode != invalid && !hasInfo(valueType(op), IsInteger) {
 		c.errorf(e.Pos(), "index must be an integer, not "+op.typ.String())
 	}
@@ -1268,8 +1284,8 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	c.sig, c.regions, c.dead = sig, nil, false
 	c.enclosing = append(c.enclosing, outer) // a parameter of the function around the closure may be kept from inside it
 	c.closures = append(c.closures, closure{pos: e.Pos()})
-	temps := c.temps
-	c.temps = nil // the body runs when the closure is called, not while the call around it is lending
+	temps, typing := c.temps, c.typingPlace
+	c.temps, c.typingPlace = nil, false // the body runs when the closure is called, not while the call around it is lending, nor where the place around it is stored
 	mark := len(c.moved)
 	c.floors = append(c.floors, floor{mark: mark})
 	outerFlow := c.flow
@@ -1282,7 +1298,7 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	c.flow = outerFlow
 	c.floors = c.floors[:len(c.floors)-1]
 	c.moved = appendMoves(c.moved[:mark], c.moved[mark:]) // the body may never run: its moves count, as the captures do, but what it gives back does not
-	c.temps = temps
+	c.temps, c.typingPlace = temps, typing
 	if caps := c.closures[len(c.closures)-1].captures; caps != nil {
 		if c.captured == nil {
 			c.captured = make(map[*ast.FuncLit][]capture)

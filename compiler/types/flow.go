@@ -137,6 +137,13 @@ type flowError struct {
 // A bitset is a set of small integers.
 type bitset []uint64
 
+// A loopSpan is the blocks of a loop: from its head, where each pass
+// begins, to the block after the loop, which is not in it, and the
+// block a pass ends in, a for's post statement, made before the body's
+// blocks though it runs after them. Blocks are made in the order of the
+// source, so a loop's are consecutive.
+type loopSpan struct{ head, cont, exit int }
+
 // A flow is the graph of one function's or closure's body.
 type flow struct {
 	blocks    []flowBlock
@@ -156,9 +163,8 @@ type flow struct {
 	parent    *flow         // for a closure's body, the graph of the body it is written in
 	ends      []int         // the ends of the branches of the open forks
 	breaks    []int         // the breaks of the open loops
-	aside     []flowEvent   // the events of an assignment's target, which take effect after its value
-	asiding   int
-	outer     token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
+	loops     []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
+	outer     token.Pos     // for a closure's body, where the closure begins: a variable declared before it may be used after the body
 	seq       int
 	back      bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
 	vars      map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
@@ -193,7 +199,7 @@ func (c *Checker) newFlow(outer token.Pos) *flow {
 func (c *Checker) freeFlow(f *flow) {
 	f.blocks = f.blocks[:0]
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
-	f.ends, f.breaks, f.aside, f.asiding, f.seq = f.ends[:0], f.breaks[:0], f.aside[:0], 0, 0
+	f.ends, f.breaks, f.loops, f.seq = f.ends[:0], f.breaks[:0], f.loops[:0], 0
 	f.deferred, f.parent, f.fnScope, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, nil, false
 	f.temps, f.temporary = f.temps[:0], nil
 	flows.Put(f)
@@ -225,17 +231,17 @@ func (f *flow) edge(from, to int) {
 	}
 }
 
-// add records an event in the current block, or aside while the target
-// of an assignment is checked. Nothing is recorded where control cannot
-// reach.
+// flowAdd records an event in the current block, or holds it while the
+// place an assignment writes is typed. Nothing is recorded where
+// control cannot reach.
 func (c *Checker) flowAdd(ev flowEvent) {
 	f := c.flow
 	if f == nil || c.dead {
 		return
 	}
 
-	if f.asiding > 0 {
-		f.aside = append(f.aside, ev)
+	if c.typingPlace { // the place an assignment writes is reached at the store: its events wait there (replay)
+		c.heldAccess = append(c.heldAccess, heldAccess{held: eventHeld, ev: ev})
 		return
 	}
 
@@ -537,39 +543,6 @@ func (c *Checker) dropScopes(floor *Scope, pos token.Pos, why dropWhy) {
 	}
 }
 
-// setAside starts setting the events recorded aside: an assignment's
-// target is checked before its value, but takes effect after it.
-func (c *Checker) setAside() int {
-	if c.flow == nil {
-		return 0
-	}
-
-	c.flow.asiding++
-	return len(c.flow.aside)
-}
-
-// endAside stops setting events aside; putAside records those set aside
-// since mark, once the value is checked.
-func (c *Checker) endAside() {
-	if c.flow != nil {
-		c.flow.asiding--
-	}
-}
-
-func (c *Checker) putAside(mark int) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	if !c.dead {
-		b := &f.blocks[f.cur]
-		b.events = append(b.events, f.aside[mark:]...)
-	}
-
-	f.aside = f.aside[:mark]
-}
-
 // flowFork starts the branches of a fork: each begins at the block the
 // fork is made in.
 func (c *Checker) flowFork(fk *fork) {
@@ -578,23 +551,47 @@ func (c *Checker) flowFork(fk *fork) {
 		return
 	}
 
-	fk.from, fk.base = f.cur, len(f.ends)
+	fk.from, fk.base, fk.held = f.cur, len(f.ends), len(c.heldAccess)
 	f.cur = f.newBlock(fk.from)
 }
 
 // flowBranchEnd ends one branch of a fork: it reaches the join unless
-// it left.
+// it left. A branch that leaves inside the place of an assignment never
+// reaches the store, so the events held for it, the drops of what it
+// leaves among them, are its own block's, recorded now.
 func (c *Checker) flowBranchEnd(fk *fork) {
 	f := c.flow
 	if f == nil {
 		return
 	}
 
-	if !c.dead {
+	if c.dead {
+		c.recordHeldEvents(fk.held)
+	} else {
 		f.ends = append(f.ends, f.cur)
 	}
 
 	f.cur = f.newBlock(fk.from)
+	fk.held = len(c.heldAccess)
+}
+
+// recordHeldEvents records the graph's events held from from on in the
+// current block, and keeps the rest held: the checks and accesses of
+// the place, which the store makes.
+func (c *Checker) recordHeldEvents(from int) {
+	f := c.flow
+	kept := c.heldAccess[:from]
+	for _, h := range c.heldAccess[from:] {
+		if h.held == eventHeld {
+			b := &f.blocks[f.cur]
+			b.events = append(b.events, h.ev)
+			continue
+		}
+
+		kept = append(kept, h)
+	}
+
+	c.heldAccess = kept
 }
 
 // flowJoin joins the branches of a fork; when they do not cover every
@@ -640,6 +637,7 @@ func (c *Checker) flowLoopEnd(r *region) {
 	}
 
 	exit := f.newBlock(f.breaks[r.base:]...)
+	f.loops = append(f.loops, loopSpan{r.head, r.cont, exit})
 	f.breaks = f.breaks[:r.base]
 	if !r.infinite {
 		f.edge(r.test, exit)
@@ -1339,9 +1337,12 @@ func (c *Checker) holderText(b *borrow) string {
 }
 
 // useText writes the use that keeps the loan b live, found from the
-// event ei of block bi, for a message about something at pos.
-func (c *Checker) useText(b *borrow, bi, ei int, pos token.Pos) string {
-	use, drop := c.findUse(b, bi, ei)
+// event ei of block bi, for a message: one reached by coming back round
+// a loop is in its next pass, wherever it stands in the source, and one
+// reached straight on is not, though it stands before, as the place an
+// assignment writes, reached after its value.
+func (c *Checker) useText(b *borrow, bi, ei int) string {
+	use, drop, again := c.findUse(b, bi, ei)
 	switch {
 	case slices.Contains(c.flow.deferred, b.holder):
 		return ", and the deferred call runs when the function returns"
@@ -1351,7 +1352,7 @@ func (c *Checker) useText(b *borrow, bi, ei int, pos token.Pos) string {
 		return ""
 	case drop:
 		return ", used when " + b.holder.name + " is dropped at " + c.lineCol(use) + ", by its Drop"
-	case use < pos:
+	case again:
 		return ", used in the next pass of the loop at " + c.lineCol(use)
 	}
 
@@ -1368,7 +1369,7 @@ func (c *Checker) checkAccess(a *flowAccess, in, live bitset, bi, ei int) {
 			return true
 		}
 
-		f.errs = append(f.errs, flowError{seq: a.seq, pos: a.pos, msg: c.collision(a.e, a.p, a.what, b) + c.useText(b, bi, ei, a.pos), access: true})
+		f.errs = append(f.errs, flowError{seq: a.seq, pos: a.pos, msg: c.collision(a.e, a.p, a.what, b) + c.useText(b, bi, ei), access: true})
 		return false
 	})
 }
@@ -1393,7 +1394,7 @@ func (c *Checker) checkDrop(d *flowDrop, in, live bitset, reported bitset, bi, e
 
 		reported.set(li)
 		msg := "cannot keep a borrow of " + d.v.name + " in " + c.holderText(b) + ": " + d.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)
-		f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: msg + c.useText(b, bi, ei, d.pos)})
+		f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: msg + c.useText(b, bi, ei)})
 		return true
 	})
 }
@@ -1408,24 +1409,31 @@ func (c *Checker) loanLive(li int, live bitset) bool {
 
 // findUse finds the first use of the loan b's holder that some path
 // from just after the event ei of block bi reaches before the holder
-// is given another value or dropped, and whether it is the holder's
-// Drop; none for a range loop, whose use is its next pass. It runs only
-// for a message.
-func (c *Checker) findUse(b *borrow, bi, ei int) (token.Pos, bool) {
+// is given another value or dropped, whether it is the holder's Drop,
+// and whether it is in a loop's next pass; none for a range loop, whose
+// use is its next pass. It runs only for a message.
+func (c *Checker) findUse(b *borrow, bi, ei int) (token.Pos, bool, bool) {
 	if b.loop {
-		return token.NoPos, false
+		return token.NoPos, false, false
 	}
 
 	return c.firstUse(b.holder, bi, ei)
 }
 
 // firstUse finds the first use of v some path from just after the event
-// ei of block bi reaches before v is given another value or dropped.
-func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool) {
+// ei of block bi reaches before v is given another value or dropped,
+// whether it is the drop, and whether it is in a loop's next pass: the
+// path came back round a loop, to a block made no later than the one it
+// left, and the use is among that loop's blocks. A use after the loop,
+// or in the pass of an outer loop, is reached straight on.
+func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 	f := c.flow
 	seen := make([]bool, len(f.blocks))
-	type at struct{ block, from int }
-	queue := []at{{bi, ei + 1}}
+	type at struct {
+		block, from int
+		loop        int // the loop the path last came back round, or -1
+	}
+	queue := []at{{bi, ei + 1, -1}}
 	for len(queue) > 0 {
 		q := queue[0]
 		queue = queue[1:]
@@ -1438,9 +1446,9 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool) {
 
 			switch {
 			case ev.kind == evUse:
-				return ev.pos, false
+				return ev.pos, false, f.inLoop(q.loop, q.block)
 			case ev.kind == evDrop && f.drops[ev.i].runs:
-				return f.drops[ev.i].pos, true
+				return f.drops[ev.i].pos, true, f.inLoop(q.loop, q.block)
 			case ev.kind == evDrop, ev.kind == evAssign && ev.path == "":
 				stop = true
 			}
@@ -1457,10 +1465,38 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool) {
 		for _, s := range blk.succs {
 			if !seen[s] {
 				seen[s] = true
-				queue = append(queue, at{s, 0})
+				loop := q.loop
+				if s <= q.block {
+					loop = f.loopAround(s, q.block)
+				}
+
+				queue = append(queue, at{s, 0, loop})
 			}
 		}
 	}
 
-	return token.NoPos, false
+	return token.NoPos, false, false
+}
+
+// loopAround returns the innermost loop whose blocks hold both ends of
+// an edge from the block from back to the earlier block to, or -1: an
+// edge to the block a pass ends in goes on in the same pass, not round.
+func (f *flow) loopAround(to, from int) int {
+	for i, l := range f.loops { // a loop ends before the loops around it, so the first found is the innermost
+		if l.head <= to && from < l.exit {
+			if to == l.cont && l.cont != l.head {
+				return -1
+			}
+
+			return i
+		}
+	}
+
+	return -1
+}
+
+// inLoop reports whether the block b is among the blocks of the loop
+// loop, none for -1.
+func (f *flow) inLoop(loop, b int) bool {
+	return loop >= 0 && f.loops[loop].head <= b && b < f.loops[loop].exit
 }

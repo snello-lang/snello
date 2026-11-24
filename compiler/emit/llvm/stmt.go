@@ -16,6 +16,15 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// A blankValue is the value a declaration gives the blank name, held
+// until every value of the declaration is made: the value, its type
+// and where the name stands.
+type blankValue struct {
+	v   value
+	t   types.Type
+	pos token.Pos
+}
+
 // stmts writes the statements of a block.
 func (e *Emitter) stmts(list []ast.Stmt) {
 	for _, s := range list {
@@ -97,9 +106,12 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 }
 
 // declStmt writes var x T = v: a slot for each name, holding the value
-// given or the zero of its type. A const declared in a function is a
-// constant global, as one declared at the top level is, under a name
-// of its own, since two functions may each declare one of a name.
+// given or the zero of its type. The blank name holds nothing: its
+// value is made in its turn and dropped once every value is made, as :=
+// drops its blank's, and with no value there is nothing to drop. A
+// const declared in a function is a constant global, as one declared
+// at the top level is, under a name of its own, since two functions may
+// each declare one of a name.
 func (e *Emitter) declStmt(d *ast.VarDecl) {
 	if d.Const {
 		for i, name := range d.Names {
@@ -131,23 +143,36 @@ func (e *Emitter) declStmt(d *ast.VarDecl) {
 		parts = e.spread(d.Values[0], len(d.Names))
 	}
 
+	var blanks []blankValue
 	for i, name := range d.Names {
 		v := e.info.Defs[name].(*types.Var)
 		vt := e.sub(v.Type())
+		blank := name.Name == "_"
 		var init value
 		switch {
 		case parts != nil:
 			init = parts[i]
 		case i < len(d.Values):
 			init = e.valueTo(d.Values[i], vt)
+		case blank:
+			continue
 		default:
 			t := e.irType(vt, name.Pos())
 			init = value{t, zero(t)}
 		}
 
+		if blank {
+			blanks = append(blanks, blankValue{init, vt, name.Pos()})
+			continue
+		}
+
 		slot := e.local(v)
 		e.store(init, slot)
 		e.own(slot, vt)
+	}
+
+	for _, b := range blanks {
+		e.discard(b.v, b.t, b.pos)
 	}
 }
 

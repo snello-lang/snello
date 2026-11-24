@@ -125,7 +125,7 @@ The methods say what happens to the entry:
 text := kv.Get(ref key) ?? return Err(Missing(key))
 ```
 
-A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, booleans, enums and tuples of those by their structure, and a struct that lists `Hash`. A slice, a map or a trait value cannot be a key, and the compiler says so at the map type. A map owns its keys and values, so inserting a borrowed string clones it first: `kv.Insert(k.Trim().Clone(), v.Trim().Clone())`.
+A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, booleans, enums and tuples of those by their structure, an owned pointer by what it points at, and a struct that lists `Hash`. A slice, a map or a trait value cannot be a key, and the compiler says so at the map type. A map owns its keys and values, so inserting a borrowed string clones it first: `kv.Insert(k.Trim().Clone(), v.Trim().Clone())`.
 
 `for k, v := range m` walks the entries in the order they were inserted, which is also the order a map prints in: `map[one:1 two:2]`. Through a `mut` borrow the values are lent for writing, as slice elements are; ranging over an owned map by value moves each key and value out, which is how `wordfreq` turns its counts into a list to sort.
 

@@ -145,8 +145,16 @@ func TestForms(t *testing.T) {
 		want = append(want, form.name)
 	}
 
+	slices.Sort(names)
+	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Errorf("the builtin package documents the forms %v, want every form, %v", names, want)
+	}
+
+	for _, word := range token.Keywords() { // a keyword the scanner gains is documented, or this fails
+		if p.form(word) == nil {
+			t.Errorf("the keyword %s is not documented", word)
+		}
 	}
 }
 

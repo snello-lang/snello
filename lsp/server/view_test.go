@@ -233,3 +233,13 @@ func offset(t *testing.T, src, lead string) int {
 
 	return i + len(lead)
 }
+
+// TestIdentAtAttribute finds a name inside an attribute, which the tree
+// keeps beside it and Inspect does not walk.
+func TestIdentAtAttribute(t *testing.T) {
+	src := "package p\n\nimport \"encoding/json\"\n\nstruct S { n int @json.Name(\"n\") }\n"
+	f, file := parse(t, src)
+	if id := identAt(f, file, strings.Index(src, "Name(")); id == nil || id.Name != "Name" {
+		t.Errorf("the name in the attribute: %v, want Name", id)
+	}
+}

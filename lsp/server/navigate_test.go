@@ -44,6 +44,8 @@ struct Port impl Loud {
 
 func (p ref Port) Area(scale int) f64 { return 1.0 }
 
+func blank(_ int) {}
+
 func total(xs ...int) int {
 	sum := 0
 	for _, x := range xs {
@@ -69,6 +71,7 @@ func main() {
 	ch <- 1
 	got := <-ch
 	v := got ?? 0
+	var _ = got
 	p := &Port{n: v}
 	defer fmt.Println("done")
 	spawn fmt.Println("task")
@@ -77,9 +80,11 @@ func main() {
 	label := match x {
 		1 | 2 => "small",
 		3..=9 => "mid",
+		n if n > 100 => "huge",
 		_ => "big",
 	}
 	_ = total(3)
+	blank(1)
 	fmt.Println(total(1, 2), quarter(8), label, y, p.n, (*p).n, p.Describe())
 }
 `
@@ -528,8 +533,10 @@ func TestFormNavigation(t *testing.T) {
 }
 
 // TestPartNavigation hovers on a member of a field a loop over
-// fields(T) gives, f.default in encoding/json: the comment of fields,
-// which says what each member is.
+// fields(T) gives, f.default in an expression and f.type in a type, in
+// encoding/json, on the comment of fields, which says what each member
+// is; and on what an arm of a match on a type writes: the | between its
+// types and its kind, struct, the pattern's comment.
 func TestPartNavigation(t *testing.T) {
 	checkout, err := filepath.Abs(stdCheckoutDir)
 	if err != nil {
@@ -537,8 +544,18 @@ func TestPartNavigation(t *testing.T) {
 	}
 
 	n := navigateIn(t, protocol.ClientCapabilities{}, checkout, "encoding/json/json.snello")
-	if h := n.hover(place{"encoding/json/json.snello", "_ => f.", "default ??"}); h == nil || !strings.Contains(h.Contents.Value, "f.default its default") {
-		t.Errorf("hover on f.default: %+v, want the comment of fields", h)
+	for _, tt := range []struct {
+		at  place
+		doc string
+	}{
+		{place{"encoding/json/json.snello", "_ => f.", "default ??"}, "f.default its default"},
+		{place{"encoding/json/json.snello", "readValue<f.", "type>(mut r)?\n"}, "f.default its default"},
+		{place{"encoding/json/json.snello", "\t\ti8 ", "| i16 | i32 | i64 | int =>"}, "pattern, in a match arm"},
+		{place{"encoding/json/json.snello", "\t\t", "struct => {"}, "pattern, in a match arm"},
+	} {
+		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
+			t.Errorf("hover on %q: %+v, want %q", tt.at.at, h, tt.doc)
+		}
 	}
 
 	n.shutdown()
@@ -568,7 +585,7 @@ func TestKeywordNavigation(t *testing.T) {
 		{place{"main.snello", "Area(scale int) f64\n\tfunc (s ref ", "Self) Describe"}, "Self, inside a trait"},
 		{place{"main.snello", "\"loud \" + ", "super.Describe"}, "super.M(args)"},
 		{place{"main.snello", "", "struct Port"}, "struct Name { fields }"},
-		{place{"main.snello", "struct Port ", "impl Loud"}, "impl, after a type's name"},
+		{place{"main.snello", "struct Port ", "impl Loud"}, "impl, in a type's declaration"},
 		{place{"main.snello", "", "func total"}, "func declares a function"},
 		{place{"main.snello", "\t", "for _, x"}, "for loops"},
 		{place{"main.snello", "x := ", "range xs"}, "range, in a for"},
@@ -595,8 +612,11 @@ func TestKeywordNavigation(t *testing.T) {
 		{place{"main.snello", "@json.", "Name(\"port\")"}, "Name"},
 		{place{"main.snello", "y := x ", "* 2"}, "Mul"},
 		{place{"main.snello", "if n ", "% 2"}, "Rem"},
-		{place{"main.snello", "sum ", "+= x"}, "Add"},
-		{place{"main.snello", "% 2 ", "== 1"}, "Eq compares two values"},
+		{place{"main.snello", "sum ", "+= x"}, "int\n\nAdd"},
+		{place{"main.snello", "for ", "_, x := range xs"}, "_ is the blank name"},
+		{place{"main.snello", "func blank(", "_ int"}, "_ is the blank name"},
+		{place{"main.snello", "\tvar ", "_ = got"}, "_ is the blank name"},
+		{place{"main.snello", "\t\tn ", "if n > 100"}, "pattern, in a match arm"},
 	} {
 		if h := n.hover(tt.at); h == nil || !strings.Contains(h.Contents.Value, tt.doc) {
 			t.Errorf("hover on %q: %+v, want %q", tt.at.at, h, tt.doc)

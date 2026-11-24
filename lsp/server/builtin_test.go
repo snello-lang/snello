@@ -105,7 +105,8 @@ func TestBuiltinIndex(t *testing.T) {
 }
 
 // TestBuiltinAt finds, in the text of builtinFile, the entry whose name
-// a place is on and the declaration of a name a signature uses, and
+// a place is on, the declaration of a name a signature uses, the form a
+// declaration's keyword or operator writes, map, ?, ... and <-, and
 // nothing on a word that names nothing the file declares.
 func TestBuiltinAt(t *testing.T) {
 	src, err := std.Sources.ReadFile(builtinFile)
@@ -115,22 +116,22 @@ func TestBuiltinAt(t *testing.T) {
 
 	text := string(src)
 	for _, tt := range []struct {
-		at, decl string
+		lead, at, decl string
 	}{
-		{"trait Eq {", "trait Eq { func (s ref Self) Eq(o ref Self) bool }"},
-		{"bool }", "type bool bool"},
-		{"map[K]V is a map", "map[K]V"},
+		{"trait ", "Eq {", "trait Eq { func (s ref Self) Eq(o ref Self) bool }"},
+		{"Eq(o ref Self) ", "bool }", "type bool bool"},
+		{"// ", "map[K]V is a map", "map[K]V"},
+		{"func (m ref ", "map[K]V) Get", "map[K]V"},
+		{"func (o T", "?) Unwrap", "enum Option<T> {"},
+		{"func print(args ", "...ref any)", "xs ...T"},
+		{"func (ch ref ", "<-chan T) Clone", "chan T"},
 	} {
-		offset := strings.Index(text, tt.at)
+		offset := strings.Index(text, tt.lead+tt.at)
 		if offset < 0 {
-			t.Fatalf("no %q in %s", tt.at, builtinFile)
+			t.Fatalf("no %q in %s", tt.lead+tt.at, builtinFile)
 		}
 
-		if strings.HasPrefix(tt.at, "trait ") {
-			offset += len("trait ")
-		}
-
-		if d, ok := builtinAt(src, offset); !ok || d.decl != tt.decl {
+		if d, ok := builtinAt(src, offset+len(tt.lead)); !ok || d.decl != tt.decl {
 			t.Errorf("at %q: %q, %v, want %q", tt.at, d.decl, ok, tt.decl)
 		}
 	}

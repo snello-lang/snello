@@ -5,6 +5,8 @@
 package types
 
 import (
+	"slices"
+
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -68,6 +70,35 @@ const (
 	rebindAccess // a borrow variable given another borrow: what borrowed through it is unmoved, a closure that reads it is not
 )
 
+// A heldAccess is an access to a place, or an event of the flow graph,
+// met while the place an assignment writes is typed before the
+// assignment's value: the place is reached where the store is made,
+// after the value, so what it does waits and is made there, in its
+// order (replay). A use is the check that the place is not moved, with
+// noUse as it was; an access one of its kind, checked against what is
+// lent at the store; a move one of a place, by a call in the place, made
+// at the store; an event one the graph records, a loan, a drop or a
+// variable's read.
+type heldAccess struct {
+	held  heldKind
+	e     ast.Expr
+	p     place
+	kind  placeKind
+	what  access
+	pos   token.Pos
+	noUse bool
+	ev    flowEvent
+}
+
+type heldKind uint8
+
+const (
+	useHeld heldKind = iota
+	accessHeld
+	moveHeld
+	eventHeld
+)
+
 // accessExpr resolves e to its place and records what the access does
 // to it. For an assignment to a variable holding a borrow it returns
 // that variable: the assignment rebinds it and ends what it held.
@@ -92,6 +123,11 @@ func (c *Checker) accessExpr(e ast.Expr, what access, pos token.Pos) *Var {
 // call being checked, at once, and records it in the graph, where the
 // borrows held by variables are decided at the end of the function.
 func (c *Checker) access(e ast.Expr, p place, what access, pos token.Pos) {
+	if c.typingPlace {
+		c.heldAccess = append(c.heldAccess, heldAccess{held: accessHeld, e: e, p: p, what: what, pos: pos})
+		return
+	}
+
 	if p.v.global && what != readAccess && what != refAccess { // a package variable is reached from every task: read and lent as ref, never changed or taken
 		c.errorf(pos, p.v.name+" is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds")
 		return
@@ -110,6 +146,51 @@ func (c *Checker) access(e ast.Expr, p place, what access, pos token.Pos) {
 	}
 
 	c.flowAccess(e, p, what, pos)
+}
+
+// replay makes what was held from from to to, in its order, where the
+// place it belongs to is reached: at its store. With again, the place
+// is reached a second time, a compound assignment's store after its
+// read: the checks and accesses are made again, and not the moves and
+// the graph's events, which the first reach recorded.
+func (c *Checker) replay(from, to int, again bool) {
+	for i := from; i < to; i++ {
+		h := c.heldAccess[i]
+		switch h.held {
+		case useHeld:
+			noUse := c.noUse
+			c.noUse = h.noUse
+			c.checkUsePlace(h.e, h.p, h.kind)
+			c.noUse = noUse
+		case accessHeld:
+			c.access(h.e, h.p, h.what, h.pos)
+		case moveHeld:
+			if !again {
+				c.moved = append(c.moved, move{h.p, h.pos, false})
+			}
+		case eventHeld:
+			if !again {
+				c.flowAdd(h.ev)
+			}
+		}
+	}
+}
+
+// settleHeld decides what an assignment's places held, from from on,
+// the places' entries before typed and the value's after: made at the
+// store, after the value; or, for an assignment nested in the place of
+// another, left to the outer store in this statement's own order, the
+// value's before the places'.
+func (c *Checker) settleHeld(from, typed int, nested bool) {
+	if !nested {
+		c.replay(from, len(c.heldAccess), false)
+		return
+	}
+
+	held := c.heldAccess[from:]
+	places := slices.Clone(held[:typed-from])
+	copy(held, held[typed-from:])
+	copy(held[len(held)-len(places):], places)
 }
 
 // collides reports whether an access to p collides with the borrow:

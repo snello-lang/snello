@@ -1,0 +1,53 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// An assignment whose place is reached through a call: the value is
+// made first, and the call runs at the store, after it, once, so a
+// value that grows the slice the call reaches into is stored where the
+// call then points, and a string stored through a pointer a call gives
+// drops the old string in the place the call gave.
+package main
+
+import "fmt"
+
+struct Box { n int }
+
+func first(bs mut []Box, tag string) mut Box {
+	fmt.Println("base", tag)
+	return mut bs[0]
+}
+
+func val(tag string) int {
+	fmt.Println("value", tag)
+	return 42
+}
+
+func firstS(xs mut []string, tag string) mut string {
+	fmt.Println("base", tag)
+	return mut xs[0]
+}
+
+func text(tag string) string {
+	fmt.Println("value", tag)
+	return fmt.Sprint("v-", tag)
+}
+
+func grown(bs mut []Box) int {
+	for i := 0; i < 1000; i++ {
+		bs.Push(Box{n: i})
+	}
+
+	return len(bs)
+}
+
+func main() {
+	bs := []Box{Box{n: 1}}
+	first(mut bs, "a").n = val("a")
+	fmt.Println(bs[0].n)
+	first(mut bs, "b").n = grown(mut bs)
+	fmt.Println(bs[0].n, len(bs))
+	xs := []string{"old".Clone()}
+	*firstS(mut xs, "c") = text("c")
+	fmt.Println(xs[0])
+}

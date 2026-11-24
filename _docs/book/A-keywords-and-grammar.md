@@ -2,7 +2,7 @@
 
 ## Keywords
 
-Thirty-one words are reserved and cannot be used as names.
+Thirty words are reserved and cannot be used as names.
 
 | | | | | |
 |---|---|---|---|---|
@@ -13,11 +13,11 @@ Thirty-one words are reserved and cannot be used as names.
 | `return` | `select` | `Self` | `spawn` | `struct` |
 | `super` | `switch` | `trait` | `type` | `var` |
 
-`Self` and `super` have meaning only inside a trait (chapter 11). `switch` has no meaning at all: Snello has no switch statement, `match` does its work on a value and, written with no value, on conditions, and the word is reserved so that a program written with one is told so. `None`, `Some`, `Ok`, `Err`, `true`, `false`, the type names and the built-in functions are predeclared names, not keywords: they are visible in every file and can be shadowed, though nothing good comes of it.
+`Self` has meaning only inside a trait, and `super` inside a method, a trait's or a type's own (chapter 11). `switch` has no meaning at all: Snello has no switch statement, `match` does its work on a value and, written with no value, on conditions, and the word is reserved so that a program written with one is told so. `None`, `Some`, `Ok`, `Err`, `true`, `false`, the type names and the built-in functions are predeclared names, not keywords: they are visible in every file and can be shadowed, though nothing good comes of it.
 
 ## Lines
 
-A statement ends at the end of its line when the line ends in a name, a literal, `)`, `]`, `}`, `?`, `>` or `>>`, or one of `return`, `break` and `continue`. Otherwise the statement continues on the next line, so a long call breaks after a comma or an opening bracket, and a method chain breaks after the dot:
+A statement ends at the end of its line when the line ends in a name, a literal, `)`, `]`, `}`, `?`, `>` or `>>`, or one of `return`, `break` and `continue`. A keyword selected after a dot is a name, so `d := f.default` ends its line as `d := f.name` does. Otherwise the statement continues on the next line, so a long call breaks after a comma or an opening bracket, and a method chain breaks after the dot:
 
 ```go
 return strconv.ParseFloat(text).
@@ -37,7 +37,7 @@ Because a line may end in `>`, a comparison or a shift keeps its right operand o
 
 ## Declarations
 
-- `struct Name impl A, B { fields }`, `enum Name { variants }`, `trait Name { ... }`, `type Name T`, `func`, `var`, `const`. The `impl` list comes after the name. A field is `names Type`, or `names Type = defaults` with one constant per name (chapter 23). Attributes, `@` and a constant, follow a field's type and defaults, a variant, or a struct's or enum's `impl` list before its body: `Port int = 80 @json.Name("port")`, `struct Options @Usage("options") { Port int @json.Name("port") }` (chapter 25). A function of a type is `func Type.Name(params) results`, `func Pair<A, B>.Of(...)` on a generic type (chapter 26).
+- `struct Name impl A, B { fields }`, `enum Name { variants }`, `trait Name { ... }`, `type Name T`, `func`, `var`, `const`. The `impl` list comes after the name and its type parameters, or after the type a `type` declaration names, `type Celsius f64 impl fmt.Stringer`. A field is `names Type`, or `names Type = defaults` with one constant per name (chapter 23). Attributes, `@` and a constant, follow a field's type and defaults, a variant, or a struct's or enum's name, type parameters and `impl` list, before its body: `Port int = 80 @json.Name("port")`, `struct Options @Usage("options") { Port int @json.Name("port") }` (chapter 25). A function of a type is `func Type.Name(params) results`, `func Pair<A, B>.Of(...)` on a generic type (chapter 26).
 - `var` and `const` declare one name list per keyword: `var x, y int = 1, 2`.
 - Parameter names and types: in `func(from, to NodeID, w int)` the names before a type share it; in `func(T, U) V` the identifiers are types. An identifier followed by a comma is decided by what ends its group.
 - An array length is a constant expression of an integer type: `[4]int`, `[N]byte`, `[2 * N]int`.

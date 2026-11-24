@@ -24,6 +24,8 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A number written down is one its type holds | literal-overflows |
 | A constant is computed by the compiler: from literals, constants, operators and conversions between number types, in its type's arithmetic, with no overflow, division by zero or fraction lost, and from no constant that leads back to it | const-not-constant, const-overflows, const-cycle |
 | A package variable's inferred type is known once its declaration is checked, in the order of the files | global-before-type |
+| A package variable is made on first use, so one named `_`, which nothing can use, is refused | blank-package-var |
+| The blank name drops what it is given, so a value made there whose `Drop` ends what it borrows, a lock's guard, `var _ = m.Lock()`, is refused | blank-guard |
 | A variadic `...T` parameter owns its arguments, a closure that borrows none of them; a `...ref T` one lends them for the call alone, no borrow of them returned; `...` passes a slice to a variadic parameter of the program's alone; a deferred call holds what its variadic arguments lend | variadic-moved, variadic-kept, variadic-lent, variadic-spread, variadic-deferred |
 | A field's default is a constant expression of the field's type, one for each name, none for a field of a type parameter, an embedded one or a trait's; a struct that declares a default has no zero value, so a declaration without a value, `make` and a map read are refused, and a positional literal leaves out only the last fields, those with a default | default-not-constant, default-no-zero |
 | A conversion between a declared type and its underlying type moves a value that is not `Copy`, and takes no borrow of one | conversion-moves |
