@@ -36,8 +36,7 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 	case *ast.CallExpr:
 		return l.call(x)
 	case *ast.SpawnExpr:
-		t := l.spawned(x.Call, x.Spawn)
-		return l.made(e, l.args(t), true)
+		return l.made(e, l.args(l.spawned(x.Call, x.Spawn)), true) // the closure's captures move into the task where the closure stands
 	case *ast.UnaryExpr:
 		return l.unary(x, want)
 	case *ast.BinaryExpr:
@@ -152,27 +151,40 @@ func (l *lowering) use(p Operand, e ast.Expr, want Type) Operand {
 }
 
 // lend lends the place p, written as e, into a borrow temporary, mut
-// when mut says so.
-func (l *lowering) lend(p Operand, e ast.Expr, mut bool) Operand {
-	tmp := l.temp(NewRef(l.typeOf(e), mut), false)
-	l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: mut, Expr: e, Pos: e.Pos()})
+// when mut says so, which the statement holds until its end unless a
+// call takes it; a borrow of a part of a temporary is of that temporary.
+func (l *lowering) lend(p Operand, e ast.Expr, mut bool) Operand { return l.lendAt(p, e, mut, e.Pos()) }
+
+// lendAt is lend, the borrow made at pos.
+func (l *lowering) lendAt(p Operand, e ast.Expr, mut bool, pos token.Pos) Operand {
+	tmp := l.temp(NewRef(l.typeOf(e), mut), true, e)
+	l.derives(tmp, p)
+	l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: mut, Expr: e, Pos: pos})
 	return tmp
 }
 
 // made writes the making of a value from its parts into a temporary,
-// which the statement owns when its type is not Copy.
+// which the statement owns when its type is not Copy or holds a borrow;
+// a borrow among the parts stays the statement's, lent until its end.
 func (l *lowering) made(e ast.Expr, args []Operand, owned bool) Operand {
+	return l.madeAt(e, args, owned, e.Pos())
+}
+
+// madeAt is made, the value made at pos.
+func (l *lowering) madeAt(e ast.Expr, args []Operand, owned bool, pos token.Pos) Operand {
 	for _, a := range args {
-		l.take(a)
+		if !l.isBorrowTemp(a) {
+			l.take(a)
+		}
 	}
 
-	t := l.temp(l.typeOf(e), owned)
-	l.emit(Instr{Op: OpMake, To: t, Args: l.args(args...), Expr: e, Pos: e.Pos()})
+	t := l.temp(l.typeOf(e), owned, e)
+	l.emit(Instr{Op: OpMake, To: t, Args: l.args(args...), Expr: e, Pos: pos})
 	return t
 }
 
-// spawned lowers the call a spawn makes: what a closure written there
-// captures moves where the closure stands, into the task.
+// spawned lowers the call a spawn statement makes: what a closure
+// written there captures moves where the closure stands, into the task.
 func (l *lowering) spawned(call ast.Expr, spawn token.Pos) Operand {
 	x, ok := call.(*ast.CallExpr)
 	if !ok {
@@ -189,13 +201,17 @@ func (l *lowering) unary(x *ast.UnaryExpr, want Type) Operand {
 	switch x.Op {
 	case token.REF, token.MUT:
 		if p, ok := l.placeOrPart(x.X); ok { // a borrow of a part of a value made here is of what the statement holds
-			tmp := l.temp(l.typeOf(x), false)
-			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: x.Op == token.MUT, Expr: x, Pos: x.Pos()})
+			tmp := l.temp(l.typeOf(x), true, x)
+			l.derives(tmp, p)
+			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: x.Op == token.MUT, Expr: x.X, Pos: x.X.Pos()})
 			return tmp
 		}
 
-		v := l.value(x.X, nil) // a borrow of a value made here, which the statement holds
-		return l.made(x, l.args(v), false)
+		v := l.value(x.X, nil) // a borrow of a value made here, which the statement holds until its end
+		t := l.temp(l.typeOf(x), false, x)
+		l.derives(t, v)
+		l.emit(Instr{Op: OpMake, To: t, Args: l.args(v), Expr: x, Pos: x.Pos()})
+		return t
 	case token.MUL:
 		p, _ := l.placeOrPart(x)
 		return l.use(p, x, want)
@@ -215,7 +231,7 @@ func (l *lowering) unary(x *ast.UnaryExpr, want Type) Operand {
 // left, and any other evaluates both, left first.
 func (l *lowering) binary(x *ast.BinaryExpr) Operand {
 	if x.Op == token.LAND || x.Op == token.LOR {
-		result := l.temp(Typ[Bool], false)
+		result := l.temp(Typ[Bool], false, x)
 		l.store(result, l.value(x.X, Typ[Bool]), x.X)
 		right, join := l.newBlock(), l.newBlock()
 		l.branch(right, join)
@@ -231,7 +247,7 @@ func (l *lowering) binary(x *ast.BinaryExpr) Operand {
 		b := l.value(x.Y, sig.params[0].typ)
 		l.take(a)
 		l.take(b)
-		t := l.temp(l.typeOf(x), true)
+		t := l.temp(l.typeOf(x), true, x)
 		l.emit(Instr{Op: OpCall, To: t, Args: l.args(a, b), Expr: x, Pos: x.Pos()})
 		return t
 	}
@@ -278,8 +294,8 @@ func (l *lowering) composite(x *ast.CompositeLit) Operand {
 // not known.
 func (l *lowering) slotType(x *ast.CompositeLit, i int, key ast.Expr) Type {
 	if id, ok := key.(*ast.Ident); ok {
-		if f, ok := l.c.info.Uses[id].(*Var); ok {
-			return f.typ
+		if f, ok := l.c.info.Uses[id].(*Var); ok && f.field {
+			return f.typ // a struct's field; a map's key is a value, which says nothing of the slot
 		}
 	}
 
@@ -320,12 +336,14 @@ func (l *lowering) madeFrom(e ast.Expr, start int, owned bool) Operand {
 // making of the closure from its captures, each read, lent or moved by
 // what the body does with it.
 func (l *lowering) funcLit(x *ast.FuncLit) Operand {
+	var form *Form
 	if sig, ok := l.c.info.Types[x].(*Signature); ok && x.Body != nil {
 		outer := l.c.lowering
 		l.c.lowering = l.inner // the closure's body is lowered apart, by the scratch of the next depth, while this body's lowering is under way
-		form := l.c.lowerBody(sig, x.Body)
-		if compareForms {
-			l.c.closureMoves = append(l.c.closureMoves, l.c.formMoves(form)...) // checked when it is made, before the scratch is reused
+		form = l.c.lowerBody(sig, x.Body)
+		if compareForms { // checked when it is made, before the scratch is reused
+			l.c.closureMoves = append(l.c.closureMoves, l.c.formMoves(form)...)
+			l.c.closureLoans = append(l.c.closureLoans, l.c.formBorrows(form, sig, x.Pos())...)
 		}
 
 		l.inner = l.c.lowering
@@ -341,24 +359,44 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 		use := uses[i] // a capture is read where the body first names it
 		switch cap.mode {
 		case byCopy:
-			l.emit(Instr{Op: OpRead, Place: p, Expr: use, Pos: use.Pos()})
+			l.emit(Instr{Op: OpRead, Place: p, Capture: true, Expr: use, Pos: use.Pos()})
 			l.argStack = append(l.argStack, p)
 		case byRef, byMut:
-			tmp := l.temp(NewRef(cap.v.typ, cap.mode == byMut), false)
-			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: cap.mode == byMut, Capture: cap.mode == byMut, Expr: use, Pos: use.Pos()})
+			tmp := l.temp(NewRef(cap.v.typ, cap.mode == byMut), false, use)
+			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: cap.mode == byMut, Capture: true, Expr: use, Pos: use.Pos()})
 			l.argStack = append(l.argStack, tmp)
 		case byMove:
-			pos := use.Pos()
+			expr, pos := use, use.Pos()
+			if moved := movedIn(form, cap.v); moved != nil {
+				expr, pos = moved.Expr, moved.Pos // the body's own move: the value is gone where the body moves it
+			}
+
 			if spawn.IsValid() {
 				pos = x.Pos() // moved into the task where the closure stands
 			}
 
-			l.emit(Instr{Op: OpMove, Place: p, Expr: use, Pos: pos})
+			l.emit(Instr{Op: OpMove, Place: p, Capture: true, Expr: expr, Pos: pos})
 			l.argStack = append(l.argStack, p)
 		}
 	}
 
 	return l.madeFrom(x, start, true)
+}
+
+// movedIn is the first instruction of a closure's form that moves the
+// captured variable v, or nil: where the body moves what it captures.
+func movedIn(form *Form, v *Var) *Instr {
+	if form == nil {
+		return nil
+	}
+
+	for i := range form.Instrs {
+		if in := &form.Instrs[i]; in.Op == OpMove && !in.Place.IsTemp() && form.Vars[in.Place.Var] == v {
+			return in
+		}
+	}
+
+	return nil
 }
 
 // firstUses returns, for each capture of a closure, the first name in
@@ -368,6 +406,14 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 // variable the body never names gives the closure itself.
 func (l *lowering) firstUses(x *ast.FuncLit, captures []capture) []ast.Expr {
 	uses := make([]ast.Expr, len(captures))
+	if x.Body == nil { // a body the parser left out: the closure itself
+		for i := range uses {
+			uses[i] = x
+		}
+
+		return uses
+	}
+
 	left := len(captures)
 	var spawned []*ast.FuncLit // the spawned closures met so far
 	ast.Inspect(x.Body, func(n ast.Node) bool {
@@ -422,8 +468,9 @@ func (l *lowering) firstUses(x *ast.FuncLit, captures []capture) []ast.Expr {
 // calls something else.
 func spawnedLit(call ast.Expr) *ast.FuncLit {
 	if x, ok := call.(*ast.CallExpr); ok {
-		lit, _ := unparen(x.Fun).(*ast.FuncLit)
-		return lit
+		if lit, ok := unparen(x.Fun).(*ast.FuncLit); ok && lit.Body != nil {
+			return lit
+		}
 	}
 
 	return nil
@@ -436,7 +483,7 @@ func (l *lowering) ifExpr(x *ast.IfExpr) Operand {
 		return Temp(NoTemp)
 	}
 
-	result := l.temp(l.typeOf(x), false)
+	result := l.temp(l.typeOf(x), false, x)
 	defer l.nest()() // the condition and the arms drop their own temporaries, not the statement's around the if
 	l.condition(x.Cond)
 	then, els, join := l.newBlock(), l.newBlock(), l.newBlock()
@@ -453,8 +500,16 @@ func (l *lowering) ifExpr(x *ast.IfExpr) Operand {
 
 	l.joinTo(join)
 	l.start(join)
-	l.own(result)
+	l.chosen(result, x)
 	return result
+}
+
+// chosen marks the value of an expression with arms, chosen by the arm
+// taken, as read where the arms join, which is where the statement
+// takes it, and owned by the statement from there.
+func (l *lowering) chosen(result Operand, x ast.Expr) {
+	l.emit(Instr{Op: OpRead, Place: result, Expr: x, Pos: x.Pos()})
+	l.own(result)
 }
 
 // blockValue lowers a block whose last statement is its value, stored
@@ -484,7 +539,7 @@ func (l *lowering) matchExpr(x *ast.MatchExpr) Operand {
 		return Temp(NoTemp)
 	}
 
-	result := l.temp(l.typeOf(x), false)
+	result := l.temp(l.typeOf(x), false, x)
 	scrutinee := l.scrutinee(x.X, l.bindsByValue(x))
 	defer l.nest()() // the arms drop their own temporaries, not the value or the statement's around the match
 	join := l.newBlock()
@@ -507,6 +562,7 @@ func (l *lowering) matchExpr(x *ast.MatchExpr) Operand {
 
 		l.start(body)
 		l.openScope()
+		l.reachMut(x.X, scrutinee)
 		l.bind(arm.Pat, scrutinee)
 		if arm.Guard != nil {
 			l.guardOf(x, arm, i+1 < len(x.Arms), next)
@@ -517,7 +573,7 @@ func (l *lowering) matchExpr(x *ast.MatchExpr) Operand {
 	}
 
 	l.start(join)
-	l.own(result)
+	l.chosen(result, x)
 	return result
 }
 
@@ -536,7 +592,7 @@ func (l *lowering) guardOf(x *ast.MatchExpr, arm *ast.MatchArm, hasNext bool, ne
 	g.Taken = taken
 	l.edge(l.cur, taken)
 	l.goTo(failed)
-	l.dropScope(arm.Arrow) // the guard failed: what the pattern bound is dropped on the way to the next arm
+	l.dropScope(arm.Arrow, dropBlock) // the guard failed: what the pattern bound is dropped on the way to the next arm
 	if hasNext {
 		l.edge(l.cur, next)
 	}
@@ -579,6 +635,15 @@ func (l *lowering) scrutinee(x ast.Expr, bindsByValue bool) Operand {
 	return l.value(x, nil) // made here: the statement's, dropped at its end
 }
 
+// reachMut records that an arm matched through a mut borrow of the
+// place the scrutinee x names reaches the place mut, as the arm's
+// bindings borrow it mut; through a ref borrow or a value, nothing.
+func (l *lowering) reachMut(x ast.Expr, v Operand) {
+	if b, ok := l.typeOf(x).(*Ref); ok && b.mut && !v.IsTemp() {
+		l.emit(Instr{Op: OpRead, Place: v, Mut: true, Expr: x, Pos: x.Pos()})
+	}
+}
+
 // bindsByValue reports whether an arm of the match binds a part of the
 // value by value, which moves the value before the arms.
 func (l *lowering) bindsByValue(x *ast.MatchExpr) bool {
@@ -612,7 +677,7 @@ func (l *lowering) patBindsByValue(p ast.Pattern) bool {
 // leaves.
 func (l *lowering) coalesce(x *ast.CoalesceExpr) Operand {
 	v := l.scrutinee(x.X, !IsCopy(l.typeOf(x))) // the value inside leaves an owned place when it is not Copy
-	result := l.temp(l.typeOf(x), false)
+	result := l.temp(l.typeOf(x), false, x)
 	defer l.nest()() // the else drops its own temporaries, not the statement's around the ??
 	some, none, join := l.newBlock(), l.newBlock(), l.newBlock()
 	l.branch(some, none)
@@ -628,7 +693,7 @@ func (l *lowering) coalesce(x *ast.CoalesceExpr) Operand {
 
 	l.joinTo(join)
 	l.start(join)
-	l.own(result)
+	l.chosen(result, x)
 	return result
 }
 
@@ -636,16 +701,18 @@ func (l *lowering) coalesce(x *ast.CoalesceExpr) Operand {
 // dropping what every open scope holds.
 func (l *lowering) try(x *ast.TryExpr) Operand {
 	v := l.scrutinee(x.X, !IsCopy(l.typeOf(x)))
-	result := l.temp(l.typeOf(x), false)
+	result := l.temp(l.typeOf(x), false, x)
 	defer l.nest()() // the leave drops what the ? made, and what the leave itself abandons around it
 	ok, fail, join := l.newBlock(), l.newBlock(), l.newBlock()
 	l.edge(l.cur, ok)
 	l.goTo(fail)
+	l.take(v)
+	l.emit(Instr{Op: OpReturn, Args: l.args(v), Expr: x, Pos: x.Question}) // the None or the Err goes to the caller
 	l.leave(0, x.Question, x)
 	l.start(ok)
 	l.unwrap(result, v, x, x.Question)
 	l.goTo(join)
-	l.own(result)
+	l.chosen(result, x)
 	return result
 }
 

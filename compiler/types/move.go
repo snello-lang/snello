@@ -153,6 +153,19 @@ func (c *Checker) resolve(name string) Object {
 	return obj
 }
 
+// refersTo is the object the name id refers to: the typing's record
+// when a pass over the form runs, since the scopes are closed once a
+// body is typed, and the scope otherwise.
+func (c *Checker) refersTo(id *ast.Ident) Object {
+	if c.formPass && c.info != nil {
+		if obj, ok := c.info.Uses[id]; ok {
+			return obj
+		}
+	}
+
+	return c.resolve(id.Name)
+}
+
 // resolvingIn runs f with the names of expressions resolved in outer.
 func (c *Checker) resolvingIn(outer *Scope, f func()) {
 	saved := c.names
@@ -177,7 +190,7 @@ func (c *Checker) placeOf(e ast.Expr) (place, placeKind) {
 
 		v, ok := c.pinned[e]
 		if !ok {
-			v, ok = c.resolve(e.Name).(*Var)
+			v, ok = c.refersTo(e).(*Var)
 		}
 
 		if !ok || v.field || v.pos == token.NoPos {

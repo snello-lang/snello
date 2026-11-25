@@ -27,7 +27,7 @@ func TestWithin(t *testing.T) {
 		{Operand{Var: 1, Temp: NoTemp, Path: "a"}, Operand{Var: 0, Temp: NoTemp, Path: "a"}, false},
 		{Temp(0), Temp(1), false},
 	}
-	f := &Form{Vars: []*Var{NewVar(token.NoPos, "x", Typ[Int]), NewVar(token.NoPos, "y", Typ[Int])}, Temps: 2}
+	f := &Form{Vars: []*Var{NewVar(token.NoPos, "x", Typ[Int]), NewVar(token.NoPos, "y", Typ[Int])}, Temps: make([]TempInfo, 2)}
 	for _, tt := range tests {
 		if got := within(tt.p, tt.q); got != tt.want {
 			t.Errorf("within(%s, %s) = %v, want %v", f.OperandString(tt.p), f.OperandString(tt.q), got, tt.want)
@@ -130,6 +130,7 @@ func TestFormMoves(t *testing.T) {
 		{"func f(n int, s string) int { return match n { 1 if take(s) > 0 => 1, _ => len(s) } }", []string{"cannot move s in a match guard"}},
 		{"func f(s string) { spawn func(v string) { print(v) }(s); print(len(s)) }", []string{"use of moved value s"}},
 		{"func f(s string) { spawn func() { print(s) }(); print(len(s)) }", []string{"use of moved value s"}},
+		{"func f(s string) { g := func() { print(len(s)); keep(s) }; g(); print(len(s)) }", []string{"use of moved value s; moved at 13:54"}},
 	}
 	for _, tt := range tests {
 		got := checkErrors(t, prelude+decls+tt.src)

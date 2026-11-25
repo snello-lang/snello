@@ -63,15 +63,16 @@ func TestLowering(t *testing.T) {
   t0 = borrow mut v.[]
   store r <- t0
   t1 = make()
-  t2 = call(t1)
-  store r.* <- t2
-  t3 = make()
-  store i <- t3
+  t2 = borrow ref t1
+  t3 = call(t2)
+  store r.* <- t3
+  t4 = make()
+  store i <- t4
   -> b1
 b1 (head):
   read i
-  t4 = make()
-  t5 = make(i, t4)
+  t5 = make()
+  t6 = make(i, t5)
   -> b2 b3
 b2:
   drop i
@@ -79,13 +80,13 @@ b2:
   ->
 b3:
   read i
-  t6 = call(i)
+  t7 = call(i)
   -> b4
 b4:
   read i
-  t7 = make()
-  t8 = make(i, t7)
-  store i <- t8
+  t8 = make()
+  t9 = make(i, t8)
+  store i <- t9
   -> b1
 `},
 		{"func f(c bool, s string) string { return if c { s } else { \"b\".Clone() } }", `b0:
@@ -97,10 +98,13 @@ b1:
   -> b3
 b2:
   t1 = make()
-  t2 = call(t1)
-  store t0 <- t2
+  t2 = borrow ref t1
+  t3 = call(t2)
+  store t0 <- t3
   -> b3
 b3:
+  read t0
+  return(t0)
   leave(s, c)
   ->
 `},
@@ -116,6 +120,7 @@ b3:
   t6 = call(t5)
   t7 = call(t4, t6)
   store t7.n <- t3
+  drop t7
   move s
   t8 = call(s)
   t9 = call(t8)
@@ -132,17 +137,31 @@ b3:
   t4 = make(t1.[], t3)
   read xs
   store t1.[] <- t4
+  drop t1
   leave(xs)
+  ->
+`},
+		{"func f(i int, s string) { m := map[int]string{i: s}; print(len(m)) }", `b0:
+  read i
+  move s
+  t0 = make(i, s)
+  store m <- t0
+  read m
+  t1 = call(m)
+  t2 = call(t1)
+  leave(m, s, i)
   ->
 `},
 		{"func f(a string, b string) { a, b = b, a; print(a, b) }", `b0:
   move b
+  t0 = make(b)
   move a
-  store a <- b
-  store b <- a
+  t1 = make(a)
+  store a <- t0
+  store b <- t1
   read a
   read b
-  t0 = call(a, b)
+  t2 = call(a, b)
   leave(b, a)
   ->
 `},
@@ -154,9 +173,11 @@ b1:
   -> b3
 b2:
   t1 = make()
+  return(t1)
   leave(o)
   ->
 b3:
+  read t0
   store n <- t0
   read o
   t2 = call(o)
@@ -165,14 +186,17 @@ b4:
   t3 = make(t2)
   -> b6
 b5:
+  return(t2)
   leave(n, o)
   ->
 b6:
+  read t3
   store m <- t3
   read n
   read m
   t4 = make(n, m)
   t5 = make(t4)
+  return(t5)
   leave(m, n, o)
   ->
 `},
@@ -183,14 +207,15 @@ b1 (head):
   -> b2 b3
 b2:
   t1 = make()
-  t2 = call(t1)
-  t3 = make(t2)
-  store n <- t3
-  t4 = borrow ref n
-  t5 = make(t4)
-  store g <- t5
+  t2 = borrow ref t1
+  t3 = call(t2)
+  t4 = make(t3)
+  store n <- t4
+  t5 = borrow ref n
+  t6 = make(t5)
+  store g <- t6
   read g
-  t6 = call()
+  t7 = call()
   leave(g, n, xs)
   ->
 b3:
@@ -209,9 +234,11 @@ b3:
 }
 
 // BenchmarkLowering checks every example program as BenchmarkCheck
-// does, recording what the checker learned, once without the forms and
-// once keeping each body's form, and reports allocations: the difference
-// between the two is what the lowering and the forms kept cost.
+// does, recording what the checker learned, once without the forms, once
+// keeping each body's form, and once comparing the form's passes with
+// the tree's, and reports allocations: the differences are what the
+// lowering and the forms kept cost, and what the passes over the form
+// cost beside the tree's.
 func BenchmarkLowering(b *testing.B) {
 	type parsed struct {
 		f    *ast.File
@@ -226,13 +253,17 @@ func BenchmarkLowering(b *testing.B) {
 
 	conf := libraryConfig()
 	for _, bench := range []struct {
-		name string
-		info func() *Info
+		name    string
+		info    func() *Info
+		compare bool
 	}{
-		{"recorded", func() *Info { return &Info{} }},
-		{"forms", func() *Info { return &Info{Forms: map[*ast.BlockStmt]*Form{}} }},
+		{"recorded", func() *Info { return &Info{} }, false},
+		{"forms", func() *Info { return &Info{Forms: map[*ast.BlockStmt]*Form{}} }, false},
+		{"compared", func() *Info { return &Info{} }, true},
 	} {
 		b.Run(bench.name, func(b *testing.B) {
+			CompareForms(bench.compare)
+			defer CompareForms(false)
 			b.ReportAllocs()
 			for b.Loop() {
 				for _, p := range files {

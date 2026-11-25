@@ -29,6 +29,7 @@ func TestSpawnHandle(t *testing.T) {
 		{"func f() { h := spawn two(); _ = h }", "task.Handle<(int, string)>", nil},
 		{"func f() { k := 2; h := spawn func() int { return k }(); _ = h }", "task.Handle<int>", nil},
 		{"func f() { h := spawn shared(); _ = h }", "", []string{"cannot spawn for a handle: rc.Rc<int> stays in its task"}},
+		{"func f(s string) { h := spawn func() { print(s) }(); print(len(s)); _ = h }", "", []string{"use of moved value s; moved at 8:31"}},
 		{"func f() { s := \"a\".Clone(); h := spawn lent(ref s); _ = h }", "", []string{"a spawned task cannot hold a borrow"}},
 	} {
 		if tt.want != nil {

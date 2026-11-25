@@ -38,7 +38,6 @@ type lowering struct {
 	scopes    []int       // the open scopes, the function's first: where each one's variables begin on declared
 	loops     []lowLoop   // the open loops, the innermost last
 	guard     *Guard      // the match guard whose condition is being lowered, which every block made meanwhile belongs to; nil otherwise
-	tempTypes []Type      // each temporary's type
 	owned     []ownedTemp // the owned temporaries the statements being lowered made, dropped at each one's end unless taken; the current statement's from ownedMark
 	ownedMark int         // where the owned temporaries of the statement or arm being lowered begin; those before it belong to the statements and expressions around it
 	taken     []bool      // each temporary, whether a place or a call took it
@@ -88,13 +87,16 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 	if l.f == nil {
 		l.f = &Form{}
 	} else {
-		l.f.Vars, l.f.Blocks, l.f.Instrs = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0]
+		l.f.Vars, l.f.Blocks, l.f.Instrs, l.f.Temps = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0], l.f.Temps[:0]
 		l.f.operands, l.f.succs = l.f.operands[:0], l.f.succs[:0]
 	}
 
 	l.taken, l.bases, l.declared = l.taken[:0], l.bases[:0], l.declared[:0]
-	l.scopes, l.loops, l.tempTypes, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.tempTypes[:0], l.owned[:0], 0
+	l.scopes, l.loops, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.owned[:0], 0
 	l.results, l.spawn, l.guard = sig.results, token.NoPos, nil
+	wasPass := c.formPass
+	c.formPass = true // the names the lowering resolves through the recorders are the typing's: the scopes are closed
+	defer func() { c.formPass = wasPass }()
 	l.cur = l.newBlock()
 	l.openScope()
 	if sig.recv != nil {
@@ -114,7 +116,6 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 	l.closeScope(body.Rbrace)
 	l.endBlock()
 	f := l.f
-	f.Temps = len(l.tempTypes)
 	if c.info != nil && c.info.Forms != nil {
 		c.info.Forms[body] = f
 		l.f = nil // the form kept is its own; the next body gets a new scratch
@@ -132,9 +133,9 @@ func (c *Checker) freeLowerings() {
 		if l.f != nil {
 			clear(l.f.Instrs[:cap(l.f.Instrs)]) // what the instructions name, the tree and its types, is let go of now
 			clear(l.f.Vars[:cap(l.f.Vars)])
+			clear(l.f.Temps[:cap(l.f.Temps)])
 		}
 
-		clear(l.tempTypes[:cap(l.tempTypes)])
 		clear(l.bases[:cap(l.bases)])
 		lowerings.Put(l)
 		l = inner
@@ -182,7 +183,7 @@ func (l *lowering) edge(from, to int) {
 	f := l.f
 	if n := len(b.Succs); n > 0 && len(f.succs) >= n && &f.succs[len(f.succs)-1] == &b.Succs[n-1] {
 		f.succs = append(f.succs, to)
-		b.Succs = f.succs[len(f.succs)-n-1:]
+		b.Succs = f.succs[len(f.succs)-n-1 : len(f.succs) : len(f.succs)]
 		return
 	}
 
@@ -238,8 +239,14 @@ func (l *lowering) openScope() { l.scopes = append(l.scopes, len(l.declared)) }
 // closeScope ends the innermost scope, dropping its variables where
 // control reaches the end, the last declared first; where control has
 // left, the drops are not written.
-func (l *lowering) closeScope(pos token.Pos) {
-	l.dropScope(pos)
+func (l *lowering) closeScope(pos token.Pos) { l.closeScopeAs(pos, dropBlock) }
+
+// closePass ends a loop's scope at the end of a pass, where the loop's
+// variables die.
+func (l *lowering) closePass(pos token.Pos) { l.closeScopeAs(pos, dropPass) }
+
+func (l *lowering) closeScopeAs(pos token.Pos, why dropWhy) {
+	l.dropScope(pos, why)
 	l.declared = l.declared[:l.scopes[len(l.scopes)-1]]
 	l.scopes = l.scopes[:len(l.scopes)-1]
 }
@@ -247,10 +254,10 @@ func (l *lowering) closeScope(pos token.Pos) {
 // dropScope drops the innermost scope's variables at pos, the last
 // declared first, leaving the scope open: a path out of the scope
 // drops them where it leaves.
-func (l *lowering) dropScope(pos token.Pos) {
+func (l *lowering) dropScope(pos token.Pos, why dropWhy) {
 	from := l.scopes[len(l.scopes)-1]
 	for i := len(l.declared) - 1; i >= from; i-- {
-		l.drop(l.declared[i], pos)
+		l.drop(l.declared[i], pos, why)
 	}
 }
 
@@ -298,26 +305,58 @@ func (l *lowering) named(id *ast.Ident) *Var {
 	return v
 }
 
-// target returns the place a name is stored to: the variable it
-// declares, declared in the open scope, when define says the statement
-// declares it, or the one it refers to.
-func (l *lowering) target(id *ast.Ident, define bool) (Operand, bool) {
+// declareStore writes the value o into the variable v, declared now.
+func (l *lowering) declareStore(v *Var, o Operand, e ast.Expr) {
+	l.storeAs(Operand{Var: l.declare(v)}, o, e, true)
+}
+
+// storeName writes the value o into the name id, declared by the
+// statement when define says so, or assigned.
+func (l *lowering) storeName(id *ast.Ident, define bool, o Operand) {
 	if v, ok := l.c.info.Defs[id].(*Var); ok && define {
-		return Operand{Var: l.declare(v)}, true
+		l.declareStore(v, o, id)
+	} else if v, ok := l.c.info.Uses[id].(*Var); ok {
+		l.store(Operand{Var: l.index(v)}, o, id)
 	}
+}
 
-	if v, ok := l.c.info.Uses[id].(*Var); ok {
-		return Operand{Var: l.index(v)}, true
+// bound marks the owned temporary a part of o is bound from, when o is
+// a part of a temporary or of a borrow of one: a binding or a loop
+// variable holds the temporary until its statement drops it.
+func (l *lowering) bound(o Operand) {
+	if o.IsValue() && o.Path != "" {
+		l.f.Temps[l.f.Temps[o.Temp].Origin].Bound = true
 	}
+}
 
-	return Operand{}, false
+// given marks the temporary o as taken by a call, a defer or a statement
+// with several values: what it lends is lent until then.
+func (l *lowering) given(o Operand) {
+	if o.IsValue() {
+		l.f.Temps[o.Temp].Given = true
+	}
+}
+
+// derives marks the temporary t as the temporary from is, or is a part
+// of: a borrow of a part of a temporary, or of a value made here, and a
+// call's result that borrows from one are of that temporary.
+func (l *lowering) derives(t, from Operand) {
+	if from.IsValue() {
+		l.f.Temps[t.Temp].Origin = l.f.Temps[from.Temp].Origin
+	}
+}
+
+// isBorrowTemp reports whether o is a borrow made here, into a
+// temporary.
+func (l *lowering) isBorrowTemp(o Operand) bool {
+	return o.IsValue() && isBorrow(l.f.Temps[o.Temp].Type)
 }
 
 // drop drops the variable at index i, unless it is a mut parameter,
 // which is the caller's.
-func (l *lowering) drop(i int, pos token.Pos) {
+func (l *lowering) drop(i int, pos token.Pos, why dropWhy) {
 	if l.droppable(i) {
-		l.emit(Instr{Op: OpDrop, Place: Operand{Var: i}, Pos: pos})
+		l.emit(Instr{Op: OpDrop, Place: Operand{Var: i}, Pos: pos, why: why})
 	}
 }
 
@@ -349,8 +388,13 @@ func (l *lowering) drops(floor int) []Operand {
 // to b when the path goes on there, a break or a continue, and none for
 // a return; control is gone from the block after it.
 func (l *lowering) leave(floor int, pos token.Pos, e ast.Expr, to ...int) {
+	why := dropExit
+	if len(to) > 0 {
+		why = dropLeave
+	}
+
 	l.dropOwnedLeaving(floor, pos)
-	l.emit(Instr{Op: OpLeave, Args: l.args(l.drops(floor)...), Expr: e, Pos: pos})
+	l.emit(Instr{Op: OpLeave, Args: l.args(l.drops(floor)...), Expr: e, Pos: pos, why: why})
 	for _, b := range to {
 		l.edge(l.cur, b)
 	}
@@ -361,10 +405,10 @@ func (l *lowering) leave(floor int, pos token.Pos, e ast.Expr, to ...int) {
 
 // Temporaries.
 
-func (l *lowering) temp(t Type, owned bool) Operand {
-	l.tempTypes = append(l.tempTypes, t)
+func (l *lowering) temp(t Type, owned bool, e ast.Expr) Operand {
+	n := len(l.f.Temps)
+	l.f.Temps = append(l.f.Temps, TempInfo{Expr: e, Type: t, Origin: n})
 	l.taken = append(l.taken, false)
-	n := len(l.tempTypes) - 1
 	if owned {
 		l.own(Temp(n))
 	}
@@ -373,12 +417,13 @@ func (l *lowering) temp(t Type, owned bool) Operand {
 }
 
 // own makes the statement own the temporary o, dropped at the
-// statement's end unless taken, when its type is not Copy and not a
-// borrow, which ends with its last use and has nothing to drop. The
-// result of an if, a match, a ?? or a ? is owned once its arms are
-// written, so that an arm's own statements do not drop it.
+// statement's end unless taken, when its type is not Copy, or holds a
+// borrow made here, which the statement lends until its end: its drop
+// is where the loan ends. The result of an if, a match, a ?? or a ? is
+// owned once its arms are written, so that an arm's own statements do
+// not drop it.
 func (l *lowering) own(o Operand) {
-	if t := l.tempTypes[o.Temp]; t != nil && !IsCopy(t) && !isBorrow(t) {
+	if t := l.f.Temps[o.Temp].Type; t != nil && (!IsCopy(t) || holdsBorrow(t)) {
 		l.owned = append(l.owned, ownedTemp{o.Temp, len(l.scopes)})
 	}
 }
@@ -388,7 +433,7 @@ func (l *lowering) own(o Operand) {
 // temporary taken leaves the temporary to be dropped: a Copy part is
 // read, and no other may be moved out of it.
 func (l *lowering) take(o Operand) {
-	if o.IsTemp() && o.Temp != NoTemp && o.Path == "" {
+	if o.IsValue() && o.Path == "" {
 		l.taken[o.Temp] = true
 	}
 }
@@ -403,11 +448,14 @@ func (l *lowering) nest() func() {
 }
 
 // dropOwned drops the owned temporaries of the statement no place
-// took, at pos, and begins the next statement's.
-func (l *lowering) dropOwned(pos token.Pos) {
+// took, at pos, where the statement ends, and begins the next
+// statement's.
+func (l *lowering) dropOwned(pos token.Pos) { l.dropOwnedAs(pos, dropStatement) }
+
+func (l *lowering) dropOwnedAs(pos token.Pos, why dropWhy) {
 	for i := len(l.owned) - 1; i >= l.ownedMark; i-- {
 		if o := l.owned[i]; !l.taken[o.temp] {
-			l.emit(Instr{Op: OpDrop, Place: Temp(o.temp), Pos: pos})
+			l.emit(Instr{Op: OpDrop, Place: Temp(o.temp), Pos: pos, why: why})
 		}
 	}
 
@@ -421,7 +469,7 @@ func (l *lowering) dropOwned(pos token.Pos) {
 func (l *lowering) dropOwnedLeaving(floor int, pos token.Pos) {
 	for i := len(l.owned) - 1; i >= 0; i-- {
 		if o := l.owned[i]; o.scope >= floor && !l.taken[o.temp] {
-			l.emit(Instr{Op: OpDrop, Place: Temp(o.temp), Pos: pos})
+			l.emit(Instr{Op: OpDrop, Place: Temp(o.temp), Pos: pos, why: dropStatement})
 		}
 	}
 

@@ -11,33 +11,33 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
-// TestFormRefusals holds the two programs the passes refuse once they
-// run on the lowered form, in the order the program evaluates them,
-// which the passes over the syntax tree accept: a compound assignment
-// reaches its place a second time after its value, through a borrow
-// variable whose owner the value moved, which the borrow pass refuses,
-// and inside the place of another assignment, which the move pass
-// refuses. The move pass runs on the form beside the tree's, so its
-// refusal is reported as the comparison's disagreement; the borrow
-// pass's row is skipped until that pass runs on the form, when both
-// rows join TestAssignOrder and testdata/errors.
+// TestFormRefusals holds the programs the passes refuse once they run
+// on the lowered form, in the order the program evaluates them, which
+// the passes over the syntax tree accept: a compound assignment reaches
+// its place a second time after its value, through a borrow variable
+// whose owner the value moved, or whose owner the value borrows mut
+// again, which the borrow pass refuses, and inside the place of another
+// assignment, which the move pass refuses; and a borrow of an arm's
+// variable carried out of the arm's block by an if expression and given
+// to a call, which the tree lends only once the block is closed. Each
+// pass runs on the form beside the tree's, so its refusal is reported
+// as the comparison's disagreement until the form's passes report in
+// the tree's place, when the rows join TestAssignOrder and
+// testdata/errors.
 func TestFormRefusals(t *testing.T) {
 	const decls = "struct B { n int; name string }\nfunc pick2(b mut B, k int, m int) mut B { return b }\n" +
-		"func takenXs(xs []int) int { return 0 }\nfunc drained(v []string) string { return \"\" }\n"
+		"func takenXs(xs []int) int { return 0 }\nfunc drained(v []string) string { return \"\" }\nfunc growB(b mut B) int { return 1 }\n" +
+		"func pass(a ref string, b int) {}\nfunc cond() bool { return true }\n"
 	tests := []struct {
 		src  string
 		want string
-		skip string
 	}{
-		{"func f(v []string) { r := mut v[0]; *r += drained(v) }", "cannot move v: v is borrowed by r", "refused once the borrow pass runs on the lowered form"},
-		{"func f(c bool) { b := B{n: 0, name: \"b\"}; xs := []int{1}; pick2(mut b, if c { xs[0] += takenXs(xs); 2 } else { 3 }, 0).n = 1 }", "use of moved value xs", ""},
+		{"func f(v []string) { r := mut v[0]; *r += drained(v) }", "cannot move v: v is borrowed by r"},
+		{"func f(c bool) { b := B{n: 0, name: \"b\"}; xs := []int{1}; pick2(mut b, if c { xs[0] += takenXs(xs); 2 } else { 3 }, 0).n = 1 }", "use of moved value xs"},
+		{"func f() { b := B{n: 0, name: \"b\"}; r := mut b; r.n += growB(mut b) }", "cannot borrow b as mut: b is already borrowed as mut by r"},
+		{"func f() { z := \"z\"; pass(if cond() { t := \"b\".Clone(); ref t } else { ref z }, 1) }", "cannot keep a borrow of t: t is dropped at the end of its block"},
 	}
 	for _, tt := range tests {
-		if tt.skip != "" {
-			t.Log(tt.skip)
-			continue
-		}
-
 		got := checkErrors(t, prelude+decls+tt.src)
 		if len(got) != 1 || !strings.Contains(got[0], tt.want) {
 			t.Errorf("%s:\n  got %q\n  want one containing %q", tt.src, got, tt.want)
@@ -50,7 +50,7 @@ func TestFormRefusals(t *testing.T) {
 // leave with its drops.
 func TestFormString(t *testing.T) {
 	xs, r := NewVar(token.NoPos, "xs", NewSlice(Typ[Int])), NewVar(token.NoPos, "r", NewRef(Typ[Int], true))
-	f := &Form{Vars: []*Var{xs, r}, Temps: 2}
+	f := &Form{Vars: []*Var{xs, r}, Temps: make([]TempInfo, 2)}
 	f.Instrs = []Instr{
 		{Op: OpBorrow, Place: Operand{Var: 0, Path: "[]"}, To: Temp(0), Mut: true},
 		{Op: OpStore, Place: Operand{Var: 1}, To: Temp(0)},

@@ -533,8 +533,7 @@ func (c *Checker) callSource(e *ast.CallExpr) ast.Expr {
 // for a name that did not resolve.
 func (c *Checker) calleeOf(e *ast.CallExpr) Object {
 	if fun, ok := e.Fun.(*ast.Ident); ok {
-		_, obj := c.scope.LookupParent(fun.Name)
-		return obj
+		return c.refersTo(fun)
 	}
 
 	return c.named(e.Fun)

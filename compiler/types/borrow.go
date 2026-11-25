@@ -53,6 +53,12 @@ type borrow struct {
 	// there, x := h.src, rather than a borrow of the place itself, x :=
 	// ref h.own: the holder holds what the place pointed at.
 	read bool
+	// call says the holder stands for a temporary lent for a call or a
+	// statement, which no variable holds: a message names no holder and
+	// no use, the loan copies nothing the place holds, and it is of no
+	// place the owner may have dropped or that escapes, as for the loans
+	// lent for one call today.
+	call bool
 }
 
 // An access says what an expression does to a place, which decides the
@@ -233,7 +239,7 @@ func (c *Checker) collision(e ast.Expr, p place, what access, b *borrow) string 
 		}
 	}
 
-	if b.holder != nil {
+	if b.holder != nil && !b.call {
 		msg += " by " + c.holderText(b)
 	}
 
@@ -250,14 +256,21 @@ func (c *Checker) lend(e ast.Expr, mut bool) {
 		return
 	}
 
-	what := refAccess
 	if mut {
-		what = mutAccess
 		c.capture(p.v, byMut)
 	}
 
-	c.access(e, p, what, e.Pos())
+	c.access(e, p, borrowAccess(mut), e.Pos())
 	c.temps = append(c.temps, borrow{place: p, mut: mut, pos: e.Pos()})
+}
+
+// borrowAccess is the access a borrow makes, ref or mut.
+func borrowAccess(mut bool) access {
+	if mut {
+		return mutAccess
+	}
+
+	return refAccess
 }
 
 // lendCaptures lends what a closure literal captures for the call it
@@ -401,7 +414,7 @@ func (c *Checker) static(e ast.Expr) bool {
 	case *ast.BasicLit:
 		return true
 	case *ast.Ident:
-		_, ok := c.resolve(e.Name).(*Const)
+		_, ok := c.refersTo(e).(*Const)
 		return ok
 	case *ast.SelectorExpr:
 		_, ok := c.named(e).(*Const)
@@ -487,24 +500,37 @@ func (c *Checker) derive(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 		return
 	}
 
-	c.sources(e, func(src ast.Expr, read, deref bool) {
-		p, kind := c.placeOf(src)
-		if kind == placeOwned && read && holdsBorrow(placeType(p)) {
-			if mut, _ := borrowIn(placeType(p)); !mut {
-				from := p.path
-				if deref && isBorrow(placeType(p)) {
-					from = joinPath(p.path, "*") // x := *r holds what r points at holds, as a copy of it would, and not r's own borrow of it
-				}
+	c.sources(e, func(src ast.Expr, read, deref bool) { c.deriveFrom(v, path, mut, src, read, deref, pos) })
+}
 
-				c.flowCopy(v, p.v, from, path, pos) // a ref borrow is copied: v holds what p holds, and p is free
-				return
+// deriveFrom records that the part path of v holds what one source of a
+// value lends, the place src, read as a value or lent, through a * or
+// not.
+func (c *Checker) deriveFrom(v *Var, path string, mut bool, src ast.Expr, read, deref bool, pos token.Pos) {
+	p, kind := c.placeOf(src)
+	c.derivePlace(v, path, mut, p, kind, read, deref, pos)
+}
+
+// derivePlace records that the part path of v holds what the place p,
+// reached as kind says, lends: a ref borrow read out of an owned place
+// is copied, and any other place is borrowed, mut when the value is, at
+// pos.
+func (c *Checker) derivePlace(v *Var, path string, mut bool, p place, kind placeKind, read, deref bool, pos token.Pos) {
+	if kind == placeOwned && read && holdsBorrow(placeType(p)) {
+		if mut, _ := borrowIn(placeType(p)); !mut {
+			from := p.path
+			if deref && isBorrow(placeType(p)) {
+				from = joinPath(p.path, "*") // x := *r holds what r points at holds, as a copy of it would, and not r's own borrow of it
 			}
-		}
 
-		if p, kind := through(p, kind); kind != notPlace {
-			c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, read: read && isBorrow(placeType(p))})
+			c.flowCopy(v, p.v, from, path, pos) // a ref borrow is copied: v holds what p holds, and p is free
+			return
 		}
-	})
+	}
+
+	if p, kind := through(p, kind); kind != notPlace {
+		c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, read: read && isBorrow(placeType(p))})
+	}
 }
 
 // accessPos is the position an access to the place e is reported at:
@@ -812,7 +838,7 @@ func (c *Checker) pin(e ast.Expr, t Type) {
 			case *ast.UnaryExpr:
 				src = x.X
 			case *ast.Ident:
-				if v, ok := c.resolve(x.Name).(*Var); ok {
+				if v, ok := c.refersTo(x).(*Var); ok {
 					if c.pinned == nil {
 						c.pinned = make(map[*ast.Ident]*Var)
 					}

@@ -57,15 +57,17 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.enclosing = c.enclosing[:0]
 	first := len(c.errors)
 	c.funcBody(sig, recv, params, body)
-	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared
-		c.closureMoves = c.closureMoves[:0]
-		form := c.lowerBody(sig, body) // a closure's form, lowered inside its function's, is checked as it is made, into closureMoves
+	c.solveFlow()
+	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared, once the tree's passes have reported
+		c.closureMoves, c.closureLoans = c.closureMoves[:0], c.closureLoans[:0]
+		form := c.lowerBody(sig, body) // a closure's form, lowered inside its function's, is checked as it is made, into closureMoves and closureLoans
 		if compareForms {
-			c.compareMoves(append(c.formMoves(form), c.closureMoves...), first)
+			moves := append(c.formMoves(form), c.closureMoves...)
+			loans := append(c.formBorrows(form, sig, token.NoPos), c.closureLoans...)
+			c.comparePasses(moves, loans, first)
 		}
 	}
 
-	c.solveFlow()
 	c.freeFlow(c.flow)
 	c.flow, c.temps = nil, c.temps[:0]
 	clear(c.pinned)
@@ -101,9 +103,7 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 		}
 	}
 
-	if c.hasMutParam(sig) || c.flow != nil && c.flow.outer != token.NoPos || c.keepsWord() {
-		c.flowParams(sig) // what reaches the caller's places is followed; a closure's parameters are its caller's too
-	}
+	c.flowParams(sig)
 
 	if !c.stmts(body.List) && sig.results != Unit {
 		c.errorf(body.Rbrace, "missing return at the end of the function")

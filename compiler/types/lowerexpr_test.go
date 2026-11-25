@@ -33,6 +33,7 @@ b2:
   store t1 <- t3
   -> b3
 b3:
+  read t1
   t4 = make(t0, t1)
   store x <- t4
   move x.a
@@ -48,13 +49,15 @@ b1:
   -> b3
 b2:
   t2 = make()
-  t3 = call(t2)
-  store t1 <- t3
+  t3 = borrow ref t2
+  t4 = call(t3)
+  store t1 <- t4
   -> b3
 b3:
+  read t1
   store s <- t1
   move s
-  t4 = call(s)
+  t5 = call(s)
   leave(s)
   ->
 `},
@@ -63,6 +66,7 @@ b3:
   t1 = make()
   t2 = make(t0, t1)
   store l <- t2
+  drop t0
   read l.n
   t3 = call(l.n)
   move s
@@ -97,13 +101,15 @@ b1:
   -> b3
 b2:
   t1 = make()
-  t2 = call(t1)
-  store t0 <- t2
+  t2 = borrow ref t1
+  t3 = call(t2)
+  store t0 <- t3
   -> b3
 b3:
+  read t0
   store s <- t0
   move s
-  t3 = call(s)
+  t4 = call(s)
   leave(s, o)
   ->
 `},
@@ -111,6 +117,8 @@ b3:
   read n
   -> b2 b3
 b1:
+  read t0
+  return(t0)
   leave(s, n)
   ->
 b2:

@@ -39,6 +39,7 @@ const (
 	OpStore                 // To's value is given to Place, dropping what Place held; a borrow variable is pointed elsewhere; a temporary stored to is a block's or an arm's value
 	OpDrop                  // the value at Place, a variable or a temporary, is dropped; a Drop reads what the value borrows
 	OpDefer                 // Args are evaluated now and lent to a holder live to every return; the call runs in each returning leave
+	OpReturn                // Args are the values the function returns, taken before the leave that follows
 	OpLeave                 // a return, a ? that returns, a break or a continue: the deferred calls when it returns, the drops in Args, then the edge
 )
 
@@ -47,10 +48,23 @@ type Form struct {
 	Vars   []*Var      // the body's variables, the parameters first, each once, by the index an Operand names
 	Blocks []FormBlock // in the order control reaches them when no edge goes back
 	Instrs []Instr     // every block's instructions in one list, a block a range of it
-	Temps  int         // how many temporaries the body makes
+	Temps  []TempInfo  // the body's temporaries, by the number an Operand names
 
 	operands []Operand // what every instruction's Args slice into, one list for the body
 	succs    []int     // what every block's Succs slice into
+}
+
+// A TempInfo is what the lowering knows of a temporary: the expression
+// whose value it holds, its type, the owned temporary it is or a borrow
+// of a part of which it is, and what takes it.
+type TempInfo struct {
+	Expr    ast.Expr
+	Type    Type
+	Origin  int  // the owned temporary this one is, or is a borrow of a part of, or a call's result borrows from: itself for a value made here
+	Loop    bool // a borrow a range loop holds of what it ranges over, for every pass
+	Bound   bool // a binding or a loop variable takes a part of it, or of a borrow of it: it is held until its statement drops it
+	Given   bool // a call or a defer takes it, or a statement with several values stores it: what it lends is lent until then
+	Carried bool // made of a value that reads a variable its statement stores: it holds what the value lends before any store
 }
 
 // A FormBlock is a straight run of instructions and the blocks control
@@ -81,14 +95,17 @@ type Instr struct {
 	To      Operand   // the temporary made or stored
 	Args    []Operand // what a make, call or defer takes; what a leave drops
 	Mut     bool      // a borrow as mut
-	Capture bool      // a mut borrow a closure's making records for a variable it assigns: no use of the value until the closure runs
+	Capture bool      // a read, borrow or move a closure's making records for a variable it captures; for a mut borrow, no use of the value until the closure runs
+	Decl    bool      // a store that declares its variable, giving it its first value
 	Expr    ast.Expr
 	Pos     token.Pos
+	why     dropWhy // for a drop or a leave, where the value dies, which a message names
 }
 
 // An Operand is a place, a variable and a path into it of field names,
-// of * for the value a borrow or pointer reaches, and of [] for any
-// element of a slice, or a temporary, a value the statement makes.
+// of * for the value a borrow or pointer reaches, of [] for any element
+// of a slice, and of ?N for the part a pattern binds, a variant's name or
+// a tuple's index after a ?, or a temporary, a value the statement makes.
 type Operand struct {
 	Var  int    // the index of the variable in the Form's Vars, or NoVar for a temporary
 	Temp int    // the temporary's number, when Var is NoVar
@@ -100,6 +117,10 @@ func Temp(n int) Operand { return Operand{Var: NoVar, Temp: n} }
 
 // IsTemp reports whether o is a temporary.
 func (o Operand) IsTemp() bool { return o.Var == NoVar }
+
+// IsValue reports whether o is a temporary that holds a value: not a
+// place, and not the mark of no value.
+func (o Operand) IsValue() bool { return o.Var == NoVar && o.Temp != NoTemp }
 
 // sub is the place part reached from o: a field by name, * for what a
 // borrow or pointer at o reaches, [] for an element.
@@ -155,6 +176,10 @@ func (f *Form) OperandString(o Operand) string {
 func (f *Form) instrString(in Instr) string {
 	switch in.Op {
 	case OpRead:
+		if in.Mut {
+			return "read mut " + f.OperandString(in.Place)
+		}
+
 		return "read " + f.OperandString(in.Place)
 	case OpMove:
 		return "move " + f.OperandString(in.Place)
@@ -175,6 +200,8 @@ func (f *Form) instrString(in Instr) string {
 		return "drop " + f.OperandString(in.Place)
 	case OpDefer:
 		return "defer" + f.argsString(in.Args)
+	case OpReturn:
+		return "return" + f.argsString(in.Args)
 	case OpLeave:
 		return "leave" + f.argsString(in.Args)
 	}

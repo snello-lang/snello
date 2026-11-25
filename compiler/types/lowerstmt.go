@@ -46,16 +46,16 @@ func (l *lowering) stmt(s ast.Stmt) {
 	case *ast.IncDecStmt:
 		p := l.place(s.X, false)
 		l.emit(Instr{Op: OpRead, Place: p, Expr: s.X, Pos: s.X.Pos()})
-		t := l.temp(l.typeOf(s.X), false)
+		t := l.temp(l.typeOf(s.X), false, s.X)
 		l.emit(Instr{Op: OpMake, To: t, Args: l.args(p), Expr: s.X, Pos: s.TokPos})
 		l.store(l.place(s.X, true), t, s.X)
-		l.dropOwned(s.TokPos)
+		l.dropOwned(s.Pos())
 	case *ast.SendStmt:
 		ch := l.channel(s.Chan)
 		v := l.value(s.Value, l.sendType(s.Chan))
 		l.take(v)
-		l.emit(Instr{Op: OpCall, To: l.temp(Unit, false), Args: l.args(ch, v), Expr: s.Value, Pos: s.Arrow})
-		l.dropOwned(s.Arrow)
+		l.emit(Instr{Op: OpCall, To: l.temp(Unit, false, s.Value), Args: l.args(ch, v), Expr: s.Value, Pos: s.Arrow})
+		l.dropOwned(s.Pos())
 	case *ast.SpawnStmt:
 		l.spawned(s.Call, s.Spawn)
 		l.dropOwned(s.Spawn)
@@ -93,18 +93,17 @@ func (l *lowering) block(b *ast.BlockStmt) {
 // type's zero value, made here.
 func (l *lowering) varDecl(d *ast.VarDecl) {
 	start := len(l.argStack)
-	values := l.values(len(d.Names), d.Values, func(i int) Type { return l.namedType(d.Names[i]) })
+	values := l.values(len(d.Names), d.Values, func(i int) Type { return l.namedType(d.Names[i]) }, nil) // a declaration's names are new: the values read none of them
 	for i, name := range d.Names {
 		v, ok := l.c.info.Defs[name].(*Var)
 		if !ok || isBlank(name) {
 			continue
 		}
 
-		idx := l.declare(v)
 		if i < len(values) {
-			l.store(Operand{Var: idx}, values[i], name)
+			l.declareStore(v, values[i], name)
 		} else {
-			l.emit(Instr{Op: OpStore, Place: Operand{Var: idx}, To: l.temp(v.typ, false), Expr: name, Pos: name.Pos()})
+			l.declareStore(v, l.temp(v.typ, false, name), name)
 		}
 	}
 
@@ -123,16 +122,20 @@ func (l *lowering) namedType(id *ast.Ident) Type {
 }
 
 // values lowers the values given to n names or places, left to right,
-// one operand each: one value per name, or the parts of one tuple. The
-// operands are gathered on the argument stack from where it stood, for
-// the caller to take off once they are stored.
-func (l *lowering) values(n int, exprs []ast.Expr, want func(i int) Type) []Operand {
+// one operand each: one value per name, or the parts of one tuple. A
+// value read from a place is taken into a temporary when the statement
+// has several values, so that a, b = b, a gives each place what was
+// read, and a value that carries a borrow out of a variable one of the
+// places lhs names is carried, so that a = id(a) and r := r keep what
+// the value read. The operands are gathered on the argument stack from
+// where it stood, for the caller to take off once they are stored.
+func (l *lowering) values(n int, exprs []ast.Expr, want func(i int) Type, lhs []ast.Expr) []Operand {
 	start := len(l.argStack)
 	if len(exprs) == 1 && n > 1 {
 		t := l.value(exprs[0], nil)
 		l.take(t)
 		for i := 0; i < n; i++ {
-			l.argStack = append(l.argStack, t.sub(strconv.Itoa(i)))
+			l.argStack = append(l.argStack, t.sub("?"+strconv.Itoa(i)))
 		}
 
 		return l.argStack[start:]
@@ -144,10 +147,31 @@ func (l *lowering) values(n int, exprs []ast.Expr, want func(i int) Type) []Oper
 			w = want(i)
 		}
 
-		l.argStack = append(l.argStack, l.value(e, w))
+		o := l.value(e, w)
+		switch {
+		case i < len(lhs) && holdsBorrow(l.typeOf(e)) && l.c.readsAny(e, lhs):
+			o = l.carry(e, o, lhs[i].Pos())
+		case !o.IsTemp() && n > 1:
+			o = l.made(e, l.args(o), true)
+		}
+
+		if n > 1 {
+			l.given(o) // a value of a statement with several keeps what it borrows lent until it is stored, as an argument does for its call
+		}
+
+		l.argStack = append(l.argStack, o)
 	}
 
 	return l.argStack[start:]
+}
+
+// carry takes the value o of e, which reads a variable its statement
+// stores, into a temporary made where the place at pos is stored: the
+// temporary holds what the value lends before any store lets go of it.
+func (l *lowering) carry(e ast.Expr, o Operand, pos token.Pos) Operand {
+	t := l.madeAt(e, l.args(o), true, pos)
+	l.f.Temps[t.Temp].Carried = true
+	return t
 }
 
 // assign lowers =, := and the operator assignments in the order the
@@ -162,15 +186,10 @@ func (l *lowering) assign(s *ast.AssignStmt) {
 		values := l.values(len(s.Lhs), s.Rhs, func(i int) Type {
 			id, _ := s.Lhs[i].(*ast.Ident)
 			return l.namedType(id) // a name := reuses is assigned, with its type
-		})
+		}, s.Lhs)
 		for i, lhs := range s.Lhs {
-			id, ok := lhs.(*ast.Ident)
-			if !ok || isBlank(id) || i >= len(values) {
-				continue
-			}
-
-			if p, ok := l.target(id, true); ok {
-				l.store(p, values[i], id)
+			if id, ok := lhs.(*ast.Ident); ok && !isBlank(id) && i < len(values) {
+				l.storeName(id, true, values[i])
 			}
 		}
 	case token.ASSIGN:
@@ -186,7 +205,7 @@ func (l *lowering) assign(s *ast.AssignStmt) {
 			}
 
 			return l.typeOf(s.Lhs[i])
-		})
+		}, s.Lhs)
 		for i, lhs := range s.Lhs {
 			if !isBlank(lhs) && i < len(values) {
 				l.store(l.place(lhs, true), values[i], lhs)
@@ -204,14 +223,14 @@ func (l *lowering) assign(s *ast.AssignStmt) {
 			v = l.read(s.Rhs[0]) // an operator reads its right side; nothing moves
 		}
 
-		t := l.temp(l.typeOf(lhs), false)
+		t := l.temp(l.typeOf(lhs), false, lhs)
 		l.emit(Instr{Op: OpMake, To: t, Args: l.args(p, v), Expr: lhs, Pos: s.TokPos})
 		l.reachAgain(lhs)
 		l.store(l.place(lhs, true), t, lhs)
 	}
 
 	l.argStack = l.argStack[:start]
-	l.dropOwned(s.TokPos)
+	l.dropOwned(s.Pos())
 }
 
 // reachAgain reads again what a call the place is reached through reads
@@ -241,15 +260,19 @@ func (l *lowering) reachAgain(e ast.Expr) {
 
 // store writes the value o into the place p: a temporary stored is
 // taken, so that the statement's end drops it no more.
-func (l *lowering) store(p, o Operand, e ast.Expr) {
+func (l *lowering) store(p, o Operand, e ast.Expr) { l.storeAs(p, o, e, false) }
+
+// storeAs is store, declaring the place's variable when decl says so.
+func (l *lowering) storeAs(p, o Operand, e ast.Expr, decl bool) {
 	l.take(o)
-	l.emit(Instr{Op: OpStore, Place: p, To: o, Expr: e, Pos: e.Pos()})
+	l.bound(o)
+	l.emit(Instr{Op: OpStore, Place: p, To: o, Decl: decl, Expr: e, Pos: e.Pos()})
 }
 
 // armValue lowers the expression an arm or a block ends with, stores
 // its value into result, and drops the arm's temporaries.
 func (l *lowering) armValue(e ast.Expr, result Operand) {
-	v := l.value(e, l.tempTypes[result.Temp])
+	v := l.value(e, l.f.Temps[result.Temp].Type)
 	l.store(result, v, e)
 	l.dropOwned(e.Pos())
 }
@@ -260,7 +283,7 @@ func (l *lowering) deferStmt(s *ast.DeferStmt) {
 		return
 	}
 
-	args := l.callArgs(call, l.calleeOf(call))
+	args, _ := l.callArgs(call, l.c.calledBy(call))
 	for _, a := range args {
 		l.take(a) // the deferred call holds them until the function returns
 	}
@@ -270,9 +293,10 @@ func (l *lowering) deferStmt(s *ast.DeferStmt) {
 }
 
 func (l *lowering) returnStmt(s *ast.ReturnStmt) {
+	start := len(l.argStack)
 	switch {
 	case len(s.Results) == 1:
-		l.take(l.value(s.Results[0], l.results))
+		l.argStack = append(l.argStack, l.value(s.Results[0], l.results))
 	case len(s.Results) > 1:
 		tuple, _ := l.results.(*Tuple)
 		for i, r := range s.Results {
@@ -281,8 +305,17 @@ func (l *lowering) returnStmt(s *ast.ReturnStmt) {
 				w = tuple.elems[i]
 			}
 
-			l.take(l.value(r, w))
+			l.argStack = append(l.argStack, l.value(r, w))
 		}
+	}
+
+	if len(s.Results) > 0 {
+		for _, v := range l.argStack[start:] {
+			l.take(v)
+		}
+
+		l.emit(Instr{Op: OpReturn, Args: l.args(l.argStack[start:]...), Expr: s.Results[0], Pos: s.Return})
+		l.argStack = l.argStack[:start]
 	}
 
 	l.leave(0, s.Return, nil)
@@ -342,7 +375,7 @@ func (l *lowering) condition(e ast.Expr) {
 	}
 
 	l.value(e, Typ[Bool])
-	l.dropOwned(e.Pos())
+	l.dropOwnedAs(e.Pos(), dropCondition)
 }
 
 // ifBind lowers if p := o { }: the value, then a branch whose arm binds
@@ -361,7 +394,8 @@ func (l *lowering) ifBind(s *ast.IfBindStmt) {
 
 	l.branch(then, els)
 	l.openScope()
-	l.bind(s.Pat, v)
+	l.reachMut(s.Value, v)
+	l.bind(s.Pat, v.sub("?Some.?0")) // the pattern binds the payload
 	l.stmts(s.Body.List)
 	l.closeScope(s.Body.Rbrace)
 	l.joinTo(join)
@@ -372,21 +406,32 @@ func (l *lowering) ifBind(s *ast.IfBindStmt) {
 	}
 
 	l.start(join)
-	l.dropOwned(s.Body.Rbrace)
+	l.dropOwned(s.Pos())
 }
 
-// bind declares the names a pattern binds and gives each what it binds
-// out of the value v.
+// bind declares the names a pattern binds and gives each the part of
+// the value v it binds: a tuple's element by its index, a variant's
+// field by the variant's name and the field's index, the whole for a
+// name alone.
 func (l *lowering) bind(p ast.Pattern, v Operand) {
-	ast.Inspect(p, func(n ast.Node) bool {
-		if id, ok := n.(*ast.IdentPat); ok {
-			if bound, ok := l.c.info.Defs[id.Name].(*Var); ok {
-				l.store(Operand{Var: l.declare(bound)}, v, id.Name)
-			}
+	switch p := p.(type) {
+	case *ast.IdentPat:
+		if bound, ok := l.c.info.Defs[p.Name].(*Var); ok {
+			l.declareStore(bound, v, p.Name)
 		}
-
-		return true
-	})
+	case *ast.TuplePat:
+		for i, elt := range p.Elts {
+			l.bind(elt, v.sub("?"+strconv.Itoa(i)))
+		}
+	case *ast.VariantPat:
+		for i, arg := range p.Args {
+			l.bind(arg, v.sub("?"+calleeName(p.Path).Name+".?"+strconv.Itoa(i)))
+		}
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			l.bind(alt, v)
+		}
+	}
 }
 
 // forStmt lowers a for loop: its init in a scope of its own; a head
@@ -404,7 +449,7 @@ func (l *lowering) forStmt(s *ast.ForStmt) {
 	}
 
 	head, exit := l.newBlock(), l.newBlock() // the exit is outside the loop
-	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, s.For
+	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, loopBegins(s)
 	l.loops = append(l.loops, lowLoop{head: head, exit: exit, scopes: len(l.scopes)})
 	body, post := l.newBlock(), l.newBlock()
 	l.loops[len(l.loops)-1].cont = post
@@ -428,6 +473,17 @@ func (l *lowering) forStmt(s *ast.ForStmt) {
 	l.closeScope(s.Body.Rbrace)
 }
 
+// loopBegins is where a for loop's passes begin, after its init, which
+// runs once: a variable the init declares is declared before the loop,
+// and one moved in a pass is moved in the next.
+func loopBegins(s *ast.ForStmt) token.Pos {
+	if s.Cond != nil {
+		return s.Cond.Pos()
+	}
+
+	return s.Body.Lbrace
+}
+
 // rangeStmt lowers a range loop: the collection once, moved when an
 // owned slice is ranged by value and lent otherwise; then each pass
 // binds the item and runs the body.
@@ -436,7 +492,7 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 		return
 	}
 
-	x := l.rangeSource(s.X) // before the loop's scope: a break or a continue leaves it be, the loop's end drops it
+	x := l.rangeSource(s.X, s.For) // before the loop's scope: a break or a continue leaves it be, the loop's end drops it
 	l.openScope()
 	head, exit := l.newBlock(), l.newBlock() // the exit is outside the loop
 	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, s.For
@@ -445,47 +501,46 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 	l.goTo(head)
 	l.edge(l.cur, exit)
 	l.goTo(body)
-	l.openScope()
+	l.openScope() // the pass's: its key and value, dropped where the pass ends
 	item := x.sub("[]")
 	for _, e := range []ast.Expr{s.Key, s.Value} {
 		if e == nil || isBlank(e) {
 			continue
 		}
 
-		id, ok := e.(*ast.Ident)
-		if !ok {
+		if id, ok := e.(*ast.Ident); ok {
+			l.storeName(id, s.Tok == token.DEFINE, item)
+		} else {
 			l.store(l.place(e, false), item, e)
-		} else if p, ok := l.target(id, s.Tok == token.DEFINE); ok {
-			l.store(p, item, id)
 		}
 	}
 
-	l.stmts(s.Body.List)
-	l.closeScope(s.Body.Rbrace)
+	l.block(s.Body)
+	l.closePass(s.Body.Rbrace)
 	l.joinTo(head)
 	l.loops = l.loops[:len(l.loops)-1]
 	l.start(exit)
 	l.closeScope(s.Body.Rbrace)
-	l.dropOwned(s.Body.Rbrace)
+	l.dropOwned(s.For)
 }
 
 // rangeSource evaluates what a range loop walks, once: an owned place
 // of a non-Copy type ranged by value is moved, an iterator or a channel
 // is lent mut, any other place is lent, and a value made here is held
 // for the loop.
-func (l *lowering) rangeSource(x ast.Expr) Operand {
+func (l *lowering) rangeSource(x ast.Expr, pos token.Pos) Operand {
 	t := l.typeOf(x)
 	if p, ok := l.placeOf(x); ok && t != nil {
 		switch {
-		case isBorrow(t):
+		case isBorrow(t): // a borrow variable is lent again, for the loop
 			l.emit(Instr{Op: OpRead, Place: p, Expr: x, Pos: x.Pos()})
-			return p
+			return l.lendLoop(p, x, isMut(t), pos)
 		case l.kindOf(p) != placeOwned: // reached through a borrow or an element: lent for the loop, since it cannot be moved out
-			return l.lend(p, x, false)
+			return l.lendLoop(p, x, false, pos)
 		case isChan(t), IteratorNext(t) != nil:
-			return l.lend(p, x, true)
-		case isString(t):
-			return l.lend(p, x, false)
+			return l.lendLoop(p, x, true, pos)
+		case isString(t), holdsBorrow(t): // a string's runes are copies, and a collection of borrows lends what they borrow: neither is consumed
+			return l.lendLoop(p, x, false, pos)
 		case IsCopy(t):
 			l.emit(Instr{Op: OpRead, Place: p, Expr: x, Pos: x.Pos()})
 			return p
@@ -495,7 +550,22 @@ func (l *lowering) rangeSource(x ast.Expr) Operand {
 		return p
 	}
 
-	return l.value(x, nil) // made here: the range statement's, dropped when the loop ends
+	v := l.value(x, nil)                             // made here: the range statement's, dropped when the loop ends
+	if t != nil && (isBorrow(t) || holdsBorrow(t)) { // what it lends is lent to the loop, for every pass, and the loop holds the value
+		l.take(v)
+		mut, _ := borrowIn(t)
+		return l.lendLoop(v, x, mut, pos)
+	}
+
+	return v
+}
+
+// lendLoop lends the place p, or what the value p lends, to the range
+// loop, at the for, for every pass: the loop holds it until it ends.
+func (l *lowering) lendLoop(p Operand, e ast.Expr, mut bool, pos token.Pos) Operand {
+	tmp := l.lendAt(p, e, mut, pos)
+	l.f.Temps[tmp.Temp].Loop = true
+	return tmp
 }
 
 // selectStmt lowers select: each case's channel, and a send's value,
@@ -544,15 +614,13 @@ func (l *lowering) selectStmt(s *ast.SelectStmt) {
 				}
 			}
 		case *ast.ExprStmt:
-			if v := values[i]; v.IsTemp() && v.Temp != NoTemp {
+			if v := values[i]; v.IsValue() {
 				l.emit(Instr{Op: OpDrop, Place: v, Pos: cc.Case}) // received and not bound: the case drops it
 			}
 		case *ast.AssignStmt:
 			for _, lhs := range comm.Lhs {
 				if id, ok := lhs.(*ast.Ident); ok && !isBlank(id) {
-					if p, ok := l.target(id, comm.Tok == token.DEFINE); ok {
-						l.store(p, values[i], id)
-					}
+					l.storeName(id, comm.Tok == token.DEFINE, values[i])
 				}
 			}
 		}

@@ -20,15 +20,15 @@ type callee struct {
 	sig    *Signature // what runs: the instance's for a generic function, the callee's type otherwise; nil for a builtin, a variant or a conversion
 }
 
-// calleeOf resolves what the call x names.
-func (l *lowering) calleeOf(x *ast.CallExpr) callee {
+// calledBy resolves what the call x names, by what the typing recorded.
+func (c *Checker) calledBy(x *ast.CallExpr) callee {
 	var k callee
 	id := calleeName(x.Fun)
 	if id == nil {
 		_, k.isType = unparen(x.Fun).(*ast.TypeExpr)
 	} else {
-		k.named, k.obj = true, l.c.info.Uses[id]
-		if inst, ok := l.c.info.Instances[id]; ok {
+		k.named, k.obj = true, c.info.Uses[id]
+		if inst, ok := c.info.Instances[id]; ok {
 			k.sig = inst.Type
 			return k
 		}
@@ -39,7 +39,7 @@ func (l *lowering) calleeOf(x *ast.CallExpr) callee {
 		return k
 	}
 
-	k.sig, _ = l.typeOf(x.Fun).(*Signature)
+	k.sig, _ = c.info.Types[x.Fun].(*Signature)
 	return k
 }
 
@@ -84,31 +84,56 @@ func (k callee) builtin() *Builtin {
 // receiver lent last, and the call into a temporary. A variant written
 // as a call and a conversion make their value from the arguments.
 func (l *lowering) call(x *ast.CallExpr) Operand {
-	k := l.calleeOf(x)
-	if !k.names() {
-		if p, ok := l.placeOf(x.Fun); ok { // a closure held in a variable or a field is read
-			l.emit(Instr{Op: OpRead, Place: p, Expr: x.Fun, Pos: x.Fun.Pos()})
-		} else {
-			l.take(l.value(x.Fun, nil)) // a closure written here, or a call that gives a function: made before the arguments
-		}
+	k := l.c.calledBy(x)
+	args, recv := l.callArgs(x, k)
+	t := l.typeOf(x)
+	tmp := l.temp(t, true, x)
+	if src := callSourceIndex(k.sig, recv); src >= 0 && src < len(args) && holdsBorrow(t) {
+		l.derives(tmp, args[src]) // a result that borrows from a temporary is of that temporary
 	}
 
-	args := l.callArgs(x, k)
-	tmp := l.temp(l.typeOf(x), true)
 	op := OpCall
 	if k.makes() {
 		op = OpMake
 	}
 
 	l.emit(Instr{Op: op, To: tmp, Args: args, Expr: x, Pos: x.Pos()})
+	if isNever(t) { // a call that never returns ends the function: what every open scope declares is dropped
+		l.leave(0, x.Pos(), x)
+	}
+
 	return tmp
 }
 
+// callSourceIndex is the operand a call's result borrows from, among the
+// operands callArgs gives, the receiver first when recv says there is
+// one: the receiver, or the argument of the one borrowed parameter; -1
+// for none.
+func callSourceIndex(sig *Signature, recv bool) int {
+	switch {
+	case sig == nil:
+		return -1
+	case recv:
+		return 0
+	}
+
+	return borrowedParam(sig)
+}
+
 // callArgs evaluates what a call takes, in order, and returns the
-// operands, the receiver's lend first when the callee is a method.
-func (l *lowering) callArgs(x *ast.CallExpr, k callee) []Operand {
+// operands, the receiver's lend first when the callee is a method, and
+// whether there is one.
+func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 	if k.conversion() && len(x.Args) == 1 {
-		return l.args(l.converted(x, x.Args[0]))
+		return l.args(l.converted(x, x.Args[0])), false
+	}
+
+	if !k.names() {
+		if p, ok := l.placeOf(x.Fun); ok { // a closure held in a variable or a field is read
+			l.emit(Instr{Op: OpRead, Place: p, Expr: x.Fun, Pos: x.Fun.Pos()})
+		} else {
+			l.take(l.value(x.Fun, nil)) // a closure written here, or a call that gives a function: made before the arguments
+		}
 	}
 
 	start := len(l.argStack)
@@ -120,11 +145,13 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) []Operand {
 		l.argStack = append(l.argStack, Operand{}) // the receiver's place among the operands, filled once it is lent
 		if p, ok := l.placeOf(sel.X); ok && isBorrow(recv.typ) {
 			recvPlace = p
-			l.emit(Instr{Op: OpRead, Place: p, Expr: sel.X, Pos: sel.X.Pos()}) // the receiver is read before the arguments
+			l.emit(Instr{Op: OpRead, Place: p, Expr: sel.X, Pos: sel.X.Pos()}) // the receiver is read before the arguments, and lent after them
 		} else {
-			recvPlace = l.value(sel.X, recv.typ)
-			l.take(recvPlace)
-			recv = nil // given, not lent after the arguments
+			recvPlace = l.value(sel.X, recv.typ) // a part of a value made here is lent now, a borrow made here is given, a value made here is lent after the arguments and stays the statement's
+			if !isBorrow(recv.typ) || l.isBorrowTemp(recvPlace) {
+				l.take(recvPlace)
+				recv = nil // given, not lent after the arguments
+			}
 		}
 	}
 
@@ -137,7 +164,12 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) []Operand {
 
 	for i, arg := range x.Args {
 		if builtin != nil && !(builtin.id == BuiltinReplace && i == 1) { // a builtin reads its arguments, but the value replace puts in the place
-			l.argStack = append(l.argStack, l.read(arg))
+			a := l.read(arg)
+			if l.isBorrowTemp(a) {
+				l.take(a) // lent for the call
+			}
+
+			l.argStack = append(l.argStack, a)
 			continue
 		}
 
@@ -146,22 +178,25 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) []Operand {
 			_, want, _, _ = argSlot(k.sig, i, x.Ellipsis.IsValid(), kind, each)
 		}
 
-		if isBorrow(want) && isBorrow(l.typeOf(arg)) { // a borrow passed on is lent again, not moved
-			l.argStack = append(l.argStack, l.read(arg))
-			continue
+		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
+			if p, ok := l.placeOrPart(arg); ok {
+				l.emit(Instr{Op: OpRead, Place: p, Expr: arg, Pos: arg.Pos()})
+				l.argStack = append(l.argStack, l.lendFor(p, arg, r.mut))
+				continue
+			}
 		}
 
 		a := l.value(arg, want)
-		if want != nil && !isBorrow(want) || builtin != nil && builtin.id == BuiltinReplace && i == 1 {
-			l.take(a) // given by value: the callee owns it
+		if want != nil && !isBorrow(want) || builtin != nil && builtin.id == BuiltinReplace && i == 1 || l.isBorrowTemp(a) {
+			l.take(a) // given by value, the callee owns it; a borrow made for the call ends when the call returns
 		}
 
 		l.argStack = append(l.argStack, a)
 	}
 
 	if recv != nil {
-		if r, ok := recv.typ.(*Ref); ok && !isBorrow(l.typeOf(recvExpr)) { // an owned place is lent last, after the arguments
-			recvPlace = l.lend(recvPlace, recvExpr, r.mut)
+		if r, ok := recv.typ.(*Ref); ok { // the receiver is lent last, after the arguments; a borrow variable is lent again
+			recvPlace = l.lendFor(recvPlace, recvExpr, r.mut)
 		}
 	}
 
@@ -169,9 +204,21 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) []Operand {
 		l.argStack[start] = recvPlace
 	}
 
+	for _, a := range l.argStack[start:] {
+		l.given(a)
+	}
+
 	args := l.args(l.argStack[start:]...)
 	l.argStack = l.argStack[:start]
-	return args
+	return args, recvExpr != nil
+}
+
+// lendFor lends the place p, written as e, for the call: the loan ends
+// when the call returns.
+func (l *lowering) lendFor(p Operand, e ast.Expr, mut bool) Operand {
+	t := l.lend(p, e, mut)
+	l.take(t)
+	return t
 }
 
 // converted evaluates the operand of a conversion: the value is taken

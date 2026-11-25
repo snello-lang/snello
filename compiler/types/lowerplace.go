@@ -88,8 +88,8 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 			return Operand{Var: l.index(v)}, true
 		}
 
-		if x.Name == "super" && l.params > 0 { // the receiver of the method being lowered, the first variable
-			return Operand{Var: 0}, true
+		if x.Name == "super" && l.c.recv != nil { // the receiver of the method being lowered, through any closures
+			return Operand{Var: l.index(l.c.recv)}, true
 		}
 	case *ast.ParenExpr:
 		return l.placeOf(x.X)

@@ -1324,14 +1324,20 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	c.closures = c.closures[:len(c.closures)-1]
 	c.enclosing = c.enclosing[:len(c.enclosing)-1]
 	c.sig, c.regions, c.dead = outer, regions, dead
+	c.closureAccesses(e)
+	return operand{value, sig, nil, nil}
+}
+
+// closureAccesses records what the making of the closure e does to what
+// it captures: a borrow, ref or mut, or a move of each, at the closure's
+// position, and a read of each when it runs.
+func (c *Checker) closureAccesses(e *ast.FuncLit) {
 	for _, cap := range c.captured[e] {
 		b := cap.borrow(nil, e.Pos())
-		what := refAccess
+		what := borrowAccess(cap.mode == byMut)
 		switch cap.mode {
 		case byCopy:
 			continue
-		case byMut:
-			what = mutAccess
 		case byMove:
 			what = moveAccess // made here, the closure owns what it moves
 		}
@@ -1344,8 +1350,6 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 			c.flowUse(cap.v, e.Pos()) // the closure reads what it captures when it runs: a borrow variable captured keeps what it views lent, so capturing the viewed place mut collides, as it does outside
 		}
 	}
-
-	return operand{value, sig, nil, nil}
 }
 
 // ifExpr checks if c { a } else { b } as an expression: both branches

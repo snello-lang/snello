@@ -164,6 +164,7 @@ type flow struct {
 	ends      []int         // the ends of the branches of the open forks
 	breaks    []int         // the breaks of the open loops
 	loops     []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
+	loopOf    []int         // for a graph built from a form, the head of the innermost loop each block is in, or -1: the loops' blocks are not consecutive there
 	outer     token.Pos     // for a closure's body, where the closure begins: a variable declared before it may be used after the body
 	seq       int
 	back      bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
@@ -201,7 +202,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.ends, f.breaks, f.loops, f.seq = f.ends[:0], f.breaks[:0], f.loops[:0], 0
 	f.deferred, f.parent, f.fnScope, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, nil, false
-	f.temps, f.temporary = f.temps[:0], nil
+	f.temps, f.temporary, f.loopOf = f.temps[:0], nil, f.loopOf[:0]
 	flows.Put(f)
 }
 
@@ -278,8 +279,16 @@ func (c *Checker) flowLoan(b borrow) {
 		return
 	}
 
+	if b.holder == b.v && c.refuseSelfLoan(b, b.pos) {
+		return // a value reached through itself, v.r = ref v.own, holds nothing of itself
+	}
+
 	f.loans = append(f.loans, b)
 	c.flowAdd(flowEvent{kind: evLoan, i: len(f.loans) - 1})
+	if b.call {
+		return // lent for a call or a statement: the loan alone
+	}
+
 	switch {
 	case isBorrow(b.v.typ):
 		c.flowCopyOf(flowCopy{to: b.holder, from: b.v, toPath: b.hpath, flat: true, lent: true, pos: b.pos})
@@ -344,8 +353,7 @@ func (c *Checker) flowTemporary(tmp ast.Expr) *Var {
 		return nil
 	}
 
-	v := NewVar(tmp.Pos(), exprText(unparen(tmp)), Typ[Invalid])
-	c.flowAssign(v, "")
+	v := c.newHolder(tmp.Pos(), exprText(unparen(tmp)))
 	f.temps = append(f.temps, v)
 	if f.temporary == nil {
 		f.temporary = make(map[*Var]bool)
@@ -395,14 +403,20 @@ func (c *Checker) dropTemporariesFor(mark int, end token.Pos, why dropWhy) {
 
 	if !c.dead {
 		for _, v := range f.temps[mark:] {
-			i := len(f.drops)
-			f.seq++
-			f.drops = append(f.drops, flowDrop{v: v, pos: end, why: why, seq: f.seq})
-			c.flowAdd(flowEvent{kind: evDrop, v: v, i: i})
+			c.flowDrop(v, end, why, false)
 		}
 	}
 
 	f.temps = f.temps[:mark]
+}
+
+// flowDrop records the drop of v at pos, for the reason why; runs says
+// the variable's Drop may read what it borrows, a use of it.
+func (c *Checker) flowDrop(v *Var, pos token.Pos, why dropWhy, runs bool) {
+	f := c.flow
+	f.seq++
+	f.drops = append(f.drops, flowDrop{v: v, pos: pos, why: why, seq: f.seq, runs: runs})
+	c.flowAdd(flowEvent{kind: evDrop, v: v, i: len(f.drops) - 1})
 }
 
 // flowAccess records an access to the place p, made by e at pos.
@@ -413,8 +427,8 @@ func (c *Checker) flowAccess(e ast.Expr, p place, what access, pos token.Pos) {
 	}
 
 	for i := len(f.accesses) - 1; i >= 0 && f.accesses[i].pos >= pos; i-- { // a call's arguments come after its receiver
-		if a := &f.accesses[i]; a.pos == pos && a.p.v == p.v && a.block == f.cur {
-			a.gone = true // one access seen twice, as a receiver is read before the arguments and lent after them: the later one stands; one per arm of a match is each arm's own
+		if a := &f.accesses[i]; a.pos == pos && a.p.v == p.v && a.block == f.cur && (!onlyReads(what) || onlyReads(a.what)) {
+			a.gone = true // one access seen twice, as a receiver is read before the arguments and lent after them: the later one stands, unless it only reads what the earlier changed or lent mut; one per arm of a match is each arm's own
 			break
 		}
 	}
@@ -423,6 +437,10 @@ func (c *Checker) flowAccess(e ast.Expr, p place, what access, pos token.Pos) {
 	f.accesses = append(f.accesses, flowAccess{e: e, p: p, what: what, pos: pos, seq: f.seq, block: f.cur})
 	c.flowAdd(flowEvent{kind: evAccess, i: len(f.accesses) - 1})
 }
+
+// onlyReads reports whether an access only reads the place: a read or a ref
+// borrow, which another ref borrow may stand beside.
+func onlyReads(what access) bool { return what == readAccess || what == refAccess }
 
 // flowReturn records a borrow returned out of v, of its part part.
 func (c *Checker) flowReturn(v *Var, pos token.Pos, part returnedPart) {
@@ -444,6 +462,38 @@ func (c *Checker) flowError(pos token.Pos, msg string, access bool) {
 	f.errs = append(f.errs, flowError{seq: f.seq, pos: pos, msg: msg, access: access})
 }
 
+// fromForm reports whether the graph was built from a form, whose
+// blocks loopOf says the loops of.
+func (f *flow) fromForm() bool { return len(f.loopOf) > 0 }
+
+// dropsHere reports whether v is dropped where its scope ends: a
+// variable of the body, not a field, a package variable or one the
+// checker stands in for.
+func dropsHere(v *Var) bool { return !v.field && !v.global && v.pos != token.NoPos }
+
+// dropRuns reports whether dropping a value of type t reads what it
+// holds: a type with a Drop method that holds a borrow.
+func dropRuns(t Type) bool { return holdsBorrow(t) && dropReads(t) }
+
+// newHolder makes a variable standing in the graph for what no variable
+// of the program holds, a temporary's or a loop's borrows, assigned at
+// pos.
+func (c *Checker) newHolder(pos token.Pos, name string) *Var {
+	v := NewVar(pos, name, Typ[Invalid])
+	c.flowAssign(v, "")
+	return v
+}
+
+// loopLoan lends the place p to the range loop whose holder is holder,
+// for every pass, at pos.
+func (c *Checker) loopLoan(holder *Var, p place, mut bool, pos token.Pos) {
+	c.flowLoan(borrow{holder: holder, place: p, mut: mut, pos: pos, loop: true})
+}
+
+// withoutDeref is the path without the * that ends it: the place a
+// borrow read through it is of.
+func withoutDeref(path string) string { return strings.TrimSuffix(strings.TrimSuffix(path, "*"), ".") }
+
 // dropScope records the drop of every variable s declares, at end, the
 // last declared first.
 func (c *Checker) dropScope(s *Scope, end token.Pos, why dropWhy) {
@@ -454,8 +504,8 @@ func (c *Checker) dropScope(s *Scope, end token.Pos, why dropWhy) {
 
 	mark := len(f.drops)
 	for _, obj := range s.elems {
-		if v, ok := obj.(*Var); ok && !v.field && !v.global && v.pos != token.NoPos && !(isMut(v.typ) && c.isParam(v)) {
-			f.drops = append(f.drops, flowDrop{v: v, pos: end, why: why, runs: holdsBorrow(v.typ) && dropReads(v.typ)}) // a mut parameter is the caller's, never dropped here
+		if v, ok := obj.(*Var); ok && dropsHere(v) && !(isMut(v.typ) && c.isParam(v)) {
+			f.drops = append(f.drops, flowDrop{v: v, pos: end, why: why, runs: dropRuns(v.typ)}) // a mut parameter is the caller's, never dropped here
 		}
 	}
 
@@ -737,10 +787,16 @@ func (f *flow) heldFirst(v *Var) int {
 // solveFlow runs the passes over the graph of the body just
 // walked and reports what collides, in the order the walk met it.
 func (c *Checker) solveFlow() {
+	c.solve()
+	c.reportFlow()
+}
+
+// solve runs the passes over the graph of the body just walked, leaving
+// what collides in the graph's errors.
+func (c *Checker) solve() {
 	f := c.flow
 	if len(f.loans) == 0 && len(f.rets) == 0 && len(f.copies) == 0 {
-		c.reportFlow() // no variable holds a borrow and none is returned: nothing to decide
-		return
+		return // no variable holds a borrow and none is returned: nothing to decide
 	}
 
 	if f.vars == nil {
@@ -795,20 +851,27 @@ func (c *Checker) solveFlow() {
 	c.liveness()
 	c.forwards()
 	c.checkFlow(take(nl))
-	c.reportFlow()
 }
 
 // reportFlow reports the errors the body's graph found, in the order
 // the walk met what they are about.
 func (c *Checker) reportFlow() {
+	c.eachFlowError(func(e flowError) { c.errorf(e.pos, e.msg) })
+}
+
+// eachFlowError calls report with each error the body's graph found, in
+// the order the walk met what they are about, two accesses at one
+// position being one seen twice, as the operand of a borrow is read and
+// then lent: the later, more specific message wins.
+func (c *Checker) eachFlowError(report func(flowError)) {
 	f := c.flow
 	slices.SortStableFunc(f.errs, func(a, b flowError) int { return a.seq - b.seq })
 	for i, e := range f.errs {
 		if i+1 < len(f.errs) && e.access && f.errs[i+1].access && f.errs[i+1].pos == e.pos {
-			continue // two accesses at one position are one seen twice, as the operand of a borrow is read and then lent: the later, more specific message wins
+			continue
 		}
 
-		c.errorf(e.pos, e.msg)
+		report(e)
 	}
 }
 
@@ -865,7 +928,7 @@ func (c *Checker) copyLoans() {
 						hpath = joinPath(cp.toPath, strings.TrimPrefix(strings.TrimPrefix(la.hpath, cp.path), "."))
 					}
 				case pathWithin(cp.path, la.hpath): // a part of what the loan covers is copied
-					if strings.HasSuffix(cp.path, "*") && !strings.Contains(la.hpath, "*") && isBorrow(placeType(place{cp.from, strings.TrimSuffix(strings.TrimSuffix(cp.path, "*"), ".")})) {
+					if strings.HasSuffix(cp.path, "*") && !strings.Contains(la.hpath, "*") && isBorrow(placeType(place{cp.from, withoutDeref(cp.path)})) {
 						continue // what a borrow points at is copied, x := *r: r's own borrow of the place is not what x holds
 					}
 				default:
@@ -1176,7 +1239,7 @@ func (c *Checker) checkGone(li int, dropped, reported bitset) {
 func (c *Checker) checkEscape(li int, reported bitset) {
 	f := c.flow
 	b := &f.loans[li]
-	if reported.has(li) {
+	if reported.has(li) || b.call {
 		return
 	}
 
@@ -1208,19 +1271,35 @@ func (c *Checker) checkEscape(li int, reported bitset) {
 // v.r = v.r, is what the value held already. Each copy is reported
 // once.
 func (c *Checker) refuseSelfBorrow(cp *flowCopy, nb borrow) {
-	if cp.selfStored || nb.read {
-		return
+	if !cp.selfStored && c.refuseSelfLoan(nb, cp.pos) {
+		cp.selfStored = true
+	}
+}
+
+// refuseSelfLoan reports the loan nb, of a place of its own holder, at
+// pos, and reports whether it did: a value may not borrow its own data,
+// and a borrowed parameter may not keep a borrow of what the caller
+// owns behind it; a borrow read out of the place is what the value held
+// already, and a borrow variable reaches its places through what it
+// points at.
+func (c *Checker) refuseSelfLoan(nb borrow, pos token.Pos) bool {
+	if nb.read {
+		return false
+	}
+
+	own := !isBorrow(nb.holder.typ)
+	if !own && !(strings.Contains(nb.hpath, "*") && c.isBorrowedParam(nb.holder)) {
+		return false
 	}
 
 	at := joinPath(nb.holder.name, nb.place.path)
-	switch {
-	case !isBorrow(nb.holder.typ):
-		cp.selfStored = true
-		c.flow.errs = append(c.flow.errs, flowError{seq: c.flow.seq, pos: cp.pos, msg: "cannot store a borrow of " + at + " in " + nb.holder.name + ": a value cannot borrow its own data, which changes or goes with it"})
-	case strings.Contains(nb.hpath, "*") && c.isBorrowedParam(nb.holder):
-		cp.selfStored = true
-		c.flow.errs = append(c.flow.errs, flowError{seq: c.flow.seq, pos: cp.pos, msg: "cannot store a borrow of " + at + " in " + nb.holder.name + ": " + nb.holder.name + " is the caller's, which may change or free " + at + " while the borrow is kept"})
+	msg := "cannot store a borrow of " + at + " in " + nb.holder.name + ": " + nb.holder.name + " is the caller's, which may change or free " + at + " while the borrow is kept"
+	if own {
+		msg = "cannot store a borrow of " + at + " in " + nb.holder.name + ": a value cannot borrow its own data, which changes or goes with it"
 	}
+
+	c.flow.errs = append(c.flow.errs, flowError{seq: c.flow.seq, pos: pos, msg: msg})
+	return true
 }
 
 // isBorrowedParam reports whether v is a parameter of the function being
@@ -1232,10 +1311,13 @@ func (c *Checker) isBorrowedParam(v *Var) bool {
 // flowParams gives each parameter that carries a borrow a borrow of what
 // the caller owns behind it, a variable of its own standing for it, so
 // that a store reaching the caller's places is seen however it gets
-// there: through a copy, a literal or a field.
+// there: through a copy, a literal or a field. What reaches the caller's
+// places is followed when a parameter is lent mut, in a closure, whose
+// parameters are its caller's too, and in a body that keeps a trait's
+// word.
 func (c *Checker) flowParams(sig *Signature) {
 	f := c.flow
-	if f == nil {
+	if f == nil || !(c.hasMutParam(sig) || f.outer != token.NoPos || c.keepsWord()) {
 		return
 	}
 
@@ -1369,7 +1451,12 @@ func (c *Checker) checkAccess(a *flowAccess, in, live bitset, bi, ei int) {
 			return true
 		}
 
-		f.errs = append(f.errs, flowError{seq: a.seq, pos: a.pos, msg: c.collision(a.e, a.p, a.what, b) + c.useText(b, bi, ei), access: true})
+		msg := c.collision(a.e, a.p, a.what, b)
+		if !b.call {
+			msg += c.useText(b, bi, ei)
+		}
+
+		f.errs = append(f.errs, flowError{seq: a.seq, pos: a.pos, msg: msg, access: true})
 		return false
 	})
 }
@@ -1482,6 +1569,16 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 // an edge from the block from back to the earlier block to, or -1: an
 // edge to the block a pass ends in goes on in the same pass, not round.
 func (f *flow) loopAround(to, from int) int {
+	if f.fromForm() { // an edge back to a head goes round that loop
+		for i, l := range f.loops {
+			if l.head == to {
+				return i
+			}
+		}
+
+		return -1
+	}
+
 	for i, l := range f.loops { // a loop ends before the loops around it, so the first found is the innermost
 		if l.head <= to && from < l.exit {
 			if to == l.cont && l.cont != l.head {
@@ -1498,5 +1595,19 @@ func (f *flow) loopAround(to, from int) int {
 // inLoop reports whether the block b is among the blocks of the loop
 // loop, none for -1.
 func (f *flow) inLoop(loop, b int) bool {
-	return loop >= 0 && f.loops[loop].head <= b && b < f.loops[loop].exit
+	if loop < 0 {
+		return false
+	}
+
+	if f.fromForm() {
+		for h := b; h >= 0; h = f.loopOf[h] { // the block itself, its head, and the heads around it
+			if h == f.loops[loop].head {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	return f.loops[loop].head <= b && b < f.loops[loop].exit
 }

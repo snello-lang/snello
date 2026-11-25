@@ -6,6 +6,7 @@ package types
 
 import (
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -185,6 +186,10 @@ type Checker struct {
 	movedValues  []ast.Expr   // the values of a statement of several whose moves are recorded where each was checked (values)
 	lowering     *lowering    // the scratch of the lowering of a body, reused across bodies (lowering.go)
 	closureMoves []formError  // what the move pass over the form refuses in the closures of the body being checked, while both passes run (checkBody)
+	closureLoans []formError  // the same for the borrow pass over the form
+	borrowPass   *formBorrows // the scratch of the borrow pass over the form, reused across bodies
+	formPass     bool         // the passes over the form are running: what the recorders refuse goes to formErrs, and a name resolves through the uses the typing recorded
+	formErrs     []formError
 	typingPlace  bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
 	heldAccess   []heldAccess // the accesses held, in their order (replay)
 
@@ -481,6 +486,14 @@ func (c *Checker) restore(p walkPlace) {
 // one body, and its mistakes are one each. Error paths may allocate
 // freely.
 func (c *Checker) errorf(pos token.Pos, msg string) {
+	if c.formPass {
+		if !slices.Contains(c.formErrs, formError{pos, msg}) {
+			c.formErrs = append(c.formErrs, formError{pos, msg})
+		}
+
+		return
+	}
+
 	at := c.position(pos)
 	for _, e := range c.errors {
 		if e.Pos == at && e.Msg == msg {

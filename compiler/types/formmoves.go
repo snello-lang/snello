@@ -137,8 +137,8 @@ func (m *formMoves) merge(b int, state []formMove) bool {
 func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
 	switch in.Op {
 	case OpRead, OpBorrow:
-		if !in.Capture {
-			m.checkUse(state, in.Place, in.Expr, false, b)
+		if !in.Capture || !in.Mut { // a mut borrow a closure captures is no use of the value until the closure runs
+			m.checkUse(state, in, false, b)
 		}
 	case OpMove:
 		if !m.movable(in) {
@@ -151,12 +151,12 @@ func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
 			}
 		}
 
-		m.checkUse(state, in.Place, in.Expr, false, b)
+		m.checkUse(state, in, false, b)
 		if !in.Place.IsTemp() {
 			state = append(state, formMove{place: in.Place, pos: in.Pos, block: b})
 		}
 	case OpStore:
-		m.checkUse(state, in.Place, in.Expr, true, b)
+		m.checkUse(state, in, true, b)
 		state = slices.DeleteFunc(state, func(r formMove) bool { return within(r.place, in.Place) })
 	}
 
@@ -167,15 +167,16 @@ func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
 // path. A store is not a use of what the place holds: a whole variable
 // may be given a new value, and so may a moved field, but a field of a
 // moved value may not.
-func (m *formMoves) checkUse(state []formMove, p Operand, e ast.Expr, store bool, b int) {
+func (m *formMoves) checkUse(state []formMove, in Instr, store bool, b int) {
+	p, e := in.Place, in.Expr
 	if p.IsTemp() {
 		return
 	}
 
 	for i := len(state) - 1; i >= 0; i-- { // the latest record of the place decides
 		r := state[i]
-		if r.round != 0 && m.inLoop(b, r.round-1) {
-			continue // come round the loop this block is in: the loop's rule reported it, once
+		if r.round != 0 && m.inLoop(b, r.round-1) && r.pos == in.Pos {
+			continue // come round the loop this block is in, to the move it came from: the loop's rule reported it, once
 		}
 
 		switch {
@@ -237,7 +238,7 @@ func (m *formMoves) movable(in Instr) bool {
 // inLoop reports whether block b is among the blocks of the loop whose
 // head is head, itself or a loop inside it.
 func (m *formMoves) inLoop(b, head int) bool {
-	for l := m.f.Blocks[b].Loop; l != noBlock; l = m.f.Blocks[l].Loop {
+	for l := b; l != noBlock; l = m.f.Blocks[l].Loop { // the block itself, a head among them, and the loops around it
 		if l == head {
 			return true
 		}
@@ -300,6 +301,42 @@ func basePos(e ast.Expr) token.Pos {
 	return accessPos(e)
 }
 
+// stepType is the type one part of a path reaches from a value of type
+// t: what a * points at, an element, or a field; t itself for a part it
+// does not name, and nil for a type the checker could not give.
+func stepType(t Type, part string) Type {
+	if t == nil {
+		return nil
+	}
+
+	switch part {
+	case "*":
+		switch u := t.(type) {
+		case *Ref:
+			return u.elem
+		case *Pointer:
+			return u.elem
+		}
+	case "[]":
+		switch u := t.Underlying().(type) {
+		case *Slice:
+			return u.elem
+		case *Array:
+			return u.elem
+		case *Map:
+			return u.value
+		}
+	default:
+		if st, ok := stripRef(t).Underlying().(*Struct); ok {
+			if f := fieldNamed(st.fields, part); f != nil {
+				return f.typ
+			}
+		}
+	}
+
+	return t
+}
+
 // within reports whether the place p is q or lies inside q.
 func within(p, q Operand) bool {
 	return p.Var == q.Var && p.Temp == q.Temp && pathWithin(p.Path, q.Path)
@@ -320,37 +357,26 @@ func placeKindOf(t Type, path string) (placeKind, string) {
 
 		switch part {
 		case "*":
-			switch u := t.(type) {
-			case *Ref:
-				kind, t = placeBorrowed, u.elem
-			case *Pointer:
-				t = u.elem
+			if _, ok := t.(*Ref); ok {
+				kind = placeBorrowed
 			}
 		case "[]":
 			if kind == placeOwned {
 				kind = placeIndexed
 			}
-
-			switch u := t.Underlying().(type) {
-			case *Slice:
-				t = u.elem
-			case *Array:
-				t = u.elem
-			case *Map:
-				t = u.value
-			}
 		default:
+			if part[0] == '?' { // the part a pattern binds, no field of the value
+				continue
+			}
+
 			if fields.Len() > 0 {
 				fields.WriteByte('.')
 			}
 
 			fields.WriteString(part)
-			if st, ok := t.Underlying().(*Struct); ok {
-				if f := fieldNamed(st.fields, part); f != nil {
-					t = f.typ
-				}
-			}
 		}
+
+		t = stepType(t, part)
 	}
 
 	return kind, fields.String()
@@ -363,7 +389,7 @@ func fieldPath(path string) string {
 	for path != "" {
 		part, rest, _ := strings.Cut(path, ".")
 		path = rest
-		if part == "*" || part == "[]" {
+		if part == "*" || part == "[]" || part[0] == '?' {
 			continue
 		}
 
@@ -394,33 +420,45 @@ func isMoveMessage(msg string) bool {
 	return strings.HasSuffix(msg, loopMovedMessage(""))
 }
 
-// compareMoves reports, when both passes run, each message the pass
-// over the form gives that the tree's did not, and each of the tree's
-// the form's did not, among the errors reported since first; a body
-// that does not type is left alone, since what its moves would be is
-// moot.
-func (c *Checker) compareMoves(form []formError, first int) {
-	tree := map[string]bool{}
+// comparePasses reports, when both passes run, each message the passes
+// over the form give that the tree's did not, and each of the tree's
+// the form's did not, among the errors reported since first: the move
+// pass's messages against moves, the borrow pass's against borrows. A
+// body that does not type is left alone, since what its moves and
+// borrows would be is moot.
+func (c *Checker) comparePasses(moves, borrows []formError, first int) {
+	treeMoves, treeBorrows := map[string]bool{}, map[string]bool{}
 	for _, e := range c.errors[first:] {
-		if isMoveMessage(e.Msg) {
-			tree[e.Pos.String()+": "+e.Msg] = true
-		} else if !strings.HasPrefix(e.Msg, "form") && !strings.Contains(e.Msg, " is borrowed ") && !strings.Contains(e.Msg, "cannot keep a borrow") {
+		text := e.Pos.String() + ": " + e.Msg
+		switch {
+		case isMoveMessage(e.Msg):
+			treeMoves[text] = true
+		case isBorrowMessage(e.Msg):
+			treeBorrows[text] = true
+		case !strings.HasPrefix(e.Msg, "form"):
 			return
 		}
 	}
 
+	c.comparePass("moves", moves, treeMoves)
+	c.comparePass("borrows", borrows, treeBorrows)
+}
+
+// comparePass reports the differences between what a pass over the
+// form gave and what the tree's pass of the same kind did.
+func (c *Checker) comparePass(what string, form []formError, tree map[string]bool) {
 	given := make(map[string]bool, len(form))
 	for _, e := range form {
 		text := c.position(e.pos).String() + ": " + e.msg
 		given[text] = true
 		if !tree[text] {
-			c.errorf(e.pos, "form: "+text+" (the tree's pass did not)")
+			c.errorf(e.pos, "form "+what+": "+text+" (the tree's pass did not)")
 		}
 	}
 
 	for text := range tree {
 		if !given[text] {
-			c.errorf(token.NoPos, "form misses: "+text)
+			c.errorf(token.NoPos, "form "+what+" misses: "+text)
 		}
 	}
 }

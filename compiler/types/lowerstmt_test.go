@@ -82,7 +82,7 @@ b4:
   move o
   -> b1 b3
 b1:
-  store v <- o
+  store v <- o.?Some.?0
   move v
   t0 = call(v)
   drop v
@@ -110,33 +110,35 @@ b2:
   ->
 b3:
   t3 = make()
-  t4 = call(t3)
-  store n <- t4
+  t4 = borrow ref t3
+  t5 = call(t4)
+  store n <- t5
   read i
-  t5 = make()
-  t6 = make(i, t5)
+  t6 = make()
+  t7 = make(i, t6)
   -> b5 b6
 b4:
   read i
-  t8 = make()
-  t9 = make(i, t8)
-  store i <- t9
+  t9 = make()
+  t10 = make(i, t9)
+  store i <- t10
   -> b1
 b5:
   leave(n)
   -> b2
 b6:
   move n
-  t7 = call(n)
+  t8 = call(n)
   drop n
   -> b4
 `},
 		{"func f(s string) { var a, _ = s, 1; keep(a) }", `b0:
   move s
-  t0 = make()
-  store a <- s
+  t0 = make(s)
+  t1 = make()
+  store a <- t0
   move a
-  t1 = call(a)
+  t2 = call(a)
   leave(a, s)
   ->
 `},
@@ -146,6 +148,7 @@ b6:
 b1 (head):
   -> b2 b3
 b2:
+  drop t0
   t2 = borrow ref w
   -> b4
 b3:
@@ -157,6 +160,7 @@ b3:
 b4 (head):
   -> b5 b6
 b5:
+  drop t2
   leave(w, c)
   ->
 b6:
