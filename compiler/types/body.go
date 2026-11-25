@@ -61,7 +61,9 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared, once the tree's passes have reported
 		form := c.lowerBody(sig, body) // the closures' forms, lowered inside their body's, are kept with it
 		if compareForms {
-			c.comparePasses(c.formMoves(form), c.formBorrows(form, sig, token.NoPos), first) // each pass runs the closures' after their body's
+			if c.comparePasses(c.formMoves(form), c.formBorrows(form, sig, token.NoPos), first) { // each pass runs the closures' after their body's
+				c.compareMoved(form, body)
+			}
 		}
 	}
 

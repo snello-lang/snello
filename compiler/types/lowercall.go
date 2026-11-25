@@ -6,6 +6,7 @@ package types
 
 import (
 	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
 )
 
 // The lowering of calls: what a call names, what it takes and in which
@@ -136,6 +137,10 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 	}
 
 	if !k.names() {
+		if x == l.spawning && !isFuncLit(x.Fun) {
+			l.keep(x.Fun, "spawned", x.Fun.Pos(), nil, "") // the task runs the closure value: one that borrows cannot go; a closure written here moves what it captures instead
+		}
+
 		if p, ok := l.placeOf(x.Fun); ok { // a closure held in a variable or a field is read
 			l.emit(Instr{Op: OpRead, Place: p, Expr: x.Fun, Pos: x.Fun.Pos()})
 		} else {
@@ -181,9 +186,13 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		}
 
 		var want Type
+		var param *Var
+		packed := false
 		if k.sig != nil && (i < k.sig.fixed() || k.sig.variadic) {
-			_, want, _, _ = argSlot(k.sig, i, x.Ellipsis.IsValid(), kind, each)
+			param, want, _, packed = argSlot(k.sig, i, x.Ellipsis.IsValid(), kind, each)
 		}
+
+		l.keepArg(x, arg, i, k, param, packed)
 
 		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
 			if p, ok := l.placeOrPart(arg); ok {
@@ -218,6 +227,33 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 	args := l.args(l.argStack[start:]...)
 	l.argStack = l.argStack[:start]
 	return args, recvExpr != nil
+}
+
+// keepArg records where the argument arg of the call x goes when it is a
+// closure: to a parameter its callee may keep, which the package's end
+// decides; stored, by a parameter that keeps it, a variadic any or a
+// variant; or spawned, into the task the call starts.
+func (l *lowering) keepArg(x *ast.CallExpr, arg ast.Expr, i int, k callee, param *Var, packed bool) {
+	if _, variant := k.obj.(*Variant); variant {
+		l.keep(arg, "stored", arg.Pos(), nil, "")
+		return
+	}
+
+	if p, callee := declared(k.obj, i); p != nil && p.pos != token.NoPos && mayHoldClosure(p.typ) {
+		l.keep(arg, "", arg.Pos(), p, callee)
+		if x == l.spawning {
+			l.keep(arg, "spawned", arg.Pos(), nil, "")
+		}
+
+		return
+	}
+
+	switch {
+	case param != nil && param.kept, packed, k.builtin() != nil && k.builtin().id == BuiltinReplace && i == 1:
+		l.keep(arg, "stored", arg.Pos(), nil, "") // the parameter, the variadic any, or the place replace fills keeps the value
+	case x == l.spawning:
+		l.keep(arg, "spawned", arg.Pos(), nil, "")
+	}
 }
 
 // lendFor lends the place p, written as e, for the call: the loan ends

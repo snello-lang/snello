@@ -191,9 +191,9 @@ func (l *lowering) spawned(call ast.Expr, spawn token.Pos) Operand {
 		return l.value(call, nil)
 	}
 
-	was := l.spawn
-	l.spawn = spawn
-	defer func() { l.spawn = was }()
+	was, wasCall := l.spawn, l.spawning
+	l.spawn, l.spawning = spawn, x
+	defer func() { l.spawn, l.spawning = was, wasCall }()
 	return l.call(x)
 }
 
@@ -221,6 +221,14 @@ func (l *lowering) unary(x *ast.UnaryExpr, want Type) Operand {
 	case token.ARROW:
 		ch := l.channel(x.X) // a receive reads its channel, as every operation on one does
 		return l.made(x, l.args(ch), true)
+	}
+
+	if fn := OperatorMethod(stripRef(l.typeOf(x.X)), x.Op, true); fn != nil { // a type's own operator: a call, whose operand goes to its receiver
+		a := l.value(x.X, fn.typ.(*Signature).recv.typ)
+		l.take(a)
+		t := l.temp(l.typeOf(x), true, x)
+		l.emit(Instr{Op: OpCall, To: t, Args: l.args(a), Expr: x, Pos: x.Pos()})
+		return t
 	}
 
 	v := l.read(x.X)
@@ -278,10 +286,12 @@ func (l *lowering) composite(x *ast.CompositeLit) Operand {
 				l.argStack = append(l.argStack, l.value(kv.Key, nil)) // a map's key is a value; a struct's field name is not
 			}
 
+			l.keep(kv.Value, "stored", kv.Value.Pos(), nil, "")
 			l.argStack = append(l.argStack, l.value(kv.Value, l.slotType(x, i, kv.Key)))
 			continue
 		}
 
+		l.keep(elt, "stored", elt.Pos(), nil, "")
 		l.argStack = append(l.argStack, l.value(elt, l.slotType(x, i, nil)))
 	}
 
@@ -349,8 +359,25 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 		}
 	}
 
-	spawn := l.spawn // the spawn this closure is the call of, where its captures move; a closure inside it is not the spawned one
+	spawn := token.NoPos // the spawn this closure is the call of, where its captures move; a closure inside its arguments is not the spawned one
+	if l.spawning != nil && unparen(l.spawning.Fun) == x {
+		spawn = l.spawn
+	}
+
 	captures := l.c.captured[x]
+	if compareForms && form != nil {
+		got := formCaptures(form, x.Pos())
+		if spawn.IsValid() { // a spawned closure takes what it captures with it: a task has frames of its own
+			for i := range got {
+				if got[i].mode != byCopy {
+					got[i].mode = byMove
+				}
+			}
+		}
+
+		l.c.compareCaptures(x, got, captures)
+	}
+
 	uses := l.firstUses(x, captures)
 	start := len(l.argStack)
 	for i, cap := range captures {
@@ -380,6 +407,43 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 	}
 
 	return l.madeFrom(x, start, true)
+}
+
+// formCaptures reads off a closure's form what the closure captures: each
+// variable of the form declared before the closure begins, with the
+// strongest use the body makes of it, moved, changed or lent mut, or
+// read, where a Copy value read is copied in. A variable a closure inside
+// the body captures counts as the body's own use of it.
+func formCaptures(f *Form, closure token.Pos) []capture {
+	var caps []capture
+	for i, v := range f.Vars {
+		if v.pos == token.NoPos || v.field || v.global || v.pos > closure {
+			continue // the closure's own, or no variable of a body
+		}
+
+		mode := byRef
+		for j := range f.Instrs {
+			in := &f.Instrs[j]
+			if in.Place.IsTemp() || in.Place.Var != i {
+				continue
+			}
+
+			switch {
+			case in.Op == OpMove:
+				mode = byMove
+			case in.Op == OpStore || in.Op == OpBorrow && in.Mut || in.Op == OpRead && in.Mut:
+				mode = max(mode, byMut)
+			}
+		}
+
+		if mode == byRef && IsCopy(v.typ) && !holdsBorrow(v.typ) && !isSignature(v.typ) {
+			mode = byCopy // a number read by a closure is copied in: the closure holds no borrow and may be returned; a borrow variable, Copy too, stays a borrow, and so does a function value, whose borrows are the holder's, not the type's
+		}
+
+		caps = append(caps, capture{v, mode})
+	}
+
+	return caps
 }
 
 // movedIn is the first instruction of a closure's form that moves the
@@ -699,7 +763,7 @@ func (l *lowering) coalesce(x *ast.CoalesceExpr) Operand {
 // try lowers x?: the value, then a branch where the error returns,
 // dropping what every open scope holds.
 func (l *lowering) try(x *ast.TryExpr) Operand {
-	v := l.scrutinee(x.X, !IsCopy(l.typeOf(x)))
+	v := l.scrutinee(x.X, true) // the Result or the option leaves an owned place when it is not Copy: its error or its None goes to the caller
 	result := l.temp(l.typeOf(x), false, x)
 	defer l.nest()() // the leave drops what the ? made, and what the leave itself abandons around it
 	ok, fail, join := l.newBlock(), l.newBlock(), l.newBlock()

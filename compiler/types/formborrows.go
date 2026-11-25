@@ -35,6 +35,8 @@ type formBorrows struct {
 	checker *Checker
 	form    *Form
 	holders []*Var // per temporary, the holder standing for it in the graph when it is or holds a borrow, or is bound from; nil otherwise
+	reached []bool // per block, whether control can reach it from the first: what it cannot is not checked, as the walk checks nothing after a return
+	work    []int  // the blocks whose successors are still to be marked, while reached is found
 }
 
 // formBorrows runs the borrow pass over f, the form of a body of
@@ -77,7 +79,12 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 	}
 
 	c.flowParams(sig)
+	m.reach()
 	for b := range f.Blocks {
+		if !m.reached[b] {
+			continue
+		}
+
 		fl.cur = b
 		for i := f.Blocks[b].From; i < f.Blocks[b].To; i++ {
 			m.step(&f.Instrs[i])
@@ -89,6 +96,7 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 		formGraphs(m) // a test reads the graph before it is freed
 	}
 
+	m.keptUses()
 	errs := slices.Clone(c.formErrs)
 	c.eachFlowError(func(e flowError) { errs = append(errs, formError{e.pos, e.msg}) })
 	for _, cf := range f.closures { // a closure written in this body: its graph sees this one as its parent
@@ -99,6 +107,25 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 	c.flow, c.temps, c.dead, c.sig = saved, temps, dead, outerSig
 	c.formPass = wasPass
 	return errs
+}
+
+// reach marks the blocks control can reach from the first.
+func (m *formBorrows) reach() {
+	f := m.form
+	m.reached = slices.Grow(m.reached[:0], len(f.Blocks))[:len(f.Blocks)]
+	clear(m.reached)
+	m.reached[0] = true
+	m.work = append(m.work[:0], 0)
+	for len(m.work) > 0 {
+		b := m.work[len(m.work)-1]
+		m.work = m.work[:len(m.work)-1]
+		for _, s := range f.Blocks[b].Succs {
+			if !m.reached[s] {
+				m.reached[s] = true
+				m.work = append(m.work, s)
+			}
+		}
+	}
 }
 
 // step records the events of one instruction.
@@ -188,6 +215,32 @@ func (m *formBorrows) step(in *Instr) {
 	case OpReturn:
 		m.uses(in.Args, in.Pos)
 		m.returned(in)
+	}
+}
+
+// keptUses checks each closure value the body puts where a closure that
+// borrows may not go, from the loans before the use: stored, sent or
+// spawned, it is refused here; given to a parameter its callee may keep,
+// it is refused at the package's end, when what the callee keeps is
+// known, which the walk's record of such calls holds.
+func (m *formBorrows) keptUses() {
+	c := m.checker
+	for _, k := range m.form.kept {
+		op := operand{mode: value, typ: c.info.Types[k.expr], expr: k.expr}
+		if k.param == nil {
+			c.cannotBe(op, k.how, k.pos)
+			continue
+		}
+
+		what := c.borrowsWhat(op, k.pos)
+		if what == "" {
+			continue
+		}
+
+		call := keepCall{k.param, k.callee, what, k.pos}
+		if !slices.Contains(c.keepCalls, call) { // recorded by the walk already while both run; the form's own once the walk's pass goes
+			c.errorf(k.pos, "form keep: "+what+" passed to "+k.callee+" is not the walk's record")
+		}
 	}
 }
 

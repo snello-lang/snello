@@ -52,6 +52,7 @@ func (l *lowering) stmt(s ast.Stmt) {
 		l.dropOwned(s.Pos())
 	case *ast.SendStmt:
 		ch := l.channel(s.Chan)
+		l.keep(s.Value, "sent", s.Value.Pos(), nil, "")
 		v := l.value(s.Value, l.sendType(s.Chan))
 		l.take(v)
 		l.emit(Instr{Op: OpCall, To: l.temp(Unit, false, s.Value), Args: l.args(ch, v), Expr: s.Value, Pos: s.Arrow})
@@ -208,6 +209,10 @@ func (l *lowering) assign(s *ast.AssignStmt) {
 		}, s.Lhs)
 		for i, lhs := range s.Lhs {
 			if !isBlank(lhs) && i < len(values) {
+				if _, name := lhs.(*ast.Ident); !name && len(s.Rhs) == len(s.Lhs) {
+					l.keep(s.Rhs[i], "stored", lhs.Pos(), nil, "") // a field or an element keeps the value
+				}
+
 				l.store(l.place(lhs, true), values[i], lhs)
 			}
 		}

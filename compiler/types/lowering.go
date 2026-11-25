@@ -44,7 +44,8 @@ type lowering struct {
 	bases     []reached   // the places reached through a call within the statement, reached once
 	params    int         // how many of the form's variables are the receiver and the parameters, the first ones
 	results   Type
-	spawn     token.Pos // the spawn a closure being lowered is the call of, where its captures move; none otherwise
+	spawn     token.Pos     // the spawn a closure being lowered is the call of, where its captures move; none otherwise
+	spawning  *ast.CallExpr // the call the spawn starts, whose arguments and callee go to the task; nil otherwise
 
 	declared     []int     // the variables the open scopes declared, in order, each scope a range of it
 	dropsScratch []Operand // what drops builds its list in, copied into the form by the leave
@@ -88,12 +89,12 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 		l.f = &Form{}
 	} else {
 		l.f.Vars, l.f.Blocks, l.f.Instrs, l.f.Temps = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0], l.f.Temps[:0]
-		l.f.operands, l.f.succs, l.f.closures = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0]
+		l.f.operands, l.f.succs, l.f.closures, l.f.kept = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0], l.f.kept[:0]
 	}
 
 	l.taken, l.bases, l.declared = l.taken[:0], l.bases[:0], l.declared[:0]
 	l.scopes, l.loops, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.owned[:0], 0
-	l.results, l.spawn, l.guard = sig.results, token.NoPos, nil
+	l.results, l.spawn, l.spawning, l.guard = sig.results, token.NoPos, nil, nil
 	wasPass := c.formPass
 	c.formPass = true // the names the lowering resolves through the recorders are the typing's: the scopes are closed
 	defer func() { c.formPass = wasPass }()
@@ -158,16 +159,12 @@ func (l *lowering) newBlock() int {
 	return len(l.f.Blocks) - 1
 }
 
-// start begins writing block b, after ending the one being written; a
-// block no edge reaches is code control cannot reach, and nothing is
-// written until a block that is reached begins.
+// start begins writing block b, after ending the one being written. A
+// block no edge reaches, the statements after a return in every arm, is
+// written all the same, since the emitters emit them; the passes check
+// what control reaches.
 func (l *lowering) start(b int) {
 	l.endBlock()
-	if l.f.Blocks[b].preds == 0 {
-		l.cur = noBlock
-		return
-	}
-
 	l.cur = b
 	l.f.Blocks[b].From, l.f.Blocks[b].To = len(l.f.Instrs), len(l.f.Instrs)
 }
@@ -188,7 +185,6 @@ func (l *lowering) edge(from, to int) {
 
 	b := &l.f.Blocks[from]
 	f := l.f
-	f.Blocks[to].preds++
 	if n := len(b.Succs); n > 0 && len(f.succs) >= n && &f.succs[len(f.succs)-1] == &b.Succs[n-1] {
 		f.succs = append(f.succs, to)
 		b.Succs = f.succs[len(f.succs)-n-1 : len(f.succs) : len(f.succs)]
@@ -334,6 +330,15 @@ func (l *lowering) storeName(id *ast.Ident, define bool, o Operand) {
 func (l *lowering) bound(o Operand) {
 	if o.IsValue() && o.Path != "" {
 		l.f.Temps[l.f.Temps[o.Temp].Origin].Bound = true
+	}
+}
+
+// keep records that the value e, when it is of a function type, is put
+// where a closure that borrows may not go: how says where, stored into
+// data, sent or spawned, or param and callee say what it is given to.
+func (l *lowering) keep(e ast.Expr, how string, pos token.Pos, param *Var, callee string) {
+	if isSignature(l.typeOf(e)) {
+		l.f.kept = append(l.f.kept, keptUse{expr: e, how: how, pos: pos, param: param, callee: callee})
 	}
 }
 

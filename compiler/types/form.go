@@ -53,6 +53,20 @@ type Form struct {
 	operands []Operand     // what every instruction's Args slice into, one list for the body
 	succs    []int         // what every block's Succs slice into
 	closures []closureForm // the closures written in the body, whose passes run under the body's
+	kept     []keptUse     // the closure values the body puts where a closure that borrows may not go
+}
+
+// A keptUse is a value of a function type the body puts where a closure
+// that borrows may not go: stored into data, sent, spawned, or given to
+// a parameter its callee may keep, which param and callee name. The
+// borrow pass decides whether the value borrows, from the loans before
+// the use.
+type keptUse struct {
+	expr   ast.Expr
+	how    string
+	pos    token.Pos
+	param  *Var
+	callee string
 }
 
 // A closureForm is the form of a closure written in a body, with the
@@ -85,7 +99,6 @@ type FormBlock struct {
 	Loop     int       // the head of the innermost loop the block is in, or -1
 	Pos      token.Pos // for a head, where the loop begins: a variable declared before it is not the loop's own
 	Guard    *Guard    // for a match guard's block, what it is and where it stands; nil for any other
-	preds    int       // the edges into the block: none, after the first block, is code control cannot reach, which is not written
 }
 
 // A Guard says what a block that evaluates a match guard is, a match

@@ -430,7 +430,7 @@ func isMoveMessage(msg string) bool {
 // pass's messages against moves, the borrow pass's against borrows. A
 // body that does not type is left alone, since what its moves and
 // borrows would be is moot.
-func (c *Checker) comparePasses(moves, borrows []formError, first int) {
+func (c *Checker) comparePasses(moves, borrows []formError, first int) bool {
 	treeMoves, treeBorrows, treeEscapes := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range c.errors[first:] {
 		text := e.Pos.String() + ": " + e.Msg
@@ -442,7 +442,7 @@ func (c *Checker) comparePasses(moves, borrows []formError, first int) {
 		case isBorrowMessage(e.Msg):
 			treeBorrows[text] = true
 		case !strings.HasPrefix(e.Msg, "form"):
-			return
+			return false // a typing error: what the walk did after it says nothing
 		}
 	}
 
@@ -459,13 +459,94 @@ func (c *Checker) comparePasses(moves, borrows []formError, first int) {
 	c.comparePass("moves", moves, treeMoves)
 	c.comparePass("borrows", kept, treeBorrows)
 	c.comparePass("escape", escapes, treeEscapes)
+	c.comparePass("captures", c.captureErrs, nil) // what the forms say the closures capture, against the walk's record: every difference is one
+	c.captureErrs = c.captureErrs[:0]
+	return true
+}
+
+// compareCaptures reports, while both run, where the captures a closure's
+// form says it makes differ from the walk's record: a variable one has
+// and the other not, or captured another way.
+func (c *Checker) compareCaptures(lit *ast.FuncLit, form, walk []capture) {
+	modes := [...]string{byCopy: "copied", byRef: "borrowed", byMut: "borrowed mut", byMove: "moved"}
+	for _, f := range form {
+		found := false
+		for _, w := range walk {
+			if w.v == f.v {
+				found = true
+				if w.mode != f.mode {
+					c.captureErrs = append(c.captureErrs, formError{lit.Pos(), f.v.name + " " + modes[f.mode] + " by the form, " + modes[w.mode] + " by the walk"})
+				}
+			}
+		}
+
+		if !found {
+			c.captureErrs = append(c.captureErrs, formError{lit.Pos(), f.v.name + " captured by the form, not by the walk"})
+		}
+	}
+
+	for _, w := range walk {
+		if !slices.ContainsFunc(form, func(f capture) bool { return f.v == w.v }) {
+			c.captureErrs = append(c.captureErrs, formError{lit.Pos(), w.v.name + " captured by the walk, not by the form"})
+		}
+	}
+}
+
+// compareMoved reports, while both run, where the places the form moves
+// differ from the moves the walk recorded for the emitters: every move
+// instruction of the body's form and its closures', the captures' aside,
+// is a recorded move, and every recorded move in the body is one.
+func (c *Checker) compareMoved(f *Form, body *ast.BlockStmt) {
+	moved := map[ast.Expr]bool{}
+	var walk func(f *Form)
+	walk = func(f *Form) {
+		for i := range f.Instrs {
+			in := &f.Instrs[i]
+			if in.Op != OpMove || in.Capture || in.Place.IsTemp() {
+				continue
+			}
+
+			if _, part := unparen(in.Expr).(*ast.PartExpr); part {
+				continue // refused by both, recorded by neither
+			}
+
+			kind, fields := placeKindOf(f.Vars[in.Place.Var].typ, in.Place.Path)
+			if holder, _ := dropHolder(place{f.Vars[in.Place.Var], fields}); kind == placeOwned && holder == "" { // a move out of a borrow, a container or a value a Drop reads is refused, and recorded by neither
+				moved[in.Expr] = true
+				if !c.info.Moves[in.Expr] {
+					c.errorf(in.Pos, "form moved: "+exprText(in.Expr)+" moved by the form, not by the walk")
+				}
+			}
+		}
+
+		for _, cf := range f.closures {
+			walk(cf.form)
+		}
+	}
+
+	walk(f)
+	for e := range c.info.Moves {
+		if e.Pos() >= body.Pos() && e.Pos() <= body.Rbrace && !moved[e] {
+			c.errorf(e.Pos(), "form moved: "+exprText(e)+" moved by the walk, not by the form")
+		}
+	}
 }
 
 // isEscapeMessage reports whether a message is the escape pass's: a
 // borrow returned that the function's source does not hold, or a
 // closure that borrows returned.
 func isEscapeMessage(msg string) bool {
-	return strings.HasPrefix(msg, "cannot return a borrow") || strings.HasSuffix(msg, " and cannot be returned")
+	if strings.HasPrefix(msg, "cannot return a borrow") {
+		return true
+	}
+
+	for _, how := range [...]string{"returned", "stored", "sent", "spawned"} {
+		if strings.HasSuffix(msg, " and cannot be "+how) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // comparePass reports the differences between what a pass over the
