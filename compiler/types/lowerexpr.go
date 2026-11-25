@@ -341,13 +341,12 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 		outer := l.c.lowering
 		l.c.lowering = l.inner // the closure's body is lowered apart, by the scratch of the next depth, while this body's lowering is under way
 		form = l.c.lowerBody(sig, x.Body)
-		if compareForms { // checked when it is made, before the scratch is reused
-			l.c.closureMoves = append(l.c.closureMoves, l.c.formMoves(form)...)
-			l.c.closureLoans = append(l.c.closureLoans, l.c.formBorrows(form, sig, x.Pos())...)
-		}
-
 		l.inner = l.c.lowering
 		l.c.lowering = outer
+		if compareForms { // checked once its body's form is built, under its body's graph
+			l.f.closures = append(l.f.closures, closureForm{form: form, sig: sig, pos: x.Pos()})
+			l.inner.f = nil // kept until then: the next closure gets a form of its own
+		}
 	}
 
 	spawn := l.spawn // the spawn this closure is the call of, where its captures move; a closure inside it is not the spawned one

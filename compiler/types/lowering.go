@@ -88,7 +88,7 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 		l.f = &Form{}
 	} else {
 		l.f.Vars, l.f.Blocks, l.f.Instrs, l.f.Temps = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0], l.f.Temps[:0]
-		l.f.operands, l.f.succs = l.f.operands[:0], l.f.succs[:0]
+		l.f.operands, l.f.succs, l.f.closures = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0]
 	}
 
 	l.taken, l.bases, l.declared = l.taken[:0], l.bases[:0], l.declared[:0]
@@ -158,9 +158,16 @@ func (l *lowering) newBlock() int {
 	return len(l.f.Blocks) - 1
 }
 
-// start begins writing block b, after ending the one being written.
+// start begins writing block b, after ending the one being written; a
+// block no edge reaches is code control cannot reach, and nothing is
+// written until a block that is reached begins.
 func (l *lowering) start(b int) {
 	l.endBlock()
+	if l.f.Blocks[b].preds == 0 {
+		l.cur = noBlock
+		return
+	}
+
 	l.cur = b
 	l.f.Blocks[b].From, l.f.Blocks[b].To = len(l.f.Instrs), len(l.f.Instrs)
 }
@@ -181,6 +188,7 @@ func (l *lowering) edge(from, to int) {
 
 	b := &l.f.Blocks[from]
 	f := l.f
+	f.Blocks[to].preds++
 	if n := len(b.Succs); n > 0 && len(f.succs) >= n && &f.succs[len(f.succs)-1] == &b.Succs[n-1] {
 		f.succs = append(f.succs, to)
 		b.Succs = f.succs[len(f.succs)-n-1 : len(f.succs) : len(f.succs)]

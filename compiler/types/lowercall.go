@@ -107,17 +107,24 @@ func (l *lowering) call(x *ast.CallExpr) Operand {
 
 // callSourceIndex is the operand a call's result borrows from, among the
 // operands callArgs gives, the receiver first when recv says there is
-// one: the receiver, or the argument of the one borrowed parameter; -1
-// for none.
+// one: a receiver that is a borrow, or the argument of the one borrowed
+// parameter; -1 for none. A receiver taken by value dies with the call,
+// so no returned borrow is of it.
 func callSourceIndex(sig *Signature, recv bool) int {
-	switch {
-	case sig == nil:
+	if sig == nil {
 		return -1
-	case recv:
+	}
+
+	if recv && isBorrow(sig.recv.typ) {
 		return 0
 	}
 
-	return borrowedParam(sig)
+	i := borrowedParam(sig)
+	if i >= 0 && recv {
+		i++
+	}
+
+	return i
 }
 
 // callArgs evaluates what a call takes, in order, and returns the
@@ -187,8 +194,8 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		}
 
 		a := l.value(arg, want)
-		if want != nil && !isBorrow(want) || builtin != nil && builtin.id == BuiltinReplace && i == 1 || l.isBorrowTemp(a) {
-			l.take(a) // given by value, the callee owns it; a borrow made for the call ends when the call returns
+		if want != nil && !isBorrow(want) || k.makes() || builtin != nil && builtin.id == BuiltinReplace && i == 1 || l.isBorrowTemp(a) {
+			l.take(a) // given by value, the callee or the variant owns it; a borrow made for the call ends when the call returns
 		}
 
 		l.argStack = append(l.argStack, a)

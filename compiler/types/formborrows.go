@@ -38,11 +38,16 @@ type formBorrows struct {
 }
 
 // formBorrows runs the borrow pass over f, the form of a body of
-// signature sig, for a closure beginning at outer, and returns what it
-// refuses.
+// signature sig, for a closure beginning at outer, then the passes of
+// the closures written in the body under its graph, and returns what
+// they refuse.
 func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formError {
 	saved, temps, dead, outerSig := c.flow, c.temps, c.dead, c.sig
 	c.flow, c.temps, c.dead, c.sig = c.newFlow(outer), nil, false, sig // the recorders decide by the body's own signature: a closure's parameters are its own
+	if outer != token.NoPos {
+		c.flow.parent = saved // a closure's body sees what the variables of the body around it hold
+	}
+
 	wasPass := c.formPass
 	c.formPass, c.formErrs = true, c.formErrs[:0]
 	m := c.borrowPass
@@ -86,6 +91,10 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 
 	errs := slices.Clone(c.formErrs)
 	c.eachFlowError(func(e flowError) { errs = append(errs, formError{e.pos, e.msg}) })
+	for _, cf := range f.closures { // a closure written in this body: its graph sees this one as its parent
+		errs = append(errs, c.formBorrows(cf.form, cf.sig, cf.pos)...)
+	}
+
 	c.freeFlow(c.flow)
 	c.flow, c.temps, c.dead, c.sig = saved, temps, dead, outerSig
 	c.formPass = wasPass
@@ -166,9 +175,11 @@ func (m *formBorrows) step(in *Instr) {
 		m.uses(in.Args, in.Pos)
 		if call, ok := in.Expr.(*ast.CallExpr); ok {
 			if holder := c.flowDeferred(in.Pos); holder != nil {
-				rest := make([]operand, len(call.Args)) // the variadic arguments, each checked: the typing refused the call otherwise
-				for i := range rest {
-					rest[i].mode = value
+				rest := make([]operand, len(call.Args)) // the variadic arguments, as the typing left them: one it refused has no type
+				for i, a := range call.Args {
+					if c.info.Types[a] != nil {
+						rest[i].mode = value
+					}
 				}
 
 				c.deferHolds(holder, call, c.calledBy(call).sig, rest, in.Pos)
@@ -176,7 +187,28 @@ func (m *formBorrows) step(in *Instr) {
 		}
 	case OpReturn:
 		m.uses(in.Args, in.Pos)
+		m.returned(in)
 	}
+}
+
+// returned checks what the returned value lets out of the function, by
+// the walk's rule: a borrow must come from the function's source,
+// followed through the loans in effect at the return, and a closure
+// that borrows cannot leave. The value a ? returns is the function's
+// own result, which lets nothing out that its expression's type did
+// not say.
+func (m *formBorrows) returned(in *Instr) {
+	if _, try := in.Expr.(*ast.TryExpr); try {
+		return
+	}
+
+	c := m.checker
+	op := operand{mode: value, typ: c.info.Types[in.Expr], expr: in.Expr}
+	if len(c.keptParams(op)) > 0 {
+		return // a parameter returned: what the function keeps, checked at its calls by the typing
+	}
+
+	c.returnEscapes(op, in.Expr.Pos())
 }
 
 // borrowed records a borrow made into a temporary: the access to the
@@ -345,7 +377,8 @@ func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
 
 	h := m.holder(t, pos, m.nameOf(info))
 	if !lends {
-		return // bound from, holding nothing of its own
+		c.holdsTemporary(h) // bound from, holding nothing of its own: a borrow of it returned is of a temporary
+		return
 	}
 
 	f := c.flow

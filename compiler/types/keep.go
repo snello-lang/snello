@@ -269,7 +269,7 @@ func (c *Checker) borrowsWhat(op operand, pos token.Pos) string {
 		}
 
 		if id, ok := unparen(e).(*ast.Ident); ok {
-			if v, ok := c.resolve(id.Name).(*Var); ok && isSignature(v.typ) {
+			if v, ok := c.refersTo(id).(*Var); ok && isSignature(v.typ) {
 				if b := c.heldBy(v, pos); b != nil {
 					what = "closure " + v.name + " captures " + b.v.name + " by borrow"
 				}

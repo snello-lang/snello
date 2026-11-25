@@ -309,14 +309,12 @@ func (l *lowering) returnStmt(s *ast.ReturnStmt) {
 		}
 	}
 
-	if len(s.Results) > 0 {
-		for _, v := range l.argStack[start:] {
-			l.take(v)
-		}
-
-		l.emit(Instr{Op: OpReturn, Args: l.args(l.argStack[start:]...), Expr: s.Results[0], Pos: s.Return})
-		l.argStack = l.argStack[:start]
+	for i, v := range l.argStack[start:] { // one return per value, each with its expression: what each lets out is checked by it
+		l.take(v)
+		l.emit(Instr{Op: OpReturn, Args: l.args(v), Expr: s.Results[i], Pos: s.Return})
 	}
+
+	l.argStack = l.argStack[:start]
 
 	l.leave(0, s.Return, nil)
 }

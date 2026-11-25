@@ -19,7 +19,7 @@ func TestFormBorrows(t *testing.T) {
 		"func pick<T>(n int, m ref map[string]T) (ref T)? { return None }\nenum E { A(items []int); B }\nfunc mk() E { return A([]int{1}) }\n" +
 		"struct W { xs []int }\nfunc mkw() W { return W{xs: []int{1}} }\nfunc (w ref W) Items() ref []int { return ref w.xs }\n" +
 		"struct B2 { xs []string }\nfunc (b ref B2) First() (ref string)? { return None }\nfunc mkb() B2 { return B2{xs: []string{\"a\"}} }\n" +
-		"struct Two { a string; src ref string }\n"
+		"struct Two { a string; src ref string }\nstruct B3 { n int }\nfunc (b B3) Pick(s ref string) (ref string)? { return Some(s) }\nfunc mkb3() B3 { return B3{n: 1} }\n"
 	tests := []struct {
 		src  string
 		want []string
@@ -36,6 +36,9 @@ func TestFormBorrows(t *testing.T) {
 		{"func f() { z := \"z\"; r := ref z; if match mkb().First() { Some(v) => { r = v; true }, None => false } { print(r) } }", []string{"cannot keep a borrow of mkb() in r: mkb() is dropped after the condition that begins at"}},
 		{"func f() { g := func(h mut Two) { h.src = ref h.a }; _ = g }", []string{"cannot store a borrow of h.a in h: h is the caller's"}},
 		{"func f(t string) { g := func(s ref string) ref string { return s }; r := g(ref t); keep(t); print(r) }", []string{"cannot move t: t is borrowed by r"}},
+		{"func f() int { outer := func() int { t := \"b\".Clone(); k := func() int { return len(t) }; inner := func() func() int { return k }; return inner()() }; return outer() }", []string{"closure k captures t by borrow and cannot be returned"}},
+		{"func f(c bool, s string) { if c { return } else { return }; r := ref s; keep(s); print(r) }", nil},
+		{"func f(s string) (ref string)? { if v := mkb3().Pick(ref s) { return Some(v) }; return None }", nil},
 	}
 	var graphs []string
 	formGraphs = func(m *formBorrows) {

@@ -375,6 +375,12 @@ func (c *Checker) kept(op operand, how string, pos token.Pos) {
 	}
 
 	c.keepParam(op, how, pos) // a parameter of the function, which the function then keeps: its callers are checked against that
+	c.cannotBe(op, how, pos)
+}
+
+// cannotBe refuses the value op where it is kept, how saying where,
+// when it is a closure that borrows.
+func (c *Checker) cannotBe(op operand, how string, pos token.Pos) {
 	if what := c.borrowsWhat(op, pos); what != "" {
 		c.errorf(pos, what+" and cannot be "+how)
 	}
@@ -423,22 +429,33 @@ func heldIn(f *flow, v *Var, pos token.Pos) *borrow {
 // local, or of a parameter taken by value, dies with the function. A
 // closure that captures a local is a borrow of that local.
 func (c *Checker) returned(e ast.Expr, op operand) {
-	if op.mode == invalid || c.keepParam(op, "returned", e.Pos()) {
+	if op.mode == invalid {
 		return
 	}
 
+	if !c.keepParam(op, "returned", e.Pos()) { // a parameter returned is what the function keeps, checked at its calls
+		c.returnEscapes(op, e.Pos())
+	}
+}
+
+// returnEscapes checks what the returned value op, no parameter, lets
+// out of the function: a closure that borrows cannot leave, and a
+// borrow must come from the function's source, followed through the
+// loans in effect at the return.
+func (c *Checker) returnEscapes(op operand, pos token.Pos) {
+	e := op.expr
 	if isSignature(op.typ) {
-		c.kept(op, "returned", e.Pos())
+		c.cannotBe(op, "returned", pos)
 		return
 	}
 
 	if holdsBorrow(c.sig.results) {
 		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(e.Pos(), "cannot return a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			c.errorf(pos, "cannot return a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
 			return
 		}
 
-		c.source(e, e.Pos())
+		c.source(e, pos)
 	}
 }
 

@@ -355,11 +355,7 @@ func (c *Checker) flowTemporary(tmp ast.Expr) *Var {
 
 	v := c.newHolder(tmp.Pos(), exprText(unparen(tmp)))
 	f.temps = append(f.temps, v)
-	if f.temporary == nil {
-		f.temporary = make(map[*Var]bool)
-	}
-
-	f.temporary[v] = true
+	c.holdsTemporary(v)
 	return v
 }
 
@@ -474,6 +470,17 @@ func dropsHere(v *Var) bool { return !v.field && !v.global && v.pos != token.NoP
 // dropRuns reports whether dropping a value of type t reads what it
 // holds: a type with a Drop method that holds a borrow.
 func dropRuns(t Type) bool { return holdsBorrow(t) && dropReads(t) }
+
+// holdsTemporary records that the holder v stands for a temporary,
+// which a returned borrow may not be of.
+func (c *Checker) holdsTemporary(v *Var) {
+	f := c.flow
+	if f.temporary == nil {
+		f.temporary = make(map[*Var]bool)
+	}
+
+	f.temporary[v] = true
+}
 
 // newHolder makes a variable standing in the graph for what no variable
 // of the program holds, a temporary's or a loop's borrows, assigned at

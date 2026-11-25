@@ -17,9 +17,18 @@ import "testing"
 // match guard's blocks hold what the guard evaluates, the arm's body
 // and the path to the next arm leaving them.
 func TestLowerExpressions(t *testing.T) {
-	const decls = "struct Row { name string }\nstruct L { r ref Row; n int }\nstruct P { a string; n int }\ntype Name string\n" +
+	const decls = "struct Row { name string }\nstruct L { r ref Row; n int }\nstruct P { a string; n int }\ntype Name string\nenum E { A(string); B(int) }\n" +
 		"func keep(s string) {}\nfunc take(s string) int { return 0 }\nfunc mk() string { return \"a\".Clone() }\nfunc opt() string? { return None }\n"
 	tests := []struct{ src, want string }{
+		{"func f() { e := A(mk()); keep(\"x\") }", `b0:
+  t0 = call()
+  t1 = make(t0)
+  store e <- t1
+  t2 = make()
+  t3 = call(t2)
+  leave(e)
+  ->
+`},
 		{"func f(c bool) { x := P{a: mk(), n: if c { 1 } else { 2 }}; keep(x.a) }", `b0:
   t0 = call()
   read c

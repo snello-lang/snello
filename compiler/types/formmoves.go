@@ -94,6 +94,10 @@ func (c *Checker) formMoves(f *Form) []formError {
 		}
 	}
 
+	for _, cf := range f.closures {
+		m.errs = append(m.errs, c.formMoves(cf.form)...)
+	}
+
 	return m.errs
 }
 
@@ -427,12 +431,14 @@ func isMoveMessage(msg string) bool {
 // body that does not type is left alone, since what its moves and
 // borrows would be is moot.
 func (c *Checker) comparePasses(moves, borrows []formError, first int) {
-	treeMoves, treeBorrows := map[string]bool{}, map[string]bool{}
+	treeMoves, treeBorrows, treeEscapes := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range c.errors[first:] {
 		text := e.Pos.String() + ": " + e.Msg
 		switch {
 		case isMoveMessage(e.Msg):
 			treeMoves[text] = true
+		case isEscapeMessage(e.Msg):
+			treeEscapes[text] = true
 		case isBorrowMessage(e.Msg):
 			treeBorrows[text] = true
 		case !strings.HasPrefix(e.Msg, "form"):
@@ -440,8 +446,26 @@ func (c *Checker) comparePasses(moves, borrows []formError, first int) {
 		}
 	}
 
+	var escapes []formError // the borrow pass's graph follows the returned borrows too: its errors are told apart by their text, in place
+	kept := borrows[:0]
+	for _, e := range borrows {
+		if isEscapeMessage(e.msg) {
+			escapes = append(escapes, e)
+		} else {
+			kept = append(kept, e)
+		}
+	}
+
 	c.comparePass("moves", moves, treeMoves)
-	c.comparePass("borrows", borrows, treeBorrows)
+	c.comparePass("borrows", kept, treeBorrows)
+	c.comparePass("escape", escapes, treeEscapes)
+}
+
+// isEscapeMessage reports whether a message is the escape pass's: a
+// borrow returned that the function's source does not hold, or a
+// closure that borrows returned.
+func isEscapeMessage(msg string) bool {
+	return strings.HasPrefix(msg, "cannot return a borrow") || strings.HasSuffix(msg, " and cannot be returned")
 }
 
 // comparePass reports the differences between what a pass over the

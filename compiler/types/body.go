@@ -59,12 +59,9 @@ func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param
 	c.funcBody(sig, recv, params, body)
 	c.solveFlow()
 	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared, once the tree's passes have reported
-		c.closureMoves, c.closureLoans = c.closureMoves[:0], c.closureLoans[:0]
-		form := c.lowerBody(sig, body) // a closure's form, lowered inside its function's, is checked as it is made, into closureMoves and closureLoans
+		form := c.lowerBody(sig, body) // the closures' forms, lowered inside their body's, are kept with it
 		if compareForms {
-			moves := append(c.formMoves(form), c.closureMoves...)
-			loans := append(c.formBorrows(form, sig, token.NoPos), c.closureLoans...)
-			c.comparePasses(moves, loans, first)
+			c.comparePasses(c.formMoves(form), c.formBorrows(form, sig, token.NoPos), first) // each pass runs the closures' after their body's
 		}
 	}
 

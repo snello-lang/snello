@@ -39,7 +39,7 @@ const (
 	OpStore                 // To's value is given to Place, dropping what Place held; a borrow variable is pointed elsewhere; a temporary stored to is a block's or an arm's value
 	OpDrop                  // the value at Place, a variable or a temporary, is dropped; a Drop reads what the value borrows
 	OpDefer                 // Args are evaluated now and lent to a holder live to every return; the call runs in each returning leave
-	OpReturn                // Args are the values the function returns, taken before the leave that follows
+	OpReturn                // Args is one value the function returns, taken before the leave that follows; Expr the expression it is the value of
 	OpLeave                 // a return, a ? that returns, a break or a continue: the deferred calls when it returns, the drops in Args, then the edge
 )
 
@@ -50,8 +50,17 @@ type Form struct {
 	Instrs []Instr     // every block's instructions in one list, a block a range of it
 	Temps  []TempInfo  // the body's temporaries, by the number an Operand names
 
-	operands []Operand // what every instruction's Args slice into, one list for the body
-	succs    []int     // what every block's Succs slice into
+	operands []Operand     // what every instruction's Args slice into, one list for the body
+	succs    []int         // what every block's Succs slice into
+	closures []closureForm // the closures written in the body, whose passes run under the body's
+}
+
+// A closureForm is the form of a closure written in a body, with the
+// closure's signature and where it begins.
+type closureForm struct {
+	form *Form
+	sig  *Signature
+	pos  token.Pos
 }
 
 // A TempInfo is what the lowering knows of a temporary: the expression
@@ -76,6 +85,7 @@ type FormBlock struct {
 	Loop     int       // the head of the innermost loop the block is in, or -1
 	Pos      token.Pos // for a head, where the loop begins: a variable declared before it is not the loop's own
 	Guard    *Guard    // for a match guard's block, what it is and where it stands; nil for any other
+	preds    int       // the edges into the block: none, after the first block, is code control cannot reach, which is not written
 }
 
 // A Guard says what a block that evaluates a match guard is, a match
