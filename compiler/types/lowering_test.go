@@ -60,19 +60,20 @@ func TestLowering(t *testing.T) {
   ->
 `},
 		{"func f(v []string) { r := mut v[0]; *r = \"z\".Clone(); for i := 0; i < 2; i += 1 { print(i) } }", `b0:
-  t0 = borrow mut v.[]
-  store r <- t0
-  t1 = make()
-  t2 = borrow ref t1
-  t3 = call(t2)
-  store r.* <- t3
-  t4 = make()
-  store i <- t4
+  t0 = make()
+  t1 = borrow mut v.[]
+  store r <- t1
+  t2 = make()
+  t3 = borrow ref t2
+  t4 = call(t3)
+  store r.* <- t4
+  t5 = make()
+  store i <- t5
   -> b1
 b1 (head):
   read i
-  t5 = make()
-  t6 = make(i, t5)
+  t6 = make()
+  t7 = make(i, t6)
   -> b2 b3
 b2:
   drop i
@@ -80,13 +81,13 @@ b2:
   ->
 b3:
   read i
-  t7 = call(i)
+  t8 = call(i)
   -> b4
 b4:
   read i
-  t8 = make()
-  t9 = make(i, t8)
-  store i <- t9
+  t9 = make()
+  t10 = make(i, t9)
+  store i <- t10
   -> b1
 `},
 		{"func f(c bool, s string) string { return if c { s } else { \"b\".Clone() } }", `b0:

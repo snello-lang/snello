@@ -202,7 +202,7 @@ type Checker struct {
 	pending      []pendingStore
 	pendingOwned []pendingStore             // the instances ownedParts was asked about then, elem the type
 	captured     map[*ast.FuncLit][]capture // what each closure captures, read off its form when it is lowered
-	moves        formMoves                  // the move pass's scratch (formmoves.go)
+	moves        *formMoves                 // the scratch of the move pass over the form, reused across bodies (formmoves.go)
 	spareForms   []*Form                    // the forms of closures checked, for the closures lowered next
 	spawning     *ast.CallExpr
 	variadic     []operand     // the variadic arguments of the call just checked, which a format is checked against
@@ -428,6 +428,7 @@ func (c *Checker) checkFiles(fs []*ast.File) {
 	c.checkCallCycles()
 	c.reach(fs)
 	c.freeLowerings()
+	c.freePasses()
 }
 
 // A fileState is a file's scope of its imports, under the package

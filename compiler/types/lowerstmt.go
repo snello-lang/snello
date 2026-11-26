@@ -135,7 +135,8 @@ func (l *lowering) values(n int, exprs []ast.Expr, want func(i int) Type, lhs []
 		t := l.value(exprs[0], nil)
 		l.take(t)
 		for i := 0; i < n; i++ {
-			l.argStack = append(l.argStack, t.sub("?"+strconv.Itoa(i)))
+			l.partBuf = strconv.AppendInt(append(l.partBuf[:0], '?'), int64(i), 10)
+			l.argStack = append(l.argStack, l.sub(t, l.partBuf))
 		}
 
 		return l.argStack[start:]
@@ -397,7 +398,7 @@ func (l *lowering) ifBind(s *ast.IfBindStmt) {
 	l.branch(then, els)
 	l.openScope()
 	l.reachMut(s.Value, v)
-	l.bind(s.Pat, v.sub("?Some.?0")) // the pattern binds the payload
+	l.bind(s.Pat, l.sub(v, []byte("?Some.?0"))) // the pattern binds the payload
 	l.stmts(s.Body.List)
 	l.closeScope(s.Body.Rbrace)
 	l.joinTo(join)
@@ -427,11 +428,14 @@ func (l *lowering) bind(p ast.Pattern, v Operand) {
 		}
 	case *ast.TuplePat:
 		for i, elt := range p.Elts {
-			l.bind(elt, v.sub("?"+strconv.Itoa(i)))
+			l.partBuf = strconv.AppendInt(append(l.partBuf[:0], '?'), int64(i), 10)
+			l.bind(elt, l.sub(v, l.partBuf))
 		}
 	case *ast.VariantPat:
 		for i, arg := range p.Args {
-			l.bind(arg, v.sub("?"+calleeName(p.Path).Name+".?"+strconv.Itoa(i)))
+			l.partBuf = append(append(append(l.partBuf[:0], '?'), calleeName(p.Path).Name...), ".?"...)
+			l.partBuf = strconv.AppendInt(l.partBuf, int64(i), 10)
+			l.bind(arg, l.sub(v, l.partBuf))
 		}
 	case *ast.OrPat:
 		for _, alt := range p.Alts {
@@ -504,7 +508,7 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 	l.edge(l.cur, exit)
 	l.goTo(body)
 	l.openScope() // the pass's: its key and value, dropped where the pass ends
-	item := x.sub("[]")
+	item := l.sub(x, []byte("[]"))
 	for _, e := range []ast.Expr{s.Key, s.Value} {
 		if e == nil || isBlank(e) {
 			continue

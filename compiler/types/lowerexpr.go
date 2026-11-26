@@ -70,6 +70,8 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 		if p, ok := l.placeOrPart(x.X); ok { // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
 			return l.lend(p, x.X, isMut(l.typeOf(e)))
 		}
+
+		return l.lend(l.value(x.X, nil), x.X, isMut(l.typeOf(e))) // a slice of a value made here borrows the temporary that holds it
 	}
 
 	if p, ok := l.placeOrPart(e); ok {
@@ -81,9 +83,13 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 
 // placeOrPart returns the operand of a place: a variable with its path,
 // or a part of a value made here, a field or an element of a call's
-// result, as a place of the temporary that holds the value.
+// result, as a place of the temporary that holds the value. The indexes
+// and keys inside a place that is read are evaluated here, once, as the
+// program evaluates them before it reaches the place; an assignment's
+// place evaluates its own (indexes).
 func (l *lowering) placeOrPart(e ast.Expr) (Operand, bool) {
 	if p, ok := l.placeOf(e); ok {
+		l.keys(e)
 		return p, true
 	}
 
@@ -109,11 +115,11 @@ func (l *lowering) partOfValue(e ast.Expr) (Operand, bool) {
 		return l.through(l.root(x.X), x.X, x.Sel.Name), true
 	case *ast.IndexExpr:
 		base := l.root(x.X) // what is indexed before the index, as the program evaluates them
-		l.value(x.Index, nil)
+		l.read(x.Index)
 		return l.through(base, x.X, "[]"), true
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
-			return l.root(x.X).sub("*"), true
+			return l.sub(l.root(x.X), []byte("*")), true
 		}
 	}
 
@@ -135,11 +141,11 @@ func (l *lowering) root(e ast.Expr) Operand {
 func (l *lowering) use(p Operand, e ast.Expr, want Type) Operand {
 	t := l.typeOf(e)
 	if r, ok := want.(*Ref); ok && !isBorrow(t) {
-		return l.lendAs(p, e, refOf(t, r), e.Pos())
+		return l.lendAs(p, e, l.refOf(t, r), e.Pos())
 	}
 
 	if r, ok := t.(*Ref); ok && want != nil && !isBorrow(want) && !isAny(want) && !IsCopy(r.elem) { // a borrow given where the value is wanted: a move out of what it points to, which is refused
-		through := p.sub("*")
+		through := l.sub(p, []byte("*"))
 		l.emit(Instr{Op: OpMove, Place: through, Expr: e, Pos: e.Pos()})
 		return through
 	}
@@ -160,18 +166,18 @@ func (l *lowering) lend(p Operand, e ast.Expr, mut bool) Operand { return l.lend
 
 // lendAt is lend, the borrow made at pos.
 func (l *lowering) lendAt(p Operand, e ast.Expr, mut bool, pos token.Pos) Operand {
-	return l.lendAs(p, e, NewRef(l.typeOf(e), mut), pos)
+	return l.lendAs(p, e, l.ref(l.typeOf(e), mut), pos)
 }
 
 // refOf is the type of a borrow of a value of type t made where want,
 // a borrow, is wanted: want itself when it is of t, as it is in most
 // places, else a borrow of t with want's mutability.
-func refOf(t Type, want *Ref) *Ref {
+func (l *lowering) refOf(t Type, want *Ref) *Ref {
 	if Identical(want.elem, t) {
 		return want
 	}
 
-	return NewRef(t, want.mut)
+	return l.ref(t, want.mut)
 }
 
 // lendAs is lendAt, the borrow made of the type ref.
@@ -418,7 +424,7 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 				l.emit(Instr{Op: OpRead, Place: p, Capture: true, Expr: use, Pos: use.Pos()}) // the closure reads the value when it runs: one moved before it is gone
 			}
 
-			tmp := l.temp(NewRef(cap.v.typ, cap.mode == byMut), false, use)
+			tmp := l.temp(l.ref(cap.v.typ, cap.mode == byMut), false, use)
 			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: cap.mode == byMut, Capture: true, Expr: use, Pos: use.Pos()})
 			l.argStack = append(l.argStack, tmp)
 		case byMove:

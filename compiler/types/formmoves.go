@@ -7,14 +7,11 @@ package types
 import (
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
-
-// setRoom is the records each block's set has room for in the pass's
-// pool before it grows on its own: nearly every set is smaller.
-const setRoom = 4
 
 // The move pass over the form: the places that may be moved at each
 // point, a set carried forward through the blocks, joined by union where
@@ -27,41 +24,61 @@ const setRoom = 4
 // moved where a pass ends, is moved in the loop's next pass: a use of it
 // there is a use of what a previous pass moved, reported as such; after
 // the loop it is a use of a moved value as any other.
+//
+// The sets are bitsets over the form's move sites, the move
+// instructions of places that may be moved, numbered in order. Each
+// block carries one set of the sites reached on this pass of every loop
+// and, per loop, one of the sites that came round it: a site's bit
+// moves from the first to the loop's set where the loop's back edge is
+// taken, and stays there round the loops outside, so a use inside that
+// loop is a use of what a previous pass moved, and a use outside it is
+// a use of the move at its position.
 
-// A formMove records a place moved, where, and in which block: a move
-// made in a guard's blocks follows the guard's path. round is one more
-// than the head of the loop the record came round, when it did: a use
-// of the place in that loop is a use of what a previous pass moved.
-type formMove struct {
-	place Operand
-	pos   token.Pos
-	block int
-	round int
-}
+// movePasses keeps the scratch of the move pass for reuse across bodies
+// and checkers, as the lowering's and the graphs are kept.
+var movePasses = sync.Pool{New: func() any { return new(formMoves) }}
 
 // A formMoves is the pass over one form, the checker's scratch for it
 // kept across bodies.
 type formMoves struct {
 	c     *Checker
 	f     *Form
-	in    [][]formMove // the moved set where each block begins
-	dirty []bool       // the blocks whose set grew since they were last stepped through
-	state []formMove   // the set being carried through a block
-	round []formMove   // the set carried round a loop, its records marked
-	pool  []formMove   // where the blocks' sets begin, setRoom records each, one allocation for the form
+	site  []int32 // per instruction, its move site, or -1
+	at    []int32 // per site, its instruction
+	block []int32 // per site, its block
+	loop  []int32 // per block, 1 + the index of the loop it heads, or 0
+	loops int     // how many loops the form has
+	words int     // the words of one set
+	in    bitset  // the sets where each block begins, sets() of them per block, words each
+	state bitset  // the sets carried through a block
+	next  bitset  // the sets carried along an edge that changes them
+	dirty []bool  // the blocks whose sets grew since they were last stepped through
 }
 
+// sets is how many sets a block carries: the sites reached on this
+// pass, and those come round each loop.
+func (m *formMoves) sets() int { return 1 + m.loops }
+
 // formMoves runs the move pass over f, the blocks in the order control
-// reaches them, each stepped through once and again while the set where
-// it begins grows, until none does.
+// reaches them, each stepped through once and again while the sets where
+// it begins grow, until none do.
 func (c *Checker) formMoves(f *Form) {
-	m := &c.moves
+	m := c.moves
+	if m == nil {
+		m = movePasses.Get().(*formMoves)
+		c.moves = m
+	}
+
 	m.c, m.f = c, f
+	m.number()
 	n := len(f.Blocks)
-	m.in, m.dirty = slices.Grow(m.in[:0], n)[:n], slices.Grow(m.dirty[:0], n)[:n]
-	m.pool = slices.Grow(m.pool[:0], n*setRoom)[:n*setRoom]
-	for b := range m.in {
-		m.in[b], m.dirty[b] = m.pool[b*setRoom:b*setRoom:(b+1)*setRoom], true
+	size := m.sets() * m.words
+	m.in = slices.Grow(m.in[:0], n*size)[:n*size]
+	clear(m.in)
+	m.state, m.next = slices.Grow(m.state[:0], size)[:size], slices.Grow(m.next[:0], size)[:size]
+	m.dirty = slices.Grow(m.dirty[:0], n)[:n]
+	for b := range m.dirty {
+		m.dirty[b] = true
 	}
 
 	for again := true; again; {
@@ -72,20 +89,21 @@ func (c *Checker) formMoves(f *Form) {
 			}
 
 			m.dirty[b] = false
-			state := append(m.state[:0], m.in[b]...)
-			for _, in := range f.Instrs[f.Blocks[b].From:f.Blocks[b].To] {
-				state = m.step(state, in, b)
+			copy(m.state, m.blockIn(b))
+			for i := f.Blocks[b].From; i < f.Blocks[b].To; i++ {
+				m.step(i, b)
 			}
 
-			m.state = state
 			for _, s := range f.Blocks[b].Succs {
-				next := state
+				next := m.state
 				if g := f.Blocks[b].Guard; g != nil && f.Blocks[s].Guard != g && s != g.Taken { // the guard failed: the moves it made, refused already, follow the arm's path alone, and the arms after are not told of them again
-					next = slices.DeleteFunc(slices.Clone(state), func(r formMove) bool { return f.Blocks[r.block].Guard == g })
+					next = m.changed(next)
+					m.without(g)
 				}
 
-				if f.Blocks[s].Head && s <= b { // a pass's end: the records come round marked
-					next = m.roundOf(next, s)
+				if f.Blocks[s].Head && s <= b { // a pass's end: the sites reached on it come round the loop
+					next = m.changed(next)
+					m.round(s)
 				}
 
 				if m.merge(s, next) {
@@ -101,42 +119,85 @@ func (c *Checker) formMoves(f *Form) {
 	}
 }
 
-// roundOf returns the records of state as they come round the loop
-// whose head is head, each marked by the first loop it came round.
-func (m *formMoves) roundOf(state []formMove, head int) []formMove {
-	out := m.round[:0]
-	for _, r := range state {
-		if r.round == 0 {
-			r.round = head + 1
-		}
-
-		out = append(out, r)
-	}
-
-	m.round = out
-	return out
-}
-
-// merge adds the records of state to the set where block b begins, and
-// reports whether the set grew.
-func (m *formMoves) merge(b int, state []formMove) bool {
-	grew := false
-	for _, r := range state {
-		if !slices.Contains(m.in[b], r) {
-			m.in[b] = append(m.in[b], r)
-			grew = true
+// number gives the form's move sites their numbers, the loops theirs,
+// and sizes the sets.
+func (m *formMoves) number() {
+	f := m.f
+	m.site = slices.Grow(m.site[:0], len(f.Instrs))[:len(f.Instrs)]
+	m.at, m.block = m.at[:0], m.block[:0]
+	for b, blk := range f.Blocks {
+		for i := blk.From; i < blk.To; i++ {
+			m.site[i] = -1
+			if in := &f.Instrs[i]; in.Op == OpMove && !in.Place.IsTemp() {
+				m.site[i] = int32(len(m.at))
+				m.at, m.block = append(m.at, int32(i)), append(m.block, int32(b))
+			}
 		}
 	}
 
-	return grew
+	m.loop, m.loops = slices.Grow(m.loop[:0], len(f.Blocks))[:len(f.Blocks)], 0
+	for b, blk := range f.Blocks {
+		m.loop[b] = 0
+		if blk.Head {
+			m.loops++
+			m.loop[b] = int32(m.loops)
+		}
+	}
+
+	m.words = (len(m.at) + 63) / 64
 }
 
-// step applies one instruction to the moved set.
-func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
+// blockIn is the sets where block b begins.
+func (m *formMoves) blockIn(b int) bitset {
+	size := m.sets() * m.words
+	return m.in[b*size : (b+1)*size]
+}
+
+// set is the k-th set of sets: the sites reached on this pass for 0,
+// those come round the loop numbered k otherwise.
+func (m *formMoves) set(sets bitset, k int) bitset { return sets[k*m.words : (k+1)*m.words] }
+
+// changed returns the sets an edge changes, next: the state copied into
+// next when it is not there yet.
+func (m *formMoves) changed(sets bitset) bitset {
+	if len(sets) == 0 || &sets[0] != &m.next[0] {
+		copy(m.next, m.state)
+	}
+
+	return m.next
+}
+
+// without takes out of next the sites in the blocks of the guard g.
+func (m *formMoves) without(g *Guard) {
+	for s, b := range m.block {
+		if m.f.Blocks[b].Guard == g {
+			for k := 0; k < m.sets(); k++ {
+				m.set(m.next, k).del(s)
+			}
+		}
+	}
+}
+
+// round makes next the sets come round the loop whose head is head: the
+// sites reached on this pass are the loop's now, and the sites come
+// round a loop inside it stay that loop's.
+func (m *formMoves) round(head int) {
+	fresh, loop := m.set(m.next, 0), m.set(m.next, int(m.loop[head]))
+	loop.union(fresh)
+	clear(fresh)
+}
+
+// merge adds the sets of sets to those where block b begins, and
+// reports whether they grew.
+func (m *formMoves) merge(b int, sets bitset) bool { return m.blockIn(b).union(sets) }
+
+// step applies the instruction i of block b to the sets of the state.
+func (m *formMoves) step(i, b int) {
+	in := &m.f.Instrs[i]
 	switch in.Op {
 	case OpRead, OpBorrow:
 		if !in.Capture || !in.Mut { // a mut borrow a closure captures is no use of the value until the closure runs
-			m.checkUse(state, in, false, b)
+			m.checkUse(in, false, b)
 		}
 	case OpMove:
 		if !m.movable(in) {
@@ -149,41 +210,58 @@ func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
 			}
 		}
 
-		m.checkUse(state, in, false, b)
-		if !in.Place.IsTemp() {
-			state = append(state, formMove{place: in.Place, pos: in.Pos, block: b})
+		m.checkUse(in, false, b)
+		if s := m.site[i]; s >= 0 {
+			m.set(m.state, 0).set(int(s))
 		}
 	case OpStore:
-		m.checkUse(state, in, true, b)
-		state = slices.DeleteFunc(state, func(r formMove) bool { return within(r.place, in.Place) })
-	}
+		m.checkUse(in, true, b)
+		for k := 0; k < m.sets(); k++ { // the place and the places inside it are given back
+			set := m.set(m.state, k)
+			set.each(func(s int) bool {
+				if within(m.f.Instrs[m.at[s]].Place, in.Place) {
+					set.del(s)
+				}
 
-	return state
+				return true
+			})
+		}
+	}
 }
 
 // checkUse reports a use of a place moved, wholly or in part, on the
 // path. A store is not a use of what the place holds: a whole variable
 // may be given a new value, and so may a moved field, but a field of a
-// moved value may not.
-func (m *formMoves) checkUse(state []formMove, in Instr, store bool, b int) {
+// moved value may not. A move reached on this pass is reported at its
+// position; one come round the loop the use is in is reported as a
+// previous pass's.
+func (m *formMoves) checkUse(in *Instr, store bool, b int) {
 	p, e := in.Place, in.Expr
 	if p.IsTemp() {
 		return
 	}
 
-	for i := len(state) - 1; i >= 0; i-- { // the latest record of the place decides
-		r := state[i]
-		switch {
-		case store && r.place == p:
-			return
-		case within(p, r.place) && r.round != 0 && m.inLoop(b, r.round-1):
-			m.c.errorf(basePos(e), loopMovedMessage(m.text(r.place))) // moved on a previous pass of the loop this use is in, and not given a value since
-			return
-		case within(p, r.place):
-			m.c.errorf(basePos(e), movedMessage(m.text(r.place), m.c.lineCol(r.pos)))
-			return
-		case !store && within(r.place, p):
-			m.c.errorf(basePos(e), partiallyMovedMessage(m.text(p), m.text(r.place), m.c.lineCol(r.pos)))
+	for k := 0; k < m.sets(); k++ { // this pass's sites first: a move on the path to the use decides over one come round
+		found := false
+		m.set(m.state, k).each(func(s int) bool {
+			moved := &m.f.Instrs[m.at[s]]
+			switch {
+			case store && moved.Place == p:
+			case within(p, moved.Place) && k > 0 && m.inLoop(b, k):
+				m.c.errorf(basePos(e), loopMovedMessage(m.text(moved.Place))) // moved on a previous pass of the loop this use is in, and not given a value since
+			case within(p, moved.Place):
+				m.c.errorf(basePos(e), movedMessage(m.text(moved.Place), m.c.lineCol(moved.Pos)))
+			case !store && within(moved.Place, p):
+				m.c.errorf(basePos(e), partiallyMovedMessage(m.text(p), m.text(moved.Place), m.c.lineCol(moved.Pos)))
+			default:
+				return true
+			}
+
+			found = true
+			return false
+		})
+
+		if found {
 			return
 		}
 	}
@@ -193,7 +271,7 @@ func (m *formMoves) checkUse(state []formMove, in Instr, store bool, b int) {
 // moves, and reports why not when it may not: a borrow, a temporary, an
 // element of a slice or a map, or a field of a value whose Drop reads
 // its fields.
-func (m *formMoves) movable(in Instr) bool {
+func (m *formMoves) movable(in *Instr) bool {
 	e := in.Expr
 	if part, ok := unparen(e).(*ast.PartExpr); ok {
 		m.c.errorf(e.Pos(), partMovedMessage(e, part))
@@ -232,11 +310,11 @@ func (m *formMoves) movable(in Instr) bool {
 	return true
 }
 
-// inLoop reports whether block b is among the blocks of the loop whose
-// head is head, itself or a loop inside it.
-func (m *formMoves) inLoop(b, head int) bool {
+// inLoop reports whether block b is among the blocks of the loop
+// numbered loop, itself or a loop inside it.
+func (m *formMoves) inLoop(b, loop int) bool {
 	for l := b; l != noBlock; l = m.f.Blocks[l].Loop { // the block itself, a head among them, and the loops around it
-		if l == head {
+		if int(m.loop[l]) == loop {
 			return true
 		}
 	}

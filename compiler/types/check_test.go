@@ -163,6 +163,7 @@ var handledErrors = map[string]bool{
 	"use-after-close.snello":     true,
 	"move-in-loop.snello":        true,
 	"evaluation-order.snello":    true,
+	"moved-in-index.snello":      true,
 	"global-moved-init.snello":   true,
 	"move-out-of-slice.snello":   true,
 	"move-out-of-borrow.snello":  true,

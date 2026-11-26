@@ -32,7 +32,7 @@ func (l *lowering) place(e ast.Expr, indexed bool) Operand {
 		return l.root(x.X).sub(x.Sel.Name)
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
-			return l.root(x.X).sub("*")
+			return l.sub(l.root(x.X), []byte("*"))
 		}
 	case *ast.IndexExpr:
 		base := l.root(x.X) // what is indexed before the index, as the program evaluates them
@@ -40,7 +40,7 @@ func (l *lowering) place(e ast.Expr, indexed bool) Operand {
 			l.value(x.Index, nil)
 		}
 
-		return base.sub("[]")
+		return l.sub(base, []byte("[]"))
 	}
 
 	return l.baseValue(e)
@@ -49,18 +49,27 @@ func (l *lowering) place(e ast.Expr, indexed bool) Operand {
 // indexes evaluates the indexes and keys inside the place e, the inner
 // first, as the program evaluates them before an assignment's values;
 // the variables the place is reached through are not read, only
-// written to.
-func (l *lowering) indexes(e ast.Expr) {
+// written to. A key is taken: the map keeps it with the value stored.
+func (l *lowering) indexes(e ast.Expr) { l.eachIndex(e, func(i ast.Expr) { l.value(i, nil) }) }
+
+// keys evaluates the indexes and keys inside the place e that is read,
+// the inner first; a key is read, never taken: the lookup compares it
+// and leaves it where it is.
+func (l *lowering) keys(e ast.Expr) { l.eachIndex(e, func(i ast.Expr) { l.read(i) }) }
+
+// eachIndex calls f with each index and key inside the place e, the
+// inner first.
+func (l *lowering) eachIndex(e ast.Expr, f func(ast.Expr)) {
 	switch x := e.(type) {
 	case *ast.ParenExpr:
-		l.indexes(x.X)
+		l.eachIndex(x.X, f)
 	case *ast.SelectorExpr:
-		l.indexes(x.X)
+		l.eachIndex(x.X, f)
 	case *ast.UnaryExpr:
-		l.indexes(x.X)
+		l.eachIndex(x.X, f)
 	case *ast.IndexExpr:
-		l.indexes(x.X)
-		l.value(x.Index, nil)
+		l.eachIndex(x.X, f)
+		f(x.Index)
 	}
 }
 
@@ -112,7 +121,7 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
 			if p, ok := l.placeOf(x.X); ok {
-				return p.sub("*"), true
+				return l.sub(p, []byte("*")), true
 			}
 		}
 	case *ast.IndexExpr:
@@ -132,17 +141,14 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 // names, reached through the deref a borrow or a pointer goes through
 // when base is one; the path is written in one piece.
 func (l *lowering) through(p Operand, base ast.Expr, part string) Operand {
-	deref := ""
+	b := l.partBuf[:0]
 	switch l.typeOf(base).(type) {
 	case *Ref, *Pointer:
-		deref = "*."
+		b = append(b, "*."...)
 	}
 
-	if p.Path == "" {
-		return Operand{Var: p.Var, Temp: p.Temp, Path: deref + part}
-	}
-
-	return Operand{Var: p.Var, Temp: p.Temp, Path: p.Path + "." + deref + part}
+	l.partBuf = append(b, part...)
+	return l.sub(p, l.partBuf)
 }
 
 // isPkgSelector reports whether a selector names a package's member.
@@ -175,6 +181,7 @@ func (l *lowering) typeOf(e ast.Expr) Type { return l.c.info.Types[e] }
 // moved: every operation on a channel goes through a borrow of it.
 func (l *lowering) channel(e ast.Expr) Operand {
 	if p, ok := l.placeOf(e); ok {
+		l.keys(e)
 		l.emit(Instr{Op: OpRead, Place: p, Expr: e, Pos: e.Pos()})
 		return p
 	}

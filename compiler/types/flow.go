@@ -144,27 +144,27 @@ type loopSpan struct{ head int }
 
 // A flow is the graph of one function's or closure's body.
 type flow struct {
-	blocks    []flowBlock
-	cur       int
-	loans     []borrow
-	accesses  []flowAccess
-	drops     []flowDrop
-	copies    []flowCopy
-	rets      []flowReturn
-	errs      []flowError
-	deferred  []*Var        // the holders of what deferred calls borrow, live until the function returns
-	outside   map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
-	held      map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
-	temporary map[*Var]bool // every such holder, for a message
-	parent    *flow         // for a closure's body, the graph of the body it is written in
-	loops     []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
-	loopOf    []int         // the head of the innermost loop each block is in, or -1
-	holders   []*Var        // the variables standing in the graph for temporaries and loops (newHolder), given back to spare when the graph is freed
-	spare     []*Var
-	outer     token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
-	seq       int
-	back      bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
-	vars      map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
+	blocks      []flowBlock
+	cur         int
+	loans       []borrow
+	accesses    []flowAccess
+	drops       []flowDrop
+	copies      []flowCopy
+	rets        []flowReturn
+	errs        []flowError
+	deferred    []*Var        // the holders of what deferred calls borrow, live until the function returns
+	outside     map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
+	held        map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
+	temporaries []*Var        // the holders standing for temporaries, which a returned borrow may not be of
+	parent      *flow         // for a closure's body, the graph of the body it is written in
+	loops       []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
+	loopOf      []int         // the head of the innermost loop each block is in, or -1
+	holders     []*Var        // the variables standing in the graph for temporaries and loops (newHolder), given back to spare when the graph is freed
+	spare       []*Var
+	outer       token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
+	seq         int
+	back        bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
+	vars        map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
 
 	// The loans each variable holds, as a chain through the loans: the
 	// first and last loan of each variable, by its number, and the loan
@@ -198,7 +198,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.loops, f.seq = f.loops[:0], 0
 	f.deferred, f.parent, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, false
-	f.temporary, f.loopOf = nil, f.loopOf[:0]
+	f.temporaries, f.loopOf = f.temporaries[:0], f.loopOf[:0]
 	f.spare, f.holders = append(f.spare, f.holders...), f.holders[:0]
 	flows.Put(f)
 }
@@ -389,14 +389,7 @@ func dropRuns(t Type) bool { return holdsBorrow(t) && dropReads(t) }
 
 // holdsTemporary records that the holder v stands for a temporary,
 // which a returned borrow may not be of.
-func (c *Checker) holdsTemporary(v *Var) {
-	f := c.flow
-	if f.temporary == nil {
-		f.temporary = make(map[*Var]bool)
-	}
-
-	f.temporary[v] = true
-}
+func (c *Checker) holdsTemporary(v *Var) { c.flow.temporaries = append(c.flow.temporaries, v) }
 
 // newHolder makes a variable standing in the graph for what no variable
 // of the program holds, a temporary's or a loop's borrows, assigned at

@@ -7,6 +7,7 @@ package types
 import (
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
@@ -23,6 +24,30 @@ import (
 // any store; and a temporary a binding is taken from. Any other value
 // says what it lends where it is stored, by its expression, so that
 // what a variable holds is decided in the form's order.
+
+// borrowPasses keeps the scratch of the borrow pass for reuse across
+// bodies and checkers, as the lowering's and the graphs are kept.
+var borrowPasses = sync.Pool{New: func() any { return new(formBorrows) }}
+
+// freePasses gives the scratch of the two passes over the form back for
+// reuse, with nothing of the package in it.
+func (c *Checker) freePasses() {
+	if m := c.moves; m != nil {
+		m.c, m.f = nil, nil
+		movePasses.Put(m)
+		c.moves = nil
+	}
+
+	if m := c.borrowPass; m != nil {
+		m.checker, m.form = nil, nil
+		clear(m.holders)
+		if len(m.names) > cacheMax {
+			clear(m.names)
+		}
+		borrowPasses.Put(m)
+		c.borrowPass = nil
+	}
+}
 
 // formGraphs, when a test sets it, is given each pass once its graph is
 // solved, for the test to print the graph and the pass's table.
@@ -51,7 +76,8 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) {
 
 	m := c.borrowPass
 	if m == nil {
-		m = &formBorrows{checker: c}
+		m = borrowPasses.Get().(*formBorrows)
+		m.checker = c
 		c.borrowPass = m
 	}
 

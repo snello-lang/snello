@@ -197,7 +197,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
 			if p, ok := l.placeOrPart(arg); ok {
 				l.emit(Instr{Op: OpRead, Place: p, Expr: arg, Pos: arg.Pos()})
-				l.argStack = append(l.argStack, l.lendFor(p, arg, NewRef(l.typeOf(arg), r.mut)))
+				l.argStack = append(l.argStack, l.lendFor(p, arg, l.ref(l.typeOf(arg), r.mut)))
 				continue
 			}
 		}
@@ -213,7 +213,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 
 	if recv != nil {
 		if r, ok := recv.typ.(*Ref); ok { // the receiver is lent last, after the arguments; a borrow variable is lent again
-			recvPlace = l.lendFor(recvPlace, recvExpr, refOf(l.typeOf(recvExpr), r))
+			recvPlace = l.lendFor(recvPlace, recvExpr, l.refOf(l.typeOf(recvExpr), r))
 		}
 	}
 

@@ -143,6 +143,7 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 		form := c.lowerInit(d, declared)
 		c.formMoves(form)
 		c.formBorrows(form, nil, token.NoPos)
+		c.spareClosures(form)
 	}
 
 	for i, name := range d.Names {

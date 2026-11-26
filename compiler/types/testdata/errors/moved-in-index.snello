@@ -1,0 +1,44 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the index of a place that is read, and the value a slice is
+// taken of, are evaluated as the program evaluates them, so a value
+// moved there is moved for what follows. Fix: move the value after its
+// last use, or pass a borrow of it.
+
+package p
+
+func take(s string) int { return 0 }
+
+func takeSlice(s string) []int { return []int{1} }
+
+func indexed(xs []int) {
+	s := "a".Clone()
+	n := xs[take(s)]
+	print(len(s)) // ERROR "use of moved value s"
+}
+
+func keyed(m map[int]int) {
+	k := "a".Clone()
+	n := m[take(k)]
+	print(len(k)) // ERROR "use of moved value k"
+}
+
+func borrowed(xs []int) {
+	s := "a".Clone()
+	r := ref xs[take(s)]
+	print(len(s)) // ERROR "use of moved value s"
+}
+
+func measured(xss [][]int) {
+	s := "a".Clone()
+	n := len(xss[take(s)])
+	print(len(s)) // ERROR "use of moved value s"
+}
+
+func sliced() {
+	s := "a".Clone()
+	n := len(takeSlice(s)[0:1])
+	print(len(s)) // ERROR "use of moved value s"
+}

@@ -636,7 +636,7 @@ func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int
 
 	switch {
 	case found:
-	case f.temporary[v]:
+	case slices.Contains(f.temporaries, v):
 		report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped when its statement ends")
 	case f.outer != token.NoPos && v.pos < f.outer: // a closure's body: the variable is the enclosing function's, captured
 		report(pos, "cannot return a borrow of "+v.name+" from a closure: "+v.name+" is captured, and a closure's returned borrow is tied to its parameters")

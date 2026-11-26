@@ -25,6 +25,13 @@ import (
 // to it.
 const noBlock = -1
 
+// cacheMax is how many entries a table of borrow types, paths or place
+// names holds before it is emptied: the tables are kept across the
+// bodies and packages a lowering is reused for, since the predeclared
+// types and the names of fields recur, and emptied at this size so that
+// no table holds what packages checked long ago made.
+const cacheMax = 1 << 12
+
 // lowerings keeps the scratch of the lowering for reuse across bodies
 // and checkers, as the flow graphs are kept: its lists grow to the
 // largest body once.
@@ -53,6 +60,61 @@ type lowering struct {
 	dropsScratch []Operand // what drops builds its list in, copied into the form by the leave
 	argStack     []Operand // what the operands of a call, a literal, a closure or a statement's values are gathered on, inner lists above outer, copied into the form once gathered
 	inner        *lowering // the scratch of the closures written in this body, one depth down
+	spare        []*Form   // the forms of closures checked, kept with the lowering for the closures lowered next
+
+	refs    map[refKey]*Ref   // the borrow types made so far, one per type and mutability: a body lends few types, many times
+	paths   map[string]string // the paths made so far, one string each
+	pathBuf []byte            // scratch a path is written in before it is looked up
+	partBuf []byte            // scratch for the part a path is extended by
+}
+
+// A refKey names a borrow type: what it points at and whether it is mut.
+type refKey struct {
+	elem Type
+	mut  bool
+}
+
+// ref is the type of a borrow of t, mut when mut says so, made once.
+func (l *lowering) ref(t Type, mut bool) *Ref {
+	k := refKey{t, mut}
+	if r, ok := l.refs[k]; ok {
+		return r
+	}
+
+	if l.refs == nil {
+		l.refs = make(map[refKey]*Ref)
+	}
+
+	r := NewRef(t, mut)
+	l.refs[k] = r
+	return r
+}
+
+// sub is the part part of the place p, the path written in one piece.
+func (l *lowering) sub(p Operand, part []byte) Operand {
+	b := append(l.pathBuf[:0], p.Path...)
+	if p.Path != "" {
+		b = append(b, '.')
+	}
+
+	b = append(b, part...)
+	l.pathBuf = b
+	return Operand{Var: p.Var, Temp: p.Temp, Path: l.path(b)}
+}
+
+// path is the string of the path written in b, made once.
+func (l *lowering) path(b []byte) string {
+	if s, ok := l.paths[string(b)]; ok {
+		return s
+	}
+
+	if l.paths == nil {
+		l.paths = make(map[string]string)
+	}
+
+	s := string(b)
+	l.paths[s] = s
+	return s
 }
 
 // An ownedTemp is a temporary a statement owns, and how many scopes
@@ -107,6 +169,7 @@ func (c *Checker) begin(sig *Signature) *lowering {
 		l = lowerings.Get().(*lowering)
 		l.c = c
 		c.lowering = l
+		c.spareForms, l.spare = append(c.spareForms, l.spare...), l.spare[:0] // the closures' forms of the bodies it was reused from
 	}
 
 	if l.f == nil {
@@ -164,21 +227,45 @@ func (l *lowering) finish(end token.Pos, body *ast.BlockStmt) *Form {
 // freeLowerings gives the checker's lowering scratch, and the scratch of
 // every depth of closure under it, back for reuse.
 func (c *Checker) freeLowerings() {
+	for _, f := range c.spareForms {
+		emptyForm(f)
+	}
+
 	for l := c.lowering; l != nil; {
 		inner := l.inner
 		l.inner, l.c = nil, nil
 		if l.f != nil {
-			clear(l.f.Instrs[:cap(l.f.Instrs)]) // what the instructions name, the tree and its types, is let go of now
-			clear(l.f.Vars[:cap(l.f.Vars)])
-			clear(l.f.Temps[:cap(l.f.Temps)])
+			emptyForm(l.f)
+		}
+
+		if c.spareForms != nil { // the closures' forms go with the outermost lowering
+			l.spare, c.spareForms = append(l.spare, c.spareForms...), nil
 		}
 
 		clear(l.bases[:cap(l.bases)])
+		if len(l.refs) > cacheMax {
+			clear(l.refs)
+		}
+
+		if len(l.paths) > cacheMax {
+			clear(l.paths)
+		}
+
 		lowerings.Put(l)
 		l = inner
 	}
 
 	c.lowering = nil
+}
+
+// emptyForm lets go of what a form kept for reuse names: the tree and
+// its types.
+func emptyForm(f *Form) {
+	clear(f.Instrs[:cap(f.Instrs)])
+	clear(f.Vars[:cap(f.Vars)])
+	clear(f.Temps[:cap(f.Temps)])
+	clear(f.closures[:cap(f.closures)])
+	clear(f.kept[:cap(f.kept)])
 }
 
 // Blocks.
