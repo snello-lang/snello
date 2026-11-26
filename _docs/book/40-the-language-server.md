@@ -22,6 +22,8 @@
 
 - **Completion.** After a dot, the members of what is before it: a value's fields and methods, its traits' and its bounds' among them, or the exported names of a package. On a name, every name visible there, the innermost first: the locals in scope, the parameters, the package's names, the imports and the language's, then the keywords; never a local declared further down. In an import's quotes, the standard library's packages and your module's. The list comes in the same order every time, and nothing is offered in a string or a comment.
 
+- **Programs and tests to run.** The server tells the editor where each program's `main` is and each test, benchmark and example, with the `snello` command that runs it alone, so the editor can put a run button beside each one and list a package's tests. It reads them from the file as you type, saved or not, and a file that does not parse keeps the list it had.
+
 Formatting is not here yet; it comes as its own task, and the server tells the editor what it does, so an editor never asks for what it cannot give.
 
 ## Running it

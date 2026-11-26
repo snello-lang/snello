@@ -209,8 +209,8 @@ An example joins what it spawns: what a task writes after the example returns is
 | Flag | What it does |
 |---|---|
 | `-v` | print every test as it starts and ends, with its logged lines, and `PASS` at the end |
-| `-run NAME` | run the tests whose name holds NAME, or every test for `.`; a subtest is not matched on its own, its test is |
-| `-bench NAME` | run the benchmarks whose name holds NAME, after the tests; `.` for all |
+| `-run NAME` | run the tests whose name holds NAME, or every test for `.`; `^NAME$` runs the one test named NAME, and `^(A|B)$` the tests named A and B; a subtest is not matched on its own, its test is |
+| `-bench NAME` | run the benchmarks whose name holds NAME, after the tests, picked the same way; `.` for all |
 | `-count N` | run the tests N times; a value that is not a number ends the run with exit code 2 before any test |
 | `-failfast` | stop at the first failing test |
 | `-timeout DURATION` | end the run with `panic: tests timed out` on the standard error and exit code 2 when it outlives the limit, `30s` or `2m`, handed to the program in whole seconds |
@@ -220,7 +220,7 @@ An example joins what it spawns: what a task writes after the example returns is
 | `-backend c` or `-backend llvm` | the backend the test build goes through |
 | `-json` | print the run as events, one JSON object a line, for an editor or a tool: see below |
 
-NAME is held as a substring, not matched as a pattern, since the language has no regular expressions yet. The flags are read by `testing.Main` from the program's arguments; `snello test` passes them through unchanged.
+NAME is held as a substring, since the language has no regular expressions yet, unless it is anchored: between `^` and `$` it is a whole name, or a group of whole names, `^(TestA|TestB)$`, which is what those patterns will mean once regular expressions come, so a pattern written now keeps its meaning. `-run ^$` runs no test, which is how a benchmark is run alone: `snello test -run ^$ -bench ^BenchmarkSum$ .`. An editor runs one test, or a file's, by these patterns. The flags are read by `testing.Main` from the program's arguments; `snello test` passes them through unchanged.
 
 ## The run as events
 

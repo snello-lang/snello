@@ -8,7 +8,10 @@
 // references, rename and completion. Each type and field is named as
 // the specification names it and encoded as its JSON spells it, so that
 // a reader can hold the two side by side. It is modeled on the Language
-// Server Protocol specification, 3.17.
+// Server Protocol specification, 3.17. The requests of the server's own,
+// beyond the specification, are named under snello/ and announced
+// under the capabilities' experimental field, which a client that does
+// not know them passes over.
 package protocol
 
 // The methods of the protocol the server answers or sends.
@@ -30,6 +33,7 @@ const (
 	MethodPrepareRename      = "textDocument/prepareRename"
 	MethodRename             = "textDocument/rename"
 	MethodCompletion         = "textDocument/completion"
+	MethodRunnables          = "snello/runnables"
 
 	// The units a position's character counts in, which the client
 	// offers and the server picks: UTF-16 code units, the protocol's
@@ -53,6 +57,13 @@ const (
 	SeverityWarning     DiagnosticSeverity = 2
 	SeverityInformation DiagnosticSeverity = 3
 	SeverityHint        DiagnosticSeverity = 4
+
+	// The kinds of runnable: a program's main, and a test file's
+	// tests, benchmarks and examples.
+	RunnableMain      RunnableKind = "main"
+	RunnableTest      RunnableKind = "test"
+	RunnableBenchmark RunnableKind = "benchmark"
+	RunnableExample   RunnableKind = "example"
 
 	// The kinds of symbol the server gives, by the protocol's numbers.
 	SymbolKindClass      SymbolKind = 5
@@ -193,7 +204,40 @@ type ServerCapabilities struct {
 	RenameProvider any `json:"renameProvider,omitempty"`
 
 	CompletionProvider *CompletionOptions `json:"completionProvider,omitempty"`
+
+	// Experimental announces the server's own requests.
+	Experimental *ExperimentalCapabilities `json:"experimental,omitempty"`
 }
+
+// ExperimentalCapabilities says which of the server's own requests it
+// answers.
+type ExperimentalCapabilities struct {
+	Runnables bool `json:"runnables,omitempty"`
+}
+
+// RunnablesParams names the document whose programs and tests are
+// asked for, or none, for those of the whole workspace.
+type RunnablesParams struct {
+	TextDocument *TextDocumentIdentifier `json:"textDocument,omitempty"`
+}
+
+// A Runnable is a program or a test the snello command runs: a main
+// package's main, or a test, a benchmark or an example of a test file.
+// Location is its whole declaration and SelectionRange its name; Dir is
+// the package's directory and Package its name; Args are the arguments
+// of the snello command that runs this one alone.
+type Runnable struct {
+	Kind           RunnableKind `json:"kind"`
+	Name           string       `json:"name"`
+	Location       Location     `json:"location"`
+	SelectionRange Range        `json:"selectionRange"`
+	Package        string       `json:"package"`
+	Dir            string       `json:"dir"`
+	Args           []string     `json:"args"`
+}
+
+// RunnableKind says what a runnable is.
+type RunnableKind string
 
 // CompletionOptions names the characters that ask for a completion as
 // they are typed, besides the letters of a name.

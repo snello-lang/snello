@@ -147,13 +147,7 @@ func (s *Server) workspaceSymbol(m *jsonrpc.Message) {
 // search before when its text has not changed since, or read again;
 // nil for a file that does not read.
 func (s *Server) outlineOf(path string) *outlined {
-	stamp := ""
-	if d := s.byPath[path]; d != nil {
-		stamp = "open " + strconv.Itoa(int(d.version))
-	} else if info, err := os.Stat(path); err == nil {
-		stamp = info.ModTime().String() + " " + strconv.FormatInt(info.Size(), 10)
-	}
-
+	stamp := s.stampOf(path)
 	if o := s.outlines[path]; o != nil && o.stamp == stamp && stamp != "" {
 		return o
 	}
@@ -173,6 +167,22 @@ func (s *Server) outlineOf(path string) *outlined {
 	}
 
 	return o
+}
+
+// stampOf names the text of the file at path, so that what was read
+// from it is read again only when it changed: the open document's
+// version, or the file's time and size on the disk; "" for a file that
+// is neither.
+func (s *Server) stampOf(path string) string {
+	if d := s.byPath[path]; d != nil {
+		return "open " + strconv.Itoa(int(d.version))
+	}
+
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime().String() + " " + strconv.FormatInt(info.Size(), 10)
+	}
+
+	return ""
 }
 
 // workspacePackages returns the packages of the workspace: every

@@ -43,6 +43,7 @@ A request is answered once, in the order its work finishes, which for this serve
 - `hoverProvider` and `definitionProvider` (section 7);
 - `documentSymbolProvider`, `workspaceSymbolProvider`, `referencesProvider`, and `renameProvider`, with `prepareProvider` for an editor that asks before it renames (section 8);
 - `completionProvider`, with `.` and `"` as the characters that ask for it (section 9);
+- `experimental.runnables`, the server's own request `snello/runnables` (section 9a);
 - `serverInfo`: `snello` and the compiler's version.
 
 The server reads no settings: `initializationOptions` and `workspace/didChangeConfiguration` are passed over, since nothing a developer could set is not already known from the files.
@@ -135,6 +136,10 @@ Where Snello's rename goes beyond the precedents: it renames a method with the w
 **In an import path,** inside an import's quotes: every package of the standard library but `builtin`, `importer.Paths`, and every package of the module, by its path under the root, `importer.Packages`, those that begin with what is typed, each written over the quoted text.
 
 Each item has its kind and, as its detail, its declaration as hover writes it, `types.ObjectString`. The order is the one above and nothing else: each item carries its place in the list as the text an editor sorts by, so that no ranking by use or by match reorders it, and the same place answers the same list every time. No snippets.
+
+## 9a. Runnables
+
+`snello/runnables` is the server's own request, beyond the protocol, announced under `experimental` so that an editor that does not know it passes it over, the way rust-analyzer serves its runnables. It answers, for the document it names, or for every package of the workspace when it names none, what `snello` runs: a main package's `main`, and each test, benchmark and example of a test file, with its kind, its name, its whole declaration and its name's stretch, its package's name and directory, and the arguments of the `snello` command that runs it alone: `run DIR`, `test -run ^Name$ DIR`, and for a benchmark `test -run ^$ -bench ^Name$ DIR`. They are found by `testrun.FileRunnables`, the rule `snello test` finds them by, so the editor lists what the command runs: an example with no output comment, which the runner compiles and does not run, is not listed, and a test whose signature is wrong is, so that running it says what is wrong. A subtest is named when it runs and is not listed; an editor adds it from the run's events, `snello test -json`. The answer comes from each file's syntax, so a package with a type error still lists its tests, and a file that does not parse answers what it held when it last parsed, until it parses again; a file is read again only when its text changed, as the workspace's symbols are. An editor builds its tree of tests, its buttons beside each test and its lens above `main` from this answer, with no search of the source of its own.
 
 ## 10. Why the standard library is checked with every check
 

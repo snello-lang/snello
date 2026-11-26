@@ -62,6 +62,20 @@ const wantLabel = "want:"
 const uncaptured = "the standard output could not be captured"
 const matchAll = "."
 
+// The parts of an anchored pattern of -run and -bench: its ends, and a
+// group of names, each one a whole name.
+const anchorStart = "^"
+const anchorEnd = "$"
+const groupStart = "("
+const groupEnd = ")"
+const alternation = "|"
+
+// patternChars are the characters a pattern of a regular expression
+// reads, which a pattern of -run and -bench holds only where its
+// anchored forms put them, so that none of them means something else
+// once the language has regular expressions.
+const patternChars = "^$()|.*+?[]{}\\"
+
 // The flags Main reads from the program's arguments.
 const flagVerbose = "-v"
 const flagShort = "-short"
@@ -349,8 +363,9 @@ func ReportAllocs() {
 // own task with what it prints to the standard output captured and
 // compared with what its comment says it must print. It reads the
 // program's arguments: -v prints every test's lines, -run NAME runs the
-// tests and the examples whose name holds NAME, -bench NAME the
-// benchmarks whose name holds NAME, . for all, -count N runs the tests
+// tests and the examples whose name holds NAME, or, anchored as ^NAME$
+// or ^(A|B)$, those it names, -bench NAME the benchmarks the same way,
+// . for all, -count N runs the tests
 // and the examples N times, -failfast stops at the first failure, -timeout D ends the program after D seconds,
 // -shuffle runs the tests in a random order, which it prints the seed
 // of, -short is for the tests to ask, -update is for expect.Golden to
@@ -395,6 +410,8 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 		}
 	}
 
+	refuseUnsupported(ref only)
+	refuseUnsupported(ref bench)
 
 	setFlags(flags)
 	if timeout > 0 {
@@ -434,7 +451,7 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 
 	if bench != "" {
 		for _, b := range ref tests {
-			if b.Name.HasPrefix(benchmarkPrefix) && (bench == matchAll || b.Name.Contains(ref bench)) {
+			if b.Name.HasPrefix(benchmarkPrefix) && selected(ref b.Name, ref bench) {
 				failures += runBenchmark(b)
 			}
 		}
@@ -494,6 +511,83 @@ func prefixed(text ref string, prefix ref string) string {
 	}
 
 	return out
+}
+
+// selected reports whether pattern, the value of -run or -bench, picks
+// the test named name: every test for ".", for ^NAME$ the one named
+// NAME, for ^(A|B)$ those named A or B, and otherwise those whose name
+// holds pattern. The anchored forms are what a pattern means once the
+// language has regular expressions, so a pattern written today keeps
+// its meaning then; an editor runs one test, or a file's, by them.
+func selected(name ref string, pattern ref string) bool {
+	if pattern == matchAll {
+		return true
+	}
+
+	if !pattern.HasPrefix(anchorStart) || !pattern.HasSuffix(anchorEnd) || pattern.Len() < anchorStart.Len() + anchorEnd.Len() {
+		return name.Contains(pattern)
+	}
+
+	whole := pattern.TrimPrefix(anchorStart).TrimSuffix(anchorEnd)
+	if whole.HasPrefix(groupStart) && whole.HasSuffix(groupEnd) {
+		whole = whole.TrimPrefix(groupStart).TrimSuffix(groupEnd)
+	}
+
+	for alternative := range whole.Split(alternation) {
+		if name == alternative {
+			return true
+		}
+	}
+
+	return false
+}
+
+// supported reports whether pattern is one selected reads: empty, ".",
+// a name or a part of one with none of a regular expression's
+// characters, or an anchored name or group of names, ^$ among them.
+func supported(pattern ref string) bool {
+	if pattern.Len() == 0 || pattern == matchAll {
+		return true
+	}
+
+	if !pattern.HasPrefix(anchorStart) || !pattern.HasSuffix(anchorEnd) || pattern.Len() < anchorStart.Len() + anchorEnd.Len() {
+		return plain(pattern)
+	}
+
+	whole := pattern.TrimPrefix(anchorStart).TrimSuffix(anchorEnd)
+	if whole.HasPrefix(groupStart) && whole.HasSuffix(groupEnd) {
+		whole = whole.TrimPrefix(groupStart).TrimSuffix(groupEnd)
+		for alternative := range whole.Split(alternation) {
+			if alternative.Len() == 0 || !plain(alternative) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	return plain(whole)
+}
+
+// refuseUnsupported ends the program with status 2, before any test
+// runs, when pattern is not one supported reads.
+func refuseUnsupported(pattern ref string) {
+	if !supported(pattern) {
+		fmt.Fprintf(mut os.Stderr(), "invalid pattern %q: a pattern is a name or a part of one, ., ^NAME$ or ^(A|B)$, until the language has regular expressions\n", pattern)
+		os.Exit(exitBadRun)
+	}
+}
+
+// plain reports whether s holds none of a regular expression's
+// characters.
+func plain(s ref string) bool {
+	for i := 0; i < patternChars.Len(); i++ {
+		if s.Contains(ref patternChars[i:i+1]) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isVerbose reports whether -v was given.
@@ -723,7 +817,7 @@ func runRound(tests ref []Test, order ref []int, only ref string) int {
 	waiting := 0
 	for _, i := range order {
 		t := ref tests[i]
-		if !t.Name.HasPrefix(testPrefix) || (only.Len() > 0 && only != matchAll && !t.Name.Contains(only)) {
+		if !t.Name.HasPrefix(testPrefix) || (only.Len() > 0 && !selected(ref t.Name, only)) {
 			continue
 		}
 
@@ -763,7 +857,7 @@ func runExamples(examples ref []Example, only ref string) int {
 	failures := 0
 	for i := 0; i < len(examples); i++ {
 		e := ref examples[i]
-		if only.Len() > 0 && only != matchAll && !e.Name.Contains(only) {
+		if only.Len() > 0 && !selected(ref e.Name, only) {
 			continue
 		}
 
