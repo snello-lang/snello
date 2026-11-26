@@ -16,6 +16,8 @@
 # type, its scope in bold before it, and its pull request's number
 # kept, which GitHub links in the notes. docs, test, ci, chore and
 # refactor are left out, since they change nothing a developer sees.
+# A pull request merged with a commit of its own of the same subject is
+# listed once, by the merge, which carries the pull request's number.
 # One git log and one awk: a few hundred commits take no time.
 # prepare.sh writes it into the release's file and the maintainer
 # reads it and keeps what reads well; the release workflow refuses a
@@ -48,6 +50,9 @@ git log --format="%h$unit%s$unit%b$record" "${since:+$since..}HEAD" |
         scope = ""
         if (match(subject, /^[a-z]+\([^)]*\)/)) { scope = substr(subject, RSTART, RLENGTH); sub(/^[a-z]+\(/, "", scope); sub(/\)$/, "", scope) }
         text = subject; sub(/^[a-z]+(\([^)]*\))?!?: /, "", text)
+        key = subject; sub(/ \(#[0-9]+\)$/, "", key)
+        if (key in seen) next # a pull request merged with its commit of the same subject: the newer, the merge with its number, stands for both
+        seen[key] = 1
         line = "- " (scope != "" ? "**" scope "**: " : "") toupper(substr(text, 1, 1)) substr(text, 2)
         if (subject ~ /^[a-z]+(\([^)]*\))?!: / || body ~ /(^|\n)BREAKING[ -]CHANGE: /) add("Breaking changes", line)
         else if (type == "feat") add("Added", line)
