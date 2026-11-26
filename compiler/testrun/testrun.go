@@ -437,8 +437,9 @@ func (p *Plan) label() string {
 	return strings.TrimSuffix(p.Path, importer.TestSuffix)
 }
 
-// Emit loads the plan's program and emits it through the backend.
-func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
+// Emit loads the plan's program and emits it through the backend, for
+// a debugger when debug says so.
+func (p *Plan) Emit(backend string, debug bool) ([]byte, []lower.Binding, error) {
 	dir := p.Dir
 	if dir == "" {
 		dir = "."
@@ -499,18 +500,19 @@ func (p *Plan) Emit(backend string) ([]byte, []lower.Binding, error) {
 	bindings := lower.Bindings(info, libs)
 	var out []byte
 	if backend == lower.LLVMBackend {
-		out, err = llvm.EmitFiles(llvm.Config{}, prog.Files, prog.Syntax, info, libs...)
+		out, err = llvm.EmitFiles(llvm.Config{Debug: debug}, prog.Files, prog.Syntax, info, libs...)
 	} else {
-		out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libs...)
+		out, err = c.EmitFiles(prog.Files, prog.Syntax, info, libs...) // the C backend's checks are a flag of the C compiler, which Build gives
 	}
 
 	return out, bindings, err
 }
 
-// Build emits and compiles the plan's program into outDir as a release
-// build through the backend, and returns the binary.
-func (p *Plan) Build(backend, outDir string) (string, error) {
-	src, bindings, err := p.Emit(backend)
+// Build emits and compiles the plan's program into outDir through the
+// backend, a release build or one for a debugger, and returns the
+// binary.
+func (p *Plan) Build(backend, outDir string, debug bool) (string, error) {
+	src, bindings, err := p.Emit(backend, debug)
 	if err != nil {
 		return "", err
 	}
@@ -519,9 +521,9 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	var bin string
 	var log []byte
 	if backend == lower.LLVMBackend {
-		bin, log, err = llvm.Build(outDir, name, src, platform.Host(), false, bindings...)
+		bin, log, err = llvm.Build(outDir, name, src, platform.Host(), debug, bindings...)
 	} else {
-		bin, log, err = c.Build(outDir, name, src, platform.Host(), false, bindings...)
+		bin, log, err = c.Build(outDir, name, src, platform.Host(), debug, bindings...)
 	}
 
 	if missing := (*toolchain.MissingError)(nil); errors.As(err, &missing) {
@@ -535,27 +537,46 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	return bin, nil
 }
 
-// Run builds the tests of the package in dir through the backend and
-// runs the program with args, its output passed through, and returns
-// the program's exit code: 0 when every test passed.
-func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, error) {
+// A Work is the directory a caller guards for a test program to be
+// built in and run from: Dir is its path, Starting says the program is
+// about to start from it, and Started hands over the program, or nil
+// for a start that failed, so that what would end the caller is passed
+// on to the program and the directory goes however the caller ends.
+// The caller removes it. With none, the program is built in a
+// directory of the runner's own, removed when it returns.
+type Work interface {
+	Dir() string
+	Starting()
+	Started(p *os.Process)
+}
+
+// Run builds the tests of the package in dir through the backend, in
+// work, and runs the program with args, its output passed through, and
+// returns the program's exit code: 0 when every test passed.
+func Run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
 	if w := importer.ModuleWarning(dir); w != "" {
 		fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
 	}
 
 	p, err := PlanDir(dir)
-
 	if err != nil {
 		return 1, err
 	}
 
-	tmp, err := os.MkdirTemp("", "snello-test")
+	return p.run(dir, backend, args, stdout, stderr, work)
+}
+
+// run builds the plan's program through the backend in work, or in a
+// directory of its own, and runs it in dir with args, its output passed
+// through, and returns its exit code.
+func (p *Plan) run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
+	tmp, done, err := workDir(work)
 	if err != nil {
 		return 1, err
 	}
 
-	defer os.RemoveAll(tmp)
-	bin, err := p.Build(backend, tmp)
+	defer done()
+	bin, err := p.Build(backend, tmp, false)
 	if err != nil {
 		return 1, err
 	}
@@ -564,7 +585,24 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	cmd.Dir = dir // a package's tests run in its directory, so that testdata/ is beside them
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if work != nil {
+		work.Starting()
+	}
+
+	err = cmd.Start()
+	if work != nil {
+		if err != nil {
+			work.Started(nil)
+		} else {
+			work.Started(cmd.Process)
+		}
+	}
+
+	if err == nil {
+		err = cmd.Wait()
+	}
+
+	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			if code := exit.ExitCode(); code >= 0 {
 				return code, nil
@@ -578,6 +616,62 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	}
 
 	return 0, nil
+}
+
+// BuildTest builds the tests of the package in dir through the backend
+// into a program at out, which runs them when it is run in dir with the
+// flags snello test passes it; debug builds it for a debugger, with
+// the information a debugger reads beside it, as snello build -debug
+// writes a program's.
+func BuildTest(dir, backend, out string, debug bool, stderr io.Writer, work Work) error {
+	if w := importer.ModuleWarning(dir); w != "" {
+		fmt.Fprintln(stderr, w)
+	}
+
+	p, err := PlanDir(dir)
+	if err != nil {
+		return err
+	}
+
+	tmp, done, err := workDir(work)
+	if err != nil {
+		return err
+	}
+
+	defer done()
+	bin, err := p.Build(backend, tmp, debug)
+	if err != nil {
+		return err
+	}
+
+	built, err := os.ReadFile(bin)
+	if err == nil {
+		err = os.WriteFile(out, built, 0o755)
+	}
+
+	if err == nil && debug {
+		var log []byte
+		if log, err = c.Bundle(bin, out, platform.Host()); err != nil { // before the build's directory, which holds what the bundle is gathered from, goes
+			err = errors.New(err.Error() + "\n" + string(log))
+		}
+	}
+
+	return err
+}
+
+// workDir returns the directory a test program is built in, work's or
+// one of the runner's own, and what removes the runner's own.
+func workDir(work Work) (string, func(), error) {
+	if work != nil {
+		return work.Dir(), func() {}, nil
+	}
+
+	tmp, err := os.MkdirTemp("", "snello-test")
+	if err != nil {
+		return "", nil, err
+	}
+
+	return tmp, func() { os.RemoveAll(tmp) }, nil
 }
 
 // mainLabel names the tests of the main package in dir on their ok or

@@ -6,6 +6,7 @@ package testrun
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -330,7 +331,7 @@ func TestAllocsAcrossTasks(t *testing.T) {
 	})
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join(root, "tasks"), backend, []string{"-run", "Nothing", "-bench", "Round"}, &out, &out)
+		code, err := Run(filepath.Join(root, "tasks"), backend, []string{"-run", "Nothing", "-bench", "Round"}, &out, &out, nil)
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", backend, err, out.String())
 		}
@@ -355,7 +356,7 @@ func TestMore(t *testing.T) {
 	dir := filepath.Join(root, "more")
 	run := func(args ...string) (string, int) {
 		var out bytes.Buffer
-		code, err := Run(dir, "llvm", args, &out, &out)
+		code, err := Run(dir, "llvm", args, &out, &out, nil)
 		if err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out.String())
 		}
@@ -468,7 +469,7 @@ func TestStdDir(t *testing.T) {
 	dir := filepath.Join("..", "..", "std", "strings")
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(dir, backend, nil, &out, &out)
+		code, err := Run(dir, backend, nil, &out, &out, nil)
 		if err != nil || code != 0 || !strings.Contains(out.String(), "ok  \tstrings\t") {
 			t.Errorf("%s: exited %d, %v\n%s", backend, code, err, out.String())
 		}
@@ -480,7 +481,7 @@ func TestStdDir(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code, err := Run(nested, "c", nil, &out, &out); err != nil || code != 0 || !strings.Contains(out.String(), "ok  \tunicode/utf8\t") {
+	if code, err := Run(nested, "c", nil, &out, &out, nil); err != nil || code != 0 || !strings.Contains(out.String(), "ok  \tunicode/utf8\t") {
 		t.Errorf("%s: exited %d, %v\n%s", nested, code, err, out.String())
 	}
 
@@ -570,7 +571,7 @@ func TestRun(t *testing.T) {
 	})
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join(root, "shapes"), backend, []string{"-v"}, &out, &out)
+		code, err := Run(filepath.Join(root, "shapes"), backend, []string{"-v"}, &out, &out, nil)
 		if err != nil {
 			t.Fatalf("%s: shapes: %v", backend, err)
 		}
@@ -581,13 +582,13 @@ func TestRun(t *testing.T) {
 		}
 
 		out.Reset()
-		code, err = Run(filepath.Join(root, "app"), backend, nil, &out, &out)
+		code, err = Run(filepath.Join(root, "app"), backend, nil, &out, &out, nil)
 		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \tapp\t") {
 			t.Errorf("%s: app exited %d, %v, printed %q", backend, code, err, out.String())
 		}
 
 		out.Reset()
-		code, err = Run(filepath.Join(root, "app"), backend, []string{"-v", "-run", "Nothing"}, &out, &out)
+		code, err = Run(filepath.Join(root, "app"), backend, []string{"-v", "-run", "Nothing"}, &out, &out, nil)
 		if err != nil || code != 0 || strings.Contains(out.String(), "=== RUN") {
 			t.Errorf("%s: app -run Nothing exited %d, %v, printed %q", backend, code, err, out.String())
 		}
@@ -631,7 +632,7 @@ func TestRun(t *testing.T) {
 	// The example the book cuts its tests from.
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join("..", "..", "examples", "packaged", "shapes"), backend, nil, &out, &out)
+		code, err := Run(filepath.Join("..", "..", "examples", "packaged", "shapes"), backend, nil, &out, &out, nil)
 		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \tshapes\t") {
 			t.Errorf("%s: the packaged example's tests exited %d, %v, printed %q", backend, code, err, out.String())
 		}
@@ -642,7 +643,7 @@ func TestRun(t *testing.T) {
 	// testing a package through its exported names alone.
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join(root, "ext"), backend, nil, &out, &out)
+		code, err := Run(filepath.Join(root, "ext"), backend, nil, &out, &out, nil)
 		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \text\t") {
 			t.Errorf("%s: the external test package exited %d, %v, printed %q", backend, code, err, out.String())
 		}
@@ -658,7 +659,7 @@ func TestRun(t *testing.T) {
 		{"../loose", "no snello.mod above the package; snello test needs the module to name it"},
 	} {
 		var out bytes.Buffer
-		_, err := Run(filepath.Join(root, c.dir), "llvm", nil, &out, &out)
+		_, err := Run(filepath.Join(root, c.dir), "llvm", nil, &out, &out, nil)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want %q", c.dir, err, c.want)
 		}
@@ -712,7 +713,7 @@ func TestRunVersion(t *testing.T) {
 		"app/main_test.snello": "package main\n\nimport \"expect\"\n\nfunc TestA() { expect.True(true) }\n",
 	})
 	var stdout, stderr bytes.Buffer
-	code, err := Run(filepath.Join(bare, "app"), "c", nil, &stdout, &stderr)
+	code, err := Run(filepath.Join(bare, "app"), "c", nil, &stdout, &stderr, nil)
 	want := "warning: " + filepath.Join(bare, importer.ModFile) + " has no snello line"
 	if err != nil || code != 0 || !strings.HasPrefix(stderr.String(), want) || !strings.HasPrefix(stdout.String(), "ok  \tapp\t") {
 		t.Errorf("a module with no line: exit %d, %v, stdout %q, stderr %q", code, err, stdout.String(), stderr.String())
@@ -726,7 +727,7 @@ func TestRunVersion(t *testing.T) {
 	t.Chdir(writeTree(t, map[string]string{"snello.mod": "exclude x\n"}))
 	stdout.Reset()
 	stderr.Reset()
-	code, err = Run(sort, "c", nil, &stdout, &stderr)
+	code, err = Run(sort, "c", nil, &stdout, &stderr, nil)
 	if err != nil || code != 0 || stderr.Len() != 0 || !strings.HasPrefix(stdout.String(), "ok  \tsort\t") {
 		t.Errorf("a standard package from inside another module: exit %d, %v, stdout %q, stderr %q", code, err, stdout.String(), stderr.String())
 	}
@@ -790,5 +791,39 @@ func TestPlanDirFrom(t *testing.T) {
 		if !slices.Equal(p.Names, tt.want) || p.Path != "lib" || p.Main {
 			t.Errorf("the plan: tests %v, path %q, main %t; want %v of lib", p.Names, p.Path, p.Main, tt.want)
 		}
+	}
+}
+
+// TestBuildTest builds a package's tests into a program at the path
+// given, through both backends, which runs the tests -run picks when it
+// is run in the package's directory, as snello test runs it.
+func TestBuildTest(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"snello.mod":      "snello 0.1.0\n",
+		"p/p.snello":      onlySrc,
+		"p/p_test.snello": onlyTest,
+	})
+
+	dir := filepath.Join(root, "p")
+	for _, backend := range []string{"llvm", "c"} {
+		out := filepath.Join(t.TempDir(), "p.test")
+		if platform.Host().OS == platform.Windows {
+			out += ".exe" // a program Windows runs ends with .exe
+		}
+
+		if err := BuildTest(dir, backend, out, false, io.Discard, nil); err != nil {
+			t.Fatalf("%s: %v", backend, err)
+		}
+
+		cmd := exec.Command(out, "-v", "-run", Only("TestAreaBig"))
+		cmd.Dir = dir
+		printed, err := cmd.Output()
+		if err != nil || !strings.Contains(string(printed), "--- PASS: TestAreaBig") || strings.Contains(string(printed), "TestArea ") {
+			t.Errorf("%s: the program printed %q, %v", backend, printed, err)
+		}
+	}
+
+	if err := BuildTest(filepath.Join(root, "none"), "llvm", filepath.Join(t.TempDir(), "x"), false, io.Discard, nil); err == nil {
+		t.Error("a directory with no tests built a program")
 	}
 }

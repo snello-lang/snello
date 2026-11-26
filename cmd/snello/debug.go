@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -77,11 +78,11 @@ const (
 	lldbImport    = "command script import "
 	lldbSourceMap = "settings set target.source-map "
 
-	// gdb's: a script to read, a command to run, the program and its
-	// arguments, and the command that maps the sources.
-	gdbScript         = "-x"
+	// gdb's: a command to run, the program and its arguments, and the
+	// commands that read the script and map the sources.
 	gdbCommand        = "-ex"
 	gdbProgram        = "--args"
+	gdbSource         = "source "
 	gdbSubstitutePath = "set substitute-path "
 
 	// argSeparator parts the words of a debugger command, stdPathEnd
@@ -144,7 +145,7 @@ func debug(path, backend string, args []string) int {
 		return exitFailure
 	}
 
-	if code := build(path, backend, platform.Host(), true); code != 0 {
+	if code := build(path, backend, platform.Host(), true, ""); code != 0 {
 		return code
 	}
 
@@ -218,14 +219,56 @@ func debuggerCommand(name, support, bin string, args []string) []string {
 		return append(append(cdbArgs(support), bin), args...)
 	}
 
-	script := filepath.Join(support, scriptName)
-	prefix := strings.TrimSuffix(lower.StdSources, stdPathEnd)
-	sources := filepath.Join(support, stdDir)
+	option, end := gdbCommand, gdbProgram
 	if name == lldb {
-		return append([]string{lldbCommand, lldbImport + strconv.Quote(script), lldbCommand, lldbSourceMap + prefix + argSeparator + strconv.Quote(sources), lldbProgram, bin}, args...)
+		option, end = lldbCommand, lldbProgram
 	}
 
-	return append([]string{gdbScript, script, gdbCommand, gdbSubstitutePath + prefix + argSeparator + strconv.Quote(sources), gdbProgram, bin}, args...)
+	var out []string
+	for _, command := range debuggerSetup(name, support) {
+		out = append(out, option, command)
+	}
+
+	return append(append(out, end, bin), args...)
+}
+
+// debuggerSetup returns the commands lldb or gdb, name, runs before the
+// program, in its own syntax: the one that loads Snello's script from
+// support, and the one that maps the standard library's sources to
+// their copy there.
+func debuggerSetup(name, support string) []string {
+	script := filepath.Join(support, scriptName)
+	prefix := strings.TrimSuffix(lower.StdSources, stdPathEnd)
+	sources := strconv.Quote(filepath.Join(support, stdDir))
+	if name == lldb {
+		return []string{lldbImport + strconv.Quote(script), lldbSourceMap + prefix + argSeparator + sources}
+	}
+
+	return []string{gdbSource + script, gdbSubstitutePath + prefix + argSeparator + sources} // gdb reads the rest of the line as the file
+}
+
+// printSetup writes Snello's support for the debugger name, lldb or
+// gdb, where debug keeps it, and prints the commands the debugger runs
+// first, one a line, for an editor that starts the debugger itself, as
+// its adapter's own setup. The support stays for the editor's session
+// whether the cache is on or not.
+func printSetup(name string, stdout, stderr io.Writer) int {
+	if name != lldb && name != gdb {
+		fmt.Fprintf(stderr, "%s %s: -setup takes %s or %s, not %q\n", program, debugCommand, lldb, gdb, name)
+		return exitUsage
+	}
+
+	support, _, err := debugSupport() // its removal is not called: the editor's debugger reads it after the command ends
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	for _, command := range debuggerSetup(name, support) {
+		fmt.Fprintln(stdout, command)
+	}
+
+	return exitSuccess
 }
 
 // cdbArgs returns cdb's arguments before the program: the support's

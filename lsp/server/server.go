@@ -67,6 +67,8 @@ type Server struct {
 	published map[string][]protocol.Diagnostic
 	queries   []*jsonrpc.Message
 	outlines  map[string]*outlined
+
+	runnableFiles map[string]*runnableFile // what snello/runnables found in each file, as the outlines are kept
 }
 
 // An incoming is a message the reading goroutine read, or the error
@@ -305,6 +307,7 @@ func (s *Server) initialize(m *jsonrpc.Message) {
 			WorkspaceSymbolProvider: true,
 			RenameProvider:          rename,
 			CompletionProvider:      &protocol.CompletionOptions{TriggerCharacters: []string{dotTrigger, quoteTrigger}},
+			Experimental:            &protocol.ExperimentalCapabilities{Runnables: true},
 		},
 		ServerInfo: &protocol.ServerInfo{Name: name, Version: version.Current},
 	})

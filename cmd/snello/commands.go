@@ -50,9 +50,10 @@ const (
 	exitFailure = 1
 	exitUsage   = 2
 
-	// The flags: the backend, a build for a debugger, and those test
-	// passes on to the program it builds, each written after flagStart;
-	// a test program runs each test once unless -count says otherwise.
+	// The flags: the backend, a build for a debugger, those test passes
+	// on to the program it builds, each written after flagStart, and
+	// the JSON env and test print; a test program runs each test once
+	// unless -count says otherwise.
 	backendFlag  = "backend"
 	debugFlag    = "debug"
 	targetFlag   = "target"
@@ -65,6 +66,10 @@ const (
 	benchFlag    = "bench"
 	countFlag    = "count"
 	timeoutFlag  = "timeout"
+	jsonFlag     = "json"
+	outFlag      = "o"
+	compileFlag  = "c"
+	setupFlag    = "setup"
 	stdioFlag    = "stdio"
 	clientFlag   = "clientProcessId"
 	flagStart    = "-"
@@ -100,7 +105,10 @@ const (
 	// word in backquotes is the value's name in the help.
 	backendUsage = "the backend, `llvm|c`; c is the reference backend"
 	debugUsage   = "build for a debugger, unoptimized, with the runtime's checks"
-	targetUsage  = "the platform to build for, `SYSTEM/PROCESSOR`, linux/arm64; the host's when not given"
+
+	// testProgramSuffix ends the name of the program test -c builds.
+	testProgramSuffix = ".test"
+	targetUsage       = "the platform to build for, `SYSTEM/PROCESSOR`, linux/arm64; the host's when not given"
 )
 
 // A testFlag is a flag test passes on to the program it builds, as it
@@ -201,13 +209,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 func commands() []*command {
 	return []*command{
 		{name: addCommand, args: addArgs, minArgs: 2, maxArgs: 3, short: "require a dependency by version, its latest release unless one is named", declare: declareAdd},
-		{name: buildCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "compile a program, a file or a directory, to a binary", declare: declareCompile(buildCommand, build)},
+		{name: buildCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "compile a program, a file or a directory, to a binary", declare: declareCompile(buildCommand, true, build)},
 		{name: checkCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "check a program, or a package, and print its errors", declare: declareCheck},
-		{name: debugCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
+		{name: debugCommand, args: debugArgs, minArgs: 0, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
 		{name: depsCommand, minArgs: 0, maxArgs: 0, short: "print the dependencies by version, and who requires each", declare: declareDeps},
 		{name: docCommand, args: docArgs, minArgs: 0, maxArgs: 1, short: "print a package's documentation, or a name's", declare: declareDoc},
 		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
-		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, emit)},
+		{name: emitCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "print the IR, or the C, that build compiles", declare: declareCompile(emitCommand, false, emit)},
 		{name: envCommand, args: envArgs, minArgs: 0, maxArgs: 1, short: "print what a build reads here, each with where it comes from", declare: declareEnv},
 		{name: fetchCommand, minArgs: 0, maxArgs: 0, short: "fetch every dependency into the module cache, for a build with no network", declare: declareFetch},
 		{name: helpCommand, args: commandArg, minArgs: 0, maxArgs: 1, short: "print the commands, or a command's help", declare: declareHelp},
@@ -323,13 +331,19 @@ func checkBackend(name, backend string, stderr io.Writer) bool {
 }
 
 // declareCompile declares the flags of build, or of emit, both named
-// by name, the backend, a build for a debugger and the target, and the
-// work that hands them to work, build's or emit's.
-func declareCompile(name string, work func(path, backend string, target platform.Target, debug bool) int) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+// by name, the backend, a build for a debugger, the target, and where
+// the binary goes when output says the command writes one, and the work
+// that hands them to work, build's or emit's.
+func declareCompile(name string, output bool, work func(path, backend string, target platform.Target, debug bool, out string) int) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	return func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 		backend := declareBackend(fs)
 		debug := fs.Bool(debugFlag, false, debugUsage)
 		target := declareTarget(fs)
+		out := new(string)
+		if output {
+			out = fs.String(outFlag, "", "write the binary to `FILE`; the program's name in this directory when not given")
+		}
+
 		return func(args []string) int {
 			if !checkBackend(name, *backend, stderr) {
 				return exitUsage
@@ -340,7 +354,7 @@ func declareCompile(name string, work func(path, backend string, target platform
 				return exitUsage
 			}
 
-			return work(args[0], *backend, t, *debug)
+			return work(args[0], *backend, t, *debug, *out)
 		}
 	}
 }
@@ -388,12 +402,23 @@ func declareCheck(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 	}
 }
 
-// declareDebug declares the flag of debug, the backend; the arguments
-// after the program's path are the program's.
+// declareDebug declares the flags of debug, the backend and the setup
+// an editor's debugger asks for; the arguments after the program's path
+// are the program's.
 func declareDebug(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	backend := declareBackend(fs)
+	setup := fs.String(setupFlag, "", "print the commands the debugger `lldb|gdb` runs first, for an editor that starts it, and write what they read")
 	return func(args []string) int {
 		if !checkBackend(debugCommand, *backend, stderr) {
+			return exitUsage
+		}
+
+		if *setup != "" {
+			return printSetup(*setup, stdout, stderr)
+		}
+
+		if len(args) == 0 {
+			fmt.Fprintf(stderr, "%s %s: a program to debug, %s, or -%s\n", program, debugCommand, debugArgs, setupFlag)
 			return exitUsage
 		}
 
@@ -477,12 +502,30 @@ func declareParse(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 func declareTest(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	backend := declareBackend(fs)
 	o := declareTestOptions(fs)
+	asJSON := fs.Bool(jsonFlag, false, "print the run as events, one JSON object a line, for an editor or a tool")
+	compileOnly := fs.Bool(compileFlag, false, "build the tests into a program and do not run it; the program takes the flags above when it runs")
+	out := fs.String(outFlag, "", "with -c, write the program to `FILE`; the package's name and .test in this directory when not given")
+	debug := fs.Bool(debugFlag, false, "with -c, "+debugUsage)
 	return func(args []string) int {
 		if !checkBackend(testCommand, *backend, stderr) {
 			return exitUsage
 		}
 
-		return runTests(args[0], *backend, o.programFlags(), stdout, stderr)
+		if (*debug || *out != "") && !*compileOnly {
+			fmt.Fprintln(stderr, "snello test: -debug and -o are for the program -c builds; a test run is a release build")
+			return exitUsage
+		}
+
+		if *compileOnly && (*asJSON || len(o.programFlags()) > 0) {
+			fmt.Fprintln(stderr, "snello test: -c builds the program and runs nothing; give it -run and the other flags when it runs")
+			return exitUsage
+		}
+
+		if *compileOnly {
+			return buildTests(args[0], *backend, *out, *debug, stderr)
+		}
+
+		return runTests(args[0], *backend, o.programFlags(), *asJSON, stdout, stderr)
 	}
 }
 

@@ -84,6 +84,8 @@ func (s *Server) query(m *jsonrpc.Message) {
 		s.rename(m)
 	case protocol.MethodCompletion:
 		s.completion(m)
+	case protocol.MethodRunnables:
+		s.runnables(m)
 	}
 }
 
@@ -92,7 +94,7 @@ func (s *Server) query(m *jsonrpc.Message) {
 func isQuery(method string) bool {
 	switch method {
 	case protocol.MethodHover, protocol.MethodDefinition, protocol.MethodDocumentSymbol, protocol.MethodWorkspaceSymbol,
-		protocol.MethodReferences, protocol.MethodPrepareRename, protocol.MethodRename, protocol.MethodCompletion:
+		protocol.MethodReferences, protocol.MethodPrepareRename, protocol.MethodRename, protocol.MethodCompletion, protocol.MethodRunnables:
 		return true
 	}
 
