@@ -154,7 +154,10 @@ try {
         Set-Variable -Name snelloReport -Value $snelloReport -Scope 1
         return $status
     }
-    function Have-Clang { [bool](Get-Command (if ($env:CLANG) { $env:CLANG } else { 'clang' }) -ErrorAction SilentlyContinue) }
+    function Have-Clang {
+        $clang = if ($env:CLANG) { $env:CLANG } else { 'clang' }
+        [bool](Get-Command $clang -ErrorAction SilentlyContinue)
+    }
     & $binary version
     $llvm = 'C:\Program Files\LLVM\bin'
     $winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -167,7 +170,7 @@ try {
             $status = Doctor
         } elseif ($winget -and (Ask 'clang is not installed, and a build needs it: install LLVM now, winget install LLVM.LLVM?')) {
             & winget install --id LLVM.LLVM --exact --accept-source-agreements --accept-package-agreements
-            if (-not (Test-Path "$llvm\clang.exe")) { Fail "LLVM did not install into $llvm: install it from https://github.com/llvm/llvm-project/releases, add its bin directory to your Path, then run snello doctor" }
+            if (-not (Test-Path "$llvm\clang.exe")) { Fail "LLVM did not install into ${llvm}: install it from https://github.com/llvm/llvm-project/releases, add its bin directory to your Path, then run snello doctor" }
             Add-ToPath $llvm
             $status = Doctor
         } elseif (-not $winget) {

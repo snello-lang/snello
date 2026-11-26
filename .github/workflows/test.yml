@@ -47,9 +47,9 @@ name: Tests
 # failed or was cancelled, and passes when they passed or were
 # skipped; the rule cannot name the matrix jobs, since a skipped matrix
 # job is recorded under its unexpanded name and the names the rule
-# would require never appear. The lints of commit messages and pull
-# request titles run on every change, in seconds. release/archive is
-# Go, and counts as code.
+# would require never appear. The parse of every script and the lints
+# of commit messages and pull request titles run on every change.
+# release/archive is Go, and counts as code.
 on:
   pull_request:
 
@@ -106,6 +106,44 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: go vet
         run: go vet ./...
+
+  scripts:
+    # Every shell script parses, on every change, since the install
+    # scripts run only after a release is published, from main. sh,
+    # dash on the runner, parses each and runs none.
+    name: the shell scripts parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: sh -n each shell script
+        run: |
+          status=0
+          for f in $(git ls-files '*.sh'); do
+            sh -n "$f" || status=1
+          done
+          exit $status
+
+  powershell:
+    # Every PowerShell script parses, on every change, under both
+    # PowerShells a Windows machine runs it with: Windows PowerShell
+    # 5.1, which the one-line install promises and Windows ships, and
+    # PowerShell 7.
+    name: the PowerShell scripts parse
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Windows PowerShell 5.1
+        shell: powershell
+        run: ./build/parse.ps1
+      - name: PowerShell 7
+        shell: pwsh
+        run: ./build/parse.ps1
 
   test:
     name: go test (${{ matrix.os }})
@@ -258,7 +296,7 @@ jobs:
     # above: green when each passed or was skipped, red when one failed
     # or was cancelled.
     name: all checks
-    needs: [changes, checks, test, distros, bench]
+    needs: [changes, scripts, powershell, checks, test, distros, bench]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
