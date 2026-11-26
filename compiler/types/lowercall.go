@@ -138,7 +138,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 
 	if !k.names() {
 		if x == l.spawning && !isFuncLit(x.Fun) {
-			l.keep(x.Fun, "spawned", x.Fun.Pos(), nil, "") // the task runs the closure value: one that borrows cannot go; a closure written here moves what it captures instead
+			l.keep(x.Fun, "spawned", x.Fun.Pos()) // the task runs the closure value: one that borrows cannot go; a closure written here moves what it captures instead
 		}
 
 		if p, ok := l.placeOf(x.Fun); ok { // a closure held in a variable or a field is read
@@ -192,7 +192,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 			param, want, _, packed = argSlot(k.sig, i, x.Ellipsis.IsValid(), kind, each)
 		}
 
-		l.keepArg(x, arg, i, k, param, packed)
+		l.keepArg(arg, i, k, param, packed || builtin != nil && builtin.id == BuiltinReplace && i == 1, x == l.spawning)
 
 		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
 			if p, ok := l.placeOrPart(arg); ok {
@@ -229,30 +229,24 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 	return args, recvExpr != nil
 }
 
-// keepArg records where the argument arg of the call x goes when it is a
+// keepArg records where the i-th argument arg of a call goes when it is a
 // closure: to a parameter its callee may keep, which the package's end
-// decides; stored, by a parameter that keeps it, a variadic any or a
-// variant; or spawned, into the task the call starts.
-func (l *lowering) keepArg(x *ast.CallExpr, arg ast.Expr, i int, k callee, param *Var, packed bool) {
-	if _, variant := k.obj.(*Variant); variant {
-		l.keep(arg, "stored", arg.Pos(), nil, "")
-		return
-	}
-
-	if p, callee := declared(k.obj, i); p != nil && p.pos != token.NoPos && mayHoldClosure(p.typ) {
-		l.keep(arg, "", arg.Pos(), p, callee)
-		if x == l.spawning {
-			l.keep(arg, "spawned", arg.Pos(), nil, "")
-		}
-
-		return
-	}
-
+// decides; stored, by a variant, a parameter that keeps it or a slot that
+// does, kept says, a variadic any or the place replace fills; and
+// spawned, into the task the call starts, when spawned says so.
+func (l *lowering) keepArg(arg ast.Expr, i int, k callee, param *Var, kept, spawned bool) {
+	_, variant := k.obj.(*Variant)
+	p, callee := declared(k.obj, i)
 	switch {
-	case param != nil && param.kept, packed, k.builtin() != nil && k.builtin().id == BuiltinReplace && i == 1:
-		l.keep(arg, "stored", arg.Pos(), nil, "") // the parameter, the variadic any, or the place replace fills keeps the value
-	case x == l.spawning:
-		l.keep(arg, "spawned", arg.Pos(), nil, "")
+	case p != nil && p.pos != token.NoPos && mayHoldClosure(p.typ):
+		l.keepFor(arg, p, callee)
+		if spawned {
+			l.keep(arg, "spawned", arg.Pos())
+		}
+	case variant, param != nil && param.kept, kept:
+		l.keep(arg, "stored", arg.Pos())
+	case spawned:
+		l.keep(arg, "spawned", arg.Pos())
 	}
 }
 

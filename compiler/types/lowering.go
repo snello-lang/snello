@@ -44,8 +44,8 @@ type lowering struct {
 	bases     []reached   // the places reached through a call within the statement, reached once
 	params    int         // how many of the form's variables are the receiver and the parameters, the first ones
 	results   Type
-	spawn     token.Pos     // the spawn a closure being lowered is the call of, where its captures move; none otherwise
-	spawning  *ast.CallExpr // the call the spawn starts, whose arguments and callee go to the task; nil otherwise
+	spawning  *ast.CallExpr // the call the spawn starts, whose closure's captures and arguments go to the task; nil otherwise
+	work      []int         // scratch for the reach over the form's blocks
 
 	declared     []int     // the variables the open scopes declared, in order, each scope a range of it
 	dropsScratch []Operand // what drops builds its list in, copied into the form by the leave
@@ -94,7 +94,7 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 
 	l.taken, l.bases, l.declared = l.taken[:0], l.bases[:0], l.declared[:0]
 	l.scopes, l.loops, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.owned[:0], 0
-	l.results, l.spawn, l.spawning, l.guard = sig.results, token.NoPos, nil, nil
+	l.results, l.spawning, l.guard = sig.results, nil, nil
 	wasPass := c.formPass
 	c.formPass = true // the names the lowering resolves through the recorders are the typing's: the scopes are closed
 	defer func() { c.formPass = wasPass }()
@@ -116,6 +116,7 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 
 	l.closeScope(body.Rbrace)
 	l.endBlock()
+	l.work = l.f.reach(l.work)
 	f := l.f
 	if c.info != nil && c.info.Forms != nil {
 		c.info.Forms[body] = f
@@ -334,12 +335,40 @@ func (l *lowering) bound(o Operand) {
 }
 
 // keep records that the value e, when it is of a function type, is put
-// where a closure that borrows may not go: how says where, stored into
-// data, sent or spawned, or param and callee say what it is given to.
-func (l *lowering) keep(e ast.Expr, how string, pos token.Pos, param *Var, callee string) {
+// where a closure that borrows may not go: stored into data, sent or
+// spawned, as how says, at pos.
+func (l *lowering) keep(e ast.Expr, how string, pos token.Pos) {
 	if isSignature(l.typeOf(e)) {
-		l.f.kept = append(l.f.kept, keptUse{expr: e, how: how, pos: pos, param: param, callee: callee})
+		l.f.kept = append(l.f.kept, keptUse{expr: e, how: how, pos: pos})
 	}
+}
+
+// keepFor records that the argument arg, when it is of a function type,
+// is given to the parameter param of callee, which may keep it: whether
+// it does is decided at the package's end.
+func (l *lowering) keepFor(arg ast.Expr, param *Var, callee string) {
+	if isSignature(l.typeOf(arg)) {
+		l.f.kept = append(l.f.kept, keptUse{expr: arg, pos: arg.Pos(), param: param, callee: callee})
+	}
+}
+
+// openLoop begins a loop whose head tests before each pass: the head and
+// the exit blocks, the head marked as where the passes begin at pos, and
+// the body block, which control is in on return; a continue goes to the
+// head unless the caller says otherwise.
+func (l *lowering) openLoop(pos token.Pos) (head, exit int) {
+	head, exit = l.newBlock(), l.newBlock() // the exit is outside the loop
+	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, pos
+	l.loops = append(l.loops, lowLoop{head: head, cont: head, exit: exit, scopes: len(l.scopes)})
+	return head, exit
+}
+
+// closeLoop ends the loop begun by openLoop: control goes back to where
+// a pass continues, and on to the exit.
+func (l *lowering) closeLoop(exit int) {
+	l.joinTo(l.loops[len(l.loops)-1].cont)
+	l.loops = l.loops[:len(l.loops)-1]
+	l.start(exit)
 }
 
 // given marks the temporary o as taken by a call, a defer or a statement

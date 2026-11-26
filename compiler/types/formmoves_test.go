@@ -80,29 +80,6 @@ func TestFieldPath(t *testing.T) {
 	}
 }
 
-// TestIsMoveMessage sorts the checker's messages into the move pass's,
-// compared against the form's, and the rest, the borrow pass's refusal
-// of a move among them.
-func TestIsMoveMessage(t *testing.T) {
-	tests := []struct {
-		msg  string
-		want bool
-	}{
-		{"use of moved value s; moved at 1:2", true},
-		{"use of partially moved value n: n.value moved at 1:2", true},
-		{"cannot move s out of a borrow", true},
-		{"s moved in a previous iteration of the loop", true},
-		{"cannot move v: v is borrowed by r", false},
-		{"cannot move v: v is borrowed at 1:2", false},
-		{"undefined: s", false},
-	}
-	for _, tt := range tests {
-		if got := isMoveMessage(tt.msg); got != tt.want {
-			t.Errorf("isMoveMessage(%q) = %v, want %v", tt.msg, got, tt.want)
-		}
-	}
-}
-
 // TestFormMoves runs the move pass over the form beside the tree's on
 // the programs whose paths the pass has rules for, and wants the two to
 // agree, every disagreement being reported as an error of its own: a

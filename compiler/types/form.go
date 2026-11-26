@@ -5,6 +5,7 @@
 package types
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,7 @@ type Form struct {
 	succs    []int         // what every block's Succs slice into
 	closures []closureForm // the closures written in the body, whose passes run under the body's
 	kept     []keptUse     // the closure values the body puts where a closure that borrows may not go
+	reached  []bool        // per block, whether control can reach it from the first: what it cannot is lowered for the emitters and checked by no pass
 }
 
 // A keptUse is a value of a function type the body puts where a closure
@@ -239,4 +241,35 @@ func (f *Form) argsString(args []Operand) string {
 	}
 
 	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+// reach marks the blocks control can reach from the first, with work as
+// the scratch of blocks whose successors are still to be marked, which
+// it returns grown.
+func (f *Form) reach(work []int) []int {
+	f.reached = slices.Grow(f.reached[:0], len(f.Blocks))[:len(f.Blocks)]
+	clear(f.reached)
+	f.reached[0] = true
+	work = append(work[:0], 0)
+	for len(work) > 0 {
+		b := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, s := range f.Blocks[b].Succs {
+			if !f.reached[s] {
+				f.reached[s] = true
+				work = append(work, s)
+			}
+		}
+	}
+
+	return work
+}
+
+// eachForm calls fn with f and, after it, with every closure's form
+// written in it, at any depth.
+func (f *Form) eachForm(fn func(*Form)) {
+	fn(f)
+	for _, cf := range f.closures {
+		cf.form.eachForm(fn)
+	}
 }

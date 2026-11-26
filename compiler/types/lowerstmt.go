@@ -52,13 +52,12 @@ func (l *lowering) stmt(s ast.Stmt) {
 		l.dropOwned(s.Pos())
 	case *ast.SendStmt:
 		ch := l.channel(s.Chan)
-		l.keep(s.Value, "sent", s.Value.Pos(), nil, "")
-		v := l.value(s.Value, l.sendType(s.Chan))
+		v := l.keptValue(s.Value, "sent", l.sendType(s.Chan))
 		l.take(v)
 		l.emit(Instr{Op: OpCall, To: l.temp(Unit, false, s.Value), Args: l.args(ch, v), Expr: s.Value, Pos: s.Arrow})
 		l.dropOwned(s.Pos())
 	case *ast.SpawnStmt:
-		l.spawned(s.Call, s.Spawn)
+		l.spawned(s.Call)
 		l.dropOwned(s.Spawn)
 	case *ast.DeferStmt:
 		l.deferStmt(s)
@@ -210,7 +209,7 @@ func (l *lowering) assign(s *ast.AssignStmt) {
 		for i, lhs := range s.Lhs {
 			if !isBlank(lhs) && i < len(values) {
 				if _, name := lhs.(*ast.Ident); !name && len(s.Rhs) == len(s.Lhs) {
-					l.keep(s.Rhs[i], "stored", lhs.Pos(), nil, "") // a field or an element keeps the value
+					l.keep(s.Rhs[i], "stored", lhs.Pos()) // a field or an element keeps the value
 				}
 
 				l.store(l.place(lhs, true), values[i], lhs)
@@ -451,11 +450,9 @@ func (l *lowering) forStmt(s *ast.ForStmt) {
 		l.stmt(s.Init)
 	}
 
-	head, exit := l.newBlock(), l.newBlock() // the exit is outside the loop
-	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, loopBegins(s)
-	l.loops = append(l.loops, lowLoop{head: head, exit: exit, scopes: len(l.scopes)})
+	head, exit := l.openLoop(loopBegins(s))
 	body, post := l.newBlock(), l.newBlock()
-	l.loops[len(l.loops)-1].cont = post
+	l.loops[len(l.loops)-1].cont = post // a continue runs the post statement
 	l.goTo(head)
 	if s.Cond != nil {
 		l.condition(s.Cond)
@@ -497,9 +494,7 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 
 	x := l.rangeSource(s.X, s.For) // before the loop's scope: a break or a continue leaves it be, the loop's end drops it
 	l.openScope()
-	head, exit := l.newBlock(), l.newBlock() // the exit is outside the loop
-	l.f.Blocks[head].Head, l.f.Blocks[head].Pos = true, s.For
-	l.loops = append(l.loops, lowLoop{head: head, cont: head, exit: exit, scopes: len(l.scopes)})
+	head, exit := l.openLoop(s.For)
 	body := l.newBlock()
 	l.goTo(head)
 	l.edge(l.cur, exit)
@@ -520,9 +515,7 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 
 	l.block(s.Body)
 	l.closePass(s.Body.Rbrace)
-	l.joinTo(head)
-	l.loops = l.loops[:len(l.loops)-1]
-	l.start(exit)
+	l.closeLoop(exit)
 	l.closeScope(s.Body.Rbrace)
 	l.dropOwned(s.For)
 }

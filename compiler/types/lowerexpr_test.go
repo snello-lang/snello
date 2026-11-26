@@ -4,7 +4,12 @@
 
 package types
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/parser"
+)
 
 // TestLowerExpressions pins the form of the expressions whose use of a
 // place the type it is given to decides: a literal's part given to a
@@ -157,6 +162,43 @@ b7:
 	for _, tt := range tests {
 		if got := lowered(t, "package p\n"+decls+tt.src); got != tt.want {
 			t.Errorf("%s\nlowered:\n%s\nwant:\n%s", tt.src, got, tt.want)
+		}
+	}
+}
+
+// TestFormCaptures reads a closure's captures off its form: a variable
+// read is borrowed, one assigned or lent mut is borrowed mut, one moved
+// is moved, and a Copy value only read is copied in; a variable the
+// closure declares is its own.
+func TestFormCaptures(t *testing.T) {
+	src := prelude + "func f(r string, m string, v string, n int) { g := func() { print(r); m = \"x\"; keep(v); print(n); own := 1; print(own) }; g() }"
+	f, file, err := parser.ParseFile("test.snello", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &Info{Forms: map[*ast.BlockStmt]*Form{}}
+	if _, err := libraryConfig().Check("", file, f, info); err != nil {
+		t.Fatal(err)
+	}
+
+	var lit *ast.FuncLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		if l, ok := n.(*ast.FuncLit); ok {
+			lit = l
+		}
+
+		return true
+	})
+	want := map[string]captureMode{"r": byRef, "m": byMut, "v": byMove, "n": byCopy}
+	got := formCaptures(info.Forms[lit.Body], lit.Pos())
+	if len(got) != len(want) {
+		t.Fatalf("got %d captures, want %d", len(got), len(want))
+	}
+
+	for _, cap := range got {
+		if mode, ok := want[cap.v.name]; !ok || mode != cap.mode {
+			t.Errorf("%s captured as %d, want %d", cap.v.name, cap.mode, mode)
 		}
 	}
 }

@@ -36,7 +36,7 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 	case *ast.CallExpr:
 		return l.call(x)
 	case *ast.SpawnExpr:
-		return l.made(e, l.args(l.spawned(x.Call, x.Spawn)), true) // the closure's captures move into the task where the closure stands
+		return l.made(e, l.args(l.spawned(x.Call)), true) // the closure's captures move into the task where the closure stands
 	case *ast.UnaryExpr:
 		return l.unary(x, want)
 	case *ast.BinaryExpr:
@@ -185,15 +185,15 @@ func (l *lowering) madeAt(e ast.Expr, args []Operand, owned bool, pos token.Pos)
 
 // spawned lowers the call a spawn statement makes: what a closure
 // written there captures moves where the closure stands, into the task.
-func (l *lowering) spawned(call ast.Expr, spawn token.Pos) Operand {
+func (l *lowering) spawned(call ast.Expr) Operand {
 	x, ok := call.(*ast.CallExpr)
 	if !ok {
 		return l.value(call, nil)
 	}
 
-	was, wasCall := l.spawn, l.spawning
-	l.spawn, l.spawning = spawn, x
-	defer func() { l.spawn, l.spawning = was, wasCall }()
+	was := l.spawning
+	l.spawning = x
+	defer func() { l.spawning = was }()
 	return l.call(x)
 }
 
@@ -286,16 +286,40 @@ func (l *lowering) composite(x *ast.CompositeLit) Operand {
 				l.argStack = append(l.argStack, l.value(kv.Key, nil)) // a map's key is a value; a struct's field name is not
 			}
 
-			l.keep(kv.Value, "stored", kv.Value.Pos(), nil, "")
-			l.argStack = append(l.argStack, l.value(kv.Value, l.slotType(x, i, kv.Key)))
+			l.argStack = append(l.argStack, l.keptValue(kv.Value, "stored", l.slotType(x, i, kv.Key)))
 			continue
 		}
 
-		l.keep(elt, "stored", elt.Pos(), nil, "")
-		l.argStack = append(l.argStack, l.value(elt, l.slotType(x, i, nil)))
+		if pe, ok := elt.(*ast.PartsElt); ok { // written once for every field of the type: its value is evaluated on each pass of a loop over them
+			l.partsElt(pe)
+			continue
+		}
+
+		l.argStack = append(l.argStack, l.keptValue(elt, "stored", l.slotType(x, i, nil)))
 	}
 
 	return l.madeFrom(x, start, true)
+}
+
+// keptValue lowers a value put where a closure that borrows may not go,
+// how saying where, and records it as such.
+func (l *lowering) keptValue(e ast.Expr, how string, want Type) Operand {
+	l.keep(e, how, e.Pos())
+	return l.value(e, want)
+}
+
+// partsElt lowers an element written for every field as a loop whose
+// body evaluates the value and gives it to the field: a value moved into
+// a field is moved on every pass, which the move pass refuses as moved
+// in a previous iteration, and a closure that borrows cannot be stored.
+func (l *lowering) partsElt(pe *ast.PartsElt) {
+	head, exit := l.openLoop(pe.For)
+	body := l.newBlock()
+	l.goTo(head)
+	l.edge(l.cur, exit)
+	l.goTo(body)
+	l.argStack = append(l.argStack, l.keptValue(pe.Value, "stored", nil))
+	l.closeLoop(exit)
 }
 
 // slotType is the type of what a literal's i-th part is given to: the
@@ -359,15 +383,12 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 		}
 	}
 
-	spawn := token.NoPos // the spawn this closure is the call of, where its captures move; a closure inside its arguments is not the spawned one
-	if l.spawning != nil && unparen(l.spawning.Fun) == x {
-		spawn = l.spawn
-	}
+	spawned := l.spawning != nil && unparen(l.spawning.Fun) == x // the closure the spawn runs, whose captures move where it stands; a closure inside its arguments is not it
 
 	captures := l.c.captured[x]
 	if compareForms && form != nil {
 		got := formCaptures(form, x.Pos())
-		if spawn.IsValid() { // a spawned closure takes what it captures with it: a task has frames of its own
+		if spawned { // a spawned closure takes what it captures with it: a task has frames of its own
 			for i := range got {
 				if got[i].mode != byCopy {
 					got[i].mode = byMove
@@ -397,7 +418,7 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 				expr, pos = moved.Expr, moved.Pos // the body's own move: the value is gone where the body moves it
 			}
 
-			if spawn.IsValid() {
+			if spawned {
 				pos = x.Pos() // moved into the task where the closure stands
 			}
 
@@ -415,32 +436,30 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 // read, where a Copy value read is copied in. A variable a closure inside
 // the body captures counts as the body's own use of it.
 func formCaptures(f *Form, closure token.Pos) []capture {
+	modes := make([]captureMode, len(f.Vars))
+	for i := range modes {
+		modes[i] = byRef
+	}
+
+	for i := range f.Instrs {
+		in := &f.Instrs[i]
+		if in.Place.IsTemp() {
+			continue
+		}
+
+		switch {
+		case in.Op == OpMove:
+			modes[in.Place.Var] = byMove
+		case in.Op == OpStore || in.Op == OpBorrow && in.Mut || in.Op == OpRead && in.Mut:
+			modes[in.Place.Var] = max(modes[in.Place.Var], byMut)
+		}
+	}
+
 	var caps []capture
 	for i, v := range f.Vars {
-		if v.pos == token.NoPos || v.field || v.global || v.pos > closure {
-			continue // the closure's own, or no variable of a body
+		if v.pos != token.NoPos && !v.field && !v.global && v.pos < closure { // declared before the closure: captured
+			caps = append(caps, capture{v, captureModeOf(v, modes[i])})
 		}
-
-		mode := byRef
-		for j := range f.Instrs {
-			in := &f.Instrs[j]
-			if in.Place.IsTemp() || in.Place.Var != i {
-				continue
-			}
-
-			switch {
-			case in.Op == OpMove:
-				mode = byMove
-			case in.Op == OpStore || in.Op == OpBorrow && in.Mut || in.Op == OpRead && in.Mut:
-				mode = max(mode, byMut)
-			}
-		}
-
-		if mode == byRef && IsCopy(v.typ) && !holdsBorrow(v.typ) && !isSignature(v.typ) {
-			mode = byCopy // a number read by a closure is copied in: the closure holds no borrow and may be returned; a borrow variable, Copy too, stays a borrow, and so does a function value, whose borrows are the holder's, not the type's
-		}
-
-		caps = append(caps, capture{v, mode})
 	}
 
 	return caps
@@ -453,9 +472,15 @@ func movedIn(form *Form, v *Var) *Instr {
 		return nil
 	}
 
-	for i := range form.Instrs {
-		if in := &form.Instrs[i]; in.Op == OpMove && !in.Place.IsTemp() && form.Vars[in.Place.Var] == v {
-			return in
+	for b, blk := range form.Blocks {
+		if !form.reached[b] {
+			continue // a move control cannot reach moves nothing
+		}
+
+		for i := blk.From; i < blk.To; i++ {
+			if in := &form.Instrs[i]; in.Op == OpMove && !in.Place.IsTemp() && form.Vars[in.Place.Var] == v {
+				return in
+			}
 		}
 	}
 

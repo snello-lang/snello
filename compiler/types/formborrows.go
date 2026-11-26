@@ -35,8 +35,6 @@ type formBorrows struct {
 	checker *Checker
 	form    *Form
 	holders []*Var // per temporary, the holder standing for it in the graph when it is or holds a borrow, or is bound from; nil otherwise
-	reached []bool // per block, whether control can reach it from the first: what it cannot is not checked, as the walk checks nothing after a return
-	work    []int  // the blocks whose successors are still to be marked, while reached is found
 }
 
 // formBorrows runs the borrow pass over f, the form of a body of
@@ -79,10 +77,9 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 	}
 
 	c.flowParams(sig)
-	m.reach()
 	for b := range f.Blocks {
-		if !m.reached[b] {
-			continue
+		if !f.reached[b] {
+			continue // what control cannot reach is not checked, as the walk checks nothing after a return
 		}
 
 		fl.cur = b
@@ -107,25 +104,6 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 	c.flow, c.temps, c.dead, c.sig = saved, temps, dead, outerSig
 	c.formPass = wasPass
 	return errs
-}
-
-// reach marks the blocks control can reach from the first.
-func (m *formBorrows) reach() {
-	f := m.form
-	m.reached = slices.Grow(m.reached[:0], len(f.Blocks))[:len(f.Blocks)]
-	clear(m.reached)
-	m.reached[0] = true
-	m.work = append(m.work[:0], 0)
-	for len(m.work) > 0 {
-		b := m.work[len(m.work)-1]
-		m.work = m.work[:len(m.work)-1]
-		for _, s := range f.Blocks[b].Succs {
-			if !m.reached[s] {
-				m.reached[s] = true
-				m.work = append(m.work, s)
-			}
-		}
-	}
 }
 
 // step records the events of one instruction.
@@ -226,22 +204,19 @@ func (m *formBorrows) step(in *Instr) {
 func (m *formBorrows) keptUses() {
 	c := m.checker
 	for _, k := range m.form.kept {
-		op := operand{mode: value, typ: c.info.Types[k.expr], expr: k.expr}
+		op := c.valueOf(k.expr)
 		if k.param == nil {
 			c.cannotBe(op, k.how, k.pos)
-			continue
-		}
-
-		what := c.borrowsWhat(op, k.pos)
-		if what == "" {
-			continue
-		}
-
-		call := keepCall{k.param, k.callee, what, k.pos}
-		if !slices.Contains(c.keepCalls, call) { // recorded by the walk already while both run; the form's own once the walk's pass goes
-			c.errorf(k.pos, "form keep: "+what+" passed to "+k.callee+" is not the walk's record")
+		} else if what := c.borrowsWhat(op, k.pos); what != "" {
+			c.formKeeps = append(c.formKeeps, keepCall{k.param, k.callee, what, k.pos}) // compared with the walk's record while both run; the record itself once the walk's pass goes
 		}
 	}
+}
+
+// valueOf is the value of e as the walk's recorders take one, with the
+// type the typing gave it.
+func (c *Checker) valueOf(e ast.Expr) operand {
+	return operand{mode: value, typ: c.info.Types[e], expr: e}
 }
 
 // returned checks what the returned value lets out of the function, by
@@ -256,7 +231,7 @@ func (m *formBorrows) returned(in *Instr) {
 	}
 
 	c := m.checker
-	op := operand{mode: value, typ: c.info.Types[in.Expr], expr: in.Expr}
+	op := c.valueOf(in.Expr)
 	if len(c.keptParams(op)) > 0 {
 		return // a parameter returned: what the function keeps, checked at its calls by the typing
 	}
@@ -666,13 +641,4 @@ func (m *formBorrows) dropVar(v *Var, pos token.Pos, why dropWhy) {
 	if dropsHere(v) {
 		m.checker.flowDrop(v, pos, why, dropRuns(v.typ))
 	}
-}
-
-// isBorrowMessage reports whether a message is the borrow pass's: a
-// collision with a loan, a borrow kept past its owner or stored where
-// the function cannot follow it, or a package variable changed.
-func isBorrowMessage(msg string) bool {
-	return strings.Contains(msg, " is borrowed") || strings.Contains(msg, " is already borrowed") ||
-		strings.HasPrefix(msg, "cannot keep a borrow of ") || strings.HasPrefix(msg, "cannot store a borrow") ||
-		strings.Contains(msg, " is a package variable, shared by every task")
 }

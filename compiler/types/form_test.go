@@ -84,3 +84,23 @@ b3:
 		t.Errorf("printed:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestFormReach marks the blocks control can reach from the first: a block
+// no edge reaches, and the blocks only it goes to, are not reached, while
+// a loop's head reached by a back edge alone from a reached block is.
+func TestFormReach(t *testing.T) {
+	f := &Form{Blocks: []FormBlock{
+		{Succs: []int{1, 3}},
+		{Succs: []int{1}, Head: true}, // a loop on itself, reached from the first
+		{Succs: []int{4}},             // after a return in every arm: no edge in
+		{},
+		{Succs: []int{3}}, // reached only from the unreached block
+	}}
+	f.reach(nil)
+	want := []bool{true, true, false, true, false}
+	for b, ok := range want {
+		if f.reached[b] != ok {
+			t.Errorf("block %d reached = %v, want %v", b, f.reached[b], ok)
+		}
+	}
+}

@@ -189,6 +189,7 @@ type Checker struct {
 	formPass    bool         // the passes over the form are running: what the recorders refuse goes to formErrs, and a name resolves through the uses the typing recorded
 	formErrs    []formError
 	captureErrs []formError  // where a closure's form and the walk disagree on what it captures, while both run (compareCaptures)
+	formKeeps   []keepCall   // the closures that borrow given to a parameter their callee may keep, as the form's pass found them, while both run (compareKeeps)
 	typingPlace bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
 	heldAccess  []heldAccess // the accesses held, in their order (replay)
 

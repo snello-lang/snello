@@ -319,10 +319,7 @@ func (c *Checker) capture(v *Var, mode captureMode) {
 		return
 	}
 
-	if mode == byRef && IsCopy(v.typ) && !holdsBorrow(v.typ) && !isSignature(v.typ) {
-		mode = byCopy // a number read by a closure is copied in: the closure holds no borrow and may be returned; a borrow variable, Copy too, stays a borrow, and so does a function value, whose borrows are the holder's, not the type's
-	}
-
+	mode = captureModeOf(v, mode)
 	for i := range c.closures {
 		cl := &c.closures[i]
 		if v.pos > cl.pos {
@@ -335,6 +332,19 @@ func (c *Checker) capture(v *Var, mode captureMode) {
 			cl.captures = append(cl.captures, capture{v, mode})
 		}
 	}
+}
+
+// captureModeOf is how a closure captures v given the strongest use it
+// makes of it: a number read by a closure is copied in, so the closure
+// holds no borrow and may be returned; a borrow variable, Copy too, stays
+// a borrow, and so does a function value, whose borrows are the holder's,
+// not the type's.
+func captureModeOf(v *Var, mode captureMode) captureMode {
+	if mode == byRef && IsCopy(v.typ) && !holdsBorrow(v.typ) && !isSignature(v.typ) {
+		return byCopy
+	}
+
+	return mode
 }
 
 func (cl *closure) index(v *Var) int {

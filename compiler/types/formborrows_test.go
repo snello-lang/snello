@@ -39,6 +39,8 @@ func TestFormBorrows(t *testing.T) {
 		{"func f() int { outer := func() int { t := \"b\".Clone(); k := func() int { return len(t) }; inner := func() func() int { return k }; return inner()() }; return outer() }", []string{"closure k captures t by borrow and cannot be returned"}},
 		{"func f(c bool, s string) { if c { return } else { return }; r := ref s; keep(s); print(r) }", nil},
 		{"func f(s string) (ref string)? { if v := mkb3().Pick(ref s) { return Some(v) }; return None }", nil},
+		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { string => s, _ => f.default ?? return None } } }), _ => None } }", []string{"s moved in a previous iteration of the loop"}},
+		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { func() int => func() int { return len(s) }, _ => f.default ?? return None } } }), _ => None } }", []string{"closure captures s by borrow and cannot be stored", "a closure that borrows cannot be chosen by if or match"}},
 	}
 	var graphs []string
 	formGraphs = func(m *formBorrows) {
