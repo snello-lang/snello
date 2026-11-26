@@ -40,7 +40,8 @@ name: Tests
 
 # A change that touches no code, Markdown anywhere, the design and the
 # book under _docs/, the changelogs, the release's scripts and
-# workflow, and Renovate's configuration, runs none of the checks: the
+# workflow, every PowerShell script, and Renovate's configuration,
+# runs none of the checks but the scripts' parse and the lints: the
 # first job lists what changed and answers whether code did, and every
 # other job runs only then. The last job, all checks, is the one the
 # branch rule requires: it waits for every other and fails when one
@@ -83,10 +84,11 @@ jobs:
           filters: |
             code:
               - '**'
-              - '!**.md'
+              - '!**/*.md'
               - '!_docs/**'
               - '!changelogs/**'
               - '!release/*.sh'
+              - '!**/*.ps1'
               - '!.github/workflows/release.yml'
               - '!.github/renovate.json'
 

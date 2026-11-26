@@ -15,8 +15,9 @@
 # not, puts snello.exe into %LOCALAPPDATA%\Programs\snello, or into
 # SNELLO_INSTALL, adds that directory to the user's Path when it is not
 # there, and ends by running snello doctor, which says what a build
-# still needs and how to install it. Run again, it upgrades; removing
-# the directory uninstalls.
+# still needs and how to install it. A token in GH_TOKEN or
+# GITHUB_TOKEN goes with the calls that find the release. Run again, it
+# upgrades; removing the directory uninstalls.
 # The preferences are the session's under iex, so they are set for the
 # script and put back at its end.
 $preferences = @{ ErrorAction = $ErrorActionPreference; Progress = $ProgressPreference }
@@ -30,6 +31,19 @@ $dir = if ($env:SNELLO_INSTALL) { $env:SNELLO_INSTALL } else { Join-Path $env:LO
 $version = $env:SNELLO_VERSION
 
 function Say($text) { Write-Host "install.ps1: $text" }
+# Get-Releases reads a URL of the releases API. Without a token GitHub
+# answers an address 60 times an hour, so a shared one, an office's or
+# a CI runner's, can be refused; a token in GH_TOKEN or GITHUB_TOKEN is
+# sent with the call. A token GitHub refuses, expired or wrong, is
+# dropped and the call made without it, so that a token only ever
+# raises the limit.
+function Get-Releases($url) {
+    $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
+    if ($token) {
+        try { return Invoke-RestMethod $url -Headers @{ Authorization = "Bearer $token" } } catch { }
+    }
+    Invoke-RestMethod $url
+}
 # Fail ends the script with a terminating error, never with exit, which
 # under iex would close the terminal the script was pasted into.
 function Fail($text) { throw "install.ps1: $text" }
@@ -53,9 +67,9 @@ if ($version) {
     $tag = 'v' + $version.TrimStart('v')
 } else {
     $tag = $null
-    try { $tag = (Invoke-RestMethod "$api/latest").tag_name } catch { $tag = $null }
+    try { $tag = (Get-Releases "$api/latest").tag_name } catch { $tag = $null }
     if (-not $tag) {
-        $newest = @(Invoke-RestMethod "${api}?per_page=1") # ? is a character of a variable's name, so $api is braced
+        $newest = @(Get-Releases "${api}?per_page=1") # ? is a character of a variable's name, so $api is braced
         if ($newest.Count -eq 0) { Fail "no release found at https://github.com/$repo/releases" }
         $tag = $newest[0].tag_name
         Say "no release yet: installing the newest pre-release, $($tag.TrimStart('v'))"

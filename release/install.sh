@@ -16,9 +16,10 @@
 # ~/.local/bin, or into SNELLO_INSTALL, says when that directory is
 # not on the path and how to add it, and ends by running snello
 # doctor, which says what a build still needs and how to install it.
-# Run again, it upgrades; removing the binary uninstalls. Nothing is
-# downloaded through a browser, so macOS puts no quarantine mark on
-# the binary. Needs curl and tar.
+# A token in GH_TOKEN or GITHUB_TOKEN goes with the calls that find the
+# release. Run again, it upgrades; removing the binary uninstalls.
+# Nothing is downloaded through a browser, so macOS puts no quarantine
+# mark on the binary. Needs curl and tar.
 set -eu
 
 repo=snello-lang/snello
@@ -35,6 +36,20 @@ fail() {
 }
 need() { command -v "$1" >/dev/null 2>&1 || fail "needs $1"; }
 tag_of() { sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1; }
+# releases reads a path of the releases API. Without a token GitHub
+# answers an address 60 times an hour, so a shared one, an office's or
+# a CI runner's, can be refused; a token in GH_TOKEN or GITHUB_TOKEN is
+# sent with the call, handed to curl on its standard input so that no
+# listing of the processes shows it. A token GitHub refuses, expired or
+# wrong, is dropped and the call made without it, so that a token only
+# ever raises the limit.
+releases() {
+    token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+    if [ -n "$token" ] && printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -fsSL --proto '=https' -K - "$api$1" 2>/dev/null; then
+        return
+    fi
+    curl -fsSL --proto '=https' "$api$1"
+}
 
 need curl
 need tar
@@ -60,9 +75,9 @@ fi
 if [ -n "$version" ]; then
     tag=v${version#v}
 else
-    tag=$(curl -fsL "$api/latest" 2>/dev/null | tag_of || true)
+    tag=$(releases /latest 2>/dev/null | tag_of || true)
     if [ -z "$tag" ]; then
-        tag=$(curl -fsSL --proto '=https' "$api?per_page=1" | tag_of)
+        tag=$(releases '?per_page=1' | tag_of)
         [ -n "$tag" ] || fail "no release found at https://github.com/$repo/releases"
         say "no release yet: installing the newest pre-release, ${tag#v}"
     fi

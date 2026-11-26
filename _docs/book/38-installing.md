@@ -18,13 +18,14 @@ irm https://raw.githubusercontent.com/snello-lang/snello/main/release/install.ps
 
 The script finds your system and processor, downloads the latest release's archive and its checksums, refuses an archive the checksums do not vouch for, verifies the archive's provenance when the GitHub CLI is installed and signed in and says so when it is not, puts `snello` into `~/.local/bin`, or `%LOCALAPPDATA%\Programs\snello` on Windows, and says when that directory is not on your path, which on Windows it adds. It ends with `snello doctor`; when a build still needs clang, the script says so and asks whether to install it now, yes or no, and on yes runs the system's own package manager, Apple's Command Line Tools, or on Windows LLVM through `winget` with its directory put on your `Path`, and then the Build Tools. A `sudo` password, Apple's dialog and an installer's own prompt stay yours. Nothing passes through a browser, so macOS puts no quarantine mark on what it installs.
 
-Three variables shape it, set for the shell the script runs in, not for `curl`:
+Four variables shape it, set for the shell the script runs in, not for `curl`:
 
 | Variable | What it does | Example |
 |---|---|---|
 | `SNELLO_VERSION` | installs that version instead of the latest release | `curl -fsSL … \| SNELLO_VERSION=0.1.0 sh`; on Windows `$env:SNELLO_VERSION = '0.1.0'` before the line |
 | `SNELLO_INSTALL` | installs into that directory | `curl -fsSL … \| SNELLO_INSTALL=/opt/snello/bin sh` |
 | `SNELLO_YES` | answers yes to every question, for a machine with nobody at the keyboard | `curl -fsSL … \| SNELLO_YES=1 sh` |
+| `GH_TOKEN` or `GITHUB_TOKEN` | a GitHub token, sent when the script asks GitHub's API which release is the latest; without one, GitHub answers an address 60 times an hour, and a shared address, an office's or a CI machine's, can be refused | on GitHub Actions, `GH_TOKEN: ${{ github.token }}` in the step's `env` |
 
 While no release is out yet, the script installs the newest pre-release and says so; a pre-release is marked as one on the Releases page and is never what "latest" means.
 
